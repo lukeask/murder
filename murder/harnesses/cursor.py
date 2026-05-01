@@ -1,0 +1,104 @@
+"""Cursor agent CLI adapter (`agent --yolo`).
+
+Pane regexes were validated empirically against
+`agent v2026.04.30-4edb302` on 2026-05-01. Captured fixtures live in
+`tests/fixtures/cursor_panes/`.
+
+Markers we rely on, all visible in the bottom rendered frame:
+
+| State            | Marker                                               |
+|------------------|------------------------------------------------------|
+| busy             | "ctrl+c to stop" (right-aligned in input box)        |
+| busy (extra)     | "Composing" / "Running" line with braille spinner    |
+| idle (post-turn) | "Add a follow-up" placeholder, no busy marker        |
+| idle (pre-turn)  | "Plan, search, build anything" placeholder           |
+| ready/booted     | either idle marker present                           |
+
+We restrict busy detection to the tail of the pane so historical
+"ctrl+c to stop" frames left in scrollback don't mis-flag a now-idle
+agent.
+"""
+
+from __future__ import annotations
+
+import re
+from pathlib import Path
+from typing import ClassVar
+
+from murder.harnesses.base import (
+    HarnessAdapter,
+    extract_last_message_heuristic,
+    strip_ansi,
+)
+
+# Number of trailing pane lines to inspect for live-state markers. The
+# cursor input frame is the last ~6 lines; 20 is generous slack so we
+# still catch the spinner line above the input box.
+_TAIL_LINES = 20
+
+_IDLE_PLACEHOLDER_RE = re.compile(
+    r"(Add a follow-up|Plan,\s*search,\s*build anything)",
+    re.IGNORECASE,
+)
+_BUSY_INPUT_HINT_RE = re.compile(r"ctrl\+c to stop", re.IGNORECASE)
+_BUSY_SPINNER_RE = re.compile(
+    r"^\s*\S+\s+(Composing|Running|Generating|Thinking)\b",
+    re.MULTILINE,
+)
+_TRUST_PROMPT_RE = re.compile(r"Workspace Trust Required", re.IGNORECASE)
+
+
+def _tail(pane_text: str) -> str:
+    lines = pane_text.splitlines()
+    return "\n".join(lines[-_TAIL_LINES:])
+
+
+class CursorAdapter(HarnessAdapter):
+    kind: ClassVar[str] = "cursor"
+
+    monkey_system_prompt: ClassVar[str] = (
+        # Loaded from prompts/monkey_cursor.md at runtime by Monkey.start().
+        # This class attribute is just a marker; runner pulls the file.
+        "see prompts/monkey_cursor.md"
+    )
+
+    def startup_cmd(self, cwd: Path) -> list[str]:
+        # `cwd` is honored by tmux.create_session; we don't need to cd here.
+        return ["agent", "--yolo"]
+
+    def is_ready(self, pane_text: str) -> bool:
+        """True once the input box is accepting text (cursor has booted past
+        any trust/login prompts).
+
+        Trust check is scoped to the live tail because once accepted, the
+        trust dialog scrolls into history but cursor is fully usable.
+        """
+        clean = strip_ansi(pane_text)
+        tail = _tail(clean)
+        if _TRUST_PROMPT_RE.search(tail):
+            return False
+        return bool(_IDLE_PLACEHOLDER_RE.search(tail))
+
+    def is_idle(self, pane_text: str) -> bool:
+        """True iff input box shows a placeholder AND no busy marker is live."""
+        clean = strip_ansi(pane_text)
+        tail = _tail(clean)
+        if _BUSY_INPUT_HINT_RE.search(tail) or _BUSY_SPINNER_RE.search(tail):
+            return False
+        return bool(_IDLE_PLACEHOLDER_RE.search(tail))
+
+    def is_busy(self, pane_text: str) -> bool:
+        clean = strip_ansi(pane_text)
+        tail = _tail(clean)
+        return bool(_BUSY_INPUT_HINT_RE.search(tail) or _BUSY_SPINNER_RE.search(tail))
+
+    def extract_last_message(self, pane_text: str) -> str | None:
+        return extract_last_message_heuristic(pane_text)
+
+    def format_nudge(self, msg: str) -> str:
+        # Simple framing — cursor has no special instruction marker.
+        return f"[supervisor] {msg}"
+
+    # TODO(M1): /model selection support.
+    # set_model(name) → send_keys '/model <name>' between startup and first prompt.
+    # Documented in tmux-subagents skill: "/model Composer 2", "/model GPT-5.2 Low".

@@ -1,0 +1,43 @@
+# Bundled defaults. Copied to .agents/roles.yaml on `murder init`.
+# Per-project overrides land in .agents/roles.yaml.
+
+project:
+  name: TODO_SET_ME           # used in tmux session names
+  repo_path: .
+
+collaborator:
+  kind: harness
+  harness: claude_code
+  startup_prompt_template: collaborator.md
+  # Opus 4.7 is selected inside CC; not configured here.
+
+sentinel:
+  kind: api
+  provider: openrouter
+  model: anthropic/claude-sonnet-4-6
+  max_context_tokens: 180000
+
+augur:
+  kind: api
+  provider: openrouter
+  model: anthropic/claude-haiku-4-5
+  poll_interval_s: 45
+  forced_summary_every_n_ticks: 7
+  stuck_threshold_ticks: 3
+  context_lines: 40
+
+default_monkey:
+  kind: harness
+  harness: cursor
+  startup_model: composer       # cursor's selector; consumed by CursorAdapter
+  startup_prompt_template: monkey_cursor.md
+
+tui:
+  ticket_grid_max_rows: 20
+  pane_mirror_height: 30
+  escalation_strip_height: 8
+  refresh_ms: 1000              # D11
+
+runtime:
+  run_dir: .agents/runs
+  session_name_template: "murder_{project}_{role}{suffix}"

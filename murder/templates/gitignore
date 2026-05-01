@@ -1,0 +1,12 @@
+# Append these to your project's .gitignore (or use as-is if you don't
+# already have one). `murder init` will add to an existing .gitignore
+# rather than overwriting.
+
+.agents/murder.db
+.agents/murder.db-wal
+.agents/murder.db-shm
+.agents/.lock
+.agents/runs/
+
+# .env files commonly hold OPENROUTER_API_KEY etc.
+.env
