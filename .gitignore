@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+
+# Environment
+.env
+
+# Murder runtime artifacts
+.agents/murder.db
+.agents/murder.db-wal
+.agents/murder.db-shm
+.agents/.lock
+.agents/runs/
+
+# Tooling
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Editors
+.vscode/
+.idea/
+*.swp
+*~

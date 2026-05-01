@@ -1,0 +1,37 @@
+luke@monsoon:~/Documents/code/murder $ cd /tmp/murder-smoke && agent --yolo
+
+  ╭──────────────────────────────────────────────────────────────────────────╮
+  │                                                                          │
+  │  ⚠ Workspace Trust Required                                              │
+  │                                                                          │
+  │  Cursor Agent can execute code and access files in this directory.       │
+  │                                                                          │
+  │  Do you trust the contents of this directory?                            │
+  │                                                                          │
+  │    /tmp/murder-smoke                                                     │
+  │                                                                          │
+  │                                                                          │
+  │    [a] Trust this workspace                                              │
+  │    [q] Quit                                                              │
+  │                                                                          │
+  │  ⏳ Trusting workspace...                                                │
+  │                                                                          │
+  ╰──────────────────────────────────────────────────────────────────────────╯
+
+
+  Cursor Agent
+  v2026.04.30-4edb302
+
+                                                                               
+  List the files in this directory and tell me what you see. Take your         
+  time.                                                                        
+                                                                               
+
+ ⠞⠆ Composing
+ ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+  → Add a follow-up                                             ctrl+c to stop 
+ ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+  Composer 2                                                          Auto-run
+  /tmp/murder-smoke · master
+
+

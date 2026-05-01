@@ -1,0 +1,62 @@
+[build-system]
+requires = ["hatchling>=1.18"]
+build-backend = "hatchling.build"
+
+[project]
+name = "murder"
+version = "0.0.1"
+description = "Agentic dev harness — a murder of crows supervising a monkey."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "TBD" }
+authors = [{ name = "luke" }]
+dependencies = [
+    # TODO(M0): pin minor versions once API surface stabilizes
+    "pydantic>=2.6",
+    "typer>=0.12",
+    "python-dotenv>=1.0",
+    "pyyaml>=6.0",
+    "httpx>=0.27",
+    "anyio>=4.3",
+    "textual>=0.60",
+    "watchfiles>=0.21",  # cross-platform inotify-ish watcher (D5)
+    # TODO(M0): tiktoken for D17 if/when context-cap enforcement lands
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "mypy>=1.8",
+    "ruff>=0.4",
+]
+
+[project.scripts]
+# Bare `murder` is the kickoff command per D8.
+murder = "murder.cli:app"
+
+[tool.hatch.build.targets.wheel]
+packages = ["murder"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+# TODO(M0): tighten lints once code lands
+select = ["E", "F", "I", "B", "UP", "PL"]
+ignore = ["PLR0913"]  # allow many args on dataclasses / pydantic models
+
+[tool.mypy]
+python_version = "3.10"
+strict = true
+# TODO(M0): re-enable disallow_untyped_decorators once Textual stubs settle
+disallow_untyped_decorators = false
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+markers = [
+    "smoke: real cursor/CC/API; requires MURDER_MANUAL_SMOKE=1",
+    "integration: needs a live tmux server",
+]

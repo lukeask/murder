@@ -1,0 +1,58 @@
+
+
+  Cursor Agent
+  v2026.04.30-4edb302
+
+                                                                               
+  List the files in this directory and tell me what you see. Take your         
+  time.                                                                        
+                                                                               
+
+  Listing the workspace directory and inspecting its contents.
+
+    Globbed, read 1 glob, 5 files
+    … 3 earlier items hidden
+    Read .agents/tickets/t001.md
+    Read .agents/roles.yaml
+    Read .agents/env.example
+
+  Here’s what’s in /tmp/murder-smoke:
+
+  Top level
+
+  • README.md — Only the literal text README (placeholder, not real docs).
+  • .gitignore — Ignores Murder/agent artifacts (.agents/murder.db*, .lock,
+    runs/) and .env; comments say murder init appends rather than
+    overwriting.
+  • .agents/ — Agent-orchestration scaffolding (matches a “Murder”-style
+    setup).
+
+  .agents/
+
+  • roles.yaml — Role config: project name placeholder (TODO_SET_ME),
+    collaborator (Claude Code harness), sentinel and augur (OpenRouter API
+    models), default_monkey (Cursor harness), tui and runtime (tmux/session
+    naming, run dir .agents/runs).
+  • env.example — Points API keys at ~/.config/murder/.env or project .env;
+    OPENROUTER_API_KEY required for the API roles.
+  • tickets/t001.md — Ticket stub: plan says “do a thing”; empty
+    working/sentinel sections.
+  • .lock — Lock file (listed by gitignore as generated/runtime).
+
+  Git
+
+  • Repository initialized under .git/ (hooks, config, etc.).
+  • From your snapshot: no commits yet on master; everything above is still
+    untracked.
+
+  Bottom line: This is a minimal, uninitialized Murder/agent workspace: config
+   + one ticket + gitignore, almost no real README or application code—looks
+  like a smoke test or template checkout named “murder-smoke.”
+
+
+ ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+  → Add a follow-up                                                            
+ ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+  Composer 2 · 5.9%                                                   Auto-run
+  /tmp/murder-smoke · master
+
