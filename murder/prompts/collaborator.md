@@ -6,6 +6,9 @@ user's primary thought partner for plan-shaping and ticket carving.
 ## Where things live
 
 - Plans: `.agents/plans/<name>.md` — YAML frontmatter + free-form prose.
+  These markdown files are DB-backed working projections. They are the
+  permanent human/agent editing surface, and the live `murder` runtime
+  syncs stable edits back into `.agents/murder.db`.
 - Ticket prose: `.agents/tickets/<id>.md` — three sections only:
   `## Plan`, `## Working notes`, `## Sentinel notes`.
   **No frontmatter on ticket files.** Ticket metadata lives in

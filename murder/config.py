@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
+from collections.abc import Mapping
 from importlib import resources
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, TypeAlias
 
 import yaml
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+HarnessKind: TypeAlias = Literal["cursor", "claude_code", "codex", "pi", "murder_native"]
 
 try:  # python-dotenv is in dependencies but tests may stub
     from dotenv import load_dotenv
@@ -24,10 +28,33 @@ class ProjectConfig(BaseModel):
 
 class HarnessRoleConfig(BaseModel):
     kind: Literal["harness"] = "harness"
-    harness: Literal["cursor", "claude_code", "pi", "murder_native"]
+    harness: HarnessKind
+    harnesses: list[HarnessKind] | None = Field(
+        default=None,
+        description="Pool of harness kinds; tickets without harness override pick stably by ticket id.",
+    )
     startup_model: str | None = None
+    startup_models: list[str] | None = Field(
+        default=None,
+        description="Pool of startup model strings; tickets without model override pick stably by ticket id.",
+    )
     startup_prompt_template: str | None = None
     binary: str | None = None
+
+    @field_validator("harnesses", "startup_models", mode="before")
+    @classmethod
+    def _empty_seq_to_none(cls, v: Any) -> Any:
+        if v == []:
+            return None
+        return v
+
+    @field_validator("startup_models", mode="after")
+    @classmethod
+    def _normalize_model_strings(cls, v: list[str] | None) -> list[str] | None:
+        if v is None:
+            return None
+        out = [str(x).strip() for x in v if str(x).strip()]
+        return out or None
 
 
 class ApiRoleConfig(BaseModel):
@@ -119,3 +146,35 @@ def _deep_merge(base: dict[str, Any], over: dict[str, Any]) -> dict[str, Any]:
         else:
             out[k] = v
     return out
+
+
+def stable_bucket_index(key: str, modulo: int) -> int:
+    """Deterministic index for spreading work across a pool (same process or not)."""
+    if modulo <= 0:
+        raise ValueError("modulo must be positive")
+    digest = hashlib.blake2b(key.encode("utf-8"), digest_size=8).digest()
+    return int.from_bytes(digest, "big") % modulo
+
+
+def resolve_default_monkey_harness(
+    monkey_cfg: HarnessRoleConfig, ticket_row: Mapping[str, Any] | None
+) -> HarnessKind:
+    overt = (ticket_row or {}).get("harness")
+    if overt:
+        return overt  # type: ignore[return-value]
+    pool = list(monkey_cfg.harnesses) if monkey_cfg.harnesses else [monkey_cfg.harness]
+    tid = str((ticket_row or {}).get("id") or "")
+    return pool[stable_bucket_index(tid, len(pool))]
+
+
+def resolve_default_monkey_startup_model(
+    monkey_cfg: HarnessRoleConfig, ticket_row: Mapping[str, Any] | None
+) -> str | None:
+    overt = (ticket_row or {}).get("model")
+    if overt:
+        return str(overt)
+    if monkey_cfg.startup_models:
+        pool = monkey_cfg.startup_models
+        tid = str((ticket_row or {}).get("id") or "")
+        return pool[stable_bucket_index(tid, len(pool))]
+    return monkey_cfg.startup_model

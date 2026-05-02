@@ -15,9 +15,10 @@ from murder import __version__
 from murder import db as dbmod
 from murder.config import Config
 from murder.orchestrator import Orchestrator
+from murder.plans.sync import content_hash
 from murder.runtime import Runtime
 from murder.storage.filesystem import read_lock_pid
-from murder.storage.paths import agents_dir, db_path, lock_path
+from murder.storage.paths import agents_dir, db_path, lock_path, plans_dir
 from murder.bus import TicketStatus
 from murder.tickets import lifecycle
 from murder.tickets import waves as waves_mod
@@ -68,10 +69,20 @@ async def _launch_tui() -> None:
 def _root(
     ctx: typer.Context,
     version: bool = typer.Option(False, "--version", "-V", help="Print version and exit."),
+    config: bool = typer.Option(
+        False,
+        "--config",
+        help="Interactive Monkey harness/model defaults (writes .agents/roles.yaml).",
+    ),
 ) -> None:
     """Bare entrypoint launches the TUI. Kickoff is `/murder` inside the chat pane."""
     if version:
         typer.echo(f"murder {__version__}")
+        raise typer.Exit(0)
+    if config:
+        from murder.config_flow import run_guided_config
+
+        run_guided_config(_repo_root())
         raise typer.Exit(0)
 
     if ctx.invoked_subcommand is not None:
@@ -87,6 +98,14 @@ def cmd_kick(
 ) -> None:
     """Kick off a single ticket's Monkey from the CLI (no TUI)."""
     asyncio.run(_bare_kickoff(ticket))
+
+
+@app.command("config")
+def cmd_config() -> None:
+    """Interactive editor for Monkey defaults (same as murder --config)."""
+    from murder.config_flow import run_guided_config
+
+    run_guided_config(_repo_root())
 
 
 @app.command("init")
@@ -183,6 +202,7 @@ def cmd_doctor() -> None:
     for name, exe in (
         ("cursor agent", "agent"),
         ("claude", "claude"),
+        ("codex", "codex"),
     ):
         if shutil.which(exe) is None:
             issues.append(f"{name} ({exe}) not on PATH — optional if unused")
@@ -212,6 +232,24 @@ def cmd_lint() -> None:
         raise typer.Exit(1)
     conn = dbmod.connect(db_path(repo))
     issues: list[str] = []
+    plan_rows = {r["name"]: dict(r) for r in conn.execute("SELECT * FROM plans").fetchall()}
+    for name, row in plan_rows.items():
+        md = repo / row["materialized_path"]
+        if not md.exists():
+            issues.append(f"plan {name}: missing markdown {md}")
+            continue
+        file_hash = content_hash(md.read_text(encoding="utf-8"))
+        last_hash = row["last_materialized_hash"]
+        if last_hash and row["body_hash"] != last_hash and file_hash != last_hash:
+            issues.append(f"plan {name}: DB/file conflict")
+        if row["sync_state"] == "parse_error":
+            issues.append(f"plan {name}: parse error: {row['parse_error']}")
+        elif row["sync_state"] == "conflict":
+            issues.append(f"plan {name}: conflict: {row['conflict_reason']}")
+    if plans_dir(repo).exists():
+        for md in plans_dir(repo).glob("*.md"):
+            if md.stem not in plan_rows:
+                issues.append(f"plan {md.stem}: orphan markdown {md}")
     rows = conn.execute("SELECT id FROM tickets").fetchall()
     tickets: list[Ticket] = []
     for r in rows:

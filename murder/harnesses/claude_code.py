@@ -9,12 +9,15 @@ Caveats:
 
 from __future__ import annotations
 
+import asyncio
 import re
 from pathlib import Path
 from typing import ClassVar
 
 from murder.harnesses.base import (
     HarnessAdapter,
+)
+from murder.harnesses.parsing import (
     extract_last_message_heuristic,
     strip_ansi,
 )
@@ -23,10 +26,18 @@ from murder.harnesses.base import (
 class ClaudeCodeAdapter(HarnessAdapter):
     kind: ClassVar[str] = "claude_code"
 
-    # TODO(M2): empirically pin against real CC pane captures.
-    _READY_RE = re.compile(r"^>\s*$|claude>", re.MULTILINE | re.IGNORECASE)
-    _IDLE_RE = re.compile(r"^>\s*$", re.MULTILINE)
-    _BUSY_RE = re.compile(r"(?:thinking|tool|\.{3})", re.IGNORECASE)
+    # Claude Code prompt is ">" or "? " depending on version/context.
+    # We also accept any non-empty pane after seeing the banner so startup
+    # doesn't hang for 240 s if the regex misses a prompt variant.
+    _READY_RE = re.compile(
+        r"[>?❯]\s*$"           # bare prompt at end of line
+        r"|✓\s+claude"         # "✓ claude@api" banner line
+        r"|Welcome to Claude"  # older banner
+        r"|claude\.ai",        # footer URL
+        re.MULTILINE | re.IGNORECASE,
+    )
+    _IDLE_RE = re.compile(r"[>?❯]\s*$", re.MULTILINE)
+    _BUSY_RE = re.compile(r"(?:thinking|Esc to interrupt|\.{3})", re.IGNORECASE)
 
     monkey_system_prompt: ClassVar[str] = "see prompts/monkey_claude_code.md"
 
@@ -47,3 +58,10 @@ class ClaudeCodeAdapter(HarnessAdapter):
 
     def format_nudge(self, msg: str) -> str:
         return f"[supervisor] {msg}"
+
+    async def request_usage_status(self, session: str) -> bool:
+        from murder.tmux import send_keys
+
+        await send_keys(session, "/usage", literal=True, enter=True)
+        await asyncio.sleep(0.2)
+        return True

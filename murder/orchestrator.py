@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -13,7 +12,8 @@ from murder.agents.collaborator import CollaboratorAgent
 from murder.agents.monkey import MonkeyAgent
 from murder.agents.sentinel import SentinelAgent
 from murder.bus import EscalationEvent, StatusChangeEvent, TicketStatus
-from murder.clients.openrouter import OpenRouterClient
+from murder.clients import create_client
+from murder.config import resolve_default_monkey_harness, resolve_default_monkey_startup_model
 from murder.harnesses import get as get_harness
 from murder.prompts import load
 from murder.tickets import lifecycle
@@ -22,17 +22,17 @@ if TYPE_CHECKING:
     from murder.runtime import Runtime
 
 
-def _session_name(rt: "Runtime", role: str, suffix: str) -> str:
+def _session_name(rt: Runtime, role: str, suffix: str) -> str:
     proj = rt.config.project.name.replace(" ", "_").replace("/", "_")
     tpl = rt.config.runtime.session_name_template
     return tpl.format(project=proj, role=role, suffix=suffix)
 
 
-def _compose_monkey_brief(rt: "Runtime", ticket_id: str) -> str:
+def _compose_monkey_brief(rt: Runtime, ticket_id: str) -> str:
     row = dbmod.get_ticket(rt.db, ticket_id)
     if row is None:
         raise KeyError(ticket_id)
-    harness_name = row.get("harness") or rt.config.default_monkey.harness
+    harness_name = resolve_default_monkey_harness(rt.config.default_monkey, row)
     tpl_name = (
         rt.config.default_monkey.startup_prompt_template or f"monkey_{harness_name}.md"
     ).removesuffix(".md")
@@ -67,7 +67,7 @@ def _compose_monkey_brief(rt: "Runtime", ticket_id: str) -> str:
 
 
 class Orchestrator:
-    def __init__(self, rt: "Runtime") -> None:
+    def __init__(self, rt: Runtime) -> None:
         self.rt = rt
 
     async def kickoff_ready(self, only: str | None = None) -> list[str]:
@@ -124,8 +124,9 @@ class Orchestrator:
         row = dbmod.get_ticket(self.rt.db, ticket_id)
         if row is None:
             raise KeyError(ticket_id)
-        harness_kind = row.get("harness") or self.rt.config.default_monkey.harness
-        harness = get_harness(harness_kind)
+        harness_kind = resolve_default_monkey_harness(self.rt.config.default_monkey, row)
+        startup_model = resolve_default_monkey_startup_model(self.rt.config.default_monkey, row)
+        harness = get_harness(harness_kind, startup_model=startup_model)
         session = _session_name(self.rt, "monkey", f"_{ticket_id}")
         brief = _compose_monkey_brief(self.rt, ticket_id)
         monkey = MonkeyAgent(
@@ -134,6 +135,7 @@ class Orchestrator:
             session=session,
             harness=harness,
             repo_root=self.rt.repo_root,
+            startup_model=startup_model,
             runtime=self.rt,
         )
         self.rt.register_agent(monkey)
@@ -144,12 +146,11 @@ class Orchestrator:
         row = dbmod.get_ticket(self.rt.db, ticket_id)
         if row is None:
             raise KeyError(ticket_id)
-        harness_kind = row.get("harness") or self.rt.config.default_monkey.harness
-        harness = get_harness(harness_kind)
+        harness_kind = resolve_default_monkey_harness(self.rt.config.default_monkey, row)
+        startup_model = resolve_default_monkey_startup_model(self.rt.config.default_monkey, row)
+        harness = get_harness(harness_kind, startup_model=startup_model)
         session = _session_name(self.rt, "augur", f"_{ticket_id}")
-        client = None
-        if os.environ.get("OPENROUTER_API_KEY"):
-            client = OpenRouterClient()
+        client = create_client(self.rt.config.augur.provider)
         augur = AugurAgent(
             agent_id=f"augur-{ticket_id}",
             ticket_id=ticket_id,
@@ -174,9 +175,7 @@ class Orchestrator:
         ).fetchone()
         if row:
             return str(row["agent_id"])
-        client = None
-        if os.environ.get("OPENROUTER_API_KEY"):
-            client = OpenRouterClient()
+        client = create_client(self.rt.config.sentinel.provider)
         session = _session_name(self.rt, "sentinel", "")
         agent = SentinelAgent(
             agent_id="sentinel-0",
@@ -197,13 +196,17 @@ class Orchestrator:
         ).fetchone()
         if row:
             return str(row["agent_id"])
-        harness = get_harness(self.rt.config.collaborator.harness)
+        startup_model = self.rt.config.collaborator.startup_model
+        harness = get_harness(
+            self.rt.config.collaborator.harness, startup_model=startup_model
+        )
         session = _session_name(self.rt, "collaborator", "")
         agent = CollaboratorAgent(
             agent_id="collaborator-0",
             session=session,
             harness=harness,
             repo_root=self.rt.repo_root,
+            startup_model=startup_model,
             runtime=self.rt,
         )
         self.rt.register_agent(agent)
@@ -234,7 +237,7 @@ class Orchestrator:
         if self.rt.bus is None or self.rt.run_id is None or self.rt.db is None:
             return
         dbmod.update_ticket_status(self.rt.db, ticket_id, TicketStatus.BLOCKED.value)
-        eid = dbmod.insert_escalation(
+        dbmod.insert_escalation(
             self.rt.db,
             ticket_id=ticket_id,
             severity=2,
@@ -280,4 +283,3 @@ class Orchestrator:
         prev = lifecycle.transition(self.rt.db, ticket_id, TicketStatus.DONE)
         await self._emit_ticket_status(ticket_id, prev, TicketStatus.DONE.value)
         return True
-

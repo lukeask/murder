@@ -29,7 +29,11 @@ augur:
 default_monkey:
   kind: harness
   harness: cursor
+  # Optional pools (murder --config can set these): tickets without overrides pick
+  # stably by ticket id. Omit harnesses / startup_models for single-harness/model.
+  # harnesses: [cursor, codex]
   startup_model: composer       # cursor's selector; consumed by CursorAdapter
+  # startup_models: [composer, gpt-4.1]
   startup_prompt_template: monkey_cursor.md
 
 tui:

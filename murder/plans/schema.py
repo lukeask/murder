@@ -1,8 +1,8 @@
 """Plan pydantic model.
 
-Plans store prose; only the frontmatter is structured. They live in
-`.agents/plans/<name>.md`. No DB row in v0 — plans aren't read by the
-runtime, only by user + Collaborator.
+Plans store prose; frontmatter carries the small amount of structured
+state that the runtime syncs into SQLite. `.agents/plans/<name>.md` is the
+editable working projection, not a separate source of truth.
 """
 
 from __future__ import annotations
@@ -30,6 +30,8 @@ class Plan(BaseModel):
     name: str
     status: PlanStatus = PlanStatus.DRAFT
     created_at: datetime
+    updated_at: datetime | None = None
     revisions: int = 0
     related_tickets: list[str] = Field(default_factory=list)
+    frontmatter: dict[str, object] = Field(default_factory=dict)
     body: str = ""

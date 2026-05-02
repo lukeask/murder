@@ -20,7 +20,7 @@ import contextlib
 import json
 import signal
 import sqlite3
-from collections.abc import AsyncGenerator, Callable, Awaitable
+from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -28,6 +28,7 @@ from typing import TYPE_CHECKING, Any
 from murder import db as dbmod
 from murder.agents.base import AgentRole
 from murder.bus import AgentStatus, Bus, EventFilter, SubscriptionHandle
+from murder.plans.sync import PlanSync, choose_editor, open_editor
 from murder.storage.filesystem import acquire_flock, release_flock
 from murder.storage.paths import db_path, lock_path
 from murder.storage.runs import allocate_run_id
@@ -55,6 +56,7 @@ class Runtime:
         self._shutdown = asyncio.Event()
         self._external_stop = asyncio.Event()
         self._lock_fd: int | None = None
+        self.plan_sync: PlanSync | None = None
 
     async def __aenter__(self) -> "Runtime":
         await self.start()
@@ -73,6 +75,9 @@ class Runtime:
         snap = json.dumps(self.config.model_dump(mode="json"), default=str)
         dbmod.insert_run(self.db, self.run_id, snap)
         self.bus = Bus(self.run_id, self.db)
+        self.plan_sync = PlanSync(self.repo_root, self.db)
+        await self.plan_sync.reconcile_all()
+        self._tasks["plan_sync"] = asyncio.create_task(self.plan_sync.run())
 
     async def stop(self) -> None:
         self._shutdown.set()
@@ -81,6 +86,9 @@ class Runtime:
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await t
         self._tasks.clear()
+        if self.plan_sync is not None:
+            with contextlib.suppress(Exception):
+                await self.plan_sync.reconcile_all()
         for agent in list(self._agents.values()):
             with contextlib.suppress(Exception):
                 await agent.stop()
@@ -92,6 +100,7 @@ class Runtime:
         if self.db is not None:
             self.db.close()
             self.db = None
+        self.plan_sync = None
         self.bus = None
         self.run_id = None
         if self._lock_fd is not None:
@@ -177,3 +186,22 @@ class Runtime:
             with contextlib.suppress(NotImplementedError):
                 loop.add_signal_handler(sig, _wake)
         await self._external_stop.wait()
+
+    async def reconcile_plan(self, name: str) -> None:
+        if self.plan_sync is not None:
+            await self.plan_sync.reconcile_name(name)
+
+    async def open_plan_in_editor(self, name: str, preferred_editor: str | None = None) -> int:
+        if self.plan_sync is None:
+            raise RuntimeError("Runtime not started (no plan sync)")
+        await self.plan_sync.reconcile_name(name)
+        row = dbmod.get_plan_row(self.db, name) if self.db is not None else None
+        path = (
+            self.repo_root / row["materialized_path"]
+            if row
+            else self.repo_root / ".agents" / "plans" / f"{name}.md"
+        )
+        editor = choose_editor(preferred_editor)
+        code = await open_editor(path, editor)
+        await self.plan_sync.reconcile_name(name)
+        return code
