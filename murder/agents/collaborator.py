@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-import asyncio
 import contextlib
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from murder.agents.base import Agent, AgentRole, AgentStatus
 from murder.harnesses.base import HarnessAdapter
+from murder.harnesses.models import HarnessStartSpec
 
 if TYPE_CHECKING:
     from murder.runtime import Runtime
@@ -25,32 +25,27 @@ class CollaboratorAgent(Agent):
         harness: HarnessAdapter,
         repo_root: Path,
         *,
-        runtime: "Runtime | None" = None,
+        startup_model: str | None = None,
+        runtime: Runtime | None = None,
     ) -> None:
         self.id = agent_id
         self.session = session
         self.harness = harness
         self.repo_root = Path(repo_root)
+        self.startup_model = startup_model
         self.runtime = runtime
         self.status = AgentStatus.IDLE
+        self.harness_session = harness.attach(session, self.repo_root)
 
     async def start(self, brief: str, ctx: dict[str, Any]) -> None:
-        from murder import tmux
         from murder.bus import StatusChangeEvent
 
-        await tmux.create_session(
-            self.session,
-            self.repo_root,
-            self.harness.startup_cmd(self.repo_root),
+        start_result = await self.harness_session.start(
+            HarnessStartSpec(cwd=self.repo_root, startup_model=self.startup_model)
         )
-        for _ in range(600):
-            pane = await tmux.capture_pane(self.session, lines=80)
-            if self.harness.is_ready(pane):
-                break
-            await asyncio.sleep(0.4)
-        else:
-            raise TimeoutError(f"Collaborator harness not ready: {self.session}")
-        await self.harness.send_prompt(self.session, brief)
+        if not start_result.ok:
+            raise TimeoutError(start_result.message or "collaborator startup failed")
+        await self.harness_session.send_prompt(brief)
         self.status = AgentStatus.RUNNING
         if self.runtime:
             self.runtime.sync_agent(self)
@@ -72,7 +67,7 @@ class CollaboratorAgent(Agent):
         from murder import tmux
 
         with contextlib.suppress(Exception):
-            await self.harness.interrupt(self.session)
+            await self.harness_session.interrupt()
         with contextlib.suppress(Exception):
             await tmux.kill_session(self.session)
         self.status = AgentStatus.DONE
@@ -80,6 +75,4 @@ class CollaboratorAgent(Agent):
             self.runtime.sync_agent(self)
 
     async def send(self, msg: str) -> None:
-        from murder import tmux
-
-        await tmux.send_keys(self.session, msg, literal=True, enter=True)
+        await self.harness_session.send_prompt(msg)

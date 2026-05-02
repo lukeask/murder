@@ -21,12 +21,16 @@ agent.
 
 from __future__ import annotations
 
+import asyncio
 import re
 from pathlib import Path
 from typing import ClassVar
 
 from murder.harnesses.base import (
     HarnessAdapter,
+)
+from murder.harnesses.models import HarnessStartSpec
+from murder.harnesses.parsing import (
     extract_last_message_heuristic,
     strip_ansi,
 )
@@ -99,6 +103,26 @@ class CursorAdapter(HarnessAdapter):
         # Simple framing — cursor has no special instruction marker.
         return f"[supervisor] {msg}"
 
-    # TODO(M1): /model selection support.
-    # set_model(name) → send_keys '/model <name>' between startup and first prompt.
-    # Documented in tmux-subagents skill: "/model Composer 2", "/model GPT-5.2 Low".
+    async def set_model(self, session: str, model: str) -> bool:
+        """Select Cursor's model before the first real prompt.
+
+        Cursor documents `/model <model>` as the runtime selector. We do not
+        validate the model name here because the available labels are account
+        and release dependent.
+        """
+        from murder.tmux import send_keys
+
+        await send_keys(session, f"/model {model}", literal=True, enter=True)
+        await asyncio.sleep(0.4)
+        return True
+
+    async def initialize_defaults(
+        self, session: str, spec: HarnessStartSpec
+    ):
+        from murder.harnesses.results import ok_result
+        from murder.tmux import send_keys
+
+        mode = "on" if spec.auto_run is not False else "off"
+        await send_keys(session, f"/auto-run {mode}", literal=True, enter=True)
+        await asyncio.sleep(0.2)
+        return ok_result()

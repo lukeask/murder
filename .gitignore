@@ -12,11 +12,7 @@ venv/
 .env
 
 # Murder runtime artifacts
-.agents/murder.db
-.agents/murder.db-wal
-.agents/murder.db-shm
-.agents/.lock
-.agents/runs/
+.agents/
 
 # Tooling
 .mypy_cache/

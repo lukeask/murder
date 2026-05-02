@@ -1,0 +1,66 @@
+"""default_monkey harness/model pools and resolution."""
+
+from __future__ import annotations
+
+import pytest
+
+from murder.config import (
+    HarnessRoleConfig,
+    resolve_default_monkey_harness,
+    resolve_default_monkey_startup_model,
+    stable_bucket_index,
+)
+
+
+def test_stable_bucket_index_deterministic() -> None:
+    assert stable_bucket_index("t001", 3) == stable_bucket_index("t001", 3)
+    assert 0 <= stable_bucket_index("t001", 3) < 3
+
+
+def test_resolve_harness_pool_spreads_tickets() -> None:
+    cfg = HarnessRoleConfig(
+        harness="cursor",
+        harnesses=["cursor", "codex", "claude_code"],
+    )
+    a = resolve_default_monkey_harness(cfg, {"id": "t001"})
+    b = resolve_default_monkey_harness(cfg, {"id": "t002"})
+    assert a in cfg.harnesses
+    assert b in cfg.harnesses
+
+
+def test_resolve_harness_ticket_override() -> None:
+    cfg = HarnessRoleConfig(harness="cursor", harnesses=["cursor", "codex"])
+    assert resolve_default_monkey_harness(cfg, {"id": "t001", "harness": "pi"}) == "pi"
+
+
+def test_resolve_model_pool_and_override() -> None:
+    cfg = HarnessRoleConfig(
+        harness="cursor",
+        startup_model="a",
+        startup_models=["m1", "m2", "m3"],
+    )
+    assert resolve_default_monkey_startup_model(cfg, {"id": "t007"}) in ("m1", "m2", "m3")
+    assert resolve_default_monkey_startup_model(cfg, {"id": "t007", "model": "z9"}) == "z9"
+
+
+def test_resolve_model_single_startup_model() -> None:
+    cfg = HarnessRoleConfig(harness="cursor", startup_model="solo", startup_models=None)
+    assert resolve_default_monkey_startup_model(cfg, {"id": "t1"}) == "solo"
+
+
+def test_startup_models_all_blank_becomes_none() -> None:
+    cfg = HarnessRoleConfig.model_validate(
+        {
+            "kind": "harness",
+            "harness": "cursor",
+            "startup_models": ["  ", ""],
+        }
+    )
+    assert cfg.startup_models is None
+
+
+def test_empty_harnesses_list_normalized() -> None:
+    cfg = HarnessRoleConfig.model_validate(
+        {"kind": "harness", "harness": "cursor", "harnesses": []},
+    )
+    assert cfg.harnesses is None

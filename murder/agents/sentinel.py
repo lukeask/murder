@@ -412,4 +412,4 @@ class SentinelAgent(Agent):
             lifecycle.transition(self.runtime.db, ticket_id, TicketStatus.BLOCKED)
         monkey = self.runtime.get_monkey(ticket_id)
         if monkey is not None:
-            await monkey.harness.interrupt(monkey.session)
+            await monkey.harness_session.interrupt()

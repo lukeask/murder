@@ -1,16 +1,19 @@
 """Chat input box.
 
 Submissions are routed by the parent app to the Collaborator session
-via the Orchestrator (lazy-spawn on first message)."""
+via the Orchestrator (lazy-spawn on first message).
+
+Enter submits; Shift+Enter inserts a newline."""
 
 from __future__ import annotations
 
+from textual.events import Key
 from textual.message import Message
-from textual.widgets import Input
+from textual.widgets import TextArea
 
 
-class ChatInput(Input):
-    class Submitted(Message):
+class ChatInput(TextArea):
+    class UserMessage(Message):
         def __init__(self, text: str) -> None:
             self.text = text
             super().__init__()
@@ -18,16 +21,27 @@ class ChatInput(Input):
     DEFAULT_CSS = """
     ChatInput {
         border: round $accent;
-        height: 3;
+        height: auto;
+        min-height: 3;
+        max-height: 8;
     }
     """
 
     def __init__(self) -> None:
-        super().__init__(placeholder="chat with the collaborator (/murder to kick off ready tickets)")
+        super().__init__()
 
-    def on_input_submitted(self, event: Input.Submitted) -> None:
-        text = event.value.strip()
-        if not text:
-            return
-        self.value = ""
-        self.post_message(self.Submitted(text))
+    def on_mount(self) -> None:
+        self.border_subtitle = "Enter to send · Shift+Enter for newline"
+
+    def on_key(self, event: Key) -> None:
+        if event.key == "enter":
+            event.prevent_default()
+            event.stop()
+            text = self.text.strip()
+            if text:
+                self.clear()
+                self.post_message(self.UserMessage(text))
+        elif event.key == "shift+enter":
+            event.prevent_default()
+            event.stop()
+            self.insert("\n")

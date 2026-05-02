@@ -16,6 +16,7 @@ from pathlib import Path
 import pytest
 
 from murder.harnesses.cursor import CursorAdapter
+from tests.unit.harness_contracts import assert_adapter_basics
 
 FIXTURES = Path(__file__).parent.parent / "fixtures" / "cursor_panes"
 
@@ -82,3 +83,50 @@ def test_stale_busy_marker_in_scrollback_doesnt_flag_busy(
     )
     assert adapter.is_idle(pane)
     assert not adapter.is_busy(pane)
+
+
+async def test_set_model_sends_cursor_slash_command(monkeypatch) -> None:
+    calls: list[tuple[str, str, bool, bool]] = []
+
+    async def fake_send_keys(
+        session: str, text: str, *, literal: bool = True, enter: bool = True
+    ) -> None:
+        calls.append((session, text, literal, enter))
+
+    monkeypatch.setattr("murder.tmux.send_keys", fake_send_keys)
+    assert await CursorAdapter().set_model("sess", "Composer 2")
+    assert calls == [("sess", "/model Composer 2", True, True)]
+
+
+async def test_set_autonomy_sends_auto_run_command(monkeypatch) -> None:
+    calls: list[tuple[str, str, bool, bool]] = []
+
+    async def fake_send_keys(
+        session: str, text: str, *, literal: bool = True, enter: bool = True
+    ) -> None:
+        calls.append((session, text, literal, enter))
+
+    from murder.harnesses.models import HarnessStartSpec
+
+    monkeypatch.setattr("murder.tmux.send_keys", fake_send_keys)
+    result = await CursorAdapter().initialize_defaults(
+        "sess", HarnessStartSpec(cwd=Path("/repo"), auto_run=True)
+    )
+    assert result.ok
+    assert calls == [("sess", "/auto-run on", True, True)]
+
+
+async def test_harness_session_set_model_returns_typed_result(monkeypatch) -> None:
+    async def fake_send_keys(
+        session: str, text: str, *, literal: bool = True, enter: bool = True
+    ) -> None:
+        del session, text, literal, enter
+
+    monkeypatch.setattr("murder.tmux.send_keys", fake_send_keys)
+    result = await CursorAdapter().attach("sess", Path("/repo")).set_model("Composer 2")
+    assert result.ok
+
+
+def test_cursor_adapter_contract_basics() -> None:
+    pane = _load("idle_first_load.txt")
+    assert_adapter_basics(CursorAdapter(), pane, Path("/repo"))

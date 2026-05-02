@@ -19,6 +19,7 @@ import uuid
 from pathlib import Path
 
 LARGE_PAYLOAD_BYTES = 1024
+PASTE_ENTER_DELAY_S = 0.15
 
 
 class TmuxError(RuntimeError):
@@ -97,6 +98,7 @@ async def send_keys(
         return
 
     payload = text.encode("utf-8")
+    used_paste_buffer = False
     if len(payload) < LARGE_PAYLOAD_BYTES:
         await _tmux("send-keys", "-t", name, "-l", text)
     else:
@@ -109,6 +111,7 @@ async def send_keys(
             await _tmux("load-buffer", "-b", buf_name, tmp_name)
             # -d deletes the buffer after paste so we don't leak buffer slots.
             await _tmux("paste-buffer", "-d", "-t", name, "-b", buf_name)
+            used_paste_buffer = True
         finally:
             try:
                 os.unlink(tmp_name)
@@ -116,6 +119,8 @@ async def send_keys(
                 pass
 
     if enter:
+        if used_paste_buffer:
+            await asyncio.sleep(PASTE_ENTER_DELAY_S)
         await _tmux("send-keys", "-t", name, "Enter")
 
 

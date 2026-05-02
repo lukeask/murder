@@ -1,20 +1,47 @@
-"""Pi CLI adapter — STUB.
+"""Pi coding-agent adapter (`pi`).
 
-User has not yet exercised pi; auto-yolo behavior unconfirmed. Adapter
-raises on use until pi is investigated. Reserved slot in registry so
-downstream code can plumb `harness: pi` ticket overrides through without
-breaking on import.
-
-TODO(post-M1): exercise `pi --help` and pane behavior; pin regexes; lift
-NotImplementedError on `is_ready` etc.
+Pi's README and installed package docs were checked on 2026-05-02. The
+adapter uses the CLI `--model` startup flag when a preferred startup model is
+configured, because Pi's interactive `/model` command opens a selector UI.
 """
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import ClassVar
 
-from murder.harnesses.base import HarnessAdapter
+from murder.harnesses.base import (
+    HarnessAdapter,
+)
+from murder.harnesses.parsing import (
+    extract_last_message_heuristic,
+    strip_ansi,
+)
+
+_TAIL_LINES = 30
+
+_READY_RE = re.compile(
+    r"(/hotkeys|Ctrl\+L|Ctrl\+P|Slash commands|^\s*[>/]\s*$)",
+    re.IGNORECASE | re.MULTILINE,
+)
+_IDLE_RE = re.compile(
+    r"(/hotkeys|Ctrl\+L|Ctrl\+P|^\s*[>/]\s*$)",
+    re.IGNORECASE | re.MULTILINE,
+)
+_BUSY_RE = re.compile(
+    r"\b(thinking|streaming|running|executing|tool calls?|retrying|compacting)\b",
+    re.IGNORECASE,
+)
+_AUTH_RE = re.compile(
+    r"\b(login|authenticate|api key|required|no provider|configure provider)\b",
+    re.IGNORECASE,
+)
+
+
+def _tail(pane_text: str) -> str:
+    lines = pane_text.splitlines()
+    return "\n".join(lines[-_TAIL_LINES:])
 
 
 class PiAdapter(HarnessAdapter):
@@ -22,19 +49,34 @@ class PiAdapter(HarnessAdapter):
     monkey_system_prompt: ClassVar[str] = "see prompts/monkey_pi.md"
 
     def startup_cmd(self, cwd: Path) -> list[str]:
-        return ["pi"]
+        cmd = ["pi"]
+        if self.startup_model:
+            cmd.extend(["--model", self.startup_model])
+        return cmd
 
     def is_ready(self, pane_text: str) -> bool:
-        raise NotImplementedError("pi adapter: not yet investigated")
+        clean = strip_ansi(pane_text)
+        tail = _tail(clean)
+        if _AUTH_RE.search(tail):
+            return False
+        return bool(_READY_RE.search(tail))
 
     def is_idle(self, pane_text: str) -> bool:
-        raise NotImplementedError("pi adapter: not yet investigated")
+        clean = strip_ansi(pane_text)
+        tail = _tail(clean)
+        if _AUTH_RE.search(tail) or self.is_busy(tail):
+            return False
+        return bool(_IDLE_RE.search(tail))
 
     def is_busy(self, pane_text: str) -> bool:
-        raise NotImplementedError("pi adapter: not yet investigated")
+        return bool(_BUSY_RE.search(_tail(strip_ansi(pane_text))))
 
     def extract_last_message(self, pane_text: str) -> str | None:
-        raise NotImplementedError("pi adapter: not yet investigated")
+        return extract_last_message_heuristic(pane_text)
 
     def format_nudge(self, msg: str) -> str:
         return f"[supervisor] {msg}"
+
+    async def set_model(self, session: str, model: str) -> bool:
+        del session
+        return model == self.startup_model
