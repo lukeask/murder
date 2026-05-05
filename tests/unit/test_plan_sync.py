@@ -35,6 +35,33 @@ created_at: '2026-05-02T12:00:00'
 
 
 @pytest.mark.asyncio
+async def test_poll_imports_new_plan_file_after_debounce(
+    tmp_path, memdb: sqlite3.Connection
+) -> None:
+    path = tmp_path / ".agents" / "plans" / "delta.md"
+    path.parent.mkdir(parents=True)
+    path.write_text(
+        """---
+name: delta
+status: draft
+created_at: '2026-05-02T12:00:00'
+---
+# Delta
+""",
+        encoding="utf-8",
+    )
+
+    sync = PlanSync(tmp_path, memdb, debounce_s=0)
+    await sync.poll_once()
+    assert dbmod.get_plan_row(memdb, "delta") is None
+
+    await sync.poll_once()
+    row = dbmod.get_plan_row(memdb, "delta")
+    assert row is not None
+    assert row["sync_state"] == "synced"
+
+
+@pytest.mark.asyncio
 async def test_sync_materializes_missing_db_plan(tmp_path, memdb: sqlite3.Connection) -> None:
     plan = Plan(name="beta", created_at=datetime(2026, 5, 2, 12, 0, 0), body="Beta\n")
     dbmod.upsert_plan(
@@ -111,3 +138,34 @@ Good
     row = dbmod.get_plan_row(memdb, "bad")
     assert row is not None
     assert row["sync_state"] == "parse_error"
+
+
+@pytest.mark.asyncio
+async def test_poll_once_handles_file_deleted_between_scan_and_stat(
+    tmp_path, memdb: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / ".agents" / "plans" / "ephemeral.md"
+    path.parent.mkdir(parents=True)
+    path.write_text(
+        """---
+name: ephemeral
+status: draft
+created_at: '2026-05-02T12:00:00'
+---
+# Ephemeral
+""",
+        encoding="utf-8",
+    )
+
+    sync = PlanSync(tmp_path, memdb, debounce_s=0)
+
+    orig_scan = sync._scan_paths
+
+    def _scan_then_delete() -> list:
+        paths = orig_scan()
+        if path.exists():
+            path.unlink()
+        return paths
+
+    monkeypatch.setattr(sync, "_scan_paths", _scan_then_delete)
+    await sync.poll_once()

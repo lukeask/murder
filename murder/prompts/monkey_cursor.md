@@ -30,8 +30,9 @@ communicate with the orchestrator.
 - `>>> CHECK: <exact item text>` — flips that checklist item to done.
 - `>>> ASK: <question>` — pauses you; the question is forwarded to the
   Sentinel, which will reply or escalate. Wait for a reply.
-- `>>> NOTE: <text>` — appends to the ticket's `## Working notes`
-  section. Use this for things future-you (or future-someone) will want
+- `>>> NOTE: <text>` followed by `>>> END` on its own line — appends to
+  the ticket's `## Working notes` section. Use this for things future-you
+  (or future-someone) will want
   to know.
 - `>>> DONE` — declares completion. The orchestrator runs git-diff +
   checklist completeness checks before accepting.

@@ -7,7 +7,7 @@ import os
 from collections.abc import Mapping
 from importlib import resources
 from pathlib import Path
-from typing import Any, Literal, TypeAlias
+from typing import Any, Literal, TypeAlias, cast
 
 import yaml
 from pydantic import BaseModel, Field, field_validator
@@ -31,12 +31,24 @@ class HarnessRoleConfig(BaseModel):
     harness: HarnessKind
     harnesses: list[HarnessKind] | None = Field(
         default=None,
-        description="Pool of harness kinds; tickets without harness override pick stably by ticket id.",
+        description=(
+            "Pool of harness kinds; tickets without harness override pick stably by ticket id."
+        ),
     )
     startup_model: str | None = None
     startup_models: list[str] | None = Field(
         default=None,
-        description="Pool of startup model strings; tickets without model override pick stably by ticket id.",
+        description=(
+            "Pool of startup model strings; tickets without model override pick "
+            "stably by ticket id."
+        ),
+    )
+    startup_models_by_harness: dict[HarnessKind, list[str]] | None = Field(
+        default=None,
+        description=(
+            "Per-harness startup model pools; tickets without model override pick "
+            "from the pool matching the resolved harness."
+        ),
     )
     startup_prompt_template: str | None = None
     binary: str | None = None
@@ -54,6 +66,20 @@ class HarnessRoleConfig(BaseModel):
         if v is None:
             return None
         out = [str(x).strip() for x in v if str(x).strip()]
+        return out or None
+
+    @field_validator("startup_models_by_harness", mode="after")
+    @classmethod
+    def _normalize_models_by_harness(
+        cls, v: dict[HarnessKind, list[str]] | None
+    ) -> dict[HarnessKind, list[str]] | None:
+        if v is None:
+            return None
+        out: dict[HarnessKind, list[str]] = {}
+        for harness, models in v.items():
+            cleaned = [str(x).strip() for x in models if str(x).strip()]
+            if cleaned:
+                out[harness] = cleaned
         return out or None
 
 
@@ -109,9 +135,10 @@ class Config(BaseModel):
     runtime: RuntimeConfig = RuntimeConfig()
 
     @classmethod
-    def load(cls, repo_root: Path) -> "Config":
-        # Load env: global first, then project-local override.
+    def load(cls, repo_root: Path) -> Config:
+        # Load env: global first, then project-local overrides.
         load_dotenv(env_path(), override=False)
+        load_dotenv(project_env_path(repo_root), override=True)
         load_dotenv(repo_root / ".env", override=True)
 
         bundled = _load_bundled_defaults()
@@ -129,6 +156,11 @@ def env_path() -> Path:
     base = os.environ.get("XDG_CONFIG_HOME")
     root = Path(base) if base else Path.home() / ".config"
     return root / "murder" / ".env"
+
+
+def project_env_path(repo_root: Path) -> Path:
+    """Project env file created by `murder init`."""
+    return repo_root / ".agents" / ".env"
 
 
 def _load_bundled_defaults() -> dict[str, Any]:
@@ -161,18 +193,25 @@ def resolve_default_monkey_harness(
 ) -> HarnessKind:
     overt = (ticket_row or {}).get("harness")
     if overt:
-        return overt  # type: ignore[return-value]
+        return cast(HarnessKind, overt)
     pool = list(monkey_cfg.harnesses) if monkey_cfg.harnesses else [monkey_cfg.harness]
     tid = str((ticket_row or {}).get("id") or "")
     return pool[stable_bucket_index(tid, len(pool))]
 
 
 def resolve_default_monkey_startup_model(
-    monkey_cfg: HarnessRoleConfig, ticket_row: Mapping[str, Any] | None
+    monkey_cfg: HarnessRoleConfig,
+    ticket_row: Mapping[str, Any] | None,
+    harness: HarnessKind | None = None,
 ) -> str | None:
     overt = (ticket_row or {}).get("model")
     if overt:
         return str(overt)
+    if harness and monkey_cfg.startup_models_by_harness:
+        pool = monkey_cfg.startup_models_by_harness.get(harness)
+        if pool:
+            tid = str((ticket_row or {}).get("id") or "")
+            return pool[stable_bucket_index(tid, len(pool))]
     if monkey_cfg.startup_models:
         pool = monkey_cfg.startup_models
         tid = str((ticket_row or {}).get("id") or "")

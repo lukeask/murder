@@ -85,7 +85,7 @@ CREATE TABLE IF NOT EXISTS agents (
     ticket_id         TEXT REFERENCES tickets(id) ON DELETE SET NULL,
     session           TEXT,
     status            TEXT NOT NULL CHECK (status IN
-                      ('idle','running','blocked','escalating','done','dead')),
+                      ('idle','running','blocked','escalating','done','failed','dead')),
     start_commit      TEXT,
     started_at        TEXT NOT NULL,
     last_heartbeat_at TEXT,
@@ -159,6 +159,34 @@ CREATE TABLE IF NOT EXISTS plan_related_tickets (
     ticket_id TEXT NOT NULL,
     PRIMARY KEY (plan_name, ticket_id)
 );
+
+CREATE TABLE IF NOT EXISTS harness_usage_snapshots (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    harness        TEXT NOT NULL,
+    source         TEXT NOT NULL,
+    fetched_at     TEXT NOT NULL,
+    status_json    TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_harness_usage_snapshots_harness
+    ON harness_usage_snapshots(harness, fetched_at);
+
+CREATE TABLE IF NOT EXISTS schedule_queue (
+    id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+    ticket_id             TEXT REFERENCES tickets(id) ON DELETE SET NULL,
+    title                 TEXT NOT NULL,
+    harness               TEXT,
+    desired_start_at      TEXT,
+    max_usage_percent     REAL,
+    status                TEXT NOT NULL DEFAULT 'pending' CHECK (status IN
+                          ('pending','scheduled','running','done','blocked','cancelled')),
+    created_at            TEXT NOT NULL,
+    updated_at            TEXT NOT NULL,
+    notes                 TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_schedule_queue_status
+    ON schedule_queue(status, desired_start_at);
 """
 # fmt: on
 
@@ -188,6 +216,45 @@ def connect(db_path: Path) -> sqlite3.Connection:
 def init_schema(conn: sqlite3.Connection) -> None:
     """Apply SCHEMA_SQL idempotently."""
     conn.executescript(SCHEMA_SQL)
+    _migrate_agents_failed_status(conn)
+
+
+def _migrate_agents_failed_status(conn: sqlite3.Connection) -> None:
+    """Allow the agent state machine to persist startup/runtime failures."""
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'agents'"
+    ).fetchone()
+    if row is None or "'failed'" in str(row["sql"]):
+        return
+    conn.executescript(
+        """
+        PRAGMA foreign_keys = OFF;
+        BEGIN;
+        ALTER TABLE agents RENAME TO agents_old_failed_migration;
+        CREATE TABLE agents (
+            agent_id          TEXT PRIMARY KEY,
+            role              TEXT NOT NULL CHECK (role IN
+                              ('collaborator','sentinel','augur','monkey')),
+            ticket_id         TEXT REFERENCES tickets(id) ON DELETE SET NULL,
+            session           TEXT,
+            status            TEXT NOT NULL CHECK (status IN
+                              ('idle','running','blocked','escalating','done','failed','dead')),
+            start_commit      TEXT,
+            started_at        TEXT NOT NULL,
+            last_heartbeat_at TEXT,
+            pid               INTEGER
+        );
+        INSERT INTO agents
+            (agent_id, role, ticket_id, session, status, start_commit,
+             started_at, last_heartbeat_at, pid)
+        SELECT agent_id, role, ticket_id, session, status, start_commit,
+               started_at, last_heartbeat_at, pid
+          FROM agents_old_failed_migration;
+        DROP TABLE agents_old_failed_migration;
+        COMMIT;
+        PRAGMA foreign_keys = ON;
+        """
+    )
 
 
 def db_path_for(repo_root: Path) -> Path:
@@ -367,7 +434,7 @@ def end_run(conn: sqlite3.Connection, run_id: str) -> None:
 
 # --- Tickets ----------------------------------------------------------------
 
-def insert_ticket(conn: sqlite3.Connection, ticket: "Ticket") -> None:
+def insert_ticket(conn: sqlite3.Connection, ticket: Ticket) -> None:
     """Insert ticket + its child rows in one transaction."""
     now = _now()
     conn.execute("BEGIN")

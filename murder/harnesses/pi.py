@@ -47,6 +47,12 @@ def _tail(pane_text: str) -> str:
 class PiAdapter(HarnessAdapter):
     kind: ClassVar[str] = "pi"
     monkey_system_prompt: ClassVar[str] = "see prompts/monkey_pi.md"
+    available_startup_models: ClassVar[list[tuple[str, str]]] = [
+        ("anthropic/claude-sonnet-4-6", "Claude Sonnet 4.6"),
+        ("anthropic/claude-opus-4-7", "Claude Opus 4.7"),
+        ("openai/gpt-5.5", "GPT-5.5"),
+        ("openai/gpt-5.4-mini", "GPT-5.4 Mini"),
+    ]
 
     def startup_cmd(self, cwd: Path) -> list[str]:
         cmd = ["pi"]

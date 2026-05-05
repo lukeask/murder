@@ -61,10 +61,17 @@ class PlanSync:
     async def poll_once(self) -> None:
         now = asyncio.get_running_loop().time()
         for path in self._scan_paths():
-            stat = path.stat()
+            try:
+                stat = path.stat()
+            except FileNotFoundError:
+                # The file may disappear between scan and stat; treat as deleted.
+                self._seen.pop(path, None)
+                self._changed_at.pop(path, None)
+                continue
             old = self._seen.get(path)
             if old is None:
                 self._seen[path] = FileSnapshot(stat.st_mtime_ns, stat.st_size)
+                self._changed_at[path] = now
                 continue
             if old.mtime_ns != stat.st_mtime_ns or old.size != stat.st_size:
                 self._seen[path] = FileSnapshot(stat.st_mtime_ns, stat.st_size)

@@ -89,9 +89,10 @@ class Runtime:
         if self.plan_sync is not None:
             with contextlib.suppress(Exception):
                 await self.plan_sync.reconcile_all()
+        terminal_statuses = {AgentStatus.DONE, AgentStatus.FAILED, AgentStatus.DEAD}
         for agent in list(self._agents.values()):
             with contextlib.suppress(Exception):
-                await agent.stop()
+                await agent.stop(failed=agent.status not in terminal_statuses)
         self._agents.clear()
         self._monkeys.clear()
         self._augurs.clear()
@@ -106,6 +107,8 @@ class Runtime:
         if self._lock_fd is not None:
             release_flock(self._lock_fd)
             self._lock_fd = None
+            with contextlib.suppress(FileNotFoundError, OSError):
+                lock_path(self.repo_root).unlink()
 
     def sync_agent(self, agent: "Agent") -> None:
         """Persist current agent fields to SQLite."""

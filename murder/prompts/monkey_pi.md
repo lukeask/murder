@@ -24,7 +24,7 @@ You are working on ticket `{ticket_id}` ({title}).
 
 - `>>> CHECK: <text>` — flip checklist done
 - `>>> ASK: <q>` — ask Sentinel
-- `>>> NOTE: <t>` — append to working notes
+- `>>> NOTE: <t>` followed by `>>> END` on its own line — append to working notes
 - `>>> DONE` — declare completion
 
 ## Hard rules

@@ -10,3 +10,4 @@
 
 # .env files commonly hold OPENROUTER_API_KEY etc.
 .env
+.agents/.env

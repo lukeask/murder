@@ -34,6 +34,9 @@ default_monkey:
   # harnesses: [cursor, codex]
   startup_model: composer       # cursor's selector; consumed by CursorAdapter
   # startup_models: [composer, gpt-4.1]
+  # startup_models_by_harness:
+  #   cursor: [composer]
+  #   codex: [gpt-5.5]
   startup_prompt_template: monkey_cursor.md
 
 tui:

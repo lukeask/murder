@@ -20,6 +20,18 @@ def test_startup_cmd_uses_tmux_capture_friendly_mode() -> None:
     ]
 
 
+def test_startup_cmd_includes_model_when_configured() -> None:
+    cmd = CodexAdapter(startup_model="gpt-5.5").startup_cmd(Path("/repo"))
+    assert cmd[-2:] == ["--model", "gpt-5.5"]
+
+
+async def test_codex_startup_model_is_supported_after_startup() -> None:
+    result = await CodexAdapter(startup_model="gpt-5.5").attach("sess", Path("/repo")).set_model(
+        "gpt-5.5"
+    )
+    assert result.ok
+
+
 def test_idle_startup_pane_is_ready_and_idle() -> None:
     pane = """
 › Explain this codebase
@@ -86,4 +98,31 @@ async def test_codex_request_usage_status_sends_status_command(monkeypatch) -> N
     monkeypatch.setattr("murder.tmux.send_keys", fake_send_keys)
     result = await CodexAdapter().attach("sess", Path("/repo")).request_usage_status()
     assert result.ok
+    assert calls == [("sess", "/status", True, True)]
+
+
+async def test_codex_collect_usage_status_sends_and_parses_panel(monkeypatch) -> None:
+    calls: list[tuple[str, str, bool, bool]] = []
+
+    async def fake_send_keys(
+        session: str, text: str, *, literal: bool = True, enter: bool = True
+    ) -> None:
+        calls.append((session, text, literal, enter))
+
+    async def fake_capture_pane(session: str, lines: int = 200) -> str:
+        assert session == "sess"
+        assert lines == 160
+        return """
+  Usage
+  Weekly limit          42% used
+  Resets 9:15am (America/New_York)
+"""
+
+    monkeypatch.setattr("murder.tmux.send_keys", fake_send_keys)
+    monkeypatch.setattr("murder.tmux.capture_pane", fake_capture_pane)
+    result = await CodexAdapter().attach("sess", Path("/repo")).collect_usage_status()
+    assert result.ok
+    assert result.data is not None
+    assert result.data.windows[0].name == "weekly"
+    assert result.data.windows[0].percent_used == 42.0
     assert calls == [("sess", "/status", True, True)]
