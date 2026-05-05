@@ -28,6 +28,8 @@ murder doctor         # checks tmux, OPENROUTER_API_KEY, harness binaries
 murder                # bare command: launches the TUI (alias: `murder up`)
 # in the chat pane: `/murder` kicks off all ready tickets;
 # anything else routes to the Collaborator (Claude Code, lazy-spawned).
+murder ticket create t001 "Dogfood the CLI" --wave 0 --plan "Implement the first path."
+murder ticket create t002 "Import markdown" --from ./ticket.md --check "Run tests"
 murder kick t007      # one-shot: kick off just t007's Monkey, no TUI
 ```
 
@@ -36,7 +38,7 @@ murder kick t007      # one-shot: kick off just t007's Monkey, no TUI
 ```
 murder/                # the package
 ├── cli.py             # `murder` entrypoint
-├── config.py          # roles.yaml + .env loading
+├── config.py          # roles.yaml + global/.agents/root .env loading
 ├── db.py              # SQLite schema + access (D2)
 ├── bus.py             # typed AgentEvent union + asyncio pubsub (D4)
 ├── tmux.py            # session helpers, load-buffer for big sends (D10)
@@ -54,6 +56,10 @@ murder/                # the package
 ├── prompts/           # role prompt templates
 └── templates/         # files copied into a project's .agents/ on `murder init`
 ```
+
+`murder init` creates `.agents/.env` from the bundled example. Environment
+loading order is `~/.config/murder/.env`, then `.agents/.env`, then repo-root
+`.env`, with later files overriding earlier values.
 
 ## See also
 

@@ -8,13 +8,20 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import ClassVar
 
-from murder.harnesses.models import HarnessPaneState, HarnessStartSpec
+from murder import tmux
+from murder.harnesses.models import (
+    HarnessPaneState,
+    HarnessStartSpec,
+    HarnessUsageStatus,
+)
+from murder.harnesses.parsing import strip_ui_chrome
 from murder.harnesses.results import SimpleResult, fail_result, ok_result
 
 ASK_RE = re.compile(r">>>\s*ASK:\s*(?P<body>.+?)(?=\n>>>|\Z)", re.DOTALL)
 CHECK_RE = re.compile(r">>>\s*CHECK:\s*(?P<body>.+?)$", re.MULTILINE)
-NOTE_RE = re.compile(r">>>\s*NOTE:\s*(?P<body>.+?)(?=\n>>>|\Z)", re.DOTALL)
+NOTE_RE = re.compile(r">>>\s*NOTE:\s*(?P<body>.+?)\n>>>\s*END\b", re.DOTALL)
 DONE_RE = re.compile(r">>>\s*DONE\b")
+MAX_NOTE_LINES = 20
 
 
 class HarnessSession:
@@ -24,8 +31,6 @@ class HarnessSession:
         self.repo_root = repo_root
 
     async def start(self, spec: HarnessStartSpec | None = None) -> SimpleResult[None]:
-        from murder import tmux
-
         start_spec = spec or HarnessStartSpec(
             cwd=self.repo_root,
             startup_model=self.adapter.startup_model,
@@ -50,15 +55,19 @@ class HarnessSession:
             model_result = await self.set_model(desired_model)
             if not model_result.ok:
                 return model_result
+            idle_result = await self.wait_idle(timeout_s=15.0)
+            if not idle_result.ok:
+                return idle_result
 
         init_result = await self.initialize_defaults(start_spec)
         if not init_result.ok:
             return init_result
+        idle_result = await self.wait_idle(timeout_s=15.0)
+        if not idle_result.ok:
+            return idle_result
         return ok_result()
 
     async def wait_ready(self, timeout_s: float = 240.0) -> SimpleResult[None]:
-        from murder import tmux
-
         attempts = max(1, int(timeout_s / 0.4))
         for _ in range(attempts):
             pane = await tmux.capture_pane(self.session, lines=120)
@@ -66,6 +75,15 @@ class HarnessSession:
                 return ok_result()
             await asyncio.sleep(0.4)
         return fail_result(f"Harness not ready in time: session={self.session}")
+
+    async def wait_idle(self, timeout_s: float = 30.0) -> SimpleResult[None]:
+        attempts = max(1, int(timeout_s / 0.4))
+        for _ in range(attempts):
+            pane = await tmux.capture_pane(self.session, lines=120)
+            if self.adapter.is_idle(pane):
+                return ok_result()
+            await asyncio.sleep(0.4)
+        return fail_result(f"Harness not idle in time: session={self.session}")
 
     async def initialize_defaults(self, spec: HarnessStartSpec) -> SimpleResult[None]:
         return await self.adapter.initialize_defaults(self.session, spec)
@@ -97,6 +115,9 @@ class HarnessSession:
             f"{self.adapter.kind} does not support usage/status reporting"
         )
 
+    async def collect_usage_status(self) -> SimpleResult[HarnessUsageStatus]:
+        return await self.adapter.collect_usage_status(self.session)
+
     async def interrupt(self) -> SimpleResult[None]:
         await self.adapter.interrupt(self.session)
         return ok_result()
@@ -105,6 +126,7 @@ class HarnessSession:
 class HarnessAdapter(ABC):
     kind: ClassVar[str]
     monkey_system_prompt: ClassVar[str]
+    available_startup_models: ClassVar[list[tuple[str, str]]] = []
 
     def __init__(self, startup_model: str | None = None) -> None:
         self.startup_model = startup_model
@@ -131,9 +153,7 @@ class HarnessAdapter(ABC):
         return ok_result()
 
     async def send_prompt(self, session: str, prompt: str) -> None:
-        from murder.tmux import send_keys
-
-        await send_keys(session, prompt, literal=True, enter=True)
+        await tmux.send_keys(session, prompt, literal=True, enter=True)
 
     async def set_model(self, session: str, model: str) -> bool:
         del session, model
@@ -143,29 +163,42 @@ class HarnessAdapter(ABC):
         del session
         return False
 
+    async def collect_usage_status(
+        self, session: str
+    ) -> SimpleResult[HarnessUsageStatus]:
+        del session
+        return fail_result(
+            f"{self.kind} does not support structured usage/status reporting"
+        )
+
     @abstractmethod
     def extract_last_message(self, pane_text: str) -> str | None: ...
 
     def detect_ask(self, pane_text: str) -> str | None:
-        m = ASK_RE.search(pane_text)
+        m = ASK_RE.search(strip_ui_chrome(pane_text))
         return m.group("body").strip() if m else None
 
     def detect_asks(self, pane_text: str) -> list[str]:
-        return [m.group("body").strip() for m in ASK_RE.finditer(pane_text)]
+        clean = strip_ui_chrome(pane_text)
+        return [m.group("body").strip() for m in ASK_RE.finditer(clean)]
 
     def detect_checks(self, pane_text: str) -> list[str]:
-        return [m.group("body").strip() for m in CHECK_RE.finditer(pane_text)]
+        clean = strip_ui_chrome(pane_text)
+        return [m.group("body").strip() for m in CHECK_RE.finditer(clean)]
 
     def detect_notes(self, pane_text: str) -> list[str]:
-        return [m.group("body").strip() for m in NOTE_RE.finditer(pane_text)]
+        clean = strip_ui_chrome(pane_text)
+        notes: list[str] = []
+        for match in NOTE_RE.finditer(clean):
+            lines = match.group("body").strip().splitlines()
+            notes.append("\n".join(lines[:MAX_NOTE_LINES]).strip())
+        return [note for note in notes if note]
 
     def detect_done(self, pane_text: str) -> bool:
-        return bool(DONE_RE.search(pane_text))
+        return bool(DONE_RE.search(strip_ui_chrome(pane_text)))
 
     @abstractmethod
     def format_nudge(self, msg: str) -> str: ...
 
     async def interrupt(self, session: str) -> None:
-        from murder.tmux import interrupt as tmux_interrupt
-
-        await tmux_interrupt(session)
+        await tmux.interrupt(session)

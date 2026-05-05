@@ -28,7 +28,7 @@ Print these tokens on their own lines in your normal output:
 
 - `>>> CHECK: <exact item text>` — flip that checklist item done.
 - `>>> ASK: <question>` — pause; question forwards to the Sentinel.
-- `>>> NOTE: <text>` — appends to ticket's working notes.
+- `>>> NOTE: <text>` followed by `>>> END` on its own line — appends to ticket's working notes.
 - `>>> DONE` — declare completion (orchestrator validates).
 
 ## Hard rules

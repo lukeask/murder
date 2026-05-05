@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import json
 from pathlib import Path
@@ -15,6 +16,8 @@ from murder.config import SentinelConfig
 from murder.storage.filesystem import atomic_write_text
 from murder.storage.paths import escalations_dir, ticket_md
 from murder.tickets import lifecycle, parser as ticket_parser
+
+MONKEY_IDLE_WAIT_TIMEOUT_S = 60.0
 
 if TYPE_CHECKING:
     from murder.clients.base import APIClient
@@ -72,11 +75,11 @@ class SentinelAgent(Agent):
         if self.runtime.db is not None:
             self.runtime.sync_agent(self)
 
-    async def stop(self) -> None:
+    async def stop(self, *, failed: bool = False) -> None:
         if self._sub_handle is not None:
             self._sub_handle.cancel()
             self._sub_handle = None
-        self.status = AgentStatus.DONE
+        self.status = AgentStatus.FAILED if failed else AgentStatus.DONE
         if self.runtime.db is not None:
             self.runtime.sync_agent(self)
 
@@ -306,8 +309,10 @@ class SentinelAgent(Agent):
         out: list[str] = []
         root = self.runtime.repo_root
         for f in root.glob(glob):
-            if not f.is_file() or len(out) > 200:
+            if len(out) >= 200:
                 break
+            if not f.is_file():
+                continue
             try:
                 text = f.read_text(encoding="utf-8", errors="ignore")
             except OSError:
@@ -340,11 +345,19 @@ class SentinelAgent(Agent):
         aug = self.runtime.get_augur(ticket_id)
         if aug is None:
             return {"error": "no augur"}
-        if not aug.is_monkey_idle():
-            await aug.await_idle()
         monkey = self.runtime.get_monkey(ticket_id)
         if monkey is None:
             return {"error": "no monkey"}
+        if not aug.is_monkey_idle():
+            try:
+                await asyncio.wait_for(
+                    aug.await_idle(),
+                    timeout=MONKEY_IDLE_WAIT_TIMEOUT_S,
+                )
+            except asyncio.TimeoutError:
+                return {"error": "monkey did not become idle in time"}
+            except Exception as e:
+                return {"error": f"monkey idle wait failed: {e}"}
         await monkey.send(msg)
         return {"ok": True}
 

@@ -31,7 +31,7 @@ class Agent(ABC):
         send the system prompt. For native daemons: kick off the loop."""
 
     @abstractmethod
-    async def stop(self) -> None:
+    async def stop(self, *, failed: bool = False) -> None:
         """Shut down. Idempotent."""
 
     @abstractmethod

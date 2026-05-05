@@ -26,14 +26,17 @@ import re
 from pathlib import Path
 from typing import ClassVar
 
+from murder import tmux
+from murder.harnesses import cursor_usage
 from murder.harnesses.base import (
     HarnessAdapter,
 )
-from murder.harnesses.models import HarnessStartSpec
+from murder.harnesses.models import HarnessStartSpec, HarnessUsageStatus
 from murder.harnesses.parsing import (
     extract_last_message_heuristic,
     strip_ansi,
 )
+from murder.harnesses.results import SimpleResult, fail_result, ok_result
 
 # Number of trailing pane lines to inspect for live-state markers. The
 # cursor input frame is the last ~6 lines; 20 is generous slack so we
@@ -59,6 +62,13 @@ def _tail(pane_text: str) -> str:
 
 class CursorAdapter(HarnessAdapter):
     kind: ClassVar[str] = "cursor"
+    available_startup_models: ClassVar[list[tuple[str, str]]] = [
+        ("composer", "Composer"),
+        ("auto", "Auto"),
+        ("gpt-5.5", "GPT-5.5"),
+        ("gpt-5.4", "GPT-5.4"),
+        ("claude-sonnet-4.5", "Claude Sonnet 4.5"),
+    ]
 
     monkey_system_prompt: ClassVar[str] = (
         # Loaded from prompts/monkey_cursor.md at runtime by Monkey.start().
@@ -110,19 +120,27 @@ class CursorAdapter(HarnessAdapter):
         validate the model name here because the available labels are account
         and release dependent.
         """
-        from murder.tmux import send_keys
-
-        await send_keys(session, f"/model {model}", literal=True, enter=True)
+        await tmux.send_keys(session, f"/model {model}", literal=True, enter=True)
         await asyncio.sleep(0.4)
         return True
 
     async def initialize_defaults(
         self, session: str, spec: HarnessStartSpec
-    ):
-        from murder.harnesses.results import ok_result
-        from murder.tmux import send_keys
-
+    ) -> SimpleResult[None]:
         mode = "on" if spec.auto_run is not False else "off"
-        await send_keys(session, f"/auto-run {mode}", literal=True, enter=True)
+        await tmux.send_keys(session, f"/auto-run {mode}", literal=True, enter=True)
         await asyncio.sleep(0.2)
         return ok_result()
+
+    async def request_usage_status(self, session: str) -> bool:
+        del session
+        return True
+
+    async def collect_usage_status(
+        self, session: str
+    ) -> SimpleResult[HarnessUsageStatus]:
+        del session
+        try:
+            return ok_result(await asyncio.to_thread(cursor_usage.get_usage_status))
+        except Exception as exc:
+            return fail_result(f"cursor usage collection failed: {exc}")

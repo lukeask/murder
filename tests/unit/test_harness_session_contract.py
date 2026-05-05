@@ -50,7 +50,7 @@ async def test_session_start_runs_full_sequence(monkeypatch) -> None:
     async def fake_create_session(name: str, cwd: Path, command: list[str]) -> None:
         calls.append(("create", (name, str(cwd), tuple(command))))
 
-    panes = iter(["booting", "READY\nIDLE"])
+    panes = iter(["booting", "READY\nIDLE", "READY\nIDLE", "READY\nIDLE"])
 
     async def fake_capture_pane(name: str, lines: int = 120) -> str:
         calls.append(("capture", (name, lines)))

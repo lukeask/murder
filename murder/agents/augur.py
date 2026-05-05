@@ -56,6 +56,8 @@ class AugurAgent(Agent):
         self._poll_task: asyncio.Task[None] | None = None
         self._done_emitted = False
         self._log_path: Path | None = None
+        self._consecutive_tick_failures = 0
+        self._max_tick_failures = 3
 
     async def start(self, brief: str, ctx: dict[str, Any]) -> None:
         from murder import tmux
@@ -92,21 +94,32 @@ class AugurAgent(Agent):
 
         async def _loop() -> None:
             while self.status == AgentStatus.RUNNING:
-                with contextlib.suppress(Exception):
+                try:
                     await self.tick()
+                    self._consecutive_tick_failures = 0
+                except asyncio.CancelledError:
+                    raise
+                except Exception as e:
+                    await self._record_tick_failure(e)
+                    if self._consecutive_tick_failures >= self._max_tick_failures:
+                        break
                 await asyncio.sleep(self.config.poll_interval_s)
 
         self._poll_task = asyncio.create_task(_loop())
 
-    async def stop(self) -> None:
+    async def stop(self, *, failed: bool = False) -> None:
         from murder import tmux
 
-        self.status = AgentStatus.DONE
+        if failed or self.status == AgentStatus.FAILED:
+            self.status = AgentStatus.FAILED
+        elif self.status != AgentStatus.DEAD:
+            self.status = AgentStatus.DONE
         if self._poll_task is not None:
             self._poll_task.cancel()
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await self._poll_task
             self._poll_task = None
+        self._fail_idle_waiters(RuntimeError("augur stopped before monkey became idle"))
         with contextlib.suppress(Exception):
             await tmux.kill_session(self.session)
         if self.runtime.db is not None:
@@ -224,7 +237,55 @@ class AugurAgent(Agent):
         loop = asyncio.get_running_loop()
         fut: asyncio.Future[None] = loop.create_future()
         self._on_idle_callbacks.append(fut)
-        await fut
+        try:
+            await fut
+        finally:
+            if fut in self._on_idle_callbacks:
+                self._on_idle_callbacks.remove(fut)
+
+    async def _record_tick_failure(self, exc: Exception) -> None:
+        from murder.bus import ErrorEvent, StatusChangeEvent
+
+        self._consecutive_tick_failures += 1
+        terminal = self._consecutive_tick_failures >= self._max_tick_failures
+        if terminal:
+            prev = self.status
+            self.status = AgentStatus.DEAD
+            self.runtime.sync_agent(self)
+            self._fail_idle_waiters(
+                RuntimeError("augur stopped after repeated poll failures")
+            )
+            if self.runtime.bus and self.runtime.run_id:
+                await self.runtime.bus.publish(
+                    StatusChangeEvent(
+                        run_id=self.runtime.run_id,
+                        agent_id=self.id,
+                        role=self.role,
+                        ticket_id=self.ticket_id,
+                        entity="agent",
+                        entity_id=self.id,
+                        from_status=prev.value,
+                        to_status=AgentStatus.DEAD.value,
+                        reason=str(exc),
+                    )
+                )
+        if self.runtime.bus and self.runtime.run_id:
+            await self.runtime.bus.publish(
+                ErrorEvent(
+                    run_id=self.runtime.run_id,
+                    agent_id=self.id,
+                    role=self.role,
+                    ticket_id=self.ticket_id,
+                    message=f"augur tick failed: {exc}",
+                    recoverable=not terminal,
+                )
+            )
+
+    def _fail_idle_waiters(self, exc: Exception) -> None:
+        for fut in self._on_idle_callbacks:
+            if not fut.done():
+                fut.set_exception(exc)
+        self._on_idle_callbacks.clear()
 
     async def _classify(self, pane: str) -> tuple[str, str | None]:
         if self._client is None:
@@ -262,4 +323,3 @@ def _heartbeat_state(s: str) -> Literal["progressing", "stuck", "thinking"]:
     if s == "thinking":
         return cast(Literal["thinking"], "thinking")
     return cast(Literal["progressing"], "progressing")
-

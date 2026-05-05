@@ -40,16 +40,36 @@ class MonkeyAgent(Agent):
         self.harness_session = harness.attach(session, self.repo_root)
 
     async def start(self, brief: str, ctx: dict[str, Any]) -> None:
-        from murder.bus import StatusChangeEvent
+        from murder.bus import ErrorEvent, StatusChangeEvent
         from murder.enforcement import git_diff
 
         start_result = await self.harness_session.start(
             HarnessStartSpec(cwd=self.repo_root, startup_model=self.startup_model)
         )
         if not start_result.ok:
+            self.status = AgentStatus.FAILED
+            if self.runtime:
+                self.runtime.sync_agent(self)
             raise TimeoutError(start_result.message or "harness startup failed")
 
-        self.start_commit = await git_diff.head_commit(self.repo_root)
+        try:
+            self.start_commit = await git_diff.head_commit(self.repo_root)
+        except Exception as e:
+            self.status = AgentStatus.FAILED
+            if self.runtime:
+                self.runtime.sync_agent(self)
+                if self.runtime.bus and self.runtime.run_id:
+                    await self.runtime.bus.publish(
+                        ErrorEvent(
+                            run_id=self.runtime.run_id,
+                            agent_id=self.id,
+                            role=self.role,
+                            ticket_id=self.ticket_id,
+                            message=str(e),
+                            recoverable=True,
+                        )
+                    )
+            raise
         await self.harness_session.send_prompt(brief)
         self.status = AgentStatus.RUNNING
         if self.runtime:
@@ -68,14 +88,17 @@ class MonkeyAgent(Agent):
                     )
                 )
 
-    async def stop(self) -> None:
+    async def stop(self, *, failed: bool = False) -> None:
         from murder import tmux
 
         with contextlib.suppress(Exception):
             await self.harness_session.interrupt()
         with contextlib.suppress(Exception):
             await tmux.kill_session(self.session)
-        self.status = AgentStatus.DONE
+        if failed or self.status == AgentStatus.FAILED:
+            self.status = AgentStatus.FAILED
+        else:
+            self.status = AgentStatus.DONE
         if self.runtime:
             self.runtime.sync_agent(self)
 

@@ -2,14 +2,11 @@
 
 from __future__ import annotations
 
-import pytest
-
 from murder.harnesses.base import (
     ASK_RE,
     CHECK_RE,
     DONE_RE,
     NOTE_RE,
-    HarnessAdapter,
 )
 
 
@@ -35,7 +32,12 @@ def test_done_regex_simple() -> None:
 
 
 def test_note_regex_multiline() -> None:
-    text = ">>> NOTE: switched to dataclass for X\nbecause Y was awkward.\n"
+    text = ">>> NOTE: switched to dataclass for X\nbecause Y was awkward.\n>>> END\n"
     m = NOTE_RE.search(text)
     assert m is not None
     assert "switched to dataclass" in m.group("body")
+
+
+def test_note_regex_requires_end_marker() -> None:
+    text = ">>> NOTE: switched to dataclass for X\nbecause Y was awkward.\n"
+    assert NOTE_RE.search(text) is None

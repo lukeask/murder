@@ -34,6 +34,10 @@ def test_app_registers_everforest_and_persists_theme(monkeypatch, tmp_path) -> N
         binding[0] == "ctrl+p" and binding[1] == "change_theme"
         for binding in app.BINDINGS
     )
+    assert any(
+        binding[0] == "f6" and binding[1] == "kick_ready"
+        for binding in app.BINDINGS
+    )
 
     app._persist_theme_changes = True
     app._watch_theme("everforest-dark-hard")

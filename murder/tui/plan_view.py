@@ -24,6 +24,9 @@ class PlanList(DataTable):
     def __init__(self) -> None:
         super().__init__(zebra_stripes=True, cursor_type="row")
         self._plans: list[str] = []
+        self.border_title = ".agents/plans"
+        # TODO(tui-planning): fold dynamic ticket ordering into this sidebar
+        # once collaborator planner/notetaker personas can prioritize tickets.
 
     def on_mount(self) -> None:
         self.add_columns("name", "status", "rev", "sync")
@@ -76,6 +79,8 @@ class PlanDocument(Markdown):
     """
 
     def __init__(self) -> None:
-        super().__init__("")
+        super().__init__(
+            "No plan selected.\n\nUse the collaborator chat to shape a plan, "
+            "or add markdown under `.agents/plans`."
+        )
         self.border_title = "(no plan selected)"
-

@@ -54,6 +54,7 @@ class AgentStatus(StrEnum):
     BLOCKED = "blocked"
     ESCALATING = "escalating"
     DONE = "done"
+    FAILED = "failed"
     DEAD = "dead"
 
 

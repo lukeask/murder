@@ -12,13 +12,17 @@ import re
 from pathlib import Path
 from typing import ClassVar
 
+from murder import tmux
 from murder.harnesses.base import (
     HarnessAdapter,
 )
+from murder.harnesses.models import HarnessUsageStatus
 from murder.harnesses.parsing import (
     extract_last_message_heuristic,
     strip_ansi,
 )
+from murder.harnesses.results import SimpleResult, ok_result
+from murder.harnesses.usage import parse_codex_status_pane
 
 _TAIL_LINES = 30
 
@@ -39,9 +43,15 @@ def _tail(pane_text: str) -> str:
 class CodexAdapter(HarnessAdapter):
     kind: ClassVar[str] = "codex"
     monkey_system_prompt: ClassVar[str] = "see prompts/monkey_codex.md"
+    available_startup_models: ClassVar[list[tuple[str, str]]] = [
+        ("gpt-5.5", "GPT-5.5"),
+        ("gpt-5.4", "GPT-5.4"),
+        ("gpt-5.4-mini", "GPT-5.4 Mini"),
+        ("gpt-5.3-codex", "GPT-5.3 Codex"),
+    ]
 
     def startup_cmd(self, cwd: Path) -> list[str]:
-        return [
+        cmd = [
             "codex",
             "--no-alt-screen",
             "--sandbox",
@@ -49,6 +59,9 @@ class CodexAdapter(HarnessAdapter):
             "--ask-for-approval",
             "never",
         ]
+        if self.startup_model:
+            cmd.extend(["--model", self.startup_model])
+        return cmd
 
     def is_ready(self, pane_text: str) -> bool:
         clean = strip_ansi(pane_text)
@@ -73,9 +86,19 @@ class CodexAdapter(HarnessAdapter):
     def format_nudge(self, msg: str) -> str:
         return f"[supervisor] {msg}"
 
-    async def request_usage_status(self, session: str) -> bool:
-        from murder.tmux import send_keys
+    async def set_model(self, session: str, model: str) -> bool:
+        del session
+        return model == self.startup_model
 
-        await send_keys(session, "/status", literal=True, enter=True)
+    async def request_usage_status(self, session: str) -> bool:
+        await tmux.send_keys(session, "/status", literal=True, enter=True)
         await asyncio.sleep(0.2)
         return True
+
+    async def collect_usage_status(
+        self, session: str
+    ) -> SimpleResult[HarnessUsageStatus]:
+        await self.request_usage_status(session)
+        await asyncio.sleep(0.4)
+        pane = await tmux.capture_pane(session, lines=160)
+        return ok_result(parse_codex_status_pane(pane))

@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
-
 from murder.config import (
     HarnessRoleConfig,
     resolve_default_monkey_harness,
@@ -46,6 +44,34 @@ def test_resolve_model_pool_and_override() -> None:
 def test_resolve_model_single_startup_model() -> None:
     cfg = HarnessRoleConfig(harness="cursor", startup_model="solo", startup_models=None)
     assert resolve_default_monkey_startup_model(cfg, {"id": "t1"}) == "solo"
+
+
+def test_resolve_model_pool_by_harness() -> None:
+    cfg = HarnessRoleConfig(
+        harness="cursor",
+        harnesses=["cursor", "codex"],
+        startup_model="composer",
+        startup_models_by_harness={
+            "cursor": ["composer"],
+            "codex": ["gpt-5.5", "gpt-5.4"],
+        },
+    )
+    assert resolve_default_monkey_startup_model(cfg, {"id": "t007"}, "cursor") == "composer"
+    assert resolve_default_monkey_startup_model(cfg, {"id": "t007"}, "codex") in (
+        "gpt-5.5",
+        "gpt-5.4",
+    )
+
+
+def test_empty_models_by_harness_normalized() -> None:
+    cfg = HarnessRoleConfig.model_validate(
+        {
+            "kind": "harness",
+            "harness": "cursor",
+            "startup_models_by_harness": {"cursor": [" "], "codex": ["gpt-5.5"]},
+        }
+    )
+    assert cfg.startup_models_by_harness == {"codex": ["gpt-5.5"]}
 
 
 def test_startup_models_all_blank_becomes_none() -> None:

@@ -4,23 +4,31 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import os
 import shutil
+import signal
+import sqlite3
 import subprocess
+import sys
+from datetime import datetime
 from importlib import resources
 from pathlib import Path
+from typing import Annotated
 
 import typer
 
 from murder import __version__
 from murder import db as dbmod
-from murder.config import Config
+from murder.bus import TicketStatus
+from murder.config import Config, HarnessRoleConfig, project_env_path
+from murder.harnesses import REGISTRY
 from murder.orchestrator import Orchestrator
-from murder.plans.sync import content_hash
+from murder.plans.sync import PlanSync, content_hash
 from murder.runtime import Runtime
 from murder.storage.filesystem import read_lock_pid
-from murder.storage.paths import agents_dir, db_path, lock_path, plans_dir
-from murder.bus import TicketStatus
+from murder.storage.paths import agents_dir, db_path, lock_path, plans_dir, ticket_md
 from murder.tickets import lifecycle
+from murder.tickets import parser as ticket_parser
 from murder.tickets import waves as waves_mod
 from murder.tickets.schema import ChecklistItem, Ticket
 
@@ -31,15 +39,125 @@ app = typer.Typer(
     invoke_without_command=True,
     add_completion=False,
 )
+tickets_app = typer.Typer(help="Create and import tickets.")
+app.add_typer(tickets_app, name="ticket")
 
 
 def _repo_root() -> Path:
     return Path.cwd().resolve()
 
 
+def _configured_harnesses(role_cfg: HarnessRoleConfig) -> list[str]:
+    harnesses = [role_cfg.harness]
+    if role_cfg.harnesses:
+        harnesses.extend(role_cfg.harnesses)
+    return list(dict.fromkeys(harnesses))
+
+
+def _harness_executable(kind: str, role_cfg: HarnessRoleConfig) -> str:
+    if role_cfg.binary and kind == role_cfg.harness:
+        return role_cfg.binary
+    cmd = REGISTRY[kind]().startup_cmd(Path("."))
+    if not cmd:
+        raise ValueError("empty startup command")
+    return cmd[0]
+
+
+def _validate_configured_harness_binaries(cfg: Config) -> list[str]:
+    issues: list[str] = []
+    for role_name, role_cfg in (
+        ("collaborator", cfg.collaborator),
+        ("default_monkey", cfg.default_monkey),
+    ):
+        for kind in _configured_harnesses(role_cfg):
+            try:
+                exe = _harness_executable(kind, role_cfg)
+            except KeyError:
+                issues.append(f"{role_name} harness {kind}: unknown harness")
+                continue
+            except Exception as e:
+                issues.append(f"{role_name} harness {kind}: startup command unavailable ({e})")
+                continue
+            if shutil.which(exe) is None:
+                issues.append(f"{role_name} harness {kind}: {exe} not on PATH")
+    return issues
+
+
+def _open_existing_db(repo: Path) -> sqlite3.Connection:
+    path = db_path(repo)
+    if not path.exists():
+        typer.secho("No murder.db — run murder init", err=True)
+        raise typer.Exit(1)
+    conn = dbmod.connect(path)
+    dbmod.init_schema(conn)
+    return conn
+
+
+def _pid_is_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def _friendly_lock_message(repo: Path) -> str:
+    pid = read_lock_pid(lock_path(repo))
+    pid_text = f" (PID {pid})" if pid is not None else ""
+    return (
+        f"murder is already running in this repo{pid_text}.\n"
+        "Stop it with `murder down`, or run from inside the running TUI."
+    )
+
+
+def _require_git_head(repo: Path) -> None:
+    inside = subprocess.run(
+        ["git", "-C", str(repo), "rev-parse", "--is-inside-work-tree"],
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+    if inside.returncode != 0 or inside.stdout.strip() != "true":
+        raise RuntimeError("murder kick requires a git checkout with at least one commit.")
+    head = subprocess.run(
+        ["git", "-C", str(repo), "rev-parse", "HEAD"],
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+    if head.returncode != 0:
+        raise RuntimeError(
+            "git repo has no commits yet; make an initial commit before `murder kick`."
+        )
+
+
+def kick_preflight(cfg: Config, repo: Path) -> None:
+    _require_git_head(repo)
+    if cfg.project.name == "TODO_SET_ME":
+        typer.secho(
+            "Warning: project.name is still TODO_SET_ME; run `murder config` to set it.",
+            fg=typer.colors.YELLOW,
+            err=True,
+        )
+
+
+def _run_async_entry(coro) -> None:  # type: ignore[no-untyped-def]
+    try:
+        asyncio.run(coro)
+    except BlockingIOError:
+        typer.secho(_friendly_lock_message(_repo_root()), fg=typer.colors.RED, err=True)
+        raise typer.Exit(1) from None
+    except RuntimeError as e:
+        typer.secho(str(e), fg=typer.colors.RED, err=True)
+        raise typer.Exit(1) from e
+
+
 async def _bare_kickoff(ticket: str | None) -> None:
     repo = _repo_root()
     cfg = Config.load(repo)
+    kick_preflight(cfg, repo)
     async with Runtime(cfg, repo) as rt:
         orch = Orchestrator(rt)
         kicked = await orch.kickoff_ready(only=ticket)
@@ -52,10 +170,12 @@ async def _bare_kickoff(ticket: str | None) -> None:
 async def _launch_tui() -> None:
     repo = _repo_root()
     cfg = Config.load(repo)
+    os.environ.setdefault("GIO_USE_VFS", "local")
+    os.environ.setdefault("GSETTINGS_BACKEND", "memory")
+    os.environ.setdefault("DBUS_SESSION_BUS_ADDRESS", "disabled:")
+    os.environ.setdefault("NO_AT_BRIDGE", "1")
     async with Runtime(cfg, repo) as rt:
         orch = Orchestrator(rt)
-        import os
-
         if os.environ.get("OPENROUTER_API_KEY"):
             with contextlib.suppress(Exception):
                 await orch.ensure_sentinel()
@@ -88,7 +208,7 @@ def _root(
     if ctx.invoked_subcommand is not None:
         return
 
-    asyncio.run(_launch_tui())
+    _run_async_entry(_launch_tui())
     raise typer.Exit(0)
 
 
@@ -97,7 +217,7 @@ def cmd_kick(
     ticket: str = typer.Argument(..., help="Ticket id to kick off (e.g. 't007')."),
 ) -> None:
     """Kick off a single ticket's Monkey from the CLI (no TUI)."""
-    asyncio.run(_bare_kickoff(ticket))
+    _run_async_entry(_bare_kickoff(ticket))
 
 
 @app.command("config")
@@ -106,6 +226,111 @@ def cmd_config() -> None:
     from murder.config_flow import run_guided_config
 
     run_guided_config(_repo_root())
+
+
+@tickets_app.command("create")
+def cmd_ticket_create(
+    ticket_id: Annotated[str, typer.Argument(help="Ticket id, e.g. t007.")],
+    title: Annotated[str, typer.Argument(help="Ticket title.")],
+    wave: Annotated[int, typer.Option("--wave", "-w", min=0, help="Ticket wave.")] = 0,
+    status: Annotated[
+        TicketStatus,
+        typer.Option("--status", help="Initial ticket status."),
+    ] = TicketStatus.PLANNED,
+    from_file: Annotated[
+        Path | None,
+        typer.Option(
+            "--from",
+            "-f",
+            exists=True,
+            file_okay=True,
+            dir_okay=False,
+            readable=True,
+            help="Markdown file to import for ticket prose sections.",
+        ),
+    ] = None,
+    plan: Annotated[
+        str | None,
+        typer.Option("--plan", help="Plan body text. Overrides imported ## Plan."),
+    ] = None,
+    dep: Annotated[
+        list[str] | None,
+        typer.Option("--dep", help="Dependency ticket id. Repeatable."),
+    ] = None,
+    write: Annotated[
+        list[Path] | None,
+        typer.Option("--write", help="Write-set path. Repeatable."),
+    ] = None,
+    check: Annotated[
+        list[str] | None,
+        typer.Option("--check", help="Checklist item. Repeatable."),
+    ] = None,
+    skill: Annotated[
+        list[str] | None,
+        typer.Option("--skill", help="Skill name. Repeatable."),
+    ] = None,
+    harness: Annotated[
+        str | None,
+        typer.Option("--harness", help="Harness override for this ticket."),
+    ] = None,
+    model: Annotated[
+        str | None,
+        typer.Option("--model", help="Model override for this ticket."),
+    ] = None,
+    overwrite_markdown: Annotated[
+        bool,
+        typer.Option("--overwrite-markdown", help="Replace an existing ticket markdown file."),
+    ] = False,
+) -> None:
+    """Create/import a ticket row and materialize `.agents/tickets/<id>.md`."""
+    repo = _repo_root()
+    md_path = ticket_md(repo, ticket_id)
+    if md_path.exists() and not overwrite_markdown:
+        typer.secho(
+            f"Refusing: {md_path} already exists. Use --overwrite-markdown to replace it.",
+            err=True,
+        )
+        raise typer.Exit(1)
+
+    sections = (
+        ticket_parser.read_ticket_md(from_file)
+        if from_file is not None
+        else {"plan": "", "working_notes": "", "sentinel_notes": "", "_preamble": ""}
+    )
+    if plan is not None:
+        sections["plan"] = plan
+
+    now = datetime.utcnow()
+    ticket = Ticket(
+        id=ticket_id,
+        title=title,
+        wave=wave,
+        status=status,
+        write_set=list(write or []),
+        deps=list(dep or []),
+        skills=list(skill or []),
+        harness=harness,
+        model=model,
+        created_at=now,
+        updated_at=now,
+        checklist=[
+            ChecklistItem(ord=ord_, text=text)
+            for ord_, text in enumerate(check or [])
+        ],
+    )
+
+    conn = _open_existing_db(repo)
+    try:
+        dbmod.insert_ticket(conn, ticket)
+    except Exception as e:
+        typer.secho(f"Failed to create ticket {ticket_id}: {e}", err=True)
+        raise typer.Exit(1) from e
+    finally:
+        conn.close()
+
+    ticket_parser.write_ticket_md(md_path, sections)
+    typer.echo(f"Created {ticket_id}: {title}")
+    typer.echo(f"Markdown: {md_path.relative_to(repo)}")
 
 
 @app.command("init")
@@ -128,10 +353,21 @@ def cmd_init(
     for sub in ("tickets", "plans", "shelved", "escalations", "runs"):
         (ad / sub).mkdir(parents=True, exist_ok=True)
     tpl_root = resources.files("murder.templates")
+    project_name = repo.name
+    if sys.stdin.isatty():
+        project_name = typer.prompt("Project name", default=repo.name).strip() or repo.name
+    roles_text = tpl_root.joinpath("roles.yaml").read_text(encoding="utf-8")
+    quoted_project_name = project_name.replace("'", "''")
+    roles_text = roles_text.replace(
+        "name: TODO_SET_ME", f"name: '{quoted_project_name}'", 1
+    )
     (ad / "roles.yaml").write_text(
-        tpl_root.joinpath("roles.yaml").read_text(encoding="utf-8"), encoding="utf-8"
+        roles_text, encoding="utf-8"
     )
     (ad / "env.example").write_text(
+        tpl_root.joinpath("env.example").read_text(encoding="utf-8"), encoding="utf-8"
+    )
+    project_env_path(repo).write_text(
         tpl_root.joinpath("env.example").read_text(encoding="utf-8"), encoding="utf-8"
     )
     gi = tpl_root.joinpath("gitignore").read_text(encoding="utf-8")
@@ -150,20 +386,22 @@ def cmd_init(
     dbmod.init_schema(conn)
     conn.close()
     typer.secho(f"Initialized {ad} and {db_path(repo)}", fg=typer.colors.GREEN)
+    if project_name == "TODO_SET_ME":
+        typer.secho(
+            "Project name is unset; run `murder config` to replace TODO_SET_ME.",
+            fg=typer.colors.YELLOW,
+        )
 
 
 @app.command("up")
 def cmd_up() -> None:
     """Launch the TUI runtime (alias of bare `murder`)."""
-    asyncio.run(_launch_tui())
+    _run_async_entry(_launch_tui())
 
 
 @app.command("down")
 def cmd_down() -> None:
     """Signal a running murder process via `.agents/.lock` pid."""
-    import os
-    import signal
-
     repo = _repo_root()
     pid = read_lock_pid(lock_path(repo))
     if pid is None:
@@ -172,16 +410,16 @@ def cmd_down() -> None:
     try:
         os.kill(pid, signal.SIGTERM)
     except ProcessLookupError:
-        typer.secho(f"Process {pid} not found.", err=True)
-        raise typer.Exit(1)
+        with contextlib.suppress(FileNotFoundError):
+            lock_path(repo).unlink()
+        typer.echo(f"Removed stale lock for dead PID {pid}.")
+        return
     typer.echo(f"Sent SIGTERM to pid {pid}")
 
 
 @app.command("doctor")
 def cmd_doctor() -> None:
     """Sanity-check environment and config."""
-    import os
-    import shutil
 
     repo = _repo_root()
     issues: list[str] = []
@@ -193,27 +431,45 @@ def cmd_doctor() -> None:
         p = subprocess.run(
             ["git", "-C", str(repo), "rev-parse", "--is-inside-work-tree"],
             capture_output=True,
+            check=False,
             text=True,
         )
         if p.returncode != 0 or p.stdout.strip() != "true":
-            issues.append("not a git checkout (expected for D5 diff checks)")
+            issues.append("not a git checkout; `murder kick` requires git diff checks")
+        else:
+            head = subprocess.run(
+                ["git", "-C", str(repo), "rev-parse", "HEAD"],
+                capture_output=True,
+                check=False,
+                text=True,
+            )
+            if head.returncode != 0:
+                issues.append(
+                    "git repo has no commits yet; make an initial commit before `murder kick`"
+                )
+    try:
+        cfg = Config.load(repo)
+    except Exception as e:
+        issues.append(f"config load failed: {e}")
+    else:
+        if cfg.project.name == "TODO_SET_ME":
+            issues.append("project.name is TODO_SET_ME; run `murder config`")
+        issues.extend(_validate_configured_harness_binaries(cfg))
     if not os.environ.get("OPENROUTER_API_KEY"):
         issues.append("OPENROUTER_API_KEY unset (Augur/Sentinel need it)")
-    for name, exe in (
-        ("cursor agent", "agent"),
-        ("claude", "claude"),
-        ("codex", "codex"),
-    ):
-        if shutil.which(exe) is None:
-            issues.append(f"{name} ({exe}) not on PATH — optional if unused")
     if not agents_dir(repo).exists():
         issues.append(".agents/ missing — run murder init")
     elif not db_path(repo).exists():
         issues.append("murder.db missing — run murder init")
-    try:
-        Config.load(repo)
-    except Exception as e:
-        issues.append(f"config load failed: {e}")
+    lock = lock_path(repo)
+    if lock.exists():
+        pid = read_lock_pid(lock)
+        if pid is None:
+            issues.append(f"lock file exists but has no readable PID: {lock}")
+        elif _pid_is_alive(pid):
+            issues.append(f"another murder runtime is running here (PID {pid} in {lock})")
+        else:
+            issues.append(f"stale murder lock for dead PID {pid}: run `murder down`")
     if issues:
         for i in issues:
             typer.secho(f"- {i}", fg=typer.colors.YELLOW, err=True)
@@ -231,6 +487,9 @@ def cmd_lint() -> None:
         typer.secho("No murder.db — run murder init", err=True)
         raise typer.Exit(1)
     conn = dbmod.connect(db_path(repo))
+    # Import/sync plan markdown before lint checks so orphan-plan warnings
+    # don't require launching the full runtime first.
+    asyncio.run(PlanSync(repo, conn).reconcile_all())
     issues: list[str] = []
     plan_rows = {r["name"]: dict(r) for r in conn.execute("SELECT * FROM plans").fetchall()}
     for name, row in plan_rows.items():
@@ -288,10 +547,11 @@ def cmd_lint() -> None:
                 ],
             )
         )
-        for p in trow.get("write_set") or []:
-            pp = (repo / p).resolve()
-            if not pp.exists():
-                issues.append(f"ticket {tid}: write_set path missing: {p}")
+        if trow["status"] == TicketStatus.DONE.value:
+            for p in trow.get("write_set") or []:
+                pp = (repo / p).resolve()
+                if not pp.exists():
+                    issues.append(f"ticket {tid}: done ticket write_set path missing: {p}")
     by_wave: dict[int, list[Ticket]] = {}
     for t in tickets:
         by_wave.setdefault(t.wave, []).append(t)
@@ -322,7 +582,7 @@ def cmd_reopen(ticket_id: str) -> None:
     except lifecycle.InvalidTransition as e:
         typer.secho(str(e), err=True)
         conn.close()
-        raise typer.Exit(1)
+        raise typer.Exit(1) from e
     conn.close()
     typer.echo(f"Reopened {ticket_id}; cascaded: {', '.join(cascaded) if cascaded else '(none)'}")
 

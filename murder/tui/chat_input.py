@@ -25,12 +25,18 @@ class ChatInput(TextArea):
         min-height: 3;
         max-height: 8;
     }
+    ChatInput:focus {
+        border: heavy $primary;
+    }
     """
 
     def __init__(self) -> None:
         super().__init__()
 
     def on_mount(self) -> None:
+        self.border_title = "collaborator"
+        # TODO(tui-planning): add explicit collaborator persona switching
+        # between planner and notetaker. Sentinel and Augur are separate roles.
         self.border_subtitle = "Enter to send · Shift+Enter for newline"
 
     def on_key(self, event: Key) -> None:
