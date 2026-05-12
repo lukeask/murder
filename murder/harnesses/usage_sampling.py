@@ -29,6 +29,22 @@ def harness_kinds_with_usage_collection(crow_cfg: HarnessRoleConfig) -> list[str
     return out
 
 
+def _supports_usage(kind: str) -> bool:
+    cls = REGISTRY.get(kind)
+    return cls is not None and cls.usage_collection_mode != "none"
+
+
+def harness_kinds_to_sample(rt: Runtime) -> list[str]:
+    """Harness kinds the schedule view samples usage for: the crow pool plus
+    the collaborator's configured harness (so e.g. a Claude-Code or Codex
+    collaborator shows up in the schedule view even when crows use cursor)."""
+    kinds = harness_kinds_with_usage_collection(rt.config.default_crow)
+    collab = rt.config.collaborator.harness
+    if _supports_usage(collab) and collab not in kinds:
+        kinds.append(collab)
+    return kinds
+
+
 def insert_harness_usage_snapshot(db: sqlite3.Connection, status: HarnessUsageStatus) -> None:
     payload = asdict(status) if is_dataclass(status) else status
     db.execute(
@@ -80,7 +96,7 @@ async def sample_harness_usages_for_config(rt: Runtime) -> tuple[int, int]:
         return 0, 0
 
     cfg = rt.config.default_crow
-    kinds = harness_kinds_with_usage_collection(cfg)
+    kinds = harness_kinds_to_sample(rt)
     stored = 0
     failures = 0
 
