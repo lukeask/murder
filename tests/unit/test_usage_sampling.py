@@ -1,6 +1,7 @@
 """Harness usage sampling helpers."""
 
 import sqlite3
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -9,15 +10,37 @@ from murder.config import HarnessRoleConfig
 from murder.harnesses.models import HarnessUsageStatus, HarnessUsageWindow
 from murder.harnesses.results import ok_result
 from murder.harnesses.usage_sampling import (
+    harness_kinds_to_sample,
     harness_kinds_with_usage_collection,
     insert_harness_usage_snapshot,
     sample_harness_usages_for_config,
 )
 
 
+def _rt(*, crow: HarnessRoleConfig, collab_harness: str) -> SimpleNamespace:
+    return SimpleNamespace(
+        config=SimpleNamespace(
+            default_crow=crow,
+            collaborator=SimpleNamespace(harness=collab_harness),
+        )
+    )
+
+
 def test_harness_kinds_with_usage_collection_excludes_pi() -> None:
     cfg = HarnessRoleConfig(harness="cursor", harnesses=["cursor", "pi", "codex"])
     assert harness_kinds_with_usage_collection(cfg) == ["cursor", "codex"]
+
+
+def test_harness_kinds_to_sample_adds_collaborator_harness() -> None:
+    rt = _rt(crow=HarnessRoleConfig(harness="cursor"), collab_harness="claude_code")
+    assert harness_kinds_to_sample(rt) == ["cursor", "claude_code"]
+
+
+def test_harness_kinds_to_sample_dedupes_and_skips_pi_collaborator() -> None:
+    rt = _rt(crow=HarnessRoleConfig(harness="codex"), collab_harness="codex")
+    assert harness_kinds_to_sample(rt) == ["codex"]
+    rt = _rt(crow=HarnessRoleConfig(harness="cursor"), collab_harness="pi")
+    assert harness_kinds_to_sample(rt) == ["cursor"]
 
 
 def test_harness_kinds_single_harness_pool() -> None:
