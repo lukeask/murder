@@ -23,7 +23,13 @@ from murder.tui.chat_input import ChatInput
 from murder.tui.escalation_strip import EscalationStrip
 from murder.tui.header import Header
 from murder.tui.pane_mirror import PaneMirror
-from murder.tui.plan_view import NotesDocument, NotetakerChat, PlanDocument, PlanList
+from murder.tui.plan_view import (
+    NotesDocument,
+    NotesList,
+    NotetakerChat,
+    PlanDocument,
+    PlanList,
+)
 from murder.tui.schedule_view import ScheduleView
 from murder.tui.settings_screen import SettingsScreen
 from murder.tui.themes import CUSTOM_THEMES
@@ -78,7 +84,8 @@ class HelpScreen(ModalScreen[None]):
                         "[b]keys[/b]",
                         "F6 kick ready · F2 focus chat · F1 help",
                         "ctrl+1/2/3  switch views  ·  [ and ] cycle views",
-                        "m  toggle planning mode (notetaker ⇄ collaborator)",
+                        "ctrl+t  toggle planning mode (notetaker ⇄ collaborator)",
+                        "ctrl+b  toggle docs sidebar (notes / plans filetree)",
                         "ctrl+c twice  force quit  ·  escape  unfocus chat",
                         "j/k  vim navigation in lists",
                         "r refresh · u refresh usage",
@@ -108,7 +115,8 @@ class MurderApp(App[None]):
         ("ctrl+3", "view_schedule", "Schedule"),
         ("[", "previous_view", "Prev view"),
         ("]", "next_view", "Next view"),
-        ("m", "toggle_planning_mode", "Plan mode"),
+        ("ctrl+t", "toggle_planning_mode", "Plan mode"),
+        ("ctrl+b", "toggle_sidebar", "Docs sidebar"),
         ("q", "quit", "Quit"),
         ("r", "refresh_now", "Refresh"),
         ("u", "collect_usage", "Usage"),
@@ -137,6 +145,10 @@ class MurderApp(App[None]):
         width: 18%;
         border: solid $border;
     }
+    NotesList {
+        width: 18%;
+        border: solid $border;
+    }
     """
 
     VIEWS = ("planning", "crows", "schedule")
@@ -150,6 +162,7 @@ class MurderApp(App[None]):
         self._agents = AgentGrid()
         self._plans = PlanList()
         self._plan_doc = PlanDocument()
+        self._notes_list = NotesList()
         self._notes_doc = NotesDocument()
         self._notetaker_chat = NotetakerChat()
         self._schedule = ScheduleView()
@@ -159,6 +172,7 @@ class MurderApp(App[None]):
         self._collab_lock = asyncio.Lock()
         self._notetaker_lock = asyncio.Lock()
         self._planning_mode = "notetaker"  # "notetaker" | "collaborator"
+        self._sidebar_visible = True
         self._notetaker_loaded = False
         self._last_notes_sig: tuple[str, str] | None = None
         self._user_config: UserConfig = load_user_config()
@@ -178,6 +192,7 @@ class MurderApp(App[None]):
             yield self._agents
             yield self._plans
             yield self._plan_doc
+            yield self._notes_list
             yield self._notes_doc
             yield self._notetaker_chat
             yield self._schedule
@@ -241,6 +256,7 @@ class MurderApp(App[None]):
         self._grid.refresh_from_db(db)
         self._agents.refresh_from_db(db)
         self._plans.refresh_from_db(db)
+        self._notes_list.refresh_from_db(db)
         self._schedule.refresh_from_db(db)
         self._escalations.refresh_from_db(db)
         if self._view == "planning":
@@ -284,6 +300,11 @@ class MurderApp(App[None]):
     def on_plan_list_plan_opened(self, event: PlanList.PlanOpened) -> None:
         self.run_worker(self._open_plan(event.name), exclusive=True, group="editor")
 
+    def on_notes_list_note_highlighted(self, event: NotesList.NoteHighlighted) -> None:
+        del event  # _active_note_name() reads the list cursor directly
+        if self._view == "planning" and self._planning_mode == "notetaker":
+            self.run_worker(self._render_notes(), exclusive=True, group="notes")
+
     async def _render_plan(self, name: str) -> None:
         await self.runtime.reconcile_plan(name)
         db = self.runtime.db
@@ -325,6 +346,10 @@ class MurderApp(App[None]):
         return agent if isinstance(agent, NotetakerAgent) else None
 
     def _active_note_name(self) -> str | None:
+        # Browsing an older note in the sidebar wins; otherwise show the live
+        # (today's) note the notetaker is appending to.
+        if self._notes_list.display and self._notes_list.selected_name:
+            return self._notes_list.selected_name
         agent = self._notetaker_agent()
         if agent is not None:
             return agent.note_name
@@ -450,8 +475,9 @@ class MurderApp(App[None]):
         self._header.set_view(self._view, self._planning_mode if planning else None)
         self._grid.display = False
         self._agents.display = self._view == "crows"
-        self._plans.display = collab_mode
+        self._plans.display = collab_mode and self._sidebar_visible
         self._plan_doc.display = collab_mode and self._has_selected_plan
+        self._notes_list.display = note_mode and self._sidebar_visible
         self._notes_doc.display = note_mode
         self._notetaker_chat.display = note_mode
         self._schedule.display = self._view == "schedule"
@@ -459,8 +485,6 @@ class MurderApp(App[None]):
         self._mirror.styles.width = "28%" if collab_mode else "1fr"
 
     def action_toggle_planning_mode(self) -> None:
-        if self._insert_if_chat_focused("m"):
-            return
         if self._view != "planning":
             self._set_view("planning")
         self._planning_mode = (
@@ -470,6 +494,11 @@ class MurderApp(App[None]):
         self.notify(f"planning mode: {self._planning_mode}", timeout=2)
         if self._planning_mode == "notetaker":
             self.run_worker(self._enter_notetaker(), exclusive=True, group="notetaker")
+
+    def action_toggle_sidebar(self) -> None:
+        self._sidebar_visible = not self._sidebar_visible
+        self._apply_mode()
+        self.notify(f"docs sidebar: {'on' if self._sidebar_visible else 'off'}", timeout=2)
 
     def on_chat_input_user_message(self, event: ChatInput.UserMessage) -> None:
         self.notify(f"you: {event.text[:90]}", timeout=2)
@@ -595,7 +624,9 @@ class MurderApp(App[None]):
             return
         # Fallback: focus current view's primary widget
         if self._view == "planning":
-            self.set_focus(self._plans)
+            self.set_focus(
+                self._notes_list if self._planning_mode == "notetaker" else self._plans
+            )
         elif self._view == "crows":
             self.set_focus(self._agents)
         else:
