@@ -176,27 +176,41 @@ class NotesDocument(Markdown):
         await self.update(body.strip() or self._EMPTY)
 
 
-class NotetakerChat(RichLog):
-    """Append-only chat transcript with the notetaker."""
+class ChatLog(RichLog):
+    """Append-only chat transcript widget, reused for any agent chat (notetaker,
+    collaborator). ``"you"``/``"user"`` is the human; ``"agent"``/``"assistant"``
+    and the configured ``agent_label`` all render as that agent's name.
+    """
 
     DEFAULT_CSS = """
-    NotetakerChat {
+    ChatLog {
         border: solid $border;
         height: 1fr;
         width: 36%;
     }
     """
 
-    _TAGS = {"you": "[b cyan]you[/]", "notetaker": "[b green]notetaker[/]"}
-
-    def __init__(self) -> None:
+    def __init__(self, *, agent_label: str = "agent") -> None:
         super().__init__(highlight=False, markup=True, wrap=True, auto_scroll=True)
-        self.border_title = "notetaker chat"
+        self._agent_label = agent_label
+        self.border_title = f"{agent_label} chat"
+
+    def _tag(self, who: str) -> str:
+        if who in ("you", "user"):
+            return "[b cyan]you[/]"
+        if who in ("agent", "assistant", self._agent_label):
+            return f"[b green]{escape(self._agent_label)}[/]"
+        return f"[b]{escape(who)}[/]"
 
     def add_turn(self, who: str, text: str) -> None:
-        tag = self._TAGS.get(who, f"[b]{escape(who)}[/]")
-        self.write(f"{tag}  {escape(text)}")
+        self.write(f"{self._tag(who)}  {escape(text)}")
         self.write("")
 
     def add_status(self, text: str) -> None:
         self.write(f"[dim]{escape(text)}[/]")
+
+    def set_turns(self, turns: list[tuple[str, str]]) -> None:
+        """Replace the whole transcript (the parsed log can change wholesale)."""
+        self.clear()
+        for who, text in turns:
+            self.add_turn(who, text)

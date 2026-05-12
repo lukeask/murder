@@ -44,6 +44,16 @@ def _tail(pane_text: str) -> str:
 class CodexAdapter(HarnessAdapter):
     kind: ClassVar[str] = "codex"
     usage_collection_mode: ClassVar[UsageCollectionMode] = "tmux_slash"
+    # Transcript parsing (best-effort; needs real-capture fixtures to harden).
+    # Codex's inline UI echoes the submitted prompt on a "› …" line.
+    transcript_prompt_markers: ClassVar[tuple[str, ...]] = ("›",)
+    transcript_drop_substrings: ClassVar[tuple[str, ...]] = (
+        "explain this codebase",
+        "esc to interrupt",
+        "to interrupt",
+        "tokens used",
+        "openai codex",
+    )
     crow_system_prompt: ClassVar[str] = "see prompts/crow_codex.md"
     available_startup_models: ClassVar[list[tuple[str, str]]] = [
         ("gpt-5.5", "GPT-5.5"),

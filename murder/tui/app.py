@@ -16,6 +16,7 @@ from textual.widgets import Footer, Static
 from murder import db as dbmod
 from murder import notes as notes_mod
 from murder import tmux
+from murder.agents.collaborator import CollaboratorAgent
 from murder.agents.notetaker import NotetakerAgent
 from murder.harnesses.usage_sampling import sample_harness_usages_for_config
 from murder.tui.agent_grid import AgentGrid
@@ -24,9 +25,9 @@ from murder.tui.escalation_strip import EscalationStrip
 from murder.tui.header import Header
 from murder.tui.pane_mirror import PaneMirror
 from murder.tui.plan_view import (
+    ChatLog,
     NotesDocument,
     NotesList,
-    NotetakerChat,
     PlanDocument,
     PlanList,
 )
@@ -86,6 +87,7 @@ class HelpScreen(ModalScreen[None]):
                         "ctrl+1/2/3  switch views  ·  [ and ] cycle views",
                         "ctrl+t  toggle planning mode (notetaker ⇄ collaborator)",
                         "ctrl+b  toggle docs sidebar (notes / plans filetree)",
+                        "ctrl+y  collaborator: parsed chat ⇄ raw tmux pane",
                         "ctrl+c twice  force quit  ·  escape  unfocus chat",
                         "j/k  vim navigation in lists",
                         "r refresh · u refresh usage",
@@ -117,6 +119,7 @@ class MurderApp(App[None]):
         ("]", "next_view", "Next view"),
         ("ctrl+t", "toggle_planning_mode", "Plan mode"),
         ("ctrl+b", "toggle_sidebar", "Docs sidebar"),
+        ("ctrl+y", "toggle_collab_raw", "Raw pane"),
         ("q", "quit", "Quit"),
         ("r", "refresh_now", "Refresh"),
         ("u", "collect_usage", "Usage"),
@@ -164,7 +167,8 @@ class MurderApp(App[None]):
         self._plan_doc = PlanDocument()
         self._notes_list = NotesList()
         self._notes_doc = NotesDocument()
-        self._notetaker_chat = NotetakerChat()
+        self._notetaker_chat = ChatLog(agent_label="notetaker")
+        self._collab_chat = ChatLog(agent_label="collaborator")
         self._schedule = ScheduleView()
         self._mirror = PaneMirror()
         self._escalations = EscalationStrip()
@@ -173,6 +177,7 @@ class MurderApp(App[None]):
         self._notetaker_lock = asyncio.Lock()
         self._planning_mode = "notetaker"  # "notetaker" | "collaborator"
         self._sidebar_visible = True
+        self._collab_raw = False  # ctrl+y: show the raw tmux pane instead of the parsed chat
         self._notetaker_loaded = False
         self._last_notes_sig: tuple[str, str] | None = None
         self._user_config: UserConfig = load_user_config()
@@ -195,6 +200,7 @@ class MurderApp(App[None]):
             yield self._notes_list
             yield self._notes_doc
             yield self._notetaker_chat
+            yield self._collab_chat
             yield self._schedule
             yield self._mirror
         yield self._escalations
@@ -270,6 +276,12 @@ class MurderApp(App[None]):
 
     async def _refresh_pane(self) -> None:
         await self._mirror.refresh_pane()
+        if (
+            self._view == "planning"
+            and self._planning_mode == "collaborator"
+            and not self._collab_raw
+        ):
+            await self._refresh_collab_chat()
 
     def on_ticket_grid_ticket_selected(self, event: TicketGrid.TicketSelected) -> None:
         crow = self.runtime.get_crow(event.ticket_id)
@@ -421,6 +433,34 @@ class MurderApp(App[None]):
             self._notetaker_chat.add_turn("notetaker", reply)
         await self._render_notes()
 
+    # ── collaborator mode ──────────────────────────────────────────────────
+
+    def _collaborator_agent(self) -> CollaboratorAgent | None:
+        agent = self.runtime.get_agent("collaborator-0")
+        return agent if isinstance(agent, CollaboratorAgent) else None
+
+    async def _refresh_collab_chat(self) -> None:
+        """Re-parse the collaborator's tmux pane into the chat transcript."""
+        if not (self._view == "planning" and self._planning_mode == "collaborator"):
+            return
+        agent = self._collaborator_agent()
+        if agent is None:
+            self._collab_chat.set_turns([])
+            self._collab_chat.add_status("(no collaborator yet — type a message to start one)")
+            return
+        turns = await agent.refresh_transcript()
+        if turns:
+            self._collab_chat.set_turns(turns)
+            return
+        self._collab_chat.set_turns([])
+        if agent.harness.transcript_prompt_markers:
+            self._collab_chat.add_status("(collaborator chat — nothing parsed yet)")
+        else:
+            self._collab_chat.add_status(
+                f"(no transcript parser for '{agent.harness.kind}' yet — "
+                "press ctrl+y for the raw pane)"
+            )
+
     def action_view_planning(self) -> None:
         self._set_view("planning")
 
@@ -472,17 +512,22 @@ class MurderApp(App[None]):
         planning = self._view == "planning"
         note_mode = planning and self._planning_mode == "notetaker"
         collab_mode = planning and self._planning_mode == "collaborator"
+        collab_chat_on = collab_mode and not self._collab_raw
+        collab_raw_on = collab_mode and self._collab_raw
         self._header.set_view(self._view, self._planning_mode if planning else None)
         self._grid.display = False
         self._agents.display = self._view == "crows"
         self._plans.display = collab_mode and self._sidebar_visible
         self._plan_doc.display = collab_mode and self._has_selected_plan
+        self._collab_chat.display = collab_chat_on
         self._notes_list.display = note_mode and self._sidebar_visible
         self._notes_doc.display = note_mode
         self._notetaker_chat.display = note_mode
         self._schedule.display = self._view == "schedule"
-        self._mirror.display = collab_mode or self._view == "crows"
-        self._mirror.styles.width = "28%" if collab_mode else "1fr"
+        self._mirror.display = collab_raw_on or self._view == "crows"
+        self._mirror.styles.width = "1fr"
+        if collab_chat_on:
+            self.run_worker(self._refresh_collab_chat(), exclusive=True, group="collab_chat")
 
     def action_toggle_planning_mode(self) -> None:
         if self._view != "planning":
@@ -499,6 +544,18 @@ class MurderApp(App[None]):
         self._sidebar_visible = not self._sidebar_visible
         self._apply_mode()
         self.notify(f"docs sidebar: {'on' if self._sidebar_visible else 'off'}", timeout=2)
+
+    def action_toggle_collab_raw(self) -> None:
+        # Only meaningful in collaborator planning mode; harmless elsewhere.
+        self._collab_raw = not self._collab_raw
+        if self._collab_raw:
+            agent = self._collaborator_agent()
+            self._mirror.set_session(agent.session if agent is not None else None)
+        self._apply_mode()
+        self.notify(
+            f"collaborator view: {'raw tmux pane' if self._collab_raw else 'parsed chat'}",
+            timeout=2,
+        )
 
     def on_chat_input_user_message(self, event: ChatInput.UserMessage) -> None:
         self.notify(f"you: {event.text[:90]}", timeout=2)
@@ -572,6 +629,9 @@ class MurderApp(App[None]):
             except Exception as e:
                 self.notify(f"send failed: {e}", severity="error", timeout=5)
                 return
+            # Optimistic echo + spinner; the next pane parse reconciles it.
+            self._collab_chat.add_turn("you", text)
+            self._collab_chat.add_status("collaborator is thinking…")
         self.notify("→ collaborator", timeout=2)
 
     async def _run_shell_cmd(self, cmd: str) -> None:
