@@ -31,6 +31,12 @@ def read_conversation(conn: sqlite3.Connection, agent_id: str) -> list[Turn]:
     return [(r["role"], r["body"]) for r in dbmod.get_agent_messages(conn, agent_id)]
 
 
+def clear(conn: sqlite3.Connection, agent_id: str) -> None:
+    """Drop the persisted log for ``agent_id`` — call when a fresh agent
+    session starts, so a new run doesn't show the previous run's chat."""
+    dbmod.replace_agent_messages(conn, agent_id, [])
+
+
 def merge_transcript(
     conn: sqlite3.Connection,
     agent_id: str,
