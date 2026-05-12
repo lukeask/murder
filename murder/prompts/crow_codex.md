@@ -1,4 +1,4 @@
-# Monkey system fragment — codex harness
+# Crow system fragment — codex harness
 
 You are working on ticket `{ticket_id}` ({title}). This is a focused
 implementation task. The plan, checklist, and write-set are below.

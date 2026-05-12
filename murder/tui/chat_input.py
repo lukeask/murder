@@ -20,13 +20,13 @@ class ChatInput(TextArea):
 
     DEFAULT_CSS = """
     ChatInput {
-        border: round $accent;
+        border: solid $border;
         height: auto;
-        min-height: 3;
+        min-height: 5;
         max-height: 8;
     }
     ChatInput:focus {
-        border: heavy $primary;
+        border: solid $primary;
     }
     """
 
@@ -36,7 +36,7 @@ class ChatInput(TextArea):
     def on_mount(self) -> None:
         self.border_title = "collaborator"
         # TODO(tui-planning): add explicit collaborator persona switching
-        # between planner and notetaker. Sentinel and Augur are separate roles.
+        # between planner and notetaker. Sentinel and CrowHandler are separate roles.
         self.border_subtitle = "Enter to send · Shift+Enter for newline"
 
     def on_key(self, event: Key) -> None:
@@ -51,3 +51,7 @@ class ChatInput(TextArea):
             event.prevent_default()
             event.stop()
             self.insert("\n")
+        elif event.key == "escape":
+            event.prevent_default()
+            event.stop()
+            self.app.action_restore_focus()

@@ -6,7 +6,7 @@ import asyncio
 import re
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import ClassVar
+from typing import ClassVar, Literal
 
 from murder import tmux
 from murder.harnesses.models import (
@@ -22,6 +22,8 @@ CHECK_RE = re.compile(r">>>\s*CHECK:\s*(?P<body>.+?)$", re.MULTILINE)
 NOTE_RE = re.compile(r">>>\s*NOTE:\s*(?P<body>.+?)\n>>>\s*END\b", re.DOTALL)
 DONE_RE = re.compile(r">>>\s*DONE\b")
 MAX_NOTE_LINES = 20
+
+UsageCollectionMode = Literal["none", "tmux_slash", "http"]
 
 
 class HarnessSession:
@@ -43,7 +45,10 @@ class HarnessSession:
 
         attempts = max(1, int(start_spec.ready_timeout_s / start_spec.poll_interval_s))
         for _ in range(attempts):
-            pane = await tmux.capture_pane(self.session, lines=120)
+            try:
+                pane = await tmux.capture_pane(self.session, lines=120)
+            except tmux.TmuxError as e:
+                return fail_result(f"Session lost during startup: {e}")
             if self.adapter.is_ready(pane):
                 break
             await asyncio.sleep(start_spec.poll_interval_s)
@@ -70,7 +75,10 @@ class HarnessSession:
     async def wait_ready(self, timeout_s: float = 240.0) -> SimpleResult[None]:
         attempts = max(1, int(timeout_s / 0.4))
         for _ in range(attempts):
-            pane = await tmux.capture_pane(self.session, lines=120)
+            try:
+                pane = await tmux.capture_pane(self.session, lines=120)
+            except tmux.TmuxError as e:
+                return fail_result(f"Session lost during ready-wait: {e}")
             if self.adapter.is_ready(pane):
                 return ok_result()
             await asyncio.sleep(0.4)
@@ -79,7 +87,10 @@ class HarnessSession:
     async def wait_idle(self, timeout_s: float = 30.0) -> SimpleResult[None]:
         attempts = max(1, int(timeout_s / 0.4))
         for _ in range(attempts):
-            pane = await tmux.capture_pane(self.session, lines=120)
+            try:
+                pane = await tmux.capture_pane(self.session, lines=120)
+            except tmux.TmuxError as e:
+                return fail_result(f"Session lost during idle-wait: {e}")
             if self.adapter.is_idle(pane):
                 return ok_result()
             await asyncio.sleep(0.4)
@@ -125,8 +136,9 @@ class HarnessSession:
 
 class HarnessAdapter(ABC):
     kind: ClassVar[str]
-    monkey_system_prompt: ClassVar[str]
+    crow_system_prompt: ClassVar[str]
     available_startup_models: ClassVar[list[tuple[str, str]]] = []
+    usage_collection_mode: ClassVar[UsageCollectionMode] = "none"
 
     def __init__(self, startup_model: str | None = None) -> None:
         self.startup_model = startup_model

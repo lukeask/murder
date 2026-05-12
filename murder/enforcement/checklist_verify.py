@@ -1,6 +1,6 @@
 """Anti-faking checklist verification.
 
-A monkey can mark a checklist item done by emitting `>>> CHECK: <text>`.
+A crow can mark a checklist item done by emitting `>>> CHECK: <text>`.
 That tells us nothing about whether the work actually landed. This module
 inspects each item's text for cited file/symbol references and verifies
 against the working tree:
@@ -16,7 +16,7 @@ the function is still `raise NotImplementedError`" stops being silent.
 
 Pure module: callers feed in a sqlite connection + repo_root + ticket_id
 and get back a structured `VerificationResult`. Wiring into the
-post-monkey-done flow is a separate decision.
+post-crow-done flow is a separate decision.
 """
 
 from __future__ import annotations

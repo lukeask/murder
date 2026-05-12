@@ -4,32 +4,39 @@ escalation strip onto the running Runtime."""
 from __future__ import annotations
 
 import asyncio
-import json
-from dataclasses import asdict, is_dataclass
+import time
 from typing import TYPE_CHECKING
 
 from textual.app import App, ComposeResult
+from textual.binding import Binding
 from textual.containers import Container, Horizontal
 from textual.screen import ModalScreen
 from textual.widgets import Footer, Static
 
 from murder import db as dbmod
+from murder import notes as notes_mod
+from murder import tmux
+from murder.agents.notetaker import NotetakerAgent
+from murder.harnesses.usage_sampling import sample_harness_usages_for_config
 from murder.tui.agent_grid import AgentGrid
 from murder.tui.chat_input import ChatInput
 from murder.tui.escalation_strip import EscalationStrip
 from murder.tui.header import Header
 from murder.tui.pane_mirror import PaneMirror
-from murder.tui.plan_view import PlanDocument, PlanList
+from murder.tui.plan_view import NotesDocument, NotetakerChat, PlanDocument, PlanList
 from murder.tui.schedule_view import ScheduleView
+from murder.tui.settings_screen import SettingsScreen
 from murder.tui.themes import CUSTOM_THEMES
 from murder.tui.ticket_grid import TicketGrid
-from murder.user_config import UserConfig, load_user_config, save_user_config
+from murder.user_config import UserConfig, load_user_config
 
 if TYPE_CHECKING:
     from murder.orchestrator import Orchestrator
     from murder.runtime import Runtime
 
-COLLABORATOR_START_TIMEOUT_S = 45.0
+COLLABORATOR_START_TIMEOUT_S = 120.0
+SCHEDULE_USAGE_DEBOUNCE_S = 20.0
+CTRL_C_DOUBLE_TAP_S = 1.5
 
 
 class HelpScreen(ModalScreen[None]):
@@ -43,7 +50,7 @@ class HelpScreen(ModalScreen[None]):
     #help {
         width: 74;
         max-width: 90%;
-        border: round $primary;
+        border: solid $primary;
         background: $surface;
         padding: 1 2;
     }
@@ -56,19 +63,26 @@ class HelpScreen(ModalScreen[None]):
                     [
                         "[b]murder help[/b]",
                         "",
-                        "monkey: coding agent assigned to one ticket",
-                        "crow: a visible agent/session row in the Crows view",
-                        "augur: watches a monkey and records progress",
+                        "crow: coding agent assigned to one ticket",
+                        "crow_handler: watches a crow and records progress",
                         "sentinel: handles questions and escalations",
                         "ticket: scoped unit of work with deps, write_set, checklist",
                         "wave: tickets that may run after earlier dependencies finish",
                         "",
                         "[b]slash commands[/b]",
                         "/murder  kick ready tickets",
+                        "/exit    quit murder",
+                        "!<cmd>   run shell command (output in pane mirror)",
+                        ":wq :q!  vim-style quit",
                         "",
                         "[b]keys[/b]",
-                        "F6 kick ready · F2 focus chat · F1 help · 1/2/3 switch views",
-                        "[ and ] change view · r refresh · u sample usage · q quit",
+                        "F6 kick ready · F2 focus chat · F1 help",
+                        "ctrl+1/2/3  switch views  ·  [ and ] cycle views",
+                        "m  toggle planning mode (notetaker ⇄ collaborator)",
+                        "ctrl+c twice  force quit  ·  escape  unfocus chat",
+                        "j/k  vim navigation in lists",
+                        "r refresh · u refresh usage",
+                        "ctrl+p settings (harnesses, models, theme)",
                         "murder --help shows the CLI reference",
                     ]
                 ),
@@ -84,13 +98,17 @@ class MurderApp(App[None]):
     """Single-screen TUI with planning, crows, and schedule views."""
 
     TITLE = "murder"
+    ENABLE_COMMAND_PALETTE = False
+
     BINDINGS = [
-        ("ctrl+p", "change_theme", "Theme"),
-        ("1", "view_planning", "Planning"),
-        ("2", "view_crows", "Crows"),
-        ("3", "view_schedule", "Schedule"),
+        Binding("ctrl+c", "ctrl_c_quit", "Quit", priority=True, show=False),
+        ("ctrl+p", "open_settings", "Settings"),
+        ("ctrl+1", "view_planning", "Planning"),
+        ("ctrl+2", "view_crows", "Crows"),
+        ("ctrl+3", "view_schedule", "Schedule"),
         ("[", "previous_view", "Prev view"),
         ("]", "next_view", "Next view"),
+        ("m", "toggle_planning_mode", "Plan mode"),
         ("q", "quit", "Quit"),
         ("r", "refresh_now", "Refresh"),
         ("u", "collect_usage", "Usage"),
@@ -109,15 +127,15 @@ class MurderApp(App[None]):
     }
     TicketGrid {
         width: 50%;
-        border: round $accent;
+        border: solid $border;
     }
     AgentGrid {
         width: 56%;
-        border: round $accent;
+        border: solid $border;
     }
     PlanList {
-        width: 28%;
-        border: round $accent;
+        width: 18%;
+        border: solid $border;
     }
     """
 
@@ -132,14 +150,24 @@ class MurderApp(App[None]):
         self._agents = AgentGrid()
         self._plans = PlanList()
         self._plan_doc = PlanDocument()
+        self._notes_doc = NotesDocument()
+        self._notetaker_chat = NotetakerChat()
         self._schedule = ScheduleView()
         self._mirror = PaneMirror()
         self._escalations = EscalationStrip()
         self._chat = ChatInput()
         self._collab_lock = asyncio.Lock()
+        self._notetaker_lock = asyncio.Lock()
+        self._planning_mode = "notetaker"  # "notetaker" | "collaborator"
+        self._notetaker_loaded = False
+        self._last_notes_sig: tuple[str, str] | None = None
         self._user_config: UserConfig = load_user_config()
-        self._persist_theme_changes = False
         self._view = "planning"
+        self._last_schedule_usage_attempt_at: float | None = None
+        self._pre_chat_focus = None
+        self._has_selected_plan = False
+        self._shell_session: str | None = None
+        self._last_ctrl_c: float = 0.0
         for theme in CUSTOM_THEMES:
             self.register_theme(theme)
 
@@ -150,6 +178,8 @@ class MurderApp(App[None]):
             yield self._agents
             yield self._plans
             yield self._plan_doc
+            yield self._notes_doc
+            yield self._notetaker_chat
             yield self._schedule
             yield self._mirror
         yield self._escalations
@@ -159,68 +189,49 @@ class MurderApp(App[None]):
     def on_mount(self) -> None:
         if self._user_config.tui.theme in self.available_themes:
             self.theme = self._user_config.tui.theme
-        self._persist_theme_changes = True
         self.sub_title = str(self.runtime.repo_root)
         self._apply_mode()
         self._refresh_db_views()
         self.set_focus(self._chat)
         if self.runtime.config.project.name == "TODO_SET_ME":
             self.notify(
-                "Project name is unset; run `murder config` to replace TODO_SET_ME.",
+                "Project name is unset — open Settings (ctrl+p) to update roles.yaml.",
                 severity="warning",
                 timeout=10,
             )
         interval_s = max(self.runtime.config.tui.refresh_ms, 250) / 1000
         self.set_interval(interval_s, self._refresh_db_views)
-        # Pane mirror cadence is independent — capture-pane is cheap but adds
-        # tmux load if the user pegs refresh_ms low.
         self.set_interval(max(interval_s, 1.0), self._refresh_pane)
+        if self._view == "planning" and self._planning_mode == "notetaker":
+            self.run_worker(self._enter_notetaker(), exclusive=True, group="notetaker")
+
+    def action_ctrl_c_quit(self) -> None:
+        now = time.monotonic()
+        if now - self._last_ctrl_c < CTRL_C_DOUBLE_TAP_S:
+            self.exit()
+        else:
+            self._last_ctrl_c = now
+            self.notify("Press ctrl+c again to quit", timeout=2)
 
     def action_refresh_now(self) -> None:
         if self._insert_if_chat_focused("r"):
             return
         self._refresh_db_views()
-        self.run_worker(self._mirror.refresh_pane(), exclusive=True)
+        self.run_worker(self._mirror.refresh_pane(), exclusive=True, group="mirror")
 
     def action_collect_usage(self) -> None:
         if self._insert_if_chat_focused("u"):
             return
-        self.run_worker(self._collect_usage_snapshots(), exclusive=True)
+        self.run_worker(self._collect_usage_snapshots(), exclusive=True, group="usage")
 
     async def _collect_usage_snapshots(self) -> None:
         if self.runtime.db is None:
             return
-        agents = list(getattr(self.runtime, "_agents", {}).values())
-        stored = 0
-        unsupported = 0
-        for agent in agents:
-            harness_session = getattr(agent, "harness_session", None)
-            if harness_session is None:
-                continue
-            result = await harness_session.collect_usage_status()
-            if not result.ok or result.data is None:
-                unsupported += 1
-                continue
-            status = result.data
-            payload = asdict(status) if is_dataclass(status) else status
-            self.runtime.db.execute(
-                """
-                INSERT INTO harness_usage_snapshots
-                    (harness, source, fetched_at, status_json)
-                VALUES (?, ?, ?, ?)
-                """,
-                (
-                    status.harness,
-                    status.source,
-                    status.fetched_at,
-                    json.dumps(payload, sort_keys=True, default=str),
-                ),
-            )
-            stored += 1
+        stored, failures = await sample_harness_usages_for_config(self.runtime)
         self._refresh_db_views()
-        if stored or unsupported:
+        if stored or failures:
             self.notify(
-                f"Sampled {stored} harness usages ({unsupported} unsupported).",
+                f"Sampled {stored} harness usages ({failures} failed).",
                 timeout=4,
             )
 
@@ -232,39 +243,46 @@ class MurderApp(App[None]):
         self._plans.refresh_from_db(db)
         self._schedule.refresh_from_db(db)
         self._escalations.refresh_from_db(db)
-        if self._view == "planning" and self._plans.selected_name:
-            self.run_worker(self._render_plan(self._plans.selected_name), exclusive=True)
+        if self._view == "planning":
+            if self._planning_mode == "collaborator" and self._plans.selected_name:
+                self.run_worker(
+                    self._render_plan(self._plans.selected_name),
+                    exclusive=True, group="plandoc",
+                )
+            elif self._planning_mode == "notetaker":
+                self.run_worker(self._render_notes(), exclusive=True, group="notes")
 
     async def _refresh_pane(self) -> None:
         await self._mirror.refresh_pane()
 
     def on_ticket_grid_ticket_selected(self, event: TicketGrid.TicketSelected) -> None:
-        monkey = self.runtime.get_monkey(event.ticket_id)
-        session = monkey.session if monkey is not None else None
+        crow = self.runtime.get_crow(event.ticket_id)
+        session = crow.session if crow is not None else None
         self._mirror.set_session(session)
-        self.run_worker(self._mirror.refresh_pane(), exclusive=True)
+        self.run_worker(self._mirror.refresh_pane(), exclusive=True, group="mirror")
 
     def on_agent_grid_agent_highlighted(self, event: AgentGrid.AgentHighlighted) -> None:
         self._mirror.set_session(event.session)
-        self.run_worker(self._mirror.refresh_pane(), exclusive=True)
+        self.run_worker(self._mirror.refresh_pane(), exclusive=True, group="mirror")
 
     def on_agent_grid_agent_opened(self, event: AgentGrid.AgentOpened) -> None:
         self._mirror.set_session(event.session)
-        self.run_worker(self._mirror.refresh_pane(), exclusive=True)
+        self.run_worker(self._mirror.refresh_pane(), exclusive=True, group="mirror")
         agent = self.runtime.get_agent(event.agent_id)
         hint = agent.attach_hint() if agent is not None else (
             f"tmux attach -t {event.session}" if event.session else "(no session)"
         )
-        # TODO(tui-crows): hand terminal control to tmux from inside Textual.
-        # For now, the pane mirror is live and the exact attach command is shown.
         self.notify(f"attach: {hint}", timeout=6)
 
     def on_plan_list_plan_highlighted(self, event: PlanList.PlanHighlighted) -> None:
         if self._view == "planning":
-            self.run_worker(self._render_plan(event.name), exclusive=True)
+            if not self._has_selected_plan:
+                self._has_selected_plan = True
+                self._plan_doc.display = True
+            self.run_worker(self._render_plan(event.name), exclusive=True, group="plandoc")
 
     def on_plan_list_plan_opened(self, event: PlanList.PlanOpened) -> None:
-        self.run_worker(self._open_plan(event.name), exclusive=True)
+        self.run_worker(self._open_plan(event.name), exclusive=True, group="editor")
 
     async def _render_plan(self, name: str) -> None:
         await self.runtime.reconcile_plan(name)
@@ -300,20 +318,111 @@ class MurderApp(App[None]):
         self._refresh_db_views()
         await self._render_plan(name)
 
-    def action_view_planning(self) -> None:
-        if self._insert_if_chat_focused("1"):
+    # ── notetaker mode ─────────────────────────────────────────────────────
+
+    def _notetaker_agent(self) -> NotetakerAgent | None:
+        agent = self.runtime.get_agent("notetaker-0")
+        return agent if isinstance(agent, NotetakerAgent) else None
+
+    def _active_note_name(self) -> str | None:
+        agent = self._notetaker_agent()
+        if agent is not None:
+            return agent.note_name
+        if self.runtime.db is not None:
+            return dbmod.latest_note_name(self.runtime.db) or notes_mod.today_name()
+        return notes_mod.today_name()
+
+    async def _render_notes(self) -> None:
+        db = self.runtime.db
+        if db is None:
             return
+        name = self._active_note_name()
+        if name is None:
+            return
+        row = dbmod.get_note(db, name)
+        body = str(row["body"]) if row else ""
+        sig = (name, str(row["updated_at"]) if row else "")
+        if sig == self._last_notes_sig:
+            return
+        self._last_notes_sig = sig
+        await self._notes_doc.show(name, body)
+
+    async def _enter_notetaker(self) -> None:
+        await self._render_notes()
+        if self.orchestrator is None:
+            return
+        async with self._notetaker_lock:
+            try:
+                agent_id = await self.orchestrator.ensure_notetaker()
+            except Exception as e:  # noqa: BLE001
+                self.notify(f"notetaker unavailable: {e}", severity="error", timeout=6)
+                return
+            agent = self.runtime.get_agent(agent_id)
+            if not isinstance(agent, NotetakerAgent):
+                return
+            if not self._notetaker_loaded:
+                self._notetaker_chat.clear()
+                for who, text in agent.transcript_for_ui():
+                    self._notetaker_chat.add_turn(who, text)
+                self._notetaker_loaded = True
+        await self._render_notes()
+
+    async def _dispatch_notetaker(self, text: str) -> None:
+        if self.orchestrator is None:
+            self.notify("notetaker: no orchestrator attached", severity="error", timeout=3)
+            return
+        async with self._notetaker_lock:
+            try:
+                agent_id = await self.orchestrator.ensure_notetaker()
+            except Exception as e:  # noqa: BLE001
+                self.notify(f"notetaker spawn failed: {e}", severity="error", timeout=8)
+                return
+            agent = self.runtime.get_agent(agent_id)
+            if not isinstance(agent, NotetakerAgent):
+                self.notify("notetaker vanished after spawn", severity="error", timeout=5)
+                return
+            if not self._notetaker_loaded:
+                self._notetaker_chat.clear()
+                for who, t in agent.transcript_for_ui():
+                    self._notetaker_chat.add_turn(who, t)
+                self._notetaker_loaded = True
+            self._notetaker_chat.add_turn("you", text)
+            self._notetaker_chat.add_status("notetaker is thinking…")
+            try:
+                reply = await agent.reply_to(text)
+            except Exception as e:  # noqa: BLE001
+                self.notify(f"notetaker error: {e}", severity="error", timeout=6)
+                return
+            self._notetaker_chat.add_turn("notetaker", reply)
+        await self._render_notes()
+
+    def action_view_planning(self) -> None:
         self._set_view("planning")
 
     def action_view_crows(self) -> None:
-        if self._insert_if_chat_focused("2"):
-            return
         self._set_view("crows")
 
     def action_view_schedule(self) -> None:
-        if self._insert_if_chat_focused("3"):
-            return
         self._set_view("schedule")
+        self.run_worker(self._on_schedule_view_enter(), exclusive=True, group="usage")
+
+    async def _on_schedule_view_enter(self) -> None:
+        if self.runtime.db is None:
+            return
+        now = time.monotonic()
+        if (
+            self._last_schedule_usage_attempt_at is not None
+            and now - self._last_schedule_usage_attempt_at < SCHEDULE_USAGE_DEBOUNCE_S
+        ):
+            return
+        self._last_schedule_usage_attempt_at = now
+        stored, failures = await sample_harness_usages_for_config(self.runtime)
+        self._refresh_db_views()
+        if stored or failures:
+            self.notify(
+                f"Schedule usage: {stored} ok, {failures} failed",
+                timeout=4,
+            )
 
     def action_next_view(self) -> None:
         if self._insert_if_chat_focused("]"):
@@ -330,30 +439,64 @@ class MurderApp(App[None]):
     def _set_view(self, view: str) -> None:
         self._view = view
         self._apply_mode()
-        self._refresh_db_views()
-        if self._view == "planning" and self._plans.selected_name:
-            self.run_worker(self._render_plan(self._plans.selected_name), exclusive=True)
+        self._refresh_db_views()  # also re-renders the planning doc for the active mode
+        if self._view == "planning" and self._planning_mode == "notetaker":
+            self.run_worker(self._enter_notetaker(), exclusive=True, group="notetaker")
 
     def _apply_mode(self) -> None:
-        self._header.set_view(self._view)
+        planning = self._view == "planning"
+        note_mode = planning and self._planning_mode == "notetaker"
+        collab_mode = planning and self._planning_mode == "collaborator"
+        self._header.set_view(self._view, self._planning_mode if planning else None)
         self._grid.display = False
         self._agents.display = self._view == "crows"
-        self._plans.display = self._view == "planning"
-        self._plan_doc.display = self._view == "planning"
+        self._plans.display = collab_mode
+        self._plan_doc.display = collab_mode and self._has_selected_plan
+        self._notes_doc.display = note_mode
+        self._notetaker_chat.display = note_mode
         self._schedule.display = self._view == "schedule"
-        self._mirror.display = self._view in {"planning", "crows"}
-        self._mirror.styles.width = "34%" if self._view == "planning" else "1fr"
+        self._mirror.display = collab_mode or self._view == "crows"
+        self._mirror.styles.width = "28%" if collab_mode else "1fr"
+
+    def action_toggle_planning_mode(self) -> None:
+        if self._insert_if_chat_focused("m"):
+            return
+        if self._view != "planning":
+            self._set_view("planning")
+        self._planning_mode = (
+            "collaborator" if self._planning_mode == "notetaker" else "notetaker"
+        )
+        self._apply_mode()
+        self.notify(f"planning mode: {self._planning_mode}", timeout=2)
+        if self._planning_mode == "notetaker":
+            self.run_worker(self._enter_notetaker(), exclusive=True, group="notetaker")
 
     def on_chat_input_user_message(self, event: ChatInput.UserMessage) -> None:
         self.notify(f"you: {event.text[:90]}", timeout=2)
         if self.orchestrator is None:
             self.notify("chat: no orchestrator attached", severity="error", timeout=3)
             return
-        self.run_worker(self._dispatch_chat(event.text), exclusive=False)
+        # Own worker group: a chat dispatch may spend a minute inside
+        # ensure_collaborator(); it must not be cancelled by an unrelated
+        # exclusive=True UI worker (plan/notes render, pane mirror, …) in the
+        # default group — that cancellation raises CancelledError, which is a
+        # BaseException and slips past the handlers below, killing the spawn
+        # silently.
+        self.run_worker(self._dispatch_chat(event.text), exclusive=False, group="chat")
 
     async def _dispatch_chat(self, text: str) -> None:
+        # Classify in most-specific-first order; keep ChatInput dumb.
+        if text.startswith("!"):
+            await self._run_shell_cmd(text[1:].strip())
+            return
+        if text in {":wq", ":q!"}:
+            self.exit()
+            return
         if text.startswith("/"):
             await self._handle_slash(text)
+            return
+        if self._view == "planning" and self._planning_mode == "notetaker":
+            await self._dispatch_notetaker(text)
             return
         # Serialize ensure+send so a flurry of messages during cold-start
         # doesn't race two collaborator spawns or interleave send_keys.
@@ -363,7 +506,7 @@ class MurderApp(App[None]):
                 "AND status IN ('running','idle') LIMIT 1"
             ).fetchone()
             if not already:
-                self.notify("starting collaborator…", timeout=30)
+                self.notify("starting collaborator… (first launch can take a minute)", timeout=60)
             try:
                 agent_id = await asyncio.wait_for(
                     self.orchestrator.ensure_collaborator(),
@@ -380,6 +523,11 @@ class MurderApp(App[None]):
                     timeout=10,
                 )
                 return
+            except asyncio.CancelledError:
+                # Some other worker (or shutdown) cancelled us mid-spawn. Don't
+                # swallow it silently — say so, then let Textual handle it.
+                self.notify("collaborator startup cancelled", severity="warning", timeout=6)
+                raise
             except Exception as e:
                 self._record_ui_escalation(f"Collaborator startup failed: {e}")
                 self.notify(f"collaborator spawn failed: {e}", severity="error", timeout=10)
@@ -388,15 +536,34 @@ class MurderApp(App[None]):
             if agent is None:
                 self.notify("collaborator vanished after spawn", severity="error", timeout=5)
                 return
-            # Route pane mirror to collaborator session so user can see it.
             self._mirror.set_session(agent.session)
-            self.run_worker(self._mirror.refresh_pane(), exclusive=True)
+            self.run_worker(self._mirror.refresh_pane(), exclusive=True, group="mirror")
             try:
                 await agent.send(text)
             except Exception as e:
                 self.notify(f"send failed: {e}", severity="error", timeout=5)
                 return
         self.notify("→ collaborator", timeout=2)
+
+    async def _run_shell_cmd(self, cmd: str) -> None:
+        if not cmd:
+            return
+        if self._shell_session:
+            try:
+                await tmux.kill_session(self._shell_session)
+            except tmux.TmuxError:
+                pass
+            self._shell_session = None
+        session_name = f"murder-shell-{int(time.monotonic() * 1000) % 1_000_000}"
+        try:
+            await tmux.create_session(session_name, self.runtime.repo_root)
+            await tmux.send_keys(session_name, cmd)
+            self._shell_session = session_name
+            self._mirror.set_session(session_name)
+            self.run_worker(self._mirror.refresh_pane(), exclusive=True, group="mirror")
+            self.notify(f"! {cmd}", timeout=2)
+        except Exception as e:
+            self.notify(f"shell error: {e}", severity="error", timeout=5)
 
     async def _handle_slash(self, text: str) -> None:
         parts = text[1:].split()
@@ -405,6 +572,8 @@ class MurderApp(App[None]):
         cmd, *args = parts
         if cmd == "murder":
             await self._kick_ready()
+        elif cmd == "exit":
+            self.exit()
         else:
             self.notify(f"unknown command: /{cmd}", severity="warning", timeout=3)
 
@@ -414,7 +583,23 @@ class MurderApp(App[None]):
         self.exit()
 
     def action_focus_chat(self) -> None:
+        if self.focused is not self._chat:
+            self._pre_chat_focus = self.focused
         self.set_focus(self._chat)
+
+    def action_restore_focus(self) -> None:
+        target = self._pre_chat_focus
+        self._pre_chat_focus = None
+        if target is not None and target.display:
+            self.set_focus(target)
+            return
+        # Fallback: focus current view's primary widget
+        if self._view == "planning":
+            self.set_focus(self._plans)
+        elif self._view == "crows":
+            self.set_focus(self._agents)
+        else:
+            self.set_focus(None)
 
     def action_show_help(self) -> None:
         if self._insert_if_chat_focused("?"):
@@ -460,11 +645,19 @@ class MurderApp(App[None]):
         self._chat.insert(text)
         return True
 
-    def _watch_theme(self, theme_name: str) -> None:
-        super()._watch_theme(theme_name)
-        if not getattr(self, "_persist_theme_changes", False):
+    def action_open_settings(self) -> None:
+        screen = SettingsScreen(
+            config=self.runtime.config,
+            repo=self.runtime.repo_root,
+            user_config=self._user_config,
+            available_themes=sorted(self.available_themes),
+        )
+        self.push_screen(screen, self._on_settings_closed)
+
+    def _on_settings_closed(self, saved: bool) -> None:
+        if not saved:
             return
-        if theme_name not in self.available_themes:
-            return
-        self._user_config.tui.theme = theme_name
-        save_user_config(self._user_config)
+        self._user_config = load_user_config()
+        if self._user_config.tui.theme and self._user_config.tui.theme in self.available_themes:
+            self.theme = self._user_config.tui.theme
+        self.notify("Settings saved.", timeout=3)

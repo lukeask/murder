@@ -8,7 +8,7 @@ from murder.harnesses.models import HarnessStartSpec
 
 class _FakeAdapter(HarnessAdapter):
     kind = "fake"
-    monkey_system_prompt = ""
+    crow_system_prompt = ""
 
     def __init__(self) -> None:
         super().__init__(startup_model="model-x")

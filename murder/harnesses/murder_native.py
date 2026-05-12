@@ -15,7 +15,7 @@ from murder.harnesses.base import HarnessAdapter
 
 class MurderNativeAdapter(HarnessAdapter):
     kind: ClassVar[str] = "murder_native"
-    monkey_system_prompt: ClassVar[str] = ""  # native agents prompted directly
+    crow_system_prompt: ClassVar[str] = ""  # native agents prompted directly
 
     def startup_cmd(self, cwd: Path) -> list[str]:
         # TODO(v2): launch the native agent process; possibly `python -m murder.native ...`.

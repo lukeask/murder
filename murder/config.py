@@ -90,7 +90,7 @@ class ApiRoleConfig(BaseModel):
     max_context_tokens: int = 180_000
 
 
-class AugurConfig(ApiRoleConfig):
+class CrowHandlerConfig(ApiRoleConfig):
     poll_interval_s: float = 45.0
     forced_summary_every_n_ticks: int = 7
     stuck_threshold_ticks: int = 3
@@ -104,13 +104,21 @@ class SentinelConfig(ApiRoleConfig):
             "grep",
             "list_tickets",
             "read_ticket",
-            "send_to_monkey",
+            "send_to_crow",
             "escalate_user",
             "escalate_collaborator",
             "append_sentinel_note",
             "pause_ticket",
         ]
     )
+
+
+class NotetakerConfig(ApiRoleConfig):
+    """Planning-mode "notetaker": an OpenRouter LLM that tidies the user's
+    stream-of-consciousness into a clean notes doc via read/write tools."""
+
+    model: str = "anthropic/claude-sonnet-4-6"
+    max_tokens: int = 1500
 
 
 class TuiConfig(BaseModel):
@@ -128,9 +136,10 @@ class RuntimeConfig(BaseModel):
 class Config(BaseModel):
     project: ProjectConfig
     collaborator: HarnessRoleConfig
+    notetaker: NotetakerConfig = NotetakerConfig()
     sentinel: SentinelConfig
-    augur: AugurConfig
-    default_monkey: HarnessRoleConfig
+    crow_handler: CrowHandlerConfig
+    default_crow: HarnessRoleConfig
     tui: TuiConfig = TuiConfig()
     runtime: RuntimeConfig = RuntimeConfig()
 
@@ -188,32 +197,32 @@ def stable_bucket_index(key: str, modulo: int) -> int:
     return int.from_bytes(digest, "big") % modulo
 
 
-def resolve_default_monkey_harness(
-    monkey_cfg: HarnessRoleConfig, ticket_row: Mapping[str, Any] | None
+def resolve_default_crow_harness(
+    crow_cfg: HarnessRoleConfig, ticket_row: Mapping[str, Any] | None
 ) -> HarnessKind:
     overt = (ticket_row or {}).get("harness")
     if overt:
         return cast(HarnessKind, overt)
-    pool = list(monkey_cfg.harnesses) if monkey_cfg.harnesses else [monkey_cfg.harness]
+    pool = list(crow_cfg.harnesses) if crow_cfg.harnesses else [crow_cfg.harness]
     tid = str((ticket_row or {}).get("id") or "")
     return pool[stable_bucket_index(tid, len(pool))]
 
 
-def resolve_default_monkey_startup_model(
-    monkey_cfg: HarnessRoleConfig,
+def resolve_default_crow_startup_model(
+    crow_cfg: HarnessRoleConfig,
     ticket_row: Mapping[str, Any] | None,
     harness: HarnessKind | None = None,
 ) -> str | None:
     overt = (ticket_row or {}).get("model")
     if overt:
         return str(overt)
-    if harness and monkey_cfg.startup_models_by_harness:
-        pool = monkey_cfg.startup_models_by_harness.get(harness)
+    if harness and crow_cfg.startup_models_by_harness:
+        pool = crow_cfg.startup_models_by_harness.get(harness)
         if pool:
             tid = str((ticket_row or {}).get("id") or "")
             return pool[stable_bucket_index(tid, len(pool))]
-    if monkey_cfg.startup_models:
-        pool = monkey_cfg.startup_models
+    if crow_cfg.startup_models:
+        pool = crow_cfg.startup_models
         tid = str((ticket_row or {}).get("id") or "")
         return pool[stable_bucket_index(tid, len(pool))]
-    return monkey_cfg.startup_model
+    return crow_cfg.startup_model

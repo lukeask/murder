@@ -2,7 +2,7 @@
 
 Tools are passed via OpenAI-compatible function-call schema. The client
 returns a normalized response (text + optional tool calls) that callers
-unpack. Streaming is not used in v0 — Augur's calls are tiny and Sentinel
+unpack. Streaming is not used in v0 — CrowHandler's calls are tiny and Sentinel
 benefits little from streaming for tool-use loops.
 """
 

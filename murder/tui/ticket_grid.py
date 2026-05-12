@@ -11,6 +11,11 @@ from textual.widgets import DataTable
 class TicketGrid(DataTable):
     """Rows: id, wave, status, title. Selecting a row emits TicketSelected."""
 
+    BINDINGS = [
+        ("j", "cursor_down", "Down"),
+        ("k", "cursor_up", "Up"),
+    ]
+
     class TicketSelected(Message):
         def __init__(self, ticket_id: str) -> None:
             self.ticket_id = ticket_id

@@ -1,4 +1,4 @@
-"""Native LLM clients for Augur and Sentinel."""
+"""Native LLM clients for CrowHandler and Sentinel."""
 
 import os
 

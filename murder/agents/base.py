@@ -1,8 +1,8 @@
 """Agent ABC + lifecycle.
 
-All four roles implement this interface. `MonkeyAgent` and
+All four roles implement this interface. `CrowAgent` and
 `CollaboratorAgent` own real tmux sessions (interactive harness).
-`AugurAgent` and `SentinelAgent` are coroutines (D1) — their `session`
+`CrowHandlerAgent` and `SentinelAgent` are coroutines (D1) — their `session`
 attribute names a logfile-tail tmux session for debug, not a real
 interactive one.
 """
@@ -27,7 +27,7 @@ class Agent(ABC):
 
     @abstractmethod
     async def start(self, brief: str, ctx: dict[str, Any]) -> None:
-        """Bring the agent online. For Monkeys: spawn tmux + harness;
+        """Bring the agent online. For Crows: spawn tmux + harness;
         send the system prompt. For native daemons: kick off the loop."""
 
     @abstractmethod
@@ -36,11 +36,11 @@ class Agent(ABC):
 
     @abstractmethod
     async def send(self, msg: str) -> None:
-        """Deliver a message to the agent. For Monkeys: send-keys via harness.
-        For Sentinel: queue an event for its handler. For Augur: ignore by default."""
+        """Deliver a message to the agent. For Crows: send-keys via harness.
+        For Sentinel: queue an event for its handler. For CrowHandler: ignore by default."""
 
     async def tick(self) -> None:
-        """Optional cadence hook. Augur uses this for its poll loop;
+        """Optional cadence hook. CrowHandler uses this for its poll loop;
         others noop."""
         return None
 

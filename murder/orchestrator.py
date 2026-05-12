@@ -5,19 +5,21 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from murder import db as dbmod
-from murder.agents.augur import AugurAgent
+from murder import db as dbmod, tmux
 from murder.agents.base import AgentRole, AgentStatus
 from murder.agents.collaborator import CollaboratorAgent
-from murder.agents.monkey import MonkeyAgent
+from murder.agents.crow import CrowAgent
+from murder.agents.crow_handler import CrowHandlerAgent
+from murder.agents.notetaker import NotetakerAgent
 from murder.agents.sentinel import SentinelAgent
 from murder.bus import EscalationEvent, StatusChangeEvent, TicketStatus
 from murder.clients import create_client
-from murder.config import resolve_default_monkey_harness, resolve_default_monkey_startup_model
+from murder.config import resolve_default_crow_harness, resolve_default_crow_startup_model
 from murder.enforcement import git_diff
 from murder.enforcement.checklist_verify import format_report, verify_checklist
 from murder.harnesses import get as get_harness
-from murder.prompts import load
+from murder.prompts import load, render
+from murder.session_names import format_session_name
 from murder.tickets import lifecycle
 
 if TYPE_CHECKING:
@@ -26,24 +28,18 @@ if TYPE_CHECKING:
 CONFLICT_PREVIEW_LIMIT = 5
 
 
-def _session_name(rt: Runtime, role: str, suffix: str) -> str:
-    proj = rt.config.project.name.replace(" ", "_").replace("/", "_")
-    tpl = rt.config.runtime.session_name_template
-    return tpl.format(project=proj, role=role, suffix=suffix)
-
-
-def _compose_monkey_brief(rt: Runtime, ticket_id: str) -> str:
+def _compose_crow_brief(rt: Runtime, ticket_id: str) -> str:
     row = dbmod.get_ticket(rt.db, ticket_id)
     if row is None:
         raise KeyError(ticket_id)
-    harness_name = resolve_default_monkey_harness(rt.config.default_monkey, row)
+    harness_name = resolve_default_crow_harness(rt.config.default_crow, row)
     tpl_name = (
-        rt.config.default_monkey.startup_prompt_template or f"monkey_{harness_name}.md"
+        rt.config.default_crow.startup_prompt_template or f"crow_{harness_name}.md"
     ).removesuffix(".md")
     try:
         system = load(tpl_name)
     except OSError:
-        system = load("monkey_cursor")
+        system = load("crow_cursor")
     lines = [
         system,
         "",
@@ -130,7 +126,7 @@ class Orchestrator:
         kicked: list[str] = []
         for tid in to_start:
             running = conn.execute(
-                "SELECT 1 FROM agents WHERE ticket_id = ? AND role IN ('monkey','augur') "
+                "SELECT 1 FROM agents WHERE ticket_id = ? AND role IN ('crow','crow_handler') "
                 "AND status IN ('running','idle')",
                 (tid,),
             ).fetchone()
@@ -143,27 +139,27 @@ class Orchestrator:
             prev = lifecycle.transition(conn, tid, TicketStatus.IN_PROGRESS)
             await self._emit_ticket_status(tid, prev, TicketStatus.IN_PROGRESS.value)
             try:
-                await self.spawn_monkey(tid)
+                await self.spawn_crow(tid)
             except Exception as e:
-                reason = f"Failed to start monkey for {tid}: {e}"
-                monkey = self.rt.get_monkey(tid)
-                if monkey is not None:
-                    monkey.status = AgentStatus.FAILED
-                    self.rt.sync_agent(monkey)
+                reason = f"Failed to start crow for {tid}: {e}"
+                crow = self.rt.get_crow(tid)
+                if crow is not None:
+                    crow.status = AgentStatus.FAILED
+                    self.rt.sync_agent(crow)
                 else:
                     dbmod.upsert_agent(
                         conn,
-                        agent_id=f"monkey-{tid}",
-                        role=AgentRole.MONKEY.value,
+                        agent_id=f"crow-{tid}",
+                        role=AgentRole.CROW.value,
                         ticket_id=tid,
-                        session=_session_name(self.rt, "monkey", f"_{tid}"),
+                        session=format_session_name(self.rt, "crow", f"_{tid}"),
                         status=AgentStatus.FAILED.value,
                     )
                 await self._fail_ticket(tid, reason)
                 continue
-            monkey = self.rt.get_monkey(tid)
-            assert monkey is not None
-            await self.spawn_augur(tid, monkey.session)
+            crow = self.rt.get_crow(tid)
+            assert crow is not None
+            await self.spawn_crow_handler(tid, crow.session)
             kicked.append(tid)
         return kicked
 
@@ -239,19 +235,19 @@ class Orchestrator:
         )
         await self._emit_escalation(ticket_id, reason, severity=2)
 
-    async def spawn_monkey(self, ticket_id: str) -> str:
+    async def spawn_crow(self, ticket_id: str) -> str:
         row = dbmod.get_ticket(self.rt.db, ticket_id)
         if row is None:
             raise KeyError(ticket_id)
-        harness_kind = resolve_default_monkey_harness(self.rt.config.default_monkey, row)
-        startup_model = resolve_default_monkey_startup_model(
-            self.rt.config.default_monkey, row, harness_kind
+        harness_kind = resolve_default_crow_harness(self.rt.config.default_crow, row)
+        startup_model = resolve_default_crow_startup_model(
+            self.rt.config.default_crow, row, harness_kind
         )
         harness = get_harness(harness_kind, startup_model=startup_model)
-        session = _session_name(self.rt, "monkey", f"_{ticket_id}")
-        brief = _compose_monkey_brief(self.rt, ticket_id)
-        monkey = MonkeyAgent(
-            agent_id=f"monkey-{ticket_id}",
+        session = format_session_name(self.rt, "crow", f"_{ticket_id}")
+        brief = _compose_crow_brief(self.rt, ticket_id)
+        crow = CrowAgent(
+            agent_id=f"crow-{ticket_id}",
             ticket_id=ticket_id,
             session=session,
             harness=harness,
@@ -259,36 +255,36 @@ class Orchestrator:
             startup_model=startup_model,
             runtime=self.rt,
         )
-        self.rt.register_agent(monkey)
-        await monkey.start(brief, {})
-        return monkey.id
+        self.rt.register_agent(crow)
+        await crow.start(brief, {})
+        return crow.id
 
-    async def spawn_augur(self, ticket_id: str, monkey_session: str) -> str:
+    async def spawn_crow_handler(self, ticket_id: str, crow_session: str) -> str:
         row = dbmod.get_ticket(self.rt.db, ticket_id)
         if row is None:
             raise KeyError(ticket_id)
-        harness_kind = resolve_default_monkey_harness(self.rt.config.default_monkey, row)
-        startup_model = resolve_default_monkey_startup_model(
-            self.rt.config.default_monkey, row, harness_kind
+        harness_kind = resolve_default_crow_harness(self.rt.config.default_crow, row)
+        startup_model = resolve_default_crow_startup_model(
+            self.rt.config.default_crow, row, harness_kind
         )
         harness = get_harness(harness_kind, startup_model=startup_model)
-        session = _session_name(self.rt, "augur", f"_{ticket_id}")
-        client = create_client(self.rt.config.augur.provider)
-        augur = AugurAgent(
-            agent_id=f"augur-{ticket_id}",
+        session = format_session_name(self.rt, "crow_handler", f"_{ticket_id}")
+        client = create_client(self.rt.config.crow_handler.provider)
+        handler = CrowHandlerAgent(
+            agent_id=f"crow_handler-{ticket_id}",
             ticket_id=ticket_id,
             session=session,
-            monkey_session=monkey_session,
+            crow_session=crow_session,
             harness=harness,
-            config=self.rt.config.augur,
+            config=self.rt.config.crow_handler,
             repo_root=self.rt.repo_root,
             runtime=self.rt,
             orchestrator=self,
             client=client,
         )
-        self.rt.register_agent(augur)
-        await augur.start("", {})
-        return augur.id
+        self.rt.register_agent(handler)
+        await handler.start("", {})
+        return handler.id
 
     async def ensure_sentinel(self) -> str:
         assert self.rt.db is not None
@@ -299,7 +295,7 @@ class Orchestrator:
         if row:
             return str(row["agent_id"])
         client = create_client(self.rt.config.sentinel.provider)
-        session = _session_name(self.rt, "sentinel", "")
+        session = format_session_name(self.rt, "sentinel", "")
         agent = SentinelAgent(
             agent_id="sentinel-0",
             session=session,
@@ -319,14 +315,18 @@ class Orchestrator:
         ).fetchone()
         if row:
             agent_id = str(row["agent_id"])
-            if self.rt.get_agent(agent_id) is not None:
-                return agent_id
-            dbmod.set_agent_status(self.rt.db, agent_id, "dead")
+            agent = self.rt.get_agent(agent_id)
+            if agent is not None:
+                if await tmux.session_exists(agent.session):
+                    return agent_id
+                await self.rt.reap(agent_id)
+            else:
+                dbmod.set_agent_status(self.rt.db, agent_id, "dead")
         startup_model = self.rt.config.collaborator.startup_model
         harness = get_harness(
             self.rt.config.collaborator.harness, startup_model=startup_model
         )
-        session = _session_name(self.rt, "collaborator", "")
+        session = format_session_name(self.rt, "collaborator", "")
         agent = CollaboratorAgent(
             agent_id="collaborator-0",
             session=session,
@@ -336,11 +336,12 @@ class Orchestrator:
             runtime=self.rt,
         )
         self.rt.register_agent(agent)
-        body = load(
-            (self.rt.config.collaborator.startup_prompt_template or "collaborator.md").removesuffix(
-                ".md"
-            )
-        )
+        tpl = (self.rt.config.collaborator.startup_prompt_template or "collaborator.md").removesuffix(".md")
+        try:
+            body = render(tpl, project_name=self.rt.config.project.name)
+        except (KeyError, IndexError, ValueError):
+            # Custom template without (or with mismatched) placeholders — use it verbatim.
+            body = load(tpl)
         try:
             await agent.start(body, {})
         except Exception as e:
@@ -360,6 +361,37 @@ class Orchestrator:
             raise
         return agent.id
 
+    async def ensure_notetaker(self) -> str:
+        row = self.rt.db.execute(
+            "SELECT agent_id FROM agents WHERE role = 'notetaker' "
+            "AND status IN ('running','idle') LIMIT 1"
+        ).fetchone()
+        if row:
+            agent_id = str(row["agent_id"])
+            if self.rt.get_agent(agent_id) is not None:
+                return agent_id
+            dbmod.set_agent_status(self.rt.db, agent_id, "dead")
+        from murder import notes as notes_mod
+
+        client = create_client(self.rt.config.notetaker.provider)
+        session = format_session_name(self.rt, "notetaker", "")
+        agent = NotetakerAgent(
+            agent_id="notetaker-0",
+            session=session,
+            config=self.rt.config.notetaker,
+            client=client,
+            repo_root=self.rt.repo_root,
+            runtime=self.rt,
+            note_name=notes_mod.today_name(),
+        )
+        self.rt.register_agent(agent)
+        try:
+            await agent.start("", {})
+        except BaseException:
+            await self.rt.reap(agent.id)
+            raise
+        return agent.id
+
     async def evaluate_wave_completion(self, wave: int) -> bool:
         assert self.rt.db is not None
         tickets = dbmod.list_tickets_in_wave(self.rt.db, wave)
@@ -371,8 +403,8 @@ class Orchestrator:
         assert self.rt.db is not None
         cascaded = lifecycle.reopen(self.rt.db, ticket_id)
         for tid in {ticket_id, *cascaded}:
-            await self.rt.reap(f"monkey-{tid}")
-            await self.rt.reap(f"augur-{tid}")
+            await self.rt.reap(f"crow-{tid}")
+            await self.rt.reap(f"crow_handler-{tid}")
         return list(cascaded)
 
     async def on_writeset_violation(self, ticket_id: str, path: str) -> None:
@@ -398,14 +430,14 @@ class Orchestrator:
             )
         )
 
-    async def on_monkey_done(self, ticket_id: str) -> bool:
+    async def on_crow_done(self, ticket_id: str) -> bool:
         assert self.rt.db is not None
-        monkey = self.rt.get_monkey(ticket_id)
-        start_commit = getattr(monkey, "start_commit", None) if monkey else None
+        crow = self.rt.get_crow(ticket_id)
+        start_commit = getattr(crow, "start_commit", None) if crow else None
         if not start_commit:
             await self._fail_ticket(
                 ticket_id,
-                "Monkey reported done without a recorded start commit; no diff validation ran.",
+                "Crow reported done without a recorded start commit; no diff validation ran.",
             )
             return False
         row = dbmod.get_ticket(self.rt.db, ticket_id)

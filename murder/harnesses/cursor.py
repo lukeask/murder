@@ -30,6 +30,7 @@ from murder import tmux
 from murder.harnesses import cursor_usage
 from murder.harnesses.base import (
     HarnessAdapter,
+    UsageCollectionMode,
 )
 from murder.harnesses.models import HarnessStartSpec, HarnessUsageStatus
 from murder.harnesses.parsing import (
@@ -62,6 +63,7 @@ def _tail(pane_text: str) -> str:
 
 class CursorAdapter(HarnessAdapter):
     kind: ClassVar[str] = "cursor"
+    usage_collection_mode: ClassVar[UsageCollectionMode] = "http"
     available_startup_models: ClassVar[list[tuple[str, str]]] = [
         ("composer", "Composer"),
         ("auto", "Auto"),
@@ -70,10 +72,10 @@ class CursorAdapter(HarnessAdapter):
         ("claude-sonnet-4.5", "Claude Sonnet 4.5"),
     ]
 
-    monkey_system_prompt: ClassVar[str] = (
-        # Loaded from prompts/monkey_cursor.md at runtime by Monkey.start().
+    crow_system_prompt: ClassVar[str] = (
+        # Loaded from prompts/crow_cursor.md at runtime by Crow.start().
         # This class attribute is just a marker; runner pulls the file.
-        "see prompts/monkey_cursor.md"
+        "see prompts/crow_cursor.md"
     )
 
     def startup_cmd(self, cwd: Path) -> list[str]:

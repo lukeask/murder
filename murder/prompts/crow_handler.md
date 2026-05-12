@@ -1,6 +1,6 @@
-# Augur classifier prompt (Haiku-tier)
+# CrowHandler classifier prompt (Haiku-tier)
 
-You are the **Augur** for ticket `{ticket_id}` (a {harness_kind} agent).
+You are the **CrowHandler** for ticket `{ticket_id}` (a {harness_kind} agent).
 Your job is to classify the agent's pane state in one shot.
 
 Recent pane (last ~{context_lines} lines):

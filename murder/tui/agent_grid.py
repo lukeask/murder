@@ -16,6 +16,11 @@ class AgentGrid(DataTable):
     are the important first slice.
     """
 
+    BINDINGS = [
+        ("j", "cursor_down", "Down"),
+        ("k", "cursor_up", "Up"),
+    ]
+
     class AgentHighlighted(Message):
         def __init__(self, agent_id: str, session: str | None) -> None:
             self.agent_id = agent_id
