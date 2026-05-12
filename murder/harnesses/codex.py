@@ -28,7 +28,10 @@ from murder.harnesses.usage import parse_codex_status_pane
 _TAIL_LINES = 30
 
 _BANNER_RE = re.compile(r"OpenAI Codex", re.IGNORECASE)
-_IDLE_PROMPT_RE = re.compile(r"^\s*›(?:\s+Explain this codebase)?\s*$", re.MULTILINE)
+# The Codex input box renders as a "› …" line; the placeholder text after it
+# rotates ("Explain this codebase", "Find and fix a bug in @filename", …), so
+# match any "› " line (busy state is screened separately, before this check).
+_IDLE_PROMPT_RE = re.compile(r"^\s*›(?:\s.*)?$", re.MULTILINE)
 _BUSY_RE = re.compile(
     r"\b(working|thinking|running|executing|applying patch|processing)\b",
     re.IGNORECASE,
@@ -44,15 +47,25 @@ def _tail(pane_text: str) -> str:
 class CodexAdapter(HarnessAdapter):
     kind: ClassVar[str] = "codex"
     usage_collection_mode: ClassVar[UsageCollectionMode] = "tmux_slash"
-    # Transcript parsing (best-effort; needs real-capture fixtures to harden).
-    # Codex's inline UI echoes the submitted prompt on a "› …" line.
+    # Codex's model picker is `/model` (singular); it opens a numbered modal
+    # list (`› 1. gpt-5.5 (current)  Frontier model …`) which the generic
+    # parser handles. The modal needs a beat to render, so capture late.
+    model_list_command: ClassVar[str | None] = "/model"
+    model_list_capture_delay_s: ClassVar[float] = 3.0
+    # Transcript parsing (best-effort; fixture: tests/fixtures/harness_panes/
+    # codex_transcript.txt). Codex echoes the submitted prompt on a "› …" line;
+    # the reply follows on "• …" lines. The footer placeholder ("Find and fix
+    # a bug in @filename" etc.) is the live input box — its trailing status bar
+    # ("<model> <effort> · ~/<cwd>") is dropped so that turn parses as empty
+    # and is discarded.
     transcript_prompt_markers: ClassVar[tuple[str, ...]] = ("›",)
     transcript_drop_substrings: ClassVar[tuple[str, ...]] = (
-        "explain this codebase",
         "esc to interrupt",
         "to interrupt",
         "tokens used",
         "openai codex",
+        "use /permissions",
+        " · ~/",
     )
     crow_system_prompt: ClassVar[str] = "see prompts/crow_codex.md"
     available_startup_models: ClassVar[list[tuple[str, str]]] = [
@@ -60,6 +73,7 @@ class CodexAdapter(HarnessAdapter):
         ("gpt-5.4", "GPT-5.4"),
         ("gpt-5.4-mini", "GPT-5.4 Mini"),
         ("gpt-5.3-codex", "GPT-5.3 Codex"),
+        ("gpt-5.2", "GPT-5.2"),
     ]
 
     def startup_cmd(self, cwd: Path) -> list[str]:

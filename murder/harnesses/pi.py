@@ -21,12 +21,15 @@ from murder.harnesses.parsing import (
 
 _TAIL_LINES = 30
 
+# Pi's bottom status bar always shows a `0.0%/123k (auto)` context-budget gauge
+# and the loaded model; either that or the input `>` / a `Ctrl+…` hint means
+# the REPL is up. (Busy state is screened separately, before the idle check.)
 _READY_RE = re.compile(
-    r"(/hotkeys|Ctrl\+L|Ctrl\+P|Slash commands|^\s*[>/]\s*$)",
+    r"(/hotkeys|Ctrl\+[A-Z]|Ctrl\+o|Slash commands|\d+%/\d+k|^\s*[>/]\s*$)",
     re.IGNORECASE | re.MULTILINE,
 )
 _IDLE_RE = re.compile(
-    r"(/hotkeys|Ctrl\+L|Ctrl\+P|^\s*[>/]\s*$)",
+    r"(/hotkeys|Ctrl\+[A-Z]|Ctrl\+o|\d+%/\d+k|^\s*[>/]\s*$)",
     re.IGNORECASE | re.MULTILINE,
 )
 _BUSY_RE = re.compile(
@@ -47,6 +50,14 @@ def _tail(pane_text: str) -> str:
 class PiAdapter(HarnessAdapter):
     kind: ClassVar[str] = "pi"
     crow_system_prompt: ClassVar[str] = "see prompts/crow_pi.md"
+    # `/model` opens a picker listing `provider/model` ids (plus any local
+    # weights) one per line; the generic parser handles it. The picker is a
+    # modal — fine for the throwaway discovery session, which is killed after.
+    model_list_command: ClassVar[str | None] = "/model"
+    model_list_capture_delay_s: ClassVar[float] = 3.0
+    # Pi's REPL renders user prompts and replies as plain text with no stable
+    # per-turn marker, so there is no parsed transcript yet (the TUI falls back
+    # to the raw pane mirror); leave transcript_prompt_markers empty.
     available_startup_models: ClassVar[list[tuple[str, str]]] = [
         ("anthropic/claude-sonnet-4-6", "Claude Sonnet 4.6"),
         ("anthropic/claude-opus-4-7", "Claude Opus 4.7"),
