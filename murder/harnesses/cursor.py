@@ -64,6 +64,11 @@ def _tail(pane_text: str) -> str:
 class CursorAdapter(HarnessAdapter):
     kind: ClassVar[str] = "cursor"
     usage_collection_mode: ClassVar[UsageCollectionMode] = "http"
+    # Cursor's `/model` picker is a 25-entry filterable table of display names
+    # ("Sonnet 4.6  (Thinking) 200K Medium", "Composer 2", …) with no id column
+    # — generic parsing yields more noise than signal, so skip discovery and
+    # rely on the curated list below.
+    model_list_command: ClassVar[str | None] = None
     available_startup_models: ClassVar[list[tuple[str, str]]] = [
         ("composer", "Composer"),
         ("auto", "Auto"),

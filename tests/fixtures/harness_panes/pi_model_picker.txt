@@ -1,0 +1,30 @@
+Model scope: deepseek/deepseek-v4-pro, deepseek/deepseek-v4-flash, google/gemini-3.1-pro-preview, moonshotai/kimi-k2.6, qwen/qwen3.6-plus, qwen/qwen3.6-35b-a3b, minimax/minimax-m2.7, xiaomi/mimo-v2.5-pro, Qwen3.6-35B-A3B-Q8_0.gguf (Ctrl+P to cycle)
+
+ pi v0.71.0
+ escape interrupt · ctrl+c/ctrl+d clear/exit · / commands · ! bash · ctrl+o more
+ Press ctrl+o to show full startup help and loaded resources.
+
+ Pi can explain its own features and look up its docs. Ask it how to use or extend Pi.
+
+────────────────────────────────────────────────────────────────────────────────
+
+Scope: all | scoped
+tab scope (all/scoped)
+
+>
+
+  deepseek/deepseek-v4-pro [or]
+  deepseek/deepseek-v4-flash [or]
+  google/gemini-3.1-pro-preview [or]
+  moonshotai/kimi-k2.6 [or]
+  qwen/qwen3.6-plus [or]
+  qwen/qwen3.6-35b-a3b [or]
+  minimax/minimax-m2.7 [or]
+  xiaomi/mimo-v2.5-pro [or]
+→ Qwen3.6-35B-A3B-Q8_0.gguf [inferno] ✓
+
+  Model Name: Qwen 3.6 35B-A3B Q8 (Local)
+
+────────────────────────────────────────────────────────────────────────────────
+~/Agents/projects/graphvisexplore
+0.0%/123k (auto)                                            (inferno) Qwen3.6-35B-A3B-Q8_0.gguf • medium

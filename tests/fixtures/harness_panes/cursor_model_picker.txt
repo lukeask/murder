@@ -1,0 +1,28 @@
+
+
+  Cursor Agent
+  v2026.05.09-0afadcc
+  Use /config to customize Cursor settings and behavior.
+
+
+ ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+  → Plan, search, build anything
+ ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+ Available models
+
+ Filter:
+
+ → Auto
+   Composer 2
+   GPT-5.5                  272K Medium
+   Codex 5.3
+   Sonnet 4.6               (Thinking) 200K Medium
+   Opus 4.7                 (Thinking) 300K Extra High
+   Grok 4.3                 200K
+   GPT-5.4                  272K Medium
+   Opus 4.6                 (Thinking) 200K High
+   Opus 4.5                 (Thinking)
+
+ 1-10 of 25
+
+ Type to filter • Enter to select • Tab to edit

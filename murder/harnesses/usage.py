@@ -116,6 +116,65 @@ def parse_claude_usage_pane(
     )
 
 
+# Codex `/status` rows look like:
+#   `  5h limit:      [███████████░] 97% left (resets 21:29)`
+#   `  Weekly limit:  [███████████░] 94% left (resets 14:49 on 18 May)`
+# Older builds said `N% used`; both are handled (and `left`/`remaining` is
+# converted to a used-percentage so it lines up with the claude_code window).
+_CODEX_LIMIT_RE = re.compile(
+    r"(?P<label>[A-Za-z0-9][\w/.\- ]*?)\s+limits?\s*:?\s*"
+    r"(?:\[[^\]]*\]\s*)?"
+    r"(?P<pct>\d+(?:\.\d+)?)\s*%\s*(?P<dir>left|remaining|used)?"
+    r"(?:[^()\n]*?\((?:resets?\s+)?(?P<reset>[^)\n]+?)\))?",
+    re.IGNORECASE,
+)
+_CLOCK_RESET_RE = re.compile(
+    r"\b(?P<h>\d{1,2}):(?P<m>\d{2})(?:\s*(?P<ampm>am|pm))?"
+    r"(?:\s+on\s+(?:(?P<day>\d{1,2})\s+(?P<mon>[A-Za-z]{3,})|(?P<mon2>[A-Za-z]{3,})\s+(?P<day2>\d{1,2})))?",
+    re.IGNORECASE,
+)
+_MONTHS = {
+    m: i
+    for i, m in enumerate(
+        ["", "jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"]
+    )
+    if i
+}
+
+
+def _parse_clock_reset(raw: str, now: datetime | None) -> str | None:
+    """Parse a `21:29` / `6:30pm` / `14:49 on 18 May` reset hint into ISO."""
+    match = _CLOCK_RESET_RE.search(raw)
+    if not match:
+        return None
+    base = now or datetime.now(tz=ZoneInfo("UTC"))
+    hour, minute = int(match.group("h")), int(match.group("m"))
+    ampm = (match.group("ampm") or "").lower()
+    if ampm == "pm" and hour < 12:
+        hour += 12
+    elif ampm == "am" and hour == 12:
+        hour = 0
+    if hour > 23 or minute > 59:
+        return None
+    day = match.group("day") or match.group("day2")
+    mon = match.group("mon") or match.group("mon2")
+    if day and mon and (mon_num := _MONTHS.get(mon[:3].lower())):
+        day_n, year = int(day), base.year
+        if (mon_num, day_n) < (base.month, base.day):
+            year += 1
+        try:
+            return base.replace(
+                year=year, month=mon_num, day=day_n,
+                hour=hour, minute=minute, second=0, microsecond=0,
+            ).isoformat()
+        except ValueError:
+            return None
+    reset_at = base.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    if reset_at <= base:
+        reset_at += timedelta(days=1)
+    return reset_at.isoformat()
+
+
 def parse_codex_status_pane(
     pane_text: str,
     *,
@@ -124,17 +183,24 @@ def parse_codex_status_pane(
 ) -> HarnessUsageStatus:
     clean = strip_ansi(pane_text)
     windows: list[HarnessUsageWindow] = []
+    seen: set[str] = set()
 
-    for label in ("session", "weekly", "daily", "5h"):
-        pct = _first_percent_after(label, clean)
-        if pct is not None:
-            windows.append(
-                HarnessUsageWindow(
-                    name=label,
-                    percent_used=pct,
-                    reset_at=_parse_reset_at(clean, now=now),
-                )
-            )
+    for match in _CODEX_LIMIT_RE.finditer(clean):
+        pct = float(match.group("pct"))
+        direction = (match.group("dir") or "").lower()
+        used = round(100.0 - pct, 4) if direction in ("left", "remaining") else pct
+        used = max(0.0, min(100.0, used))
+        name = re.sub(r"\s+", " ", match.group("label")).strip().lower() or "usage"
+        if name in seen:
+            continue
+        seen.add(name)
+        reset_raw = match.group("reset") or ""
+        # Newer Codex builds put `(resets 21:29)` inline; older ones put a
+        # standalone `Resets 9:15am (TZ)` line — fall back to the latter.
+        reset_at = (
+            _parse_clock_reset(reset_raw, now) if reset_raw else _parse_reset_at(clean, now=now)
+        )
+        windows.append(HarnessUsageWindow(name=name, percent_used=used, reset_at=reset_at))
 
     if not windows and (match := _PERCENT_RE.search(clean)):
         windows.append(

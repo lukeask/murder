@@ -1,0 +1,17 @@
+ ▐▛███▜▌   Claude Code v2.1.139
+▝▜█████▛▘  Opus 4.7 with xhigh effort · Claude Pro
+  ▘▘ ▝▝    ~/Agents/projects/graphvisexplore
+
+❯ /model
+
+────────────────────────────────────────────────────────────────────────────────
+  Select model
+  Switch between Claude models. Applies to this session and future Claude Code sessions. For other/previous model names, specify with --model.
+
+    1. Default (recommended)  Sonnet 4.6 · Best for everyday tasks
+  ❯ 2. Opus ✔                 Opus 4.7 · Most capable for complex work · ~2× usage vs Sonnet
+    3. Haiku                  Haiku 4.5 · Fastest for quick answers
+
+  ◉ xHigh effort (default) ←/→ to adjust
+
+  Enter to confirm · Esc to cancel

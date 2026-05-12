@@ -31,15 +31,22 @@ from murder.harnesses.usage import parse_claude_usage_pane
 class ClaudeCodeAdapter(HarnessAdapter):
     kind: ClassVar[str] = "claude_code"
     usage_collection_mode: ClassVar[UsageCollectionMode] = "tmux_slash"
-    # Transcript parsing (best-effort; needs real-capture fixtures to harden).
-    # CC echoes the submitted prompt on a "> …" / "❯ …" line; the reply and any
-    # tool boxes follow until the next prompt. Status-bar lines are dropped.
+    # CC's `/model` opens a radio dialog of human labels ("Default", "Opus ✔",
+    # "Haiku"), not `--model` ids — the hardcoded list below is the source of
+    # truth, so skip `/model` discovery entirely.
+    model_list_command: ClassVar[str | None] = None
+    # Transcript parsing (best-effort; fixture: tests/fixtures/harness_panes/
+    # claude_transcript.txt). CC echoes the submitted prompt on a "> …" / "❯ …"
+    # line; the reply (●) and tool boxes (⏺ ⎿) follow until the next prompt.
+    # Status-bar and "✻ …" spinner lines are dropped; the empty trailing "❯ "
+    # and the pre-first-message placeholder both parse to no turn.
     transcript_prompt_markers: ClassVar[tuple[str, ...]] = (">", "❯")
     transcript_drop_substrings: ClassVar[tuple[str, ...]] = (
         "bypass permissions",
         "esc to interrupt",
         "for shortcuts",
         "? for help",
+        " · ~/",
     )
 
     # Claude Code prompt is ">" or "? " depending on version/context.
