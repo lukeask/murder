@@ -7,10 +7,14 @@ import contextlib
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from murder import tmux
+from murder import conversation, tmux
 from murder.agents.base import Agent, AgentRole, AgentStatus
 from murder.harnesses.base import HarnessAdapter
 from murder.harnesses.models import HarnessStartSpec
+
+# How far back into the pane's scrollback to read when reconstructing the chat
+# transcript. Generous: a planning conversation should fit comfortably.
+TRANSCRIPT_SCROLLBACK_LINES = 4000
 
 if TYPE_CHECKING:
     from murder.runtime import Runtime
@@ -94,3 +98,22 @@ class CollaboratorAgent(Agent):
 
     async def send(self, msg: str) -> None:
         await self.harness_session.send_prompt(msg)
+
+    async def refresh_transcript(self) -> list[tuple[str, str]]:
+        """Capture the session pane, parse it with the harness adapter, merge
+        into the persisted conversation log, and return the effective
+        transcript as ``(role, text)`` turns (``role`` ∈ ``{"user","assistant"}``).
+
+        Returns ``[]`` if the session is gone or the harness has no transcript
+        parser yet (the TUI falls back to the raw pane mirror in that case).
+        """
+        try:
+            pane = await tmux.capture_pane(
+                self.session, lines=TRANSCRIPT_SCROLLBACK_LINES
+            )
+        except tmux.TmuxError:
+            return []
+        parsed = self.harness.parse_transcript(pane)
+        if self.runtime is None or self.runtime.db is None:
+            return parsed
+        return conversation.merge_transcript(self.runtime.db, self.id, parsed)

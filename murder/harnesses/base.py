@@ -14,7 +14,7 @@ from murder.harnesses.models import (
     HarnessStartSpec,
     HarnessUsageStatus,
 )
-from murder.harnesses.parsing import strip_ui_chrome
+from murder.harnesses.parsing import parse_prompt_marker_transcript, strip_ui_chrome
 from murder.harnesses.results import SimpleResult, fail_result, ok_result
 
 ASK_RE = re.compile(r">>>\s*ASK:\s*(?P<body>.+?)(?=\n>>>|\Z)", re.DOTALL)
@@ -140,6 +140,13 @@ class HarnessAdapter(ABC):
     available_startup_models: ClassVar[list[tuple[str, str]]] = []
     usage_collection_mode: ClassVar[UsageCollectionMode] = "none"
 
+    # Inputs for the default transcript parser (see parse_transcript). Leave the
+    # markers empty for a harness whose UI doesn't echo prompts behind a simple
+    # marker; such a harness either overrides parse_transcript or has no parsed
+    # transcript yet (the raw pane mirror remains available in the TUI).
+    transcript_prompt_markers: ClassVar[tuple[str, ...]] = ()
+    transcript_drop_substrings: ClassVar[tuple[str, ...]] = ()
+
     def __init__(self, startup_model: str | None = None) -> None:
         self.startup_model = startup_model
 
@@ -185,6 +192,23 @@ class HarnessAdapter(ABC):
 
     @abstractmethod
     def extract_last_message(self, pane_text: str) -> str | None: ...
+
+    def parse_transcript(self, pane_text: str) -> list[tuple[str, str]]:
+        """Best-effort ``(role, text)`` turns visible in the session pane.
+
+        Returns the *full* visible transcript on every call — never deltas;
+        :func:`murder.conversation.merge_transcript` reconciles successive
+        parses into the persisted log. ``role`` is ``"user"`` or
+        ``"assistant"``. The default uses the prompt-marker heuristic keyed by
+        :attr:`transcript_prompt_markers` / :attr:`transcript_drop_substrings`;
+        a harness with cleaner UI structure should override this with something
+        tighter (and fixture-test it against a real capture).
+        """
+        return parse_prompt_marker_transcript(
+            pane_text,
+            prompt_markers=self.transcript_prompt_markers,
+            drop_substrings=self.transcript_drop_substrings,
+        )
 
     def detect_ask(self, pane_text: str) -> str | None:
         m = ASK_RE.search(strip_ui_chrome(pane_text))

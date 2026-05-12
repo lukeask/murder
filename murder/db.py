@@ -170,6 +170,17 @@ CREATE TABLE IF NOT EXISTS notes (
 
 CREATE INDEX IF NOT EXISTS idx_notes_updated ON notes(updated_at);
 
+CREATE TABLE IF NOT EXISTS agent_messages (
+    agent_id    TEXT NOT NULL,
+    ordinal     INTEGER NOT NULL,
+    role        TEXT NOT NULL CHECK (role IN ('user','assistant','system')),
+    body        TEXT NOT NULL,
+    captured_at TEXT NOT NULL,
+    PRIMARY KEY (agent_id, ordinal)
+);
+
+CREATE INDEX IF NOT EXISTS idx_agent_messages_agent ON agent_messages(agent_id);
+
 CREATE TABLE IF NOT EXISTS harness_usage_snapshots (
     id             INTEGER PRIMARY KEY AUTOINCREMENT,
     harness        TEXT NOT NULL,
@@ -528,6 +539,37 @@ def upsert_note(
             "UPDATE notes SET updated_at = ?, body = ?, materialized_path = ? WHERE name = ?",
             (now, body, materialized_path, name),
         )
+
+
+# --- Agent conversation log -------------------------------------------------
+# Persisted, parsed transcript of an agent's interactive session — one row per
+# turn. See murder/conversation.py for the merge/reconcile logic; this layer is
+# just dumb storage.
+
+def get_agent_messages(conn: sqlite3.Connection, agent_id: str) -> list[dict[str, Any]]:
+    rows = conn.execute(
+        "SELECT ordinal, role, body, captured_at FROM agent_messages "
+        "WHERE agent_id = ? ORDER BY ordinal",
+        (agent_id,),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def replace_agent_messages(
+    conn: sqlite3.Connection,
+    agent_id: str,
+    turns: list[tuple[str, str]],
+    *,
+    captured_at: str | None = None,
+) -> None:
+    """Atomically replace the whole stored transcript for ``agent_id``."""
+    ts = captured_at or _now()
+    conn.execute("DELETE FROM agent_messages WHERE agent_id = ?", (agent_id,))
+    conn.executemany(
+        "INSERT INTO agent_messages (agent_id, ordinal, role, body, captured_at) "
+        "VALUES (?, ?, ?, ?, ?)",
+        [(agent_id, i, role, body, ts) for i, (role, body) in enumerate(turns)],
+    )
 
 
 # --- Runs -------------------------------------------------------------------

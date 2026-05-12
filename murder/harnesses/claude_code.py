@@ -31,6 +31,16 @@ from murder.harnesses.usage import parse_claude_usage_pane
 class ClaudeCodeAdapter(HarnessAdapter):
     kind: ClassVar[str] = "claude_code"
     usage_collection_mode: ClassVar[UsageCollectionMode] = "tmux_slash"
+    # Transcript parsing (best-effort; needs real-capture fixtures to harden).
+    # CC echoes the submitted prompt on a "> …" / "❯ …" line; the reply and any
+    # tool boxes follow until the next prompt. Status-bar lines are dropped.
+    transcript_prompt_markers: ClassVar[tuple[str, ...]] = (">", "❯")
+    transcript_drop_substrings: ClassVar[tuple[str, ...]] = (
+        "bypass permissions",
+        "esc to interrupt",
+        "for shortcuts",
+        "? for help",
+    )
 
     # Claude Code prompt is ">" or "? " depending on version/context.
     # We also accept any non-empty pane after seeing the banner so startup
