@@ -67,8 +67,7 @@ class ScheduleView(Static):
 
         lines = [
             "[b]Usage-aware queue[/b]",
-            "WIP: open TUI will own scheduled launches; runner thresholds are not wired yet.",
-            "TODO: collect harness usage snapshots on cadence and trigger due schedule_queue rows.",
+            "WIP: scheduled launches and runner thresholds are not wired yet.",
             "",
             "[b]Ready tickets[/b]",
         ]
@@ -102,8 +101,8 @@ class ScheduleView(Static):
             for r in usage:
                 lines.extend(_usage_lines(dict(r)))
         else:
-            lines.append("  (no snapshots yet)")
-            lines.append("  TODO: persist HarnessUsageStatus from Claude/Codex/Cursor facade.")
+            lines.append("  (no snapshots yet; open schedule view or press u to sample)")
+            lines.append("  Probe tmux sessions: murder_<project>_usage_<harness>")
 
         self.update("\n".join(lines))
 

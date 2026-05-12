@@ -22,8 +22,8 @@ EVERFOREST_DARK_HARD = Theme(
     panel="#2e383c",
     dark=True,
     variables={
-        "border": "#a7c080",
-        "border-blurred": "#4f5b58",
+        "border": "#83c092",
+        "border-blurred": "#374a40",
         "block-cursor-background": "#d3c6aa",
         "block-cursor-foreground": "#272e33",
         "button-color-foreground": "#272e33",

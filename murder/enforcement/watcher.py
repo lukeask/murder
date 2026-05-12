@@ -17,19 +17,19 @@ class WriteSetWatcher:
         self.repo_root = repo_root.resolve()
         self.orchestrator = orchestrator
         self._allowed: set[Path] = set()
-        self._monkey_writesets: dict[str, set[Path]] = {}
+        self._crow_writesets: dict[str, set[Path]] = {}
 
-    def add_monkey(self, ticket_id: str, write_set: Iterable[Path]) -> None:
-        self._monkey_writesets[ticket_id] = {Path(p) for p in write_set}
+    def add_crow(self, ticket_id: str, write_set: Iterable[Path]) -> None:
+        self._crow_writesets[ticket_id] = {Path(p) for p in write_set}
         self._recompute_union()
 
-    def remove_monkey(self, ticket_id: str) -> None:
-        self._monkey_writesets.pop(ticket_id, None)
+    def remove_crow(self, ticket_id: str) -> None:
+        self._crow_writesets.pop(ticket_id, None)
         self._recompute_union()
 
     def _recompute_union(self) -> None:
         u: set[Path] = set()
-        for paths in self._monkey_writesets.values():
+        for paths in self._crow_writesets.values():
             u |= paths
         self._allowed = u
 
@@ -49,17 +49,17 @@ class WriteSetWatcher:
                 allowed_str = {p.as_posix() for p in self._allowed}
                 if rel_posix in allowed_str:
                     continue
-                ticket_id = self._blame_active_monkey()
+                ticket_id = self._blame_active_crow()
                 if ticket_id:
                     await self.orchestrator.on_writeset_violation(
                         ticket_id, rel.as_posix()
                     )
 
-    def _blame_active_monkey(self) -> str | None:
-        """Pick a running monkey when multiple are active (heuristic: first)."""
-        if not self._monkey_writesets:
+    def _blame_active_crow(self) -> str | None:
+        """Pick a running crow when multiple are active (heuristic: first)."""
+        if not self._crow_writesets:
             return None
-        return next(iter(self._monkey_writesets.keys()), None)
+        return next(iter(self._crow_writesets.keys()), None)
 
 
 def _is_ignored(rel: Path) -> bool:

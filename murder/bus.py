@@ -34,9 +34,10 @@ log = logging.getLogger("murder.bus")
 
 class Role(StrEnum):
     COLLABORATOR = "collaborator"
+    NOTETAKER = "notetaker"
     SENTINEL = "sentinel"
-    AUGUR = "augur"
-    MONKEY = "monkey"
+    CROW_HANDLER = "crow_handler"
+    CROW = "crow"
 
 
 class TicketStatus(StrEnum):
@@ -85,7 +86,7 @@ class SummaryEvent(_BaseEvent):
 class QuestionEvent(_BaseEvent):
     type: Literal["question"] = "question"
     question: str
-    monkey_session: str
+    crow_session: str
     recent_pane: str = ""
 
 
@@ -94,7 +95,7 @@ class EscalationEvent(_BaseEvent):
     to: Literal["user", "collaborator"]
     reason: str
     severity: Literal[1, 2, 3] = 2
-    monkey_session: str | None = None
+    crow_session: str | None = None
     source_event_id: UUID | None = None
 
 

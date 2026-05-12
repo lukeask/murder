@@ -4,7 +4,7 @@
 deps, write_sets, checklist items, agent state, events, escalations, and
 runs. Markdown stays for prose only.
 
-WAL mode is mandatory — Augur reads concurrently with Sentinel writes.
+WAL mode is mandatory — CrowHandler reads concurrently with Sentinel writes.
 """
 
 from __future__ import annotations
@@ -81,7 +81,7 @@ CREATE INDEX IF NOT EXISTS idx_checklist_ticket ON checklist(ticket_id);
 CREATE TABLE IF NOT EXISTS agents (
     agent_id          TEXT PRIMARY KEY,
     role              TEXT NOT NULL CHECK (role IN
-                      ('collaborator','sentinel','augur','monkey')),
+                      ('collaborator','notetaker','sentinel','crow_handler','crow')),
     ticket_id         TEXT REFERENCES tickets(id) ON DELETE SET NULL,
     session           TEXT,
     status            TEXT NOT NULL CHECK (status IN
@@ -160,6 +160,16 @@ CREATE TABLE IF NOT EXISTS plan_related_tickets (
     PRIMARY KEY (plan_name, ticket_id)
 );
 
+CREATE TABLE IF NOT EXISTS notes (
+    name              TEXT PRIMARY KEY,
+    created_at        TEXT NOT NULL,
+    updated_at        TEXT NOT NULL,
+    body              TEXT NOT NULL DEFAULT '',
+    materialized_path TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_notes_updated ON notes(updated_at);
+
 CREATE TABLE IF NOT EXISTS harness_usage_snapshots (
     id             INTEGER PRIMARY KEY AUTOINCREMENT,
     harness        TEXT NOT NULL,
@@ -217,6 +227,64 @@ def init_schema(conn: sqlite3.Connection) -> None:
     """Apply SCHEMA_SQL idempotently."""
     conn.executescript(SCHEMA_SQL)
     _migrate_agents_failed_status(conn)
+    _migrate_agents_notetaker_role(conn)
+    _migrate_role_names(conn)
+
+
+def _migrate_agents_notetaker_role(conn: sqlite3.Connection) -> None:
+    """Add 'notetaker' to the agents.role CHECK (planning notetaker agent)."""
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'agents'"
+    ).fetchone()
+    if row is None or "'notetaker'" in str(row["sql"]):
+        return
+    conn.executescript(
+        """
+        PRAGMA foreign_keys = OFF;
+        BEGIN;
+        ALTER TABLE agents RENAME TO agents_old_notetaker_migration;
+        CREATE TABLE agents (
+            agent_id          TEXT PRIMARY KEY,
+            role              TEXT NOT NULL CHECK (role IN
+                              ('collaborator','notetaker','sentinel','crow_handler','crow')),
+            ticket_id         TEXT REFERENCES tickets(id) ON DELETE SET NULL,
+            session           TEXT,
+            status            TEXT NOT NULL CHECK (status IN
+                              ('idle','running','blocked','escalating','done','failed','dead')),
+            start_commit      TEXT,
+            started_at        TEXT NOT NULL,
+            last_heartbeat_at TEXT,
+            pid               INTEGER
+        );
+        INSERT INTO agents
+            (agent_id, role, ticket_id, session, status, start_commit,
+             started_at, last_heartbeat_at, pid)
+        SELECT agent_id, role, ticket_id, session, status, start_commit,
+               started_at, last_heartbeat_at, pid
+          FROM agents_old_notetaker_migration;
+        DROP TABLE agents_old_notetaker_migration;
+        COMMIT;
+        PRAGMA foreign_keys = ON;
+        """
+    )
+
+
+def _migrate_role_names(conn: sqlite3.Connection) -> None:
+    """Rename augur→crow_handler and monkey→crow in the agents table."""
+    conn.execute(
+        "UPDATE agents SET role = 'crow_handler' WHERE role = 'augur'"
+    )
+    conn.execute(
+        "UPDATE agents SET role = 'crow' WHERE role = 'monkey'"
+    )
+    conn.execute(
+        "UPDATE agents SET agent_id = REPLACE(agent_id, 'augur-', 'crow_handler-')"
+        " WHERE agent_id LIKE 'augur-%'"
+    )
+    conn.execute(
+        "UPDATE agents SET agent_id = REPLACE(agent_id, 'monkey-', 'crow-')"
+        " WHERE agent_id LIKE 'monkey-%'"
+    )
 
 
 def _migrate_agents_failed_status(conn: sqlite3.Connection) -> None:
@@ -234,7 +302,7 @@ def _migrate_agents_failed_status(conn: sqlite3.Connection) -> None:
         CREATE TABLE agents (
             agent_id          TEXT PRIMARY KEY,
             role              TEXT NOT NULL CHECK (role IN
-                              ('collaborator','sentinel','augur','monkey')),
+                              ('collaborator','sentinel','crow_handler','crow')),
             ticket_id         TEXT REFERENCES tickets(id) ON DELETE SET NULL,
             session           TEXT,
             status            TEXT NOT NULL CHECK (status IN
@@ -417,6 +485,49 @@ def mark_plan_sync_state(
         """,
         (sync_state, file_hash, conflict_reason, parse_error, _now(), name),
     )
+
+
+# --- Notes (planning scratchpad docs) --------------------------------------
+
+def get_note(conn: sqlite3.Connection, name: str) -> dict[str, Any] | None:
+    row = conn.execute("SELECT * FROM notes WHERE name = ?", (name,)).fetchone()
+    return dict(row) if row else None
+
+
+def list_notes(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+    rows = conn.execute(
+        """
+        SELECT name, created_at, updated_at, materialized_path, length(body) AS size
+          FROM notes
+         ORDER BY name DESC
+        """
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def latest_note_name(conn: sqlite3.Connection) -> str | None:
+    row = conn.execute("SELECT name FROM notes ORDER BY name DESC LIMIT 1").fetchone()
+    return str(row["name"]) if row else None
+
+
+def upsert_note(
+    conn: sqlite3.Connection, name: str, *, body: str, materialized_path: str
+) -> None:
+    now = _now()
+    existing = conn.execute("SELECT 1 FROM notes WHERE name = ?", (name,)).fetchone()
+    if existing is None:
+        conn.execute(
+            """
+            INSERT INTO notes (name, created_at, updated_at, body, materialized_path)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (name, now, now, body, materialized_path),
+        )
+    else:
+        conn.execute(
+            "UPDATE notes SET updated_at = ?, body = ?, materialized_path = ? WHERE name = ?",
+            (now, body, materialized_path, name),
+        )
 
 
 # --- Runs -------------------------------------------------------------------

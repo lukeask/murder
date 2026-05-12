@@ -11,8 +11,8 @@ def test_heartbeat_serializes_with_type_field() -> None:
     pytest.skip("M2 stub")
 
 
-def test_question_event_carries_monkey_session() -> None:
-    # TODO(M2): assert presence of monkey_session field for D3 routing.
+def test_question_event_carries_crow_session() -> None:
+    # TODO(M2): assert presence of crow_session field for D3 routing.
     pytest.skip("M2 stub")
 
 

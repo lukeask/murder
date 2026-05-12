@@ -1,4 +1,4 @@
-"""AugurAgent — per-Monkey driver (D1: native coroutine, not a tmux pane)."""
+"""CrowHandlerAgent — per-Crow driver (D1: native coroutine, not a tmux pane)."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, cast
 
 from murder.agents.base import Agent, AgentRole, AgentStatus
-from murder.config import AugurConfig
+from murder.config import CrowHandlerConfig
 from murder.harnesses.base import HarnessAdapter
 
 if TYPE_CHECKING:
@@ -19,17 +19,17 @@ if TYPE_CHECKING:
     from murder.runtime import Runtime
 
 
-class AugurAgent(Agent):
-    role = AgentRole.AUGUR
+class CrowHandlerAgent(Agent):
+    role = AgentRole.CROW_HANDLER
 
     def __init__(
         self,
         agent_id: str,
         ticket_id: str,
         session: str,
-        monkey_session: str,
+        crow_session: str,
         harness: HarnessAdapter,
-        config: AugurConfig,
+        config: CrowHandlerConfig,
         *,
         repo_root: Path,
         runtime: "Runtime",
@@ -39,7 +39,7 @@ class AugurAgent(Agent):
         self.id = agent_id
         self.ticket_id = ticket_id
         self.session = session
-        self.monkey_session = monkey_session
+        self.crow_session = crow_session
         self.harness = harness
         self.config = config
         self.repo_root = Path(repo_root)
@@ -66,10 +66,10 @@ class AugurAgent(Agent):
 
         assert self.runtime.run_id is not None
         self._log_path = open_pane_log(
-            self.repo_root, self.runtime.run_id, f"augur_{self.ticket_id}"
+            self.repo_root, self.runtime.run_id, f"crow_handler_{self.ticket_id}"
         )
         self._log_path.write_text(
-            f"# augur log for {self.ticket_id}\n", encoding="utf-8"
+            f"# crow_handler log for {self.ticket_id}\n", encoding="utf-8"
         )
         await tmux.create_session(
             self.session,
@@ -119,7 +119,7 @@ class AugurAgent(Agent):
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await self._poll_task
             self._poll_task = None
-        self._fail_idle_waiters(RuntimeError("augur stopped before monkey became idle"))
+        self._fail_idle_waiters(RuntimeError("crow_handler stopped before crow became idle"))
         with contextlib.suppress(Exception):
             await tmux.kill_session(self.session)
         if self.runtime.db is not None:
@@ -151,7 +151,7 @@ class AugurAgent(Agent):
             return
 
         pane = await tmux.capture_pane(
-            self.monkey_session, lines=self.config.context_lines
+            self.crow_session, lines=self.config.context_lines
         )
         self._idle_cached = self.harness.is_idle(pane)
         self._fire_idle_callbacks_if_idle()
@@ -168,7 +168,7 @@ class AugurAgent(Agent):
                     role=self.role,
                     ticket_id=self.ticket_id,
                     question=ask,
-                    monkey_session=self.monkey_session,
+                    crow_session=self.crow_session,
                     recent_pane=pane[-4000:],
                 )
             )
@@ -182,7 +182,7 @@ class AugurAgent(Agent):
 
         if self.harness.detect_done(pane) and not self._done_emitted:
             self._done_emitted = True
-            await self._orch.on_monkey_done(self.ticket_id)
+            await self._orch.on_crow_done(self.ticket_id)
             return
 
         excerpt = self.harness.extract_last_message(pane) or ""
@@ -220,7 +220,7 @@ class AugurAgent(Agent):
                     agent_id=self.id,
                     role=self.role,
                     ticket_id=self.ticket_id,
-                    text=self._last_summary or excerpt[:200] or "(augur)",
+                    text=self._last_summary or excerpt[:200] or "(crow_handler)",
                     checklist_done=done_n,
                     checklist_total=total,
                     last_message_excerpt=excerpt[:500],
@@ -228,7 +228,7 @@ class AugurAgent(Agent):
             )
         dbmod.heartbeat_agent(self.runtime.db, self.id)
 
-    def is_monkey_idle(self) -> bool:
+    def is_crow_idle(self) -> bool:
         return self._idle_cached
 
     async def await_idle(self) -> None:
@@ -253,7 +253,7 @@ class AugurAgent(Agent):
             self.status = AgentStatus.DEAD
             self.runtime.sync_agent(self)
             self._fail_idle_waiters(
-                RuntimeError("augur stopped after repeated poll failures")
+                RuntimeError("crow_handler stopped after repeated poll failures")
             )
             if self.runtime.bus and self.runtime.run_id:
                 await self.runtime.bus.publish(
@@ -276,7 +276,7 @@ class AugurAgent(Agent):
                     agent_id=self.id,
                     role=self.role,
                     ticket_id=self.ticket_id,
-                    message=f"augur tick failed: {exc}",
+                    message=f"crow_handler tick failed: {exc}",
                     recoverable=not terminal,
                 )
             )

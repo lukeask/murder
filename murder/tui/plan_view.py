@@ -4,12 +4,18 @@ from __future__ import annotations
 
 import sqlite3
 
+from rich.markup import escape
 from textual.message import Message
-from textual.widgets import DataTable, Markdown
+from textual.widgets import DataTable, Markdown, RichLog
 
 
 class PlanList(DataTable):
     """DB-backed plan list."""
+
+    BINDINGS = [
+        ("j", "cursor_down", "Down"),
+        ("k", "cursor_up", "Up"),
+    ]
 
     class PlanHighlighted(Message):
         def __init__(self, name: str) -> None:
@@ -26,7 +32,7 @@ class PlanList(DataTable):
         self._plans: list[str] = []
         self.border_title = ".agents/plans"
         # TODO(tui-planning): fold dynamic ticket ordering into this sidebar
-        # once collaborator planner/notetaker personas can prioritize tickets.
+        # once collaborator Planner/Notetaker personas can prioritize tickets.
 
     def on_mount(self) -> None:
         self.add_columns("name", "status", "rev", "sync")
@@ -72,7 +78,7 @@ class PlanList(DataTable):
 class PlanDocument(Markdown):
     DEFAULT_CSS = """
     PlanDocument {
-        border: round $accent;
+        border: solid $border;
         height: 1fr;
         width: 1fr;
     }
@@ -84,3 +90,54 @@ class PlanDocument(Markdown):
             "or add markdown under `.agents/plans`."
         )
         self.border_title = "(no plan selected)"
+
+
+class NotesDocument(Markdown):
+    """Live view of the notetaker's notes document (`.agents/notes/<date>.md`)."""
+
+    DEFAULT_CSS = """
+    NotesDocument {
+        border: solid $border;
+        height: 1fr;
+        width: 1fr;
+    }
+    """
+
+    _EMPTY = (
+        "# Notes\n\n_No notes yet — type in the chat box and the notetaker will "
+        "tidy them into this document._"
+    )
+
+    def __init__(self) -> None:
+        super().__init__(self._EMPTY)
+        self.border_title = "notes"
+
+    async def show(self, name: str, body: str) -> None:
+        self.border_title = f"notes · {name}"
+        await self.update(body.strip() or self._EMPTY)
+
+
+class NotetakerChat(RichLog):
+    """Append-only chat transcript with the notetaker."""
+
+    DEFAULT_CSS = """
+    NotetakerChat {
+        border: solid $border;
+        height: 1fr;
+        width: 36%;
+    }
+    """
+
+    _TAGS = {"you": "[b cyan]you[/]", "notetaker": "[b green]notetaker[/]"}
+
+    def __init__(self) -> None:
+        super().__init__(highlight=False, markup=True, wrap=True, auto_scroll=True)
+        self.border_title = "notetaker chat"
+
+    def add_turn(self, who: str, text: str) -> None:
+        tag = self._TAGS.get(who, f"[b]{escape(who)}[/]")
+        self.write(f"{tag}  {escape(text)}")
+        self.write("")
+
+    def add_status(self, text: str) -> None:
+        self.write(f"[dim]{escape(text)}[/]")

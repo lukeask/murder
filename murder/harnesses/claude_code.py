@@ -17,6 +17,7 @@ from typing import ClassVar
 from murder import tmux
 from murder.harnesses.base import (
     HarnessAdapter,
+    UsageCollectionMode,
 )
 from murder.harnesses.models import HarnessUsageStatus
 from murder.harnesses.parsing import (
@@ -29,6 +30,7 @@ from murder.harnesses.usage import parse_claude_usage_pane
 
 class ClaudeCodeAdapter(HarnessAdapter):
     kind: ClassVar[str] = "claude_code"
+    usage_collection_mode: ClassVar[UsageCollectionMode] = "tmux_slash"
 
     # Claude Code prompt is ">" or "? " depending on version/context.
     # We also accept any non-empty pane after seeing the banner so startup
@@ -37,13 +39,27 @@ class ClaudeCodeAdapter(HarnessAdapter):
         r"[>?❯]\s*$"           # bare prompt at end of line
         r"|✓\s+claude"         # "✓ claude@api" banner line
         r"|Welcome to Claude"  # older banner
-        r"|claude\.ai",        # footer URL
+        r"|claude\.ai"         # footer URL
+        r"|Claude Code\b"      # version banner (CC 2.x: "Claude Code v2.1.x")
+        r"|bypass permissions", # skip-permissions status bar (CC 2.x)
         re.MULTILINE | re.IGNORECASE,
     )
     _IDLE_RE = re.compile(r"[>?❯]\s*$", re.MULTILINE)
     _BUSY_RE = re.compile(r"(?:thinking|Esc to interrupt|\.{3})", re.IGNORECASE)
+    _CC2_UI_RE = re.compile(r"bypass permissions", re.IGNORECASE)
+    # CC 2.x: "Esc to interrupt" appears in status bar ONLY while actively generating.
+    # _BUSY_RE includes \.{3} which would false-positive on placeholder text, so use this.
+    _CC2_GENERATING_RE = re.compile(r"Esc to interrupt", re.IGNORECASE)
+    # First launch in an un-trusted directory: CC shows an interactive
+    # "do you trust the files in this folder?" list dialog. Our ready-regex
+    # matches that dialog (it contains "Claude Code") so startup proceeds, but
+    # nothing dismisses it — initialize_defaults() answers it.
+    _TRUST_PROMPT_RE = re.compile(
+        r"trust the files in this folder|Yes, I trust this folder|trust this folder\?",
+        re.IGNORECASE,
+    )
 
-    monkey_system_prompt: ClassVar[str] = "see prompts/monkey_claude_code.md"
+    crow_system_prompt: ClassVar[str] = "see prompts/crow_claude_code.md"
     available_startup_models: ClassVar[list[tuple[str, str]]] = [
         ("opus", "Opus"),
         ("sonnet", "Sonnet"),
@@ -60,10 +76,33 @@ class ClaudeCodeAdapter(HarnessAdapter):
         return bool(self._READY_RE.search(strip_ansi(pane_text)))
 
     def is_idle(self, pane_text: str) -> bool:
-        return bool(self._IDLE_RE.search(strip_ansi(pane_text)))
+        clean = strip_ansi(pane_text)
+        # CC 2.x shows "bypass permissions" in the status bar at all times;
+        # "Esc to interrupt" is only added while actively generating.
+        if self._CC2_UI_RE.search(clean):
+            return not bool(self._CC2_GENERATING_RE.search(clean))
+        return bool(self._IDLE_RE.search(clean))
 
     def is_busy(self, pane_text: str) -> bool:
         return bool(self._BUSY_RE.search(strip_ansi(pane_text)))
+
+    async def initialize_defaults(self, session, spec):  # type: ignore[override]
+        del spec
+        # Dismiss the first-run "trust this folder?" dialog if it's up. The
+        # ready check may have fired before the dialog rendered, so poll a bit.
+        for _ in range(15):  # ~6 s
+            try:
+                pane = strip_ansi(await tmux.capture_pane(session, lines=40))
+            except tmux.TmuxError:
+                return ok_result()  # session gone; let the next wait_idle report it
+            if self._TRUST_PROMPT_RE.search(pane):
+                await tmux.send_keys(session, "1", literal=True, enter=True)
+                await asyncio.sleep(0.6)
+                return ok_result()
+            if self.is_idle(pane):  # already at the REPL — nothing to dismiss
+                return ok_result()
+            await asyncio.sleep(0.4)
+        return ok_result()
 
     def extract_last_message(self, pane_text: str) -> str | None:
         return extract_last_message_heuristic(pane_text)

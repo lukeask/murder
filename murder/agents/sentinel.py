@@ -17,7 +17,7 @@ from murder.storage.filesystem import atomic_write_text
 from murder.storage.paths import escalations_dir, ticket_md
 from murder.tickets import lifecycle, parser as ticket_parser
 
-MONKEY_IDLE_WAIT_TIMEOUT_S = 60.0
+CROW_IDLE_WAIT_TIMEOUT_S = 60.0
 
 if TYPE_CHECKING:
     from murder.clients.base import APIClient
@@ -87,7 +87,7 @@ class SentinelAgent(Agent):
         """Reserved for TUI-forwarded prompts (M5)."""
         del msg
 
-    async def on_augur_escalation(self, event: EscalationEvent) -> None:
+    async def on_crow_handler_escalation(self, event: EscalationEvent) -> None:
         """Escalations are already persisted via the bus; hook reserved for policy."""
         del event
 
@@ -111,7 +111,7 @@ class SentinelAgent(Agent):
                     {
                         "ticket_id": event.ticket_id,
                         "question": event.question,
-                        "monkey_session": event.monkey_session,
+                        "crow_session": event.crow_session,
                     }
                 ),
             }
@@ -169,8 +169,8 @@ class SentinelAgent(Agent):
                 )
             if name == "read_ticket":
                 return await self.tool_read_ticket(str(args.get("ticket_id", "")))
-            if name == "send_to_monkey":
-                return await self.tool_send_to_monkey(
+            if name == "send_to_crow":
+                return await self.tool_send_to_crow(
                     str(args.get("ticket_id", "")), str(args.get("msg", ""))
                 )
             if name == "escalate_user":
@@ -241,8 +241,8 @@ class SentinelAgent(Agent):
                 },
             ),
             ToolSpec(
-                name="send_to_monkey",
-                description="Send a nudge to the monkey after idle gate.",
+                name="send_to_crow",
+                description="Send a nudge to the crow after idle gate.",
                 parameters={
                     "type": "object",
                     "properties": {
@@ -284,7 +284,7 @@ class SentinelAgent(Agent):
             ),
             ToolSpec(
                 name="pause_ticket",
-                description="Pause a ticket (blocked) and interrupt monkey.",
+                description="Pause a ticket (blocked) and interrupt crow.",
                 parameters={
                     "type": "object",
                     "properties": {"ticket_id": {"type": "string"}, "reason": {"type": "string"}},
@@ -341,24 +341,24 @@ class SentinelAgent(Agent):
         row = dbmod.get_ticket(self.runtime.db, ticket_id)
         return row or {}
 
-    async def tool_send_to_monkey(self, ticket_id: str, msg: str) -> dict[str, Any]:
-        aug = self.runtime.get_augur(ticket_id)
-        if aug is None:
-            return {"error": "no augur"}
-        monkey = self.runtime.get_monkey(ticket_id)
-        if monkey is None:
-            return {"error": "no monkey"}
-        if not aug.is_monkey_idle():
+    async def tool_send_to_crow(self, ticket_id: str, msg: str) -> dict[str, Any]:
+        handler = self.runtime.get_crow_handler(ticket_id)
+        if handler is None:
+            return {"error": "no crow_handler"}
+        crow = self.runtime.get_crow(ticket_id)
+        if crow is None:
+            return {"error": "no crow"}
+        if not handler.is_crow_idle():
             try:
                 await asyncio.wait_for(
-                    aug.await_idle(),
-                    timeout=MONKEY_IDLE_WAIT_TIMEOUT_S,
+                    handler.await_idle(),
+                    timeout=CROW_IDLE_WAIT_TIMEOUT_S,
                 )
             except asyncio.TimeoutError:
-                return {"error": "monkey did not become idle in time"}
+                return {"error": "crow did not become idle in time"}
             except Exception as e:
-                return {"error": f"monkey idle wait failed: {e}"}
-        await monkey.send(msg)
+                return {"error": f"crow idle wait failed: {e}"}
+        await crow.send(msg)
         return {"ok": True}
 
     async def tool_escalate_user(self, reason: str, severity: int) -> None:
@@ -423,6 +423,6 @@ class SentinelAgent(Agent):
             return
         with contextlib.suppress(lifecycle.InvalidTransition):
             lifecycle.transition(self.runtime.db, ticket_id, TicketStatus.BLOCKED)
-        monkey = self.runtime.get_monkey(ticket_id)
-        if monkey is not None:
-            await monkey.harness_session.interrupt()
+        crow = self.runtime.get_crow(ticket_id)
+        if crow is not None:
+            await crow.harness_session.interrupt()

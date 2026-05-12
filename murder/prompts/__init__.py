@@ -1,7 +1,7 @@
 """Prompt template loader.
 
 Reads `<name>.md` from this package directory. Composition (e.g.
-monkey_<harness>.md + ticket-specific brief) happens at the call site.
+crow_<harness>.md + ticket-specific brief) happens at the call site.
 """
 
 from __future__ import annotations
@@ -21,5 +21,5 @@ def load(name: str) -> str:
 
 
 def render(name: str, /, **fields: object) -> str:
-    """Load a template and `.format(**fields)` it. Useful for monkey prompts."""
+    """Load a template and `.format(**fields)` it. Useful for crow prompts."""
     return load(name).format(**fields)

@@ -12,7 +12,7 @@ class PaneMirror(RichLog):
 
     DEFAULT_CSS = """
     PaneMirror {
-        border: round $accent;
+        border: solid $border;
         height: 1fr;
     }
     """

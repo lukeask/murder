@@ -15,7 +15,7 @@ from murder.runtime import Runtime
 
 class _FakeHarness(HarnessAdapter):
     kind = "fake"
-    monkey_system_prompt = ""
+    crow_system_prompt = ""
 
     def startup_cmd(self, cwd: Path) -> list[str]:
         return ["fake"]

@@ -1,4 +1,5 @@
-"""CollaboratorAgent — wraps Claude Code in a tmux session."""
+"""CollaboratorAgent — wraps an interactive coding CLI (harness) in a tmux
+session for the "collaborator" planning mode."""
 
 from __future__ import annotations
 
@@ -6,12 +7,18 @@ import contextlib
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from murder import tmux
 from murder.agents.base import Agent, AgentRole, AgentStatus
 from murder.harnesses.base import HarnessAdapter
 from murder.harnesses.models import HarnessStartSpec
 
 if TYPE_CHECKING:
     from murder.runtime import Runtime
+
+# Keep the harness's own ready/idle waits comfortably under the TUI's hard
+# spawn timeout (`MurderApp.COLLABORATOR_START_TIMEOUT_S`) so a slow harness
+# surfaces its own clean failure instead of being cancelled mid-startup.
+READY_TIMEOUT_S = 75.0
 
 
 class CollaboratorAgent(Agent):
@@ -41,11 +48,24 @@ class CollaboratorAgent(Agent):
         from murder.bus import StatusChangeEvent
 
         start_result = await self.harness_session.start(
-            HarnessStartSpec(cwd=self.repo_root, startup_model=self.startup_model)
+            HarnessStartSpec(
+                cwd=self.repo_root,
+                startup_model=self.startup_model,
+                ready_timeout_s=READY_TIMEOUT_S,
+            )
         )
         if not start_result.ok:
             raise TimeoutError(start_result.message or "collaborator startup failed")
         await self.harness_session.send_prompt(brief)
+        # If the harness binary launched but then exited (e.g. an unanswered
+        # interactive prompt, a crash, or a missing/broken install), the tmux
+        # session is already gone — say so plainly instead of leaving the pane
+        # mirror to report a bare "[session vanished]".
+        if not await tmux.session_exists(self.session):
+            raise RuntimeError(
+                f"collaborator harness '{self.harness.kind}' exited right after startup; "
+                "check it runs interactively in this repo (`murder doctor`)"
+            )
         self.status = AgentStatus.RUNNING
         if self.runtime:
             self.runtime.sync_agent(self)
@@ -64,8 +84,6 @@ class CollaboratorAgent(Agent):
                 )
 
     async def stop(self, *, failed: bool = False) -> None:
-        from murder import tmux
-
         with contextlib.suppress(Exception):
             await self.harness_session.interrupt()
         with contextlib.suppress(Exception):

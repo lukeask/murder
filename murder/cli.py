@@ -34,7 +34,7 @@ from murder.tickets.schema import ChecklistItem, Ticket
 
 app = typer.Typer(
     name="murder",
-    help="Agentic dev harness — a murder of crows over a monkey.",
+    help="Agentic dev harness — a murder of crows.",
     no_args_is_help=False,
     invoke_without_command=True,
     add_completion=False,
@@ -67,7 +67,7 @@ def _validate_configured_harness_binaries(cfg: Config) -> list[str]:
     issues: list[str] = []
     for role_name, role_cfg in (
         ("collaborator", cfg.collaborator),
-        ("default_monkey", cfg.default_monkey),
+        ("default_crow", cfg.default_crow),
     ):
         for kind in _configured_harnesses(role_cfg):
             try:
@@ -137,7 +137,7 @@ def kick_preflight(cfg: Config, repo: Path) -> None:
     _require_git_head(repo)
     if cfg.project.name == "TODO_SET_ME":
         typer.secho(
-            "Warning: project.name is still TODO_SET_ME; run `murder config` to set it.",
+            "Warning: project.name is still TODO_SET_ME; open Settings (ctrl+p) in the TUI to set it.",
             fg=typer.colors.YELLOW,
             err=True,
         )
@@ -163,7 +163,7 @@ async def _bare_kickoff(ticket: str | None) -> None:
         kicked = await orch.kickoff_ready(only=ticket)
         typer.echo(f"Kicked off tickets: {', '.join(kicked) if kicked else '(none)'}")
         if kicked:
-            typer.echo("Waiting for SIGINT/SIGTERM (Augur poll loop is running).")
+            typer.echo("Waiting for SIGINT/SIGTERM (CrowHandler poll loop is running).")
             await rt.run_until_signal()
 
 
@@ -189,20 +189,10 @@ async def _launch_tui() -> None:
 def _root(
     ctx: typer.Context,
     version: bool = typer.Option(False, "--version", "-V", help="Print version and exit."),
-    config: bool = typer.Option(
-        False,
-        "--config",
-        help="Interactive Monkey harness/model defaults (writes .agents/roles.yaml).",
-    ),
 ) -> None:
     """Bare entrypoint launches the TUI. Kickoff is `/murder` inside the chat pane."""
     if version:
         typer.echo(f"murder {__version__}")
-        raise typer.Exit(0)
-    if config:
-        from murder.config_flow import run_guided_config
-
-        run_guided_config(_repo_root())
         raise typer.Exit(0)
 
     if ctx.invoked_subcommand is not None:
@@ -216,16 +206,10 @@ def _root(
 def cmd_kick(
     ticket: str = typer.Argument(..., help="Ticket id to kick off (e.g. 't007')."),
 ) -> None:
-    """Kick off a single ticket's Monkey from the CLI (no TUI)."""
+    """Kick off a single ticket's Crow from the CLI (no TUI)."""
     _run_async_entry(_bare_kickoff(ticket))
 
 
-@app.command("config")
-def cmd_config() -> None:
-    """Interactive editor for Monkey defaults (same as murder --config)."""
-    from murder.config_flow import run_guided_config
-
-    run_guided_config(_repo_root())
 
 
 @tickets_app.command("create")
@@ -456,7 +440,7 @@ def cmd_doctor() -> None:
             issues.append("project.name is TODO_SET_ME; run `murder config`")
         issues.extend(_validate_configured_harness_binaries(cfg))
     if not os.environ.get("OPENROUTER_API_KEY"):
-        issues.append("OPENROUTER_API_KEY unset (Augur/Sentinel need it)")
+        issues.append("OPENROUTER_API_KEY unset (CrowHandler/Sentinel need it)")
     if not agents_dir(repo).exists():
         issues.append(".agents/ missing — run murder init")
     elif not db_path(repo).exists():

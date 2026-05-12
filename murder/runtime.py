@@ -2,13 +2,13 @@
 
 Owns the asyncio loop, the SQLite connection, the bus, and the lifecycle
 of all agents. The TUI is one consumer in this same loop (D1: single
-process). Daemons (Augur, Sentinel) are coroutines spawned and supervised
+process). Daemons (CrowHandler, Sentinel) are coroutines spawned and supervised
 here; their "tmux session" is a logfile being tailed for debug
 visibility, not a real interactive session.
 
 Process model rules:
 - One murder process per repo. flock on `.agents/.lock` enforces.
-- Graceful shutdown drains the bus, signals Monkeys, kills tmux sessions.
+- Graceful shutdown drains the bus, signals Crows, kills tmux sessions.
 - Crash recovery: on startup, reconcile DB ↔ tmux ↔ filesystem before
   resuming.
 """
@@ -50,8 +50,8 @@ class Runtime:
         self.bus: Bus | None = None
         self.run_id: str | None = None
         self._agents: dict[str, "Agent"] = {}
-        self._monkeys: dict[str, "Agent"] = {}
-        self._augurs: dict[str, "Agent"] = {}
+        self._crows: dict[str, "Agent"] = {}
+        self._crow_handlers: dict[str, "Agent"] = {}
         self._tasks: dict[str, asyncio.Task[None]] = {}
         self._shutdown = asyncio.Event()
         self._external_stop = asyncio.Event()
@@ -94,8 +94,8 @@ class Runtime:
             with contextlib.suppress(Exception):
                 await agent.stop(failed=agent.status not in terminal_statuses)
         self._agents.clear()
-        self._monkeys.clear()
-        self._augurs.clear()
+        self._crows.clear()
+        self._crow_handlers.clear()
         if self.run_id and self.db is not None:
             dbmod.end_run(self.db, self.run_id)
         if self.db is not None:
@@ -128,28 +128,28 @@ class Runtime:
     def register_agent(self, agent: "Agent") -> None:
         self._agents[agent.id] = agent
         if agent.ticket_id is not None:
-            if agent.role == AgentRole.MONKEY:
-                self._monkeys[agent.ticket_id] = agent
-            elif agent.role == AgentRole.AUGUR:
-                self._augurs[agent.ticket_id] = agent
+            if agent.role == AgentRole.CROW:
+                self._crows[agent.ticket_id] = agent
+            elif agent.role == AgentRole.CROW_HANDLER:
+                self._crow_handlers[agent.ticket_id] = agent
         self.sync_agent(agent)
 
     def get_agent(self, agent_id: str) -> "Agent | None":
         return self._agents.get(agent_id)
 
-    def get_monkey(self, ticket_id: str) -> "Agent | None":
-        return self._monkeys.get(ticket_id)
+    def get_crow(self, ticket_id: str) -> "Agent | None":
+        return self._crows.get(ticket_id)
 
-    def get_augur(self, ticket_id: str) -> "Agent | None":
-        return self._augurs.get(ticket_id)
+    def get_crow_handler(self, ticket_id: str) -> "Agent | None":
+        return self._crow_handlers.get(ticket_id)
 
     async def reap(self, agent_id: str) -> None:
         agent = self._agents.pop(agent_id, None)
         if agent is None:
             return
         if agent.ticket_id is not None:
-            self._monkeys.pop(agent.ticket_id, None)
-            self._augurs.pop(agent.ticket_id, None)
+            self._crows.pop(agent.ticket_id, None)
+            self._crow_handlers.pop(agent.ticket_id, None)
         t = self._tasks.pop(agent_id, None)
         if t is not None:
             t.cancel()

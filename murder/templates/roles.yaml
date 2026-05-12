@@ -7,9 +7,15 @@ project:
 
 collaborator:
   kind: harness
-  harness: claude_code
+  harness: claude_code        # picked from Settings (ctrl+p); also drives the collaborator planning mode
   startup_prompt_template: collaborator.md
   # Opus 4.7 is selected inside CC; not configured here.
+
+notetaker:
+  kind: api
+  provider: openrouter
+  model: anthropic/claude-sonnet-4-6   # picked from Settings (ctrl+p)
+  max_tokens: 1500
 
 sentinel:
   kind: api
@@ -17,7 +23,7 @@ sentinel:
   model: anthropic/claude-sonnet-4-6
   max_context_tokens: 180000
 
-augur:
+crow_handler:
   kind: api
   provider: openrouter
   model: anthropic/claude-haiku-4-5
@@ -26,7 +32,7 @@ augur:
   stuck_threshold_ticks: 3
   context_lines: 40
 
-default_monkey:
+default_crow:
   kind: harness
   harness: cursor
   # Optional pools (murder --config can set these): tickets without overrides pick
@@ -37,7 +43,7 @@ default_monkey:
   # startup_models_by_harness:
   #   cursor: [composer]
   #   codex: [gpt-5.5]
-  startup_prompt_template: monkey_cursor.md
+  startup_prompt_template: crow_cursor.md
 
 tui:
   ticket_grid_max_rows: 20

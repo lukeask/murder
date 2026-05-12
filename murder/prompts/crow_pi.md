@@ -1,8 +1,8 @@
-# Monkey system fragment — pi harness (STUB)
+# Crow system fragment — pi harness (STUB)
 
 TODO(post-M1): empirically calibrate this against pi behavior.
 
-For now, mirrors `monkey_cursor.md` content. Once pi is exercised,
+For now, mirrors `crow_cursor.md` content. Once pi is exercised,
 adjust framing if its conventions diverge (e.g. its tool-call rendering,
 its idle prompt style).
 

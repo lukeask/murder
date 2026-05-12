@@ -15,6 +15,7 @@ from typing import ClassVar
 from murder import tmux
 from murder.harnesses.base import (
     HarnessAdapter,
+    UsageCollectionMode,
 )
 from murder.harnesses.models import HarnessUsageStatus
 from murder.harnesses.parsing import (
@@ -42,7 +43,8 @@ def _tail(pane_text: str) -> str:
 
 class CodexAdapter(HarnessAdapter):
     kind: ClassVar[str] = "codex"
-    monkey_system_prompt: ClassVar[str] = "see prompts/monkey_codex.md"
+    usage_collection_mode: ClassVar[UsageCollectionMode] = "tmux_slash"
+    crow_system_prompt: ClassVar[str] = "see prompts/crow_codex.md"
     available_startup_models: ClassVar[list[tuple[str, str]]] = [
         ("gpt-5.5", "GPT-5.5"),
         ("gpt-5.4", "GPT-5.4"),

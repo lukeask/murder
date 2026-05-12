@@ -14,7 +14,7 @@ class EscalationStrip(Static):
     EscalationStrip {
         height: auto;
         max-height: 8;
-        border: round $warning;
+        border: solid $error;
         padding: 0 1;
     }
     """
@@ -32,8 +32,9 @@ class EscalationStrip(Static):
             "ORDER BY ts DESC LIMIT 6"
         ).fetchall()
         if not rows:
-            self.update("[dim](no pending escalations)[/dim]")
+            self.display = False
             return
+        self.display = True
         lines = []
         for r in rows:
             sev = "!" * int(r["severity"])

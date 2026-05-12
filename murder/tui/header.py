@@ -26,6 +26,7 @@ class Header(Static):
         self.project = project
         self._counts: dict[str, int] = {s: 0 for s in _STATUSES}
         self._view = "planning"
+        self._planning_mode: str | None = None
 
     def refresh_counts(self, db: sqlite3.Connection | None) -> None:
         if db is None:
@@ -37,8 +38,9 @@ class Header(Static):
             self._counts[s] = int(row["c"]) if row else 0
         self._update_text()
 
-    def set_view(self, view: str) -> None:
+    def set_view(self, view: str, planning_mode: str | None = None) -> None:
         self._view = view
+        self._planning_mode = planning_mode
         self._update_text()
 
     def _update_text(self) -> None:
@@ -48,10 +50,13 @@ class Header(Static):
             if self.project == "TODO_SET_ME"
             else self.project
         )
+        planning_label = "[1 planning]"
+        if self._planning_mode:
+            planning_label = f"[1 planning · {self._planning_mode}]"
         tabs = " ".join(
             f"[b]{label}[/b]" if key == self._view else label
             for key, label in (
-                ("planning", "[1 planning]"),
+                ("planning", planning_label),
                 ("crows", "[2 crows]"),
                 ("schedule", "[3 schedule]"),
             )

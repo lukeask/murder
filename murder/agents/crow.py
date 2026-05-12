@@ -1,4 +1,4 @@
-"""MonkeyAgent — wraps an interactive coding CLI in a tmux session."""
+"""CrowAgent — wraps an interactive coding CLI in a tmux session."""
 
 from __future__ import annotations
 
@@ -14,8 +14,8 @@ if TYPE_CHECKING:
     from murder.runtime import Runtime
 
 
-class MonkeyAgent(Agent):
-    role = AgentRole.MONKEY
+class CrowAgent(Agent):
+    role = AgentRole.CROW
 
     def __init__(
         self,

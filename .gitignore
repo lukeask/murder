@@ -26,3 +26,6 @@ htmlcov/
 .idea/
 *.swp
 *~
+
+# Stray runtime logs
+error.log
