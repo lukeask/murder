@@ -72,6 +72,10 @@ class CollaboratorAgent(Agent):
             )
         self.status = AgentStatus.RUNNING
         if self.runtime:
+            if self.runtime.db is not None:
+                # Fresh tmux session ⇒ fresh transcript; don't surface a prior
+                # run's chat in the new one.
+                conversation.clear(self.runtime.db, self.id)
             self.runtime.sync_agent(self)
             if self.runtime.bus and self.runtime.run_id:
                 await self.runtime.bus.publish(

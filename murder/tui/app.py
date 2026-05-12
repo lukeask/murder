@@ -174,6 +174,7 @@ class MurderApp(App[None]):
         self._escalations = EscalationStrip()
         self._chat = ChatInput()
         self._collab_lock = asyncio.Lock()
+        self._collab_chat_lock = asyncio.Lock()
         self._notetaker_lock = asyncio.Lock()
         self._planning_mode = "notetaker"  # "notetaker" | "collaborator"
         self._sidebar_visible = True
@@ -440,26 +441,33 @@ class MurderApp(App[None]):
         return agent if isinstance(agent, CollaboratorAgent) else None
 
     async def _refresh_collab_chat(self) -> None:
-        """Re-parse the collaborator's tmux pane into the chat transcript."""
-        if not (self._view == "planning" and self._planning_mode == "collaborator"):
+        """Re-parse the collaborator's tmux pane into the chat transcript.
+
+        Lock-guarded so overlapping refresh-pane ticks don't race two parses
+        onto the same conversation log.
+        """
+        if self._collab_chat_lock.locked():
             return
-        agent = self._collaborator_agent()
-        if agent is None:
+        async with self._collab_chat_lock:
+            if not (self._view == "planning" and self._planning_mode == "collaborator"):
+                return
+            agent = self._collaborator_agent()
+            if agent is None:
+                self._collab_chat.set_turns([])
+                self._collab_chat.add_status("(no collaborator yet — type a message to start one)")
+                return
+            turns = await agent.refresh_transcript()
+            if turns:
+                self._collab_chat.set_turns(turns)
+                return
             self._collab_chat.set_turns([])
-            self._collab_chat.add_status("(no collaborator yet — type a message to start one)")
-            return
-        turns = await agent.refresh_transcript()
-        if turns:
-            self._collab_chat.set_turns(turns)
-            return
-        self._collab_chat.set_turns([])
-        if agent.harness.transcript_prompt_markers:
-            self._collab_chat.add_status("(collaborator chat — nothing parsed yet)")
-        else:
-            self._collab_chat.add_status(
-                f"(no transcript parser for '{agent.harness.kind}' yet — "
-                "press ctrl+y for the raw pane)"
-            )
+            if agent.harness.transcript_prompt_markers:
+                self._collab_chat.add_status("(collaborator chat — nothing parsed yet)")
+            else:
+                self._collab_chat.add_status(
+                    f"(no transcript parser for '{agent.harness.kind}' yet — "
+                    "press ctrl+y for the raw pane)"
+                )
 
     def action_view_planning(self) -> None:
         self._set_view("planning")

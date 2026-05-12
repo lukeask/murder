@@ -12,6 +12,7 @@ from murder import tmux as tmuxmod
 from murder.agents.collaborator import CollaboratorAgent
 from murder.harnesses import get as get_harness
 from murder.harnesses.parsing import parse_prompt_marker_transcript
+from murder.harnesses.results import ok_result
 
 _HELPER_REPLY = (
     "Sure:\n  def add(a, b):\n      return a + b\nwrote helper.py\nDone — anything else?"
@@ -132,6 +133,33 @@ async def test_refresh_transcript_captures_parses_and_merges(monkeypatch, memdb,
     turns = await agent.refresh_transcript()
     assert turns[0] == ("user", "what's 2 + 2?")
     assert conversation.read_conversation(memdb, "collaborator-0") == turns
+
+
+@pytest.mark.asyncio
+async def test_start_clears_prior_conversation_log(monkeypatch, memdb, tmp_path) -> None:
+    # A previous run left a transcript under the same agent id.
+    conversation.merge_transcript(memdb, "collaborator-0", _turns(("user", "old")))
+
+    agent = CollaboratorAgent(
+        agent_id="collaborator-0",
+        session="murder_test_collab",
+        harness=get_harness("claude_code"),
+        repo_root=tmp_path,
+        runtime=SimpleNamespace(db=memdb, bus=None, run_id=None, sync_agent=lambda a: None),  # type: ignore[arg-type]
+    )
+
+    async def ok(*a, **k):  # noqa: ANN002, ANN003, ARG001
+        return ok_result()
+
+    async def yes(*a, **k):  # noqa: ANN002, ANN003, ARG001
+        return True
+
+    monkeypatch.setattr(agent.harness_session, "start", ok)
+    monkeypatch.setattr(agent.harness_session, "send_prompt", ok)
+    monkeypatch.setattr("murder.agents.collaborator.tmux.session_exists", yes)
+
+    await agent.start("hello", {})
+    assert conversation.read_conversation(memdb, "collaborator-0") == []
 
 
 @pytest.mark.asyncio
