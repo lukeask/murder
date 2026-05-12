@@ -75,6 +75,65 @@ class PlanList(DataTable):
             self.post_message(self.PlanOpened(self._plans[idx]))
 
 
+class NotesList(DataTable):
+    """DB-backed list of dated notes documents (`.agents/notes/<date>.md`).
+
+    The notetaker owns the note bodies; this is just a sidebar "filetree" so
+    you can see which days have notes and how big they are. Highlighting a row
+    surfaces it; the notetaker view keeps showing the live (today's) note.
+    """
+
+    BINDINGS = [
+        ("j", "cursor_down", "Down"),
+        ("k", "cursor_up", "Up"),
+    ]
+
+    class NoteHighlighted(Message):
+        def __init__(self, name: str) -> None:
+            self.name = name
+            super().__init__()
+
+    def __init__(self) -> None:
+        super().__init__(zebra_stripes=True, cursor_type="row")
+        self._names: list[str] = []
+        self.border_title = ".agents/notes"
+
+    def on_mount(self) -> None:
+        self.add_columns("date", "chars", "updated")
+
+    def refresh_from_db(self, db: sqlite3.Connection | None) -> None:
+        if db is None:
+            return
+        row = self.cursor_row
+        rows = db.execute(
+            """
+            SELECT name, length(body) AS size, updated_at
+              FROM notes
+             ORDER BY name DESC
+            """
+        ).fetchall()
+        self.clear()
+        self._names = []
+        for r in rows:
+            updated = str(r["updated_at"])[:16].replace("T", " ")
+            self.add_row(r["name"], str(r["size"]), updated)
+            self._names.append(r["name"])
+        if self._names:
+            self.move_cursor(row=min(max(row, 0), len(self._names) - 1))
+
+    @property
+    def selected_name(self) -> str | None:
+        row = self.cursor_row
+        if 0 <= row < len(self._names):
+            return self._names[row]
+        return None
+
+    def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
+        idx = event.cursor_row
+        if 0 <= idx < len(self._names):
+            self.post_message(self.NoteHighlighted(self._names[idx]))
+
+
 class PlanDocument(Markdown):
     DEFAULT_CSS = """
     PlanDocument {
