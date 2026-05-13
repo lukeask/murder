@@ -1,4 +1,4 @@
-"""Harness adapter registry. See `.agents/harnesses_spec.md`.
+"""Harness adapter registry. See `.murder/harnesses_spec.md`.
 
 Adapters wrap interactive CLI harnesses (cursor, claude_code, codex, pi,
 murder_native) so the runner / CrowHandler / Sentinel can stay

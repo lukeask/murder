@@ -7,7 +7,7 @@ here; their "tmux session" is a logfile being tailed for debug
 visibility, not a real interactive session.
 
 Process model rules:
-- One murder process per repo. flock on `.agents/.lock` enforces.
+- One murder process per repo. flock on `.murder/.lock` enforces.
 - Graceful shutdown drains the bus, signals Crows, kills tmux sessions.
 - Crash recovery: on startup, reconcile DB ↔ tmux ↔ filesystem before
   resuming.
@@ -202,7 +202,7 @@ class Runtime:
         path = (
             self.repo_root / row["materialized_path"]
             if row
-            else self.repo_root / ".agents" / "plans" / f"{name}.md"
+            else self.repo_root / ".murder" / "plans" / f"{name}.md"
         )
         editor = choose_editor(preferred_editor)
         code = await open_editor(path, editor)

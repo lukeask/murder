@@ -1,6 +1,6 @@
 """Ticket pydantic model — mirrors the SQLite tables (D2).
 
-Tickets in v0 are split: metadata in DB, prose in `.agents/tickets/<id>.md`
+Tickets in v0 are split: metadata in DB, prose in `.murder/tickets/<id>.md`
 (flat, no wave subdirs per D9). This model is the in-memory aggregate
 view used by orchestrator, sentinel tools, and TUI.
 """
@@ -38,7 +38,7 @@ class Ticket(BaseModel):
     updated_at: datetime
     checklist: list[ChecklistItem] = Field(default_factory=list)
 
-    # Body sections (loaded from .agents/tickets/<id>.md)
+    # Body sections (loaded from .murder/tickets/<id>.md)
     plan_body: str = ""
     working_notes: str = ""
     sentinel_notes: str = ""

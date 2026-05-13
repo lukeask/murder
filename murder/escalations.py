@@ -2,7 +2,7 @@
 
 Escalations live in two places:
 - DB row in `escalations` (metadata: severity, recipient, source_event_id, resolved).
-- Markdown body at `.agents/escalations/<id>.md` for `to_recipient='collaborator'`
+- Markdown body at `.murder/escalations/<id>.md` for `to_recipient='collaborator'`
   (Collaborator reads markdown; user reads the TUI strip).
 
 Sentinel emits via `Bus.publish(EscalationEvent)` and a runtime hook
@@ -31,7 +31,7 @@ def queue_for_collaborator(
     body: str,
     repo_root: Path,
 ) -> tuple[int, Path]:
-    """Insert escalation row + write `.agents/escalations/<id>.md` with body."""
+    """Insert escalation row + write `.murder/escalations/<id>.md` with body."""
     # TODO(M3): write body atomically (tempfile + os.replace); return (id, path).
     # Body content convention: top-level title = reason; section per supporting fact.
     raise NotImplementedError("M3: escalations.queue_for_collaborator")

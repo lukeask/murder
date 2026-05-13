@@ -19,7 +19,7 @@ def test_plan_rows_revisions_and_related_links(memdb: sqlite3.Connection) -> Non
         memdb,
         plan,
         content_hash="abc",
-        materialized_path=".agents/plans/db-backed.md",
+        materialized_path=".murder/plans/db-backed.md",
         file_hash="abc",
         last_materialized_hash="abc",
         revision_source="import",

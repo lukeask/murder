@@ -1,6 +1,6 @@
 """User-level config stored under XDG config home.
 
-This is intentionally separate from project `.agents/roles.yaml`: it stores
+This is intentionally separate from project `.murder/roles.yaml`: it stores
 local UI preferences that should follow the user across repos.
 """
 

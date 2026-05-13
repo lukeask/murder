@@ -1,5 +1,5 @@
-# Bundled defaults. Copied to .agents/roles.yaml on `murder init`.
-# Per-project overrides land in .agents/roles.yaml.
+# Bundled defaults. Copied to .murder/roles.yaml on `murder init`.
+# Per-project overrides land in .murder/roles.yaml.
 
 project:
   name: TODO_SET_ME           # used in tmux session names
@@ -52,5 +52,5 @@ tui:
   refresh_ms: 1000              # D11
 
 runtime:
-  run_dir: .agents/runs
+  run_dir: .murder/runs
   session_name_template: "murder_{project}_{role}{suffix}"

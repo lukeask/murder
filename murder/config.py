@@ -129,7 +129,7 @@ class TuiConfig(BaseModel):
 
 
 class RuntimeConfig(BaseModel):
-    run_dir: Path = Path(".agents/runs")
+    run_dir: Path = Path(".murder/runs")
     session_name_template: str = "murder_{project}_{role}{suffix}"
 
 
@@ -151,7 +151,7 @@ class Config(BaseModel):
         load_dotenv(repo_root / ".env", override=True)
 
         bundled = _load_bundled_defaults()
-        project = repo_root / ".agents" / "roles.yaml"
+        project = repo_root / ".murder" / "roles.yaml"
         merged: dict[str, Any] = bundled
         if project.exists():
             with project.open("r", encoding="utf-8") as f:
@@ -169,7 +169,7 @@ def env_path() -> Path:
 
 def project_env_path(repo_root: Path) -> Path:
     """Project env file created by `murder init`."""
-    return repo_root / ".agents" / ".env"
+    return repo_root / ".murder" / ".env"
 
 
 def _load_bundled_defaults() -> dict[str, Any]:

@@ -31,4 +31,4 @@ You are working on ticket `{ticket_id}` ({title}).
 
 - Stay in write-set.
 - No unplanned abstractions.
-- No `.agents/` edits.
+- No `.murder/` edits.

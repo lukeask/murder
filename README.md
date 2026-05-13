@@ -2,7 +2,7 @@
 
 Agentic dev harness. A *murder* of crows supervises a *monkey*.
 
-> Status: pre-M0 scaffold. Nothing runs yet. See `.agents/` for the design
+> Status: pre-M0 scaffold. Nothing runs yet. See `.murder/` for the design
 > docs that drive this codebase:
 > - `initialbrainstorm.md` — philosophy & flow
 > - `1777410436NOTES.md` — settled naming, role hierarchy, event flow
@@ -23,7 +23,7 @@ Agentic dev harness. A *murder* of crows supervises a *monkey*.
 
 ```bash
 pip install -e .      # editable install of the murder package
-murder init           # creates .agents/ + .agents/murder.db
+murder init           # creates .murder/ + .murder/murder.db
 murder doctor         # checks tmux, OPENROUTER_API_KEY, harness binaries
 murder                # bare command: launches the TUI (alias: `murder up`)
 # in the chat pane: `/murder` kicks off all ready tickets;
@@ -38,7 +38,7 @@ murder kick t007      # one-shot: kick off just t007's Monkey, no TUI
 ```
 murder/                # the package
 ├── cli.py             # `murder` entrypoint
-├── config.py          # roles.yaml + global/.agents/root .env loading
+├── config.py          # roles.yaml + global/.murder/root .env loading
 ├── db.py              # SQLite schema + access (D2)
 ├── bus.py             # typed AgentEvent union + asyncio pubsub (D4)
 ├── tmux.py            # session helpers, load-buffer for big sends (D10)
@@ -54,13 +54,13 @@ murder/                # the package
 ├── tui/               # Textual app
 ├── storage/           # paths, runs, filesystem
 ├── prompts/           # role prompt templates
-└── templates/         # files copied into a project's .agents/ on `murder init`
+└── templates/         # files copied into a project's .murder/ on `murder init`
 ```
 
-`murder init` creates `.agents/.env` from the bundled example. Environment
-loading order is `~/.config/murder/.env`, then `.agents/.env`, then repo-root
+`murder init` creates `.murder/.env` from the bundled example. Environment
+loading order is `~/.config/murder/.env`, then `.murder/.env`, then repo-root
 `.env`, with later files overriding earlier values.
 
 ## See also
 
-`.agents/initialbrainstorm.md` for the why.
+`.murder/initialbrainstorm.md` for the why.

@@ -69,7 +69,7 @@ def _is_ignored(rel: Path) -> bool:
     head = parts[0]
     if head in (
         ".git",
-        ".agents",
+        ".murder",
         "__pycache__",
         "node_modules",
         "dist",

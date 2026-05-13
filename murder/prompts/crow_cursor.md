@@ -43,4 +43,4 @@ communicate with the orchestrator.
   you need one, `>>> ASK:` first.
 - Do not modify other tickets or other parts of the codebase.
 - Run the project's tests before signaling `>>> DONE`.
-- Do not edit `.agents/`. Ever.
+- Do not edit `.murder/`. Ever.

@@ -9,13 +9,13 @@ from murder.storage import paths
 
 def test_ticket_md_is_flat() -> None:
     p = paths.ticket_md(Path("/repo"), "t007")
-    assert p == Path("/repo/.agents/tickets/t007.md")
+    assert p == Path("/repo/.murder/tickets/t007.md")
     assert "wave" not in str(p)
 
 
 def test_db_path_under_agents() -> None:
-    assert paths.db_path(Path("/x")) == Path("/x/.agents/murder.db")
+    assert paths.db_path(Path("/x")) == Path("/x/.murder/murder.db")
 
 
 def test_lock_path_under_agents() -> None:
-    assert paths.lock_path(Path("/x")) == Path("/x/.agents/.lock")
+    assert paths.lock_path(Path("/x")) == Path("/x/.murder/.lock")
