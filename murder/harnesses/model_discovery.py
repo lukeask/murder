@@ -12,6 +12,10 @@ from murder.harnesses.models import HarnessStartSpec
 from murder.harnesses.results import SimpleResult, fail_result
 
 
+def _probe_session_name(prefix: str, kind: str) -> str:
+    return f"murder_{prefix}_{kind}_{os.getpid()}_{time.monotonic_ns() % 1_000_000}"
+
+
 async def discover_harness_models(
     kind: str,
     repo_root: Path,
@@ -28,7 +32,8 @@ async def discover_harness_models(
     adapter = get_harness(kind, startup_model=startup_model)
     if adapter.model_list_command is None:
         return fail_result(f"{kind} has no machine-parsable model list")
-    session = f"murder_models_{kind}_{os.getpid()}_{time.monotonic_ns() % 1_000_000}"
+    session = _probe_session_name("models", kind)
+    result: SimpleResult[list[tuple[str, str]]]
     try:
         harness_session = adapter.attach(session, repo_root)
         started = await harness_session.start(
@@ -39,12 +44,69 @@ async def discover_harness_models(
             )
         )
         if not started.ok:
-            return fail_result(started.message or f"{kind} did not start")
-        return await harness_session.collect_available_models()
+            result = fail_result(started.message or f"{kind} did not start")
+        else:
+            result = await harness_session.collect_available_models()
+            if not result.ok:
+                result = fail_result(
+                    f"{kind} /models discovery parse failed: "
+                    f"{result.message or 'no model choices parsed'}"
+                )
     except Exception as exc:
-        return fail_result(f"{kind} /models discovery failed: {exc}")
-    finally:
-        try:
-            await tmux.kill_session(session)
-        except Exception:
-            pass
+        result = fail_result(f"{kind} /models discovery probe failed: {exc}")
+
+    try:
+        await tmux.kill_session(session)
+    except Exception as exc:
+        if result.ok:
+            return fail_result(
+                f"{kind} /models discovery cleanup failed for {session}: {exc}"
+            )
+        return fail_result(
+            f"{result.message}; cleanup also failed for {session}: {exc}"
+        )
+    return result
+
+
+async def probe_invalid_harness_model(
+    kind: str,
+    repo_root: Path,
+    *,
+    model: str = "thisisnotarealmodel",
+    ready_timeout_s: float = 45.0,
+) -> SimpleResult[None]:
+    """Start a temporary harness and verify `/model <model>` is rejected."""
+    adapter = get_harness(kind)
+    session = _probe_session_name("invalid_model", kind)
+    result: SimpleResult[None]
+    try:
+        harness_session = adapter.attach(session, repo_root)
+        started = await harness_session.start(
+            HarnessStartSpec(
+                cwd=repo_root,
+                ready_timeout_s=ready_timeout_s,
+            )
+        )
+        if not started.ok:
+            result = fail_result(started.message or f"{kind} did not start")
+        else:
+            result = await harness_session.probe_invalid_model(model)
+            if not result.ok:
+                result = fail_result(
+                    f"{kind} invalid model probe rejection detection failed: "
+                    f"{result.message or 'no rejection detected'}"
+                )
+    except Exception as exc:
+        result = fail_result(f"{kind} invalid model probe failed: {exc}")
+
+    try:
+        await tmux.kill_session(session)
+    except Exception as exc:
+        if result.ok:
+            return fail_result(
+                f"{kind} invalid model probe cleanup failed for {session}: {exc}"
+            )
+        return fail_result(
+            f"{result.message}; cleanup also failed for {session}: {exc}"
+        )
+    return result

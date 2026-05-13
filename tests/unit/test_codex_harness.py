@@ -177,6 +177,29 @@ async def test_codex_request_usage_status_sends_status_command(monkeypatch) -> N
     assert sleeps == [0.5, 0.8, 1.2]
 
 
+async def test_codex_request_model_list_waits_for_slash_picker(monkeypatch) -> None:
+    calls: list[tuple[str, str, bool, bool]] = []
+    sleeps: list[float] = []
+
+    async def fake_send_keys(
+        session: str, text: str, *, literal: bool = True, enter: bool = True
+    ) -> None:
+        calls.append((session, text, literal, enter))
+
+    async def fake_sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+
+    monkeypatch.setattr("murder.tmux.send_keys", fake_send_keys)
+    monkeypatch.setattr("murder.harnesses.codex.asyncio.sleep", fake_sleep)
+    result = await CodexAdapter().request_model_list("sess")
+    assert result is True
+    assert calls == [
+        ("sess", "/model", True, False),
+        ("sess", "", True, True),
+    ]
+    assert sleeps == [1.5, 0.5, 3.0]
+
+
 async def test_codex_collect_usage_status_sends_and_parses_panel(monkeypatch) -> None:
     calls: list[tuple[str, str, bool, bool]] = []
     sleeps: list[float] = []

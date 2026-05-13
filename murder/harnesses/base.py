@@ -14,7 +14,12 @@ from murder.harnesses.models import (
     HarnessStartSpec,
     HarnessUsageStatus,
 )
-from murder.harnesses.parsing import parse_prompt_marker_transcript, strip_ui_chrome
+from murder.harnesses.parsing import (
+    parse_harness_model_list,
+    parse_prompt_marker_transcript,
+    strip_ansi,
+    strip_ui_chrome,
+)
 from murder.harnesses.results import SimpleResult, fail_result, ok_result
 
 ASK_RE = re.compile(r">>>\s*ASK:\s*(?P<body>.+?)(?=\n>>>|\Z)", re.DOTALL)
@@ -24,6 +29,16 @@ DONE_RE = re.compile(r">>>\s*DONE\b")
 MAX_NOTE_LINES = 20
 
 UsageCollectionMode = Literal["none", "tmux_slash", "http"]
+
+_MODEL_REJECTION_WORD_RE = re.compile(
+    r"\b("
+    r"invalid|unknown|unsupported|unrecognized|unrecognised|"
+    r"unavailable|not\s+available|not\s+found|no\s+such|"
+    r"does\s+not\s+exist|failed\s+to\s+set|could\s+not\s+set"
+    r")\b",
+    re.IGNORECASE,
+)
+_MODEL_WORD_RE = re.compile(r"\bmodels?\b", re.IGNORECASE)
 
 
 class HarnessSession:
@@ -43,6 +58,17 @@ class HarnessSession:
             self.adapter.startup_cmd(start_spec.cwd),
         )
 
+        ready = await self._wait_startup_ready(start_spec)
+        if not ready.ok:
+            return ready
+        configured = await self._configure_started_session(start_spec)
+        if not configured.ok:
+            return configured
+        return ok_result()
+
+    async def _wait_startup_ready(
+        self, start_spec: HarnessStartSpec
+    ) -> SimpleResult[None]:
         attempts = max(1, int(start_spec.ready_timeout_s / start_spec.poll_interval_s))
         for _ in range(attempts):
             try:
@@ -54,7 +80,11 @@ class HarnessSession:
             await asyncio.sleep(start_spec.poll_interval_s)
         else:
             return fail_result(f"Harness not ready in time: session={self.session}")
+        return ok_result()
 
+    async def _configure_started_session(
+        self, start_spec: HarnessStartSpec
+    ) -> SimpleResult[None]:
         desired_model = start_spec.startup_model or self.adapter.startup_model
         if desired_model:
             model_result = await self.set_model(desired_model)
@@ -129,6 +159,12 @@ class HarnessSession:
     async def collect_usage_status(self) -> SimpleResult[HarnessUsageStatus]:
         return await self.adapter.collect_usage_status(self.session)
 
+    async def collect_available_models(self) -> SimpleResult[list[tuple[str, str]]]:
+        return await self.adapter.collect_available_models(self.session)
+
+    async def probe_invalid_model(self, model: str) -> SimpleResult[None]:
+        return await self.adapter.probe_invalid_model(self.session, model)
+
     async def interrupt(self) -> SimpleResult[None]:
         await self.adapter.interrupt(self.session)
         return ok_result()
@@ -138,6 +174,10 @@ class HarnessAdapter(ABC):
     kind: ClassVar[str]
     crow_system_prompt: ClassVar[str]
     available_startup_models: ClassVar[list[tuple[str, str]]] = []
+    model_list_command: ClassVar[str | None] = "/models"
+    model_list_capture_delay_s: ClassVar[float] = 0.8
+    model_selection_command_template: ClassVar[str | None] = "/model {model}"
+    model_selection_capture_delay_s: ClassVar[float] = 0.8
     usage_collection_mode: ClassVar[UsageCollectionMode] = "none"
 
     # Inputs for the default transcript parser (see parse_transcript). Leave the
@@ -178,6 +218,42 @@ class HarnessAdapter(ABC):
         del session, model
         return False
 
+    async def request_model_selection(self, session: str, model: str) -> bool:
+        if self.model_selection_command_template is None:
+            return False
+        await tmux.send_keys(
+            session,
+            self.model_selection_command_template.format(model=model),
+            literal=True,
+            enter=True,
+        )
+        await asyncio.sleep(self.model_selection_capture_delay_s)
+        return True
+
+    def detects_model_rejection(self, pane_text: str, model: str) -> bool:
+        clean = strip_ansi(pane_text)
+        model_at = clean.lower().find(model.lower())
+        if model_at >= 0:
+            window = clean[max(0, model_at - 240) : model_at + len(model) + 240]
+            return bool(_MODEL_REJECTION_WORD_RE.search(window))
+        tail = clean[-1200:]
+        return bool(
+            _MODEL_REJECTION_WORD_RE.search(tail) and _MODEL_WORD_RE.search(tail)
+        )
+
+    async def probe_invalid_model(
+        self, session: str, model: str
+    ) -> SimpleResult[None]:
+        requested = await self.request_model_selection(session, model)
+        if not requested:
+            return fail_result(f"{self.kind} does not support runtime model selection")
+        pane = await tmux.capture_pane(session, lines=200)
+        if self.detects_model_rejection(pane, model):
+            return ok_result()
+        return fail_result(
+            f"{self.kind} did not reject invalid model selection for {model!r}"
+        )
+
     async def request_usage_status(self, session: str) -> bool:
         del session
         return False
@@ -189,6 +265,25 @@ class HarnessAdapter(ABC):
         return fail_result(
             f"{self.kind} does not support structured usage/status reporting"
         )
+
+    async def request_model_list(self, session: str) -> bool:
+        if self.model_list_command is None:
+            return False
+        await tmux.send_keys(session, self.model_list_command, literal=True, enter=True)
+        await asyncio.sleep(self.model_list_capture_delay_s)
+        return True
+
+    async def collect_available_models(
+        self, session: str
+    ) -> SimpleResult[list[tuple[str, str]]]:
+        requested = await self.request_model_list(session)
+        if not requested:
+            return fail_result(f"{self.kind} does not support /models discovery")
+        pane = await tmux.capture_pane(session, lines=200)
+        models = parse_harness_model_list(pane)
+        if not models:
+            return fail_result(f"{self.kind} /models did not expose any model choices")
+        return ok_result(models)
 
     @abstractmethod
     def extract_last_message(self, pane_text: str) -> str | None: ...

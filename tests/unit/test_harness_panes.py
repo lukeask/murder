@@ -34,6 +34,40 @@ def test_codex_model_picker_lists_real_models() -> None:
     assert ids == ["gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex", "gpt-5.2"]
 
 
+def test_codex_model_picker_skips_tip_urls_but_keeps_descriptions() -> None:
+    pane = """
+  Tip: Join the OpenAI community Discord: https://discord.gg/openai
+
+  Select Model and Effort
+
+› 1. gpt-5.5 (current)  Frontier model for complex coding, research, and real-world work.
+  2. gpt-5.4            Strong model for everyday coding.
+"""
+    assert parse_harness_model_list(pane) == [
+        ("gpt-5.5", "Gpt 5.5"),
+        ("gpt-5.4", "gpt-5.4 Strong model for everyday coding."),
+    ]
+
+
+def test_codex_idle_footer_is_not_a_model_list() -> None:
+    pane = """
+╭──────────────────────────────────────────────╮
+│ >_ OpenAI Codex (v0.130.0)                   │
+│                                              │
+│ model:     gpt-5.5 high   /model to change   │
+│ directory: ~/Agents/projects/graphvisexplore │
+╰──────────────────────────────────────────────╯
+
+  Tip: NEW: Prevent sleep while running is now available in /experimental.
+
+
+› Implement {feature}
+
+  gpt-5.5 medium · ~/Agents/projects/graphvisexplore
+"""
+    assert parse_harness_model_list(pane) == []
+
+
 def test_pi_model_picker_lists_provider_slugs_and_local_weights() -> None:
     ids = [model_id for model_id, _ in parse_harness_model_list(_pane("pi_model_picker"))]
     assert ids == [

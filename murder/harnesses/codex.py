@@ -41,6 +41,9 @@ _LOGIN_RE = re.compile(r"\b(login required|not logged in|codex login)\b", re.IGN
 _STATUS_COMMAND_POPUP_DELAY_S = 0.5
 _STATUS_FIRST_ENTER_DELAY_S = 0.8
 _STATUS_CAPTURE_DELAY_S = 1.2
+_MODEL_STARTUP_SETTLE_DELAY_S = 1.5
+_MODEL_COMMAND_POPUP_DELAY_S = 0.5
+_MODEL_CAPTURE_DELAY_S = 3.0
 
 
 def _tail(pane_text: str) -> str:
@@ -121,6 +124,19 @@ class CodexAdapter(HarnessAdapter):
     async def set_model(self, session: str, model: str) -> bool:
         del session
         return model == self.startup_model
+
+    async def request_model_list(self, session: str) -> bool:
+        # TODO: Replace this fixed delay with a pane-state wait for Codex to
+        # fully finish startup; otherwise early slash commands can be rejected
+        # as "disabled while a task is in progress."
+        await asyncio.sleep(_MODEL_STARTUP_SETTLE_DELAY_S)
+        await tmux.send_keys(session, "/model", literal=True, enter=False)
+        # TODO: Replace this fixed delay with a pane-state wait for Codex's
+        # slash-command picker, so model discovery is not timing-dependent.
+        await asyncio.sleep(_MODEL_COMMAND_POPUP_DELAY_S)
+        await tmux.send_keys(session, "", literal=True, enter=True)
+        await asyncio.sleep(_MODEL_CAPTURE_DELAY_S)
+        return True
 
     async def request_usage_status(self, session: str) -> bool:
         await tmux.send_keys(session, "/status", literal=True, enter=False)
