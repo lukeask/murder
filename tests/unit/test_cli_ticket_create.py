@@ -9,7 +9,7 @@ from murder.cli import app
 
 
 def _ticket_row(repo: Path, ticket_id: str) -> dict[str, object]:
-    conn = dbmod.connect(repo / ".agents" / "murder.db")
+    conn = dbmod.connect(repo / ".murder" / "murder.db")
     try:
         row = dbmod.get_ticket(conn, ticket_id)
     finally:
@@ -67,7 +67,7 @@ def test_ticket_create_from_cli_options(monkeypatch, tmp_path: Path) -> None:
         "Write markdown",
     ]
     assert "Wire up the dogfood path." in (
-        tmp_path / ".agents" / "tickets" / "t001.md"
+        tmp_path / ".murder" / "tickets" / "t001.md"
     ).read_text(encoding="utf-8")
 
 
@@ -102,7 +102,7 @@ def test_ticket_create_imports_markdown_sections(monkeypatch, tmp_path: Path) ->
     assert result.exit_code == 0, result.output
     row = _ticket_row(tmp_path, "t002")
     assert row["title"] == "Imported ticket"
-    body = (tmp_path / ".agents" / "tickets" / "t002.md").read_text(encoding="utf-8")
+    body = (tmp_path / ".murder" / "tickets" / "t002.md").read_text(encoding="utf-8")
     assert "Imported plan." in body
     assert "Imported notes." in body
     assert "Imported sentinel notes." in body
@@ -116,7 +116,7 @@ def test_ticket_create_requires_initialized_db(monkeypatch, tmp_path: Path) -> N
 
     assert result.exit_code == 1
     assert "No murder.db" in result.output
-    assert not (tmp_path / ".agents" / "tickets" / "t003.md").exists()
+    assert not (tmp_path / ".murder" / "tickets" / "t003.md").exists()
 
 
 def test_lint_allows_future_write_set_files_before_done(
@@ -175,7 +175,7 @@ def test_lint_imports_orphan_plan_markdown(monkeypatch, tmp_path: Path) -> None:
     runner = CliRunner()
 
     assert runner.invoke(app, ["init"]).exit_code == 0
-    plan_path = tmp_path / ".agents" / "plans" / "hello-web.md"
+    plan_path = tmp_path / ".murder" / "plans" / "hello-web.md"
     plan_path.write_text(
         """---
 name: hello-web
@@ -190,7 +190,7 @@ created_at: '2026-05-04T20:00:00'
     lint = runner.invoke(app, ["lint"])
     assert lint.exit_code == 0, lint.output
 
-    conn = dbmod.connect(tmp_path / ".agents" / "murder.db")
+    conn = dbmod.connect(tmp_path / ".murder" / "murder.db")
     try:
         row = dbmod.get_plan_row(conn, "hello-web")
     finally:

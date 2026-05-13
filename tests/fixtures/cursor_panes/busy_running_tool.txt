@@ -12,27 +12,27 @@
 
     Globbed, read 1 glob, 5 files
     … 3 earlier items hidden
-    Read .agents/tickets/t001.md
-    Read .agents/roles.yaml
-    Read .agents/env.example
+    Read .murder/tickets/t001.md
+    Read .murder/roles.yaml
+    Read .murder/env.example
 
   Here’s what’s in /tmp/murder-smoke:
 
   Top level
 
   • README.md — Only the literal text README (placeholder, not real docs).
-  • .gitignore — Ignores Murder/agent artifacts (.agents/murder.db*, .lock,
+  • .gitignore — Ignores Murder/agent artifacts (.murder/murder.db*, .lock,
     runs/) and .env; comments say murder init appends rather than
     overwriting.
-  • .agents/ — Agent-orchestration scaffolding (matches a “Murder”-style
+  • .murder/ — Agent-orchestration scaffolding (matches a “Murder”-style
     setup).
 
-  .agents/
+  .murder/
 
   • roles.yaml — Role config: project name placeholder (TODO_SET_ME),
     collaborator (Claude Code harness), sentinel and augur (OpenRouter API
     models), default_monkey (Cursor harness), tui and runtime (tmux/session
-    naming, run dir .agents/runs).
+    naming, run dir .murder/runs).
   • env.example — Points API keys at ~/.config/murder/.env or project .env;
     OPENROUTER_API_KEY required for the API roles.
   • tickets/t001.md — Ticket stub: plan says “do a thing”; empty
@@ -65,7 +65,7 @@
   ├────────────┼──────────────────────────────────┤
   │ .          │ Directory itself                 │
   │ ..         │ Parent (/tmp)                    │
-  │ .agents/   │ Hidden dir — agent/ticket config │
+  │ .murder/   │ Hidden dir — agent/ticket config │
   │ .git/      │ Git metadata                     │
   │ .gitignore │ 317 bytes                        │
   │ README.md  │ 7 bytes                          │

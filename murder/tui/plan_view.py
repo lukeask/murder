@@ -30,7 +30,7 @@ class PlanList(DataTable):
     def __init__(self) -> None:
         super().__init__(zebra_stripes=True, cursor_type="row")
         self._plans: list[str] = []
-        self.border_title = ".agents/plans"
+        self.border_title = ".murder/plans"
         # TODO(tui-planning): fold dynamic ticket ordering into this sidebar
         # once collaborator Planner/Notetaker personas can prioritize tickets.
 
@@ -76,7 +76,7 @@ class PlanList(DataTable):
 
 
 class NotesList(DataTable):
-    """DB-backed list of dated notes documents (`.agents/notes/<date>.md`).
+    """DB-backed list of dated notes documents (`.murder/notes/<date>.md`).
 
     The notetaker owns the note bodies; this is just a sidebar "filetree" so
     you can see which days have notes and how big they are. Highlighting a row
@@ -96,7 +96,7 @@ class NotesList(DataTable):
     def __init__(self) -> None:
         super().__init__(zebra_stripes=True, cursor_type="row")
         self._names: list[str] = []
-        self.border_title = ".agents/notes"
+        self.border_title = ".murder/notes"
 
     def on_mount(self) -> None:
         self.add_columns("date", "chars", "updated")
@@ -146,13 +146,13 @@ class PlanDocument(Markdown):
     def __init__(self) -> None:
         super().__init__(
             "No plan selected.\n\nUse the collaborator chat to shape a plan, "
-            "or add markdown under `.agents/plans`."
+            "or add markdown under `.murder/plans`."
         )
         self.border_title = "(no plan selected)"
 
 
 class NotesDocument(Markdown):
-    """Live view of the notetaker's notes document (`.agents/notes/<date>.md`)."""
+    """Live view of the notetaker's notes document (`.murder/notes/<date>.md`)."""
 
     DEFAULT_CSS = """
     NotesDocument {

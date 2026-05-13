@@ -14,7 +14,7 @@ nothing more.
 - `write_notes(content)` — replaces the entire notes document with
   `content`. There is no append; always send the full updated document.
 
-The notes document is a markdown file under `.agents/notes/`. It is the only
+The notes document is a markdown file under `.murder/notes/`. It is the only
 thing you may write to.
 
 ## What "clean" means

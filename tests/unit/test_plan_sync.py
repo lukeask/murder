@@ -12,7 +12,7 @@ from murder.plans.sync import PlanSync
 
 @pytest.mark.asyncio
 async def test_sync_imports_orphan_plan_file(tmp_path, memdb: sqlite3.Connection) -> None:
-    path = tmp_path / ".agents" / "plans" / "alpha.md"
+    path = tmp_path / ".murder" / "plans" / "alpha.md"
     path.parent.mkdir(parents=True)
     path.write_text(
         """---
@@ -38,7 +38,7 @@ created_at: '2026-05-02T12:00:00'
 async def test_poll_imports_new_plan_file_after_debounce(
     tmp_path, memdb: sqlite3.Connection
 ) -> None:
-    path = tmp_path / ".agents" / "plans" / "delta.md"
+    path = tmp_path / ".murder" / "plans" / "delta.md"
     path.parent.mkdir(parents=True)
     path.write_text(
         """---
@@ -68,19 +68,19 @@ async def test_sync_materializes_missing_db_plan(tmp_path, memdb: sqlite3.Connec
         memdb,
         plan,
         content_hash="dbhash",
-        materialized_path=".agents/plans/beta.md",
+        materialized_path=".murder/plans/beta.md",
         create_revision=False,
     )
 
     sync = PlanSync(tmp_path, memdb)
     await sync.reconcile_all()
 
-    assert (tmp_path / ".agents" / "plans" / "beta.md").exists()
+    assert (tmp_path / ".murder" / "plans" / "beta.md").exists()
 
 
 @pytest.mark.asyncio
 async def test_sync_materializes_db_side_update(tmp_path, memdb: sqlite3.Connection) -> None:
-    path = tmp_path / ".agents" / "plans" / "gamma.md"
+    path = tmp_path / ".murder" / "plans" / "gamma.md"
     path.parent.mkdir(parents=True)
     path.write_text(
         """---
@@ -117,7 +117,7 @@ Old
 async def test_sync_marks_parse_error_without_overwriting_db(
     tmp_path, memdb: sqlite3.Connection
 ) -> None:
-    path = tmp_path / ".agents" / "plans" / "bad.md"
+    path = tmp_path / ".murder" / "plans" / "bad.md"
     path.parent.mkdir(parents=True)
     path.write_text(
         """---
@@ -144,7 +144,7 @@ Good
 async def test_poll_once_handles_file_deleted_between_scan_and_stat(
     tmp_path, memdb: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    path = tmp_path / ".agents" / "plans" / "ephemeral.md"
+    path = tmp_path / ".murder" / "plans" / "ephemeral.md"
     path.parent.mkdir(parents=True)
     path.write_text(
         """---

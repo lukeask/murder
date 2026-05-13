@@ -1,7 +1,7 @@
 """Plan pydantic model.
 
 Plans store prose; frontmatter carries the small amount of structured
-state that the runtime syncs into SQLite. `.agents/plans/<name>.md` is the
+state that the runtime syncs into SQLite. `.murder/plans/<name>.md` is the
 editable working projection, not a separate source of truth.
 """
 

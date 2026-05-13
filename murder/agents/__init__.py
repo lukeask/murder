@@ -1,6 +1,6 @@
 """The cast: Collaborator, Notetaker, Sentinel, CrowHandler, Crow.
 
-See `.agents/1777410436NOTES.md` for role responsibilities and the
+See `.murder/1777410436NOTES.md` for role responsibilities and the
 hierarchy: User → Collaborator → Sentinel → CrowHandler → Crow. The
 Notetaker is an alternate planning-mode partner (see `agents/notetaker.py`).
 """

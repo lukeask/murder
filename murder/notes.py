@@ -1,6 +1,6 @@
 """DB-backed planning notes — the "notetaker" scratchpad docs.
 
-Notes are dated markdown documents (`.agents/notes/<YYYY-MM-DD>.md`). The
+Notes are dated markdown documents (`.murder/notes/<YYYY-MM-DD>.md`). The
 SQLite `notes` table is authoritative; every write also materializes the
 markdown file so the doc stays browsable/editable on disk. Importing on-disk
 edits back into the DB is intentionally left for a future bidirectional-sync

@@ -30,7 +30,7 @@ class FileSnapshot:
 
 
 class PlanSync:
-    """Poll `.agents/plans/*.md` and reconcile stable edits into SQLite."""
+    """Poll `.murder/plans/*.md` and reconcile stable edits into SQLite."""
 
     def __init__(
         self,

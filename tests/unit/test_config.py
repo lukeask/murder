@@ -61,7 +61,7 @@ def test_default_tui_refresh_is_1000ms() -> None:
 
 
 def test_load_with_no_project_yaml_uses_bundled_defaults(tmp_path) -> None:
-    # TODO(M0): create tmp_path/.agents/; do not write roles.yaml; Config.load(tmp_path).
+    # TODO(M0): create tmp_path/.murder/; do not write roles.yaml; Config.load(tmp_path).
     pytest.skip("M0 stub")
 
 

@@ -59,7 +59,7 @@ def _agent(memdb, tmp_path: Path, client) -> NotetakerAgent:
 def test_write_note_updates_db_and_materializes_file(memdb, tmp_path: Path) -> None:
     notes.write_note(memdb, tmp_path, "2026-05-11", "# Goals\n- ship it")
     assert notes.read_note(memdb, "2026-05-11") == "# Goals\n- ship it"
-    f = tmp_path / ".agents" / "notes" / "2026-05-11.md"
+    f = tmp_path / ".murder" / "notes" / "2026-05-11.md"
     assert f.read_text(encoding="utf-8") == "# Goals\n- ship it"
 
 

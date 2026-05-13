@@ -8,9 +8,16 @@ from __future__ import annotations
 
 from pathlib import Path
 
+MURDER_DIR_NAME = ".murder"
+
+
+def murder_dir(repo_root: Path) -> Path:
+    return repo_root / MURDER_DIR_NAME
+
 
 def agents_dir(repo_root: Path) -> Path:
-    return repo_root / ".agents"
+    """Backward-compatible name for the project-local murder state directory."""
+    return murder_dir(repo_root)
 
 
 def db_path(repo_root: Path) -> Path:

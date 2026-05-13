@@ -1,6 +1,6 @@
 """SQLite schema + access layer (D2).
 
-`.agents/murder.db` is the source of truth for ticket metadata, status,
+`.murder/murder.db` is the source of truth for ticket metadata, status,
 deps, write_sets, checklist items, agent state, events, escalations, and
 runs. Markdown stays for prose only.
 
@@ -337,7 +337,7 @@ def _migrate_agents_failed_status(conn: sqlite3.Connection) -> None:
 
 
 def db_path_for(repo_root: Path) -> Path:
-    return repo_root / ".agents" / "murder.db"
+    return repo_root / ".murder" / "murder.db"
 
 
 # --- Iso timestamp helper ---------------------------------------------------

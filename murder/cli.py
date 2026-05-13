@@ -266,7 +266,7 @@ def cmd_ticket_create(
         typer.Option("--overwrite-markdown", help="Replace an existing ticket markdown file."),
     ] = False,
 ) -> None:
-    """Create/import a ticket row and materialize `.agents/tickets/<id>.md`."""
+    """Create/import a ticket row and materialize `.murder/tickets/<id>.md`."""
     repo = _repo_root()
     md_path = ticket_md(repo, ticket_id)
     if md_path.exists() and not overwrite_markdown:
@@ -319,9 +319,9 @@ def cmd_ticket_create(
 
 @app.command("init")
 def cmd_init(
-    force: bool = typer.Option(False, "--force", help="Overwrite existing .agents/ tree."),
+    force: bool = typer.Option(False, "--force", help="Overwrite existing .murder/ tree."),
 ) -> None:
-    """Scaffold .agents/ and create murder.db in the current repo."""
+    """Scaffold .murder/ and create murder.db in the current repo."""
     repo = _repo_root()
     ad = agents_dir(repo)
     if ad.exists() and not force:
@@ -385,7 +385,7 @@ def cmd_up() -> None:
 
 @app.command("down")
 def cmd_down() -> None:
-    """Signal a running murder process via `.agents/.lock` pid."""
+    """Signal a running murder process via `.murder/.lock` pid."""
     repo = _repo_root()
     pid = read_lock_pid(lock_path(repo))
     if pid is None:
@@ -442,7 +442,7 @@ def cmd_doctor() -> None:
     if not os.environ.get("OPENROUTER_API_KEY"):
         issues.append("OPENROUTER_API_KEY unset (CrowHandler/Sentinel need it)")
     if not agents_dir(repo).exists():
-        issues.append(".agents/ missing — run murder init")
+        issues.append(".murder/ missing — run murder init")
     elif not db_path(repo).exists():
         issues.append("murder.db missing — run murder init")
     lock = lock_path(repo)
