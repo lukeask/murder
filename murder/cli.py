@@ -9,7 +9,6 @@ import shutil
 import signal
 import sqlite3
 import subprocess
-import sys
 from datetime import datetime
 from importlib import resources
 from pathlib import Path
@@ -91,6 +90,79 @@ def _open_existing_db(repo: Path) -> sqlite3.Connection:
     conn = dbmod.connect(path)
     dbmod.init_schema(conn)
     return conn
+
+
+def _append_gitignore_entries(repo: Path, entries: str) -> None:
+    root_gitignore = repo / ".gitignore"
+    if root_gitignore.exists():
+        existing = root_gitignore.read_text(encoding="utf-8")
+        to_add = [ln for ln in entries.splitlines() if ln and ln not in existing]
+        if to_add:
+            root_gitignore.write_text(
+                existing.rstrip() + "\n\n# murder\n" + "\n".join(to_add) + "\n",
+                encoding="utf-8",
+            )
+        return
+    root_gitignore.write_text(entries.rstrip() + "\n", encoding="utf-8")
+
+
+def _scaffold_project(repo: Path, *, force: bool = False) -> Path:
+    ad = agents_dir(repo)
+    if ad.exists() and not force:
+        typer.secho(
+            f"Refusing: {ad} already exists. Use --force to delete and re-scaffold.",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(1)
+    if ad.exists() and force:
+        shutil.rmtree(ad)
+    ad.mkdir(parents=True, exist_ok=True)
+    for sub in ("tickets", "plans", "shelved", "escalations", "runs"):
+        (ad / sub).mkdir(parents=True, exist_ok=True)
+
+    tpl_root = resources.files("murder.templates")
+    project_name = repo.name
+
+    roles_text = tpl_root.joinpath("roles.yaml").read_text(encoding="utf-8")
+    quoted_project_name = project_name.replace("'", "''")
+    roles_text = roles_text.replace(
+        "name: TODO_SET_ME", f"name: '{quoted_project_name}'", 1
+    )
+    (ad / "roles.yaml").write_text(roles_text, encoding="utf-8")
+    (ad / "env.example").write_text(
+        tpl_root.joinpath("env.example").read_text(encoding="utf-8"), encoding="utf-8"
+    )
+    project_env_path(repo).write_text(
+        tpl_root.joinpath("env.example").read_text(encoding="utf-8"), encoding="utf-8"
+    )
+    _append_gitignore_entries(repo, tpl_root.joinpath("gitignore").read_text(encoding="utf-8"))
+
+    conn = dbmod.connect(db_path(repo))
+    dbmod.init_schema(conn)
+    conn.close()
+    return ad
+
+
+def _ensure_initialized_for_bare_command(repo: Path) -> None:
+    if db_path(repo).exists():
+        return
+    if agents_dir(repo).exists():
+        typer.secho(
+            "Found .murder/ but no murder.db. Run `murder init --force` to re-scaffold.",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(1)
+    should_init = typer.confirm(
+        "This directory has not been initialized for murder. Run `murder init` now?",
+        default=True,
+    )
+    if not should_init:
+        typer.secho("Aborted. Run `murder init` when you're ready.", err=True)
+        raise typer.Exit(1)
+    ad = _scaffold_project(repo)
+    typer.secho(f"Initialized {ad} and {db_path(repo)}", fg=typer.colors.GREEN)
 
 
 def _pid_is_alive(pid: int) -> bool:
@@ -198,6 +270,7 @@ def _root(
     if ctx.invoked_subcommand is not None:
         return
 
+    _ensure_initialized_for_bare_command(_repo_root())
     _run_async_entry(_launch_tui())
     raise typer.Exit(0)
 
@@ -323,58 +396,8 @@ def cmd_init(
 ) -> None:
     """Scaffold .murder/ and create murder.db in the current repo."""
     repo = _repo_root()
-    ad = agents_dir(repo)
-    if ad.exists() and not force:
-        typer.secho(
-            f"Refusing: {ad} already exists. Use --force to delete and re-scaffold.",
-            fg=typer.colors.RED,
-            err=True,
-        )
-        raise typer.Exit(1)
-    if ad.exists() and force:
-        shutil.rmtree(ad)
-    ad.mkdir(parents=True, exist_ok=True)
-    for sub in ("tickets", "plans", "shelved", "escalations", "runs"):
-        (ad / sub).mkdir(parents=True, exist_ok=True)
-    tpl_root = resources.files("murder.templates")
-    project_name = repo.name
-    if sys.stdin.isatty():
-        project_name = typer.prompt("Project name", default=repo.name).strip() or repo.name
-    roles_text = tpl_root.joinpath("roles.yaml").read_text(encoding="utf-8")
-    quoted_project_name = project_name.replace("'", "''")
-    roles_text = roles_text.replace(
-        "name: TODO_SET_ME", f"name: '{quoted_project_name}'", 1
-    )
-    (ad / "roles.yaml").write_text(
-        roles_text, encoding="utf-8"
-    )
-    (ad / "env.example").write_text(
-        tpl_root.joinpath("env.example").read_text(encoding="utf-8"), encoding="utf-8"
-    )
-    project_env_path(repo).write_text(
-        tpl_root.joinpath("env.example").read_text(encoding="utf-8"), encoding="utf-8"
-    )
-    gi = tpl_root.joinpath("gitignore").read_text(encoding="utf-8")
-    root_gitignore = repo / ".gitignore"
-    if root_gitignore.exists():
-        existing = root_gitignore.read_text(encoding="utf-8")
-        to_add = [ln for ln in gi.splitlines() if ln and ln not in existing]
-        if to_add:
-            root_gitignore.write_text(
-                existing.rstrip() + "\n\n# murder\n" + "\n".join(to_add) + "\n",
-                encoding="utf-8",
-            )
-    else:
-        root_gitignore.write_text(gi + "\n", encoding="utf-8")
-    conn = dbmod.connect(db_path(repo))
-    dbmod.init_schema(conn)
-    conn.close()
+    ad = _scaffold_project(repo, force=force)
     typer.secho(f"Initialized {ad} and {db_path(repo)}", fg=typer.colors.GREEN)
-    if project_name == "TODO_SET_ME":
-        typer.secho(
-            "Project name is unset; run `murder config` to replace TODO_SET_ME.",
-            fg=typer.colors.YELLOW,
-        )
 
 
 @app.command("up")
