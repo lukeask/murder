@@ -69,6 +69,8 @@ def _clean_model_line(line: str) -> str:
 
 
 _VERSION_BANNER_RE = re.compile(r"v\d+(?:\.\d+){1,}(?:-[\w.]+)?", re.IGNORECASE)
+_MODEL_STATUS_PATH_RE = re.compile(r"\s·\s(?:~/|/|\./|\.\./)")
+_MODEL_PROSE_URL_RE = re.compile(r"(?:https?://|www\.|discord\.gg/)", re.IGNORECASE)
 _MODEL_FILE_SUFFIXES = (".gguf", ".bin", ".safetensors")
 _MAX_MODEL_LABEL_LEN = 72
 _MIN_RULE_LEN = 3
@@ -150,6 +152,10 @@ def parse_harness_model_list(pane_text: str) -> list[tuple[str, str]]:
         line = _clean_model_line(raw_line)
         if not line:
             continue
+        if _MODEL_STATUS_PATH_RE.search(line):
+            continue  # status/footer line with cwd, not a model choice
+        if _MODEL_PROSE_URL_RE.search(line):
+            continue  # prose/tip line carrying a URL, not a model choice
         if line.startswith(("~/", "/", "./", "../")):
             continue  # a filesystem path (cwd banner), not a model
         lowered = line.lower()

@@ -18,6 +18,7 @@ from murder import notes as notes_mod
 from murder import tmux
 from murder.agents.collaborator import CollaboratorAgent
 from murder.agents.notetaker import NotetakerAgent
+from murder.config import Config
 from murder.harnesses.usage_sampling import sample_harness_usages_for_config
 from murder.tui.agent_grid import AgentGrid
 from murder.tui.chat_input import ChatInput
@@ -532,6 +533,7 @@ class MurderApp(App[None]):
         self._notes_doc.display = note_mode
         self._notetaker_chat.display = note_mode
         self._schedule.display = self._view == "schedule"
+        self._chat.display = self._view != "schedule"
         self._mirror.display = collab_raw_on or self._view == "crows"
         self._mirror.styles.width = "1fr"
         if collab_chat_on:
@@ -756,7 +758,17 @@ class MurderApp(App[None]):
     def _on_settings_closed(self, saved: bool) -> None:
         if not saved:
             return
+        try:
+            self.runtime.config = Config.load(self.runtime.repo_root)
+        except Exception as exc:
+            self.notify(
+                f"Settings saved, but failed to reload project config: {exc}",
+                severity="error",
+                timeout=6,
+            )
         self._user_config = load_user_config()
         if self._user_config.tui.theme and self._user_config.tui.theme in self.available_themes:
             self.theme = self._user_config.tui.theme
+        self._header.project = self.runtime.config.project.name
+        self._header._update_text()
         self.notify("Settings saved.", timeout=3)
