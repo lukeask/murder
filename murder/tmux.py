@@ -51,11 +51,29 @@ async def session_exists(name: str) -> bool:
     return rc == 0
 
 
-async def create_session(name: str, cwd: Path, cmd: list[str] | None = None) -> None:
-    """Create a detached session in `cwd`, optionally with an initial command."""
+async def create_session(
+    name: str,
+    cwd: Path,
+    cmd: list[str] | None = None,
+    *,
+    width: int = 220,
+    height: int = 50,
+) -> None:
+    """Create a detached session in `cwd`, optionally with an initial command.
+
+    Detached sessions otherwise default to 80x24; we never attach a client, so
+    the harness CLI renders at whatever size we set here for the session's life.
+    80 columns is too narrow for some harness output — e.g. codex `/status`
+    wraps the weekly ``(resets … on … May)`` onto a continuation line, which
+    breaks single-line parsing — so default generously wide.
+    """
     if await session_exists(name):
         raise TmuxError(f"session already exists: {name}")
-    args = ["new-session", "-d", "-s", name, "-c", str(cwd)]
+    args = [
+        "new-session", "-d", "-s", name,
+        "-x", str(width), "-y", str(height),
+        "-c", str(cwd),
+    ]
     if cmd:
         # tmux treats remaining argv as a command to run inside the new session's pane.
         args.extend(cmd)

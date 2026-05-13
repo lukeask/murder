@@ -33,14 +33,20 @@ _BANNER_RE = re.compile(r"OpenAI Codex", re.IGNORECASE)
 # match any "› " line (busy state is screened separately, before this check).
 _IDLE_PROMPT_RE = re.compile(r"^\s*›(?:\s.*)?$", re.MULTILINE)
 _BUSY_RE = re.compile(
-    r"\b(working|thinking|running|executing|applying patch|processing)\b",
-    re.IGNORECASE,
+    r"^\s*(?:working|thinking|running|executing|processing|applying patch)\b",
+    re.IGNORECASE | re.MULTILINE,
 )
 _LOGIN_RE = re.compile(r"\b(login required|not logged in|codex login)\b", re.IGNORECASE)
+
+_STATUS_COMMAND_POPUP_DELAY_S = 0.5
+_STATUS_FIRST_ENTER_DELAY_S = 0.8
+_STATUS_CAPTURE_DELAY_S = 1.2
 
 
 def _tail(pane_text: str) -> str:
     lines = pane_text.splitlines()
+    while lines and not lines[-1].strip():
+        lines.pop()
     return "\n".join(lines[-_TAIL_LINES:])
 
 
@@ -117,14 +123,17 @@ class CodexAdapter(HarnessAdapter):
         return model == self.startup_model
 
     async def request_usage_status(self, session: str) -> bool:
-        await tmux.send_keys(session, "/status", literal=True, enter=True)
-        await asyncio.sleep(0.2)
+        await tmux.send_keys(session, "/status", literal=True, enter=False)
+        await asyncio.sleep(_STATUS_COMMAND_POPUP_DELAY_S)
+        await tmux.send_keys(session, "", literal=True, enter=True)
+        await asyncio.sleep(_STATUS_FIRST_ENTER_DELAY_S)
+        await tmux.send_keys(session, "", literal=True, enter=True)
+        await asyncio.sleep(_STATUS_CAPTURE_DELAY_S)
         return True
 
     async def collect_usage_status(
         self, session: str
     ) -> SimpleResult[HarnessUsageStatus]:
         await self.request_usage_status(session)
-        await asyncio.sleep(0.4)
         pane = await tmux.capture_pane(session, lines=160)
         return ok_result(parse_codex_status_pane(pane))
