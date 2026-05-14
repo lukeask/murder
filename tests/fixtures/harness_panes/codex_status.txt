@@ -8,9 +8,9 @@
 │  Directory:            ~/Agents/projects/graphvisexplore                        │
 │  Permissions:          Custom (workspace, never)                                │
 │  Agents.md:            <none>                                                   │
-│  Account:              redacted@example.invalid (Plus)                                 │
+│  Account:              redacted@example.invalid (Plus)                          │
 │  Collaboration mode:   Default                                                  │
-│  Session:              redacted-session-id                     │
+│  Session:              redacted-session-id                                      │
 │                                                                                 │
 │  5h limit:             [███████████████████░] 97% left (resets 21:29)           │
 │  Weekly limit:         [███████████████████░] 94% left (resets 14:49 on 18 May) │

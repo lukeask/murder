@@ -93,6 +93,23 @@ def test_stale_busy_marker_in_scrollback_doesnt_flag_busy(
     assert not adapter.is_busy(pane)
 
 
+def test_trailing_blank_rows_do_not_hide_idle_prompt(adapter: CursorAdapter) -> None:
+    pane = (
+        "Cursor Agent\n"
+        "v2026.05.09-0afadcc\n"
+        "\n"
+        " ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄\n"
+        "  → Plan, search, build anything\n"
+        " ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀\n"
+        "  Composer 2                              Auto-run\n"
+        "  /tmp/murder-smoke · master\n"
+        + "\n" * 40
+    )
+    assert adapter.is_ready(pane)
+    assert adapter.is_idle(pane)
+    assert not adapter.is_busy(pane)
+
+
 def test_note_parser_requires_end_and_strips_cursor_chrome(
     adapter: CursorAdapter,
 ) -> None:

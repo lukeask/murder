@@ -58,6 +58,8 @@ _TRUST_PROMPT_RE = re.compile(r"Workspace Trust Required", re.IGNORECASE)
 
 def _tail(pane_text: str) -> str:
     lines = pane_text.splitlines()
+    while lines and not lines[-1].strip():
+        lines.pop()
     return "\n".join(lines[-_TAIL_LINES:])
 
 

@@ -7,12 +7,17 @@ Enter submits; Shift+Enter inserts a newline."""
 
 from __future__ import annotations
 
+from textual.binding import Binding
 from textual.events import Key
 from textual.message import Message
 from textual.widgets import TextArea
 
 
 class ChatInput(TextArea):
+    BINDINGS = [
+        Binding("j", "cursor_down", "Down", show=False),
+        Binding("k", "cursor_up", "Up", show=False),
+    ]
     class UserMessage(Message):
         def __init__(self, text: str) -> None:
             self.text = text
@@ -34,10 +39,13 @@ class ChatInput(TextArea):
         super().__init__()
 
     def on_mount(self) -> None:
-        self.border_title = "collaborator"
-        # TODO(tui-planning): add explicit collaborator persona switching
-        # between planner and notetaker. Sentinel and CrowHandler are separate roles.
+        self.set_recipient("collaborator")
         self.border_subtitle = "Enter to send · Shift+Enter for newline"
+
+    def set_recipient(self, recipient: str) -> None:
+        """Update the chat target label shown in the input border."""
+        label = recipient.strip() or "collaborator"
+        self.border_title = label
 
     def on_key(self, event: Key) -> None:
         if event.key == "enter":

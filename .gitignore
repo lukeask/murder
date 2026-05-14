@@ -29,3 +29,9 @@ htmlcov/
 
 # Stray runtime logs
 error.log
+
+# murder
+# Append these to your project's .gitignore (or use as-is if you don't
+# already have one). `murder init` will add to an existing .gitignore
+# rather than overwriting.
+# .env files commonly hold OPENROUTER_API_KEY etc.

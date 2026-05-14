@@ -44,6 +44,7 @@ _STATUS_CAPTURE_DELAY_S = 1.2
 _MODEL_STARTUP_SETTLE_DELAY_S = 1.5
 _MODEL_COMMAND_POPUP_DELAY_S = 0.5
 _MODEL_CAPTURE_DELAY_S = 3.0
+_PROMPT_SUBMIT_DELAY_S = 0.2
 
 
 def _tail(pane_text: str) -> str:
@@ -120,6 +121,13 @@ class CodexAdapter(HarnessAdapter):
 
     def format_nudge(self, msg: str) -> str:
         return f"[supervisor] {msg}"
+
+    async def send_prompt(self, session: str, prompt: str) -> None:
+        await tmux.send_keys(session, prompt, literal=True, enter=False)
+        await asyncio.sleep(_PROMPT_SUBMIT_DELAY_S)
+        # Codex 0.130 treats Enter after bracketed paste as newline/expand;
+        # Tab submits when idle and queues when busy, matching our send intent.
+        await tmux.send_keys(session, "Tab", literal=False, enter=False)
 
     async def set_model(self, session: str, model: str) -> bool:
         del session

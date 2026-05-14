@@ -93,6 +93,11 @@ class NotesList(DataTable):
             self.name = name
             super().__init__()
 
+    class NoteOpened(Message):
+        def __init__(self, name: str) -> None:
+            self.name = name
+            super().__init__()
+
     def __init__(self) -> None:
         super().__init__(zebra_stripes=True, cursor_type="row")
         self._names: list[str] = []
@@ -133,13 +138,28 @@ class NotesList(DataTable):
         if 0 <= idx < len(self._names):
             self.post_message(self.NoteHighlighted(self._names[idx]))
 
+    def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
+        idx = event.cursor_row
+        if 0 <= idx < len(self._names):
+            self.post_message(self.NoteOpened(self._names[idx]))
+
 
 class PlanDocument(Markdown):
+    BINDINGS = [
+        ("j", "line_down", "Down"),
+        ("k", "line_up", "Up"),
+        ("down", "line_down", "Down"),
+        ("up", "line_up", "Up"),
+        ("pagedown", "page_down", "Page down"),
+        ("pageup", "page_up", "Page up"),
+    ]
+
     DEFAULT_CSS = """
     PlanDocument {
         border: solid $border;
         height: 1fr;
         width: 1fr;
+        overflow-y: auto;
     }
     """
 
@@ -150,15 +170,31 @@ class PlanDocument(Markdown):
         )
         self.border_title = "(no plan selected)"
 
+    def action_line_down(self) -> None:
+        self.action_scroll_down()
 
-class NotesDocument(Markdown):
+    def action_line_up(self) -> None:
+        self.action_scroll_up()
+
+
+class NotesDocument(Markdown, can_focus=True):
     """Live view of the notetaker's notes document (`.murder/notes/<date>.md`)."""
+
+    BINDINGS = [
+        ("j", "line_down", "Down"),
+        ("k", "line_up", "Up"),
+        ("down", "line_down", "Down"),
+        ("up", "line_up", "Up"),
+        ("pagedown", "page_down", "Page down"),
+        ("pageup", "page_up", "Page up"),
+    ]
 
     DEFAULT_CSS = """
     NotesDocument {
         border: solid $border;
         height: 1fr;
         width: 1fr;
+        overflow-y: auto;
     }
     """
 
@@ -169,11 +205,18 @@ class NotesDocument(Markdown):
 
     def __init__(self) -> None:
         super().__init__(self._EMPTY)
+        self.can_focus = True
         self.border_title = "notes"
 
     async def show(self, name: str, body: str) -> None:
         self.border_title = f"notes · {name}"
         await self.update(body.strip() or self._EMPTY)
+
+    def action_line_down(self) -> None:
+        self.action_scroll_down()
+
+    def action_line_up(self) -> None:
+        self.action_scroll_up()
 
 
 class ChatLog(RichLog):
@@ -182,11 +225,18 @@ class ChatLog(RichLog):
     and the configured ``agent_label`` all render as that agent's name.
     """
 
+    BINDINGS = [
+        ("j", "line_down", "Down"),
+        ("k", "line_up", "Up"),
+        ("down", "line_down", "Down"),
+        ("up", "line_up", "Up"),
+    ]
+
     DEFAULT_CSS = """
     ChatLog {
         border: solid $border;
         height: 1fr;
-        width: 36%;
+        width: 1fr;
     }
     """
 
@@ -194,6 +244,12 @@ class ChatLog(RichLog):
         super().__init__(highlight=False, markup=True, wrap=True, auto_scroll=True)
         self._agent_label = agent_label
         self.border_title = f"{agent_label} chat"
+
+    def action_line_down(self) -> None:
+        self.action_scroll_down()
+
+    def action_line_up(self) -> None:
+        self.action_scroll_up()
 
     def _tag(self, who: str) -> str:
         if who in ("you", "user"):

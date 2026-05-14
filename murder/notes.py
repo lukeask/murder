@@ -1,14 +1,13 @@
 """DB-backed planning notes — the "notetaker" scratchpad docs.
 
-Notes are dated markdown documents (`.murder/notes/<YYYY-MM-DD>.md`). The
-SQLite `notes` table is authoritative; every write also materializes the
-markdown file so the doc stays browsable/editable on disk. Importing on-disk
-edits back into the DB is intentionally left for a future bidirectional-sync
-module — the notetaker agent is currently the only writer.
+Notes are dated markdown documents (`.murder/notes/<YYYY-MM-DD>.md`).
+Runtime now maintains a DB+file mirror and records note revisions in
+`note_revisions` for safety/auditability.
 """
 
 from __future__ import annotations
 
+import hashlib
 import sqlite3
 from datetime import datetime
 from pathlib import Path
@@ -28,17 +27,41 @@ def _rel_path(repo_root: Path, name: str) -> str:
     return str(note_md(repo_root, name).relative_to(repo_root))
 
 
+def content_hash(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _record_revision(
+    conn: sqlite3.Connection, name: str, body: str, *, source: str
+) -> None:
+    dbmod.insert_note_revision(
+        conn,
+        name,
+        source=source,
+        body=body,
+        content_hash=content_hash(body),
+    )
+
+
 def ensure_note(conn: sqlite3.Connection, repo_root: Path, name: str) -> dict[str, Any]:
-    """Return the note row for `name`, creating an empty one (DB + file) if absent."""
+    """Return note row for `name`, importing existing files without clobbering."""
     row = dbmod.get_note(conn, name)
-    if row is not None:
-        return row
     rel = _rel_path(repo_root, name)
-    dbmod.upsert_note(conn, name, body="", materialized_path=rel)
-    atomic_write_text(repo_root / rel, "")
-    return dbmod.get_note(conn, name) or {
-        "name": name, "body": "", "materialized_path": rel,
-    }
+    path = repo_root / rel
+    if row is not None:
+        if not path.exists():
+            atomic_write_text(path, str(row["body"]))
+        return row
+    if path.exists():
+        body = path.read_text(encoding="utf-8")
+        dbmod.upsert_note(conn, name, body=body, materialized_path=rel)
+        _record_revision(conn, name, body, source="bootstrap")
+    else:
+        body = ""
+        dbmod.upsert_note(conn, name, body=body, materialized_path=rel)
+        atomic_write_text(path, body)
+        _record_revision(conn, name, body, source="bootstrap")
+    return dbmod.get_note(conn, name) or {"name": name, "body": body, "materialized_path": rel}
 
 
 def read_note(conn: sqlite3.Connection, name: str) -> str:
@@ -46,11 +69,22 @@ def read_note(conn: sqlite3.Connection, name: str) -> str:
     return str(row["body"]) if row else ""
 
 
-def write_note(conn: sqlite3.Connection, repo_root: Path, name: str, body: str) -> None:
+def write_note(
+    conn: sqlite3.Connection,
+    repo_root: Path,
+    name: str,
+    body: str,
+    *,
+    source: str = "agent",
+) -> None:
     """Replace the body of note `name` in the DB and re-materialize its file."""
+    existing = dbmod.get_note(conn, name)
+    old_body = str(existing["body"]) if existing is not None else None
     rel = _rel_path(repo_root, name)
     dbmod.upsert_note(conn, name, body=body, materialized_path=rel)
     atomic_write_text(repo_root / rel, body)
+    if old_body != body:
+        _record_revision(conn, name, body, source=source)
 
 
 def latest_prior_note(

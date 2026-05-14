@@ -13,6 +13,7 @@ from pathlib import Path
 from pydantic import BaseModel, Field
 
 from murder.bus import TicketStatus
+from murder.config import HarnessKind
 
 
 class ChecklistItem(BaseModel):
@@ -31,7 +32,7 @@ class Ticket(BaseModel):
     write_set: list[Path] = Field(default_factory=list)
     deps: list[str] = Field(default_factory=list)
     skills: list[str] = Field(default_factory=list)
-    harness: str | None = None  # override default_crow
+    harness: HarnessKind | None = None  # override default_crow
     model: str | None = None
     attempts: int = 0
     created_at: datetime

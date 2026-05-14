@@ -11,8 +11,9 @@ from murder.config import (
 
 
 def test_stable_bucket_index_deterministic() -> None:
-    assert stable_bucket_index("t001", 3) == stable_bucket_index("t001", 3)
-    assert 0 <= stable_bucket_index("t001", 3) < 3
+    modulo = 3
+    assert stable_bucket_index("t001", modulo) == stable_bucket_index("t001", modulo)
+    assert 0 <= stable_bucket_index("t001", modulo) < modulo
 
 
 def test_resolve_harness_pool_spreads_tickets() -> None:
@@ -61,6 +62,15 @@ def test_resolve_model_pool_by_harness() -> None:
         "gpt-5.5",
         "gpt-5.4",
     )
+
+
+def test_resolve_model_pool_without_ticket_uses_first_model() -> None:
+    cfg = HarnessRoleConfig(
+        harness="codex",
+        startup_models=["gpt-5.4", "gpt-5.5"],
+    )
+
+    assert resolve_default_crow_startup_model(cfg, None) == "gpt-5.4"
 
 
 def test_empty_models_by_harness_normalized() -> None:

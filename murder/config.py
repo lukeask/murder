@@ -151,12 +151,16 @@ class Config(BaseModel):
         load_dotenv(repo_root / ".env", override=True)
 
         bundled = _load_bundled_defaults()
+        from murder.user_config import load_user_config
+
+        merged: dict[str, Any] = _deep_merge(
+            dict(bundled), load_user_config().model_dump(mode="json", exclude_none=True)
+        )
         project = repo_root / ".murder" / "roles.yaml"
-        merged: dict[str, Any] = bundled
         if project.exists():
             with project.open("r", encoding="utf-8") as f:
                 user_yaml = yaml.safe_load(f) or {}
-            merged = _deep_merge(bundled, user_yaml)
+            merged = _deep_merge(merged, user_yaml)
         return cls.model_validate(merged)
 
 
@@ -220,9 +224,13 @@ def resolve_default_crow_startup_model(
         pool = crow_cfg.startup_models_by_harness.get(harness)
         if pool:
             tid = str((ticket_row or {}).get("id") or "")
+            if not tid:
+                return pool[0]
             return pool[stable_bucket_index(tid, len(pool))]
     if crow_cfg.startup_models:
         pool = crow_cfg.startup_models
         tid = str((ticket_row or {}).get("id") or "")
+        if not tid:
+            return pool[0]
         return pool[stable_bucket_index(tid, len(pool))]
     return crow_cfg.startup_model
