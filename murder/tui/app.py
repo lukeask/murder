@@ -21,8 +21,8 @@ from murder import tmux
 from murder.bus.protocol import CommandEvent
 from murder.config import Config
 from murder.storage.paths import note_md
-from murder.tui.agent_grid import AgentGrid
 from murder.tui.chat_input import ChatInput
+from murder.tui.crows_view import CrowsView, CrowTile
 from murder.tui.escalation_strip import EscalationStrip
 from murder.tui.header import Header
 from murder.tui.pane_mirror import PaneMirror
@@ -40,6 +40,8 @@ from murder.tui.ticket_grid import TicketGrid
 from murder.user_config import UserConfig, load_user_config
 
 if TYPE_CHECKING:
+    from textual.widget import Widget
+
     from murder.orchestrator import Orchestrator
     from murder.runtime import Runtime
 
@@ -129,6 +131,18 @@ class MurderApp(App[None]):
         ("ctrl+t", "toggle_planning_mode", "Plan mode"),
         ("ctrl+b", "toggle_sidebar", "Docs sidebar"),
         ("ctrl+y", "toggle_collab_raw", "Raw pane"),
+        # Between-pane focus (VISION §4.3). Bare hjkl/arrows stay with the
+        # focused widget so intra-pane motion isn't stolen.
+        Binding("ctrl+h", "focus_left", "Focus left", show=False),
+        Binding("ctrl+j", "focus_down", "Focus down", show=False),
+        Binding("ctrl+k", "focus_up", "Focus up", show=False),
+        Binding("ctrl+l", "focus_right", "Focus right", show=False),
+        Binding("ctrl+left", "focus_left", "Focus left", show=False),
+        Binding("ctrl+down", "focus_down", "Focus down", show=False),
+        Binding("ctrl+up", "focus_up", "Focus up", show=False),
+        Binding("ctrl+right", "focus_right", "Focus right", show=False),
+        Binding("tab", "focus_next_region", "Next pane", show=False, priority=True),
+        Binding("shift+tab", "focus_previous_region", "Prev pane", show=False, priority=True),
         ("q", "quit", "Quit"),
         ("r", "refresh_now", "Refresh"),
         ("u", "collect_usage", "Usage"),
@@ -149,8 +163,8 @@ class MurderApp(App[None]):
         width: 50%;
         border: solid $border;
     }
-    AgentGrid {
-        width: 56%;
+    CrowsView {
+        width: 1fr;
         border: solid $border;
     }
     PlanList {
@@ -171,7 +185,7 @@ class MurderApp(App[None]):
         self.orchestrator = orchestrator
         self._header = Header(runtime.config.project.name)
         self._grid = TicketGrid()
-        self._agents = AgentGrid()
+        self._crows = CrowsView()
         self._plans = PlanList()
         self._plan_doc = PlanDocument()
         self._notes_list = NotesList()
@@ -203,7 +217,7 @@ class MurderApp(App[None]):
         yield self._header
         with Horizontal(id="body"):
             yield self._grid
-            yield self._agents
+            yield self._crows
             yield self._plans
             yield self._plan_doc
             yield self._notes_list
@@ -276,7 +290,7 @@ class MurderApp(App[None]):
         db = self.runtime.db
         self._header.refresh_counts(db)
         self._grid.refresh_from_db(db)
-        self._agents.refresh_from_db(db)
+        self._crows.refresh_from_db(db)
         self._plans.refresh_from_db(db)
         self._notes_list.refresh_from_db(db)
         self._schedule.refresh_from_db(db)
@@ -292,6 +306,8 @@ class MurderApp(App[None]):
 
     async def _refresh_pane(self) -> None:
         await self._mirror.refresh_pane()
+        if self._view == "crows":
+            await self._crows.refresh_tails()
         if (
             self._view == "planning"
             and self._planning_mode == "collaborator"
@@ -303,14 +319,19 @@ class MurderApp(App[None]):
         self._mirror.set_session(self._crow_session_for_ticket(event.ticket_id))
         self.run_worker(self._mirror.refresh_pane(), exclusive=True, group="mirror")
 
-    def on_agent_grid_agent_highlighted(self, event: AgentGrid.AgentHighlighted) -> None:
-        self._mirror.set_session(event.session)
-        self.run_worker(self._mirror.refresh_pane(), exclusive=True, group="mirror")
+    def on_crows_view_tile_selected(self, event: CrowsView.TileSelected) -> None:
+        # Keep the shared pane mirror in sync so planning's collab-raw
+        # toggle and the shell session share a hint.
+        self._mirror.set_session(event.entry.session)
 
-    def on_agent_grid_agent_opened(self, event: AgentGrid.AgentOpened) -> None:
-        self._mirror.set_session(event.session)
-        self.run_worker(self._mirror.refresh_pane(), exclusive=True, group="mirror")
-        hint = f"tmux attach -t {event.session}" if event.session else "(no session)"
+    def on_crow_tile_opened(self, event: CrowTile.Opened) -> None:
+        # The CrowsView itself handles enlarge; surface a short attach hint
+        # so power users can still drop into a real tmux session.
+        hint = (
+            f"tmux attach -t {event.entry.session}"
+            if event.entry.session
+            else "(no session)"
+        )
         self.notify(f"attach: {hint}", timeout=6)
 
     def on_plan_list_plan_highlighted(self, event: PlanList.PlanHighlighted) -> None:
@@ -543,7 +564,7 @@ class MurderApp(App[None]):
         self._chat.set_recipient(_chat_target_label(self._view, self._planning_mode))
         self._header.set_view(self._view, self._planning_mode if planning else None)
         self._grid.display = False
-        self._agents.display = self._view == "crows"
+        self._crows.display = self._view == "crows"
         self._plans.display = collab_mode and self._sidebar_visible
         self._plan_doc.display = collab_mode and self._has_selected_plan
         self._collab_chat.display = collab_chat_on
@@ -552,7 +573,9 @@ class MurderApp(App[None]):
         self._notetaker_chat.display = note_mode
         self._schedule.display = self._view == "schedule"
         self._chat.display = self._view != "schedule"
-        self._mirror.display = collab_raw_on or self._view == "crows"
+        # The shared PaneMirror is now only used by planning's collab-raw
+        # toggle; CrowsView owns its own mirror for the enlarged tile.
+        self._mirror.display = collab_raw_on
         self._mirror.styles.width = "1fr"
         if collab_chat_on:
             self.run_worker(self._refresh_collab_chat(), exclusive=True, group="collab_chat")
@@ -678,7 +701,8 @@ class MurderApp(App[None]):
                 self._notes_list if self._planning_mode == "notetaker" else self._plans
             )
         elif self._view == "crows":
-            self.set_focus(self._agents)
+            if not self._crows.focus_first_tile():
+                self.set_focus(self._crows)
         else:
             self.set_focus(None)
 
@@ -689,6 +713,70 @@ class MurderApp(App[None]):
 
     def action_show_help_force(self) -> None:
         self.push_screen(HelpScreen())
+
+    # ── pane focus traversal (VISION §4.3) ─────────────────────────────────
+    # ctrl+hjkl / ctrl+arrows move focus between sibling panes in reading
+    # order. Bare hjkl/arrows are *not* bound here, so the focused widget
+    # (chat input, RichLog, plan doc, ...) keeps its intra-pane motion.
+
+    def _ordered_focusable_panes(self) -> list[Widget]:
+        """Top-level panes currently visible in the active place."""
+        candidates: list[Widget] = []
+        if self._view == "planning":
+            if self._planning_mode == "notetaker":
+                candidates = [
+                    self._notes_list,
+                    self._notes_doc,
+                    self._notetaker_chat,
+                    self._chat,
+                ]
+            elif self._collab_raw:
+                candidates = [self._plans, self._plan_doc, self._mirror, self._chat]
+            else:
+                candidates = [self._plans, self._plan_doc, self._collab_chat, self._chat]
+        elif self._view == "crows":
+            candidates = [self._crows, self._chat]
+        else:  # schedule
+            candidates = [self._schedule]
+        return [w for w in candidates if w.display]
+
+    def _shift_focus(self, delta: int) -> None:
+        panes = self._ordered_focusable_panes()
+        if not panes:
+            return
+        current = self.focused
+        idx = -1
+        for i, pane in enumerate(panes):
+            if current is pane or (current is not None and current in pane.walk_children()):
+                idx = i
+                break
+        if idx >= 0:
+            target_idx = (idx + delta) % len(panes)
+        else:
+            target_idx = 0 if delta > 0 else len(panes) - 1
+        target = panes[target_idx]
+        # Crows tail-wall is itself a container; focus the first tile.
+        if target is self._crows and self._crows.focus_first_tile():
+            return
+        self.set_focus(target)
+
+    def action_focus_next_region(self) -> None:
+        self._shift_focus(1)
+
+    def action_focus_previous_region(self) -> None:
+        self._shift_focus(-1)
+
+    def action_focus_right(self) -> None:
+        self._shift_focus(1)
+
+    def action_focus_left(self) -> None:
+        self._shift_focus(-1)
+
+    def action_focus_down(self) -> None:
+        self._shift_focus(1)
+
+    def action_focus_up(self) -> None:
+        self._shift_focus(-1)
 
     def action_kick_ready(self) -> None:
         self.run_worker(self._kick_ready(), exclusive=False)
