@@ -771,6 +771,57 @@ class SettingsScreen(ModalScreen[bool]):
                 status.update("")
                 status.display = False
 
+    def _start_global_model_discovery(self, kind: HarnessKind) -> None:
+        if kind in self._global_model_discovery_attempted:
+            return
+        self.run_worker(
+            self._refresh_global_harness_model_options(kind),
+            exclusive=False,
+            group=f"settings_global_models_{kind}",
+        )
+
+    async def _refresh_global_enabled_harness_model_options(self) -> None:
+        for kind in [k for k, _, _ in _HARNESS_ROWS if k in self._global_harnesses]:
+            await self._refresh_global_harness_model_options(kind)
+
+    async def _refresh_global_harness_model_options(self, kind: HarnessKind) -> None:
+        if kind in self._global_model_discovery_attempted:
+            return
+        self._global_model_discovery_attempted.add(kind)
+        result = await discover_harness_models(kind, self._repo)
+        if not result.ok or not result.data:
+            return
+        await self._replace_global_model_options(kind, result.data)
+
+    async def _replace_global_model_options(
+        self, kind: HarnessKind, options: list[tuple[str, str]]
+    ) -> None:
+        cleaned = self._dedupe_model_options(options)
+        if not cleaned:
+            return
+        old_key = self._focusable[self._cursor_idx].key if self._focusable else None
+        old_states = self._global_model_states.get(kind, {})
+        self._global_model_options[kind] = cleaned
+        self._global_model_states[kind] = {
+            model_id: old_states.get(model_id, "disabled") for model_id, _ in cleaned
+        }
+
+        section = self.query_one(f"#global-section-models-{_sid(kind)}")
+        for item in list(section.query(_SettingItem)):
+            await item.remove()
+        await section.mount(
+            *(self._global_model_item(kind, model_id, label) for model_id, label in cleaned)
+        )
+        section.display = kind in self._global_harnesses
+        self._refresh_global_model_validation()
+        self._rebuild_focusable()
+        if old_key:
+            self._cursor_idx = next(
+                (i for i, item in enumerate(self._focusable) if item.key == old_key),
+                min(self._cursor_idx, max(0, len(self._focusable) - 1)),
+            )
+        self._refresh_cursor()
+
     def _model_ids(self, kind: HarnessKind) -> list[str]:
         return [model_id for model_id, _ in self._model_options.get(kind, [])]
 
