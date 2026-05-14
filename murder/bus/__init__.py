@@ -103,7 +103,7 @@ class Bus:
     async def publish(self, event: Any) -> None:
         # Persist before fan-out so handler crashes can't lose events.
         if self._db is not None:
-            from murder.db import insert_event
+            from murder.db import insert_command_event, insert_event
 
             payload = event.model_dump(
                 mode="json",
@@ -114,16 +114,40 @@ class Bus:
             if ev_role is not None:
                 role_value = ev_role.value if hasattr(ev_role, "value") else str(ev_role)
             try:
-                insert_event(
-                    self._db,
-                    run_id=event.run_id,
-                    agent_id=event.agent_id,
-                    role=role_value,
-                    ticket_id=getattr(event, "ticket_id", None),
-                    type=event.type,
-                    payload=payload,
-                    ts=event.ts.isoformat(timespec="seconds"),
-                )
+                if isinstance(event, CommandEvent):
+                    insert_command_event(
+                        self._db,
+                        command_id=str(event.id),
+                        run_id=event.run_id,
+                        agent_id=event.agent_id,
+                        role=role_value,
+                        ticket_id=getattr(event, "ticket_id", None),
+                        target_worker=event.target_worker,
+                        kind=event.kind,
+                        payload=event.payload,
+                        correlation_id=event.correlation_id,
+                        idempotency_key=event.idempotency_key,
+                        status=event.status.value,
+                        claimed_by=event.claimed_by,
+                        lease_expires_at=event.lease_expires_at,
+                        attempt_count=event.attempt_count,
+                        retryable=event.retryable,
+                        result=event.result,
+                        event_type=event.type,
+                        event_payload=payload,
+                        ts=event.ts.isoformat(timespec="seconds"),
+                    )
+                else:
+                    insert_event(
+                        self._db,
+                        run_id=event.run_id,
+                        agent_id=event.agent_id,
+                        role=role_value or "",
+                        ticket_id=getattr(event, "ticket_id", None),
+                        type=event.type,
+                        payload=payload,
+                        ts=event.ts.isoformat(timespec="seconds"),
+                    )
             except Exception:
                 log.exception("bus: failed to persist event %s", event.type)
                 # Continue with fan-out even if persistence failed.

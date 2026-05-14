@@ -4,8 +4,10 @@ escalation strip onto the running Runtime."""
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 from typing import TYPE_CHECKING
+from uuid import uuid4
 
 from textual.app import App, ComposeResult
 from textual.binding import Binding
@@ -16,10 +18,9 @@ from textual.widgets import Footer, Static
 from murder import db as dbmod
 from murder import notes as notes_mod
 from murder import tmux
-from murder.agents.collaborator import CollaboratorAgent
-from murder.agents.notetaker import NotetakerAgent
+from murder.bus.protocol import CommandEvent
 from murder.config import Config
-from murder.harnesses.usage_sampling import sample_harness_usages_for_config
+from murder.storage.paths import note_md
 from murder.tui.agent_grid import AgentGrid
 from murder.tui.chat_input import ChatInput
 from murder.tui.escalation_strip import EscalationStrip
@@ -37,13 +38,13 @@ from murder.tui.settings_screen import SettingsScreen
 from murder.tui.themes import CUSTOM_THEMES
 from murder.tui.ticket_grid import TicketGrid
 from murder.user_config import UserConfig, load_user_config
-from murder.storage.paths import note_md
 
 if TYPE_CHECKING:
     from murder.orchestrator import Orchestrator
     from murder.runtime import Runtime
 
 COLLABORATOR_START_TIMEOUT_S = 120.0
+COMMAND_POLL_S = 0.05
 SCHEDULE_USAGE_DEBOUNCE_S = 20.0
 CTRL_C_DOUBLE_TAP_S = 1.5
 
@@ -254,9 +255,16 @@ class MurderApp(App[None]):
         self.run_worker(self._collect_usage_snapshots(), exclusive=True, group="usage")
 
     async def _collect_usage_snapshots(self) -> None:
-        if self.runtime.db is None:
+        result = await self._submit_command(
+            target_worker="usage-probe",
+            kind="state.harness_usage.sample",
+            payload={"trigger": "manual_u_key"},
+            timeout_s=20.0,
+        )
+        if result is None:
             return
-        stored, failures = await sample_harness_usages_for_config(self.runtime)
+        stored = int(result.get("stored", 0))
+        failures = int(result.get("failures", 0))
         self._refresh_db_views()
         if stored or failures:
             self.notify(
@@ -292,9 +300,7 @@ class MurderApp(App[None]):
             await self._refresh_collab_chat()
 
     def on_ticket_grid_ticket_selected(self, event: TicketGrid.TicketSelected) -> None:
-        crow = self.runtime.get_crow(event.ticket_id)
-        session = crow.session if crow is not None else None
-        self._mirror.set_session(session)
+        self._mirror.set_session(self._crow_session_for_ticket(event.ticket_id))
         self.run_worker(self._mirror.refresh_pane(), exclusive=True, group="mirror")
 
     def on_agent_grid_agent_highlighted(self, event: AgentGrid.AgentHighlighted) -> None:
@@ -304,10 +310,7 @@ class MurderApp(App[None]):
     def on_agent_grid_agent_opened(self, event: AgentGrid.AgentOpened) -> None:
         self._mirror.set_session(event.session)
         self.run_worker(self._mirror.refresh_pane(), exclusive=True, group="mirror")
-        agent = self.runtime.get_agent(event.agent_id)
-        hint = agent.attach_hint() if agent is not None else (
-            f"tmux attach -t {event.session}" if event.session else "(no session)"
-        )
+        hint = f"tmux attach -t {event.session}" if event.session else "(no session)"
         self.notify(f"attach: {hint}", timeout=6)
 
     def on_plan_list_plan_highlighted(self, event: PlanList.PlanHighlighted) -> None:
@@ -381,18 +384,11 @@ class MurderApp(App[None]):
 
     # ── notetaker mode ─────────────────────────────────────────────────────
 
-    def _notetaker_agent(self) -> NotetakerAgent | None:
-        agent = self.runtime.get_agent("notetaker-0")
-        return agent if isinstance(agent, NotetakerAgent) else None
-
     def _active_note_name(self) -> str | None:
         # Browsing an older note in the sidebar wins; otherwise show the live
         # (today's) note the notetaker is appending to.
         if self._notes_list.display and self._notes_list.selected_name:
             return self._notes_list.selected_name
-        agent = self._notetaker_agent()
-        if agent is not None:
-            return agent.note_name
         if self.runtime.db is not None:
             return dbmod.latest_note_name(self.runtime.db) or notes_mod.today_name()
         return notes_mod.today_name()
@@ -416,58 +412,31 @@ class MurderApp(App[None]):
 
     async def _enter_notetaker(self) -> None:
         await self._render_notes()
-        if self.orchestrator is None:
-            return
-        async with self._notetaker_lock:
-            try:
-                agent_id = await self.orchestrator.ensure_notetaker()
-            except Exception as e:  # noqa: BLE001
-                self.notify(f"notetaker unavailable: {e}", severity="error", timeout=6)
-                return
-            agent = self.runtime.get_agent(agent_id)
-            if not isinstance(agent, NotetakerAgent):
-                return
-            if not self._notetaker_loaded:
-                self._notetaker_chat.clear()
-                for who, text in agent.transcript_for_ui():
-                    self._notetaker_chat.add_turn(who, text)
-                self._notetaker_loaded = True
+        if not self._notetaker_loaded:
+            self._notetaker_chat.clear()
+            self._notetaker_loaded = True
         await self._render_notes()
 
     async def _dispatch_notetaker(self, text: str) -> None:
-        if self.orchestrator is None:
-            self.notify("notetaker: no orchestrator attached", severity="error", timeout=3)
-            return
         async with self._notetaker_lock:
-            try:
-                agent_id = await self.orchestrator.ensure_notetaker()
-            except Exception as e:  # noqa: BLE001
-                self.notify(f"notetaker spawn failed: {e}", severity="error", timeout=8)
-                return
-            agent = self.runtime.get_agent(agent_id)
-            if not isinstance(agent, NotetakerAgent):
-                self.notify("notetaker vanished after spawn", severity="error", timeout=5)
-                return
             if not self._notetaker_loaded:
                 self._notetaker_chat.clear()
-                for who, t in agent.transcript_for_ui():
-                    self._notetaker_chat.add_turn(who, t)
                 self._notetaker_loaded = True
             self._notetaker_chat.add_turn("you", text)
             self._notetaker_chat.add_status("notetaker is thinking…")
-            try:
-                reply = await agent.reply_to(text)
-            except Exception as e:  # noqa: BLE001
-                self.notify(f"notetaker error: {e}", severity="error", timeout=6)
+            result = await self._submit_command(
+                target_worker="orchestrator",
+                kind="notetaker.chat.send",
+                payload={"text": text},
+                timeout_s=COLLABORATOR_START_TIMEOUT_S,
+            )
+            if result is None:
                 return
-            self._notetaker_chat.add_turn("notetaker", reply)
+            reply = result.get("reply")
+            self._notetaker_chat.add_turn("notetaker", str(reply or ""))
         await self._render_notes()
 
     # ── collaborator mode ──────────────────────────────────────────────────
-
-    def _collaborator_agent(self) -> CollaboratorAgent | None:
-        agent = self.runtime.get_agent("collaborator-0")
-        return agent if isinstance(agent, CollaboratorAgent) else None
 
     async def _refresh_collab_chat(self) -> None:
         """Re-parse the collaborator's tmux pane into the chat transcript.
@@ -480,21 +449,34 @@ class MurderApp(App[None]):
         async with self._collab_chat_lock:
             if not (self._view == "planning" and self._planning_mode == "collaborator"):
                 return
-            agent = self._collaborator_agent()
-            if agent is None:
+            result = await self._submit_command(
+                target_worker="collaborator",
+                kind="collaborator.transcript.refresh",
+                payload={},
+                timeout_s=8.0,
+                notify_errors=False,
+            )
+            if result is None:
+                return
+            if not bool(result.get("available")):
                 self._collab_chat.set_turns([])
                 self._collab_chat.add_status("(no collaborator yet — type a message to start one)")
                 return
-            turns = await agent.refresh_transcript()
+            turns = [
+                (str(item.get("role", "")), str(item.get("text", "")))
+                for item in result.get("turns", [])
+                if isinstance(item, dict)
+            ]
             if turns:
                 self._collab_chat.set_turns(turns)
                 return
             self._collab_chat.set_turns([])
-            if agent.harness.transcript_prompt_markers:
+            if bool(result.get("has_parser")):
                 self._collab_chat.add_status("(collaborator chat — nothing parsed yet)")
             else:
+                harness_kind = str(result.get("harness_kind", "unknown"))
                 self._collab_chat.add_status(
-                    f"(no transcript parser for '{agent.harness.kind}' yet — "
+                    f"(no transcript parser for '{harness_kind}' yet — "
                     "press ctrl+y for the raw pane)"
                 )
 
@@ -509,8 +491,6 @@ class MurderApp(App[None]):
         self.run_worker(self._on_schedule_view_enter(), exclusive=True, group="usage")
 
     async def _on_schedule_view_enter(self) -> None:
-        if self.runtime.db is None:
-            return
         now = time.monotonic()
         if (
             self._last_schedule_usage_attempt_at is not None
@@ -518,7 +498,16 @@ class MurderApp(App[None]):
         ):
             return
         self._last_schedule_usage_attempt_at = now
-        stored, failures = await sample_harness_usages_for_config(self.runtime)
+        result = await self._submit_command(
+            target_worker="usage-probe",
+            kind="scheduler.probe_usage",
+            payload={"trigger": "schedule_view_enter"},
+            timeout_s=20.0,
+        )
+        if result is None:
+            return
+        stored = int(result.get("stored", 0))
+        failures = int(result.get("failures", 0))
         self._refresh_db_views()
         if stored or failures:
             self.notify(
@@ -588,8 +577,7 @@ class MurderApp(App[None]):
         # Only meaningful in collaborator planning mode; harmless elsewhere.
         self._collab_raw = not self._collab_raw
         if self._collab_raw:
-            agent = self._collaborator_agent()
-            self._mirror.set_session(agent.session if agent is not None else None)
+            self._sync_collaborator_mirror_session()
         self._apply_mode()
         self.notify(
             f"collaborator view: {'raw tmux pane' if self._collab_raw else 'parsed chat'}",
@@ -597,9 +585,6 @@ class MurderApp(App[None]):
         )
 
     def on_chat_input_user_message(self, event: ChatInput.UserMessage) -> None:
-        if self.orchestrator is None:
-            self.notify("chat: no orchestrator attached", severity="error", timeout=3)
-            return
         # Own worker group: a chat dispatch may spend a minute inside
         # ensure_collaborator(); it must not be cancelled by an unrelated
         # exclusive=True UI worker (plan/notes render, pane mirror, …) in the
@@ -625,48 +610,15 @@ class MurderApp(App[None]):
         # Serialize ensure+send so a flurry of messages during cold-start
         # doesn't race two collaborator spawns or interleave send_keys.
         async with self._collab_lock:
-            already = self.runtime.db and self.runtime.db.execute(
-                "SELECT agent_id FROM agents WHERE role='collaborator' "
-                "AND status IN ('running','idle') LIMIT 1"
-            ).fetchone()
-            if not already:
-                self.notify("starting collaborator… (first launch can take a minute)", timeout=60)
-            try:
-                agent_id = await asyncio.wait_for(
-                    self.orchestrator.ensure_collaborator(),
-                    timeout=COLLABORATOR_START_TIMEOUT_S,
-                )
-            except asyncio.TimeoutError:
-                self._record_ui_escalation(
-                    "Collaborator startup timed out; check Claude Code install/auth "
-                    "or run `murder doctor`."
-                )
-                self.notify(
-                    "collaborator startup timed out; check install/auth or `murder doctor`",
-                    severity="error",
-                    timeout=10,
-                )
+            result = await self._submit_command(
+                target_worker="collaborator",
+                kind="collaborator.chat_send",
+                payload={"text": text},
+                timeout_s=COLLABORATOR_START_TIMEOUT_S,
+            )
+            if result is None:
                 return
-            except asyncio.CancelledError:
-                # Some other worker (or shutdown) cancelled us mid-spawn. Don't
-                # swallow it silently — say so, then let Textual handle it.
-                self.notify("collaborator startup cancelled", severity="warning", timeout=6)
-                raise
-            except Exception as e:
-                self._record_ui_escalation(f"Collaborator startup failed: {e}")
-                self.notify(f"collaborator spawn failed: {e}", severity="error", timeout=10)
-                return
-            agent = self.runtime.get_agent(agent_id)
-            if agent is None:
-                self.notify("collaborator vanished after spawn", severity="error", timeout=5)
-                return
-            self._mirror.set_session(agent.session)
-            self.run_worker(self._mirror.refresh_pane(), exclusive=True, group="mirror")
-            try:
-                await agent.send(text)
-            except Exception as e:
-                self.notify(f"send failed: {e}", severity="error", timeout=5)
-                return
+            self._sync_collaborator_mirror_session()
             # Optimistic echo + spinner; the next pane parse reconciles it.
             self._collab_chat.add_turn("you", text)
             self._collab_chat.add_status("collaborator is thinking…")
@@ -742,14 +694,15 @@ class MurderApp(App[None]):
         self.run_worker(self._kick_ready(), exclusive=False)
 
     async def _kick_ready(self) -> None:
-        if self.orchestrator is None:
-            self.notify("kickoff unavailable: no orchestrator", severity="error", timeout=4)
+        result = await self._submit_command(
+            target_worker="orchestrator",
+            kind="scheduler.kickoff_ready",
+            payload={},
+            timeout_s=30.0,
+        )
+        if result is None:
             return
-        try:
-            kicked = await self.orchestrator.kickoff_ready()
-        except Exception as e:
-            self.notify(f"kickoff failed: {e}", severity="error", timeout=5)
-            return
+        kicked = list(result.get("kicked", []))
         self.notify(
             f"kicked: {', '.join(kicked)}" if kicked else "no ready tickets",
             timeout=3,
@@ -757,16 +710,22 @@ class MurderApp(App[None]):
         self._refresh_db_views()
 
     def _record_ui_escalation(self, reason: str) -> None:
-        if self.runtime.db is None:
-            return
-        dbmod.insert_escalation(
-            self.runtime.db,
-            ticket_id=None,
-            severity=2,
-            reason=reason,
-            to_recipient="user",
+        self.run_worker(
+            self._submit_command(
+                target_worker="state",
+                kind="state.escalation.create",
+                payload={
+                    "ticket_id": None,
+                    "severity": 2,
+                    "reason": reason,
+                    "to_recipient": "user",
+                },
+                timeout_s=10.0,
+                notify_errors=False,
+            ),
+            exclusive=False,
+            group="ui_escalation",
         )
-        self._escalations.refresh_from_db(self.runtime.db)
 
     def _insert_if_chat_focused(self, text: str) -> bool:
         if self.focused is not self._chat:
@@ -800,3 +759,73 @@ class MurderApp(App[None]):
         self._header.project = self.runtime.config.project.name
         self._header._update_text()
         self.notify("Settings saved.", timeout=3)
+
+    async def _submit_command(
+        self,
+        *,
+        target_worker: str,
+        kind: str,
+        payload: dict[str, object],
+        timeout_s: float,
+        notify_errors: bool = True,
+    ) -> dict[str, object] | None:
+        if self.runtime.bus is None or self.runtime.db is None or self.runtime.run_id is None:
+            if notify_errors:
+                self.notify("service bus unavailable", severity="error", timeout=4)
+            return None
+        command = CommandEvent(
+            run_id=self.runtime.run_id,
+            agent_id="tui",
+            target_worker=target_worker,
+            kind=kind,
+            payload=payload,
+            correlation_id=f"tui-{uuid4()}",
+            idempotency_key=f"tui-{kind}-{uuid4()}",
+        )
+        await self.runtime.bus.publish(command)
+        deadline = time.monotonic() + timeout_s
+        while time.monotonic() < deadline:
+            row = self.runtime.db.execute(
+                "SELECT status, result_json, last_error FROM commands WHERE id = ?",
+                (str(command.id),),
+            ).fetchone()
+            if row is None:
+                await asyncio.sleep(COMMAND_POLL_S)
+                continue
+            status = str(row["status"])
+            if status == "done":
+                raw = row["result_json"]
+                return json.loads(raw) if raw else {}
+            if status == "failed":
+                message = str(row["last_error"] or f"{kind} failed")
+                if notify_errors:
+                    self.notify(message, severity="error", timeout=8)
+                return None
+            await asyncio.sleep(COMMAND_POLL_S)
+        if notify_errors:
+            self.notify(f"{kind} timed out", severity="error", timeout=8)
+        return None
+
+    def _sync_collaborator_mirror_session(self) -> None:
+        if self.runtime.db is None:
+            return
+        row = self.runtime.db.execute(
+            "SELECT session FROM agents WHERE role='collaborator' "
+            "AND status IN ('running','idle') LIMIT 1"
+        ).fetchone()
+        if row is None:
+            return
+        self._mirror.set_session(str(row["session"]))
+        self.run_worker(self._mirror.refresh_pane(), exclusive=True, group="mirror")
+
+    def _crow_session_for_ticket(self, ticket_id: str) -> str | None:
+        if self.runtime.db is None:
+            return None
+        row = self.runtime.db.execute(
+            "SELECT session FROM agents WHERE ticket_id = ? AND role = 'crow' "
+            "AND status IN ('running','idle') LIMIT 1",
+            (ticket_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        return str(row["session"])
