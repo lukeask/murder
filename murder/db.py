@@ -170,6 +170,18 @@ CREATE TABLE IF NOT EXISTS notes (
 
 CREATE INDEX IF NOT EXISTS idx_notes_updated ON notes(updated_at);
 
+CREATE TABLE IF NOT EXISTS note_revisions (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    note_name    TEXT NOT NULL REFERENCES notes(name) ON DELETE CASCADE,
+    created_at   TEXT NOT NULL,
+    source       TEXT NOT NULL CHECK (source IN ('agent','file_import','bootstrap')),
+    body         TEXT NOT NULL,
+    content_hash TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_note_revisions_note
+    ON note_revisions(note_name, id);
+
 CREATE TABLE IF NOT EXISTS agent_messages (
     agent_id    TEXT NOT NULL,
     ordinal     INTEGER NOT NULL,
@@ -539,6 +551,37 @@ def upsert_note(
             "UPDATE notes SET updated_at = ?, body = ?, materialized_path = ? WHERE name = ?",
             (now, body, materialized_path, name),
         )
+
+
+def insert_note_revision(
+    conn: sqlite3.Connection,
+    name: str,
+    *,
+    source: str,
+    body: str,
+    content_hash: str,
+) -> int:
+    cur = conn.execute(
+        """
+        INSERT INTO note_revisions (note_name, created_at, source, body, content_hash)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        (name, _now(), source, body, content_hash),
+    )
+    return int(cur.lastrowid or 0)
+
+
+def list_note_revisions(conn: sqlite3.Connection, name: str) -> list[dict[str, Any]]:
+    rows = conn.execute(
+        """
+        SELECT id, note_name, created_at, source, body, content_hash
+          FROM note_revisions
+         WHERE note_name = ?
+         ORDER BY id
+        """,
+        (name,),
+    ).fetchall()
+    return [dict(r) for r in rows]
 
 
 # --- Agent conversation log -------------------------------------------------

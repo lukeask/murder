@@ -25,7 +25,14 @@ from murder.orchestrator import Orchestrator
 from murder.plans.sync import PlanSync, content_hash
 from murder.runtime import Runtime
 from murder.storage.filesystem import read_lock_pid
-from murder.storage.paths import agents_dir, db_path, lock_path, plans_dir, ticket_md
+from murder.storage.paths import (
+    agents_dir,
+    db_path,
+    lock_path,
+    notes_dir,
+    plans_dir,
+    ticket_md,
+)
 from murder.tickets import lifecycle
 from murder.tickets import parser as ticket_parser
 from murder.tickets import waves as waves_mod
@@ -516,6 +523,19 @@ def cmd_lint() -> None:
         for md in plans_dir(repo).glob("*.md"):
             if md.stem not in plan_rows:
                 issues.append(f"plan {md.stem}: orphan markdown {md}")
+    note_rows = {r["name"]: dict(r) for r in conn.execute("SELECT * FROM notes").fetchall()}
+    for name, row in note_rows.items():
+        md = repo / row["materialized_path"]
+        if not md.exists():
+            issues.append(f"note {name}: missing markdown {md}")
+            continue
+        text = md.read_text(encoding="utf-8")
+        if text != str(row["body"]):
+            issues.append(f"note {name}: DB/file body mismatch")
+    if notes_dir(repo).exists():
+        for md in notes_dir(repo).glob("*.md"):
+            if md.stem not in note_rows:
+                issues.append(f"note {md.stem}: orphan markdown {md}")
     rows = conn.execute("SELECT id FROM tickets").fetchall()
     tickets: list[Ticket] = []
     for r in rows:

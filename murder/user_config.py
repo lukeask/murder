@@ -2,16 +2,22 @@
 
 This is intentionally separate from project `.murder/roles.yaml`: it stores
 local UI preferences that should follow the user across repos.
+
+Optional `collaborator`, `default_crow`, and `notetaker` blocks mirror the
+shape of `.murder/roles.yaml` sections; they are merged globally before the
+project file (see `Config.load`).
 """
 
 from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import yaml
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+UserHarnessKind = Literal["cursor", "claude_code", "codex", "pi", "murder_native"]
 
 
 class TuiUserConfig(BaseModel):
@@ -19,8 +25,80 @@ class TuiUserConfig(BaseModel):
     editor: str | None = None
 
 
+class UserHarnessRolePatch(BaseModel):
+    """Partial harness role; fields align with `HarnessRoleConfig` for deep-merge."""
+
+    kind: Literal["harness"] | None = None
+    harness: UserHarnessKind | None = None
+    harnesses: list[UserHarnessKind] | None = Field(
+        default=None,
+        description=(
+            "Pool of harness kinds; tickets without harness override pick stably by ticket id."
+        ),
+    )
+    startup_model: str | None = None
+    startup_models: list[str] | None = Field(
+        default=None,
+        description=(
+            "Pool of startup model strings; tickets without model override pick "
+            "stably by ticket id."
+        ),
+    )
+    startup_models_by_harness: dict[UserHarnessKind, list[str]] | None = Field(
+        default=None,
+        description=(
+            "Per-harness startup model pools; tickets without model override pick "
+            "from the pool matching the resolved harness."
+        ),
+    )
+    startup_prompt_template: str | None = None
+    binary: str | None = None
+
+    @field_validator("harnesses", "startup_models", mode="before")
+    @classmethod
+    def _empty_seq_to_none(cls, v: Any) -> Any:
+        if v == []:
+            return None
+        return v
+
+    @field_validator("startup_models", mode="after")
+    @classmethod
+    def _normalize_model_strings(cls, v: list[str] | None) -> list[str] | None:
+        if v is None:
+            return None
+        out = [str(x).strip() for x in v if str(x).strip()]
+        return out or None
+
+    @field_validator("startup_models_by_harness", mode="after")
+    @classmethod
+    def _normalize_models_by_harness(
+        cls, v: dict[UserHarnessKind, list[str]] | None
+    ) -> dict[UserHarnessKind, list[str]] | None:
+        if v is None:
+            return None
+        out: dict[UserHarnessKind, list[str]] = {}
+        for harness, models in v.items():
+            cleaned = [str(x).strip() for x in models if str(x).strip()]
+            if cleaned:
+                out[harness] = cleaned
+        return out or None
+
+
+class UserNotetakerPatch(BaseModel):
+    """Partial notetaker api role; fields align with `NotetakerConfig` for deep-merge."""
+
+    kind: Literal["api"] | None = None
+    provider: Literal["openrouter", "anthropic", "openai", "local"] | None = None
+    model: str | None = None
+    max_tokens: int | None = None
+    max_context_tokens: int | None = None
+
+
 class UserConfig(BaseModel):
     tui: TuiUserConfig = Field(default_factory=TuiUserConfig)
+    collaborator: UserHarnessRolePatch | None = None
+    default_crow: UserHarnessRolePatch | None = None
+    notetaker: UserNotetakerPatch | None = None
 
 
 def config_dir() -> Path:

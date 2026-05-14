@@ -8,13 +8,13 @@ import json
 import os
 import shlex
 import shutil
-from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
 from murder import db as dbmod
 from murder.plans.parser import parse, render, write
 from murder.plans.schema import Plan, PlanStatus
+from murder.storage.markdown_sync import MarkdownSyncLoop
 from murder.storage.paths import plan_md, plans_dir
 
 
@@ -22,14 +22,7 @@ def content_hash(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
-@dataclass
-class FileSnapshot:
-    mtime_ns: int
-    size: int
-    hash: str | None = None
-
-
-class PlanSync:
+class PlanSync(MarkdownSyncLoop):
     """Poll `.murder/plans/*.md` and reconcile stable edits into SQLite."""
 
     def __init__(
@@ -40,53 +33,8 @@ class PlanSync:
         poll_s: float = 1.5,
         debounce_s: float = 0.75,
     ) -> None:
-        self.repo_root = repo_root
+        super().__init__(repo_root, poll_s=poll_s, debounce_s=debounce_s)
         self.db = db
-        self.poll_s = poll_s
-        self.debounce_s = debounce_s
-        self._seen: dict[Path, FileSnapshot] = {}
-        self._changed_at: dict[Path, float] = {}
-        self._running = False
-
-    async def run(self) -> None:
-        self._running = True
-        await self.reconcile_all()
-        try:
-            while self._running:
-                await self.poll_once()
-                await asyncio.sleep(self.poll_s)
-        finally:
-            self._running = False
-
-    async def poll_once(self) -> None:
-        now = asyncio.get_running_loop().time()
-        for path in self._scan_paths():
-            try:
-                stat = path.stat()
-            except FileNotFoundError:
-                # The file may disappear between scan and stat; treat as deleted.
-                self._seen.pop(path, None)
-                self._changed_at.pop(path, None)
-                continue
-            old = self._seen.get(path)
-            if old is None:
-                self._seen[path] = FileSnapshot(stat.st_mtime_ns, stat.st_size)
-                self._changed_at[path] = now
-                continue
-            if old.mtime_ns != stat.st_mtime_ns or old.size != stat.st_size:
-                self._seen[path] = FileSnapshot(stat.st_mtime_ns, stat.st_size)
-                self._changed_at[path] = now
-                continue
-            changed_at = self._changed_at.get(path)
-            if changed_at is not None and now - changed_at >= self.debounce_s:
-                await self.reconcile_file(path)
-                self._changed_at.pop(path, None)
-
-        existing = set(self._scan_paths())
-        for path in list(self._seen):
-            if path not in existing:
-                self._seen.pop(path, None)
-                self._changed_at.pop(path, None)
 
     async def reconcile_all(self) -> None:
         plans_dir(self.repo_root).mkdir(parents=True, exist_ok=True)
@@ -94,7 +42,7 @@ class PlanSync:
             path = self.repo_root / row["materialized_path"]
             if not path.exists():
                 self.materialize_row(row)
-        for path in self._scan_paths():
+        for path in self.scan_paths():
             await self.reconcile_file(path)
 
     async def reconcile_name(self, name: str) -> None:
@@ -197,6 +145,9 @@ class PlanSync:
             (h, h, datetime.utcnow().isoformat(timespec="seconds"), plan.name),
         )
         return path
+
+    def scan_paths(self) -> list[Path]:
+        return self._scan_paths()
 
     def _scan_paths(self) -> list[Path]:
         root = plans_dir(self.repo_root)

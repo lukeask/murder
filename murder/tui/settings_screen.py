@@ -1,4 +1,7 @@
-"""TUI settings screen — project harness/model config + global theme.
+"""TUI settings screen — project harness/model config + global user defaults.
+
+Global scope edits `~/.config/murder/config.yaml` (theme + optional
+`default_crow` patch). Project scope edits `.murder/roles.yaml`.
 
 Replaces the old `murder config` / `murder --config` CLI flow.
 """
@@ -20,7 +23,7 @@ from murder.config import Config, HarnessKind, HarnessRoleConfig
 from murder.harnesses import REGISTRY
 from murder.harnesses.model_discovery import discover_harness_models
 from murder.storage.paths import roles_yaml
-from murder.user_config import UserConfig, save_user_config
+from murder.user_config import UserConfig, UserHarnessRolePatch, save_user_config
 
 _HARNESS_ROWS: list[tuple[HarnessKind, str, str]] = [
     ("cursor", "Cursor CLI", "agent"),
@@ -156,7 +159,7 @@ class _SettingItem(Static, can_focus=False):
 
 
 class SettingsScreen(ModalScreen[bool]):
-    """Settings panel: global (theme) and project (harnesses + models)."""
+    """Settings panel: global (theme + user `default_crow`) and project (roles.yaml)."""
 
     BINDINGS = [
         Binding("escape", "cancel", "Cancel"),
@@ -295,9 +298,75 @@ class SettingsScreen(ModalScreen[bool]):
         self._notetaker_model: str = config.notetaker.model
         self._collaborator_harness: HarnessKind = config.collaborator.harness
 
+        # Global default_crow (staged from `user_config.default_crow` only — never merged
+        # project/bundled effective config).
+        self._initial_default_crow: UserHarnessRolePatch | None = (
+            user_config.default_crow.model_copy(deep=True)
+            if user_config.default_crow is not None
+            else None
+        )
+        self._global_crow_dirty = False
+        self._global_harnesses: set[HarnessKind] = set()
+        self._global_model_options: dict[HarnessKind, list[tuple[str, str]]] = {}
+        self._global_model_states: dict[HarnessKind, dict[str, ModelState]] = {}
+        self._global_model_discovery_attempted: set[HarnessKind] = set()
+        self._populate_global_crow_from_patch(user_config.default_crow)
+
         self._scope = "project"
         self._cursor_idx = 0
         self._focusable: list[_SettingItem] = []
+
+    def _populate_global_crow_from_patch(self, patch: UserHarnessRolePatch | None) -> None:
+        """Initialize global crow UI from the user file only (no project merge)."""
+        configured_models: dict[HarnessKind, list[str]] = {}
+        configured_defaults: dict[HarnessKind, str] = {}
+        pool: list[HarnessKind] = []
+        if patch is not None:
+            if patch.harnesses:
+                pool = [cast(HarnessKind, h) for h in patch.harnesses]
+            elif patch.harness is not None:
+                pool = [cast(HarnessKind, patch.harness)]
+            if patch.startup_models_by_harness:
+                for k, ms in patch.startup_models_by_harness.items():
+                    h = cast(HarnessKind, k)
+                    configured_models[h] = list(ms)
+                    if ms:
+                        configured_defaults[h] = ms[0]
+            elif patch.startup_models:
+                for h in pool:
+                    hk = cast(HarnessKind, h)
+                    configured_models[hk] = list(patch.startup_models)
+                    if patch.startup_model in patch.startup_models:
+                        configured_defaults[hk] = cast(str, patch.startup_model)
+                    elif patch.startup_models:
+                        configured_defaults[hk] = patch.startup_models[0]
+            elif patch.startup_model is not None:
+                for h in pool:
+                    hk = cast(HarnessKind, h)
+                    configured_models[hk] = [patch.startup_model]
+                    configured_defaults[hk] = patch.startup_model
+
+        self._global_harnesses = set(pool)
+        for kind, _, _ in _HARNESS_ROWS:
+            options = list(REGISTRY[kind].available_startup_models)
+            seen = {model_id for model_id, _ in options}
+            for model_id in configured_models.get(kind, []):
+                if model_id not in seen:
+                    options.append((model_id, model_id))
+                    seen.add(model_id)
+            self._global_model_options[kind] = options
+            default_model = configured_defaults.get(kind)
+            selected = set(configured_models.get(kind, []))
+            self._global_model_states[kind] = {
+                model_id: (
+                    "default"
+                    if model_id == default_model
+                    else "enabled"
+                    if model_id in selected
+                    else "disabled"
+                )
+                for model_id, _ in options
+            }
 
     # ── compose ────────────────────────────────────────────────────────────
 
@@ -309,7 +378,11 @@ class SettingsScreen(ModalScreen[bool]):
                 # Global section: theme
                 with Vertical(id="section-global"):
                     yield Static(
-                        "── THEME  (global: ~/.config/murder/) ──",
+                        "── GLOBAL  (~/.config/murder/) ──",
+                        classes="section-header",
+                    )
+                    yield Static(
+                        "── THEME ──",
                         classes="section-header",
                     )
                     for name in self._available_themes:
@@ -318,6 +391,37 @@ class SettingsScreen(ModalScreen[bool]):
                             checked=(name == self._theme_sel),
                             item_id=f"item-theme-{_sid(name)}",
                         )
+                    yield Static(
+                        "── ENABLED CROW HARNESSES  (your default crow) ──",
+                        classes="section-header",
+                    )
+                    for kind, label, exe in _HARNESS_ROWS:
+                        avail = "✓" if shutil.which(exe) else "✗"
+                        yield _SettingItem(
+                            "cb", f"{label}  [{avail}]",
+                            key=f"global_harness:{kind}",
+                            checked=(kind in self._global_harnesses),
+                            item_id=f"item-global-harness-{kind}",
+                        )
+                    for kind, label, _ in _HARNESS_ROWS:
+                        options = self._global_model_options[kind]
+                        section = Vertical(id=f"global-section-models-{_sid(kind)}")
+                        section.display = kind in self._global_harnesses
+                        with section:
+                            yield Static(
+                                f"── {label.upper()} MODELS  (global) ──",
+                                id=f"global-header-models-{_sid(kind)}",
+                                classes="section-header",
+                            )
+                            status = Static(
+                                "",
+                                id=f"global-status-models-{_sid(kind)}",
+                                classes="model-status",
+                            )
+                            status.display = False
+                            yield status
+                            for model_id, model_label in options:
+                                yield self._global_model_item(kind, model_id, model_label)
 
                 # Project section: harnesses, models, API roles
                 with Vertical(id="section-project"):
@@ -398,17 +502,24 @@ class SettingsScreen(ModalScreen[bool]):
                             item_id=f"item-crow_handler-{_sid(model_id)}",
                         )
             yield Static(
-                "j/k move  enter/spc toggle  g global  p project  s save  esc cancel",
+                "j/k move  enter/spc toggle  "
+                "g global (theme + your default crow)  p project  s save  esc cancel",
                 id="help-bar",
             )
 
     def on_mount(self) -> None:
         self._apply_scope()
         self._refresh_model_validation()
+        self._refresh_global_model_validation()
         self.run_worker(
             self._refresh_enabled_harness_model_options(),
             exclusive=True,
             group="settings_models",
+        )
+        self.run_worker(
+            self._refresh_global_enabled_harness_model_options(),
+            exclusive=True,
+            group="settings_global_models",
         )
 
     # ── scope ──────────────────────────────────────────────────────────────
@@ -506,6 +617,11 @@ class SettingsScreen(ModalScreen[bool]):
         elif kind == "collab_harness":
             self._collaborator_harness = cast(HarnessKind, payload)
             self._refresh_radio_group("collab_harness")
+        elif kind == "global_harness":
+            self._toggle_global_harness(item, cast(HarnessKind, payload))
+        elif kind == "global_model":
+            harness_s, model_id = payload.split(":", 1)
+            self._toggle_global_model(item, cast(HarnessKind, harness_s), model_id)
 
     def _toggle_harness(self, item: _SettingItem, kind: HarnessKind) -> None:
         if kind in self._harnesses:
@@ -544,6 +660,42 @@ class SettingsScreen(ModalScreen[bool]):
         item.model_state = next_state
         self._refresh_model_validation()
 
+    def _toggle_global_harness(self, item: _SettingItem, kind: HarnessKind) -> None:
+        self._global_crow_dirty = True
+        if kind in self._global_harnesses:
+            self._global_harnesses.discard(kind)
+            self._set_global_model_section_display(kind, False)
+        else:
+            self._global_harnesses.add(kind)
+            if not _ordered_enabled_models(
+                self._global_model_states.get(kind, {}),
+                self._global_model_ids(kind),
+            ):
+                first = next(iter(self._global_model_ids(kind)), None)
+                if first:
+                    self._global_model_states[kind][first] = "default"
+            self._set_global_model_section_display(kind, True)
+            self._start_global_model_discovery(kind)
+        item.checked = kind in self._global_harnesses
+        self._refresh_global_model_validation()
+        saved_key = item.key
+        self._rebuild_focusable()
+        self._cursor_idx = next(
+            (i for i, f in enumerate(self._focusable) if f.key == saved_key), 0
+        )
+        self._refresh_cursor()
+
+    def _toggle_global_model(
+        self, item: _SettingItem, kind: HarnessKind, model_id: str
+    ) -> None:
+        self._global_crow_dirty = True
+        state = self._global_model_states.setdefault(kind, {}).get(model_id, "disabled")
+        next_index = (_MODEL_STATE_ORDER.index(state) + 1) % len(_MODEL_STATE_ORDER)
+        next_state = _MODEL_STATE_ORDER[next_index]
+        self._global_model_states[kind][model_id] = next_state
+        item.model_state = next_state
+        self._refresh_global_model_validation()
+
     def _refresh_radio_group(self, group: str) -> None:
         group_value = {
             "theme": self._theme_sel,
@@ -572,6 +724,52 @@ class SettingsScreen(ModalScreen[bool]):
             model_state=self._model_states[kind].get(model_id, "disabled"),
             item_id=f"item-model-{_sid(kind)}-{_sid(model_id)}",
         )
+
+    def _global_model_widget(self, kind: HarnessKind, model_id: str) -> _SettingItem:
+        return self.query_one(
+            f"#item-global-model-{_sid(kind)}-{_sid(model_id)}", _SettingItem
+        )
+
+    def _global_model_item(
+        self, kind: HarnessKind, model_id: str, model_label: str
+    ) -> _SettingItem:
+        return _SettingItem(
+            "tri",
+            model_label,
+            key=f"global_model:{kind}:{model_id}",
+            indent=1,
+            model_state=self._global_model_states[kind].get(model_id, "disabled"),
+            item_id=f"item-global-model-{_sid(kind)}-{_sid(model_id)}",
+        )
+
+    def _global_model_ids(self, kind: HarnessKind) -> list[str]:
+        return [model_id for model_id, _ in self._global_model_options.get(kind, [])]
+
+    def _set_global_model_section_display(self, kind: HarnessKind, visible: bool) -> None:
+        self.query_one(f"#global-section-models-{_sid(kind)}").display = visible
+        for model_id in self._global_model_ids(kind):
+            widget = self._global_model_widget(kind, model_id)
+            widget.model_state = self._global_model_states.get(kind, {}).get(
+                model_id, "disabled"
+            )
+
+    def _refresh_global_model_validation(self) -> None:
+        for kind, _, _ in _HARNESS_ROWS:
+            if not self._global_model_options.get(kind):
+                continue
+            status = self.query_one(f"#global-status-models-{_sid(kind)}", Static)
+            message = None
+            if kind in self._global_harnesses:
+                message = _model_validation_message(
+                    self._global_model_states.get(kind, {}),
+                    self._global_model_ids(kind),
+                )
+            if message:
+                status.update(message)
+                status.display = True
+            else:
+                status.update("")
+                status.display = False
 
     def _model_ids(self, kind: HarnessKind) -> list[str]:
         return [model_id for model_id, _ in self._model_options.get(kind, [])]

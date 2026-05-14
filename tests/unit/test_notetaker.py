@@ -71,6 +71,30 @@ def test_latest_prior_note_skips_empty_and_self(memdb, tmp_path: Path) -> None:
     assert prior == ("2026-05-09", "old stuff")
 
 
+def test_ensure_note_imports_existing_file_without_clobber(memdb, tmp_path: Path) -> None:
+    path = tmp_path / ".murder" / "notes" / "2026-05-11.md"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("# Existing\n- keep me", encoding="utf-8")
+
+    row = notes.ensure_note(memdb, tmp_path, "2026-05-11")
+    assert str(row["body"]) == "# Existing\n- keep me"
+    assert notes.read_note(memdb, "2026-05-11") == "# Existing\n- keep me"
+    assert path.read_text(encoding="utf-8") == "# Existing\n- keep me"
+
+
+def test_write_note_records_revisions(memdb, tmp_path: Path) -> None:
+    notes.write_note(memdb, tmp_path, "2026-05-11", "v1")
+    notes.write_note(memdb, tmp_path, "2026-05-11", "v2")
+    revisions = memdb.execute(
+        "SELECT source, body FROM note_revisions WHERE note_name = ? ORDER BY id",
+        ("2026-05-11",),
+    ).fetchall()
+    assert [(r["source"], r["body"]) for r in revisions] == [
+        ("agent", "v1"),
+        ("agent", "v2"),
+    ]
+
+
 # ── NotetakerAgent ─────────────────────────────────────────────────────────
 
 

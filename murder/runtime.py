@@ -18,19 +18,23 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import shlex
 import signal
 import sqlite3
+import subprocess
 from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from murder import db as dbmod
+from murder import notes as notes_mod
 from murder.agents.base import AgentRole
 from murder.bus import AgentStatus, Bus, EventFilter, SubscriptionHandle
+from murder.notes_sync import NoteSync
 from murder.plans.sync import PlanSync, choose_editor, open_editor
 from murder.storage.filesystem import acquire_flock, release_flock
-from murder.storage.paths import db_path, lock_path
+from murder.storage.paths import db_path, lock_path, note_md
 from murder.storage.runs import allocate_run_id
 
 if TYPE_CHECKING:
@@ -57,6 +61,7 @@ class Runtime:
         self._external_stop = asyncio.Event()
         self._lock_fd: int | None = None
         self.plan_sync: PlanSync | None = None
+        self.note_sync: NoteSync | None = None
 
     async def __aenter__(self) -> "Runtime":
         await self.start()
@@ -76,8 +81,11 @@ class Runtime:
         dbmod.insert_run(self.db, self.run_id, snap)
         self.bus = Bus(self.run_id, self.db)
         self.plan_sync = PlanSync(self.repo_root, self.db)
+        self.note_sync = NoteSync(self.repo_root, self.db)
         await self.plan_sync.reconcile_all()
+        await self.note_sync.reconcile_all()
         self._tasks["plan_sync"] = asyncio.create_task(self.plan_sync.run())
+        self._tasks["note_sync"] = asyncio.create_task(self.note_sync.run())
 
     async def stop(self) -> None:
         self._shutdown.set()
@@ -89,6 +97,9 @@ class Runtime:
         if self.plan_sync is not None:
             with contextlib.suppress(Exception):
                 await self.plan_sync.reconcile_all()
+        if self.note_sync is not None:
+            with contextlib.suppress(Exception):
+                await self.note_sync.reconcile_all()
         terminal_statuses = {AgentStatus.DONE, AgentStatus.FAILED, AgentStatus.DEAD}
         for agent in list(self._agents.values()):
             with contextlib.suppress(Exception):
@@ -102,6 +113,7 @@ class Runtime:
             self.db.close()
             self.db = None
         self.plan_sync = None
+        self.note_sync = None
         self.bus = None
         self.run_id = None
         if self._lock_fd is not None:
@@ -208,3 +220,36 @@ class Runtime:
         code = await open_editor(path, editor)
         await self.plan_sync.reconcile_name(name)
         return code
+
+    async def open_note_in_editor(self, name: str, preferred_editor: str | None = None) -> int:
+        if self.db is None:
+            raise RuntimeError("Runtime not started (no database)")
+        notes_mod.ensure_note(self.db, self.repo_root, name)
+        path = note_md(self.repo_root, name)
+        editor = choose_editor(preferred_editor)
+        code = await open_editor(path, editor)
+        if self.note_sync is not None:
+            await self.note_sync.reconcile_file(path)
+        return code
+
+    def open_editor_blocking(self, path: Path, preferred_editor: str | None = None) -> int:
+        editor = choose_editor(preferred_editor)
+        argv = shlex.split(editor)
+        if not argv:
+            argv = ["vi"]
+        proc = subprocess.run([*argv, str(path)], check=False)
+        return int(proc.returncode)
+
+    def plan_path_for(self, name: str) -> Path:
+        row = dbmod.get_plan_row(self.db, name) if self.db is not None else None
+        return (
+            self.repo_root / row["materialized_path"]
+            if row
+            else self.repo_root / ".murder" / "plans" / f"{name}.md"
+        )
+
+    def note_path_for(self, name: str) -> Path:
+        if self.db is None:
+            raise RuntimeError("Runtime not started (no database)")
+        notes_mod.ensure_note(self.db, self.repo_root, name)
+        return note_md(self.repo_root, name)

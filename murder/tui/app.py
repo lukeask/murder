@@ -37,6 +37,7 @@ from murder.tui.settings_screen import SettingsScreen
 from murder.tui.themes import CUSTOM_THEMES
 from murder.tui.ticket_grid import TicketGrid
 from murder.user_config import UserConfig, load_user_config
+from murder.storage.paths import note_md
 
 if TYPE_CHECKING:
     from murder.orchestrator import Orchestrator
@@ -45,6 +46,12 @@ if TYPE_CHECKING:
 COLLABORATOR_START_TIMEOUT_S = 120.0
 SCHEDULE_USAGE_DEBOUNCE_S = 20.0
 CTRL_C_DOUBLE_TAP_S = 1.5
+
+
+def _chat_target_label(view: str, planning_mode: str) -> str:
+    if view == "planning" and planning_mode == "notetaker":
+        return "notetaker"
+    return "collaborator"
 
 
 class HelpScreen(ModalScreen[None]):
@@ -90,7 +97,7 @@ class HelpScreen(ModalScreen[None]):
                         "ctrl+b  toggle docs sidebar (notes / plans filetree)",
                         "ctrl+y  collaborator: parsed chat ⇄ raw tmux pane",
                         "ctrl+c twice  force quit  ·  escape  unfocus chat",
-                        "j/k  vim navigation in lists",
+                        "j/k or ↑/↓  vim-style navigation in lists and logs",
                         "r refresh · u refresh usage",
                         "ctrl+p settings (harnesses, models, theme)",
                         "murder --help shows the CLI reference",
@@ -181,7 +188,6 @@ class MurderApp(App[None]):
         self._sidebar_visible = True
         self._collab_raw = False  # ctrl+y: show the raw tmux pane instead of the parsed chat
         self._notetaker_loaded = False
-        self._last_notes_sig: tuple[str, str] | None = None
         self._user_config: UserConfig = load_user_config()
         self._view = "planning"
         self._last_schedule_usage_attempt_at: float | None = None
@@ -311,13 +317,17 @@ class MurderApp(App[None]):
                 self._plan_doc.display = True
             self.run_worker(self._render_plan(event.name), exclusive=True, group="plandoc")
 
-    def on_plan_list_plan_opened(self, event: PlanList.PlanOpened) -> None:
-        self.run_worker(self._open_plan(event.name), exclusive=True, group="editor")
+    async def on_plan_list_plan_opened(self, event: PlanList.PlanOpened) -> None:
+        await self._open_plan(event.name)
 
     def on_notes_list_note_highlighted(self, event: NotesList.NoteHighlighted) -> None:
         del event  # _active_note_name() reads the list cursor directly
         if self._view == "planning" and self._planning_mode == "notetaker":
             self.run_worker(self._render_notes(), exclusive=True, group="notes")
+
+    async def on_notes_list_note_opened(self, event: NotesList.NoteOpened) -> None:
+        if self._view == "planning" and self._planning_mode == "notetaker":
+            await self._open_note(event.name)
 
     async def _render_plan(self, name: str) -> None:
         await self.runtime.reconcile_plan(name)
@@ -347,11 +357,27 @@ class MurderApp(App[None]):
         await self._plan_doc.update(text)
 
     async def _open_plan(self, name: str) -> None:
-        code = await self.runtime.open_plan_in_editor(name, self._user_config.tui.editor)
+        await self.runtime.reconcile_plan(name)
+        path = self.runtime.plan_path_for(name)
+        with self.suspend():
+            code = self.runtime.open_editor_blocking(path, self._user_config.tui.editor)
         if code != 0:
             self.notify(f"editor exited with {code}", severity="warning", timeout=5)
+        await self.runtime.reconcile_plan(name)
         self._refresh_db_views()
         await self._render_plan(name)
+
+    async def _open_note(self, name: str) -> None:
+        path = self.runtime.note_path_for(name)
+        with self.suspend():
+            code = self.runtime.open_editor_blocking(path, self._user_config.tui.editor)
+        if code != 0:
+            self.notify(f"editor exited with {code}", severity="warning", timeout=5)
+        if self.runtime.note_sync is not None:
+            await self.runtime.note_sync.reconcile_file(path)
+        self._refresh_db_views()
+        await self._render_notes()
+        self.set_focus(self._notes_doc)
 
     # ── notetaker mode ─────────────────────────────────────────────────────
 
@@ -380,10 +406,12 @@ class MurderApp(App[None]):
             return
         row = dbmod.get_note(db, name)
         body = str(row["body"]) if row else ""
-        sig = (name, str(row["updated_at"]) if row else "")
-        if sig == self._last_notes_sig:
-            return
-        self._last_notes_sig = sig
+        if not body.strip():
+            path = note_md(self.runtime.repo_root, name)
+            if path.exists():
+                body = path.read_text(encoding="utf-8")
+        # Avoid stale-placeholder lock-in on startup: render from source of
+        # truth every refresh tick rather than short-circuiting by timestamp.
         await self._notes_doc.show(name, body)
 
     async def _enter_notetaker(self) -> None:
@@ -523,6 +551,7 @@ class MurderApp(App[None]):
         collab_mode = planning and self._planning_mode == "collaborator"
         collab_chat_on = collab_mode and not self._collab_raw
         collab_raw_on = collab_mode and self._collab_raw
+        self._chat.set_recipient(_chat_target_label(self._view, self._planning_mode))
         self._header.set_view(self._view, self._planning_mode if planning else None)
         self._grid.display = False
         self._agents.display = self._view == "crows"
@@ -568,7 +597,6 @@ class MurderApp(App[None]):
         )
 
     def on_chat_input_user_message(self, event: ChatInput.UserMessage) -> None:
-        self.notify(f"you: {event.text[:90]}", timeout=2)
         if self.orchestrator is None:
             self.notify("chat: no orchestrator attached", severity="error", timeout=3)
             return
