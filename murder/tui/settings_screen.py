@@ -49,6 +49,114 @@ ModelState: TypeAlias = Literal["disabled", "enabled", "default"]
 _MODEL_STATE_ORDER: tuple[ModelState, ...] = ("disabled", "enabled", "default")
 
 
+def _read_patch_models(  # noqa: PLR0912 — mirrors the patch's three mutually-exclusive model-spec arms; splitting further fragments one algorithm.
+    patch: HarnessRoleConfig | UserHarnessRolePatch | None,
+) -> tuple[list[HarnessKind], dict[HarnessKind, list[str]], dict[HarnessKind, str]]:
+    """Read the patch's harness/model intent. Pure domain projection.
+
+    Returns (pool, configured_models, configured_defaults). Empty pool
+    means "no harnesses enabled." Unified rule for picking a per-harness
+    default when `startup_models_by_harness` isn't set: prefer
+    `startup_model` if it's in the pool, else fall back to the pool's
+    first entry.
+    """
+    if patch is None:
+        return [], {}, {}
+
+    if patch.harnesses:
+        pool: list[HarnessKind] = [cast(HarnessKind, h) for h in patch.harnesses]
+    elif patch.harness is not None:
+        pool = [cast(HarnessKind, patch.harness)]
+    else:
+        pool = []
+
+    configured_models: dict[HarnessKind, list[str]] = {}
+    configured_defaults: dict[HarnessKind, str] = {}
+
+    if patch.startup_models_by_harness:
+        for k, ms in patch.startup_models_by_harness.items():
+            h = cast(HarnessKind, k)
+            configured_models[h] = list(ms)
+            if ms:
+                configured_defaults[h] = ms[0]
+    elif patch.startup_models:
+        for h in pool:
+            hk = cast(HarnessKind, h)
+            configured_models[hk] = list(patch.startup_models)
+            if patch.startup_model in patch.startup_models:
+                configured_defaults[hk] = cast(str, patch.startup_model)
+            else:
+                configured_defaults[hk] = patch.startup_models[0]
+    elif patch.startup_model is not None:
+        for h in pool:
+            hk = cast(HarnessKind, h)
+            configured_models[hk] = [patch.startup_model]
+            configured_defaults[hk] = patch.startup_model
+
+    return pool, configured_models, configured_defaults
+
+
+def _build_ui_model_state(
+    configured_models: dict[HarnessKind, list[str]],
+    configured_defaults: dict[HarnessKind, str],
+) -> tuple[
+    dict[HarnessKind, list[tuple[str, str]]],
+    dict[HarnessKind, dict[str, ModelState]],
+]:
+    """Project domain model selections into the UI's per-harness option
+    list (REGISTRY defaults plus anything the patch referenced) and a
+    `default`/`enabled`/`disabled` classifier per option."""
+    options_by_kind: dict[HarnessKind, list[tuple[str, str]]] = {}
+    states_by_kind: dict[HarnessKind, dict[str, ModelState]] = {}
+    for kind, _, _ in _HARNESS_ROWS:
+        options = list(REGISTRY[kind].available_startup_models)
+        seen = {model_id for model_id, _ in options}
+        for model_id in configured_models.get(kind, []):
+            if model_id not in seen:
+                options.append((model_id, model_id))
+                seen.add(model_id)
+        options_by_kind[kind] = options
+        default_model = configured_defaults.get(kind)
+        selected = set(configured_models.get(kind, []))
+        states_by_kind[kind] = {
+            model_id: _classify_model_state(model_id, default_model, selected)
+            for model_id, _ in options
+        }
+    return options_by_kind, states_by_kind
+
+
+def _classify_model_state(
+    model_id: str, default_model: str | None, selected: set[str]
+) -> ModelState:
+    if model_id == default_model:
+        return "default"
+    if model_id in selected:
+        return "enabled"
+    return "disabled"
+
+
+def _resolve_crow_model_state(
+    patch: HarnessRoleConfig | UserHarnessRolePatch | None,
+) -> tuple[
+    set[HarnessKind],
+    dict[HarnessKind, list[tuple[str, str]]],
+    dict[HarnessKind, dict[str, ModelState]],
+]:
+    """Project a harness-role patch into UI-staged settings state.
+
+    Both the project scope (`Config.default_crow`) and the global scope
+    (`UserConfig.default_crow`) feed UI state through the same shape.
+    Composes patch-reading and UI-building so the two scopes share one
+    algorithm — the two used to inline it and had drifted on the
+    `startup_models` fallback.
+    """
+    pool, configured_models, configured_defaults = _read_patch_models(patch)
+    options_by_kind, states_by_kind = _build_ui_model_state(
+        configured_models, configured_defaults
+    )
+    return set(pool), options_by_kind, states_by_kind
+
+
 def _sid(s: str) -> str:
     """Sanitize a string for use as a Textual widget ID suffix."""
     return "".join(c if c.isalnum() or c == "_" else "_" for c in s)
@@ -247,52 +355,13 @@ class SettingsScreen(ModalScreen[bool]):
             available_themes[0] if available_themes else ""
         )
 
-        # Project state
-        crow = config.default_crow
-        pool: list[HarnessKind] = list(crow.harnesses) if crow.harnesses else [crow.harness]
-        self._harnesses: set[HarnessKind] = set(pool)
-        configured_models: dict[HarnessKind, list[str]] = {}
-        configured_defaults: dict[HarnessKind, str] = {}
-        if crow.startup_models_by_harness:
-            for k, ms in crow.startup_models_by_harness.items():
-                h = cast(HarnessKind, k)
-                configured_models[h] = list(ms)
-                if ms:
-                    configured_defaults[h] = ms[0]
-        elif crow.startup_models:
-            for h in pool:
-                hk = cast(HarnessKind, h)
-                configured_models[hk] = list(crow.startup_models)
-                if crow.startup_model in crow.startup_models:
-                    configured_defaults[hk] = cast(str, crow.startup_model)
-        elif crow.startup_model:
-            for h in pool:
-                hk = cast(HarnessKind, h)
-                configured_models[hk] = [crow.startup_model]
-                configured_defaults[hk] = crow.startup_model
-        self._model_options: dict[HarnessKind, list[tuple[str, str]]] = {}
-        self._model_states: dict[HarnessKind, dict[str, ModelState]] = {}
+        # Project state — resolved via the shared patch projector.
+        (
+            self._harnesses,
+            self._model_options,
+            self._model_states,
+        ) = _resolve_crow_model_state(config.default_crow)
         self._model_discovery_attempted: set[HarnessKind] = set()
-        for kind, _, _ in _HARNESS_ROWS:
-            options = list(REGISTRY[kind].available_startup_models)
-            seen = {model_id for model_id, _ in options}
-            for model_id in configured_models.get(kind, []):
-                if model_id not in seen:
-                    options.append((model_id, model_id))
-                    seen.add(model_id)
-            self._model_options[kind] = options
-            default_model = configured_defaults.get(kind)
-            selected = set(configured_models.get(kind, []))
-            self._model_states[kind] = {
-                model_id: (
-                    "default"
-                    if model_id == default_model
-                    else "enabled"
-                    if model_id in selected
-                    else "disabled"
-                )
-                for model_id, _ in options
-            }
         self._sentinel_model: str = config.sentinel.model
         self._crow_handler_model: str = config.crow_handler.model
         self._notetaker_model: str = config.notetaker.model
@@ -306,9 +375,6 @@ class SettingsScreen(ModalScreen[bool]):
             else None
         )
         self._global_crow_dirty = False
-        self._global_harnesses: set[HarnessKind] = set()
-        self._global_model_options: dict[HarnessKind, list[tuple[str, str]]] = {}
-        self._global_model_states: dict[HarnessKind, dict[str, ModelState]] = {}
         self._global_model_discovery_attempted: set[HarnessKind] = set()
         self._populate_global_crow_from_patch(user_config.default_crow)
 
@@ -318,55 +384,11 @@ class SettingsScreen(ModalScreen[bool]):
 
     def _populate_global_crow_from_patch(self, patch: UserHarnessRolePatch | None) -> None:
         """Initialize global crow UI from the user file only (no project merge)."""
-        configured_models: dict[HarnessKind, list[str]] = {}
-        configured_defaults: dict[HarnessKind, str] = {}
-        pool: list[HarnessKind] = []
-        if patch is not None:
-            if patch.harnesses:
-                pool = [cast(HarnessKind, h) for h in patch.harnesses]
-            elif patch.harness is not None:
-                pool = [cast(HarnessKind, patch.harness)]
-            if patch.startup_models_by_harness:
-                for k, ms in patch.startup_models_by_harness.items():
-                    h = cast(HarnessKind, k)
-                    configured_models[h] = list(ms)
-                    if ms:
-                        configured_defaults[h] = ms[0]
-            elif patch.startup_models:
-                for h in pool:
-                    hk = cast(HarnessKind, h)
-                    configured_models[hk] = list(patch.startup_models)
-                    if patch.startup_model in patch.startup_models:
-                        configured_defaults[hk] = cast(str, patch.startup_model)
-                    elif patch.startup_models:
-                        configured_defaults[hk] = patch.startup_models[0]
-            elif patch.startup_model is not None:
-                for h in pool:
-                    hk = cast(HarnessKind, h)
-                    configured_models[hk] = [patch.startup_model]
-                    configured_defaults[hk] = patch.startup_model
-
-        self._global_harnesses = set(pool)
-        for kind, _, _ in _HARNESS_ROWS:
-            options = list(REGISTRY[kind].available_startup_models)
-            seen = {model_id for model_id, _ in options}
-            for model_id in configured_models.get(kind, []):
-                if model_id not in seen:
-                    options.append((model_id, model_id))
-                    seen.add(model_id)
-            self._global_model_options[kind] = options
-            default_model = configured_defaults.get(kind)
-            selected = set(configured_models.get(kind, []))
-            self._global_model_states[kind] = {
-                model_id: (
-                    "default"
-                    if model_id == default_model
-                    else "enabled"
-                    if model_id in selected
-                    else "disabled"
-                )
-                for model_id, _ in options
-            }
+        (
+            self._global_harnesses,
+            self._global_model_options,
+            self._global_model_states,
+        ) = _resolve_crow_model_state(patch)
 
     # ── compose ────────────────────────────────────────────────────────────
 
