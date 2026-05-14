@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from murder.tui.app import _chat_target_label
+from murder.tui.app import MurderApp, _chat_target_label
 from murder.tui.chat_input import ChatInput
 from murder.tui.plan_view import ChatLog, NotesDocument, NotesList, PlanDocument, PlanList
 
@@ -64,4 +64,44 @@ def test_notes_list_arrow_matches_jk_actions() -> None:
 
 def test_chat_log_uses_flexible_width() -> None:
     assert "width: 1fr;" in ChatLog.DEFAULT_CSS
+
+
+# ── pane motion spine (VISION §4.3) ────────────────────────────────────────
+
+
+def _app_binding_actions(key: str) -> list[str]:
+    return [b.action for b in MurderApp._merged_bindings.key_to_bindings.get(key, [])]
+
+
+def test_app_binds_ctrl_hjkl_to_pane_focus() -> None:
+    assert _app_binding_actions("ctrl+h") == ["focus_left"]
+    assert _app_binding_actions("ctrl+j") == ["focus_down"]
+    assert _app_binding_actions("ctrl+k") == ["focus_up"]
+    assert _app_binding_actions("ctrl+l") == ["focus_right"]
+
+
+def test_app_binds_ctrl_arrows_parallel_to_ctrl_hjkl() -> None:
+    assert _app_binding_actions("ctrl+left") == _app_binding_actions("ctrl+h")
+    assert _app_binding_actions("ctrl+down") == _app_binding_actions("ctrl+j")
+    assert _app_binding_actions("ctrl+up") == _app_binding_actions("ctrl+k")
+    assert _app_binding_actions("ctrl+right") == _app_binding_actions("ctrl+l")
+
+
+def test_app_binds_tab_to_focus_traversal() -> None:
+    assert _app_binding_actions("tab") == ["focus_next_region"]
+    assert _app_binding_actions("shift+tab") == ["focus_previous_region"]
+
+
+def test_tab_binding_is_priority_so_textarea_cannot_swallow_it() -> None:
+    bindings = MurderApp._merged_bindings.key_to_bindings["tab"]
+    assert any(b.priority for b in bindings)
+
+
+def test_bare_hjkl_are_not_app_level_so_widgets_keep_intra_pane_motion() -> None:
+    # Sanity: the app must not steal directional keys; only ctrl-modified
+    # variants and tab move focus between panes.
+    for key in ("h", "j", "k", "l"):
+        assert _app_binding_actions(key) == [], (
+            f"App binds bare {key!r}; that would break intra-pane vim motion"
+        )
 
