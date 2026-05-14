@@ -19,6 +19,9 @@ import typer
 from murder import __version__
 from murder import db as dbmod
 from murder.bus import TicketStatus
+from murder.bus.broker import DurableBroker
+from murder.bus.protocol import CommandEvent
+from murder.bus.transport_socket import SocketBusServer
 from murder.config import Config, HarnessRoleConfig, project_env_path
 from murder.harnesses import REGISTRY
 from murder.orchestrator import Orchestrator
@@ -33,10 +36,19 @@ from murder.storage.paths import (
     plans_dir,
     ticket_md,
 )
+from murder.supervisor import Supervisor
 from murder.tickets import lifecycle
 from murder.tickets import parser as ticket_parser
 from murder.tickets import waves as waves_mod
 from murder.tickets.schema import ChecklistItem, Ticket
+from murder.tui.app import MurderApp
+from murder.workers import (
+    CollaboratorWorker,
+    OrchestratorCommandWorker,
+    StateCommandWorker,
+    UsageProbeWorker,
+    WorkerCtx,
+)
 
 app = typer.Typer(
     name="murder",
@@ -216,7 +228,10 @@ def kick_preflight(cfg: Config, repo: Path) -> None:
     _require_git_head(repo)
     if cfg.project.name == "TODO_SET_ME":
         typer.secho(
-            "Warning: project.name is still TODO_SET_ME; open Settings (ctrl+p) in the TUI to set it.",
+            (
+                "Warning: project.name is still TODO_SET_ME; "
+                "open Settings (ctrl+p) in the TUI to set it."
+            ),
             fg=typer.colors.YELLOW,
             err=True,
         )
@@ -246,6 +261,86 @@ async def _bare_kickoff(ticket: str | None) -> None:
             await rt.run_until_signal()
 
 
+def _register_service_rpc_handlers(rt: Runtime, broker: DurableBroker) -> None:
+    broker.register_rpc_handler(
+        "health.ping",
+        lambda _body: {"ok": True, "run_id": rt.run_id, "pid": os.getpid()},
+    )
+
+    async def _command_submit(body: dict) -> dict:
+        target_worker = str(body.get("target_worker", "")).strip()
+        kind = str(body.get("kind", "")).strip()
+        payload = body.get("payload")
+        if not target_worker or not kind:
+            raise ValueError("command.submit requires target_worker and kind")
+        if payload is None:
+            payload = {}
+        if not isinstance(payload, dict):
+            raise ValueError("command.submit payload must be an object")
+        command = CommandEvent(
+            run_id=str(rt.run_id),
+            agent_id=str(body.get("agent_id") or "rpc-client"),
+            target_worker=target_worker,
+            kind=kind,
+            payload=payload,
+            correlation_id=str(body.get("correlation_id") or f"rpc-{os.getpid()}"),
+            idempotency_key=str(body.get("idempotency_key") or os.urandom(16).hex()),
+        )
+        await broker.publish(command)
+        return {"ok": True, "command_id": str(command.id)}
+
+    def _command_status(body: dict) -> dict:
+        if rt.db is None:
+            return {"ok": False, "error": "runtime_db_unavailable"}
+        command_id = str(body.get("command_id", "")).strip()
+        if not command_id:
+            raise ValueError("command.status requires command_id")
+        row = rt.db.execute(
+            "SELECT status, result_json, last_error, updated_at FROM commands WHERE id = ?",
+            (command_id,),
+        ).fetchone()
+        if row is None:
+            return {"ok": False, "error": "not_found", "command_id": command_id}
+        return {
+            "ok": True,
+            "command_id": command_id,
+            "status": row["status"],
+            "result_json": row["result_json"],
+            "last_error": row["last_error"],
+            "updated_at": row["updated_at"],
+        }
+
+    broker.register_rpc_handler("command.submit", _command_submit)
+    broker.register_rpc_handler("command.status", _command_status)
+
+
+async def _start_service_supervisor(
+    *,
+    repo: Path,
+    rt: Runtime,
+    orch: Orchestrator,
+    broker: DurableBroker,
+) -> Supervisor:
+    worker_ctx = WorkerCtx(repo_root=repo, db=rt.db, bus=broker, run_id=rt.run_id)
+    supervisor = Supervisor(worker_ctx)
+    await supervisor.start_worker(StateCommandWorker())
+    await supervisor.start_worker(UsageProbeWorker.from_runtime(rt))
+    await supervisor.start_worker(
+        CollaboratorWorker(
+            ensure_collaborator=orch.ensure_collaborator,
+            get_agent=rt.get_agent,
+        )
+    )
+    await supervisor.start_worker(
+        OrchestratorCommandWorker(
+            kickoff_ready=orch.kickoff_ready,
+            ensure_notetaker=orch.ensure_notetaker,
+            get_agent=rt.get_agent,
+        )
+    )
+    return supervisor
+
+
 async def _launch_tui() -> None:
     repo = _repo_root()
     cfg = Config.load(repo)
@@ -255,13 +350,32 @@ async def _launch_tui() -> None:
     os.environ.setdefault("NO_AT_BRIDGE", "1")
     async with Runtime(cfg, repo) as rt:
         orch = Orchestrator(rt)
+        if rt.db is None or rt.bus is None or rt.run_id is None:
+            raise RuntimeError("runtime failed to initialize db/bus/run_id")
+        broker = DurableBroker(rt.bus, rt.db)
+        _register_service_rpc_handlers(rt, broker)
+        socket_server = SocketBusServer(
+            broker,
+            run_id=rt.run_id,
+        )
+        await socket_server.start()
+        supervisor = await _start_service_supervisor(
+            repo=repo,
+            rt=rt,
+            orch=orch,
+            broker=broker,
+        )
         if os.environ.get("OPENROUTER_API_KEY"):
             with contextlib.suppress(Exception):
                 await orch.ensure_sentinel()
-        from murder.tui.app import MurderApp
 
         app_ui = MurderApp(rt, orchestrator=orch)
-        await app_ui.run_async()
+        try:
+            await app_ui.run_async()
+        finally:
+            await supervisor.stop_all()
+            with contextlib.suppress(FileNotFoundError, OSError):
+                await socket_server.stop()
 
 
 @app.callback()
