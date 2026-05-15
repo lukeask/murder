@@ -31,8 +31,12 @@ class Agent(ABC):
         send the system prompt. For native daemons: kick off the loop."""
 
     @abstractmethod
-    async def stop(self, *, failed: bool = False) -> None:
-        """Shut down. Idempotent."""
+    async def stop(self, *, failed: bool = False, kill_session: bool = True) -> None:
+        """Shut down. Idempotent.
+
+        kill_session=False leaves the tmux session alive so a subsequent
+        Runtime.start() can detect and reattach (graceful TUI quit path).
+        """
 
     @abstractmethod
     async def send(self, msg: str) -> None:

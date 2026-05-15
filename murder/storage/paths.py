@@ -79,3 +79,8 @@ def shelved_dir(repo_root: Path) -> Path:
 
 def roles_yaml(repo_root: Path) -> Path:
     return agents_dir(repo_root) / "roles.yaml"
+
+
+def notetaker_context_md(repo_root: Path) -> Path:
+    """Singleton markdown backing the notetaker prompt context (DB is source of truth)."""
+    return agents_dir(repo_root) / "notetakercontext.md"

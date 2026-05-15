@@ -88,13 +88,14 @@ class CrowAgent(Agent):
                     )
                 )
 
-    async def stop(self, *, failed: bool = False) -> None:
+    async def stop(self, *, failed: bool = False, kill_session: bool = True) -> None:
         from murder import tmux
 
-        with contextlib.suppress(Exception):
-            await self.harness_session.interrupt()
-        with contextlib.suppress(Exception):
-            await tmux.kill_session(self.session)
+        if kill_session:
+            with contextlib.suppress(Exception):
+                await self.harness_session.interrupt()
+            with contextlib.suppress(Exception):
+                await tmux.kill_session(self.session)
         if failed or self.status == AgentStatus.FAILED:
             self.status = AgentStatus.FAILED
         else:

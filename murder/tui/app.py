@@ -4,6 +4,7 @@ escalation strip onto the running Runtime."""
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import time
 from typing import TYPE_CHECKING
@@ -20,11 +21,13 @@ from murder import notes as notes_mod
 from murder import tmux
 from murder.bus.protocol import CommandEvent
 from murder.config import Config
+from murder.harnesses import REGISTRY
 from murder.storage.paths import note_md
 from murder.tui.chat_input import ChatInput
 from murder.tui.crows_view import CrowsView, CrowTile
 from murder.tui.escalation_strip import EscalationStrip
 from murder.tui.header import Header
+from murder.tui.note_capture import RECENT_NOTE_ROWS, NoteCaptureScreen
 from murder.tui.pane_mirror import PaneMirror
 from murder.tui.plan_view import (
     ChatLog,
@@ -33,7 +36,7 @@ from murder.tui.plan_view import (
     PlanDocument,
     PlanList,
 )
-from murder.tui.schedule_view import ScheduleView
+from murder.tui.schedule_view import CarveFormScreen, ScheduleTicketsTable, ScheduleView
 from murder.tui.settings_screen import SettingsScreen
 from murder.tui.themes import CUSTOM_THEMES
 from murder.tui.ticket_grid import TicketGrid
@@ -49,6 +52,19 @@ COLLABORATOR_START_TIMEOUT_S = 120.0
 COMMAND_POLL_S = 0.05
 SCHEDULE_USAGE_DEBOUNCE_S = 20.0
 CTRL_C_DOUBLE_TAP_S = 1.5
+
+_VIM_QUIT_COMMANDS = frozenset({":wq", ":q!"})
+
+
+def _is_vim_style_quit(text: str) -> bool:
+    """True only when the *entire* submission is :wq or :q! (case-insensitive).
+
+    Leading/trailing whitespace may surround the command; embedding :wq inside
+    normal prose must not quit.
+    """
+
+    stripped = text.strip().lower()
+    return stripped in _VIM_QUIT_COMMANDS
 
 
 def _chat_target_label(view: str, planning_mode: str) -> str:
@@ -89,6 +105,7 @@ class HelpScreen(ModalScreen[None]):
                         "",
                         "[b]slash commands[/b]",
                         "/murder  kick ready tickets",
+                        "/note    quick capture (bare = overlay; with text = submit)",
                         "/exit    quit murder",
                         "!<cmd>   run shell command (output in pane mirror)",
                         ":wq :q!  vim-style quit",
@@ -96,12 +113,15 @@ class HelpScreen(ModalScreen[None]):
                         "[b]keys[/b]",
                         "F6 kick ready · F2 focus chat · F1 help",
                         "ctrl+1/2/3  switch views  ·  [ and ] cycle views",
+                        "Schedule: roster shows ticket status; [b]planned[/b] rows — "
+                        "[b]c[/b] / Enter opens promote form",
                         "ctrl+t  toggle planning mode (notetaker ⇄ collaborator)",
                         "ctrl+b  toggle docs sidebar (notes / plans filetree)",
                         "ctrl+y  collaborator: parsed chat ⇄ raw tmux pane",
                         "ctrl+c twice  force quit  ·  escape  unfocus chat",
                         "j/k or ↑/↓  vim-style navigation in lists and logs",
                         "r refresh · u refresh usage",
+                        "ctrl+n  quick note capture overlay (global)",
                         "ctrl+p settings (harnesses, models, theme)",
                         "murder --help shows the CLI reference",
                     ]
@@ -123,6 +143,7 @@ class MurderApp(App[None]):
     BINDINGS = [
         Binding("ctrl+c", "ctrl_c_quit", "Quit", priority=True, show=False),
         ("ctrl+p", "open_settings", "Settings"),
+        Binding("ctrl+n", "open_note_capture", "Quick note", show=False),
         ("ctrl+1", "view_planning", "Planning"),
         ("ctrl+2", "view_crows", "Crows"),
         ("ctrl+3", "view_schedule", "Schedule"),
@@ -143,9 +164,9 @@ class MurderApp(App[None]):
         Binding("ctrl+right", "focus_right", "Focus right", show=False),
         Binding("tab", "focus_next_region", "Next pane", show=False, priority=True),
         Binding("shift+tab", "focus_previous_region", "Prev pane", show=False, priority=True),
-        ("q", "quit", "Quit"),
         ("r", "refresh_now", "Refresh"),
         ("u", "collect_usage", "Usage"),
+        ("c", "schedule_apply_carve", "Carve"),
         ("f6", "kick_ready", "Kick"),
         ("f2", "focus_chat", "Chat"),
         ("f1", "show_help_force", "Help"),
@@ -210,6 +231,7 @@ class MurderApp(App[None]):
         self._has_selected_plan = False
         self._shell_session: str | None = None
         self._last_ctrl_c: float = 0.0
+        self._note_capture_draft = ""
         for theme in CUSTOM_THEMES:
             self.register_theme(theme)
 
@@ -377,8 +399,7 @@ class MurderApp(App[None]):
             text = f"# {name}\n\nParse error: {row['parse_error']}\n\n```markdown\n{text}\n```"
         elif row["sync_state"] == "conflict":
             text = f"# {name}\n\nConflict: {row['conflict_reason']}\n\n{text}"
-        self._plan_doc.border_title = name
-        await self._plan_doc.update(text)
+        await self._plan_doc.set_plan_markdown(name, text)
 
     async def _open_plan(self, name: str) -> None:
         await self.runtime.reconcile_plan(name)
@@ -509,6 +530,9 @@ class MurderApp(App[None]):
 
     def action_view_schedule(self) -> None:
         self._set_view("schedule")
+        with contextlib.suppress(Exception):
+            table = self._schedule.query_one(ScheduleTicketsTable)
+            self.set_focus(table)
         self.run_worker(self._on_schedule_view_enter(), exclusive=True, group="usage")
 
     async def _on_schedule_view_enter(self) -> None:
@@ -621,7 +645,7 @@ class MurderApp(App[None]):
         if text.startswith("!"):
             await self._run_shell_cmd(text[1:].strip())
             return
-        if text in {":wq", ":q!"}:
+        if _is_vim_style_quit(text):
             self.exit()
             return
         if text.startswith("/"):
@@ -676,13 +700,61 @@ class MurderApp(App[None]):
             await self._kick_ready()
         elif cmd == "exit":
             self.exit()
+        elif cmd == "note":
+            body = " ".join(args).strip()
+            if body:
+                self.run_worker(
+                    self._slash_note_submit(body),
+                    exclusive=False,
+                    group="note_capture",
+                )
+            else:
+                self.action_open_note_capture()
         else:
             self.notify(f"unknown command: /{cmd}", severity="warning", timeout=3)
 
-    def action_quit(self) -> None:
-        if self._insert_if_chat_focused("q"):
+    def action_open_note_capture(self) -> None:
+        screen = NoteCaptureScreen(
+            initial_draft=self._note_capture_draft,
+            load_recent_rows=self._sync_recent_note_entries,
+            submit_capture=self._submit_note_capture_async,
+        )
+        self.push_screen(screen, self._on_note_capture_closed)
+
+    def _sync_recent_note_entries(self) -> list[dict]:
+        db = self.runtime.db
+        if db is None:
+            return []
+        return dbmod.list_recent_notes_entries(db, limit=RECENT_NOTE_ROWS)
+
+    async def _submit_note_capture_async(self, text: str) -> bool:
+        body = text.strip()
+        if not body:
+            return False
+        result = await self._submit_command(
+            target_worker="orchestrator",
+            kind="notetaker.capture.submit",
+            payload={"text": body},
+            timeout_s=COLLABORATOR_START_TIMEOUT_S,
+        )
+        return result is not None
+
+    async def _slash_note_submit(self, body: str) -> None:
+        ok = await self._submit_note_capture_async(body)
+        if ok:
+            self._refresh_db_views()
+            self.notify("capture submitted", timeout=3)
+        else:
+            self.notify("capture failed — check orchestrator / API", severity="warning", timeout=6)
+
+    def _on_note_capture_closed(self, payload: tuple[bool, str] | None) -> None:
+        if payload is None:
             return
-        self.exit()
+        submitted, draft_snapshot = payload
+        self._note_capture_draft = "" if submitted else draft_snapshot
+        if submitted:
+            self._refresh_db_views()
+            self.notify("capture submitted", timeout=3)
 
     def action_focus_chat(self) -> None:
         if self.focused is not self._chat:
@@ -737,7 +809,10 @@ class MurderApp(App[None]):
         elif self._view == "crows":
             candidates = [self._crows, self._chat]
         else:  # schedule
-            candidates = [self._schedule]
+            try:
+                candidates = [self._schedule.query_one(ScheduleTicketsTable)]
+            except Exception:
+                candidates = [self._schedule]
         return [w for w in candidates if w.display]
 
     def _shift_focus(self, delta: int) -> None:
@@ -795,6 +870,80 @@ class MurderApp(App[None]):
             f"kicked: {', '.join(kicked)}" if kicked else "no ready tickets",
             timeout=3,
         )
+        self._refresh_db_views()
+
+    def action_schedule_apply_carve(self) -> None:
+        if self._insert_if_chat_focused("c"):
+            return
+        if self._view != "schedule":
+            return
+        if not self._schedule.selected_ticket_is_planned:
+            self.notify(
+                "Select a [b]planned[/b] ticket to promote (see status column).",
+                severity="warning",
+                timeout=5,
+            )
+            return
+        tid = self._schedule.selected_ticket_id
+        if not tid:
+            self.notify("Select a ticket row first", severity="warning", timeout=4)
+            return
+        self._open_carve_screen(tid)
+
+    def on_schedule_tickets_table_carve_requested(
+        self, event: ScheduleTicketsTable.CarveRequested
+    ) -> None:
+        event.stop()
+        if self._view != "schedule":
+            return
+        self._open_carve_screen(event.ticket_id)
+
+    def _open_carve_screen(self, ticket_id: str) -> None:
+        db = self.runtime.db
+        if db is None:
+            self.notify("database unavailable", severity="error", timeout=4)
+            return
+        row = dbmod.get_ticket(db, ticket_id)
+        if row is None:
+            self.notify(f"ticket {ticket_id} not found", severity="error", timeout=4)
+            return
+        snapshot = {str(k): row[k] for k in row.keys()}
+        hint = "[dim]Known harness kinds:[/dim] " + ", ".join(sorted(REGISTRY.keys()))
+        self.push_screen(
+            CarveFormScreen(ticket_id, snapshot, harness_hint=hint),
+            lambda spec: self._after_carve_modal(ticket_id, spec),
+        )
+
+    def _after_carve_modal(
+        self, ticket_id: str, spec: dict[str, object] | None
+    ) -> None:
+        if not spec:
+            return
+        self.run_worker(
+            self._submit_carve_ready(ticket_id, spec),
+            exclusive=False,
+            group="carve",
+        )
+
+    async def _submit_carve_ready(
+        self, ticket_id: str, carve: dict[str, object]
+    ) -> None:
+        result = await self._submit_command(
+            target_worker="orchestrator",
+            kind="ticket.apply_carve_ready",
+            payload={"ticket_id": ticket_id, "carve": carve},
+            timeout_s=30.0,
+        )
+        if result is None:
+            return
+        if not result.get("ok"):
+            self.notify(
+                str(result.get("error") or "carve rejected"),
+                severity="error",
+                timeout=10,
+            )
+            return
+        self.notify(f"{ticket_id} → ready (carve applied)", timeout=4)
         self._refresh_db_views()
 
     def _record_ui_escalation(self, reason: str) -> None:

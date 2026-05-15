@@ -91,11 +91,12 @@ class CollaboratorAgent(Agent):
                     )
                 )
 
-    async def stop(self, *, failed: bool = False) -> None:
-        with contextlib.suppress(Exception):
-            await self.harness_session.interrupt()
-        with contextlib.suppress(Exception):
-            await tmux.kill_session(self.session)
+    async def stop(self, *, failed: bool = False, kill_session: bool = True) -> None:
+        if kill_session:
+            with contextlib.suppress(Exception):
+                await self.harness_session.interrupt()
+            with contextlib.suppress(Exception):
+                await tmux.kill_session(self.session)
         self.status = AgentStatus.FAILED if failed else AgentStatus.DONE
         if self.runtime:
             self.runtime.sync_agent(self)

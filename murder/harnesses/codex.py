@@ -22,7 +22,7 @@ from murder.harnesses.parsing import (
     extract_last_message_heuristic,
     strip_ansi,
 )
-from murder.harnesses.results import SimpleResult, ok_result
+from murder.harnesses.results import SimpleResult, fail_result, ok_result
 from murder.harnesses.usage import parse_codex_status_pane
 
 _TAIL_LINES = 30
@@ -41,6 +41,8 @@ _LOGIN_RE = re.compile(r"\b(login required|not logged in|codex login)\b", re.IGN
 _STATUS_COMMAND_POPUP_DELAY_S = 0.5
 _STATUS_FIRST_ENTER_DELAY_S = 0.8
 _STATUS_CAPTURE_DELAY_S = 1.2
+_STATUS_RETRY_DELAY_S = 0.6
+_STATUS_DISMISS_DELAY_S = 0.1
 _MODEL_STARTUP_SETTLE_DELAY_S = 1.5
 _MODEL_COMMAND_POPUP_DELAY_S = 0.5
 _MODEL_CAPTURE_DELAY_S = 3.0
@@ -147,6 +149,9 @@ class CodexAdapter(HarnessAdapter):
         return True
 
     async def request_usage_status(self, session: str) -> bool:
+        # If an older modal is still visible, close it before issuing /status.
+        await tmux.send_keys(session, "Escape", literal=False, enter=False)
+        await asyncio.sleep(_STATUS_DISMISS_DELAY_S)
         await tmux.send_keys(session, "/status", literal=True, enter=False)
         await asyncio.sleep(_STATUS_COMMAND_POPUP_DELAY_S)
         await tmux.send_keys(session, "", literal=True, enter=True)
@@ -158,6 +163,12 @@ class CodexAdapter(HarnessAdapter):
     async def collect_usage_status(
         self, session: str
     ) -> SimpleResult[HarnessUsageStatus]:
-        await self.request_usage_status(session)
-        pane = await tmux.capture_pane(session, lines=160)
-        return ok_result(parse_codex_status_pane(pane))
+        for attempt in range(2):
+            await self.request_usage_status(session)
+            pane = await tmux.capture_pane(session, lines=160)
+            status = parse_codex_status_pane(pane)
+            if status.windows:
+                return ok_result(status)
+            if attempt == 0:
+                await asyncio.sleep(_STATUS_RETRY_DELAY_S)
+        return fail_result("codex /status did not expose any usage windows")

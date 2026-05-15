@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from murder.plans.schema import Plan
+from murder.storage.paths import MURDER_DIR_NAME
 
 if TYPE_CHECKING:
     from murder.tickets.schema import Ticket
@@ -232,6 +233,23 @@ CREATE TABLE IF NOT EXISTS note_revisions (
 CREATE INDEX IF NOT EXISTS idx_note_revisions_note
     ON note_revisions(note_name, id);
 
+CREATE TABLE IF NOT EXISTS notetaker_context (
+    id                INTEGER PRIMARY KEY CHECK (id = 1),
+    body              TEXT NOT NULL DEFAULT '',
+    updated_at        TEXT NOT NULL,
+    materialized_path TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS notes_entries (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts          TEXT NOT NULL,
+    raw         TEXT NOT NULL,
+    cleaned     TEXT NOT NULL,
+    short_vers  TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_notes_entries_ts ON notes_entries(ts);
+
 CREATE TABLE IF NOT EXISTS agent_messages (
     agent_id    TEXT NOT NULL,
     ordinal     INTEGER NOT NULL,
@@ -303,6 +321,7 @@ def init_schema(conn: sqlite3.Connection) -> None:
     _migrate_agents_failed_status(conn)
     _migrate_agents_notetaker_role(conn)
     _migrate_role_names(conn)
+    ensure_notetaker_context_row(conn)
 
 
 def _migrate_agents_notetaker_role(conn: sqlite3.Connection) -> None:
@@ -415,6 +434,21 @@ def db_path_for(repo_root: Path) -> Path:
 
 def _now() -> str:
     return datetime.utcnow().isoformat(timespec="seconds")
+
+
+NOTETAKER_CONTEXT_ROW_ID = 1
+NOTETAKER_CONTEXT_MATERIALIZED_REL = f"{MURDER_DIR_NAME}/notetakercontext.md"
+
+
+def ensure_notetaker_context_row(conn: sqlite3.Connection) -> None:
+    """Ensure singleton row id=1 exists (survives repeated init_schema)."""
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO notetaker_context (id, body, updated_at, materialized_path)
+        VALUES (?, '', ?, ?)
+        """,
+        (NOTETAKER_CONTEXT_ROW_ID, _now(), NOTETAKER_CONTEXT_MATERIALIZED_REL),
+    )
 
 
 # --- Plans ------------------------------------------------------------------
@@ -643,6 +677,57 @@ def list_note_revisions(conn: sqlite3.Connection, name: str) -> list[dict[str, A
     return [dict(r) for r in rows]
 
 
+# --- Notetaker context (singleton) + capture entries -------------------------
+
+def get_notetaker_context(conn: sqlite3.Connection) -> dict[str, Any] | None:
+    row = conn.execute(
+        "SELECT * FROM notetaker_context WHERE id = ?",
+        (NOTETAKER_CONTEXT_ROW_ID,),
+    ).fetchone()
+    return dict(row) if row else None
+
+
+def upsert_notetaker_context(
+    conn: sqlite3.Connection, *, body: str, materialized_path: str
+) -> None:
+    conn.execute(
+        """
+        UPDATE notetaker_context
+           SET body = ?, updated_at = ?, materialized_path = ?
+         WHERE id = ?
+        """,
+        (body, _now(), materialized_path, NOTETAKER_CONTEXT_ROW_ID),
+    )
+
+
+def insert_notes_entry(
+    conn: sqlite3.Connection, *, raw: str, cleaned: str, short_vers: str
+) -> int:
+    cur = conn.execute(
+        """
+        INSERT INTO notes_entries (ts, raw, cleaned, short_vers)
+        VALUES (?, ?, ?, ?)
+        """,
+        (_now(), raw, cleaned, short_vers),
+    )
+    return int(cur.lastrowid or 0)
+
+
+def list_recent_notes_entries(
+    conn: sqlite3.Connection, *, limit: int = 50
+) -> list[dict[str, Any]]:
+    rows = conn.execute(
+        """
+        SELECT id, ts, raw, cleaned, short_vers
+          FROM notes_entries
+         ORDER BY ts DESC, id DESC
+         LIMIT ?
+        """,
+        (limit,),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
 # --- Agent conversation log -------------------------------------------------
 # Persisted, parsed transcript of an agent's interactive session — one row per
 # turn. See murder/conversation.py for the merge/reconcile logic; this layer is
@@ -736,6 +821,56 @@ def insert_ticket(conn: sqlite3.Connection, ticket: Ticket) -> None:
     except Exception:
         conn.execute("ROLLBACK")
         raise
+
+
+def apply_ticket_carve_payload(
+    conn: sqlite3.Connection,
+    ticket_id: str,
+    *,
+    title: str,
+    harness: str | None,
+    model: str | None,
+    deps: list[str],
+    skills: list[str],
+    write_set: list[str],
+    checklist: list[str],
+) -> None:
+    """Replace deps, write_set, skills, checklist and update ticket title/harness/model.
+
+    Caller must wrap in a transaction if combined with status changes.
+    """
+    conn.execute(
+        """
+        UPDATE tickets
+           SET title = ?, harness = ?, model = ?, updated_at = ?
+         WHERE id = ?
+        """,
+        (title, harness, model, _now(), ticket_id),
+    )
+    conn.execute("DELETE FROM ticket_deps WHERE ticket_id = ?", (ticket_id,))
+    for dep in deps:
+        conn.execute(
+            "INSERT INTO ticket_deps(ticket_id, depends_on_id) VALUES (?, ?)",
+            (ticket_id, dep),
+        )
+    conn.execute("DELETE FROM ticket_write_set WHERE ticket_id = ?", (ticket_id,))
+    for path in write_set:
+        conn.execute(
+            "INSERT INTO ticket_write_set(ticket_id, path) VALUES (?, ?)",
+            (ticket_id, path),
+        )
+    conn.execute("DELETE FROM ticket_skills WHERE ticket_id = ?", (ticket_id,))
+    for skill in skills:
+        conn.execute(
+            "INSERT INTO ticket_skills(ticket_id, skill) VALUES (?, ?)",
+            (ticket_id, skill),
+        )
+    conn.execute("DELETE FROM checklist WHERE ticket_id = ?", (ticket_id,))
+    for ord_, text in enumerate(checklist):
+        conn.execute(
+            "INSERT INTO checklist(ticket_id, ord, text, done) VALUES (?, ?, ?, 0)",
+            (ticket_id, ord_, text),
+        )
 
 
 def get_ticket(conn: sqlite3.Connection, ticket_id: str) -> dict[str, Any] | None:

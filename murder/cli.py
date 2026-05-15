@@ -9,6 +9,7 @@ import shutil
 import signal
 import sqlite3
 import subprocess
+import sys
 from datetime import datetime
 from importlib import resources
 from pathlib import Path
@@ -37,10 +38,11 @@ from murder.storage.paths import (
     ticket_md,
 )
 from murder.supervisor import Supervisor
-from murder.tickets import lifecycle
+from murder.tickets import carve, lifecycle
 from murder.tickets import parser as ticket_parser
 from murder.tickets import waves as waves_mod
 from murder.tickets.schema import ChecklistItem, Ticket
+from murder.tickets.sync import TicketSync
 from murder.tui.app import MurderApp
 from murder.workers import (
     CollaboratorWorker,
@@ -334,8 +336,8 @@ async def _start_service_supervisor(
     await supervisor.start_worker(
         OrchestratorCommandWorker(
             kickoff_ready=orch.kickoff_ready,
-            ensure_notetaker=orch.ensure_notetaker,
-            get_agent=rt.get_agent,
+            apply_carve_ready=orch.apply_ticket_carve_ready,
+            capture_submit=orch.submit_notetaker_capture,
         )
     )
     return supervisor
@@ -511,6 +513,43 @@ def cmd_ticket_create(
     typer.echo(f"Markdown: {md_path.relative_to(repo)}")
 
 
+@tickets_app.command("ingest-carve")
+def cmd_ticket_ingest_carve(
+    ticket_id: Annotated[str, typer.Argument(help="Ticket id; must match YAML id field.")],
+    file: Annotated[
+        Path | None,
+        typer.Option(
+            "--file",
+            "-f",
+            exists=True,
+            file_okay=True,
+            dir_okay=False,
+            readable=True,
+            help="YAML carving form; omit to read stdin.",
+        ),
+    ] = None,
+) -> None:
+    """Apply collaborator carving YAML: deps/write_set/checklist + planned → ready."""
+    raw = file.read_text(encoding="utf-8") if file is not None else sys.stdin.read()
+    if not raw.strip():
+        typer.secho("Empty YAML input.", err=True)
+        raise typer.Exit(1)
+    repo = _repo_root()
+    conn = _open_existing_db(repo)
+    try:
+        spec = carve.parse_carve_yaml(raw)
+        carve.apply_carve_ready_spec(conn, ticket_id, spec)
+    except carve.CarveError as e:
+        typer.secho(str(e), err=True)
+        raise typer.Exit(1) from e
+    except Exception as e:
+        typer.secho(f"ingest-carve failed: {e}", err=True)
+        raise typer.Exit(1) from e
+    finally:
+        conn.close()
+    typer.echo(f"{ticket_id}: sidecar applied; status=ready")
+
+
 @app.command("init")
 def cmd_init(
     force: bool = typer.Option(False, "--force", help="Overwrite existing .murder/ tree."),
@@ -618,6 +657,7 @@ def cmd_lint() -> None:
     # Import/sync plan markdown before lint checks so orphan-plan warnings
     # don't require launching the full runtime first.
     asyncio.run(PlanSync(repo, conn).reconcile_all())
+    asyncio.run(TicketSync(repo, conn).reconcile_all())
     issues: list[str] = []
     plan_rows = {r["name"]: dict(r) for r in conn.execute("SELECT * FROM plans").fetchall()}
     for name, row in plan_rows.items():

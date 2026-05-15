@@ -270,8 +270,7 @@ class SettingsScreen(ModalScreen[bool]):
     """Settings panel: global (theme + user `default_crow`) and project (roles.yaml)."""
 
     BINDINGS = [
-        Binding("escape", "cancel", "Cancel"),
-        Binding("s", "save", "Save"),
+        Binding("escape", "cancel", "Close"),
         Binding("g", "scope_global", "Global", show=False),
         Binding("p", "scope_project", "Project", show=False),
         Binding("j", "cursor_down", "Down", show=False),
@@ -350,7 +349,7 @@ class SettingsScreen(ModalScreen[bool]):
         self._user_config = user_config
         self._available_themes = available_themes
 
-        # Global state (staged; applied only on save)
+        # Global state (theme + default crow UI; written on edit via autosave)
         self._theme_sel: str = user_config.tui.theme or (
             available_themes[0] if available_themes else ""
         )
@@ -374,13 +373,13 @@ class SettingsScreen(ModalScreen[bool]):
             if user_config.default_crow is not None
             else None
         )
-        self._global_crow_dirty = False
         self._global_model_discovery_attempted: set[HarnessKind] = set()
         self._populate_global_crow_from_patch(user_config.default_crow)
 
         self._scope = "project"
         self._cursor_idx = 0
         self._focusable: list[_SettingItem] = []
+        self._written_since_open = False
 
     def _populate_global_crow_from_patch(self, patch: UserHarnessRolePatch | None) -> None:
         """Initialize global crow UI from the user file only (no project merge)."""
@@ -525,7 +524,7 @@ class SettingsScreen(ModalScreen[bool]):
                         )
             yield Static(
                 "j/k move  enter/spc toggle  "
-                "g global (theme + your default crow)  p project  s save  esc cancel",
+                "g global (theme + your default crow)  p project  esc close",
                 id="help-bar",
             )
 
@@ -644,6 +643,20 @@ class SettingsScreen(ModalScreen[bool]):
         elif kind == "global_model":
             harness_s, model_id = payload.split(":", 1)
             self._toggle_global_model(item, cast(HarnessKind, harness_s), model_id)
+        else:
+            return
+
+        if kind in {
+            "harness",
+            "model",
+            "sentinel",
+            "crow_handler",
+            "notetaker",
+            "collab_harness",
+        }:
+            self._try_autosave_project()
+        elif kind in {"theme", "global_harness", "global_model"}:
+            self._try_autosave_global()
 
     def _toggle_harness(self, item: _SettingItem, kind: HarnessKind) -> None:
         if kind in self._harnesses:
@@ -683,7 +696,6 @@ class SettingsScreen(ModalScreen[bool]):
         self._refresh_model_validation()
 
     def _toggle_global_harness(self, item: _SettingItem, kind: HarnessKind) -> None:
-        self._global_crow_dirty = True
         if kind in self._global_harnesses:
             self._global_harnesses.discard(kind)
             self._set_global_model_section_display(kind, False)
@@ -710,7 +722,6 @@ class SettingsScreen(ModalScreen[bool]):
     def _toggle_global_model(
         self, item: _SettingItem, kind: HarnessKind, model_id: str
     ) -> None:
-        self._global_crow_dirty = True
         state = self._global_model_states.setdefault(kind, {}).get(model_id, "disabled")
         next_index = (_MODEL_STATE_ORDER.index(state) + 1) % len(_MODEL_STATE_ORDER)
         next_state = _MODEL_STATE_ORDER[next_index]
@@ -843,6 +854,7 @@ class SettingsScreen(ModalScreen[bool]):
                 min(self._cursor_idx, max(0, len(self._focusable) - 1)),
             )
         self._refresh_cursor()
+        self._try_autosave_global()
 
     def _model_ids(self, kind: HarnessKind) -> list[str]:
         return [model_id for model_id, _ in self._model_options.get(kind, [])]
@@ -936,6 +948,7 @@ class SettingsScreen(ModalScreen[bool]):
                 min(self._cursor_idx, max(0, len(self._focusable) - 1)),
             )
         self._refresh_cursor()
+        self._try_autosave_project()
 
     def _dedupe_model_options(
         self, options: list[tuple[str, str]]
@@ -951,19 +964,61 @@ class SettingsScreen(ModalScreen[bool]):
             out.append((model_id, label))
         return out
 
-    # ── save / cancel ──────────────────────────────────────────────────────
+    # ── persist (autosave on edit) ─────────────────────────────────────────
 
-    def action_save(self) -> None:
-        if not self._save_project():
-            return
+    def _try_autosave_project(self) -> None:
+        if self._save_project():
+            self._written_since_open = True
+
+    def _try_autosave_global(self) -> None:
         self._save_global()
-        self.dismiss(True)
+        self._written_since_open = True
 
     def action_cancel(self) -> None:
-        self.dismiss(False)
+        self.dismiss(self._written_since_open)
+
+    def _global_default_crow_save_update(self) -> None:
+        """Sync ``default_crow`` on ``self._user_config`` from global UI when valid."""
+        harness_list = [k for k, _, _ in _HARNESS_ROWS if k in self._global_harnesses]
+        if not harness_list:
+            self._user_config.default_crow = None
+            return
+        for kind in harness_list:
+            if _model_validation_message(
+                self._global_model_states.get(kind, {}),
+                self._global_model_ids(kind),
+            ) is not None:
+                return
+        crow: dict[str, object] = {
+            "harness": harness_list[0],
+            "harnesses": harness_list if len(harness_list) > 1 else None,
+        }
+        if len(harness_list) == 1:
+            h = harness_list[0]
+            model_list = _ordered_enabled_models(
+                self._global_model_states.get(h, {}),
+                self._global_model_ids(h),
+            )
+            crow["startup_model"] = model_list[0] if model_list else None
+            crow["startup_models"] = model_list if len(model_list) > 1 else None
+            crow["startup_models_by_harness"] = None
+        else:
+            by_harness: dict[str, list[str]] = {}
+            for h in harness_list:
+                ml = _ordered_enabled_models(
+                    self._global_model_states.get(h, {}),
+                    self._global_model_ids(h),
+                )
+                if ml:
+                    by_harness[str(h)] = ml
+            crow["startup_model"] = None
+            crow["startup_models"] = None
+            crow["startup_models_by_harness"] = by_harness or None
+        self._user_config.default_crow = UserHarnessRolePatch.model_validate(crow)
 
     def _save_global(self) -> None:
         self._user_config.tui.theme = self._theme_sel or None
+        self._global_default_crow_save_update()
         save_user_config(self._user_config)
 
     def _save_project(self) -> bool:
@@ -971,7 +1026,7 @@ class SettingsScreen(ModalScreen[bool]):
         if validation_messages:
             self._refresh_model_validation()
             self.notify(
-                "Invalid model settings; fix red messages before saving.",
+                "Invalid model settings; fix red messages first.",
                 severity="error",
                 timeout=5,
             )

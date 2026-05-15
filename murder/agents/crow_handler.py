@@ -107,7 +107,8 @@ class CrowHandlerAgent(Agent):
 
         self._poll_task = asyncio.create_task(_loop())
 
-    async def stop(self, *, failed: bool = False) -> None:
+    async def stop(self, *, failed: bool = False, kill_session: bool = True) -> None:
+        del kill_session  # crow_handler has no real tmux session
         from murder import tmux
 
         if failed or self.status == AgentStatus.FAILED:

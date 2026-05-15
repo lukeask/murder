@@ -29,13 +29,17 @@ from typing import TYPE_CHECKING, Any
 
 from murder import db as dbmod
 from murder import notes as notes_mod
+from murder import tmux
 from murder.agents.base import AgentRole
 from murder.bus import AgentStatus, Bus, EventFilter, SubscriptionHandle
 from murder.notes_sync import NoteSync
+from murder.notetaker_context_sync import NotetakerContextSync
 from murder.plans.sync import PlanSync, choose_editor, open_editor
+from murder.recovery import ReconcileReport, reconcile_agents_vs_tmux
 from murder.storage.filesystem import acquire_flock, release_flock
 from murder.storage.paths import db_path, lock_path, note_md
 from murder.storage.runs import allocate_run_id
+from murder.tickets.sync import TicketSync
 
 if TYPE_CHECKING:
     from murder.agents.base import Agent
@@ -47,23 +51,25 @@ Handler = Callable[[Any], Awaitable[None]]
 class Runtime:
     """Async context manager owning the murder process lifecycle."""
 
-    def __init__(self, config: "Config", repo_root: Path) -> None:
+    def __init__(self, config: Config, repo_root: Path) -> None:
         self.config = config
         self.repo_root = repo_root
         self.db: sqlite3.Connection | None = None
         self.bus: Bus | None = None
         self.run_id: str | None = None
-        self._agents: dict[str, "Agent"] = {}
-        self._crows: dict[str, "Agent"] = {}
-        self._crow_handlers: dict[str, "Agent"] = {}
+        self._agents: dict[str, Agent] = {}
+        self._crows: dict[str, Agent] = {}
+        self._crow_handlers: dict[str, Agent] = {}
         self._tasks: dict[str, asyncio.Task[None]] = {}
         self._shutdown = asyncio.Event()
         self._external_stop = asyncio.Event()
         self._lock_fd: int | None = None
         self.plan_sync: PlanSync | None = None
         self.note_sync: NoteSync | None = None
+        self.notetaker_context_sync: NotetakerContextSync | None = None
+        self.ticket_sync: TicketSync | None = None
 
-    async def __aenter__(self) -> "Runtime":
+    async def __aenter__(self) -> Runtime:
         await self.start()
         return self
 
@@ -76,16 +82,29 @@ class Runtime:
         self._lock_fd = acquire_flock(lock_path(self.repo_root))
         self.db = dbmod.connect(db_path(self.repo_root))
         dbmod.init_schema(self.db)
+        live_sessions = set(await tmux.list_sessions())
+        report = reconcile_agents_vs_tmux(self.db, live_sessions)
+        if report:
+            import logging
+            logging.getLogger(__name__).info("startup reconcile: %s", report.summary())
         self.run_id = allocate_run_id(self.repo_root)
         snap = json.dumps(self.config.model_dump(mode="json"), default=str)
         dbmod.insert_run(self.db, self.run_id, snap)
         self.bus = Bus(self.run_id, self.db)
         self.plan_sync = PlanSync(self.repo_root, self.db)
         self.note_sync = NoteSync(self.repo_root, self.db)
+        self.notetaker_context_sync = NotetakerContextSync(self.repo_root, self.db)
+        self.ticket_sync = TicketSync(self.repo_root, self.db)
         await self.plan_sync.reconcile_all()
         await self.note_sync.reconcile_all()
+        await self.notetaker_context_sync.reconcile_all()
+        await self.ticket_sync.reconcile_all()
         self._tasks["plan_sync"] = asyncio.create_task(self.plan_sync.run())
         self._tasks["note_sync"] = asyncio.create_task(self.note_sync.run())
+        self._tasks["notetaker_context_sync"] = asyncio.create_task(
+            self.notetaker_context_sync.run()
+        )
+        self._tasks["ticket_sync"] = asyncio.create_task(self.ticket_sync.run())
 
     async def stop(self) -> None:
         self._shutdown.set()
@@ -100,10 +119,22 @@ class Runtime:
         if self.note_sync is not None:
             with contextlib.suppress(Exception):
                 await self.note_sync.reconcile_all()
+        if self.notetaker_context_sync is not None:
+            with contextlib.suppress(Exception):
+                await self.notetaker_context_sync.reconcile_all()
+        if self.ticket_sync is not None:
+            with contextlib.suppress(Exception):
+                await self.ticket_sync.reconcile_all()
         terminal_statuses = {AgentStatus.DONE, AgentStatus.FAILED, AgentStatus.DEAD}
+        # On graceful TUI quit, leave crow/collaborator tmux sessions alive so
+        # they survive across TUI restarts. On crash/forced stop, kill them.
+        graceful = self._external_stop.is_set()
         for agent in list(self._agents.values()):
             with contextlib.suppress(Exception):
-                await agent.stop(failed=agent.status not in terminal_statuses)
+                await agent.stop(
+                    failed=agent.status not in terminal_statuses,
+                    kill_session=not graceful,
+                )
         self._agents.clear()
         self._crows.clear()
         self._crow_handlers.clear()
@@ -114,6 +145,8 @@ class Runtime:
             self.db = None
         self.plan_sync = None
         self.note_sync = None
+        self.notetaker_context_sync = None
+        self.ticket_sync = None
         self.bus = None
         self.run_id = None
         if self._lock_fd is not None:
@@ -122,7 +155,7 @@ class Runtime:
             with contextlib.suppress(FileNotFoundError, OSError):
                 lock_path(self.repo_root).unlink()
 
-    def sync_agent(self, agent: "Agent") -> None:
+    def sync_agent(self, agent: Agent) -> None:
         """Persist current agent fields to SQLite."""
         if self.db is None:
             return
@@ -137,7 +170,7 @@ class Runtime:
             pid=None,
         )
 
-    def register_agent(self, agent: "Agent") -> None:
+    def register_agent(self, agent: Agent) -> None:
         self._agents[agent.id] = agent
         if agent.ticket_id is not None:
             if agent.role == AgentRole.CROW:
@@ -146,13 +179,13 @@ class Runtime:
                 self._crow_handlers[agent.ticket_id] = agent
         self.sync_agent(agent)
 
-    def get_agent(self, agent_id: str) -> "Agent | None":
+    def get_agent(self, agent_id: str) -> Agent | None:
         return self._agents.get(agent_id)
 
-    def get_crow(self, ticket_id: str) -> "Agent | None":
+    def get_crow(self, ticket_id: str) -> Agent | None:
         return self._crows.get(ticket_id)
 
-    def get_crow_handler(self, ticket_id: str) -> "Agent | None":
+    def get_crow_handler(self, ticket_id: str) -> Agent | None:
         return self._crow_handlers.get(ticket_id)
 
     async def reap(self, agent_id: str) -> None:
