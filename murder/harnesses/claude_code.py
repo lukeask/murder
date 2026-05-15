@@ -24,7 +24,7 @@ from murder.harnesses.parsing import (
     extract_last_message_heuristic,
     strip_ansi,
 )
-from murder.harnesses.results import SimpleResult, ok_result
+from murder.harnesses.results import SimpleResult, fail_result, ok_result
 from murder.harnesses.usage import parse_claude_usage_pane
 
 
@@ -132,6 +132,10 @@ class ClaudeCodeAdapter(HarnessAdapter):
         return model == self.startup_model
 
     async def request_usage_status(self, session: str) -> bool:
+        # If a prior /usage or /status dialog is still open, dismiss it first
+        # so the slash command is submitted at the main prompt.
+        await tmux.send_keys(session, "Escape", literal=False, enter=False)
+        await asyncio.sleep(0.1)
         await tmux.send_keys(session, "/usage", literal=True, enter=True)
         await asyncio.sleep(0.2)
         return True
@@ -139,7 +143,30 @@ class ClaudeCodeAdapter(HarnessAdapter):
     async def collect_usage_status(
         self, session: str
     ) -> SimpleResult[HarnessUsageStatus]:
-        await self.request_usage_status(session)
-        await asyncio.sleep(0.4)
-        pane = await tmux.capture_pane(session, lines=160)
-        return ok_result(parse_claude_usage_pane(pane))
+        for attempt in range(2):
+            await self.request_usage_status(session)
+            await asyncio.sleep(0.4)
+            pane = await tmux.capture_pane(session, lines=160)
+            status = parse_claude_usage_pane(pane)
+            has_session = (
+                status.session is not None
+                and any(
+                    value is not None
+                    for value in (
+                        status.session.input_tokens,
+                        status.session.output_tokens,
+                        status.session.cache_read_tokens,
+                        status.session.cache_write_tokens,
+                        status.session.cost_usd,
+                        status.session.api_duration_s,
+                        status.session.wall_duration_s,
+                        status.session.lines_added,
+                        status.session.lines_removed,
+                    )
+                )
+            )
+            if status.windows or has_session:
+                return ok_result(status)
+            if attempt == 0:
+                await asyncio.sleep(0.4)
+        return fail_result("claude /usage did not expose any usage details")

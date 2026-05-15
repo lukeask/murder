@@ -37,7 +37,10 @@ async def test_claude_request_usage_status_sends_usage_command(monkeypatch) -> N
     monkeypatch.setattr("murder.tmux.send_keys", fake_send_keys)
     result = await ClaudeCodeAdapter().attach("sess", Path("/repo")).request_usage_status()
     assert result.ok
-    assert calls == [("sess", "/usage", True, True)]
+    assert calls == [
+        ("sess", "Escape", False, False),
+        ("sess", "/usage", True, True),
+    ]
 
 
 async def test_claude_collect_usage_status_sends_and_parses_panel(monkeypatch) -> None:
@@ -68,4 +71,39 @@ async def test_claude_collect_usage_status_sends_and_parses_panel(monkeypatch) -
     assert result.data.windows[0].percent_used == 55.0
     assert result.data.session is not None
     assert result.data.session.input_tokens == 1
-    assert calls == [("sess", "/usage", True, True)]
+    assert calls == [
+        ("sess", "Escape", False, False),
+        ("sess", "/usage", True, True),
+    ]
+
+
+async def test_claude_collect_usage_status_retries_and_fails_on_empty_panel(monkeypatch) -> None:
+    calls: list[tuple[str, str, bool, bool]] = []
+    sleeps: list[float] = []
+
+    async def fake_send_keys(
+        session: str, text: str, *, literal: bool = True, enter: bool = True
+    ) -> None:
+        calls.append((session, text, literal, enter))
+
+    async def fake_sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+
+    async def fake_capture_pane(session: str, lines: int = 200) -> str:
+        assert session == "sess"
+        assert lines == 160
+        return "Welcome to Claude\n> "
+
+    monkeypatch.setattr("murder.tmux.send_keys", fake_send_keys)
+    monkeypatch.setattr("murder.tmux.capture_pane", fake_capture_pane)
+    monkeypatch.setattr("murder.harnesses.claude_code.asyncio.sleep", fake_sleep)
+    result = await ClaudeCodeAdapter().attach("sess", Path("/repo")).collect_usage_status()
+    assert not result.ok
+    assert result.message == "claude /usage did not expose any usage details"
+    assert calls == [
+        ("sess", "Escape", False, False),
+        ("sess", "/usage", True, True),
+        ("sess", "Escape", False, False),
+        ("sess", "/usage", True, True),
+    ]
+    assert sleeps == [0.1, 0.2, 0.4, 0.4, 0.1, 0.2, 0.4]

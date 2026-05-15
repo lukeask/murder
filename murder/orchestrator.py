@@ -3,14 +3,15 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
-from murder import db as dbmod, tmux
+from murder import db as dbmod
+from murder import notes as notes_mod
+from murder import notetaker_capture, tmux
 from murder.agents.base import AgentRole, AgentStatus
 from murder.agents.collaborator import CollaboratorAgent
 from murder.agents.crow import CrowAgent
 from murder.agents.crow_handler import CrowHandlerAgent
-from murder.agents.notetaker import NotetakerAgent
 from murder.agents.sentinel import SentinelAgent
 from murder.bus import EscalationEvent, StatusChangeEvent, TicketStatus
 from murder.clients import create_client
@@ -20,7 +21,7 @@ from murder.enforcement.checklist_verify import format_report, verify_checklist
 from murder.harnesses import get as get_harness
 from murder.prompts import load, render
 from murder.session_names import format_session_name
-from murder.tickets import lifecycle
+from murder.tickets import carve, lifecycle
 
 if TYPE_CHECKING:
     from murder.runtime import Runtime
@@ -183,10 +184,11 @@ class Orchestrator:
         return sorted(out, key=lambda item: (item[0], item[1]))
 
     async def _emit_ticket_status(
-        self, ticket_id: str, from_status: str, to_status: str
+        self, ticket_id: str, from_status: str | TicketStatus, to_status: str
     ) -> None:
         if self.rt.bus is None or self.rt.run_id is None:
             return
+        from_s = from_status.value if isinstance(from_status, TicketStatus) else from_status
         await self.rt.bus.publish(
             StatusChangeEvent(
                 run_id=self.rt.run_id,
@@ -195,7 +197,7 @@ class Orchestrator:
                 ticket_id=ticket_id,
                 entity="ticket",
                 entity_id=ticket_id,
-                from_status=from_status,
+                from_status=from_s,
                 to_status=to_status,
             )
         )
@@ -336,7 +338,10 @@ class Orchestrator:
             runtime=self.rt,
         )
         self.rt.register_agent(agent)
-        tpl = (self.rt.config.collaborator.startup_prompt_template or "collaborator.md").removesuffix(".md")
+        tpl_raw = (
+            self.rt.config.collaborator.startup_prompt_template or "collaborator.md"
+        )
+        tpl = tpl_raw.removesuffix(".md")
         try:
             body = render(tpl, project_name=self.rt.config.project.name)
         except (KeyError, IndexError, ValueError):
@@ -361,36 +366,26 @@ class Orchestrator:
             raise
         return agent.id
 
-    async def ensure_notetaker(self) -> str:
-        row = self.rt.db.execute(
-            "SELECT agent_id FROM agents WHERE role = 'notetaker' "
-            "AND status IN ('running','idle') LIMIT 1"
-        ).fetchone()
-        if row:
-            agent_id = str(row["agent_id"])
-            if self.rt.get_agent(agent_id) is not None:
-                return agent_id
-            dbmod.set_agent_status(self.rt.db, agent_id, "dead")
-        from murder import notes as notes_mod
+    async def submit_notetaker_capture(self, payload: dict[str, Any]) -> dict[str, Any]:
+        assert self.rt.db is not None
+
+        raw = payload.get("raw")
+        if raw is None:
+            raw = payload.get("text")
+        if not isinstance(raw, str) or not raw.strip():
+            raise ValueError(
+                "notetaker.capture.submit requires non-empty payload.raw or payload.text"
+            )
 
         client = create_client(self.rt.config.notetaker.provider)
-        session = format_session_name(self.rt, "notetaker", "")
-        agent = NotetakerAgent(
-            agent_id="notetaker-0",
-            session=session,
-            config=self.rt.config.notetaker,
-            client=client,
+        return await notetaker_capture.submit_capture(
             repo_root=self.rt.repo_root,
-            runtime=self.rt,
+            conn=self.rt.db,
+            raw=raw.strip(),
+            client=client,
+            config=self.rt.config.notetaker,
             note_name=notes_mod.today_name(),
         )
-        self.rt.register_agent(agent)
-        try:
-            await agent.start("", {})
-        except BaseException:
-            await self.rt.reap(agent.id)
-            raise
-        return agent.id
 
     async def evaluate_wave_completion(self, wave: int) -> bool:
         assert self.rt.db is not None
@@ -462,3 +457,30 @@ class Orchestrator:
         prev = lifecycle.transition(self.rt.db, ticket_id, TicketStatus.DONE)
         await self._emit_ticket_status(ticket_id, prev, TicketStatus.DONE.value)
         return True
+
+    async def apply_ticket_carve_ready(
+        self, ticket_id: str, payload: dict[str, object]
+    ) -> dict[str, object]:
+        """Apply carved sidecar from structured ``carve`` or legacy ``yaml`` string."""
+        assert self.rt.db is not None
+        carve_body = payload.get("carve")
+        yaml_text = payload.get("yaml")
+        try:
+            if isinstance(carve_body, dict) and carve_body:
+                spec = dict(carve_body)
+                if spec.get("id") is None:
+                    spec["id"] = ticket_id
+                prev = carve.apply_carve_ready_spec(self.rt.db, ticket_id, spec)
+            elif isinstance(yaml_text, str) and yaml_text.strip():
+                spec = carve.parse_carve_yaml(yaml_text)
+                prev = carve.apply_carve_ready_spec(self.rt.db, ticket_id, spec)
+            else:
+                return {
+                    "handled": True,
+                    "ok": False,
+                    "error": "payload must include non-empty 'carve' object or 'yaml' string",
+                }
+        except carve.CarveError as exc:
+            return {"handled": True, "ok": False, "error": str(exc)}
+        await self._emit_ticket_status(ticket_id, prev, TicketStatus.READY.value)
+        return {"handled": True, "ok": True, "ticket_id": ticket_id}

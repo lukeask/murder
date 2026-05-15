@@ -170,11 +170,12 @@ async def test_codex_request_usage_status_sends_status_command(monkeypatch) -> N
     result = await CodexAdapter().attach("sess", Path("/repo")).request_usage_status()
     assert result.ok
     assert calls == [
+        ("sess", "Escape", False, False),
         ("sess", "/status", True, False),
         ("sess", "", True, True),
         ("sess", "", True, True),
     ]
-    assert sleeps == [0.5, 0.8, 1.2]
+    assert sleeps == [0.1, 0.5, 0.8, 1.2]
 
 
 async def test_codex_send_prompt_submits_with_tab(monkeypatch) -> None:
@@ -253,8 +254,45 @@ async def test_codex_collect_usage_status_sends_and_parses_panel(monkeypatch) ->
     assert result.data.windows[0].name == "weekly"
     assert result.data.windows[0].percent_used == 42.0
     assert calls == [
+        ("sess", "Escape", False, False),
         ("sess", "/status", True, False),
         ("sess", "", True, True),
         ("sess", "", True, True),
     ]
-    assert sleeps == [0.5, 0.8, 1.2]
+    assert sleeps == [0.1, 0.5, 0.8, 1.2]
+
+
+async def test_codex_collect_usage_status_retries_and_fails_on_empty_panel(monkeypatch) -> None:
+    calls: list[tuple[str, str, bool, bool]] = []
+    sleeps: list[float] = []
+
+    async def fake_send_keys(
+        session: str, text: str, *, literal: bool = True, enter: bool = True
+    ) -> None:
+        calls.append((session, text, literal, enter))
+
+    async def fake_sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+
+    async def fake_capture_pane(session: str, lines: int = 200) -> str:
+        assert session == "sess"
+        assert lines == 160
+        return "OpenAI Codex\n› Explain this codebase\n"
+
+    monkeypatch.setattr("murder.tmux.send_keys", fake_send_keys)
+    monkeypatch.setattr("murder.tmux.capture_pane", fake_capture_pane)
+    monkeypatch.setattr("murder.harnesses.codex.asyncio.sleep", fake_sleep)
+    result = await CodexAdapter().attach("sess", Path("/repo")).collect_usage_status()
+    assert not result.ok
+    assert result.message == "codex /status did not expose any usage windows"
+    assert calls == [
+        ("sess", "Escape", False, False),
+        ("sess", "/status", True, False),
+        ("sess", "", True, True),
+        ("sess", "", True, True),
+        ("sess", "Escape", False, False),
+        ("sess", "/status", True, False),
+        ("sess", "", True, True),
+        ("sess", "", True, True),
+    ]
+    assert sleeps == [0.1, 0.5, 0.8, 1.2, 0.6, 0.1, 0.5, 0.8, 1.2]

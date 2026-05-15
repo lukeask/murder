@@ -14,6 +14,12 @@ venv/
 # Murder runtime artifacts
 .murder/
 
+# Local agent / IDE / handoff (repo-root dot dirs)
+.agents/
+.claude/
+.codex/
+.codex-handoff/
+
 # Tooling
 .mypy_cache/
 .pytest_cache/

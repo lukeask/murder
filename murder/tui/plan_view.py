@@ -169,6 +169,15 @@ class PlanDocument(Markdown):
             "or add markdown under `.murder/plans`."
         )
         self.border_title = "(no plan selected)"
+        self._last_render_key: tuple[str, str] | None = None
+
+    async def set_plan_markdown(self, title: str, markdown: str) -> None:
+        """Update the viewer only when title or body changed — skips Rich re-parse."""
+        if self._last_render_key == (title, markdown):
+            return
+        self._last_render_key = (title, markdown)
+        self.border_title = title
+        await self.update(markdown)
 
     def action_line_down(self) -> None:
         self.action_scroll_down()
@@ -207,10 +216,16 @@ class NotesDocument(Markdown, can_focus=True):
         super().__init__(self._EMPTY)
         self.can_focus = True
         self.border_title = "notes"
+        self._last_render_key: tuple[str, str] | None = None
 
     async def show(self, name: str, body: str) -> None:
+        """Render the note body; no-op when ``(name, normalized body)`` matches last tick."""
+        display = body.strip() or self._EMPTY
+        if self._last_render_key == (name, display):
+            return
+        self._last_render_key = (name, display)
         self.border_title = f"notes · {name}"
-        await self.update(body.strip() or self._EMPTY)
+        await self.update(display)
 
     def action_line_down(self) -> None:
         self.action_scroll_down()

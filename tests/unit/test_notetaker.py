@@ -1,4 +1,4 @@
-"""NotetakerAgent + notes storage."""
+"""Notes storage + notetaker capture shim/tests."""
 
 from __future__ import annotations
 
@@ -9,48 +9,27 @@ import pytest
 
 from murder import notes
 from murder.agents.notetaker import NotetakerAgent
-from murder.clients.base import CompletionResult, ToolCall
+from murder.clients.base import CompletionResult
 from murder.config import NotetakerConfig
+from murder.orchestrator import Orchestrator
+from murder.runtime import Runtime
 
 
-class _FakeClient:
-    """Returns a scripted sequence of completions."""
-
-    def __init__(self, results: list[CompletionResult]) -> None:
-        self._results = list(results)
-        self.calls: list[list[dict]] = []
+class _FenceClient:
+    def __init__(self, fence_body: str) -> None:
+        self._fence_body = fence_body
 
     async def complete(self, *, model, system, messages, tools, max_tokens, temperature=0.0):
-        del model, system, tools, max_tokens, temperature
-        self.calls.append([dict(m) for m in messages])
-        return self._results.pop(0)
-
-
-def _completion(text: str | None, tool_calls: list[ToolCall] | None = None) -> CompletionResult:
-    return CompletionResult(
-        text=text,
-        tool_calls=tool_calls or [],
-        prompt_tokens=1,
-        completion_tokens=1,
-        model="fake",
-        latency_ms=0.0,
-    )
-
-
-def _runtime(memdb):
-    return SimpleNamespace(db=memdb, bus=None, run_id=None, sync_agent=lambda agent: None)
-
-
-def _agent(memdb, tmp_path: Path, client) -> NotetakerAgent:
-    return NotetakerAgent(
-        agent_id="notetaker-0",
-        session="murder_test_notetaker",
-        config=NotetakerConfig(),
-        client=client,
-        repo_root=tmp_path,
-        runtime=_runtime(memdb),  # type: ignore[arg-type]
-        note_name="2026-05-11",
-    )
+        del model, system, messages, tools, max_tokens, temperature
+        text = "```json\n" + self._fence_body + "\n```"
+        return CompletionResult(
+            text=text,
+            tool_calls=[],
+            prompt_tokens=1,
+            completion_tokens=1,
+            model="fake",
+            latency_ms=0.0,
+        )
 
 
 # ── notes module ───────────────────────────────────────────────────────────
@@ -95,61 +74,18 @@ def test_write_note_records_revisions(memdb, tmp_path: Path) -> None:
     ]
 
 
-# ── NotetakerAgent ─────────────────────────────────────────────────────────
+# ── shim + capture orchestration ──────────────────────────────────────────
+
+
+def test_notetaker_agent_shim_errors_on_construct() -> None:
+    with pytest.raises(RuntimeError, match="capture.submit"):
+        NotetakerAgent()  # type: ignore[call-arg]
 
 
 @pytest.mark.asyncio
-async def test_start_seeds_simulated_read_when_prior_notes_exist(memdb, tmp_path: Path) -> None:
-    notes.write_note(memdb, tmp_path, "2026-05-10", "yesterday's notes")
-    agent = _agent(memdb, tmp_path, _FakeClient([]))
-    await agent.start("", {})
-    assert agent.messages[0]["role"] == "assistant"
-    assert agent.messages[0]["tool_calls"][0]["function"]["name"] == "read_notes"
-    assert agent.messages[1]["role"] == "tool"
-    assert "yesterday's notes" in agent.messages[1]["content"]
-    # UI transcript starts with the synthetic "read" line and nothing else yet.
-    assert agent.transcript_for_ui() == [("notetaker", "📄 Read current notes (2026-05-11).")]
-
-
-@pytest.mark.asyncio
-async def test_reply_runs_tool_loop_and_writes_notes(memdb, tmp_path: Path) -> None:
-    client = _FakeClient(
-        [
-            _completion(
-                "Tidying that up.",
-                [ToolCall(name="write_notes", arguments={"content": "## Goals\n- launch"}, call_id="c1")],
-            ),
-            _completion("Done — want me to break that into tickets?"),
-        ]
-    )
-    agent = _agent(memdb, tmp_path, client)
-    await agent.start("", {})
-    reply = await agent.reply_to("ok so we wanna launch the thing, goals: launch")
-    assert reply == "Done — want me to break that into tickets?"
-    assert notes.read_note(memdb, "2026-05-11") == "## Goals\n- launch"
-    transcript = agent.transcript_for_ui()
-    assert transcript[-2:] == [
-        ("you", "ok so we wanna launch the thing, goals: launch"),
-        ("notetaker", "Done — want me to break that into tickets?"),
-    ]
-
-
-@pytest.mark.asyncio
-async def test_reply_without_client_is_graceful(memdb, tmp_path: Path) -> None:
-    agent = _agent(memdb, tmp_path, client=None)
-    await agent.start("", {})
-    reply = await agent.reply_to("hello?")
-    assert "offline" in reply.lower()
-    assert agent.messages[-1] == {"role": "assistant", "content": reply}
-
-
-@pytest.mark.asyncio
-async def test_ensure_notetaker_registers_agent_and_persists_row(
+async def test_submit_notetaker_capture_inserts_db_and_updates_note(
     monkeypatch: pytest.MonkeyPatch, memdb, tmp_path: Path
 ) -> None:
-    from murder.orchestrator import Orchestrator
-    from murder.runtime import Runtime
-
     cfg = SimpleNamespace(
         project=SimpleNamespace(name="test"),
         runtime=SimpleNamespace(session_name_template="murder_{project}_{role}{suffix}"),
@@ -157,14 +93,21 @@ async def test_ensure_notetaker_registers_agent_and_persists_row(
     )
     rt = Runtime(cfg, tmp_path)  # type: ignore[arg-type]
     rt.db = memdb
-    monkeypatch.setattr("murder.orchestrator.create_client", lambda provider: None)
+    monkeypatch.setattr(
+        "murder.orchestrator.create_client",
+        lambda provider: _FenceClient(
+            '{"cleaned": "## Item\\n- one", "short_vers": "one item noted"}'
+        ),
+    )
 
-    agent_id = await Orchestrator(rt).ensure_notetaker()
-    assert agent_id == "notetaker-0"
-    assert isinstance(rt.get_agent("notetaker-0"), NotetakerAgent)
+    out = await Orchestrator(rt).submit_notetaker_capture({"text": "  ramble ramble one  "})
+
     row = memdb.execute(
-        "SELECT role, status FROM agents WHERE agent_id = 'notetaker-0'"
+        "SELECT raw, cleaned, short_vers FROM notes_entries ORDER BY id DESC LIMIT 1",
     ).fetchone()
-    assert (row["role"], row["status"]) == ("notetaker", "running")
-    # Re-entrant: same in-memory agent is reused, not re-created.
-    assert await Orchestrator(rt).ensure_notetaker() == "notetaker-0"
+    assert row["raw"] == "ramble ramble one"
+    assert "## Item" in row["cleaned"]
+    assert out["reply"] == "one item noted"
+    merged = notes.read_note(memdb, notes.today_name())
+    assert "## Item" in merged
+

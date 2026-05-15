@@ -75,7 +75,8 @@ class SentinelAgent(Agent):
         if self.runtime.db is not None:
             self.runtime.sync_agent(self)
 
-    async def stop(self, *, failed: bool = False) -> None:
+    async def stop(self, *, failed: bool = False, kill_session: bool = True) -> None:
+        del kill_session  # sentinel has no real tmux session
         if self._sub_handle is not None:
             self._sub_handle.cancel()
             self._sub_handle = None

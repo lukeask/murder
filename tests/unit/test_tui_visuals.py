@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from murder.tui.app import MurderApp, _chat_target_label
+import pytest
+
+from murder.tui.app import MurderApp, _chat_target_label, _is_vim_style_quit
 from murder.tui.chat_input import ChatInput
 from murder.tui.plan_view import ChatLog, NotesDocument, NotesList, PlanDocument, PlanList
 
@@ -104,4 +106,59 @@ def test_bare_hjkl_are_not_app_level_so_widgets_keep_intra_pane_motion() -> None
         assert _app_binding_actions(key) == [], (
             f"App binds bare {key!r}; that would break intra-pane vim motion"
         )
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        (":wq", True),
+        (":WQ", True),
+        ("  :wq  ", True),
+        (":wq\n", True),
+        (":q!", True),
+        (":Q!", True),
+        ("  :q!  ", True),
+        (":q!\nignored next line", False),
+        ("so I was thinking about :wq and :q! the other day", False),
+        (":wq trailing junk", False),
+        ("junk\n:wq", False),
+        (":x", False),
+        (":q", False),
+        (":!", False),
+    ],
+)
+def test_is_vim_style_quit_requires_whole_message(text: str, expected: bool) -> None:
+    assert _is_vim_style_quit(text) is expected
+
+
+@pytest.mark.asyncio
+async def test_notes_document_show_skips_update_when_identity_unchanged(monkeypatch):
+    doc = NotesDocument()
+    payloads: list[str] = []
+
+    async def spy_update(markdown: str) -> None:
+        payloads.append(markdown)
+
+    monkeypatch.setattr(doc, "update", spy_update)
+    await doc.show("2026-05-01", "## hi")
+    await doc.show("2026-05-01", "## hi")
+    await doc.show("2026-05-01", "  ## hi\n")
+    await doc.show("2026-05-02", "## hi")
+    assert payloads == ["## hi", "## hi"]
+
+
+@pytest.mark.asyncio
+async def test_plan_document_set_plan_markdown_skips_update_when_unchanged(monkeypatch):
+    doc = PlanDocument()
+    payloads: list[str] = []
+
+    async def spy_update(markdown: str) -> None:
+        payloads.append(markdown)
+
+    monkeypatch.setattr(doc, "update", spy_update)
+    await doc.set_plan_markdown("p1", "# one")
+    await doc.set_plan_markdown("p1", "# one")
+    await doc.set_plan_markdown("p2", "# one")
+    assert payloads == ["# one", "# one"]
+    assert doc.border_title == "p2"
 

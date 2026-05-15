@@ -4,16 +4,23 @@ from __future__ import annotations
 
 import inspect
 import sqlite3
+from datetime import datetime, timezone
 
 from murder.tui.crow_health import HEALTH_BORDER_COLOR, Health, classify
 from murder.tui.crows_view import CrowEntry, CrowsView, load_crow_entries
 
 
-def _insert_ticket(db: sqlite3.Connection, ticket_id: str, *, title: str = "x") -> None:
+def _insert_ticket(
+    db: sqlite3.Connection,
+    ticket_id: str,
+    *,
+    title: str = "x",
+    status: str = "in_progress",
+) -> None:
     db.execute(
         "INSERT INTO tickets(id, title, wave, status, created_at, updated_at) "
-        "VALUES (?, ?, 0, 'in_progress', '2026-05-14T00:00:00', '2026-05-14T00:00:00')",
-        (ticket_id, title),
+        "VALUES (?, ?, 0, ?, '2026-05-14T00:00:00', '2026-05-14T00:00:00')",
+        (ticket_id, title, status),
     )
 
 
@@ -26,13 +33,16 @@ def _insert_agent(
     status: str = "running",
     session: str | None = "tmux-1",
     started_at: str = "2026-05-14T01:00:00",
+    last_heartbeat_at: str | None = None,
 ) -> None:
     db.execute(
         """
-        INSERT INTO agents(agent_id, role, ticket_id, session, status, started_at)
-        VALUES (?, ?, ?, ?, ?, ?)
+        INSERT INTO agents(
+            agent_id, role, ticket_id, session, status, started_at, last_heartbeat_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?)
         """,
-        (agent_id, role, ticket_id, session, status, started_at),
+        (agent_id, role, ticket_id, session, status, started_at, last_heartbeat_at),
     )
 
 
@@ -175,3 +185,55 @@ def test_load_crow_entries_produces_crow_entry_dataclass(memdb: sqlite3.Connecti
     assert isinstance(entry, CrowEntry)
     assert entry.session == "tmux-foo"
     assert entry.role == "crow"
+
+
+def test_load_crow_entries_hides_stale_failed_terminal_ticket(memdb: sqlite3.Connection) -> None:
+    now = datetime(2026, 5, 14, 10, 0, 0, tzinfo=timezone.utc)
+    _insert_ticket(memdb, "t-stale", status="failed")
+    _insert_ticket(memdb, "t-live", status="in_progress")
+    _insert_agent(
+        memdb,
+        agent_id="a-stale",
+        ticket_id="t-stale",
+        status="failed",
+        started_at="2026-05-13T07:00:00",
+        last_heartbeat_at="2026-05-13T07:01:00",
+    )
+    _insert_agent(memdb, agent_id="a-live", ticket_id="t-live", status="running")
+
+    entries = load_crow_entries(memdb, now=now)
+    assert [e.agent_id for e in entries] == ["a-live"]
+
+
+def test_load_crow_entries_keeps_recent_failed_terminal_ticket(memdb: sqlite3.Connection) -> None:
+    now = datetime(2026, 5, 14, 10, 0, 0, tzinfo=timezone.utc)
+    _insert_ticket(memdb, "t-recent", status="failed")
+    _insert_agent(
+        memdb,
+        agent_id="a-recent-failed",
+        ticket_id="t-recent",
+        status="failed",
+        started_at="2026-05-14T09:30:00",
+        last_heartbeat_at="2026-05-14T09:59:00",
+    )
+
+    entries = load_crow_entries(memdb, now=now)
+    assert [e.agent_id for e in entries] == ["a-recent-failed"]
+
+
+def test_load_crow_entries_keeps_failed_for_active_ticket_even_if_old(
+    memdb: sqlite3.Connection,
+) -> None:
+    now = datetime(2026, 5, 14, 10, 0, 0, tzinfo=timezone.utc)
+    _insert_ticket(memdb, "t-active", status="in_progress")
+    _insert_agent(
+        memdb,
+        agent_id="a-old-failed",
+        ticket_id="t-active",
+        status="failed",
+        started_at="2026-05-13T01:00:00",
+        last_heartbeat_at="2026-05-13T01:05:00",
+    )
+
+    entries = load_crow_entries(memdb, now=now)
+    assert [e.agent_id for e in entries] == ["a-old-failed"]

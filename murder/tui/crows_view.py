@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import sqlite3
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 
 from textual.app import ComposeResult
 from textual.binding import Binding
@@ -37,6 +38,12 @@ CAPTURE_TIMEOUT_S = 2.0
 GRID_TARGET_COLS = 3
 """Tail-wall packs roughly into this many columns; rows scale by count."""
 
+TERMINAL_TICKET_STATUSES = frozenset({"done", "failed"})
+"""Ticket states that indicate the work item is closed."""
+
+FAILED_STALE_AFTER = timedelta(hours=2)
+"""Hide failed agents after this long unless their ticket is still active."""
+
 
 @dataclass(frozen=True)
 class CrowEntry:
@@ -51,16 +58,20 @@ class CrowEntry:
     health: Health
 
 
-def load_crow_entries(db: sqlite3.Connection) -> list[CrowEntry]:
+def load_crow_entries(db: sqlite3.Connection, *, now: datetime | None = None) -> list[CrowEntry]:
     """Project the DB into one CrowEntry per live agent the wall cares about.
 
-    Excludes `done`/`dead` agents so the wall doesn't fill with corpses;
-    failed crows stay (red border) so attention surfaces stay visible.
+    Excludes `done`/`dead` agents so the wall doesn't fill with corpses.
+    Failed agents stay visible while fresh or tied to non-terminal tickets,
+    then age out so stale historical failures don't dominate the wall.
     """
+    now = now or datetime.now(timezone.utc)
     rows = db.execute(
         """
         SELECT a.agent_id, a.role, a.ticket_id, a.status, a.session,
-               COALESCE(t.title, '') AS title
+               a.started_at, a.last_heartbeat_at,
+               COALESCE(t.title, '') AS title,
+               COALESCE(t.status, '') AS ticket_status
           FROM agents a
           LEFT JOIN tickets t ON t.id = a.ticket_id
          WHERE a.status NOT IN ('done', 'dead')
@@ -77,6 +88,9 @@ def load_crow_entries(db: sqlite3.Connection) -> list[CrowEntry]:
                a.agent_id
         """
     ).fetchall()
+    if not rows:
+        return []
+    rows = [r for r in rows if _keep_wall_row(r, now=now)]
     if not rows:
         return []
 
@@ -117,6 +131,32 @@ def load_crow_entries(db: sqlite3.Connection) -> list[CrowEntry]:
             )
         )
     return entries
+
+
+def _keep_wall_row(row: sqlite3.Row, *, now: datetime) -> bool:
+    """Return True if this agent row should stay visible on the crows wall."""
+    if row["status"] != "failed":
+        return True
+    ticket_status = str(row["ticket_status"] or "")
+    if ticket_status and ticket_status not in TERMINAL_TICKET_STATUSES:
+        return True
+    last_seen = _parse_iso_ts(row["last_heartbeat_at"]) or _parse_iso_ts(row["started_at"])
+    if last_seen is None:
+        return True
+    age = now - last_seen
+    return age <= FAILED_STALE_AFTER
+
+
+def _parse_iso_ts(value: object) -> datetime | None:
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
 
 
 class CrowTile(Container):
