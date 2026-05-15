@@ -538,7 +538,12 @@ def cmd_ticket_ingest_carve(
     conn = _open_existing_db(repo)
     try:
         spec = carve.parse_carve_yaml(raw)
-        carve.apply_carve_ready_spec(conn, ticket_id, spec)
+        carve.ingest_carve_ready_spec(
+            conn=conn,
+            repo_root=str(repo),
+            ticket_id=ticket_id,
+            spec=spec,
+        )
     except carve.CarveError as e:
         typer.secho(str(e), err=True)
         raise typer.Exit(1) from e

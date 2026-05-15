@@ -3,11 +3,19 @@
 from __future__ import annotations
 
 import sqlite3
+from pathlib import Path
 
 import pytest
 
+from murder import db as dbmod
 from murder.bus import TicketStatus
-from murder.tickets.carve import CarveError, apply_carve_ready_spec, parse_carve_yaml
+from murder.storage.paths import ticket_yaml
+from murder.tickets.carve import (
+    CarveError,
+    apply_carve_ready_spec,
+    ingest_carve_ready_spec,
+    parse_carve_yaml,
+)
 from murder.tui.schedule_view import parse_carve_paste
 
 
@@ -101,3 +109,36 @@ def test_apply_carve_rejects_wave_mismatch(memdb: sqlite3.Connection) -> None:
     )
     with pytest.raises(CarveError, match="wave mismatch"):
         apply_carve_ready_spec(memdb, "t009", spec)
+
+
+def test_ingest_carve_writes_yaml_sidecar_and_merges(
+    memdb: sqlite3.Connection, tmp_path: Path
+) -> None:
+    _insert_ticket(memdb, "t010", wave=1, status="planned")
+    ypath = ticket_yaml(tmp_path, "t010")
+    ypath.parent.mkdir(parents=True, exist_ok=True)
+    ypath.write_text("id: t010\nstatus: planned\nnote: keep-me\n", encoding="utf-8")
+
+    spec = parse_carve_yaml(
+        "id: t010\ntitle: New\nwave: 1\nharness: codex\ndeps: []\nskills: []\n"
+        "write_set: [murder/cli.py]\nchecklist: [done]\n"
+    )
+    prev = ingest_carve_ready_spec(
+        conn=memdb,
+        repo_root=str(tmp_path),
+        ticket_id="t010",
+        spec=spec,
+    )
+
+    assert prev == TicketStatus.PLANNED
+    row = memdb.execute("SELECT status FROM tickets WHERE id='t010'").fetchone()
+    assert row["status"] == "ready"
+    ytxt = ypath.read_text(encoding="utf-8")
+    assert "note: keep-me" in ytxt
+    assert "title: New" in ytxt
+
+
+def test_compute_ready_excludes_planned(memdb: sqlite3.Connection) -> None:
+    _insert_ticket(memdb, "t100", status="planned")
+    _insert_ticket(memdb, "t101", status="ready")
+    assert dbmod.compute_ready(memdb) == ["t101"]

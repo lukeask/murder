@@ -133,10 +133,6 @@ class Orchestrator:
             ).fetchone()
             if running:
                 continue
-            st = dbmod.get_ticket_status(conn, tid)
-            if st == TicketStatus.PLANNED.value:
-                prev = lifecycle.transition(conn, tid, TicketStatus.READY)
-                await self._emit_ticket_status(tid, prev, TicketStatus.READY.value)
             prev = lifecycle.transition(conn, tid, TicketStatus.IN_PROGRESS)
             await self._emit_ticket_status(tid, prev, TicketStatus.IN_PROGRESS.value)
             try:
@@ -470,10 +466,20 @@ class Orchestrator:
                 spec = dict(carve_body)
                 if spec.get("id") is None:
                     spec["id"] = ticket_id
-                prev = carve.apply_carve_ready_spec(self.rt.db, ticket_id, spec)
+                prev = carve.ingest_carve_ready_spec(
+                    conn=self.rt.db,
+                    repo_root=str(self.rt.repo_root),
+                    ticket_id=ticket_id,
+                    spec=spec,
+                )
             elif isinstance(yaml_text, str) and yaml_text.strip():
                 spec = carve.parse_carve_yaml(yaml_text)
-                prev = carve.apply_carve_ready_spec(self.rt.db, ticket_id, spec)
+                prev = carve.ingest_carve_ready_spec(
+                    conn=self.rt.db,
+                    repo_root=str(self.rt.repo_root),
+                    ticket_id=ticket_id,
+                    spec=spec,
+                )
             else:
                 return {
                     "handled": True,

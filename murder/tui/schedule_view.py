@@ -32,11 +32,11 @@ def parse_carve_paste(text: str) -> dict[str, Any]:
 
 
 class ScheduleTicketsTable(DataTable):
-    """Tickets on the critical path: status visible; carve only for planned."""
+    """Tickets on the critical path with YAML metadata sync state visible."""
 
     BINDINGS = [
-        Binding("enter", "request_carve", "Carve", show=False),
-        Binding("c", "request_carve", "Carve", show=False),
+        Binding("enter", "request_carve", "Metadata", show=False),
+        Binding("c", "request_carve", "Metadata", show=False),
     ]
 
     class CarveRequested(Message):
@@ -50,7 +50,16 @@ class ScheduleTicketsTable(DataTable):
         self._statuses: list[str] = []
 
     def on_mount(self) -> None:
-        self.add_columns("id", "wave", "status", "deps", "title")
+        self.add_columns(
+            "id",
+            "wave",
+            "status",
+            "deps",
+            "schedule_at",
+            "harness",
+            "model",
+            "title",
+        )
 
     def refresh_from_db(self, db: sqlite3.Connection | None) -> None:
         if db is None:
@@ -65,13 +74,15 @@ class ScheduleTicketsTable(DataTable):
         """
         active = db.execute(
             f"""
-            SELECT t.id, t.title, t.wave, t.status, {dep_subq} AS deps_ok
+            SELECT t.id, t.title, t.wave, t.status, t.schedule_at, t.harness, t.model,
+                   t.metadata_sync_state, t.metadata_parse_error,
+                   t.metadata_conflict_reason, {dep_subq} AS deps_ok
               FROM tickets AS t
              WHERE t.status IN ('planned', 'ready', 'in_progress', 'blocked', 'failed')
              ORDER BY
                    CASE t.status
-                     WHEN 'planned' THEN 0
-                     WHEN 'ready' THEN 1
+                     WHEN 'ready' THEN 0
+                     WHEN 'planned' THEN 1
                      WHEN 'in_progress' THEN 2
                      WHEN 'blocked' THEN 3
                      WHEN 'failed' THEN 4
@@ -82,7 +93,9 @@ class ScheduleTicketsTable(DataTable):
         ).fetchall()
         recent_done = db.execute(
             f"""
-            SELECT t.id, t.title, t.wave, t.status, {dep_subq} AS deps_ok
+            SELECT t.id, t.title, t.wave, t.status, t.schedule_at, t.harness, t.model,
+                   t.metadata_sync_state, t.metadata_parse_error,
+                   t.metadata_conflict_reason, {dep_subq} AS deps_ok
               FROM tickets AS t
              WHERE t.status = 'done'
              ORDER BY datetime(t.updated_at) DESC, t.id
@@ -95,11 +108,22 @@ class ScheduleTicketsTable(DataTable):
         self._statuses = []
         for r in (*active, *recent_done):
             st = str(r["status"])
-            if st == "planned":
+            sync_state = str(r["metadata_sync_state"] or "synced")
+            display_status = st if sync_state == "synced" else f"{st}!"
+            if st in {"planned", "ready"}:
                 deps_cell = "ok" if int(r["deps_ok"]) else "wait"
             else:
                 deps_cell = "—"
-            self.add_row(r["id"], str(r["wave"]), st, deps_cell, r["title"])
+            self.add_row(
+                r["id"],
+                str(r["wave"]),
+                display_status,
+                deps_cell,
+                _format_start(r["schedule_at"]),
+                r["harness"] or "default",
+                r["model"] or "",
+                r["title"],
+            )
             self._ids.append(r["id"])
             self._statuses.append(st)
 
@@ -113,19 +137,19 @@ class ScheduleTicketsTable(DataTable):
         return None
 
     @property
-    def cursor_is_planned(self) -> bool:
+    def cursor_is_editable(self) -> bool:
         i = self.cursor_row
         if not self._statuses or i < 0 or i >= len(self._statuses):
             return False
-        return self._statuses[i] == "planned"
+        return self._statuses[i] in {"planned", "ready"}
 
     def action_request_carve(self) -> None:
         tid = self.cursor_ticket_id
         if tid is None:
             return
-        if not self.cursor_is_planned:
+        if not self.cursor_is_editable:
             self.app.notify(
-                "Carve only applies to [b]planned[/b] tickets — pick a planned row.",
+                "Metadata edits apply to [b]planned[/b] or [b]ready[/b] tickets.",
                 severity="warning",
                 timeout=5,
             )
@@ -142,7 +166,7 @@ def _checklist_to_lines(snapshot: dict[str, Any]) -> str:
 
 
 class CarveFormScreen(ModalScreen[dict[str, Any] | None]):
-    """Structured carve / promote to ready — no raw YAML required."""
+    """YAML-backed ticket metadata editor / mark-ready action."""
 
     BINDINGS = [("escape", "cancel", "Cancel")]
 
@@ -188,13 +212,12 @@ class CarveFormScreen(ModalScreen[dict[str, Any] | None]):
     def compose(self) -> ComposeResult:
         with Vertical(id="carve_dialog"):
             yield Static(
-                f"Promote [b]{self.ticket_id}[/b] to [b]ready[/b] — edit fields, or paste "
-                "YAML/JSON from the collaborator and tap Merge.",
+                f"Edit metadata for [b]{self.ticket_id}[/b] — Apply writes the YAML "
+                "sidecar and marks the ticket [b]ready[/b].",
                 id="carve_hdr",
             )
             yield Static(
-                f"Current DB status: [b]{self._snapshot.get('status', '?')}[/b] — must be "
-                "[b]planned[/b] to apply.",
+                f"Current DB status: [b]{self._snapshot.get('status', '?')}[/b].",
                 id="carve_status",
             )
             yield Static(f"Wave (fixed): {self._wave}", id="carve_wave")
@@ -218,7 +241,7 @@ class CarveFormScreen(ModalScreen[dict[str, Any] | None]):
             yield TextArea(id="import_paste")
             with Horizontal(id="carve_buttons"):
                 yield Button("Merge paste → fields", id="merge")
-                yield Button("Apply (planned → ready)", variant="primary", id="apply")
+                yield Button("Write YAML + mark ready", variant="primary", id="apply")
                 yield Button("Cancel", id="cancel")
 
     def on_mount(self) -> None:
@@ -278,7 +301,8 @@ class CarveFormScreen(ModalScreen[dict[str, Any] | None]):
             "id": self.ticket_id,
             "title": title,
             "wave": self._wave,
-            "harness_override": harness,
+            "status": "ready",
+            "harness": harness,
             "model": model_raw or None,
             "deps": self._lines(self.query_one("#field_deps", TextArea).text),
             "write_set": self._lines(self.query_one("#field_writes", TextArea).text),
@@ -320,7 +344,7 @@ class CarveFormScreen(ModalScreen[dict[str, Any] | None]):
             if not spec["title"]:
                 self.app.notify("Title is required.", severity="warning", timeout=4)
                 return
-            if not str(spec.get("harness_override", "")).strip():
+            if not str(spec.get("harness", "")).strip():
                 self.app.notify("Harness is required.", severity="warning", timeout=4)
                 return
             self.dismiss(spec)
@@ -365,8 +389,8 @@ class ScheduleView(Vertical):
         return self.query_one(ScheduleTicketsTable).cursor_ticket_id
 
     @property
-    def selected_ticket_is_planned(self) -> bool:
-        return self.query_one(ScheduleTicketsTable).cursor_is_planned
+    def selected_ticket_is_editable(self) -> bool:
+        return self.query_one(ScheduleTicketsTable).cursor_is_editable
 
 
 def _schedule_tail_content(db: sqlite3.Connection | None) -> str:
@@ -401,8 +425,8 @@ def _schedule_tail_content(db: sqlite3.Connection | None) -> str:
     ).fetchall()
 
     lines = [
-        "[b]Schedule[/b] — roster above shows status; [b]planned[/b] rows: [b]c[/b] / Enter "
-        "opens promote form.",
+        "[b]Schedule[/b] — [b]ready[/b] rows with deps ok kick with F6; "
+        "[b]c[/b] / Enter edits YAML metadata.",
         "",
         "[b]Scheduled / pending[/b]",
     ]

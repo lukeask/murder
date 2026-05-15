@@ -49,6 +49,10 @@ def ticket_md(repo_root: Path, ticket_id: str) -> Path:
     return tickets_dir(repo_root) / f"{ticket_id}.md"
 
 
+def ticket_yaml(repo_root: Path, ticket_id: str) -> Path:
+    return tickets_dir(repo_root) / f"{ticket_id}.yaml"
+
+
 def plans_dir(repo_root: Path) -> Path:
     return agents_dir(repo_root) / "plans"
 
