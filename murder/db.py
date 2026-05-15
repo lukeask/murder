@@ -41,6 +41,14 @@ CREATE TABLE IF NOT EXISTS tickets (
                   ('planned','ready','in_progress','blocked','done','failed')),
     harness       TEXT,
     model         TEXT,
+    schedule_at   TEXT,
+    metadata_hash TEXT,
+    metadata_file_hash TEXT,
+    metadata_last_materialized_hash TEXT,
+    metadata_materialized_path TEXT,
+    metadata_sync_state TEXT NOT NULL DEFAULT 'synced',
+    metadata_parse_error TEXT,
+    metadata_conflict_reason TEXT,
     attempts      INTEGER NOT NULL DEFAULT 0,
     created_at    TEXT NOT NULL,
     updated_at    TEXT NOT NULL
@@ -318,6 +326,7 @@ def init_schema(conn: sqlite3.Connection) -> None:
     """Apply SCHEMA_SQL idempotently."""
     conn.executescript(SCHEMA_SQL)
     _migrate_events_schema_version(conn)
+    _migrate_ticket_metadata_columns(conn)
     _migrate_agents_failed_status(conn)
     _migrate_agents_notetaker_role(conn)
     _migrate_role_names(conn)
@@ -368,6 +377,32 @@ def _migrate_events_schema_version(conn: sqlite3.Connection) -> None:
     if row is not None:
         return
     conn.execute("ALTER TABLE events ADD COLUMN schema_version INTEGER NOT NULL DEFAULT 1")
+
+
+def _migrate_ticket_metadata_columns(conn: sqlite3.Connection) -> None:
+    """Add additive ticket metadata/scheduling columns for YAML sidecar sync."""
+    ticket_cols = {
+        row["name"] for row in conn.execute("PRAGMA table_info(tickets)").fetchall()
+    }
+    migrations: tuple[tuple[str, str], ...] = (
+        ("schedule_at", "TEXT"),
+        ("metadata_hash", "TEXT"),
+        ("metadata_file_hash", "TEXT"),
+        ("metadata_last_materialized_hash", "TEXT"),
+        ("metadata_materialized_path", "TEXT"),
+        ("metadata_sync_state", "TEXT NOT NULL DEFAULT 'synced'"),
+        ("metadata_parse_error", "TEXT"),
+        ("metadata_conflict_reason", "TEXT"),
+    )
+    for name, ddl in migrations:
+        if name in ticket_cols:
+            continue
+        conn.execute(f"ALTER TABLE tickets ADD COLUMN {name} {ddl}")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_tickets_schedule_at ON tickets(schedule_at)")
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_tickets_metadata_sync_state "
+        "ON tickets(metadata_sync_state)"
+    )
 
 
 def _migrate_role_names(conn: sqlite3.Connection) -> None:
@@ -956,7 +991,7 @@ def get_ticket_status(conn: sqlite3.Connection, ticket_id: str) -> str | None:
 
 
 def compute_ready(conn: sqlite3.Connection) -> list[str]:
-    """Tickets whose deps are all `done` and that are currently `planned` or `ready`.
+    """Tickets whose deps are all `done` and that are currently `ready`.
 
     A ticket with no deps qualifies trivially. Result is sorted by wave then id
     so kickoff order is stable.
@@ -965,7 +1000,7 @@ def compute_ready(conn: sqlite3.Connection) -> list[str]:
         """
         SELECT t.id
           FROM tickets AS t
-          WHERE t.status IN ('planned', 'ready')
+          WHERE t.status = 'ready'
             AND NOT EXISTS (
                 SELECT 1 FROM ticket_deps AS d
                   JOIN tickets AS dep ON dep.id = d.depends_on_id

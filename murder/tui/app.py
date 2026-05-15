@@ -113,8 +113,8 @@ class HelpScreen(ModalScreen[None]):
                         "[b]keys[/b]",
                         "F6 kick ready · F2 focus chat · F1 help",
                         "ctrl+1/2/3  switch views  ·  [ and ] cycle views",
-                        "Schedule: roster shows ticket status; [b]planned[/b] rows — "
-                        "[b]c[/b] / Enter opens promote form",
+                        "Schedule: [b]c[/b] / Enter edits ticket YAML metadata; "
+                        "F6 kicks ready rows",
                         "ctrl+t  toggle planning mode (notetaker ⇄ collaborator)",
                         "ctrl+b  toggle docs sidebar (notes / plans filetree)",
                         "ctrl+y  collaborator: parsed chat ⇄ raw tmux pane",
@@ -166,7 +166,7 @@ class MurderApp(App[None]):
         Binding("shift+tab", "focus_previous_region", "Prev pane", show=False, priority=True),
         ("r", "refresh_now", "Refresh"),
         ("u", "collect_usage", "Usage"),
-        ("c", "schedule_apply_carve", "Carve"),
+        ("c", "schedule_apply_carve", "Metadata"),
         ("f6", "kick_ready", "Kick"),
         ("f2", "focus_chat", "Chat"),
         ("f1", "show_help_force", "Help"),
@@ -877,9 +877,9 @@ class MurderApp(App[None]):
             return
         if self._view != "schedule":
             return
-        if not self._schedule.selected_ticket_is_planned:
+        if not self._schedule.selected_ticket_is_editable:
             self.notify(
-                "Select a [b]planned[/b] ticket to promote (see status column).",
+                "Select a [b]planned[/b] or [b]ready[/b] ticket to edit metadata.",
                 severity="warning",
                 timeout=5,
             )
@@ -943,7 +943,7 @@ class MurderApp(App[None]):
                 timeout=10,
             )
             return
-        self.notify(f"{ticket_id} → ready (carve applied)", timeout=4)
+        self.notify(f"{ticket_id} metadata written; status=ready", timeout=4)
         self._refresh_db_views()
 
     def _record_ui_escalation(self, reason: str) -> None:

@@ -18,6 +18,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import logging
 import shlex
 import signal
 import sqlite3
@@ -35,10 +36,11 @@ from murder.bus import AgentStatus, Bus, EventFilter, SubscriptionHandle
 from murder.notes_sync import NoteSync
 from murder.notetaker_context_sync import NotetakerContextSync
 from murder.plans.sync import PlanSync, choose_editor, open_editor
-from murder.recovery import ReconcileReport, reconcile_agents_vs_tmux
+from murder.recovery import reconcile_agents_vs_tmux
 from murder.storage.filesystem import acquire_flock, release_flock
 from murder.storage.paths import db_path, lock_path, note_md
 from murder.storage.runs import allocate_run_id
+from murder.tickets.meta_sync import TicketMetadataSync
 from murder.tickets.sync import TicketSync
 
 if TYPE_CHECKING:
@@ -68,6 +70,7 @@ class Runtime:
         self.note_sync: NoteSync | None = None
         self.notetaker_context_sync: NotetakerContextSync | None = None
         self.ticket_sync: TicketSync | None = None
+        self.ticket_metadata_sync: TicketMetadataSync | None = None
 
     async def __aenter__(self) -> Runtime:
         await self.start()
@@ -85,7 +88,6 @@ class Runtime:
         live_sessions = set(await tmux.list_sessions())
         report = reconcile_agents_vs_tmux(self.db, live_sessions)
         if report:
-            import logging
             logging.getLogger(__name__).info("startup reconcile: %s", report.summary())
         self.run_id = allocate_run_id(self.repo_root)
         snap = json.dumps(self.config.model_dump(mode="json"), default=str)
@@ -95,16 +97,21 @@ class Runtime:
         self.note_sync = NoteSync(self.repo_root, self.db)
         self.notetaker_context_sync = NotetakerContextSync(self.repo_root, self.db)
         self.ticket_sync = TicketSync(self.repo_root, self.db)
+        self.ticket_metadata_sync = TicketMetadataSync(self.repo_root, self.db)
         await self.plan_sync.reconcile_all()
         await self.note_sync.reconcile_all()
         await self.notetaker_context_sync.reconcile_all()
         await self.ticket_sync.reconcile_all()
+        await self.ticket_metadata_sync.reconcile_all()
         self._tasks["plan_sync"] = asyncio.create_task(self.plan_sync.run())
         self._tasks["note_sync"] = asyncio.create_task(self.note_sync.run())
         self._tasks["notetaker_context_sync"] = asyncio.create_task(
             self.notetaker_context_sync.run()
         )
         self._tasks["ticket_sync"] = asyncio.create_task(self.ticket_sync.run())
+        self._tasks["ticket_metadata_sync"] = asyncio.create_task(
+            self.ticket_metadata_sync.run()
+        )
 
     async def stop(self) -> None:
         self._shutdown.set()
@@ -125,6 +132,9 @@ class Runtime:
         if self.ticket_sync is not None:
             with contextlib.suppress(Exception):
                 await self.ticket_sync.reconcile_all()
+        if self.ticket_metadata_sync is not None:
+            with contextlib.suppress(Exception):
+                await self.ticket_metadata_sync.reconcile_all()
         terminal_statuses = {AgentStatus.DONE, AgentStatus.FAILED, AgentStatus.DEAD}
         # On graceful TUI quit, leave crow/collaborator tmux sessions alive so
         # they survive across TUI restarts. On crash/forced stop, kill them.
@@ -147,6 +157,7 @@ class Runtime:
         self.note_sync = None
         self.notetaker_context_sync = None
         self.ticket_sync = None
+        self.ticket_metadata_sync = None
         self.bus = None
         self.run_id = None
         if self._lock_fd is not None:

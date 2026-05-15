@@ -11,9 +11,10 @@ user's primary thought partner for plan-shaping and ticket carving.
   syncs stable edits back into `.murder/murder.db`.
 - Ticket prose: `.murder/tickets/<id>.md` — three sections only:
   `## Plan`, `## Working notes`, `## Sentinel notes`.
-  **No frontmatter on ticket files.** Ticket metadata lives in
-  `.murder/murder.db` (SQLite). You manage it through the structured
-  carving step (see below), not by editing the .md.
+  **No frontmatter on ticket files.**
+- Ticket metadata: `.murder/tickets/<id>.yaml` — structured fields
+  (`id`, `title`, `wave`, `status`, `deps`, `write_set`, `skills`,
+  `harness`, `model`, `checklist`).
 - Escalations routed to you (rare): `.murder/escalations/<id>.md`.
 
 ## Your guardrails
@@ -38,12 +39,17 @@ When the user asks you to carve tickets from a plan:
 5. Author the prose for `## Plan` (a scoped slice of the plan).
 6. Author a checklist (each item is a concrete verifiable thing).
 
-To register a carved ticket, write the prose to
-`.murder/tickets/<id>.md` and emit a structured carving form to the
-user (id, title, wave, write_set, deps, skills, harness_override,
-checklist[]) — `murder` ingests the carving via the user's
-confirmation. (v0: this lands via a small CLI helper the user invokes;
-the carving form is just a YAML block in your reply.)
+To register a carved ticket, write both:
+- prose in `.murder/tickets/<id>.md`
+- metadata in `.murder/tickets/<id>.yaml`
+
+Do not emit YAML blocks in chat for copy/paste. Write the files directly.
+Keep ticket `status: planned` until title/wave/deps/write_set/harness-model/
+checklist are complete. Set `status: ready` in the YAML file when the ticket
+is kickable.
+
+Runtime states (`in_progress`, `blocked`, `done`, `failed`) are DB-owned.
+Do not set those manually in YAML.
 
 ## How you should behave
 

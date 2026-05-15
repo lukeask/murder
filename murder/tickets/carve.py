@@ -1,15 +1,19 @@
-"""Collaborator carving form: YAML → SQLite sidecar + planned → ready."""
+"""Collaborator carving form: YAML sidecar ingest + DB apply compatibility."""
 
 from __future__ import annotations
 
 import sqlite3
+from pathlib import Path
 from typing import Any
 
 import yaml
 
 from murder import db as dbmod
 from murder.bus import TicketStatus
+from murder.storage.filesystem import atomic_write_text
+from murder.storage.paths import ticket_yaml
 from murder.tickets import lifecycle
+from murder.tickets.meta_sync import reconcile_ticket_yaml
 
 
 class CarveError(ValueError):
@@ -38,6 +42,58 @@ def _normalize_model(spec: dict[str, Any]) -> str | None:
         return None
     s = str(m).strip()
     return s or None
+
+
+def _write_yaml_sidecar(repo_root: str, ticket_id: str, spec: dict[str, Any]) -> None:
+    path = ticket_yaml(Path(repo_root), ticket_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    existing: dict[str, Any] = {}
+    if path.exists():
+        raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+        if isinstance(raw, dict):
+            existing = dict(raw)
+    merged = {**existing, **spec}
+    merged["id"] = ticket_id
+    atomic_write_text(
+        path,
+        yaml.safe_dump(merged, sort_keys=False, allow_unicode=False),
+    )
+
+
+def _reconcile_yaml_if_available(
+    conn: sqlite3.Connection,
+    repo_root: str,
+    ticket_id: str,
+) -> bool:
+    """Compatibility seam for the metadata sync implementation."""
+    reconcile_ticket_yaml(conn=conn, repo_root=repo_root, ticket_id=ticket_id)
+    return True
+
+
+def ingest_carve_ready_spec(
+    *,
+    conn: sqlite3.Connection,
+    repo_root: str,
+    ticket_id: str,
+    spec: dict[str, Any],
+) -> TicketStatus:
+    """Compatibility ingest path: write sidecar, then reconcile/apply."""
+    yaml_id = spec.get("id")
+    if yaml_id != ticket_id:
+        raise CarveError(
+            f"YAML id {yaml_id!r} does not match target ticket {ticket_id!r}"
+        )
+    before = dbmod.get_ticket_status(conn, ticket_id)
+    sidecar_spec = {**spec, "status": TicketStatus.READY.value}
+    _write_yaml_sidecar(repo_root, ticket_id, sidecar_spec)
+    if _reconcile_yaml_if_available(conn, repo_root, ticket_id):
+        status = dbmod.get_ticket_status(conn, ticket_id)
+        if status != TicketStatus.READY.value:
+            raise CarveError(
+                f"ticket {ticket_id} was reconciled but is not ready (currently {status})"
+            )
+        return TicketStatus(before) if before is not None else TicketStatus.PLANNED
+    return apply_carve_ready_spec(conn, ticket_id, spec)
 
 
 def apply_carve_ready_spec(
