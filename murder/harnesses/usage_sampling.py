@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import sqlite3
 from dataclasses import asdict, is_dataclass
@@ -69,20 +70,22 @@ async def _ensure_tmux_slash_session(
 
     name = format_session_name(rt, "usage", f"_{kind}")
     adapter = get_harness(kind, startup_model=startup_model)
-    hs = adapter.attach(name, rt.repo_root)
 
     if await tmux.session_exists(name):
+        hs = adapter.attach(name, rt.repo_root)
         ready = await hs.wait_ready(timeout_s=90.0)
-        if not ready.ok:
-            return None
-        idle = await hs.wait_idle(timeout_s=30.0)
-        if not idle.ok:
-            return None
-    else:
-        spec = HarnessStartSpec(cwd=rt.repo_root, startup_model=startup_model)
-        started = await hs.start(spec)
-        if not started.ok:
-            return None
+        if ready.ok:
+            idle = await hs.wait_idle(timeout_s=30.0)
+            if idle.ok:
+                return hs
+        with contextlib.suppress(tmux.TmuxError):
+            await tmux.kill_session(name)
+
+    hs = adapter.attach(name, rt.repo_root)
+    spec = HarnessStartSpec(cwd=rt.repo_root, startup_model=startup_model)
+    started = await hs.start(spec)
+    if not started.ok:
+        return None
     return hs
 
 
@@ -122,6 +125,8 @@ async def sample_harness_usages_for_config(rt: Runtime) -> tuple[int, int]:
                 continue
             result = await hs.collect_usage_status()
             if not result.ok or result.data is None:
+                with contextlib.suppress(tmux.TmuxError):
+                    await tmux.kill_session(hs.session)
                 failures += 1
                 continue
             insert_harness_usage_snapshot(db, result.data)
