@@ -10,6 +10,8 @@ from murder.workers.base import Worker, WorkerCtx, WorkerSpec
 KickoffReady = Callable[[str | None], Awaitable[list[str]]]
 ApplyCarveReady = Callable[[str, dict[str, Any]], Awaitable[dict[str, Any]]]
 CaptureSubmit = Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]
+RetryFailed = Callable[[str], Awaitable[dict[str, Any]]]
+SetScheduleAt = Callable[[str, str | None], Awaitable[dict[str, Any]]]
 
 
 class OrchestratorCommandWorker(Worker):
@@ -19,6 +21,8 @@ class OrchestratorCommandWorker(Worker):
         kickoff_ready: KickoffReady,
         apply_carve_ready: ApplyCarveReady,
         capture_submit: CaptureSubmit,
+        retry_failed: RetryFailed,
+        set_schedule_at: SetScheduleAt,
     ) -> None:
         super().__init__(
             WorkerSpec(
@@ -28,12 +32,16 @@ class OrchestratorCommandWorker(Worker):
                     "scheduler.kickoff_ready",
                     "notetaker.capture.submit",
                     "ticket.apply_carve_ready",
+                    "ticket.retry_failed",
+                    "ticket.set_schedule_at",
                 ),
             )
         )
         self._kickoff_ready = kickoff_ready
         self._apply_carve_ready = apply_carve_ready
         self._capture_submit = capture_submit
+        self._retry_failed = retry_failed
+        self._set_schedule_at = set_schedule_at
 
     async def run(self, ctx: WorkerCtx, stop_event: asyncio.Event) -> None:  # noqa: ARG002
         await stop_event.wait()
@@ -62,4 +70,17 @@ class OrchestratorCommandWorker(Worker):
         if command.kind == "notetaker.capture.submit":
             result = await self._capture_submit(dict(command.payload))
             return {"handled": True, **result}
+        if command.kind == "ticket.retry_failed":
+            ticket_id = command.payload.get("ticket_id")
+            if not isinstance(ticket_id, str) or not ticket_id.strip():
+                raise ValueError("ticket.retry_failed requires ticket_id")
+            return await self._retry_failed(ticket_id.strip())
+        if command.kind == "ticket.set_schedule_at":
+            ticket_id = command.payload.get("ticket_id")
+            schedule_at = command.payload.get("schedule_at")
+            if not isinstance(ticket_id, str) or not ticket_id.strip():
+                raise ValueError("ticket.set_schedule_at requires ticket_id")
+            if schedule_at is not None and not isinstance(schedule_at, str):
+                raise ValueError("ticket.set_schedule_at requires string or null schedule_at")
+            return await self._set_schedule_at(ticket_id.strip(), schedule_at)
         return {"handled": False}

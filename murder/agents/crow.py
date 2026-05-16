@@ -54,22 +54,8 @@ class CrowAgent(Agent):
 
         try:
             self.start_commit = await git_diff.head_commit(self.repo_root)
-        except Exception as e:
-            self.status = AgentStatus.FAILED
-            if self.runtime:
-                self.runtime.sync_agent(self)
-                if self.runtime.bus and self.runtime.run_id:
-                    await self.runtime.bus.publish(
-                        ErrorEvent(
-                            run_id=self.runtime.run_id,
-                            agent_id=self.id,
-                            role=self.role,
-                            ticket_id=self.ticket_id,
-                            message=str(e),
-                            recoverable=True,
-                        )
-                    )
-            raise
+        except Exception:
+            self.start_commit = None
         await self.harness_session.send_prompt(brief)
         self.status = AgentStatus.RUNNING
         if self.runtime:

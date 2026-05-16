@@ -221,6 +221,37 @@ class PresenceEvent(_BaseEvent):
     version: int
 
 
+class SchedulerModeEvent(_BaseEvent):
+    """Broadcast when the scheduler mode changes."""
+    type: Literal["scheduler.mode"] = "scheduler.mode"
+    from_mode: str
+    to_mode: str
+    changed_by: Literal["user", "api"] = "user"
+
+
+class SchedulerDecisionEvent(_BaseEvent):
+    """Emitted on every crow_magic tick per (harness, window_key)."""
+    type: Literal["scheduler.decision"] = "scheduler.decision"
+    mode: str
+    harness: str
+    window_key: str
+    decision: bool
+    usage: float
+    t_until_reset: float
+    t_period: float
+    threshold: float
+    rationale: str
+    kicked_ticket_id: str | None = None
+
+
+class UsageResetEvent(_BaseEvent):
+    """Emitted when consecutive snapshots show a usage reset (drop > 80% of prev)."""
+    type: Literal["usage.reset"] = "usage.reset"
+    harness: str
+    prev_pct: float
+    curr_pct: float
+
+
 # --- Discriminated union of inner events ------------------------------------
 
 BusEvent = Annotated[
@@ -234,6 +265,9 @@ BusEvent = Annotated[
         CommandEvent,
         StateSnapshotEvent,
         PresenceEvent,
+        SchedulerModeEvent,
+        SchedulerDecisionEvent,
+        UsageResetEvent,
     ],
     Field(discriminator="type"),
 ]
@@ -433,7 +467,8 @@ __all__ = [
     "Entity", "PresenceState", "ClientKind",
     "HeartbeatEvent", "SummaryEvent", "QuestionEvent",
     "EscalationEvent", "StatusChangeEvent", "ErrorEvent",
-    "CommandEvent", "StateSnapshotEvent", "PresenceEvent",
+    "CommandEvent", "StateSnapshotEvent", "PresenceEvent", "SchedulerModeEvent",
+    "SchedulerDecisionEvent", "UsageResetEvent",
     "BusEvent", "AgentEvent", "BUS_EVENT_ADAPTER",
     "EventFilter",
     "HelloBody", "SubArgs", "RpcArgs", "AckBody", "ErrBody", "WakeBody",

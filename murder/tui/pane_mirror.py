@@ -5,6 +5,7 @@ from __future__ import annotations
 from textual.widgets import RichLog
 
 from murder import tmux
+from murder.tui.perf_log import PerfLog
 
 
 class PaneMirror(RichLog):
@@ -17,8 +18,9 @@ class PaneMirror(RichLog):
     }
     """
 
-    def __init__(self) -> None:
+    def __init__(self, perf: PerfLog | None = None) -> None:
         super().__init__(highlight=False, markup=False, wrap=False, auto_scroll=True)
+        self._perf = perf
         self._session: str | None = None
         self._last_text: str = ""
         self._ever_attached = False
@@ -37,6 +39,16 @@ class PaneMirror(RichLog):
             self._ever_attached = True
 
     async def refresh_pane(self) -> None:
+        perf = self._perf
+        if perf is not None and perf.enabled:
+            with perf.span("tui.pane_mirror.refresh") as dyn:
+                prior = self._last_text
+                await self._refresh_pane_body()
+                dyn["changed"] = self._last_text != prior
+            return
+        await self._refresh_pane_body()
+
+    async def _refresh_pane_body(self) -> None:
         if not self._session:
             if not self._last_text:
                 self.clear()
@@ -44,7 +56,7 @@ class PaneMirror(RichLog):
                 self._last_text = "(no agent running yet)"
             return
         try:
-            text = await tmux.capture_pane(self._session, lines=200)
+            text = await tmux.capture_pane(self._session, lines=200, perf=self._perf)
         except tmux.TmuxError:
             vanished = self._ever_attached
             self._session = None

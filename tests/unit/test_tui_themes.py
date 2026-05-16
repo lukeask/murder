@@ -36,7 +36,7 @@ def test_app_registers_everforest_and_has_settings_binding(monkeypatch, tmp_path
         return b.action if hasattr(b, "action") else b[1]
 
     assert any(
-        _binding_key(b) == "ctrl+p" and _binding_action(b) == "open_settings"
+        _binding_key(b) == "ctrl+comma" and _binding_action(b) == "open_settings"
         for b in app.BINDINGS
     )
     assert any(

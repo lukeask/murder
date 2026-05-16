@@ -16,7 +16,7 @@ from murder.tickets.carve import (
     ingest_carve_ready_spec,
     parse_carve_yaml,
 )
-from murder.tui.schedule_view import parse_carve_paste
+from murder.tui.dispatch.roster import parse_carve_paste
 
 
 def test_parse_carve_paste_json() -> None:

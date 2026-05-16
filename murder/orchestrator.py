@@ -223,6 +223,7 @@ class Orchestrator:
             prev = lifecycle.transition(self.rt.db, ticket_id, TicketStatus.FAILED)
         except Exception:
             dbmod.update_ticket_status(self.rt.db, ticket_id, TicketStatus.FAILED.value)
+        lifecycle.set_last_error(self.rt.db, ticket_id, reason)
         await self._emit_ticket_status(ticket_id, prev, TicketStatus.FAILED.value)
         dbmod.insert_escalation(
             self.rt.db,
@@ -397,6 +398,25 @@ class Orchestrator:
             await self.rt.reap(f"crow-{tid}")
             await self.rt.reap(f"crow_handler-{tid}")
         return list(cascaded)
+
+    async def retry_failed_ticket(self, ticket_id: str) -> dict[str, Any]:
+        """Transition a failed ticket back to planned and clear its last_error."""
+        assert self.rt.db is not None
+        prev = lifecycle.transition(
+            self.rt.db, ticket_id, TicketStatus.PLANNED, reason="retry"
+        )
+        lifecycle.clear_last_error(self.rt.db, ticket_id)
+        await self.rt.reap(f"crow-{ticket_id}")
+        await self.rt.reap(f"crow_handler-{ticket_id}")
+        await self._emit_ticket_status(ticket_id, prev, TicketStatus.PLANNED.value)
+        return {"handled": True, "ticket_id": ticket_id, "prev_status": prev.value}
+
+    async def set_schedule_at(self, ticket_id: str, schedule_at: str | None) -> dict[str, Any]:
+        """Update the schedule_at timestamp for a ticket."""
+        assert self.rt.db is not None
+        self.rt.db.execute("UPDATE tickets SET schedule_at = ? WHERE id = ?", (schedule_at, ticket_id))
+        self.rt.db.commit()
+        return {"handled": True, "ticket_id": ticket_id, "schedule_at": schedule_at}
 
     async def on_writeset_violation(self, ticket_id: str, path: str) -> None:
         if self.rt.bus is None or self.rt.run_id is None or self.rt.db is None:

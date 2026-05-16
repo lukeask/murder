@@ -50,6 +50,7 @@ CREATE TABLE IF NOT EXISTS tickets (
     metadata_parse_error TEXT,
     metadata_conflict_reason TEXT,
     attempts      INTEGER NOT NULL DEFAULT 0,
+    last_error    TEXT,
     created_at    TEXT NOT NULL,
     updated_at    TEXT NOT NULL
 );
@@ -296,6 +297,39 @@ CREATE TABLE IF NOT EXISTS schedule_queue (
 
 CREATE INDEX IF NOT EXISTS idx_schedule_queue_status
     ON schedule_queue(status, desired_start_at);
+
+CREATE TABLE IF NOT EXISTS scheduler_state (
+    id         INTEGER PRIMARY KEY CHECK (id = 1),
+    mode       TEXT NOT NULL DEFAULT 'manual' CHECK (mode IN ('manual','autorun_ready','crow_magic')),
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS scheduler_params (
+    harness              TEXT NOT NULL,
+    window_key           TEXT NOT NULL,
+    c_changeoff          REAL NOT NULL DEFAULT 0.7,
+    t_alwaysyes          REAL NOT NULL DEFAULT 15.0,
+    alwayscutoff         REAL NOT NULL DEFAULT 0.6,
+    intensity            REAL NOT NULL DEFAULT 1.0,
+    multiharness_cutoff  REAL,
+    updated_at           TEXT NOT NULL,
+    PRIMARY KEY (harness, window_key)
+);
+
+CREATE TABLE IF NOT EXISTS scheduler_decision_cache (
+    harness              TEXT NOT NULL,
+    window_key           TEXT NOT NULL,
+    mode                 TEXT NOT NULL,
+    decision             INTEGER NOT NULL,
+    usage                REAL NOT NULL,
+    t_until_reset        REAL NOT NULL,
+    t_period             REAL NOT NULL,
+    threshold            REAL NOT NULL,
+    rationale            TEXT NOT NULL,
+    kicked_ticket_id     TEXT,
+    updated_at           TEXT NOT NULL,
+    PRIMARY KEY (harness, window_key)
+);
 """
 # fmt: on
 
@@ -327,10 +361,18 @@ def init_schema(conn: sqlite3.Connection) -> None:
     conn.executescript(SCHEMA_SQL)
     _migrate_events_schema_version(conn)
     _migrate_ticket_metadata_columns(conn)
+    _migrate_ticket_last_error(conn)
     _migrate_agents_failed_status(conn)
     _migrate_agents_notetaker_role(conn)
     _migrate_role_names(conn)
     ensure_notetaker_context_row(conn)
+
+
+def _migrate_ticket_last_error(conn: sqlite3.Connection) -> None:
+    """Add last_error TEXT column to tickets for scheduler retry display."""
+    cols = {row["name"] for row in conn.execute("PRAGMA table_info(tickets)").fetchall()}
+    if "last_error" not in cols:
+        conn.execute("ALTER TABLE tickets ADD COLUMN last_error TEXT")
 
 
 def _migrate_agents_notetaker_role(conn: sqlite3.Connection) -> None:

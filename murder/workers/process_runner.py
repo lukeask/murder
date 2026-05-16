@@ -5,7 +5,7 @@ from __future__ import annotations
 import multiprocessing as mp
 from collections.abc import Callable
 from contextlib import suppress
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 ProcessTarget = Callable[[Any, Any], None]
@@ -22,6 +22,7 @@ class SubprocessWorkerRunner:
 
     target: ProcessTarget
     name: str
+    args: tuple[Any, ...] = field(default_factory=tuple)
 
     def __post_init__(self) -> None:
         self._ctx = mp.get_context("spawn")
@@ -47,7 +48,7 @@ class SubprocessWorkerRunner:
         self._stop.clear()
         self._process = self._ctx.Process(
             target=self.target,
-            args=(self._stop, self._commands),
+            args=(self._stop, self._commands, *self.args),
             name=self.name,
         )
         self._process.start()

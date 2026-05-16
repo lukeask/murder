@@ -1,12 +1,15 @@
 """Top-level Textual app — wires header, ticket grid, pane mirror, and
-escalation strip onto the running Runtime."""
+escalation strip onto the running service client."""
 
 from __future__ import annotations
 
 import asyncio
 import contextlib
 import json
+import os
+import subprocess
 import time
+from pathlib import Path
 from typing import TYPE_CHECKING
 from uuid import uuid4
 
@@ -29,6 +32,7 @@ from murder.tui.escalation_strip import EscalationStrip
 from murder.tui.header import Header
 from murder.tui.note_capture import RECENT_NOTE_ROWS, NoteCaptureScreen
 from murder.tui.pane_mirror import PaneMirror
+from murder.tui.perf_log import make_perf_log
 from murder.tui.plan_view import (
     ChatLog,
     NotesDocument,
@@ -36,17 +40,23 @@ from murder.tui.plan_view import (
     PlanDocument,
     PlanList,
 )
-from murder.tui.schedule_view import CarveFormScreen, ScheduleTicketsTable, ScheduleView
+from murder.tui.dispatch import (
+    CarveFormScreen,
+    DispatchView,
+    ScheduleTicketsTable,
+)
+from murder.tui.dispatch.mode_strip import ModeStrip
 from murder.tui.settings_screen import SettingsScreen
 from murder.tui.themes import CUSTOM_THEMES
 from murder.tui.ticket_grid import TicketGrid
 from murder.user_config import UserConfig, load_user_config
 
 if TYPE_CHECKING:
+    from typing import Any
+
     from textual.widget import Widget
 
     from murder.orchestrator import Orchestrator
-    from murder.runtime import Runtime
 
 COLLABORATOR_START_TIMEOUT_S = 120.0
 COMMAND_POLL_S = 0.05
@@ -73,10 +83,24 @@ def _chat_target_label(view: str, planning_mode: str) -> str:
     return "collaborator"
 
 
+def _git_head_sha(repo_root: Path) -> str:
+    try:
+        proc = subprocess.run(
+            ["git", "-C", str(repo_root), "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=2.0,
+            check=False,
+        )
+        return proc.stdout.strip() if proc.returncode == 0 else ""
+    except Exception:
+        return ""
+
+
 class HelpScreen(ModalScreen[None]):
     """Small in-app glossary and key reference."""
 
-    BINDINGS = [("escape", "dismiss", "Close"), ("f1", "dismiss", "Close")]
+    BINDINGS = [("escape", "dismiss", "Close"), ("ctrl+/", "dismiss", "Close")]
     CSS = """
     HelpScreen {
         align: center middle;
@@ -111,18 +135,17 @@ class HelpScreen(ModalScreen[None]):
                         ":wq :q!  vim-style quit",
                         "",
                         "[b]keys[/b]",
-                        "F6 kick ready · F2 focus chat · F1 help",
+                        "ctrl+f focus chat · ? help · ctrl+, settings",
                         "ctrl+1/2/3  switch views  ·  [ and ] cycle views",
-                        "Schedule: [b]c[/b] / Enter edits ticket YAML metadata; "
+                        "Dispatch: [b]c[/b] / Enter edits ticket YAML metadata; "
                         "F6 kicks ready rows",
                         "ctrl+t  toggle planning mode (notetaker ⇄ collaborator)",
                         "ctrl+b  toggle docs sidebar (notes / plans filetree)",
                         "ctrl+y  collaborator: parsed chat ⇄ raw tmux pane",
                         "ctrl+c twice  force quit  ·  escape  unfocus chat",
                         "j/k or ↑/↓  vim-style navigation in lists and logs",
-                        "r refresh · u refresh usage",
+                        "ctrl+r refresh · ctrl+u refresh usage",
                         "ctrl+n  quick note capture overlay (global)",
-                        "ctrl+p settings (harnesses, models, theme)",
                         "murder --help shows the CLI reference",
                     ]
                 ),
@@ -142,11 +165,11 @@ class MurderApp(App[None]):
 
     BINDINGS = [
         Binding("ctrl+c", "ctrl_c_quit", "Quit", priority=True, show=False),
-        ("ctrl+p", "open_settings", "Settings"),
+        ("ctrl+comma", "open_settings", "Settings"),
         Binding("ctrl+n", "open_note_capture", "Quick note", show=False),
         ("ctrl+1", "view_planning", "Planning"),
         ("ctrl+2", "view_crows", "Crows"),
-        ("ctrl+3", "view_schedule", "Schedule"),
+        ("ctrl+3", "view_schedule", "Dispatch"),
         ("[", "previous_view", "Prev view"),
         ("]", "next_view", "Next view"),
         ("ctrl+t", "toggle_planning_mode", "Plan mode"),
@@ -164,13 +187,13 @@ class MurderApp(App[None]):
         Binding("ctrl+right", "focus_right", "Focus right", show=False),
         Binding("tab", "focus_next_region", "Next pane", show=False, priority=True),
         Binding("shift+tab", "focus_previous_region", "Prev pane", show=False, priority=True),
-        ("r", "refresh_now", "Refresh"),
-        ("u", "collect_usage", "Usage"),
+        ("ctrl+r", "refresh_now", "Refresh"),
+        ("ctrl+u", "collect_usage", "Usage"),
         ("c", "schedule_apply_carve", "Metadata"),
         ("f6", "kick_ready", "Kick"),
-        ("f2", "focus_chat", "Chat"),
-        ("f1", "show_help_force", "Help"),
-        ("?", "show_help", "Help"),
+        ("ctrl+f", "focus_chat", "Chat"),
+        Binding("ctrl+/", "show_help_force", "Help", show=False),
+        ("?", "show_help_force", "Help"),
     ]
 
     CSS = """
@@ -200,21 +223,24 @@ class MurderApp(App[None]):
 
     VIEWS = ("planning", "crows", "schedule")
 
-    def __init__(self, runtime: Runtime, orchestrator: Orchestrator | None = None) -> None:
+    def __init__(self, runtime: Any, orchestrator: Orchestrator | None = None) -> None:
         super().__init__()
         self.runtime = runtime
         self.orchestrator = orchestrator
+        self.perf = make_perf_log(runtime.repo_root)
+        self._perf_log_enabled = self.perf.enabled
+        self._perf_mount_time: float | None = None
         self._header = Header(runtime.config.project.name)
         self._grid = TicketGrid()
-        self._crows = CrowsView()
+        self._crows = CrowsView(perf_log=self.perf)
         self._plans = PlanList()
         self._plan_doc = PlanDocument()
         self._notes_list = NotesList()
         self._notes_doc = NotesDocument()
         self._notetaker_chat = ChatLog(agent_label="notetaker")
         self._collab_chat = ChatLog(agent_label="collaborator")
-        self._schedule = ScheduleView()
-        self._mirror = PaneMirror()
+        self._dispatch = DispatchView()
+        self._mirror = PaneMirror(perf=self.perf)
         self._escalations = EscalationStrip()
         self._chat = ChatInput()
         self._collab_lock = asyncio.Lock()
@@ -246,7 +272,7 @@ class MurderApp(App[None]):
             yield self._notes_doc
             yield self._notetaker_chat
             yield self._collab_chat
-            yield self._schedule
+            yield self._dispatch
             yield self._mirror
         yield self._escalations
         yield self._chat
@@ -257,11 +283,23 @@ class MurderApp(App[None]):
             self.theme = self._user_config.tui.theme
         self.sub_title = str(self.runtime.repo_root)
         self._apply_mode()
+        if self.perf.enabled:
+            self._perf_mount_time = time.perf_counter()
+            refresh_ms = self.runtime.config.tui.refresh_ms
+            interval_s = max(refresh_ms, 250) / 1000
+            pane_interval_s = max(interval_s, 1.0)
+            self.perf.event(
+                "tui.startup",
+                refresh_ms=refresh_ms,
+                pane_interval_s=round(pane_interval_s, 3),
+                git_sha=_git_head_sha(self.runtime.repo_root),
+                pid=os.getpid(),
+            )
         self._refresh_db_views()
         self.set_focus(self._chat)
         if self.runtime.config.project.name == "TODO_SET_ME":
             self.notify(
-                "Project name is unset — open Settings (ctrl+p) to update roles.yaml.",
+                "Project name is unset — open Settings (ctrl+,) to update roles.yaml.",
                 severity="warning",
                 timeout=10,
             )
@@ -270,6 +308,14 @@ class MurderApp(App[None]):
         self.set_interval(max(interval_s, 1.0), self._refresh_pane)
         if self._view == "planning" and self._planning_mode == "notetaker":
             self.run_worker(self._enter_notetaker(), exclusive=True, group="notetaker")
+
+    def on_unmount(self) -> None:
+        if self.perf.enabled and self._perf_mount_time is not None:
+            self.perf.event(
+                "tui.shutdown",
+                uptime_s=round(time.perf_counter() - self._perf_mount_time, 3),
+            )
+        self.perf.close()
 
     def action_ctrl_c_quit(self) -> None:
         now = time.monotonic()
@@ -310,32 +356,42 @@ class MurderApp(App[None]):
 
     def _refresh_db_views(self) -> None:
         db = self.runtime.db
-        self._header.refresh_counts(db)
-        self._grid.refresh_from_db(db)
-        self._crows.refresh_from_db(db)
-        self._plans.refresh_from_db(db)
-        self._notes_list.refresh_from_db(db)
-        self._schedule.refresh_from_db(db)
-        self._escalations.refresh_from_db(db)
-        if self._view == "planning":
-            if self._planning_mode == "collaborator" and self._plans.selected_name:
-                self.run_worker(
-                    self._render_plan(self._plans.selected_name),
-                    exclusive=True, group="plandoc",
-                )
-            elif self._planning_mode == "notetaker":
-                self.run_worker(self._render_notes(), exclusive=True, group="notes")
+        perf = self.perf
+        with perf.span("tui.refresh_db_views"):
+            with perf.span("tui.header.refresh_counts"):
+                self._header.refresh_counts(db)
+            with perf.span("tui.grid.refresh"):
+                self._grid.refresh_from_db(db)
+            with perf.span("tui.crows.refresh_db"):
+                self._crows.refresh_from_db(db)
+            with perf.span("tui.plans.refresh"):
+                self._plans.refresh_from_db(db)
+            with perf.span("tui.notes_list.refresh"):
+                self._notes_list.refresh_from_db(db)
+            with perf.span("tui.schedule.refresh"):
+                self._dispatch.refresh_from_db(db)
+            with perf.span("tui.escalations.refresh"):
+                self._escalations.refresh_from_db(db)
+            if self._view == "planning":
+                if self._planning_mode == "collaborator" and self._plans.selected_name:
+                    self.run_worker(
+                        self._render_plan(self._plans.selected_name),
+                        exclusive=True, group="plandoc",
+                    )
+                elif self._planning_mode == "notetaker":
+                    self.run_worker(self._render_notes(), exclusive=True, group="notes")
 
     async def _refresh_pane(self) -> None:
-        await self._mirror.refresh_pane()
-        if self._view == "crows":
-            await self._crows.refresh_tails()
-        if (
-            self._view == "planning"
-            and self._planning_mode == "collaborator"
-            and not self._collab_raw
-        ):
-            await self._refresh_collab_chat()
+        with self.perf.span("tui.refresh_pane"):
+            await self._mirror.refresh_pane()
+            if self._view == "crows":
+                await self._crows.refresh_tails()
+            if (
+                self._view == "planning"
+                and self._planning_mode == "collaborator"
+                and not self._collab_raw
+            ):
+                await self._refresh_collab_chat()
 
     def on_ticket_grid_ticket_selected(self, event: TicketGrid.TicketSelected) -> None:
         self._mirror.set_session(self._crow_session_for_ticket(event.ticket_id))
@@ -376,30 +432,31 @@ class MurderApp(App[None]):
             await self._open_note(event.name)
 
     async def _render_plan(self, name: str) -> None:
-        await self.runtime.reconcile_plan(name)
-        db = self.runtime.db
-        if db is None:
-            return
-        row = db.execute(
-            """
-            SELECT materialized_path, sync_state, parse_error, conflict_reason
-              FROM plans
-             WHERE name = ?
-            """,
-            (name,),
-        ).fetchone()
-        if row is None:
-            return
-        path = self.runtime.repo_root / row["materialized_path"]
-        if path.exists():
-            text = path.read_text(encoding="utf-8")
-        else:
-            text = f"# {name}\n\nMissing materialized file: `{row['materialized_path']}`\n"
-        if row["sync_state"] == "parse_error":
-            text = f"# {name}\n\nParse error: {row['parse_error']}\n\n```markdown\n{text}\n```"
-        elif row["sync_state"] == "conflict":
-            text = f"# {name}\n\nConflict: {row['conflict_reason']}\n\n{text}"
-        await self._plan_doc.set_plan_markdown(name, text)
+        with self.perf.span("tui.render_plan"):
+            await self.runtime.reconcile_plan(name)
+            db = self.runtime.db
+            if db is None:
+                return
+            row = db.execute(
+                """
+                SELECT materialized_path, sync_state, parse_error, conflict_reason
+                  FROM plans
+                 WHERE name = ?
+                """,
+                (name,),
+            ).fetchone()
+            if row is None:
+                return
+            path = self.runtime.repo_root / row["materialized_path"]
+            if path.exists():
+                text = path.read_text(encoding="utf-8")
+            else:
+                text = f"# {name}\n\nMissing materialized file: `{row['materialized_path']}`\n"
+            if row["sync_state"] == "parse_error":
+                text = f"# {name}\n\nParse error: {row['parse_error']}\n\n```markdown\n{text}\n```"
+            elif row["sync_state"] == "conflict":
+                text = f"# {name}\n\nConflict: {row['conflict_reason']}\n\n{text}"
+            await self._plan_doc.set_plan_markdown(name, text)
 
     async def _open_plan(self, name: str) -> None:
         await self.runtime.reconcile_plan(name)
@@ -436,21 +493,22 @@ class MurderApp(App[None]):
         return notes_mod.today_name()
 
     async def _render_notes(self) -> None:
-        db = self.runtime.db
-        if db is None:
-            return
-        name = self._active_note_name()
-        if name is None:
-            return
-        row = dbmod.get_note(db, name)
-        body = str(row["body"]) if row else ""
-        if not body.strip():
-            path = note_md(self.runtime.repo_root, name)
-            if path.exists():
-                body = path.read_text(encoding="utf-8")
-        # Avoid stale-placeholder lock-in on startup: render from source of
-        # truth every refresh tick rather than short-circuiting by timestamp.
-        await self._notes_doc.show(name, body)
+        with self.perf.span("tui.render_notes"):
+            db = self.runtime.db
+            if db is None:
+                return
+            name = self._active_note_name()
+            if name is None:
+                return
+            row = dbmod.get_note(db, name)
+            body = str(row["body"]) if row else ""
+            if not body.strip():
+                path = note_md(self.runtime.repo_root, name)
+                if path.exists():
+                    body = path.read_text(encoding="utf-8")
+            # Avoid stale-placeholder lock-in on startup: render from source of
+            # truth every refresh tick rather than short-circuiting by timestamp.
+            await self._notes_doc.show(name, body)
 
     async def _enter_notetaker(self) -> None:
         await self._render_notes()
@@ -489,38 +547,39 @@ class MurderApp(App[None]):
         if self._collab_chat_lock.locked():
             return
         async with self._collab_chat_lock:
-            if not (self._view == "planning" and self._planning_mode == "collaborator"):
-                return
-            result = await self._submit_command(
-                target_worker="collaborator",
-                kind="collaborator.transcript.refresh",
-                payload={},
-                timeout_s=8.0,
-                notify_errors=False,
-            )
-            if result is None:
-                return
-            if not bool(result.get("available")):
-                self._collab_chat.set_turns([])
-                self._collab_chat.add_status("(no collaborator yet — type a message to start one)")
-                return
-            turns = [
-                (str(item.get("role", "")), str(item.get("text", "")))
-                for item in result.get("turns", [])
-                if isinstance(item, dict)
-            ]
-            if turns:
-                self._collab_chat.set_turns(turns)
-                return
-            self._collab_chat.set_turns([])
-            if bool(result.get("has_parser")):
-                self._collab_chat.add_status("(collaborator chat — nothing parsed yet)")
-            else:
-                harness_kind = str(result.get("harness_kind", "unknown"))
-                self._collab_chat.add_status(
-                    f"(no transcript parser for '{harness_kind}' yet — "
-                    "press ctrl+y for the raw pane)"
+            with self.perf.span("tui.collab_chat.refresh"):
+                if not (self._view == "planning" and self._planning_mode == "collaborator"):
+                    return
+                result = await self._submit_command(
+                    target_worker="collaborator",
+                    kind="collaborator.transcript.refresh",
+                    payload={},
+                    timeout_s=8.0,
+                    notify_errors=False,
                 )
+                if result is None:
+                    return
+                if not bool(result.get("available")):
+                    self._collab_chat.set_turns([])
+                    self._collab_chat.add_status("(no collaborator yet — type a message to start one)")
+                    return
+                turns = [
+                    (str(item.get("role", "")), str(item.get("text", "")))
+                    for item in result.get("turns", [])
+                    if isinstance(item, dict)
+                ]
+                if turns:
+                    self._collab_chat.set_turns(turns)
+                    return
+                self._collab_chat.set_turns([])
+                if bool(result.get("has_parser")):
+                    self._collab_chat.add_status("(collaborator chat — nothing parsed yet)")
+                else:
+                    harness_kind = str(result.get("harness_kind", "unknown"))
+                    self._collab_chat.add_status(
+                        f"(no transcript parser for '{harness_kind}' yet — "
+                        "press ctrl+y for the raw pane)"
+                    )
 
     def action_view_planning(self) -> None:
         self._set_view("planning")
@@ -531,7 +590,7 @@ class MurderApp(App[None]):
     def action_view_schedule(self) -> None:
         self._set_view("schedule")
         with contextlib.suppress(Exception):
-            table = self._schedule.query_one(ScheduleTicketsTable)
+            table = self._dispatch.query_one(ScheduleTicketsTable)
             self.set_focus(table)
         self.run_worker(self._on_schedule_view_enter(), exclusive=True, group="usage")
 
@@ -595,7 +654,7 @@ class MurderApp(App[None]):
         self._notes_list.display = note_mode and self._sidebar_visible
         self._notes_doc.display = note_mode
         self._notetaker_chat.display = note_mode
-        self._schedule.display = self._view == "schedule"
+        self._dispatch.display = self._view == "schedule"
         self._chat.display = self._view != "schedule"
         # The shared PaneMirror is now only used by planning's collab-raw
         # toggle; CrowsView owns its own mirror for the enlarged tile.
@@ -779,8 +838,6 @@ class MurderApp(App[None]):
             self.set_focus(None)
 
     def action_show_help(self) -> None:
-        if self._insert_if_chat_focused("?"):
-            return
         self.push_screen(HelpScreen())
 
     def action_show_help_force(self) -> None:
@@ -808,11 +865,11 @@ class MurderApp(App[None]):
                 candidates = [self._plans, self._plan_doc, self._collab_chat, self._chat]
         elif self._view == "crows":
             candidates = [self._crows, self._chat]
-        else:  # schedule
+        else:  # schedule/dispatch
             try:
-                candidates = [self._schedule.query_one(ScheduleTicketsTable)]
+                candidates = [self._dispatch.query_one(ScheduleTicketsTable)]
             except Exception:
-                candidates = [self._schedule]
+                candidates = [self._dispatch]
         return [w for w in candidates if w.display]
 
     def _shift_focus(self, delta: int) -> None:
@@ -877,14 +934,14 @@ class MurderApp(App[None]):
             return
         if self._view != "schedule":
             return
-        if not self._schedule.selected_ticket_is_editable:
+        if not self._dispatch.selected_ticket_is_editable:
             self.notify(
                 "Select a [b]planned[/b] or [b]ready[/b] ticket to edit metadata.",
                 severity="warning",
                 timeout=5,
             )
             return
-        tid = self._schedule.selected_ticket_id
+        tid = self._dispatch.selected_ticket_id
         if not tid:
             self.notify("Select a ticket row first", severity="warning", timeout=4)
             return
@@ -898,6 +955,48 @@ class MurderApp(App[None]):
             return
         self._open_carve_screen(event.ticket_id)
 
+    def on_schedule_tickets_table_retry_requested(
+        self, event: ScheduleTicketsTable.RetryRequested
+    ) -> None:
+        event.stop()
+        self.run_worker(
+            self._submit_retry_failed(event.ticket_id),
+            exclusive=False,
+            group="retry",
+        )
+
+    def on_escalation_strip_retry_requested(
+        self, event: EscalationStrip.RetryRequested
+    ) -> None:
+        event.stop()
+        self.run_worker(
+            self._submit_retry_failed(event.ticket_id),
+            exclusive=False,
+            group="retry",
+        )
+
+    def on_mode_strip_set_mode_requested(
+        self, event: ModeStrip.SetModeRequested
+    ) -> None:
+        event.stop()
+        self.run_worker(
+            self._submit_set_scheduler_mode(event.to_mode),
+            exclusive=False,
+            group="scheduler",
+        )
+
+    async def _submit_set_scheduler_mode(self, to_mode: str) -> None:
+        result = await self._submit_command(
+            target_worker="scheduler",
+            kind="scheduler.set_mode",
+            payload={"mode": to_mode},
+            timeout_s=10.0,
+        )
+        if result is None:
+            return
+        self.notify(f"Scheduler mode → {to_mode}", timeout=3)
+        self._refresh_db_views()
+
     def _open_carve_screen(self, ticket_id: str) -> None:
         db = self.runtime.db
         if db is None:
@@ -908,22 +1007,75 @@ class MurderApp(App[None]):
             self.notify(f"ticket {ticket_id} not found", severity="error", timeout=4)
             return
         snapshot = {str(k): row[k] for k in row.keys()}
+        orig_status = str(row.get("status") or "")
         hint = "[dim]Known harness kinds:[/dim] " + ", ".join(sorted(REGISTRY.keys()))
         self.push_screen(
             CarveFormScreen(ticket_id, snapshot, harness_hint=hint),
-            lambda spec: self._after_carve_modal(ticket_id, spec),
+            lambda spec: self._after_carve_modal(ticket_id, spec, orig_status=orig_status),
         )
 
     def _after_carve_modal(
-        self, ticket_id: str, spec: dict[str, object] | None
+        self,
+        ticket_id: str,
+        spec: dict[str, object] | None,
+        *,
+        orig_status: str = "",
     ) -> None:
         if not spec:
             return
-        self.run_worker(
-            self._submit_carve_ready(ticket_id, spec),
-            exclusive=False,
-            group="carve",
+        if orig_status == "failed":
+            self.run_worker(
+                self._submit_retry_then_carve(ticket_id, spec),
+                exclusive=False,
+                group="carve",
+            )
+        else:
+            self.run_worker(
+                self._submit_carve_ready(ticket_id, spec),
+                exclusive=False,
+                group="carve",
+            )
+
+    async def _submit_retry_failed(self, ticket_id: str) -> None:
+        result = await self._submit_command(
+            target_worker="orchestrator",
+            kind="ticket.retry_failed",
+            payload={"ticket_id": ticket_id},
+            timeout_s=15.0,
         )
+        if result is None:
+            return
+        self.notify(f"{ticket_id} queued for retry; status=planned", timeout=4)
+        self._refresh_db_views()
+
+    async def _submit_retry_then_carve(
+        self, ticket_id: str, carve: dict[str, object]
+    ) -> None:
+        retry_result = await self._submit_command(
+            target_worker="orchestrator",
+            kind="ticket.retry_failed",
+            payload={"ticket_id": ticket_id},
+            timeout_s=15.0,
+        )
+        if retry_result is None:
+            return
+        result = await self._submit_command(
+            target_worker="orchestrator",
+            kind="ticket.apply_carve_ready",
+            payload={"ticket_id": ticket_id, "carve": carve},
+            timeout_s=30.0,
+        )
+        if result is None:
+            return
+        if not result.get("ok"):
+            self.notify(
+                str(result.get("error") or "carve rejected"),
+                severity="error",
+                timeout=10,
+            )
+            return
+        self.notify(f"{ticket_id} retried and metadata written; status=ready", timeout=4)
+        self._refresh_db_views()
 
     async def _submit_carve_ready(
         self, ticket_id: str, carve: dict[str, object]
@@ -1006,6 +1158,19 @@ class MurderApp(App[None]):
         timeout_s: float,
         notify_errors: bool = True,
     ) -> dict[str, object] | None:
+        submit_command = getattr(self.runtime, "submit_command", None)
+        if submit_command is not None:
+            try:
+                return await submit_command(
+                    target_worker=target_worker,
+                    kind=kind,
+                    payload=payload,
+                    timeout_s=timeout_s,
+                )
+            except Exception as exc:
+                if notify_errors:
+                    self.notify(str(exc), severity="error", timeout=8)
+                return None
         if self.runtime.bus is None or self.runtime.db is None or self.runtime.run_id is None:
             if notify_errors:
                 self.notify("service bus unavailable", severity="error", timeout=4)

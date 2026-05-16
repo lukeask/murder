@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import os
 import queue
 import sqlite3
 import threading
@@ -13,6 +15,7 @@ from murder.bus import CommandEvent, Role
 from murder.supervisor import Supervisor
 from murder.workers.base import Worker, WorkerCommand, WorkerCtx, WorkerSpec
 from murder.workers.thread_runner import ThreadWorkerRunner
+from murder.workers.usage_probe_worker import UsageProbeWorker
 
 
 class _DummyWorker(Worker):
@@ -89,6 +92,36 @@ async def test_supervisor_writes_worker_heartbeat_rows(memdb: sqlite3.Connection
     assert row["run_id"] == "r1"
     assert row["role"] == "dummy"
     assert "process_model" in row["payload_json"]
+
+
+@pytest.mark.asyncio
+async def test_supervisor_starts_usage_probe_as_subprocess(tmp_path: Path) -> None:
+    db_path = tmp_path / ".murder" / "murder.db"
+    conn = dbmod.connect(db_path)
+    dbmod.init_schema(conn)
+    dbmod.insert_run(conn, "r1", "{}")
+    ctx = WorkerCtx(repo_root=tmp_path, db=conn, run_id="r1")
+    sup = Supervisor(ctx)
+
+    await sup.start_worker(UsageProbeWorker())
+    try:
+        for _ in range(50):
+            row = conn.execute(
+                "SELECT payload_json FROM worker_heartbeats WHERE worker_id = 'usage-probe'"
+            ).fetchone()
+            if row is not None:
+                payload = json.loads(row["payload_json"])
+                if payload.get("pid"):
+                    break
+            await asyncio.sleep(0.02)
+        else:
+            raise AssertionError("usage-probe heartbeat was not written")
+        pid = int(payload["pid"])
+        assert pid != os.getpid()
+        os.kill(pid, 0)
+    finally:
+        await sup.stop_all()
+        conn.close()
 
 
 @pytest.mark.asyncio

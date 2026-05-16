@@ -26,24 +26,32 @@ class TmuxError(RuntimeError):
     """Non-zero exit from tmux."""
 
 
-async def _tmux(*args: str, check: bool = True) -> tuple[int, str, str]:
-    """Run `tmux <args>` in a worker thread; return (rc, stdout, stderr)."""
+async def _tmux(*args: str, check: bool = True, timeout_s: float = 10) -> tuple[int, str, str]:
+    """Run `tmux <args>`; return (rc, stdout, stderr)."""
 
-    def _run() -> subprocess.CompletedProcess[str]:
-        return subprocess.run(
-            ["tmux", *args],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-
-    proc = await asyncio.to_thread(_run)
-    if check and proc.returncode != 0:
+    proc = await asyncio.create_subprocess_exec(
+        "tmux",
+        *args,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    try:
+        stdout_raw, stderr_raw = await asyncio.wait_for(proc.communicate(), timeout=timeout_s)
+    except asyncio.TimeoutError:
+        proc.kill()
+        await proc.wait()
+        stdout_raw, stderr_raw = b"", b"tmux command timed out"
+        returncode = 124
+    else:
+        returncode = int(proc.returncode or 0)
+    stdout = stdout_raw.decode("utf-8", errors="replace")
+    stderr = stderr_raw.decode("utf-8", errors="replace")
+    if check and returncode != 0:
         raise TmuxError(
-            f"tmux {' '.join(shlex.quote(a) for a in args)} → rc={proc.returncode}: "
-            f"{proc.stderr.strip() or proc.stdout.strip()}"
+            f"tmux {' '.join(shlex.quote(a) for a in args)} → rc={returncode}: "
+            f"{stderr.strip() or stdout.strip()}"
         )
-    return proc.returncode, proc.stdout, proc.stderr
+    return returncode, stdout, stderr
 
 
 async def session_exists(name: str) -> bool:
@@ -87,16 +95,30 @@ async def kill_session(name: str) -> None:
 
 
 async def list_sessions(prefix: str | None = None) -> list[str]:
-    rc, out, _ = await _tmux("list-sessions", "-F", "#{session_name}", check=False)
+    rc, out, _ = await _tmux(
+        "list-sessions",
+        "-F",
+        "#{session_name}",
+        check=False,
+        timeout_s=0.5,
+    )
     if rc != 0:
         return []  # no server running → no sessions
     names = [line for line in out.splitlines() if line]
     return [n for n in names if prefix is None or n.startswith(prefix)]
 
 
-async def capture_pane(name: str, lines: int = 200) -> str:
-    """Capture the last `lines` lines from the session's active pane."""
+async def capture_pane(name: str, lines: int = 200, *, perf: object | None = None) -> str:
+    """Capture the last `lines` lines from the session's active pane.
+
+    Optional ``perf`` is a :class:`murder.tui.perf_log.PerfLog` (duck-typed:
+    ``enabled`` and sync ``span``); used only by TUI call sites.
+    """
     # -p: pipe to stdout; -S -<n>: start n lines back from the bottom of history.
+    if perf is not None and getattr(perf, "enabled", False):
+        with perf.span("tmux.capture_pane", session=name, lines=int(lines)):  # type: ignore[attr-defined]
+            _, out, _ = await _tmux("capture-pane", "-p", "-t", name, "-S", f"-{int(lines)}")
+            return out
     _, out, _ = await _tmux("capture-pane", "-p", "-t", name, "-S", f"-{int(lines)}")
     return out
 
