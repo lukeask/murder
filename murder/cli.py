@@ -20,9 +20,10 @@ import typer
 from murder import __version__
 from murder import db as dbmod
 from murder.bus import TicketStatus
+from murder.bus.client import SocketBusClient
 from murder.bus.broker import DurableBroker
-from murder.bus.protocol import CommandEvent
-from murder.bus.transport_socket import SocketBusServer
+from murder.bus.protocol import ClientKind, CommandEvent
+from murder.bus.transport_socket import SocketBusServer, default_socket_path
 from murder.config import Config, HarnessRoleConfig, project_env_path
 from murder.harnesses import REGISTRY
 from murder.orchestrator import Orchestrator
@@ -33,6 +34,7 @@ from murder.storage.paths import (
     agents_dir,
     db_path,
     lock_path,
+    logs_dir,
     notes_dir,
     plans_dir,
     ticket_md,
@@ -44,6 +46,8 @@ from murder.tickets import waves as waves_mod
 from murder.tickets.schema import ChecklistItem, Ticket
 from murder.tickets.sync import TicketSync
 from murder.tui.app import MurderApp
+from murder.tui.client import TuiRuntimeClient
+from murder.scheduler import SchedulerWorker
 from murder.workers import (
     CollaboratorWorker,
     OrchestratorCommandWorker,
@@ -196,6 +200,54 @@ def _pid_is_alive(pid: int) -> bool:
     return True
 
 
+async def _socket_is_connectable(socket_path: Path, *, timeout_s: float = 0.5) -> bool:
+    try:
+        client = SocketBusClient(
+            socket_path,
+            client_kind=ClientKind.CLI_EPHEMERAL,
+            client_id=f"probe-{os.getpid()}",
+        )
+        await asyncio.wait_for(
+            client.request("health.ping", {}, timeout_s=timeout_s),
+            timeout=timeout_s + 0.25,
+        )
+    except Exception:
+        return False
+    return True
+
+
+async def _supervisor_is_live(repo: Path, socket_path: Path) -> bool:
+    pid = read_lock_pid(lock_path(repo))
+    return bool(pid is not None and _pid_is_alive(pid) and await _socket_is_connectable(socket_path))
+
+
+def _spawn_service_process(repo: Path) -> subprocess.Popen[bytes]:
+    log_root = logs_dir(repo) / datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
+    log_root.mkdir(parents=True, exist_ok=True)
+    log_file = open(log_root / "supervisor.ndjson", "ab", buffering=0)
+    return subprocess.Popen(
+        [sys.executable, "-m", "murder", "serviced"],
+        cwd=str(repo),
+        stdin=subprocess.DEVNULL,
+        stdout=log_file,
+        stderr=subprocess.STDOUT,
+        start_new_session=True,
+        close_fds=True,
+    )
+
+
+async def _ensure_supervisor(repo: Path, socket_path: Path) -> None:
+    if await _supervisor_is_live(repo, socket_path):
+        return
+    _spawn_service_process(repo)
+    delays = (0.25, 0.5, 1.0, 1.0, 1.0, 1.0)
+    for delay in delays:
+        await asyncio.sleep(delay)
+        if await _supervisor_is_live(repo, socket_path):
+            return
+    raise RuntimeError("supervisor did not become ready within 5s")
+
+
 def _friendly_lock_message(repo: Path) -> str:
     pid = read_lock_pid(lock_path(repo))
     pid_text = f" (PID {pid})" if pid is not None else ""
@@ -254,13 +306,21 @@ async def _bare_kickoff(ticket: str | None) -> None:
     repo = _repo_root()
     cfg = Config.load(repo)
     kick_preflight(cfg, repo)
-    async with Runtime(cfg, repo) as rt:
-        orch = Orchestrator(rt)
-        kicked = await orch.kickoff_ready(only=ticket)
-        typer.echo(f"Kicked off tickets: {', '.join(kicked) if kicked else '(none)'}")
-        if kicked:
-            typer.echo("Waiting for SIGINT/SIGTERM (CrowHandler poll loop is running).")
-            await rt.run_until_signal()
+    socket_path = default_socket_path()
+    await _ensure_supervisor(repo, socket_path)
+    client = TuiRuntimeClient(repo, socket_path, cfg, client_kind=ClientKind.CLI_EPHEMERAL)
+    await client.connect()
+    try:
+        result = await client.submit_command(
+            target_worker="orchestrator",
+            kind="scheduler.kickoff_ready",
+            payload={"only": ticket},
+            timeout_s=30.0,
+        )
+    finally:
+        await client.close()
+    kicked = list(result.get("kicked", []))
+    typer.echo(f"Kicked off tickets: {', '.join(kicked) if kicked else '(none)'}")
 
 
 def _register_service_rpc_handlers(rt: Runtime, broker: DurableBroker) -> None:
@@ -326,6 +386,7 @@ async def _start_service_supervisor(
     worker_ctx = WorkerCtx(repo_root=repo, db=rt.db, bus=broker, run_id=rt.run_id)
     supervisor = Supervisor(worker_ctx)
     await supervisor.start_worker(StateCommandWorker())
+    await supervisor.start_worker(SchedulerWorker())
     await supervisor.start_worker(UsageProbeWorker.from_runtime(rt))
     await supervisor.start_worker(
         CollaboratorWorker(
@@ -338,18 +399,16 @@ async def _start_service_supervisor(
             kickoff_ready=orch.kickoff_ready,
             apply_carve_ready=orch.apply_ticket_carve_ready,
             capture_submit=orch.submit_notetaker_capture,
+            retry_failed=orch.retry_failed_ticket,
+            set_schedule_at=orch.set_schedule_at,
         )
     )
     return supervisor
 
 
-async def _launch_tui() -> None:
+async def _run_supervisor_only() -> None:
     repo = _repo_root()
     cfg = Config.load(repo)
-    os.environ.setdefault("GIO_USE_VFS", "local")
-    os.environ.setdefault("GSETTINGS_BACKEND", "memory")
-    os.environ.setdefault("DBUS_SESSION_BUS_ADDRESS", "disabled:")
-    os.environ.setdefault("NO_AT_BRIDGE", "1")
     async with Runtime(cfg, repo) as rt:
         orch = Orchestrator(rt)
         if rt.db is None or rt.bus is None or rt.run_id is None:
@@ -359,6 +418,7 @@ async def _launch_tui() -> None:
         socket_server = SocketBusServer(
             broker,
             run_id=rt.run_id,
+            socket_path=default_socket_path(),
         )
         await socket_server.start()
         supervisor = await _start_service_supervisor(
@@ -370,14 +430,34 @@ async def _launch_tui() -> None:
         if os.environ.get("OPENROUTER_API_KEY"):
             with contextlib.suppress(Exception):
                 await orch.ensure_sentinel()
-
-        app_ui = MurderApp(rt, orchestrator=orch)
         try:
-            await app_ui.run_async()
+            await rt.run_until_signal()
         finally:
             await supervisor.stop_all()
             with contextlib.suppress(FileNotFoundError, OSError):
                 await socket_server.stop()
+            # A service shutdown is authoritative (`murder down`), unlike the
+            # old in-process TUI quit path. Let Runtime stop agents/tmux.
+            with contextlib.suppress(Exception):
+                rt._external_stop.clear()
+
+
+async def _launch_tui() -> None:
+    repo = _repo_root()
+    cfg = Config.load(repo)
+    os.environ.setdefault("GIO_USE_VFS", "local")
+    os.environ.setdefault("GSETTINGS_BACKEND", "memory")
+    os.environ.setdefault("DBUS_SESSION_BUS_ADDRESS", "disabled:")
+    os.environ.setdefault("NO_AT_BRIDGE", "1")
+    socket_path = default_socket_path()
+    await _ensure_supervisor(repo, socket_path)
+    client = TuiRuntimeClient(repo, socket_path, cfg)
+    await client.connect()
+    app_ui = MurderApp(client)
+    try:
+        await app_ui.run_async()
+    finally:
+        await client.close()
 
 
 @app.callback()
@@ -569,6 +649,12 @@ def cmd_init(
 def cmd_up() -> None:
     """Launch the TUI runtime (alias of bare `murder`)."""
     _run_async_entry(_launch_tui())
+
+
+@app.command("serviced", hidden=True)
+def cmd_serviced() -> None:
+    """Internal supervisor-only service entrypoint."""
+    _run_async_entry(_run_supervisor_only())
 
 
 @app.command("down")
@@ -771,6 +857,22 @@ def cmd_reopen(ticket_id: str) -> None:
         raise typer.Exit(1) from e
     conn.close()
     typer.echo(f"Reopened {ticket_id}; cascaded: {', '.join(cascaded) if cascaded else '(none)'}")
+
+
+@app.command("retry")
+def cmd_retry(ticket_id: str) -> None:
+    """Retry a failed ticket — transition failed → planned and clear its last_error."""
+    repo = _repo_root()
+    conn = dbmod.connect(db_path(repo))
+    try:
+        lifecycle.transition(conn, ticket_id, TicketStatus.PLANNED, reason="retry")
+        lifecycle.clear_last_error(conn, ticket_id)
+    except lifecycle.InvalidTransition as e:
+        typer.secho(str(e), err=True)
+        conn.close()
+        raise typer.Exit(1) from e
+    conn.close()
+    typer.echo(f"Retried {ticket_id}; status=planned")
 
 
 @app.command("replay")

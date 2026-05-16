@@ -190,3 +190,43 @@ async def test_db_owned_status_is_not_mutated_from_yaml(
     assert "DB-owned" in str(status["metadata_conflict_reason"])
     reloaded = yaml.safe_load(path.read_text(encoding="utf-8"))
     assert reloaded["status"] == "in_progress"
+
+
+@pytest.mark.asyncio
+async def test_import_yaml_creates_missing_db_ticket_for_slug_style_id(
+    tmp_path, memdb: sqlite3.Connection
+) -> None:
+    path = tmp_path / ".murder" / "tickets" / "T03-suite-b-algorithm-choice.yaml"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        yaml.safe_dump(
+            {
+                "id": "T03-suite-b-algorithm-choice",
+                "title": "Suite B algorithm choice",
+                "wave": 3,
+                "status": "ready",
+                "harness": "cursor",
+                "model": "composer",
+                "deps": [],
+                "skills": [],
+                "write_set": ["src/solver.py"],
+                "checklist": ["pick algorithm"],
+                "schedule_at": None,
+            },
+            sort_keys=False,
+            allow_unicode=False,
+        ),
+        encoding="utf-8",
+    )
+    sync = TicketMetadataSync(tmp_path, memdb)
+
+    await sync.reconcile_all()
+
+    row = memdb.execute(
+        "SELECT id, status, harness, model FROM tickets "
+        "WHERE id = 'T03-suite-b-algorithm-choice'"
+    ).fetchone()
+    assert row is not None
+    assert row["status"] == "ready"
+    assert row["harness"] == "cursor"
+    assert row["model"] == "composer"

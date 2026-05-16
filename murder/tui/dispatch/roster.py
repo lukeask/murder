@@ -1,4 +1,4 @@
-"""Usage-aware schedule and queue view."""
+"""Ticket roster and carve form for the Dispatch view."""
 
 from __future__ import annotations
 
@@ -31,15 +31,39 @@ def parse_carve_paste(text: str) -> dict[str, Any]:
     return data
 
 
+def _format_start(value: str | None) -> str:
+    if not value:
+        return "unscheduled"
+    try:
+        dt = datetime.fromisoformat(value)
+    except ValueError:
+        return value
+    return dt.strftime("%a %H:%M")
+
+
+def _checklist_to_lines(snapshot: dict[str, Any]) -> str:
+    items = snapshot.get("checklist") or []
+    if not items:
+        return ""
+    rows = sorted(items, key=lambda x: int(x.get("ord", 0)))
+    return "\n".join(str(x.get("text", "")).strip() for x in rows if str(x.get("text", "")).strip())
+
+
 class ScheduleTicketsTable(DataTable):
     """Tickets on the critical path with YAML metadata sync state visible."""
 
     BINDINGS = [
         Binding("enter", "request_carve", "Metadata", show=False),
         Binding("c", "request_carve", "Metadata", show=False),
+        Binding("r", "retry_failed", "Retry (failed)", show=False),
     ]
 
     class CarveRequested(Message):
+        def __init__(self, ticket_id: str) -> None:
+            self.ticket_id = ticket_id
+            super().__init__()
+
+    class RetryRequested(Message):
         def __init__(self, ticket_id: str) -> None:
             self.ticket_id = ticket_id
             super().__init__()
@@ -137,11 +161,15 @@ class ScheduleTicketsTable(DataTable):
         return None
 
     @property
-    def cursor_is_editable(self) -> bool:
+    def cursor_status(self) -> str | None:
         i = self.cursor_row
         if not self._statuses or i < 0 or i >= len(self._statuses):
-            return False
-        return self._statuses[i] in {"planned", "ready"}
+            return None
+        return self._statuses[i]
+
+    @property
+    def cursor_is_editable(self) -> bool:
+        return self.cursor_status in {"planned", "ready", "failed"}
 
     def action_request_carve(self) -> None:
         tid = self.cursor_ticket_id
@@ -149,20 +177,25 @@ class ScheduleTicketsTable(DataTable):
             return
         if not self.cursor_is_editable:
             self.app.notify(
-                "Metadata edits apply to [b]planned[/b] or [b]ready[/b] tickets.",
+                "Metadata edits apply to [b]planned[/b], [b]ready[/b], or [b]failed[/b] tickets.",
                 severity="warning",
                 timeout=5,
             )
             return
         self.post_message(self.CarveRequested(tid))
 
-
-def _checklist_to_lines(snapshot: dict[str, Any]) -> str:
-    items = snapshot.get("checklist") or []
-    if not items:
-        return ""
-    rows = sorted(items, key=lambda x: int(x.get("ord", 0)))
-    return "\n".join(str(x.get("text", "")).strip() for x in rows if str(x.get("text", "")).strip())
+    def action_retry_failed(self) -> None:
+        if self.cursor_status != "failed":
+            self.app.notify(
+                "Retry applies to [b]failed[/b] tickets only.",
+                severity="warning",
+                timeout=4,
+            )
+            return
+        tid = self.cursor_ticket_id
+        if tid is None:
+            return
+        self.post_message(self.RetryRequested(tid))
 
 
 class CarveFormScreen(ModalScreen[dict[str, Any] | None]):
@@ -209,13 +242,24 @@ class CarveFormScreen(ModalScreen[dict[str, Any] | None]):
         self._harness_hint = harness_hint
         self._wave = int(snapshot.get("wave", 0))
 
+    @property
+    def _is_retry_mode(self) -> bool:
+        return str(self._snapshot.get("status", "")) == "failed"
+
     def compose(self) -> ComposeResult:
         with Vertical(id="carve_dialog"):
-            yield Static(
-                f"Edit metadata for [b]{self.ticket_id}[/b] — Apply writes the YAML "
-                "sidecar and marks the ticket [b]ready[/b].",
-                id="carve_hdr",
-            )
+            if self._is_retry_mode:
+                yield Static(
+                    f"Retry + edit metadata for [b]{self.ticket_id}[/b] — Apply retries "
+                    "the ticket and marks it [b]ready[/b].",
+                    id="carve_hdr",
+                )
+            else:
+                yield Static(
+                    f"Edit metadata for [b]{self.ticket_id}[/b] — Apply writes the YAML "
+                    "sidecar and marks the ticket [b]ready[/b].",
+                    id="carve_hdr",
+                )
             yield Static(
                 f"Current DB status: [b]{self._snapshot.get('status', '?')}[/b].",
                 id="carve_status",
@@ -241,7 +285,10 @@ class CarveFormScreen(ModalScreen[dict[str, Any] | None]):
             yield TextArea(id="import_paste")
             with Horizontal(id="carve_buttons"):
                 yield Button("Merge paste → fields", id="merge")
-                yield Button("Write YAML + mark ready", variant="primary", id="apply")
+                if self._is_retry_mode:
+                    yield Button("Retry + apply metadata", variant="primary", id="apply")
+                else:
+                    yield Button("Write YAML + mark ready", variant="primary", id="apply")
                 yield Button("Cancel", id="cancel")
 
     def on_mount(self) -> None:
@@ -348,142 +395,3 @@ class CarveFormScreen(ModalScreen[dict[str, Any] | None]):
                 self.app.notify("Harness is required.", severity="warning", timeout=4)
                 return
             self.dismiss(spec)
-
-
-class ScheduleView(Vertical):
-    """Command-center: ticket roster + queue placeholder + usage."""
-
-    DEFAULT_CSS = """
-    ScheduleView {
-        border: round $accent;
-        height: 1fr;
-        padding: 0 1;
-    }
-    ScheduleView #schedule_tickets {
-        min-height: 6;
-        max-height: 18;
-        margin-bottom: 1;
-    }
-    ScheduleView #field_deps,
-    ScheduleView #field_writes,
-    ScheduleView #field_skills,
-    ScheduleView #field_checklist {
-        height: 4;
-        min-height: 3;
-    }
-    ScheduleView #schedule_rest {
-        height: 1fr;
-    }
-    """
-
-    def compose(self) -> ComposeResult:
-        yield ScheduleTicketsTable()
-        yield Static("", id="schedule_rest")
-
-    def refresh_from_db(self, db: sqlite3.Connection | None) -> None:
-        self.query_one(ScheduleTicketsTable).refresh_from_db(db)
-        self.query_one("#schedule_rest", Static).update(_schedule_tail_content(db))
-
-    @property
-    def selected_ticket_id(self) -> str | None:
-        return self.query_one(ScheduleTicketsTable).cursor_ticket_id
-
-    @property
-    def selected_ticket_is_editable(self) -> bool:
-        return self.query_one(ScheduleTicketsTable).cursor_is_editable
-
-
-def _schedule_tail_content(db: sqlite3.Connection | None) -> str:
-    if db is None:
-        return ""
-    queued = db.execute(
-        """
-        SELECT id, ticket_id, title, harness, desired_start_at,
-               max_usage_percent, status
-          FROM schedule_queue
-         WHERE status IN ('pending','scheduled','blocked')
-         ORDER BY
-               CASE WHEN desired_start_at IS NULL THEN 1 ELSE 0 END,
-               desired_start_at,
-               id
-         LIMIT 10
-        """
-    ).fetchall()
-    usage = db.execute(
-        """
-        SELECT s.harness, s.source, s.fetched_at, s.status_json
-          FROM harness_usage_snapshots s
-          JOIN (
-                SELECT harness, MAX(fetched_at) AS fetched_at
-                  FROM harness_usage_snapshots
-                 GROUP BY harness
-               ) latest
-            ON latest.harness = s.harness
-           AND latest.fetched_at = s.fetched_at
-         ORDER BY s.harness
-        """
-    ).fetchall()
-
-    lines = [
-        "[b]Schedule[/b] — [b]ready[/b] rows with deps ok kick with F6; "
-        "[b]c[/b] / Enter edits YAML metadata.",
-        "",
-        "[b]Scheduled / pending[/b]",
-    ]
-    if queued:
-        for r in queued:
-            start = _format_start(r["desired_start_at"])
-            cap = (
-                f" · start if usage <= {r['max_usage_percent']:.0f}%"
-                if r["max_usage_percent"] is not None
-                else ""
-            )
-            ticket = f"{r['ticket_id']} · " if r["ticket_id"] else ""
-            lines.append(
-                f"  #{r['id']} · {r['status']} · {start} · "
-                f"{r['harness'] or 'default'}{cap} · {ticket}{r['title']}"
-            )
-    else:
-        lines.append(
-            "  (empty; scheduling not wired — use F6 or /murder to kick ready tickets)"
-        )
-
-    lines.extend(["", "[b]Latest usage windows[/b]"])
-    if usage:
-        for r in usage:
-            lines.extend(_usage_lines(dict(r)))
-    else:
-        lines.append("  (no snapshots yet; press u to sample)")
-        lines.append("  Probe tmux sessions: murder_<project>_usage_<harness>")
-
-    return "\n".join(lines)
-
-
-def _format_start(value: str | None) -> str:
-    if not value:
-        return "unscheduled"
-    try:
-        dt = datetime.fromisoformat(value)
-    except ValueError:
-        return value
-    return dt.strftime("%a %H:%M")
-
-
-def _usage_lines(row: dict[str, Any]) -> list[str]:
-    try:
-        payload = json.loads(row["status_json"])
-    except (TypeError, ValueError):
-        return [f"  {row['harness']} · {row['source']} · malformed snapshot"]
-    windows = payload.get("windows") or []
-    if not isinstance(windows, list) or not windows:
-        return [f"  {row['harness']} · {row['source']} · no windows"]
-    out = [f"  {row['harness']} · {row['source']} · fetched {row['fetched_at']}"]
-    for window in windows[:4]:
-        if not isinstance(window, dict):
-            continue
-        name = window.get("name") or "usage"
-        pct = window.get("percent_used")
-        reset = window.get("reset_at") or window.get("ends_at") or "unknown reset"
-        pct_text = f"{pct:.0f}%" if isinstance(pct, (int, float)) else "unknown"
-        out.append(f"    {name}: {pct_text} used · reset {reset}")
-    return out

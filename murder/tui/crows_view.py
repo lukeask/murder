@@ -27,6 +27,7 @@ from textual.widgets import Static
 
 from murder import tmux
 from murder.tui.crow_health import Health, classify
+from murder.tui.perf_log import PerfLog
 from murder.tui.pane_mirror import PaneMirror
 
 TILE_LINES = 8
@@ -274,9 +275,15 @@ class TailWall(Grid):
         self._order: list[str] = []
         self._empty: _EmptyMessage | None = None
 
-    def reconcile(self, entries: list[CrowEntry]) -> list[str]:
-        """Make the visible tile set match `entries`. Returns the new agent order."""
+    def reconcile(self, entries: list[CrowEntry]) -> tuple[list[str], int, int, int]:
+        """Make the visible tile set match ``entries``.
+
+        Returns ``(order, n_mounted, n_removed, n_updated)``.
+        """
         new_ids = [e.agent_id for e in entries]
+        removed = 0
+        mounted = 0
+        updated = 0
         # Drop empty placeholder if we now have entries
         if entries and self._empty is not None:
             self._empty.remove()
@@ -285,17 +292,19 @@ class TailWall(Grid):
         if not entries:
             for agent_id in list(self._tiles):
                 self._tiles.pop(agent_id).remove()
+                removed += 1
             self._order = []
             if self._empty is None:
                 self._empty = _EmptyMessage()
                 self.mount(self._empty)
                 self.styles.grid_size_columns = 1
                 self.styles.grid_size_rows = 1
-            return []
+            return [], 0, removed, 0
         # Remove gone-away tiles
         for agent_id in list(self._tiles):
             if agent_id not in new_ids:
                 self._tiles.pop(agent_id).remove()
+                removed += 1
         # Mount or update remaining
         for entry in entries:
             tile = self._tiles.get(entry.agent_id)
@@ -303,11 +312,14 @@ class TailWall(Grid):
                 tile = CrowTile(entry)
                 self._tiles[entry.agent_id] = tile
                 self.mount(tile)
+                mounted += 1
             else:
+                if tile.entry != entry:
+                    updated += 1
                 tile.update_entry(entry)
         self._order = new_ids
         self._resize_grid(len(new_ids))
-        return new_ids
+        return new_ids, mounted, removed, updated
 
     def _resize_grid(self, count: int) -> None:
         cols = min(GRID_TARGET_COLS, max(1, count))
@@ -356,10 +368,11 @@ class CrowsView(Container):
             self.entry = entry
             super().__init__()
 
-    def __init__(self) -> None:
+    def __init__(self, perf_log: PerfLog | None = None) -> None:
         super().__init__()
+        self._perf = perf_log
         self._wall = TailWall()
-        self._mirror = PaneMirror()
+        self._mirror = PaneMirror(perf=self._perf)
         self._entries_by_id: dict[str, CrowEntry] = {}
         self.border_title = "crows"
 
@@ -375,7 +388,15 @@ class CrowsView(Container):
             return
         entries = load_crow_entries(db)
         self._entries_by_id = {e.agent_id: e for e in entries}
-        self._wall.reconcile(entries)
+        perf = self._perf
+        if perf is not None and perf.enabled:
+            with perf.span("tui.crows.reconcile") as dyn:
+                _order, m, r, u = self._wall.reconcile(entries)
+                dyn["mounted"] = m
+                dyn["removed"] = r
+                dyn["updated"] = u
+        else:
+            self._wall.reconcile(entries)
         # If the currently-enlarged crow disappeared, fall back to wall.
         if self.enlarged_agent_id is not None and self.enlarged_agent_id not in self._entries_by_id:
             self.enlarged_agent_id = None
@@ -392,7 +413,13 @@ class CrowsView(Container):
 
         Per-tile timeout + gather so one stuck pane can't block input.
         """
+        perf = self._perf
         if self.enlarged_agent_id is not None:
+            n_tiles = 1
+            if perf is not None and perf.enabled:
+                with perf.span("tui.crows.refresh_tails", n_tiles=n_tiles):
+                    await self._mirror.refresh_pane()
+                return
             await self._mirror.refresh_pane()
             return
         tasks = []
@@ -404,24 +431,39 @@ class CrowsView(Container):
                     tile.set_tail("(no session)")
                 continue
             tasks.append(self._capture_for_tile(tile, entry.session))
+        n_tiles = len(tasks)
+        if perf is not None and perf.enabled:
+            with perf.span("tui.crows.refresh_tails", n_tiles=n_tiles):
+                if tasks:
+                    await asyncio.gather(*tasks, return_exceptions=True)
+            return
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
 
     async def _capture_for_tile(self, tile: CrowTile, session: str) -> None:
-        try:
-            text = await asyncio.wait_for(
-                tmux.capture_pane(session, lines=TILE_LINES),
-                timeout=CAPTURE_TIMEOUT_S,
-            )
-        except (tmux.TmuxError, asyncio.TimeoutError):
-            tile.set_tail("(session vanished)")
+        perf = self._perf
+
+        async def _run() -> None:
+            try:
+                text = await asyncio.wait_for(
+                    tmux.capture_pane(session, lines=TILE_LINES, perf=perf),
+                    timeout=CAPTURE_TIMEOUT_S,
+                )
+            except (tmux.TmuxError, asyncio.TimeoutError):
+                tile.set_tail("(session vanished)")
+                return
+            # Show only the last TILE_LINES non-empty trailing lines; capture_pane
+            # may return blank padding at the bottom of a fresh pane.
+            lines = text.splitlines()
+            if len(lines) > TILE_LINES:
+                lines = lines[-TILE_LINES:]
+            tile.set_tail("\n".join(lines))
+
+        if perf is not None and perf.enabled:
+            with perf.span("tui.crows.capture_tile", session=session):
+                await _run()
             return
-        # Show only the last TILE_LINES non-empty trailing lines; capture_pane
-        # may return blank padding at the bottom of a fresh pane.
-        lines = text.splitlines()
-        if len(lines) > TILE_LINES:
-            lines = lines[-TILE_LINES:]
-        tile.set_tail("\n".join(lines))
+        await _run()
 
     # ── mode transitions ──────────────────────────────────────────────────
 

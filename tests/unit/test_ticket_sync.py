@@ -133,3 +133,31 @@ async def test_poll_imports_new_ticket_file_and_updates_tui_query_paths(
         ("planned",),
     ).fetchone()
     assert int(planned_count["c"]) >= 1
+
+
+@pytest.mark.asyncio
+async def test_reconcile_all_imports_slug_style_ticket_id(
+    tmp_path, memdb: sqlite3.Connection
+) -> None:
+    path = tmp_path / ".murder" / "tickets" / "T01-scaffold.md"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "\n".join(
+            [
+                "# Scaffold",
+                "",
+                "## Plan",
+                "Bootstrap project skeleton.",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    sync = TicketSync(tmp_path, memdb)
+    await sync.reconcile_all()
+
+    row = dbmod.get_ticket(memdb, "T01-scaffold")
+    assert row is not None
+    assert row["status"] == "planned"
+    assert row["title"] == "Scaffold"

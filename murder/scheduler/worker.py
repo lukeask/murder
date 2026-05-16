@@ -1,0 +1,588 @@
+from __future__ import annotations
+
+import asyncio
+import json
+import re
+import sqlite3
+from datetime import datetime, timezone
+from typing import Any
+from uuid import uuid4
+
+from pydantic import BaseModel, ConfigDict, ValidationError
+
+from murder import db as dbmod
+from murder.bus.protocol import (
+    CommandEvent,
+    SchedulerDecisionEvent,
+    SchedulerModeEvent,
+    UsageResetEvent,
+)
+from murder.scheduler import decisionf
+from murder.workers.base import Worker, WorkerCtx, WorkerSpec
+
+_VALID_MODES = frozenset({"manual", "autorun_ready", "crow_magic"})
+_TICK_INTERVAL_S = 10.0
+_WINDOW_NAME_RE = re.compile(r"^(\d+)(h|d)$", re.IGNORECASE)
+_WINDOW_NAME_MINUTES = {"h": 60.0, "d": 1440.0}
+
+
+class SchedulerParamsPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    c_changeoff: float = 0.7
+    t_alwaysyes: float = 15.0
+    alwayscutoff: float = 0.6
+    intensity: float = 1.0
+    multiharness_cutoff: float | None = None
+
+
+class SchedulerSetParamsPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    harness: str
+    window_key: str
+    params: SchedulerParamsPayload
+
+
+def _first_percent_used(payload: dict[str, Any]) -> float | None:
+    """Return percent_used from the first window in a snapshot payload, or None."""
+    windows = payload.get("windows") or []
+    for w in windows:
+        if isinstance(w, dict):
+            v = w.get("percent_used")
+            if isinstance(v, (int, float)):
+                return float(v)
+    return None
+
+
+def _parse_t_period(window: dict[str, Any]) -> float | None:
+    """Derive t_period (minutes) from a window dict, or return None to skip."""
+    starts_at_str = window.get("starts_at")
+    end_str = window.get("ends_at") or window.get("reset_at")
+    if starts_at_str and end_str:
+        try:
+            starts_at = datetime.fromisoformat(starts_at_str)
+            ends_at = datetime.fromisoformat(end_str)
+            period_m = (ends_at - starts_at).total_seconds() / 60.0
+            if period_m > 0:
+                return period_m
+        except (ValueError, TypeError):
+            pass
+    # Fallback: parse window name like "5h" or "7d"
+    name = window.get("name") or ""
+    m = _WINDOW_NAME_RE.match(name)
+    if m:
+        value = float(m.group(1))
+        unit = m.group(2).lower()
+        return value * _WINDOW_NAME_MINUTES[unit]
+    return None
+
+
+def _coerce_scheduler_params_row(row: sqlite3.Row) -> SchedulerParamsPayload | None:
+    try:
+        return SchedulerParamsPayload.model_validate(
+            {
+                "c_changeoff": row["c_changeoff"],
+                "t_alwaysyes": row["t_alwaysyes"],
+                "alwayscutoff": row["alwayscutoff"],
+                "intensity": row["intensity"],
+                "multiharness_cutoff": row["multiharness_cutoff"],
+            }
+        )
+    except ValidationError:
+        return None
+
+
+class SchedulerWorker(Worker):
+    """Automates ticket kickoff based on configured scheduler mode.
+
+    Modes:
+    - manual: never kicks anything automatically (operator-driven F6 / CLI)
+    - autorun_ready: every tick, submits scheduler.kickoff_ready to orchestrator
+      when ready tickets with clear deps exist
+    - crow_magic: per-(harness, window) usage gate via decisionf; per-harness
+      priority pick; respects multiharness_cutoff
+    """
+
+    SET_MODE = "scheduler.set_mode"
+    SET_PARAMS = "scheduler.set_params"
+
+    def __init__(self) -> None:
+        super().__init__(
+            WorkerSpec(
+                name="scheduler",
+                accepts=(self.SET_MODE, self.SET_PARAMS),
+                process_model="thread",
+            )
+        )
+        self._tick_seq = 0
+        # Track last emitted reset per harness (harness → prev_pct at emit time)
+        self._last_reset_prev_pct: dict[str, float] = {}
+        self._last_prune_day: str = ""
+
+    async def on_start(self, ctx: WorkerCtx) -> None:
+        if ctx.db is None:
+            return
+        now = datetime.now(timezone.utc).isoformat()
+        ctx.db.execute(
+            "INSERT OR IGNORE INTO scheduler_state(id, mode, updated_at) VALUES (1, 'manual', ?)",
+            (now,),
+        )
+        self._prune_old_snapshots(ctx.db)
+        self._last_prune_day = datetime.now(timezone.utc).date().isoformat()
+
+    async def run(self, ctx: WorkerCtx, stop_event: asyncio.Event) -> None:
+        while True:
+            try:
+                await asyncio.wait_for(stop_event.wait(), timeout=_TICK_INTERVAL_S)
+                break
+            except asyncio.TimeoutError:
+                self._tick_seq += 1
+                await self._tick(ctx)
+
+    def _prune_old_snapshots(self, db: sqlite3.Connection) -> None:
+        db.execute(
+            "DELETE FROM harness_usage_snapshots WHERE fetched_at < datetime('now', '-60 days')"
+        )
+
+    async def _tick(self, ctx: WorkerCtx) -> None:
+        if ctx.db is None or ctx.run_id is None:
+            return
+        today = datetime.now(timezone.utc).date().isoformat()
+        if today != self._last_prune_day:
+            self._prune_old_snapshots(ctx.db)
+            self._last_prune_day = today
+        row = ctx.db.execute(
+            "SELECT mode FROM scheduler_state WHERE id = 1"
+        ).fetchone()
+        if row is None:
+            return
+        mode = row["mode"]
+        if mode == "autorun_ready":
+            await self._tick_autorun_ready(ctx)
+        elif mode == "crow_magic":
+            await self._tick_crow_magic(ctx)
+
+    async def _tick_autorun_ready(self, ctx: WorkerCtx) -> None:
+        assert ctx.db is not None and ctx.run_id is not None
+        ready = dbmod.compute_ready(ctx.db)
+        if not ready:
+            return
+        command_id = str(uuid4())
+        idempotency_key = f"scheduler.kickoff_ready:{ctx.run_id}:{self._tick_seq}"
+        try:
+            dbmod.enqueue_command(
+                ctx.db,
+                command_id=command_id,
+                run_id=ctx.run_id,
+                agent_id=self.name,
+                role=None,
+                ticket_id=None,
+                target_worker="orchestrator",
+                kind="scheduler.kickoff_ready",
+                payload={},
+                correlation_id=command_id,
+                idempotency_key=idempotency_key,
+                retryable=False,
+            )
+        except sqlite3.IntegrityError:
+            pass  # duplicate key — previous tick's command still pending
+
+    async def _tick_crow_magic(self, ctx: WorkerCtx) -> None:
+        assert ctx.db is not None and ctx.run_id is not None
+        now = datetime.now(timezone.utc)
+
+        snap_rows = ctx.db.execute(
+            """
+            SELECT s.harness, s.status_json
+              FROM harness_usage_snapshots s
+              JOIN (
+                    SELECT harness, MAX(fetched_at) AS fetched_at
+                      FROM harness_usage_snapshots
+                     GROUP BY harness
+                   ) latest
+                ON latest.harness = s.harness
+               AND latest.fetched_at = s.fetched_at
+            """
+        ).fetchall()
+
+        for snap_row in snap_rows:
+            harness = snap_row["harness"]
+            try:
+                payload = json.loads(snap_row["status_json"])
+            except (TypeError, ValueError):
+                continue
+
+            windows = payload.get("windows") or []
+            for window in windows:
+                if not isinstance(window, dict):
+                    continue
+                await self._evaluate_window(ctx, harness, window, now)
+
+        # Usage-reset detection: compare last two snapshots per harness
+        await self._check_usage_reset(ctx)
+
+    async def _check_usage_reset(self, ctx: WorkerCtx) -> None:
+        assert ctx.db is not None and ctx.run_id is not None
+        harnesses = ctx.db.execute(
+            "SELECT DISTINCT harness FROM harness_usage_snapshots"
+        ).fetchall()
+        for row in harnesses:
+            harness = row["harness"]
+            pair = ctx.db.execute(
+                """
+                SELECT status_json FROM harness_usage_snapshots
+                 WHERE harness = ?
+                 ORDER BY fetched_at DESC
+                 LIMIT 2
+                """,
+                (harness,),
+            ).fetchall()
+            if len(pair) < 2:
+                continue
+            try:
+                curr_payload = json.loads(pair[0]["status_json"])
+                prev_payload = json.loads(pair[1]["status_json"])
+            except (TypeError, ValueError):
+                continue
+            curr_pct = _first_percent_used(curr_payload)
+            prev_pct = _first_percent_used(prev_payload)
+            if curr_pct is None or prev_pct is None:
+                continue
+            if prev_pct >= 30.0 and curr_pct <= 5.0:
+                # Avoid double-emit: only emit if prev_pct differs from last emitted
+                last = self._last_reset_prev_pct.get(harness)
+                if last != prev_pct:
+                    self._last_reset_prev_pct[harness] = prev_pct
+                    if ctx.bus is not None:
+                        await ctx.bus.publish(
+                            UsageResetEvent(
+                                run_id=ctx.run_id,
+                                agent_id=self.name,
+                                harness=harness,
+                                prev_pct=prev_pct,
+                                curr_pct=curr_pct,
+                            )
+                        )
+
+    async def _evaluate_window(
+        self,
+        ctx: WorkerCtx,
+        harness: str,
+        window: dict[str, Any],
+        now: datetime,
+    ) -> None:
+        assert ctx.db is not None and ctx.run_id is not None
+
+        percent_used = window.get("percent_used")
+        reset_at_str = window.get("reset_at")
+        window_key = window.get("name") or "usage"
+
+        if not isinstance(percent_used, (int, float)) or reset_at_str is None:
+            return
+
+        try:
+            reset_at = datetime.fromisoformat(reset_at_str)
+            if reset_at.tzinfo is None:
+                reset_at = reset_at.replace(tzinfo=timezone.utc)
+            t_until_reset = (reset_at - now).total_seconds() / 60.0
+        except (ValueError, TypeError):
+            return
+
+        if t_until_reset <= 0:
+            return
+
+        t_period = _parse_t_period(window)
+        if t_period is None or t_period <= 0:
+            return
+
+        # Load per-(harness, window_key) params; fall back to decisionf defaults
+        params_row = ctx.db.execute(
+            "SELECT c_changeoff, t_alwaysyes, alwayscutoff, intensity, multiharness_cutoff "
+            "FROM scheduler_params WHERE harness = ? AND window_key = ?",
+            (harness, window_key),
+        ).fetchone()
+
+        multiharness_cutoff: float | None = None
+        params_obj = SchedulerParamsPayload()
+        if params_row is not None:
+            parsed = _coerce_scheduler_params_row(params_row)
+            if parsed is not None:
+                params_obj = parsed
+                multiharness_cutoff = params_obj.multiharness_cutoff
+
+        usage = percent_used / 100.0
+        threshold = decisionf._f_threshold(
+            t_until_reset,
+            t_period,
+            c_changeoff=params_obj.c_changeoff,
+            t_alwaysyes=params_obj.t_alwaysyes,
+            alwayscutoff=params_obj.alwayscutoff,
+            intensity=params_obj.intensity,
+        )
+        should_use = usage >= threshold
+
+        if not should_use:
+            rationale = (
+                f"Holding: {harness}/{window_key} usage {percent_used:.0f}%"
+                f" below threshold {threshold * 100:.0f}%"
+            )
+            self._upsert_decision_cache(
+                ctx, harness, window_key, "crow_magic",
+                False, usage, t_until_reset, t_period, threshold, rationale, None,
+            )
+            await self._emit_decision(
+                ctx, harness, window_key, False, usage,
+                t_until_reset, t_period, threshold, rationale, None,
+            )
+            return
+
+        # multiharness_cutoff: skip if usage below cutoff and harness is already busy
+        if multiharness_cutoff is not None:
+            cutoff_frac = multiharness_cutoff / 100.0 if multiharness_cutoff > 1.0 else multiharness_cutoff
+            if usage < cutoff_frac:
+                busy = ctx.db.execute(
+                    "SELECT COUNT(*) AS n FROM tickets WHERE harness = ? AND status = 'in_progress'",
+                    (harness,),
+                ).fetchone()["n"]
+                if busy > 0:
+                    rationale = (
+                        f"Holding: {harness}/{window_key} usage {percent_used:.0f}%"
+                        f" below multiharness cutoff {cutoff_frac * 100:.0f}% (harness busy)"
+                    )
+                    self._upsert_decision_cache(
+                        ctx, harness, window_key, "crow_magic",
+                        False, usage, t_until_reset, t_period, threshold, rationale, None,
+                    )
+                    await self._emit_decision(
+                        ctx, harness, window_key, False, usage,
+                        t_until_reset, t_period, threshold, rationale, None,
+                    )
+                    return
+
+        # Pick highest-priority ready ticket for this harness (or harness-agnostic)
+        ticket_row = ctx.db.execute(
+            """
+            SELECT t.id
+              FROM tickets AS t
+             WHERE t.status = 'ready'
+               AND (t.harness = ? OR t.harness IS NULL)
+               AND NOT EXISTS (
+                   SELECT 1 FROM ticket_deps AS d
+                     JOIN tickets AS dep ON dep.id = d.depends_on_id
+                    WHERE d.ticket_id = t.id
+                      AND dep.status != 'done'
+               )
+             ORDER BY t.wave ASC,
+                      CASE WHEN t.schedule_at IS NULL THEN 1 ELSE 0 END,
+                      t.schedule_at ASC,
+                      t.id ASC
+             LIMIT 1
+            """,
+            (harness,),
+        ).fetchone()
+
+        if ticket_row is None:
+            rationale = (
+                f"No ready tickets for {harness}/{window_key}"
+                f" (usage {percent_used:.0f}% ≥ threshold {threshold * 100:.0f}%)"
+            )
+            self._upsert_decision_cache(
+                ctx, harness, window_key, "crow_magic",
+                False, usage, t_until_reset, t_period, threshold, rationale, None,
+            )
+            await self._emit_decision(
+                ctx, harness, window_key, False, usage,
+                t_until_reset, t_period, threshold, rationale, None,
+            )
+            return
+
+        ticket_id = ticket_row["id"]
+        rationale = (
+            f"Kicking {ticket_id}: {harness}/{window_key} usage {percent_used:.0f}%"
+            f" ≥ threshold {threshold * 100:.0f}%"
+        )
+        self._upsert_decision_cache(
+            ctx, harness, window_key, "crow_magic",
+            True, usage, t_until_reset, t_period, threshold, rationale, ticket_id,
+        )
+        await self._emit_decision(
+            ctx, harness, window_key, True, usage,
+            t_until_reset, t_period, threshold, rationale, ticket_id,
+        )
+
+        command_id = str(uuid4())
+        idempotency_key = (
+            f"scheduler.kickoff_ready:{ctx.run_id}:{self._tick_seq}:{ticket_id}"
+        )
+        try:
+            dbmod.enqueue_command(
+                ctx.db,
+                command_id=command_id,
+                run_id=ctx.run_id,
+                agent_id=self.name,
+                role=None,
+                ticket_id=None,
+                target_worker="orchestrator",
+                kind="scheduler.kickoff_ready",
+                payload={"only": ticket_id},
+                correlation_id=command_id,
+                idempotency_key=idempotency_key,
+                retryable=False,
+            )
+        except sqlite3.IntegrityError:
+            pass
+
+    def _upsert_decision_cache(
+        self,
+        ctx: WorkerCtx,
+        harness: str,
+        window_key: str,
+        mode: str,
+        decision: bool,
+        usage: float,
+        t_until_reset: float,
+        t_period: float,
+        threshold: float,
+        rationale: str,
+        kicked_ticket_id: str | None,
+    ) -> None:
+        assert ctx.db is not None
+        now = datetime.now(timezone.utc).isoformat()
+        ctx.db.execute(
+            """
+            INSERT INTO scheduler_decision_cache
+                (harness, window_key, mode, decision, usage, t_until_reset,
+                 t_period, threshold, rationale, kicked_ticket_id, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(harness, window_key) DO UPDATE SET
+                mode             = excluded.mode,
+                decision         = excluded.decision,
+                usage            = excluded.usage,
+                t_until_reset    = excluded.t_until_reset,
+                t_period         = excluded.t_period,
+                threshold        = excluded.threshold,
+                rationale        = excluded.rationale,
+                kicked_ticket_id = excluded.kicked_ticket_id,
+                updated_at       = excluded.updated_at
+            """,
+            (
+                harness, window_key, mode, int(decision), usage,
+                t_until_reset, t_period, threshold, rationale,
+                kicked_ticket_id, now,
+            ),
+        )
+
+    async def _emit_decision(
+        self,
+        ctx: WorkerCtx,
+        harness: str,
+        window_key: str,
+        decision: bool,
+        usage: float,
+        t_until_reset: float,
+        t_period: float,
+        threshold: float,
+        rationale: str,
+        kicked_ticket_id: str | None,
+    ) -> None:
+        if ctx.bus is None or ctx.run_id is None:
+            return
+        await ctx.bus.publish(
+            SchedulerDecisionEvent(
+                run_id=ctx.run_id,
+                agent_id=self.name,
+                mode="crow_magic",
+                harness=harness,
+                window_key=window_key,
+                decision=decision,
+                usage=usage,
+                t_until_reset=t_until_reset,
+                t_period=t_period,
+                threshold=threshold,
+                rationale=rationale,
+                kicked_ticket_id=kicked_ticket_id,
+            )
+        )
+
+    async def on_command(self, command: CommandEvent, ctx: WorkerCtx) -> dict[str, Any]:
+        if command.kind == self.SET_MODE:
+            return await self._handle_set_mode(command, ctx)
+        if command.kind == self.SET_PARAMS:
+            return await self._handle_set_params(command, ctx)
+        return {"handled": False}
+
+    async def _handle_set_mode(
+        self, command: CommandEvent, ctx: WorkerCtx
+    ) -> dict[str, Any]:
+        if ctx.db is None:
+            raise RuntimeError("SchedulerWorker requires ctx.db")
+        to_mode = command.payload.get("mode")
+        if to_mode not in _VALID_MODES:
+            raise ValueError(f"scheduler.set_mode: unknown mode {to_mode!r}")
+        row = ctx.db.execute(
+            "SELECT mode FROM scheduler_state WHERE id = 1"
+        ).fetchone()
+        from_mode = row["mode"] if row else "manual"
+        now = datetime.now(timezone.utc).isoformat()
+        ctx.db.execute(
+            "UPDATE scheduler_state SET mode = ?, updated_at = ? WHERE id = 1",
+            (to_mode, now),
+        )
+        if ctx.bus is not None and ctx.run_id is not None:
+            changed_by = command.payload.get("changed_by", "user")
+            if changed_by not in {"user", "api"}:
+                changed_by = "user"
+            await ctx.bus.publish(
+                SchedulerModeEvent(
+                    run_id=ctx.run_id,
+                    agent_id=self.name,
+                    from_mode=from_mode,
+                    to_mode=to_mode,
+                    changed_by=changed_by,
+                )
+            )
+        return {"handled": True, "from_mode": from_mode, "to_mode": to_mode}
+
+    async def _handle_set_params(
+        self, command: CommandEvent, ctx: WorkerCtx
+    ) -> dict[str, Any]:
+        if ctx.db is None:
+            raise RuntimeError("SchedulerWorker requires ctx.db")
+        try:
+            payload = SchedulerSetParamsPayload.model_validate(command.payload)
+        except ValidationError as exc:
+            raise ValueError(f"scheduler.set_params: invalid payload: {exc}") from exc
+
+        harness = payload.harness.strip()
+        window_key = payload.window_key.strip()
+        if not harness:
+            raise ValueError("scheduler.set_params: harness required")
+        if not window_key:
+            raise ValueError("scheduler.set_params: window_key required")
+
+        now = datetime.now(timezone.utc).isoformat()
+        ctx.db.execute(
+            """
+            INSERT INTO scheduler_params
+                (harness, window_key, c_changeoff, t_alwaysyes, alwayscutoff,
+                 intensity, multiharness_cutoff, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(harness, window_key) DO UPDATE SET
+                c_changeoff         = excluded.c_changeoff,
+                t_alwaysyes         = excluded.t_alwaysyes,
+                alwayscutoff        = excluded.alwayscutoff,
+                intensity           = excluded.intensity,
+                multiharness_cutoff = excluded.multiharness_cutoff,
+                updated_at          = excluded.updated_at
+            """,
+            (
+                harness,
+                window_key,
+                payload.params.c_changeoff,
+                payload.params.t_alwaysyes,
+                payload.params.alwayscutoff,
+                payload.params.intensity,
+                payload.params.multiharness_cutoff,
+                now,
+            ),
+        )
+        return {"handled": True, "harness": harness, "window_key": window_key}

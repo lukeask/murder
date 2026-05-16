@@ -43,7 +43,8 @@ async def test_note_capture_enter_submit() -> None:
                 submit_capture=submit_capture,
             )
         )
-        await asyncio.sleep(0.02)
+        await pilot.pause()
+        await pilot.pause()
         draft = app.screen.query_one("#draft", NoteCaptureScreen.Draft)
         assert draft.has_focus
         await pilot.press(*list("buy milk"))

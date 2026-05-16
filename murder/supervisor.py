@@ -20,6 +20,8 @@ from murder.bus.protocol import (
     Role,
 )
 from murder.workers.base import Worker, WorkerCommand, WorkerCtx
+from murder.workers.process_runner import SubprocessWorkerRunner
+from murder.workers.process_targets import usage_probe_process_target
 
 
 @dataclass(frozen=True)
@@ -32,11 +34,12 @@ class _ClaimedCommand:
 class _WorkerState:
     worker: Worker
     stop_event: asyncio.Event
-    run_task: asyncio.Task[None]
+    run_task: asyncio.Task[None] | None
     command_task: asyncio.Task[None]
     command_claim_task: asyncio.Task[None]
     heartbeat_task: asyncio.Task[None]
     commands: asyncio.Queue[WorkerCommand | CommandEvent | _ClaimedCommand]
+    runner: SubprocessWorkerRunner | None = None
 
 
 class Supervisor:
@@ -66,21 +69,28 @@ class Supervisor:
         stop_event = asyncio.Event()
         commands: asyncio.Queue[WorkerCommand | CommandEvent | _ClaimedCommand] = asyncio.Queue()
         await worker.on_start(self._ctx)
+        runner = await self._start_subprocess_runner(worker)
+        run_task = (
+            None
+            if runner is not None
+            else asyncio.create_task(worker.run(self._ctx, stop_event), name=f"{name}:run")
+        )
         state = _WorkerState(
             worker=worker,
             stop_event=stop_event,
-            run_task=asyncio.create_task(worker.run(self._ctx, stop_event), name=f"{name}:run"),
+            run_task=run_task,
             command_task=asyncio.create_task(
-                self._command_loop(worker, stop_event, commands), name=f"{name}:commands"
+                self._command_loop(worker, stop_event, commands, runner), name=f"{name}:commands"
             ),
             command_claim_task=asyncio.create_task(
                 self._command_claim_loop(worker, stop_event, commands),
                 name=f"{name}:command-claim",
             ),
             heartbeat_task=asyncio.create_task(
-                self._heartbeat_loop(worker, stop_event), name=f"{name}:heartbeat"
+                self._heartbeat_loop(worker, stop_event, runner), name=f"{name}:heartbeat"
             ),
             commands=commands,
+            runner=runner,
         )
         self._states[name] = state
         if self._reaper_task is None:
@@ -97,12 +107,15 @@ class Supervisor:
             task.cancel()
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await task
-        try:
-            await asyncio.wait_for(state.run_task, timeout=state.worker.spec.shutdown_grace_s)
-        except asyncio.TimeoutError:
-            state.run_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError, Exception):
-                await state.run_task
+        if state.runner is not None:
+            await state.runner.stop(state.worker.spec.shutdown_grace_s)
+        elif state.run_task is not None:
+            try:
+                await asyncio.wait_for(state.run_task, timeout=state.worker.spec.shutdown_grace_s)
+            except asyncio.TimeoutError:
+                state.run_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError, Exception):
+                    await state.run_task
         await state.worker.on_stop(self._ctx)
 
     async def stop_all(self) -> None:
@@ -135,9 +148,13 @@ class Supervisor:
         worker: Worker,
         stop_event: asyncio.Event,
         commands: asyncio.Queue[WorkerCommand | CommandEvent | _ClaimedCommand],
+        runner: SubprocessWorkerRunner | None = None,
     ) -> None:
         while not stop_event.is_set():
             command = await commands.get()
+            if runner is not None:
+                await runner.dispatch(command)
+                continue
             if isinstance(command, _ClaimedCommand):
                 await self._handle_command_event(
                     worker,
@@ -150,6 +167,22 @@ class Supervisor:
                 continue
             with contextlib.suppress(Exception):
                 await worker.handle_command(command, self._ctx)
+
+    async def _start_subprocess_runner(self, worker: Worker) -> SubprocessWorkerRunner | None:
+        if worker.spec.process_model != "subprocess":
+            return None
+        if worker.spec.name != "usage-probe":
+            # These workers still capture runtime closures during migration.
+            # Keep them alive on the supervisor loop until they have a
+            # top-level process bootstrap.
+            return None
+        runner = SubprocessWorkerRunner(
+            usage_probe_process_target,
+            name=worker.spec.name,
+            args=(str(self._ctx.repo_root), str(self._ctx.run_id or "")),
+        )
+        await runner.start()
+        return runner
 
     async def _handle_command_event(
         self,
@@ -224,7 +257,12 @@ class Supervisor:
             for command_id in reaped["failed"]:
                 await self._publish_failed_command_escalation(command_id)
 
-    async def _heartbeat_loop(self, worker: Worker, stop_event: asyncio.Event) -> None:
+    async def _heartbeat_loop(
+        self,
+        worker: Worker,
+        stop_event: asyncio.Event,
+        runner: SubprocessWorkerRunner | None = None,
+    ) -> None:
         interval = max(0.05, worker.spec.heartbeat_s)
         while not stop_event.is_set():
             if self._ctx.db is not None and self._ctx.run_id is not None:
@@ -233,7 +271,10 @@ class Supervisor:
                     worker_id=worker.spec.name,
                     run_id=self._ctx.run_id,
                     role=worker.spec.name,
-                    payload={"process_model": worker.spec.process_model},
+                    payload={
+                        "process_model": worker.spec.process_model,
+                        "pid": runner.pid if runner is not None else None,
+                    },
                 )
             callback = self._ctx.on_heartbeat
             if callback is not None:

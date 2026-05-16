@@ -18,7 +18,9 @@ from murder.storage.markdown_sync import MarkdownSyncLoop
 from murder.storage.paths import tickets_dir
 from murder.tickets.schema import Ticket
 
-_TICKET_ID_RE = re.compile(r"^t\d+$")
+# Accept legacy `t007` ids and newer slug-style ids like `T01-scaffold`.
+# Require at least one digit to avoid importing arbitrary prose files.
+_TICKET_ID_RE = re.compile(r"^(?=.*\d)[A-Za-z][A-Za-z0-9_-]*$")
 
 
 def _clean_title_line(line: str) -> str:

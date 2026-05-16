@@ -94,6 +94,19 @@ def test_app_binds_tab_to_focus_traversal() -> None:
     assert _app_binding_actions("shift+tab") == ["focus_previous_region"]
 
 
+def test_app_binds_ctrl_verb_chords_for_common_actions() -> None:
+    assert _app_binding_actions("ctrl+comma") == ["open_settings"]
+    assert _app_binding_actions("ctrl+/") == ["show_help_force"]
+    assert _app_binding_actions("question_mark") == ["show_help_force"]
+    assert _app_binding_actions("ctrl+f") == ["focus_chat"]
+    assert _app_binding_actions("ctrl+r") == ["refresh_now"]
+    assert _app_binding_actions("ctrl+u") == ["collect_usage"]
+    assert _app_binding_actions("f1") == []
+    assert _app_binding_actions("f2") == []
+    assert _app_binding_actions("r") == []
+    assert _app_binding_actions("u") == []
+
+
 def test_tab_binding_is_priority_so_textarea_cannot_swallow_it() -> None:
     bindings = MurderApp._merged_bindings.key_to_bindings["tab"]
     assert any(b.priority for b in bindings)
@@ -161,4 +174,3 @@ async def test_plan_document_set_plan_markdown_skips_update_when_unchanged(monke
     await doc.set_plan_markdown("p2", "# one")
     assert payloads == ["# one", "# one"]
     assert doc.border_title == "p2"
-

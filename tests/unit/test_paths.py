@@ -19,3 +19,7 @@ def test_db_path_under_agents() -> None:
 
 def test_lock_path_under_agents() -> None:
     assert paths.lock_path(Path("/x")) == Path("/x/.murder/.lock")
+
+
+def test_logs_dir_under_agents() -> None:
+    assert paths.logs_dir(Path("/repo")) == Path("/repo/.murder/logs")

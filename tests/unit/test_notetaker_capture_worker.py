@@ -30,10 +30,18 @@ async def test_notetaker_capture_submit_command() -> None:
             "reply": "ok",
         }
 
+    async def _retry_failed(_ticket_id: str) -> dict[str, object]:  # pragma: no cover
+        raise AssertionError("should not be called")
+
+    async def _set_schedule_at(_ticket_id: str, _schedule_at: str | None) -> dict[str, object]:  # pragma: no cover
+        raise AssertionError("should not be called")
+
     worker = OrchestratorCommandWorker(
         kickoff_ready=_kickoff_ready,
         apply_carve_ready=_apply_carve_ready,
         capture_submit=_capture_submit,
+        retry_failed=_retry_failed,
+        set_schedule_at=_set_schedule_at,
     )
     result = await worker.on_command(
         CommandEvent(

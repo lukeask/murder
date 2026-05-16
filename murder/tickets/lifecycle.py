@@ -3,9 +3,14 @@
 from __future__ import annotations
 
 import sqlite3
+from datetime import datetime
 
 from murder import db
 from murder.bus import TicketStatus
+
+
+def _now() -> str:
+    return datetime.utcnow().isoformat(timespec="seconds")
 
 VALID_TRANSITIONS: dict[TicketStatus, set[TicketStatus]] = {
     TicketStatus.PLANNED: {TicketStatus.READY},
@@ -46,6 +51,22 @@ def transition(
         )
     db.update_ticket_status(conn, ticket_id, to.value)
     return prev
+
+
+def clear_last_error(conn: sqlite3.Connection, ticket_id: str) -> None:
+    """Clear last_error on a ticket (called after successful retry transition)."""
+    conn.execute(
+        "UPDATE tickets SET last_error = NULL, updated_at = ? WHERE id = ?",
+        (_now(), ticket_id),
+    )
+
+
+def set_last_error(conn: sqlite3.Connection, ticket_id: str, error: str) -> None:
+    """Record the terminal failure reason on a ticket."""
+    conn.execute(
+        "UPDATE tickets SET last_error = ?, updated_at = ? WHERE id = ?",
+        (error, db._now(), ticket_id),
+    )
 
 
 def reopen(conn: sqlite3.Connection, ticket_id: str) -> list[str]:

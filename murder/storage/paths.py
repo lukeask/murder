@@ -20,6 +20,11 @@ def agents_dir(repo_root: Path) -> Path:
     return murder_dir(repo_root)
 
 
+def logs_dir(repo_root: Path) -> Path:
+    """Directory for diagnostic logs (e.g. TUI perf JSONL)."""
+    return agents_dir(repo_root) / "logs"
+
+
 def db_path(repo_root: Path) -> Path:
     return agents_dir(repo_root) / "murder.db"
 
