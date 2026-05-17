@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Callable
 from typing import Any
 
 from textual import on
@@ -16,7 +16,6 @@ from textual.screen import ModalScreen
 from textual.widgets import DataTable, Footer, Static, TextArea
 
 LoadRecentFn = Callable[[], list[dict[str, Any]]]
-SubmitCaptureFn = Callable[[str], Awaitable[bool]]
 DismissPayload = tuple[bool, str]
 
 RECENT_NOTE_ROWS = 12
@@ -106,7 +105,7 @@ class NoteCaptureScreen(ModalScreen[DismissPayload]):
     BLUR_DELAY_S = 0.35
 
     class Draft(TextArea):
-        """Draft region — Enter submits; Shift+Enter newline; ESC delegates upward."""
+        """Draft region — Enter dismisses with submit intent; Shift+Enter newline; ESC upward."""
 
         def __init__(self, outer: NoteCaptureScreen) -> None:
             super().__init__(id="draft")
@@ -138,7 +137,7 @@ class NoteCaptureScreen(ModalScreen[DismissPayload]):
                 event.stop()
                 text = self.text.strip()
                 if text:
-                    outer.trigger_submit(text)
+                    outer._finish(submitted=True)
                 return
 
             if key == "shift+enter":
@@ -152,12 +151,10 @@ class NoteCaptureScreen(ModalScreen[DismissPayload]):
         *,
         initial_draft: str,
         load_recent_rows: LoadRecentFn,
-        submit_capture: SubmitCaptureFn,
     ) -> None:
         super().__init__()
         self._initial_draft = initial_draft
         self._load_recent_rows = load_recent_rows
-        self._submit_capture = submit_capture
         self._rows: list[dict[str, Any]] = []
         self._draft_esc_armed_at: float | None = None
         self._blur_after_idle: asyncio.TimerHandle | None = None
@@ -219,7 +216,7 @@ class NoteCaptureScreen(ModalScreen[DismissPayload]):
         with Vertical(id="capture_shell"):
             yield Static(
                 "Quick capture — recent summaries · draft below · ESC from draft → list · "
-                "ESC ESC closes · ESC then d clears draft · u undoes · Enter sends",
+                "ESC ESC closes · ESC then d clears draft · u undoes · Enter saves in background",
                 id="capture_header",
             )
             with Horizontal(id="capture_split"):
@@ -239,7 +236,7 @@ class NoteCaptureScreen(ModalScreen[DismissPayload]):
         self.set_focus(self._draft_widget)
 
     async def _hydrate_recent_rows(self) -> None:
-        rows = await asyncio.to_thread(self._load_recent_rows)
+        rows = self._load_recent_rows()
         table = self.query_one("#recent_table", RecentNotesTable)
         self._rows = list(rows)
         table.clear(columns=True)
@@ -288,17 +285,7 @@ class NoteCaptureScreen(ModalScreen[DismissPayload]):
         if self._focused_within_recent_table():
             self.query_one("#recent_table", RecentNotesTable).action_cursor_up()
 
-    def trigger_submit(self, text: str) -> None:
-        self.run_worker(self._submit_and_close(text), exclusive=True, group="note_capture_submit")
-
-    async def _submit_and_close(self, text: str) -> None:
-        ok = await self._submit_capture(text)
-        if ok:
-            self._cancel_blur_timer()
-            self._finish(submitted=True)
-
     def _finish(self, *, submitted: bool) -> None:
         self._cancel_blur_timer()
         draft_snapshot = self._draft_widget.text
         self.dismiss((submitted, draft_snapshot))
-

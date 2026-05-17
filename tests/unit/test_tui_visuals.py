@@ -2,20 +2,13 @@
 
 from __future__ import annotations
 
+import sqlite3
+
 import pytest
 
-from murder.tui.app import MurderApp, _chat_target_label, _is_vim_style_quit
+from murder.tui.app import MurderApp, _is_vim_style_quit
 from murder.tui.chat_input import ChatInput
 from murder.tui.plan_view import ChatLog, NotesDocument, NotesList, PlanDocument, PlanList
-
-
-def test_chat_target_label_tracks_notetaker_mode() -> None:
-    assert _chat_target_label("planning", "notetaker") == "notetaker"
-
-
-def test_chat_target_label_defaults_to_collaborator() -> None:
-    assert _chat_target_label("planning", "collaborator") == "collaborator"
-    assert _chat_target_label("crows", "notetaker") == "collaborator"
 
 
 def test_notes_document_is_focusable_for_tab_navigation() -> None:
@@ -64,6 +57,46 @@ def test_notes_list_arrow_matches_jk_actions() -> None:
     assert _binding_actions(NotesList, "up") == _binding_actions(NotesList, "k")
 
 
+def test_notes_list_has_retire_confirmation_binding() -> None:
+    assert _binding_actions(NotesList, "r") == ["retire_note"]
+
+
+def test_notes_list_refresh_tolerates_legacy_notes_without_status(monkeypatch) -> None:
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.execute(
+        """
+        CREATE TABLE notes (
+            name TEXT PRIMARY KEY,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            body TEXT NOT NULL DEFAULT '',
+            materialized_path TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO notes (name, created_at, updated_at, body, materialized_path)
+        VALUES ('legacy', '2026-01-01T00:00:00', '2026-01-02T00:00:00',
+                'body', '.murder/notes/legacy.md')
+        """
+    )
+    notes = NotesList()
+    rendered: list[tuple[str, str, str]] = []
+    monkeypatch.setattr(notes, "clear", lambda *args, **kwargs: None)
+    monkeypatch.setattr(notes, "add_row", lambda *cells, **kwargs: rendered.append(cells))
+    monkeypatch.setattr(notes, "move_cursor", lambda *args, **kwargs: None)
+
+    try:
+        notes.refresh_from_db(conn)
+    finally:
+        conn.close()
+
+    assert notes.selected_name == "legacy"
+    assert rendered == [("legacy", "4", "2026-01-02 00:00")]
+
+
 def test_chat_log_uses_flexible_width() -> None:
     assert "width: 1fr;" in ChatLog.DEFAULT_CSS
 
@@ -110,6 +143,30 @@ def test_app_binds_ctrl_verb_chords_for_common_actions() -> None:
 def test_tab_binding_is_priority_so_textarea_cannot_swallow_it() -> None:
     bindings = MurderApp._merged_bindings.key_to_bindings["tab"]
     assert any(b.priority for b in bindings)
+
+
+def test_ctrl_hjkl_bindings_are_priority() -> None:
+    """ctrl+hjkl must be priority=True so they fire even when ChatInput
+    (a TextArea) is focused.  TextArea owns ctrl+left/right (word nav) and
+    ctrl+k (delete-to-EOL); without priority=True it consumes those keys
+    before the App sees them, making pane navigation impossible from chat."""
+    for key in ("ctrl+h", "ctrl+j", "ctrl+k", "ctrl+l"):
+        bindings = MurderApp._merged_bindings.key_to_bindings.get(key, [])
+        assert bindings, f"no binding found for {key}"
+        assert any(b.priority for b in bindings), (
+            f"binding for {key!r} must have priority=True so TextArea cannot swallow it"
+        )
+
+
+def test_ctrl_arrow_bindings_are_priority() -> None:
+    """ctrl+arrow aliases: ctrl+left/right are bound by TextArea for word-motion,
+    so the App's pane-navigation must win."""
+    for key in ("ctrl+left", "ctrl+down", "ctrl+up", "ctrl+right"):
+        bindings = MurderApp._merged_bindings.key_to_bindings.get(key, [])
+        assert bindings, f"no binding found for {key}"
+        assert any(b.priority for b in bindings), (
+            f"binding for {key!r} must have priority=True so TextArea cannot swallow it"
+        )
 
 
 def test_bare_hjkl_are_not_app_level_so_widgets_keep_intra_pane_motion() -> None:

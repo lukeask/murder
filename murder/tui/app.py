@@ -15,19 +15,25 @@ from uuid import uuid4
 
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import Container, Horizontal
+from textual.containers import Container, Horizontal, Vertical
 from textual.screen import ModalScreen
 from textual.widgets import Footer, Static
 
 from murder import db as dbmod
 from murder import notes as notes_mod
-from murder import tmux
+from murder import notetaker_capture, tmux
 from murder.bus.protocol import CommandEvent
+from murder.clients import create_client
 from murder.config import Config
 from murder.harnesses import REGISTRY
-from murder.storage.paths import note_md
 from murder.tui.chat_input import ChatInput
 from murder.tui.crows_view import CrowsView, CrowTile
+from murder.tui.dispatch import (
+    CarveFormScreen,
+    DispatchView,
+    ScheduleTicketsTable,
+)
+from murder.tui.dispatch.mode_strip import ModeStrip
 from murder.tui.escalation_strip import EscalationStrip
 from murder.tui.header import Header
 from murder.tui.note_capture import RECENT_NOTE_ROWS, NoteCaptureScreen
@@ -40,15 +46,16 @@ from murder.tui.plan_view import (
     PlanDocument,
     PlanList,
 )
-from murder.tui.dispatch import (
-    CarveFormScreen,
-    DispatchView,
-    ScheduleTicketsTable,
-)
-from murder.tui.dispatch.mode_strip import ModeStrip
 from murder.tui.settings_screen import SettingsScreen
 from murder.tui.themes import CUSTOM_THEMES
 from murder.tui.ticket_grid import TicketGrid
+from murder.usage_sample_command import (
+    HARNESS_USAGE_SAMPLE_KIND,
+    TRIGGER_USAGE_MANUAL_KEY,
+    USAGE_PROBE_TARGET,
+    USAGE_SAMPLE_DEFAULT_TIMEOUT_S,
+    harness_usage_sample_payload,
+)
 from murder.user_config import UserConfig, load_user_config
 
 if TYPE_CHECKING:
@@ -75,12 +82,6 @@ def _is_vim_style_quit(text: str) -> bool:
 
     stripped = text.strip().lower()
     return stripped in _VIM_QUIT_COMMANDS
-
-
-def _chat_target_label(view: str, planning_mode: str) -> str:
-    if view == "planning" and planning_mode == "notetaker":
-        return "notetaker"
-    return "collaborator"
 
 
 def _git_head_sha(repo_root: Path) -> str:
@@ -137,10 +138,9 @@ class HelpScreen(ModalScreen[None]):
                         "[b]keys[/b]",
                         "ctrl+f focus chat · ? help · ctrl+, settings",
                         "ctrl+1/2/3  switch views  ·  [ and ] cycle views",
-                        "Dispatch: [b]c[/b] / Enter edits ticket YAML metadata; "
+                        "Dispatch: [b]c[/b] / Enter opens ticket metadata editor; "
                         "F6 kicks ready rows",
-                        "ctrl+t  toggle planning mode (notetaker ⇄ collaborator)",
-                        "ctrl+b  toggle docs sidebar (notes / plans filetree)",
+                        "ctrl+b  toggle docs sidebar",
                         "ctrl+y  collaborator: parsed chat ⇄ raw tmux pane",
                         "ctrl+c twice  force quit  ·  escape  unfocus chat",
                         "j/k or ↑/↓  vim-style navigation in lists and logs",
@@ -172,24 +172,27 @@ class MurderApp(App[None]):
         ("ctrl+3", "view_schedule", "Dispatch"),
         ("[", "previous_view", "Prev view"),
         ("]", "next_view", "Next view"),
-        ("ctrl+t", "toggle_planning_mode", "Plan mode"),
         ("ctrl+b", "toggle_sidebar", "Docs sidebar"),
         ("ctrl+y", "toggle_collab_raw", "Raw pane"),
         # Between-pane focus (VISION §4.3). Bare hjkl/arrows stay with the
         # focused widget so intra-pane motion isn't stolen.
-        Binding("ctrl+h", "focus_left", "Focus left", show=False),
-        Binding("ctrl+j", "focus_down", "Focus down", show=False),
-        Binding("ctrl+k", "focus_up", "Focus up", show=False),
-        Binding("ctrl+l", "focus_right", "Focus right", show=False),
-        Binding("ctrl+left", "focus_left", "Focus left", show=False),
-        Binding("ctrl+down", "focus_down", "Focus down", show=False),
-        Binding("ctrl+up", "focus_up", "Focus up", show=False),
-        Binding("ctrl+right", "focus_right", "Focus right", show=False),
+        # priority=True so these fire even when a TextArea/Input is focused
+        # (TextArea binds ctrl+left/right for word motion; ctrl+k for line
+        # deletion — without priority the widget consumes them first).
+        Binding("ctrl+h", "focus_left", "Focus left", show=False, priority=True),
+        Binding("ctrl+j", "focus_down", "Focus down", show=False, priority=True),
+        Binding("ctrl+k", "focus_up", "Focus up", show=False, priority=True),
+        Binding("ctrl+l", "focus_right", "Focus right", show=False, priority=True),
+        Binding("ctrl+left", "focus_left", "Focus left", show=False, priority=True),
+        Binding("ctrl+down", "focus_down", "Focus down", show=False, priority=True),
+        Binding("ctrl+up", "focus_up", "Focus up", show=False, priority=True),
+        Binding("ctrl+right", "focus_right", "Focus right", show=False, priority=True),
         Binding("tab", "focus_next_region", "Next pane", show=False, priority=True),
         Binding("shift+tab", "focus_previous_region", "Prev pane", show=False, priority=True),
         ("ctrl+r", "refresh_now", "Refresh"),
         ("ctrl+u", "collect_usage", "Usage"),
         ("c", "schedule_apply_carve", "Metadata"),
+        Binding("m", "schedule_mode_picker", "Mode", show=False),
         ("f6", "kick_ready", "Kick"),
         ("ctrl+f", "focus_chat", "Chat"),
         Binding("ctrl+/", "show_help_force", "Help", show=False),
@@ -199,6 +202,9 @@ class MurderApp(App[None]):
     CSS = """
     Screen {
         layout: vertical;
+    }
+    ToastRack {
+        align: right bottom;
     }
     #body {
         height: 1fr;
@@ -211,12 +217,16 @@ class MurderApp(App[None]):
         width: 1fr;
         border: solid $border;
     }
-    PlanList {
+    #planning_sidebar {
         width: 18%;
+        height: 1fr;
+    }
+    PlanList {
+        height: 1fr;
         border: solid $border;
     }
     NotesList {
-        width: 18%;
+        height: 1fr;
         border: solid $border;
     }
     """
@@ -237,7 +247,6 @@ class MurderApp(App[None]):
         self._plan_doc = PlanDocument()
         self._notes_list = NotesList()
         self._notes_doc = NotesDocument()
-        self._notetaker_chat = ChatLog(agent_label="notetaker")
         self._collab_chat = ChatLog(agent_label="collaborator")
         self._dispatch = DispatchView()
         self._mirror = PaneMirror(perf=self.perf)
@@ -245,16 +254,14 @@ class MurderApp(App[None]):
         self._chat = ChatInput()
         self._collab_lock = asyncio.Lock()
         self._collab_chat_lock = asyncio.Lock()
-        self._notetaker_lock = asyncio.Lock()
-        self._planning_mode = "notetaker"  # "notetaker" | "collaborator"
         self._sidebar_visible = True
         self._collab_raw = False  # ctrl+y: show the raw tmux pane instead of the parsed chat
-        self._notetaker_loaded = False
         self._user_config: UserConfig = load_user_config()
         self._view = "planning"
         self._last_schedule_usage_attempt_at: float | None = None
         self._pre_chat_focus = None
         self._has_selected_plan = False
+        self._active_document = "plan"
         self._shell_session: str | None = None
         self._last_ctrl_c: float = 0.0
         self._note_capture_draft = ""
@@ -266,11 +273,11 @@ class MurderApp(App[None]):
         with Horizontal(id="body"):
             yield self._grid
             yield self._crows
-            yield self._plans
+            with Vertical(id="planning_sidebar"):
+                yield self._plans
+                yield self._notes_list
             yield self._plan_doc
-            yield self._notes_list
             yield self._notes_doc
-            yield self._notetaker_chat
             yield self._collab_chat
             yield self._dispatch
             yield self._mirror
@@ -306,8 +313,6 @@ class MurderApp(App[None]):
         interval_s = max(self.runtime.config.tui.refresh_ms, 250) / 1000
         self.set_interval(interval_s, self._refresh_db_views)
         self.set_interval(max(interval_s, 1.0), self._refresh_pane)
-        if self._view == "planning" and self._planning_mode == "notetaker":
-            self.run_worker(self._enter_notetaker(), exclusive=True, group="notetaker")
 
     def on_unmount(self) -> None:
         if self.perf.enabled and self._perf_mount_time is not None:
@@ -338,10 +343,10 @@ class MurderApp(App[None]):
 
     async def _collect_usage_snapshots(self) -> None:
         result = await self._submit_command(
-            target_worker="usage-probe",
-            kind="state.harness_usage.sample",
-            payload={"trigger": "manual_u_key"},
-            timeout_s=20.0,
+            target_worker=USAGE_PROBE_TARGET,
+            kind=HARNESS_USAGE_SAMPLE_KIND,
+            payload=harness_usage_sample_payload(trigger=TRIGGER_USAGE_MANUAL_KEY),
+            timeout_s=USAGE_SAMPLE_DEFAULT_TIMEOUT_S,
         )
         if result is None:
             return
@@ -372,25 +377,35 @@ class MurderApp(App[None]):
                 self._dispatch.refresh_from_db(db)
             with perf.span("tui.escalations.refresh"):
                 self._escalations.refresh_from_db(db)
-            if self._view == "planning":
-                if self._planning_mode == "collaborator" and self._plans.selected_name:
-                    self.run_worker(
-                        self._render_plan(self._plans.selected_name),
-                        exclusive=True, group="plandoc",
-                    )
-                elif self._planning_mode == "notetaker":
-                    self.run_worker(self._render_notes(), exclusive=True, group="notes")
+            if (
+                self._view == "planning"
+                and self._active_document == "plan"
+                and self._plans.selected_name
+            ):
+                self.run_worker(
+                    self._render_plan(self._plans.selected_name),
+                    exclusive=True,
+                    group="plandoc",
+                    exit_on_error=False,
+                )
+            elif (
+                self._view == "planning"
+                and self._active_document == "note"
+                and self._notes_list.selected_name
+            ):
+                self.run_worker(
+                    self._render_note(self._notes_list.selected_name),
+                    exclusive=True,
+                    group="notedoc",
+                    exit_on_error=False,
+                )
 
     async def _refresh_pane(self) -> None:
         with self.perf.span("tui.refresh_pane"):
             await self._mirror.refresh_pane()
             if self._view == "crows":
                 await self._crows.refresh_tails()
-            if (
-                self._view == "planning"
-                and self._planning_mode == "collaborator"
-                and not self._collab_raw
-            ):
+            if self._view == "planning" and not self._collab_raw:
                 await self._refresh_collab_chat()
 
     def on_ticket_grid_ticket_selected(self, event: TicketGrid.TicketSelected) -> None:
@@ -414,26 +429,49 @@ class MurderApp(App[None]):
 
     def on_plan_list_plan_highlighted(self, event: PlanList.PlanHighlighted) -> None:
         if self._view == "planning":
+            self._active_document = "plan"
             if not self._has_selected_plan:
                 self._has_selected_plan = True
                 self._plan_doc.display = True
-            self.run_worker(self._render_plan(event.name), exclusive=True, group="plandoc")
+            self._plan_doc.display = True
+            self._notes_doc.display = False
+            self.run_worker(
+                self._render_plan(event.name),
+                exclusive=True,
+                group="plandoc",
+                exit_on_error=False,
+            )
 
     async def on_plan_list_plan_opened(self, event: PlanList.PlanOpened) -> None:
         await self._open_plan(event.name)
 
     def on_notes_list_note_highlighted(self, event: NotesList.NoteHighlighted) -> None:
-        del event  # _active_note_name() reads the list cursor directly
-        if self._view == "planning" and self._planning_mode == "notetaker":
-            self.run_worker(self._render_notes(), exclusive=True, group="notes")
+        if self._view == "planning":
+            self._active_document = "note"
+            self._plan_doc.display = False
+            self._notes_doc.display = True
+            self.run_worker(
+                self._render_note(event.name),
+                exclusive=True,
+                group="notedoc",
+                exit_on_error=False,
+            )
 
     async def on_notes_list_note_opened(self, event: NotesList.NoteOpened) -> None:
-        if self._view == "planning" and self._planning_mode == "notetaker":
-            await self._open_note(event.name)
+        await self._open_note(event.name)
+
+    async def on_notes_list_note_retire_requested(
+        self, event: NotesList.NoteRetireRequested
+    ) -> None:
+        await self._retire_note(event.name)
 
     async def _render_plan(self, name: str) -> None:
+        # No reconcile_plan() here: this runs on the UI refresh timer (and on
+        # every plan-list highlight). The plan_sync background task already
+        # polls `.murder/plans/*.md` into SQLite, so a hot-path reconcile is
+        # redundant file/DB I/O — and an exception from it would crash the
+        # whole app via the worker. Read straight from the DB instead.
         with self.perf.span("tui.render_plan"):
-            await self.runtime.reconcile_plan(name)
             db = self.runtime.db
             if db is None:
                 return
@@ -469,8 +507,32 @@ class MurderApp(App[None]):
         self._refresh_db_views()
         await self._render_plan(name)
 
+    async def _render_note(self, name: str) -> None:
+        with self.perf.span("tui.render_note"):
+            db = self.runtime.db
+            if db is None:
+                return
+            row = dbmod.get_note(db, name)
+            if row is None:
+                return
+            path = self.runtime.repo_root / str(row["materialized_path"])
+            if path.exists():
+                text = path.read_text(encoding="utf-8")
+            else:
+                text = str(row["body"])
+            await self._notes_doc.show(name, text)
+
     async def _open_note(self, name: str) -> None:
-        path = self.runtime.note_path_for(name)
+        db = self.runtime.db
+        if db is None:
+            return
+        notes_mod.ensure_note(db, self.runtime.repo_root, name)
+        row = dbmod.get_note(db, name)
+        path = (
+            self.runtime.repo_root / str(row["materialized_path"])
+            if row
+            else self.runtime.note_path_for(name)
+        )
         with self.suspend():
             code = self.runtime.open_editor_blocking(path, self._user_config.tui.editor)
         if code != 0:
@@ -478,65 +540,25 @@ class MurderApp(App[None]):
         if self.runtime.note_sync is not None:
             await self.runtime.note_sync.reconcile_file(path)
         self._refresh_db_views()
-        await self._render_notes()
+        await self._render_note(name)
         self.set_focus(self._notes_doc)
 
-    # ── notetaker mode ─────────────────────────────────────────────────────
-
-    def _active_note_name(self) -> str | None:
-        # Browsing an older note in the sidebar wins; otherwise show the live
-        # (today's) note the notetaker is appending to.
-        if self._notes_list.display and self._notes_list.selected_name:
-            return self._notes_list.selected_name
-        if self.runtime.db is not None:
-            return dbmod.latest_note_name(self.runtime.db) or notes_mod.today_name()
-        return notes_mod.today_name()
-
-    async def _render_notes(self) -> None:
-        with self.perf.span("tui.render_notes"):
-            db = self.runtime.db
-            if db is None:
-                return
-            name = self._active_note_name()
-            if name is None:
-                return
-            row = dbmod.get_note(db, name)
-            body = str(row["body"]) if row else ""
-            if not body.strip():
-                path = note_md(self.runtime.repo_root, name)
-                if path.exists():
-                    body = path.read_text(encoding="utf-8")
-            # Avoid stale-placeholder lock-in on startup: render from source of
-            # truth every refresh tick rather than short-circuiting by timestamp.
-            await self._notes_doc.show(name, body)
-
-    async def _enter_notetaker(self) -> None:
-        await self._render_notes()
-        if not self._notetaker_loaded:
-            self._notetaker_chat.clear()
-            self._notetaker_loaded = True
-        await self._render_notes()
-
-    async def _dispatch_notetaker(self, text: str) -> None:
-        async with self._notetaker_lock:
-            if not self._notetaker_loaded:
-                self._notetaker_chat.clear()
-                self._notetaker_loaded = True
-            self._notetaker_chat.add_turn("you", text)
-            self._notetaker_chat.add_status("notetaker is thinking…")
-            result = await self._submit_command(
-                target_worker="orchestrator",
-                kind="notetaker.chat.send",
-                payload={"text": text},
-                timeout_s=COLLABORATOR_START_TIMEOUT_S,
-            )
-            if result is None:
-                return
-            reply = result.get("reply")
-            self._notetaker_chat.add_turn("notetaker", str(reply or ""))
-        await self._render_notes()
-
-    # ── collaborator mode ──────────────────────────────────────────────────
+    async def _retire_note(self, name: str) -> None:
+        db = self.runtime.db
+        if db is None:
+            return
+        try:
+            dest = notes_mod.retire_note(db, self.runtime.repo_root, name)
+        except Exception as e:
+            self.notify(f"could not retire note: {e}", severity="error", timeout=6)
+            return
+        self._refresh_db_views()
+        self.notify(f"retired note: {dest.name}", timeout=4)
+        if self._notes_list.selected_name:
+            await self._render_note(self._notes_list.selected_name)
+        else:
+            self._active_document = "plan"
+            self._apply_mode()
 
     async def _refresh_collab_chat(self) -> None:
         """Re-parse the collaborator's tmux pane into the chat transcript.
@@ -548,7 +570,7 @@ class MurderApp(App[None]):
             return
         async with self._collab_chat_lock:
             with self.perf.span("tui.collab_chat.refresh"):
-                if not (self._view == "planning" and self._planning_mode == "collaborator"):
+                if self._view != "planning":
                     return
                 result = await self._submit_command(
                     target_worker="collaborator",
@@ -561,7 +583,9 @@ class MurderApp(App[None]):
                     return
                 if not bool(result.get("available")):
                     self._collab_chat.set_turns([])
-                    self._collab_chat.add_status("(no collaborator yet — type a message to start one)")
+                    self._collab_chat.add_status(
+                        "(no collaborator yet — type a message to start one)"
+                    )
                     return
                 turns = [
                     (str(item.get("role", "")), str(item.get("text", "")))
@@ -634,26 +658,25 @@ class MurderApp(App[None]):
     def _set_view(self, view: str) -> None:
         self._view = view
         self._apply_mode()
-        self._refresh_db_views()  # also re-renders the planning doc for the active mode
-        if self._view == "planning" and self._planning_mode == "notetaker":
-            self.run_worker(self._enter_notetaker(), exclusive=True, group="notetaker")
+        self._refresh_db_views()  # also re-renders the planning doc when a plan is selected
 
     def _apply_mode(self) -> None:
         planning = self._view == "planning"
-        note_mode = planning and self._planning_mode == "notetaker"
-        collab_mode = planning and self._planning_mode == "collaborator"
-        collab_chat_on = collab_mode and not self._collab_raw
-        collab_raw_on = collab_mode and self._collab_raw
-        self._chat.set_recipient(_chat_target_label(self._view, self._planning_mode))
-        self._header.set_view(self._view, self._planning_mode if planning else None)
+        collab_chat_on = planning and not self._collab_raw
+        collab_raw_on = planning and self._collab_raw
+        self._chat.set_recipient("collaborator")
+        self._header.set_view(self._view)
         self._grid.display = False
         self._crows.display = self._view == "crows"
-        self._plans.display = collab_mode and self._sidebar_visible
-        self._plan_doc.display = collab_mode and self._has_selected_plan
+        with contextlib.suppress(Exception):
+            self.query_one("#planning_sidebar").display = planning and self._sidebar_visible
+        self._plans.display = planning and self._sidebar_visible
+        self._notes_list.display = planning and self._sidebar_visible
+        self._plan_doc.display = (
+            planning and self._active_document == "plan" and self._has_selected_plan
+        )
+        self._notes_doc.display = planning and self._active_document == "note"
         self._collab_chat.display = collab_chat_on
-        self._notes_list.display = note_mode and self._sidebar_visible
-        self._notes_doc.display = note_mode
-        self._notetaker_chat.display = note_mode
         self._dispatch.display = self._view == "schedule"
         self._chat.display = self._view != "schedule"
         # The shared PaneMirror is now only used by planning's collab-raw
@@ -662,17 +685,6 @@ class MurderApp(App[None]):
         self._mirror.styles.width = "1fr"
         if collab_chat_on:
             self.run_worker(self._refresh_collab_chat(), exclusive=True, group="collab_chat")
-
-    def action_toggle_planning_mode(self) -> None:
-        if self._view != "planning":
-            self._set_view("planning")
-        self._planning_mode = (
-            "collaborator" if self._planning_mode == "notetaker" else "notetaker"
-        )
-        self._apply_mode()
-        self.notify(f"planning mode: {self._planning_mode}", timeout=2)
-        if self._planning_mode == "notetaker":
-            self.run_worker(self._enter_notetaker(), exclusive=True, group="notetaker")
 
     def action_toggle_sidebar(self) -> None:
         self._sidebar_visible = not self._sidebar_visible
@@ -709,9 +721,6 @@ class MurderApp(App[None]):
             return
         if text.startswith("/"):
             await self._handle_slash(text)
-            return
-        if self._view == "planning" and self._planning_mode == "notetaker":
-            await self._dispatch_notetaker(text)
             return
         # Serialize ensure+send so a flurry of messages during cold-start
         # doesn't race two collaborator spawns or interleave send_keys.
@@ -762,11 +771,7 @@ class MurderApp(App[None]):
         elif cmd == "note":
             body = " ".join(args).strip()
             if body:
-                self.run_worker(
-                    self._slash_note_submit(body),
-                    exclusive=False,
-                    group="note_capture",
-                )
+                await self._slash_note_submit(body)
             else:
                 self.action_open_note_capture()
         else:
@@ -776,7 +781,6 @@ class MurderApp(App[None]):
         screen = NoteCaptureScreen(
             initial_draft=self._note_capture_draft,
             load_recent_rows=self._sync_recent_note_entries,
-            submit_capture=self._submit_note_capture_async,
         )
         self.push_screen(screen, self._on_note_capture_closed)
 
@@ -786,25 +790,42 @@ class MurderApp(App[None]):
             return []
         return dbmod.list_recent_notes_entries(db, limit=RECENT_NOTE_ROWS)
 
-    async def _submit_note_capture_async(self, text: str) -> bool:
+    def _record_note_capture_immediate(self, text: str) -> dict[str, Any] | None:
         body = text.strip()
         if not body:
-            return False
-        result = await self._submit_command(
-            target_worker="orchestrator",
-            kind="notetaker.capture.submit",
-            payload={"text": body},
-            timeout_s=COLLABORATOR_START_TIMEOUT_S,
+            return None
+        db = self.runtime.db
+        if db is None:
+            return None
+        result = notetaker_capture.create_durable_capture(
+            repo_root=self.runtime.repo_root,
+            conn=db,
+            raw=body,
         )
-        return result is not None
+        note_name = str(result["note_name"])
+        self._refresh_db_views()
+        self._active_document = "note"
+        self._plan_doc.display = False
+        self._notes_doc.display = True
+        self._notes_list.select_name(note_name)
+        self.run_worker(
+            self._render_note(note_name),
+            exclusive=True,
+            group="notedoc",
+            exit_on_error=False,
+        )
+        return result
 
     async def _slash_note_submit(self, body: str) -> None:
-        ok = await self._submit_note_capture_async(body)
-        if ok:
-            self._refresh_db_views()
-            self.notify("capture submitted", timeout=3)
-        else:
-            self.notify("capture failed — check orchestrator / API", severity="warning", timeout=6)
+        created = self._record_note_capture_immediate(body)
+        if created is None:
+            self.notify("capture failed — no database", severity="warning", timeout=6)
+            return
+        self.run_worker(
+            self._resolve_note_capture_background(created),
+            exclusive=False,
+            group="note_capture",
+        )
 
     def _on_note_capture_closed(self, payload: tuple[bool, str] | None) -> None:
         if payload is None:
@@ -812,8 +833,40 @@ class MurderApp(App[None]):
         submitted, draft_snapshot = payload
         self._note_capture_draft = "" if submitted else draft_snapshot
         if submitted:
-            self._refresh_db_views()
-            self.notify("capture submitted", timeout=3)
+            created = self._record_note_capture_immediate(draft_snapshot)
+            if created is None:
+                self.notify("capture failed — no database", severity="warning", timeout=6)
+                return
+            self.run_worker(
+                self._resolve_note_capture_background(created),
+                exclusive=False,
+                group="note_capture",
+            )
+
+    async def _resolve_note_capture_background(self, created: dict[str, Any]) -> None:
+        db = self.runtime.db
+        if db is None:
+            return
+        try:
+            client = create_client(self.runtime.config.notetaker.provider)
+            resolved = await notetaker_capture.resolve_capture_note(
+                repo_root=self.runtime.repo_root,
+                conn=db,
+                raw=str(created["cleaned"]),
+                entry_id=int(created["entry_id"]),
+                note_name=str(created["note_name"]),
+                client=client,
+                config=self.runtime.config.notetaker,
+            )
+        except Exception as e:
+            self.notify(f"note saved; title update failed: {e}", severity="warning", timeout=6)
+            return
+        self._refresh_db_views()
+        note_name = str(resolved["note_name"])
+        self._active_document = "note"
+        self._notes_list.select_name(note_name)
+        await self._render_note(note_name)
+        self.notify(f"note ready: {note_name}.md", timeout=4)
 
     def action_focus_chat(self) -> None:
         if self.focused is not self._chat:
@@ -828,9 +881,7 @@ class MurderApp(App[None]):
             return
         # Fallback: focus current view's primary widget
         if self._view == "planning":
-            self.set_focus(
-                self._notes_list if self._planning_mode == "notetaker" else self._plans
-            )
+            self.set_focus(self._notes_list if self._active_document == "note" else self._plans)
         elif self._view == "crows":
             if not self._crows.focus_first_tile():
                 self.set_focus(self._crows)
@@ -852,17 +903,11 @@ class MurderApp(App[None]):
         """Top-level panes currently visible in the active place."""
         candidates: list[Widget] = []
         if self._view == "planning":
-            if self._planning_mode == "notetaker":
-                candidates = [
-                    self._notes_list,
-                    self._notes_doc,
-                    self._notetaker_chat,
-                    self._chat,
-                ]
-            elif self._collab_raw:
-                candidates = [self._plans, self._plan_doc, self._mirror, self._chat]
+            doc = self._notes_doc if self._active_document == "note" else self._plan_doc
+            if self._collab_raw:
+                candidates = [self._plans, self._notes_list, doc, self._mirror, self._chat]
             else:
-                candidates = [self._plans, self._plan_doc, self._collab_chat, self._chat]
+                candidates = [self._plans, self._notes_list, doc, self._collab_chat, self._chat]
         elif self._view == "crows":
             candidates = [self._crows, self._chat]
         else:  # schedule/dispatch
@@ -929,17 +974,17 @@ class MurderApp(App[None]):
         )
         self._refresh_db_views()
 
+    def action_schedule_mode_picker(self) -> None:
+        if self._view != "schedule":
+            return
+        strip = self._dispatch.query_one(ModeStrip)
+        strip.action_open_mode_picker()
+        strip.focus()
+
     def action_schedule_apply_carve(self) -> None:
         if self._insert_if_chat_focused("c"):
             return
         if self._view != "schedule":
-            return
-        if not self._dispatch.selected_ticket_is_editable:
-            self.notify(
-                "Select a [b]planned[/b] or [b]ready[/b] ticket to edit metadata.",
-                severity="warning",
-                timeout=5,
-            )
             return
         tid = self._dispatch.selected_ticket_id
         if not tid:
@@ -1007,34 +1052,26 @@ class MurderApp(App[None]):
             self.notify(f"ticket {ticket_id} not found", severity="error", timeout=4)
             return
         snapshot = {str(k): row[k] for k in row.keys()}
-        orig_status = str(row.get("status") or "")
         hint = "[dim]Known harness kinds:[/dim] " + ", ".join(sorted(REGISTRY.keys()))
         self.push_screen(
-            CarveFormScreen(ticket_id, snapshot, harness_hint=hint),
-            lambda spec: self._after_carve_modal(ticket_id, spec, orig_status=orig_status),
+            CarveFormScreen(
+                ticket_id,
+                snapshot,
+                harness_hint=hint,
+                db=db,
+                on_autosave=lambda spec: self._enqueue_carve_autosave(ticket_id, spec),
+            ),
+            lambda _result: None,
         )
 
-    def _after_carve_modal(
-        self,
-        ticket_id: str,
-        spec: dict[str, object] | None,
-        *,
-        orig_status: str = "",
-    ) -> None:
-        if not spec:
-            return
-        if orig_status == "failed":
-            self.run_worker(
-                self._submit_retry_then_carve(ticket_id, spec),
-                exclusive=False,
-                group="carve",
-            )
-        else:
-            self.run_worker(
-                self._submit_carve_ready(ticket_id, spec),
-                exclusive=False,
-                group="carve",
-            )
+    def _enqueue_carve_autosave(self, ticket_id: str, spec: dict[str, object]) -> None:
+        self.run_worker(
+            self._submit_update_metadata_and_status(
+                ticket_id, spec, notify_success=False
+            ),
+            exclusive=True,
+            group="carve",
+        )
 
     async def _submit_retry_failed(self, ticket_id: str) -> None:
         result = await self._submit_command(
@@ -1048,54 +1085,54 @@ class MurderApp(App[None]):
         self.notify(f"{ticket_id} queued for retry; status=planned", timeout=4)
         self._refresh_db_views()
 
-    async def _submit_retry_then_carve(
-        self, ticket_id: str, carve: dict[str, object]
+    async def _submit_update_metadata_and_status(
+        self,
+        ticket_id: str,
+        spec: dict[str, object],
+        *,
+        notify_success: bool = True,
     ) -> None:
-        retry_result = await self._submit_command(
+        meta_result = await self._submit_command(
             target_worker="orchestrator",
-            kind="ticket.retry_failed",
-            payload={"ticket_id": ticket_id},
-            timeout_s=15.0,
-        )
-        if retry_result is None:
-            return
-        result = await self._submit_command(
-            target_worker="orchestrator",
-            kind="ticket.apply_carve_ready",
-            payload={"ticket_id": ticket_id, "carve": carve},
+            kind="ticket.update_metadata",
+            payload={"ticket_id": ticket_id, **spec},
             timeout_s=30.0,
         )
-        if result is None:
+        if meta_result is None:
             return
-        if not result.get("ok"):
+        if not meta_result.get("ok"):
             self.notify(
-                str(result.get("error") or "carve rejected"),
+                str(meta_result.get("error") or "metadata update failed"),
                 severity="error",
                 timeout=10,
             )
             return
-        self.notify(f"{ticket_id} retried and metadata written; status=ready", timeout=4)
-        self._refresh_db_views()
-
-    async def _submit_carve_ready(
-        self, ticket_id: str, carve: dict[str, object]
-    ) -> None:
-        result = await self._submit_command(
-            target_worker="orchestrator",
-            kind="ticket.apply_carve_ready",
-            payload={"ticket_id": ticket_id, "carve": carve},
-            timeout_s=30.0,
-        )
-        if result is None:
+        db = self.runtime.db
+        if db is None:
             return
-        if not result.get("ok"):
-            self.notify(
-                str(result.get("error") or "carve rejected"),
-                severity="error",
-                timeout=10,
+        row2 = dbmod.get_ticket(db, ticket_id)
+        db_status = str(row2.get("status") or "") if row2 else ""
+        want = str(spec.get("status") or "").strip()
+        if not want:
+            want = db_status
+        if want and want != db_status:
+            status_result = await self._submit_command(
+                target_worker="orchestrator",
+                kind="ticket.force_status",
+                payload={"ticket_id": ticket_id, "status": want},
+                timeout_s=15.0,
             )
-            return
-        self.notify(f"{ticket_id} metadata written; status=ready", timeout=4)
+            if status_result is None:
+                return
+            if not status_result.get("ok"):
+                self.notify(
+                    str(status_result.get("error") or "status update failed"),
+                    severity="error",
+                    timeout=10,
+                )
+                return
+        if notify_success:
+            self.notify(f"{ticket_id} updated", timeout=4)
         self._refresh_db_views()
 
     def _record_ui_escalation(self, reason: str) -> None:
