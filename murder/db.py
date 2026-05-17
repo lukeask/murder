@@ -14,6 +14,7 @@ import sqlite3
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+from uuid import uuid4
 
 from murder.plans.schema import Plan
 from murder.storage.paths import MURDER_DIR_NAME
@@ -38,7 +39,7 @@ CREATE TABLE IF NOT EXISTS tickets (
     title         TEXT NOT NULL,
     wave          INTEGER NOT NULL,
     status        TEXT NOT NULL CHECK (status IN
-                  ('planned','ready','in_progress','blocked','done','failed')),
+                  ('planned','ready','in_progress','blocked','done','failed','archived')),
     harness       TEXT,
     model         TEXT,
     schedule_at   TEXT,
@@ -221,9 +222,12 @@ CREATE TABLE IF NOT EXISTS plan_related_tickets (
 );
 
 CREATE TABLE IF NOT EXISTS notes (
-    name              TEXT PRIMARY KEY,
+    id                TEXT PRIMARY KEY,
+    name              TEXT NOT NULL UNIQUE,
     created_at        TEXT NOT NULL,
     updated_at        TEXT NOT NULL,
+    status            TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','retired')),
+    retired_at        TEXT,
     body              TEXT NOT NULL DEFAULT '',
     materialized_path TEXT NOT NULL
 );
@@ -300,7 +304,8 @@ CREATE INDEX IF NOT EXISTS idx_schedule_queue_status
 
 CREATE TABLE IF NOT EXISTS scheduler_state (
     id         INTEGER PRIMARY KEY CHECK (id = 1),
-    mode       TEXT NOT NULL DEFAULT 'manual' CHECK (mode IN ('manual','autorun_ready','crow_magic')),
+    mode       TEXT NOT NULL DEFAULT 'manual'
+               CHECK (mode IN ('manual','autorun_ready','crow_magic')),
     updated_at TEXT NOT NULL
 );
 
@@ -365,6 +370,8 @@ def init_schema(conn: sqlite3.Connection) -> None:
     _migrate_agents_failed_status(conn)
     _migrate_agents_notetaker_role(conn)
     _migrate_role_names(conn)
+    _migrate_ticket_archived_status(conn)
+    _migrate_notes_identity_status(conn)
     ensure_notetaker_context_row(conn)
 
 
@@ -373,6 +380,118 @@ def _migrate_ticket_last_error(conn: sqlite3.Connection) -> None:
     cols = {row["name"] for row in conn.execute("PRAGMA table_info(tickets)").fetchall()}
     if "last_error" not in cols:
         conn.execute("ALTER TABLE tickets ADD COLUMN last_error TEXT")
+
+
+def _migrate_ticket_archived_status(conn: sqlite3.Connection) -> None:
+    """Add 'archived' to the tickets status CHECK constraint via table recreation."""
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'tickets'"
+    ).fetchone()
+    if row is None or "'archived'" in str(row["sql"]):
+        return
+    conn.executescript(
+        """
+        PRAGMA foreign_keys = OFF;
+        BEGIN;
+        ALTER TABLE tickets RENAME TO tickets_old_archived_migration;
+        CREATE TABLE tickets (
+            id            TEXT PRIMARY KEY,
+            title         TEXT NOT NULL,
+            wave          INTEGER NOT NULL,
+            status        TEXT NOT NULL CHECK (status IN
+                          ('planned','ready','in_progress','blocked','done','failed','archived')),
+            harness       TEXT,
+            model         TEXT,
+            schedule_at   TEXT,
+            metadata_hash TEXT,
+            metadata_file_hash TEXT,
+            metadata_last_materialized_hash TEXT,
+            metadata_materialized_path TEXT,
+            metadata_sync_state TEXT NOT NULL DEFAULT 'synced',
+            metadata_parse_error TEXT,
+            metadata_conflict_reason TEXT,
+            attempts      INTEGER NOT NULL DEFAULT 0,
+            last_error    TEXT,
+            created_at    TEXT NOT NULL,
+            updated_at    TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_tickets_wave   ON tickets(wave);
+        CREATE INDEX IF NOT EXISTS idx_tickets_status ON tickets(status);
+        CREATE INDEX IF NOT EXISTS idx_tickets_schedule_at ON tickets(schedule_at);
+        CREATE INDEX IF NOT EXISTS idx_tickets_metadata_sync_state ON tickets(metadata_sync_state);
+        INSERT INTO tickets SELECT
+            id, title, wave, status, harness, model, schedule_at,
+            metadata_hash, metadata_file_hash, metadata_last_materialized_hash,
+            metadata_materialized_path, metadata_sync_state, metadata_parse_error,
+            metadata_conflict_reason, attempts, last_error, created_at, updated_at
+        FROM tickets_old_archived_migration;
+        DROP TABLE tickets_old_archived_migration;
+        COMMIT;
+        PRAGMA foreign_keys = ON;
+        """
+    )
+
+
+def _migrate_notes_identity_status(conn: sqlite3.Connection) -> None:
+    """Add UUID-backed identity and retirement state to notes."""
+    cols = {row["name"] for row in conn.execute("PRAGMA table_info(notes)").fetchall()}
+    if {"id", "status", "retired_at"} <= cols:
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_notes_status_updated "
+            "ON notes(status, updated_at)"
+        )
+        return
+
+    rows = conn.execute(
+        "SELECT name, created_at, updated_at, body, materialized_path FROM notes"
+    ).fetchall()
+    conn.execute("PRAGMA foreign_keys = OFF")
+    conn.execute("BEGIN")
+    try:
+        conn.execute("ALTER TABLE notes RENAME TO notes_old_identity_migration")
+        conn.execute(
+            """
+            CREATE TABLE notes (
+                id                TEXT PRIMARY KEY,
+                name              TEXT NOT NULL UNIQUE,
+                created_at        TEXT NOT NULL,
+                updated_at        TEXT NOT NULL,
+                status            TEXT NOT NULL DEFAULT 'active'
+                                  CHECK (status IN ('active','retired')),
+                retired_at        TEXT,
+                body              TEXT NOT NULL DEFAULT '',
+                materialized_path TEXT NOT NULL
+            )
+            """
+        )
+        for row in rows:
+            conn.execute(
+                """
+                INSERT INTO notes
+                    (id, name, created_at, updated_at, status, retired_at, body, materialized_path)
+                VALUES (?, ?, ?, ?, 'active', NULL, ?, ?)
+                """,
+                (
+                    str(uuid4()),
+                    row["name"],
+                    row["created_at"],
+                    row["updated_at"],
+                    row["body"],
+                    row["materialized_path"],
+                ),
+            )
+        conn.execute("DROP TABLE notes_old_identity_migration")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_notes_updated ON notes(updated_at)")
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_notes_status_updated "
+            "ON notes(status, updated_at)"
+        )
+        conn.execute("COMMIT")
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
+    finally:
+        conn.execute("PRAGMA foreign_keys = ON")
 
 
 def _migrate_agents_notetaker_role(conn: sqlite3.Connection) -> None:
@@ -690,16 +809,20 @@ def get_note(conn: sqlite3.Connection, name: str) -> dict[str, Any] | None:
 def list_notes(conn: sqlite3.Connection) -> list[dict[str, Any]]:
     rows = conn.execute(
         """
-        SELECT name, created_at, updated_at, materialized_path, length(body) AS size
+        SELECT id, name, created_at, updated_at, status, retired_at,
+               materialized_path, length(body) AS size
           FROM notes
-         ORDER BY name DESC
+         WHERE status = 'active'
+         ORDER BY updated_at DESC, name
         """
     ).fetchall()
     return [dict(r) for r in rows]
 
 
 def latest_note_name(conn: sqlite3.Connection) -> str | None:
-    row = conn.execute("SELECT name FROM notes ORDER BY name DESC LIMIT 1").fetchone()
+    row = conn.execute(
+        "SELECT name FROM notes WHERE status = 'active' ORDER BY updated_at DESC, name LIMIT 1"
+    ).fetchone()
     return str(row["name"]) if row else None
 
 
@@ -711,16 +834,62 @@ def upsert_note(
     if existing is None:
         conn.execute(
             """
-            INSERT INTO notes (name, created_at, updated_at, body, materialized_path)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO notes
+                (id, name, created_at, updated_at, status, retired_at, body, materialized_path)
+            VALUES (?, ?, ?, ?, 'active', NULL, ?, ?)
             """,
-            (name, now, now, body, materialized_path),
+            (str(uuid4()), name, now, now, body, materialized_path),
         )
     else:
         conn.execute(
-            "UPDATE notes SET updated_at = ?, body = ?, materialized_path = ? WHERE name = ?",
+            """
+            UPDATE notes
+               SET updated_at = ?, status = 'active', retired_at = NULL,
+                   body = ?, materialized_path = ?
+             WHERE name = ?
+            """,
             (now, body, materialized_path, name),
         )
+
+
+def rename_note(
+    conn: sqlite3.Connection, old_name: str, new_name: str, *, materialized_path: str
+) -> None:
+    now = _now()
+    conn.execute("PRAGMA foreign_keys = OFF")
+    conn.execute("BEGIN")
+    try:
+        conn.execute(
+            """
+            UPDATE notes
+               SET name = ?, updated_at = ?, materialized_path = ?
+             WHERE name = ? AND status = 'active'
+            """,
+            (new_name, now, materialized_path, old_name),
+        )
+        conn.execute(
+            "UPDATE note_revisions SET note_name = ? WHERE note_name = ?",
+            (new_name, old_name),
+        )
+        conn.execute("COMMIT")
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
+    finally:
+        conn.execute("PRAGMA foreign_keys = ON")
+
+
+def mark_note_retired(conn: sqlite3.Connection, name: str, *, materialized_path: str) -> None:
+    now = _now()
+    conn.execute(
+        """
+        UPDATE notes
+           SET status = 'retired', retired_at = ?, updated_at = ?,
+               materialized_path = ?
+         WHERE name = ?
+        """,
+        (now, now, materialized_path, name),
+    )
 
 
 def insert_note_revision(
