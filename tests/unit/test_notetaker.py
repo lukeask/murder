@@ -96,7 +96,7 @@ async def test_submit_notetaker_capture_inserts_db_and_updates_note(
     monkeypatch.setattr(
         "murder.orchestrator.create_client",
         lambda provider: _FenceClient(
-            '{"cleaned": "## Item\\n- one", "short_vers": "one item noted"}'
+            '{"short_vers": "one item noted"}'
         ),
     )
 
@@ -106,8 +106,7 @@ async def test_submit_notetaker_capture_inserts_db_and_updates_note(
         "SELECT raw, cleaned, short_vers FROM notes_entries ORDER BY id DESC LIMIT 1",
     ).fetchone()
     assert row["raw"] == "ramble ramble one"
-    assert "## Item" in row["cleaned"]
+    assert row["cleaned"] == "ramble ramble one"
     assert out["reply"] == "one item noted"
     merged = notes.read_note(memdb, notes.today_name())
-    assert "## Item" in merged
-
+    assert "ramble ramble one" in merged
