@@ -230,3 +230,45 @@ async def test_import_yaml_creates_missing_db_ticket_for_slug_style_id(
     assert row["status"] == "ready"
     assert row["harness"] == "cursor"
     assert row["model"] == "composer"
+
+
+@pytest.mark.asyncio
+async def test_import_yaml_creates_missing_db_ticket_for_numeric_prefix_id(
+    tmp_path, memdb: sqlite3.Connection
+) -> None:
+    path = tmp_path / ".murder" / "tickets" / "01-msg-types.yaml"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        yaml.safe_dump(
+            {
+                "id": "01-msg-types",
+                "title": "Message type cleanup",
+                "wave": 1,
+                "status": "planned",
+                "harness": "cursor",
+                "model": None,
+                "deps": [],
+                "skills": [],
+                "write_set": ["src/messages.py"],
+                "checklist": ["keep ids importable"],
+                "schedule_at": None,
+            },
+            sort_keys=False,
+            allow_unicode=False,
+        ),
+        encoding="utf-8",
+    )
+    sync = TicketMetadataSync(tmp_path, memdb)
+
+    await sync.reconcile_all()
+
+    row = memdb.execute(
+        "SELECT id, title, wave, status, harness, model FROM tickets "
+        "WHERE id = '01-msg-types'"
+    ).fetchone()
+    assert row is not None
+    assert row["title"] == "Message type cleanup"
+    assert row["wave"] == 1
+    assert row["status"] == "planned"
+    assert row["harness"] == "cursor"
+    assert row["model"] is None

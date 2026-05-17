@@ -161,3 +161,34 @@ async def test_reconcile_all_imports_slug_style_ticket_id(
     assert row is not None
     assert row["status"] == "planned"
     assert row["title"] == "Scaffold"
+
+
+@pytest.mark.asyncio
+async def test_reconcile_all_imports_numeric_prefix_ticket_id(
+    tmp_path, memdb: sqlite3.Connection
+) -> None:
+    """Stems like `01-msg-types` start with a digit; they must still import."""
+    path = tmp_path / ".murder" / "tickets" / "01-msg-types.md"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "\n".join(
+            [
+                "## Plan",
+                "Ordered ticket stem.",
+                "",
+                "## Working notes",
+                "",
+                "## Sentinel notes",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    sync = TicketSync(tmp_path, memdb)
+    await sync.reconcile_all()
+
+    row = dbmod.get_ticket(memdb, "01-msg-types")
+    assert row is not None
+    assert row["status"] == "planned"
+    assert row["title"] == "Ordered ticket stem."

@@ -23,9 +23,9 @@ from murder.tickets.meta import (
 )
 from murder.tickets.schema import ChecklistItem, Ticket
 
-# Accept legacy `t007` ids and newer slug-style ids like `T01-scaffold`.
+# Accept legacy `t007`, slug-style `T01-scaffold`, and numeric-prefix `01-msg-types`.
 # Require at least one digit to avoid ingesting arbitrary YAML by filename.
-_TICKET_ID_RE = re.compile(r"^(?=.*\d)[A-Za-z][A-Za-z0-9_-]*$")
+_TICKET_ID_RE = re.compile(r"^(?=.*\d)[A-Za-z0-9][A-Za-z0-9_-]*$")
 _DB_OWNED_STATUSES = {
     TicketStatus.IN_PROGRESS.value,
     TicketStatus.BLOCKED.value,

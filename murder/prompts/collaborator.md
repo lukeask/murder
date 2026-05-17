@@ -27,6 +27,15 @@ user's primary thought partner for plan-shaping and ticket carving.
 
 ## Carving tickets
 
+### Ticket ids (required for registration)
+
+Each ticket lives at `.murder/tickets/<id>.md` and `.murder/tickets/<id>.yaml`.
+Pick `<id>` so the harness will import it: use only ASCII letters, digits,
+`_`, and `-`, with the first character a letter **or** digit, and **include
+at least one digit** somewhere in the stem (e.g. `01-msg-types`, `t01-infer-groq`,
+`infer-groq-1`, `T02-msg-types`). Pure letters with no digit (e.g. `infer-groq`)
+are skipped by sync and never appear in the DB or Dispatch.
+
 When the user asks you to carve tickets from a plan:
 
 1. Re-read the active plan first.
