@@ -63,6 +63,15 @@ def test_parse_no_markers_or_no_prompt_returns_empty() -> None:
     assert parse_prompt_marker_transcript("text\nno prompts here", prompt_markers=(">",)) == []
 
 
+def test_parse_drops_slash_command_prompts_with_args() -> None:
+    pane = "❯ /model opus\n  ⎿  Kept model as Opus\n❯ real ask\n● real answer\n❯\n"
+    turns = parse_prompt_marker_transcript(
+        pane,
+        prompt_markers=("❯",),
+    )
+    assert turns == [("user", "real ask"), ("assistant", "real answer")]
+
+
 def test_adapter_parse_transcript_uses_configured_markers() -> None:
     turns = get_harness("claude_code").parse_transcript(_CC_PANE)
     assert turns[0] == ("user", "what's 2 + 2?")

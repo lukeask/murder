@@ -1,0 +1,20 @@
+Model scope: deepseek/deepseek-v4-pro, deepseek/deepseek-v4-flash (Ctrl+P to cycle)
+
+ pi v0.74.1
+ escape interrupt · ctrl+c/ctrl+d clear/exit · / commands · ! bash · ctrl+o more
+
+────────────────────────────────────────────────────────────────────────────────
+
+Scope: all | scoped
+tab scope (all/scoped)
+
+>
+
+  deepseek/deepseek-v4-pro [or]
+→ deepseek/deepseek-v4-flash [or] ✓
+
+  Model Name: DeepSeek V4 Flash
+
+────────────────────────────────────────────────────────────────────────────────
+/home/user/Documents/code/murder (main)
+0.0%/1.0M (auto)                             (deepseek) deepseek-v4-flash • high

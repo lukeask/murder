@@ -142,26 +142,40 @@ async def send_keys(
     if len(payload) < LARGE_PAYLOAD_BYTES:
         await _tmux("send-keys", "-t", name, "-l", text)
     else:
-        buf_name = f"murder_{uuid.uuid4().hex[:8]}"
-        # NamedTemporaryFile so we get cleanup on exception paths.
-        fd, tmp_name = tempfile.mkstemp(prefix="murder_buf_", suffix=".txt")
-        try:
-            with os.fdopen(fd, "wb") as f:
-                f.write(payload)
-            await _tmux("load-buffer", "-b", buf_name, tmp_name)
-            # -d deletes the buffer after paste so we don't leak buffer slots.
-            await _tmux("paste-buffer", "-d", "-t", name, "-b", buf_name)
-            used_paste_buffer = True
-        finally:
-            try:
-                os.unlink(tmp_name)
-            except OSError:
-                pass
+        await _paste_buffer_bytes(name, payload)
+        used_paste_buffer = True
 
     if enter:
         if used_paste_buffer:
             await asyncio.sleep(PASTE_ENTER_DELAY_S)
         await _tmux("send-keys", "-t", name, "Enter")
+
+
+async def _paste_buffer_bytes(name: str, payload: bytes) -> None:
+    """``load-buffer`` + ``paste-buffer`` for raw UTF-8 (no trailing Enter)."""
+
+    buf_name = f"murder_{uuid.uuid4().hex[:8]}"
+    fd, tmp_name = tempfile.mkstemp(prefix="murder_buf_", suffix=".txt")
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(payload)
+        await _tmux("load-buffer", "-b", buf_name, tmp_name)
+        # -d deletes the buffer after paste so we don't leak buffer slots.
+        await _tmux("paste-buffer", "-d", "-t", name, "-b", buf_name)
+    finally:
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+
+
+async def paste_buffer_literal(name: str, text: str) -> None:
+    """Inject ``text`` via paste-buffer regardless of size (never ``send-keys -l``).
+
+    Harnesses that need one keystroke sequence per terminal paste (e.g. Codex
+    after bracketed paste) can chunk prompts and call this per chunk.
+    """
+    await _paste_buffer_bytes(name, text.encode("utf-8"))
 
 
 async def interrupt(name: str) -> None:

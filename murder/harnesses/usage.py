@@ -119,8 +119,10 @@ def parse_claude_usage_pane(
 # Codex `/status` rows look like:
 #   `  5h limit:      [███████████░] 97% left (resets 21:29)`
 #   `  Weekly limit:  [███████████░] 94% left (resets 14:49 on 18 May)`
-# Older builds said `N% used`; both are handled (and `left`/`remaining` is
-# converted to a used-percentage so it lines up with the claude_code window).
+# The suffix says `left`/`remaining` (quota *remaining*) or `used` (quota
+# *consumed*). The bar fill tracks the remaining fraction, so a near-full bar
+# means low usage. `percent_used` is always normalized to consumed quota:
+# `left`/`remaining` is converted with 100−x; `used` passes through.
 _CODEX_LIMIT_RE = re.compile(
     r"(?P<label>[A-Za-z0-9][\w/.\- ]*?)\s+limits?\s*:?\s*"
     r"(?:\[[^\]]*\]\s*)?"
@@ -187,9 +189,9 @@ def parse_codex_status_pane(
 
     for match in _CODEX_LIMIT_RE.finditer(clean):
         pct = float(match.group("pct"))
-        direction = (match.group("dir") or "").lower()
-        used = round(100.0 - pct, 4) if direction in ("left", "remaining") else pct
-        used = max(0.0, min(100.0, used))
+        direction = (match.group("dir") or "used").lower()
+        used = 100.0 - pct if direction in ("left", "remaining") else pct
+        used = round(max(0.0, min(100.0, used)), 4)
         name = re.sub(r"\s+", " ", match.group("label")).strip().lower() or "usage"
         if name in seen:
             continue

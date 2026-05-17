@@ -188,7 +188,7 @@ def parse_harness_model_list(pane_text: str) -> list[tuple[str, str]]:
 
 
 _TOOL_GLYPH_RE = re.compile(r"^\s*[⏺⎿└╰├│•·⤷●○◦‣▪▸]+\s*")
-_SLASH_COMMAND_RE = re.compile(r"/[A-Za-z][\w-]*\Z")
+_SLASH_COMMAND_RE = re.compile(r"/[A-Za-z][\w-]*(?:\s+.*)?\Z")
 
 
 def _clean_assistant_line(line: str) -> str:

@@ -15,7 +15,11 @@ class _FakeAgent:
         self.harness = type(
             "Harness",
             (),
-            {"kind": "codex", "transcript_prompt_markers": ["user", "assistant"]},
+            {
+                "kind": "codex",
+                "transcript_prompt_markers": ["user", "assistant"],
+                "has_transcript_parser": lambda _self: True,
+            },
         )()
         self.session = "collaborator-session"
         self.turns: list[tuple[str, str]] = [("you", "hi"), ("assistant", "hello")]
@@ -109,7 +113,7 @@ async def test_swap_model_returns_not_implemented_by_default() -> None:
 async def test_transcript_refresh_returns_turns_and_metadata() -> None:
     agent = _FakeAgent()
     worker = CollaboratorWorker(
-        ensure_collaborator=lambda: _never_called(),
+        ensure_collaborator=_never_called,
         get_agent=lambda _agent_id: agent,
     )
     ctx = WorkerCtx(repo_root=Path("."))
@@ -136,7 +140,7 @@ async def test_transcript_refresh_returns_turns_and_metadata() -> None:
 @pytest.mark.asyncio
 async def test_transcript_refresh_unavailable_without_agent() -> None:
     worker = CollaboratorWorker(
-        ensure_collaborator=lambda: _never_called(),
+        ensure_collaborator=_never_called,
         get_agent=lambda _agent_id: None,
     )
     ctx = WorkerCtx(repo_root=Path("."))

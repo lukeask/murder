@@ -28,3 +28,17 @@ async def test_send_keys_large_payload_settles_before_enter(monkeypatch, tmp_pat
     assert calls[1] == ("paste-buffer", "-d", "-t", "sess", "-b", calls[0][2])
     assert calls[2] == ("send-keys", "-t", "sess", "Enter")
     assert sleeps == [tmux.PASTE_ENTER_DELAY_S]
+
+
+@pytest.mark.asyncio
+async def test_paste_buffer_literal_loads_and_pastes(monkeypatch) -> None:
+    calls: list[tuple[str, ...]] = []
+
+    async def fake_tmux(*args: str, check: bool = True) -> tuple[int, str, str]:
+        calls.append(args)
+        return 0, "", ""
+
+    monkeypatch.setattr(tmux, "_tmux", fake_tmux)
+    await tmux.paste_buffer_literal("sess", "hi")
+    assert calls[0][:3] == ("load-buffer", "-b", calls[0][2])
+    assert calls[1] == ("paste-buffer", "-d", "-t", "sess", "-b", calls[0][2])
