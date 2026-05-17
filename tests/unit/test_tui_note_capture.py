@@ -22,17 +22,13 @@ class Shell(App):
         yield Static("under")
 
 
-async def _reject_submit(_: str) -> bool:
-    raise AssertionError("submit should not run")
-
-
 @pytest.mark.asyncio
 async def test_note_capture_enter_submit() -> None:
-    submitted: list[str] = []
+    closed: list[tuple[bool, str]] = []
 
-    async def submit_capture(text: str) -> bool:
-        submitted.append(text)
-        return True
+    def on_done(payload: tuple[bool, str] | None) -> None:
+        if payload is not None:
+            closed.append(payload)
 
     app = Shell()
     async with app.run_test() as pilot:
@@ -40,8 +36,8 @@ async def test_note_capture_enter_submit() -> None:
             NoteCaptureScreen(
                 initial_draft="",
                 load_recent_rows=list,
-                submit_capture=submit_capture,
-            )
+            ),
+            on_done,
         )
         await pilot.pause()
         await pilot.pause()
@@ -49,8 +45,8 @@ async def test_note_capture_enter_submit() -> None:
         assert draft.has_focus
         await pilot.press(*list("buy milk"))
         await pilot.press("enter")
-        await asyncio.sleep(0.15)
-        assert submitted == ["buy milk"]
+        await pilot.pause()
+        assert closed == [(True, "buy milk")]
         assert not isinstance(app.screen, NoteCaptureScreen)
 
 
@@ -68,7 +64,6 @@ async def test_note_capture_esc_esc_closes_preserving_draft() -> None:
             NoteCaptureScreen(
                 initial_draft="wip thought",
                 load_recent_rows=list,
-                submit_capture=_reject_submit,
             ),
             on_done,
         )
@@ -88,7 +83,6 @@ async def test_note_capture_esc_then_blur_then_esc_from_list() -> None:
             NoteCaptureScreen(
                 initial_draft="x",
                 load_recent_rows=lambda: [{"short_vers": "one", "cleaned": "full one"}],
-                submit_capture=_reject_submit,
             )
         )
         await asyncio.sleep(0.08)
@@ -109,7 +103,6 @@ async def test_note_capture_escape_d_chord_and_undo() -> None:
             NoteCaptureScreen(
                 initial_draft="",
                 load_recent_rows=list,
-                submit_capture=_reject_submit,
             )
         )
         await asyncio.sleep(0.02)
@@ -135,7 +128,6 @@ async def test_recent_rows_populate_table() -> None:
             NoteCaptureScreen(
                 initial_draft="",
                 load_recent_rows=lambda: rows_data,
-                submit_capture=_reject_submit,
             )
         )
         await asyncio.sleep(0.08)
@@ -148,11 +140,16 @@ async def test_slash_note_with_body_submits(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
     captured: list[str] = []
 
-    async def fake_submit(self: MurderApp, text: str) -> bool:
+    def fake_record(self: MurderApp, text: str) -> dict[str, object]:
         captured.append(text)
-        return True
+        return {"cleaned": text, "entry_id": 1, "note_name": "n"}
 
-    monkeypatch.setattr(MurderApp, "_submit_note_capture_async", fake_submit)
+    def fake_run_worker(self: MurderApp, coro, **kwargs):  # type: ignore[no-untyped-def]
+        del self, kwargs
+        coro.close()
+
+    monkeypatch.setattr(MurderApp, "_record_note_capture_immediate", fake_record)
+    monkeypatch.setattr(MurderApp, "run_worker", fake_run_worker)
 
     runtime = SimpleNamespace(
         config=SimpleNamespace(
@@ -166,6 +163,41 @@ async def test_slash_note_with_body_submits(monkeypatch, tmp_path) -> None:
     await app._dispatch_chat("/note hello world")
     await asyncio.sleep(0.08)
     assert captured == ["hello world"]
+
+
+def test_record_note_capture_immediate_writes_timestamp_note(
+    memdb: sqlite3.Connection,
+    tmp_path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    runtime = SimpleNamespace(
+        config=SimpleNamespace(
+            project=SimpleNamespace(name="test"),
+            tui=SimpleNamespace(refresh_ms=1000),
+        ),
+        repo_root=tmp_path,
+        db=memdb,
+    )
+    app = MurderApp(runtime)  # type: ignore[arg-type]
+
+    def fake_refresh() -> None:
+        return None
+
+    def fake_run_worker(coro, **kwargs):  # type: ignore[no-untyped-def]
+        del kwargs
+        coro.close()
+
+    monkeypatch.setattr(app, "_refresh_db_views", fake_refresh)
+    monkeypatch.setattr(app, "run_worker", fake_run_worker)
+    created = app._record_note_capture_immediate("  durable thought  ")
+
+    assert created is not None
+    note_name = str(created["note_name"])
+    assert (tmp_path / ".murder" / "notes" / f"{note_name}.md").read_text(
+        encoding="utf-8"
+    ) == "durable thought\n"
+    assert dbmod.get_note(memdb, note_name) is not None
 
 
 @pytest.mark.asyncio

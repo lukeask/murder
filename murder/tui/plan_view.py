@@ -76,16 +76,12 @@ class PlanList(DataTable):
 
 
 class NotesList(DataTable):
-    """DB-backed list of dated notes documents (`.murder/notes/<date>.md`).
-
-    The notetaker owns the note bodies; this is just a sidebar "filetree" so
-    you can see which days have notes and how big they are. Highlighting a row
-    surfaces it; the notetaker view keeps showing the live (today's) note.
-    """
+    """DB-backed list of active note documents."""
 
     BINDINGS = [
         ("j", "cursor_down", "Down"),
         ("k", "cursor_up", "Up"),
+        ("r", "retire_note", "Retire"),
     ]
 
     class NoteHighlighted(Message):
@@ -98,25 +94,42 @@ class NotesList(DataTable):
             self.name = name
             super().__init__()
 
+    class NoteRetireRequested(Message):
+        def __init__(self, name: str) -> None:
+            self.name = name
+            super().__init__()
+
     def __init__(self) -> None:
         super().__init__(zebra_stripes=True, cursor_type="row")
         self._names: list[str] = []
+        self._retire_armed_name: str | None = None
         self.border_title = ".murder/notes"
 
     def on_mount(self) -> None:
-        self.add_columns("date", "chars", "updated")
+        self.add_columns("note", "chars", "updated")
 
     def refresh_from_db(self, db: sqlite3.Connection | None) -> None:
         if db is None:
             return
         row = self.cursor_row
-        rows = db.execute(
-            """
-            SELECT name, length(body) AS size, updated_at
-              FROM notes
-             ORDER BY name DESC
-            """
-        ).fetchall()
+        cols = {r["name"] for r in db.execute("PRAGMA table_info(notes)").fetchall()}
+        if "status" in cols:
+            rows = db.execute(
+                """
+                SELECT name, length(body) AS size, updated_at
+                  FROM notes
+                 WHERE status = 'active'
+                 ORDER BY updated_at DESC, name
+                """
+            ).fetchall()
+        else:
+            rows = db.execute(
+                """
+                SELECT name, length(body) AS size, updated_at
+                  FROM notes
+                 ORDER BY updated_at DESC, name
+                """
+            ).fetchall()
         self.clear()
         self._names = []
         for r in rows:
@@ -133,15 +146,40 @@ class NotesList(DataTable):
             return self._names[row]
         return None
 
+    def select_name(self, name: str) -> None:
+        if name in self._names:
+            self.move_cursor(row=self._names.index(name))
+
     def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
         idx = event.cursor_row
         if 0 <= idx < len(self._names):
+            if self._retire_armed_name != self._names[idx]:
+                self.cancel_retire_confirmation()
             self.post_message(self.NoteHighlighted(self._names[idx]))
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         idx = event.cursor_row
         if 0 <= idx < len(self._names):
             self.post_message(self.NoteOpened(self._names[idx]))
+
+    def on_key(self, event) -> None:  # type: ignore[no-untyped-def]
+        if self._retire_armed_name is not None and event.key != "r":
+            self.cancel_retire_confirmation()
+
+    def action_retire_note(self) -> None:
+        name = self.selected_name
+        if not name:
+            return
+        if self._retire_armed_name == name:
+            self.cancel_retire_confirmation()
+            self.post_message(self.NoteRetireRequested(name))
+            return
+        self._retire_armed_name = name
+        self.border_subtitle = "press r again to retire"
+
+    def cancel_retire_confirmation(self) -> None:
+        self._retire_armed_name = None
+        self.border_subtitle = ""
 
 
 class PlanDocument(Markdown):
@@ -208,8 +246,8 @@ class NotesDocument(Markdown, can_focus=True):
     """
 
     _EMPTY = (
-        "# Notes\n\n_No notes yet — type in the chat box and the notetaker will "
-        "tidy them into this document._"
+        "# Notes\n\n_Use **ctrl+n** (or `/note` in chat) for quick capture; entries "
+        "land in the database from the overlay pipeline._"
     )
 
     def __init__(self) -> None:
@@ -235,9 +273,10 @@ class NotesDocument(Markdown, can_focus=True):
 
 
 class ChatLog(RichLog):
-    """Append-only chat transcript widget, reused for any agent chat (notetaker,
-    collaborator). ``"you"``/``"user"`` is the human; ``"agent"``/``"assistant"``
-    and the configured ``agent_label`` all render as that agent's name.
+    """Append-only chat transcript widget, reused for agent chats.
+
+    ``"you"``/``"user"`` is the human; ``"agent"``/``"assistant"`` and the
+    configured ``agent_label`` all render as that agent's name.
     """
 
     BINDINGS = [
