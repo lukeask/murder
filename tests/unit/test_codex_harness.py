@@ -178,7 +178,7 @@ async def test_codex_request_usage_status_sends_status_command(monkeypatch) -> N
     assert sleeps == [0.1, 0.5, 0.8, 1.2]
 
 
-async def test_codex_send_prompt_submits_with_tab(monkeypatch) -> None:
+async def test_codex_send_prompt_submits_small_prompt_with_enter(monkeypatch) -> None:
     calls: list[tuple[str, str, bool, bool]] = []
     sleeps: list[float] = []
 
@@ -196,9 +196,56 @@ async def test_codex_send_prompt_submits_with_tab(monkeypatch) -> None:
     assert result.ok
     assert calls == [
         ("sess", "hello", True, False),
-        ("sess", "Tab", False, False),
+        ("sess", "", True, True),
     ]
     assert sleeps == [0.2]
+
+
+async def test_codex_send_prompt_chunks_large_prompt_paste_tab_enter_per_chunk(monkeypatch) -> None:
+    calls: list[tuple[str, str, bool, bool]] = []
+    sleeps: list[float] = []
+    pastes: list[str] = []
+
+    async def fake_send_keys(
+        session: str, text: str, *, literal: bool = True, enter: bool = True
+    ) -> None:
+        calls.append((session, text, literal, enter))
+
+    async def fake_sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+
+    async def fake_paste(session: str, text: str) -> None:
+        assert session == "sess"
+        pastes.append(text)
+
+    monkeypatch.setattr("murder.tmux.send_keys", fake_send_keys)
+    monkeypatch.setattr("murder.tmux.paste_buffer_literal", fake_paste)
+    monkeypatch.setattr("murder.harnesses.codex.asyncio.sleep", fake_sleep)
+    big = "x" * 2048
+    result = await CodexAdapter().attach("sess", Path("/repo")).send_prompt(big)
+    assert result.ok
+    assert [len(p) for p in pastes] == [768, 768, 512]
+    assert "".join(pastes) == big
+    assert calls == [
+        ("sess", "Tab", False, False),
+        ("sess", "", True, True),
+        ("sess", "Tab", False, False),
+        ("sess", "", True, True),
+        ("sess", "Tab", False, False),
+        ("sess", "", True, True),
+    ]
+    assert sleeps == [0.2, 0.2, 0.2]
+
+
+def test_utf8_byte_chunks_keeps_multibyte_codepoints_intact() -> None:
+    from murder.harnesses.codex import _utf8_byte_chunks
+
+    data = ("a" * 3 + "😀" + "b" * 3).encode()
+    parts = _utf8_byte_chunks(data, max_bytes=4)
+    assert b"".join(parts) == data
+    for p in parts:
+        p.decode("utf-8")
+    assert parts == [b"aaa", "\U0001f600".encode("utf-8"), b"bbb"]
 
 
 async def test_codex_request_model_list_waits_for_slash_picker(monkeypatch) -> None:

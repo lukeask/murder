@@ -20,10 +20,15 @@ from murder.harnesses.parsing import parse_harness_model_list
 from murder.harnesses.usage import parse_claude_usage_pane, parse_codex_status_pane
 
 _PANES = Path(__file__).resolve().parents[1] / "fixtures" / "harness_panes"
+_CURSOR_PANES = Path(__file__).resolve().parents[1] / "fixtures" / "cursor_panes"
 
 
 def _pane(name: str) -> str:
     return (_PANES / f"{name}.txt").read_text()
+
+
+def _cursor_pane(name: str) -> str:
+    return (_CURSOR_PANES / f"{name}.txt").read_text()
 
 
 # ── /model discovery ───────────────────────────────────────────────────────
@@ -115,6 +120,14 @@ def test_codex_status_pane_handles_used_phrasing() -> None:
     assert by_name["weekly"].reset_at is None
 
 
+def test_codex_status_fixture_left_suffix_is_remaining_quota() -> None:
+    """v0.130 /status prints `N% left`, i.e. quota remaining — percent_used is 100−N."""
+    now = datetime(2026, 5, 15, 12, 0, tzinfo=ZoneInfo("UTC"))
+    by_name = {w.name: w for w in parse_codex_status_pane(_pane("codex_status"), now=now).windows}
+    assert by_name["5h"].percent_used == 3.0
+    assert by_name["weekly"].percent_used == 6.0
+
+
 def test_claude_usage_pane_still_parses() -> None:
     now = datetime(2026, 5, 12, 18, 0, tzinfo=ZoneInfo("America/New_York"))
     status = parse_claude_usage_pane(_pane("claude_usage"), now=now, fetched_at="t")
@@ -160,15 +173,151 @@ def test_codex_transcript_extracts_turns_and_drops_input_box() -> None:
     assert len(turns) == 2
 
 
-def test_pi_and_cursor_have_no_transcript_parser_yet() -> None:
-    # Their REPLs render turns as plain text with no stable marker — parse
-    # returns nothing and the TUI shows the raw pane mirror instead.
-    assert get_harness("pi").transcript_prompt_markers == ()
-    assert get_harness("cursor").transcript_prompt_markers == ()
-    assert get_harness("pi").parse_transcript("some\npane\ntext") == []
+def test_pi_transcript_extracts_user_and_assistant_turns() -> None:
+    turns = get_harness("pi").parse_transcript(_pane("pi_transcript"))
+    assert turns == [
+        ("user", "summarize this repo in one sentence"),
+        (
+            "assistant",
+            "Murder is a local-first harness for coordinating multiple coding agents through\n"
+            "tmux, SQLite-backed state, and a Textual TUI.",
+        ),
+        ("user", "list two parser risks"),
+        (
+            "assistant",
+            "Two risks:\n"
+            "- confusing live input/status chrome with conversation turns\n"
+            "- treating model-rendered shell prompts as user prompts",
+        ),
+    ]
+    flat = "\n".join(t for _, t in turns)
+    assert "deepseek-v4-flash" not in flat
+    assert "0.0%/" not in flat
+    assert "ctrl+c/ctrl+d" not in flat
 
 
-@pytest.mark.parametrize(("kind", "fixture"), [("claude_code", "claude"), ("codex", "codex")])
+def test_pi_model_picker_is_not_parsed_as_transcript() -> None:
+    assert get_harness("pi").parse_transcript(_pane("pi_transcript_model_picker_not_chat")) == []
+
+
+def test_pi_extract_last_message_drops_footer() -> None:
+    pane = _pane("pi_transcript")
+    assert get_harness("pi").extract_last_message(pane) == (
+        "Two risks:\n"
+        "- confusing live input/status chrome with conversation turns\n"
+        "- treating model-rendered shell prompts as user prompts"
+    )
+
+
+def test_pi_protocol_lines_remain_model_text_not_footer_noise() -> None:
+    pane = """
+> verify the ticket
+
+I checked the implementation.
+>>> CHECK: tests pass
+>>> DONE
+
+/home/luke/Documents/code/murder (main)
+0.0%/1.0M (auto)                             (deepseek) deepseek-v4-flash • high
+"""
+    adapter = get_harness("pi")
+    assert adapter.parse_transcript(pane) == [
+        ("user", "verify the ticket"),
+        ("assistant", "I checked the implementation.\n>>> CHECK: tests pass\n>>> DONE"),
+    ]
+    assert adapter.detect_checks(pane) == ["tests pass"]
+    assert adapter.detect_done(pane)
+
+
+def test_cursor_transcript_extracts_padded_user_prompt_and_assistant_reply() -> None:
+    turns = get_harness("cursor").parse_transcript(_cursor_pane("idle_after_first_turn"))
+    assert turns[0] == (
+        "user",
+        "List the files in this directory and tell me what you see. Take your time.",
+    )
+    assert turns[1][0] == "assistant"
+    assert "Listing the workspace directory" in turns[1][1]
+    assert "Bottom line:" in turns[1][1]
+    flat = "\n".join(text for _, text in turns)
+    assert "Cursor Agent" not in flat
+    assert "Add a follow-up" not in flat
+    assert "Composer 2" not in flat
+    assert "/tmp/murder-smoke · master" not in flat
+    assert len(turns) == 2
+
+
+def test_cursor_busy_transcript_keeps_turn_boundaries_and_drops_status_chrome() -> None:
+    turns = get_harness("cursor").parse_transcript(_cursor_pane("busy_running_tool"))
+    assert [role for role, _ in turns] == [
+        "user",
+        "assistant",
+        "user",
+        "assistant",
+        "user",
+        "assistant",
+    ]
+    assert turns[2] == ("user", 'Run "ls -la" via the shell tool and tell me what\'s there.')
+    assert turns[4] == ("user", 'Sleep for 10 seconds via the shell tool, then say "done".')
+    assert "$ ls -la /tmp/murder-smoke 702ms" in turns[3][1]
+    assert "$ sleep 10 6.4s" in turns[5][1]
+    flat = "\n".join(text for _, text in turns)
+    assert "ctrl+c to stop" not in flat
+    assert "Running  21 tokens" not in flat
+
+
+def test_cursor_composing_prompt_without_model_text_is_not_a_turn() -> None:
+    assert get_harness("cursor").parse_transcript(_cursor_pane("busy_composing")) == []
+
+
+def test_cursor_model_picker_is_not_parsed_as_transcript() -> None:
+    assert get_harness("cursor").parse_transcript(_pane("cursor_model_picker")) == []
+
+
+def test_cursor_extract_last_message_drops_footer() -> None:
+    message = get_harness("cursor").extract_last_message(_cursor_pane("idle_after_first_turn"))
+    assert message is not None
+    assert message.endswith('template checkout named “murder-smoke.”')
+    assert "Composer 2" not in message
+
+
+def test_cursor_protocol_lines_remain_model_text_not_footer_noise() -> None:
+    pane = """
+  Cursor Agent
+  v2026.04.30-4edb302
+
+                                                                               
+  verify the ticket                                                            
+                                                                               
+
+  I checked the implementation.
+  >>> CHECK: tests pass
+  >>> DONE
+
+ ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+  → Add a follow-up                                                            
+ ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+  Composer 2 · 5.9%                                                   Auto-run
+  /tmp/murder-smoke · master
+"""
+    adapter = get_harness("cursor")
+    assert adapter.parse_transcript(pane) == [
+        ("user", "verify the ticket"),
+        ("assistant", "I checked the implementation.\n>>> CHECK: tests pass\n>>> DONE"),
+    ]
+    assert adapter.detect_checks(pane) == ["tests pass"]
+    assert adapter.detect_done(pane)
+
+
+def test_cursor_transcript_parser_is_idempotent_on_reparse() -> None:
+    adapter = get_harness("cursor")
+    pane = _cursor_pane("busy_running_tool")
+    assert adapter.parse_transcript(pane) == adapter.parse_transcript(pane)
+
+
+@pytest.mark.parametrize(
+    ("kind", "fixture"),
+    [("claude_code", "claude"), ("codex", "codex"), ("pi", "pi")],
+)
 def test_transcript_parser_is_idempotent_on_reparse(kind: str, fixture: str) -> None:
     adapter = get_harness(kind)
     pane = _pane(f"{fixture}_transcript")

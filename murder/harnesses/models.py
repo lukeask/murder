@@ -35,6 +35,18 @@ class HarnessUsageTotals:
 
 @dataclass(slots=True)
 class HarnessUsageWindow:
+    """One usage/quota window for a harness (a billing or rate-limit period).
+
+    `percent_used` is the contract every adapter must honor: quota *consumed*,
+    as a percentage 0–100 — never quota remaining. Each adapter normalizes to
+    this when it parses; the display layer is provider-agnostic and trusts it.
+
+    `used`/`limit` are optional raw counts shown for context only. Do NOT
+    re-derive `percent_used` from them — a provider may report a percentage
+    that does not equal `used/limit` (e.g. Cursor's request counts are not a
+    clean used-of-limit pair).
+    """
+
     name: str
     percent_used: float | None = None
     reset_at: str | None = None

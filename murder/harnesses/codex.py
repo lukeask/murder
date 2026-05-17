@@ -47,6 +47,26 @@ _MODEL_STARTUP_SETTLE_DELAY_S = 1.5
 _MODEL_COMMAND_POPUP_DELAY_S = 0.5
 _MODEL_CAPTURE_DELAY_S = 3.0
 _PROMPT_SUBMIT_DELAY_S = 0.2
+# Codex inline composer expects Tab+Enter after each bracketed paste; long prompts
+# must be split into multiple tmux pastes so each segment gets its own confirmation.
+_CODEX_PASTE_CHUNK_UTF8 = 768
+
+
+def _utf8_byte_chunks(data: bytes, max_bytes: int) -> list[bytes]:
+    if max_bytes < 1:
+        raise ValueError("max_bytes must be >= 1")
+    chunks: list[bytes] = []
+    i = 0
+    n = len(data)
+    while i < n:
+        end = min(i + max_bytes, n)
+        while end > i and end < n and (data[end] & 0xC0) == 0x80:
+            end -= 1
+        if end <= i:
+            end = i + 1
+        chunks.append(data[i:end])
+        i = end
+    return chunks
 
 
 def _tail(pane_text: str) -> str:
@@ -125,11 +145,18 @@ class CodexAdapter(HarnessAdapter):
         return f"[supervisor] {msg}"
 
     async def send_prompt(self, session: str, prompt: str) -> None:
-        await tmux.send_keys(session, prompt, literal=True, enter=False)
-        await asyncio.sleep(_PROMPT_SUBMIT_DELAY_S)
-        # Codex 0.130 treats Enter after bracketed paste as newline/expand;
-        # Tab submits when idle and queues when busy, matching our send intent.
-        await tmux.send_keys(session, "Tab", literal=False, enter=False)
+        raw = prompt.encode("utf-8")
+        if len(raw) < tmux.LARGE_PAYLOAD_BYTES:
+            await tmux.send_keys(session, prompt, literal=True, enter=False)
+            await asyncio.sleep(_PROMPT_SUBMIT_DELAY_S)
+            await tmux.send_keys(session, "", literal=True, enter=True)
+            return
+
+        for piece in _utf8_byte_chunks(raw, _CODEX_PASTE_CHUNK_UTF8):
+            await tmux.paste_buffer_literal(session, piece.decode("utf-8"))
+            await asyncio.sleep(_PROMPT_SUBMIT_DELAY_S)
+            await tmux.send_keys(session, "Tab", literal=False, enter=False)
+            await tmux.send_keys(session, "", literal=True, enter=True)
 
     async def set_model(self, session: str, model: str) -> bool:
         del session

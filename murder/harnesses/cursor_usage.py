@@ -220,15 +220,10 @@ def get_usage_status() -> HarnessUsageStatus:
     api_used = _first_int(inner, 3)
     api_limit = _first_int(inner, 5)
 
-    windows = [
-        HarnessUsageWindow(
-            name="current_period",
-            percent_used=_first_float(inner, 14),
-            starts_at=_ms_iso(period_start_ms),
-            ends_at=_ms_iso(period_end_ms),
-            reset_at=_ms_iso(period_end_ms),
-        )
-    ]
+    # Fields 12/13 carry the consumed-percentage for the auto-composer and API
+    # quotas directly. `used`/`limit` are raw request counts for display only —
+    # they are NOT a clean used-of-limit pair, so percent comes from the field.
+    windows: list[HarnessUsageWindow] = []
     if (pct_auto := _first_float(inner, 12)) is not None:
         windows.append(
             HarnessUsageWindow(

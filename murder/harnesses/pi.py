@@ -16,6 +16,9 @@ from murder.harnesses.base import (
 )
 from murder.harnesses.parsing import (
     extract_last_message_heuristic,
+    is_rule_line,
+    is_status_spinner_line,
+    parse_prompt_marker_transcript,
     strip_ansi,
 )
 
@@ -40,6 +43,44 @@ _AUTH_RE = re.compile(
     r"\b(login|authenticate|api key|required|no provider|configure provider)\b",
     re.IGNORECASE,
 )
+_PI_STATUS_RE = re.compile(r"\b\d+(?:\.\d+)?%/\d+(?:\.\d+)?[kKmM]\s+\([^)]*\)")
+_PI_CWD_RE = re.compile(r"^(?:~/|/|\./|\.\./).*(?:\s+\([^)]+\))?$")
+_PI_CHROME_RE = re.compile(
+    r"""
+    ^\s*(?:
+        pi\s+v\d+\b
+        |escape\s+interrupt\b
+        |press\s+ctrl\+o\b
+        |pi\s+can\s+explain\b
+        |extend\s+pi\.
+        |warning:\s+tmux\s+extended-keys\b
+        |scope:\s+all\s+\|\s+scoped\b
+        |tab\s+scope\b
+        |model\s+scope:
+        |model\s+name:
+        |use\s+/login\b
+        |.*docs/(?:providers|models)\.md\s*$
+    )
+    """,
+    re.IGNORECASE | re.VERBOSE,
+)
+
+
+def _is_pi_chrome(line: str) -> bool:
+    s = line.strip()
+    if not s:
+        return False
+    if is_rule_line(line) or is_status_spinner_line(line):
+        return True
+    return bool(
+        _PI_STATUS_RE.search(s) or _PI_CWD_RE.match(s) or _PI_CHROME_RE.match(s)
+    )
+
+
+def _strip_pi_chrome(pane_text: str) -> str:
+    return "\n".join(
+        line for line in strip_ansi(pane_text).splitlines() if not _is_pi_chrome(line)
+    )
 
 
 def _tail(pane_text: str) -> str:
@@ -55,9 +96,18 @@ class PiAdapter(HarnessAdapter):
     # modal — fine for the throwaway discovery session, which is killed after.
     model_list_command: ClassVar[str | None] = "/model"
     model_list_capture_delay_s: ClassVar[float] = 3.0
-    # Pi's REPL renders user prompts and replies as plain text with no stable
-    # per-turn marker, so there is no parsed transcript yet (the TUI falls back
-    # to the raw pane mirror); leave transcript_prompt_markers empty.
+    # Pi echoes submitted prompts with `> ...`; the idle input prompt is a bare
+    # `>` and is discarded by the shared parser. Pi-specific chrome is stripped
+    # in parse_transcript before applying the generic prompt-marker heuristic.
+    transcript_prompt_markers: ClassVar[tuple[str, ...]] = (">",)
+    transcript_drop_substrings: ClassVar[tuple[str, ...]] = (
+        "ctrl+c/ctrl+d",
+        "slash commands",
+        "startup help",
+        "loaded resources",
+        "tmux extended-keys",
+        "0.0%/",
+    )
     available_startup_models: ClassVar[list[tuple[str, str]]] = [
         ("anthropic/claude-sonnet-4-6", "Claude Sonnet 4.6"),
         ("anthropic/claude-opus-4-7", "Claude Opus 4.7"),
@@ -89,7 +139,14 @@ class PiAdapter(HarnessAdapter):
         return bool(_BUSY_RE.search(_tail(strip_ansi(pane_text))))
 
     def extract_last_message(self, pane_text: str) -> str | None:
-        return extract_last_message_heuristic(pane_text)
+        return extract_last_message_heuristic(_strip_pi_chrome(pane_text))
+
+    def parse_transcript(self, pane_text: str) -> list[tuple[str, str]]:
+        return parse_prompt_marker_transcript(
+            _strip_pi_chrome(pane_text),
+            prompt_markers=self.transcript_prompt_markers,
+            drop_substrings=self.transcript_drop_substrings,
+        )
 
     def format_nudge(self, msg: str) -> str:
         return f"[supervisor] {msg}"

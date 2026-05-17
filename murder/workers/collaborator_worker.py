@@ -70,7 +70,7 @@ class CollaboratorWorker(Worker):
                 "handled": True,
                 "available": True,
                 "turns": [{"role": role, "text": text} for role, text in turns],
-                "has_parser": bool(agent.harness.transcript_prompt_markers),
+                "has_parser": agent.harness.has_transcript_parser(),
                 "harness_kind": str(agent.harness.kind),
                 "session": str(agent.session),
             }

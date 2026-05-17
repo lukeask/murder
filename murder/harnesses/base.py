@@ -46,6 +46,7 @@ class HarnessSession:
         self.adapter = adapter
         self.session = session
         self.repo_root = repo_root
+        self._first_send_idle_gate_pending = False
 
     async def start(self, spec: HarnessStartSpec | None = None) -> SimpleResult[None]:
         start_spec = spec or HarnessStartSpec(
@@ -64,6 +65,7 @@ class HarnessSession:
         configured = await self._configure_started_session(start_spec)
         if not configured.ok:
             return configured
+        self._first_send_idle_gate_pending = True
         return ok_result()
 
     async def _wait_startup_ready(
@@ -137,7 +139,12 @@ class HarnessSession:
         )
 
     async def send_prompt(self, prompt: str) -> SimpleResult[None]:
+        if self._first_send_idle_gate_pending:
+            idle = await self.wait_idle(timeout_s=15.0)
+            if not idle.ok:
+                return idle
         await self.adapter.send_prompt(self.session, prompt)
+        self._first_send_idle_gate_pending = False
         return ok_result()
 
     async def set_model(self, model: str) -> SimpleResult[None]:
@@ -287,6 +294,9 @@ class HarnessAdapter(ABC):
 
     @abstractmethod
     def extract_last_message(self, pane_text: str) -> str | None: ...
+
+    def has_transcript_parser(self) -> bool:
+        return bool(self.transcript_prompt_markers)
 
     def parse_transcript(self, pane_text: str) -> list[tuple[str, str]]:
         """Best-effort ``(role, text)`` turns visible in the session pane.
