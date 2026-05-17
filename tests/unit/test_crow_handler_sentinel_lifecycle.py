@@ -110,6 +110,103 @@ async def test_crow_handler_stop_fails_pending_idle_waiters(monkeypatch) -> None
 
 
 @pytest.mark.asyncio
+async def test_handler_stops_when_on_crow_done_fails(monkeypatch) -> None:
+    """Wedge fix: if on_crow_done returns False, handler must schedule stop()."""
+    runtime = _Runtime()
+    handler = _crow_handler(runtime)
+    handler.status = AgentStatus.RUNNING
+    handler._log_path = None  # suppress file I/O
+
+    stopped: list[bool] = []
+    original_stop = handler.stop
+
+    async def fake_stop(**kwargs) -> None:
+        stopped.append(True)
+        await original_stop(**kwargs)
+
+    handler.stop = fake_stop
+
+    async def fake_capture_pane(session: str, lines: int) -> str:
+        return ">>> DONE"
+
+    async def fake_kill_session(session: str) -> None:
+        pass
+
+    monkeypatch.setattr("murder.tmux.capture_pane", fake_capture_pane)
+    monkeypatch.setattr("murder.tmux.kill_session", fake_kill_session)
+    monkeypatch.setattr(
+        "murder.db.get_ticket_status",
+        lambda db, ticket_id: "running",
+    )
+
+    handler.harness.detect_done = lambda pane_text: True
+    handler.harness.detect_asks = lambda pane_text: []
+    handler.harness.detect_checks = lambda pane_text: []
+    handler.harness.detect_notes = lambda pane_text: []
+    handler.harness.is_idle = lambda pane_text: False
+    handler.harness.extract_last_message = lambda pane_text: None
+
+    runtime.db = object()  # non-None triggers tick logic
+    runtime.bus = _Bus()
+    runtime.run_id = "run-1"
+
+    orch = SimpleNamespace(on_crow_done=None)
+
+    async def failing_on_crow_done(ticket_id: str) -> bool:
+        return False
+
+    orch.on_crow_done = failing_on_crow_done
+    handler._orch = orch
+
+    await handler.tick()
+
+    # Give the scheduled stop() task a chance to run
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+
+    assert stopped, "stop() should have been called after on_crow_done returned False"
+
+
+@pytest.mark.asyncio
+async def test_handler_stops_when_ticket_is_terminal_at_tick_time(monkeypatch) -> None:
+    """Defensive guard: handler stops when DB shows ticket already done/failed."""
+    runtime = _Runtime()
+    handler = _crow_handler(runtime)
+    handler.status = AgentStatus.RUNNING
+    handler._log_path = None
+
+    stopped: list[bool] = []
+    original_stop = handler.stop
+
+    async def fake_stop(**kwargs) -> None:
+        stopped.append(True)
+        await original_stop(**kwargs)
+
+    handler.stop = fake_stop
+
+    async def fake_kill_session(session: str) -> None:
+        pass
+
+    monkeypatch.setattr("murder.tmux.kill_session", fake_kill_session)
+    monkeypatch.setattr(
+        "murder.db.get_ticket_status",
+        lambda db, ticket_id: "done",
+    )
+
+    runtime.db = object()
+    runtime.bus = _Bus()
+    runtime.run_id = "run-1"
+
+    await handler.tick()
+
+    # Give the scheduled stop() task a chance to run
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+
+    assert stopped, "stop() should have been called when ticket was already terminal"
+
+
+@pytest.mark.asyncio
 async def test_sentinel_send_to_crow_times_out_waiting_for_idle(monkeypatch) -> None:
     sent: list[str] = []
 

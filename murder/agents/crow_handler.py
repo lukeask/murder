@@ -71,6 +71,7 @@ class CrowHandlerAgent(Agent):
         self._log_path.write_text(
             f"# crow_handler log for {self.ticket_id}\n", encoding="utf-8"
         )
+        self._log(f"handler started — watching crow session {self.crow_session}")
         await tmux.create_session(
             self.session,
             self.repo_root,
@@ -137,6 +138,15 @@ class CrowHandlerAgent(Agent):
                 fut.set_result(None)
         self._on_idle_callbacks.clear()
 
+    def _log(self, msg: str) -> None:
+        if self._log_path is None:
+            return
+        import datetime
+        ts = datetime.datetime.now(datetime.timezone.utc).strftime("%H:%M:%S")
+        with contextlib.suppress(Exception):
+            with self._log_path.open("a", encoding="utf-8") as f:
+                f.write(f"[{ts}] {msg}\n")
+
     async def tick(self) -> None:
         from murder import db as dbmod
         from murder import tmux
@@ -149,6 +159,14 @@ class CrowHandlerAgent(Agent):
         from murder.tickets import parser as ticket_parser
 
         if self.runtime.db is None or self.runtime.bus is None or self.runtime.run_id is None:
+            return
+
+        # Stop if ticket reached a terminal state via any path (escalation,
+        # manual edit, supervisor recovery) not just our own done detection.
+        ticket_status = dbmod.get_ticket_status(self.runtime.db, self.ticket_id)
+        if ticket_status in ("done", "failed"):
+            self._log(f"ticket {self.ticket_id} is {ticket_status} — stopping handler")
+            asyncio.create_task(self.stop())
             return
 
         pane = await tmux.capture_pane(
@@ -183,7 +201,13 @@ class CrowHandlerAgent(Agent):
 
         if self.harness.detect_done(pane) and not self._done_emitted:
             self._done_emitted = True
-            await self._orch.on_crow_done(self.ticket_id)
+            self._log(f"crow done detected for {self.ticket_id} — verifying…")
+            success = await self._orch.on_crow_done(self.ticket_id)
+            if success:
+                self._log(f"ticket {self.ticket_id} verified done — stopping handler")
+            else:
+                self._log(f"ticket {self.ticket_id} failed verification — stopping handler")
+                asyncio.create_task(self.stop())
             return
 
         excerpt = self.harness.extract_last_message(pane) or ""
@@ -198,6 +222,7 @@ class CrowHandlerAgent(Agent):
             state, summary = await self._classify(pane)
             self._last_summary = summary
             hb_state = _heartbeat_state(state)
+            self._log(f"heartbeat state={hb_state} summary={summary or '—'!r}")
             await self.runtime.bus.publish(
                 HeartbeatEvent(
                     run_id=self.runtime.run_id,
