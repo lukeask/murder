@@ -790,6 +790,15 @@ def insert_notes_entry(
     return int(cur.lastrowid or 0)
 
 
+def update_notes_entry_short_vers(
+    conn: sqlite3.Connection, entry_id: int, short_vers: str
+) -> None:
+    conn.execute(
+        "UPDATE notes_entries SET short_vers = ? WHERE id = ?",
+        (short_vers, entry_id),
+    )
+
+
 def list_recent_notes_entries(
     conn: sqlite3.Connection, *, limit: int = 50
 ) -> list[dict[str, Any]]:
