@@ -39,9 +39,7 @@ def test_ticket_dep_self_loop_rejected(memdb: sqlite3.Connection) -> None:
         """
     )
     with pytest.raises(sqlite3.IntegrityError):
-        memdb.execute(
-            "INSERT INTO ticket_deps(ticket_id, depends_on_id) VALUES ('T-1', 'T-1')"
-        )
+        memdb.execute("INSERT INTO ticket_deps(ticket_id, depends_on_id) VALUES ('T-1', 'T-1')")
 
 
 def test_cascade_deletes(memdb: sqlite3.Connection) -> None:
@@ -161,9 +159,7 @@ def test_ticket_metadata_columns_migrate_existing_tickets_table() -> None:
             """,
             (".murder/tickets/T-1.yaml",),
         )
-        row = conn.execute(
-            "SELECT metadata_sync_state FROM tickets WHERE id = 'T-1'"
-        ).fetchone()
+        row = conn.execute("SELECT metadata_sync_state FROM tickets WHERE id = 'T-1'").fetchone()
         assert row["metadata_sync_state"] == "synced"
     finally:
         conn.close()

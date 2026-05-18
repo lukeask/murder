@@ -81,4 +81,3 @@ class MarkdownSyncLoop(ABC):
     @abstractmethod
     def scan_paths(self) -> list[Path]:
         """Return tracked markdown files under repo_root."""
-

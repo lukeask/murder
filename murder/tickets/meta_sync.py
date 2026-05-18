@@ -138,10 +138,7 @@ class TicketMetadataSync(MarkdownSyncLoop):
             )
             return
 
-        if (
-            db_status == TicketStatus.READY.value
-            and yaml_status == TicketStatus.PLANNED.value
-        ):
+        if db_status == TicketStatus.READY.value and yaml_status == TicketStatus.PLANNED.value:
             if self._has_active_crow(ticket_id):
                 self._mark_sync_state(
                     ticket_id,
@@ -217,16 +214,12 @@ class TicketMetadataSync(MarkdownSyncLoop):
             schedule_at=row.get("schedule_at") if "schedule_at" in row else None,
         )
 
-    def _mark_orphan_parse_error(
-        self, ticket_id: str, file_hash: str, parse_error: str
-    ) -> None:
+    def _mark_orphan_parse_error(self, ticket_id: str, file_hash: str, parse_error: str) -> None:
         # Missing rows have nowhere to persist sync state. Leave the YAML in
         # place; a later reconcile can import it once dependencies exist.
         del ticket_id, file_hash, parse_error
 
-    def _apply_mutable_fields(
-        self, ticket_id: str, meta: TicketMetadata, db_status: str
-    ) -> None:
+    def _apply_mutable_fields(self, ticket_id: str, meta: TicketMetadata, db_status: str) -> None:
         self.db.execute(
             """
             UPDATE tickets
@@ -245,12 +238,8 @@ class TicketMetadataSync(MarkdownSyncLoop):
         if meta.status.value != db_status:
             dbmod.update_ticket_status(self.db, ticket_id, meta.status.value)
         self._set_schedule_at(ticket_id, meta.schedule_at)
-        self._replace_edges(
-            "ticket_deps", "depends_on_id", ticket_id, list(meta.deps or [])
-        )
-        self._replace_edges(
-            "ticket_write_set", "path", ticket_id, list(meta.write_set or [])
-        )
+        self._replace_edges("ticket_deps", "depends_on_id", ticket_id, list(meta.deps or []))
+        self._replace_edges("ticket_write_set", "path", ticket_id, list(meta.write_set or []))
         self._replace_edges("ticket_skills", "skill", ticket_id, list(meta.skills or []))
         self._replace_checklist(ticket_id, list(meta.checklist or []))
 
@@ -316,10 +305,7 @@ class TicketMetadataSync(MarkdownSyncLoop):
         if file_hash is not None and "metadata_file_hash" in self._ticket_columns:
             assignments.append("metadata_file_hash = ?")
             values.append(file_hash)
-        if (
-            "metadata_materialized_path" in self._ticket_columns
-            and materialized_path is not None
-        ):
+        if "metadata_materialized_path" in self._ticket_columns and materialized_path is not None:
             assignments.append("metadata_materialized_path = ?")
             values.append(materialized_path)
         if state == "synced":
@@ -327,10 +313,7 @@ class TicketMetadataSync(MarkdownSyncLoop):
                 assignments.append("metadata_parse_error = NULL")
             if "metadata_conflict_reason" in self._ticket_columns:
                 assignments.append("metadata_conflict_reason = NULL")
-            if (
-                "metadata_last_materialized_hash" in self._ticket_columns
-                and file_hash is not None
-            ):
+            if "metadata_last_materialized_hash" in self._ticket_columns and file_hash is not None:
                 assignments.append("metadata_last_materialized_hash = ?")
                 values.append(file_hash)
             if "metadata_hash" in self._ticket_columns and metadata_hash is not None:

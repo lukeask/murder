@@ -13,7 +13,6 @@ from __future__ import annotations
 import asyncio
 import os
 import shlex
-import subprocess
 import tempfile
 import uuid
 from pathlib import Path
@@ -78,9 +77,16 @@ async def create_session(
     if await session_exists(name):
         raise TmuxError(f"session already exists: {name}")
     args = [
-        "new-session", "-d", "-s", name,
-        "-x", str(width), "-y", str(height),
-        "-c", str(cwd),
+        "new-session",
+        "-d",
+        "-s",
+        name,
+        "-x",
+        str(width),
+        "-y",
+        str(height),
+        "-c",
+        str(cwd),
     ]
     if cmd:
         # tmux treats remaining argv as a command to run inside the new session's pane.
@@ -123,9 +129,7 @@ async def capture_pane(name: str, lines: int = 200, *, perf: object | None = Non
     return out
 
 
-async def send_keys(
-    name: str, text: str, *, literal: bool = True, enter: bool = True
-) -> None:
+async def send_keys(name: str, text: str, *, literal: bool = True, enter: bool = True) -> None:
     """Deliver `text` to the session's input buffer.
 
     Small payloads → `tmux send-keys -t <name> -l <text>` (literal).

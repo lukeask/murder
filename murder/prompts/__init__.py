@@ -13,9 +13,7 @@ def load(name: str) -> str:
     """Return the text of `<name>.md` in this package, or raise FileNotFoundError."""
     fname = name if name.endswith(".md") else f"{name}.md"
     try:
-        return (
-            resources.files("murder.prompts").joinpath(fname).read_text(encoding="utf-8")
-        )
+        return resources.files("murder.prompts").joinpath(fname).read_text(encoding="utf-8")
     except (FileNotFoundError, ModuleNotFoundError) as e:
         raise FileNotFoundError(f"prompt template not found: {fname}") from e
 

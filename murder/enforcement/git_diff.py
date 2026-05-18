@@ -30,9 +30,7 @@ async def head_commit(repo_root: Path) -> str:
 
 async def diff_files(repo_root: Path, since_commit: str) -> list[Path]:
     """Return paths changed since `since_commit` (paths relative to repo_root)."""
-    rc, out, err = await _git(
-        "diff", "--name-only", since_commit, "HEAD", cwd=repo_root
-    )
+    rc, out, err = await _git("diff", "--name-only", since_commit, "HEAD", cwd=repo_root)
     if rc != 0:
         raise RuntimeError(f"git diff failed: {err.strip()}")
     return [Path(p) for p in out.splitlines() if p.strip()]

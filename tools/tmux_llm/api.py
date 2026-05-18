@@ -118,9 +118,7 @@ def _busy_guard(s: str, window: int | str) -> str | None:
     return None
 
 
-def _recapture_if_idle_missing_exit(
-    session: str, window: int | str, raw: str, lines: int
-) -> str:
+def _recapture_if_idle_missing_exit(session: str, window: int | str, raw: str, lines: int) -> str:
     """One short retry when the shell is idle but the exit marker has not appeared yet."""
     body, ex = B.strip_exit_lines(raw)
     if ex is not None:
@@ -228,9 +226,8 @@ def tool_send(keys: str, window: int | str = 0) -> str:
         if kind == "literal":
             if payload and (e := B.send_keys_literal(s, w, payload)):
                 return f"{e} (Send segment {i}/{total}, literal)"
-        else:
-            if e := B.send_keys_named(s, w, payload):
-                return f"{e} (Send segment {i}/{total}, key {payload!r})"
+        elif e := B.send_keys_named(s, w, payload):
+            return f"{e} (Send segment {i}/{total}, key {payload!r})"
 
     return f"sent to window {_window_label(w)}"
 
@@ -260,7 +257,10 @@ def tool_read(lines: int = 200, window: int | str = 0) -> str:
 
 
 def _schema_window() -> dict[str, Any]:
-    return {"oneOf": [{"type": "integer"}, {"type": "string"}], "description": "0-based index or window name"}
+    return {
+        "oneOf": [{"type": "integer"}, {"type": "string"}],
+        "description": "0-based index or window name",
+    }
 
 
 OPENAI_TOOL_DEFINITIONS: list[ToolDefinition] = [
@@ -398,11 +398,15 @@ def dispatch_tool(name: str, arguments: dict[str, Any] | None) -> str:
                 **_pick(args, ("command", "window", "wait"), defaults={"window": 0, "wait": 120})
             )
         if name == "Wait":
-            return tool_wait(**_pick(args, ("window", "timeout"), defaults={"window": 0, "timeout": 120}))
+            return tool_wait(
+                **_pick(args, ("window", "timeout"), defaults={"window": 0, "timeout": 120})
+            )
         if name == "Send":
             return tool_send(**_pick(args, ("keys", "window"), defaults={"window": 0}))
         if name == "Read":
-            return tool_read(**_pick(args, ("lines", "window"), defaults={"lines": 200, "window": 0}))
+            return tool_read(
+                **_pick(args, ("lines", "window"), defaults={"lines": 200, "window": 0})
+            )
     except TypeError as e:
         return f"error: bad arguments for {name}: {e}"
 

@@ -52,9 +52,7 @@ class _FakeModelAdapter:
         return self.session
 
 
-def _stable_probe_session(
-    monkeypatch, *, kind: str = "codex", prefix: str = "models"
-) -> str:
+def _stable_probe_session(monkeypatch, *, kind: str = "codex", prefix: str = "models") -> str:
     monkeypatch.setattr("murder.harnesses.model_discovery.os.getpid", lambda: 123)
     monkeypatch.setattr(
         "murder.harnesses.model_discovery.time.monotonic_ns",
@@ -93,9 +91,7 @@ async def test_discover_harness_models_cleans_up_probe_session_on_parse_failure(
     monkeypatch,
 ) -> None:
     session_name = _stable_probe_session(monkeypatch)
-    fake_session = _FakeModelSession(
-        collect_result=fail_result("no model choices parsed")
-    )
+    fake_session = _FakeModelSession(collect_result=fail_result("no model choices parsed"))
     adapter = _FakeModelAdapter(fake_session)
     killed: list[str] = []
 
@@ -141,9 +137,7 @@ async def test_discover_harness_models_reports_cleanup_failure(monkeypatch) -> N
 async def test_probe_invalid_harness_model_cleans_up_after_rejection(
     monkeypatch, kind: str
 ) -> None:
-    session_name = _stable_probe_session(
-        monkeypatch, kind=kind, prefix="invalid_model"
-    )
+    session_name = _stable_probe_session(monkeypatch, kind=kind, prefix="invalid_model")
     fake_session = _FakeModelSession()
     adapter = _FakeModelAdapter(fake_session)
     killed: list[str] = []
@@ -169,13 +163,9 @@ async def test_probe_invalid_harness_model_cleans_up_after_rejection(
 async def test_probe_invalid_harness_model_reports_rejection_detection_failure(
     monkeypatch,
 ) -> None:
-    session_name = _stable_probe_session(
-        monkeypatch, kind="cursor", prefix="invalid_model"
-    )
+    session_name = _stable_probe_session(monkeypatch, kind="cursor", prefix="invalid_model")
     fake_session = _FakeModelSession(
-        invalid_model_result=fail_result(
-            "cursor did not reject invalid model selection"
-        )
+        invalid_model_result=fail_result("cursor did not reject invalid model selection")
     )
     adapter = _FakeModelAdapter(fake_session)
     killed: list[str] = []
@@ -197,9 +187,7 @@ async def test_probe_invalid_harness_model_reports_rejection_detection_failure(
 
 
 async def test_probe_invalid_harness_model_reports_cleanup_failure(monkeypatch) -> None:
-    session_name = _stable_probe_session(
-        monkeypatch, kind="codex", prefix="invalid_model"
-    )
+    session_name = _stable_probe_session(monkeypatch, kind="codex", prefix="invalid_model")
     fake_session = _FakeModelSession()
     adapter = _FakeModelAdapter(fake_session)
 

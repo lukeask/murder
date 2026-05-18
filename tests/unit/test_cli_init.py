@@ -20,9 +20,7 @@ def test_init_scaffolds_murder_dir_and_gitignore(monkeypatch, tmp_path: Path) ->
     assert ".murder/" in (tmp_path / ".gitignore").read_text(encoding="utf-8")
 
 
-def test_bare_command_prompts_to_initialize(
-    monkeypatch, tmp_path: Path
-) -> None:
+def test_bare_command_prompts_to_initialize(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.chdir(tmp_path)
     runner = CliRunner()
 

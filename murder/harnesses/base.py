@@ -68,9 +68,7 @@ class HarnessSession:
         self._first_send_idle_gate_pending = True
         return ok_result()
 
-    async def _wait_startup_ready(
-        self, start_spec: HarnessStartSpec
-    ) -> SimpleResult[None]:
+    async def _wait_startup_ready(self, start_spec: HarnessStartSpec) -> SimpleResult[None]:
         attempts = max(1, int(start_spec.ready_timeout_s / start_spec.poll_interval_s))
         for _ in range(attempts):
             try:
@@ -84,9 +82,7 @@ class HarnessSession:
             return fail_result(f"Harness not ready in time: session={self.session}")
         return ok_result()
 
-    async def _configure_started_session(
-        self, start_spec: HarnessStartSpec
-    ) -> SimpleResult[None]:
+    async def _configure_started_session(self, start_spec: HarnessStartSpec) -> SimpleResult[None]:
         desired_model = start_spec.startup_model or self.adapter.startup_model
         if desired_model:
             model_result = await self.set_model(desired_model)
@@ -151,17 +147,13 @@ class HarnessSession:
         selected = await self.adapter.set_model(self.session, model)
         if selected:
             return ok_result()
-        return fail_result(
-            f"{self.adapter.kind} does not support runtime model selection"
-        )
+        return fail_result(f"{self.adapter.kind} does not support runtime model selection")
 
     async def request_usage_status(self) -> SimpleResult[None]:
         requested = await self.adapter.request_usage_status(self.session)
         if requested:
             return ok_result()
-        return fail_result(
-            f"{self.adapter.kind} does not support usage/status reporting"
-        )
+        return fail_result(f"{self.adapter.kind} does not support usage/status reporting")
 
     async def collect_usage_status(self) -> SimpleResult[HarnessUsageStatus]:
         return await self.adapter.collect_usage_status(self.session)
@@ -212,9 +204,7 @@ class HarnessAdapter(ABC):
     @abstractmethod
     def is_busy(self, pane_text: str) -> bool: ...
 
-    async def initialize_defaults(
-        self, session: str, spec: HarnessStartSpec
-    ) -> SimpleResult[None]:
+    async def initialize_defaults(self, session: str, spec: HarnessStartSpec) -> SimpleResult[None]:
         del session, spec
         return ok_result()
 
@@ -244,34 +234,24 @@ class HarnessAdapter(ABC):
             window = clean[max(0, model_at - 240) : model_at + len(model) + 240]
             return bool(_MODEL_REJECTION_WORD_RE.search(window))
         tail = clean[-1200:]
-        return bool(
-            _MODEL_REJECTION_WORD_RE.search(tail) and _MODEL_WORD_RE.search(tail)
-        )
+        return bool(_MODEL_REJECTION_WORD_RE.search(tail) and _MODEL_WORD_RE.search(tail))
 
-    async def probe_invalid_model(
-        self, session: str, model: str
-    ) -> SimpleResult[None]:
+    async def probe_invalid_model(self, session: str, model: str) -> SimpleResult[None]:
         requested = await self.request_model_selection(session, model)
         if not requested:
             return fail_result(f"{self.kind} does not support runtime model selection")
         pane = await tmux.capture_pane(session, lines=200)
         if self.detects_model_rejection(pane, model):
             return ok_result()
-        return fail_result(
-            f"{self.kind} did not reject invalid model selection for {model!r}"
-        )
+        return fail_result(f"{self.kind} did not reject invalid model selection for {model!r}")
 
     async def request_usage_status(self, session: str) -> bool:
         del session
         return False
 
-    async def collect_usage_status(
-        self, session: str
-    ) -> SimpleResult[HarnessUsageStatus]:
+    async def collect_usage_status(self, session: str) -> SimpleResult[HarnessUsageStatus]:
         del session
-        return fail_result(
-            f"{self.kind} does not support structured usage/status reporting"
-        )
+        return fail_result(f"{self.kind} does not support structured usage/status reporting")
 
     async def request_model_list(self, session: str) -> bool:
         if self.model_list_command is None:
@@ -280,9 +260,7 @@ class HarnessAdapter(ABC):
         await asyncio.sleep(self.model_list_capture_delay_s)
         return True
 
-    async def collect_available_models(
-        self, session: str
-    ) -> SimpleResult[list[tuple[str, str]]]:
+    async def collect_available_models(self, session: str) -> SimpleResult[list[tuple[str, str]]]:
         requested = await self.request_model_list(session)
         if not requested:
             return fail_result(f"{self.kind} does not support /models discovery")

@@ -42,9 +42,7 @@ def adapter() -> CursorAdapter:
     "fixture",
     ["idle_first_load.txt", "idle_after_first_turn.txt"],
 )
-def test_idle_states_are_idle_and_ready_and_not_busy(
-    adapter: CursorAdapter, fixture: str
-) -> None:
+def test_idle_states_are_idle_and_ready_and_not_busy(adapter: CursorAdapter, fixture: str) -> None:
     pane = _load(fixture)
     assert adapter.is_ready(pane), f"{fixture}: should be ready"
     assert adapter.is_idle(pane), f"{fixture}: should be idle"
@@ -55,9 +53,7 @@ def test_idle_states_are_idle_and_ready_and_not_busy(
     "fixture",
     ["busy_composing.txt", "busy_running_tool.txt"],
 )
-def test_busy_states_are_busy_and_not_idle(
-    adapter: CursorAdapter, fixture: str
-) -> None:
+def test_busy_states_are_busy_and_not_idle(adapter: CursorAdapter, fixture: str) -> None:
     pane = _load(fixture)
     assert adapter.is_busy(pane), f"{fixture}: should be busy"
     assert not adapter.is_idle(pane), f"{fixture}: should not be idle"
@@ -82,12 +78,16 @@ def test_stale_busy_marker_in_scrollback_doesnt_flag_busy(
 ) -> None:
     """If the agent went busy, then completed, the historical 'ctrl+c to stop'
     can still be in the pane scrollback; only the live tail counts."""
-    pane = "ctrl+c to stop\n" + "\n" * 50 + (
-        " ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄\n"
-        "  → Add a follow-up\n"
-        " ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀\n"
-        "  Composer 2                              Auto-run\n"
-        "  /tmp/murder-smoke · master\n"
+    pane = (
+        "ctrl+c to stop\n"
+        + "\n" * 50
+        + (
+            " ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄\n"
+            "  → Add a follow-up\n"
+            " ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀\n"
+            "  Composer 2                              Auto-run\n"
+            "  /tmp/murder-smoke · master\n"
+        )
     )
     assert adapter.is_idle(pane)
     assert not adapter.is_busy(pane)
@@ -102,8 +102,7 @@ def test_trailing_blank_rows_do_not_hide_idle_prompt(adapter: CursorAdapter) -> 
         "  → Plan, search, build anything\n"
         " ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀\n"
         "  Composer 2                              Auto-run\n"
-        "  /tmp/murder-smoke · master\n"
-        + "\n" * 40
+        "  /tmp/murder-smoke · master\n" + "\n" * 40
     )
     assert adapter.is_ready(pane)
     assert adapter.is_idle(pane)
@@ -125,9 +124,7 @@ def test_note_parser_requires_end_and_strips_cursor_chrome(
         ]
     )
 
-    assert adapter.detect_notes(pane) == [
-        "implemented the CLI path\nwith a second useful line"
-    ]
+    assert adapter.detect_notes(pane) == ["implemented the CLI path\nwith a second useful line"]
     assert adapter.detect_done(pane)
 
 
@@ -205,9 +202,7 @@ async def test_cursor_collect_usage_status_uses_cursor_api_helper(monkeypatch) -
     async def fake_to_thread(func, /, *args, **kwargs):
         return func(*args, **kwargs)
 
-    monkeypatch.setattr(
-        "murder.harnesses.cursor_usage.get_usage_status", fake_get_usage_status
-    )
+    monkeypatch.setattr("murder.harnesses.cursor_usage.get_usage_status", fake_get_usage_status)
     monkeypatch.setattr("murder.harnesses.cursor.asyncio.to_thread", fake_to_thread)
     result = await CursorAdapter().attach("sess", Path("/repo")).collect_usage_status()
     assert result.ok

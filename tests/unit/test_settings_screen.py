@@ -27,17 +27,13 @@ def test_ordered_enabled_models_puts_default_first() -> None:
 def test_model_validation_requires_at_least_one_selected() -> None:
     states = {"a": "disabled", "b": "disabled"}
 
-    assert _model_validation_message(states, ["a", "b"]) == (
-        "invalid: select at least one model"
-    )
+    assert _model_validation_message(states, ["a", "b"]) == ("invalid: select at least one model")
 
 
 def test_model_validation_rejects_multiple_defaults() -> None:
     states = {"a": "default", "b": "default"}
 
-    assert _model_validation_message(states, ["a", "b"]) == (
-        "invalid: choose only one default"
-    )
+    assert _model_validation_message(states, ["a", "b"]) == ("invalid: choose only one default")
 
 
 def test_model_validation_allows_enabled_without_default() -> None:

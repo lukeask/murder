@@ -7,9 +7,11 @@ from tests.unit.harness_contracts import assert_adapter_basics
 
 
 def test_startup_cmd_includes_model_when_configured() -> None:
-    assert PiAdapter(startup_model="anthropic/claude-sonnet-4-6").startup_cmd(
-        Path("/repo")
-    ) == ["pi", "--model", "anthropic/claude-sonnet-4-6"]
+    assert PiAdapter(startup_model="anthropic/claude-sonnet-4-6").startup_cmd(Path("/repo")) == [
+        "pi",
+        "--model",
+        "anthropic/claude-sonnet-4-6",
+    ]
 
 
 def test_ready_idle_pane() -> None:

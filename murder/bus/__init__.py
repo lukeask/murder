@@ -20,19 +20,27 @@ from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any
 
 from murder.bus.protocol import (
-    AckBody,
-    AckMessage,
-    AgentEvent,
-    AgentStatus,
     BUS_EVENT_ADAPTER,
-    BusEvent,
-    ClientKind,
-    CommandEvent,
-    CommandStatus,
     DEFAULT_HEARTBEAT_INTERVAL_S,
     DEFAULT_LEASE_TTL_S,
     DEFAULT_MAX_COMMAND_ATTEMPTS,
     DEFAULT_RPC_TIMEOUT_S,
+    IDEMPOTENCY_WINDOW_S,
+    PRESENCE_DISCONNECT_DEBOUNCE_S,
+    PRESENCE_USER_KINDS,
+    PROTOCOL_VERSION,
+    SOCKET_BASENAME,
+    SOCKET_RUNTIME_SUBDIR,
+    SUBSCRIBER_QUEUE_DEFAULT,
+    WIRE_MESSAGE_ADAPTER,
+    AckBody,
+    AckMessage,
+    AgentEvent,
+    AgentStatus,
+    BusEvent,
+    ClientKind,
+    CommandEvent,
+    CommandStatus,
     Entity,
     ErrBody,
     ErrMessage,
@@ -42,10 +50,6 @@ from murder.bus.protocol import (
     HeartbeatEvent,
     HelloBody,
     HelloMessage,
-    IDEMPOTENCY_WINDOW_S,
-    PROTOCOL_VERSION,
-    PRESENCE_DISCONNECT_DEBOUNCE_S,
-    PRESENCE_USER_KINDS,
     PresenceEvent,
     PresenceState,
     PubMessage,
@@ -53,16 +57,12 @@ from murder.bus.protocol import (
     Role,
     RpcArgs,
     RpcMessage,
-    SOCKET_BASENAME,
-    SOCKET_RUNTIME_SUBDIR,
-    SUBSCRIBER_QUEUE_DEFAULT,
     StateSnapshotEvent,
     StatusChangeEvent,
     SubArgs,
     SubMessage,
     SummaryEvent,
     TicketStatus,
-    WIRE_MESSAGE_ADAPTER,
     WakeBody,
     WakeMessage,
     WireMessage,
@@ -78,7 +78,7 @@ Handler = Callable[[Any], Awaitable[None]]
 
 
 class SubscriptionHandle:
-    def __init__(self, bus: "Bus", token: int) -> None:
+    def __init__(self, bus: Bus, token: int) -> None:
         self._bus = bus
         self._token = token
         self._cancelled = False
@@ -93,7 +93,7 @@ class SubscriptionHandle:
 class Bus:
     """In-process pub/sub. Persists every event before fan-out."""
 
-    def __init__(self, run_id: str, db_conn: "sqlite3.Connection | None" = None) -> None:
+    def __init__(self, run_id: str, db_conn: sqlite3.Connection | None = None) -> None:
         self._run_id = run_id
         self._db = db_conn
         self._subs: dict[int, tuple[Handler, EventFilter | None]] = {}
@@ -166,9 +166,7 @@ class Bus:
 
         await asyncio.gather(*(_dispatch(h, f) for h, f in handlers))
 
-    def subscribe(
-        self, handler: Handler, filter: EventFilter | None = None
-    ) -> SubscriptionHandle:
+    def subscribe(self, handler: Handler, filter: EventFilter | None = None) -> SubscriptionHandle:
         token = self._next_token
         self._next_token += 1
         self._subs[token] = (handler, filter)
@@ -177,23 +175,54 @@ class Bus:
 
 __all__ = [
     # Broker implementation
-    "Bus", "SubscriptionHandle", "Handler",
+    "Bus",
+    "SubscriptionHandle",
+    "Handler",
     # Re-exports from protocol
     "PROTOCOL_VERSION",
-    "Role", "TicketStatus", "AgentStatus", "CommandStatus",
-    "Entity", "PresenceState", "ClientKind",
-    "HeartbeatEvent", "SummaryEvent", "QuestionEvent",
-    "EscalationEvent", "StatusChangeEvent", "ErrorEvent",
-    "CommandEvent", "StateSnapshotEvent", "PresenceEvent",
-    "BusEvent", "AgentEvent", "BUS_EVENT_ADAPTER",
+    "Role",
+    "TicketStatus",
+    "AgentStatus",
+    "CommandStatus",
+    "Entity",
+    "PresenceState",
+    "ClientKind",
+    "HeartbeatEvent",
+    "SummaryEvent",
+    "QuestionEvent",
+    "EscalationEvent",
+    "StatusChangeEvent",
+    "ErrorEvent",
+    "CommandEvent",
+    "StateSnapshotEvent",
+    "PresenceEvent",
+    "BusEvent",
+    "AgentEvent",
+    "BUS_EVENT_ADAPTER",
     "EventFilter",
-    "HelloBody", "SubArgs", "RpcArgs", "AckBody", "ErrBody", "WakeBody",
-    "HelloMessage", "PubMessage", "SubMessage", "RpcMessage",
-    "AckMessage", "ErrMessage", "WakeMessage",
-    "WireMessage", "WIRE_MESSAGE_ADAPTER",
-    "SOCKET_RUNTIME_SUBDIR", "SOCKET_BASENAME",
-    "DEFAULT_RPC_TIMEOUT_S", "DEFAULT_HEARTBEAT_INTERVAL_S",
-    "DEFAULT_LEASE_TTL_S", "DEFAULT_MAX_COMMAND_ATTEMPTS",
-    "PRESENCE_DISCONNECT_DEBOUNCE_S", "PRESENCE_USER_KINDS",
-    "SUBSCRIBER_QUEUE_DEFAULT", "IDEMPOTENCY_WINDOW_S",
+    "HelloBody",
+    "SubArgs",
+    "RpcArgs",
+    "AckBody",
+    "ErrBody",
+    "WakeBody",
+    "HelloMessage",
+    "PubMessage",
+    "SubMessage",
+    "RpcMessage",
+    "AckMessage",
+    "ErrMessage",
+    "WakeMessage",
+    "WireMessage",
+    "WIRE_MESSAGE_ADAPTER",
+    "SOCKET_RUNTIME_SUBDIR",
+    "SOCKET_BASENAME",
+    "DEFAULT_RPC_TIMEOUT_S",
+    "DEFAULT_HEARTBEAT_INTERVAL_S",
+    "DEFAULT_LEASE_TTL_S",
+    "DEFAULT_MAX_COMMAND_ATTEMPTS",
+    "PRESENCE_DISCONNECT_DEBOUNCE_S",
+    "PRESENCE_USER_KINDS",
+    "SUBSCRIBER_QUEUE_DEFAULT",
+    "IDEMPOTENCY_WINDOW_S",
 ]

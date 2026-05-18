@@ -127,9 +127,7 @@ class InProcessBroker:
         *,
         timeout_s: float,
     ) -> dict:
-        raise UnsupportedRpcError(
-            f"InProcessBroker has no RPC router for target {target!r} yet"
-        )
+        raise UnsupportedRpcError(f"InProcessBroker has no RPC router for target {target!r} yet")
 
 
 class DurableBroker:

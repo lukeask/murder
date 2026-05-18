@@ -40,7 +40,7 @@ class CrowAgent(Agent):
         self.harness_session = harness.attach(session, self.repo_root)
 
     async def start(self, brief: str, ctx: dict[str, Any]) -> None:
-        from murder.bus import ErrorEvent, StatusChangeEvent
+        from murder.bus import StatusChangeEvent
         from murder.enforcement import git_diff
 
         start_result = await self.harness_session.start(

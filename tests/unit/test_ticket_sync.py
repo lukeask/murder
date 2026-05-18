@@ -87,10 +87,7 @@ async def test_reconcile_file_does_not_overwrite_existing_ticket_row(
     assert row["harness"] == "codex"
     assert row["model"] == "gpt-5"
     assert row["attempts"] == EXISTING_ATTEMPTS
-    assert (
-        memdb.execute("SELECT COUNT(*) AS n FROM tickets WHERE id = 't013'").fetchone()["n"]
-        == 1
-    )
+    assert memdb.execute("SELECT COUNT(*) AS n FROM tickets WHERE id = 't013'").fetchone()["n"] == 1
 
 
 @pytest.mark.asyncio
@@ -122,9 +119,7 @@ async def test_poll_imports_new_ticket_file_and_updates_tui_query_paths(
     assert dbmod.get_ticket(memdb, "t014") is not None
 
     # Query shape used by TicketGrid.refresh_from_db.
-    rows = memdb.execute(
-        "SELECT id, title, wave, status FROM tickets ORDER BY wave, id"
-    ).fetchall()
+    rows = memdb.execute("SELECT id, title, wave, status FROM tickets ORDER BY wave, id").fetchall()
     assert any(r["id"] == "t014" for r in rows)
 
     # Query shape used by Header.refresh_counts.

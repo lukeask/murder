@@ -59,12 +59,8 @@ async def discover_harness_models(
         await tmux.kill_session(session)
     except Exception as exc:
         if result.ok:
-            return fail_result(
-                f"{kind} /models discovery cleanup failed for {session}: {exc}"
-            )
-        return fail_result(
-            f"{result.message}; cleanup also failed for {session}: {exc}"
-        )
+            return fail_result(f"{kind} /models discovery cleanup failed for {session}: {exc}")
+        return fail_result(f"{result.message}; cleanup also failed for {session}: {exc}")
     return result
 
 
@@ -103,10 +99,6 @@ async def probe_invalid_harness_model(
         await tmux.kill_session(session)
     except Exception as exc:
         if result.ok:
-            return fail_result(
-                f"{kind} invalid model probe cleanup failed for {session}: {exc}"
-            )
-        return fail_result(
-            f"{result.message}; cleanup also failed for {session}: {exc}"
-        )
+            return fail_result(f"{kind} invalid model probe cleanup failed for {session}: {exc}")
+        return fail_result(f"{result.message}; cleanup also failed for {session}: {exc}")
     return result

@@ -72,15 +72,11 @@ def _is_pi_chrome(line: str) -> bool:
         return False
     if is_rule_line(line) or is_status_spinner_line(line):
         return True
-    return bool(
-        _PI_STATUS_RE.search(s) or _PI_CWD_RE.match(s) or _PI_CHROME_RE.match(s)
-    )
+    return bool(_PI_STATUS_RE.search(s) or _PI_CWD_RE.match(s) or _PI_CHROME_RE.match(s))
 
 
 def _strip_pi_chrome(pane_text: str) -> str:
-    return "\n".join(
-        line for line in strip_ansi(pane_text).splitlines() if not _is_pi_chrome(line)
-    )
+    return "\n".join(line for line in strip_ansi(pane_text).splitlines() if not _is_pi_chrome(line))
 
 
 def _tail(pane_text: str) -> str:

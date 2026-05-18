@@ -95,9 +95,7 @@ async def test_submit_notetaker_capture_inserts_db_and_updates_note(
     rt.db = memdb
     monkeypatch.setattr(
         "murder.orchestrator.create_client",
-        lambda provider: _FenceClient(
-            '{"short_vers": "one item noted"}'
-        ),
+        lambda provider: _FenceClient('{"short_vers": "one item noted"}'),
     )
 
     out = await Orchestrator(rt).submit_notetaker_capture({"text": "  ramble ramble one  "})

@@ -57,4 +57,7 @@ async def test_publish_non_command_writes_event_only(memdb: sqlite3.Connection) 
     await bus.publish(event)
 
     assert memdb.execute("SELECT COUNT(*) AS n FROM commands").fetchone()["n"] == 0
-    assert memdb.execute("SELECT COUNT(*) AS n FROM events WHERE type = 'heartbeat'").fetchone()["n"] == 1
+    assert (
+        memdb.execute("SELECT COUNT(*) AS n FROM events WHERE type = 'heartbeat'").fetchone()["n"]
+        == 1
+    )

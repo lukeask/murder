@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
-from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from murder import db as dbmod
@@ -15,7 +14,8 @@ from murder.clients.base import ToolSpec
 from murder.config import SentinelConfig
 from murder.storage.filesystem import atomic_write_text
 from murder.storage.paths import escalations_dir, ticket_md
-from murder.tickets import lifecycle, parser as ticket_parser
+from murder.tickets import lifecycle
+from murder.tickets import parser as ticket_parser
 
 CROW_IDLE_WAIT_TIMEOUT_S = 60.0
 
@@ -34,10 +34,10 @@ class SentinelAgent(Agent):
         agent_id: str,
         session: str,
         config: SentinelConfig,
-        client: "APIClient | None",
+        client: APIClient | None,
         *,
-        runtime: "Runtime",
-        orchestrator: "Orchestrator",
+        runtime: Runtime,
+        orchestrator: Orchestrator,
     ) -> None:
         self.id = agent_id
         self.session = session

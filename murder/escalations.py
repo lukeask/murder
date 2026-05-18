@@ -19,7 +19,7 @@ if TYPE_CHECKING:
     from murder.bus import EscalationEvent
 
 
-def queue_for_user(conn: sqlite3.Connection, event: "EscalationEvent") -> int:
+def queue_for_user(conn: sqlite3.Connection, event: EscalationEvent) -> int:
     """Insert escalation row; return id. TUI strip will pick it up via bus subscription."""
     # TODO(M3): db.insert_escalation with to_recipient='user', source_event_id from event.
     raise NotImplementedError("M3: escalations.queue_for_user")
@@ -27,7 +27,7 @@ def queue_for_user(conn: sqlite3.Connection, event: "EscalationEvent") -> int:
 
 def queue_for_collaborator(
     conn: sqlite3.Connection,
-    event: "EscalationEvent",
+    event: EscalationEvent,
     body: str,
     repo_root: Path,
 ) -> tuple[int, Path]:

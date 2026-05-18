@@ -60,9 +60,7 @@ schedule_at: null
 
 def test_invalid_id_mismatch() -> None:
     with pytest.raises(TicketMetadataError, match="does not match expected id"):
-        parse_ticket_metadata(
-            "id: t002\ntitle: x\nwave: 1\nstatus: planned\n", expected_id="t001"
-        )
+        parse_ticket_metadata("id: t002\ntitle: x\nwave: 1\nstatus: planned\n", expected_id="t001")
 
 
 def test_invalid_status_rejected() -> None:
@@ -72,9 +70,7 @@ def test_invalid_status_rejected() -> None:
 
 def test_invalid_list_field_rejected() -> None:
     with pytest.raises(TicketMetadataError, match="deps must be a list of strings"):
-        parse_ticket_metadata(
-            "id: t001\ntitle: x\nwave: 1\nstatus: planned\ndeps: [t000, 5]\n"
-        )
+        parse_ticket_metadata("id: t001\ntitle: x\nwave: 1\nstatus: planned\ndeps: [t000, 5]\n")
 
 
 @pytest.mark.parametrize("entry", ["/abs/path.py", "../escape.py", "x/../../y.py"])

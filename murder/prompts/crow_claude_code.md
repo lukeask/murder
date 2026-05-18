@@ -36,4 +36,3 @@ Print these tokens on their own lines in your normal output:
 - Don't introduce abstractions absent from the plan. `>>> ASK:` first.
 - Stay inside the write-set.
 - Run project tests before `>>> DONE`.
-- Do not edit `.murder/`.

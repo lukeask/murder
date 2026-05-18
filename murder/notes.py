@@ -41,9 +41,7 @@ def content_hash(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
-def _record_revision(
-    conn: sqlite3.Connection, name: str, body: str, *, source: str
-) -> None:
+def _record_revision(conn: sqlite3.Connection, name: str, body: str, *, source: str) -> None:
     dbmod.insert_note_revision(
         conn,
         name,
@@ -200,9 +198,7 @@ def retire_note(conn: sqlite3.Connection, repo_root: Path, name: str) -> Path:
     return dest
 
 
-def latest_prior_note(
-    conn: sqlite3.Connection, exclude: str
-) -> tuple[str, str] | None:
+def latest_prior_note(conn: sqlite3.Connection, exclude: str) -> tuple[str, str] | None:
     """The most recently-named non-empty note other than `exclude`, as (name, body)."""
     for row in dbmod.list_notes(conn):
         if row["name"] != exclude and row["size"]:

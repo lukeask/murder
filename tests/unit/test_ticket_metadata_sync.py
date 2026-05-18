@@ -9,9 +9,7 @@ from murder.tickets.meta_sync import TicketMetadataSync
 
 
 def _add_metadata_columns(conn: sqlite3.Connection) -> None:
-    existing = {
-        str(r["name"]) for r in conn.execute("PRAGMA table_info(tickets)").fetchall()
-    }
+    existing = {str(r["name"]) for r in conn.execute("PRAGMA table_info(tickets)").fetchall()}
     if "schedule_at" not in existing:
         conn.execute("ALTER TABLE tickets ADD COLUMN schedule_at TEXT")
     if "metadata_hash" not in existing:
@@ -57,8 +55,7 @@ async def test_materialize_missing_yaml_for_db_ticket(tmp_path, memdb: sqlite3.C
     )
     memdb.execute("INSERT INTO ticket_skills(ticket_id, skill) VALUES ('t101', 'openai-docs')")
     memdb.execute(
-        "INSERT INTO checklist(ticket_id, ord, text, done) "
-        "VALUES ('t101', 0, 'check me', 0)"
+        "INSERT INTO checklist(ticket_id, ord, text, done) VALUES ('t101', 0, 'check me', 0)"
     )
     sync = TicketMetadataSync(tmp_path, memdb)
 
@@ -223,8 +220,7 @@ async def test_import_yaml_creates_missing_db_ticket_for_slug_style_id(
     await sync.reconcile_all()
 
     row = memdb.execute(
-        "SELECT id, status, harness, model FROM tickets "
-        "WHERE id = 'T03-suite-b-algorithm-choice'"
+        "SELECT id, status, harness, model FROM tickets WHERE id = 'T03-suite-b-algorithm-choice'"
     ).fetchone()
     assert row is not None
     assert row["status"] == "ready"
@@ -263,8 +259,7 @@ async def test_import_yaml_creates_missing_db_ticket_for_numeric_prefix_id(
     await sync.reconcile_all()
 
     row = memdb.execute(
-        "SELECT id, title, wave, status, harness, model FROM tickets "
-        "WHERE id = '01-msg-types'"
+        "SELECT id, title, wave, status, harness, model FROM tickets WHERE id = '01-msg-types'"
     ).fetchone()
     assert row is not None
     assert row["title"] == "Message type cleanup"

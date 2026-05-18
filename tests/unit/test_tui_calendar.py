@@ -67,6 +67,7 @@ def test_calendar_panel_toggle_view() -> None:
     panel.action_toggle_view()
     assert panel._view_mode == "day"
 
+
 def test_calendar_panel_rendering(memdb: sqlite3.Connection) -> None:
     memdb.execute(
         "INSERT INTO harness_usage_snapshots(harness, source, fetched_at, status_json) "
@@ -81,22 +82,22 @@ def test_calendar_panel_rendering(memdb: sqlite3.Connection) -> None:
     memdb.execute(
         "INSERT INTO agents(agent_id, role, ticket_id, status, started_at) "
         "VALUES ('a1', 'crow', 't1', 'running', ?)",
-        (now.isoformat(),)
+        (now.isoformat(),),
     )
     # scheduled ticket
     memdb.execute(
         "INSERT INTO tickets(id, title, wave, status, harness, schedule_at, created_at, updated_at) "
         "VALUES ('t2', 'title', 1, 'planned', 'h1', ?, '2026-05-15', '2026-05-15')",
-        ((now + timedelta(hours=1)).isoformat(),)
+        ((now + timedelta(hours=1)).isoformat(),),
     )
-    
+
     panel = _FakeCalendarPanel()
     panel.refresh_from_db(memdb)
-    
+
     # Check that t1 is in the first row (now)
     # and t2 is in the second row (now + 1h)
     assert len(panel._rows) == 24
-    
+
     # panel._rows[0] is (Time, cell_for_h1)
     # cell_for_h1 is a Text object, we can check its plain string
     assert "t1" in panel._rows[0][1].plain

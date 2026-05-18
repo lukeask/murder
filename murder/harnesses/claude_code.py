@@ -53,12 +53,12 @@ class ClaudeCodeAdapter(HarnessAdapter):
     # We also accept any non-empty pane after seeing the banner so startup
     # doesn't hang for 240 s if the regex misses a prompt variant.
     _READY_RE = re.compile(
-        r"[>?❯]\s*$"           # bare prompt at end of line
-        r"|✓\s+claude"         # "✓ claude@api" banner line
+        r"[>?❯]\s*$"  # bare prompt at end of line
+        r"|✓\s+claude"  # "✓ claude@api" banner line
         r"|Welcome to Claude"  # older banner
-        r"|claude\.ai"         # footer URL
-        r"|Claude Code\b"      # version banner (CC 2.x: "Claude Code v2.1.x")
-        r"|bypass permissions", # skip-permissions status bar (CC 2.x)
+        r"|claude\.ai"  # footer URL
+        r"|Claude Code\b"  # version banner (CC 2.x: "Claude Code v2.1.x")
+        r"|bypass permissions",  # skip-permissions status bar (CC 2.x)
         re.MULTILINE | re.IGNORECASE,
     )
     _IDLE_RE = re.compile(r"[>?❯]\s*$", re.MULTILINE)
@@ -140,29 +140,24 @@ class ClaudeCodeAdapter(HarnessAdapter):
         await asyncio.sleep(0.2)
         return True
 
-    async def collect_usage_status(
-        self, session: str
-    ) -> SimpleResult[HarnessUsageStatus]:
+    async def collect_usage_status(self, session: str) -> SimpleResult[HarnessUsageStatus]:
         for attempt in range(2):
             await self.request_usage_status(session)
             await asyncio.sleep(0.4)
             pane = await tmux.capture_pane(session, lines=160)
             status = parse_claude_usage_pane(pane)
-            has_session = (
-                status.session is not None
-                and any(
-                    value is not None
-                    for value in (
-                        status.session.input_tokens,
-                        status.session.output_tokens,
-                        status.session.cache_read_tokens,
-                        status.session.cache_write_tokens,
-                        status.session.cost_usd,
-                        status.session.api_duration_s,
-                        status.session.wall_duration_s,
-                        status.session.lines_added,
-                        status.session.lines_removed,
-                    )
+            has_session = status.session is not None and any(
+                value is not None
+                for value in (
+                    status.session.input_tokens,
+                    status.session.output_tokens,
+                    status.session.cache_read_tokens,
+                    status.session.cache_write_tokens,
+                    status.session.cost_usd,
+                    status.session.api_duration_s,
+                    status.session.wall_duration_s,
+                    status.session.lines_added,
+                    status.session.lines_removed,
                 )
             )
             if status.windows or has_session:

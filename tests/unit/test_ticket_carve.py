@@ -56,9 +56,7 @@ def test_parse_carve_yaml_rejects_non_mapping(memdb: sqlite3.Connection) -> None
 def test_apply_carve_ready_updates_sidecar_and_status(memdb: sqlite3.Connection) -> None:
     _insert_ticket(memdb, "t001", wave=1, status="done")
     _insert_ticket(memdb, "t002", wave=2, status="planned")
-    memdb.execute(
-        "INSERT INTO ticket_deps(ticket_id, depends_on_id) VALUES ('t002', 't001')"
-    )
+    memdb.execute("INSERT INTO ticket_deps(ticket_id, depends_on_id) VALUES ('t002', 't001')")
     yaml = """
 id: t002
 title: "Ship feature"
@@ -85,19 +83,28 @@ checklist:
     assert row["harness"] == "cursor"
     assert row["model"] == "Composer 2"
 
-    deps = [r["depends_on_id"] for r in memdb.execute(
-        "SELECT depends_on_id FROM ticket_deps WHERE ticket_id='t002'"
-    ).fetchall()]
+    deps = [
+        r["depends_on_id"]
+        for r in memdb.execute(
+            "SELECT depends_on_id FROM ticket_deps WHERE ticket_id='t002'"
+        ).fetchall()
+    ]
     assert deps == ["t001"]
 
-    paths = [r["path"] for r in memdb.execute(
-        "SELECT path FROM ticket_write_set WHERE ticket_id='t002'"
-    ).fetchall()]
+    paths = [
+        r["path"]
+        for r in memdb.execute(
+            "SELECT path FROM ticket_write_set WHERE ticket_id='t002'"
+        ).fetchall()
+    ]
     assert paths == ["murder/db.py"]
 
-    texts = [r["text"] for r in memdb.execute(
-        "SELECT text FROM checklist WHERE ticket_id='t002' ORDER BY ord"
-    ).fetchall()]
+    texts = [
+        r["text"]
+        for r in memdb.execute(
+            "SELECT text FROM checklist WHERE ticket_id='t002' ORDER BY ord"
+        ).fetchall()
+    ]
     assert texts == ["Do the thing", "Test the thing"]
 
 

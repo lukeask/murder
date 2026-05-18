@@ -41,12 +41,10 @@ class CalendarPanel(DataTable):
 
     def action_jump_now(self) -> None:
         self.move_cursor(row=0)
-        self.scroll_to_row(0)
 
     def action_jump_end(self) -> None:
         if self.row_count > 0:
             self.move_cursor(row=self.row_count - 1)
-            self.scroll_to_row(self.row_count - 1)
 
     def refresh_from_db(self, db: sqlite3.Connection | None) -> None:
         self._db = db
@@ -88,7 +86,7 @@ class CalendarPanel(DataTable):
 
         # Build grid
         now = datetime.now(timezone.utc)
-        
+
         if self._view_mode == "day":
             # 24 hours starting from current hour
             start_time = now.replace(minute=0, second=0, microsecond=0)
@@ -120,7 +118,7 @@ class CalendarPanel(DataTable):
                                 cell_text.append(f"▶ {a['ticket_id']}", style="green")
                         except ValueError:
                             pass
-                
+
                 # Check scheduled
                 for s in scheduled:
                     if (s["harness"] or "default") == h:
@@ -134,7 +132,7 @@ class CalendarPanel(DataTable):
                                 cell_text.append(f"○ {s['ticket_id']}", style="yellow")
                         except ValueError:
                             pass
-                
+
                 row_cells.append(cell_text)
-            
+
             self.add_row(*row_cells)

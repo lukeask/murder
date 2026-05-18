@@ -13,7 +13,8 @@ from abc import ABC, abstractmethod
 from typing import Any
 
 # Re-export from bus to keep StrEnum definitions in one place.
-from murder.bus import AgentStatus, Role as AgentRole
+from murder.bus import AgentStatus
+from murder.bus import Role as AgentRole
 
 __all__ = ["Agent", "AgentRole", "AgentStatus"]
 

@@ -11,18 +11,17 @@ depends on it.
 
 from __future__ import annotations
 
-from datetime import datetime
 from uuid import uuid4
 
 import pytest
 
 from murder.bus.protocol import (
     BUS_EVENT_ADAPTER,
+    PRESENCE_USER_KINDS,
     PROTOCOL_VERSION,
     WIRE_MESSAGE_ADAPTER,
     AckBody,
     AckMessage,
-    AgentStatus,
     ClientKind,
     CommandEvent,
     CommandStatus,
@@ -35,7 +34,6 @@ from murder.bus.protocol import (
     HeartbeatEvent,
     HelloBody,
     HelloMessage,
-    PRESENCE_USER_KINDS,
     PresenceEvent,
     PresenceState,
     PubMessage,
@@ -53,11 +51,13 @@ from murder.bus.protocol import (
     WakeMessage,
 )
 
-
 # === Sample factories =========================================================
 
+
 def _heartbeat() -> HeartbeatEvent:
-    return HeartbeatEvent(run_id="r1", agent_id="a1", role=Role.COLLABORATOR, state="progressing", summary="ok")
+    return HeartbeatEvent(
+        run_id="r1", agent_id="a1", role=Role.COLLABORATOR, state="progressing", summary="ok"
+    )
 
 
 def _summary() -> SummaryEvent:
@@ -74,9 +74,13 @@ def _escalation() -> EscalationEvent:
 
 def _status_change() -> StatusChangeEvent:
     return StatusChangeEvent(
-        run_id="r1", agent_id="a1", role=Role.CROW_HANDLER,
-        entity="ticket", entity_id="t1",
-        from_status=TicketStatus.READY.value, to_status=TicketStatus.IN_PROGRESS.value,
+        run_id="r1",
+        agent_id="a1",
+        role=Role.CROW_HANDLER,
+        entity="ticket",
+        entity_id="t1",
+        from_status=TicketStatus.READY.value,
+        to_status=TicketStatus.IN_PROGRESS.value,
     )
 
 
@@ -98,7 +102,10 @@ def _command() -> CommandEvent:
 
 def _state_snapshot() -> StateSnapshotEvent:
     return StateSnapshotEvent(
-        run_id="r1", entity=Entity.TICKET, key="t007", entity_version=3,
+        run_id="r1",
+        entity=Entity.TICKET,
+        key="t007",
+        entity_version=3,
     )
 
 
@@ -113,12 +120,20 @@ def _presence() -> PresenceEvent:
 
 
 BUS_EVENT_SAMPLES = [
-    _heartbeat, _summary, _question, _escalation, _status_change, _error,
-    _command, _state_snapshot, _presence,
+    _heartbeat,
+    _summary,
+    _question,
+    _escalation,
+    _status_change,
+    _error,
+    _command,
+    _state_snapshot,
+    _presence,
 ]
 
 
 # === BusEvent round-trip ======================================================
+
 
 @pytest.mark.parametrize("factory", BUS_EVENT_SAMPLES, ids=lambda f: f.__name__)
 def test_bus_event_roundtrip(factory):
@@ -143,6 +158,7 @@ def test_bus_event_rejects_unknown_type():
 
 
 # === WireMessage round-trip ===================================================
+
 
 def _hello_msg() -> HelloMessage:
     return HelloMessage(
@@ -195,7 +211,13 @@ def _wake_msg() -> WakeMessage:
 
 
 WIRE_MESSAGE_SAMPLES = [
-    _hello_msg, _pub_msg, _sub_msg, _rpc_msg, _ack_msg, _err_msg, _wake_msg,
+    _hello_msg,
+    _pub_msg,
+    _sub_msg,
+    _rpc_msg,
+    _ack_msg,
+    _err_msg,
+    _wake_msg,
 ]
 
 
@@ -226,6 +248,7 @@ def test_pub_message_event_discriminator_survives_envelope():
 
 
 # === EventFilter ==============================================================
+
 
 def test_event_filter_empty_matches_anything():
     f = EventFilter()
@@ -275,6 +298,7 @@ def test_event_filter_compose_and_semantics():
 
 
 # === Protocol invariants ======================================================
+
 
 def test_protocol_version_is_int_and_set():
     assert isinstance(PROTOCOL_VERSION, int)

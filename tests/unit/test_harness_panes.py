@@ -276,7 +276,7 @@ def test_cursor_model_picker_is_not_parsed_as_transcript() -> None:
 def test_cursor_extract_last_message_drops_footer() -> None:
     message = get_harness("cursor").extract_last_message(_cursor_pane("idle_after_first_turn"))
     assert message is not None
-    assert message.endswith('template checkout named “murder-smoke.”')
+    assert message.endswith("template checkout named “murder-smoke.”")
     assert "Composer 2" not in message
 
 

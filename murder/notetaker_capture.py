@@ -168,9 +168,7 @@ def create_durable_capture(
     if not body:
         raise ValueError("empty capture")
     initial_short = _fallback_short_vers(body)
-    entry_id = dbmod.insert_notes_entry(
-        conn, raw=body, cleaned=body, short_vers=initial_short
-    )
+    entry_id = dbmod.insert_notes_entry(conn, raw=body, cleaned=body, short_vers=initial_short)
     note_name = notes_mod.create_timestamped_note(conn, repo_root, body, source="agent")
     return {
         "entry_id": entry_id,

@@ -109,9 +109,7 @@ class Runtime:
             self.notetaker_context_sync.run()
         )
         self._tasks["ticket_sync"] = asyncio.create_task(self.ticket_sync.run())
-        self._tasks["ticket_metadata_sync"] = asyncio.create_task(
-            self.ticket_metadata_sync.run()
-        )
+        self._tasks["ticket_metadata_sync"] = asyncio.create_task(self.ticket_metadata_sync.run())
 
     async def stop(self) -> None:
         self._shutdown.set()

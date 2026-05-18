@@ -24,9 +24,7 @@ async def test_reconcile_all_imports_existing_note_file(memdb, tmp_path: Path) -
         "SELECT source, body FROM note_revisions WHERE note_name = ? ORDER BY id",
         ("2026-05-13",),
     ).fetchall()
-    assert [(r["source"], r["body"]) for r in revs] == [
-        ("file_import", "# Imported\n- from disk")
-    ]
+    assert [(r["source"], r["body"]) for r in revs] == [("file_import", "# Imported\n- from disk")]
 
 
 @pytest.mark.asyncio

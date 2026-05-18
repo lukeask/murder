@@ -437,8 +437,7 @@ def _migrate_notes_identity_status(conn: sqlite3.Connection) -> None:
     cols = {row["name"] for row in conn.execute("PRAGMA table_info(notes)").fetchall()}
     if {"id", "status", "retired_at"} <= cols:
         conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_notes_status_updated "
-            "ON notes(status, updated_at)"
+            "CREATE INDEX IF NOT EXISTS idx_notes_status_updated ON notes(status, updated_at)"
         )
         return
 
@@ -483,8 +482,7 @@ def _migrate_notes_identity_status(conn: sqlite3.Connection) -> None:
         conn.execute("DROP TABLE notes_old_identity_migration")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_notes_updated ON notes(updated_at)")
         conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_notes_status_updated "
-            "ON notes(status, updated_at)"
+            "CREATE INDEX IF NOT EXISTS idx_notes_status_updated ON notes(status, updated_at)"
         )
         conn.execute("COMMIT")
     except Exception:
@@ -531,6 +529,7 @@ def _migrate_agents_notetaker_role(conn: sqlite3.Connection) -> None:
         """
     )
 
+
 def _migrate_events_schema_version(conn: sqlite3.Connection) -> None:
     row = conn.execute(
         "SELECT 1 FROM pragma_table_info('events') WHERE name = 'schema_version'"
@@ -542,9 +541,7 @@ def _migrate_events_schema_version(conn: sqlite3.Connection) -> None:
 
 def _migrate_ticket_metadata_columns(conn: sqlite3.Connection) -> None:
     """Add additive ticket metadata/scheduling columns for YAML sidecar sync."""
-    ticket_cols = {
-        row["name"] for row in conn.execute("PRAGMA table_info(tickets)").fetchall()
-    }
+    ticket_cols = {row["name"] for row in conn.execute("PRAGMA table_info(tickets)").fetchall()}
     migrations: tuple[tuple[str, str], ...] = (
         ("schedule_at", "TEXT"),
         ("metadata_hash", "TEXT"),
@@ -561,19 +558,14 @@ def _migrate_ticket_metadata_columns(conn: sqlite3.Connection) -> None:
         conn.execute(f"ALTER TABLE tickets ADD COLUMN {name} {ddl}")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_tickets_schedule_at ON tickets(schedule_at)")
     conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_tickets_metadata_sync_state "
-        "ON tickets(metadata_sync_state)"
+        "CREATE INDEX IF NOT EXISTS idx_tickets_metadata_sync_state ON tickets(metadata_sync_state)"
     )
 
 
 def _migrate_role_names(conn: sqlite3.Connection) -> None:
     """Rename augur→crow_handler and monkey→crow in the agents table."""
-    conn.execute(
-        "UPDATE agents SET role = 'crow_handler' WHERE role = 'augur'"
-    )
-    conn.execute(
-        "UPDATE agents SET role = 'crow' WHERE role = 'monkey'"
-    )
+    conn.execute("UPDATE agents SET role = 'crow_handler' WHERE role = 'augur'")
+    conn.execute("UPDATE agents SET role = 'crow' WHERE role = 'monkey'")
     conn.execute(
         "UPDATE agents SET agent_id = REPLACE(agent_id, 'augur-', 'crow_handler-')"
         " WHERE agent_id LIKE 'augur-%'"
@@ -628,6 +620,7 @@ def db_path_for(repo_root: Path) -> Path:
 
 # --- Iso timestamp helper ---------------------------------------------------
 
+
 def _now() -> str:
     return datetime.utcnow().isoformat(timespec="seconds")
 
@@ -648,6 +641,7 @@ def ensure_notetaker_context_row(conn: sqlite3.Connection) -> None:
 
 
 # --- Plans ------------------------------------------------------------------
+
 
 def insert_plan_revision(
     conn: sqlite3.Connection,
@@ -757,9 +751,7 @@ def upsert_plan(
             (plan.name, ticket_id),
         )
     if create_revision:
-        insert_plan_revision(
-            conn, plan, source=revision_source, content_hash=content_hash
-        )
+        insert_plan_revision(conn, plan, source=revision_source, content_hash=content_hash)
 
 
 def list_plans(conn: sqlite3.Connection) -> list[dict[str, Any]]:
@@ -801,6 +793,7 @@ def mark_plan_sync_state(
 
 # --- Notes (planning scratchpad docs) --------------------------------------
 
+
 def get_note(conn: sqlite3.Connection, name: str) -> dict[str, Any] | None:
     row = conn.execute("SELECT * FROM notes WHERE name = ?", (name,)).fetchone()
     return dict(row) if row else None
@@ -826,9 +819,7 @@ def latest_note_name(conn: sqlite3.Connection) -> str | None:
     return str(row["name"]) if row else None
 
 
-def upsert_note(
-    conn: sqlite3.Connection, name: str, *, body: str, materialized_path: str
-) -> None:
+def upsert_note(conn: sqlite3.Connection, name: str, *, body: str, materialized_path: str) -> None:
     now = _now()
     existing = conn.execute("SELECT 1 FROM notes WHERE name = ?", (name,)).fetchone()
     if existing is None:
@@ -925,6 +916,7 @@ def list_note_revisions(conn: sqlite3.Connection, name: str) -> list[dict[str, A
 
 # --- Notetaker context (singleton) + capture entries -------------------------
 
+
 def get_notetaker_context(conn: sqlite3.Connection) -> dict[str, Any] | None:
     row = conn.execute(
         "SELECT * FROM notetaker_context WHERE id = ?",
@@ -946,9 +938,7 @@ def upsert_notetaker_context(
     )
 
 
-def insert_notes_entry(
-    conn: sqlite3.Connection, *, raw: str, cleaned: str, short_vers: str
-) -> int:
+def insert_notes_entry(conn: sqlite3.Connection, *, raw: str, cleaned: str, short_vers: str) -> int:
     cur = conn.execute(
         """
         INSERT INTO notes_entries (ts, raw, cleaned, short_vers)
@@ -959,18 +949,14 @@ def insert_notes_entry(
     return int(cur.lastrowid or 0)
 
 
-def update_notes_entry_short_vers(
-    conn: sqlite3.Connection, entry_id: int, short_vers: str
-) -> None:
+def update_notes_entry_short_vers(conn: sqlite3.Connection, entry_id: int, short_vers: str) -> None:
     conn.execute(
         "UPDATE notes_entries SET short_vers = ? WHERE id = ?",
         (short_vers, entry_id),
     )
 
 
-def list_recent_notes_entries(
-    conn: sqlite3.Connection, *, limit: int = 50
-) -> list[dict[str, Any]]:
+def list_recent_notes_entries(conn: sqlite3.Connection, *, limit: int = 50) -> list[dict[str, Any]]:
     rows = conn.execute(
         """
         SELECT id, ts, raw, cleaned, short_vers
@@ -987,6 +973,7 @@ def list_recent_notes_entries(
 # Persisted, parsed transcript of an agent's interactive session — one row per
 # turn. See murder/conversation.py for the merge/reconcile logic; this layer is
 # just dumb storage.
+
 
 def get_agent_messages(conn: sqlite3.Connection, agent_id: str) -> list[dict[str, Any]]:
     rows = conn.execute(
@@ -1016,6 +1003,7 @@ def replace_agent_messages(
 
 # --- Runs -------------------------------------------------------------------
 
+
 def insert_run(conn: sqlite3.Connection, run_id: str, config_snapshot: str) -> None:
     conn.execute(
         "INSERT INTO runs(run_id, started_at, config_snapshot) VALUES (?, ?, ?)",
@@ -1028,6 +1016,7 @@ def end_run(conn: sqlite3.Connection, run_id: str) -> None:
 
 
 # --- Tickets ----------------------------------------------------------------
+
 
 def insert_ticket(conn: sqlite3.Connection, ticket: Ticket) -> None:
     """Insert ticket + its child rows in one transaction."""
@@ -1141,21 +1130,16 @@ def get_ticket(conn: sqlite3.Connection, ticket_id: str) -> dict[str, Any] | Non
     ]
     write_set = [
         r["path"]
-        for r in conn.execute(
-            "SELECT path FROM ticket_write_set WHERE ticket_id = ?", (ticket_id,)
-        )
+        for r in conn.execute("SELECT path FROM ticket_write_set WHERE ticket_id = ?", (ticket_id,))
     ]
     skills = [
         r["skill"]
-        for r in conn.execute(
-            "SELECT skill FROM ticket_skills WHERE ticket_id = ?", (ticket_id,)
-        )
+        for r in conn.execute("SELECT skill FROM ticket_skills WHERE ticket_id = ?", (ticket_id,))
     ]
     checklist = [
         dict(r)
         for r in conn.execute(
-            "SELECT id, ord, text, done, done_at FROM checklist "
-            "WHERE ticket_id = ? ORDER BY ord",
+            "SELECT id, ord, text, done, done_at FROM checklist WHERE ticket_id = ? ORDER BY ord",
             (ticket_id,),
         )
     ]
@@ -1168,9 +1152,7 @@ def get_ticket(conn: sqlite3.Connection, ticket_id: str) -> dict[str, Any] | Non
     }
 
 
-def list_tickets_by_status(
-    conn: sqlite3.Connection, status: str
-) -> list[dict[str, Any]]:
+def list_tickets_by_status(conn: sqlite3.Connection, status: str) -> list[dict[str, Any]]:
     rows = conn.execute(
         "SELECT id FROM tickets WHERE status = ? ORDER BY wave, id", (status,)
     ).fetchall()
@@ -1183,9 +1165,7 @@ def list_tickets_by_status(
 
 
 def list_tickets_in_wave(conn: sqlite3.Connection, wave: int) -> list[dict[str, Any]]:
-    rows = conn.execute(
-        "SELECT id FROM tickets WHERE wave = ? ORDER BY id", (wave,)
-    ).fetchall()
+    rows = conn.execute("SELECT id FROM tickets WHERE wave = ? ORDER BY id", (wave,)).fetchall()
     out: list[dict[str, Any]] = []
     for r in rows:
         t = get_ticket(conn, r["id"])
@@ -1194,9 +1174,7 @@ def list_tickets_in_wave(conn: sqlite3.Connection, wave: int) -> list[dict[str, 
     return out
 
 
-def update_ticket_status(
-    conn: sqlite3.Connection, ticket_id: str, new_status: str
-) -> None:
+def update_ticket_status(conn: sqlite3.Connection, ticket_id: str, new_status: str) -> None:
     conn.execute(
         "UPDATE tickets SET status = ?, updated_at = ? WHERE id = ?",
         (new_status, _now(), ticket_id),
@@ -1204,9 +1182,7 @@ def update_ticket_status(
 
 
 def get_ticket_status(conn: sqlite3.Connection, ticket_id: str) -> str | None:
-    row = conn.execute(
-        "SELECT status FROM tickets WHERE id = ?", (ticket_id,)
-    ).fetchone()
+    row = conn.execute("SELECT status FROM tickets WHERE id = ?", (ticket_id,)).fetchone()
     return row["status"] if row else None
 
 
@@ -1242,6 +1218,7 @@ def dependents_of(conn: sqlite3.Connection, ticket_id: str) -> list[str]:
 
 
 # --- Checklist (D6) ---------------------------------------------------------
+
 
 def set_checklist(conn: sqlite3.Connection, ticket_id: str, items: list[str]) -> None:
     """Replace a ticket's checklist. Used by Collaborator on carve."""
@@ -1301,6 +1278,7 @@ def checklist_progress(conn: sqlite3.Connection, ticket_id: str) -> tuple[int, i
 
 # --- Agents -----------------------------------------------------------------
 
+
 def upsert_agent(
     conn: sqlite3.Connection,
     *,
@@ -1314,9 +1292,7 @@ def upsert_agent(
 ) -> None:
     """Insert or update an agent row."""
     now = _now()
-    existing = conn.execute(
-        "SELECT 1 FROM agents WHERE agent_id = ?", (agent_id,)
-    ).fetchone()
+    existing = conn.execute("SELECT 1 FROM agents WHERE agent_id = ?", (agent_id,)).fetchone()
     if existing is None:
         conn.execute(
             """
@@ -1356,6 +1332,7 @@ def set_agent_status(conn: sqlite3.Connection, agent_id: str, status: str) -> No
 
 
 # --- Events -----------------------------------------------------------------
+
 
 def insert_event(
     conn: sqlite3.Connection,
@@ -1713,6 +1690,7 @@ def insert_command_event(
 
 # --- Escalations ------------------------------------------------------------
 
+
 def insert_escalation(
     conn: sqlite3.Connection,
     *,
@@ -1743,8 +1721,7 @@ def list_pending_escalations(
         ).fetchall()
     else:
         rows = conn.execute(
-            "SELECT * FROM escalations WHERE resolved = 0 AND to_recipient = ? "
-            "ORDER BY ts DESC",
+            "SELECT * FROM escalations WHERE resolved = 0 AND to_recipient = ? ORDER BY ts DESC",
             (recipient,),
         ).fetchall()
     return [dict(r) for r in rows]

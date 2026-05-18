@@ -31,4 +31,3 @@ You are working on ticket `{ticket_id}` ({title}).
 
 - Stay in write-set.
 - No unplanned abstractions.
-- No `.murder/` edits.

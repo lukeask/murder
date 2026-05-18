@@ -27,7 +27,13 @@ async def test_kickoff_ready_command() -> None:
         raise AssertionError("should not be called")
 
     async def _set_schedule_at(_ticket_id: str, _schedule_at: str | None) -> dict[str, object]:
-            raise AssertionError("should not be called")
+        raise AssertionError("should not be called")
+
+    async def _update_metadata(_t: str, _p: dict[str, object]) -> dict[str, object]:
+        raise AssertionError("should not be called")
+
+    async def _force_status(_t: str, _s: str) -> dict[str, object]:
+        raise AssertionError("should not be called")
 
     worker = OrchestratorCommandWorker(
         kickoff_ready=_kickoff_ready,
@@ -35,6 +41,8 @@ async def test_kickoff_ready_command() -> None:
         capture_submit=_capture_submit,
         retry_failed=_retry_failed,
         set_schedule_at=_set_schedule_at,
+        update_metadata=_update_metadata,
+        force_status=_force_status,
     )
     result = await worker.on_command(
         CommandEvent(
@@ -73,12 +81,22 @@ async def test_ticket_apply_carve_ready_command() -> None:
     async def _set_schedule_at(_ticket_id: str, _schedule_at: str | None) -> dict[str, object]:
         raise AssertionError("should not be called")
 
+    async def _update_metadata(
+        _t: str, _p: dict[str, object]
+    ) -> dict[str, object]:  # pragma: no cover
+        raise AssertionError("should not be called")
+
+    async def _force_status(_t: str, _s: str) -> dict[str, object]:  # pragma: no cover
+        raise AssertionError("should not be called")
+
     worker = OrchestratorCommandWorker(
         kickoff_ready=_kickoff_ready,
         apply_carve_ready=_apply_carve,
         capture_submit=_capture_submit,
         retry_failed=_retry_failed,
         set_schedule_at=_set_schedule_at,
+        update_metadata=_update_metadata,
+        force_status=_force_status,
     )
     carve = {"id": "t099", "title": "X", "wave": 1}
     result = await worker.on_command(
@@ -103,7 +121,9 @@ async def test_ticket_retry_failed_command() -> None:
     async def _kickoff_ready(_only: str | None) -> list[str]:  # pragma: no cover
         raise AssertionError("should not be called")
 
-    async def _apply_carve_ready(_tid: str, _payload: dict[str, object]) -> dict[str, object]:  # pragma: no cover
+    async def _apply_carve_ready(
+        _tid: str, _payload: dict[str, object]
+    ) -> dict[str, object]:  # pragma: no cover
         raise AssertionError("should not be called")
 
     async def _capture_submit(_payload: dict[str, object]) -> dict[str, object]:  # pragma: no cover
@@ -114,7 +134,15 @@ async def test_ticket_retry_failed_command() -> None:
         return {"handled": True, "ticket_id": ticket_id, "prev_status": "failed"}
 
     async def _set_schedule_at(_ticket_id: str, _schedule_at: str | None) -> dict[str, object]:
-            raise AssertionError("should not be called")
+        raise AssertionError("should not be called")
+
+    async def _update_metadata(
+        _t: str, _p: dict[str, object]
+    ) -> dict[str, object]:  # pragma: no cover
+        raise AssertionError("should not be called")
+
+    async def _force_status(_t: str, _s: str) -> dict[str, object]:  # pragma: no cover
+        raise AssertionError("should not be called")
 
     worker = OrchestratorCommandWorker(
         kickoff_ready=_kickoff_ready,
@@ -122,6 +150,8 @@ async def test_ticket_retry_failed_command() -> None:
         capture_submit=_capture_submit,
         retry_failed=_retry_failed,
         set_schedule_at=_set_schedule_at,
+        update_metadata=_update_metadata,
+        force_status=_force_status,
     )
     result = await worker.on_command(
         CommandEvent(
@@ -149,6 +179,8 @@ async def test_ticket_retry_failed_missing_ticket_id_raises() -> None:
         capture_submit=lambda _p: (_ for _ in ()).throw(AssertionError),  # type: ignore[arg-type]
         retry_failed=_noop,
         set_schedule_at=lambda _t, _s: (_ for _ in ()).throw(AssertionError),  # type: ignore[arg-type]
+        update_metadata=lambda _t, _p: (_ for _ in ()).throw(AssertionError),  # type: ignore[arg-type]
+        force_status=lambda _t, _s: (_ for _ in ()).throw(AssertionError),  # type: ignore[arg-type]
     )
     with pytest.raises(ValueError, match="ticket_id"):
         await worker.on_command(
@@ -161,4 +193,4 @@ async def test_ticket_retry_failed_missing_ticket_id_raises() -> None:
                 idempotency_key="idem-4",
             ),
             WorkerCtx(repo_root=Path(".")),
-    )
+        )

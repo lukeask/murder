@@ -150,9 +150,7 @@ class SchedulerWorker(Worker):
         if today != self._last_prune_day:
             self._prune_old_snapshots(ctx.db)
             self._last_prune_day = today
-        row = ctx.db.execute(
-            "SELECT mode FROM scheduler_state WHERE id = 1"
-        ).fetchone()
+        row = ctx.db.execute("SELECT mode FROM scheduler_state WHERE id = 1").fetchone()
         if row is None:
             return
         mode = row["mode"]
@@ -326,18 +324,37 @@ class SchedulerWorker(Worker):
                 f" below threshold {threshold * 100:.0f}%"
             )
             self._upsert_decision_cache(
-                ctx, harness, window_key, "crow_magic",
-                False, usage, t_until_reset, t_period, threshold, rationale, None,
+                ctx,
+                harness,
+                window_key,
+                "crow_magic",
+                False,
+                usage,
+                t_until_reset,
+                t_period,
+                threshold,
+                rationale,
+                None,
             )
             await self._emit_decision(
-                ctx, harness, window_key, False, usage,
-                t_until_reset, t_period, threshold, rationale, None,
+                ctx,
+                harness,
+                window_key,
+                False,
+                usage,
+                t_until_reset,
+                t_period,
+                threshold,
+                rationale,
+                None,
             )
             return
 
         # multiharness_cutoff: skip if usage below cutoff and harness is already busy
         if multiharness_cutoff is not None:
-            cutoff_frac = multiharness_cutoff / 100.0 if multiharness_cutoff > 1.0 else multiharness_cutoff
+            cutoff_frac = (
+                multiharness_cutoff / 100.0 if multiharness_cutoff > 1.0 else multiharness_cutoff
+            )
             if usage < cutoff_frac:
                 busy = ctx.db.execute(
                     "SELECT COUNT(*) AS n FROM tickets WHERE harness = ? AND status = 'in_progress'",
@@ -349,12 +366,29 @@ class SchedulerWorker(Worker):
                         f" below multiharness cutoff {cutoff_frac * 100:.0f}% (harness busy)"
                     )
                     self._upsert_decision_cache(
-                        ctx, harness, window_key, "crow_magic",
-                        False, usage, t_until_reset, t_period, threshold, rationale, None,
+                        ctx,
+                        harness,
+                        window_key,
+                        "crow_magic",
+                        False,
+                        usage,
+                        t_until_reset,
+                        t_period,
+                        threshold,
+                        rationale,
+                        None,
                     )
                     await self._emit_decision(
-                        ctx, harness, window_key, False, usage,
-                        t_until_reset, t_period, threshold, rationale, None,
+                        ctx,
+                        harness,
+                        window_key,
+                        False,
+                        usage,
+                        t_until_reset,
+                        t_period,
+                        threshold,
+                        rationale,
+                        None,
                     )
                     return
 
@@ -386,12 +420,29 @@ class SchedulerWorker(Worker):
                 f" (usage {percent_used:.0f}% ≥ threshold {threshold * 100:.0f}%)"
             )
             self._upsert_decision_cache(
-                ctx, harness, window_key, "crow_magic",
-                False, usage, t_until_reset, t_period, threshold, rationale, None,
+                ctx,
+                harness,
+                window_key,
+                "crow_magic",
+                False,
+                usage,
+                t_until_reset,
+                t_period,
+                threshold,
+                rationale,
+                None,
             )
             await self._emit_decision(
-                ctx, harness, window_key, False, usage,
-                t_until_reset, t_period, threshold, rationale, None,
+                ctx,
+                harness,
+                window_key,
+                False,
+                usage,
+                t_until_reset,
+                t_period,
+                threshold,
+                rationale,
+                None,
             )
             return
 
@@ -401,18 +452,33 @@ class SchedulerWorker(Worker):
             f" ≥ threshold {threshold * 100:.0f}%"
         )
         self._upsert_decision_cache(
-            ctx, harness, window_key, "crow_magic",
-            True, usage, t_until_reset, t_period, threshold, rationale, ticket_id,
+            ctx,
+            harness,
+            window_key,
+            "crow_magic",
+            True,
+            usage,
+            t_until_reset,
+            t_period,
+            threshold,
+            rationale,
+            ticket_id,
         )
         await self._emit_decision(
-            ctx, harness, window_key, True, usage,
-            t_until_reset, t_period, threshold, rationale, ticket_id,
+            ctx,
+            harness,
+            window_key,
+            True,
+            usage,
+            t_until_reset,
+            t_period,
+            threshold,
+            rationale,
+            ticket_id,
         )
 
         command_id = str(uuid4())
-        idempotency_key = (
-            f"scheduler.kickoff_ready:{ctx.run_id}:{self._tick_seq}:{ticket_id}"
-        )
+        idempotency_key = f"scheduler.kickoff_ready:{ctx.run_id}:{self._tick_seq}:{ticket_id}"
         try:
             dbmod.enqueue_command(
                 ctx.db,
@@ -465,9 +531,17 @@ class SchedulerWorker(Worker):
                 updated_at       = excluded.updated_at
             """,
             (
-                harness, window_key, mode, int(decision), usage,
-                t_until_reset, t_period, threshold, rationale,
-                kicked_ticket_id, now,
+                harness,
+                window_key,
+                mode,
+                int(decision),
+                usage,
+                t_until_reset,
+                t_period,
+                threshold,
+                rationale,
+                kicked_ticket_id,
+                now,
             ),
         )
 
@@ -510,17 +584,13 @@ class SchedulerWorker(Worker):
             return await self._handle_set_params(command, ctx)
         return {"handled": False}
 
-    async def _handle_set_mode(
-        self, command: CommandEvent, ctx: WorkerCtx
-    ) -> dict[str, Any]:
+    async def _handle_set_mode(self, command: CommandEvent, ctx: WorkerCtx) -> dict[str, Any]:
         if ctx.db is None:
             raise RuntimeError("SchedulerWorker requires ctx.db")
         to_mode = command.payload.get("mode")
         if to_mode not in _VALID_MODES:
             raise ValueError(f"scheduler.set_mode: unknown mode {to_mode!r}")
-        row = ctx.db.execute(
-            "SELECT mode FROM scheduler_state WHERE id = 1"
-        ).fetchone()
+        row = ctx.db.execute("SELECT mode FROM scheduler_state WHERE id = 1").fetchone()
         from_mode = row["mode"] if row else "manual"
         now = datetime.now(timezone.utc).isoformat()
         ctx.db.execute(
@@ -542,9 +612,7 @@ class SchedulerWorker(Worker):
             )
         return {"handled": True, "from_mode": from_mode, "to_mode": to_mode}
 
-    async def _handle_set_params(
-        self, command: CommandEvent, ctx: WorkerCtx
-    ) -> dict[str, Any]:
+    async def _handle_set_params(self, command: CommandEvent, ctx: WorkerCtx) -> dict[str, Any]:
         if ctx.db is None:
             raise RuntimeError("SchedulerWorker requires ctx.db")
         try:

@@ -26,8 +26,10 @@ def test_startup_cmd_includes_model_when_configured() -> None:
 
 
 async def test_codex_startup_model_is_supported_after_startup() -> None:
-    result = await CodexAdapter(startup_model="gpt-5.5").attach("sess", Path("/repo")).set_model(
-        "gpt-5.5"
+    result = (
+        await CodexAdapter(startup_model="gpt-5.5")
+        .attach("sess", Path("/repo"))
+        .set_model("gpt-5.5")
     )
     assert result.ok
 

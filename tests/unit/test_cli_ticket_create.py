@@ -30,8 +30,9 @@ def test_ticket_create_from_cli_options(monkeypatch, tmp_path: Path) -> None:
         [
             "ticket",
             "create",
-            "t001",
             "First ticket",
+            "--id",
+            "t001",
             "--wave",
             "1",
             "--status",
@@ -66,9 +67,9 @@ def test_ticket_create_from_cli_options(monkeypatch, tmp_path: Path) -> None:
         "Create the row",
         "Write markdown",
     ]
-    assert "Wire up the dogfood path." in (
-        tmp_path / ".murder" / "tickets" / "t001.md"
-    ).read_text(encoding="utf-8")
+    assert "Wire up the dogfood path." in (tmp_path / ".murder" / "tickets" / "t001.md").read_text(
+        encoding="utf-8"
+    )
 
 
 def test_ticket_create_imports_markdown_sections(monkeypatch, tmp_path: Path) -> None:
@@ -96,7 +97,7 @@ def test_ticket_create_imports_markdown_sections(monkeypatch, tmp_path: Path) ->
 
     result = runner.invoke(
         app,
-        ["ticket", "create", "t002", "Imported ticket", "--from", str(source)],
+        ["ticket", "create", "Imported ticket", "--id", "t002", "--from", str(source)],
     )
 
     assert result.exit_code == 0, result.output
@@ -112,16 +113,14 @@ def test_ticket_create_requires_initialized_db(monkeypatch, tmp_path: Path) -> N
     monkeypatch.chdir(tmp_path)
     runner = CliRunner()
 
-    result = runner.invoke(app, ["ticket", "create", "t003", "No DB"])
+    result = runner.invoke(app, ["ticket", "create", "No DB", "--id", "t003"])
 
     assert result.exit_code == 1
     assert "No murder.db" in result.output
     assert not (tmp_path / ".murder" / "tickets" / "t003.md").exists()
 
 
-def test_lint_allows_future_write_set_files_before_done(
-    monkeypatch, tmp_path: Path
-) -> None:
+def test_lint_allows_future_write_set_files_before_done(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.chdir(tmp_path)
     runner = CliRunner()
 
@@ -131,8 +130,9 @@ def test_lint_allows_future_write_set_files_before_done(
         [
             "ticket",
             "create",
-            "t004",
             "Create missing files later",
+            "--id",
+            "t004",
             "--status",
             "ready",
             "--write",
@@ -155,8 +155,9 @@ def test_lint_reports_missing_done_write_set(monkeypatch, tmp_path: Path) -> Non
         [
             "ticket",
             "create",
-            "t005",
             "Claimed complete",
+            "--id",
+            "t005",
             "--status",
             "done",
             "--write",
