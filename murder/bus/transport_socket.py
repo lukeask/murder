@@ -110,9 +110,7 @@ class SocketBusServer:
                     writer,
                     correlation_id=hello.correlation_id,
                     code="protocol_version_mismatch",
-                    message=(
-                        f"server={PROTOCOL_VERSION} client={hello.body.protocol_version}"
-                    ),
+                    message=(f"server={PROTOCOL_VERSION} client={hello.body.protocol_version}"),
                 )
                 return
             session = _ClientSession(
@@ -349,9 +347,7 @@ class SocketBusServer:
 
     def _user_count(self) -> int:
         return sum(
-            count
-            for kind, count in self._kind_counts.items()
-            if kind in PRESENCE_USER_KINDS
+            count for kind, count in self._kind_counts.items() if kind in PRESENCE_USER_KINDS
         )
 
 

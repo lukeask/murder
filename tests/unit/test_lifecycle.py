@@ -12,9 +12,9 @@ from murder.tickets.lifecycle import (
     VALID_TRANSITIONS,
     InvalidTransition,
     clear_last_error,
+    reopen,
     set_last_error,
     transition,
-    reopen,
 )
 
 
@@ -37,13 +37,29 @@ def test_done_can_reopen_to_planned() -> None:
     assert TicketStatus.PLANNED in VALID_TRANSITIONS[TicketStatus.DONE]
 
 
-def test_failed_to_planned_only() -> None:
-    assert VALID_TRANSITIONS[TicketStatus.FAILED] == {TicketStatus.PLANNED}
+def test_failed_to_planned_or_archived() -> None:
+    assert VALID_TRANSITIONS[TicketStatus.FAILED] == {TicketStatus.PLANNED, TicketStatus.ARCHIVED}
 
 
 def test_planned_to_in_progress_is_blocked() -> None:
     """planned must pass through ready first."""
     assert TicketStatus.IN_PROGRESS not in VALID_TRANSITIONS[TicketStatus.PLANNED]
+
+
+def test_any_active_status_can_archive() -> None:
+    for st in (
+        TicketStatus.PLANNED,
+        TicketStatus.READY,
+        TicketStatus.IN_PROGRESS,
+        TicketStatus.BLOCKED,
+        TicketStatus.FAILED,
+        TicketStatus.DONE,
+    ):
+        assert TicketStatus.ARCHIVED in VALID_TRANSITIONS[st], f"{st} should allow archiving"
+
+
+def test_archived_can_only_unarchive_to_planned() -> None:
+    assert VALID_TRANSITIONS[TicketStatus.ARCHIVED] == {TicketStatus.PLANNED}
 
 
 def test_invalid_transition_raises(memdb: sqlite3.Connection) -> None:
@@ -55,9 +71,7 @@ def test_invalid_transition_raises(memdb: sqlite3.Connection) -> None:
 def test_reopen_cascades_dependents(memdb: sqlite3.Connection) -> None:
     _seed_ticket(memdb, "t001", status="done")
     _seed_ticket(memdb, "t002", status="ready")
-    memdb.execute(
-        "INSERT INTO ticket_deps(ticket_id, depends_on_id) VALUES ('t002', 't001')"
-    )
+    memdb.execute("INSERT INTO ticket_deps(ticket_id, depends_on_id) VALUES ('t002', 't001')")
     cascaded = reopen(memdb, "t001")
     assert cascaded == ["t002"]
     assert dbmod.get_ticket_status(memdb, "t001") == "planned"

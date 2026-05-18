@@ -28,9 +28,7 @@ class OpenAICompatibleClient(OpenRouterClient):
         if require_api_key and not key:
             raise RuntimeError(f"{api_key_env} is unset")
         self.api_key = key
-        self.base_url = (base_url or os.environ.get("OPENAI_BASE_URL") or OPENAI_BASE).rstrip(
-            "/"
-        )
+        self.base_url = (base_url or os.environ.get("OPENAI_BASE_URL") or OPENAI_BASE).rstrip("/")
         self._headers = {"Content-Type": "application/json"}
         if self.api_key:
             self._headers["Authorization"] = f"Bearer {self.api_key}"

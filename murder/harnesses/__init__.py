@@ -11,13 +11,13 @@ from murder.harnesses.base import (
     HarnessAdapter,
     HarnessSession,
 )
-from murder.harnesses.models import HarnessPaneState, HarnessStartSpec
-from murder.harnesses.results import SimpleResult
 from murder.harnesses.claude_code import ClaudeCodeAdapter
 from murder.harnesses.codex import CodexAdapter
 from murder.harnesses.cursor import CursorAdapter
+from murder.harnesses.models import HarnessPaneState, HarnessStartSpec
 from murder.harnesses.murder_native import MurderNativeAdapter
 from murder.harnesses.pi import PiAdapter
+from murder.harnesses.results import SimpleResult
 
 REGISTRY: dict[str, type[HarnessAdapter]] = {
     "cursor": CursorAdapter,

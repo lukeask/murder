@@ -77,9 +77,7 @@ async def test_failed_collaborator_start_is_reaped(
 
     assert rt.get_agent("collaborator-0") is None
     assert stopped == ["collaborator-0"]
-    row = memdb.execute(
-        "SELECT status FROM agents WHERE agent_id = 'collaborator-0'"
-    ).fetchone()
+    row = memdb.execute("SELECT status FROM agents WHERE agent_id = 'collaborator-0'").fetchone()
     assert row["status"] == AgentStatus.DEAD.value
 
 
@@ -119,8 +117,6 @@ async def test_stale_collaborator_row_does_not_block_retry(
     stale = memdb.execute(
         "SELECT status FROM agents WHERE agent_id = 'collaborator-stale'"
     ).fetchone()
-    fresh = memdb.execute(
-        "SELECT status FROM agents WHERE agent_id = 'collaborator-0'"
-    ).fetchone()
+    fresh = memdb.execute("SELECT status FROM agents WHERE agent_id = 'collaborator-0'").fetchone()
     assert stale["status"] == AgentStatus.DEAD.value
     assert fresh["status"] == AgentStatus.RUNNING.value

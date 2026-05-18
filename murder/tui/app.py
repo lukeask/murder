@@ -420,11 +420,7 @@ class MurderApp(App[None]):
     def on_crow_tile_opened(self, event: CrowTile.Opened) -> None:
         # The CrowsView itself handles enlarge; surface a short attach hint
         # so power users can still drop into a real tmux session.
-        hint = (
-            f"tmux attach -t {event.entry.session}"
-            if event.entry.session
-            else "(no session)"
-        )
+        hint = f"tmux attach -t {event.entry.session}" if event.entry.session else "(no session)"
         self.notify(f"attach: {hint}", timeout=6)
 
     def on_plan_list_plan_highlighted(self, event: PlanList.PlanHighlighted) -> None:
@@ -1010,9 +1006,7 @@ class MurderApp(App[None]):
             group="retry",
         )
 
-    def on_escalation_strip_retry_requested(
-        self, event: EscalationStrip.RetryRequested
-    ) -> None:
+    def on_escalation_strip_retry_requested(self, event: EscalationStrip.RetryRequested) -> None:
         event.stop()
         self.run_worker(
             self._submit_retry_failed(event.ticket_id),
@@ -1020,9 +1014,7 @@ class MurderApp(App[None]):
             group="retry",
         )
 
-    def on_mode_strip_set_mode_requested(
-        self, event: ModeStrip.SetModeRequested
-    ) -> None:
+    def on_mode_strip_set_mode_requested(self, event: ModeStrip.SetModeRequested) -> None:
         event.stop()
         self.run_worker(
             self._submit_set_scheduler_mode(event.to_mode),
@@ -1066,9 +1058,7 @@ class MurderApp(App[None]):
 
     def _enqueue_carve_autosave(self, ticket_id: str, spec: dict[str, object]) -> None:
         self.run_worker(
-            self._submit_update_metadata_and_status(
-                ticket_id, spec, notify_success=False
-            ),
+            self._submit_update_metadata_and_status(ticket_id, spec, notify_success=False),
             exclusive=True,
             group="carve",
         )

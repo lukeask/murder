@@ -89,6 +89,7 @@ def _insert_snapshot(
 # Rationale format
 # ---------------------------------------------------------------------------
 
+
 def test_hold_rationale_format(memdb: sqlite3.Connection) -> None:
     """Hold decision produces 'Holding: ...' rationale in decision cache."""
     worker = SchedulerWorker()
@@ -98,7 +99,9 @@ def test_hold_rationale_format(memdb: sqlite3.Connection) -> None:
     _insert_run(memdb)
     _insert_ticket(memdb, "de001", status="ready", harness="cursor")
     # 5% usage at t=7000 → threshold ≈ 0.30 → hold
-    _insert_snapshot(memdb, "cursor", percent_used=5.0, t_period_minutes=10_000.0, t_until_reset_minutes=7_000.0)
+    _insert_snapshot(
+        memdb, "cursor", percent_used=5.0, t_period_minutes=10_000.0, t_until_reset_minutes=7_000.0
+    )
 
     worker._tick_seq = 1
     asyncio.run(worker._tick(ctx))
@@ -161,6 +164,7 @@ def test_no_ready_tickets_rationale(memdb: sqlite3.Connection) -> None:
 # Decision event emission
 # ---------------------------------------------------------------------------
 
+
 def test_decision_event_emitted_on_hold(memdb: sqlite3.Connection) -> None:
     """Hold decision emits a SchedulerDecisionEvent with decision=False."""
     bus = MagicMock()
@@ -212,6 +216,7 @@ def test_decision_event_emitted_on_kick(memdb: sqlite3.Connection) -> None:
 # ---------------------------------------------------------------------------
 # Usage-reset detection
 # ---------------------------------------------------------------------------
+
 
 def _insert_snapshot_raw(
     conn: sqlite3.Connection,
@@ -335,6 +340,7 @@ def test_usage_reset_not_emitted_without_bus(memdb: sqlite3.Connection) -> None:
 # ---------------------------------------------------------------------------
 # Decision cache upsert
 # ---------------------------------------------------------------------------
+
 
 def test_decision_cache_upserted_on_every_tick(memdb: sqlite3.Connection) -> None:
     """Cache row is upserted on each tick; only one row exists per (harness, window_key)."""

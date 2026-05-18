@@ -248,9 +248,7 @@ class CursorAdapter(HarnessAdapter):
         await asyncio.sleep(0.4)
         return True
 
-    async def initialize_defaults(
-        self, session: str, spec: HarnessStartSpec
-    ) -> SimpleResult[None]:
+    async def initialize_defaults(self, session: str, spec: HarnessStartSpec) -> SimpleResult[None]:
         mode = "on" if spec.auto_run is not False else "off"
         await tmux.send_keys(session, f"/auto-run {mode}", literal=True, enter=True)
         await asyncio.sleep(0.2)
@@ -260,9 +258,7 @@ class CursorAdapter(HarnessAdapter):
         del session
         return True
 
-    async def collect_usage_status(
-        self, session: str
-    ) -> SimpleResult[HarnessUsageStatus]:
+    async def collect_usage_status(self, session: str) -> SimpleResult[HarnessUsageStatus]:
         del session
         try:
             return ok_result(await asyncio.to_thread(cursor_usage.get_usage_status))

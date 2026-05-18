@@ -18,6 +18,7 @@ class ChatInput(TextArea):
         Binding("j", "cursor_down", "Down", show=False),
         Binding("k", "cursor_up", "Up", show=False),
     ]
+
     class UserMessage(Message):
         def __init__(self, text: str) -> None:
             self.text = text

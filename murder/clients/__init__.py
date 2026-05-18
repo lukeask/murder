@@ -18,9 +18,7 @@ def create_client(provider: str) -> APIClient | None:
         if provider == "openai":
             return OpenAICompatibleClient(base_url=os.environ.get("OPENAI_BASE_URL", OPENAI_BASE))
         if provider == "local":
-            base_url = os.environ.get("LOCAL_OPENAI_BASE_URL") or os.environ.get(
-                "OPENAI_BASE_URL"
-            )
+            base_url = os.environ.get("LOCAL_OPENAI_BASE_URL") or os.environ.get("OPENAI_BASE_URL")
             if not base_url:
                 return None
             return OpenAICompatibleClient(

@@ -97,6 +97,7 @@ def _command_count(conn: sqlite3.Connection) -> int:
 # Basic kick / no-kick decisions
 # ---------------------------------------------------------------------------
 
+
 def test_crow_magic_kicks_when_usage_high(memdb: sqlite3.Connection) -> None:
     """High usage (80%) in alwayscutoff zone → decisionf returns True → command queued."""
     worker = SchedulerWorker()
@@ -106,7 +107,9 @@ def test_crow_magic_kicks_when_usage_high(memdb: sqlite3.Connection) -> None:
     _insert_run(memdb)
     _insert_ticket(memdb, "cm001", harness="cursor")
     # 80% used, 5000 min left of 10000 — above alwayscutoff (0.6) → should kick
-    _insert_snapshot(memdb, "cursor", percent_used=80.0, t_period_minutes=10_000.0, t_until_reset_minutes=5_000.0)
+    _insert_snapshot(
+        memdb, "cursor", percent_used=80.0, t_period_minutes=10_000.0, t_until_reset_minutes=5_000.0
+    )
 
     worker._tick_seq = 1
     asyncio.run(worker._tick(ctx))
@@ -126,7 +129,9 @@ def test_crow_magic_no_kick_when_usage_very_low_early(memdb: sqlite3.Connection)
     _insert_run(memdb)
     _insert_ticket(memdb, "cm002", harness="cursor")
     # 5% used, 7000 min left of 10000 → threshold≈0.30 → 0.05 < 0.30 → no kick
-    _insert_snapshot(memdb, "cursor", percent_used=5.0, t_period_minutes=10_000.0, t_until_reset_minutes=7_000.0)
+    _insert_snapshot(
+        memdb, "cursor", percent_used=5.0, t_period_minutes=10_000.0, t_until_reset_minutes=7_000.0
+    )
 
     worker._tick_seq = 1
     asyncio.run(worker._tick(ctx))
@@ -169,6 +174,7 @@ def test_crow_magic_no_kick_in_manual_mode(memdb: sqlite3.Connection) -> None:
 # ---------------------------------------------------------------------------
 # multiharness_cutoff gate
 # ---------------------------------------------------------------------------
+
 
 def test_crow_magic_multiharness_cutoff_blocks_when_busy(memdb: sqlite3.Connection) -> None:
     """usage(0.3) < cutoff(0.5) AND harness is busy → skip."""
@@ -253,6 +259,7 @@ def test_crow_magic_multiharness_cutoff_null_disabled(memdb: sqlite3.Connection)
 # t_period derivation
 # ---------------------------------------------------------------------------
 
+
 def test_crow_magic_skips_window_without_period(memdb: sqlite3.Connection) -> None:
     """Window with no starts_at and unrecognised name → t_period=None → skip."""
     worker = SchedulerWorker()
@@ -313,6 +320,7 @@ def test_crow_magic_uses_named_window_period(memdb: sqlite3.Connection) -> None:
 # Idempotency within a tick
 # ---------------------------------------------------------------------------
 
+
 def test_crow_magic_tick_idempotent(memdb: sqlite3.Connection) -> None:
     """Same tick_seq → duplicate idempotency key → second call inserts nothing."""
     worker = SchedulerWorker()
@@ -333,6 +341,7 @@ def test_crow_magic_tick_idempotent(memdb: sqlite3.Connection) -> None:
 # ---------------------------------------------------------------------------
 # scheduler.set_params RPC
 # ---------------------------------------------------------------------------
+
 
 def test_set_params_upserts_row(memdb: sqlite3.Connection) -> None:
     from murder.bus.protocol import CommandEvent

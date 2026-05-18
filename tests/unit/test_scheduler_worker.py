@@ -41,6 +41,7 @@ def _insert_ticket(
 
 # --- on_start initialises scheduler_state row --------------------------------
 
+
 def test_on_start_inserts_default_row(memdb: sqlite3.Connection) -> None:
     worker = SchedulerWorker()
     asyncio.run(worker.on_start(_make_ctx(memdb)))
@@ -60,8 +61,10 @@ def test_on_start_is_idempotent(memdb: sqlite3.Connection) -> None:
 
 # --- scheduler.set_mode command ----------------------------------------------
 
+
 def _make_command_event(kind: str, payload: dict[str, Any]):  # type: ignore[type-arg]
     from murder.bus.protocol import CommandEvent
+
     return CommandEvent(
         run_id="run-test-001",
         agent_id="tui",
@@ -122,6 +125,7 @@ def test_unknown_command_returns_not_handled(memdb: sqlite3.Connection) -> None:
 
 # --- _tick logic -------------------------------------------------------------
 
+
 def test_tick_does_nothing_in_manual_mode(memdb: sqlite3.Connection) -> None:
     _insert_ticket(memdb, "t001", status="ready")
     worker = SchedulerWorker()
@@ -137,9 +141,7 @@ def test_tick_does_nothing_with_no_ready_tickets(memdb: sqlite3.Connection) -> N
     worker = SchedulerWorker()
     ctx = _make_ctx(memdb)
     asyncio.run(worker.on_start(ctx))
-    memdb.execute(
-        "UPDATE scheduler_state SET mode = 'autorun_ready' WHERE id = 1"
-    )
+    memdb.execute("UPDATE scheduler_state SET mode = 'autorun_ready' WHERE id = 1")
     _insert_ticket(memdb, "t002", status="planned")
     worker._tick_seq = 1
     asyncio.run(worker._tick(ctx))
@@ -151,9 +153,7 @@ def test_tick_submits_kickoff_when_autorun_and_ready(memdb: sqlite3.Connection) 
     worker = SchedulerWorker()
     ctx = _make_ctx(memdb)
     asyncio.run(worker.on_start(ctx))
-    memdb.execute(
-        "UPDATE scheduler_state SET mode = 'autorun_ready' WHERE id = 1"
-    )
+    memdb.execute("UPDATE scheduler_state SET mode = 'autorun_ready' WHERE id = 1")
     # Need a run row for the FK constraint
     memdb.execute(
         "INSERT INTO runs(run_id, started_at, config_snapshot) VALUES (?, ?, ?)",
@@ -172,9 +172,7 @@ def test_tick_is_idempotent_for_same_seq(memdb: sqlite3.Connection) -> None:
     worker = SchedulerWorker()
     ctx = _make_ctx(memdb)
     asyncio.run(worker.on_start(ctx))
-    memdb.execute(
-        "UPDATE scheduler_state SET mode = 'autorun_ready' WHERE id = 1"
-    )
+    memdb.execute("UPDATE scheduler_state SET mode = 'autorun_ready' WHERE id = 1")
     memdb.execute(
         "INSERT INTO runs(run_id, started_at, config_snapshot) VALUES (?, ?, ?)",
         ("run-test-001", "2026-01-01T00:00:00", "{}"),

@@ -198,9 +198,7 @@ class Supervisor:
                     dbmod.fail_command(
                         self._ctx.db,
                         command_id=command_id,
-                        last_error=(
-                            f"worker {worker.spec.name!r} did not handle {command.kind!r}"
-                        ),
+                        last_error=(f"worker {worker.spec.name!r} did not handle {command.kind!r}"),
                         retryable=False,
                     )
                 return

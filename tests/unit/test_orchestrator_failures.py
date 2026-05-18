@@ -45,19 +45,14 @@ async def test_orchestrator_fail_persists_last_error_and_retry_clears_it(
 
     await orch._fail_ticket("t900", "crow bootstrap timed out")
 
-    failed = memdb.execute(
-        "SELECT status, last_error FROM tickets WHERE id = 't900'"
-    ).fetchone()
+    failed = memdb.execute("SELECT status, last_error FROM tickets WHERE id = 't900'").fetchone()
     assert failed is not None
     assert failed["status"] == "failed"
     assert failed["last_error"] == "crow bootstrap timed out"
 
     await orch.retry_failed_ticket("t900")
 
-    retried = memdb.execute(
-        "SELECT status, last_error FROM tickets WHERE id = 't900'"
-    ).fetchone()
+    retried = memdb.execute("SELECT status, last_error FROM tickets WHERE id = 't900'").fetchone()
     assert retried is not None
     assert retried["status"] == "planned"
     assert retried["last_error"] is None
-

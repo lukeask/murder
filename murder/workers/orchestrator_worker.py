@@ -12,6 +12,8 @@ ApplyCarveReady = Callable[[str, dict[str, Any]], Awaitable[dict[str, Any]]]
 CaptureSubmit = Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]
 RetryFailed = Callable[[str], Awaitable[dict[str, Any]]]
 SetScheduleAt = Callable[[str, str | None], Awaitable[dict[str, Any]]]
+UpdateMetadata = Callable[[str, dict[str, Any]], Awaitable[dict[str, Any]]]
+ForceStatus = Callable[[str, str], Awaitable[dict[str, Any]]]
 
 
 class OrchestratorCommandWorker(Worker):
@@ -23,6 +25,8 @@ class OrchestratorCommandWorker(Worker):
         capture_submit: CaptureSubmit,
         retry_failed: RetryFailed,
         set_schedule_at: SetScheduleAt,
+        update_metadata: UpdateMetadata,
+        force_status: ForceStatus,
     ) -> None:
         super().__init__(
             WorkerSpec(
@@ -34,6 +38,8 @@ class OrchestratorCommandWorker(Worker):
                     "ticket.apply_carve_ready",
                     "ticket.retry_failed",
                     "ticket.set_schedule_at",
+                    "ticket.update_metadata",
+                    "ticket.force_status",
                 ),
             )
         )
@@ -42,6 +48,8 @@ class OrchestratorCommandWorker(Worker):
         self._capture_submit = capture_submit
         self._retry_failed = retry_failed
         self._set_schedule_at = set_schedule_at
+        self._update_metadata = update_metadata
+        self._force_status = force_status
 
     async def run(self, ctx: WorkerCtx, stop_event: asyncio.Event) -> None:  # noqa: ARG002
         await stop_event.wait()
@@ -83,4 +91,17 @@ class OrchestratorCommandWorker(Worker):
             if schedule_at is not None and not isinstance(schedule_at, str):
                 raise ValueError("ticket.set_schedule_at requires string or null schedule_at")
             return await self._set_schedule_at(ticket_id.strip(), schedule_at)
+        if command.kind == "ticket.update_metadata":
+            ticket_id = command.payload.get("ticket_id")
+            if not isinstance(ticket_id, str) or not ticket_id.strip():
+                raise ValueError("ticket.update_metadata requires ticket_id")
+            return await self._update_metadata(ticket_id.strip(), dict(command.payload))
+        if command.kind == "ticket.force_status":
+            ticket_id = command.payload.get("ticket_id")
+            status = command.payload.get("status")
+            if not isinstance(ticket_id, str) or not ticket_id.strip():
+                raise ValueError("ticket.force_status requires ticket_id")
+            if not isinstance(status, str) or not status.strip():
+                raise ValueError("ticket.force_status requires status")
+            return await self._force_status(ticket_id.strip(), status.strip())
         return {"handled": False}

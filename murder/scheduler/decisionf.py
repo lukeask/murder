@@ -4,22 +4,16 @@ Decision function for resource rationing.
 Returns True iff resources should be used at current time.
 Decision rule: f(t) <= usage -> use (True); f(t) > usage -> don't use (False).
 """
+
 from __future__ import annotations
 
 
 def _bezier_cubic_y(P0y: float, P1y: float, P2y: float, P3y: float, t: float) -> float:
     """y-coord of cubic Bezier at parameter t in [0,1]."""
-    return (
-        (1 - t) ** 3 * P0y
-        + 3 * (1 - t) ** 2 * t * P1y
-        + 3 * (1 - t) * t ** 2 * P2y
-        + t ** 3 * P3y
-    )
+    return (1 - t) ** 3 * P0y + 3 * (1 - t) ** 2 * t * P1y + 3 * (1 - t) * t**2 * P2y + t**3 * P3y
 
 
-def _solve_bezier_t(
-    P0x: float, P1x: float, P2x: float, P3x: float, x_target: float
-) -> float:
+def _solve_bezier_t(P0x: float, P1x: float, P2x: float, P3x: float, x_target: float) -> float:
     """
     Solve for t in [0,1] such that the cubic Bezier's x-coord equals x_target.
     Bezier x is monotone in t since control points have increasing x, so use
@@ -31,8 +25,8 @@ def _solve_bezier_t(
         x_mid = (
             (1 - mid) ** 3 * P0x
             + 3 * (1 - mid) ** 2 * mid * P1x
-            + 3 * (1 - mid) * mid ** 2 * P2x
-            + mid ** 3 * P3x
+            + 3 * (1 - mid) * mid**2 * P2x
+            + mid**3 * P3x
         )
         if x_mid < x_target:
             lo = mid

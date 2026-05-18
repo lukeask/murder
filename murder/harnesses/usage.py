@@ -166,8 +166,13 @@ def _parse_clock_reset(raw: str, now: datetime | None) -> str | None:
             year += 1
         try:
             return base.replace(
-                year=year, month=mon_num, day=day_n,
-                hour=hour, minute=minute, second=0, microsecond=0,
+                year=year,
+                month=mon_num,
+                day=day_n,
+                hour=hour,
+                minute=minute,
+                second=0,
+                microsecond=0,
             ).isoformat()
         except ValueError:
             return None

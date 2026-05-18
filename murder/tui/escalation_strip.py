@@ -43,6 +43,7 @@ class EscalationStrip(Static):
             "FROM escalations e "
             "LEFT JOIN tickets t ON t.id = e.ticket_id "
             "WHERE e.resolved = 0 "
+            "AND (t.status IS NULL OR t.status != 'archived') "
             "ORDER BY e.ts DESC LIMIT 6"
         ).fetchall()
         if not rows:

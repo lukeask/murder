@@ -126,7 +126,10 @@ def test_load_crow_entries_orders_attention_first(memdb: sqlite3.Connection) -> 
 
     entries = load_crow_entries(memdb)
     assert [e.agent_id for e in entries] == [
-        "a-escal", "a-blocked", "a-running", "a-idle",
+        "a-escal",
+        "a-blocked",
+        "a-running",
+        "a-idle",
     ]
 
 

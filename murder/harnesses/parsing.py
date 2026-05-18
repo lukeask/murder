@@ -49,9 +49,7 @@ def strip_ansi(s: str) -> str:
 def strip_ui_chrome(s: str) -> str:
     """Remove known harness status/footer lines before sentinel parsing."""
     clean = strip_ansi(s)
-    return "\n".join(
-        line for line in clean.splitlines() if not _UI_CHROME_RE.match(line.strip())
-    )
+    return "\n".join(line for line in clean.splitlines() if not _UI_CHROME_RE.match(line.strip()))
 
 
 def _model_label(model_id: str) -> str:

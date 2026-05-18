@@ -12,11 +12,12 @@ from __future__ import annotations
 
 import json
 import os
+from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from time import perf_counter
-from typing import Any, Iterator
+from typing import Any
 
 _LOG_SIZE_ROTATE_BYTES = 10 * 1024 * 1024
 

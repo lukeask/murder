@@ -32,9 +32,9 @@ class CrowHandlerAgent(Agent):
         config: CrowHandlerConfig,
         *,
         repo_root: Path,
-        runtime: "Runtime",
-        orchestrator: "Orchestrator",
-        client: "APIClient | None" = None,
+        runtime: Runtime,
+        orchestrator: Orchestrator,
+        client: APIClient | None = None,
     ) -> None:
         self.id = agent_id
         self.ticket_id = ticket_id
@@ -68,9 +68,7 @@ class CrowHandlerAgent(Agent):
         self._log_path = open_pane_log(
             self.repo_root, self.runtime.run_id, f"crow_handler_{self.ticket_id}"
         )
-        self._log_path.write_text(
-            f"# crow_handler log for {self.ticket_id}\n", encoding="utf-8"
-        )
+        self._log_path.write_text(f"# crow_handler log for {self.ticket_id}\n", encoding="utf-8")
         self._log(f"handler started — watching crow session {self.crow_session}")
         await tmux.create_session(
             self.session,
@@ -142,6 +140,7 @@ class CrowHandlerAgent(Agent):
         if self._log_path is None:
             return
         import datetime
+
         ts = datetime.datetime.now(datetime.timezone.utc).strftime("%H:%M:%S")
         with contextlib.suppress(Exception):
             with self._log_path.open("a", encoding="utf-8") as f:
@@ -169,9 +168,7 @@ class CrowHandlerAgent(Agent):
             asyncio.create_task(self.stop())
             return
 
-        pane = await tmux.capture_pane(
-            self.crow_session, lines=self.config.context_lines
-        )
+        pane = await tmux.capture_pane(self.crow_session, lines=self.config.context_lines)
         self._idle_cached = self.harness.is_idle(pane)
         self._fire_idle_callbacks_if_idle()
 

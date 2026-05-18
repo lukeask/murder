@@ -74,9 +74,7 @@ def reconcile_agents_vs_tmux(
             report.agents_marked_dead.append(row["agent_id"])
 
     # Recover in_progress tickets whose crow agent is no longer live.
-    in_progress = conn.execute(
-        "SELECT id FROM tickets WHERE status = 'in_progress'"
-    ).fetchall()
+    in_progress = conn.execute("SELECT id FROM tickets WHERE status = 'in_progress'").fetchall()
     for t_row in in_progress:
         tid = t_row["id"]
         crow_row = conn.execute(

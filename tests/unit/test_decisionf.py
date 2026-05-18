@@ -6,7 +6,6 @@ import pytest
 
 from murder.scheduler.decisionf import _f_threshold, f
 
-
 # ---------------------------------------------------------------------------
 # _f_threshold boundary conditions
 # ---------------------------------------------------------------------------
@@ -69,13 +68,14 @@ def test_threshold_monotone_non_increasing() -> None:
         # Going left → higher t_until_reset → threshold should not increase
         assert vals[i] >= vals[i + 1] - 1e-9, (
             f"Non-monotone at i={i}: threshold({ts[i]:.1f})={vals[i]:.4f} "
-            f"< threshold({ts[i+1]:.1f})={vals[i+1]:.4f}"
+            f"< threshold({ts[i + 1]:.1f})={vals[i + 1]:.4f}"
         )
 
 
 # ---------------------------------------------------------------------------
 # f() decision logic
 # ---------------------------------------------------------------------------
+
 
 def test_f_always_yes_zone() -> None:
     # In always-yes zone (t_until_reset ≥ t_period - t_alwaysyes = 9985), threshold=0

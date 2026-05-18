@@ -12,12 +12,13 @@ from murder.harnesses.usage_sampling import (
     sample_harness_usages_for_config,
 )
 from murder.storage.paths import db_path
-from murder.workers.base import WorkerCtx
-from murder.workers.base import WorkerCommand
+from murder.workers.base import WorkerCommand, WorkerCtx
 from murder.workers.usage_probe_worker import UsageProbeWorker
 
 
-def usage_probe_process_target(stop_event: Any, command_queue: Any, repo_root: str, run_id: str) -> None:
+def usage_probe_process_target(
+    stop_event: Any, command_queue: Any, repo_root: str, run_id: str
+) -> None:
     asyncio.run(_run_usage_probe_process(stop_event, command_queue, repo_root, run_id))
 
 

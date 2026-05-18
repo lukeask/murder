@@ -13,7 +13,7 @@ if TYPE_CHECKING:
 
 
 class WriteSetWatcher:
-    def __init__(self, repo_root: Path, orchestrator: "Orchestrator") -> None:
+    def __init__(self, repo_root: Path, orchestrator: Orchestrator) -> None:
         self.repo_root = repo_root.resolve()
         self.orchestrator = orchestrator
         self._allowed: set[Path] = set()
@@ -51,9 +51,7 @@ class WriteSetWatcher:
                     continue
                 ticket_id = self._blame_active_crow()
                 if ticket_id:
-                    await self.orchestrator.on_writeset_violation(
-                        ticket_id, rel.as_posix()
-                    )
+                    await self.orchestrator.on_writeset_violation(ticket_id, rel.as_posix())
 
     def _blame_active_crow(self) -> str | None:
         """Pick a running crow when multiple are active (heuristic: first)."""

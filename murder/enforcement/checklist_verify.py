@@ -418,8 +418,7 @@ def verify_checklist(
     (e.g. "decide on naming") are always exempt.
     """
     rows = conn.execute(
-        "SELECT id, ord, text, done FROM checklist "
-        "WHERE ticket_id = ? ORDER BY ord",
+        "SELECT id, ord, text, done FROM checklist WHERE ticket_id = ? ORDER BY ord",
         (ticket_id,),
     ).fetchall()
 
@@ -429,9 +428,7 @@ def verify_checklist(
         if only_done and not done:
             continue
         require = require_citation_when_codey and looks_like_code_work(row["text"])
-        citations, issues = verify_item_text(
-            row["text"], repo_root, require_citation=require
-        )
+        citations, issues = verify_item_text(row["text"], repo_root, require_citation=require)
         items.append(
             ItemFinding(
                 item_id=int(row["id"]),

@@ -27,8 +27,8 @@ from textual.widgets import Static
 
 from murder import tmux
 from murder.tui.crow_health import Health, classify
-from murder.tui.perf_log import PerfLog
 from murder.tui.pane_mirror import PaneMirror
+from murder.tui.perf_log import PerfLog
 
 TILE_LINES = 8
 """Last N lines of pane each tile shows in the wall."""

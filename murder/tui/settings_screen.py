@@ -151,9 +151,7 @@ def _resolve_crow_model_state(
     `startup_models` fallback.
     """
     pool, configured_models, configured_defaults = _read_patch_models(patch)
-    options_by_kind, states_by_kind = _build_ui_model_state(
-        configured_models, configured_defaults
-    )
+    options_by_kind, states_by_kind = _build_ui_model_state(configured_models, configured_defaults)
     return set(pool), options_by_kind, states_by_kind
 
 
@@ -162,9 +160,7 @@ def _sid(s: str) -> str:
     return "".join(c if c.isalnum() or c == "_" else "_" for c in s)
 
 
-def _ordered_enabled_models(
-    model_states: dict[str, ModelState], model_ids: list[str]
-) -> list[str]:
+def _ordered_enabled_models(model_states: dict[str, ModelState], model_ids: list[str]) -> list[str]:
     defaults = [m for m in model_ids if model_states.get(m) == "default"]
     enabled = [m for m in model_ids if model_states.get(m) == "enabled"]
     return defaults + enabled
@@ -408,7 +404,10 @@ class SettingsScreen(ModalScreen[bool]):
                     )
                     for name in self._available_themes:
                         yield _SettingItem(
-                            "radio", name, key=f"theme:{name}", group="theme",
+                            "radio",
+                            name,
+                            key=f"theme:{name}",
+                            group="theme",
                             checked=(name == self._theme_sel),
                             item_id=f"item-theme-{_sid(name)}",
                         )
@@ -419,7 +418,8 @@ class SettingsScreen(ModalScreen[bool]):
                     for kind, label, exe in _HARNESS_ROWS:
                         avail = "✓" if shutil.which(exe) else "✗"
                         yield _SettingItem(
-                            "cb", f"{label}  [{avail}]",
+                            "cb",
+                            f"{label}  [{avail}]",
                             key=f"global_harness:{kind}",
                             checked=(kind in self._global_harnesses),
                             item_id=f"item-global-harness-{kind}",
@@ -453,7 +453,8 @@ class SettingsScreen(ModalScreen[bool]):
                     for kind, label, exe in _HARNESS_ROWS:
                         avail = "✓" if shutil.which(exe) else "✗"
                         yield _SettingItem(
-                            "cb", f"{label}  [{avail}]",
+                            "cb",
+                            f"{label}  [{avail}]",
                             key=f"harness:{kind}",
                             checked=(kind in self._harnesses),
                             item_id=f"item-harness-{kind}",
@@ -484,8 +485,10 @@ class SettingsScreen(ModalScreen[bool]):
                     for kind, label, exe in _HARNESS_ROWS:
                         avail = "✓" if shutil.which(exe) else "✗"
                         yield _SettingItem(
-                            "radio", f"{label}  [{avail}]",
-                            key=f"collab_harness:{kind}", group="collab_harness",
+                            "radio",
+                            f"{label}  [{avail}]",
+                            key=f"collab_harness:{kind}",
+                            group="collab_harness",
                             checked=(kind == self._collaborator_harness),
                             item_id=f"item-collab_harness-{_sid(kind)}",
                         )
@@ -495,8 +498,10 @@ class SettingsScreen(ModalScreen[bool]):
                     )
                     for model_id, model_label in _API_MODEL_ROWS:
                         yield _SettingItem(
-                            "radio", model_label,
-                            key=f"notetaker:{model_id}", group="notetaker",
+                            "radio",
+                            model_label,
+                            key=f"notetaker:{model_id}",
+                            group="notetaker",
                             checked=(model_id == self._notetaker_model),
                             item_id=f"item-notetaker-{_sid(model_id)}",
                         )
@@ -506,8 +511,10 @@ class SettingsScreen(ModalScreen[bool]):
                     )
                     for model_id, model_label in _API_MODEL_ROWS:
                         yield _SettingItem(
-                            "radio", model_label,
-                            key=f"sentinel:{model_id}", group="sentinel",
+                            "radio",
+                            model_label,
+                            key=f"sentinel:{model_id}",
+                            group="sentinel",
                             checked=(model_id == self._sentinel_model),
                             item_id=f"item-sentinel-{_sid(model_id)}",
                         )
@@ -517,8 +524,10 @@ class SettingsScreen(ModalScreen[bool]):
                     )
                     for model_id, model_label in _API_MODEL_ROWS:
                         yield _SettingItem(
-                            "radio", model_label,
-                            key=f"crow_handler:{model_id}", group="crow_handler",
+                            "radio",
+                            model_label,
+                            key=f"crow_handler:{model_id}",
+                            group="crow_handler",
                             checked=(model_id == self._crow_handler_model),
                             item_id=f"item-crow_handler-{_sid(model_id)}",
                         )
@@ -680,14 +689,10 @@ class SettingsScreen(ModalScreen[bool]):
         self._refresh_model_validation()
         saved_key = item.key
         self._rebuild_focusable()
-        self._cursor_idx = next(
-            (i for i, f in enumerate(self._focusable) if f.key == saved_key), 0
-        )
+        self._cursor_idx = next((i for i, f in enumerate(self._focusable) if f.key == saved_key), 0)
         self._refresh_cursor()
 
-    def _toggle_model(
-        self, item: _SettingItem, kind: HarnessKind, model_id: str
-    ) -> None:
+    def _toggle_model(self, item: _SettingItem, kind: HarnessKind, model_id: str) -> None:
         state = self._model_states.setdefault(kind, {}).get(model_id, "disabled")
         next_index = (_MODEL_STATE_ORDER.index(state) + 1) % len(_MODEL_STATE_ORDER)
         next_state = _MODEL_STATE_ORDER[next_index]
@@ -714,14 +719,10 @@ class SettingsScreen(ModalScreen[bool]):
         self._refresh_global_model_validation()
         saved_key = item.key
         self._rebuild_focusable()
-        self._cursor_idx = next(
-            (i for i, f in enumerate(self._focusable) if f.key == saved_key), 0
-        )
+        self._cursor_idx = next((i for i, f in enumerate(self._focusable) if f.key == saved_key), 0)
         self._refresh_cursor()
 
-    def _toggle_global_model(
-        self, item: _SettingItem, kind: HarnessKind, model_id: str
-    ) -> None:
+    def _toggle_global_model(self, item: _SettingItem, kind: HarnessKind, model_id: str) -> None:
         state = self._global_model_states.setdefault(kind, {}).get(model_id, "disabled")
         next_index = (_MODEL_STATE_ORDER.index(state) + 1) % len(_MODEL_STATE_ORDER)
         next_state = _MODEL_STATE_ORDER[next_index]
@@ -742,13 +743,9 @@ class SettingsScreen(ModalScreen[bool]):
                 item.checked = item.key == f"{group}:{group_value}"
 
     def _model_widget(self, kind: HarnessKind, model_id: str) -> _SettingItem:
-        return self.query_one(
-            f"#item-model-{_sid(kind)}-{_sid(model_id)}", _SettingItem
-        )
+        return self.query_one(f"#item-model-{_sid(kind)}-{_sid(model_id)}", _SettingItem)
 
-    def _model_item(
-        self, kind: HarnessKind, model_id: str, model_label: str
-    ) -> _SettingItem:
+    def _model_item(self, kind: HarnessKind, model_id: str, model_label: str) -> _SettingItem:
         return _SettingItem(
             "tri",
             model_label,
@@ -759,9 +756,7 @@ class SettingsScreen(ModalScreen[bool]):
         )
 
     def _global_model_widget(self, kind: HarnessKind, model_id: str) -> _SettingItem:
-        return self.query_one(
-            f"#item-global-model-{_sid(kind)}-{_sid(model_id)}", _SettingItem
-        )
+        return self.query_one(f"#item-global-model-{_sid(kind)}-{_sid(model_id)}", _SettingItem)
 
     def _global_model_item(
         self, kind: HarnessKind, model_id: str, model_label: str
@@ -782,9 +777,7 @@ class SettingsScreen(ModalScreen[bool]):
         self.query_one(f"#global-section-models-{_sid(kind)}").display = visible
         for model_id in self._global_model_ids(kind):
             widget = self._global_model_widget(kind, model_id)
-            widget.model_state = self._global_model_states.get(kind, {}).get(
-                model_id, "disabled"
-            )
+            widget.model_state = self._global_model_states.get(kind, {}).get(model_id, "disabled")
 
     def _refresh_global_model_validation(self) -> None:
         for kind, _, _ in _HARNESS_ROWS:
@@ -863,9 +856,7 @@ class SettingsScreen(ModalScreen[bool]):
         self.query_one(f"#section-models-{_sid(kind)}").display = visible
         for model_id in self._model_ids(kind):
             widget = self._model_widget(kind, model_id)
-            widget.model_state = self._model_states.get(kind, {}).get(
-                model_id, "disabled"
-            )
+            widget.model_state = self._model_states.get(kind, {}).get(model_id, "disabled")
 
     def _refresh_model_validation(self) -> None:
         for kind, _, _ in _HARNESS_ROWS:
@@ -950,9 +941,7 @@ class SettingsScreen(ModalScreen[bool]):
         self._refresh_cursor()
         self._try_autosave_project()
 
-    def _dedupe_model_options(
-        self, options: list[tuple[str, str]]
-    ) -> list[tuple[str, str]]:
+    def _dedupe_model_options(self, options: list[tuple[str, str]]) -> list[tuple[str, str]]:
         out: list[tuple[str, str]] = []
         seen: set[str] = set()
         for raw_model_id, raw_label in options:
@@ -984,10 +973,13 @@ class SettingsScreen(ModalScreen[bool]):
             self._user_config.default_crow = None
             return
         for kind in harness_list:
-            if _model_validation_message(
-                self._global_model_states.get(kind, {}),
-                self._global_model_ids(kind),
-            ) is not None:
+            if (
+                _model_validation_message(
+                    self._global_model_states.get(kind, {}),
+                    self._global_model_ids(kind),
+                )
+                is not None
+            ):
                 return
         crow: dict[str, object] = {
             "harness": harness_list[0],

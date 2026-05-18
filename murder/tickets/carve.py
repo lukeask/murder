@@ -80,9 +80,7 @@ def ingest_carve_ready_spec(
     """Compatibility ingest path: write sidecar, then reconcile/apply."""
     yaml_id = spec.get("id")
     if yaml_id != ticket_id:
-        raise CarveError(
-            f"YAML id {yaml_id!r} does not match target ticket {ticket_id!r}"
-        )
+        raise CarveError(f"YAML id {yaml_id!r} does not match target ticket {ticket_id!r}")
     before = dbmod.get_ticket_status(conn, ticket_id)
     sidecar_spec = {**spec, "status": TicketStatus.READY.value}
     _write_yaml_sidecar(repo_root, ticket_id, sidecar_spec)
@@ -107,17 +105,13 @@ def apply_carve_ready_spec(
     """
     yaml_id = spec.get("id")
     if yaml_id != ticket_id:
-        raise CarveError(
-            f"YAML id {yaml_id!r} does not match target ticket {ticket_id!r}"
-        )
+        raise CarveError(f"YAML id {yaml_id!r} does not match target ticket {ticket_id!r}")
 
     row = dbmod.get_ticket(conn, ticket_id)
     if row is None:
         raise CarveError(f"ticket not found: {ticket_id}")
     if row["status"] != TicketStatus.PLANNED.value:
-        raise CarveError(
-            f"ticket {ticket_id} must be planned (currently {row['status']})"
-        )
+        raise CarveError(f"ticket {ticket_id} must be planned (currently {row['status']})")
 
     wave_raw = spec.get("wave")
     if wave_raw is None:

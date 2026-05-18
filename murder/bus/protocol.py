@@ -29,23 +29,25 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Annotated, Any, Literal, Union
+from typing import Annotated, Any, Literal
 from uuid import UUID, uuid4
 
 try:
     from enum import StrEnum
 except ImportError:  # Python <3.11
+
     class StrEnum(str, Enum):
         def __str__(self) -> str:
             return str.__str__(self)
 
-from pydantic import BaseModel, Field, TypeAdapter
 
+from pydantic import BaseModel, Field, TypeAdapter
 
 PROTOCOL_VERSION = 1
 
 
 # === Closed enums ============================================================
+
 
 class Role(StrEnum):
     COLLABORATOR = "collaborator"
@@ -62,6 +64,7 @@ class TicketStatus(StrEnum):
     BLOCKED = "blocked"
     DONE = "done"
     FAILED = "failed"
+    ARCHIVED = "archived"
 
 
 class AgentStatus(StrEnum):
@@ -84,6 +87,7 @@ class CommandStatus(StrEnum):
 
 class Entity(StrEnum):
     """Closed — adding a value bumps PROTOCOL_VERSION."""
+
     TICKET = "ticket"
     AGENT = "agent"
     PLAN = "plan"
@@ -107,6 +111,7 @@ class ClientKind(StrEnum):
 
 # === Inner events (persisted to events table; discriminated by `type`) =======
 
+
 class _BaseEvent(BaseModel):
     id: UUID = Field(default_factory=uuid4)
     ts: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
@@ -117,6 +122,7 @@ class _BaseEvent(BaseModel):
 
 
 # --- Legacy types (semantics unchanged from murder/bus.py pre-refactor) ------
+
 
 class HeartbeatEvent(_BaseEvent):
     type: Literal["heartbeat"] = "heartbeat"
@@ -167,6 +173,7 @@ class ErrorEvent(_BaseEvent):
 
 # --- New types added by the worker-bus refactor -----------------------------
 
+
 class CommandEvent(_BaseEvent):
     """A request to a worker. Lives in both ``commands`` and ``events``.
 
@@ -175,6 +182,7 @@ class CommandEvent(_BaseEvent):
     carries enough to reconstruct the command id; the full body lives in
     ``commands``.
     """
+
     type: Literal["command"] = "command"
     target_worker: str
     kind: str
@@ -196,6 +204,7 @@ class StateSnapshotEvent(_BaseEvent):
     refetches on receipt. See worker_bus_refactor.md §D.5 for the
     deliberation.
     """
+
     type: Literal["state.snapshot"] = "state.snapshot"
     entity: Entity
     key: str
@@ -214,6 +223,7 @@ class PresenceEvent(_BaseEvent):
     so that bridges that don't preserve order can't corrupt downstream
     workers' adaptive cadence.
     """
+
     type: Literal["presence"] = "presence"
     state: PresenceState
     user_count: int = 0
@@ -223,6 +233,7 @@ class PresenceEvent(_BaseEvent):
 
 class SchedulerModeEvent(_BaseEvent):
     """Broadcast when the scheduler mode changes."""
+
     type: Literal["scheduler.mode"] = "scheduler.mode"
     from_mode: str
     to_mode: str
@@ -231,6 +242,7 @@ class SchedulerModeEvent(_BaseEvent):
 
 class SchedulerDecisionEvent(_BaseEvent):
     """Emitted on every crow_magic tick per (harness, window_key)."""
+
     type: Literal["scheduler.decision"] = "scheduler.decision"
     mode: str
     harness: str
@@ -246,6 +258,7 @@ class SchedulerDecisionEvent(_BaseEvent):
 
 class UsageResetEvent(_BaseEvent):
     """Emitted when consecutive snapshots show a usage reset (drop > 80% of prev)."""
+
     type: Literal["usage.reset"] = "usage.reset"
     harness: str
     prev_pct: float
@@ -255,20 +268,7 @@ class UsageResetEvent(_BaseEvent):
 # --- Discriminated union of inner events ------------------------------------
 
 BusEvent = Annotated[
-    Union[
-        HeartbeatEvent,
-        SummaryEvent,
-        QuestionEvent,
-        EscalationEvent,
-        StatusChangeEvent,
-        ErrorEvent,
-        CommandEvent,
-        StateSnapshotEvent,
-        PresenceEvent,
-        SchedulerModeEvent,
-        SchedulerDecisionEvent,
-        UsageResetEvent,
-    ],
+    HeartbeatEvent | SummaryEvent | QuestionEvent | EscalationEvent | StatusChangeEvent | ErrorEvent | CommandEvent | StateSnapshotEvent | PresenceEvent | SchedulerModeEvent | SchedulerDecisionEvent | UsageResetEvent,
     Field(discriminator="type"),
 ]
 
@@ -279,19 +279,13 @@ BUS_EVENT_ADAPTER: TypeAdapter[BusEvent] = TypeAdapter(BusEvent)
 # call sites that pattern-match on it keep their narrowed semantics until
 # they migrate to ``BusEvent``.
 AgentEvent = Annotated[
-    Union[
-        HeartbeatEvent,
-        SummaryEvent,
-        QuestionEvent,
-        EscalationEvent,
-        StatusChangeEvent,
-        ErrorEvent,
-    ],
+    HeartbeatEvent | SummaryEvent | QuestionEvent | EscalationEvent | StatusChangeEvent | ErrorEvent,
     Field(discriminator="type"),
 ]
 
 
 # === Filter ==================================================================
+
 
 class EventFilter(BaseModel):
     """Server-applied filter. Fields compose with AND; ``None`` matches any.
@@ -300,6 +294,7 @@ class EventFilter(BaseModel):
     (~45 clients in worker_bus_refactor handoff §5.2) client-side filtering
     is O(clients × events) and untenable.
     """
+
     role: Role | None = None
     ticket_id: str | None = None
     type: str | None = None
@@ -316,7 +311,10 @@ class EventFilter(BaseModel):
             return False
         if self.entity is not None and getattr(event, "entity", None) != self.entity:
             return False
-        if self.target_worker is not None and getattr(event, "target_worker", None) != self.target_worker:
+        if (
+            self.target_worker is not None
+            and getattr(event, "target_worker", None) != self.target_worker
+        ):
             return False
         if self.kind is not None and getattr(event, "kind", None) != self.kind:
             return False
@@ -324,6 +322,7 @@ class EventFilter(BaseModel):
 
 
 # === Envelope bodies =========================================================
+
 
 class HelloBody(BaseModel):
     """Sent by the client as the first message after socket connect.
@@ -333,6 +332,7 @@ class HelloBody(BaseModel):
     disagree. ``client_id`` is stable across reconnects so the supervisor
     can resume in-flight RPC state and presence counting correctly.
     """
+
     protocol_version: int
     client_kind: ClientKind
     client_id: str
@@ -348,6 +348,7 @@ class SubArgs(BaseModel):
     current PresenceEvent on the new subscription immediately after
     replay_done so late subscribers aren't blind to current state.
     """
+
     filter: EventFilter = Field(default_factory=EventFilter)
     since_id: int | None = None
     presence_retain: bool = True
@@ -379,12 +380,14 @@ class WakeBody(BaseModel):
     "you just joined — here are the entities whose state is most likely
     stale for you." Not persisted to ``events``.
     """
+
     client_id: str
     reason: Literal["connect", "reconnect"] = "connect"
     fresh_state_hints: list[Entity] = Field(default_factory=list)
 
 
 # === Wire envelope (discriminated by `op`) ===================================
+
 
 class _BaseMessage(BaseModel):
     schema_version: int = PROTOCOL_VERSION
@@ -427,15 +430,7 @@ class WakeMessage(_BaseMessage):
 
 
 WireMessage = Annotated[
-    Union[
-        HelloMessage,
-        PubMessage,
-        SubMessage,
-        RpcMessage,
-        AckMessage,
-        ErrMessage,
-        WakeMessage,
-    ],
+    HelloMessage | PubMessage | SubMessage | RpcMessage | AckMessage | ErrMessage | WakeMessage,
     Field(discriminator="op"),
 ]
 
@@ -463,22 +458,53 @@ IDEMPOTENCY_WINDOW_S = 60.0
 
 __all__ = [
     "PROTOCOL_VERSION",
-    "Role", "TicketStatus", "AgentStatus", "CommandStatus",
-    "Entity", "PresenceState", "ClientKind",
-    "HeartbeatEvent", "SummaryEvent", "QuestionEvent",
-    "EscalationEvent", "StatusChangeEvent", "ErrorEvent",
-    "CommandEvent", "StateSnapshotEvent", "PresenceEvent", "SchedulerModeEvent",
-    "SchedulerDecisionEvent", "UsageResetEvent",
-    "BusEvent", "AgentEvent", "BUS_EVENT_ADAPTER",
+    "Role",
+    "TicketStatus",
+    "AgentStatus",
+    "CommandStatus",
+    "Entity",
+    "PresenceState",
+    "ClientKind",
+    "HeartbeatEvent",
+    "SummaryEvent",
+    "QuestionEvent",
+    "EscalationEvent",
+    "StatusChangeEvent",
+    "ErrorEvent",
+    "CommandEvent",
+    "StateSnapshotEvent",
+    "PresenceEvent",
+    "SchedulerModeEvent",
+    "SchedulerDecisionEvent",
+    "UsageResetEvent",
+    "BusEvent",
+    "AgentEvent",
+    "BUS_EVENT_ADAPTER",
     "EventFilter",
-    "HelloBody", "SubArgs", "RpcArgs", "AckBody", "ErrBody", "WakeBody",
-    "HelloMessage", "PubMessage", "SubMessage", "RpcMessage",
-    "AckMessage", "ErrMessage", "WakeMessage",
-    "WireMessage", "WIRE_MESSAGE_ADAPTER",
-    "SOCKET_RUNTIME_SUBDIR", "SOCKET_BASENAME",
-    "DEFAULT_RPC_TIMEOUT_S", "DEFAULT_HEARTBEAT_INTERVAL_S",
-    "DEFAULT_LEASE_TTL_S", "DEFAULT_MAX_COMMAND_ATTEMPTS",
+    "HelloBody",
+    "SubArgs",
+    "RpcArgs",
+    "AckBody",
+    "ErrBody",
+    "WakeBody",
+    "HelloMessage",
+    "PubMessage",
+    "SubMessage",
+    "RpcMessage",
+    "AckMessage",
+    "ErrMessage",
+    "WakeMessage",
+    "WireMessage",
+    "WIRE_MESSAGE_ADAPTER",
+    "SOCKET_RUNTIME_SUBDIR",
+    "SOCKET_BASENAME",
+    "DEFAULT_RPC_TIMEOUT_S",
+    "DEFAULT_HEARTBEAT_INTERVAL_S",
+    "DEFAULT_LEASE_TTL_S",
+    "DEFAULT_MAX_COMMAND_ATTEMPTS",
     "COMMAND_REAPER_INTERVAL_S",
-    "PRESENCE_DISCONNECT_DEBOUNCE_S", "PRESENCE_USER_KINDS",
-    "SUBSCRIBER_QUEUE_DEFAULT", "IDEMPOTENCY_WINDOW_S",
+    "PRESENCE_DISCONNECT_DEBOUNCE_S",
+    "PRESENCE_USER_KINDS",
+    "SUBSCRIBER_QUEUE_DEFAULT",
+    "IDEMPOTENCY_WINDOW_S",
 ]

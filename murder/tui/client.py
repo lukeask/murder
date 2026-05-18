@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import json
 import shlex
-import sqlite3
 import subprocess
 import time
 from pathlib import Path
@@ -56,7 +55,6 @@ class TuiRuntimeClient:
 
     async def reconcile_plan(self, name: str) -> None:
         del name
-        return None
 
     def plan_path_for(self, name: str) -> Path:
         row = dbmod.get_plan_row(self.db, name)

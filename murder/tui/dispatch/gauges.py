@@ -6,7 +6,7 @@ import json
 import re
 import sqlite3
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from textual.app import ComposeResult
@@ -22,6 +22,11 @@ _SPARK_BARS = "▁▂▃▄▅▆▇█"
 
 _WINDOW_NAME_RE = re.compile(r"^(\d+)(h|d)$", re.IGNORECASE)
 _WINDOW_NAME_MINUTES = {"h": 60.0, "d": 1440.0}
+
+# Usage-color thresholds (percent used). Lower usage is greener — unused quota
+# is safe headroom, high usage is the danger zone. Tune these to shift bands.
+_USAGE_YELLOW_PCT = 40.0  # >= this: "moderate usage"
+_USAGE_RED_PCT = 75.0  # >= this: "high usage" — running low on quota
 
 
 def _ring_char(pct: float) -> str:
@@ -44,19 +49,44 @@ def _fmt_duration(minutes: float) -> str:
     return f"{days}d"
 
 
-def _color_for_pct(pct: float, decision_hold: bool = False) -> str:
-    """Return a Rich color name for the given usage percentage."""
-    if decision_hold:
+def _color_for_pct(pct: float) -> str:
+    """Return a Rich color name for a usage percentage.
+
+    Color reflects the meter itself — purely the percentage consumed. Lower
+    usage is greener; high usage is the danger zone. Scheduler state (holds)
+    deliberately does not affect gauge color.
+    """
+    if pct >= _USAGE_RED_PCT:
         return "red"
-    if pct >= 80.0:
-        return "red"
-    if pct >= 60.0:
+    if pct >= _USAGE_YELLOW_PCT:
         return "yellow"
     return "green"
 
 
-def _t_period_from_window(window: dict[str, Any], window_key: str) -> float:
-    """Derive t_period in minutes from a window dict, falling back to the window name."""
+# Billing-period lengths, in minutes. Fixed defaults until each provider can
+# report its real cycle length; `_period_minutes_for()` is the single seam to
+# swap for auto-detection later — callers never touch this table directly.
+_CLAUDE_CODE_SESSION_MINUTES = 5 * 60.0
+_CODEX_5H_MINUTES = 5 * 60.0
+_CODEX_WEEKLY_MINUTES = 7 * 24 * 60.0
+_CURSOR_PERIOD_MINUTES = 30 * 24 * 60.0
+
+_PERIOD_MINUTES: dict[tuple[str, str], float] = {
+    ("claude_code", "current_session"): _CLAUDE_CODE_SESSION_MINUTES,
+    ("codex", "5h"): _CODEX_5H_MINUTES,
+    ("codex", "weekly"): _CODEX_WEEKLY_MINUTES,
+    ("cursor", "auto_composer"): _CURSOR_PERIOD_MINUTES,
+    ("cursor", "api"): _CURSOR_PERIOD_MINUTES,
+}
+
+
+def _period_minutes_for(harness: str, window_key: str, window: dict[str, Any]) -> float:
+    """Billing-period length in minutes for a usage window.
+
+    Resolution order: explicit ``starts_at``/``ends_at`` on the snapshot, then
+    an ``<n>h``/``<n>d`` window name, then the static ``_PERIOD_MINUTES`` table.
+    Replace this body when period auto-detection lands. Returns 0.0 if unknown.
+    """
     starts_at_str = window.get("starts_at")
     end_str = window.get("ends_at") or window.get("reset_at")
     if starts_at_str and end_str:
@@ -70,15 +100,13 @@ def _t_period_from_window(window: dict[str, Any], window_key: str) -> float:
             pass
     m = _WINDOW_NAME_RE.match(window_key)
     if m:
-        value = float(m.group(1))
-        unit = m.group(2).lower()
-        return value * _WINDOW_NAME_MINUTES[unit]
-    return 0.0
+        return float(m.group(1)) * _WINDOW_NAME_MINUTES[m.group(2).lower()]
+    return _PERIOD_MINUTES.get((harness, window_key), 0.0)
 
 
 def _pct_from_window(payload: dict[str, Any], window_key: str) -> float | None:
     """Return percent_used for the named window from a snapshot payload."""
-    for w in (payload.get("windows") or []):
+    for w in payload.get("windows") or []:
         if not isinstance(w, dict):
             continue
         if (w.get("name") or "usage") == window_key:
@@ -94,7 +122,6 @@ class _GaugeData:
     window_key: str
     pct: float
     t_until_reset_minutes: float
-    decision_hold: bool = False
     t_period_minutes: float = 0.0
 
 
@@ -143,53 +170,107 @@ def _load_gauges(db: sqlite3.Connection) -> list[_GaugeData]:
                     t_until = max(0.0, (reset_at - now).total_seconds() / 60.0)
                 except (ValueError, TypeError):
                     pass
-            t_period = _t_period_from_window(window, window_key)
-            gauges.append(_GaugeData(
-                harness=harness,
-                window_key=window_key,
-                pct=float(pct),
-                t_until_reset_minutes=t_until,
-                t_period_minutes=t_period,
-            ))
+            t_period = _period_minutes_for(harness, window_key, window)
+            gauges.append(
+                _GaugeData(
+                    harness=harness,
+                    window_key=window_key,
+                    pct=float(pct),
+                    t_until_reset_minutes=t_until,
+                    t_period_minutes=t_period,
+                )
+            )
 
-    # Overlay decision cache to mark holds
-    try:
-        dec_rows = db.execute(
-            "SELECT harness, window_key, decision FROM scheduler_decision_cache"
-        ).fetchall()
-        dec_lookup = {
-            (r["harness"], r["window_key"]): bool(r["decision"])
-            for r in dec_rows
-        }
-        for g in gauges:
-            decision = dec_lookup.get((g.harness, g.window_key))
-            if decision is False:
-                g.decision_hold = True
-    except Exception:
-        pass
+    # Column-major order: group by provider so same-harness windows are
+    # adjacent. Stable sort preserves per-harness window order.
+    order = {h: i for i, h in enumerate(_PROVIDER_ORDER)}
+    gauges.sort(key=lambda g: order.get(g.harness, len(order)))
 
     return gauges
 
 
-def _render_gauge(g: _GaugeData, focused: bool) -> str:
-    """Render a single gauge as a Rich markup string."""
-    color = _color_for_pct(g.pct, g.decision_hold)
+# Providers are laid out as side-by-side columns in this order; unlisted
+# harnesses follow, in load order. _PROVIDER_LABELS overrides the column header.
+_PROVIDER_ORDER = ("claude_code", "codex", "cursor")
+_PROVIDER_LABELS = {"claude_code": "claude code"}
+
+
+def _gauge_text(g: _GaugeData) -> str:
+    """Plain (markup-free) gauge cell text, sans focus brackets."""
     ring = _ring_char(g.pct)
-    label = f"{g.harness}/{g.window_key}"
     rst = _fmt_duration(g.t_until_reset_minutes)
-    body = f"[{color}]{ring}[/{color}] {label} {g.pct:.0f}%  rst {rst}"
+    period = _fmt_duration(g.t_period_minutes) if g.t_period_minutes > 0 else "?"
+    return f"{ring} {g.window_key} {g.pct:.0f}% rst {rst}/{period}"
+
+
+def _gauge_width(g: _GaugeData) -> int:
+    """Visible width of a rendered gauge cell (text plus focus brackets/pad)."""
+    return len(_gauge_text(g)) + 2
+
+
+def _render_gauge(g: _GaugeData, focused: bool) -> str:
+    """Render a single gauge as a Rich markup string.
+
+    The harness is conveyed by the column header, so the cell shows only the
+    window: ring, window key, percent used, and `reset/period` durations.
+    """
+    color = _color_for_pct(g.pct)
+    ring = _ring_char(g.pct)
+    rst = _fmt_duration(g.t_until_reset_minutes)
+    period = _fmt_duration(g.t_period_minutes) if g.t_period_minutes > 0 else "?"
+    body = f"[{color}]{ring}[/{color}] {g.window_key} {g.pct:.0f}% rst {rst}/{period}"
     if focused:
-        return f"[b][[/b]{body}[b]][/b]"
+        return f"[b]\\[[/b]{body}[b]][/b]"
     return f" {body} "
+
+
+def _build_strip_text(gauges: list[_GaugeData], focus_idx: int) -> str:
+    """Lay out gauges as side-by-side provider columns, windows stacked.
+
+    `gauges` is provider-ordered by `_load_gauges`, so each maximal run of one
+    harness becomes a column: a bold header plus one gauge cell per window.
+    """
+    if not gauges:
+        return ""
+
+    columns: list[dict[str, Any]] = []
+    for idx, g in enumerate(gauges):
+        if columns and columns[-1]["harness"] == g.harness:
+            columns[-1]["cells"].append((idx, g))
+        else:
+            columns.append({"harness": g.harness, "cells": [(idx, g)]})
+
+    for col in columns:
+        col["header"] = _PROVIDER_LABELS.get(col["harness"], col["harness"])
+        col["width"] = max([len(col["header"])] + [_gauge_width(g) for _, g in col["cells"]])
+
+    gap = "  "
+    n_rows = max(len(col["cells"]) for col in columns)
+
+    lines = [
+        gap.join(
+            f"[b]{col['header']}[/b]" + " " * (col["width"] - len(col["header"])) for col in columns
+        )
+    ]
+    for row in range(n_rows):
+        cells = []
+        for col in columns:
+            if row < len(col["cells"]):
+                idx, g = col["cells"][row]
+                cell = _render_gauge(g, idx == focus_idx)
+                cells.append(cell + " " * (col["width"] - _gauge_width(g)))
+            else:
+                cells.append(" " * col["width"])
+        lines.append(gap.join(cells))
+    return "\n".join(lines)
 
 
 # ---------------------------------------------------------------------------
 # Drill-in helpers
 # ---------------------------------------------------------------------------
 
-def _spark_history(
-    db: sqlite3.Connection, harness: str, window_key: str
-) -> str:
+
+def _spark_history(db: sqlite3.Connection, harness: str, window_key: str) -> str:
     """Return a 14-char block sparkline of daily avg usage for a harness/window."""
     rows = db.execute(
         """
@@ -305,6 +386,7 @@ def _burn_attribution(
 # GaugeDrillIn modal
 # ---------------------------------------------------------------------------
 
+
 class GaugeDrillIn(ModalScreen[None]):
     """Full-screen detail view for a single (harness, window) usage gauge."""
 
@@ -373,7 +455,7 @@ class GaugeDrillIn(ModalScreen[None]):
 
     def _build_content(self) -> str:
         g = self._gauge
-        color = _color_for_pct(g.pct, g.decision_hold)
+        color = _color_for_pct(g.pct)
         ring = _ring_char(g.pct)
         rst = _fmt_duration(g.t_until_reset_minutes)
 
@@ -419,6 +501,7 @@ class GaugeDrillIn(ModalScreen[None]):
         self.dismiss()
         try:
             from murder.tui.dispatch.mode_strip import ModeStrip
+
             self.app.query_one(ModeStrip).action_open_mode_picker()
         except Exception:
             pass
@@ -428,8 +511,9 @@ class GaugeDrillIn(ModalScreen[None]):
 # GaugeStrip widget
 # ---------------------------------------------------------------------------
 
+
 class GaugeStrip(Static):
-    """Horizontal row of per-(harness, window) usage gauges."""
+    """Per-provider usage gauges, one column per harness, windows stacked."""
 
     BINDINGS = [
         Binding("left", "focus_prev", "Prev gauge", show=False),
@@ -439,7 +523,7 @@ class GaugeStrip(Static):
 
     DEFAULT_CSS = """
     GaugeStrip {
-        height: 1;
+        height: auto;
         color: $text-muted;
     }
     """
@@ -460,14 +544,7 @@ class GaugeStrip(Static):
         self._render_strip()
 
     def _render_strip(self) -> None:
-        if not self._gauges:
-            self.update("")
-            return
-        parts = [
-            _render_gauge(g, i == self._focus_idx)
-            for i, g in enumerate(self._gauges)
-        ]
-        self.update("  ".join(parts))
+        self.update(_build_strip_text(self._gauges, self._focus_idx))
 
     def action_focus_prev(self) -> None:
         if self._gauges:

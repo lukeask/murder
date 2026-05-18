@@ -14,14 +14,15 @@ from datetime import datetime
 from importlib import resources
 from pathlib import Path
 from typing import Annotated
+from uuid import uuid4
 
 import typer
 
 from murder import __version__
 from murder import db as dbmod
 from murder.bus import TicketStatus
-from murder.bus.client import SocketBusClient
 from murder.bus.broker import DurableBroker
+from murder.bus.client import SocketBusClient
 from murder.bus.protocol import ClientKind, CommandEvent
 from murder.bus.transport_socket import SocketBusServer, default_socket_path
 from murder.config import Config, HarnessRoleConfig, project_env_path
@@ -29,6 +30,7 @@ from murder.harnesses import REGISTRY
 from murder.orchestrator import Orchestrator
 from murder.plans.sync import PlanSync, content_hash
 from murder.runtime import Runtime
+from murder.scheduler import SchedulerWorker
 from murder.storage.filesystem import read_lock_pid
 from murder.storage.paths import (
     agents_dir,
@@ -47,7 +49,7 @@ from murder.tickets.schema import ChecklistItem, Ticket
 from murder.tickets.sync import TicketSync
 from murder.tui.app import MurderApp
 from murder.tui.client import TuiRuntimeClient
-from murder.scheduler import SchedulerWorker
+from murder.usage_sample_command import run_service_usage_poll_loop
 from murder.workers import (
     CollaboratorWorker,
     OrchestratorCommandWorker,
@@ -151,9 +153,7 @@ def _scaffold_project(repo: Path, *, force: bool = False) -> Path:
 
     roles_text = tpl_root.joinpath("roles.yaml").read_text(encoding="utf-8")
     quoted_project_name = project_name.replace("'", "''")
-    roles_text = roles_text.replace(
-        "name: TODO_SET_ME", f"name: '{quoted_project_name}'", 1
-    )
+    roles_text = roles_text.replace("name: TODO_SET_ME", f"name: '{quoted_project_name}'", 1)
     (ad / "roles.yaml").write_text(roles_text, encoding="utf-8")
     (ad / "env.example").write_text(
         tpl_root.joinpath("env.example").read_text(encoding="utf-8"), encoding="utf-8"
@@ -218,7 +218,9 @@ async def _socket_is_connectable(socket_path: Path, *, timeout_s: float = 0.5) -
 
 async def _supervisor_is_live(repo: Path, socket_path: Path) -> bool:
     pid = read_lock_pid(lock_path(repo))
-    return bool(pid is not None and _pid_is_alive(pid) and await _socket_is_connectable(socket_path))
+    return bool(
+        pid is not None and _pid_is_alive(pid) and await _socket_is_connectable(socket_path)
+    )
 
 
 def _spawn_service_process(repo: Path) -> subprocess.Popen[bytes]:
@@ -401,6 +403,8 @@ async def _start_service_supervisor(
             capture_submit=orch.submit_notetaker_capture,
             retry_failed=orch.retry_failed_ticket,
             set_schedule_at=orch.set_schedule_at,
+            update_metadata=orch.update_ticket_metadata,
+            force_status=orch.force_ticket_status,
         )
     )
     return supervisor
@@ -427,12 +431,19 @@ async def _run_supervisor_only() -> None:
             orch=orch,
             broker=broker,
         )
+        usage_poll = asyncio.create_task(
+            run_service_usage_poll_loop(broker, rt.db, str(rt.run_id)),
+            name="usage-sample-poll",
+        )
         if os.environ.get("OPENROUTER_API_KEY"):
             with contextlib.suppress(Exception):
                 await orch.ensure_sentinel()
         try:
             await rt.run_until_signal()
         finally:
+            usage_poll.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await usage_poll
             await supervisor.stop_all()
             with contextlib.suppress(FileNotFoundError, OSError):
                 await socket_server.stop()
@@ -480,18 +491,18 @@ def _root(
 
 @app.command("kick")
 def cmd_kick(
-    ticket: str = typer.Argument(..., help="Ticket id to kick off (e.g. 't007')."),
+    ticket: str = typer.Argument(..., help="Ticket id to kick off."),
 ) -> None:
     """Kick off a single ticket's Crow from the CLI (no TUI)."""
     _run_async_entry(_bare_kickoff(ticket))
 
 
-
-
 @tickets_app.command("create")
 def cmd_ticket_create(
-    ticket_id: Annotated[str, typer.Argument(help="Ticket id, e.g. t007.")],
     title: Annotated[str, typer.Argument(help="Ticket title.")],
+    ticket_id: Annotated[
+        str | None, typer.Option("--id", help="Ticket id (UUID auto-generated if omitted).")
+    ] = None,
     wave: Annotated[int, typer.Option("--wave", "-w", min=0, help="Ticket wave.")] = 0,
     status: Annotated[
         TicketStatus,
@@ -543,6 +554,8 @@ def cmd_ticket_create(
     ] = False,
 ) -> None:
     """Create/import a ticket row and materialize `.murder/tickets/<id>.md`."""
+    if ticket_id is None:
+        ticket_id = str(uuid4())
     repo = _repo_root()
     md_path = ticket_md(repo, ticket_id)
     if md_path.exists() and not overwrite_markdown:
@@ -573,10 +586,7 @@ def cmd_ticket_create(
         model=model,
         created_at=now,
         updated_at=now,
-        checklist=[
-            ChecklistItem(ord=ord_, text=text)
-            for ord_, text in enumerate(check or [])
-        ],
+        checklist=[ChecklistItem(ord=ord_, text=text) for ord_, text in enumerate(check or [])],
     )
 
     conn = _open_existing_db(repo)
@@ -811,9 +821,7 @@ def cmd_lint() -> None:
                         ord=c["ord"],
                         text=c["text"],
                         done=bool(c["done"]),
-                        done_at=datetime.fromisoformat(c["done_at"])
-                        if c.get("done_at")
-                        else None,
+                        done_at=datetime.fromisoformat(c["done_at"]) if c.get("done_at") else None,
                     )
                     for c in trow.get("checklist") or []
                 ],
@@ -906,14 +914,13 @@ def cmd_status() -> None:
     conn = dbmod.connect(db_path(repo))
     typer.echo("Tickets by status:")
     for st in ("planned", "ready", "in_progress", "blocked", "done", "failed"):
-        n = conn.execute(
-            "SELECT COUNT(*) AS c FROM tickets WHERE status = ?", (st,)
-        ).fetchone()["c"]
+        n = conn.execute("SELECT COUNT(*) AS c FROM tickets WHERE status = ?", (st,)).fetchone()[
+            "c"
+        ]
         typer.echo(f"  {st}: {n}")
     typer.echo("Agents:")
     for r in conn.execute(
-        "SELECT agent_id, role, ticket_id, status FROM agents "
-        "ORDER BY started_at DESC LIMIT 20"
+        "SELECT agent_id, role, ticket_id, status FROM agents ORDER BY started_at DESC LIMIT 20"
     ).fetchall():
         typer.echo(
             f"  {r['agent_id']} role={r['role']} ticket={r['ticket_id']} status={r['status']}"

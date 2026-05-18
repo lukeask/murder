@@ -12,11 +12,11 @@ EXPECTED_REPROMPT_CALLS = 2
 
 
 def test_extract_json_fence_reads_first_fence() -> None:
-    text = '''Some words
+    text = """Some words
 ```json
 {"cleaned":"A","short_vers":"B"}
 ```
-'''
+"""
     blob = notetaker_capture.extract_json_fence(text)
     assert blob == {"cleaned": "A", "short_vers": "B"}
 
@@ -105,15 +105,11 @@ async def test_resolve_capture_note_renames_to_slug(memdb, tmp_path) -> None:
 
     assert out["note_name"] == "rate-limit-recovery"
     assert (tmp_path / ".murder" / "notes" / "rate-limit-recovery.md").exists()
-    assert not (
-        tmp_path / ".murder" / "notes" / f"{created['note_name']}.md"
-    ).exists()
+    assert not (tmp_path / ".murder" / "notes" / f"{created['note_name']}.md").exists()
 
 
 @pytest.mark.asyncio
-async def test_resolve_capture_note_reprompts_then_suffixes_on_collision(
-    memdb, tmp_path
-) -> None:
+async def test_resolve_capture_note_reprompts_then_suffixes_on_collision(memdb, tmp_path) -> None:
     first = notetaker_capture.create_durable_capture(
         repo_root=tmp_path,
         conn=memdb,

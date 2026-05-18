@@ -17,6 +17,7 @@ HarnessKind: TypeAlias = Literal["cursor", "claude_code", "codex", "pi", "murder
 try:  # python-dotenv is in dependencies but tests may stub
     from dotenv import load_dotenv
 except ImportError:  # pragma: no cover
+
     def load_dotenv(*args: Any, **kwargs: Any) -> bool:  # type: ignore[misc]
         return False
 
@@ -177,9 +178,7 @@ def project_env_path(repo_root: Path) -> Path:
 
 
 def _load_bundled_defaults() -> dict[str, Any]:
-    text = (
-        resources.files("murder.templates").joinpath("roles.yaml").read_text(encoding="utf-8")
-    )
+    text = resources.files("murder.templates").joinpath("roles.yaml").read_text(encoding="utf-8")
     return yaml.safe_load(text) or {}
 
 

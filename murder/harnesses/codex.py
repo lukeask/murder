@@ -187,9 +187,7 @@ class CodexAdapter(HarnessAdapter):
         await asyncio.sleep(_STATUS_CAPTURE_DELAY_S)
         return True
 
-    async def collect_usage_status(
-        self, session: str
-    ) -> SimpleResult[HarnessUsageStatus]:
+    async def collect_usage_status(self, session: str) -> SimpleResult[HarnessUsageStatus]:
         for attempt in range(2):
             await self.request_usage_status(session)
             pane = await tmux.capture_pane(session, lines=160)

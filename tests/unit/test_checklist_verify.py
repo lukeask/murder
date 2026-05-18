@@ -37,8 +37,7 @@ def _add_item(
     done: bool,
 ) -> None:
     conn.execute(
-        "INSERT INTO checklist(ticket_id, ord, text, done, done_at) "
-        "VALUES (?, ?, ?, ?, ?)",
+        "INSERT INTO checklist(ticket_id, ord, text, done, done_at) VALUES (?, ?, ?, ?, ?)",
         (ticket_id, ord_, text, 1 if done else 0, "2026-01-01" if done else None),
     )
 
@@ -78,9 +77,7 @@ def test_extract_citations_dotted_resolves_to_file(tmp_path: Path) -> None:
     _write(tmp_path, "murder/bus.py", "class Bus:\n    def publish(self): return 1\n")
     refs = extract_citations("calls murder.bus.Bus.publish to fan out", tmp_path)
     # Should resolve to bus.py with symbol Bus.publish.
-    assert any(
-        r.path == Path("murder/bus.py") and r.symbol == "Bus.publish" for r in refs
-    )
+    assert any(r.path == Path("murder/bus.py") and r.symbol == "Bus.publish" for r in refs)
 
 
 def test_extract_citations_ignores_prose_backticks(tmp_path: Path) -> None:
@@ -201,24 +198,18 @@ def test_verify_item_text_flags_path_escaping_repo(tmp_path: Path) -> None:
 
 def test_verify_item_text_flags_stub_symbol(tmp_path: Path) -> None:
     _write(tmp_path, "pkg/foo.py", "def bar():\n    pass\n")
-    _, issues = verify_item_text(
-        "implemented `pkg/foo.py:bar`", tmp_path, require_citation=True
-    )
+    _, issues = verify_item_text("implemented `pkg/foo.py:bar`", tmp_path, require_citation=True)
     assert any("stub body" in i for i in issues)
 
 
 def test_verify_item_text_passes_real_symbol(tmp_path: Path) -> None:
     _write(tmp_path, "pkg/foo.py", "def bar():\n    return 1\n")
-    _, issues = verify_item_text(
-        "implemented `pkg/foo.py:bar`", tmp_path, require_citation=True
-    )
+    _, issues = verify_item_text("implemented `pkg/foo.py:bar`", tmp_path, require_citation=True)
     assert issues == []
 
 
 def test_verify_item_text_requires_citation_when_codey(tmp_path: Path) -> None:
-    _, issues = verify_item_text(
-        "implement Foo.parse", tmp_path, require_citation=True
-    )
+    _, issues = verify_item_text("implement Foo.parse", tmp_path, require_citation=True)
     assert any("no file citation" in i for i in issues)
 
 
@@ -249,9 +240,7 @@ def test_looks_like_code_work(text: str, expected: bool) -> None:
 # --- verify_checklist (DB-backed) -------------------------------------------
 
 
-def test_verify_checklist_only_done_by_default(
-    memdb: sqlite3.Connection, tmp_path: Path
-) -> None:
+def test_verify_checklist_only_done_by_default(memdb: sqlite3.Connection, tmp_path: Path) -> None:
     _seed_ticket(memdb)
     _write(tmp_path, "pkg/foo.py", "def bar():\n    return 1\n")
     _add_item(memdb, "t001", 0, "implement `pkg/foo.py:bar`", done=True)
@@ -262,9 +251,7 @@ def test_verify_checklist_only_done_by_default(
     assert result.overall_ok
 
 
-def test_verify_checklist_flags_fake_done(
-    memdb: sqlite3.Connection, tmp_path: Path
-) -> None:
+def test_verify_checklist_flags_fake_done(memdb: sqlite3.Connection, tmp_path: Path) -> None:
     _seed_ticket(memdb)
     _write(tmp_path, "pkg/foo.py", "def bar():\n    pass\n")
     _add_item(memdb, "t001", 0, "implement `pkg/foo.py:bar`", done=True)
@@ -287,9 +274,7 @@ def test_verify_checklist_flags_codey_item_without_citation(
     assert "no file citation" in result.items[0].issues[0]
 
 
-def test_verify_checklist_passes_prose_item(
-    memdb: sqlite3.Connection, tmp_path: Path
-) -> None:
+def test_verify_checklist_passes_prose_item(memdb: sqlite3.Connection, tmp_path: Path) -> None:
     _seed_ticket(memdb)
     _add_item(memdb, "t001", 0, "decide on team naming convention", done=True)
 
@@ -310,9 +295,7 @@ def test_verify_checklist_dry_run_includes_undone(
     assert result.overall_ok
 
 
-def test_format_report_includes_failing_items(
-    memdb: sqlite3.Connection, tmp_path: Path
-) -> None:
+def test_format_report_includes_failing_items(memdb: sqlite3.Connection, tmp_path: Path) -> None:
     _seed_ticket(memdb)
     _write(tmp_path, "pkg/foo.py", "def bar():\n    pass\n")
     _add_item(memdb, "t001", 0, "implement `pkg/foo.py:bar`", done=True)
@@ -323,9 +306,7 @@ def test_format_report_includes_failing_items(
     assert "stub body" in text
 
 
-def test_format_report_all_ok(
-    memdb: sqlite3.Connection, tmp_path: Path
-) -> None:
+def test_format_report_all_ok(memdb: sqlite3.Connection, tmp_path: Path) -> None:
     _seed_ticket(memdb)
     _write(tmp_path, "pkg/foo.py", "def bar():\n    return 1\n")
     _add_item(memdb, "t001", 0, "implement `pkg/foo.py:bar`", done=True)

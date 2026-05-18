@@ -12,17 +12,20 @@ from murder.bus import TicketStatus
 def _now() -> str:
     return datetime.utcnow().isoformat(timespec="seconds")
 
+
 VALID_TRANSITIONS: dict[TicketStatus, set[TicketStatus]] = {
-    TicketStatus.PLANNED: {TicketStatus.READY},
-    TicketStatus.READY: {TicketStatus.IN_PROGRESS, TicketStatus.PLANNED},
+    TicketStatus.PLANNED: {TicketStatus.READY, TicketStatus.ARCHIVED},
+    TicketStatus.READY: {TicketStatus.IN_PROGRESS, TicketStatus.PLANNED, TicketStatus.ARCHIVED},
     TicketStatus.IN_PROGRESS: {
         TicketStatus.DONE,
         TicketStatus.BLOCKED,
         TicketStatus.FAILED,
+        TicketStatus.ARCHIVED,
     },
-    TicketStatus.BLOCKED: {TicketStatus.IN_PROGRESS, TicketStatus.FAILED},
-    TicketStatus.FAILED: {TicketStatus.PLANNED},
-    TicketStatus.DONE: {TicketStatus.PLANNED},  # D7: reopen
+    TicketStatus.BLOCKED: {TicketStatus.IN_PROGRESS, TicketStatus.FAILED, TicketStatus.ARCHIVED},
+    TicketStatus.FAILED: {TicketStatus.PLANNED, TicketStatus.ARCHIVED},
+    TicketStatus.DONE: {TicketStatus.PLANNED, TicketStatus.ARCHIVED},  # D7: reopen
+    TicketStatus.ARCHIVED: {TicketStatus.PLANNED},  # un-archive
 }
 
 
@@ -84,9 +87,7 @@ def reopen(conn: sqlite3.Connection, ticket_id: str) -> list[str]:
             TicketStatus.BLOCKED.value,
         }:
             try:
-                transition(
-                    conn, dep_id, TicketStatus.PLANNED, reason="upstream_reopened"
-                )
+                transition(conn, dep_id, TicketStatus.PLANNED, reason="upstream_reopened")
                 cascaded.append(dep_id)
             except InvalidTransition:
                 # Some statuses (e.g. failed) aren't reachable from PLANNED via this

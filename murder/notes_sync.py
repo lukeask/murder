@@ -70,4 +70,3 @@ class NoteSync(MarkdownSyncLoop):
         if not root.exists():
             return []
         return sorted(p for p in root.glob("*.md") if p.is_file())
-

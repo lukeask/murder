@@ -29,6 +29,7 @@ def test_app_registers_everforest_and_has_settings_binding(monkeypatch, tmp_path
     app = MurderApp(runtime)  # type: ignore[arg-type]
 
     assert "everforest-dark-hard" in app.available_themes
+
     def _binding_key(b):
         return b.key if hasattr(b, "key") else b[0]
 
@@ -39,10 +40,7 @@ def test_app_registers_everforest_and_has_settings_binding(monkeypatch, tmp_path
         _binding_key(b) == "ctrl+comma" and _binding_action(b) == "open_settings"
         for b in app.BINDINGS
     )
-    assert any(
-        _binding_key(b) == "f6" and _binding_action(b) == "kick_ready"
-        for b in app.BINDINGS
-    )
+    assert any(_binding_key(b) == "f6" and _binding_action(b) == "kick_ready" for b in app.BINDINGS)
 
 
 def test_settings_close_reload_updates_runtime_project_config(monkeypatch, tmp_path) -> None:
@@ -81,6 +79,12 @@ def test_schedule_view_hides_chat_input(monkeypatch, tmp_path) -> None:
         db=None,
     )
     app = MurderApp(runtime)  # type: ignore[arg-type]
+
+    def _noop_worker(coro, *a, **kw):
+        if hasattr(coro, "close"):
+            coro.close()
+
+    monkeypatch.setattr(app, "run_worker", _noop_worker)
 
     app._view = "planning"
     app._apply_mode()

@@ -17,9 +17,7 @@ EXPECTED_ATTEMPTS_AFTER_RECLAIM = 2
 
 class _CommandWorker(Worker):
     def __init__(self, *, fail_on: set[str] | None = None) -> None:
-        super().__init__(
-            WorkerSpec(name="collaborator", heartbeat_s=10.0, shutdown_grace_s=0.1)
-        )
+        super().__init__(WorkerSpec(name="collaborator", heartbeat_s=10.0, shutdown_grace_s=0.1))
         self.handled: list[str] = []
         self.fail_on = fail_on or set()
 

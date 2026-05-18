@@ -113,9 +113,7 @@ class CollaboratorAgent(Agent):
         parser yet (the TUI falls back to the raw pane mirror in that case).
         """
         try:
-            pane = await tmux.capture_pane(
-                self.session, lines=TRANSCRIPT_SCROLLBACK_LINES
-            )
+            pane = await tmux.capture_pane(self.session, lines=TRANSCRIPT_SCROLLBACK_LINES)
         except tmux.TmuxError:
             return []
         parsed = self.harness.parse_transcript(pane)

@@ -4,17 +4,21 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from datetime import datetime
+from collections import defaultdict
+from collections.abc import Callable, Sequence
+from datetime import datetime, timedelta
 from typing import Any
 
 import yaml
+from textual import events, on
 from textual.app import ComposeResult
 from textual.binding import Binding
-from textual.containers import Horizontal, Vertical
+from textual.containers import Vertical, VerticalScroll
 from textual.message import Message
 from textual.screen import ModalScreen
-from textual.widgets import Button, DataTable, Input, Static, TextArea
-from yaml import YAMLError
+from textual.widgets import DataTable, Input, SelectionList, Static, TextArea
+
+from murder.harnesses import REGISTRY
 
 
 def parse_carve_paste(text: str) -> dict[str, Any]:
@@ -31,14 +35,66 @@ def parse_carve_paste(text: str) -> dict[str, Any]:
     return data
 
 
-def _format_start(value: str | None) -> str:
+def _format_schedule_timestamp(value: str | None) -> str | None:
+    """Format schedule_at for display, or None if unset."""
     if not value:
-        return "unscheduled"
+        return None
     try:
         dt = datetime.fromisoformat(value)
     except ValueError:
-        return value
+        return str(value)
     return dt.strftime("%a %H:%M")
+
+
+def _crow_dispatch_semantics(rows: Sequence[sqlite3.Row], ticket_id: str) -> str:
+    """Crow Magic: 'waiting' on usage holds; else 'queued' (deps, ordering, or picked)."""
+    if not rows:
+        return "queued"
+    tid = str(ticket_id)
+    kicked_me = any(int(r["decision"]) == 1 and r["kicked_ticket_id"] == tid for r in rows)
+    if kicked_me:
+        return "queued"
+    hold_usage = any(
+        int(r["decision"]) == 0 and str(r["rationale"] or "").startswith("Holding:") for r in rows
+    )
+    if hold_usage:
+        return "waiting"
+    return "queued"
+
+
+def _dispatch_schedule_cell(
+    scheduler_mode: str,
+    status: str,
+    schedule_at: str | None,
+    harness: str | None,
+    ticket_id: str,
+    crow_rows: Sequence[sqlite3.Row],
+) -> str:
+    """Dispatch roster 'schedule' column: timestamps, queue semantics, now/done."""
+    if status == "done":
+        return ""
+    if status == "in_progress":
+        return "now"
+    ts = _format_schedule_timestamp(schedule_at)
+    if ts is not None:
+        return ts
+    if status not in {"planned", "ready"}:
+        return ""
+    if scheduler_mode == "manual":
+        return "unscheduled"
+    if scheduler_mode == "autorun_ready":
+        return "queued"
+    return _crow_dispatch_semantics(crow_rows, ticket_id)
+
+
+def _crow_rows_for_harness(
+    harness: str | None,
+    all_rows: Sequence[sqlite3.Row],
+    by_harness: dict[str, list[sqlite3.Row]],
+) -> list[sqlite3.Row]:
+    if harness is None:
+        return list(all_rows)
+    return list(by_harness.get(harness, ()))
 
 
 def _checklist_to_lines(snapshot: dict[str, Any]) -> str:
@@ -56,6 +112,8 @@ class ScheduleTicketsTable(DataTable):
         Binding("enter", "request_carve", "Metadata", show=False),
         Binding("c", "request_carve", "Metadata", show=False),
         Binding("r", "retry_failed", "Retry (failed)", show=False),
+        Binding("j", "cursor_down", "Down", show=False),
+        Binding("k", "cursor_up", "Up", show=False),
     ]
 
     class CarveRequested(Message):
@@ -74,20 +132,32 @@ class ScheduleTicketsTable(DataTable):
         self._statuses: list[str] = []
 
     def on_mount(self) -> None:
-        self.add_columns(
-            "id",
-            "wave",
-            "status",
-            "deps",
-            "schedule_at",
-            "harness",
-            "model",
-            "title",
-        )
+        # Fixed widths so a long title does not consume the whole viewport; other
+        # columns stay visible (DataTable scrolls horizontally if total exceeds width).
+        self.add_column("title", width=34)
+        self.add_column("wave", width=5)
+        self.add_column("status", width=14)
+        self.add_column("deps", width=5)
+        self.add_column("schedule", width=14)
+        self.add_column("harness", width=14)
+        self.add_column("model", width=18)
+
+    @property
+    def column_count(self) -> int:
+        return len(self.columns)
 
     def refresh_from_db(self, db: sqlite3.Connection | None) -> None:
         if db is None:
             return
+        mode_row = db.execute("SELECT mode FROM scheduler_state WHERE id = 1").fetchone()
+        scheduler_mode = str(mode_row["mode"]) if mode_row is not None else "manual"
+        crow_all = db.execute(
+            "SELECT harness, decision, rationale, kicked_ticket_id FROM scheduler_decision_cache"
+        ).fetchall()
+        crow_by_harness: dict[str, list[sqlite3.Row]] = defaultdict(list)
+        for cr in crow_all:
+            crow_by_harness[str(cr["harness"])].append(cr)
+
         dep_subq = """
             NOT EXISTS (
                 SELECT 1 FROM ticket_deps AS d
@@ -126,11 +196,26 @@ class ScheduleTicketsTable(DataTable):
              LIMIT 6
             """
         ).fetchall()
+        archived_tickets = db.execute(
+            f"""
+            SELECT t.id, t.title, t.wave, t.status, t.schedule_at, t.harness, t.model,
+                   t.metadata_sync_state, t.metadata_parse_error,
+                   t.metadata_conflict_reason, {dep_subq} AS deps_ok
+              FROM tickets AS t
+             WHERE t.status = 'archived'
+             ORDER BY datetime(t.updated_at) DESC, t.id
+             LIMIT 20
+            """
+        ).fetchall()
+
+        prev_ticket_id = self.cursor_ticket_id
+        prev_row = self.cursor_row
 
         self.clear()
         self._ids = []
         self._statuses = []
-        for r in (*active, *recent_done):
+        for r in (*active, *recent_done, *archived_tickets):
+            tid = str(r["id"])
             st = str(r["status"])
             sync_state = str(r["metadata_sync_state"] or "synced")
             display_status = st if sync_state == "synced" else f"{st}!"
@@ -138,18 +223,40 @@ class ScheduleTicketsTable(DataTable):
                 deps_cell = "ok" if int(r["deps_ok"]) else "wait"
             else:
                 deps_cell = "—"
+            crow = _crow_rows_for_harness(
+                str(r["harness"]) if r["harness"] is not None else None,
+                crow_all,
+                crow_by_harness,
+            )
+            sched = _dispatch_schedule_cell(
+                scheduler_mode,
+                st,
+                str(r["schedule_at"]) if r["schedule_at"] else None,
+                str(r["harness"]) if r["harness"] is not None else None,
+                tid,
+                crow,
+            )
             self.add_row(
-                r["id"],
+                str(r["title"] or ""),
                 str(r["wave"]),
                 display_status,
                 deps_cell,
-                _format_start(r["schedule_at"]),
-                r["harness"] or "default",
-                r["model"] or "",
-                r["title"],
+                sched,
+                str(r["harness"] or ""),
+                str(r["model"] or ""),
             )
-            self._ids.append(r["id"])
+            self._ids.append(tid)
             self._statuses.append(st)
+
+        if self._ids:
+            if prev_ticket_id is not None:
+                try:
+                    idx = self._ids.index(prev_ticket_id)
+                except ValueError:
+                    idx = min(max(0, prev_row), len(self._ids) - 1)
+            else:
+                idx = min(max(0, prev_row), len(self._ids) - 1)
+            self.move_cursor(row=idx, animate=False)
 
     @property
     def cursor_ticket_id(self) -> str | None:
@@ -169,18 +276,12 @@ class ScheduleTicketsTable(DataTable):
 
     @property
     def cursor_is_editable(self) -> bool:
-        return self.cursor_status in {"planned", "ready", "failed"}
+        """True when a ticket row is selected (metadata carve may open for any status)."""
+        return self.cursor_ticket_id is not None
 
     def action_request_carve(self) -> None:
         tid = self.cursor_ticket_id
         if tid is None:
-            return
-        if not self.cursor_is_editable:
-            self.app.notify(
-                "Metadata edits apply to [b]planned[/b], [b]ready[/b], or [b]failed[/b] tickets.",
-                severity="warning",
-                timeout=5,
-            )
             return
         self.post_message(self.CarveRequested(tid))
 
@@ -198,34 +299,299 @@ class ScheduleTicketsTable(DataTable):
         self.post_message(self.RetryRequested(tid))
 
 
-class CarveFormScreen(ModalScreen[dict[str, Any] | None]):
-    """YAML-backed ticket metadata editor / mark-ready action."""
+_SCHEDULE_NONE = "__murder_schedule_none__"
 
-    BINDINGS = [("escape", "cancel", "Cancel")]
+_STATUS_SELECT_OPTIONS: list[tuple[str, str]] = [
+    ("Planned", "planned"),
+    ("Ready", "ready"),
+    ("In progress", "in_progress"),
+    ("Blocked", "blocked"),
+    ("Failed", "failed"),
+    ("Done", "done"),
+    ("Archived", "archived"),
+]
+
+_HARNESS_SELECT_OPTIONS: list[tuple[str, str]] = [
+    ("Cursor CLI", "cursor"),
+    ("Claude Code", "claude_code"),
+    ("Codex CLI", "codex"),
+    ("Pi", "pi"),
+    ("Murder native", "murder_native"),
+]
+
+
+def _wave_select_options(db: sqlite3.Connection, current: int) -> list[tuple[str, int]]:
+    rows = db.execute("SELECT DISTINCT wave FROM tickets ORDER BY wave").fetchall()
+    waves = {int(r["wave"]) for r in rows} | {int(current), 0}
+    hi = max(waves)
+    for w in range(hi + 1, hi + 8):
+        waves.add(w)
+    ordered = sorted(waves)[:48]
+    return [(f"Wave {w}", w) for w in ordered]
+
+
+def _schedule_select_options(snapshot_at: str | None) -> list[tuple[str, str]]:
+    opts: list[tuple[str, str]] = [("Not scheduled", _SCHEDULE_NONE)]
+    now = datetime.now().astimezone()
+    if snapshot_at:
+        label = snapshot_at.replace("T", " ")[:19]
+        opts.append((f"Keep current ({label})", snapshot_at))
+    for hours, cap in ((1, "+1 hour"), (4, "+4 hours"), (24, "+24 hours")):
+        opts.append((cap, (now + timedelta(hours=hours)).replace(microsecond=0).isoformat()))
+    tomorrow = (now + timedelta(days=1)).replace(hour=9, minute=0, second=0, microsecond=0)
+    opts.append(("Tomorrow 09:00 (local)", tomorrow.isoformat()))
+    return opts
+
+
+def _model_select_options(harness: str, current_model: str | None) -> list[tuple[str, str]]:
+    opts: list[tuple[str, str]] = [("(no model override)", "")]
+    cls = REGISTRY.get(harness)
+    if cls is not None:
+        for model_id, label in cls.available_startup_models:
+            opts.append((f"{label} ({model_id})", model_id))
+    if current_model and current_model not in {v for _, v in opts}:
+        opts.append((f"Other: {current_model}", current_model))
+    return opts
+
+
+class RadioRow(Static):
+    """Horizontal single-select field — options laid across the width.
+
+    `h`/`l` (or left/right) move the selection; the marked option is the
+    value. One focusable widget, so `j`/`k`/Tab still move between fields.
+    Visual sibling of the settings screen's radio rows.
+    """
+
+    can_focus = True
+
+    DEFAULT_CSS = """
+    RadioRow {
+        height: auto;
+        padding: 0 1;
+    }
+    RadioRow:focus {
+        background: $boost;
+    }
+    """
+
+    BINDINGS = [
+        Binding("left,h", "prev", "Prev option", show=False),
+        Binding("right,l", "next", "Next option", show=False),
+    ]
+
+    class Changed(Message):
+        """Posted when the selected option changes."""
+
+        def __init__(self, radio: RadioRow) -> None:
+            self.radio = radio
+            super().__init__()
+
+    def __init__(
+        self,
+        options: list[tuple[str, Any]],
+        *,
+        value: Any = None,
+        id: str | None = None,
+    ) -> None:
+        # markup=False: bracket/paren glyphs in option labels must not be
+        # parsed as Rich markup (mirrors settings_screen._SettingItem).
+        super().__init__(id=id, markup=False)
+        self._options: list[tuple[str, Any]] = list(options)
+        self._selected: int = self._index_of(value) if value is not None else 0
+
+    def _index_of(self, value: Any) -> int:
+        for i, (_, v) in enumerate(self._options):
+            if v == value:
+                return i
+        return 0
+
+    def on_mount(self) -> None:
+        self._render_options()
+
+    @property
+    def value(self) -> Any:
+        if not self._options:
+            return None
+        return self._options[self._selected][1]
+
+    @value.setter
+    def value(self, new_value: Any) -> None:
+        self._selected = self._index_of(new_value)
+        self._render_options()
+
+    def set_options(self, options: list[tuple[str, Any]], *, value: Any = None) -> None:
+        """Replace the option list (e.g. when a dependent field changes)."""
+        self._options = list(options)
+        self._selected = self._index_of(value) if value is not None else 0
+        self._render_options()
+
+    def _render_options(self) -> None:
+        cells = [
+            f"{'(•)' if i == self._selected else '( )'} {label}"
+            for i, (label, _) in enumerate(self._options)
+        ]
+        self.update("   ".join(cells) if cells else "( ) —")
+
+    def action_prev(self) -> None:
+        self._move(-1)
+
+    def action_next(self) -> None:
+        self._move(1)
+
+    def _move(self, delta: int) -> None:
+        if len(self._options) < 2:
+            return
+        self._selected = (self._selected + delta) % len(self._options)
+        self._render_options()
+        self.post_message(self.Changed(self))
+
+
+class TitleStripInput(Input):
+    """Title row: j/k focus without typing; Enter edits; Escape leaves edit mode."""
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        kwargs.setdefault("select_on_focus", False)
+        super().__init__(*args, **kwargs)
+        self._editing = False
+
+    @property
+    def editing(self) -> bool:
+        return self._editing
+
+    def replace(self, text: str, start: int, end: int) -> None:
+        if not self._editing:
+            return
+        super().replace(text, start, end)
+
+    def check_consume_key(self, key: str, character: str | None) -> bool:
+        """Browse mode: don't claim printable keys.
+
+        Textual strips a screen/app binding from the binding chain if a
+        more-focused widget's ``check_consume_key`` claims that key. An
+        ``Input`` claims every printable key, which would swallow the carve
+        form's ``j``/``k`` navigation. In browse mode we claim nothing so
+        those bindings fire; in edit mode we behave like a normal Input.
+        """
+        if not self._editing:
+            return False
+        return super().check_consume_key(key, character)
+
+    async def action_submit(self) -> None:
+        if not self._editing:
+            self._editing = True
+            self.cursor_position = len(self.value)
+            return
+        await super().action_submit()
+
+    async def _on_key(self, event: events.Key) -> None:
+        if event.key == "escape" and self._editing:
+            self._editing = False
+            event.stop()
+            event.prevent_default()
+            return
+        if event.is_printable and not self._editing:
+            return
+        await super()._on_key(event)
+
+    def _on_paste(self, event: events.Paste) -> None:
+        if not self._editing:
+            return
+        super()._on_paste(event)
+
+
+class CarveTextArea(TextArea):
+    """Multiline fields: read-only until Enter so j/k can move focus past the widget."""
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        kwargs.setdefault("read_only", True)
+        kwargs.setdefault("show_cursor", True)
+        super().__init__(*args, **kwargs)
+        self._editing = False
+
+    @property
+    def editing(self) -> bool:
+        return self._editing
+
+    async def _on_key(self, event: events.Key) -> None:
+        if not self._editing:
+            if event.key == "enter":
+                self._editing = True
+                self.read_only = False
+                event.stop()
+                event.prevent_default()
+            # All other keys bubble up to CarveFormScreen for j/k navigation
+            return
+        if event.key == "escape":
+            self._editing = False
+            self.read_only = True
+            event.stop()
+            event.prevent_default()
+            return
+        await super()._on_key(event)
+
+    async def _on_paste(self, event: events.Paste) -> None:
+        if self.read_only and not self._editing:
+            return
+        await super()._on_paste(event)
+
+
+class CarveFormScreen(ModalScreen[None]):
+    """Keyboard-friendly ticket metadata editor (lists + text fields)."""
+
+    BINDINGS = [
+        Binding("escape", "cancel", "Close"),
+        Binding("j", "nav_next", "Next field", show=False, priority=True),
+        Binding("k", "nav_prev", "Prev field", show=False, priority=True),
+    ]
 
     CSS = """
     CarveFormScreen {
         align: center middle;
     }
     #carve_dialog {
-        width: 92;
-        max-width: 98%;
-        height: 90%;
+        width: 90%;
+        max-height: 92%;
         border: solid $primary;
         background: $surface;
-        padding: 1 2;
+    }
+    #carve_title {
+        background: $primary;
+        color: $background;
+        text-align: center;
+        height: 1;
+        padding: 0 2;
+        text-style: bold;
+    }
+    #carve_subtitle {
+        height: 1;
+        padding: 0 2;
+        background: $panel;
+        color: $text-muted;
     }
     #carve_fields {
         height: 1fr;
-        min-height: 10;
+        min-height: 8;
+        padding: 0 2;
+    }
+    #field_deps, #field_skills_pick {
+        height: 9;
+        min-height: 4;
+        border: tall $surface;
+    }
+    #field_writes, #field_skills_extra, #field_checklist {
+        height: 5;
+        min-height: 3;
     }
     .field_label {
         margin-top: 1;
         text-style: bold;
     }
-    #import_paste {
-        height: 5;
-        min-height: 3;
+    #carve_help {
+        height: 1;
+        padding: 0 1;
+        background: $panel;
+        color: $text-muted;
+        text-align: center;
     }
     """
 
@@ -235,76 +601,170 @@ class CarveFormScreen(ModalScreen[dict[str, Any] | None]):
         snapshot: dict[str, Any],
         *,
         harness_hint: str,
+        db: sqlite3.Connection,
+        on_autosave: Callable[[dict[str, Any]], None],
     ) -> None:
         super().__init__()
         self.ticket_id = ticket_id
         self._snapshot = snapshot
         self._harness_hint = harness_hint
-        self._wave = int(snapshot.get("wave", 0))
-
-    @property
-    def _is_retry_mode(self) -> bool:
-        return str(self._snapshot.get("status", "")) == "failed"
+        self._db = db
+        self._on_autosave = on_autosave
+        self._suppress_autosave = True
 
     def compose(self) -> ComposeResult:
+        cur_status = str(self._snapshot.get("status", "planned"))
         with Vertical(id="carve_dialog"):
-            if self._is_retry_mode:
-                yield Static(
-                    f"Retry + edit metadata for [b]{self.ticket_id}[/b] — Apply retries "
-                    "the ticket and marks it [b]ready[/b].",
-                    id="carve_hdr",
-                )
-            else:
-                yield Static(
-                    f"Edit metadata for [b]{self.ticket_id}[/b] — Apply writes the YAML "
-                    "sidecar and marks the ticket [b]ready[/b].",
-                    id="carve_hdr",
-                )
+            yield Static("Edit ticket", id="carve_title")
             yield Static(
-                f"Current DB status: [b]{self._snapshot.get('status', '?')}[/b].",
-                id="carve_status",
+                f"id: [dim]{self.ticket_id}[/dim] · status: [b]{cur_status}[/b] · {self._harness_hint}",
+                id="carve_subtitle",
             )
-            yield Static(f"Wave (fixed): {self._wave}", id="carve_wave")
-            yield Static(self._harness_hint, id="carve_harness_hint")
-            with Vertical(id="carve_fields"):
+            with VerticalScroll(id="carve_fields"):
+                yield Static("Status", classes="field_label")
+                yield RadioRow(
+                    _STATUS_SELECT_OPTIONS,
+                    value=cur_status
+                    if cur_status in {v for _, v in _STATUS_SELECT_OPTIONS}
+                    else "planned",
+                    id="field_status",
+                )
                 yield Static("Title", classes="field_label")
-                yield Input(placeholder="Title", id="field_title")
-                yield Static("Harness (e.g. cursor)", classes="field_label")
-                yield Input(placeholder="cursor", id="field_harness")
-                yield Static("Model override (optional)", classes="field_label")
-                yield Input(placeholder="Composer 2", id="field_model")
-                yield Static("Deps — one ticket id per line", classes="field_label")
-                yield TextArea(id="field_deps")
+                yield TitleStripInput(placeholder="Title", id="field_title")
+                yield Static("Wave", classes="field_label")
+                yield RadioRow(
+                    _wave_select_options(self._db, int(self._snapshot.get("wave", 0))),
+                    value=int(self._snapshot.get("wave", 0)),
+                    id="field_wave",
+                )
+                yield Static("Scheduled start (optional)", classes="field_label")
+                sched_opts = _schedule_select_options(
+                    str(self._snapshot["schedule_at"])
+                    if self._snapshot.get("schedule_at")
+                    else None
+                )
+                sched_val = (
+                    str(self._snapshot["schedule_at"])
+                    if self._snapshot.get("schedule_at")
+                    else _SCHEDULE_NONE
+                )
+                if sched_val != _SCHEDULE_NONE and sched_val not in {v for _, v in sched_opts}:
+                    sched_opts.insert(1, (f"Keep ({sched_val[:19]}…)", sched_val))
+                yield RadioRow(
+                    sched_opts,
+                    value=sched_val
+                    if any(v == sched_val for _, v in sched_opts)
+                    else _SCHEDULE_NONE,
+                    id="field_schedule",
+                )
+                yield Static("Harness", classes="field_label")
+                yield RadioRow(
+                    list(_HARNESS_SELECT_OPTIONS),
+                    value=str(self._snapshot.get("harness") or "cursor").strip() or "cursor",
+                    id="field_harness",
+                )
+                yield Static("Model", classes="field_label")
+                yield RadioRow([("(no model override)", "")], id="field_model")
+                yield Static("Depends on (space toggles)", classes="field_label")
+                yield SelectionList[str](id="field_deps")
+                yield Static("Skills from project (space toggles)", classes="field_label")
+                yield SelectionList[str](id="field_skills_pick")
+                yield Static("Extra skills — one per line", classes="field_label")
+                yield CarveTextArea(id="field_skills_extra")
                 yield Static("Write set — one repo-relative path per line", classes="field_label")
-                yield TextArea(id="field_writes")
-                yield Static("Skills — one per line (optional)", classes="field_label")
-                yield TextArea(id="field_skills")
+                yield CarveTextArea(id="field_writes")
                 yield Static("Checklist — one item per line", classes="field_label")
-                yield TextArea(id="field_checklist")
-            yield Static("Optional: paste collaborator YAML/JSON", classes="field_label")
-            yield TextArea(id="import_paste")
-            with Horizontal(id="carve_buttons"):
-                yield Button("Merge paste → fields", id="merge")
-                if self._is_retry_mode:
-                    yield Button("Retry + apply metadata", variant="primary", id="apply")
-                else:
-                    yield Button("Write YAML + mark ready", variant="primary", id="apply")
-                yield Button("Cancel", id="cancel")
+                yield CarveTextArea(id="field_checklist")
+            yield Static(
+                "Tab/Shift+Tab · j/k fields · Enter on title / multiline fields to edit · "
+                "Esc closes (Esc exits edit)",
+                id="carve_help",
+            )
 
     def on_mount(self) -> None:
+        self._suppress_autosave = True
         snap = self._snapshot
-        self.query_one("#field_title", Input).value = str(snap.get("title") or "")
-        self.query_one("#field_harness", Input).value = str(snap.get("harness") or "")
-        mod = snap.get("model")
-        self.query_one("#field_model", Input).value = str(mod) if mod else ""
-        deps = snap.get("deps") or []
-        self.query_one("#field_deps", TextArea).text = "\n".join(str(d) for d in deps)
+        self.query_one("#field_title", TitleStripInput).value = str(snap.get("title") or "")
+        wave_row = self.query_one("#field_wave", RadioRow)
+        wave_row.value = int(snap.get("wave", 0))
+
+        harness_s = str(snap.get("harness") or "cursor").strip()
+        h_row = self.query_one("#field_harness", RadioRow)
+        hpairs = list(_HARNESS_SELECT_OPTIONS)
+        known_kinds = {k for _, k in hpairs}
+        if harness_s not in known_kinds:
+            hpairs.append((f"Other: {harness_s}", harness_s))
+        h_row.set_options(hpairs, value=harness_s)
+
+        mod = str(snap.get("model") or "").strip() or None
+        self._refresh_model_select(harness_s, mod)
+
+        dep_rows = self._db.execute(
+            "SELECT id, title FROM tickets WHERE id != ? ORDER BY wave, id",
+            (self.ticket_id,),
+        ).fetchall()
+        chosen = {str(d) for d in (snap.get("deps") or [])}
+        deps_list = self.query_one("#field_deps", SelectionList)
+        if dep_rows:
+            deps_list.add_options(
+                [
+                    (str(r["title"] or r["id"])[:64], str(r["id"]), str(r["id"]) in chosen)
+                    for r in dep_rows
+                ]
+            )
+        skill_rows = self._db.execute(
+            "SELECT DISTINCT skill FROM ticket_skills ORDER BY skill"
+        ).fetchall()
+        skills_pick = self.query_one("#field_skills_pick", SelectionList)
+        cur_skills = {str(s) for s in (snap.get("skills") or [])}
+        known = {str(r["skill"]) for r in skill_rows}
+        if skill_rows:
+            skills_pick.add_options(
+                [
+                    (str(r["skill"]), str(r["skill"]), str(r["skill"]) in cur_skills)
+                    for r in skill_rows
+                ]
+            )
+        extra_skills = sorted(cur_skills - known)
+        self.query_one("#field_skills_extra", CarveTextArea).text = "\n".join(extra_skills)
+
         writes = snap.get("write_set") or []
-        self.query_one("#field_writes", TextArea).text = "\n".join(str(p) for p in writes)
-        skills = snap.get("skills") or []
-        self.query_one("#field_skills", TextArea).text = "\n".join(str(s) for s in skills)
-        self.query_one("#field_checklist", TextArea).text = _checklist_to_lines(snap)
-        self.query_one("#field_title", Input).focus()
+        self.query_one("#field_writes", CarveTextArea).text = "\n".join(str(p) for p in writes)
+        self.query_one("#field_checklist", CarveTextArea).text = _checklist_to_lines(snap)
+        self.query_one("#field_status", RadioRow).focus()
+        self._suppress_autosave = False
+
+    def _refresh_model_select(self, harness: str, prefer: str | None) -> None:
+        m_row = self.query_one("#field_model", RadioRow)
+        opts = _model_select_options(harness, prefer)
+        cur = "" if prefer is None or prefer == "" else str(prefer).strip()
+        m_row.set_options(opts, value=cur)
+
+    def on_radio_row_changed(self, event: RadioRow.Changed) -> None:
+        if event.radio.id == "field_harness":
+            m_row = self.query_one("#field_model", RadioRow)
+            cur = m_row.value
+            cur_s = "" if cur in (None, "") else str(cur).strip()
+            self._refresh_model_select(str(event.radio.value), cur_s or None)
+        self._autosave()
+
+    def _typing_focus(self) -> bool:
+        w = self.focused
+        if isinstance(w, TitleStripInput):
+            return w.editing
+        if isinstance(w, CarveTextArea):
+            return w.editing
+        return isinstance(w, TextArea)
+
+    def action_nav_next(self) -> None:
+        if self._typing_focus():
+            return
+        self.screen.focus_next()
+
+    def action_nav_prev(self) -> None:
+        if self._typing_focus():
+            return
+        self.screen.focus_previous()
 
     def _lines(self, text: str) -> list[str]:
         lines: list[str] = []
@@ -314,84 +774,63 @@ class CarveFormScreen(ModalScreen[dict[str, Any] | None]):
                 lines.append(s)
         return lines
 
-    def _apply_import_to_form(self, data: dict[str, Any]) -> None:
-        if title := data.get("title"):
-            self.query_one("#field_title", Input).value = str(title).strip()
-        ho = data.get("harness_override")
-        h = ho if ho is not None else data.get("harness")
-        if h:
-            self.query_one("#field_harness", Input).value = str(h).strip()
-        if data.get("model") is not None:
-            self.query_one("#field_model", Input).value = str(data.get("model") or "").strip()
-        if "deps" in data and data["deps"] is not None:
-            deps = data["deps"]
-            if isinstance(deps, list):
-                self.query_one("#field_deps", TextArea).text = "\n".join(str(x) for x in deps)
-        if "write_set" in data and data["write_set"] is not None:
-            ws = data["write_set"]
-            if isinstance(ws, list):
-                self.query_one("#field_writes", TextArea).text = "\n".join(str(x) for x in ws)
-        if "skills" in data and data["skills"] is not None:
-            sk = data["skills"]
-            if isinstance(sk, list):
-                self.query_one("#field_skills", TextArea).text = "\n".join(str(x) for x in sk)
-        if "checklist" in data and data["checklist"] is not None:
-            ch = data["checklist"]
-            if isinstance(ch, list):
-                self.query_one("#field_checklist", TextArea).text = "\n".join(str(x) for x in ch)
-
     def _collect_spec(self) -> dict[str, Any]:
-        title = self.query_one("#field_title", Input).value.strip()
-        harness = self.query_one("#field_harness", Input).value.strip()
-        model_raw = self.query_one("#field_model", Input).value.strip()
+        title = self.query_one("#field_title", TitleStripInput).value.strip()
+        harness = str(self.query_one("#field_harness", RadioRow).value)
+        model_v = self.query_one("#field_model", RadioRow).value
+        model_raw = "" if model_v in (None, "") else str(model_v).strip()
+        wave = int(self.query_one("#field_wave", RadioRow).value)
+        sched_v = self.query_one("#field_schedule", RadioRow).value
+        if sched_v == _SCHEDULE_NONE:
+            schedule_at: str | None = None
+        else:
+            schedule_at = str(sched_v)
+        status_v = self.query_one("#field_status", RadioRow).value
+        status = str(status_v) if status_v not in (None, "") else "planned"
+
+        deps = list(self.query_one("#field_deps", SelectionList).selected)
+        skills_sel = list(self.query_one("#field_skills_pick", SelectionList).selected)
+        skills_extra = self._lines(self.query_one("#field_skills_extra", CarveTextArea).text)
+        skills = sorted(set(skills_sel) | set(skills_extra))
+
         return {
             "id": self.ticket_id,
             "title": title,
-            "wave": self._wave,
-            "status": "ready",
+            "wave": wave,
+            "status": status,
             "harness": harness,
             "model": model_raw or None,
-            "deps": self._lines(self.query_one("#field_deps", TextArea).text),
-            "write_set": self._lines(self.query_one("#field_writes", TextArea).text),
-            "skills": self._lines(self.query_one("#field_skills", TextArea).text),
-            "checklist": self._lines(self.query_one("#field_checklist", TextArea).text),
+            "schedule_at": schedule_at,
+            "deps": deps,
+            "write_set": self._lines(self.query_one("#field_writes", CarveTextArea).text),
+            "skills": skills,
+            "checklist": self._lines(self.query_one("#field_checklist", CarveTextArea).text),
         }
+
+    def _autosave(self) -> None:
+        if self._suppress_autosave:
+            return
+        spec = self._collect_spec()
+        if not spec["title"]:
+            return
+        if not str(spec.get("harness", "")).strip():
+            return
+        self._on_autosave(spec)
 
     def action_cancel(self) -> None:
         self.dismiss(None)
 
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "cancel":
-            self.dismiss(None)
-        elif event.button.id == "merge":
-            raw = self.query_one("#import_paste", TextArea).text
-            try:
-                data = parse_carve_paste(raw)
-            except (ValueError, json.JSONDecodeError, YAMLError) as e:
-                self.app.notify(f"Could not parse paste: {e}", severity="error", timeout=8)
-                return
-            if str(data.get("id", self.ticket_id)) != self.ticket_id:
-                self.app.notify(
-                    f"Paste id {data.get('id')!r} does not match {self.ticket_id!r}",
-                    severity="error",
-                    timeout=8,
-                )
-                return
-            wr = data.get("wave")
-            if wr is not None and int(wr) != self._wave:
-                self.app.notify(
-                    f"Paste wave {wr} does not match ticket wave {self._wave} (ignored in form).",
-                    severity="warning",
-                    timeout=6,
-                )
-            self._apply_import_to_form(data)
-            self.app.notify("Merged paste into fields.", timeout=3)
-        elif event.button.id == "apply":
-            spec = self._collect_spec()
-            if not spec["title"]:
-                self.app.notify("Title is required.", severity="warning", timeout=4)
-                return
-            if not str(spec.get("harness", "")).strip():
-                self.app.notify("Harness is required.", severity="warning", timeout=4)
-                return
-            self.dismiss(spec)
+    @on(Input.Changed, "#field_title")
+    def _title_changed(self, _event: Input.Changed) -> None:
+        self._autosave()
+
+    @on(TextArea.Changed, "#field_skills_extra")
+    @on(TextArea.Changed, "#field_writes")
+    @on(TextArea.Changed, "#field_checklist")
+    def _text_areas_changed(self, _event: TextArea.Changed) -> None:
+        self._autosave()
+
+    @on(SelectionList.SelectedChanged, "#field_deps")
+    @on(SelectionList.SelectedChanged, "#field_skills_pick")
+    def _selection_lists_changed(self, _event: SelectionList.SelectedChanged) -> None:
+        self._autosave()

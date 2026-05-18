@@ -6,22 +6,20 @@ import json
 import sqlite3
 from datetime import datetime, timedelta, timezone
 
-import pytest
-
 import murder.db as dbmod
 from murder.tui.dispatch.gauges import (
     GaugeDrillIn,
     GaugeStrip,
-    _GaugeData,
     _burn_attribution,
+    _GaugeData,
     _recent_reset_events,
     _spark_history,
 )
 
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
+
 
 def _make_db() -> sqlite3.Connection:
     conn = sqlite3.connect(":memory:", isolation_level=None)
@@ -103,6 +101,7 @@ def _insert_ticket(
 # _spark_history
 # ---------------------------------------------------------------------------
 
+
 def test_spark_history_empty_db() -> None:
     db = _make_db()
     result = _spark_history(db, "cursor", "5h")
@@ -148,6 +147,7 @@ def test_spark_history_ignores_different_window_key() -> None:
 # ---------------------------------------------------------------------------
 # _recent_reset_events
 # ---------------------------------------------------------------------------
+
 
 def test_recent_resets_empty_db() -> None:
     db = _make_db()
@@ -217,6 +217,7 @@ def test_recent_resets_returns_reset_at_timestamp() -> None:
 # _burn_attribution
 # ---------------------------------------------------------------------------
 
+
 def test_burn_attribution_empty_db() -> None:
     db = _make_db()
     result = _burn_attribution(db, "cursor", 300.0)
@@ -263,8 +264,12 @@ def test_burn_attribution_sorted_by_active_minutes() -> None:
     _insert_ticket(db, "t004", harness="cursor", title="Long run")
 
     # t004 runs 120 min, t003 runs 30 min
-    _insert_agent(db, "ag003", "t003", _iso(now - timedelta(minutes=40)), _iso(now - timedelta(minutes=10)))
-    _insert_agent(db, "ag004", "t004", _iso(now - timedelta(minutes=130)), _iso(now - timedelta(minutes=10)))
+    _insert_agent(
+        db, "ag003", "t003", _iso(now - timedelta(minutes=40)), _iso(now - timedelta(minutes=10))
+    )
+    _insert_agent(
+        db, "ag004", "t004", _iso(now - timedelta(minutes=130)), _iso(now - timedelta(minutes=10))
+    )
 
     result = _burn_attribution(db, "cursor", 300.0)
     assert len(result) == 2
@@ -290,11 +295,15 @@ def test_burn_attribution_harness_filter() -> None:
 # GaugeDrillIn._build_content
 # ---------------------------------------------------------------------------
 
+
 def test_drill_in_build_content_has_sections() -> None:
     db = _make_db()
     g = _GaugeData(
-        harness="cursor", window_key="5h", pct=75.0,
-        t_until_reset_minutes=120.0, t_period_minutes=300.0,
+        harness="cursor",
+        window_key="5h",
+        pct=75.0,
+        t_until_reset_minutes=120.0,
+        t_period_minutes=300.0,
     )
     modal = GaugeDrillIn(g, db)
     content = modal._build_content()
@@ -306,8 +315,11 @@ def test_drill_in_build_content_has_sections() -> None:
 def test_drill_in_build_content_shows_pct() -> None:
     db = _make_db()
     g = _GaugeData(
-        harness="cursor", window_key="5h", pct=73.0,
-        t_until_reset_minutes=90.0, t_period_minutes=300.0,
+        harness="cursor",
+        window_key="5h",
+        pct=73.0,
+        t_until_reset_minutes=90.0,
+        t_period_minutes=300.0,
     )
     modal = GaugeDrillIn(g, db)
     content = modal._build_content()
@@ -317,8 +329,11 @@ def test_drill_in_build_content_shows_pct() -> None:
 def test_drill_in_build_content_shows_rst() -> None:
     db = _make_db()
     g = _GaugeData(
-        harness="cursor", window_key="5h", pct=50.0,
-        t_until_reset_minutes=90.0, t_period_minutes=300.0,
+        harness="cursor",
+        window_key="5h",
+        pct=50.0,
+        t_until_reset_minutes=90.0,
+        t_period_minutes=300.0,
     )
     modal = GaugeDrillIn(g, db)
     content = modal._build_content()
@@ -332,8 +347,11 @@ def test_drill_in_build_content_lists_burn_ticket() -> None:
     _insert_agent(db, "ag010", "t010", _iso(now - timedelta(minutes=60)), _iso(now))
 
     g = _GaugeData(
-        harness="cursor", window_key="5h", pct=50.0,
-        t_until_reset_minutes=90.0, t_period_minutes=300.0,
+        harness="cursor",
+        window_key="5h",
+        pct=50.0,
+        t_until_reset_minutes=90.0,
+        t_period_minutes=300.0,
     )
     modal = GaugeDrillIn(g, db)
     content = modal._build_content()
@@ -348,8 +366,11 @@ def test_drill_in_build_content_lists_reset_event() -> None:
     _insert_snapshot(db, "cursor", 2.0, "5h", fetched_at=_iso(now - timedelta(hours=2)))
 
     g = _GaugeData(
-        harness="cursor", window_key="5h", pct=2.0,
-        t_until_reset_minutes=90.0, t_period_minutes=300.0,
+        harness="cursor",
+        window_key="5h",
+        pct=2.0,
+        t_until_reset_minutes=90.0,
+        t_period_minutes=300.0,
     )
     modal = GaugeDrillIn(g, db)
     content = modal._build_content()
@@ -360,6 +381,7 @@ def test_drill_in_build_content_lists_reset_event() -> None:
 # ---------------------------------------------------------------------------
 # GaugeStrip drill-in wiring
 # ---------------------------------------------------------------------------
+
 
 def test_gauge_strip_stores_db_on_refresh() -> None:
     db = _make_db()
@@ -379,6 +401,7 @@ def test_gauge_strip_drill_in_no_crash_without_gauges() -> None:
 # SchedulerWorker prune (unit-level)
 # ---------------------------------------------------------------------------
 
+
 def test_prune_removes_old_snapshots(memdb: sqlite3.Connection) -> None:
     from murder.scheduler.worker import SchedulerWorker
 
@@ -387,27 +410,40 @@ def test_prune_removes_old_snapshots(memdb: sqlite3.Connection) -> None:
     old_ts = _iso(now - timedelta(days=61))
     memdb.execute(
         "INSERT INTO harness_usage_snapshots(harness, source, fetched_at, status_json) VALUES (?, ?, ?, ?)",
-        ("cursor", "test", old_ts, json.dumps({"harness": "cursor", "source": "test", "fetched_at": old_ts, "windows": []})),
+        (
+            "cursor",
+            "test",
+            old_ts,
+            json.dumps(
+                {"harness": "cursor", "source": "test", "fetched_at": old_ts, "windows": []}
+            ),
+        ),
     )
     # Insert recent snapshot
     recent_ts = _iso(now - timedelta(days=1))
     memdb.execute(
         "INSERT INTO harness_usage_snapshots(harness, source, fetched_at, status_json) VALUES (?, ?, ?, ?)",
-        ("cursor", "test", recent_ts, json.dumps({"harness": "cursor", "source": "test", "fetched_at": recent_ts, "windows": []})),
+        (
+            "cursor",
+            "test",
+            recent_ts,
+            json.dumps(
+                {"harness": "cursor", "source": "test", "fetched_at": recent_ts, "windows": []}
+            ),
+        ),
     )
 
     worker = SchedulerWorker()
     worker._prune_old_snapshots(memdb)
 
-    remaining = memdb.execute(
-        "SELECT fetched_at FROM harness_usage_snapshots"
-    ).fetchall()
+    remaining = memdb.execute("SELECT fetched_at FROM harness_usage_snapshots").fetchall()
     assert len(remaining) == 1
     assert remaining[0]["fetched_at"] == recent_ts
 
 
 def test_prune_on_start_cleans_old_data(memdb: sqlite3.Connection) -> None:
     import asyncio
+
     from murder.scheduler.worker import SchedulerWorker
     from murder.workers.base import WorkerCtx
 
@@ -422,7 +458,5 @@ def test_prune_on_start_cleans_old_data(memdb: sqlite3.Connection) -> None:
     ctx = WorkerCtx(repo_root=None, db=memdb, bus=None, run_id="run-prune-001", shutdown=None)  # type: ignore[arg-type]
     asyncio.run(worker.on_start(ctx))
 
-    count = memdb.execute(
-        "SELECT COUNT(*) AS n FROM harness_usage_snapshots"
-    ).fetchone()["n"]
+    count = memdb.execute("SELECT COUNT(*) AS n FROM harness_usage_snapshots").fetchone()["n"]
     assert count == 0

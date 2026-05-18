@@ -220,7 +220,9 @@ def wrap_shell_command(command: str) -> str:
     shell metacharacter edge cases can still mis-record exit status; prefer simple
     one-liners or scripts in files. Very long one-liners can hit ``ARG_MAX``.
     """
-    inner = "{ " + command + "; __tmux_ll_ec=$?; printf '\\n__TMUX_LL_EXIT__ %d\\n' $__tmux_ll_ec; }"
+    inner = (
+        "{ " + command + "; __tmux_ll_ec=$?; printf '\\n__TMUX_LL_EXIT__ %d\\n' $__tmux_ll_ec; }"
+    )
     return "sh -c " + shlex.quote(inner)
 
 
