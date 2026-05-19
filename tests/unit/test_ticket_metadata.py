@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 
 from murder.bus import TicketStatus
-from murder.tickets.meta import (
+from murder.tickets.sidecar import (
     TicketMetadata,
     TicketMetadataError,
     ensure_file_authored_status,

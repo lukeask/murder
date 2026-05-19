@@ -17,7 +17,7 @@ from murder.bus.protocol import (
     SchedulerModeEvent,
     UsageResetEvent,
 )
-from murder.scheduler import decisionf
+from murder.scheduler import usage_threshold_curve
 from murder.workers.base import Worker, WorkerCtx, WorkerSpec
 
 _VALID_MODES = frozenset({"manual", "autorun_ready", "crow_magic"})
@@ -98,7 +98,7 @@ class SchedulerWorker(Worker):
     - manual: never kicks anything automatically (operator-driven F6 / CLI)
     - autorun_ready: every tick, submits scheduler.kickoff_ready to orchestrator
       when ready tickets with clear deps exist
-    - crow_magic: per-(harness, window) usage gate via decisionf; per-harness
+    - crow_magic: per-(harness, window) usage gate via usage_threshold_curve; per-harness
       priority pick; respects multiharness_cutoff
     """
 
@@ -292,7 +292,7 @@ class SchedulerWorker(Worker):
         if t_period is None or t_period <= 0:
             return
 
-        # Load per-(harness, window_key) params; fall back to decisionf defaults
+        # Load per-(harness, window_key) params; fall back to usage_threshold_curve defaults
         params_row = ctx.db.execute(
             "SELECT c_changeoff, t_alwaysyes, alwayscutoff, intensity, multiharness_cutoff "
             "FROM scheduler_params WHERE harness = ? AND window_key = ?",
@@ -308,7 +308,7 @@ class SchedulerWorker(Worker):
                 multiharness_cutoff = params_obj.multiharness_cutoff
 
         usage = percent_used / 100.0
-        threshold = decisionf._f_threshold(
+        threshold = usage_threshold_curve._f_threshold(
             t_until_reset,
             t_period,
             c_changeoff=params_obj.c_changeoff,

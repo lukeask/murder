@@ -316,7 +316,7 @@ _HARNESS_SELECT_OPTIONS: list[tuple[str, str]] = [
     ("Claude Code", "claude_code"),
     ("Codex CLI", "codex"),
     ("Pi", "pi"),
-    ("Murder native", "murder_native"),
+    ("Native coding crow", "native_coding_crow"),
 ]
 
 

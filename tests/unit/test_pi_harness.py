@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from murder.harnesses.pi import PiAdapter
-from tests.unit.harness_contracts import assert_adapter_basics
+from murder.harnesses.pi_harness import PiAdapter
+from tests.unit._harness_assertions import assert_adapter_basics
 
 
 def test_startup_cmd_includes_model_when_configured() -> None:

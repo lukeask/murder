@@ -23,7 +23,7 @@ import sqlite3
 
 from murder import db as dbmod
 
-# (role, text) — deliberately a plain tuple, matching NotetakerAgent.transcript_for_ui.
+# (role, text) — deliberately a plain tuple for UI transcript rendering.
 Turn = tuple[str, str]
 
 

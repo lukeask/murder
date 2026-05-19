@@ -17,7 +17,7 @@ from typing import Any, Literal
 import yaml
 from pydantic import BaseModel, Field, field_validator
 
-UserHarnessKind = Literal["cursor", "claude_code", "codex", "pi", "murder_native"]
+UserHarnessKind = Literal["cursor", "claude_code", "codex", "pi", "native_coding_crow"]
 
 
 class TuiUserConfig(BaseModel):

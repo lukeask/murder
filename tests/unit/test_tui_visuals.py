@@ -8,7 +8,7 @@ import pytest
 
 from murder.tui.app import MurderApp, _is_vim_style_quit
 from murder.tui.chat_input import ChatInput
-from murder.tui.plan_view import ChatLog, NotesDocument, NotesList, PlanDocument, PlanList
+from murder.tui.planning_mode_widgets import ChatLog, NotesDocument, NotesList, PlanDocument, PlanList
 
 
 def test_notes_document_is_focusable_for_tab_navigation() -> None:

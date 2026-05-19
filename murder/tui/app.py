@@ -39,7 +39,7 @@ from murder.tui.header import Header
 from murder.tui.note_capture import RECENT_NOTE_ROWS, NoteCaptureScreen
 from murder.tui.pane_mirror import PaneMirror
 from murder.tui.perf_log import make_perf_log
-from murder.tui.plan_view import (
+from murder.tui.planning_mode_widgets import (
     ChatLog,
     NotesDocument,
     NotesList,

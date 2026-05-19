@@ -39,8 +39,8 @@ from murder.plans.sync import PlanSync, choose_editor, open_editor
 from murder.recovery import reconcile_agents_vs_tmux
 from murder.storage.filesystem import acquire_flock, release_flock
 from murder.storage.paths import db_path, lock_path, note_md
-from murder.storage.runs import allocate_run_id
-from murder.tickets.meta_sync import TicketMetadataSync
+from murder.storage.run_id_allocation import allocate_run_id
+from murder.tickets.metadata_sidecar_sync import TicketMetadataSync
 from murder.tickets.sync import TicketSync
 
 if TYPE_CHECKING:

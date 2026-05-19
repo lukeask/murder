@@ -6,6 +6,6 @@ ticket prose .md files, lockfile, .env paths.
 """
 
 from murder.storage.paths import agents_dir, db_path, lock_path, runs_dir
-from murder.storage.runs import allocate_run_id
+from murder.storage.run_id_allocation import allocate_run_id
 
 __all__ = ["agents_dir", "db_path", "lock_path", "runs_dir", "allocate_run_id"]
