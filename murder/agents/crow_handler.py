@@ -62,7 +62,7 @@ class CrowHandlerAgent(Agent):
     async def start(self, brief: str, ctx: dict[str, Any]) -> None:
         from murder import tmux
         from murder.bus import StatusChangeEvent
-        from murder.storage.runs import open_pane_log
+        from murder.storage.run_id_allocation import open_pane_log
 
         assert self.runtime.run_id is not None
         self._log_path = open_pane_log(

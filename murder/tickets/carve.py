@@ -13,7 +13,7 @@ from murder.bus import TicketStatus
 from murder.storage.filesystem import atomic_write_text
 from murder.storage.paths import ticket_yaml
 from murder.tickets import lifecycle
-from murder.tickets.meta_sync import reconcile_ticket_yaml
+from murder.tickets.metadata_sidecar_sync import reconcile_ticket_yaml
 
 
 class CarveError(ValueError):

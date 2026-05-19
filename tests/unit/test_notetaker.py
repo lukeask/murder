@@ -1,4 +1,4 @@
-"""Notes storage + notetaker capture shim/tests."""
+"""Notes storage + notetaker capture tests."""
 
 from __future__ import annotations
 
@@ -8,7 +8,6 @@ from types import SimpleNamespace
 import pytest
 
 from murder import notes
-from murder.agents.notetaker import NotetakerAgent
 from murder.clients.base import CompletionResult
 from murder.config import NotetakerConfig
 from murder.orchestrator import Orchestrator
@@ -74,12 +73,7 @@ def test_write_note_records_revisions(memdb, tmp_path: Path) -> None:
     ]
 
 
-# ── shim + capture orchestration ──────────────────────────────────────────
-
-
-def test_notetaker_agent_shim_errors_on_construct() -> None:
-    with pytest.raises(RuntimeError, match="capture.submit"):
-        NotetakerAgent()  # type: ignore[call-arg]
+# ── capture orchestration ─────────────────────────────────────────────────
 
 
 @pytest.mark.asyncio

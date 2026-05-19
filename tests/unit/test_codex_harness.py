@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from murder.harnesses.codex import CodexAdapter
-from tests.unit.harness_contracts import assert_adapter_basics
+from tests.unit._harness_assertions import assert_adapter_basics
 
 
 def test_startup_cmd_uses_tmux_capture_friendly_mode() -> None:

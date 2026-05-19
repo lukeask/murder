@@ -5,7 +5,7 @@ import sqlite3
 import pytest
 import yaml
 
-from murder.tickets.meta_sync import TicketMetadataSync
+from murder.tickets.metadata_sidecar_sync import TicketMetadataSync
 
 
 def _add_metadata_columns(conn: sqlite3.Connection) -> None:
@@ -86,7 +86,7 @@ async def test_import_yaml_creates_missing_db_ticket(tmp_path, memdb: sqlite3.Co
                 "model": "gpt-5",
                 "deps": [],
                 "skills": ["imagegen"],
-                "write_set": ["murder/tickets/meta_sync.py"],
+                "write_set": ["murder/tickets/metadata_sidecar_sync.py"],
                 "checklist": ["first"],
                 "schedule_at": None,
             },

@@ -99,7 +99,7 @@ def _command_count(conn: sqlite3.Connection) -> int:
 
 
 def test_crow_magic_kicks_when_usage_high(memdb: sqlite3.Connection) -> None:
-    """High usage (80%) in alwayscutoff zone → decisionf returns True → command queued."""
+    """High usage (80%) in alwayscutoff zone → usage_threshold_curve returns True → command queued."""
     worker = SchedulerWorker()
     ctx = _make_ctx(memdb)
     asyncio.run(worker.on_start(ctx))
@@ -188,8 +188,8 @@ def test_crow_magic_multiharness_cutoff_blocks_when_busy(memdb: sqlite3.Connecti
     _insert_ticket(memdb, "cm010", status="in_progress", harness="cursor")
     # Ready ticket
     _insert_ticket(memdb, "cm011", status="ready", harness="cursor")
-    # Low usage — but decisionf still says yes (alwayscutoff=0.6; usage=0.3 < 0.6 → False normally)
-    # We need a snapshot where decisionf says True but usage < multiharness_cutoff.
+    # Low usage — but usage_threshold_curve still says yes (alwayscutoff=0.6; usage=0.3 < 0.6 → False normally)
+    # We need a snapshot where usage_threshold_curve says True but usage < multiharness_cutoff.
     # Use the always-yes zone: t_until_reset ≈ t_period (just entered period), threshold→0
     # Actually let's use: percent_used=70, in alwayscutoff zone (threshold=0.6), so 0.7 > 0.6 → True
     # Set multiharness_cutoff=0.8 (80%) so usage 0.7 < 0.8 and harness busy → skip

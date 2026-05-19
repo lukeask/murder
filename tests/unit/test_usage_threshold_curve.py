@@ -1,10 +1,10 @@
-"""Unit tests for scheduler.decisionf threshold curve properties."""
+"""Unit tests for scheduler.usage_threshold_curve threshold curve properties."""
 
 from __future__ import annotations
 
 import pytest
 
-from murder.scheduler.decisionf import _f_threshold, f
+from murder.scheduler.usage_threshold_curve import _f_threshold, f
 
 # ---------------------------------------------------------------------------
 # _f_threshold boundary conditions

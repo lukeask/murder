@@ -30,7 +30,7 @@ _HARNESS_ROWS: list[tuple[HarnessKind, str, str]] = [
     ("claude_code", "Claude Code", "claude"),
     ("codex", "Codex CLI", "codex"),
     ("pi", "Pi", "pi"),
-    ("murder_native", "Murder native", "murder_native"),
+    ("native_coding_crow", "Native coding crow", "native_coding_crow"),
 ]
 
 _API_MODEL_ROWS: list[tuple[str, str]] = [

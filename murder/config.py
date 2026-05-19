@@ -12,7 +12,7 @@ from typing import Any, Literal, TypeAlias, cast
 import yaml
 from pydantic import BaseModel, Field, field_validator
 
-HarnessKind: TypeAlias = Literal["cursor", "claude_code", "codex", "pi", "murder_native"]
+HarnessKind: TypeAlias = Literal["cursor", "claude_code", "codex", "pi", "native_coding_crow"]
 
 try:  # python-dotenv is in dependencies but tests may stub
     from dotenv import load_dotenv

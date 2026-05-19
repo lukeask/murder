@@ -15,7 +15,7 @@ from murder.bus import TicketStatus
 from murder.storage.filesystem import atomic_write_text
 from murder.storage.markdown_sync import MarkdownSyncLoop
 from murder.storage.paths import ticket_yaml, tickets_dir
-from murder.tickets.meta import (
+from murder.tickets.sidecar import (
     TicketMetadata,
     parse_ticket_metadata,
     render_ticket_metadata,

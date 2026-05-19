@@ -24,7 +24,7 @@ from murder.harnesses.models import (
     HarnessUsageStatus,
     HarnessUsageWindow,
 )
-from tests.unit.harness_contracts import assert_adapter_basics
+from tests.unit._harness_assertions import assert_adapter_basics
 
 FIXTURES = Path(__file__).parent.parent / "fixtures" / "cursor_panes"
 
