@@ -96,7 +96,11 @@ async def spawn_agent(
         raise ValueError(f"spawn_agent: unsupported role {role!r}")
 
     rt.register_agent(agent)
-    await agent.start(spec.startup_prompt or "", {})
+    try:
+        await agent.start(spec.startup_prompt or "", {})
+    except BaseException:
+        await rt.reap(agent.id)
+        raise
 
     handle = AgentHandle(session_name=session_name, spec=spec, task=None)
 
