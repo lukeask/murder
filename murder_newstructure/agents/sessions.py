@@ -28,19 +28,11 @@ class AgentSessionStatus(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class AgentScope:
-    """What an agent session is about."""
+    """What an agent session is about. All fields optional — global agents (e.g. Sentinel) have no ticket/plan/worktree."""
 
     ticket_id: str | None = None
     plan_name: str | None = None
     worktree_path: str | None = None
-
-    def __post_init__(self) -> None:
-        if not any(
-            value is not None for value in (self.ticket_id, self.plan_name, self.worktree_path)
-        ):
-            raise ValueError(
-                "AgentScope requires at least one of ticket_id, plan_name, worktree_path"
-            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -49,7 +41,7 @@ class AgentSpec:
 
     role: str
     scope: AgentScope
-    harness: str
+    harness: str | None = None
     model: str | None = None
     startup_prompt: str | None = None
     escalation_target: str | None = None

@@ -12,7 +12,6 @@ from murder.agents.base import AgentRole, AgentStatus
 from murder.agents.collaborator import CollaboratorAgent
 from murder.agents.crow import CrowAgent
 from murder.agents.crow_handler import CrowHandlerAgent
-from murder.agents.sentinel import SentinelAgent
 from murder.bus import StatusChangeEvent, TicketStatus
 from murder.clients import create_client
 from murder.config import resolve_default_crow_harness, resolve_default_crow_startup_model
@@ -21,6 +20,8 @@ from murder.prompts import load, render
 from murder.session_names import format_session_name
 from murder.tickets import carve, lifecycle
 
+from murder_newstructure.agents.runner import spawn_agent
+from murder_newstructure.agents.sessions import AgentScope, AgentSpec
 from murder_newstructure.service.runtime_scope import OrchestratorHost
 
 from ..escalations.service import EscalationService
@@ -261,18 +262,12 @@ class Orchestrator:
         ).fetchone()
         if row:
             return str(row["agent_id"])
-        client = create_client(self.rt.config.sentinel.provider)
-        session = format_session_name(self.rt, "sentinel", "")
-        agent = SentinelAgent(
-            agent_id="sentinel-0",
-            session=session,
-            config=self.rt.config.sentinel,
-            client=client,
-            runtime=self.rt,
+        spec = AgentSpec(
+            role=AgentRole.SENTINEL,
+            scope=AgentScope(),
         )
-        self.rt.register_agent(agent)
-        await agent.start("", {})
-        return agent.id
+        handle = await spawn_agent(spec, rt=self.rt)
+        return handle.session_name
 
     async def ensure_collaborator(self) -> str:
         row = self.rt.db.execute(

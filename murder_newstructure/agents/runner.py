@@ -43,13 +43,15 @@ async def spawn_agent(
     any unrecognised role.
     """
     role = spec.role
-    harness = get_harness(spec.harness, startup_model=spec.model)
 
     if role == AgentRole.CROW:
         if spec.scope.ticket_id is None:
             raise ValueError("CROW spec requires scope.ticket_id")
+        if not spec.harness:
+            raise ValueError("CROW spec requires harness")
         ticket_id = spec.scope.ticket_id
         session_name = format_session_name(rt, "crow", f"_{ticket_id}")
+        harness = get_harness(spec.harness, startup_model=spec.model)
         agent = CrowAgent(
             agent_id=f"crow-{ticket_id}",
             ticket_id=ticket_id,
@@ -61,7 +63,10 @@ async def spawn_agent(
         )
 
     elif role == AgentRole.COLLABORATOR:
+        if not spec.harness:
+            raise ValueError("COLLABORATOR spec requires harness")
         session_name = format_session_name(rt, "collaborator", "")
+        harness = get_harness(spec.harness, startup_model=spec.model)
         agent = CollaboratorAgent(
             agent_id="collaborator-0",
             session=session_name,
