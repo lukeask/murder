@@ -1,0 +1,103 @@
+"""Durable and live agent session types."""
+
+from __future__ import annotations
+
+import asyncio
+import contextlib
+import sys
+from dataclasses import dataclass, field
+from datetime import datetime
+from enum import Enum
+
+if sys.version_info >= (3, 11):
+    from enum import StrEnum
+else:
+
+    class StrEnum(str, Enum):
+        def __str__(self) -> str:
+            return str.__str__(self)
+
+
+class AgentSessionStatus(StrEnum):
+    STARTING = "starting"
+    RUNNING = "running"
+    DONE = "done"
+    FAILED = "failed"
+    INTERRUPTED = "interrupted"
+
+
+@dataclass(frozen=True, slots=True)
+class AgentScope:
+    """What an agent session is about."""
+
+    ticket_id: str | None = None
+    plan_name: str | None = None
+    worktree_path: str | None = None
+
+    def __post_init__(self) -> None:
+        if not any(
+            value is not None for value in (self.ticket_id, self.plan_name, self.worktree_path)
+        ):
+            raise ValueError(
+                "AgentScope requires at least one of ticket_id, plan_name, worktree_path"
+            )
+
+
+@dataclass(frozen=True, slots=True)
+class AgentSpec:
+    """Everything needed to spawn an agent session."""
+
+    role: str
+    scope: AgentScope
+    harness: str
+    model: str | None = None
+    startup_prompt: str | None = None
+    escalation_target: str | None = None
+    capabilities_required: frozenset[str] = field(default_factory=frozenset)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "capabilities_required",
+            frozenset(self.capabilities_required),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class AgentHandle:
+    """Live reference to a running agent session."""
+
+    session_name: str
+    spec: AgentSpec
+    task: asyncio.Task[object] | None = None
+
+    async def interrupt(self) -> None:
+        if self.task is None or self.task.done():
+            return
+        self.task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await self.task
+
+    async def is_live(self) -> bool:
+        task = self.task
+        return task is not None and not task.done() and not task.cancelled()
+
+
+@dataclass(frozen=True, slots=True)
+class AgentSession:
+    """Durable record of an agent session."""
+
+    session_id: str
+    spec: AgentSpec
+    status: AgentSessionStatus
+    started_at: datetime
+    ended_at: datetime | None = None
+
+
+__all__ = [
+    "AgentHandle",
+    "AgentScope",
+    "AgentSession",
+    "AgentSessionStatus",
+    "AgentSpec",
+]
