@@ -1,0 +1,411 @@
+"""Service lifecycle and ticket-operation commands."""
+
+from __future__ import annotations
+
+import asyncio
+import contextlib
+import os
+import signal
+import subprocess
+import sys
+from datetime import datetime
+from pathlib import Path
+
+import typer
+
+from murder.bus import TicketStatus
+from murder.bus.client import SocketBusClient
+from murder.bus.protocol import ClientKind
+from murder.bus.transport_socket import default_socket_path
+from murder.config import Config
+from murder.persistence.escalations import list_pending_escalations
+from murder.persistence.schema import get_db, init_db
+from murder.persistence.tickets import get_ticket
+from murder.plans.sync import PlanSync, content_hash
+from murder.service.host import ServiceHost
+from murder.storage.filesystem import read_lock_pid
+from murder.storage.paths import (
+    agents_dir,
+    db_path,
+    lock_path,
+    logs_dir,
+    notes_dir,
+    plans_dir,
+    ticket_md,
+)
+from murder.tickets import lifecycle
+from murder.tickets import waves as waves_mod
+from murder.tickets.schema import ChecklistItem, Ticket
+from murder.tickets.sync import TicketSync
+from murder.tui.client import TuiRuntimeClient
+
+
+def _repo_root() -> Path:
+    return Path.cwd().resolve()
+
+
+def _open_existing_db(repo: Path):  # type: ignore[return]
+    path = db_path(repo)
+    if not path.exists():
+        typer.secho("No murder.db — run murder init", err=True)
+        raise typer.Exit(1)
+    conn = get_db(path)
+    init_db(conn)
+    return conn
+
+
+def _pid_is_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+async def _socket_is_connectable(socket_path: Path, *, timeout_s: float = 0.5) -> bool:
+    try:
+        client = SocketBusClient(
+            socket_path,
+            client_kind=ClientKind.CLI_EPHEMERAL,
+            client_id=f"probe-{os.getpid()}",
+        )
+        await asyncio.wait_for(
+            client.request("health.ping", {}, timeout_s=timeout_s),
+            timeout=timeout_s + 0.25,
+        )
+    except Exception:
+        return False
+    return True
+
+
+async def _supervisor_is_live(repo: Path, socket_path: Path) -> bool:
+    pid = read_lock_pid(lock_path(repo))
+    return bool(
+        pid is not None and _pid_is_alive(pid) and await _socket_is_connectable(socket_path)
+    )
+
+
+def _spawn_service_process(repo: Path) -> subprocess.Popen[bytes]:
+    log_root = logs_dir(repo) / datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
+    log_root.mkdir(parents=True, exist_ok=True)
+    log_file = open(log_root / "supervisor.ndjson", "ab", buffering=0)
+    return subprocess.Popen(
+        [sys.executable, "-m", "murder", "serviced"],
+        cwd=str(repo),
+        stdin=subprocess.DEVNULL,
+        stdout=log_file,
+        stderr=subprocess.STDOUT,
+        start_new_session=True,
+        close_fds=True,
+    )
+
+
+async def _ensure_supervisor(repo: Path, socket_path: Path) -> None:
+    if await _supervisor_is_live(repo, socket_path):
+        return
+    _spawn_service_process(repo)
+    delays = (0.25, 0.5, 1.0, 1.0, 1.0, 1.0)
+    for delay in delays:
+        await asyncio.sleep(delay)
+        if await _supervisor_is_live(repo, socket_path):
+            return
+    raise RuntimeError("supervisor did not become ready within 5s")
+
+
+def _friendly_lock_message(repo: Path) -> str:
+    pid = read_lock_pid(lock_path(repo))
+    pid_text = f" (PID {pid})" if pid is not None else ""
+    return (
+        f"murder is already running in this repo{pid_text}.\n"
+        "Stop it with `murder down`, or run from inside the running TUI."
+    )
+
+
+def _require_git_head(repo: Path) -> None:
+    inside = subprocess.run(
+        ["git", "-C", str(repo), "rev-parse", "--is-inside-work-tree"],
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+    if inside.returncode != 0 or inside.stdout.strip() != "true":
+        raise RuntimeError("murder kick requires a git checkout with at least one commit.")
+    head = subprocess.run(
+        ["git", "-C", str(repo), "rev-parse", "HEAD"],
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+    if head.returncode != 0:
+        raise RuntimeError(
+            "git repo has no commits yet; make an initial commit before `murder kick`."
+        )
+
+
+def kick_preflight(cfg: Config, repo: Path) -> None:
+    _require_git_head(repo)
+    if cfg.project.name == "TODO_SET_ME":
+        typer.secho(
+            (
+                "Warning: project.name is still TODO_SET_ME; "
+                "open Settings (ctrl+p) in the TUI to set it."
+            ),
+            fg=typer.colors.YELLOW,
+            err=True,
+        )
+
+
+def _run_async_entry(coro) -> None:  # type: ignore[no-untyped-def]
+    try:
+        asyncio.run(coro)
+    except BlockingIOError:
+        typer.secho(_friendly_lock_message(_repo_root()), fg=typer.colors.RED, err=True)
+        raise typer.Exit(1) from None
+    except RuntimeError as e:
+        typer.secho(str(e), fg=typer.colors.RED, err=True)
+        raise typer.Exit(1) from e
+
+
+async def _bare_kickoff(ticket: str | None) -> None:
+    repo = _repo_root()
+    cfg = Config.load(repo)
+    kick_preflight(cfg, repo)
+    socket_path = default_socket_path()
+    await _ensure_supervisor(repo, socket_path)
+    client = TuiRuntimeClient(repo, socket_path, cfg, client_kind=ClientKind.CLI_EPHEMERAL)
+    await client.connect()
+    try:
+        result = await client.submit_command(
+            target_worker="orchestrator",
+            kind="scheduler.kickoff_ready",
+            payload={"only": ticket},
+            timeout_s=30.0,
+        )
+    finally:
+        await client.close()
+    kicked = list(result.get("kicked", []))
+    typer.echo(f"Kicked off tickets: {', '.join(kicked) if kicked else '(none)'}")
+
+
+async def _run_supervisor_only() -> None:
+    repo = _repo_root()
+    cfg = Config.load(repo)
+    host = ServiceHost(cfg, repo)
+    async with host:
+        try:
+            await host.run_until_signal()
+        finally:
+            # A service shutdown is authoritative (`murder down`), unlike the
+            # old in-process TUI quit path. Let Runtime stop agents/tmux.
+            with contextlib.suppress(Exception):
+                if host.runtime is not None:
+                    host.runtime._external_stop.clear()
+
+
+def cmd_kick(
+    ticket: str = typer.Argument(..., help="Ticket id to kick off."),
+) -> None:
+    """Kick off a single ticket's Crow from the CLI (no TUI)."""
+    _run_async_entry(_bare_kickoff(ticket))
+
+
+def cmd_serviced() -> None:
+    """Internal supervisor-only service entrypoint."""
+    _run_async_entry(_run_supervisor_only())
+
+
+def cmd_down() -> None:
+    """Signal a running murder process via `.murder/.lock` pid."""
+    repo = _repo_root()
+    pid = read_lock_pid(lock_path(repo))
+    if pid is None:
+        typer.secho("No lock pid found (murder not running?).", err=True)
+        raise typer.Exit(1)
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except ProcessLookupError:
+        with contextlib.suppress(FileNotFoundError):
+            lock_path(repo).unlink()
+        typer.echo(f"Removed stale lock for dead PID {pid}.")
+        return
+    typer.echo(f"Sent SIGTERM to pid {pid}")
+
+
+def cmd_status() -> None:
+    """Print a concise status snapshot (no TUI)."""
+    repo = _repo_root()
+    if not db_path(repo).exists():
+        typer.echo("No database — murder init")
+        return
+    conn = get_db(db_path(repo))
+    typer.echo("Tickets by status:")
+    for st in ("planned", "ready", "in_progress", "blocked", "done", "failed"):
+        n = conn.execute("SELECT COUNT(*) AS c FROM tickets WHERE status = ?", (st,)).fetchone()[
+            "c"
+        ]
+        typer.echo(f"  {st}: {n}")
+    typer.echo("Agents:")
+    for r in conn.execute(
+        "SELECT agent_id, role, ticket_id, status FROM agents ORDER BY started_at DESC LIMIT 20"
+    ).fetchall():
+        typer.echo(
+            f"  {r['agent_id']} role={r['role']} ticket={r['ticket_id']} status={r['status']}"
+        )
+    pend = list_pending_escalations(conn)
+    typer.echo(f"Pending escalations: {len(pend)}")
+    conn.close()
+
+
+def cmd_reopen(ticket_id: str) -> None:
+    """Mark a done ticket as planned and cascade to dependents (D7)."""
+    repo = _repo_root()
+    conn = get_db(db_path(repo))
+    try:
+        cascaded = lifecycle.reopen(conn, ticket_id)
+    except lifecycle.InvalidTransition as e:
+        typer.secho(str(e), err=True)
+        conn.close()
+        raise typer.Exit(1) from e
+    conn.close()
+    typer.echo(f"Reopened {ticket_id}; cascaded: {', '.join(cascaded) if cascaded else '(none)'}")
+
+
+def cmd_retry(ticket_id: str) -> None:
+    """Retry a failed ticket — transition failed → planned and clear its last_error."""
+    repo = _repo_root()
+    conn = get_db(db_path(repo))
+    try:
+        lifecycle.transition(conn, ticket_id, TicketStatus.PLANNED, reason="retry")
+        lifecycle.clear_last_error(conn, ticket_id)
+    except lifecycle.InvalidTransition as e:
+        typer.secho(str(e), err=True)
+        conn.close()
+        raise typer.Exit(1) from e
+    conn.close()
+    typer.echo(f"Retried {ticket_id}; status=planned")
+
+
+def cmd_replay(run_id: str) -> None:
+    """Print events for a past run as a timeline."""
+    repo = _repo_root()
+    conn = get_db(db_path(repo))
+    rows = conn.execute(
+        "SELECT id, ts, type, agent_id, ticket_id, payload_json FROM events "
+        "WHERE run_id = ? ORDER BY id",
+        (run_id,),
+    ).fetchall()
+    conn.close()
+    if not rows:
+        typer.secho(f"No events for run_id={run_id}", err=True)
+        raise typer.Exit(1)
+    for r in rows:
+        typer.echo(
+            f"{r['ts']} [{r['type']}] agent={r['agent_id']} ticket={r['ticket_id']} "
+            f"payload={r['payload_json'][:200]}"
+        )
+
+
+def cmd_lint() -> None:
+    """Reconcile DB ↔ markdown ↔ filesystem; print mismatches."""
+    from datetime import datetime
+
+    repo = _repo_root()
+    if not db_path(repo).exists():
+        typer.secho("No murder.db — run murder init", err=True)
+        raise typer.Exit(1)
+    conn = get_db(db_path(repo))
+    asyncio.run(PlanSync(repo, conn).reconcile_all())
+    asyncio.run(TicketSync(repo, conn).reconcile_all())
+    issues: list[str] = []
+    plan_rows = {r["name"]: dict(r) for r in conn.execute("SELECT * FROM plans").fetchall()}
+    for name, row in plan_rows.items():
+        md = repo / row["materialized_path"]
+        if not md.exists():
+            issues.append(f"plan {name}: missing markdown {md}")
+            continue
+        file_hash = content_hash(md.read_text(encoding="utf-8"))
+        last_hash = row["last_materialized_hash"]
+        if last_hash and row["body_hash"] != last_hash and file_hash != last_hash:
+            issues.append(f"plan {name}: DB/file conflict")
+        if row["sync_state"] == "parse_error":
+            issues.append(f"plan {name}: parse error: {row['parse_error']}")
+        elif row["sync_state"] == "conflict":
+            issues.append(f"plan {name}: conflict: {row['conflict_reason']}")
+    if plans_dir(repo).exists():
+        for md in plans_dir(repo).glob("*.md"):
+            if md.stem not in plan_rows:
+                issues.append(f"plan {md.stem}: orphan markdown {md}")
+    note_rows = {r["name"]: dict(r) for r in conn.execute("SELECT * FROM notes").fetchall()}
+    for name, row in note_rows.items():
+        md = repo / row["materialized_path"]
+        if not md.exists():
+            issues.append(f"note {name}: missing markdown {md}")
+            continue
+        text = md.read_text(encoding="utf-8")
+        if text != str(row["body"]):
+            issues.append(f"note {name}: DB/file body mismatch")
+    if notes_dir(repo).exists():
+        for md in notes_dir(repo).glob("*.md"):
+            if md.stem not in note_rows:
+                issues.append(f"note {md.stem}: orphan markdown {md}")
+    rows = conn.execute("SELECT id FROM tickets").fetchall()
+    tickets: list[Ticket] = []
+    for r in rows:
+        tid = r["id"]
+        md = agents_dir(repo) / "tickets" / f"{tid}.md"
+        if not md.exists():
+            issues.append(f"ticket {tid}: missing markdown {md}")
+        trow = get_ticket(conn, tid)
+        if not trow:
+            continue
+        tickets.append(
+            Ticket(
+                id=trow["id"],
+                title=trow["title"],
+                wave=trow["wave"],
+                status=TicketStatus(trow["status"]),
+                harness=trow.get("harness"),
+                model=trow.get("model"),
+                attempts=trow["attempts"],
+                created_at=datetime.fromisoformat(trow["created_at"]),
+                updated_at=datetime.fromisoformat(trow["updated_at"]),
+                write_set=[Path(p) for p in trow.get("write_set") or []],
+                deps=list(trow.get("deps") or []),
+                skills=list(trow.get("skills") or []),
+                checklist=[
+                    ChecklistItem(
+                        id=c.get("id"),
+                        ord=c["ord"],
+                        text=c["text"],
+                        done=bool(c["done"]),
+                        done_at=datetime.fromisoformat(c["done_at"]) if c.get("done_at") else None,
+                    )
+                    for c in trow.get("checklist") or []
+                ],
+            )
+        )
+        if trow["status"] == TicketStatus.DONE.value:
+            for p in trow.get("write_set") or []:
+                pp = (repo / p).resolve()
+                if not pp.exists():
+                    issues.append(f"ticket {tid}: done ticket write_set path missing: {p}")
+    by_wave: dict[int, list[Ticket]] = {}
+    for t in tickets:
+        by_wave.setdefault(t.wave, []).append(t)
+    for w, ts in by_wave.items():
+        try:
+            waves_mod.topo_partition(ts)
+        except waves_mod.CycleError as e:
+            issues.append(f"wave {w}: {e}")
+        for a, b, overlap in waves_mod.write_set_conflicts(ts):
+            issues.append(f"wave {w}: write_set overlap {a}/{b}: {overlap}")
+        for tid, dep in waves_mod.misordered_deps(ts):
+            issues.append(f"wave {w}: misordered dep {tid} -> {dep}")
+    conn.close()
+    if issues:
+        for i in issues:
+            typer.echo(i)
+        raise typer.Exit(1)
+    typer.echo("lint: OK")

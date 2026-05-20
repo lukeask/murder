@@ -1,0 +1,1 @@
+"""Stub module – implementation pending."""
