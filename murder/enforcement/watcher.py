@@ -2,20 +2,18 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Awaitable, Callable, Iterable
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 from watchfiles import Change, awatch
 
-if TYPE_CHECKING:
-    from murder.orchestrator import Orchestrator
+OnViolation = Callable[[str, str], Awaitable[None]]
 
 
 class WriteSetWatcher:
-    def __init__(self, repo_root: Path, orchestrator: Orchestrator) -> None:
+    def __init__(self, repo_root: Path, on_violation: OnViolation) -> None:
         self.repo_root = repo_root.resolve()
-        self.orchestrator = orchestrator
+        self._on_violation = on_violation
         self._allowed: set[Path] = set()
         self._crow_writesets: dict[str, set[Path]] = {}
 
@@ -51,7 +49,7 @@ class WriteSetWatcher:
                     continue
                 ticket_id = self._blame_active_crow()
                 if ticket_id:
-                    await self.orchestrator.on_writeset_violation(ticket_id, rel.as_posix())
+                    await self._on_violation(ticket_id, rel.as_posix())
 
     def _blame_active_crow(self) -> str | None:
         """Pick a running crow when multiple are active (heuristic: first)."""

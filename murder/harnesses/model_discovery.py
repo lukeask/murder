@@ -6,8 +6,8 @@ import os
 import time
 from pathlib import Path
 
-from murder import tmux
-from murder.harnesses import get as get_harness
+from murder.terminal import tmux
+from murder.harnesses import capabilities_for, get as get_harness
 from murder.harnesses.models import HarnessStartSpec
 from murder.harnesses.results import SimpleResult, fail_result
 
@@ -29,9 +29,10 @@ async def discover_harness_models(
     ``model_list_command = None``; for those the hardcoded
     ``available_startup_models`` is authoritative and we skip the session spin-up.
     """
+    caps = capabilities_for(kind)
+    if not caps.model_discovery:
+        return fail_result(f"{kind} does not declare model_discovery capability")
     adapter = get_harness(kind, startup_model=startup_model)
-    if adapter.model_list_command is None:
-        return fail_result(f"{kind} has no machine-parsable model list")
     session = _probe_session_name("models", kind)
     result: SimpleResult[list[tuple[str, str]]]
     try:

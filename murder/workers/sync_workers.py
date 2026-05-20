@@ -5,7 +5,7 @@ import contextlib
 import sqlite3
 from pathlib import Path
 
-from murder.notes_sync import NoteSync
+from murder.notes.sync import NoteSync
 from murder.plans.sync import PlanSync
 from murder.workers.base import Worker, WorkerCtx, WorkerSpec
 

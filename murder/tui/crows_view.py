@@ -6,15 +6,14 @@ crow's tmux pane, a ticket-id + title header, and a border colored by
 client-side health. Selecting a tile enlarges it into a full pane mirror
 in place; ESC or `q` returns to the wall.
 
-The widget reads from DB snapshots + `tmux.capture_pane` for now. The
-data path is the same seam that will swap to `pane_content` / `crow_health`
-bus subscriptions when those land (VISION §7.1) — only the source moves.
+Tiles render from :class:`~murder.service.client_api.CrowSnapshot`
+via ``ServiceReadModel``. Pane tails still use ``tmux.capture_pane`` until
+pane-content bus subscriptions land.
 """
 
 from __future__ import annotations
 
 import asyncio
-import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
@@ -25,8 +24,9 @@ from textual.message import Message
 from textual.reactive import reactive
 from textual.widgets import Static
 
-from murder import tmux
-from murder.tui.crow_health import Health, classify
+from murder.service.client_api import CrowSessionSummary, CrowSnapshot
+from murder.terminal import tmux
+from murder.tui.crow_health import Health, classify, is_stuck
 from murder.tui.pane_mirror import PaneMirror
 from murder.tui.perf_log import PerfLog
 
@@ -39,125 +39,107 @@ CAPTURE_TIMEOUT_S = 2.0
 GRID_TARGET_COLS = 3
 """Tail-wall packs roughly into this many columns; rows scale by count."""
 
+TERMINAL_AGENT_STATUSES = frozenset({"done", "dead"})
+"""Agent states excluded from the wall."""
+
 TERMINAL_TICKET_STATUSES = frozenset({"done", "failed"})
 """Ticket states that indicate the work item is closed."""
 
 FAILED_STALE_AFTER = timedelta(hours=2)
-"""Hide failed agents after this long unless their ticket is still active."""
+"""Hide failed agents after this long without a recent heartbeat."""
+
+_STATUS_SORT_RANK = {
+    "escalating": 0,
+    "blocked": 1,
+    "running": 2,
+    "idle": 3,
+    "failed": 4,
+}
 
 
 @dataclass(frozen=True)
 class CrowEntry:
-    """One row in the wall, joined from `agents` + `tickets`."""
+    """One tile in the wall, projected from :class:`CrowSessionSummary`."""
 
     agent_id: str
-    role: str
-    ticket_id: str | None
+    ticket_id: str
     ticket_title: str
+    harness: str
     status: str
     session: str | None
     health: Health
 
 
-def load_crow_entries(db: sqlite3.Connection, *, now: datetime | None = None) -> list[CrowEntry]:
-    """Project the DB into one CrowEntry per live agent the wall cares about.
-
-    Excludes `done`/`dead` agents so the wall doesn't fill with corpses.
-    Failed agents stay visible while fresh or tied to non-terminal tickets,
-    then age out so stale historical failures don't dominate the wall.
-    """
+def entries_from_snapshot(
+    snapshot: CrowSnapshot,
+    *,
+    now: datetime | None = None,
+) -> list[CrowEntry]:
+    """Project snapshot sessions into wall entries, filtered and sorted."""
     now = now or datetime.now(timezone.utc)
-    rows = db.execute(
-        """
-        SELECT a.agent_id, a.role, a.ticket_id, a.status, a.session,
-               a.started_at, a.last_heartbeat_at,
-               COALESCE(t.title, '') AS title,
-               COALESCE(t.status, '') AS ticket_status
-          FROM agents a
-          LEFT JOIN tickets t ON t.id = a.ticket_id
-         WHERE a.status NOT IN ('done', 'dead')
-         ORDER BY
-               CASE a.status
-                 WHEN 'escalating' THEN 0
-                 WHEN 'blocked' THEN 1
-                 WHEN 'running' THEN 2
-                 WHEN 'idle' THEN 3
-                 WHEN 'failed' THEN 4
-                 ELSE 5
-               END,
-               a.started_at DESC,
-               a.agent_id
-        """
-    ).fetchall()
-    if not rows:
-        return []
-    rows = [r for r in rows if _keep_wall_row(r, now=now)]
-    if not rows:
-        return []
-
-    ticket_ids = [r["ticket_id"] for r in rows if r["ticket_id"]]
-    open_by_ticket: dict[str, tuple[int, int]] = {}
-    if ticket_ids:
-        placeholders = ",".join("?" * len(ticket_ids))
-        for esc in db.execute(
-            f"""
-            SELECT ticket_id, COUNT(*) AS n, MAX(severity) AS max_sev
-              FROM escalations
-             WHERE resolved = 0 AND ticket_id IN ({placeholders})
-             GROUP BY ticket_id
-            """,
-            ticket_ids,
-        ).fetchall():
-            open_by_ticket[str(esc["ticket_id"])] = (
-                int(esc["n"]),
-                int(esc["max_sev"] or 0),
-            )
-
     entries: list[CrowEntry] = []
-    for r in rows:
-        n, sev = open_by_ticket.get(r["ticket_id"] or "", (0, 0))
-        entries.append(
-            CrowEntry(
-                agent_id=r["agent_id"],
-                role=r["role"],
-                ticket_id=r["ticket_id"],
-                ticket_title=r["title"] or "",
-                status=r["status"],
-                session=r["session"],
-                health=classify(
-                    status=r["status"],
-                    open_escalations=n,
-                    max_severity=sev,
-                ),
-            )
+    for session in snapshot.sessions:
+        entry = _entry_from_session(session, now=now)
+        if entry is not None:
+            entries.append(entry)
+    entries.sort(
+        key=lambda e: (
+            _STATUS_SORT_RANK.get(e.status, 99),
+            e.ticket_id,
+            e.agent_id,
         )
+    )
     return entries
 
 
-def _keep_wall_row(row: sqlite3.Row, *, now: datetime) -> bool:
-    """Return True if this agent row should stay visible on the crows wall."""
-    if row["status"] != "failed":
+def _entry_from_session(
+    session: CrowSessionSummary,
+    *,
+    now: datetime,
+) -> CrowEntry | None:
+    status = session.status
+    if status in TERMINAL_AGENT_STATUSES:
+        return None
+    if status == "failed" and not _keep_failed_session(session, now=now):
+        return None
+    tile_id = session.agent_id or session.session_name or session.ticket_id or ""
+    if not tile_id:
+        return None
+    title = session.ticket_title or session.harness or session.ticket_id or tile_id
+    return CrowEntry(
+        agent_id=tile_id,
+        ticket_id=session.ticket_id or "",
+        ticket_title=title,
+        harness=session.harness or "",
+        status=status,
+        session=session.session_name,
+        health=_health_for_summary(session, now=now),
+    )
+
+
+def _health_for_summary(session: CrowSessionSummary, *, now: datetime) -> Health:
+    return classify(
+        status=session.status,
+        open_escalations=session.open_escalations,
+        max_severity=session.max_severity,
+        stuck=is_stuck(status=session.status, last_seen=session.last_seen, now=now),
+    )
+
+
+def _keep_failed_session(session: CrowSessionSummary, *, now: datetime) -> bool:
+    if session.status != "failed":
         return True
-    ticket_status = str(row["ticket_status"] or "")
+    ticket_status = session.ticket_status or ""
     if ticket_status and ticket_status not in TERMINAL_TICKET_STATUSES:
         return True
-    last_seen = _parse_iso_ts(row["last_heartbeat_at"]) or _parse_iso_ts(row["started_at"])
+    last_seen = session.last_seen or session.started_at
     if last_seen is None:
         return True
-    age = now - last_seen
-    return age <= FAILED_STALE_AFTER
-
-
-def _parse_iso_ts(value: object) -> datetime | None:
-    if not isinstance(value, str) or not value:
-        return None
-    try:
-        parsed = datetime.fromisoformat(value)
-    except ValueError:
-        return None
-    if parsed.tzinfo is None:
-        return parsed.replace(tzinfo=timezone.utc)
-    return parsed.astimezone(timezone.utc)
+    if last_seen.tzinfo is None:
+        last_seen = last_seen.replace(tzinfo=timezone.utc)
+    else:
+        last_seen = last_seen.astimezone(timezone.utc)
+    return now - last_seen <= FAILED_STALE_AFTER
 
 
 class CrowTile(Container):
@@ -216,7 +198,7 @@ class CrowTile(Container):
         self._apply_entry()
 
     def update_entry(self, entry: CrowEntry) -> None:
-        """Reconcile after a DB refresh; rebuild border + header in place."""
+        """Reconcile after a snapshot refresh; rebuild border + header in place."""
         self._entry = entry
         self._apply_entry()
 
@@ -226,7 +208,7 @@ class CrowTile(Container):
     def _apply_entry(self) -> None:
         e = self._entry
         ticket = e.ticket_id or "—"
-        title = e.ticket_title or e.role
+        title = e.ticket_title or e.harness or "crow"
         self.border_title = f"{ticket} · {title}"
         self.border_subtitle = e.session or "(no session)"
         for h in Health:
@@ -259,7 +241,7 @@ class _EmptyMessage(Static):
 
 
 class TailWall(Grid):
-    """Grid of CrowTiles. Owns reconciliation against the DB."""
+    """Grid of CrowTiles. Owns reconciliation against snapshot entries."""
 
     DEFAULT_CSS = """
     TailWall {
@@ -284,11 +266,9 @@ class TailWall(Grid):
         removed = 0
         mounted = 0
         updated = 0
-        # Drop empty placeholder if we now have entries
         if entries and self._empty is not None:
             self._empty.remove()
             self._empty = None
-        # Show empty placeholder if we have none
         if not entries:
             for agent_id in list(self._tiles):
                 self._tiles.pop(agent_id).remove()
@@ -300,12 +280,10 @@ class TailWall(Grid):
                 self.styles.grid_size_columns = 1
                 self.styles.grid_size_rows = 1
             return [], 0, removed, 0
-        # Remove gone-away tiles
         for agent_id in list(self._tiles):
             if agent_id not in new_ids:
                 self._tiles.pop(agent_id).remove()
                 removed += 1
-        # Mount or update remaining
         for entry in entries:
             tile = self._tiles.get(entry.agent_id)
             if tile is None:
@@ -336,12 +314,7 @@ class TailWall(Grid):
 
 
 class CrowsView(Container):
-    """Crows place — wall mode + enlarged mode.
-
-    Mounts a TailWall and an internal PaneMirror as siblings; flips
-    their `display` to switch modes. The mirror reuses the same widget
-    the planning view uses for raw tmux, so behavior stays consistent.
-    """
+    """Crows place — wall mode + enlarged mode."""
 
     DEFAULT_CSS = """
     CrowsView {
@@ -361,8 +334,7 @@ class CrowsView(Container):
     enlarged_agent_id: reactive[str | None] = reactive(None)
 
     class TileSelected(Message):
-        """Posted whenever the focused tile changes; the app updates the
-        planning-side mirror's session for parity with the old behavior."""
+        """Posted whenever the focused tile changes."""
 
         def __init__(self, entry: CrowEntry) -> None:
             self.entry = entry
@@ -374,7 +346,12 @@ class CrowsView(Container):
         self._wall = TailWall()
         self._mirror = PaneMirror(perf=self._perf)
         self._entries_by_id: dict[str, CrowEntry] = {}
+        self._invalidation_key: str | None = None
         self.border_title = "crows"
+
+    @property
+    def invalidation_key(self) -> str | None:
+        return self._invalidation_key
 
     def compose(self) -> ComposeResult:
         yield self._wall
@@ -383,10 +360,10 @@ class CrowsView(Container):
     def on_mount(self) -> None:
         self._apply_mode()
 
-    def refresh_from_db(self, db: sqlite3.Connection | None) -> None:
-        if db is None:
-            return
-        entries = load_crow_entries(db)
+    def render_from_snapshot(self, snapshot: CrowSnapshot) -> None:
+        """Reconcile the wall from a service snapshot."""
+        self._invalidation_key = snapshot.invalidation_key
+        entries = entries_from_snapshot(snapshot)
         self._entries_by_id = {e.agent_id: e for e in entries}
         perf = self._perf
         if perf is not None and perf.enabled:
@@ -397,22 +374,17 @@ class CrowsView(Container):
                 dyn["updated"] = u
         else:
             self._wall.reconcile(entries)
-        # If the currently-enlarged crow disappeared, fall back to wall.
         if self.enlarged_agent_id is not None and self.enlarged_agent_id not in self._entries_by_id:
             self.enlarged_agent_id = None
             self._apply_mode()
             return
-        # Refresh the enlarged tile's mirror session in case it changed.
         if self.enlarged_agent_id is not None:
             e = self._entries_by_id[self.enlarged_agent_id]
             self._mirror.set_session(e.session)
-            self._mirror.border_title = f"{e.ticket_id or '—'} · {e.ticket_title or e.role}"
+            self._mirror.border_title = f"{e.ticket_id or '—'} · {e.ticket_title or e.harness}"
 
     async def refresh_tails(self) -> None:
-        """Capture last-N lines for every visible tile, in parallel.
-
-        Per-tile timeout + gather so one stuck pane can't block input.
-        """
+        """Capture last-N lines for every visible tile, in parallel."""
         perf = self._perf
         if self.enlarged_agent_id is not None:
             n_tiles = 1
@@ -452,8 +424,6 @@ class CrowsView(Container):
             except (tmux.TmuxError, asyncio.TimeoutError):
                 tile.set_tail("(session vanished)")
                 return
-            # Show only the last TILE_LINES non-empty trailing lines; capture_pane
-            # may return blank padding at the bottom of a fresh pane.
             lines = text.splitlines()
             if len(lines) > TILE_LINES:
                 lines = lines[-TILE_LINES:]
@@ -465,15 +435,13 @@ class CrowsView(Container):
             return
         await _run()
 
-    # ── mode transitions ──────────────────────────────────────────────────
-
     def enlarge(self, agent_id: str) -> bool:
         entry = self._entries_by_id.get(agent_id)
         if entry is None:
             return False
         self.enlarged_agent_id = agent_id
         self._mirror.set_session(entry.session)
-        self._mirror.border_title = f"{entry.ticket_id or '—'} · {entry.ticket_title or entry.role}"
+        self._mirror.border_title = f"{entry.ticket_id or '—'} · {entry.ticket_title or entry.harness}"
         self._apply_mode()
         return True
 
@@ -483,7 +451,6 @@ class CrowsView(Container):
         previous = self.enlarged_agent_id
         self.enlarged_agent_id = None
         self._apply_mode()
-        # Restore focus to the tile we were inspecting if it's still around.
         tile = self._wall.tile_for(previous)
         if tile is not None:
             tile.focus()

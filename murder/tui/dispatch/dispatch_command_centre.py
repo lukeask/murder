@@ -2,15 +2,19 @@
 
 from __future__ import annotations
 
-import sqlite3
+from typing import TYPE_CHECKING
 
 from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical
 
+from murder.service.client_api import ScheduleSnapshot
 from murder.tui.dispatch.calendar import CalendarPanel
 from murder.tui.dispatch.gauges import GaugeStrip
 from murder.tui.dispatch.mode_strip import ModeStrip
 from murder.tui.dispatch.roster import ScheduleTicketsTable
+
+if TYPE_CHECKING:
+    from murder.service.read_model import ServiceReadModel
 
 
 class DispatchView(Vertical):
@@ -55,11 +59,20 @@ class DispatchView(Vertical):
             yield ScheduleTicketsTable()
             yield CalendarPanel()
 
-    def refresh_from_db(self, db: sqlite3.Connection | None) -> None:
-        self.query_one(ModeStrip).refresh_from_db(db)
-        self.query_one(GaugeStrip).refresh_from_db(db)
-        self.query_one(ScheduleTicketsTable).refresh_from_db(db)
-        self.query_one(CalendarPanel).refresh_from_db(db)
+    def refresh_from_snapshot(
+        self,
+        snapshot: ScheduleSnapshot,
+        *,
+        read_model: ServiceReadModel | None = None,
+    ) -> None:
+        """Refresh all dispatch sub-widgets from a service snapshot."""
+        self.query_one(ModeStrip).refresh_from_snapshot(snapshot)
+        gauges = self.query_one(GaugeStrip)
+        if read_model is not None:
+            gauges.set_read_model(read_model)
+        gauges.refresh_from_snapshot(snapshot)
+        self.query_one(ScheduleTicketsTable).refresh_from_snapshot(snapshot)
+        self.query_one(CalendarPanel).refresh_from_snapshot(snapshot)
 
     @property
     def selected_ticket_id(self) -> str | None:

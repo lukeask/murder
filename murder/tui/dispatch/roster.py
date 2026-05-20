@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import json
-import sqlite3
-from collections import defaultdict
 from collections.abc import Callable, Sequence
 from datetime import datetime, timedelta
 from typing import Any
@@ -19,6 +17,18 @@ from textual.screen import ModalScreen
 from textual.widgets import DataTable, Input, SelectionList, Static, TextArea
 
 from murder.harnesses import REGISTRY
+from murder.tickets.status import TicketStatus
+
+from murder.service.client_api import (
+    ScheduleSnapshot,
+    ScheduleTicketRow,
+    TicketCarveSnapshot,
+)
+from murder.tui.dispatch.schedule_cells import (
+    deps_cell_for,
+    dispatch_schedule_cell,
+    display_status_for,
+)
 
 
 def parse_carve_paste(text: str) -> dict[str, Any]:
@@ -33,68 +43,6 @@ def parse_carve_paste(text: str) -> dict[str, Any]:
     if not isinstance(data, dict):
         raise ValueError("paste must be a JSON/YAML mapping")
     return data
-
-
-def _format_schedule_timestamp(value: str | None) -> str | None:
-    """Format schedule_at for display, or None if unset."""
-    if not value:
-        return None
-    try:
-        dt = datetime.fromisoformat(value)
-    except ValueError:
-        return str(value)
-    return dt.strftime("%a %H:%M")
-
-
-def _crow_dispatch_semantics(rows: Sequence[sqlite3.Row], ticket_id: str) -> str:
-    """Crow Magic: 'waiting' on usage holds; else 'queued' (deps, ordering, or picked)."""
-    if not rows:
-        return "queued"
-    tid = str(ticket_id)
-    kicked_me = any(int(r["decision"]) == 1 and r["kicked_ticket_id"] == tid for r in rows)
-    if kicked_me:
-        return "queued"
-    hold_usage = any(
-        int(r["decision"]) == 0 and str(r["rationale"] or "").startswith("Holding:") for r in rows
-    )
-    if hold_usage:
-        return "waiting"
-    return "queued"
-
-
-def _dispatch_schedule_cell(
-    scheduler_mode: str,
-    status: str,
-    schedule_at: str | None,
-    harness: str | None,
-    ticket_id: str,
-    crow_rows: Sequence[sqlite3.Row],
-) -> str:
-    """Dispatch roster 'schedule' column: timestamps, queue semantics, now/done."""
-    if status == "done":
-        return ""
-    if status == "in_progress":
-        return "now"
-    ts = _format_schedule_timestamp(schedule_at)
-    if ts is not None:
-        return ts
-    if status not in {"planned", "ready"}:
-        return ""
-    if scheduler_mode == "manual":
-        return "unscheduled"
-    if scheduler_mode == "autorun_ready":
-        return "queued"
-    return _crow_dispatch_semantics(crow_rows, ticket_id)
-
-
-def _crow_rows_for_harness(
-    harness: str | None,
-    all_rows: Sequence[sqlite3.Row],
-    by_harness: dict[str, list[sqlite3.Row]],
-) -> list[sqlite3.Row]:
-    if harness is None:
-        return list(all_rows)
-    return list(by_harness.get(harness, ()))
 
 
 def _checklist_to_lines(snapshot: dict[str, Any]) -> str:
@@ -146,108 +94,19 @@ class ScheduleTicketsTable(DataTable):
     def column_count(self) -> int:
         return len(self.columns)
 
-    def refresh_from_db(self, db: sqlite3.Connection | None) -> None:
-        if db is None:
-            return
-        mode_row = db.execute("SELECT mode FROM scheduler_state WHERE id = 1").fetchone()
-        scheduler_mode = str(mode_row["mode"]) if mode_row is not None else "manual"
-        crow_all = db.execute(
-            "SELECT harness, decision, rationale, kicked_ticket_id FROM scheduler_decision_cache"
-        ).fetchall()
-        crow_by_harness: dict[str, list[sqlite3.Row]] = defaultdict(list)
-        for cr in crow_all:
-            crow_by_harness[str(cr["harness"])].append(cr)
-
-        dep_subq = """
-            NOT EXISTS (
-                SELECT 1 FROM ticket_deps AS d
-                  JOIN tickets AS dep ON dep.id = d.depends_on_id
-                 WHERE d.ticket_id = t.id
-                   AND dep.status != 'done'
-            )
-        """
-        active = db.execute(
-            f"""
-            SELECT t.id, t.title, t.wave, t.status, t.schedule_at, t.harness, t.model,
-                   t.metadata_sync_state, t.metadata_parse_error,
-                   t.metadata_conflict_reason, {dep_subq} AS deps_ok
-              FROM tickets AS t
-             WHERE t.status IN ('planned', 'ready', 'in_progress', 'blocked', 'failed')
-             ORDER BY
-                   CASE t.status
-                     WHEN 'ready' THEN 0
-                     WHEN 'planned' THEN 1
-                     WHEN 'in_progress' THEN 2
-                     WHEN 'blocked' THEN 3
-                     WHEN 'failed' THEN 4
-                     ELSE 9
-                   END,
-                   t.wave, t.id
-            """
-        ).fetchall()
-        recent_done = db.execute(
-            f"""
-            SELECT t.id, t.title, t.wave, t.status, t.schedule_at, t.harness, t.model,
-                   t.metadata_sync_state, t.metadata_parse_error,
-                   t.metadata_conflict_reason, {dep_subq} AS deps_ok
-              FROM tickets AS t
-             WHERE t.status = 'done'
-             ORDER BY datetime(t.updated_at) DESC, t.id
-             LIMIT 6
-            """
-        ).fetchall()
-        archived_tickets = db.execute(
-            f"""
-            SELECT t.id, t.title, t.wave, t.status, t.schedule_at, t.harness, t.model,
-                   t.metadata_sync_state, t.metadata_parse_error,
-                   t.metadata_conflict_reason, {dep_subq} AS deps_ok
-              FROM tickets AS t
-             WHERE t.status = 'archived'
-             ORDER BY datetime(t.updated_at) DESC, t.id
-             LIMIT 20
-            """
-        ).fetchall()
-
+    def refresh_from_snapshot(self, snapshot: ScheduleSnapshot) -> None:
         prev_ticket_id = self.cursor_ticket_id
         prev_row = self.cursor_row
-
         self.clear()
         self._ids = []
         self._statuses = []
-        for r in (*active, *recent_done, *archived_tickets):
-            tid = str(r["id"])
-            st = str(r["status"])
-            sync_state = str(r["metadata_sync_state"] or "synced")
-            display_status = st if sync_state == "synced" else f"{st}!"
-            if st in {"planned", "ready"}:
-                deps_cell = "ok" if int(r["deps_ok"]) else "wait"
-            else:
-                deps_cell = "—"
-            crow = _crow_rows_for_harness(
-                str(r["harness"]) if r["harness"] is not None else None,
-                crow_all,
-                crow_by_harness,
-            )
-            sched = _dispatch_schedule_cell(
-                scheduler_mode,
-                st,
-                str(r["schedule_at"]) if r["schedule_at"] else None,
-                str(r["harness"]) if r["harness"] is not None else None,
-                tid,
-                crow,
-            )
-            self.add_row(
-                str(r["title"] or ""),
-                str(r["wave"]),
-                display_status,
-                deps_cell,
-                sched,
-                str(r["harness"] or ""),
-                str(r["model"] or ""),
-            )
-            self._ids.append(tid)
-            self._statuses.append(st)
-
+        rows = (
+            *snapshot.active_tickets,
+            *snapshot.recent_done_tickets,
+            *snapshot.archived_tickets,
+        )
+        for row in rows:
+            self._append_row(snapshot, row)
         if self._ids:
             if prev_ticket_id is not None:
                 try:
@@ -257,6 +116,24 @@ class ScheduleTicketsTable(DataTable):
             else:
                 idx = min(max(0, prev_row), len(self._ids) - 1)
             self.move_cursor(row=idx, animate=False)
+
+    def _append_row(self, snapshot: ScheduleSnapshot, row: ScheduleTicketRow) -> None:
+        sched = dispatch_schedule_cell(
+            scheduler_mode=snapshot.scheduler_mode,
+            row=row,
+            decisions=snapshot.scheduler_decisions,
+        )
+        self.add_row(
+            row.title,
+            str(row.wave),
+            display_status_for(row),
+            deps_cell_for(row),
+            sched,
+            row.harness or "",
+            row.model or "",
+        )
+        self._ids.append(row.id)
+        self._statuses.append(row.status)
 
     @property
     def cursor_ticket_id(self) -> str | None:
@@ -302,6 +179,7 @@ class ScheduleTicketsTable(DataTable):
 _SCHEDULE_NONE = "__murder_schedule_none__"
 
 _STATUS_SELECT_OPTIONS: list[tuple[str, str]] = [
+    ("Draft", "draft"),
     ("Planned", "planned"),
     ("Ready", "ready"),
     ("In progress", "in_progress"),
@@ -320,9 +198,8 @@ _HARNESS_SELECT_OPTIONS: list[tuple[str, str]] = [
 ]
 
 
-def _wave_select_options(db: sqlite3.Connection, current: int) -> list[tuple[str, int]]:
-    rows = db.execute("SELECT DISTINCT wave FROM tickets ORDER BY wave").fetchall()
-    waves = {int(r["wave"]) for r in rows} | {int(current), 0}
+def _wave_select_options(wave_values: Sequence[int], current: int) -> list[tuple[str, int]]:
+    waves = {int(w) for w in wave_values} | {int(current), 0}
     hi = max(waves)
     for w in range(hi + 1, hi + 8):
         waves.add(w)
@@ -597,18 +474,16 @@ class CarveFormScreen(ModalScreen[None]):
 
     def __init__(
         self,
-        ticket_id: str,
-        snapshot: dict[str, Any],
+        carve: TicketCarveSnapshot,
         *,
         harness_hint: str,
-        db: sqlite3.Connection,
         on_autosave: Callable[[dict[str, Any]], None],
     ) -> None:
         super().__init__()
-        self.ticket_id = ticket_id
-        self._snapshot = snapshot
+        self.ticket_id = carve.ticket_id
+        self._carve = carve
+        self._snapshot = dict(carve.fields)
         self._harness_hint = harness_hint
-        self._db = db
         self._on_autosave = on_autosave
         self._suppress_autosave = True
 
@@ -633,7 +508,9 @@ class CarveFormScreen(ModalScreen[None]):
                 yield TitleStripInput(placeholder="Title", id="field_title")
                 yield Static("Wave", classes="field_label")
                 yield RadioRow(
-                    _wave_select_options(self._db, int(self._snapshot.get("wave", 0))),
+                    _wave_select_options(
+                        self._carve.wave_options, int(self._snapshot.get("wave", 0))
+                    ),
                     value=int(self._snapshot.get("wave", 0)),
                     id="field_wave",
                 )
@@ -699,30 +576,23 @@ class CarveFormScreen(ModalScreen[None]):
         mod = str(snap.get("model") or "").strip() or None
         self._refresh_model_select(harness_s, mod)
 
-        dep_rows = self._db.execute(
-            "SELECT id, title FROM tickets WHERE id != ? ORDER BY wave, id",
-            (self.ticket_id,),
-        ).fetchall()
         chosen = {str(d) for d in (snap.get("deps") or [])}
         deps_list = self.query_one("#field_deps", SelectionList)
-        if dep_rows:
+        if self._carve.dependency_options:
             deps_list.add_options(
                 [
-                    (str(r["title"] or r["id"])[:64], str(r["id"]), str(r["id"]) in chosen)
-                    for r in dep_rows
+                    (ref.title[:64], ref.id, ref.id in chosen)
+                    for ref in self._carve.dependency_options
                 ]
             )
-        skill_rows = self._db.execute(
-            "SELECT DISTINCT skill FROM ticket_skills ORDER BY skill"
-        ).fetchall()
         skills_pick = self.query_one("#field_skills_pick", SelectionList)
         cur_skills = {str(s) for s in (snap.get("skills") or [])}
-        known = {str(r["skill"]) for r in skill_rows}
-        if skill_rows:
+        known = set(self._carve.known_skills)
+        if self._carve.known_skills:
             skills_pick.add_options(
                 [
-                    (str(r["skill"]), str(r["skill"]), str(r["skill"]) in cur_skills)
-                    for r in skill_rows
+                    (skill, skill, skill in cur_skills)
+                    for skill in self._carve.known_skills
                 ]
             )
         extra_skills = sorted(cur_skills - known)

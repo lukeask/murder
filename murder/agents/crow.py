@@ -11,7 +11,7 @@ from murder.harnesses.base import HarnessAdapter
 from murder.harnesses.models import HarnessStartSpec
 
 if TYPE_CHECKING:
-    from murder.runtime import Runtime
+    from murder.service.runtime_scope import AgentLifecycleHost as Runtime
 
 
 class CrowAgent(Agent):
@@ -74,12 +74,8 @@ class CrowAgent(Agent):
                     )
                 )
 
-    async def is_live(self) -> bool:
-        from murder import tmux
-        return await tmux.session_exists(self.session)
-
     async def stop(self, *, failed: bool = False, kill_session: bool = True) -> None:
-        from murder import tmux
+        from murder.terminal import tmux
 
         if kill_session:
             with contextlib.suppress(Exception):

@@ -5,8 +5,8 @@ from __future__ import annotations
 import sqlite3
 from datetime import datetime
 
-from murder import db
-from murder.bus import TicketStatus
+from murder.persistence import tickets as db
+from murder.tickets.status import TicketStatus
 
 
 def _now() -> str:
@@ -14,6 +14,7 @@ def _now() -> str:
 
 
 VALID_TRANSITIONS: dict[TicketStatus, set[TicketStatus]] = {
+    TicketStatus.DRAFT: {TicketStatus.PLANNED, TicketStatus.ARCHIVED},
     TicketStatus.PLANNED: {TicketStatus.READY, TicketStatus.ARCHIVED},
     TicketStatus.READY: {TicketStatus.IN_PROGRESS, TicketStatus.PLANNED, TicketStatus.ARCHIVED},
     TicketStatus.IN_PROGRESS: {

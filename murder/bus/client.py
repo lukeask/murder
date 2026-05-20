@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import json
 from collections.abc import AsyncIterator
 from pathlib import Path
@@ -26,6 +25,44 @@ from murder.bus.protocol import (
     WakeMessage,
 )
 
+from .transport_socket import UdsTransport
+
+
+class _UdsJsonSession:
+    """JSON-lines framing over a connected ``UdsTransport``."""
+
+    def __init__(self, transport: UdsTransport) -> None:
+        self._transport = transport
+        self._buf = bytearray()
+
+    async def close(self) -> None:
+        await self._transport.close()
+
+    async def send(self, message: object) -> None:
+        payload = json.dumps(message.model_dump(mode="json"), default=str) + "\n"
+        await self._transport.send(payload.encode())
+
+    async def recv(self, *, timeout_s: float) -> object:
+        line = await self._readline(timeout_s=timeout_s)
+        return WIRE_MESSAGE_ADAPTER.validate_json(line.decode("utf-8"))
+
+    async def _readline(self, *, timeout_s: float) -> bytes:
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout_s
+        while True:
+            nl = self._buf.find(b"\n")
+            if nl >= 0:
+                line = bytes(self._buf[: nl + 1])
+                del self._buf[: nl + 1]
+                return line
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                raise asyncio.TimeoutError()
+            chunk = await asyncio.wait_for(self._transport.recv(), timeout=remaining)
+            if not chunk:
+                raise RuntimeError("bus socket closed")
+            self._buf.extend(chunk)
+
 
 class SocketBusClient(BusBroker):
     """Small JSON-lines client for the local supervisor socket.
@@ -33,6 +70,9 @@ class SocketBusClient(BusBroker):
     RPC and publish calls use short-lived connections. Subscriptions keep a
     dedicated connection open for the iterator lifetime.
     """
+
+    _RPC_IDLE_TIMEOUT_S = 5.0
+    _SUBSCRIPTION_IDLE_TIMEOUT_S = 300.0
 
     def __init__(
         self,
@@ -46,17 +86,17 @@ class SocketBusClient(BusBroker):
         self.client_id = client_id or f"{client_kind.value}-{uuid4().hex}"
 
     async def publish(self, event: BusEvent) -> None:
-        reader, writer = await self._connect()
+        session = await self._connect(idle_timeout_s=self._RPC_IDLE_TIMEOUT_S)
         try:
             correlation_id = f"pub-{uuid4().hex}"
-            await self._send(writer, PubMessage(correlation_id=correlation_id, event=event))
-            msg = await self._recv(reader)
+            await session.send(PubMessage(correlation_id=correlation_id, event=event))
+            msg = await session.recv(timeout_s=self._RPC_IDLE_TIMEOUT_S)
             if isinstance(msg, ErrMessage):
                 raise RuntimeError(msg.body.message)
             if not isinstance(msg, AckMessage) or msg.correlation_id != correlation_id:
                 raise RuntimeError("unexpected publish acknowledgement")
         finally:
-            await self._close(writer)
+            await session.close()
 
     async def subscribe(
         self,
@@ -64,18 +104,17 @@ class SocketBusClient(BusBroker):
         *,
         since_id: int | None = None,
     ) -> AsyncIterator[BusEvent]:
-        reader, writer = await self._connect()
+        session = await self._connect(idle_timeout_s=self._SUBSCRIPTION_IDLE_TIMEOUT_S)
         try:
             correlation_id = f"sub-{uuid4().hex}"
-            await self._send(
-                writer,
+            await session.send(
                 SubMessage(
                     correlation_id=correlation_id,
                     args=SubArgs(filter=filter or EventFilter(), since_id=since_id),
                 ),
             )
             while True:
-                msg = await self._recv(reader)
+                msg = await session.recv(timeout_s=self._SUBSCRIPTION_IDLE_TIMEOUT_S)
                 if isinstance(msg, ErrMessage):
                     raise RuntimeError(msg.body.message)
                 if isinstance(msg, WakeMessage):
@@ -85,7 +124,7 @@ class SocketBusClient(BusBroker):
                 if isinstance(msg, PubMessage):
                     yield msg.event
         finally:
-            await self._close(writer)
+            await session.close()
 
     async def request(
         self,
@@ -94,18 +133,18 @@ class SocketBusClient(BusBroker):
         *,
         timeout_s: float,
     ) -> dict:
-        reader, writer = await self._connect()
+        session = await self._connect(idle_timeout_s=self._RPC_IDLE_TIMEOUT_S)
+        recv_timeout = timeout_s + 1.0
         try:
             correlation_id = f"rpc-{uuid4().hex}"
-            await self._send(
-                writer,
+            await session.send(
                 RpcMessage(
                     correlation_id=correlation_id,
                     args=RpcArgs(target=target, body=body, timeout_s=timeout_s),
                 ),
             )
             while True:
-                msg = await self._recv(reader, timeout_s=timeout_s + 1.0)
+                msg = await session.recv(timeout_s=recv_timeout)
                 if isinstance(msg, WakeMessage):
                     continue
                 if isinstance(msg, ErrMessage):
@@ -113,13 +152,14 @@ class SocketBusClient(BusBroker):
                 if isinstance(msg, AckMessage) and msg.correlation_id == correlation_id:
                     return msg.body.result or {}
         finally:
-            await self._close(writer)
+            await session.close()
 
-    async def _connect(self) -> tuple[asyncio.StreamReader, asyncio.StreamWriter]:
-        reader, writer = await asyncio.open_unix_connection(str(self.socket_path))
+    async def _connect(self, *, idle_timeout_s: float) -> _UdsJsonSession:
+        transport = UdsTransport(subscription_idle_timeout=idle_timeout_s)
+        await transport.connect(self.socket_path)
+        session = _UdsJsonSession(transport)
         correlation_id = f"hello-{uuid4().hex}"
-        await self._send(
-            writer,
+        await session.send(
             HelloMessage(
                 correlation_id=correlation_id,
                 body=HelloBody(
@@ -130,30 +170,10 @@ class SocketBusClient(BusBroker):
             ),
         )
         while True:
-            msg = await self._recv(reader)
+            msg = await session.recv(timeout_s=idle_timeout_s)
             if isinstance(msg, WakeMessage):
                 continue
             if isinstance(msg, ErrMessage):
                 raise RuntimeError(msg.body.message)
             if isinstance(msg, AckMessage) and msg.correlation_id == correlation_id:
-                return reader, writer
-
-    async def _send(self, writer: asyncio.StreamWriter, message: object) -> None:
-        writer.write((json.dumps(message.model_dump(mode="json"), default=str) + "\n").encode())
-        await writer.drain()
-
-    async def _recv(
-        self,
-        reader: asyncio.StreamReader,
-        *,
-        timeout_s: float = 5.0,
-    ) -> object:
-        line = await asyncio.wait_for(reader.readline(), timeout=timeout_s)
-        if not line:
-            raise RuntimeError("bus socket closed")
-        return WIRE_MESSAGE_ADAPTER.validate_json(line.decode("utf-8"))
-
-    async def _close(self, writer: asyncio.StreamWriter) -> None:
-        writer.close()
-        with contextlib.suppress(Exception):
-            await writer.wait_closed()
+                return session

@@ -19,26 +19,21 @@ from textual.containers import Container, Horizontal, Vertical
 from textual.screen import ModalScreen
 from textual.widgets import Footer, Static
 
-from murder import db as dbmod
-from murder import notes as notes_mod
-from murder import notetaker_capture, tmux
-from murder.bus.protocol import CommandEvent
-from murder.clients import create_client
+from murder.terminal import tmux
 from murder.config import Config
-from murder.harnesses import REGISTRY
 from murder.tui.chat_input import ChatInput
-from murder.tui.crows_view import CrowsView, CrowTile
-from murder.tui.dispatch import (
-    CarveFormScreen,
-    DispatchView,
-    ScheduleTicketsTable,
-)
+from murder.tui.dispatch import DispatchView, ScheduleTicketsTable
 from murder.tui.dispatch.mode_strip import ModeStrip
-from murder.tui.escalation_strip import EscalationStrip
-from murder.tui.header import Header
 from murder.tui.note_capture import RECENT_NOTE_ROWS, NoteCaptureScreen
 from murder.tui.pane_mirror import PaneMirror
 from murder.tui.perf_log import make_perf_log
+from murder.tui.settings_screen import SettingsScreen
+from murder.tui.themes import CUSTOM_THEMES
+
+from murder.tui.controllers import DispatchController, TuiContext
+from murder.tui.crows_view import CrowsView, CrowTile
+from murder.tui.escalation_strip import EscalationStrip
+from murder.tui.header import Header
 from murder.tui.planning_mode_widgets import (
     ChatLog,
     NotesDocument,
@@ -46,16 +41,8 @@ from murder.tui.planning_mode_widgets import (
     PlanDocument,
     PlanList,
 )
-from murder.tui.settings_screen import SettingsScreen
-from murder.tui.themes import CUSTOM_THEMES
 from murder.tui.ticket_grid import TicketGrid
-from murder.usage_sample_command import (
-    HARNESS_USAGE_SAMPLE_KIND,
-    TRIGGER_USAGE_MANUAL_KEY,
-    USAGE_PROBE_TARGET,
-    USAGE_SAMPLE_DEFAULT_TIMEOUT_S,
-    harness_usage_sample_payload,
-)
+from murder.service.settings_service import SettingsService
 from murder.user_config import UserConfig, load_user_config
 
 if TYPE_CHECKING:
@@ -63,11 +50,8 @@ if TYPE_CHECKING:
 
     from textual.widget import Widget
 
-    from murder.orchestrator import Orchestrator
 
 COLLABORATOR_START_TIMEOUT_S = 120.0
-COMMAND_POLL_S = 0.05
-SCHEDULE_USAGE_DEBOUNCE_S = 20.0
 CTRL_C_DOUBLE_TAP_S = 1.5
 
 _VIM_QUIT_COMMANDS = frozenset({":wq", ":q!"})
@@ -167,11 +151,11 @@ class MurderApp(App[None]):
         Binding("ctrl+c", "ctrl_c_quit", "Quit", priority=True, show=False),
         ("ctrl+comma", "open_settings", "Settings"),
         Binding("ctrl+n", "open_note_capture", "Quick note", show=False),
-        ("ctrl+1", "view_planning", "Planning"),
-        ("ctrl+2", "view_crows", "Crows"),
-        ("ctrl+3", "view_schedule", "Dispatch"),
-        ("[", "previous_view", "Prev view"),
-        ("]", "next_view", "Next view"),
+        Binding("ctrl+1", "view_planning", "Planning", priority=True),
+        Binding("ctrl+2", "view_crows", "Crows", priority=True),
+        Binding("ctrl+3", "view_schedule", "Dispatch", priority=True),
+        Binding("[", "previous_view", "Prev view", priority=True),
+        Binding("]", "next_view", "Next view", priority=True),
         ("ctrl+b", "toggle_sidebar", "Docs sidebar"),
         ("ctrl+y", "toggle_collab_raw", "Raw pane"),
         # Between-pane focus (VISION §4.3). Bare hjkl/arrows stay with the
@@ -233,10 +217,9 @@ class MurderApp(App[None]):
 
     VIEWS = ("planning", "crows", "schedule")
 
-    def __init__(self, runtime: Any, orchestrator: Orchestrator | None = None) -> None:
+    def __init__(self, runtime: Any) -> None:
         super().__init__()
         self.runtime = runtime
-        self.orchestrator = orchestrator
         self.perf = make_perf_log(runtime.repo_root)
         self._perf_log_enabled = self.perf.enabled
         self._perf_mount_time: float | None = None
@@ -258,13 +241,23 @@ class MurderApp(App[None]):
         self._collab_raw = False  # ctrl+y: show the raw tmux pane instead of the parsed chat
         self._user_config: UserConfig = load_user_config()
         self._view = "planning"
-        self._last_schedule_usage_attempt_at: float | None = None
         self._pre_chat_focus = None
         self._has_selected_plan = False
         self._active_document = "plan"
         self._shell_session: str | None = None
         self._last_ctrl_c: float = 0.0
         self._note_capture_draft = ""
+        self._crow_snapshot = None
+        self._dispatch_ctrl = DispatchController(
+            TuiContext(
+                submit_command=self._submit_command,
+                notify=self.notify,
+                refresh_views=self._refresh_db_views,
+                push_screen=self.push_screen,
+                run_worker=self.run_worker,
+                read_model=runtime.read_model,
+            )
+        )
         for theme in CUSTOM_THEMES:
             self.register_theme(theme)
 
@@ -342,41 +335,34 @@ class MurderApp(App[None]):
         self.run_worker(self._collect_usage_snapshots(), exclusive=True, group="usage")
 
     async def _collect_usage_snapshots(self) -> None:
-        result = await self._submit_command(
-            target_worker=USAGE_PROBE_TARGET,
-            kind=HARNESS_USAGE_SAMPLE_KIND,
-            payload=harness_usage_sample_payload(trigger=TRIGGER_USAGE_MANUAL_KEY),
-            timeout_s=USAGE_SAMPLE_DEFAULT_TIMEOUT_S,
-        )
-        if result is None:
-            return
-        stored = int(result.get("stored", 0))
-        failures = int(result.get("failures", 0))
-        self._refresh_db_views()
-        if stored or failures:
-            self.notify(
-                f"Sampled {stored} harness usages ({failures} failed).",
-                timeout=4,
-            )
+        await self._dispatch_ctrl.collect_usage_snapshots()
 
     def _refresh_db_views(self) -> None:
-        db = self.runtime.db
         perf = self.perf
         with perf.span("tui.refresh_db_views"):
+            dispatch = self.runtime.read_model.get_dispatch_snapshot()
             with perf.span("tui.header.refresh_counts"):
-                self._header.refresh_counts(db)
+                self._header.refresh_from_snapshot(dispatch)
             with perf.span("tui.grid.refresh"):
-                self._grid.refresh_from_db(db)
-            with perf.span("tui.crows.refresh_db"):
-                self._crows.refresh_from_db(db)
+                self._grid.refresh_from_snapshot(dispatch)
+            with perf.span("tui.crows.render_snapshot"):
+                self._crow_snapshot = self.runtime.read_model.get_crow_snapshot()
+                self._crows.render_from_snapshot(self._crow_snapshot)
             with perf.span("tui.plans.refresh"):
-                self._plans.refresh_from_db(db)
+                self._plans.refresh_from_snapshot(self.runtime.read_model.get_plans_snapshot())
             with perf.span("tui.notes_list.refresh"):
-                self._notes_list.refresh_from_db(db)
+                self._notes_list.refresh_from_snapshot(
+                    self.runtime.read_model.get_notes_snapshot()
+                )
             with perf.span("tui.schedule.refresh"):
-                self._dispatch.refresh_from_db(db)
+                self._dispatch.refresh_from_snapshot(
+                    self.runtime.read_model.get_schedule_snapshot(),
+                    read_model=self.runtime.read_model,
+                )
             with perf.span("tui.escalations.refresh"):
-                self._escalations.refresh_from_db(db)
+                self._escalations.refresh_from_snapshot(
+                    self.runtime.read_model.get_escalations_snapshot()
+                )
             if (
                 self._view == "planning"
                 and self._active_document == "plan"
@@ -462,35 +448,11 @@ class MurderApp(App[None]):
         await self._retire_note(event.name)
 
     async def _render_plan(self, name: str) -> None:
-        # No reconcile_plan() here: this runs on the UI refresh timer (and on
-        # every plan-list highlight). The plan_sync background task already
-        # polls `.murder/plans/*.md` into SQLite, so a hot-path reconcile is
-        # redundant file/DB I/O — and an exception from it would crash the
-        # whole app via the worker. Read straight from the DB instead.
         with self.perf.span("tui.render_plan"):
-            db = self.runtime.db
-            if db is None:
+            display = self.runtime.read_model.get_plan_display(name)
+            if display is None:
                 return
-            row = db.execute(
-                """
-                SELECT materialized_path, sync_state, parse_error, conflict_reason
-                  FROM plans
-                 WHERE name = ?
-                """,
-                (name,),
-            ).fetchone()
-            if row is None:
-                return
-            path = self.runtime.repo_root / row["materialized_path"]
-            if path.exists():
-                text = path.read_text(encoding="utf-8")
-            else:
-                text = f"# {name}\n\nMissing materialized file: `{row['materialized_path']}`\n"
-            if row["sync_state"] == "parse_error":
-                text = f"# {name}\n\nParse error: {row['parse_error']}\n\n```markdown\n{text}\n```"
-            elif row["sync_state"] == "conflict":
-                text = f"# {name}\n\nConflict: {row['conflict_reason']}\n\n{text}"
-            await self._plan_doc.set_plan_markdown(name, text)
+            await self._plan_doc.set_plan_markdown(name, display.markdown)
 
     async def _open_plan(self, name: str) -> None:
         await self.runtime.reconcile_plan(name)
@@ -505,28 +467,24 @@ class MurderApp(App[None]):
 
     async def _render_note(self, name: str) -> None:
         with self.perf.span("tui.render_note"):
-            db = self.runtime.db
-            if db is None:
+            display = self.runtime.read_model.get_note_display(name)
+            if display is None:
                 return
-            row = dbmod.get_note(db, name)
-            if row is None:
-                return
-            path = self.runtime.repo_root / str(row["materialized_path"])
-            if path.exists():
-                text = path.read_text(encoding="utf-8")
-            else:
-                text = str(row["body"])
-            await self._notes_doc.show(name, text)
+            await self._notes_doc.show(name, display.markdown)
 
     async def _open_note(self, name: str) -> None:
-        db = self.runtime.db
-        if db is None:
+        result = await self._submit_command(
+            target_worker="orchestrator",
+            kind="note.ensure",
+            payload={"name": name},
+            timeout_s=10.0,
+        )
+        if result is None:
             return
-        notes_mod.ensure_note(db, self.runtime.repo_root, name)
-        row = dbmod.get_note(db, name)
+        mat_path = str(result.get("materialized_path") or "")
         path = (
-            self.runtime.repo_root / str(row["materialized_path"])
-            if row
+            self.runtime.repo_root / mat_path
+            if mat_path
             else self.runtime.note_path_for(name)
         )
         with self.suspend():
@@ -540,16 +498,17 @@ class MurderApp(App[None]):
         self.set_focus(self._notes_doc)
 
     async def _retire_note(self, name: str) -> None:
-        db = self.runtime.db
-        if db is None:
+        result = await self._submit_command(
+            target_worker="orchestrator",
+            kind="note.retire",
+            payload={"name": name},
+            timeout_s=10.0,
+        )
+        if result is None:
             return
-        try:
-            dest = notes_mod.retire_note(db, self.runtime.repo_root, name)
-        except Exception as e:
-            self.notify(f"could not retire note: {e}", severity="error", timeout=6)
-            return
+        dest_name = str(result.get("dest_name") or name)
         self._refresh_db_views()
-        self.notify(f"retired note: {dest.name}", timeout=4)
+        self.notify(f"retired note: {dest_name}", timeout=4)
         if self._notes_list.selected_name:
             await self._render_note(self._notes_list.selected_name)
         else:
@@ -615,29 +574,7 @@ class MurderApp(App[None]):
         self.run_worker(self._on_schedule_view_enter(), exclusive=True, group="usage")
 
     async def _on_schedule_view_enter(self) -> None:
-        now = time.monotonic()
-        if (
-            self._last_schedule_usage_attempt_at is not None
-            and now - self._last_schedule_usage_attempt_at < SCHEDULE_USAGE_DEBOUNCE_S
-        ):
-            return
-        self._last_schedule_usage_attempt_at = now
-        result = await self._submit_command(
-            target_worker="usage-probe",
-            kind="scheduler.probe_usage",
-            payload={"trigger": "schedule_view_enter"},
-            timeout_s=20.0,
-        )
-        if result is None:
-            return
-        stored = int(result.get("stored", 0))
-        failures = int(result.get("failures", 0))
-        self._refresh_db_views()
-        if stored or failures:
-            self.notify(
-                f"Schedule usage: {stored} ok, {failures} failed",
-                timeout=4,
-            )
+        await self._dispatch_ctrl.probe_usage_on_schedule_enter()
 
     def action_next_view(self) -> None:
         if self._insert_if_chat_focused("]"):
@@ -781,24 +718,48 @@ class MurderApp(App[None]):
         self.push_screen(screen, self._on_note_capture_closed)
 
     def _sync_recent_note_entries(self) -> list[dict]:
-        db = self.runtime.db
-        if db is None:
-            return []
-        return dbmod.list_recent_notes_entries(db, limit=RECENT_NOTE_ROWS)
+        return self.runtime.read_model.get_notetaker_recent_entries(RECENT_NOTE_ROWS)
 
-    def _record_note_capture_immediate(self, text: str) -> dict[str, Any] | None:
-        body = text.strip()
+    async def _slash_note_submit(self, body: str) -> None:
+        body = body.strip()
         if not body:
-            return None
-        db = self.runtime.db
-        if db is None:
-            return None
-        result = notetaker_capture.create_durable_capture(
-            repo_root=self.runtime.repo_root,
-            conn=db,
-            raw=body,
+            return
+        self.run_worker(
+            self._capture_note_via_service(body),
+            exclusive=False,
+            group="note_capture",
         )
-        note_name = str(result["note_name"])
+
+    def _on_note_capture_closed(self, payload: tuple[bool, str] | None) -> None:
+        if payload is None:
+            return
+        submitted, draft_snapshot = payload
+        self._note_capture_draft = "" if submitted else draft_snapshot
+        if submitted:
+            body = draft_snapshot.strip()
+            if body:
+                self.run_worker(
+                    self._capture_note_via_service(body),
+                    exclusive=False,
+                    group="note_capture",
+                )
+
+    async def _capture_note_via_service(self, raw: str) -> None:
+        """Submit note capture through the service command and update UI on completion."""
+        self.notify("capturing note...", timeout=3)
+        result = await self._submit_command(
+            target_worker="orchestrator",
+            kind="notetaker.capture.submit",
+            payload={"raw": raw},
+            timeout_s=60.0,
+            notify_errors=True,
+        )
+        if result is None:
+            return
+        note_name = str(result.get("note_name") or "")
+        if not note_name:
+            self.notify("note saved (unknown name)", timeout=4)
+            return
         self._refresh_db_views()
         self._active_document = "note"
         self._plan_doc.display = False
@@ -810,58 +771,6 @@ class MurderApp(App[None]):
             group="notedoc",
             exit_on_error=False,
         )
-        return result
-
-    async def _slash_note_submit(self, body: str) -> None:
-        created = self._record_note_capture_immediate(body)
-        if created is None:
-            self.notify("capture failed — no database", severity="warning", timeout=6)
-            return
-        self.run_worker(
-            self._resolve_note_capture_background(created),
-            exclusive=False,
-            group="note_capture",
-        )
-
-    def _on_note_capture_closed(self, payload: tuple[bool, str] | None) -> None:
-        if payload is None:
-            return
-        submitted, draft_snapshot = payload
-        self._note_capture_draft = "" if submitted else draft_snapshot
-        if submitted:
-            created = self._record_note_capture_immediate(draft_snapshot)
-            if created is None:
-                self.notify("capture failed — no database", severity="warning", timeout=6)
-                return
-            self.run_worker(
-                self._resolve_note_capture_background(created),
-                exclusive=False,
-                group="note_capture",
-            )
-
-    async def _resolve_note_capture_background(self, created: dict[str, Any]) -> None:
-        db = self.runtime.db
-        if db is None:
-            return
-        try:
-            client = create_client(self.runtime.config.notetaker.provider)
-            resolved = await notetaker_capture.resolve_capture_note(
-                repo_root=self.runtime.repo_root,
-                conn=db,
-                raw=str(created["cleaned"]),
-                entry_id=int(created["entry_id"]),
-                note_name=str(created["note_name"]),
-                client=client,
-                config=self.runtime.config.notetaker,
-            )
-        except Exception as e:
-            self.notify(f"note saved; title update failed: {e}", severity="warning", timeout=6)
-            return
-        self._refresh_db_views()
-        note_name = str(resolved["note_name"])
-        self._active_document = "note"
-        self._notes_list.select_name(note_name)
-        await self._render_note(note_name)
         self.notify(f"note ready: {note_name}.md", timeout=4)
 
     def action_focus_chat(self) -> None:
@@ -955,20 +864,7 @@ class MurderApp(App[None]):
         self.run_worker(self._kick_ready(), exclusive=False)
 
     async def _kick_ready(self) -> None:
-        result = await self._submit_command(
-            target_worker="orchestrator",
-            kind="scheduler.kickoff_ready",
-            payload={},
-            timeout_s=30.0,
-        )
-        if result is None:
-            return
-        kicked = list(result.get("kicked", []))
-        self.notify(
-            f"kicked: {', '.join(kicked)}" if kicked else "no ready tickets",
-            timeout=3,
-        )
-        self._refresh_db_views()
+        await self._dispatch_ctrl.kick_ready()
 
     def action_schedule_mode_picker(self) -> None:
         if self._view != "schedule":
@@ -1014,6 +910,22 @@ class MurderApp(App[None]):
             group="retry",
         )
 
+    def on_escalation_strip_navigate_requested(
+        self, event: EscalationStrip.NavigateRequested
+    ) -> None:
+        event.stop()
+        esc = event.escalation
+        if esc.to_recipient == "collaborator":
+            self._set_view("planning")
+        elif esc.ticket_id:
+            self._set_view("crows")
+        else:
+            self.notify(
+                f"Escalation #{esc.id}: {esc.reason}",
+                severity="warning",
+                timeout=8,
+            )
+
     def on_mode_strip_set_mode_requested(self, event: ModeStrip.SetModeRequested) -> None:
         event.stop()
         self.run_worker(
@@ -1023,57 +935,16 @@ class MurderApp(App[None]):
         )
 
     async def _submit_set_scheduler_mode(self, to_mode: str) -> None:
-        result = await self._submit_command(
-            target_worker="scheduler",
-            kind="scheduler.set_mode",
-            payload={"mode": to_mode},
-            timeout_s=10.0,
-        )
-        if result is None:
-            return
-        self.notify(f"Scheduler mode → {to_mode}", timeout=3)
-        self._refresh_db_views()
+        await self._dispatch_ctrl.set_scheduler_mode(to_mode)
 
     def _open_carve_screen(self, ticket_id: str) -> None:
-        db = self.runtime.db
-        if db is None:
-            self.notify("database unavailable", severity="error", timeout=4)
-            return
-        row = dbmod.get_ticket(db, ticket_id)
-        if row is None:
-            self.notify(f"ticket {ticket_id} not found", severity="error", timeout=4)
-            return
-        snapshot = {str(k): row[k] for k in row.keys()}
-        hint = "[dim]Known harness kinds:[/dim] " + ", ".join(sorted(REGISTRY.keys()))
-        self.push_screen(
-            CarveFormScreen(
-                ticket_id,
-                snapshot,
-                harness_hint=hint,
-                db=db,
-                on_autosave=lambda spec: self._enqueue_carve_autosave(ticket_id, spec),
-            ),
-            lambda _result: None,
-        )
+        self._dispatch_ctrl.open_carve_screen(ticket_id)
 
     def _enqueue_carve_autosave(self, ticket_id: str, spec: dict[str, object]) -> None:
-        self.run_worker(
-            self._submit_update_metadata_and_status(ticket_id, spec, notify_success=False),
-            exclusive=True,
-            group="carve",
-        )
+        self._dispatch_ctrl.enqueue_carve_autosave(ticket_id, spec)
 
     async def _submit_retry_failed(self, ticket_id: str) -> None:
-        result = await self._submit_command(
-            target_worker="orchestrator",
-            kind="ticket.retry_failed",
-            payload={"ticket_id": ticket_id},
-            timeout_s=15.0,
-        )
-        if result is None:
-            return
-        self.notify(f"{ticket_id} queued for retry; status=planned", timeout=4)
-        self._refresh_db_views()
+        await self._dispatch_ctrl.retry_failed(ticket_id)
 
     async def _submit_update_metadata_and_status(
         self,
@@ -1082,48 +953,9 @@ class MurderApp(App[None]):
         *,
         notify_success: bool = True,
     ) -> None:
-        meta_result = await self._submit_command(
-            target_worker="orchestrator",
-            kind="ticket.update_metadata",
-            payload={"ticket_id": ticket_id, **spec},
-            timeout_s=30.0,
+        await self._dispatch_ctrl.update_metadata_and_status(
+            ticket_id, spec, notify_success=notify_success
         )
-        if meta_result is None:
-            return
-        if not meta_result.get("ok"):
-            self.notify(
-                str(meta_result.get("error") or "metadata update failed"),
-                severity="error",
-                timeout=10,
-            )
-            return
-        db = self.runtime.db
-        if db is None:
-            return
-        row2 = dbmod.get_ticket(db, ticket_id)
-        db_status = str(row2.get("status") or "") if row2 else ""
-        want = str(spec.get("status") or "").strip()
-        if not want:
-            want = db_status
-        if want and want != db_status:
-            status_result = await self._submit_command(
-                target_worker="orchestrator",
-                kind="ticket.force_status",
-                payload={"ticket_id": ticket_id, "status": want},
-                timeout_s=15.0,
-            )
-            if status_result is None:
-                return
-            if not status_result.get("ok"):
-                self.notify(
-                    str(status_result.get("error") or "status update failed"),
-                    severity="error",
-                    timeout=10,
-                )
-                return
-        if notify_success:
-            self.notify(f"{ticket_id} updated", timeout=4)
-        self._refresh_db_views()
 
     def _record_ui_escalation(self, reason: str) -> None:
         self.run_worker(
@@ -1155,6 +987,7 @@ class MurderApp(App[None]):
             repo=self.runtime.repo_root,
             user_config=self._user_config,
             available_themes=sorted(self.available_themes),
+            settings_service=SettingsService(self.runtime.repo_root),
         )
         self.push_screen(screen, self._on_settings_closed)
 
@@ -1186,75 +1019,38 @@ class MurderApp(App[None]):
         notify_errors: bool = True,
     ) -> dict[str, object] | None:
         submit_command = getattr(self.runtime, "submit_command", None)
-        if submit_command is not None:
-            try:
-                return await submit_command(
-                    target_worker=target_worker,
-                    kind=kind,
-                    payload=payload,
-                    timeout_s=timeout_s,
-                )
-            except Exception as exc:
-                if notify_errors:
-                    self.notify(str(exc), severity="error", timeout=8)
-                return None
-        if self.runtime.bus is None or self.runtime.db is None or self.runtime.run_id is None:
+        if submit_command is None:
             if notify_errors:
-                self.notify("service bus unavailable", severity="error", timeout=4)
+                self.notify("service client unavailable", severity="error", timeout=4)
             return None
-        command = CommandEvent(
-            run_id=self.runtime.run_id,
-            agent_id="tui",
-            target_worker=target_worker,
-            kind=kind,
-            payload=payload,
-            correlation_id=f"tui-{uuid4()}",
-            idempotency_key=f"tui-{kind}-{uuid4()}",
-        )
-        await self.runtime.bus.publish(command)
-        deadline = time.monotonic() + timeout_s
-        while time.monotonic() < deadline:
-            row = self.runtime.db.execute(
-                "SELECT status, result_json, last_error FROM commands WHERE id = ?",
-                (str(command.id),),
-            ).fetchone()
-            if row is None:
-                await asyncio.sleep(COMMAND_POLL_S)
-                continue
-            status = str(row["status"])
-            if status == "done":
-                raw = row["result_json"]
-                return json.loads(raw) if raw else {}
-            if status == "failed":
-                message = str(row["last_error"] or f"{kind} failed")
-                if notify_errors:
-                    self.notify(message, severity="error", timeout=8)
-                return None
-            await asyncio.sleep(COMMAND_POLL_S)
-        if notify_errors:
-            self.notify(f"{kind} timed out", severity="error", timeout=8)
-        return None
+        try:
+            return await submit_command(
+                target_worker=target_worker,
+                kind=kind,
+                payload=payload,
+                timeout_s=timeout_s,
+            )
+        except Exception as exc:
+            if notify_errors:
+                self.notify(str(exc), severity="error", timeout=8)
+            return None
 
     def _sync_collaborator_mirror_session(self) -> None:
-        if self.runtime.db is None:
-            return
-        row = self.runtime.db.execute(
-            "SELECT session FROM agents WHERE role='collaborator' "
-            "AND status IN ('running','idle') LIMIT 1"
-        ).fetchone()
-        if row is None:
-            return
-        self._mirror.set_session(str(row["session"]))
-        self.run_worker(self._mirror.refresh_pane(), exclusive=True, group="mirror")
+        snapshot = self._crow_snapshot or self.runtime.read_model.get_crow_snapshot()
+        for session in snapshot.sessions:
+            if session.role == "collaborator" and session.status in ("running", "idle"):
+                if session.session_name:
+                    self._mirror.set_session(session.session_name)
+                    self.run_worker(self._mirror.refresh_pane(), exclusive=True, group="mirror")
+                return
 
     def _crow_session_for_ticket(self, ticket_id: str) -> str | None:
-        if self.runtime.db is None:
-            return None
-        row = self.runtime.db.execute(
-            "SELECT session FROM agents WHERE ticket_id = ? AND role = 'crow' "
-            "AND status IN ('running','idle') LIMIT 1",
-            (ticket_id,),
-        ).fetchone()
-        if row is None:
-            return None
-        return str(row["session"])
+        snapshot = self._crow_snapshot or self.runtime.read_model.get_crow_snapshot()
+        for session in snapshot.sessions:
+            if (
+                session.ticket_id == ticket_id
+                and session.role == "crow"
+                and session.status in ("running", "idle")
+            ):
+                return session.session_name
+        return None

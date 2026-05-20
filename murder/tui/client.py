@@ -2,30 +2,36 @@ from __future__ import annotations
 
 import asyncio
 import json
-import shlex
-import subprocess
 import time
 from pathlib import Path
 from uuid import uuid4
 
-from murder import db as dbmod
-from murder import notes as notes_mod
 from murder.bus.client import SocketBusClient
 from murder.bus.protocol import ClientKind
 from murder.config import Config
-from murder.plans.sync import choose_editor
-from murder.storage.paths import db_path, note_md
+from murder.persistence.schema import get_db
+from murder.service.client_api import (
+    CommandRequest,
+    CommandResult,
+    CommandStatus,
+    CrowSnapshot,
+    DispatchSnapshot,
+    EscalationsSnapshot,
+    MurderServiceClient,
+    NotesSnapshot,
+    PlansSnapshot,
+    ScheduleSnapshot,
+    TicketDetailSnapshot,
+)
+from murder.service.document_access import DocumentAccess
+from murder.service.read_model import ServiceReadModel
+from murder.storage.paths import db_path
 
 COMMAND_POLL_S = 0.05
 
 
 class TuiRuntimeClient:
-    """TUI-facing service facade.
-
-    This is intentionally narrower than Runtime: reads are local DB snapshots
-    for the current transitional widgets, while mutations go through the
-    supervisor command RPC surface.
-    """
+    """TUI-facing service facade implementing :class:`MurderServiceClient`."""
 
     def __init__(
         self,
@@ -42,37 +48,36 @@ class TuiRuntimeClient:
             client_kind=client_kind,
             client_id=f"{client_kind.value}-{uuid4().hex}",
         )
-        self.db = dbmod.connect(db_path(repo_root))
+        self._db = get_db(db_path(repo_root))
+        self.read_model = ServiceReadModel(db_path(repo_root))
+        self.documents = DocumentAccess(repo_root, self._db)
         self.run_id: str | None = None
         self.note_sync = None
+
+    @property
+    def db(self):
+        """Internal DB connection; not for TUI app-layer use.
+        All app-layer mutations go through service commands."""
+        return self._db
 
     async def connect(self) -> None:
         reply = await self.bus.request("health.ping", {}, timeout_s=5.0)
         self.run_id = str(reply.get("run_id") or "")
 
     async def close(self) -> None:
-        self.db.close()
+        self._db.close()
 
     async def reconcile_plan(self, name: str) -> None:
-        del name
+        await self.documents.reconcile_plan(name)
 
     def plan_path_for(self, name: str) -> Path:
-        row = dbmod.get_plan_row(self.db, name)
-        return (
-            self.repo_root / row["materialized_path"]
-            if row
-            else self.repo_root / ".murder" / "plans" / f"{name}.md"
-        )
+        return self.documents.plan_path_for(name)
 
     def note_path_for(self, name: str) -> Path:
-        notes_mod.ensure_note(self.db, self.repo_root, name)
-        return note_md(self.repo_root, name)
+        return self.documents.note_path_for(name)
 
     def open_editor_blocking(self, path: Path, preferred_editor: str | None = None) -> int:
-        editor = choose_editor(preferred_editor)
-        argv = shlex.split(editor) or ["vi"]
-        proc = subprocess.run([*argv, str(path)], check=False)
-        return int(proc.returncode)
+        return self.documents.open_editor_blocking(path, preferred_editor)
 
     async def submit_command(
         self,
@@ -82,6 +87,40 @@ class TuiRuntimeClient:
         payload: dict[str, object],
         timeout_s: float,
     ) -> dict[str, object]:
+        """Submit a durable command and poll until done or failed."""
+        result = await self._submit_raw(
+            target_worker=target_worker,
+            kind=kind,
+            payload=payload,
+            timeout_s=timeout_s,
+        )
+        if result.status == CommandStatus.FAILED:
+            raise RuntimeError(result.error or f"{kind} failed")
+        return dict(result.result or {})
+
+    async def submit_command_typed(self, request: CommandRequest) -> CommandResult:
+        payload = dict(request.payload)
+        timeout_s = float(payload.pop("timeout_s", 30.0))
+        target_worker = str(payload.pop("target_worker", ""))
+        return await self._submit_raw(
+            target_worker=target_worker,
+            kind=request.command_type,
+            payload=payload,
+            timeout_s=timeout_s,
+            correlation_id=request.correlation_id,
+            idempotency_key=request.idempotency_key,
+        )
+
+    async def _submit_raw(
+        self,
+        *,
+        target_worker: str,
+        kind: str,
+        payload: dict[str, object],
+        timeout_s: float,
+        correlation_id: str | None = None,
+        idempotency_key: str | None = None,
+    ) -> CommandResult:
         submitted = await self.bus.request(
             "command.submit",
             {
@@ -89,8 +128,8 @@ class TuiRuntimeClient:
                 "kind": kind,
                 "payload": payload,
                 "agent_id": "tui",
-                "correlation_id": f"tui-{uuid4()}",
-                "idempotency_key": f"tui-{kind}-{uuid4()}",
+                "correlation_id": correlation_id or f"tui-{uuid4()}",
+                "idempotency_key": idempotency_key or f"tui-{kind}-{uuid4()}",
             },
             timeout_s=min(timeout_s, 10.0),
         )
@@ -107,8 +146,61 @@ class TuiRuntimeClient:
             state = str(status.get("status") or "")
             if state == "done":
                 raw = status.get("result_json")
-                return json.loads(str(raw)) if raw else {}
+                parsed = json.loads(str(raw)) if raw else {}
+                return CommandResult(
+                    command_id=command_id,
+                    status=CommandStatus.ACCEPTED,
+                    result=parsed,
+                )
             if state == "failed":
-                raise RuntimeError(str(status.get("last_error") or f"{kind} failed"))
+                return CommandResult(
+                    command_id=command_id,
+                    status=CommandStatus.FAILED,
+                    error=str(status.get("last_error") or f"{kind} failed"),
+                )
             await asyncio.sleep(COMMAND_POLL_S)
         raise TimeoutError(f"{kind} timed out")
+
+    async def get_dispatch_snapshot(self) -> DispatchSnapshot:
+        return self.read_model.get_dispatch_snapshot()
+
+    async def get_schedule_snapshot(self) -> ScheduleSnapshot:
+        return self.read_model.get_schedule_snapshot()
+
+    async def get_ticket_detail(self, ticket_id: str) -> TicketDetailSnapshot | None:
+        try:
+            return self.read_model.get_ticket_detail(ticket_id)
+        except KeyError:
+            return None
+
+    async def get_crow_snapshot(self) -> CrowSnapshot:
+        return self.read_model.get_crow_snapshot()
+
+    async def get_escalations(self) -> EscalationsSnapshot:
+        return self.read_model.get_escalations_snapshot()
+
+    async def ack_escalation(self, escalation_id: int) -> None:
+        self.read_model.ack_escalation(str(escalation_id))
+
+    async def send_agent_message(
+        self,
+        agent_id: str,
+        message: str,
+        *,
+        ticket_id: str | None = None,
+    ) -> CommandResult:
+        payload: dict[str, object] = {"agent_id": agent_id, "message": message}
+        if ticket_id is not None:
+            payload["ticket_id"] = ticket_id
+        return await self._submit_raw(
+            target_worker="orchestrator",
+            kind="agent.message",
+            payload=payload,
+            timeout_s=30.0,
+        )
+
+    async def get_plans_snapshot(self) -> PlansSnapshot:
+        return self.read_model.get_plans_snapshot()
+
+    async def get_notes_snapshot(self) -> NotesSnapshot:
+        return self.read_model.get_notes_snapshot()

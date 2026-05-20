@@ -12,11 +12,12 @@ from typing import TYPE_CHECKING, Any, Literal, cast
 from murder.agents.base import Agent, AgentRole, AgentStatus
 from murder.config import CrowHandlerConfig
 from murder.harnesses.base import HarnessAdapter
+from murder.orchestration.outcome import TicketOutcomeService
+from murder.tickets.status import TicketStatus
 
 if TYPE_CHECKING:
     from murder.clients.base import APIClient
-    from murder.orchestrator import Orchestrator
-    from murder.runtime import Runtime
+    from murder.service.runtime_scope import AgentLifecycleHost as Runtime
 
 
 class CrowHandlerAgent(Agent):
@@ -33,7 +34,8 @@ class CrowHandlerAgent(Agent):
         *,
         repo_root: Path,
         runtime: Runtime,
-        orchestrator: Orchestrator,
+        outcome: TicketOutcomeService,
+        start_commit: str | None = None,
         client: APIClient | None = None,
     ) -> None:
         self.id = agent_id
@@ -44,7 +46,8 @@ class CrowHandlerAgent(Agent):
         self.config = config
         self.repo_root = Path(repo_root)
         self.runtime = runtime
-        self._orch = orchestrator
+        self.outcome = outcome
+        self._start_commit = start_commit
         self._client = client
         self.status = AgentStatus.IDLE
         self._tick_count = 0
@@ -56,11 +59,10 @@ class CrowHandlerAgent(Agent):
         self._poll_task: asyncio.Task[None] | None = None
         self._done_emitted = False
         self._log_path: Path | None = None
-        self._consecutive_tick_failures = 0
-        self._max_tick_failures = 3
+        self._terminal_failure = False
 
     async def start(self, brief: str, ctx: dict[str, Any]) -> None:
-        from murder import tmux
+        from murder.terminal import tmux
         from murder.bus import StatusChangeEvent
         from murder.storage.run_id_allocation import open_pane_log
 
@@ -92,23 +94,26 @@ class CrowHandlerAgent(Agent):
             )
 
         async def _loop() -> None:
-            while self.status == AgentStatus.RUNNING:
-                try:
-                    await self.tick()
-                    self._consecutive_tick_failures = 0
-                except asyncio.CancelledError:
-                    raise
-                except Exception as e:
-                    await self._record_tick_failure(e)
-                    if self._consecutive_tick_failures >= self._max_tick_failures:
+            try:
+                while self.status == AgentStatus.RUNNING and not self._terminal_failure:
+                    try:
+                        await self.tick()
+                        self._consecutive_tick_failures = 0
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as e:
+                        await self._handle_tick_failure(e)
                         break
-                await asyncio.sleep(self.config.poll_interval_s)
+                    await asyncio.sleep(self.config.poll_interval_s)
+            finally:
+                if self._terminal_failure:
+                    await self._finalize_after_tick_failure()
 
         self._poll_task = asyncio.create_task(_loop())
 
     async def stop(self, *, failed: bool = False, kill_session: bool = True) -> None:
         del kill_session  # crow_handler has no real tmux session
-        from murder import tmux
+        from murder.terminal import tmux
 
         if failed or self.status == AgentStatus.FAILED:
             self.status = AgentStatus.FAILED
@@ -147,8 +152,9 @@ class CrowHandlerAgent(Agent):
                 f.write(f"[{ts}] {msg}\n")
 
     async def tick(self) -> None:
-        from murder import db as dbmod
-        from murder import tmux
+        from murder.terminal import tmux
+        from murder.persistence.tickets import get_ticket_status, check_off_item, checklist_progress
+        from murder.persistence.agents import heartbeat_agent
         from murder.bus import (
             HeartbeatEvent,
             QuestionEvent,
@@ -162,8 +168,8 @@ class CrowHandlerAgent(Agent):
 
         # Stop if ticket reached a terminal state via any path (escalation,
         # manual edit, supervisor recovery) not just our own done detection.
-        ticket_status = dbmod.get_ticket_status(self.runtime.db, self.ticket_id)
-        if ticket_status in ("done", "failed"):
+        ticket_status = get_ticket_status(self.runtime.db, self.ticket_id)
+        if TicketStatus(ticket_status) in (TicketStatus.DONE, TicketStatus.FAILED):
             self._log(f"ticket {self.ticket_id} is {ticket_status} — stopping handler")
             asyncio.create_task(self.stop())
             return
@@ -190,7 +196,7 @@ class CrowHandlerAgent(Agent):
             )
 
         for check in self.harness.detect_checks(pane):
-            dbmod.check_off_item(self.runtime.db, self.ticket_id, check)
+            check_off_item(self.runtime.db, self.ticket_id, check)
 
         tpath = ticket_md(self.repo_root, self.ticket_id)
         for note in self.harness.detect_notes(pane):
@@ -199,7 +205,7 @@ class CrowHandlerAgent(Agent):
         if self.harness.detect_done(pane) and not self._done_emitted:
             self._done_emitted = True
             self._log(f"crow done detected for {self.ticket_id} — verifying…")
-            success = await self._orch.on_crow_done(self.ticket_id)
+            success = await self.outcome.complete_after_crow(self.ticket_id, start_commit=self._start_commit)
             if success:
                 self._log(f"ticket {self.ticket_id} verified done — stopping handler")
             else:
@@ -208,7 +214,7 @@ class CrowHandlerAgent(Agent):
             return
 
         excerpt = self.harness.extract_last_message(pane) or ""
-        done_n, total = dbmod.checklist_progress(self.runtime.db, self.ticket_id)
+        done_n, total = checklist_progress(self.runtime.db, self.ticket_id)
 
         if pane_unchanged and self._idle_cached:
             self._stuck_ticks += 1
@@ -249,7 +255,7 @@ class CrowHandlerAgent(Agent):
                     last_message_excerpt=excerpt[:500],
                 )
             )
-        dbmod.heartbeat_agent(self.runtime.db, self.id)
+        heartbeat_agent(self.runtime.db, self.id)
 
     def is_crow_idle(self) -> bool:
         return self._idle_cached
@@ -266,43 +272,52 @@ class CrowHandlerAgent(Agent):
             if fut in self._on_idle_callbacks:
                 self._on_idle_callbacks.remove(fut)
 
-    async def _record_tick_failure(self, exc: Exception) -> None:
+    async def _handle_tick_failure(self, exc: Exception) -> None:
         from murder.bus import ErrorEvent, StatusChangeEvent
 
-        self._consecutive_tick_failures += 1
-        terminal = self._consecutive_tick_failures >= self._max_tick_failures
-        if terminal:
-            prev = self.status
-            self.status = AgentStatus.DEAD
-            self.runtime.sync_agent(self)
-            self._fail_idle_waiters(
-                RuntimeError("crow_handler stopped after repeated poll failures")
-            )
-            if self.runtime.bus and self.runtime.run_id:
-                await self.runtime.bus.publish(
-                    StatusChangeEvent(
-                        run_id=self.runtime.run_id,
-                        agent_id=self.id,
-                        role=self.role,
-                        ticket_id=self.ticket_id,
-                        entity="agent",
-                        entity_id=self.id,
-                        from_status=prev.value,
-                        to_status=AgentStatus.DEAD.value,
-                        reason=str(exc),
-                    )
-                )
+        if self._terminal_failure:
+            return
+        self._terminal_failure = True
+        error = str(exc)
+        self._log(f"tick failure — failing ticket: {error}")
+        await self.outcome.fail_ticket(self.ticket_id, f"crow_handler tick failed: {error}")
+
+        prev = self.status
+        self.status = AgentStatus.FAILED
+        self.runtime.sync_agent(self)
+        self._fail_idle_waiters(RuntimeError(f"crow_handler tick failed: {error}"))
         if self.runtime.bus and self.runtime.run_id:
+            await self.runtime.bus.publish(
+                StatusChangeEvent(
+                    run_id=self.runtime.run_id,
+                    agent_id=self.id,
+                    role=self.role,
+                    ticket_id=self.ticket_id,
+                    entity="agent",
+                    entity_id=self.id,
+                    from_status=prev.value,
+                    to_status=AgentStatus.FAILED.value,
+                    reason=error,
+                )
+            )
             await self.runtime.bus.publish(
                 ErrorEvent(
                     run_id=self.runtime.run_id,
                     agent_id=self.id,
                     role=self.role,
                     ticket_id=self.ticket_id,
-                    message=f"crow_handler tick failed: {exc}",
-                    recoverable=not terminal,
+                    message=f"crow_handler tick failed: {error}",
+                    recoverable=False,
                 )
             )
+
+    async def _finalize_after_tick_failure(self) -> None:
+        from murder.terminal import tmux
+
+        with contextlib.suppress(Exception):
+            await tmux.kill_session(self.session)
+        if self.runtime.db is not None:
+            self.runtime.sync_agent(self)
 
     def _fail_idle_waiters(self, exc: Exception) -> None:
         for fut in self._on_idle_callbacks:

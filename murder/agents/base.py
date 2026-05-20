@@ -47,9 +47,9 @@ class Agent(ABC):
     async def is_live(self) -> bool:
         """Return True if the agent session is currently running.
 
-        Tmux-based agents (CrowAgent, CollaboratorAgent) override this to check
-        session existence. Coroutine agents use status. Default is True so
-        non-overriding agents are considered live unless explicitly stopped.
+        Tmux-based agents override this to check session existence; coroutine
+        agents use status. Default is True so non-overriding agents are
+        considered live unless explicitly stopped.
         """
         return True
 
@@ -59,6 +59,6 @@ class Agent(ABC):
         return None
 
     def attach_hint(self) -> str:
-        from murder.tmux import attach_command
+        from murder.terminal.tmux import attach_command
 
         return attach_command(self.session)

@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-import sqlite3
-
 from textual.binding import Binding
 from textual.message import Message
 from textual.widgets import Static
+
+from murder.service.client_api import ScheduleSnapshot
 
 _MODES = ("manual", "autorun_ready", "crow_magic")
 _MODE_LABELS = {
@@ -14,36 +14,6 @@ _MODE_LABELS = {
     "autorun_ready": "Autorun Ready",
     "crow_magic": "Crow Magic",
 }
-
-
-def _crow_rationale(db: sqlite3.Connection) -> str:
-    """Build a one-line crow-magic status for display in the mode strip."""
-    dec_rows = db.execute(
-        "SELECT harness, window_key, decision, rationale"
-        " FROM scheduler_decision_cache ORDER BY updated_at DESC"
-    ).fetchall()
-
-    if not dec_rows:
-        snap_n = db.execute("SELECT COUNT(*) AS n FROM harness_usage_snapshots").fetchone()["n"]
-        if snap_n == 0:
-            return "no usage snapshots — press ctrl+u to fetch"
-        return "evaluating…"
-
-    holds = [r for r in dec_rows if not r["decision"]]
-    kicks = [r for r in dec_rows if r["decision"]]
-
-    if kicks:
-        # Show the kick rationale (most actionable)
-        latest_kick = kicks[0]
-        if len(dec_rows) > 1:
-            return f"[{len(holds)} holding]  {latest_kick['rationale']}"
-        return latest_kick["rationale"]
-
-    # All holding
-    if len(holds) == 1:
-        return holds[0]["rationale"]
-    labels = " · ".join(f"{r['harness']}/{r['window_key']}" for r in holds)
-    return f"holding: {labels}"
 
 
 class ModeStrip(Static):
@@ -86,17 +56,11 @@ class ModeStrip(Static):
     def on_mount(self) -> None:
         self._render_mode()
 
-    def refresh_from_db(self, db: sqlite3.Connection | None) -> None:
-        if db is None:
-            return
-        row = db.execute("SELECT mode FROM scheduler_state WHERE id = 1").fetchone()
-        if row is not None:
-            self._mode = row["mode"]
-        if self._mode == "crow_magic":
-            self._rationale = _crow_rationale(db)
-        else:
-            self._rationale = ""
+    def refresh_from_snapshot(self, snapshot: ScheduleSnapshot) -> None:
+        self._mode = snapshot.scheduler_mode
+        self._rationale = snapshot.mode_rationale
         self._render_mode()
+
 
     def _render_mode(self) -> None:
         label = _MODE_LABELS.get(self._mode, self._mode)

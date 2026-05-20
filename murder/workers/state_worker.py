@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
-from murder import db as dbmod
+from murder.persistence import escalations as dbmod
 from murder.bus.protocol import CommandEvent, Entity, StateSnapshotEvent
 from murder.workers.base import Worker, WorkerCtx, WorkerSpec
 

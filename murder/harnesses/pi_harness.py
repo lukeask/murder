@@ -18,7 +18,6 @@ from murder.harnesses.parsing import (
     extract_last_message_heuristic,
     is_rule_line,
     is_status_spinner_line,
-    parse_prompt_marker_transcript,
     strip_ansi,
 )
 
@@ -137,16 +136,21 @@ class PiAdapter(HarnessAdapter):
     def extract_last_message(self, pane_text: str) -> str | None:
         return extract_last_message_heuristic(_strip_pi_chrome(pane_text))
 
-    def parse_transcript(self, pane_text: str) -> list[tuple[str, str]]:
-        return parse_prompt_marker_transcript(
-            _strip_pi_chrome(pane_text),
-            prompt_markers=self.transcript_prompt_markers,
-            drop_substrings=self.transcript_drop_substrings,
-        )
-
     def format_nudge(self, msg: str) -> str:
         return f"[supervisor] {msg}"
 
     async def set_model(self, session: str, model: str) -> bool:
         del session
         return model == self.startup_model
+
+
+from murder.harnesses.transcripts import PreprocessedPromptMarkerParser, register_parser
+
+register_parser(
+    "pi",
+    PreprocessedPromptMarkerParser(
+        prompt_markers=PiAdapter.transcript_prompt_markers,
+        drop_substrings=PiAdapter.transcript_drop_substrings,
+        normalize=_strip_pi_chrome,
+    ),
+)

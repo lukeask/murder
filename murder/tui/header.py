@@ -2,11 +2,20 @@
 
 from __future__ import annotations
 
-import sqlite3
-
 from textual.widgets import Static
 
-_STATUSES = ("planned", "ready", "in_progress", "blocked", "done", "failed")
+from murder.service.client_api import DispatchSnapshot
+
+_STATUSES = (
+    "draft",
+    "planned",
+    "ready",
+    "in_progress",
+    "blocked",
+    "done",
+    "failed",
+    "archived",
+)
 
 
 class Header(Static):
@@ -27,12 +36,13 @@ class Header(Static):
         self._counts: dict[str, int] = {s: 0 for s in _STATUSES}
         self._view = "planning"
 
-    def refresh_counts(self, db: sqlite3.Connection | None) -> None:
-        if db is None:
-            return
-        for s in _STATUSES:
-            row = db.execute("SELECT COUNT(*) AS c FROM tickets WHERE status = ?", (s,)).fetchone()
-            self._counts[s] = int(row["c"]) if row else 0
+    def refresh_from_snapshot(self, snapshot: DispatchSnapshot) -> None:
+        counts = {s: 0 for s in _STATUSES}
+        for ticket in snapshot.tickets:
+            key = ticket.status.value
+            if key in counts:
+                counts[key] += 1
+        self._counts = counts
         self._update_text()
 
     def set_view(self, view: str) -> None:

@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-import sqlite3
-
 from rich.markup import escape
 from textual.message import Message
 from textual.widgets import DataTable, Markdown, RichLog
+
+from murder.service.client_api import NotesSnapshot, PlansSnapshot
 
 
 class PlanList(DataTable):
@@ -37,23 +37,18 @@ class PlanList(DataTable):
     def on_mount(self) -> None:
         self.add_columns("name", "status", "rev", "sync")
 
-    def refresh_from_db(self, db: sqlite3.Connection | None) -> None:
-        if db is None:
-            return
+    def refresh_from_snapshot(self, snapshot: PlansSnapshot) -> None:
         row = self.cursor_row
-        rows = db.execute(
-            """
-            SELECT p.name, p.status, p.sync_state,
-                   (SELECT COUNT(*) FROM plan_revisions r WHERE r.plan_name = p.name) AS revisions
-              FROM plans p
-             ORDER BY p.updated_at DESC, p.name
-            """
-        ).fetchall()
         self.clear()
         self._plans = []
-        for r in rows:
-            self.add_row(r["name"], r["status"], str(r["revisions"]), r["sync_state"])
-            self._plans.append(r["name"])
+        for plan in snapshot.plans:
+            self.add_row(
+                plan.name,
+                plan.status,
+                str(plan.revision_count),
+                plan.sync_state,
+            )
+            self._plans.append(plan.name)
         if self._plans:
             self.move_cursor(row=min(max(row, 0), len(self._plans) - 1))
 
@@ -108,34 +103,14 @@ class NotesList(DataTable):
     def on_mount(self) -> None:
         self.add_columns("note", "chars", "updated")
 
-    def refresh_from_db(self, db: sqlite3.Connection | None) -> None:
-        if db is None:
-            return
+    def refresh_from_snapshot(self, snapshot: NotesSnapshot) -> None:
         row = self.cursor_row
-        cols = {r["name"] for r in db.execute("PRAGMA table_info(notes)").fetchall()}
-        if "status" in cols:
-            rows = db.execute(
-                """
-                SELECT name, length(body) AS size, updated_at
-                  FROM notes
-                 WHERE status = 'active'
-                 ORDER BY updated_at DESC, name
-                """
-            ).fetchall()
-        else:
-            rows = db.execute(
-                """
-                SELECT name, length(body) AS size, updated_at
-                  FROM notes
-                 ORDER BY updated_at DESC, name
-                """
-            ).fetchall()
         self.clear()
         self._names = []
-        for r in rows:
-            updated = str(r["updated_at"])[:16].replace("T", " ")
-            self.add_row(r["name"], str(r["size"]), updated)
-            self._names.append(r["name"])
+        for note in snapshot.notes:
+            updated = note.updated_at.isoformat()[:16].replace("T", " ")
+            self.add_row(note.name, str(note.char_count), updated)
+            self._names.append(note.name)
         if self._names:
             self.move_cursor(row=min(max(row, 0), len(self._names) - 1))
 

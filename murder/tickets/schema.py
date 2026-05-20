@@ -12,8 +12,8 @@ from pathlib import Path
 
 from pydantic import BaseModel, Field
 
-from murder.bus import TicketStatus
 from murder.config import HarnessKind
+from murder.tickets.status import TicketStatus
 
 
 class ChecklistItem(BaseModel):

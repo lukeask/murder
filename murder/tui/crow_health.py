@@ -1,16 +1,13 @@
 """Crow health classification for the tail-wall borders.
 
-Health is a client-side fact derived from existing DB snapshots
-(`agents.status`, open `escalations`), per VISION.md §5. The classifier
-is intentionally pure so it can be unit-tested without spinning up
-Textual or sqlite.
-
-When the bus eventually streams `crow_health` events (VISION §7.1), the
-input shape stays the same — only the data source moves.
+Health is a client-side fact derived from ``CrowSessionSummary.status`` and
+``last_seen``, per VISION.md §5. The classifier is intentionally pure so it
+can be unit-tested without spinning up Textual.
 """
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from enum import Enum
 
 
@@ -24,6 +21,9 @@ class Health(str, Enum):
 _RED_STATUSES = frozenset({"escalating", "blocked", "failed", "dead"})
 _GREEN_STATUSES = frozenset({"running", "idle"})
 _DONE_STATUSES = frozenset({"done"})
+
+STUCK_AFTER = timedelta(seconds=60)
+"""Running/idle crows with no heartbeat newer than this are stuck-but-alive."""
 
 # Severity 1 is informational; severity ≥ 2 is "needs human attention" per
 # the protocol enum and turns a crow's border red even with zero open rows
@@ -64,6 +64,42 @@ def classify(
     if norm in _DONE_STATUSES:
         return Health.NEUTRAL
     return Health.NEUTRAL
+
+
+def is_stuck(
+    *,
+    status: str | None,
+    last_seen: datetime | None,
+    now: datetime,
+) -> bool:
+    """True when a live crow's heartbeat is older than :data:`STUCK_AFTER`."""
+    norm = (status or "").lower()
+    if norm not in _GREEN_STATUSES:
+        return False
+    if last_seen is None:
+        return False
+    seen = _as_utc(last_seen)
+    return now - seen > STUCK_AFTER
+
+
+def health_for_session(
+    *,
+    status: str,
+    last_seen: datetime | None,
+    now: datetime | None = None,
+) -> Health:
+    """Border color for one :class:`~murder.service.client_api.CrowSessionSummary`."""
+    now_utc = _as_utc(now) if now is not None else datetime.now(timezone.utc)
+    return classify(
+        status=status,
+        stuck=is_stuck(status=status, last_seen=last_seen, now=now_utc),
+    )
+
+
+def _as_utc(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
 
 
 HEALTH_BORDER_COLOR: dict[Health, str] = {

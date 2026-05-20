@@ -12,7 +12,6 @@ import shutil
 from pathlib import Path
 from typing import Literal, TypeAlias, cast
 
-import yaml
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Container, Vertical, VerticalScroll
@@ -21,9 +20,9 @@ from textual.widgets import Static
 
 from murder.config import Config, HarnessKind, HarnessRoleConfig
 from murder.harnesses import REGISTRY
-from murder.harnesses.model_discovery import discover_harness_models
-from murder.storage.paths import roles_yaml
-from murder.user_config import UserConfig, UserHarnessRolePatch, save_user_config
+from murder.user_config import UserConfig, UserHarnessRolePatch
+
+from murder.service.settings_service import ProjectRoleModels, SettingsService
 
 _HARNESS_ROWS: list[tuple[HarnessKind, str, str]] = [
     ("cursor", "Cursor CLI", "agent"),
@@ -338,10 +337,13 @@ class SettingsScreen(ModalScreen[bool]):
         repo: Path,
         user_config: UserConfig,
         available_themes: list[str],
+        *,
+        settings_service: SettingsService | None = None,
     ) -> None:
         super().__init__()
         self._config = config
         self._repo = repo
+        self._settings = settings_service or SettingsService(repo)
         self._user_config = user_config
         self._available_themes = available_themes
 
@@ -906,10 +908,10 @@ class SettingsScreen(ModalScreen[bool]):
         if kind in self._model_discovery_attempted:
             return
         self._model_discovery_attempted.add(kind)
-        result = await discover_harness_models(kind, self._repo)
-        if not result.ok or not result.data:
+        result = await self._settings.discover_models(kind)
+        if not result.ok or not result.models:
             return
-        await self._replace_model_options(kind, result.data)
+        await self._replace_model_options(kind, list(result.models))
 
     async def _replace_model_options(
         self, kind: HarnessKind, options: list[tuple[str, str]]
@@ -1011,7 +1013,9 @@ class SettingsScreen(ModalScreen[bool]):
     def _save_global(self) -> None:
         self._user_config.tui.theme = self._theme_sel or None
         self._global_default_crow_save_update()
-        save_user_config(self._user_config)
+        result = self._settings.save_global(self._user_config)
+        if not result.ok and result.error:
+            self.notify(result.error, severity="error", timeout=5)
 
     def _save_project(self) -> bool:
         validation_messages = self._project_validation_messages()
@@ -1024,28 +1028,29 @@ class SettingsScreen(ModalScreen[bool]):
             )
             return False
 
-        path = roles_yaml(self._repo)
-        if not path.exists():
-            self.notify(
-                "No .murder/roles.yaml — run murder init first.",
-                severity="error",
-                timeout=4,
-            )
-            return False
-
-        raw: dict = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-        crow = self._staged_crow_config(raw)
-
+        crow = self._staged_crow_config({})
         try:
             HarnessRoleConfig.model_validate(crow)
         except Exception as exc:
             self.notify(f"Invalid config: {exc}", severity="error", timeout=6)
             return False
 
-        raw["default_crow"] = crow
-        self._stage_api_role_models(raw)
-
-        path.write_text(yaml.safe_dump(raw, sort_keys=False, allow_unicode=True), encoding="utf-8")
+        result = self._settings.save_project(
+            default_crow=crow,
+            role_models=ProjectRoleModels(
+                sentinel_model=self._sentinel_model,
+                crow_handler_model=self._crow_handler_model,
+                collaborator_harness=self._collaborator_harness,
+                notetaker_model=self._notetaker_model,
+            ),
+        )
+        if not result.ok:
+            self.notify(
+                result.error or "Failed to save project settings.",
+                severity="error",
+                timeout=5,
+            )
+            return False
         return True
 
     def _staged_harness_list(self) -> list[HarnessKind]:
@@ -1084,27 +1089,3 @@ class SettingsScreen(ModalScreen[bool]):
             crow["startup_models_by_harness"] = by_harness or None
         return crow
 
-    def _stage_api_role_models(self, raw: dict) -> None:
-        sentinel = raw.get("sentinel")
-        if not isinstance(sentinel, dict):
-            sentinel = {}
-        sentinel["model"] = self._sentinel_model
-        raw["sentinel"] = sentinel
-
-        crow_handler = raw.get("crow_handler")
-        if not isinstance(crow_handler, dict):
-            crow_handler = {}
-        crow_handler["model"] = self._crow_handler_model
-        raw["crow_handler"] = crow_handler
-
-        collaborator = raw.get("collaborator")
-        if not isinstance(collaborator, dict):
-            collaborator = {}
-        collaborator["harness"] = self._collaborator_harness
-        raw["collaborator"] = collaborator
-
-        notetaker = raw.get("notetaker")
-        if not isinstance(notetaker, dict):
-            notetaker = {}
-        notetaker["model"] = self._notetaker_model
-        raw["notetaker"] = notetaker
