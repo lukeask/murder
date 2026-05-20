@@ -310,6 +310,19 @@ class Orchestrator:
             note_name=notes_mod.today_name(),
         )
 
+    async def ensure_note(self, name: str) -> dict[str, Any]:
+        assert self.rt.db is not None
+        row = notes_mod.ensure_note(self.rt.db, self.rt.repo_root, name)
+        return {"name": name, "materialized_path": str(row.get("materialized_path", ""))}
+
+    async def retire_note(self, name: str) -> dict[str, Any]:
+        assert self.rt.db is not None
+        try:
+            dest = notes_mod.retire_note(self.rt.db, self.rt.repo_root, name)
+        except Exception as exc:
+            raise ValueError(f"could not retire note: {exc}") from exc
+        return {"name": name, "dest_name": dest.name}
+
     async def evaluate_wave_completion(self, wave: int) -> bool:
         assert self.rt.db is not None
         tickets = dbmod.list_tickets_in_wave(self.rt.db, wave)
