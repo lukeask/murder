@@ -9,7 +9,6 @@ from murder import notes as notes_mod
 from murder import notetaker_capture
 from murder.terminal import tmux
 from murder.agents.base import AgentRole, AgentStatus
-from murder.agents.collaborator import CollaboratorAgent
 from murder.agents.crow import CrowAgent
 from murder.agents.crow_handler import CrowHandlerAgent
 from murder.bus import StatusChangeEvent, TicketStatus
@@ -283,36 +282,26 @@ class Orchestrator:
                 await self.rt.reap(agent_id)
             else:
                 dbmod.set_agent_status(self.rt.db, agent_id, "dead")
-        startup_model = self.rt.config.collaborator.startup_model
-        harness = get_harness(self.rt.config.collaborator.harness, startup_model=startup_model)
-        session = format_session_name(self.rt, "collaborator", "")
-        agent = CollaboratorAgent(
-            agent_id="collaborator-0",
-            session=session,
-            harness=harness,
-            repo_root=self.rt.repo_root,
-            startup_model=startup_model,
-            runtime=self.rt,
-        )
-        self.rt.register_agent(agent)
         tpl_raw = self.rt.config.collaborator.startup_prompt_template or "collaborator.md"
         tpl = tpl_raw.removesuffix(".md")
         try:
             body = render(tpl, project_name=self.rt.config.project.name)
         except (KeyError, IndexError, ValueError):
-            # Custom template without (or with mismatched) placeholders — use it verbatim.
             body = load(tpl)
+        spec = AgentSpec(
+            role=AgentRole.COLLABORATOR,
+            scope=AgentScope(),
+            harness=self.rt.config.collaborator.harness,
+            model=self.rt.config.collaborator.startup_model,
+            startup_prompt=body,
+        )
         try:
-            await agent.start(body, {})
+            handle = await spawn_agent(spec, rt=self.rt)
         except Exception as e:
             reason = f"Collaborator startup failed: {e}"
             await self._escalations().record_collaborator_startup_failure(reason)
-            await self.rt.reap(agent.id)
             raise
-        except BaseException:
-            await self.rt.reap(agent.id)
-            raise
-        return agent.id
+        return handle.session_name
 
     async def submit_notetaker_capture(self, payload: dict[str, Any]) -> dict[str, Any]:
         assert self.rt.db is not None
