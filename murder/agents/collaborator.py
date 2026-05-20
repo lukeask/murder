@@ -91,6 +91,9 @@ class CollaboratorAgent(Agent):
                     )
                 )
 
+    async def is_live(self) -> bool:
+        return await tmux.session_exists(self.session)
+
     async def stop(self, *, failed: bool = False, kill_session: bool = True) -> None:
         if kill_session:
             with contextlib.suppress(Exception):
