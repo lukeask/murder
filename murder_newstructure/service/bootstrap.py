@@ -60,6 +60,8 @@ async def start_supervisor_workers(
             set_schedule_at=orchestrator.set_schedule_at,
             update_metadata=orchestrator.update_ticket_metadata,
             force_status=orchestrator.force_ticket_status,
+            note_ensure=orchestrator.ensure_note,
+            note_retire=orchestrator.retire_note,
         )
     )
     return supervisor

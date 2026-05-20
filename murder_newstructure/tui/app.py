@@ -19,8 +19,6 @@ from textual.containers import Container, Horizontal, Vertical
 from textual.screen import ModalScreen
 from textual.widgets import Footer, Static
 
-from murder.persistence.notes import get_note
-from murder import notes as notes_mod
 from murder.terminal import tmux
 from murder.config import Config
 from murder.tui.chat_input import ChatInput
@@ -475,14 +473,18 @@ class MurderApp(App[None]):
             await self._notes_doc.show(name, display.markdown)
 
     async def _open_note(self, name: str) -> None:
-        db = self.runtime.db
-        if db is None:
+        result = await self._submit_command(
+            target_worker="orchestrator",
+            kind="note.ensure",
+            payload={"name": name},
+            timeout_s=10.0,
+        )
+        if result is None:
             return
-        notes_mod.ensure_note(db, self.runtime.repo_root, name)
-        row = get_note(db, name)
+        mat_path = str(result.get("materialized_path") or "")
         path = (
-            self.runtime.repo_root / str(row["materialized_path"])
-            if row
+            self.runtime.repo_root / mat_path
+            if mat_path
             else self.runtime.note_path_for(name)
         )
         with self.suspend():
@@ -496,16 +498,17 @@ class MurderApp(App[None]):
         self.set_focus(self._notes_doc)
 
     async def _retire_note(self, name: str) -> None:
-        db = self.runtime.db
-        if db is None:
+        result = await self._submit_command(
+            target_worker="orchestrator",
+            kind="note.retire",
+            payload={"name": name},
+            timeout_s=10.0,
+        )
+        if result is None:
             return
-        try:
-            dest = notes_mod.retire_note(db, self.runtime.repo_root, name)
-        except Exception as e:
-            self.notify(f"could not retire note: {e}", severity="error", timeout=6)
-            return
+        dest_name = str(result.get("dest_name") or name)
         self._refresh_db_views()
-        self.notify(f"retired note: {dest.name}", timeout=4)
+        self.notify(f"retired note: {dest_name}", timeout=4)
         if self._notes_list.selected_name:
             await self._render_note(self._notes_list.selected_name)
         else:
