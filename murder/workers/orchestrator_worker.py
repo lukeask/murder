@@ -14,6 +14,8 @@ RetryFailed = Callable[[str], Awaitable[dict[str, Any]]]
 SetScheduleAt = Callable[[str, str | None], Awaitable[dict[str, Any]]]
 UpdateMetadata = Callable[[str, dict[str, Any]], Awaitable[dict[str, Any]]]
 ForceStatus = Callable[[str, str], Awaitable[dict[str, Any]]]
+NoteEnsure = Callable[[str], Awaitable[dict[str, Any]]]
+NoteRetire = Callable[[str], Awaitable[dict[str, Any]]]
 
 
 class OrchestratorCommandWorker(Worker):
@@ -27,6 +29,8 @@ class OrchestratorCommandWorker(Worker):
         set_schedule_at: SetScheduleAt,
         update_metadata: UpdateMetadata,
         force_status: ForceStatus,
+        note_ensure: NoteEnsure,
+        note_retire: NoteRetire,
     ) -> None:
         super().__init__(
             WorkerSpec(
@@ -35,6 +39,8 @@ class OrchestratorCommandWorker(Worker):
                 accepts=(
                     "scheduler.kickoff_ready",
                     "notetaker.capture.submit",
+                    "note.ensure",
+                    "note.retire",
                     "ticket.apply_carve_ready",
                     "ticket.retry_failed",
                     "ticket.set_schedule_at",
@@ -50,6 +56,8 @@ class OrchestratorCommandWorker(Worker):
         self._set_schedule_at = set_schedule_at
         self._update_metadata = update_metadata
         self._force_status = force_status
+        self._note_ensure = note_ensure
+        self._note_retire = note_retire
 
     async def run(self, ctx: WorkerCtx, stop_event: asyncio.Event) -> None:  # noqa: ARG002
         await stop_event.wait()
@@ -78,6 +86,16 @@ class OrchestratorCommandWorker(Worker):
         if command.kind == "notetaker.capture.submit":
             result = await self._capture_submit(dict(command.payload))
             return {"handled": True, **result}
+        if command.kind == "note.ensure":
+            name = command.payload.get("name")
+            if not isinstance(name, str) or not name.strip():
+                raise ValueError("note.ensure requires name")
+            return await self._note_ensure(name.strip())
+        if command.kind == "note.retire":
+            name = command.payload.get("name")
+            if not isinstance(name, str) or not name.strip():
+                raise ValueError("note.retire requires name")
+            return await self._note_retire(name.strip())
         if command.kind == "ticket.retry_failed":
             ticket_id = command.payload.get("ticket_id")
             if not isinstance(ticket_id, str) or not ticket_id.strip():

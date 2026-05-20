@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-import sqlite3
-
 from textual.message import Message
 from textual.widgets import DataTable
+
+from murder.service.client_api import DispatchSnapshot
 
 
 class TicketGrid(DataTable):
@@ -28,17 +28,17 @@ class TicketGrid(DataTable):
     def on_mount(self) -> None:
         self.add_columns("id", "wave", "status", "title")
 
-    def refresh_from_db(self, db: sqlite3.Connection | None) -> None:
-        if db is None:
-            return
-        rows = db.execute(
-            "SELECT id, title, wave, status FROM tickets ORDER BY wave, id"
-        ).fetchall()
+    def refresh_from_snapshot(self, snapshot: DispatchSnapshot) -> None:
         self.clear()
         self._tickets = []
-        for r in rows:
-            self.add_row(r["id"], str(r["wave"]), r["status"], r["title"])
-            self._tickets.append(r["id"])
+        for ticket in snapshot.tickets:
+            self.add_row(
+                ticket.id,
+                str(ticket.wave),
+                ticket.status.value,
+                ticket.title,
+            )
+            self._tickets.append(ticket.id)
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         idx = event.cursor_row

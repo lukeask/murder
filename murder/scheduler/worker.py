@@ -10,14 +10,23 @@ from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, ValidationError
 
-from murder import db as dbmod
+from murder.persistence.tickets import compute_ready
+from murder.persistence.commands import enqueue_command
 from murder.bus.protocol import (
     CommandEvent,
     SchedulerDecisionEvent,
     SchedulerModeEvent,
     UsageResetEvent,
 )
-from murder.scheduler import usage_threshold_curve
+from murder.policy.scheduler_policy import (
+    SchedulerCaps,
+    SchedulerInput,
+    SchedulerParams,
+    SchedulerWindow,
+    TicketRecord,
+    decide,
+    usage_reset_detected,
+)
 from murder.workers.base import Worker, WorkerCtx, WorkerSpec
 
 _VALID_MODES = frozenset({"manual", "autorun_ready", "crow_magic"})
@@ -161,13 +170,13 @@ class SchedulerWorker(Worker):
 
     async def _tick_autorun_ready(self, ctx: WorkerCtx) -> None:
         assert ctx.db is not None and ctx.run_id is not None
-        ready = dbmod.compute_ready(ctx.db)
+        ready = compute_ready(ctx.db)
         if not ready:
             return
         command_id = str(uuid4())
         idempotency_key = f"scheduler.kickoff_ready:{ctx.run_id}:{self._tick_seq}"
         try:
-            dbmod.enqueue_command(
+            enqueue_command(
                 ctx.db,
                 command_id=command_id,
                 run_id=ctx.run_id,
@@ -245,7 +254,7 @@ class SchedulerWorker(Worker):
             prev_pct = _first_percent_used(prev_payload)
             if curr_pct is None or prev_pct is None:
                 continue
-            if prev_pct >= 30.0 and curr_pct <= 5.0:
+            if usage_reset_detected(prev_pct, curr_pct):
                 # Avoid double-emit: only emit if prev_pct differs from last emitted
                 last = self._last_reset_prev_pct.get(harness)
                 if last != prev_pct:
@@ -299,103 +308,22 @@ class SchedulerWorker(Worker):
             (harness, window_key),
         ).fetchone()
 
-        multiharness_cutoff: float | None = None
         params_obj = SchedulerParamsPayload()
         if params_row is not None:
             parsed = _coerce_scheduler_params_row(params_row)
             if parsed is not None:
                 params_obj = parsed
-                multiharness_cutoff = params_obj.multiharness_cutoff
 
-        usage = percent_used / 100.0
-        threshold = usage_threshold_curve._f_threshold(
-            t_until_reset,
-            t_period,
-            c_changeoff=params_obj.c_changeoff,
-            t_alwaysyes=params_obj.t_alwaysyes,
-            alwayscutoff=params_obj.alwayscutoff,
-            intensity=params_obj.intensity,
+        busy = (
+            ctx.db.execute(
+                "SELECT COUNT(*) AS n FROM tickets WHERE harness = ? AND status = 'in_progress'",
+                (harness,),
+            ).fetchone()["n"]
+            > 0
         )
-        should_use = usage >= threshold
-
-        if not should_use:
-            rationale = (
-                f"Holding: {harness}/{window_key} usage {percent_used:.0f}%"
-                f" below threshold {threshold * 100:.0f}%"
-            )
-            self._upsert_decision_cache(
-                ctx,
-                harness,
-                window_key,
-                "crow_magic",
-                False,
-                usage,
-                t_until_reset,
-                t_period,
-                threshold,
-                rationale,
-                None,
-            )
-            await self._emit_decision(
-                ctx,
-                harness,
-                window_key,
-                False,
-                usage,
-                t_until_reset,
-                t_period,
-                threshold,
-                rationale,
-                None,
-            )
-            return
-
-        # multiharness_cutoff: skip if usage below cutoff and harness is already busy
-        if multiharness_cutoff is not None:
-            cutoff_frac = (
-                multiharness_cutoff / 100.0 if multiharness_cutoff > 1.0 else multiharness_cutoff
-            )
-            if usage < cutoff_frac:
-                busy = ctx.db.execute(
-                    "SELECT COUNT(*) AS n FROM tickets WHERE harness = ? AND status = 'in_progress'",
-                    (harness,),
-                ).fetchone()["n"]
-                if busy > 0:
-                    rationale = (
-                        f"Holding: {harness}/{window_key} usage {percent_used:.0f}%"
-                        f" below multiharness cutoff {cutoff_frac * 100:.0f}% (harness busy)"
-                    )
-                    self._upsert_decision_cache(
-                        ctx,
-                        harness,
-                        window_key,
-                        "crow_magic",
-                        False,
-                        usage,
-                        t_until_reset,
-                        t_period,
-                        threshold,
-                        rationale,
-                        None,
-                    )
-                    await self._emit_decision(
-                        ctx,
-                        harness,
-                        window_key,
-                        False,
-                        usage,
-                        t_until_reset,
-                        t_period,
-                        threshold,
-                        rationale,
-                        None,
-                    )
-                    return
-
-        # Pick highest-priority ready ticket for this harness (or harness-agnostic)
-        ticket_row = ctx.db.execute(
+        ready_rows = ctx.db.execute(
             """
-            SELECT t.id
+            SELECT t.id, t.wave, t.schedule_at, t.harness
               FROM tickets AS t
              WHERE t.status = 'ready'
                AND (t.harness = ? OR t.harness IS NULL)
@@ -403,84 +331,80 @@ class SchedulerWorker(Worker):
                    SELECT 1 FROM ticket_deps AS d
                      JOIN tickets AS dep ON dep.id = d.depends_on_id
                     WHERE d.ticket_id = t.id
-                      AND dep.status != 'done'
+                      AND dep.status NOT IN ('done', 'archived')
                )
-             ORDER BY t.wave ASC,
-                      CASE WHEN t.schedule_at IS NULL THEN 1 ELSE 0 END,
-                      t.schedule_at ASC,
-                      t.id ASC
-             LIMIT 1
             """,
             (harness,),
-        ).fetchone()
+        ).fetchall()
+        ready_tickets = [
+            TicketRecord(
+                id=row["id"],
+                wave=row["wave"],
+                schedule_at=row["schedule_at"],
+                harness=row["harness"],
+            )
+            for row in ready_rows
+        ]
 
-        if ticket_row is None:
-            rationale = (
-                f"No ready tickets for {harness}/{window_key}"
-                f" (usage {percent_used:.0f}% ≥ threshold {threshold * 100:.0f}%)"
-            )
-            self._upsert_decision_cache(
-                ctx,
-                harness,
-                window_key,
-                "crow_magic",
-                False,
-                usage,
-                t_until_reset,
-                t_period,
-                threshold,
-                rationale,
-                None,
-            )
-            await self._emit_decision(
-                ctx,
-                harness,
-                window_key,
-                False,
-                usage,
-                t_until_reset,
-                t_period,
-                threshold,
-                rationale,
-                None,
-            )
-            return
-
-        ticket_id = ticket_row["id"]
-        rationale = (
-            f"Kicking {ticket_id}: {harness}/{window_key} usage {percent_used:.0f}%"
-            f" ≥ threshold {threshold * 100:.0f}%"
+        policy_input = SchedulerInput(
+            window=SchedulerWindow(
+                harness=harness,
+                window_key=window_key,
+                percent_used=float(percent_used),
+                t_until_reset=t_until_reset,
+                t_period=t_period,
+            ),
+            params=SchedulerParams(
+                c_changeoff=params_obj.c_changeoff,
+                t_alwaysyes=params_obj.t_alwaysyes,
+                alwayscutoff=params_obj.alwayscutoff,
+                intensity=params_obj.intensity,
+                multiharness_cutoff=params_obj.multiharness_cutoff,
+            ),
+            harness_busy={harness: busy},
+            provider_budgets={},
+            caps=SchedulerCaps(),
+            ready_tickets=ready_tickets,
         )
+        decision = decide(policy_input)
+        usage = float(percent_used) / 100.0
+        threshold = decision.threshold_used if decision.threshold_used is not None else 0.0
+        should_kick = decision.action == "kick"
+        ticket_id = decision.ticket_id
+
         self._upsert_decision_cache(
             ctx,
             harness,
             window_key,
             "crow_magic",
-            True,
+            should_kick,
             usage,
             t_until_reset,
             t_period,
             threshold,
-            rationale,
+            decision.rationale,
             ticket_id,
         )
         await self._emit_decision(
             ctx,
             harness,
             window_key,
-            True,
+            should_kick,
             usage,
             t_until_reset,
             t_period,
             threshold,
-            rationale,
+            decision.rationale,
             ticket_id,
         )
+
+        if not should_kick or ticket_id is None:
+            return
 
         command_id = str(uuid4())
         idempotency_key = f"scheduler.kickoff_ready:{ctx.run_id}:{self._tick_seq}:{ticket_id}"
         try:
-            dbmod.enqueue_command(
+            enqueue_command(
                 ctx.db,
                 command_id=command_id,
                 run_id=ctx.run_id,

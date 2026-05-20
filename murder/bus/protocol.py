@@ -43,6 +43,8 @@ except ImportError:  # Python <3.11
 
 from pydantic import BaseModel, Field, TypeAdapter
 
+from murder.tickets.status import TicketStatus
+
 PROTOCOL_VERSION = 1
 
 
@@ -55,16 +57,6 @@ class Role(StrEnum):
     SENTINEL = "sentinel"
     CROW_HANDLER = "crow_handler"
     CROW = "crow"
-
-
-class TicketStatus(StrEnum):
-    PLANNED = "planned"
-    READY = "ready"
-    IN_PROGRESS = "in_progress"
-    BLOCKED = "blocked"
-    DONE = "done"
-    FAILED = "failed"
-    ARCHIVED = "archived"
 
 
 class AgentStatus(StrEnum):

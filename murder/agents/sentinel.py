@@ -7,13 +7,13 @@ import contextlib
 import json
 from typing import TYPE_CHECKING, Any
 
-from murder import db as dbmod
 from murder.agents.base import Agent, AgentRole, AgentStatus
+from murder.persistence.tickets import get_ticket as _db_get_ticket
 from murder.bus import EscalationEvent, QuestionEvent, TicketStatus
 from murder.clients.base import ToolSpec
 from murder.config import SentinelConfig
-from murder.storage.filesystem import atomic_write_text
-from murder.storage.paths import escalations_dir, ticket_md
+from murder.storage.paths import ticket_md
+
 from murder.tickets import lifecycle
 from murder.tickets import parser as ticket_parser
 
@@ -21,8 +21,7 @@ CROW_IDLE_WAIT_TIMEOUT_S = 60.0
 
 if TYPE_CHECKING:
     from murder.clients.base import APIClient
-    from murder.orchestrator import Orchestrator
-    from murder.runtime import Runtime
+    from murder.service.runtime_scope import AgentLifecycleHost as Runtime
 
 
 class SentinelAgent(Agent):
@@ -37,16 +36,26 @@ class SentinelAgent(Agent):
         client: APIClient | None,
         *,
         runtime: Runtime,
-        orchestrator: Orchestrator,
     ) -> None:
         self.id = agent_id
         self.session = session
         self.config = config
         self.client = client
         self.runtime = runtime
-        self._orch = orchestrator
         self.status = AgentStatus.IDLE
         self._sub_handle: Any = None
+
+    def _escalations(self) -> "EscalationService":
+        from murder.escalations.service import EscalationService
+        assert self.runtime.db is not None
+        return EscalationService(
+            conn=self.runtime.db,
+            repo_root=self.runtime.repo_root,
+            bus=self.runtime.bus,
+            run_id=self.runtime.run_id,
+            agent_id=self.id,
+            role=self.role,
+        )
 
     async def start(self, brief: str, ctx: dict[str, Any]) -> None:
         from murder.bus import StatusChangeEvent
@@ -339,7 +348,7 @@ class SentinelAgent(Agent):
     async def tool_read_ticket(self, ticket_id: str) -> dict[str, Any]:
         if self.runtime.db is None:
             return {}
-        row = dbmod.get_ticket(self.runtime.db, ticket_id)
+        row = _db_get_ticket(self.runtime.db, ticket_id)
         return row or {}
 
     async def tool_send_to_crow(self, ticket_id: str, msg: str) -> dict[str, Any]:
@@ -363,56 +372,14 @@ class SentinelAgent(Agent):
         return {"ok": True}
 
     async def tool_escalate_user(self, reason: str, severity: int) -> None:
-        if self.runtime.bus is None or self.runtime.run_id is None or self.runtime.db is None:
+        if self.runtime.db is None:
             return
-        sev = severity if severity in (1, 2, 3) else 2
-        dbmod.insert_escalation(
-            self.runtime.db,
-            ticket_id=None,
-            severity=sev,
-            reason=reason,
-            to_recipient="user",
-        )
-        await self.runtime.bus.publish(
-            EscalationEvent(
-                run_id=self.runtime.run_id,
-                agent_id=self.id,
-                role=self.role,
-                ticket_id=None,
-                to="user",
-                reason=reason,
-                severity=sev,  # type: ignore[arg-type]
-            )
-        )
+        await self._escalations().escalate_to_user(reason, severity=severity)
 
     async def tool_escalate_collaborator(self, reason: str, body: str) -> None:
-        if self.runtime.db is None or self.runtime.bus is None or self.runtime.run_id is None:
+        if self.runtime.db is None:
             return
-        eid = dbmod.insert_escalation(
-            self.runtime.db,
-            ticket_id=None,
-            severity=2,
-            reason=reason,
-            to_recipient="collaborator",
-            body_path=None,
-        )
-        path = escalations_dir(self.runtime.repo_root) / f"{eid}.md"
-        atomic_write_text(path, body)
-        self.runtime.db.execute(
-            "UPDATE escalations SET body_path = ? WHERE id = ?",
-            (str(path), eid),
-        )
-        await self.runtime.bus.publish(
-            EscalationEvent(
-                run_id=self.runtime.run_id,
-                agent_id=self.id,
-                role=self.role,
-                ticket_id=None,
-                to="collaborator",
-                reason=reason,
-                severity=2,
-            )
-        )
+        await self._escalations().escalate_to_collaborator(reason, body)
 
     async def tool_append_sentinel_note(self, ticket_id: str, note: str) -> None:
         path = ticket_md(self.runtime.repo_root, ticket_id)

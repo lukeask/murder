@@ -11,6 +11,7 @@ from murder.harnesses.base import (
     HarnessAdapter,
     HarnessSession,
 )
+from murder.harnesses.capabilities import CapabilityError, HarnessCapabilities, require
 from murder.harnesses.claude_code import ClaudeCodeAdapter
 from murder.harnesses.codex import CodexAdapter
 from murder.harnesses.cursor import CursorAdapter
@@ -27,6 +28,18 @@ REGISTRY: dict[str, type[HarnessAdapter]] = {
     "native_coding_crow": NativeCodingCrowAdapter,
 }
 
+CAPABILITY_REGISTRY: dict[str, HarnessCapabilities] = {
+    kind: adapter_cls.declared_capabilities() for kind, adapter_cls in REGISTRY.items()
+}
+
+
+def capabilities_for(kind: str) -> HarnessCapabilities:
+    """Return declared capabilities for a harness kind."""
+    try:
+        return CAPABILITY_REGISTRY[kind]
+    except KeyError as e:
+        raise KeyError(f"unknown harness kind: {kind}") from e
+
 
 def get(kind: str, startup_model: str | None = None) -> HarnessAdapter:
     """Instantiate the adapter for `kind`. Raises KeyError if unknown."""
@@ -34,11 +47,16 @@ def get(kind: str, startup_model: str | None = None) -> HarnessAdapter:
 
 
 __all__ = [
+    "CAPABILITY_REGISTRY",
+    "CapabilityError",
     "HarnessAdapter",
-    "HarnessSession",
+    "HarnessCapabilities",
     "HarnessPaneState",
+    "HarnessSession",
     "HarnessStartSpec",
-    "SimpleResult",
     "REGISTRY",
+    "SimpleResult",
+    "capabilities_for",
     "get",
+    "require",
 ]

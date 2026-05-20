@@ -5,16 +5,47 @@ from __future__ import annotations
 import contextlib
 import json
 import sqlite3
-from dataclasses import asdict, is_dataclass
+from dataclasses import asdict, dataclass, is_dataclass
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, Protocol
 
-from murder import tmux
-from murder.config import HarnessRoleConfig, resolve_default_crow_startup_model
+from murder.terminal import tmux
+from murder.config import Config, HarnessRoleConfig, resolve_default_crow_startup_model
 from murder.harnesses import REGISTRY
 from murder.harnesses import get as get_harness
 from murder.harnesses.base import HarnessAdapter, HarnessSession
 from murder.harnesses.models import HarnessStartSpec, HarnessUsageStatus
-from murder.runtime import Runtime
-from murder.session_names import format_session_name
+from murder.terminal.session_names import format_session_name
+
+class _RuntimeDbScope(Protocol):
+    """Narrow surface for building :class:`UsageSamplingContext` without importing Runtime."""
+
+    @property
+    def config(self) -> Config: ...
+
+    @property
+    def repo_root(self) -> Path: ...
+
+    @property
+    def db(self) -> sqlite3.Connection | None: ...
+
+
+class _SessionNameScope(Protocol):
+    @property
+    def config(self) -> Config: ...
+
+
+@dataclass(frozen=True, slots=True)
+class UsageSamplingContext:
+    """Explicit deps for usage sampling (no Runtime service locator)."""
+
+    config: Config
+    repo_root: Path
+    db: sqlite3.Connection | None
+
+    @classmethod
+    def from_runtime(cls, scope: _RuntimeDbScope) -> UsageSamplingContext:
+        return cls(config=scope.config, repo_root=scope.repo_root, db=scope.db)
 
 
 def harness_kinds_with_usage_collection(crow_cfg: HarnessRoleConfig) -> list[str]:
@@ -35,12 +66,11 @@ def _supports_usage(kind: str) -> bool:
     return cls is not None and cls.usage_collection_mode != "none"
 
 
-def harness_kinds_to_sample(rt: Runtime) -> list[str]:
-    """Harness kinds the schedule view samples usage for: the crow pool plus
-    the collaborator's configured harness (so e.g. a Claude-Code or Codex
-    collaborator shows up in the schedule view even when crows use cursor)."""
-    kinds = harness_kinds_with_usage_collection(rt.config.default_crow)
-    collab = rt.config.collaborator.harness
+def harness_kinds_to_sample(ctx: UsageSamplingContext | _SessionNameScope) -> list[str]:
+    """Harness kinds to sample: crow pool plus collaborator harness when supported."""
+    config = ctx.config
+    kinds = harness_kinds_with_usage_collection(config.default_crow)
+    collab = config.collaborator.harness
     if _supports_usage(collab) and collab not in kinds:
         kinds.append(collab)
     return kinds
@@ -64,15 +94,15 @@ def insert_harness_usage_snapshot(db: sqlite3.Connection, status: HarnessUsageSt
 
 
 async def _ensure_tmux_slash_session(
-    rt: Runtime, kind: str, startup_model: str | None
+    ctx: UsageSamplingContext,
+    kind: str,
+    startup_model: str | None,
 ) -> HarnessSession | None:
-    """Return a ready :class:`HarnessSession` or None if setup failed."""
-
-    name = format_session_name(rt, "usage", f"_{kind}")
+    name = format_session_name(ctx, "usage", f"_{kind}")
     adapter = get_harness(kind, startup_model=startup_model)
 
     if await tmux.session_exists(name):
-        hs = adapter.attach(name, rt.repo_root)
+        hs = adapter.attach(name, ctx.repo_root)
         ready = await hs.wait_ready(timeout_s=90.0)
         if ready.ok:
             idle = await hs.wait_idle(timeout_s=30.0)
@@ -81,25 +111,22 @@ async def _ensure_tmux_slash_session(
         with contextlib.suppress(tmux.TmuxError):
             await tmux.kill_session(name)
 
-    hs = adapter.attach(name, rt.repo_root)
-    spec = HarnessStartSpec(cwd=rt.repo_root, startup_model=startup_model)
+    hs = adapter.attach(name, ctx.repo_root)
+    spec = HarnessStartSpec(cwd=ctx.repo_root, startup_model=startup_model)
     started = await hs.start(spec)
     if not started.ok:
         return None
     return hs
 
 
-async def sample_harness_usages_for_config(rt: Runtime) -> tuple[int, int]:
-    """Start or reuse usage probe sessions, collect usage, persist snapshots.
-
-    Returns (stored_count, failure_count) for notifications.
-    """
-    db = rt.db
+async def sample_harness_usages(ctx: UsageSamplingContext) -> tuple[int, int]:
+    """Start or reuse usage probe sessions, collect usage, persist snapshots."""
+    db = ctx.db
     if db is None:
         return 0, 0
 
-    cfg = rt.config.default_crow
-    kinds = harness_kinds_to_sample(rt)
+    cfg = ctx.config.default_crow
+    kinds = harness_kinds_to_sample(ctx)
     stored = 0
     failures = 0
 
@@ -119,7 +146,7 @@ async def sample_harness_usages_for_config(rt: Runtime) -> tuple[int, int]:
             continue
 
         if mode == "tmux_slash":
-            hs = await _ensure_tmux_slash_session(rt, kind, model)
+            hs = await _ensure_tmux_slash_session(ctx, kind, model)
             if hs is None:
                 failures += 1
                 continue
@@ -133,3 +160,22 @@ async def sample_harness_usages_for_config(rt: Runtime) -> tuple[int, int]:
             stored += 1
 
     return stored, failures
+
+
+async def sample_harness_usages_for_config(
+    rt: _RuntimeDbScope | UsageSamplingContext,
+) -> tuple[int, int]:
+    """Compatibility entry: accept Runtime during migration or explicit context."""
+    if isinstance(rt, UsageSamplingContext):
+        return await sample_harness_usages(rt)
+    return await sample_harness_usages(UsageSamplingContext.from_runtime(rt))
+
+
+__all__ = [
+    "UsageSamplingContext",
+    "harness_kinds_to_sample",
+    "harness_kinds_with_usage_collection",
+    "insert_harness_usage_snapshot",
+    "sample_harness_usages",
+    "sample_harness_usages_for_config",
+]

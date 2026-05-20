@@ -26,7 +26,7 @@ import re
 from pathlib import Path
 from typing import ClassVar
 
-from murder import tmux
+from murder.terminal import tmux
 from murder.harnesses import cursor_usage
 from murder.harnesses.base import (
     HarnessAdapter,
@@ -45,9 +45,6 @@ from murder.harnesses.results import SimpleResult, fail_result, ok_result
 # cursor input frame is the last ~6 lines; 20 is generous slack so we
 # still catch the spinner line above the input box.
 _TAIL_LINES = 20
-_CURSOR_USER_LINE_MIN_WIDTH = 72
-_CURSOR_USER_LINE_MIN_TRAILING_SPACES = 4
-
 _IDLE_PLACEHOLDER_RE = re.compile(
     r"(Add a follow-up|Plan,\s*search,\s*build anything)",
     re.IGNORECASE,
@@ -109,24 +106,6 @@ def _strip_cursor_chrome(pane_text: str) -> str:
     )
 
 
-def _is_cursor_user_line(line: str) -> bool:
-    """Cursor renders submitted prompts as padded full-width text blocks."""
-    if not line.strip():
-        return False
-    return (
-        len(line) >= _CURSOR_USER_LINE_MIN_WIDTH
-        and len(line) - len(line.rstrip()) >= _CURSOR_USER_LINE_MIN_TRAILING_SPACES
-    )
-
-
-def _join_cursor_user_lines(lines: list[str]) -> str:
-    return " ".join(line.strip() for line in lines if line.strip()).strip()
-
-
-def _clean_cursor_assistant_line(line: str) -> str:
-    return line[2:] if line.startswith("  ") else line.rstrip()
-
-
 class CursorAdapter(HarnessAdapter):
     kind: ClassVar[str] = "cursor"
     usage_collection_mode: ClassVar[UsageCollectionMode] = "http"
@@ -181,57 +160,6 @@ class CursorAdapter(HarnessAdapter):
 
     def extract_last_message(self, pane_text: str) -> str | None:
         return extract_last_message_heuristic(_strip_cursor_chrome(pane_text))
-
-    def has_transcript_parser(self) -> bool:
-        return True
-
-    def parse_transcript(self, pane_text: str) -> list[tuple[str, str]]:
-        lines = strip_ansi(pane_text).splitlines()
-        turns: list[tuple[str, str]] = []
-        current_user: str | None = None
-        user_lines: list[str] = []
-        assistant_lines: list[str] = []
-        in_user_block = False
-
-        def flush_assistant() -> None:
-            nonlocal assistant_lines
-            if current_user is None:
-                assistant_lines = []
-                return
-            body = "\n".join(line.rstrip() for line in assistant_lines).strip()
-            if body:
-                turns.append(("user", current_user))
-                turns.append(("assistant", body))
-            assistant_lines = []
-
-        def flush_user_block() -> None:
-            nonlocal current_user, user_lines, in_user_block
-            if not in_user_block:
-                return
-            prompt = _join_cursor_user_lines(user_lines)
-            if prompt:
-                flush_assistant()
-                current_user = prompt
-            user_lines = []
-            in_user_block = False
-
-        for line in lines:
-            if _is_cursor_chrome(line):
-                continue
-            if _is_cursor_user_line(line):
-                if not in_user_block:
-                    in_user_block = True
-                    user_lines = []
-                user_lines.append(line)
-                continue
-            flush_user_block()
-            if current_user is None:
-                continue
-            assistant_lines.append(_clean_cursor_assistant_line(line))
-
-        flush_user_block()
-        flush_assistant()
-        return turns
 
     def format_nudge(self, msg: str) -> str:
         # Simple framing — cursor has no special instruction marker.

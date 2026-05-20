@@ -7,7 +7,8 @@ import contextlib
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from murder import conversation, tmux
+from murder.persistence import conversation
+from murder.terminal import tmux
 from murder.agents.base import Agent, AgentRole, AgentStatus
 from murder.harnesses.base import HarnessAdapter
 from murder.harnesses.models import HarnessStartSpec
@@ -17,7 +18,7 @@ from murder.harnesses.models import HarnessStartSpec
 TRANSCRIPT_SCROLLBACK_LINES = 4000
 
 if TYPE_CHECKING:
-    from murder.runtime import Runtime
+    from murder.service.runtime_scope import AgentLifecycleHost as Runtime
 
 # Keep the harness's own ready/idle waits comfortably under the TUI's hard
 # spawn timeout (`MurderApp.COLLABORATOR_START_TIMEOUT_S`) so a slow harness
@@ -90,9 +91,6 @@ class CollaboratorAgent(Agent):
                         to_status=AgentStatus.RUNNING.value,
                     )
                 )
-
-    async def is_live(self) -> bool:
-        return await tmux.session_exists(self.session)
 
     async def stop(self, *, failed: bool = False, kill_session: bool = True) -> None:
         if kill_session:

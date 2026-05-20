@@ -8,7 +8,7 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import ClassVar, Literal
 
-from murder import tmux
+from murder.terminal import tmux
 from murder.harnesses.models import (
     HarnessPaneState,
     HarnessStartSpec,
@@ -16,10 +16,11 @@ from murder.harnesses.models import (
 )
 from murder.harnesses.parsing import (
     parse_harness_model_list,
-    parse_prompt_marker_transcript,
     strip_ansi,
     strip_ui_chrome,
 )
+from murder.harnesses.capabilities import CapabilityError, HarnessCapabilities, require
+from murder.harnesses.transcripts import has_transcript_parser, parse_transcript_for_adapter
 from murder.harnesses.results import SimpleResult, fail_result, ok_result
 
 ASK_RE = re.compile(r">>>\s*ASK:\s*(?P<body>.+?)(?=\n>>>|\Z)", re.DOTALL)
@@ -189,6 +190,24 @@ class HarnessAdapter(ABC):
     def __init__(self, startup_model: str | None = None) -> None:
         self.startup_model = startup_model
 
+    @classmethod
+    def declared_capabilities(cls) -> HarnessCapabilities:
+        """Derive capability flags from adapter class vars (registry source of truth)."""
+        return HarnessCapabilities(
+            usage_reporting=cls.usage_collection_mode != "none",
+            model_discovery=cls.model_list_command is not None,
+            model_selection=cls.model_selection_command_template is not None,
+            pane_state_reading=True,
+            transcript_access=has_transcript_parser(
+                cls.kind,
+                prompt_markers=cls.transcript_prompt_markers,
+            ),
+            startup_interrupt_continue=True,
+        )
+
+    def capabilities(self) -> HarnessCapabilities:
+        return self.declared_capabilities()
+
     def attach(self, session: str, repo_root: Path) -> HarnessSession:
         return HarnessSession(self, session, repo_root)
 
@@ -237,6 +256,10 @@ class HarnessAdapter(ABC):
         return bool(_MODEL_REJECTION_WORD_RE.search(tail) and _MODEL_WORD_RE.search(tail))
 
     async def probe_invalid_model(self, session: str, model: str) -> SimpleResult[None]:
+        try:
+            require(self.capabilities(), "model_selection")
+        except CapabilityError as e:
+            return fail_result(str(e))
         requested = await self.request_model_selection(session, model)
         if not requested:
             return fail_result(f"{self.kind} does not support runtime model selection")
@@ -251,6 +274,10 @@ class HarnessAdapter(ABC):
 
     async def collect_usage_status(self, session: str) -> SimpleResult[HarnessUsageStatus]:
         del session
+        try:
+            require(self.capabilities(), "usage_reporting")
+        except CapabilityError as e:
+            return fail_result(str(e))
         return fail_result(f"{self.kind} does not support structured usage/status reporting")
 
     async def request_model_list(self, session: str) -> bool:
@@ -274,24 +301,19 @@ class HarnessAdapter(ABC):
     def extract_last_message(self, pane_text: str) -> str | None: ...
 
     def has_transcript_parser(self) -> bool:
-        return bool(self.transcript_prompt_markers)
+        return has_transcript_parser(
+            self.kind,
+            prompt_markers=self.transcript_prompt_markers,
+        )
 
     def parse_transcript(self, pane_text: str) -> list[tuple[str, str]]:
         """Best-effort ``(role, text)`` turns visible in the session pane.
 
         Returns the *full* visible transcript on every call — never deltas;
-        :func:`murder.conversation.merge_transcript` reconciles successive
-        parses into the persisted log. ``role`` is ``"user"`` or
-        ``"assistant"``. The default uses the prompt-marker heuristic keyed by
-        :attr:`transcript_prompt_markers` / :attr:`transcript_drop_substrings`;
-        a harness with cleaner UI structure should override this with something
-        tighter (and fixture-test it against a real capture).
+        :func:`murder.persistence.conversation.merge_transcript` reconciles
+        successive parses. Delegates to :mod:`murder.harnesses.transcripts`.
         """
-        return parse_prompt_marker_transcript(
-            pane_text,
-            prompt_markers=self.transcript_prompt_markers,
-            drop_substrings=self.transcript_drop_substrings,
-        )
+        return parse_transcript_for_adapter(self, pane_text)
 
     def detect_ask(self, pane_text: str) -> str | None:
         m = ASK_RE.search(strip_ui_chrome(pane_text))

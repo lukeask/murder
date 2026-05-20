@@ -8,12 +8,12 @@ from typing import Any
 
 import yaml
 
-from murder import db as dbmod
-from murder.bus import TicketStatus
+from murder.persistence import tickets as dbmod
 from murder.storage.filesystem import atomic_write_text
 from murder.storage.paths import ticket_yaml
 from murder.tickets import lifecycle
-from murder.tickets.metadata_sidecar_sync import reconcile_ticket_yaml
+from murder.tickets.sidecar_sync import reconcile_ticket_yaml
+from murder.tickets.status import TicketStatus
 
 
 class CarveError(ValueError):

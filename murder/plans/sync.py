@@ -11,10 +11,10 @@ import shutil
 from datetime import datetime
 from pathlib import Path
 
-from murder import db as dbmod
+from murder.persistence import plans as dbmod
 from murder.plans.parser import parse, render, write
 from murder.plans.schema import Plan, PlanStatus
-from murder.storage.markdown_sync import MarkdownSyncLoop
+from murder.storage.markdown_loop import MarkdownSyncLoop
 from murder.storage.paths import plan_md, plans_dir
 
 

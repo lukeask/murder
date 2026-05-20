@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from textual.widgets import RichLog
 
-from murder import tmux
+from murder.terminal import tmux
 from murder.tui.perf_log import PerfLog
 
 

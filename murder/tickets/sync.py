@@ -12,11 +12,11 @@ import sqlite3
 from datetime import datetime
 from pathlib import Path
 
-from murder import db as dbmod
-from murder.bus import TicketStatus
-from murder.storage.markdown_sync import MarkdownSyncLoop
+from murder.persistence import tickets as dbmod
+from murder.storage.markdown_loop import MarkdownSyncLoop
 from murder.storage.paths import tickets_dir
 from murder.tickets.schema import Ticket
+from murder.tickets.status import TicketStatus
 
 # Accept legacy `t007`, slug-style `T01-scaffold`, and numeric-prefix `01-msg-types`.
 # Require at least one digit to avoid importing arbitrary prose files.

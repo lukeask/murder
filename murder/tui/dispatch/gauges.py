@@ -2,12 +2,10 @@
 
 from __future__ import annotations
 
-import json
 import re
-import sqlite3
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
-from typing import Any
+from datetime import datetime, timezone
+from typing import TYPE_CHECKING, Any
 
 from textual.app import ComposeResult
 from textual.binding import Binding
@@ -15,11 +13,17 @@ from textual.containers import ScrollableContainer, Vertical
 from textual.screen import ModalScreen
 from textual.widgets import Static
 
+from murder.service.client_api import (
+    ScheduleSnapshot,
+    UsageGaugeDrillInSnapshot,
+    UsageGaugeSummary,
+)
+
+if TYPE_CHECKING:
+    from murder.service.read_model import ServiceReadModel
+
 # Unicode ring chars: empty → quarter → half → three-quarter → full
 _RING = ["○", "◔", "◑", "◕", "●"]
-# Sparkline bar characters (1/8 to 8/8 fill)
-_SPARK_BARS = "▁▂▃▄▅▆▇█"
-
 _WINDOW_NAME_RE = re.compile(r"^(\d+)(h|d)$", re.IGNORECASE)
 _WINDOW_NAME_MINUTES = {"h": 60.0, "d": 1440.0}
 
@@ -104,18 +108,6 @@ def _period_minutes_for(harness: str, window_key: str, window: dict[str, Any]) -
     return _PERIOD_MINUTES.get((harness, window_key), 0.0)
 
 
-def _pct_from_window(payload: dict[str, Any], window_key: str) -> float | None:
-    """Return percent_used for the named window from a snapshot payload."""
-    for w in payload.get("windows") or []:
-        if not isinstance(w, dict):
-            continue
-        if (w.get("name") or "usage") == window_key:
-            pct = w.get("percent_used")
-            if isinstance(pct, (int, float)):
-                return float(pct)
-    return None
-
-
 @dataclass
 class _GaugeData:
     harness: str
@@ -125,68 +117,14 @@ class _GaugeData:
     t_period_minutes: float = 0.0
 
 
-def _load_gauges(db: sqlite3.Connection) -> list[_GaugeData]:
-    """Read latest harness snapshots and decision cache; build gauge list."""
-    snap_rows = db.execute(
-        """
-        SELECT s.harness, s.status_json
-          FROM harness_usage_snapshots s
-          JOIN (
-                SELECT harness, MAX(fetched_at) AS fetched_at
-                  FROM harness_usage_snapshots
-                 GROUP BY harness
-               ) latest
-            ON latest.harness = s.harness
-           AND latest.fetched_at = s.fetched_at
-         ORDER BY s.harness
-        """
-    ).fetchall()
-
-    now = datetime.now(timezone.utc)
-    gauges: list[_GaugeData] = []
-
-    for snap_row in snap_rows:
-        harness = snap_row["harness"]
-        try:
-            payload = json.loads(snap_row["status_json"])
-        except (TypeError, ValueError):
-            continue
-
-        windows = payload.get("windows") or []
-        for window in windows:
-            if not isinstance(window, dict):
-                continue
-            pct = window.get("percent_used")
-            if not isinstance(pct, (int, float)):
-                continue
-            window_key = window.get("name") or "usage"
-            reset_at_str = window.get("reset_at") or window.get("ends_at")
-            t_until = 0.0
-            if reset_at_str:
-                try:
-                    reset_at = datetime.fromisoformat(reset_at_str)
-                    if reset_at.tzinfo is None:
-                        reset_at = reset_at.replace(tzinfo=timezone.utc)
-                    t_until = max(0.0, (reset_at - now).total_seconds() / 60.0)
-                except (ValueError, TypeError):
-                    pass
-            t_period = _period_minutes_for(harness, window_key, window)
-            gauges.append(
-                _GaugeData(
-                    harness=harness,
-                    window_key=window_key,
-                    pct=float(pct),
-                    t_until_reset_minutes=t_until,
-                    t_period_minutes=t_period,
-                )
-            )
-
-    # Column-major order: group by provider so same-harness windows are
-    # adjacent. Stable sort preserves per-harness window order.
-    order = {h: i for i, h in enumerate(_PROVIDER_ORDER)}
-    gauges.sort(key=lambda g: order.get(g.harness, len(order)))
-
-    return gauges
+def _gauge_from_summary(summary: UsageGaugeSummary) -> _GaugeData:
+    return _GaugeData(
+        harness=summary.harness,
+        window_key=summary.window_key,
+        pct=summary.pct,
+        t_until_reset_minutes=summary.t_until_reset_minutes,
+        t_period_minutes=summary.t_period_minutes,
+    )
 
 
 # Providers are laid out as side-by-side columns in this order; unlisted
@@ -266,123 +204,6 @@ def _build_strip_text(gauges: list[_GaugeData], focus_idx: int) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Drill-in helpers
-# ---------------------------------------------------------------------------
-
-
-def _spark_history(db: sqlite3.Connection, harness: str, window_key: str) -> str:
-    """Return a 14-char block sparkline of daily avg usage for a harness/window."""
-    rows = db.execute(
-        """
-        SELECT date(fetched_at) AS day, status_json
-          FROM harness_usage_snapshots
-         WHERE harness = ?
-           AND fetched_at >= datetime('now', '-14 days')
-         ORDER BY fetched_at
-        """,
-        (harness,),
-    ).fetchall()
-
-    by_day: dict[str, list[float]] = {}
-    for row in rows:
-        day = row["day"]
-        try:
-            payload = json.loads(row["status_json"])
-        except (TypeError, ValueError):
-            continue
-        pct = _pct_from_window(payload, window_key)
-        if pct is not None:
-            by_day.setdefault(day, []).append(pct)
-
-    if not by_day:
-        return "(no history)"
-
-    today = datetime.now(timezone.utc).date()
-    spark = []
-    for i in range(13, -1, -1):
-        d = (today - timedelta(days=i)).isoformat()
-        pcts = by_day.get(d, [])
-        avg = sum(pcts) / len(pcts) if pcts else 0.0
-        idx = min(int(avg / 100.0 * 8), 7)
-        spark.append(_SPARK_BARS[idx])
-    return "".join(spark)
-
-
-def _recent_reset_events(
-    db: sqlite3.Connection, harness: str, window_key: str, days: int = 14
-) -> list[dict[str, Any]]:
-    """Scan last `days` days of snapshots for usage-reset pairs."""
-    rows = db.execute(
-        """
-        SELECT fetched_at, status_json FROM harness_usage_snapshots
-         WHERE harness = ?
-           AND fetched_at >= datetime('now', '-' || ? || ' days')
-         ORDER BY fetched_at ASC
-        """,
-        (harness, days),
-    ).fetchall()
-
-    resets: list[dict[str, Any]] = []
-    for i in range(1, len(rows)):
-        try:
-            curr = json.loads(rows[i]["status_json"])
-            prev = json.loads(rows[i - 1]["status_json"])
-        except (TypeError, ValueError):
-            continue
-        curr_pct = _pct_from_window(curr, window_key)
-        prev_pct = _pct_from_window(prev, window_key)
-        if curr_pct is None or prev_pct is None:
-            continue
-        if prev_pct >= 30.0 and curr_pct <= 5.0:
-            resets.append({"reset_at": rows[i]["fetched_at"], "peak_pct": prev_pct})
-    return resets
-
-
-_BURN_SQL = """
-SELECT
-    t.id,
-    t.title,
-    CAST(
-        (JULIANDAY(COALESCE(a.last_heartbeat_at, ?))
-         - JULIANDAY(
-             CASE WHEN a.started_at > ? THEN a.started_at ELSE ? END
-         )) * 1440 AS INTEGER
-    ) AS active_minutes
-  FROM agents a
-  JOIN tickets t ON t.id = a.ticket_id
- WHERE t.harness = ?
-   AND COALESCE(a.last_heartbeat_at, ?) > ?
-GROUP BY t.id, t.title
-HAVING active_minutes > 0
-ORDER BY active_minutes DESC
-LIMIT 10
-"""
-
-
-def _burn_attribution(
-    db: sqlite3.Connection, harness: str, t_period_minutes: float
-) -> list[dict[str, Any]]:
-    """Return top tickets by active time during the billing window."""
-    if t_period_minutes <= 0:
-        return []
-    now = datetime.now(timezone.utc)
-    window_start = (now - timedelta(minutes=t_period_minutes)).isoformat()
-    now_str = now.isoformat()
-    rows = db.execute(
-        _BURN_SQL,
-        (now_str, window_start, window_start, harness, now_str, window_start),
-    ).fetchall()
-    return [
-        {
-            "ticket_id": r["id"],
-            "title": r["title"],
-            "active_minutes": int(r["active_minutes"]),
-        }
-        for r in rows
-    ]
-
-
-# ---------------------------------------------------------------------------
 # GaugeDrillIn modal
 # ---------------------------------------------------------------------------
 
@@ -430,10 +251,10 @@ class GaugeDrillIn(ModalScreen[None]):
     }
     """
 
-    def __init__(self, gauge: _GaugeData, db: sqlite3.Connection) -> None:
+    def __init__(self, gauge: _GaugeData, drill_in: UsageGaugeDrillInSnapshot) -> None:
         super().__init__()
         self._gauge = gauge
-        self._db = db
+        self._drill_in = drill_in
 
     def compose(self) -> ComposeResult:
         g = self._gauge
@@ -464,28 +285,23 @@ class GaugeDrillIn(ModalScreen[None]):
             "",
         ]
 
-        # 14-day sparkline
-        spark = _spark_history(self._db, g.harness, g.window_key)
-        lines += [f"[b]14-day history[/b]  {spark}", ""]
+        drill = self._drill_in
+        lines += [f"[b]14-day history[/b]  {drill.sparkline}", ""]
 
-        # Recent resets
-        resets = _recent_reset_events(self._db, g.harness, g.window_key)
         lines.append("[b]Recent resets[/b]")
-        if resets:
-            for r in resets:
-                day = r["reset_at"][:10]
-                lines.append(f"  Hit {r['peak_pct']:.0f}% before reset on {day}")
+        if drill.recent_resets:
+            for r in drill.recent_resets:
+                day = r.reset_at[:10]
+                lines.append(f"  Hit {r.peak_pct:.0f}% before reset on {day}")
         else:
             lines.append("  (none in last 14 days)")
         lines.append("")
 
-        # Burn attribution
-        burn = _burn_attribution(self._db, g.harness, g.t_period_minutes)
         lines.append("[b]What burned this period[/b]")
-        if burn:
-            for b in burn:
-                dur = _fmt_duration(float(b["active_minutes"]))
-                lines.append(f"  {b['ticket_id']} · {b['title']} ({dur})")
+        if drill.burn_rows:
+            for b in drill.burn_rows:
+                dur = _fmt_duration(float(b.active_minutes))
+                lines.append(f"  {b.ticket_id} · {b.title} ({dur})")
         else:
             lines.append("  (no active tickets this period)")
 
@@ -532,13 +348,13 @@ class GaugeStrip(Static):
         super().__init__("")
         self._gauges: list[_GaugeData] = []
         self._focus_idx: int = 0
-        self._db: sqlite3.Connection | None = None
+        self._read_model: ServiceReadModel | None = None
 
-    def refresh_from_db(self, db: sqlite3.Connection | None) -> None:
-        if db is None:
-            return
-        self._db = db
-        self._gauges = _load_gauges(db)
+    def set_read_model(self, read_model: ServiceReadModel) -> None:
+        self._read_model = read_model
+
+    def refresh_from_snapshot(self, snapshot: ScheduleSnapshot) -> None:
+        self._gauges = [_gauge_from_summary(g) for g in snapshot.usage_gauges]
         if self._focus_idx >= len(self._gauges):
             self._focus_idx = max(0, len(self._gauges) - 1)
         self._render_strip()
@@ -557,7 +373,12 @@ class GaugeStrip(Static):
             self._render_strip()
 
     def action_drill_in(self) -> None:
-        if not self._gauges or self._db is None:
+        if not self._gauges or self._read_model is None:
             return
         gauge = self._gauges[self._focus_idx]
-        self.app.push_screen(GaugeDrillIn(gauge, self._db))
+        drill_in = self._read_model.get_usage_gauge_drill_in(
+            harness=gauge.harness,
+            window_key=gauge.window_key,
+            t_period_minutes=gauge.t_period_minutes,
+        )
+        self.app.push_screen(GaugeDrillIn(gauge, drill_in))

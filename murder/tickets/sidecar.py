@@ -10,7 +10,7 @@ from typing import Any
 
 import yaml
 
-from murder.bus import TicketStatus
+from murder.tickets.status import TicketStatus
 
 _FILE_AUTHORED_STATUSES = {TicketStatus.PLANNED, TicketStatus.READY}
 
