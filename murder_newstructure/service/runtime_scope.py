@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Protocol
 
 from murder.bus import Bus
+from murder_newstructure.agents.events import AgentEventSink
 
 if TYPE_CHECKING:
     from murder.agents.base import Agent
@@ -32,6 +33,7 @@ class OrchestratorHost(AgentLifecycleHost, Protocol):
     """Orchestration surface: lifecycle host plus spawn/registry operations."""
 
     config: Config
+    event_sink: AgentEventSink
 
     def register_agent(self, agent: Agent) -> None: ...
 

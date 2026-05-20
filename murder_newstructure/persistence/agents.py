@@ -64,6 +64,15 @@ def set_agent_status(conn: sqlite3.Connection, agent_id: str, status: str) -> No
     )
 
 
+def get_active_agent_by_role(conn: sqlite3.Connection, role: str) -> str | None:
+    """Return the agent_id of a running/idle agent with the given role, or None."""
+    row = conn.execute(
+        "SELECT agent_id FROM agents WHERE role = ? AND status IN ('running','idle') LIMIT 1",
+        (role,),
+    ).fetchone()
+    return str(row["agent_id"]) if row else None
+
+
 def get_agent_messages(conn: sqlite3.Connection, agent_id: str) -> list[dict[str, Any]]:
     rows = conn.execute(
         "SELECT ordinal, role, body, captured_at FROM agent_messages "

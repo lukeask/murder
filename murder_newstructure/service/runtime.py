@@ -29,6 +29,7 @@ from typing import TYPE_CHECKING, Any
 from murder import db as dbmod
 from murder import tmux
 from murder.bus import AgentStatus, Bus, EventFilter, SubscriptionHandle
+from murder_newstructure.agents.events import AgentEventSink, LoggingAgentEventSink
 from murder_newstructure.service.agent_registry import AgentRegistry
 from murder_newstructure.service.document_access import DocumentAccess
 from murder_newstructure.service.filesystem_sync import FilesystemSyncSupervisor
@@ -61,6 +62,7 @@ class Runtime:
         self.run_id: str | None = None
         self._agents = AgentRegistry()
         self.agents = self._agents
+        self.event_sink: AgentEventSink = LoggingAgentEventSink()
         self._tasks: dict[str, asyncio.Task[None]] = {}
         self._shutdown = asyncio.Event()
         self._external_stop = asyncio.Event()
