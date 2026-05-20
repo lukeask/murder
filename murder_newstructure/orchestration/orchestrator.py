@@ -213,7 +213,7 @@ class Orchestrator:
             model=startup_model,
             startup_prompt=brief,
         )
-        handle = await spawn_agent(spec, rt=self.rt)
+        handle = await spawn_agent(spec, rt=self.rt, event_sink=self.rt.event_sink)
         return handle.session_name
 
     async def spawn_crow_handler(self, ticket_id: str, crow_session: str) -> str:
@@ -248,26 +248,19 @@ class Orchestrator:
 
     async def ensure_sentinel(self) -> str:
         assert self.rt.db is not None
-        row = self.rt.db.execute(
-            "SELECT agent_id FROM agents WHERE role = 'sentinel' "
-            "AND status IN ('running','idle') LIMIT 1"
-        ).fetchone()
-        if row:
-            return str(row["agent_id"])
+        agent_id = dbmod.get_active_agent_by_role(self.rt.db, "sentinel")
+        if agent_id:
+            return agent_id
         spec = AgentSpec(
             role=AgentRole.SENTINEL,
             scope=AgentScope(),
         )
-        handle = await spawn_agent(spec, rt=self.rt)
+        handle = await spawn_agent(spec, rt=self.rt, event_sink=self.rt.event_sink)
         return handle.session_name
 
     async def ensure_collaborator(self) -> str:
-        row = self.rt.db.execute(
-            "SELECT agent_id FROM agents WHERE role = 'collaborator' "
-            "AND status IN ('running','idle') LIMIT 1"
-        ).fetchone()
-        if row:
-            agent_id = str(row["agent_id"])
+        agent_id = dbmod.get_active_agent_by_role(self.rt.db, "collaborator")
+        if agent_id:
             agent = self.rt.get_agent(agent_id)
             if agent is not None:
                 if await agent.is_live():
@@ -289,7 +282,7 @@ class Orchestrator:
             startup_prompt=body,
         )
         try:
-            handle = await spawn_agent(spec, rt=self.rt)
+            handle = await spawn_agent(spec, rt=self.rt, event_sink=self.rt.event_sink)
         except Exception as e:
             reason = f"Collaborator startup failed: {e}"
             await self._escalations().record_collaborator_startup_failure(reason)
