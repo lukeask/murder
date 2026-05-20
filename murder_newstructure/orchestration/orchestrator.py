@@ -9,7 +9,6 @@ from murder import notes as notes_mod
 from murder import notetaker_capture
 from murder.terminal import tmux
 from murder.agents.base import AgentRole, AgentStatus
-from murder.agents.crow import CrowAgent
 from murder.agents.crow_handler import CrowHandlerAgent
 from murder.bus import StatusChangeEvent, TicketStatus
 from murder.clients import create_client
@@ -207,21 +206,16 @@ class Orchestrator:
         startup_model = resolve_default_crow_startup_model(
             self.rt.config.default_crow, row, harness_kind
         )
-        harness = get_harness(harness_kind, startup_model=startup_model)
-        session = format_session_name(self.rt, "crow", f"_{ticket_id}")
         brief = _compose_crow_brief(self.rt, ticket_id)
-        crow = CrowAgent(
-            agent_id=f"crow-{ticket_id}",
-            ticket_id=ticket_id,
-            session=session,
-            harness=harness,
-            repo_root=self.rt.repo_root,
-            startup_model=startup_model,
-            runtime=self.rt,
+        spec = AgentSpec(
+            role=AgentRole.CROW,
+            scope=AgentScope(ticket_id=ticket_id),
+            harness=harness_kind,
+            model=startup_model,
+            startup_prompt=brief,
         )
-        self.rt.register_agent(crow)
-        await crow.start(brief, {})
-        return crow.id
+        handle = await spawn_agent(spec, rt=self.rt)
+        return handle.session_name
 
     async def spawn_crow_handler(self, ticket_id: str, crow_session: str) -> str:
         row = dbmod.get_ticket(self.rt.db, ticket_id)
