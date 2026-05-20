@@ -7,7 +7,6 @@ from typing import TYPE_CHECKING, Any
 from murder import persistence as dbmod
 from murder import notes as notes_mod
 from murder import notetaker_capture
-from murder.terminal import tmux
 from murder.agents.base import AgentRole, AgentStatus
 from murder.agents.crow_handler import CrowHandlerAgent
 from murder.bus import StatusChangeEvent, TicketStatus
@@ -271,7 +270,7 @@ class Orchestrator:
             agent_id = str(row["agent_id"])
             agent = self.rt.get_agent(agent_id)
             if agent is not None:
-                if await tmux.session_exists(agent.session):
+                if await agent.is_live():
                     return agent_id
                 await self.rt.reap(agent_id)
             else:

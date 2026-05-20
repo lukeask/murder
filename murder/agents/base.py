@@ -44,6 +44,15 @@ class Agent(ABC):
         """Deliver a message to the agent. For Crows: send-keys via harness.
         For Sentinel: queue an event for its handler. For CrowHandler: ignore by default."""
 
+    async def is_live(self) -> bool:
+        """Return True if the agent session is currently running.
+
+        Tmux-based agents (CrowAgent, CollaboratorAgent) override this to check
+        session existence. Coroutine agents use status. Default is True so
+        non-overriding agents are considered live unless explicitly stopped.
+        """
+        return True
+
     async def tick(self) -> None:
         """Optional cadence hook. CrowHandler uses this for its poll loop;
         others noop."""

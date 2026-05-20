@@ -74,6 +74,10 @@ class CrowAgent(Agent):
                     )
                 )
 
+    async def is_live(self) -> bool:
+        from murder import tmux
+        return await tmux.session_exists(self.session)
+
     async def stop(self, *, failed: bool = False, kill_session: bool = True) -> None:
         from murder import tmux
 
