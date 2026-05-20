@@ -368,6 +368,19 @@ class ServiceReadModel:
             ticket = ticket_store.get_ticket(conn, ticket_id)
         return ticket.status.value if ticket is not None else None
 
+    def get_notetaker_recent_entries(self, limit: int = 50) -> list[dict[str, object]]:
+        with closing(self._connect()) as conn:
+            rows = conn.execute(
+                """
+                SELECT id, ts, raw, cleaned, short_vers
+                  FROM notes_entries
+                 ORDER BY ts DESC, id DESC
+                 LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+        return [dict(r) for r in rows]
+
     def ack_escalation(self, escalation_id: str) -> None:
         ack_escalation_db(int(escalation_id), self.db_path)
         self.invalidate(InvalidationKeys.escalations)
