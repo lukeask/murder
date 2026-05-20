@@ -26,9 +26,8 @@ from murder import notes as notetaker_capture
 from murder.terminal import tmux
 from murder.clients import create_client
 from murder.config import Config
-from murder.harnesses import REGISTRY
 from murder.tui.chat_input import ChatInput
-from murder_newstructure.tui.dispatch import CarveFormScreen, DispatchView, ScheduleTicketsTable
+from murder_newstructure.tui.dispatch import DispatchView, ScheduleTicketsTable
 from murder_newstructure.tui.dispatch.mode_strip import ModeStrip
 from murder.tui.note_capture import RECENT_NOTE_ROWS, NoteCaptureScreen
 from murder.tui.pane_mirror import PaneMirror
@@ -36,6 +35,7 @@ from murder.tui.perf_log import make_perf_log
 from murder_newstructure.tui.settings_screen import SettingsScreen
 from murder.tui.themes import CUSTOM_THEMES
 
+from murder_newstructure.tui.controllers import DispatchController, TuiContext
 from murder_newstructure.tui.crows_view import CrowsView, CrowTile
 from murder_newstructure.tui.escalation_strip import EscalationStrip
 from murder_newstructure.tui.header import Header
@@ -48,13 +48,6 @@ from murder_newstructure.tui.planning_mode_widgets import (
 )
 from murder_newstructure.tui.ticket_grid import TicketGrid
 from murder_newstructure.service.settings_service import SettingsService
-from murder.usage_sample_command import (
-    HARNESS_USAGE_SAMPLE_KIND,
-    TRIGGER_USAGE_MANUAL_KEY,
-    USAGE_PROBE_TARGET,
-    USAGE_SAMPLE_DEFAULT_TIMEOUT_S,
-    harness_usage_sample_payload,
-)
 from murder.user_config import UserConfig, load_user_config
 
 if TYPE_CHECKING:
@@ -64,7 +57,6 @@ if TYPE_CHECKING:
 
 
 COLLABORATOR_START_TIMEOUT_S = 120.0
-SCHEDULE_USAGE_DEBOUNCE_S = 20.0
 CTRL_C_DOUBLE_TAP_S = 1.5
 
 _VIM_QUIT_COMMANDS = frozenset({":wq", ":q!"})
@@ -254,7 +246,6 @@ class MurderApp(App[None]):
         self._collab_raw = False  # ctrl+y: show the raw tmux pane instead of the parsed chat
         self._user_config: UserConfig = load_user_config()
         self._view = "planning"
-        self._last_schedule_usage_attempt_at: float | None = None
         self._pre_chat_focus = None
         self._has_selected_plan = False
         self._active_document = "plan"
@@ -262,6 +253,16 @@ class MurderApp(App[None]):
         self._last_ctrl_c: float = 0.0
         self._note_capture_draft = ""
         self._crow_snapshot = None
+        self._dispatch_ctrl = DispatchController(
+            TuiContext(
+                submit_command=self._submit_command,
+                notify=self.notify,
+                refresh_views=self._refresh_db_views,
+                push_screen=self.push_screen,
+                run_worker=self.run_worker,
+                read_model=runtime.read_model,
+            )
+        )
         for theme in CUSTOM_THEMES:
             self.register_theme(theme)
 
@@ -339,22 +340,7 @@ class MurderApp(App[None]):
         self.run_worker(self._collect_usage_snapshots(), exclusive=True, group="usage")
 
     async def _collect_usage_snapshots(self) -> None:
-        result = await self._submit_command(
-            target_worker=USAGE_PROBE_TARGET,
-            kind=HARNESS_USAGE_SAMPLE_KIND,
-            payload=harness_usage_sample_payload(trigger=TRIGGER_USAGE_MANUAL_KEY),
-            timeout_s=USAGE_SAMPLE_DEFAULT_TIMEOUT_S,
-        )
-        if result is None:
-            return
-        stored = int(result.get("stored", 0))
-        failures = int(result.get("failures", 0))
-        self._refresh_db_views()
-        if stored or failures:
-            self.notify(
-                f"Sampled {stored} harness usages ({failures} failed).",
-                timeout=4,
-            )
+        await self._dispatch_ctrl.collect_usage_snapshots()
 
     def _refresh_db_views(self) -> None:
         perf = self.perf
@@ -588,29 +574,7 @@ class MurderApp(App[None]):
         self.run_worker(self._on_schedule_view_enter(), exclusive=True, group="usage")
 
     async def _on_schedule_view_enter(self) -> None:
-        now = time.monotonic()
-        if (
-            self._last_schedule_usage_attempt_at is not None
-            and now - self._last_schedule_usage_attempt_at < SCHEDULE_USAGE_DEBOUNCE_S
-        ):
-            return
-        self._last_schedule_usage_attempt_at = now
-        result = await self._submit_command(
-            target_worker="usage-probe",
-            kind="scheduler.probe_usage",
-            payload={"trigger": "schedule_view_enter"},
-            timeout_s=20.0,
-        )
-        if result is None:
-            return
-        stored = int(result.get("stored", 0))
-        failures = int(result.get("failures", 0))
-        self._refresh_db_views()
-        if stored or failures:
-            self.notify(
-                f"Schedule usage: {stored} ok, {failures} failed",
-                timeout=4,
-            )
+        await self._dispatch_ctrl.probe_usage_on_schedule_enter()
 
     def action_next_view(self) -> None:
         if self._insert_if_chat_focused("]"):
@@ -928,20 +892,7 @@ class MurderApp(App[None]):
         self.run_worker(self._kick_ready(), exclusive=False)
 
     async def _kick_ready(self) -> None:
-        result = await self._submit_command(
-            target_worker="orchestrator",
-            kind="scheduler.kickoff_ready",
-            payload={},
-            timeout_s=30.0,
-        )
-        if result is None:
-            return
-        kicked = list(result.get("kicked", []))
-        self.notify(
-            f"kicked: {', '.join(kicked)}" if kicked else "no ready tickets",
-            timeout=3,
-        )
-        self._refresh_db_views()
+        await self._dispatch_ctrl.kick_ready()
 
     def action_schedule_mode_picker(self) -> None:
         if self._view != "schedule":
@@ -996,50 +947,16 @@ class MurderApp(App[None]):
         )
 
     async def _submit_set_scheduler_mode(self, to_mode: str) -> None:
-        result = await self._submit_command(
-            target_worker="scheduler",
-            kind="scheduler.set_mode",
-            payload={"mode": to_mode},
-            timeout_s=10.0,
-        )
-        if result is None:
-            return
-        self.notify(f"Scheduler mode → {to_mode}", timeout=3)
-        self._refresh_db_views()
+        await self._dispatch_ctrl.set_scheduler_mode(to_mode)
 
     def _open_carve_screen(self, ticket_id: str) -> None:
-        carve = self.runtime.read_model.get_ticket_carve_snapshot(ticket_id)
-        if carve is None:
-            self.notify(f"ticket {ticket_id} not found", severity="error", timeout=4)
-            return
-        hint = "[dim]Known harness kinds:[/dim] " + ", ".join(sorted(REGISTRY.keys()))
-        self.push_screen(
-            CarveFormScreen(
-                carve,
-                harness_hint=hint,
-                on_autosave=lambda spec: self._enqueue_carve_autosave(ticket_id, spec),
-            ),
-            lambda _result: None,
-        )
+        self._dispatch_ctrl.open_carve_screen(ticket_id)
 
     def _enqueue_carve_autosave(self, ticket_id: str, spec: dict[str, object]) -> None:
-        self.run_worker(
-            self._submit_update_metadata_and_status(ticket_id, spec, notify_success=False),
-            exclusive=True,
-            group="carve",
-        )
+        self._dispatch_ctrl.enqueue_carve_autosave(ticket_id, spec)
 
     async def _submit_retry_failed(self, ticket_id: str) -> None:
-        result = await self._submit_command(
-            target_worker="orchestrator",
-            kind="ticket.retry_failed",
-            payload={"ticket_id": ticket_id},
-            timeout_s=15.0,
-        )
-        if result is None:
-            return
-        self.notify(f"{ticket_id} queued for retry; status=planned", timeout=4)
-        self._refresh_db_views()
+        await self._dispatch_ctrl.retry_failed(ticket_id)
 
     async def _submit_update_metadata_and_status(
         self,
@@ -1048,44 +965,9 @@ class MurderApp(App[None]):
         *,
         notify_success: bool = True,
     ) -> None:
-        meta_result = await self._submit_command(
-            target_worker="orchestrator",
-            kind="ticket.update_metadata",
-            payload={"ticket_id": ticket_id, **spec},
-            timeout_s=30.0,
+        await self._dispatch_ctrl.update_metadata_and_status(
+            ticket_id, spec, notify_success=notify_success
         )
-        if meta_result is None:
-            return
-        if not meta_result.get("ok"):
-            self.notify(
-                str(meta_result.get("error") or "metadata update failed"),
-                severity="error",
-                timeout=10,
-            )
-            return
-        db_status = self.runtime.read_model.get_ticket_status(ticket_id) or ""
-        want = str(spec.get("status") or "").strip()
-        if not want:
-            want = db_status
-        if want and want != db_status:
-            status_result = await self._submit_command(
-                target_worker="orchestrator",
-                kind="ticket.force_status",
-                payload={"ticket_id": ticket_id, "status": want},
-                timeout_s=15.0,
-            )
-            if status_result is None:
-                return
-            if not status_result.get("ok"):
-                self.notify(
-                    str(status_result.get("error") or "status update failed"),
-                    severity="error",
-                    timeout=10,
-                )
-                return
-        if notify_success:
-            self.notify(f"{ticket_id} updated", timeout=4)
-        self._refresh_db_views()
 
     def _record_ui_escalation(self, reason: str) -> None:
         self.run_worker(
