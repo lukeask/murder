@@ -247,8 +247,20 @@ class ServiceReadModel:
                  ORDER BY e.ts DESC
                 """
             ).fetchall()
+            history_rows = conn.execute(
+                """
+                SELECT e.id, e.ts, e.ticket_id, e.severity, e.reason, e.to_recipient,
+                       e.body_path, e.resolved_at, e.source_event_id, t.status AS ticket_status
+                  FROM escalations e
+                  LEFT JOIN tickets t ON t.id = e.ticket_id
+                 WHERE e.resolved_at IS NOT NULL
+                 ORDER BY e.resolved_at DESC
+                 LIMIT 20
+                """
+            ).fetchall()
         return EscalationsSnapshot(
             active=tuple(_escalation_summary_from_row(row) for row in active_rows),
+            history=tuple(_escalation_summary_from_row(row) for row in history_rows),
             as_of=as_of,
             invalidation_key=self.current_key(InvalidationKeys.escalations),
         )

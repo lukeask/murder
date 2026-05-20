@@ -74,10 +74,6 @@ class DispatchView(Vertical):
         self.query_one(ScheduleTicketsTable).refresh_from_snapshot(snapshot)
         self.query_one(CalendarPanel).refresh_from_snapshot(snapshot)
 
-    def refresh_from_db(self, db: object | None) -> None:
-        """Legacy shim; prefer :meth:`refresh_from_snapshot`."""
-        del db
-
     @property
     def selected_ticket_id(self) -> str | None:
         return self.query_one(ScheduleTicketsTable).cursor_ticket_id

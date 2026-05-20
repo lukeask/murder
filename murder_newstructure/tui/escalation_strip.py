@@ -17,7 +17,7 @@ class EscalationStrip(Static):
     DEFAULT_CSS = """
     EscalationStrip {
         height: auto;
-        max-height: 8;
+        max-height: 12;
         border: solid $error;
         padding: 0 1;
     }
@@ -34,15 +34,22 @@ class EscalationStrip(Static):
             super().__init__()
             self.ticket_id = ticket_id
 
-    def refresh_from_snapshot(self, snapshot: EscalationsSnapshot, *, limit: int = 6) -> None:
-        rows = snapshot.active[:limit]
-        if not rows:
+    def refresh_from_snapshot(
+        self,
+        snapshot: EscalationsSnapshot,
+        *,
+        limit: int = 6,
+        history_limit: int = 5,
+    ) -> None:
+        active_rows = snapshot.active[:limit]
+        history_rows = snapshot.history[:history_limit]
+        if not active_rows and not history_rows:
             self.display = False
             return
         self.display = True
         self._latest_failed_ticket_id = None
         lines = []
-        for row in rows:
+        for row in active_rows:
             sev = "!" * int(row.severity)
             tid = row.ticket_id or "-"
             is_failed = row.ticket_status == "failed"
@@ -53,6 +60,15 @@ class EscalationStrip(Static):
                 f"[b]{sev}[/b] #{row.id} → {row.to_recipient} · {tid} · {row.reason}"
                 + retry_hint
             )
+        if history_rows:
+            if lines:
+                lines.append("")
+            lines.append("[dim]— resolved —[/dim]")
+            for row in history_rows:
+                tid = row.ticket_id or "-"
+                lines.append(
+                    f"[dim]#{row.id} {tid} · {row.reason}[/dim]"
+                )
         self.update("\n".join(lines))
 
     def action_retry_latest_failed(self) -> None:
