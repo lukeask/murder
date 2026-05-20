@@ -56,7 +56,8 @@ class TuiRuntimeClient:
 
     @property
     def db(self):
-        """Transitional: note capture paths still mutate via SQLite."""
+        """Transitional: _open_note and _retire_note still mutate via SQLite.
+        Removal requires note.ensure and note.retire service commands."""
         return self._db
 
     async def connect(self) -> None:

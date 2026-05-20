@@ -20,11 +20,8 @@ from textual.screen import ModalScreen
 from textual.widgets import Footer, Static
 
 from murder.persistence.notes import get_note
-from murder.persistence.notetaker import list_recent_notes_entries
 from murder import notes as notes_mod
-from murder import notes as notetaker_capture
 from murder.terminal import tmux
-from murder.clients import create_client
 from murder.config import Config
 from murder.tui.chat_input import ChatInput
 from murder_newstructure.tui.dispatch import DispatchView, ScheduleTicketsTable
@@ -718,24 +715,48 @@ class MurderApp(App[None]):
         self.push_screen(screen, self._on_note_capture_closed)
 
     def _sync_recent_note_entries(self) -> list[dict]:
-        db = self.runtime.db
-        if db is None:
-            return []
-        return list_recent_notes_entries(db, limit=RECENT_NOTE_ROWS)
+        return self.runtime.read_model.get_notetaker_recent_entries(RECENT_NOTE_ROWS)
 
-    def _record_note_capture_immediate(self, text: str) -> dict[str, Any] | None:
-        body = text.strip()
+    async def _slash_note_submit(self, body: str) -> None:
+        body = body.strip()
         if not body:
-            return None
-        db = self.runtime.db
-        if db is None:
-            return None
-        result = notetaker_capture.create_durable_capture(
-            repo_root=self.runtime.repo_root,
-            conn=db,
-            raw=body,
+            return
+        self.run_worker(
+            self._capture_note_via_service(body),
+            exclusive=False,
+            group="note_capture",
         )
-        note_name = str(result["note_name"])
+
+    def _on_note_capture_closed(self, payload: tuple[bool, str] | None) -> None:
+        if payload is None:
+            return
+        submitted, draft_snapshot = payload
+        self._note_capture_draft = "" if submitted else draft_snapshot
+        if submitted:
+            body = draft_snapshot.strip()
+            if body:
+                self.run_worker(
+                    self._capture_note_via_service(body),
+                    exclusive=False,
+                    group="note_capture",
+                )
+
+    async def _capture_note_via_service(self, raw: str) -> None:
+        """Submit note capture through the service command and update UI on completion."""
+        self.notify("capturing note...", timeout=3)
+        result = await self._submit_command(
+            target_worker="orchestrator",
+            kind="notetaker.capture.submit",
+            payload={"raw": raw},
+            timeout_s=60.0,
+            notify_errors=True,
+        )
+        if result is None:
+            return
+        note_name = str(result.get("note_name") or "")
+        if not note_name:
+            self.notify("note saved (unknown name)", timeout=4)
+            return
         self._refresh_db_views()
         self._active_document = "note"
         self._plan_doc.display = False
@@ -747,58 +768,6 @@ class MurderApp(App[None]):
             group="notedoc",
             exit_on_error=False,
         )
-        return result
-
-    async def _slash_note_submit(self, body: str) -> None:
-        created = self._record_note_capture_immediate(body)
-        if created is None:
-            self.notify("capture failed — no database", severity="warning", timeout=6)
-            return
-        self.run_worker(
-            self._resolve_note_capture_background(created),
-            exclusive=False,
-            group="note_capture",
-        )
-
-    def _on_note_capture_closed(self, payload: tuple[bool, str] | None) -> None:
-        if payload is None:
-            return
-        submitted, draft_snapshot = payload
-        self._note_capture_draft = "" if submitted else draft_snapshot
-        if submitted:
-            created = self._record_note_capture_immediate(draft_snapshot)
-            if created is None:
-                self.notify("capture failed — no database", severity="warning", timeout=6)
-                return
-            self.run_worker(
-                self._resolve_note_capture_background(created),
-                exclusive=False,
-                group="note_capture",
-            )
-
-    async def _resolve_note_capture_background(self, created: dict[str, Any]) -> None:
-        db = self.runtime.db
-        if db is None:
-            return
-        try:
-            client = create_client(self.runtime.config.notetaker.provider)
-            resolved = await notetaker_capture.resolve_capture_note(
-                repo_root=self.runtime.repo_root,
-                conn=db,
-                raw=str(created["cleaned"]),
-                entry_id=int(created["entry_id"]),
-                note_name=str(created["note_name"]),
-                client=client,
-                config=self.runtime.config.notetaker,
-            )
-        except Exception as e:
-            self.notify(f"note saved; title update failed: {e}", severity="warning", timeout=6)
-            return
-        self._refresh_db_views()
-        note_name = str(resolved["note_name"])
-        self._active_document = "note"
-        self._notes_list.select_name(note_name)
-        await self._render_note(note_name)
         self.notify(f"note ready: {note_name}.md", timeout=4)
 
     def action_focus_chat(self) -> None:
@@ -937,6 +906,22 @@ class MurderApp(App[None]):
             exclusive=False,
             group="retry",
         )
+
+    def on_escalation_strip_navigate_requested(
+        self, event: EscalationStrip.NavigateRequested
+    ) -> None:
+        event.stop()
+        esc = event.escalation
+        if esc.to_recipient == "collaborator":
+            self._set_view("planning")
+        elif esc.ticket_id:
+            self._set_view("crows")
+        else:
+            self.notify(
+                f"Escalation #{esc.id}: {esc.reason}",
+                severity="warning",
+                timeout=8,
+            )
 
     def on_mode_strip_set_mode_requested(self, event: ModeStrip.SetModeRequested) -> None:
         event.stop()
