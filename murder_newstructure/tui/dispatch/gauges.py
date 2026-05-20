@@ -359,10 +359,6 @@ class GaugeStrip(Static):
             self._focus_idx = max(0, len(self._gauges) - 1)
         self._render_strip()
 
-    def refresh_from_db(self, db: object | None) -> None:
-        """Legacy shim; prefer :meth:`refresh_from_snapshot`."""
-        del db
-
     def _render_strip(self) -> None:
         self.update(_build_strip_text(self._gauges, self._focus_idx))
 

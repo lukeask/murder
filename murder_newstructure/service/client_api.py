@@ -137,6 +137,7 @@ class EscalationsSnapshot:
     active: tuple[EscalationSummary, ...]
     as_of: datetime
     invalidation_key: str
+    history: tuple[EscalationSummary, ...] = field(default_factory=tuple)
 
 
 @dataclass(frozen=True, slots=True)

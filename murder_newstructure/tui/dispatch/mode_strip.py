@@ -61,9 +61,6 @@ class ModeStrip(Static):
         self._rationale = snapshot.mode_rationale
         self._render_mode()
 
-    def refresh_from_db(self, db: object | None) -> None:
-        """Legacy shim; prefer :meth:`refresh_from_snapshot`."""
-        del db
 
     def _render_mode(self) -> None:
         label = _MODE_LABELS.get(self._mode, self._mode)
