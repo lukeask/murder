@@ -7,6 +7,7 @@ import asyncio
 import contextlib
 import json
 import os
+import re
 import subprocess
 import time
 from pathlib import Path
@@ -43,6 +44,7 @@ from murder.tui.planning_mode_widgets import (
 )
 from murder.tui.ticket_grid import TicketGrid
 from murder.service.settings_service import SettingsService
+from murder.storage.paths import tickets_dir, ticket_md
 from murder.user_config import UserConfig, load_user_config
 
 if TYPE_CHECKING:
@@ -54,18 +56,19 @@ if TYPE_CHECKING:
 COLLABORATOR_START_TIMEOUT_S = 120.0
 CTRL_C_DOUBLE_TAP_S = 1.5
 
-_VIM_QUIT_COMMANDS = frozenset({":wq", ":q!"})
+_TNUM_RE = re.compile(r"^t(\d+)$", re.IGNORECASE)
 
 
-def _is_vim_style_quit(text: str) -> bool:
-    """True only when the *entire* submission is :wq or :q! (case-insensitive).
-
-    Leading/trailing whitespace may surround the command; embedding :wq inside
-    normal prose must not quit.
-    """
-
-    stripped = text.strip().lower()
-    return stripped in _VIM_QUIT_COMMANDS
+def _next_ticket_id(repo_root: Path) -> str:
+    """Return the next t<NNN> id, scanning the tickets dir for the current max."""
+    root = tickets_dir(repo_root)
+    max_n = 0
+    if root.exists():
+        for p in root.glob("*.md"):
+            m = _TNUM_RE.match(p.stem)
+            if m:
+                max_n = max(max_n, int(m.group(1)))
+    return f"t{max_n + 1:03d}"
 
 
 def _git_head_sha(repo_root: Path) -> str:
@@ -112,12 +115,11 @@ class HelpScreen(ModalScreen[None]):
                         "ticket: scoped unit of work with deps, write_set, checklist",
                         "wave: tickets that may run after earlier dependencies finish",
                         "",
-                        "[b]slash commands[/b]",
-                        "/murder  kick ready tickets",
-                        "/note    quick capture (bare = overlay; with text = submit)",
-                        "/exit    quit murder",
-                        "!<cmd>   run shell command (output in pane mirror)",
-                        ":wq :q!  vim-style quit",
+                        "[b]commands[/b]",
+                        "!<cmd>         run shell command (output in pane mirror)",
+                        ":wq :q :q!    quit murder",
+                        ":ticket <title>  create PLANNED ticket (sync picks up in ~2s)",
+                        "/anything      passed to agent unchanged (/clear /compact etc)",
                         "",
                         "[b]keys[/b]",
                         "ctrl+f focus chat · ? help · ctrl+, settings",
@@ -645,16 +647,13 @@ class MurderApp(App[None]):
         self.run_worker(self._dispatch_chat(event.text), exclusive=False, group="chat")
 
     async def _dispatch_chat(self, text: str) -> None:
-        # Classify in most-specific-first order; keep ChatInput dumb.
         if text.startswith("!"):
             await self._run_shell_cmd(text[1:].strip())
             return
-        if _is_vim_style_quit(text):
-            self.exit()
+        if text.startswith(":"):
+            await self._handle_colon(text)
             return
-        if text.startswith("/"):
-            await self._handle_slash(text)
-            return
+        # Everything else — including /slash messages — goes to the collaborator unchanged.
         # Serialize ensure+send so a flurry of messages during cold-start
         # doesn't race two collaborator spawns or interleave send_keys.
         async with self._collab_lock:
@@ -692,23 +691,18 @@ class MurderApp(App[None]):
         except Exception as e:
             self.notify(f"shell error: {e}", severity="error", timeout=5)
 
-    async def _handle_slash(self, text: str) -> None:
-        parts = text[1:].split()
-        if not parts:
-            return
-        cmd, *args = parts
-        if cmd == "murder":
-            await self._kick_ready()
-        elif cmd == "exit":
+    async def _handle_colon(self, text: str) -> None:
+        stripped = text.strip()
+        cmd_lower = stripped.lower()
+        if cmd_lower in {":wq", ":q", ":q!"}:
             self.exit()
-        elif cmd == "note":
-            body = " ".join(args).strip()
-            if body:
-                await self._slash_note_submit(body)
-            else:
-                self.action_open_note_capture()
-        else:
-            self.notify(f"unknown command: /{cmd}", severity="warning", timeout=3)
+            return
+        if cmd_lower.startswith(":ticket "):
+            title = stripped[len(":ticket "):].strip()
+            if not title:
+                self.notify(":ticket requires a title", severity="warning", timeout=3)
+                return
+            await self._quick_create_ticket(title)
 
     def action_open_note_capture(self) -> None:
         screen = NoteCaptureScreen(
@@ -772,6 +766,18 @@ class MurderApp(App[None]):
             exit_on_error=False,
         )
         self.notify(f"note ready: {note_name}.md", timeout=4)
+
+    async def _quick_create_ticket(self, title: str) -> None:
+        """Write a .murder/tickets/<id>.md; TicketSync imports it as PLANNED."""
+        try:
+            ticket_id = _next_ticket_id(self.runtime.repo_root)
+            path = ticket_md(self.runtime.repo_root, ticket_id)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(f"# {title}\n\n## Plan\n\n## Working Notes\n\n## Sentinel Notes\n")
+        except Exception as exc:
+            self.notify(f"ticket create failed: {exc}", severity="error", timeout=6)
+            return
+        self.notify(f"ticket {ticket_id}: {title}", timeout=5)
 
     def action_focus_chat(self) -> None:
         if self.focused is not self._chat:

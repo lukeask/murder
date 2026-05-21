@@ -35,11 +35,13 @@ class ServiceHost:
     config: Config
     repo_root: Path
     socket_path: Path = field(default_factory=default_socket_path)
+    tcp_port: int | None = None
     runtime: Runtime | None = None
     broker: DurableBroker | None = None
     orchestrator: Orchestrator | None = None
     supervisor: Supervisor | None = None
     socket_server: SocketBusServer | None = None
+    tcp_bound: tuple[str, int] | None = None
     _usage_poll_task: asyncio.Task[None] | None = field(default=None, repr=False)
     _rpc_handlers: dict[str, RpcHandler] = field(default_factory=dict, repr=False)
 
@@ -137,6 +139,9 @@ class ServiceHost:
             socket_path=self.socket_path,
         )
         await self.socket_server.start()
+        if self.tcp_port is not None:
+            self.tcp_bound = await self.socket_server.start_tcp_listener(port=self.tcp_port)
+            LOGGER.info("TCP bus listener on %s:%d", *self.tcp_bound)
 
         self.supervisor = await start_supervisor_workers(
             repo_root=self.repo_root,

@@ -8,7 +8,7 @@ Planning capture uses `murder.notetaker_capture` (bus command `notetaker.capture
 from murder.agents.base import Agent, AgentRole, AgentStatus
 from murder.agents.collaborator import CollaboratorAgent
 from murder.agents.crow import CrowAgent
-from murder.agents.crow_handler import CrowHandlerAgent
+from murder.agents.crow_handler import CrowHandler
 from murder.agents.sentinel import SentinelAgent
 
 __all__ = [
@@ -17,6 +17,6 @@ __all__ = [
     "AgentStatus",
     "CollaboratorAgent",
     "CrowAgent",
-    "CrowHandlerAgent",
+    "CrowHandler",
     "SentinelAgent",
 ]
