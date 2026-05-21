@@ -18,7 +18,7 @@ from murder.persistence.agents import (
     set_agent_status as _db_set_agent_status,
 )
 from murder.agents.base import AgentRole, AgentStatus
-from murder.agents.crow_handler import CrowHandlerAgent
+from murder.agents.crow_handler import CrowHandler
 from murder.bus import StatusChangeEvent, TicketStatus
 from murder.clients import create_client
 from murder.config import resolve_default_crow_harness, resolve_default_crow_startup_model
@@ -239,7 +239,7 @@ class Orchestrator:
         client = create_client(self.rt.config.crow_handler.provider)
         crow_agent = self.rt.get_crow(ticket_id)
         start_commit = getattr(crow_agent, "start_commit", None) if crow_agent else None
-        handler = CrowHandlerAgent(
+        handler = CrowHandler(
             agent_id=f"crow_handler-{ticket_id}",
             ticket_id=ticket_id,
             session=session,

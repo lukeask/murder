@@ -1,4 +1,4 @@
-"""CrowHandlerAgent — per-Crow driver (D1: native coroutine, not a tmux pane)."""
+"""CrowHandler — per-Crow driver (D1: native coroutine, not a tmux pane)."""
 
 from __future__ import annotations
 
@@ -20,7 +20,7 @@ if TYPE_CHECKING:
     from murder.service.runtime_scope import AgentLifecycleHost as Runtime
 
 
-class CrowHandlerAgent(Agent):
+class CrowHandler(Agent):
     role = AgentRole.CROW_HANDLER
 
     def __init__(

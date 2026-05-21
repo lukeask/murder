@@ -55,6 +55,7 @@ class SocketBusServer:
         self._socket_path = socket_path or default_socket_path()
         self._disconnect_debounce_s = disconnect_debounce_s
         self._server: asyncio.AbstractServer | None = None
+        self._tcp_server: asyncio.AbstractServer | None = None
         self._clients: dict[int, _ClientSession] = {}
         self._presence_state = PresenceState.HEADLESS
         self._presence_version = 0
@@ -76,6 +77,20 @@ class SocketBusServer:
             path=str(self._socket_path),
         )
 
+    async def start_tcp_listener(self, host: str = "127.0.0.1", port: int = 0) -> tuple[str, int]:
+        """Start an additional TCP listener; returns (bound_host, bound_port).
+
+        Uses the same _handle_client path as the Unix socket — the protocol is
+        identical, so any bus client that speaks the wire protocol can connect
+        over TCP (useful for web adapters / remote tooling).
+        """
+        self._tcp_server = await asyncio.start_server(self._handle_client, host, port)
+        sockets = self._tcp_server.sockets
+        if not sockets:
+            raise RuntimeError("TCP server started without bound sockets")
+        bound = sockets[0].getsockname()
+        return str(bound[0]), int(bound[1])
+
     async def stop(self) -> None:
         self._closed = True
         if self._presence_task is not None:
@@ -87,6 +102,10 @@ class SocketBusServer:
                 task.cancel()
             await session.transport.close()
         self._clients.clear()
+        if self._tcp_server is not None:
+            self._tcp_server.close()
+            await self._tcp_server.wait_closed()
+            self._tcp_server = None
         if self._server is not None:
             self._server.close()
             await self._server.wait_closed()

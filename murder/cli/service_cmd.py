@@ -189,10 +189,10 @@ async def _bare_kickoff(ticket: str | None) -> None:
     typer.echo(f"Kicked off tickets: {', '.join(kicked) if kicked else '(none)'}")
 
 
-async def _run_supervisor_only() -> None:
+async def _run_supervisor_only(tcp_port: int | None = None) -> None:
     repo = _repo_root()
     cfg = Config.load(repo)
-    host = ServiceHost(cfg, repo)
+    host = ServiceHost(cfg, repo, tcp_port=tcp_port)
     async with host:
         try:
             await host.run_until_signal()
@@ -211,9 +211,11 @@ def cmd_kick(
     _run_async_entry(_bare_kickoff(ticket))
 
 
-def cmd_serviced() -> None:
+def cmd_serviced(
+    tcp_port: int = typer.Option(0, "--tcp-port", help="Also listen on TCP; 0 = disabled."),
+) -> None:
     """Internal supervisor-only service entrypoint."""
-    _run_async_entry(_run_supervisor_only())
+    _run_async_entry(_run_supervisor_only(tcp_port=tcp_port or None))
 
 
 def cmd_down() -> None:

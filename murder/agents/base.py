@@ -2,7 +2,7 @@
 
 All four roles implement this interface. `CrowAgent` and
 `CollaboratorAgent` own real tmux sessions (interactive harness).
-`CrowHandlerAgent` and `SentinelAgent` are coroutines (D1) — their `session`
+`CrowHandler` and `SentinelAgent` are coroutines (D1) — their `session`
 attribute names a logfile-tail tmux session for debug, not a real
 interactive one.
 """
