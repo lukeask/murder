@@ -97,6 +97,8 @@ def _entry_from_session(
     *,
     now: datetime,
 ) -> CrowEntry | None:
+    if session.role != "crow":
+        return None
     status = session.status
     if status in TERMINAL_AGENT_STATUSES:
         return None
@@ -223,7 +225,6 @@ class CrowTile(Container):
 
     async def on_click(self) -> None:  # type: ignore[override]
         self.focus()
-        self.post_message(self.Opened(self._entry))
 
 
 class _EmptyMessage(Static):
@@ -251,11 +252,23 @@ class TailWall(Grid):
     }
     """
 
+    BINDINGS = [
+        Binding("h", "move_left", "Left", show=False),
+        Binding("l", "move_right", "Right", show=False),
+        Binding("j", "move_down", "Down", show=False),
+        Binding("k", "move_up", "Up", show=False),
+        Binding("left", "move_left", "Left", show=False),
+        Binding("right", "move_right", "Right", show=False),
+        Binding("down", "move_down", "Down", show=False),
+        Binding("up", "move_up", "Up", show=False),
+    ]
+
     def __init__(self) -> None:
         super().__init__()
         self._tiles: dict[str, CrowTile] = {}
         self._order: list[str] = []
         self._empty: _EmptyMessage | None = None
+        self._cols: int = 1
 
     def reconcile(self, entries: list[CrowEntry]) -> tuple[list[str], int, int, int]:
         """Make the visible tile set match ``entries``.
@@ -302,8 +315,44 @@ class TailWall(Grid):
     def _resize_grid(self, count: int) -> None:
         cols = min(GRID_TARGET_COLS, max(1, count))
         rows = max(1, (count + cols - 1) // cols)
+        self._cols = cols
         self.styles.grid_size_columns = cols
         self.styles.grid_size_rows = rows
+
+    def _focused_tile_idx(self) -> int | None:
+        focused = self.app.focused
+        if not isinstance(focused, CrowTile):
+            return None
+        try:
+            return self._order.index(focused.entry.agent_id)
+        except ValueError:
+            return None
+
+    def _focus_idx(self, idx: int) -> None:
+        if 0 <= idx < len(self._order):
+            tile = self._tiles.get(self._order[idx])
+            if tile is not None:
+                tile.focus()
+
+    def action_move_left(self) -> None:
+        idx = self._focused_tile_idx()
+        if idx is not None and idx % self._cols > 0:
+            self._focus_idx(idx - 1)
+
+    def action_move_right(self) -> None:
+        idx = self._focused_tile_idx()
+        if idx is not None and idx % self._cols < self._cols - 1 and idx + 1 < len(self._order):
+            self._focus_idx(idx + 1)
+
+    def action_move_up(self) -> None:
+        idx = self._focused_tile_idx()
+        if idx is not None and idx - self._cols >= 0:
+            self._focus_idx(idx - self._cols)
+
+    def action_move_down(self) -> None:
+        idx = self._focused_tile_idx()
+        if idx is not None and idx + self._cols < len(self._order):
+            self._focus_idx(idx + self._cols)
 
     def tile_for(self, agent_id: str) -> CrowTile | None:
         return self._tiles.get(agent_id)
@@ -347,6 +396,7 @@ class CrowsView(Container):
         self._mirror = PaneMirror(perf=self._perf)
         self._entries_by_id: dict[str, CrowEntry] = {}
         self._invalidation_key: str | None = None
+        self._last_focused_agent_id: str | None = None
         self.border_title = "crows"
 
     @property
@@ -460,6 +510,15 @@ class CrowsView(Container):
         self._wall.display = not enlarged
         self._mirror.display = enlarged
 
+    def focus_last_tile(self) -> bool:
+        """Restore focus to the most recently focused tile, if still present."""
+        if self._last_focused_agent_id is not None:
+            tile = self._wall.tile_for(self._last_focused_agent_id)
+            if tile is not None:
+                tile.focus()
+                return True
+        return False
+
     def focus_first_tile(self) -> bool:
         if not self._wall.order:
             return False
@@ -470,6 +529,7 @@ class CrowsView(Container):
         return True
 
     def on_crow_tile_highlighted(self, event: CrowTile.Highlighted) -> None:
+        self._last_focused_agent_id = event.entry.agent_id
         self.post_message(self.TileSelected(event.entry))
 
     def on_crow_tile_opened(self, event: CrowTile.Opened) -> None:

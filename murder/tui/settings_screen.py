@@ -44,6 +44,32 @@ _API_MODEL_ROWS: list[tuple[str, str]] = [
     ("deepseek/deepseek-v4-pro", "DeepSeek V4 Pro"),
 ]
 
+_API_PROVIDER_ROWS: list[tuple[str, str]] = [
+    ("openrouter", "OpenRouter"),
+    ("cerebras", "Cerebras"),
+    ("groq", "Groq"),
+    ("anthropic", "Anthropic (direct)"),
+    ("openai", "OpenAI (direct)"),
+    ("local", "Local OpenAI-compatible"),
+]
+
+_CEREBRAS_MODELS: list[tuple[str, str]] = [
+    ("zai-glm-4.7", "ZAI GLM 4.7 (reasoning)"),
+]
+
+_GROQ_MODELS: list[tuple[str, str]] = [
+    ("openai/gpt-oss-120b", "OpenAI GPT-OSS 120B"),
+]
+
+_NOTETAKER_MODELS_BY_PROVIDER: dict[str, list[tuple[str, str]]] = {
+    "openrouter": _API_MODEL_ROWS,
+    "anthropic": _API_MODEL_ROWS,
+    "openai": _API_MODEL_ROWS,
+    "local": _API_MODEL_ROWS,
+    "cerebras": _CEREBRAS_MODELS,
+    "groq": _GROQ_MODELS,
+}
+
 ModelState: TypeAlias = Literal["disabled", "enabled", "default"]
 _MODEL_STATE_ORDER: tuple[ModelState, ...] = ("disabled", "enabled", "default")
 
@@ -270,8 +296,8 @@ class SettingsScreen(ModalScreen[bool]):
         Binding("p", "scope_project", "Project", show=False),
         Binding("j", "cursor_down", "Down", show=False),
         Binding("k", "cursor_up", "Up", show=False),
-        Binding("down", "cursor_down", "Down", show=False),
-        Binding("up", "cursor_up", "Up", show=False),
+        Binding("h", "item_left", "Left", show=False),
+        Binding("l", "item_right", "Right", show=False),
         Binding("enter", "toggle_item", "Toggle", show=False),
         Binding("space", "toggle_item", "Toggle", show=False),
     ]
@@ -281,7 +307,7 @@ class SettingsScreen(ModalScreen[bool]):
         align: center middle;
     }
     #settings-box {
-        width: 68;
+        width: 84;
         max-width: 92%;
         max-height: 88%;
         border: solid $primary;
@@ -359,10 +385,11 @@ class SettingsScreen(ModalScreen[bool]):
             self._model_states,
         ) = _resolve_crow_model_state(config.default_crow)
         self._model_discovery_attempted: set[HarnessKind] = set()
-        self._sentinel_model: str = config.sentinel.model
         self._crow_handler_model: str = config.crow_handler.model
+        self._notetaker_provider: str = config.notetaker.provider
         self._notetaker_model: str = config.notetaker.model
         self._collaborator_harness: HarnessKind = config.collaborator.harness
+        self._planner_harness: HarnessKind = config.planner.harness
 
         # Global default_crow (staged from `user_config.default_crow` only — never merged
         # project/bundled effective config).
@@ -495,10 +522,40 @@ class SettingsScreen(ModalScreen[bool]):
                             item_id=f"item-collab_harness-{_sid(kind)}",
                         )
                     yield Static(
-                        "── NOTETAKER MODEL  (project) ──",
+                        "── PLANNING AGENT HARNESS  (project) ──",
                         classes="section-header",
                     )
-                    for model_id, model_label in _API_MODEL_ROWS:
+                    for kind, label, exe in _HARNESS_ROWS:
+                        avail = "✓" if shutil.which(exe) else "✗"
+                        yield _SettingItem(
+                            "radio",
+                            f"{label}  [{avail}]",
+                            key=f"planner_harness:{kind}",
+                            group="planner_harness",
+                            checked=(kind == self._planner_harness),
+                            item_id=f"item-planner_harness-{_sid(kind)}",
+                        )
+                    yield Static(
+                        "── NOTETAKER PROVIDER  (project) ──",
+                        classes="section-header",
+                    )
+                    for provider_id, provider_label in _API_PROVIDER_ROWS:
+                        yield _SettingItem(
+                            "radio",
+                            provider_label,
+                            key=f"notetaker_provider:{provider_id}",
+                            group="notetaker_provider",
+                            checked=(provider_id == self._notetaker_provider),
+                            item_id=f"item-notetaker-provider-{_sid(provider_id)}",
+                        )
+                    yield Static(
+                        "── NOTETAKER MODEL  (project) ──",
+                        id="notetaker-model-header",
+                        classes="section-header",
+                    )
+                    for model_id, model_label in _NOTETAKER_MODELS_BY_PROVIDER.get(
+                        self._notetaker_provider, _API_MODEL_ROWS
+                    ):
                         yield _SettingItem(
                             "radio",
                             model_label,
@@ -506,19 +563,6 @@ class SettingsScreen(ModalScreen[bool]):
                             group="notetaker",
                             checked=(model_id == self._notetaker_model),
                             item_id=f"item-notetaker-{_sid(model_id)}",
-                        )
-                    yield Static(
-                        "── SENTINEL MODEL  (project) ──",
-                        classes="section-header",
-                    )
-                    for model_id, model_label in _API_MODEL_ROWS:
-                        yield _SettingItem(
-                            "radio",
-                            model_label,
-                            key=f"sentinel:{model_id}",
-                            group="sentinel",
-                            checked=(model_id == self._sentinel_model),
-                            item_id=f"item-sentinel-{_sid(model_id)}",
                         )
                     yield Static(
                         "── CROW HANDLER MODEL  (project) ──",
@@ -534,13 +578,14 @@ class SettingsScreen(ModalScreen[bool]):
                             item_id=f"item-crow_handler-{_sid(model_id)}",
                         )
             yield Static(
-                "j/k move  enter/spc toggle  "
-                "g global (theme + your default crow)  p project  esc close",
+                "j/k move  h/l ←→  ↑↓ scroll  enter/spc toggle  "
+                "g global  p project  esc close",
                 id="help-bar",
             )
 
     def on_mount(self) -> None:
         self._apply_scope()
+        self.query_one("#scroll").focus()
         self._refresh_model_validation()
         self._refresh_global_model_validation()
         self.run_worker(
@@ -620,12 +665,62 @@ class SettingsScreen(ModalScreen[bool]):
         self._cursor_idx = (self._cursor_idx - 1) % len(self._focusable)
         self._refresh_cursor()
 
-    # ── toggle ─────────────────────────────────────────────────────────────
-
-    def action_toggle_item(self) -> None:
+    def _focused_item(self) -> _SettingItem | None:
         if not self._focusable or self._cursor_idx >= len(self._focusable):
-            return
-        item = self._focusable[self._cursor_idx]
+            return None
+        return self._focusable[self._cursor_idx]
+
+    def _radio_neighbor(self, item: _SettingItem, direction: int) -> _SettingItem | None:
+        mates = [f for f in self._focusable if f.group == item.group]
+        if not mates:
+            return None
+        try:
+            idx = mates.index(item)
+        except ValueError:
+            return mates[0]
+        return mates[(idx + direction) % len(mates)]
+
+    def _cycle_tri_item(self, item: _SettingItem, direction: int) -> None:
+        kind, *rest_parts = item.key.split(":", 1)
+        payload = rest_parts[0] if rest_parts else ""
+        if kind == "model":
+            harness_s, model_id = payload.split(":", 1)
+            harness_kind = cast(HarnessKind, harness_s)
+            states = self._model_states.setdefault(harness_kind, {})
+            state = states.get(model_id, "disabled")
+            next_index = (_MODEL_STATE_ORDER.index(state) + direction) % len(_MODEL_STATE_ORDER)
+            next_state = _MODEL_STATE_ORDER[next_index]
+            states[model_id] = next_state
+            item.model_state = next_state
+            self._refresh_model_validation()
+            self._try_autosave_project()
+        elif kind == "global_model":
+            harness_s, model_id = payload.split(":", 1)
+            harness_kind = cast(HarnessKind, harness_s)
+            states = self._global_model_states.setdefault(harness_kind, {})
+            state = states.get(model_id, "disabled")
+            next_index = (_MODEL_STATE_ORDER.index(state) + direction) % len(_MODEL_STATE_ORDER)
+            next_state = _MODEL_STATE_ORDER[next_index]
+            states[model_id] = next_state
+            item.model_state = next_state
+            self._refresh_global_model_validation()
+            self._try_autosave_global()
+
+    def _autosave_for_kind(self, kind: str) -> None:
+        if kind in {
+            "harness",
+            "model",
+            "crow_handler",
+            "notetaker",
+            "notetaker_provider",
+            "collab_harness",
+            "planner_harness",
+        }:
+            self._try_autosave_project()
+        elif kind in {"theme", "global_harness", "global_model"}:
+            self._try_autosave_global()
+
+    def _apply_item(self, item: _SettingItem) -> str | None:
         kind, *rest_parts = item.key.split(":", 1)
         payload = rest_parts[0] if rest_parts else ""
 
@@ -637,37 +732,66 @@ class SettingsScreen(ModalScreen[bool]):
         elif kind == "theme":
             self._theme_sel = payload
             self._refresh_radio_group("theme")
-        elif kind == "sentinel":
-            self._sentinel_model = payload
-            self._refresh_radio_group("sentinel")
         elif kind == "crow_handler":
             self._crow_handler_model = payload
             self._refresh_radio_group("crow_handler")
+        elif kind == "notetaker_provider":
+            self._notetaker_provider = payload
+            self._refresh_radio_group("notetaker_provider")
+            self.run_worker(self._rebuild_notetaker_model_rows(), exclusive=True, group="notetaker_models")
         elif kind == "notetaker":
             self._notetaker_model = payload
             self._refresh_radio_group("notetaker")
         elif kind == "collab_harness":
             self._collaborator_harness = cast(HarnessKind, payload)
             self._refresh_radio_group("collab_harness")
+        elif kind == "planner_harness":
+            self._planner_harness = cast(HarnessKind, payload)
+            self._refresh_radio_group("planner_harness")
         elif kind == "global_harness":
             self._toggle_global_harness(item, cast(HarnessKind, payload))
         elif kind == "global_model":
             harness_s, model_id = payload.split(":", 1)
             self._toggle_global_model(item, cast(HarnessKind, harness_s), model_id)
         else:
-            return
+            return None
 
-        if kind in {
-            "harness",
-            "model",
-            "sentinel",
-            "crow_handler",
-            "notetaker",
-            "collab_harness",
-        }:
-            self._try_autosave_project()
-        elif kind in {"theme", "global_harness", "global_model"}:
-            self._try_autosave_global()
+        self._autosave_for_kind(kind)
+        return kind
+
+    # ── toggle ─────────────────────────────────────────────────────────────
+
+    def action_toggle_item(self) -> None:
+        item = self._focused_item()
+        if item is None:
+            return
+        self._apply_item(item)
+
+    def action_item_right(self) -> None:
+        item = self._focused_item()
+        if item is None:
+            return
+        if item._kind == "tri":
+            self._cycle_tri_item(item, 1)
+        elif item._kind == "radio":
+            neighbor = self._radio_neighbor(item, 1)
+            if neighbor is not None:
+                self._apply_item(neighbor)
+        elif item._kind == "cb" and not item.checked:
+            self._apply_item(item)
+
+    def action_item_left(self) -> None:
+        item = self._focused_item()
+        if item is None:
+            return
+        if item._kind == "tri":
+            self._cycle_tri_item(item, -1)
+        elif item._kind == "radio":
+            neighbor = self._radio_neighbor(item, -1)
+            if neighbor is not None:
+                self._apply_item(neighbor)
+        elif item._kind == "cb" and item.checked:
+            self._apply_item(item)
 
     def _toggle_harness(self, item: _SettingItem, kind: HarnessKind) -> None:
         if kind in self._harnesses:
@@ -735,10 +859,11 @@ class SettingsScreen(ModalScreen[bool]):
     def _refresh_radio_group(self, group: str) -> None:
         group_value = {
             "theme": self._theme_sel,
-            "sentinel": self._sentinel_model,
             "crow_handler": self._crow_handler_model,
             "notetaker": self._notetaker_model,
+            "notetaker_provider": self._notetaker_provider,
             "collab_harness": self._collaborator_harness,
+            "planner_harness": self._planner_harness,
         }[group]
         for item in self._focusable:
             if item.group == group:
@@ -816,10 +941,10 @@ class SettingsScreen(ModalScreen[bool]):
         if kind in self._global_model_discovery_attempted:
             return
         self._global_model_discovery_attempted.add(kind)
-        result = await discover_harness_models(kind, self._repo)
-        if not result.ok or not result.data:
+        result = await self._settings.discover_models(kind)
+        if not result.ok or not result.models:
             return
-        await self._replace_global_model_options(kind, result.data)
+        await self._replace_global_model_options(kind, list(result.models))
 
     async def _replace_global_model_options(
         self, kind: HarnessKind, options: list[tuple[str, str]]
@@ -943,6 +1068,37 @@ class SettingsScreen(ModalScreen[bool]):
         self._refresh_cursor()
         self._try_autosave_project()
 
+    async def _rebuild_notetaker_model_rows(self) -> None:
+        """Swap out notetaker model radio rows to match the newly-selected provider."""
+        new_rows = _NOTETAKER_MODELS_BY_PROVIDER.get(self._notetaker_provider, _API_MODEL_ROWS)
+        # Reset the model selection to the first option for the new provider.
+        if new_rows:
+            self._notetaker_model = new_rows[0][0]
+
+        section = self.query_one("#section-project")
+        # Remove all existing notetaker model items.
+        for item in list(section.query(_SettingItem)):
+            if item.group == "notetaker":
+                await item.remove()
+
+        # Find the NOTETAKER MODEL header to mount after it.
+        header_static = self.query_one("#notetaker-model-header", Static)
+        new_items = [
+            _SettingItem(
+                "radio",
+                model_label,
+                key=f"notetaker:{model_id}",
+                group="notetaker",
+                checked=(model_id == self._notetaker_model),
+                item_id=f"item-notetaker-{_sid(model_id)}",
+            )
+            for model_id, model_label in new_rows
+        ]
+        await header_static.mount(*new_items, after=header_static)
+        self._rebuild_focusable()
+        self._refresh_cursor()
+        self._try_autosave_project()
+
     def _dedupe_model_options(self, options: list[tuple[str, str]]) -> list[tuple[str, str]]:
         out: list[tuple[str, str]] = []
         seen: set[str] = set()
@@ -1038,10 +1194,11 @@ class SettingsScreen(ModalScreen[bool]):
         result = self._settings.save_project(
             default_crow=crow,
             role_models=ProjectRoleModels(
-                sentinel_model=self._sentinel_model,
                 crow_handler_model=self._crow_handler_model,
                 collaborator_harness=self._collaborator_harness,
                 notetaker_model=self._notetaker_model,
+                notetaker_provider=self._notetaker_provider,
+                planner_harness=self._planner_harness,
             ),
         )
         if not result.ok:
@@ -1088,4 +1245,3 @@ class SettingsScreen(ModalScreen[bool]):
             crow["startup_models"] = None
             crow["startup_models_by_harness"] = by_harness or None
         return crow
-

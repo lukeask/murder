@@ -14,6 +14,7 @@ class EscalationStrip(Static):
 
     BINDINGS = [
         Binding("r", "retry_latest_failed", "Retry failed escalation", show=False),
+        Binding("a", "ack", "Acknowledge", show=False),
         Binding("up", "cursor_up", "Prev escalation", show=False),
         Binding("k", "cursor_up", "Prev escalation", show=False),
         Binding("down", "cursor_down", "Next escalation", show=False),
@@ -38,6 +39,11 @@ class EscalationStrip(Static):
         self._active_rows: list[EscalationSummary] = []
         self._cursor_idx: int = 0
 
+    class AckRequested(Message):
+        def __init__(self, escalation_id: int) -> None:
+            super().__init__()
+            self.escalation_id = escalation_id
+
     class RetryRequested(Message):
         def __init__(self, ticket_id: str) -> None:
             super().__init__()
@@ -53,13 +59,11 @@ class EscalationStrip(Static):
         snapshot: EscalationsSnapshot,
         *,
         limit: int = 6,
-        history_limit: int = 5,
     ) -> None:
         self._active_rows = list(snapshot.active[:limit])
         if self._cursor_idx >= len(self._active_rows):
             self._cursor_idx = max(0, len(self._active_rows) - 1)
-        history_rows = snapshot.history[:history_limit]
-        if not self._active_rows and not history_rows:
+        if not self._active_rows:
             self.display = False
             return
         self.display = True
@@ -79,13 +83,6 @@ class EscalationStrip(Static):
                 + retry_hint
                 + enter_hint
             )
-        if history_rows:
-            if lines:
-                lines.append("")
-            lines.append("[dim]— resolved —[/dim]")
-            for row in history_rows:
-                tid = row.ticket_id or "-"
-                lines.append(f"[dim]  #{row.id} {tid} · {row.reason}[/dim]")
         self.update("\n".join(lines))
 
     def action_cursor_up(self) -> None:
@@ -102,6 +99,11 @@ class EscalationStrip(Static):
         if not self._active_rows:
             return
         self.post_message(self.NavigateRequested(self._active_rows[self._cursor_idx]))
+
+    def action_ack(self) -> None:
+        if not self._active_rows:
+            return
+        self.post_message(self.AckRequested(self._active_rows[self._cursor_idx].id))
 
     def action_retry_latest_failed(self) -> None:
         if self._latest_failed_ticket_id is None:

@@ -82,6 +82,7 @@ class ScheduleTicketsTable(DataTable):
     def on_mount(self) -> None:
         # Fixed widths so a long title does not consume the whole viewport; other
         # columns stay visible (DataTable scrolls horizontally if total exceeds width).
+        self.add_column("id", width=6)
         self.add_column("title", width=34)
         self.add_column("wave", width=5)
         self.add_column("status", width=14)
@@ -124,6 +125,7 @@ class ScheduleTicketsTable(DataTable):
             decisions=snapshot.scheduler_decisions,
         )
         self.add_row(
+            row.id,
             row.title,
             str(row.wave),
             display_status_for(row),

@@ -15,6 +15,7 @@ class PlanList(DataTable):
     BINDINGS = [
         ("j", "cursor_down", "Down"),
         ("k", "cursor_up", "Up"),
+        ("r", "deprecate_plan", "Deprecate"),
     ]
 
     class PlanHighlighted(Message):
@@ -27,9 +28,15 @@ class PlanList(DataTable):
             self.name = name
             super().__init__()
 
+    class PlanDeprecateRequested(Message):
+        def __init__(self, name: str) -> None:
+            self.name = name
+            super().__init__()
+
     def __init__(self) -> None:
         super().__init__(zebra_stripes=True, cursor_type="row")
         self._plans: list[str] = []
+        self._deprecate_armed_name: str | None = None
         self.border_title = ".murder/plans"
         # TODO(tui-planning): fold dynamic ticket ordering into this sidebar
         # once collaborator Planner/Notetaker personas can prioritize tickets.
@@ -39,18 +46,19 @@ class PlanList(DataTable):
 
     def refresh_from_snapshot(self, snapshot: PlansSnapshot) -> None:
         row = self.cursor_row
-        self.clear()
-        self._plans = []
-        for plan in snapshot.plans:
-            self.add_row(
-                plan.name,
-                plan.status,
-                str(plan.revision_count),
-                plan.sync_state,
-            )
-            self._plans.append(plan.name)
-        if self._plans:
-            self.move_cursor(row=min(max(row, 0), len(self._plans) - 1))
+        with self.prevent(DataTable.RowHighlighted):
+            self.clear()
+            self._plans = []
+            for plan in snapshot.plans:
+                self.add_row(
+                    plan.name,
+                    plan.status,
+                    str(plan.revision_count),
+                    plan.sync_state,
+                )
+                self._plans.append(plan.name)
+            if self._plans:
+                self.move_cursor(row=min(max(row, 0), len(self._plans) - 1))
 
     @property
     def selected_name(self) -> str | None:
@@ -59,15 +67,41 @@ class PlanList(DataTable):
             return self._plans[row]
         return None
 
+    def select_name(self, name: str) -> None:
+        if name in self._plans:
+            self.move_cursor(row=self._plans.index(name))
+
     def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
         idx = event.cursor_row
         if 0 <= idx < len(self._plans):
-            self.post_message(self.PlanHighlighted(self._plans[idx]))
+            name = self._plans[idx]
+            if name != self._deprecate_armed_name:
+                self.cancel_deprecate_confirmation()
+            self.post_message(self.PlanHighlighted(name))
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         idx = event.cursor_row
         if 0 <= idx < len(self._plans):
             self.post_message(self.PlanOpened(self._plans[idx]))
+
+    def on_key(self, event) -> None:  # type: ignore[no-untyped-def]
+        if self._deprecate_armed_name is not None and event.key != "r":
+            self.cancel_deprecate_confirmation()
+
+    def action_deprecate_plan(self) -> None:
+        name = self.selected_name
+        if not name:
+            return
+        if self._deprecate_armed_name == name:
+            self.cancel_deprecate_confirmation()
+            self.post_message(self.PlanDeprecateRequested(name))
+            return
+        self._deprecate_armed_name = name
+        self.border_subtitle = "press r again to deprecate"
+
+    def cancel_deprecate_confirmation(self) -> None:
+        self._deprecate_armed_name = None
+        self.border_subtitle = ""
 
 
 class NotesList(DataTable):
@@ -105,14 +139,15 @@ class NotesList(DataTable):
 
     def refresh_from_snapshot(self, snapshot: NotesSnapshot) -> None:
         row = self.cursor_row
-        self.clear()
-        self._names = []
-        for note in snapshot.notes:
-            updated = note.updated_at.isoformat()[:16].replace("T", " ")
-            self.add_row(note.name, str(note.char_count), updated)
-            self._names.append(note.name)
-        if self._names:
-            self.move_cursor(row=min(max(row, 0), len(self._names) - 1))
+        with self.prevent(DataTable.RowHighlighted):
+            self.clear()
+            self._names = []
+            for note in snapshot.notes:
+                updated = note.updated_at.isoformat()[:16].replace("T", " ")
+                self.add_row(note.name, str(note.char_count), updated)
+                self._names.append(note.name)
+            if self._names:
+                self.move_cursor(row=min(max(row, 0), len(self._names) - 1))
 
     @property
     def selected_name(self) -> str | None:
@@ -128,9 +163,10 @@ class NotesList(DataTable):
     def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
         idx = event.cursor_row
         if 0 <= idx < len(self._names):
-            if self._retire_armed_name != self._names[idx]:
+            name = self._names[idx]
+            if name != self._retire_armed_name:
                 self.cancel_retire_confirmation()
-            self.post_message(self.NoteHighlighted(self._names[idx]))
+            self.post_message(self.NoteHighlighted(name))
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         idx = event.cursor_row
@@ -157,7 +193,7 @@ class NotesList(DataTable):
         self.border_subtitle = ""
 
 
-class PlanDocument(Markdown):
+class PlanDocument(Markdown, can_focus=True):
     BINDINGS = [
         ("j", "line_down", "Down"),
         ("k", "line_up", "Up"),
