@@ -1,66 +1,61 @@
-# murder
+<div align="center">
 
-Agentic dev harness. A *murder* of crows supervises a *monkey*.
+# 🐦‍⬛ murder
 
-> Status: pre-M0 scaffold. Nothing runs yet. See `.murder/` for the design
-> docs that drive this codebase:
-> - `initialbrainstorm.md` — philosophy & flow
-> - `1777410436NOTES.md` — settled naming, role hierarchy, event flow
-> - `harnesses_spec.md` — adapter dir requirements
-> - `furtherspecproposal.md` — v0 spec; **§v0 Final Direction is the
->   build target.** Earlier sections are the brainstorm trail.
+**An agentic dev harness — a murder of crows for your codebase.**
 
-## The cast
+[![python](https://img.shields.io/badge/python-≥3.10-blue?logo=python&logoColor=white)](pyproject.toml)
+[![status](https://img.shields.io/badge/status-WIP-orange)](README.md)
+[![license](https://img.shields.io/badge/license-MIT-lightgrey)](LICENSE)
 
-| Role | What it is | Lives in |
-|---|---|---|
-| **Collaborator** | Planning chat partner. Wraps Claude Code. | `agents/collaborator.py` |
-| **Sentinel** | Tech-lead overseer. Codebase-aware. One global. | `agents/sentinel.py` |
-| **Augur** | Per-Monkey driver. Cheap + programmatic. | `agents/augur.py` |
-| **Monkey** | Implementer. Wraps cursor / claude-code / pi. | `agents/monkey.py` |
+</div>
 
-## Quick start (when this works)
+> [!NOTE]
+> Placeholder readme. Everything below is in flux.
+
+> *the crows have notes.*
+
+<details open>
+<summary><b>⚡ start</b></summary>
 
 ```bash
-pip install -e .      # editable install of the murder package
-murder init           # creates .murder/ + .murder/murder.db
-murder doctor         # checks tmux, OPENROUTER_API_KEY, harness binaries
-murder                # bare command: launches the TUI (alias: `murder up`)
-# in the chat pane: `/murder` kicks off all ready tickets;
-# anything else routes to the Collaborator (Claude Code, lazy-spawned).
-murder ticket create t001 "Dogfood the CLI" --wave 0 --plan "Implement the first path."
-murder ticket create t002 "Import markdown" --from ./ticket.md --check "Run tests"
-murder kick t007      # one-shot: kick off just t007's Monkey, no TUI
+python -m venv .venv && source .venv/bin/activate
+pip install -e .
+murder init && murder
 ```
 
-## Layout
+Bare <kbd>murder</kbd> opens the TUI.
 
+</details>
+
+<details>
+<summary><b>🔪 commands</b></summary>
+
+| cmd | does |
+| --- | --- |
+| `murder` | launch the TUI |
+| `murder down` | stop the service |
+| `murder down -s NAME` | stop a named service from `murder ls` |
+| `murder id` | print this directory's service session id |
+| `murder ls` | list running service instances |
+| `murder kick` | kick off a ticket |
+| `murder init` | scaffold a project |
+
+
+</details>
+
+<details>
+<summary><b>🧪 dev</b></summary>
+
+```bash
+pip install -e ".[dev]"
+pytest
 ```
-murder/                # the package
-├── cli.py             # `murder` entrypoint
-├── config.py          # roles.yaml + global/.murder/root .env loading
-├── db.py              # SQLite schema + access (D2)
-├── bus.py             # typed AgentEvent union + asyncio pubsub (D4)
-├── tmux.py            # session helpers, load-buffer for big sends (D10)
-├── runtime.py         # async runtime + supervisor + flock
-├── orchestrator.py    # spawn/kill agents; wave kickoff; ready computation
-├── escalations.py     # escalation queue helpers
-├── harnesses/         # interactive-CLI wrappers (cursor, cc, pi, native)
-├── clients/           # native LLM clients (OpenRouter)
-├── agents/            # Collaborator, Sentinel, Augur, Monkey
-├── tickets/           # schema, parser, waves, lifecycle, checklist protocol
-├── plans/             # plan markdown schema/parser
-├── enforcement/       # write-set live + post-hoc enforcement (D5)
-├── tui/               # Textual app
-├── storage/           # paths, runs, filesystem
-├── prompts/           # role prompt templates
-└── templates/         # files copied into a project's .murder/ on `murder init`
-```
 
-`murder init` creates `.murder/.env` from the bundled example. Environment
-loading order is `~/.config/murder/.env`, then `.murder/.env`, then repo-root
-`.env`, with later files overriding earlier values.
+→ [CONTRIBUTING.md](CONTRIBUTING.md)
 
-## See also
+</details>
 
-`.murder/initialbrainstorm.md` for the why.
+---
+
+<sub>readme subject to murder · v0.0.1</sub>
