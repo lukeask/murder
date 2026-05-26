@@ -7,19 +7,18 @@ from pathlib import Path
 
 from murder.storage.filesystem import atomic_write_text
 
-_KNOWN_SECTIONS = ("Plan", "Working notes", "Sentinel notes")
+_KNOWN_SECTIONS = ("Plan", "Working notes")
 _HEADER_RE = re.compile(r"^## (?P<name>.+?)\s*$", re.MULTILINE)
 
 
 def parse(md_text: str) -> dict[str, str]:
     """Split body into known sections. Unknown sections / preamble go in `_preamble`.
 
-    Returns dict with keys 'plan', 'working_notes', 'sentinel_notes', '_preamble'.
+    Returns dict with keys 'plan', 'working_notes', '_preamble'.
     """
     sections: dict[str, str] = {
         "plan": "",
         "working_notes": "",
-        "sentinel_notes": "",
         "_preamble": "",
     }
     matches = list(_HEADER_RE.finditer(md_text))
@@ -37,13 +36,11 @@ def parse(md_text: str) -> dict[str, str]:
             sections["plan"] = body
         elif name == "Working notes":
             sections["working_notes"] = body
-        elif name == "Sentinel notes":
-            sections["sentinel_notes"] = body
         # Unknown sections are silently dropped in v0.
     return sections
 
 
-def render(plan: str = "", working_notes: str = "", sentinel_notes: str = "") -> str:
+def render(plan: str = "", working_notes: str = "") -> str:
     """Emit a canonical ticket markdown body."""
     parts = [
         "## Plan",
@@ -51,9 +48,6 @@ def render(plan: str = "", working_notes: str = "", sentinel_notes: str = "") ->
         "",
         "## Working notes",
         working_notes.strip(),
-        "",
-        "## Sentinel notes",
-        sentinel_notes.strip(),
         "",
     ]
     return "\n".join(parts).rstrip() + "\n"
@@ -64,17 +58,16 @@ def read_ticket_md(path: Path) -> dict[str, str]:
 
 
 def write_ticket_md(path: Path, sections: dict[str, str]) -> None:
-    """Atomic write — only the three known sections are written."""
+    """Atomic write — only the two known sections are written."""
     text = render(
         plan=sections.get("plan", ""),
         working_notes=sections.get("working_notes", ""),
-        sentinel_notes=sections.get("sentinel_notes", ""),
     )
     atomic_write_text(path, text)
 
 
 def append_section(path: Path, section: str, text: str) -> None:
-    """Append `text` to `section` ('Plan', 'Working notes', or 'Sentinel notes').
+    """Append `text` to `section` ('Plan' or 'Working notes').
 
     Creates the file or section if missing. Atomic.
     """
@@ -83,7 +76,7 @@ def append_section(path: Path, section: str, text: str) -> None:
     if path.exists():
         sections = parse(path.read_text(encoding="utf-8"))
     else:
-        sections = {"plan": "", "working_notes": "", "sentinel_notes": "", "_preamble": ""}
+        sections = {"plan": "", "working_notes": "", "_preamble": ""}
     key = section.lower().replace(" ", "_")
     existing = sections.get(key, "")
     sections[key] = (existing + ("\n\n" if existing else "") + text.strip()).strip()

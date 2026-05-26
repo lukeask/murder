@@ -36,7 +36,7 @@ def _clean_title_line(line: str) -> str:
 
 
 def _infer_title(path: Path, ticket_id: str) -> str:
-    section_headers = {"plan", "working notes", "sentinel notes"}
+    section_headers = {"plan", "working notes"}
     with contextlib.suppress(FileNotFoundError):
         raw = path.read_text(encoding="utf-8")
         for line in raw.splitlines():

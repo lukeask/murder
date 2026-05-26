@@ -1,4 +1,4 @@
-"""TUI launch command."""
+"""TUI launch and service-start commands."""
 
 from __future__ import annotations
 
@@ -7,9 +7,8 @@ from pathlib import Path
 
 import typer
 
-from murder.bus.protocol import ClientKind
 from murder.bus.transport_socket import default_socket_path
-from murder.cli.service_cmd import _ensure_supervisor, _run_async_entry
+from murder.cli.service_cmd import _ensure_supervisor, _ensure_supervisor_started, _run_async_entry
 from murder.config import Config
 from murder.tui.app import MurderApp
 from murder.tui.client import TuiRuntimeClient
@@ -26,7 +25,7 @@ async def _launch_tui() -> None:
     os.environ.setdefault("GSETTINGS_BACKEND", "memory")
     os.environ.setdefault("DBUS_SESSION_BUS_ADDRESS", "disabled:")
     os.environ.setdefault("NO_AT_BRIDGE", "1")
-    socket_path = default_socket_path()
+    socket_path = default_socket_path(repo)
     await _ensure_supervisor(repo, socket_path)
     client = TuiRuntimeClient(repo, socket_path, cfg)
     await client.connect()
@@ -38,5 +37,11 @@ async def _launch_tui() -> None:
 
 
 def cmd_up() -> None:
-    """Launch the TUI runtime (alias of bare `murder`)."""
-    _run_async_entry(_launch_tui())
+    """Start the background supervisor and print whether it was already running."""
+
+    async def _up() -> None:
+        repo = _repo_root()
+        started = await _ensure_supervisor_started(repo, default_socket_path(repo))
+        typer.echo("started" if started else "already up")
+
+    _run_async_entry(_up())

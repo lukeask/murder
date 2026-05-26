@@ -38,7 +38,7 @@ class EscalationService:
     bus: Bus | None = None
     run_id: str | None = None
     agent_id: str = "orchestrator"
-    role: AgentRole = AgentRole.SENTINEL
+    role: AgentRole = AgentRole.COLLABORATOR
 
     async def escalate_to_user(
         self,

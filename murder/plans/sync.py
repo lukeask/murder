@@ -15,7 +15,7 @@ from murder.persistence import plans as dbmod
 from murder.plans.parser import parse, render, write
 from murder.plans.schema import Plan, PlanStatus
 from murder.storage.markdown_loop import MarkdownSyncLoop
-from murder.storage.paths import plan_md, plans_dir
+from murder.storage.paths import deprecated_plans_dir, plan_md, plans_dir
 
 
 def content_hash(text: str) -> str:
@@ -57,6 +57,130 @@ class PlanSync(MarkdownSyncLoop):
             self.materialize_row(row)
             return
         await self.reconcile_file(path)
+
+    def rename_plan(self, old_name: str, new_name: str) -> dict[str, object]:
+        """Rename a persisted plan and its materialized markdown projection."""
+        row = dbmod.get_plan_row(self.db, old_name)
+        if row is None:
+            raise KeyError(old_name)
+        if dbmod.get_plan_row(self.db, new_name) is not None:
+            raise ValueError(f"plan already exists: {new_name}")
+
+        related = self.db.execute(
+            "SELECT ticket_id FROM plan_related_tickets WHERE plan_name = ? ORDER BY ticket_id",
+            (old_name,),
+        ).fetchall()
+        related_tickets = [str(r["ticket_id"]) for r in related]
+        old_path = self.repo_root / str(row["materialized_path"])
+        if old_path.exists():
+            try:
+                plan = parse(old_path.read_text(encoding="utf-8"), default_name=old_name)
+            except Exception:
+                plan = plan_from_row({**row, "_related_rows": related})
+        else:
+            plan = plan_from_row({**row, "_related_rows": related})
+        plan.name = new_name
+        plan.revisions = int(row.get("revision_count") or row.get("revisions") or 0)
+        plan.related_tickets = related_tickets
+        plan.updated_at = datetime.utcnow()
+
+        new_path = plan_md(self.repo_root, new_name)
+        materialized_path = str(new_path.relative_to(self.repo_root))
+        rendered = render(plan)
+        rendered_hash = content_hash(rendered)
+
+        with self.db:
+            dbmod.rename_plan(
+                self.db,
+                old_name,
+                new_name,
+                materialized_path=materialized_path,
+            )
+            write(new_path, plan)
+            if old_path != new_path and old_path.exists():
+                old_path.unlink()
+            raw = new_path.read_text(encoding="utf-8")
+            file_hash = content_hash(raw)
+            self.db.execute(
+                """
+                UPDATE plans
+                   SET status = ?, updated_at = ?, body = ?, frontmatter_json = ?,
+                       body_hash = ?, file_hash = ?, last_materialized_hash = ?,
+                       materialized_path = ?, sync_state = 'synced',
+                       conflict_reason = NULL, parse_error = NULL
+                 WHERE name = ?
+                """,
+                (
+                    plan.status.value,
+                    plan.updated_at.isoformat(timespec="seconds"),
+                    plan.body,
+                    json.dumps(plan.frontmatter, sort_keys=True, default=str),
+                    rendered_hash,
+                    file_hash,
+                    file_hash,
+                    materialized_path,
+                    new_name,
+                ),
+            )
+        return dbmod.get_plan_row(self.db, new_name) or {}
+
+    def deprecate_plan(self, name: str) -> dict[str, object]:
+        """Mark a plan superseded and move its markdown out of the active plan list."""
+        row = dbmod.get_plan_row(self.db, name)
+        if row is None:
+            raise KeyError(name)
+
+        related = self.db.execute(
+            "SELECT ticket_id FROM plan_related_tickets WHERE plan_name = ? ORDER BY ticket_id",
+            (name,),
+        ).fetchall()
+        old_path = self.repo_root / str(row["materialized_path"])
+        if old_path.exists():
+            try:
+                plan = parse(old_path.read_text(encoding="utf-8"), default_name=name)
+            except Exception:
+                plan = plan_from_row({**row, "_related_rows": related})
+        else:
+            plan = plan_from_row({**row, "_related_rows": related})
+        plan.name = name
+        plan.status = PlanStatus.SUPERSEDED
+        plan.revisions = int(row.get("revision_count") or row.get("revisions") or 0)
+        plan.related_tickets = [str(r["ticket_id"]) for r in related]
+        plan.updated_at = datetime.utcnow()
+
+        dest_dir = deprecated_plans_dir(self.repo_root)
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        dest = dest_dir / f"{name}.md"
+        if dest.exists() and old_path != dest:
+            i = 2
+            while True:
+                candidate = dest_dir / f"{name}-{i}.md"
+                if not candidate.exists():
+                    dest = candidate
+                    break
+                i += 1
+
+        write(dest, plan)
+        if old_path != dest and old_path.exists():
+            old_path.unlink()
+        raw = dest.read_text(encoding="utf-8")
+        h = content_hash(raw)
+        with self.db:
+            row = dbmod.deprecate_plan(
+                self.db,
+                name,
+                materialized_path=str(dest.relative_to(self.repo_root)),
+                file_hash=h,
+                last_materialized_hash=h,
+                body_hash=h,
+                body=plan.body,
+                frontmatter_json=json.dumps(
+                    plan.frontmatter,
+                    sort_keys=True,
+                    default=str,
+                ),
+            )
+        return row
 
     async def reconcile_file(self, path: Path) -> None:
         rel = str(path.relative_to(self.repo_root))
@@ -108,7 +232,12 @@ class PlanSync(MarkdownSyncLoop):
         if db_changed:
             self.materialize_row(row)
             return
-        if file_changed or row["sync_state"] in {"parse_error", "missing_file", "conflict"}:
+        path_changed = row["materialized_path"] != rel
+        if (
+            file_changed
+            or path_changed
+            or row["sync_state"] in {"parse_error", "missing_file", "conflict"}
+        ):
             dbmod.upsert_plan(
                 self.db,
                 plan,
