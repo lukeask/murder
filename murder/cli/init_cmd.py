@@ -190,7 +190,7 @@ def cmd_ticket_create(
     sections = (
         ticket_parser.read_ticket_md(from_file)
         if from_file is not None
-        else {"plan": "", "working_notes": "", "sentinel_notes": "", "_preamble": ""}
+        else {"plan": "", "working_notes": "", "_preamble": ""}
     )
     if plan is not None:
         sections["plan"] = plan

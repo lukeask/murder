@@ -21,6 +21,7 @@ from murder.service.bootstrap import start_supervisor_workers
 from murder.service.runtime import Runtime
 from murder.service.settings_service import SettingsService
 from murder.service.supervisor import Supervisor
+from murder.storage.service_registry import remove_service_session, write_service_session
 from murder.usage_sample_command import run_service_usage_poll_loop
 
 LOGGER = logging.getLogger(__name__)
@@ -44,6 +45,7 @@ class ServiceHost:
     tcp_bound: tuple[str, int] | None = None
     _usage_poll_task: asyncio.Task[None] | None = field(default=None, repr=False)
     _rpc_handlers: dict[str, RpcHandler] = field(default_factory=dict, repr=False)
+    _service_session_name: str | None = field(default=None, repr=False)
 
     def register_rpc_handler(self, method: str, handler: RpcHandler) -> None:
         self._rpc_handlers[method] = handler
@@ -153,9 +155,10 @@ class ServiceHost:
             run_service_usage_poll_loop(self.broker, self.runtime.db, str(self.runtime.run_id)),
             name="usage-sample-poll",
         )
-        if os.environ.get("OPENROUTER_API_KEY"):
-            with contextlib.suppress(Exception):
-                await self.orchestrator.ensure_sentinel()
+        with contextlib.suppress(Exception):
+            await self.orchestrator.start_question_listener()
+        session = write_service_session(self.repo_root, self.socket_path)
+        self._service_session_name = session.name
 
     async def run_until_signal(self) -> None:
         if self.runtime is None:
@@ -177,6 +180,10 @@ class ServiceHost:
             with contextlib.suppress(FileNotFoundError, OSError):
                 await self.socket_server.stop()
             self.socket_server = None
+
+        if self._service_session_name is not None:
+            remove_service_session(self._service_session_name)
+            self._service_session_name = None
 
         if self.runtime is not None:
             with contextlib.suppress(Exception):
