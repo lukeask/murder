@@ -62,6 +62,10 @@ def plans_dir(repo_root: Path) -> Path:
     return agents_dir(repo_root) / "plans"
 
 
+def deprecated_plans_dir(repo_root: Path) -> Path:
+    return plans_dir(repo_root) / "deprecated_plans"
+
+
 def plan_md(repo_root: Path, name: str) -> Path:
     return plans_dir(repo_root) / f"{name}.md"
 

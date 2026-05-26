@@ -31,7 +31,14 @@ from murder.storage.paths import (
     logs_dir,
     notes_dir,
     plans_dir,
-    ticket_md,
+)
+from murder.storage.service_registry import (
+    AmbiguousServiceSessionError,
+    ServiceSession,
+    list_service_sessions,
+    project_session_name,
+    remove_service_session,
+    resolve_service_session_selector,
 )
 from murder.tickets import lifecycle
 from murder.tickets import waves as waves_mod
@@ -62,6 +69,16 @@ def _pid_is_alive(pid: int) -> bool:
     except PermissionError:
         return True
     return True
+
+
+def _live_service_sessions() -> list[ServiceSession]:
+    sessions: list[ServiceSession] = []
+    for session in list_service_sessions():
+        if _pid_is_alive(session.pid):
+            sessions.append(session)
+        else:
+            remove_service_session(session.name)
+    return sessions
 
 
 async def _socket_is_connectable(socket_path: Path, *, timeout_s: float = 0.5) -> bool:
@@ -112,6 +129,14 @@ async def _ensure_supervisor(repo: Path, socket_path: Path) -> None:
         if await _supervisor_is_live(repo, socket_path):
             return
     raise RuntimeError("supervisor did not become ready within 5s")
+
+
+async def _ensure_supervisor_started(repo: Path, socket_path: Path) -> bool:
+    """Return True when this call started the supervisor, False if it was already live."""
+    if await _supervisor_is_live(repo, socket_path):
+        return False
+    await _ensure_supervisor(repo, socket_path)
+    return True
 
 
 def _friendly_lock_message(repo: Path) -> str:
@@ -172,7 +197,7 @@ async def _bare_kickoff(ticket: str | None) -> None:
     repo = _repo_root()
     cfg = Config.load(repo)
     kick_preflight(cfg, repo)
-    socket_path = default_socket_path()
+    socket_path = default_socket_path(repo)
     await _ensure_supervisor(repo, socket_path)
     client = TuiRuntimeClient(repo, socket_path, cfg, client_kind=ClientKind.CLI_EPHEMERAL)
     await client.connect()
@@ -192,7 +217,7 @@ async def _bare_kickoff(ticket: str | None) -> None:
 async def _run_supervisor_only(tcp_port: int | None = None) -> None:
     repo = _repo_root()
     cfg = Config.load(repo)
-    host = ServiceHost(cfg, repo, tcp_port=tcp_port)
+    host = ServiceHost(cfg, repo, socket_path=default_socket_path(repo), tcp_port=tcp_port)
     async with host:
         try:
             await host.run_until_signal()
@@ -218,10 +243,7 @@ def cmd_serviced(
     _run_async_entry(_run_supervisor_only(tcp_port=tcp_port or None))
 
 
-def cmd_down() -> None:
-    """Signal a running murder process via `.murder/.lock` pid."""
-    repo = _repo_root()
-    pid = read_lock_pid(lock_path(repo))
+def _signal_service(repo: Path, pid: int, *, session_name: str | None = None) -> None:
     if pid is None:
         typer.secho("No lock pid found (murder not running?).", err=True)
         raise typer.Exit(1)
@@ -230,9 +252,71 @@ def cmd_down() -> None:
     except ProcessLookupError:
         with contextlib.suppress(FileNotFoundError):
             lock_path(repo).unlink()
+        if session_name is not None:
+            remove_service_session(session_name)
         typer.echo(f"Removed stale lock for dead PID {pid}.")
         return
     typer.echo(f"Sent SIGTERM to pid {pid}")
+
+
+def _down_named_session(selector: str) -> None:
+    sessions = _live_service_sessions()
+    try:
+        session = resolve_service_session_selector(selector, sessions)
+    except AmbiguousServiceSessionError as exc:
+        typer.secho(
+            f"Multiple murder services share basename {exc.selector!r}. Use the full session id:",
+            err=True,
+        )
+        for match in exc.matches:
+            typer.secho(
+                f"  murder down -s {match.name}  # hash={match.path_hash} repo={match.repo_root}",
+                err=True,
+            )
+        raise typer.Exit(1) from exc
+
+    if session is None:
+        typer.secho(f"No murder service session named {selector!r}. Run `murder ls`.", err=True)
+        raise typer.Exit(1)
+    _signal_service(session.repo_root, session.pid, session_name=session.name)
+
+
+def cmd_down(
+    session: str | None = typer.Option(
+        None,
+        "--session",
+        "-s",
+        help="Stop a service by session id or unambiguous directory basename.",
+    ),
+) -> None:
+    """Signal a running murder process."""
+    if session:
+        _down_named_session(session)
+        return
+
+    repo = _repo_root()
+    pid = read_lock_pid(lock_path(repo))
+    if pid is None:
+        typer.secho("No lock pid found (murder not running?).", err=True)
+        raise typer.Exit(1)
+    _signal_service(repo, pid, session_name=project_session_name(repo))
+
+
+def cmd_id() -> None:
+    """Print the current directory's murder service session id."""
+    typer.echo(project_session_name(_repo_root()))
+
+
+def cmd_ls() -> None:
+    """List running murder service instances."""
+    sessions = sorted(_live_service_sessions(), key=lambda s: (s.basename, s.name))
+    if not sessions:
+        typer.echo("No murder services running.")
+        return
+
+    typer.echo(f"{'SESSION':<30} {'PID':>7}  REPO")
+    for session in sessions:
+        typer.echo(f"{session.name:<30} {session.pid:>7}  {session.repo_root}")
 
 
 def cmd_status() -> None:
@@ -311,8 +395,6 @@ def cmd_replay(run_id: str) -> None:
 
 def cmd_lint() -> None:
     """Reconcile DB ↔ markdown ↔ filesystem; print mismatches."""
-    from datetime import datetime
-
     repo = _repo_root()
     if not db_path(repo).exists():
         typer.secho("No murder.db — run murder init", err=True)

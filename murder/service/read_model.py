@@ -83,6 +83,7 @@ class ServiceReadModel:
                        (SELECT COUNT(*) FROM plan_revisions r WHERE r.plan_name = p.name)
                            AS revisions
                   FROM plans p
+                 WHERE p.status != 'superseded'
                  ORDER BY p.updated_at DESC, p.name
                 """
             ).fetchall()
@@ -277,7 +278,12 @@ class ServiceReadModel:
             ).fetchone()
         if row is None:
             return None
-        path = self.db_path.parent / "plans" / str(row["materialized_path"])
+        materialized_path = Path(str(row["materialized_path"]))
+        path = (
+            materialized_path
+            if materialized_path.is_absolute()
+            else self.db_path.parent.parent / materialized_path
+        )
         if path.exists():
             text = path.read_text(encoding="utf-8")
         else:

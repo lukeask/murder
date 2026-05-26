@@ -44,6 +44,23 @@ class AgentRegistry:
     def get_crow_handler(self, ticket_id: str) -> Agent | None:
         return self._crow_handlers.get(ticket_id)
 
+    def rename_agent(
+        self,
+        old_agent_id: str,
+        new_agent_id: str,
+        *,
+        persist: Callable[[Agent], None] | None = None,
+    ) -> Agent | None:
+        """Rekey a live agent without stopping it."""
+        agent = self._agents.pop(old_agent_id, None)
+        if agent is None:
+            return None
+        agent.id = new_agent_id
+        self._agents[new_agent_id] = agent
+        if persist is not None:
+            persist(agent)
+        return agent
+
     def all_agents(self) -> list[Agent]:
         return list(self._agents.values())
 

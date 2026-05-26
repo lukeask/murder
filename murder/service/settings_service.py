@@ -34,10 +34,13 @@ class ModelDiscoveryResult:
 
 @dataclass(frozen=True, slots=True)
 class ProjectRoleModels:
-    sentinel_model: str
     crow_handler_model: str
     collaborator_harness: HarnessKind
     notetaker_model: str
+    crow_handler_auto_free: bool = False
+    notetaker_provider: str = "cerebras"
+    notetaker_auto_free: bool = False
+    planner_harness: HarnessKind = "claude_code"
 
 
 @dataclass
@@ -99,16 +102,11 @@ class SettingsService:
 
     @staticmethod
     def _apply_role_models(raw: dict[str, Any], role_models: ProjectRoleModels) -> None:
-        sentinel = raw.get("sentinel")
-        if not isinstance(sentinel, dict):
-            sentinel = {}
-        sentinel["model"] = role_models.sentinel_model
-        raw["sentinel"] = sentinel
-
         crow_handler = raw.get("crow_handler")
         if not isinstance(crow_handler, dict):
             crow_handler = {}
         crow_handler["model"] = role_models.crow_handler_model
+        crow_handler["auto_free"] = role_models.crow_handler_auto_free
         raw["crow_handler"] = crow_handler
 
         collaborator = raw.get("collaborator")
@@ -120,8 +118,16 @@ class SettingsService:
         notetaker = raw.get("notetaker")
         if not isinstance(notetaker, dict):
             notetaker = {}
+        notetaker["provider"] = role_models.notetaker_provider
         notetaker["model"] = role_models.notetaker_model
+        notetaker["auto_free"] = role_models.notetaker_auto_free
         raw["notetaker"] = notetaker
+
+        planner = raw.get("planner")
+        if not isinstance(planner, dict):
+            planner = {}
+        planner["harness"] = role_models.planner_harness
+        raw["planner"] = planner
 
 
 async def apply_settings_change(

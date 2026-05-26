@@ -37,12 +37,17 @@ def atomic_write_text(path: Path, text: str, encoding: str = "utf-8") -> None:
         raise
 
 
-def acquire_flock(path: Path) -> int:
-    """Open `path`, take an exclusive non-blocking flock, return the fd.
+def _pid_is_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
 
-    Caller stores fd to keep the lock alive (closing the fd releases the
-    lock). Raises BlockingIOError if held by another process.
-    """
+
+def _acquire_flock_inner(path: Path) -> int:
     path.parent.mkdir(parents=True, exist_ok=True)
     fd = os.open(str(path), os.O_RDWR | os.O_CREAT, 0o644)
     try:
@@ -56,6 +61,25 @@ def acquire_flock(path: Path) -> int:
     os.ftruncate(fd, 0)
     os.write(fd, f"{os.getpid()}\n".encode())
     return fd
+
+
+def acquire_flock(path: Path) -> int:
+    """Open `path`, take an exclusive non-blocking flock, return the fd.
+
+    Caller stores fd to keep the lock alive (closing the fd releases the
+    lock). Raises BlockingIOError if held by another process.
+    """
+    try:
+        return _acquire_flock_inner(path)
+    except BlockingIOError:
+        recorded = read_lock_pid(path)
+        if recorded is None or not _pid_is_alive(recorded):
+            try:
+                path.unlink()
+            except FileNotFoundError:
+                pass
+            return _acquire_flock_inner(path)
+        raise
 
 
 def release_flock(fd: int) -> None:

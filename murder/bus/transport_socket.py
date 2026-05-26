@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
-import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -13,8 +12,6 @@ from murder.bus.protocol import (
     PRESENCE_DISCONNECT_DEBOUNCE_S,
     PRESENCE_USER_KINDS,
     PROTOCOL_VERSION,
-    SOCKET_BASENAME,
-    SOCKET_RUNTIME_SUBDIR,
     WIRE_MESSAGE_ADAPTER,
     AckBody,
     AckMessage,
@@ -31,6 +28,7 @@ from murder.bus.protocol import (
     WakeBody,
     WakeMessage,
 )
+from murder.storage.service_registry import socket_path_for_repo
 
 
 @dataclass
@@ -304,7 +302,6 @@ class SocketBusServer:
             Entity.NOTE,
             Entity.ESCALATION,
             Entity.QUEUE_ROW,
-            Entity.SENTINEL_STATE,
         ]
         await self._send_message(
             transport,
@@ -367,18 +364,15 @@ class SocketBusServer:
         )
 
 
-def default_socket_path() -> Path:
-    runtime_dir = os.environ.get("XDG_RUNTIME_DIR")
-    if runtime_dir:
-        return Path(runtime_dir) / SOCKET_RUNTIME_SUBDIR / SOCKET_BASENAME
-    return Path(f"/tmp/murder-{os.getuid()}") / SOCKET_BASENAME
+def default_socket_path(repo_root: Path | None = None) -> Path:
+    return socket_path_for_repo(repo_root or Path.cwd())
 
 
 # ---------------------------------------------------------------------------
 # Client-side UDS Transport
 # ---------------------------------------------------------------------------
 
-from murder.bus.transport import Transport  # noqa: E402
+from murder.bus.transport import Transport  # noqa: E402,I001
 
 
 _SENTINEL = object()  # signals the writer drain loop to stop
