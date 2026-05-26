@@ -215,7 +215,7 @@ class TicketMetadataSync(MarkdownSyncLoop):
             skills=list(row.get("skills") or []),
             write_set=list(row.get("write_set") or []),
             checklist=[item["text"] for item in row.get("checklist") or []],
-            schedule_at=row.get("schedule_at") if "schedule_at" in row else None,
+            schedule_at=row.get("schedule_at"),
         )
 
     def _mark_orphan_parse_error(self, ticket_id: str, file_hash: str, parse_error: str) -> None:

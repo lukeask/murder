@@ -2,7 +2,7 @@
 
 Tickets in v0 are split: metadata in DB, prose in `.murder/tickets/<id>.md`
 (flat, no wave subdirs per D9). This model is the in-memory aggregate
-view used by orchestrator, sentinel tools, and TUI.
+view used by orchestrator and TUI.
 """
 
 from __future__ import annotations
@@ -42,7 +42,6 @@ class Ticket(BaseModel):
     # Body sections (loaded from .murder/tickets/<id>.md)
     plan_body: str = ""
     working_notes: str = ""
-    sentinel_notes: str = ""
 
     def md_path(self, agents_root: Path) -> Path:
         """Where this ticket's prose-only markdown lives (D9: flat)."""
