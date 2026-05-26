@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, cast
 
 from murder.agents.base import Agent, AgentRole, AgentStatus
+from murder.completion import CompletionCoordinator
 from murder.config import CrowHandlerConfig
 from murder.harnesses.base import HarnessAdapter
 from murder.orchestration.outcome import TicketOutcomeService
@@ -35,6 +36,7 @@ class CrowHandler(Agent):
         repo_root: Path,
         runtime: Runtime,
         outcome: TicketOutcomeService,
+        coordinator: CompletionCoordinator,
         start_commit: str | None = None,
         client: APIClient | None = None,
     ) -> None:
@@ -47,6 +49,7 @@ class CrowHandler(Agent):
         self.repo_root = Path(repo_root)
         self.runtime = runtime
         self.outcome = outcome
+        self.coordinator = coordinator
         self._start_commit = start_commit
         self._client = client
         self.status = AgentStatus.IDLE
@@ -57,7 +60,7 @@ class CrowHandler(Agent):
         self._idle_cached = False
         self._on_idle_callbacks: list[asyncio.Future[None]] = []
         self._poll_task: asyncio.Task[None] | None = None
-        self._done_emitted = False
+        self._done_pane_hash: str | None = None
         self._log_path: Path | None = None
         self._terminal_failure = False
 
@@ -131,7 +134,8 @@ class CrowHandler(Agent):
             self.runtime.sync_agent(self)
 
     async def send(self, msg: str) -> None:
-        return None
+        text = self.harness.format_nudge(msg)
+        await self.harness.send_prompt(self.crow_session, text)
 
     def _fire_idle_callbacks_if_idle(self) -> None:
         if not self._idle_cached:
@@ -202,15 +206,15 @@ class CrowHandler(Agent):
         for note in self.harness.detect_notes(pane):
             ticket_parser.append_section(tpath, "Working notes", f">>> NOTE: {note}")
 
-        if self.harness.detect_done(pane) and not self._done_emitted:
-            self._done_emitted = True
-            self._log(f"crow done detected for {self.ticket_id} — verifying…")
-            success = await self.outcome.complete_after_crow(self.ticket_id, start_commit=self._start_commit)
-            if success:
-                self._log(f"ticket {self.ticket_id} verified done — stopping handler")
-            else:
-                self._log(f"ticket {self.ticket_id} failed verification — stopping handler")
-                asyncio.create_task(self.stop())
+        current_hash = hashlib.sha256(pane.encode("utf-8", errors="replace")).hexdigest()
+        if self.harness.detect_done(pane) and current_hash != self._done_pane_hash:
+            self._done_pane_hash = current_hash
+            self._log(f"crow done detected for {self.ticket_id} — running completion checks…")
+            await self.coordinator.handle_done(
+                self.ticket_id,
+                crow_session=self.crow_session,
+                start_commit=self._start_commit,
+            )
             return
 
         excerpt = self.harness.extract_last_message(pane) or ""

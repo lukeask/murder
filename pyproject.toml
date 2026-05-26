@@ -8,7 +8,7 @@ version = "0.0.1"
 description = "Agentic dev harness — a murder of crows supervising a monkey."
 readme = "README.md"
 requires-python = ">=3.10"
-license = { text = "TBD" }
+license = "MIT"
 authors = [{ name = "luke" }]
 dependencies = [
     # TODO(M0): pin minor versions once API surface stabilizes
@@ -26,7 +26,6 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "pytest>=8.0",
-    "pytest-asyncio>=0.23",
     "mypy>=1.8",
     "ruff>=0.4",
 ]
@@ -34,6 +33,12 @@ dev = [
 [project.scripts]
 # Bare `murder` is the kickoff command per D8.
 murder = "murder.cli:app"
+
+[tool.hatch.build]
+include = [
+    "murder/prompts/*.md",
+    "murder/templates/*",
+]
 
 [tool.hatch.build.targets.wheel]
 packages = ["murder"]
@@ -54,7 +59,6 @@ strict = true
 disallow_untyped_decorators = false
 
 [tool.pytest.ini_options]
-asyncio_mode = "auto"
 testpaths = ["tests"]
 markers = [
     "smoke: real cursor/CC/API; requires MURDER_MANUAL_SMOKE=1",

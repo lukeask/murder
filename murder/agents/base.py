@@ -1,8 +1,9 @@
 """Agent ABC + lifecycle.
 
-All four roles implement this interface. `CrowAgent` and
+All roles implement this interface. `CrowAgent` and
 `CollaboratorAgent` own real tmux sessions (interactive harness).
-`CrowHandler` and `SentinelAgent` are coroutines (D1) — their `session`
+`PlanningAgent` also owns a real tmux session, cwd=.murder/.
+`CrowHandler` and `PlanningHandler` are coroutines (D1) — their `session`
 attribute names a logfile-tail tmux session for debug, not a real
 interactive one.
 """
@@ -24,7 +25,7 @@ class Agent(ABC):
     role: AgentRole
     session: str  # tmux session name (interactive) or virtual session (logfile-tail)
     status: AgentStatus
-    ticket_id: str | None  # None for Collaborator, Sentinel
+    ticket_id: str | None  # None for Collaborator, PlanningAgent, PlanningHandler
 
     @abstractmethod
     async def start(self, brief: str, ctx: dict[str, Any]) -> None:
@@ -42,7 +43,7 @@ class Agent(ABC):
     @abstractmethod
     async def send(self, msg: str) -> None:
         """Deliver a message to the agent. For Crows: send-keys via harness.
-        For Sentinel: queue an event for its handler. For CrowHandler: ignore by default."""
+        For PlanningAgent: send-keys via harness. For handlers: ignore by default."""
 
     async def is_live(self) -> bool:
         """Return True if the agent session is currently running.

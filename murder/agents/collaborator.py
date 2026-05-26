@@ -49,6 +49,9 @@ class CollaboratorAgent(Agent):
         self.status = AgentStatus.IDLE
         self.harness_session = harness.attach(session, self.repo_root)
 
+    async def is_live(self) -> bool:
+        return await tmux.session_exists(self.session)
+
     async def start(self, brief: str, ctx: dict[str, Any]) -> None:
         from murder.bus import StatusChangeEvent
 
@@ -69,7 +72,7 @@ class CollaboratorAgent(Agent):
         if not await tmux.session_exists(self.session):
             raise RuntimeError(
                 f"collaborator harness '{self.harness.kind}' exited right after startup; "
-                "check it runs interactively in this repo (`murder doctor`)"
+                "check it runs interactively in this repo"
             )
         self.status = AgentStatus.RUNNING
         if self.runtime:

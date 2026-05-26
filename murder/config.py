@@ -85,7 +85,8 @@ class HarnessRoleConfig(BaseModel):
 
 class ApiRoleConfig(BaseModel):
     kind: Literal["api"] = "api"
-    provider: Literal["openrouter", "anthropic", "openai", "local"] = "openrouter"
+    provider: Literal["openrouter", "anthropic", "openai", "local", "cerebras", "groq"] = "openrouter"
+    auto_free: bool = False
     model: str
     max_context_tokens: int = 180_000
 
@@ -97,27 +98,37 @@ class CrowHandlerConfig(ApiRoleConfig):
     context_lines: int = 40
 
 
-class SentinelConfig(ApiRoleConfig):
-    tools: list[str] = Field(
-        default_factory=lambda: [
-            "read_file",
-            "grep",
-            "list_tickets",
-            "read_ticket",
-            "send_to_crow",
-            "escalate_user",
-            "escalate_collaborator",
-            "append_sentinel_note",
-            "pause_ticket",
-        ]
-    )
+class PlannerConfig(BaseModel):
+    """Per-plan planning agent: a tmux-backed harness whose cwd is `.murder/`."""
+
+    kind: Literal["harness"] = "harness"
+    harness: HarnessKind = "claude_code"
+    startup_model: str | None = None
+    startup_prompt_template: str = "planner.md"
+    # The crow-ASK relay template used by PlanningHandler.
+    crow_ask_template: str = "crow_ask_to_planner.md"
+    # PlanningHandler poll cadence (parallel to CrowHandlerConfig.poll_interval_s).
+    poll_interval_s: float = 5.0
+
+    @field_validator("kind", mode="before")
+    @classmethod
+    def _legacy_api_kind_to_harness(cls, v: Any) -> Any:
+        if v == "api":
+            return "harness"
+        return v
 
 
 class NotetakerConfig(ApiRoleConfig):
-    """Planning-mode "notetaker": an OpenRouter LLM that tidies the user's
-    stream-of-consciousness into a clean notes doc via read/write tools."""
+    """Planning-mode "notetaker": tidies the user's stream-of-consciousness
+    into a clean notes doc via read/write tools.
 
-    model: str = "anthropic/claude-sonnet-4-6"
+    Defaults to Cerebras/zai-glm-4.7 (reasoning model, fast on Cerebras
+    hardware). Falls back gracefully to no-LLM behavior if CEREBRAS_API_KEY
+    is unset — same degradation path as any API role with a missing key.
+    """
+
+    provider: Literal["openrouter", "anthropic", "openai", "local", "cerebras", "groq"] = "cerebras"
+    model: str = "zai-glm-4.7"
     max_tokens: int = 1500
 
 
@@ -137,7 +148,7 @@ class Config(BaseModel):
     project: ProjectConfig
     collaborator: HarnessRoleConfig
     notetaker: NotetakerConfig = NotetakerConfig()
-    sentinel: SentinelConfig
+    planner: PlannerConfig = PlannerConfig()
     crow_handler: CrowHandlerConfig
     default_crow: HarnessRoleConfig
     tui: TuiConfig = TuiConfig()

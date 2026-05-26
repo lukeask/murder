@@ -1,8 +1,7 @@
 """Claude Code CLI adapter (`claude --dangerously-skip-permissions`).
 
 Caveats:
-- `--dangerously-skip-permissions` refuses to run as root; surfaced in
-  `murder doctor`.
+- `--dangerously-skip-permissions` refuses to run as root.
 - CC's UI has tool-box rendering and spinners; pane regexes need
   empirical tuning during M1/M2.
 """

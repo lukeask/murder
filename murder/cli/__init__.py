@@ -7,7 +7,6 @@ from pathlib import Path
 import typer
 
 from murder import __version__
-from murder.cli.doctor_cmd import cmd_doctor
 from murder.cli.init_cmd import (
     _ensure_initialized_for_bare_command,
     cmd_init,
@@ -16,10 +15,12 @@ from murder.cli.init_cmd import (
 from murder.cli.service_cmd import (
     _run_async_entry,
     cmd_down,
+    cmd_id,
     cmd_kick,
     cmd_lint,
-    cmd_replay,
+    cmd_ls,
     cmd_reopen,
+    cmd_replay,
     cmd_retry,
     cmd_serviced,
     cmd_status,
@@ -59,7 +60,8 @@ app.command("kick")(cmd_kick)
 app.command("up")(cmd_up)
 app.command("serviced", hidden=True)(cmd_serviced)
 app.command("down")(cmd_down)
-app.command("doctor")(cmd_doctor)
+app.command("id")(cmd_id)
+app.command("ls")(cmd_ls)
 app.command("lint")(cmd_lint)
 app.command("reopen")(cmd_reopen)
 app.command("retry")(cmd_retry)

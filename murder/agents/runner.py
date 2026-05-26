@@ -14,8 +14,7 @@ from typing import TYPE_CHECKING
 from murder.agents.base import AgentRole
 from murder.agents.collaborator import CollaboratorAgent
 from murder.agents.crow import CrowAgent
-from murder.agents.sentinel import SentinelAgent
-from murder.clients import create_client
+from murder.agents.planning_agent import PlanningAgent
 from murder.harnesses import get as get_harness
 
 from murder.agents.events import AgentEventSink, AgentStartedEvent
@@ -76,14 +75,21 @@ async def spawn_agent(
             runtime=rt,
         )
 
-    elif role == AgentRole.SENTINEL:
-        client = create_client(rt.config.sentinel.provider)
-        session_name = format_session_name(rt, "sentinel", "")
-        agent = SentinelAgent(
-            agent_id="sentinel-0",
+    elif role == AgentRole.PLANNER:
+        if spec.scope.plan_name is None:
+            raise ValueError("PLANNER spec requires scope.plan_name")
+        if not spec.harness:
+            raise ValueError("PLANNER spec requires harness")
+        plan_name = spec.scope.plan_name
+        session_name = format_session_name(rt, "planner", f"_{plan_name}")
+        harness = get_harness(spec.harness, startup_model=spec.model)
+        agent = PlanningAgent(
+            agent_id=f"planner-{plan_name}",
             session=session_name,
-            config=rt.config.sentinel,
-            client=client,
+            plan_name=plan_name,
+            harness=harness,
+            repo_root=rt.repo_root,
+            startup_model=spec.model,
             runtime=rt,
         )
 
@@ -102,7 +108,7 @@ async def spawn_agent(
         await rt.reap(agent.id)
         raise
 
-    handle = AgentHandle(session_name=session_name, spec=spec, task=None)
+    handle = AgentHandle(agent_id=agent.id, session_name=session_name, spec=spec, task=None)
 
     if event_sink is not None:
         await event_sink.emit(

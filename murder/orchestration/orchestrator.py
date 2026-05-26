@@ -2,7 +2,17 @@
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
+import logging
+import re
+import sqlite3
+from datetime import datetime
 from typing import TYPE_CHECKING, Any
+
+_TNUM_RE = re.compile(r"^t(\d+)$")
+
+LOGGER = logging.getLogger(__name__)
 
 from murder import notes as notes_mod
 from murder.persistence.tickets import (
@@ -12,27 +22,75 @@ from murder.persistence.tickets import (
     update_ticket_status as _db_update_ticket_status,
     apply_ticket_carve_payload as _db_apply_ticket_carve_payload,
 )
+from murder.persistence.plans import (
+    get_plan_row as _db_get_plan_row,
+    upsert_plan as _db_upsert_plan,
+)
 from murder.persistence.agents import (
     upsert_agent as _db_upsert_agent,
     get_active_agent_by_role as _db_get_active_agent_by_role,
     set_agent_status as _db_set_agent_status,
+    rename_agent as _db_rename_agent,
 )
 from murder.agents.base import AgentRole, AgentStatus
 from murder.agents.crow_handler import CrowHandler
+from murder.agents.planning_handler import PlanningHandler
 from murder.bus import StatusChangeEvent, TicketStatus
-from murder.clients import create_client
-from murder.config import resolve_default_crow_harness, resolve_default_crow_startup_model
+from murder.clients import resolve_role_client
+from murder.config import (
+    PlannerConfig,
+    resolve_default_crow_harness,
+    resolve_default_crow_startup_model,
+)
 from murder.harnesses import get as get_harness
+from murder.plans.parser import (
+    render as _render_plan_markdown,
+    write as _write_plan_markdown,
+)
+from murder.plans.schema import Plan, PlanStatus
+from murder.plans.sync import content_hash as _plan_content_hash
 from murder.prompts import load, render
+from murder.storage.paths import plan_md, ticket_md, tickets_dir
+from murder.terminal import tmux
 from murder.terminal.session_names import format_session_name
 from murder.tickets import carve, lifecycle
 
 from murder.agents.runner import spawn_agent
 from murder.agents.sessions import AgentScope, AgentSpec
+from murder.completion import CheckRegistry, CompletionCoordinator
 from murder.service.runtime_scope import OrchestratorHost
 
 from ..escalations.service import EscalationService
 from .outcome import TicketOutcomeService
+
+
+def _get_plan_for_ticket(conn: sqlite3.Connection, ticket_id: str) -> str | None:
+    """Return the plan_name for a ticket, or None if not in any plan."""
+    has_plan_tickets = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'plan_tickets'"
+    ).fetchone()
+    table = "plan_tickets" if has_plan_tickets is not None else "plan_related_tickets"
+    row = conn.execute(
+        f"SELECT plan_name FROM {table} WHERE ticket_id = ? LIMIT 1",
+        (ticket_id,),
+    ).fetchone()
+    return str(row["plan_name"]) if row else None
+
+
+def _validate_plan_filename_stem(name: str, *, command: str) -> str:
+    name = name.strip()
+    if not name or "/" in name or "\\" in name or name in {".", ".."}:
+        raise ValueError(f"{command} name must be a single filename stem")
+    return name
+
+
+def _load_planner_startup_prompt(cfg: PlannerConfig, plan_name: str) -> str:
+    tpl = (cfg.startup_prompt_template or "planner.md").removesuffix(".md")
+    try:
+        return render(tpl, plan_name=plan_name)
+    except (KeyError, IndexError, ValueError):
+        return load(tpl)
+
 
 CONFLICT_PREVIEW_LIMIT = 5
 
@@ -95,6 +153,13 @@ def _format_write_set_conflicts(conflicts: list[tuple[str, str, set[str]]]) -> s
 class Orchestrator:
     def __init__(self, rt: OrchestratorHost) -> None:
         self.rt = rt
+        self._question_listener: Any = None
+        self._planner_spawn_locks: dict[str, asyncio.Lock] = {}
+        self.completion_coordinator = CompletionCoordinator(
+            rt,
+            CheckRegistry(),
+            ensure_planning_agent=self.ensure_planning_agent,
+        )
 
     def _escalations(self) -> EscalationService:
         assert self.rt.db is not None
@@ -104,7 +169,7 @@ class Orchestrator:
             bus=self.rt.bus,
             run_id=self.rt.run_id,
             agent_id="orchestrator",
-            role=AgentRole.SENTINEL,
+            role=AgentRole.COLLABORATOR,
         )
 
     def _outcomes(self) -> TicketOutcomeService:
@@ -168,6 +233,57 @@ class Orchestrator:
             kicked.append(tid)
         return kicked
 
+    async def quick_kick_ticket(self, title: str) -> dict[str, Any]:
+        """Create a ticket, insert it into the DB as PLANNED, and immediately kick it."""
+        assert self.rt.db is not None
+        conn = self.rt.db
+        repo_root = self.rt.repo_root
+
+        # Derive next ID from DB + file system to avoid races with TicketSync.
+        max_n = 0
+        for row in conn.execute("SELECT id FROM tickets WHERE id LIKE 't%'").fetchall():
+            m = _TNUM_RE.match(str(row["id"]))
+            if m:
+                max_n = max(max_n, int(m.group(1)))
+        root = tickets_dir(repo_root)
+        if root.exists():
+            for p in root.glob("*.md"):
+                m2 = _TNUM_RE.match(p.stem)
+                if m2:
+                    max_n = max(max_n, int(m2.group(1)))
+        ticket_id = f"t{max_n + 1:03d}"
+
+        # Write the markdown file so the sidecar sync stays consistent.
+        path = ticket_md(repo_root, ticket_id)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(f"# {title}\n\n## Plan\n\n## Working Notes\n")
+
+        # Insert directly into DB — bypasses the 1.5 s TicketSync poll.
+        from murder.persistence.tickets import insert_ticket as _db_insert_ticket
+        from murder.tickets.schema import Ticket
+        from murder.tickets.status import TicketStatus
+
+        now = datetime.utcnow().replace(microsecond=0)
+        row_existing = conn.execute(
+            "SELECT id FROM tickets WHERE id = ?", (ticket_id,)
+        ).fetchone()
+        if row_existing is None:
+            ticket = Ticket(
+                id=ticket_id,
+                title=title,
+                wave=1,
+                status=TicketStatus.PLANNED,
+                created_at=now,
+                updated_at=now,
+            )
+            try:
+                _db_insert_ticket(conn, ticket)
+            except Exception:
+                pass  # TicketSync may have raced us
+
+        kicked = await self.kickoff_ready(only=ticket_id)
+        return {"handled": True, "ticket_id": ticket_id, "title": title, "kicked": kicked}
+
     def _ready_write_set_conflicts(self, ticket_ids: list[str]) -> list[tuple[str, str, set[str]]]:
         assert self.rt.db is not None
         rows = [_db_get_ticket(self.rt.db, tid) for tid in ticket_ids]
@@ -195,7 +311,7 @@ class Orchestrator:
             StatusChangeEvent(
                 run_id=self.rt.run_id,
                 agent_id="orchestrator",
-                role=AgentRole.SENTINEL,
+                role=AgentRole.COLLABORATOR,
                 ticket_id=ticket_id,
                 entity="ticket",
                 entity_id=ticket_id,
@@ -236,7 +352,7 @@ class Orchestrator:
         )
         harness = get_harness(harness_kind, startup_model=startup_model)
         session = format_session_name(self.rt, "crow_handler", f"_{ticket_id}")
-        client = create_client(self.rt.config.crow_handler.provider)
+        client = resolve_role_client(self.rt.config.crow_handler)
         crow_agent = self.rt.get_crow(ticket_id)
         start_commit = getattr(crow_agent, "start_commit", None) if crow_agent else None
         handler = CrowHandler(
@@ -249,6 +365,7 @@ class Orchestrator:
             repo_root=self.rt.repo_root,
             runtime=self.rt,
             outcome=self._outcomes(),
+            coordinator=self.completion_coordinator,
             start_commit=start_commit,
             client=client,
         )
@@ -256,17 +373,291 @@ class Orchestrator:
         await handler.start("", {})
         return handler.id
 
-    async def ensure_sentinel(self) -> str:
-        assert self.rt.db is not None
-        agent_id = _db_get_active_agent_by_role(self.rt.db, "sentinel")
-        if agent_id:
-            return agent_id
-        spec = AgentSpec(
-            role=AgentRole.SENTINEL,
-            scope=AgentScope(),
+    async def spawn_planning_handler(self, plan_name: str, planner_session: str) -> str:
+        """Spawn a PlanningHandler coroutine for the given planner session."""
+        handler_id = f"planning_handler-{plan_name}"
+        cfg = self.rt.config.planner
+        harness = get_harness(cfg.harness, startup_model=cfg.startup_model)
+        log_session = format_session_name(self.rt, "planning_handler", f"_{plan_name}")
+        handler = PlanningHandler(
+            agent_id=handler_id,
+            session=log_session,
+            planner_session=planner_session,
+            plan_name=plan_name,
+            harness=harness,
+            config=cfg,
+            repo_root=self.rt.repo_root,
+            runtime=self.rt,
         )
-        handle = await spawn_agent(spec, rt=self.rt, event_sink=self.rt.event_sink)
-        return handle.session_name
+        self.rt.register_agent(handler)
+        await handler.start("", {})
+        return handler_id
+
+    async def start_question_listener(self) -> None:
+        """Subscribe to QuestionEvents on the bus and route to the per-plan planning agent.
+
+        Fallback: if no plan is associated with the ticket, escalate to the user.
+        """
+        bus = self.rt.bus
+        if bus is None:
+            return
+
+        async def _handle(event: Any) -> None:
+            if getattr(event, "type", None) != "question":
+                return
+            ticket_id: str | None = getattr(event, "ticket_id", None)
+            question: str = str(getattr(event, "question", ""))
+            crow_session: str = str(getattr(event, "crow_session", ""))
+            await self.route_crow_ask(ticket_id, question, crow_session)
+
+        self._question_listener = bus.subscribe(_handle, None)
+
+    async def route_crow_ask(
+        self,
+        ticket_id: str | None,
+        ask: str,
+        crow_session: str,
+    ) -> None:
+        """Route a crow ASK to the per-plan PlanningHandler, or escalate to user."""
+        if ticket_id and self.rt.db is not None:
+            plan_name = _get_plan_for_ticket(self.rt.db, ticket_id)
+            if plan_name:
+                try:
+                    await self.ensure_planning_agent(plan_name)
+                    handler = self.rt.get_agent(f"planning_handler-{plan_name}")
+                    if isinstance(handler, PlanningHandler):
+                        await handler.relay_ask(ticket_id, ask, crow_session)
+                        return
+                except Exception as exc:
+                    LOGGER.warning("planner routing failed for %s: %s", plan_name, exc)
+        reason = f"[crow ASK] {ask[:300]}"
+        await self._escalations().escalate_to_user(reason, severity=2, ticket_id=ticket_id)
+
+    async def ensure_planning_agent(self, plan_name: str) -> str:
+        """Return the agent_id of a live planning agent for plan_name,
+        spawning the agent + its handler if needed."""
+        assert self.rt.db is not None
+        agent_id = f"planner-{plan_name}"
+        if plan_name not in self._planner_spawn_locks:
+            self._planner_spawn_locks[plan_name] = asyncio.Lock()
+        async with self._planner_spawn_locks[plan_name]:
+            agent = self.rt.get_agent(agent_id)
+            if agent is not None and await self._agent_is_live(agent):
+                handler = self.rt.get_agent(f"planning_handler-{plan_name}")
+                if not isinstance(handler, PlanningHandler):
+                    await self.spawn_planning_handler(plan_name, agent.session)
+                return agent_id
+            cfg = self.rt.config.planner
+            startup_prompt = _load_planner_startup_prompt(cfg, plan_name)
+            spec = AgentSpec(
+                role=AgentRole.PLANNER,
+                scope=AgentScope(plan_name=plan_name),
+                harness=cfg.harness,
+                model=cfg.startup_model,
+                startup_prompt=startup_prompt,
+            )
+            handle = await spawn_agent(spec, rt=self.rt, event_sink=self.rt.event_sink)
+            # TODO: resumability — if a prior planner session exists with prior
+            # transcript, future work will summarize via compact-style summary
+            # and seed the new session. For now we always spawn fresh.
+            await self.spawn_planning_handler(plan_name, handle.session_name)
+            return agent_id
+
+    async def send_agent_message(
+        self, agent_id: str, message: str, ticket_id: str | None
+    ) -> dict[str, Any]:
+        """Deliver a message to an agent by id.
+
+        Planner targets are restored on demand so a selected plan can receive
+        chat even if its tmux session has not been started yet.
+        """
+        del ticket_id
+
+        agent = self.rt.get_agent(agent_id)
+        if agent_id.startswith("planner-"):
+            plan_name = agent_id[len("planner-") :]
+            if not plan_name:
+                return {"handled": False, "error": "planner agent_id requires a plan name"}
+            if agent is None or not await self._agent_is_live(agent):
+                await self.ensure_planning_agent(plan_name)
+                agent = self.rt.get_agent(agent_id)
+        if agent is None:
+            return {"handled": False, "error": f"no agent named {agent_id}"}
+        await agent.send(message)
+        return {"handled": True}
+
+    async def _agent_is_live(self, agent: Any) -> bool:
+        try:
+            live = bool(await agent.is_live())
+        except Exception:
+            return False
+        if getattr(agent, "role", None) == AgentRole.PLANNER:
+            session = getattr(agent, "session", None)
+            if not isinstance(session, str) or not session:
+                return False
+            return live and await tmux.session_exists(session)
+        return live
+
+    async def scaffold_plan(self, name: str, body: str) -> dict[str, Any]:
+        """Create or refresh a draft plan row and its materialized markdown."""
+        assert self.rt.db is not None
+        name = _validate_plan_filename_stem(name, command="plan.scaffold")
+        now = datetime.utcnow()
+        plan = Plan(
+            name=name,
+            status=PlanStatus.DRAFT,
+            created_at=now,
+            updated_at=now,
+            related_tickets=[],
+            frontmatter={},
+            body=body,
+        )
+        path = plan_md(self.rt.repo_root, name)
+        materialized_path = str(path.relative_to(self.rt.repo_root))
+        rendered = _render_plan_markdown(plan)
+        content_hash = _plan_content_hash(rendered)
+        with self.rt.db:
+            _db_upsert_plan(
+                self.rt.db,
+                plan,
+                content_hash=content_hash,
+                materialized_path=materialized_path,
+                file_hash=content_hash,
+                last_materialized_hash=content_hash,
+                sync_state="synced",
+                create_revision=True,
+                revision_source="db",
+            )
+            _write_plan_markdown(path, plan)
+        row = _db_get_plan_row(self.rt.db, name) or {}
+        return {
+            "handled": True,
+            "name": name,
+            "materialized_path": materialized_path,
+            "revision_count": row.get("revision_count"),
+        }
+
+    async def rename_plan(self, old_name: str, new_name: str) -> dict[str, Any]:
+        """Explicit first-class plan rename with live planner continuity."""
+        assert self.rt.db is not None
+        old_name = _validate_plan_filename_stem(old_name, command="plan.rename")
+        new_name = _validate_plan_filename_stem(new_name, command="plan.rename")
+        if old_name == new_name:
+            row = _db_get_plan_row(self.rt.db, old_name)
+            if row is None:
+                raise KeyError(old_name)
+            return {
+                "handled": True,
+                "old_name": old_name,
+                "name": new_name,
+                "materialized_path": row["materialized_path"],
+                "revision_count": row.get("revision_count"),
+            }
+        if _db_get_plan_row(self.rt.db, old_name) is None:
+            raise KeyError(old_name)
+        if _db_get_plan_row(self.rt.db, new_name) is not None:
+            raise ValueError(f"plan already exists: {new_name}")
+        await self._preflight_plan_runtime_rename(old_name, new_name)
+        if self.rt.plan_sync is None:
+            raise RuntimeError("plan sync not available")
+        row = self.rt.plan_sync.rename_plan(old_name, new_name)
+        await self._retarget_plan_runtime(old_name, new_name)
+        return {
+            "handled": True,
+            "old_name": old_name,
+            "name": new_name,
+            "materialized_path": row.get("materialized_path"),
+            "revision_count": row.get("revision_count"),
+        }
+
+    async def deprecate_plan(self, name: str) -> dict[str, Any]:
+        """Mark a plan superseded and remove it from active planning."""
+        assert self.rt.db is not None
+        name = _validate_plan_filename_stem(name, command="plan.deprecate")
+        if self.rt.plan_sync is None:
+            raise RuntimeError("plan sync not available")
+        row = self.rt.plan_sync.deprecate_plan(name)
+        for agent_id in (f"planning_handler-{name}", f"planner-{name}"):
+            if self.rt.get_agent(agent_id) is not None:
+                await self.rt.reap(agent_id)
+            else:
+                _db_set_agent_status(self.rt.db, agent_id, AgentStatus.DEAD.value)
+        return {
+            "handled": True,
+            "name": name,
+            "status": row.get("status"),
+            "materialized_path": row.get("materialized_path"),
+            "revision_count": row.get("revision_count"),
+        }
+
+    async def _preflight_plan_runtime_rename(self, old_name: str, new_name: str) -> None:
+        planner = self.rt.get_agent(f"planner-{old_name}")
+        if planner is not None:
+            old_session = format_session_name(self.rt, "planner", f"_{old_name}")
+            new_session = format_session_name(self.rt, "planner", f"_{new_name}")
+            if await tmux.session_exists(old_session) and await tmux.session_exists(
+                new_session
+            ):
+                raise tmux.TmuxError(f"session already exists: {new_session}")
+        handler = self.rt.get_agent(f"planning_handler-{old_name}")
+        if handler is not None:
+            old_session = format_session_name(self.rt, "planning_handler", f"_{old_name}")
+            new_session = format_session_name(self.rt, "planning_handler", f"_{new_name}")
+            if await tmux.session_exists(old_session) and await tmux.session_exists(
+                new_session
+            ):
+                raise tmux.TmuxError(f"session already exists: {new_session}")
+
+    async def _retarget_plan_runtime(self, old_name: str, new_name: str) -> None:
+        assert self.rt.db is not None
+        old_lock = self._planner_spawn_locks.pop(old_name, None)
+        if old_lock is not None:
+            self._planner_spawn_locks[new_name] = old_lock
+
+        old_planner_id = f"planner-{old_name}"
+        new_planner_id = f"planner-{new_name}"
+        old_planner_session = format_session_name(self.rt, "planner", f"_{old_name}")
+        new_planner_session = format_session_name(self.rt, "planner", f"_{new_name}")
+        planner = self.rt.agents.rename_agent(old_planner_id, new_planner_id)
+        await tmux.rename_session(old_planner_session, new_planner_session)
+        if planner is not None:
+            planner.session = new_planner_session
+            if hasattr(planner, "plan_name"):
+                planner.plan_name = new_name
+            harness_session = getattr(planner, "harness_session", None)
+            if harness_session is not None:
+                harness_session.session = new_planner_session
+
+        old_handler_id = f"planning_handler-{old_name}"
+        new_handler_id = f"planning_handler-{new_name}"
+        old_handler_session = format_session_name(self.rt, "planning_handler", f"_{old_name}")
+        new_handler_session = format_session_name(self.rt, "planning_handler", f"_{new_name}")
+        handler = self.rt.agents.rename_agent(old_handler_id, new_handler_id)
+        await tmux.rename_session(old_handler_session, new_handler_session)
+        if handler is not None:
+            handler.session = new_handler_session
+            if hasattr(handler, "plan_name"):
+                handler.plan_name = new_name
+            if hasattr(handler, "planner_session"):
+                handler.planner_session = new_planner_session
+
+        with self.rt.db:
+            _db_rename_agent(
+                self.rt.db,
+                old_planner_id,
+                new_planner_id,
+                session=new_planner_session,
+            )
+            _db_rename_agent(
+                self.rt.db,
+                old_handler_id,
+                new_handler_id,
+                session=new_handler_session,
+            )
+            if planner is not None:
+                self.rt.sync_agent(planner)
+            if handler is not None:
+                self.rt.sync_agent(handler)
 
     async def ensure_collaborator(self) -> str:
         agent_id = _db_get_active_agent_by_role(self.rt.db, "collaborator")
@@ -277,6 +668,15 @@ class Orchestrator:
                     return agent_id
                 await self.rt.reap(agent_id)
             else:
+                # Agent in DB but not in registry (e.g. service restart with
+                # keep-sessions-alive). Kill the orphaned tmux session so the
+                # upcoming create_session call doesn't raise "already exists".
+                row = self.rt.db.execute(
+                    "SELECT session FROM agents WHERE agent_id = ?", (agent_id,)
+                ).fetchone()
+                if row and row["session"] and await tmux.session_exists(row["session"]):
+                    with contextlib.suppress(Exception):
+                        await tmux.kill_session(row["session"])
                 _db_set_agent_status(self.rt.db, agent_id, "dead")
         tpl_raw = self.rt.config.collaborator.startup_prompt_template or "collaborator.md"
         tpl = tpl_raw.removesuffix(".md")
@@ -297,7 +697,7 @@ class Orchestrator:
             reason = f"Collaborator startup failed: {e}"
             await self._escalations().record_collaborator_startup_failure(reason)
             raise
-        return handle.session_name
+        return handle.agent_id
 
     async def submit_notetaker_capture(self, payload: dict[str, Any]) -> dict[str, Any]:
         assert self.rt.db is not None
@@ -310,7 +710,7 @@ class Orchestrator:
                 "notetaker.capture.submit requires non-empty payload.raw or payload.text"
             )
 
-        client = create_client(self.rt.config.notetaker.provider)
+        client = resolve_role_client(self.rt.config.notetaker)
         return await notes_mod.submit_capture(
             repo_root=self.rt.repo_root,
             conn=self.rt.db,
@@ -437,14 +837,6 @@ class Orchestrator:
         if self.rt.db is None:
             return
         await self._escalations().block_writeset_violation(ticket_id, path)
-
-    async def on_crow_done(self, ticket_id: str) -> bool:
-        assert self.rt.db is not None
-        crow = self.rt.get_crow(ticket_id)
-        start_commit = getattr(crow, "start_commit", None) if crow else None
-        return await self._outcomes().complete_after_crow(
-            ticket_id, start_commit=start_commit
-        )
 
     async def apply_ticket_carve_ready(
         self, ticket_id: str, payload: dict[str, object]

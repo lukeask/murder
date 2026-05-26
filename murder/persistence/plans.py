@@ -131,6 +131,7 @@ def list_plans(conn: sqlite3.Connection) -> list[dict[str, Any]]:
         SELECT p.*,
                (SELECT COUNT(*) FROM plan_revisions r WHERE r.plan_name = p.name) AS revisions
           FROM plans p
+         WHERE p.status != 'superseded'
          ORDER BY p.updated_at DESC, p.name
         """
     ).fetchall()
@@ -140,6 +141,97 @@ def list_plans(conn: sqlite3.Connection) -> list[dict[str, Any]]:
 def get_plan_row(conn: sqlite3.Connection, name: str) -> dict[str, Any] | None:
     row = conn.execute("SELECT * FROM plans WHERE name = ?", (name,)).fetchone()
     return dict(row) if row else None
+
+
+def rename_plan(
+    conn: sqlite3.Connection,
+    old_name: str,
+    new_name: str,
+    *,
+    materialized_path: str,
+) -> dict[str, Any]:
+    """Move a plan primary key and child references to ``new_name``.
+
+    The schema's child tables reference ``plans(name)`` without ON UPDATE
+    CASCADE, so this copies the parent row to the new key before moving child
+    rows and deleting the old key.
+    """
+    old_row = get_plan_row(conn, old_name)
+    if old_row is None:
+        raise KeyError(old_name)
+    if get_plan_row(conn, new_name) is not None:
+        raise ValueError(f"plan already exists: {new_name}")
+
+    now = _now()
+    conn.execute(
+        """
+        INSERT INTO plans
+            (name, status, created_at, updated_at, body, frontmatter_json,
+             body_hash, file_hash, last_materialized_hash, materialized_path,
+             sync_state, conflict_reason, parse_error, revision_count)
+        SELECT ?, status, created_at, ?, body, frontmatter_json,
+               body_hash, file_hash, last_materialized_hash, ?,
+               sync_state, conflict_reason, parse_error, revision_count
+          FROM plans
+         WHERE name = ?
+        """,
+        (new_name, now, materialized_path, old_name),
+    )
+    conn.execute(
+        "UPDATE plan_revisions SET plan_name = ? WHERE plan_name = ?",
+        (new_name, old_name),
+    )
+    conn.execute(
+        "UPDATE plan_related_tickets SET plan_name = ? WHERE plan_name = ?",
+        (new_name, old_name),
+    )
+    has_plan_tickets = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'plan_tickets'"
+    ).fetchone()
+    if has_plan_tickets is not None:
+        conn.execute(
+            "UPDATE plan_tickets SET plan_name = ? WHERE plan_name = ?",
+            (new_name, old_name),
+        )
+    conn.execute("DELETE FROM plans WHERE name = ?", (old_name,))
+    return get_plan_row(conn, new_name) or {}
+
+
+def deprecate_plan(
+    conn: sqlite3.Connection,
+    name: str,
+    *,
+    materialized_path: str,
+    file_hash: str,
+    last_materialized_hash: str,
+    body_hash: str,
+    body: str,
+    frontmatter_json: str,
+) -> dict[str, Any]:
+    now = _now()
+    cur = conn.execute(
+        """
+        UPDATE plans
+           SET status = 'superseded', updated_at = ?, body = ?,
+               frontmatter_json = ?, body_hash = ?, file_hash = ?,
+               last_materialized_hash = ?, materialized_path = ?,
+               sync_state = 'synced', conflict_reason = NULL, parse_error = NULL
+         WHERE name = ?
+        """,
+        (
+            now,
+            body,
+            frontmatter_json,
+            body_hash,
+            file_hash,
+            last_materialized_hash,
+            materialized_path,
+            name,
+        ),
+    )
+    if cur.rowcount == 0:
+        raise KeyError(name)
+    return get_plan_row(conn, name) or {}
 
 
 def mark_plan_sync_state(

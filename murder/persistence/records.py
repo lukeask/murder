@@ -33,6 +33,12 @@ class ChecklistItemRecord:
     def __getitem__(self, key: str) -> Any:
         return self.to_dict()[key]
 
+    def __contains__(self, key: object) -> bool:
+        return key in self.to_dict()
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(self.to_dict())
+
 
 @dataclass(frozen=True, slots=True)
 class TicketRecord:
@@ -91,6 +97,12 @@ class TicketRecord:
 
     def __getitem__(self, key: str) -> Any:
         return self.to_dict()[key]
+
+    def __contains__(self, key: object) -> bool:
+        return key in self.to_dict()
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(self.to_dict())
 
     def keys(self) -> Iterator[str]:
         return iter(self.to_dict().keys())
@@ -157,6 +169,12 @@ class CommandRecord:
     def __getitem__(self, key: str) -> Any:
         return self.to_dict()[key]
 
+    def __contains__(self, key: object) -> bool:
+        return key in self.to_dict()
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(self.to_dict())
+
 
 @dataclass(frozen=True, slots=True)
 class EscalationRecord:
@@ -190,6 +208,12 @@ class EscalationRecord:
 
     def __getitem__(self, key: str) -> Any:
         return self.to_dict()[key]
+
+    def __contains__(self, key: object) -> bool:
+        return key in self.to_dict()
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(self.to_dict())
 
 
 def ticket_record_from_row(

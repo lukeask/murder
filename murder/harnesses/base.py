@@ -24,6 +24,10 @@ from murder.harnesses.transcripts import has_transcript_parser, parse_transcript
 from murder.harnesses.results import SimpleResult, fail_result, ok_result
 
 ASK_RE = re.compile(r">>>\s*ASK:\s*(?P<body>.+?)(?=\n>>>|\Z)", re.DOTALL)
+ANSWER_RE = re.compile(
+    r">>>\s*ANSWER\[(?P<ticket>[^\]]+)\]:\s*(?P<body>.+?)(?=\n>>>|\Z)",
+    re.DOTALL,
+)
 CHECK_RE = re.compile(r">>>\s*CHECK:\s*(?P<body>.+?)$", re.MULTILINE)
 NOTE_RE = re.compile(r">>>\s*NOTE:\s*(?P<body>.+?)\n>>>\s*END\b", re.DOTALL)
 DONE_RE = re.compile(r">>>\s*DONE\b")
@@ -322,6 +326,16 @@ class HarnessAdapter(ABC):
     def detect_asks(self, pane_text: str) -> list[str]:
         clean = strip_ui_chrome(pane_text)
         return [m.group("body").strip() for m in ASK_RE.finditer(clean)]
+
+    def detect_answers(self, pane_text: str) -> list[tuple[str, str]]:
+        clean = strip_ui_chrome(pane_text)
+        return [
+            (
+                m.group("ticket").strip(),
+                (m.group("body").strip().splitlines() or [""])[0].strip(),
+            )
+            for m in ANSWER_RE.finditer(clean)
+        ]
 
     def detect_checks(self, pane_text: str) -> list[str]:
         clean = strip_ui_chrome(pane_text)

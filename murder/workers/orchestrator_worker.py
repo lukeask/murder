@@ -16,6 +16,11 @@ UpdateMetadata = Callable[[str, dict[str, Any]], Awaitable[dict[str, Any]]]
 ForceStatus = Callable[[str, str], Awaitable[dict[str, Any]]]
 NoteEnsure = Callable[[str], Awaitable[dict[str, Any]]]
 NoteRetire = Callable[[str], Awaitable[dict[str, Any]]]
+SendAgentMessage = Callable[[str, str, str | None], Awaitable[dict[str, Any]]]
+ScaffoldPlan = Callable[[str, str], Awaitable[dict[str, Any]]]
+RenamePlan = Callable[[str, str], Awaitable[dict[str, Any]]]
+DeprecatePlan = Callable[[str], Awaitable[dict[str, Any]]]
+QuickKickTicket = Callable[[str], Awaitable[dict[str, Any]]]
 
 
 class OrchestratorCommandWorker(Worker):
@@ -31,6 +36,11 @@ class OrchestratorCommandWorker(Worker):
         force_status: ForceStatus,
         note_ensure: NoteEnsure,
         note_retire: NoteRetire,
+        send_agent_message: SendAgentMessage,
+        scaffold_plan: ScaffoldPlan,
+        rename_plan: RenamePlan,
+        deprecate_plan: DeprecatePlan,
+        quick_kick_ticket: QuickKickTicket,
     ) -> None:
         super().__init__(
             WorkerSpec(
@@ -46,6 +56,11 @@ class OrchestratorCommandWorker(Worker):
                     "ticket.set_schedule_at",
                     "ticket.update_metadata",
                     "ticket.force_status",
+                    "agent.message",
+                    "plan.scaffold",
+                    "plan.rename",
+                    "plan.deprecate",
+                    "ticket.quick_kick",
                 ),
             )
         )
@@ -58,6 +73,11 @@ class OrchestratorCommandWorker(Worker):
         self._force_status = force_status
         self._note_ensure = note_ensure
         self._note_retire = note_retire
+        self._send_agent_message = send_agent_message
+        self._scaffold_plan = scaffold_plan
+        self._rename_plan = rename_plan
+        self._deprecate_plan = deprecate_plan
+        self._quick_kick_ticket = quick_kick_ticket
 
     async def run(self, ctx: WorkerCtx, stop_event: asyncio.Event) -> None:  # noqa: ARG002
         await stop_event.wait()
@@ -96,6 +116,38 @@ class OrchestratorCommandWorker(Worker):
             if not isinstance(name, str) or not name.strip():
                 raise ValueError("note.retire requires name")
             return await self._note_retire(name.strip())
+        if command.kind == "agent.message":
+            agent_id = command.payload.get("agent_id")
+            message = command.payload.get("message")
+            if not isinstance(agent_id, str) or not agent_id.strip():
+                raise ValueError("agent.message requires agent_id")
+            if not isinstance(message, str):
+                raise ValueError("agent.message requires message")
+            ticket_id = command.payload.get("ticket_id")
+            if ticket_id is not None and not isinstance(ticket_id, str):
+                raise ValueError("agent.message ticket_id must be a string or null")
+            return await self._send_agent_message(agent_id.strip(), message, ticket_id)
+        if command.kind == "plan.scaffold":
+            name = command.payload.get("name")
+            body = command.payload.get("body")
+            if not isinstance(name, str) or not name.strip():
+                raise ValueError("plan.scaffold requires name")
+            if not isinstance(body, str):
+                raise ValueError("plan.scaffold requires body")
+            return await self._scaffold_plan(name.strip(), body)
+        if command.kind == "plan.rename":
+            old_name = command.payload.get("old_name")
+            new_name = command.payload.get("new_name")
+            if not isinstance(old_name, str) or not old_name.strip():
+                raise ValueError("plan.rename requires old_name")
+            if not isinstance(new_name, str) or not new_name.strip():
+                raise ValueError("plan.rename requires new_name")
+            return await self._rename_plan(old_name.strip(), new_name.strip())
+        if command.kind == "plan.deprecate":
+            name = command.payload.get("name")
+            if not isinstance(name, str) or not name.strip():
+                raise ValueError("plan.deprecate requires name")
+            return await self._deprecate_plan(name.strip())
         if command.kind == "ticket.retry_failed":
             ticket_id = command.payload.get("ticket_id")
             if not isinstance(ticket_id, str) or not ticket_id.strip():
@@ -122,4 +174,9 @@ class OrchestratorCommandWorker(Worker):
             if not isinstance(status, str) or not status.strip():
                 raise ValueError("ticket.force_status requires status")
             return await self._force_status(ticket_id.strip(), status.strip())
+        if command.kind == "ticket.quick_kick":
+            title = command.payload.get("title")
+            if not isinstance(title, str) or not title.strip():
+                raise ValueError("ticket.quick_kick requires title")
+            return await self._quick_kick_ticket(title.strip())
         return {"handled": False}

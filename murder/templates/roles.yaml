@@ -13,15 +13,17 @@ collaborator:
 
 notetaker:
   kind: api
-  provider: openrouter
-  model: anthropic/claude-sonnet-4-6   # picked from Settings (ctrl+p)
+  provider: cerebras
+  model: zai-glm-4.7                   # picked from Settings (ctrl+p)
   max_tokens: 1500
 
-sentinel:
-  kind: api
-  provider: openrouter
-  model: anthropic/claude-sonnet-4-6
-  max_context_tokens: 180000
+planner:
+  kind: harness
+  harness: claude_code
+  startup_prompt_template: planner.md
+  crow_ask_template: crow_ask_to_planner.md
+  poll_interval_s: 5
+  # Opus 4.7 is picked inside CC; not configured here.
 
 crow_handler:
   kind: api
@@ -43,7 +45,7 @@ default_crow:
   # startup_models_by_harness:
   #   cursor: [composer]
   #   codex: [gpt-5.5]
-  startup_prompt_template: crow_cursor.md
+  startup_prompt_template: fresh_crow.md
 
 tui:
   ticket_grid_max_rows: 20

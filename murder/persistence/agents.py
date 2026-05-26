@@ -1,8 +1,7 @@
-"""Persistence for the agents, agent_messages, and sentinel_state tables."""
+"""Persistence for the agents and agent_messages tables."""
 
 from __future__ import annotations
 
-import json
 import sqlite3
 from datetime import datetime
 from typing import Any
@@ -64,6 +63,43 @@ def set_agent_status(conn: sqlite3.Connection, agent_id: str, status: str) -> No
     )
 
 
+def rename_agent(
+    conn: sqlite3.Connection,
+    old_agent_id: str,
+    new_agent_id: str,
+    *,
+    session: str | None = None,
+) -> None:
+    """Rekey an agent row and its stored transcript."""
+    now = _now()
+    old_row = conn.execute(
+        "SELECT * FROM agents WHERE agent_id = ?", (old_agent_id,)
+    ).fetchone()
+    new_row = conn.execute(
+        "SELECT * FROM agents WHERE agent_id = ?", (new_agent_id,)
+    ).fetchone()
+    if old_row is not None:
+        if new_row is not None:
+            conn.execute("DELETE FROM agents WHERE agent_id = ?", (new_agent_id,))
+        conn.execute(
+            """
+            UPDATE agents
+               SET agent_id = ?, session = COALESCE(?, session), last_heartbeat_at = ?
+             WHERE agent_id = ?
+            """,
+            (new_agent_id, session, now, old_agent_id),
+        )
+    elif new_row is not None and session is not None:
+        conn.execute(
+            "UPDATE agents SET session = ?, last_heartbeat_at = ? WHERE agent_id = ?",
+            (session, now, new_agent_id),
+        )
+    conn.execute(
+        "UPDATE agent_messages SET agent_id = ? WHERE agent_id = ?",
+        (new_agent_id, old_agent_id),
+    )
+
+
 def get_active_agent_by_role(conn: sqlite3.Connection, role: str) -> str | None:
     """Return the agent_id of a running/idle agent with the given role, or None."""
     row = conn.execute(
@@ -99,35 +135,32 @@ def replace_agent_messages(
     )
 
 
-def upsert_sentinel_state(
+def list_stale_done_crow_sessions(
     conn: sqlite3.Connection,
     *,
-    key: str,
-    run_id: str,
-    state: dict[str, Any],
-) -> None:
-    conn.execute(
+    older_than_minutes: int = 10,
+) -> list[dict[str, Any]]:
+    """Return crow agents with a live session whose ticket reached a terminal state
+    at least ``older_than_minutes`` ago.
+
+    Returns list of dicts with keys: agent_id, session.
+    """
+    rows = conn.execute(
         """
-        INSERT INTO sentinel_state(key, run_id, updated_at, state_json)
-        VALUES (?, ?, ?, ?)
-        ON CONFLICT(key) DO UPDATE SET
-            run_id = excluded.run_id,
-            updated_at = excluded.updated_at,
-            state_json = excluded.state_json
+        SELECT a.agent_id, a.session
+          FROM agents a
+          JOIN tickets t ON a.ticket_id = t.id
+         WHERE a.role = 'crow'
+           AND a.session IS NOT NULL
+           AND t.status IN ('done', 'failed')
+           AND t.updated_at < datetime('now', ? || ' minutes')
         """,
-        (key, run_id, _now(), json.dumps(state, default=str)),
-    )
+        (f"-{older_than_minutes}",),
+    ).fetchall()
+    return [dict(r) for r in rows]
 
 
-def get_sentinel_state(conn: sqlite3.Connection, key: str) -> dict[str, Any] | None:
-    row = conn.execute(
-        "SELECT state_json FROM sentinel_state WHERE key = ?",
-        (key,),
-    ).fetchone()
-    if row is None:
-        return None
-    raw = row["state_json"]
-    if not raw:
-        return {}
-    loaded = json.loads(raw)
-    return loaded if isinstance(loaded, dict) else {}
+def clear_agent_session(conn: sqlite3.Connection, agent_id: str) -> None:
+    """NULL out the session column for an agent (used after killing its tmux session)."""
+    conn.execute("UPDATE agents SET session = NULL WHERE agent_id = ?", (agent_id,))
+

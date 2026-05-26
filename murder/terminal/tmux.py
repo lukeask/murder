@@ -100,6 +100,18 @@ async def kill_session(name: str) -> None:
         await _tmux("kill-session", "-t", name)
 
 
+async def rename_session(old_name: str, new_name: str) -> bool:
+    """Rename a tmux session if it exists; return whether a rename happened."""
+    if old_name == new_name:
+        return False
+    if not await session_exists(old_name):
+        return False
+    if await session_exists(new_name):
+        raise TmuxError(f"session already exists: {new_name}")
+    await _tmux("rename-session", "-t", old_name, new_name)
+    return True
+
+
 async def list_sessions(prefix: str | None = None) -> list[str]:
     rc, out, _ = await _tmux(
         "list-sessions",
