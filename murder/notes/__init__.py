@@ -20,7 +20,8 @@ from typing import Any
 
 from murder.clients.base import APIClient
 from murder.config import NotetakerConfig
-from murder.persistence import notetaker as dbmod
+from murder.persistence import notes as notes_db
+from murder.persistence import notetaker as notetaker_db
 from murder.prompts import load as _load_prompt
 from murder.storage.filesystem import atomic_write_text
 from murder.storage.paths import note_md, notes_dir
@@ -62,7 +63,7 @@ def content_hash(text: str) -> str:
 
 
 def _record_revision(conn: sqlite3.Connection, name: str, body: str, *, source: str) -> None:
-    dbmod.insert_note_revision(
+    notes_db.insert_note_revision(
         conn,
         name,
         source=source,
@@ -73,7 +74,7 @@ def _record_revision(conn: sqlite3.Connection, name: str, body: str, *, source: 
 
 def ensure_note(conn: sqlite3.Connection, repo_root: Path, name: str) -> dict[str, Any]:
     """Return note row for `name`, importing existing files without clobbering."""
-    row = dbmod.get_note(conn, name)
+    row = notes_db.get_note(conn, name)
     rel = _rel_path(repo_root, name)
     path = repo_root / rel
     if row is not None:
@@ -82,18 +83,18 @@ def ensure_note(conn: sqlite3.Connection, repo_root: Path, name: str) -> dict[st
         return row
     if path.exists():
         body = path.read_text(encoding="utf-8")
-        dbmod.upsert_note(conn, name, body=body, materialized_path=rel)
+        notes_db.upsert_note(conn, name, body=body, materialized_path=rel)
         _record_revision(conn, name, body, source="bootstrap")
     else:
         body = ""
-        dbmod.upsert_note(conn, name, body=body, materialized_path=rel)
+        notes_db.upsert_note(conn, name, body=body, materialized_path=rel)
         atomic_write_text(path, body)
         _record_revision(conn, name, body, source="bootstrap")
-    return dbmod.get_note(conn, name) or {"name": name, "body": body, "materialized_path": rel}
+    return notes_db.get_note(conn, name) or {"name": name, "body": body, "materialized_path": rel}
 
 
 def read_note(conn: sqlite3.Connection, name: str) -> str:
-    row = dbmod.get_note(conn, name)
+    row = notes_db.get_note(conn, name)
     return str(row["body"]) if row else ""
 
 
@@ -106,10 +107,10 @@ def write_note(
     source: str = "agent",
 ) -> None:
     """Replace the body of note `name` in the DB and re-materialize its file."""
-    existing = dbmod.get_note(conn, name)
+    existing = notes_db.get_note(conn, name)
     old_body = str(existing["body"]) if existing is not None else None
     rel = _rel_path(repo_root, name)
-    dbmod.upsert_note(conn, name, body=body, materialized_path=rel)
+    notes_db.upsert_note(conn, name, body=body, materialized_path=rel)
     atomic_write_text(repo_root / rel, body)
     if old_body != body:
         _record_revision(conn, name, body, source=source)
@@ -127,13 +128,13 @@ def create_timestamped_note(
     base = timestamp_name(now)
     name = base
     i = 2
-    while dbmod.get_note(conn, name) is not None or note_md(repo_root, name).exists():
+    while notes_db.get_note(conn, name) is not None or note_md(repo_root, name).exists():
         name = f"{base}-{i}"
         i += 1
     rel = _rel_path(repo_root, name)
     text = body.rstrip() + "\n"
     atomic_write_text(repo_root / rel, text)
-    dbmod.upsert_note(conn, name, body=text, materialized_path=rel)
+    notes_db.upsert_note(conn, name, body=text, materialized_path=rel)
     _record_revision(conn, name, text, source=source)
     return name
 
@@ -147,7 +148,7 @@ def active_note_name_exists(
 ) -> bool:
     if name == exclude:
         return False
-    row = dbmod.get_note(conn, name)
+    row = notes_db.get_note(conn, name)
     if row is not None and str(row.get("status", "active")) == "active":
         return True
     path = note_md(repo_root, name)
@@ -165,7 +166,7 @@ def rename_note(
         return old_name
     if active_note_name_exists(conn, repo_root, new_name, exclude=old_name):
         raise FileExistsError(f"note already exists: {new_name}")
-    row = dbmod.get_note(conn, old_name)
+    row = notes_db.get_note(conn, old_name)
     if row is None:
         raise FileNotFoundError(f"note not found: {old_name}")
     old_path = repo_root / str(row["materialized_path"])
@@ -177,7 +178,7 @@ def rename_note(
         old_path.rename(new_path)
     else:
         atomic_write_text(new_path, str(row["body"]))
-    dbmod.rename_note(
+    notes_db.rename_note(
         conn,
         old_name,
         new_name,
@@ -188,7 +189,7 @@ def rename_note(
 
 def retire_note(conn: sqlite3.Connection, repo_root: Path, name: str) -> Path:
     """Move an active note out of the sidebar into `.murder/notes/retired_notes/`."""
-    row = dbmod.get_note(conn, name)
+    row = notes_db.get_note(conn, name)
     if row is None:
         raise FileNotFoundError(f"note not found: {name}")
     old_path = repo_root / str(row["materialized_path"])
@@ -210,7 +211,7 @@ def retire_note(conn: sqlite3.Connection, repo_root: Path, name: str) -> Path:
         old_path.rename(dest)
     else:
         atomic_write_text(dest, str(row["body"]))
-    dbmod.mark_note_retired(
+    notes_db.mark_note_retired(
         conn,
         name,
         materialized_path=str(dest.relative_to(repo_root)),
@@ -220,9 +221,9 @@ def retire_note(conn: sqlite3.Connection, repo_root: Path, name: str) -> Path:
 
 def latest_prior_note(conn: sqlite3.Connection, exclude: str) -> tuple[str, str] | None:
     """The most recently-named non-empty note other than `exclude`, as (name, body)."""
-    for row in dbmod.list_notes(conn):
+    for row in notes_db.list_notes(conn):
         if row["name"] != exclude and row["size"]:
-            full = dbmod.get_note(conn, row["name"])
+            full = notes_db.get_note(conn, row["name"])
             if full:
                 return row["name"], str(full["body"])
     return None
@@ -382,7 +383,9 @@ def create_durable_capture(
     if not body:
         raise ValueError("empty capture")
     initial_short = _fallback_short_vers(body)
-    entry_id = dbmod.insert_notes_entry(conn, raw=body, cleaned=body, short_vers=initial_short)
+    entry_id = notetaker_db.insert_notes_entry(
+        conn, raw=body, cleaned=body, short_vers=initial_short
+    )
     note_name = create_timestamped_note(conn, repo_root, body, source="agent")
     return {
         "entry_id": entry_id,
@@ -428,7 +431,7 @@ async def resolve_capture_note(
         config=config,
     )
     short_vers = meta["short_vers"]
-    dbmod.update_notes_entry_short_vers(conn, entry_id, short_vers)
+    notetaker_db.update_notes_entry_short_vers(conn, entry_id, short_vers)
 
     resolved_name = note_name
     title = meta["one_or_two_word_title"]
@@ -445,7 +448,7 @@ async def resolve_capture_note(
             retry_slug = _slugify_title(retry["one_or_two_word_title"])
             if retry_slug:
                 short_vers = retry["short_vers"]
-                dbmod.update_notes_entry_short_vers(conn, entry_id, short_vers)
+                notetaker_db.update_notes_entry_short_vers(conn, entry_id, short_vers)
                 slug = retry_slug
         target = _collision_safe_name(conn, repo_root, slug, exclude=note_name)
         if target != note_name:
@@ -482,10 +485,10 @@ async def submit_capture(
     else:
         initial_short = _fallback_short_vers(body)
         if entry_id is None:
-            entry_id = dbmod.insert_notes_entry(
+            entry_id = notetaker_db.insert_notes_entry(
                 conn, raw=body, cleaned=body, short_vers=initial_short
             )
-        if dbmod.get_note(conn, note_name) is None:
+        if notes_db.get_note(conn, note_name) is None:
             write_note(conn, repo_root, note_name, body.rstrip() + "\n", source="agent")
         else:
             note_body = read_note(conn, note_name).rstrip()

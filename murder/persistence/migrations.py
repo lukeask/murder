@@ -299,3 +299,79 @@ def _migrate_agents_failed_status(conn: sqlite3.Connection) -> None:
         PRAGMA foreign_keys = ON;
         """
     )
+
+
+def _migrate_completion_tables(conn: sqlite3.Connection) -> None:
+    """Add check_results and completion_attempts tables for the completion coordinator."""
+    existing = {
+        row["name"]
+        for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table'"
+        ).fetchall()
+    }
+    if "check_results" not in existing:
+        conn.execute(
+            """
+            CREATE TABLE check_results (
+                ticket_id   TEXT NOT NULL,
+                check_name  TEXT NOT NULL,
+                timestamp   TEXT NOT NULL,
+                status      TEXT NOT NULL CHECK (status IN ('pass', 'fail')),
+                data_json   TEXT,
+                PRIMARY KEY (ticket_id, check_name, timestamp)
+            )
+            """
+        )
+    if "completion_attempts" not in existing:
+        conn.execute(
+            """
+            CREATE TABLE completion_attempts (
+                ticket_id   TEXT NOT NULL,
+                check_name  TEXT NOT NULL,
+                attempts    INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (ticket_id, check_name)
+            )
+            """
+        )
+
+
+def _migrate_drop_sentinel(conn: sqlite3.Connection) -> None:
+    """Remove deceased sentinel role and its unused persistence table."""
+    conn.execute("DROP TABLE IF EXISTS sentinel_state")
+
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'agents'"
+    ).fetchone()
+    if row is None or "'sentinel'" not in str(row["sql"]):
+        return
+
+    conn.executescript(
+        """
+        PRAGMA foreign_keys = OFF;
+        BEGIN;
+        DELETE FROM agents WHERE role = 'sentinel';
+        ALTER TABLE agents RENAME TO agents_old_sentinel_migration;
+        CREATE TABLE agents (
+            agent_id          TEXT PRIMARY KEY,
+            role              TEXT NOT NULL CHECK (role IN
+                              ('collaborator','notetaker','crow_handler','crow','planner','planning_handler')),
+            ticket_id         TEXT REFERENCES tickets(id) ON DELETE SET NULL,
+            session           TEXT,
+            status            TEXT NOT NULL CHECK (status IN
+                              ('idle','running','blocked','escalating','done','failed','dead')),
+            start_commit      TEXT,
+            started_at        TEXT NOT NULL,
+            last_heartbeat_at TEXT,
+            pid               INTEGER
+        );
+        INSERT INTO agents
+            (agent_id, role, ticket_id, session, status, start_commit,
+             started_at, last_heartbeat_at, pid)
+        SELECT agent_id, role, ticket_id, session, status, start_commit,
+               started_at, last_heartbeat_at, pid
+          FROM agents_old_sentinel_migration;
+        DROP TABLE agents_old_sentinel_migration;
+        COMMIT;
+        PRAGMA foreign_keys = ON;
+        """
+    )

@@ -54,7 +54,8 @@ PROTOCOL_VERSION = 1
 class Role(StrEnum):
     COLLABORATOR = "collaborator"
     NOTETAKER = "notetaker"
-    SENTINEL = "sentinel"
+    PLANNER = "planner"
+    PLANNING_HANDLER = "planning_handler"
     CROW_HANDLER = "crow_handler"
     CROW = "crow"
 
@@ -86,7 +87,6 @@ class Entity(StrEnum):
     NOTE = "note"
     ESCALATION = "escalation"
     QUEUE_ROW = "queue_row"
-    SENTINEL_STATE = "sentinel_state"
 
 
 class PresenceState(StrEnum):

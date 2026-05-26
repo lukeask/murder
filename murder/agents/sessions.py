@@ -59,6 +59,7 @@ class AgentSpec:
 class AgentHandle:
     """Live reference to a running agent session."""
 
+    agent_id: str
     session_name: str
     spec: AgentSpec
     task: asyncio.Task[object] | None = None

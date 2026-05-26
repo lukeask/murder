@@ -81,7 +81,7 @@ CREATE INDEX IF NOT EXISTS idx_checklist_ticket ON checklist(ticket_id);
 CREATE TABLE IF NOT EXISTS agents (
     agent_id          TEXT PRIMARY KEY,
     role              TEXT NOT NULL CHECK (role IN
-                      ('collaborator','notetaker','sentinel','crow_handler','crow')),
+                      ('collaborator','notetaker','crow_handler','crow','planner','planning_handler')),
     ticket_id         TEXT REFERENCES tickets(id) ON DELETE SET NULL,
     session           TEXT,
     status            TEXT NOT NULL CHECK (status IN
@@ -149,13 +149,6 @@ CREATE TABLE IF NOT EXISTS worker_heartbeats (
 
 CREATE INDEX IF NOT EXISTS idx_worker_heartbeats_run
     ON worker_heartbeats(run_id, last_heartbeat_at);
-
-CREATE TABLE IF NOT EXISTS sentinel_state (
-    key              TEXT PRIMARY KEY,
-    run_id           TEXT NOT NULL REFERENCES runs(run_id) ON DELETE CASCADE,
-    updated_at       TEXT NOT NULL,
-    state_json       TEXT NOT NULL DEFAULT '{}'
-);
 
 CREATE TABLE IF NOT EXISTS escalations (
     id                INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -360,6 +353,8 @@ def init_db(conn: sqlite3.Connection) -> None:
     from murder.persistence.migrations import (
         _migrate_agents_failed_status,
         _migrate_agents_notetaker_role,
+        _migrate_completion_tables,
+        _migrate_drop_sentinel,
         _migrate_events_schema_version,
         _migrate_notes_identity_status,
         _migrate_role_names,
@@ -380,6 +375,8 @@ def init_db(conn: sqlite3.Connection) -> None:
     _migrate_ticket_archived_status(conn)
     _migrate_ticket_draft_status(conn)
     _migrate_notes_identity_status(conn)
+    _migrate_completion_tables(conn)
+    _migrate_drop_sentinel(conn)
     ensure_notetaker_context_row(conn)
 
 

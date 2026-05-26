@@ -1,15 +1,17 @@
-"""The cast: Collaborator, Notetaker, Sentinel, CrowHandler, Crow.
+"""The cast: Collaborator, Notetaker, PlanningAgent, CrowHandler, Crow.
 
 See `.murder/1777410436NOTES.md` for role responsibilities and the
-hierarchy: User → Collaborator → Sentinel → CrowHandler → Crow. The
-Planning capture uses `murder.notetaker_capture` (bus command `notetaker.capture.submit`).
+hierarchy: User → Collaborator → PlanningAgent (per-plan) → CrowHandler → Crow.
+Planning capture: bus `notetaker.capture.submit` → orchestrator →
+`murder.notes.submit_capture`.
 """
 
 from murder.agents.base import Agent, AgentRole, AgentStatus
 from murder.agents.collaborator import CollaboratorAgent
 from murder.agents.crow import CrowAgent
 from murder.agents.crow_handler import CrowHandler
-from murder.agents.sentinel import SentinelAgent
+from murder.agents.planning_agent import PlanningAgent
+from murder.agents.planning_handler import PlanningHandler
 
 __all__ = [
     "Agent",
@@ -18,5 +20,6 @@ __all__ = [
     "CollaboratorAgent",
     "CrowAgent",
     "CrowHandler",
-    "SentinelAgent",
+    "PlanningAgent",
+    "PlanningHandler",
 ]
