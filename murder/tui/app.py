@@ -10,6 +10,7 @@ import os
 import re
 import subprocess
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING
 from uuid import uuid4
@@ -17,10 +18,12 @@ from uuid import uuid4
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Container, Horizontal, Vertical
+from textual.notifications import SeverityLevel
 from textual.screen import ModalScreen
 from textual.widgets import Footer, Static
 
 from murder.terminal import tmux
+from murder.terminal.session_names import format_session_name
 from murder.config import Config
 from murder.tui.chat_input import ChatInput
 from murder.tui.dispatch import DispatchView, ScheduleTicketsTable
@@ -55,6 +58,8 @@ if TYPE_CHECKING:
 
 COLLABORATOR_START_TIMEOUT_S = 120.0
 CTRL_C_DOUBLE_TAP_S = 1.5
+TOAST_TIMEOUT_MULTIPLIER = 3.0
+RENAME_SELECTED_ARG_COUNT = 2
 
 _TNUM_RE = re.compile(r"^t(\d+)$", re.IGNORECASE)
 
@@ -69,6 +74,12 @@ def _next_ticket_id(repo_root: Path) -> str:
             if m:
                 max_n = max(max_n, int(m.group(1)))
     return f"t{max_n + 1:03d}"
+
+
+def _is_ticket_handle(handle: str, repo_root: Path) -> bool:
+    if _TNUM_RE.match(handle):
+        return True
+    return (tickets_dir(repo_root) / f"{handle}.yaml").exists()
 
 
 def _git_head_sha(repo_root: Path) -> str:
@@ -111,7 +122,7 @@ class HelpScreen(ModalScreen[None]):
                         "",
                         "crow: coding agent assigned to one ticket",
                         "crow_handler: watches a crow and records progress",
-                        "sentinel: handles questions and escalations",
+                        "planning_agent: per-plan LLM that answers crow questions",
                         "ticket: scoped unit of work with deps, write_set, checklist",
                         "wave: tickets that may run after earlier dependencies finish",
                         "",
@@ -132,6 +143,7 @@ class HelpScreen(ModalScreen[None]):
                         "j/k or ↑/↓  vim-style navigation in lists and logs",
                         "ctrl+r refresh · ctrl+u refresh usage",
                         "ctrl+n  quick note capture overlay (global)",
+                        "e  focus escalation strip (when active) · a ack · r retry · ↵ navigate",
                         "murder --help shows the CLI reference",
                     ]
                 ),
@@ -153,6 +165,7 @@ class MurderApp(App[None]):
         Binding("ctrl+c", "ctrl_c_quit", "Quit", priority=True, show=False),
         ("ctrl+comma", "open_settings", "Settings"),
         Binding("ctrl+n", "open_note_capture", "Quick note", show=False),
+        Binding("ctrl+p", "new_plan_session", "New plan", show=False),
         Binding("ctrl+1", "view_planning", "Planning", priority=True),
         Binding("ctrl+2", "view_crows", "Crows", priority=True),
         Binding("ctrl+3", "view_schedule", "Dispatch", priority=True),
@@ -175,6 +188,7 @@ class MurderApp(App[None]):
         Binding("ctrl+right", "focus_right", "Focus right", show=False, priority=True),
         Binding("tab", "focus_next_region", "Next pane", show=False, priority=True),
         Binding("shift+tab", "focus_previous_region", "Prev pane", show=False, priority=True),
+        Binding("e", "focus_escalations", "Escalations", show=False),
         ("ctrl+r", "refresh_now", "Refresh"),
         ("ctrl+u", "collect_usage", "Usage"),
         ("c", "schedule_apply_carve", "Metadata"),
@@ -241,6 +255,8 @@ class MurderApp(App[None]):
         self._collab_chat_lock = asyncio.Lock()
         self._sidebar_visible = True
         self._collab_raw = False  # ctrl+y: show the raw tmux pane instead of the parsed chat
+        self._chat_target_agent_id: str | None = None
+        self._chat_target_label = "collaborator"
         self._user_config: UserConfig = load_user_config()
         self._view = "planning"
         self._pre_chat_focus = None
@@ -262,6 +278,25 @@ class MurderApp(App[None]):
         )
         for theme in CUSTOM_THEMES:
             self.register_theme(theme)
+
+    def notify(
+        self,
+        message: str,
+        *,
+        title: str = "",
+        severity: SeverityLevel = "information",
+        timeout: float | None = None,
+        markup: bool = True,
+    ) -> None:
+        if timeout is not None:
+            timeout *= TOAST_TIMEOUT_MULTIPLIER
+        super().notify(
+            message,
+            title=title,
+            severity=severity,
+            timeout=timeout,
+            markup=markup,
+        )
 
     def compose(self) -> ComposeResult:
         yield self._header
@@ -336,6 +371,12 @@ class MurderApp(App[None]):
             return
         self.run_worker(self._collect_usage_snapshots(), exclusive=True, group="usage")
 
+    def action_focus_escalations(self) -> None:
+        if self._escalations.display:
+            self._escalations.focus()
+        else:
+            self.notify("No active escalations.", timeout=2)
+
     async def _collect_usage_snapshots(self) -> None:
         await self._dispatch_ctrl.collect_usage_snapshots()
 
@@ -370,6 +411,12 @@ class MurderApp(App[None]):
                 and self._active_document == "plan"
                 and self._plans.selected_name
             ):
+                if self._has_selected_plan:
+                    plan_name = self._plans.selected_name
+                    self._chat_target_agent_id = f"planner-{plan_name}"
+                    self._chat_target_label = f"planner: {plan_name}"
+                    self._chat.set_recipient(self._chat_target_label)
+                    self._sync_planner_mirror_session(plan_name)
                 self.run_worker(
                     self._render_plan(self._plans.selected_name),
                     exclusive=True,
@@ -387,13 +434,19 @@ class MurderApp(App[None]):
                     group="notedoc",
                     exit_on_error=False,
                 )
+            elif self._view == "planning" and self._active_document == "plan":
+                self._has_selected_plan = False
+                self._chat_target_agent_id = None
+                self._chat_target_label = "collaborator"
+                self._chat.set_recipient("collaborator")
+                self._plan_doc.display = False
 
     async def _refresh_pane(self) -> None:
         with self.perf.span("tui.refresh_pane"):
             await self._mirror.refresh_pane()
             if self._view == "crows":
                 await self._crows.refresh_tails()
-            if self._view == "planning" and not self._collab_raw:
+            if self._view == "planning" and not self._collab_raw and self._planner_target_name() is None:
                 await self._refresh_collab_chat()
 
     def on_ticket_grid_ticket_selected(self, event: TicketGrid.TicketSelected) -> None:
@@ -404,6 +457,11 @@ class MurderApp(App[None]):
         # Keep the shared pane mirror in sync so planning's collab-raw
         # toggle and the shell session share a hint.
         self._mirror.set_session(event.entry.session)
+        if self._view == "crows":
+            self._chat_target_agent_id = event.entry.agent_id
+            label = event.entry.ticket_id or event.entry.session or event.entry.agent_id
+            self._chat_target_label = label
+            self._chat.set_recipient(label)
 
     def on_crow_tile_opened(self, event: CrowTile.Opened) -> None:
         # The CrowsView itself handles enlarge; surface a short attach hint
@@ -416,9 +474,9 @@ class MurderApp(App[None]):
             self._active_document = "plan"
             if not self._has_selected_plan:
                 self._has_selected_plan = True
-                self._plan_doc.display = True
-            self._plan_doc.display = True
-            self._notes_doc.display = False
+            self._chat_target_agent_id = f"planner-{event.name}"
+            self._chat_target_label = f"planner: {event.name}"
+            self._apply_mode()
             self.run_worker(
                 self._render_plan(event.name),
                 exclusive=True,
@@ -429,11 +487,17 @@ class MurderApp(App[None]):
     async def on_plan_list_plan_opened(self, event: PlanList.PlanOpened) -> None:
         await self._open_plan(event.name)
 
+    async def on_plan_list_plan_deprecate_requested(
+        self, event: PlanList.PlanDeprecateRequested
+    ) -> None:
+        await self._deprecate_plan(event.name)
+
     def on_notes_list_note_highlighted(self, event: NotesList.NoteHighlighted) -> None:
         if self._view == "planning":
             self._active_document = "note"
-            self._plan_doc.display = False
-            self._notes_doc.display = True
+            self._chat_target_agent_id = None
+            self._chat_target_label = "collaborator"
+            self._apply_mode()
             self.run_worker(
                 self._render_note(event.name),
                 exclusive=True,
@@ -517,6 +581,28 @@ class MurderApp(App[None]):
             self._active_document = "plan"
             self._apply_mode()
 
+    async def _deprecate_plan(self, name: str) -> None:
+        result = await self._submit_command(
+            target_worker="orchestrator",
+            kind="plan.deprecate",
+            payload={"name": name},
+            timeout_s=10.0,
+        )
+        if result is None:
+            return
+        self._refresh_db_views()
+        self.notify(f"deprecated plan: {name}", timeout=4)
+        selected = self._plans.selected_name
+        if selected:
+            await self._focus_plan(selected)
+        else:
+            self._has_selected_plan = False
+            self._chat_target_agent_id = None
+            self._chat_target_label = "collaborator"
+            self._chat.set_recipient("collaborator")
+            self._plan_doc.display = False
+            self._apply_mode()
+
     async def _refresh_collab_chat(self) -> None:
         """Re-parse the collaborator's tmux pane into the chat transcript.
 
@@ -592,14 +678,26 @@ class MurderApp(App[None]):
 
     def _set_view(self, view: str) -> None:
         self._view = view
+        self._chat_target_agent_id = None
+        self._chat_target_label = "collaborator"
         self._apply_mode()
         self._refresh_db_views()  # also re-renders the planning doc when a plan is selected
 
     def _apply_mode(self) -> None:
         planning = self._view == "planning"
-        collab_chat_on = planning and not self._collab_raw
-        collab_raw_on = planning and self._collab_raw
-        self._chat.set_recipient("collaborator")
+        has_planner_target = planning and self._planner_target_name() is not None
+        collab_chat_on = planning and not self._collab_raw and not has_planner_target
+        collab_raw_on = planning and (self._collab_raw or has_planner_target)
+        if self._view == "planning":
+            if self._chat_target_agent_id is None:
+                self._chat.set_recipient("collaborator")
+            else:
+                self._chat.set_recipient(self._chat_target_label)
+        elif self._view == "crows":
+            if self._chat_target_agent_id is None:
+                self._chat.set_recipient("collaborator")
+            else:
+                self._chat.set_recipient(self._chat_target_label)
         self._header.set_view(self._view)
         self._grid.display = False
         self._crows.display = self._view == "crows"
@@ -618,6 +716,12 @@ class MurderApp(App[None]):
         # toggle; CrowsView owns its own mirror for the enlarged tile.
         self._mirror.display = collab_raw_on
         self._mirror.styles.width = "1fr"
+        if collab_raw_on:
+            plan_name = self._planner_target_name()
+            if plan_name is not None:
+                self._sync_planner_mirror_session(plan_name)
+            else:
+                self._sync_collaborator_mirror_session()
         if collab_chat_on:
             self.run_worker(self._refresh_collab_chat(), exclusive=True, group="collab_chat")
 
@@ -630,10 +734,15 @@ class MurderApp(App[None]):
         # Only meaningful in collaborator planning mode; harmless elsewhere.
         self._collab_raw = not self._collab_raw
         if self._collab_raw:
-            self._sync_collaborator_mirror_session()
+            plan_name = self._planner_target_name()
+            if plan_name is not None:
+                self._sync_planner_mirror_session(plan_name)
+            else:
+                self._sync_collaborator_mirror_session()
         self._apply_mode()
+        raw_label = "planner raw tmux pane" if self._planner_target_name() else "raw tmux pane"
         self.notify(
-            f"collaborator view: {'raw tmux pane' if self._collab_raw else 'parsed chat'}",
+            f"collaborator view: {raw_label if self._collab_raw else 'parsed chat'}",
             timeout=2,
         )
 
@@ -653,9 +762,61 @@ class MurderApp(App[None]):
         if text.startswith(":"):
             await self._handle_colon(text)
             return
-        # Everything else — including /slash messages — goes to the collaborator unchanged.
-        # Serialize ensure+send so a flurry of messages during cold-start
-        # doesn't race two collaborator spawns or interleave send_keys.
+
+        # Capture before any awaits — the periodic refresh can reset
+        # _chat_target_agent_id between yields, causing spurious collab routing.
+        target_id = self._chat_target_agent_id
+
+        # @-routing: @newplanner / @np scaffolds a fresh plan; @<planname>
+        # targets an existing planner.  Body-less @xxx just focuses, no send.
+        if text.startswith("@"):
+            parts = text.split(None, 1)
+            handle = parts[0][1:].lower()
+            body = parts[1] if len(parts) > 1 else ""
+            if handle in ("newplanner", "np"):
+                plan_name = await self._scaffold_new_plan()
+                if plan_name is None:
+                    self.notify("plan scaffold failed", severity="error", timeout=5)
+                    return
+                target_id = f"planner-{plan_name}"
+                await self._focus_plan(plan_name)
+            elif handle == "collaborator":
+                target_id = None  # route through the existing collab branch below
+                text = body
+                if not body:
+                    return
+            elif _is_ticket_handle(handle, self.runtime.repo_root):
+                target_id = f"crow-{handle}"
+            else:
+                target_id = f"planner-{handle}"
+            if not body:
+                return
+            text = body
+
+        if target_id is not None:
+            result = await self._submit_command(
+                target_worker="orchestrator",
+                kind="agent.message",
+                payload={"agent_id": target_id, "message": text},
+                timeout_s=COLLABORATOR_START_TIMEOUT_S,
+            )
+            if result is None:
+                return
+            if result.get("handled") is False:
+                error = str(result.get("error") or "agent did not handle message")
+                self.notify(error, severity="error", timeout=6)
+                return
+            if target_id.startswith("planner-"):
+                self._sync_planner_mirror_session(target_id[len("planner-"):])
+            label = (
+                self._chat_target_label
+                if target_id == self._chat_target_agent_id
+                else target_id
+            )
+            self.notify(f"→ {label}", timeout=2)
+            return
+
+        # Default: collaborator. Lock serializes ensure+send on cold start.
         async with self._collab_lock:
             result = await self._submit_command(
                 target_worker="collaborator",
@@ -666,7 +827,6 @@ class MurderApp(App[None]):
             if result is None:
                 return
             self._sync_collaborator_mirror_session()
-            # Optimistic echo + spinner; the next pane parse reconciles it.
             self._collab_chat.add_turn("you", text)
             self._collab_chat.add_status("collaborator is thinking…")
         self.notify("→ collaborator", timeout=2)
@@ -697,12 +857,103 @@ class MurderApp(App[None]):
         if cmd_lower in {":wq", ":q", ":q!"}:
             self.exit()
             return
-        if cmd_lower.startswith(":ticket "):
+        elif cmd_lower.startswith(":ticket "):
             title = stripped[len(":ticket "):].strip()
             if not title:
                 self.notify(":ticket requires a title", severity="warning", timeout=3)
                 return
             await self._quick_create_ticket(title)
+        elif cmd_lower.startswith(":quick "):
+            title = stripped[len(":quick "):].strip()
+            if not title:
+                self.notify(":quick requires a title", severity="warning", timeout=3)
+                return
+            await self._quick_kick_ticket(title)
+        elif cmd_lower.startswith(":rename "):
+            args = stripped.split(maxsplit=2)
+            if len(args) == RENAME_SELECTED_ARG_COUNT:
+                old_name = self._plans.selected_name
+                new_name = args[1].strip()
+            else:
+                old_name = args[1].strip()
+                new_name = args[2].strip()
+            if not old_name:
+                self.notify(
+                    ":rename requires a selected plan or old name",
+                    severity="warning",
+                    timeout=3,
+                )
+                return
+            if not new_name:
+                self.notify(":rename requires a new name", severity="warning", timeout=3)
+                return
+            await self._rename_plan(old_name, new_name)
+        elif cmd_lower.startswith(":deprecate"):
+            parts = stripped.split(maxsplit=1)
+            name = parts[1].strip() if len(parts) > 1 else self._plans.selected_name
+            if not name:
+                self.notify(
+                    ":deprecate requires a selected plan or name",
+                    severity="warning",
+                    timeout=3,
+                )
+                return
+            await self._deprecate_plan(name)
+
+    def action_new_plan_session(self) -> None:
+        """ctrl+p: scaffold a new plan and make it the chat target."""
+        if self._view != "planning":
+            return
+        self.run_worker(self._new_plan_session(), exclusive=False, group="chat")
+
+    async def _new_plan_session(self) -> None:
+        plan_name = await self._scaffold_new_plan()
+        if plan_name is None:
+            self.notify("plan scaffold failed", severity="error", timeout=5)
+            return
+        await self._focus_plan(plan_name)
+        self.notify(f"new plan: {plan_name}", timeout=3)
+
+    async def _scaffold_new_plan(self) -> str | None:
+        """Create a placeholder plan and return its canonical name."""
+        name = "plan-" + datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        result = await self._submit_command(
+            target_worker="orchestrator",
+            kind="plan.scaffold",
+            payload={"name": name, "body": "# Plan Name\n"},
+            timeout_s=10.0,
+        )
+        if result is None:
+            return None
+        return str(result.get("name") or name)
+
+    async def _focus_plan(self, name: str) -> None:
+        self._refresh_db_views()
+        plan_names = list(getattr(self._plans, "_plans", []))
+        if name in plan_names:
+            self._plans.move_cursor(row=plan_names.index(name))
+        self._active_document = "plan"
+        self._has_selected_plan = True
+        self._plan_doc.display = True
+        self._notes_doc.display = False
+        self._chat_target_agent_id = f"planner-{name}"
+        self._chat_target_label = f"planner: {name}"
+        self._chat.set_recipient(self._chat_target_label)
+        self._sync_planner_mirror_session(name)
+        await self._render_plan(name)
+
+    async def _rename_plan(self, old_name: str, new_name: str) -> None:
+        result = await self._submit_command(
+            target_worker="orchestrator",
+            kind="plan.rename",
+            payload={"old_name": old_name, "new_name": new_name},
+            timeout_s=10.0,
+        )
+        if result is None:
+            return
+        name = str(result.get("name") or new_name)
+        await self._focus_plan(name)
+        self.notify(f"renamed plan: {old_name} → {name}", timeout=3)
 
     def action_open_note_capture(self) -> None:
         screen = NoteCaptureScreen(
@@ -740,7 +991,6 @@ class MurderApp(App[None]):
 
     async def _capture_note_via_service(self, raw: str) -> None:
         """Submit note capture through the service command and update UI on completion."""
-        self.notify("capturing note...", timeout=3)
         result = await self._submit_command(
             target_worker="orchestrator",
             kind="notetaker.capture.submit",
@@ -751,8 +1001,9 @@ class MurderApp(App[None]):
         if result is None:
             return
         note_name = str(result.get("note_name") or "")
+        short_vers = str(result.get("short_vers") or "")
         if not note_name:
-            self.notify("note saved (unknown name)", timeout=4)
+            self.notify(short_vers or "note saved", timeout=5)
             return
         self._refresh_db_views()
         self._active_document = "note"
@@ -765,7 +1016,7 @@ class MurderApp(App[None]):
             group="notedoc",
             exit_on_error=False,
         )
-        self.notify(f"note ready: {note_name}.md", timeout=4)
+        self.notify(short_vers or f"note saved: {note_name}", timeout=5)
 
     async def _quick_create_ticket(self, title: str) -> None:
         """Write a .murder/tickets/<id>.md; TicketSync imports it as PLANNED."""
@@ -773,11 +1024,30 @@ class MurderApp(App[None]):
             ticket_id = _next_ticket_id(self.runtime.repo_root)
             path = ticket_md(self.runtime.repo_root, ticket_id)
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(f"# {title}\n\n## Plan\n\n## Working Notes\n\n## Sentinel Notes\n")
+            path.write_text(f"# {title}\n\n## Plan\n\n## Working Notes\n")
         except Exception as exc:
             self.notify(f"ticket create failed: {exc}", severity="error", timeout=6)
             return
         self.notify(f"ticket {ticket_id}: {title}", timeout=5)
+
+    async def _quick_kick_ticket(self, title: str) -> None:
+        """Create a ticket and immediately kick it via the service."""
+        result = await self._submit_command(
+            target_worker="orchestrator",
+            kind="ticket.quick_kick",
+            payload={"title": title},
+            timeout_s=30.0,
+            notify_errors=True,
+        )
+        if result is None:
+            return
+        ticket_id = str(result.get("ticket_id") or "")
+        kicked = list(result.get("kicked") or [])
+        if kicked:
+            self.notify(f"kicked {ticket_id}: {title}", timeout=5)
+        else:
+            self.notify(f"created {ticket_id}: {title} (not yet ready)", timeout=5)
+        self._refresh_db_views()
 
     def action_focus_chat(self) -> None:
         if self.focused is not self._chat:
@@ -794,7 +1064,7 @@ class MurderApp(App[None]):
         if self._view == "planning":
             self.set_focus(self._notes_list if self._active_document == "note" else self._plans)
         elif self._view == "crows":
-            if not self._crows.focus_first_tile():
+            if not self._crows.focus_last_tile() and not self._crows.focus_first_tile():
                 self.set_focus(self._crows)
         else:
             self.set_focus(None)
@@ -811,14 +1081,17 @@ class MurderApp(App[None]):
     # (chat input, RichLog, plan doc, ...) keeps its intra-pane motion.
 
     def _ordered_focusable_panes(self) -> list[Widget]:
-        """Top-level panes currently visible in the active place."""
-        candidates: list[Widget] = []
+        """Top-level panes currently visible in the active view, in tab order."""
         if self._view == "planning":
-            doc = self._notes_doc if self._active_document == "note" else self._plan_doc
-            if self._collab_raw:
-                candidates = [self._plans, self._notes_list, doc, self._mirror, self._chat]
-            else:
-                candidates = [self._plans, self._notes_list, doc, self._collab_chat, self._chat]
+            candidates = [
+                self._plans,
+                self._notes_list,
+                self._plan_doc,
+                self._notes_doc,
+                self._collab_chat,
+                self._mirror,
+                self._chat,
+            ]
         elif self._view == "crows":
             candidates = [self._crows, self._chat]
         else:  # schedule/dispatch
@@ -907,6 +1180,11 @@ class MurderApp(App[None]):
             exclusive=False,
             group="retry",
         )
+
+    def on_escalation_strip_ack_requested(self, event: EscalationStrip.AckRequested) -> None:
+        event.stop()
+        self.runtime.read_model.ack_escalation(str(event.escalation_id))
+        self.notify("Escalation acknowledged.", timeout=3)
 
     def on_escalation_strip_retry_requested(self, event: EscalationStrip.RetryRequested) -> None:
         event.stop()
@@ -1042,7 +1320,7 @@ class MurderApp(App[None]):
             return None
 
     def _sync_collaborator_mirror_session(self) -> None:
-        snapshot = self._crow_snapshot or self.runtime.read_model.get_crow_snapshot()
+        snapshot = self.runtime.read_model.get_crow_snapshot()
         for session in snapshot.sessions:
             if session.role == "collaborator" and session.status in ("running", "idle"):
                 if session.session_name:
@@ -1050,8 +1328,23 @@ class MurderApp(App[None]):
                     self.run_worker(self._mirror.refresh_pane(), exclusive=True, group="mirror")
                 return
 
+    def _planner_target_name(self) -> str | None:
+        target = self._chat_target_agent_id
+        if target is None or not target.startswith("planner-"):
+            return None
+        plan_name = target[len("planner-") :]
+        return plan_name or None
+
+    def _sync_planner_mirror_session(self, plan_name: str) -> None:
+        if self._view != "planning":
+            return
+        session_name = format_session_name(self.runtime, "planner", f"_{plan_name}")
+        self._mirror.set_session(session_name)
+        self._mirror.border_title = f"planner: {plan_name}"
+        self.run_worker(self._mirror.refresh_pane(), exclusive=True, group="mirror")
+
     def _crow_session_for_ticket(self, ticket_id: str) -> str | None:
-        snapshot = self._crow_snapshot or self.runtime.read_model.get_crow_snapshot()
+        snapshot = self.runtime.read_model.get_crow_snapshot()
         for session in snapshot.sessions:
             if (
                 session.ticket_id == ticket_id
