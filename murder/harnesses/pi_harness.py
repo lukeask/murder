@@ -27,15 +27,15 @@ _TAIL_LINES = 30
 # and the loaded model; either that or the input `>` / a `Ctrl+…` hint means
 # the REPL is up. (Busy state is screened separately, before the idle check.)
 _READY_RE = re.compile(
-    r"(/hotkeys|Ctrl\+[A-Z]|Ctrl\+o|Slash commands|\d+%/\d+k|^\s*[>/]\s*$)",
+    r"(/hotkeys|Ctrl\+[A-Z]|Ctrl\+o|Slash commands|[\d.]+%/[\d.]+[kKmM]|^\s*[>/]\s*$)",
     re.IGNORECASE | re.MULTILINE,
 )
 _IDLE_RE = re.compile(
-    r"(/hotkeys|Ctrl\+[A-Z]|Ctrl\+o|\d+%/\d+k|^\s*[>/]\s*$)",
+    r"(/hotkeys|Ctrl\+[A-Z]|Ctrl\+o|[\d.]+%/[\d.]+[kKmM]|^\s*[>/]\s*$)",
     re.IGNORECASE | re.MULTILINE,
 )
 _BUSY_RE = re.compile(
-    r"\b(thinking|streaming|running|executing|tool calls?|retrying|compacting)\b",
+    r"\b(thinking|streaming|running|working|executing|tool calls?|retrying|compacting)\b",
     re.IGNORECASE,
 )
 _AUTH_RE = re.compile(
@@ -135,9 +135,6 @@ class PiAdapter(HarnessAdapter):
 
     def extract_last_message(self, pane_text: str) -> str | None:
         return extract_last_message_heuristic(_strip_pi_chrome(pane_text))
-
-    def format_nudge(self, msg: str) -> str:
-        return f"[supervisor] {msg}"
 
     async def set_model(self, session: str, model: str) -> bool:
         del session

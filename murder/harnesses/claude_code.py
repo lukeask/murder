@@ -61,10 +61,9 @@ class ClaudeCodeAdapter(HarnessAdapter):
         re.MULTILINE | re.IGNORECASE,
     )
     _IDLE_RE = re.compile(r"[>?❯]\s*$", re.MULTILINE)
-    _BUSY_RE = re.compile(r"(?:thinking|Esc to interrupt|\.{3})", re.IGNORECASE)
+    _BUSY_RE = re.compile(r"(?:thinking|Esc to interrupt)", re.IGNORECASE)
     _CC2_UI_RE = re.compile(r"bypass permissions", re.IGNORECASE)
     # CC 2.x: "Esc to interrupt" appears in status bar ONLY while actively generating.
-    # _BUSY_RE includes \.{3} which would false-positive on placeholder text, so use this.
     _CC2_GENERATING_RE = re.compile(r"Esc to interrupt", re.IGNORECASE)
     # First launch in an un-trusted directory: CC shows an interactive
     # "do you trust the files in this folder?" list dialog. Our ready-regex
@@ -122,9 +121,6 @@ class ClaudeCodeAdapter(HarnessAdapter):
 
     def extract_last_message(self, pane_text: str) -> str | None:
         return extract_last_message_heuristic(pane_text)
-
-    def format_nudge(self, msg: str) -> str:
-        return f"[supervisor] {msg}"
 
     async def set_model(self, session: str, model: str) -> bool:
         del session

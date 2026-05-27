@@ -33,7 +33,7 @@ _BANNER_RE = re.compile(r"OpenAI Codex", re.IGNORECASE)
 # match any "› " line (busy state is screened separately, before this check).
 _IDLE_PROMPT_RE = re.compile(r"^\s*›(?:\s.*)?$", re.MULTILINE)
 _BUSY_RE = re.compile(
-    r"^\s*(?:working|thinking|running|executing|processing|applying patch)\b",
+    r"^\s*(?:[•·]\s*)?(?:working|thinking|running|executing|processing|applying patch)\b",
     re.IGNORECASE | re.MULTILINE,
 )
 _LOGIN_RE = re.compile(r"\b(login required|not logged in|codex login)\b", re.IGNORECASE)
@@ -140,9 +140,6 @@ class CodexAdapter(HarnessAdapter):
 
     def extract_last_message(self, pane_text: str) -> str | None:
         return extract_last_message_heuristic(pane_text)
-
-    def format_nudge(self, msg: str) -> str:
-        return f"[supervisor] {msg}"
 
     async def send_prompt(self, session: str, prompt: str) -> None:
         raw = prompt.encode("utf-8")
