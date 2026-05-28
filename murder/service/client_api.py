@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields, is_dataclass
 from datetime import datetime
 from enum import Enum
 from types import MappingProxyType
-from typing import ClassVar, Protocol
+from types import UnionType
+from typing import Any, ClassVar, Protocol, get_args, get_origin, get_type_hints
+from typing import Union
 
 from murder.tickets.status import TicketStatus
 
@@ -103,7 +105,7 @@ class CrowSessionSummary:
     agent_id: str
     role: str
     ticket_id: str | None
-    ticket_title: str
+    ticket_title: str | None
     status: str
     session_name: str | None
     harness: str | None
@@ -253,7 +255,6 @@ class TicketCarveSnapshot:
     fields: Mapping[str, object]
     wave_options: tuple[int, ...]
     dependency_options: tuple[TicketRef, ...]
-    known_skills: tuple[str, ...]
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "fields", dict(self.fields))
@@ -329,6 +330,61 @@ class MurderServiceClient(Protocol):
         ticket_id: str | None = None,
     ) -> CommandResult: ...
 
+    async def spawn_rogue(
+        self,
+        harness: str,
+        model: str,
+        name: str | None = None,
+    ) -> str: ...
+
+
+def dto_to_wire(value: Any) -> Any:
+    """Convert service DTOs into JSON-compatible RPC payload values."""
+    if is_dataclass(value) and not isinstance(value, type):
+        return {field.name: dto_to_wire(getattr(value, field.name)) for field in fields(value)}
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, Enum):
+        return value.value
+    if isinstance(value, Mapping):
+        return {str(key): dto_to_wire(item) for key, item in value.items()}
+    if isinstance(value, tuple | list):
+        return [dto_to_wire(item) for item in value]
+    return value
+
+
+def dto_from_wire(cls: type[Any], value: Any) -> Any:
+    """Rehydrate service DTOs from JSON-compatible RPC payload values."""
+    origin = get_origin(cls)
+    args = get_args(cls)
+    if origin in (Union, UnionType):
+        non_none = [arg for arg in args if arg is not type(None)]
+        if value is None:
+            return None
+        if len(non_none) == 1:
+            return dto_from_wire(non_none[0], value)
+    if origin is tuple:
+        item_type = args[0] if args else Any
+        return tuple(dto_from_wire(item_type, item) for item in (value or ()))
+    if origin in (dict, Mapping):
+        return dict(value or {})
+    if cls is Any or cls is object:
+        return value
+    if cls is datetime:
+        return datetime.fromisoformat(str(value))
+    if isinstance(cls, type) and issubclass(cls, Enum):
+        return cls(value)
+    if isinstance(cls, type) and is_dataclass(cls):
+        hints = get_type_hints(cls)
+        return cls(
+            **{
+                field.name: dto_from_wire(hints.get(field.name, Any), value[field.name])
+                for field in fields(cls)
+                if field.name in value
+            }
+        )
+    return value
+
 
 __all__ = [
     "ChecklistItem",
@@ -363,4 +419,6 @@ __all__ = [
     "TicketCarveSnapshot",
     "TicketDetailSnapshot",
     "TicketSummary",
+    "dto_from_wire",
+    "dto_to_wire",
 ]

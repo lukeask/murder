@@ -190,7 +190,7 @@ def _crow_rationale(conn: sqlite3.Connection) -> str:
     if not dec_rows:
         snap_n = conn.execute("SELECT COUNT(*) AS n FROM harness_usage_snapshots").fetchone()["n"]
         if snap_n == 0:
-            return "no usage snapshots — press ctrl+u to fetch"
+            return "no usage snapshots — press ctrl+r to fetch"
         return "evaluating…"
     holds = [r for r in dec_rows if not r["decision"]]
     kicks = [r for r in dec_rows if r["decision"]]

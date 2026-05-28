@@ -18,9 +18,12 @@ from murder.config import Config
 from murder.orchestration.orchestrator import Orchestrator
 from murder.persistence.commands import get_command_status
 from murder.service.bootstrap import start_supervisor_workers
+from murder.service.client_api import dto_to_wire
+from murder.service.read_model import ServiceReadModel
 from murder.service.runtime import Runtime
 from murder.service.settings_service import SettingsService
 from murder.service.supervisor import Supervisor
+from murder.storage.paths import db_path
 from murder.storage.service_registry import remove_service_session, write_service_session
 from murder.usage_sample_command import run_service_usage_poll_loop
 
@@ -38,6 +41,7 @@ class ServiceHost:
     socket_path: Path = field(default_factory=default_socket_path)
     tcp_port: int | None = None
     runtime: Runtime | None = None
+    read_model: ServiceReadModel | None = None
     broker: DurableBroker | None = None
     orchestrator: Orchestrator | None = None
     supervisor: Supervisor | None = None
@@ -107,6 +111,166 @@ class ServiceHost:
         self.register_rpc_handler("command.submit", _command_submit)
         self.register_rpc_handler("command.status", _command_status)
 
+        def _read_model() -> ServiceReadModel:
+            if self.read_model is None:
+                raise RuntimeError("read model unavailable")
+            return self.read_model
+
+        def _value(value: Any) -> dict[str, Any]:
+            return {"ok": True, "value": dto_to_wire(value)}
+
+        def _state_dispatch_snapshot(_body: dict[str, Any]) -> dict[str, Any]:
+            return _value(_read_model().get_dispatch_snapshot())
+
+        def _state_schedule_snapshot(_body: dict[str, Any]) -> dict[str, Any]:
+            return _value(_read_model().get_schedule_snapshot())
+
+        def _state_crow_snapshot(_body: dict[str, Any]) -> dict[str, Any]:
+            return _value(_read_model().get_crow_snapshot())
+
+        def _state_escalations_snapshot(_body: dict[str, Any]) -> dict[str, Any]:
+            return _value(_read_model().get_escalations_snapshot())
+
+        def _state_plans_snapshot(_body: dict[str, Any]) -> dict[str, Any]:
+            return _value(_read_model().get_plans_snapshot())
+
+        def _state_notes_snapshot(_body: dict[str, Any]) -> dict[str, Any]:
+            return _value(_read_model().get_notes_snapshot())
+
+        def _state_ticket_detail(body: dict[str, Any]) -> dict[str, Any]:
+            ticket_id = str(body.get("ticket_id", "")).strip()
+            if not ticket_id:
+                raise ValueError("state.ticket_detail requires ticket_id")
+            try:
+                return _value(_read_model().get_ticket_detail(ticket_id))
+            except KeyError:
+                return _value(None)
+
+        def _state_plan_display(body: dict[str, Any]) -> dict[str, Any]:
+            name = str(body.get("name", "")).strip()
+            if not name:
+                raise ValueError("state.plan_display requires name")
+            return _value(_read_model().get_plan_display(name))
+
+        def _state_note_display(body: dict[str, Any]) -> dict[str, Any]:
+            name = str(body.get("name", "")).strip()
+            if not name:
+                raise ValueError("state.note_display requires name")
+            return _value(_read_model().get_note_display(name))
+
+        def _state_usage_gauge_drill_in(body: dict[str, Any]) -> dict[str, Any]:
+            harness = str(body.get("harness", "")).strip()
+            window_key = str(body.get("window_key", "")).strip()
+            if not harness or not window_key:
+                raise ValueError("state.usage_gauge_drill_in requires harness and window_key")
+            return _value(
+                _read_model().get_usage_gauge_drill_in(
+                    harness=harness,
+                    window_key=window_key,
+                    t_period_minutes=float(body.get("t_period_minutes", 0.0)),
+                )
+            )
+
+        def _state_ticket_carve(body: dict[str, Any]) -> dict[str, Any]:
+            ticket_id = str(body.get("ticket_id", "")).strip()
+            if not ticket_id:
+                raise ValueError("state.ticket_carve requires ticket_id")
+            return _value(_read_model().get_ticket_carve_snapshot(ticket_id))
+
+        def _state_ticket_status(body: dict[str, Any]) -> dict[str, Any]:
+            ticket_id = str(body.get("ticket_id", "")).strip()
+            if not ticket_id:
+                raise ValueError("state.ticket_status requires ticket_id")
+            return _value(_read_model().get_ticket_status(ticket_id))
+
+        def _state_notetaker_recent_entries(body: dict[str, Any]) -> dict[str, Any]:
+            return _value(
+                _read_model().get_notetaker_recent_entries(
+                    int(body.get("limit") or 50),
+                )
+            )
+
+        async def _document_reconcile_plan(body: dict[str, Any]) -> dict[str, Any]:
+            rt = self.runtime
+            if rt is None:
+                raise RuntimeError("runtime unavailable")
+            name = str(body.get("name", "")).strip()
+            if not name:
+                raise ValueError("document.reconcile_plan requires name")
+            await rt.reconcile_plan(name)
+            return {"ok": True}
+
+        def _document_plan_path(body: dict[str, Any]) -> dict[str, Any]:
+            rt = self.runtime
+            if rt is None:
+                raise RuntimeError("runtime unavailable")
+            name = str(body.get("name", "")).strip()
+            if not name:
+                raise ValueError("document.plan_path requires name")
+            return _value(str(rt.plan_path_for(name)))
+
+        def _document_note_path(body: dict[str, Any]) -> dict[str, Any]:
+            rt = self.runtime
+            if rt is None:
+                raise RuntimeError("runtime unavailable")
+            name = str(body.get("name", "")).strip()
+            if not name:
+                raise ValueError("document.note_path requires name")
+            return _value(str(rt.note_path_for(name)))
+
+        self.register_rpc_handler("state.dispatch_snapshot", _state_dispatch_snapshot)
+        self.register_rpc_handler("state.schedule_snapshot", _state_schedule_snapshot)
+        self.register_rpc_handler("state.crow_snapshot", _state_crow_snapshot)
+        self.register_rpc_handler("state.escalations_snapshot", _state_escalations_snapshot)
+        self.register_rpc_handler("state.plans_snapshot", _state_plans_snapshot)
+        self.register_rpc_handler("state.notes_snapshot", _state_notes_snapshot)
+        self.register_rpc_handler("state.ticket_detail", _state_ticket_detail)
+        self.register_rpc_handler("state.plan_display", _state_plan_display)
+        self.register_rpc_handler("state.note_display", _state_note_display)
+        self.register_rpc_handler("state.usage_gauge_drill_in", _state_usage_gauge_drill_in)
+        self.register_rpc_handler("state.ticket_carve", _state_ticket_carve)
+        self.register_rpc_handler("state.ticket_status", _state_ticket_status)
+        self.register_rpc_handler(
+            "state.notetaker_recent_entries",
+            _state_notetaker_recent_entries,
+        )
+        self.register_rpc_handler("document.reconcile_plan", _document_reconcile_plan)
+        self.register_rpc_handler("document.plan_path", _document_plan_path)
+        self.register_rpc_handler("document.note_path", _document_note_path)
+
+        async def _tmux_capture_pane(body: dict[str, Any]) -> dict[str, Any]:
+            from murder.terminal import tmux
+
+            session = str(body.get("session", "")).strip()
+            if not session:
+                raise ValueError("tmux.capture_pane requires session")
+            lines = int(body.get("lines") or 200)
+            try:
+                text = await tmux.capture_pane(session, lines=lines)
+            except tmux.TmuxError as exc:
+                return {"ok": False, "error": str(exc)}
+            return {"ok": True, "text": text}
+
+        async def _tmux_shell_run(body: dict[str, Any]) -> dict[str, Any]:
+            import time
+
+            from murder.terminal import tmux
+
+            command = str(body.get("command", "")).strip()
+            if not command:
+                raise ValueError("tmux.shell_run requires command")
+            prior = body.get("prior_session")
+            if isinstance(prior, str) and prior.strip():
+                with contextlib.suppress(tmux.TmuxError):
+                    await tmux.kill_session(prior.strip())
+            session_name = f"murder-shell-{int(time.monotonic() * 1000) % 1_000_000}"
+            await tmux.create_session(session_name, self.repo_root)
+            await tmux.send_keys(session_name, command)
+            return {"ok": True, "session_name": session_name}
+
+        self.register_rpc_handler("tmux.capture_pane", _tmux_capture_pane)
+        self.register_rpc_handler("tmux.shell_run", _tmux_shell_run)
+
         settings = SettingsService(self.repo_root)
 
         async def _settings_discover_models(body: dict[str, Any]) -> dict[str, Any]:
@@ -127,6 +291,7 @@ class ServiceHost:
         await self.runtime.start()
         if self.runtime.db is None or self.runtime.bus is None or self.runtime.run_id is None:
             raise RuntimeError("runtime failed to initialize db/bus/run_id")
+        self.read_model = ServiceReadModel(db_path(self.repo_root))
 
         self.register_default_rpc_handlers()
 
@@ -191,6 +356,7 @@ class ServiceHost:
             await self.runtime.stop()
             self.runtime = None
 
+        self.read_model = None
         self.broker = None
         self.orchestrator = None
 

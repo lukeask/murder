@@ -1,10 +1,10 @@
-"""Mirrors a tmux pane via periodic capture-pane."""
+"""Mirrors a tmux pane via periodic capture-pane (fetched over the service bus)."""
 
 from __future__ import annotations
 
 from textual.widgets import RichLog
 
-from murder.terminal import tmux
+from murder.tui.pane_capture import CapturePaneFn, PaneCaptureError
 from murder.tui.perf_log import PerfLog
 
 
@@ -18,13 +18,22 @@ class PaneMirror(RichLog):
     }
     """
 
-    def __init__(self, perf: PerfLog | None = None) -> None:
+    def __init__(
+        self,
+        perf: PerfLog | None = None,
+        *,
+        capture_pane: CapturePaneFn | None = None,
+    ) -> None:
         super().__init__(highlight=False, markup=False, wrap=False, auto_scroll=True)
         self._perf = perf
+        self._capture_pane = capture_pane
         self._session: str | None = None
         self._last_text: str = ""
         self._ever_attached = False
         self.border_title = "(no session selected)"
+
+    def set_capture_pane(self, capture_pane: CapturePaneFn) -> None:
+        self._capture_pane = capture_pane
 
     def set_session(self, session: str | None) -> None:
         if session == self._session:
@@ -55,9 +64,11 @@ class PaneMirror(RichLog):
                 self.write("(no agent running yet)")
                 self._last_text = "(no agent running yet)"
             return
+        if self._capture_pane is None:
+            return
         try:
-            text = await tmux.capture_pane(self._session, lines=200, perf=self._perf)
-        except tmux.TmuxError:
+            text = await self._capture_pane(self._session, 200)
+        except PaneCaptureError:
             vanished = self._ever_attached
             self._session = None
             self._last_text = ""

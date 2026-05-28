@@ -341,9 +341,6 @@ class ServiceReadModel:
                 "SELECT id, title FROM tickets WHERE id != ? ORDER BY wave, id",
                 (ticket_id,),
             ).fetchall()
-            skill_rows = conn.execute(
-                "SELECT DISTINCT skill FROM ticket_skills ORDER BY skill"
-            ).fetchall()
         fields: dict[str, object] = {
             "status": ticket.status.value,
             "title": ticket.title,
@@ -352,7 +349,6 @@ class ServiceReadModel:
             "harness": ticket.harness,
             "model": ticket.model,
             "deps": list(ticket.deps),
-            "skills": list(ticket.skills),
             "write_set": list(ticket.write_set),
             "checklist": [
                 {"text": item.text, "done": item.done} for item in ticket.checklist
@@ -366,7 +362,6 @@ class ServiceReadModel:
                 TicketRef(id=str(r["id"]), title=str(r["title"] or r["id"]))
                 for r in dep_rows
             ),
-            known_skills=tuple(str(r["skill"]) for r in skill_rows),
         )
 
     def get_ticket_status(self, ticket_id: str) -> str | None:
