@@ -159,6 +159,9 @@ class CodexAdapter(HarnessAdapter):
         del session
         return model == self.startup_model
 
+    async def interrupt(self, session: str) -> None:
+        await self.interrupt_generation(session)
+
     async def request_model_list(self, session: str) -> bool:
         # TODO: Replace this fixed delay with a pane-state wait for Codex to
         # fully finish startup; otherwise early slash commands can be rejected
