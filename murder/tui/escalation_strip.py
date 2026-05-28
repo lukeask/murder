@@ -6,7 +6,7 @@ from textual.binding import Binding
 from textual.message import Message
 from textual.widgets import Static
 
-from murder.service.client_api import EscalationSummary, EscalationsSnapshot
+from murder.service.client_api import EscalationsSnapshot, EscalationSummary
 
 
 class EscalationStrip(Static):
@@ -14,7 +14,7 @@ class EscalationStrip(Static):
 
     BINDINGS = [
         Binding("r", "retry_latest_failed", "Retry failed escalation", show=False),
-        Binding("a", "ack", "Acknowledge", show=False),
+        Binding("a", "ack", "Resolve", show=False),
         Binding("up", "cursor_up", "Prev escalation", show=False),
         Binding("k", "cursor_up", "Prev escalation", show=False),
         Binding("down", "cursor_down", "Next escalation", show=False),
@@ -40,9 +40,10 @@ class EscalationStrip(Static):
         self._cursor_idx: int = 0
 
     class AckRequested(Message):
-        def __init__(self, escalation_id: int) -> None:
+        def __init__(self, escalation: EscalationSummary) -> None:
             super().__init__()
-            self.escalation_id = escalation_id
+            self.escalation = escalation
+            self.escalation_id = escalation.id
 
     class RetryRequested(Message):
         def __init__(self, ticket_id: str) -> None:
@@ -59,31 +60,25 @@ class EscalationStrip(Static):
         snapshot: EscalationsSnapshot,
         *,
         limit: int = 6,
+        show: bool = True,
     ) -> None:
         self._active_rows = list(snapshot.active[:limit])
         if self._cursor_idx >= len(self._active_rows):
             self._cursor_idx = max(0, len(self._active_rows) - 1)
         if not self._active_rows:
+            self._latest_failed_ticket_id = None
             self.display = False
+            self.update("escalations: (none)")
             return
-        self.display = True
-        self._latest_failed_ticket_id = None
-        lines = []
-        for idx, row in enumerate(self._active_rows):
-            sev = "!" * int(row.severity)
-            tid = row.ticket_id or "-"
-            is_failed = row.ticket_status == "failed"
-            if is_failed and self._latest_failed_ticket_id is None and row.ticket_id:
-                self._latest_failed_ticket_id = row.ticket_id
-            retry_hint = " [dim][r retry][/dim]" if is_failed else ""
-            enter_hint = " [dim][↵][/dim]" if idx == self._cursor_idx else ""
-            prefix = "[b]>[/b] " if idx == self._cursor_idx else "  "
-            lines.append(
-                f"{prefix}[b]{sev}[/b] #{row.id} → {row.to_recipient} · {tid} · {row.reason}"
-                + retry_hint
-                + enter_hint
-            )
-        self.update("\n".join(lines))
+        self._sync_display(show=show)
+        self._render_rows()
+
+    def set_user_visible(self, visible: bool) -> None:
+        """Show or hide the strip without dropping cached active rows."""
+        self._sync_display(show=visible)
+
+    def _sync_display(self, *, show: bool) -> None:
+        self.display = show and bool(self._active_rows)
 
     def action_cursor_up(self) -> None:
         if self._active_rows:
@@ -103,7 +98,7 @@ class EscalationStrip(Static):
     def action_ack(self) -> None:
         if not self._active_rows:
             return
-        self.post_message(self.AckRequested(self._active_rows[self._cursor_idx].id))
+        self.post_message(self.AckRequested(self._active_rows[self._cursor_idx]))
 
     def action_retry_latest_failed(self) -> None:
         if self._latest_failed_ticket_id is None:
@@ -117,6 +112,9 @@ class EscalationStrip(Static):
 
     def _re_render(self) -> None:
         """Re-render with updated cursor position without a full snapshot refresh."""
+        self._render_rows()
+
+    def _render_rows(self) -> None:
         lines = []
         self._latest_failed_ticket_id = None
         for idx, row in enumerate(self._active_rows):
@@ -125,12 +123,12 @@ class EscalationStrip(Static):
             is_failed = row.ticket_status == "failed"
             if is_failed and self._latest_failed_ticket_id is None and row.ticket_id:
                 self._latest_failed_ticket_id = row.ticket_id
-            retry_hint = " [dim][r retry][/dim]" if is_failed else ""
-            enter_hint = " [dim][↵][/dim]" if idx == self._cursor_idx else ""
+            retry_hint = " [dim]\\[r retry][/dim]" if is_failed else ""
+            action_hint = " [dim]\\[a solve] [↵][/dim]" if idx == self._cursor_idx else ""
             prefix = "[b]>[/b] " if idx == self._cursor_idx else "  "
             lines.append(
                 f"{prefix}[b]{sev}[/b] #{row.id} → {row.to_recipient} · {tid} · {row.reason}"
                 + retry_hint
-                + enter_hint
+                + action_hint
             )
         self.update("\n".join(lines) if lines else "escalations: (none)")
