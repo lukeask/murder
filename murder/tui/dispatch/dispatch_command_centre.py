@@ -2,19 +2,18 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from collections.abc import Awaitable, Callable
 
 from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical
 
-from murder.service.client_api import ScheduleSnapshot
+from murder.service.client_api import ScheduleSnapshot, UsageGaugeDrillInSnapshot
 from murder.tui.dispatch.calendar import CalendarPanel
 from murder.tui.dispatch.gauges import GaugeStrip
 from murder.tui.dispatch.mode_strip import ModeStrip
 from murder.tui.dispatch.roster import ScheduleTicketsTable
 
-if TYPE_CHECKING:
-    from murder.service.read_model import ServiceReadModel
+UsageDrillInLoader = Callable[..., Awaitable[UsageGaugeDrillInSnapshot]]
 
 
 class DispatchView(Vertical):
@@ -45,7 +44,6 @@ class DispatchView(Vertical):
     }
     DispatchView #field_deps,
     DispatchView #field_writes,
-    DispatchView #field_skills,
     DispatchView #field_checklist {
         height: 4;
         min-height: 3;
@@ -63,13 +61,13 @@ class DispatchView(Vertical):
         self,
         snapshot: ScheduleSnapshot,
         *,
-        read_model: ServiceReadModel | None = None,
+        usage_drill_in_loader: UsageDrillInLoader | None = None,
     ) -> None:
         """Refresh all dispatch sub-widgets from a service snapshot."""
         self.query_one(ModeStrip).refresh_from_snapshot(snapshot)
         gauges = self.query_one(GaugeStrip)
-        if read_model is not None:
-            gauges.set_read_model(read_model)
+        if usage_drill_in_loader is not None:
+            gauges.set_drill_in_loader(usage_drill_in_loader)
         gauges.refresh_from_snapshot(snapshot)
         self.query_one(ScheduleTicketsTable).refresh_from_snapshot(snapshot)
         self.query_one(CalendarPanel).refresh_from_snapshot(snapshot)

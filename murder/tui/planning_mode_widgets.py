@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from rich.markup import escape
+from textual.binding import Binding
 from textual.message import Message
 from textual.widgets import DataTable, Markdown, RichLog
 
@@ -13,6 +14,7 @@ class PlanList(DataTable):
     """DB-backed plan list."""
 
     BINDINGS = [
+        Binding("enter", "open_selected", "Open", show=False),
         ("j", "cursor_down", "Down"),
         ("k", "cursor_up", "Up"),
         ("r", "deprecate_plan", "Deprecate"),
@@ -80,9 +82,17 @@ class PlanList(DataTable):
             self.post_message(self.PlanHighlighted(name))
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
-        idx = event.cursor_row
-        if 0 <= idx < len(self._plans):
-            self.post_message(self.PlanOpened(self._plans[idx]))
+        # DataTable emits RowSelected when clicking an already-highlighted row.
+        # Mouse clicks should only highlight; Enter is the explicit open action.
+        event.stop()
+
+    def action_open_selected(self) -> None:
+        name = self.selected_name
+        if name:
+            self.post_message(self.PlanOpened(name))
+
+    def action_select_cursor(self) -> None:
+        self.action_open_selected()
 
     def on_key(self, event) -> None:  # type: ignore[no-untyped-def]
         if self._deprecate_armed_name is not None and event.key != "r":
@@ -108,6 +118,7 @@ class NotesList(DataTable):
     """DB-backed list of active note documents."""
 
     BINDINGS = [
+        Binding("enter", "open_selected", "Open", show=False),
         ("j", "cursor_down", "Down"),
         ("k", "cursor_up", "Up"),
         ("r", "retire_note", "Retire"),
@@ -169,9 +180,17 @@ class NotesList(DataTable):
             self.post_message(self.NoteHighlighted(name))
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
-        idx = event.cursor_row
-        if 0 <= idx < len(self._names):
-            self.post_message(self.NoteOpened(self._names[idx]))
+        # DataTable emits RowSelected when clicking an already-highlighted row.
+        # Mouse clicks should only highlight; Enter is the explicit open action.
+        event.stop()
+
+    def action_open_selected(self) -> None:
+        name = self.selected_name
+        if name:
+            self.post_message(self.NoteOpened(name))
+
+    def action_select_cursor(self) -> None:
+        self.action_open_selected()
 
     def on_key(self, event) -> None:  # type: ignore[no-untyped-def]
         if self._retire_armed_name is not None and event.key != "r":
@@ -302,11 +321,19 @@ class ChatLog(RichLog):
         border: solid $border;
         height: 1fr;
         width: 1fr;
+        overflow-x: hidden;
+        overflow-y: auto;
     }
     """
 
     def __init__(self, *, agent_label: str = "agent") -> None:
-        super().__init__(highlight=False, markup=True, wrap=True, auto_scroll=True)
+        super().__init__(
+            highlight=False,
+            markup=True,
+            min_width=1,
+            wrap=True,
+            auto_scroll=True,
+        )
         self._agent_label = agent_label
         self.border_title = f"{agent_label} chat"
 
