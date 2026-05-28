@@ -7,26 +7,30 @@ client-side health. Selecting a tile enlarges it into a full pane mirror
 in place; ESC or `q` returns to the wall.
 
 Tiles render from :class:`~murder.service.client_api.CrowSnapshot`
-via ``ServiceReadModel``. Pane tails still use ``tmux.capture_pane`` until
-pane-content bus subscriptions land.
+fetched over the service bus. Pane tails use :meth:`~murder.tui.client.TuiRuntimeClient.capture_pane`.
 """
 
 from __future__ import annotations
 
 import asyncio
+import json
+import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
+from textual import events
 from textual.app import ComposeResult
 from textual.binding import Binding
-from textual.containers import Container, Grid
+from textual.containers import Container, Grid, ScrollableContainer
 from textual.message import Message
 from textual.reactive import reactive
+from textual.widget import Widget
 from textual.widgets import Static
 
 from murder.service.client_api import CrowSessionSummary, CrowSnapshot
-from murder.terminal import tmux
 from murder.tui.crow_health import Health, classify, is_stuck
+from murder.tui.pane_capture import CapturePaneFn, PaneCaptureError
 from murder.tui.pane_mirror import PaneMirror
 from murder.tui.perf_log import PerfLog
 
@@ -56,6 +60,8 @@ _STATUS_SORT_RANK = {
     "failed": 4,
 }
 
+logger = logging.getLogger(__name__)
+
 
 @dataclass(frozen=True)
 class CrowEntry:
@@ -63,11 +69,370 @@ class CrowEntry:
 
     agent_id: str
     ticket_id: str
-    ticket_title: str
+    ticket_title: str | None
     harness: str
     status: str
     session: str | None
     health: Health
+    started_at: datetime | None = None
+
+
+class CrowRosterRow(Widget):
+    """Two-line roster entry for one crow."""
+
+    DEFAULT_CSS = """
+    CrowRosterRow {
+        height: 2;
+        padding: 0 1;
+        border-left: tall $border;
+        background: $surface;
+    }
+    CrowRosterRow:focus {
+        background: $primary 15%;
+        border-left: tall $primary;
+    }
+    CrowRosterRow.-health-red    { border-left: tall $error; }
+    CrowRosterRow.-health-yellow { border-left: tall $warning; }
+    CrowRosterRow.-health-green  { border-left: tall $success; }
+    CrowRosterRow.-health-neutral{ border-left: tall $border; }
+    CrowRosterRow.-kill-pending  { background: $error 10%; }
+    """
+
+    can_focus = True
+
+    def __init__(
+        self,
+        entry: CrowEntry,
+        *,
+        favorite: bool = False,
+        pane_visible: bool = False,
+        kill_pending: bool = False,
+    ) -> None:
+        super().__init__()
+        self._entry = entry
+        self._favorite = favorite
+        self._pane_visible = pane_visible
+        self._kill_pending = kill_pending
+        self._line1 = Static("", markup=False)
+        self._line2 = Static("", markup=False)
+
+    def compose(self) -> ComposeResult:
+        yield self._line1
+        yield self._line2
+
+    def on_mount(self) -> None:
+        self._refresh_content()
+        self._refresh_classes()
+
+    def update(
+        self,
+        entry: CrowEntry,
+        *,
+        favorite: bool,
+        pane_visible: bool,
+        kill_pending: bool,
+    ) -> None:
+        changed = (
+            entry != self._entry
+            or favorite != self._favorite
+            or pane_visible != self._pane_visible
+            or kill_pending != self._kill_pending
+        )
+        self._entry = entry
+        self._favorite = favorite
+        self._pane_visible = pane_visible
+        self._kill_pending = kill_pending
+        if changed:
+            self._refresh_content()
+            self._refresh_classes()
+
+    def _refresh_content(self) -> None:
+        e = self._entry
+        star = "★ " if self._favorite else "  "
+        eye = "[pane]" if self._pane_visible else ""
+        ticket = f"[{e.ticket_id}]" if e.ticket_id else ""
+        name = e.session or e.agent_id
+        status_chip = e.status.upper()
+        line1_parts = [star + name, status_chip]
+        if ticket:
+            line1_parts.append(ticket)
+        if eye:
+            line1_parts.append(eye)
+        self._line1.update("  ".join(line1_parts))
+
+        if self._kill_pending:
+            self._line2.update("  murder this crow? [m / ctrl+m = confirm  ·  any other key = cancel]")
+        else:
+            self._line2.update("  doing: ")
+
+    def _refresh_classes(self) -> None:
+        for h in Health:
+            self.remove_class(f"-health-{h.value}")
+        self.add_class(f"-health-{self._entry.health.value}")
+        self.set_class(self._kill_pending, "-kill-pending")
+
+    @property
+    def agent_id(self) -> str:
+        return self._entry.agent_id
+
+    @property
+    def entry(self) -> CrowEntry:
+        return self._entry
+
+
+class CrowRosterList(ScrollableContainer):
+    """Scrollable, keyboard-driven roster of active crows."""
+
+    BINDINGS = [
+        Binding("j", "cursor_down", "Down", show=False),
+        Binding("k", "cursor_up", "Up", show=False),
+        Binding("down", "cursor_down", "Down", show=False),
+        Binding("up", "cursor_up", "Up", show=False),
+        Binding("f", "toggle_favorite", "Favorite", show=False),
+        Binding("enter", "toggle_pane", "Toggle pane", show=False),
+        Binding("ctrl+m", "kill_confirm", "Kill", show=False),
+        Binding("m", "kill_confirm_m", "Kill confirm", show=False),
+    ]
+
+    class CrowSelected(Message):
+        def __init__(self, agent_id: str) -> None:
+            self.agent_id = agent_id
+            super().__init__()
+
+    class PaneVisibilityChanged(Message):
+        def __init__(self, visible: set[str]) -> None:
+            self.visible = frozenset(visible)
+            super().__init__()
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._favorites: set[str] = set()
+        self._pane_visible: set[str] = set()
+        self._kill_pending: str | None = None
+        self._rows: dict[str, CrowRosterRow] = {}
+        self._order: list[str] = []
+        self._prefs_path: Path | None = None
+        self._last_entries: list[CrowEntry] = []
+
+    def set_prefs_path(self, path: Path) -> None:
+        self._prefs_path = path
+        self._load_favorites()
+
+    def _load_favorites(self) -> None:
+        if self._prefs_path is None or not self._prefs_path.exists():
+            return
+        try:
+            data = json.loads(self._prefs_path.read_text())
+            favorites = data.get("favorites", [])
+            if isinstance(favorites, list):
+                self._favorites = {str(agent_id) for agent_id in favorites}
+        except Exception:
+            logger.debug("failed to load TUI favorites from %s", self._prefs_path, exc_info=True)
+
+    def _save_favorites(self) -> None:
+        if self._prefs_path is None:
+            return
+        try:
+            self._prefs_path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = self._prefs_path.with_suffix(".tmp")
+            tmp.write_text(json.dumps({"favorites": sorted(self._favorites)}))
+            tmp.replace(self._prefs_path)
+        except Exception:
+            logger.debug("failed to save TUI favorites to %s", self._prefs_path, exc_info=True)
+
+    def reconcile(self, entries: list[CrowEntry]) -> None:
+        self._last_entries = list(entries)
+        entries_by_id = {entry.agent_id: entry for entry in entries}
+        ordered_entries = sorted(entries, key=self._sort_entry)
+        ordered_ids = [entry.agent_id for entry in ordered_entries]
+
+        for agent_id in list(self._rows):
+            if agent_id not in entries_by_id:
+                row = self._rows.pop(agent_id)
+                row.remove()
+                if self._kill_pending == agent_id:
+                    self._kill_pending = None
+                self._pane_visible.discard(agent_id)
+
+        for entry in ordered_entries:
+            row = self._rows.get(entry.agent_id)
+            if row is None:
+                row = CrowRosterRow(
+                    entry,
+                    favorite=entry.agent_id in self._favorites,
+                    pane_visible=entry.agent_id in self._pane_visible,
+                    kill_pending=self._kill_pending == entry.agent_id,
+                )
+                self._rows[entry.agent_id] = row
+                self.mount(row)
+            else:
+                self._update_row(row, entry)
+
+        if ordered_ids != self._order:
+            for index, agent_id in enumerate(ordered_ids):
+                row = self._rows.get(agent_id)
+                if row is not None and row.is_mounted:
+                    self.move_child(row, before=index)
+        self._order = ordered_ids
+
+    def on_key(self, event: events.Key) -> None:
+        if self._kill_pending is None:
+            return
+        if event.key not in {"ctrl+m", "m"}:
+            self._clear_kill_pending()
+            event.prevent_default()
+            event.stop()
+
+    def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
+        del parameters
+        if self._kill_pending is not None and action not in {
+            "kill_confirm",
+            "kill_confirm_m",
+        }:
+            self._clear_kill_pending()
+            return False
+        return True
+
+    def on_descendant_focus(self, event: events.DescendantFocus) -> None:
+        if isinstance(event.widget, CrowRosterRow):
+            self.post_message(self.CrowSelected(event.widget.agent_id))
+
+    def action_cursor_down(self) -> None:
+        self._move_focus(1)
+
+    def action_cursor_up(self) -> None:
+        self._move_focus(-1)
+
+    def action_toggle_favorite(self) -> None:
+        row = self._focused_row()
+        if row is None:
+            return
+        agent_id = row.agent_id
+        if agent_id in self._favorites:
+            self._favorites.remove(agent_id)
+        else:
+            self._favorites.add(agent_id)
+        self._save_favorites()
+        self.reconcile(self._last_entries)
+        focused = self._rows.get(agent_id)
+        if focused is not None:
+            focused.focus()
+
+    def action_toggle_pane(self) -> None:
+        row = self._focused_row()
+        if row is None:
+            return
+        agent_id = row.agent_id
+        if agent_id in self._pane_visible:
+            self._pane_visible.remove(agent_id)
+        else:
+            self._pane_visible.add(agent_id)
+        self._update_row(row, row.entry)
+        self.post_message(self.PaneVisibilityChanged(self._pane_visible))
+
+    def add_rogue(self, agent_id: str) -> None:
+        self._favorites.add(agent_id)
+        self._pane_visible.add(agent_id)
+        self._save_favorites()
+        row = self._rows.get(agent_id)
+        if row is not None:
+            self._update_row(row, row.entry)
+        self.post_message(self.PaneVisibilityChanged(self._pane_visible))
+
+    def hide_agent(self, agent_id: str) -> bool:
+        if agent_id not in self._pane_visible:
+            return False
+        self._pane_visible.remove(agent_id)
+        row = self._rows.get(agent_id)
+        if row is not None:
+            self._update_row(row, row.entry)
+        self.post_message(self.PaneVisibilityChanged(self._pane_visible))
+        return True
+
+    @property
+    def pane_visible(self) -> frozenset[str]:
+        return frozenset(self._pane_visible)
+
+    def focus_agent(self, agent_id: str) -> bool:
+        row = self._rows.get(agent_id)
+        if row is None:
+            return False
+        row.focus()
+        return True
+
+    def focus_first_row(self) -> bool:
+        if not self._order:
+            return False
+        return self.focus_agent(self._order[0])
+
+    def action_kill_confirm(self) -> None:
+        self._handle_kill_confirm()
+
+    def action_kill_confirm_m(self) -> None:
+        row = self._focused_row()
+        if row is None:
+            self._clear_kill_pending()
+            return
+        if self._kill_pending != row.agent_id:
+            self._clear_kill_pending()
+            return
+        self._handle_kill_confirm()
+
+    def _handle_kill_confirm(self) -> None:
+        row = self._focused_row()
+        if row is None:
+            return
+        agent_id = row.agent_id
+        if self._kill_pending == agent_id:
+            logger.info("TODO: dispatch agent.stop for %s", agent_id)
+            self._clear_kill_pending()
+            return
+        self._clear_kill_pending()
+        self._kill_pending = agent_id
+        self._update_row(row, row.entry)
+
+    def _clear_kill_pending(self) -> None:
+        if self._kill_pending is None:
+            return
+        agent_id = self._kill_pending
+        self._kill_pending = None
+        row = self._rows.get(agent_id)
+        if row is not None:
+            self._update_row(row, row.entry)
+
+    def _focused_row(self) -> CrowRosterRow | None:
+        focused = self.app.focused
+        if isinstance(focused, CrowRosterRow) and focused.agent_id in self._rows:
+            return focused
+        return None
+
+    def _move_focus(self, delta: int) -> None:
+        if not self._order:
+            return
+        row = self._focused_row()
+        if row is None:
+            idx = 0 if delta > 0 else len(self._order) - 1
+        else:
+            idx = max(0, min(len(self._order) - 1, self._order.index(row.agent_id) + delta))
+        next_row = self._rows.get(self._order[idx])
+        if next_row is not None:
+            next_row.focus()
+
+    def _sort_entry(self, entry: CrowEntry) -> tuple[bool, float, str]:
+        started = entry.started_at
+        return (
+            entry.agent_id not in self._favorites,
+            -(started.timestamp() if started else 0),
+            entry.agent_id,
+        )
+
+    def _update_row(self, row: CrowRosterRow, entry: CrowEntry) -> None:
+        row.update(
+            entry,
+            favorite=entry.agent_id in self._favorites,
+            pane_visible=entry.agent_id in self._pane_visible,
+            kill_pending=self._kill_pending == entry.agent_id,
+        )
 
 
 def entries_from_snapshot(
@@ -85,7 +450,7 @@ def entries_from_snapshot(
     entries.sort(
         key=lambda e: (
             _STATUS_SORT_RANK.get(e.status, 99),
-            e.ticket_id,
+            e.ticket_id or "",
             e.agent_id,
         )
     )
@@ -97,7 +462,7 @@ def _entry_from_session(
     *,
     now: datetime,
 ) -> CrowEntry | None:
-    if session.role != "crow":
+    if session.role not in {"crow", "rogue"}:
         return None
     status = session.status
     if status in TERMINAL_AGENT_STATUSES:
@@ -116,6 +481,7 @@ def _entry_from_session(
         status=status,
         session=session.session_name,
         health=_health_for_summary(session, now=now),
+        started_at=session.started_at,
     )
 
 
@@ -155,9 +521,9 @@ class CrowTile(Container):
         width: 1fr;
         layout: vertical;
     }
-    CrowTile.-health-red    { border: solid red; }
-    CrowTile.-health-yellow { border: solid yellow; }
-    CrowTile.-health-green  { border: solid green; }
+    CrowTile.-health-red    { border: solid $error; }
+    CrowTile.-health-yellow { border: solid $warning; }
+    CrowTile.-health-green  { border: solid $success; }
     CrowTile.-health-neutral{ border: solid $border; }
     CrowTile:focus,
     CrowTile:focus-within { border: heavy $accent; }
@@ -170,8 +536,7 @@ class CrowTile(Container):
 
     can_focus = True
     BINDINGS = [
-        Binding("enter", "open", "Enlarge", show=False),
-        Binding("o", "open", "Enlarge", show=False),
+        Binding("ctrl+o", "open", "Enlarge", show=False),
     ]
 
     class Highlighted(Message):
@@ -371,13 +736,22 @@ class CrowsView(Container):
         width: 1fr;
         layout: vertical;
     }
-    CrowsView > TailWall { height: 1fr; }
+    CrowsView > TailWall {
+        min-height: 60%;
+        height: 1fr;
+    }
+    CrowsView > CrowRosterList {
+        height: auto;
+        max-height: 40%;
+        min-height: 2;
+    }
     CrowsView > PaneMirror { height: 1fr; }
     """
 
     BINDINGS = [
         Binding("escape", "back_to_wall", "Wall", show=False),
         Binding("q", "back_to_wall", "Wall", show=False),
+        Binding("ctrl+h", "hide_focused_tile", "Hide pane", show=False),
     ]
 
     enlarged_agent_id: reactive[str | None] = reactive(None)
@@ -389,11 +763,20 @@ class CrowsView(Container):
             self.entry = entry
             super().__init__()
 
-    def __init__(self, perf_log: PerfLog | None = None) -> None:
+    def __init__(
+        self,
+        perf_log: PerfLog | None = None,
+        *,
+        capture_pane: CapturePaneFn | None = None,
+        prefs_path: Path | None = None,
+    ) -> None:
         super().__init__()
         self._perf = perf_log
+        self._capture_pane = capture_pane
+        self._prefs_path = prefs_path
         self._wall = TailWall()
-        self._mirror = PaneMirror(perf=self._perf)
+        self._roster = CrowRosterList()
+        self._mirror = PaneMirror(perf=self._perf, capture_pane=capture_pane)
         self._entries_by_id: dict[str, CrowEntry] = {}
         self._invalidation_key: str | None = None
         self._last_focused_agent_id: str | None = None
@@ -405,9 +788,12 @@ class CrowsView(Container):
 
     def compose(self) -> ComposeResult:
         yield self._wall
+        yield self._roster
         yield self._mirror
 
     def on_mount(self) -> None:
+        if self._prefs_path is not None:
+            self._roster.set_prefs_path(self._prefs_path)
         self._apply_mode()
 
     def render_from_snapshot(self, snapshot: CrowSnapshot) -> None:
@@ -415,23 +801,28 @@ class CrowsView(Container):
         self._invalidation_key = snapshot.invalidation_key
         entries = entries_from_snapshot(snapshot)
         self._entries_by_id = {e.agent_id: e for e in entries}
+        self._roster.reconcile(entries)
+        wall_entries = self._visible_wall_entries()
         perf = self._perf
         if perf is not None and perf.enabled:
             with perf.span("tui.crows.reconcile") as dyn:
-                _order, m, r, u = self._wall.reconcile(entries)
+                _order, m, r, u = self._wall.reconcile(wall_entries)
                 dyn["mounted"] = m
                 dyn["removed"] = r
                 dyn["updated"] = u
         else:
-            self._wall.reconcile(entries)
+            self._wall.reconcile(wall_entries)
         if self.enlarged_agent_id is not None and self.enlarged_agent_id not in self._entries_by_id:
             self.enlarged_agent_id = None
-            self._apply_mode()
-            return
+        self._apply_mode()
         if self.enlarged_agent_id is not None:
             e = self._entries_by_id[self.enlarged_agent_id]
             self._mirror.set_session(e.session)
             self._mirror.border_title = f"{e.ticket_id or '—'} · {e.ticket_title or e.harness}"
+
+    def _visible_wall_entries(self) -> list[CrowEntry]:
+        visible = self._roster.pane_visible
+        return [entry for entry in self._entries_by_id.values() if entry.agent_id in visible]
 
     async def refresh_tails(self) -> None:
         """Capture last-N lines for every visible tile, in parallel."""
@@ -464,14 +855,18 @@ class CrowsView(Container):
 
     async def _capture_for_tile(self, tile: CrowTile, session: str) -> None:
         perf = self._perf
+        capture = self._capture_pane
+        if capture is None:
+            tile.set_tail("(no capture)")
+            return
 
         async def _run() -> None:
             try:
                 text = await asyncio.wait_for(
-                    tmux.capture_pane(session, lines=TILE_LINES, perf=perf),
+                    capture(session, TILE_LINES),
                     timeout=CAPTURE_TIMEOUT_S,
                 )
-            except (tmux.TmuxError, asyncio.TimeoutError):
+            except (PaneCaptureError, asyncio.TimeoutError):
                 tile.set_tail("(session vanished)")
                 return
             lines = text.splitlines()
@@ -505,10 +900,29 @@ class CrowsView(Container):
         if tile is not None:
             tile.focus()
 
+    def action_hide_focused_tile(self) -> None:
+        self.hide_focused_tile()
+
+    def hide_focused_tile(self) -> bool:
+        focused = self.app.focused
+        if not isinstance(focused, CrowTile):
+            return False
+        agent_id = focused.entry.agent_id
+        if not self._roster.hide_agent(agent_id):
+            return False
+        if not self._roster.focus_agent(agent_id):
+            self._roster.focus()
+        return True
+
     def _apply_mode(self) -> None:
         enlarged = self.enlarged_agent_id is not None
-        self._wall.display = not enlarged
         self._mirror.display = enlarged
+        if enlarged:
+            self._wall.display = False
+            self._roster.display = False
+        else:
+            self._roster.display = True
+            self._wall.display = bool(self._roster.pane_visible)
 
     def focus_last_tile(self) -> bool:
         """Restore focus to the most recently focused tile, if still present."""
@@ -528,9 +942,36 @@ class CrowsView(Container):
         tile.focus()
         return True
 
+    def focus_roster(self) -> bool:
+        if not self._roster.display:
+            return False
+        if self._roster.focus_first_row():
+            return True
+        self._roster.focus()
+        return True
+
+    def roster_add_rogue(self, agent_id: str) -> None:
+        """Mark a newly spawned rogue crow as favorite and pane-visible."""
+        self._roster.add_rogue(agent_id)
+
     def on_crow_tile_highlighted(self, event: CrowTile.Highlighted) -> None:
         self._last_focused_agent_id = event.entry.agent_id
         self.post_message(self.TileSelected(event.entry))
 
     def on_crow_tile_opened(self, event: CrowTile.Opened) -> None:
         self.enlarge(event.entry.agent_id)
+
+    def on_crow_roster_list_pane_visibility_changed(
+        self,
+        event: CrowRosterList.PaneVisibilityChanged,
+    ) -> None:
+        wall_entries = [
+            entry for entry in self._entries_by_id.values() if entry.agent_id in event.visible
+        ]
+        self._wall.reconcile(wall_entries)
+        self._apply_mode()
+
+    def on_crow_roster_list_crow_selected(self, event: CrowRosterList.CrowSelected) -> None:
+        entry = self._entries_by_id.get(event.agent_id)
+        if entry is not None:
+            self.post_message(self.TileSelected(entry))
