@@ -13,6 +13,7 @@ absent, error exit, or timeout).
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 from dataclasses import dataclass
 from pathlib import Path
@@ -70,8 +71,8 @@ async def probe_harness_version(
             stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout_s)
         except asyncio.TimeoutError:
             proc.kill()
-            with asyncio.timeout(2.0):
-                await proc.wait()
+            with contextlib.suppress(asyncio.TimeoutError):
+                await asyncio.wait_for(proc.wait(), timeout=2.0)
             _log.warning("probe %s: timed out after %.1fs", kind, timeout_s)
             return ProbeResult(kind=kind, raw=None, binary_used=binary)
 

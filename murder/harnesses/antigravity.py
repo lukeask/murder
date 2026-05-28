@@ -62,8 +62,8 @@ _MODAL_FOOTER_RE = re.compile(r"esc to cancel", re.IGNORECASE)
 _BUSY_RE = re.compile(r"Generating\.\.\.", re.IGNORECASE)
 
 # First-launch trust dialog. The default selection is "Yes, I trust this
-# folder", so a bare Enter accepts; we still send "Up" first to be robust
-# against the cursor having moved.
+# folder", so a bare Enter accepts. Do NOT send "Up" first: at the top row
+# the dialog wraps to "No, exit", which would terminate the harness.
 _TRUST_PROMPT_RE = re.compile(
     r"Do you trust the contents|Yes, I trust this folder",
     re.IGNORECASE,
