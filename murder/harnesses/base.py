@@ -183,6 +183,8 @@ class HarnessAdapter(ABC):
     model_selection_command_template: ClassVar[str | None] = "/model {model}"
     model_selection_capture_delay_s: ClassVar[float] = 0.8
     usage_collection_mode: ClassVar[UsageCollectionMode] = "none"
+    supports_subagents: ClassVar[bool] = False
+    cheapest_subagent_model: ClassVar[str | None] = None
 
     # Inputs for the default transcript parser (see parse_transcript). Leave the
     # markers empty for a harness whose UI doesn't echo prompts behind a simple
@@ -207,6 +209,8 @@ class HarnessAdapter(ABC):
                 prompt_markers=cls.transcript_prompt_markers,
             ),
             startup_interrupt_continue=True,
+            supports_subagents=cls.supports_subagents,
+            cheapest_subagent_model=cls.cheapest_subagent_model,
         )
 
     def capabilities(self) -> HarnessCapabilities:
@@ -352,8 +356,10 @@ class HarnessAdapter(ABC):
     def detect_done(self, pane_text: str) -> bool:
         return bool(DONE_RE.search(strip_ui_chrome(pane_text)))
 
-    @abstractmethod
-    def format_nudge(self, msg: str) -> str: ...
-
     async def interrupt(self, session: str) -> None:
+        """Stop an in-flight generation. Override per harness (see plan Obj 4)."""
         await tmux.interrupt(session)
+
+    async def interrupt_generation(self, session: str) -> None:
+        """Send Escape — shared by interactive CLIs that document esc-to-interrupt."""
+        await tmux.send_keys(session, "Escape", literal=False, enter=False)

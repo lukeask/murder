@@ -33,6 +33,3 @@ class NativeCodingCrowAdapter(HarnessAdapter):
 
     def extract_last_message(self, pane_text: str) -> str | None:
         raise NotImplementedError("v2: native_coding_crow extract_last_message")
-
-    def format_nudge(self, msg: str) -> str:
-        return msg  # native agents accept structured input; no framing needed.

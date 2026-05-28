@@ -140,6 +140,9 @@ class PiAdapter(HarnessAdapter):
         del session
         return model == self.startup_model
 
+    async def interrupt(self, session: str) -> None:
+        await self.interrupt_generation(session)
+
 
 from murder.harnesses.transcripts import PreprocessedPromptMarkerParser, register_parser
 

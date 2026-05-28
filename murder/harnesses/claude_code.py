@@ -126,6 +126,9 @@ class ClaudeCodeAdapter(HarnessAdapter):
         del session
         return model == self.startup_model
 
+    async def interrupt(self, session: str) -> None:
+        await self.interrupt_generation(session)
+
     async def request_usage_status(self, session: str) -> bool:
         # If a prior /usage or /status dialog is still open, dismiss it first
         # so the slash command is submitted at the main prompt.
