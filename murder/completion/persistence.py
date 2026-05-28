@@ -39,6 +39,21 @@ def bump_attempts(conn: sqlite3.Connection, ticket_id: str, check_name: str) -> 
     conn.commit()
 
 
+def get_latest_check_status(
+    conn: sqlite3.Connection, ticket_id: str, check_name: str
+) -> str | None:
+    row = conn.execute(
+        """
+        SELECT status FROM check_results
+         WHERE ticket_id = ? AND check_name = ?
+         ORDER BY timestamp DESC
+         LIMIT 1
+        """,
+        (ticket_id, check_name),
+    ).fetchone()
+    return str(row["status"]) if row else None
+
+
 def reset_attempts(conn: sqlite3.Connection, ticket_id: str, check_name: str) -> None:
     conn.execute(
         "INSERT INTO completion_attempts (ticket_id, check_name, attempts) VALUES (?, ?, 0)"
@@ -51,6 +66,7 @@ def reset_attempts(conn: sqlite3.Connection, ticket_id: str, check_name: str) ->
 __all__ = [
     "bump_attempts",
     "get_attempts",
+    "get_latest_check_status",
     "reset_attempts",
     "write_check_result",
 ]
