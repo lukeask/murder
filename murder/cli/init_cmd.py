@@ -158,10 +158,6 @@ def cmd_ticket_create(
         list[str] | None,
         typer.Option("--check", help="Checklist item. Repeatable."),
     ] = None,
-    skill: Annotated[
-        list[str] | None,
-        typer.Option("--skill", help="Skill name. Repeatable."),
-    ] = None,
     harness: Annotated[
         str | None,
         typer.Option("--harness", help="Harness override for this ticket."),
@@ -203,7 +199,7 @@ def cmd_ticket_create(
         status=status,
         write_set=list(write or []),
         deps=list(dep or []),
-        skills=list(skill or []),
+        skills=[],
         harness=harness,
         model=model,
         created_at=now,

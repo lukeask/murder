@@ -5,15 +5,14 @@ Setup, conventions, and what tests are worth writing. Agent-only section at the 
 ## Setup
 
 ```bash
-python -m venv .venv && source .venv/bin/activate
-pip install -e ".[dev]"
+uv sync
 ```
 
-Python ≥3.10, hatchling backend. No `uv`/`poetry`/`pip-tools`.
+Python ≥3.10, hatchling backend. `uv` manages the repo-local `.venv/`. No Poetry or pip-tools.
 
 ## Tooling
 
-`ruff check . && ruff format .`, `mypy --strict murder/`, `pytest`. No CI/pre-commit yet; run locally before PR.
+`uv run ruff check . && uv run ruff format .`, `uv run mypy --strict murder/`, `uv run pytest`. No CI/pre-commit yet; run locally before PR.
 
 ## Layout
 
@@ -22,7 +21,7 @@ murder/
   agents/         crow, crow_handler, sentinel, collaborator
   bus/            broker + transports + client
   clients/        LLM API (anthropic, openai-compat, openrouter)
-  harnesses/      claude_code, codex, cursor, pi, native adapters
+  harnesses/      claude_code, codex, cursor, pi, antigravity, native adapters
   orchestration/  orchestrator, outcome, validator
   scheduler/      worker + usage curves
   service/        runtime, supervisor, recovery, bootstrap

@@ -19,9 +19,9 @@
 <summary><b>⚡ start</b></summary>
 
 ```bash
-python -m venv .venv && source .venv/bin/activate
-pip install -e .
-murder init && murder
+uv sync
+uv run murder init
+uv run murder
 ```
 
 Bare <kbd>murder</kbd> opens the TUI.
@@ -48,8 +48,8 @@ Bare <kbd>murder</kbd> opens the TUI.
 <summary><b>🧪 dev</b></summary>
 
 ```bash
-pip install -e ".[dev]"
-pytest
+uv sync
+uv run pytest
 ```
 
 → [CONTRIBUTING.md](CONTRIBUTING.md)
