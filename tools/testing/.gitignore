@@ -1,0 +1,4 @@
+# PTY driver session logs — ephemeral test outputs, not source
+*.txt
+recordings/
+trust-recording-*/
