@@ -1,5 +1,6 @@
 from murder.workers.base import Worker, WorkerCommand, WorkerCtx, WorkerSpec
 from murder.workers.collaborator_worker import CollaboratorWorker
+from murder.workers.harness_version_probe_worker import HarnessVersionProbeWorker
 from murder.workers.orchestrator_worker import OrchestratorCommandWorker
 from murder.workers.process_runner import SubprocessWorkerRunner
 from murder.workers.state_worker import StateCommandWorker
@@ -14,6 +15,7 @@ __all__ = [
     "WorkerCtx",
     "WorkerSpec",
     "CollaboratorWorker",
+    "HarnessVersionProbeWorker",
     "OrchestratorCommandWorker",
     "StateCommandWorker",
     "SubprocessWorkerRunner",

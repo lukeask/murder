@@ -1,0 +1,36 @@
+# Verified harness CLI versions → adapter IDs
+#
+# This file is written by tools/testing/check_harness_versions.py (Phase 2 dev gate).
+# The service worker reads it at startup; it never writes here.
+#
+# Resolution rules (implemented in versioning.py):
+#   - Exact match → use that adapter_id
+#   - Installed > max key → use latest adapter_id, log version_newer_than_supported
+#   - Kind absent → use "<kind>_default" as fallback
+#
+# See .murder/notes/plan-harness-versioning-phase2.md for Phase 2 plans.
+
+claude_code:
+  "2.1.153":
+    adapter: claude_code_default
+    verified_at: "2026-05-27"
+
+codex:
+  "0.134.0":
+    adapter: codex_default
+    verified_at: "2026-05-27"
+
+cursor:
+  # cursor --version is unavailable on this machine (no IDE installation).
+  # Entries will be added when a version string becomes probeable.
+  # Forward-compat rule returns "cursor_default" until then.
+
+pi:
+  "0.74.1":
+    adapter: pi_default
+    verified_at: "2026-05-27"
+
+antigravity:
+  "1.0.3":
+    adapter: antigravity_default
+    verified_at: "2026-05-28"
