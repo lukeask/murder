@@ -17,10 +17,13 @@ ForceStatus = Callable[[str, str], Awaitable[dict[str, Any]]]
 NoteEnsure = Callable[[str], Awaitable[dict[str, Any]]]
 NoteRetire = Callable[[str], Awaitable[dict[str, Any]]]
 SendAgentMessage = Callable[[str, str, str | None], Awaitable[dict[str, Any]]]
+SendAgentKey = Callable[[str | None, str, bool], Awaitable[dict[str, Any]]]
+InterruptAgent = Callable[[str], Awaitable[dict[str, Any]]]
 ScaffoldPlan = Callable[[str, str], Awaitable[dict[str, Any]]]
 RenamePlan = Callable[[str, str], Awaitable[dict[str, Any]]]
 DeprecatePlan = Callable[[str], Awaitable[dict[str, Any]]]
 QuickKickTicket = Callable[[str], Awaitable[dict[str, Any]]]
+SpawnRogue = Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]
 
 
 class OrchestratorCommandWorker(Worker):
@@ -37,10 +40,13 @@ class OrchestratorCommandWorker(Worker):
         note_ensure: NoteEnsure,
         note_retire: NoteRetire,
         send_agent_message: SendAgentMessage,
+        send_agent_key: SendAgentKey,
+        interrupt_agent: InterruptAgent,
         scaffold_plan: ScaffoldPlan,
         rename_plan: RenamePlan,
         deprecate_plan: DeprecatePlan,
         quick_kick_ticket: QuickKickTicket,
+        spawn_rogue: SpawnRogue,
     ) -> None:
         super().__init__(
             WorkerSpec(
@@ -57,10 +63,13 @@ class OrchestratorCommandWorker(Worker):
                     "ticket.update_metadata",
                     "ticket.force_status",
                     "agent.message",
+                    "agent.send_key",
+                    "agent.interrupt",
                     "plan.scaffold",
                     "plan.rename",
                     "plan.deprecate",
                     "ticket.quick_kick",
+                    "crow.spawn_rogue",
                 ),
             )
         )
@@ -74,10 +83,13 @@ class OrchestratorCommandWorker(Worker):
         self._note_ensure = note_ensure
         self._note_retire = note_retire
         self._send_agent_message = send_agent_message
+        self._send_agent_key = send_agent_key
+        self._interrupt_agent = interrupt_agent
         self._scaffold_plan = scaffold_plan
         self._rename_plan = rename_plan
         self._deprecate_plan = deprecate_plan
         self._quick_kick_ticket = quick_kick_ticket
+        self._spawn_rogue = spawn_rogue
 
     async def run(self, ctx: WorkerCtx, stop_event: asyncio.Event) -> None:  # noqa: ARG002
         await stop_event.wait()
@@ -127,6 +139,27 @@ class OrchestratorCommandWorker(Worker):
             if ticket_id is not None and not isinstance(ticket_id, str):
                 raise ValueError("agent.message ticket_id must be a string or null")
             return await self._send_agent_message(agent_id.strip(), message, ticket_id)
+        if command.kind == "agent.send_key":
+            raw_agent_id = command.payload.get("agent_id")
+            if raw_agent_id is not None and (
+                not isinstance(raw_agent_id, str) or not raw_agent_id.strip()
+            ):
+                raise ValueError("agent.send_key agent_id must be a string or null")
+            key = command.payload.get("key")
+            if not isinstance(key, str) or not key.strip():
+                raise ValueError("agent.send_key requires key")
+            literal = bool(command.payload.get("literal"))
+            agent_id = (
+                raw_agent_id.strip()
+                if isinstance(raw_agent_id, str) and raw_agent_id.strip()
+                else None
+            )
+            return await self._send_agent_key(agent_id, key.strip(), literal)
+        if command.kind == "agent.interrupt":
+            agent_id = command.payload.get("agent_id")
+            if not isinstance(agent_id, str) or not agent_id.strip():
+                raise ValueError("agent.interrupt requires agent_id")
+            return await self._interrupt_agent(agent_id.strip())
         if command.kind == "plan.scaffold":
             name = command.payload.get("name")
             body = command.payload.get("body")
@@ -179,4 +212,6 @@ class OrchestratorCommandWorker(Worker):
             if not isinstance(title, str) or not title.strip():
                 raise ValueError("ticket.quick_kick requires title")
             return await self._quick_kick_ticket(title.strip())
+        if command.kind == "crow.spawn_rogue":
+            return await self._spawn_rogue(dict(command.payload))
         return {"handled": False}

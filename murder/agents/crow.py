@@ -20,7 +20,7 @@ class CrowAgent(Agent):
     def __init__(
         self,
         agent_id: str,
-        ticket_id: str,
+        ticket_id: str | None,
         session: str,
         harness: HarnessAdapter,
         repo_root: Path,
@@ -90,5 +90,4 @@ class CrowAgent(Agent):
             self.runtime.sync_agent(self)
 
     async def send(self, msg: str) -> None:
-        text = self.harness.format_nudge(msg)
-        await self.harness_session.send_prompt(text)
+        await self.harness_session.send_prompt(msg)
