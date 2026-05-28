@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any
+from datetime import datetime
+from typing import Any
 
 from textual.app import ComposeResult
 from textual.binding import Binding
@@ -18,9 +19,9 @@ from murder.service.client_api import (
     UsageGaugeDrillInSnapshot,
     UsageGaugeSummary,
 )
+from murder.tui.dispatch.mode_strip import ModeStrip
 
-if TYPE_CHECKING:
-    from murder.service.read_model import ServiceReadModel
+UsageDrillInLoader = Callable[..., Awaitable[UsageGaugeDrillInSnapshot]]
 
 # Unicode ring chars: empty → quarter → half → three-quarter → full
 _RING = ["○", "◔", "◑", "◕", "●"]
@@ -31,6 +32,9 @@ _WINDOW_NAME_MINUTES = {"h": 60.0, "d": 1440.0}
 # is safe headroom, high usage is the danger zone. Tune these to shift bands.
 _USAGE_YELLOW_PCT = 40.0  # >= this: "moderate usage"
 _USAGE_RED_PCT = 75.0  # >= this: "high usage" — running low on quota
+_MINUTES_PER_HOUR = 60
+_HOURS_PER_TWO_DAYS = 48
+_HOURS_PER_DAY = 24
 
 
 def _ring_char(pct: float) -> str:
@@ -43,13 +47,13 @@ def _fmt_duration(minutes: float) -> str:
     """Format a duration in minutes as a short human-readable string."""
     if minutes < 1:
         return "<1m"
-    if minutes < 60:
+    if minutes < _MINUTES_PER_HOUR:
         return f"{int(minutes)}m"
-    hours = int(minutes // 60)
-    mins = int(minutes % 60)
-    if hours < 48:
+    hours = int(minutes // _MINUTES_PER_HOUR)
+    mins = int(minutes % _MINUTES_PER_HOUR)
+    if hours < _HOURS_PER_TWO_DAYS:
         return f"{hours}h{mins:02d}m" if mins else f"{hours}h"
-    days = hours // 24
+    days = hours // _HOURS_PER_DAY
     return f"{days}d"
 
 
@@ -316,8 +320,6 @@ class GaugeDrillIn(ModalScreen[None]):
     def action_open_mode_picker(self) -> None:
         self.dismiss()
         try:
-            from murder.tui.dispatch.mode_strip import ModeStrip
-
             self.app.query_one(ModeStrip).action_open_mode_picker()
         except Exception:
             pass
@@ -331,6 +333,8 @@ class GaugeDrillIn(ModalScreen[None]):
 class GaugeStrip(Static):
     """Per-provider usage gauges, one column per harness, windows stacked."""
 
+    can_focus = True
+
     BINDINGS = [
         Binding("left", "focus_prev", "Prev gauge", show=False),
         Binding("right", "focus_next", "Next gauge", show=False),
@@ -341,6 +345,7 @@ class GaugeStrip(Static):
     GaugeStrip {
         height: auto;
         color: $text-muted;
+        border: solid $border;
     }
     """
 
@@ -348,10 +353,10 @@ class GaugeStrip(Static):
         super().__init__("")
         self._gauges: list[_GaugeData] = []
         self._focus_idx: int = 0
-        self._read_model: ServiceReadModel | None = None
+        self._drill_in_loader: UsageDrillInLoader | None = None
 
-    def set_read_model(self, read_model: ServiceReadModel) -> None:
-        self._read_model = read_model
+    def set_drill_in_loader(self, loader: UsageDrillInLoader) -> None:
+        self._drill_in_loader = loader
 
     def refresh_from_snapshot(self, snapshot: ScheduleSnapshot) -> None:
         self._gauges = [_gauge_from_summary(g) for g in snapshot.usage_gauges]
@@ -373,10 +378,19 @@ class GaugeStrip(Static):
             self._render_strip()
 
     def action_drill_in(self) -> None:
-        if not self._gauges or self._read_model is None:
+        if not self._gauges or self._drill_in_loader is None:
             return
         gauge = self._gauges[self._focus_idx]
-        drill_in = self._read_model.get_usage_gauge_drill_in(
+        self.app.run_worker(
+            self._open_drill_in(gauge),
+            exclusive=True,
+            group="usage_drill_in",
+        )
+
+    async def _open_drill_in(self, gauge: _GaugeData) -> None:
+        if self._drill_in_loader is None:
+            return
+        drill_in = await self._drill_in_loader(
             harness=gauge.harness,
             window_key=gauge.window_key,
             t_period_minutes=gauge.t_period_minutes,
