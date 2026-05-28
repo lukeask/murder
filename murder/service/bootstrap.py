@@ -13,6 +13,7 @@ from murder.service.supervisor import Supervisor
 from murder.workers import (
     CollaboratorWorker,
     DoneSessionSweeperWorker,
+    HarnessVersionProbeWorker,
     OrchestratorCommandWorker,
     StateCommandWorker,
     UsageProbeWorker,
@@ -46,6 +47,7 @@ async def start_supervisor_workers(
     await supervisor.start_worker(StateCommandWorker())
     await supervisor.start_worker(SchedulerWorker())
     await supervisor.start_worker(UsageProbeWorker.from_worker_ctx(worker_ctx))
+    await supervisor.start_worker(HarnessVersionProbeWorker.from_runtime(runtime))
     await supervisor.start_worker(DoneSessionSweeperWorker())
     await supervisor.start_worker(
         CollaboratorWorker(
@@ -65,10 +67,13 @@ async def start_supervisor_workers(
             note_ensure=orchestrator.ensure_note,
             note_retire=orchestrator.retire_note,
             send_agent_message=orchestrator.send_agent_message,
+            send_agent_key=orchestrator.send_agent_key,
+            interrupt_agent=orchestrator.interrupt_agent,
             scaffold_plan=orchestrator.scaffold_plan,
             rename_plan=orchestrator.rename_plan,
             deprecate_plan=orchestrator.deprecate_plan,
             quick_kick_ticket=orchestrator.quick_kick_ticket,
+            spawn_rogue=orchestrator.spawn_rogue_command,
         )
     )
     return supervisor

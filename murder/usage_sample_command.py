@@ -1,7 +1,7 @@
 """Shared harness usage sampling via the usage-probe worker.
 
-Used by the TUI (Ctrl+U), the headless service interval poll, and any other
-caller that should issue the same ``state.harness_usage.sample`` command.
+Used by the TUI (Ctrl+R refresh), the headless service interval poll, and any
+other caller that should issue the same ``state.harness_usage.sample`` command.
 """
 
 from __future__ import annotations
@@ -28,7 +28,8 @@ USAGE_SAMPLE_POLL_INTERVAL_S = 600.0
 USAGE_SAMPLE_DEFAULT_TIMEOUT_S = 20.0
 COMMAND_POLL_S = 0.05
 
-TRIGGER_USAGE_MANUAL_KEY = "manual_u_key"
+TRIGGER_USAGE_MANUAL_REFRESH = "manual_refresh"
+TRIGGER_USAGE_MANUAL_KEY = TRIGGER_USAGE_MANUAL_REFRESH
 TRIGGER_USAGE_SERVICE_INTERVAL = "interval_10m"
 
 
