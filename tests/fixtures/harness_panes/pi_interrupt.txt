@@ -1,0 +1,40 @@
+# source: tools/testing/recordings/20260526-105818-pi-interrupt-deepseek-v4-flash/frames.jsonl frame 27
+ not use tools until you have written at least 500 words of planning text first.
+
+
+ The user wants me to:
+ 1. Read every file in the current directory recursively
+ 2. For each file write exactly 150 words of analysis
+ 3. Do not use tools until I've written at least 500 words of planning text first
+
+ Let me start by writing my planning text, then I'll use the tools.
+
+ Wait, they said "Do not use tools until you have written at least 500 words of planning text first." So I need to
+ write 500+ words of planning before I can use any tools. But I need to use tools to read files... Let me think about
+ this.
+
+ I think the user wants me to plan what I'm going to do, describe the approach, then execute. Let me write the planning
+ text first.
+
+ Before I can use any tools, I need to write at least 500 words of planning text. Let me think through this
+ comprehensively.
+
+ ────────────────────────────────────────────────────────────────────────────────
+
+ Planning Text
+
+ ### Task Analysis
+
+ The user is asking me to read every file in the current working directory
+ (/home/user/Documents/code/testingmurderharness) recursively, and for each file, write exactly 150 words of analysis.
+ I am restricted from using any tools until I have written at least 500 words of planning. This means I must first
+ fully articulate my approach, anticipate challenges, structure my output, and define how I will handle each file
+ before I ever invoke read, bash, edit, or `write
+
+ Operation aborted
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+~/Documents/code/testingmurderharness
+0.0%/1.0M (auto)                                                                (or) deepseek/deepseek-v4-flash • medium

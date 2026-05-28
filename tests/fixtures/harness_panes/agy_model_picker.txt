@@ -1,0 +1,24 @@
+# source: tools/testing/recordings/20260527-214509-agy-model/frames.jsonl frame 15
+      ▄▀▀▄        Antigravity CLI 1.0.2
+     ▀▀▀▀▀▀       lukeask@gmail.com
+    ▀▀▀▀▀▀▀▀      Gemini 3.1 Pro (Low)
+   ▄▀▀    ▀▀▄     /tmp/testingmurderharness
+  ▄▀▀      ▀▀▄
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+>
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+Switch Model
+
+  Gemini 3.5 Flash (Medium)
+  Gemini 3.5 Flash (High)
+  Gemini 3.5 Flash (Low)
+> Gemini 3.1 Pro (Low)         (current)
+  Gemini 3.1 Pro (High)
+  Claude Sonnet 4.6 (Thinking)
+  Claude Opus 4.6 (Thinking)
+  GPT-OSS 120B (Medium)
+
+Keyboard: ↑/↓ Navigate  enter Select  esc Go Back
+
+esc to cancel                                                                                       Gemini 3.1 Pro (Low)

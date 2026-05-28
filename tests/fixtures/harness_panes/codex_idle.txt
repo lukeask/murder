@@ -1,0 +1,47 @@
+# source: tools/testing/recordings/20260523-215413/frames.jsonl frame 30
+user@machine:~/Documents/code/murder $ codex
+╭────────────────────────────────────────────╮
+│ >_ OpenAI Codex (v0.133.0)                 │
+│                                            │
+│ model:     gpt-5.4 high   /model to change │
+│ directory: ~/Documents/code/murder         │
+╰────────────────────────────────────────────╯
+
+  Tip: Use /rename to rename your threads for easier thread resuming.
+
+• Model changed to gpt-5.4-mini high
+
+
+› Find and fix a bug in @filename
+
+  gpt-5.4-mini high · ~/Documents/code/murder
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
