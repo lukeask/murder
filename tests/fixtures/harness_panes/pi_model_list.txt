@@ -1,0 +1,47 @@
+# source: tools/testing/recordings/20260523-215816/frames.jsonl frame 8
+user@machine:~/Documents/code/murder $ pi
+Model scope: deepseek/deepseek-v4-pro, deepseek/deepseek-v4-flash, google/gemini-3.1-pro-prev
+iew, moonshotai/kimi-k2.6, qwen/qwen3.6-plus, qwen/qwen3.6-35b-a3b, minimax/minimax-m2.7, xia
+omi/mimo-v2.5-pro, Qwen3.6-35B-A3B-Q8_0.gguf, Qwen3.6-27B-Q8_0.gguf (Ctrl+P to cycle)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

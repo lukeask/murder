@@ -1,0 +1,47 @@
+# source: tools/testing/recordings/20260523-215258/frames.jsonl frame 11
+user@machine:~/Documents/code/murder $ claude
+ ▐▛███▜▌   Claude Code v2.1.150
+▝▜█████▛▘  Sonnet 4.6 with high effort · Claude Pro
+  ▘▘ ▝▝    ~/Documents/code/murder
+
+─────────────────────────────────────────────────────────────────────────────────────────────
+❯ Try "create a util logging.py that..."
+─────────────────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← for agents             ● high · /effort
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

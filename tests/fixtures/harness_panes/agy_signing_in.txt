@@ -1,0 +1,11 @@
+# source: tools/testing/recordings/20260527-214113-agy-idle-startup/frames.jsonl frame 2
+
+     ▄▀▀▄
+    ▀▀▀▀▀▀
+   ▀▀▀▀▀▀▀▀
+  ▄▀▀    ▀▀▄
+ ▄▀▀      ▀▀▄
+
+ Welcome to the Antigravity CLI. You are currently not signed in.
+
+ ⣷  Signing in...

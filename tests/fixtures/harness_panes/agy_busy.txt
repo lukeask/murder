@@ -1,0 +1,14 @@
+# source: tools/testing/recordings/20260527-220559-agy-busy/frames.jsonl frame 20
+      ▄▀▀▄        Antigravity CLI 1.0.2
+     ▀▀▀▀▀▀       user@example.com
+    ▀▀▀▀▀▀▀▀      Gemini 3.1 Pro (Low)
+   ▄▀▀    ▀▀▄     /tmp/testingmurderharness
+  ▄▀▀      ▀▀▄
+
+────────────────────────────────────────────────────────────
+> Reply with exactly: OK
+⢿ Generating...
+────────────────────────────────────────────────────────────────────────────────
+>
+────────────────────────────────────────────────────────────────────────────────
+esc to cancel                                               Gemini 3.1 Pro (Low)

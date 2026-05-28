@@ -1,0 +1,11 @@
+# source: tools/testing/recordings/20260527-214113-agy-idle-startup/frames.jsonl last frame
+      ▄▀▀▄        Antigravity CLI 1.0.2
+     ▀▀▀▀▀▀       user@example.com
+    ▀▀▀▀▀▀▀▀      Gemini 3.1 Pro (Low)
+   ▄▀▀    ▀▀▄     /tmp/testingmurderharness
+  ▄▀▀      ▀▀▄
+
+────────────────────────────────────────────────────────────────────────────────
+>
+────────────────────────────────────────────────────────────────────────────────
+? for shortcuts                                             Gemini 3.1 Pro (Low)

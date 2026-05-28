@@ -343,21 +343,22 @@ def test_wait_ready_tmux_error_returns_fail_result(fake_tmux: FakeTmux):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# interrupt() — delegates to tmux.interrupt
+# interrupt() — delegates to adapter (CC sends Escape, not Ctrl+C)
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def test_interrupt_calls_tmux_interrupt(fake_tmux: FakeTmux):
+def test_interrupt_calls_adapter_escape(fake_tmux: FakeTmux):
     hs = _make_session(ClaudeCodeAdapter())
 
     result = asyncio.run(hs.interrupt())
 
     assert result.ok
-    assert "interrupt" in fake_tmux.call_names()
-    interrupt_calls = fake_tmux.calls_to("interrupt")
-    assert len(interrupt_calls) == 1
-    (session_arg,), _ = interrupt_calls[0]
+    send_calls = fake_tmux.calls_to("send_keys")
+    assert len(send_calls) == 1
+    (session_arg, keys), kw = send_calls[0]
     assert session_arg == "test-session"
+    assert keys == "Escape"
+    assert kw == {"literal": False, "enter": False}
 
 
 # ─────────────────────────────────────────────────────────────────────────────

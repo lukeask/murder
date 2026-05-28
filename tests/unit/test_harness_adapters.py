@@ -15,6 +15,8 @@ Fixture provenance:
       → tools/testing/recordings/20260523-215643 and 20260526-102216-cursor-busy
   pi_idle / pi_busy
       → tools/testing/recordings/20260523-215816 and 20260526-103015-pi-busy-deepseek-v4-flash
+  agy_idle / agy_busy / agy_trust_dialog / agy_signing_in / agy_model_picker
+      → tools/testing/recordings/20260527-21*-agy-*
 """
 
 from __future__ import annotations
@@ -23,6 +25,7 @@ from pathlib import Path
 
 import pytest
 
+from murder.harnesses.antigravity import AntigravityAdapter
 from murder.harnesses.claude_code import ClaudeCodeAdapter
 from murder.harnesses.codex import CodexAdapter
 from murder.harnesses.cursor import CursorAdapter
@@ -56,6 +59,12 @@ CURSOR_STARTUP = _load("cursor_startup.txt")
 
 PI_IDLE = _load("pi_idle.txt")
 PI_BUSY = _load("pi_busy.txt")
+
+AGY_IDLE = _load("agy_idle.txt")
+AGY_BUSY = _load("agy_busy.txt")
+AGY_TRUST_DIALOG = _load("agy_trust_dialog.txt")
+AGY_SIGNING_IN = _load("agy_signing_in.txt")
+AGY_MODEL_PICKER = _load("agy_model_picker.txt")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -351,6 +360,90 @@ class TestPiAdapter:
     def test_auth_error_blocks_ready(self):
         pane = PaneSimulator().add("login required", ">").render()
         assert self.pi.is_ready(pane) is False
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Antigravity adapter
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestAntigravityAdapter:
+    agy = AntigravityAdapter()
+
+    # ── idle fixture ──────────────────────────────────────────────────────────
+
+    def test_idle_pane_is_idle(self):
+        # "? for shortcuts" footer present, no Generating spinner → idle
+        assert self.agy.is_idle(AGY_IDLE) is True
+
+    def test_idle_pane_is_ready(self):
+        assert self.agy.is_ready(AGY_IDLE) is True
+
+    def test_idle_pane_not_busy(self):
+        assert self.agy.is_busy(AGY_IDLE) is False
+
+    # ── busy fixture ──────────────────────────────────────────────────────────
+
+    def test_busy_pane_is_busy(self):
+        # "⢿ Generating..." spinner line is detected via the static text
+        assert self.agy.is_busy(AGY_BUSY) is True
+
+    def test_busy_pane_not_idle(self):
+        assert self.agy.is_idle(AGY_BUSY) is False
+
+    def test_busy_pane_is_ready(self):
+        # Banner + "esc to cancel" footer keeps the harness ready while busy
+        assert self.agy.is_ready(AGY_BUSY) is True
+
+    # ── trust dialog (first-run, untrusted directory) ─────────────────────────
+
+    def test_trust_dialog_is_ready(self):
+        # is_ready must include the trust dialog so initialize_defaults
+        # gets a chance to dismiss it
+        assert self.agy.is_ready(AGY_TRUST_DIALOG) is True
+
+    def test_trust_dialog_not_idle(self):
+        # No "? for shortcuts" footer yet; the dialog must block idle
+        assert self.agy.is_idle(AGY_TRUST_DIALOG) is False
+
+    # ── signing-in splash ─────────────────────────────────────────────────────
+
+    def test_signing_in_pane_not_ready(self):
+        # "Signing in..." spinner means the harness has not booted yet
+        assert self.agy.is_ready(AGY_SIGNING_IN) is False
+
+    def test_signing_in_pane_not_idle(self):
+        assert self.agy.is_idle(AGY_SIGNING_IN) is False
+
+    # ── /model picker (modal open) ────────────────────────────────────────────
+
+    def test_model_picker_is_ready(self):
+        # Picker is modal: footer is "esc to cancel" but harness is alive
+        assert self.agy.is_ready(AGY_MODEL_PICKER) is True
+
+    def test_model_picker_not_idle(self):
+        # No "? for shortcuts" footer while the modal is open → not idle
+        assert self.agy.is_idle(AGY_MODEL_PICKER) is False
+
+    def test_model_picker_not_busy(self):
+        # "esc to cancel" alone is not a busy marker (no Generating...)
+        assert self.agy.is_busy(AGY_MODEL_PICKER) is False
+
+    # ── synthetic ─────────────────────────────────────────────────────────────
+
+    def test_startup_cmd_does_not_include_model_flag(self):
+        # agy 1.0.2 has no --model flag; startup_model is advisory only
+        adapter = AntigravityAdapter(startup_model="gemini-3.1-pro")
+        cmd = adapter.startup_cmd(Path("/tmp/repo"))
+        assert "agy" in cmd
+        assert "--dangerously-skip-permissions" in cmd
+        assert "--model" not in cmd
+
+    def test_set_model_only_matches_startup_model(self):
+        import asyncio as _asyncio
+
+        adapter = AntigravityAdapter(startup_model="gemini")
+        assert _asyncio.run(adapter.set_model("sess", "gemini")) is True
+        assert _asyncio.run(adapter.set_model("sess", "other")) is False
 
 
 # ─────────────────────────────────────────────────────────────────────────────
