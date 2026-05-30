@@ -15,9 +15,9 @@ from murder.harnesses import REGISTRY, capabilities_for
 
 _HARNESS_MODELS: dict[str, list[str]] = {
     "claude_code": [
-        "claude-sonnet-4-6",
-        "claude-opus-4-7",
-        "claude-haiku-4-5-20251001",
+        "sonnet",
+        "opus",
+        "haiku",
     ],
     "codex": [
         "gpt-5.5",
