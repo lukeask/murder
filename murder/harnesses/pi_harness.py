@@ -136,8 +136,8 @@ class PiAdapter(HarnessAdapter):
     def extract_last_message(self, pane_text: str) -> str | None:
         return extract_last_message_heuristic(_strip_pi_chrome(pane_text))
 
-    async def set_model(self, session: str, model: str) -> bool:
-        del session
+    async def set_model(self, session: str, model: str, *, effort: str | None = None) -> bool:
+        del session, effort
         return model == self.startup_model
 
     async def interrupt(self, session: str) -> None:

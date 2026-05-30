@@ -142,11 +142,11 @@ class TestClaudeCodeAdapter:
         assert "claude" in cmd
         assert "--dangerously-skip-permissions" in cmd
 
-    def test_startup_cmd_includes_model_when_set(self):
+    def test_startup_cmd_does_not_include_model_flag(self):
         adapter = ClaudeCodeAdapter(startup_model="haiku")
         cmd = adapter.startup_cmd(Path("/tmp/repo"))
-        assert "--model" in cmd
-        assert "haiku" in cmd
+        assert "--model" not in cmd
+        assert "haiku" not in cmd
 
 
 # ─────────────────────────────────────────────────────────────────────────────

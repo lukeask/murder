@@ -160,8 +160,8 @@ class AntigravityAdapter(HarnessAdapter):
             await asyncio.sleep(0.4)
         return ok_result()
 
-    async def set_model(self, session: str, model: str) -> bool:
-        del session
+    async def set_model(self, session: str, model: str, *, effort: str | None = None) -> bool:
+        del session, effort
         # /model is a numbered picker of display labels; runtime selection
         # by id is unsupported. Accept only when the caller's desired
         # model already matches the harness default.

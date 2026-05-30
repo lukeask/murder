@@ -39,6 +39,7 @@ class UserHarnessRolePatch(BaseModel):
         ),
     )
     startup_model: str | None = None
+    startup_effort: str | None = None
     startup_models: list[str] | None = Field(
         default=None,
         description=(

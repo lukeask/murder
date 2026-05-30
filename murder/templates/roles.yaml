@@ -41,6 +41,7 @@ default_crow:
   # stably by ticket id. Omit harnesses / startup_models for single-harness/model.
   # harnesses: [cursor, codex]
   startup_model: composer       # cursor's selector; consumed by CursorAdapter
+  # startup_effort: medium       # optional; defaults to medium for CC/Codex when supported
   # startup_models: [composer, gpt-4.1]
   # startup_models_by_harness:
   #   cursor: [composer]
