@@ -112,6 +112,7 @@ class CrowSessionSummary:
     last_seen: datetime | None
     started_at: datetime | None
     ticket_status: str | None
+    worktree_path: str | None = None
     open_escalations: int = 0
     max_severity: int = 0
 
@@ -372,6 +373,9 @@ class MurderServiceClient(Protocol):
         model: str,
         effort: str | None = None,
         name: str | None = None,
+        *,
+        worktree_path: str | None = None,
+        worktree_branch: str | None = None,
     ) -> str: ...
 
 

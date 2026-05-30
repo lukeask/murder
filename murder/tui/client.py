@@ -249,12 +249,19 @@ class TuiRuntimeClient:
         model: str,
         effort: str | None = None,
         name: str | None = None,
+        *,
+        worktree_path: str | None = None,
+        worktree_branch: str | None = None,
     ) -> str:
         payload: dict[str, object] = {"harness": harness, "model": model}
         if effort is not None:
             payload["effort"] = effort
         if name is not None:
             payload["name"] = name
+        if worktree_path is not None:
+            payload["worktree_path"] = worktree_path
+        if worktree_branch is not None:
+            payload["worktree_branch"] = worktree_branch
         result = await self.submit_command(
             target_worker="orchestrator",
             kind="crow.spawn_rogue",

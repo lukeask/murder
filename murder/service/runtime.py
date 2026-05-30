@@ -150,6 +150,7 @@ class Runtime:
         """Persist current agent fields to SQLite."""
         if self.db is None:
             return
+        worktree_path = getattr(agent, "worktree_path", None)
         _db_upsert_agent(
             self.db,
             agent_id=agent.id,
@@ -158,6 +159,7 @@ class Runtime:
             session=agent.session,
             status=agent.status.value,
             start_commit=getattr(agent, "start_commit", None),
+            worktree_path=str(worktree_path) if worktree_path is not None else None,
             pid=None,
         )
 

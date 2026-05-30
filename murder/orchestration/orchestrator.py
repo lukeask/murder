@@ -8,6 +8,7 @@ import logging
 import re
 import sqlite3
 from datetime import datetime
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
@@ -51,6 +52,11 @@ from murder.plans.parser import (
 from murder.plans.schema import Plan, PlanStatus
 from murder.plans.sync import content_hash as _plan_content_hash
 from murder.storage.paths import plan_md, ticket_md, tickets_dir
+from murder.storage.worktrees import (
+    ensure_crow_worktree,
+    ensure_named_worktree,
+    prune_terminal_crow_worktree,
+)
 from murder.terminal import tmux
 from murder.terminal.session_names import format_session_name
 from murder.tickets import carve, lifecycle
@@ -323,6 +329,10 @@ class Orchestrator:
             self.rt.config.default_crow, row, harness_kind
         )
         startup_effort = resolve_default_crow_startup_effort(self.rt.config.default_crow, row)
+        worktree_path: str | None = None
+        if self.rt.config.runtime.use_worktrees:
+            worktree = await ensure_crow_worktree(self.rt.repo_root, ticket_id)
+            worktree_path = str(worktree.path)
         ctx = BriefContext(
             role=AgentRole.CROW,
             repo_root=self.rt.repo_root,
@@ -334,7 +344,7 @@ class Orchestrator:
         brief = assembler_for(ctx).build(ctx)
         spec = AgentSpec(
             role=AgentRole.CROW,
-            scope=AgentScope(ticket_id=ticket_id),
+            scope=AgentScope(ticket_id=ticket_id, worktree_path=worktree_path),
             harness=harness_kind,
             model=startup_model,
             effort=startup_effort,
@@ -361,6 +371,7 @@ class Orchestrator:
         client = resolve_role_client(self.rt.config.crow_handler)
         crow_agent = self.rt.get_crow(ticket_id)
         start_commit = getattr(crow_agent, "start_commit", None) if crow_agent else None
+        worktree_path = getattr(crow_agent, "worktree_path", None) if crow_agent else None
         handler = CrowHandler(
             agent_id=f"crow_handler-{ticket_id}",
             ticket_id=ticket_id,
@@ -369,6 +380,7 @@ class Orchestrator:
             harness=harness,
             config=self.rt.config.crow_handler,
             repo_root=self.rt.repo_root,
+            workspace_root=worktree_path,
             runtime=self.rt,
             outcome=self._outcomes(),
             coordinator=self.completion_coordinator,
@@ -405,6 +417,9 @@ class Orchestrator:
         model: str,
         effort: str | None = None,
         name: str | None = None,
+        *,
+        worktree_path: str | None = None,
+        worktree_branch: str | None = None,
     ) -> str:
         """Start a ticketless crow session; inject model selection when supported."""
         harness_kind = harness.strip()
@@ -425,20 +440,39 @@ class Orchestrator:
             startup_model=startup_model,
             startup_effort=startup_effort,
         )
+
+        cwd = self.rt.repo_root
+        resolved_worktree: Path | None = None
+        if isinstance(worktree_branch, str) and worktree_branch.strip():
+            ref = await ensure_named_worktree(
+                self.rt.repo_root,
+                worktree_branch.strip(),
+                category="rogue",
+            )
+            cwd = ref.path
+            resolved_worktree = ref.path
+        elif isinstance(worktree_path, str) and worktree_path.strip():
+            path = Path(worktree_path.strip())
+            if not path.is_absolute():
+                path = self.rt.repo_root / path
+            cwd = path
+            resolved_worktree = path
+
         agent = CrowAgent(
             agent_id=agent_id,
             ticket_id=None,
             session=session_name,
             harness=harness_adapter,
-            repo_root=self.rt.repo_root,
+            repo_root=cwd,
             startup_model=startup_model,
             startup_effort=startup_effort,
+            worktree_path=resolved_worktree,
             runtime=self.rt,
         )
 
         self.rt.register_agent(agent)
         start_spec = HarnessStartSpec(
-            cwd=self.rt.repo_root,
+            cwd=cwd,
             startup_model=startup_model,
             startup_effort=startup_effort,
         )
@@ -458,14 +492,31 @@ class Orchestrator:
         model = payload.get("model")
         effort = payload.get("effort")
         name = payload.get("name")
+        worktree_path = payload.get("worktree_path")
+        worktree_branch = payload.get("worktree_branch")
         if not isinstance(harness, str) or not harness.strip():
             raise ValueError("crow.spawn_rogue requires harness")
         if not isinstance(model, str):
             raise ValueError("crow.spawn_rogue requires model")
         if effort is not None and not isinstance(effort, str):
             raise ValueError("crow.spawn_rogue effort must be a string")
+        if worktree_path is not None and not isinstance(worktree_path, str):
+            raise ValueError("crow.spawn_rogue worktree_path must be a string")
+        if worktree_branch is not None and not isinstance(worktree_branch, str):
+            raise ValueError("crow.spawn_rogue worktree_branch must be a string")
         rogue_name = name.strip() if isinstance(name, str) and name.strip() else None
-        agent_id = await self.spawn_rogue(harness.strip(), model, effort, rogue_name)
+        agent_id = await self.spawn_rogue(
+            harness.strip(),
+            model,
+            effort,
+            rogue_name,
+            worktree_path=worktree_path.strip()
+            if isinstance(worktree_path, str) and worktree_path.strip()
+            else None,
+            worktree_branch=worktree_branch.strip()
+            if isinstance(worktree_branch, str) and worktree_branch.strip()
+            else None,
+        )
         return {"handled": True, "agent_id": agent_id}
 
     async def start_question_listener(self) -> None:
@@ -986,6 +1037,11 @@ class Orchestrator:
             TicketStatus.ARCHIVED.value,
         ):
             await self._reap_ticket_crow_agents(ticket_id)
+            if self.rt.db is not None:
+                with contextlib.suppress(Exception):
+                    await prune_terminal_crow_worktree(
+                        self.rt.db, self.rt.repo_root, ticket_id
+                    )
         return {"handled": True, "ok": True, "ticket_id": ticket_id, "prev_status": prev_str}
 
     async def _reap_ticket_crow_agents(self, ticket_id: str) -> None:

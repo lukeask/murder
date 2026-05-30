@@ -25,6 +25,7 @@ from murder.config import Config
 from murder.service.client_api import EscalationSummary
 from murder.service.settings_service import SettingsService
 from murder.storage.paths import ticket_md, tickets_dir, tui_prefs_path
+from murder.storage.worktrees import list_git_worktrees_sync
 from murder.terminal.session_names import format_session_name
 from murder.tui.chat_input import ChatInput
 from murder.tui.chat_target_cycle import (
@@ -56,7 +57,7 @@ from murder.tui.planning_mode_widgets import (
     ReportsList,
 )
 from murder.tui.settings_screen import SettingsScreen
-from murder.tui.spawn_wizard import SpawnWizard
+from murder.tui.spawn_wizard import SpawnWizard, build_worktree_options
 from murder.tui.themes import CUSTOM_THEMES
 from murder.tui.ticket_grid import TicketGrid
 from murder.user_config import UserConfig, load_user_config
@@ -905,7 +906,12 @@ class MurderApp(App[None]):
             self.notify("spawn wizard unavailable", severity="error", timeout=4)
             return
         self._chat.display = False
-        wizard = SpawnWizard()
+        try:
+            worktree_entries = list_git_worktrees_sync(self.runtime.repo_root)
+        except Exception:
+            worktree_entries = []
+        worktree_options = build_worktree_options(self.runtime.repo_root, worktree_entries)
+        wizard = SpawnWizard(worktree_options=worktree_options)
         self._spawn_wizard = wizard
         parent.mount(wizard, before=self._chat)
         wizard.focus()
@@ -914,7 +920,13 @@ class MurderApp(App[None]):
         event.stop()
         self._teardown_spawn_wizard()
         self.run_worker(
-            self._do_spawn_rogue(event.harness, event.model, event.name),
+            self._do_spawn_rogue(
+                event.harness,
+                event.model,
+                event.name,
+                worktree_path=event.worktree_path,
+                worktree_branch=event.worktree_branch,
+            ),
             exclusive=False,
             group="spawn_rogue",
         )
@@ -937,20 +949,34 @@ class MurderApp(App[None]):
         harness: str,
         model: str,
         name: str | None,
+        *,
+        worktree_path: str | None = None,
+        worktree_branch: str | None = None,
     ) -> None:
         spawn_rogue = getattr(self.runtime, "spawn_rogue", None)
         try:
             if spawn_rogue is not None:
-                agent_id = await spawn_rogue(harness=harness, model=model, name=name)
+                agent_id = await spawn_rogue(
+                    harness=harness,
+                    model=model,
+                    name=name,
+                    worktree_path=worktree_path,
+                    worktree_branch=worktree_branch,
+                )
             else:
+                payload: dict[str, object] = {
+                    "harness": harness,
+                    "model": model,
+                    "name": name,
+                }
+                if worktree_path is not None:
+                    payload["worktree_path"] = worktree_path
+                if worktree_branch is not None:
+                    payload["worktree_branch"] = worktree_branch
                 result = await self._submit_command(
                     target_worker="orchestrator",
                     kind="crow.spawn_rogue",
-                    payload={
-                        "harness": harness,
-                        "model": model,
-                        "name": name,
-                    },
+                    payload=payload,
                     timeout_s=120.0,
                     notify_errors=False,
                 )

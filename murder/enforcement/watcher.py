@@ -43,9 +43,7 @@ class WriteSetWatcher:
                     continue
                 if _is_ignored(rel):
                     continue
-                rel_posix = rel.as_posix()
-                allowed_str = {p.as_posix() for p in self._allowed}
-                if rel_posix in allowed_str:
+                if _is_allowed_write(rel, self._allowed):
                     continue
                 ticket_id = self._blame_active_crow()
                 if ticket_id:
@@ -79,3 +77,7 @@ def _is_ignored(rel: Path) -> bool:
     if head.startswith("."):
         return True
     return False
+
+
+def _is_allowed_write(rel: Path, allowed: set[Path]) -> bool:
+    return any(rel == path or path in rel.parents for path in allowed)

@@ -200,6 +200,7 @@ class ServiceReadModel:
             rows = conn.execute(
                 """
                 SELECT a.agent_id, a.role, a.ticket_id, a.status, a.session,
+                       a.worktree_path,
                        a.started_at, a.last_heartbeat_at,
                        COALESCE(t.title, '') AS title,
                        COALESCE(t.status, '') AS ticket_status,
@@ -249,6 +250,7 @@ class ServiceReadModel:
                 last_seen=_parse_datetime(row["last_heartbeat_at"]),
                 started_at=_parse_datetime(row["started_at"]),
                 ticket_status=_optional_str(row["ticket_status"]) or None,
+                worktree_path=_optional_str(row["worktree_path"]),
                 open_escalations=open_by_ticket.get(str(row["ticket_id"] or ""), (0, 0))[0],
                 max_severity=open_by_ticket.get(str(row["ticket_id"] or ""), (0, 0))[1],
             )

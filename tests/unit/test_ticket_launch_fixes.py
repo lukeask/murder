@@ -223,5 +223,6 @@ def test_artifact_retry_reruns_completion_when_files_appear(
         "t096",
         crow_session="crow-t096",
         start_commit=None,
+        repo_root=repo_root,
     )
     assert artifact_retry_handler._artifact_retry_paths is None
