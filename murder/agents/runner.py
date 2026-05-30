@@ -9,6 +9,7 @@ single role's implementation details.  All other roles go through here.
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from murder.agents.base import AgentRole
@@ -51,13 +52,16 @@ async def spawn_agent(
         ticket_id = spec.scope.ticket_id
         session_name = format_session_name(rt, "crow", f"_{ticket_id}")
         harness = get_harness(spec.harness, startup_model=spec.model)
+        worktree_path = Path(spec.scope.worktree_path) if spec.scope.worktree_path else None
+        repo_root = worktree_path or rt.repo_root
         agent = CrowAgent(
             agent_id=f"crow-{ticket_id}",
             ticket_id=ticket_id,
             session=session_name,
             harness=harness,
-            repo_root=rt.repo_root,
+            repo_root=repo_root,
             startup_model=spec.model,
+            worktree_path=worktree_path,
             runtime=rt,
         )
 
