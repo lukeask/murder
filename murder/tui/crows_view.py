@@ -910,6 +910,16 @@ class CrowsView(Container):
         visible = self._roster.pane_visible
         return [entry for entry in self._entries_by_id.values() if entry.agent_id in visible]
 
+    def visible_wall_chat_targets(self) -> tuple[list[str], dict[str, CrowEntry]]:
+        """Tail-wall order and entries for pane-visible crows (chat-target cycling)."""
+        order = list(self._wall.order)
+        entries = {
+            agent_id: self._entries_by_id[agent_id]
+            for agent_id in order
+            if agent_id in self._entries_by_id
+        }
+        return order, entries
+
     async def refresh_tails(self) -> None:
         """Capture last-N lines for every visible tile, in parallel."""
         perf = self._perf

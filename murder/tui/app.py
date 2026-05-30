@@ -27,6 +27,12 @@ from murder.service.settings_service import SettingsService
 from murder.storage.paths import ticket_md, tickets_dir, tui_prefs_path
 from murder.terminal.session_names import format_session_name
 from murder.tui.chat_input import ChatInput
+from murder.tui.chat_target_cycle import (
+    ChatTarget,
+    crows_chat_targets,
+    cycle_chat_target,
+    planning_chat_targets,
+)
 from murder.tui.controllers import DispatchController, TuiContext
 from murder.tui.crows_view import CrowsView, CrowTile
 from murder.tui.dispatch import DispatchView, ScheduleTicketsTable
@@ -151,7 +157,7 @@ class HelpScreen(ModalScreen[None]):
                         "/anything      passed to agent unchanged (/clear /compact etc)",
                         "",
                         "[b]keys[/b]",
-                        "ctrl+f focus chat · ? help · ctrl+, settings",
+                        "ctrl+f focus chat · ctrl+h/l cycle chat target (planning/crows) · ? help · ctrl+, settings",
                         "ctrl+1/2/3  switch views  ·  [ and ] cycle views",
                         "Dispatch: [b]c[/b] / Enter opens ticket metadata editor; "
                         "F6 kicks ready rows",
@@ -1692,9 +1698,13 @@ class MurderApp(App[None]):
         self._shift_focus(-1)
 
     def action_focus_right(self) -> None:
+        if self._cycle_chat_target_if_focused(1):
+            return
         self._shift_focus_direction("right")
 
     def action_focus_left(self) -> None:
+        if self._cycle_chat_target_if_focused(-1):
+            return
         self._shift_focus_direction("left")
 
     def action_focus_down(self) -> None:
@@ -1905,6 +1915,47 @@ class MurderApp(App[None]):
         if self.focused is not self._chat:
             return False
         self._chat.insert(text)
+        return True
+
+    def _chat_target_cycle_enabled(self) -> bool:
+        return (
+            self.focused is self._chat
+            and not self._raw_key_mode
+            and self._view in ("planning", "crows")
+        )
+
+    def _chat_target_options(self) -> list[ChatTarget]:
+        if self._view == "planning":
+            return planning_chat_targets(self._crow_snapshot)
+        wall_order, entries = self._crows.visible_wall_chat_targets()
+        return crows_chat_targets(wall_order, entries)
+
+    def _apply_chat_target(self, target: ChatTarget) -> None:
+        if target.agent_id != self._chat_target_agent_id:
+            self._chat_pending_message = None
+        self._chat_target_agent_id = target.agent_id
+        self._chat_target_label = target.label
+        if self._view == "planning":
+            # Mirror vs parsed collab chat follows planner target; keep panes in sync.
+            self._apply_mode()
+        elif self._view == "crows":
+            self._sync_chat_recipient()
+            if target.agent_id is not None:
+                _, entries = self._crows.visible_wall_chat_targets()
+                crow_entry = entries.get(target.agent_id)
+                if crow_entry is not None and crow_entry.session:
+                    self._mirror.set_session(crow_entry.session)
+        else:
+            self._sync_chat_recipient()
+
+    def _cycle_chat_target_if_focused(self, delta: int) -> bool:
+        if not self._chat_target_cycle_enabled():
+            return False
+        options = self._chat_target_options()
+        next_target = cycle_chat_target(options, self._chat_target_agent_id, delta)
+        if next_target is None:
+            return True
+        self._apply_chat_target(next_target)
         return True
 
     def action_open_settings(self) -> None:
