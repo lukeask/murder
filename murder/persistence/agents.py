@@ -20,6 +20,7 @@ def upsert_agent(
     session: str | None,
     status: str,
     start_commit: str | None = None,
+    worktree_path: str | None = None,
     pid: int | None = None,
 ) -> None:
     """Insert or update an agent row."""
@@ -29,23 +30,46 @@ def upsert_agent(
         conn.execute(
             """
             INSERT INTO agents
-                (agent_id, role, ticket_id, session, status, start_commit,
+                (agent_id, role, ticket_id, session, worktree_path, status, start_commit,
                  started_at, last_heartbeat_at, pid)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (agent_id, role, ticket_id, session, status, start_commit, now, now, pid),
+            (
+                agent_id,
+                role,
+                ticket_id,
+                session,
+                worktree_path,
+                status,
+                start_commit,
+                now,
+                now,
+                pid,
+            ),
         )
     else:
         conn.execute(
             """
             UPDATE agents
-               SET role = ?, ticket_id = ?, session = ?, status = ?,
+               SET role = ?, ticket_id = ?, session = ?,
+                   worktree_path = COALESCE(?, worktree_path),
+                   status = ?,
                    start_commit = COALESCE(?, start_commit),
                    last_heartbeat_at = ?,
                    pid = COALESCE(?, pid)
              WHERE agent_id = ?
             """,
-            (role, ticket_id, session, status, start_commit, now, pid, agent_id),
+            (
+                role,
+                ticket_id,
+                session,
+                worktree_path,
+                status,
+                start_commit,
+                now,
+                pid,
+                agent_id,
+            ),
         )
 
 
@@ -143,11 +167,11 @@ def list_stale_done_crow_sessions(
     """Return crow agents with a live session whose ticket reached a terminal state
     at least ``older_than_minutes`` ago.
 
-    Returns list of dicts with keys: agent_id, session.
+    Returns list of dicts with keys: agent_id, session, ticket_id, worktree_path.
     """
     rows = conn.execute(
         """
-        SELECT a.agent_id, a.session
+        SELECT a.agent_id, a.session, a.ticket_id, a.worktree_path
           FROM agents a
           JOIN tickets t ON a.ticket_id = t.id
          WHERE a.role = 'crow'
@@ -163,4 +187,3 @@ def list_stale_done_crow_sessions(
 def clear_agent_session(conn: sqlite3.Connection, agent_id: str) -> None:
     """NULL out the session column for an agent (used after killing its tmux session)."""
     conn.execute("UPDATE agents SET session = NULL WHERE agent_id = ?", (agent_id,))
-

@@ -84,6 +84,7 @@ CREATE TABLE IF NOT EXISTS agents (
                       ('collaborator','notetaker','crow_handler','crow','planner','planning_handler')),
     ticket_id         TEXT REFERENCES tickets(id) ON DELETE SET NULL,
     session           TEXT,
+    worktree_path     TEXT,
     status            TEXT NOT NULL CHECK (status IN
                       ('idle','running','blocked','escalating','done','failed','dead')),
     start_commit      TEXT,
@@ -353,6 +354,7 @@ def init_db(conn: sqlite3.Connection) -> None:
     from murder.persistence.migrations import (
         _migrate_agents_failed_status,
         _migrate_agents_notetaker_role,
+        _migrate_agents_worktree_path,
         _migrate_completion_tables,
         _migrate_drop_sentinel,
         _migrate_events_schema_version,
@@ -377,6 +379,7 @@ def init_db(conn: sqlite3.Connection) -> None:
     _migrate_notes_identity_status(conn)
     _migrate_completion_tables(conn)
     _migrate_drop_sentinel(conn)
+    _migrate_agents_worktree_path(conn)
     ensure_notetaker_context_row(conn)
 
 

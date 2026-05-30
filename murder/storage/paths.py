@@ -37,6 +37,10 @@ def runs_dir(repo_root: Path) -> Path:
     return agents_dir(repo_root) / "runs"
 
 
+def worktrees_dir(repo_root: Path) -> Path:
+    return agents_dir(repo_root) / "worktrees"
+
+
 def run_dir(repo_root: Path, run_id: str) -> Path:
     return runs_dir(repo_root) / run_id
 

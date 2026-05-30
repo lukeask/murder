@@ -38,6 +38,7 @@ class CrowHandler(Agent):
         outcome: TicketOutcomeService,
         coordinator: CompletionCoordinator,
         start_commit: str | None = None,
+        workspace_root: Path | None = None,
         client: APIClient | None = None,
     ) -> None:
         self.id = agent_id
@@ -47,6 +48,9 @@ class CrowHandler(Agent):
         self.harness = harness
         self.config = config
         self.repo_root = Path(repo_root)
+        self.workspace_root = (
+            Path(workspace_root) if workspace_root is not None else self.repo_root
+        )
         self.runtime = runtime
         self.outcome = outcome
         self.coordinator = coordinator
@@ -214,6 +218,7 @@ class CrowHandler(Agent):
                 self.ticket_id,
                 crow_session=self.crow_session,
                 start_commit=self._start_commit,
+                repo_root=self.workspace_root,
             )
             return
 

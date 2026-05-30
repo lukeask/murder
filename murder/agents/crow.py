@@ -26,6 +26,7 @@ class CrowAgent(Agent):
         repo_root: Path,
         *,
         startup_model: str | None = None,
+        worktree_path: Path | None = None,
         runtime: Runtime | None = None,
     ) -> None:
         self.id = agent_id
@@ -33,6 +34,7 @@ class CrowAgent(Agent):
         self.session = session
         self.harness = harness
         self.repo_root = Path(repo_root)
+        self.worktree_path = Path(worktree_path) if worktree_path is not None else None
         self.startup_model = startup_model
         self.runtime = runtime
         self.status = AgentStatus.IDLE

@@ -142,6 +142,7 @@ class TuiConfig(BaseModel):
 class RuntimeConfig(BaseModel):
     run_dir: Path = Path(".murder/runs")
     session_name_template: str = "murder_{project}_{role}{suffix}"
+    use_worktrees: bool = False
 
 
 class Config(BaseModel):

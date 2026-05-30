@@ -3,9 +3,8 @@
 from __future__ import annotations
 
 import sqlite3
-from uuid import uuid4
-
 from datetime import datetime
+from uuid import uuid4
 
 
 def _now() -> str:
@@ -224,6 +223,13 @@ def _migrate_events_schema_version(conn: sqlite3.Connection) -> None:
     if row is not None:
         return
     conn.execute("ALTER TABLE events ADD COLUMN schema_version INTEGER NOT NULL DEFAULT 1")
+
+
+def _migrate_agents_worktree_path(conn: sqlite3.Connection) -> None:
+    """Track the execution worktree used by an agent session."""
+    cols = {row["name"] for row in conn.execute("PRAGMA table_info(agents)").fetchall()}
+    if "worktree_path" not in cols:
+        conn.execute("ALTER TABLE agents ADD COLUMN worktree_path TEXT")
 
 
 def _migrate_ticket_metadata_columns(conn: sqlite3.Connection) -> None:

@@ -51,6 +51,7 @@ from murder.plans.schema import Plan, PlanStatus
 from murder.plans.sync import content_hash as _plan_content_hash
 from murder.prompts import load, render
 from murder.storage.paths import plan_md, ticket_md, tickets_dir
+from murder.storage.worktrees import ensure_crow_worktree, prune_terminal_crow_worktree
 from murder.terminal import tmux
 from murder.terminal.session_names import format_session_name
 from murder.tickets import carve, lifecycle
@@ -331,10 +332,14 @@ class Orchestrator:
         startup_model = resolve_default_crow_startup_model(
             self.rt.config.default_crow, row, harness_kind
         )
+        worktree_path: str | None = None
+        if self.rt.config.runtime.use_worktrees:
+            worktree = await ensure_crow_worktree(self.rt.repo_root, ticket_id)
+            worktree_path = str(worktree.path)
         brief = _compose_crow_brief(self.rt, ticket_id)
         spec = AgentSpec(
             role=AgentRole.CROW,
-            scope=AgentScope(ticket_id=ticket_id),
+            scope=AgentScope(ticket_id=ticket_id, worktree_path=worktree_path),
             harness=harness_kind,
             model=startup_model,
             startup_prompt=brief,
@@ -355,6 +360,7 @@ class Orchestrator:
         client = resolve_role_client(self.rt.config.crow_handler)
         crow_agent = self.rt.get_crow(ticket_id)
         start_commit = getattr(crow_agent, "start_commit", None) if crow_agent else None
+        worktree_path = getattr(crow_agent, "worktree_path", None) if crow_agent else None
         handler = CrowHandler(
             agent_id=f"crow_handler-{ticket_id}",
             ticket_id=ticket_id,
@@ -363,6 +369,7 @@ class Orchestrator:
             harness=harness,
             config=self.rt.config.crow_handler,
             repo_root=self.rt.repo_root,
+            workspace_root=worktree_path,
             runtime=self.rt,
             outcome=self._outcomes(),
             coordinator=self.completion_coordinator,
@@ -831,6 +838,9 @@ class Orchestrator:
         except ValueError:
             prev = TicketStatus.PLANNED
         await self._emit_ticket_status(ticket_id, prev, status)
+        if self.rt.db is not None and status in {"done", "failed", "archived"}:
+            with contextlib.suppress(Exception):
+                await prune_terminal_crow_worktree(self.rt.db, self.rt.repo_root, ticket_id)
         return {"handled": True, "ok": True, "ticket_id": ticket_id, "prev_status": prev_str}
 
     async def on_writeset_violation(self, ticket_id: str, path: str) -> None:

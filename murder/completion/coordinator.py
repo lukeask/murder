@@ -74,6 +74,7 @@ class CompletionCoordinator:
         *,
         crow_session: str,
         start_commit: str | None,
+        repo_root: Path | None = None,
     ) -> None:
         from murder.persistence.tickets import get_ticket as _db_get_ticket
 
@@ -90,7 +91,7 @@ class CompletionCoordinator:
         ctx = CompletionContext(
             ticket_id=ticket_id,
             write_set=write_set,
-            repo_root=self._rt.repo_root,
+            repo_root=repo_root or self._rt.repo_root,
             db=conn,
             start_commit=start_commit,
         )
@@ -240,6 +241,7 @@ class CompletionCoordinator:
                     to_status=TicketStatus.DONE.value,
                 )
             )
+        await self._prune_terminal_worktree(ticket_id)
 
     async def _fail_ticket(self, ticket_id: str, reason: str) -> None:
         from murder.tickets import lifecycle
@@ -272,6 +274,7 @@ class CompletionCoordinator:
                 )
             )
         await self._make_escalation_service().record_ticket_failure(ticket_id, reason)
+        await self._prune_terminal_worktree(ticket_id)
 
     async def _escalate_to_user(self, ticket_id: str, reason: str) -> None:
         esc = self._make_escalation_service()
@@ -297,6 +300,16 @@ class CompletionCoordinator:
             agent_id="coordinator",
             role=AgentRole.COLLABORATOR,
         )
+
+    async def _prune_terminal_worktree(self, ticket_id: str) -> None:
+        if self._rt.db is None:
+            return
+        from murder.storage.worktrees import prune_terminal_crow_worktree
+
+        try:
+            await prune_terminal_crow_worktree(self._rt.db, self._rt.repo_root, ticket_id)
+        except Exception as exc:
+            LOGGER.debug("worktree prune skipped for %s: %s", ticket_id, exc)
 
 
 __all__ = ["CompletionCoordinator", "CoordinatorHost"]
