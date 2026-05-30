@@ -50,7 +50,7 @@ async def spawn_agent(
             raise ValueError("CROW spec requires harness")
         ticket_id = spec.scope.ticket_id
         session_name = format_session_name(rt, "crow", f"_{ticket_id}")
-        harness = get_harness(spec.harness, startup_model=spec.model)
+        harness = get_harness(spec.harness, startup_model=spec.model, startup_effort=spec.effort)
         agent = CrowAgent(
             agent_id=f"crow-{ticket_id}",
             ticket_id=ticket_id,
@@ -58,6 +58,7 @@ async def spawn_agent(
             harness=harness,
             repo_root=rt.repo_root,
             startup_model=spec.model,
+            startup_effort=spec.effort,
             runtime=rt,
         )
 
@@ -65,13 +66,14 @@ async def spawn_agent(
         if not spec.harness:
             raise ValueError("COLLABORATOR spec requires harness")
         session_name = format_session_name(rt, "collaborator", "")
-        harness = get_harness(spec.harness, startup_model=spec.model)
+        harness = get_harness(spec.harness, startup_model=spec.model, startup_effort=spec.effort)
         agent = CollaboratorAgent(
             agent_id="collaborator-0",
             session=session_name,
             harness=harness,
             repo_root=rt.repo_root,
             startup_model=spec.model,
+            startup_effort=spec.effort,
             runtime=rt,
         )
 
@@ -82,7 +84,7 @@ async def spawn_agent(
             raise ValueError("PLANNER spec requires harness")
         plan_name = spec.scope.plan_name
         session_name = format_session_name(rt, "planner", f"_{plan_name}")
-        harness = get_harness(spec.harness, startup_model=spec.model)
+        harness = get_harness(spec.harness, startup_model=spec.model, startup_effort=spec.effort)
         agent = PlanningAgent(
             agent_id=f"planner-{plan_name}",
             session=session_name,
@@ -90,6 +92,7 @@ async def spawn_agent(
             harness=harness,
             repo_root=rt.repo_root,
             startup_model=spec.model,
+            startup_effort=spec.effort,
             runtime=rt,
         )
 

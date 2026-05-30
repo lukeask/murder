@@ -38,6 +38,7 @@ class CollaboratorAgent(Agent):
         repo_root: Path,
         *,
         startup_model: str | None = None,
+        startup_effort: str | None = None,
         runtime: Runtime | None = None,
     ) -> None:
         self.id = agent_id
@@ -45,6 +46,7 @@ class CollaboratorAgent(Agent):
         self.harness = harness
         self.repo_root = Path(repo_root)
         self.startup_model = startup_model
+        self.startup_effort = startup_effort
         self.runtime = runtime
         self.status = AgentStatus.IDLE
         self.harness_session = harness.attach(session, self.repo_root)
@@ -59,6 +61,7 @@ class CollaboratorAgent(Agent):
             HarnessStartSpec(
                 cwd=self.repo_root,
                 startup_model=self.startup_model,
+                startup_effort=self.startup_effort,
                 ready_timeout_s=READY_TIMEOUT_S,
             )
         )

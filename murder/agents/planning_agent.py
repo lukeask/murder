@@ -33,6 +33,7 @@ class PlanningAgent(Agent):
         repo_root: Path,
         *,
         startup_model: str | None = None,
+        startup_effort: str | None = None,
         runtime: Runtime,
     ) -> None:
         self.id = agent_id
@@ -41,6 +42,7 @@ class PlanningAgent(Agent):
         self.harness = harness
         self.repo_root = Path(repo_root)
         self.startup_model = startup_model
+        self.startup_effort = startup_effort
         self.runtime = runtime
         self.status = AgentStatus.IDLE
         # cwd is .murder/, not the repo root: planners work in the project-state dir.
@@ -51,7 +53,11 @@ class PlanningAgent(Agent):
         from murder.bus import StatusChangeEvent
 
         start_result = await self.harness_session.start(
-            HarnessStartSpec(cwd=self._cwd, startup_model=self.startup_model)
+            HarnessStartSpec(
+                cwd=self._cwd,
+                startup_model=self.startup_model,
+                startup_effort=self.startup_effort,
+            )
         )
         if not start_result.ok:
             self.status = AgentStatus.FAILED
