@@ -26,7 +26,7 @@ from textual.containers import Container, Grid, ScrollableContainer
 from textual.message import Message
 from textual.reactive import reactive
 from textual.widget import Widget
-from textual.widgets import Static
+from textual.widgets import RichLog, Static
 
 from murder.service.client_api import CrowSessionSummary, CrowSnapshot
 from murder.tui.crow_health import Health, classify, is_stuck
@@ -34,8 +34,11 @@ from murder.tui.pane_capture import CapturePaneFn, PaneCaptureError
 from murder.tui.pane_mirror import PaneMirror
 from murder.tui.perf_log import PerfLog
 
-TILE_LINES = 8
-"""Last N lines of pane each tile shows in the wall."""
+TILE_LINES_RAW = 40
+"""Raw-mode tail: last N lines of pane; large enough to show the input box and permission prompts."""
+
+TILE_LINES_PARSED = 200
+"""Parsed-mode capture: enough history for a meaningful transcript scroll."""
 
 CAPTURE_TIMEOUT_S = 2.0
 """Per-tile tmux capture timeout — a stuck pane must not block the wall."""
@@ -510,8 +513,26 @@ def _keep_failed_session(session: CrowSessionSummary, *, now: datetime) -> bool:
     return now - last_seen <= FAILED_STALE_AFTER
 
 
+def _parse_tile_text(pane_text: str, harness_kind: str) -> list[tuple[str, str]]:
+    """Parse a pane capture into (role, text) turns for the given harness kind."""
+    from murder.harnesses import REGISTRY
+    from murder.harnesses.transcripts import parser_for_harness_kind
+
+    cls = REGISTRY.get(harness_kind or "")
+    if cls is None:
+        return []
+    parser = parser_for_harness_kind(
+        harness_kind,
+        prompt_markers=getattr(cls, "transcript_prompt_markers", ()),
+        drop_substrings=getattr(cls, "transcript_drop_substrings", ()),
+    )
+    if parser is None:
+        return []
+    return parser.parse(pane_text)
+
+
 class CrowTile(Container):
-    """One tile in the wall: header + last-N lines + health-colored border."""
+    """One tile in the wall: header + raw tail OR parsed chat transcript."""
 
     DEFAULT_CSS = """
     CrowTile {
@@ -527,16 +548,23 @@ class CrowTile(Container):
     CrowTile.-health-neutral{ border: solid $border; }
     CrowTile:focus,
     CrowTile:focus-within { border: heavy $accent; }
-    CrowTile > Static.tail {
+    CrowTile > RichLog {
         height: 1fr;
         width: 1fr;
-        overflow-y: hidden;
+        background: transparent;
+    }
+    CrowTile > ChatLog {
+        height: 1fr;
+        width: 1fr;
+        border: none;
+        padding: 0;
     }
     """
 
     can_focus = True
     BINDINGS = [
         Binding("ctrl+o", "open", "Enlarge", show=False),
+        Binding("ctrl+y", "toggle_view", "Parsed/Raw", show=False),
     ]
 
     class Highlighted(Message):
@@ -549,20 +577,48 @@ class CrowTile(Container):
             self.entry = entry
             super().__init__()
 
+    class ViewToggled(Message):
+        def __init__(self, entry: CrowEntry, raw_mode: bool) -> None:
+            self.entry = entry
+            self.raw_mode = raw_mode
+            super().__init__()
+
     def __init__(self, entry: CrowEntry) -> None:
         super().__init__()
         self._entry = entry
-        self._tail = Static("", classes="tail", markup=False)
+        self._raw_mode = True
+        self._last_turns: list[tuple[str, str]] = []
+        self._raw_log = RichLog(highlight=False, markup=False, wrap=True, auto_scroll=True)
+        # Import here to avoid requiring planning_mode_widgets at module load time.
+        from murder.tui.planning_mode_widgets import ChatLog as _ChatLog
+
+        self._chat_log = _ChatLog(agent_label=entry.harness or "agent")
 
     @property
     def entry(self) -> CrowEntry:
         return self._entry
 
+    @property
+    def raw_mode(self) -> bool:
+        return self._raw_mode
+
     def compose(self) -> ComposeResult:
-        yield self._tail
+        yield self._raw_log
+        yield self._chat_log
 
     def on_mount(self) -> None:
         self._apply_entry()
+        self._chat_log.display = False
+
+    def on_key(self, event: events.Key) -> None:
+        if self._raw_mode:
+            return
+        if event.key in ("j", "down"):
+            self._chat_log.action_scroll_down()
+            event.stop()
+        elif event.key in ("k", "up"):
+            self._chat_log.action_scroll_up()
+            event.stop()
 
     def update_entry(self, entry: CrowEntry) -> None:
         """Reconcile after a snapshot refresh; rebuild border + header in place."""
@@ -570,7 +626,26 @@ class CrowTile(Container):
         self._apply_entry()
 
     def set_tail(self, text: str) -> None:
-        self._tail.update(text)
+        """Update the raw log view (called on each refresh tick)."""
+        self._raw_log.clear()
+        for line in text.splitlines():
+            self._raw_log.write(line)
+
+    def set_parsed(self, turns: list[tuple[str, str]], harness_kind: str = "") -> None:
+        """Update the parsed chat log; skips if turns are unchanged."""
+        if turns == self._last_turns:
+            return
+        self._last_turns = turns
+        self._chat_log.set_turns(turns)
+        if not turns:
+            kind = harness_kind or self._entry.harness or "unknown"
+            self._chat_log.add_status(f"(no transcript parser for '{kind}')")
+
+    def action_toggle_view(self) -> None:
+        self._raw_mode = not self._raw_mode
+        self._raw_log.display = self._raw_mode
+        self._chat_log.display = not self._raw_mode
+        self.post_message(self.ViewToggled(self._entry, self._raw_mode))
 
     def _apply_entry(self) -> None:
         e = self._entry
@@ -603,7 +678,7 @@ class _EmptyMessage(Static):
     """
 
     def __init__(self) -> None:
-        super().__init__("(no crows yet — kick a ready ticket from Schedule)")
+        super().__init__("(press Enter on an agent to show its pane)")
 
 
 class TailWall(Grid):
@@ -734,16 +809,18 @@ class CrowsView(Container):
     CrowsView {
         height: 1fr;
         width: 1fr;
-        layout: vertical;
-    }
-    CrowsView > TailWall {
-        min-height: 60%;
-        height: 1fr;
+        layout: horizontal;
     }
     CrowsView > CrowRosterList {
-        height: auto;
-        max-height: 40%;
-        min-height: 2;
+        height: 1fr;
+        width: 30%;
+        min-width: 28;
+        border: solid $border;
+    }
+    CrowsView > TailWall {
+        height: 1fr;
+        width: 1fr;
+        border: solid $border;
     }
     CrowsView > PaneMirror { height: 1fr; }
     """
@@ -780,15 +857,24 @@ class CrowsView(Container):
         self._entries_by_id: dict[str, CrowEntry] = {}
         self._invalidation_key: str | None = None
         self._last_focused_agent_id: str | None = None
-        self.border_title = "crows"
+        self._roster.border_title = "agents"
+        self._wall.border_title = "tails"
 
     @property
     def invalidation_key(self) -> str | None:
         return self._invalidation_key
 
+    @property
+    def roster(self) -> CrowRosterList:
+        return self._roster
+
+    @property
+    def wall(self) -> TailWall:
+        return self._wall
+
     def compose(self) -> ComposeResult:
-        yield self._wall
         yield self._roster
+        yield self._wall
         yield self._mirror
 
     def on_mount(self) -> None:
@@ -860,19 +946,22 @@ class CrowsView(Container):
             tile.set_tail("(no capture)")
             return
 
+        n_lines = TILE_LINES_PARSED if not tile.raw_mode else TILE_LINES_RAW
+
         async def _run() -> None:
             try:
                 text = await asyncio.wait_for(
-                    capture(session, TILE_LINES),
+                    capture(session, n_lines),
                     timeout=CAPTURE_TIMEOUT_S,
                 )
             except (PaneCaptureError, asyncio.TimeoutError):
                 tile.set_tail("(session vanished)")
                 return
-            lines = text.splitlines()
-            if len(lines) > TILE_LINES:
-                lines = lines[-TILE_LINES:]
-            tile.set_tail("\n".join(lines))
+            if tile.raw_mode:
+                tile.set_tail(text)
+            else:
+                turns = _parse_tile_text(text, tile.entry.harness)
+                tile.set_parsed(turns)
 
         if perf is not None and perf.enabled:
             with perf.span("tui.crows.capture_tile", session=session):
@@ -970,6 +1059,20 @@ class CrowsView(Container):
         ]
         self._wall.reconcile(wall_entries)
         self._apply_mode()
+
+    def on_crow_tile_view_toggled(self, event: CrowTile.ViewToggled) -> None:
+        """On toggle to parsed mode, trigger an immediate re-capture for that tile."""
+        if event.raw_mode:
+            return  # Switched back to raw — next refresh will repopulate.
+        session = event.entry.session
+        tile = self._wall.tile_for(event.entry.agent_id)
+        if tile is None or not session:
+            return
+        self.run_worker(
+            self._capture_for_tile(tile, session),
+            exclusive=False,
+            group="crow_tile_parsed",
+        )
 
     def on_crow_roster_list_crow_selected(self, event: CrowRosterList.CrowSelected) -> None:
         entry = self._entries_by_id.get(event.agent_id)

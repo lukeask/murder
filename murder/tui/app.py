@@ -232,7 +232,6 @@ class MurderApp(App[None]):
     }
     CrowsView {
         width: 1fr;
-        border: solid $border;
     }
     #planning_sidebar {
         width: 18%;
@@ -975,7 +974,7 @@ class MurderApp(App[None]):
         del event
         target_id = self._chat_target_agent_id
         if target_id is None or not (
-            target_id.startswith("crow-") or target_id.startswith("rogue-")
+            target_id.startswith("crow-") or "rogue-" in target_id
         ):
             return
         self.run_worker(self._interrupt_crow(target_id), exclusive=False, group="chat")
@@ -1436,6 +1435,16 @@ class MurderApp(App[None]):
                 return True
             if self._crows.focus_roster():
                 return True
+        elif target is self._crows.wall:
+            if self._crows.focus_last_tile() or self._crows.focus_first_tile():
+                return True
+            self.set_focus(target)
+            return True
+        elif target is self._crows.roster:
+            if self._crows.focus_roster():
+                return True
+            self.set_focus(target)
+            return True
         self.set_focus(target)
         return True
 
@@ -1545,18 +1554,35 @@ class MurderApp(App[None]):
     def _shift_crows_focus(self, direction: str) -> bool:
         esc = self._escalations if self._is_displayed(self._escalations) else None
         chat = self._chat if self._is_displayed(self._chat) else None
+        roster = self._crows.roster
+        wall = self._crows.wall
+        wall_visible = self._is_displayed(wall)
         target: Widget | None = None
 
-        if direction in {"down", "right"}:
-            if self._focus_contains(self._crows):
+        if direction == "right":
+            if self._focus_contains(roster):
+                target = wall if wall_visible else esc or chat
+            elif wall_visible and self._focus_contains(wall):
                 target = esc or chat
             elif esc is not None and self._focus_contains(esc):
                 target = chat
-        elif direction in {"up", "left"}:
+        elif direction == "left":
             if chat is not None and self._focus_contains(chat):
-                target = esc or self._crows
+                target = esc or (wall if wall_visible else roster)
             elif esc is not None and self._focus_contains(esc):
-                target = self._crows
+                target = wall if wall_visible else roster
+            elif wall_visible and self._focus_contains(wall):
+                target = roster
+        elif direction == "down":
+            if self._focus_contains(roster) or (wall_visible and self._focus_contains(wall)):
+                target = esc or chat
+            elif esc is not None and self._focus_contains(esc):
+                target = chat
+        elif direction == "up":
+            if chat is not None and self._focus_contains(chat):
+                target = esc or (wall if wall_visible else roster)
+            elif esc is not None and self._focus_contains(esc):
+                target = wall if wall_visible else roster
 
         return self._focus_target(target)
 
@@ -1627,7 +1653,12 @@ class MurderApp(App[None]):
                 self._chat,
             ]
         elif self._view == "crows":
-            candidates = [self._crows, self._escalations, self._chat]
+            candidates = [
+                self._crows.roster,
+                self._crows.wall,
+                self._escalations,
+                self._chat,
+            ]
         else:  # schedule/dispatch
             candidates = [
                 self._dispatch_widget(ModeStrip),
@@ -1652,10 +1683,7 @@ class MurderApp(App[None]):
         else:
             target_idx = 0 if delta > 0 else len(panes) - 1
         target = panes[target_idx]
-        # Crows tail-wall is itself a container; focus the first tile.
-        if target is self._crows and self._crows.focus_first_tile():
-            return
-        self.set_focus(target)
+        self._focus_target(target)
 
     def action_focus_next_region(self) -> None:
         self._shift_focus(1)
@@ -1667,12 +1695,6 @@ class MurderApp(App[None]):
         self._shift_focus_direction("right")
 
     def action_focus_left(self) -> None:
-        if (
-            self._view == "crows"
-            and isinstance(self.focused, CrowTile)
-            and self._crows.hide_focused_tile()
-        ):
-            return
         self._shift_focus_direction("left")
 
     def action_focus_down(self) -> None:

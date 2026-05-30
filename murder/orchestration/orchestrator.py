@@ -89,6 +89,17 @@ def _rogue_slug(name: str | None) -> str:
     return uuid4().hex[:8]
 
 
+def _harness_prefix(harness_kind: str) -> str:
+    """Short harness label for rogue agent IDs (e.g. 'claude', 'codex')."""
+    first_word = harness_kind.split("_")[0].split("-")[0].lower()
+    return first_word[:8] or "rogue"
+
+
+def is_rogue_agent_id(agent_id: str) -> bool:
+    """True for any rogue agent id regardless of harness prefix."""
+    return "rogue-" in agent_id
+
+
 def _validate_plan_filename_stem(name: str, *, command: str) -> str:
     name = name.strip()
     if not name or "/" in name or "\\" in name or name in {".", ".."}:
@@ -401,11 +412,12 @@ class Orchestrator:
             raise ValueError("spawn_rogue requires harness")
 
         slug = _rogue_slug(name)
-        agent_id = f"rogue-{slug}"
+        prefix = _harness_prefix(harness_kind)
+        agent_id = f"{prefix}-rogue-{slug}"
         while self.rt.get_agent(agent_id) is not None:
-            agent_id = f"rogue-{uuid4().hex[:8]}"
+            agent_id = f"{prefix}-rogue-{uuid4().hex[:8]}"
 
-        session_name = format_session_name(self.rt, "crow", f"_rogue_{slug}")
+        session_name = format_session_name(self.rt, "crow", f"_{prefix}_rogue_{slug}")
         startup_model = model.strip() or None
         startup_effort = effort.strip() if isinstance(effort, str) and effort.strip() else None
         harness_adapter = get_harness(
@@ -598,7 +610,7 @@ class Orchestrator:
         }
 
     async def interrupt_agent(self, agent_id: str) -> dict[str, Any]:
-        if agent_id.startswith("rogue-"):
+        if is_rogue_agent_id(agent_id):
             agent = self.rt.get_agent(agent_id)
             if agent is None:
                 return {"handled": False, "error": f"no agent named {agent_id}"}
