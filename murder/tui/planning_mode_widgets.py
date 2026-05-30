@@ -7,7 +7,7 @@ from textual.binding import Binding
 from textual.message import Message
 from textual.widgets import DataTable, Markdown, RichLog
 
-from murder.service.client_api import NotesSnapshot, PlansSnapshot
+from murder.service.client_api import NotesSnapshot, PlansSnapshot, ReportsSnapshot
 
 
 class PlanList(DataTable):
@@ -212,6 +212,75 @@ class NotesList(DataTable):
         self.border_subtitle = ""
 
 
+class ReportsList(DataTable):
+    """Filesystem-backed list of report documents."""
+
+    BINDINGS = [
+        Binding("enter", "open_selected", "Open", show=False),
+        ("j", "cursor_down", "Down"),
+        ("k", "cursor_up", "Up"),
+    ]
+
+    class ReportHighlighted(Message):
+        def __init__(self, name: str) -> None:
+            self.name = name
+            super().__init__()
+
+    class ReportOpened(Message):
+        def __init__(self, name: str) -> None:
+            self.name = name
+            super().__init__()
+
+    def __init__(self) -> None:
+        super().__init__(zebra_stripes=True, cursor_type="row")
+        self._names: list[str] = []
+        self.border_title = ".murder/reports"
+
+    def on_mount(self) -> None:
+        self.add_columns("report", "chars", "updated")
+
+    def refresh_from_snapshot(self, snapshot: ReportsSnapshot) -> None:
+        row = self.cursor_row
+        with self.prevent(DataTable.RowHighlighted):
+            self.clear()
+            self._names = []
+            for report in snapshot.reports:
+                updated = report.updated_at.isoformat()[:16].replace("T", " ")
+                self.add_row(report.name, str(report.char_count), updated)
+                self._names.append(report.name)
+            if self._names:
+                self.move_cursor(row=min(max(row, 0), len(self._names) - 1))
+
+    @property
+    def selected_name(self) -> str | None:
+        row = self.cursor_row
+        if 0 <= row < len(self._names):
+            return self._names[row]
+        return None
+
+    def select_name(self, name: str) -> None:
+        if name in self._names:
+            self.move_cursor(row=self._names.index(name))
+
+    def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
+        idx = event.cursor_row
+        if 0 <= idx < len(self._names):
+            self.post_message(self.ReportHighlighted(self._names[idx]))
+
+    def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
+        # DataTable emits RowSelected when clicking an already-highlighted row.
+        # Mouse clicks should only highlight; Enter is the explicit open action.
+        event.stop()
+
+    def action_open_selected(self) -> None:
+        name = self.selected_name
+        if name:
+            self.post_message(self.ReportOpened(name))
+
+    def action_select_cursor(self) -> None:
+        self.action_open_selected()
+
+
 class PlanDocument(Markdown, can_focus=True):
     BINDINGS = [
         ("j", "line_down", "Down"),
@@ -293,6 +362,51 @@ class NotesDocument(Markdown, can_focus=True):
             return
         self._last_render_key = (name, display)
         self.border_title = f"notes · {name}"
+        await self.update(display)
+
+    def action_line_down(self) -> None:
+        self.action_scroll_down()
+
+    def action_line_up(self) -> None:
+        self.action_scroll_up()
+
+
+class ReportDocument(Markdown, can_focus=True):
+    """Live view of a report document (`.murder/reports/<name>.md`)."""
+
+    BINDINGS = [
+        ("j", "line_down", "Down"),
+        ("k", "line_up", "Up"),
+        ("down", "line_down", "Down"),
+        ("up", "line_up", "Up"),
+        ("pagedown", "page_down", "Page down"),
+        ("pageup", "page_up", "Page up"),
+    ]
+
+    DEFAULT_CSS = """
+    ReportDocument {
+        border: solid $border;
+        height: 1fr;
+        width: 1fr;
+        overflow-y: auto;
+    }
+    """
+
+    _EMPTY = "# Reports\n\n_Add markdown under `.murder/reports`._"
+
+    def __init__(self) -> None:
+        super().__init__(self._EMPTY)
+        self.can_focus = True
+        self.border_title = "reports"
+        self._last_render_key: tuple[str, str] | None = None
+
+    async def show(self, name: str, body: str) -> None:
+        """Render the report body; no-op when ``(name, normalized body)`` matches."""
+        display = body.strip() or self._EMPTY
+        if self._last_render_key == (name, display):
+            return
+        self._last_render_key = (name, display)
+        self.border_title = f"reports · {name}"
         await self.update(display)
 
     def action_line_down(self) -> None:

@@ -46,6 +46,8 @@ from murder.tui.planning_mode_widgets import (
     NotesList,
     PlanDocument,
     PlanList,
+    ReportDocument,
+    ReportsList,
 )
 from murder.tui.settings_screen import SettingsScreen
 from murder.tui.spawn_wizard import SpawnWizard
@@ -240,12 +242,18 @@ class MurderApp(App[None]):
         height: 1fr;
         border: solid $border;
     }
+    ReportsList {
+        height: 1fr;
+        border: solid $border;
+    }
 
     /* Focused pane — $accent comes from the active Textual theme (Settings). */
     PlanList:focus,
     NotesList:focus,
+    ReportsList:focus,
     PlanDocument:focus,
     NotesDocument:focus,
+    ReportDocument:focus,
     ChatLog:focus,
     PaneMirror:focus,
     EscalationStrip:focus,
@@ -260,6 +268,7 @@ class MurderApp(App[None]):
 
     PlanList:focus,
     NotesList:focus,
+    ReportsList:focus,
     ChatLog:focus,
     PaneMirror:focus,
     ScheduleTicketsTable:focus,
@@ -289,6 +298,8 @@ class MurderApp(App[None]):
         self._plan_doc = PlanDocument()
         self._notes_list = NotesList()
         self._notes_doc = NotesDocument()
+        self._reports_list = ReportsList()
+        self._report_doc = ReportDocument()
         self._collab_chat = ChatLog(agent_label="collaborator")
         self._dispatch = DispatchView()
         self._mirror = PaneMirror(perf=self.perf, capture_pane=self._bus_capture_pane)
@@ -355,8 +366,10 @@ class MurderApp(App[None]):
             with Vertical(id="planning_sidebar"):
                 yield self._plans
                 yield self._notes_list
+                yield self._reports_list
             yield self._plan_doc
             yield self._notes_doc
+            yield self._report_doc
             yield self._collab_chat
             yield self._dispatch
             yield self._mirror
@@ -450,6 +463,10 @@ class MurderApp(App[None]):
                 self._notes_list.refresh_from_snapshot(
                     await self.runtime.get_notes_snapshot()
                 )
+            with perf.span("tui.reports_list.refresh"):
+                self._reports_list.refresh_from_snapshot(
+                    await self.runtime.get_reports_snapshot()
+                )
             with perf.span("tui.schedule.refresh"):
                 self._dispatch.refresh_from_snapshot(
                     await self.runtime.get_schedule_snapshot(),
@@ -486,6 +503,17 @@ class MurderApp(App[None]):
                     self._render_note(self._notes_list.selected_name),
                     exclusive=True,
                     group="notedoc",
+                    exit_on_error=False,
+                )
+            elif (
+                self._view == "planning"
+                and self._active_document == "report"
+                and self._reports_list.selected_name
+            ):
+                self.run_worker(
+                    self._render_report(self._reports_list.selected_name),
+                    exclusive=True,
+                    group="reportdoc",
                     exit_on_error=False,
                 )
             elif self._view == "planning" and self._active_document == "plan":
@@ -573,6 +601,22 @@ class MurderApp(App[None]):
     ) -> None:
         await self._retire_note(event.name)
 
+    def on_reports_list_report_highlighted(self, event: ReportsList.ReportHighlighted) -> None:
+        if self._view == "planning":
+            self._active_document = "report"
+            self._chat_target_agent_id = None
+            self._chat_target_label = "collaborator"
+            self._apply_mode()
+            self.run_worker(
+                self._render_report(event.name),
+                exclusive=True,
+                group="reportdoc",
+                exit_on_error=False,
+            )
+
+    async def on_reports_list_report_opened(self, event: ReportsList.ReportOpened) -> None:
+        await self._open_report(event.name)
+
     async def _render_plan(self, name: str) -> None:
         with self.perf.span("tui.render_plan"):
             display = await self.runtime.get_plan_display(name)
@@ -622,6 +666,23 @@ class MurderApp(App[None]):
         self._refresh_service_views()
         await self._render_note(name)
         self.set_focus(self._notes_doc)
+
+    async def _render_report(self, name: str) -> None:
+        with self.perf.span("tui.render_report"):
+            display = await self.runtime.get_report_display(name)
+            if display is None:
+                return
+            await self._report_doc.show(name, display.markdown)
+
+    async def _open_report(self, name: str) -> None:
+        path = await self.runtime.report_path_for(name)
+        with self.suspend():
+            code = self.runtime.open_editor_blocking(path, self._user_config.tui.editor)
+        if code != 0:
+            self.notify(f"editor exited with {code}", severity="warning", timeout=5)
+        self._refresh_service_views()
+        await self._render_report(name)
+        self.set_focus(self._report_doc)
 
     async def _retire_note(self, name: str) -> None:
         result = await self._submit_command(
@@ -758,10 +819,12 @@ class MurderApp(App[None]):
             self.query_one("#planning_sidebar").display = planning and self._sidebar_visible
         self._plans.display = planning and self._sidebar_visible
         self._notes_list.display = planning and self._sidebar_visible
+        self._reports_list.display = planning and self._sidebar_visible
         self._plan_doc.display = (
             planning and self._active_document == "plan" and self._has_selected_plan
         )
         self._notes_doc.display = planning and self._active_document == "note"
+        self._report_doc.display = planning and self._active_document == "report"
         self._collab_chat.display = collab_chat_on
         self._dispatch.display = self._view == "schedule"
         wizard_active = self._spawn_wizard is not None or self._escalation_wizard is not None
@@ -789,8 +852,10 @@ class MurderApp(App[None]):
             and (
                 focused_before is self._plans
                 or focused_before is self._notes_list
+                or focused_before is self._reports_list
                 or focused_before in self._plans.walk_children()
                 or focused_before in self._notes_list.walk_children()
+                or focused_before in self._reports_list.walk_children()
             )
         ):
             self._focus_planning_after_sidebar_hide()
@@ -1180,6 +1245,7 @@ class MurderApp(App[None]):
         self._has_selected_plan = True
         self._plan_doc.display = True
         self._notes_doc.display = False
+        self._report_doc.display = False
         self._chat_target_agent_id = f"planner-{name}"
         self._chat_target_label = f"planner: {name}"
         self._sync_chat_recipient()
@@ -1253,6 +1319,7 @@ class MurderApp(App[None]):
         self._active_document = "note"
         self._plan_doc.display = False
         self._notes_doc.display = True
+        self._report_doc.display = False
         self._notes_list.select_name(note_name)
         self.run_worker(
             self._render_note(note_name),
@@ -1312,9 +1379,12 @@ class MurderApp(App[None]):
         # Fallback: focus current view's primary widget
         if self._view == "planning":
             if self._sidebar_visible:
-                self.set_focus(
-                    self._notes_list if self._active_document == "note" else self._plans
-                )
+                if self._active_document == "note":
+                    self.set_focus(self._notes_list)
+                elif self._active_document == "report":
+                    self.set_focus(self._reports_list)
+                else:
+                    self.set_focus(self._plans)
             else:
                 self._focus_planning_after_sidebar_hide()
         elif self._view == "crows":
@@ -1373,14 +1443,16 @@ class MurderApp(App[None]):
         )
 
     def _planning_document_pane(self) -> Widget | None:
-        if self._active_document == "note" and self._is_displayed(self._notes_doc):
-            return self._notes_doc
-        if self._active_document == "plan" and self._is_displayed(self._plan_doc):
-            return self._plan_doc
-        if self._is_displayed(self._notes_doc):
-            return self._notes_doc
-        if self._is_displayed(self._plan_doc):
-            return self._plan_doc
+        active_doc = {
+            "report": self._report_doc,
+            "note": self._notes_doc,
+            "plan": self._plan_doc,
+        }.get(self._active_document)
+        if active_doc is not None and self._is_displayed(active_doc):
+            return active_doc
+        for candidate in (self._report_doc, self._notes_doc, self._plan_doc):
+            if self._is_displayed(candidate):
+                return candidate
         return None
 
     def _planning_right_pane(self) -> Widget | None:
@@ -1412,25 +1484,36 @@ class MurderApp(App[None]):
             ) or (
                 self._is_displayed(self._notes_list)
                 and self._focus_contains(self._notes_list)
+            ) or (
+                self._is_displayed(self._reports_list)
+                and self._focus_contains(self._reports_list)
             ):
                 target = doc or right or chat
             elif doc is not None and self._focus_contains(doc):
                 target = right or chat
         elif direction == "left":
             if right is not None and self._focus_contains(right):
-                target = doc or (self._notes_list if self._is_displayed(self._notes_list) else None)
+                target = doc or (
+                    self._reports_list if self._is_displayed(self._reports_list) else None
+                )
             elif doc is not None and self._focus_contains(doc):
-                if self._active_document == "note":
+                if self._active_document == "report":
+                    target = (
+                        self._reports_list if self._is_displayed(self._reports_list) else None
+                    )
+                elif self._active_document == "note":
                     target = self._notes_list if self._is_displayed(self._notes_list) else None
                 else:
                     target = self._plans if self._is_displayed(self._plans) else None
         elif direction == "down":
             if self._is_displayed(self._plans) and self._focus_contains(self._plans):
                 target = self._notes_list
+            elif self._is_displayed(self._notes_list) and self._focus_contains(self._notes_list):
+                target = self._reports_list
             elif (
                 (
-                    self._is_displayed(self._notes_list)
-                    and self._focus_contains(self._notes_list)
+                    self._is_displayed(self._reports_list)
+                    and self._focus_contains(self._reports_list)
                 )
                 or (doc is not None and self._focus_contains(doc))
                 or (right is not None and self._focus_contains(right))
@@ -1440,12 +1523,16 @@ class MurderApp(App[None]):
                 target = chat
         elif direction == "up":
             sidebar_target = (
-                self._notes_list if self._is_displayed(self._notes_list) else None
+                self._reports_list if self._is_displayed(self._reports_list) else None
             )
             if chat is not None and self._focus_contains(chat):
                 target = esc or sidebar_target or doc or right
             elif esc is not None and self._focus_contains(esc):
                 target = sidebar_target or doc or right
+            elif self._is_displayed(self._reports_list) and self._focus_contains(
+                self._reports_list
+            ):
+                target = self._notes_list
             elif self._is_displayed(self._notes_list) and self._focus_contains(self._notes_list):
                 target = self._plans
 
@@ -1526,8 +1613,10 @@ class MurderApp(App[None]):
             candidates = [
                 self._plans,
                 self._notes_list,
+                self._reports_list,
                 self._plan_doc,
                 self._notes_doc,
+                self._report_doc,
                 self._collab_chat,
                 self._mirror,
                 self._escalations,

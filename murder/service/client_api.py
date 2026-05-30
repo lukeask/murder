@@ -178,6 +178,23 @@ class NotesSnapshot:
 
 
 @dataclass(frozen=True, slots=True)
+class ReportSummary:
+    name: str
+    char_count: int
+    updated_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class ReportsSnapshot:
+    reports: tuple[ReportSummary, ...]
+    as_of: datetime
+    invalidation_key: str
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "reports", tuple(self.reports))
+
+
+@dataclass(frozen=True, slots=True)
 class SchedulerDecisionSummary:
     harness: str
     decision: int
@@ -244,6 +261,12 @@ class NoteDisplaySnapshot:
 
 
 @dataclass(frozen=True, slots=True)
+class ReportDisplaySnapshot:
+    name: str
+    markdown: str
+
+
+@dataclass(frozen=True, slots=True)
 class TicketRef:
     id: str
     title: str
@@ -298,6 +321,7 @@ class InvalidationKeys:
     escalations: ClassVar[str] = "escalations"
     plans: ClassVar[str] = "plans"
     notes: ClassVar[str] = "notes"
+    reports: ClassVar[str] = "reports"
     settings: ClassVar[str] = "settings"
 
     @staticmethod
@@ -319,6 +343,18 @@ class MurderServiceClient(Protocol):
     async def get_crow_snapshot(self) -> CrowSnapshot: ...
 
     async def get_escalations(self) -> EscalationsSnapshot: ...
+
+    async def get_plans_snapshot(self) -> PlansSnapshot: ...
+
+    async def get_notes_snapshot(self) -> NotesSnapshot: ...
+
+    async def get_reports_snapshot(self) -> ReportsSnapshot: ...
+
+    async def get_plan_display(self, name: str) -> PlanDisplaySnapshot | None: ...
+
+    async def get_note_display(self, name: str) -> NoteDisplaySnapshot | None: ...
+
+    async def get_report_display(self, name: str) -> ReportDisplaySnapshot | None: ...
 
     async def ack_escalation(self, escalation_id: int) -> None: ...
 
@@ -401,6 +437,9 @@ __all__ = [
     "MurderServiceClient",
     "NoteSummary",
     "NotesSnapshot",
+    "ReportDisplaySnapshot",
+    "ReportSummary",
+    "ReportsSnapshot",
     "PlanSummary",
     "PlansSnapshot",
     "CalendarRunningAgent",

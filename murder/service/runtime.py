@@ -220,6 +220,9 @@ class Runtime:
     async def open_note_in_editor(self, name: str, preferred_editor: str | None = None) -> int:
         return await self.documents.open_note_in_editor(name, preferred_editor)
 
+    async def open_report_in_editor(self, name: str, preferred_editor: str | None = None) -> int:
+        return await self.documents.open_report_in_editor(name, preferred_editor)
+
     def open_editor_blocking(self, path: Path, preferred_editor: str | None = None) -> int:
         return self.documents.open_editor_blocking(path, preferred_editor)
 
@@ -228,3 +231,6 @@ class Runtime:
 
     def note_path_for(self, name: str) -> Path:
         return self.documents.note_path_for(name)
+
+    def report_path_for(self, name: str) -> Path:
+        return self.documents.report_path_for(name)

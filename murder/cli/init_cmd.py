@@ -65,7 +65,7 @@ def _scaffold_project(repo: Path, *, force: bool = False) -> Path:
     if ad.exists() and force:
         shutil.rmtree(ad)
     ad.mkdir(parents=True, exist_ok=True)
-    for sub in ("tickets", "plans", "shelved", "escalations", "runs"):
+    for sub in ("tickets", "plans", "reports", "shelved", "escalations", "runs"):
         (ad / sub).mkdir(parents=True, exist_ok=True)
 
     tpl_root = resources.files("murder.templates")
