@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING
 from murder.harnesses import REGISTRY
 from murder.usage_sample_command import (
     HARNESS_USAGE_SAMPLE_KIND,
-    TRIGGER_USAGE_MANUAL_KEY,
+    TRIGGER_USAGE_MANUAL_REFRESH,
     USAGE_PROBE_TARGET,
     USAGE_SAMPLE_DEFAULT_TIMEOUT_S,
     harness_usage_sample_payload,
@@ -93,7 +93,7 @@ class DispatchController:
                 timeout=10,
             )
             return
-        db_status = self._ctx.read_model.get_ticket_status(ticket_id) or ""
+        db_status = await self._ctx.get_ticket_status(ticket_id) or ""
         want = str(spec.get("status") or "").strip()
         if not want:
             want = db_status
@@ -124,8 +124,8 @@ class DispatchController:
             group="carve",
         )
 
-    def open_carve_screen(self, ticket_id: str) -> None:
-        carve = self._ctx.read_model.get_ticket_carve_snapshot(ticket_id)
+    async def open_carve_screen(self, ticket_id: str) -> None:
+        carve = await self._ctx.get_ticket_carve_snapshot(ticket_id)
         if carve is None:
             self._ctx.notify(f"ticket {ticket_id} not found", severity="error", timeout=4)
             return
@@ -164,23 +164,35 @@ class DispatchController:
                 timeout=4,
             )
 
-    async def collect_usage_snapshots(self) -> None:
+    async def sample_usage_snapshots(
+        self,
+        *,
+        trigger: str = TRIGGER_USAGE_MANUAL_REFRESH,
+        notify: bool = False,
+    ) -> dict[str, object] | None:
+        """Ask the usage-probe worker to collect fresh harness usage snapshots."""
         result = await self._ctx.submit_command(
             target_worker=USAGE_PROBE_TARGET,
             kind=HARNESS_USAGE_SAMPLE_KIND,
-            payload=harness_usage_sample_payload(trigger=TRIGGER_USAGE_MANUAL_KEY),
+            payload=harness_usage_sample_payload(trigger=trigger),
             timeout_s=USAGE_SAMPLE_DEFAULT_TIMEOUT_S,
         )
         if result is None:
-            return
+            return None
         stored = int(result.get("stored", 0))
         failures = int(result.get("failures", 0))
-        self._ctx.refresh_views()
-        if stored or failures:
+        if notify and (stored or failures):
             self._ctx.notify(
                 f"Sampled {stored} harness usages ({failures} failed).",
                 timeout=4,
             )
+        elif failures:
+            self._ctx.notify(
+                f"Usage refresh failed ({failures} harnesses).",
+                severity="error",
+                timeout=6,
+            )
+        return result
 
 
 __all__ = ["DispatchController"]

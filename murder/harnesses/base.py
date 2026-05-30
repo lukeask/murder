@@ -10,6 +10,7 @@ from typing import ClassVar, Literal
 
 from murder.terminal import tmux
 from murder.harnesses.models import (
+    HarnessModelState,
     HarnessPaneState,
     HarnessStartSpec,
     HarnessUsageStatus,
@@ -57,6 +58,7 @@ class HarnessSession:
         start_spec = spec or HarnessStartSpec(
             cwd=self.repo_root,
             startup_model=self.adapter.startup_model,
+            startup_effort=self.adapter.startup_effort,
         )
         await tmux.create_session(
             self.session,
@@ -89,8 +91,11 @@ class HarnessSession:
 
     async def _configure_started_session(self, start_spec: HarnessStartSpec) -> SimpleResult[None]:
         desired_model = start_spec.startup_model or self.adapter.startup_model
+        desired_effort = start_spec.startup_effort or self.adapter.startup_effort
+        if desired_model and desired_effort is None and self.adapter.supported_efforts:
+            desired_effort = self.adapter.default_effort
         if desired_model:
-            model_result = await self.set_model(desired_model)
+            model_result = await self.set_model(desired_model, desired_effort)
             if not model_result.ok:
                 return model_result
             idle_result = await self.wait_idle(timeout_s=15.0)
@@ -148,11 +153,14 @@ class HarnessSession:
         self._first_send_idle_gate_pending = False
         return ok_result()
 
-    async def set_model(self, model: str) -> SimpleResult[None]:
-        selected = await self.adapter.set_model(self.session, model)
+    async def set_model(self, model: str, effort: str | None = None) -> SimpleResult[None]:
+        selected = await self.adapter.set_model(self.session, model, effort=effort)
         if selected:
             return ok_result()
-        return fail_result(f"{self.adapter.kind} does not support runtime model selection")
+        effort_msg = f" with effort {effort!r}" if effort else ""
+        return fail_result(
+            f"{self.adapter.kind} failed to select runtime model {model!r}{effort_msg}"
+        )
 
     async def request_usage_status(self) -> SimpleResult[None]:
         requested = await self.adapter.request_usage_status(self.session)
@@ -165,6 +173,13 @@ class HarnessSession:
 
     async def collect_available_models(self) -> SimpleResult[list[tuple[str, str]]]:
         return await self.adapter.collect_available_models(self.session)
+
+    async def collect_active_model_state(self) -> SimpleResult[HarnessModelState]:
+        pane = await tmux.capture_pane(self.session, lines=200)
+        state = self.adapter.parse_active_model_state(pane)
+        if state is None or (state.model is None and state.effort is None):
+            return fail_result(f"{self.adapter.kind} active model state was not visible")
+        return ok_result(state)
 
     async def probe_invalid_model(self, model: str) -> SimpleResult[None]:
         return await self.adapter.probe_invalid_model(self.session, model)
@@ -182,7 +197,11 @@ class HarnessAdapter(ABC):
     model_list_capture_delay_s: ClassVar[float] = 0.8
     model_selection_command_template: ClassVar[str | None] = "/model {model}"
     model_selection_capture_delay_s: ClassVar[float] = 0.8
+    supported_efforts: ClassVar[tuple[str, ...]] = ()
+    default_effort: ClassVar[str] = "medium"
     usage_collection_mode: ClassVar[UsageCollectionMode] = "none"
+    supports_subagents: ClassVar[bool] = False
+    cheapest_subagent_model: ClassVar[str | None] = None
 
     # Inputs for the default transcript parser (see parse_transcript). Leave the
     # markers empty for a harness whose UI doesn't echo prompts behind a simple
@@ -191,8 +210,13 @@ class HarnessAdapter(ABC):
     transcript_prompt_markers: ClassVar[tuple[str, ...]] = ()
     transcript_drop_substrings: ClassVar[tuple[str, ...]] = ()
 
-    def __init__(self, startup_model: str | None = None) -> None:
+    def __init__(
+        self,
+        startup_model: str | None = None,
+        startup_effort: str | None = None,
+    ) -> None:
         self.startup_model = startup_model
+        self.startup_effort = startup_effort
 
     @classmethod
     def declared_capabilities(cls) -> HarnessCapabilities:
@@ -207,6 +231,8 @@ class HarnessAdapter(ABC):
                 prompt_markers=cls.transcript_prompt_markers,
             ),
             startup_interrupt_continue=True,
+            supports_subagents=cls.supports_subagents,
+            cheapest_subagent_model=cls.cheapest_subagent_model,
         )
 
     def capabilities(self) -> HarnessCapabilities:
@@ -234,11 +260,18 @@ class HarnessAdapter(ABC):
     async def send_prompt(self, session: str, prompt: str) -> None:
         await tmux.send_keys(session, prompt, literal=True, enter=True)
 
-    async def set_model(self, session: str, model: str) -> bool:
-        del session, model
+    async def set_model(self, session: str, model: str, *, effort: str | None = None) -> bool:
+        del session, model, effort
         return False
 
-    async def request_model_selection(self, session: str, model: str) -> bool:
+    async def request_model_selection(
+        self,
+        session: str,
+        model: str,
+        *,
+        effort: str | None = None,
+    ) -> bool:
+        del effort
         if self.model_selection_command_template is None:
             return False
         await tmux.send_keys(
@@ -301,6 +334,10 @@ class HarnessAdapter(ABC):
             return fail_result(f"{self.kind} /models did not expose any model choices")
         return ok_result(models)
 
+    def parse_active_model_state(self, pane_text: str) -> HarnessModelState | None:
+        del pane_text
+        return None
+
     @abstractmethod
     def extract_last_message(self, pane_text: str) -> str | None: ...
 
@@ -352,8 +389,10 @@ class HarnessAdapter(ABC):
     def detect_done(self, pane_text: str) -> bool:
         return bool(DONE_RE.search(strip_ui_chrome(pane_text)))
 
-    @abstractmethod
-    def format_nudge(self, msg: str) -> str: ...
-
     async def interrupt(self, session: str) -> None:
+        """Stop an in-flight generation. Override per harness (see plan Obj 4)."""
         await tmux.interrupt(session)
+
+    async def interrupt_generation(self, session: str) -> None:
+        """Send Escape — shared by interactive CLIs that document esc-to-interrupt."""
+        await tmux.send_keys(session, "Escape", literal=False, enter=False)

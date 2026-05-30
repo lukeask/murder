@@ -65,7 +65,7 @@ def _scaffold_project(repo: Path, *, force: bool = False) -> Path:
     if ad.exists() and force:
         shutil.rmtree(ad)
     ad.mkdir(parents=True, exist_ok=True)
-    for sub in ("tickets", "plans", "shelved", "escalations", "runs"):
+    for sub in ("tickets", "plans", "reports", "shelved", "escalations", "runs"):
         (ad / sub).mkdir(parents=True, exist_ok=True)
 
     tpl_root = resources.files("murder.templates")
@@ -158,10 +158,6 @@ def cmd_ticket_create(
         list[str] | None,
         typer.Option("--check", help="Checklist item. Repeatable."),
     ] = None,
-    skill: Annotated[
-        list[str] | None,
-        typer.Option("--skill", help="Skill name. Repeatable."),
-    ] = None,
     harness: Annotated[
         str | None,
         typer.Option("--harness", help="Harness override for this ticket."),
@@ -203,7 +199,7 @@ def cmd_ticket_create(
         status=status,
         write_set=list(write or []),
         deps=list(dep or []),
-        skills=list(skill or []),
+        skills=[],
         harness=harness,
         model=model,
         created_at=now,

@@ -144,12 +144,21 @@ _MONTHS = {
 }
 
 
+def _local_clock_base(now: datetime | None) -> datetime:
+    """Wall-clock anchor for bare reset times from harness panes (local TZ)."""
+    if now is None:
+        return datetime.now().astimezone()
+    if now.tzinfo is None:
+        return now.replace(tzinfo=datetime.now().astimezone().tzinfo)
+    return now.astimezone()
+
+
 def _parse_clock_reset(raw: str, now: datetime | None) -> str | None:
     """Parse a `21:29` / `6:30pm` / `14:49 on 18 May` reset hint into ISO."""
     match = _CLOCK_RESET_RE.search(raw)
     if not match:
         return None
-    base = now or datetime.now(tz=ZoneInfo("UTC"))
+    base = _local_clock_base(now)
     hour, minute = int(match.group("h")), int(match.group("m"))
     ampm = (match.group("ampm") or "").lower()
     if ampm == "pm" and hour < 12:
@@ -189,8 +198,9 @@ def parse_codex_status_pane(
     now: datetime | None = None,
 ) -> HarnessUsageStatus:
     clean = strip_ansi(pane_text)
-    windows: list[HarnessUsageWindow] = []
-    seen: set[str] = set()
+    # Usage probe sessions keep /status scrollback; take the latest row per window.
+    windows_by_name: dict[str, HarnessUsageWindow] = {}
+    window_order: list[str] = []
 
     for match in _CODEX_LIMIT_RE.finditer(clean):
         pct = float(match.group("pct"))
@@ -198,16 +208,17 @@ def parse_codex_status_pane(
         used = 100.0 - pct if direction in ("left", "remaining") else pct
         used = round(max(0.0, min(100.0, used)), 4)
         name = re.sub(r"\s+", " ", match.group("label")).strip().lower() or "usage"
-        if name in seen:
-            continue
-        seen.add(name)
         reset_raw = match.group("reset") or ""
         # Newer Codex builds put `(resets 21:29)` inline; older ones put a
         # standalone `Resets 9:15am (TZ)` line — fall back to the latter.
         reset_at = (
             _parse_clock_reset(reset_raw, now) if reset_raw else _parse_reset_at(clean, now=now)
         )
-        windows.append(HarnessUsageWindow(name=name, percent_used=used, reset_at=reset_at))
+        if name not in windows_by_name:
+            window_order.append(name)
+        windows_by_name[name] = HarnessUsageWindow(name=name, percent_used=used, reset_at=reset_at)
+
+    windows = [windows_by_name[name] for name in window_order]
 
     if not windows and (match := _PERCENT_RE.search(clean)):
         windows.append(

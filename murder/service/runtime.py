@@ -33,6 +33,7 @@ from murder.persistence.agents import upsert_agent as _db_upsert_agent, set_agen
 from murder.bus import AgentStatus, Bus, EventFilter, SubscriptionHandle
 from murder.agents.events import AgentEventSink, LoggingAgentEventSink
 from murder.service.agent_registry import AgentRegistry
+from murder.harnesses.versioning import HarnessVersionRegistry
 from murder.service.document_access import DocumentAccess
 from murder.service.filesystem_sync import FilesystemSyncSupervisor
 from murder.service.recovery import reconcile_agents_vs_tmux
@@ -67,6 +68,7 @@ class Runtime:
         self.event_sink: AgentEventSink = LoggingAgentEventSink()
         self._tasks: dict[str, asyncio.Task[None]] = {}
         self._shutdown = asyncio.Event()
+        self.harness_versions = HarnessVersionRegistry()
         self._external_stop = asyncio.Event()
         self._lock_fd: int | None = None
         self._sync: FilesystemSyncSupervisor | None = None
@@ -220,6 +222,9 @@ class Runtime:
     async def open_note_in_editor(self, name: str, preferred_editor: str | None = None) -> int:
         return await self.documents.open_note_in_editor(name, preferred_editor)
 
+    async def open_report_in_editor(self, name: str, preferred_editor: str | None = None) -> int:
+        return await self.documents.open_report_in_editor(name, preferred_editor)
+
     def open_editor_blocking(self, path: Path, preferred_editor: str | None = None) -> int:
         return self.documents.open_editor_blocking(path, preferred_editor)
 
@@ -228,3 +233,6 @@ class Runtime:
 
     def note_path_for(self, name: str) -> Path:
         return self.documents.note_path_for(name)
+
+    def report_path_for(self, name: str) -> Path:
+        return self.documents.report_path_for(name)

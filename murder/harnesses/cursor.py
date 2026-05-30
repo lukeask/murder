@@ -161,17 +161,14 @@ class CursorAdapter(HarnessAdapter):
     def extract_last_message(self, pane_text: str) -> str | None:
         return extract_last_message_heuristic(_strip_cursor_chrome(pane_text))
 
-    def format_nudge(self, msg: str) -> str:
-        # Simple framing — cursor has no special instruction marker.
-        return f"[supervisor] {msg}"
-
-    async def set_model(self, session: str, model: str) -> bool:
+    async def set_model(self, session: str, model: str, *, effort: str | None = None) -> bool:
         """Select Cursor's model before the first real prompt.
 
         Cursor documents `/model <model>` as the runtime selector. We do not
         validate the model name here because the available labels are account
         and release dependent.
         """
+        del effort
         await tmux.send_keys(session, f"/model {model}", literal=True, enter=True)
         await asyncio.sleep(0.4)
         return True
@@ -181,6 +178,9 @@ class CursorAdapter(HarnessAdapter):
         await tmux.send_keys(session, f"/auto-run {mode}", literal=True, enter=True)
         await asyncio.sleep(0.2)
         return ok_result()
+
+    async def interrupt(self, session: str) -> None:
+        await self.interrupt_generation(session)
 
     async def request_usage_status(self, session: str) -> bool:
         del session

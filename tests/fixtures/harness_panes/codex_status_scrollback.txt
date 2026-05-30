@@ -1,0 +1,211 @@
+# source: live capture murder_murder_usage_codex 2026-05-28
+│  Session:              019e5c91-89a0-7ca1-9b8c-b407e537f7d6                     │
+│                                                                                 │
+│  5h limit:             [░░░░░░░░░░░░░░░░░░░░] 0% left (resets 20:43)            │
+│  Weekly limit:         [█████████░░░░░░░░░░░] 43% left (resets 16:54 on 30 May) │
+╰─────────────────────────────────────────────────────────────────────────────────╯
+
+/status
+
+╭─────────────────────────────────────────────────────────────────────────────────╮
+│  >_ OpenAI Codex (v0.133.0)                                                     │
+│                                                                                 │
+│ Visit https://chatgpt.com/codex/settings/usage for up-to-date                   │
+│ information on rate limits and credits                                          │
+│                                                                                 │
+│  Model:                gpt-5.4 (reasoning high, summaries auto)                 │
+│  Directory:            ~/Documents/code/murder                                  │
+│  Permissions:          Custom (workspace, never)                                │
+│  Agents.md:            <none>                                                   │
+│  Account:              user@example.com (Plus)                                 │
+│  Collaboration mode:   Default                                                  │
+│  Session:              019e5c91-89a0-7ca1-9b8c-b407e537f7d6                     │
+│                                                                                 │
+│  5h limit:             [░░░░░░░░░░░░░░░░░░░░] 0% left (resets 20:43)            │
+│  Weekly limit:         [█████████░░░░░░░░░░░] 43% left (resets 16:54 on 30 May) │
+╰─────────────────────────────────────────────────────────────────────────────────╯
+
+/status
+
+╭─────────────────────────────────────────────────────────────────────────────────╮
+│  >_ OpenAI Codex (v0.133.0)                                                     │
+│                                                                                 │
+│ Visit https://chatgpt.com/codex/settings/usage for up-to-date                   │
+│ information on rate limits and credits                                          │
+│                                                                                 │
+│  Model:                gpt-5.4 (reasoning high, summaries auto)                 │
+│  Directory:            ~/Documents/code/murder                                  │
+│  Permissions:          Custom (workspace, never)                                │
+│  Agents.md:            <none>                                                   │
+│  Account:              user@example.com (Plus)                                 │
+│  Collaboration mode:   Default                                                  │
+│  Session:              019e5c91-89a0-7ca1-9b8c-b407e537f7d6                     │
+│                                                                                 │
+│  5h limit:             [░░░░░░░░░░░░░░░░░░░░] 0% left (resets 20:43)            │
+│  Weekly limit:         [█████████░░░░░░░░░░░] 43% left (resets 16:54 on 30 May) │
+╰─────────────────────────────────────────────────────────────────────────────────╯
+
+/status
+
+╭─────────────────────────────────────────────────────────────────────────────────╮
+│  >_ OpenAI Codex (v0.133.0)                                                     │
+│                                                                                 │
+│ Visit https://chatgpt.com/codex/settings/usage for up-to-date                   │
+│ information on rate limits and credits                                          │
+│                                                                                 │
+│  Model:                gpt-5.4 (reasoning high, summaries auto)                 │
+│  Directory:            ~/Documents/code/murder                                  │
+│  Permissions:          Custom (workspace, never)                                │
+│  Agents.md:            <none>                                                   │
+│  Account:              user@example.com (Plus)                                 │
+│  Collaboration mode:   Default                                                  │
+│  Session:              019e5c91-89a0-7ca1-9b8c-b407e537f7d6                     │
+│                                                                                 │
+│  5h limit:             [░░░░░░░░░░░░░░░░░░░░] 0% left (resets 20:43)            │
+│  Weekly limit:         [█████████░░░░░░░░░░░] 43% left (resets 16:54 on 30 May) │
+╰─────────────────────────────────────────────────────────────────────────────────╯
+
+/status
+
+╭─────────────────────────────────────────────────────────────────────────────────╮
+│  >_ OpenAI Codex (v0.133.0)                                                     │
+│                                                                                 │
+│ Visit https://chatgpt.com/codex/settings/usage for up-to-date                   │
+│ information on rate limits and credits                                          │
+│                                                                                 │
+│  Model:                gpt-5.4 (reasoning high, summaries auto)                 │
+│  Directory:            ~/Documents/code/murder                                  │
+│  Permissions:          Custom (workspace, never)                                │
+│  Agents.md:            <none>                                                   │
+│  Account:              user@example.com (Plus)                                 │
+│  Collaboration mode:   Default                                                  │
+│  Session:              019e5c91-89a0-7ca1-9b8c-b407e537f7d6                     │
+│                                                                                 │
+│  5h limit:             [░░░░░░░░░░░░░░░░░░░░] 0% left (resets 20:43)            │
+│  Weekly limit:         [█████████░░░░░░░░░░░] 43% left (resets 16:54 on 30 May) │
+╰─────────────────────────────────────────────────────────────────────────────────╯
+
+/status
+
+╭─────────────────────────────────────────────────────────────────────────────────╮
+│  >_ OpenAI Codex (v0.133.0)                                                     │
+│                                                                                 │
+│ Visit https://chatgpt.com/codex/settings/usage for up-to-date                   │
+│ information on rate limits and credits                                          │
+│                                                                                 │
+│  Model:                gpt-5.4 (reasoning high, summaries auto)                 │
+│  Directory:            ~/Documents/code/murder                                  │
+│  Permissions:          Custom (workspace, never)                                │
+│  Agents.md:            <none>                                                   │
+│  Account:              user@example.com (Plus)                                 │
+│  Collaboration mode:   Default                                                  │
+│  Session:              019e5c91-89a0-7ca1-9b8c-b407e537f7d6                     │
+│                                                                                 │
+│  5h limit:             [░░░░░░░░░░░░░░░░░░░░] 0% left (resets 20:43)            │
+│  Weekly limit:         [█████████░░░░░░░░░░░] 43% left (resets 16:54 on 30 May) │
+╰─────────────────────────────────────────────────────────────────────────────────╯
+
+/status
+
+╭─────────────────────────────────────────────────────────────────────────────────╮
+│  >_ OpenAI Codex (v0.133.0)                                                     │
+│                                                                                 │
+│ Visit https://chatgpt.com/codex/settings/usage for up-to-date                   │
+│ information on rate limits and credits                                          │
+│                                                                                 │
+│  Model:                gpt-5.4 (reasoning high, summaries auto)                 │
+│  Directory:            ~/Documents/code/murder                                  │
+│  Permissions:          Custom (workspace, never)                                │
+│  Agents.md:            <none>                                                   │
+│  Account:              user@example.com (Plus)                                 │
+│  Collaboration mode:   Default                                                  │
+│  Session:              019e5c91-89a0-7ca1-9b8c-b407e537f7d6                     │
+│                                                                                 │
+│  5h limit:             [░░░░░░░░░░░░░░░░░░░░] 0% left (resets 20:43)            │
+│  Weekly limit:         [█████████░░░░░░░░░░░] 43% left (resets 16:54 on 30 May) │
+╰─────────────────────────────────────────────────────────────────────────────────╯
+
+/status
+
+╭─────────────────────────────────────────────────────────────────────────────────╮
+│  >_ OpenAI Codex (v0.133.0)                                                     │
+│                                                                                 │
+│ Visit https://chatgpt.com/codex/settings/usage for up-to-date                   │
+│ information on rate limits and credits                                          │
+│                                                                                 │
+│  Model:                gpt-5.4 (reasoning high, summaries auto)                 │
+│  Directory:            ~/Documents/code/murder                                  │
+│  Permissions:          Custom (workspace, never)                                │
+│  Agents.md:            <none>                                                   │
+│  Account:              user@example.com (Plus)                                 │
+│  Collaboration mode:   Default                                                  │
+│  Session:              019e5c91-89a0-7ca1-9b8c-b407e537f7d6                     │
+│                                                                                 │
+│  5h limit:             [████████████████████] 99% left (resets 01:52 on 28 May) │
+│  Weekly limit:         [█████████░░░░░░░░░░░] 43% left (resets 16:54 on 30 May) │
+╰─────────────────────────────────────────────────────────────────────────────────╯
+
+/status
+
+╭─────────────────────────────────────────────────────────────────────────────────╮
+│  >_ OpenAI Codex (v0.133.0)                                                     │
+│                                                                                 │
+│ Visit https://chatgpt.com/codex/settings/usage for up-to-date                   │
+│ information on rate limits and credits                                          │
+│                                                                                 │
+│  Model:                gpt-5.4 (reasoning high, summaries auto)                 │
+│  Directory:            ~/Documents/code/murder                                  │
+│  Permissions:          Custom (workspace, never)                                │
+│  Agents.md:            <none>                                                   │
+│  Account:              user@example.com (Plus)                                 │
+│  Collaboration mode:   Default                                                  │
+│  Session:              019e5c91-89a0-7ca1-9b8c-b407e537f7d6                     │
+│                                                                                 │
+│  5h limit:             [████████████████████] 99% left (resets 02:02 on 28 May) │
+│  Weekly limit:         [█████████░░░░░░░░░░░] 43% left (resets 16:54 on 30 May) │
+╰─────────────────────────────────────────────────────────────────────────────────╯
+
+/status
+
+╭─────────────────────────────────────────────────────────────────────────────────╮
+│  >_ OpenAI Codex (v0.133.0)                                                     │
+│                                                                                 │
+│ Visit https://chatgpt.com/codex/settings/usage for up-to-date                   │
+│ information on rate limits and credits                                          │
+│                                                                                 │
+│  Model:                gpt-5.4 (reasoning high, summaries auto)                 │
+│  Directory:            ~/Documents/code/murder                                  │
+│  Permissions:          Custom (workspace, never)                                │
+│  Agents.md:            <none>                                                   │
+│  Account:              user@example.com (Plus)                                 │
+│  Collaboration mode:   Default                                                  │
+│  Session:              019e5c91-89a0-7ca1-9b8c-b407e537f7d6                     │
+│                                                                                 │
+│  5h limit:             [████████████████████] 99% left (resets 02:13 on 28 May) │
+│  Weekly limit:         [█████████░░░░░░░░░░░] 43% left (resets 16:54 on 30 May) │
+╰─────────────────────────────────────────────────────────────────────────────────╯
+
+/status
+
+╭─────────────────────────────────────────────────────────────────────────────────╮
+│  >_ OpenAI Codex (v0.133.0)                                                     │
+│                                                                                 │
+│ Visit https://chatgpt.com/codex/settings/usage for up-to-date                   │
+│ information on rate limits and credits                                          │
+│                                                                                 │
+│  Model:                gpt-5.4 (reasoning high, summaries auto)                 │
+│  Directory:            ~/Documents/code/murder                                  │
+│  Permissions:          Custom (workspace, never)                                │
+│  Agents.md:            <none>                                                   │
+│  Account:              user@example.com (Plus)                                 │
+│  Collaboration mode:   Default                                                  │
+│  Session:              019e5c91-89a0-7ca1-9b8c-b407e537f7d6                     │
+│                                                                                 │
+│  5h limit:             [████████████████████] 99% left (resets 02:14 on 28 May) │
+│  Weekly limit:         [█████████░░░░░░░░░░░] 43% left (resets 16:54 on 30 May) │
+╰─────────────────────────────────────────────────────────────────────────────────╯
+
+
+› Summarize recent commits
+
+  gpt-5.4 high · ~/Documents/code/murder

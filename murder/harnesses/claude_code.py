@@ -18,22 +18,68 @@ from murder.harnesses.base import (
     HarnessAdapter,
     UsageCollectionMode,
 )
-from murder.harnesses.models import HarnessUsageStatus
+from murder.harnesses.models import HarnessModelState, HarnessUsageStatus
 from murder.harnesses.parsing import (
     extract_last_message_heuristic,
+    normalize_effort,
+    parse_claude_code_model_choices,
     strip_ansi,
 )
 from murder.harnesses.results import SimpleResult, fail_result, ok_result
 from murder.harnesses.usage import parse_claude_usage_pane
 
+_MODEL_CAPTURE_DELAY_S = 0.6
+_MODEL_MENU_DELAY_S = 0.4
+_CC_EFFORT_ORDER = ("low", "medium", "high", "xhigh", "max")
+_CC_MODEL_LINE_RE = re.compile(
+    r"\b(?P<model>Opus|Sonnet|Haiku)\b(?:\s+\d+(?:\.\d+)*)?.*?"
+    r"\bwith\s+(?P<effort>low|medium|high|x\s*high|xhigh|max)\s+effort\b",
+    re.IGNORECASE,
+)
+_CC_EFFORT_STATUS_RE = re.compile(
+    r"[●•]\s*(?P<effort>low|medium|high|x\s*high|xhigh|max)\s*(?:·|$)",
+    re.IGNORECASE,
+)
+_CC_MENU_EFFORT_RE = re.compile(
+    r"[●•]\s*(?P<effort>low|medium|high|x\s*high|xhigh|max)\s+effort\b",
+    re.IGNORECASE,
+)
+
+
+def _claude_model_id(model: str | None) -> str | None:
+    if model is None:
+        return None
+    lowered = model.strip().lower()
+    if not lowered:
+        return None
+    if "opus" in lowered:
+        return "opus"
+    if "sonnet" in lowered:
+        return "sonnet"
+    if "haiku" in lowered:
+        return "haiku"
+    return None
+
+
+def _shortest_effort_keys(current: str, desired: str) -> list[str]:
+    if current == desired:
+        return []
+    cur = _CC_EFFORT_ORDER.index(current)
+    target = _CC_EFFORT_ORDER.index(desired)
+    right = (target - cur) % len(_CC_EFFORT_ORDER)
+    left = (cur - target) % len(_CC_EFFORT_ORDER)
+    if left <= right:
+        return ["Left"] * left
+    return ["Right"] * right
 
 class ClaudeCodeAdapter(HarnessAdapter):
     kind: ClassVar[str] = "claude_code"
     usage_collection_mode: ClassVar[UsageCollectionMode] = "tmux_slash"
-    # CC's `/model` opens a radio dialog of human labels ("Default", "Opus ✔",
-    # "Haiku"), not `--model` ids — the hardcoded list below is the source of
-    # truth, so skip `/model` discovery entirely.
-    model_list_command: ClassVar[str | None] = None
+    # CC's `/model` opens a radio dialog of human labels. Adapter-specific
+    # parsing maps those labels to slash-command ids (`opus`, `sonnet`, `haiku`).
+    model_list_command: ClassVar[str | None] = "/model"
+    model_list_capture_delay_s: ClassVar[float] = _MODEL_CAPTURE_DELAY_S
+    supported_efforts: ClassVar[tuple[str, ...]] = _CC_EFFORT_ORDER
     # Transcript parsing (best-effort; fixture: tests/fixtures/harness_panes/
     # claude_transcript.txt). CC echoes the submitted prompt on a "> …" / "❯ …"
     # line; the reply (●) and tool boxes (⏺ ⎿) follow until the next prompt.
@@ -82,9 +128,8 @@ class ClaudeCodeAdapter(HarnessAdapter):
     ]
 
     def startup_cmd(self, cwd: Path) -> list[str]:
+        del cwd
         cmd = ["claude", "--dangerously-skip-permissions"]
-        if self.startup_model:
-            cmd.extend(["--model", self.startup_model])
         return cmd
 
     def is_ready(self, pane_text: str) -> bool:
@@ -122,9 +167,79 @@ class ClaudeCodeAdapter(HarnessAdapter):
     def extract_last_message(self, pane_text: str) -> str | None:
         return extract_last_message_heuristic(pane_text)
 
-    async def set_model(self, session: str, model: str) -> bool:
-        del session
-        return model == self.startup_model
+    async def set_model(self, session: str, model: str, *, effort: str | None = None) -> bool:
+        desired_model = _claude_model_id(model)
+        if desired_model is None:
+            return False
+        desired_effort = normalize_effort(effort) if effort else self.default_effort
+
+        await tmux.send_keys(session, f"/model {desired_model}", literal=True, enter=True)
+        await asyncio.sleep(_MODEL_CAPTURE_DELAY_S)
+
+        if desired_effort is not None:
+            await self._set_effort(session, desired_effort)
+
+        pane = await tmux.capture_pane(session, lines=200)
+        state = self.parse_active_model_state(pane)
+        if state is None or state.model != desired_model:
+            return False
+        if desired_effort is not None and state.effort != desired_effort:
+            return False
+        return True
+
+    async def _set_effort(self, session: str, desired_effort: str) -> None:
+        await tmux.send_keys(session, "/model", literal=True, enter=True)
+        await asyncio.sleep(_MODEL_MENU_DELAY_S)
+        pane = await tmux.capture_pane(session, lines=200)
+        current = self.parse_active_model_state(pane)
+        current_effort = current.effort if current else None
+        if current_effort in _CC_EFFORT_ORDER and current_effort != desired_effort:
+            for key in _shortest_effort_keys(current_effort, desired_effort):
+                await tmux.send_keys(session, key, literal=False, enter=False)
+                await asyncio.sleep(0.05)
+        await tmux.send_keys(session, "", literal=True, enter=True)
+        await asyncio.sleep(_MODEL_MENU_DELAY_S)
+
+    def parse_active_model_state(self, pane_text: str) -> HarnessModelState | None:
+        clean = strip_ansi(pane_text)
+        model: str | None = None
+        effort: str | None = None
+
+        matches = list(_CC_MODEL_LINE_RE.finditer(clean))
+        if matches:
+            match = matches[-1]
+            model = _claude_model_id(match.group("model"))
+            effort = normalize_effort(match.group("effort"))
+
+        menu_choices = parse_claude_code_model_choices(clean)
+        current_choice = next((choice for choice in menu_choices if choice.current), None)
+        if current_choice is not None:
+            model = current_choice.model_id
+
+        effort_matches = list(_CC_MENU_EFFORT_RE.finditer(clean))
+        if effort_matches:
+            effort = normalize_effort(effort_matches[-1].group("effort"))
+        elif effort is None:
+            status_matches = list(_CC_EFFORT_STATUS_RE.finditer(clean))
+            if status_matches:
+                effort = normalize_effort(status_matches[-1].group("effort"))
+
+        if model is None and effort is None:
+            return None
+        return HarnessModelState(model=model, effort=effort)
+
+    async def collect_available_models(self, session: str) -> SimpleResult[list[tuple[str, str]]]:
+        requested = await self.request_model_list(session)
+        if not requested:
+            return fail_result(f"{self.kind} does not support /models discovery")
+        pane = await tmux.capture_pane(session, lines=200)
+        models = [(choice.model_id, choice.label) for choice in parse_claude_code_model_choices(pane)]
+        if not models:
+            return fail_result(f"{self.kind} /model did not expose any model choices")
+        return ok_result(models)
+
+    async def interrupt(self, session: str) -> None:
+        await self.interrupt_generation(session)
 
     async def request_usage_status(self, session: str) -> bool:
         # If a prior /usage or /status dialog is still open, dismiss it first

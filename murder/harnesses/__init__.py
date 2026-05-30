@@ -1,12 +1,13 @@
 """Harness adapter registry. See `.murder/harnesses_spec.md`.
 
 Adapters wrap interactive CLI harnesses (cursor, claude_code, codex, pi,
-native_coding_crow) so the runner / CrowHandler / Sentinel can stay
-harness-agnostic.
+antigravity, native_coding_crow) so the runner / CrowHandler / Sentinel
+can stay harness-agnostic.
 """
 
 from __future__ import annotations
 
+from murder.harnesses.antigravity import AntigravityAdapter
 from murder.harnesses.base import (
     HarnessAdapter,
     HarnessSession,
@@ -25,6 +26,7 @@ REGISTRY: dict[str, type[HarnessAdapter]] = {
     "claude_code": ClaudeCodeAdapter,
     "codex": CodexAdapter,
     "pi": PiAdapter,
+    "antigravity": AntigravityAdapter,
     "native_coding_crow": NativeCodingCrowAdapter,
 }
 
@@ -41,9 +43,21 @@ def capabilities_for(kind: str) -> HarnessCapabilities:
         raise KeyError(f"unknown harness kind: {kind}") from e
 
 
-def get(kind: str, startup_model: str | None = None) -> HarnessAdapter:
-    """Instantiate the adapter for `kind`. Raises KeyError if unknown."""
-    return REGISTRY[kind](startup_model=startup_model)
+def get(
+    kind: str,
+    startup_model: str | None = None,
+    *,
+    startup_effort: str | None = None,
+    version: str | None = None,
+) -> HarnessAdapter:
+    """Instantiate the adapter for *kind*.
+
+    *version* is accepted now and threaded through for Phase 2 adapter
+    dispatch (currently ignored — all kinds have a single adapter class).
+    Raises KeyError if *kind* is unknown.
+    """
+    del version  # Phase 2: pass to resolve_adapter_id → select adapter class
+    return REGISTRY[kind](startup_model=startup_model, startup_effort=startup_effort)
 
 
 __all__ = [

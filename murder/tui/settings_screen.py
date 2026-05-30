@@ -29,6 +29,7 @@ _HARNESS_ROWS: list[tuple[HarnessKind, str, str]] = [
     ("claude_code", "Claude Code", "claude"),
     ("codex", "Codex CLI", "codex"),
     ("pi", "Pi", "pi"),
+    ("antigravity", "Antigravity CLI", "agy"),
     ("native_coding_crow", "Native coding crow", "native_coding_crow"),
 ]
 
@@ -298,6 +299,7 @@ class SettingsScreen(ModalScreen[bool]):
         Binding("k", "cursor_up", "Up", show=False),
         Binding("h", "item_left", "Left", show=False),
         Binding("l", "item_right", "Right", show=False),
+        Binding("a", "toggle_mode", "Basic/Advanced", show=False),
         Binding("enter", "toggle_item", "Toggle", show=False),
         Binding("space", "toggle_item", "Toggle", show=False),
     ]
@@ -386,8 +388,10 @@ class SettingsScreen(ModalScreen[bool]):
         ) = _resolve_crow_model_state(config.default_crow)
         self._model_discovery_attempted: set[HarnessKind] = set()
         self._crow_handler_model: str = config.crow_handler.model
+        self._crow_handler_auto_free: bool = config.crow_handler.auto_free
         self._notetaker_provider: str = config.notetaker.provider
         self._notetaker_model: str = config.notetaker.model
+        self._notetaker_auto_free: bool = config.notetaker.auto_free
         self._collaborator_harness: HarnessKind = config.collaborator.harness
         self._planner_harness: HarnessKind = config.planner.harness
 
@@ -402,6 +406,7 @@ class SettingsScreen(ModalScreen[bool]):
         self._populate_global_crow_from_patch(user_config.default_crow)
 
         self._scope = "project"
+        self._mode: Literal["basic", "advanced"] = "basic"
         self._cursor_idx = 0
         self._focusable: list[_SettingItem] = []
         self._written_since_open = False
@@ -507,6 +512,55 @@ class SettingsScreen(ModalScreen[bool]):
                             yield status
                             for model_id, model_label in options:
                                 yield self._model_item(kind, model_id, model_label)
+                    with Vertical(id="section-internal-model"):
+                        yield Static(
+                            "── INTERNAL MODEL  (project) ──",
+                            classes="section-header",
+                        )
+                        yield _SettingItem(
+                            "radio",
+                            "Auto Free",
+                            key="auto_free_mode:auto",
+                            group="auto_free_mode",
+                            checked=self._internal_auto_free_enabled(),
+                            item_id="item-auto-free-mode-auto",
+                        )
+                        yield _SettingItem(
+                            "radio",
+                            "Manual",
+                            key="auto_free_mode:manual",
+                            group="auto_free_mode",
+                            checked=not self._internal_auto_free_enabled(),
+                            item_id="item-auto-free-mode-manual",
+                        )
+                        with Vertical(id="section-internal-manual"):
+                            yield Static(
+                                "── PROVIDER  (project) ──",
+                                classes="section-header",
+                            )
+                            for provider_id, provider_label in _API_PROVIDER_ROWS:
+                                yield _SettingItem(
+                                    "radio",
+                                    provider_label,
+                                    key=f"internal_provider:{provider_id}",
+                                    group="internal_provider",
+                                    checked=(provider_id == self._notetaker_provider),
+                                    item_id=f"item-internal-provider-{_sid(provider_id)}",
+                                )
+                            yield Static(
+                                "── MODEL  (project) ──",
+                                classes="section-header",
+                            )
+                            with Vertical(id="section-internal-model-rows"):
+                                for model_id, model_label in self._internal_model_rows():
+                                    yield _SettingItem(
+                                        "radio",
+                                        model_label,
+                                        key=f"internal_model:{model_id}",
+                                        group="internal_model",
+                                        checked=(model_id == self._notetaker_model),
+                                        item_id=f"item-internal-model-{_sid(model_id)}",
+                                    )
                     yield Static(
                         "── COLLABORATOR HARNESS  (project) ──",
                         classes="section-header",
@@ -535,56 +589,58 @@ class SettingsScreen(ModalScreen[bool]):
                             checked=(kind == self._planner_harness),
                             item_id=f"item-planner_harness-{_sid(kind)}",
                         )
-                    yield Static(
-                        "── NOTETAKER PROVIDER  (project) ──",
-                        classes="section-header",
-                    )
-                    for provider_id, provider_label in _API_PROVIDER_ROWS:
-                        yield _SettingItem(
-                            "radio",
-                            provider_label,
-                            key=f"notetaker_provider:{provider_id}",
-                            group="notetaker_provider",
-                            checked=(provider_id == self._notetaker_provider),
-                            item_id=f"item-notetaker-provider-{_sid(provider_id)}",
+                    with Vertical(id="section-api-roles"):
+                        yield Static(
+                            "── NOTETAKER PROVIDER  (project) ──",
+                            classes="section-header",
                         )
-                    yield Static(
-                        "── NOTETAKER MODEL  (project) ──",
-                        id="notetaker-model-header",
-                        classes="section-header",
-                    )
-                    for model_id, model_label in _NOTETAKER_MODELS_BY_PROVIDER.get(
-                        self._notetaker_provider, _API_MODEL_ROWS
-                    ):
-                        yield _SettingItem(
-                            "radio",
-                            model_label,
-                            key=f"notetaker:{model_id}",
-                            group="notetaker",
-                            checked=(model_id == self._notetaker_model),
-                            item_id=f"item-notetaker-{_sid(model_id)}",
+                        for provider_id, provider_label in _API_PROVIDER_ROWS:
+                            yield _SettingItem(
+                                "radio",
+                                provider_label,
+                                key=f"notetaker_provider:{provider_id}",
+                                group="notetaker_provider",
+                                checked=(provider_id == self._notetaker_provider),
+                                item_id=f"item-notetaker-provider-{_sid(provider_id)}",
+                            )
+                        yield Static(
+                            "── NOTETAKER MODEL  (project) ──",
+                            id="notetaker-model-header",
+                            classes="section-header",
                         )
-                    yield Static(
-                        "── CROW HANDLER MODEL  (project) ──",
-                        classes="section-header",
-                    )
-                    for model_id, model_label in _API_MODEL_ROWS:
-                        yield _SettingItem(
-                            "radio",
-                            model_label,
-                            key=f"crow_handler:{model_id}",
-                            group="crow_handler",
-                            checked=(model_id == self._crow_handler_model),
-                            item_id=f"item-crow_handler-{_sid(model_id)}",
+                        for model_id, model_label in _NOTETAKER_MODELS_BY_PROVIDER.get(
+                            self._notetaker_provider, _API_MODEL_ROWS
+                        ):
+                            yield _SettingItem(
+                                "radio",
+                                model_label,
+                                key=f"notetaker:{model_id}",
+                                group="notetaker",
+                                checked=(model_id == self._notetaker_model),
+                                item_id=f"item-notetaker-{_sid(model_id)}",
+                            )
+                        yield Static(
+                            "── CROW HANDLER MODEL  (project) ──",
+                            classes="section-header",
                         )
+                        for model_id, model_label in _API_MODEL_ROWS:
+                            yield _SettingItem(
+                                "radio",
+                                model_label,
+                                key=f"crow_handler:{model_id}",
+                                group="crow_handler",
+                                checked=(model_id == self._crow_handler_model),
+                                item_id=f"item-crow_handler-{_sid(model_id)}",
+                            )
             yield Static(
                 "j/k move  h/l ←→  ↑↓ scroll  enter/spc toggle  "
-                "g global  p project  esc close",
+                "a basic/adv  g global  p project  esc close",
                 id="help-bar",
             )
 
     def on_mount(self) -> None:
         self._apply_scope()
+        self._apply_mode()
         self.query_one("#scroll").focus()
         self._refresh_model_validation()
         self._refresh_global_model_validation()
@@ -630,6 +686,38 @@ class SettingsScreen(ModalScreen[bool]):
     def action_scope_project(self) -> None:
         self._scope = "project"
         self._apply_scope()
+
+    # ── mode ───────────────────────────────────────────────────────────────
+
+    def action_toggle_mode(self) -> None:
+        self._mode = "advanced" if self._mode == "basic" else "basic"
+        self._apply_mode()
+
+    def _apply_mode(self) -> None:
+        old_key = self._focusable[self._cursor_idx].key if self._focusable else None
+        basic = self._mode == "basic"
+        self.query_one("#section-internal-model").display = basic
+        self.query_one("#section-internal-manual").display = (
+            basic and not self._internal_auto_free_enabled()
+        )
+        self.query_one("#section-api-roles").display = not basic
+        for kind in [k for k, _, _ in _HARNESS_ROWS]:
+            self._set_model_section_display(kind, kind in self._harnesses)
+        self._rebuild_focusable()
+        if old_key:
+            self._cursor_idx = next(
+                (i for i, item in enumerate(self._focusable) if item.key == old_key),
+                min(self._cursor_idx, max(0, len(self._focusable) - 1)),
+            )
+        else:
+            self._cursor_idx = min(self._cursor_idx, max(0, len(self._focusable) - 1))
+        self._refresh_cursor()
+
+    def _internal_auto_free_enabled(self) -> bool:
+        return self._crow_handler_auto_free and self._notetaker_auto_free
+
+    def _internal_model_rows(self) -> list[tuple[str, str]]:
+        return _NOTETAKER_MODELS_BY_PROVIDER.get(self._notetaker_provider, _API_MODEL_ROWS)
 
     # ── focusable list ─────────────────────────────────────────────────────
 
@@ -713,6 +801,9 @@ class SettingsScreen(ModalScreen[bool]):
             "crow_handler",
             "notetaker",
             "notetaker_provider",
+            "auto_free_mode",
+            "internal_provider",
+            "internal_model",
             "collab_harness",
             "planner_harness",
         }:
@@ -738,10 +829,38 @@ class SettingsScreen(ModalScreen[bool]):
         elif kind == "notetaker_provider":
             self._notetaker_provider = payload
             self._refresh_radio_group("notetaker_provider")
-            self.run_worker(self._rebuild_notetaker_model_rows(), exclusive=True, group="notetaker_models")
+            self.run_worker(
+                self._rebuild_notetaker_model_rows(),
+                exclusive=True,
+                group="notetaker_models",
+            )
+            self.run_worker(
+                self._rebuild_internal_model_rows(reset_selection=False),
+                exclusive=True,
+                group="internal_models",
+            )
         elif kind == "notetaker":
             self._notetaker_model = payload
             self._refresh_radio_group("notetaker")
+        elif kind == "auto_free_mode":
+            enabled = payload == "auto"
+            self._crow_handler_auto_free = enabled
+            self._notetaker_auto_free = enabled
+            self._refresh_radio_group("auto_free_mode")
+            self._apply_mode()
+        elif kind == "internal_provider":
+            self._notetaker_provider = payload
+            self._select_first_internal_model_for_provider()
+            self._refresh_radio_group("internal_provider")
+            self.run_worker(
+                self._rebuild_internal_model_rows(reset_selection=False),
+                exclusive=True,
+                group="internal_models",
+            )
+        elif kind == "internal_model":
+            self._notetaker_model = payload
+            self._crow_handler_model = payload
+            self._refresh_radio_group("internal_model")
         elif kind == "collab_harness":
             self._collaborator_harness = cast(HarnessKind, payload)
             self._refresh_radio_group("collab_harness")
@@ -862,10 +981,13 @@ class SettingsScreen(ModalScreen[bool]):
             "crow_handler": self._crow_handler_model,
             "notetaker": self._notetaker_model,
             "notetaker_provider": self._notetaker_provider,
+            "auto_free_mode": "auto" if self._internal_auto_free_enabled() else "manual",
+            "internal_provider": self._notetaker_provider,
+            "internal_model": self._notetaker_model,
             "collab_harness": self._collaborator_harness,
             "planner_harness": self._planner_harness,
         }[group]
-        for item in self._focusable:
+        for item in self.query(_SettingItem):
             if item.group == group:
                 item.checked = item.key == f"{group}:{group_value}"
 
@@ -980,7 +1102,9 @@ class SettingsScreen(ModalScreen[bool]):
         return [model_id for model_id, _ in self._model_options.get(kind, [])]
 
     def _set_model_section_display(self, kind: HarnessKind, visible: bool) -> None:
-        self.query_one(f"#section-models-{_sid(kind)}").display = visible
+        self.query_one(f"#section-models-{_sid(kind)}").display = (
+            visible and self._mode == "advanced"
+        )
         for model_id in self._model_ids(kind):
             widget = self._model_widget(kind, model_id)
             widget.model_state = self._model_states.get(kind, {}).get(model_id, "disabled")
@@ -1057,7 +1181,7 @@ class SettingsScreen(ModalScreen[bool]):
         await section.mount(
             *(self._model_item(kind, model_id, label) for model_id, label in cleaned)
         )
-        section.display = kind in self._harnesses
+        section.display = kind in self._harnesses and self._mode == "advanced"
         self._refresh_model_validation()
         self._rebuild_focusable()
         if old_key:
@@ -1098,6 +1222,39 @@ class SettingsScreen(ModalScreen[bool]):
         self._rebuild_focusable()
         self._refresh_cursor()
         self._try_autosave_project()
+
+    def _select_first_internal_model_for_provider(self) -> None:
+        rows = self._internal_model_rows()
+        model_id = rows[0][0] if rows else ""
+        self._notetaker_model = model_id
+        self._crow_handler_model = model_id
+
+    async def _rebuild_internal_model_rows(self, *, reset_selection: bool) -> None:
+        """Swap out basic-mode internal model rows for the selected provider."""
+        if reset_selection:
+            self._select_first_internal_model_for_provider()
+
+        section = self.query_one("#section-internal-model-rows")
+        for item in list(section.query(_SettingItem)):
+            await item.remove()
+        await section.mount(
+            *(
+                _SettingItem(
+                    "radio",
+                    model_label,
+                    key=f"internal_model:{model_id}",
+                    group="internal_model",
+                    checked=(model_id == self._notetaker_model),
+                    item_id=f"item-internal-model-{_sid(model_id)}",
+                )
+                for model_id, model_label in self._internal_model_rows()
+            )
+        )
+        self._refresh_radio_group("internal_provider")
+        self._refresh_radio_group("internal_model")
+        self._rebuild_focusable()
+        self._cursor_idx = min(self._cursor_idx, max(0, len(self._focusable) - 1))
+        self._refresh_cursor()
 
     def _dedupe_model_options(self, options: list[tuple[str, str]]) -> list[tuple[str, str]]:
         out: list[tuple[str, str]] = []
@@ -1197,7 +1354,9 @@ class SettingsScreen(ModalScreen[bool]):
                 crow_handler_model=self._crow_handler_model,
                 collaborator_harness=self._collaborator_harness,
                 notetaker_model=self._notetaker_model,
+                crow_handler_auto_free=self._crow_handler_auto_free,
                 notetaker_provider=self._notetaker_provider,
+                notetaker_auto_free=self._notetaker_auto_free,
                 planner_harness=self._planner_harness,
             ),
         )

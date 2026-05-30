@@ -169,15 +169,13 @@ def test_start_with_startup_model_calls_set_model(fake_tmux: FakeTmux):
 
 
 def test_start_set_model_fail_returns_fail_result(fake_tmux: FakeTmux):
-    # ClaudeCodeAdapter.set_model only returns True when model == startup_model.
-    # Passing a different model during _configure_started_session should fail.
+    # Unknown CC model ids fail before the startup prompt is sent.
     fake_tmux.queue_pane(CC_IDLE)
-    adapter = ClaudeCodeAdapter(startup_model="sonnet")
+    adapter = ClaudeCodeAdapter()
     hs = _make_session(adapter)
-    # spec with different model than adapter.startup_model
     spec = HarnessStartSpec(
         cwd=Path("/tmp/repo"),
-        startup_model="opus",  # ≠ adapter.startup_model ("sonnet")
+        startup_model="not-a-claude-model",
         ready_timeout_s=0.4,
         poll_interval_s=0.4,
     )
@@ -185,7 +183,7 @@ def test_start_set_model_fail_returns_fail_result(fake_tmux: FakeTmux):
     result = asyncio.run(hs.start(spec))
 
     assert not result.ok
-    assert "does not support runtime model selection" in (result.message or "")
+    assert "failed to select runtime model" in (result.message or "")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -343,21 +341,22 @@ def test_wait_ready_tmux_error_returns_fail_result(fake_tmux: FakeTmux):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# interrupt() — delegates to tmux.interrupt
+# interrupt() — delegates to adapter (CC sends Escape, not Ctrl+C)
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def test_interrupt_calls_tmux_interrupt(fake_tmux: FakeTmux):
+def test_interrupt_calls_adapter_escape(fake_tmux: FakeTmux):
     hs = _make_session(ClaudeCodeAdapter())
 
     result = asyncio.run(hs.interrupt())
 
     assert result.ok
-    assert "interrupt" in fake_tmux.call_names()
-    interrupt_calls = fake_tmux.calls_to("interrupt")
-    assert len(interrupt_calls) == 1
-    (session_arg,), _ = interrupt_calls[0]
+    send_calls = fake_tmux.calls_to("send_keys")
+    assert len(send_calls) == 1
+    (session_arg, keys), kw = send_calls[0]
     assert session_arg == "test-session"
+    assert keys == "Escape"
+    assert kw == {"literal": False, "enter": False}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -366,19 +365,20 @@ def test_interrupt_calls_tmux_interrupt(fake_tmux: FakeTmux):
 
 
 def test_set_model_fails_for_non_runtime_selectable_adapter(fake_tmux: FakeTmux):
-    # ClaudeCodeAdapter only matches startup model; other values return False
-    hs = _make_session(ClaudeCodeAdapter(startup_model="sonnet"))
+    hs = _make_session(ClaudeCodeAdapter())
 
-    result = asyncio.run(hs.set_model("opus"))
+    result = asyncio.run(hs.set_model("not-a-claude-model"))
 
     assert not result.ok
-    assert "does not support runtime model selection" in (result.message or "")
+    assert "failed to select runtime model" in (result.message or "")
 
 
 def test_set_model_succeeds_when_model_matches_startup(fake_tmux: FakeTmux):
-    # CC's set_model returns True only when model == startup_model
-    adapter = ClaudeCodeAdapter(startup_model="haiku")
+    adapter = ClaudeCodeAdapter()
     hs = _make_session(adapter)
+    fake_tmux.queue_pane(
+        "Claude Code v2.1.150\nHaiku 4.5 with medium effort · Claude Pro\n❯ \n"
+    )
 
     result = asyncio.run(hs.set_model("haiku"))
 

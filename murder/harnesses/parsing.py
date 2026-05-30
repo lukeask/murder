@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import re
 
+from murder.harnesses.models import HarnessEffortChoice, HarnessModelChoice
+
 _ANSI_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 _MODEL_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:+-]*(?:/[A-Za-z0-9][A-Za-z0-9._:+-]*)?")
 _CODE_SPAN_RE = re.compile(r"`([^`]+)`")
@@ -106,6 +108,34 @@ _MODEL_SKIP_FRAGMENTS = (
     "new version",
 )
 
+_NUMBERED_ROW_RE = re.compile(
+    r"^[\s>›→▸▶❯»*•·●○◉◆◇■□☑☒✓✔✗✘\-\u00a0]*"
+    r"(?P<index>\d{1,3})[.)\]]\s+"
+    r"(?P<body>.+?)\s*$"
+)
+_CURRENT_MARKER_RE = re.compile(
+    r"\b(current|selected|active)\b|[✓✔]",
+    re.IGNORECASE,
+)
+_EFFORT_WORD_RE = re.compile(
+    r"\b(?:extra\s+high|x\s*high|xhigh|max|high|medium|low)\b",
+    re.IGNORECASE,
+)
+
+_EFFORT_ALIASES = {
+    "low": "low",
+    "medium": "medium",
+    "med": "medium",
+    "high": "high",
+    "xhigh": "xhigh",
+    "x-high": "xhigh",
+    "x high": "xhigh",
+    "extrahigh": "xhigh",
+    "extra high": "xhigh",
+    "extra-high": "xhigh",
+    "max": "max",
+}
+
 
 def _model_id_from_token(token: str) -> str | None:
     """Return ``token`` if it looks like a usable model identifier, else None.
@@ -130,6 +160,115 @@ def _model_id_from_token(token: str) -> str | None:
     if digit_pos != -1 and letter_pos != -1 and letter_pos < digit_pos:
         return token
     return None
+
+
+def normalize_effort(value: str | None) -> str | None:
+    """Normalize harness effort/reasoning labels to stable config values."""
+    if value is None:
+        return None
+    raw = re.sub(r"\s+", " ", value.strip().lower().replace("_", " "))
+    if not raw:
+        return None
+    compact = raw.replace(" ", "").replace("-", "")
+    return _EFFORT_ALIASES.get(raw) or _EFFORT_ALIASES.get(compact)
+
+
+def parse_numbered_model_choices(pane_text: str) -> list[HarnessModelChoice]:
+    """Parse numbered model picker rows while preserving row indices."""
+    choices: list[HarnessModelChoice] = []
+    seen: set[tuple[int | None, str]] = set()
+    for raw_line in strip_ui_chrome(pane_text).splitlines():
+        raw = strip_ansi(raw_line).rstrip()
+        match = _NUMBERED_ROW_RE.match(raw)
+        if match is None:
+            continue
+        index = int(match.group("index"))
+        body = match.group("body")
+        parsed = parse_harness_model_list(raw)
+        if parsed:
+            model_id, label = parsed[0]
+        else:
+            body_clean = _clean_model_line(raw)
+            first = body_clean.split(maxsplit=1)[0] if body_clean else ""
+            if not first or not any(ch.isalpha() for ch in first):
+                continue
+            model_id = first
+            label = body_clean
+        key = (index, model_id)
+        if key in seen:
+            continue
+        seen.add(key)
+        choices.append(
+            HarnessModelChoice(
+                index=index,
+                model_id=model_id,
+                label=label,
+                current=bool(_CURRENT_MARKER_RE.search(body)),
+            )
+        )
+    return choices
+
+
+def parse_numbered_effort_choices(pane_text: str) -> list[HarnessEffortChoice]:
+    """Parse numbered effort/reasoning rows from model-selection panes."""
+    choices: list[HarnessEffortChoice] = []
+    seen: set[tuple[int | None, str]] = set()
+    for raw_line in strip_ui_chrome(pane_text).splitlines():
+        raw = strip_ansi(raw_line).rstrip()
+        match = _NUMBERED_ROW_RE.match(raw)
+        if match is None:
+            continue
+        index = int(match.group("index"))
+        body = match.group("body")
+        effort_match = _EFFORT_WORD_RE.search(body)
+        effort = normalize_effort(effort_match.group(0) if effort_match else None)
+        if effort is None:
+            continue
+        key = (index, effort)
+        if key in seen:
+            continue
+        seen.add(key)
+        choices.append(
+            HarnessEffortChoice(
+                index=index,
+                effort=effort,
+                label=re.sub(r"\s+", " ", body).strip(),
+                current=bool(_CURRENT_MARKER_RE.search(body)),
+            )
+        )
+    return choices
+
+
+def parse_claude_code_model_choices(pane_text: str) -> list[HarnessModelChoice]:
+    """Parse Claude Code's `/model` radio dialog into slash-command ids."""
+    rows: list[HarnessModelChoice] = []
+    seen: set[str] = set()
+    for raw_line in strip_ui_chrome(pane_text).splitlines():
+        raw = strip_ansi(raw_line).rstrip()
+        match = _NUMBERED_ROW_RE.match(raw)
+        if match is None:
+            continue
+        body = re.sub(r"\s+", " ", match.group("body")).strip()
+        lowered = body.lower()
+        model_id: str | None = None
+        if "opus" in lowered:
+            model_id = "opus"
+        elif "sonnet" in lowered:
+            model_id = "sonnet"
+        elif "haiku" in lowered:
+            model_id = "haiku"
+        if model_id is None or model_id in seen:
+            continue
+        seen.add(model_id)
+        rows.append(
+            HarnessModelChoice(
+                index=int(match.group("index")),
+                model_id=model_id,
+                label=body,
+                current=bool(_CURRENT_MARKER_RE.search(body) or raw.lstrip().startswith(">")),
+            )
+        )
+    return rows
 
 
 def parse_harness_model_list(pane_text: str) -> list[tuple[str, str]]:

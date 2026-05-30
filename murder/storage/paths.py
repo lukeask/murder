@@ -82,6 +82,14 @@ def note_md(repo_root: Path, name: str) -> Path:
     return notes_dir(repo_root) / f"{name}.md"
 
 
+def reports_dir(repo_root: Path) -> Path:
+    return agents_dir(repo_root) / "reports"
+
+
+def report_md(repo_root: Path, name: str) -> Path:
+    return reports_dir(repo_root) / f"{name}.md"
+
+
 def escalations_dir(repo_root: Path) -> Path:
     return agents_dir(repo_root) / "escalations"
 
@@ -98,6 +106,15 @@ def roles_yaml(repo_root: Path) -> Path:
     return agents_dir(repo_root) / "roles.yaml"
 
 
+def crow_context_dir(repo_root: Path) -> Path:
+    """Directory for project-level context documents injected into crow briefs."""
+    return murder_dir(repo_root) / "context"
+
+
 def notetaker_context_md(repo_root: Path) -> Path:
     """Singleton markdown backing the notetaker prompt context (DB is source of truth)."""
     return agents_dir(repo_root) / "notetakercontext.md"
+
+
+def tui_prefs_path(repo_root: Path) -> Path:
+    return murder_dir(repo_root) / "tui_prefs.json"

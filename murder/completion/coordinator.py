@@ -6,6 +6,7 @@ import json
 import logging
 import sqlite3
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol
@@ -22,6 +23,12 @@ if TYPE_CHECKING:
     from murder.agents.base import Agent
 
 LOGGER = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class DoneHandleResult:
+    completed: bool
+    failed_checks: tuple[str, ...] = ()
 
 
 class CoordinatorHost(Protocol):
@@ -75,17 +82,17 @@ class CompletionCoordinator:
         crow_session: str,
         start_commit: str | None,
         repo_root: Path | None = None,
-    ) -> None:
+    ) -> DoneHandleResult:
         from murder.persistence.tickets import get_ticket as _db_get_ticket
 
         if self._rt.db is None:
-            return
+            return DoneHandleResult(completed=False)
 
         conn = self._rt.db
         row = _db_get_ticket(conn, ticket_id)
         if row is None:
             LOGGER.warning("coordinator.handle_done: ticket %s not found", ticket_id)
-            return
+            return DoneHandleResult(completed=False)
 
         write_set = tuple(Path(p) for p in (row.get("write_set") or []))
         ctx = CompletionContext(
@@ -121,7 +128,7 @@ class CompletionCoordinator:
 
         if not failures:
             await self._transition_done(ticket_id)
-            return
+            return DoneHandleResult(completed=True)
 
         reprompt_msgs: list[str] = []
         for name, result in failures:
@@ -142,6 +149,11 @@ class CompletionCoordinator:
             if crow is not None:
                 combined = "The following checks failed. Please fix them:\n\n" + "\n\n".join(reprompt_msgs)
                 await crow.send(combined)
+
+        return DoneHandleResult(
+            completed=False,
+            failed_checks=tuple(name for name, _ in failures),
+        )
 
     async def _dispatch(
         self,
@@ -221,12 +233,21 @@ class CompletionCoordinator:
         return result.message
 
     async def _transition_done(self, ticket_id: str) -> None:
+        from murder.persistence.tickets import get_ticket_status
         from murder.tickets import lifecycle
         from murder.tickets.status import TicketStatus
         from murder.bus import StatusChangeEvent
 
         if self._rt.db is None:
             return
+        status = get_ticket_status(self._rt.db, ticket_id)
+        if status == TicketStatus.READY.value:
+            lifecycle.transition(
+                self._rt.db,
+                ticket_id,
+                TicketStatus.IN_PROGRESS,
+                reason="completion",
+            )
         prev = lifecycle.transition(self._rt.db, ticket_id, TicketStatus.DONE)
         if self._rt.bus is not None and self._rt.run_id is not None:
             await self._rt.bus.publish(
@@ -312,4 +333,4 @@ class CompletionCoordinator:
             LOGGER.debug("worktree prune skipped for %s: %s", ticket_id, exc)
 
 
-__all__ = ["CompletionCoordinator", "CoordinatorHost"]
+__all__ = ["CompletionCoordinator", "CoordinatorHost", "DoneHandleResult"]

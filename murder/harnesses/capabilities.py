@@ -19,6 +19,8 @@ class HarnessCapabilities:
     resumable_after_exhaustion: bool = False
     structured_output_reliable: bool = False
     startup_interrupt_continue: bool = False
+    supports_subagents: bool = False
+    cheapest_subagent_model: str | None = None
 
 
 def require(capabilities: HarnessCapabilities, name: str) -> None:

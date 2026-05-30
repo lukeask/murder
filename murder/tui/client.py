@@ -2,14 +2,18 @@ from __future__ import annotations
 
 import asyncio
 import json
+import shlex
+import subprocess
 import time
 from pathlib import Path
+from typing import Any
 from uuid import uuid4
 
 from murder.bus.client import SocketBusClient
 from murder.bus.protocol import ClientKind
 from murder.config import Config
-from murder.persistence.schema import get_db
+from murder.tui.pane_capture import PaneCaptureError
+
 from murder.service.client_api import (
     CommandRequest,
     CommandResult,
@@ -18,16 +22,21 @@ from murder.service.client_api import (
     DispatchSnapshot,
     EscalationsSnapshot,
     MurderServiceClient,
+    NoteDisplaySnapshot,
     NotesSnapshot,
+    PlanDisplaySnapshot,
     PlansSnapshot,
+    ReportDisplaySnapshot,
+    ReportsSnapshot,
     ScheduleSnapshot,
+    TicketCarveSnapshot,
     TicketDetailSnapshot,
+    UsageGaugeDrillInSnapshot,
+    dto_from_wire,
 )
-from murder.service.document_access import DocumentAccess
-from murder.service.read_model import ServiceReadModel
-from murder.storage.paths import db_path
 
 COMMAND_POLL_S = 0.05
+STATE_RPC_TIMEOUT_S = 10.0
 
 
 class TuiRuntimeClient:
@@ -48,36 +57,57 @@ class TuiRuntimeClient:
             client_kind=client_kind,
             client_id=f"{client_kind.value}-{uuid4().hex}",
         )
-        self._db = get_db(db_path(repo_root))
-        self.read_model = ServiceReadModel(db_path(repo_root))
-        self.documents = DocumentAccess(repo_root, self._db)
         self.run_id: str | None = None
         self.note_sync = None
-
-    @property
-    def db(self):
-        """Internal DB connection; not for TUI app-layer use.
-        All app-layer mutations go through service commands."""
-        return self._db
 
     async def connect(self) -> None:
         reply = await self.bus.request("health.ping", {}, timeout_s=5.0)
         self.run_id = str(reply.get("run_id") or "")
 
     async def close(self) -> None:
-        self._db.close()
+        return None
 
     async def reconcile_plan(self, name: str) -> None:
-        await self.documents.reconcile_plan(name)
+        await self.bus.request(
+            "document.reconcile_plan",
+            {"name": name},
+            timeout_s=STATE_RPC_TIMEOUT_S,
+        )
 
-    def plan_path_for(self, name: str) -> Path:
-        return self.documents.plan_path_for(name)
+    async def plan_path_for(self, name: str) -> Path:
+        return Path(
+            await self._request_value(
+                "document.plan_path",
+                {"name": name},
+                str,
+            )
+        )
 
-    def note_path_for(self, name: str) -> Path:
-        return self.documents.note_path_for(name)
+    async def note_path_for(self, name: str) -> Path:
+        return Path(
+            await self._request_value(
+                "document.note_path",
+                {"name": name},
+                str,
+            )
+        )
+
+    async def report_path_for(self, name: str) -> Path:
+        return Path(
+            await self._request_value(
+                "document.report_path",
+                {"name": name},
+                str,
+            )
+        )
 
     def open_editor_blocking(self, path: Path, preferred_editor: str | None = None) -> int:
-        return self.documents.open_editor_blocking(path, preferred_editor)
+        from murder.plans.sync import choose_editor
+
+        editor = choose_editor(preferred_editor)
+        argv = shlex.split(editor) or ["vi"]
+        proc = subprocess.run([*argv, str(path)], check=False)
+        return int(proc.returncode)
 
     async def submit_command(
         self,
@@ -162,25 +192,31 @@ class TuiRuntimeClient:
         raise TimeoutError(f"{kind} timed out")
 
     async def get_dispatch_snapshot(self) -> DispatchSnapshot:
-        return self.read_model.get_dispatch_snapshot()
+        return await self._request_value("state.dispatch_snapshot", {}, DispatchSnapshot)
 
     async def get_schedule_snapshot(self) -> ScheduleSnapshot:
-        return self.read_model.get_schedule_snapshot()
+        return await self._request_value("state.schedule_snapshot", {}, ScheduleSnapshot)
 
     async def get_ticket_detail(self, ticket_id: str) -> TicketDetailSnapshot | None:
-        try:
-            return self.read_model.get_ticket_detail(ticket_id)
-        except KeyError:
-            return None
+        return await self._request_optional(
+            "state.ticket_detail",
+            {"ticket_id": ticket_id},
+            TicketDetailSnapshot,
+        )
 
     async def get_crow_snapshot(self) -> CrowSnapshot:
-        return self.read_model.get_crow_snapshot()
+        return await self._request_value("state.crow_snapshot", {}, CrowSnapshot)
 
     async def get_escalations(self) -> EscalationsSnapshot:
-        return self.read_model.get_escalations_snapshot()
+        return await self._request_value("state.escalations_snapshot", {}, EscalationsSnapshot)
 
     async def ack_escalation(self, escalation_id: int) -> None:
-        self.read_model.ack_escalation(str(escalation_id))
+        await self.submit_command(
+            target_worker="state",
+            kind="state.escalation.ack",
+            payload={"escalation_id": escalation_id},
+            timeout_s=10.0,
+        )
 
     async def send_agent_message(
         self,
@@ -199,8 +235,157 @@ class TuiRuntimeClient:
             timeout_s=30.0,
         )
 
+    async def interrupt_agent(self, agent_id: str) -> CommandResult:
+        return await self._submit_raw(
+            target_worker="orchestrator",
+            kind="agent.interrupt",
+            payload={"agent_id": agent_id},
+            timeout_s=15.0,
+        )
+
+    async def spawn_rogue(
+        self,
+        harness: str,
+        model: str,
+        effort: str | None = None,
+        name: str | None = None,
+        *,
+        worktree_path: str | None = None,
+        worktree_branch: str | None = None,
+    ) -> str:
+        payload: dict[str, object] = {"harness": harness, "model": model}
+        if effort is not None:
+            payload["effort"] = effort
+        if name is not None:
+            payload["name"] = name
+        if worktree_path is not None:
+            payload["worktree_path"] = worktree_path
+        if worktree_branch is not None:
+            payload["worktree_branch"] = worktree_branch
+        result = await self.submit_command(
+            target_worker="orchestrator",
+            kind="crow.spawn_rogue",
+            payload=payload,
+            timeout_s=120.0,
+        )
+        agent_id = str(result.get("agent_id") or "")
+        if not agent_id:
+            raise RuntimeError("crow.spawn_rogue did not return agent_id")
+        return agent_id
+
+    async def capture_pane(self, session: str, *, lines: int = 200) -> str:
+        reply = await self.bus.request(
+            "tmux.capture_pane",
+            {"session": session, "lines": int(lines)},
+            timeout_s=STATE_RPC_TIMEOUT_S,
+        )
+        if not reply.get("ok"):
+            raise PaneCaptureError(str(reply.get("error") or "tmux.capture_pane failed"))
+        return str(reply.get("text") or "")
+
+    async def run_shell_command(
+        self, command: str, *, prior_session: str | None = None
+    ) -> str:
+        body: dict[str, object] = {"command": command}
+        if prior_session:
+            body["prior_session"] = prior_session
+        reply = await self.bus.request("tmux.shell_run", body, timeout_s=STATE_RPC_TIMEOUT_S)
+        if not reply.get("ok"):
+            raise RuntimeError(str(reply.get("error") or "tmux.shell_run failed"))
+        session_name = str(reply.get("session_name") or "")
+        if not session_name:
+            raise RuntimeError("tmux.shell_run did not return session_name")
+        return session_name
+
     async def get_plans_snapshot(self) -> PlansSnapshot:
-        return self.read_model.get_plans_snapshot()
+        return await self._request_value("state.plans_snapshot", {}, PlansSnapshot)
 
     async def get_notes_snapshot(self) -> NotesSnapshot:
-        return self.read_model.get_notes_snapshot()
+        return await self._request_value("state.notes_snapshot", {}, NotesSnapshot)
+
+    async def get_reports_snapshot(self) -> ReportsSnapshot:
+        return await self._request_value("state.reports_snapshot", {}, ReportsSnapshot)
+
+    async def get_plan_display(self, name: str) -> PlanDisplaySnapshot | None:
+        return await self._request_optional(
+            "state.plan_display",
+            {"name": name},
+            PlanDisplaySnapshot,
+        )
+
+    async def get_note_display(self, name: str) -> NoteDisplaySnapshot | None:
+        return await self._request_optional(
+            "state.note_display",
+            {"name": name},
+            NoteDisplaySnapshot,
+        )
+
+    async def get_report_display(self, name: str) -> ReportDisplaySnapshot | None:
+        return await self._request_optional(
+            "state.report_display",
+            {"name": name},
+            ReportDisplaySnapshot,
+        )
+
+    async def get_usage_gauge_drill_in(
+        self,
+        *,
+        harness: str,
+        window_key: str,
+        t_period_minutes: float,
+    ) -> UsageGaugeDrillInSnapshot:
+        return await self._request_value(
+            "state.usage_gauge_drill_in",
+            {
+                "harness": harness,
+                "window_key": window_key,
+                "t_period_minutes": t_period_minutes,
+            },
+            UsageGaugeDrillInSnapshot,
+        )
+
+    async def get_ticket_carve_snapshot(
+        self,
+        ticket_id: str,
+    ) -> TicketCarveSnapshot | None:
+        return await self._request_optional(
+            "state.ticket_carve",
+            {"ticket_id": ticket_id},
+            TicketCarveSnapshot,
+        )
+
+    async def get_ticket_status(self, ticket_id: str) -> str | None:
+        return await self._request_optional(
+            "state.ticket_status",
+            {"ticket_id": ticket_id},
+            str,
+        )
+
+    async def get_notetaker_recent_entries(self, limit: int = 50) -> list[dict[str, object]]:
+        rows = await self._request_value(
+            "state.notetaker_recent_entries",
+            {"limit": limit},
+            list,
+        )
+        return [dict(row) for row in rows]
+
+    async def _request_value(
+        self,
+        target: str,
+        body: dict[str, object],
+        cls: type[Any],
+    ) -> Any:
+        reply = await self.bus.request(target, body, timeout_s=STATE_RPC_TIMEOUT_S)
+        return dto_from_wire(cls, reply.get("value"))
+
+    async def _request_optional(
+        self,
+        target: str,
+        body: dict[str, object],
+        cls: type[Any],
+    ) -> Any | None:
+        reply = await self.bus.request(target, body, timeout_s=STATE_RPC_TIMEOUT_S)
+        value = reply.get("value")
+        if value is None:
+            return None
+        return dto_from_wire(cls, value)

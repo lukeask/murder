@@ -1,0 +1,24 @@
+# source: tools/testing/recordings/20260526-080137-pi-model-deepseek-v4-flash/frames.jsonl frame 6
+────────────────────────────────────────────────────────────────────────────────
+
+Scope: all | scoped
+tab scope (all/scoped)
+
+>
+
+→ deepseek/deepseek-v4-pro [or]
+  deepseek/deepseek-v4-flash [or]
+  google/gemini-3.1-pro-preview [or]
+  moonshotai/kimi-k2.6 [or]
+  qwen/qwen3.6-plus [or]
+  qwen/qwen3.6-35b-a3b [or]
+  minimax/minimax-m2.7 [or]
+  xiaomi/mimo-v2.5-pro [or]
+  Qwen3.6-35B-A3B-Q8_0.gguf [inferno]
+  Qwen3.6-27B-Q8_0.gguf [inferno]
+
+  Model Name: DeepSeek V4 Pro
+
+────────────────────────────────────────────────────────────────────────────────
+~/Documents/code/testingmurderharness
+0.0%/1.0M (auto)                             (deepseek) deepseek-v4-flash • high

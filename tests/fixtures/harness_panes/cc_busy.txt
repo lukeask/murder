@@ -1,0 +1,47 @@
+# source: tools/testing/recordings/20260523-215258/frames.jsonl frame 29
+user@machine:~/Documents/code/murder $ claude
+ ▐▛███▜▌   Claude Code v2.1.150
+▝▜█████▛▘  Sonnet 4.6 with high effort · Claude Pro
+  ▘▘ ▝▝    ~/Documents/code/murder
+
+❯ model sonnet
+
+· Roosting…
+
+─────────────────────────────────────────────────────────────────────────────────────────────
+❯ 
+─────────────────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ bypass permissions on (shift+tab to cycle) · esc to interrupt         ● high · /effort
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

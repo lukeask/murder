@@ -23,7 +23,7 @@ dependencies = [
     # TODO(M0): tiktoken for D17 if/when context-cap enforcement lands
 ]
 
-[project.optional-dependencies]
+[dependency-groups]
 dev = [
     "pytest>=8.0",
     "mypy>=1.8",

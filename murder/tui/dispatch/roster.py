@@ -196,6 +196,7 @@ _HARNESS_SELECT_OPTIONS: list[tuple[str, str]] = [
     ("Claude Code", "claude_code"),
     ("Codex CLI", "codex"),
     ("Pi", "pi"),
+    ("Antigravity CLI", "antigravity"),
     ("Native coding crow", "native_coding_crow"),
 ]
 
@@ -452,12 +453,12 @@ class CarveFormScreen(ModalScreen[None]):
         min-height: 8;
         padding: 0 2;
     }
-    #field_deps, #field_skills_pick {
+    #field_deps {
         height: 9;
         min-height: 4;
         border: tall $surface;
     }
-    #field_writes, #field_skills_extra, #field_checklist {
+    #field_writes, #field_checklist {
         height: 5;
         min-height: 3;
     }
@@ -546,10 +547,6 @@ class CarveFormScreen(ModalScreen[None]):
                 yield RadioRow([("(no model override)", "")], id="field_model")
                 yield Static("Depends on (space toggles)", classes="field_label")
                 yield SelectionList[str](id="field_deps")
-                yield Static("Skills from project (space toggles)", classes="field_label")
-                yield SelectionList[str](id="field_skills_pick")
-                yield Static("Extra skills — one per line", classes="field_label")
-                yield CarveTextArea(id="field_skills_extra")
                 yield Static("Write set — one repo-relative path per line", classes="field_label")
                 yield CarveTextArea(id="field_writes")
                 yield Static("Checklist — one item per line", classes="field_label")
@@ -587,19 +584,6 @@ class CarveFormScreen(ModalScreen[None]):
                     for ref in self._carve.dependency_options
                 ]
             )
-        skills_pick = self.query_one("#field_skills_pick", SelectionList)
-        cur_skills = {str(s) for s in (snap.get("skills") or [])}
-        known = set(self._carve.known_skills)
-        if self._carve.known_skills:
-            skills_pick.add_options(
-                [
-                    (skill, skill, skill in cur_skills)
-                    for skill in self._carve.known_skills
-                ]
-            )
-        extra_skills = sorted(cur_skills - known)
-        self.query_one("#field_skills_extra", CarveTextArea).text = "\n".join(extra_skills)
-
         writes = snap.get("write_set") or []
         self.query_one("#field_writes", CarveTextArea).text = "\n".join(str(p) for p in writes)
         self.query_one("#field_checklist", CarveTextArea).text = _checklist_to_lines(snap)
@@ -661,9 +645,6 @@ class CarveFormScreen(ModalScreen[None]):
         status = str(status_v) if status_v not in (None, "") else "planned"
 
         deps = list(self.query_one("#field_deps", SelectionList).selected)
-        skills_sel = list(self.query_one("#field_skills_pick", SelectionList).selected)
-        skills_extra = self._lines(self.query_one("#field_skills_extra", CarveTextArea).text)
-        skills = sorted(set(skills_sel) | set(skills_extra))
 
         return {
             "id": self.ticket_id,
@@ -675,7 +656,6 @@ class CarveFormScreen(ModalScreen[None]):
             "schedule_at": schedule_at,
             "deps": deps,
             "write_set": self._lines(self.query_one("#field_writes", CarveTextArea).text),
-            "skills": skills,
             "checklist": self._lines(self.query_one("#field_checklist", CarveTextArea).text),
         }
 
@@ -696,13 +676,11 @@ class CarveFormScreen(ModalScreen[None]):
     def _title_changed(self, _event: Input.Changed) -> None:
         self._autosave()
 
-    @on(TextArea.Changed, "#field_skills_extra")
     @on(TextArea.Changed, "#field_writes")
     @on(TextArea.Changed, "#field_checklist")
     def _text_areas_changed(self, _event: TextArea.Changed) -> None:
         self._autosave()
 
     @on(SelectionList.SelectedChanged, "#field_deps")
-    @on(SelectionList.SelectedChanged, "#field_skills_pick")
     def _selection_lists_changed(self, _event: SelectionList.SelectedChanged) -> None:
         self._autosave()
