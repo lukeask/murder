@@ -22,9 +22,12 @@ from pathlib import Path
 from murder.harnesses.claude_code import ClaudeCodeAdapter
 from murder.harnesses.codex import CodexAdapter
 from murder.harnesses.cursor import CursorAdapter
+from murder.harnesses.cursor import _cursor_model_id_from_label
 from murder.harnesses.parsing import (
     parse_antigravity_model_choices,
     parse_claude_code_model_choices,
+    parse_cursor_model_list,
+    parse_cursor_model_page,
     parse_harness_model_list,
     parse_numbered_effort_choices,
     parse_numbered_model_choices,
@@ -230,9 +233,19 @@ def test_cc_model_list_command_is_slash_model():
     assert ClaudeCodeAdapter.model_list_command == "/model"
 
 
-def test_cursor_model_list_command_is_none():
-    # Cursor's picker has display names without usable IDs; discovery is off
-    assert CursorAdapter.model_list_command is None
+def test_cursor_model_list_command_is_slash_model():
+    assert CursorAdapter.model_list_command == "/model"
+
+
+def test_cursor_model_list_parses_first_page_fixture():
+    pane = _pane("cursor_model_list.txt")
+    assert parse_cursor_model_page(pane) == (1, 10, 27)
+    rows = parse_cursor_model_list(pane, _cursor_model_id_from_label)
+    assert len(rows) == 10
+    ids = {model_id for model_id, _ in rows}
+    assert "composer-2.5" in ids
+    assert "codex-5-3" in ids
+    assert "sonnet-4-6" in ids
 
 
 def test_codex_model_list_command_is_slash_model():

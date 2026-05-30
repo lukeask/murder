@@ -147,6 +147,14 @@ _AGY_EFFORT_IN_LABEL_RE = re.compile(
     r"\((Low|Medium|High|Thinking)\)",
     re.IGNORECASE,
 )
+_CURSOR_MODEL_PAGE_RE = re.compile(
+    r"(?P<start>\d+)\s*-\s*(?P<end>\d+)\s+of\s+(?P<total>\d+)",
+    re.IGNORECASE,
+)
+_CURSOR_MODEL_MENU_SKIP_RE = re.compile(
+    r"^(?:available models|filter:?\s*$|type to filter|\d+\s*-\s*\d+\s+of\s+\d+)",
+    re.IGNORECASE,
+)
 
 
 def _model_id_from_token(token: str) -> str | None:
@@ -283,6 +291,54 @@ def parse_claude_code_model_choices(pane_text: str) -> list[HarnessModelChoice]:
     return rows
 
 
+def parse_cursor_model_page(pane_text: str) -> tuple[int, int, int] | None:
+    """Return ``(start, end, total)`` from Cursor's ``1-10 of 27`` picker footer."""
+    clean = strip_ansi(pane_text)
+    matches = list(_CURSOR_MODEL_PAGE_RE.finditer(clean))
+    if not matches:
+        return None
+    match = matches[-1]
+    return (
+        int(match.group("start")),
+        int(match.group("end")),
+        int(match.group("total")),
+    )
+
+
+def parse_cursor_model_list(
+    pane_text: str,
+    model_id_for_label: Callable[[str], str | None],
+) -> list[tuple[str, str]]:
+    """Parse every model row visible on the current Cursor ``/model`` page."""
+    rows: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    in_menu = False
+    for raw_line in strip_ui_chrome(pane_text).splitlines():
+        raw = strip_ansi(raw_line).rstrip()
+        if not raw or raw.startswith("#"):
+            continue
+        if "available models" in raw.lower():
+            in_menu = True
+            continue
+        if not in_menu:
+            continue
+        if _CURSOR_MODEL_MENU_SKIP_RE.match(raw.strip()):
+            continue
+        if set(raw.strip()) <= _SEPARATOR_CHARS | {" "}:
+            continue
+        body = re.sub(r"^\s*[>→]\s+", "", raw).strip()
+        body = re.sub(r"\s*\(Tab to modify\)\s*$", "", body, flags=re.IGNORECASE).strip()
+        body = re.sub(r"\s{2,}.*$", "", body).strip()
+        if not body:
+            continue
+        model_id = model_id_for_label(body)
+        if not model_id or model_id in seen:
+            continue
+        seen.add(model_id)
+        rows.append((model_id, body))
+    return rows
+
+
 def slug_model_label(label: str) -> str:
     """Stable lowercase id from a human model label (``Gemini 3.1 Pro`` → ``gemini-3-1-pro``)."""
     base = re.sub(r"\s*\([^)]+\)\s*", " ", label).strip()
@@ -304,6 +360,8 @@ def parse_pointed_model_choices(
             continue
         body = re.sub(r"\s+", " ", match.group("body")).strip()
         if not body or "tab to modify" in body.lower():
+            continue
+        if re.search(r"plan,\s*search|add a follow-up", body, re.IGNORECASE):
             continue
         if model_id_for_label is not None:
             model_id = model_id_for_label(body)

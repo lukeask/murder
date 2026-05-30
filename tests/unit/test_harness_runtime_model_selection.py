@@ -124,6 +124,32 @@ CURSOR_IDLE_COMPOSER_FAST = """
   ~/Documents/code/murder · main
 """
 
+CURSOR_MODEL_LIST_PAGE1 = _pane("cursor_model_list.txt")
+CURSOR_MODEL_LIST_PAGE2 = """
+Available models
+
+ Filter:
+
+   Kimi K2.5
+   Grok 4
+
+ 11-20 of 27
+
+ Type to filter • Enter to select • Tab to edit
+"""
+CURSOR_MODEL_LIST_PAGE3 = """
+Available models
+
+ Filter:
+
+   o3
+   o4-mini
+
+ 21-27 of 27
+
+ Type to filter • Enter to select • Tab to edit
+"""
+
 AGY_MODEL_PICKER = _pane("agy_model_picker.txt")
 AGY_IDLE = _pane("agy_idle.txt")
 PI_MODEL_PICKER = _pane("pi_model_picker.txt")
@@ -131,6 +157,28 @@ PI_IDLE = """
 ~/Documents/code/testingmurderharness
 0.0%/1.0M (auto)                             (deepseek) deepseek-v4-flash • high
 """
+
+
+@pytest.mark.asyncio
+async def test_cursor_collect_available_models_scrolls_pages(fake_tmux: FakeTmux) -> None:
+    fake_tmux.queue_pane(CURSOR_MODEL_LIST_PAGE1)
+    fake_tmux.queue_pane(CURSOR_MODEL_LIST_PAGE2)
+    fake_tmux.queue_pane(CURSOR_MODEL_LIST_PAGE3)
+    fake_tmux.queue_pane(CURSOR_MODEL_LIST_PAGE3)
+
+    result = await CursorAdapter().collect_available_models("sess")
+
+    assert result.ok, result.message
+    assert result.data is not None
+    ids = {model_id for model_id, _ in result.data}
+    assert len(ids) >= 12
+    assert "composer-2.5" in ids
+    assert "kimi-k2-5" in ids
+    assert "o3" in ids
+    sent = [args[1] for args, _ in fake_tmux.calls_to("send_keys")]
+    assert "/model" in sent
+    assert "PageDown" in sent
+    assert "Escape" in sent
 
 
 def test_cursor_default_effort_is_slow_not_fast() -> None:
