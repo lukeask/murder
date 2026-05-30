@@ -83,6 +83,8 @@ def test_cc_set_model_selects_model_and_adjusts_effort(fake_tmux: FakeTmux) -> N
 
 
 def test_codex_set_model_uses_picker_indices_then_reasoning_index(fake_tmux: FakeTmux) -> None:
+    fake_tmux.queue_pane(CODEX_IDLE_FOO_MEDIUM)
+    fake_tmux.queue_pane(CODEX_MODEL_PICKER)
     fake_tmux.queue_pane(CODEX_MODEL_PICKER)
     fake_tmux.queue_pane(CODEX_REASONING_PICKER)
     fake_tmux.queue_pane(CODEX_IDLE_FOO_MEDIUM)

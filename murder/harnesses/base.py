@@ -94,13 +94,6 @@ class HarnessSession:
         desired_effort = start_spec.startup_effort or self.adapter.startup_effort
         if desired_model and desired_effort is None and self.adapter.supported_efforts:
             desired_effort = self.adapter.default_effort
-        if desired_model:
-            model_result = await self.set_model(desired_model, desired_effort)
-            if not model_result.ok:
-                return model_result
-            idle_result = await self.wait_idle(timeout_s=15.0)
-            if not idle_result.ok:
-                return idle_result
 
         init_result = await self.initialize_defaults(start_spec)
         if not init_result.ok:
@@ -108,6 +101,14 @@ class HarnessSession:
         idle_result = await self.wait_idle(timeout_s=15.0)
         if not idle_result.ok:
             return idle_result
+
+        if desired_model:
+            model_result = await self.set_model(desired_model, desired_effort)
+            if not model_result.ok:
+                return model_result
+            idle_result = await self.wait_idle(timeout_s=15.0)
+            if not idle_result.ok:
+                return idle_result
         return ok_result()
 
     async def wait_ready(self, timeout_s: float = 240.0) -> SimpleResult[None]:

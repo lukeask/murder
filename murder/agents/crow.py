@@ -62,7 +62,19 @@ class CrowAgent(Agent):
             self.start_commit = await git_diff.head_commit(self.repo_root)
         except Exception:
             self.start_commit = None
-        await self.harness_session.send_prompt(brief)
+        paste = await self.harness_session.send_prompt(brief)
+        if not paste.ok:
+            self.status = AgentStatus.FAILED
+            if self.runtime:
+                self.runtime.sync_agent(self)
+            raise RuntimeError(paste.message or "failed to deliver startup context")
+        if brief and brief.strip():
+            idle = await self.harness_session.wait_idle(timeout_s=15.0)
+            if not idle.ok:
+                self.status = AgentStatus.FAILED
+                if self.runtime:
+                    self.runtime.sync_agent(self)
+                raise RuntimeError(idle.message or "harness did not finish reading context")
         self.status = AgentStatus.RUNNING
         if self.runtime:
             self.runtime.sync_agent(self)

@@ -171,6 +171,9 @@ class CursorAdapter(HarnessAdapter):
         del effort
         await tmux.send_keys(session, f"/model {model}", literal=True, enter=True)
         await asyncio.sleep(0.4)
+        pane = await tmux.capture_pane(session, lines=200)
+        if self.detects_model_rejection(pane, model):
+            return False
         return True
 
     async def initialize_defaults(self, session: str, spec: HarnessStartSpec) -> SimpleResult[None]:

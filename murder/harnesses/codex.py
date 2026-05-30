@@ -46,8 +46,8 @@ _STATUS_FIRST_ENTER_DELAY_S = 0.8
 _STATUS_CAPTURE_DELAY_S = 1.2
 _STATUS_RETRY_DELAY_S = 0.6
 _STATUS_DISMISS_DELAY_S = 0.1
-_MODEL_STARTUP_SETTLE_DELAY_S = 1.5
-_MODEL_COMMAND_POPUP_DELAY_S = 0.5
+_MODEL_POLL_INTERVAL_S = 0.4
+_MODEL_STARTUP_POLL_TIMEOUT_S = 15.0
 _MODEL_CAPTURE_DELAY_S = 3.0
 _MODEL_STEP_DELAY_S = 0.6
 _PROMPT_SUBMIT_DELAY_S = 0.2
@@ -160,7 +160,8 @@ class CodexAdapter(HarnessAdapter):
             await tmux.send_keys(session, "", literal=True, enter=True)
 
     async def set_model(self, session: str, model: str, *, effort: str | None = None) -> bool:
-        await self.request_model_list(session)
+        if not await self.request_model_list(session):
+            return False
         pane = await tmux.capture_pane(session, lines=200)
         choices = parse_numbered_model_choices(pane)
         choice = next((c for c in choices if c.model_id == model), None)
@@ -224,17 +225,25 @@ class CodexAdapter(HarnessAdapter):
         await self.interrupt_generation(session)
 
     async def request_model_list(self, session: str) -> bool:
-        # TODO: Replace this fixed delay with a pane-state wait for Codex to
-        # fully finish startup; otherwise early slash commands can be rejected
-        # as "disabled while a task is in progress."
-        await asyncio.sleep(_MODEL_STARTUP_SETTLE_DELAY_S)
+        startup_attempts = max(1, int(_MODEL_STARTUP_POLL_TIMEOUT_S / _MODEL_POLL_INTERVAL_S))
+        for _ in range(startup_attempts):
+            pane = await tmux.capture_pane(session, lines=200)
+            if self.is_idle(pane):
+                break
+            await asyncio.sleep(_MODEL_POLL_INTERVAL_S)
+        else:
+            return False
+
         await tmux.send_keys(session, "/model", literal=True, enter=False)
-        # TODO: Replace this fixed delay with a pane-state wait for Codex's
-        # slash-command picker, so model discovery is not timing-dependent.
-        await asyncio.sleep(_MODEL_COMMAND_POPUP_DELAY_S)
         await tmux.send_keys(session, "", literal=True, enter=True)
-        await asyncio.sleep(_MODEL_CAPTURE_DELAY_S)
-        return True
+
+        picker_attempts = max(1, int(_MODEL_CAPTURE_DELAY_S / _MODEL_POLL_INTERVAL_S))
+        for _ in range(picker_attempts):
+            pane = await tmux.capture_pane(session, lines=200)
+            if parse_numbered_model_choices(pane):
+                return True
+            await asyncio.sleep(_MODEL_POLL_INTERVAL_S)
+        return False
 
     async def request_usage_status(self, session: str) -> bool:
         # If an older modal is still visible, close it before issuing /status.
