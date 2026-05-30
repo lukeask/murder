@@ -8,9 +8,32 @@ from pathlib import Path
 class HarnessStartSpec:
     cwd: Path
     startup_model: str | None = None
+    startup_effort: str | None = None
     ready_timeout_s: float = 240.0
     poll_interval_s: float = 0.4
     auto_run: bool | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class HarnessModelChoice:
+    index: int | None
+    model_id: str
+    label: str
+    current: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class HarnessEffortChoice:
+    index: int | None
+    effort: str
+    label: str
+    current: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class HarnessModelState:
+    model: str | None = None
+    effort: str | None = None
 
 
 @dataclass(slots=True)

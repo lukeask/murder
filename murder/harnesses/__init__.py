@@ -43,7 +43,13 @@ def capabilities_for(kind: str) -> HarnessCapabilities:
         raise KeyError(f"unknown harness kind: {kind}") from e
 
 
-def get(kind: str, startup_model: str | None = None, *, version: str | None = None) -> HarnessAdapter:
+def get(
+    kind: str,
+    startup_model: str | None = None,
+    *,
+    startup_effort: str | None = None,
+    version: str | None = None,
+) -> HarnessAdapter:
     """Instantiate the adapter for *kind*.
 
     *version* is accepted now and threaded through for Phase 2 adapter
@@ -51,7 +57,7 @@ def get(kind: str, startup_model: str | None = None, *, version: str | None = No
     Raises KeyError if *kind* is unknown.
     """
     del version  # Phase 2: pass to resolve_adapter_id → select adapter class
-    return REGISTRY[kind](startup_model=startup_model)
+    return REGISTRY[kind](startup_model=startup_model, startup_effort=startup_effort)
 
 
 __all__ = [

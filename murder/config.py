@@ -38,6 +38,7 @@ class HarnessRoleConfig(BaseModel):
         ),
     )
     startup_model: str | None = None
+    startup_effort: str | None = None
     startup_models: list[str] | None = Field(
         default=None,
         description=(
@@ -106,6 +107,7 @@ class PlannerConfig(BaseModel):
     kind: Literal["harness"] = "harness"
     harness: HarnessKind = "claude_code"
     startup_model: str | None = None
+    startup_effort: str | None = None
     startup_prompt_template: str = "planner.md"
     # The crow-ASK relay template used by PlanningHandler.
     crow_ask_template: str = "crow_ask_to_planner.md"
@@ -206,6 +208,7 @@ def _deep_merge(base: dict[str, Any], over: dict[str, Any]) -> dict[str, Any]:
 
 from murder.policy.harness_resolution import (  # noqa: E402
     resolve_default_crow_harness,
+    resolve_default_crow_startup_effort,
     resolve_default_crow_startup_model,
     stable_bucket_index,
 )

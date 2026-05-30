@@ -22,7 +22,12 @@ from pathlib import Path
 from murder.harnesses.claude_code import ClaudeCodeAdapter
 from murder.harnesses.codex import CodexAdapter
 from murder.harnesses.cursor import CursorAdapter
-from murder.harnesses.parsing import parse_harness_model_list
+from murder.harnesses.parsing import (
+    parse_claude_code_model_choices,
+    parse_harness_model_list,
+    parse_numbered_effort_choices,
+    parse_numbered_model_choices,
+)
 from murder.harnesses.pi_harness import PiAdapter
 from tests.support.simulators import PaneSimulator
 
@@ -42,6 +47,25 @@ def _pane(name: str) -> str:
 
 CODEX_MODEL_LIST = _pane("codex_model_list.txt")
 PI_MODEL_PICKER = _pane("pi_model_picker.txt")
+CC_MODEL_PICKER = """
+Select Model
+Switch between Claude models. Your pick becomes the default for new sessions.
+
+  1. Default (recommended)  Sonnet 4.6 · Best for everyday tasks
+  2. Sonnet (1M context)   Sonnet 4.6 with 1M context
+> 3. Opus ✓                Opus 4.8 · Most capable for complex work
+  4. Haiku                 Haiku 4.5 · Fastest for quick answers
+
+● High effort (default) ←/→ to adjust
+"""
+CODEX_REASONING_PICKER = """
+Select Reasoning Level for modelnamefoo
+
+1. Low
+2. Medium (default)
+3. High
+4. Extra High
+"""
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -166,13 +190,43 @@ def test_pi_model_picker_status_bar_not_a_model():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Adapters that disable model discovery
+# Adapter-specific numbered pickers
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def test_cc_model_list_command_is_none():
-    # CC uses a hardcoded radio dialog; dynamic discovery is intentionally off
-    assert ClaudeCodeAdapter.model_list_command is None
+def test_codex_numbered_model_choices_preserve_indices():
+    choices = parse_numbered_model_choices(CODEX_MODEL_LIST)
+    by_id = {choice.model_id: choice for choice in choices}
+    assert by_id["gpt-5.4-mini"].index == 3
+    assert by_id["gpt-5.4"].current is True
+
+
+def test_codex_reasoning_choices_parse_extra_high():
+    choices = parse_numbered_effort_choices(CODEX_REASONING_PICKER)
+    by_effort = {choice.effort: choice for choice in choices}
+    assert by_effort["medium"].index == 2
+    assert by_effort["xhigh"].index == 4
+
+
+def test_cc_model_picker_extracts_runtime_model_ids():
+    choices = parse_claude_code_model_choices(CC_MODEL_PICKER)
+    ids = [choice.model_id for choice in choices]
+    assert ids == ["sonnet", "opus", "haiku"]
+
+
+def test_cc_model_picker_marks_current_model():
+    choices = parse_claude_code_model_choices(CC_MODEL_PICKER)
+    current = [choice.model_id for choice in choices if choice.current]
+    assert current == ["opus"]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Adapter discovery config
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def test_cc_model_list_command_is_slash_model():
+    assert ClaudeCodeAdapter.model_list_command == "/model"
 
 
 def test_cursor_model_list_command_is_none():
