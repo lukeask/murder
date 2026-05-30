@@ -370,6 +370,7 @@ class MurderServiceClient(Protocol):
         self,
         harness: str,
         model: str,
+        effort: str | None = None,
         name: str | None = None,
     ) -> str: ...
 

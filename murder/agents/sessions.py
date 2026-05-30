@@ -43,6 +43,7 @@ class AgentSpec:
     scope: AgentScope
     harness: str | None = None
     model: str | None = None
+    effort: str | None = None
     startup_prompt: str | None = None
     escalation_target: str | None = None
     capabilities_required: frozenset[str] = field(default_factory=frozenset)

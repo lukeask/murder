@@ -40,6 +40,7 @@ from murder.bus import StatusChangeEvent, TicketStatus
 from murder.clients import resolve_role_client
 from murder.config import (
     resolve_default_crow_harness,
+    resolve_default_crow_startup_effort,
     resolve_default_crow_startup_model,
 )
 from murder.harnesses import get as get_harness
@@ -310,12 +311,13 @@ class Orchestrator:
         startup_model = resolve_default_crow_startup_model(
             self.rt.config.default_crow, row, harness_kind
         )
+        startup_effort = resolve_default_crow_startup_effort(self.rt.config.default_crow, row)
         ctx = BriefContext(
             role=AgentRole.CROW,
             repo_root=self.rt.repo_root,
             caps=capabilities_for(harness_kind),
             harness_name=harness_kind,
-            model=startup_model,
+            model=None,
             ticket=dict(row),
         )
         brief = assembler_for(ctx).build(ctx)
@@ -324,6 +326,7 @@ class Orchestrator:
             scope=AgentScope(ticket_id=ticket_id),
             harness=harness_kind,
             model=startup_model,
+            effort=startup_effort,
             startup_prompt=brief,
         )
         handle = await spawn_agent(spec, rt=self.rt, event_sink=self.rt.event_sink)
@@ -337,7 +340,12 @@ class Orchestrator:
         startup_model = resolve_default_crow_startup_model(
             self.rt.config.default_crow, row, harness_kind
         )
-        harness = get_harness(harness_kind, startup_model=startup_model)
+        startup_effort = resolve_default_crow_startup_effort(self.rt.config.default_crow, row)
+        harness = get_harness(
+            harness_kind,
+            startup_model=startup_model,
+            startup_effort=startup_effort,
+        )
         session = format_session_name(self.rt, "crow_handler", f"_{ticket_id}")
         client = resolve_role_client(self.rt.config.crow_handler)
         crow_agent = self.rt.get_crow(ticket_id)
@@ -384,6 +392,7 @@ class Orchestrator:
         self,
         harness: str,
         model: str,
+        effort: str | None = None,
         name: str | None = None,
     ) -> str:
         """Start a ticketless crow session; inject model selection when supported."""
@@ -398,7 +407,12 @@ class Orchestrator:
 
         session_name = format_session_name(self.rt, "crow", f"_rogue_{slug}")
         startup_model = model.strip() or None
-        harness_adapter = get_harness(harness_kind)
+        startup_effort = effort.strip() if isinstance(effort, str) and effort.strip() else None
+        harness_adapter = get_harness(
+            harness_kind,
+            startup_model=startup_model,
+            startup_effort=startup_effort,
+        )
         agent = CrowAgent(
             agent_id=agent_id,
             ticket_id=None,
@@ -406,6 +420,7 @@ class Orchestrator:
             harness=harness_adapter,
             repo_root=self.rt.repo_root,
             startup_model=startup_model,
+            startup_effort=startup_effort,
             runtime=self.rt,
         )
 
@@ -413,6 +428,7 @@ class Orchestrator:
         start_spec = HarnessStartSpec(
             cwd=self.rt.repo_root,
             startup_model=startup_model,
+            startup_effort=startup_effort,
         )
         try:
             start_result = await agent.harness_session.start(start_spec)
@@ -428,13 +444,16 @@ class Orchestrator:
     async def spawn_rogue_command(self, payload: dict[str, Any]) -> dict[str, Any]:
         harness = payload.get("harness")
         model = payload.get("model")
+        effort = payload.get("effort")
         name = payload.get("name")
         if not isinstance(harness, str) or not harness.strip():
             raise ValueError("crow.spawn_rogue requires harness")
         if not isinstance(model, str):
             raise ValueError("crow.spawn_rogue requires model")
+        if effort is not None and not isinstance(effort, str):
+            raise ValueError("crow.spawn_rogue effort must be a string")
         rogue_name = name.strip() if isinstance(name, str) and name.strip() else None
-        agent_id = await self.spawn_rogue(harness.strip(), model, rogue_name)
+        agent_id = await self.spawn_rogue(harness.strip(), model, effort, rogue_name)
         return {"handled": True, "agent_id": agent_id}
 
     async def start_question_listener(self) -> None:
@@ -497,7 +516,7 @@ class Orchestrator:
                 repo_root=self.rt.repo_root,
                 caps=capabilities_for(cfg.harness),
                 harness_name=cfg.harness,
-                model=cfg.startup_model,
+                model=None,
                 plan_name=plan_name,
             )
             startup_prompt = assembler_for(ctx).build(ctx)
@@ -506,6 +525,7 @@ class Orchestrator:
                 scope=AgentScope(plan_name=plan_name),
                 harness=cfg.harness,
                 model=cfg.startup_model,
+                effort=cfg.startup_effort,
                 startup_prompt=startup_prompt,
             )
             handle = await spawn_agent(spec, rt=self.rt, event_sink=self.rt.event_sink)
@@ -796,7 +816,7 @@ class Orchestrator:
             repo_root=self.rt.repo_root,
             caps=capabilities_for(collab_cfg.harness),
             harness_name=collab_cfg.harness,
-            model=collab_cfg.startup_model,
+            model=None,
         )
         body = assembler_for(ctx).build(ctx)
         spec = AgentSpec(
@@ -804,6 +824,7 @@ class Orchestrator:
             scope=AgentScope(),
             harness=collab_cfg.harness,
             model=collab_cfg.startup_model,
+            effort=collab_cfg.startup_effort,
             startup_prompt=body,
         )
         try:
