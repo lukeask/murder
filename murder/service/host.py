@@ -137,6 +137,9 @@ class ServiceHost:
         def _state_notes_snapshot(_body: dict[str, Any]) -> dict[str, Any]:
             return _value(_read_model().get_notes_snapshot())
 
+        def _state_reports_snapshot(_body: dict[str, Any]) -> dict[str, Any]:
+            return _value(_read_model().get_reports_snapshot())
+
         def _state_ticket_detail(body: dict[str, Any]) -> dict[str, Any]:
             ticket_id = str(body.get("ticket_id", "")).strip()
             if not ticket_id:
@@ -157,6 +160,12 @@ class ServiceHost:
             if not name:
                 raise ValueError("state.note_display requires name")
             return _value(_read_model().get_note_display(name))
+
+        def _state_report_display(body: dict[str, Any]) -> dict[str, Any]:
+            name = str(body.get("name", "")).strip()
+            if not name:
+                raise ValueError("state.report_display requires name")
+            return _value(_read_model().get_report_display(name))
 
         def _state_usage_gauge_drill_in(body: dict[str, Any]) -> dict[str, Any]:
             harness = str(body.get("harness", "")).strip()
@@ -218,15 +227,26 @@ class ServiceHost:
                 raise ValueError("document.note_path requires name")
             return _value(str(rt.note_path_for(name)))
 
+        def _document_report_path(body: dict[str, Any]) -> dict[str, Any]:
+            rt = self.runtime
+            if rt is None:
+                raise RuntimeError("runtime unavailable")
+            name = str(body.get("name", "")).strip()
+            if not name:
+                raise ValueError("document.report_path requires name")
+            return _value(str(rt.report_path_for(name)))
+
         self.register_rpc_handler("state.dispatch_snapshot", _state_dispatch_snapshot)
         self.register_rpc_handler("state.schedule_snapshot", _state_schedule_snapshot)
         self.register_rpc_handler("state.crow_snapshot", _state_crow_snapshot)
         self.register_rpc_handler("state.escalations_snapshot", _state_escalations_snapshot)
         self.register_rpc_handler("state.plans_snapshot", _state_plans_snapshot)
         self.register_rpc_handler("state.notes_snapshot", _state_notes_snapshot)
+        self.register_rpc_handler("state.reports_snapshot", _state_reports_snapshot)
         self.register_rpc_handler("state.ticket_detail", _state_ticket_detail)
         self.register_rpc_handler("state.plan_display", _state_plan_display)
         self.register_rpc_handler("state.note_display", _state_note_display)
+        self.register_rpc_handler("state.report_display", _state_report_display)
         self.register_rpc_handler("state.usage_gauge_drill_in", _state_usage_gauge_drill_in)
         self.register_rpc_handler("state.ticket_carve", _state_ticket_carve)
         self.register_rpc_handler("state.ticket_status", _state_ticket_status)
@@ -237,6 +257,7 @@ class ServiceHost:
         self.register_rpc_handler("document.reconcile_plan", _document_reconcile_plan)
         self.register_rpc_handler("document.plan_path", _document_plan_path)
         self.register_rpc_handler("document.note_path", _document_note_path)
+        self.register_rpc_handler("document.report_path", _document_report_path)
 
         async def _tmux_capture_pane(body: dict[str, Any]) -> dict[str, Any]:
             from murder.terminal import tmux

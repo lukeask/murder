@@ -26,6 +26,8 @@ from murder.service.client_api import (
     NotesSnapshot,
     PlanDisplaySnapshot,
     PlansSnapshot,
+    ReportDisplaySnapshot,
+    ReportsSnapshot,
     ScheduleSnapshot,
     TicketCarveSnapshot,
     TicketDetailSnapshot,
@@ -85,6 +87,15 @@ class TuiRuntimeClient:
         return Path(
             await self._request_value(
                 "document.note_path",
+                {"name": name},
+                str,
+            )
+        )
+
+    async def report_path_for(self, name: str) -> Path:
+        return Path(
+            await self._request_value(
+                "document.report_path",
                 {"name": name},
                 str,
             )
@@ -282,6 +293,9 @@ class TuiRuntimeClient:
     async def get_notes_snapshot(self) -> NotesSnapshot:
         return await self._request_value("state.notes_snapshot", {}, NotesSnapshot)
 
+    async def get_reports_snapshot(self) -> ReportsSnapshot:
+        return await self._request_value("state.reports_snapshot", {}, ReportsSnapshot)
+
     async def get_plan_display(self, name: str) -> PlanDisplaySnapshot | None:
         return await self._request_optional(
             "state.plan_display",
@@ -294,6 +308,13 @@ class TuiRuntimeClient:
             "state.note_display",
             {"name": name},
             NoteDisplaySnapshot,
+        )
+
+    async def get_report_display(self, name: str) -> ReportDisplaySnapshot | None:
+        return await self._request_optional(
+            "state.report_display",
+            {"name": name},
+            ReportDisplaySnapshot,
         )
 
     async def get_usage_gauge_drill_in(

@@ -78,6 +78,14 @@ def note_md(repo_root: Path, name: str) -> Path:
     return notes_dir(repo_root) / f"{name}.md"
 
 
+def reports_dir(repo_root: Path) -> Path:
+    return agents_dir(repo_root) / "reports"
+
+
+def report_md(repo_root: Path, name: str) -> Path:
+    return reports_dir(repo_root) / f"{name}.md"
+
+
 def escalations_dir(repo_root: Path) -> Path:
     return agents_dir(repo_root) / "escalations"
 

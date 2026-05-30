@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING
 from murder import notes as notes_mod
 from murder.persistence.plans import get_plan_row as _db_get_plan_row
 from murder.plans.sync import choose_editor, open_editor
-from murder.storage.paths import note_md
+from murder.storage.paths import note_md, report_md, reports_dir
 
 if TYPE_CHECKING:
     from murder.notes.sync import NoteSync
@@ -46,6 +46,10 @@ class DocumentAccess:
         notes_mod.ensure_note(self.db, self.repo_root, name)
         return note_md(self.repo_root, name)
 
+    def report_path_for(self, name: str) -> Path:
+        reports_dir(self.repo_root).mkdir(parents=True, exist_ok=True)
+        return report_md(self.repo_root, name)
+
     def open_editor_blocking(self, path: Path, preferred_editor: str | None = None) -> int:
         editor = choose_editor(preferred_editor)
         argv = shlex.split(editor) or ["vi"]
@@ -69,6 +73,11 @@ class DocumentAccess:
         if self.note_sync is not None:
             await self.note_sync.reconcile_file(path)
         return code
+
+    async def open_report_in_editor(self, name: str, preferred_editor: str | None = None) -> int:
+        path = self.report_path_for(name)
+        editor = choose_editor(preferred_editor)
+        return await open_editor(path, editor)
 
 
 __all__ = ["DocumentAccess"]
