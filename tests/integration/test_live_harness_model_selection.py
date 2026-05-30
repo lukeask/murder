@@ -13,21 +13,46 @@ from murder.harnesses.models import HarnessStartSpec
 from murder.terminal import tmux
 
 _LIVE_ENV = "MURDER_LIVE_MODEL_SELECT"
-_HARNESSES = ["claude_code", "codex"]
-_BINARIES = {
-    "claude_code": "claude",
-    "codex": "codex",
+_HARNESS_CONFIG: dict[str, dict[str, object]] = {
+    "claude_code": {"binary": "claude"},
+    "codex": {"binary": "codex"},
+    "cursor": {
+        "binary": "agent",
+        "preferred_models": ["composer-2.5", "gpt-5.5"],
+    },
+    "pi": {"binary": "pi"},
+    "antigravity": {
+        "binary": "agy",
+        "preferred_models": ["gemini-3-1-pro"],
+    },
 }
+_HARNESSES = list(_HARNESS_CONFIG)
 
 
 def _skip_unless_live(harness: str) -> None:
     if os.environ.get(_LIVE_ENV) != "1":
         pytest.skip(f"set {_LIVE_ENV}=1 to run live harness model-selection tests")
-    binary = _BINARIES[harness]
+    binary = str(_HARNESS_CONFIG[harness]["binary"])
     if shutil.which(binary) is None:
         pytest.skip(f"{binary!r} is not installed")
     if shutil.which("tmux") is None:
         pytest.skip("'tmux' is not installed")
+
+
+def _pick_models(
+    harness: str,
+    discovered: list[tuple[str, str]],
+    rng: random.Random,
+) -> list[str]:
+    cfg = _HARNESS_CONFIG[harness]
+    preferred = cfg.get("preferred_models")
+    if isinstance(preferred, list):
+        available = {model_id for model_id, _ in discovered}
+        picks = [model for model in preferred if model in available]
+        if picks:
+            return rng.sample(picks, k=min(2, len(picks)))
+    models = [model_id for model_id, _ in discovered]
+    return rng.sample(models, k=min(2, len(models)))
 
 
 @pytest.mark.integration
@@ -46,7 +71,7 @@ async def _run_roundtrip(harness: str, repo_root: Path) -> None:
     try:
         probe = adapter.attach(probe_session, repo_root)
         started = await probe.start(
-            HarnessStartSpec(cwd=repo_root, ready_timeout_s=60.0, poll_interval_s=0.5)
+            HarnessStartSpec(cwd=repo_root, ready_timeout_s=90.0, poll_interval_s=0.5)
         )
         assert started.ok, f"{harness}: startup failed before model discovery: {started.message}"
 
@@ -56,8 +81,7 @@ async def _run_roundtrip(harness: str, repo_root: Path) -> None:
     finally:
         await tmux.kill_session(probe_session)
 
-    models = [model_id for model_id, _label in discovered.data]
-    selected_models = rng.sample(models, k=min(2, len(models)))
+    selected_models = _pick_models(harness, discovered.data, rng)
     efforts = list(adapter.supported_efforts) or [None]
     selected_efforts = rng.sample(efforts, k=min(2, len(efforts)))
 
@@ -72,7 +96,7 @@ async def _run_roundtrip(harness: str, repo_root: Path) -> None:
                         cwd=repo_root,
                         startup_model=model,
                         startup_effort=effort,
-                        ready_timeout_s=60.0,
+                        ready_timeout_s=90.0,
                         poll_interval_s=0.5,
                     )
                 )

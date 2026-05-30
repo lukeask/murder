@@ -29,6 +29,9 @@ def _load(name: str) -> str:
 CC_IDLE = _load("cc_idle.txt")
 CC_TRUST = _load("cc_trust_dialog.txt")
 CURSOR_IDLE = _load("cursor_idle.txt")
+# Idle pane with no parseable active-model status line, so cursor's set_model
+# verification falls back to curated membership and confirms the request.
+CURSOR_IDLE_GPT = CURSOR_IDLE.replace("Composer 2.5", "GPT-5.5")
 CODEX_IDLE = _load("codex_idle.txt")
 
 
@@ -62,7 +65,7 @@ def _send_texts(ft: FakeTmux) -> list[str]:
 
 
 def test_crow_agent_start_applies_model_before_brief(fake_tmux_launch: FakeTmux) -> None:
-    fake_tmux_launch.queue_pane(CURSOR_IDLE)
+    fake_tmux_launch.queue_pane(CURSOR_IDLE_GPT)
 
     agent = CrowAgent(
         agent_id="crow-t001",
@@ -87,7 +90,7 @@ def test_crow_agent_start_applies_model_before_brief(fake_tmux_launch: FakeTmux)
 
 
 def test_rogue_harness_start_never_sends_brief(fake_tmux_launch: FakeTmux) -> None:
-    fake_tmux_launch.queue_pane(CURSOR_IDLE)
+    fake_tmux_launch.queue_pane(CURSOR_IDLE_GPT)
     context_text = "rogue must not receive this context body"
 
     hs = HarnessSession(CursorAdapter(startup_model="gpt-5.5"), "rogue-sess", Path("/tmp/repo"))
@@ -217,8 +220,10 @@ def test_cursor_set_model_returns_false_on_rejection(fake_tmux_launch: FakeTmux)
     assert ok is False
 
 
-def test_cursor_set_model_returns_true_when_pane_clean(fake_tmux_launch: FakeTmux) -> None:
-    fake_tmux_launch.queue_pane(CURSOR_IDLE)
+def test_cursor_set_model_returns_true_when_model_confirmed(fake_tmux_launch: FakeTmux) -> None:
+    # No conflicting active-model status line on the pane, so verification
+    # falls back to curated membership and confirms the requested model.
+    fake_tmux_launch.queue_pane(CURSOR_IDLE_GPT)
 
     ok = asyncio.run(CursorAdapter().set_model("sess", "gpt-5.5"))
 

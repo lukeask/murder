@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 
 from murder.harnesses.models import HarnessEffortChoice, HarnessModelChoice
 
@@ -134,7 +135,26 @@ _EFFORT_ALIASES = {
     "extra high": "xhigh",
     "extra-high": "xhigh",
     "max": "max",
+    "slow": "slow",
+    "fast": "fast",
 }
+_POINTED_ROW_RE = re.compile(
+    r"^\s*"
+    r"(?P<point>[>→])\s+"
+    r"(?P<body>.+?)\s*$"
+)
+_AGY_EFFORT_IN_LABEL_RE = re.compile(
+    r"\((Low|Medium|High|Thinking)\)",
+    re.IGNORECASE,
+)
+_CURSOR_MODEL_PAGE_RE = re.compile(
+    r"(?P<start>\d+)\s*-\s*(?P<end>\d+)\s+of\s+(?P<total>\d+)",
+    re.IGNORECASE,
+)
+_CURSOR_MODEL_MENU_SKIP_RE = re.compile(
+    r"^(?:available models|filter:?\s*$|type to filter|\d+\s*-\s*\d+\s+of\s+\d+)",
+    re.IGNORECASE,
+)
 
 
 def _model_id_from_token(token: str) -> str | None:
@@ -269,6 +289,166 @@ def parse_claude_code_model_choices(pane_text: str) -> list[HarnessModelChoice]:
             )
         )
     return rows
+
+
+def parse_cursor_model_page(pane_text: str) -> tuple[int, int, int] | None:
+    """Return ``(start, end, total)`` from Cursor's ``1-10 of 27`` picker footer."""
+    clean = strip_ansi(pane_text)
+    matches = list(_CURSOR_MODEL_PAGE_RE.finditer(clean))
+    if not matches:
+        return None
+    match = matches[-1]
+    return (
+        int(match.group("start")),
+        int(match.group("end")),
+        int(match.group("total")),
+    )
+
+
+def parse_cursor_model_list(
+    pane_text: str,
+    model_id_for_label: Callable[[str], str | None],
+) -> list[tuple[str, str]]:
+    """Parse every model row visible on the current Cursor ``/model`` page."""
+    rows: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    in_menu = False
+    for raw_line in strip_ui_chrome(pane_text).splitlines():
+        raw = strip_ansi(raw_line).rstrip()
+        if not raw or raw.startswith("#"):
+            continue
+        if "available models" in raw.lower():
+            in_menu = True
+            continue
+        if not in_menu:
+            continue
+        if _CURSOR_MODEL_MENU_SKIP_RE.match(raw.strip()):
+            continue
+        if set(raw.strip()) <= _SEPARATOR_CHARS | {" "}:
+            continue
+        body = re.sub(r"^\s*[>→]\s+", "", raw).strip()
+        body = re.sub(r"\s*\(Tab to modify\)\s*$", "", body, flags=re.IGNORECASE).strip()
+        body = re.sub(r"\s{2,}.*$", "", body).strip()
+        if not body:
+            continue
+        model_id = model_id_for_label(body)
+        if not model_id or model_id in seen:
+            continue
+        seen.add(model_id)
+        rows.append((model_id, body))
+    return rows
+
+
+def slug_model_label(label: str) -> str:
+    """Stable lowercase id from a human model label (``Gemini 3.1 Pro`` → ``gemini-3-1-pro``)."""
+    base = re.sub(r"\s*\([^)]+\)\s*", " ", label).strip()
+    return re.sub(r"[^a-z0-9]+", "-", base.lower()).strip("-")
+
+
+def parse_pointed_model_choices(
+    pane_text: str,
+    *,
+    model_id_for_label: Callable[[str], str | None] | None = None,
+) -> list[HarnessModelChoice]:
+    """Parse arrow-selected model rows (``> …`` / ``→ …``) from picker panes."""
+    choices: list[HarnessModelChoice] = []
+    seen: set[str] = set()
+    for raw_line in strip_ui_chrome(pane_text).splitlines():
+        raw = strip_ansi(raw_line).rstrip()
+        match = _POINTED_ROW_RE.match(raw)
+        if match is None:
+            continue
+        body = re.sub(r"\s+", " ", match.group("body")).strip()
+        if not body or "tab to modify" in body.lower():
+            continue
+        if re.search(r"plan,\s*search|add a follow-up", body, re.IGNORECASE):
+            continue
+        if model_id_for_label is not None:
+            model_id = model_id_for_label(body)
+        else:
+            parsed = parse_harness_model_list(body)
+            model_id = parsed[0][0] if parsed else slug_model_label(body)
+        if not model_id or model_id in seen:
+            continue
+        seen.add(model_id)
+        choices.append(
+            HarnessModelChoice(
+                index=None,
+                model_id=model_id,
+                label=body,
+                current=True,
+            )
+        )
+    if choices:
+        return choices
+    # Pi lists every row but only marks the current one with →.
+    for raw_line in strip_ui_chrome(pane_text).splitlines():
+        raw = strip_ansi(raw_line).rstrip()
+        if not raw.startswith(("→", ">")):
+            continue
+        body = re.sub(r"^[>→]\s+", "", raw).strip()
+        parsed = parse_harness_model_list(body)
+        if not parsed:
+            continue
+        model_id, label = parsed[0]
+        if model_id in seen:
+            continue
+        seen.add(model_id)
+        choices.append(
+            HarnessModelChoice(
+                index=None,
+                model_id=model_id,
+                label=label,
+                current=True,
+            )
+        )
+    return choices
+
+
+def parse_antigravity_model_choices(pane_text: str) -> list[HarnessModelChoice]:
+    """Parse Antigravity ``/model`` rows; effort is the trailing ``(Low)`` tag."""
+    choices: list[HarnessModelChoice] = []
+    seen: set[tuple[str, str | None]] = set()
+    in_menu = False
+    for raw_line in strip_ui_chrome(pane_text).splitlines():
+        raw = strip_ansi(raw_line).rstrip()
+        if not raw or raw.startswith("#"):
+            continue
+        lowered = raw.lower()
+        if "switch model" in lowered:
+            in_menu = True
+            continue
+        if not in_menu:
+            continue
+        if lowered.startswith("keyboard:"):
+            break
+        if not re.match(r"^\s*>?\s*(?:Gemini|Claude|GPT|Sonnet|Opus)\b", raw, re.IGNORECASE):
+            continue
+        pointed = _POINTED_ROW_RE.match(raw)
+        body = pointed.group("body") if pointed else re.sub(r"^\s*>\s+", "", raw).strip()
+        body = re.sub(r"\s+", " ", body).strip()
+        if not body:
+            continue
+        effort_match = _AGY_EFFORT_IN_LABEL_RE.search(body)
+        effort = normalize_effort(effort_match.group(1)) if effort_match else None
+        base_label = _AGY_EFFORT_IN_LABEL_RE.sub("", body).strip()
+        base_label = re.sub(r"\s*\(current\)\s*", "", base_label, flags=re.IGNORECASE).strip()
+        model_id = slug_model_label(base_label)
+        if not model_id:
+            continue
+        key = (model_id, effort)
+        if key in seen:
+            continue
+        seen.add(key)
+        choices.append(
+            HarnessModelChoice(
+                index=None,
+                model_id=model_id,
+                label=body,
+                current=bool(pointed) or "(current)" in body.lower(),
+            )
+        )
+    return choices
 
 
 def parse_harness_model_list(pane_text: str) -> list[tuple[str, str]]:

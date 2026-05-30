@@ -438,12 +438,9 @@ class TestAntigravityAdapter:
         assert "--dangerously-skip-permissions" in cmd
         assert "--model" not in cmd
 
-    def test_set_model_only_matches_startup_model(self):
-        import asyncio as _asyncio
-
-        adapter = AntigravityAdapter(startup_model="gemini")
-        assert _asyncio.run(adapter.set_model("sess", "gemini")) is True
-        assert _asyncio.run(adapter.set_model("sess", "other")) is False
+    # NOTE: antigravity set_model now navigates the /model picker (see
+    # test_harness_runtime_model_selection.test_antigravity_set_model_navigates_picker);
+    # the old advisory string-match contract no longer applies.
 
 
 # ─────────────────────────────────────────────────────────────────────────────
