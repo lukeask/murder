@@ -13,10 +13,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Callable, Coroutine
 
-if TYPE_CHECKING:
-    from murder.service.read_model import ServiceReadModel
-
 SubmitCommandFn = Callable[..., "Coroutine[Any, Any, dict[str, object] | None]"]
+
+if TYPE_CHECKING:
+    from murder.service.client_api import TicketCarveSnapshot
+
+GetTicketStatusFn = Callable[[str], "Coroutine[Any, Any, str | None]"]
+GetTicketCarveFn = Callable[[str], "Coroutine[Any, Any, TicketCarveSnapshot | None]"]
 
 
 @dataclass
@@ -28,7 +31,8 @@ class TuiContext:
     refresh_views: Callable[[], None]
     push_screen: Callable[..., Any]
     run_worker: Callable[..., Any]
-    read_model: "ServiceReadModel"
+    get_ticket_status: GetTicketStatusFn
+    get_ticket_carve_snapshot: GetTicketCarveFn
 
 
 from murder.tui.controllers.dispatch import DispatchController

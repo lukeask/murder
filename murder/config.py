@@ -11,7 +11,9 @@ from typing import Any, Literal, TypeAlias, cast
 import yaml
 from pydantic import BaseModel, Field, field_validator
 
-HarnessKind: TypeAlias = Literal["cursor", "claude_code", "codex", "pi", "native_coding_crow"]
+HarnessKind: TypeAlias = Literal[
+    "cursor", "claude_code", "codex", "pi", "antigravity", "native_coding_crow"
+]
 
 try:  # python-dotenv is in dependencies but tests may stub
     from dotenv import load_dotenv
@@ -36,6 +38,7 @@ class HarnessRoleConfig(BaseModel):
         ),
     )
     startup_model: str | None = None
+    startup_effort: str | None = None
     startup_models: list[str] | None = Field(
         default=None,
         description=(
@@ -104,6 +107,7 @@ class PlannerConfig(BaseModel):
     kind: Literal["harness"] = "harness"
     harness: HarnessKind = "claude_code"
     startup_model: str | None = None
+    startup_effort: str | None = None
     startup_prompt_template: str = "planner.md"
     # The crow-ASK relay template used by PlanningHandler.
     crow_ask_template: str = "crow_ask_to_planner.md"
@@ -205,6 +209,7 @@ def _deep_merge(base: dict[str, Any], over: dict[str, Any]) -> dict[str, Any]:
 
 from murder.policy.harness_resolution import (  # noqa: E402
     resolve_default_crow_harness,
+    resolve_default_crow_startup_effort,
     resolve_default_crow_startup_model,
     stable_bucket_index,
 )

@@ -11,10 +11,25 @@ def _repo_path(repo_root: Path, path: Path) -> Path:
     return (repo_root / path).resolve()
 
 
+def write_set_artifacts_present(repo_root: Path, write_set: list[Path]) -> bool:
+    """True when every write_set path exists and is non-empty."""
+    for path in write_set:
+        target = _repo_path(repo_root, path)
+        if not target.exists():
+            return False
+        if target.is_file() and target.stat().st_size == 0:
+            return False
+        if target.is_dir() and not any(target.iterdir()):
+            return False
+    return True
+
+
 class ArtifactCheck:
     name = "artifact"
 
     async def run(self, ctx: CompletionContext) -> CheckResult:
+        if write_set_artifacts_present(ctx.repo_root, list(ctx.write_set)):
+            return CheckResult(CheckStatus.PASS, message="write_set artefacts present")
         failures: list[str] = []
         for path in ctx.write_set:
             target = _repo_path(ctx.repo_root, path)
@@ -34,4 +49,4 @@ class ArtifactCheck:
         return CheckResult(CheckStatus.PASS, message="write_set artefacts present")
 
 
-__all__ = ["ArtifactCheck"]
+__all__ = ["ArtifactCheck", "write_set_artifacts_present"]

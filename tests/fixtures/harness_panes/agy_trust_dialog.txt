@@ -1,0 +1,14 @@
+# source: tools/testing/recordings/20260527-213911-agy-trust-dialog/frames.jsonl frame 13
+Accessing workspace:
+
+/tmp/murder-agy-trust-recording-rec006
+
+Do you trust the contents of this project?
+
+Antigravity CLI requires permission to read, edit, and execute files here.
+
+> Yes, I trust this folder
+  No, exit
+
+  ↑/↓ Navigate · enter Confirm
+                                                            Gemini 3.1 Pro (Low)

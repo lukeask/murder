@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import time
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 from textual import on
@@ -15,7 +16,7 @@ from textual.events import Key
 from textual.screen import ModalScreen
 from textual.widgets import DataTable, Footer, Static, TextArea
 
-LoadRecentFn = Callable[[], list[dict[str, Any]]]
+LoadRecentFn = Callable[[], list[dict[str, Any]] | Awaitable[list[dict[str, Any]]]]
 DismissPayload = tuple[bool, str]
 
 RECENT_NOTE_ROWS = 12
@@ -237,6 +238,8 @@ class NoteCaptureScreen(ModalScreen[DismissPayload]):
 
     async def _hydrate_recent_rows(self) -> None:
         rows = self._load_recent_rows()
+        if inspect.isawaitable(rows):
+            rows = await rows
         table = self.query_one("#recent_table", RecentNotesTable)
         self._rows = list(rows)
         table.clear(columns=True)

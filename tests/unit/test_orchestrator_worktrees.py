@@ -69,9 +69,16 @@ def test_spawn_crow_defaults_to_main_checkout(repo_root: Path, monkeypatch) -> N
         captured["event_sink"] = event_sink
         return type("Handle", (), {"session_name": "murder_repo_crow_t001"})()
 
+    class _FakeAssembler:
+        def build(self, _ctx) -> str:
+            return "brief"
+
     monkeypatch.setattr("murder.orchestration.orchestrator.ensure_crow_worktree", fake_ensure)
     monkeypatch.setattr("murder.orchestration.orchestrator.spawn_agent", fake_spawn_agent)
-    monkeypatch.setattr("murder.orchestration.orchestrator.load", lambda _name: "system")
+    monkeypatch.setattr(
+        "murder.orchestration.orchestrator.assembler_for",
+        lambda _ctx: _FakeAssembler(),
+    )
 
     session = asyncio.run(Orchestrator(rt).spawn_crow("t001"))  # type: ignore[arg-type]
 
@@ -114,9 +121,16 @@ def test_spawn_crow_provisions_opt_in_worktree_and_puts_it_in_agent_scope(
         captured["event_sink"] = event_sink
         return type("Handle", (), {"session_name": "murder_repo_crow_t001"})()
 
+    class _FakeAssembler:
+        def build(self, _ctx) -> str:
+            return "brief"
+
     monkeypatch.setattr("murder.orchestration.orchestrator.ensure_crow_worktree", fake_ensure)
     monkeypatch.setattr("murder.orchestration.orchestrator.spawn_agent", fake_spawn_agent)
-    monkeypatch.setattr("murder.orchestration.orchestrator.load", lambda _name: "system")
+    monkeypatch.setattr(
+        "murder.orchestration.orchestrator.assembler_for",
+        lambda _ctx: _FakeAssembler(),
+    )
 
     session = asyncio.run(Orchestrator(rt).spawn_crow("t001"))  # type: ignore[arg-type]
 

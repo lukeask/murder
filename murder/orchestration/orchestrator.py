@@ -8,7 +8,9 @@ import logging
 import re
 import sqlite3
 from datetime import datetime
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
+from uuid import uuid4
 
 _TNUM_RE = re.compile(r"^t(\d+)$")
 
@@ -38,8 +40,8 @@ from murder.agents.planning_handler import PlanningHandler
 from murder.bus import StatusChangeEvent, TicketStatus
 from murder.clients import resolve_role_client
 from murder.config import (
-    PlannerConfig,
     resolve_default_crow_harness,
+    resolve_default_crow_startup_effort,
     resolve_default_crow_startup_model,
 )
 from murder.harnesses import get as get_harness
@@ -49,16 +51,23 @@ from murder.plans.parser import (
 )
 from murder.plans.schema import Plan, PlanStatus
 from murder.plans.sync import content_hash as _plan_content_hash
-from murder.prompts import load, render
 from murder.storage.paths import plan_md, ticket_md, tickets_dir
-from murder.storage.worktrees import ensure_crow_worktree, prune_terminal_crow_worktree
+from murder.storage.worktrees import (
+    ensure_crow_worktree,
+    ensure_named_worktree,
+    prune_terminal_crow_worktree,
+)
 from murder.terminal import tmux
 from murder.terminal.session_names import format_session_name
 from murder.tickets import carve, lifecycle
 
+from murder.agents.crow import CrowAgent
 from murder.agents.runner import spawn_agent
 from murder.agents.sessions import AgentScope, AgentSpec
+from murder.harnesses.models import HarnessStartSpec
 from murder.completion import CheckRegistry, CompletionCoordinator
+from murder.harnesses import capabilities_for
+from murder.orchestration.brief import BriefContext, assembler_for
 from murder.service.runtime_scope import OrchestratorHost
 
 from ..escalations.service import EscalationService
@@ -78,6 +87,14 @@ def _get_plan_for_ticket(conn: sqlite3.Connection, ticket_id: str) -> str | None
     return str(row["plan_name"]) if row else None
 
 
+def _rogue_slug(name: str | None) -> str:
+    if name and name.strip():
+        slug = re.sub(r"[^a-zA-Z0-9_-]+", "-", name.strip()).strip("-").lower()
+        if slug:
+            return slug[:32]
+    return uuid4().hex[:8]
+
+
 def _validate_plan_filename_stem(name: str, *, command: str) -> str:
     name = name.strip()
     if not name or "/" in name or "\\" in name or name in {".", ".."}:
@@ -85,53 +102,7 @@ def _validate_plan_filename_stem(name: str, *, command: str) -> str:
     return name
 
 
-def _load_planner_startup_prompt(cfg: PlannerConfig, plan_name: str) -> str:
-    tpl = (cfg.startup_prompt_template or "planner.md").removesuffix(".md")
-    try:
-        return render(tpl, plan_name=plan_name)
-    except (KeyError, IndexError, ValueError):
-        return load(tpl)
-
-
 CONFLICT_PREVIEW_LIMIT = 5
-
-
-def _compose_crow_brief(rt: OrchestratorHost, ticket_id: str) -> str:
-    row = _db_get_ticket(rt.db, ticket_id)
-    if row is None:
-        raise KeyError(ticket_id)
-    harness_name = resolve_default_crow_harness(rt.config.default_crow, row)
-    tpl_name = (
-        rt.config.default_crow.startup_prompt_template or f"crow_{harness_name}.md"
-    ).removesuffix(".md")
-    try:
-        system = load(tpl_name)
-    except OSError:
-        system = load("crow_cursor")
-    lines = [
-        system,
-        "",
-        "## Ticket metadata",
-        f"- id: {row['id']}",
-        f"- title: {row['title']}",
-        f"- wave: {row['wave']}",
-        f"- harness: {harness_name}",
-        "",
-        "## Dependencies",
-        ", ".join(row.get("deps") or []) or "(none)",
-        "",
-        "## Write set",
-        "\n".join(f"- {p}" for p in (row.get("write_set") or [])) or "(empty)",
-        "",
-        "## Skills",
-        "\n".join(f"- {s}" for s in (row.get("skills") or [])) or "(none)",
-        "",
-        "## Checklist",
-    ]
-    for c in row.get("checklist") or []:
-        mark = "x" if c.get("done") else " "
-        lines.append(f"- [{mark}] {c.get('text', '')}")
-    return "\n".join(lines)
 
 
 def _format_write_set_conflicts(conflicts: list[tuple[str, str, set[str]]]) -> str:
@@ -200,13 +171,19 @@ class Orchestrator:
                 return []
         kicked: list[str] = []
         for tid in to_start:
+            row = _db_get_ticket(conn, tid)
+            if row is None:
+                continue
+            ticket_status = str(row.get("status") or "")
             running = conn.execute(
                 "SELECT 1 FROM agents WHERE ticket_id = ? AND role IN ('crow','crow_handler') "
                 "AND status IN ('running','idle')",
                 (tid,),
             ).fetchone()
-            if running:
-                continue
+            if running is not None:
+                if ticket_status == TicketStatus.IN_PROGRESS.value:
+                    continue
+                await self._reap_ticket_crow_agents(tid)
             prev = lifecycle.transition(conn, tid, TicketStatus.IN_PROGRESS)
             await self._emit_ticket_status(tid, prev, TicketStatus.IN_PROGRESS.value)
             try:
@@ -231,6 +208,14 @@ class Orchestrator:
             crow = self.rt.get_crow(tid)
             assert crow is not None
             await self.spawn_crow_handler(tid, crow.session)
+            from murder.persistence.tickets import get_ticket_status
+
+            if get_ticket_status(conn, tid) != TicketStatus.IN_PROGRESS.value:
+                await self._fail_ticket(
+                    tid,
+                    f"kickoff status drift: expected in_progress, got {get_ticket_status(conn, tid)}",
+                )
+                continue
             kicked.append(tid)
         return kicked
 
@@ -332,16 +317,26 @@ class Orchestrator:
         startup_model = resolve_default_crow_startup_model(
             self.rt.config.default_crow, row, harness_kind
         )
+        startup_effort = resolve_default_crow_startup_effort(self.rt.config.default_crow, row)
         worktree_path: str | None = None
         if self.rt.config.runtime.use_worktrees:
             worktree = await ensure_crow_worktree(self.rt.repo_root, ticket_id)
             worktree_path = str(worktree.path)
-        brief = _compose_crow_brief(self.rt, ticket_id)
+        ctx = BriefContext(
+            role=AgentRole.CROW,
+            repo_root=self.rt.repo_root,
+            caps=capabilities_for(harness_kind),
+            harness_name=harness_kind,
+            model=None,
+            ticket=dict(row),
+        )
+        brief = assembler_for(ctx).build(ctx)
         spec = AgentSpec(
             role=AgentRole.CROW,
             scope=AgentScope(ticket_id=ticket_id, worktree_path=worktree_path),
             harness=harness_kind,
             model=startup_model,
+            effort=startup_effort,
             startup_prompt=brief,
         )
         handle = await spawn_agent(spec, rt=self.rt, event_sink=self.rt.event_sink)
@@ -355,7 +350,12 @@ class Orchestrator:
         startup_model = resolve_default_crow_startup_model(
             self.rt.config.default_crow, row, harness_kind
         )
-        harness = get_harness(harness_kind, startup_model=startup_model)
+        startup_effort = resolve_default_crow_startup_effort(self.rt.config.default_crow, row)
+        harness = get_harness(
+            harness_kind,
+            startup_model=startup_model,
+            startup_effort=startup_effort,
+        )
         session = format_session_name(self.rt, "crow_handler", f"_{ticket_id}")
         client = resolve_role_client(self.rt.config.crow_handler)
         crow_agent = self.rt.get_crow(ticket_id)
@@ -399,6 +399,113 @@ class Orchestrator:
         self.rt.register_agent(handler)
         await handler.start("", {})
         return handler_id
+
+    async def spawn_rogue(
+        self,
+        harness: str,
+        model: str,
+        effort: str | None = None,
+        name: str | None = None,
+        *,
+        worktree_path: str | None = None,
+        worktree_branch: str | None = None,
+    ) -> str:
+        """Start a ticketless crow session; inject model selection when supported."""
+        harness_kind = harness.strip()
+        if not harness_kind:
+            raise ValueError("spawn_rogue requires harness")
+
+        slug = _rogue_slug(name)
+        agent_id = f"rogue-{slug}"
+        while self.rt.get_agent(agent_id) is not None:
+            agent_id = f"rogue-{uuid4().hex[:8]}"
+
+        session_name = format_session_name(self.rt, "crow", f"_rogue_{slug}")
+        startup_model = model.strip() or None
+        startup_effort = effort.strip() if isinstance(effort, str) and effort.strip() else None
+        harness_adapter = get_harness(
+            harness_kind,
+            startup_model=startup_model,
+            startup_effort=startup_effort,
+        )
+
+        cwd = self.rt.repo_root
+        resolved_worktree: Path | None = None
+        if isinstance(worktree_branch, str) and worktree_branch.strip():
+            ref = await ensure_named_worktree(
+                self.rt.repo_root,
+                worktree_branch.strip(),
+                category="rogue",
+            )
+            cwd = ref.path
+            resolved_worktree = ref.path
+        elif isinstance(worktree_path, str) and worktree_path.strip():
+            path = Path(worktree_path.strip())
+            if not path.is_absolute():
+                path = self.rt.repo_root / path
+            cwd = path
+            resolved_worktree = path
+
+        agent = CrowAgent(
+            agent_id=agent_id,
+            ticket_id=None,
+            session=session_name,
+            harness=harness_adapter,
+            repo_root=cwd,
+            startup_model=startup_model,
+            startup_effort=startup_effort,
+            worktree_path=resolved_worktree,
+            runtime=self.rt,
+        )
+
+        self.rt.register_agent(agent)
+        start_spec = HarnessStartSpec(
+            cwd=cwd,
+            startup_model=startup_model,
+            startup_effort=startup_effort,
+        )
+        try:
+            start_result = await agent.harness_session.start(start_spec)
+            if not start_result.ok:
+                raise RuntimeError(start_result.message or "harness startup failed")
+            agent.status = AgentStatus.RUNNING
+            self.rt.sync_agent(agent)
+        except BaseException:
+            await self.rt.reap(agent_id)
+            raise
+        return agent_id
+
+    async def spawn_rogue_command(self, payload: dict[str, Any]) -> dict[str, Any]:
+        harness = payload.get("harness")
+        model = payload.get("model")
+        effort = payload.get("effort")
+        name = payload.get("name")
+        worktree_path = payload.get("worktree_path")
+        worktree_branch = payload.get("worktree_branch")
+        if not isinstance(harness, str) or not harness.strip():
+            raise ValueError("crow.spawn_rogue requires harness")
+        if not isinstance(model, str):
+            raise ValueError("crow.spawn_rogue requires model")
+        if effort is not None and not isinstance(effort, str):
+            raise ValueError("crow.spawn_rogue effort must be a string")
+        if worktree_path is not None and not isinstance(worktree_path, str):
+            raise ValueError("crow.spawn_rogue worktree_path must be a string")
+        if worktree_branch is not None and not isinstance(worktree_branch, str):
+            raise ValueError("crow.spawn_rogue worktree_branch must be a string")
+        rogue_name = name.strip() if isinstance(name, str) and name.strip() else None
+        agent_id = await self.spawn_rogue(
+            harness.strip(),
+            model,
+            effort,
+            rogue_name,
+            worktree_path=worktree_path.strip()
+            if isinstance(worktree_path, str) and worktree_path.strip()
+            else None,
+            worktree_branch=worktree_branch.strip()
+            if isinstance(worktree_branch, str) and worktree_branch.strip()
+            else None,
+        )
+        return {"handled": True, "agent_id": agent_id}
 
     async def start_question_listener(self) -> None:
         """Subscribe to QuestionEvents on the bus and route to the per-plan planning agent.
@@ -455,12 +562,21 @@ class Orchestrator:
                     await self.spawn_planning_handler(plan_name, agent.session)
                 return agent_id
             cfg = self.rt.config.planner
-            startup_prompt = _load_planner_startup_prompt(cfg, plan_name)
+            ctx = BriefContext(
+                role=AgentRole.PLANNER,
+                repo_root=self.rt.repo_root,
+                caps=capabilities_for(cfg.harness),
+                harness_name=cfg.harness,
+                model=None,
+                plan_name=plan_name,
+            )
+            startup_prompt = assembler_for(ctx).build(ctx)
             spec = AgentSpec(
                 role=AgentRole.PLANNER,
                 scope=AgentScope(plan_name=plan_name),
                 harness=cfg.harness,
                 model=cfg.startup_model,
+                effort=cfg.startup_effort,
                 startup_prompt=startup_prompt,
             )
             handle = await spawn_agent(spec, rt=self.rt, event_sink=self.rt.event_sink)
@@ -488,9 +604,69 @@ class Orchestrator:
             if agent is None or not await self._agent_is_live(agent):
                 await self.ensure_planning_agent(plan_name)
                 agent = self.rt.get_agent(agent_id)
+        if agent_id.startswith("crow-"):
+            ticket_id = agent_id[len("crow-") :]
+            if not ticket_id:
+                return {"handled": False, "error": "crow agent_id requires a ticket id"}
+            handler = self.rt.get_crow_handler(ticket_id)
+            if handler is not None:
+                queue_result = await handler.queue_message(message)
+                return {"handled": True, **queue_result}
         if agent is None:
             return {"handled": False, "error": f"no agent named {agent_id}"}
         await agent.send(message)
+        return {"handled": True, "queued": False}
+
+    async def send_agent_key(
+        self, agent_id: str | None, key: str, *, literal: bool = False
+    ) -> dict[str, Any]:
+        """Send a raw tmux key (name or literal text) to an agent harness pane."""
+        if agent_id is None:
+            agent_id = await self.ensure_collaborator()
+
+        agent = self.rt.get_agent(agent_id)
+        if agent_id.startswith("planner-"):
+            plan_name = agent_id[len("planner-") :]
+            if not plan_name:
+                return {"handled": False, "error": "planner agent_id requires a plan name"}
+            if agent is None or not await self._agent_is_live(agent):
+                await self.ensure_planning_agent(plan_name)
+                agent = self.rt.get_agent(agent_id)
+        if agent is None:
+            return {"handled": False, "error": f"no agent named {agent_id}"}
+
+        session = getattr(agent, "session", None)
+        if not isinstance(session, str) or not session:
+            return {"handled": False, "error": f"agent {agent_id} has no tmux session"}
+
+        await tmux.send_keys(session, key, literal=literal, enter=False)
+        return {
+            "handled": True,
+            "agent_id": agent_id,
+            "session": session,
+            "key": key,
+            "literal": literal,
+        }
+
+    async def interrupt_agent(self, agent_id: str) -> dict[str, Any]:
+        if agent_id.startswith("rogue-"):
+            agent = self.rt.get_agent(agent_id)
+            if agent is None:
+                return {"handled": False, "error": f"no agent named {agent_id}"}
+            harness_session = getattr(agent, "harness_session", None)
+            if harness_session is None:
+                return {"handled": False, "error": f"agent {agent_id} has no harness session"}
+            await harness_session.interrupt()
+            return {"handled": True}
+        if not agent_id.startswith("crow-"):
+            return {"handled": False, "error": "interrupt is only supported for crow agents"}
+        ticket_id = agent_id[len("crow-") :]
+        if not ticket_id:
+            return {"handled": False, "error": "crow agent_id requires a ticket id"}
+        handler = self.rt.get_crow_handler(ticket_id)
+        if handler is None:
+            return {"handled": False, "error": f"no crow_handler for {ticket_id}"}
+        await handler.interrupt_crow()
         return {"handled": True}
 
     async def _agent_is_live(self, agent: Any) -> bool:
@@ -685,17 +861,21 @@ class Orchestrator:
                     with contextlib.suppress(Exception):
                         await tmux.kill_session(row["session"])
                 _db_set_agent_status(self.rt.db, agent_id, "dead")
-        tpl_raw = self.rt.config.collaborator.startup_prompt_template or "collaborator.md"
-        tpl = tpl_raw.removesuffix(".md")
-        try:
-            body = render(tpl, project_name=self.rt.config.project.name)
-        except (KeyError, IndexError, ValueError):
-            body = load(tpl)
+        collab_cfg = self.rt.config.collaborator
+        ctx = BriefContext(
+            role=AgentRole.COLLABORATOR,
+            repo_root=self.rt.repo_root,
+            caps=capabilities_for(collab_cfg.harness),
+            harness_name=collab_cfg.harness,
+            model=None,
+        )
+        body = assembler_for(ctx).build(ctx)
         spec = AgentSpec(
             role=AgentRole.COLLABORATOR,
             scope=AgentScope(),
-            harness=self.rt.config.collaborator.harness,
-            model=self.rt.config.collaborator.startup_model,
+            harness=collab_cfg.harness,
+            model=collab_cfg.startup_model,
+            effort=collab_cfg.startup_effort,
             startup_prompt=body,
         )
         try:
@@ -751,8 +931,7 @@ class Orchestrator:
         assert self.rt.db is not None
         cascaded = lifecycle.reopen(self.rt.db, ticket_id)
         for tid in {ticket_id, *cascaded}:
-            await self.rt.reap(f"crow-{tid}")
-            await self.rt.reap(f"crow_handler-{tid}")
+            await self._reap_ticket_crow_agents(tid)
         return list(cascaded)
 
     async def retry_failed_ticket(self, ticket_id: str) -> dict[str, Any]:
@@ -760,8 +939,7 @@ class Orchestrator:
         assert self.rt.db is not None
         prev = lifecycle.transition(self.rt.db, ticket_id, TicketStatus.PLANNED, reason="retry")
         lifecycle.clear_last_error(self.rt.db, ticket_id)
-        await self.rt.reap(f"crow-{ticket_id}")
-        await self.rt.reap(f"crow_handler-{ticket_id}")
+        await self._reap_ticket_crow_agents(ticket_id)
         await self._emit_ticket_status(ticket_id, prev, TicketStatus.PLANNED.value)
         return {"handled": True, "ticket_id": ticket_id, "prev_status": prev.value}
 
@@ -798,7 +976,10 @@ class Orchestrator:
         if schedule_at is not None:
             schedule_at = str(schedule_at).strip() or None
         deps = [str(d) for d in (payload.get("deps") or [])]
-        skills = [str(s) for s in (payload.get("skills") or [])]
+        if "skills" in payload:
+            skills = [str(s) for s in (payload.get("skills") or [])]
+        else:
+            skills = [str(s) for s in (row.get("skills") or [])]
         write_set = [str(p) for p in (payload.get("write_set") or [])]
         checklist = [str(c) for c in (payload.get("checklist") or [])]
         with self.rt.db:
@@ -838,10 +1019,22 @@ class Orchestrator:
         except ValueError:
             prev = TicketStatus.PLANNED
         await self._emit_ticket_status(ticket_id, prev, status)
-        if self.rt.db is not None and status in {"done", "failed", "archived"}:
-            with contextlib.suppress(Exception):
-                await prune_terminal_crow_worktree(self.rt.db, self.rt.repo_root, ticket_id)
+        if status in (
+            TicketStatus.DONE.value,
+            TicketStatus.FAILED.value,
+            TicketStatus.ARCHIVED.value,
+        ):
+            await self._reap_ticket_crow_agents(ticket_id)
+            if self.rt.db is not None:
+                with contextlib.suppress(Exception):
+                    await prune_terminal_crow_worktree(
+                        self.rt.db, self.rt.repo_root, ticket_id
+                    )
         return {"handled": True, "ok": True, "ticket_id": ticket_id, "prev_status": prev_str}
+
+    async def _reap_ticket_crow_agents(self, ticket_id: str) -> None:
+        await self.rt.reap(f"crow-{ticket_id}")
+        await self.rt.reap(f"crow_handler-{ticket_id}")
 
     async def on_writeset_violation(self, ticket_id: str, path: str) -> None:
         if self.rt.db is None:

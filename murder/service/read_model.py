@@ -25,6 +25,9 @@ from murder.service.client_api import (
     PlanDisplaySnapshot,
     PlansSnapshot,
     PlanSummary,
+    ReportDisplaySnapshot,
+    ReportsSnapshot,
+    ReportSummary,
     ScheduleSnapshot,
     TicketCarveSnapshot,
     TicketDetailSnapshot,
@@ -36,6 +39,7 @@ from murder.service.schedule_snapshot import (
     build_schedule_snapshot,
     build_usage_gauge_drill_in,
 )
+from murder.storage.paths import reports_dir
 from murder.tickets.parser import read_ticket_md
 from murder.tickets.status import TicketStatus
 
@@ -135,6 +139,28 @@ class ServiceReadModel:
             notes=notes,
             as_of=as_of,
             invalidation_key=self.current_key(InvalidationKeys.notes),
+        )
+
+    def get_reports_snapshot(self) -> ReportsSnapshot:
+        as_of = datetime.utcnow()
+        root = reports_dir(self.db_path.parent.parent)
+        root.mkdir(parents=True, exist_ok=True)
+        reports = tuple(
+            ReportSummary(
+                name=path.stem,
+                char_count=path.stat().st_size,
+                updated_at=datetime.fromtimestamp(path.stat().st_mtime),
+            )
+            for path in sorted(
+                root.glob("*.md"),
+                key=lambda candidate: (-candidate.stat().st_mtime, candidate.name),
+            )
+            if path.is_file()
+        )
+        return ReportsSnapshot(
+            reports=reports,
+            as_of=as_of,
+            invalidation_key=self.current_key(InvalidationKeys.reports),
         )
 
     def get_ticket_detail(self, ticket_id: str) -> TicketDetailSnapshot:
@@ -316,6 +342,13 @@ class ServiceReadModel:
             text = str(row["body"])
         return NoteDisplaySnapshot(name=name, markdown=text)
 
+    def get_report_display(self, name: str) -> ReportDisplaySnapshot | None:
+        path = reports_dir(self.db_path.parent.parent) / f"{name}.md"
+        if not path.exists() or not path.is_file():
+            return None
+        text = path.read_text(encoding="utf-8")
+        return ReportDisplaySnapshot(name=name, markdown=text)
+
     def get_usage_gauge_drill_in(
         self,
         *,
@@ -343,9 +376,6 @@ class ServiceReadModel:
                 "SELECT id, title FROM tickets WHERE id != ? ORDER BY wave, id",
                 (ticket_id,),
             ).fetchall()
-            skill_rows = conn.execute(
-                "SELECT DISTINCT skill FROM ticket_skills ORDER BY skill"
-            ).fetchall()
         fields: dict[str, object] = {
             "status": ticket.status.value,
             "title": ticket.title,
@@ -354,7 +384,6 @@ class ServiceReadModel:
             "harness": ticket.harness,
             "model": ticket.model,
             "deps": list(ticket.deps),
-            "skills": list(ticket.skills),
             "write_set": list(ticket.write_set),
             "checklist": [
                 {"text": item.text, "done": item.done} for item in ticket.checklist
@@ -368,7 +397,6 @@ class ServiceReadModel:
                 TicketRef(id=str(r["id"]), title=str(r["title"] or r["id"]))
                 for r in dep_rows
             ),
-            known_skills=tuple(str(r["skill"]) for r in skill_rows),
         )
 
     def get_ticket_status(self, ticket_id: str) -> str | None:

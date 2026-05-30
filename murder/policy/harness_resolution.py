@@ -52,8 +52,22 @@ def resolve_default_crow_startup_model(
     return crow_cfg.startup_model
 
 
+def resolve_default_crow_startup_effort(
+    crow_cfg: HarnessRoleConfig,
+    ticket_row: Mapping[str, Any] | None,
+) -> str | None:
+    overt = (ticket_row or {}).get("effort")
+    if overt:
+        return str(overt)
+    overt = (ticket_row or {}).get("reasoning_effort")
+    if overt:
+        return str(overt)
+    return crow_cfg.startup_effort
+
+
 __all__ = [
     "resolve_default_crow_harness",
+    "resolve_default_crow_startup_effort",
     "resolve_default_crow_startup_model",
     "stable_bucket_index",
 ]

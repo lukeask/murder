@@ -62,9 +62,11 @@ class CrowHandler(Agent):
         self._last_pane_hash: str | None = None
         self._last_summary: str | None = None
         self._idle_cached = False
+        self._queued_message: str | None = None
         self._on_idle_callbacks: list[asyncio.Future[None]] = []
         self._poll_task: asyncio.Task[None] | None = None
         self._done_pane_hash: str | None = None
+        self._artifact_retry_paths: tuple[Path, ...] | None = None
         self._log_path: Path | None = None
         self._terminal_failure = False
 
@@ -138,8 +140,22 @@ class CrowHandler(Agent):
             self.runtime.sync_agent(self)
 
     async def send(self, msg: str) -> None:
-        text = self.harness.format_nudge(msg)
-        await self.harness.send_prompt(self.crow_session, text)
+        await self.harness.send_prompt(self.crow_session, msg)
+
+    @property
+    def pending_message(self) -> str | None:
+        return self._queued_message
+
+    async def queue_message(self, msg: str) -> dict[str, bool]:
+        """Deliver now if the crow is idle; otherwise hold until the next idle tick."""
+        if self.is_crow_idle():
+            await self.send(msg)
+            return {"queued": False}
+        self._queued_message = msg
+        return {"queued": True}
+
+    async def interrupt_crow(self) -> None:
+        await self.harness.interrupt(self.crow_session)
 
     def _fire_idle_callbacks_if_idle(self) -> None:
         if not self._idle_cached:
@@ -168,11 +184,21 @@ class CrowHandler(Agent):
             QuestionEvent,
             SummaryEvent,
         )
+        from murder.completion.checks.artifact import write_set_artifacts_present
         from murder.storage.paths import ticket_md
         from murder.tickets import parser as ticket_parser
 
         if self.runtime.db is None or self.runtime.bus is None or self.runtime.run_id is None:
             return
+
+        pane = await tmux.capture_pane(self.crow_session, lines=self.config.context_lines)
+
+        if self._artifact_retry_paths is not None:
+            if write_set_artifacts_present(self.repo_root, list(self._artifact_retry_paths)):
+                self._artifact_retry_paths = None
+                if self.harness.detect_done(pane):
+                    await self._run_completion(retry_artifact=True)
+                    return
 
         # Stop if ticket reached a terminal state via any path (escalation,
         # manual edit, supervisor recovery) not just our own done detection.
@@ -182,8 +208,12 @@ class CrowHandler(Agent):
             asyncio.create_task(self.stop())
             return
 
-        pane = await tmux.capture_pane(self.crow_session, lines=self.config.context_lines)
+        was_idle = self._idle_cached
         self._idle_cached = self.harness.is_idle(pane)
+        if self._idle_cached and not was_idle and self._queued_message is not None:
+            queued = self._queued_message
+            self._queued_message = None
+            await self.send(queued)
         self._fire_idle_callbacks_if_idle()
 
         h = hashlib.sha256(pane.encode("utf-8", errors="replace")).hexdigest()
@@ -213,13 +243,7 @@ class CrowHandler(Agent):
         current_hash = hashlib.sha256(pane.encode("utf-8", errors="replace")).hexdigest()
         if self.harness.detect_done(pane) and current_hash != self._done_pane_hash:
             self._done_pane_hash = current_hash
-            self._log(f"crow done detected for {self.ticket_id} — running completion checks…")
-            await self.coordinator.handle_done(
-                self.ticket_id,
-                crow_session=self.crow_session,
-                start_commit=self._start_commit,
-                repo_root=self.workspace_root,
-            )
+            await self._run_completion()
             return
 
         excerpt = self.harness.extract_last_message(pane) or ""
@@ -265,6 +289,47 @@ class CrowHandler(Agent):
                 )
             )
         heartbeat_agent(self.runtime.db, self.id)
+
+    async def _run_completion(self, *, retry_artifact: bool = False) -> None:
+        from murder.completion.coordinator import DoneHandleResult
+        from murder.persistence.tickets import get_ticket as _db_get_ticket
+        from murder.persistence.tickets import get_ticket_status
+        from murder.tickets.status import TicketStatus
+
+        if retry_artifact:
+            self._log(
+                f"write_set artefacts appeared for {self.ticket_id} — "
+                "re-running completion checks…"
+            )
+        else:
+            self._log(f"crow done detected for {self.ticket_id} — running completion checks…")
+        result = await self.coordinator.handle_done(
+            self.ticket_id,
+            crow_session=self.crow_session,
+            start_commit=self._start_commit,
+            repo_root=self.workspace_root,
+        )
+        if not isinstance(result, DoneHandleResult):
+            return
+        if result.completed:
+            return
+        if "artifact" not in result.failed_checks:
+            return
+        if self.runtime.db is None:
+            return
+        if get_ticket_status(self.runtime.db, self.ticket_id) != TicketStatus.IN_PROGRESS.value:
+            return
+        row = _db_get_ticket(self.runtime.db, self.ticket_id)
+        if row is None:
+            return
+        paths = tuple(Path(p) for p in (row.get("write_set") or []))
+        if not paths:
+            return
+        self._artifact_retry_paths = paths
+        self._done_pane_hash = None
+        self._log(
+            f"artifact check failed for {self.ticket_id} — watching write_set for late files"
+        )
 
     def is_crow_idle(self) -> bool:
         return self._idle_cached

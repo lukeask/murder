@@ -35,9 +35,7 @@ class ModeStrip(Static):
     ModeStrip {
         height: 2;
         color: $text-muted;
-    }
-    ModeStrip:focus {
-        background: $boost;
+        border: solid $border;
     }
     """
 

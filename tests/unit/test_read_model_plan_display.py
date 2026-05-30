@@ -8,7 +8,7 @@ from murder.plans.parser import render
 from murder.plans.schema import Plan, PlanStatus
 from murder.plans.sync import content_hash
 from murder.service.read_model import ServiceReadModel
-from murder.storage.paths import db_path, plan_md
+from murder.storage.paths import db_path, plan_md, report_md, reports_dir
 
 
 def test_get_plan_display_reads_repo_relative_materialized_path(repo_root) -> None:
@@ -44,3 +44,31 @@ def test_get_plan_display_reads_repo_relative_materialized_path(repo_root) -> No
     assert display is not None
     assert display.markdown == text
     assert "Missing materialized file" not in display.markdown
+
+
+def test_get_reports_snapshot_lists_markdown_reports(repo_root) -> None:
+    conn = get_db(db_path(repo_root))
+    init_db(conn)
+    conn.close()
+    reports_dir(repo_root).mkdir(parents=True, exist_ok=True)
+    report_md(repo_root, "first").write_text("# First\n\nbody\n", encoding="utf-8")
+    (reports_dir(repo_root) / "ignore.txt").write_text("not a report", encoding="utf-8")
+
+    snapshot = ServiceReadModel(db_path(repo_root)).get_reports_snapshot()
+
+    assert [report.name for report in snapshot.reports] == ["first"]
+    assert snapshot.reports[0].char_count > 0
+
+
+def test_get_report_display_reads_report_markdown(repo_root) -> None:
+    conn = get_db(db_path(repo_root))
+    init_db(conn)
+    conn.close()
+    reports_dir(repo_root).mkdir(parents=True, exist_ok=True)
+    text = "# Report\n\nvisible content\n"
+    report_md(repo_root, "weekly").write_text(text, encoding="utf-8")
+
+    display = ServiceReadModel(db_path(repo_root)).get_report_display("weekly")
+
+    assert display is not None
+    assert display.markdown == text

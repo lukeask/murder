@@ -1,0 +1,47 @@
+# source: tools/testing/recordings/20260523-215643/frames.jsonl frame 22
+user@machine:~/Documents/code/murder $ agent
+
+
+  Cursor Agent
+  v2026.05.20-2b5dd59
+  Use /debug to instrument and debug complex problems.
+
+
+ ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+  → Plan, search, build anything
+ ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+ Available models
+
+ Filter:
+
+   Auto
+ → Composer 2.5             (Tab to modify)
+   Composer 2
+   GPT-5.5                  272K Medium
+   Codex 5.3                Medium
+   Sonnet 4.6               (Thinking) 200K Medium
+   Opus 4.7                 (Thinking) 300K High
+   Grok Build 0.1           200K
+   GPT-5.4                  272K Medium
+   Opus 4.6                 (Thinking) 200K High
+
+ 1-10 of 27
+
+ Type to filter • Enter to select • Tab to edit
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

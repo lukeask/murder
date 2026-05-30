@@ -20,12 +20,13 @@ class CrowAgent(Agent):
     def __init__(
         self,
         agent_id: str,
-        ticket_id: str,
+        ticket_id: str | None,
         session: str,
         harness: HarnessAdapter,
         repo_root: Path,
         *,
         startup_model: str | None = None,
+        startup_effort: str | None = None,
         worktree_path: Path | None = None,
         runtime: Runtime | None = None,
     ) -> None:
@@ -36,6 +37,7 @@ class CrowAgent(Agent):
         self.repo_root = Path(repo_root)
         self.worktree_path = Path(worktree_path) if worktree_path is not None else None
         self.startup_model = startup_model
+        self.startup_effort = startup_effort
         self.runtime = runtime
         self.status = AgentStatus.IDLE
         self.start_commit: str | None = None
@@ -46,7 +48,11 @@ class CrowAgent(Agent):
         from murder.enforcement import git_diff
 
         start_result = await self.harness_session.start(
-            HarnessStartSpec(cwd=self.repo_root, startup_model=self.startup_model)
+            HarnessStartSpec(
+                cwd=self.repo_root,
+                startup_model=self.startup_model,
+                startup_effort=self.startup_effort,
+            )
         )
         if not start_result.ok:
             self.status = AgentStatus.FAILED
@@ -92,5 +98,4 @@ class CrowAgent(Agent):
             self.runtime.sync_agent(self)
 
     async def send(self, msg: str) -> None:
-        text = self.harness.format_nudge(msg)
-        await self.harness_session.send_prompt(text)
+        await self.harness_session.send_prompt(msg)

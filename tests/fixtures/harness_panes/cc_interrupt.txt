@@ -1,0 +1,40 @@
+# source: tools/testing/recordings/20260526-110300-claude-interrupt-haiku/frames.jsonl frame 27
+ ▐▛███▜▌   Claude Code v2.1.150
+▝▜█████▛▘  Haiku 4.5 · Claude Pro
+  ▘▘ ▝▝    ~/Documents/code/testingmurderharness
+
+❯ List every file in this repository recursively and write a detailed one-paragraph summary of each file. Include all
+  source files, configs, tests, and READMEs. Read every file completely before summarizing. Do not skip any directory.
+
+● I'll recursively explore this repository and provide detailed summaries of every file.
+  ⎿  Interrupted · What should Claude do instead?
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ 
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← for agents
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

@@ -17,9 +17,12 @@ from murder.harnesses.base import (
     HarnessAdapter,
     UsageCollectionMode,
 )
-from murder.harnesses.models import HarnessUsageStatus
+from murder.harnesses.models import HarnessModelState, HarnessUsageStatus
 from murder.harnesses.parsing import (
     extract_last_message_heuristic,
+    normalize_effort,
+    parse_numbered_effort_choices,
+    parse_numbered_model_choices,
     strip_ansi,
 )
 from murder.harnesses.results import SimpleResult, fail_result, ok_result
@@ -46,6 +49,7 @@ _STATUS_DISMISS_DELAY_S = 0.1
 _MODEL_STARTUP_SETTLE_DELAY_S = 1.5
 _MODEL_COMMAND_POPUP_DELAY_S = 0.5
 _MODEL_CAPTURE_DELAY_S = 3.0
+_MODEL_STEP_DELAY_S = 0.6
 _PROMPT_SUBMIT_DELAY_S = 0.2
 # Codex inline composer expects Tab+Enter after each bracketed paste; long prompts
 # must be split into multiple tmux pastes so each segment gets its own confirmation.
@@ -84,6 +88,7 @@ class CodexAdapter(HarnessAdapter):
     # parser handles. The modal needs a beat to render, so capture late.
     model_list_command: ClassVar[str | None] = "/model"
     model_list_capture_delay_s: ClassVar[float] = 3.0
+    supported_efforts: ClassVar[tuple[str, ...]] = ("low", "medium", "high", "xhigh")
     # Transcript parsing (best-effort; fixture: tests/fixtures/harness_panes/
     # codex_transcript.txt). Codex echoes the submitted prompt on a "› …" line;
     # the reply follows on "• …" lines. The footer placeholder ("Find and fix
@@ -109,6 +114,7 @@ class CodexAdapter(HarnessAdapter):
     ]
 
     def startup_cmd(self, cwd: Path) -> list[str]:
+        del cwd
         cmd = [
             "codex",
             "--no-alt-screen",
@@ -117,8 +123,6 @@ class CodexAdapter(HarnessAdapter):
             "--ask-for-approval",
             "never",
         ]
-        if self.startup_model:
-            cmd.extend(["--model", self.startup_model])
         return cmd
 
     def is_ready(self, pane_text: str) -> bool:
@@ -155,9 +159,69 @@ class CodexAdapter(HarnessAdapter):
             await tmux.send_keys(session, "Tab", literal=False, enter=False)
             await tmux.send_keys(session, "", literal=True, enter=True)
 
-    async def set_model(self, session: str, model: str) -> bool:
-        del session
-        return model == self.startup_model
+    async def set_model(self, session: str, model: str, *, effort: str | None = None) -> bool:
+        await self.request_model_list(session)
+        pane = await tmux.capture_pane(session, lines=200)
+        choices = parse_numbered_model_choices(pane)
+        choice = next((c for c in choices if c.model_id == model), None)
+        if choice is None or choice.index is None:
+            await tmux.send_keys(session, "Escape", literal=False, enter=False)
+            return False
+
+        await tmux.send_keys(session, str(choice.index), literal=True, enter=False)
+        await asyncio.sleep(_MODEL_STEP_DELAY_S)
+
+        desired_effort = normalize_effort(effort) if effort else self.default_effort
+        if desired_effort is not None:
+            effort_pane = await tmux.capture_pane(session, lines=200)
+            effort_choices = parse_numbered_effort_choices(effort_pane)
+            effort_choice = next((c for c in effort_choices if c.effort == desired_effort), None)
+            if effort_choice is not None and effort_choice.index is not None:
+                await tmux.send_keys(session, str(effort_choice.index), literal=True, enter=False)
+                await asyncio.sleep(_MODEL_STEP_DELAY_S)
+
+        pane = await tmux.capture_pane(session, lines=200)
+        state = self.parse_active_model_state(pane)
+        if state is None:
+            return False
+        if state.model != model:
+            return False
+        if desired_effort is not None and state.effort != desired_effort:
+            return False
+        return True
+
+    def parse_active_model_state(self, pane_text: str) -> HarnessModelState | None:
+        clean = strip_ansi(pane_text)
+        patterns = (
+            re.compile(
+                r"\bmodel:\s*(?P<model>[A-Za-z0-9][A-Za-z0-9._:+/-]*)\s+"
+                r"(?P<effort>low|medium|high|extra\s+high|xhigh)\b",
+                re.IGNORECASE,
+            ),
+            re.compile(
+                r"^\s*(?P<model>[A-Za-z0-9][A-Za-z0-9._:+/-]*)\s+"
+                r"(?P<effort>low|medium|high|extra\s+high|xhigh)\s+·\s",
+                re.IGNORECASE | re.MULTILINE,
+            ),
+            re.compile(
+                r"\bModel changed to\s+(?P<model>[A-Za-z0-9][A-Za-z0-9._:+/-]*)\s+"
+                r"(?P<effort>low|medium|high|extra\s+high|xhigh)\b",
+                re.IGNORECASE,
+            ),
+        )
+        for pattern in patterns:
+            matches = list(pattern.finditer(clean))
+            if not matches:
+                continue
+            match = matches[-1]
+            return HarnessModelState(
+                model=match.group("model"),
+                effort=normalize_effort(match.group("effort")),
+            )
+        return None
+
+    async def interrupt(self, session: str) -> None:
+        await self.interrupt_generation(session)
 
     async def request_model_list(self, session: str) -> bool:
         # TODO: Replace this fixed delay with a pane-state wait for Codex to
