@@ -386,6 +386,9 @@ def test_set_model_succeeds_when_model_matches_startup(fake_tmux: FakeTmux):
 
 
 def test_set_model_cursor_sends_slash_model_command(fake_tmux: FakeTmux):
+    fake_tmux.queue_pane(
+        "  → Plan, search, build anything\n  GPT-5.5   Auto-run\n  ~/repo · main\n"
+    )
     hs = _make_session(CursorAdapter())
 
     result = asyncio.run(hs.set_model("gpt-5.5"))

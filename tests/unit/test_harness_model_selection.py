@@ -23,6 +23,7 @@ from murder.harnesses.claude_code import ClaudeCodeAdapter
 from murder.harnesses.codex import CodexAdapter
 from murder.harnesses.cursor import CursorAdapter
 from murder.harnesses.parsing import (
+    parse_antigravity_model_choices,
     parse_claude_code_model_choices,
     parse_harness_model_list,
     parse_numbered_effort_choices,
@@ -240,6 +241,19 @@ def test_codex_model_list_command_is_slash_model():
 
 def test_pi_model_list_command_is_slash_model():
     assert PiAdapter.model_list_command == "/model"
+
+
+def test_antigravity_model_list_command_is_slash_model():
+    from murder.harnesses.antigravity import AntigravityAdapter
+
+    assert AntigravityAdapter.model_list_command == "/model"
+
+
+def test_antigravity_picker_slugs_gemini_pro_low():
+    choices = parse_antigravity_model_choices(_pane("agy_model_picker.txt"))
+    by_id = {choice.model_id: choice for choice in choices}
+    assert "gemini-3-1-pro" in by_id
+    assert "gemini-3-5-flash" in by_id
 
 
 # ─────────────────────────────────────────────────────────────────────────────
