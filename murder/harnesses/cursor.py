@@ -26,25 +26,32 @@ import re
 from pathlib import Path
 from typing import ClassVar
 
-from murder.terminal import tmux
 from murder.harnesses import cursor_usage
 from murder.harnesses.base import (
     HarnessAdapter,
     UsageCollectionMode,
 )
-from murder.harnesses.models import HarnessStartSpec, HarnessUsageStatus
+from murder.harnesses.models import HarnessModelState, HarnessStartSpec, HarnessUsageStatus
 from murder.harnesses.parsing import (
     extract_last_message_heuristic,
     is_rule_line,
     is_status_spinner_line,
+    normalize_effort,
+    parse_harness_model_list,
+    parse_pointed_model_choices,
     strip_ansi,
 )
 from murder.harnesses.results import SimpleResult, fail_result, ok_result
+from murder.terminal import tmux
 
 # Number of trailing pane lines to inspect for live-state markers. The
 # cursor input frame is the last ~6 lines; 20 is generous slack so we
 # still catch the spinner line above the input box.
 _TAIL_LINES = 20
+_MODEL_SETTLE_DELAY_S = 0.5
+_MODEL_MENU_DELAY_S = 0.4
+_COMPOSER_IDS = frozenset({"composer", "composer-2", "composer-2.5"})
+_CURSOR_SPEEDS = ("slow", "fast")
 _IDLE_PLACEHOLDER_RE = re.compile(
     r"(Add a follow-up|Plan,\s*search,\s*build anything)",
     re.IGNORECASE,
@@ -57,6 +64,7 @@ _BUSY_SPINNER_RE = re.compile(
 _TRUST_PROMPT_RE = re.compile(r"Workspace Trust Required", re.IGNORECASE)
 _CURSOR_CWD_RE = re.compile(r"^\s*(?:~/|/|\./|\.\./).*\s+·\s+\S+\s*$")
 _CURSOR_COMPOSER_RE = re.compile(r"^\s*Composer\b.*\bAuto-run\b", re.IGNORECASE)
+_CURSOR_SPEED_IN_LINE_RE = re.compile(r"\b(Slow|Fast)\b", re.IGNORECASE)
 _CURSOR_PLACEHOLDER_RE = re.compile(
     r"^\s*→\s*(?:Add a follow-up|Plan,\s*search,\s*build anything)\b",
     re.IGNORECASE,
@@ -106,16 +114,42 @@ def _strip_cursor_chrome(pane_text: str) -> str:
     )
 
 
+def _normalize_cursor_model(model: str) -> str:
+    key = model.strip().lower().replace("_", " ")
+    key = re.sub(r"\s+", "-", key)
+    if key in _COMPOSER_IDS or key == "composer":
+        return "composer-2.5"
+    return key
+
+
+def _cursor_model_id_from_label(label: str) -> str | None:
+    lowered = label.lower()
+    if "composer 2.5" in lowered:
+        return "composer-2.5"
+    if re.search(r"\bcomposer 2\b", lowered):
+        return "composer-2"
+    if lowered.startswith("auto"):
+        return "auto"
+    parsed = parse_harness_model_list(label)
+    if parsed:
+        return parsed[0][0]
+    return None
+
+
+def _is_composer_model(model: str) -> bool:
+    return _normalize_cursor_model(model) == "composer-2.5"
+
+
 class CursorAdapter(HarnessAdapter):
     kind: ClassVar[str] = "cursor"
     usage_collection_mode: ClassVar[UsageCollectionMode] = "http"
-    # Cursor's `/model` picker is a 25-entry filterable table of display names
-    # ("Sonnet 4.6  (Thinking) 200K Medium", "Composer 2", …) with no id column
-    # — generic parsing yields more noise than signal, so skip discovery and
-    # rely on the curated list below.
+    # Cursor's `/model` picker is a filterable table of display names. Runtime
+    # ids are curated here; Composer 2.5 additionally supports slow/fast (Tab).
     model_list_command: ClassVar[str | None] = None
+    supported_efforts: ClassVar[tuple[str, ...]] = _CURSOR_SPEEDS
+    default_effort: ClassVar[str] = "slow"
     available_startup_models: ClassVar[list[tuple[str, str]]] = [
-        ("composer", "Composer"),
+        ("composer-2.5", "Composer 2.5"),
         ("auto", "Auto"),
         ("gpt-5.5", "GPT-5.5"),
         ("gpt-5.4", "GPT-5.4"),
@@ -129,7 +163,7 @@ class CursorAdapter(HarnessAdapter):
     )
 
     def startup_cmd(self, cwd: Path) -> list[str]:
-        # `cwd` is honored by tmux.create_session; we don't need to cd here.
+        del cwd
         return ["agent", "--yolo"]
 
     def is_ready(self, pane_text: str) -> bool:
@@ -161,17 +195,94 @@ class CursorAdapter(HarnessAdapter):
     def extract_last_message(self, pane_text: str) -> str | None:
         return extract_last_message_heuristic(_strip_cursor_chrome(pane_text))
 
-    async def set_model(self, session: str, model: str, *, effort: str | None = None) -> bool:
-        """Select Cursor's model before the first real prompt.
+    def _parse_composer_speed(self, pane_text: str) -> str | None:
+        clean = strip_ansi(pane_text)
+        for line in clean.splitlines():
+            if "composer 2.5" not in line.lower():
+                continue
+            match = _CURSOR_SPEED_IN_LINE_RE.search(line)
+            if match:
+                return normalize_effort(match.group(1))
+        return None
 
-        Cursor documents `/model <model>` as the runtime selector. We do not
-        validate the model name here because the available labels are account
-        and release dependent.
-        """
-        del effort
+    def parse_active_model_state(self, pane_text: str) -> HarnessModelState | None:
+        clean = strip_ansi(pane_text)
+        model: str | None = None
+        effort: str | None = None
+
+        for line in _tail(clean).splitlines():
+            if not _CURSOR_COMPOSER_RE.match(line.strip()):
+                continue
+            label = line.strip()
+            model = _cursor_model_id_from_label(label.split("Auto-run", maxsplit=1)[0])
+            speed_match = _CURSOR_SPEED_IN_LINE_RE.search(label)
+            if speed_match:
+                effort = normalize_effort(speed_match.group(1))
+            break
+
+        menu = parse_pointed_model_choices(clean, model_id_for_label=_cursor_model_id_from_label)
+        current = next((choice for choice in menu if choice.current), None)
+        if current is not None:
+            model = current.model_id
+
+        speed = self._parse_composer_speed(clean)
+        if speed is not None:
+            effort = speed
+
+        if model is None and effort is None:
+            return None
+        return HarnessModelState(model=model, effort=effort)
+
+    async def _set_composer_speed(self, session: str, desired_speed: str) -> bool:
+        if desired_speed not in _CURSOR_SPEEDS:
+            return False
+        await tmux.send_keys(session, "/model", literal=True, enter=True)
+        await asyncio.sleep(_MODEL_MENU_DELAY_S)
+        await tmux.send_keys(session, "Composer 2.5", literal=True, enter=False)
+        await asyncio.sleep(0.25)
+        pane = await tmux.capture_pane(session, lines=200)
+        current = self._parse_composer_speed(pane)
+        for _ in range(len(_CURSOR_SPEEDS) + 1):
+            if current == desired_speed:
+                break
+            await tmux.send_keys(session, "Tab", literal=False, enter=False)
+            await asyncio.sleep(0.12)
+            pane = await tmux.capture_pane(session, lines=200)
+            current = self._parse_composer_speed(pane)
+        await tmux.send_keys(session, "", literal=True, enter=True)
+        await asyncio.sleep(_MODEL_SETTLE_DELAY_S)
+        pane = await tmux.capture_pane(session, lines=200)
+        state = self.parse_active_model_state(pane)
+        if state is None or state.model != "composer-2.5":
+            return False
+        return state.effort == desired_speed
+
+    async def set_model(self, session: str, model: str, *, effort: str | None = None) -> bool:
+        desired_model = _normalize_cursor_model(model)
+        desired_speed = normalize_effort(effort) if effort else None
+
+        if _is_composer_model(desired_model) and desired_speed is not None:
+            return await self._set_composer_speed(session, desired_speed)
+
         await tmux.send_keys(session, f"/model {model}", literal=True, enter=True)
-        await asyncio.sleep(0.4)
+        await asyncio.sleep(_MODEL_SETTLE_DELAY_S)
+        pane = await tmux.capture_pane(session, lines=200)
+        state = self.parse_active_model_state(pane)
+        if state is None:
+            curated = {_normalize_cursor_model(m) for m, _ in self.available_startup_models}
+            return desired_model in curated
+        active_model = _normalize_cursor_model(state.model or "")
+        if active_model != desired_model:
+            return False
+        if desired_speed is not None and state.effort != desired_speed:
+            return False
         return True
+
+    async def collect_available_models(self, session: str) -> SimpleResult[list[tuple[str, str]]]:
+        del session
+        if self.available_startup_models:
+            return ok_result(list(self.available_startup_models))
+        return fail_result(f"{self.kind} has no curated startup models")
 
     async def initialize_defaults(self, session: str, spec: HarnessStartSpec) -> SimpleResult[None]:
         mode = "on" if spec.auto_run is not False else "off"

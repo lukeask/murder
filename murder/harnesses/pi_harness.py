@@ -1,12 +1,13 @@
 """Pi coding-agent adapter (`pi`).
 
-Pi's README and installed package docs were checked on 2026-05-02. The
-adapter uses the CLI `--model` startup flag when a preferred startup model is
-configured, because Pi's interactive `/model` command opens a selector UI.
+Pi's README and installed package docs were checked on 2026-05-02. Runtime
+model selection uses the interactive ``/model`` picker; startup ``--model`` is
+not used so ``HarnessSession`` can apply the model after the REPL is ready.
 """
 
 from __future__ import annotations
 
+import asyncio
 import re
 from pathlib import Path
 from typing import ClassVar
@@ -14,18 +15,23 @@ from typing import ClassVar
 from murder.harnesses.base import (
     HarnessAdapter,
 )
+from murder.harnesses.models import HarnessModelState
 from murder.harnesses.parsing import (
     extract_last_message_heuristic,
     is_rule_line,
     is_status_spinner_line,
+    normalize_effort,
+    parse_harness_model_list,
     strip_ansi,
 )
+from murder.harnesses.results import SimpleResult, fail_result, ok_result
+from murder.terminal import tmux
 
 _TAIL_LINES = 30
+_MODEL_MENU_DELAY_S = 0.5
+_MODEL_FILTER_DELAY_S = 0.35
+_MODEL_SETTLE_DELAY_S = 0.5
 
-# Pi's bottom status bar always shows a `0.0%/123k (auto)` context-budget gauge
-# and the loaded model; either that or the input `>` / a `Ctrl+…` hint means
-# the REPL is up. (Busy state is screened separately, before the idle check.)
 _READY_RE = re.compile(
     r"(/hotkeys|Ctrl\+[A-Z]|Ctrl\+o|Slash commands|[\d.]+%/[\d.]+[kKmM]|^\s*[>/]\s*$)",
     re.IGNORECASE | re.MULTILINE,
@@ -43,6 +49,11 @@ _AUTH_RE = re.compile(
     re.IGNORECASE,
 )
 _PI_STATUS_RE = re.compile(r"\b\d+(?:\.\d+)?%/\d+(?:\.\d+)?[kKmM]\s+\([^)]*\)")
+_PI_ACTIVE_MODEL_RE = re.compile(
+    r"\((?P<provider>[a-z][a-z0-9_-]*)\)\s+"
+    r"(?P<model>[A-Za-z0-9][A-Za-z0-9._+-]*)(?:\s*[•·]\s*(?P<effort>low|medium|high))?",
+    re.IGNORECASE,
+)
 _PI_CWD_RE = re.compile(r"^(?:~/|/|\./|\.\./).*(?:\s+\([^)]+\))?$")
 _PI_CHROME_RE = re.compile(
     r"""
@@ -83,17 +94,23 @@ def _tail(pane_text: str) -> str:
     return "\n".join(lines[-_TAIL_LINES:])
 
 
+def _pi_model_filter(model: str) -> str:
+    return model.rsplit("/", maxsplit=1)[-1] if "/" in model else model
+
+
+def _pi_models_match(desired: str, active: str | None) -> bool:
+    if active is None:
+        return False
+    if desired == active:
+        return True
+    return _pi_model_filter(desired) == _pi_model_filter(active)
+
+
 class PiAdapter(HarnessAdapter):
     kind: ClassVar[str] = "pi"
     crow_system_prompt: ClassVar[str] = "see prompts/crow_pi.md"
-    # `/model` opens a picker listing `provider/model` ids (plus any local
-    # weights) one per line; the generic parser handles it. The picker is a
-    # modal — fine for the throwaway discovery session, which is killed after.
     model_list_command: ClassVar[str | None] = "/model"
     model_list_capture_delay_s: ClassVar[float] = 3.0
-    # Pi echoes submitted prompts with `> ...`; the idle input prompt is a bare
-    # `>` and is discarded by the shared parser. Pi-specific chrome is stripped
-    # in parse_transcript before applying the generic prompt-marker heuristic.
     transcript_prompt_markers: ClassVar[tuple[str, ...]] = (">",)
     transcript_drop_substrings: ClassVar[tuple[str, ...]] = (
         "ctrl+c/ctrl+d",
@@ -111,10 +128,8 @@ class PiAdapter(HarnessAdapter):
     ]
 
     def startup_cmd(self, cwd: Path) -> list[str]:
-        cmd = ["pi"]
-        if self.startup_model:
-            cmd.extend(["--model", self.startup_model])
-        return cmd
+        del cwd
+        return ["pi"]
 
     def is_ready(self, pane_text: str) -> bool:
         clean = strip_ansi(pane_text)
@@ -136,9 +151,49 @@ class PiAdapter(HarnessAdapter):
     def extract_last_message(self, pane_text: str) -> str | None:
         return extract_last_message_heuristic(_strip_pi_chrome(pane_text))
 
+    def parse_active_model_state(self, pane_text: str) -> HarnessModelState | None:
+        clean = strip_ansi(pane_text)
+        for line in reversed(_tail(clean).splitlines()):
+            match = _PI_ACTIVE_MODEL_RE.search(line)
+            if match is None:
+                continue
+            provider = match.group("provider")
+            short = match.group("model")
+            model = f"{provider}/{short}"
+            effort = normalize_effort(match.group("effort"))
+            return HarnessModelState(model=model, effort=effort)
+        return None
+
     async def set_model(self, session: str, model: str, *, effort: str | None = None) -> bool:
-        del session, effort
-        return model == self.startup_model
+        del effort
+        requested = await self.request_model_list(session)
+        if not requested:
+            return False
+        pane = await tmux.capture_pane(session, lines=200)
+        choices = parse_harness_model_list(pane)
+        if not any(row_id == model for row_id, _ in choices):
+            await tmux.send_keys(session, "Escape", literal=False, enter=False)
+            return False
+
+        filter_text = _pi_model_filter(model)
+        await tmux.send_keys(session, filter_text, literal=True, enter=False)
+        await asyncio.sleep(_MODEL_FILTER_DELAY_S)
+        await tmux.send_keys(session, "", literal=True, enter=True)
+        await asyncio.sleep(_MODEL_SETTLE_DELAY_S)
+
+        pane = await tmux.capture_pane(session, lines=200)
+        state = self.parse_active_model_state(pane)
+        return _pi_models_match(model, state.model if state else None)
+
+    async def collect_available_models(self, session: str) -> SimpleResult[list[tuple[str, str]]]:
+        requested = await self.request_model_list(session)
+        if not requested:
+            return fail_result(f"{self.kind} does not support /model discovery")
+        pane = await tmux.capture_pane(session, lines=200)
+        models = parse_harness_model_list(pane)
+        if not models:
+            return fail_result(f"{self.kind} /model did not expose any model choices")
+        return ok_result(models)
 
     async def interrupt(self, session: str) -> None:
         await self.interrupt_generation(session)
