@@ -141,6 +141,10 @@ class HelpScreen(ModalScreen[None]):
                         "!<cmd>         run shell command (output in pane mirror)",
                         ":wq :q :q!    quit murder",
                         ":ticket <title>  create PLANNED ticket (sync picks up in ~2s)",
+                        ":quick <title>   create ticket and kick immediately",
+                        ":rename <new>    rename selected plan  (:rename <old> <new>)",
+                        ":deprecate [name]  deprecate selected or named plan",
+                        ":spawn          open rogue crow spawn wizard",
                         ":hideescalations  toggle escalation strip",
                         ":uparrow :downarrow :larrow :rarrow :enter  one raw key → harness",
                         ":rawkeymode  pass keys through until Esc Esc",
@@ -1744,8 +1748,8 @@ class MurderApp(App[None]):
         self, event: EscalationResolveWizard.Confirmed
     ) -> None:
         event.stop()
-        self._teardown_escalation_wizard()
         if event.action == "ack":
+            self._teardown_escalation_wizard(focus_chat=False)
             self.run_worker(
                 self._ack_escalation(event.escalation.id),
                 exclusive=False,
@@ -1753,12 +1757,14 @@ class MurderApp(App[None]):
             )
             return
         if event.action == "retry_ack" and event.escalation.ticket_id:
+            self._teardown_escalation_wizard(focus_chat=False)
             self.run_worker(
                 self._retry_and_ack_escalation(event.escalation.ticket_id, event.escalation.id),
                 exclusive=False,
                 group="escalation_retry_ack",
             )
             return
+        self._teardown_escalation_wizard()
         if event.action == "navigate":
             self._navigate_to_escalation(event.escalation)
 
@@ -1768,20 +1774,25 @@ class MurderApp(App[None]):
         event.stop()
         self._teardown_escalation_wizard()
 
-    def _teardown_escalation_wizard(self) -> None:
+    def _teardown_escalation_wizard(self, *, focus_chat: bool = True) -> None:
         wizard = self._escalation_wizard
         if wizard is not None:
             wizard.remove()
             self._escalation_wizard = None
         self._chat.display = self._view != "schedule" and self._spawn_wizard is None
-        if self._chat.display:
+        if focus_chat and self._chat.display:
             self._chat.focus()
+
+    def _focus_bottom_pane(self) -> None:
+        """Focus escalations when active, otherwise chat (if visible)."""
+        self._focus_target(self._bottom_focus_pane())
 
     async def _retry_and_ack_escalation(self, ticket_id: str, escalation_id: int) -> None:
         await self._submit_retry_failed(ticket_id)
         await self.runtime.ack_escalation(escalation_id)
         self.notify("Ticket retry queued; escalation acknowledged.", timeout=3)
-        self._refresh_service_views()
+        await self._refresh_bus_views()
+        self._focus_bottom_pane()
 
     def _navigate_to_escalation(self, esc: EscalationSummary) -> None:
         if esc.to_recipient == "collaborator":
@@ -1798,7 +1809,8 @@ class MurderApp(App[None]):
     async def _ack_escalation(self, escalation_id: int) -> None:
         await self.runtime.ack_escalation(escalation_id)
         self.notify("Escalation acknowledged.", timeout=3)
-        self._refresh_service_views()
+        await self._refresh_bus_views()
+        self._focus_bottom_pane()
 
     def on_escalation_strip_retry_requested(self, event: EscalationStrip.RetryRequested) -> None:
         event.stop()

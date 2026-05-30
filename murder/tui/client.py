@@ -247,9 +247,12 @@ class TuiRuntimeClient:
         self,
         harness: str,
         model: str,
+        effort: str | None = None,
         name: str | None = None,
     ) -> str:
         payload: dict[str, object] = {"harness": harness, "model": model}
+        if effort is not None:
+            payload["effort"] = effort
         if name is not None:
             payload["name"] = name
         result = await self.submit_command(
