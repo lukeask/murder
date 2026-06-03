@@ -38,6 +38,10 @@ class UsageProbeWorker(Worker):
                 name="usage-probe",
                 accepts=self.COMMAND_KINDS,
                 process_model="subprocess",
+                # Usage sampling is disposable; a hung sample must never delay
+                # supervisor shutdown (which holds the repo flock). Fall through
+                # to terminate/kill quickly instead of waiting the 2s default.
+                shutdown_grace_s=0.2,
             )
         )
         self._sampler = sampler
