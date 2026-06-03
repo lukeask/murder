@@ -41,4 +41,4 @@ Useful flags:
 - `--cwd PATH` sets the working directory for a new session.
 - `--label NAME` adds a readable suffix to the recording directory name.
 - `--keep-session` leaves a newly created session alive after recording ends.
-- `--frame-interval 0.1` increases frame sampling frequency.
+- `--frame-interval 0.2` lowers frame sampling frequency (default is 20 Hz).

@@ -10,6 +10,9 @@ from textual.app import ComposeResult
 from murder.config import PlannerConfig
 from murder.service.client_api import CrowSessionSummary, CrowSnapshot
 from murder.tui.app import MurderApp
+from murder.tui.chat_input import ChatInput
+from murder.tui.crow_health import Health
+from murder.tui.crows_view import CrowEntry
 
 
 async def _capture_pane(session: str, *, lines: int = 200) -> str:
@@ -118,6 +121,31 @@ def test_ctrl_y_toggles_focused_crow_tile_in_crows_view() -> None:
     asyncio.run(_run())
 
 
+def test_sync_chat_recipient_uses_live_crow_title_label() -> None:
+    app = _QuietMurderApp()
+
+    entry = CrowEntry(
+        agent_id="codex-rogue-tailwall",
+        ticket_id="",
+        ticket_title="tailwall",
+        harness="codex",
+        status="running",
+        session="murder_repo_crow_codex_rogue_tailwall",
+        health=Health.GREEN,
+        model="gpt-5.4",
+    )
+
+    app._crows.visible_wall_chat_targets = lambda: (  # type: ignore[method-assign]  # noqa: SLF001
+        [entry.agent_id],
+        {entry.agent_id: entry},
+    )
+    app._chat_target_agent_id = entry.agent_id  # noqa: SLF001
+    app._chat_target_label = entry.agent_id  # noqa: SLF001
+    app._sync_chat_recipient()  # noqa: SLF001
+
+    assert str(app._chat.border_title) == "tailwall codex gpt-5.4 rogue"  # noqa: SLF001
+
+
 def test_planner_chat_defaults_to_parsed_not_raw_mirror() -> None:
     app = _PlanningMurderApp()
 
@@ -202,5 +230,72 @@ def test_rename_while_chatting_rogue_submits_crow_rename() -> None:
                 "name": "newname",
             }
             assert app._chat_target_agent_id == "cursor-rogue-newname"  # noqa: SLF001
+
+    asyncio.run(_run())
+
+
+def test_m_command_arms_current_chat_target_murder() -> None:
+    app = _PlanningMurderApp()
+
+    async def _run() -> None:
+        async with app.run_test() as pilot:
+            app._chat_target_agent_id = "crow-t001"  # noqa: SLF001
+            app._chat_target_label = "t001 cursor"  # noqa: SLF001
+            app._sync_chat_recipient()  # noqa: SLF001
+
+            await app._handle_colon(":m")  # noqa: SLF001
+            await pilot.pause()
+
+            assert app._chat_murder_pending_agent_id == "crow-t001"  # noqa: SLF001
+            assert "murder this crow?" in str(app._chat.border_subtitle)  # noqa: SLF001
+
+    asyncio.run(_run())
+
+
+def test_chat_murder_confirm_submits_agent_stop_on_m() -> None:
+    app = _PlanningMurderApp()
+    submitted: list[dict[str, object]] = []
+
+    async def _submit_command(**kwargs: object) -> dict[str, object]:
+        submitted.append(dict(kwargs))
+        return {"handled": True}
+
+    async def _run() -> None:
+        async with app.run_test() as pilot:
+            app.runtime.submit_command = _submit_command  # type: ignore[attr-defined]
+            app._chat_target_agent_id = "crow-t001"  # noqa: SLF001
+            app._chat_target_label = "t001 cursor"  # noqa: SLF001
+            app._sync_chat_recipient()  # noqa: SLF001
+
+            await app._handle_colon(":murder")  # noqa: SLF001
+            await pilot.pause()
+            app.on_chat_input_murder_confirm(ChatInput.MurderConfirm())
+            await pilot.pause()
+
+            assert len(submitted) == 1
+            assert submitted[0]["kind"] == "agent.stop"
+            assert submitted[0]["payload"] == {"agent_id": "crow-t001"}
+            assert app._chat_murder_pending_agent_id is None  # noqa: SLF001
+            assert app._chat_target_agent_id is None  # noqa: SLF001
+
+    asyncio.run(_run())
+
+
+def test_chat_murder_cancel_on_other_key() -> None:
+    app = _PlanningMurderApp()
+
+    async def _run() -> None:
+        async with app.run_test() as pilot:
+            app._chat_target_agent_id = "crow-t001"  # noqa: SLF001
+            app._chat_target_label = "t001 cursor"  # noqa: SLF001
+            app._sync_chat_recipient()  # noqa: SLF001
+
+            await app._handle_colon(":m")  # noqa: SLF001
+            await pilot.pause()
+            app.on_chat_input_murder_cancel(ChatInput.MurderCancel())
+            await pilot.pause()
+
+            assert app._chat_murder_pending_agent_id is None  # noqa: SLF001
+            assert app._chat_target_agent_id == "crow-t001"  # noqa: SLF001
 
     asyncio.run(_run())

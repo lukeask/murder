@@ -7,16 +7,25 @@ from datetime import datetime, timezone
 
 from textual.app import App, ComposeResult
 
-from murder.service.client_api import CrowSessionSummary, CrowSnapshot, DispatchSnapshot, TicketSummary
+from murder.service.client_api import (
+    CrowSessionSummary,
+    CrowSnapshot,
+    DispatchSnapshot,
+    TicketSummary,
+    UsageGaugeSummary,
+)
 from murder.tickets.status import TicketStatus
 from murder.tui.crow_health import Health
 from murder.tui.crows_view import CrowEntry, entries_from_snapshot
 from murder.tui.header import (
     Header,
+    compose_header_line,
     crow_display_id,
     format_attention_segments,
     format_inflight_segment,
+    format_usage_segments,
     format_view_tabs,
+    pick_soonest_per_harness,
 )
 from murder.tui.themes import EVERFOREST_DARK_HARD, register_crow_themes
 
@@ -90,6 +99,18 @@ def test_view_tabs_plain_words_no_numbers() -> None:
     assert format_view_tabs("crows", None) == "planning  [b]crows[/]  dispatch"
 
 
+def test_compose_header_line_right_aligns_status_group() -> None:
+    rendered = compose_header_line("murder · demo · planning  crows  dispatch", "▶2 t001 t002", 60)
+    assert rendered.endswith("▶2 t001 t002")
+    assert "dispatch" in rendered
+    assert "dispatch ▶2" not in rendered
+
+
+def test_compose_header_line_drops_right_group_when_width_too_small() -> None:
+    left = "murder · demo · planning  crows  dispatch"
+    assert compose_header_line(left, "▶2 t001 t002", len(left)) == left
+
+
 def test_view_tabs_active_tab_uses_accent() -> None:
     accent = EVERFOREST_DARK_HARD.accent
     rendered = format_view_tabs("planning", accent)
@@ -129,6 +150,34 @@ def test_inflight_overflow_collapses_to_plus_k() -> None:
     )
     entries = entries_from_snapshot(_snapshot(*sessions))
     assert format_inflight_segment(entries) == "▶8 t000 t001 t002 +5"
+
+
+def test_usage_picks_soonest_reset_per_harness() -> None:
+    gauges = (
+        UsageGaugeSummary("codex", "5h", 26.0, 262.0, 300.0),
+        UsageGaugeSummary("codex", "weekly", 10.0, 10_080.0, 10_080.0),
+        UsageGaugeSummary("claude_code", "current_session", 40.0, 50.0, 300.0),
+    )
+    picked = pick_soonest_per_harness(gauges)
+    assert picked["codex"].window_key == "5h"
+    assert picked["claude_code"].window_key == "current_session"
+
+
+def test_usage_render_matches_gauge_clocks() -> None:
+    gauges = (
+        UsageGaugeSummary("claude_code", "current_session", 26.4, 262.0, 300.0),
+        UsageGaugeSummary("codex", "5h", 28.0, 234.0, 300.0),
+        UsageGaugeSummary("cursor", "auto_composer", 88.1, 11 * 24 * 60.0, 43_200.0),
+    )
+    assert format_usage_segments(gauges, colorize=False) == [
+        "claude 26% 4h22m",
+        "codex 28% 3h54m",
+        "cursor 88% 11d",
+    ]
+
+
+def test_usage_empty_gauges_no_segments() -> None:
+    assert format_usage_segments(()) == []
 
 
 def test_attention_segments_zero_suppressed() -> None:
@@ -186,5 +235,23 @@ def test_header_cold_start_no_crash() -> None:
             assert "▶" not in text
             assert "⚠" not in text
             assert "✗" not in text
+
+    asyncio.run(_run())
+
+
+def test_header_empty_usage_gauges_no_crash() -> None:
+    header = Header("demo")
+
+    async def _run() -> None:
+        app = _HeaderApp(header)
+        async with app.run_test() as pilot:
+            header.refresh_from_snapshot(
+                DispatchSnapshot(tickets=(), as_of=_now(), invalidation_key="empty"),
+                usage_gauges=(),
+            )
+            await pilot.pause()
+            text = str(header.render())
+            assert "claude" not in text
+            assert "codex" not in text
 
     asyncio.run(_run())

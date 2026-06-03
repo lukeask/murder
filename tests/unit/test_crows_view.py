@@ -50,6 +50,11 @@ def _session(**kwargs: object) -> CrowSessionSummary:
     return CrowSessionSummary(**defaults)  # type: ignore[arg-type]
 
 
+def _plain(widget) -> str:
+    rendered = widget.render()
+    return getattr(rendered, "plain", str(rendered))
+
+
 def test_entries_from_snapshot_includes_running_crow() -> None:
     snap = CrowSnapshot(
         sessions=(_session(),),
@@ -73,6 +78,49 @@ def test_entries_from_snapshot_skips_handlers() -> None:
     )
     entries = entries_from_snapshot(snap)
     assert [e.agent_id for e in entries] == ["crow-t001"]
+
+
+def test_crow_display_labels_strip_rogue_session_prefix() -> None:
+    entry = CrowEntry(
+        agent_id="codex-rogue-tailwall",
+        ticket_id="",
+        ticket_title="tailwall",
+        harness="codex",
+        status="running",
+        session="murder_repo_crow_codex_rogue_tailwall",
+        health=Health.GREEN,
+        model="gpt-5.4",
+    )
+
+    labels = crows_view_mod._crow_display_labels(entry)
+
+    assert labels.name == "tailwall"
+    assert labels.harness == "codex"
+    assert labels.model == "gpt-5.4"
+    assert labels.is_rogue is True
+
+
+def test_display_name_strips_compact_rogue_prefix() -> None:
+    assert crows_view_mod._display_name("codex_rogue_tailwall", "codex") == "tailwall"
+
+
+def test_crow_display_labels_map_claude_harness() -> None:
+    entry = CrowEntry(
+        agent_id="claude-rogue-test",
+        ticket_id="",
+        ticket_title="test",
+        harness="claude_code",
+        status="running",
+        session="murder_repo_crow_claude_rogue_test",
+        health=Health.GREEN,
+    )
+
+    labels = crows_view_mod._crow_display_labels(entry)
+
+    assert labels.name == "test"
+    assert labels.harness == "claude"
+    assert labels.model == "—"
+    assert labels.is_rogue is True
 
 
 def test_crow_tile_first_empty_parsed_capture_shows_status() -> None:
@@ -153,6 +201,34 @@ def test_crow_tile_set_parsed_rerenders_when_width_changes() -> None:
     fake.size.width = 80
     tile.set_parsed(turns, "antigravity")
     assert len(fake.set_turns_calls) == 2
+
+
+def test_crow_tile_border_uses_name_harness_model_and_not_last_user_message() -> None:
+    tile = CrowTile(
+        CrowEntry(
+            agent_id="codex-rogue-tailwall",
+            ticket_id="",
+            ticket_title="tailwall",
+            harness="codex",
+            status="running",
+            session="murder_repo_crow_codex_rogue_tailwall",
+            health=Health.GREEN,
+            model="gpt-5.4",
+        )
+    )
+
+    async def _run() -> None:
+        app = _TileApp(tile)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            assert str(tile.border_title) == "tailwall codex gpt-5.4 rogue"
+            assert str(tile.border_subtitle) == "RUNNING"
+            tile._last_user_msg = "please rename the border label"  # noqa: SLF001 - regression seam
+            tile._apply_entry()  # noqa: SLF001 - regression seam
+            await pilot.pause()
+            assert str(tile.border_subtitle) == "please rename the border label"
+
+    asyncio.run(_run())
 
 
 def test_crow_tile_jk_scroll_when_not_scrollable_does_not_crash() -> None:
@@ -331,6 +407,79 @@ def test_crows_view_parsed_refresh_shows_status_when_capture_fails() -> None:
     asyncio.run(_run())
 
 
+def test_ticket_agent_raw_toggle_populates_raw_log_immediately(monkeypatch) -> None:
+    """Switching from parsed to raw mode must trigger an immediate capture.
+
+    Ticket agents (claude_code harness) start in parsed mode. The raw_log is
+    never written while in parsed mode, so toggling to raw showed an empty tile
+    until the next periodic refresh tick. The fix fires a capture immediately on
+    any parsed↔raw toggle.
+    """
+    calls: list[tuple[str, int]] = []
+
+    async def capture(session: str, *, lines: int) -> str:
+        calls.append((session, lines))
+        return "CC output line 1\nCC output line 2"
+
+    monkeypatch.setattr(
+        crows_view_mod,
+        "_parse_tile_text",
+        lambda pane_text, harness_kind: [("assistant", "parsed reply")],
+    )
+
+    view = CrowsView(capture_pane=capture)  # type: ignore[arg-type]
+    snap = CrowSnapshot(
+        sessions=(
+            _session(
+                agent_id="crow-t001",
+                role="crow",
+                ticket_id="t001",
+                ticket_title="Fix thing",
+                session_name="murder_demo_crow_t001",
+                harness="claude_code",
+            ),
+        ),
+        as_of=datetime.now(timezone.utc),
+        invalidation_key="k",
+    )
+
+    async def _run() -> None:
+        app = _CrowsApp(view)
+        async with app.run_test() as pilot:
+            view.render_from_snapshot(snap)
+            await pilot.pause()
+            # Add the ticket agent to pane-visible (simulates user pressing P
+            # in the roster). Focus the row first so action_toggle_pane works.
+            roster = view._roster  # noqa: SLF001
+            roster.focus_agent("crow-t001")
+            await pilot.pause()
+            roster.action_toggle_pane()
+            await pilot.pause()
+            tile = view.wall.tile_for("crow-t001")
+            assert tile is not None
+            # Tile starts in parsed mode (claude_code has a parser).
+            assert not tile.raw_mode
+            # Populate the parsed log.
+            await view.refresh_tails()
+            await pilot.pause()
+            calls.clear()
+            # Toggle to raw mode — must trigger an immediate capture without
+            # waiting for the next periodic refresh tick.
+            tile.action_toggle_view()
+            assert tile.raw_mode
+            await pilot.pause()
+            # The immediate capture should have populated the raw log.
+            rendered = "\n".join(
+                strip.text
+                for strip in tile._raw_log.lines  # noqa: SLF001
+            )
+            assert "CC output" in rendered
+
+    asyncio.run(_run())
+    # At least one raw-mode capture (lines=40) must have fired immediately.
+    assert any(lines == 40 for _, lines in calls)
+
+
 def test_crows_view_wall_uses_fractional_grid_tracks() -> None:
     view = CrowsView()
     snap = CrowSnapshot(
@@ -364,6 +513,96 @@ def test_crows_view_wall_uses_fractional_grid_tracks() -> None:
             await pilot.pause()
             assert all(track.unit.name == "FRACTION" for track in view.wall.styles.grid_columns)
             assert all(track.unit.name == "FRACTION" for track in view.wall.styles.grid_rows)
+
+    asyncio.run(_run())
+
+
+def test_crows_view_roster_shows_compact_rogue_name_harness_and_model() -> None:
+    view = CrowsView()
+    snap = CrowSnapshot(
+        sessions=(
+            _session(
+                agent_id="codex-rogue-tailwall",
+                ticket_id="",
+                ticket_title="tailwall",
+                session_name="murder_repo_crow_codex_rogue_tailwall",
+                harness="codex",
+                model="gpt-5.4",
+            ),
+        ),
+        as_of=datetime.now(timezone.utc),
+        invalidation_key="k",
+    )
+
+    async def _run() -> None:
+        app = _CrowsApp(view)
+        async with app.run_test() as pilot:
+            view.render_from_snapshot(snap)
+            view.roster_add_rogue("codex-rogue-tailwall")
+            view.render_from_snapshot(snap)
+            await pilot.pause()
+            row = view.roster._rows["codex-rogue-tailwall"]  # noqa: SLF001 - regression seam
+            line1 = _plain(row._line1)  # noqa: SLF001 - regression seam
+            line2 = _plain(row._line2)  # noqa: SLF001 - regression seam
+            assert "tailwall" in line1
+            assert "codex_rogue_tailwall" not in line1
+            assert "RUNNING" in line1
+            assert "[pane]" in line1
+            assert "doing:" in line2
+            assert "codex" in line2
+            assert "gpt-5.4" in line2
+            assert "rogue" in line2
+
+    asyncio.run(_run())
+
+
+def test_crows_view_chat_target_highlight_tracks_selected_crow() -> None:
+    view = CrowsView()
+    snap = CrowSnapshot(
+        sessions=(
+            _session(
+                agent_id="codex-rogue-tailwall",
+                ticket_id="",
+                ticket_title="tailwall",
+                session_name="murder_repo_crow_codex_rogue_tailwall",
+                harness="codex",
+                model="gpt-5.4",
+            ),
+            _session(
+                agent_id="cursor-rogue-scout",
+                ticket_id="",
+                ticket_title="scout",
+                session_name="murder_repo_crow_cursor_rogue_scout",
+                harness="cursor",
+                model="gpt-5.5",
+            ),
+        ),
+        as_of=datetime.now(timezone.utc),
+        invalidation_key="k",
+    )
+
+    async def _run() -> None:
+        app = _CrowsApp(view)
+        async with app.run_test() as pilot:
+            view.render_from_snapshot(snap)
+            view.roster_add_rogue("codex-rogue-tailwall")
+            view.roster_add_rogue("cursor-rogue-scout")
+            view.render_from_snapshot(snap)
+            await pilot.pause()
+            first = view.wall.tile_for("codex-rogue-tailwall")
+            second = view.wall.tile_for("cursor-rogue-scout")
+            assert first is not None
+            assert second is not None
+
+            view.set_chat_target("codex-rogue-tailwall")
+            await pilot.pause()
+            assert first.has_class("-chat-target")
+            assert not second.has_class("-chat-target")
+
+            view.set_chat_target("cursor-rogue-scout")
+            await pilot.pause()
+            assert not first.has_class("-chat-target")
+            assert second.has_class("-chat-target")
 
     asyncio.run(_run())
 

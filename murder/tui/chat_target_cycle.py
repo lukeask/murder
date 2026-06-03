@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from murder.service.client_api import CrowSnapshot
-from murder.tui.crows_view import CrowEntry
+from murder.tui.crows_view import CrowEntry, crow_title_label
 
 _ACTIVE_AGENT_STATUSES = frozenset({"running", "idle"})
 
@@ -45,8 +45,7 @@ def crows_chat_targets(
         entry = entries_by_id.get(agent_id)
         if entry is None:
             continue
-        label = entry.ticket_id or entry.session or entry.agent_id
-        targets.append(ChatTarget(agent_id, label))
+        targets.append(ChatTarget(agent_id, crow_title_label(entry)))
     return targets
 
 

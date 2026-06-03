@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
 from types import SimpleNamespace
 
+from textual.app import App, ComposeResult
+
+from murder.tui.chat_input import ChatInput
 from murder.tui.chat_input import _harness_delivery
 
 
@@ -22,3 +26,69 @@ def test_named_special_keys() -> None:
 
 def test_ctrl_combo() -> None:
     assert _harness_delivery(_key(key="ctrl+c")) == ("C-c", False)
+
+
+class _ChatInputApp(App[None]):
+    def __init__(self) -> None:
+        super().__init__()
+        self.chat = ChatInput()
+        self.events: list[str] = []
+
+    def compose(self) -> ComposeResult:
+        yield self.chat
+
+    def on_mount(self) -> None:
+        self.chat.focus()
+
+    def on_chat_input_murder_confirm(self, event: ChatInput.MurderConfirm) -> None:
+        del event
+        self.events.append("confirm")
+
+    def on_chat_input_murder_cancel(self, event: ChatInput.MurderCancel) -> None:
+        del event
+        self.events.append("cancel")
+
+
+def test_murder_confirm_mode_accepts_m() -> None:
+    app = _ChatInputApp()
+
+    async def _run() -> None:
+        async with app.run_test() as pilot:
+            app.chat.set_murder_confirm("crow-t001")
+            await pilot.pause()
+            await pilot.press("m")
+            await pilot.pause()
+
+            assert app.events == ["confirm"]
+
+    asyncio.run(_run())
+
+
+def test_murder_confirm_mode_accepts_ctrl_m() -> None:
+    app = _ChatInputApp()
+
+    async def _run() -> None:
+        async with app.run_test() as pilot:
+            app.chat.set_murder_confirm("crow-t001")
+            await pilot.pause()
+            await pilot.press("ctrl+m")
+            await pilot.pause()
+
+            assert app.events == ["confirm"]
+
+    asyncio.run(_run())
+
+
+def test_murder_confirm_mode_cancels_on_other_key() -> None:
+    app = _ChatInputApp()
+
+    async def _run() -> None:
+        async with app.run_test() as pilot:
+            app.chat.set_murder_confirm("crow-t001")
+            await pilot.pause()
+            await pilot.press("x")
+            await pilot.pause()
+
+            assert app.events == ["cancel"]
+
+    asyncio.run(_run())

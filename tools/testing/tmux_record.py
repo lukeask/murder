@@ -408,8 +408,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--frame-interval",
         type=float,
-        default=0.2,
-        help="Seconds between frame snapshots while idle (default: 0.2).",
+        default=0.05,
+        help="Seconds between frame snapshots while idle (default: 0.05, 20 Hz).",
     )
     parser.add_argument(
         "--keep-session",

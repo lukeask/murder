@@ -42,8 +42,6 @@ def main() -> int:
         SESSION,
         "--label",
         label,
-        "--frame-interval",
-        "0.1",
         "--cwd",
         str(cwd),
     ]

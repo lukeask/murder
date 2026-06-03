@@ -50,7 +50,7 @@ class PlanList(DataTable):
 
     def refresh_from_snapshot(self, snapshot: PlansSnapshot) -> None:
         new_rows = [
-            (p.name, p.status, str(p.revision_count), p.sync_state)
+            (p.name.removeprefix("plan-"), p.status, str(p.revision_count), p.sync_state)
             for p in snapshot.plans
         ]
         if new_rows == self._last_rows:
@@ -62,8 +62,9 @@ class PlanList(DataTable):
             self.clear()
             self._plans = []
             for plan in snapshot.plans:
+                display_name = plan.name.removeprefix("plan-")
                 self.add_row(
-                    plan.name,
+                    display_name,
                     plan.status,
                     str(plan.revision_count),
                     plan.sync_state,

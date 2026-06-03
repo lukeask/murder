@@ -133,8 +133,13 @@ def _gauge_from_summary(summary: UsageGaugeSummary) -> _GaugeData:
 
 # Providers are laid out as side-by-side columns in this order; unlisted
 # harnesses follow, in load order. _PROVIDER_LABELS overrides the column header.
-_PROVIDER_ORDER = ("claude_code", "codex", "cursor")
+PROVIDER_ORDER = ("claude_code", "codex", "cursor")
+_PROVIDER_ORDER = PROVIDER_ORDER
 _PROVIDER_LABELS = {"claude_code": "claude code"}
+
+# Shared with header bar usage segment (same thresholds as gauge cells).
+fmt_duration = _fmt_duration
+color_for_pct = _color_for_pct
 
 
 def _gauge_text(g: _GaugeData) -> str:

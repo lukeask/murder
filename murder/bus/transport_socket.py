@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import errno
 import json
+import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -29,6 +31,13 @@ from murder.bus.protocol import (
     WakeMessage,
 )
 from murder.storage.service_registry import socket_path_for_repo
+
+
+LOGGER = logging.getLogger(__name__)
+
+_ACCEPT_RESOURCE_ERRNOS = frozenset({errno.EMFILE, errno.ENFILE, errno.ENOBUFS, errno.ENOMEM})
+_ACCEPT_BACKOFF_MIN = 0.1
+_ACCEPT_BACKOFF_MAX = 30.0
 
 
 @dataclass
@@ -60,6 +69,9 @@ class SocketBusServer:
         self._presence_task: asyncio.Task[None] | None = None
         self._kind_counts: dict[ClientKind, int] = {}
         self._closed = False
+        self._accept_backoff_delay: float = 0.0
+        self._accept_backoff_task: asyncio.Task[None] | None = None
+        self._prior_exception_handler: Any = None
 
     @property
     def socket_path(self) -> Path:
@@ -74,6 +86,7 @@ class SocketBusServer:
             self._handle_client,
             path=str(self._socket_path),
         )
+        self._install_accept_backoff_handler()
 
     async def start_tcp_listener(self, host: str = "127.0.0.1", port: int = 0) -> tuple[str, int]:
         """Start an additional TCP listener; returns (bound_host, bound_port).
@@ -91,6 +104,13 @@ class SocketBusServer:
 
     async def stop(self) -> None:
         self._closed = True
+        if self._accept_backoff_task is not None:
+            self._accept_backoff_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._accept_backoff_task
+            self._accept_backoff_task = None
+        loop = asyncio.get_event_loop()
+        loop.set_exception_handler(self._prior_exception_handler)
         if self._presence_task is not None:
             self._presence_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
@@ -111,11 +131,56 @@ class SocketBusServer:
         if self._socket_path.exists():
             self._socket_path.unlink()
 
+    def _install_accept_backoff_handler(self) -> None:
+        loop = asyncio.get_event_loop()
+        self._prior_exception_handler = loop.get_exception_handler()
+
+        def _handler(loop: asyncio.AbstractEventLoop, ctx: dict[str, Any]) -> None:
+            exc = ctx.get("exception")
+            if isinstance(exc, OSError) and exc.errno in _ACCEPT_RESOURCE_ERRNOS:
+                self._on_accept_resource_error(exc)
+                return
+            if self._prior_exception_handler is not None:
+                self._prior_exception_handler(loop, ctx)
+            else:
+                loop.default_exception_handler(ctx)
+
+        loop.set_exception_handler(_handler)
+
+    def _on_accept_resource_error(self, exc: OSError) -> None:
+        if self._accept_backoff_task is not None:
+            return  # already backing off, nothing to do
+        delay = min(
+            max(_ACCEPT_BACKOFF_MIN, self._accept_backoff_delay * 2),
+            _ACCEPT_BACKOFF_MAX,
+        )
+        self._accept_backoff_delay = delay
+        LOGGER.warning("socket accept failed (errno %d), pausing for %.1fs", exc.errno, delay)
+        servers = [s for s in (self._server, self._tcp_server) if s is not None]
+        for srv in servers:
+            srv.pause_serving()
+        self._accept_backoff_task = asyncio.create_task(
+            self._resume_after_backoff(delay, servers),
+            name="accept-backoff",
+        )
+
+    async def _resume_after_backoff(
+        self, delay: float, servers: list[asyncio.AbstractServer]
+    ) -> None:
+        await asyncio.sleep(delay)
+        self._accept_backoff_task = None
+        if self._closed:
+            return
+        for srv in servers:
+            srv.resume_serving()
+        LOGGER.info("socket accept resumed after %.1fs backoff", delay)
+
     async def _handle_client(
         self,
         reader: asyncio.StreamReader,
         writer: asyncio.StreamWriter,
     ) -> None:
+        self._accept_backoff_delay = 0.0
         transport = attach_stream_transport(reader, writer)
         session_key = id(transport)
         session: _ClientSession | None = None

@@ -72,13 +72,6 @@ class CrowAgent(HarnessBackedAgent):
             if self.runtime:
                 self.runtime.sync_agent(self)
             raise RuntimeError(paste.message or "failed to deliver startup context")
-        if brief and brief.strip():
-            idle = await self.harness_session.wait_idle(timeout_s=15.0)
-            if not idle.ok:
-                self.status = AgentStatus.FAILED
-                if self.runtime:
-                    self.runtime.sync_agent(self)
-                raise RuntimeError(idle.message or "harness did not finish reading context")
         self.status = AgentStatus.RUNNING
         if self.runtime:
             if self.runtime.db is not None:

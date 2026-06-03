@@ -64,11 +64,20 @@ def test_planning_chat_targets_collaborator_then_live_planners() -> None:
 def test_crows_chat_targets_follows_wall_order() -> None:
     entries = {
         "crow-a": _crow_entry("crow-a", ticket_id="t002"),
-        "crow-b": _crow_entry("crow-b", ticket_id="t001"),
+        "codex-rogue-tailwall": CrowEntry(
+            agent_id="codex-rogue-tailwall",
+            ticket_id="",
+            ticket_title="tailwall",
+            harness="codex",
+            status="running",
+            session="murder_repo_crow_codex_rogue_tailwall",
+            health=Health.GREEN,
+            model="gpt-5.4",
+        ),
     }
-    targets = crows_chat_targets(["crow-b", "crow-a"], entries)
-    assert [t.agent_id for t in targets] == ["crow-b", "crow-a"]
-    assert targets[0].label == "t001"
+    targets = crows_chat_targets(["codex-rogue-tailwall", "crow-a"], entries)
+    assert [t.agent_id for t in targets] == ["codex-rogue-tailwall", "crow-a"]
+    assert targets[0].label == "tailwall codex gpt-5.4 rogue"
 
 
 def test_cycle_chat_target_wraps_forward_and_backward() -> None:

@@ -69,12 +69,112 @@ _STATUS_SORT_RANK = {
 }
 
 _CROW_PREFIX_RE = re.compile(r"^murder_[^_]+_crow_")
+_KNOWN_HARNESS_ALIASES = {
+    "agv",
+    "antigrav",
+    "antigravity",
+    "claude",
+    "claude_code",
+    "codex",
+    "cursor",
+    "pi",
+}
 
 
 def _short_display_name(raw: str) -> str:
     """Strip project/template prefix, yielding harness+role+id."""
     m = _CROW_PREFIX_RE.match(raw)
     return raw[m.end():] if m else raw
+
+
+@dataclass(frozen=True)
+class CrowDisplayLabels:
+    """Compact UI labels for one crow across roster and tile views."""
+
+    name: str
+    harness: str
+    model: str
+    is_rogue: bool
+
+
+def _display_harness(raw: str) -> str:
+    kind = raw.strip().lower()
+    return {
+        "antigrav": "agv",
+        "antigravity": "agv",
+        "claude": "claude",
+        "claude_code": "claude",
+        "codex": "codex",
+        "cursor": "cursor",
+        "pi": "pi",
+    }.get(kind, kind or "—")
+
+
+def _compact_model(raw: str | None, *, limit: int = 18) -> str:
+    model = str(raw or "").strip()
+    if not model:
+        return "—"
+    if "/" in model:
+        model = model.rsplit("/", 1)[-1]
+    if len(model) <= limit:
+        return model
+    return model[: limit - 1] + "…"
+
+
+def _display_name(raw: str, harness: str = "") -> str:
+    short = _short_display_name(raw).strip()
+    if not short:
+        return "crow"
+    for marker in ("_rogue_", "-rogue-"):
+        if marker in short:
+            _prefix, suffix = short.split(marker, 1)
+            return suffix or short
+    for prefix in ("rogue_", "rogue-"):
+        if short.startswith(prefix):
+            short = short[len(prefix) :]
+            break
+    harness_aliases = {
+        harness.strip().lower(),
+        _display_harness(harness),
+    } | _KNOWN_HARNESS_ALIASES
+    for alias in sorted((a for a in harness_aliases if a), key=len, reverse=True):
+        for sep in ("_", "-"):
+            token = f"{alias}{sep}"
+            if short.startswith(token):
+                trimmed = short[len(token) :]
+                if trimmed:
+                    return trimmed
+    return short
+
+
+def _is_rogue_entry(entry: CrowEntry) -> bool:
+    for raw in (entry.session, entry.agent_id):
+        text = str(raw or "").strip().lower()
+        if not text:
+            continue
+        if "_rogue_" in text or "-rogue-" in text or text.startswith(("rogue_", "rogue-")):
+            return True
+    return False
+
+
+def _crow_display_labels(entry: CrowEntry) -> CrowDisplayLabels:
+    raw_name = entry.session or entry.agent_id or ""
+    return CrowDisplayLabels(
+        name=_display_name(raw_name, entry.harness) or "crow",
+        harness=_display_harness(entry.harness),
+        model=_compact_model(entry.model),
+        is_rogue=_is_rogue_entry(entry),
+    )
+
+
+def crow_title_label(entry: CrowEntry) -> str:
+    labels = _crow_display_labels(entry)
+    parts = [labels.name, labels.harness]
+    if labels.model != "—":
+        parts.append(labels.model)
+    if labels.is_rogue:
+        parts.append("(rogue)")
+    return " · ".join(parts)
 
 logger = logging.getLogger(__name__)
 
@@ -104,14 +204,14 @@ class CrowRosterRow(Widget):
         border-left: tall $border;
         background: $surface;
     }
-    CrowRosterRow:focus {
-        background: $pane-focus 15%;
-        border-left: tall $pane-focus;
-    }
     CrowRosterRow.-health-red    { border-left: tall $crow-health-red; }
     CrowRosterRow.-health-yellow { border-left: tall $crow-health-yellow; }
     CrowRosterRow.-health-green  { border-left: tall $crow-health-green; }
     CrowRosterRow.-health-neutral{ border-left: tall $crow-health-neutral; }
+    CrowRosterRow:focus {
+        background: $pane-focus 15%;
+        border-left: tall $pane-focus;
+    }
     CrowRosterRow.-kill-pending  { background: $error 10%; }
     """
 
@@ -165,12 +265,12 @@ class CrowRosterRow(Widget):
 
     def _refresh_content(self) -> None:
         e = self._entry
+        labels = _crow_display_labels(e)
         star = "★ " if self._favorite else "  "
         eye = "[pane]" if self._pane_visible else ""
         ticket = f"[{e.ticket_id}]" if e.ticket_id else ""
-        name = _short_display_name(e.session or e.agent_id)
         status_chip = e.status.upper()
-        line1_parts = [star + name, status_chip]
+        line1_parts = [f"{star}{labels.name}", f"{status_chip:<8}"]
         if ticket:
             line1_parts.append(ticket)
         if eye:
@@ -180,7 +280,15 @@ class CrowRosterRow(Widget):
         if self._kill_pending:
             self._line2.update("  murder this crow? [m / ctrl+m = confirm  ·  any other key = cancel]")
         else:
-            self._line2.update("  doing: ")
+            activity = (e.ticket_title or "").strip() or labels.name
+            meta = [labels.harness]
+            if labels.model != "—":
+                meta.append(labels.model)
+            if labels.is_rogue:
+                meta.append("(rogue)")
+            meta_text = " · ".join(meta)
+            suffix = f"  ·  {meta_text}" if meta_text else ""
+            self._line2.update(f"  doing: {activity}{suffix}")
 
     def _refresh_classes(self) -> None:
         for h in Health:
@@ -577,26 +685,31 @@ class CrowTile(Container):
 
     DEFAULT_CSS = """
     CrowTile {
-        border: solid $border;
+        border: solid $border-blurred;
         padding: 0 1;
         height: 1fr;
         width: 1fr;
         layout: vertical;
     }
-    CrowTile.-health-red    { border: solid $crow-health-red; }
-    CrowTile.-health-yellow { border: solid $crow-health-yellow; }
-    CrowTile.-health-green  { border: solid $crow-health-green; }
-    CrowTile.-health-neutral{ border: solid $crow-health-neutral; }
     CrowTile:focus,
     CrowTile:focus-within { border: heavy $pane-focus; }
-    CrowTile > RichLog {
-        height: 1fr;
-        width: 1fr;
-        background: transparent;
-    }
+    CrowTile.-chat-target,
+    CrowTile.-chat-target:focus,
+    CrowTile.-chat-target:focus-within { border: heavy $accent; }
+    CrowTile > RichLog,
     CrowTile > ChatLog {
         height: 1fr;
         width: 1fr;
+        background: transparent;
+        scrollbar-size-vertical: 1;
+        scrollbar-color: $scrollbar 50%;
+        scrollbar-color-hover: $scrollbar 70%;
+        scrollbar-color-active: $scrollbar 85%;
+        scrollbar-background: transparent;
+        scrollbar-background-hover: $scrollbar-background 20%;
+        scrollbar-background-active: $scrollbar-background 30%;
+    }
+    CrowTile > ChatLog {
         overflow-x: hidden;
         overflow-y: auto;
         border: none;
@@ -647,6 +760,7 @@ class CrowTile(Container):
         from murder.tui.planning_mode_widgets import ChatLog as _ChatLog
 
         self._chat_log = _ChatLog(agent_label=entry.harness or "agent")
+        self._chat_targeted = False
 
     @property
     def entry(self) -> CrowEntry:
@@ -684,6 +798,10 @@ class CrowTile(Container):
         """Reconcile after a snapshot refresh; rebuild border + header in place."""
         self._entry = entry
         self._apply_entry()
+
+    def set_chat_targeted(self, active: bool) -> None:
+        self._chat_targeted = active
+        self.set_class(active, "-chat-target")
 
     def set_tail(self, text: str) -> None:
         """Update the raw log view (called on each refresh tick)."""
@@ -739,13 +857,18 @@ class CrowTile(Container):
 
     def _apply_entry(self) -> None:
         e = self._entry
-        name = _short_display_name(e.session or e.agent_id)
-        model_label = e.model or e.harness or ""
-        self.border_title = f"{name} · {model_label}" if model_label else name
-        self.border_subtitle = self._last_user_msg
+        self.border_title = crow_title_label(e)
+        subtitle = self._last_user_msg.strip()
+        if not subtitle:
+            parts = [e.status.upper()]
+            if e.ticket_id:
+                parts.append(f"[{e.ticket_id}]")
+            subtitle = "  ".join(parts)
+        self.border_subtitle = subtitle
         for h in Health:
             self.remove_class(f"-health-{h.value}")
         self.add_class(f"-health-{e.health.value}")
+        self.set_class(self._chat_targeted, "-chat-target")
 
     def on_focus(self) -> None:
         self.post_message(self.Highlighted(self._entry))
@@ -799,6 +922,7 @@ class TailWall(Grid):
         self._order: list[str] = []
         self._empty: _EmptyMessage | None = None
         self._cols: int = 1
+        self._chat_target_agent_id: str | None = None
 
     def reconcile(self, entries: list[CrowEntry]) -> tuple[list[str], int, int, int]:
         """Make the visible tile set match ``entries``.
@@ -840,9 +964,15 @@ class TailWall(Grid):
                 if tile.entry != entry:
                     updated += 1
                 tile.update_entry(entry)
+            tile.set_chat_targeted(entry.agent_id == self._chat_target_agent_id)
         self._order = new_ids
         self._resize_grid(len(new_ids))
         return new_ids, mounted, removed, updated
+
+    def set_chat_target(self, agent_id: str | None) -> None:
+        self._chat_target_agent_id = agent_id
+        for tile_agent_id, tile in self._tiles.items():
+            tile.set_chat_targeted(tile_agent_id == agent_id)
 
     def _resize_grid(self, count: int) -> None:
         if count == 5:
@@ -987,6 +1117,7 @@ class CrowsView(Container):
         self._entries_by_id: dict[str, CrowEntry] = {}
         self._invalidation_key: str | None = None
         self._last_focused_agent_id: str | None = None
+        self._chat_target_agent_id: str | None = None
         self._roster_visible: bool = True
         self._roster.border_title = "crows"
         self._wall.border_title = "tails"
@@ -1029,6 +1160,7 @@ class CrowsView(Container):
                 dyn["updated"] = u
         else:
             self._wall.reconcile(wall_entries)
+        self._wall.set_chat_target(self._chat_target_agent_id)
         if self.enlarged_agent_id is not None and self.enlarged_agent_id not in self._entries_by_id:
             self.enlarged_agent_id = None
         self._apply_mode()
@@ -1213,8 +1345,15 @@ class CrowsView(Container):
             )
         if self._last_focused_agent_id == old_agent_id:
             self._last_focused_agent_id = new_agent_id
+        if self._chat_target_agent_id == old_agent_id:
+            self._chat_target_agent_id = new_agent_id
+            self._wall.set_chat_target(new_agent_id)
         if self.enlarged_agent_id == old_agent_id:
             self.enlarged_agent_id = new_agent_id
+
+    def set_chat_target(self, agent_id: str | None) -> None:
+        self._chat_target_agent_id = agent_id
+        self._wall.set_chat_target(agent_id)
 
     def on_crow_roster_list_kill_requested(self, event: CrowRosterList.KillRequested) -> None:
         self.post_message(self.KillRequested(event.agent_id))
@@ -1237,9 +1376,11 @@ class CrowsView(Container):
         self._apply_mode()
 
     def on_crow_tile_view_toggled(self, event: CrowTile.ViewToggled) -> None:
-        """On toggle to parsed mode, trigger an immediate re-capture for that tile."""
-        if event.raw_mode:
-            return  # Switched back to raw — next refresh will repopulate.
+        """Trigger an immediate re-capture after any parsed↔raw toggle.
+
+        Without this, switching to raw mode shows an empty log until the next
+        periodic refresh tick because the raw_log is never written in parsed mode.
+        """
         session = event.entry.session
         tile = self._wall.tile_for(event.entry.agent_id)
         if tile is None or not session:
