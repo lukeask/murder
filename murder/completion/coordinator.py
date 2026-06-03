@@ -80,7 +80,6 @@ class CompletionCoordinator:
         ticket_id: str,
         *,
         crow_session: str,
-        start_commit: str | None,
         repo_root: Path | None = None,
     ) -> DoneHandleResult:
         from murder.persistence.tickets import get_ticket as _db_get_ticket
@@ -94,13 +93,10 @@ class CompletionCoordinator:
             LOGGER.warning("coordinator.handle_done: ticket %s not found", ticket_id)
             return DoneHandleResult(completed=False)
 
-        write_set = tuple(Path(p) for p in (row.get("write_set") or []))
         ctx = CompletionContext(
             ticket_id=ticket_id,
-            write_set=write_set,
             repo_root=repo_root or self._rt.repo_root,
             db=conn,
-            start_commit=start_commit,
         )
 
         checks = self._registry.assigned_checks(row)

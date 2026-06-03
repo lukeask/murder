@@ -472,7 +472,7 @@ class CarveFormScreen(ModalScreen[None]):
         min-height: 4;
         border: tall $surface;
     }
-    #field_writes, #field_checklist {
+    #field_checklist {
         height: 5;
         min-height: 3;
     }
@@ -561,8 +561,6 @@ class CarveFormScreen(ModalScreen[None]):
                 yield RadioRow([("(no model override)", "")], id="field_model")
                 yield Static("Depends on (space toggles)", classes="field_label")
                 yield SelectionList[str](id="field_deps")
-                yield Static("Write set — one repo-relative path per line", classes="field_label")
-                yield CarveTextArea(id="field_writes")
                 yield Static("Checklist — one item per line", classes="field_label")
                 yield CarveTextArea(id="field_checklist")
             yield Static(
@@ -598,8 +596,6 @@ class CarveFormScreen(ModalScreen[None]):
                     for ref in self._carve.dependency_options
                 ]
             )
-        writes = snap.get("write_set") or []
-        self.query_one("#field_writes", CarveTextArea).text = "\n".join(str(p) for p in writes)
         self.query_one("#field_checklist", CarveTextArea).text = _checklist_to_lines(snap)
         self.query_one("#field_status", RadioRow).focus()
         self._suppress_autosave = False
@@ -669,7 +665,6 @@ class CarveFormScreen(ModalScreen[None]):
             "model": model_raw or None,
             "schedule_at": schedule_at,
             "deps": deps,
-            "write_set": self._lines(self.query_one("#field_writes", CarveTextArea).text),
             "checklist": self._lines(self.query_one("#field_checklist", CarveTextArea).text),
         }
 
@@ -690,7 +685,6 @@ class CarveFormScreen(ModalScreen[None]):
     def _title_changed(self, _event: Input.Changed) -> None:
         self._autosave()
 
-    @on(TextArea.Changed, "#field_writes")
     @on(TextArea.Changed, "#field_checklist")
     def _text_areas_changed(self, _event: TextArea.Changed) -> None:
         self._autosave()

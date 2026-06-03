@@ -20,7 +20,6 @@ from murder.orchestration.brief import (
     HarnessQuirksSection,
     RepoDocumentsSection,
     SubagentHintSection,
-    WriteSetSection,
     assembler_for,
 )
 
@@ -54,43 +53,12 @@ def _ctx(
     )
 
 
-def _ticket(write_set: list[str] | None = None) -> dict:
+def _ticket() -> dict:
     return {
         "id": "t001",
         "title": "Add logging",
         "wave": 1,
-        "write_set": write_set or [],
     }
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# WriteSetSection
-# ─────────────────────────────────────────────────────────────────────────────
-
-
-class TestWriteSetSection:
-    sec = WriteSetSection()
-
-    def test_returns_none_when_no_ticket(self, tmp_path: Path) -> None:
-        ctx = _ctx(repo_root=tmp_path, ticket=None)
-        assert self.sec.build(ctx) is None
-
-    def test_returns_none_when_empty_write_set(self, tmp_path: Path) -> None:
-        ctx = _ctx(repo_root=tmp_path, ticket=_ticket(write_set=[]))
-        assert self.sec.build(ctx) is None
-
-    def test_heading(self, tmp_path: Path) -> None:
-        ctx = _ctx(repo_root=tmp_path, ticket=_ticket(write_set=["src/foo.py"]))
-        block = self.sec.build(ctx)
-        assert block is not None
-        assert block.heading == "Write set"
-
-    def test_bullet_per_path(self, tmp_path: Path) -> None:
-        ctx = _ctx(repo_root=tmp_path, ticket=_ticket(write_set=["a.py", "b.py"]))
-        block = self.sec.build(ctx)
-        assert block is not None
-        assert "- a.py" in block.text
-        assert "- b.py" in block.text
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -313,18 +281,10 @@ class TestAssemblerForDispatch:
 
 
 class TestBriefIntegration:
-    def test_crow_build_includes_write_set(self, tmp_path: Path) -> None:
-        ctx = _ctx(
-            role=AgentRole.CROW,
-            repo_root=tmp_path,
-            ticket=_ticket(write_set=["src/foo.py"]),
-        )
+    def test_crow_build_is_string(self, tmp_path: Path) -> None:
+        ctx = _ctx(role=AgentRole.CROW, repo_root=tmp_path, ticket=_ticket())
         output = assembler_for(ctx).build(ctx)
-        assert "src/foo.py" in output
-
-    def test_crow_build_excludes_write_set_when_absent(self, tmp_path: Path) -> None:
-        ctx = _ctx(role=AgentRole.CROW, repo_root=tmp_path, ticket=_ticket(write_set=[]))
-        output = assembler_for(ctx).build(ctx)
+        assert isinstance(output, str)
         assert "Write set" not in output
 
     def test_crow_build_includes_subagent_hint(self, tmp_path: Path) -> None:
@@ -344,15 +304,6 @@ class TestBriefIntegration:
         ctx = _ctx(role=AgentRole.PLANNER, repo_root=tmp_path, plan_name="my-plan")
         output = assembler_for(ctx).build(ctx)
         assert "Do important things." in output
-
-    def test_planner_build_excludes_write_set(self, tmp_path: Path) -> None:
-        ctx = _ctx(
-            role=AgentRole.PLANNER,
-            repo_root=tmp_path,
-            ticket=_ticket(write_set=["src/foo.py"]),
-        )
-        output = assembler_for(ctx).build(ctx)
-        assert "Write set" not in output
 
     def test_collaborator_build_is_string(self, tmp_path: Path) -> None:
         ctx = _ctx(role=AgentRole.COLLABORATOR, repo_root=tmp_path)

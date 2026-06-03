@@ -5,7 +5,6 @@ from __future__ import annotations
 import hashlib
 from dataclasses import dataclass
 from datetime import datetime
-from pathlib import PurePosixPath
 from typing import Any
 
 import yaml
@@ -29,7 +28,6 @@ class TicketMetadata:
     model: str | None = None
     deps: list[str] | None = None
     skills: list[str] | None = None
-    write_set: list[str] | None = None
     checklist: list[str] | None = None
     schedule_at: str | None = None
 
@@ -37,7 +35,6 @@ class TicketMetadata:
         # Normalize optional list fields to empty lists for stable rendering.
         object.__setattr__(self, "deps", list(self.deps or []))
         object.__setattr__(self, "skills", list(self.skills or []))
-        object.__setattr__(self, "write_set", list(self.write_set or []))
         object.__setattr__(self, "checklist", list(self.checklist or []))
 
 
@@ -61,9 +58,6 @@ def parse_ticket_metadata(text: str, *, expected_id: str | None = None) -> Ticke
     model = _optional_str(raw.get("model"))
     deps = _require_str_list(raw.get("deps"), "deps")
     skills = _require_str_list(raw.get("skills"), "skills")
-    write_set = _require_str_list(raw.get("write_set"), "write_set")
-    for entry in write_set:
-        _validate_write_set_entry(entry)
     checklist = _require_str_list(raw.get("checklist"), "checklist")
     schedule_at = _require_schedule_at(raw.get("schedule_at"))
 
@@ -76,7 +70,6 @@ def parse_ticket_metadata(text: str, *, expected_id: str | None = None) -> Ticke
         model=model,
         deps=deps,
         skills=skills,
-        write_set=write_set,
         checklist=checklist,
         schedule_at=schedule_at,
     )
@@ -99,7 +92,6 @@ def render_ticket_metadata(meta: TicketMetadata) -> str:
         "model": meta.model,
         "deps": list(meta.deps or []),
         "skills": list(meta.skills or []),
-        "write_set": list(meta.write_set or []),
         "checklist": list(meta.checklist or []),
         "schedule_at": meta.schedule_at,
     }
@@ -146,14 +138,6 @@ def _require_str_list(value: object, field: str) -> list[str]:
     if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
         raise TicketMetadataError(f"{field} must be a list of strings")
     return list(value)
-
-
-def _validate_write_set_entry(value: str) -> None:
-    path = PurePosixPath(value)
-    if value == "" or path.is_absolute() or ".." in path.parts:
-        raise TicketMetadataError(
-            f"write_set entry must be repo-relative and non-traversing: {value!r}"
-        )
 
 
 def _require_schedule_at(value: object) -> str | None:

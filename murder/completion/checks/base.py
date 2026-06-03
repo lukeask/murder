@@ -32,13 +32,10 @@ class CheckResult:
 @dataclass(frozen=True, slots=True)
 class CompletionContext:
     ticket_id: str
-    write_set: tuple[Path, ...]
     repo_root: Path
     db: sqlite3.Connection
-    start_commit: str | None = None
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "write_set", tuple(Path(p) for p in self.write_set))
         object.__setattr__(self, "repo_root", Path(self.repo_root))
 
 

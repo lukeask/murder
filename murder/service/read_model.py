@@ -389,7 +389,6 @@ class ServiceReadModel:
             "harness": ticket.harness,
             "model": ticket.model,
             "deps": list(ticket.deps),
-            "write_set": list(ticket.write_set),
             "checklist": [
                 {"text": item.text, "done": item.done} for item in ticket.checklist
             ],

@@ -25,7 +25,7 @@ from murder.config import Config
 from murder.orchestration.orchestrator import is_rogue_agent_id
 from murder.service.client_api import EscalationSummary
 from murder.service.settings_service import SettingsService
-from murder.storage.paths import ticket_md, tickets_dir, tui_prefs_path
+from murder.storage.paths import murder_dir, ticket_md, tickets_dir, tui_prefs_path
 from murder.storage.worktrees import list_murder_worktrees_sync
 from murder.terminal.session_names import format_session_name
 from murder.tui.chat_input import ChatInput
@@ -143,7 +143,7 @@ class HelpScreen(ModalScreen[None]):
                         "crow: coding agent assigned to one ticket",
                         "crow_handler: watches a crow and records progress",
                         "planning_agent: per-plan LLM that answers crow questions",
-                        "ticket: scoped unit of work with deps, write_set, checklist",
+                        "ticket: scoped unit of work with deps, checklist",
                         "wave: tickets that may run after earlier dependencies finish",
                         "",
                         "[b]commands[/b]",
@@ -218,7 +218,7 @@ class MurderApp(App[None]):
         Binding("shift+tab", "focus_previous_region", "Prev pane", show=False, priority=True),
         Binding("e", "focus_escalations", "Escalations", show=False),
         Binding("ctrl+e", "focus_escalations", "Escalations", show=False),
-        ("ctrl+r", "refresh_now", "Refresh"),
+        Binding("ctrl+r", "refresh_now", "Refresh", show=False),
         ("c", "schedule_apply_carve", "Metadata"),
         Binding("m", "schedule_mode_picker", "Mode", show=False),
         ("f6", "kick_ready", "Kick"),
@@ -328,6 +328,7 @@ class MurderApp(App[None]):
         self._chat_target_agent_id: str | None = None
         self._chat_target_label = "collaborator"
         self._chat_pending_message: str | None = None
+        self._chat_murder_pending_agent_id: str | None = None
         self._user_config: UserConfig = load_user_config()
         self._view = "planning"
         self._pre_chat_focus = None
@@ -470,10 +471,12 @@ class MurderApp(App[None]):
             dispatch = await self.runtime.get_dispatch_snapshot()
             with perf.span("tui.crows.render_snapshot"):
                 self._crow_snapshot = await self.runtime.get_crow_snapshot()
+            schedule = await self.runtime.get_schedule_snapshot()
             with perf.span("tui.header.refresh_counts"):
                 self._header.refresh_from_snapshot(
                     dispatch,
                     crow_snapshot=self._crow_snapshot,
+                    usage_gauges=schedule.usage_gauges,
                 )
             with perf.span("tui.grid.refresh"):
                 self._grid.refresh_from_snapshot(dispatch)
@@ -495,7 +498,7 @@ class MurderApp(App[None]):
                 )
             with perf.span("tui.schedule.refresh"):
                 self._dispatch.refresh_from_snapshot(
-                    await self.runtime.get_schedule_snapshot(),
+                    schedule,
                     usage_drill_in_loader=self.runtime.get_usage_gauge_drill_in,
                 )
             with perf.span("tui.escalations.refresh"):
@@ -581,6 +584,7 @@ class MurderApp(App[None]):
         if self._view == "crows":
             if event.entry.agent_id != self._chat_target_agent_id:
                 self._chat_pending_message = None
+                self._chat_murder_pending_agent_id = None
             self._chat_target_agent_id = event.entry.agent_id
             self._chat_target_label = crow_title_label(event.entry)
             self._sync_chat_recipient()
@@ -609,7 +613,9 @@ class MurderApp(App[None]):
             self._chat_target_agent_id = None
             self._chat_target_label = "collaborator"
             self._chat_pending_message = None
-            self._sync_chat_recipient()
+        if self._chat_murder_pending_agent_id == agent_id:
+            self._chat_murder_pending_agent_id = None
+        self._sync_chat_recipient()
         self.notify(f"murdered {agent_id}", timeout=2)
         self._refresh_service_views()
 
@@ -1212,6 +1218,22 @@ class MurderApp(App[None]):
         del event
         self._set_raw_key_mode(False)
 
+    def on_chat_input_murder_confirm(self, event: ChatInput.MurderConfirm) -> None:
+        del event
+        agent_id = self._chat_murder_pending_agent_id
+        self._chat_murder_pending_agent_id = None
+        self._sync_chat_recipient()
+        if agent_id is None:
+            return
+        self.run_worker(self._murder_crow(agent_id), exclusive=False, group="ui_crow_kill")
+
+    def on_chat_input_murder_cancel(self, event: ChatInput.MurderCancel) -> None:
+        del event
+        if self._chat_murder_pending_agent_id is None:
+            return
+        self._chat_murder_pending_agent_id = None
+        self._sync_chat_recipient()
+
     async def _capture_pane_via_bus(self, session: str, lines: int) -> str:
         return await self.runtime.capture_pane(session, lines=lines)
 
@@ -1237,12 +1259,31 @@ class MurderApp(App[None]):
             )
         return crow_title_label(entry)
 
+    def _chat_target_is_crow(self, agent_id: str | None = None) -> bool:
+        target_id = self._chat_target_agent_id if agent_id is None else agent_id
+        return bool(target_id) and (
+            str(target_id).startswith("crow-") or "rogue-" in str(target_id)
+        )
+
+    def _arm_chat_target_murder(self) -> bool:
+        target_id = self._chat_target_agent_id
+        if not self._chat_target_is_crow(target_id):
+            self.notify(":murder requires a crow chat target", severity="warning", timeout=3)
+            return False
+        self._chat_murder_pending_agent_id = target_id
+        self._sync_chat_recipient()
+        return True
+
     def _sync_chat_recipient(self) -> None:
         target = self._chat_target_agent_id
-        is_crow = target is not None and not target.startswith("planner-")
+        if self._chat_murder_pending_agent_id is not None and target != self._chat_murder_pending_agent_id:
+            self._chat_murder_pending_agent_id = None
+        is_crow = self._chat_target_is_crow(target)
         label = self._chat_target_label if target else "collaborator"
         self._chat.set_recipient(label, is_crow=is_crow)
         self._chat.set_pending(self._chat_pending_message if is_crow else None)
+        murder_target = label if is_crow and target == self._chat_murder_pending_agent_id else None
+        self._chat.set_murder_confirm(murder_target)
         self._crows.set_chat_target(target if is_crow else None)
 
     async def _dispatch_chat(self, text: str) -> None:  # noqa: PLR0911, PLR0912
@@ -1423,6 +1464,8 @@ class MurderApp(App[None]):
                 )
                 return
             await self._deprecate_plan(name)
+        elif cmd_lower in {":m", ":murder"}:
+            self._arm_chat_target_murder()
         elif cmd_lower == ":hideescalations":
             self._escalations_visible = not self._escalations_visible
             self._escalations.set_user_visible(self._escalations_visible)
@@ -1556,6 +1599,7 @@ class MurderApp(App[None]):
         screen = NoteCaptureScreen(
             initial_draft=self._note_capture_draft,
             load_recent_rows=self._sync_recent_note_entries,
+            images_dir=murder_dir(self.runtime.repo_root) / "images",
         )
         self.push_screen(screen, self._on_note_capture_closed)
 

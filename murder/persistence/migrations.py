@@ -447,3 +447,13 @@ def _migrate_plans_single_master(conn: sqlite3.Connection) -> None:
         PRAGMA foreign_keys = ON;
         """
     )
+
+
+def _migrate_drop_ticket_write_set(conn: sqlite3.Connection) -> None:
+    """Drop the ticket_write_set table (write_set concept removed)."""
+    row = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='ticket_write_set'"
+    ).fetchone()
+    if row is None:
+        return
+    conn.execute("DROP TABLE ticket_write_set")

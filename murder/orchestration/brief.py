@@ -68,14 +68,6 @@ def _template_vars(ctx: BriefContext) -> dict[str, str]:
     }
 
 
-class WriteSetSection:
-    def build(self, ctx: BriefContext) -> Block | None:
-        paths = (ctx.ticket or {}).get("write_set") or []
-        if not paths:
-            return None
-        return Block(heading="Write set", text="\n".join(f"- {p}" for p in paths))
-
-
 class RepoDocumentsSection:
     """Inject `.murder/context/*.md` files when present and non-empty."""
 
@@ -164,7 +156,6 @@ def assembler_for(ctx: BriefContext) -> BriefAssembler:
             return BriefAssembler(
                 "fresh_crow",
                 [
-                    WriteSetSection(),
                     RepoDocumentsSection(),
                     HarnessQuirksSection(),
                     SubagentHintSection(),
@@ -198,6 +189,5 @@ __all__ = [
     "RepoDocumentsSection",
     "Section",
     "SubagentHintSection",
-    "WriteSetSection",
     "assembler_for",
 ]

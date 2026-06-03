@@ -46,24 +46,6 @@ def topo_partition(tickets: Iterable[Ticket]) -> list[list[Ticket]]:
     return layers
 
 
-def write_set_conflicts(tickets: Iterable[Ticket]) -> list[tuple[str, str, set[str]]]:
-    """Pairs of tickets in the same wave with overlapping write_sets."""
-    by_wave: dict[int, list[Ticket]] = defaultdict(list)
-    for t in tickets:
-        by_wave[t.wave].append(t)
-    out: list[tuple[str, str, set[str]]] = []
-    for ts in by_wave.values():
-        for i, a in enumerate(ts):
-            for b in ts[i + 1 :]:
-                a_set = {str(p) for p in a.write_set}
-                b_set = {str(p) for p in b.write_set}
-                overlap = a_set & b_set
-                if overlap:
-                    lo, hi = sorted([a.id, b.id])
-                    out.append((lo, hi, overlap))
-    return sorted(out, key=lambda x: (x[0], x[1]))
-
-
 def misordered_deps(tickets: Iterable[Ticket]) -> list[tuple[str, str]]:
     """Pairs (ticket, dep_id) where dep's wave >= ticket's wave."""
     by_id: dict[str, Ticket] = {t.id: t for t in tickets}

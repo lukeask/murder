@@ -126,26 +126,6 @@ def _validate_plan_filename_stem(name: str, *, command: str) -> str:
     return name
 
 
-CONFLICT_PREVIEW_LIMIT = 5
-
-
-def _format_write_set_conflicts(conflicts: list[tuple[str, str, set[str]]]) -> str:
-    parts = [
-        f"{a}/{b}: {', '.join(sorted(overlap))}"
-        for a, b, overlap in conflicts[:CONFLICT_PREVIEW_LIMIT]
-    ]
-    suffix = (
-        f" (+{len(conflicts) - CONFLICT_PREVIEW_LIMIT} more)"
-        if len(conflicts) > CONFLICT_PREVIEW_LIMIT
-        else ""
-    )
-    return (
-        "Ready tickets have overlapping write_sets; refusing parallel kickoff: "
-        + "; ".join(parts)
-        + suffix
-    )
-
-
 class Orchestrator:
     def __init__(self, rt: OrchestratorHost) -> None:
         self.rt = rt
@@ -187,12 +167,6 @@ class Orchestrator:
             to_start = [only]
         else:
             to_start = list(ready)
-        if only is None:
-            conflicts = self._ready_write_set_conflicts(to_start)
-            if conflicts:
-                reason = _format_write_set_conflicts(conflicts)
-                await self._escalations().record_kickoff_conflict(reason)
-                return []
         kicked: list[str] = []
         for tid in to_start:
             row = _db_get_ticket(conn, tid)
@@ -294,23 +268,6 @@ class Orchestrator:
         kicked = await self.kickoff_ready(only=ticket_id)
         return {"handled": True, "ticket_id": ticket_id, "title": title, "kicked": kicked}
 
-    def _ready_write_set_conflicts(self, ticket_ids: list[str]) -> list[tuple[str, str, set[str]]]:
-        assert self.rt.db is not None
-        rows = [_db_get_ticket(self.rt.db, tid) for tid in ticket_ids]
-        tickets = [r for r in rows if r is not None]
-        out: list[tuple[str, str, set[str]]] = []
-        for i, a in enumerate(tickets):
-            for b in tickets[i + 1 :]:
-                if a["wave"] != b["wave"]:
-                    continue
-                overlap = {str(p) for p in a.get("write_set") or []} & {
-                    str(p) for p in b.get("write_set") or []
-                }
-                if overlap:
-                    lo, hi = sorted([a["id"], b["id"]])
-                    out.append((lo, hi, overlap))
-        return sorted(out, key=lambda item: (item[0], item[1]))
-
     async def _emit_ticket_status(
         self, ticket_id: str, from_status: str | TicketStatus, to_status: str
     ) -> None:
@@ -383,7 +340,6 @@ class Orchestrator:
         session = format_session_name(self.rt, "crow_handler", f"_{ticket_id}")
         client = resolve_role_client(self.rt.config.crow_handler)
         crow_agent = self.rt.get_crow(ticket_id)
-        start_commit = getattr(crow_agent, "start_commit", None) if crow_agent else None
         worktree_path = getattr(crow_agent, "worktree_path", None) if crow_agent else None
         handler = CrowHandler(
             agent_id=f"crow_handler-{ticket_id}",
@@ -397,7 +353,6 @@ class Orchestrator:
             runtime=self.rt,
             outcome=self._outcomes(),
             coordinator=self.completion_coordinator,
-            start_commit=start_commit,
             client=client,
         )
         self.rt.register_agent(handler)
@@ -1113,7 +1068,6 @@ class Orchestrator:
             skills = [str(s) for s in (payload.get("skills") or [])]
         else:
             skills = [str(s) for s in (row.get("skills") or [])]
-        write_set = [str(p) for p in (payload.get("write_set") or [])]
         checklist = [str(c) for c in (payload.get("checklist") or [])]
         with self.rt.db:
             self.rt.db.execute(
@@ -1128,7 +1082,6 @@ class Orchestrator:
                 model=model,
                 deps=deps,
                 skills=skills,
-                write_set=write_set,
                 checklist=checklist,
             )
         return {"handled": True, "ok": True, "ticket_id": ticket_id}
@@ -1168,11 +1121,6 @@ class Orchestrator:
     async def _reap_ticket_crow_agents(self, ticket_id: str) -> None:
         await self.rt.reap(f"crow-{ticket_id}")
         await self.rt.reap(f"crow_handler-{ticket_id}")
-
-    async def on_writeset_violation(self, ticket_id: str, path: str) -> None:
-        if self.rt.db is None:
-            return
-        await self._escalations().block_writeset_violation(ticket_id, path)
 
     async def apply_ticket_carve_ready(
         self, ticket_id: str, payload: dict[str, object]

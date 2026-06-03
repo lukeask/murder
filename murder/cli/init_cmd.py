@@ -150,10 +150,6 @@ def cmd_ticket_create(
         list[str] | None,
         typer.Option("--dep", help="Dependency ticket id. Repeatable."),
     ] = None,
-    write: Annotated[
-        list[Path] | None,
-        typer.Option("--write", help="Write-set path. Repeatable."),
-    ] = None,
     check: Annotated[
         list[str] | None,
         typer.Option("--check", help="Checklist item. Repeatable."),
@@ -197,7 +193,6 @@ def cmd_ticket_create(
         title=title,
         wave=wave,
         status=status,
-        write_set=list(write or []),
         deps=list(dep or []),
         skills=[],
         harness=harness,
@@ -237,7 +232,7 @@ def cmd_ticket_ingest_carve(
         ),
     ] = None,
 ) -> None:
-    """Apply collaborator carving YAML: deps/write_set/checklist + planned → ready."""
+    """Apply collaborator carving YAML: deps/checklist + planned → ready."""
     raw = file.read_text(encoding="utf-8") if file is not None else sys.stdin.read()
     if not raw.strip():
         typer.secho("Empty YAML input.", err=True)

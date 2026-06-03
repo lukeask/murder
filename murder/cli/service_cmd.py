@@ -455,7 +455,6 @@ def cmd_lint() -> None:
                 attempts=trow["attempts"],
                 created_at=datetime.fromisoformat(trow["created_at"]),
                 updated_at=datetime.fromisoformat(trow["updated_at"]),
-                write_set=[Path(p) for p in trow.get("write_set") or []],
                 deps=list(trow.get("deps") or []),
                 skills=list(trow.get("skills") or []),
                 checklist=[
@@ -470,11 +469,6 @@ def cmd_lint() -> None:
                 ],
             )
         )
-        if trow["status"] == TicketStatus.DONE.value:
-            for p in trow.get("write_set") or []:
-                pp = (repo / p).resolve()
-                if not pp.exists():
-                    issues.append(f"ticket {tid}: done ticket write_set path missing: {p}")
     by_wave: dict[int, list[Ticket]] = {}
     for t in tickets:
         by_wave.setdefault(t.wave, []).append(t)
@@ -483,8 +477,6 @@ def cmd_lint() -> None:
             waves_mod.topo_partition(ts)
         except waves_mod.CycleError as e:
             issues.append(f"wave {w}: {e}")
-        for a, b, overlap in waves_mod.write_set_conflicts(ts):
-            issues.append(f"wave {w}: write_set overlap {a}/{b}: {overlap}")
         for tid, dep in waves_mod.misordered_deps(ts):
             issues.append(f"wave {w}: misordered dep {tid} -> {dep}")
     conn.close()

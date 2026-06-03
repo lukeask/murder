@@ -44,10 +44,7 @@ class TicketOutcomeService:
         await self.escalations.record_ticket_failure(ticket_id, reason)
         await self._prune_terminal_worktree(ticket_id)
 
-    async def block_ticket(self, ticket_id: str, reason: str, *, path: str | None = None) -> None:
-        if path is not None:
-            await self.escalations.block_writeset_violation(ticket_id, path)
-            return
+    async def block_ticket(self, ticket_id: str, reason: str) -> None:
         ticket_db.update_ticket_status(self.conn, ticket_id, TicketStatus.BLOCKED.value)
         await self.escalations.record_ticket_failure(ticket_id, reason)
 

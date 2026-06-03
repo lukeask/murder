@@ -29,7 +29,6 @@ class Ticket(BaseModel):
     title: str
     wave: int
     status: TicketStatus = TicketStatus.PLANNED
-    write_set: list[Path] = Field(default_factory=list)
     deps: list[str] = Field(default_factory=list)
     skills: list[str] = Field(default_factory=list)
     harness: HarnessKind | None = None  # override default_crow

@@ -137,7 +137,6 @@ def apply_carve_ready_spec(
 
     deps = _require_str_list(spec, "deps")
     skills = _require_str_list(spec, "skills")
-    write_set = _require_str_list(spec, "write_set")
     checklist = _require_str_list(spec, "checklist")
 
     model = _normalize_model(spec)
@@ -152,7 +151,6 @@ def apply_carve_ready_spec(
             model=model,
             deps=deps,
             skills=skills,
-            write_set=write_set,
             checklist=checklist,
         )
         prev = lifecycle.transition(conn, ticket_id, TicketStatus.READY)

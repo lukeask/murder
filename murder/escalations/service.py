@@ -13,7 +13,6 @@ from murder.bus.protocol import EscalationEvent, TicketStatus
 from murder.persistence.records import EscalationRecord
 
 from ..persistence import escalations as dbmod
-from ..persistence.tickets import update_ticket_status
 from ..storage.filesystem import atomic_write_text
 from ..storage.paths import escalation_md
 
@@ -23,10 +22,6 @@ if TYPE_CHECKING:
 
 def _clamp_severity(severity: int) -> int:
     return max(1, min(3, severity))
-
-
-def _writeset_body(ticket_id: str, path: str) -> str:
-    return f"# Write-set violation\n\nTicket `{ticket_id}` touched `{path}` outside its write set.\n"
 
 
 @dataclass(slots=True)
@@ -94,32 +89,6 @@ class EscalationService:
 
     async def record_collaborator_startup_failure(self, reason: str) -> int:
         return await self.escalate_to_user(reason, severity=2, ticket_id=None)
-
-    async def block_writeset_violation(self, ticket_id: str, path: str) -> int:
-        """Block ticket and escalate with markdown body (blocked ≠ failed)."""
-        update_ticket_status(self.conn, ticket_id, TicketStatus.BLOCKED.value)
-        reason = f"Write outside write_set: {path}"
-        body = _writeset_body(ticket_id, path)
-        eid = dbmod.insert_escalation(
-            self.conn,
-            ticket_id=ticket_id,
-            severity=2,
-            reason=reason,
-            to_recipient="collaborator",
-        )
-        md_path = escalation_md(self.repo_root, eid)
-        atomic_write_text(md_path, body)
-        self.conn.execute(
-            "UPDATE escalations SET body_path = ? WHERE id = ?",
-            (str(md_path), eid),
-        )
-        await self._publish(
-            ticket_id=ticket_id,
-            reason=f"Write-set violation: {path}",
-            severity=2,
-            to="collaborator",
-        )
-        return eid
 
     def list_active(self, recipient: str | None = None) -> list[EscalationRecord]:
         return dbmod.list_pending_escalations(self.conn, recipient)

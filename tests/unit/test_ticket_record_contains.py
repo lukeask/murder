@@ -30,7 +30,6 @@ def test_ticket_record_contains() -> None:
         created_at="",
         updated_at="",
         deps=(),
-        write_set=(),
         skills=(),
         checklist=(),
     )

@@ -101,7 +101,6 @@ class TicketMetadataSync(MarkdownSyncLoop):
             )
             ticket.deps = list(meta.deps or [])
             ticket.skills = list(meta.skills or [])
-            ticket.write_set = list(meta.write_set or [])
             ticket.checklist = []
             for idx, text in enumerate(meta.checklist or []):
                 ticket.checklist.append(ChecklistItem(ord=idx, text=text))
@@ -213,7 +212,6 @@ class TicketMetadataSync(MarkdownSyncLoop):
             model=row.get("model"),
             deps=list(row.get("deps") or []),
             skills=list(row.get("skills") or []),
-            write_set=list(row.get("write_set") or []),
             checklist=[item["text"] for item in row.get("checklist") or []],
             schedule_at=row.get("schedule_at"),
         )
@@ -243,7 +241,6 @@ class TicketMetadataSync(MarkdownSyncLoop):
             dbmod.update_ticket_status(self.db, ticket_id, meta.status.value)
         self._set_schedule_at(ticket_id, meta.schedule_at)
         self._replace_edges("ticket_deps", "depends_on_id", ticket_id, list(meta.deps or []))
-        self._replace_edges("ticket_write_set", "path", ticket_id, list(meta.write_set or []))
         self._replace_edges("ticket_skills", "skill", ticket_id, list(meta.skills or []))
         self._replace_checklist(ticket_id, list(meta.checklist or []))
 

@@ -1,4 +1,4 @@
-"""Persistence for tickets, ticket_deps, ticket_write_set, ticket_skills, and checklist tables."""
+"""Persistence for tickets, ticket_deps, ticket_skills, and checklist tables."""
 
 from __future__ import annotations
 
@@ -48,11 +48,6 @@ def insert_ticket(conn: sqlite3.Connection, ticket: Ticket) -> None:
                 "INSERT INTO ticket_deps(ticket_id, depends_on_id) VALUES (?, ?)",
                 (ticket.id, dep),
             )
-        for path in ticket.write_set:
-            conn.execute(
-                "INSERT INTO ticket_write_set(ticket_id, path) VALUES (?, ?)",
-                (ticket.id, str(path)),
-            )
         for skill in ticket.skills:
             conn.execute(
                 "INSERT INTO ticket_skills(ticket_id, skill) VALUES (?, ?)",
@@ -78,10 +73,9 @@ def apply_ticket_carve_payload(
     model: str | None,
     deps: list[str],
     skills: list[str],
-    write_set: list[str],
     checklist: list[str],
 ) -> None:
-    """Replace deps, write_set, skills, checklist and update ticket title/harness/model.
+    """Replace deps, skills, checklist and update ticket title/harness/model.
 
     Caller must wrap in a transaction if combined with status changes.
     """
@@ -98,12 +92,6 @@ def apply_ticket_carve_payload(
         conn.execute(
             "INSERT INTO ticket_deps(ticket_id, depends_on_id) VALUES (?, ?)",
             (ticket_id, dep),
-        )
-    conn.execute("DELETE FROM ticket_write_set WHERE ticket_id = ?", (ticket_id,))
-    for path in write_set:
-        conn.execute(
-            "INSERT INTO ticket_write_set(ticket_id, path) VALUES (?, ?)",
-            (ticket_id, path),
         )
     conn.execute("DELETE FROM ticket_skills WHERE ticket_id = ?", (ticket_id,))
     for skill in skills:
@@ -130,10 +118,6 @@ def get_ticket(conn: sqlite3.Connection, ticket_id: str) -> TicketRecord | None:
             "SELECT depends_on_id FROM ticket_deps WHERE ticket_id = ?", (ticket_id,)
         )
     ]
-    write_set = [
-        str(r["path"])
-        for r in conn.execute("SELECT path FROM ticket_write_set WHERE ticket_id = ?", (ticket_id,))
-    ]
     skills = [
         str(r["skill"])
         for r in conn.execute("SELECT skill FROM ticket_skills WHERE ticket_id = ?", (ticket_id,))
@@ -154,7 +138,6 @@ def get_ticket(conn: sqlite3.Connection, ticket_id: str) -> TicketRecord | None:
     return ticket_record_from_row(
         row,
         deps=deps,
-        write_set=write_set,
         skills=skills,
         checklist=checklist,
     )

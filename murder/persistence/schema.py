@@ -55,12 +55,6 @@ CREATE TABLE IF NOT EXISTS ticket_deps (
     CHECK (ticket_id != depends_on_id)
 );
 
-CREATE TABLE IF NOT EXISTS ticket_write_set (
-    ticket_id  TEXT NOT NULL REFERENCES tickets(id) ON DELETE CASCADE,
-    path       TEXT NOT NULL,
-    PRIMARY KEY (ticket_id, path)
-);
-
 CREATE TABLE IF NOT EXISTS ticket_skills (
     ticket_id  TEXT NOT NULL REFERENCES tickets(id) ON DELETE CASCADE,
     skill      TEXT NOT NULL,
@@ -358,6 +352,7 @@ def init_db(conn: sqlite3.Connection) -> None:
         _migrate_agents_worktree_path,
         _migrate_completion_tables,
         _migrate_drop_sentinel,
+        _migrate_drop_ticket_write_set,
         _migrate_events_schema_version,
         _migrate_notes_identity_status,
         _migrate_plans_single_master,
@@ -385,6 +380,7 @@ def init_db(conn: sqlite3.Connection) -> None:
     _migrate_agents_harness(conn)
     _migrate_agents_model(conn)
     _migrate_agents_worktree_path(conn)
+    _migrate_drop_ticket_write_set(conn)
     ensure_notetaker_context_row(conn)
 
 
