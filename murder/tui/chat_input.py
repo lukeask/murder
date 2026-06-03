@@ -10,7 +10,11 @@ requests an interrupt (flush a queued message sooner)."""
 
 from __future__ import annotations
 
+import asyncio
+import secrets
+import tempfile
 import time
+from pathlib import Path
 
 from textual.binding import Binding
 from textual.events import Key
@@ -95,6 +99,7 @@ class ChatInput(TextArea):
     BINDINGS = [
         Binding("j", "cursor_down", "Down", show=False),
         Binding("k", "cursor_up", "Up", show=False),
+        Binding("ctrl+m", "murder_confirm", "Murder confirm", show=False),
     ]
 
     class UserMessage(Message):
@@ -116,6 +121,12 @@ class ChatInput(TextArea):
 
     class RawKeyModeExit(Message):
         """Esc Esc — leave raw key mode."""
+
+    class MurderConfirm(Message):
+        """Confirm murdering the currently armed crow target."""
+
+    class MurderCancel(Message):
+        """Cancel a pending crow murder confirmation."""
 
     DEFAULT_CSS = """
     ChatInput {
@@ -141,6 +152,9 @@ class ChatInput(TextArea):
         self._sent_history = _SentMessageHistory()
         self._raw_key_mode = False
         self._escape_armed_at = 0.0
+        self._murder_target_label: str | None = None
+        self._paste_counter = 0
+        self._pending_image_paths: dict[str, Path] = {}
 
     def on_mount(self) -> None:
         self.set_recipient("collaborator")
@@ -155,6 +169,7 @@ class ChatInput(TextArea):
         self._escape_armed_at = 0.0
         self.set_class(active, "-raw-key-mode")
         if active:
+            self._cleanup_pending_images()
             self.clear()
             self.focus()
         self._refresh_hints()
@@ -162,6 +177,8 @@ class ChatInput(TextArea):
     def _refresh_hints(self, *, pending: str | None = None) -> None:
         if self._raw_key_mode:
             hints = "RAW KEY MODE · Esc Esc to exit · keys → harness"
+        elif self._murder_target_label:
+            hints = "murder this crow? [m / ctrl+m = confirm  ·  any other key = cancel]"
         else:
             hints = "Enter to send · ↑↓ history · Shift+Enter for newline"
             if getattr(self, "_is_crow_target", False):
@@ -181,12 +198,46 @@ class ChatInput(TextArea):
     def set_pending(self, text: str | None) -> None:
         self._refresh_hints(pending=text)
 
+    def set_murder_confirm(self, target_label: str | None) -> None:
+        self._murder_target_label = (target_label or "").strip() or None
+        self._refresh_hints()
+
     def _set_input_text(self, value: str) -> None:
         self.text = value
         lines = value.split("\n")
         if not lines:
             return
         self.move_cursor((len(lines) - 1, len(lines[-1])))
+
+    def _cleanup_pending_images(self) -> None:
+        for p in self._pending_image_paths.values():
+            try:
+                p.unlink(missing_ok=True)
+            except OSError:
+                pass
+        self._pending_image_paths.clear()
+
+    async def _paste_image(self) -> None:
+        from murder.tui.clipboard_image import has_clipboard_image, read_clipboard_image_png
+
+        if not await has_clipboard_image():
+            self.action_paste()
+            return
+
+        self._paste_counter += 1
+        n = self._paste_counter
+        token = f"[Image #{n}]"
+        self.insert(token)
+
+        data = await read_clipboard_image_png()
+        if data is None:
+            self.text = self.text.replace(token, "[Image paste failed]", 1)
+            return
+
+        hex8 = secrets.token_hex(4)
+        tmp_path = Path(tempfile.gettempdir()) / f"murder-clipboard-{hex8}.png"
+        tmp_path.write_bytes(data)
+        self._pending_image_paths[token] = tmp_path
 
     def _exit_raw_key_mode(self) -> None:
         if not self._raw_key_mode:
@@ -212,18 +263,43 @@ class ChatInput(TextArea):
         key, literal = delivery
         self.post_message(self.RawKeyPress(key, literal=literal))
 
+    def _handle_murder_confirm_key(self, event: Key) -> bool:
+        if not self._murder_target_label:
+            return False
+        event.prevent_default()
+        event.stop()
+        if event.key in {"m", "ctrl+m", "enter"}:
+            self.set_murder_confirm(None)
+            self.post_message(self.MurderConfirm())
+        else:
+            self.set_murder_confirm(None)
+            self.post_message(self.MurderCancel())
+        return True
+
+    def action_murder_confirm(self) -> None:
+        if not self._murder_target_label:
+            return
+        self.set_murder_confirm(None)
+        self.post_message(self.MurderConfirm())
+
     def on_key(self, event: Key) -> None:
         if self._raw_key_mode:
             self._handle_raw_key(event)
+            return
+        if self._handle_murder_confirm_key(event):
             return
         if event.key == "enter":
             event.prevent_default()
             event.stop()
             text = self.text.strip()
             if text in _SPAWN_COMMANDS:
+                self._cleanup_pending_images()
                 self.clear()
                 self.post_message(self.SpawnCommand())
             elif text:
+                for token, path in self._pending_image_paths.items():
+                    text = text.replace(token, str(path))
+                self._pending_image_paths.clear()
                 self._sent_history.append(text)
                 self.clear()
                 self.post_message(self.UserMessage(text))
@@ -250,6 +326,7 @@ class ChatInput(TextArea):
             event.stop()
             if hasattr(self.app, "_chat_input_memory"):
                 self.app._chat_input_memory = self.text
+            self._cleanup_pending_images()
             self.clear()
         elif event.key == "ctrl+p":
             event.prevent_default()
@@ -257,6 +334,10 @@ class ChatInput(TextArea):
             memory = getattr(self.app, "_chat_input_memory", "")
             if memory:
                 self._set_input_text(memory)
+        elif event.key == "ctrl+v":
+            event.prevent_default()
+            event.stop()
+            asyncio.create_task(self._paste_image())
         elif event.key == "escape":
             event.prevent_default()
             event.stop()

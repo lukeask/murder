@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import datetime
 import inspect
+import secrets
 import time
 from collections.abc import Awaitable, Callable
+from pathlib import Path
 from typing import Any
 
 from textual import on
@@ -147,15 +150,52 @@ class NoteCaptureScreen(ModalScreen[DismissPayload]):
                 self.insert("\n")
                 return
 
+            if key == "ctrl+v":
+                event.prevent_default()
+                event.stop()
+                asyncio.create_task(self._paste_image())
+                return
+
+        async def _paste_image(self) -> None:
+            from murder.tui.clipboard_image import has_clipboard_image, read_clipboard_image_png
+
+            if not await has_clipboard_image():
+                self.action_paste()
+                return
+
+            outer = self._outer
+            outer._paste_counter += 1
+            n = outer._paste_counter
+            placeholder = f"[Image #{n} pasting…]"
+            self.insert(placeholder)
+
+            data = await read_clipboard_image_png()
+            if data is None:
+                replacement = "[Image paste failed]"
+            else:
+                images_dir = outer._images_dir
+                images_dir.mkdir(parents=True, exist_ok=True)
+                ts = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
+                hex4 = secrets.token_hex(2)
+                fname = f"note-img-{ts}-{hex4}.png"
+                fpath = images_dir / fname
+                fpath.write_bytes(data)
+                replacement = f"![image]({fpath})"
+
+            self.text = self.text.replace(placeholder, replacement, 1)
+
     def __init__(
         self,
         *,
         initial_draft: str,
         load_recent_rows: LoadRecentFn,
+        images_dir: Path,
     ) -> None:
         super().__init__()
         self._initial_draft = initial_draft
         self._load_recent_rows = load_recent_rows
+        self._images_dir = images_dir
+        self._paste_counter = 0
         self._rows: list[dict[str, Any]] = []
         self._draft_esc_armed_at: float | None = None
         self._blur_after_idle: asyncio.TimerHandle | None = None
