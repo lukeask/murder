@@ -36,7 +36,8 @@ from murder.tui.chat_target_cycle import (
     planning_chat_targets,
 )
 from murder.tui.controllers import DispatchController, TuiContext
-from murder.tui.crows_view import CrowsView, CrowTile
+from murder.tui.crow_health import Health
+from murder.tui.crows_view import CrowEntry, CrowsView, CrowTile, crow_title_label
 from murder.tui.dispatch import DispatchView, ScheduleTicketsTable
 from murder.tui.dispatch.calendar import CalendarPanel
 from murder.tui.dispatch.gauges import GaugeStrip
@@ -337,6 +338,9 @@ class MurderApp(App[None]):
         self._note_capture_draft = ""
         self._chat_input_memory = ""
         self._crow_snapshot = None
+        self._plan_revision_map: dict[str, int] = {}
+        self._plan_content_cache: dict[str, tuple[int, str]] = {}
+        self._plan_highlight_timer: object | None = None
         self._dispatch_ctrl = DispatchController(
             TuiContext(
                 submit_command=self._submit_command,
@@ -476,7 +480,11 @@ class MurderApp(App[None]):
             with perf.span("tui.crows.render_snapshot"):
                 self._crows.render_from_snapshot(self._crow_snapshot)
             with perf.span("tui.plans.refresh"):
-                self._plans.refresh_from_snapshot(await self.runtime.get_plans_snapshot())
+                _plans_snapshot = await self.runtime.get_plans_snapshot()
+                self._plan_revision_map = {
+                    p.name: p.revision_count for p in _plans_snapshot.plans
+                }
+                self._plans.refresh_from_snapshot(_plans_snapshot)
             with perf.span("tui.notes_list.refresh"):
                 self._notes_list.refresh_from_snapshot(
                     await self.runtime.get_notes_snapshot()
@@ -574,8 +582,7 @@ class MurderApp(App[None]):
             if event.entry.agent_id != self._chat_target_agent_id:
                 self._chat_pending_message = None
             self._chat_target_agent_id = event.entry.agent_id
-            label = event.entry.ticket_id or event.entry.session or event.entry.agent_id
-            self._chat_target_label = label
+            self._chat_target_label = crow_title_label(event.entry)
             self._sync_chat_recipient()
 
     def on_crows_view_kill_requested(self, event: CrowsView.KillRequested) -> None:
@@ -620,12 +627,21 @@ class MurderApp(App[None]):
             self._chat_target_agent_id = f"planner-{event.name}"
             self._chat_target_label = f"planner: {event.name}"
             self._apply_mode()
-            self.run_worker(
-                self._render_plan(event.name),
-                exclusive=True,
-                group="plandoc",
-                exit_on_error=False,
+            if self._plan_highlight_timer is not None:
+                self._plan_highlight_timer.stop()  # type: ignore[union-attr]
+            name = event.name
+            self._plan_highlight_timer = self.set_timer(
+                0.1, lambda: self._schedule_plan_render(name)
             )
+
+    def _schedule_plan_render(self, name: str) -> None:
+        self._plan_highlight_timer = None
+        self.run_worker(
+            self._render_plan(name),
+            exclusive=True,
+            group="plandoc",
+            exit_on_error=False,
+        )
 
     async def on_plan_list_plan_opened(self, event: PlanList.PlanOpened) -> None:
         await self._open_plan(event.name)
@@ -674,10 +690,19 @@ class MurderApp(App[None]):
 
     async def _render_plan(self, name: str) -> None:
         with self.perf.span("tui.render_plan"):
-            display = await self.runtime.get_plan_display(name)
+            rev = self._plan_revision_map.get(name)
+            cached = self._plan_content_cache.get(name)
+            if cached is not None and rev is not None and cached[0] == rev:
+                with self.perf.span("tui.render_plan.parse"):
+                    await self._plan_doc.set_plan_markdown(name, cached[1])
+                return
+            with self.perf.span("tui.render_plan.fetch"):
+                display = await self.runtime.get_plan_display(name)
             if display is None:
                 return
-            await self._plan_doc.set_plan_markdown(name, display.markdown)
+            self._plan_content_cache[name] = (rev if rev is not None else 0, display.markdown)
+            with self.perf.span("tui.render_plan.parse"):
+                await self._plan_doc.set_plan_markdown(name, display.markdown)
 
     async def _open_plan(self, name: str) -> None:
         await self.runtime.reconcile_plan(name)
@@ -1157,7 +1182,11 @@ class MurderApp(App[None]):
             return
         self._crows.roster_add_rogue(agent_id)
         self._chat_target_agent_id = agent_id
-        self._chat_target_label = agent_id
+        self._chat_target_label = self._crow_chat_label(
+            agent_id,
+            harness=harness,
+            model=model,
+        )
         self._chat_pending_message = None
         self._sync_chat_recipient()
         self._refresh_service_views()
@@ -1186,12 +1215,35 @@ class MurderApp(App[None]):
     async def _capture_pane_via_bus(self, session: str, lines: int) -> str:
         return await self.runtime.capture_pane(session, lines=lines)
 
+    def _crow_chat_label(
+        self,
+        agent_id: str,
+        *,
+        harness: str | None = None,
+        model: str | None = None,
+    ) -> str:
+        _, entries = self._crows.visible_wall_chat_targets()
+        entry = entries.get(agent_id)
+        if entry is None:
+            entry = CrowEntry(
+                agent_id=agent_id,
+                ticket_id="",
+                ticket_title=None,
+                harness=harness or "",
+                status="running",
+                session=None,
+                health=Health.NEUTRAL,
+                model=model,
+            )
+        return crow_title_label(entry)
+
     def _sync_chat_recipient(self) -> None:
         target = self._chat_target_agent_id
         is_crow = target is not None and not target.startswith("planner-")
         label = self._chat_target_label if target else "collaborator"
         self._chat.set_recipient(label, is_crow=is_crow)
         self._chat.set_pending(self._chat_pending_message if is_crow else None)
+        self._crows.set_chat_target(target if is_crow else None)
 
     async def _dispatch_chat(self, text: str) -> None:  # noqa: PLR0911, PLR0912
         if text.startswith("!"):
@@ -1494,7 +1546,7 @@ class MurderApp(App[None]):
             self._crows.roster_rename_rogue(old_agent_id, new_agent_id)
             if self._chat_target_agent_id == old_agent_id:
                 self._chat_target_agent_id = new_agent_id
-                self._chat_target_label = new_agent_id
+                self._chat_target_label = self._crow_chat_label(new_agent_id)
                 self._chat_pending_message = None
                 self._sync_chat_recipient()
         self.notify(f"renamed rogue: {old_agent_id} → {new_agent_id}", timeout=3)
