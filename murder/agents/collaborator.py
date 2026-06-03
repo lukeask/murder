@@ -7,11 +7,11 @@ import contextlib
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from murder.agents.base import HarnessBackedAgent, AgentRole, AgentStatus
 from murder.persistence import conversation
-from murder.terminal import tmux
-from murder.agents.base import Agent, AgentRole, AgentStatus
 from murder.harnesses.base import HarnessAdapter
 from murder.harnesses.models import HarnessStartSpec
+from murder.terminal import tmux
 
 # How far back into the pane's scrollback to read when reconstructing the chat
 # transcript. Generous: a planning conversation should fit comfortably.
@@ -26,7 +26,7 @@ if TYPE_CHECKING:
 READY_TIMEOUT_S = 75.0
 
 
-class CollaboratorAgent(Agent):
+class CollaboratorAgent(HarnessBackedAgent):
     role = AgentRole.COLLABORATOR
     ticket_id = None
 
@@ -50,9 +50,6 @@ class CollaboratorAgent(Agent):
         self.runtime = runtime
         self.status = AgentStatus.IDLE
         self.harness_session = harness.attach(session, self.repo_root)
-
-    async def is_live(self) -> bool:
-        return await tmux.session_exists(self.session)
 
     async def start(self, brief: str, ctx: dict[str, Any]) -> None:
         from murder.bus import StatusChangeEvent
@@ -110,20 +107,3 @@ class CollaboratorAgent(Agent):
 
     async def send(self, msg: str) -> None:
         await self.harness_session.send_prompt(msg)
-
-    async def refresh_transcript(self) -> list[tuple[str, str]]:
-        """Capture the session pane, parse it with the harness adapter, merge
-        into the persisted conversation log, and return the effective
-        transcript as ``(role, text)`` turns (``role`` ∈ ``{"user","assistant"}``).
-
-        Returns ``[]`` if the session is gone or the harness has no transcript
-        parser yet (the TUI falls back to the raw pane mirror in that case).
-        """
-        try:
-            pane = await tmux.capture_pane(self.session, lines=TRANSCRIPT_SCROLLBACK_LINES)
-        except tmux.TmuxError:
-            return []
-        parsed = self.harness.parse_transcript(pane)
-        if self.runtime is None or self.runtime.db is None:
-            return parsed
-        return conversation.merge_transcript(self.runtime.db, self.id, parsed)

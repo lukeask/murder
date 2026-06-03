@@ -11,6 +11,10 @@ def _now() -> str:
     return datetime.utcnow().isoformat(timespec="seconds")
 
 
+_LEGACY_PLAN_MATERIALIZED_HASH_COLUMN = "last_" "materialized_" "hash"
+_LEGACY_PLAN_CONFLICT_COLUMN = "conflict" "_reason"
+
+
 def _migrate_ticket_last_error(conn: sqlite3.Connection) -> None:
     """Add last_error TEXT column to tickets for scheduler retry display."""
     cols = {row["name"] for row in conn.execute("PRAGMA table_info(tickets)").fetchall()}
@@ -232,6 +236,20 @@ def _migrate_agents_worktree_path(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE agents ADD COLUMN worktree_path TEXT")
 
 
+def _migrate_agents_model(conn: sqlite3.Connection) -> None:
+    """Persist the startup model requested for each agent session."""
+    cols = {row["name"] for row in conn.execute("PRAGMA table_info(agents)").fetchall()}
+    if "model" not in cols:
+        conn.execute("ALTER TABLE agents ADD COLUMN model TEXT")
+
+
+def _migrate_agents_harness(conn: sqlite3.Connection) -> None:
+    """Persist the harness kind on agents so rogue crows keep parser identity."""
+    cols = {row["name"] for row in conn.execute("PRAGMA table_info(agents)").fetchall()}
+    if "harness" not in cols:
+        conn.execute("ALTER TABLE agents ADD COLUMN harness TEXT")
+
+
 def _migrate_ticket_metadata_columns(conn: sqlite3.Connection) -> None:
     """Add additive ticket metadata/scheduling columns for YAML sidecar sync."""
     ticket_cols = {row["name"] for row in conn.execute("PRAGMA table_info(tickets)").fetchall()}
@@ -377,6 +395,54 @@ def _migrate_drop_sentinel(conn: sqlite3.Connection) -> None:
                started_at, last_heartbeat_at, pid
           FROM agents_old_sentinel_migration;
         DROP TABLE agents_old_sentinel_migration;
+        COMMIT;
+        PRAGMA foreign_keys = ON;
+        """
+    )
+
+
+def _migrate_plans_single_master(conn: sqlite3.Connection) -> None:
+    """Drop bidirectional-sync columns from plans; narrow sync_state CHECK.
+
+    Idempotent: no-op once the new schema is in place.
+    """
+    row = conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='plans'").fetchone()
+    if row is None:
+        return
+    cols = {column["name"] for column in conn.execute("PRAGMA table_info(plans)").fetchall()}
+    if _LEGACY_PLAN_CONFLICT_COLUMN not in cols:
+        return
+    conn.executescript(
+        """
+        PRAGMA foreign_keys = OFF;
+        BEGIN;
+        ALTER TABLE plans RENAME TO plans_old_single_master_migration;
+        CREATE TABLE plans (
+            name              TEXT PRIMARY KEY,
+            status            TEXT NOT NULL CHECK (status IN ('draft','accepted','superseded')),
+            created_at        TEXT NOT NULL,
+            updated_at        TEXT NOT NULL,
+            body              TEXT NOT NULL,
+            frontmatter_json  TEXT NOT NULL DEFAULT '{}',
+            body_hash         TEXT NOT NULL,
+            file_hash         TEXT,
+            materialized_path TEXT NOT NULL,
+            revision_count    INTEGER NOT NULL DEFAULT 0,
+            sync_state        TEXT NOT NULL DEFAULT 'synced'
+                              CHECK (sync_state IN ('synced','parse_error')),
+            parse_error       TEXT
+        );
+        INSERT INTO plans (name,status,created_at,updated_at,body,frontmatter_json,
+                           body_hash,file_hash,materialized_path,revision_count,
+                           sync_state,parse_error)
+        SELECT name,status,created_at,updated_at,body,frontmatter_json,
+               body_hash,file_hash,materialized_path,revision_count,
+               CASE WHEN sync_state IN ('synced','parse_error') THEN sync_state
+                    ELSE 'synced' END,
+               parse_error
+          FROM plans_old_single_master_migration;
+        DROP TABLE plans_old_single_master_migration;
+        CREATE INDEX IF NOT EXISTS idx_plans_status ON plans(status);
         COMMIT;
         PRAGMA foreign_keys = ON;
         """

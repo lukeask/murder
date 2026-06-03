@@ -177,6 +177,10 @@ class TestCodexAdapter:
         # The › prompt is visible; "Starting MCP servers" line doesn't match _BUSY_RE
         assert self.cx.is_idle(CODEX_STARTUP) is True
 
+    def test_startup_cmd_passes_requested_model(self):
+        cmd = CodexAdapter(startup_model="gpt-5.4-mini").startup_cmd(Path("/tmp/repo"))
+        assert cmd[cmd.index("--model") + 1] == "gpt-5.4-mini"
+
     # ── "busy" fixture — known gap: • Working is not detected ─────────────────
 
     def test_codex_bullet_working_is_busy(self):

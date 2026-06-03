@@ -84,6 +84,8 @@ CREATE TABLE IF NOT EXISTS agents (
                       ('collaborator','notetaker','crow_handler','crow','planner','planning_handler')),
     ticket_id         TEXT REFERENCES tickets(id) ON DELETE SET NULL,
     session           TEXT,
+    harness           TEXT,
+    model             TEXT,
     worktree_path     TEXT,
     status            TEXT NOT NULL CHECK (status IN
                       ('idle','running','blocked','escalating','done','failed','dead')),
@@ -165,22 +167,19 @@ CREATE TABLE IF NOT EXISTS escalations (
 );
 
 CREATE TABLE IF NOT EXISTS plans (
-    name                   TEXT PRIMARY KEY,
-    status                 TEXT NOT NULL CHECK (status IN
-                           ('draft','accepted','superseded')),
-    created_at             TEXT NOT NULL,
-    updated_at             TEXT NOT NULL,
-    body                   TEXT NOT NULL,
-    frontmatter_json       TEXT NOT NULL DEFAULT '{}',
-    body_hash              TEXT NOT NULL,
-    file_hash              TEXT,
-    last_materialized_hash TEXT,
-    materialized_path      TEXT NOT NULL,
-    revision_count         INTEGER NOT NULL DEFAULT 0,
-    sync_state             TEXT NOT NULL DEFAULT 'synced' CHECK (sync_state IN
-                           ('synced','missing_file','orphan_file','parse_error','conflict')),
-    conflict_reason        TEXT,
-    parse_error            TEXT
+    name              TEXT PRIMARY KEY,
+    status            TEXT NOT NULL CHECK (status IN ('draft','accepted','superseded')),
+    created_at        TEXT NOT NULL,
+    updated_at        TEXT NOT NULL,
+    body              TEXT NOT NULL,
+    frontmatter_json  TEXT NOT NULL DEFAULT '{}',
+    body_hash         TEXT NOT NULL,
+    file_hash         TEXT,
+    materialized_path TEXT NOT NULL,
+    revision_count    INTEGER NOT NULL DEFAULT 0,
+    sync_state        TEXT NOT NULL DEFAULT 'synced'
+                      CHECK (sync_state IN ('synced','parse_error')),
+    parse_error       TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_plans_status ON plans(status);
@@ -353,12 +352,15 @@ def init_db(conn: sqlite3.Connection) -> None:
     """Apply SCHEMA_SQL idempotently."""
     from murder.persistence.migrations import (
         _migrate_agents_failed_status,
+        _migrate_agents_harness,
+        _migrate_agents_model,
         _migrate_agents_notetaker_role,
         _migrate_agents_worktree_path,
         _migrate_completion_tables,
         _migrate_drop_sentinel,
         _migrate_events_schema_version,
         _migrate_notes_identity_status,
+        _migrate_plans_single_master,
         _migrate_role_names,
         _migrate_ticket_archived_status,
         _migrate_ticket_draft_status,
@@ -379,6 +381,9 @@ def init_db(conn: sqlite3.Connection) -> None:
     _migrate_notes_identity_status(conn)
     _migrate_completion_tables(conn)
     _migrate_drop_sentinel(conn)
+    _migrate_plans_single_master(conn)
+    _migrate_agents_harness(conn)
+    _migrate_agents_model(conn)
     _migrate_agents_worktree_path(conn)
     ensure_notetaker_context_row(conn)
 

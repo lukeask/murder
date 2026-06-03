@@ -62,8 +62,9 @@ class CollaboratorWorker(Worker):
             result = await self._swap_model(payload, ctx)
             return {"handled": True, **(result or {})}
         if kind == "collaborator.transcript.refresh":
-            agent = self._get_agent("collaborator-0")
-            if agent is None:
+            agent_id = payload.get("agent_id", "collaborator-0")
+            agent = self._get_agent(str(agent_id))
+            if agent is None or not hasattr(agent, "refresh_transcript"):
                 return {"handled": True, "available": False, "turns": []}
             turns = await agent.refresh_transcript()
             return {

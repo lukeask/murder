@@ -28,6 +28,7 @@ from murder.tui.dispatch.schedule_cells import (
     deps_cell_for,
     dispatch_schedule_cell,
     display_status_for,
+    last_update_cell,
 )
 
 
@@ -55,6 +56,15 @@ def _checklist_to_lines(snapshot: dict[str, Any]) -> str:
 
 class ScheduleTicketsTable(DataTable):
     """Tickets on the critical path with YAML metadata sync state visible."""
+
+    DEFAULT_CSS = """
+    ScheduleTicketsTable {
+        border: solid $primary;
+    }
+    ScheduleTicketsTable:focus {
+        border: solid $accent;
+    }
+    """
 
     BINDINGS = [
         Binding("enter", "request_carve", "Metadata", show=False),
@@ -86,6 +96,7 @@ class ScheduleTicketsTable(DataTable):
         self.add_column("title", width=34)
         self.add_column("wave", width=5)
         self.add_column("status", width=14)
+        self.add_column("last update", width=24)
         self.add_column("deps", width=5)
         self.add_column("schedule", width=14)
         self.add_column("harness", width=14)
@@ -106,7 +117,9 @@ class ScheduleTicketsTable(DataTable):
             *snapshot.recent_done_tickets,
             *snapshot.archived_tickets,
         )
-        for row in rows:
+        sorted_rows = sorted(rows, key=lambda row: row.id)
+        sorted_rows.sort(key=lambda row: row.last_update_at, reverse=True)
+        for row in sorted_rows:
             self._append_row(snapshot, row)
         if self._ids:
             if prev_ticket_id is not None:
@@ -129,6 +142,7 @@ class ScheduleTicketsTable(DataTable):
             row.title,
             str(row.wave),
             display_status_for(row),
+            last_update_cell(row, snapshot.as_of),
             deps_cell_for(row),
             sched,
             row.harness or "",

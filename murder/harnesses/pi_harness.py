@@ -68,8 +68,26 @@ _PI_CHROME_RE = re.compile(
         |tab\s+scope\b
         |model\s+scope:
         |model\s+name:
+        |.*ctrl\+p\s+to\s+cycle\b
+        |.*\brestart\s+tmux\.?\s*$
         |use\s+/login\b
         |.*docs/(?:providers|models)\.md\s*$
+        |update\s+available\b
+        |new\s+version\s+\d
+        |changelog:\s+https?://
+        |https?://\S
+        |.*\.(?:g|gg|ggu|gguf|bin|safetensors)\b
+    )
+    """,
+    re.IGNORECASE | re.VERBOSE,
+)
+_PI_REASONING_PREFIX_RE = re.compile(
+    r"""
+    ^\s*(?:
+        the\s+user\s+(?:wants|asked|is\s+asking)\b
+        |i\s+(?:need|should|will|can)\b
+        |we\s+need\b
+        |need\s+to\b
     )
     """,
     re.IGNORECASE | re.VERBOSE,
@@ -87,6 +105,17 @@ def _is_pi_chrome(line: str) -> bool:
 
 def _strip_pi_chrome(pane_text: str) -> str:
     return "\n".join(line for line in strip_ansi(pane_text).splitlines() if not _is_pi_chrome(line))
+
+
+def _normalize_pi_transcript_body(role: str, body: str) -> str:
+    if role != "assistant" or "\n\n" not in body:
+        return body
+    paragraphs = [part.strip() for part in body.split("\n\n") if part.strip()]
+    if len(paragraphs) < 2:
+        return body
+    if any(_PI_REASONING_PREFIX_RE.match(part) for part in paragraphs[:-1]):
+        return paragraphs[-1]
+    return body
 
 
 def _tail(pane_text: str) -> str:
@@ -111,15 +140,10 @@ class PiAdapter(HarnessAdapter):
     crow_system_prompt: ClassVar[str] = "see prompts/crow_pi.md"
     model_list_command: ClassVar[str | None] = "/model"
     model_list_capture_delay_s: ClassVar[float] = 3.0
-    transcript_prompt_markers: ClassVar[tuple[str, ...]] = (">",)
-    transcript_drop_substrings: ClassVar[tuple[str, ...]] = (
-        "ctrl+c/ctrl+d",
-        "slash commands",
-        "startup help",
-        "loaded resources",
-        "tmux extended-keys",
-        "0.0%/",
-    )
+    # Transcript parsing is handled by the registered BlankSeparatedTranscriptParser
+    # (see register_parser at the bottom of this module), keyed off ``_is_pi_chrome``
+    # — Pi's scrollback doesn't echo a prompt marker on completed turns, so the
+    # generic prompt-marker ClassVars are intentionally left unset.
     available_startup_models: ClassVar[list[tuple[str, str]]] = [
         ("anthropic/claude-sonnet-4-6", "Claude Sonnet 4.6"),
         ("anthropic/claude-opus-4-7", "Claude Opus 4.7"),
@@ -199,13 +223,12 @@ class PiAdapter(HarnessAdapter):
         await self.interrupt_generation(session)
 
 
-from murder.harnesses.transcripts import PreprocessedPromptMarkerParser, register_parser
+from murder.harnesses.transcripts import BlankSeparatedTranscriptParser, register_parser
 
 register_parser(
     "pi",
-    PreprocessedPromptMarkerParser(
-        prompt_markers=PiAdapter.transcript_prompt_markers,
-        drop_substrings=PiAdapter.transcript_drop_substrings,
-        normalize=_strip_pi_chrome,
+    BlankSeparatedTranscriptParser(
+        is_chrome_fn=_is_pi_chrome,
+        normalize_body=_normalize_pi_transcript_body,
     ),
 )

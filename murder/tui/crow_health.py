@@ -103,8 +103,8 @@ def _as_utc(value: datetime) -> datetime:
 
 
 HEALTH_BORDER_COLOR: dict[Health, str] = {
-    Health.RED: "red",
-    Health.YELLOW: "yellow",
-    Health.GREEN: "green",
-    Health.NEUTRAL: "$border",
+    Health.RED: "$crow-health-red",
+    Health.YELLOW: "$crow-health-yellow",
+    Health.GREEN: "$crow-health-green",
+    Health.NEUTRAL: "$crow-health-neutral",
 }

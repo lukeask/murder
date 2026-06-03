@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from murder.agents.base import Agent, AgentRole, AgentStatus
+from murder.agents.base import Daemon, AgentRole, AgentStatus
 from murder.config import PlannerConfig
 from murder.harnesses.base import HarnessAdapter
 
@@ -29,7 +29,7 @@ class PendingAsk:
     crow_session: str
 
 
-class PlanningHandler(Agent):
+class PlanningHandler(Daemon):
     role = AgentRole.PLANNING_HANDLER
 
     def __init__(
@@ -54,7 +54,6 @@ class PlanningHandler(Agent):
         self.runtime = runtime
         self.status = AgentStatus.IDLE
         self.ticket_id = None
-        self._poll_task: asyncio.Task[None] | None = None
         # One in-flight ask per ticket. If the same crow re-asks while a prior
         # ask is pending, the new ask replaces the old pending entry.
         self._pending: dict[str, PendingAsk] = {}
@@ -97,19 +96,19 @@ class PlanningHandler(Agent):
                 )
             )
 
-        async def _loop() -> None:
-            while self.status == AgentStatus.RUNNING:
-                try:
-                    await self.tick()
-                except asyncio.CancelledError:
-                    raise
-                except Exception:
-                    # A transient planner pane read failure should not terminate
-                    # the handler. relay_ask() will surface dead sessions.
-                    pass
-                await asyncio.sleep(self.config.poll_interval_s)
+        self._start_loop()
 
-        self._poll_task = asyncio.create_task(_loop())
+    async def _loop(self) -> None:
+        while self.status == AgentStatus.RUNNING:
+            try:
+                await self.tick()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                # A transient planner pane read failure should not terminate
+                # the handler. relay_ask() will surface dead sessions.
+                pass
+            await asyncio.sleep(self.config.poll_interval_s)
 
     async def stop(self, *, failed: bool = False, kill_session: bool = True) -> None:
         del kill_session
@@ -119,21 +118,9 @@ class PlanningHandler(Agent):
             self.status = AgentStatus.FAILED
         else:
             self.status = AgentStatus.DONE
-        if self._poll_task is not None:
-            self._poll_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError, Exception):
-                await self._poll_task
-            self._poll_task = None
+        await super().stop(failed=failed)
         with contextlib.suppress(Exception):
             await tmux.kill_session(self.session)
-        if self.runtime.db is not None:
-            self.runtime.sync_agent(self)
-
-    async def send(self, msg: str) -> None:
-        # PlanningHandler does not accept direct messages; user/crow chat goes
-        # to the PlanningAgent itself, not its handler.
-        del msg
-        return None
 
     async def relay_ask(self, ticket_id: str, ask: str, crow_session: str) -> None:
         """Called by orchestrator when a crow on this plan emits an ASK."""

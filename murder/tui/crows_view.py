@@ -13,13 +13,16 @@ fetched over the service bus. Pane tails use :meth:`~murder.tui.client.TuiRuntim
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
-from dataclasses import dataclass
+import re
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from textual import events
+from textual.actions import SkipAction
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Container, Grid, ScrollableContainer
@@ -28,8 +31,10 @@ from textual.reactive import reactive
 from textual.widget import Widget
 from textual.widgets import RichLog, Static
 
+from murder.harnesses.transcripts import has_transcript_parser
 from murder.service.client_api import CrowSessionSummary, CrowSnapshot
 from murder.tui.crow_health import Health, classify, is_stuck
+from murder.tui.live_log import LiveRichLog
 from murder.tui.pane_capture import CapturePaneFn, PaneCaptureError
 from murder.tui.pane_mirror import PaneMirror
 from murder.tui.perf_log import PerfLog
@@ -37,8 +42,8 @@ from murder.tui.perf_log import PerfLog
 TILE_LINES_RAW = 40
 """Raw-mode tail: last N lines of pane; large enough to show the input box and permission prompts."""
 
-TILE_LINES_PARSED = 200
-"""Parsed-mode capture: enough history for a meaningful transcript scroll."""
+TILE_LINES_PARSED = 400
+"""Parsed-mode capture: enough history for wrapped panes and model-switch chatter."""
 
 CAPTURE_TIMEOUT_S = 2.0
 """Per-tile tmux capture timeout — a stuck pane must not block the wall."""
@@ -63,6 +68,14 @@ _STATUS_SORT_RANK = {
     "failed": 4,
 }
 
+_CROW_PREFIX_RE = re.compile(r"^murder_[^_]+_crow_")
+
+
+def _short_display_name(raw: str) -> str:
+    """Strip project/template prefix, yielding harness+role+id."""
+    m = _CROW_PREFIX_RE.match(raw)
+    return raw[m.end():] if m else raw
+
 logger = logging.getLogger(__name__)
 
 
@@ -78,6 +91,7 @@ class CrowEntry:
     session: str | None
     health: Health
     started_at: datetime | None = None
+    model: str | None = None
 
 
 class CrowRosterRow(Widget):
@@ -85,19 +99,19 @@ class CrowRosterRow(Widget):
 
     DEFAULT_CSS = """
     CrowRosterRow {
-        height: 2;
+        height: auto;
         padding: 0 1;
         border-left: tall $border;
         background: $surface;
     }
     CrowRosterRow:focus {
-        background: $primary 15%;
-        border-left: tall $primary;
+        background: $pane-focus 15%;
+        border-left: tall $pane-focus;
     }
-    CrowRosterRow.-health-red    { border-left: tall $error; }
-    CrowRosterRow.-health-yellow { border-left: tall $warning; }
-    CrowRosterRow.-health-green  { border-left: tall $success; }
-    CrowRosterRow.-health-neutral{ border-left: tall $border; }
+    CrowRosterRow.-health-red    { border-left: tall $crow-health-red; }
+    CrowRosterRow.-health-yellow { border-left: tall $crow-health-yellow; }
+    CrowRosterRow.-health-green  { border-left: tall $crow-health-green; }
+    CrowRosterRow.-health-neutral{ border-left: tall $crow-health-neutral; }
     CrowRosterRow.-kill-pending  { background: $error 10%; }
     """
 
@@ -154,7 +168,7 @@ class CrowRosterRow(Widget):
         star = "★ " if self._favorite else "  "
         eye = "[pane]" if self._pane_visible else ""
         ticket = f"[{e.ticket_id}]" if e.ticket_id else ""
-        name = e.session or e.agent_id
+        name = _short_display_name(e.session or e.agent_id)
         status_chip = e.status.upper()
         line1_parts = [star + name, status_chip]
         if ticket:
@@ -205,6 +219,11 @@ class CrowRosterList(ScrollableContainer):
     class PaneVisibilityChanged(Message):
         def __init__(self, visible: set[str]) -> None:
             self.visible = frozenset(visible)
+            super().__init__()
+
+    class KillRequested(Message):
+        def __init__(self, agent_id: str) -> None:
+            self.agent_id = agent_id
             super().__init__()
 
     def __init__(self) -> None:
@@ -342,6 +361,27 @@ class CrowRosterList(ScrollableContainer):
             self._update_row(row, row.entry)
         self.post_message(self.PaneVisibilityChanged(self._pane_visible))
 
+    def rename_rogue(self, old_agent_id: str, new_agent_id: str) -> None:
+        if old_agent_id in self._favorites:
+            self._favorites.discard(old_agent_id)
+            self._favorites.add(new_agent_id)
+        if old_agent_id in self._pane_visible:
+            self._pane_visible.discard(old_agent_id)
+            self._pane_visible.add(new_agent_id)
+        if self._kill_pending == old_agent_id:
+            self._kill_pending = None
+        self._save_favorites()
+        row = self._rows.pop(old_agent_id, None)
+        if row is not None:
+            self._rows[new_agent_id] = row
+            updated_entry = replace(row.entry, agent_id=new_agent_id, ticket_title=new_agent_id)
+            if old_agent_id in self._order:
+                self._order = [
+                    new_agent_id if agent_id == old_agent_id else agent_id
+                    for agent_id in self._order
+                ]
+            self._update_row(row, updated_entry)
+
     def hide_agent(self, agent_id: str) -> bool:
         if agent_id not in self._pane_visible:
             return False
@@ -387,7 +427,7 @@ class CrowRosterList(ScrollableContainer):
             return
         agent_id = row.agent_id
         if self._kill_pending == agent_id:
-            logger.info("TODO: dispatch agent.stop for %s", agent_id)
+            self.post_message(self.KillRequested(agent_id))
             self._clear_kill_pending()
             return
         self._clear_kill_pending()
@@ -485,6 +525,7 @@ def _entry_from_session(
         session=session.session_name,
         health=_health_for_summary(session, now=now),
         started_at=session.started_at,
+        model=session.model,
     )
 
 
@@ -542,12 +583,12 @@ class CrowTile(Container):
         width: 1fr;
         layout: vertical;
     }
-    CrowTile.-health-red    { border: solid $error; }
-    CrowTile.-health-yellow { border: solid $warning; }
-    CrowTile.-health-green  { border: solid $success; }
-    CrowTile.-health-neutral{ border: solid $border; }
+    CrowTile.-health-red    { border: solid $crow-health-red; }
+    CrowTile.-health-yellow { border: solid $crow-health-yellow; }
+    CrowTile.-health-green  { border: solid $crow-health-green; }
+    CrowTile.-health-neutral{ border: solid $crow-health-neutral; }
     CrowTile:focus,
-    CrowTile:focus-within { border: heavy $accent; }
+    CrowTile:focus-within { border: heavy $pane-focus; }
     CrowTile > RichLog {
         height: 1fr;
         width: 1fr;
@@ -556,6 +597,8 @@ class CrowTile(Container):
     CrowTile > ChatLog {
         height: 1fr;
         width: 1fr;
+        overflow-x: hidden;
+        overflow-y: auto;
         border: none;
         padding: 0;
     }
@@ -586,9 +629,20 @@ class CrowTile(Container):
     def __init__(self, entry: CrowEntry) -> None:
         super().__init__()
         self._entry = entry
-        self._raw_mode = True
+        # Default to parsed mode when a parser is available for this harness;
+        # fall back to raw mode for harnesses with no transcript parser so the
+        # tile is never a blank screen on first render.
+        self._raw_mode = not has_transcript_parser(entry.harness or "")
         self._last_turns: list[tuple[str, str]] = []
-        self._raw_log = RichLog(highlight=False, markup=False, wrap=True, auto_scroll=True)
+        self._parsed_loaded = False
+        self._last_render_width = 0
+        self._last_user_msg: str = ""
+        self._raw_log = LiveRichLog(
+            highlight=False,
+            markup=False,
+            min_width=1,
+            wrap=True,
+        )
         # Import here to avoid requiring planning_mode_widgets at module load time.
         from murder.tui.planning_mode_widgets import ChatLog as _ChatLog
 
@@ -608,16 +662,22 @@ class CrowTile(Container):
 
     def on_mount(self) -> None:
         self._apply_entry()
-        self._chat_log.display = False
+        self._raw_log.display = self._raw_mode
+        self._chat_log.display = not self._raw_mode
 
     def on_key(self, event: events.Key) -> None:
         if self._raw_mode:
             return
+        # Call the scroll actions directly (not via the binding dispatcher), so
+        # suppress the SkipAction they raise when the transcript isn't scrollable
+        # — otherwise a stray j/k while the tile is focused crashes the TUI.
         if event.key in ("j", "down"):
-            self._chat_log.action_scroll_down()
+            with contextlib.suppress(SkipAction):
+                self._chat_log.action_scroll_down()
             event.stop()
         elif event.key in ("k", "up"):
-            self._chat_log.action_scroll_up()
+            with contextlib.suppress(SkipAction):
+                self._chat_log.action_scroll_up()
             event.stop()
 
     def update_entry(self, entry: CrowEntry) -> None:
@@ -627,19 +687,49 @@ class CrowTile(Container):
 
     def set_tail(self, text: str) -> None:
         """Update the raw log view (called on each refresh tick)."""
-        self._raw_log.clear()
-        for line in text.splitlines():
-            self._raw_log.write(line)
+        def _write_tail() -> None:
+            for line in text.splitlines():
+                self._raw_log.write(line)
+
+        self._raw_log.replace_lines(_write_tail)
 
     def set_parsed(self, turns: list[tuple[str, str]], harness_kind: str = "") -> None:
-        """Update the parsed chat log; skips if turns are unchanged."""
-        if turns == self._last_turns:
+        """Update the parsed chat log.
+
+        A RichLog renders and caches each line's Strip at the widget's width when
+        ``write()`` is called, and does not reflow on resize. A parse can land
+        while the ChatLog is still ``display:false`` / pre-layout (size 0 → it
+        renders at ``min_width`` 1), e.g. right after a ctrl+y toggle reveals the
+        tile. Caching that narrow render paints the transcript as a column of
+        single characters (or blank) that never recovers.
+
+        So: defer until the ChatLog has a real width, then re-render whenever the
+        turns change *or* the width changed since the last render (a later resize
+        must re-flow the cached lines). The refresh tick re-invokes this, so a
+        deferred first parse renders on the next tick once layout has run.
+        """
+        width = self._chat_log.size.width
+        if width <= 1:
+            return  # not laid out yet — avoid caching a min-width render
+        if self._parsed_loaded and turns == self._last_turns and width == self._last_render_width:
             return
+        self._parsed_loaded = True
         self._last_turns = turns
+        self._last_render_width = width
         self._chat_log.set_turns(turns)
         if not turns:
             kind = harness_kind or self._entry.harness or "unknown"
-            self._chat_log.add_status(f"(no transcript parser for '{kind}')")
+            self._chat_log.add_status(f"(no parsed transcript visible yet for '{kind}')")
+        last_user = next((text for role, text in reversed(turns) if role == "user"), "")
+        new_msg = last_user.splitlines()[0].strip() if last_user else ""
+        if new_msg != self._last_user_msg:
+            self._last_user_msg = new_msg
+            self._apply_entry()
+
+    def set_parsed_status(self, text: str) -> None:
+        self._parsed_loaded = True
+        self._last_turns = []
+        self._chat_log.replace_transcript([], status=text)
 
     def action_toggle_view(self) -> None:
         self._raw_mode = not self._raw_mode
@@ -649,10 +739,10 @@ class CrowTile(Container):
 
     def _apply_entry(self) -> None:
         e = self._entry
-        ticket = e.ticket_id or "—"
-        title = e.ticket_title or e.harness or "crow"
-        self.border_title = f"{ticket} · {title}"
-        self.border_subtitle = e.session or "(no session)"
+        name = _short_display_name(e.session or e.agent_id)
+        model_label = e.model or e.harness or ""
+        self.border_title = f"{name} · {model_label}" if model_label else name
+        self.border_subtitle = self._last_user_msg
         for h in Health:
             self.remove_class(f"-health-{h.value}")
         self.add_class(f"-health-{e.health.value}")
@@ -732,6 +822,8 @@ class TailWall(Grid):
                 self.mount(self._empty)
                 self.styles.grid_size_columns = 1
                 self.styles.grid_size_rows = 1
+                self.styles.grid_columns = "1fr"
+                self.styles.grid_rows = "1fr"
             return [], 0, removed, 0
         for agent_id in list(self._tiles):
             if agent_id not in new_ids:
@@ -753,11 +845,41 @@ class TailWall(Grid):
         return new_ids, mounted, removed, updated
 
     def _resize_grid(self, count: int) -> None:
-        cols = min(GRID_TARGET_COLS, max(1, count))
-        rows = max(1, (count + cols - 1) // cols)
-        self._cols = cols
-        self.styles.grid_size_columns = cols
-        self.styles.grid_size_rows = rows
+        if count == 5:
+            # 6-column grid: top row = 3 tiles at span 2, bottom row = 2 tiles at span 3
+            self._cols = 3
+            grid_cols = 6
+            rows = 2
+            self.styles.grid_size_columns = grid_cols
+            self.styles.grid_size_rows = rows
+            self.styles.grid_columns = " ".join("1fr" for _ in range(grid_cols))
+            self.styles.grid_rows = "1fr 1fr"
+            for i, agent_id in enumerate(self._order):
+                tile = self._tiles.get(agent_id)
+                if tile is not None:
+                    tile.styles.column_span = 2 if i < 3 else 3
+        elif count == 4:
+            self._cols = 2
+            self.styles.grid_size_columns = 2
+            self.styles.grid_size_rows = 2
+            self.styles.grid_columns = "1fr 1fr"
+            self.styles.grid_rows = "1fr 1fr"
+            for agent_id in self._order:
+                tile = self._tiles.get(agent_id)
+                if tile is not None:
+                    tile.styles.column_span = 1
+        else:
+            cols = min(GRID_TARGET_COLS, max(1, count))
+            rows = max(1, (count + cols - 1) // cols)
+            self._cols = cols
+            self.styles.grid_size_columns = cols
+            self.styles.grid_size_rows = rows
+            self.styles.grid_columns = " ".join("1fr" for _ in range(cols))
+            self.styles.grid_rows = " ".join("1fr" for _ in range(rows))
+            for agent_id in self._order:
+                tile = self._tiles.get(agent_id)
+                if tile is not None:
+                    tile.styles.column_span = 1
 
     def _focused_tile_idx(self) -> int | None:
         focused = self.app.focused
@@ -813,9 +935,12 @@ class CrowsView(Container):
     }
     CrowsView > CrowRosterList {
         height: 1fr;
-        width: 30%;
-        min-width: 28;
+        width: 21%;
+        min-width: 22;
         border: solid $border;
+    }
+    CrowsView > CrowRosterList:focus-within {
+        border: heavy $pane-focus;
     }
     CrowsView > TailWall {
         height: 1fr;
@@ -840,6 +965,11 @@ class CrowsView(Container):
             self.entry = entry
             super().__init__()
 
+    class KillRequested(Message):
+        def __init__(self, agent_id: str) -> None:
+            self.agent_id = agent_id
+            super().__init__()
+
     def __init__(
         self,
         perf_log: PerfLog | None = None,
@@ -857,7 +987,8 @@ class CrowsView(Container):
         self._entries_by_id: dict[str, CrowEntry] = {}
         self._invalidation_key: str | None = None
         self._last_focused_agent_id: str | None = None
-        self._roster.border_title = "agents"
+        self._roster_visible: bool = True
+        self._roster.border_title = "crows"
         self._wall.border_title = "tails"
 
     @property
@@ -961,17 +1092,26 @@ class CrowsView(Container):
         async def _run() -> None:
             try:
                 text = await asyncio.wait_for(
-                    capture(session, n_lines),
+                    capture(session, lines=n_lines),  # type: ignore[call-arg]
                     timeout=CAPTURE_TIMEOUT_S,
                 )
             except (PaneCaptureError, asyncio.TimeoutError):
-                tile.set_tail("(session vanished)")
+                if tile.raw_mode:
+                    tile.set_tail("(session vanished)")
+                else:
+                    tile.set_parsed_status("(session vanished)")
                 return
             if tile.raw_mode:
                 tile.set_tail(text)
             else:
-                turns = _parse_tile_text(text, tile.entry.harness)
-                tile.set_parsed(turns)
+                kind = tile.entry.harness
+                try:
+                    turns = _parse_tile_text(text, kind)
+                except Exception:
+                    logger.exception("tile parse failed for %s (%s)", session, kind)
+                    tile.set_parsed_status(f"(parse error for '{kind or 'unknown'}')")
+                    return
+                tile.set_parsed(turns, kind)
 
         if perf is not None and perf.enabled:
             with perf.span("tui.crows.capture_tile", session=session):
@@ -988,6 +1128,15 @@ class CrowsView(Container):
         self._mirror.border_title = f"{entry.ticket_id or '—'} · {entry.ticket_title or entry.harness}"
         self._apply_mode()
         return True
+
+    def toggle_roster(self) -> bool:
+        """Toggle the crows roster sidebar. Returns new visibility state."""
+        self._roster_visible = not self._roster_visible
+        self._apply_mode()
+        if not self._roster_visible:
+            if not self.focus_first_tile():
+                self._wall.focus()
+        return self._roster_visible
 
     def action_back_to_wall(self) -> None:
         if self.enlarged_agent_id is None:
@@ -1020,7 +1169,7 @@ class CrowsView(Container):
             self._wall.display = False
             self._roster.display = False
         else:
-            self._roster.display = True
+            self._roster.display = self._roster_visible
             self._wall.display = bool(self._roster.pane_visible)
 
     def focus_last_tile(self) -> bool:
@@ -1052,6 +1201,23 @@ class CrowsView(Container):
     def roster_add_rogue(self, agent_id: str) -> None:
         """Mark a newly spawned rogue crow as favorite and pane-visible."""
         self._roster.add_rogue(agent_id)
+
+    def roster_rename_rogue(self, old_agent_id: str, new_agent_id: str) -> None:
+        self._roster.rename_rogue(old_agent_id, new_agent_id)
+        entry = self._entries_by_id.pop(old_agent_id, None)
+        if entry is not None:
+            self._entries_by_id[new_agent_id] = replace(
+                entry,
+                agent_id=new_agent_id,
+                ticket_title=new_agent_id,
+            )
+        if self._last_focused_agent_id == old_agent_id:
+            self._last_focused_agent_id = new_agent_id
+        if self.enlarged_agent_id == old_agent_id:
+            self.enlarged_agent_id = new_agent_id
+
+    def on_crow_roster_list_kill_requested(self, event: CrowRosterList.KillRequested) -> None:
+        self.post_message(self.KillRequested(event.agent_id))
 
     def on_crow_tile_highlighted(self, event: CrowTile.Highlighted) -> None:
         self._last_focused_agent_id = event.entry.agent_id

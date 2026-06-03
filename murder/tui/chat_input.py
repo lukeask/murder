@@ -4,7 +4,7 @@ Submissions are routed by the parent app to the Collaborator session
 via the Orchestrator (lazy-spawn on first message).
 
 Enter submits; Shift+Enter inserts a newline. Up/Down recall prior sent
-messages (readline-style draft is preserved). :rawkeymode forwards keys to
+messages (readline-style draft is preserved). :raw forwards keys to
 the harness until Esc Esc. For a crow target, Enter on an empty box
 requests an interrupt (flush a queued message sooner)."""
 
@@ -19,6 +19,7 @@ from textual.widgets import TextArea
 
 _SENT_HISTORY_MAX = 200
 _RAW_KEY_ESCAPE_EXIT_S = 0.45
+_SPAWN_COMMANDS = frozenset({":spawn", ":s"})
 
 _NAMED_TMUX_KEYS: dict[str, str] = {
     "enter": "Enter",
@@ -105,7 +106,7 @@ class ChatInput(TextArea):
         """Enter pressed with no text (crow interrupt when the app routes to a crow)."""
 
     class SpawnCommand(Message):
-        """Literal :spawn submitted; the app mounts the inline spawn wizard."""
+        """Literal :spawn or :s submitted; the app mounts the inline spawn wizard."""
 
     class RawKeyPress(Message):
         def __init__(self, key: str, *, literal: bool = False) -> None:
@@ -219,7 +220,7 @@ class ChatInput(TextArea):
             event.prevent_default()
             event.stop()
             text = self.text.strip()
-            if text == ":spawn":
+            if text in _SPAWN_COMMANDS:
                 self.clear()
                 self.post_message(self.SpawnCommand())
             elif text:
@@ -244,6 +245,18 @@ class ChatInput(TextArea):
             recalled = self._sent_history.browse_down()
             if recalled is not None:
                 self._set_input_text(recalled)
+        elif event.key == "ctrl+d":
+            event.prevent_default()
+            event.stop()
+            if hasattr(self.app, "_chat_input_memory"):
+                self.app._chat_input_memory = self.text
+            self.clear()
+        elif event.key == "ctrl+p":
+            event.prevent_default()
+            event.stop()
+            memory = getattr(self.app, "_chat_input_memory", "")
+            if memory:
+                self._set_input_text(memory)
         elif event.key == "escape":
             event.prevent_default()
             event.stop()

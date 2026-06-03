@@ -43,6 +43,12 @@ def _load(name: str) -> str:
 
 CC_IDLE = _load("cc_idle.txt")
 CC_BUSY = _load("cc_busy.txt")
+CODEX_IDLE_MINI = """
+OpenAI Codex
+
+›
+gpt-5.4-mini · ~/repo
+"""
 
 
 # ── Shared fixture / helpers ──────────────────────────────────────────────────
@@ -107,6 +113,45 @@ def test_start_success_passes_correct_cmd_to_create_session(fake_tmux: FakeTmux)
     assert "--dangerously-skip-permissions" in cmd
 
 
+def test_start_spec_model_is_bound_before_startup_cmd(fake_tmux: FakeTmux):
+    fake_tmux.queue_pane(CODEX_IDLE_MINI)
+    hs = _make_session(CodexAdapter())
+
+    result = asyncio.run(hs.start(_start_spec(model="gpt-5.4-mini")))
+
+    assert result.ok
+    create_calls = fake_tmux.calls_to("create_session")
+    assert len(create_calls) == 1
+    _session_name, _cwd, cmd = create_calls[0][0]
+    assert cmd[-2:] == ["--model", "gpt-5.4-mini"]
+    assert hs.adapter.startup_model == "gpt-5.4-mini"
+
+
+def test_adapter_startup_model_is_enough_to_skip_codex_runtime_picker(
+    fake_tmux: FakeTmux,
+):
+    fake_tmux.queue_pane(CODEX_IDLE_MINI)
+    hs = _make_session(CodexAdapter(startup_model="gpt-5.4-mini"))
+
+    async def _spy_set_model(model: str, effort: str | None = None):
+        raise AssertionError(f"unexpected runtime selection for {model} {effort}")
+
+    hs.set_model = _spy_set_model  # type: ignore[method-assign]
+
+    result = asyncio.run(hs.start(_start_spec()))
+
+    assert result.ok
+
+
+def test_set_model_accepts_codex_startup_selected_model(fake_tmux: FakeTmux):
+    hs = _make_session(CodexAdapter(startup_model="gpt-5.4-mini"))
+
+    result = asyncio.run(hs.set_model("gpt-5.4-mini", "medium"))
+
+    assert result.ok
+    assert fake_tmux.calls_to("send_keys") == []
+
+
 def test_start_success_sets_first_send_idle_gate(fake_tmux: FakeTmux):
     fake_tmux.queue_pane(CC_IDLE)
     hs = _make_session(ClaudeCodeAdapter())
@@ -166,6 +211,18 @@ def test_start_with_startup_model_calls_set_model(fake_tmux: FakeTmux):
     send_calls = fake_tmux.calls_to("send_keys")
     model_cmds = [args[1] for args, _ in send_calls if "/model" in args[1]]
     assert len(model_cmds) >= 1, "Expected at least one /model command"
+
+
+def test_cursor_default_composer_startup_skips_runtime_model_selection(fake_tmux: FakeTmux):
+    fake_tmux.queue_pane("  → Plan, search, build anything\n  Composer 2.5   Auto-run\n  ~/repo · main")
+    adapter = CursorAdapter(startup_model="composer-2.5")
+    hs = _make_session(adapter)
+
+    result = asyncio.run(hs.start(_start_spec(model="composer-2.5")))
+
+    assert result.ok
+    send_texts = [args[1] for args, _ in fake_tmux.calls_to("send_keys")]
+    assert not any(text.startswith("/model") for text in send_texts)
 
 
 def test_start_set_model_fail_returns_fail_result(fake_tmux: FakeTmux):
@@ -446,8 +503,7 @@ def test_cc_start_dismisses_trust_dialog(fake_tmux: FakeTmux):
     assert "1" in send_texts, "Expected trust dialog acceptance ('1') to be sent"
 
 
-def test_cursor_start_sends_auto_run_command(fake_tmux: FakeTmux):
-    # CursorAdapter.initialize_defaults sends "/auto-run on" (spec.auto_run is None → "on")
+def test_cursor_start_does_not_force_auto_run_when_unspecified(fake_tmux: FakeTmux):
     cursor_idle = _load("cursor_idle.txt")
     fake_tmux.queue_pane(cursor_idle)
 
@@ -456,7 +512,31 @@ def test_cursor_start_sends_auto_run_command(fake_tmux: FakeTmux):
     asyncio.run(hs.start(spec))
 
     send_texts = [args[1] for args, _ in fake_tmux.calls_to("send_keys")]
-    assert any("/auto-run" in t for t in send_texts), "Expected /auto-run command to be sent"
+    assert not any("/auto-run" in t for t in send_texts)
+
+
+def test_cursor_initialize_defaults_can_disable_auto_run(fake_tmux: FakeTmux):
+    hs = _make_session(CursorAdapter())
+    spec = _start_spec()
+    spec.auto_run = False
+
+    result = asyncio.run(hs.initialize_defaults(spec))
+
+    assert result.ok
+    send_texts = [args[1] for args, _ in fake_tmux.calls_to("send_keys")]
+    assert "/auto-run off" in send_texts
+
+
+def test_cursor_send_prompt_clears_input_before_typing(fake_tmux: FakeTmux):
+    adapter = CursorAdapter()
+
+    asyncio.run(adapter.send_prompt("cursor-session", 'good work. reply "ok"'))
+
+    send_calls = fake_tmux.calls_to("send_keys")
+    assert send_calls[0][0][1] == "C-u"
+    assert send_calls[0][1] == {"literal": False, "enter": False}
+    assert send_calls[1][0][1] == 'good work. reply "ok"'
+    assert send_calls[1][1] == {"literal": True, "enter": True}
 
 
 # ─────────────────────────────────────────────────────────────────────────────

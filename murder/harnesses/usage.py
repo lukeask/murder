@@ -22,7 +22,7 @@ _CLAUDE_USAGE_RE = re.compile(
 )
 _PERCENT_RE = re.compile(r"(?P<pct>\d+(?:\.\d+)?)\s*%\s+used", re.IGNORECASE)
 _RESET_RE = re.compile(
-    r"\bResets?\s+(?P<time>\d{1,2}:\d{2}\s*(?:am|pm))"
+    r"\bResets?\s+(?P<time>\d{1,2}(?::\d{2})?\s*(?:am|pm))"
     r"(?:\s*\((?P<tz>[^)]+)\))?",
     re.IGNORECASE,
 )
@@ -43,9 +43,12 @@ def utc_now_iso() -> str:
 
 
 def _parse_reset_at(text: str, now: datetime | None = None) -> str | None:
-    match = _RESET_RE.search(text)
-    if not match:
+    # Take the last match so stale /usage scrollback above the current overlay
+    # doesn't win over the fresh reset time at the bottom of the pane.
+    matches = list(_RESET_RE.finditer(text))
+    if not matches:
         return None
+    match = matches[-1]
 
     tz_name = match.group("tz") or "UTC"
     try:
@@ -54,7 +57,10 @@ def _parse_reset_at(text: str, now: datetime | None = None) -> str | None:
         tz = ZoneInfo("UTC")
 
     base = now.astimezone(tz) if now else datetime.now(tz=tz)
-    parsed = datetime.strptime(match.group("time").replace(" ", ""), "%I:%M%p")
+    raw_time = match.group("time").replace(" ", "")
+    # Claude's /usage renders bare-hour resets like `12am`; minutes optional.
+    fmt = "%I:%M%p" if ":" in raw_time else "%I%p"
+    parsed = datetime.strptime(raw_time, fmt)
     reset_at = base.replace(
         hour=parsed.hour,
         minute=parsed.minute,
@@ -67,7 +73,8 @@ def _parse_reset_at(text: str, now: datetime | None = None) -> str | None:
 
 
 def _first_percent_after(label: str, text: str) -> float | None:
-    idx = text.lower().find(label.lower())
+    # rfind: when scrollback contains old overlays, take the latest occurrence.
+    idx = text.lower().rfind(label.lower())
     if idx < 0:
         return None
     haystack = text[idx:]

@@ -9,7 +9,7 @@ import json
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, cast
 
-from murder.agents.base import Agent, AgentRole, AgentStatus
+from murder.agents.base import Daemon, AgentRole, AgentStatus
 from murder.completion import CompletionCoordinator
 from murder.config import CrowHandlerConfig
 from murder.harnesses.base import HarnessAdapter
@@ -21,7 +21,7 @@ if TYPE_CHECKING:
     from murder.service.runtime_scope import AgentLifecycleHost as Runtime
 
 
-class CrowHandler(Agent):
+class CrowHandler(Daemon):
     role = AgentRole.CROW_HANDLER
 
     def __init__(
@@ -64,7 +64,6 @@ class CrowHandler(Agent):
         self._idle_cached = False
         self._queued_message: str | None = None
         self._on_idle_callbacks: list[asyncio.Future[None]] = []
-        self._poll_task: asyncio.Task[None] | None = None
         self._done_pane_hash: str | None = None
         self._artifact_retry_paths: tuple[Path, ...] | None = None
         self._log_path: Path | None = None
@@ -102,23 +101,23 @@ class CrowHandler(Agent):
                 )
             )
 
-        async def _loop() -> None:
-            try:
-                while self.status == AgentStatus.RUNNING and not self._terminal_failure:
-                    try:
-                        await self.tick()
-                        self._consecutive_tick_failures = 0
-                    except asyncio.CancelledError:
-                        raise
-                    except Exception as e:
-                        await self._handle_tick_failure(e)
-                        break
-                    await asyncio.sleep(self.config.poll_interval_s)
-            finally:
-                if self._terminal_failure:
-                    await self._finalize_after_tick_failure()
+        self._start_loop()
 
-        self._poll_task = asyncio.create_task(_loop())
+    async def _loop(self) -> None:
+        try:
+            while self.status == AgentStatus.RUNNING and not self._terminal_failure:
+                try:
+                    await self.tick()
+                    self._consecutive_tick_failures = 0
+                except asyncio.CancelledError:
+                    raise
+                except Exception as e:
+                    await self._handle_tick_failure(e)
+                    break
+                await asyncio.sleep(self.config.poll_interval_s)
+        finally:
+            if self._terminal_failure:
+                await self._finalize_after_tick_failure()
 
     async def stop(self, *, failed: bool = False, kill_session: bool = True) -> None:
         del kill_session  # crow_handler has no real tmux session
@@ -128,16 +127,10 @@ class CrowHandler(Agent):
             self.status = AgentStatus.FAILED
         elif self.status != AgentStatus.DEAD:
             self.status = AgentStatus.DONE
-        if self._poll_task is not None:
-            self._poll_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError, Exception):
-                await self._poll_task
-            self._poll_task = None
+        await super().stop(failed=failed)
         self._fail_idle_waiters(RuntimeError("crow_handler stopped before crow became idle"))
         with contextlib.suppress(Exception):
             await tmux.kill_session(self.session)
-        if self.runtime.db is not None:
-            self.runtime.sync_agent(self)
 
     async def send(self, msg: str) -> None:
         await self.harness.send_prompt(self.crow_session, msg)

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from collections.abc import Sequence
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from murder.service.client_api import ScheduleTicketRow, SchedulerDecisionSummary
 from murder.tickets.status import TicketStatus
@@ -73,6 +73,15 @@ def dispatch_schedule_cell(
 def display_status_for(row: ScheduleTicketRow) -> str:
     sync_state = row.metadata_sync_state or "synced"
     return row.status if sync_state == "synced" else f"{row.status}!"
+
+
+def last_update_cell(row: ScheduleTicketRow, as_of: datetime) -> str:
+    stamp = (
+        row.last_update_at.strftime("%H:%M")
+        if as_of - row.last_update_at < timedelta(hours=24)
+        else row.last_update_at.strftime("%Y-%m-%d")
+    )
+    return f"{stamp} {row.last_update_label}"
 
 
 def deps_cell_for(row: ScheduleTicketRow) -> str:

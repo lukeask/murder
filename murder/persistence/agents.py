@@ -18,6 +18,8 @@ def upsert_agent(
     role: str,
     ticket_id: str | None,
     session: str | None,
+    harness: str | None = None,
+    model: str | None = None,
     status: str,
     start_commit: str | None = None,
     worktree_path: str | None = None,
@@ -30,15 +32,17 @@ def upsert_agent(
         conn.execute(
             """
             INSERT INTO agents
-                (agent_id, role, ticket_id, session, worktree_path, status, start_commit,
-                 started_at, last_heartbeat_at, pid)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                (agent_id, role, ticket_id, session, harness, model, worktree_path, status,
+                 start_commit, started_at, last_heartbeat_at, pid)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 agent_id,
                 role,
                 ticket_id,
                 session,
+                harness,
+                model,
                 worktree_path,
                 status,
                 start_commit,
@@ -51,7 +55,8 @@ def upsert_agent(
         conn.execute(
             """
             UPDATE agents
-               SET role = ?, ticket_id = ?, session = ?,
+               SET role = ?, ticket_id = ?, session = ?, harness = COALESCE(?, harness),
+                   model = COALESCE(?, model),
                    worktree_path = COALESCE(?, worktree_path),
                    status = ?,
                    start_commit = COALESCE(?, start_commit),
@@ -63,6 +68,8 @@ def upsert_agent(
                 role,
                 ticket_id,
                 session,
+                harness,
+                model,
                 worktree_path,
                 status,
                 start_commit,

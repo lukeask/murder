@@ -19,6 +19,8 @@ NoteRetire = Callable[[str], Awaitable[dict[str, Any]]]
 SendAgentMessage = Callable[[str, str, str | None], Awaitable[dict[str, Any]]]
 SendAgentKey = Callable[[str | None, str, bool], Awaitable[dict[str, Any]]]
 InterruptAgent = Callable[[str], Awaitable[dict[str, Any]]]
+StopAgent = Callable[[str], Awaitable[dict[str, Any]]]
+RenameRogue = Callable[[str, str], Awaitable[dict[str, Any]]]
 ScaffoldPlan = Callable[[str, str], Awaitable[dict[str, Any]]]
 RenamePlan = Callable[[str, str], Awaitable[dict[str, Any]]]
 DeprecatePlan = Callable[[str], Awaitable[dict[str, Any]]]
@@ -42,6 +44,8 @@ class OrchestratorCommandWorker(Worker):
         send_agent_message: SendAgentMessage,
         send_agent_key: SendAgentKey,
         interrupt_agent: InterruptAgent,
+        stop_agent: StopAgent,
+        rename_rogue: RenameRogue,
         scaffold_plan: ScaffoldPlan,
         rename_plan: RenamePlan,
         deprecate_plan: DeprecatePlan,
@@ -65,6 +69,8 @@ class OrchestratorCommandWorker(Worker):
                     "agent.message",
                     "agent.send_key",
                     "agent.interrupt",
+                    "agent.stop",
+                    "crow.rename_rogue",
                     "plan.scaffold",
                     "plan.rename",
                     "plan.deprecate",
@@ -85,6 +91,8 @@ class OrchestratorCommandWorker(Worker):
         self._send_agent_message = send_agent_message
         self._send_agent_key = send_agent_key
         self._interrupt_agent = interrupt_agent
+        self._stop_agent = stop_agent
+        self._rename_rogue = rename_rogue
         self._scaffold_plan = scaffold_plan
         self._rename_plan = rename_plan
         self._deprecate_plan = deprecate_plan
@@ -154,12 +162,25 @@ class OrchestratorCommandWorker(Worker):
                 if isinstance(raw_agent_id, str) and raw_agent_id.strip()
                 else None
             )
-            return await self._send_agent_key(agent_id, key.strip(), literal)
+            return await self._send_agent_key(agent_id, key.strip(), literal=literal)
         if command.kind == "agent.interrupt":
             agent_id = command.payload.get("agent_id")
             if not isinstance(agent_id, str) or not agent_id.strip():
                 raise ValueError("agent.interrupt requires agent_id")
             return await self._interrupt_agent(agent_id.strip())
+        if command.kind == "agent.stop":
+            agent_id = command.payload.get("agent_id")
+            if not isinstance(agent_id, str) or not agent_id.strip():
+                raise ValueError("agent.stop requires agent_id")
+            return await self._stop_agent(agent_id.strip())
+        if command.kind == "crow.rename_rogue":
+            agent_id = command.payload.get("agent_id")
+            name = command.payload.get("name")
+            if not isinstance(agent_id, str) or not agent_id.strip():
+                raise ValueError("crow.rename_rogue requires agent_id")
+            if not isinstance(name, str) or not name.strip():
+                raise ValueError("crow.rename_rogue requires name")
+            return await self._rename_rogue(agent_id.strip(), name.strip())
         if command.kind == "plan.scaffold":
             name = command.payload.get("name")
             body = command.payload.get("body")

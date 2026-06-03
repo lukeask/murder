@@ -60,6 +60,16 @@ class HarnessSession:
             startup_model=self.adapter.startup_model,
             startup_effort=self.adapter.startup_effort,
         )
+        # Adapters are strictly per-session (one HarnessAdapter instance backs
+        # one HarnessSession). start() propagates the spec's startup model/effort
+        # onto the adapter so that startup_cmd() and the "model already selected"
+        # check below read a single source of truth. Do not share an adapter
+        # across sessions — this write would otherwise leak one session's model
+        # into the next.
+        if start_spec.startup_model is not None:
+            self.adapter.startup_model = start_spec.startup_model
+        if start_spec.startup_effort is not None:
+            self.adapter.startup_effort = start_spec.startup_effort
         await tmux.create_session(
             self.session,
             start_spec.cwd,
@@ -103,12 +113,27 @@ class HarnessSession:
             return idle_result
 
         if desired_model:
-            model_result = await self.set_model(desired_model, desired_effort)
-            if not model_result.ok:
-                return model_result
-            idle_result = await self.wait_idle(timeout_s=15.0)
-            if not idle_result.ok:
-                return idle_result
+            launched_model = start_spec.startup_model or self.adapter.startup_model
+            startup_already_selected = (
+                self.adapter.startup_model_selects_runtime_model
+                and desired_model == launched_model
+            )
+            # A startup --model flag (codex) selects the model but carries no
+            # reasoning effort, so when a *non-default* effort is wanted we still
+            # run the runtime selection even though the model is already in place.
+            # set_model() short-circuits the default-effort case, so this only
+            # drives the picker when effort genuinely needs changing.
+            needs_runtime_effort = (
+                desired_effort is not None
+                and desired_effort != self.adapter.default_effort
+            )
+            if not startup_already_selected or needs_runtime_effort:
+                model_result = await self.set_model(desired_model, desired_effort)
+                if not model_result.ok:
+                    return model_result
+                idle_result = await self.wait_idle(timeout_s=15.0)
+                if not idle_result.ok:
+                    return idle_result
         return ok_result()
 
     async def wait_ready(self, timeout_s: float = 240.0) -> SimpleResult[None]:
@@ -155,12 +180,24 @@ class HarnessSession:
         return ok_result()
 
     async def set_model(self, model: str, effort: str | None = None) -> SimpleResult[None]:
+        # A model selected by the launch --model flag already runs at the
+        # harness's default effort, so requesting that same model with no (or
+        # the default) effort is a no-op. A non-default effort still has to be
+        # applied via the adapter's runtime picker.
+        if (
+            self.adapter.startup_model_selects_runtime_model
+            and self.adapter.startup_model == model
+            and (effort is None or effort == self.adapter.default_effort)
+        ):
+            return ok_result()
         selected = await self.adapter.set_model(self.session, model, effort=effort)
         if selected:
             return ok_result()
         effort_msg = f" with effort {effort!r}" if effort else ""
         return fail_result(
-            f"{self.adapter.kind} failed to select runtime model {model!r}{effort_msg}"
+            f"{self.adapter.kind} failed to select runtime model {model!r}{effort_msg} "
+            f"(startup_model={self.adapter.startup_model!r}, "
+            f"startup_selects_runtime={self.adapter.startup_model_selects_runtime_model})"
         )
 
     async def request_usage_status(self) -> SimpleResult[None]:
@@ -203,6 +240,7 @@ class HarnessAdapter(ABC):
     usage_collection_mode: ClassVar[UsageCollectionMode] = "none"
     supports_subagents: ClassVar[bool] = False
     cheapest_subagent_model: ClassVar[str | None] = None
+    startup_model_selects_runtime_model: ClassVar[bool] = False
 
     # Inputs for the default transcript parser (see parse_transcript). Leave the
     # markers empty for a harness whose UI doesn't echo prompts behind a simple

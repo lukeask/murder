@@ -23,6 +23,17 @@ class Owner(StrEnum):
 # check_name is intentionally reachable: future per-check budgets and
 # per-ticket overrides will key off it. This sprint keeps one uniform ladder.
 def resolution_policy(check_name: str, attempts: int) -> Owner:
+    # EMERGENCY (2026-06-02): writeset failures must NEVER auto-revert via REPROMPT.
+    # Crows share the main working tree (worktree isolation not yet implemented), so
+    # a revert reprompt causes the crow to run `git checkout --` on files it doesn't
+    # own, permanently destroying uncommitted user work. Skip straight to ASK_USER so
+    # a human reviews the violation before any destructive action is taken.
+    # TODO: lift this override once .murder/worktrees/ isolation is implemented.
+    if check_name == "writeset":
+        if attempts == 0:
+            return Owner.ASK_USER
+        return Owner.FAIL_TICKET
+
     if attempts == 0:
         return Owner.REPROMPT
     if attempts == 1:

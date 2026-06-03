@@ -22,10 +22,11 @@ from textual.widget import Widget
 from textual.widgets import Footer, Static
 
 from murder.config import Config
+from murder.orchestration.orchestrator import is_rogue_agent_id
 from murder.service.client_api import EscalationSummary
 from murder.service.settings_service import SettingsService
 from murder.storage.paths import ticket_md, tickets_dir, tui_prefs_path
-from murder.storage.worktrees import list_git_worktrees_sync
+from murder.storage.worktrees import list_murder_worktrees_sync
 from murder.terminal.session_names import format_session_name
 from murder.tui.chat_input import ChatInput
 from murder.tui.chat_target_cycle import (
@@ -58,7 +59,7 @@ from murder.tui.planning_mode_widgets import (
 )
 from murder.tui.settings_screen import SettingsScreen
 from murder.tui.spawn_wizard import SpawnWizard, build_worktree_options
-from murder.tui.themes import CUSTOM_THEMES
+from murder.tui.themes import crow_tui_variable_defaults, register_crow_themes
 from murder.tui.ticket_grid import TicketGrid
 from murder.user_config import UserConfig, load_user_config
 
@@ -149,12 +150,13 @@ class HelpScreen(ModalScreen[None]):
                         ":wq :q :q!    quit murder",
                         ":ticket <title>  create PLANNED ticket (sync picks up in ~2s)",
                         ":quick <title>   create ticket and kick immediately",
-                        ":rename <new>    rename selected plan  (:rename <old> <new>)",
+                        ":rename <new>    rename selected plan, or rogue crow when chatting one",
+                        "  (:rename <old> <new> for plans)",
                         ":deprecate [name]  deprecate selected or named plan",
-                        ":spawn          open rogue crow spawn wizard",
+                        ":spawn :s       open rogue crow spawn wizard",
                         ":hideescalations  toggle escalation strip",
                         ":uparrow :downarrow :larrow :rarrow :enter  one raw key → harness",
-                        ":rawkeymode  pass keys through until Esc Esc",
+                        ":raw  pass keys through until Esc Esc",
                         "/anything      passed to agent unchanged (/clear /compact etc)",
                         "",
                         "[b]keys[/b]",
@@ -162,8 +164,8 @@ class HelpScreen(ModalScreen[None]):
                         "ctrl+1/2/3  switch views  ·  [ and ] cycle views",
                         "Dispatch: [b]c[/b] / Enter opens ticket metadata editor; "
                         "F6 kicks ready rows",
-                        "ctrl+b  toggle docs sidebar",
-                        "ctrl+y  collaborator: parsed chat ⇄ raw tmux pane",
+                        "ctrl+b  toggle docs sidebar (planning) / crows roster sidebar (crows view)",
+                        "ctrl+y  planning/crow chat pane: parsed ⇄ raw tmux (when pane focused)",
                         "ctrl+c twice  force quit  ·  escape  unfocus chat",
                         "j/k or ↑/↓  vim-style navigation in lists and logs",
                         "ctrl+r refresh (includes usage gauges)",
@@ -194,8 +196,8 @@ class MurderApp(App[None]):
         Binding("ctrl+1", "view_planning", "Planning", priority=True),
         Binding("ctrl+2", "view_crows", "Crows", priority=True),
         Binding("ctrl+3", "view_schedule", "Dispatch", priority=True),
-        Binding("[", "previous_view", "Prev view", priority=True),
-        Binding("]", "next_view", "Next view", priority=True),
+        Binding("[", "previous_view", "Prev view", priority=True, show=False),
+        Binding("]", "next_view", "Next view", priority=True, show=False),
         ("ctrl+b", "toggle_sidebar", "Docs sidebar"),
         ("ctrl+y", "toggle_collab_raw", "Raw pane"),
         # Between-pane focus (VISION §4.3). Bare hjkl/arrows stay with the
@@ -214,11 +216,13 @@ class MurderApp(App[None]):
         Binding("tab", "focus_next_region", "Next pane", show=False, priority=True),
         Binding("shift+tab", "focus_previous_region", "Prev pane", show=False, priority=True),
         Binding("e", "focus_escalations", "Escalations", show=False),
+        Binding("ctrl+e", "focus_escalations", "Escalations", show=False),
         ("ctrl+r", "refresh_now", "Refresh"),
         ("c", "schedule_apply_carve", "Metadata"),
         Binding("m", "schedule_mode_picker", "Mode", show=False),
         ("f6", "kick_ready", "Kick"),
         ("ctrl+f", "focus_chat", "Chat"),
+        Binding("ctrl+s", "quick_spawn", "Spawn", show=False, priority=True),
         Binding("ctrl+/", "show_help_force", "Help", show=False),
         ("?", "show_help_force", "Help"),
     ]
@@ -257,7 +261,7 @@ class MurderApp(App[None]):
         border: solid $border;
     }
 
-    /* Focused pane — $accent comes from the active Textual theme (Settings). */
+    /* Focused pane — $pane-focus is distinct from crow-health-* (see themes.py). */
     PlanList:focus,
     NotesList:focus,
     ReportsList:focus,
@@ -267,13 +271,11 @@ class MurderApp(App[None]):
     ChatLog:focus,
     PaneMirror:focus,
     EscalationStrip:focus,
-    DispatchView:focus-within,
-    ScheduleTicketsTable:focus,
     CalendarPanel:focus,
     GaugeStrip:focus,
     ModeStrip:focus,
     TicketGrid:focus {
-        border: heavy $accent;
+        border: heavy $pane-focus;
     }
 
     PlanList:focus,
@@ -281,7 +283,6 @@ class MurderApp(App[None]):
     ReportsList:focus,
     ChatLog:focus,
     PaneMirror:focus,
-    ScheduleTicketsTable:focus,
     CalendarPanel:focus,
     TicketGrid:focus {
         background-tint: 0%;
@@ -334,6 +335,7 @@ class MurderApp(App[None]):
         self._shell_session: str | None = None
         self._last_ctrl_c: float = 0.0
         self._note_capture_draft = ""
+        self._chat_input_memory = ""
         self._crow_snapshot = None
         self._dispatch_ctrl = DispatchController(
             TuiContext(
@@ -346,8 +348,10 @@ class MurderApp(App[None]):
                 get_ticket_carve_snapshot=runtime.get_ticket_carve_snapshot,
             )
         )
-        for theme in CUSTOM_THEMES:
-            self.register_theme(theme)
+        register_crow_themes(self)
+
+    def get_theme_variable_defaults(self) -> dict[str, str]:
+        return crow_tui_variable_defaults()
 
     def notify(
         self,
@@ -460,12 +464,16 @@ class MurderApp(App[None]):
         perf = self.perf
         with perf.span("tui.refresh_bus_views"):
             dispatch = await self.runtime.get_dispatch_snapshot()
+            with perf.span("tui.crows.render_snapshot"):
+                self._crow_snapshot = await self.runtime.get_crow_snapshot()
             with perf.span("tui.header.refresh_counts"):
-                self._header.refresh_from_snapshot(dispatch)
+                self._header.refresh_from_snapshot(
+                    dispatch,
+                    crow_snapshot=self._crow_snapshot,
+                )
             with perf.span("tui.grid.refresh"):
                 self._grid.refresh_from_snapshot(dispatch)
             with perf.span("tui.crows.render_snapshot"):
-                self._crow_snapshot = await self.runtime.get_crow_snapshot()
                 self._crows.render_from_snapshot(self._crow_snapshot)
             with perf.span("tui.plans.refresh"):
                 self._plans.refresh_from_snapshot(await self.runtime.get_plans_snapshot())
@@ -533,17 +541,26 @@ class MurderApp(App[None]):
                 self._sync_chat_recipient()
                 self._plan_doc.display = False
 
-    async def _refresh_pane(self) -> None:
+    def _refresh_pane(self) -> None:
+        # Run in a worker with exit_on_error=False so a transient bus hiccup
+        # (e.g. a slow capture_pane RPC raising TimeoutError) skips the tick
+        # instead of propagating into the message pump and crashing the TUI.
+        # Dedicated group + exclusive coalesces overlapping ticks without
+        # cross-cancelling the manual group="mirror" refreshes.
+        self.run_worker(
+            self._refresh_pane_views(),
+            exclusive=True,
+            group="pane_refresh",
+            exit_on_error=False,
+        )
+
+    async def _refresh_pane_views(self) -> None:
         with self.perf.span("tui.refresh_pane"):
             await self._mirror.refresh_pane()
             if self._view == "crows":
                 await self._crows.refresh_tails()
-            if (
-                self._view == "planning"
-                and not self._collab_raw
-                and self._planner_target_name() is None
-            ):
-                await self._refresh_collab_chat()
+            if self._view == "planning" and not self._collab_raw:
+                await self._refresh_planning_chat()
 
     def on_ticket_grid_ticket_selected(self, event: TicketGrid.TicketSelected) -> None:
         self._mirror.set_session(self._crow_session_for_ticket(event.ticket_id))
@@ -560,6 +577,34 @@ class MurderApp(App[None]):
             label = event.entry.ticket_id or event.entry.session or event.entry.agent_id
             self._chat_target_label = label
             self._sync_chat_recipient()
+
+    def on_crows_view_kill_requested(self, event: CrowsView.KillRequested) -> None:
+        self.run_worker(
+            self._murder_crow(event.agent_id),
+            exclusive=False,
+            group="ui_crow_kill",
+        )
+
+    async def _murder_crow(self, agent_id: str) -> None:
+        result = await self._submit_command(
+            target_worker="orchestrator",
+            kind="agent.stop",
+            payload={"agent_id": agent_id},
+            timeout_s=15.0,
+        )
+        if result is None:
+            return
+        if result.get("handled") is False:
+            error = str(result.get("error") or "stop failed")
+            self.notify(error, severity="error", timeout=6)
+            return
+        if self._chat_target_agent_id == agent_id:
+            self._chat_target_agent_id = None
+            self._chat_target_label = "collaborator"
+            self._chat_pending_message = None
+            self._sync_chat_recipient()
+        self.notify(f"murdered {agent_id}", timeout=2)
+        self._refresh_service_views()
 
     def on_crow_tile_opened(self, event: CrowTile.Opened) -> None:
         # The CrowsView itself handles enlarge; surface a short attach hint
@@ -734,8 +779,8 @@ class MurderApp(App[None]):
             self._plan_doc.display = False
             self._apply_mode()
 
-    async def _refresh_collab_chat(self) -> None:
-        """Re-parse the collaborator's tmux pane into the chat transcript.
+    async def _refresh_planning_chat(self) -> None:
+        """Re-parse the active planning chat pane (collaborator or planner).
 
         Lock-guarded so overlapping refresh-pane ticks don't race two parses
         onto the same conversation log.
@@ -743,41 +788,96 @@ class MurderApp(App[None]):
         if self._collab_chat_lock.locked():
             return
         async with self._collab_chat_lock:
-            with self.perf.span("tui.collab_chat.refresh"):
+            with self.perf.span("tui.planning_chat.refresh"):
                 if self._view != "planning":
                     return
-                result = await self._submit_command(
-                    target_worker="collaborator",
-                    kind="collaborator.transcript.refresh",
-                    payload={},
-                    timeout_s=8.0,
-                    notify_errors=False,
-                )
-                if result is None:
-                    return
-                if not bool(result.get("available")):
-                    self._collab_chat.set_turns([])
-                    self._collab_chat.add_status(
-                        "(no collaborator yet — type a message to start one)"
-                    )
-                    return
-                turns = [
-                    (str(item.get("role", "")), str(item.get("text", "")))
-                    for item in result.get("turns", [])
-                    if isinstance(item, dict)
-                ]
-                if turns:
-                    self._collab_chat.set_turns(turns)
-                    return
-                self._collab_chat.set_turns([])
-                if bool(result.get("has_parser")):
-                    self._collab_chat.add_status("(collaborator chat — nothing parsed yet)")
+                plan_name = self._planner_target_name()
+                if plan_name is not None:
+                    await self._refresh_planner_chat(plan_name)
                 else:
-                    harness_kind = str(result.get("harness_kind", "unknown"))
-                    self._collab_chat.add_status(
-                        f"(no transcript parser for '{harness_kind}' yet — "
-                        "press ctrl+y for the raw pane)"
-                    )
+                    await self._refresh_collaborator_chat()
+
+    async def _refresh_collaborator_chat(self) -> None:
+        self._sync_planning_chat_label()
+        result = await self._submit_command(
+            target_worker="collaborator",
+            kind="collaborator.transcript.refresh",
+            payload={},
+            timeout_s=8.0,
+            notify_errors=False,
+        )
+        if result is None:
+            return
+        if not bool(result.get("available")):
+            self._collab_chat.replace_transcript(
+                [],
+                status="(no collaborator yet — type a message to start one)",
+            )
+            return
+        turns = [
+            (str(item.get("role", "")), str(item.get("text", "")))
+            for item in result.get("turns", [])
+            if isinstance(item, dict)
+        ]
+        if turns:
+            self._collab_chat.set_turns(turns)
+            return
+        if bool(result.get("has_parser")):
+            self._collab_chat.replace_transcript(
+                [],
+                status="(collaborator chat — nothing parsed yet)",
+            )
+        else:
+            harness_kind = str(result.get("harness_kind", "unknown"))
+            self._collab_chat.replace_transcript(
+                [],
+                status=(
+                    f"(no transcript parser for '{harness_kind}' yet — "
+                    "press ctrl+y for the raw pane)"
+                ),
+            )
+
+    async def _refresh_planner_chat(self, plan_name: str) -> None:
+        self._sync_planning_chat_label()
+        result = await self._submit_command(
+            target_worker="collaborator",
+            kind="collaborator.transcript.refresh",
+            payload={"agent_id": f"planner-{plan_name}"},
+            timeout_s=8.0,
+            notify_errors=False,
+        )
+        if result is None:
+            return
+        if not bool(result.get("available")):
+            self._collab_chat.replace_transcript([], status="(no planner session yet)")
+            return
+        turns = [
+            (str(item.get("role", "")), str(item.get("text", "")))
+            for item in result.get("turns", [])
+            if isinstance(item, dict)
+        ]
+        if turns:
+            self._collab_chat.set_turns(turns)
+            return
+        if bool(result.get("has_parser")):
+            self._collab_chat.replace_transcript(
+                [],
+                status="(planner chat — nothing parsed yet)",
+            )
+        else:
+            harness_kind = str(result.get("harness_kind", "unknown"))
+            self._collab_chat.replace_transcript(
+                [],
+                status=(
+                    f"(no transcript parser for '{harness_kind}' yet — "
+                    "press ctrl+y for the raw pane)"
+                ),
+            )
+
+    def _sync_planning_chat_label(self) -> None:
+        plan_name = self._planner_target_name()
+        label = f"planner: {plan_name}" if plan_name is not None else "collaborator"
+        self._collab_chat.set_agent_label(label)
 
     def action_view_planning(self) -> None:
         self._set_view("planning")
@@ -817,9 +917,8 @@ class MurderApp(App[None]):
 
     def _apply_mode(self) -> None:
         planning = self._view == "planning"
-        has_planner_target = planning and self._planner_target_name() is not None
-        collab_chat_on = planning and not self._collab_raw and not has_planner_target
-        collab_raw_on = planning and (self._collab_raw or has_planner_target)
+        collab_chat_on = planning and not self._collab_raw
+        collab_raw_on = planning and self._collab_raw
         if self._view in ("planning", "crows"):
             self._sync_chat_recipient()
         self._header.set_view(self._view)
@@ -850,9 +949,27 @@ class MurderApp(App[None]):
             else:
                 self._sync_collaborator_mirror_session()
         if collab_chat_on:
-            self.run_worker(self._refresh_collab_chat(), exclusive=True, group="collab_chat")
+            self.run_worker(self._refresh_planning_chat(), exclusive=True, group="collab_chat")
+        self.refresh_bindings()
+
+    def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
+        del parameters
+        if action in {"toggle_sidebar", "toggle_collab_raw"}:
+            return self._view in ("planning", "crows")
+        if action in {"schedule_apply_carve", "kick_ready"}:
+            return self._view == "schedule"
+        if action == "focus_chat":
+            return self._view != "schedule"
+        return True
+
+    def _planning_chat_pane_focused(self) -> bool:
+        return self._focus_contains(self._collab_chat) or self._focus_contains(self._mirror)
 
     def action_toggle_sidebar(self) -> None:
+        if self._view == "crows":
+            visible = self._crows.toggle_roster()
+            self.notify(f"crows sidebar: {'on' if visible else 'off'}", timeout=2)
+            return
         focused_before = self.focused
         self._sidebar_visible = not self._sidebar_visible
         self._apply_mode()
@@ -872,7 +989,25 @@ class MurderApp(App[None]):
         self.notify(f"docs sidebar: {'on' if self._sidebar_visible else 'off'}", timeout=2)
 
     def action_toggle_collab_raw(self) -> None:
-        # Only meaningful in collaborator planning mode; harmless elsewhere.
+        if self._view == "crows":
+            tile = self._focused_crow_tile()
+            if tile is None:
+                self.notify("focus a crow tail first", timeout=2)
+                return
+            tile.action_toggle_view()
+            self.notify(
+                f"crow tail view: {'raw tmux pane' if tile.raw_mode else 'parsed transcript'}",
+                timeout=2,
+            )
+            return
+
+        if self._view != "planning":
+            return
+
+        if not self._planning_chat_pane_focused():
+            self.notify("focus the chat pane first", timeout=2)
+            return
+
         self._collab_raw = not self._collab_raw
         if self._collab_raw:
             plan_name = self._planner_target_name()
@@ -881,11 +1016,24 @@ class MurderApp(App[None]):
             else:
                 self._sync_collaborator_mirror_session()
         self._apply_mode()
-        raw_label = "planner raw tmux pane" if self._planner_target_name() else "raw tmux pane"
+        plan_name = self._planner_target_name()
+        target = f"planner: {plan_name}" if plan_name is not None else "collaborator"
         self.notify(
-            f"collaborator view: {raw_label if self._collab_raw else 'parsed chat'}",
+            f"{target} view: {'raw tmux pane' if self._collab_raw else 'parsed chat'}",
             timeout=2,
         )
+
+    def _focused_crow_tile(self) -> CrowTile | None:
+        focused = self.focused
+        if isinstance(focused, CrowTile):
+            return focused
+        if self._view != "crows":
+            return None
+        if self._crows.focus_last_tile() or self._crows.focus_first_tile():
+            focused = self.focused
+            if isinstance(focused, CrowTile):
+                return focused
+        return None
 
     def on_chat_input_user_message(self, event: ChatInput.UserMessage) -> None:
         # Own worker group: a chat dispatch may spend a minute inside
@@ -907,14 +1055,27 @@ class MurderApp(App[None]):
             return
         self._chat.display = False
         try:
-            worktree_entries = list_git_worktrees_sync(self.runtime.repo_root)
+            worktree_entries = list_murder_worktrees_sync(self.runtime.repo_root)
         except Exception:
             worktree_entries = []
         worktree_options = build_worktree_options(self.runtime.repo_root, worktree_entries)
-        wizard = SpawnWizard(worktree_options=worktree_options)
+        wizard = SpawnWizard(
+            worktree_options=worktree_options,
+            model_discovery=self._discover_spawn_models,
+        )
         self._spawn_wizard = wizard
         parent.mount(wizard, before=self._chat)
         wizard.focus()
+
+    async def _discover_spawn_models(self, harness: str):
+        result = await SettingsService(self.runtime.repo_root).discover_models(harness)
+        if not result.ok:
+            self.notify(
+                f"{harness} model discovery failed: {result.message or 'no models found'}",
+                severity="warning",
+                timeout=6,
+            )
+        return result
 
     def on_spawn_wizard_confirmed(self, event: SpawnWizard.Confirmed) -> None:
         event.stop()
@@ -1167,6 +1328,21 @@ class MurderApp(App[None]):
             await self._quick_kick_ticket(title)
         elif cmd_lower.startswith(":rename "):
             args = stripped.split(maxsplit=2)
+            target_id = self._chat_target_agent_id
+            if target_id is not None and is_rogue_agent_id(target_id):
+                if len(args) != RENAME_SELECTED_ARG_COUNT:
+                    self.notify(
+                        ":rename <new> while chatting a rogue crow",
+                        severity="warning",
+                        timeout=3,
+                    )
+                    return
+                new_name = args[1].strip()
+                if not new_name:
+                    self.notify(":rename requires a new name", severity="warning", timeout=3)
+                    return
+                await self._rename_rogue_crow(target_id, new_name)
+                return
             if len(args) == RENAME_SELECTED_ARG_COUNT:
                 old_name = self._plans.selected_name
                 new_name = args[1].strip()
@@ -1204,7 +1380,7 @@ class MurderApp(App[None]):
             )
         elif cmd_lower in _COLON_RAW_KEYS:
             await self._send_raw_key_to_chat_target(_COLON_RAW_KEYS[cmd_lower])
-        elif cmd_lower == ":rawkeymode":
+        elif cmd_lower == ":raw":
             self._set_raw_key_mode(True)
 
     def _set_raw_key_mode(self, active: bool) -> None:
@@ -1300,6 +1476,30 @@ class MurderApp(App[None]):
         await self._focus_plan(name)
         self.notify(f"renamed plan: {old_name} → {name}", timeout=3)
 
+    async def _rename_rogue_crow(self, old_agent_id: str, new_name: str) -> None:
+        result = await self._submit_command(
+            target_worker="orchestrator",
+            kind="crow.rename_rogue",
+            payload={"agent_id": old_agent_id, "name": new_name},
+            timeout_s=15.0,
+        )
+        if result is None:
+            return
+        if result.get("handled") is False:
+            error = str(result.get("error") or "rename failed")
+            self.notify(error, severity="error", timeout=6)
+            return
+        new_agent_id = str(result.get("agent_id") or old_agent_id)
+        if new_agent_id != old_agent_id:
+            self._crows.roster_rename_rogue(old_agent_id, new_agent_id)
+            if self._chat_target_agent_id == old_agent_id:
+                self._chat_target_agent_id = new_agent_id
+                self._chat_target_label = new_agent_id
+                self._chat_pending_message = None
+                self._sync_chat_recipient()
+        self.notify(f"renamed rogue: {old_agent_id} → {new_agent_id}", timeout=3)
+        self._refresh_service_views()
+
     def action_open_note_capture(self) -> None:
         screen = NoteCaptureScreen(
             initial_draft=self._note_capture_draft,
@@ -1335,7 +1535,7 @@ class MurderApp(App[None]):
                 )
 
     async def _capture_note_via_service(self, raw: str) -> None:
-        """Submit note capture through the service command and update UI on completion."""
+        """Submit note capture through the service command; toast on completion."""
         result = await self._submit_command(
             target_worker="orchestrator",
             kind="notetaker.capture.submit",
@@ -1347,22 +1547,11 @@ class MurderApp(App[None]):
             return
         note_name = str(result.get("note_name") or "")
         short_vers = str(result.get("short_vers") or "")
-        if not note_name:
-            self.notify(short_vers or "note saved", timeout=5)
-            return
         self._refresh_service_views()
-        self._active_document = "note"
-        self._plan_doc.display = False
-        self._notes_doc.display = True
-        self._report_doc.display = False
-        self._notes_list.select_name(note_name)
-        self.run_worker(
-            self._render_note(note_name),
-            exclusive=True,
-            group="notedoc",
-            exit_on_error=False,
-        )
-        self.notify(short_vers or f"note saved: {note_name}", timeout=5)
+        if note_name:
+            self.notify(short_vers or f"note saved: {note_name}", timeout=5)
+        else:
+            self.notify(short_vers or "note saved", timeout=5)
 
     async def _quick_create_ticket(self, title: str) -> None:
         """Write a .murder/tickets/<id>.md; TicketSync imports it as PLANNED."""
@@ -1402,6 +1591,11 @@ class MurderApp(App[None]):
         if self.focused is not self._chat:
             self._pre_chat_focus = self.focused
         self.set_focus(self._chat)
+
+    def action_quick_spawn(self) -> None:
+        self._set_view("crows")
+        self.set_focus(self._chat)
+        self._chat.post_message(ChatInput.SpawnCommand())
 
     def action_restore_focus(self) -> None:
         if self._raw_key_mode:

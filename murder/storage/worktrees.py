@@ -144,6 +144,22 @@ def list_git_worktrees_sync(repo_root: Path) -> list[WorktreeEntry]:
     return _parse_worktree_porcelain(result.stdout, repo_root)
 
 
+def list_murder_worktrees_sync(repo_root: Path) -> list[WorktreeEntry]:
+    """Return only worktrees living under .murder/worktrees/."""
+    base = worktrees_dir(repo_root).resolve()
+    entries = list_git_worktrees_sync(repo_root)
+    result = []
+    for entry in entries:
+        if entry.is_main:
+            continue
+        try:
+            entry.path.resolve().relative_to(base)
+            result.append(entry)
+        except ValueError:
+            pass
+    return result
+
+
 async def ensure_worktree(repo_root: Path, ref: WorktreeRef) -> WorktreeRef:
     """Create or reuse a git worktree at ``ref.path`` on ``ref.branch``."""
 
@@ -247,6 +263,7 @@ __all__ = [
     "ensure_worktree",
     "list_git_worktrees",
     "list_git_worktrees_sync",
+    "list_murder_worktrees_sync",
     "named_worktree_ref",
     "prune_crow_worktree",
     "prune_terminal_crow_worktree",

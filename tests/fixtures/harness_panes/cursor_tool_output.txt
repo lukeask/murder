@@ -1,0 +1,36 @@
+
+    Read .gitignore
+
+  Repo contents: one file.
+
+  ────────────────────────────────────────
+
+  .gitignore
+
+  Git ignore rules for a Murder agent harness (or a project that uses it). It excludes Murder's
+  local state under .agents/ (SQLite DB murder.db plus WAL/SHM, a lock file, and runs/),
+  secret-bearing .env files (including .agents/.env), and the .murder/ directory.
+
+  ────────────────────────────────────────
+
+  Bottom line: testingmurderharness is effectively a stub — only a Murder-oriented .gitignore,
+  no source, tests, or config yet.
+
+
+  Search the entire repo recursively. For every file found, read it fully and write a detailed
+  200-word summary.
+
+
+  $ find /home/user/Documents/code/testingmurderharness -type f 201ms
+    /home/user/Documents/code/testingmurderharness/.gitignore
+    ---
+    … truncated (2 more lines) · ctrl+o to expand
+
+    Globbing "**/*" in .
+
+ ⠰⠰ Running  153 tokens
+ ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+  → Add a follow-up                                                             ctrl+c to stop
+ ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+  Composer 2.5 · 7.4%                                                                Auto-run
+  ~/Documents/code/testingmurderharness

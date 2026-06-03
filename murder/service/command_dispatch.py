@@ -77,11 +77,18 @@ class CommandDispatcher:
         result: dict[str, Any],
     ) -> None:
         if result.get("handled") is False:
-            self.fail(
-                command_id,
-                f"worker {worker_name!r} did not handle {command.kind!r}",
-                retryable=False,
+            # ``handled: False`` covers two cases: a worker that genuinely has
+            # no branch for this kind, and a handler reporting a soft business
+            # failure via an ``error`` field (e.g. "no agent named X"). Prefer
+            # the specific message so the caller sees the real reason instead of
+            # the generic "did not handle" text.
+            error = result.get("error")
+            message = (
+                str(error)
+                if error
+                else f"worker {worker_name!r} did not handle {command.kind!r}"
             )
+            self.fail(command_id, message, retryable=False)
             return
         self.complete(command_id, result)
 

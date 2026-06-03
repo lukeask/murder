@@ -33,7 +33,7 @@ class ModeStrip(Static):
 
     DEFAULT_CSS = """
     ModeStrip {
-        height: 2;
+        height: auto;
         color: $text-muted;
         border: solid $border;
     }

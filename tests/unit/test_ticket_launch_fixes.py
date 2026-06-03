@@ -15,6 +15,8 @@ from murder.completion.coordinator import CompletionCoordinator
 from murder.completion.registry import CheckRegistry
 from murder.config import CrowHandlerConfig
 from murder.harnesses.claude_code import ClaudeCodeAdapter
+from murder.harnesses.base import HarnessSession
+from murder.harnesses.results import fail_result
 from murder.orchestration.orchestrator import Orchestrator
 from murder.orchestration.outcome import TicketOutcomeService
 from murder.persistence.agents import upsert_agent
@@ -123,6 +125,72 @@ def test_force_ticket_status_reaps_crow_agents(repo_root: Path) -> None:
     assert result["ok"] is True
     assert reaped == ["crow-t098", "crow_handler-t098"]
     assert get_ticket_status(conn, "t098") == TicketStatus.DONE.value
+
+
+def test_set_schedule_at_updates_ticket_timestamp(repo_root: Path) -> None:
+    conn = _connect(repo_root)
+    created = datetime(2026, 5, 28, 12, 0, 0)
+    insert_ticket(
+        conn,
+        Ticket(
+            id="t097a",
+            title="schedule me",
+            wave=1,
+            status=TicketStatus.PLANNED,
+            created_at=created,
+            updated_at=created,
+        ),
+    )
+    rt = SimpleNamespace(db=conn, repo_root=repo_root, bus=None, run_id=None)
+    orch = Orchestrator(rt)
+
+    asyncio.run(orch.set_schedule_at("t097a", "2026-05-29T09:00:00"))
+
+    row = conn.execute(
+        "SELECT schedule_at, updated_at FROM tickets WHERE id = ?", ("t097a",)
+    ).fetchone()
+    assert row["schedule_at"] == "2026-05-29T09:00:00"
+    assert row["updated_at"] != created.isoformat(timespec="seconds")
+
+
+def test_codex_rogue_keeps_startup_model_session_on_runtime_picker_failure(
+    repo_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    agents: dict[str, object] = {}
+    reaped: list[str] = []
+
+    async def _reap(agent_id: str) -> None:
+        reaped.append(agent_id)
+
+    async def _fail_model_selection(self: HarnessSession, spec) -> object:
+        return fail_result(
+            "codex failed to select runtime model 'gpt-5.4-mini' with effort 'medium'"
+        )
+
+    monkeypatch.setattr(HarnessSession, "start", _fail_model_selection)
+
+    rt = SimpleNamespace(
+        db=MagicMock(),
+        bus=MagicMock(),
+        run_id="test-run",
+        repo_root=repo_root,
+        config=SimpleNamespace(
+            project=SimpleNamespace(name="test"),
+            runtime=SimpleNamespace(session_name_template="murder_{project}_{role}{suffix}"),
+        ),
+        get_agent=lambda agent_id: agents.get(agent_id),
+        register_agent=lambda agent: agents.setdefault(agent.id, agent),
+        sync_agent=MagicMock(),
+        reap=_reap,
+    )
+    orch = Orchestrator(rt)
+
+    agent_id = asyncio.run(orch.spawn_rogue("codex", "gpt-5.4-mini"))
+
+    assert agent_id in agents
+    assert reaped == []
+    rt.sync_agent.assert_called_once()
 
 
 def test_transition_done_heals_ready_status(repo_root: Path) -> None:

@@ -13,18 +13,18 @@ from murder.bus import AgentStatus
 if TYPE_CHECKING:
     import sqlite3
 
-    from murder.agents.base import Agent
+    from murder.agents.base import LifecycleParticipant
 
 
 class AgentRegistry:
     """Owns live agent instances; Runtime delegates registration and lookup."""
 
     def __init__(self) -> None:
-        self._agents: dict[str, Agent] = {}
-        self._crows: dict[str, Agent] = {}
-        self._crow_handlers: dict[str, Agent] = {}
+        self._agents: dict[str, LifecycleParticipant] = {}
+        self._crows: dict[str, LifecycleParticipant] = {}
+        self._crow_handlers: dict[str, LifecycleParticipant] = {}
 
-    def register(self, agent: Agent, *, persist: Callable[[Agent], None] | None = None) -> None:
+    def register(self, agent: LifecycleParticipant, *, persist: Callable[[LifecycleParticipant], None] | None = None) -> None:
         """Track one agent; optional ``persist`` is ``Runtime.sync_agent``."""
         self._agents[agent.id] = agent
         if agent.ticket_id is not None:
@@ -35,13 +35,13 @@ class AgentRegistry:
         if persist is not None:
             persist(agent)
 
-    def get_agent(self, agent_id: str) -> Agent | None:
+    def get_agent(self, agent_id: str) -> LifecycleParticipant | None:
         return self._agents.get(agent_id)
 
-    def get_crow(self, ticket_id: str) -> Agent | None:
+    def get_crow(self, ticket_id: str) -> LifecycleParticipant | None:
         return self._crows.get(ticket_id)
 
-    def get_crow_handler(self, ticket_id: str) -> Agent | None:
+    def get_crow_handler(self, ticket_id: str) -> LifecycleParticipant | None:
         return self._crow_handlers.get(ticket_id)
 
     def rename_agent(
@@ -49,8 +49,8 @@ class AgentRegistry:
         old_agent_id: str,
         new_agent_id: str,
         *,
-        persist: Callable[[Agent], None] | None = None,
-    ) -> Agent | None:
+        persist: Callable[[LifecycleParticipant], None] | None = None,
+    ) -> LifecycleParticipant | None:
         """Rekey a live agent without stopping it."""
         agent = self._agents.pop(old_agent_id, None)
         if agent is None:
@@ -61,7 +61,7 @@ class AgentRegistry:
             persist(agent)
         return agent
 
-    def all_agents(self) -> list[Agent]:
+    def all_agents(self) -> list[LifecycleParticipant]:
         return list(self._agents.values())
 
     async def reap(

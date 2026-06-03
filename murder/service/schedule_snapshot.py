@@ -61,28 +61,21 @@ def build_schedule_snapshot(
     active = _ticket_rows(
         conn.execute(
             f"""
-            SELECT t.id, t.title, t.wave, t.status, t.schedule_at, t.harness, t.model,
+            SELECT t.id, t.title, t.wave, t.status, t.updated_at, t.schedule_at,
+                   t.harness, t.model, t.last_error,
                    t.metadata_sync_state, t.metadata_parse_error,
                    t.metadata_conflict_reason, {dep_subq} AS deps_ok
               FROM tickets AS t
              WHERE t.status IN ('planned', 'ready', 'in_progress', 'blocked', 'failed')
-             ORDER BY
-                   CASE t.status
-                     WHEN 'ready' THEN 0
-                     WHEN 'planned' THEN 1
-                     WHEN 'in_progress' THEN 2
-                     WHEN 'blocked' THEN 3
-                     WHEN 'failed' THEN 4
-                     ELSE 9
-                   END,
-                   t.wave, t.id
+             ORDER BY datetime(t.updated_at) DESC, t.id
             """
         ).fetchall()
     )
     recent_done = _ticket_rows(
         conn.execute(
             f"""
-            SELECT t.id, t.title, t.wave, t.status, t.schedule_at, t.harness, t.model,
+            SELECT t.id, t.title, t.wave, t.status, t.updated_at, t.schedule_at,
+                   t.harness, t.model, t.last_error,
                    t.metadata_sync_state, t.metadata_parse_error,
                    t.metadata_conflict_reason, {dep_subq} AS deps_ok
               FROM tickets AS t
@@ -95,7 +88,8 @@ def build_schedule_snapshot(
     archived = _ticket_rows(
         conn.execute(
             f"""
-            SELECT t.id, t.title, t.wave, t.status, t.schedule_at, t.harness, t.model,
+            SELECT t.id, t.title, t.wave, t.status, t.updated_at, t.schedule_at,
+                   t.harness, t.model, t.last_error,
                    t.metadata_sync_state, t.metadata_parse_error,
                    t.metadata_conflict_reason, {dep_subq} AS deps_ok
               FROM tickets AS t
@@ -166,6 +160,8 @@ def _ticket_rows(rows: list[sqlite3.Row]) -> tuple[ScheduleTicketRow, ...]:
             title=str(r["title"] or ""),
             wave=int(r["wave"]),
             status=str(r["status"]),
+            last_update_at=_parse_ticket_updated_at(r["updated_at"]),
+            last_update_label=_last_update_label(r),
             schedule_at=str(r["schedule_at"]) if r["schedule_at"] else None,
             harness=str(r["harness"]) if r["harness"] is not None else None,
             model=str(r["model"]) if r["model"] is not None else None,
@@ -180,6 +176,27 @@ def _ticket_rows(rows: list[sqlite3.Row]) -> tuple[ScheduleTicketRow, ...]:
         )
         for r in rows
     )
+
+
+def _parse_ticket_updated_at(raw: object) -> datetime:
+    try:
+        return datetime.fromisoformat(str(raw))
+    except (TypeError, ValueError):
+        return datetime.utcnow()
+
+
+def _last_update_label(row: sqlite3.Row) -> str:
+    sync_state = str(row["metadata_sync_state"] or "synced")
+    if sync_state == "conflict" or row["metadata_conflict_reason"]:
+        return "metadata conflict"
+    if sync_state == "parse_error" or row["metadata_parse_error"]:
+        return "metadata parse error"
+    status = str(row["status"] or "")
+    if status == "failed" and row["last_error"]:
+        return "status failed"
+    if status:
+        return f"status {status.replace('_', ' ')}"
+    return "content"
 
 
 def _crow_rationale(conn: sqlite3.Connection) -> str:

@@ -6,15 +6,17 @@ import contextlib
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from murder.agents.base import Agent, AgentRole, AgentStatus
+from murder.agents.base import HarnessBackedAgent, AgentRole, AgentStatus
+from murder.persistence import conversation
 from murder.harnesses.base import HarnessAdapter
 from murder.harnesses.models import HarnessStartSpec
+from murder.terminal import tmux
 
 if TYPE_CHECKING:
     from murder.service.runtime_scope import AgentLifecycleHost as Runtime
 
 
-class CrowAgent(Agent):
+class CrowAgent(HarnessBackedAgent):
     role = AgentRole.CROW
 
     def __init__(
@@ -79,6 +81,8 @@ class CrowAgent(Agent):
                 raise RuntimeError(idle.message or "harness did not finish reading context")
         self.status = AgentStatus.RUNNING
         if self.runtime:
+            if self.runtime.db is not None:
+                conversation.clear(self.runtime.db, self.id)
             self.runtime.sync_agent(self)
             if self.runtime.bus and self.runtime.run_id:
                 await self.runtime.bus.publish(

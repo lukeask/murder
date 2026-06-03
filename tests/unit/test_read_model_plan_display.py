@@ -33,7 +33,6 @@ def test_get_plan_display_reads_repo_relative_materialized_path(repo_root) -> No
         content_hash=content_hash(text),
         materialized_path=str(path.relative_to(repo_root)),
         file_hash=content_hash(text),
-        last_materialized_hash=content_hash(text),
         sync_state="synced",
         create_revision=True,
         revision_source="import",

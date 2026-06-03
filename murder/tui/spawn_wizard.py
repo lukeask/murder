@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -14,6 +14,7 @@ from textual.widget import Widget
 from textual.widgets import Input, Static
 
 from murder.harnesses import REGISTRY, capabilities_for
+from murder.service.settings_service import ModelDiscoveryResult
 from murder.storage.worktrees import WorktreeEntry
 
 _HARNESS_MODELS: dict[str, list[str]] = {
@@ -25,7 +26,9 @@ _HARNESS_MODELS: dict[str, list[str]] = {
     "codex": [
         "gpt-5.5",
         "gpt-5.4",
+        "gpt-5.4-mini",
         "gpt-5.3-codex",
+        "gpt-5.2",
     ],
     "pi": [],
     "cursor": [],
@@ -44,10 +47,21 @@ _HARNESS_ORDER = [
 
 _MAIN_WORKTREE = "__main__"
 _NEW_WORKTREE = "__new__"
+ModelDiscoveryCallback = Callable[[str], Awaitable[ModelDiscoveryResult]]
 
 
 def _display_harness(kind: str) -> str:
     return kind.replace("_", "-")
+
+
+def _static_model_ids_for_harness(harness: str) -> list[str]:
+    models = _HARNESS_MODELS.get(harness, [])
+    if models:
+        return list(models)
+    adapter_cls = REGISTRY.get(harness)
+    if adapter_cls is None:
+        return []
+    return [model_id for model_id, _label in adapter_cls.available_startup_models]
 
 
 @dataclass(frozen=True, slots=True)
@@ -117,9 +131,16 @@ class SpawnWizard(Widget):
     class Cancelled(Message):
         pass
 
-    def __init__(self, *, worktree_options: list[WorktreeOption] | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        worktree_options: list[WorktreeOption] | None = None,
+        model_discovery: ModelDiscoveryCallback | None = None,
+    ) -> None:
         super().__init__()
         self._worktree_options = list(worktree_options or [])
+        self._model_discovery = model_discovery
+        self._discovered_models: dict[str, list[str]] = {}
         self._phase = "harness"
         self._harnesses: list[str] = []
         self._cursor = 0
@@ -160,11 +181,19 @@ class SpawnWizard(Widget):
             self._selected_harness = self._harnesses[self._cursor]
             self._selected_model = ""
             self._cursor = 0
-            self._phase = (
-                "model"
-                if self._should_select_model(self._selected_harness)
-                else ("worktree" if self._worktree_options else "name")
-            )
+            if self._should_select_model(self._selected_harness):
+                models = self._current_models()
+                if models:
+                    self._phase = "model"
+                else:
+                    self._phase = "model_loading"
+                    self.run_worker(
+                        self._discover_models(self._selected_harness),
+                        exclusive=True,
+                        group="spawn_wizard_models",
+                    )
+            else:
+                self._phase = "worktree" if self._worktree_options else "name"
             self._refresh_display()
             return
 
@@ -262,6 +291,13 @@ class SpawnWizard(Widget):
             )
             return
 
+        if self._phase == "model_loading":
+            harness = self._selected_harness or ""
+            self._display.update(
+                f"Discovering models  (harness: {escape(_display_harness(harness))})"
+            )
+            return
+
         if self._phase == "model":
             harness = self._selected_harness or ""
             self._display.update(
@@ -308,9 +344,30 @@ class SpawnWizard(Widget):
     def _current_models(self) -> list[str]:
         if self._selected_harness is None:
             return []
-        return _HARNESS_MODELS.get(self._selected_harness, [])
+        discovered = self._discovered_models.get(self._selected_harness)
+        if discovered is not None:
+            return discovered
+        return _static_model_ids_for_harness(self._selected_harness)
 
     def _should_select_model(self, harness: str) -> bool:
         if not capabilities_for(harness).model_selection:
             return False
-        return bool(_HARNESS_MODELS.get(harness))
+        return bool(_static_model_ids_for_harness(harness)) or (
+            self._model_discovery is not None and capabilities_for(harness).model_discovery
+        )
+
+    async def _discover_models(self, harness: str) -> None:
+        if self._model_discovery is None:
+            return
+        try:
+            result = await self._model_discovery(harness)
+        except Exception:
+            models: list[str] = []
+        else:
+            models = [model_id for model_id, _label in result.models] if result.ok else []
+        self._discovered_models[harness] = models
+        if self._selected_harness != harness or self._phase != "model_loading":
+            return
+        self._cursor = 0
+        self._phase = "model" if models else ("worktree" if self._worktree_options else "name")
+        self._refresh_display()

@@ -29,7 +29,10 @@ class WriteSetCheck:
         return CheckResult(
             CheckStatus.FAIL,
             message="diff outside write_set",
-            hint=f"Revert changes outside your write_set. Offending paths: {preview}",
+            # NOTE: no revert instruction — policy routes writeset failures to ASK_USER,
+            # not REPROMPT. Never tell crows to `git checkout --` in the shared tree;
+            # that destroys uncommitted user work. See policy.py resolution_policy().
+            hint=f"Files modified outside write_set (requires human review): {preview}",
         )
 
 

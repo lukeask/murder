@@ -1,0 +1,24 @@
+# source: synthetic — simulates stale /usage scrollback above a fresh overlay
+╭──────────────────────────────────────────────────────╮
+│ Claude Code – Usage                                   │
+│                                                       │
+│ Current session                                       │
+│ [========] 72% used                                   │
+│ Resets 11pm (America/New_York)                        │
+│                                                       │
+│ Usage: 12345 input, 6789 output,                      │
+│        1000 cache read, 500 cache write               │
+╰──────────────────────────────────────────────────────╯
+
+/usage
+
+╭──────────────────────────────────────────────────────╮
+│ Claude Code – Usage                                   │
+│                                                       │
+│ Current session                                       │
+│ [===] 15% used                                        │
+│ Resets 1am (America/New_York)                         │
+│                                                       │
+│ Usage: 2000 input, 800 output,                        │
+│        200 cache read, 100 cache write                │
+╰──────────────────────────────────────────────────────╯

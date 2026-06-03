@@ -8,6 +8,7 @@ from textual.message import Message
 from textual.widgets import DataTable, Markdown, RichLog
 
 from murder.service.client_api import NotesSnapshot, PlansSnapshot, ReportsSnapshot
+from murder.tui.live_log import LiveRichLog
 
 
 class PlanList(DataTable):
@@ -39,6 +40,7 @@ class PlanList(DataTable):
         super().__init__(zebra_stripes=True, cursor_type="row")
         self._plans: list[str] = []
         self._deprecate_armed_name: str | None = None
+        self._last_rows: list[tuple[str, str, str, str]] = []
         self.border_title = ".murder/plans"
         # TODO(tui-planning): fold dynamic ticket ordering into this sidebar
         # once collaborator Planner/Notetaker personas can prioritize tickets.
@@ -47,7 +49,15 @@ class PlanList(DataTable):
         self.add_columns("name", "status", "rev", "sync")
 
     def refresh_from_snapshot(self, snapshot: PlansSnapshot) -> None:
+        new_rows = [
+            (p.name, p.status, str(p.revision_count), p.sync_state)
+            for p in snapshot.plans
+        ]
+        if new_rows == self._last_rows:
+            return
+        self._last_rows = new_rows
         row = self.cursor_row
+        scroll_y = self.scroll_y
         with self.prevent(DataTable.RowHighlighted):
             self.clear()
             self._plans = []
@@ -61,6 +71,7 @@ class PlanList(DataTable):
                 self._plans.append(plan.name)
             if self._plans:
                 self.move_cursor(row=min(max(row, 0), len(self._plans) - 1))
+        self.scroll_y = scroll_y
 
     @property
     def selected_name(self) -> str | None:
@@ -143,13 +154,22 @@ class NotesList(DataTable):
         super().__init__(zebra_stripes=True, cursor_type="row")
         self._names: list[str] = []
         self._retire_armed_name: str | None = None
+        self._last_rows: list[tuple[str, str, str]] = []
         self.border_title = ".murder/notes"
 
     def on_mount(self) -> None:
         self.add_columns("note", "chars", "updated")
 
     def refresh_from_snapshot(self, snapshot: NotesSnapshot) -> None:
+        new_rows = [
+            (n.name, str(n.char_count), n.updated_at.isoformat()[:16])
+            for n in snapshot.notes
+        ]
+        if new_rows == self._last_rows:
+            return
+        self._last_rows = new_rows
         row = self.cursor_row
+        scroll_y = self.scroll_y
         with self.prevent(DataTable.RowHighlighted):
             self.clear()
             self._names = []
@@ -159,6 +179,7 @@ class NotesList(DataTable):
                 self._names.append(note.name)
             if self._names:
                 self.move_cursor(row=min(max(row, 0), len(self._names) - 1))
+        self.scroll_y = scroll_y
 
     @property
     def selected_name(self) -> str | None:
@@ -234,13 +255,22 @@ class ReportsList(DataTable):
     def __init__(self) -> None:
         super().__init__(zebra_stripes=True, cursor_type="row")
         self._names: list[str] = []
+        self._last_rows: list[tuple[str, str, str]] = []
         self.border_title = ".murder/reports"
 
     def on_mount(self) -> None:
         self.add_columns("report", "chars", "updated")
 
     def refresh_from_snapshot(self, snapshot: ReportsSnapshot) -> None:
+        new_rows = [
+            (r.name, str(r.char_count), r.updated_at.isoformat()[:16])
+            for r in snapshot.reports
+        ]
+        if new_rows == self._last_rows:
+            return
+        self._last_rows = new_rows
         row = self.cursor_row
+        scroll_y = self.scroll_y
         with self.prevent(DataTable.RowHighlighted):
             self.clear()
             self._names = []
@@ -250,6 +280,7 @@ class ReportsList(DataTable):
                 self._names.append(report.name)
             if self._names:
                 self.move_cursor(row=min(max(row, 0), len(self._names) - 1))
+        self.scroll_y = scroll_y
 
     @property
     def selected_name(self) -> str | None:
@@ -416,7 +447,7 @@ class ReportDocument(Markdown, can_focus=True):
         self.action_scroll_up()
 
 
-class ChatLog(RichLog):
+class ChatLog(LiveRichLog):
     """Append-only chat transcript widget, reused for agent chats.
 
     ``"you"``/``"user"`` is the human; ``"agent"``/``"assistant"`` and the
@@ -446,8 +477,12 @@ class ChatLog(RichLog):
             markup=True,
             min_width=1,
             wrap=True,
-            auto_scroll=True,
         )
+        self._agent_label = agent_label
+        self._last_render_key: tuple[str, tuple[tuple[str, str], ...], str | None] | None = None
+        self.border_title = f"{agent_label} chat"
+
+    def set_agent_label(self, agent_label: str) -> None:
         self._agent_label = agent_label
         self.border_title = f"{agent_label} chat"
 
@@ -465,14 +500,32 @@ class ChatLog(RichLog):
         return f"[b]{escape(who)}[/]"
 
     def add_turn(self, who: str, text: str) -> None:
-        self.write(f"{self._tag(who)}  {escape(text)}")
+        self.write(f"{self._tag(who)}: {escape(text)}")
         self.write("")
 
     def add_status(self, text: str) -> None:
         self.write(f"[dim]{escape(text)}[/]")
 
+    def replace_transcript(
+        self,
+        turns: list[tuple[str, str]],
+        *,
+        status: str | None = None,
+    ) -> None:
+        """Replace transcript content in one rewrite pass."""
+        render_key = (self._agent_label, tuple(turns), status)
+        if render_key == self._last_render_key:
+            return
+        self._last_render_key = render_key
+
+        def _write() -> None:
+            for who, text in turns:
+                self.add_turn(who, text)
+            if status is not None:
+                self.add_status(status)
+
+        self.replace_lines(_write)
+
     def set_turns(self, turns: list[tuple[str, str]]) -> None:
         """Replace the whole transcript (the parsed log can change wholesale)."""
-        self.clear()
-        for who, text in turns:
-            self.add_turn(who, text)
+        self.replace_transcript(turns)

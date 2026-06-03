@@ -21,13 +21,10 @@ class DispatchView(Vertical):
 
     DEFAULT_CSS = """
     DispatchView {
-        border: round $accent;
         height: 1fr;
-        padding: 0 1;
     }
     DispatchView #dispatch_body {
         height: 1fr;
-        margin-bottom: 1;
     }
     DispatchView #dispatch_body {
         min-width: 72;

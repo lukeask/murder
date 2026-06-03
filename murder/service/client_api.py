@@ -113,6 +113,7 @@ class CrowSessionSummary:
     started_at: datetime | None
     ticket_status: str | None
     worktree_path: str | None = None
+    model: str | None = None
     open_escalations: int = 0
     max_severity: int = 0
 
@@ -209,6 +210,8 @@ class ScheduleTicketRow:
     title: str
     wave: int
     status: str
+    last_update_at: datetime
+    last_update_label: str
     schedule_at: str | None
     harness: str | None
     model: str | None

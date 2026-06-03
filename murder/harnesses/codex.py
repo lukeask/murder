@@ -80,9 +80,21 @@ def _tail(pane_text: str) -> str:
     return "\n".join(lines[-_TAIL_LINES:])
 
 
+def _model_state_matches(
+    state: HarnessModelState | None,
+    *,
+    model: str,
+    effort: str | None,
+) -> bool:
+    if state is None or state.model != model:
+        return False
+    return effort is None or state.effort in (effort, None)
+
+
 class CodexAdapter(HarnessAdapter):
     kind: ClassVar[str] = "codex"
     usage_collection_mode: ClassVar[UsageCollectionMode] = "tmux_slash"
+    startup_model_selects_runtime_model: ClassVar[bool] = True
     # Codex's model picker is `/model` (singular); it opens a numbered modal
     # list (`› 1. gpt-5.5 (current)  Frontier model …`) which the generic
     # parser handles. The modal needs a beat to render, so capture late.
@@ -123,6 +135,8 @@ class CodexAdapter(HarnessAdapter):
             "--ask-for-approval",
             "never",
         ]
+        if self.startup_model:
+            cmd.extend(["--model", self.startup_model])
         return cmd
 
     def is_ready(self, pane_text: str) -> bool:
@@ -160,22 +174,37 @@ class CodexAdapter(HarnessAdapter):
             await tmux.send_keys(session, "", literal=True, enter=True)
 
     async def set_model(self, session: str, model: str, *, effort: str | None = None) -> bool:
+        # The launch --model flag selects the model but not its reasoning effort,
+        # so we cannot blanket-trust a startup model here: a non-default effort
+        # still has to be driven through the picker. We only skip the picker when
+        # the model+effort already read back correct (below), or as a degraded
+        # fallback when the picker can't be driven.
+        desired_effort = normalize_effort(effort) if effort else self.default_effort
+        pane = await tmux.capture_pane(session, lines=200)
+        state = self.parse_active_model_state(pane)
+        if _model_state_matches(state, model=model, effort=desired_effort):
+            return True
+
         if not await self.request_model_list(session):
-            return False
+            # Picker never rendered → trust the launch flag for the model
+            # (effort stays best-effort in this degraded path).
+            return self.startup_model == model
         pane = await tmux.capture_pane(session, lines=200)
         choices = parse_numbered_model_choices(pane)
         choice = next((c for c in choices if c.model_id == model), None)
         if choice is None or choice.index is None:
             await tmux.send_keys(session, "Escape", literal=False, enter=False)
-            return False
+            # Model absent from the rendered list → same launch-flag fallback.
+            return self.startup_model == model
 
         await tmux.send_keys(session, str(choice.index), literal=True, enter=False)
         await asyncio.sleep(_MODEL_STEP_DELAY_S)
 
-        desired_effort = normalize_effort(effort) if effort else self.default_effort
+        effort_selection_available = False
         if desired_effort is not None:
             effort_pane = await tmux.capture_pane(session, lines=200)
             effort_choices = parse_numbered_effort_choices(effort_pane)
+            effort_selection_available = bool(effort_choices)
             effort_choice = next((c for c in effort_choices if c.effort == desired_effort), None)
             if effort_choice is not None and effort_choice.index is not None:
                 await tmux.send_keys(session, str(effort_choice.index), literal=True, enter=False)
@@ -183,30 +212,33 @@ class CodexAdapter(HarnessAdapter):
 
         pane = await tmux.capture_pane(session, lines=200)
         state = self.parse_active_model_state(pane)
-        if state is None:
-            return False
-        if state.model != model:
-            return False
-        if desired_effort is not None and state.effort != desired_effort:
-            return False
-        return True
+        verified_effort = desired_effort if effort_selection_available else None
+        if _model_state_matches(state, model=model, effort=verified_effort):
+            return True
+        # Picker was driven but the change didn't read back; trust the launch
+        # flag for the model rather than failing on a slow/garbled pane read.
+        return self.startup_model == model
 
     def parse_active_model_state(self, pane_text: str) -> HarnessModelState | None:
         clean = strip_ansi(pane_text)
         patterns = (
             re.compile(
                 r"\bmodel:\s*(?P<model>[A-Za-z0-9][A-Za-z0-9._:+/-]*)\s+"
-                r"(?P<effort>low|medium|high|extra\s+high|xhigh)\b",
+                r"(?:(?P<effort>low|medium|high|extra\s+high|xhigh)\b)?",
                 re.IGNORECASE,
             ),
+            # Bottom-left status line "<model> <effort> · ~/cwd". The effort word
+            # is REQUIRED here: without it any "<word> · <something>" footer
+            # (e.g. "myproject · ~/path · 23% left") would parse as a model. The
+            # effort-less status form is covered by the "model:" pattern above.
             re.compile(
-                r"^\s*(?P<model>[A-Za-z0-9][A-Za-z0-9._:+/-]*)\s+"
-                r"(?P<effort>low|medium|high|extra\s+high|xhigh)\s+·\s",
+                r"^\s*(?P<model>[A-Za-z0-9][A-Za-z0-9._:+/-]*)"
+                r"\s+(?P<effort>low|medium|high|extra\s+high|xhigh)\s+·\s",
                 re.IGNORECASE | re.MULTILINE,
             ),
             re.compile(
                 r"\bModel changed to\s+(?P<model>[A-Za-z0-9][A-Za-z0-9._:+/-]*)\s+"
-                r"(?P<effort>low|medium|high|extra\s+high|xhigh)\b",
+                r"(?:(?P<effort>low|medium|high|extra\s+high|xhigh)\b)?",
                 re.IGNORECASE,
             ),
         )

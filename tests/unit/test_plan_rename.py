@@ -46,7 +46,6 @@ def _insert_plan(conn, repo_root, plan: Plan) -> None:
         content_hash=content_hash(text),
         materialized_path=str(plan_md(repo_root, plan.name).relative_to(repo_root)),
         file_hash=content_hash(text),
-        last_materialized_hash=content_hash(text),
         sync_state="synced",
         create_revision=True,
         revision_source="db",

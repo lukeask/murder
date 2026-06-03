@@ -43,7 +43,7 @@ from murder.storage.paths import db_path, lock_path
 from murder.storage.run_id_allocation import allocate_run_id
 
 if TYPE_CHECKING:
-    from murder.agents.base import Agent
+    from murder.agents.base import LifecycleParticipant
     from murder.config import Config
     from murder.notes.sync import NoteSync
     from murder.notes.sync import NotetakerContextSync
@@ -146,7 +146,7 @@ class Runtime:
             with contextlib.suppress(FileNotFoundError, OSError):
                 lock_path(self.repo_root).unlink()
 
-    def sync_agent(self, agent: Agent) -> None:
+    def sync_agent(self, agent: LifecycleParticipant) -> None:
         """Persist current agent fields to SQLite."""
         if self.db is None:
             return
@@ -157,22 +157,24 @@ class Runtime:
             role=agent.role.value,
             ticket_id=agent.ticket_id,
             session=agent.session,
+            harness=getattr(getattr(agent, "harness", None), "kind", None),
+            model=getattr(agent, "startup_model", None),
             status=agent.status.value,
             start_commit=getattr(agent, "start_commit", None),
             worktree_path=str(worktree_path) if worktree_path is not None else None,
             pid=None,
         )
 
-    def register_agent(self, agent: Agent) -> None:
+    def register_agent(self, agent: LifecycleParticipant) -> None:
         self._agents.register(agent, persist=self.sync_agent)
 
-    def get_agent(self, agent_id: str) -> Agent | None:
+    def get_agent(self, agent_id: str) -> LifecycleParticipant | None:
         return self._agents.get_agent(agent_id)
 
-    def get_crow(self, ticket_id: str) -> Agent | None:
+    def get_crow(self, ticket_id: str) -> LifecycleParticipant | None:
         return self._agents.get_crow(ticket_id)
 
-    def get_crow_handler(self, ticket_id: str) -> Agent | None:
+    def get_crow_handler(self, ticket_id: str) -> LifecycleParticipant | None:
         return self._agents.get_crow_handler(ticket_id)
 
     async def reap(self, agent_id: str) -> None:

@@ -30,6 +30,12 @@ _SEPARATOR_CHARS = set("─━│┃╭╮╰╯┌┐└┘├┤┬┴┼╎�
 _SPINNER_LINE_RE = re.compile(
     r"^\s*[✻✶✳✽✢⠁-⣿◐◓◑◒↻⟳]+\s+\w+",
 )
+# CC 2.x thinking-status spinner: "* Recombobulating.. (8m 11s • ↓ 24.1k tokens)"
+# The leading * is animated (sometimes absent); anchor on the stable part: a
+# capitalised verb followed by 2+ dots and a parenthetical containing "tokens".
+_CC_THINKING_STATUS_RE = re.compile(
+    r"^\s*\*?\s*[A-Z]\w+\.{2,}\s*\([^)]*tokens",
+)
 _UI_CHROME_RE = re.compile(
     r"""
     ^\s*(?:
@@ -524,15 +530,44 @@ def is_rule_line(line: str) -> bool:
 
 
 def is_status_spinner_line(line: str) -> bool:
-    """True for a harness's own progress/spinner line (``✻ Brewed for 7s`` …)."""
-    return bool(_SPINNER_LINE_RE.match(line))
+    """True for a harness's own progress/spinner line (``✻ Brewed for 7s``, ``* Galloping.. (7s · tokens)`` …)."""
+    return bool(_SPINNER_LINE_RE.match(line) or _CC_THINKING_STATUS_RE.match(line))
 
 
-def parse_prompt_marker_transcript(
+def is_tool_glyph_line(line: str) -> bool:
+    """True for a line starting with a tool-call / continuation glyph (``⏺`` ``⎿`` ``●`` …)."""
+    return bool(_TOOL_GLYPH_RE.match(line.strip()))
+
+
+def _split_prompt_marker(line: str, prompt_markers: tuple[str, ...]) -> tuple[bool, str]:
+    """``(is_prompt, prompt_text)`` for a line against the harness prompt markers."""
+    s = line.strip()
+    for marker in prompt_markers:
+        if s == marker:
+            return True, ""
+        if s.startswith(marker + " "):
+            return True, s[len(marker) + 1 :].strip()
+    return False, ""
+
+
+def _is_transcript_chrome(line: str, lowered_drops: tuple[str, ...]) -> bool:
+    """True for rules, spinner lines, and status bars matched by ``drop_substrings``."""
+    s = line.strip()
+    if not s:
+        return False
+    if is_rule_line(line) or is_status_spinner_line(line):
+        return True
+    lowered = s.lower()
+    return any(d in lowered for d in lowered_drops)
+
+
+def parse_prompt_marker_transcript(  # noqa: PLR0915 — one irreducible stateful line scanner; splitting the flush/turn bookkeeping across functions fragments a single algorithm.
     pane_text: str,
     *,
     prompt_markers: tuple[str, ...],
     drop_substrings: tuple[str, ...] = (),
+    user_continuation: Callable[[str], bool] | None = None,
+    assistant_start: Callable[[str], bool] | None = None,
 ) -> list[tuple[str, str]]:
     """Generic CLI-harness transcript parser.
 
@@ -545,64 +580,83 @@ def parse_prompt_marker_transcript(
     bare prompts, prompts that are just a slash-command echo, and a dangling
     final prompt with no reply yet (the live input box) are not emitted.
 
+    ``user_continuation`` and ``assistant_start`` adapt harnesses such as
+    Claude Code, whose echoed multi-line user text continues after the prompt
+    marker until a tool/reply glyph starts the assistant block. ``user_continuation``
+    is only consulted before the assistant block starts, so it is meaningless
+    without ``assistant_start`` and the two must be supplied together.
+
     Returns ``(role, text)`` turns with ``role`` in ``{"user", "assistant"}``,
     or ``[]`` if no prompt line is visible. This is a heuristic keyed to the
-    common "echoed prompt + free-text reply" shape — adapters whose UI has
-    cleaner structure should override ``HarnessAdapter.parse_transcript`` with
-    something tighter, ideally fixture-tested against a real pane capture.
+    common "echoed prompt + free-text reply" shape.
     """
     if not prompt_markers:
         return []
+    if user_continuation is not None and assistant_start is None:
+        raise ValueError("user_continuation requires assistant_start to be supplied too")
 
     lines = strip_ansi(pane_text).splitlines()
     lowered_drops = tuple(d.lower() for d in drop_substrings)
 
-    def split_prompt(line: str) -> tuple[bool, str]:
-        s = line.strip()
-        for marker in prompt_markers:
-            if s == marker:
-                return True, ""
-            if s.startswith(marker + " "):
-                return True, s[len(marker) + 1 :].strip()
-        return False, ""
-
-    def is_chrome(line: str) -> bool:
-        s = line.strip()
-        if not s:
-            return False
-        if is_rule_line(line) or is_status_spinner_line(line):
-            return True
-        lowered = s.lower()
-        return any(d in lowered for d in lowered_drops)
-
     turns: list[tuple[str, str]] = []
-    cur_user: str | None = None
+    cur_user_parts: list[str] = []
     assistant_lines: list[str] = []
     seen_prompt = False
+    cur_noise = False
+    assistant_started = False
+
+    def current_user() -> str:
+        return "\n".join(part for part in cur_user_parts if part.strip()).strip()
+
+    def reset() -> None:
+        nonlocal cur_user_parts, assistant_lines, cur_noise, assistant_started
+        cur_user_parts = []
+        assistant_lines = []
+        cur_noise = False
+        assistant_started = False
 
     def flush(*, final: bool = False) -> None:
-        if cur_user is None:
+        if cur_noise:
+            reset()
             return
         body = "\n".join(assistant_lines).strip()
         if final and not body:
-            return  # dangling prompt with no reply yet → the live input box
-        turns.append(("user", cur_user))
+            reset()  # dangling prompt with no reply yet → the live input box
+            return
+        user_body = current_user()
+        if user_body:
+            turns.append(("user", user_body))
         if body:
             turns.append(("assistant", body))
+        reset()
 
     for line in lines:
-        if is_chrome(line):
+        if _is_transcript_chrome(line, lowered_drops):
             continue
-        is_prompt, prompt_text = split_prompt(line)
+        is_prompt, prompt_text = _split_prompt_marker(line, prompt_markers)
         if is_prompt:
             flush()
             seen_prompt = True
             # Bare prompt or a slash-command echo (`/model`, `/clear`) → noise.
-            is_noise = not prompt_text or _SLASH_COMMAND_RE.fullmatch(prompt_text)
-            cur_user = None if is_noise else prompt_text
+            cur_noise = not prompt_text or bool(_SLASH_COMMAND_RE.fullmatch(prompt_text))
+            cur_user_parts = [] if cur_noise else [prompt_text]
             assistant_lines = []
+            assistant_started = assistant_start is None
             continue
-        if not seen_prompt:
+        if not seen_prompt or cur_noise:
+            continue
+        if not assistant_started:
+            if assistant_start is not None and assistant_start(line):
+                assistant_started = True
+                cleaned = _clean_assistant_line(line)
+                if cleaned.strip():
+                    assistant_lines.append(cleaned)
+                continue
+            if user_continuation is not None and user_continuation(line):
+                continuation = line.strip()
+                if continuation:
+                    cur_user_parts.append(continuation)
+                continue
             continue
         assistant_lines.append(_clean_assistant_line(line))
 

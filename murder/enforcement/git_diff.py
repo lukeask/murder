@@ -33,6 +33,11 @@ async def head_commit(repo_root: Path) -> str:
 
 async def diff_files(repo_root: Path, since_commit: str) -> list[Path]:
     """Return paths changed since `since_commit` (paths relative to repo_root)."""
+    # Compares working tree against since_commit — intentional, because crows do NOT
+    # commit; their changes live in the working tree. False-positive risk: pre-existing
+    # dirty user files also show up. Real fix requires crow worktree isolation
+    # (.murder/worktrees/..., not yet implemented). Until then the policy layer must
+    # NOT auto-revert on violations — see resolution_policy() in policy.py. (2026-06-02)
     rc, out, err = await _git("diff", "--name-only", since_commit, cwd=repo_root)
     if rc != 0:
         raise RuntimeError(f"git diff failed: {err.strip()}")

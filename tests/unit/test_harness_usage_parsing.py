@@ -4,7 +4,7 @@ from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from murder.harnesses.usage import parse_codex_status_pane
+from murder.harnesses.usage import parse_claude_usage_pane, parse_codex_status_pane
 
 
 def _load_pane_fixture(name: str) -> str:
@@ -14,6 +14,22 @@ def _load_pane_fixture(name: str) -> str:
 
 def _codex_session_limit_pane() -> str:
     return _load_pane_fixture("codex_session_limit.txt")
+
+
+def test_claude_usage_parses_bare_hour_reset() -> None:
+    # Claude's /usage renders top-of-hour resets without minutes, e.g. `12am`.
+    pane = (
+        "Current session\n"
+        "[====]  15% used\n"
+        "Resets 12am (America/New_York)\n"
+    )
+    now = datetime(2026, 6, 1, 23, 40, tzinfo=ZoneInfo("America/New_York"))
+    status = parse_claude_usage_pane(pane, now=now)
+    assert status.windows[0].percent_used == 15.0
+    reset_at = datetime.fromisoformat(status.windows[0].reset_at)
+    assert reset_at.hour == 0 and reset_at.minute == 0
+    t_until_minutes = (reset_at - now).total_seconds() / 60.0
+    assert t_until_minutes == 20.0
 
 
 def test_codex_5h_limit_parses_left_as_used() -> None:
@@ -33,6 +49,20 @@ def test_codex_reset_clock_uses_local_timezone_not_utc() -> None:
     assert reset_at.hour == 20 and reset_at.minute == 43
     t_until_minutes = (reset_at - now).total_seconds() / 60.0
     assert 40.0 < t_until_minutes < 50.0
+
+
+def test_claude_usage_uses_latest_reset_when_scrollback_has_stale_entry() -> None:
+    # Scrollback has an old /usage overlay with "Resets 11pm"; the current
+    # overlay below it shows "Resets 1am". Parser must return 1am, not 11pm.
+    pane = _load_pane_fixture("cc_usage_scrollback.txt")
+    # now = 11:30pm Eastern — 11pm has already passed, 1am is 1.5h away
+    now = datetime(2026, 6, 1, 23, 30, tzinfo=ZoneInfo("America/New_York"))
+    status = parse_claude_usage_pane(pane, now=now)
+    assert status.windows[0].percent_used == 15.0
+    reset_at = datetime.fromisoformat(status.windows[0].reset_at)
+    assert reset_at.hour == 1 and reset_at.minute == 0
+    t_until_minutes = (reset_at - now).total_seconds() / 60.0
+    assert 85.0 < t_until_minutes < 95.0  # ~90 min, not ~23h
 
 
 def test_codex_status_uses_latest_scrollback_row_per_window() -> None:

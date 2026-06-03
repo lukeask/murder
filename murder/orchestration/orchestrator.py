@@ -106,6 +106,19 @@ def is_rogue_agent_id(agent_id: str) -> bool:
     return "rogue-" in agent_id
 
 
+def _crow_handler_companion(agent_id: str) -> str:
+    """The crow_handler id paired with a ``crow-<ticket>`` agent, else itself.
+
+    Used to tear down both halves of a ticket crow when force-stopping an
+    agent the runtime no longer tracks. Returns ``agent_id`` unchanged when
+    there is no separate handler (e.g. rogue crows), so callers can pass it
+    to a query without a special case.
+    """
+    if agent_id.startswith("crow-"):
+        return f"crow_handler-{agent_id[len('crow-'):]}"
+    return agent_id
+
+
 def _validate_plan_filename_stem(name: str, *, command: str) -> str:
     name = name.strip()
     if not name or "/" in name or "\\" in name or name in {".", ".."}:
@@ -479,7 +492,17 @@ class Orchestrator:
         try:
             start_result = await agent.harness_session.start(start_spec)
             if not start_result.ok:
-                raise RuntimeError(start_result.message or "harness startup failed")
+                message = start_result.message or "harness startup failed"
+                known_startup_models = {
+                    model_id for model_id, _label in harness_adapter.available_startup_models
+                }
+                codex_startup_model_gate = (
+                    harness_kind == "codex"
+                    and startup_model in known_startup_models
+                    and "failed to select runtime model" in message
+                )
+                if not codex_startup_model_gate:
+                    raise RuntimeError(message)
             agent.status = AgentStatus.RUNNING
             self.rt.sync_agent(agent)
         except BaseException:
@@ -660,6 +683,103 @@ class Orchestrator:
             "literal": literal,
         }
 
+    async def stop_agent(self, agent_id: str) -> dict[str, Any]:
+        """Stop a live agent and tear down its tmux session."""
+        if self.rt.get_agent(agent_id) is None:
+            # Not in the in-memory registry. The roster derives "running" from
+            # the agents table, so a crow spawned in a prior service run shows
+            # up as killable even though its handle was never re-registered
+            # (its tmux session may well still be live). Tear it down directly
+            # so murda works after a service restart instead of bailing with
+            # "no agent named X".
+            return await self._force_stop_unregistered_agent(agent_id)
+        if agent_id.startswith("crow-"):
+            ticket_id = agent_id[len("crow-") :]
+            if ticket_id:
+                await self._reap_ticket_crow_agents(ticket_id)
+                return {"handled": True, "agent_id": agent_id}
+        await self.rt.reap(agent_id)
+        return {"handled": True, "agent_id": agent_id}
+
+    async def _force_stop_unregistered_agent(self, agent_id: str) -> dict[str, Any]:
+        """Kill the tmux session and mark dead an agent the runtime forgot."""
+        db = self.rt.db
+        if db is None:
+            return {"handled": False, "error": f"no agent named {agent_id}"}
+        rows = db.execute(
+            """
+            SELECT agent_id, session FROM agents
+             WHERE (agent_id = ? OR agent_id = ?)
+               AND status NOT IN ('done', 'dead')
+            """,
+            (agent_id, _crow_handler_companion(agent_id)),
+        ).fetchall()
+        if not rows:
+            return {"handled": False, "error": f"no agent named {agent_id}"}
+        for row in rows:
+            session = row["session"]
+            if session and await tmux.session_exists(session):
+                with contextlib.suppress(tmux.TmuxError):
+                    await tmux.kill_session(session)
+            _db_set_agent_status(db, row["agent_id"], AgentStatus.DEAD.value)
+        return {"handled": True, "agent_id": agent_id}
+
+    async def rename_rogue_agent(self, agent_id: str, name: str) -> dict[str, Any]:
+        """Rename a live rogue crow without restarting its harness."""
+        if not is_rogue_agent_id(agent_id):
+            return {"handled": False, "error": "rename is only supported for rogue crows"}
+        agent = self.rt.get_agent(agent_id)
+        if agent is None:
+            return {"handled": False, "error": f"no agent named {agent_id}"}
+        match = re.match(r"^(.+)-rogue-(.+)$", agent_id)
+        if match is None:
+            return {"handled": False, "error": f"cannot parse rogue agent id {agent_id}"}
+        prefix = match.group(1)
+        slug = _rogue_slug(name)
+        new_agent_id = f"{prefix}-rogue-{slug}"
+        if new_agent_id == agent_id:
+            return {"handled": True, "agent_id": agent_id}
+        if self.rt.get_agent(new_agent_id) is not None:
+            return {"handled": False, "error": f"agent already exists: {new_agent_id}"}
+
+        old_session = getattr(agent, "session", None)
+        new_session = format_session_name(self.rt, "crow", f"_{prefix}_rogue_{slug}")
+        if (
+            isinstance(old_session, str)
+            and old_session != new_session
+            and await tmux.session_exists(new_session)
+        ):
+            return {"handled": False, "error": f"session already exists: {new_session}"}
+
+        renamed = self.rt.agents.rename_agent(
+            agent_id,
+            new_agent_id,
+            persist=self.rt.sync_agent,
+        )
+        if renamed is None:
+            return {"handled": False, "error": f"failed to rename {agent_id}"}
+        if isinstance(old_session, str) and old_session != new_session:
+            if await tmux.session_exists(old_session):
+                await tmux.rename_session(old_session, new_session)
+            renamed.session = new_session
+            harness_session = getattr(renamed, "harness_session", None)
+            if harness_session is not None:
+                harness_session.session = new_session
+        if self.rt.db is not None:
+            with self.rt.db:
+                _db_rename_agent(
+                    self.rt.db,
+                    agent_id,
+                    new_agent_id,
+                    session=getattr(renamed, "session", None),
+                )
+            self.rt.sync_agent(renamed)
+        return {
+            "handled": True,
+            "old_agent_id": agent_id,
+            "agent_id": new_agent_id,
+        }
+
     async def interrupt_agent(self, agent_id: str) -> dict[str, Any]:
         if is_rogue_agent_id(agent_id):
             agent = self.rt.get_agent(agent_id)
@@ -718,7 +838,6 @@ class Orchestrator:
                 content_hash=content_hash,
                 materialized_path=materialized_path,
                 file_hash=content_hash,
-                last_materialized_hash=content_hash,
                 sync_state="synced",
                 create_revision=True,
                 revision_source="db",
@@ -947,19 +1066,21 @@ class Orchestrator:
         return list(cascaded)
 
     async def retry_failed_ticket(self, ticket_id: str) -> dict[str, Any]:
-        """Transition a failed ticket back to planned and clear its last_error."""
+        """Transition a failed ticket back to ready and clear its last_error."""
         assert self.rt.db is not None
-        prev = lifecycle.transition(self.rt.db, ticket_id, TicketStatus.PLANNED, reason="retry")
+        prev = lifecycle.transition(self.rt.db, ticket_id, TicketStatus.READY, reason="retry")
         lifecycle.clear_last_error(self.rt.db, ticket_id)
         await self._reap_ticket_crow_agents(ticket_id)
-        await self._emit_ticket_status(ticket_id, prev, TicketStatus.PLANNED.value)
+        await self._emit_ticket_status(ticket_id, prev, TicketStatus.READY.value)
         return {"handled": True, "ticket_id": ticket_id, "prev_status": prev.value}
 
     async def set_schedule_at(self, ticket_id: str, schedule_at: str | None) -> dict[str, Any]:
         """Update the schedule_at timestamp for a ticket."""
         assert self.rt.db is not None
+        now = datetime.now().isoformat(timespec="seconds")
         self.rt.db.execute(
-            "UPDATE tickets SET schedule_at = ? WHERE id = ?", (schedule_at, ticket_id)
+            "UPDATE tickets SET schedule_at = ?, updated_at = ? WHERE id = ?",
+            (schedule_at, now, ticket_id),
         )
         self.rt.db.commit()
         return {"handled": True, "ticket_id": ticket_id, "schedule_at": schedule_at}

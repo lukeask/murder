@@ -11,7 +11,7 @@ import contextlib
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from murder.agents.base import Agent, AgentRole, AgentStatus
+from murder.agents.base import HarnessBackedAgent, AgentRole, AgentStatus
 from murder.harnesses.base import HarnessAdapter
 from murder.harnesses.models import HarnessStartSpec
 from murder.storage.paths import agents_dir
@@ -20,7 +20,7 @@ if TYPE_CHECKING:
     from murder.service.runtime_scope import AgentLifecycleHost as Runtime
 
 
-class PlanningAgent(Agent):
+class PlanningAgent(HarnessBackedAgent):
     role = AgentRole.PLANNER
     ticket_id = None
 

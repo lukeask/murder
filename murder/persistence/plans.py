@@ -51,9 +51,7 @@ def upsert_plan(
     content_hash: str,
     materialized_path: str,
     file_hash: str | None = None,
-    last_materialized_hash: str | None = None,
     sync_state: str = "synced",
-    conflict_reason: str | None = None,
     parse_error: str | None = None,
     create_revision: bool = True,
     revision_source: str = "db",
@@ -67,9 +65,8 @@ def upsert_plan(
             """
             INSERT INTO plans
                 (name, status, created_at, updated_at, body, frontmatter_json,
-                 body_hash, file_hash, last_materialized_hash, materialized_path,
-                 sync_state, conflict_reason, parse_error)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 body_hash, file_hash, materialized_path, sync_state, parse_error)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 plan.name,
@@ -80,10 +77,8 @@ def upsert_plan(
                 json.dumps(plan.frontmatter, sort_keys=True, default=str),
                 content_hash,
                 file_hash,
-                last_materialized_hash,
                 materialized_path,
                 sync_state,
-                conflict_reason,
                 parse_error,
             ),
         )
@@ -92,9 +87,8 @@ def upsert_plan(
             """
             UPDATE plans
                SET status = ?, updated_at = ?, body = ?, frontmatter_json = ?,
-                   body_hash = ?, file_hash = ?, last_materialized_hash = ?,
-                   materialized_path = ?, sync_state = ?, conflict_reason = ?,
-                   parse_error = ?
+                   body_hash = ?, file_hash = ?, materialized_path = ?,
+                   sync_state = ?, parse_error = ?
              WHERE name = ?
             """,
             (
@@ -104,10 +98,8 @@ def upsert_plan(
                 json.dumps(plan.frontmatter, sort_keys=True, default=str),
                 content_hash,
                 file_hash,
-                last_materialized_hash,
                 materialized_path,
                 sync_state,
-                conflict_reason,
                 parse_error,
                 plan.name,
             ),
@@ -132,7 +124,12 @@ def list_plans(conn: sqlite3.Connection) -> list[dict[str, Any]]:
                (SELECT COUNT(*) FROM plan_revisions r WHERE r.plan_name = p.name) AS revisions
           FROM plans p
          WHERE p.status != 'superseded'
-         ORDER BY p.updated_at DESC, p.name
+         ORDER BY COALESCE(
+           (SELECT MAX(captured_at) FROM agent_messages
+             WHERE agent_id = 'planner-' || p.name
+               AND role IN ('user', 'assistant')),
+           p.created_at
+         ) DESC, p.name
         """
     ).fetchall()
     return [dict(r) for r in rows]
@@ -140,6 +137,17 @@ def list_plans(conn: sqlite3.Connection) -> list[dict[str, Any]]:
 
 def get_plan_row(conn: sqlite3.Connection, name: str) -> dict[str, Any] | None:
     row = conn.execute("SELECT * FROM plans WHERE name = ?", (name,)).fetchone()
+    return dict(row) if row else None
+
+
+def get_plan_row_by_materialized_path(
+    conn: sqlite3.Connection,
+    materialized_path: str,
+) -> dict[str, Any] | None:
+    row = conn.execute(
+        "SELECT * FROM plans WHERE materialized_path = ?",
+        (materialized_path,),
+    ).fetchone()
     return dict(row) if row else None
 
 
@@ -167,11 +175,10 @@ def rename_plan(
         """
         INSERT INTO plans
             (name, status, created_at, updated_at, body, frontmatter_json,
-             body_hash, file_hash, last_materialized_hash, materialized_path,
-             sync_state, conflict_reason, parse_error, revision_count)
+             body_hash, file_hash, materialized_path, sync_state, parse_error,
+             revision_count)
         SELECT ?, status, created_at, ?, body, frontmatter_json,
-               body_hash, file_hash, last_materialized_hash, ?,
-               sync_state, conflict_reason, parse_error, revision_count
+               body_hash, file_hash, ?, sync_state, parse_error, revision_count
           FROM plans
          WHERE name = ?
         """,
@@ -203,7 +210,6 @@ def deprecate_plan(
     *,
     materialized_path: str,
     file_hash: str,
-    last_materialized_hash: str,
     body_hash: str,
     body: str,
     frontmatter_json: str,
@@ -214,8 +220,7 @@ def deprecate_plan(
         UPDATE plans
            SET status = 'superseded', updated_at = ?, body = ?,
                frontmatter_json = ?, body_hash = ?, file_hash = ?,
-               last_materialized_hash = ?, materialized_path = ?,
-               sync_state = 'synced', conflict_reason = NULL, parse_error = NULL
+               materialized_path = ?, sync_state = 'synced', parse_error = NULL
          WHERE name = ?
         """,
         (
@@ -224,7 +229,6 @@ def deprecate_plan(
             frontmatter_json,
             body_hash,
             file_hash,
-            last_materialized_hash,
             materialized_path,
             name,
         ),
@@ -240,15 +244,14 @@ def mark_plan_sync_state(
     sync_state: str,
     *,
     file_hash: str | None = None,
-    conflict_reason: str | None = None,
     parse_error: str | None = None,
 ) -> None:
     conn.execute(
         """
         UPDATE plans
            SET sync_state = ?, file_hash = COALESCE(?, file_hash),
-               conflict_reason = ?, parse_error = ?, updated_at = ?
+               parse_error = ?, updated_at = ?
          WHERE name = ?
         """,
-        (sync_state, file_hash, conflict_reason, parse_error, _now(), name),
+        (sync_state, file_hash, parse_error, _now(), name),
     )

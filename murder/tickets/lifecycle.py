@@ -24,7 +24,7 @@ VALID_TRANSITIONS: dict[TicketStatus, set[TicketStatus]] = {
         TicketStatus.ARCHIVED,
     },
     TicketStatus.BLOCKED: {TicketStatus.IN_PROGRESS, TicketStatus.FAILED, TicketStatus.ARCHIVED},
-    TicketStatus.FAILED: {TicketStatus.PLANNED, TicketStatus.ARCHIVED},
+    TicketStatus.FAILED: {TicketStatus.PLANNED, TicketStatus.READY, TicketStatus.ARCHIVED},
     TicketStatus.DONE: {TicketStatus.PLANNED, TicketStatus.ARCHIVED},  # D7: reopen
     TicketStatus.ARCHIVED: {TicketStatus.PLANNED},  # un-archive
 }

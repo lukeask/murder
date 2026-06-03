@@ -105,9 +105,8 @@ class PlanSync(MarkdownSyncLoop):
                 """
                 UPDATE plans
                    SET status = ?, updated_at = ?, body = ?, frontmatter_json = ?,
-                       body_hash = ?, file_hash = ?, last_materialized_hash = ?,
-                       materialized_path = ?, sync_state = 'synced',
-                       conflict_reason = NULL, parse_error = NULL
+                       body_hash = ?, file_hash = ?, materialized_path = ?,
+                       sync_state = 'synced', parse_error = NULL
                  WHERE name = ?
                 """,
                 (
@@ -116,7 +115,6 @@ class PlanSync(MarkdownSyncLoop):
                     plan.body,
                     json.dumps(plan.frontmatter, sort_keys=True, default=str),
                     rendered_hash,
-                    file_hash,
                     file_hash,
                     materialized_path,
                     new_name,
@@ -171,7 +169,6 @@ class PlanSync(MarkdownSyncLoop):
                 name,
                 materialized_path=str(dest.relative_to(self.repo_root)),
                 file_hash=h,
-                last_materialized_hash=h,
                 body_hash=h,
                 body=plan.body,
                 frontmatter_json=json.dumps(
@@ -190,6 +187,8 @@ class PlanSync(MarkdownSyncLoop):
             plan = parse(raw, default_name=path.stem)
         except Exception as exc:
             row = dbmod.get_plan_row(self.db, path.stem)
+            if row is None:
+                row = dbmod.get_plan_row_by_materialized_path(self.db, rel)
             if row is not None:
                 dbmod.mark_plan_sync_state(
                     self.db,
@@ -210,47 +209,29 @@ class PlanSync(MarkdownSyncLoop):
                 content_hash=rendered_hash,
                 materialized_path=rel,
                 file_hash=file_hash,
-                last_materialized_hash=file_hash,
                 sync_state="synced",
                 create_revision=True,
                 revision_source="import",
             )
             return
 
-        last_hash = row["last_materialized_hash"]
-        db_changed = bool(last_hash and row["body_hash"] != last_hash)
-        file_changed = bool(last_hash and file_hash != last_hash)
-        if db_changed and file_changed:
-            dbmod.mark_plan_sync_state(
-                self.db,
-                row["name"],
-                "conflict",
-                file_hash=file_hash,
-                conflict_reason="database and markdown changed since last materialization",
-            )
-            return
-        if db_changed:
-            self.materialize_row(row)
-            return
-        path_changed = row["materialized_path"] != rel
-        if (
+        file_changed = row["file_hash"] != file_hash
+        needs_ingest = (
             file_changed
-            or path_changed
-            or row["sync_state"] in {"parse_error", "missing_file", "conflict"}
-        ):
+            or row["materialized_path"] != rel
+            or row["sync_state"] != "synced"
+        )
+        if needs_ingest:
             dbmod.upsert_plan(
                 self.db,
                 plan,
                 content_hash=rendered_hash,
                 materialized_path=rel,
                 file_hash=file_hash,
-                last_materialized_hash=file_hash,
                 sync_state="synced",
-                create_revision=file_changed,
+                create_revision=(rendered_hash != row["body_hash"]),
                 revision_source="file",
             )
-        elif row["file_hash"] != file_hash or row["sync_state"] != "synced":
-            dbmod.mark_plan_sync_state(self.db, row["name"], "synced", file_hash=file_hash)
 
     def materialize_row(self, row: dict[str, object]) -> Path:
         related = self.db.execute(
@@ -268,10 +249,10 @@ class PlanSync(MarkdownSyncLoop):
         self.db.execute(
             """
             UPDATE plans
-               SET body_hash = ?, last_materialized_hash = ?, updated_at = ?
+               SET body_hash = ?, updated_at = ?
              WHERE name = ?
             """,
-            (h, h, datetime.utcnow().isoformat(timespec="seconds"), plan.name),
+            (h, datetime.utcnow().isoformat(timespec="seconds"), plan.name),
         )
         return path
 

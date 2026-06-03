@@ -79,3 +79,22 @@ def test_crow_snapshot_exposes_worktree_path(repo_root: Path) -> None:
     snapshot = ServiceReadModel(repo_root / ".murder" / "murder.db").get_crow_snapshot()
 
     assert snapshot.sessions[0].worktree_path == str(worktree_path)
+
+
+def test_rogue_crow_snapshot_exposes_agent_harness(repo_root: Path) -> None:
+    conn = get_db(repo_root / ".murder" / "murder.db")
+    init_db(conn)
+
+    upsert_agent(
+        conn,
+        agent_id="claude-rogue-test",
+        role="crow",
+        ticket_id=None,
+        session="murder_repo_crow_claude_rogue_test",
+        harness="claude_code",
+        status="running",
+    )
+
+    snapshot = ServiceReadModel(repo_root / ".murder" / "murder.db").get_crow_snapshot()
+
+    assert snapshot.sessions[0].harness == "claude_code"

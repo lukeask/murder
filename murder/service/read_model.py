@@ -88,7 +88,12 @@ class ServiceReadModel:
                            AS revisions
                   FROM plans p
                  WHERE p.status != 'superseded'
-                 ORDER BY p.updated_at DESC, p.name
+                 ORDER BY COALESCE(
+                   (SELECT MAX(captured_at) FROM agent_messages
+                     WHERE agent_id = 'planner-' || p.name
+                       AND role IN ('user', 'assistant')),
+                   p.created_at
+                 ) DESC, p.name
                 """
             ).fetchall()
         plans = tuple(
@@ -200,11 +205,12 @@ class ServiceReadModel:
             rows = conn.execute(
                 """
                 SELECT a.agent_id, a.role, a.ticket_id, a.status, a.session,
+                       COALESCE(a.harness, t.harness) AS harness,
+                       COALESCE(a.model, t.model) AS model,
                        a.worktree_path,
                        a.started_at, a.last_heartbeat_at,
                        COALESCE(t.title, '') AS title,
-                       COALESCE(t.status, '') AS ticket_status,
-                       t.harness
+                       COALESCE(t.status, '') AS ticket_status
                   FROM agents a
                   LEFT JOIN tickets t ON t.id = a.ticket_id
                  WHERE a.status NOT IN ('done', 'dead')
@@ -251,6 +257,7 @@ class ServiceReadModel:
                 started_at=_parse_datetime(row["started_at"]),
                 ticket_status=_optional_str(row["ticket_status"]) or None,
                 worktree_path=_optional_str(row["worktree_path"]),
+                model=_optional_str(row["model"]),
                 open_escalations=open_by_ticket.get(str(row["ticket_id"] or ""), (0, 0))[0],
                 max_severity=open_by_ticket.get(str(row["ticket_id"] or ""), (0, 0))[1],
             )
@@ -298,7 +305,7 @@ class ServiceReadModel:
         with closing(self._connect()) as conn:
             row = conn.execute(
                 """
-                SELECT materialized_path, sync_state, parse_error, conflict_reason
+                SELECT materialized_path, sync_state, parse_error
                   FROM plans
                  WHERE name = ?
                 """,
@@ -319,8 +326,6 @@ class ServiceReadModel:
         sync_state = str(row["sync_state"])
         if sync_state == "parse_error":
             text = f"# {name}\n\nParse error: {row['parse_error']}\n\n```markdown\n{text}\n```"
-        elif sync_state == "conflict":
-            text = f"# {name}\n\nConflict: {row['conflict_reason']}\n\n{text}"
         return PlanDisplaySnapshot(name=name, markdown=text)
 
     def get_note_display(self, name: str) -> NoteDisplaySnapshot | None:

@@ -69,6 +69,8 @@ async def start_supervisor_workers(
             send_agent_message=orchestrator.send_agent_message,
             send_agent_key=orchestrator.send_agent_key,
             interrupt_agent=orchestrator.interrupt_agent,
+            stop_agent=orchestrator.stop_agent,
+            rename_rogue=orchestrator.rename_rogue_agent,
             scaffold_plan=orchestrator.scaffold_plan,
             rename_plan=orchestrator.rename_plan,
             deprecate_plan=orchestrator.deprecate_plan,

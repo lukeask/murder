@@ -55,6 +55,7 @@ _MODEL_SETTLE_DELAY_S = 0.5
 _MODEL_MENU_DELAY_S = 0.4
 _MODEL_PAGE_SCROLL_DELAY_S = 0.25
 _MAX_CURSOR_MODEL_PAGES = 32
+_MODEL_VERIFY_ATTEMPTS = 4
 _COMPOSER_IDS = frozenset({"composer", "composer-2", "composer-2.5"})
 _CURSOR_SPEEDS = ("slow", "fast")
 _IDLE_PLACEHOLDER_RE = re.compile(
@@ -70,6 +71,14 @@ _TRUST_PROMPT_RE = re.compile(r"Workspace Trust Required", re.IGNORECASE)
 _CURSOR_CWD_RE = re.compile(r"^\s*(?:~/|/|\./|\.\./).*\s+·\s+\S+\s*$")
 _CURSOR_COMPOSER_RE = re.compile(r"^\s*Composer\b.*\bAuto-run\b", re.IGNORECASE)
 _CURSOR_SPEED_IN_LINE_RE = re.compile(r"\b(Slow|Fast)\b", re.IGNORECASE)
+_CURSOR_COMPOSER_EDIT_RE = re.compile(
+    r"composer\s+2(?:\.5)?\s+[—-]\s*edit\s+parameters",
+    re.IGNORECASE,
+)
+_CURSOR_FAST_CHECKBOX_RE = re.compile(
+    r"\[\s*(?P<mark>[xX✓]?)\s*\]\s*Fast\b",
+    re.IGNORECASE,
+)
 _CURSOR_PLACEHOLDER_RE = re.compile(
     r"^\s*→\s*(?:Add a follow-up|Plan,\s*search,\s*build anything)\b",
     re.IGNORECASE,
@@ -179,6 +188,28 @@ class CursorAdapter(HarnessAdapter):
         del cwd
         return ["agent", "--yolo"]
 
+    def startup_model_satisfies_runtime_request(
+        self,
+        model: str,
+        effort: str | None = None,
+        *,
+        launched_model: str | None = None,
+    ) -> bool:
+        normalized_model = _normalize_cursor_model(model)
+        normalized_startup = _normalize_cursor_model(launched_model or self.startup_model or "")
+        normalized_effort = normalize_effort(effort) if effort else None
+        if (
+            normalized_model == "composer-2.5"
+            and normalized_startup == "composer-2.5"
+            and (normalized_effort is None or normalized_effort == self.default_effort)
+        ):
+            return True
+        return super().startup_model_satisfies_runtime_request(
+            model,
+            effort,
+            launched_model=launched_model,
+        )
+
     def is_ready(self, pane_text: str) -> bool:
         """True once the input box is accepting text (cursor has booted past
         any trust/login prompts).
@@ -210,13 +241,24 @@ class CursorAdapter(HarnessAdapter):
 
     def _parse_composer_speed(self, pane_text: str) -> str | None:
         clean = strip_ansi(pane_text)
+        in_edit_parameters = False
         for line in clean.splitlines():
             if "composer 2.5" not in line.lower():
+                if not in_edit_parameters:
+                    continue
+                checkbox = _CURSOR_FAST_CHECKBOX_RE.search(line)
+                if checkbox:
+                    return "fast" if checkbox.group("mark") else "slow"
                 continue
             match = _CURSOR_SPEED_IN_LINE_RE.search(line)
             if match:
                 return normalize_effort(match.group(1))
+            if _CURSOR_COMPOSER_EDIT_RE.search(line):
+                in_edit_parameters = True
         return None
+
+    def _is_composer_edit_parameters(self, pane_text: str) -> bool:
+        return bool(_CURSOR_COMPOSER_EDIT_RE.search(strip_ansi(pane_text)))
 
     def parse_active_model_state(self, pane_text: str) -> HarnessModelState | None:
         clean = strip_ansi(pane_text)
@@ -255,24 +297,52 @@ class CursorAdapter(HarnessAdapter):
         await asyncio.sleep(0.25)
         pane = await tmux.capture_pane(session, lines=200)
         current = self._parse_composer_speed(pane)
-        for _ in range(len(_CURSOR_SPEEDS) + 1):
-            if current == desired_speed:
-                break
-            await tmux.send_keys(session, "Tab", literal=False, enter=False)
-            await asyncio.sleep(0.12)
-            pane = await tmux.capture_pane(session, lines=200)
-            current = self._parse_composer_speed(pane)
+        if self._is_composer_edit_parameters(pane):
+            if current != desired_speed:
+                await tmux.send_keys(session, "Space", literal=False, enter=False)
+                await asyncio.sleep(0.12)
+                pane = await tmux.capture_pane(session, lines=200)
+                current = self._parse_composer_speed(pane)
+        else:
+            for _ in range(len(_CURSOR_SPEEDS) + 1):
+                if current == desired_speed:
+                    break
+                await tmux.send_keys(session, "Tab", literal=False, enter=False)
+                await asyncio.sleep(0.12)
+                pane = await tmux.capture_pane(session, lines=200)
+                current = self._parse_composer_speed(pane)
         await tmux.send_keys(session, "", literal=True, enter=True)
-        await asyncio.sleep(_MODEL_SETTLE_DELAY_S)
-        pane = await tmux.capture_pane(session, lines=200)
-        state = self.parse_active_model_state(pane)
-        if state is None or state.model != "composer-2.5":
-            return False
-        return state.effort == desired_speed
+        for _ in range(_MODEL_VERIFY_ATTEMPTS):
+            await asyncio.sleep(_MODEL_SETTLE_DELAY_S)
+            pane = await tmux.capture_pane(session, lines=200)
+            state = self.parse_active_model_state(pane)
+            if state is None or state.model != "composer-2.5":
+                continue
+            if state.effort == desired_speed:
+                return True
+            if desired_speed == self.default_effort and state.effort is None:
+                return True
+        return False
 
     async def set_model(self, session: str, model: str, *, effort: str | None = None) -> bool:
         desired_model = _normalize_cursor_model(model)
         desired_speed = normalize_effort(effort) if effort else None
+        current_state: HarnessModelState | None = None
+        for attempt in range(_MODEL_VERIFY_ATTEMPTS):
+            pane = await tmux.capture_pane(session, lines=200)
+            current_state = self.parse_active_model_state(pane)
+            current_model = _normalize_cursor_model(current_state.model or "") if current_state else None
+            if current_model == desired_model:
+                if desired_speed is None:
+                    return True
+                if current_state and current_state.effort == desired_speed:
+                    return True
+                if _is_composer_model(desired_model) and desired_speed == self.default_effort:
+                    if current_state.effort is None:
+                        return True
+            if current_state is not None or attempt == _MODEL_VERIFY_ATTEMPTS - 1:
+                break
+            await asyncio.sleep(0.2)
 
         if _is_composer_model(desired_model) and desired_speed is not None:
             return await self._set_composer_speed(session, desired_speed)
@@ -339,10 +409,17 @@ class CursorAdapter(HarnessAdapter):
         return ok_result(rows)
 
     async def initialize_defaults(self, session: str, spec: HarnessStartSpec) -> SimpleResult[None]:
-        mode = "on" if spec.auto_run is not False else "off"
+        if spec.auto_run is None:
+            return ok_result()
+        mode = "on" if spec.auto_run else "off"
         await tmux.send_keys(session, f"/auto-run {mode}", literal=True, enter=True)
         await asyncio.sleep(0.2)
         return ok_result()
+
+    async def send_prompt(self, session: str, prompt: str) -> None:
+        await tmux.send_keys(session, "C-u", literal=False, enter=False)
+        await asyncio.sleep(0.05)
+        await tmux.send_keys(session, prompt, literal=True, enter=True)
 
     async def interrupt(self, session: str) -> None:
         await self.interrupt_generation(session)

@@ -68,7 +68,7 @@ class DispatchController:
         )
         if result is None:
             return
-        self._ctx.notify(f"{ticket_id} queued for retry; status=planned", timeout=4)
+        self._ctx.notify(f"{ticket_id} queued for retry; status=ready", timeout=4)
         self._ctx.refresh_views()
 
     async def update_metadata_and_status(

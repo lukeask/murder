@@ -165,10 +165,10 @@ def test_cc_trust_dialog_dismissed_before_model_command(fake_tmux_launch: FakeTm
 
 
 def test_configure_session_defaults_effort_to_medium(fake_tmux_launch: FakeTmux) -> None:
-    fake_tmux_launch.queue_pane(CODEX_IDLE)
+    fake_tmux_launch.queue_pane(CC_IDLE)
     captured: dict[str, object] = {}
 
-    hs = HarnessSession(CodexAdapter(), "codex-sess", Path("/tmp/repo"))
+    hs = HarnessSession(ClaudeCodeAdapter(), "claude-sess", Path("/tmp/repo"))
 
     async def _spy_set_model(model: str, effort: str | None = None):
         captured["effort"] = effort
@@ -188,10 +188,10 @@ def test_configure_session_defaults_effort_to_medium(fake_tmux_launch: FakeTmux)
 
 
 def test_configure_session_preserves_explicit_effort(fake_tmux_launch: FakeTmux) -> None:
-    fake_tmux_launch.queue_pane(CODEX_IDLE)
+    fake_tmux_launch.queue_pane(CC_IDLE)
     captured: dict[str, object] = {}
 
-    hs = HarnessSession(CodexAdapter(), "codex-sess", Path("/tmp/repo"))
+    hs = HarnessSession(ClaudeCodeAdapter(), "claude-sess", Path("/tmp/repo"))
 
     async def _spy_set_model(model: str, effort: str | None = None):
         captured["effort"] = effort
@@ -207,6 +207,51 @@ def test_configure_session_preserves_explicit_effort(fake_tmux_launch: FakeTmux)
 
     assert result.ok
     assert captured["effort"] == "high"
+
+
+def test_codex_startup_model_skips_runtime_picker(fake_tmux_launch: FakeTmux) -> None:
+    fake_tmux_launch.queue_pane(CODEX_IDLE)
+    hs = HarnessSession(CodexAdapter(), "codex-sess", Path("/tmp/repo"))
+
+    async def _spy_set_model(model: str, effort: str | None = None):
+        raise AssertionError(f"unexpected runtime selection for {model} {effort}")
+
+    hs.set_model = _spy_set_model  # type: ignore[method-assign]
+
+    result = asyncio.run(
+        hs._configure_started_session(  # noqa: SLF001
+            _fast_spec(startup_model="gpt-5.4-mini", startup_effort=None)
+        )
+    )
+
+    assert result.ok
+
+
+def test_codex_startup_nondefault_effort_drives_runtime_selection(
+    fake_tmux_launch: FakeTmux,
+) -> None:
+    # The launch --model flag selects the model but carries no effort, so a
+    # non-default startup effort must still run the runtime selection even
+    # though the model itself is already in place.
+    fake_tmux_launch.queue_pane(CODEX_IDLE)
+    hs = HarnessSession(CodexAdapter(), "codex-sess", Path("/tmp/repo"))
+    captured: dict[str, object] = {}
+
+    async def _spy_set_model(model: str, effort: str | None = None):
+        captured["model"] = model
+        captured["effort"] = effort
+        return ok_result()
+
+    hs.set_model = _spy_set_model  # type: ignore[method-assign]
+
+    result = asyncio.run(
+        hs._configure_started_session(  # noqa: SLF001
+            _fast_spec(startup_model="gpt-5.4-mini", startup_effort="high")
+        )
+    )
+
+    assert result.ok
+    assert captured == {"model": "gpt-5.4-mini", "effort": "high"}
 
 
 # ── 7.6 — Cursor set_model rejection detection ───────────────────────────────

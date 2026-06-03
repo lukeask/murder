@@ -36,6 +36,13 @@ _CC_MODEL_LINE_RE = re.compile(
     r"\bwith\s+(?P<effort>low|medium|high|x\s*high|xhigh|max)\s+effort\b",
     re.IGNORECASE,
 )
+# Fallback: banner line "Haiku 4.5 · Claude Pro" without effort text. The
+# trailing " ·" anchors this to the banner/status line so a bare "Opus 4.x"
+# mentioned in conversation prose can't be misread as the active model.
+_CC_BANNER_MODEL_RE = re.compile(
+    r"\b(?P<model>Opus|Sonnet|Haiku)\s+\d+\.\d+\s+·",
+    re.IGNORECASE,
+)
 _CC_EFFORT_STATUS_RE = re.compile(
     r"[●•]\s*(?P<effort>low|medium|high|x\s*high|xhigh|max)\s*(?:·|$)",
     re.IGNORECASE,
@@ -80,12 +87,13 @@ class ClaudeCodeAdapter(HarnessAdapter):
     model_list_command: ClassVar[str | None] = "/model"
     model_list_capture_delay_s: ClassVar[float] = _MODEL_CAPTURE_DELAY_S
     supported_efforts: ClassVar[tuple[str, ...]] = _CC_EFFORT_ORDER
-    # Transcript parsing (best-effort; fixture: tests/fixtures/harness_panes/
-    # claude_transcript.txt). CC echoes the submitted prompt on a "> …" / "❯ …"
-    # line; the reply (●) and tool boxes (⏺ ⎿) follow until the next prompt.
-    # Status-bar and "✻ …" spinner lines are dropped; the empty trailing "❯ "
-    # and the pre-first-message placeholder both parse to no turn.
-    transcript_prompt_markers: ClassVar[tuple[str, ...]] = (">", "❯")
+    # Transcript parsing. CC echoes the submitted prompt on a "❯ …" line; the
+    # reply (●) and tool boxes (⏺ ⎿) follow until the next prompt.  Status-bar
+    # and "✻ …" spinner lines are dropped; the empty trailing "❯ " and the
+    # pre-first-message placeholder both parse to no turn.
+    # Only ❯ (U+276F) is used — plain ">" appears in diffs/blockquotes inside
+    # assistant output and must not be treated as a turn boundary.
+    transcript_prompt_markers: ClassVar[tuple[str, ...]] = ("❯",)
     transcript_drop_substrings: ClassVar[tuple[str, ...]] = (
         "bypass permissions",
         "esc to interrupt",
@@ -183,7 +191,10 @@ class ClaudeCodeAdapter(HarnessAdapter):
         state = self.parse_active_model_state(pane)
         if state is None or state.model != desired_model:
             return False
-        if desired_effort is not None and state.effort != desired_effort:
+        # Only reject on effort mismatch when effort is readable; if the pane
+        # doesn't show effort text (older CC, or freshly-switched), trust the
+        # model match and the set_effort call.
+        if state.effort is not None and desired_effort is not None and state.effort != desired_effort:
             return False
         return True
 
@@ -210,6 +221,13 @@ class ClaudeCodeAdapter(HarnessAdapter):
             match = matches[-1]
             model = _claude_model_id(match.group("model"))
             effort = normalize_effort(match.group("effort"))
+
+        if model is None:
+            # Older CC (v2.1.150) or freshly-switched model: banner shows
+            # "Haiku 4.5 · Claude Pro" without effort text.
+            banner_match = _CC_BANNER_MODEL_RE.search(clean)
+            if banner_match:
+                model = _claude_model_id(banner_match.group("model"))
 
         menu_choices = parse_claude_code_model_choices(clean)
         current_choice = next((choice for choice in menu_choices if choice.current), None)
