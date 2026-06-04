@@ -16,7 +16,7 @@ _FAILURE_PREAMBLE = (
 )
 
 _FORBIDDEN_MODULE_PREFIXES: tuple[str, ...] = (
-    "murder.terminal.tmux",
+    "murder.runtime.terminal.tmux",
 )
 
 _FORBIDDEN_IMPORTED_NAMES: frozenset[str] = frozenset({"tmux"})
@@ -73,10 +73,10 @@ class _TuiTmuxGuard(ast.NodeVisitor):
         hit = self._module_forbidden(module)
         if hit is not None:
             self._add(node, f"forbidden import from {module!r} (via {hit})")
-        if module == "murder.terminal":
+        if module == "murder.runtime.terminal":
             for alias in node.names:
                 if alias.name in _FORBIDDEN_IMPORTED_NAMES:
-                    self._add(node, f"forbidden import of tmux from murder.terminal")
+                    self._add(node, f"forbidden import of tmux from murder.runtime.terminal")
 
     def visit_Call(self, node: ast.Call) -> None:
         func = node.func
@@ -110,8 +110,8 @@ def _violations_in_source(source: str, *, path: Path | None = None) -> list[_Vio
 
 def test_tmux_guard_detects_forbidden_patterns() -> None:
     samples = (
-        "from murder.terminal import tmux\n",
-        "import murder.terminal.tmux as tmux\n",
+        "from murder.runtime.terminal import tmux\n",
+        "import murder.runtime.terminal.tmux as tmux\n",
         "tmux.capture_pane('s', lines=10)\n",
         "await tmux.send_keys('s', 'Enter', literal=False)\n",
     )

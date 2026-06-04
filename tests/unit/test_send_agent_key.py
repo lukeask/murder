@@ -7,7 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from murder.orchestration.orchestrator import Orchestrator
+from murder.runtime.orchestration.orchestrator import Orchestrator
 from tests.support.fake_tmux import FakeTmux
 
 

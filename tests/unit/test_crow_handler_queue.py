@@ -8,10 +8,10 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from murder.agents.crow_handler import CrowHandler
+from murder.runtime.agents.crow_handler import CrowHandler
 from murder.config import CrowHandlerConfig
-from murder.harnesses.claude_code import ClaudeCodeAdapter
-from murder.orchestration.outcome import TicketOutcomeService
+from murder.llm.harnesses.claude_code import ClaudeCodeAdapter
+from murder.runtime.orchestration.outcome import TicketOutcomeService
 from tests.unit.test_harness_adapters import CC_BUSY, CC_IDLE
 
 SESSION = "crow-t001"
@@ -55,10 +55,10 @@ def test_queue_message_sends_immediately_when_idle(handler, fake_tmux):
 
 def test_queue_message_holds_until_idle(handler, fake_tmux, monkeypatch):
     monkeypatch.setattr(
-        "murder.persistence.tickets.get_ticket_status",
+        "murder.state.persistence.tickets.get_ticket_status",
         lambda _db, _tid: "in_progress",
     )
-    monkeypatch.setattr("murder.persistence.agents.heartbeat_agent", lambda *_a, **_k: None)
+    monkeypatch.setattr("murder.state.persistence.agents.heartbeat_agent", lambda *_a, **_k: None)
     handler._idle_cached = False
     result = asyncio.run(handler.queue_message("wait for idle"))
     assert result == {"queued": True}

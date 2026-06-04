@@ -6,16 +6,16 @@ from types import SimpleNamespace
 
 import pytest
 
-from murder.agents.base import AgentRole, AgentStatus
-from murder.orchestration.orchestrator import Orchestrator
-from murder.persistence import plans as plan_db
-from murder.persistence.agents import upsert_agent
-from murder.persistence.schema import get_db, init_db
-from murder.plans.parser import parse, render, write
-from murder.plans.schema import Plan, PlanStatus
-from murder.plans.sync import PlanSync, content_hash
-from murder.service.agent_registry import AgentRegistry
-from murder.storage.paths import db_path, deprecated_plans_dir, plan_md
+from murder.runtime.agents.base import AgentRole, AgentStatus
+from murder.runtime.orchestration.orchestrator import Orchestrator
+from murder.state.persistence import plans as plan_db
+from murder.state.persistence.agents import upsert_agent
+from murder.state.persistence.schema import get_db, init_db
+from murder.work.plans.parser import parse, render, write
+from murder.work.plans.schema import Plan, PlanStatus
+from murder.work.plans.sync import PlanSync, content_hash
+from murder.app.service.agent_registry import AgentRegistry
+from murder.state.storage.paths import db_path, deprecated_plans_dir, plan_md
 
 
 def _connect(repo_root):
@@ -209,7 +209,7 @@ def test_retarget_plan_runtime_rekeys_live_planner_and_handler(
         return True
 
     monkeypatch.setattr(
-        "murder.orchestration.orchestrator.tmux.rename_session",
+        "murder.runtime.orchestration.orchestrator.tmux.rename_session",
         fake_rename_session,
     )
 

@@ -5,12 +5,12 @@ from pathlib import Path
 
 import pytest
 
-from murder.harnesses.antigravity import AntigravityAdapter
-from murder.harnesses.claude_code import ClaudeCodeAdapter
-from murder.harnesses.codex import CodexAdapter
-from murder.harnesses.cursor import CursorAdapter
-from murder.harnesses.pi_harness import PiAdapter
-from murder.harnesses.parsing import parse_antigravity_model_choices
+from murder.llm.harnesses.antigravity import AntigravityAdapter
+from murder.llm.harnesses.claude_code import ClaudeCodeAdapter
+from murder.llm.harnesses.codex import CodexAdapter
+from murder.llm.harnesses.cursor import CursorAdapter
+from murder.llm.harnesses.pi_harness import PiAdapter
+from murder.llm.harnesses.parsing import parse_antigravity_model_choices
 from tests.support.fake_tmux import FakeTmux
 
 _FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "harness_panes"
@@ -466,6 +466,20 @@ def test_antigravity_set_model_navigates_picker(fake_tmux: FakeTmux) -> None:
     sent = [args[1] for args, _ in fake_tmux.calls_to("send_keys")]
     assert "/model" in sent
     assert "Up" in sent
+
+
+def test_antigravity_set_model_without_effort_accepts_available_variant(
+    fake_tmux: FakeTmux,
+) -> None:
+    fake_tmux.queue_pane(AGY_MODEL_PICKER)
+    fake_tmux.queue_pane(AGY_IDLE)
+
+    ok = asyncio.run(AntigravityAdapter().set_model("sess", "gemini-3-1-pro"))
+
+    assert ok is True
+    sent = [args[1] for args, _ in fake_tmux.calls_to("send_keys")]
+    assert "/model" in sent
+    assert "Escape" not in sent
 
 
 def test_pi_active_model_state_from_status_bar() -> None:

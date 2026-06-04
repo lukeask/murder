@@ -16,12 +16,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from murder.harnesses.antigravity import AntigravityAdapter
-from murder.harnesses.claude_code import ClaudeCodeAdapter
-from murder.harnesses.codex import CodexAdapter
-from murder.harnesses.cursor import CursorAdapter
-from murder.harnesses.pi_harness import PiAdapter
-from murder.harnesses.parsing import parse_prompt_marker_transcript
+from murder.llm.harnesses.antigravity import AntigravityAdapter
+from murder.llm.harnesses.claude_code import ClaudeCodeAdapter
+from murder.llm.harnesses.codex import CodexAdapter
+from murder.llm.harnesses.cursor import CursorAdapter
+from murder.llm.harnesses.pi_harness import PiAdapter
+from murder.llm.harnesses.parsing import parse_prompt_marker_transcript
 from tests.support.simulators import PaneSimulator
 
 _FIXTURES = Path(__file__).parent.parent / "fixtures" / "harness_panes"

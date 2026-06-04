@@ -30,7 +30,7 @@ from murder.bus.protocol import (
     WakeBody,
     WakeMessage,
 )
-from murder.storage.service_registry import socket_path_for_repo
+from murder.state.storage.service_registry import socket_path_for_repo
 
 
 LOGGER = logging.getLogger(__name__)

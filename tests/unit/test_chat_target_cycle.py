@@ -4,14 +4,14 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from murder.service.client_api import CrowSessionSummary, CrowSnapshot
-from murder.tui.chat_target_cycle import (
+from murder.app.service.client_api import CrowSessionSummary, CrowSnapshot
+from murder.app.tui.chat_target_cycle import (
     ChatTarget,
     crows_chat_targets,
     cycle_chat_target,
     planning_chat_targets,
 )
-from murder.tui.crows_view import CrowEntry, Health
+from murder.app.tui.crows_view import CrowEntry, Health
 
 
 def _session(**kwargs: object) -> CrowSessionSummary:

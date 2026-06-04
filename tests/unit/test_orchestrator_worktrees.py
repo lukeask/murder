@@ -4,7 +4,7 @@ import asyncio
 from dataclasses import dataclass
 from pathlib import Path
 
-from murder.agents.base import AgentRole
+from murder.runtime.agents.base import AgentRole
 from murder.config import (
     Config,
     CrowHandlerConfig,
@@ -12,9 +12,9 @@ from murder.config import (
     ProjectConfig,
     RuntimeConfig,
 )
-from murder.orchestration.orchestrator import Orchestrator
-from murder.persistence.schema import get_db, init_db
-from murder.storage.worktrees import WorktreeRef
+from murder.runtime.orchestration.orchestrator import Orchestrator
+from murder.state.persistence.schema import get_db, init_db
+from murder.state.storage.worktrees import WorktreeRef
 
 
 @dataclass
@@ -73,10 +73,10 @@ def test_spawn_crow_defaults_to_main_checkout(repo_root: Path, monkeypatch) -> N
         def build(self, _ctx) -> str:
             return "brief"
 
-    monkeypatch.setattr("murder.orchestration.orchestrator.ensure_crow_worktree", fake_ensure)
-    monkeypatch.setattr("murder.orchestration.orchestrator.spawn_agent", fake_spawn_agent)
+    monkeypatch.setattr("murder.runtime.orchestration.orchestrator.ensure_crow_worktree", fake_ensure)
+    monkeypatch.setattr("murder.runtime.orchestration.orchestrator.spawn_agent", fake_spawn_agent)
     monkeypatch.setattr(
-        "murder.orchestration.orchestrator.assembler_for",
+        "murder.runtime.orchestration.orchestrator.assembler_for",
         lambda _ctx: _FakeAssembler(),
     )
 
@@ -125,10 +125,10 @@ def test_spawn_crow_provisions_opt_in_worktree_and_puts_it_in_agent_scope(
         def build(self, _ctx) -> str:
             return "brief"
 
-    monkeypatch.setattr("murder.orchestration.orchestrator.ensure_crow_worktree", fake_ensure)
-    monkeypatch.setattr("murder.orchestration.orchestrator.spawn_agent", fake_spawn_agent)
+    monkeypatch.setattr("murder.runtime.orchestration.orchestrator.ensure_crow_worktree", fake_ensure)
+    monkeypatch.setattr("murder.runtime.orchestration.orchestrator.spawn_agent", fake_spawn_agent)
     monkeypatch.setattr(
-        "murder.orchestration.orchestrator.assembler_for",
+        "murder.runtime.orchestration.orchestrator.assembler_for",
         lambda _ctx: _FakeAssembler(),
     )
 

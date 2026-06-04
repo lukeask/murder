@@ -8,11 +8,11 @@ from types import SimpleNamespace
 from textual.app import ComposeResult
 
 from murder.config import PlannerConfig
-from murder.service.client_api import CrowSessionSummary, CrowSnapshot
-from murder.tui.app import MurderApp
-from murder.tui.chat_input import ChatInput
-from murder.tui.crow_health import Health
-from murder.tui.crows_view import CrowEntry
+from murder.app.service.client_api import CrowSessionSummary, CrowSnapshot
+from murder.app.tui.app import MurderApp
+from murder.app.tui.chat_input import ChatInput
+from murder.app.tui.crow_health import Health
+from murder.app.tui.crows_view import CrowEntry
 
 
 async def _capture_pane(session: str, *, lines: int = 200) -> str:
@@ -297,5 +297,100 @@ def test_chat_murder_cancel_on_other_key() -> None:
 
             assert app._chat_murder_pending_agent_id is None  # noqa: SLF001
             assert app._chat_target_agent_id == "crow-t001"  # noqa: SLF001
+
+    asyncio.run(_run())
+
+
+def test_crows_focus_moves_by_screen_direction_in_four_pane_layout() -> None:
+    app = _QuietMurderApp()
+    snap = CrowSnapshot(
+        sessions=(_session(agent_id="rogue-cursor-a"),),
+        as_of=datetime.now(timezone.utc),
+        invalidation_key="k",
+    )
+
+    async def _run() -> None:
+        async with app.run_test() as pilot:
+            app._crows.render_from_snapshot(snap)  # noqa: SLF001
+            app._crows.roster_add_rogue("rogue-cursor-a")  # noqa: SLF001
+            app._crows.render_from_snapshot(snap)  # noqa: SLF001
+            await pilot.pause()
+
+            assert app._crows.focus_first_tile()  # noqa: SLF001
+            await pilot.pause()
+            app.action_focus_right()
+            await pilot.pause()
+            assert app._focus_contains(app._crows.wall)  # noqa: SLF001
+
+            app.action_focus_down()
+            await pilot.pause()
+            assert app.focused is app._escalations  # noqa: SLF001
+
+            assert app._crows.focus_roster()  # noqa: SLF001
+            await pilot.pause()
+            app.action_focus_right()
+            await pilot.pause()
+            assert app._focus_contains(app._crows.wall)  # noqa: SLF001
+
+    asyncio.run(_run())
+
+
+def test_crows_focus_does_not_jump_sideways_in_three_pane_layout() -> None:
+    app = _QuietMurderApp()
+    snap = CrowSnapshot(
+        sessions=(_session(agent_id="rogue-cursor-a"),),
+        as_of=datetime.now(timezone.utc),
+        invalidation_key="k",
+    )
+
+    async def _run() -> None:
+        async with app.run_test() as pilot:
+            app._crows.render_from_snapshot(snap)  # noqa: SLF001
+            app._crows.roster_add_rogue("rogue-cursor-a")  # noqa: SLF001
+            app._crows.render_from_snapshot(snap)  # noqa: SLF001
+            await pilot.pause()
+
+            assert app._crows.toggle_roster() is False  # noqa: SLF001
+            await pilot.pause()
+            assert app._crows.focus_first_tile()  # noqa: SLF001
+            await pilot.pause()
+
+            app.action_focus_right()
+            await pilot.pause()
+            assert app._focus_contains(app._crows.wall)  # noqa: SLF001
+
+            app.action_focus_down()
+            await pilot.pause()
+            assert app.focused is app._escalations  # noqa: SLF001
+
+    asyncio.run(_run())
+
+
+def test_crows_roster_and_tailwall_use_chat_accent_when_focused() -> None:
+    app = _QuietMurderApp()
+    snap = CrowSnapshot(
+        sessions=(_session(agent_id="rogue-cursor-a"),),
+        as_of=datetime.now(timezone.utc),
+        invalidation_key="k",
+    )
+
+    async def _run() -> None:
+        async with app.run_test() as pilot:
+            app._crows.render_from_snapshot(snap)  # noqa: SLF001
+            app._crows.roster_add_rogue("rogue-cursor-a")  # noqa: SLF001
+            app._crows.render_from_snapshot(snap)  # noqa: SLF001
+            await pilot.pause()
+
+            app._chat.focus()  # noqa: SLF001
+            await pilot.pause()
+            chat_border = app._chat.styles.border_top  # noqa: SLF001
+
+            assert app._crows.focus_roster()  # noqa: SLF001
+            await pilot.pause()
+            assert app._crows.roster.styles.border_top == chat_border  # noqa: SLF001
+
+            assert app._crows.focus_first_tile()  # noqa: SLF001
+            await pilot.pause()
+            assert app._crows.wall.styles.border_top == chat_border  # noqa: SLF001
 
     asyncio.run(_run())

@@ -89,7 +89,7 @@ def test_subscribe_before_broker_ready_buffers_until_connect(): ...
 def test_malformed_envelope_logs_and_drops(): ...
 ```
 
-Cookbook blocks **mandatory** in: `bus/client.py`, `harnesses/base.py`, `orchestration/orchestrator.py`. Optional elsewhere; add one if the API isn't self-evident.
+Cookbook blocks **mandatory** in: `bus/client.py`, `llm/harnesses/base.py`, `runtime/orchestration/orchestrator.py`. Optional elsewhere; add one if the API isn't self-evident.
 
 ### Naming
 

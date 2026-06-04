@@ -24,12 +24,12 @@ from pathlib import Path
 
 import pytest
 
-import murder.terminal.tmux as tmux_mod
-from murder.harnesses.base import HarnessSession
-from murder.harnesses.claude_code import ClaudeCodeAdapter
-from murder.harnesses.codex import CodexAdapter
-from murder.harnesses.cursor import CursorAdapter
-from murder.harnesses.models import HarnessStartSpec
+import murder.runtime.terminal.tmux as tmux_mod
+from murder.llm.harnesses.base import HarnessSession
+from murder.llm.harnesses.claude_code import ClaudeCodeAdapter
+from murder.llm.harnesses.codex import CodexAdapter
+from murder.llm.harnesses.cursor import CursorAdapter
+from murder.llm.harnesses.models import HarnessStartSpec
 from tests.support.fake_tmux import FakeTmux
 
 # ── Pane texts loaded from fixtures ──────────────────────────────────────────

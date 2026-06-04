@@ -8,9 +8,9 @@ from pathlib import Path
 
 import pytest
 
-from murder.harnesses import get as get_harness
-from murder.harnesses.models import HarnessStartSpec
-from murder.terminal import tmux
+from murder.llm.harnesses import get as get_harness
+from murder.llm.harnesses.models import HarnessStartSpec
+from murder.runtime.terminal import tmux
 
 _LIVE_ENV = "MURDER_LIVE_MODEL_SELECT"
 _HARNESS_CONFIG: dict[str, dict[str, object]] = {

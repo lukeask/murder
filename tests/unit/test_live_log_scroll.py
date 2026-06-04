@@ -4,8 +4,8 @@ import asyncio
 
 from textual.app import App, ComposeResult
 
-from murder.tui.pane_mirror import PaneMirror
-from murder.tui.planning_mode_widgets import ChatLog
+from murder.app.tui.pane_mirror import PaneMirror
+from murder.app.tui.planning_mode_widgets import ChatLog
 
 
 class _ChatApp(App[None]):

@@ -7,8 +7,8 @@ from types import SimpleNamespace
 
 from textual.app import App, ComposeResult
 
-from murder.tui.chat_input import ChatInput
-from murder.tui.chat_input import _harness_delivery
+from murder.app.tui.chat_input import ChatInput
+from murder.app.tui.chat_input import _harness_delivery
 
 
 def _key(*, key: str, character: str | None = None, is_printable: bool = False) -> SimpleNamespace:

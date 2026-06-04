@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from murder.service.client_api import EscalationSummary
-from murder.tui.escalation_resolve_wizard import EscalationResolveWizard
+from murder.app.service.client_api import EscalationSummary
+from murder.app.tui.escalation_resolve_wizard import EscalationResolveWizard
 
 
 def _row(*, ticket_status: str | None = None) -> EscalationSummary:

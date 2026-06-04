@@ -18,8 +18,8 @@ from murder.config import (
     HarnessRoleConfig,
     ProjectConfig,
 )
-from murder.orchestration.orchestrator import Orchestrator
-from murder.persistence.schema import get_db, init_db
+from murder.runtime.orchestration.orchestrator import Orchestrator
+from murder.state.persistence.schema import get_db, init_db
 
 
 @dataclass
@@ -76,8 +76,8 @@ def test_stop_unregistered_rogue_kills_session_and_marks_dead(
     async def fake_kill(name: str) -> None:
         killed.append(name)
 
-    monkeypatch.setattr("murder.orchestration.orchestrator.tmux.session_exists", fake_exists)
-    monkeypatch.setattr("murder.orchestration.orchestrator.tmux.kill_session", fake_kill)
+    monkeypatch.setattr("murder.runtime.orchestration.orchestrator.tmux.session_exists", fake_exists)
+    monkeypatch.setattr("murder.runtime.orchestration.orchestrator.tmux.kill_session", fake_kill)
 
     result = asyncio.run(Orchestrator(rt).stop_agent("codex-rogue-planreview"))  # type: ignore[arg-type]
 
@@ -111,8 +111,8 @@ def test_stop_unregistered_crow_also_reaps_handler(repo_root: Path, monkeypatch)
     async def fake_kill(name: str) -> None:
         return None
 
-    monkeypatch.setattr("murder.orchestration.orchestrator.tmux.session_exists", fake_exists)
-    monkeypatch.setattr("murder.orchestration.orchestrator.tmux.kill_session", fake_kill)
+    monkeypatch.setattr("murder.runtime.orchestration.orchestrator.tmux.session_exists", fake_exists)
+    monkeypatch.setattr("murder.runtime.orchestration.orchestrator.tmux.kill_session", fake_kill)
 
     result = asyncio.run(Orchestrator(rt).stop_agent("crow-t001"))  # type: ignore[arg-type]
 

@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from murder.persistence.agents import upsert_agent
-from murder.persistence.schema import get_db, init_db
-from murder.service.read_model import ServiceReadModel
+from murder.state.persistence.agents import upsert_agent
+from murder.state.persistence.schema import get_db, init_db
+from murder.app.service.read_model import ServiceReadModel
 
 
 def test_agents_persist_worktree_path(repo_root: Path) -> None:

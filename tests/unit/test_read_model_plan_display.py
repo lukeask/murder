@@ -2,13 +2,13 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from murder.persistence import plans as plan_db
-from murder.persistence.schema import get_db, init_db
-from murder.plans.parser import render
-from murder.plans.schema import Plan, PlanStatus
-from murder.plans.sync import content_hash
-from murder.service.read_model import ServiceReadModel
-from murder.storage.paths import db_path, plan_md, report_md, reports_dir
+from murder.state.persistence import plans as plan_db
+from murder.state.persistence.schema import get_db, init_db
+from murder.work.plans.parser import render
+from murder.work.plans.schema import Plan, PlanStatus
+from murder.work.plans.sync import content_hash
+from murder.app.service.read_model import ServiceReadModel
+from murder.state.storage.paths import db_path, plan_md, report_md, reports_dir
 
 
 def test_get_plan_display_reads_repo_relative_materialized_path(repo_root) -> None:

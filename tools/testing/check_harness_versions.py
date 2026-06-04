@@ -27,7 +27,7 @@ from pathlib import Path
 import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-MANIFEST_PATH = REPO_ROOT / "murder" / "harnesses" / "verified_versions.yaml"
+MANIFEST_PATH = REPO_ROOT / "murder" / "llm" / "harnesses" / "verified_versions.yaml"
 TEST_PATHS = ["tests/unit/test_harness_adapters.py",
               "tests/unit/test_harness_session.py",
               "tests/unit/test_harness_transcripts.py",
@@ -37,8 +37,8 @@ TEST_PATHS = ["tests/unit/test_harness_adapters.py",
 
 sys.path.insert(0, str(REPO_ROOT))
 
-from murder.harnesses.version_probe import probe_all, probeable_kinds  # noqa: E402
-from murder.harnesses.versioning import load_manifest, normalize_version  # noqa: E402
+from murder.llm.harnesses.version_probe import probe_all, probeable_kinds  # noqa: E402
+from murder.llm.harnesses.versioning import load_manifest, normalize_version  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -215,7 +215,7 @@ def main(dry_run: bool = False) -> int:
     else:
         _write_manifest(manifest, MANIFEST_PATH)
         _ok(f"\nManifest updated: {MANIFEST_PATH.relative_to(REPO_ROOT)}")
-        print("  Review with: git diff murder/harnesses/verified_versions.yaml")
+        print("  Review with: git diff murder/llm/harnesses/verified_versions.yaml")
 
     return 0
 

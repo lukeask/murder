@@ -5,10 +5,10 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
-from murder.agents.collaborator import CollaboratorAgent
-from murder.harnesses.claude_code import ClaudeCodeAdapter
-from murder.persistence.schema import get_db, init_db
-from murder.terminal import tmux
+from murder.runtime.agents.collaborator import CollaboratorAgent
+from murder.llm.harnesses.claude_code import ClaudeCodeAdapter
+from murder.state.persistence.schema import get_db, init_db
+from murder.runtime.terminal import tmux
 from tests.support.fake_tmux import FakeTmux
 
 _FIXTURES = Path(__file__).parent.parent / "fixtures" / "harness_panes"

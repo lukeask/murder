@@ -6,8 +6,8 @@ import asyncio
 
 from textual.app import App, ComposeResult
 
-from murder.tui.pane_capture import PaneCaptureError
-from murder.tui.pane_mirror import PaneMirror
+from murder.app.tui.pane_capture import PaneCaptureError
+from murder.app.tui.pane_mirror import PaneMirror
 
 
 class _App(App):

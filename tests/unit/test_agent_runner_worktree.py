@@ -5,9 +5,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
 
-from murder.agents.base import AgentRole
-from murder.agents.runner import spawn_agent
-from murder.agents.sessions import AgentScope, AgentSpec
+from murder.runtime.agents.base import AgentRole
+from murder.runtime.agents.runner import spawn_agent
+from murder.runtime.agents.sessions import AgentScope, AgentSpec
 
 
 @dataclass
@@ -43,8 +43,8 @@ def test_spawn_crow_uses_scope_worktree_as_repo_root(tmp_path: Path, monkeypatch
     worktree_root = tmp_path / "repo" / ".murder" / "worktrees" / "crow" / "t001"
     rt = _Runtime(repo_root=main_root)
 
-    monkeypatch.setattr("murder.agents.runner.CrowAgent", _FakeCrow)
-    monkeypatch.setattr("murder.agents.runner.get_harness", lambda *_args, **_kw: object())
+    monkeypatch.setattr("murder.runtime.agents.runner.CrowAgent", _FakeCrow)
+    monkeypatch.setattr("murder.runtime.agents.runner.get_harness", lambda *_args, **_kw: object())
 
     spec = AgentSpec(
         role=AgentRole.CROW,
@@ -63,8 +63,8 @@ def test_spawn_crow_defaults_to_runtime_repo_root(tmp_path: Path, monkeypatch) -
     main_root = tmp_path / "repo"
     rt = _Runtime(repo_root=main_root)
 
-    monkeypatch.setattr("murder.agents.runner.CrowAgent", _FakeCrow)
-    monkeypatch.setattr("murder.agents.runner.get_harness", lambda *_args, **_kw: object())
+    monkeypatch.setattr("murder.runtime.agents.runner.CrowAgent", _FakeCrow)
+    monkeypatch.setattr("murder.runtime.agents.runner.get_harness", lambda *_args, **_kw: object())
 
     spec = AgentSpec(
         role=AgentRole.CROW,

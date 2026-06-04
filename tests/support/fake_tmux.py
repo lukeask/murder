@@ -1,10 +1,10 @@
-"""Fake ``murder.terminal.tmux`` module for harness unit tests.
+"""Fake ``murder.runtime.terminal.tmux`` module for harness unit tests.
 
 Usage in a test::
 
     @pytest.fixture
     def fake_tmux(monkeypatch):
-        import murder.terminal.tmux as tmux_mod
+        import murder.runtime.terminal.tmux as tmux_mod
         ft = FakeTmux()
         ft.install(monkeypatch, tmux_mod)
         return ft

@@ -193,7 +193,7 @@ def project_env_path(repo_root: Path) -> Path:
 
 
 def _load_bundled_defaults() -> dict[str, Any]:
-    text = resources.files("murder.templates").joinpath("roles.yaml").read_text(encoding="utf-8")
+    text = resources.files("murder.resources.templates").joinpath("roles.yaml").read_text(encoding="utf-8")
     return yaml.safe_load(text) or {}
 
 
@@ -207,7 +207,7 @@ def _deep_merge(base: dict[str, Any], over: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
-from murder.policy.harness_resolution import (  # noqa: E402
+from murder.verdict.policy.harness_resolution import (  # noqa: E402
     resolve_default_crow_harness,
     resolve_default_crow_startup_effort,
     resolve_default_crow_startup_model,

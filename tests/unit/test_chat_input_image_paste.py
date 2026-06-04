@@ -11,8 +11,8 @@ import pytest
 from textual.app import App, ComposeResult
 from textual.widgets import Label
 
-import murder.tui.clipboard_image as clip_mod
-from murder.tui.chat_input import ChatInput
+import murder.app.tui.clipboard_image as clip_mod
+from murder.app.tui.chat_input import ChatInput
 
 
 class _ChatApp(App[None]):

@@ -32,12 +32,12 @@ dev = [
 
 [project.scripts]
 # Bare `murder` is the kickoff command per D8.
-murder = "murder.cli:app"
+murder = "murder.app.cli:app"
 
 [tool.hatch.build]
 include = [
-    "murder/prompts/*.md",
-    "murder/templates/*",
+    "murder/llm/prompts/*.md",
+    "murder/resources/templates/*",
 ]
 
 [tool.hatch.build.targets.wheel]

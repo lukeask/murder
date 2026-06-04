@@ -4,7 +4,7 @@ import asyncio
 import subprocess
 from pathlib import Path
 
-from murder.storage.worktrees import (
+from murder.state.storage.worktrees import (
     WorktreeEntry,
     crow_worktree_ref,
     ensure_crow_worktree,
@@ -62,7 +62,7 @@ def test_list_git_worktrees_parses_porcelain(repo_root: Path, monkeypatch) -> No
         assert args == ("worktree", "list", "--porcelain")
         return 0, porcelain, ""
 
-    monkeypatch.setattr("murder.storage.worktrees._git", fake_git)
+    monkeypatch.setattr("murder.state.storage.worktrees._git", fake_git)
 
     entries = asyncio.run(list_git_worktrees(repo_root))
 
@@ -114,7 +114,7 @@ def test_ensure_crow_worktree_creates_branch_from_head(
         calls.append(args)
         return 0, "", ""
 
-    monkeypatch.setattr("murder.storage.worktrees._git", fake_git)
+    monkeypatch.setattr("murder.state.storage.worktrees._git", fake_git)
 
     ref = asyncio.run(ensure_crow_worktree(repo_root, "t001"))
 
@@ -142,7 +142,7 @@ def test_ensure_crow_worktree_reuses_existing_branch(
             return 128, "", "fatal: a branch named 'murder/crow/t001' already exists"
         return 0, "", ""
 
-    monkeypatch.setattr("murder.storage.worktrees._git", fake_git)
+    monkeypatch.setattr("murder.state.storage.worktrees._git", fake_git)
 
     ref = asyncio.run(ensure_crow_worktree(repo_root, "t001"))
 
@@ -194,7 +194,7 @@ def test_prune_worktree_path_resolves_relative_paths_from_repo_root(
         calls.append(args)
         return 0, "", ""
 
-    monkeypatch.setattr("murder.storage.worktrees._git", fake_git)
+    monkeypatch.setattr("murder.state.storage.worktrees._git", fake_git)
 
     assert asyncio.run(prune_worktree_path(repo_root, ".murder/worktrees/crow/t001")) is True
     assert calls == [("worktree", "remove", str(worktree))]

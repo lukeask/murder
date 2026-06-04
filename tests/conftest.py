@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from murder.terminal import tmux as tmux_mod
+from murder.runtime.terminal import tmux as tmux_mod
 from tests.support.fake_tmux import FakeTmux
 
 

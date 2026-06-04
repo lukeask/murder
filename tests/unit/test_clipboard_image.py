@@ -1,11 +1,11 @@
-"""Tests for murder.tui.clipboard_image."""
+"""Tests for murder.app.tui.clipboard_image."""
 
 from __future__ import annotations
 
 import asyncio
 
-import murder.tui.clipboard_image as clip_mod
-from murder.tui.clipboard_image import has_clipboard_image, read_clipboard_image_png
+import murder.app.tui.clipboard_image as clip_mod
+from murder.app.tui.clipboard_image import has_clipboard_image, read_clipboard_image_png
 
 
 class _FakeProc:

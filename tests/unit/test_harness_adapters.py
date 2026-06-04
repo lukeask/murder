@@ -25,11 +25,11 @@ from pathlib import Path
 
 import pytest
 
-from murder.harnesses.antigravity import AntigravityAdapter
-from murder.harnesses.claude_code import ClaudeCodeAdapter
-from murder.harnesses.codex import CodexAdapter
-from murder.harnesses.cursor import CursorAdapter
-from murder.harnesses.pi_harness import PiAdapter
+from murder.llm.harnesses.antigravity import AntigravityAdapter
+from murder.llm.harnesses.claude_code import ClaudeCodeAdapter
+from murder.llm.harnesses.codex import CodexAdapter
+from murder.llm.harnesses.cursor import CursorAdapter
+from murder.llm.harnesses.pi_harness import PiAdapter
 from tests.support.simulators import PaneSimulator
 
 FIXTURES = Path(__file__).parent.parent / "fixtures" / "harness_panes"

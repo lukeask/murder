@@ -6,7 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from murder.config import PlannerConfig
-from murder.tui.app import MurderApp
+from murder.app.tui.app import MurderApp
 
 
 def _runtime() -> SimpleNamespace:

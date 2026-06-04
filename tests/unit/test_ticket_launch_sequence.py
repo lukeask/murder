@@ -8,15 +8,16 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-import murder.terminal.tmux as tmux_mod
-from murder.agents.base import AgentStatus
-from murder.agents.crow import CrowAgent
-from murder.harnesses.base import HarnessSession
-from murder.harnesses.claude_code import ClaudeCodeAdapter
-from murder.harnesses.codex import CodexAdapter
-from murder.harnesses.cursor import CursorAdapter
-from murder.harnesses.models import HarnessStartSpec
-from murder.harnesses.results import fail_result, ok_result
+import murder.runtime.terminal.tmux as tmux_mod
+from murder.runtime.agents.base import AgentStatus
+from murder.runtime.agents.crow import CrowAgent
+from murder.llm.harnesses.antigravity import AntigravityAdapter
+from murder.llm.harnesses.base import HarnessSession
+from murder.llm.harnesses.claude_code import ClaudeCodeAdapter
+from murder.llm.harnesses.codex import CodexAdapter
+from murder.llm.harnesses.cursor import CursorAdapter
+from murder.llm.harnesses.models import HarnessStartSpec
+from murder.llm.harnesses.results import fail_result, ok_result
 from tests.support.fake_tmux import FakeTmux
 
 _FIXTURES = Path(__file__).parent.parent / "fixtures" / "harness_panes"
@@ -45,7 +46,7 @@ def fake_tmux_launch(monkeypatch):
 
     monkeypatch.setattr("asyncio.sleep", _noop_sleep)
     monkeypatch.setattr(
-        "murder.enforcement.git_diff.head_commit",
+        "murder.verdict.enforcement.git_diff.head_commit",
         AsyncMock(return_value="abc123"),
     )
     return ft
@@ -185,6 +186,31 @@ def test_configure_session_defaults_effort_to_medium(fake_tmux_launch: FakeTmux)
     assert result.ok
     assert captured["effort"] == "medium"
     assert CodexAdapter.default_effort == "medium"
+
+
+def test_antigravity_configure_session_keeps_effort_unset_when_omitted(
+    fake_tmux_launch: FakeTmux,
+) -> None:
+    fake_tmux_launch.queue_pane(_load("agy_idle.txt"))
+    captured: dict[str, object] = {}
+
+    hs = HarnessSession(AntigravityAdapter(), "agy-sess", Path("/tmp/repo"))
+
+    async def _spy_set_model(model: str, effort: str | None = None):
+        captured["model"] = model
+        captured["effort"] = effort
+        return ok_result()
+
+    hs.set_model = _spy_set_model  # type: ignore[method-assign]
+
+    result = asyncio.run(
+        hs._configure_started_session(  # noqa: SLF001
+            _fast_spec(startup_model="gemini-3-1-pro", startup_effort=None)
+        )
+    )
+
+    assert result.ok
+    assert captured == {"model": "gemini-3-1-pro", "effort": None}
 
 
 def test_configure_session_preserves_explicit_effort(fake_tmux_launch: FakeTmux) -> None:

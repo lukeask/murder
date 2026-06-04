@@ -7,17 +7,17 @@ from datetime import datetime, timezone
 
 from textual.app import App, ComposeResult
 
-from murder.service.client_api import (
+from murder.app.service.client_api import (
     CrowSessionSummary,
     CrowSnapshot,
     DispatchSnapshot,
     TicketSummary,
     UsageGaugeSummary,
 )
-from murder.tickets.status import TicketStatus
-from murder.tui.crow_health import Health
-from murder.tui.crows_view import CrowEntry, entries_from_snapshot
-from murder.tui.header import (
+from murder.work.tickets.status import TicketStatus
+from murder.app.tui.crow_health import Health
+from murder.app.tui.crows_view import CrowEntry, entries_from_snapshot
+from murder.app.tui.header import (
     Header,
     compose_header_line,
     crow_display_id,
@@ -27,7 +27,7 @@ from murder.tui.header import (
     format_view_tabs,
     pick_soonest_per_harness,
 )
-from murder.tui.themes import EVERFOREST_DARK_HARD, register_crow_themes
+from murder.app.tui.themes import EVERFOREST_DARK_HARD, register_crow_themes
 
 
 def _now() -> datetime:

@@ -1,14 +1,14 @@
 from __future__ import annotations
 
-import murder.persistence.tickets as _tickets  # noqa: F401 — break records ↔ tickets cycle
+import murder.state.persistence.tickets as _tickets  # noqa: F401 — break records ↔ tickets cycle
 
-from murder.persistence.records import (
+from murder.state.persistence.records import (
     ChecklistItemRecord,
     CommandRecord,
     EscalationRecord,
     TicketRecord,
 )
-from murder.tickets.status import TicketStatus
+from murder.work.tickets.status import TicketStatus
 
 
 def test_checklist_item_record_contains() -> None:

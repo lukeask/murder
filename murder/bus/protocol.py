@@ -43,7 +43,7 @@ except ImportError:  # Python <3.11
 
 from pydantic import BaseModel, Field, TypeAdapter
 
-from murder.tickets.status import TicketStatus
+from murder.work.tickets.status import TicketStatus
 
 PROTOCOL_VERSION = 1
 

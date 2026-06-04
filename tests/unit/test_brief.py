@@ -1,4 +1,4 @@
-"""Tests for the BriefAssembler / Section system in murder.orchestration.brief.
+"""Tests for the BriefAssembler / Section system in murder.runtime.orchestration.brief.
 
 Each section is tested in isolation (no template loading required).
 Integration smoke-tests call assembler_for(...).build(...) with real templates
@@ -11,9 +11,9 @@ from pathlib import Path
 
 import pytest
 
-from murder.agents.base import AgentRole
-from murder.harnesses.capabilities import HarnessCapabilities
-from murder.orchestration.brief import (
+from murder.runtime.agents.base import AgentRole
+from murder.llm.harnesses.capabilities import HarnessCapabilities
+from murder.runtime.orchestration.brief import (
     BriefAssembler,
     BriefContext,
     CurrentPlanSection,

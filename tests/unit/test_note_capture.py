@@ -11,8 +11,8 @@ import pytest
 from textual.app import App, ComposeResult
 from textual.widgets import Label
 
-import murder.tui.clipboard_image as clip_mod
-from murder.tui.note_capture import NoteCaptureScreen
+import murder.app.tui.clipboard_image as clip_mod
+from murder.app.tui.note_capture import NoteCaptureScreen
 
 
 class _NoteApp(App[None]):

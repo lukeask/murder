@@ -8,11 +8,11 @@ from types import SimpleNamespace
 
 from textual.app import App, ComposeResult
 
-from murder.service.client_api import CrowSessionSummary, CrowSnapshot
-from murder.tui import crows_view as crows_view_mod
-from murder.tui.crow_health import Health
-from murder.tui.crows_view import CrowEntry, CrowTile, CrowsView, entries_from_snapshot
-from murder.tui.themes import crow_tui_variable_defaults, register_crow_themes
+from murder.app.service.client_api import CrowSessionSummary, CrowSnapshot
+from murder.app.tui import crows_view as crows_view_mod
+from murder.app.tui.crow_health import Health
+from murder.app.tui.crows_view import CrowEntry, CrowTile, CrowsView, entries_from_snapshot
+from murder.app.tui.themes import crow_tui_variable_defaults, register_crow_themes
 
 
 class _CrowThemedApp(App[None]):

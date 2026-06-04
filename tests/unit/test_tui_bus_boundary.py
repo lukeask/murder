@@ -7,9 +7,9 @@ from typing import Any
 
 from murder.bus.protocol import ClientKind
 from murder.config import Config, CrowHandlerConfig, HarnessRoleConfig, ProjectConfig
-from murder.service.client_api import DispatchSnapshot, TicketSummary, dto_to_wire
-from murder.tickets.status import TicketStatus
-from murder.tui.client import TuiRuntimeClient
+from murder.app.service.client_api import DispatchSnapshot, TicketSummary, dto_to_wire
+from murder.work.tickets.status import TicketStatus
+from murder.app.tui.client import TuiRuntimeClient
 
 
 class BusSimulator:

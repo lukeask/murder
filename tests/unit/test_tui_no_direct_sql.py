@@ -18,9 +18,9 @@ _FAILURE_PREAMBLE = (
 # Module paths (exact or prefix) that must not be imported from the TUI package.
 _FORBIDDEN_MODULE_PREFIXES: tuple[str, ...] = (
     "sqlite3",
-    "murder.persistence",
-    "murder.service.read_model",
-    "murder.escalations.views",
+    "murder.state.persistence",
+    "murder.app.service.read_model",
+    "murder.verdict.escalations.views",
     "murder.db",
 )
 
@@ -125,8 +125,8 @@ def test_sql_guard_detects_forbidden_patterns() -> None:
     """Cookbook: guard must flag representative direct-SQL / read_model patterns."""
     samples = (
         "import sqlite3\n",
-        "from murder.persistence.schema import get_db\n",
-        "from murder.service.read_model import ServiceReadModel\n",
+        "from murder.state.persistence.schema import get_db\n",
+        "from murder.app.service.read_model import ServiceReadModel\n",
         "runtime.read_model.get_dispatch_snapshot()\n",
         "db.execute('SELECT 1')\n",
     )

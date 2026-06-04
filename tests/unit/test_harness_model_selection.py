@@ -19,11 +19,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from murder.harnesses.claude_code import ClaudeCodeAdapter
-from murder.harnesses.codex import CodexAdapter
-from murder.harnesses.cursor import CursorAdapter
-from murder.harnesses.cursor import _cursor_model_id_from_label
-from murder.harnesses.parsing import (
+from murder.llm.harnesses.claude_code import ClaudeCodeAdapter
+from murder.llm.harnesses.codex import CodexAdapter
+from murder.llm.harnesses.cursor import CursorAdapter
+from murder.llm.harnesses.cursor import _cursor_model_id_from_label
+from murder.llm.harnesses.parsing import (
     parse_antigravity_model_choices,
     parse_claude_code_model_choices,
     parse_cursor_model_list,
@@ -32,7 +32,7 @@ from murder.harnesses.parsing import (
     parse_numbered_effort_choices,
     parse_numbered_model_choices,
 )
-from murder.harnesses.pi_harness import PiAdapter
+from murder.llm.harnesses.pi_harness import PiAdapter
 from tests.support.simulators import PaneSimulator
 
 _FIXTURES = Path(__file__).parent.parent / "fixtures" / "harness_panes"
@@ -257,7 +257,7 @@ def test_pi_model_list_command_is_slash_model():
 
 
 def test_antigravity_model_list_command_is_slash_model():
-    from murder.harnesses.antigravity import AntigravityAdapter
+    from murder.llm.harnesses.antigravity import AntigravityAdapter
 
     assert AntigravityAdapter.model_list_command == "/model"
 

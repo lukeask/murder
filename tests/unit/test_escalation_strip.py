@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from murder.service.client_api import EscalationsSnapshot, EscalationSummary
-from murder.tui.escalation_strip import EscalationStrip
+from murder.app.service.client_api import EscalationsSnapshot, EscalationSummary
+from murder.app.tui.escalation_strip import EscalationStrip
 
 
 def _row(

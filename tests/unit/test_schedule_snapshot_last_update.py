@@ -5,14 +5,14 @@ from datetime import datetime, timedelta
 
 from textual.app import App, ComposeResult
 
-from murder.persistence.schema import get_db, init_db
-from murder.service.client_api import ScheduleSnapshot, ScheduleTicketRow
-from murder.service.schedule_snapshot import build_schedule_snapshot
-from murder.storage.paths import db_path
-from murder.tickets.schema import Ticket
-from murder.tickets.status import TicketStatus
-from murder.tui.dispatch.roster import ScheduleTicketsTable
-from murder.tui.dispatch.schedule_cells import last_update_cell
+from murder.state.persistence.schema import get_db, init_db
+from murder.app.service.client_api import ScheduleSnapshot, ScheduleTicketRow
+from murder.app.service.schedule_snapshot import build_schedule_snapshot
+from murder.state.storage.paths import db_path
+from murder.work.tickets.schema import Ticket
+from murder.work.tickets.status import TicketStatus
+from murder.app.tui.dispatch.roster import ScheduleTicketsTable
+from murder.app.tui.dispatch.schedule_cells import last_update_cell
 
 
 def _row(

@@ -4,7 +4,7 @@ from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from murder.harnesses.usage import parse_claude_usage_pane, parse_codex_status_pane
+from murder.llm.harnesses.usage import parse_claude_usage_pane, parse_codex_status_pane
 
 
 def _load_pane_fixture(name: str) -> str:
@@ -76,3 +76,29 @@ def test_codex_status_uses_latest_scrollback_row_per_window() -> None:
     assert reset_at.hour == 2 and reset_at.minute == 14
     t_until_minutes = (reset_at - now).total_seconds() / 60.0
     assert 4.5 * 60 < t_until_minutes < 5.5 * 60
+
+
+def test_claude_usage_dialog_narrow_parses_block_bar_and_reset() -> None:
+    # Real /usage overlay captured at ~93 cols; block-char bar, "1:40pm (America/New_York)"
+    pane = _load_pane_fixture("cc_usage_dialog_narrow.txt")
+    now = datetime(2026, 6, 3, 10, 0, tzinfo=ZoneInfo("America/New_York"))
+    status = parse_claude_usage_pane(pane, now=now)
+    assert len(status.windows) == 1
+    assert status.windows[0].percent_used == 84.0
+    reset_at = datetime.fromisoformat(status.windows[0].reset_at)
+    assert reset_at.hour == 13 and reset_at.minute == 40
+    t_until_minutes = (reset_at - now).total_seconds() / 60.0
+    assert 3.5 * 60 < t_until_minutes < 4.0 * 60  # ~3h40m away
+
+
+def test_claude_usage_dialog_wide_parses_block_bar_and_reset() -> None:
+    # Real /usage overlay captured at ~217 cols; same format but no line-wrapping
+    pane = _load_pane_fixture("cc_usage_dialog_wide.txt")
+    now = datetime(2026, 6, 3, 10, 0, tzinfo=ZoneInfo("America/New_York"))
+    status = parse_claude_usage_pane(pane, now=now)
+    assert len(status.windows) == 1
+    assert status.windows[0].percent_used == 88.0
+    reset_at = datetime.fromisoformat(status.windows[0].reset_at)
+    assert reset_at.hour == 13 and reset_at.minute == 40
+    t_until_minutes = (reset_at - now).total_seconds() / 60.0
+    assert 3.5 * 60 < t_until_minutes < 4.0 * 60  # ~3h40m away

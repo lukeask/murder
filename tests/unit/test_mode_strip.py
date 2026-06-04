@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from murder.service.client_api import ScheduleSnapshot
-from murder.tui.dispatch.mode_strip import ModeStrip
+from murder.app.service.client_api import ScheduleSnapshot
+from murder.app.tui.dispatch.mode_strip import ModeStrip
 
 
 def _snapshot(*, mode: str = "manual", rationale: str = "") -> ScheduleSnapshot:

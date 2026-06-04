@@ -13,10 +13,10 @@ from pathlib import Path
 import pytest
 
 from murder.bus.protocol import ClientKind
-from murder.cli.init_cmd import _scaffold_project
+from murder.app.cli.init_cmd import _scaffold_project
 from murder.config import Config
-from murder.storage.service_registry import project_session_name
-from murder.tui.client import TuiRuntimeClient
+from murder.state.storage.service_registry import project_session_name
+from murder.app.tui.client import TuiRuntimeClient
 
 _STARTUP_TIMEOUT_S = 15.0
 _CONNECT_RETRY_S = 0.25

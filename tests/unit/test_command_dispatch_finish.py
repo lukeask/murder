@@ -11,7 +11,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from murder.bus.protocol import CommandEvent
-from murder.service.command_dispatch import CommandDispatcher
+from murder.app.service.command_dispatch import CommandDispatcher
 
 
 def _command(kind: str = "agent.stop") -> CommandEvent:

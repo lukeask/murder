@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from murder.storage.service_registry import (
+from murder.state.storage.service_registry import (
     AmbiguousServiceSessionError,
     ServiceSession,
     project_path_hash,

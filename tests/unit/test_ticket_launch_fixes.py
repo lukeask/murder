@@ -10,21 +10,21 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from murder.agents.crow_handler import CrowHandler
-from murder.completion.coordinator import CompletionCoordinator
-from murder.completion.registry import CheckRegistry
+from murder.runtime.agents.crow_handler import CrowHandler
+from murder.verdict.completion.coordinator import CompletionCoordinator
+from murder.verdict.completion.registry import CheckRegistry
 from murder.config import CrowHandlerConfig
-from murder.harnesses.claude_code import ClaudeCodeAdapter
-from murder.harnesses.base import HarnessSession
-from murder.harnesses.results import fail_result
-from murder.orchestration.orchestrator import Orchestrator
-from murder.orchestration.outcome import TicketOutcomeService
-from murder.persistence.agents import upsert_agent
-from murder.persistence.schema import get_db, init_db
-from murder.persistence.tickets import get_ticket_status, insert_ticket
-from murder.storage.paths import db_path
-from murder.tickets.schema import Ticket
-from murder.tickets.status import TicketStatus
+from murder.llm.harnesses.claude_code import ClaudeCodeAdapter
+from murder.llm.harnesses.base import HarnessSession
+from murder.llm.harnesses.results import fail_result
+from murder.runtime.orchestration.orchestrator import Orchestrator
+from murder.runtime.orchestration.outcome import TicketOutcomeService
+from murder.state.persistence.agents import upsert_agent
+from murder.state.persistence.schema import get_db, init_db
+from murder.state.persistence.tickets import get_ticket_status, insert_ticket
+from murder.state.storage.paths import db_path
+from murder.work.tickets.schema import Ticket
+from murder.work.tickets.status import TicketStatus
 from tests.unit.test_harness_adapters import CC_IDLE
 
 

@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import asyncio
 
-from murder.service.settings_service import ModelDiscoveryResult
-from murder.tui.spawn_wizard import SpawnWizard, _HARNESS_MODELS, _static_model_ids_for_harness
+from murder.app.service.settings_service import ModelDiscoveryResult
+from murder.app.tui.spawn_wizard import SpawnWizard, _HARNESS_MODELS, _static_model_ids_for_harness
 
 
 def test_codex_spawn_models_include_gpt_mini() -> None:

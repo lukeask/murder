@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from murder.tui.chat_input import _SentMessageHistory
+from murder.app.tui.chat_input import _SentMessageHistory
 
 
 def test_empty_history_is_noop() -> None:
