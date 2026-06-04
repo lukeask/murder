@@ -1,0 +1,46 @@
+  won't guess a winner — clobbering either side would lose work — so it parks it as conflict
+  with reason "database and markdown changed since last materialization." Nothing syncs in
+  either direction until it's resolved (re-save from whichever side is canonical, and the
+  matching-hash path takes over).
+
+  Net: the two parse_errors are benign frontmatter mismatches; the one conflict is the sync
+  loop correctly refusing to auto-merge a genuine two-sided divergence. Nothing's broken in
+  the sync code itself — it's doing exactly what it should given the file contents. Happy to
+  fix any/all of them if you want, but leaving as-is per your ask.
+
+✻ Baked for 1m 13s
+
+❯ wondering if we arrived at this state becasue of changes to murder codebase and these are
+  old files, or is the current pipeline capable of leading to wedged state like this?
+
+● Good question — let me distinguish "stale artifacts" from "reachable today." Let me check
+  the history and whether the current writer could ever produce these.
+
+● Bash(cd /home/user/Documents/code/murder; echo "=== schema.py PlanStatus history ==="; git
+      log --oneline -L '/class PlanStatus/,/^class /:murder/work/plans/schema.py' 2>/…)
+  ⎿  === schema.py PlanStatus history ===
+     2e8fbf3 v1: initial scaffold + Collaborator chat wiring
+     … +11 lines (ctrl+o to expand)
+
+● Bash(cd /home/user/Documents/code/murder
+      echo "=== jk-crash file history ==="; git log --oneline --
+      .murder/plans/plan-jk-crash.md | head…)
+  ⎿  === jk-crash file history ===
+     === tui-polish file history ===
+     === done-crow-cleanup file history ===
+     === is .murder tracked at all? ===
+
+● .murder/plans/ is gitignored (runtime artifacts), so no per-file history. The schema answer
+  is decisive though: PlanStatus has only ever had draft/accepted/superseded since the
+  initial scaffold — open and active were never valid in this codebase. Let me confirm the
+  writer can't emit them and look at the full frontmatter.
+
+✢ Noodling… (25s · ↓ 1.4k tokens · thought for 7s)
+  ⎿  Tip: Say "fan out subagents" and Claude sends a team. Each one digs deep so nothing gets
+     missed.
+
+─────────────────────────────────────────────────────────────────────────────────────────────
+❯ 
+─────────────────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ bypass permissions on (shift+tab to cycle) · esc to interrupt
+

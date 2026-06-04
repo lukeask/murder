@@ -1,0 +1,46 @@
+    234 -            return
+    235 -        path_changed = row["materialized_path"] != rel
+    236 -        if (
+    218 +        file_changed = row["file_hash"] != file_hash
+    219 +        needs_ingest = (
+    220              file_changed
+    238 -            or path_changed
+    239 -            or row["sync_state"] in {"parse_error", "missing_file", "conflict"}
+    240 -        ):
+    221 +            or row["materialized_path"] != rel
+    222 +            or row["sync_state"] != "synced"
+    223 +        )
+    224 +        if needs_ingest:
+    225              dbmod.upsert_plan(
+        ⋮
+    230                  file_hash=file_hash,
+    247 -                last_materialized_hash=file_hash,
+    231                  sync_state="synced",
+    249 -                create_revision=file_changed,
+    232 +                create_revision=(rendered_hash != row["body_hash"]),
+    233                  revision_source="file",
+    234              )
+    252 -        elif row["file_hash"] != file_hash or row["sync_state"] != "synced":
+    253 -            dbmod.mark_plan_sync_state(self.db, row["name"], "synced", file_hash=file_hash)
+    235
+        ⋮
+    251              UPDATE plans
+    271 -               SET body_hash = ?, last_materialized_hash = ?, updated_at = ?
+    252 +               SET body_hash = ?, updated_at = ?
+    253               WHERE name = ?
+    254              """,
+    274 -            (h, h, datetime.utcnow().isoformat(timespec="seconds"), plan.name),
+    255 +            (h, datetime.utcnow().isoformat(timespec="seconds"), plan.name),
+    256          )
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• The core reconcile logic is swapped now: file hash against stored file hash, no DB-changed branch, no conflict state. I’m moving through schema and migration next so the runtime and
+  existing database shape match the new model.
+
+• Working (1m 42s • esc to interrupt)
+
+
+› Find and fix a bug in @filename
+
+  gpt-5.4 high · ~/Documents/code/murder

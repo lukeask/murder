@@ -1,0 +1,46 @@
+    382 +            updated_at        TEXT NOT NULL,
+    383 +            body              TEXT NOT NULL,
+    384 +            frontmatter_json  TEXT NOT NULL DEFAULT '{}',
+    385 +            body_hash         TEXT NOT NULL,
+    386 +            file_hash         TEXT,
+    387 +            materialized_path TEXT NOT NULL,
+    388 +            revision_count    INTEGER NOT NULL DEFAULT 0,
+    389 +            sync_state        TEXT NOT NULL DEFAULT 'synced'
+    390 +                              CHECK (sync_state IN ('synced','parse_error')),
+    391 +            parse_error       TEXT
+    392 +        );
+    393 +        INSERT INTO plans (name,status,created_at,updated_at,body,frontmatter_json,
+    394 +                           body_hash,file_hash,materialized_path,revision_count,
+    395 +                           sync_state,parse_error)
+    396 +        SELECT name,status,created_at,updated_at,body,frontmatter_json,
+    397 +               body_hash,file_hash,materialized_path,revision_count,
+    398 +               CASE WHEN sync_state IN ('synced','parse_error') THEN sync_state
+    399 +                    ELSE 'synced' END,
+    400 +               parse_error
+    401 +          FROM plans_old_single_master_migration;
+    402 +        DROP TABLE plans_old_single_master_migration;
+    403 +        CREATE INDEX IF NOT EXISTS idx_plans_status ON plans(status);
+    404 +        COMMIT;
+    405 +        PRAGMA foreign_keys = ON;
+    406 +        """
+    407 +    )
+    408 +
+    409      row = conn.execute(
+
+• Edited murder/app/service/read_model.py (+1 -3)
+    307                  """
+    308 -                SELECT materialized_path, sync_state, parse_error, conflict_reason
+    308 +                SELECT materialized_path, sync_state, parse_error
+    309                    FROM plans
+        ⋮
+    328              text = f"# {name}\n\nParse error: {row['parse_error']}\n\n```markdown\n{text}\n```"
+    329 -        elif sync_state == "conflict":
+    330 -            text = f"# {name}\n\nConflict: {row['conflict_reason']}\n\n{text}"
+    329          return PlanDisplaySnapshot(name=name, markdown=text)
+
+• Working (2m 07s • esc to interrupt)
+
+
+› Find and fix a bug in @filename
+
+  gpt-5.4 high · ~/Documents/code/murder

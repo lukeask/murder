@@ -1,0 +1,46 @@
+    371 +    if row is None or "conflict_reason" not in str(row["sql"]):
+    372 +        return
+    373 +    conn.executescript(
+    374 +        """
+    375 +        PRAGMA foreign_keys = OFF;
+    376 +        BEGIN;
+    377 +        ALTER TABLE plans RENAME TO plans_old_single_master_migration;
+    378 +        CREATE TABLE plans (
+    379 +            name              TEXT PRIMARY KEY,
+    380 +            status            TEXT NOT NULL CHECK (status IN ('draft','accepted','superseded')),
+    381 +            created_at        TEXT NOT NULL,
+    382 +            updated_at        TEXT NOT NULL,
+    383 +            body              TEXT NOT NULL,
+    384 +            frontmatter_json  TEXT NOT NULL DEFAULT '{}',
+    385 +            body_hash         TEXT NOT NULL,
+    386 +            file_hash         TEXT,
+    387 +            materialized_path TEXT NOT NULL,
+    388 +            revision_count    INTEGER NOT NULL DEFAULT 0,
+    389 +            sync_state        TEXT NOT NULL DEFAULT 'synced'
+    390 +                              CHECK (sync_state IN ('synced','parse_error')),
+    391 +            parse_error       TEXT
+    392 +        );
+    393 +        INSERT INTO plans (name,status,created_at,updated_at,body,frontmatter_json,
+    394 +                           body_hash,file_hash,materialized_path,revision_count,
+    395 +                           sync_state,parse_error)
+    396 +        SELECT name,status,created_at,updated_at,body,frontmatter_json,
+    397 +               body_hash,file_hash,materialized_path,revision_count,
+    398 +               CASE WHEN sync_state IN ('synced','parse_error') THEN sync_state
+    399 +                    ELSE 'synced' END,
+    400 +               parse_error
+    401 +          FROM plans_old_single_master_migration;
+    402 +        DROP TABLE plans_old_single_master_migration;
+    403 +        CREATE INDEX IF NOT EXISTS idx_plans_status ON plans(status);
+    404 +        COMMIT;
+    405 +        PRAGMA foreign_keys = ON;
+    406 +        """
+    407 +    )
+    408 +
+    409      row = conn.execute(
+
+• Working (2m 02s • esc to interrupt)
+
+
+› Find and fix a bug in @filename
+
+  gpt-5.4 high · ~/Documents/code/murder

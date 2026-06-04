@@ -1,0 +1,46 @@
+    154  def rename_plan(
+        ⋮
+    177              (name, status, created_at, updated_at, body, frontmatter_json,
+    175 -             body_hash, file_hash, last_materialized_hash, materialized_path,
+    176 -             sync_state, conflict_reason, parse_error, revision_count)
+    178 +             body_hash, file_hash, materialized_path, sync_state, parse_error,
+    179 +             revision_count)
+    180          SELECT ?, status, created_at, ?, body, frontmatter_json,
+    178 -               body_hash, file_hash, last_materialized_hash, ?,
+    179 -               sync_state, conflict_reason, parse_error, revision_count
+    181 +               body_hash, file_hash, ?, sync_state, parse_error, revision_count
+    182            FROM plans
+        ⋮
+    212      file_hash: str,
+    211 -    last_materialized_hash: str,
+    213      body_hash: str,
+        ⋮
+    222                 frontmatter_json = ?, body_hash = ?, file_hash = ?,
+    222 -               last_materialized_hash = ?, materialized_path = ?,
+    223 -               sync_state = 'synced', conflict_reason = NULL, parse_error = NULL
+    223 +               materialized_path = ?, sync_state = 'synced', parse_error = NULL
+    224           WHERE name = ?
+        ⋮
+    231              file_hash,
+    232 -            last_materialized_hash,
+    232              materialized_path,
+        ⋮
+    246      file_hash: str | None = None,
+    248 -    conflict_reason: str | None = None,
+    247      parse_error: str | None = None,
+        ⋮
+    252             SET sync_state = ?, file_hash = COALESCE(?, file_hash),
+    255 -               conflict_reason = ?, parse_error = ?, updated_at = ?
+    253 +               parse_error = ?, updated_at = ?
+    254           WHERE name = ?
+    255          """,
+    258 -        (sync_state, file_hash, conflict_reason, parse_error, _now(), name),
+    256 +        (sync_state, file_hash, parse_error, _now(), name),
+    257      )
+
+• Working (1m 21s • esc to interrupt)
+
+
+› Find and fix a bug in @filename
+
+  gpt-5.4 high · ~/Documents/code/murder

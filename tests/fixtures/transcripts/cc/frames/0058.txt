@@ -1,0 +1,46 @@
+  - plan-tui-polish-cleanup.md is canonical-format (name:, created_at:, revisions: 3) but
+  carries status: active and a supersedes: extra — i.e. a hand/agent edit of the status field
+  after the fact (had it round-tripped, status would be a valid value).
+
+  So: not a codebase-change artifact. But the current pipeline will re-raise parse_error any
+  time a human or agent edits frontmatter to an unsupported status — reconcile_file scans
+  every *.md and parses it (sync.py:189-201). So it's reachable today, just only via
+  out-of-band edits; the pipeline never self-generates it. This one is arguably "working as
+  intended" (refusing to ingest garbage).
+
+  conflict → reachable today, and won't self-heal
+
+  This is the live concern. The branch at sync.py:223-231 fires whenever both the DB body and
+  the markdown diverged from last_materialized_hash (db_changed and file_changed). That's a
+  plain two-writer race: a planning agent writes a new revision into the DB while the file is
+  edited out-of-band (editor, agent, git checkout) — both since the last materialization.
+  With a 1.5s poll / 0.75s debounce, that window is real and reachable in normal operation.
+
+  Worse, it's sticky. mark_plan_sync_state updates only file_hash — not
+  last_materialized_hash or body_hash (plans.py:251-259). So once conflicted, db_changed and
+  file_changed both stay True on every subsequent poll and it re-evaluates to conflict
+  indefinitely. Editing the file again doesn't help (keeps file_changed true), and the
+  DB-wins path (materialize_row at sync.py:232-234) only runs when db_changed and not
+  file_changed — unreachable while the file still diverges. I checked the service layer:
+  there's no "resolve conflict" affordance — read_model.py:329 just displays the conflict
+  banner, and open_plan_in_editor just re-runs reconcile_name, which re-lands on conflict.
+  The only code paths that force sync_state='synced' are rename_plan and deprecate_plan
+  (sync.py:109, plans.py:223).
+
+  So a conflicted plan stays wedged until you either rename/deprecate it, or manually
+  converge the hashes (re-save from the canonical side so one of the two stops diverging).
+
+  Bottom line: parse_error = stale/foreign input the pipeline correctly rejects; conflict = a
+  genuine, current-pipeline-reachable wedge with no built-in resolver. If you ever do want a
+  fix, the cheap one is giving conflict an escape hatch (a "keep file" / "keep DB" action
+  that calls materialize_row or re-imports and resets last_materialized_hash).
+
+✻ Churned for 1m 41s
+
+─────────────────────────────────────────────────────────────────────────────────────────────
+❯ have an opus subagent compare the two document versions and fix the current state so we
+─────────────────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ bypass permissions on (shift+tab to cycle)
+
+
+

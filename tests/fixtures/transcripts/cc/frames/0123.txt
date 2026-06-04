@@ -1,0 +1,46 @@
+
+  1. Stop the wedge (smallest, do regardless). Today mark_plan_sync_state writes only file_hash, never advancing last_materialized_hash or body_hash, so db_changed && file_changed stay true
+  forever and nothing — not even re-editing the file — escapes. At minimum, conflict must have an exit. This is the bug-shaped part, independent of strategy.
+  2. 3-way merge on reconcile (the real fix). When you hit db_changed && file_changed, recover the base body from plan_revisions and run a line-level diff3 of base / db_body / file_body.
+  Clean merges (the common case) auto-resolve and go straight to synced. This leverages assets you already have; it's mostly wiring, not new storage.
+  3. Conflict-copy fallback for true overlaps (Dropbox's trick). When diff3 does hit overlapping hunks, don't block — either write conflict markers (<<<<<<<) into the file and mark a
+  lightweight needs_review, or spill the losing side to <name>.conflict-<ts>.md and surface it. Loss-proof, never sticky, and the human resolves it like a git conflict. This is where your
+  "have a planning agent resolve" instinct actually belongs — not as the detector/merger (that should be deterministic diff3), but only as an optional convenience for resolving the residual
+  overlap conflicts a human would otherwise handle.
+
+  There's also a more radical option worth naming because it deletes the whole conflict class rather than handling it:
+
+  4. Collapse the dual-write: make the file the source of truth, DB a rebuildable read-model. The conflict exists only because the same logical doc is authoritatively writable from two
+  sides. If planning agents edited plans by writing the markdown file (same channel the human uses) and the DB were a derived projection you can rebuild from files, there'd be a single
+  write path and no DB-vs-file divergence to reconcile — just last-writer-wins on one file, which is a normal editor problem. The cost is reworking how agents mutate plans. Given your
+  memory note about "flexible substrate, not bespoke flows," this is the most architecturally honest direction, but it's the biggest change.
+
+  My recommendation: 2 + 3 now (they reuse plan_revisions and last_materialized_hash, which already exist, and match git semantics your users already understand), with 1 as the immediate
+  stop-the-bleeding, and 4 filed as the eventual simplification if/when plan editing gets reworked anyway.
+
+  Want me to sketch the diff3 reconcile path concretely against sync.py — including how to pull the base body out of plan_revisions — so you can see how much actually changes?
+
+✻ Waiting for 1 background agent to finish
+
+● Agent "Reconcile conflicted plan" completed · 2m 40s
+
+● The subagent finished cleanly — plan-done-crow-cleanup is back to synced, nothing lost, and it held across a full poll cycle (the live service didn't clobber it). Worth noting it did this
+  against a running service by doing the file-write + DB-update in one transaction and re-verifying after a poll — which is itself a small proof that the convergence approach is sound.
+
+  What it merged:
+
+  - Body = file side, which was a strict superset of the DB body except for one stale "failed agents are out of scope" bullet that the file's newer ## Scope update section deliberately
+  reverses. Keeping it would've made the doc self-contradictory, and the mechanism it cited (rt.reap) is restated in the new section — so dropping it lost no information. Good judgment
+  call; that's exactly the kind of semantic overlap a plain diff3 would've flagged as a conflict and kicked to a human.
+  - related_tickets = union [t007, t009] (DB had []).
+  - Truthful frontmatter (revisions=1, real updated_at), status=draft.
+  - Backups intact at /tmp/plan-done-crow-cleanup.file.bak and .db.bak if you want to eyeball the merge yourself.
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ 
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ bypass permissions on (shift+tab to cycle) · esc to interrupt · ↓ to manage
+
+  ● main                                                                                                                                                        ↑/↓ to select · Enter to view
+  ◯ general-purpose  Reconcile conflicted plan                                                                                                                        2m 40s · ↓ 26.9k tokens
+

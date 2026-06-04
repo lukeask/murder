@@ -1,0 +1,46 @@
+  │ plan-jk-crash.md           │ open          │ ✗      │
+  ├────────────────────────────┼───────────────┼────────┤
+  │ plan-tui-polish-cleanup.md │ active        │ ✗      │
+  └────────────────────────────┴───────────────┴────────┘
+
+  Both look like hand-edits (or imports from an older/foreign convention — jk-crash also uses
+  title:/created: instead of the name:/created_at: the materializer writes). The DB still
+  has the last good copy of each (both draft); the markdown edits just aren't being ingested
+  while the status is unparseable. Fixing is a one-word edit in each file
+  (open→draft/accepted, active→draft/accepted) — the next poll would clear it.
+
+  conflict (1 plan) — both sides changed
+
+  plan-done-crow-cleanup hit the db_changed and file_changed branch (sync.py:223-231): both
+  the DB row's body and the markdown file diverged from the last materialized hash. Sync
+  won't guess a winner — clobbering either side would lose work — so it parks it as conflict
+  with reason "database and markdown changed since last materialization." Nothing syncs in
+  either direction until it's resolved (re-save from whichever side is canonical, and the
+  matching-hash path takes over).
+
+  Net: the two parse_errors are benign frontmatter mismatches; the one conflict is the sync
+  loop correctly refusing to auto-merge a genuine two-sided divergence. Nothing's broken in
+  the sync code itself — it's doing exactly what it should given the file contents. Happy to
+  fix any/all of them if you want, but leaving as-is per your ask.
+
+✻ Baked for 1m 13s
+
+❯ wondering if we arrived at this state becasue of changes to murder codebase and these are
+  old files, or is the current pipeline capable of leading to wedged state like this?
+
+● Good question — let me distinguish "stale artifacts" from "reachable today." Let me check
+  the history and whether the current writer could ever produce these.
+
+● Bash(cd /home/user/Documents/code/murder; echo "=== schema.py PlanStatus history ==="; git
+      log --oneline -L '/class PlanStatus/,/^class /:murder/work/plans/schema.py' 2>/…)
+  ⎿  Waiting…
+
+✽ Noodling… (8s · ↓ 375 tokens · thought for 5s)
+  ⎿  Tip: Say "fan out subagents" and Claude sends a team. Each one digs deep so nothing gets
+     missed.
+
+─────────────────────────────────────────────────────────────────────────────────────────────
+❯ 
+─────────────────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ bypass permissions on (shift+tab to cycle) · esc to interrupt
+

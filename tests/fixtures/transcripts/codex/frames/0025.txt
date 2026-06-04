@@ -1,0 +1,46 @@
+    411              continue
+    412 -        file_hash = content_hash(md.read_text(encoding="utf-8"))
+    413 -        last_hash = row["last_materialized_hash"]
+    414 -        if last_hash and row["body_hash"] != last_hash and file_hash != last_hash:
+    415 -            issues.append(f"plan {name}: DB/file conflict")
+    412          if row["sync_state"] == "parse_error":
+    413              issues.append(f"plan {name}: parse error: {row['parse_error']}")
+    418 -        elif row["sync_state"] == "conflict":
+    419 -            issues.append(f"plan {name}: conflict: {row['conflict_reason']}")
+    414      if plans_dir(repo).exists():
+
+• Edited murder/runtime/orchestration/orchestrator.py (+0 -1)
+    840                  file_hash=content_hash,
+    841 -                last_materialized_hash=content_hash,
+    841                  sync_state="synced",
+
+• Explored
+  └ Read conftest.py
+    Search missing_file|orphan_file|parse_error|reconcile_all\(|materialize_row\(|plan sync in unit
+    Search SELECT sql FROM sqlite_master WHERE name='plans'|init_db\(conn\).*init_db\(conn\)|PRAGMA table_info\(plans\)|migrate_plans in unit
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• I’ve finished the first code sweep. Now I’m tightening the test net around the new invariants: no plan conflict state, no semantic no-op revision churn, and migration of an old plans
+  table into the new shape.
+
+• Explored
+  └ Search init_db\(|sqlite_master|PRAGMA table_info\(|migrate_ in unit
+    List unit
+
+• Edited tests/unit/test_read_model_plan_display.py (+0 -1)
+    35          file_hash=content_hash(text),
+    36 -        last_materialized_hash=content_hash(text),
+    36          sync_state="synced",
+
+• Edited tests/unit/test_plan_rename.py (+0 -1)
+    48          file_hash=content_hash(text),
+    49 -        last_materialized_hash=content_hash(text),
+    49          sync_state="synced",
+
+• Working (3m 03s • esc to interrupt)
+
+
+› Find and fix a bug in @filename
+
+  gpt-5.4 high · ~/Documents/code/murder

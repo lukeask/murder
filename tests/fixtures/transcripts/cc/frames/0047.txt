@@ -1,0 +1,46 @@
+     2e8fbf3 v1: initial scaffold + Collaborator chat wiring
+     … +11 lines (ctrl+o to expand)
+
+● Bash(cd /home/user/Documents/code/murder
+      echo "=== jk-crash file history ==="; git log --oneline --
+      .murder/plans/plan-jk-crash.md | head…)
+  ⎿  === jk-crash file history ===
+     === tui-polish file history ===
+     === done-crow-cleanup file history ===
+     === is .murder tracked at all? ===
+
+● .murder/plans/ is gitignored (runtime artifacts), so no per-file history. The schema answer
+  is decisive though: PlanStatus has only ever had draft/accepted/superseded since the
+  initial scaffold — open and active were never valid in this codebase. Let me confirm the
+  writer can't emit them and look at the full frontmatter.
+
+● Bash(cd /home/user/Documents/code/murder
+      echo "=== parser parse/render/write ==="; sed -n '1,200p' murder/work/plans/parser.py)
+  ⎿  === parser parse/render/write ===
+     """Plan markdown parser/writer."""
+     … +109 lines (ctrl+o to expand)
+
+● Let me check whether conflict has any resolution path in the current pipeline (or whether
+  it's a sticky terminal state).
+
+● Bash(cd /home/user/Documents/code/murder
+      echo "=== full tui-polish frontmatter ==="; sed -n '1,14p'
+      .murder/plans/plan-tui-polish-cleanup.md…)
+  ⎿  === full tui-polish frontmatter ===
+     ---
+     created_at: '2026-05-30T00:00:00'
+     … +54 lines (ctrl+o to expand)
+
+  Read 1 file (ctrl+o to expand)
+
+● Traced it end to end. Short answer: the two parse_errors are bad-data-origin (never
+  producible by the pipeline itself), but the one conflict is fully reachable by the current
+  pipeline — and it's a sticky terminal state. Details:
+
+  parse_error → external/hand edits, not a schema migration
+
+─────────────────────────────────────────────────────────────────────────────────────────────
+❯ 
+─────────────────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ bypass permissions on (shift+tab to cycle) · esc to interrupt
+

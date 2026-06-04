@@ -1,0 +1,46 @@
+
+  Worse, it's sticky. mark_plan_sync_state updates only file_hash — not
+  last_materialized_hash or body_hash (plans.py:251-259). So once conflicted, db_changed and
+  file_changed both stay True on every subsequent poll and it re-evaluates to conflict
+  indefinitely. Editing the file again doesn't help (keeps file_changed true), and the
+  DB-wins path (materialize_row at sync.py:232-234) only runs when db_changed and not
+  file_changed — unreachable while the file still diverges. I checked the service layer:
+  there's no "resolve conflict" affordance — read_model.py:329 just displays the conflict
+  banner, and open_plan_in_editor just re-runs reconcile_name, which re-lands on conflict.
+  The only code paths that force sync_state='synced' are rename_plan and deprecate_plan
+  (sync.py:109, plans.py:223).
+
+  So a conflicted plan stays wedged until you either rename/deprecate it, or manually
+  converge the hashes (re-save from the canonical side so one of the two stops diverging).
+
+  Bottom line: parse_error = stale/foreign input the pipeline correctly rejects; conflict = a
+  genuine, current-pipeline-reachable wedge with no built-in resolver. If you ever do want a
+  fix, the cheap one is giving conflict an escape hatch (a "keep file" / "keep DB" action
+  that calls materialize_row or re-imports and resets last_materialized_hash).
+
+✻ Churned for 1m 41s
+
+❯ have an opus subagent compare the two document versions and fix the current state so we
+  don't lose anything. You and I will keep chatting about this. How do products like google
+  drive and similar solve this type of problem? are there patterns worth using in this
+  codebase? I could bandaid the problem by similarly having a planning agent call to
+  resolve, but that's not a real fix.
+
+● I'll dispatch an Opus subagent to safely reconcile the conflicted plan in the background,
+  then we can talk through the design while it works.
+
+● Agent(Reconcile conflicted plan)
+  ⎿  Backgrounded agent (↓ to manage · ctrl+o to expand)
+
+✽ Cogitating… (1m 3s · ↑ 3.9k tokens)
+  ⎿  Tip: /goal keeps Claude working until a condition is met. Good for "tests pass", "build
+     succeeds", or long refactors.
+
+─────────────────────────────────────────────────────────────────────────────────────────────
+❯ 
+─────────────────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ bypass permissions on (shift+tab to cycle) · esc to interrupt · ↓ to manage
+
+  ● main                                                        ↑/↓ to select · Enter to view
+  ◯ general-purpose  Reconcile conflicted plan                                             0s
+

@@ -1,0 +1,38 @@
+# source: tmux capture_pane murder_murder_usage_claude_code 2026-06-03
+# terminal width ~217 cols; real /usage overlay showing 88% consumption
+❯ /usage
+
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  Settings  Status   Config   Usage   Stats
+
+  Session
+
+  Total cost:            $0.0000
+  Total duration (API):  0s
+  Total duration (wall): 16h 47m 38s
+  Total code changes:    0 lines added, 0 lines removed
+  Usage:                 0 input, 0 output, 0 cache read, 0 cache write
+
+  Current session
+  ████████████████████████████████████████████       88% used
+  Resets 1:40pm (America/New_York)
+
+  What's contributing to your limits usage?
+  Approximate, based on local sessions on this machine — does not include other devices or claude.ai
+
+  Last 24h · these are independent characteristics of your usage, not a breakdown
+
+  30% of your usage came from subagent-heavy sessions
+   Each subagent runs its own requests. Be deliberate about spawning them — and
+   consider configuring a cheaper model for simpler subagents.
+
+  Subagents               % of usage
+  Explore                         7%
+  general-purpose                 4%
+
+  MCP servers             % of usage
+  tmuxmcp                         1%
+
+  d to day · w to week
+
+  Esc to cancel

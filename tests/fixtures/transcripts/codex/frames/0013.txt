@@ -1,0 +1,46 @@
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• I’ve confirmed the handoff is a full replacement of the old plan conflict path, not a feature flag. I’m mapping the exact persistence, sync, schema, CLI, and test surfaces now, then I’ll
+  patch them in one pass and validate with targeted tests before the full suite.
+
+• Updated Plan
+  └ Implement the single-master plans refactor described in the handoff, then verify it with targeted and full tests.
+    ✔ Inspect current plan sync, persistence, schema, CLI lint, and affected tests
+    □ Refactor plan sync and persistence to remove bidirectional conflict state for plans
+    □ Update schema and migrations for the new plans table shape
+    □ Adjust read-model and CLI plan lint behavior
+    □ Update and add tests for single-master plan sync behavior
+    □ Run targeted tests, full suite, and final grep/schema verification
+
+• Explored
+  └ Read plans.py, sync.py, schema.py, service_cmd.py, orchestrator.py, migrations.py, read_model.py, test_plan_rename.py, test_read_model_plan_display.py
+    Search PlanSync|reconcile_file|materialize_row|plan_revisions|scaffold_plan in unit
+    Search plan.*conflict|sync_state.?==.?['\"]conflict['\"]|last_materialized_hash|conflict_reason in unit
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• I’ve got the exact surface area. Next step is the mechanical part: remove the old plan-only columns and branches everywhere they’re load-bearing, then backfill the new migration and
+  regression tests around file-hash-based ingest.
+
+• Explored
+  └ Search cmd_lint|PlanSync\(repo, conn\)\.reconcile_all|missing markdown|orphan markdown|parse error in unit
+    Read parser.py
+    Search upsert_plan\(|deprecate_plan\(|mark_plan_sync_state\(|rename_plan\( in murder
+    Read schema.py
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• I’m at the edit point now. The main thing I’m guarding is not leaving any shadow of the old plan conflict path behind in persistence or tests, because that would keep the broken model
+  alive under different names.
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• I’m updating the plan persistence layer first because every other surface hangs off those signatures and columns. After that I’ll swap the reconcile logic over to raw file-hash change
+  detection.
+
+• Working (58s • esc to interrupt)
+
+
+› Find and fix a bug in @filename
+
+  gpt-5.4 high · ~/Documents/code/murder

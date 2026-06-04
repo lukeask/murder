@@ -1,0 +1,46 @@
+  You've built bidirectional replication between two replicas (a SQLite row and a markdown
+  file) reconciled by polling snapshots. The defining limitation is right there in
+  last_materialized_hash: you compare hashes of current state, not streams of edits.
+  Snapshots let you detect divergence but give you nothing to merge with — by the time you
+  see two different blobs, the edit operations that produced them are gone. Every product
+  below is, at bottom, a different answer to "what do you retain so that merge is possible,
+  and at what granularity?"
+
+  How the big products solve it
+
+  Dropbox / Google Drive desktop sync (opaque files): detect, never merge, never lose. They
+  don't understand file internals, so on concurrent edits they keep one version as canonical
+  and write the other to Document (conflicted copy 2026-06-02).md. Crude, but it has two
+  properties your current code lacks: it's never lossy and never sticky. Your conflict state
+  is strictly worse than Dropbox's — it wedges and surfaces nothing actionable.
+
+  Google Docs native (OT — Operational Transform): a central server serializes every
+  keystroke. Each edit is an operation against a base revision; the server transforms
+  concurrent ops so they commute. This is what makes real-time co-editing work, but it
+  requires (a) a always-on mediator and (b) edits expressed as operations, not file saves.
+  Your "poll the file every 1.5s" model is the opposite of this. Not applicable.
+
+  Newer collaborative editors (Notion-ish, Linear, Figma — CRDTs, e.g. Yjs/Automerge):
+  structure the doc so concurrent edits always converge with no coordinator. Mathematically
+  the cleanest answer to multi-writer-no-lock. But the document stops being "a markdown file
+  / a TEXT column" and becomes a CRDT structure you serialize. For a tool where the two
+  writers are one agent and one human occasionally editing a file, that's enormous overkill —
+  you'd pay CRDT representation costs to solve a 2-writer, low-frequency race.
+
+  git: three-way merge against a common ancestor (diff3). This is the one that actually fits
+  you, because git solves exactly your shape: two divergent snapshots plus a known merge
+  base. With the ancestor, non-overlapping edits auto-merge silently and only
+  genuinely-overlapping hunks become conflicts. The whole "agent rewrote section 3 while the
+  human fixed a typo in section 1" case — which is most of your real conflicts — just
+  resolves.
+
+  What I'd actually do here (and why it's not a bandaid)
+
+─────────────────────────────────────────────────────────────────────────────────────────────
+❯ 
+─────────────────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ bypass permissions on (shift+tab to cycle) · esc to interrupt · ↓ to manage
+
+  ● main                                                        ↑/↓ to select · Enter to view
+  ◯ general-purpose  Reconcile conflicted plan                           52s · ↓ 23.1k tokens
+

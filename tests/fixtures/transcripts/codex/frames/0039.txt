@@ -1,0 +1,46 @@
+    445          CREATE INDEX IF NOT EXISTS idx_plans_status ON plans(status);
+    409 -        COMMIT;
+    410 -        PRAGMA foreign_keys = ON;
+    411 -        """
+    412 -    )
+    413 -
+    414 -    row = conn.execute(
+    415 -        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'agents'"
+    416 -    ).fetchone()
+    417 -    if row is None or "'sentinel'" not in str(row["sql"]):
+    418 -        return
+    419 -
+    420 -    conn.executescript(
+    421 -        """
+    422 -        PRAGMA foreign_keys = OFF;
+    423 -        BEGIN;
+    424 -        DELETE FROM agents WHERE role = 'sentinel';
+    425 -        ALTER TABLE agents RENAME TO agents_old_sentinel_migration;
+    426 -        CREATE TABLE agents (
+    427 -            agent_id          TEXT PRIMARY KEY,
+    428 -            role              TEXT NOT NULL CHECK (role IN
+    429 -                              ('collaborator','notetaker','crow_handler','crow','planner','planning_handler')),
+    430 -            ticket_id         TEXT REFERENCES tickets(id) ON DELETE SET NULL,
+    431 -            session           TEXT,
+    432 -            status            TEXT NOT NULL CHECK (status IN
+    433 -                              ('idle','running','blocked','escalating','done','failed','dead')),
+    434 -            start_commit      TEXT,
+    435 -            started_at        TEXT NOT NULL,
+    436 -            last_heartbeat_at TEXT,
+    437 -            pid               INTEGER
+    438 -        );
+    439 -        INSERT INTO agents
+    440 -            (agent_id, role, ticket_id, session, status, start_commit,
+    441 -             started_at, last_heartbeat_at, pid)
+    442 -        SELECT agent_id, role, ticket_id, session, status, start_commit,
+    443 -               started_at, last_heartbeat_at, pid
+    444 -          FROM agents_old_sentinel_migration;
+    445 -        DROP TABLE agents_old_sentinel_migration;
+    446          COMMIT;
+
+• Working (5m 45s • esc to interrupt)
+
+
+› Find and fix a bug in @filename
+
+  gpt-5.4 high · ~/Documents/code/murder

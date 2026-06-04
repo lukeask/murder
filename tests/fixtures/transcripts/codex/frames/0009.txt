@@ -1,0 +1,46 @@
+• I’m reading the handoff and the surrounding code first so the implementation matches what’s already here. After that I’ll make the scoped changes and run the relevant checks.
+
+• Explored
+  └ List reports
+    Read db-sync-handoff.md
+
+• Ran git status --short
+  └  M murder/runtime/agents/__init__.py
+     M murder/runtime/agents/base.py
+    … +56 lines (ctrl + t to view transcript)
+    ?? tests/unit/test_stop_agent_zombie.py
+    ?? tests/unit/test_tui_app.py
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• I have the core handoff. I’m loading the rest of the spec plus the exact implementation points it names so I can replace the old sync path cleanly instead of layering on top.
+
+• Explored
+  └ Read db-sync-handoff.md, plan-sync-single-master.md
+    Search conflict_reason|last_materialized_hash|db_changed|sync_state == \"conflict\"|sync_state='conflict'|sync_state = 'conflict' in murder
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• I’ve confirmed the handoff is a full replacement of the old plan conflict path, not a feature flag. I’m mapping the exact persistence, sync, schema, CLI, and test surfaces now, then I’ll
+  patch them in one pass and validate with targeted tests before the full suite.
+
+• Updated Plan
+  └ Implement the single-master plans refactor described in the handoff, then verify it with targeted and full tests.
+    ✔ Inspect current plan sync, persistence, schema, CLI lint, and affected tests
+    □ Refactor plan sync and persistence to remove bidirectional conflict state for plans
+    □ Update schema and migrations for the new plans table shape
+    □ Adjust read-model and CLI plan lint behavior
+    □ Update and add tests for single-master plan sync behavior
+    □ Run targeted tests, full suite, and final grep/schema verification
+
+• Explored
+  └ Read plans.py, sync.py, schema.py, service_cmd.py, orchestrator.py, migrations.py, read_model.py, test_plan_rename.py, test_read_model_plan_display.py
+    Search PlanSync|reconcile_file|materialize_row|plan_revisions|scaffold_plan in unit
+    Search plan.*conflict|sync_state.?==.?['\"]conflict['\"]|last_materialized_hash|conflict_reason in unit
+
+• Working (34s • esc to interrupt)
+
+
+› Find and fix a bug in @filename
+
+  gpt-5.4 high · ~/Documents/code/murder

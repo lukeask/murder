@@ -1,0 +1,203 @@
+{
+  "harness": "codex",
+  "state": "awaiting_input",
+  "condensed": null,
+  "segments": [
+    {
+      "type": "user",
+      "text": "please read db-sync-handoff.md in .murder/reports and implement the plan described in the handoff"
+    },
+    {
+      "type": "assistant",
+      "phase": "intermediate",
+      "text": "I'm reading the handoff and the surrounding code first so the implementation matches what's already here. After that I'll make the scoped changes and run the relevant checks.",
+      "elapsed": null
+    },
+    {
+      "type": "tool_call",
+      "title": "Explored",
+      "input": null,
+      "result": "List reports\nRead db-sync-handoff.md",
+      "elided": false,
+      "running": false
+    },
+    {
+      "type": "tool_call",
+      "title": "git status --short",
+      "input": null,
+      "result": " M murder/runtime/agents/__init__.py",
+      "elided": true,
+      "running": false
+    },
+    {
+      "type": "assistant",
+      "phase": "intermediate",
+      "text": "I have the core handoff. Loading the rest of the spec plus the exact implementation points it names so I can replace the old sync path cleanly instead of layering on top.",
+      "elapsed": null
+    },
+    {
+      "type": "tool_call",
+      "title": "Explored",
+      "input": null,
+      "result": "Read db-sync-handoff.md, plan-sync-single-master.md\nSearch conflict_reason|last_materialized_hash|db_changed|sync_state=='conflict' in murder",
+      "elided": false,
+      "running": false
+    },
+    {
+      "type": "assistant",
+      "phase": "intermediate",
+      "text": "Confirmed the handoff is a full replacement of the old plan conflict path, not a feature flag. Mapping the exact persistence, sync, schema, CLI, and test surfaces now, then I'll patch them in one pass and validate with targeted tests before the full suite.",
+      "elapsed": null
+    },
+    {
+      "type": "plan_update",
+      "title": "Implement the single-master plans refactor, then verify with targeted + full tests",
+      "items": [
+        {"done": true,  "text": "Inspect current plan sync, persistence, schema, CLI lint, affected tests"},
+        {"done": false, "text": "Refactor plan sync & persistence to remove bidirectional conflict state"},
+        {"done": false, "text": "Update schema and migrations for the new plans table shape"},
+        {"done": false, "text": "Adjust read-model and CLI plan lint behavior"},
+        {"done": false, "text": "Update and add tests for single-master plan sync"},
+        {"done": false, "text": "Run targeted tests, full suite, final grep/schema verification"}
+      ]
+    },
+    {
+      "type": "tool_call",
+      "title": "Explored",
+      "input": null,
+      "result": "Read plans.py, sync.py, schema.py, service_cmd.py, orchestrator.py, migrations.py, read_model.py",
+      "elided": false,
+      "running": false
+    },
+    {
+      "type": "assistant",
+      "phase": "intermediate",
+      "text": "I've got the exact surface area. Next is the mechanical part: remove the old plan-only columns and branches everywhere they're load-bearing, then backfill the new migration and regression tests around file-hash-based ingest.",
+      "elapsed": null
+    },
+    {
+      "type": "assistant",
+      "phase": "intermediate",
+      "text": "I'm updating the plan persistence layer first because every other surface hangs off those signatures and columns. After that I'll swap the reconcile logic over to raw file-hash change detection.",
+      "elapsed": null
+    },
+    {
+      "type": "tool_call",
+      "title": "Edited murder/state/persistence/schema.py (+13 −16)",
+      "input": null,
+      "result": null,
+      "elided": false,
+      "running": false
+    },
+    {
+      "type": "tool_call",
+      "title": "Edited murder/state/persistence/migrations.py (+39 −0)",
+      "input": null,
+      "result": null,
+      "elided": false,
+      "running": false
+    },
+    {
+      "type": "tool_call",
+      "title": "Edited murder/app/service/read_model.py (+1 −3)",
+      "input": null,
+      "result": null,
+      "elided": false,
+      "running": false
+    },
+    {
+      "type": "tool_call",
+      "title": "Edited service_cmd.py (+0 −6) · orchestrator.py (+0 −1) · plans.py (rename_plan / upsert signatures)",
+      "input": null,
+      "result": null,
+      "elided": true,
+      "running": false
+    },
+    {
+      "type": "assistant",
+      "phase": "intermediate",
+      "text": "Finished the first code sweep. Now tightening the test net around the new invariants: no plan conflict state, no semantic no-op revision churn, and migration of an old plans table into the new shape.",
+      "elapsed": null
+    },
+    {
+      "type": "tool_call",
+      "title": "Edited test_read_model_plan_display.py (+0 −1) · test_plan_rename.py (+0 −1)",
+      "input": null,
+      "result": "drop last_materialized_hash from fixtures",
+      "elided": false,
+      "running": false
+    },
+    {
+      "type": "tool_call",
+      "title": "Added tests/unit/test_plan_sync_single_master.py",
+      "input": null,
+      "result": "real edits create revisions · no-op rewrites don't · missing-file recovery · legacy migration",
+      "elided": false,
+      "running": false
+    },
+    {
+      "type": "tool_call",
+      "title": "pytest test_read_model_plan_display / test_plan_rename / test_plan_sync_single_master -q",
+      "input": null,
+      "result": "13 passed in 0.55s",
+      "elided": false,
+      "running": false
+    },
+    {
+      "type": "tool_call",
+      "title": "pytest tests -q --ignore=tests/smoke",
+      "input": null,
+      "result": "402 passed, 5 skipped",
+      "elided": false,
+      "running": false
+    },
+    {
+      "type": "tool_call",
+      "title": "tmux.kill_session({\"session\":\"plan-sync-tests\"})",
+      "input": null,
+      "result": "✔ request approved · ⎿ Session 'plan-sync-tests' killed on local",
+      "elided": false,
+      "running": false
+    },
+    {
+      "type": "assistant",
+      "phase": "intermediate",
+      "text": "The verification run is clean once the sandbox-only smoke test is excluded: 402 passed, 5 skipped. Doing one last diff review so the final summary points to the actual changed surfaces.",
+      "elapsed": null
+    },
+    {
+      "type": "tool_call",
+      "title": "git diff --stat -- (10 files)",
+      "input": null,
+      "result": "9 files changed, 259 insertions(+), 88 deletions(−)",
+      "elided": false,
+      "running": false
+    },
+    {
+      "type": "tool_call",
+      "title": "git diff -- (10 files)",
+      "input": null,
+      "result": null,
+      "elided": true,
+      "running": false
+    },
+    {
+      "type": "plan_update",
+      "title": "Single-master refactor implemented, verified, DB migrated in place",
+      "items": [
+        {"done": true, "text": "Inspect current surfaces"},
+        {"done": true, "text": "Refactor sync & persistence to remove bidirectional conflict state"},
+        {"done": true, "text": "Update schema and migrations"},
+        {"done": true, "text": "Adjust read-model and CLI plan lint"},
+        {"done": true, "text": "Update and add tests"},
+        {"done": true, "text": "Run targeted tests, full suite, final grep/schema verify"}
+      ]
+    },
+    {
+      "type": "assistant",
+      "phase": "final",
+      "text": "Implemented the handoff in the plan path.\n\nThe main changes are in sync.py:182, plans.py:47, schema.py:169, migrations.py:404, read_model.py:304, and service_cmd.py:404. Plans are now single-master: reconcile_file ingests from file hash only, there is no plan conflict branch, last_materialized_hash and conflict_reason are removed from plan persistence/schema, and the only DB→file write left is missing-file recovery via materialize_row. I also adjusted the plan scaffold call site in orchestrator.py:832.\n\nAdded regression coverage in test_plan_sync_single_master.py:44 for real edits creating revisions, semantic no-op rewrites not creating revisions, missing-file recovery, and legacy-schema migration. Existing plan tests updated in test_plan_rename.py:43 and test_read_model_plan_display.py:30.\n\nVerification\npytest test_read_model_plan_display · test_plan_rename · test_plan_sync_single_master -q → 13 passed\npytest tests -q --ignore=tests/smoke → 402 passed, 5 skipped\ngrep for retired plan-sync vocabulary now only hits ticket metadata paths\nverified fresh DB schema + migrated .murder/murder.db in place → plans now only ('synced','parse_error')\n\nOne limitation: pytest tests -q still fails in tests/smoke/test_lifecycle.py — the sandbox blocks Unix socket bind/connect under the test temp dir (PermissionError: Operation not permitted). Environmental, not from this refactor. Also, the handoff asked for an advisor review pass, but no advisor tool is available in this environment.",
+      "elapsed": "13m 06s"
+    }
+  ]
+}

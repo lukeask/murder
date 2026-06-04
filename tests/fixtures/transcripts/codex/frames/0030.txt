@@ -1,0 +1,46 @@
+    200 +        conn.execute(
+    201 +            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'plans'"
+    202 +        ).fetchone()["sql"]
+    203 +    )
+    204 +    row = plan_db.get_plan_row(conn, "legacy")
+    205 +    columns = {
+    206 +        column["name"] for column in conn.execute("PRAGMA table_info(plans)").fetchall()
+    207 +    }
+    208 +
+    209 +    assert row is not None
+    210 +    assert row["sync_state"] == "synced"
+    211 +    assert "last_materialized_hash" not in columns
+    212 +    assert "conflict_reason" not in columns
+    213 +    assert "last_materialized_hash" not in sql
+    214 +    assert "conflict_reason" not in sql
+    215 +    assert "parse_error" in sql
+    216 +    assert "'conflict'" not in sql
+    217 +
+    218 +    init_db(conn)
+    219 +    sql_again = str(
+    220 +        conn.execute(
+    221 +            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'plans'"
+    222 +        ).fetchone()["sql"]
+    223 +    )
+    224 +    assert sql_again == sql
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• I’ve patched the tests and added migration coverage. Next I’m running a repo-wide grep for the retired plan sync vocabulary so I can catch anything still hanging off the old columns
+  before the test run.
+
+• Explored
+  └ Search conflict_reason|last_materialized_hash|db_changed|sync_state == \"conflict\"|sync_state.?IN.*conflict|sync_state = 'conflict'|sync_state='conflict' in murder
+    Read sync.py, plans.py
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• I found the remaining plan-side hits from the old vocabulary. They’re only in the migration path and its test now, so I’m rewriting those references to keep the implementation and the
+  grep surface aligned with the handoff’s “tickets only” rule.
+
+• Working (4m 33s • esc to interrupt)
+
+
+› Find and fix a bug in @filename
+
+  gpt-5.4 high · ~/Documents/code/murder

@@ -1,0 +1,46 @@
+    436 -            last_heartbeat_at TEXT,
+    437 -            pid               INTEGER
+    438 -        );
+    439 -        INSERT INTO agents
+    440 -            (agent_id, role, ticket_id, session, status, start_commit,
+    441 -             started_at, last_heartbeat_at, pid)
+    442 -        SELECT agent_id, role, ticket_id, session, status, start_commit,
+    443 -               started_at, last_heartbeat_at, pid
+    444 -          FROM agents_old_sentinel_migration;
+    445 -        DROP TABLE agents_old_sentinel_migration;
+    446          COMMIT;
+
+• Explored
+  └ Search conflict_reason|last_materialized_hash|db_changed|sync_state.*conflict|sync_state == \"conflict\"|sync_state='conflict'|sync_state = 'conflict' in murder
+
+• Ran python -m py_compile murder/work/plans/sync.py murder/state/persistence/plans.py murder/state/persistence/schema.py murder/state/persistence/migrations.py murder/app/service/read_model.py murder/app/cli/
+  │ service_cmd.py murder/runtime/orchestration/orchestrator.py tests/unit/test_plan_rename.py tests/unit/test_read_model_plan_display.py tests/unit/test_plan_sync_single_master.py
+  └ (no output)
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• The source scan is clean now for plans: only ticket metadata paths still carry the old conflict vocabulary, which is the intended exception. I’m running the plan-focused tests next to
+  shake out any behavioral mistakes before the full suite.
+
+• Ran python -m pytest tests/unit/test_read_model_plan_display.py tests/unit/test_plan_rename.py tests/unit/test_plan_sync_single_master.py -q
+  └ .............                                                            [100%]
+    13 passed in 0.55s
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• The plan-focused tests are green. I’m moving to the full suite now, along with the schema checks the handoff asked for, because the migration and runtime changes touch shared persistence
+  code.
+
+• Ran sqlite3 .murder/murder.db "SELECT sql FROM sqlite_master WHERE name='plans';"
+  └ CREATE TABLE plans (
+        name                   TEXT PRIMARY KEY,
+    … +14 lines (ctrl + t to view transcript)
+        parse_error            TEXT
+    )
+
+• Working (6m 07s • esc to interrupt)
+
+
+› Find and fix a bug in @filename
+
+  gpt-5.4 high · ~/Documents/code/murder

@@ -1,0 +1,46 @@
+    213 -    assert "last_materialized_hash" not in sql
+    214 -    assert "conflict_reason" not in sql
+    214 +    assert _LEGACY_PLAN_MATERIALIZED_HASH_COLUMN not in columns
+    215 +    assert _LEGACY_PLAN_CONFLICT_COLUMN not in columns
+    216 +    assert _LEGACY_PLAN_MATERIALIZED_HASH_COLUMN not in sql
+    217 +    assert _LEGACY_PLAN_CONFLICT_COLUMN not in sql
+    218      assert "parse_error" in sql
+    216 -    assert "'conflict'" not in sql
+    219 +    assert f"'{_LEGACY_PLAN_CONFLICT_STATE}'" not in sql
+    220
+
+• Explored
+  └ Read migrations.py
+    Search conflict_reason|last_materialized_hash|db_changed|sync_state.*conflict|sync_state == \"conflict\"|sync_state='conflict'|sync_state = 'conflict' in murder
+    Read test_plan_sync_single_master.py
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• I caught something worth checking in the migration file after the patch. I’m inspecting that block directly before running tests so I don’t validate against a malformed migration module.
+
+• Explored
+  └ Read migrations.py
+
+• Ran python -m py_compile murder/state/persistence/migrations.py
+  └ (no output)
+
+• Explored
+  └ Search def _migrate_ in migrations.py
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• The migration module still compiles, but I found an unrelated sentinel-migration block that got stranded under the new plans migration. I’m fixing that before I trust any test results.
+
+• Ran git diff -- murder/state/persistence/migrations.py
+  └ diff --git a/murder/state/persistence/migrations.py b/murder/state/persistence/migrations.py
+    index b68fecd..30104df 100644
+    … +87 lines (ctrl + t to view transcript)
+             "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'agents'"
+         ).fetchone()
+
+• Working (5m 25s • esc to interrupt)
+
+
+› Find and fix a bug in @filename
+
+  gpt-5.4 high · ~/Documents/code/murder

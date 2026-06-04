@@ -1,0 +1,46 @@
+
+
+❯ dont need fixes, but currently the sync status on some .murder/plans reads conflic and
+  parse_error. mind looking into that for me and letting me know what the deal is?
+
+  Searched for 2 patterns, read 2 files, listed 1 directory (ctrl+o to expand)
+
+● Now let me query the actual DB to see which plans are in those states and what the reasons
+  are.
+
+  Searched for 1 pattern (ctrl+o to expand)
+
+● Bash(sqlite3 -header -column .murder/murder.db "SELECT name, status, sync_state,
+      materialized_path, substr(conflict_reason,1,60) AS conflict_reason, substr(parse_err…)
+  ⎿  name                     status  sync_state   materialized_path
+          conflict_reason                                           parse_error
+     … +12 lines (ctrl+o to expand)
+
+● Let me confirm the details — the valid statuses and what's actually in those files.
+
+  Searched for 1 pattern (ctrl+o to expand)
+
+● Bash(for f in plan-jk-crash plan-tui-polish-cleanup plan-done-crow-cleanup; do echo "=== $f
+      ==="; head -8 .murder/plans/$f.md; echo; done)
+  ⎿  === plan-jk-crash ===
+     ---
+     title: "Fix jk-crash: event-loop starvation + TicketRecord footgun"
+     … +26 lines (ctrl+o to expand)
+
+  Searched for 1 pattern (ctrl+o to expand)
+
+● Got it — here's the deal. Three plans are off synced, and there are two distinct causes.
+
+  parse_error (2 plans) — invalid status: in frontmatter
+
+  The PlanStatus enum (murder/work/plans/schema.py:25) only accepts three values: draft, accepted,
+  superseded. These two files have a status: that isn't one of them, so parse() throws and
+  reconcile_file catches it and parks the plan in parse_error (sync.py:189-201):
+
+  | File | status: value | Valid? |
+
+─────────────────────────────────────────────────────────────────────────────────────────────
+❯ 
+─────────────────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ bypass permissions on (shift+tab to cycle) · esc to interrupt
+

@@ -1,0 +1,46 @@
+    169  CREATE TABLE IF NOT EXISTS plans (
+    170 -    name                   TEXT PRIMARY KEY,
+    171 -    status                 TEXT NOT NULL CHECK (status IN
+    172 -                           ('draft','accepted','superseded')),
+    173 -    created_at             TEXT NOT NULL,
+    174 -    updated_at             TEXT NOT NULL,
+    175 -    body                   TEXT NOT NULL,
+    176 -    frontmatter_json       TEXT NOT NULL DEFAULT '{}',
+    177 -    body_hash              TEXT NOT NULL,
+    178 -    file_hash              TEXT,
+    179 -    last_materialized_hash TEXT,
+    180 -    materialized_path      TEXT NOT NULL,
+    181 -    revision_count         INTEGER NOT NULL DEFAULT 0,
+    182 -    sync_state             TEXT NOT NULL DEFAULT 'synced' CHECK (sync_state IN
+    183 -                           ('synced','missing_file','orphan_file','parse_error','conflict')),
+    184 -    conflict_reason        TEXT,
+    185 -    parse_error            TEXT
+    170 +    name              TEXT PRIMARY KEY,
+    171 +    status            TEXT NOT NULL CHECK (status IN ('draft','accepted','superseded')),
+    172 +    created_at        TEXT NOT NULL,
+    173 +    updated_at        TEXT NOT NULL,
+    174 +    body              TEXT NOT NULL,
+    175 +    frontmatter_json  TEXT NOT NULL DEFAULT '{}',
+    176 +    body_hash         TEXT NOT NULL,
+    177 +    file_hash         TEXT,
+    178 +    materialized_path TEXT NOT NULL,
+    179 +    revision_count    INTEGER NOT NULL DEFAULT 0,
+    180 +    sync_state        TEXT NOT NULL DEFAULT 'synced'
+    181 +                      CHECK (sync_state IN ('synced','parse_error')),
+    182 +    parse_error       TEXT
+    183  );
+        ⋮
+    362          _migrate_notes_identity_status,
+    363 +        _migrate_plans_single_master,
+    364          _migrate_role_names,
+        ⋮
+    383      _migrate_drop_sentinel(conn)
+    384 +    _migrate_plans_single_master(conn)
+    385      _migrate_agents_harness(conn)
+
+• Working (1m 51s • esc to interrupt)
+
+
+› Find and fix a bug in @filename
+
+  gpt-5.4 high · ~/Documents/code/murder

@@ -1,0 +1,46 @@
+    399 +                    ELSE 'synced' END,
+    400 +               parse_error
+    401 +          FROM plans_old_single_master_migration;
+    402 +        DROP TABLE plans_old_single_master_migration;
+    403 +        CREATE INDEX IF NOT EXISTS idx_plans_status ON plans(status);
+    404 +        COMMIT;
+    405 +        PRAGMA foreign_keys = ON;
+    406 +        """
+    407 +    )
+    408 +
+    409      row = conn.execute(
+
+• Edited murder/app/service/read_model.py (+1 -3)
+    307                  """
+    308 -                SELECT materialized_path, sync_state, parse_error, conflict_reason
+    308 +                SELECT materialized_path, sync_state, parse_error
+    309                    FROM plans
+        ⋮
+    328              text = f"# {name}\n\nParse error: {row['parse_error']}\n\n```markdown\n{text}\n```"
+    329 -        elif sync_state == "conflict":
+    330 -            text = f"# {name}\n\nConflict: {row['conflict_reason']}\n\n{text}"
+    329          return PlanDisplaySnapshot(name=name, markdown=text)
+
+• Edited murder/app/cli/service_cmd.py (+0 -6)
+    411              continue
+    412 -        file_hash = content_hash(md.read_text(encoding="utf-8"))
+    413 -        last_hash = row["last_materialized_hash"]
+    414 -        if last_hash and row["body_hash"] != last_hash and file_hash != last_hash:
+    415 -            issues.append(f"plan {name}: DB/file conflict")
+    412          if row["sync_state"] == "parse_error":
+    413              issues.append(f"plan {name}: parse error: {row['parse_error']}")
+    418 -        elif row["sync_state"] == "conflict":
+    419 -            issues.append(f"plan {name}: conflict: {row['conflict_reason']}")
+    414      if plans_dir(repo).exists():
+
+• Edited murder/runtime/orchestration/orchestrator.py (+0 -1)
+    840                  file_hash=content_hash,
+    841 -                last_materialized_hash=content_hash,
+    841                  sync_state="synced",
+
+• Working (2m 16s • esc to interrupt)
+
+
+› Find and fix a bug in @filename
+
+  gpt-5.4 high · ~/Documents/code/murder

@@ -1,0 +1,46 @@
+import subprocess, sys
+proc = subprocess.run([sys.executable, '-m', 'pytest', 'tests/unit', '-q'], cwd='.', text=True, capture_output=True)
+print('EXIT', proc.returncode)
+if proc.stdout:
+    print(proc.stdout)
+if proc.stderr:
+    print('STDERR:')
+    print(proc.stderr)
+PY
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• The unit-suite subprocess has the same wrapper issue after completion. I’m rerunning it with a long initial wait so the command can finish before the first yield and return cleanly.
+
+• Ran ps -ef | rg "pytest tests -q --ignore=tests/smoke|python -m pytest tests -q --ignore=tests/smoke"
+  └ luke           1       0  0 20:57 ?        00:00:00 bwrap --new-session --die-with-parent --ro-bind / / --dev /dev --bind /tmp /tmp --perms 555 --tmpfs /tmp/.git --remount-ro /tmp/.git
+    --perms 555 --tmpfs /tmp/.agents --remount-ro /tmp/.agents --perms 555 --tmpfs /tmp/.codex --remount-ro /tmp/.codex --bind /home/user/Documents/code/murder /home/user/Documents/code/
+    … +73 lines (ctrl + t to view transcript)
+    luke           2       1  0 20:57 ?        00:00:00 /bin/bash -c ps -ef | rg "pytest tests -q --ignore=tests/smoke|python -m pytest tests -q --ignore=tests/smoke"
+    luke           4       2  0 20:57 ?        00:00:00 rg pytest tests -q --ignore=tests/smoke|python -m pytest tests -q --ignore=tests/smoke
+
+• Waited for background terminal · python - <<'PY'
+import subprocess, sys
+proc = subprocess.run([sys.executable, '-m', 'pytest', 'tests', '-q', '--ignore=tests/smoke'], cwd='.', text=True, capture_output=True)
+print('EXIT', proc.returncode)
+if proc.stdout:
+    print(proc.stdout)
+if proc.stderr:
+    print('STDERR:')
+    print(proc.stderr)
+PY
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• The direct command wrapper is the problem now, not pytest. I’m switching to a tmux-backed run for the remaining verification so I can capture a clean exit and output without leaving
+  zombie sessions behind.
+
+• Calling tmux.create_session({"name":"plan-sync-tests"})
+
+• Reviewing approval request (12m 04s • esc to interrupt) · 4 background terminals running · /ps to view · /stop to close
+  └ MCP create_session on tmux
+
+
+› Find and fix a bug in @filename
+
+  gpt-5.4 high · ~/Documents/code/murder
