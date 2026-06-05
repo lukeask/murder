@@ -1,0 +1,35 @@
+{
+  "harness": "codex",
+  "source": "tools/testing/recordings/20260604-213019/frames.jsonl",
+  "label_rule": "State labels are boundary-forward from metadata annotations, adjusted only where pane text is indistinguishable or already visibly settled because adapter.is_idle receives text only.",
+  "ranges": [
+    {
+      "start": 17,
+      "end": 25,
+      "state": "awaiting_input"
+    },
+    {
+      "start": 26,
+      "end": 29,
+      "state": "working"
+    },
+    {
+      "start": 30,
+      "end": 41,
+      "state": "awaiting_input"
+    },
+    {
+      "start": 42,
+      "end": 44,
+      "state": "working"
+    },
+    {
+      "start": 45,
+      "end": 61,
+      "state": "awaiting_input"
+    }
+  ],
+  "notes": [
+    "Frame 25 is byte-identical to frame 17, and frame 41 is byte-identical to frame 30; both are labeled by visible pane text, because adapter.is_idle receives only text."
+  ]
+}

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import re
 from abc import ABC, abstractmethod
 from pathlib import Path
@@ -21,8 +22,10 @@ from murder.llm.harnesses.parsing import (
     strip_ui_chrome,
 )
 from murder.llm.harnesses.capabilities import CapabilityError, HarnessCapabilities, require
-from murder.llm.harnesses.transcripts import has_transcript_parser, parse_transcript_for_adapter
+from murder.llm.harnesses.transcript_v2 import SEGMENT_TYPES, parse_frames, supports_harness
 from murder.llm.harnesses.results import SimpleResult, fail_result, ok_result
+
+_log = logging.getLogger(__name__)
 
 ASK_RE = re.compile(r">>>\s*ASK:\s*(?P<body>.+?)(?=\n>>>|\Z)", re.DOTALL)
 ANSWER_RE = re.compile(
@@ -45,6 +48,31 @@ _MODEL_REJECTION_WORD_RE = re.compile(
     re.IGNORECASE,
 )
 _MODEL_WORD_RE = re.compile(r"\bmodels?\b", re.IGNORECASE)
+
+
+def _transcript_doc_to_turns(doc: dict[str, object]) -> list[tuple[str, str]]:
+    turns: list[tuple[str, str]] = []
+    segments = doc.get("segments")
+    if not isinstance(segments, list):
+        return turns
+    for segment in segments:
+        if not isinstance(segment, dict):
+            continue
+        seg_type = segment.get("type")
+        if seg_type == "user":
+            text = segment.get("text")
+            if isinstance(text, str) and text.strip():
+                turns.append(("user", text))
+        elif seg_type == "assistant":
+            text = segment.get("text")
+            if isinstance(text, str) and text.strip():
+                turns.append(("assistant", text))
+        elif seg_type not in SEGMENT_TYPES:
+            # Other known types (tool_call, plan_update, …) are intentionally
+            # absent from the flat conversation log; an *unknown* type means the
+            # grammar grew a variant this projection never learned about.
+            _log.warning("transcript projection: dropping unknown segment type %r", seg_type)
+    return turns
 
 
 class HarnessSession:
@@ -248,13 +276,6 @@ class HarnessAdapter(ABC):
     cheapest_subagent_model: ClassVar[str | None] = None
     startup_model_selects_runtime_model: ClassVar[bool] = False
 
-    # Inputs for the default transcript parser (see parse_transcript). Leave the
-    # markers empty for a harness whose UI doesn't echo prompts behind a simple
-    # marker; such a harness either overrides parse_transcript or has no parsed
-    # transcript yet (the raw pane mirror remains available in the TUI).
-    transcript_prompt_markers: ClassVar[tuple[str, ...]] = ()
-    transcript_drop_substrings: ClassVar[tuple[str, ...]] = ()
-
     def __init__(
         self,
         startup_model: str | None = None,
@@ -271,10 +292,7 @@ class HarnessAdapter(ABC):
             model_discovery=cls.model_list_command is not None,
             model_selection=cls.model_selection_command_template is not None,
             pane_state_reading=True,
-            transcript_access=has_transcript_parser(
-                cls.kind,
-                prompt_markers=cls.transcript_prompt_markers,
-            ),
+            transcript_access=supports_harness(cls.kind),
             startup_interrupt_continue=True,
             supports_subagents=cls.supports_subagents,
             cheapest_subagent_model=cls.cheapest_subagent_model,
@@ -387,19 +405,27 @@ class HarnessAdapter(ABC):
     def extract_last_message(self, pane_text: str) -> str | None: ...
 
     def has_transcript_parser(self) -> bool:
-        return has_transcript_parser(
-            self.kind,
-            prompt_markers=self.transcript_prompt_markers,
-        )
+        return supports_harness(self.kind)
+
+    def parse_transcript_doc(self, pane_text: str) -> dict[str, object]:
+        if not supports_harness(self.kind):
+            return {
+                "harness": self.kind,
+                "state": "working",
+                "condensed": None,
+                "segments": [],
+            }
+        return parse_frames(self.kind, [pane_text])
 
     def parse_transcript(self, pane_text: str) -> list[tuple[str, str]]:
-        """Best-effort ``(role, text)`` turns visible in the session pane.
+        """Best-effort visible user/assistant turns projected from TranscriptDoc.
 
         Returns the *full* visible transcript on every call — never deltas;
         :func:`murder.state.persistence.conversation.merge_transcript` reconciles
-        successive parses. Delegates to :mod:`murder.llm.harnesses.transcripts`.
+        successive parses. This remains a compatibility projection for the
+        persisted conversation log, whose storage model is still flat turns.
         """
-        return parse_transcript_for_adapter(self, pane_text)
+        return _transcript_doc_to_turns(self.parse_transcript_doc(pane_text))
 
     def detect_ask(self, pane_text: str) -> str | None:
         m = ASK_RE.search(strip_ui_chrome(pane_text))

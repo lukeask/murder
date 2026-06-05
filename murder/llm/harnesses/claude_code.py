@@ -51,6 +51,10 @@ _CC_MENU_EFFORT_RE = re.compile(
     r"[●•]\s*(?P<effort>low|medium|high|x\s*high|xhigh|max)\s+effort\b",
     re.IGNORECASE,
 )
+_TRUST_PROMPT_RE = re.compile(
+    r"trust this folder|accessing workspace:|enter to confirm",
+    re.IGNORECASE,
+)
 
 
 def _claude_model_id(model: str | None) -> str | None:
@@ -87,20 +91,6 @@ class ClaudeCodeAdapter(HarnessAdapter):
     model_list_command: ClassVar[str | None] = "/model"
     model_list_capture_delay_s: ClassVar[float] = _MODEL_CAPTURE_DELAY_S
     supported_efforts: ClassVar[tuple[str, ...]] = _CC_EFFORT_ORDER
-    # Transcript parsing. CC echoes the submitted prompt on a "❯ …" line; the
-    # reply (●) and tool boxes (⏺ ⎿) follow until the next prompt.  Status-bar
-    # and "✻ …" spinner lines are dropped; the empty trailing "❯ " and the
-    # pre-first-message placeholder both parse to no turn.
-    # Only ❯ (U+276F) is used — plain ">" appears in diffs/blockquotes inside
-    # assistant output and must not be treated as a turn boundary.
-    transcript_prompt_markers: ClassVar[tuple[str, ...]] = ("❯",)
-    transcript_drop_substrings: ClassVar[tuple[str, ...]] = (
-        "bypass permissions",
-        "esc to interrupt",
-        "for shortcuts",
-        "? for help",
-        " · ~/",
-    )
 
     # Claude Code prompt is ">" or "? " depending on version/context.
     # We also accept any non-empty pane after seeing the banner so startup
@@ -119,15 +109,6 @@ class ClaudeCodeAdapter(HarnessAdapter):
     _CC2_UI_RE = re.compile(r"bypass permissions", re.IGNORECASE)
     # CC 2.x: "Esc to interrupt" appears in status bar ONLY while actively generating.
     _CC2_GENERATING_RE = re.compile(r"Esc to interrupt", re.IGNORECASE)
-    # First launch in an un-trusted directory: CC shows an interactive
-    # "do you trust the files in this folder?" list dialog. Our ready-regex
-    # matches that dialog (it contains "Claude Code") so startup proceeds, but
-    # nothing dismisses it — initialize_defaults() answers it.
-    _TRUST_PROMPT_RE = re.compile(
-        r"trust the files in this folder|Yes, I trust this folder|trust this folder\?",
-        re.IGNORECASE,
-    )
-
     crow_system_prompt: ClassVar[str] = "see prompts/crow_claude_code.md"
     available_startup_models: ClassVar[list[tuple[str, str]]] = [
         ("opus", "Opus"),
@@ -156,20 +137,19 @@ class ClaudeCodeAdapter(HarnessAdapter):
 
     async def initialize_defaults(self, session, spec):  # type: ignore[override]
         del spec
-        # Dismiss the first-run "trust this folder?" dialog if it's up. The
-        # ready check may have fired before the dialog rendered, so poll a bit.
-        for _ in range(15):  # ~6 s
-            try:
-                pane = strip_ansi(await tmux.capture_pane(session, lines=40))
-            except tmux.TmuxError:
-                return ok_result()  # session gone; let the next wait_idle report it
-            if self._TRUST_PROMPT_RE.search(pane):
+        # The trust-folder dialog can paint a beat after the session first
+        # reports ready, so poll briefly instead of reading a single frame: a
+        # dialog that renders after one capture would otherwise park the session
+        # on the prompt forever (the stuck-collaborator failure class).
+        attempts = 4
+        for attempt in range(attempts):
+            pane = strip_ansi(await tmux.capture_pane(session, lines=80))
+            if _TRUST_PROMPT_RE.search(pane):
                 await tmux.send_keys(session, "1", literal=True, enter=True)
-                await asyncio.sleep(0.6)
-                return ok_result()
-            if self.is_idle(pane):  # already at the REPL — nothing to dismiss
-                return ok_result()
-            await asyncio.sleep(0.4)
+                await asyncio.sleep(0.2)
+                break
+            if attempt < attempts - 1:
+                await asyncio.sleep(0.3)
         return ok_result()
 
     def extract_last_message(self, pane_text: str) -> str | None:

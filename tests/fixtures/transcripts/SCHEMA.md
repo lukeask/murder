@@ -19,7 +19,7 @@ fixtures pin the *final* accumulated document after the whole sequence.
 ```jsonc
 {
   "harness": "claude_code" | "codex",
-  "state":   "awaiting_input" | "working",   // extensible; reserve "awaiting_approval"
+  "state":   "awaiting_input" | "working" | "awaiting_approval",
   "condensed": null,                          // ALWAYS null here — see note below
   "segments": [ Segment, … ]
 }
@@ -58,6 +58,12 @@ small-LLM summarization pass over `segments`. It is `null` in every deterministi
 
 // CC background subagent lifecycle. status "dispatched" when launched, "completed" when done.
 { "type": "agent_event", "name": str, "status": "dispatched" | "completed", "elapsed": str | null }
+
+// live multiple-choice prompt. `selected` tracks the currently highlighted
+// option while the prompt is live; `chosen` is the submitted option once answered.
+{ "type": "choice_prompt", "question": str,
+  "options": [ { "number": int, "label": str, "description": str | null }, … ],
+  "footer": str | null, "selected": int, "answered": bool, "chosen": int | null }
 ```
 
 ## Suppressed entirely (never a segment)

@@ -36,7 +36,8 @@ _BANNER_RE = re.compile(r"OpenAI Codex", re.IGNORECASE)
 # match any "› " line (busy state is screened separately, before this check).
 _IDLE_PROMPT_RE = re.compile(r"^\s*›(?:\s.*)?$", re.MULTILINE)
 _BUSY_RE = re.compile(
-    r"^\s*(?:[•·]\s*)?(?:working|thinking|running|executing|processing|applying patch)\b",
+    r"^\s*(?:[•·]\s*)?(?:working|thinking|running|executing|processing|applying patch)\b"
+    r"|esc to interrupt",
     re.IGNORECASE | re.MULTILINE,
 )
 _LOGIN_RE = re.compile(r"\b(login required|not logged in|codex login)\b", re.IGNORECASE)
@@ -101,21 +102,6 @@ class CodexAdapter(HarnessAdapter):
     model_list_command: ClassVar[str | None] = "/model"
     model_list_capture_delay_s: ClassVar[float] = 3.0
     supported_efforts: ClassVar[tuple[str, ...]] = ("low", "medium", "high", "xhigh")
-    # Transcript parsing (best-effort; fixture: tests/fixtures/harness_panes/
-    # codex_transcript.txt). Codex echoes the submitted prompt on a "› …" line;
-    # the reply follows on "• …" lines. The footer placeholder ("Find and fix
-    # a bug in @filename" etc.) is the live input box — its trailing status bar
-    # ("<model> <effort> · ~/<cwd>") is dropped so that turn parses as empty
-    # and is discarded.
-    transcript_prompt_markers: ClassVar[tuple[str, ...]] = ("›",)
-    transcript_drop_substrings: ClassVar[tuple[str, ...]] = (
-        "esc to interrupt",
-        "to interrupt",
-        "tokens used",
-        "openai codex",
-        "use /permissions",
-        " · ~/",
-    )
     crow_system_prompt: ClassVar[str] = "see prompts/crow_codex.md"
     available_startup_models: ClassVar[list[tuple[str, str]]] = [
         ("gpt-5.5", "GPT-5.5"),

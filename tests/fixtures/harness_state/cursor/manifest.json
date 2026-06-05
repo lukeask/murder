@@ -1,0 +1,35 @@
+{
+  "harness": "cursor",
+  "source": "tools/testing/recordings/20260604-213352/frames.jsonl",
+  "label_rule": "State labels are boundary-forward from metadata annotations, adjusted only where pane text is indistinguishable or already visibly settled because adapter.is_idle receives text only.",
+  "ranges": [
+    {
+      "start": 12,
+      "end": 20,
+      "state": "awaiting_input"
+    },
+    {
+      "start": 21,
+      "end": 67,
+      "state": "working"
+    },
+    {
+      "start": 68,
+      "end": 74,
+      "state": "awaiting_input"
+    },
+    {
+      "start": 75,
+      "end": 132,
+      "state": "working"
+    },
+    {
+      "start": 133,
+      "end": 136,
+      "state": "awaiting_input"
+    }
+  ],
+  "notes": [
+    "Live typed input before Enter is labeled awaiting_input; the harness has not started work yet."
+  ]
+}

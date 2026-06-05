@@ -140,10 +140,8 @@ class PiAdapter(HarnessAdapter):
     crow_system_prompt: ClassVar[str] = "see prompts/crow_pi.md"
     model_list_command: ClassVar[str | None] = "/model"
     model_list_capture_delay_s: ClassVar[float] = 3.0
-    # Transcript parsing is handled by the registered BlankSeparatedTranscriptParser
-    # (see register_parser at the bottom of this module), keyed off ``_is_pi_chrome``
-    # — Pi's scrollback doesn't echo a prompt marker on completed turns, so the
-    # generic prompt-marker ClassVars are intentionally left unset.
+    # Pi has no transcript_v2 front-end yet, so the generic prompt-marker
+    # ClassVars remain unset and the UI falls back to the raw pane mirror.
     available_startup_models: ClassVar[list[tuple[str, str]]] = [
         ("anthropic/claude-sonnet-4-6", "Claude Sonnet 4.6"),
         ("anthropic/claude-opus-4-7", "Claude Opus 4.7"),
@@ -221,14 +219,3 @@ class PiAdapter(HarnessAdapter):
 
     async def interrupt(self, session: str) -> None:
         await self.interrupt_generation(session)
-
-
-from murder.llm.harnesses.transcripts import BlankSeparatedTranscriptParser, register_parser
-
-register_parser(
-    "pi",
-    BlankSeparatedTranscriptParser(
-        is_chrome_fn=_is_pi_chrome,
-        normalize_body=_normalize_pi_transcript_body,
-    ),
-)

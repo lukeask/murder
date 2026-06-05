@@ -1,0 +1,46 @@
+      209
+      210 +**RESOLVED.** Verified by t009-verify: `DoneSessionSweeperWorker` in `murder/workers/done_session_sweeper.py`, registered in bootstrap, sweeps every 60s.
+      211 +
+      212  ---
+      213
+      214  ## description — Frame Pair Analysis (TUI screen recordings)
+
+● Update(.murder/notes/June4Roundup.md)
+  ⎿  Added 2 lines
+      171
+      172  Originally suspected: rapid j/k navigation between notes/plans crashes the TUI. Root cause turned out to be unrelated: `sidecar_sync._meta_from_row` during service startup
+            — `TicketRecord` lacked `__contains__`, causing `"schedule_at" in row` to raise `KeyError: 0`. Fixed in `records.py` (t008). No separate j/k TUI crash path was found.
+      173
+      174 +**RESOLVED BY: t008** — fix in `records.py`.
+      175 +
+      176  ---
+      177
+      178  ## image-paste-passthrough-codex (2026-06-04)
+
+● The roundup is complete. Here's a summary of what was done:
+
+  ---
+  Roundup complete. June4Roundup.md now covers all 34 notes (+ retired_notes directory). Resolution status:
+
+  Confirmed RESOLVED:
+  - escalation-ack-keyboard-nav — escalation resolve wizard + focus keybind (e/a) fully implemented
+  - crows-view — all 5 requested features implemented (CrowRosterRow, favorite, ctrl+m kill, pane toggle, color-coded status)
+  - ctrlshortcuts — ctrl+d/ctrl+p implemented in chat_input.py:324-336
+  - scrollsnap — LiveRichLog preserves manual scroll position
+  - done-cleanup — DoneSessionSweeperWorker verified by t009-verify
+  - jk-crash — fixed in records.py (t008)
+  - writeset-loop-dirty-worktree — write_set concept deleted entirely (dfce0ae)
+  - shutdown-down-wait-for-exit — partially mitigated (cb1c365), full fix still outstanding
+
+  Confirmed STILL OPEN:
+  - shortcut-failure — chat_target_cycle.py:27 filters out planners with no active agent; fix: remove status filter
+  - image-paste-passthrough-codex — image path sent as text only; file never copied to crow workspace
+
+✻ Baked for 8m 47s
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ make a ticket for the shortcut-failure fix
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ bypass permissions on (shift+tab to cycle) · gh auth login · ← for agents
+
+

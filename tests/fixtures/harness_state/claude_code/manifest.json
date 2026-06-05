@@ -1,0 +1,35 @@
+{
+  "harness": "claude_code",
+  "source": "tools/testing/recordings/20260604-185817/frames.jsonl",
+  "label_rule": "State labels are boundary-forward from metadata annotations, adjusted only where pane text is indistinguishable or already visibly settled because adapter.is_idle receives text only.",
+  "ranges": [
+    {
+      "start": 15,
+      "end": 23,
+      "state": "awaiting_input"
+    },
+    {
+      "start": 24,
+      "end": 33,
+      "state": "working"
+    },
+    {
+      "start": 34,
+      "end": 52,
+      "state": "awaiting_input"
+    },
+    {
+      "start": 53,
+      "end": 64,
+      "state": "working"
+    },
+    {
+      "start": 65,
+      "end": 91,
+      "state": "awaiting_input"
+    }
+  ],
+  "notes": [
+    "Derived from metadata annotations. Frame 65 already has idle-visible pane text (completion marker plus live prompt and no esc-to-interrupt), so the executable text-only label starts awaiting_input there; frame 66 is the human-noted settled idle frame."
+  ]
+}

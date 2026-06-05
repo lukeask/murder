@@ -1,0 +1,29 @@
+# source: tools/testing/recordings/20260529-015112/frames.jsonl frame 213 (cursor moved)
+# terminal width ~185 cols; artificial MC dialog with descriptions + free-text option
+
+user@machine:~/Documents/code/murder $ claude
+ ▐▛███▜▌   Claude Code v2.1.154
+▝▜█████▛▘  Sonnet 4.6 with high effort · Claude Pro
+  ▘▘ ▝▝    ~/Documents/code/murder
+
+   Opus 4.8 is now available! · /model to switch
+
+❯ can you please do the thing where you present me with some options that I can use number keys to select between for a test?
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ ☐ Test select
+
+Which option do you want to pick?
+
+  1. Option A
+     The first test option
+  2. Option B
+     The second test option
+  3. Option C
+     The third test option
+  4. Option D
+     The fourth test option
+  5. Type something.
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ 6. Chat about this
+
+Enter to select · ↑/↓ to navigate · Esc to cancel

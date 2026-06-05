@@ -9,7 +9,7 @@
     },
     {
       "type": "tool_call",
-      "title": "Searched 1 pattern · listed plans dir",
+      "title": "Searched for 2 patterns, read 2 files, listed 1 directory",
       "input": null,
       "result": null,
       "elided": true,
@@ -23,21 +23,45 @@
     },
     {
       "type": "tool_call",
-      "title": "sqlite3 murder.db \"SELECT name, status, sync_state, … FROM plans\"",
-      "input": "sqlite3 murder.db \"SELECT name, status, sync_state, … FROM plans\"",
+      "title": "Searched for 1 pattern",
+      "input": null,
       "result": null,
+      "elided": true,
+      "running": false
+    },
+    {
+      "type": "tool_call",
+      "title": "sqlite3 -header -column .murder/murder.db \"SELECT name, status, sync_state, materialized_path, substr(conflict_reason,1,60) AS conflict_reason, substr(parse_er…",
+      "input": "sqlite3 -header -column .murder/murder.db \"SELECT name, status, sync_state, materialized_path, substr(conflict_reason,1,60) AS conflict_reason, substr(parse_er…",
+      "result": "name                     status  sync_state   materialized_path\nconflict_reason                                           parse_error",
       "elided": true,
       "running": false
     },
     {
       "type": "assistant",
       "phase": "intermediate",
-      "text": "Let me confirm the valid statuses and what's actually in those files.",
+      "text": "Let me confirm the details — the valid statuses and what's actually in those files.",
       "elapsed": null
     },
     {
       "type": "tool_call",
-      "title": "head -8 each of plan-jk-crash / plan-tui-polish-cleanup / plan-done-crow-cleanup",
+      "title": "Searched for 1 pattern",
+      "input": null,
+      "result": null,
+      "elided": true,
+      "running": false
+    },
+    {
+      "type": "tool_call",
+      "title": "for f in plan-jk-crash plan-tui-polish-cleanup plan-done-crow-cleanup; do echo \"=== $f ===\"; head -8 .murder/plans/$f.md; echo; done",
+      "input": "for f in plan-jk-crash plan-tui-polish-cleanup plan-done-crow-cleanup; do echo \"=== $f ===\"; head -8 .murder/plans/$f.md; echo; done",
+      "result": "=== plan-jk-crash ===\n---\ntitle: \"Fix jk-crash: event-loop starvation + TicketRecord footgun\"",
+      "elided": true,
+      "running": false
+    },
+    {
+      "type": "tool_call",
+      "title": "Searched for 1 pattern",
       "input": null,
       "result": null,
       "elided": true,
@@ -46,7 +70,7 @@
     {
       "type": "assistant",
       "phase": "final",
-      "text": "Got it — here's the deal. Three plans are off synced, and there are two distinct causes.\n\nparse_error (2 plans) — invalid status: in frontmatter\n\nThe PlanStatus enum (murder/work/plans/schema.py:25) only accepts three values: draft, accepted, superseded. These two files have a status: that isn't one of them, so parse() throws and reconcile_file parks the plan in parse_error (sync.py:189-201):\n\n┌────────────────────────────┬───────────────┬────────┐\n│            File            │ status: value │ Valid? │\n├────────────────────────────┼───────────────┼────────┤\n│ plan-jk-crash.md           │ open          │ ✗      │\n│ plan-tui-polish-cleanup.md │ active        │ ✗      │\n└────────────────────────────┴───────────────┴────────┘\n\nBoth look like hand-edits. The DB still has the last good copy of each (both draft); the markdown edits just aren't being ingested while the status is unparseable. A one-word edit in each file clears it on the next poll.\n\nconflict (1 plan) — both sides changed\n\nplan-done-crow-cleanup hit the db_changed and file_changed branch (sync.py:223-231): both the DB body and the markdown diverged from the last materialized hash. Sync won't guess a winner, so it parks it as conflict.\n\nNet: the two parse_errors are benign frontmatter mismatches; the one conflict is the sync loop correctly refusing to auto-merge a genuine two-sided divergence. Happy to fix any/all if you want, but leaving as-is per your ask.",
+      "text": "Got it — here's the deal. Three plans are off synced, and there are two distinct causes.\n\nparse_error (2 plans) — invalid status: in frontmatter\n\nThe PlanStatus enum (murder/work/plans/schema.py:25) only accepts three values: draft, accepted, superseded. These two files have a status: that isn't one of them, so parse() throws and reconcile_file catches it and parks the plan in parse_error (sync.py:189-201):\n\n┌────────────────────────────┬───────────────┬────────┐\n│            File            │ status: value │ Valid? │\n├────────────────────────────┼───────────────┼────────┤\n│ plan-jk-crash.md           │ open          │ ✗      │\n├────────────────────────────┼───────────────┼────────┤\n│ plan-tui-polish-cleanup.md │ active        │ ✗      │\n└────────────────────────────┴───────────────┴────────┘\n\nBoth look like hand-edits (or imports from an older/foreign convention — jk-crash also uses title:/created: instead of the name:/created_at: the materializer writes). The DB still has the last good copy of each (both draft); the markdown edits just aren't being ingested while the status is unparseable. Fixing is a one-word edit in each file (open→draft/accepted, active→draft/accepted) — the next poll would clear it.\n\nconflict (1 plan) — both sides changed\n\nplan-done-crow-cleanup hit the db_changed and file_changed branch (sync.py:223-231): both the DB row's body and the markdown file diverged from the last materialized hash. Sync won't guess a winner — clobbering either side would lose work — so it parks it as conflict with reason \"database and markdown changed since last materialization.\" Nothing syncs in either direction until it's resolved (re-save from whichever side is canonical, and the matching-hash path takes over).\n\nNet: the two parse_errors are benign frontmatter mismatches; the one conflict is the sync loop correctly refusing to auto-merge a genuine two-sided divergence. Nothing's broken in the sync code itself — it's doing exactly what it should given the file contents. Happy to fix any/all of them if you want, but leaving as-is per your ask.",
       "elapsed": "1m 13s"
     },
     {
@@ -56,13 +80,57 @@
     {
       "type": "assistant",
       "phase": "intermediate",
-      "text": "Good question — let me distinguish \"stale artifacts\" from \"reachable today,\" and check whether the current writer could ever produce these.",
+      "text": "Good question — let me distinguish \"stale artifacts\" from \"reachable today.\" Let me check the history and whether the current writer could ever produce these.",
       "elapsed": null
     },
     {
       "type": "tool_call",
-      "title": "git log -L PlanStatus schema.py · file histories · parser.py · frontmatter",
-      "input": "git log -L PlanStatus schema.py",
+      "title": "cd /home/user/Documents/code/murder; echo \"=== schema.py PlanStatus history ===\"; git log --oneline -L '/class PlanStatus/,/^class /:murder/work/plans/schema.p…",
+      "input": "cd /home/user/Documents/code/murder; echo \"=== schema.py PlanStatus history ===\"; git log --oneline -L '/class PlanStatus/,/^class /:murder/work/plans/schema.p…",
+      "result": "=== schema.py PlanStatus history ===\n2e8fbf3 v1: initial scaffold + Collaborator chat wiring",
+      "elided": true,
+      "running": false
+    },
+    {
+      "type": "tool_call",
+      "title": "cd /home/user/Documents/code/murder echo \"=== jk-crash file history ===\"; git log --oneline -- .murder/plans/plan-jk-crash.md | head…",
+      "input": "cd /home/user/Documents/code/murder echo \"=== jk-crash file history ===\"; git log --oneline -- .murder/plans/plan-jk-crash.md | head…",
+      "result": "=== jk-crash file history ===\n=== tui-polish file history ===\n=== done-crow-cleanup file history ===\n=== is .murder tracked at all? ===",
+      "elided": false,
+      "running": false
+    },
+    {
+      "type": "assistant",
+      "phase": "intermediate",
+      "text": ".murder/plans/ is gitignored (runtime artifacts), so no per-file history. The schema answer is decisive though: PlanStatus has only ever had draft/accepted/superseded since the initial scaffold — open and active were never valid in this codebase. Let me confirm the writer can't emit them and look at the full frontmatter.",
+      "elapsed": null
+    },
+    {
+      "type": "tool_call",
+      "title": "cd /home/user/Documents/code/murder echo \"=== parser parse/render/write ===\"; sed -n '1,200p' murder/work/plans/parser.py",
+      "input": "cd /home/user/Documents/code/murder echo \"=== parser parse/render/write ===\"; sed -n '1,200p' murder/work/plans/parser.py",
+      "result": "=== parser parse/render/write ===\n\"\"\"Plan markdown parser/writer.\"\"\"",
+      "elided": true,
+      "running": false
+    },
+    {
+      "type": "assistant",
+      "phase": "intermediate",
+      "text": "Let me check whether conflict has any resolution path in the current pipeline (or whether it's a sticky terminal state).",
+      "elapsed": null
+    },
+    {
+      "type": "tool_call",
+      "title": "cd /home/user/Documents/code/murder echo \"=== full tui-polish frontmatter ===\"; sed -n '1,14p' .murder/plans/plan-tui-polish-cleanup.md…",
+      "input": "cd /home/user/Documents/code/murder echo \"=== full tui-polish frontmatter ===\"; sed -n '1,14p' .murder/plans/plan-tui-polish-cleanup.md…",
+      "result": "=== full tui-polish frontmatter ===\n---\ncreated_at: '2026-05-30T00:00:00'",
+      "elided": true,
+      "running": false
+    },
+    {
+      "type": "tool_call",
+      "title": "Read 1 file",
+      "input": null,
       "result": null,
       "elided": true,
       "running": false
@@ -70,7 +138,7 @@
     {
       "type": "assistant",
       "phase": "final",
-      "text": "Traced it end to end. Short answer: the two parse_errors are bad-data-origin (never producible by the pipeline itself), but the one conflict is fully reachable by the current pipeline — and it's a sticky terminal state.\n\nparse_error → external/hand edits, not a schema migration\n\nThe writer can't produce these. render() always emits status: plan.status.value, a valid enum member by construction. PlanStatus has been exactly draft/accepted/superseded since the initial scaffold (2e8fbf3); open and active were never valid here. plan-jk-crash.md uses a foreign frontmatter schema (title:/created:) entirely; plan-tui-polish-cleanup.md is canonical-format but had its status hand-edited to active. So: not a codebase-change artifact — but reconcile_file will re-raise parse_error any time someone edits frontmatter to an unsupported status. Reachable only via out-of-band edits; arguably working as intended.\n\nconflict → reachable today, and won't self-heal\n\nThis is the live concern. The branch at sync.py:223-231 fires whenever both DB body and markdown diverged from last_materialized_hash — a plain two-writer race (agent writes a revision while the file is edited out-of-band). With a 1.5s poll / 0.75s debounce, that window is real.\n\nWorse, it's sticky. mark_plan_sync_state updates only file_hash, never last_materialized_hash/body_hash (plans.py:251-259), so once conflicted it re-evaluates to conflict indefinitely; even re-editing the file doesn't escape. No service-layer \"resolve conflict\" affordance exists — only rename_plan/deprecate_plan force synced.\n\nBottom line: parse_error = stale/foreign input correctly rejected; conflict = a genuine, current-pipeline-reachable wedge with no built-in resolver. The cheap fix is giving conflict an escape hatch (a \"keep file\" / \"keep DB\" action that resets last_materialized_hash).",
+      "text": "Traced it end to end. Short answer: the two parse_errors are bad-data-origin (never producible by the pipeline itself), but the one conflict is fully reachable by the current pipeline — and it's a sticky terminal state. Details:\n\nparse_error → external/hand edits, not a schema migration\n\nThe pipeline's writer can't produce these. render() (parser.py:64-73) always emits status: plan.status.value, which is by construction a valid enum member. The only way a file gets an invalid status: is if something other than the pipeline wrote it. And it's not a case of \"we renamed enum values and old files went stale\" — PlanStatus has been exactly draft/accepted/superseded since the initial scaffold (2e8fbf3); open and active were never valid here.\n\nThe two files confirm external authorship:\n- plan-jk-crash.md uses a foreign frontmatter schema entirely — title:, created:, reopened:\ninstead of the canonical name:/created_at:/revisions:. This never round-tripped through\nrender(); it was authored by hand or imported from elsewhere.\n- plan-tui-polish-cleanup.md is canonical-format (name:, created_at:, revisions: 3) but\ncarries status: active and a supersedes: extra — i.e. a hand/agent edit of the status field\nafter the fact (had it round-tripped, status would be a valid value).\n\nSo: not a codebase-change artifact. But the current pipeline will re-raise parse_error any time a human or agent edits frontmatter to an unsupported status — reconcile_file scans every *.md and parses it (sync.py:189-201). So it's reachable today, just only via out-of-band edits; the pipeline never self-generates it. This one is arguably \"working as intended\" (refusing to ingest garbage).\n\nconflict → reachable today, and won't self-heal\n\nThis is the live concern. The branch at sync.py:223-231 fires whenever both the DB body and the markdown diverged from last_materialized_hash (db_changed and file_changed). That's a plain two-writer race: a planning agent writes a new revision into the DB while the file is edited out-of-band (editor, agent, git checkout) — both since the last materialization. With a 1.5s poll / 0.75s debounce, that window is real and reachable in normal operation.\n\nWorse, it's sticky. mark_plan_sync_state updates only file_hash — not last_materialized_hash or body_hash (plans.py:251-259). So once conflicted, db_changed and file_changed both stay True on every subsequent poll and it re-evaluates to conflict indefinitely. Editing the file again doesn't help (keeps file_changed true), and the DB-wins path (materialize_row at sync.py:232-234) only runs when db_changed and not file_changed — unreachable while the file still diverges. I checked the service layer: there's no \"resolve conflict\" affordance — read_model.py:329 just displays the conflict banner, and open_plan_in_editor just re-runs reconcile_name, which re-lands on conflict. The only code paths that force sync_state='synced' are rename_plan and deprecate_plan (sync.py:109, plans.py:223).\n\nSo a conflicted plan stays wedged until you either rename/deprecate it, or manually converge the hashes (re-save from the canonical side so one of the two stops diverging).\n\nBottom line: parse_error = stale/foreign input the pipeline correctly rejects; conflict = a genuine, current-pipeline-reachable wedge with no built-in resolver. If you ever do want a fix, the cheap one is giving conflict an escape hatch (a \"keep file\" / \"keep DB\" action that calls materialize_row or re-imports and resets last_materialized_hash).",
       "elapsed": "1m 41s"
     },
     {
@@ -91,8 +159,8 @@
     },
     {
       "type": "assistant",
-      "phase": "final",
-      "text": "Subagent's reconciling plan-done-crow-cleanup in the background (with backups of both versions first, so it's loss-proof even if its merge is imperfect). Now to your real question.\n\nWhat kind of problem this actually is\n\nYou've built bidirectional replication between two replicas (a SQLite row and a markdown file) reconciled by polling snapshots. The defining limitation is in last_materialized_hash: you compare hashes of current state, not streams of edits. Snapshots detect divergence but give you nothing to merge with. Every product below is a different answer to \"what do you retain so merge is possible, and at what granularity?\"\n\nHow the big products solve it\n\nDropbox / Google Drive (opaque files): detect, never merge, never lose — keep one canonical and write the other to (conflicted copy).md. Crude, but never lossy and never sticky; your conflict state is strictly worse.\n\nGoogle Docs (OT): a central server serializes every keystroke as transformable ops. Needs an always-on mediator and edits-as-operations. Your \"poll the file every 1.5s\" is the opposite. Not applicable.\n\nNotion/Linear/Figma (CRDTs): converge with no coordinator, but the doc stops being a markdown file / TEXT column and becomes a CRDT structure. Enormous overkill for one agent + one occasional human editor.\n\ngit (diff3): three-way merge against a common ancestor — this is the one that fits, because git solves exactly your shape: two divergent snapshots plus a known merge base. Non-overlapping edits auto-merge; only genuine overlaps conflict.\n\nWhat I'd actually do (not a bandaid)\n\nmurder already stores almost everything a 3-way merge needs: last_materialized_hash is your merge-base pointer, and plan_revisions retains historical bodies + hashes. You're storing the ancestor; you just aren't using it. So, cheapest first:\n\n1. Stop the wedge (do regardless) — conflict must have an exit; advance the hashes so re-editing escapes. The bug-shaped part.\n2. 3-way merge on reconcile (the real fix) — recover the base from plan_revisions, run diff3 of base/db/file; clean merges go straight to synced.\n3. Conflict-copy fallback for true overlaps (Dropbox's trick) — write conflict markers or spill to <name>.conflict-<ts>.md; loss-proof, never sticky. This is where an agent-resolve belongs — not as detector/merger (that's deterministic diff3), only for residual overlaps.\n4. Collapse the dual-write — make the file canonical, DB a rebuildable read-model; deletes the whole conflict class. Biggest change, most architecturally honest.\n\nRecommendation: 2 + 3 now (reuse existing assets, match git semantics), 1 as stop-the-bleeding, 4 filed for when plan editing gets reworked anyway.",
+      "phase": "intermediate",
+      "text": "Subagent's reconciling plan-done-crow-cleanup in the background (with backups of both versions first, so it's loss-proof even if its merge is imperfect). I'll surface its report when it lands. Now to your real question.\n\nWhat kind of problem this actually is\n\nYou've built bidirectional replication between two replicas (a SQLite row and a markdown file) reconciled by polling snapshots. The defining limitation is right there in last_materialized_hash: you compare hashes of current state, not streams of edits. Snapshots let you detect divergence but give you nothing to merge with — by the time you see two different blobs, the edit operations that produced them are gone. Every product below is, at bottom, a different answer to \"what do you retain so that merge is possible, and at what granularity?\"\n\nHow the big products solve it\n\nDropbox / Google Drive desktop sync (opaque files): detect, never merge, never lose. They don't understand file internals, so on concurrent edits they keep one version as canonical and write the other to Document (conflicted copy 2026-06-02).md. Crude, but it has two properties your current code lacks: it's never lossy and never sticky. Your conflict state is strictly worse than Dropbox's — it wedges and surfaces nothing actionable.\n\nGoogle Docs native (OT — Operational Transform): a central server serializes every keystroke. Each edit is an operation against a base revision; the server transforms concurrent ops so they commute. This is what makes real-time co-editing work, but it requires (a) a always-on mediator and (b) edits expressed as operations, not file saves. Your \"poll the file every 1.5s\" model is the opposite of this. Not applicable.\n\nNewer collaborative editors (Notion-ish, Linear, Figma — CRDTs, e.g. Yjs/Automerge): structure the doc so concurrent edits always converge with no coordinator. Mathematically the cleanest answer to multi-writer-no-lock. But the document stops being \"a markdown file / a TEXT column\" and becomes a CRDT structure you serialize. For a tool where the two writers are one agent and one human occasionally editing a file, that's enormous overkill — you'd pay CRDT representation costs to solve a 2-writer, low-frequency race.\n\ngit: three-way merge against a common ancestor (diff3). This is the one that actually fits you, because git solves exactly your shape: two divergent snapshots plus a known merge base. With the ancestor, non-overlapping edits auto-merge silently and only genuinely-overlapping hunks become conflicts. The whole \"agent rewrote section 3 while the human fixed a typo in section 1\" case — which is most of your real conflicts — just resolves.\n\nWhat I'd actually do here (and why it's not a bandaid)\n\nThe key realization: murder already stores almost everything a 3-way merge needs.\n\n- last_materialized_hash is already your merge-base pointer.\n- plan_revisions already retains historical bodies + content hashes per revision. So the\ncontent of the base (the revision whose hash == last_materialized_hash) is very likely\nalready recoverable from disk. You're storing the ancestor; you just aren't using it.\n\nSo the real fix is a progression, cheapest first:\n\n1. Stop the wedge (smallest, do regardless). Today mark_plan_sync_state writes only\nfile_hash, never advancing last_materialized_hash or body_hash, so db_changed &&\n\ngit: three-way merge against a common ancestor (diff3). This is the one that actually fits you, because git solves exactly your shape: two divergent snapshots plus a known merge base. With the ancestor, non-overlapping edits auto-merge silently and only genuinely-overlapping hunks become conflicts. The whole \"agent rewrote section 3 while the human fixed a typo in section 1\" case — which is most of your real conflicts — just resolves.\n\nWhat I'd actually do here (and why it's not a bandaid)\n\nThe key realization: murder already stores almost everything a 3-way merge needs.\n\n- last_materialized_hash is already your merge-base pointer.\n- plan_revisions already retains historical bodies + content hashes per revision. So the content of the base (the revision whose hash == last_materialized_hash) is very likely already\nrecoverable from disk. You're storing the ancestor; you just aren't using it.\n\nSo the real fix is a progression, cheapest first:\n\n1. Stop the wedge (smallest, do regardless). Today mark_plan_sync_state writes only file_hash, never advancing last_materialized_hash or body_hash, so db_changed && file_changed stay true\nforever and nothing — not even re-editing the file — escapes. At minimum, conflict must have an exit. This is the bug-shaped part, independent of strategy.\n2. 3-way merge on reconcile (the real fix). When you hit db_changed && file_changed, recover the base body from plan_revisions and run a line-level diff3 of base / db_body / file_body.\nClean merges (the common case) auto-resolve and go straight to synced. This leverages assets you already have; it's mostly wiring, not new storage.\n3. Conflict-copy fallback for true overlaps (Dropbox's trick). When diff3 does hit overlapping hunks, don't block — either write conflict markers (<<<<<<<) into the file and mark a\nlightweight needs_review, or spill the losing side to <name>.conflict-<ts>.md and surface it. Loss-proof, never sticky, and the human resolves it like a git conflict. This is where your\n\"have a planning agent resolve\" instinct actually belongs — not as the detector/merger (that should be deterministic diff3), but only as an optional convenience for resolving the residual\noverlap conflicts a human would otherwise handle.\n\nThere's also a more radical option worth naming because it deletes the whole conflict class rather than handling it:\n\n4. Collapse the dual-write: make the file the source of truth, DB a rebuildable read-model. The conflict exists only because the same logical doc is authoritatively writable from two\nsides. If planning agents edited plans by writing the markdown file (same channel the human uses) and the DB were a derived projection you can rebuild from files, there'd be a single\nwrite path and no DB-vs-file divergence to reconcile — just last-writer-wins on one file, which is a normal editor problem. The cost is reworking how agents mutate plans. Given your\nmemory note about \"flexible substrate, not bespoke flows,\" this is the most architecturally honest direction, but it's the biggest change.\n\nMy recommendation: 2 + 3 now (they reuse plan_revisions and last_materialized_hash, which already exist, and match git semantics your users already understand), with 1 as the immediate stop-the-bleeding, and 4 filed as the eventual simplification if/when plan editing gets reworked anyway.\n\nWant me to sketch the diff3 reconcile path concretely against sync.py — including how to pull the base body out of plan_revisions — so you can see how much actually changes?",
       "elapsed": null
     },
     {
@@ -104,7 +172,7 @@
     {
       "type": "assistant",
       "phase": "final",
-      "text": "The subagent finished cleanly — plan-done-crow-cleanup is back to synced, nothing lost, and it held across a full poll cycle. It did the file-write + DB-update in one transaction and re-verified after a poll — itself a small proof the convergence approach is sound.\n\nWhat it merged: body = file side (a strict superset of the DB body except one stale \"failed agents are out of scope\" bullet the new ## Scope section reverses — dropping it lost no info); related_tickets = union [t007, t009]; truthful frontmatter (revisions=1), status=draft; backups at /tmp/plan-done-crow-cleanup.file.bak and .db.bak. Final hashes all converged; conflict_reason and parse_error cleared.\n\nFor the design discussion: the agent effectively performed a manual 3-way merge but had to reconstruct the DB side via render() because the base wasn't handed to it. The single overlap it resolved is precisely the residual diff3 would surface — everything else would've auto-merged. Live confirmation that 2 (diff3) + 3 (escalate the true overlap) is the right shape: deterministic merge for the 90%, judgment only for the genuine semantic conflict.\n\nWant me to sketch the diff3 reconcile path concretely against sync.py, including pulling the base body out of plan_revisions? I can keep it to a design sketch (no edits) since you said no fixes yet.",
+      "text": "The subagent finished cleanly — plan-done-crow-cleanup is back to synced, nothing lost, and it held across a full poll cycle (the live service didn't clobber it). Worth noting it did this against a running service by doing the file-write + DB-update in one transaction and re-verifying after a poll — which is itself a small proof that the convergence approach is sound.\n\nWhat it merged:\n- Body = file side, which was a strict superset of the DB body except for one stale \"failed agents are out of scope\" bullet that the file's newer ## Scope update section deliberately\nreverses. Keeping it would've made the doc self-contradictory, and the mechanism it cited (rt.reap) is restated in the new section — so dropping it lost no information. Good judgment\ncall; that's exactly the kind of semantic overlap a plain diff3 would've flagged as a conflict and kicked to a human.\n- related_tickets = union [t007, t009] (DB had []).\n- Truthful frontmatter (revisions=1, real updated_at), status=draft.\n- Backups intact at /tmp/plan-done-crow-cleanup.file.bak and .db.bak if you want to eyeball the merge yourself.\n\nFinal hashes all converged (body_hash == file_hash == last_materialized_hash == ed0738f9…), conflict_reason and parse_error cleared.\n\nOne thing this run illustrates for the design discussion: the agent effectively performed a manual 3-way merge by reconstructing both sides — but it had to reconstruct the DB side via render() because the base wasn't handed to it. The single overlap it resolved (\"out of scope\" vs. the new scope section) is precisely the residual that diff3 would surface and a human/agent resolves — everything else (the new section, the ticket refs, the extra bullet) was non-overlapping and would've auto-merged. So this is a live confirmation that 2 (diff3) + 3 (escalate the true overlap) is the right shape: deterministic merge for the 90%, judgment only for the genuine semantic conflict.\n\nMy offer still stands — want me to sketch the diff3 reconcile path against sync.py, including pulling the base body out of plan_revisions? I can keep it to a concrete design sketch (no edits) since you said no fixes yet.",
       "elapsed": "3m 59s"
     }
   ]

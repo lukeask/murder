@@ -14,7 +14,7 @@ Keys (scroll mode):
 
 Keys (insert mode):
     Enter         finish — y/n to keep comment in memory
-    Shift+Enter   newline (Ctrl+J if your terminal maps Enter without shift)
+    Shift+Enter   newline (Ctrl+O fallback; Enter submits)
     Esc           cancel insert
 """
 
@@ -195,6 +195,12 @@ def frame_text(frame: dict[str, object]) -> str:
     return ""
 
 
+def init_curses_styles() -> None:
+    if curses.has_colors():
+        curses.start_color()
+        curses.use_default_colors()
+
+
 def draw_pane(stdscr: curses.window, lines: list[str]) -> None:
     height, width = stdscr.getmaxyx()
     stdscr.erase()
@@ -214,13 +220,43 @@ def wrap_status(*parts: str) -> str:
     return "  |  ".join(parts)
 
 
-def build_display_lines(
+def _truncate_lines(lines: list[str], budget: int) -> list[str]:
+    if budget <= 0:
+        return []
+    if len(lines) <= budget:
+        return lines
+    if budget == 1:
+        return [f"... ({len(lines)} lines)"]
+    return lines[: budget - 1] + [f"... ({len(lines) - budget + 1} more lines)"]
+
+
+def _put_line(
+    stdscr: curses.window,
+    row: int,
+    text: str,
+    *,
+    width: int,
+    dim: bool = False,
+) -> None:
+    if row < 0:
+        return
+    try:
+        if dim:
+            stdscr.attron(curses.A_DIM)
+        stdscr.addnstr(row, 0, text, max(0, width - 1))
+        if dim:
+            stdscr.attroff(curses.A_DIM)
+    except curses.error:
+        pass
+
+
+def build_header(
     frames: list[dict[str, object]],
     current_idx: int,
     *,
     frame_comments: dict[int, str],
     extra_status: str = "",
-) -> list[str]:
+) -> str:
     total = len(frames)
     number = current_idx + 1
     header = f"Frame {number}/{total}"
@@ -228,39 +264,97 @@ def build_display_lines(
         header += "  [commented]"
     if extra_status:
         header += f"  |  {extra_status}"
-    lines = [header, ""]
+    return header
 
-    blocks: list[tuple[int, str]] = []
-    for offset in (-2, -1, 0):
-        idx = current_idx + offset
-        if idx >= 0:
-            blocks.append((idx + 1, frame_text(frames[idx])))
 
-    if len(blocks) >= 3:
-        num_a, text_a = blocks[0]
-        num_b, text_b = blocks[1]
-        _num_c, text_c = blocks[2]
-        lines.append(f"--- frame {num_a} ---")
-        lines.extend(text_a.splitlines())
-        lines.append("")
-        lines.append(f"--- frame {num_b} ---")
-        lines.extend(text_b.splitlines())
-        lines.append("")
-        lines.append("-----")
-        lines.extend(text_c.splitlines())
-    elif len(blocks) == 2:
-        num_b, text_b = blocks[0]
-        _num_c, text_c = blocks[1]
-        lines.append(f"--- frame {num_b} ---")
-        lines.extend(text_b.splitlines())
-        lines.append("")
-        lines.append("-----")
-        lines.extend(text_c.splitlines())
-    elif blocks:
-        _num_c, text_c = blocks[0]
-        lines.append("-----")
-        lines.extend(text_c.splitlines())
-    return lines
+def render_frame_view(
+    stdscr: curses.window,
+    frames: list[dict[str, object]],
+    current_idx: int,
+    *,
+    frame_comments: dict[int, str],
+    extra_status: str = "",
+    edit: tuple[int, list[str], int] | None = None,
+    edit_status: str = "",
+) -> None:
+    """Prev frame (dim) + current; edit block pinned to bottom when present."""
+    height, width = stdscr.getmaxyx()
+    stdscr.erase()
+
+    header = build_header(
+        frames, current_idx, frame_comments=frame_comments, extra_status=extra_status
+    )
+    _put_line(stdscr, 0, header, width=width)
+
+    bottom = height - 1
+    if edit is not None:
+        frame_num, edit_lines, line_idx = edit
+        visible = 8
+        start = max(0, min(line_idx, len(edit_lines) - 1) - visible + 1)
+        window = edit_lines[start : start + visible]
+        edit_rows: list[str] = [
+            f"--- comment frame {frame_num} (Enter=done, Ctrl+O=newline, Esc=cancel) ---"
+        ]
+        for offset, line in enumerate(window):
+            abs_idx = start + offset
+            prefix = "> " if abs_idx == line_idx else "  "
+            edit_rows.append(prefix + line)
+        if edit_status:
+            edit_rows.append(edit_status)
+        for line in reversed(edit_rows):
+            _put_line(stdscr, bottom, line, width=width)
+            bottom -= 1
+        bottom -= 1
+
+    current_num = current_idx + 1
+    current_lines = frame_text(frames[current_idx]).splitlines()
+    prev: tuple[int, list[str]] | None = None
+    if current_idx > 0:
+        prev_num = current_idx
+        prev = (prev_num, frame_text(frames[current_idx - 1]).splitlines())
+
+    frame_top = 2
+    frame_bottom = bottom
+    available = max(0, frame_bottom - frame_top)
+    separator_rows = 2 if prev else 0
+    min_current = min(len(current_lines), 6)
+    prev_budget = 0
+    if prev:
+        prev_budget = min(
+            len(prev[1]),
+            max(3, (available - separator_rows - min_current) // 3),
+        )
+    current_budget = available - separator_rows - prev_budget
+    if current_budget < min_current and prev:
+        prev_budget = max(0, available - separator_rows - min_current)
+        current_budget = available - separator_rows - prev_budget
+    current_budget = max(0, current_budget)
+
+    row = frame_top
+    if prev and row <= frame_bottom:
+        prev_num, prev_lines = prev
+        shown_prev = _truncate_lines(prev_lines, prev_budget)
+        _put_line(stdscr, row, f"--- frame {prev_num} ---", width=width, dim=True)
+        row += 1
+        for line in shown_prev:
+            if row > frame_bottom:
+                break
+            _put_line(stdscr, row, line, width=width, dim=True)
+            row += 1
+        if row <= frame_bottom:
+            row += 1
+
+    if prev and row <= frame_bottom:
+        _put_line(stdscr, row, "-----", width=width)
+        row += 1
+    shown_current = _truncate_lines(current_lines, current_budget)
+    for line in shown_current:
+        if row > frame_bottom:
+            break
+        _put_line(stdscr, row, line, width=width)
+        row += 1
+
+    stdscr.refresh()
 
 
 def prompt_yn(stdscr: curses.window, message: str) -> bool:
@@ -321,22 +415,15 @@ def insert_comment_edit(
         return "\n".join(edit_lines).rstrip("\n")
 
     def render(status: str = "") -> None:
-        display = build_display_lines(
+        render_frame_view(
+            stdscr,
             frames,
             current_idx,
             frame_comments=frame_comments,
+            edit=(number, edit_lines, line_idx),
+            edit_status=status
+            or "Shift+Enter/Ctrl+O=newline",
         )
-        display.append("")
-        display.append(f"--- insert comment for frame {number} ---")
-        for i, line in enumerate(edit_lines):
-            prefix = "> " if i == line_idx else "  "
-            display.append(prefix + line)
-        display.append("")
-        display.append(
-            status
-            or "Enter=done (y/n)  Shift+Enter/Ctrl+J=newline  Esc=cancel"
-        )
-        draw_pane(stdscr, display)
 
     render()
     prev_ch: int | None = None
@@ -346,7 +433,7 @@ def insert_comment_edit(
         if ch == 27:
             return None
 
-        if is_shift_enter(ch, prev_ch) or ch == ord("\j"):
+        if is_shift_enter(ch, prev_ch) or ch == 15:  # Ctrl+O newline
             cur = edit_lines[line_idx]
             before, after = cur[:col], cur[col:]
             edit_lines[line_idx] = before
@@ -438,6 +525,7 @@ def run_ui(
     base_comment: str,
     frame_comments: dict[int, str],
 ) -> tuple[str, dict[int, str], bool]:
+    init_curses_styles()
     curses.curs_set(0)
     stdscr.keypad(True)
 
@@ -451,14 +539,12 @@ def run_ui(
             status = f"find: {find_buffer}_  (Enter=go, Esc=cancel)"
         else:
             status = help_scroll
-        draw_pane(
+        render_frame_view(
             stdscr,
-            build_display_lines(
-                frames,
-                current_idx,
-                frame_comments=frame_comments,
-                extra_status=status,
-            ),
+            frames,
+            current_idx,
+            frame_comments=frame_comments,
+            extra_status=status,
         )
         ch = stdscr.getch()
 

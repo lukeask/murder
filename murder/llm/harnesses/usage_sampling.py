@@ -93,24 +93,17 @@ def insert_harness_usage_snapshot(db: sqlite3.Connection, status: HarnessUsageSt
     )
 
 
-async def _ensure_tmux_slash_session(
+async def _start_tmux_slash_session(
     ctx: UsageSamplingContext,
     kind: str,
     startup_model: str | None,
 ) -> HarnessSession | None:
     name = format_session_name(ctx, "usage", f"_{kind}")
     adapter = get_harness(kind, startup_model=startup_model)
-
-    if await tmux.session_exists(name):
-        hs = adapter.attach(name, ctx.repo_root)
-        ready = await hs.wait_ready(timeout_s=90.0)
-        if ready.ok:
-            idle = await hs.wait_idle(timeout_s=30.0)
-            if idle.ok:
-                return hs
-        with contextlib.suppress(tmux.TmuxError):
-            await tmux.kill_session(name)
-
+    # Usage sampling is one-shot on purpose: a fresh session avoids stale
+    # slash-command overlays and harnesses that degrade after long runtimes.
+    with contextlib.suppress(tmux.TmuxError):
+        await tmux.kill_session(name)
     hs = adapter.attach(name, ctx.repo_root)
     spec = HarnessStartSpec(cwd=ctx.repo_root, startup_model=startup_model)
     started = await hs.start(spec)
@@ -120,7 +113,7 @@ async def _ensure_tmux_slash_session(
 
 
 async def sample_harness_usages(ctx: UsageSamplingContext) -> tuple[int, int]:
-    """Start or reuse usage probe sessions, collect usage, persist snapshots."""
+    """Collect harness usage snapshots, using fresh probe sessions when needed."""
     db = ctx.db
     if db is None:
         return 0, 0
@@ -146,18 +139,20 @@ async def sample_harness_usages(ctx: UsageSamplingContext) -> tuple[int, int]:
             continue
 
         if mode == "tmux_slash":
-            hs = await _ensure_tmux_slash_session(ctx, kind, model)
+            hs = await _start_tmux_slash_session(ctx, kind, model)
             if hs is None:
                 failures += 1
                 continue
-            result = await hs.collect_usage_status()
-            if not result.ok or result.data is None:
+            try:
+                result = await hs.collect_usage_status()
+                if not result.ok or result.data is None:
+                    failures += 1
+                    continue
+                insert_harness_usage_snapshot(db, result.data)
+                stored += 1
+            finally:
                 with contextlib.suppress(tmux.TmuxError):
                     await tmux.kill_session(hs.session)
-                failures += 1
-                continue
-            insert_harness_usage_snapshot(db, result.data)
-            stored += 1
 
     return stored, failures
 

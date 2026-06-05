@@ -1,0 +1,22 @@
+# source: tools/testing/recordings/20260523-215258/frames.jsonl frame 32
+# terminal width ~89 cols
+
+user@machine:~/Documents/code/murder $ claude
+ ▐▛███▜▌   Claude Code v2.1.150
+▝▜█████▛▘  Sonnet 4.6 with high effort · Claude Pro
+  ▘▘ ▝▝    ~/Documents/code/murder
+
+❯ model sonnet
+  ⎿  You've hit your session limit · resets 9:10pm (America/New_York)
+
+✻ Worked for 0s
+
+❯ /rate-limit-options
+
+─────────────────────────────────────────────────────────────────────────────────────────────
+  What do you want to do?
+
+  ❯ 1. Stop and wait for limit to reset
+    2. Upgrade your plan
+
+  Enter to confirm · Esc to cancel

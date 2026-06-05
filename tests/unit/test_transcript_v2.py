@@ -5,9 +5,8 @@ DISEMBODIED TESTS — the parser they pin does not exist yet.
 ================================================================================
 These tests are written *before* the implementation, against the ground-truth
 fixtures in ``tests/fixtures/transcripts/`` (see that dir's ``SCHEMA.md``). They
-describe the contract the v2 rewrite must satisfy and will replace the legacy
-flat ``(role, text)`` model in ``murder/llm/harnesses/transcripts.py`` /
-``tests/unit/test_harness_transcripts.py``.
+describe the contract the v2 rewrite must satisfy and replaced the legacy
+flat ``(role, text)`` model in ``murder/llm/harnesses/transcripts.py``.
 
 Until ``murder.llm.harnesses.transcript_v2`` lands, the whole module SKIPS (via the
 ``importorskip`` below) so the suite stays green. The plan that tracks the
@@ -56,6 +55,8 @@ _CHROME_NEVER = [
     "Tip:",
     "tokens",
     "shift+tab to cycle",
+    "uncached",
+    "/clear to start fresh",
     "Find and fix a bug in @filename",
 ]
 
@@ -67,6 +68,15 @@ def _frames(harness: str) -> list[str]:
 
 def _expected(harness: str) -> dict:
     return json.loads((_FIXTURES / harness / "expected.json").read_text(encoding="utf-8"))
+
+
+def _scenario_frames(name: str) -> list[str]:
+    fdir = _FIXTURES / name / "frames"
+    return [p.read_text(encoding="utf-8") for p in sorted(fdir.glob("*.txt"))]
+
+
+def _scenario_expected(name: str) -> dict:
+    return json.loads((_FIXTURES / name / "expected.json").read_text(encoding="utf-8"))
 
 
 def _parse(harness: str) -> dict:
@@ -120,6 +130,25 @@ def test_no_chrome_leaks_into_any_segment(harness):
         assert needle not in blob, f"chrome leaked into parse: {needle!r}"
 
 
+def test_cc_uncached_notice_suppressed_and_idle():
+    """CC status-bar uncached-tokens notice (recording 20260604-214229) is chrome only."""
+    fdir = _FIXTURES / "cc_uncached" / "frames"
+    frames = [p.read_text(encoding="utf-8") for p in sorted(fdir.glob("*.txt"))]
+    assert any("uncached" in frame for frame in frames), "fixture must include uncached notice"
+    assert any("/clear to start fresh" in frame for frame in frames), "fixture must include idle chrome"
+
+    acc = transcript_v2.TranscriptAccumulator("claude_code")
+    for frame in frames:
+        acc.feed(frame)
+        doc = acc.to_dict()
+        blob = json.dumps(doc, ensure_ascii=False)
+        assert "uncached" not in blob
+        assert "/clear to start fresh" not in blob
+        assert doc["state"] == "awaiting_input"
+
+    assert acc.to_dict() == transcript_v2.parse_frames("claude_code", frames)
+
+
 def test_cc_unsent_live_input_is_not_a_turn():
     """The final CC frame shows ``❯ yeah, sketch the diff3…`` then ``❯ d`` being
     typed — both are live input that was never submitted, so neither may appear
@@ -157,8 +186,14 @@ def test_codex_has_single_user_turn():
 def test_final_blocks_carry_elapsed(harness):
     finals = [s for s in _segs(_parse(harness)) if s["type"] == "assistant" and s["phase"] == "final"]
     assert finals, "expected at least one final assistant block"
-    # the terminal final of each turn carries the completion-marker duration
-    assert any(f.get("elapsed") for f in finals)
+    # The terminal final of a turn carries the completion-marker duration *when
+    # the pane rendered one*. CC shows `✻ Worked/Baked for …` markers; the codex
+    # capture has NO `─ Worked for … ─` marker anywhere (verified by grep), so
+    # its single final closes at idle with elapsed=None — see
+    # test_codex_one_final_at_end. The earlier fixture hardcoded "13m 06s" for
+    # codex; that value is not derivable from the frames.
+    if harness == "cc":
+        assert any(f.get("elapsed") for f in finals)
 
 
 @pytest.mark.parametrize("harness", _HARNESSES)
@@ -172,7 +207,15 @@ def test_codex_one_final_at_end():
     segs = _segs(_parse("codex"))
     finals = [i for i, s in enumerate(segs) if s["type"] == "assistant" and s["phase"] == "final"]
     assert len(finals) == 1
-    assert segs[finals[0]]["elapsed"] == "13m 06s"
+    # The codex capture contains no `─ Worked for … ─` completion marker (verified
+    # by grep over codex/frames/*.txt), so elapsed is None. The turn is closed
+    # structurally by the idle input placeholder at the bottom of the pane. The
+    # prior fixture's "13m 06s" was fabricated and is not present in any frame.
+    assert segs[finals[0]]["elapsed"] is None
+    # It is the last assistant block of the transcript.
+    assert finals[0] == max(
+        i for i, s in enumerate(segs) if s["type"] == "assistant"
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -255,3 +298,38 @@ def test_incremental_feed_equals_batch_parse(harness):
     for frame in _frames(harness):
         acc.feed(frame)
     assert acc.to_dict() == _parse(harness)
+
+
+def test_cc_choice_prompt_unanswered_fixture_matches_expected():
+    doc = transcript_v2.parse_frames("claude_code", _scenario_frames("cc_mc_awaiting_approval"))
+    assert doc == _scenario_expected("cc_mc_awaiting_approval")
+
+
+def test_cc_choice_prompt_answered_fixture_matches_expected():
+    doc = transcript_v2.parse_frames("claude_code", _scenario_frames("cc_mc_answered"))
+    assert doc == _scenario_expected("cc_mc_answered")
+
+
+def test_cc_choice_prompt_cursor_motion_updates_in_place():
+    acc = transcript_v2.TranscriptAccumulator("claude_code")
+    frames = _scenario_frames("cc_mc_answered")
+    acc.feed(frames[0])
+    first = acc.to_dict()
+    acc.feed(frames[1])
+    second = acc.to_dict()
+    assert len(first["segments"]) == len(second["segments"]) == 2
+    assert [segment["type"] for segment in second["segments"]].count("choice_prompt") == 1
+    assert second["segments"][-1]["answered"] is False
+    assert first["segments"][-1]["selected"] == 1
+    assert second["segments"][-1]["selected"] == 6
+
+
+def test_cc_choice_prompt_resolution_marks_answered_with_selected_option():
+    acc = transcript_v2.TranscriptAccumulator("claude_code")
+    for frame in _scenario_frames("cc_mc_answered"):
+        acc.feed(frame)
+    doc = acc.to_dict()
+    choice = next(segment for segment in doc["segments"] if segment["type"] == "choice_prompt")
+    assert doc["state"] == "awaiting_input"
+    assert choice["answered"] is True
+    assert choice["chosen"] == 6

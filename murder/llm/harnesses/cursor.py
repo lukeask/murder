@@ -83,6 +83,7 @@ _CURSOR_PLACEHOLDER_RE = re.compile(
     r"^\s*→\s*(?:Add a follow-up|Plan,\s*search,\s*build anything)\b",
     re.IGNORECASE,
 )
+_CURSOR_INPUT_RE = re.compile(r"^\s*→\s*\S", re.IGNORECASE | re.MULTILINE)
 _CURSOR_CHROME_RE = re.compile(
     r"""
     ^\s*(?:
@@ -221,7 +222,7 @@ class CursorAdapter(HarnessAdapter):
         tail = _tail(clean)
         if _TRUST_PROMPT_RE.search(tail):
             return False
-        return bool(_IDLE_PLACEHOLDER_RE.search(tail))
+        return bool(_IDLE_PLACEHOLDER_RE.search(tail) or _CURSOR_INPUT_RE.search(tail))
 
     def is_idle(self, pane_text: str) -> bool:
         """True iff input box shows a placeholder AND no busy marker is live."""
@@ -229,7 +230,7 @@ class CursorAdapter(HarnessAdapter):
         tail = _tail(clean)
         if _BUSY_INPUT_HINT_RE.search(tail) or _BUSY_SPINNER_RE.search(tail):
             return False
-        return bool(_IDLE_PLACEHOLDER_RE.search(tail))
+        return bool(_IDLE_PLACEHOLDER_RE.search(tail) or _CURSOR_INPUT_RE.search(tail))
 
     def is_busy(self, pane_text: str) -> bool:
         clean = strip_ansi(pane_text)

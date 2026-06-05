@@ -1,0 +1,51 @@
+{
+  "harness": "claude_code",
+  "state": "awaiting_input",
+  "condensed": null,
+  "segments": [
+    {
+      "type": "user",
+      "text": "can you please do the thing where you present me with some options that I can use number keys to select between for a test?"
+    },
+    {
+      "type": "choice_prompt",
+      "question": "Which option do you want to pick?",
+      "options": [
+        {
+          "number": 1,
+          "label": "Option A",
+          "description": "The first test option"
+        },
+        {
+          "number": 2,
+          "label": "Option B",
+          "description": "The second test option"
+        },
+        {
+          "number": 3,
+          "label": "Option C",
+          "description": "The third test option"
+        },
+        {
+          "number": 4,
+          "label": "Option D",
+          "description": "The fourth test option"
+        },
+        {
+          "number": 5,
+          "label": "Type something.",
+          "description": null
+        },
+        {
+          "number": 6,
+          "label": "Chat about this",
+          "description": null
+        }
+      ],
+      "footer": "Enter to select · ↑/↓ to navigate · Esc to cancel",
+      "selected": 6,
+      "answered": true,
+      "chosen": 6
+    }
+  ]
+}

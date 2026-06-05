@@ -173,9 +173,10 @@ class TestCodexAdapter:
         # Banner "OpenAI Codex" present immediately
         assert self.cx.is_ready(CODEX_STARTUP) is True
 
-    def test_startup_pane_is_idle(self):
-        # The › prompt is visible; "Starting MCP servers" line doesn't match _BUSY_RE
-        assert self.cx.is_idle(CODEX_STARTUP) is True
+    def test_startup_pane_not_idle_while_mcp_servers_start(self):
+        # "esc to interrupt" means Codex is still doing startup work even though
+        # the prompt chrome is already visible.
+        assert self.cx.is_idle(CODEX_STARTUP) is False
 
     def test_startup_cmd_passes_requested_model(self):
         cmd = CodexAdapter(startup_model="gpt-5.4-mini").startup_cmd(Path("/tmp/repo"))

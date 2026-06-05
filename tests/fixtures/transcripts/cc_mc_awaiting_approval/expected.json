@@ -1,0 +1,27 @@
+{
+  "harness": "claude_code",
+  "state": "awaiting_approval",
+  "condensed": null,
+  "segments": [
+    {
+      "type": "choice_prompt",
+      "question": "Security guide",
+      "options": [
+        {
+          "number": 1,
+          "label": "Yes, I trust this folder",
+          "description": null
+        },
+        {
+          "number": 2,
+          "label": "No, exit",
+          "description": null
+        }
+      ],
+      "footer": "Enter to confirm · Esc to cancel",
+      "selected": 1,
+      "answered": false,
+      "chosen": null
+    }
+  ]
+}
