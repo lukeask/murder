@@ -1,30 +1,17 @@
-"""Ground-truth tests for the NEW (v2) harness transcript parsing stack.
+"""Ground-truth tests for the harness transcript parsing stack.
 
-================================================================================
-DISEMBODIED TESTS — the parser they pin does not exist yet.
-================================================================================
-These tests are written *before* the implementation, against the ground-truth
-fixtures in ``tests/fixtures/transcripts/`` (see that dir's ``SCHEMA.md``). They
-describe the contract the v2 rewrite must satisfy and replaced the legacy
-flat ``(role, text)`` model in ``murder/llm/harnesses/transcripts.py``.
+Assumed API:
 
-Until ``murder.llm.harnesses.transcript_v2`` lands, the whole module SKIPS (via the
-``importorskip`` below) so the suite stays green. The plan that tracks the
-rewrite is ``.murder/plans/plan-transcript-parser-v2.md``.
-
-Assumed v2 API (this is the seam the rewrite must expose; rename here + in the
-plan if the implementer chooses different names):
-
-    from murder.llm.harnesses import transcript_v2
+    import murder.llm.harnesses.transcripts as transcripts
 
     # stateful, appending: feed pane captures in order, read the accumulated doc
-    acc = transcript_v2.TranscriptAccumulator(harness="claude_code")
+    acc = transcripts.TranscriptAccumulator(harness="claude_code")
     for frame in frames:
         acc.feed(frame)
     doc = acc.to_dict()        # -> TranscriptDoc dict matching SCHEMA.md
 
     # convenience: feed a whole sequence at once
-    doc = transcript_v2.parse_frames("claude_code", frames)
+    doc = transcripts.parse_frames("claude_code", frames)
 
 ``doc`` is the discriminated-union document defined in SCHEMA.md:
 ``{"harness","state","condensed","segments":[...]}``.
@@ -37,10 +24,7 @@ from pathlib import Path
 
 import pytest
 
-transcript_v2 = pytest.importorskip(
-    "murder.llm.harnesses.transcript_v2",
-    reason="parser v2 not implemented yet — disembodied ground-truth tests",
-)
+import murder.llm.harnesses.transcripts as transcripts
 
 _FIXTURES = Path(__file__).parent.parent / "fixtures" / "transcripts"
 _HARNESSES = ["cc", "codex", "cursor", "pi", "antigravity"]
@@ -88,9 +72,7 @@ def _scenario_expected(name: str) -> dict:
 
 
 def _parse(harness: str) -> dict:
-    if not hasattr(transcript_v2, "parse_frames"):
-        pytest.skip("transcript_v2.parse_frames not implemented yet")
-    return transcript_v2.parse_frames(_HARNESS_KIND[harness], _frames(harness))
+    return transcripts.parse_frames(_HARNESS_KIND[harness], _frames(harness))
 
 
 def _segs(doc: dict) -> list[dict]:
@@ -145,7 +127,7 @@ def test_cc_uncached_notice_suppressed_and_idle():
     assert any("uncached" in frame for frame in frames), "fixture must include uncached notice"
     assert any("/clear to start fresh" in frame for frame in frames), "fixture must include idle chrome"
 
-    acc = transcript_v2.TranscriptAccumulator("claude_code")
+    acc = transcripts.TranscriptAccumulator("claude_code")
     for frame in frames:
         acc.feed(frame)
         doc = acc.to_dict()
@@ -154,7 +136,7 @@ def test_cc_uncached_notice_suppressed_and_idle():
         assert "/clear to start fresh" not in blob
         assert doc["state"] == "awaiting_input"
 
-    assert acc.to_dict() == transcript_v2.parse_frames("claude_code", frames)
+    assert acc.to_dict() == transcripts.parse_frames("claude_code", frames)
 
 
 def test_cc_unsent_live_input_is_not_a_turn():
@@ -274,9 +256,7 @@ def test_codex_emits_two_plan_updates_last_all_done():
 # Appending / statefulness — the core reason the parser is frame-sequence based.
 # --------------------------------------------------------------------------- #
 def _accumulator(harness: str):
-    if not hasattr(transcript_v2, "TranscriptAccumulator"):
-        pytest.skip("transcript_v2.TranscriptAccumulator not implemented yet")
-    return transcript_v2.TranscriptAccumulator(_HARNESS_KIND[harness])
+    return transcripts.TranscriptAccumulator(_HARNESS_KIND[harness])
 
 
 @pytest.mark.parametrize("harness", _HARNESSES)
@@ -309,17 +289,17 @@ def test_incremental_feed_equals_batch_parse(harness):
 
 
 def test_cc_choice_prompt_unanswered_fixture_matches_expected():
-    doc = transcript_v2.parse_frames("claude_code", _scenario_frames("cc_mc_awaiting_approval"))
+    doc = transcripts.parse_frames("claude_code", _scenario_frames("cc_mc_awaiting_approval"))
     assert doc == _scenario_expected("cc_mc_awaiting_approval")
 
 
 def test_cc_choice_prompt_answered_fixture_matches_expected():
-    doc = transcript_v2.parse_frames("claude_code", _scenario_frames("cc_mc_answered"))
+    doc = transcripts.parse_frames("claude_code", _scenario_frames("cc_mc_answered"))
     assert doc == _scenario_expected("cc_mc_answered")
 
 
 def test_cc_choice_prompt_cursor_motion_updates_in_place():
-    acc = transcript_v2.TranscriptAccumulator("claude_code")
+    acc = transcripts.TranscriptAccumulator("claude_code")
     frames = _scenario_frames("cc_mc_answered")
     acc.feed(frames[0])
     first = acc.to_dict()
@@ -333,7 +313,7 @@ def test_cc_choice_prompt_cursor_motion_updates_in_place():
 
 
 def test_cc_choice_prompt_resolution_marks_answered_with_selected_option():
-    acc = transcript_v2.TranscriptAccumulator("claude_code")
+    acc = transcripts.TranscriptAccumulator("claude_code")
     for frame in _scenario_frames("cc_mc_answered"):
         acc.feed(frame)
     doc = acc.to_dict()
@@ -451,10 +431,8 @@ def test_antigravity_no_chrome_in_segments():
 # --------------------------------------------------------------------------- #
 # Injected system prompt: murder sends its crow system prompt as the session's
 # first user message. Markerless harnesses (cursor, pi) echo it as a user turn
-# they never answer; left in place it inverts every later role (the bug in
-# .murder/notes/cursor.md). Because murder owns the exact text, the parser drops
-# the matching leading blocks. (The recorded cursor/pi fixtures predate prompt
-# injection, so this scenario is built inline.)
+# they never answer; left in place it inverts every later role. Because murder
+# owns the exact text, the parser drops the matching leading blocks.
 # --------------------------------------------------------------------------- #
 _COLLAB_SYSTEM_PROMPT = (
     "You are the user's general-purpose helper inside the murder TUI. Your cwd "
@@ -471,13 +449,7 @@ _COLLAB_SYSTEM_PROMPT = (
 
 
 def _cursor_frame_with_system_prompt() -> str:
-    """A cursor pane where the system prompt was echoed as the first user turn.
-
-    The three system-prompt paragraphs render as separate (blank-line-separated)
-    user blocks ahead of the real conversation ``test`` → reply, mirroring
-    .murder/notes/cursor.md. Content lines are indented two spaces like cursor's
-    real scrollback; the input frame at the bottom keeps the pane idle.
-    """
+    """A cursor pane where the system prompt was echoed as the first user turn."""
     body_paragraphs = "\n\n".join(
         f"  {para}" for para in _COLLAB_SYSTEM_PROMPT.split("\n\n")
     )
@@ -504,7 +476,7 @@ def _cursor_frame_with_system_prompt() -> str:
 
 def test_cursor_system_prompt_stripped_when_supplied():
     frame = _cursor_frame_with_system_prompt()
-    doc = transcript_v2.parse_frames(
+    doc = transcripts.parse_frames(
         "cursor", [frame], system_prompt=_COLLAB_SYSTEM_PROMPT
     )
     # The injected prompt is gone; the real conversation parses with correct roles.
@@ -527,7 +499,7 @@ def test_cursor_system_prompt_inverts_roles_without_it():
     mislabels the prompt's paragraphs as a user/assistant mix (and inverts the
     real turns) — exactly the bug the fix removes."""
     frame = _cursor_frame_with_system_prompt()
-    doc = transcript_v2.parse_frames("cursor", [frame])
+    doc = transcripts.parse_frames("cursor", [frame])
     users = [s["text"] for s in doc["segments"] if s["type"] == "user"]
     # System-prompt paragraphs leak in, and the real "test" is no longer user[0].
     assert any("generally assist the user" in u for u in users)
@@ -535,7 +507,7 @@ def test_cursor_system_prompt_inverts_roles_without_it():
 
 
 def test_strip_leading_system_prompt_helper():
-    strip = transcript_v2._strip_leading_system_prompt
+    strip = transcripts._strip_leading_system_prompt
     blocks = [
         ["para one"],
         ["para two"],
@@ -558,11 +530,11 @@ def test_strip_leading_system_prompt_helper():
 def test_strip_tolerates_smart_quotes_and_rewrapping():
     """Cursor reflows the echoed prompt and may swap ASCII quotes for typographic
     ones; the match must survive both so it doesn't silently no-op in production."""
-    strip = transcript_v2._strip_leading_system_prompt
+    strip = transcripts._strip_leading_system_prompt
     prompt = "the user's `plan.md` files must start with frontmatter"
     # Echoed back with curly quotes and a mid-paragraph soft wrap (extra block).
     blocks = [
-        ["the user’s `plan.md` files"],
+        ["the user's `plan.md` files"],
         ["must start with frontmatter"],
         ["the real first message"],
     ]
@@ -571,8 +543,7 @@ def test_strip_tolerates_smart_quotes_and_rewrapping():
 
 def test_real_collaborator_brief_is_stripped(tmp_path):
     """Ground the matcher against the *actual* assembled collaborator brief
-    (collaborator.md + any repo context docs), not a hand-copied string — the
-    seam the bug lives at is murder's real prompt vs cursor's echo of it."""
+    (collaborator.md + any repo context docs), not a hand-copied string."""
     from murder.bus import Role
     from murder.llm.harnesses.capabilities import HarnessCapabilities
     from murder.runtime.orchestration.brief import BriefContext, assembler_for
@@ -587,9 +558,6 @@ def test_real_collaborator_brief_is_stripped(tmp_path):
     brief = assembler_for(ctx).build(ctx)
     assert "generally assist the user" in brief  # sanity: real prompt loaded
 
-    # Render the brief as cursor echoes a user turn: 2-space indent, paragraphs
-    # split on blank lines, long lines hard-wrapped at ~70 cols (soft wraps the
-    # parser must re-join).
     import textwrap
 
     echoed_lines: list[str] = []
@@ -612,7 +580,7 @@ def test_real_collaborator_brief_is_stripped(tmp_path):
         "  Composer 2.5 · 7.3%                                    Auto-run\n"
         "  ~/Documents/code/murder · fix/shutdown-flock-race\n"
     )
-    doc = transcript_v2.parse_frames("cursor", [frame], system_prompt=brief)
+    doc = transcripts.parse_frames("cursor", [frame], system_prompt=brief)
     assert doc["segments"] == [
         {"type": "user", "text": "what should we work on?"},
         {
@@ -640,7 +608,7 @@ def test_pi_system_prompt_stripped_when_supplied():
         "\n"
         "> \n"
     )
-    doc = transcript_v2.parse_frames("pi", [frame], system_prompt=prompt)
+    doc = transcripts.parse_frames("pi", [frame], system_prompt=prompt)
     users = [s["text"] for s in doc["segments"] if s["type"] == "user"]
     assert users == ["what should we build?"]
     blob = json.dumps(doc, ensure_ascii=False)

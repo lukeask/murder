@@ -10,7 +10,7 @@ from typing import Any, Protocol
 
 from murder.llm.clients import AutoFreeClient, create_client
 from murder.llm.clients.base import APIClient
-from murder.llm.harnesses.transcript_v2 import SEGMENT_TYPES
+from murder.llm.harnesses.transcripts import SEGMENT_TYPES
 from murder.llm.prompts import load as load_prompt
 
 _log = logging.getLogger(__name__)

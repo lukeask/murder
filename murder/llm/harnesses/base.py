@@ -22,7 +22,7 @@ from murder.llm.harnesses.parsing import (
     strip_ui_chrome,
 )
 from murder.llm.harnesses.capabilities import CapabilityError, HarnessCapabilities, require
-from murder.llm.harnesses.transcript_v2 import SEGMENT_TYPES, parse_frames, supports_harness
+from murder.llm.harnesses.transcripts import SEGMENT_TYPES, parse_frames, supports_harness
 from murder.llm.harnesses.results import SimpleResult, fail_result, ok_result
 
 _log = logging.getLogger(__name__)

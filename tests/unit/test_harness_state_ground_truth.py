@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from murder.llm.harnesses import get as get_adapter
-from murder.llm.harnesses.transcript_v2 import TranscriptAccumulator
+from murder.llm.harnesses.transcripts import TranscriptAccumulator
 
 FIXTURES = Path(__file__).parent.parent / "fixtures" / "harness_state"
 HARNESSES = ("claude_code", "codex", "cursor")
@@ -29,7 +29,7 @@ def test_adapter_idle_matches_annotated_state(harness: str) -> None:
 
 
 @pytest.mark.parametrize("harness", HARNESSES)
-def test_transcript_v2_state_matches_annotated_state(harness: str) -> None:
+def test_transcript_state_matches_annotated_state(harness: str) -> None:
     acc = TranscriptAccumulator(harness)
     for row in _rows(harness):
         acc.feed(row["text"])

@@ -41,7 +41,7 @@ from murder.app.tui.pane_capture import CapturePaneFn, PaneCaptureError
 from murder.app.tui.pane_mirror import PaneMirror
 from murder.app.tui.perf_log import PerfLog
 from murder.llm.harnesses.choice_prompt import ChoiceOption, MultipleChoicePrompt
-from murder.llm.harnesses.transcript_v2 import (
+from murder.llm.harnesses.transcripts import (
     SEGMENT_TYPES,
     TranscriptAccumulator,
     supports_harness,

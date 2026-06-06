@@ -42,8 +42,8 @@ def test_build_summary_prompt_uses_segments_prior_condensed_and_state() -> None:
             },
             {
                 "type": "tool_call",
-                "title": "sed -n transcript_v2.py",
-                "input": "sed -n '1,120p' murder/llm/harnesses/transcript_v2.py",
+                "title": "sed -n transcripts/core.py",
+                "input": "sed -n '1,120p' murder/llm/harnesses/transcripts/core.py",
                 "result": None,
                 "elided": True,
                 "running": False,
@@ -71,7 +71,7 @@ def test_build_summary_prompt_uses_segments_prior_condensed_and_state() -> None:
         "text": "The provider seam should wrap APIClient.",
         "elapsed": "1m 02s",
     }
-    assert payload["segments"][2]["title"] == "sed -n transcript_v2.py"
+    assert payload["segments"][2]["title"] == "sed -n transcripts/core.py"
 
 
 @pytest.mark.asyncio
