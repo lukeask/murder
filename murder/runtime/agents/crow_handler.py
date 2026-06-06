@@ -6,13 +6,15 @@ import asyncio
 import contextlib
 import hashlib
 import json
+import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, cast
 
-from murder.runtime.agents.base import Daemon, AgentRole, AgentStatus
+from murder.runtime.agents.base import Daemon, AgentRole, AgentStatus, TRANSCRIPT_SCROLLBACK_LINES
 from murder.verdict.completion import CompletionCoordinator
 from murder.config import CrowHandlerConfig
 from murder.llm.harnesses.base import HarnessAdapter
+from murder.llm.harnesses.results import SimpleResult
 from murder.runtime.orchestration.outcome import TicketOutcomeService
 from murder.work.tickets.status import TicketStatus
 
@@ -65,6 +67,8 @@ class CrowHandler(Daemon):
         self._done_pane_hash: str | None = None
         self._log_path: Path | None = None
         self._terminal_failure = False
+        self._last_orchestration_t: float = 0.0
+        self._last_orchestration_pane_hash: str | None = None
 
     async def start(self, brief: str, ctx: dict[str, Any]) -> None:
         from murder.runtime.terminal import tmux
@@ -111,7 +115,12 @@ class CrowHandler(Daemon):
                 except Exception as e:
                     await self._handle_tick_failure(e)
                     break
-                await asyncio.sleep(self.config.poll_interval_s)
+                interval = (
+                    self.config.idle_projection_interval_s
+                    if self._idle_cached
+                    else self.config.projection_interval_s
+                )
+                await asyncio.sleep(interval)
         finally:
             if self._terminal_failure:
                 await self._finalize_after_tick_failure()
@@ -129,8 +138,8 @@ class CrowHandler(Daemon):
         with contextlib.suppress(Exception):
             await tmux.kill_session(self.session)
 
-    async def send(self, msg: str) -> None:
-        await self.harness.send_prompt(self.crow_session, msg)
+    async def send(self, msg: str) -> SimpleResult[None]:
+        return await self.harness.send_prompt(self.crow_session, msg)
 
     @property
     def pending_message(self) -> str | None:
@@ -139,7 +148,13 @@ class CrowHandler(Daemon):
     async def queue_message(self, msg: str) -> dict[str, bool]:
         """Deliver now if the crow is idle; otherwise hold until the next idle tick."""
         if self.is_crow_idle():
-            await self.send(msg)
+            result = await self.send(msg)
+            if not result.ok:
+                return {
+                    "queued": False,
+                    "ok": False,
+                    "error": result.message or "crow message delivery failed",
+                }
             return {"queued": False}
         self._queued_message = msg
         return {"queued": True}
@@ -167,42 +182,61 @@ class CrowHandler(Daemon):
 
     async def tick(self) -> None:
         from murder.runtime.terminal import tmux
-        from murder.state.persistence.tickets import get_ticket_status, check_off_item, checklist_progress
-        from murder.state.persistence.agents import heartbeat_agent
-        from murder.bus import (
-            HeartbeatEvent,
-            QuestionEvent,
-            SummaryEvent,
-        )
-        from murder.state.storage.paths import ticket_md
-        from murder.work.tickets import parser as ticket_parser
 
         if self.runtime.db is None or self.runtime.bus is None or self.runtime.run_id is None:
             return
 
-        pane = await tmux.capture_pane(self.crow_session, lines=self.config.context_lines)
+        pane = await tmux.capture_pane(self.crow_session, lines=TRANSCRIPT_SCROLLBACK_LINES)
 
-        # Stop if ticket reached a terminal state via any path (escalation,
-        # manual edit, supervisor recovery) not just our own done detection.
+        # Transcript projection is owned by the CrowAgent's own loop, not here;
+        # this handler only does ticket orchestration off the captured pane.
+
+        # Fast: idle detection + queued message delivery
+        was_idle = self._idle_cached
+        self._idle_cached = self.harness.is_idle(pane)
+        if self._idle_cached and not was_idle and self._queued_message is not None:
+            queued = self._queued_message
+            self._queued_message = None
+            result = await self.send(queued)
+            if not result.ok:
+                self._log(result.message or "queued message delivery failed")
+        self._fire_idle_callbacks_if_idle()
+
+        # Fast: pane hash + done detection (hash-gated to fire once per done state)
+        h = hashlib.sha256(pane.encode("utf-8", errors="replace")).hexdigest()
+        self._last_pane_hash = h
+
+        if self.harness.detect_done(pane) and h != self._done_pane_hash:
+            self._done_pane_hash = h
+            await self._run_completion()
+            return
+
+        # Slow: orchestration (time-gated; asks/notes are not idempotent at 5Hz)
+        now = time.monotonic()
+        if now - self._last_orchestration_t >= self.config.poll_interval_s:
+            self._last_orchestration_t = now
+            await self._orchestration_tick(pane)
+
+    async def _orchestration_tick(self, pane: str) -> None:
+        from murder.state.persistence.tickets import get_ticket_status, check_off_item, checklist_progress
+        from murder.state.persistence.agents import heartbeat_agent
+        from murder.bus import HeartbeatEvent, QuestionEvent, SummaryEvent
+        from murder.state.storage.paths import ticket_md
+        from murder.work.tickets import parser as ticket_parser
+
+        # Stop if ticket reached a terminal state via any path.
         ticket_status = get_ticket_status(self.runtime.db, self.ticket_id)
         if TicketStatus(ticket_status) in (TicketStatus.DONE, TicketStatus.FAILED):
             self._log(f"ticket {self.ticket_id} is {ticket_status} — stopping handler")
             asyncio.create_task(self.stop())
             return
 
-        was_idle = self._idle_cached
-        self._idle_cached = self.harness.is_idle(pane)
-        if self._idle_cached and not was_idle and self._queued_message is not None:
-            queued = self._queued_message
-            self._queued_message = None
-            await self.send(queued)
-        self._fire_idle_callbacks_if_idle()
+        # Tail-slice for non-idempotent detectors: keep the same window as the
+        # original 40-line capture so markers scroll out between orchestration ticks.
+        tail_lines = pane.splitlines()[-self.config.context_lines:]
+        tail = "\n".join(tail_lines)
 
-        h = hashlib.sha256(pane.encode("utf-8", errors="replace")).hexdigest()
-        pane_unchanged = h == self._last_pane_hash
-        self._last_pane_hash = h
-
-        for ask in self.harness.detect_asks(pane):
+        for ask in self.harness.detect_asks(tail):
             await self.runtime.bus.publish(
                 QuestionEvent(
                     run_id=self.runtime.run_id,
@@ -211,7 +245,7 @@ class CrowHandler(Daemon):
                     ticket_id=self.ticket_id,
                     question=ask,
                     crow_session=self.crow_session,
-                    recent_pane=pane[-4000:],
+                    recent_pane=tail,
                 )
             )
 
@@ -219,14 +253,13 @@ class CrowHandler(Daemon):
             check_off_item(self.runtime.db, self.ticket_id, check)
 
         tpath = ticket_md(self.repo_root, self.ticket_id)
-        for note in self.harness.detect_notes(pane):
+        for note in self.harness.detect_notes(tail):
             ticket_parser.append_section(tpath, "Working notes", f">>> NOTE: {note}")
 
-        current_hash = hashlib.sha256(pane.encode("utf-8", errors="replace")).hexdigest()
-        if self.harness.detect_done(pane) and current_hash != self._done_pane_hash:
-            self._done_pane_hash = current_hash
-            await self._run_completion()
-            return
+        # Stuck detection: compare pane hash between consecutive orchestration ticks.
+        h = hashlib.sha256(pane.encode("utf-8", errors="replace")).hexdigest()
+        pane_unchanged = h == self._last_orchestration_pane_hash
+        self._last_orchestration_pane_hash = h
 
         excerpt = self.harness.extract_last_message(pane) or ""
         done_n, total = checklist_progress(self.runtime.db, self.ticket_id)

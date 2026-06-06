@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any
 from murder.runtime.agents.base import HarnessBackedAgent, AgentRole, AgentStatus
 from murder.llm.harnesses.base import HarnessAdapter
 from murder.llm.harnesses.models import HarnessStartSpec
+from murder.llm.harnesses.results import SimpleResult
 from murder.state.storage.paths import agents_dir
 
 if TYPE_CHECKING:
@@ -69,8 +70,15 @@ class PlanningAgent(HarnessBackedAgent):
             raise TimeoutError(start_result.message or "planner harness startup failed")
 
         if brief:
-            await self.harness_session.send_prompt(brief)
+            send_result = await self.harness_session.send_prompt(brief)
+            if not send_result.ok:
+                self.status = AgentStatus.FAILED
+                if self.runtime:
+                    self.runtime.sync_agent(self)
+                raise RuntimeError(send_result.message or "planner startup prompt failed")
         self.status = AgentStatus.RUNNING
+        # Fresh tmux session ⇒ fresh transcript + accumulator scrollback.
+        self.start_conversation()
         if self.runtime:
             self.runtime.sync_agent(self)
             if self.runtime.bus and self.runtime.run_id:
@@ -102,5 +110,5 @@ class PlanningAgent(HarnessBackedAgent):
         if self.runtime:
             self.runtime.sync_agent(self)
 
-    async def send(self, msg: str) -> None:
-        await self.harness_session.send_prompt(msg)
+    async def send(self, msg: str) -> SimpleResult[None]:
+        return await self.harness_session.send_prompt(msg)

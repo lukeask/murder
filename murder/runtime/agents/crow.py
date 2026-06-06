@@ -7,9 +7,9 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from murder.runtime.agents.base import HarnessBackedAgent, AgentRole, AgentStatus
-from murder.state.persistence import conversation
 from murder.llm.harnesses.base import HarnessAdapter
 from murder.llm.harnesses.models import HarnessStartSpec
+from murder.llm.harnesses.results import SimpleResult
 from murder.runtime.terminal import tmux
 
 if TYPE_CHECKING:
@@ -76,9 +76,9 @@ class CrowAgent(HarnessBackedAgent):
                 self.runtime.sync_agent(self)
             raise RuntimeError(paste.message or "failed to deliver startup context")
         self.status = AgentStatus.RUNNING
+        # Fresh tmux session ⇒ fresh transcript + accumulator scrollback.
+        self.start_conversation()
         if self.runtime:
-            if self.runtime.db is not None:
-                conversation.clear(self.runtime.db, self.id)
             self.runtime.sync_agent(self)
             if self.runtime.bus and self.runtime.run_id:
                 await self.runtime.bus.publish(
@@ -97,6 +97,7 @@ class CrowAgent(HarnessBackedAgent):
     async def stop(self, *, failed: bool = False, kill_session: bool = True) -> None:
         from murder.runtime.terminal import tmux
 
+        await self._finalize_conversation_on_stop(kill_session=kill_session, failed=failed)
         if kill_session:
             with contextlib.suppress(Exception):
                 await self.harness_session.interrupt()
@@ -109,5 +110,5 @@ class CrowAgent(HarnessBackedAgent):
         if self.runtime:
             self.runtime.sync_agent(self)
 
-    async def send(self, msg: str) -> None:
-        await self.harness_session.send_prompt(msg)
+    async def send(self, msg: str) -> SimpleResult[None]:
+        return await self.harness_session.send_prompt(msg)

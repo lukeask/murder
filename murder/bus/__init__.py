@@ -19,8 +19,6 @@ import logging
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any
 
-from murder.work.tickets.status import TicketStatus
-
 from murder.bus.protocol import (
     BUS_EVENT_ADAPTER,
     DEFAULT_HEARTBEAT_INTERVAL_S,
@@ -43,6 +41,7 @@ from murder.bus.protocol import (
     ClientKind,
     CommandEvent,
     CommandStatus,
+    ConversationBlockEvent,
     Entity,
     ErrBody,
     ErrMessage,
@@ -68,6 +67,7 @@ from murder.bus.protocol import (
     WakeMessage,
     WireMessage,
 )
+from murder.work.tickets.status import TicketStatus
 
 if TYPE_CHECKING:
     import sqlite3
@@ -104,8 +104,8 @@ class Bus:
     async def publish(self, event: Any) -> None:
         # Persist before fan-out so handler crashes can't lose events.
         if self._db is not None:
-            from murder.state.persistence.event_log import insert_event
             from murder.state.persistence.commands import insert_command_event
+            from murder.state.persistence.event_log import insert_event
 
             payload = event.model_dump(
                 mode="json",
@@ -196,6 +196,7 @@ __all__ = [
     "StatusChangeEvent",
     "ErrorEvent",
     "CommandEvent",
+    "ConversationBlockEvent",
     "StateSnapshotEvent",
     "PresenceEvent",
     "BusEvent",

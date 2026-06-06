@@ -36,8 +36,9 @@ _CC_RUNNING_SUMMARY_RE = re.compile(
     r"|Finding|Found|Fetching|Fetched)\b.*…"
 )
 _CC_SPINNER_RE = re.compile(
-    r"^\s*[·*✻✶✳✽✢⠁-⣿◐◓◑◒]?\s*[A-Z]\w+…+\s*\([^)]*(?:tokens|thought|↑|↓|esc to)"
+    r"^\s*[·*✻✶✳✽✢⠁-⣿◐◓◑◒]?\s*[A-Z]\w+…+\s*(?:\([^)]*(?:tokens|thought|↑|↓|esc to)[^)]*\))?\s*$"
 )
+_CC_SHELL_PROMPT_RE = re.compile(r"^\w+@\w[-\w.]*:[~\w/]*\s*\$\s")
 _CC_AGENT_ROSTER_RE = re.compile(r"^\s*[●◯]\s+(?:main|general-purpose)\b")
 _CC_UNCACHED_NOTICE_RE = re.compile(
     r"(?:~?\d[\d.,]*(?:\s*[kKmM])?(?:\s+tokens)?)\s+uncached\b"
@@ -66,17 +67,20 @@ def _is_live_prompt(lines: list[str], index: int) -> bool:
 
 def _cc_is_chrome(line: str) -> bool:
     stripped = line.strip()
+    prompt_m = _CC_PROMPT_RE.match(line)
     return bool(
         not stripped
         or _RULE_RE.match(line)
         or _CC_SPINNER_RE.match(line)
+        or _CC_SHELL_PROMPT_RE.match(line)
         or _CC_AGENT_ROSTER_RE.match(line)
+        or (prompt_m is not None and not (prompt_m.group(1) or "").strip())
         or "bypass permissions" in line
         or "esc to interrupt" in line
         or "shift+tab to cycle" in line
         or _CC_UNCACHED_NOTICE_RE.search(line)
         or "/clear to start fresh" in line
-        or "↑/↓ to select" in line
+        or "↑/↓ to " in line
         or "to manage" in line
         or "Backgrounded agent" in stripped
         or stripped.startswith("Tip:")
@@ -153,7 +157,11 @@ def _cc_collect_result(lines: list[str], i: int) -> tuple[str | None, bool, int]
     return result, elided, i
 
 
-def parse_lines(lines: list[str], system_prompt: str | None = None) -> list[Segment]:  # noqa: ARG001
+def parse_lines(
+    lines: list[str],
+    system_prompt: str | None = None,  # noqa: ARG001
+    user_texts: list[str] | None = None,  # noqa: ARG001
+) -> list[Segment]:
     segments: list[Segment] = []
     i = 0
     while i < len(lines):
@@ -168,11 +176,25 @@ def parse_lines(lines: list[str], system_prompt: str | None = None) -> list[Segm
         ):
             body = [prompt.group(1)]
             i += 1
-            while i < len(lines) and lines[i].startswith("  ") and not _cc_is_chrome(lines[i]):
+            while i < len(lines):
+                cur = lines[i]
                 if _cc_starts_block(lines, i):
                     break
-                body.append(lines[i])
-                i += 1
+                if cur.startswith("  ") and not _cc_is_chrome(cur):
+                    body.append(cur)
+                    i += 1
+                elif not cur.strip():
+                    # Cross blank lines only when more indented continuation follows
+                    j = i + 1
+                    while j < len(lines) and not lines[j].strip():
+                        j += 1
+                    if j < len(lines) and lines[j].startswith("  ") and not _cc_starts_block(lines, j):
+                        body.append("")
+                        i += 1
+                    else:
+                        break
+                else:
+                    break
             segments.append({"type": "user", "text": _reflow_user(body)})
             continue
 
@@ -276,6 +298,39 @@ def parse_lines(lines: list[str], system_prompt: str | None = None) -> list[Segm
                 if not _cc_is_chrome(lines[i]):
                     body.append(lines[i])
                 elif not lines[i].strip():
+                    body.append("")
+                i += 1
+            text = _reflow_prose(body)
+            if text:
+                segments.append(
+                    {
+                        "type": "assistant",
+                        "phase": "intermediate",
+                        "text": text,
+                        "elapsed": None,
+                    }
+                )
+            continue
+
+        if (
+            not _cc_is_chrome(line)
+            and not (_CC_PROMPT_RE.match(line) and _is_live_prompt(lines, i))
+            and not _CC_CHOICE_OPTION_PROMPT_RE.match(line)
+            and not line.startswith(" ")
+        ):
+            body = [line]
+            i += 1
+            while i < len(lines) and not _cc_starts_block(lines, i):
+                cur = lines[i]
+                if _CC_PROMPT_RE.match(cur) and _is_live_prompt(lines, i):
+                    break
+                if _CC_CHOICE_OPTION_PROMPT_RE.match(cur):
+                    break
+                if cur.startswith(" ") and cur.strip():
+                    break
+                if not _cc_is_chrome(cur):
+                    body.append(cur)
+                elif not cur.strip():
                     body.append("")
                 i += 1
             text = _reflow_prose(body)

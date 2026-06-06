@@ -14,7 +14,7 @@ from murder.llm.harnesses.transcripts.core import (
     _strip_leading_system_prompt,
     parse_frames,
 )
-from murder.llm.harnesses.transcripts.registry import supports_harness
+from murder.llm.harnesses.transcripts.registry import supports_harness, wants_ansi
 from murder.llm.harnesses.transcripts.segments import SEGMENT_TYPES, Segment
 from murder.llm.harnesses.transcripts._shared import _dedupe_adjacent, _segment_key
 
@@ -24,6 +24,7 @@ __all__ = [
     "TranscriptAccumulator",
     "parse_frames",
     "supports_harness",
+    "wants_ansi",
     "_merge_segments",
     "_PaneScrollback",
     "_strip_leading_system_prompt",

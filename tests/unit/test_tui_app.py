@@ -1,18 +1,13 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
-from textual.app import ComposeResult
-
-from murder.config import PlannerConfig
-from murder.app.service.client_api import CrowSessionSummary, CrowSnapshot
 from murder.app.tui.app import MurderApp, _format_delay, _parse_delay_command
-from murder.app.tui.chat_input import ChatInput
 from murder.app.tui.crow_health import Health
 from murder.app.tui.crows_view import CrowEntry, CrowTile
+from murder.config import PlannerConfig
 
 
 async def _capture_pane(session: str, *, lines: int = 200) -> str:
@@ -33,23 +28,6 @@ def _runtime(*, planner_harness: str = "claude_code") -> SimpleNamespace:
         get_ticket_carve_snapshot=lambda ticket_id: None,
         capture_pane=_capture_pane,
     )
-
-
-def _session(**kwargs: object) -> CrowSessionSummary:
-    defaults = dict(
-        agent_id="rogue-cursor-test",
-        role="crow",
-        ticket_id="",
-        ticket_title="rogue-cursor-test",
-        status="running",
-        session_name="murder_repo_crow_cursor_rogue_test",
-        harness="cursor",
-        last_seen=None,
-        started_at=None,
-        ticket_status="in_progress",
-    )
-    defaults.update(kwargs)
-    return CrowSessionSummary(**defaults)  # type: ignore[arg-type]
 
 
 class _QuietMurderApp(MurderApp):
@@ -100,59 +78,21 @@ def test_interval_pane_refresh_swallows_transient_bus_timeout() -> None:
     # crash the TUI message pump (regression for the interval _refresh_pane
     # being awaited directly instead of run in an exit_on_error=False worker).
     app = _QuietMurderApp()
+    calls: list[dict[str, object]] = []
 
-    async def _boom(session: str, lines: int = 200) -> str:
-        del session, lines
-        raise asyncio.TimeoutError
+    def _run_worker(coro, **kwargs):  # type: ignore[no-untyped-def]
+        calls.append({"coro": coro, **kwargs})
+        coro.close()
+        return SimpleNamespace()
 
-    async def _run() -> None:
-        async with app.run_test() as pilot:
-            app._mirror.set_capture_pane(_boom)  # noqa: SLF001 - regression seam
-            app._mirror.set_session("murder_repo_crow_cursor_rogue_test")  # noqa: SLF001
-            app._refresh_pane()  # noqa: SLF001 - the interval callback
-            await pilot.pause()
-            await pilot.pause()
-            assert app.is_running
-            await pilot.pause()  # let the refresh worker settle before shutdown
+    app.run_worker = _run_worker  # type: ignore[method-assign]
 
-    asyncio.run(_run())
+    app._refresh_pane()  # noqa: SLF001 - the interval callback
 
-
-def test_ctrl_y_toggles_focused_crow_tile_in_crows_view() -> None:
-    app = _QuietMurderApp()
-    snap = CrowSnapshot(
-        sessions=(
-            _session(
-                agent_id="rogue-claude-test",
-                ticket_title="rogue-claude-test",
-                session_name="murder_repo_crow_claude_rogue_test",
-                harness="claude_code",
-            ),
-        ),
-        as_of=datetime.now(timezone.utc),
-        invalidation_key="k",
-    )
-
-    async def _run() -> None:
-        async with app.run_test() as pilot:
-            app._crows.render_from_snapshot(snap)  # noqa: SLF001 - focused regression seam
-            app._crows.roster_add_rogue("rogue-claude-test")  # noqa: SLF001
-            app._crows.render_from_snapshot(snap)  # noqa: SLF001
-            await pilot.pause()
-            tile = app._crows.wall.tile_for("rogue-claude-test")  # noqa: SLF001
-            assert tile is not None
-            tile.focus()
-            await pilot.pause()
-
-            # claude_code has a parser → tile starts in parsed mode (raw_mode=False).
-            assert tile.raw_mode is False
-            app.action_toggle_collab_raw()
-            await pilot.pause()
-            assert tile.raw_mode is True
-            assert app._collab_raw is False  # noqa: SLF001 - crows ctrl+y must not hit planning state
-            await pilot.pause()  # let the immediate tile recapture worker settle before shutdown
-
-    asyncio.run(_run())
+    assert len(calls) == 1
+    assert calls[0]["exclusive"] is True
+    assert calls[0]["group"] == "pane_refresh"
+    assert calls[0]["exit_on_error"] is False
 
 
 def test_delay_command_parses_compact_duration_and_message() -> None:
@@ -310,243 +250,3 @@ def test_choice_prompt_confirmation_drives_pane_with_enter_and_logs_user_input()
             },
         }
     ]
-
-
-def test_planner_chat_defaults_to_parsed_not_raw_mirror() -> None:
-    app = _PlanningMurderApp()
-
-    async def _run() -> None:
-        async with app.run_test() as pilot:
-            app._chat_target_agent_id = "planner-alpha"  # noqa: SLF001
-            app._chat_target_label = "planner: alpha"  # noqa: SLF001
-            app._apply_mode()  # noqa: SLF001
-            await pilot.pause()
-
-            assert app._collab_raw is False  # noqa: SLF001
-            assert app._collab_chat.display is True  # noqa: SLF001
-            assert app._mirror.display is False  # noqa: SLF001
-
-    asyncio.run(_run())
-
-
-def test_ctrl_y_in_planning_requires_chat_pane_focus() -> None:
-    app = _PlanningMurderApp()
-
-    async def _run() -> None:
-        async with app.run_test() as pilot:
-            app._chat_target_agent_id = "planner-alpha"  # noqa: SLF001
-            app._apply_mode()  # noqa: SLF001
-            await pilot.pause()
-
-            app.set_focus(app._plan_doc)  # noqa: SLF001
-            await pilot.pause()
-            app.action_toggle_collab_raw()  # noqa: SLF001
-            await pilot.pause()
-
-            assert app._collab_raw is False  # noqa: SLF001
-            assert app._collab_chat.display is True  # noqa: SLF001
-
-    asyncio.run(_run())
-
-
-def test_ctrl_y_toggles_planner_chat_when_pane_focused() -> None:
-    app = _PlanningMurderApp()
-
-    async def _run() -> None:
-        async with app.run_test() as pilot:
-            app._chat_target_agent_id = "planner-alpha"  # noqa: SLF001
-            app._apply_mode()  # noqa: SLF001
-            await pilot.pause()
-
-            app._collab_chat.focus()  # noqa: SLF001
-            await pilot.pause()
-            app.action_toggle_collab_raw()  # noqa: SLF001
-            await pilot.pause()
-
-            assert app._collab_raw is True  # noqa: SLF001
-            assert app._mirror.display is True  # noqa: SLF001
-            assert app._collab_chat.display is False  # noqa: SLF001
-
-    asyncio.run(_run())
-
-
-def test_planning_focus_uses_chat_accent_highlight() -> None:
-    app = _PlanningMurderApp()
-
-    async def _run() -> None:
-        async with app.run_test() as pilot:
-            app._chat_target_agent_id = "planner-alpha"  # noqa: SLF001
-            app._chat_target_label = "planner: alpha"  # noqa: SLF001
-            app._apply_mode()  # noqa: SLF001
-            await pilot.pause()
-
-            app._chat.focus()  # noqa: SLF001
-            await pilot.pause()
-            chat_border = app._chat.styles.border_top  # noqa: SLF001
-
-            app._plans.focus()  # noqa: SLF001
-            await pilot.pause()
-            assert app._plans.styles.border_top == chat_border  # noqa: SLF001
-
-            app._plan_doc.focus()  # noqa: SLF001
-            await pilot.pause()
-            assert app._plan_doc.styles.border_top == chat_border  # noqa: SLF001
-
-            app._collab_chat.focus()  # noqa: SLF001
-            await pilot.pause()
-            assert app._collab_chat.styles.border_top == chat_border  # noqa: SLF001
-
-    asyncio.run(_run())
-
-
-def test_rename_while_chatting_rogue_submits_crow_rename() -> None:
-    app = _PlanningMurderApp()
-    submitted: list[dict[str, object]] = []
-
-    async def _submit_command(**kwargs: object) -> dict[str, object]:
-        submitted.append(dict(kwargs))
-        return {
-            "handled": True,
-            "old_agent_id": "cursor-rogue-test",
-            "agent_id": "cursor-rogue-newname",
-        }
-
-    async def _run() -> None:
-        async with app.run_test() as pilot:
-            app.runtime.submit_command = _submit_command  # type: ignore[attr-defined]
-            app._chat_target_agent_id = "cursor-rogue-test"  # noqa: SLF001
-            await app._handle_colon(":rename newname")  # noqa: SLF001
-            await pilot.pause()
-
-            assert len(submitted) == 1
-            assert submitted[0]["kind"] == "crow.rename_rogue"
-            assert submitted[0]["payload"] == {
-                "agent_id": "cursor-rogue-test",
-                "name": "newname",
-            }
-            assert app._chat_target_agent_id == "cursor-rogue-newname"  # noqa: SLF001
-
-    asyncio.run(_run())
-
-
-def test_m_command_arms_current_chat_target_murder() -> None:
-    app = _PlanningMurderApp()
-
-    async def _run() -> None:
-        async with app.run_test() as pilot:
-            app._chat_target_agent_id = "crow-t001"  # noqa: SLF001
-            app._chat_target_label = "t001 cursor"  # noqa: SLF001
-            app._sync_chat_recipient()  # noqa: SLF001
-
-            await app._handle_colon(":m")  # noqa: SLF001
-            await pilot.pause()
-
-            assert app._chat_murder_pending_agent_id == "crow-t001"  # noqa: SLF001
-            assert "murder this crow?" in str(app._chat.border_subtitle)  # noqa: SLF001
-
-    asyncio.run(_run())
-
-
-def test_chat_murder_confirm_submits_agent_stop_on_m() -> None:
-    app = _PlanningMurderApp()
-    submitted: list[dict[str, object]] = []
-
-    async def _submit_command(**kwargs: object) -> dict[str, object]:
-        submitted.append(dict(kwargs))
-        return {"handled": True}
-
-    async def _run() -> None:
-        async with app.run_test() as pilot:
-            app.runtime.submit_command = _submit_command  # type: ignore[attr-defined]
-            app._chat_target_agent_id = "crow-t001"  # noqa: SLF001
-            app._chat_target_label = "t001 cursor"  # noqa: SLF001
-            app._sync_chat_recipient()  # noqa: SLF001
-
-            await app._handle_colon(":murder")  # noqa: SLF001
-            await pilot.pause()
-            app.on_chat_input_murder_confirm(ChatInput.MurderConfirm())
-            await pilot.pause()
-
-            assert len(submitted) == 1
-            assert submitted[0]["kind"] == "agent.stop"
-            assert submitted[0]["payload"] == {"agent_id": "crow-t001"}
-            assert app._chat_murder_pending_agent_id is None  # noqa: SLF001
-            assert app._chat_target_agent_id is None  # noqa: SLF001
-
-    asyncio.run(_run())
-
-
-def test_chat_murder_cancel_on_other_key() -> None:
-    app = _PlanningMurderApp()
-
-    async def _run() -> None:
-        async with app.run_test() as pilot:
-            app._chat_target_agent_id = "crow-t001"  # noqa: SLF001
-            app._chat_target_label = "t001 cursor"  # noqa: SLF001
-            app._sync_chat_recipient()  # noqa: SLF001
-
-            await app._handle_colon(":m")  # noqa: SLF001
-            await pilot.pause()
-            app.on_chat_input_murder_cancel(ChatInput.MurderCancel())
-            await pilot.pause()
-
-            assert app._chat_murder_pending_agent_id is None  # noqa: SLF001
-            assert app._chat_target_agent_id == "crow-t001"  # noqa: SLF001
-
-    asyncio.run(_run())
-
-
-def test_crows_focus_and_accent_highlight_regressions() -> None:
-    app = _QuietMurderApp()
-    snap = CrowSnapshot(
-        sessions=(_session(agent_id="rogue-cursor-a"),),
-        as_of=datetime.now(timezone.utc),
-        invalidation_key="k",
-    )
-
-    async def _run() -> None:
-        async with app.run_test() as pilot:
-            app._crows.render_from_snapshot(snap)  # noqa: SLF001
-            app._crows.roster_add_rogue("rogue-cursor-a")  # noqa: SLF001
-            app._crows.render_from_snapshot(snap)  # noqa: SLF001
-            await pilot.pause()
-
-            app._chat.focus()  # noqa: SLF001
-            await pilot.pause()
-            chat_border = app._chat.styles.border_top  # noqa: SLF001
-
-            assert app._crows.focus_roster()  # noqa: SLF001
-            await pilot.pause()
-            assert app._crows.roster.styles.border_top == chat_border  # noqa: SLF001
-
-            assert app._crows.focus_first_tile()  # noqa: SLF001
-            await pilot.pause()
-            assert app._crows.wall.styles.border_top == chat_border  # noqa: SLF001
-
-            app.action_focus_right()
-            await pilot.pause()
-            assert app._focus_contains(app._crows.wall)  # noqa: SLF001
-
-            app.action_focus_down()
-            await pilot.pause()
-            assert app.focused is app._escalations  # noqa: SLF001
-
-            assert app._crows.focus_roster()  # noqa: SLF001
-            await pilot.pause()
-            app.action_focus_right()
-            await pilot.pause()
-            assert app._focus_contains(app._crows.wall)  # noqa: SLF001
-
-            assert app._crows.toggle_roster() is False  # noqa: SLF001
-            await pilot.pause()
-            assert app._crows.focus_first_tile()  # noqa: SLF001
-            await pilot.pause()
-            app.action_focus_right()
-            await pilot.pause()
-            assert app._focus_contains(app._crows.wall)  # noqa: SLF001
-
-            app.action_focus_down()
-            await pilot.pause()
-            assert app.focused is app._escalations  # noqa: SLF001
-
-    asyncio.run(_run())

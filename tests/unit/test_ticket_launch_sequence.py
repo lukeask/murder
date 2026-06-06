@@ -134,6 +134,26 @@ def test_crow_agent_start_fails_when_brief_paste_fails(
     sync.assert_called()
 
 
+def test_crow_agent_send_propagates_failed_result(monkeypatch: pytest.MonkeyPatch) -> None:
+    agent = CrowAgent(
+        agent_id="crow-t003",
+        ticket_id="t003",
+        session="crow-t003",
+        harness=ClaudeCodeAdapter(),
+        repo_root=Path("/tmp/test-repo"),
+    )
+
+    async def _fail_send(_prompt: str):
+        return fail_result("delivery failed")
+
+    monkeypatch.setattr(agent.harness_session, "send_prompt", _fail_send)
+
+    result = asyncio.run(agent.send("hello"))
+
+    assert not result.ok
+    assert result.message == "delivery failed"
+
+
 # ── 7.4 — CC trust dismissed before /model ───────────────────────────────────
 
 

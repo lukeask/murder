@@ -37,6 +37,7 @@ from murder.llm.harnesses.versioning import HarnessVersionRegistry
 from murder.app.service.document_access import DocumentAccess
 from murder.app.service.filesystem_sync import FilesystemSyncSupervisor
 from murder.app.service.recovery import reconcile_agents_vs_tmux
+from murder.state.persistence.conversation import mark_stale_conversations
 from murder.app.service.runtime_lifecycle import shutdown_live_agents
 from murder.state.storage.filesystem import acquire_flock, release_flock
 from murder.state.storage.paths import db_path, lock_path
@@ -96,6 +97,11 @@ class Runtime:
         report = reconcile_agents_vs_tmux(self.db, live_sessions)
         if report:
             logging.getLogger(__name__).info("startup reconcile: %s", report.summary())
+        stale_count = mark_stale_conversations(self.db)
+        if stale_count:
+            logging.getLogger(__name__).info(
+                "startup: marked %d in_progress conversation(s) stale", stale_count
+            )
         self.run_id = allocate_run_id(self.repo_root)
         snap = json.dumps(self.config.model_dump(mode="json"), default=str)
         _db_insert_run(self.db, self.run_id, snap)

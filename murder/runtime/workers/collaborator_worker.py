@@ -54,7 +54,24 @@ class CollaboratorWorker(Worker):
             agent = self._get_agent(agent_id)
             if agent is None:
                 raise RuntimeError(f"collaborator agent not found after ensure: {agent_id}")
-            await agent.send(text)
+            send_result = await agent.send(text)
+            if send_result is not None and getattr(send_result, "ok", True) is False:
+                message = (
+                    getattr(send_result, "message", None)
+                    or "collaborator message delivery failed"
+                )
+                if hasattr(agent, "record_notice_block_event"):
+                    await agent.record_notice_block_event(
+                        f"Collaborator message delivery failed: {message}",
+                        severity="error",
+                    )
+                raise RuntimeError(message)
+            # Ground truth: record the exact text the user sent as an authoritative
+            # user block once the harness accepts delivery.
+            if hasattr(agent, "record_user_block_event"):
+                await agent.record_user_block_event(text)
+            else:
+                agent.record_user_block(text)
             return {"handled": True, "agent_id": agent_id}
         if kind == "collaborator.swap_model":
             if self._swap_model is None:

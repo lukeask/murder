@@ -36,7 +36,11 @@ def _pi_is_transcript_chrome(line: str) -> bool:
     return False
 
 
-def parse_lines(lines: list[str], system_prompt: str | None = None) -> list[Segment]:
+def parse_lines(
+    lines: list[str],
+    system_prompt: str | None = None,
+    user_texts: list[str] | None = None,  # noqa: ARG001
+) -> list[Segment]:
     """Parse pi scrollback into segments.
 
     Pi uses no syntactic user/assistant markers. Submitted content in

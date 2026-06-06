@@ -152,7 +152,11 @@ def _parse_codex_tool(label: str, lines: list[str], i: int) -> tuple[Segment, in
     }, i
 
 
-def parse_lines(lines: list[str], system_prompt: str | None = None) -> list[Segment]:  # noqa: ARG001
+def parse_lines(
+    lines: list[str],
+    system_prompt: str | None = None,  # noqa: ARG001
+    user_texts: list[str] | None = None,  # noqa: ARG001
+) -> list[Segment]:
     segments: list[Segment] = []
     i = 0
     while i < len(lines):

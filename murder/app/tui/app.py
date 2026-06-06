@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from textual import events
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Container, Horizontal, Vertical
@@ -35,9 +36,17 @@ from murder.app.tui.chat_target_cycle import (
     cycle_chat_target,
     planning_chat_targets,
 )
+from murder.app.tui.conversations import ConversationProjection
 from murder.app.tui.controllers import DispatchController, TuiContext
 from murder.app.tui.crow_health import Health
-from murder.app.tui.crows_view import CrowEntry, CrowsView, CrowTile, crow_title_label
+from murder.app.tui.crows_view import (
+    CrowEntry,
+    CrowsView,
+    CrowTile,
+    crow_title_label,
+    doc_to_chat_turns,
+    entries_from_snapshot,
+)
 from murder.app.tui.dispatch import DispatchView, ScheduleTicketsTable
 from murder.app.tui.dispatch.calendar import CalendarPanel
 from murder.app.tui.dispatch.gauges import GaugeStrip
@@ -365,7 +374,6 @@ class MurderApp(App[None]):
         self._chat = ChatInput()
         self._spawn_wizard: SpawnWizard | None = None
         self._collab_lock = asyncio.Lock()
-        self._collab_chat_lock = asyncio.Lock()
         self._sidebar_visible = True
         self._escalations_visible = True
         self._collab_raw = False  # ctrl+y: show the raw tmux pane instead of the parsed chat
@@ -384,6 +392,7 @@ class MurderApp(App[None]):
         self._note_capture_draft = ""
         self._chat_input_memory = ""
         self._crow_snapshot = None
+        self._conversations = ConversationProjection()
         self._plan_revision_map: dict[str, int] = {}
         self._plan_content_cache: dict[str, tuple[int, str]] = {}
         self._plan_highlight_timer: object | None = None
@@ -459,6 +468,18 @@ class MurderApp(App[None]):
                 pid=os.getpid(),
             )
         self._refresh_service_views()
+        self.run_worker(
+            self._bootstrap_conversations(),
+            exclusive=True,
+            group="conversation_bootstrap",
+            exit_on_error=False,
+        )
+        self.run_worker(
+            self._subscribe_conversation_blocks(),
+            exclusive=True,
+            group="conversation_events",
+            exit_on_error=False,
+        )
         self.set_focus(self._chat)
         if self.runtime.config.project.name == "TODO_SET_ME":
             self.notify(
@@ -469,6 +490,10 @@ class MurderApp(App[None]):
         interval_s = max(self.runtime.config.tui.refresh_ms, 250) / 1000
         self.set_interval(interval_s, self._refresh_service_views)
         self.set_interval(max(interval_s, 1.0), self._refresh_pane)
+
+    def on_resize(self, event: events.Resize) -> None:
+        del event
+        self._render_planning_chat_from_model()
 
     def on_unmount(self) -> None:
         for task in tuple(self._delayed_chat_tasks):
@@ -618,8 +643,39 @@ class MurderApp(App[None]):
             await self._mirror.refresh_pane()
             if self._view == "crows":
                 await self._crows.refresh_tails()
-            if self._view == "planning" and not self._collab_raw:
-                await self._refresh_planning_chat()
+
+    async def _bootstrap_conversations(self) -> None:
+        snapshot_loader = getattr(self.runtime, "get_conversations_snapshot", None)
+        if snapshot_loader is None:
+            return
+        snapshot = await snapshot_loader()
+        self._conversations.bootstrap(snapshot)
+        self._render_all_conversations()
+
+    async def _subscribe_conversation_blocks(self) -> None:
+        subscribe = getattr(self.runtime, "subscribe_conversation_blocks", None)
+        if subscribe is None:
+            return
+        async for event in subscribe():
+            conversation_id = self._conversations.apply_event(event)
+            if conversation_id is not None:
+                self._render_conversation(conversation_id)
+
+    def _render_all_conversations(self) -> None:
+        docs: dict[str, dict[str, object]] = {}
+        if self._crow_snapshot is not None:
+            for entry in entries_from_snapshot(self._crow_snapshot):
+                doc = self._conversations.doc_for(entry.agent_id)
+                if doc is not None:
+                    docs[entry.agent_id] = doc
+        self._crows.set_conversation_docs(docs)
+        self._render_planning_chat_from_model()
+
+    def _render_conversation(self, conversation_id: str) -> None:
+        doc = self._conversations.doc_for(conversation_id)
+        self._crows.set_conversation_doc(conversation_id, doc)
+        if conversation_id == self._planning_conversation_id():
+            self._render_planning_chat_from_model()
 
     def on_ticket_grid_ticket_selected(self, event: TicketGrid.TicketSelected) -> None:
         self._mirror.set_session(self._crow_session_for_ticket(event.ticket_id))
@@ -858,99 +914,46 @@ class MurderApp(App[None]):
             self._plan_doc.display = False
             self._apply_mode()
 
-    async def _refresh_planning_chat(self) -> None:
-        """Re-parse the active planning chat pane (collaborator or planner).
-
-        Lock-guarded so overlapping refresh-pane ticks don't race two parses
-        onto the same conversation log.
-        """
-        if self._collab_chat_lock.locked():
-            return
-        async with self._collab_chat_lock:
-            with self.perf.span("tui.planning_chat.refresh"):
-                if self._view != "planning":
-                    return
-                plan_name = self._planner_target_name()
-                if plan_name is not None:
-                    await self._refresh_planner_chat(plan_name)
-                else:
-                    await self._refresh_collaborator_chat()
-
-    async def _refresh_collaborator_chat(self) -> None:
-        self._sync_planning_chat_label()
-        result = await self._submit_command(
-            target_worker="collaborator",
-            kind="collaborator.transcript.refresh",
-            payload={},
-            timeout_s=8.0,
-            notify_errors=False,
+    def _planning_conversation_id(self) -> str:
+        plan_name = self._planner_target_name()
+        if plan_name is not None:
+            return f"planner-{plan_name}"
+        return (
+            self._conversations.conversation_id_for_agent_prefix("collaborator")
+            or "collaborator-0"
         )
-        if result is None:
+
+    def _render_planning_chat_from_model(self) -> None:
+        self._sync_planning_chat_label()
+        if self._view != "planning" or self._collab_raw:
             return
-        if not bool(result.get("available")):
-            self._collab_chat.replace_transcript(
-                [],
-                status="(no collaborator yet — type a message to start one)",
-            )
+        conversation_id = self._planning_conversation_id()
+        is_collaborator = self._planner_target_name() is None
+        if self._collab_chat.size.width <= 1:
             return
-        turns = [
-            (str(item.get("role", "")), str(item.get("text", "")))
-            for item in result.get("turns", [])
-            if isinstance(item, dict)
-        ]
+        doc = self._conversations.doc_for(conversation_id)
+        if doc is None:
+            if is_collaborator:
+                self._collab_chat.replace_transcript(
+                    [],
+                    status="(no collaborator yet — type a message to start one)",
+                )
+            else:
+                self._collab_chat.replace_transcript([], status="(no planner session yet)")
+            return
+        turns = doc_to_chat_turns(doc)
         if turns:
             self._collab_chat.set_turns(turns)
             return
-        if bool(result.get("has_parser")):
+        if is_collaborator:
             self._collab_chat.replace_transcript(
                 [],
                 status="(collaborator chat — nothing parsed yet)",
             )
         else:
-            harness_kind = str(result.get("harness_kind", "unknown"))
-            self._collab_chat.replace_transcript(
-                [],
-                status=(
-                    f"(no transcript parser for '{harness_kind}' yet — "
-                    "press ctrl+y for the raw pane)"
-                ),
-            )
-
-    async def _refresh_planner_chat(self, plan_name: str) -> None:
-        self._sync_planning_chat_label()
-        result = await self._submit_command(
-            target_worker="collaborator",
-            kind="collaborator.transcript.refresh",
-            payload={"agent_id": f"planner-{plan_name}"},
-            timeout_s=8.0,
-            notify_errors=False,
-        )
-        if result is None:
-            return
-        if not bool(result.get("available")):
-            self._collab_chat.replace_transcript([], status="(no planner session yet)")
-            return
-        turns = [
-            (str(item.get("role", "")), str(item.get("text", "")))
-            for item in result.get("turns", [])
-            if isinstance(item, dict)
-        ]
-        if turns:
-            self._collab_chat.set_turns(turns)
-            return
-        if bool(result.get("has_parser")):
             self._collab_chat.replace_transcript(
                 [],
                 status="(planner chat — nothing parsed yet)",
-            )
-        else:
-            harness_kind = str(result.get("harness_kind", "unknown"))
-            self._collab_chat.replace_transcript(
-                [],
-                status=(
-                    f"(no transcript parser for '{harness_kind}' yet — "
-                    "press ctrl+y for the raw pane)"
-                ),
             )
 
     def _sync_planning_chat_label(self) -> None:
@@ -1028,7 +1031,7 @@ class MurderApp(App[None]):
             else:
                 self._sync_collaborator_mirror_session()
         if collab_chat_on:
-            self.run_worker(self._refresh_planning_chat(), exclusive=True, group="collab_chat")
+            self._render_planning_chat_from_model()
         self.refresh_bindings()
         if self._view in ("planning", "crows") and not self._is_displayed(self.focused):
             self.set_focus(self._chat)
@@ -1437,8 +1440,10 @@ class MurderApp(App[None]):
             if result is None:
                 return
             self._sync_collaborator_mirror_session()
-            self._collab_chat.add_turn("you", text)
-            self._collab_chat.add_status("collaborator is thinking…")
+            # No optimistic `add_turn("you", text)`: the service recorded the
+            # exact text as a ground-truth user block at the send boundary, so
+            # the next transcript refresh surfaces it authoritatively. The old
+            # optimistic add raced that refresh and could duplicate/misorder.
         self.notify("→ collaborator", timeout=2)
 
     def _schedule_delayed_chat(
@@ -2502,6 +2507,7 @@ class MurderApp(App[None]):
     def _on_settings_closed(self, saved: bool) -> None:
         if not saved:
             return
+        previous_collaborator_harness = self.runtime.config.collaborator.harness
         try:
             self.runtime.config = Config.load(self.runtime.repo_root)
         except Exception as exc:
@@ -2515,7 +2521,39 @@ class MurderApp(App[None]):
             self.theme = self._user_config.tui.theme
         self._header.project = self.runtime.config.project.name
         self._header._update_text()
+        if self.runtime.config.collaborator.harness != previous_collaborator_harness:
+            self.run_worker(
+                self._reconfigure_collaborator_after_settings(),
+                exclusive=True,
+                group="settings",
+            )
         self.notify("Settings saved.", timeout=3)
+
+    async def _reconfigure_collaborator_after_settings(self) -> None:
+        result = await self._submit_command(
+            target_worker="orchestrator",
+            kind="collaborator.reconfigure",
+            payload={},
+            timeout_s=COLLABORATOR_START_TIMEOUT_S,
+            notify_errors=False,
+        )
+        if result is None:
+            self.notify(
+                "Settings saved, but collaborator reconfiguration did not complete.",
+                severity="error",
+                timeout=6,
+            )
+            return
+        if result.get("handled") is False or result.get("error"):
+            self.notify(
+                f"Settings saved, but collaborator reconfiguration failed: {result.get('error')}",
+                severity="error",
+                timeout=8,
+            )
+            return
+        if result.get("changed"):
+            harness = str(result.get("harness") or "new harness")
+            self.notify(f"Collaborator restarted with {harness}.", timeout=4)
 
     async def _submit_command(
         self,

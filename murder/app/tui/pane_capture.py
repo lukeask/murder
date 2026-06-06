@@ -6,6 +6,5 @@ from collections.abc import Awaitable, Callable
 
 CapturePaneFn = Callable[[str, int], Awaitable[str]]
 
-
 class PaneCaptureError(Exception):
     """Pane capture failed or the session is gone."""

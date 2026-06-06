@@ -86,6 +86,22 @@ def test_chat_log_follows_tail_when_already_at_bottom() -> None:
     asyncio.run(_run())
 
 
+def test_chat_log_render_key_tracks_width() -> None:
+    log = ChatLog(agent_label="collaborator")
+
+    async def _run() -> None:
+        app = _ChatApp(log)
+        async with app.run_test() as pilot:
+            log.set_turns([("user", "hello")])
+            await pilot.pause()
+            render_key = log._last_render_key  # noqa: SLF001 - regression guard
+            assert render_key is not None
+            assert render_key[-1] == log.size.width
+            assert render_key[-1] > 1
+
+    asyncio.run(_run())
+
+
 def test_pane_mirror_preserves_manual_scroll_on_refresh() -> None:
     calls = 0
 

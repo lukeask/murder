@@ -68,6 +68,7 @@ async def start_supervisor_workers(
             note_retire=orchestrator.retire_note,
             send_agent_message=orchestrator.send_agent_message,
             send_agent_key=orchestrator.send_agent_key,
+            refresh_agent_transcript=orchestrator.refresh_agent_transcript,
             interrupt_agent=orchestrator.interrupt_agent,
             stop_agent=orchestrator.stop_agent,
             rename_rogue=orchestrator.rename_rogue_agent,
@@ -76,6 +77,7 @@ async def start_supervisor_workers(
             deprecate_plan=orchestrator.deprecate_plan,
             quick_kick_ticket=orchestrator.quick_kick_ticket,
             spawn_rogue=orchestrator.spawn_rogue_command,
+            reconfigure_collaborator=orchestrator.reconfigure_collaborator,
         )
     )
     return supervisor

@@ -62,17 +62,40 @@ def _expected(harness: str) -> dict:
     return json.loads((_FIXTURES / harness / "expected.json").read_text(encoding="utf-8"))
 
 
+def _strip_frame_header(text: str) -> str:
+    """Strip fixture metadata comment lines (# source: ..., # terminal width ...)
+    that the recording tool prepends — these are not pane content."""
+    lines = text.split("\n")
+    while lines and lines[0].startswith("#"):
+        lines.pop(0)
+    return "\n".join(lines)
+
+
 def _scenario_frames(name: str) -> list[str]:
     fdir = _FIXTURES / name / "frames"
-    return [p.read_text(encoding="utf-8") for p in sorted(fdir.glob("*.txt"))]
+    return [_strip_frame_header(p.read_text(encoding="utf-8")) for p in sorted(fdir.glob("*.txt"))]
 
 
 def _scenario_expected(name: str) -> dict:
     return json.loads((_FIXTURES / name / "expected.json").read_text(encoding="utf-8"))
 
 
+# Ground-truth user turns per fixture, supplied to the parser the way the
+# producer does in production (recorded authoritatively at the send boundary).
+# Markerless cursor uses these as anchors to label echoed user content; without
+# them (and without colour escapes in the plain fixtures) it treats every block
+# as assistant.
+_FIXTURE_USER_TEXTS: dict[str, list[str]] = {
+    "cursor": ["test", "test2"],
+}
+
+
 def _parse(harness: str) -> dict:
-    return transcripts.parse_frames(_HARNESS_KIND[harness], _frames(harness))
+    return transcripts.parse_frames(
+        _HARNESS_KIND[harness],
+        _frames(harness),
+        user_texts=_FIXTURE_USER_TEXTS.get(harness),
+    )
 
 
 def _segs(doc: dict) -> list[dict]:
@@ -256,7 +279,11 @@ def test_codex_emits_two_plan_updates_last_all_done():
 # Appending / statefulness — the core reason the parser is frame-sequence based.
 # --------------------------------------------------------------------------- #
 def _accumulator(harness: str):
-    return transcripts.TranscriptAccumulator(_HARNESS_KIND[harness])
+    acc = transcripts.TranscriptAccumulator(_HARNESS_KIND[harness])
+    user_texts = _FIXTURE_USER_TEXTS.get(harness)
+    if user_texts is not None:
+        acc.user_texts = user_texts
+    return acc
 
 
 @pytest.mark.parametrize("harness", _HARNESSES)
@@ -474,14 +501,95 @@ def _cursor_frame_with_system_prompt() -> str:
     )
 
 
-def test_cursor_system_prompt_stripped_when_supplied():
+def test_cc_multiline_brief_captured_as_single_user_turn():
+    """A multi-paragraph collaborator brief sent as ``❯ <text>`` must be parsed
+    as a single user segment, not split into user + phantom assistant turns.
+
+    Regression guard: blank lines between paragraphs of the brief used to stop
+    user-turn consumption, causing subsequent indented paragraphs to fall through
+    to the catch-all and appear as assistant intermediate blocks — which would then
+    survive the project_parsed_doc_with_changes user-strip and show in the chat.
+    """
+    from murder.llm.harnesses.transcripts.grammar import claude_code as cc
+
+    pane_lines = [
+        "❯ You are a collaborator helping plan the feature.",
+        "",
+        "  Please analyze the codebase carefully.",
+        "",
+        "  Focus on the architecture and interfaces.",
+        "",
+        "● Starting the session",
+        "  I'll help you plan this.",
+    ]
+    segs = cc.parse_lines(pane_lines)
+
+    user_segs = [s for s in segs if s["type"] == "user"]
+    assistant_segs = [s for s in segs if s["type"] == "assistant"]
+
+    assert len(user_segs) == 1, f"expected 1 user segment, got {len(user_segs)}: {user_segs}"
+    assert "collaborator" in user_segs[0]["text"]
+    # None of the brief paragraphs should have leaked into assistant segments.
+    for asst in assistant_segs:
+        assert "analyze the codebase" not in asst.get("text", "")
+        assert "architecture and interfaces" not in asst.get("text", "")
+
+
+def _cursor_paint_user_blocks(frame: str, user_texts: list[str]) -> str:
+    """Re-create Cursor's user-input background colour around the given lines.
+
+    Cursor paints submitted user blocks with SGR bg ``48;2;36;36;40``; the
+    plain fixtures dropped it. This wraps the matching content lines so a frame
+    exercises the colour-marker path the way a real ``-e`` capture would.
+    """
+    needles = {t.strip() for t in user_texts}
+    out: list[str] = []
+    for line in frame.splitlines():
+        if line.strip() in needles:
+            out.append(f"\x1b[48;2;36;36;40m{line}\x1b[49m")
+        else:
+            out.append(line)
+    return "\n".join(out)
+
+
+def test_cursor_input_box_continuation_is_chrome():
+    """The live composer can hold wrapped text whose continuation lines carry no
+    ``→`` marker — only the input-box background colour. Those lines must be
+    suppressed as chrome, not leak into the transcript as an assistant turn.
+
+    Regression: a brief left sitting in the input box surfaced its wrapped tail
+    ("...the system is to generally assist...") as a ``collaborator:`` message.
+    """
+    input_bg = "\x1b[48;2;21;21;21m"
+    frame = (
+        "  Understood. I'm your helper.\n"
+        "\n"
+        " ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄\n"
+        f"{input_bg} → You are the user's general-purpose helper. Your role in the\x1b[49m\n"
+        f"{input_bg}   system is to generally assist the user however they ask.\x1b[49m\n"
+        " ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀\n"
+        "  Composer 2.5 · 7.3%                                    Auto-run\n"
+        "  ~/Documents/code/murder · fix/shutdown-flock-race\n"
+    )
+    doc = transcripts.parse_frames("cursor", [frame])
+    blob = json.dumps(doc, ensure_ascii=False)
+    assert "generally assist the user" not in blob
+    assert [s["text"] for s in doc["segments"] if s["type"] == "assistant"] == [
+        "Understood. I'm your helper."
+    ]
+
+
+def test_cursor_system_prompt_dropped_via_anchors():
+    """With murder-owned anchors (system prompt + ground-truth user turn), the
+    echoed prompt and the user echo are labelled ``user`` (dropped downstream),
+    leaving only the genuine assistant turn. They must never surface as
+    assistant chat."""
     frame = _cursor_frame_with_system_prompt()
     doc = transcripts.parse_frames(
-        "cursor", [frame], system_prompt=_COLLAB_SYSTEM_PROMPT
+        "cursor", [frame], system_prompt=_COLLAB_SYSTEM_PROMPT, user_texts=["test"]
     )
-    # The injected prompt is gone; the real conversation parses with correct roles.
-    assert doc["segments"] == [
-        {"type": "user", "text": "test"},
+    kept = [s for s in doc["segments"] if s["type"] != "user"]
+    assert kept == [
         {
             "type": "assistant",
             "phase": "final",
@@ -489,21 +597,34 @@ def test_cursor_system_prompt_stripped_when_supplied():
             "elapsed": None,
         },
     ]
-    blob = json.dumps(doc, ensure_ascii=False)
-    assert "generally assist the user" not in blob
-    assert "Murder keeps state" not in blob
+    # Murder-owned content is present only as user segments, never assistant.
+    asst_blob = json.dumps(kept, ensure_ascii=False)
+    assert "generally assist the user" not in asst_blob
+    assert "Murder keeps state" not in asst_blob
+    assert any(s["type"] == "user" and s["text"] == "test" for s in doc["segments"])
 
 
-def test_cursor_system_prompt_inverts_roles_without_it():
-    """Guards the regression: with no system_prompt, the markerless alternation
-    mislabels the prompt's paragraphs as a user/assistant mix (and inverts the
-    real turns) — exactly the bug the fix removes."""
-    frame = _cursor_frame_with_system_prompt()
+def test_cursor_user_blocks_classified_by_colour_marker():
+    """The primary signal: Cursor colour-codes user-input blocks. With the
+    background-colour escapes preserved, user turns are recognised with no
+    anchors supplied at all — and the system prompt never leaks as assistant."""
+    frame = _cursor_paint_user_blocks(
+        _cursor_frame_with_system_prompt(),
+        [*_COLLAB_SYSTEM_PROMPT.split("\n\n"), "test"],
+    )
+    # Note: no system_prompt, no user_texts — colour alone must carry roles.
     doc = transcripts.parse_frames("cursor", [frame])
-    users = [s["text"] for s in doc["segments"] if s["type"] == "user"]
-    # System-prompt paragraphs leak in, and the real "test" is no longer user[0].
-    assert any("generally assist the user" in u for u in users)
-    assert users[0] != "test"
+    kept = [s for s in doc["segments"] if s["type"] != "user"]
+    assert kept == [
+        {
+            "type": "assistant",
+            "phase": "final",
+            "text": "Here — what do you want to work on?",
+            "elapsed": None,
+        },
+    ]
+    assert any(s["type"] == "user" and s["text"] == "test" for s in doc["segments"])
+    assert "generally assist the user" not in json.dumps(kept, ensure_ascii=False)
 
 
 def test_strip_leading_system_prompt_helper():
@@ -580,9 +701,11 @@ def test_real_collaborator_brief_is_stripped(tmp_path):
         "  Composer 2.5 · 7.3%                                    Auto-run\n"
         "  ~/Documents/code/murder · fix/shutdown-flock-race\n"
     )
-    doc = transcripts.parse_frames("cursor", [frame], system_prompt=brief)
-    assert doc["segments"] == [
-        {"type": "user", "text": "what should we work on?"},
+    doc = transcripts.parse_frames(
+        "cursor", [frame], system_prompt=brief, user_texts=["what should we work on?"]
+    )
+    kept = [s for s in doc["segments"] if s["type"] != "user"]
+    assert kept == [
         {
             "type": "assistant",
             "phase": "final",
@@ -590,6 +713,12 @@ def test_real_collaborator_brief_is_stripped(tmp_path):
             "elapsed": None,
         },
     ]
+    # The real brief is anchored away — no paragraph of it survives as assistant.
+    assert "generally assist the user" not in json.dumps(kept, ensure_ascii=False)
+    assert any(
+        s["type"] == "user" and s["text"] == "what should we work on?"
+        for s in doc["segments"]
+    )
 
 
 def test_pi_system_prompt_stripped_when_supplied():

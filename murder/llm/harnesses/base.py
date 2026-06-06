@@ -197,6 +197,9 @@ class HarnessSession:
         return fail_result(f"Harness not idle in time: session={self.session}")
 
     def _pane_is_awaiting_input(self, pane_text: str) -> bool:
+        input_ready = self.adapter.is_input_ready(pane_text)
+        if input_ready is not None:
+            return input_ready
         if self.adapter.has_transcript_parser():
             return self.adapter.parse_transcript_doc(pane_text).get("state") == "awaiting_input"
         return self.adapter.is_idle(pane_text)
@@ -239,7 +242,12 @@ class HarnessSession:
             input_ready = await self.wait_input_ready(timeout_s=15.0)
             if not input_ready.ok:
                 return input_ready
-        await self.adapter.send_prompt(self.session, prompt)
+        try:
+            delivered = await self.adapter.send_prompt(self.session, prompt)
+        except Exception as e:
+            return fail_result(f"Harness prompt delivery failed: {e}")
+        if not delivered.ok:
+            return delivered
         self._first_send_idle_gate_pending = False
         return ok_result()
 
@@ -351,12 +359,17 @@ class HarnessAdapter(ABC):
     @abstractmethod
     def is_busy(self, pane_text: str) -> bool: ...
 
+    def is_input_ready(self, pane_text: str) -> bool | None:
+        del pane_text
+        return None
+
     async def initialize_defaults(self, session: str, spec: HarnessStartSpec) -> SimpleResult[None]:
         del session, spec
         return ok_result()
 
-    async def send_prompt(self, session: str, prompt: str) -> None:
+    async def send_prompt(self, session: str, prompt: str) -> SimpleResult[None]:
         await tmux.send_keys(session, prompt, literal=True, enter=True)
+        return ok_result()
 
     async def set_model(self, session: str, model: str, *, effort: str | None = None) -> bool:
         del session, model, effort
@@ -433,6 +446,15 @@ class HarnessAdapter(ABC):
         return ok_result(models)
 
     def parse_active_model_state(self, pane_text: str) -> HarnessModelState | None:
+        del pane_text
+        return None
+
+    def graceful_exit_command(self) -> str | None:
+        """Return the command to send for a graceful exit, or None if unsupported."""
+        return None
+
+    def extract_resume_session_id(self, pane_text: str) -> str | None:
+        """Parse the harness's 'to resume this session' output and return the session id."""
         del pane_text
         return None
 

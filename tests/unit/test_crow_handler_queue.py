@@ -10,6 +10,7 @@ import pytest
 
 from murder.runtime.agents.crow_handler import CrowHandler
 from murder.config import CrowHandlerConfig
+from murder.llm.harnesses.results import fail_result
 from murder.llm.harnesses.claude_code import ClaudeCodeAdapter
 from murder.runtime.orchestration.outcome import TicketOutcomeService
 from tests.unit.test_harness_adapters import CC_BUSY, CC_IDLE
@@ -51,6 +52,19 @@ def test_queue_message_sends_immediately_when_idle(handler, fake_tmux):
     assert session_arg == SESSION
     assert text == "nudge"
     assert kw["enter"] is True
+
+
+def test_queue_message_reports_immediate_delivery_failure(handler, fake_tmux, monkeypatch):
+    async def _fail_send(_session: str, _msg: str):
+        return fail_result("send failed")
+
+    monkeypatch.setattr(handler.harness, "send_prompt", _fail_send)
+    handler._idle_cached = True
+
+    result = asyncio.run(handler.queue_message("nudge"))
+
+    assert result == {"queued": False, "ok": False, "error": "send failed"}
+    assert fake_tmux.calls_to("send_keys") == []
 
 
 def test_queue_message_holds_until_idle(handler, fake_tmux, monkeypatch):

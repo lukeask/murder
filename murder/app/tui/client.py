@@ -5,23 +5,19 @@ import json
 import shlex
 import subprocess
 import time
+from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
-
-from murder.bus.client import SocketBusClient
-from murder.bus.protocol import ClientKind
-from murder.config import Config
-from murder.app.tui.pane_capture import PaneCaptureError
 
 from murder.app.service.client_api import (
     CommandRequest,
     CommandResult,
     CommandStatus,
+    ConversationsSnapshot,
     CrowSnapshot,
     DispatchSnapshot,
     EscalationsSnapshot,
-    MurderServiceClient,
     NoteDisplaySnapshot,
     NotesSnapshot,
     PlanDisplaySnapshot,
@@ -34,6 +30,10 @@ from murder.app.service.client_api import (
     UsageGaugeDrillInSnapshot,
     dto_from_wire,
 )
+from murder.app.tui.pane_capture import PaneCaptureError
+from murder.bus.client import SocketBusClient
+from murder.bus.protocol import BusEvent, ClientKind, EventFilter
+from murder.config import Config
 
 COMMAND_POLL_S = 0.05
 STATE_RPC_TIMEOUT_S = 10.0
@@ -206,6 +206,17 @@ class TuiRuntimeClient:
 
     async def get_crow_snapshot(self) -> CrowSnapshot:
         return await self._request_value("state.crow_snapshot", {}, CrowSnapshot)
+
+    async def get_conversations_snapshot(self) -> ConversationsSnapshot:
+        return await self._request_value(
+            "state.conversations_snapshot",
+            {},
+            ConversationsSnapshot,
+        )
+
+    async def subscribe_conversation_blocks(self) -> AsyncIterator[BusEvent]:
+        async for event in self.bus.subscribe(EventFilter(type="conversation.block")):
+            yield event
 
     async def get_escalations(self) -> EscalationsSnapshot:
         return await self._request_value("state.escalations_snapshot", {}, EscalationsSnapshot)

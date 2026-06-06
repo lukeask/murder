@@ -8,6 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from murder.llm.harnesses.results import fail_result, ok_result
 from murder.runtime.orchestration.orchestrator import Orchestrator
 from murder.state.persistence.agents import get_agent_messages
 from murder.state.persistence.schema import get_db, init_db
@@ -107,3 +108,57 @@ def test_send_agent_key_can_submit_enter_and_log_user_input(
             "captured_at": get_agent_messages(db, "crow-t001")[0]["captured_at"],
         }
     ]
+
+
+def test_send_agent_message_reports_delivery_failure_without_user_block(
+    repo_root: Path,
+) -> None:
+    db = get_db(repo_root / ".murder" / "murder.db")
+    init_db(db)
+
+    class _Agent:
+        async def send(self, _message: str):
+            return fail_result("Harness not awaiting input in time: session=crow-t001")
+
+    rt = SimpleNamespace(
+        get_agent=lambda agent_id: _Agent() if agent_id == "crow-t001" else None,
+        get_crow_handler=lambda _ticket_id: None,
+        db=db,
+        bus=None,
+        run_id=None,
+    )
+    orch = Orchestrator(rt)
+
+    result = asyncio.run(orch.send_agent_message("crow-t001", "hello", None))
+
+    assert result == {
+        "handled": False,
+        "error": "Harness not awaiting input in time: session=crow-t001",
+    }
+    assert get_agent_messages(db, "crow-t001") == []
+
+
+def test_send_agent_message_records_user_block_after_delivery_acceptance(
+    repo_root: Path,
+) -> None:
+    db = get_db(repo_root / ".murder" / "murder.db")
+    init_db(db)
+
+    class _Agent:
+        async def send(self, _message: str):
+            return ok_result()
+
+    rt = SimpleNamespace(
+        get_agent=lambda agent_id: _Agent() if agent_id == "crow-t001" else None,
+        get_crow_handler=lambda _ticket_id: None,
+        db=db,
+        bus=None,
+        run_id=None,
+    )
+    orch = Orchestrator(rt)
+
+    result = asyncio.run(orch.send_agent_message("crow-t001", "hello", None))
+
+    assert result == {"handled": True, "queued": False}
+    messages = get_agent_messages(db, "crow-t001")
+    assert [m["body"] for m in messages] == ["hello"]

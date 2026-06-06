@@ -99,6 +99,8 @@ class CrowHandlerConfig(ApiRoleConfig):
     forced_summary_every_n_ticks: int = 7
     stuck_threshold_ticks: int = 3
     context_lines: int = 40
+    projection_interval_s: float = 0.2
+    idle_projection_interval_s: float = 1.0
 
 
 class PlannerConfig(BaseModel):

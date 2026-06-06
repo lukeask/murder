@@ -126,18 +126,29 @@ async def list_sessions(prefix: str | None = None) -> list[str]:
     return [n for n in names if prefix is None or n.startswith(prefix)]
 
 
-async def capture_pane(name: str, lines: int = 200, *, perf: object | None = None) -> str:
+async def capture_pane(
+    name: str, lines: int = 200, *, perf: object | None = None, escapes: bool = False
+) -> str:
     """Capture the last `lines` lines from the session's active pane.
 
     Optional ``perf`` is a :class:`murder.app.tui.perf_log.PerfLog` (duck-typed:
     ``enabled`` and sync ``span``); used only by TUI call sites.
+
+    ``escapes`` adds tmux's ``-e`` flag so SGR (colour/style) escape sequences
+    are preserved in the output. Markerless harnesses that colour-code their
+    user-input blocks (e.g. cursor) rely on this to recover turn roles; default
+    off so the common case stays plain text.
     """
-    # -p: pipe to stdout; -S -<n>: start n lines back from the bottom of history.
+    # -p: pipe to stdout; -S -<n>: start n lines back from the bottom of history;
+    # -e: keep SGR escapes (opt-in).
+    extra = ("-e",) if escapes else ()
     if perf is not None and getattr(perf, "enabled", False):
         with perf.span("tmux.capture_pane", session=name, lines=int(lines)):  # type: ignore[attr-defined]
-            _, out, _ = await _tmux("capture-pane", "-p", "-t", name, "-S", f"-{int(lines)}")
+            _, out, _ = await _tmux(
+                "capture-pane", "-p", *extra, "-t", name, "-S", f"-{int(lines)}"
+            )
             return out
-    _, out, _ = await _tmux("capture-pane", "-p", "-t", name, "-S", f"-{int(lines)}")
+    _, out, _ = await _tmux("capture-pane", "-p", *extra, "-t", name, "-S", f"-{int(lines)}")
     return out
 
 

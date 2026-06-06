@@ -257,10 +257,36 @@ class UsageResetEvent(_BaseEvent):
     curr_pct: float
 
 
+class ConversationBlockEvent(_BaseEvent):
+    """Content-bearing conversation block push event.
+
+    Additive event kind for event-sourced transcripts. ``action`` distinguishes
+    immutable appends from live trailing-block updates without touching the
+    closed ``Entity`` enum or key-only ``StateSnapshotEvent`` contract.
+    """
+
+    type: Literal["conversation.block"] = "conversation.block"
+    conversation_id: str
+    action: Literal["block-appended", "block-updated"]
+    block: dict[str, Any]
+
+
 # --- Discriminated union of inner events ------------------------------------
 
 BusEvent = Annotated[
-    HeartbeatEvent | SummaryEvent | QuestionEvent | EscalationEvent | StatusChangeEvent | ErrorEvent | CommandEvent | StateSnapshotEvent | PresenceEvent | SchedulerModeEvent | SchedulerDecisionEvent | UsageResetEvent,
+    HeartbeatEvent
+    | SummaryEvent
+    | QuestionEvent
+    | EscalationEvent
+    | StatusChangeEvent
+    | ErrorEvent
+    | CommandEvent
+    | StateSnapshotEvent
+    | PresenceEvent
+    | SchedulerModeEvent
+    | SchedulerDecisionEvent
+    | UsageResetEvent
+    | ConversationBlockEvent,
     Field(discriminator="type"),
 ]
 
@@ -271,7 +297,12 @@ BUS_EVENT_ADAPTER: TypeAdapter[BusEvent] = TypeAdapter(BusEvent)
 # call sites that pattern-match on it keep their narrowed semantics until
 # they migrate to ``BusEvent``.
 AgentEvent = Annotated[
-    HeartbeatEvent | SummaryEvent | QuestionEvent | EscalationEvent | StatusChangeEvent | ErrorEvent,
+    HeartbeatEvent
+    | SummaryEvent
+    | QuestionEvent
+    | EscalationEvent
+    | StatusChangeEvent
+    | ErrorEvent,
     Field(discriminator="type"),
 ]
 
@@ -469,6 +500,7 @@ __all__ = [
     "SchedulerModeEvent",
     "SchedulerDecisionEvent",
     "UsageResetEvent",
+    "ConversationBlockEvent",
     "BusEvent",
     "AgentEvent",
     "BUS_EVENT_ADAPTER",

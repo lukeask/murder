@@ -417,10 +417,11 @@ class CursorAdapter(HarnessAdapter):
         await asyncio.sleep(0.2)
         return ok_result()
 
-    async def send_prompt(self, session: str, prompt: str) -> None:
+    async def send_prompt(self, session: str, prompt: str) -> SimpleResult[None]:
         await tmux.send_keys(session, "C-u", literal=False, enter=False)
         await asyncio.sleep(0.05)
         await tmux.send_keys(session, prompt, literal=True, enter=True)
+        return ok_result()
 
     async def interrupt(self, session: str) -> None:
         await self.interrupt_generation(session)

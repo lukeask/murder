@@ -8,9 +8,9 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from murder.runtime.agents.base import HarnessBackedAgent, AgentRole, AgentStatus
-from murder.state.persistence import conversation
 from murder.llm.harnesses.base import HarnessAdapter
 from murder.llm.harnesses.models import HarnessStartSpec
+from murder.llm.harnesses.results import SimpleResult
 from murder.runtime.terminal import tmux
 
 # How far back into the pane's scrollback to read when reconstructing the chat
@@ -58,6 +58,10 @@ class CollaboratorAgent(HarnessBackedAgent):
         # can recognise and drop it instead of mislabelling its paragraphs as
         # alternating user/assistant chat turns.
         self.harness.system_prompt = brief
+        # Fresh startup attempt means fresh transcript, even if the harness
+        # fails before it can accept the prompt; the failure notice belongs to
+        # this attempt, not a prior successful conversation.
+        self.start_conversation()
         start_result = await self.harness_session.start(
             HarnessStartSpec(
                 cwd=self.repo_root,
@@ -67,23 +71,26 @@ class CollaboratorAgent(HarnessBackedAgent):
             )
         )
         if not start_result.ok:
+            await self._fail_startup(start_result.message or "collaborator startup failed")
             raise TimeoutError(start_result.message or "collaborator startup failed")
-        await self.harness_session.send_prompt(brief)
+        send_result = await self.harness_session.send_prompt(brief)
+        if not send_result.ok:
+            message = send_result.message or "collaborator startup prompt failed"
+            await self._fail_startup(message)
+            raise RuntimeError(message)
         # If the harness binary launched but then exited (e.g. an unanswered
         # interactive prompt, a crash, or a missing/broken install), the tmux
         # session is already gone — say so plainly instead of leaving the pane
         # mirror to report a bare "[session vanished]".
         if not await tmux.session_exists(self.session):
-            raise RuntimeError(
+            message = (
                 f"collaborator harness '{self.harness.kind}' exited right after startup; "
                 "check it runs interactively in this repo"
             )
+            await self._fail_startup(message)
+            raise RuntimeError(message)
         self.status = AgentStatus.RUNNING
         if self.runtime:
-            if self.runtime.db is not None:
-                # Fresh tmux session ⇒ fresh transcript; don't surface a prior
-                # run's chat in the new one.
-                conversation.clear(self.runtime.db, self.id)
             self.runtime.sync_agent(self)
             if self.runtime.bus and self.runtime.run_id:
                 await self.runtime.bus.publish(
@@ -99,7 +106,17 @@ class CollaboratorAgent(HarnessBackedAgent):
                     )
                 )
 
+    async def _fail_startup(self, message: str) -> None:
+        self.status = AgentStatus.FAILED
+        await self.record_notice_block_event(
+            f"Collaborator startup failed: {message}",
+            severity="error",
+        )
+        if self.runtime:
+            self.runtime.sync_agent(self)
+
     async def stop(self, *, failed: bool = False, kill_session: bool = True) -> None:
+        await self._finalize_conversation_on_stop(kill_session=kill_session, failed=failed)
         if kill_session:
             with contextlib.suppress(Exception):
                 await self.harness_session.interrupt()
@@ -109,5 +126,5 @@ class CollaboratorAgent(HarnessBackedAgent):
         if self.runtime:
             self.runtime.sync_agent(self)
 
-    async def send(self, msg: str) -> None:
-        await self.harness_session.send_prompt(msg)
+    async def send(self, msg: str) -> SimpleResult[None]:
+        return await self.harness_session.send_prompt(msg)

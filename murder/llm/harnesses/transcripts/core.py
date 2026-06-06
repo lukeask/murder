@@ -144,6 +144,14 @@ def _resolve_choice_prompt(
         resolved["chosen"] = prompt.selected_option.number
         segments[index] = resolved
         break
+    # The choice dialog question is already stored in choice_prompt.question; remove
+    # any assistant segment with the identical text so it doesn't appear twice.
+    question = (prompt.question or "").strip()
+    if question:
+        segments = [
+            s for s in segments
+            if not (s.get("type") == "assistant" and s.get("text", "").strip() == question)
+        ]
     return segments
 
 
@@ -162,15 +170,23 @@ class TranscriptAccumulator:
     def __init__(self, harness: str, *, system_prompt: str | None = None) -> None:
         self.harness = harness
         self.system_prompt = system_prompt
+        # Ground-truth user turns (recorded at the send boundary), used by
+        # markerless grammars to recognise echoed user content. Updated by the
+        # producer before each feed; empty is fine.
+        self.user_texts: list[str] = []
         self._scrollback = _PaneScrollback()
         self._state = "working"
         self._segments: list[Segment] = []
         self._active_choice_prompt: Any = None
 
     def feed(self, frame: str) -> None:
-        self._scrollback.feed(frame)
-
         grammar = get_grammar(self.harness) if supports_harness(self.harness) else None
+
+        # Per-harness frame preprocessing (e.g. cursor tags colour-coded user
+        # lines) runs on the raw capture before scrollback reconciliation.
+        if grammar is not None and hasattr(grammar, "preprocess_frame"):
+            frame = grammar.preprocess_frame(frame)
+        self._scrollback.feed(frame)
 
         live_choice_prompt = None
         if grammar is not None:
@@ -186,7 +202,9 @@ class TranscriptAccumulator:
 
         # Parse current scrollback.
         if grammar is not None:
-            parsed = grammar.parse_lines(self._scrollback.lines, self.system_prompt)
+            parsed = grammar.parse_lines(
+                self._scrollback.lines, self.system_prompt, self.user_texts
+            )
         else:
             parsed = []
 
@@ -194,6 +212,15 @@ class TranscriptAccumulator:
             from murder.llm.harnesses.transcripts.grammar.claude_code import (  # noqa: PLC0415
                 choice_prompt_segment,
             )
+            # The choice question text was emitted by the assistant and then the
+            # dialog was rendered. Parse_lines may capture it as an assistant
+            # segment; remove it so it doesn't duplicate choice_prompt.question.
+            question = (live_choice_prompt.question or "").strip()
+            if question:
+                parsed = [
+                    s for s in parsed
+                    if not (s.get("type") == "assistant" and s.get("text", "").strip() == question)
+                ]
             parsed.append(choice_prompt_segment(live_choice_prompt))
 
         self._segments = _dedupe_adjacent(_merge_segments(self._segments, parsed))
@@ -226,9 +253,15 @@ class TranscriptAccumulator:
 
 
 def parse_frames(
-    harness: str, frames: Iterable[str], *, system_prompt: str | None = None
+    harness: str,
+    frames: Iterable[str],
+    *,
+    system_prompt: str | None = None,
+    user_texts: list[str] | None = None,
 ) -> dict[str, Any]:
     acc = TranscriptAccumulator(harness, system_prompt=system_prompt)
+    if user_texts is not None:
+        acc.user_texts = user_texts
     for frame in frames:
         acc.feed(frame)
     return acc.to_dict()

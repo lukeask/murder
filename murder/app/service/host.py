@@ -11,18 +11,18 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from murder.bus.broker import DurableBroker
-from murder.bus.protocol import CommandEvent
-from murder.bus.transport_socket import SocketBusServer, default_socket_path
-from murder.config import Config
-from murder.runtime.orchestration.orchestrator import Orchestrator
-from murder.state.persistence.commands import get_command_status
 from murder.app.service.bootstrap import start_supervisor_workers
 from murder.app.service.client_api import dto_to_wire
 from murder.app.service.read_model import ServiceReadModel
 from murder.app.service.runtime import Runtime
 from murder.app.service.settings_service import SettingsService
 from murder.app.service.supervisor import Supervisor
+from murder.bus.broker import DurableBroker
+from murder.bus.protocol import CommandEvent
+from murder.bus.transport_socket import SocketBusServer, default_socket_path
+from murder.config import Config
+from murder.runtime.orchestration.orchestrator import Orchestrator
+from murder.state.persistence.commands import get_command_status
 from murder.state.storage.paths import db_path
 from murder.state.storage.service_registry import remove_service_session, write_service_session
 from murder.usage_sample_command import run_service_usage_poll_loop
@@ -48,6 +48,7 @@ class ServiceHost:
     socket_server: SocketBusServer | None = None
     tcp_bound: tuple[str, int] | None = None
     _usage_poll_task: asyncio.Task[None] | None = field(default=None, repr=False)
+    _projection_poll_task: asyncio.Task[None] | None = field(default=None, repr=False)
     _rpc_handlers: dict[str, RpcHandler] = field(default_factory=dict, repr=False)
     _service_session_name: str | None = field(default=None, repr=False)
 
@@ -127,6 +128,9 @@ class ServiceHost:
 
         def _state_crow_snapshot(_body: dict[str, Any]) -> dict[str, Any]:
             return _value(_read_model().get_crow_snapshot())
+
+        def _state_conversations_snapshot(_body: dict[str, Any]) -> dict[str, Any]:
+            return _value(_read_model().get_conversations_snapshot())
 
         def _state_escalations_snapshot(_body: dict[str, Any]) -> dict[str, Any]:
             return _value(_read_model().get_escalations_snapshot())
@@ -239,6 +243,7 @@ class ServiceHost:
         self.register_rpc_handler("state.dispatch_snapshot", _state_dispatch_snapshot)
         self.register_rpc_handler("state.schedule_snapshot", _state_schedule_snapshot)
         self.register_rpc_handler("state.crow_snapshot", _state_crow_snapshot)
+        self.register_rpc_handler("state.conversations_snapshot", _state_conversations_snapshot)
         self.register_rpc_handler("state.escalations_snapshot", _state_escalations_snapshot)
         self.register_rpc_handler("state.plans_snapshot", _state_plans_snapshot)
         self.register_rpc_handler("state.notes_snapshot", _state_notes_snapshot)
@@ -341,10 +346,39 @@ class ServiceHost:
             run_service_usage_poll_loop(self.broker, self.runtime.db, str(self.runtime.run_id)),
             name="usage-sample-poll",
         )
+        self._projection_poll_task = asyncio.create_task(
+            self._run_projection_poll_loop(), name="transcript-projection-poll"
+        )
         with contextlib.suppress(Exception):
             await self.orchestrator.start_question_listener()
         session = write_service_session(self.repo_root, self.socket_path)
         self._service_session_name = session.name
+
+    async def _run_projection_poll_loop(self) -> None:
+        """Single service-owned ticker that projects every harness-backed agent's
+        pane into the conversation store. One loop for crows, rogues,
+        collaborators, and planners alike — projection is a universal per-agent
+        concern, decoupled from ticket orchestration (CrowHandler) so ticketless
+        rogues and collaborators are covered too."""
+        from murder.runtime.agents.base import (
+            HarnessBackedAgent,
+            PROJECTION_INTERVAL_S,
+        )
+        from murder.runtime.terminal import tmux
+
+        while True:
+            runtime = self.runtime
+            if runtime is not None:
+                for agent in runtime.agents.all_agents():
+                    if not isinstance(agent, HarnessBackedAgent):
+                        continue
+                    try:
+                        await agent.project_once()
+                    except tmux.TmuxError:
+                        pass
+                    except Exception:
+                        LOGGER.debug("projection tick failed for %s", agent.id, exc_info=True)
+            await asyncio.sleep(PROJECTION_INTERVAL_S)
 
     async def run_until_signal(self) -> None:
         if self.runtime is None:
@@ -357,6 +391,12 @@ class ServiceHost:
             with contextlib.suppress(asyncio.CancelledError):
                 await self._usage_poll_task
             self._usage_poll_task = None
+
+        if self._projection_poll_task is not None:
+            self._projection_poll_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._projection_poll_task
+            self._projection_poll_task = None
 
         if self.supervisor is not None:
             await self.supervisor.stop_all()

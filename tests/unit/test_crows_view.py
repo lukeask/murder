@@ -457,22 +457,72 @@ def test_crows_view_refresh_tails_uses_keyword_lines_capture() -> None:
     assert calls == [("murder_repo_crow_antigravity_rogue_test", 40)]
 
 
-def test_crows_view_parsed_refresh_renders_keyword_lines_capture() -> None:
-    calls: list[tuple[str, int]] = []
+def test_crow_tile_has_no_local_transcript_accumulator() -> None:
+    tile = CrowTile(
+        CrowEntry(
+            agent_id="crow-t001",
+            ticket_id="t001",
+            ticket_title="Fix thing",
+            harness="claude_code",
+            status="running",
+            session="murder_demo_crow_t001",
+            health=Health.GREEN,
+        )
+    )
+
+    assert not hasattr(tile, "_transcript_acc")
+    assert not hasattr(tile, "ingest_parsed_frame")
+
+
+def test_crows_view_parsed_refresh_renders_conversation_projection() -> None:
+    view = CrowsView()
+    snap = CrowSnapshot(
+        sessions=(
+            _session(
+                agent_id="crow-t001",
+                role="crow",
+                ticket_id="t001",
+                ticket_title="Fix thing",
+                session_name="murder_demo_crow_t001",
+                harness="claude_code",
+            ),
+        ),
+        as_of=datetime.now(timezone.utc),
+        invalidation_key="k",
+    )
+    doc = {
+        "harness": "claude_code",
+        "state": "awaiting_input",
+        "condensed": None,
+        "segments": [
+            {"type": "assistant", "phase": "final", "text": "server reply", "elapsed": None},
+        ],
+    }
+
+    async def _run() -> None:
+        app = _CrowsApp(view)
+        async with app.run_test() as pilot:
+            view.render_from_snapshot(snap)
+            view.roster_add_rogue("crow-t001")
+            view.render_from_snapshot(snap)
+            await pilot.pause()
+            tile = view.wall.tile_for("crow-t001")
+            assert tile is not None
+            view.set_conversation_doc("crow-t001", doc)
+            await view.refresh_tails()
+            await pilot.pause()
+            rendered = "\n".join(strip.text for strip in tile._chat_log.lines)  # noqa: SLF001
+            assert "server reply" in rendered
+
+    asyncio.run(_run())
+
+
+def test_crows_view_parsed_refresh_does_not_call_capture_or_fetch() -> None:
+    captured: list[str] = []
 
     async def capture(session: str, *, lines: int) -> str:
-        calls.append((session, lines))
-        return (
-            "❯ inspect this ticket\n"
-            "\n"
-            "● parsed claude_code reply\n"
-            "\n"
-            "✻ Worked for 2s\n"
-            "\n"
-            "────────────────────\n"
-            "❯ \n"
-            "────────────────────\n"
-        )
+        captured.append(session)
+        return "raw only"
 
     view = CrowsView(capture_pane=capture)  # type: ignore[arg-type]
     snap = CrowSnapshot(
@@ -504,19 +554,14 @@ def test_crows_view_parsed_refresh_renders_keyword_lines_capture() -> None:
                 strip.text
                 for strip in tile._chat_log.lines  # noqa: SLF001 - regression test for blank parsed tiles
             )
-            assert "parsed claude_code reply" in rendered
+            assert "parsed transcript unavailable" in rendered
 
     asyncio.run(_run())
-    assert calls
-    assert all(call == ("murder_repo_crow_claude_rogue_test", 400) for call in calls)
+    assert captured == []
 
 
-def test_crows_view_parsed_refresh_shows_status_when_capture_fails() -> None:
-    async def capture(session: str, *, lines: int) -> str:
-        del session, lines
-        raise crows_view_mod.PaneCaptureError("gone")
-
-    view = CrowsView(capture_pane=capture)  # type: ignore[arg-type]
+def test_crows_view_parsed_refresh_shows_status_when_fetch_unavailable() -> None:
+    view = CrowsView()
     snap = CrowSnapshot(
         sessions=(
             _session(
@@ -547,7 +592,7 @@ def test_crows_view_parsed_refresh_shows_status_when_capture_fails() -> None:
                 strip.text
                 for strip in tile._chat_log.lines  # noqa: SLF001 - regression test for blank parsed tiles
             )
-            assert "session vanished" in rendered
+            assert "parsed transcript unavailable" in rendered
 
     asyncio.run(_run())
 

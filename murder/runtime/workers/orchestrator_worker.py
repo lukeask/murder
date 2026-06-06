@@ -18,6 +18,7 @@ NoteEnsure = Callable[[str], Awaitable[dict[str, Any]]]
 NoteRetire = Callable[[str], Awaitable[dict[str, Any]]]
 SendAgentMessage = Callable[[str, str, str | None], Awaitable[dict[str, Any]]]
 SendAgentKey = Callable[[str | None, str, bool, bool, str | None], Awaitable[dict[str, Any]]]
+RefreshAgentTranscript = Callable[[str], Awaitable[dict[str, Any]]]
 InterruptAgent = Callable[[str], Awaitable[dict[str, Any]]]
 StopAgent = Callable[[str], Awaitable[dict[str, Any]]]
 RenameRogue = Callable[[str, str], Awaitable[dict[str, Any]]]
@@ -26,6 +27,7 @@ RenamePlan = Callable[[str, str], Awaitable[dict[str, Any]]]
 DeprecatePlan = Callable[[str], Awaitable[dict[str, Any]]]
 QuickKickTicket = Callable[[str], Awaitable[dict[str, Any]]]
 SpawnRogue = Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]
+ReconfigureCollaborator = Callable[[], Awaitable[dict[str, Any]]]
 
 
 class OrchestratorCommandWorker(Worker):
@@ -43,6 +45,7 @@ class OrchestratorCommandWorker(Worker):
         note_retire: NoteRetire,
         send_agent_message: SendAgentMessage,
         send_agent_key: SendAgentKey,
+        refresh_agent_transcript: RefreshAgentTranscript,
         interrupt_agent: InterruptAgent,
         stop_agent: StopAgent,
         rename_rogue: RenameRogue,
@@ -51,6 +54,7 @@ class OrchestratorCommandWorker(Worker):
         deprecate_plan: DeprecatePlan,
         quick_kick_ticket: QuickKickTicket,
         spawn_rogue: SpawnRogue,
+        reconfigure_collaborator: ReconfigureCollaborator,
     ) -> None:
         super().__init__(
             WorkerSpec(
@@ -68,6 +72,7 @@ class OrchestratorCommandWorker(Worker):
                     "ticket.force_status",
                     "agent.message",
                     "agent.send_key",
+                    "agent.transcript.refresh",
                     "agent.interrupt",
                     "agent.stop",
                     "crow.rename_rogue",
@@ -76,6 +81,7 @@ class OrchestratorCommandWorker(Worker):
                     "plan.deprecate",
                     "ticket.quick_kick",
                     "crow.spawn_rogue",
+                    "collaborator.reconfigure",
                 ),
             )
         )
@@ -90,6 +96,7 @@ class OrchestratorCommandWorker(Worker):
         self._note_retire = note_retire
         self._send_agent_message = send_agent_message
         self._send_agent_key = send_agent_key
+        self._refresh_agent_transcript = refresh_agent_transcript
         self._interrupt_agent = interrupt_agent
         self._stop_agent = stop_agent
         self._rename_rogue = rename_rogue
@@ -98,6 +105,7 @@ class OrchestratorCommandWorker(Worker):
         self._deprecate_plan = deprecate_plan
         self._quick_kick_ticket = quick_kick_ticket
         self._spawn_rogue = spawn_rogue
+        self._reconfigure_collaborator = reconfigure_collaborator
 
     async def run(self, ctx: WorkerCtx, stop_event: asyncio.Event) -> None:  # noqa: ARG002
         await stop_event.wait()
@@ -173,6 +181,11 @@ class OrchestratorCommandWorker(Worker):
                 enter=enter,
                 log_user_input=log_user_input,
             )
+        if command.kind == "agent.transcript.refresh":
+            agent_id = command.payload.get("agent_id")
+            if not isinstance(agent_id, str) or not agent_id.strip():
+                raise ValueError("agent.transcript.refresh requires agent_id")
+            return await self._refresh_agent_transcript(agent_id.strip())
         if command.kind == "agent.interrupt":
             agent_id = command.payload.get("agent_id")
             if not isinstance(agent_id, str) or not agent_id.strip():
@@ -245,4 +258,6 @@ class OrchestratorCommandWorker(Worker):
             return await self._quick_kick_ticket(title.strip())
         if command.kind == "crow.spawn_rogue":
             return await self._spawn_rogue(dict(command.payload))
+        if command.kind == "collaborator.reconfigure":
+            return await self._reconfigure_collaborator()
         return {"handled": False}

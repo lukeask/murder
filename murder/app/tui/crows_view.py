@@ -41,11 +41,7 @@ from murder.app.tui.pane_capture import CapturePaneFn, PaneCaptureError
 from murder.app.tui.pane_mirror import PaneMirror
 from murder.app.tui.perf_log import PerfLog
 from murder.llm.harnesses.choice_prompt import ChoiceOption, MultipleChoicePrompt
-from murder.llm.harnesses.transcripts import (
-    SEGMENT_TYPES,
-    TranscriptAccumulator,
-    supports_harness,
-)
+from murder.llm.harnesses.transcripts import SEGMENT_TYPES, supports_harness
 
 TILE_LINES_RAW = 40
 """Raw-mode tail: last N lines of pane; large enough to show the input box and permission prompts."""
@@ -679,10 +675,6 @@ def _segment_text(segment: Mapping[str, Any]) -> tuple[str, str] | None:
         text = segment.get("text")
         if not isinstance(text, str) or not text.strip():
             return None
-        elapsed = segment.get("elapsed")
-        phase = str(segment.get("phase") or "")
-        if phase == "final" and isinstance(elapsed, str) and elapsed.strip():
-            return ("assistant", f"{text}\n\n[{elapsed}]")
         return ("assistant", text)
     if seg_type == "tool_call":
         title = str(segment.get("title") or "").strip()
@@ -746,12 +738,18 @@ def _segment_text(segment: Mapping[str, Any]) -> tuple[str, str] | None:
                 if label:
                     lines.append(f"{number}. {label}")
         return ("prompt", "\n".join(lines))
+    if seg_type == "notice":
+        message = str(segment.get("message") or segment.get("text") or "").strip()
+        severity = str(segment.get("severity") or "").strip()
+        if not message:
+            return None
+        return ("notice", f"{severity}: {message}" if severity else message)
     if seg_type not in SEGMENT_TYPES:
         logger.warning("crow transcript render: dropping unknown segment type %r", seg_type)
     return None
 
 
-def _doc_to_chat_turns(doc: Mapping[str, Any]) -> list[tuple[str, str]]:
+def doc_to_chat_turns(doc: Mapping[str, Any]) -> list[tuple[str, str]]:
     turns: list[tuple[str, str]] = []
     segments = doc.get("segments")
     if not isinstance(segments, list):
@@ -899,11 +897,6 @@ class CrowTile(Container):
         # fall back to raw mode for harnesses with no transcript parser so the
         # tile is never a blank screen on first render.
         self._raw_mode = not supports_harness(entry.harness or "")
-        self._transcript_acc = (
-            TranscriptAccumulator(entry.harness)
-            if supports_harness(entry.harness or "")
-            else None
-        )
         self._last_turns: list[tuple[str, str]] = []
         self._parsed_loaded = False
         self._last_render_width = 0
@@ -956,11 +949,6 @@ class CrowTile(Container):
     def update_entry(self, entry: CrowEntry) -> None:
         """Reconcile after a snapshot refresh; rebuild border + header in place."""
         if entry.harness != self._entry.harness:
-            self._transcript_acc = (
-                TranscriptAccumulator(entry.harness)
-                if supports_harness(entry.harness or "")
-                else None
-            )
             self._raw_mode = not supports_harness(entry.harness or "")
             self._parsed_loaded = False
             self._last_turns = []
@@ -981,14 +969,6 @@ class CrowTile(Container):
 
         self._raw_log.replace_lines(_write_tail)
 
-    def ingest_parsed_frame(self, text: str) -> None:
-        if self._transcript_acc is None:
-            kind = self._entry.harness or "unknown"
-            self.set_parsed_status(f"(parsed transcript unavailable for '{kind}')")
-            return
-        self._transcript_acc.feed(text)
-        self.set_parsed_doc(self._transcript_acc.to_dict(), self._entry.harness)
-
     def set_parsed_doc(self, doc: Mapping[str, Any], harness_kind: str = "") -> None:
         """Update the parsed chat log.
 
@@ -1008,7 +988,7 @@ class CrowTile(Container):
         if width <= 1:
             return  # not laid out yet — avoid caching a min-width render
         live_prompt = _live_choice_prompt(doc)
-        turns = _doc_to_chat_turns(doc)
+        turns = doc_to_chat_turns(doc)
         if self._parsed_loaded and turns == self._last_turns and width == self._last_render_width:
             self._sync_choice_prompt(live_prompt)
             return
@@ -1341,6 +1321,7 @@ class CrowsView(Container):
         self._last_focused_agent_id: str | None = None
         self._chat_target_agent_id: str | None = None
         self._roster_visible: bool = True
+        self._conversation_docs: dict[str, Mapping[str, Any]] = {}
         self._roster.border_title = "crows"
         self._wall.border_title = "tails"
 
@@ -1383,6 +1364,10 @@ class CrowsView(Container):
         else:
             self._wall.reconcile(wall_entries)
         self._wall.set_chat_target(self._chat_target_agent_id)
+        for agent_id in self._wall.order:
+            tile = self._wall.tile_for(agent_id)
+            if tile is not None and not tile.raw_mode:
+                self._render_parsed_tile(tile)
         if self.enlarged_agent_id is not None and self.enlarged_agent_id not in self._entries_by_id:
             self.enlarged_agent_id = None
         self._apply_mode()
@@ -1404,6 +1389,22 @@ class CrowsView(Container):
             if agent_id in self._entries_by_id
         }
         return order, entries
+
+    def set_conversation_doc(self, conversation_id: str, doc: Mapping[str, Any] | None) -> None:
+        if doc is None:
+            self._conversation_docs.pop(conversation_id, None)
+        else:
+            self._conversation_docs[conversation_id] = doc
+        tile = self._wall.tile_for(conversation_id)
+        if tile is not None and not tile.raw_mode:
+            self._render_parsed_tile(tile)
+
+    def set_conversation_docs(self, docs: Mapping[str, Mapping[str, Any]]) -> None:
+        self._conversation_docs = dict(docs)
+        for agent_id in self._wall.order:
+            tile = self._wall.tile_for(agent_id)
+            if tile is not None and not tile.raw_mode:
+                self._render_parsed_tile(tile)
 
     async def refresh_tails(self) -> None:
         """Capture last-N lines for every visible tile, in parallel."""
@@ -1436,41 +1437,45 @@ class CrowsView(Container):
 
     async def _capture_for_tile(self, tile: CrowTile, session: str) -> None:
         perf = self._perf
-        capture = self._capture_pane
-        if capture is None:
-            tile.set_tail("(no capture)")
-            return
-
-        n_lines = TILE_LINES_PARSED if not tile.raw_mode else TILE_LINES_RAW
 
         async def _run() -> None:
-            try:
-                text = await asyncio.wait_for(
-                    capture(session, lines=n_lines),  # type: ignore[call-arg]
-                    timeout=CAPTURE_TIMEOUT_S,
-                )
-            except (PaneCaptureError, asyncio.TimeoutError):
-                if tile.raw_mode:
-                    tile.set_tail("(session vanished)")
-                else:
-                    tile.set_parsed_status("(session vanished)")
-                return
             if tile.raw_mode:
-                tile.set_tail(text)
+                await self._refresh_raw_tile(tile, session)
             else:
-                try:
-                    tile.ingest_parsed_frame(text)
-                except Exception:
-                    kind = tile.entry.harness
-                    logger.exception("tile parse failed for %s (%s)", session, kind)
-                    tile.set_parsed_status(f"(parse error for '{kind or 'unknown'}')")
-                    return
+                await self._refresh_parsed_tile(tile)
 
         if perf is not None and perf.enabled:
             with perf.span("tui.crows.capture_tile", session=session):
                 await _run()
             return
         await _run()
+
+    async def _refresh_raw_tile(self, tile: CrowTile, session: str) -> None:
+        """Raw mode: mirror the pane verbatim via the local capture callback."""
+        capture = self._capture_pane
+        if capture is None:
+            tile.set_tail("(no capture)")
+            return
+        try:
+            text = await asyncio.wait_for(
+                capture(session, lines=TILE_LINES_RAW),  # type: ignore[call-arg]
+                timeout=CAPTURE_TIMEOUT_S,
+            )
+        except (PaneCaptureError, asyncio.TimeoutError):
+            tile.set_tail("(session vanished)")
+            return
+        tile.set_tail(text)
+
+    async def _refresh_parsed_tile(self, tile: CrowTile) -> None:
+        """Parsed mode: render the TUI's event-sourced conversation projection."""
+        self._render_parsed_tile(tile)
+
+    def _render_parsed_tile(self, tile: CrowTile) -> None:
+        doc = self._conversation_docs.get(tile.entry.agent_id)
+        if doc is None:
+            tile.set_parsed_status("(parsed transcript unavailable)")
+            return
+        tile.set_parsed_doc(doc, str(doc.get("harness") or tile.entry.harness))
 
     def enlarge(self, agent_id: str) -> bool:
         entry = self._entries_by_id.get(agent_id)

@@ -2,16 +2,18 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from collections import defaultdict
 from contextlib import closing
 from datetime import datetime
 from pathlib import Path
 
-from murder.state.persistence import tickets as ticket_store
-from murder.state.persistence.schema import get_db
 from murder.app.service.client_api import (
     ChecklistItem,
+    ConversationBlockSummary,
+    ConversationsSnapshot,
+    ConversationSummary,
     CrowSessionSummary,
     CrowSnapshot,
     DispatchSnapshot,
@@ -38,6 +40,8 @@ from murder.app.service.schedule_snapshot import (
     build_schedule_snapshot,
     build_usage_gauge_drill_in,
 )
+from murder.state.persistence import tickets as ticket_store
+from murder.state.persistence.schema import get_db
 from murder.state.storage.paths import reports_dir
 from murder.work.tickets.parser import read_ticket_md
 from murder.work.tickets.status import TicketStatus
@@ -266,6 +270,65 @@ class ServiceReadModel:
             sessions=sessions,
             as_of=as_of,
             invalidation_key=self.current_key(InvalidationKeys.crows),
+        )
+
+    def get_conversations_snapshot(self) -> ConversationsSnapshot:
+        """Return active conversation histories for a newly connected TUI."""
+        as_of = datetime.utcnow()
+        with closing(self._connect()) as conn:
+            conv_rows = conn.execute(
+                """
+                SELECT conversation_id, agent_id, harness, model, harness_session_id,
+                       live_state, condensed, status
+                  FROM conversations
+                 WHERE status = 'in_progress'
+                 ORDER BY updated_at DESC, conversation_id
+                """
+            ).fetchall()
+            block_rows = conn.execute(
+                """
+                SELECT conversation_id, id, ordinal, kind, payload_json, sealed,
+                       service_received_at
+                  FROM conversation_blocks
+                 WHERE conversation_id IN (
+                       SELECT conversation_id
+                         FROM conversations
+                        WHERE status = 'in_progress'
+                  )
+                 ORDER BY conversation_id, ordinal
+                """
+            ).fetchall()
+        blocks_by_conversation: dict[str, list[ConversationBlockSummary]] = defaultdict(list)
+        for row in block_rows:
+            blocks_by_conversation[str(row["conversation_id"])].append(
+                ConversationBlockSummary(
+                    id=int(row["id"]),
+                    conversation_id=str(row["conversation_id"]),
+                    ordinal=int(row["ordinal"]),
+                    kind=str(row["kind"]),
+                    payload=json.loads(str(row["payload_json"] or "{}")),
+                    sealed=bool(row["sealed"]),
+                    service_received_at=str(row["service_received_at"]),
+                )
+            )
+        conversations = tuple(
+            ConversationSummary(
+                conversation_id=str(row["conversation_id"]),
+                agent_id=str(row["agent_id"]),
+                harness=_optional_str(row["harness"]),
+                model=_optional_str(row["model"]),
+                harness_session_id=_optional_str(row["harness_session_id"]),
+                live_state=_optional_str(row["live_state"]),
+                condensed=_optional_str(row["condensed"]),
+                status=str(row["status"]),
+                blocks=tuple(blocks_by_conversation[str(row["conversation_id"])]),
+            )
+            for row in conv_rows
+        )
+        return ConversationsSnapshot(
+            conversations=conversations,
+            as_of=as_of,
+            invalidation_key=self.current_key(InvalidationKeys.conversations),
         )
 
     def get_escalations_snapshot(self) -> EscalationsSnapshot:

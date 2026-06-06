@@ -2,16 +2,15 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import AsyncIterator, Mapping
 from dataclasses import dataclass, field, fields, is_dataclass
 from datetime import datetime
 from enum import Enum
-from types import MappingProxyType
-from types import UnionType
-from typing import Any, ClassVar, Protocol, get_args, get_origin, get_type_hints
-from typing import Union
+from types import MappingProxyType, UnionType
+from typing import Any, ClassVar, Protocol, Union, get_args, get_origin, get_type_hints
 
 from murder.work.tickets.status import TicketStatus
+from murder.bus.protocol import BusEvent
 
 
 class CommandStatus(str, Enum):
@@ -318,6 +317,46 @@ class ScheduleSnapshot:
     invalidation_key: str
 
 
+@dataclass(frozen=True, slots=True)
+class ConversationBlockSummary:
+    id: int | None
+    conversation_id: str
+    ordinal: int
+    kind: str
+    payload: Mapping[str, object]
+    sealed: bool
+    service_received_at: str
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "payload", dict(self.payload))
+
+
+@dataclass(frozen=True, slots=True)
+class ConversationSummary:
+    conversation_id: str
+    agent_id: str
+    harness: str | None
+    model: str | None
+    harness_session_id: str | None
+    live_state: str | None
+    condensed: str | None
+    status: str
+    blocks: tuple[ConversationBlockSummary, ...]
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "blocks", tuple(self.blocks))
+
+
+@dataclass(frozen=True, slots=True)
+class ConversationsSnapshot:
+    conversations: tuple[ConversationSummary, ...]
+    as_of: datetime
+    invalidation_key: str
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "conversations", tuple(self.conversations))
+
+
 class InvalidationKeys:
     dispatch: ClassVar[str] = "dispatch"
     schedule: ClassVar[str] = "schedule"
@@ -327,6 +366,7 @@ class InvalidationKeys:
     notes: ClassVar[str] = "notes"
     reports: ClassVar[str] = "reports"
     settings: ClassVar[str] = "settings"
+    conversations: ClassVar[str] = "conversations"
 
     @staticmethod
     def ticket_detail(ticket_id: str) -> str:
@@ -353,6 +393,10 @@ class MurderServiceClient(Protocol):
     async def get_notes_snapshot(self) -> NotesSnapshot: ...
 
     async def get_reports_snapshot(self) -> ReportsSnapshot: ...
+
+    async def get_conversations_snapshot(self) -> ConversationsSnapshot: ...
+
+    def subscribe_conversation_blocks(self) -> AsyncIterator[BusEvent]: ...
 
     async def get_plan_display(self, name: str) -> PlanDisplaySnapshot | None: ...
 
@@ -435,6 +479,9 @@ __all__ = [
     "CommandRequest",
     "CommandResult",
     "CommandStatus",
+    "ConversationBlockSummary",
+    "ConversationSummary",
+    "ConversationsSnapshot",
     "CrowSessionSummary",
     "CrowSnapshot",
     "CurrentSettingsSnapshot",

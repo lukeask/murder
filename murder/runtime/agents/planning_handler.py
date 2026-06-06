@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from murder.runtime.agents.base import Daemon, AgentRole, AgentStatus
+from murder.runtime.agents.base import Daemon, AgentRole, AgentStatus, TRANSCRIPT_SCROLLBACK_LINES
 from murder.config import PlannerConfig
 from murder.llm.harnesses.base import HarnessAdapter
 
@@ -136,7 +136,9 @@ class PlanningHandler(Daemon):
                 f"Please wrap your reply as `>>> ANSWER[{ticket_id}]: <reply>` "
                 "so the system can extract it."
             )
-        await self.harness.send_prompt(self.planner_session, body)
+        result = await self.harness.send_prompt(self.planner_session, body)
+        if not result.ok:
+            raise RuntimeError(result.message or "planner message delivery failed")
         self._pending[ticket_id] = PendingAsk(ticket_id, ask, crow_session)
         # Clear any prior routed marker for this ticket so a fresh answer for
         # the same ticket can be picked up.
@@ -145,7 +147,11 @@ class PlanningHandler(Daemon):
     async def tick(self) -> None:
         from murder.runtime.terminal import tmux
 
-        pane = await tmux.capture_pane(self.planner_session, lines=400)
+        pane = await tmux.capture_pane(self.planner_session, lines=TRANSCRIPT_SCROLLBACK_LINES)
+
+        # Transcript projection is owned by the PlanningAgent's own loop, not
+        # here; this handler only relays crow ASKs and routes ANSWER markers.
+
         for ticket_id, reply in self.harness.detect_answers(pane):
             if ticket_id in self._routed:
                 continue

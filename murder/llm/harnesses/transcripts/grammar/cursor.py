@@ -4,15 +4,61 @@ from __future__ import annotations
 
 import re
 
-from murder.llm.harnesses.transcripts.segments import Segment
+from murder.llm.harnesses.parsing import strip_ansi
 from murder.llm.harnesses.transcripts._shared import (
     _dedupe_adjacent,
-    strip_leading_system_prompt,
+    murder_owned_anchors,
+    normalize_prompt_match,
 )
+from murder.llm.harnesses.transcripts.segments import Segment
+
+# Cursor colour-codes every submitted *user-input* block with one SGR
+# background and the live composer (input box) with another, so both turn role
+# and live-UI chrome are recoverable from colour. We capture with escapes (-e)
+# and tag the matching lines with sentinels that survive ANSI stripping and
+# scrollback reconciliation, then classify by the tags instead of by fragile
+# positional alternation. See preprocess_frame / WANTS_ANSI.
+WANTS_ANSI = True
+_USER_BG_RE = re.compile(r"\x1b\[48;2;36;36;40m")  # submitted user-input block
+_INPUT_BG_RE = re.compile(r"\x1b\[48;2;21;21;21m")  # live composer / input box
+_USER_MARK = "\x01"
+_CHROME_MARK = "\x02"
 
 # ---- cursor regexes -------------------------------------------------------- #
 _CURSOR_INPUT_LINE_RE = re.compile(r"^\s*→\s*\S")
 _CURSOR_STARTUP_HINT_RE = re.compile(r"^(?:Use\s+/\S|Try\s+Composer\b)", re.IGNORECASE)
+
+
+def preprocess_frame(frame: str) -> str:
+    """Tag user-input lines, then strip ANSI for the rest of the pipeline.
+
+    Run on the raw ``-e`` capture before scrollback reconciliation. Lines Cursor
+    painted with the user-input background get a ``_USER_MARK`` prefix; lines in
+    the live composer get a ``_CHROME_MARK`` prefix (its wrapped continuations
+    carry no ``→`` marker, so colour is the only reliable way to suppress them).
+    The marks are preserved verbatim by ``strip_ansi`` and stable across frames,
+    so they travel with the line through scrollback. Frames captured without
+    escapes carry no marks and fall through to the anchor-based classifier.
+    """
+    out: list[str] = []
+    for raw in frame.splitlines():
+        plain = strip_ansi(raw)
+        if _INPUT_BG_RE.search(raw):
+            out.append(_CHROME_MARK + plain)
+        elif _USER_BG_RE.search(raw):
+            out.append(_USER_MARK + plain)
+        else:
+            out.append(plain)
+    return "\n".join(out)
+
+
+def _classify(line: str) -> tuple[bool, bool, str]:
+    """Split a possibly-tagged line into ``(is_user_input, is_chrome, plain)``."""
+    if line.startswith(_USER_MARK):
+        return True, False, line[len(_USER_MARK):]
+    if line.startswith(_CHROME_MARK):
+        return False, True, line[len(_CHROME_MARK):]
+    return False, False, line
 
 
 def _cursor_is_chrome(line: str) -> bool:
@@ -24,25 +70,38 @@ def _cursor_is_chrome(line: str) -> bool:
     """
     from murder.llm.harnesses.cursor import _is_cursor_chrome  # noqa: PLC0415
 
+    _is_user, is_chrome, line = _classify(line)
+    if is_chrome:
+        return True
     s = line.strip()
-    if not s:
-        return True
-    if _is_cursor_chrome(line):
-        return True
-    if _CURSOR_INPUT_LINE_RE.match(line):
-        return True
-    if s.startswith("Tip:") or _CURSOR_STARTUP_HINT_RE.match(s):
-        return True
-    if not line.startswith(" "):
-        return True
-    return False
+    return bool(
+        not s
+        or _is_cursor_chrome(line)
+        or _CURSOR_INPUT_LINE_RE.match(line)
+        or s.startswith("Tip:")
+        or _CURSOR_STARTUP_HINT_RE.match(s)
+        or not line.startswith(" ")
+    )
 
 
-def parse_lines(lines: list[str], system_prompt: str | None = None) -> list[Segment]:
+def parse_lines(
+    lines: list[str],
+    system_prompt: str | None = None,
+    user_texts: list[str] | None = None,
+) -> list[Segment]:
     """Parse cursor scrollback into segments.
 
-    Cursor uses no syntactic markers. Content blocks alternate strictly
-    user → assistant → user → …, starting with user.
+    Cursor has no *syntactic* role markers, but it colour-codes user-input
+    blocks; ``preprocess_frame`` tags those lines with ``_USER_MARK``. We split
+    the pane into blank-line blocks and classify each as ``user`` (a tagged
+    block, or one whose text reconstructs murder's own system prompt / a
+    ground-truth user turn) versus ``assistant`` (everything else). The
+    positional alternation this replaces scrambled roles whenever a turn spanned
+    multiple paragraphs or Cursor re-rendered the injected prompt mid-pane.
+
+    Parsed ``user`` segments are dropped downstream in favour of authoritative
+    user blocks, so the only job here is to keep genuine assistant prose and
+    discard murder's own echoed content.
     """
     blocks: list[list[str]] = []
     current: list[str] = []
@@ -56,14 +115,16 @@ def parse_lines(lines: list[str], system_prompt: str | None = None) -> list[Segm
     if current:
         blocks.append(current)
 
-    blocks = strip_leading_system_prompt(blocks, system_prompt)
+    anchors = murder_owned_anchors(system_prompt, user_texts)
 
     segments: list[Segment] = []
-    for idx, block in enumerate(blocks):
-        text = " ".join(line.strip() for line in block if line.strip())
+    for block in blocks:
+        classified = [_classify(line) for line in block]
+        is_user = any(is_u for is_u, _is_chrome, _plain in classified)
+        text = " ".join(plain.strip() for _is_u, _is_chrome, plain in classified if plain.strip())
         if not text:
             continue
-        if idx % 2 == 0:
+        if is_user or normalize_prompt_match(text) in anchors:
             segments.append({"type": "user", "text": text})
         else:
             segments.append(

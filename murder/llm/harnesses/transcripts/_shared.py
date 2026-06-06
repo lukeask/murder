@@ -39,6 +39,29 @@ def normalize_prompt_match(text: str) -> str:
     return " ".join(normalize_codex_text(text).split())
 
 
+def murder_owned_anchors(
+    system_prompt: str | None, user_texts: list[str] | None
+) -> set[str]:
+    """Normalised text of every block murder itself authored: the injected
+    system prompt (split into its blank-line paragraphs, since markerless panes
+    render each paragraph as its own block) and every ground-truth user turn.
+
+    A parsed block whose normalised text is one of these is murder's own
+    content echoed back by the harness — drop it rather than show it as chat.
+    """
+    anchors: set[str] = set()
+    if system_prompt:
+        for para in re.split(r"\n\s*\n", system_prompt):
+            normalized = normalize_prompt_match(para)
+            if normalized:
+                anchors.add(normalized)
+    for text in user_texts or ():
+        normalized = normalize_prompt_match(text)
+        if normalized:
+            anchors.add(normalized)
+    return anchors
+
+
 def reflow_paragraphs(
     lines: list[str],
     *,

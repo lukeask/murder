@@ -27,7 +27,11 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
-from murder.state.persistence.agents import get_agent_messages, replace_agent_messages
+from murder.state.persistence.agents import (
+    append_agent_message,
+    get_agent_messages,
+    replace_agent_messages,
+)
 
 # ---------------------------------------------------------------------------
 # Legacy flat-turns path (agent_messages table) — unchanged
@@ -43,8 +47,17 @@ def read_conversation(conn: sqlite3.Connection, agent_id: str) -> list[Turn]:
 
 def clear(conn: sqlite3.Connection, agent_id: str) -> None:
     """Drop the persisted log for ``agent_id`` — call when a fresh agent
-    session starts, so a new run doesn't show the previous run's chat."""
+    session starts, so a new run doesn't show the previous run's chat.
+
+    Clears *both* stores: the legacy flat ``agent_messages`` log and the 1.b
+    JSON conversation store (blocks + metadata row). Leaving stale JSON blocks
+    would make ``project_parsed_doc`` reconcile a new session's parse against a
+    prior session's interleaved stream. ``conversation_id`` is the ``agent_id``
+    (one live conversation per agent, 1.c).
+    """
     replace_agent_messages(conn, agent_id, [])
+    conn.execute("DELETE FROM conversation_blocks WHERE conversation_id = ?", (agent_id,))
+    conn.execute("DELETE FROM conversations WHERE conversation_id = ?", (agent_id,))
 
 
 def merge_transcript(
@@ -118,6 +131,27 @@ class ConversationBlock:
     payload: dict[str, Any]  # the original segment dict, lossless
     sealed: bool
     service_received_at: str
+
+
+@dataclass
+class ConversationBlockChange:
+    """A store mutation that should be pushed to subscribed clients."""
+
+    action: str  # "block-appended" | "block-updated"
+    block: ConversationBlock
+
+
+def block_to_wire(block: ConversationBlock) -> dict[str, Any]:
+    """JSON-compatible representation used by bus events and snapshot RPCs."""
+    return {
+        "id": block.id,
+        "conversation_id": block.conversation_id,
+        "ordinal": block.ordinal,
+        "kind": block.kind,
+        "payload": block.payload,
+        "sealed": block.sealed,
+        "service_received_at": block.service_received_at,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -339,6 +373,20 @@ def read_conversation_blocks(
     ]
 
 
+def read_user_texts(conn: sqlite3.Connection, conversation_id: str) -> list[str]:
+    """Return the text of every ground-truth ``user`` block, in order.
+
+    These are recorded authoritatively at the send boundary, so they are the
+    canonical record of what the user typed. Markerless grammars use them as
+    anchors to recognise (and drop) user turns echoed back in the pane.
+    """
+    return [
+        text
+        for b in read_conversation_blocks(conn, conversation_id)
+        if b.kind == "user" and (text := str(b.payload.get("text", "")).strip())
+    ]
+
+
 def read_conversation_doc(
     conn: sqlite3.Connection,
     conversation_id: str,
@@ -479,6 +527,102 @@ def merge_conversation_doc(
     return read_conversation_blocks(conn, conversation_id)
 
 
+def merge_non_user_segments(
+    conn: sqlite3.Connection,
+    conversation_id: str,
+    segments: list[dict[str, Any]],
+    *,
+    received_at: str | None = None,
+) -> list[ConversationBlock]:
+    blocks, _changes = merge_non_user_segments_with_changes(
+        conn,
+        conversation_id,
+        segments,
+        received_at=received_at,
+    )
+    return blocks
+
+
+def merge_non_user_segments_with_changes(
+    conn: sqlite3.Connection,
+    conversation_id: str,
+    segments: list[dict[str, Any]],
+    *,
+    received_at: str | None = None,
+) -> tuple[list[ConversationBlock], list[ConversationBlockChange]]:
+    """Reconcile parsed *non-user* segments against stored non-user blocks.
+
+    This is the projector-side sibling of :func:`merge_conversation_doc`. The
+    difference is what the parsed stream is reconciled against: ground-truth
+    ``user`` blocks (recorded authoritatively at the send boundary, 1.c) are
+    interleaved into the stored stream, but the parsed doc has its re-derived
+    ``user`` segments stripped. Reconciling the stripped parse against the
+    *full* interleaved stored stream would make every parse look shorter than
+    storage and get dropped as pane noise. So we project storage to its
+    non-user blocks first and apply the same longer-replaces-shorter rule
+    against that subsequence, mapping decisions back to the real block rows.
+
+    Correctness against the live-block rule: user blocks are always sealed, so
+    the single ever-unsealed block (if any) is the global trailing block, which
+    is necessarily ``non_user[-1]``. ``update_live_block`` targets that one
+    ``sealed=0`` row. New segments append after every stored block (including a
+    trailing sealed user block) via ``append_block``'s ``MAX(ordinal)+1``;
+    ``seal_previous=True`` is a no-op when the tail is an already-sealed user
+    block.
+
+    Returns the effective block list after merging.
+    """
+    ts = received_at or _now()
+    if not segments:
+        return read_conversation_blocks(conn, conversation_id), []
+
+    stored = read_conversation_blocks(conn, conversation_id)
+    non_user = [b for b in stored if b.kind != "user"]
+    n_stored = len(non_user)
+    n_parsed = len(segments)
+    changes: list[ConversationBlockChange] = []
+
+    if n_parsed < n_stored:
+        # Shorter parse: transient pane noise, ignore.
+        return stored, []
+
+    for i in range(n_stored):
+        existing = non_user[i]
+        if not existing.sealed and segments[i] != existing.payload:
+            # Live trailing block grew or flipped terminal — update in place.
+            update_live_block(conn, conversation_id, segments[i], received_at=ts)
+            row = conn.execute(
+                """
+                SELECT id, ordinal, kind, payload_json, sealed, service_received_at
+                  FROM conversation_blocks
+                 WHERE id = ?
+                """,
+                (existing.id,),
+            ).fetchone()
+            if row is not None:
+                changes.append(
+                    ConversationBlockChange(
+                        action="block-updated",
+                        block=ConversationBlock(
+                            id=int(row["id"]),
+                            conversation_id=conversation_id,
+                            ordinal=int(row["ordinal"]),
+                            kind=row["kind"],
+                            payload=json.loads(row["payload_json"]),
+                            sealed=bool(row["sealed"]),
+                            service_received_at=row["service_received_at"],
+                        ),
+                    )
+                )
+        # Sealed blocks are immutable — leave them as-is.
+
+    for i in range(n_stored, n_parsed):
+        block = append_block(conn, conversation_id, segments[i], received_at=ts, seal_previous=True)
+        changes.append(ConversationBlockChange(action="block-appended", block=block))
+
+    return read_conversation_blocks(conn, conversation_id), changes
+
+
 def _get_agent_id(conn: sqlite3.Connection, conversation_id: str) -> str:
     """Return the agent_id for an existing conversation, or empty string."""
     row = conn.execute(
@@ -486,6 +630,157 @@ def _get_agent_id(conn: sqlite3.Connection, conversation_id: str) -> str:
         (conversation_id,),
     ).fetchone()
     return str(row["agent_id"]) if row else ""
+
+
+# ---------------------------------------------------------------------------
+# Ground-truth user blocks + server-side projection (Phase 1.c)
+# ---------------------------------------------------------------------------
+
+def append_user_message(
+    conn: sqlite3.Connection,
+    agent_id: str,
+    text: str,
+    *,
+    conversation_id: str | None = None,
+    received_at: str | None = None,
+) -> ConversationBlock | None:
+    """Record a ground-truth user turn at the send boundary.
+
+    The service *knows* the exact text the user typed, so it stores it
+    authoritatively instead of re-deriving it from a noisy pane capture
+    (which is what corrupts the collaborator chat). Writes to *both* stores:
+
+    - the 1.b JSON conversation store as a sealed ``user`` block, and
+    - the legacy flat ``agent_messages`` log for compatibility.
+
+    The conversation row is upserted on first use so the block always has a
+    home. ``conversation_id`` defaults to ``agent_id`` (one live conversation
+    per agent). No-op for blank text.
+    """
+    body = (text or "").strip()
+    if not body:
+        return None
+    conv_id = conversation_id or agent_id
+    ts = received_at or _now()
+    upsert_conversation(conn, conversation_id=conv_id, agent_id=agent_id)
+    block = append_block(conn, conv_id, {"type": "user", "text": body}, received_at=ts)
+    append_agent_message(conn, agent_id, "user", body, captured_at=ts)
+    return block
+
+
+def append_notice(
+    conn: sqlite3.Connection,
+    agent_id: str,
+    message: str,
+    *,
+    severity: str = "error",
+    conversation_id: str | None = None,
+    received_at: str | None = None,
+) -> ConversationBlock | None:
+    """Record a service-originated notice in the conversation stream.
+
+    Notices are how startup/usage-limit failures become visible chat history
+    instead of disappearing into worker errors. They intentionally do not write
+    to the legacy flat ``agent_messages`` table because notices are structured
+    UI blocks, not assistant/user turns.
+    """
+    body = (message or "").strip()
+    if not body:
+        return None
+    conv_id = conversation_id or agent_id
+    ts = received_at or _now()
+    upsert_conversation(conn, conversation_id=conv_id, agent_id=agent_id)
+    return append_block(
+        conn,
+        conv_id,
+        {"type": "notice", "severity": severity, "message": body},
+        received_at=ts,
+    )
+
+
+def _doc_to_flat_turns(doc: dict[str, Any]) -> list[Turn]:
+    """Project a TranscriptDoc's segments into flat ``(role, text)`` turns.
+
+    Only ``user`` and ``assistant`` segments carry into the flat log; tool /
+    plan / event segments live only in the JSON store.
+    """
+    turns: list[Turn] = []
+    for seg in doc.get("segments", []):
+        if not isinstance(seg, dict):
+            continue
+        seg_type = seg.get("type")
+        if seg_type in ("user", "assistant"):
+            text = seg.get("text")
+            if isinstance(text, str) and text.strip():
+                turns.append(("user" if seg_type == "user" else "assistant", text))
+    return turns
+
+
+def project_parsed_doc(
+    conn: sqlite3.Connection,
+    agent_id: str,
+    doc: dict[str, Any],
+    *,
+    conversation_id: str | None = None,
+    received_at: str | None = None,
+) -> dict[str, Any]:
+    merged, _changes = project_parsed_doc_with_changes(
+        conn,
+        agent_id,
+        doc,
+        conversation_id=conversation_id,
+        received_at=received_at,
+    )
+    return merged
+
+
+def project_parsed_doc_with_changes(
+    conn: sqlite3.Connection,
+    agent_id: str,
+    doc: dict[str, Any],
+    *,
+    conversation_id: str | None = None,
+    received_at: str | None = None,
+) -> tuple[dict[str, Any], list[ConversationBlockChange]]:
+    """Reconcile a freshly parsed pane ``doc`` into the unified stores.
+
+    The send boundary already recorded authoritative ``user`` blocks, so the
+    parser's own (re-derived, noisy) ``user`` segments are *stripped* before
+    merge — ground-truth user blocks are the single source of user turns,
+    uniform across echoing (CC) and markerless (codex) harnesses. The
+    remaining non-user segments reconcile into the JSON store via
+    :func:`merge_non_user_segments`, which projects storage to its non-user
+    blocks first so the stripped parse and stored stream are the same shape
+    (reconciling against the full interleaved stream would drop every parse as
+    pane noise).
+
+    The flat ``agent_messages`` log is then rebuilt from the merged JSON store
+    so both stores stay consistent and user turns never duplicate.
+
+    Returns the reconstructed conversation doc plus the concrete block changes
+    that should be pushed over the bus.
+    """
+    conv_id = conversation_id or agent_id
+    segments = doc.get("segments", [])
+    non_user = [s for s in segments if not (isinstance(s, dict) and s.get("type") == "user")]
+    upsert_conversation(
+        conn,
+        conversation_id=conv_id,
+        agent_id=agent_id,
+        harness=doc.get("harness"),
+        live_state=doc.get("state"),
+        condensed=doc.get("condensed"),
+    )
+    _blocks, changes = merge_non_user_segments_with_changes(
+        conn,
+        conv_id,
+        non_user,
+        received_at=received_at,
+    )
+
+    merged = read_conversation_doc(conn, conv_id) or {"segments": []}
+    replace_agent_messages(conn, agent_id, _doc_to_flat_turns(merged), captured_at=received_at)
+    return merged, changes
 
 
 def mark_stale_conversations(conn: sqlite3.Connection) -> int:

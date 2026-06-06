@@ -43,6 +43,8 @@ def _load(name: str) -> str:
 
 CC_IDLE = _load("cc_idle.txt")
 CC_BUSY = _load("cc_busy.txt")
+CODEX_IDLE = _load("codex_idle.txt")
+CODEX_STARTUP = _load("codex_startup.txt")
 CODEX_IDLE_MINI = """
 OpenAI Codex
 
@@ -349,6 +351,35 @@ def test_send_prompt_idle_timeout_returns_fail_result(fake_tmux: FakeTmux):
     assert "not awaiting input in time" in (result.message or "")
 
 
+def test_codex_first_send_startup_busy_pane_does_not_send(fake_tmux: FakeTmux):
+    hs = _make_session(CodexAdapter())
+    hs.require_first_send_idle_gate()
+    fake_tmux.queue_pane(CODEX_STARTUP)
+
+    result = asyncio.run(hs.send_prompt("do the thing"))
+
+    assert not result.ok
+    assert "not awaiting input in time" in (result.message or "")
+    assert fake_tmux.calls_to("send_keys") == []
+    assert hs._first_send_idle_gate_pending is True
+
+
+def test_codex_first_send_idle_pane_sends_and_clears_gate(fake_tmux: FakeTmux):
+    hs = _make_session(CodexAdapter())
+    hs.require_first_send_idle_gate()
+    fake_tmux.queue_pane(CODEX_IDLE)
+    fake_tmux.queue_pane(CODEX_IDLE)
+    fake_tmux.queue_pane("• Working (0s • esc to interrupt)")
+
+    result = asyncio.run(hs.send_prompt("short prompt"))
+
+    assert result.ok
+    assert hs._first_send_idle_gate_pending is False
+    texts = [args[1] for args, _ in fake_tmux.calls_to("send_keys")]
+    assert "short prompt" in texts
+    assert "Enter" in texts
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # wait_idle() — timeout and TmuxError branches
 # ─────────────────────────────────────────────────────────────────────────────
@@ -602,6 +633,58 @@ gpt-5.5 medium · ~/repo
         (("test-session", "Enter"), {"literal": False, "enter": False}),
         (("test-session", "Enter"), {"literal": False, "enter": False}),
     ]
+
+
+def test_codex_small_prompt_retries_when_wrapped_prompt_stays_in_composer(
+    fake_tmux: FakeTmux,
+):
+    adapter = CodexAdapter()
+    prompt = "Write a Python function that checks if a number is prime using trial division"
+    live_prompt = """
+OpenAI Codex
+
+› Write a Python function that checks if a number is prime using trial
+  division
+
+gpt-5.5 medium · ~/repo
+"""
+    fake_tmux.queue_pane(live_prompt)
+    fake_tmux.queue_pane("• Working (0s • esc to interrupt)")
+
+    result = asyncio.run(adapter.send_prompt("test-session", prompt))
+
+    assert result.ok
+    enter_calls = [
+        (args, kw)
+        for args, kw in fake_tmux.calls_to("send_keys")
+        if args == ("test-session", "Enter")
+    ]
+    assert len(enter_calls) == 2
+
+
+def test_codex_small_prompt_fails_when_composer_never_clears(
+    fake_tmux: FakeTmux,
+):
+    adapter = CodexAdapter()
+    live_prompt = """
+OpenAI Codex
+
+› short prompt
+
+gpt-5.5 medium · ~/repo
+"""
+    fake_tmux.queue_pane(live_prompt)
+
+    result = asyncio.run(adapter.send_prompt("test-session", "short prompt"))
+
+    assert not result.ok
+    assert "did not clear the composer" in (result.message or "")
+    enter_calls = [
+        (args, kw)
+        for args, kw in fake_tmux.calls_to("send_keys")
+        if args == ("test-session", "Enter")
+    ]
+    assert len(enter_calls) == 3
 
 
 def test_codex_large_prompt_uses_paste_buffer_chunks(fake_tmux: FakeTmux):

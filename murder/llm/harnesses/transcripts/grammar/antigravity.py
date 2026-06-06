@@ -52,7 +52,11 @@ def _is_agy_live_prompt(lines: list[str], index: int) -> bool:
     )
 
 
-def parse_lines(lines: list[str], system_prompt: str | None = None) -> list[Segment]:  # noqa: ARG001
+def parse_lines(
+    lines: list[str],
+    system_prompt: str | None = None,  # noqa: ARG001
+    user_texts: list[str] | None = None,  # noqa: ARG001
+) -> list[Segment]:
     """Parse antigravity scrollback into segments."""
     segments: list[Segment] = []
     i = 0

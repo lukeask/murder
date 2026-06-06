@@ -29,7 +29,6 @@ from murder.state.persistence.plans import (
     upsert_plan as _db_upsert_plan,
 )
 from murder.state.persistence.agents import (
-    append_agent_message as _db_append_agent_message,
     upsert_agent as _db_upsert_agent,
     get_active_agent_by_role as _db_get_active_agent_by_role,
     set_agent_status as _db_set_agent_status,
@@ -41,6 +40,7 @@ from murder.runtime.agents.planning_handler import PlanningHandler
 from murder.bus import StatusChangeEvent, TicketStatus
 from murder.llm.clients import resolve_role_client
 from murder.config import (
+    Config,
     resolve_default_crow_harness,
     resolve_default_crow_startup_effort,
     resolve_default_crow_startup_model,
@@ -474,6 +474,9 @@ class Orchestrator:
                 agent.harness_session.require_first_send_idle_gate()
             agent.status = AgentStatus.RUNNING
             self.rt.sync_agent(agent)
+            # Rogues bypass CrowAgent.start(), so kick off transcript projection
+            # here: a fresh session ⇒ fresh accumulator + producer loop.
+            agent.start_conversation()
         except BaseException:
             await self.rt.reap(agent_id)
             raise
@@ -590,6 +593,38 @@ class Orchestrator:
             await self.spawn_planning_handler(plan_name, handle.session_name)
             return agent_id
 
+    async def _record_user_block(self, agent_id: str, text: str) -> None:
+        """Record a ground-truth user turn at the send boundary.
+
+        Writes directly through the runtime db keyed by ``agent_id`` (the
+        conversation id), so the exact text the user sent is stored
+        authoritatively instead of re-derived from a noisy pane capture — the
+        source of the collaborator corruption. No-op without a db.
+        """
+        db = getattr(self.rt, "db", None)
+        if db is None:
+            return
+        from murder.bus import ConversationBlockEvent
+        from murder.state.persistence import conversation
+
+        block = conversation.append_user_message(db, agent_id, text)
+        bus = getattr(self.rt, "bus", None)
+        run_id = getattr(self.rt, "run_id", None)
+        if block is None or bus is None or run_id is None:
+            return
+        agent = self.rt.get_agent(agent_id)
+        await bus.publish(
+            ConversationBlockEvent(
+                run_id=str(run_id),
+                agent_id=agent_id,
+                role=getattr(agent, "role", None),
+                ticket_id=getattr(agent, "ticket_id", None),
+                conversation_id=agent_id,
+                action="block-appended",
+                block=conversation.block_to_wire(block),
+            )
+        )
+
     async def send_agent_message(
         self, agent_id: str, message: str, ticket_id: str | None
     ) -> dict[str, Any]:
@@ -615,10 +650,26 @@ class Orchestrator:
             handler = self.rt.get_crow_handler(ticket_id)
             if handler is not None:
                 queue_result = await handler.queue_message(message)
+                if queue_result.get("ok") is False:
+                    return {
+                        "handled": False,
+                        "error": str(queue_result.get("error") or "crow message delivery failed"),
+                        **queue_result,
+                    }
+                # Ground truth: record the user turn on the crow's own
+                # conversation once the handler accepts immediate or queued
+                # delivery.
+                await self._record_user_block(agent_id, message)
                 return {"handled": True, **queue_result}
         if agent is None:
             return {"handled": False, "error": f"no agent named {agent_id}"}
-        await agent.send(message)
+        send_result = await agent.send(message)
+        if send_result is not None and getattr(send_result, "ok", True) is False:
+            return {
+                "handled": False,
+                "error": getattr(send_result, "message", None) or "agent message delivery failed",
+            }
+        await self._record_user_block(agent_id, message)
         return {"handled": True, "queued": False}
 
     async def send_agent_key(
@@ -650,9 +701,10 @@ class Orchestrator:
             return {"handled": False, "error": f"agent {agent_id} has no tmux session"}
 
         await tmux.send_keys(session, key, literal=literal, enter=enter)
-        db = getattr(self.rt, "db", None)
-        if db is not None and isinstance(log_user_input, str) and log_user_input.strip():
-            _db_append_agent_message(db, agent_id, "user", log_user_input.strip())
+        # Ground truth: record raw-key user input authoritatively in both the
+        # JSON store and the flat log (always-log-user-input is non-negotiable).
+        if isinstance(log_user_input, str) and log_user_input.strip():
+            await self._record_user_block(agent_id, log_user_input)
         return {
             "handled": True,
             "agent_id": agent_id,
@@ -661,6 +713,34 @@ class Orchestrator:
             "literal": literal,
             "enter": enter,
             "logged_user_input": bool(log_user_input and log_user_input.strip()),
+        }
+
+    async def refresh_agent_transcript(self, agent_id: str) -> dict[str, Any]:
+        """Project an agent's pane server-side and return the rich conversation
+        doc for the TUI to render (crows + planners).
+
+        This is the server-side mirror of the collaborator's
+        ``collaborator.transcript.refresh`` RPC: parsing happens here, never in
+        the TUI. Planner targets are restored on demand. Returns
+        ``available=False`` with an empty doc when the agent or its parser is
+        absent (the TUI falls back to the raw pane mirror).
+        """
+        agent = self.rt.get_agent(agent_id)
+        if agent_id.startswith("planner-"):
+            plan_name = agent_id[len("planner-") :]
+            if plan_name and (agent is None or not await self._agent_is_live(agent)):
+                await self.ensure_planning_agent(plan_name)
+                agent = self.rt.get_agent(agent_id)
+        if agent is None or not hasattr(agent, "refresh_transcript_doc"):
+            return {"handled": True, "available": False, "doc": None}
+        doc = await agent.refresh_transcript_doc()
+        return {
+            "handled": True,
+            "available": True,
+            "doc": doc,
+            "has_parser": agent.harness.has_transcript_parser(),
+            "harness_kind": str(agent.harness.kind),
+            "session": str(agent.session),
         }
 
     async def stop_agent(self, agent_id: str) -> dict[str, Any]:
@@ -996,6 +1076,59 @@ class Orchestrator:
             await self._escalations().record_collaborator_startup_failure(reason)
             raise
         return handle.agent_id
+
+    async def reconfigure_collaborator(self) -> dict[str, Any]:
+        """Reload project config and restart the collaborator if its live harness changed."""
+        new_config = Config.load(self.rt.repo_root)
+        self.rt.config = new_config
+        current_harness = new_config.collaborator.harness
+
+        restarted = False
+        agent_id = _db_get_active_agent_by_role(self.rt.db, "collaborator")
+        live_harness: str | None = None
+        if agent_id:
+            agent = self.rt.get_agent(agent_id)
+            if agent is not None:
+                live_harness = str(getattr(getattr(agent, "harness", None), "kind", "") or "")
+            else:
+                row = self.rt.db.execute(
+                    "SELECT harness FROM agents WHERE agent_id = ?",
+                    (agent_id,),
+                ).fetchone()
+                live_harness = str(row["harness"]) if row and row["harness"] else None
+        if live_harness == current_harness:
+            return {
+                "handled": True,
+                "changed": False,
+                "harness": current_harness,
+            }
+
+        if agent_id:
+            agent = self.rt.get_agent(agent_id)
+            if agent is not None:
+                await agent.stop(failed=False, kill_session=True)
+            await self.rt.reap(agent_id)
+            try:
+                await self.ensure_collaborator()
+            except Exception as e:
+                reason = f"Collaborator startup failed: {e}"
+                await self._escalations().record_collaborator_startup_failure(reason)
+                return {
+                    "handled": False,
+                    "changed": True,
+                    "previous_harness": live_harness,
+                    "harness": current_harness,
+                    "restarted": False,
+                    "error": str(e),
+                }
+            restarted = True
+        return {
+            "handled": True,
+            "changed": True,
+            "previous_harness": live_harness,
+            "harness": current_harness,
+            "restarted": restarted,
+        }
 
     async def submit_notetaker_capture(self, payload: dict[str, Any]) -> dict[str, Any]:
         assert self.rt.db is not None

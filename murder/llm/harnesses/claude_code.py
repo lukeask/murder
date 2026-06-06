@@ -155,6 +155,18 @@ class ClaudeCodeAdapter(HarnessAdapter):
     def extract_last_message(self, pane_text: str) -> str | None:
         return extract_last_message_heuristic(pane_text)
 
+    _RESUME_RE: ClassVar[re.Pattern[str]] = re.compile(
+        r"claude\s+(?:--resume|-r)\s+(\S+)", re.IGNORECASE
+    )
+
+    def graceful_exit_command(self) -> str | None:
+        return "/exit"
+
+    def extract_resume_session_id(self, pane_text: str) -> str | None:
+        clean = strip_ansi(pane_text)
+        m = self._RESUME_RE.search(clean)
+        return m.group(1) if m else None
+
     async def set_model(self, session: str, model: str, *, effort: str | None = None) -> bool:
         desired_model = _claude_model_id(model)
         if desired_model is None:

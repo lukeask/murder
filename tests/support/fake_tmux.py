@@ -46,8 +46,10 @@ class FakeTmux:
 
     # ── fake async ops ────────────────────────────────────────────────────────
 
-    async def capture_pane(self, session: str, *, lines: int = 120) -> str:
-        self.calls.append(("capture_pane", (session,), {"lines": lines}))
+    async def capture_pane(
+        self, session: str, *, lines: int = 120, escapes: bool = False
+    ) -> str:
+        self.calls.append(("capture_pane", (session,), {"lines": lines, "escapes": escapes}))
         return self._next_pane()
 
     async def create_session(self, name: str, cwd: object, cmd: list[str]) -> None:

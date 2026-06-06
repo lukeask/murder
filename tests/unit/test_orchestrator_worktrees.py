@@ -14,6 +14,7 @@ from murder.config import (
 )
 from murder.runtime.orchestration.orchestrator import Orchestrator
 from murder.state.persistence.schema import get_db, init_db
+from murder.state.persistence.agents import upsert_agent
 from murder.state.storage.worktrees import WorktreeRef
 
 
@@ -40,6 +41,131 @@ class _Runtime:
 
     async def reap(self, _agent_id: str) -> None:
         return None
+
+
+class _LiveHarness:
+    kind = "codex"
+
+
+class _LiveCollaborator:
+    harness = _LiveHarness()
+
+    def __init__(self) -> None:
+        self.stopped = False
+
+    async def stop(self, *, failed: bool = False, kill_session: bool = True) -> None:
+        self.stopped = True
+
+
+def test_reconfigure_collaborator_restarts_when_saved_harness_changes(
+    repo_root: Path, monkeypatch
+) -> None:
+    conn = get_db(repo_root / ".murder" / "murder.db")
+    init_db(conn)
+    roles_path = repo_root / ".murder" / "roles.yaml"
+    roles_path.write_text(
+        Path("murder/resources/templates/roles.yaml").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    config = Config(
+        project=ProjectConfig(name="repo"),
+        collaborator=HarnessRoleConfig(harness="codex"),
+        default_crow=HarnessRoleConfig(harness="codex"),
+        crow_handler=CrowHandlerConfig(model="test-model"),
+    )
+    live = _LiveCollaborator()
+    reaped: list[str] = []
+    ensured: list[bool] = []
+
+    class _RuntimeWithCollaborator(_Runtime):
+        def get_agent(self, agent_id: str):
+            return live if agent_id == "collaborator-0" else None
+
+        async def reap(self, agent_id: str) -> None:
+            reaped.append(agent_id)
+
+    rt = _RuntimeWithCollaborator(repo_root=repo_root, config=config, db=conn)
+    upsert_agent(
+        conn,
+        agent_id="collaborator-0",
+        role="collaborator",
+        ticket_id=None,
+        session="murder_repo_collaborator",
+        harness="codex",
+        model=None,
+        status="running",
+        start_commit=None,
+        worktree_path=None,
+        pid=None,
+    )
+    orch = Orchestrator(rt)  # type: ignore[arg-type]
+
+    async def _ensure() -> str:
+        ensured.append(True)
+        return "collaborator-0"
+
+    monkeypatch.setattr(orch, "ensure_collaborator", _ensure)
+
+    result = asyncio.run(orch.reconfigure_collaborator())
+
+    assert result["changed"] is True
+    assert result["previous_harness"] == "codex"
+    assert result["harness"] == "claude_code"
+    assert live.stopped is True
+    assert reaped == ["collaborator-0"]
+    assert ensured == [True]
+
+
+def test_reconfigure_collaborator_returns_startup_failure_error(
+    repo_root: Path, monkeypatch
+) -> None:
+    conn = get_db(repo_root / ".murder" / "murder.db")
+    init_db(conn)
+    roles_path = repo_root / ".murder" / "roles.yaml"
+    roles_path.write_text(
+        Path("murder/resources/templates/roles.yaml").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    config = Config(
+        project=ProjectConfig(name="repo"),
+        collaborator=HarnessRoleConfig(harness="codex"),
+        default_crow=HarnessRoleConfig(harness="codex"),
+        crow_handler=CrowHandlerConfig(model="test-model"),
+    )
+    live = _LiveCollaborator()
+
+    class _RuntimeWithCollaborator(_Runtime):
+        def get_agent(self, agent_id: str):
+            return live if agent_id == "collaborator-0" else None
+
+    rt = _RuntimeWithCollaborator(repo_root=repo_root, config=config, db=conn)
+    upsert_agent(
+        conn,
+        agent_id="collaborator-0",
+        role="collaborator",
+        ticket_id=None,
+        session="murder_repo_collaborator",
+        harness="codex",
+        model=None,
+        status="running",
+        start_commit=None,
+        worktree_path=None,
+        pid=None,
+    )
+    orch = Orchestrator(rt)  # type: ignore[arg-type]
+
+    async def _ensure() -> str:
+        raise TimeoutError("Harness not awaiting input in time: session=collaborator-0")
+
+    monkeypatch.setattr(orch, "ensure_collaborator", _ensure)
+
+    result = asyncio.run(orch.reconfigure_collaborator())
+
+    assert result["handled"] is False
+    assert result["changed"] is True
+    assert result["error"] == "Harness not awaiting input in time: session=collaborator-0"
+    assert result["restarted"] is False
+    assert live.stopped is True
 
 
 def test_spawn_crow_defaults_to_main_checkout(repo_root: Path, monkeypatch) -> None:

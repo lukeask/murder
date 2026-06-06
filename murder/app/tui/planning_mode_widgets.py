@@ -480,7 +480,12 @@ class ChatLog(LiveRichLog):
             wrap=True,
         )
         self._agent_label = agent_label
-        self._last_render_key: tuple[str, tuple[tuple[str, str], ...], str | None] | None = None
+        self._last_render_key: tuple[
+            str,
+            tuple[tuple[str, str], ...],
+            str | None,
+            int,
+        ] | None = None
         self.border_title = f"{agent_label} chat"
 
     def set_agent_label(self, agent_label: str) -> None:
@@ -514,7 +519,7 @@ class ChatLog(LiveRichLog):
         status: str | None = None,
     ) -> None:
         """Replace transcript content in one rewrite pass."""
-        render_key = (self._agent_label, tuple(turns), status)
+        render_key = (self._agent_label, tuple(turns), status, self.size.width)
         if render_key == self._last_render_key:
             return
         self._last_render_key = render_key
