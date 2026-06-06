@@ -279,13 +279,18 @@ def update_live_block(
 ) -> bool:
     """Replace the payload of the live trailing block with ``seg``.
 
-    Used when an intermediate assistant turn grows (new text appended).
-    The ``received_at`` timestamp on the block is refreshed to reflect the
-    latest content.  Returns True if a live block existed and was updated,
-    False if there is no unsealed block (caller should use ``append_block``).
+    Used when an intermediate assistant turn grows (new text appended) or when
+    that turn flips to a terminal kind. The ``received_at`` timestamp on the
+    block is refreshed to reflect the latest content. If the new kind is
+    terminal (anything other than ``assistant_intermediate``) the block is
+    sealed in place per the live-block rule — a block seals when its phase
+    flips to final, so a final turn never lingers as a mutable tail. Returns
+    True if a live block existed and was updated, False if there is no unsealed
+    block (caller should use ``append_block``).
     """
     ts = received_at or _now()
     kind = segment_to_block_kind(seg)
+    sealed = 0 if kind == "assistant_intermediate" else 1
     cur = conn.execute(
         """
         SELECT id FROM conversation_blocks
@@ -298,10 +303,10 @@ def update_live_block(
     conn.execute(
         """
         UPDATE conversation_blocks
-           SET kind = ?, payload_json = ?, service_received_at = ?
+           SET kind = ?, payload_json = ?, sealed = ?, service_received_at = ?
          WHERE id = ?
         """,
-        (kind, json.dumps(seg), ts, cur["id"]),
+        (kind, json.dumps(seg), sealed, ts, cur["id"]),
     )
     return True
 
@@ -435,7 +440,7 @@ def merge_conversation_doc(
                     ordinal=live.ordinal,
                     kind=new_kind,
                     payload=new_payload,
-                    sealed=False,
+                    sealed=new_kind != "assistant_intermediate",
                     service_received_at=ts,
                 )
         return read_conversation_blocks(conn, conversation_id)
@@ -452,13 +457,14 @@ def merge_conversation_doc(
                 # Live trailing block — update in place if content changed.
                 if seg != existing.payload:
                     update_live_block(conn, conversation_id, seg, received_at=ts)
+                    new_kind = segment_to_block_kind(seg)
                     result[i] = ConversationBlock(
                         id=existing.id,
                         conversation_id=conversation_id,
                         ordinal=existing.ordinal,
-                        kind=segment_to_block_kind(seg),
+                        kind=new_kind,
                         payload=seg,
-                        sealed=False,
+                        sealed=new_kind != "assistant_intermediate",
                         service_received_at=ts,
                     )
             # Sealed blocks: immutable — leave them as-is.

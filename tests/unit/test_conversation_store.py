@@ -267,6 +267,16 @@ def test_update_live_block_updates_payload(conn):
     assert json.loads(row["payload_json"])["text"] == "hello world"
 
 
+def test_update_live_block_seals_on_terminal_kind(conn):
+    """Updating the live block to a non-intermediate kind seals it in place."""
+    _make_conv(conn)
+    b = append_block(conn, "conv-1", {"type": "assistant", "phase": "intermediate", "text": "hi"})
+    assert b.sealed is False
+    update_live_block(conn, "conv-1", {"type": "assistant", "phase": "final", "text": "hi done"})
+    row = conn.execute("SELECT sealed FROM conversation_blocks WHERE id=?", (b.id,)).fetchone()
+    assert row["sealed"] == 1
+
+
 def test_update_live_block_returns_false_if_no_live_block(conn):
     _make_conv(conn)
     seg = {"type": "user", "text": "done"}
@@ -459,6 +469,30 @@ def test_merge_conversation_doc_live_block_rule(conn):
         "SELECT COUNT(*) FROM conversation_blocks WHERE conversation_id='conv-1' AND sealed=0"
     ).fetchone()[0]
     assert count <= 1
+
+
+def test_merge_conversation_doc_equal_count_flip_to_final_seals(conn):
+    """An equal-count merge that flips the live tail to phase=final seals it.
+
+    The live-block rule says a block seals when its phase flips to final, so a
+    finished turn never lingers as a mutable tail (which would keep emitting
+    block-updated events in 1.d). Regression for update_live_block leaving the
+    block sealed=0 on the intermediate→final transition.
+    """
+    _make_conv(conn)
+    merge_conversation_doc(conn, "conv-1", {"segments": [
+        {"type": "user", "text": "q"},
+        {"type": "assistant", "phase": "intermediate", "text": "thinking..."},
+    ]})
+    assert read_conversation_blocks(conn, "conv-1")[-1].sealed is False
+
+    merge_conversation_doc(conn, "conv-1", {"segments": [
+        {"type": "user", "text": "q"},
+        {"type": "assistant", "phase": "final", "text": "done"},
+    ]})
+    tail = read_conversation_blocks(conn, "conv-1")[-1]
+    assert tail.kind == "assistant_final"
+    assert tail.sealed is True
 
 
 def test_merge_conversation_doc_updates_conversation_metadata(conn):
