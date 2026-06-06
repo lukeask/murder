@@ -124,3 +124,13 @@ def test_parse_no_cursor_marker_returns_none() -> None:
 
 def test_parse_empty_string_returns_none() -> None:
     assert parse_claude_code_choice_prompt("") is None
+
+
+def test_parse_ignores_stray_numbered_lines_in_scrollback() -> None:
+    # The pane scrollback holds an instruction list ("1. Write...", "2. Emit...")
+    # whose lines also match the option regex. Only the trailing menu is real.
+    result = parse_claude_code_choice_prompt(_load("planner_with_scrollback.txt"))
+    assert result is not None
+    assert result.question == "Where should we focus this planning session?"
+    assert [opt.number for opt in result.options] == [1, 2, 3, 4, 5, 6]
+    assert result.options[0].label == "Settle open questions"

@@ -798,18 +798,19 @@ def _segment_to_choice_prompt(segment: Mapping[str, Any]) -> MultipleChoicePromp
 
 
 def _live_choice_prompt(doc: Mapping[str, Any]) -> MultipleChoicePrompt | None:
-    if doc.get("state") != "awaiting_approval":
-        return None
+    # A live multiple-choice dialog is always the trailing segment (the grammar
+    # appends it last while the pane shows it, and marks it answered once it is
+    # gone). We key off that rather than doc["state"]: conversation live_state is
+    # only carried into the TUI projection at bootstrap and is never refreshed by
+    # block events, so a prompt that goes live mid-session would otherwise never
+    # surface the wizard (see notes/wizard-fail.md).
     segments = doc.get("segments")
-    if not isinstance(segments, list):
+    if not isinstance(segments, list) or not segments:
         return None
-    for segment in reversed(segments):
-        if not isinstance(segment, Mapping):
-            continue
-        prompt = _segment_to_choice_prompt(segment)
-        if prompt is not None:
-            return prompt
-    return None
+    last = segments[-1]
+    if not isinstance(last, Mapping):
+        return None
+    return _segment_to_choice_prompt(last)
 
 
 def _last_user_summary(doc: Mapping[str, Any]) -> str:

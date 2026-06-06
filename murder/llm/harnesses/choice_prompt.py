@@ -41,6 +41,23 @@ def parse_claude_code_choice_prompt(pane_text: str) -> MultipleChoicePrompt | No
         cursor_char, num_str, label = match.group(1), match.group(2), match.group(3)
         options_raw.append((i, cursor_char is not None, int(num_str), label.strip()))
 
+    if not options_raw:
+        return None
+
+    # Stray numbered lines elsewhere in the pane — e.g. an instruction list in
+    # the scrollback — also match _OPTION_RE. The live menu is the trailing run
+    # whose numbers count up sequentially (CC numbers options from 1). Walk back
+    # from the last match keeping options while each is exactly one less than the
+    # one below it, then drop everything before that run.
+    trailing = [options_raw[-1]]
+    for entry in reversed(options_raw[:-1]):
+        if entry[2] == trailing[-1][2] - 1:
+            trailing.append(entry)
+        else:
+            break
+    trailing.reverse()
+    options_raw = trailing
+
     if len(options_raw) < 2:
         return None
     if not any(has_cursor for _, has_cursor, _, _ in options_raw):

@@ -1,0 +1,38 @@
+  **Carving a ticket — step by step:**
+
+  1. **Write `.murder/tickets/<id>.md`** with exactly these three sections, no frontmatter:
+
+  ```
+  ## Plan
+  ```
+
+  2. **Emit a YAML carving form** in the chat immediately after writing the file:
+
+  ```yaml
+  id: <id>
+  ```
+
+  **Rules:**
+  - The ticket id format is `t<NNN>`.
+
+● I've read the plan shell and its YAML sidecar. Here's where it stands:
+
+  Before I start filling in scope and phases, where do you want to take this?
+────────────────────────────────────────────────────────────────────────────────────────────
+ ☐ Focus
+
+Where should we focus this planning session?
+
+❯ 1. Settle open questions
+     Work through the 4 open questions to lock scope before detailing phases.
+  2. Inventory current refresh paths
+     Do the v0 audit first, so the plan rests on facts.
+  3. Detail v1 (snapshot-first)
+     Assume migration order and dive into designing the snapshot-first wiring.
+  4. Just refine the shell
+     Tighten goal/motivation/scope prose and phase definitions.
+  5. Type something.
+────────────────────────────────────────────────────────────────────────────────────────────
+  6. Chat about this
+
+Enter to select · ↑/↓ to navigate · Esc to cancel

@@ -301,6 +301,55 @@ def test_crow_tile_renders_live_choice_prompt_as_wizard() -> None:
     asyncio.run(_run())
 
 
+def test_crow_tile_renders_live_choice_prompt_with_stale_doc_state() -> None:
+    # Regression (notes/wizard-fail.md): conversation live_state is only carried
+    # into the TUI projection at bootstrap, so a prompt that goes live mid-session
+    # arrives with a stale doc state (here "working"). The wizard must still
+    # trigger off the trailing unanswered choice_prompt segment.
+    tile = CrowTile(
+        CrowEntry(
+            agent_id="planner-test",
+            ticket_id="",
+            ticket_title="planner-test",
+            harness="claude_code",
+            status="running",
+            session="murder_repo_planner_test",
+            health=Health.GREEN,
+        )
+    )
+    doc = {
+        "harness": "claude_code",
+        "state": "working",
+        "condensed": None,
+        "segments": [
+            {"type": "user", "text": "help me plan"},
+            {
+                "type": "choice_prompt",
+                "question": "Where should we focus?",
+                "options": [
+                    {"number": 1, "label": "Settle open questions", "description": None},
+                    {"number": 2, "label": "Inventory refresh paths", "description": None},
+                ],
+                "footer": "Enter to select",
+                "selected": 1,
+                "answered": False,
+                "chosen": None,
+            },
+        ],
+    }
+
+    async def _run() -> None:
+        app = _TileApp(tile)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            tile.set_parsed_doc(doc, "claude_code")
+            await pilot.pause()
+            assert tile._choice_wizard is not None  # noqa: SLF001
+            assert tile._choice_wizard.prompt.question == "Where should we focus?"  # noqa: SLF001
+
+    asyncio.run(_run())
+
+
 def test_crow_tile_renders_answered_choice_prompt_as_static_history() -> None:
     tile = CrowTile(
         CrowEntry(
