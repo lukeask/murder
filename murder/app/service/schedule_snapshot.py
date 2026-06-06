@@ -20,6 +20,7 @@ from murder.app.service.client_api import (
 
 _PERIOD_MINUTES: dict[tuple[str, str], float] = {
     ("claude_code", "current_session"): 5 * 60.0,
+    ("claude_code", "current_week"): 7 * 24 * 60.0,
     ("codex", "5h"): 5 * 60.0,
     ("codex", "weekly"): 7 * 24 * 60.0,
     ("cursor", "auto_composer"): 30 * 24 * 60.0,

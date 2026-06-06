@@ -91,6 +91,23 @@ def test_claude_usage_dialog_narrow_parses_block_bar_and_reset() -> None:
     assert 3.5 * 60 < t_until_minutes < 4.0 * 60  # ~3h40m away
 
 
+def test_claude_usage_dialog_weekly_parses_both_windows() -> None:
+    # Max plan: /usage shows both "Current session" and "Current week (all models)".
+    # Reset for weekly uses "Jun 13, 2am" format (month + day + bare hour).
+    pane = _load_pane_fixture("cc_usage_dialog_weekly.txt")
+    now = datetime(2026, 6, 6, 10, 0, tzinfo=ZoneInfo("America/New_York"))
+    status = parse_claude_usage_pane(pane, now=now)
+    assert len(status.windows) == 2
+    by_name = {w.name: w for w in status.windows}
+    assert by_name["current_session"].percent_used == 2.0
+    session_reset = datetime.fromisoformat(by_name["current_session"].reset_at)
+    assert session_reset.hour == 15 and session_reset.minute == 30  # 3:30pm
+    assert by_name["current_week"].percent_used == 0.0
+    week_reset = datetime.fromisoformat(by_name["current_week"].reset_at)
+    assert week_reset.month == 6 and week_reset.day == 13
+    assert week_reset.hour == 2 and week_reset.minute == 0
+
+
 def test_claude_usage_dialog_wide_parses_block_bar_and_reset() -> None:
     # Real /usage overlay captured at ~217 cols; same format but no line-wrapping
     pane = _load_pane_fixture("cc_usage_dialog_wide.txt")

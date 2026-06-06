@@ -22,7 +22,9 @@ _CLAUDE_USAGE_RE = re.compile(
 )
 _PERCENT_RE = re.compile(r"(?P<pct>\d+(?:\.\d+)?)\s*%\s+used", re.IGNORECASE)
 _RESET_RE = re.compile(
-    r"\bResets?\s+(?P<time>\d{1,2}(?::\d{2})?\s*(?:am|pm))"
+    r"\bResets?\s+"
+    r"(?:(?P<mon>[A-Za-z]{3,9})\s+(?P<mday>\d{1,2}),?\s*)?"
+    r"(?P<time>\d{1,2}(?::\d{2})?\s*(?:am|pm))"
     r"(?:\s*\((?P<tz>[^)]+)\))?",
     re.IGNORECASE,
 )
@@ -42,14 +44,7 @@ def utc_now_iso() -> str:
     return datetime.now(tz=ZoneInfo("UTC")).isoformat()
 
 
-def _parse_reset_at(text: str, now: datetime | None = None) -> str | None:
-    # Take the last match so stale /usage scrollback above the current overlay
-    # doesn't win over the fresh reset time at the bottom of the pane.
-    matches = list(_RESET_RE.finditer(text))
-    if not matches:
-        return None
-    match = matches[-1]
-
+def _parse_reset_from_match(match: re.Match, now: datetime | None) -> str | None:
     tz_name = match.group("tz") or "UTC"
     try:
         tz = ZoneInfo(tz_name)
@@ -61,15 +56,46 @@ def _parse_reset_at(text: str, now: datetime | None = None) -> str | None:
     # Claude's /usage renders bare-hour resets like `12am`; minutes optional.
     fmt = "%I:%M%p" if ":" in raw_time else "%I%p"
     parsed = datetime.strptime(raw_time, fmt)
-    reset_at = base.replace(
-        hour=parsed.hour,
-        minute=parsed.minute,
-        second=0,
-        microsecond=0,
-    )
+
+    mon_str = match.group("mon")
+    mday_str = match.group("mday")
+    if mon_str and mday_str and (mon_num := _MONTHS.get(mon_str[:3].lower())):
+        day_n, year = int(mday_str), base.year
+        if (mon_num, day_n) < (base.month, base.day):
+            year += 1
+        try:
+            return base.replace(
+                year=year, month=mon_num, day=day_n,
+                hour=parsed.hour, minute=parsed.minute,
+                second=0, microsecond=0,
+            ).isoformat()
+        except ValueError:
+            return None
+
+    reset_at = base.replace(hour=parsed.hour, minute=parsed.minute, second=0, microsecond=0)
     if reset_at <= base:
         reset_at += timedelta(days=1)
     return reset_at.isoformat()
+
+
+def _parse_reset_at(text: str, now: datetime | None = None) -> str | None:
+    # Take the last match so stale /usage scrollback above the current overlay
+    # doesn't win over the fresh reset time at the bottom of the pane.
+    matches = list(_RESET_RE.finditer(text))
+    if not matches:
+        return None
+    return _parse_reset_from_match(matches[-1], now)
+
+
+def _reset_after_label(label: str, text: str, now: datetime | None) -> str | None:
+    """First reset time appearing after the latest occurrence of label (scrollback-safe)."""
+    idx = text.lower().rfind(label.lower())
+    if idx < 0:
+        return None
+    matches = list(_RESET_RE.finditer(text[idx:]))
+    if not matches:
+        return None
+    return _parse_reset_from_match(matches[0], now)
 
 
 def _first_percent_after(label: str, text: str) -> float | None:
@@ -107,12 +133,23 @@ def parse_claude_usage_pane(
         totals.cache_read_tokens = int(match.group("cache_read"))
         totals.cache_write_tokens = int(match.group("cache_write"))
 
-    window = HarnessUsageWindow(
-        name="current_session",
-        percent_used=_first_percent_after("Current session", clean),
-        reset_at=_parse_reset_at(clean, now=now),
-    )
-    windows = [window] if window.percent_used is not None or window.reset_at else []
+    windows: list[HarnessUsageWindow] = []
+    session_pct = _first_percent_after("Current session", clean)
+    session_reset = _reset_after_label("Current session", clean, now)
+    if session_pct is not None or session_reset:
+        windows.append(HarnessUsageWindow(
+            name="current_session",
+            percent_used=session_pct,
+            reset_at=session_reset,
+        ))
+    weekly_pct = _first_percent_after("Current week", clean)
+    weekly_reset = _reset_after_label("Current week", clean, now)
+    if weekly_pct is not None or weekly_reset:
+        windows.append(HarnessUsageWindow(
+            name="current_week",
+            percent_used=weekly_pct,
+            reset_at=weekly_reset,
+        ))
 
     return HarnessUsageStatus(
         harness="claude_code",
