@@ -22,7 +22,7 @@ _CC_PROMPT_RE = re.compile(r"^\s*❯[\s ]*(.*)$")
 _CC_CHOICE_OPTION_PROMPT_RE = re.compile(r"^\s*❯[\s\xa0]*\d+\.\s+")
 _CC_BULLET_RE = re.compile(r"^●\s+(.*)$")
 _CC_COMPLETION_RE = re.compile(
-    r"^\s*[✻✶✳✽✢]\s+(?:Worked|Baked|Churned|Sautéed|Cooked|Brewed|Noodled|Cogitated)\s+for\s+(\d.+?)\s*$"
+    r"^\s*[✻✶✳✽✢]\s+[A-Z][\w-]+\s+for\s+(\d.+?)\s*$"
 )
 _CC_AGENT_DONE_RE = re.compile(r'^●\s+Agent\s+"(.+?)"\s+completed\s+·\s+(.+?)\s*$')
 _CC_AGENT_START_RE = re.compile(r"^●\s+Agent\((.+?)\)\s*$")
@@ -36,7 +36,7 @@ _CC_RUNNING_SUMMARY_RE = re.compile(
     r"|Finding|Found|Fetching|Fetched)\b.*…"
 )
 _CC_SPINNER_RE = re.compile(
-    r"^\s*[·*✻✶✳✽✢⠁-⣿◐◓◑◒]?\s*[A-Z]\w+…+\s*(?:\([^)]*(?:tokens|thought|↑|↓|esc to)[^)]*\))?\s*$"
+    r"^\s*[·*✻✶✳✽✢⠁-⣿◐◓◑◒]?\s*[A-Z][\w-]+…+\s*(?:\([^)]*(?:tokens|thought|↑|↓|esc to)[^)]*\))?\s*$"
 )
 _CC_SHELL_PROMPT_RE = re.compile(r"^\w+@\w[-\w.]*:[~\w/]*\s*\$\s")
 _CC_AGENT_ROSTER_RE = re.compile(r"^\s*[●◯]\s+(?:main|general-purpose)\b")
