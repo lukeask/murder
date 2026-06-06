@@ -13,6 +13,8 @@ venv/
 
 # Murder runtime artifacts
 .murder/
+# SQLite databases (runtime state; .murder/murder.db plus any stray root copy)
+*.db
 
 # Local agent / IDE / handoff (repo-root dot dirs)
 .agents/
