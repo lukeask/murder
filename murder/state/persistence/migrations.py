@@ -457,3 +457,64 @@ def _migrate_drop_ticket_write_set(conn: sqlite3.Connection) -> None:
     if row is None:
         return
     conn.execute("DROP TABLE ticket_write_set")
+
+
+def _migrate_conversation_store(conn: sqlite3.Connection) -> None:
+    """Add conversations + conversation_blocks tables (Phase 1.b JSON store).
+
+    Idempotent: the CREATE TABLE IF NOT EXISTS in SCHEMA_SQL handles fresh DBs;
+    this migration handles existing DBs that ran init_db before 1.b landed.
+    """
+    existing = {
+        row["name"]
+        for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table'"
+        ).fetchall()
+    }
+    if "conversations" not in existing:
+        conn.executescript(
+            """
+            CREATE TABLE conversations (
+                conversation_id    TEXT PRIMARY KEY,
+                agent_id           TEXT NOT NULL,
+                harness            TEXT,
+                model              TEXT,
+                harness_session_id TEXT,
+                live_state         TEXT,
+                condensed          TEXT,
+                status             TEXT NOT NULL DEFAULT 'in_progress'
+                                   CHECK (status IN ('in_progress','complete','stale')),
+                created_at         TEXT NOT NULL,
+                updated_at         TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_conversations_agent ON conversations(agent_id);
+            CREATE INDEX IF NOT EXISTS idx_conversations_status ON conversations(status);
+            """
+        )
+    if "conversation_blocks" not in existing:
+        conn.executescript(
+            """
+            CREATE TABLE conversation_blocks (
+                id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+                conversation_id     TEXT NOT NULL REFERENCES conversations(conversation_id)
+                                    ON DELETE CASCADE,
+                ordinal             INTEGER NOT NULL,
+                kind                TEXT NOT NULL CHECK (kind IN (
+                                        'user',
+                                        'assistant_intermediate',
+                                        'assistant_final',
+                                        'tool_call',
+                                        'plan_update',
+                                        'agent_event',
+                                        'choice_prompt',
+                                        'notice'
+                                    )),
+                payload_json        TEXT NOT NULL,
+                sealed              INTEGER NOT NULL DEFAULT 0,
+                service_received_at TEXT NOT NULL,
+                UNIQUE (conversation_id, ordinal)
+            );
+            CREATE INDEX IF NOT EXISTS idx_conversation_blocks_conv
+                ON conversation_blocks(conversation_id, ordinal);
+            """
+        )

@@ -1,0 +1,64 @@
+# source: tools/testing/recordings/20260606-043551/frames.jsonl frame 187
+    Leave a working note on the ticket. The closing `>>> END` is required.
+
+  >>> DONE
+    Declare the ticket complete. Completion checks will run; you may be reprompted if they fail.
+
+  Read the ticket first, then work. Keep edits scoped to the write_set. Use ASK when blocked rather than guessing.
+
+
+● I'll start by finding my ticket.
+
+  Listed 1 directory (ctrl+o to expand)
+
+● Bash(git log --oneline -5 && echo "---BRANCH---" && git branch --show-current)
+  ⎿  11a1368 feat: replace transcript parser with stateful transcript_v2
+     c0cedf9 test: add transcript-v2 fixtures and disembodied tests
+     aa958eb refactor: reorganize into app/llm/runtime/state/verdict/work namespaces
+     … +4 lines (ctrl+o to expand)
+  ⎿  Interrupted · What should Claude do instead?
+
+❯ /advisor
+  ⎿  Advisor set to Sonnet 4.6
+
+❯ /advisor
+  ⎿  Advisor disabled
+
+❯ /advisor
+  ⎿  Advisor set to Opus 4.8
+
+❯ /model
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  Select model
+  Switch between Claude models. Your pick becomes the default for new sessions. For other/previous model names, specify with --model.
+
+    1. Default (recommended)  Sonnet 4.6 · Best for everyday tasks
+    2. Sonnet (1M context)    Sonnet 4.6 with 1M context · Draws from usage credits · $3/$15 per Mtok
+  ❯ 3. Opus ✔                 Opus 4.8 · Most capable for complex work · ~2× usage vs Sonnet
+    4. Haiku                  Haiku 4.5 · Fastest for quick answers
+
+  ○ Low effort ←/→ to adjust
+
+  Use /fast to turn on Fast mode (Opus 4.8).
+
+  Enter to set as default · s to use this session only · Esc to cancel
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

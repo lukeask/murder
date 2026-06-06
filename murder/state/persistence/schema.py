@@ -250,6 +250,70 @@ CREATE TABLE IF NOT EXISTS agent_messages (
 
 CREATE INDEX IF NOT EXISTS idx_agent_messages_agent ON agent_messages(agent_id);
 
+-- Parsed conversation store (Phase 1.b).
+-- One row per conversation session.  agent_id is a soft reference (no FK) so
+-- tests can insert without a matching agents row, mirroring agent_messages.
+-- harness_session_id: the resume-id captured on graceful /exit (1.g fills this).
+-- live_state: the harness UI state at last parse (working/awaiting_input/awaiting_approval).
+-- condensed: summary field from the transcript doc; stored for lossless round-trip.
+-- status:
+--   in_progress – conversation has an active tmux pane owned by murder.
+--   complete    – harness exited gracefully; resume id was captured; history is final.
+--   stale       – was in_progress at startup but its pane is gone (murder killed the
+--                 session before /exit could run); treated as read-only history.
+--                 Stale exists because a hard restart (ctrl-C, OOM, system reboot)
+--                 leaves in_progress rows with no live pane — we need a third state
+--                 distinct from "in_progress" (no pane) and "complete" (graceful).
+CREATE TABLE IF NOT EXISTS conversations (
+    conversation_id    TEXT PRIMARY KEY,
+    agent_id           TEXT NOT NULL,
+    harness            TEXT,
+    model              TEXT,
+    harness_session_id TEXT,
+    live_state         TEXT,
+    condensed          TEXT,
+    status             TEXT NOT NULL DEFAULT 'in_progress'
+                       CHECK (status IN ('in_progress','complete','stale')),
+    created_at         TEXT NOT NULL,
+    updated_at         TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_conversations_agent ON conversations(agent_id);
+CREATE INDEX IF NOT EXISTS idx_conversations_status ON conversations(status);
+
+-- Append-only block rows for each conversation.
+-- kind mirrors the segment TypedDicts from segments.py plus:
+--   assistant_intermediate  (assistant segment phase=intermediate)
+--   assistant_final         (assistant segment phase=final)
+--   notice                  (reserved for 1.f; usage/error notices emitted by the service)
+-- payload_json: the full original segment dict stored verbatim for lossless round-trip.
+-- sealed: 0 = live/mutable (the one trailing block that may still grow); 1 = immutable.
+--   At most one sealed=0 row per conversation at any time.
+-- ordinal: 0-based append order within the conversation.
+CREATE TABLE IF NOT EXISTS conversation_blocks (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    conversation_id     TEXT NOT NULL REFERENCES conversations(conversation_id)
+                        ON DELETE CASCADE,
+    ordinal             INTEGER NOT NULL,
+    kind                TEXT NOT NULL CHECK (kind IN (
+                            'user',
+                            'assistant_intermediate',
+                            'assistant_final',
+                            'tool_call',
+                            'plan_update',
+                            'agent_event',
+                            'choice_prompt',
+                            'notice'
+                        )),
+    payload_json        TEXT NOT NULL,
+    sealed              INTEGER NOT NULL DEFAULT 0,
+    service_received_at TEXT NOT NULL,
+    UNIQUE (conversation_id, ordinal)
+);
+
+CREATE INDEX IF NOT EXISTS idx_conversation_blocks_conv
+    ON conversation_blocks(conversation_id, ordinal);
+
 CREATE TABLE IF NOT EXISTS harness_usage_snapshots (
     id             INTEGER PRIMARY KEY AUTOINCREMENT,
     harness        TEXT NOT NULL,
@@ -351,6 +415,7 @@ def init_db(conn: sqlite3.Connection) -> None:
         _migrate_agents_notetaker_role,
         _migrate_agents_worktree_path,
         _migrate_completion_tables,
+        _migrate_conversation_store,
         _migrate_drop_sentinel,
         _migrate_drop_ticket_write_set,
         _migrate_events_schema_version,
@@ -381,6 +446,7 @@ def init_db(conn: sqlite3.Connection) -> None:
     _migrate_agents_model(conn)
     _migrate_agents_worktree_path(conn)
     _migrate_drop_ticket_write_set(conn)
+    _migrate_conversation_store(conn)
     ensure_notetaker_context_row(conn)
 
 

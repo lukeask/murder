@@ -258,6 +258,175 @@ def _pi_model_picker(frames: list[dict[str, object]]) -> int:
     return _find_first(frames, ok)
 
 
+# ── 2026-06-06 additions: effort/fast support, advisor picker, uncached ───────
+
+
+def _cc_advisor_picker_no_advisor(frames: list[dict[str, object]]) -> int:
+    """Advisor picker with cursor on ``No advisor ✔`` (option 3)."""
+    return _find_first(
+        frames,
+        lambda t: "Advisor (experimental)" in t and "❯ 3. No advisor" in t,
+    )
+
+
+def _cc_advisor_picker_sonnet(frames: list[dict[str, object]]) -> int:
+    """Advisor picker with cursor on ``Sonnet 4.6`` (option 2)."""
+    return _find_first(
+        frames,
+        lambda t: "Advisor (experimental)" in t and "❯ 2. Sonnet 4.6" in t,
+    )
+
+
+def _cc_advisor_picker_opus(frames: list[dict[str, object]]) -> int:
+    """Advisor picker with cursor on ``Opus 4.8`` (option 1)."""
+    return _find_first(
+        frames,
+        lambda t: "Advisor (experimental)" in t and "❯ 1. Opus 4.8" in t and "No advisor" in t,
+    )
+
+
+def _cc_model_effort_medium(frames: list[dict[str, object]]) -> int:
+    """Model picker showing ``◐ Medium effort ←/→ to adjust``."""
+    return _find_first(frames, lambda t: "◐ Medium effort" in t and "←/→ to adjust" in t)
+
+
+def _cc_model_effort_low(frames: list[dict[str, object]]) -> int:
+    """Model picker showing ``○ Low effort ←/→ to adjust``."""
+    return _find_first(frames, lambda t: "○ Low effort" in t and "←/→ to adjust" in t)
+
+
+def _cc_model_effort_high(frames: list[dict[str, object]]) -> int:
+    """Model picker showing ``● High effort (default) ←/→ to adjust``."""
+    return _find_first(frames, lambda t: "● High effort" in t and "←/→ to adjust" in t)
+
+
+def _cc_model_effort_max(frames: list[dict[str, object]]) -> int:
+    """Model picker showing ``◈ Max effort ←/→ to adjust``."""
+    return _find_first(frames, lambda t: "◈ Max effort" in t and "←/→ to adjust" in t)
+
+
+def _cc_advisor_active_idle(frames: list[dict[str, object]]) -> int:
+    """Idle CC pane with advisor active in status bar."""
+
+    def ok(text: str) -> bool:
+        return (
+            "Advisor Tool (experimental) is on" in text
+            and "bypass permissions" in text.lower()
+            and "esc to interrupt" not in text.lower()
+        )
+
+    return _find_first(frames, ok)
+
+
+def _codex_usage_limit(frames: list[dict[str, object]]) -> int:
+    """Codex pane showing the usage-limit banner (``■ You've hit your usage limit``)."""
+    return _find_first(frames, lambda t: "You've hit your usage limit" in t)
+
+
+def _codex_model_picker_gpt55(frames: list[dict[str, object]]) -> int:
+    """Codex model picker with ``gpt-5.5`` highlighted (``Select Model and Effort``)."""
+    return _find_first(
+        frames,
+        lambda t: "Select Model and Effort" in t and "gpt-5.5 (default)" in t,
+    )
+
+
+def _codex_reasoning_medium(frames: list[dict[str, object]]) -> int:
+    """Codex reasoning-level picker with Medium highlighted."""
+    return _find_first(
+        frames,
+        lambda t: "Select Reasoning Level" in t and "› 2. Medium (default)" in t,
+    )
+
+
+def _codex_reasoning_high(frames: list[dict[str, object]]) -> int:
+    """Codex reasoning-level picker with High highlighted."""
+    return _find_first(
+        frames,
+        lambda t: "Select Reasoning Level" in t and "› 3. High" in t,
+    )
+
+
+def _codex_reasoning_extrahi(frames: list[dict[str, object]]) -> int:
+    """Codex reasoning-level picker with Extra high highlighted."""
+    return _find_first(
+        frames,
+        lambda t: "Select Reasoning Level" in t and "› 4. Extra high" in t,
+    )
+
+
+def _codex_reasoning_low(frames: list[dict[str, object]]) -> int:
+    """Codex reasoning-level picker with Low highlighted."""
+    return _find_first(
+        frames,
+        lambda t: "Select Reasoning Level" in t and "› 1. Low" in t,
+    )
+
+
+def _cursor_model_list_with_efforts(frames: list[dict[str, object]]) -> int:
+    """Cursor model list showing effort annotations (e.g. ``(Thinking) 300K High``)."""
+    return _find_first(
+        frames,
+        lambda t: "Type to filter" in t and "(Thinking) 300K High" in t and "Opus 4.8" in t,
+    )
+
+
+def _cursor_composer_fast_off(frames: list[dict[str, object]]) -> int:
+    """Cursor Composer 2.5 Edit Parameters with Fast unchecked (``→ [ ] Fast``)."""
+    return _find_first(
+        frames,
+        lambda t: "Composer 2.5 — Edit Parameters" in t and "→ [ ] Fast" in t,
+    )
+
+
+def _cursor_composer_fast_on(frames: list[dict[str, object]]) -> int:
+    """Cursor Composer 2.5 Edit Parameters with Fast checked (``→ [x] Fast``)."""
+    return _find_first(
+        frames,
+        lambda t: "Composer 2.5 — Edit Parameters" in t and "→ [x] Fast" in t,
+    )
+
+
+def _cursor_model_list_fast_active(frames: list[dict[str, object]]) -> int:
+    """Cursor model list showing ``Composer 2.5  Fast (Tab to modify)``."""
+    return _find_first(
+        frames,
+        lambda t: "Type to filter" in t and "Composer 2.5" in t and "Fast (Tab to modify)" in t,
+    )
+
+
+def _cursor_status_fast_active(frames: list[dict[str, object]]) -> int:
+    """Cursor idle pane with status bar showing ``Composer 2.5 Fast · <pct>%``."""
+    return _find_first(
+        frames,
+        lambda t: "Composer 2.5 Fast" in t and "Add a follow-up" in t,
+    )
+
+
+def _cursor_opus_edit_params_default(frames: list[dict[str, object]]) -> int:
+    """Cursor Opus 4.8 Edit Parameters panel with High as the selected effort."""
+    return _find_first(
+        frames,
+        lambda t: "Opus 4.8 — Edit Parameters" in t and "High ✓" in t and "→ 300K" in t,
+    )
+
+
+def _cursor_opus_effort_low_hover(frames: list[dict[str, object]]) -> int:
+    """Cursor Opus 4.8 Edit Parameters panel with cursor hovering on Low."""
+    return _find_first(
+        frames,
+        lambda t: "Opus 4.8 — Edit Parameters" in t and "→ Low" in t,
+    )
+
+
+def _cursor_opus_effort_medium_selected(frames: list[dict[str, object]]) -> int:
+    """Cursor Opus 4.8 Edit Parameters panel after selecting Medium (``Medium ✓``)."""
+    return _find_first(
+        frames,
+        lambda t: "Opus 4.8 — Edit Parameters" in t and "Medium ✓" in t,
+    )
+
+
 EXTRACTIONS: tuple[Extraction, ...] = (
     Extraction("20260523-215258", "cc_idle.txt", _cc_idle),
     Extraction("20260523-215258", "cc_busy.txt", _cc_busy),
@@ -285,6 +454,31 @@ EXTRACTIONS: tuple[Extraction, ...] = (
         "pi_interrupt.txt",
         _pi_interrupt,
     ),
+    # 2026-06-06 additions: CC advisor picker + effort levels
+    Extraction("20260606-043551", "cc_advisor_picker_no_advisor.txt", _cc_advisor_picker_no_advisor),
+    Extraction("20260606-043551", "cc_advisor_picker_sonnet.txt", _cc_advisor_picker_sonnet),
+    Extraction("20260606-043551", "cc_advisor_picker_opus.txt", _cc_advisor_picker_opus),
+    Extraction("20260606-043551", "cc_model_effort_medium.txt", _cc_model_effort_medium),
+    Extraction("20260606-043551", "cc_model_effort_low.txt", _cc_model_effort_low),
+    Extraction("20260606-043551", "cc_model_effort_high.txt", _cc_model_effort_high),
+    Extraction("20260606-043551", "cc_model_effort_max.txt", _cc_model_effort_max),
+    Extraction("20260606-043551", "cc_advisor_active_idle.txt", _cc_advisor_active_idle),
+    # 2026-06-06 additions: Codex usage limit + reasoning level picker
+    Extraction("20260606-043724", "codex_usage_limit.txt", _codex_usage_limit),
+    Extraction("20260606-043724", "codex_model_picker_gpt55.txt", _codex_model_picker_gpt55),
+    Extraction("20260606-043724", "codex_reasoning_medium.txt", _codex_reasoning_medium),
+    Extraction("20260606-043724", "codex_reasoning_high.txt", _codex_reasoning_high),
+    Extraction("20260606-043724", "codex_reasoning_extrahi.txt", _codex_reasoning_extrahi),
+    Extraction("20260606-043724", "codex_reasoning_low.txt", _codex_reasoning_low),
+    # 2026-06-06 additions: Cursor fast mode + Opus effort picker
+    Extraction("20260606-043837", "cursor_model_list_with_efforts.txt", _cursor_model_list_with_efforts),
+    Extraction("20260606-043837", "cursor_composer_fast_off.txt", _cursor_composer_fast_off),
+    Extraction("20260606-043837", "cursor_composer_fast_on.txt", _cursor_composer_fast_on),
+    Extraction("20260606-043837", "cursor_model_list_fast_active.txt", _cursor_model_list_fast_active),
+    Extraction("20260606-043837", "cursor_status_fast_active.txt", _cursor_status_fast_active),
+    Extraction("20260606-043837", "cursor_opus_edit_params_default.txt", _cursor_opus_edit_params_default),
+    Extraction("20260606-043837", "cursor_opus_effort_low_hover.txt", _cursor_opus_effort_low_hover),
+    Extraction("20260606-043837", "cursor_opus_effort_medium_selected.txt", _cursor_opus_effort_medium_selected),
 )
 
 

@@ -1,0 +1,64 @@
+# source: tools/testing/recordings/20260606-043837/frames.jsonl frame 126
+user@machine:~/Documents/code/murder $ agent
+
+
+  Cursor Agent
+  v2026.06.04-8f81907
+  Use /skills to give Cursor specialized knowledge for tasks.
+
+
+  [Pasted text #1 +21 lines]
+
+
+  Locating and reading the assigned ticket files.
+
+    Globbed 2 globs
+    Globbed ".murder/tickets/*" in .
+    Globbed ".murder/**/*.yaml" in .
+
+  $ ls -la /home/user/Documents/code/murder/.murder/tickets/ 2>/dev/null || ls -la /home/user/Documents/code/murder/.murder/ 2>/dev/null 1.2s
+    total 452
+    drwxrwxr-x  2 luke luke  4096 Jun  6 00:38 .
+    … truncated (96 more lines) · ctrl+o to expand
+
+    Grepped "ticket_id|assigned|crow" in .murder
+    Found 58 matches  (truncated)
+
+
+  stop
+
+
+  Stopped. No further ticket work or file changes unless you ask to resume.
+
+
+ ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+  → Add a follow-up
+ ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+ Available models
+
+ Filter:
+
+   Auto
+ → Composer 2.5             (Tab to modify)
+   Opus 4.8                 (Thinking) 300K High
+   GPT-5.5                  272K Medium
+   Sonnet 4.6               (Thinking) 200K Medium
+   Codex 5.3                Medium
+   Opus 4.7                 (Thinking) 300K High
+   Grok Build 0.1           200K
+   GPT-5.4                  272K Medium
+   Opus 4.6                 (Thinking) 200K High
+
+ 1-10 of 27
+
+ Type to filter • Enter to select • Tab to edit
+
+
+
+
+
+
+
+
+
+

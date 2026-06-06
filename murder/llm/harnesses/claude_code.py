@@ -44,11 +44,11 @@ _CC_BANNER_MODEL_RE = re.compile(
     re.IGNORECASE,
 )
 _CC_EFFORT_STATUS_RE = re.compile(
-    r"[●•]\s*(?P<effort>low|medium|high|x\s*high|xhigh|max)\s*(?:·|$)",
+    r"[●•○◐◈]\s*(?P<effort>low|medium|high|x\s*high|xhigh|max)\s*(?:·|$)",
     re.IGNORECASE,
 )
 _CC_MENU_EFFORT_RE = re.compile(
-    r"[●•]\s*(?P<effort>low|medium|high|x\s*high|xhigh|max)\s+effort\b",
+    r"[●•○◐◈]\s*(?P<effort>low|medium|high|x\s*high|xhigh|max)\s+effort\b",
     re.IGNORECASE,
 )
 _TRUST_PROMPT_RE = re.compile(

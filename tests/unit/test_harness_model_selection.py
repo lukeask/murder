@@ -312,3 +312,151 @@ def test_provider_model_slug_extracted():
     models = parse_harness_model_list(pane)
     ids = [m[0] for m in models]
     assert "anthropic/claude-sonnet-4-6" in ids
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 2026-06-06 recordings: CC effort picker, Codex reasoning, Cursor fast mode
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def test_cc_model_picker_effort_high_parses():
+    """Existing CC regex matches ● High effort; this is the passing baseline."""
+    adapter = ClaudeCodeAdapter()
+    result = adapter.parse_active_model_state(_pane("cc_model_effort_high.txt"))
+    assert result is not None
+    assert result.effort == "high"
+
+
+def test_cc_model_picker_effort_low_parses():
+    """CC ○ Low effort indicator must be parsed (○ not in current [●•] class)."""
+    adapter = ClaudeCodeAdapter()
+    result = adapter.parse_active_model_state(_pane("cc_model_effort_low.txt"))
+    assert result is not None
+    assert result.effort == "low"
+
+
+def test_cc_model_picker_effort_medium_parses():
+    """CC ◐ Medium effort indicator must be parsed (◐ not in current [●•] class)."""
+    adapter = ClaudeCodeAdapter()
+    result = adapter.parse_active_model_state(_pane("cc_model_effort_medium.txt"))
+    assert result is not None
+    assert result.effort == "medium"
+
+
+def test_cc_model_picker_effort_max_parses():
+    """CC ◈ Max effort indicator must be parsed (◈ not in current [●•] class)."""
+    adapter = ClaudeCodeAdapter()
+    result = adapter.parse_active_model_state(_pane("cc_model_effort_max.txt"))
+    assert result is not None
+    assert result.effort == "max"
+
+
+def test_cc_advisor_active_idle_reports_model_and_effort():
+    """Advisor-active CC pane (status bar changed) still reports model + effort."""
+    adapter = ClaudeCodeAdapter()
+    result = adapter.parse_active_model_state(_pane("cc_advisor_active_idle.txt"))
+    assert result is not None
+    assert result.model is not None
+    assert result.effort is not None
+
+
+def test_cc_advisor_active_idle_is_idle():
+    """Advisor-active status bar does not falsely trigger busy detection."""
+    adapter = ClaudeCodeAdapter()
+    assert adapter.is_idle(_pane("cc_advisor_active_idle.txt")) is True
+
+
+# ─── Codex reasoning level picker (real recording fixtures) ──────────────────
+
+
+def test_codex_reasoning_picker_low_from_fixture():
+    choices = parse_numbered_effort_choices(_pane("codex_reasoning_low.txt"))
+    by_effort = {c.effort: c for c in choices}
+    assert by_effort["low"].index == 1
+    assert by_effort["medium"].index == 2
+    assert by_effort["high"].index == 3
+    assert by_effort["xhigh"].index == 4
+
+
+def test_codex_reasoning_picker_medium_from_fixture():
+    choices = parse_numbered_effort_choices(_pane("codex_reasoning_medium.txt"))
+    by_effort = {c.effort: c for c in choices}
+    assert by_effort["medium"].index == 2
+
+
+def test_codex_reasoning_picker_high_from_fixture():
+    choices = parse_numbered_effort_choices(_pane("codex_reasoning_high.txt"))
+    by_effort = {c.effort: c for c in choices}
+    assert by_effort["high"].index == 3
+
+
+def test_codex_reasoning_picker_extrahi_from_fixture():
+    choices = parse_numbered_effort_choices(_pane("codex_reasoning_extrahi.txt"))
+    by_effort = {c.effort: c for c in choices}
+    assert by_effort["xhigh"].index == 4
+
+
+def test_codex_model_picker_gpt55_fixture_extracts_three_models():
+    choices = parse_numbered_model_choices(_pane("codex_model_picker_gpt55.txt"))
+    ids = [c.model_id for c in choices]
+    assert "gpt-5.5" in ids
+    assert "gpt-5.4" in ids
+    assert "gpt-5.4-mini" in ids
+
+
+def test_codex_model_picker_gpt55_marks_current_model():
+    choices = parse_numbered_model_choices(_pane("codex_model_picker_gpt55.txt"))
+    current = [c.model_id for c in choices if c.current]
+    assert current == ["gpt-5.4-mini"]
+
+
+def test_codex_usage_limit_pane_is_idle():
+    """Usage-limit banner does not make the adapter consider the pane busy."""
+    adapter = CodexAdapter()
+    assert adapter.is_idle(_pane("codex_usage_limit.txt")) is True
+
+
+# ─── Cursor fast mode (real recording fixtures) ───────────────────────────────
+
+
+def test_cursor_composer_fast_off_reports_slow():
+    """Edit-parameters panel with [ ] Fast → speed is slow."""
+    adapter = CursorAdapter()
+    result = adapter.parse_active_model_state(_pane("cursor_composer_fast_off.txt"))
+    assert result is not None
+    assert result.effort == "slow"
+
+
+def test_cursor_composer_fast_on_reports_fast():
+    """Edit-parameters panel with [x] Fast → speed is fast."""
+    adapter = CursorAdapter()
+    result = adapter.parse_active_model_state(_pane("cursor_composer_fast_on.txt"))
+    assert result is not None
+    assert result.effort == "fast"
+
+
+def test_cursor_status_bar_fast_active_reports_fast():
+    """Status bar ``Composer 2.5 Fast · 9.1%`` → speed is fast."""
+    adapter = CursorAdapter()
+    result = adapter.parse_active_model_state(_pane("cursor_status_fast_active.txt"))
+    assert result is not None
+    assert result.effort == "fast"
+
+
+def test_cursor_model_list_fast_active_reports_fast():
+    """Model list ``Composer 2.5  Fast (Tab to modify)`` → speed is fast."""
+    adapter = CursorAdapter()
+    result = adapter.parse_active_model_state(_pane("cursor_model_list_fast_active.txt"))
+    assert result is not None
+    assert result.effort == "fast"
+
+
+def test_cursor_model_list_with_efforts_extracts_opus_48():
+    rows = parse_cursor_model_list(_pane("cursor_model_list_with_efforts.txt"), _cursor_model_id_from_label)
+    ids = [r[0] for r in rows]
+    assert "opus-4-8" in ids
+
+
+def test_cursor_model_list_with_efforts_shows_27_total():
+    page_num, on_page, total = parse_cursor_model_page(_pane("cursor_model_list_with_efforts.txt"))
+    assert total == 27
