@@ -219,7 +219,7 @@ class HelpScreen(ModalScreen[None]):
                         "Dispatch: [b]c[/b] / Enter opens ticket metadata editor; "
                         "F6 kicks ready rows",
                         "ctrl+b  toggle docs sidebar (planning) / crows roster sidebar (crows view)",
-                        "ctrl+y  planning/crow chat pane: parsed ⇄ raw tmux (when pane focused)",
+                        "ctrl+y  all panes: toggle parsed ⇄ raw tmux (global)",
                         "ctrl+c twice  force quit  ·  escape  unfocus chat",
                         "j/k or ↑/↓  vim-style navigation in lists and logs",
                         "ctrl+r refresh (includes usage gauges)",
@@ -1073,25 +1073,6 @@ class MurderApp(App[None]):
         self.notify(f"docs sidebar: {'on' if self._sidebar_visible else 'off'}", timeout=2)
 
     def action_toggle_collab_raw(self) -> None:
-        if self._view == "crows":
-            tile = self._focused_crow_tile()
-            if tile is None:
-                self.notify("focus a crow tail first", timeout=2)
-                return
-            tile.action_toggle_view()
-            self.notify(
-                f"crow tail view: {'raw tmux pane' if tile.raw_mode else 'parsed transcript'}",
-                timeout=2,
-            )
-            return
-
-        if self._view != "planning":
-            return
-
-        if not self._planning_chat_pane_focused():
-            self.notify("focus the chat pane first", timeout=2)
-            return
-
         self._collab_raw = not self._collab_raw
         if self._collab_raw:
             plan_name = self._planner_target_name()
@@ -1100,10 +1081,10 @@ class MurderApp(App[None]):
             else:
                 self._sync_collaborator_mirror_session()
         self._apply_mode()
-        plan_name = self._planner_target_name()
-        target = f"planner: {plan_name}" if plan_name is not None else "collaborator"
+        for tile in self._crows.wall.tiles:
+            tile.set_raw_mode(self._collab_raw)
         self.notify(
-            f"{target} view: {'raw tmux pane' if self._collab_raw else 'parsed chat'}",
+            f"all panes: {'raw tmux' if self._collab_raw else 'parsed'}",
             timeout=2,
         )
 

@@ -864,7 +864,6 @@ class CrowTile(Container):
     can_focus = True
     BINDINGS = [
         Binding("ctrl+o", "open", "Enlarge", show=False),
-        Binding("ctrl+y", "toggle_view", "Parsed/Raw", show=False),
     ]
 
     class Highlighted(Message):
@@ -1018,6 +1017,12 @@ class CrowTile(Container):
         if self._choice_wizard is not None:
             self._choice_wizard.display = not self._raw_mode
         self.post_message(self.ViewToggled(self._entry, self._raw_mode))
+
+    def set_raw_mode(self, value: bool) -> None:
+        # Raw-only tiles (unsupported harness) stay raw regardless.
+        target = value or not supports_harness(self._entry.harness or "")
+        if self._raw_mode != target:
+            self.action_toggle_view()
 
     def on_cc_multiple_choice_wizard_confirmed(
         self,
@@ -1247,6 +1252,10 @@ class TailWall(Grid):
 
     def tile_for(self, agent_id: str) -> CrowTile | None:
         return self._tiles.get(agent_id)
+
+    @property
+    def tiles(self) -> list[CrowTile]:
+        return list(self._tiles.values())
 
     @property
     def order(self) -> list[str]:
