@@ -73,6 +73,8 @@ CTRL_C_DOUBLE_TAP_S = 1.5
 TOAST_TIMEOUT_MULTIPLIER = 3.0
 RENAME_SELECTED_ARG_COUNT = 2
 
+_DELAY_DURATION_RE = re.compile(r"(?P<amount>\d+)(?P<unit>[hms])", re.IGNORECASE)
+
 _COLON_RAW_KEYS: dict[str, str] = {
     ":uparrow": "Up",
     ":downarrow": "Down",
@@ -100,6 +102,47 @@ def _is_ticket_handle(handle: str, repo_root: Path) -> bool:
     if _TNUM_RE.match(handle):
         return True
     return (tickets_dir(repo_root) / f"{handle}.yaml").exists()
+
+
+def _parse_delay_command(text: str) -> tuple[float, str] | None:
+    parts = text.strip().split(maxsplit=2)
+    if len(parts) != 3 or parts[0].lower() != ":delay":
+        return None
+    duration_token = parts[1]
+    pos = 0
+    seconds = 0
+    for match in _DELAY_DURATION_RE.finditer(duration_token):
+        if match.start() != pos:
+            return None
+        pos = match.end()
+        amount = int(match.group("amount"))
+        unit = match.group("unit").lower()
+        if unit == "h":
+            seconds += amount * 3600
+        elif unit == "m":
+            seconds += amount * 60
+        elif unit == "s":
+            seconds += amount
+    if pos != len(duration_token) or seconds <= 0:
+        return None
+    message = parts[2].strip()
+    if not message:
+        return None
+    return float(seconds), message
+
+
+def _format_delay(seconds: float) -> str:
+    remaining = int(seconds)
+    hours, remaining = divmod(remaining, 3600)
+    minutes, secs = divmod(remaining, 60)
+    pieces: list[str] = []
+    if hours:
+        pieces.append(f"{hours}h")
+    if minutes:
+        pieces.append(f"{minutes}m")
+    if secs or not pieces:
+        pieces.append(f"{secs}s")
+    return "".join(pieces)
 
 
 def _git_head_sha(repo_root: Path) -> str:
@@ -154,6 +197,7 @@ class HelpScreen(ModalScreen[None]):
                         ":rename <new>    rename selected plan, or rogue crow when chatting one",
                         "  (:rename <old> <new> for plans)",
                         ":deprecate [name]  deprecate selected or named plan",
+                        ":delay <5m|3h1m> <message>  send to current chat target later",
                         ":spawn :s       open rogue crow spawn wizard",
                         ":hideescalations  toggle escalation strip",
                         ":uparrow :downarrow :larrow :rarrow :enter  one raw key → harness",
@@ -262,7 +306,7 @@ class MurderApp(App[None]):
         border: solid $border;
     }
 
-    /* Focused pane — $pane-focus is distinct from crow-health-* (see themes.py). */
+    /* Focused panes use the same accent as the chat input / crows containers. */
     PlanList:focus,
     NotesList:focus,
     ReportsList:focus,
@@ -276,7 +320,7 @@ class MurderApp(App[None]):
     GaugeStrip:focus,
     ModeStrip:focus,
     TicketGrid:focus {
-        border: heavy $pane-focus;
+        border: heavy $accent;
     }
 
     PlanList:focus,
@@ -329,6 +373,7 @@ class MurderApp(App[None]):
         self._chat_target_label = "collaborator"
         self._chat_pending_message: str | None = None
         self._chat_murder_pending_agent_id: str | None = None
+        self._delayed_chat_tasks: set[asyncio.Task[None]] = set()
         self._user_config: UserConfig = load_user_config()
         self._view = "planning"
         self._pre_chat_focus = None
@@ -426,6 +471,9 @@ class MurderApp(App[None]):
         self.set_interval(max(interval_s, 1.0), self._refresh_pane)
 
     def on_unmount(self) -> None:
+        for task in tuple(self._delayed_chat_tasks):
+            task.cancel()
+        self._delayed_chat_tasks.clear()
         if self.perf.enabled and self._perf_mount_time is not None:
             self.perf.event(
                 "tui.shutdown",
@@ -982,6 +1030,8 @@ class MurderApp(App[None]):
         if collab_chat_on:
             self.run_worker(self._refresh_planning_chat(), exclusive=True, group="collab_chat")
         self.refresh_bindings()
+        if self._view in ("planning", "crows") and not self._is_displayed(self.focused):
+            self.set_focus(self._chat)
 
     def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
         del parameters
@@ -1279,7 +1329,12 @@ class MurderApp(App[None]):
         if self._chat_murder_pending_agent_id is not None and target != self._chat_murder_pending_agent_id:
             self._chat_murder_pending_agent_id = None
         is_crow = self._chat_target_is_crow(target)
-        label = self._chat_target_label if target else "collaborator"
+        if is_crow and target:
+            label = self._crow_chat_label(target)
+        elif target:
+            label = self._chat_target_label
+        else:
+            label = "collaborator"
         self._chat.set_recipient(label, is_crow=is_crow)
         self._chat.set_pending(self._chat_pending_message if is_crow else None)
         murder_target = label if is_crow and target == self._chat_murder_pending_agent_id else None
@@ -1325,6 +1380,19 @@ class MurderApp(App[None]):
             text = body
 
         if target_id is not None:
+            await self._dispatch_to_chat_target(text, target_id=target_id)
+            return
+
+        await self._dispatch_to_chat_target(text, target_id=None)
+
+    async def _dispatch_to_chat_target(
+        self,
+        text: str,
+        *,
+        target_id: str | None,
+        target_label: str | None = None,
+    ) -> None:
+        if target_id is not None:
             result = await self._submit_command(
                 target_worker="orchestrator",
                 kind="agent.message",
@@ -1337,7 +1405,7 @@ class MurderApp(App[None]):
                 error = str(result.get("error") or "agent did not handle message")
                 self.notify(error, severity="error", timeout=6)
                 return
-            if target_id.startswith("crow-"):
+            if target_id.startswith("crow-") and target_id == self._chat_target_agent_id:
                 if result.get("queued"):
                     self._chat_pending_message = text
                     self._sync_chat_recipient()
@@ -1348,9 +1416,12 @@ class MurderApp(App[None]):
             if target_id.startswith("planner-"):
                 self._sync_planner_mirror_session(target_id[len("planner-"):])
             label = (
-                self._chat_target_label
-                if target_id == self._chat_target_agent_id
-                else target_id
+                target_label
+                or (
+                    self._chat_target_label
+                    if target_id == self._chat_target_agent_id
+                    else target_id
+                )
             )
             self.notify(f"→ {label}", timeout=2)
             return
@@ -1369,6 +1440,45 @@ class MurderApp(App[None]):
             self._collab_chat.add_turn("you", text)
             self._collab_chat.add_status("collaborator is thinking…")
         self.notify("→ collaborator", timeout=2)
+
+    def _schedule_delayed_chat(
+        self,
+        delay_s: float,
+        message: str,
+        *,
+        target_id: str | None,
+        target_label: str,
+    ) -> None:
+        task = asyncio.create_task(
+            self._delayed_chat_worker(
+                delay_s,
+                message,
+                target_id=target_id,
+                target_label=target_label,
+            )
+        )
+        self._delayed_chat_tasks.add(task)
+        task.add_done_callback(self._delayed_chat_tasks.discard)
+
+    async def _delayed_chat_worker(
+        self,
+        delay_s: float,
+        message: str,
+        *,
+        target_id: str | None,
+        target_label: str,
+    ) -> None:
+        try:
+            await asyncio.sleep(delay_s)
+            await self._dispatch_to_chat_target(
+                message,
+                target_id=target_id,
+                target_label=target_label,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            self.notify(f"delayed send failed: {exc}", severity="error", timeout=6)
 
     async def _interrupt_crow(self, agent_id: str) -> None:
         result = await self._submit_command(
@@ -1406,6 +1516,29 @@ class MurderApp(App[None]):
         cmd_lower = stripped.lower()
         if cmd_lower in {":wq", ":q", ":q!"}:
             self.exit()
+            return
+        elif cmd_lower.startswith(":delay"):
+            parsed = _parse_delay_command(stripped)
+            if parsed is None:
+                self.notify(
+                    ":delay <duration> <message>, e.g. :delay 5m check again",
+                    severity="warning",
+                    timeout=4,
+                )
+                return
+            delay_s, message = parsed
+            target_id = self._chat_target_agent_id
+            target_label = self._chat_target_label if target_id is not None else "collaborator"
+            self._schedule_delayed_chat(
+                delay_s,
+                message,
+                target_id=target_id,
+                target_label=target_label,
+            )
+            self.notify(
+                f"delayed {_format_delay(delay_s)} → {target_label}",
+                timeout=3,
+            )
             return
         elif cmd_lower.startswith(":ticket "):
             title = stripped[len(":ticket "):].strip()
@@ -1492,14 +1625,37 @@ class MurderApp(App[None]):
             widget = self._chat
         super().set_focus(widget)
 
+    def on_app_focus(self) -> None:
+        if self.focused is None:
+            self.set_focus(self._chat)
+
     async def _send_raw_key_to_chat_target(self, key: str, *, literal: bool = False) -> None:
+        await self._send_agent_key(
+            agent_id=self._chat_target_agent_id,
+            key=key,
+            literal=literal,
+            notify_label=self._chat_target_label or "harness",
+        )
+
+    async def _send_agent_key(
+        self,
+        *,
+        agent_id: str | None,
+        key: str,
+        literal: bool = False,
+        enter: bool = False,
+        log_user_input: str | None = None,
+        notify_label: str | None = None,
+    ) -> None:
         result = await self._submit_command(
             target_worker="orchestrator",
             kind="agent.send_key",
             payload={
-                "agent_id": self._chat_target_agent_id,
+                "agent_id": agent_id,
                 "key": key,
                 "literal": literal,
+                "enter": enter,
+                "log_user_input": log_user_input,
             },
             timeout_s=15.0,
         )
@@ -1512,8 +1668,23 @@ class MurderApp(App[None]):
         session = result.get("session")
         if isinstance(session, str) and self._mirror._session == session:
             self.run_worker(self._mirror.refresh_pane(), exclusive=True, group="mirror")
-        label = self._chat_target_label or "harness"
+        label = notify_label or "harness"
         self.notify(f"→ {label}: {key}", timeout=2)
+
+    def on_crow_tile_choice_prompt_confirmed(self, event: CrowTile.ChoicePromptConfirmed) -> None:
+        event.stop()
+        self.run_worker(
+            self._send_agent_key(
+                agent_id=event.entry.agent_id,
+                key=str(event.option_number),
+                literal=True,
+                enter=True,
+                log_user_input=f"{event.option_number}. {event.label}",
+                notify_label=crow_title_label(event.entry),
+            ),
+            exclusive=False,
+            group="chat",
+        )
 
     def action_new_plan_session(self) -> None:
         """ctrl+p: scaffold a new plan and make it the chat target."""

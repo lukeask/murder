@@ -266,6 +266,24 @@ def test_first_send_prompt_waits_for_idle(fake_tmux: FakeTmux):
     assert names.index("capture_pane") < names.index("send_keys")
 
 
+def test_first_send_prompt_waits_for_stable_input_ready(fake_tmux: FakeTmux):
+    fake_tmux.queue_pane(CC_IDLE)
+    hs = _make_session(ClaudeCodeAdapter())
+    asyncio.run(hs.start(_start_spec()))
+    fake_tmux.calls.clear()
+
+    fake_tmux.reset_queue()
+    fake_tmux.queue_pane(CC_BUSY)
+    fake_tmux.queue_pane(CC_IDLE)
+    fake_tmux.queue_pane(CC_IDLE)
+
+    result = asyncio.run(hs.send_prompt("hello world"))
+
+    assert result.ok
+    names = fake_tmux.call_names()
+    assert names[:4] == ["capture_pane", "capture_pane", "capture_pane", "send_keys"]
+
+
 def test_first_send_prompt_clears_gate(fake_tmux: FakeTmux):
     fake_tmux.queue_pane(CC_IDLE)
     hs = _make_session(ClaudeCodeAdapter())
@@ -328,7 +346,7 @@ def test_send_prompt_idle_timeout_returns_fail_result(fake_tmux: FakeTmux):
     result = asyncio.run(hs.send_prompt("test"))
 
     assert not result.ok
-    assert "not idle in time" in (result.message or "")
+    assert "not awaiting input in time" in (result.message or "")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -545,17 +563,45 @@ def test_cursor_send_prompt_clears_input_before_typing(fake_tmux: FakeTmux):
 
 
 def test_codex_small_prompt_uses_send_keys_with_tab_enter(fake_tmux: FakeTmux):
-    # Short prompt (<1024 bytes): send_keys text, then send_keys Enter
+    # Short prompt (<1024 bytes): send_keys text, then a named Enter submit.
     adapter = CodexAdapter()
     hs = _make_session(adapter)
+    fake_tmux.queue_pane("• Working (0s • esc to interrupt)")
 
     asyncio.run(hs.adapter.send_prompt("test-session", "short prompt"))
 
     send_calls = fake_tmux.calls_to("send_keys")
-    # The adapter sends the text first, then an empty Tab/Enter
     assert len(send_calls) >= 2
     texts = [args[1] for args, _ in send_calls]
     assert "short prompt" in texts
+    assert ("test-session", "Enter") in [args for args, _ in send_calls]
+
+
+def test_codex_small_prompt_retries_enter_when_prompt_stays_in_composer(
+    fake_tmux: FakeTmux,
+):
+    adapter = CodexAdapter()
+    live_prompt = """
+OpenAI Codex
+
+› short prompt
+
+gpt-5.5 medium · ~/repo
+"""
+    fake_tmux.queue_pane(live_prompt)
+    fake_tmux.queue_pane("• Working (0s • esc to interrupt)")
+
+    asyncio.run(adapter.send_prompt("test-session", "short prompt"))
+
+    enter_calls = [
+        (args, kw)
+        for args, kw in fake_tmux.calls_to("send_keys")
+        if args == ("test-session", "Enter")
+    ]
+    assert enter_calls == [
+        (("test-session", "Enter"), {"literal": False, "enter": False}),
+        (("test-session", "Enter"), {"literal": False, "enter": False}),
+    ]
 
 
 def test_codex_large_prompt_uses_paste_buffer_chunks(fake_tmux: FakeTmux):

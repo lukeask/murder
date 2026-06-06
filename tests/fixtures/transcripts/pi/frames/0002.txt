@@ -1,0 +1,23 @@
+
+ Warning: tmux extended-keys is off. Modified Enter keys may not work. Add `set
+ -g extended-keys on` to ~/.tmux.conf and restart tmux.
+
+────────────────────────────────────────────────────────────────────────────────
+ Update Available
+ New version 0.75.5 is available. Run pi update
+ Changelog:
+ https://github.com/earendil-works/pi-mono/blob/main/packages/coding-agent/CHAN
+ GELOG.md
+────────────────────────────────────────────────────────────────────────────────
+
+
+ say hello in one word
+
+
+ ⠋ Working...
+
+────────────────────────────────────────────────────────────────────────────────
+
+────────────────────────────────────────────────────────────────────────────────
+~/Documents/code/testingmurderharness
+0.0%/1.0M (auto)                        (or) deepseek/deepseek-v4-flash • medium

@@ -17,7 +17,7 @@ ForceStatus = Callable[[str, str], Awaitable[dict[str, Any]]]
 NoteEnsure = Callable[[str], Awaitable[dict[str, Any]]]
 NoteRetire = Callable[[str], Awaitable[dict[str, Any]]]
 SendAgentMessage = Callable[[str, str, str | None], Awaitable[dict[str, Any]]]
-SendAgentKey = Callable[[str | None, str, bool], Awaitable[dict[str, Any]]]
+SendAgentKey = Callable[[str | None, str, bool, bool, str | None], Awaitable[dict[str, Any]]]
 InterruptAgent = Callable[[str], Awaitable[dict[str, Any]]]
 StopAgent = Callable[[str], Awaitable[dict[str, Any]]]
 RenameRogue = Callable[[str, str], Awaitable[dict[str, Any]]]
@@ -157,12 +157,22 @@ class OrchestratorCommandWorker(Worker):
             if not isinstance(key, str) or not key.strip():
                 raise ValueError("agent.send_key requires key")
             literal = bool(command.payload.get("literal"))
+            enter = bool(command.payload.get("enter"))
+            log_user_input = command.payload.get("log_user_input")
+            if log_user_input is not None and not isinstance(log_user_input, str):
+                raise ValueError("agent.send_key log_user_input must be a string or null")
             agent_id = (
                 raw_agent_id.strip()
                 if isinstance(raw_agent_id, str) and raw_agent_id.strip()
                 else None
             )
-            return await self._send_agent_key(agent_id, key.strip(), literal=literal)
+            return await self._send_agent_key(
+                agent_id,
+                key.strip(),
+                literal=literal,
+                enter=enter,
+                log_user_input=log_user_input,
+            )
         if command.kind == "agent.interrupt":
             agent_id = command.payload.get("agent_id")
             if not isinstance(agent_id, str) or not agent_id.strip():

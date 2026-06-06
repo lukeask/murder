@@ -113,6 +113,9 @@ class HarnessSession:
         self._first_send_idle_gate_pending = True
         return ok_result()
 
+    def require_first_send_idle_gate(self) -> None:
+        self._first_send_idle_gate_pending = True
+
     async def _wait_startup_ready(self, start_spec: HarnessStartSpec) -> SimpleResult[None]:
         attempts = max(1, int(start_spec.ready_timeout_s / start_spec.poll_interval_s))
         for _ in range(attempts):
@@ -193,6 +196,34 @@ class HarnessSession:
             await asyncio.sleep(0.4)
         return fail_result(f"Harness not idle in time: session={self.session}")
 
+    def _pane_is_awaiting_input(self, pane_text: str) -> bool:
+        if self.adapter.has_transcript_parser():
+            return self.adapter.parse_transcript_doc(pane_text).get("state") == "awaiting_input"
+        return self.adapter.is_idle(pane_text)
+
+    async def wait_input_ready(
+        self,
+        timeout_s: float = 30.0,
+        *,
+        stable_polls: int = 2,
+    ) -> SimpleResult[None]:
+        attempts = max(1, int(timeout_s / 0.4))
+        needed = max(1, stable_polls)
+        consecutive = 0
+        for _ in range(attempts):
+            try:
+                pane = await tmux.capture_pane(self.session, lines=120)
+            except tmux.TmuxError as e:
+                return fail_result(f"Session lost during input-ready-wait: {e}")
+            if self._pane_is_awaiting_input(pane):
+                consecutive += 1
+                if consecutive >= needed:
+                    return ok_result()
+            else:
+                consecutive = 0
+            await asyncio.sleep(0.4)
+        return fail_result(f"Harness not awaiting input in time: session={self.session}")
+
     async def initialize_defaults(self, spec: HarnessStartSpec) -> SimpleResult[None]:
         return await self.adapter.initialize_defaults(self.session, spec)
 
@@ -205,9 +236,9 @@ class HarnessSession:
 
     async def send_prompt(self, prompt: str) -> SimpleResult[None]:
         if self._first_send_idle_gate_pending:
-            idle = await self.wait_idle(timeout_s=15.0)
-            if not idle.ok:
-                return idle
+            input_ready = await self.wait_input_ready(timeout_s=15.0)
+            if not input_ready.ok:
+                return input_ready
         await self.adapter.send_prompt(self.session, prompt)
         self._first_send_idle_gate_pending = False
         return ok_result()
@@ -283,6 +314,10 @@ class HarnessAdapter(ABC):
     ) -> None:
         self.startup_model = startup_model
         self.startup_effort = startup_effort
+        # The murder-owned system prompt injected as this session's first user
+        # message. Set by the agent at start() so markerless transcript parsers
+        # (cursor, pi) can strip it instead of mislabelling it as chat turns.
+        self.system_prompt: str | None = None
 
     @classmethod
     def declared_capabilities(cls) -> HarnessCapabilities:
@@ -415,7 +450,7 @@ class HarnessAdapter(ABC):
                 "condensed": None,
                 "segments": [],
             }
-        return parse_frames(self.kind, [pane_text])
+        return parse_frames(self.kind, [pane_text], system_prompt=self.system_prompt)
 
     def parse_transcript(self, pane_text: str) -> list[tuple[str, str]]:
         """Best-effort visible user/assistant turns projected from TranscriptDoc.

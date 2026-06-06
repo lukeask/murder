@@ -49,6 +49,9 @@ class CrowAgent(HarnessBackedAgent):
         from murder.bus import StatusChangeEvent
         from murder.verdict.enforcement import git_diff
 
+        # Record the injected system prompt so the transcript parser can drop it
+        # rather than mislabel its paragraphs as chat turns (markerless harnesses).
+        self.harness.system_prompt = brief
         start_result = await self.harness_session.start(
             HarnessStartSpec(
                 cwd=self.repo_root,

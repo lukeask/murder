@@ -22,6 +22,9 @@ def test_printable_character_is_literal() -> None:
 def test_named_special_keys() -> None:
     assert _harness_delivery(_key(key="up")) == ("Up", False)
     assert _harness_delivery(_key(key="enter")) == ("Enter", False)
+    # space has a printable character but must use the named key so the
+    # notification shows "Space" rather than an invisible trailing space
+    assert _harness_delivery(_key(key="space", character=" ", is_printable=True)) == ("Space", False)
 
 
 def test_ctrl_combo() -> None:

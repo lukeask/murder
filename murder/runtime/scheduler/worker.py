@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import re
 import sqlite3
 from datetime import datetime, timezone
@@ -12,6 +11,7 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 
 from murder.state.persistence.tickets import compute_ready
 from murder.state.persistence.commands import enqueue_command
+from murder.state.persistence.usage_status import UsageStatusSnapshot, UsageWindow
 from murder.bus.protocol import (
     CommandEvent,
     SchedulerDecisionEvent,
@@ -51,24 +51,12 @@ class SchedulerSetParamsPayload(BaseModel):
     params: SchedulerParamsPayload
 
 
-def _first_percent_used(payload: dict[str, Any]) -> float | None:
-    """Return percent_used from the first window in a snapshot payload, or None."""
-    windows = payload.get("windows") or []
-    for w in windows:
-        if isinstance(w, dict):
-            v = w.get("percent_used")
-            if isinstance(v, (int, float)):
-                return float(v)
-    return None
-
-
-def _parse_t_period(window: dict[str, Any]) -> float | None:
-    """Derive t_period (minutes) from a window dict, or return None to skip."""
-    starts_at_str = window.get("starts_at")
-    end_str = window.get("ends_at") or window.get("reset_at")
-    if starts_at_str and end_str:
+def _parse_t_period(window: UsageWindow) -> float | None:
+    """Derive t_period (minutes) from a usage window, or return None to skip."""
+    end_str = window.ends_at or window.reset_at
+    if window.starts_at and end_str:
         try:
-            starts_at = datetime.fromisoformat(starts_at_str)
+            starts_at = datetime.fromisoformat(window.starts_at)
             ends_at = datetime.fromisoformat(end_str)
             period_m = (ends_at - starts_at).total_seconds() / 60.0
             if period_m > 0:
@@ -76,8 +64,7 @@ def _parse_t_period(window: dict[str, Any]) -> float | None:
         except (ValueError, TypeError):
             pass
     # Fallback: parse window name like "5h" or "7d"
-    name = window.get("name") or ""
-    m = _WINDOW_NAME_RE.match(name)
+    m = _WINDOW_NAME_RE.match(window.name)
     if m:
         value = float(m.group(1))
         unit = m.group(2).lower()
@@ -213,15 +200,10 @@ class SchedulerWorker(Worker):
 
         for snap_row in snap_rows:
             harness = snap_row["harness"]
-            try:
-                payload = json.loads(snap_row["status_json"])
-            except (TypeError, ValueError):
+            snapshot = UsageStatusSnapshot.from_json(snap_row["status_json"])
+            if snapshot is None:
                 continue
-
-            windows = payload.get("windows") or []
-            for window in windows:
-                if not isinstance(window, dict):
-                    continue
+            for window in snapshot.windows:
                 await self._evaluate_window(ctx, harness, window, now)
 
         # Usage-reset detection: compare last two snapshots per harness
@@ -245,13 +227,12 @@ class SchedulerWorker(Worker):
             ).fetchall()
             if len(pair) < 2:
                 continue
-            try:
-                curr_payload = json.loads(pair[0]["status_json"])
-                prev_payload = json.loads(pair[1]["status_json"])
-            except (TypeError, ValueError):
+            curr = UsageStatusSnapshot.from_json(pair[0]["status_json"])
+            prev = UsageStatusSnapshot.from_json(pair[1]["status_json"])
+            if curr is None or prev is None:
                 continue
-            curr_pct = _first_percent_used(curr_payload)
-            prev_pct = _first_percent_used(prev_payload)
+            curr_pct = curr.first_percent_used()
+            prev_pct = prev.first_percent_used()
             if curr_pct is None or prev_pct is None:
                 continue
             if usage_reset_detected(prev_pct, curr_pct):
@@ -274,16 +255,16 @@ class SchedulerWorker(Worker):
         self,
         ctx: WorkerCtx,
         harness: str,
-        window: dict[str, Any],
+        window: UsageWindow,
         now: datetime,
     ) -> None:
         assert ctx.db is not None and ctx.run_id is not None
 
-        percent_used = window.get("percent_used")
-        reset_at_str = window.get("reset_at")
-        window_key = window.get("name") or "usage"
+        percent_used = window.percent_used
+        reset_at_str = window.reset_at
+        window_key = window.window_key
 
-        if not isinstance(percent_used, (int, float)) or reset_at_str is None:
+        if percent_used is None or reset_at_str is None:
             return
 
         try:

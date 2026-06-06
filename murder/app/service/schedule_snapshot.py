@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-import json
 import sqlite3
 from datetime import datetime, timedelta, timezone
 
+from murder.state.persistence.usage_status import UsageStatusSnapshot
 from murder.app.service.client_api import (
     CalendarRunningAgent,
     CalendarScheduledTicket,
@@ -241,18 +241,15 @@ def _load_gauges(conn: sqlite3.Connection) -> list[UsageGaugeSummary]:
     gauges: list[UsageGaugeSummary] = []
     for snap_row in snap_rows:
         harness = str(snap_row["harness"])
-        try:
-            payload = json.loads(snap_row["status_json"])
-        except (TypeError, ValueError):
+        snapshot = UsageStatusSnapshot.from_json(snap_row["status_json"])
+        if snapshot is None:
             continue
-        for window in payload.get("windows") or []:
-            if not isinstance(window, dict):
+        for window in snapshot.windows:
+            pct = window.percent_used
+            if pct is None:
                 continue
-            pct = window.get("percent_used")
-            if not isinstance(pct, (int, float)):
-                continue
-            window_key = str(window.get("name") or "usage")
-            reset_at_str = window.get("reset_at") or window.get("ends_at")
+            window_key = window.window_key
+            reset_at_str = window.reset_at or window.ends_at
             t_until = 0.0
             if reset_at_str:
                 try:
@@ -296,17 +293,6 @@ def build_usage_gauge_drill_in(
     )
 
 
-def _pct_from_window(payload: dict[str, object], window_key: str) -> float | None:
-    for w in payload.get("windows") or []:
-        if not isinstance(w, dict):
-            continue
-        if (w.get("name") or "usage") == window_key:
-            pct = w.get("percent_used")
-            if isinstance(pct, (int, float)):
-                return float(pct)
-    return None
-
-
 def _spark_history(conn: sqlite3.Connection, harness: str, window_key: str) -> str:
     rows = conn.execute(
         """
@@ -321,11 +307,10 @@ def _spark_history(conn: sqlite3.Connection, harness: str, window_key: str) -> s
     by_day: dict[str, list[float]] = {}
     for row in rows:
         day = str(row["day"])
-        try:
-            payload = json.loads(row["status_json"])
-        except (TypeError, ValueError):
+        snapshot = UsageStatusSnapshot.from_json(row["status_json"])
+        if snapshot is None:
             continue
-        pct = _pct_from_window(payload, window_key)
+        pct = snapshot.percent_for(window_key)
         if pct is not None:
             by_day.setdefault(day, []).append(pct)
     if not by_day:
@@ -355,13 +340,12 @@ def _recent_reset_events(
     ).fetchall()
     resets: list[UsageResetEvent] = []
     for i in range(1, len(rows)):
-        try:
-            curr = json.loads(rows[i]["status_json"])
-            prev = json.loads(rows[i - 1]["status_json"])
-        except (TypeError, ValueError):
+        curr = UsageStatusSnapshot.from_json(rows[i]["status_json"])
+        prev = UsageStatusSnapshot.from_json(rows[i - 1]["status_json"])
+        if curr is None or prev is None:
             continue
-        curr_pct = _pct_from_window(curr, window_key)
-        prev_pct = _pct_from_window(prev, window_key)
+        curr_pct = curr.percent_for(window_key)
+        prev_pct = prev.percent_for(window_key)
         if curr_pct is None or prev_pct is None:
             continue
         if prev_pct >= 30.0 and curr_pct <= 5.0:

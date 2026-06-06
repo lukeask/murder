@@ -1,0 +1,11 @@
+{
+  "harness": "cursor",
+  "state": "awaiting_input",
+  "condensed": null,
+  "segments": [
+    {"type": "user", "text": "test"},
+    {"type": "assistant", "phase": "final", "text": "Here — what do you want to work on?", "elapsed": null},
+    {"type": "user", "text": "test2"},
+    {"type": "assistant", "phase": "final", "text": "Still here. Say what you want to tackle on murder (or another check) and I’ll run with it.", "elapsed": null}
+  ]
+}

@@ -1,0 +1,23 @@
+ -g extended-keys on` to ~/.tmux.conf and restart tmux.
+
+────────────────────────────────────────────────────────────────────────────────
+ Update Available
+ New version 0.75.5 is available. Run pi update
+ Changelog:
+ https://github.com/earendil-works/pi-mono/blob/main/packages/coding-agent/CHAN
+ GELOG.md
+────────────────────────────────────────────────────────────────────────────────
+
+
+ say hello in one word
+
+
+ The user wants me to say hello in one word.
+
+ Hello
+
+────────────────────────────────────────────────────────────────────────────────
+
+────────────────────────────────────────────────────────────────────────────────
+~/Documents/code/testingmurderharness
+↑1.2k ↓13 R256 $0.000 0.1%/1.0M (auto)  (or) deepseek/deepseek-v4-flash • medium

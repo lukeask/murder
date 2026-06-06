@@ -54,6 +54,10 @@ class CollaboratorAgent(HarnessBackedAgent):
     async def start(self, brief: str, ctx: dict[str, Any]) -> None:
         from murder.bus import StatusChangeEvent
 
+        # Record the injected system prompt so the (markerless) transcript parser
+        # can recognise and drop it instead of mislabelling its paragraphs as
+        # alternating user/assistant chat turns.
+        self.harness.system_prompt = brief
         start_result = await self.harness_session.start(
             HarnessStartSpec(
                 cwd=self.repo_root,

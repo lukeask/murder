@@ -9,6 +9,7 @@ from types import SimpleNamespace
 from textual.app import App, ComposeResult
 
 from murder.app.service.client_api import CrowSessionSummary, CrowSnapshot
+from murder.app.tui.cc_multiple_choice_wizard import CCMultipleChoiceWizard
 from murder.app.tui import crows_view as crows_view_mod
 from murder.app.tui.crow_health import Health
 from murder.app.tui.crows_view import CrowEntry, CrowTile, CrowsView, entries_from_snapshot
@@ -141,7 +142,10 @@ def test_crow_tile_first_empty_parsed_capture_shows_status() -> None:
         async with app.run_test() as pilot:
             # claude_code has a parser → tile starts in parsed mode; no toggle needed.
             await pilot.pause()  # let the revealed ChatLog get a real width first
-            tile.set_parsed([], "claude_code")
+            tile.set_parsed_doc(
+                {"harness": "claude_code", "state": "awaiting_input", "condensed": None, "segments": []},
+                "claude_code",
+            )
             await pilot.pause()
             rendered = "\n".join(
                 strip.text
@@ -159,7 +163,15 @@ def test_crow_tile_set_parsed_rerenders_when_width_changes() -> None:
     # when the ChatLog width changes — not dedup on unchanged turns alone — or the
     # transcript paints blank forever despite the rows being present. (The visual
     # symptom only reproduces in a real terminal, so this guards the dedup logic.)
-    turns = [("user", "hi there"), ("assistant", "response text here")]
+    doc = {
+        "harness": "claude_code",
+        "state": "awaiting_input",
+        "condensed": None,
+        "segments": [
+            {"type": "user", "text": "hi there"},
+            {"type": "assistant", "phase": "final", "text": "response text here", "elapsed": None},
+        ],
+    }
     tile = CrowTile(
         CrowEntry(
             agent_id="antigrav-rogue-test",
@@ -188,19 +200,150 @@ def test_crow_tile_set_parsed_rerenders_when_width_changes() -> None:
 
     # First parse lands while the chat log is still size 0/min-width (hidden /
     # pre-layout): defer rather than cache a narrow render.
-    tile.set_parsed(turns, "antigravity")
+    tile.set_parsed_doc(doc, "antigravity")
     assert len(fake.set_turns_calls) == 0
     # Tile gains a real width → render now.
     fake.size.width = 46
-    tile.set_parsed(turns, "antigravity")
+    tile.set_parsed_doc(doc, "antigravity")
     assert len(fake.set_turns_calls) == 1
     # Same turns, same width → dedup, no re-render.
-    tile.set_parsed(turns, "antigravity")
+    tile.set_parsed_doc(doc, "antigravity")
     assert len(fake.set_turns_calls) == 1
     # A later resize must re-flow the cached lines even though the turns are unchanged.
     fake.size.width = 80
-    tile.set_parsed(turns, "antigravity")
+    tile.set_parsed_doc(doc, "antigravity")
     assert len(fake.set_turns_calls) == 2
+
+
+def test_crow_tile_renders_user_segments_distinct_from_assistant_output() -> None:
+    tile = CrowTile(
+        CrowEntry(
+            agent_id="claude-rogue-test",
+            ticket_id="",
+            ticket_title="claude-rogue-test",
+            harness="claude_code",
+            status="running",
+            session="murder_repo_crow_claude_rogue_test",
+            health=Health.GREEN,
+        )
+    )
+    doc = {
+        "harness": "claude_code",
+        "state": "awaiting_input",
+        "condensed": None,
+        "segments": [
+            {"type": "user", "text": "show me the status"},
+            {"type": "assistant", "phase": "final", "text": "here is the status", "elapsed": "2s"},
+        ],
+    }
+
+    async def _run() -> None:
+        app = _TileApp(tile)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            tile.set_parsed_doc(doc, "claude_code")
+            await pilot.pause()
+            rendered = "\n".join(
+                strip.text
+                for strip in tile._chat_log.lines  # noqa: SLF001 - render invariant
+            )
+            assert "you: show me the status" in rendered
+            assert "claude_code: here is the status" in rendered
+
+    asyncio.run(_run())
+
+
+def test_crow_tile_renders_live_choice_prompt_as_wizard() -> None:
+    tile = CrowTile(
+        CrowEntry(
+            agent_id="claude-rogue-test",
+            ticket_id="",
+            ticket_title="claude-rogue-test",
+            harness="claude_code",
+            status="running",
+            session="murder_repo_crow_claude_rogue_test",
+            health=Health.GREEN,
+        )
+    )
+    doc = {
+        "harness": "claude_code",
+        "state": "awaiting_approval",
+        "condensed": None,
+        "segments": [
+            {
+                "type": "choice_prompt",
+                "question": "Trust this folder?",
+                "options": [
+                    {"number": 1, "label": "Yes", "description": None},
+                    {"number": 2, "label": "No", "description": None},
+                ],
+                "footer": "Enter to confirm",
+                "selected": 2,
+                "answered": False,
+                "chosen": None,
+            }
+        ],
+    }
+
+    async def _run() -> None:
+        app = _TileApp(tile)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            tile.set_parsed_doc(doc, "claude_code")
+            await pilot.pause()
+            assert tile._choice_wizard is not None  # noqa: SLF001
+            assert isinstance(tile._choice_wizard, CCMultipleChoiceWizard)  # noqa: SLF001
+            assert tile._choice_wizard.prompt.selected_option.number == 2  # noqa: SLF001
+            assert tile._choice_wizard._cursor == 1  # noqa: SLF001
+            assert tile._choice_wizard.display is True  # noqa: SLF001
+            assert tile._chat_log.display is False  # noqa: SLF001
+
+    asyncio.run(_run())
+
+
+def test_crow_tile_renders_answered_choice_prompt_as_static_history() -> None:
+    tile = CrowTile(
+        CrowEntry(
+            agent_id="claude-rogue-test",
+            ticket_id="",
+            ticket_title="claude-rogue-test",
+            harness="claude_code",
+            status="running",
+            session="murder_repo_crow_claude_rogue_test",
+            health=Health.GREEN,
+        )
+    )
+    doc = {
+        "harness": "claude_code",
+        "state": "awaiting_input",
+        "condensed": None,
+        "segments": [
+            {
+                "type": "choice_prompt",
+                "question": "Trust this folder?",
+                "options": [
+                    {"number": 1, "label": "Yes", "description": None},
+                    {"number": 2, "label": "No", "description": None},
+                ],
+                "footer": "Enter to confirm",
+                "answered": True,
+                "chosen": 2,
+            }
+        ],
+    }
+
+    async def _run() -> None:
+        app = _TileApp(tile)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            tile.set_parsed_doc(doc, "claude_code")
+            await pilot.pause()
+            rendered = "\n".join(strip.text for strip in tile._chat_log.lines)  # noqa: SLF001
+            assert "Trust this folder?" in rendered
+            assert "selected: 2. No" in rendered
+            assert tile._choice_wizard is None  # noqa: SLF001
+
+    asyncio.run(_run())
 
 
 def test_crow_tile_border_uses_name_harness_model_and_not_last_user_message() -> None:
@@ -287,7 +430,7 @@ def test_crows_view_refresh_tails_uses_keyword_lines_capture() -> None:
                 ticket_id="",
                 ticket_title="rogue-antigravity-test",
                 session_name="murder_repo_crow_antigravity_rogue_test",
-                harness="antigravity",
+                harness="unknown",
             ),
         ),
         as_of=datetime.now(timezone.utc),
@@ -314,28 +457,32 @@ def test_crows_view_refresh_tails_uses_keyword_lines_capture() -> None:
     assert calls == [("murder_repo_crow_antigravity_rogue_test", 40)]
 
 
-def test_crows_view_parsed_refresh_renders_keyword_lines_capture(monkeypatch) -> None:
+def test_crows_view_parsed_refresh_renders_keyword_lines_capture() -> None:
     calls: list[tuple[str, int]] = []
 
     async def capture(session: str, *, lines: int) -> str:
         calls.append((session, lines))
-        return "raw antigravity transcript"
-
-    monkeypatch.setattr(
-        crows_view_mod,
-        "_parse_tile_text",
-        lambda pane_text, harness_kind: [("assistant", f"parsed {harness_kind} reply")],
-    )
+        return (
+            "❯ inspect this ticket\n"
+            "\n"
+            "● parsed claude_code reply\n"
+            "\n"
+            "✻ Worked for 2s\n"
+            "\n"
+            "────────────────────\n"
+            "❯ \n"
+            "────────────────────\n"
+        )
 
     view = CrowsView(capture_pane=capture)  # type: ignore[arg-type]
     snap = CrowSnapshot(
         sessions=(
             _session(
-                agent_id="rogue-antigravity-test",
+                agent_id="rogue-claude-test",
                 ticket_id="",
-                ticket_title="rogue-antigravity-test",
-                session_name="murder_repo_crow_antigravity_rogue_test",
-                harness="antigravity",
+                ticket_title="rogue-claude-test",
+                session_name="murder_repo_crow_claude_rogue_test",
+                harness="claude_code",
             ),
         ),
         as_of=datetime.now(timezone.utc),
@@ -346,24 +493,22 @@ def test_crows_view_parsed_refresh_renders_keyword_lines_capture(monkeypatch) ->
         app = _CrowsApp(view)
         async with app.run_test() as pilot:
             view.render_from_snapshot(snap)
-            view.roster_add_rogue("rogue-antigravity-test")
+            view.roster_add_rogue("rogue-claude-test")
             view.render_from_snapshot(snap)
             await pilot.pause()
-            tile = view.wall.tile_for("rogue-antigravity-test")
+            tile = view.wall.tile_for("rogue-claude-test")
             assert tile is not None
-            tile.action_toggle_view()
-            await pilot.pause()  # let layout run so ChatLog gets a real width before parsing
             await view.refresh_tails()
             await pilot.pause()
             rendered = "\n".join(
                 strip.text
                 for strip in tile._chat_log.lines  # noqa: SLF001 - regression test for blank parsed tiles
             )
-            assert "parsed antigravity reply" in rendered
+            assert "parsed claude_code reply" in rendered
 
     asyncio.run(_run())
     assert calls
-    assert all(call == ("murder_repo_crow_antigravity_rogue_test", 400) for call in calls)
+    assert all(call == ("murder_repo_crow_claude_rogue_test", 400) for call in calls)
 
 
 def test_crows_view_parsed_refresh_shows_status_when_capture_fails() -> None:
@@ -375,11 +520,11 @@ def test_crows_view_parsed_refresh_shows_status_when_capture_fails() -> None:
     snap = CrowSnapshot(
         sessions=(
             _session(
-                agent_id="rogue-cursor-test",
+                agent_id="rogue-claude-test",
                 ticket_id="",
-                ticket_title="rogue-cursor-test",
-                session_name="murder_repo_crow_cursor_rogue_test",
-                harness="cursor",
+                ticket_title="rogue-claude-test",
+                session_name="murder_repo_crow_claude_rogue_test",
+                harness="claude_code",
             ),
         ),
         as_of=datetime.now(timezone.utc),
@@ -390,12 +535,12 @@ def test_crows_view_parsed_refresh_shows_status_when_capture_fails() -> None:
         app = _CrowsApp(view)
         async with app.run_test() as pilot:
             view.render_from_snapshot(snap)
-            view.roster_add_rogue("rogue-cursor-test")
+            view.roster_add_rogue("rogue-claude-test")
             view.render_from_snapshot(snap)
             await pilot.pause()
-            tile = view.wall.tile_for("rogue-cursor-test")
+            tile = view.wall.tile_for("rogue-claude-test")
             assert tile is not None
-            # cursor has a parser → tile starts in parsed mode; no toggle needed.
+            # claude_code has a parser → tile starts in parsed mode; no toggle needed.
             await view.refresh_tails()
             await pilot.pause()
             rendered = "\n".join(
@@ -407,7 +552,7 @@ def test_crows_view_parsed_refresh_shows_status_when_capture_fails() -> None:
     asyncio.run(_run())
 
 
-def test_ticket_agent_raw_toggle_populates_raw_log_immediately(monkeypatch) -> None:
+def test_ticket_agent_raw_toggle_populates_raw_log_immediately() -> None:
     """Switching from parsed to raw mode must trigger an immediate capture.
 
     Ticket agents (claude_code harness) start in parsed mode. The raw_log is
@@ -420,12 +565,6 @@ def test_ticket_agent_raw_toggle_populates_raw_log_immediately(monkeypatch) -> N
     async def capture(session: str, *, lines: int) -> str:
         calls.append((session, lines))
         return "CC output line 1\nCC output line 2"
-
-    monkeypatch.setattr(
-        crows_view_mod,
-        "_parse_tile_text",
-        lambda pane_text, harness_kind: [("assistant", "parsed reply")],
-    )
 
     view = CrowsView(capture_pane=capture)  # type: ignore[arg-type]
     snap = CrowSnapshot(

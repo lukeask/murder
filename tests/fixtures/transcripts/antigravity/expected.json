@@ -1,0 +1,10 @@
+{
+  "harness": "antigravity",
+  "state": "awaiting_input",
+  "condensed": null,
+  "segments": [
+    {"type": "user", "text": "Reply with exactly: OK"},
+    {"type": "assistant", "phase": "final", "text": "Prioritizing Tool Usage OK", "elapsed": null},
+    {"type": "user", "text": "Reply with exactly: OK"}
+  ]
+}

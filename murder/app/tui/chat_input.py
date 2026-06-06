@@ -79,13 +79,13 @@ class _SentMessageHistory:
 
 def _harness_delivery(event: Key) -> tuple[str, bool] | None:
     """Map a Textual key event to (tmux payload, literal flag)."""
-    character = getattr(event, "character", None)
-    if character is not None and len(character) == 1 and event.is_printable:
-        return (character, True)
     key = event.key
     named = _NAMED_TMUX_KEYS.get(key)
     if named is not None:
         return (named, False)
+    character = getattr(event, "character", None)
+    if character is not None and len(character) == 1 and event.is_printable:
+        return (character, True)
     if key.startswith("ctrl+"):
         part = key[5:]
         if len(part) == 1:

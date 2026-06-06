@@ -43,8 +43,14 @@ transcript_v2 = pytest.importorskip(
 )
 
 _FIXTURES = Path(__file__).parent.parent / "fixtures" / "transcripts"
-_HARNESSES = ["cc", "codex"]
-_HARNESS_KIND = {"cc": "claude_code", "codex": "codex"}
+_HARNESSES = ["cc", "codex", "cursor", "pi", "antigravity"]
+_HARNESS_KIND = {
+    "cc": "claude_code",
+    "codex": "codex",
+    "cursor": "cursor",
+    "pi": "pi",
+    "antigravity": "antigravity",
+}
 
 # Chrome / live-UI strings that must NEVER survive into a parsed segment.
 _CHROME_NEVER = [
@@ -58,6 +64,8 @@ _CHROME_NEVER = [
     "uncached",
     "/clear to start fresh",
     "Find and fix a bug in @filename",
+    "? for shortcuts",
+    "Antigravity CLI",
 ]
 
 
@@ -333,3 +341,307 @@ def test_cc_choice_prompt_resolution_marks_answered_with_selected_option():
     assert doc["state"] == "awaiting_input"
     assert choice["answered"] is True
     assert choice["chosen"] == 6
+
+
+# --------------------------------------------------------------------------- #
+# Cursor-specific: two user/assistant turns, no tool calls, elapsed always null.
+# --------------------------------------------------------------------------- #
+def test_cursor_has_two_user_turns():
+    users = [s["text"] for s in _segs(_parse("cursor")) if s["type"] == "user"]
+    assert users == ["test", "test2"]
+
+
+def test_cursor_has_two_final_assistant_blocks():
+    segs = _segs(_parse("cursor"))
+    finals = [s for s in segs if s["type"] == "assistant" and s["phase"] == "final"]
+    assert len(finals) == 2
+    # cursor shows no completion-marker duration; elapsed is always null
+    assert all(f["elapsed"] is None for f in finals)
+
+
+def test_cursor_has_no_tool_calls():
+    segs = _segs(_parse("cursor"))
+    assert not any(s["type"] == "tool_call" for s in segs)
+
+
+def test_cursor_no_chrome_in_segments():
+    cursor_chrome = [
+        "Cursor Agent",
+        "Use /mcp",
+        "Add a follow-up",
+        "Plan, search, build anything",
+        "Composer",
+        "Auto-run",
+        "ctrl+c to stop",
+    ]
+    blob = json.dumps(_parse("cursor"), ensure_ascii=False)
+    for needle in cursor_chrome:
+        assert needle not in blob, f"cursor chrome leaked into parse: {needle!r}"
+
+
+# --------------------------------------------------------------------------- #
+# Pi-specific: one user/assistant turn, reasoning prefix stripped.
+# --------------------------------------------------------------------------- #
+def test_pi_has_one_user_turn():
+    users = [s["text"] for s in _segs(_parse("pi")) if s["type"] == "user"]
+    assert users == ["say hello in one word"]
+
+
+def test_pi_has_one_final_assistant_block():
+    segs = _segs(_parse("pi"))
+    finals = [s for s in segs if s["type"] == "assistant" and s["phase"] == "final"]
+    assert len(finals) == 1
+    assert finals[0]["text"] == "Hello"
+
+
+def test_pi_no_tool_calls():
+    segs = _segs(_parse("pi"))
+    assert not any(s["type"] == "tool_call" for s in segs)
+
+
+def test_pi_no_chrome_in_segments():
+    pi_chrome = [
+        "The user wants",
+        "ctrl+o to expand",
+        "compacted from",
+        "Update Available",
+        "pi update",
+        "[compaction]",
+    ]
+    blob = json.dumps(_parse("pi"), ensure_ascii=False)
+    for needle in pi_chrome:
+        assert needle.lower() not in blob.lower(), f"pi chrome leaked: {needle!r}"
+
+
+# --------------------------------------------------------------------------- #
+# Antigravity-specific: two user turns, one assistant, second turn interrupted.
+# --------------------------------------------------------------------------- #
+def test_antigravity_has_two_user_turns():
+    users = [s["text"] for s in _segs(_parse("antigravity")) if s["type"] == "user"]
+    assert users == ["Reply with exactly: OK", "Reply with exactly: OK"]
+
+
+def test_antigravity_has_one_final_assistant_block():
+    segs = _segs(_parse("antigravity"))
+    finals = [s for s in segs if s["type"] == "assistant" and s["phase"] == "final"]
+    assert len(finals) == 1
+    assert finals[0]["text"] == "Prioritizing Tool Usage OK"
+
+
+def test_antigravity_no_tool_calls():
+    segs = _segs(_parse("antigravity"))
+    assert not any(s["type"] == "tool_call" for s in segs)
+
+
+def test_antigravity_no_chrome_in_segments():
+    agy_chrome = [
+        "? for shortcuts",
+        "esc to cancel",
+        "Generating...",
+        "Antigravity CLI",
+        "Interrupted",
+        "user@example.com",
+        "▸ Thought for",
+    ]
+    blob = json.dumps(_parse("antigravity"), ensure_ascii=False)
+    for needle in agy_chrome:
+        assert needle not in blob, f"agy chrome leaked: {needle!r}"
+
+
+# --------------------------------------------------------------------------- #
+# Injected system prompt: murder sends its crow system prompt as the session's
+# first user message. Markerless harnesses (cursor, pi) echo it as a user turn
+# they never answer; left in place it inverts every later role (the bug in
+# .murder/notes/cursor.md). Because murder owns the exact text, the parser drops
+# the matching leading blocks. (The recorded cursor/pi fixtures predate prompt
+# injection, so this scenario is built inline.)
+# --------------------------------------------------------------------------- #
+_COLLAB_SYSTEM_PROMPT = (
+    "You are the user's general-purpose helper inside the murder TUI. Your cwd "
+    "is the repo root. You run as a long-lived session and auto-restart on "
+    "death. Murder is an agent orchestration metaharness. Your role in the "
+    "system is to generally assist the user however they ask.\n\n"
+    "Murder keeps state for you in the .murder subdirectory of the project. If "
+    "a user mentions a note, it is likely in .murder/notes and plans live in "
+    ".murder/plans. Only read these if directly relevant to the conversation.\n\n"
+    "Plan `.md` files in `.murder/plans` must start with YAML frontmatter; "
+    "ticket `.md` files must not. Ticket YAML is only metadata/carving output "
+    "when requested."
+)
+
+
+def _cursor_frame_with_system_prompt() -> str:
+    """A cursor pane where the system prompt was echoed as the first user turn.
+
+    The three system-prompt paragraphs render as separate (blank-line-separated)
+    user blocks ahead of the real conversation ``test`` → reply, mirroring
+    .murder/notes/cursor.md. Content lines are indented two spaces like cursor's
+    real scrollback; the input frame at the bottom keeps the pane idle.
+    """
+    body_paragraphs = "\n\n".join(
+        f"  {para}" for para in _COLLAB_SYSTEM_PROMPT.split("\n\n")
+    )
+    return (
+        "user@machine:~/Documents/code/murder $ agent\n"
+        "\n\n"
+        "  Cursor Agent\n"
+        "  v2026.06.04-8f81907\n"
+        "  Use /mcp to connect Cursor to your tools and data sources.\n"
+        "\n\n"
+        f"{body_paragraphs}\n"
+        "\n\n"
+        "  test\n"
+        "\n\n"
+        "  Here — what do you want to work on?\n"
+        "\n"
+        " ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄\n"
+        "  → Add a follow-up\n"
+        " ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀\n"
+        "  Composer 2.5 · 7.3%                                    Auto-run\n"
+        "  ~/Documents/code/murder · fix/shutdown-flock-race\n"
+    )
+
+
+def test_cursor_system_prompt_stripped_when_supplied():
+    frame = _cursor_frame_with_system_prompt()
+    doc = transcript_v2.parse_frames(
+        "cursor", [frame], system_prompt=_COLLAB_SYSTEM_PROMPT
+    )
+    # The injected prompt is gone; the real conversation parses with correct roles.
+    assert doc["segments"] == [
+        {"type": "user", "text": "test"},
+        {
+            "type": "assistant",
+            "phase": "final",
+            "text": "Here — what do you want to work on?",
+            "elapsed": None,
+        },
+    ]
+    blob = json.dumps(doc, ensure_ascii=False)
+    assert "generally assist the user" not in blob
+    assert "Murder keeps state" not in blob
+
+
+def test_cursor_system_prompt_inverts_roles_without_it():
+    """Guards the regression: with no system_prompt, the markerless alternation
+    mislabels the prompt's paragraphs as a user/assistant mix (and inverts the
+    real turns) — exactly the bug the fix removes."""
+    frame = _cursor_frame_with_system_prompt()
+    doc = transcript_v2.parse_frames("cursor", [frame])
+    users = [s["text"] for s in doc["segments"] if s["type"] == "user"]
+    # System-prompt paragraphs leak in, and the real "test" is no longer user[0].
+    assert any("generally assist the user" in u for u in users)
+    assert users[0] != "test"
+
+
+def test_strip_leading_system_prompt_helper():
+    strip = transcript_v2._strip_leading_system_prompt
+    blocks = [
+        ["para one"],
+        ["para two"],
+        ["test"],
+        ["a reply"],
+    ]
+    prompt = "para one\n\npara two"
+    assert strip(blocks, prompt) == [["test"], ["a reply"]]
+    # No prompt / no match → blocks untouched.
+    assert strip(blocks, None) == blocks
+    assert strip(blocks, "something else entirely") == blocks
+    # A partial match (prompt head present but not fully covered) is left intact
+    # rather than dropping a real turn.
+    assert strip([["para one"], ["test"]], "para one\n\npara two") == [
+        ["para one"],
+        ["test"],
+    ]
+
+
+def test_strip_tolerates_smart_quotes_and_rewrapping():
+    """Cursor reflows the echoed prompt and may swap ASCII quotes for typographic
+    ones; the match must survive both so it doesn't silently no-op in production."""
+    strip = transcript_v2._strip_leading_system_prompt
+    prompt = "the user's `plan.md` files must start with frontmatter"
+    # Echoed back with curly quotes and a mid-paragraph soft wrap (extra block).
+    blocks = [
+        ["the user’s `plan.md` files"],
+        ["must start with frontmatter"],
+        ["the real first message"],
+    ]
+    assert strip(blocks, prompt) == [["the real first message"]]
+
+
+def test_real_collaborator_brief_is_stripped(tmp_path):
+    """Ground the matcher against the *actual* assembled collaborator brief
+    (collaborator.md + any repo context docs), not a hand-copied string — the
+    seam the bug lives at is murder's real prompt vs cursor's echo of it."""
+    from murder.bus import Role
+    from murder.llm.harnesses.capabilities import HarnessCapabilities
+    from murder.runtime.orchestration.brief import BriefContext, assembler_for
+
+    ctx = BriefContext(
+        role=Role.COLLABORATOR,
+        repo_root=tmp_path,
+        caps=HarnessCapabilities(),
+        harness_name="cursor",
+        model=None,
+    )
+    brief = assembler_for(ctx).build(ctx)
+    assert "generally assist the user" in brief  # sanity: real prompt loaded
+
+    # Render the brief as cursor echoes a user turn: 2-space indent, paragraphs
+    # split on blank lines, long lines hard-wrapped at ~70 cols (soft wraps the
+    # parser must re-join).
+    import textwrap
+
+    echoed_lines: list[str] = []
+    for para in brief.split("\n\n"):
+        for wrapped in textwrap.wrap(para.strip(), width=70) or [""]:
+            echoed_lines.append(f"  {wrapped}")
+        echoed_lines.append("")
+    echoed = "\n".join(echoed_lines)
+
+    frame = (
+        "user@machine:~/Documents/code/murder $ agent\n\n\n"
+        "  Cursor Agent\n"
+        "  v2026.06.04-8f81907\n\n\n"
+        f"{echoed}\n\n"
+        "  what should we work on?\n\n\n"
+        "  Here — tell me what to tackle.\n\n"
+        " ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄\n"
+        "  → Add a follow-up\n"
+        " ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀\n"
+        "  Composer 2.5 · 7.3%                                    Auto-run\n"
+        "  ~/Documents/code/murder · fix/shutdown-flock-race\n"
+    )
+    doc = transcript_v2.parse_frames("cursor", [frame], system_prompt=brief)
+    assert doc["segments"] == [
+        {"type": "user", "text": "what should we work on?"},
+        {
+            "type": "assistant",
+            "phase": "final",
+            "text": "Here — tell me what to tackle.",
+            "elapsed": None,
+        },
+    ]
+
+
+def test_pi_system_prompt_stripped_when_supplied():
+    """Pi shares the markerless alternation, so the same stripping applies."""
+    prompt = "line one of the brief\n\nline two of the brief"
+    frame = (
+        "pi session\n"
+        "\n"
+        " line one of the brief\n"
+        "\n"
+        " line two of the brief\n"
+        "\n"
+        " what should we build?\n"
+        "\n"
+        " Let's start with the parser.\n"
+        "\n"
+        "> \n"
+    )
+    doc = transcript_v2.parse_frames("pi", [frame], system_prompt=prompt)
+    users = [s["text"] for s in doc["segments"] if s["type"] == "user"]
+    assert users == ["what should we build?"]
+    blob = json.dumps(doc, ensure_ascii=False)
+    assert "brief" not in blob

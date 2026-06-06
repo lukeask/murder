@@ -1,0 +1,9 @@
+{
+  "harness": "pi",
+  "state": "awaiting_input",
+  "condensed": null,
+  "segments": [
+    {"type": "user", "text": "say hello in one word"},
+    {"type": "assistant", "phase": "final", "text": "Hello", "elapsed": null}
+  ]
+}

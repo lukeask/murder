@@ -7,6 +7,14 @@ alone. It has no knowledge of any specific command, file name, SQL query, or
 prose content of any session; a different CC or codex session parses through the
 exact same code path.
 
+The one deliberate exception is the murder-owned system prompt: markerless
+harnesses (cursor, pi) carry no syntactic user/assistant cue, so the parser
+assigns roles by alternating block position. Murder injects its system prompt as
+the crow's first user message, which the harness echoes as an un-answered user
+turn that breaks strict alternation for every turn after it. Because murder owns
+that exact text, ``system_prompt`` can be threaded in so the matching leading
+blocks are dropped (see ``_strip_leading_system_prompt``).
+
 Pipeline (one shape for both harnesses):
 
     feed(frame) -> _PaneScrollback reconciles successive fixed-height captures
@@ -121,6 +129,20 @@ _TITLE_MAX = 160
 # ---- shared chrome ---------------------------------------------------------- #
 _RULE_RE = re.compile(r"^\s*[─━═]{8,}\s*$")
 
+# ---- pi grammar ------------------------------------------------------------- #
+_PI_COMPACTION_RE = re.compile(
+    r"^\s*(?:\[compaction\]|compacted\s+from\b|run\s+pi\s+update\b|changelog:\s*$|more\s*$)",
+    re.IGNORECASE,
+)
+# Wrapped URL continuation lines (e.g. "GELOG.md" split off a long URL).
+_PI_URL_FRAG_RE = re.compile(r"^\s*[A-Z]{2,}[a-zA-Z0-9_-]*\.[a-z]{1,5}\s*$")
+
+# ---- antigravity grammar ---------------------------------------------------- #
+_AGY_PROMPT_RE = re.compile(r"^\s*>\s+(.+)$")
+_AGY_THINKING_HEADER_RE = re.compile(r"^\s*▸\s+Thought\s+for\b")
+_AGY_INTERRUPTED_RE = re.compile(r"^\s*⎿\s+Interrupted\b")
+_AGY_LOGO_RE = re.compile(r"^\s*[▄▀]")
+
 # ---- claude_code grammar ---------------------------------------------------- #
 _CC_PROMPT_RE = re.compile(r"^\s*❯[\s ]*(.*)$")
 _CC_CHOICE_OPTION_PROMPT_RE = re.compile(r"^\s*❯[\s\xa0]*\d+\.\s+")
@@ -213,6 +235,14 @@ def _state_adapter(harness: str) -> Any | None:
         from murder.llm.harnesses.cursor import CursorAdapter
 
         return CursorAdapter()
+    if harness == "pi":
+        from murder.llm.harnesses.pi_harness import PiAdapter
+
+        return PiAdapter()
+    if harness == "antigravity":
+        from murder.llm.harnesses.antigravity import AntigravityAdapter
+
+        return AntigravityAdapter()
     return None
 
 
@@ -823,6 +853,339 @@ def _parse_codex(lines: list[str]) -> list[Segment]:
 
 
 # --------------------------------------------------------------------------- #
+# cursor parser.
+# --------------------------------------------------------------------------- #
+_CURSOR_INPUT_LINE_RE = re.compile(r"^\s*→\s*\S")
+# Cursor rotates startup hints; all take the form "Use /<cmd> ..." or "Try Composer ...".
+_CURSOR_STARTUP_HINT_RE = re.compile(r"^(?:Use\s+/\S|Try\s+Composer\b)", re.IGNORECASE)
+
+
+def _cursor_is_chrome(line: str) -> bool:
+    """Chrome predicate for cursor transcript parsing.
+
+    Extends `_is_cursor_chrome` from cursor.py with patterns that are not
+    needed for idle/busy state detection but must be suppressed in the parsed
+    transcript: shell prompt, startup hint lines, Tip: lines, typed-but-unsent
+    input.  Blank lines are treated as chrome here so callers can split on them.
+    """
+    from murder.llm.harnesses.cursor import _is_cursor_chrome
+
+    s = line.strip()
+    if not s:
+        return True
+    if _is_cursor_chrome(line):
+        return True
+    if _CURSOR_INPUT_LINE_RE.match(line):  # → <typed text> not yet submitted
+        return True
+    if s.startswith("Tip:") or _CURSOR_STARTUP_HINT_RE.match(s):
+        return True
+    if not line.startswith(" "):  # shell prompt / unindented non-content
+        return True
+    return False
+
+
+def _normalize_prompt_match(text: str) -> str:
+    """Fold a string to a comparison form for system-prompt matching.
+
+    Cursor reflows the echoed user message (soft-wrapping long lines) and may
+    render typographic quotes/dashes where the stored prompt has ASCII ones, so
+    the match must be resilient to both: collapse all whitespace and fold the
+    common smart-punctuation pairs (the same set codex output is normalised
+    with). Only used to *recognise* the prompt; the displayed text is untouched.
+    """
+    return " ".join(_normalize_codex_text(text).split())
+
+
+def _strip_leading_system_prompt(
+    blocks: list[list[str]], system_prompt: str | None
+) -> list[list[str]]:
+    """Drop the leading blocks that reconstruct murder's injected system prompt.
+
+    Markerless harnesses assign roles by alternating block position, so the
+    crow's injected system prompt — echoed as a user turn the harness never
+    answers — inverts every subsequent role. Murder owns the exact prompt text,
+    so we recognise the leading blocks that form it and drop them, letting
+    alternation restart from the first real user message.
+
+    The prompt spans multiple blank-line-separated paragraphs, so we consume as
+    many leading blocks as form a (normalised) prefix of the prompt and only
+    strip them once they cover the *whole* prompt. The all-or-nothing rule is
+    deliberate: a merely partial match (the prompt's head scrolled out of the
+    capture, or a character we failed to normalise) leaves every block intact.
+    A one-off inverted parse is recoverable; silently deleting a real user turn
+    is not (murder never drops user input).
+    """
+    if not system_prompt or not blocks:
+        return blocks
+    target = _normalize_prompt_match(system_prompt)
+    if not target:
+        return blocks
+    acc = ""
+    for consumed, block in enumerate(blocks, start=1):
+        block_text = " ".join(line.strip() for line in block if line.strip())
+        acc = _normalize_prompt_match(f"{acc} {block_text}")
+        if acc == target:
+            return blocks[consumed:]
+        if not target.startswith(acc):
+            break
+    return blocks
+
+
+def _parse_cursor(lines: list[str], system_prompt: str | None = None) -> list[Segment]:
+    """Parse cursor scrollback into segments.
+
+    Cursor uses no syntactic markers (❯ for user, ● for assistant). Content
+    blocks (contiguous non-chrome lines separated by chrome/blank runs) alternate
+    strictly user → assistant → user → …, starting with user. This holds for
+    prose-only sessions; revisit when a tool-heavy cursor fixture is added.
+    Murder's injected system prompt (``system_prompt``) is stripped from the
+    leading blocks first so it does not invert the alternation.
+    """
+    blocks: list[list[str]] = []
+    current: list[str] = []
+    for line in lines:
+        if _cursor_is_chrome(line):
+            if current:
+                blocks.append(current)
+                current = []
+        else:
+            current.append(line)
+    if current:
+        blocks.append(current)
+
+    blocks = _strip_leading_system_prompt(blocks, system_prompt)
+
+    segments: list[Segment] = []
+    for idx, block in enumerate(blocks):
+        text = " ".join(line.strip() for line in block if line.strip())
+        if not text:
+            continue
+        if idx % 2 == 0:
+            segments.append({"type": "user", "text": text})
+        else:
+            segments.append(
+                {"type": "assistant", "phase": "intermediate", "text": text, "elapsed": None}
+            )
+    return _dedupe_adjacent(segments)
+
+
+def _close_last_cursor_turn(segments: list[Segment]) -> None:
+    """At idle, all cursor assistant blocks are complete turns — mark all final.
+
+    Cursor renders no completion-marker duration, so elapsed stays None.
+    Unlike codex (one turn) or CC (inline markers), cursor multi-turn sessions
+    leave every assistant block intermediate until idle time.
+    """
+    for segment in segments:
+        if segment["type"] == "assistant" and segment.get("phase") == "intermediate":
+            segment["phase"] = "final"
+
+
+# --------------------------------------------------------------------------- #
+# pi parser.
+# --------------------------------------------------------------------------- #
+def _pi_is_transcript_chrome(line: str) -> bool:
+    """Chrome predicate for pi transcript parsing.
+
+    Pi submitted content always has a leading space in scrollback; the live
+    input box and all chrome lines do not (or are caught by `_is_pi_chrome`).
+    Blank lines are chrome here so callers can split on them.
+    """
+    from murder.llm.harnesses.pi_harness import _is_pi_chrome
+
+    s = line.strip()
+    if not s:
+        return True
+    if _is_pi_chrome(line):
+        return True
+    if _PI_COMPACTION_RE.match(s):
+        return True
+    if _PI_URL_FRAG_RE.match(s):
+        return True
+    # Pi's live input box and unindented chrome never have a leading space;
+    # submitted content in scrollback always does.
+    if not line.startswith(" "):
+        return True
+    return False
+
+
+def _parse_pi(lines: list[str], system_prompt: str | None = None) -> list[Segment]:
+    """Parse pi scrollback into segments.
+
+    Pi uses no syntactic user/assistant markers. Submitted content in
+    scrollback is indented with a single leading space; all chrome (rules,
+    banner, status bar, compaction notices) is filtered first. The remaining
+    non-chrome blocks alternate user → assistant, starting with user. Within
+    each assistant block the leading reasoning-prefix paragraph(s) (matching
+    `_PI_REASONING_PREFIX_RE`) are stripped. Murder's injected system prompt
+    (``system_prompt``) is stripped from the leading blocks first so it does not
+    invert the alternation.
+    """
+    from murder.llm.harnesses.pi_harness import _PI_REASONING_PREFIX_RE
+
+    blocks: list[list[str]] = []
+    current: list[str] = []
+    for line in lines:
+        if _pi_is_transcript_chrome(line):
+            if current:
+                blocks.append(current)
+                current = []
+        else:
+            current.append(line)
+    if current:
+        blocks.append(current)
+
+    blocks = _strip_leading_system_prompt(blocks, system_prompt)
+
+    segments: list[Segment] = []
+    i = 0
+    while i < len(blocks):
+        user_text = " ".join(l.strip() for l in blocks[i] if l.strip())
+        if not user_text:
+            i += 1
+            continue
+        segments.append({"type": "user", "text": user_text})
+        i += 1
+
+        # Collect assistant: skip reasoning-prefix blocks, take first
+        # non-reasoning block as the response. A second non-reasoning block
+        # after the response means the next user turn has started.
+        assistant_parts: list[str] = []
+        while i < len(blocks):
+            block_text = " ".join(l.strip() for l in blocks[i] if l.strip())
+            if not block_text:
+                i += 1
+                continue
+            if _PI_REASONING_PREFIX_RE.match(block_text):
+                i += 1
+                continue
+            if not assistant_parts:
+                assistant_parts.append(block_text)
+                i += 1
+            else:
+                break
+
+        if assistant_parts:
+            segments.append(
+                {
+                    "type": "assistant",
+                    "phase": "intermediate",
+                    "text": " ".join(assistant_parts),
+                    "elapsed": None,
+                }
+            )
+
+    return _dedupe_adjacent(segments)
+
+
+def _close_last_pi_turn(segments: list[Segment]) -> None:
+    """At idle, mark all intermediate pi assistant blocks final."""
+    for segment in segments:
+        if segment["type"] == "assistant" and segment.get("phase") == "intermediate":
+            segment["phase"] = "final"
+
+
+# --------------------------------------------------------------------------- #
+# antigravity parser.
+# --------------------------------------------------------------------------- #
+def _agy_is_chrome(line: str) -> bool:
+    """Chrome predicate for antigravity transcript parsing."""
+    s = line.strip()
+    if not s:
+        return True
+    if _RULE_RE.match(line):
+        return True
+    if _AGY_LOGO_RE.match(line):
+        return True
+    if _AGY_THINKING_HEADER_RE.match(line):
+        return True
+    if _AGY_INTERRUPTED_RE.match(line):
+        return True
+    lowered = s.lower()
+    for drop in ("? for shortcuts", "esc to cancel", "↑/↓ navigate", "generating..."):
+        if drop in lowered:
+            return True
+    return False
+
+
+def _is_agy_live_prompt(lines: list[str], index: int) -> bool:
+    """True when a `>` line is the live input box (between two horizontal rules)."""
+    before = index - 1
+    while before >= 0 and not lines[before].strip():
+        before -= 1
+    after = index + 1
+    while after < len(lines) and not lines[after].strip():
+        after += 1
+    return (
+        before >= 0
+        and after < len(lines)
+        and bool(_RULE_RE.match(lines[before]))
+        and bool(_RULE_RE.match(lines[after]))
+    )
+
+
+def _parse_agy(lines: list[str]) -> list[Segment]:
+    """Parse antigravity scrollback into segments.
+
+    Antigravity uses `>` as the user-turn marker. Thinking blocks
+    (`▸ Thought for N tokens` header + 2-space-indented content) contribute
+    their indented content to the assistant segment; the header line is chrome.
+    The live input box at the bottom (an empty `>` between two rules) is
+    suppressed. Interrupted turns produce a user segment with no assistant.
+    """
+    segments: list[Segment] = []
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        prompt = _AGY_PROMPT_RE.match(line)
+        if prompt and not _is_agy_live_prompt(lines, i):
+            user_text = prompt.group(1).strip()
+            if user_text:
+                segments.append({"type": "user", "text": user_text})
+            i += 1
+            # Collect assistant content until the next submitted `>` prompt or live box.
+            assistant_parts: list[str] = []
+            while i < len(lines):
+                aline = lines[i]
+                if _AGY_PROMPT_RE.match(aline) and not _is_agy_live_prompt(lines, i):
+                    break
+                if _is_agy_live_prompt(lines, i):
+                    break
+                if _AGY_THINKING_HEADER_RE.match(aline):
+                    i += 1
+                    while i < len(lines) and lines[i].startswith("  ") and lines[i].strip():
+                        assistant_parts.append(lines[i].strip())
+                        i += 1
+                    continue
+                if _agy_is_chrome(aline):
+                    i += 1
+                    continue
+                stripped = aline.strip()
+                if stripped:
+                    assistant_parts.append(stripped)
+                i += 1
+            if assistant_parts:
+                segments.append(
+                    {
+                        "type": "assistant",
+                        "phase": "intermediate",
+                        "text": " ".join(assistant_parts),
+                        "elapsed": None,
+                    }
+                )
+            continue
+        i += 1
+    return _dedupe_adjacent(segments)
+
+
+def _close_last_agy_turn(segments: list[Segment]) -> None:
+    """At idle, mark all intermediate antigravity assistant blocks final."""
+    for segment in segments:
+        if segment["type"] == "assistant" and segment.get("phase") == "intermediate":
+            segment["phase"] = "final"
+
+
+# --------------------------------------------------------------------------- #
 # Reconciliation helpers shared by both harnesses.
 # --------------------------------------------------------------------------- #
 def _dedupe_adjacent(segments: list[Segment]) -> list[Segment]:
@@ -994,8 +1357,11 @@ def _resolve_choice_prompt(segments: list[Segment], prompt: MultipleChoicePrompt
 class TranscriptAccumulator:
     """Append pane captures and expose the accumulated typed transcript."""
 
-    def __init__(self, harness: str) -> None:
+    def __init__(self, harness: str, *, system_prompt: str | None = None) -> None:
         self.harness = harness
+        # The murder-owned prompt injected as the crow's first user message;
+        # markerless parsers strip it so it does not invert role alternation.
+        self.system_prompt = system_prompt
         self._scrollback = _PaneScrollback()
         self._state = "working"
         self._segments: list[Segment] = []
@@ -1011,6 +1377,12 @@ class TranscriptAccumulator:
             parsed = _parse_cc(self._scrollback.lines)
         elif self.harness == "codex":
             parsed = _parse_codex(self._scrollback.lines)
+        elif self.harness == "cursor":
+            parsed = _parse_cursor(self._scrollback.lines, self.system_prompt)
+        elif self.harness == "pi":
+            parsed = _parse_pi(self._scrollback.lines, self.system_prompt)
+        elif self.harness == "antigravity":
+            parsed = _parse_agy(self._scrollback.lines)
         else:
             parsed = []
         if live_choice_prompt is not None:
@@ -1035,6 +1407,12 @@ class TranscriptAccumulator:
         # mid-session window never marks a premature final.
         if self.harness == "codex" and self._state == "awaiting_input":
             _close_last_codex_turn(segments)
+        if self.harness == "cursor" and self._state == "awaiting_input":
+            _close_last_cursor_turn(segments)
+        if self.harness == "pi" and self._state == "awaiting_input":
+            _close_last_pi_turn(segments)
+        if self.harness == "antigravity" and self._state == "awaiting_input":
+            _close_last_agy_turn(segments)
         return {
             "harness": self.harness,
             "state": self._state,
@@ -1060,11 +1438,13 @@ def _state_from_frame(
 
 
 def supports_harness(harness: str) -> bool:
-    return harness in {"claude_code", "codex"}
+    return harness in {"claude_code", "codex", "cursor", "pi", "antigravity"}
 
 
-def parse_frames(harness: str, frames: Iterable[str]) -> dict[str, Any]:
-    acc = TranscriptAccumulator(harness)
+def parse_frames(
+    harness: str, frames: Iterable[str], *, system_prompt: str | None = None
+) -> dict[str, Any]:
+    acc = TranscriptAccumulator(harness, system_prompt=system_prompt)
     for frame in frames:
         acc.feed(frame)
     return acc.to_dict()

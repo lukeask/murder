@@ -35,6 +35,8 @@ _BANNER_RE = re.compile(r"OpenAI Codex", re.IGNORECASE)
 # rotates ("Explain this codebase", "Find and fix a bug in @filename", …), so
 # match any "› " line (busy state is screened separately, before this check).
 _IDLE_PROMPT_RE = re.compile(r"^\s*›(?:\s.*)?$", re.MULTILINE)
+_BULLET_RE = re.compile(r"^•\s+", re.MULTILINE)
+_COMPLETION_RE = re.compile(r"^\s*─\s*Worked\s+for\s+.+?\s*─\s*$", re.MULTILINE)
 _BUSY_RE = re.compile(
     r"^\s*(?:[•·]\s*)?(?:working|thinking|running|executing|processing|applying patch)\b"
     r"|esc to interrupt",
@@ -52,6 +54,8 @@ _MODEL_STARTUP_POLL_TIMEOUT_S = 15.0
 _MODEL_CAPTURE_DELAY_S = 3.0
 _MODEL_STEP_DELAY_S = 0.6
 _PROMPT_SUBMIT_DELAY_S = 0.2
+_PROMPT_VERIFY_DELAY_S = 0.8
+_PROMPT_SUBMIT_RETRIES = 2
 # Codex inline composer expects Tab+Enter after each bracketed paste; long prompts
 # must be split into multiple tmux pastes so each segment gets its own confirmation.
 _CODEX_PASTE_CHUNK_UTF8 = 768
@@ -90,6 +94,27 @@ def _model_state_matches(
     if state is None or state.model != model:
         return False
     return effort is None or state.effort in (effort, None)
+
+
+def _live_prompt_text(pane_text: str) -> str | None:
+    lines = strip_ansi(pane_text).splitlines()
+    for index in range(len(lines) - 1, -1, -1):
+        match = _IDLE_PROMPT_RE.match(lines[index])
+        if match is None:
+            continue
+        below = "\n".join(lines[index + 1 :])
+        if _BULLET_RE.search(below) or _COMPLETION_RE.search(below):
+            return None
+        return lines[index].strip()[1:].strip()
+    return None
+
+
+def _prompt_still_in_composer(pane_text: str, prompt: str) -> bool:
+    expected = re.sub(r"\s+", " ", prompt).strip()
+    if not expected:
+        return False
+    live = _live_prompt_text(pane_text)
+    return live is not None and re.sub(r"\s+", " ", live).strip() == expected
 
 
 class CodexAdapter(HarnessAdapter):
@@ -145,19 +170,33 @@ class CodexAdapter(HarnessAdapter):
     def extract_last_message(self, pane_text: str) -> str | None:
         return extract_last_message_heuristic(pane_text)
 
+    async def _submit_prompt(self, session: str) -> None:
+        await tmux.send_keys(session, "Enter", literal=False, enter=False)
+
+    async def _ensure_prompt_submitted(self, session: str, prompt: str) -> None:
+        if not prompt.strip():
+            return
+        for _ in range(_PROMPT_SUBMIT_RETRIES):
+            await asyncio.sleep(_PROMPT_VERIFY_DELAY_S)
+            pane = await tmux.capture_pane(session, lines=120)
+            if self.is_busy(pane) or not _prompt_still_in_composer(pane, prompt):
+                return
+            await self._submit_prompt(session)
+
     async def send_prompt(self, session: str, prompt: str) -> None:
         raw = prompt.encode("utf-8")
         if len(raw) < tmux.LARGE_PAYLOAD_BYTES:
             await tmux.send_keys(session, prompt, literal=True, enter=False)
             await asyncio.sleep(_PROMPT_SUBMIT_DELAY_S)
-            await tmux.send_keys(session, "", literal=True, enter=True)
+            await self._submit_prompt(session)
+            await self._ensure_prompt_submitted(session, prompt)
             return
 
         for piece in _utf8_byte_chunks(raw, _CODEX_PASTE_CHUNK_UTF8):
             await tmux.paste_buffer_literal(session, piece.decode("utf-8"))
             await asyncio.sleep(_PROMPT_SUBMIT_DELAY_S)
             await tmux.send_keys(session, "Tab", literal=False, enter=False)
-            await tmux.send_keys(session, "", literal=True, enter=True)
+            await self._submit_prompt(session)
 
     async def set_model(self, session: str, model: str, *, effort: str | None = None) -> bool:
         # The launch --model flag selects the model but not its reasoning effort,

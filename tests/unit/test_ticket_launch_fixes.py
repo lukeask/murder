@@ -190,6 +190,51 @@ def test_codex_rogue_keeps_startup_model_session_on_runtime_picker_failure(
 
     assert agent_id in agents
     assert reaped == []
+    agent = agents[agent_id]
+    assert agent.harness_session._first_send_idle_gate_pending is True  # noqa: SLF001
+    rt.sync_agent.assert_called_once()
+
+
+def test_codex_rogue_keeps_startup_model_session_on_idle_timeout(
+    repo_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    agents: dict[str, object] = {}
+    reaped: list[str] = []
+
+    async def _reap(agent_id: str) -> None:
+        reaped.append(agent_id)
+
+    async def _fail_idle_wait(self: HarnessSession, spec) -> object:
+        return fail_result("Harness not idle in time: session=murder_test_crow_codex_rogue_test")
+
+    def _get_agent(agent_id: str) -> object | None:
+        return agents.get(agent_id)
+
+    monkeypatch.setattr(HarnessSession, "start", _fail_idle_wait)
+
+    rt = SimpleNamespace(
+        db=MagicMock(),
+        bus=MagicMock(),
+        run_id="test-run",
+        repo_root=repo_root,
+        config=SimpleNamespace(
+            project=SimpleNamespace(name="test"),
+            runtime=SimpleNamespace(session_name_template="murder_{project}_{role}{suffix}"),
+        ),
+        get_agent=_get_agent,
+        register_agent=lambda agent: agents.setdefault(agent.id, agent),
+        sync_agent=MagicMock(),
+        reap=_reap,
+    )
+    orch = Orchestrator(rt)
+
+    agent_id = asyncio.run(orch.spawn_rogue("codex", "gpt-5.4-mini"))
+
+    assert agent_id in agents
+    assert reaped == []
+    agent = agents[agent_id]
+    assert agent.harness_session._first_send_idle_gate_pending is True  # noqa: SLF001
     rt.sync_agent.assert_called_once()
 
 
@@ -215,4 +260,3 @@ def test_transition_done_heals_ready_status(repo_root: Path) -> None:
     )
 
     assert get_ticket_status(conn, "t097") == TicketStatus.DONE.value
-

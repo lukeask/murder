@@ -8,7 +8,6 @@ from contextlib import closing
 from datetime import datetime
 from pathlib import Path
 
-from murder.verdict.escalations.views import ack_escalation_db
 from murder.state.persistence import tickets as ticket_store
 from murder.state.persistence.schema import get_db
 from murder.app.service.client_api import (
@@ -420,10 +419,6 @@ class ServiceReadModel:
                 (limit,),
             ).fetchall()
         return [dict(r) for r in rows]
-
-    def ack_escalation(self, escalation_id: str) -> None:
-        ack_escalation_db(int(escalation_id), self.db_path)
-        self.invalidate(InvalidationKeys.escalations)
 
     def invalidate(self, key: str) -> None:
         self._generations[key] += 1

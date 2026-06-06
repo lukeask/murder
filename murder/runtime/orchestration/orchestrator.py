@@ -29,6 +29,7 @@ from murder.state.persistence.plans import (
     upsert_plan as _db_upsert_plan,
 )
 from murder.state.persistence.agents import (
+    append_agent_message as _db_append_agent_message,
     upsert_agent as _db_upsert_agent,
     get_active_agent_by_role as _db_get_active_agent_by_role,
     set_agent_status as _db_set_agent_status,
@@ -104,6 +105,24 @@ def _harness_prefix(harness_kind: str) -> str:
 def is_rogue_agent_id(agent_id: str) -> bool:
     """True for any rogue agent id regardless of harness prefix."""
     return "rogue-" in agent_id
+
+
+def _codex_startup_model_degraded_ok(
+    harness_kind: str,
+    startup_model: str | None,
+    harness_adapter: Any,
+    message: str,
+) -> bool:
+    if harness_kind != "codex" or startup_model is None:
+        return False
+    known_startup_models = {
+        model_id
+        for model_id, _label in getattr(harness_adapter, "available_startup_models", ())
+    }
+    if startup_model not in known_startup_models:
+        return False
+    msg = message.lower()
+    return "failed to select runtime model" in msg or "not idle in time" in msg
 
 
 def _crow_handler_companion(agent_id: str) -> str:
@@ -448,16 +467,11 @@ class Orchestrator:
             start_result = await agent.harness_session.start(start_spec)
             if not start_result.ok:
                 message = start_result.message or "harness startup failed"
-                known_startup_models = {
-                    model_id for model_id, _label in harness_adapter.available_startup_models
-                }
-                codex_startup_model_gate = (
-                    harness_kind == "codex"
-                    and startup_model in known_startup_models
-                    and "failed to select runtime model" in message
-                )
-                if not codex_startup_model_gate:
+                if not _codex_startup_model_degraded_ok(
+                    harness_kind, startup_model, harness_adapter, message
+                ):
                     raise RuntimeError(message)
+                agent.harness_session.require_first_send_idle_gate()
             agent.status = AgentStatus.RUNNING
             self.rt.sync_agent(agent)
         except BaseException:
@@ -608,7 +622,13 @@ class Orchestrator:
         return {"handled": True, "queued": False}
 
     async def send_agent_key(
-        self, agent_id: str | None, key: str, *, literal: bool = False
+        self,
+        agent_id: str | None,
+        key: str,
+        *,
+        literal: bool = False,
+        enter: bool = False,
+        log_user_input: str | None = None,
     ) -> dict[str, Any]:
         """Send a raw tmux key (name or literal text) to an agent harness pane."""
         if agent_id is None:
@@ -629,13 +649,18 @@ class Orchestrator:
         if not isinstance(session, str) or not session:
             return {"handled": False, "error": f"agent {agent_id} has no tmux session"}
 
-        await tmux.send_keys(session, key, literal=literal, enter=False)
+        await tmux.send_keys(session, key, literal=literal, enter=enter)
+        db = getattr(self.rt, "db", None)
+        if db is not None and isinstance(log_user_input, str) and log_user_input.strip():
+            _db_append_agent_message(db, agent_id, "user", log_user_input.strip())
         return {
             "handled": True,
             "agent_id": agent_id,
             "session": session,
             "key": key,
             "literal": literal,
+            "enter": enter,
+            "logged_user_input": bool(log_user_input and log_user_input.strip()),
         }
 
     async def stop_agent(self, agent_id: str) -> dict[str, Any]:

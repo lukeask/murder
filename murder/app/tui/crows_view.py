@@ -17,9 +17,11 @@ import contextlib
 import json
 import logging
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Any
 
 from textual import events
 from textual.actions import SkipAction
@@ -31,13 +33,19 @@ from textual.reactive import reactive
 from textual.widget import Widget
 from textual.widgets import RichLog, Static
 
-from murder.llm.harnesses.transcripts import has_transcript_parser
 from murder.app.service.client_api import CrowSessionSummary, CrowSnapshot
+from murder.app.tui.cc_multiple_choice_wizard import CCMultipleChoiceWizard
 from murder.app.tui.crow_health import Health, classify, is_stuck
 from murder.app.tui.live_log import LiveRichLog
 from murder.app.tui.pane_capture import CapturePaneFn, PaneCaptureError
 from murder.app.tui.pane_mirror import PaneMirror
 from murder.app.tui.perf_log import PerfLog
+from murder.llm.harnesses.choice_prompt import ChoiceOption, MultipleChoicePrompt
+from murder.llm.harnesses.transcript_v2 import (
+    SEGMENT_TYPES,
+    TranscriptAccumulator,
+    supports_harness,
+)
 
 TILE_LINES_RAW = 40
 """Raw-mode tail: last N lines of pane; large enough to show the input box and permission prompts."""
@@ -662,22 +670,160 @@ def _keep_failed_session(session: CrowSessionSummary, *, now: datetime) -> bool:
     return now - last_seen <= FAILED_STALE_AFTER
 
 
-def _parse_tile_text(pane_text: str, harness_kind: str) -> list[tuple[str, str]]:
-    """Parse a pane capture into (role, text) turns for the given harness kind."""
-    from murder.llm.harnesses import REGISTRY
-    from murder.llm.harnesses.transcripts import parser_for_harness_kind
+def _segment_text(segment: Mapping[str, Any]) -> tuple[str, str] | None:
+    seg_type = segment.get("type")
+    if seg_type == "user":
+        text = segment.get("text")
+        return ("user", text) if isinstance(text, str) and text.strip() else None
+    if seg_type == "assistant":
+        text = segment.get("text")
+        if not isinstance(text, str) or not text.strip():
+            return None
+        elapsed = segment.get("elapsed")
+        phase = str(segment.get("phase") or "")
+        if phase == "final" and isinstance(elapsed, str) and elapsed.strip():
+            return ("assistant", f"{text}\n\n[{elapsed}]")
+        return ("assistant", text)
+    if seg_type == "tool_call":
+        title = str(segment.get("title") or "").strip()
+        if not title:
+            return None
+        parts = [title]
+        tool_input = segment.get("input")
+        if isinstance(tool_input, str) and tool_input.strip():
+            parts.append(f"$ {tool_input}")
+        result = segment.get("result")
+        if isinstance(result, str) and result.strip():
+            parts.append(result)
+        if segment.get("elided"):
+            parts.append("[collapsed]")
+        return ("tool", "\n".join(parts))
+    if seg_type == "plan_update":
+        title = str(segment.get("title") or "").strip()
+        items = segment.get("items")
+        if not title or not isinstance(items, list):
+            return None
+        lines = [title]
+        for item in items:
+            if not isinstance(item, Mapping):
+                continue
+            marker = "x" if item.get("done") else " "
+            text = str(item.get("text") or "").strip()
+            if text:
+                lines.append(f"[{marker}] {text}")
+        return ("plan", "\n".join(lines))
+    if seg_type == "agent_event":
+        name = str(segment.get("name") or "").strip()
+        status = str(segment.get("status") or "").strip()
+        elapsed = str(segment.get("elapsed") or "").strip()
+        parts = [part for part in (status, name, elapsed) if part]
+        return ("agent", " · ".join(parts)) if parts else None
+    if seg_type == "choice_prompt":
+        question = str(segment.get("question") or "").strip()
+        options = segment.get("options")
+        if not question:
+            return None
+        lines = [question]
+        if segment.get("answered"):
+            chosen = segment.get("chosen")
+            if isinstance(options, list):
+                for option in options:
+                    if not isinstance(option, Mapping):
+                        continue
+                    if option.get("number") != chosen:
+                        continue
+                    label = str(option.get("label") or "").strip()
+                    if label:
+                        lines.append(f"selected: {chosen}. {label}")
+                    break
+            return ("prompt", "\n".join(lines))
+        if isinstance(options, list):
+            for option in options:
+                if not isinstance(option, Mapping):
+                    continue
+                number = option.get("number")
+                label = str(option.get("label") or "").strip()
+                if label:
+                    lines.append(f"{number}. {label}")
+        return ("prompt", "\n".join(lines))
+    if seg_type not in SEGMENT_TYPES:
+        logger.warning("crow transcript render: dropping unknown segment type %r", seg_type)
+    return None
 
-    cls = REGISTRY.get(harness_kind or "")
-    if cls is None:
-        return []
-    parser = parser_for_harness_kind(
-        harness_kind,
-        prompt_markers=getattr(cls, "transcript_prompt_markers", ()),
-        drop_substrings=getattr(cls, "transcript_drop_substrings", ()),
+
+def _doc_to_chat_turns(doc: Mapping[str, Any]) -> list[tuple[str, str]]:
+    turns: list[tuple[str, str]] = []
+    segments = doc.get("segments")
+    if not isinstance(segments, list):
+        return turns
+    for segment in segments:
+        if not isinstance(segment, Mapping):
+            continue
+        rendered = _segment_text(segment)
+        if rendered is not None:
+            turns.append(rendered)
+    return turns
+
+
+def _segment_to_choice_prompt(segment: Mapping[str, Any]) -> MultipleChoicePrompt | None:
+    if segment.get("type") != "choice_prompt" or segment.get("answered"):
+        return None
+    question = str(segment.get("question") or "").strip()
+    options_raw = segment.get("options")
+    if not question or not isinstance(options_raw, list):
+        return None
+    options: list[ChoiceOption] = []
+    for option in options_raw:
+        if not isinstance(option, Mapping):
+            continue
+        number = option.get("number")
+        label = str(option.get("label") or "").strip()
+        if not isinstance(number, int) or not label:
+            continue
+        description = str(option.get("description") or "").strip()
+        options.append(ChoiceOption(number=number, label=label, description=description))
+    if not options:
+        return None
+    selected_number = segment.get("selected")
+    selected_index = 0
+    if isinstance(selected_number, int):
+        for idx, option in enumerate(options):
+            if option.number == selected_number:
+                selected_index = idx
+                break
+    return MultipleChoicePrompt(
+        question=question,
+        options=tuple(options),
+        selected_index=selected_index,
+        footer=str(segment.get("footer") or "").strip(),
     )
-    if parser is None:
-        return []
-    return parser.parse(pane_text)
+
+
+def _live_choice_prompt(doc: Mapping[str, Any]) -> MultipleChoicePrompt | None:
+    if doc.get("state") != "awaiting_approval":
+        return None
+    segments = doc.get("segments")
+    if not isinstance(segments, list):
+        return None
+    for segment in reversed(segments):
+        if not isinstance(segment, Mapping):
+            continue
+        prompt = _segment_to_choice_prompt(segment)
+        if prompt is not None:
+            return prompt
+    return None
+
+
+def _last_user_summary(doc: Mapping[str, Any]) -> str:
+    segments = doc.get("segments")
+    if not isinstance(segments, list):
+        return ""
+    for segment in reversed(segments):
+        if isinstance(segment, Mapping) and segment.get("type") == "user":
+            text = segment.get("text")
+            if isinstance(text, str):
+                return text.splitlines()[0].strip()
+    return ""
 
 
 class CrowTile(Container):
@@ -739,13 +885,25 @@ class CrowTile(Container):
             self.raw_mode = raw_mode
             super().__init__()
 
+    class ChoicePromptConfirmed(Message):
+        def __init__(self, entry: CrowEntry, option_number: int, label: str) -> None:
+            self.entry = entry
+            self.option_number = option_number
+            self.label = label
+            super().__init__()
+
     def __init__(self, entry: CrowEntry) -> None:
         super().__init__()
         self._entry = entry
         # Default to parsed mode when a parser is available for this harness;
         # fall back to raw mode for harnesses with no transcript parser so the
         # tile is never a blank screen on first render.
-        self._raw_mode = not has_transcript_parser(entry.harness or "")
+        self._raw_mode = not supports_harness(entry.harness or "")
+        self._transcript_acc = (
+            TranscriptAccumulator(entry.harness)
+            if supports_harness(entry.harness or "")
+            else None
+        )
         self._last_turns: list[tuple[str, str]] = []
         self._parsed_loaded = False
         self._last_render_width = 0
@@ -760,6 +918,7 @@ class CrowTile(Container):
         from murder.app.tui.planning_mode_widgets import ChatLog as _ChatLog
 
         self._chat_log = _ChatLog(agent_label=entry.harness or "agent")
+        self._choice_wizard: CCMultipleChoiceWizard | None = None
         self._chat_targeted = False
 
     @property
@@ -796,6 +955,17 @@ class CrowTile(Container):
 
     def update_entry(self, entry: CrowEntry) -> None:
         """Reconcile after a snapshot refresh; rebuild border + header in place."""
+        if entry.harness != self._entry.harness:
+            self._transcript_acc = (
+                TranscriptAccumulator(entry.harness)
+                if supports_harness(entry.harness or "")
+                else None
+            )
+            self._raw_mode = not supports_harness(entry.harness or "")
+            self._parsed_loaded = False
+            self._last_turns = []
+            self._last_render_width = 0
+            self._last_user_msg = ""
         self._entry = entry
         self._apply_entry()
 
@@ -811,7 +981,15 @@ class CrowTile(Container):
 
         self._raw_log.replace_lines(_write_tail)
 
-    def set_parsed(self, turns: list[tuple[str, str]], harness_kind: str = "") -> None:
+    def ingest_parsed_frame(self, text: str) -> None:
+        if self._transcript_acc is None:
+            kind = self._entry.harness or "unknown"
+            self.set_parsed_status(f"(parsed transcript unavailable for '{kind}')")
+            return
+        self._transcript_acc.feed(text)
+        self.set_parsed_doc(self._transcript_acc.to_dict(), self._entry.harness)
+
+    def set_parsed_doc(self, doc: Mapping[str, Any], harness_kind: str = "") -> None:
         """Update the parsed chat log.
 
         A RichLog renders and caches each line's Strip at the widget's width when
@@ -829,17 +1007,20 @@ class CrowTile(Container):
         width = self._chat_log.size.width
         if width <= 1:
             return  # not laid out yet — avoid caching a min-width render
+        live_prompt = _live_choice_prompt(doc)
+        turns = _doc_to_chat_turns(doc)
         if self._parsed_loaded and turns == self._last_turns and width == self._last_render_width:
+            self._sync_choice_prompt(live_prompt)
             return
         self._parsed_loaded = True
         self._last_turns = turns
         self._last_render_width = width
         self._chat_log.set_turns(turns)
+        self._sync_choice_prompt(live_prompt)
         if not turns:
             kind = harness_kind or self._entry.harness or "unknown"
             self._chat_log.add_status(f"(no parsed transcript visible yet for '{kind}')")
-        last_user = next((text for role, text in reversed(turns) if role == "user"), "")
-        new_msg = last_user.splitlines()[0].strip() if last_user else ""
+        new_msg = _last_user_summary(doc)
         if new_msg != self._last_user_msg:
             self._last_user_msg = new_msg
             self._apply_entry()
@@ -847,13 +1028,49 @@ class CrowTile(Container):
     def set_parsed_status(self, text: str) -> None:
         self._parsed_loaded = True
         self._last_turns = []
+        self._sync_choice_prompt(None)
         self._chat_log.replace_transcript([], status=text)
 
     def action_toggle_view(self) -> None:
         self._raw_mode = not self._raw_mode
         self._raw_log.display = self._raw_mode
-        self._chat_log.display = not self._raw_mode
+        self._chat_log.display = not self._raw_mode and self._choice_wizard is None
+        if self._choice_wizard is not None:
+            self._choice_wizard.display = not self._raw_mode
         self.post_message(self.ViewToggled(self._entry, self._raw_mode))
+
+    def on_cc_multiple_choice_wizard_confirmed(
+        self,
+        event: CCMultipleChoiceWizard.Confirmed,
+    ) -> None:
+        event.stop()
+        self.post_message(self.ChoicePromptConfirmed(self._entry, event.option_number, event.label))
+
+    def on_cc_multiple_choice_wizard_cancelled(
+        self,
+        event: CCMultipleChoiceWizard.Cancelled,
+    ) -> None:
+        event.stop()
+
+    def _sync_choice_prompt(self, prompt: MultipleChoicePrompt | None) -> None:
+        if prompt is None:
+            wizard = self._choice_wizard
+            if wizard is not None:
+                wizard.remove()
+                self._choice_wizard = None
+            self._chat_log.display = not self._raw_mode
+            return
+        wizard = self._choice_wizard
+        if wizard is None:
+            wizard = CCMultipleChoiceWizard(prompt)
+            self._choice_wizard = wizard
+            self.mount(wizard)
+        else:
+            wizard.update_prompt(prompt)
+        wizard.display = not self._raw_mode
+        self._chat_log.display = False
+        if wizard.display and self.has_focus:
+            wizard.focus()
 
     def _apply_entry(self) -> None:
         e = self._entry
@@ -871,6 +1088,8 @@ class CrowTile(Container):
         self.set_class(self._chat_targeted, "-chat-target")
 
     def on_focus(self) -> None:
+        if self._choice_wizard is not None and self._choice_wizard.display:
+            self._choice_wizard.focus()
         self.post_message(self.Highlighted(self._entry))
 
     def action_open(self) -> None:
@@ -1239,14 +1458,13 @@ class CrowsView(Container):
             if tile.raw_mode:
                 tile.set_tail(text)
             else:
-                kind = tile.entry.harness
                 try:
-                    turns = _parse_tile_text(text, kind)
+                    tile.ingest_parsed_frame(text)
                 except Exception:
+                    kind = tile.entry.harness
                     logger.exception("tile parse failed for %s (%s)", session, kind)
                     tile.set_parsed_status(f"(parse error for '{kind or 'unknown'}')")
                     return
-                tile.set_parsed(turns, kind)
 
         if perf is not None and perf.enabled:
             with perf.span("tui.crows.capture_tile", session=session):

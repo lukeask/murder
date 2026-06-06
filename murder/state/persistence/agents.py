@@ -166,6 +166,27 @@ def replace_agent_messages(
     )
 
 
+def append_agent_message(
+    conn: sqlite3.Connection,
+    agent_id: str,
+    role: str,
+    body: str,
+    *,
+    captured_at: str | None = None,
+) -> None:
+    """Append one message row without rewriting prior transcript history."""
+    ts = captured_at or _now()
+    row = conn.execute(
+        "SELECT COALESCE(MAX(ordinal), -1) + 1 AS next_ordinal FROM agent_messages WHERE agent_id = ?",
+        (agent_id,),
+    ).fetchone()
+    ordinal = int(row["next_ordinal"]) if row is not None else 0
+    conn.execute(
+        "INSERT INTO agent_messages (agent_id, ordinal, role, body, captured_at) VALUES (?, ?, ?, ?, ?)",
+        (agent_id, ordinal, role, body, ts),
+    )
+
+
 def list_stale_done_crow_sessions(
     conn: sqlite3.Connection,
     *,
