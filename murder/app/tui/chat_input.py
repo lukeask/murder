@@ -6,7 +6,12 @@ via the Orchestrator (lazy-spawn on first message).
 Enter submits; Shift+Enter inserts a newline. Up/Down recall prior sent
 messages (readline-style draft is preserved). :raw forwards keys to
 the harness until Esc Esc. For a crow target, Enter on an empty box
-requests an interrupt (flush a queued message sooner)."""
+requests an interrupt (flush a queued message sooner).
+
+Phase 2 (t055): ChatInput is a **pure-UI leaf** — it has no shared state
+and no store binding.  It stays a plain TextArea subclass; the StoreComponent
+mixin would add no value here.  All user intents are emitted upward as Textual
+Message subclasses (UserMessage, EmptySubmit, etc.) for the app to route."""
 
 from __future__ import annotations
 
