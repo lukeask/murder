@@ -7,6 +7,7 @@ from textual.message import Message
 from textual.widgets import Static
 
 from murder.app.service.client_api import ScheduleSnapshot
+from murder.app.tui.components import StoreComponent
 
 _MODES = ("manual", "autorun_ready", "crow_magic")
 _MODE_LABELS = {
@@ -16,8 +17,13 @@ _MODE_LABELS = {
 }
 
 
-class ModeStrip(Static):
-    """Renders the current scheduler mode with picker interactions."""
+class ModeStrip(StoreComponent, Static):
+    """Renders the current scheduler mode with picker interactions.
+
+    Parent-cascade pattern: DispatchView is bound to the schedule store and
+    forwards the snapshot via refresh_from_snapshot().  This widget is NOT
+    independently bound; it renders on demand from the parent cascade.
+    """
 
     can_focus = True
 
@@ -45,7 +51,7 @@ class ModeStrip(Static):
             self.to_mode = to_mode
 
     def __init__(self) -> None:
-        super().__init__("")
+        Static.__init__(self, "")
         self._mode = "manual"
         self._rationale = ""
         self._picker_open = False
@@ -53,8 +59,10 @@ class ModeStrip(Static):
 
     def on_mount(self) -> None:
         self._render_mode()
+        super().on_mount()  # StoreComponent subscribes if bound
 
     def refresh_from_snapshot(self, snapshot: ScheduleSnapshot) -> None:
+        """Accepts both ScheduleSnapshot (bridge) and ScheduleStoreSnapshot (self-subscribe)."""
         self._mode = snapshot.scheduler_mode
         self._rationale = snapshot.mode_rationale
         self._render_mode()

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from typing import Any
 
 from rich.text import Text
 from textual.binding import Binding
@@ -13,10 +14,16 @@ from murder.app.service.client_api import (
     CalendarScheduledTicket,
     ScheduleSnapshot,
 )
+from murder.app.tui.components import StoreComponent
 
 
-class CalendarPanel(DataTable):
-    """In-flight and user-scheduled ticket calendar."""
+class CalendarPanel(StoreComponent, DataTable):
+    """In-flight and user-scheduled ticket calendar.
+
+    Parent-cascade pattern: DispatchView is bound to the schedule store and
+    forwards the snapshot via refresh_from_snapshot().  This widget is NOT
+    independently bound; it renders on demand from the parent cascade.
+    """
 
     DEFAULT_CSS = """
     CalendarPanel {
@@ -32,12 +39,13 @@ class CalendarPanel(DataTable):
     ]
 
     def __init__(self) -> None:
-        super().__init__(id="calendar_panel", zebra_stripes=True, cursor_type="cell")
+        DataTable.__init__(self, id="calendar_panel", zebra_stripes=True, cursor_type="cell")
         self._view_mode: str = "day"
-        self._snapshot: ScheduleSnapshot | None = None
+        self._snapshot: Any | None = None
 
     def on_mount(self) -> None:
         self.add_column("Time")
+        super().on_mount()  # StoreComponent subscribes if bound
 
     def action_toggle_view(self) -> None:
         self._view_mode = "week" if self._view_mode == "day" else "day"
@@ -51,7 +59,8 @@ class CalendarPanel(DataTable):
         if self.row_count > 0:
             self.move_cursor(row=self.row_count - 1)
 
-    def refresh_from_snapshot(self, snapshot: ScheduleSnapshot) -> None:
+    def refresh_from_snapshot(self, snapshot: Any) -> None:
+        """Accepts both ScheduleSnapshot (bridge) and ScheduleStoreSnapshot (self-subscribe)."""
         self._snapshot = snapshot
         harnesses = list(snapshot.calendar_harnesses) or ["default"]
         self.clear(columns=True)

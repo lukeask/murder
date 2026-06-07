@@ -6,10 +6,16 @@ from textual.message import Message
 from textual.widgets import DataTable
 
 from murder.app.service.client_api import DispatchSnapshot
+from murder.app.tui.components import StoreComponent
 
 
-class TicketGrid(DataTable):
-    """Rows: id, wave, status, title. Selecting a row emits TicketSelected."""
+class TicketGrid(StoreComponent, DataTable):
+    """Rows: id, wave, status, title. Selecting a row emits TicketSelected.
+
+    StoreComponent binding: bind_stores(dispatch=dispatch_store)
+    Bound by DefaultLayout before compose; self-subscribes on mount and reads
+    DispatchStoreSnapshot (duck-type compatible with DispatchSnapshot).
+    """
 
     BINDINGS = [
         ("j", "cursor_down", "Down"),
@@ -22,13 +28,15 @@ class TicketGrid(DataTable):
             super().__init__()
 
     def __init__(self) -> None:
-        super().__init__(zebra_stripes=True, cursor_type="row")
+        DataTable.__init__(self, zebra_stripes=True, cursor_type="row")
         self._tickets: list[str] = []
 
     def on_mount(self) -> None:
         self.add_columns("id", "wave", "status", "title")
+        super().on_mount()  # StoreComponent subscribes if bound
 
     def refresh_from_snapshot(self, snapshot: DispatchSnapshot) -> None:
+        """Accepts both DispatchSnapshot (bridge) and DispatchStoreSnapshot (self-subscribe)."""
         self.clear()
         self._tickets = []
         for ticket in snapshot.tickets:

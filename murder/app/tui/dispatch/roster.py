@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable, Sequence
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import yaml
@@ -24,6 +24,7 @@ from murder.app.service.client_api import (
     ScheduleTicketRow,
     TicketCarveSnapshot,
 )
+from murder.app.tui.components import StoreComponent
 from murder.app.tui.dispatch.schedule_cells import (
     deps_cell_for,
     dispatch_schedule_cell,
@@ -54,8 +55,14 @@ def _checklist_to_lines(snapshot: dict[str, Any]) -> str:
     return "\n".join(str(x.get("text", "")).strip() for x in rows if str(x.get("text", "")).strip())
 
 
-class ScheduleTicketsTable(DataTable):
-    """Tickets on the critical path with YAML metadata sync state visible."""
+class ScheduleTicketsTable(StoreComponent, DataTable):
+    """Tickets on the critical path with YAML metadata sync state visible.
+
+    Parent-cascade pattern: DispatchView is bound to the schedule store and
+    forwards the snapshot via refresh_from_snapshot().  This widget is NOT
+    independently bound; it renders on demand from the parent cascade.
+    ``sorted_rows`` in the snapshot (moved store-side) skips the per-render sort.
+    """
 
     DEFAULT_CSS = """
     ScheduleTicketsTable {
@@ -85,7 +92,7 @@ class ScheduleTicketsTable(DataTable):
             super().__init__()
 
     def __init__(self) -> None:
-        super().__init__(id="schedule_tickets", zebra_stripes=True, cursor_type="row")
+        DataTable.__init__(self, id="schedule_tickets", zebra_stripes=True, cursor_type="row")
         self._ids: list[str] = []
         self._statuses: list[str] = []
 
@@ -101,24 +108,36 @@ class ScheduleTicketsTable(DataTable):
         self.add_column("schedule", width=14)
         self.add_column("harness", width=14)
         self.add_column("model", width=18)
+        super().on_mount()  # StoreComponent subscribes if bound
 
     @property
     def column_count(self) -> int:
         return len(self.columns)
 
     def refresh_from_snapshot(self, snapshot: ScheduleSnapshot) -> None:
+        """Accepts both ScheduleSnapshot (bridge) and ScheduleStoreSnapshot (self-subscribe).
+
+        Uses ``snapshot.sorted_rows`` when present (store snapshot path with
+        pre-computed sort); falls back to sorting inline for bridge compatibility.
+        """
         prev_ticket_id = self.cursor_ticket_id
         prev_row = self.cursor_row
         self.clear()
         self._ids = []
         self._statuses = []
-        rows = (
-            *snapshot.active_tickets,
-            *snapshot.recent_done_tickets,
-            *snapshot.archived_tickets,
-        )
-        sorted_rows = sorted(rows, key=lambda row: row.id)
-        sorted_rows.sort(key=lambda row: row.last_update_at, reverse=True)
+        # Use pre-sorted rows from store snapshot if available; otherwise sort inline.
+        pre_sorted = getattr(snapshot, "sorted_rows", None)
+        if pre_sorted is not None:
+            sorted_rows: tuple[ScheduleTicketRow, ...] = pre_sorted
+        else:
+            all_rows: tuple[ScheduleTicketRow, ...] = (
+                *snapshot.active_tickets,
+                *snapshot.recent_done_tickets,
+                *snapshot.archived_tickets,
+            )
+            tmp = sorted(all_rows, key=lambda row: row.id)
+            tmp.sort(key=lambda row: row.last_update_at, reverse=True)
+            sorted_rows = tuple(tmp)
         for row in sorted_rows:
             self._append_row(snapshot, row)
         if self._ids:
@@ -131,18 +150,22 @@ class ScheduleTicketsTable(DataTable):
                 idx = min(max(0, prev_row), len(self._ids) - 1)
             self.move_cursor(row=idx, animate=False)
 
-    def _append_row(self, snapshot: ScheduleSnapshot, row: ScheduleTicketRow) -> None:
+    def _append_row(self, snapshot: Any, row: ScheduleTicketRow) -> None:
         sched = dispatch_schedule_cell(
             scheduler_mode=snapshot.scheduler_mode,
             row=row,
             decisions=snapshot.scheduler_decisions,
         )
+        # Use snapshot.as_of when available (bridge/raw ScheduleSnapshot path);
+        # fall back to datetime.now() for self-subscribe path (ScheduleStoreSnapshot
+        # deliberately excludes as_of to avoid spurious notifications every poll).
+        as_of = getattr(snapshot, "as_of", None) or datetime.now(timezone.utc)
         self.add_row(
             row.id,
             row.title,
             str(row.wave),
             display_status_for(row),
-            last_update_cell(row, snapshot.as_of),
+            last_update_cell(row, as_of),
             deps_cell_for(row),
             sched,
             row.harness or "",

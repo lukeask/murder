@@ -19,6 +19,7 @@ from murder.app.service.client_api import (
     UsageGaugeDrillInSnapshot,
     UsageGaugeSummary,
 )
+from murder.app.tui.components import StoreComponent
 from murder.app.tui.dispatch.mode_strip import ModeStrip
 
 UsageDrillInLoader = Callable[..., Awaitable[UsageGaugeDrillInSnapshot]]
@@ -335,8 +336,13 @@ class GaugeDrillIn(ModalScreen[None]):
 # ---------------------------------------------------------------------------
 
 
-class GaugeStrip(Static):
-    """Per-provider usage gauges, one column per harness, windows stacked."""
+class GaugeStrip(StoreComponent, Static):
+    """Per-provider usage gauges, one column per harness, windows stacked.
+
+    Parent-cascade pattern: DispatchView is bound to the schedule store and
+    forwards the snapshot via refresh_from_snapshot().  This widget is NOT
+    independently bound; it renders on demand from the parent cascade.
+    """
 
     can_focus = True
 
@@ -355,15 +361,19 @@ class GaugeStrip(Static):
     """
 
     def __init__(self) -> None:
-        super().__init__("")
+        Static.__init__(self, "")
         self._gauges: list[_GaugeData] = []
         self._focus_idx: int = 0
         self._drill_in_loader: UsageDrillInLoader | None = None
+
+    def on_mount(self) -> None:
+        super().on_mount()  # StoreComponent subscribes if bound
 
     def set_drill_in_loader(self, loader: UsageDrillInLoader) -> None:
         self._drill_in_loader = loader
 
     def refresh_from_snapshot(self, snapshot: ScheduleSnapshot) -> None:
+        """Accepts both ScheduleSnapshot (bridge) and ScheduleStoreSnapshot (self-subscribe)."""
         self._gauges = [_gauge_from_summary(g) for g in snapshot.usage_gauges]
         if self._focus_idx >= len(self._gauges):
             self._focus_idx = max(0, len(self._gauges) - 1)

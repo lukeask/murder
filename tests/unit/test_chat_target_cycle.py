@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from murder.app.service.client_api import CrowSessionSummary, CrowSnapshot
+from murder.app.service.client_api import CrowSnapshot
 from murder.app.tui.chat_target_cycle import (
     ChatTarget,
     crows_chat_targets,
@@ -12,23 +12,7 @@ from murder.app.tui.chat_target_cycle import (
     planning_chat_targets,
 )
 from murder.app.tui.crows_view import CrowEntry, Health
-
-
-def _session(**kwargs: object) -> CrowSessionSummary:
-    defaults = dict(
-        agent_id="crow-t001",
-        role="crow",
-        ticket_id="t001",
-        ticket_title="Fix thing",
-        status="running",
-        session_name="murder_demo_crow_t001",
-        harness="cursor",
-        last_seen=None,
-        started_at=None,
-        ticket_status="in_progress",
-    )
-    defaults.update(kwargs)
-    return CrowSessionSummary(**defaults)  # type: ignore[arg-type]
+from tests.support.factories import factory_crow_session
 
 
 def _crow_entry(agent_id: str, *, ticket_id: str = "t001") -> CrowEntry:
@@ -46,9 +30,9 @@ def _crow_entry(agent_id: str, *, ticket_id: str = "t001") -> CrowEntry:
 def test_planning_chat_targets_collaborator_then_live_planners() -> None:
     snap = CrowSnapshot(
         sessions=(
-            _session(agent_id="planner-beta", role="planner"),
-            _session(agent_id="planner-alpha", role="planner"),
-            _session(agent_id="planner-done", role="planner", status="done"),
+            factory_crow_session(agent_id="planner-beta", role="planner"),
+            factory_crow_session(agent_id="planner-alpha", role="planner"),
+            factory_crow_session(agent_id="planner-done", role="planner", status="done"),
         ),
         as_of=datetime.now(timezone.utc),
         invalidation_key="k",

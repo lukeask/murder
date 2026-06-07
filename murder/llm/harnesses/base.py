@@ -34,7 +34,15 @@ ANSWER_RE = re.compile(
 )
 CHECK_RE = re.compile(r">>>\s*CHECK:\s*(?P<body>.+?)$", re.MULTILINE)
 NOTE_RE = re.compile(r">>>\s*NOTE:\s*(?P<body>.+?)\n>>>\s*END\b", re.DOTALL)
-DONE_RE = re.compile(r">>>\s*DONE\b")
+DONE_RE = re.compile(r"^>>>\s*DONE[ \t]*$", re.MULTILINE)
+# Used when scanning assistant segment text that may have been reflowed by the
+# transcript parser (reflow joins paragraph lines with spaces, so a >>> DONE
+# that was on its own pane line can appear as "... sentence. >>> DONE" in the
+# segment text).  We trust the role boundary (user vs assistant) enforced by
+# parse_transcript_doc, so we accept >>> DONE when it appears at the start,
+# after whitespace, or after a sentence-ending character, and is followed only
+# by whitespace or end-of-string (not embedded in a longer token).
+_DONE_IN_SEGMENT_RE = re.compile(r"(?:^|(?<=\s))>>>\s*DONE[ \t]*(?:\n|\Z)", re.MULTILINE)
 MAX_NOTE_LINES = 20
 
 UsageCollectionMode = Literal["none", "tmux_slash", "http"]
@@ -515,6 +523,31 @@ class HarnessAdapter(ABC):
         return [note for note in notes if note]
 
     def detect_done(self, pane_text: str) -> bool:
+        """Return True iff the assistant (crow) emitted ``>>> DONE``.
+
+        Source-aware: ``>>> DONE`` that appears in user/system content (the
+        pasted startup brief or a follow-up user message) must never trigger
+        completion — only a crow-authored ``>>> DONE`` counts.
+
+        When a transcript parser is available the search is restricted to
+        assistant-role segments, so the startup brief's ``>>> DONE`` example
+        (pasted as a user turn) is excluded.  ``_DONE_IN_SEGMENT_RE`` is used
+        instead of the stricter ``DONE_RE`` because the transcript reflow may
+        join a standalone ``>>> DONE`` line onto the preceding sentence via a
+        space, making the ``^`` anchor in ``DONE_RE`` miss it.
+
+        For harnesses without a transcript parser the search falls back to the
+        full pane after stripping UI chrome (original behaviour).
+        """
+        if self.has_transcript_parser():
+            doc = self.parse_transcript_doc(pane_text)
+            return any(
+                isinstance(s, dict)
+                and s.get("type") == "assistant"
+                and isinstance(s.get("text"), str)
+                and bool(_DONE_IN_SEGMENT_RE.search(s["text"]))
+                for s in doc.get("segments", [])
+            )
         return bool(DONE_RE.search(strip_ui_chrome(pane_text)))
 
     async def interrupt(self, session: str) -> None:
