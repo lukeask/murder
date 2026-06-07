@@ -473,6 +473,59 @@ class TestSentinelDetection:
     def test_detect_done_false_when_absent(self):
         assert self.cc.detect_done("still working") is False
 
+    def test_detect_done_false_for_brief_example(self):
+        # The fresh_crow.md prompt contains ">>> DONE  ← ..." as an example.
+        # That annotated line must NOT trigger completion (regression guard).
+        brief_line = ">>> DONE     ← emit exactly this marker, alone on its own line"
+        assert self.cc.detect_done(f"preamble\n{brief_line}\nmore text") is False
+
+    def test_detect_done_with_trailing_whitespace(self):
+        assert self.cc.detect_done(">>> DONE   \n") is True
+
+    # ── Source-awareness tests (the core fix) ─────────────────────────────────
+
+    def test_detect_done_false_when_done_in_user_input(self):
+        # A >>> DONE in the ❯-prefixed user/input region (e.g. pasted startup
+        # brief or a follow-up user message) must NOT trigger completion.
+        # This is the regression test for the original bug: pasted fresh_crow.md
+        # brief contained a >>> DONE example that fired on the first tick.
+        pane = "❯ Remember to emit >>> DONE when finished\n● Working...\n"
+        assert self.cc.detect_done(pane) is False
+
+    def test_detect_done_false_when_done_only_in_pasted_brief_user_turn(self):
+        # Simulates the actual bug: fresh_crow.md brief with the annotated
+        # >>> DONE example pasted as the first user message, followed by the
+        # harness idle prompt.  No assistant >>> DONE emitted yet.
+        pane = (
+            "❯ You are a crow. Emit >>> DONE     ← emit this marker when done.\n"
+            "─────────────────────────────────────────────────────────────────\n"
+            "❯ \n"
+            "─────────────────────────────────────────────────────────────────\n"
+        )
+        assert self.cc.detect_done(pane) is False
+
+    def test_detect_done_true_when_assistant_emits_done_standalone(self):
+        # Crow emits >>> DONE on its own line after completing work.
+        pane = (
+            "❯ Fix bug in foo.py.\n"
+            "● Read(foo.py)\n"
+            "  ⎿  (content)\n"
+            "● Edit(foo.py)\n"
+            "  ⎿  (updated)\n"
+            "\n"
+            ">>> DONE\n"
+            "─────────────────────────────────────────────────────────────────\n"
+            "❯ \n"
+            "─────────────────────────────────────────────────────────────────\n"
+        )
+        assert self.cc.detect_done(pane) is True
+
+    def test_detect_done_true_when_done_reflowed_into_assistant_bullet(self):
+        # Crow emits >>> DONE immediately after a bullet with no blank line;
+        # the transcript reflow joins them but detect_done must still fire.
+        pane = "❯ Fix bug.\n● Fixed the issue.\n>>> DONE\n"
+        assert self.cc.detect_done(pane) is True
+
     def test_detect_checks(self):
         pane = ">>> CHECK: run tests\n>>> CHECK: push branch\n"
         checks = self.cc.detect_checks(pane)

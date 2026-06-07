@@ -16,10 +16,8 @@ import asyncio
 import contextlib
 import json
 import logging
-import re
 from collections.abc import Mapping
-from dataclasses import dataclass, replace
-from datetime import datetime, timedelta, timezone
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -33,13 +31,20 @@ from textual.reactive import reactive
 from textual.widget import Widget
 from textual.widgets import RichLog, Static
 
-from murder.app.service.client_api import CrowSessionSummary, CrowSnapshot
+from murder.app.service.client_api import CrowSnapshot
 from murder.app.tui.cc_multiple_choice_wizard import CCMultipleChoiceWizard
-from murder.app.tui.crow_health import Health, classify, is_stuck
+from murder.app.tui.crow_health import Health
 from murder.app.tui.live_log import LiveRichLog
 from murder.app.tui.pane_capture import CapturePaneFn, PaneCaptureError
 from murder.app.tui.pane_mirror import PaneMirror
 from murder.app.tui.perf_log import PerfLog
+from murder.app.tui.stores.roster import (
+    CrowDisplayLabels,
+    CrowEntry,
+    _crow_display_labels,
+    crow_title_label,
+    entries_from_snapshot,
+)
 from murder.llm.harnesses.choice_prompt import ChoiceOption, MultipleChoicePrompt
 from murder.llm.harnesses.transcripts import SEGMENT_TYPES, supports_harness
 
@@ -55,147 +60,7 @@ CAPTURE_TIMEOUT_S = 2.0
 GRID_TARGET_COLS = 3
 """Tail-wall packs roughly into this many columns; rows scale by count."""
 
-TERMINAL_AGENT_STATUSES = frozenset({"done", "dead"})
-"""Agent states excluded from the wall."""
-
-TERMINAL_TICKET_STATUSES = frozenset({"done", "failed"})
-"""Ticket states that indicate the work item is closed."""
-
-FAILED_STALE_AFTER = timedelta(hours=2)
-"""Hide failed agents after this long without a recent heartbeat."""
-
-_STATUS_SORT_RANK = {
-    "escalating": 0,
-    "blocked": 1,
-    "running": 2,
-    "idle": 3,
-    "failed": 4,
-}
-
-_CROW_PREFIX_RE = re.compile(r"^murder_[^_]+_crow_")
-_KNOWN_HARNESS_ALIASES = {
-    "agv",
-    "antigrav",
-    "antigravity",
-    "claude",
-    "claude_code",
-    "codex",
-    "cursor",
-    "pi",
-}
-
-
-def _short_display_name(raw: str) -> str:
-    """Strip project/template prefix, yielding harness+role+id."""
-    m = _CROW_PREFIX_RE.match(raw)
-    return raw[m.end():] if m else raw
-
-
-@dataclass(frozen=True)
-class CrowDisplayLabels:
-    """Compact UI labels for one crow across roster and tile views."""
-
-    name: str
-    harness: str
-    model: str
-    is_rogue: bool
-
-
-def _display_harness(raw: str) -> str:
-    kind = raw.strip().lower()
-    return {
-        "antigrav": "agv",
-        "antigravity": "agv",
-        "claude": "claude",
-        "claude_code": "claude",
-        "codex": "codex",
-        "cursor": "cursor",
-        "pi": "pi",
-    }.get(kind, kind or "—")
-
-
-def _compact_model(raw: str | None, *, limit: int = 18) -> str:
-    model = str(raw or "").strip()
-    if not model:
-        return "—"
-    if "/" in model:
-        model = model.rsplit("/", 1)[-1]
-    if len(model) <= limit:
-        return model
-    return model[: limit - 1] + "…"
-
-
-def _display_name(raw: str, harness: str = "") -> str:
-    short = _short_display_name(raw).strip()
-    if not short:
-        return "crow"
-    for marker in ("_rogue_", "-rogue-"):
-        if marker in short:
-            _prefix, suffix = short.split(marker, 1)
-            return suffix or short
-    for prefix in ("rogue_", "rogue-"):
-        if short.startswith(prefix):
-            short = short[len(prefix) :]
-            break
-    harness_aliases = {
-        harness.strip().lower(),
-        _display_harness(harness),
-    } | _KNOWN_HARNESS_ALIASES
-    for alias in sorted((a for a in harness_aliases if a), key=len, reverse=True):
-        for sep in ("_", "-"):
-            token = f"{alias}{sep}"
-            if short.startswith(token):
-                trimmed = short[len(token) :]
-                if trimmed:
-                    return trimmed
-    return short
-
-
-def _is_rogue_entry(entry: CrowEntry) -> bool:
-    for raw in (entry.session, entry.agent_id):
-        text = str(raw or "").strip().lower()
-        if not text:
-            continue
-        if "_rogue_" in text or "-rogue-" in text or text.startswith(("rogue_", "rogue-")):
-            return True
-    return False
-
-
-def _crow_display_labels(entry: CrowEntry) -> CrowDisplayLabels:
-    raw_name = entry.session or entry.agent_id or ""
-    return CrowDisplayLabels(
-        name=_display_name(raw_name, entry.harness) or "crow",
-        harness=_display_harness(entry.harness),
-        model=_compact_model(entry.model),
-        is_rogue=_is_rogue_entry(entry),
-    )
-
-
-def crow_title_label(entry: CrowEntry) -> str:
-    labels = _crow_display_labels(entry)
-    parts = [labels.name, labels.harness]
-    if labels.model != "—":
-        parts.append(labels.model)
-    if labels.is_rogue:
-        parts.append("rogue")
-    return " ".join(parts)
-
 logger = logging.getLogger(__name__)
-
-
-@dataclass(frozen=True)
-class CrowEntry:
-    """One tile in the wall, projected from :class:`CrowSessionSummary`."""
-
-    agent_id: str
-    ticket_id: str
-    ticket_title: str | None
-    harness: str
-    status: str
-    session: str | None
-    health: Health
-    started_at: datetime | None = None
-    model: str | None = None
 
 
 class CrowRosterRow(Widget):
@@ -588,82 +453,6 @@ class CrowRosterList(ScrollableContainer):
             pane_visible=entry.agent_id in self._pane_visible,
             kill_pending=self._kill_pending == entry.agent_id,
         )
-
-
-def entries_from_snapshot(
-    snapshot: CrowSnapshot,
-    *,
-    now: datetime | None = None,
-) -> list[CrowEntry]:
-    """Project snapshot sessions into wall entries, filtered and sorted."""
-    now = now or datetime.now(timezone.utc)
-    entries: list[CrowEntry] = []
-    for session in snapshot.sessions:
-        entry = _entry_from_session(session, now=now)
-        if entry is not None:
-            entries.append(entry)
-    entries.sort(
-        key=lambda e: (
-            _STATUS_SORT_RANK.get(e.status, 99),
-            e.ticket_id or "",
-            e.agent_id,
-        )
-    )
-    return entries
-
-
-def _entry_from_session(
-    session: CrowSessionSummary,
-    *,
-    now: datetime,
-) -> CrowEntry | None:
-    if session.role not in {"crow", "rogue"}:
-        return None
-    status = session.status
-    if status in TERMINAL_AGENT_STATUSES:
-        return None
-    if status == "failed" and not _keep_failed_session(session, now=now):
-        return None
-    tile_id = session.agent_id or session.session_name or session.ticket_id or ""
-    if not tile_id:
-        return None
-    title = session.ticket_title or session.harness or session.ticket_id or tile_id
-    return CrowEntry(
-        agent_id=tile_id,
-        ticket_id=session.ticket_id or "",
-        ticket_title=title,
-        harness=session.harness or "",
-        status=status,
-        session=session.session_name,
-        health=_health_for_summary(session, now=now),
-        started_at=session.started_at,
-        model=session.model,
-    )
-
-
-def _health_for_summary(session: CrowSessionSummary, *, now: datetime) -> Health:
-    return classify(
-        status=session.status,
-        open_escalations=session.open_escalations,
-        max_severity=session.max_severity,
-        stuck=is_stuck(status=session.status, last_seen=session.last_seen, now=now),
-    )
-
-
-def _keep_failed_session(session: CrowSessionSummary, *, now: datetime) -> bool:
-    if session.status != "failed":
-        return True
-    ticket_status = session.ticket_status or ""
-    if ticket_status and ticket_status not in TERMINAL_TICKET_STATUSES:
-        return True
-    last_seen = session.last_seen or session.started_at
-    if last_seen is None:
-        return True
-    if last_seen.tzinfo is None:
-        last_seen = last_seen.replace(tzinfo=timezone.utc)
-    else:
-        last_seen = last_seen.astimezone(timezone.utc)
-    return now - last_seen <= FAILED_STALE_AFTER
 
 
 def _segment_text(segment: Mapping[str, Any]) -> tuple[str, str] | None:

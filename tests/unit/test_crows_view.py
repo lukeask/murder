@@ -13,6 +13,7 @@ from murder.app.tui.cc_multiple_choice_wizard import CCMultipleChoiceWizard
 from murder.app.tui import crows_view as crows_view_mod
 from murder.app.tui.crow_health import Health
 from murder.app.tui.crows_view import CrowEntry, CrowTile, CrowsView, entries_from_snapshot
+from murder.app.tui.stores import roster as roster_mod
 from murder.app.tui.themes import crow_tui_variable_defaults, register_crow_themes
 
 
@@ -93,7 +94,7 @@ def test_crow_display_labels_strip_rogue_session_prefix() -> None:
         model="gpt-5.4",
     )
 
-    labels = crows_view_mod._crow_display_labels(entry)
+    labels = roster_mod._crow_display_labels(entry)
 
     assert labels.name == "tailwall"
     assert labels.harness == "codex"
@@ -102,7 +103,7 @@ def test_crow_display_labels_strip_rogue_session_prefix() -> None:
 
 
 def test_display_name_strips_compact_rogue_prefix() -> None:
-    assert crows_view_mod._display_name("codex_rogue_tailwall", "codex") == "tailwall"
+    assert roster_mod._display_name("codex_rogue_tailwall", "codex") == "tailwall"
 
 
 def test_crow_display_labels_map_claude_harness() -> None:
@@ -116,7 +117,7 @@ def test_crow_display_labels_map_claude_harness() -> None:
         health=Health.GREEN,
     )
 
-    labels = crows_view_mod._crow_display_labels(entry)
+    labels = roster_mod._crow_display_labels(entry)
 
     assert labels.name == "test"
     assert labels.harness == "claude"

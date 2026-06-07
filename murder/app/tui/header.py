@@ -7,7 +7,7 @@ import re
 from textual.widgets import Static
 
 from murder.app.service.client_api import CrowSnapshot, DispatchSnapshot, UsageGaugeSummary
-from murder.app.tui.crows_view import CrowEntry, _short_display_name, entries_from_snapshot
+from murder.app.tui.stores.roster import CrowEntry, _short_display_name, entries_from_snapshot
 from murder.app.tui.dispatch.gauges import PROVIDER_ORDER, color_for_pct, fmt_duration
 
 _ATTENTION_STATUSES = ("blocked", "failed")

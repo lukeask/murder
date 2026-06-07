@@ -75,7 +75,7 @@ class _ChoicePromptApp(_QuietMurderApp):
 
 def test_interval_pane_refresh_swallows_transient_bus_timeout() -> None:
     # A slow capture_pane RPC raising TimeoutError must skip the tick, not
-    # crash the TUI message pump (regression for the interval _refresh_pane
+    # crash the TUI message pump (regression for the interval pane tick
     # being awaited directly instead of run in an exit_on_error=False worker).
     app = _QuietMurderApp()
     calls: list[dict[str, object]] = []
@@ -87,7 +87,7 @@ def test_interval_pane_refresh_swallows_transient_bus_timeout() -> None:
 
     app.run_worker = _run_worker  # type: ignore[method-assign]
 
-    app._refresh_pane()  # noqa: SLF001 - the interval callback
+    app._run_pane_tick()  # noqa: SLF001 - the interval callback
 
     assert len(calls) == 1
     assert calls[0]["exclusive"] is True
