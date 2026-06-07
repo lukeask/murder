@@ -9,12 +9,19 @@ Usage drill-in pattern mirrors the document body loader in documents.py:
   - Drill-in entries are evicted when their ``(harness, window_key)`` pair is
     absent from the latest ``usage_gauges`` (covers gauge removal and window
     rotation).
+
+Derived fields (moved store-side for Phase 2 component library):
+  - ``sorted_rows``: active + recent_done + archived tickets pre-sorted for the
+    ScheduleTicketsTable roster (wave/status/title sort order).
+  - ``as_of``: re-exposed so duck-type callers (widgets accepting either the raw
+    ScheduleSnapshot or the store snapshot) can use it for last_update_cell.
 """
 
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from datetime import datetime
 
 from murder.app.service.client_api import (
     CalendarRunningAgent,
@@ -30,12 +37,28 @@ from murder.app.tui.stores.base import BaseStore
 UsageDrillInLoader = Callable[..., Awaitable[UsageGaugeDrillInSnapshot]]
 
 
+def _sort_schedule_rows(
+    rows: tuple[ScheduleTicketRow, ...],
+) -> tuple[ScheduleTicketRow, ...]:
+    """Pre-sort schedule rows: by id (stable) then by last_update_at descending.
+
+    This mirrors the existing sort in ScheduleTicketsTable.refresh_from_snapshot
+    but moves it store-side so widgets receive pre-sorted data.
+    """
+    sorted_by_id = sorted(rows, key=lambda row: row.id)
+    sorted_final = sorted(sorted_by_id, key=lambda row: row.last_update_at, reverse=True)
+    return tuple(sorted_final)
+
+
 @dataclass(frozen=True, slots=True)
 class ScheduleStoreSnapshot:
     """Immutable snapshot emitted by ScheduleStore.
 
-    ``as_of`` from the server snapshot is deliberately excluded.
+    ``as_of`` from the server snapshot is deliberately excluded — it advances
+    every poll.  Widgets that need a "now" reference use datetime.now() directly.
     ``drill_ins`` holds the sorted cached drill-in detail snapshots.
+    ``sorted_rows`` is a derived field: active + recent_done + archived rows
+    pre-sorted by (last_update_at desc) for the ScheduleTicketsTable.
     """
 
     scheduler_mode: str
@@ -50,6 +73,7 @@ class ScheduleStoreSnapshot:
     scheduled_tickets: tuple[CalendarScheduledTicket, ...]
     invalidation_key: str
     drill_ins: tuple[UsageGaugeDrillInSnapshot, ...]  # sorted by (harness, window_key)
+    sorted_rows: tuple[ScheduleTicketRow, ...] = ()  # pre-sorted for ScheduleTicketsTable
 
 
 class ScheduleStore(BaseStore[ScheduleStoreSnapshot]):
@@ -121,6 +145,11 @@ class ScheduleStore(BaseStore[ScheduleStoreSnapshot]):
                 key=lambda d: (d.harness, d.window_key),
             )
         )
+        all_rows = (
+            *snapshot.active_tickets,
+            *snapshot.recent_done_tickets,
+            *snapshot.archived_tickets,
+        )
         return ScheduleStoreSnapshot(
             scheduler_mode=snapshot.scheduler_mode,
             mode_rationale=snapshot.mode_rationale,
@@ -134,4 +163,5 @@ class ScheduleStore(BaseStore[ScheduleStoreSnapshot]):
             scheduled_tickets=snapshot.scheduled_tickets,
             invalidation_key=snapshot.invalidation_key,
             drill_ins=drill_ins,
+            sorted_rows=_sort_schedule_rows(all_rows),
         )
