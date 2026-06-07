@@ -7,6 +7,7 @@ import re
 from textual.widgets import Static
 
 from murder.app.service.client_api import CrowSnapshot, DispatchSnapshot, UsageGaugeSummary
+from murder.app.tui.components import StoreComponent
 from murder.app.tui.stores.roster import CrowEntry, _short_display_name, entries_from_snapshot
 from murder.app.tui.dispatch.gauges import PROVIDER_ORDER, color_for_pct, fmt_duration
 
@@ -133,8 +134,17 @@ def format_view_tabs(view: str, accent: str | None) -> str:
     return "  ".join(labels)
 
 
-class Header(Static):
-    """Project name, view tabs, live crows, and attention counts."""
+class Header(StoreComponent, Static):
+    """Project name, view tabs, live crows, and attention counts.
+
+    StoreComponent binding (optional during bridge migration):
+        bind_stores(dispatch=dispatch_store)
+
+    When bound, self-subscribes on mount and reads DispatchStoreSnapshot for
+    the pre-computed ``attention_counts``. The bridge path still calls
+    refresh_from_snapshot(DispatchSnapshot, crow_snapshot=..., usage_gauges=...)
+    directly; both paths converge on _update_text().
+    """
 
     DEFAULT_CSS = """
     Header {
@@ -146,12 +156,15 @@ class Header(Static):
     """
 
     def __init__(self, project: str) -> None:
-        super().__init__("murder")
+        Static.__init__(self, "murder")
         self.project = project
         self._counts: dict[str, int] = {s: 0 for s in _ATTENTION_STATUSES}
         self._view = "planning"
         self._crow_snapshot: CrowSnapshot | None = None
         self._usage_gauges: tuple[UsageGaugeSummary, ...] = ()
+
+    def on_mount(self) -> None:
+        super().on_mount()  # StoreComponent subscribes if bound
 
     def refresh_from_snapshot(
         self,
@@ -160,12 +173,25 @@ class Header(Static):
         crow_snapshot: CrowSnapshot | None = None,
         usage_gauges: tuple[UsageGaugeSummary, ...] | None = None,
     ) -> None:
-        counts = {s: 0 for s in _ATTENTION_STATUSES}
-        for ticket in snapshot.tickets:
-            key = ticket.status.value
-            if key in counts:
-                counts[key] += 1
-        self._counts = counts
+        """Render from a dispatch snapshot.
+
+        Accepts both the raw DispatchSnapshot (bridge path) and a
+        DispatchStoreSnapshot (self-subscribe path).  The store snapshot
+        carries pre-computed ``attention_counts``; the raw snapshot's counts
+        are computed here for bridge compatibility.
+        """
+        # Use pre-computed counts if available (store snapshot path); otherwise
+        # compute them from tickets (bridge path with raw DispatchSnapshot).
+        pre_counts = getattr(snapshot, "attention_counts", None)
+        if pre_counts is not None:
+            self._counts = dict(pre_counts)
+        else:
+            counts = {s: 0 for s in _ATTENTION_STATUSES}
+            for ticket in snapshot.tickets:
+                key = ticket.status.value
+                if key in counts:
+                    counts[key] += 1
+            self._counts = counts
         if crow_snapshot is not None:
             self._crow_snapshot = crow_snapshot
         if usage_gauges is not None:
