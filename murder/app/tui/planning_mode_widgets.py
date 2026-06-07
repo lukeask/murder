@@ -8,10 +8,18 @@ from textual.message import Message
 from textual.widgets import DataTable, Markdown, RichLog
 
 from murder.app.service.client_api import NotesSnapshot, PlansSnapshot, ReportsSnapshot
+from murder.app.tui.components import StoreComponent
 from murder.app.tui.live_log import LiveRichLog
+from murder.app.tui.stores.documents import (
+    DocumentStoreSnapshot,
+    NotesStoreSnapshot,
+    PlansStoreSnapshot,
+    ReportsStoreSnapshot,
+)
+from murder.app.tui.stores.conversations import ConversationsStoreSnapshot
 
 
-class PlanList(DataTable):
+class PlanList(StoreComponent, DataTable):
     """DB-backed plan list."""
 
     BINDINGS = [
@@ -47,6 +55,36 @@ class PlanList(DataTable):
 
     def on_mount(self) -> None:
         self.add_columns("name", "status", "rev", "sync")
+        super().on_mount()  # StoreComponent: subscribe + initial paint if store bound
+
+    def _render_from_stores(self) -> None:
+        """Render from DocumentStoreSnapshot — store path (self-subscribe)."""
+        bound = getattr(self, "_bound_stores", None)
+        if not bound:
+            return
+        stores = list(bound.values())
+        if not stores:
+            return
+        snap: PlansStoreSnapshot = stores[0].get_snapshot()
+        self._render_store_snapshot(snap)
+
+    def _render_store_snapshot(self, snap: PlansStoreSnapshot) -> None:
+        """Idempotent render from a DocumentStoreSnapshot (plans variant)."""
+        new_rows = snap.rows
+        if new_rows == tuple(self._last_rows):
+            return
+        self._last_rows = list(new_rows)
+        row = self.cursor_row
+        scroll_y = self.scroll_y
+        with self.prevent(DataTable.RowHighlighted):
+            self.clear()
+            self._plans = []
+            for item, display_row in zip(snap.items, snap.rows):
+                self.add_row(*display_row)
+                self._plans.append(item.name)
+            if self._plans:
+                self.move_cursor(row=min(max(row, 0), len(self._plans) - 1))
+        self.scroll_y = scroll_y
 
     def refresh_from_snapshot(self, snapshot: PlansSnapshot) -> None:
         new_rows = [
@@ -126,7 +164,7 @@ class PlanList(DataTable):
         self.border_subtitle = ""
 
 
-class NotesList(DataTable):
+class NotesList(StoreComponent, DataTable):
     """DB-backed list of active note documents."""
 
     BINDINGS = [
@@ -160,6 +198,36 @@ class NotesList(DataTable):
 
     def on_mount(self) -> None:
         self.add_columns("note", "chars", "updated")
+        super().on_mount()  # StoreComponent: subscribe + initial paint if store bound
+
+    def _render_from_stores(self) -> None:
+        """Render from DocumentStoreSnapshot — store path (self-subscribe)."""
+        bound = getattr(self, "_bound_stores", None)
+        if not bound:
+            return
+        stores = list(bound.values())
+        if not stores:
+            return
+        snap: NotesStoreSnapshot = stores[0].get_snapshot()
+        self._render_store_snapshot(snap)
+
+    def _render_store_snapshot(self, snap: NotesStoreSnapshot) -> None:
+        """Idempotent render from a DocumentStoreSnapshot (notes variant)."""
+        new_rows = snap.rows
+        if new_rows == tuple(self._last_rows):
+            return
+        self._last_rows = list(new_rows)
+        row = self.cursor_row
+        scroll_y = self.scroll_y
+        with self.prevent(DataTable.RowHighlighted):
+            self.clear()
+            self._names = []
+            for item, display_row in zip(snap.items, snap.rows):
+                self.add_row(*display_row)
+                self._names.append(item.name)
+            if self._names:
+                self.move_cursor(row=min(max(row, 0), len(self._names) - 1))
+        self.scroll_y = scroll_y
 
     def refresh_from_snapshot(self, snapshot: NotesSnapshot) -> None:
         new_rows = [
@@ -234,7 +302,7 @@ class NotesList(DataTable):
         self.border_subtitle = ""
 
 
-class ReportsList(DataTable):
+class ReportsList(StoreComponent, DataTable):
     """Filesystem-backed list of report documents."""
 
     BINDINGS = [
@@ -261,6 +329,36 @@ class ReportsList(DataTable):
 
     def on_mount(self) -> None:
         self.add_columns("report", "chars", "updated")
+        super().on_mount()  # StoreComponent: subscribe + initial paint if store bound
+
+    def _render_from_stores(self) -> None:
+        """Render from DocumentStoreSnapshot — store path (self-subscribe)."""
+        bound = getattr(self, "_bound_stores", None)
+        if not bound:
+            return
+        stores = list(bound.values())
+        if not stores:
+            return
+        snap: ReportsStoreSnapshot = stores[0].get_snapshot()
+        self._render_store_snapshot(snap)
+
+    def _render_store_snapshot(self, snap: ReportsStoreSnapshot) -> None:
+        """Idempotent render from a DocumentStoreSnapshot (reports variant)."""
+        new_rows = snap.rows
+        if new_rows == tuple(self._last_rows):
+            return
+        self._last_rows = list(new_rows)
+        row = self.cursor_row
+        scroll_y = self.scroll_y
+        with self.prevent(DataTable.RowHighlighted):
+            self.clear()
+            self._names = []
+            for item, display_row in zip(snap.items, snap.rows):
+                self.add_row(*display_row)
+                self._names.append(item.name)
+            if self._names:
+                self.move_cursor(row=min(max(row, 0), len(self._names) - 1))
+        self.scroll_y = scroll_y
 
     def refresh_from_snapshot(self, snapshot: ReportsSnapshot) -> None:
         new_rows = [
@@ -313,7 +411,7 @@ class ReportsList(DataTable):
         self.action_open_selected()
 
 
-class PlanDocument(Markdown, can_focus=True):
+class PlanDocument(StoreComponent, Markdown, can_focus=True):
     BINDINGS = [
         ("j", "line_down", "Down"),
         ("k", "line_up", "Up"),
@@ -332,16 +430,39 @@ class PlanDocument(Markdown, can_focus=True):
     }
     """
 
+    _EMPTY_PLAN = (
+        "No plan selected.\n\nUse the collaborator chat to shape a plan, "
+        "or add markdown under `.murder/plans`."
+    )
+
     def __init__(self) -> None:
-        super().__init__(
-            "No plan selected.\n\nUse the collaborator chat to shape a plan, "
-            "or add markdown under `.murder/plans`."
-        )
+        super().__init__(self._EMPTY_PLAN)
         self.border_title = "(no plan selected)"
         self._last_render_key: tuple[str, str] | None = None
 
+    def refresh_from_snapshot(self, snapshot: PlansStoreSnapshot) -> None:
+        """Sync render from DocumentStoreSnapshot — store path."""
+        name = snapshot.selected_name
+        if name is None:
+            if self._last_render_key is not None:
+                self._last_render_key = None
+                self.border_title = "(no plan selected)"
+                self.update(self._EMPTY_PLAN)
+            return
+        body_map = dict(snapshot.bodies)
+        body = body_map.get(name, "")
+        title = name
+        if self._last_render_key == (title, body):
+            return
+        self._last_render_key = (title, body)
+        self.border_title = title
+        self.update(body or self._EMPTY_PLAN)
+
     async def set_plan_markdown(self, title: str, markdown: str) -> None:
-        """Update the viewer only when title or body changed — skips Rich re-parse."""
+        """Update the viewer only when title or body changed — skips Rich re-parse.
+
+        Bridge entrypoint: called by app.py when no store is bound.
+        """
         if self._last_render_key == (title, markdown):
             return
         self._last_render_key = (title, markdown)
@@ -355,7 +476,7 @@ class PlanDocument(Markdown, can_focus=True):
         self.action_scroll_up()
 
 
-class NotesDocument(Markdown, can_focus=True):
+class NotesDocument(StoreComponent, Markdown, can_focus=True):
     """Live view of the notetaker's notes document (`.murder/notes/<date>.md`)."""
 
     BINDINGS = [
@@ -387,8 +508,29 @@ class NotesDocument(Markdown, can_focus=True):
         self.border_title = "notes"
         self._last_render_key: tuple[str, str] | None = None
 
+    def refresh_from_snapshot(self, snapshot: NotesStoreSnapshot) -> None:
+        """Sync render from DocumentStoreSnapshot — store path."""
+        name = snapshot.selected_name
+        if name is None:
+            if self._last_render_key is not None:
+                self._last_render_key = None
+                self.border_title = "notes"
+                self.update(self._EMPTY)
+            return
+        body_map = dict(snapshot.bodies)
+        raw_body = body_map.get(name, "")
+        display = raw_body.strip() or self._EMPTY
+        if self._last_render_key == (name, display):
+            return
+        self._last_render_key = (name, display)
+        self.border_title = f"notes · {name}"
+        self.update(display)
+
     async def show(self, name: str, body: str) -> None:
-        """Render the note body; no-op when ``(name, normalized body)`` matches last tick."""
+        """Render the note body; no-op when ``(name, normalized body)`` matches last tick.
+
+        Bridge entrypoint: called by app.py when no store is bound.
+        """
         display = body.strip() or self._EMPTY
         if self._last_render_key == (name, display):
             return
@@ -403,7 +545,7 @@ class NotesDocument(Markdown, can_focus=True):
         self.action_scroll_up()
 
 
-class ReportDocument(Markdown, can_focus=True):
+class ReportDocument(StoreComponent, Markdown, can_focus=True):
     """Live view of a report document (`.murder/reports/<name>.md`)."""
 
     BINDINGS = [
@@ -432,8 +574,29 @@ class ReportDocument(Markdown, can_focus=True):
         self.border_title = "reports"
         self._last_render_key: tuple[str, str] | None = None
 
+    def refresh_from_snapshot(self, snapshot: ReportsStoreSnapshot) -> None:
+        """Sync render from DocumentStoreSnapshot — store path."""
+        name = snapshot.selected_name
+        if name is None:
+            if self._last_render_key is not None:
+                self._last_render_key = None
+                self.border_title = "reports"
+                self.update(self._EMPTY)
+            return
+        body_map = dict(snapshot.bodies)
+        raw_body = body_map.get(name, "")
+        display = raw_body.strip() or self._EMPTY
+        if self._last_render_key == (name, display):
+            return
+        self._last_render_key = (name, display)
+        self.border_title = f"reports · {name}"
+        self.update(display)
+
     async def show(self, name: str, body: str) -> None:
-        """Render the report body; no-op when ``(name, normalized body)`` matches."""
+        """Render the report body; no-op when ``(name, normalized body)`` matches.
+
+        Bridge entrypoint: called by app.py when no store is bound.
+        """
         display = body.strip() or self._EMPTY
         if self._last_render_key == (name, display):
             return
@@ -448,11 +611,16 @@ class ReportDocument(Markdown, can_focus=True):
         self.action_scroll_up()
 
 
-class ChatLog(LiveRichLog):
+class ChatLog(StoreComponent, LiveRichLog):
     """Append-only chat transcript widget, reused for agent chats.
 
     ``"you"``/``"user"`` is the human; ``"agent"``/``"assistant"`` and the
     configured ``agent_label`` all render as that agent's name.
+
+    When a ConversationsStore is bound via bind_stores(conversations=store),
+    set ``conversation_id`` to the conversation to display and the widget
+    self-subscribes to render turns from the store snapshot.  The bridge path
+    (replace_transcript / set_turns) continues to work when no store is bound.
     """
 
     BINDINGS = [
@@ -480,6 +648,7 @@ class ChatLog(LiveRichLog):
             wrap=True,
         )
         self._agent_label = agent_label
+        self._conversation_id: str | None = None  # view-local; set by parent
         self._last_render_key: tuple[
             str,
             tuple[tuple[str, str], ...],
@@ -491,6 +660,41 @@ class ChatLog(LiveRichLog):
     def set_agent_label(self, agent_label: str) -> None:
         self._agent_label = agent_label
         self.border_title = f"{agent_label} chat"
+
+    def set_conversation_id(self, conversation_id: str | None) -> None:
+        """Set the conversation to display (view-local state).
+
+        Triggers a re-render if the store is bound and a snapshot is available.
+        """
+        if self._conversation_id == conversation_id:
+            return
+        self._conversation_id = conversation_id
+        bound = getattr(self, "_bound_stores", None)
+        if bound:
+            self._render_from_stores()
+
+    def _render_from_stores(self) -> None:
+        """Render from ConversationsStoreSnapshot — store path (self-subscribe)."""
+        bound = getattr(self, "_bound_stores", None)
+        if not bound:
+            return
+        stores = list(bound.values())
+        if not stores:
+            return
+        snap: ConversationsStoreSnapshot = stores[0].get_snapshot()
+        self.refresh_from_snapshot(snap)
+
+    def refresh_from_snapshot(self, snapshot: ConversationsStoreSnapshot) -> None:
+        """Render turns for the current conversation_id from the store snapshot."""
+        cid = self._conversation_id
+        if cid is None:
+            return
+        turns: tuple[tuple[str, str], ...] = ()
+        for conv_id, conv_turns in snapshot.turns_by_id:
+            if conv_id == cid:
+                turns = conv_turns
+                break
+        self.set_turns(list(turns))
 
     def action_line_down(self) -> None:
         self.action_scroll_down()
