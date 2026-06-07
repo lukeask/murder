@@ -1,4 +1,15 @@
-"""Mirrors a tmux pane via periodic capture-pane (fetched over the service bus)."""
+"""Mirrors a tmux pane via periodic capture-pane (fetched over the service bus).
+
+Phase 2 (t055): PaneMirror is intentionally **left on the pane-tick path**.
+
+A TailStore would need a feeder that calls ingest() on every capture-pane tick.
+That feeder lives in coordinator.pane_tick / app.py — files this ticket may NOT
+touch.  An unfed store is dead code, and binding PaneMirror to it would not
+happen until t056 anyway.
+
+Decision: leave PaneMirror on its existing async pane-tick path.  t056 is the
+right place to introduce TailStore and bind PaneMirror once coordinator.py can
+wire the feed.  This is noted for the integration agent."""
 
 from __future__ import annotations
 
