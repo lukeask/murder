@@ -18,7 +18,6 @@ from unittest.mock import AsyncMock
 from murder.app.service.client_api import (
     CalendarRunningAgent,
     CalendarScheduledTicket,
-    DispatchSnapshot,
     EscalationSummary,
     EscalationsSnapshot,
     ScheduleSnapshot,
@@ -33,6 +32,7 @@ from murder.app.service.client_api import (
 from murder.app.tui.stores.dispatch import DispatchStore
 from murder.app.tui.stores.escalations import EscalationsStore
 from murder.app.tui.stores.schedule import ScheduleStore
+from tests.support.factories import factory_dispatch_snapshot
 
 _DT1 = datetime(2026, 1, 1, tzinfo=timezone.utc)
 _DT2 = datetime(2026, 1, 2, tzinfo=timezone.utc)
@@ -47,14 +47,6 @@ def _ticket(tid: str = "t001", status: str = "open") -> TicketSummary:
     return TicketSummary(
         id=tid, title="Test", status=status, wave=1, harness=None, model=None
     )
-
-
-def _dispatch_snap(
-    tickets: tuple[TicketSummary, ...] = (),
-    invalidation_key: str = "k1",
-    as_of: datetime = _DT1,
-) -> DispatchSnapshot:
-    return DispatchSnapshot(tickets=tickets, as_of=as_of, invalidation_key=invalidation_key)
 
 
 def _escalation(eid: int = 1) -> EscalationSummary:
@@ -130,7 +122,7 @@ def test_dispatch_notifies_on_first_ingest() -> None:
     calls: list[None] = []
     store.subscribe(lambda: calls.append(None))
 
-    store.ingest_snapshot(_dispatch_snap((_ticket(),), "k1"))
+    store.ingest_snapshot(factory_dispatch_snapshot((_ticket(),), "k1"))
     assert len(calls) == 1
 
 
@@ -138,30 +130,30 @@ def test_dispatch_no_notify_on_identical_reingest() -> None:
     """Same tickets + same invalidation_key but different as_of must NOT notify."""
     store = DispatchStore()
     t = _ticket()
-    store.ingest_snapshot(_dispatch_snap((t,), "k1", _DT1))
+    store.ingest_snapshot(factory_dispatch_snapshot((t,), "k1", _DT1))
 
     calls: list[None] = []
     store.subscribe(lambda: calls.append(None))
 
-    store.ingest_snapshot(_dispatch_snap((t,), "k1", _DT2))
+    store.ingest_snapshot(factory_dispatch_snapshot((t,), "k1", _DT2))
     assert len(calls) == 0
 
 
 def test_dispatch_notifies_on_content_change() -> None:
     store = DispatchStore()
-    store.ingest_snapshot(_dispatch_snap((_ticket("t001"),), "k1"))
+    store.ingest_snapshot(factory_dispatch_snapshot((_ticket("t001"),), "k1"))
 
     calls: list[None] = []
     store.subscribe(lambda: calls.append(None))
 
-    store.ingest_snapshot(_dispatch_snap((_ticket("t002"),), "k2"))
+    store.ingest_snapshot(factory_dispatch_snapshot((_ticket("t002"),), "k2"))
     assert len(calls) == 1
 
 
 def test_dispatch_snapshot_holds_tickets() -> None:
     store = DispatchStore()
     t = _ticket()
-    store.ingest_snapshot(_dispatch_snap((t,), "k1"))
+    store.ingest_snapshot(factory_dispatch_snapshot((t,), "k1"))
     snap = store.get_snapshot()
     assert snap.tickets == (t,)
     assert snap.invalidation_key == "k1"

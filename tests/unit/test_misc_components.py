@@ -14,53 +14,22 @@ hand-rolled fakes, following the pattern in test_store_component_base.py.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from typing import Any
 from unittest.mock import patch
 
 import pytest
 
-from murder.app.service.client_api import EscalationsSnapshot, EscalationSummary
 from murder.app.tui.escalation_strip import EscalationStrip
 from murder.app.tui.stores.escalations import EscalationsStore
+from tests.support.factories import (
+    factory_escalation_row,
+    factory_escalations_snapshot,
+)
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-
-def _row(
-    escalation_id: int,
-    *,
-    ticket_id: str | None = "t-1",
-    reason: str = "blocked",
-    severity: int = 2,
-    to_recipient: str = "user",
-    ticket_status: str | None = None,
-) -> EscalationSummary:
-    return EscalationSummary(
-        id=escalation_id,
-        ticket_id=ticket_id,
-        severity=severity,
-        reason=reason,
-        to_recipient=to_recipient,
-        body_path=None,
-        ticket_status=ticket_status,
-    )
-
-
-def _snapshot(
-    *active: EscalationSummary,
-    history: tuple[EscalationSummary, ...] = (),
-    key: str = "k1",
-) -> EscalationsSnapshot:
-    return EscalationsSnapshot(
-        active=active,
-        history=history,
-        as_of=datetime.now(timezone.utc),
-        invalidation_key=key,
-    )
 
 
 def _make_strip() -> EscalationStrip:
@@ -98,7 +67,7 @@ def test_strip_subscribes_on_mount() -> None:
     assert len(renders) == 1
 
     # Store change fires another.
-    store.ingest_snapshot(_snapshot(_row(1)))
+    store.ingest_snapshot(factory_escalations_snapshot(factory_escalation_row(1)))
     assert len(renders) == 2
 
 
@@ -115,7 +84,7 @@ def test_strip_unsubscribes_on_unmount() -> None:
     strip.on_unmount()
 
     renders.clear()
-    store.ingest_snapshot(_snapshot(_row(1)))
+    store.ingest_snapshot(factory_escalations_snapshot(factory_escalation_row(1)))
     assert renders == []
 
 
@@ -139,7 +108,7 @@ def test_strip_render_on_change_reflects_new_snapshot() -> None:
         strip.on_mount()
         rendered.clear()  # discard initial paint
 
-        store.ingest_snapshot(_snapshot(_row(10, reason="urgent")))
+        store.ingest_snapshot(factory_escalations_snapshot(factory_escalation_row(10, reason="urgent")))
 
     # The snapshot forwarded to refresh_from_snapshot should contain the new row.
     assert len(rendered) == 1
@@ -166,14 +135,14 @@ def test_user_visible_persists_across_store_rerender() -> None:
     updates: list[str] = []
     strip.update = updates.append  # type: ignore[assignment]
 
-    row = _row(1)
+    row = factory_escalation_row(1)
     # Bridge call with show=False — user hid the strip.
-    strip.refresh_from_snapshot(_snapshot(row), show=False)
+    strip.refresh_from_snapshot(factory_escalations_snapshot(row), show=False)
     assert strip._user_visible is False
     assert strip.display is False
 
     # Store-driven re-render (no show kwarg) must stay hidden.
-    strip.refresh_from_snapshot(_snapshot(row, key="k2"))
+    strip.refresh_from_snapshot(factory_escalations_snapshot(row, key="k2"))
     assert strip.display is False
 
 
@@ -182,8 +151,8 @@ def test_user_visible_restored_after_set_user_visible() -> None:
     strip = _make_strip()
     strip.update = lambda *a, **kw: None  # type: ignore[assignment]
 
-    row = _row(1)
-    strip.refresh_from_snapshot(_snapshot(row), show=False)
+    row = factory_escalation_row(1)
+    strip.refresh_from_snapshot(factory_escalations_snapshot(row), show=False)
     assert strip.display is False
 
     strip.set_user_visible(True)
@@ -191,7 +160,7 @@ def test_user_visible_restored_after_set_user_visible() -> None:
     assert strip._user_visible is True
 
     # Subsequent store-driven render should stay visible.
-    strip.refresh_from_snapshot(_snapshot(row, key="k3"))
+    strip.refresh_from_snapshot(factory_escalations_snapshot(row, key="k3"))
     assert strip.display is True
 
 
@@ -206,10 +175,10 @@ def test_bridge_show_true_updates_user_visible() -> None:
     strip = _make_strip()
     strip.update = lambda *a, **kw: None  # type: ignore[assignment]
 
-    row = _row(1)
-    strip.refresh_from_snapshot(_snapshot(row), show=False)
+    row = factory_escalation_row(1)
+    strip.refresh_from_snapshot(factory_escalations_snapshot(row), show=False)
     assert strip._user_visible is False
 
-    strip.refresh_from_snapshot(_snapshot(row, key="k2"), show=True)
+    strip.refresh_from_snapshot(factory_escalations_snapshot(row, key="k2"), show=True)
     assert strip._user_visible is True
     assert strip.display is True

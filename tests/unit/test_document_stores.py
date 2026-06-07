@@ -33,6 +33,14 @@ from murder.app.tui.stores.documents import (
     PlansStore,
     ReportsStore,
 )
+from tests.support.factories import (
+    factory_note_summary,
+    factory_notes_snapshot,
+    factory_plan_summary,
+    factory_plans_snapshot,
+    factory_report_summary,
+    factory_reports_snapshot,
+)
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -48,7 +56,7 @@ def _plans_snap(
     invalidation_key: str = "k1",
     as_of: datetime = _DT1,
 ) -> PlansSnapshot:
-    return PlansSnapshot(plans=plans, invalidation_key=invalidation_key, as_of=as_of)
+    return factory_plans_snapshot(plans, invalidation_key=invalidation_key, as_of=as_of)
 
 
 def _notes_snap(
@@ -56,7 +64,7 @@ def _notes_snap(
     invalidation_key: str = "k1",
     as_of: datetime = _DT1,
 ) -> NotesSnapshot:
-    return NotesSnapshot(notes=notes, invalidation_key=invalidation_key, as_of=as_of)
+    return factory_notes_snapshot(notes, invalidation_key=invalidation_key, as_of=as_of)
 
 
 def _reports_snap(
@@ -64,19 +72,19 @@ def _reports_snap(
     invalidation_key: str = "k1",
     as_of: datetime = _DT1,
 ) -> ReportsSnapshot:
-    return ReportsSnapshot(reports=reports, invalidation_key=invalidation_key, as_of=as_of)
+    return factory_reports_snapshot(reports, invalidation_key=invalidation_key, as_of=as_of)
 
 
 def _plan(name: str = "plan-a", revision: int = 1) -> PlanSummary:
-    return PlanSummary(name=name, status="active", revision_count=revision, sync_state="clean")
+    return factory_plan_summary(name=name, revision=revision)
 
 
 def _note(name: str = "note-a", updated: datetime = _DT1) -> NoteSummary:
-    return NoteSummary(name=name, char_count=100, updated_at=updated)
+    return factory_note_summary(name=name, updated=updated)
 
 
 def _report(name: str = "report-a", updated: datetime = _DT1) -> ReportSummary:
-    return ReportSummary(name=name, char_count=200, updated_at=updated)
+    return factory_report_summary(name=name, updated=updated)
 
 
 def _plan_display(name: str = "plan-a", body: str = "# plan") -> PlanDisplaySnapshot:

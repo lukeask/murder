@@ -17,16 +17,12 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timezone
-from typing import Any
 
-import pytest
-
-from murder.app.service.client_api import CrowSessionSummary, CrowSnapshot
-from murder.app.tui.crow_health import Health
 from murder.app.tui.crows_view import CrowsView
-from murder.app.tui.stores.roster import CrowEntry, RosterSnapshot, RosterStore
+from murder.app.tui.stores.roster import RosterStore
 from textual.app import App, ComposeResult
 from murder.app.tui.themes import crow_tui_variable_defaults, register_crow_themes
+from tests.support.factories import factory_crow_session, factory_crow_snapshot
 
 
 # ---------------------------------------------------------------------------
@@ -35,31 +31,6 @@ from murder.app.tui.themes import crow_tui_variable_defaults, register_crow_them
 
 
 _NOW = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
-
-
-def _session(**kwargs: object) -> CrowSessionSummary:
-    defaults: dict[str, Any] = dict(
-        agent_id="crow-t001",
-        role="crow",
-        ticket_id="t001",
-        ticket_title="Fix thing",
-        status="running",
-        session_name="murder_demo_crow_t001",
-        harness="cursor",
-        last_seen=None,
-        started_at=None,
-        ticket_status="in_progress",
-    )
-    defaults.update(kwargs)
-    return CrowSessionSummary(**defaults)  # type: ignore[arg-type]
-
-
-def _snapshot(*sessions: CrowSessionSummary, key: str = "k") -> CrowSnapshot:
-    return CrowSnapshot(
-        sessions=sessions,
-        as_of=_NOW,
-        invalidation_key=key,
-    )
 
 
 class _ThemedApp(App[None]):
@@ -98,7 +69,7 @@ def test_crows_view_renders_on_store_change() -> None:
             assert len(view._entries_by_id) == 0  # noqa: SLF001
 
             # Ingest a snapshot with one crow.
-            snap = _snapshot(_session())
+            snap = factory_crow_snapshot(factory_crow_session())
             store.ingest_snapshot(snap, now=_NOW)
             await pilot.pause()
 
@@ -116,13 +87,13 @@ def test_crows_view_renders_on_second_store_change() -> None:
     async def _run() -> None:
         app = _CrowsApp(view)
         async with app.run_test() as pilot:
-            store.ingest_snapshot(_snapshot(_session()), now=_NOW)
+            store.ingest_snapshot(factory_crow_snapshot(factory_crow_session()), now=_NOW)
             await pilot.pause()
             assert "crow-t001" in view._entries_by_id  # noqa: SLF001
 
             # Swap in a different crow.
             store.ingest_snapshot(
-                _snapshot(_session(agent_id="crow-t002", ticket_id="t002"), key="k2"),
+                factory_crow_snapshot(factory_crow_session(agent_id="crow-t002", ticket_id="t002"), key="k2"),
                 now=_NOW,
             )
             await pilot.pause()
@@ -148,9 +119,9 @@ def test_crows_view_uses_snapshot_entries_verbatim() -> None:
     view.bind_stores(roster=store)
 
     # Two sessions: escalating first (will be sort-rank 0 in store), idle second.
-    snap = _snapshot(
-        _session(agent_id="crow-idle", status="idle"),
-        _session(agent_id="crow-esc", status="escalating"),
+    snap = factory_crow_snapshot(
+        factory_crow_session(agent_id="crow-idle", status="idle"),
+        factory_crow_session(agent_id="crow-esc", status="escalating"),
         key="v1",
     )
 
@@ -186,7 +157,7 @@ def test_crows_view_unsubscribes_on_unmount() -> None:
     async def _run() -> None:
         app = _CrowsApp(view)
         async with app.run_test() as pilot:
-            store.ingest_snapshot(_snapshot(_session()), now=_NOW)
+            store.ingest_snapshot(factory_crow_snapshot(factory_crow_session()), now=_NOW)
             await pilot.pause()
             assert "crow-t001" in view._entries_by_id  # noqa: SLF001
 
@@ -206,7 +177,7 @@ def test_crows_view_store_change_after_unmount_does_not_update_view() -> None:
     async def _run() -> None:
         app = _CrowsApp(view)
         async with app.run_test() as pilot:
-            store.ingest_snapshot(_snapshot(_session()), now=_NOW)
+            store.ingest_snapshot(factory_crow_snapshot(factory_crow_session()), now=_NOW)
             await pilot.pause()
 
         # Capture the state at unmount.
@@ -214,7 +185,7 @@ def test_crows_view_store_change_after_unmount_does_not_update_view() -> None:
 
         # Push a new snapshot after unmount.
         store.ingest_snapshot(
-            _snapshot(_session(agent_id="crow-t999", ticket_id="t999"), key="k2"),
+            factory_crow_snapshot(factory_crow_session(agent_id="crow-t999", ticket_id="t999"), key="k2"),
             now=_NOW,
         )
 
@@ -234,7 +205,7 @@ def test_bridge_path_still_works_without_store_bound() -> None:
     view = CrowsView()
     # No bind_stores call — stays bridge-driven.
 
-    snap = _snapshot(_session())
+    snap = factory_crow_snapshot(factory_crow_session())
 
     async def _run() -> None:
         app = _CrowsApp(view)
@@ -250,9 +221,9 @@ def test_bridge_path_filters_terminal_agents() -> None:
     """Bridge path filters done/dead agents (delegates to entries_from_snapshot)."""
     view = CrowsView()
 
-    snap = _snapshot(
-        _session(agent_id="crow-done", status="done"),
-        _session(agent_id="crow-running", status="running"),
+    snap = factory_crow_snapshot(
+        factory_crow_session(agent_id="crow-done", status="done"),
+        factory_crow_session(agent_id="crow-running", status="running"),
     )
 
     async def _run() -> None:
@@ -273,9 +244,9 @@ def test_bridge_path_filters_terminal_agents() -> None:
 
 def test_store_and_bridge_paths_converge() -> None:
     """Store path and bridge path produce the same _entries_by_id for the same input."""
-    snap = _snapshot(
-        _session(agent_id="crow-a", status="running"),
-        _session(agent_id="crow-b", status="idle"),
+    snap = factory_crow_snapshot(
+        factory_crow_session(agent_id="crow-a", status="running"),
+        factory_crow_session(agent_id="crow-b", status="idle"),
         key="same",
     )
 

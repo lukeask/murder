@@ -8,13 +8,14 @@ from types import SimpleNamespace
 
 from textual.app import App, ComposeResult
 
-from murder.app.service.client_api import CrowSessionSummary, CrowSnapshot
+from murder.app.service.client_api import CrowSnapshot
 from murder.app.tui.cc_multiple_choice_wizard import CCMultipleChoiceWizard
 from murder.app.tui import crows_view as crows_view_mod
 from murder.app.tui.crow_health import Health
 from murder.app.tui.crows_view import CrowEntry, CrowTile, CrowsView, entries_from_snapshot
 from murder.app.tui.stores import roster as roster_mod
 from murder.app.tui.themes import crow_tui_variable_defaults, register_crow_themes
+from tests.support.factories import factory_crow_session
 
 
 class _CrowThemedApp(App[None]):
@@ -35,23 +36,6 @@ class _TileApp(_CrowThemedApp):
         yield self._tile
 
 
-def _session(**kwargs: object) -> CrowSessionSummary:
-    defaults = dict(
-        agent_id="crow-t001",
-        role="crow",
-        ticket_id="t001",
-        ticket_title="Fix thing",
-        status="running",
-        session_name="murder_demo_crow_t001",
-        harness="cursor",
-        last_seen=None,
-        started_at=None,
-        ticket_status="in_progress",
-    )
-    defaults.update(kwargs)
-    return CrowSessionSummary(**defaults)  # type: ignore[arg-type]
-
-
 def _plain(widget) -> str:
     rendered = widget.render()
     return getattr(rendered, "plain", str(rendered))
@@ -59,7 +43,7 @@ def _plain(widget) -> str:
 
 def test_entries_from_snapshot_includes_running_crow() -> None:
     snap = CrowSnapshot(
-        sessions=(_session(),),
+        sessions=(factory_crow_session(),),
         as_of=datetime.now(timezone.utc),
         invalidation_key="k",
     )
@@ -71,9 +55,9 @@ def test_entries_from_snapshot_includes_running_crow() -> None:
 def test_entries_from_snapshot_skips_handlers() -> None:
     snap = CrowSnapshot(
         sessions=(
-            _session(agent_id="crow_handler-t001", role="crow_handler", harness=""),
-            _session(agent_id="planning_handler-plan", role="planning_handler", harness=""),
-            _session(),
+            factory_crow_session(agent_id="crow_handler-t001", role="crow_handler", harness=""),
+            factory_crow_session(agent_id="planning_handler-plan", role="planning_handler", harness=""),
+            factory_crow_session(),
         ),
         as_of=datetime.now(timezone.utc),
         invalidation_key="k",
@@ -475,7 +459,7 @@ def test_crows_view_refresh_tails_uses_keyword_lines_capture() -> None:
     view = CrowsView(capture_pane=capture)  # type: ignore[arg-type]
     snap = CrowSnapshot(
         sessions=(
-            _session(
+            factory_crow_session(
                 agent_id="rogue-antigravity-test",
                 ticket_id="",
                 ticket_title="rogue-antigravity-test",
@@ -528,7 +512,7 @@ def test_crows_view_parsed_refresh_renders_conversation_projection() -> None:
     view = CrowsView()
     snap = CrowSnapshot(
         sessions=(
-            _session(
+            factory_crow_session(
                 agent_id="crow-t001",
                 role="crow",
                 ticket_id="t001",
@@ -577,7 +561,7 @@ def test_crows_view_parsed_refresh_does_not_call_capture_or_fetch() -> None:
     view = CrowsView(capture_pane=capture)  # type: ignore[arg-type]
     snap = CrowSnapshot(
         sessions=(
-            _session(
+            factory_crow_session(
                 agent_id="rogue-claude-test",
                 ticket_id="",
                 ticket_title="rogue-claude-test",
@@ -614,7 +598,7 @@ def test_crows_view_parsed_refresh_shows_status_when_fetch_unavailable() -> None
     view = CrowsView()
     snap = CrowSnapshot(
         sessions=(
-            _session(
+            factory_crow_session(
                 agent_id="rogue-claude-test",
                 ticket_id="",
                 ticket_title="rogue-claude-test",
@@ -664,7 +648,7 @@ def test_ticket_agent_raw_toggle_populates_raw_log_immediately() -> None:
     view = CrowsView(capture_pane=capture)  # type: ignore[arg-type]
     snap = CrowSnapshot(
         sessions=(
-            _session(
+            factory_crow_session(
                 agent_id="crow-t001",
                 role="crow",
                 ticket_id="t001",
@@ -718,14 +702,14 @@ def test_crows_view_wall_uses_fractional_grid_tracks() -> None:
     view = CrowsView()
     snap = CrowSnapshot(
         sessions=(
-            _session(
+            factory_crow_session(
                 agent_id="rogue-a",
                 ticket_id="",
                 ticket_title="rogue-a",
                 session_name="murder_repo_crow_cursor_rogue_a",
                 harness="cursor",
             ),
-            _session(
+            factory_crow_session(
                 agent_id="rogue-b",
                 ticket_id="",
                 ticket_title="rogue-b",
@@ -755,7 +739,7 @@ def test_crows_view_roster_shows_compact_rogue_name_harness_and_model() -> None:
     view = CrowsView()
     snap = CrowSnapshot(
         sessions=(
-            _session(
+            factory_crow_session(
                 agent_id="codex-rogue-tailwall",
                 ticket_id="",
                 ticket_title="tailwall",
@@ -794,7 +778,7 @@ def test_crows_view_chat_target_highlight_tracks_selected_crow() -> None:
     view = CrowsView()
     snap = CrowSnapshot(
         sessions=(
-            _session(
+            factory_crow_session(
                 agent_id="codex-rogue-tailwall",
                 ticket_id="",
                 ticket_title="tailwall",
@@ -802,7 +786,7 @@ def test_crows_view_chat_target_highlight_tracks_selected_crow() -> None:
                 harness="codex",
                 model="gpt-5.4",
             ),
-            _session(
+            factory_crow_session(
                 agent_id="cursor-rogue-scout",
                 ticket_id="",
                 ticket_title="scout",
@@ -854,7 +838,7 @@ def test_roster_kill_confirm_posts_kill_requested() -> None:
     view = CrowsView()
     snap = CrowSnapshot(
         sessions=(
-            _session(
+            factory_crow_session(
                 agent_id="cursor-rogue-test",
                 ticket_id="",
                 ticket_title="cursor-rogue-test",
@@ -889,7 +873,7 @@ def test_roster_kill_confirm_posts_kill_requested() -> None:
 
 def _kill_snapshot() -> CrowSnapshot:
     return CrowSnapshot(
-        sessions=(_session(agent_id="crow-t001", ticket_id="t001"),),
+        sessions=(factory_crow_session(agent_id="crow-t001", ticket_id="t001"),),
         as_of=datetime.now(timezone.utc),
         invalidation_key="k",
     )

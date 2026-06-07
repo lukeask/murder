@@ -44,6 +44,17 @@ from murder.app.service.client_api import (
     ConversationSummary,
     ConversationsSnapshot,
 )
+from tests.support.factories import (
+    factory_conversation_block,
+    factory_conversation_summary,
+    factory_conversations_snapshot,
+    factory_note_summary,
+    factory_notes_snapshot,
+    factory_plan_summary,
+    factory_plans_snapshot,
+    factory_report_summary,
+    factory_reports_snapshot,
+)
 
 # ---------------------------------------------------------------------------
 # Helpers / fixtures
@@ -54,27 +65,27 @@ _DT2 = datetime(2026, 1, 2, tzinfo=timezone.utc)
 
 
 def _plan(name: str = "plan-alpha", revision: int = 1, status: str = "active", sync: str = "clean") -> PlanSummary:
-    return PlanSummary(name=name, status=status, revision_count=revision, sync_state=sync)
+    return factory_plan_summary(name=name, revision=revision, status=status, sync=sync)
 
 
 def _plans_snap(*plans: PlanSummary, key: str = "k1") -> PlansSnapshot:
-    return PlansSnapshot(plans=plans, invalidation_key=key, as_of=_DT1)
+    return factory_plans_snapshot(plans, invalidation_key=key, as_of=_DT1)
 
 
 def _note(name: str = "note-a", char_count: int = 100, updated: datetime = _DT1) -> NoteSummary:
-    return NoteSummary(name=name, char_count=char_count, updated_at=updated)
+    return factory_note_summary(name=name, char_count=char_count, updated=updated)
 
 
 def _notes_snap(*notes: NoteSummary, key: str = "k1") -> NotesSnapshot:
-    return NotesSnapshot(notes=notes, invalidation_key=key, as_of=_DT1)
+    return factory_notes_snapshot(notes, invalidation_key=key, as_of=_DT1)
 
 
 def _report(name: str = "report-a", char_count: int = 200, updated: datetime = _DT1) -> ReportSummary:
-    return ReportSummary(name=name, char_count=char_count, updated_at=updated)
+    return factory_report_summary(name=name, char_count=char_count, updated=updated)
 
 
 def _reports_snap(*reports: ReportSummary, key: str = "k1") -> ReportsSnapshot:
-    return ReportsSnapshot(reports=reports, invalidation_key=key, as_of=_DT1)
+    return factory_reports_snapshot(reports, invalidation_key=key, as_of=_DT1)
 
 
 def _block(
@@ -83,14 +94,8 @@ def _block(
     payload: dict | None = None,
     conversation_id: str = "conv-1",
 ) -> ConversationBlockSummary:
-    return ConversationBlockSummary(
-        id=None,
-        conversation_id=conversation_id,
-        ordinal=ordinal,
-        kind=kind,
-        payload=payload or {"type": "user", "text": f"msg-{ordinal}"},
-        sealed=True,
-        service_received_at="2026-01-01T00:00:00",
+    return factory_conversation_block(
+        ordinal, kind=kind, payload=payload, conversation_id=conversation_id
     )
 
 
@@ -99,25 +104,13 @@ def _conv_summary(
     agent_id: str = "agent-1",
     blocks: tuple[ConversationBlockSummary, ...] = (),
 ) -> ConversationSummary:
-    return ConversationSummary(
-        conversation_id=conversation_id,
-        agent_id=agent_id,
-        harness="cc",
-        model="sonnet",
-        harness_session_id=None,
-        live_state="awaiting_input",
-        condensed=None,
-        status="in_progress",
-        blocks=blocks,
+    return factory_conversation_summary(
+        conversation_id=conversation_id, agent_id=agent_id, blocks=blocks
     )
 
 
 def _convs_snapshot(*summaries: ConversationSummary) -> ConversationsSnapshot:
-    return ConversationsSnapshot(
-        conversations=summaries,
-        as_of=_DT1,
-        invalidation_key="key",
-    )
+    return factory_conversations_snapshot(*summaries, as_of=_DT1)
 
 
 # ---------------------------------------------------------------------------
