@@ -41,12 +41,18 @@ class DocumentStoreSnapshot(Generic[ItemT]):
     ``bodies`` is a sorted (name, markdown) tuple so equality is stable.
     ``as_of`` from the server snapshot is deliberately excluded — it advances
     on every poll even when content is unchanged.
+
+    ``rows`` holds pre-derived display rows ready for the list widget to render
+    without any further derivation.  The tuple type varies by store subclass
+    (plans: (display_name, status, revision, sync_state); notes/reports:
+    (name, char_count, updated_at[:16])).  Cursor/selection remain view-local.
     """
 
     items: tuple[ItemT, ...]
     invalidation_key: str
     selected_name: str | None
     bodies: tuple[tuple[str, str], ...]  # sorted (name, markdown)
+    rows: tuple[tuple[str, ...], ...] = ()  # pre-derived display rows
 
 
 PlansStoreSnapshot = DocumentStoreSnapshot[PlanSummary]
@@ -94,6 +100,14 @@ class _DocumentStore(
         raise NotImplementedError
 
     def _display_body(self, display: DisplaySnapT) -> str:
+        raise NotImplementedError
+
+    def _derive_rows(self, items: tuple[ItemT, ...]) -> tuple[tuple[str, ...], ...]:
+        """Return pre-derived display rows for the list widget.
+
+        Each element is a tuple of strings ready to pass directly to DataTable
+        add_row.  Subclasses override to provide type-specific projection.
+        """
         raise NotImplementedError
 
     # -- public API --------------------------------------------------------
@@ -155,12 +169,14 @@ class _DocumentStore(
                 key=lambda x: x[0],
             )
         )
+        rows = self._derive_rows(items)
         self._set(
             DocumentStoreSnapshot(
                 items=items,
                 invalidation_key=invalidation_key,
                 selected_name=selected_name,
                 bodies=bodies,
+                rows=rows,
             )
         )
 
@@ -178,6 +194,18 @@ class PlansStore(_DocumentStore[PlansSnapshot, PlanSummary, PlanDisplaySnapshot]
     def _display_body(self, display: PlanDisplaySnapshot) -> str:
         return display.markdown
 
+    def _derive_rows(self, items: tuple[PlanSummary, ...]) -> tuple[tuple[str, ...], ...]:
+        """(display_name, status, revision_count, sync_state) per plan."""
+        return tuple(
+            (
+                item.name.removeprefix("plan-"),
+                item.status,
+                str(item.revision_count),
+                item.sync_state,
+            )
+            for item in items
+        )
+
 
 class NotesStore(_DocumentStore[NotesSnapshot, NoteSummary, NoteDisplaySnapshot]):
     def _unpack_list(self, snap: NotesSnapshot) -> tuple[tuple[NoteSummary, ...], str]:
@@ -192,6 +220,17 @@ class NotesStore(_DocumentStore[NotesSnapshot, NoteSummary, NoteDisplaySnapshot]
     def _display_body(self, display: NoteDisplaySnapshot) -> str:
         return display.markdown
 
+    def _derive_rows(self, items: tuple[NoteSummary, ...]) -> tuple[tuple[str, ...], ...]:
+        """(name, char_count, updated_at[:16]) per note (T replaced with space)."""
+        return tuple(
+            (
+                item.name,
+                str(item.char_count),
+                item.updated_at.isoformat()[:16].replace("T", " "),
+            )
+            for item in items
+        )
+
 
 class ReportsStore(_DocumentStore[ReportsSnapshot, ReportSummary, ReportDisplaySnapshot]):
     def _unpack_list(self, snap: ReportsSnapshot) -> tuple[tuple[ReportSummary, ...], str]:
@@ -205,3 +244,14 @@ class ReportsStore(_DocumentStore[ReportsSnapshot, ReportSummary, ReportDisplayS
 
     def _display_body(self, display: ReportDisplaySnapshot) -> str:
         return display.markdown
+
+    def _derive_rows(self, items: tuple[ReportSummary, ...]) -> tuple[tuple[str, ...], ...]:
+        """(name, char_count, updated_at[:16]) per report (T replaced with space)."""
+        return tuple(
+            (
+                item.name,
+                str(item.char_count),
+                item.updated_at.isoformat()[:16].replace("T", " "),
+            )
+            for item in items
+        )
