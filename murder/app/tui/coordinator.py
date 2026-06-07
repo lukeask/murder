@@ -1,7 +1,13 @@
 """Ingestion coordinator — owns the runtime client and drives all stores.
 
-Design-agnostic: knows stores and data, never widgets or layout. The bridge
-(store → widget) is wired in app.py by subscribing callbacks to each store.
+Design-agnostic: knows stores and data, never widgets or layout.  Components
+self-subscribe to their stores via the StoreComponent mixin; app.py adds
+coordination-only store callbacks (doc resyncs, chat routing) separately.
+
+``last_crow_snapshot`` is retained because three app.py helpers need raw
+CrowSnapshot.sessions (planner chat-target cycling, collaborator mirror
+session lookup, and crow-session-for-ticket lookup) which are not available
+from the projected RosterSnapshot.
 """
 
 from __future__ import annotations
@@ -11,12 +17,6 @@ from typing import Any
 
 from murder.app.service.client_api import (
     CrowSnapshot,
-    DispatchSnapshot,
-    EscalationsSnapshot,
-    NotesSnapshot,
-    PlansSnapshot,
-    ReportsSnapshot,
-    ScheduleSnapshot,
 )
 from murder.app.tui.stores.base import StoreRegistry
 from murder.app.tui.stores.conversations import ConversationsStore
@@ -39,10 +39,6 @@ class IngestionCoordinator:
 
     Pane tick: delegates to injected callables so no Textual widget is
     imported here.
-
-    Bridge pattern: app.py subscribes callbacks to each store. When a store
-    notifies, the callback reads ``last_*_snapshot`` and calls the widget's
-    existing ``refresh_from_snapshot``. All widget knowledge stays in app.py.
     """
 
     def __init__(self, runtime: Any, registry: StoreRegistry | None = None) -> None:
@@ -71,26 +67,17 @@ class IngestionCoordinator:
             registry.register("notes", self.notes)
             registry.register("reports", self.reports)
 
-        # Latest raw service snapshots — read by bridge callbacks in app.py.
-        # Updated unconditionally each poll tick before stores are notified.
+        # Raw crow snapshot retained for helpers that need CrowSnapshot.sessions
+        # (planner chat-target cycling, collaborator mirror lookup, crow-session
+        # for ticket).  All other raw snapshots are consumed via stores only.
         self.last_crow_snapshot: CrowSnapshot | None = None
-        self.last_dispatch_snapshot: DispatchSnapshot | None = None
-        self.last_schedule_snapshot: ScheduleSnapshot | None = None
-        self.last_escalations_snapshot: EscalationsSnapshot | None = None
-        self.last_plans_snapshot: PlansSnapshot | None = None
-        self.last_notes_snapshot: NotesSnapshot | None = None
-        self.last_reports_snapshot: ReportsSnapshot | None = None
 
     # ------------------------------------------------------------------
     # Poll tick
     # ------------------------------------------------------------------
 
     async def poll_tick(self) -> None:
-        """Fetch all service snapshots and ingest into stores.
-
-        Snapshots are cached before stores are notified, so bridge callbacks
-        that read ``last_*_snapshot`` always see the just-fetched values.
-        """
+        """Fetch all service snapshots and ingest into stores."""
         crow = await self._runtime.get_crow_snapshot()
         dispatch = await self._runtime.get_dispatch_snapshot()
         schedule = await self._runtime.get_schedule_snapshot()
@@ -99,14 +86,8 @@ class IngestionCoordinator:
         reports = await self._runtime.get_reports_snapshot()
         escalations = await self._runtime.get_escalations()
 
-        # Cache before ingestion so bridge callbacks see fresh values.
+        # Cache raw crow snapshot for helpers that need CrowSnapshot.sessions.
         self.last_crow_snapshot = crow
-        self.last_dispatch_snapshot = dispatch
-        self.last_schedule_snapshot = schedule
-        self.last_plans_snapshot = plans
-        self.last_notes_snapshot = notes
-        self.last_reports_snapshot = reports
-        self.last_escalations_snapshot = escalations
 
         # Ingest — each store notifies only when content changes.
         self.roster.ingest_snapshot(crow)

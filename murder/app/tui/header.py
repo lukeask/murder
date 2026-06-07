@@ -11,6 +11,16 @@ from murder.app.tui.components import StoreComponent
 from murder.app.tui.stores.roster import CrowEntry, _short_display_name, entries_from_snapshot
 from murder.app.tui.dispatch.gauges import PROVIDER_ORDER, color_for_pct, fmt_duration
 
+# Type aliases used in _render_from_stores import guard.
+try:
+    from murder.app.tui.stores.dispatch import DispatchStoreSnapshot
+    from murder.app.tui.stores.roster import RosterSnapshot
+    from murder.app.tui.stores.schedule import ScheduleStoreSnapshot
+except ImportError:
+    DispatchStoreSnapshot = None  # type: ignore[assignment,misc]
+    RosterSnapshot = None  # type: ignore[assignment,misc]
+    ScheduleStoreSnapshot = None  # type: ignore[assignment,misc]
+
 _ATTENTION_STATUSES = ("blocked", "failed")
 _HEADER_CROW_ID_LIMIT = 3
 _HEADER_NAME_MAX = 12
@@ -137,13 +147,12 @@ def format_view_tabs(view: str, accent: str | None) -> str:
 class Header(StoreComponent, Static):
     """Project name, view tabs, live crows, and attention counts.
 
-    StoreComponent binding (optional during bridge migration):
-        bind_stores(dispatch=dispatch_store)
+    StoreComponent binding:
+        bind_stores(dispatch=dispatch_store, roster=roster_store, schedule=schedule_store)
 
-    When bound, self-subscribes on mount and reads DispatchStoreSnapshot for
-    the pre-computed ``attention_counts``. The bridge path still calls
-    refresh_from_snapshot(DispatchSnapshot, crow_snapshot=..., usage_gauges=...)
-    directly; both paths converge on _update_text().
+    Bound by DefaultLayout with all three stores before compose; overrides
+    _render_from_stores() to read dispatch (attention_counts), roster
+    (in-flight entries), and schedule (usage_gauges), then calls _update_text().
     """
 
     DEFAULT_CSS = """
@@ -165,6 +174,44 @@ class Header(StoreComponent, Static):
 
     def on_mount(self) -> None:
         super().on_mount()  # StoreComponent subscribes if bound
+
+    def _render_from_stores(self) -> None:
+        """Multi-store render: reads dispatch, roster, and schedule snapshots.
+
+        Header is bound to three stores (dispatch, roster, schedule) because
+        it renders three independent segments:
+          - attention counts  → dispatch snapshot
+          - in-flight crows   → roster snapshot (projected CrowEntry list)
+          - usage gauges      → schedule snapshot
+
+        Called by StoreComponent._on_store_change() on any store change.
+        """
+        bound = getattr(self, "_bound_stores", None)
+        if not bound:
+            return
+        dispatch_store = bound.get("dispatch")
+        roster_store = bound.get("roster")
+        schedule_store = bound.get("schedule")
+
+        # Attention counts from dispatch.
+        if dispatch_store is not None:
+            dispatch_snap = dispatch_store.get_snapshot()
+            pre_counts = getattr(dispatch_snap, "attention_counts", None)
+            if pre_counts is not None:
+                self._counts = dict(pre_counts)
+
+        # In-flight crows from roster (already projected; use entries directly).
+        if roster_store is not None:
+            roster_snap = roster_store.get_snapshot()
+            self._roster_entries: list[CrowEntry] = list(roster_snap.entries)
+        # (Usage gauges retained from _crow_snapshot path — fall through.)
+
+        # Usage gauges from schedule.
+        if schedule_store is not None:
+            schedule_snap = schedule_store.get_snapshot()
+            self._usage_gauges = schedule_snap.usage_gauges
+
+        self._update_text()
 
     def refresh_from_snapshot(
         self,
@@ -229,7 +276,13 @@ class Header(StoreComponent, Static):
         project = "[red][unconfigured][/red]" if self.project == "TODO_SET_ME" else self.project
         tabs = format_view_tabs(self._view, self._theme_accent())
         right_segments: list[str] = []
-        if self._crow_snapshot is not None:
+        # Prefer projected roster entries (store path) over raw snapshot (bridge path).
+        roster_entries: list[CrowEntry] | None = getattr(self, "_roster_entries", None)
+        if roster_entries is not None:
+            inflight = format_inflight_segment(roster_entries)
+            if inflight:
+                right_segments.append(inflight)
+        elif self._crow_snapshot is not None:
             inflight = format_inflight_segment(entries_from_snapshot(self._crow_snapshot))
             if inflight:
                 right_segments.append(inflight)

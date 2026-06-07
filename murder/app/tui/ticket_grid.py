@@ -12,11 +12,9 @@ from murder.app.tui.components import StoreComponent
 class TicketGrid(StoreComponent, DataTable):
     """Rows: id, wave, status, title. Selecting a row emits TicketSelected.
 
-    StoreComponent binding (optional during bridge migration):
-        bind_stores(dispatch=dispatch_store)
-
-    When bound, self-subscribes on mount and reads DispatchStoreSnapshot
-    (duck-type compatible with DispatchSnapshot for the fields used here).
+    StoreComponent binding: bind_stores(dispatch=dispatch_store)
+    Bound by DefaultLayout before compose; self-subscribes on mount and reads
+    DispatchStoreSnapshot (duck-type compatible with DispatchSnapshot).
     """
 
     BINDINGS = [

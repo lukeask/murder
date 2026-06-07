@@ -134,6 +134,15 @@ class _DocumentStore(
             return
         self._rebuild(current.items, current.invalidation_key, name)
 
+    def invalidate_body(self, name: str) -> None:
+        """Evict the cached body for ``name`` so the next request_body re-fetches.
+
+        Call this after an edit that changes the body on disk but before the
+        poll tick updates the version_key in the item list (which would evict
+        via the normal cache eviction path on the next ingest_list call).
+        """
+        self._body_cache.pop(name, None)
+
     async def request_body(self, name: str) -> None:
         """Ensure body for ``name`` is loaded; no-op if already cached.
 

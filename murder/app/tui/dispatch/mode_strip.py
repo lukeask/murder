@@ -20,11 +20,9 @@ _MODE_LABELS = {
 class ModeStrip(StoreComponent, Static):
     """Renders the current scheduler mode with picker interactions.
 
-    StoreComponent binding (optional during bridge migration):
-        bind_stores(schedule=schedule_store)
-
-    When bound, self-subscribes on mount and reads ScheduleStoreSnapshot
-    (duck-type compatible with ScheduleSnapshot for scheduler_mode/mode_rationale).
+    Parent-cascade pattern: DispatchView is bound to the schedule store and
+    forwards the snapshot via refresh_from_snapshot().  This widget is NOT
+    independently bound; it renders on demand from the parent cascade.
     """
 
     can_focus = True

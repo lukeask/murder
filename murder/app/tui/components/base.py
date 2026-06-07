@@ -1,7 +1,7 @@
 """StoreComponent mixin — React useSyncExternalStore shape for Textual widgets.
 
 This mixin wires the data-layer stores to a widget's render method.  It is
-the single integration point that four Phase 2 wave-2 tickets subclass.
+the integration point for all Phase 2 StoreComponent widgets.
 
 Usage
 -----
@@ -21,12 +21,34 @@ StoreComponent calls super().on_mount() and super().on_unmount() via
 getattr-guards so that it sits safely anywhere in a Textual MRO and in
 headless test stubs (where on_mount/on_unmount don't exist on object).
 
-Migration / optional binding
+Textual MRO dispatch note
+--------------------------
+Textual dispatches on_mount/on_unmount to EVERY class in the MRO that defines
+the handler.  To prevent double-subscription when a subclass explicitly calls
+super().on_mount(), StoreComponent.on_mount is idempotent: if _unsubs is
+already set (non-empty), the subscribe+paint step is skipped on subsequent
+invocations.
+
+Binding contract
 -----------------------------
-During Phase 2 migration, binding a store is OPTIONAL.  A component with no
-store bound stays bridge-driven (coordinator calls refresh_from_snapshot
-directly) and the mixin is a no-op.  t056 makes binding required and removes
-the optional path.
+Store binding via bind_stores() is the standard path.  The layout module
+(default_layout.py) ensures every top-level widget is bound before compose().
+
+Two legitimate exceptions where a widget may be mounted without a bound store:
+
+1. Parent-cascade pattern: a container (e.g. DispatchView) is bound to a
+   store and manually forwards the snapshot to its children via
+   refresh_from_snapshot().  The children are unbound StoreComponents that
+   render on demand from the parent's cascade call rather than self-subscription.
+   This is intentional, not a migration fallback.
+
+2. Ad-hoc / dynamic conversation_id: ChatLog's conversation_id switches at
+   runtime based on app view state.  app.py drives it via set_turns/
+   replace_transcript until the status-string model is lifted into the store
+   (Phase 3 follow-up).
+
+A widget mounted without a bound store is a no-op for the store-subscription
+path — it will not auto-render from any store change.
 
 Render sink
 -----------
@@ -48,16 +70,15 @@ class StoreComponent:
 
         class MyWidget(StoreComponent, Static): ...
 
-    Public API (stable contract for t052–t055)
-    ------------------------------------------
+    Public API
+    ----------
     bind_stores(**stores) -> None
         Inject one or more stores by name.  Call before on_mount (e.g. from
-        the parent layout/app) or inside __init__.  Binding is optional during
-        migration; when no stores are bound the mixin is a no-op.
+        the layout module default_layout.py).  Binding is REQUIRED; a widget
+        mounted without a bound store will not auto-render from any store.
 
     _on_store_change() -> None
-        Subscribe callback; also available for bridge callers that want to
-        trigger a re-render without injecting the snapshot themselves.
+        Subscribe callback called by the store on state change.
 
     _render_from_stores() -> None
         Override in a multi-store component.  Default handles the single-store
@@ -86,6 +107,11 @@ class StoreComponent:
 
         Calls super().on_mount() first so that any Textual base-class or
         sibling-mixin setup runs before the first paint.
+
+        Idempotent: Textual dispatches on_mount to each class in the MRO
+        separately, so widgets that call super().on_mount() explicitly would
+        trigger this method twice. The guard on ``_unsubs`` prevents
+        double-subscription and an initial paint from the second invocation.
         """
         parent_mount = getattr(super(), "on_mount", None)
         if parent_mount is not None:
@@ -93,6 +119,12 @@ class StoreComponent:
 
         bound = getattr(self, "_bound_stores", None)
         if not bound:
+            return
+
+        # Idempotency guard: skip if already subscribed (happens when a
+        # subclass explicitly calls super().on_mount() AND Textual's own MRO
+        # dispatch also invokes StoreComponent.on_mount separately).
+        if getattr(self, "_unsubs", None):
             return
 
         unsubs: list[Callable[[], None]] = []

@@ -339,11 +339,9 @@ class GaugeDrillIn(ModalScreen[None]):
 class GaugeStrip(StoreComponent, Static):
     """Per-provider usage gauges, one column per harness, windows stacked.
 
-    StoreComponent binding (optional during bridge migration):
-        bind_stores(schedule=schedule_store)
-
-    When bound, self-subscribes on mount and reads ScheduleStoreSnapshot
-    (duck-type compatible with ScheduleSnapshot for usage_gauges).
+    Parent-cascade pattern: DispatchView is bound to the schedule store and
+    forwards the snapshot via refresh_from_snapshot().  This widget is NOT
+    independently bound; it renders on demand from the parent cascade.
     """
 
     can_focus = True

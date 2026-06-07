@@ -37,6 +37,7 @@ from murder.app.tui.chat_target_cycle import (
     planning_chat_targets,
 )
 from murder.app.tui.coordinator import IngestionCoordinator
+from murder.app.tui.layout import DefaultLayout
 from murder.app.tui.controllers import DispatchController, TuiContext
 from murder.app.tui.crow_health import Health
 from murder.app.tui.crows_view import (
@@ -351,27 +352,9 @@ class MurderApp(App[None]):
         self.perf = make_perf_log(runtime.repo_root)
         self._perf_log_enabled = self.perf.enabled
         self._perf_mount_time: float | None = None
-        self._header = Header(runtime.config.project.name)
-        self._grid = TicketGrid()
         self._bus_capture_pane: CapturePaneFn = self._capture_pane_via_bus
-        self._crows = CrowsView(
-            perf_log=self.perf,
-            capture_pane=self._bus_capture_pane,
-            prefs_path=tui_prefs_path(runtime.repo_root),
-        )
-        self._plans = PlanList()
-        self._plan_doc = PlanDocument()
-        self._notes_list = NotesList()
-        self._notes_doc = NotesDocument()
-        self._reports_list = ReportsList()
-        self._report_doc = ReportDocument()
-        self._collab_chat = ChatLog(agent_label="collaborator")
-        self._dispatch = DispatchView()
-        self._mirror = PaneMirror(perf=self.perf, capture_pane=self._bus_capture_pane)
         self._raw_key_mode = False
-        self._escalations = EscalationStrip()
         self._escalation_wizard: EscalationResolveWizard | None = None
-        self._chat = ChatInput()
         self._spawn_wizard: SpawnWizard | None = None
         self._collab_lock = asyncio.Lock()
         self._sidebar_visible = True
@@ -392,9 +375,37 @@ class MurderApp(App[None]):
         self._note_capture_draft = ""
         self._chat_input_memory = ""
         self._coordinator = IngestionCoordinator(runtime)
-        self._plan_revision_map: dict[str, int] = {}
-        self._plan_content_cache: dict[str, tuple[int, str]] = {}
         self._plan_highlight_timer: object | None = None
+
+        # Build layout: instantiates and binds all StoreComponent widgets.
+        # Capture-pane is injected here; it delegates to _capture_pane_via_bus
+        # which is wired to runtime after super().__init__ runs.
+        self._layout = DefaultLayout(
+            self._coordinator,
+            project_name=runtime.config.project.name,
+            perf=self.perf,
+            capture_pane=self._bus_capture_pane,
+            prefs_path=tui_prefs_path(runtime.repo_root),
+            usage_drill_in_loader=getattr(runtime, "get_usage_gauge_drill_in", None),
+        )
+
+        # Widget aliases — kept for backward compatibility with the 330+ handler
+        # references throughout app.py.  The layout owns the widget instances.
+        self._header = self._layout.header
+        self._grid = self._layout.grid
+        self._crows = self._layout.crows
+        self._plans = self._layout.plans
+        self._plan_doc = self._layout.plan_doc
+        self._notes_list = self._layout.notes_list
+        self._notes_doc = self._layout.notes_doc
+        self._reports_list = self._layout.reports_list
+        self._report_doc = self._layout.report_doc
+        self._collab_chat = self._layout.collab_chat
+        self._dispatch = self._layout.dispatch
+        self._mirror = self._layout.mirror
+        self._escalations = self._layout.escalations
+        self._chat = self._layout.chat
+
         self._dispatch_ctrl = DispatchController(
             TuiContext(
                 submit_command=self._submit_command,
@@ -431,23 +442,7 @@ class MurderApp(App[None]):
         )
 
     def compose(self) -> ComposeResult:
-        yield self._header
-        with Horizontal(id="body"):
-            yield self._grid
-            yield self._crows
-            with Vertical(id="planning_sidebar"):
-                yield self._plans
-                yield self._notes_list
-                yield self._reports_list
-            yield self._plan_doc
-            yield self._notes_doc
-            yield self._report_doc
-            yield self._collab_chat
-            yield self._dispatch
-            yield self._mirror
-        yield self._escalations
-        yield self._chat
-        yield Footer()
+        yield from self._layout.compose()
 
     def on_mount(self) -> None:
         if self._user_config.tui.theme in self.available_themes:
@@ -466,15 +461,18 @@ class MurderApp(App[None]):
                 git_sha=_git_head_sha(self.runtime.repo_root),
                 pid=os.getpid(),
             )
-        # Wire bridge: store change → widget refresh. Must happen before the
-        # first poll tick so no notification is missed.
-        self._coordinator.dispatch.subscribe(self._bridge_dispatch)
-        self._coordinator.roster.subscribe(self._bridge_roster)
-        self._coordinator.schedule.subscribe(self._bridge_schedule)
-        self._coordinator.plans.subscribe(self._bridge_plans)
-        self._coordinator.notes.subscribe(self._bridge_notes)
-        self._coordinator.reports.subscribe(self._bridge_reports)
-        self._coordinator.escalations.subscribe(self._bridge_escalations)
+        # Inject the usage drill-in loader into GaugeStrip now that it's mounted.
+        self._layout.inject_gauge_drill_in_loader()
+
+        # Coordination subscriptions: these are NOT widget-render callbacks
+        # (those are handled by each widget's own self-subscription via StoreComponent).
+        # These callbacks drive app-level coordination: doc resyncs, chat routing,
+        # mirror session tracking.  They live here because they require app state
+        # (view mode, chat target, etc.) that components must not access directly.
+        self._coordinator.roster.subscribe(self._on_roster_changed)
+        self._coordinator.plans.subscribe(self._on_plans_changed)
+        self._coordinator.notes.subscribe(self._on_notes_changed)
+        self._coordinator.reports.subscribe(self._on_reports_changed)
 
         self._refresh_service_views()
         self.run_worker(
@@ -564,73 +562,32 @@ class MurderApp(App[None]):
         await self._coordinator.bootstrap_conversations()
         self._render_all_conversations()
 
-    # ── bridge callbacks ────────────────────────────────────────────────────
-    # Each is subscribed to a store in on_mount. Called synchronously from
-    # within poll_tick() when the store detects a real change. Adapt the store
-    # snapshot into the widget's existing refresh_from_snapshot signature here;
-    # never leak widget knowledge into the coordinator or the stores.
+    # ── coordination callbacks ──────────────────────────────────────────────
+    # These are subscribed to stores in on_mount for APP-LEVEL coordination only:
+    # doc resyncs, chat target routing, mirror session tracking.
+    # Widget render is handled by each widget's own StoreComponent self-subscription.
+    # The pattern: "if the view + selection says X should update, enqueue a worker."
 
-    def _bridge_dispatch(self) -> None:
-        dispatch = self._coordinator.last_dispatch_snapshot
-        if dispatch is None:
-            return
-        schedule = self._coordinator.last_schedule_snapshot
-        crow = self._coordinator.last_crow_snapshot
-        with self.perf.span("tui.header.refresh_counts"):
-            self._header.refresh_from_snapshot(
-                dispatch,
-                crow_snapshot=crow,
-                usage_gauges=schedule.usage_gauges if schedule is not None else None,
-            )
-        with self.perf.span("tui.grid.refresh"):
-            self._grid.refresh_from_snapshot(dispatch)
-
-    def _bridge_roster(self) -> None:
-        crow = self._coordinator.last_crow_snapshot
-        if crow is None:
-            return
-        with self.perf.span("tui.crows.render_snapshot"):
-            self._crows.render_from_snapshot(crow)
+    def _on_roster_changed(self) -> None:
+        """Roster changed: refresh conversation docs for all crow tiles."""
         self._render_all_conversations()
 
-    def _bridge_schedule(self) -> None:
-        schedule = self._coordinator.last_schedule_snapshot
-        if schedule is None:
-            return
-        with self.perf.span("tui.schedule.refresh"):
-            self._dispatch.refresh_from_snapshot(
-                schedule,
-                usage_drill_in_loader=self.runtime.get_usage_gauge_drill_in,
-            )
-        # Keep header usage gauges current when schedule changes.
-        dispatch = self._coordinator.last_dispatch_snapshot
-        if dispatch is not None:
-            self._header.refresh_from_snapshot(
-                dispatch,
-                crow_snapshot=self._coordinator.last_crow_snapshot,
-                usage_gauges=schedule.usage_gauges,
-            )
-
-    def _bridge_plans(self) -> None:
-        plans = self._coordinator.last_plans_snapshot
-        if plans is None:
-            return
-        self._plan_revision_map = {p.name: p.revision_count for p in plans.plans}
-        with self.perf.span("tui.plans.refresh"):
-            self._plans.refresh_from_snapshot(plans)
+    def _on_plans_changed(self) -> None:
+        """Plans list changed: resync open plan document and chat routing."""
+        snap = self._coordinator.plans.get_snapshot()
         if (
             self._view == "planning"
             and self._active_document == "plan"
-            and self._plans.selected_name
+            and snap.selected_name
         ):
             if self._has_selected_plan:
-                plan_name = self._plans.selected_name
+                plan_name = snap.selected_name
                 self._chat_target_agent_id = f"planner-{plan_name}"
                 self._chat_target_label = f"planner: {plan_name}"
                 self._sync_chat_recipient()
                 self._sync_planner_mirror_session(plan_name)
             self.run_worker(
-                self._render_plan(self._plans.selected_name),
+                self._ensure_plan_body(snap.selected_name),
                 exclusive=True,
                 group="plandoc",
                 exit_on_error=False,
@@ -642,59 +599,45 @@ class MurderApp(App[None]):
             self._sync_chat_recipient()
             self._plan_doc.display = False
 
-    def _bridge_notes(self) -> None:
-        notes = self._coordinator.last_notes_snapshot
-        if notes is None:
-            return
-        with self.perf.span("tui.notes_list.refresh"):
-            self._notes_list.refresh_from_snapshot(notes)
+    def _on_notes_changed(self) -> None:
+        """Notes list changed: resync open note document."""
+        snap = self._coordinator.notes.get_snapshot()
         if (
             self._view == "planning"
             and self._active_document == "note"
-            and self._notes_list.selected_name
+            and snap.selected_name
         ):
             self.run_worker(
-                self._render_note(self._notes_list.selected_name),
+                self._ensure_note_body(snap.selected_name),
                 exclusive=True,
                 group="notedoc",
                 exit_on_error=False,
             )
 
-    def _bridge_reports(self) -> None:
-        reports = self._coordinator.last_reports_snapshot
-        if reports is None:
-            return
-        with self.perf.span("tui.reports_list.refresh"):
-            self._reports_list.refresh_from_snapshot(reports)
+    def _on_reports_changed(self) -> None:
+        """Reports list changed: resync open report document."""
+        snap = self._coordinator.reports.get_snapshot()
         if (
             self._view == "planning"
             and self._active_document == "report"
-            and self._reports_list.selected_name
+            and snap.selected_name
         ):
             self.run_worker(
-                self._render_report(self._reports_list.selected_name),
+                self._ensure_report_body(snap.selected_name),
                 exclusive=True,
                 group="reportdoc",
                 exit_on_error=False,
             )
 
-    def _bridge_escalations(self) -> None:
-        escalations = self._coordinator.last_escalations_snapshot
-        if escalations is None:
-            return
-        with self.perf.span("tui.escalations.refresh"):
-            self._escalations.refresh_from_snapshot(
-                escalations, show=self._escalations_visible
-            )
-
     def _render_all_conversations(self) -> None:
         docs: dict[str, dict[str, object]] = {}
-        crow = self._coordinator.last_crow_snapshot
-        if crow is not None:
-            for entry in entries_from_snapshot(crow):
-                doc = self._coordinator.conversations.doc_for(entry.agent_id)
-                if doc is not None:
-                    docs[entry.agent_id] = doc
+        # Use projected roster entries (store path) instead of raw CrowSnapshot.
+        # entries_from_snapshot is kept for the non-store callers; here we use
+        # the already-projected RosterSnapshot.entries to avoid duplicate work.
+        for entry in self._coordinator.roster.get_snapshot().entries:
+            doc = self._coordinator.conversations.doc_for(entry.agent_id)
+            if doc is not None:
+                docs[entry.agent_id] = doc
         self._crows.set_conversation_docs(docs)
         self._render_planning_chat_from_model()
 
@@ -826,20 +769,19 @@ class MurderApp(App[None]):
         await self._open_report(event.name)
 
     async def _render_plan(self, name: str) -> None:
+        """Render a plan document: set it as selected and ensure its body is loaded.
+
+        The PlanDocument widget is bound to PlansStore and will auto-render when
+        the store notifies (on set_selected and on request_body completing).
+        """
         with self.perf.span("tui.render_plan"):
-            rev = self._plan_revision_map.get(name)
-            cached = self._plan_content_cache.get(name)
-            if cached is not None and rev is not None and cached[0] == rev:
-                with self.perf.span("tui.render_plan.parse"):
-                    await self._plan_doc.set_plan_markdown(name, cached[1])
-                return
+            self._coordinator.plans.set_selected(name)
             with self.perf.span("tui.render_plan.fetch"):
-                display = await self.runtime.get_plan_display(name)
-            if display is None:
-                return
-            self._plan_content_cache[name] = (rev if rev is not None else 0, display.markdown)
-            with self.perf.span("tui.render_plan.parse"):
-                await self._plan_doc.set_plan_markdown(name, display.markdown)
+                await self._coordinator.plans.request_body(name)
+
+    async def _ensure_plan_body(self, name: str) -> None:
+        """Ensure plan body is loaded in the store (re-fetches if evicted)."""
+        await self._coordinator.plans.request_body(name)
 
     async def _open_plan(self, name: str) -> None:
         await self.runtime.reconcile_plan(name)
@@ -849,15 +791,20 @@ class MurderApp(App[None]):
         if code != 0:
             self.notify(f"editor exited with {code}", severity="warning", timeout=5)
         await self.runtime.reconcile_plan(name)
+        # Evict cached body so _render_plan (request_body) re-fetches fresh content.
+        self._coordinator.plans.invalidate_body(name)
         self._refresh_service_views()
         await self._render_plan(name)
 
     async def _render_note(self, name: str) -> None:
+        """Render a note document: set it as selected and ensure its body is loaded."""
         with self.perf.span("tui.render_note"):
-            display = await self.runtime.get_note_display(name)
-            if display is None:
-                return
-            await self._notes_doc.show(name, display.markdown)
+            self._coordinator.notes.set_selected(name)
+            await self._coordinator.notes.request_body(name)
+
+    async def _ensure_note_body(self, name: str) -> None:
+        """Ensure note body is loaded in the store."""
+        await self._coordinator.notes.request_body(name)
 
     async def _open_note(self, name: str) -> None:
         result = await self._submit_command(
@@ -880,16 +827,21 @@ class MurderApp(App[None]):
             self.notify(f"editor exited with {code}", severity="warning", timeout=5)
         if self.runtime.note_sync is not None:
             await self.runtime.note_sync.reconcile_file(path)
+        # Evict cached body so _render_note (request_body) re-fetches fresh content.
+        self._coordinator.notes.invalidate_body(name)
         self._refresh_service_views()
         await self._render_note(name)
         self.set_focus(self._notes_doc)
 
     async def _render_report(self, name: str) -> None:
+        """Render a report document: set it as selected and ensure its body is loaded."""
         with self.perf.span("tui.render_report"):
-            display = await self.runtime.get_report_display(name)
-            if display is None:
-                return
-            await self._report_doc.show(name, display.markdown)
+            self._coordinator.reports.set_selected(name)
+            await self._coordinator.reports.request_body(name)
+
+    async def _ensure_report_body(self, name: str) -> None:
+        """Ensure report body is loaded in the store."""
+        await self._coordinator.reports.request_body(name)
 
     async def _open_report(self, name: str) -> None:
         path = await self.runtime.report_path_for(name)
@@ -897,6 +849,8 @@ class MurderApp(App[None]):
             code = self.runtime.open_editor_blocking(path, self._user_config.tui.editor)
         if code != 0:
             self.notify(f"editor exited with {code}", severity="warning", timeout=5)
+        # Evict cached body so _render_report (request_body) re-fetches fresh content.
+        self._coordinator.reports.invalidate_body(name)
         self._refresh_service_views()
         await self._render_report(name)
         self.set_focus(self._report_doc)

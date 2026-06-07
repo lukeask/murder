@@ -1156,6 +1156,9 @@ class CrowsView(StoreComponent, Container):
         if self._prefs_path is not None:
             self._roster.set_prefs_path(self._prefs_path)
         self._apply_mode()
+        # StoreComponent.on_mount is dispatched separately by Textual's MRO
+        # event dispatch. The explicit super().on_mount() call is omitted here
+        # to keep this method focused on CrowsView-specific mount logic.
 
     def refresh_from_snapshot(self, snapshot: RosterSnapshot) -> None:
         """Render sink for the StoreComponent store-subscribe path.

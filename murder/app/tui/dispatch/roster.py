@@ -58,12 +58,10 @@ def _checklist_to_lines(snapshot: dict[str, Any]) -> str:
 class ScheduleTicketsTable(StoreComponent, DataTable):
     """Tickets on the critical path with YAML metadata sync state visible.
 
-    StoreComponent binding (optional during bridge migration):
-        bind_stores(schedule=schedule_store)
-
-    When bound, self-subscribes on mount and reads ScheduleStoreSnapshot
-    (duck-type compatible with ScheduleSnapshot; ``sorted_rows`` is used when
-    present to skip the per-render sort, which moved store-side).
+    Parent-cascade pattern: DispatchView is bound to the schedule store and
+    forwards the snapshot via refresh_from_snapshot().  This widget is NOT
+    independently bound; it renders on demand from the parent cascade.
+    ``sorted_rows`` in the snapshot (moved store-side) skips the per-render sort.
     """
 
     DEFAULT_CSS = """

@@ -21,13 +21,12 @@ UsageDrillInLoader = Callable[..., Awaitable[UsageGaugeDrillInSnapshot]]
 class DispatchView(StoreComponent, Vertical):
     """Command-centre: mode strip, ticket roster, usage, gauges, and calendar.
 
-    StoreComponent binding (optional during bridge migration):
-        bind_stores(schedule=schedule_store)
-
-    When bound, self-subscribes on mount and cascades the ScheduleStoreSnapshot
-    (duck-type compatible with ScheduleSnapshot) to each child widget.
-    The cascade (→children) is preserved: DispatchView is the single subscriber
-    and children receive the snapshot via the existing refresh_from_snapshot call.
+    StoreComponent binding: bind_stores(schedule=schedule_store)
+    Bound by DefaultLayout before compose; self-subscribes on mount and cascades
+    the ScheduleStoreSnapshot (duck-type compatible with ScheduleSnapshot) to
+    each child widget.  Children (ModeStrip, GaugeStrip, ScheduleTicketsTable,
+    CalendarPanel) use the parent-cascade pattern — they are NOT independently
+    bound and render on demand from this widget's refresh_from_snapshot call.
     """
 
     DEFAULT_CSS = """

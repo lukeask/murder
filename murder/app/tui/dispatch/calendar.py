@@ -20,11 +20,9 @@ from murder.app.tui.components import StoreComponent
 class CalendarPanel(StoreComponent, DataTable):
     """In-flight and user-scheduled ticket calendar.
 
-    StoreComponent binding (optional during bridge migration):
-        bind_stores(schedule=schedule_store)
-
-    When bound, self-subscribes on mount and reads ScheduleStoreSnapshot
-    (duck-type compatible with ScheduleSnapshot for calendar fields).
+    Parent-cascade pattern: DispatchView is bound to the schedule store and
+    forwards the snapshot via refresh_from_snapshot().  This widget is NOT
+    independently bound; it renders on demand from the parent cascade.
     """
 
     DEFAULT_CSS = """
