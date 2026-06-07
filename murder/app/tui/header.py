@@ -220,25 +220,15 @@ class Header(StoreComponent, Static):
         crow_snapshot: CrowSnapshot | None = None,
         usage_gauges: tuple[UsageGaugeSummary, ...] | None = None,
     ) -> None:
-        """Render from a dispatch snapshot.
+        """Render from a dispatch snapshot (bridge/cascade path).
 
-        Accepts both the raw DispatchSnapshot (bridge path) and a
-        DispatchStoreSnapshot (self-subscribe path).  The store snapshot
-        carries pre-computed ``attention_counts``; the raw snapshot's counts
-        are computed here for bridge compatibility.
+        The snapshot is expected to carry pre-computed ``attention_counts``.
+        Header's primary render path is _render_from_stores(), which reads three
+        stores directly; this method is kept for the parent-cascade pattern.
         """
-        # Use pre-computed counts if available (store snapshot path); otherwise
-        # compute them from tickets (bridge path with raw DispatchSnapshot).
-        pre_counts = getattr(snapshot, "attention_counts", None)
-        if pre_counts is not None:
-            self._counts = dict(pre_counts)
-        else:
-            counts = {s: 0 for s in _ATTENTION_STATUSES}
-            for ticket in snapshot.tickets:
-                key = ticket.status.value
-                if key in counts:
-                    counts[key] += 1
-            self._counts = counts
+        counts = getattr(snapshot, "attention_counts", None)
+        if counts is not None:
+            self._counts = dict(counts)
         if crow_snapshot is not None:
             self._crow_snapshot = crow_snapshot
         if usage_gauges is not None:
