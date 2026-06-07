@@ -38,9 +38,11 @@ from murder.app.tui.live_log import LiveRichLog
 from murder.app.tui.pane_capture import CapturePaneFn, PaneCaptureError
 from murder.app.tui.pane_mirror import PaneMirror
 from murder.app.tui.perf_log import PerfLog
+from murder.app.tui.components.base import StoreComponent
 from murder.app.tui.stores.roster import (
     CrowDisplayLabels,
     CrowEntry,
+    RosterSnapshot,
     _crow_display_labels,
     crow_title_label,
     entries_from_snapshot,
@@ -1052,8 +1054,17 @@ class TailWall(Grid):
         return list(self._order)
 
 
-class CrowsView(Container):
-    """Crows place — wall mode + enlarged mode."""
+class CrowsView(StoreComponent, Container):
+    """Crows place — wall mode + enlarged mode.
+
+    Implements the StoreComponent mixin so it can self-subscribe to
+    :class:`~murder.app.tui.stores.roster.RosterStore` when a store is bound
+    (Phase 2 layout path).  When no store is bound the component stays
+    bridge-driven via ``render_from_snapshot`` (Phase 1 bridge path).
+
+    Both paths converge on ``_render_entries`` so the render logic is shared
+    and idempotent.
+    """
 
     DEFAULT_CSS = """
     CrowsView {
@@ -1146,10 +1157,29 @@ class CrowsView(Container):
             self._roster.set_prefs_path(self._prefs_path)
         self._apply_mode()
 
+    def refresh_from_snapshot(self, snapshot: RosterSnapshot) -> None:
+        """Render sink for the StoreComponent store-subscribe path.
+
+        Called by ``_on_store_change`` (via the mixin) with a fully projected
+        :class:`RosterSnapshot` whose ``entries`` are already filtered/sorted.
+        Delegates to ``_render_entries`` so both the store and bridge paths
+        share the same render logic.
+        """
+        self._render_entries(list(snapshot.entries), snapshot.invalidation_key)
+
     def render_from_snapshot(self, snapshot: CrowSnapshot) -> None:
-        """Reconcile the wall from a service snapshot."""
-        self._invalidation_key = snapshot.invalidation_key
+        """Bridge path: reconcile the wall from a raw service snapshot.
+
+        This is kept for backward compatibility while the coordinator bridge
+        still feeds raw snapshots.  Projects the snapshot using
+        ``entries_from_snapshot`` then delegates to ``_render_entries``.
+        """
         entries = entries_from_snapshot(snapshot)
+        self._render_entries(entries, snapshot.invalidation_key)
+
+    def _render_entries(self, entries: list[CrowEntry], invalidation_key: str) -> None:
+        """Shared render core — idempotent; safe to call from either path."""
+        self._invalidation_key = invalidation_key
         self._entries_by_id = {e.agent_id: e for e in entries}
         self._roster.reconcile(entries)
         wall_entries = self._visible_wall_entries()
