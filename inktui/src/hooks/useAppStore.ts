@@ -39,3 +39,19 @@ export function useAppStore<T>(
   }
   return useStoreWithEqualityFn(store, selector, equality);
 }
+
+/**
+ * Return the raw {@link AppStoreApi} handle (not a subscribed selection). For the rare consumer that
+ * needs imperative `getState()`/`setState` access outside React's render-subscribe cycle — e.g. a
+ * C7M *mode* factory, which is plain data (not a component) and reads slice state inside its
+ * `onIntent`/`onUncaptured` handlers. Components that render off the store use {@link useAppStore}
+ * instead; reach for this only when there is no component to subscribe (rule 1 still holds — the
+ * mode dispatches actions, never the bus). Throws if used outside an {@link AppStoreProvider}.
+ */
+export function useAppStoreApi(): AppStoreApi {
+  const store = useContext(AppStoreContext);
+  if (store === null) {
+    throw new Error('useAppStoreApi must be used within an <AppStoreProvider>.');
+  }
+  return store;
+}

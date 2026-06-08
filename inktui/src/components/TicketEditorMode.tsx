@@ -18,98 +18,99 @@
  * means panels stay visible (inlayout mode), not a full vim clone. Implemented here with
  * normal/insert modes, line navigation, character insert/delete, and checklist toggle.
  *
- * ## Design (the in-layout C7M mode recipe)
+ * ## Design (the in-layout C7M mode recipe — ONE input owner, rule 5)
  *
- * 1. **Declare a Mode** — `ticketEditorMode(modes, options)` builds a {@link Mode} with
- *    `presentation: 'inlayout'`, a keymap for save/dismiss, and a `render` thunk.
+ * 1. **Declare a Mode** — `ticketEditorMode(modes, store, options)` builds a {@link Mode} with
+ *    `presentation: 'inlayout'`, a declared keymap for the special keys (esc/ctrl+s/tab/return/
+ *    backspace/arrows), an `onUncaptured` for printable chars + vim command letters, and a `render`
+ *    thunk over a pure component.
  * 2. **Enter it** — `TicketsPanel`'s `'open'` intent calls `modes.enter(ticketEditorMode(...))`.
  *    This saves the current focus; the dispatcher's layer 0 captures all keys for the mode.
- * 3. **Text input via a second `useInput`** — the mode's declared keymap handles `esc` (dismiss)
- *    and `ctrl+s` (save+dismiss). The editor surface's own `useInput` handles printable text and
- *    vim navigation. Ink supports multiple `useInput` hooks in parallel — layer 0's "swallow"
- *    only prevents lower *layers* (global chords, panel keymaps) from firing; it cannot un-call
- *    an independent `useInput`. The editor's handler ignores `esc`/`ctrl+s` (those are handled
- *    exactly once via `onIntent`) so no double-handling occurs.
+ * 3. **Text input via the ONE root dispatcher** — there is NO second `useInput` here. Every key the
+ *    editor handles arrives through the single root dispatcher (rule 5): a matching declared chord
+ *    fires the mode's `onIntent`; any other key is offered to the mode's `onUncaptured` (the C12
+ *    dispatcher extension) before the dispatcher's swallow decision. The editor's vim mode, cursor
+ *    line, pending-`d`, and schedule-field focus are mutable state in this factory's closure (NOT
+ *    React state) — exactly the {@link ./NewPlanModal.js} modal pattern — mutated by the handlers,
+ *    then `refresh()` re-enters the mode id to re-render. The editable body itself lives in the
+ *    `ticketDetail` store slice and is mutated only through its actions (rule 3).
  * 4. **Dismiss restores focus** — `onIntent` calls `modes.exit(id)`, the primitive's job.
  *
  * ## Vim modes
  *
- * NORMAL mode: cursor-line navigation (`j`/`k`), `i` → INSERT, `dd` → delete line,
+ * NORMAL mode: cursor-line navigation (`j`/`k` or arrows), `i` → INSERT, `dd` → delete line,
  *   `x` → toggle checklist item on cursor line, `q` → discard (Esc also dismisses),
- *   `ctrl+s` → save (also in INSERT).
+ *   `ctrl+s` → save (also in INSERT), `tab` → focus the schedule field.
  * INSERT mode: printable chars appended to cursor line; `Backspace` → delete last char;
- *   `Return` → new line after cursor; `Esc` → back to NORMAL (Esc here means "back to normal",
- *   not "discard" — discard requires NORMAL `q` or the mode's Esc chord from NORMAL).
+ *   `Return` → new line after cursor; `Esc` → dismiss (the mode's Esc chord). The editor does not
+ *   distinguish "Esc back to NORMAL" from "Esc discard" — Esc is the mode's declared dismiss chord.
  *
  * ## What this is the reference for (C12 plan/note editors)
  *
  * C12 builds the plan and note editors by copying this file. The in-layout mode pattern (declare
- * Mode → enter() from panel → editor captures input → save/dismiss → focus restored) is the
- * copyable artifact. The vim editor surface below replaces `ConfirmDialog` as the render content.
- * The mode's keymap + onIntent is identical in shape to `confirmMode`; the editor adds its own
- * `useInput` for text capture.
+ * Mode → enter() from panel → keymap+onUncaptured capture all input → save/dismiss → focus
+ * restored) is the copyable artifact. The mode's keymap + onIntent + onUncaptured is identical in
+ * shape to {@link ./NewPlanModal.js}; the editor adds vim mode/cursor closure state.
  */
 
-import { Box, Text, useInput } from 'ink';
-import { type JSX, useCallback, useState } from 'react';
-import { shallow } from 'zustand/shallow';
-import { useAppStore } from '../hooks/useAppStore.js';
+import type { Key } from 'ink';
+import { Box, Text } from 'ink';
+import { type JSX, useCallback } from 'react';
+import { useAppStore, useAppStoreApi } from '../hooks/useAppStore.js';
 import { useInputStores } from '../hooks/useInputStores.js';
 import type { Mode, ModeStoreApi } from '../input/modeStore.js';
+import type { AppStoreApi } from '../store/store.js';
+import type { TicketFrontmatter } from '../store/ticketDetail/ticketDetailSlice.js';
+
+// Import the dispatcher augmentation so Mode gets the `onUncaptured` field at the TS level.
+// The augmentation is declared in dispatcher.ts; importing it brings the declaration into scope.
+import '../input/dispatcher.js';
 
 // ── Mode declaration ────────────────────────────────────────────────────────────────────────────
 
-/** The editor mode's intent union — save or dismiss, exactly as `confirmMode`. */
-type EditorIntent = 'save' | 'dismiss';
+/**
+ * The editor mode's intent union — the special keys the declared keymap routes. Printable
+ * characters and the vim command letters (`j`/`k`/`i`/`x`/`d`/`q`) are NOT here: they flow through
+ * `onUncaptured`, because what they do is context-dependent on the vim mode (a `j` is navigation in
+ * NORMAL but a literal character in INSERT), which a static keymap cannot express.
+ */
+type EditorIntent =
+  | 'save'
+  | 'dismiss'
+  | 'navUp'
+  | 'navDown'
+  | 'newline'
+  | 'backspace'
+  | 'toggleSchedule';
 
 /** Stable mode id so re-entry is idempotent (the modeStore pattern). */
 const EDITOR_MODE_ID = 'ticket-editor';
 
 /** What the caller supplies to open the editor. */
 export interface TicketEditorModeOptions {
-  /** Called when the user saves (ctrl+s). The action layer (via `useAppStore`) does the bus call. */
+  /** Called when the user saves (ctrl+s). The action layer (via the store) does the bus call. */
   readonly onSave: () => void;
-  /** Called when the user dismisses without saving (Esc from NORMAL, `q`). */
+  /** Called when the user dismisses without saving (Esc, `q`). */
   readonly onDiscard: () => void;
 }
 
-/**
- * Build the ticket editor {@link Mode}. `presentation: 'inlayout'` keeps surrounding panels
- * visible (no `$EDITOR`-blank). The mode's keymap handles save/dismiss; the editor surface's own
- * `useInput` handles text editing. Pass the `modes` store so the mode can `exit` itself.
- *
- * C12 copies this function to build plan/note editors — swap `render` and the mode `id`.
- */
-export function ticketEditorMode(
-  modes: ModeStoreApi,
-  options: TicketEditorModeOptions,
-): Mode<EditorIntent> {
-  return {
-    id: EDITOR_MODE_ID,
-    presentation: 'inlayout',
-    // No passThrough: the editor captures everything. Panel chords do NOT fire underneath.
-    keymap: [
-      { chord: { key: { escape: true } }, intent: 'dismiss', description: 'discard & close' },
-      { chord: { input: 's', key: { ctrl: true } }, intent: 'save', description: 'save & close' },
-    ],
-    onIntent(intent) {
-      // Exit first (restores focus), then run the caller's handler — identical to confirmMode's
-      // "exit-then-act" contract so a save that opens another mode stacks correctly.
-      modes.getState().exit(EDITOR_MODE_ID);
-      if (intent === 'save') {
-        options.onSave();
-      } else {
-        options.onDiscard();
-      }
-    },
-    render: () => <TicketEditorSurface modes={modes} options={options} />,
-  };
-}
-
-// ── Editor surface ──────────────────────────────────────────────────────────────────────────────
-
 /** Vim editing modes. NORMAL: navigate + commands; INSERT: type text. */
 type VimMode = 'normal' | 'insert';
+
+/**
+ * Mutable local state inside the mode closure. Not React state — the mode is plain data (the
+ * {@link ./NewPlanModal.js} pattern). Mutated in `onIntent`/`onUncaptured`; `render` reads it at
+ * call time. The editable body is NOT here — it lives in the `ticketDetail` store slice and is read
+ * via the store handle / mutated via its actions (rule 3).
+ */
+interface EditorUiState {
+  vimMode: VimMode;
+  cursorLine: number;
+  /** Pending `d` for `dd` (delete-line) detection. */
+  pendingD: boolean;
+  /** When true, keystrokes edit the schedule duration field instead of the body. */
+  scheduleFocused: boolean;
+}
 
 /** Split a body string into lines. Always returns at least one element. */
 function toLines(body: string): string[] {
@@ -138,195 +139,275 @@ function isChecklistLine(line: string): boolean {
 }
 
 /**
- * The editor surface. A pure-function-of-state component (rule 1): reads the `ticketDetail` slice
- * for the body/frontmatter to display, and dispatches `setEditedBody`/`setScheduleInput` actions
- * as the user types (rule 3 — state mutations only through actions). Renders inside the Overlay's
- * inlayout slot, so surrounding panels stay visible above.
+ * Build the ticket editor {@link Mode}. `presentation: 'inlayout'` keeps surrounding panels
+ * visible (no `$EDITOR`-blank). The mode is the SINGLE input owner (rule 5): its keymap handles the
+ * special keys and its `onUncaptured` handles printable chars + vim commands — there is no second
+ * `useInput`. Pass `modes` (for self-dismiss) and the `store` handle (to read the body slice and
+ * dispatch its actions inside the handlers; rule 3 — the mode dispatches actions, never the bus).
+ *
+ * C12 copies this function to build plan/note editors — swap `render`, the mode `id`, and the
+ * body-bearing slice.
  */
-function TicketEditorSurface({
-  modes,
-  options,
-}: {
-  readonly modes: ModeStoreApi;
-  readonly options: TicketEditorModeOptions;
-}): JSX.Element {
-  // Rule 1: read exactly the ticketDetail slice (shallow).
-  const detail = useAppStore((s) => s.ticketDetail, shallow);
-  // Rule 3: actions are the only view→bus path.
-  const setEditedBody = useAppStore((s) => s.actions.ticketDetail.setEditedBody);
-  const setScheduleInput = useAppStore((s) => s.actions.ticketDetail.setScheduleInput);
+export function ticketEditorMode(
+  modes: ModeStoreApi,
+  store: AppStoreApi,
+  options: TicketEditorModeOptions,
+): Mode<EditorIntent> {
+  const id = EDITOR_MODE_ID;
 
-  // Local vim state: current mode and cursor line.
-  const [vimMode, setVimMode] = useState<VimMode>('normal');
-  const [cursorLine, setCursorLine] = useState(0);
-  // Pending `d` for `dd` command detection.
-  const [pendingD, setPendingD] = useState(false);
-  // Schedule input focus toggle (tab to move between body and schedule field).
-  const [scheduleFocused, setScheduleFocused] = useState(false);
+  // Mutable UI state in the closure — not React state (the mode is plain data, like NewPlanModal).
+  const ui: EditorUiState = {
+    vimMode: 'normal',
+    cursorLine: 0,
+    pendingD: false,
+    scheduleFocused: false,
+  };
 
-  const lines = detail.editedBody !== null ? toLines(detail.editedBody) : [];
-  const clampedCursor = lines.length === 0 ? 0 : Math.min(cursorLine, lines.length - 1);
+  // Re-render by poking the mode store: re-enter the same id (idempotent focus, new stack ref).
+  function refresh(): void {
+    const current = modes.getState().stack.find((f) => f.mode.id === id);
+    if (current !== undefined) {
+      modes.getState().enter(current.mode);
+    }
+  }
 
-  const updateBody = useCallback(
-    (newLines: readonly string[]) => {
-      setEditedBody(fromLines(newLines));
-    },
-    [setEditedBody],
-  );
+  // Slice/action accessors — read the body from the slice, write via actions (rule 3).
+  const detail = () => store.getState().ticketDetail;
+  const acts = () => store.getState().actions.ticketDetail;
 
-  // The editor's own useInput — handles text editing independently of the mode's keymap.
-  // The mode's layer 0 swallows keys at the dispatcher level, preventing panel/global handlers
-  // from firing; this handler runs in parallel and captures raw character input.
-  // IMPORTANT: Esc and ctrl+s are handled via the mode's onIntent (they fire exactly once,
-  // through the mode keymap). This handler ignores them to prevent double-handling.
-  useInput(
-    (inputChar, key) => {
-      // Ignore esc and ctrl+s — those are handled by the mode's declared keymap / onIntent.
-      if (key.escape || (key.ctrl && inputChar === 's')) {
-        return;
-      }
+  /** Current body lines (empty when nothing loaded), and the cursor clamped into range. */
+  function bodyLines(): string[] {
+    const body = detail().editedBody;
+    return body !== null ? toLines(body) : [];
+  }
+  function clampedCursor(lines: readonly string[]): number {
+    return lines.length === 0 ? 0 : Math.min(ui.cursorLine, lines.length - 1);
+  }
+  function writeBody(lines: readonly string[]): void {
+    acts().setEditedBody(fromLines(lines));
+  }
 
-      // Schedule field: if focused, handle input in the duration field.
-      if (scheduleFocused) {
-        if (key.return) {
-          // Enter submits schedule (blur the field).
-          setScheduleFocused(false);
-          return;
-        }
-        if (key.backspace || key.delete) {
-          const current = detail.scheduleInput;
-          setScheduleInput(current.length > 0 ? current.slice(0, -1) : '');
-          return;
-        }
-        if (key.tab) {
-          setScheduleFocused(false);
-          return;
-        }
-        // Printable chars in schedule field.
-        if (!key.ctrl && !key.meta && inputChar.length === 1) {
-          setScheduleInput(detail.scheduleInput + inputChar);
-          return;
-        }
-        return;
-      }
-
-      // Tab: toggle to schedule field.
-      if (key.tab) {
-        setScheduleFocused(true);
-        return;
-      }
-
-      if (vimMode === 'insert') {
-        // INSERT mode: printable chars, backspace, enter.
-        if (key.return) {
-          // New line after cursor.
-          const newLines = [...lines];
-          newLines.splice(clampedCursor + 1, 0, '');
-          updateBody(newLines);
-          setCursorLine(clampedCursor + 1);
-          return;
-        }
-        if (key.backspace || key.delete) {
-          if (lines.length === 0) {
-            return;
-          }
-          const line = lines[clampedCursor] ?? '';
-          if (line.length > 0) {
-            const newLines = [...lines];
-            newLines[clampedCursor] = line.slice(0, -1);
-            updateBody(newLines);
-          } else if (lines.length > 1 && clampedCursor > 0) {
-            // Merge with previous line on backspace at start of empty line.
-            const newLines = [...lines];
-            newLines.splice(clampedCursor, 1);
-            updateBody(newLines);
-            setCursorLine(clampedCursor - 1);
-          }
-          return;
-        }
-        if (!key.ctrl && !key.meta && inputChar.length === 1) {
-          const newLines = [...lines];
-          const line = lines[clampedCursor] ?? '';
-          newLines[clampedCursor] = line + inputChar;
-          updateBody(newLines);
-          return;
-        }
-        // Esc in INSERT → back to NORMAL (not dismiss — dismiss is NORMAL 'q' or the mode's Esc chord).
-        // But the mode's keymap already handles Esc via onIntent('dismiss') — so this path never
-        // fires. The editor intentionally defers to the mode for Esc (key.escape is filtered above).
-        return;
-      }
-
-      // NORMAL mode commands.
-      // j/k: line navigation.
-      if (inputChar === 'j' || key.downArrow) {
-        setCursorLine(Math.min(clampedCursor + 1, Math.max(lines.length - 1, 0)));
-        setPendingD(false);
-        return;
-      }
-      if (inputChar === 'k' || key.upArrow) {
-        setCursorLine(Math.max(clampedCursor - 1, 0));
-        setPendingD(false);
-        return;
-      }
-      // i: enter INSERT mode.
-      if (inputChar === 'i') {
-        setVimMode('insert');
-        setPendingD(false);
-        return;
-      }
-      // x: toggle checklist item on cursor line.
-      if (inputChar === 'x') {
-        if (lines.length === 0) {
-          return;
-        }
-        const line = lines[clampedCursor];
+  // ── NORMAL-mode command letters (j/k/i/x/dd/q). Returns true if the char was a command. ──
+  function handleNormalCommand(input: string): boolean {
+    const lines = bodyLines();
+    const cursor = clampedCursor(lines);
+    switch (input) {
+      case 'j':
+        ui.cursorLine = Math.min(cursor + 1, Math.max(lines.length - 1, 0));
+        ui.pendingD = false;
+        return true;
+      case 'k':
+        ui.cursorLine = Math.max(cursor - 1, 0);
+        ui.pendingD = false;
+        return true;
+      case 'i':
+        ui.vimMode = 'insert';
+        ui.pendingD = false;
+        return true;
+      case 'x': {
+        const line = lines[cursor];
         if (line !== undefined && isChecklistLine(line)) {
-          const newLines = [...lines];
-          newLines[clampedCursor] = toggleChecklist(line);
-          updateBody(newLines);
+          const next = [...lines];
+          next[cursor] = toggleChecklist(line);
+          writeBody(next);
         }
-        setPendingD(false);
-        return;
+        ui.pendingD = false;
+        return true;
       }
-      // dd: delete current line.
-      if (inputChar === 'd') {
-        if (pendingD) {
-          // Second 'd': execute delete.
-          if (lines.length === 0) {
-            setPendingD(false);
+      case 'd': {
+        if (ui.pendingD) {
+          // Second 'd': delete the cursor line.
+          if (lines.length > 0) {
+            const next = [...lines];
+            next.splice(cursor, 1);
+            if (next.length === 0) {
+              next.push('');
+            }
+            writeBody(next);
+            ui.cursorLine = Math.min(cursor, next.length - 1);
+          }
+          ui.pendingD = false;
+        } else {
+          ui.pendingD = true;
+        }
+        return true;
+      }
+      case 'q':
+        // Discard: exit the mode then run the caller's discard handler (exit-then-act).
+        modes.getState().exit(id);
+        options.onDiscard();
+        ui.pendingD = false;
+        return true;
+      default:
+        // Any other key clears a pending 'd' but is not a command (let it be swallowed).
+        ui.pendingD = false;
+        return false;
+    }
+  }
+
+  /** INSERT-mode printable character: append to the cursor line. Returns true (always consumed). */
+  function handleInsertChar(input: string): boolean {
+    const lines = bodyLines();
+    const cursor = clampedCursor(lines);
+    const next = lines.length === 0 ? [''] : [...lines];
+    const line = next[cursor] ?? '';
+    next[cursor] = line + input;
+    writeBody(next);
+    return true;
+  }
+
+  const mode: Mode<EditorIntent> = {
+    id,
+    presentation: 'inlayout',
+    // No passThrough: the editor captures everything. Panel/global chords do NOT fire underneath.
+    keymap: [
+      // Dismiss / save — handled identically to confirmMode.
+      { chord: { key: { escape: true } }, intent: 'dismiss', description: 'discard & close' },
+      { chord: { input: 's', key: { ctrl: true } }, intent: 'save', description: 'save & close' },
+      // Tab toggles the schedule field focus.
+      { chord: { key: { tab: true } }, intent: 'toggleSchedule', description: 'schedule field' },
+      // Arrow navigation (NORMAL line nav; mirrors j/k).
+      { chord: { key: { upArrow: true } }, intent: 'navUp', description: 'line up' },
+      { chord: { key: { downArrow: true } }, intent: 'navDown', description: 'line down' },
+      // Backspace deletes left (in INSERT body or the schedule field).
+      { chord: { key: { backspace: true } }, intent: 'backspace', description: 'delete char' },
+      { chord: { key: { delete: true } }, intent: 'backspace', description: 'delete char' },
+      // Return: new line (INSERT body) or submit (schedule field).
+      { chord: { key: { return: true } }, intent: 'newline', description: 'new line / submit' },
+    ],
+    onIntent(intent) {
+      switch (intent) {
+        case 'save':
+          // Exit first (restores focus), then run the caller's handler — confirmMode's
+          // "exit-then-act" contract so a save that opens another mode stacks correctly.
+          modes.getState().exit(id);
+          options.onSave();
+          return;
+        case 'dismiss':
+          modes.getState().exit(id);
+          options.onDiscard();
+          return;
+        case 'toggleSchedule':
+          ui.scheduleFocused = !ui.scheduleFocused;
+          ui.pendingD = false;
+          refresh();
+          return;
+        case 'navUp':
+          if (!ui.scheduleFocused) {
+            ui.cursorLine = Math.max(clampedCursor(bodyLines()) - 1, 0);
+            ui.pendingD = false;
+            refresh();
+          }
+          return;
+        case 'navDown':
+          if (!ui.scheduleFocused) {
+            const lines = bodyLines();
+            ui.cursorLine = Math.min(clampedCursor(lines) + 1, Math.max(lines.length - 1, 0));
+            ui.pendingD = false;
+            refresh();
+          }
+          return;
+        case 'backspace': {
+          if (ui.scheduleFocused) {
+            const current = detail().scheduleInput;
+            acts().setScheduleInput(current.length > 0 ? current.slice(0, -1) : '');
+            refresh();
             return;
           }
-          const newLines = [...lines];
-          newLines.splice(clampedCursor, 1);
-          if (newLines.length === 0) {
-            newLines.push('');
+          if (ui.vimMode !== 'insert') {
+            return; // Backspace is a no-op in NORMAL.
           }
-          updateBody(newLines);
-          setCursorLine(Math.min(clampedCursor, newLines.length - 1));
-          setPendingD(false);
-        } else {
-          setPendingD(true);
+          const lines = bodyLines();
+          if (lines.length === 0) {
+            return;
+          }
+          const cursor = clampedCursor(lines);
+          const line = lines[cursor] ?? '';
+          if (line.length > 0) {
+            const next = [...lines];
+            next[cursor] = line.slice(0, -1);
+            writeBody(next);
+          } else if (lines.length > 1 && cursor > 0) {
+            // Merge with previous line on backspace at start of empty line.
+            const next = [...lines];
+            next.splice(cursor, 1);
+            writeBody(next);
+            ui.cursorLine = cursor - 1;
+          }
+          refresh();
+          return;
         }
-        return;
+        case 'newline': {
+          if (ui.scheduleFocused) {
+            // Enter submits the schedule field (blur it).
+            ui.scheduleFocused = false;
+            refresh();
+            return;
+          }
+          if (ui.vimMode !== 'insert') {
+            return; // Return is a no-op in NORMAL (no command bound to it).
+          }
+          const lines = bodyLines();
+          const cursor = clampedCursor(lines);
+          const next = lines.length === 0 ? [''] : [...lines];
+          next.splice(cursor + 1, 0, '');
+          writeBody(next);
+          ui.cursorLine = cursor + 1;
+          refresh();
+          return;
+        }
+        default:
+          return intent satisfies never;
       }
-      // q: discard (calls onDiscard via onIntent path — we exit the mode here directly).
-      if (inputChar === 'q') {
-        modes.getState().exit(EDITOR_MODE_ID);
-        options.onDiscard();
-        setPendingD(false);
-        return;
-      }
-      // Esc in NORMAL: already handled by mode's keymap → onIntent('dismiss').
-      // Any other key clears pending 'd'.
-      setPendingD(false);
     },
-    // isActive: always true while the mode is up (this component only renders while the mode is active).
-    { isActive: true },
-  );
+    // onUncaptured: the single path for printable chars + vim command letters (C12 dispatcher
+    // extension). The dispatcher calls this when the declared keymap has no match. We reject
+    // modified/empty keys (those are not characters we own) and route the rest by context.
+    onUncaptured(input: string, key: Key): boolean {
+      if (input.length === 0 || key.ctrl || key.meta || key.escape) {
+        return false; // not a printable char we handle — let the dispatcher swallow it.
+      }
+      // Schedule field: every printable char appends to the duration string.
+      if (ui.scheduleFocused) {
+        acts().setScheduleInput(detail().scheduleInput + input);
+        refresh();
+        return true;
+      }
+      // INSERT: append to the body line. NORMAL: interpret as a vim command letter.
+      const handled =
+        ui.vimMode === 'insert' ? handleInsertChar(input) : handleNormalCommand(input);
+      // Even an un-mapped NORMAL key (handled === false) is still ours to swallow: refresh so the
+      // pending-'d' clear is reflected, and return true to keep exclusive capture.
+      refresh();
+      return handled || ui.vimMode === 'normal';
+    },
+    render: () => <TicketEditorSurface ui={ui} />,
+  };
 
-  const { frontmatter, status, error, scheduleInput, scheduleValid } = detail;
-  const hasUnsavedChanges = detail.editedBody !== detail.savedBody;
+  return mode;
+}
+
+// ── Editor surface (pure presentation) ───────────────────────────────────────────────────────────
+
+/**
+ * The editor surface — a pure function of the `ticketDetail` slice plus the mode's `ui` closure
+ * state (rule 1: no input capture here; the mode owns all input). It reads the slice for the body/
+ * frontmatter and the closure for vim mode / cursor / schedule focus, and draws inside the
+ * Overlay's inlayout slot so surrounding panels stay visible above.
+ */
+function TicketEditorSurface({ ui }: { readonly ui: EditorUiState }): JSX.Element {
+  // Rule 1: read exactly the ticketDetail slice for the rendered body/frontmatter/status.
+  const editedBody = useAppStore((s) => s.ticketDetail.editedBody);
+  const savedBody = useAppStore((s) => s.ticketDetail.savedBody);
+  const frontmatter = useAppStore((s) => s.ticketDetail.frontmatter);
+  const status = useAppStore((s) => s.ticketDetail.status);
+  const error = useAppStore((s) => s.ticketDetail.error);
+  const scheduleInput = useAppStore((s) => s.ticketDetail.scheduleInput);
+  const scheduleValid = useAppStore((s) => s.ticketDetail.scheduleValid);
+
+  const lines = editedBody !== null ? toLines(editedBody) : [];
+  const cursor = lines.length === 0 ? 0 : Math.min(ui.cursorLine, lines.length - 1);
+  const hasUnsavedChanges = editedBody !== savedBody;
 
   return (
     <Box
@@ -343,15 +424,7 @@ function TicketEditorSurface({
           {'[editor]'}
         </Text>
         {frontmatter !== null ? (
-          <>
-            <Text bold>{frontmatter.title}</Text>
-            {frontmatter.harness !== null && (
-              <Text dimColor>{`harness:${frontmatter.harness}`}</Text>
-            )}
-            {frontmatter.model !== null && <Text dimColor>{`model:${frontmatter.model}`}</Text>}
-            {frontmatter.deps !== '' && <Text dimColor>{`deps:${frontmatter.deps}`}</Text>}
-            {frontmatter.worktree !== null && <Text dimColor>{`wt:${frontmatter.worktree}`}</Text>}
-          </>
+          <EditorHeader frontmatter={frontmatter} />
         ) : (
           <Text dimColor>loading…</Text>
         )}
@@ -365,10 +438,10 @@ function TicketEditorSurface({
 
       {/* Vim mode indicator */}
       <Box flexDirection="row" columnGap={2}>
-        <Text color={vimMode === 'insert' ? 'green' : 'yellow'}>
-          {vimMode === 'insert' ? '-- INSERT --' : '-- NORMAL --'}
+        <Text color={ui.vimMode === 'insert' ? 'green' : 'yellow'}>
+          {ui.vimMode === 'insert' ? '-- INSERT --' : '-- NORMAL --'}
         </Text>
-        {pendingD && <Text dimColor>{'d_'}</Text>}
+        {ui.pendingD && <Text dimColor>{'d_'}</Text>}
       </Box>
 
       {/* Body editor: lines with cursor highlight */}
@@ -377,27 +450,27 @@ function TicketEditorSurface({
           <Text dimColor>{'(empty body)'}</Text>
         ) : (
           lines.map((line, index) => {
-            const selected = index === clampedCursor;
+            const selected = index === cursor;
             const isChecklist = isChecklistLine(line);
             const checklistDone = isChecklist && /\[x\]/.test(line);
             return (
               // biome-ignore lint/suspicious/noArrayIndexKey: body lines are position-keyed by design (duplicate content is normal in markdown; index IS the stable identity).
               <Box key={index} flexDirection="row">
-                <Text inverse={selected && vimMode === 'normal'}>{selected ? '▌' : ' '}</Text>
+                <Text inverse={selected && ui.vimMode === 'normal'}>{selected ? '▌' : ' '}</Text>
                 {isChecklist ? (
                   checklistDone ? (
                     <Text
-                      inverse={selected && vimMode === 'normal'}
+                      inverse={selected && ui.vimMode === 'normal'}
                       color="green"
                       dimColor={!selected}
                     >
                       {line}
                     </Text>
                   ) : (
-                    <Text inverse={selected && vimMode === 'normal'}>{line}</Text>
+                    <Text inverse={selected && ui.vimMode === 'normal'}>{line}</Text>
                   )
                 ) : (
-                  <Text inverse={selected && vimMode === 'normal'} dimColor={!selected}>
+                  <Text inverse={selected && ui.vimMode === 'normal'} dimColor={!selected}>
                     {line}
                   </Text>
                 )}
@@ -410,7 +483,7 @@ function TicketEditorSurface({
       {/* Schedule input (separate from body — `ticket.schedule` RPC) */}
       <Box flexDirection="row" columnGap={1} marginTop={1}>
         <Text dimColor>{'schedule:'}</Text>
-        {scheduleFocused ? (
+        {ui.scheduleFocused ? (
           <Text color="cyan" inverse>
             {scheduleInput !== '' ? scheduleInput : ''}
             <Text color="cyan">{'█'}</Text>
@@ -428,12 +501,25 @@ function TicketEditorSurface({
       {/* Hint bar */}
       <Box flexDirection="row" columnGap={2} marginTop={0}>
         <Text dimColor>
-          {vimMode === 'normal'
+          {ui.vimMode === 'normal'
             ? 'j/k:nav  i:insert  x:toggle-checklist  dd:del-line  q:discard  tab:schedule  ctrl+s:save'
-            : 'type text  esc:normal  ctrl+s:save'}
+            : 'type text  esc:discard  ctrl+s:save'}
         </Text>
       </Box>
     </Box>
+  );
+}
+
+/** The frontmatter header row — display-only context (rule 1). */
+function EditorHeader({ frontmatter }: { readonly frontmatter: TicketFrontmatter }): JSX.Element {
+  return (
+    <>
+      <Text bold>{frontmatter.title}</Text>
+      {frontmatter.harness !== null && <Text dimColor>{`harness:${frontmatter.harness}`}</Text>}
+      {frontmatter.model !== null && <Text dimColor>{`model:${frontmatter.model}`}</Text>}
+      {frontmatter.deps !== '' && <Text dimColor>{`deps:${frontmatter.deps}`}</Text>}
+      {frontmatter.worktree !== null && <Text dimColor>{`wt:${frontmatter.worktree}`}</Text>}
+    </>
   );
 }
 
@@ -444,12 +530,13 @@ function TicketEditorSurface({
  * stays at the same level of abstraction as the rest of its keymap. Returns the `openEditor`
  * callback to bind to the `'open'` intent.
  *
- * Rule 3: `open(ticketId)` goes through the store action; `saveBody()` goes through the store
- * action. The component (TicketsPanel) calls `openEditor(id)` only; this hook owns the mode
- * wiring.
+ * Rule 3: `open(ticketId)` goes through the store action; `saveBody()`/`schedule()` go through the
+ * store actions. The component (TicketsPanel) calls `openEditor(id)` only; this hook owns the mode
+ * wiring and hands the mode factory the store handle it needs to read/mutate the body slice.
  */
 export function useTicketEditor(): (ticketId: string) => void {
   const { modes } = useInputStores();
+  const store = useAppStoreApi();
   const openAction = useAppStore((s) => s.actions.ticketDetail.open);
   const saveBodyAction = useAppStore((s) => s.actions.ticketDetail.saveBody);
   const scheduleAction = useAppStore((s) => s.actions.ticketDetail.schedule);
@@ -461,7 +548,7 @@ export function useTicketEditor(): (ticketId: string) => void {
       void openAction(ticketId);
       // 2. Enter the mode — panels stay visible (inlayout). Focus saved by modeStore.
       modes.getState().enter(
-        ticketEditorMode(modes, {
+        ticketEditorMode(modes, store, {
           onSave() {
             // Save the body and schedule (if valid) before closing.
             void saveBodyAction();
@@ -475,6 +562,6 @@ export function useTicketEditor(): (ticketId: string) => void {
         }),
       );
     },
-    [modes, openAction, saveBodyAction, scheduleAction, closeAction],
+    [modes, store, openAction, saveBodyAction, scheduleAction, closeAction],
   );
 }
