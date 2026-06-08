@@ -1,4 +1,4 @@
-"""Ticket schema, parser, wave logic, lifecycle, checklist protocol."""
+"""Ticket schema, parser, lifecycle, checklist protocol."""
 
 from murder.work.tickets.lifecycle import VALID_TRANSITIONS, transition
 from murder.work.tickets.schema import Ticket

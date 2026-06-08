@@ -74,16 +74,6 @@ def apply_carve_ready_spec(
     if row["status"] != TicketStatus.PLANNED.value:
         raise CarveError(f"ticket {ticket_id} must be planned (currently {row['status']})")
 
-    wave_raw = spec.get("wave")
-    if wave_raw is None:
-        raise CarveError("wave is required in carving YAML")
-    try:
-        wave = int(wave_raw)
-    except (TypeError, ValueError) as e:
-        raise CarveError("wave must be an integer") from e
-    if wave != int(row["wave"]):
-        raise CarveError(f"wave mismatch: YAML has {wave}, DB has {row['wave']}")
-
     title = spec.get("title")
     if not title or not str(title).strip():
         raise CarveError("title is required in carving YAML")

@@ -1,8 +1,7 @@
 """Ticket pydantic model — mirrors the SQLite tables (D2).
 
 Tickets in v0 are split: metadata in DB, prose in `.murder/tickets/<id>.md`
-(flat, no wave subdirs per D9). This model is the in-memory aggregate
-view used by orchestrator and TUI.
+This model is the in-memory aggregate view used by orchestrator and TUI.
 """
 
 from __future__ import annotations
@@ -27,7 +26,6 @@ class ChecklistItem(BaseModel):
 class Ticket(BaseModel):
     id: str  # 't007'
     title: str
-    wave: int
     status: TicketStatus = TicketStatus.PLANNED
     deps: list[str] = Field(default_factory=list)
     skills: list[str] = Field(default_factory=list)

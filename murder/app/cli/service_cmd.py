@@ -41,7 +41,6 @@ from murder.state.storage.service_registry import (
     resolve_service_session_selector,
 )
 from murder.work.tickets import lifecycle
-from murder.work.tickets import waves as waves_mod
 from murder.work.tickets.schema import ChecklistItem, Ticket
 from murder.work.tickets.sync import TicketSync
 from murder.app.tui.client import TuiRuntimeClient
@@ -448,7 +447,6 @@ def cmd_lint() -> None:
             Ticket(
                 id=trow["id"],
                 title=trow["title"],
-                wave=trow["wave"],
                 status=TicketStatus(trow["status"]),
                 harness=trow.get("harness"),
                 model=trow.get("model"),
@@ -469,16 +467,21 @@ def cmd_lint() -> None:
                 ],
             )
         )
-    by_wave: dict[int, list[Ticket]] = {}
-    for t in tickets:
-        by_wave.setdefault(t.wave, []).append(t)
-    for w, ts in by_wave.items():
-        try:
-            waves_mod.topo_partition(ts)
-        except waves_mod.CycleError as e:
-            issues.append(f"wave {w}: {e}")
-        for tid, dep in waves_mod.misordered_deps(ts):
-            issues.append(f"wave {w}: misordered dep {tid} -> {dep}")
+    ticket_by_id = {ticket.id: ticket for ticket in tickets}
+    for ticket in tickets:
+        seen: set[str] = set()
+        stack = list(ticket.deps)
+        while stack:
+            dep_id = stack.pop()
+            if dep_id == ticket.id:
+                issues.append(f"ticket {ticket.id}: dependency cycle")
+                break
+            if dep_id in seen:
+                continue
+            seen.add(dep_id)
+            dep = ticket_by_id.get(dep_id)
+            if dep is not None:
+                stack.extend(dep.deps)
     conn.close()
     if issues:
         for i in issues:

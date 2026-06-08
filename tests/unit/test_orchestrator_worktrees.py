@@ -173,8 +173,8 @@ def test_spawn_crow_defaults_to_main_checkout(repo_root: Path, monkeypatch) -> N
     init_db(conn)
     conn.execute(
         """
-        INSERT INTO tickets(id, title, wave, status, created_at, updated_at)
-        VALUES ('t001', 'Fix thing', 1, 'ready', '2026-01-01', '2026-01-01')
+        INSERT INTO tickets(id, title, status, created_at, updated_at)
+        VALUES ('t001', 'Fix thing', 'ready', '2026-01-01', '2026-01-01')
         """
     )
     config = Config(
@@ -222,8 +222,8 @@ def test_spawn_crow_provisions_opt_in_worktree_and_puts_it_in_agent_scope(
     init_db(conn)
     conn.execute(
         """
-        INSERT INTO tickets(id, title, wave, status, created_at, updated_at)
-        VALUES ('t001', 'Fix thing', 1, 'ready', '2026-01-01', '2026-01-01')
+        INSERT INTO tickets(id, title, status, created_at, updated_at)
+        VALUES ('t001', 'Fix thing', 'ready', '2026-01-01', '2026-01-01')
         """
     )
     config = Config(

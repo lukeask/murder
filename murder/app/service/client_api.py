@@ -66,7 +66,6 @@ class TicketSummary:
     id: str
     title: str
     status: TicketStatus
-    wave: int
     harness: str | None
     model: str | None
 
@@ -207,7 +206,6 @@ class SchedulerDecisionSummary:
 class ScheduleTicketRow:
     id: str
     title: str
-    wave: int
     status: str
     last_update_at: datetime
     last_update_label: str
@@ -279,7 +277,6 @@ class TicketRef:
 class TicketCarveSnapshot:
     ticket_id: str
     fields: Mapping[str, object]
-    wave_options: tuple[int, ...]
     dependency_options: tuple[TicketRef, ...]
 
     def __post_init__(self) -> None:

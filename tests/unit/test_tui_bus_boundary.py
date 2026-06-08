@@ -75,7 +75,6 @@ def test_tui_dispatch_snapshot_comes_from_bus_without_opening_db(repo_root) -> N
                 id="t001",
                 title="Bus only",
                 status=TicketStatus.PLANNED,
-                wave=1,
                 harness="codex",
                 model=None,
             ),

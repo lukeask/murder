@@ -42,7 +42,6 @@ def _dispatch(*statuses: TicketStatus) -> DispatchSnapshot:
             id=f"t{i:03d}",
             title=f"ticket {i}",
             status=status,
-            wave=1,
             harness="cursor",
             model=None,
         )

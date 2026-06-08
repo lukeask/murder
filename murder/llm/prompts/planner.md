@@ -29,7 +29,6 @@ You also carve tickets: when we agree on a discrete unit of work, write the tick
 ```yaml
 id: <id>           # e.g. t014
 title: <short title>
-wave: <int>        # execution order; lower waves run first
 write_set:         # files the crow is expected to touch
   - path/to/file.py
 deps: []           # ticket ids that must complete before this one

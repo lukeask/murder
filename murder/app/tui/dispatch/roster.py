@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Callable, Sequence
+from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -17,7 +17,6 @@ from textual.screen import ModalScreen
 from textual.widgets import DataTable, Input, SelectionList, Static, TextArea
 
 from murder.llm.harnesses import REGISTRY
-from murder.work.tickets.status import TicketStatus
 
 from murder.app.service.client_api import (
     ScheduleSnapshot,
@@ -101,7 +100,6 @@ class ScheduleTicketsTable(StoreComponent, DataTable):
         # columns stay visible (DataTable scrolls horizontally if total exceeds width).
         self.add_column("id", width=6)
         self.add_column("title", width=34)
-        self.add_column("wave", width=5)
         self.add_column("status", width=14)
         self.add_column("last update", width=24)
         self.add_column("deps", width=5)
@@ -163,7 +161,6 @@ class ScheduleTicketsTable(StoreComponent, DataTable):
         self.add_row(
             row.id,
             row.title,
-            str(row.wave),
             display_status_for(row),
             last_update_cell(row, as_of),
             deps_cell_for(row),
@@ -236,15 +233,6 @@ _HARNESS_SELECT_OPTIONS: list[tuple[str, str]] = [
     ("Antigravity CLI", "antigravity"),
     ("Native coding crow", "native_coding_crow"),
 ]
-
-
-def _wave_select_options(wave_values: Sequence[int], current: int) -> list[tuple[str, int]]:
-    waves = {int(w) for w in wave_values} | {int(current), 0}
-    hi = max(waves)
-    for w in range(hi + 1, hi + 8):
-        waves.add(w)
-    ordered = sorted(waves)[:48]
-    return [(f"Wave {w}", w) for w in ordered]
 
 
 def _schedule_select_options(snapshot_at: str | None) -> list[tuple[str, str]]:
@@ -546,14 +534,6 @@ class CarveFormScreen(ModalScreen[None]):
                 )
                 yield Static("Title", classes="field_label")
                 yield TitleStripInput(placeholder="Title", id="field_title")
-                yield Static("Wave", classes="field_label")
-                yield RadioRow(
-                    _wave_select_options(
-                        self._carve.wave_options, int(self._snapshot.get("wave", 0))
-                    ),
-                    value=int(self._snapshot.get("wave", 0)),
-                    id="field_wave",
-                )
                 yield Static("Scheduled start (optional)", classes="field_label")
                 sched_opts = _schedule_select_options(
                     str(self._snapshot["schedule_at"])
@@ -596,9 +576,6 @@ class CarveFormScreen(ModalScreen[None]):
         self._suppress_autosave = True
         snap = self._snapshot
         self.query_one("#field_title", TitleStripInput).value = str(snap.get("title") or "")
-        wave_row = self.query_one("#field_wave", RadioRow)
-        wave_row.value = int(snap.get("wave", 0))
-
         harness_s = str(snap.get("harness") or "cursor").strip()
         h_row = self.query_one("#field_harness", RadioRow)
         hpairs = list(_HARNESS_SELECT_OPTIONS)
@@ -668,7 +645,6 @@ class CarveFormScreen(ModalScreen[None]):
         harness = str(self.query_one("#field_harness", RadioRow).value)
         model_v = self.query_one("#field_model", RadioRow).value
         model_raw = "" if model_v in (None, "") else str(model_v).strip()
-        wave = int(self.query_one("#field_wave", RadioRow).value)
         sched_v = self.query_one("#field_schedule", RadioRow).value
         if sched_v == _SCHEDULE_NONE:
             schedule_at: str | None = None
@@ -682,7 +658,6 @@ class CarveFormScreen(ModalScreen[None]):
         return {
             "id": self.ticket_id,
             "title": title,
-            "wave": wave,
             "status": status,
             "harness": harness,
             "model": model_raw or None,

@@ -44,7 +44,6 @@ class ChecklistItemRecord:
 class TicketRecord:
     id: str
     title: str
-    wave: int
     status: TicketStatus
     harness: str | None
     model: str | None
@@ -68,7 +67,6 @@ class TicketRecord:
         base: dict[str, Any] = {
             "id": self.id,
             "title": self.title,
-            "wave": self.wave,
             "status": self.status.value,
             "harness": self.harness,
             "model": self.model,
@@ -224,7 +222,6 @@ def ticket_record_from_row(
     return TicketRecord(
         id=str(row["id"]),
         title=str(row["title"]),
-        wave=int(row["wave"]),
         status=TicketStatus(str(row["status"])),
         harness=row["harness"],
         model=row["model"],

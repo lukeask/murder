@@ -45,7 +45,7 @@ _DT2 = datetime(2026, 1, 2, tzinfo=timezone.utc)
 
 def _ticket(tid: str = "t001", status: str = "open") -> TicketSummary:
     return TicketSummary(
-        id=tid, title="Test", status=status, wave=1, harness=None, model=None
+        id=tid, title="Test", status=status, harness=None, model=None
     )
 
 

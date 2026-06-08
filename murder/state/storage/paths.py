@@ -50,7 +50,7 @@ def panes_dir(repo_root: Path, run_id: str) -> Path:
 
 
 def tickets_dir(repo_root: Path) -> Path:
-    """Flat per D9 — wave is in DB."""
+    """Flat ticket markdown directory."""
     return agents_dir(repo_root) / "tickets"
 
 

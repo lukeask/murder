@@ -92,14 +92,13 @@ def factory_crow_entry(**kwargs: Any) -> CrowEntry:
 def factory_ticket_summary(
     tid: str = "t001",
     status: Any = "planned",
-    wave: int = 1,
     title: str = "Test ticket",
     harness: str | None = None,
     model: str | None = None,
 ) -> TicketSummary:
     """Build a TicketSummary."""
     return TicketSummary(
-        id=tid, title=title, status=status, wave=wave, harness=harness, model=model
+        id=tid, title=title, status=status, harness=harness, model=model
     )
 
 
@@ -117,7 +116,6 @@ def factory_dispatch_snapshot(
 def factory_schedule_ticket_row(
     tid: str = "t001",
     status: str = "planned",
-    wave: int = 1,
     title: str = "Test ticket",
     last_update_at: datetime = FACTORY_DT,
 ) -> ScheduleTicketRow:
@@ -126,7 +124,6 @@ def factory_schedule_ticket_row(
         id=tid,
         title=title,
         status=status,
-        wave=wave,
         harness=None,
         model=None,
         last_update_at=last_update_at,

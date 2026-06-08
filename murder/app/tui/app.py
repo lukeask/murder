@@ -197,7 +197,6 @@ class HelpScreen(ModalScreen[None]):
                         "crow_handler: watches a crow and records progress",
                         "planning_agent: per-plan LLM that answers crow questions",
                         "ticket: scoped unit of work with deps, checklist",
-                        "wave: tickets that may run after earlier dependencies finish",
                         "",
                         "[b]commands[/b]",
                         "!<cmd>         run shell command (output in pane mirror)",

@@ -125,7 +125,6 @@ def cmd_ticket_create(
     ticket_id: Annotated[
         str | None, typer.Option("--id", help="Ticket id (UUID auto-generated if omitted).")
     ] = None,
-    wave: Annotated[int, typer.Option("--wave", "-w", min=0, help="Ticket wave.")] = 0,
     status: Annotated[
         TicketStatus,
         typer.Option("--status", help="Initial ticket status."),
@@ -191,7 +190,6 @@ def cmd_ticket_create(
     ticket = Ticket(
         id=ticket_id,
         title=title,
-        wave=wave,
         status=status,
         deps=list(dep or []),
         skills=[],

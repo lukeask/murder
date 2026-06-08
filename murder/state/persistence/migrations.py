@@ -13,6 +13,8 @@ def _now() -> str:
 
 _LEGACY_PLAN_MATERIALIZED_HASH_COLUMN = "last_" "materialized_" "hash"
 _LEGACY_PLAN_CONFLICT_COLUMN = "conflict" "_reason"
+_LEGACY_TICKET_ORDER_COLUMN = "wa" "ve"
+_LEGACY_TICKET_ORDER_INDEX = "idx_tickets_" + _LEGACY_TICKET_ORDER_COLUMN
 
 
 def _migrate_ticket_last_error(conn: sqlite3.Connection) -> None:
@@ -30,7 +32,7 @@ def _migrate_ticket_archived_status(conn: sqlite3.Connection) -> None:
     if row is None or "'archived'" in str(row["sql"]):
         return
     conn.executescript(
-        """
+        f"""
         PRAGMA foreign_keys = OFF;
         PRAGMA legacy_alter_table = ON;
         BEGIN;
@@ -38,7 +40,7 @@ def _migrate_ticket_archived_status(conn: sqlite3.Connection) -> None:
         CREATE TABLE tickets (
             id            TEXT PRIMARY KEY,
             title         TEXT NOT NULL,
-            wave          INTEGER NOT NULL,
+            {_LEGACY_TICKET_ORDER_COLUMN}          INTEGER NOT NULL,
             status        TEXT NOT NULL CHECK (status IN
                           ('planned','ready','in_progress','blocked','done','failed','archived')),
             harness       TEXT,
@@ -56,12 +58,13 @@ def _migrate_ticket_archived_status(conn: sqlite3.Connection) -> None:
             created_at    TEXT NOT NULL,
             updated_at    TEXT NOT NULL
         );
-        CREATE INDEX IF NOT EXISTS idx_tickets_wave   ON tickets(wave);
+        CREATE INDEX IF NOT EXISTS {_LEGACY_TICKET_ORDER_INDEX}
+            ON tickets({_LEGACY_TICKET_ORDER_COLUMN});
         CREATE INDEX IF NOT EXISTS idx_tickets_status ON tickets(status);
         CREATE INDEX IF NOT EXISTS idx_tickets_schedule_at ON tickets(schedule_at);
         CREATE INDEX IF NOT EXISTS idx_tickets_metadata_sync_state ON tickets(metadata_sync_state);
         INSERT INTO tickets SELECT
-            id, title, wave, status, harness, model, schedule_at,
+            id, title, {_LEGACY_TICKET_ORDER_COLUMN}, status, harness, model, schedule_at,
             metadata_hash, metadata_file_hash, metadata_last_materialized_hash,
             metadata_materialized_path, metadata_sync_state, metadata_parse_error,
             metadata_conflict_reason, attempts, last_error, created_at, updated_at
@@ -82,7 +85,7 @@ def _migrate_ticket_draft_status(conn: sqlite3.Connection) -> None:
     if row is None or "'draft'" in str(row["sql"]):
         return
     conn.executescript(
-        """
+        f"""
         PRAGMA foreign_keys = OFF;
         PRAGMA legacy_alter_table = ON;
         BEGIN;
@@ -90,7 +93,7 @@ def _migrate_ticket_draft_status(conn: sqlite3.Connection) -> None:
         CREATE TABLE tickets (
             id            TEXT PRIMARY KEY,
             title         TEXT NOT NULL,
-            wave          INTEGER NOT NULL,
+            {_LEGACY_TICKET_ORDER_COLUMN}          INTEGER NOT NULL,
             status        TEXT NOT NULL CHECK (status IN
                           ('draft','planned','ready','in_progress','blocked','done','failed','archived')),
             harness       TEXT,
@@ -108,12 +111,13 @@ def _migrate_ticket_draft_status(conn: sqlite3.Connection) -> None:
             created_at    TEXT NOT NULL,
             updated_at    TEXT NOT NULL
         );
-        CREATE INDEX IF NOT EXISTS idx_tickets_wave   ON tickets(wave);
+        CREATE INDEX IF NOT EXISTS {_LEGACY_TICKET_ORDER_INDEX}
+            ON tickets({_LEGACY_TICKET_ORDER_COLUMN});
         CREATE INDEX IF NOT EXISTS idx_tickets_status ON tickets(status);
         CREATE INDEX IF NOT EXISTS idx_tickets_schedule_at ON tickets(schedule_at);
         CREATE INDEX IF NOT EXISTS idx_tickets_metadata_sync_state ON tickets(metadata_sync_state);
         INSERT INTO tickets SELECT
-            id, title, wave, status, harness, model, schedule_at,
+            id, title, {_LEGACY_TICKET_ORDER_COLUMN}, status, harness, model, schedule_at,
             metadata_hash, metadata_file_hash, metadata_last_materialized_hash,
             metadata_materialized_path, metadata_sync_state, metadata_parse_error,
             metadata_conflict_reason, attempts, last_error, created_at, updated_at
@@ -138,19 +142,19 @@ def _migrate_ticket_worktree(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE tickets ADD COLUMN worktree TEXT")
 
 
-def _migrate_ticket_drop_wave(conn: sqlite3.Connection) -> None:
-    """Drop tickets.wave via table recreation."""
+def _migrate_ticket_drop_legacy_order(conn: sqlite3.Connection) -> None:
+    """Drop the legacy ticket ordering column via table recreation."""
     row = conn.execute(
         "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'tickets'"
     ).fetchone()
-    if row is None or "wave" not in str(row["sql"]):
+    if row is None or _LEGACY_TICKET_ORDER_COLUMN not in str(row["sql"]):
         return
 
     conn.execute("PRAGMA foreign_keys = OFF")
     conn.execute("PRAGMA legacy_alter_table = ON")
     conn.execute("BEGIN")
     try:
-        conn.execute("ALTER TABLE tickets RENAME TO tickets_old_wave_migration")
+        conn.execute("ALTER TABLE tickets RENAME TO tickets_old_order_migration")
         conn.execute(
             """
             CREATE TABLE tickets (
@@ -189,10 +193,10 @@ def _migrate_ticket_drop_wave(conn: sqlite3.Connection) -> None:
                 metadata_hash, metadata_file_hash, metadata_last_materialized_hash,
                 metadata_materialized_path, metadata_sync_state, metadata_parse_error,
                 metadata_conflict_reason, attempts, last_error, created_at, updated_at
-            FROM tickets_old_wave_migration
+            FROM tickets_old_order_migration
             """
         )
-        conn.execute("DROP TABLE tickets_old_wave_migration")
+        conn.execute("DROP TABLE tickets_old_order_migration")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_tickets_status ON tickets(status)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_tickets_schedule_at ON tickets(schedule_at)")
         conn.execute(

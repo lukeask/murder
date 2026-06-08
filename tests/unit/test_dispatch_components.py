@@ -60,10 +60,10 @@ def test_dispatch_store_attention_counts_with_tickets() -> None:
     from murder.work.tickets.status import TicketStatus
     from murder.app.service.client_api import TicketSummary
     tickets = (
-        TicketSummary(id="t1", title="A", status=TicketStatus.BLOCKED, wave=1, harness=None, model=None),
-        TicketSummary(id="t2", title="B", status=TicketStatus.FAILED, wave=1, harness=None, model=None),
-        TicketSummary(id="t3", title="C", status=TicketStatus.BLOCKED, wave=1, harness=None, model=None),
-        TicketSummary(id="t4", title="D", status=TicketStatus.PLANNED, wave=1, harness=None, model=None),
+        TicketSummary(id="t1", title="A", status=TicketStatus.BLOCKED, harness=None, model=None),
+        TicketSummary(id="t2", title="B", status=TicketStatus.FAILED, harness=None, model=None),
+        TicketSummary(id="t3", title="C", status=TicketStatus.BLOCKED, harness=None, model=None),
+        TicketSummary(id="t4", title="D", status=TicketStatus.PLANNED, harness=None, model=None),
     )
     store = DispatchStore()
     store.ingest_snapshot(factory_dispatch_snapshot(tickets))
@@ -77,7 +77,7 @@ def test_dispatch_store_no_notify_on_same_content() -> None:
     """Identical tickets + key but different as_of does NOT notify (attention_counts stable)."""
     from murder.work.tickets.status import TicketStatus
     from murder.app.service.client_api import TicketSummary
-    ticket = TicketSummary(id="t1", title="A", status=TicketStatus.BLOCKED, wave=1, harness=None, model=None)
+    ticket = TicketSummary(id="t1", title="A", status=TicketStatus.BLOCKED, harness=None, model=None)
     store = DispatchStore()
     store.ingest_snapshot(factory_dispatch_snapshot((ticket,), "k1", _DT1))
     calls: list[None] = []
@@ -239,7 +239,7 @@ def test_header_refresh_from_snapshot_bridge_compat() -> None:
     from murder.work.tickets.status import TicketStatus
     from murder.app.service.client_api import TicketSummary
     tickets = (
-        TicketSummary(id="t1", title="A", status=TicketStatus.BLOCKED, wave=1, harness=None, model=None),
+        TicketSummary(id="t1", title="A", status=TicketStatus.BLOCKED, harness=None, model=None),
     )
     snap2 = factory_dispatch_snapshot(tickets)
     # Simulate refresh without update() (no Textual Static):
@@ -370,10 +370,10 @@ def test_compute_attention_counts_with_enum_status() -> None:
     from murder.work.tickets.status import TicketStatus
     from murder.app.service.client_api import TicketSummary
     tickets = (
-        TicketSummary(id="t1", title="A", status=TicketStatus.BLOCKED, wave=1, harness=None, model=None),
-        TicketSummary(id="t2", title="B", status=TicketStatus.BLOCKED, wave=1, harness=None, model=None),
-        TicketSummary(id="t3", title="C", status=TicketStatus.FAILED, wave=1, harness=None, model=None),
-        TicketSummary(id="t4", title="D", status=TicketStatus.PLANNED, wave=1, harness=None, model=None),
+        TicketSummary(id="t1", title="A", status=TicketStatus.BLOCKED, harness=None, model=None),
+        TicketSummary(id="t2", title="B", status=TicketStatus.BLOCKED, harness=None, model=None),
+        TicketSummary(id="t3", title="C", status=TicketStatus.FAILED, harness=None, model=None),
+        TicketSummary(id="t4", title="D", status=TicketStatus.PLANNED, harness=None, model=None),
     )
     result = dict(_compute_attention_counts(tickets))
     assert result["blocked"] == 2
@@ -384,9 +384,9 @@ def test_compute_attention_counts_with_string_status() -> None:
     """String statuses (as used in pre-existing tests) are handled gracefully."""
     from murder.app.service.client_api import TicketSummary
     tickets = (
-        TicketSummary(id="t1", title="A", status="blocked", wave=1, harness=None, model=None),
-        TicketSummary(id="t2", title="B", status="failed", wave=1, harness=None, model=None),
-        TicketSummary(id="t3", title="C", status="planned", wave=1, harness=None, model=None),
+        TicketSummary(id="t1", title="A", status="blocked", harness=None, model=None),
+        TicketSummary(id="t2", title="B", status="failed", harness=None, model=None),
+        TicketSummary(id="t3", title="C", status="planned", harness=None, model=None),
     )
     result = dict(_compute_attention_counts(tickets))
     assert result["blocked"] == 1

@@ -22,7 +22,6 @@ def test_ticket_record_contains() -> None:
     record = TicketRecord(
         id="t001",
         title="dummy",
-        wave=0,
         status=TicketStatus.READY,
         harness=None,
         model=None,

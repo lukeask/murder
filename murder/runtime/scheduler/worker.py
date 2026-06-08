@@ -304,7 +304,7 @@ class SchedulerWorker(Worker):
         )
         ready_rows = ctx.db.execute(
             """
-            SELECT t.id, t.wave, t.schedule_at, t.harness
+            SELECT t.id, t.schedule_at, t.harness
               FROM tickets AS t
              WHERE t.status = 'ready'
                AND (t.harness = ? OR t.harness IS NULL)
@@ -320,7 +320,6 @@ class SchedulerWorker(Worker):
         ready_tickets = [
             TicketRecord(
                 id=row["id"],
-                wave=row["wave"],
                 schedule_at=row["schedule_at"],
                 harness=row["harness"],
             )

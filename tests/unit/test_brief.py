@@ -57,7 +57,6 @@ def _ticket() -> dict:
     return {
         "id": "t001",
         "title": "Add logging",
-        "wave": 1,
     }
 
 

@@ -10,7 +10,7 @@ from murder.app.tui.components import StoreComponent
 
 
 class TicketGrid(StoreComponent, DataTable):
-    """Rows: id, wave, status, title. Selecting a row emits TicketSelected.
+    """Rows: id, status, title. Selecting a row emits TicketSelected.
 
     StoreComponent binding: bind_stores(dispatch=dispatch_store)
     Bound by DefaultLayout before compose; self-subscribes on mount and reads
@@ -32,7 +32,7 @@ class TicketGrid(StoreComponent, DataTable):
         self._tickets: list[str] = []
 
     def on_mount(self) -> None:
-        self.add_columns("id", "wave", "status", "title")
+        self.add_columns("id", "status", "title")
         super().on_mount()  # StoreComponent subscribes if bound
 
     def refresh_from_snapshot(self, snapshot: DispatchSnapshot) -> None:
@@ -42,7 +42,6 @@ class TicketGrid(StoreComponent, DataTable):
         for ticket in snapshot.tickets:
             self.add_row(
                 ticket.id,
-                str(ticket.wave),
                 ticket.status.value,
                 ticket.title,
             )

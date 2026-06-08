@@ -418,7 +418,7 @@ def init_db(conn: sqlite3.Connection) -> None:
         _migrate_ticket_archived_status,
         _migrate_ticket_draft_status,
         _migrate_ticket_drop_skills,
-        _migrate_ticket_drop_wave,
+        _migrate_ticket_drop_legacy_order,
         _migrate_ticket_last_error,
         _migrate_ticket_metadata_columns,
         _migrate_ticket_worktree,
@@ -435,7 +435,7 @@ def init_db(conn: sqlite3.Connection) -> None:
     _migrate_ticket_archived_status(conn)
     _migrate_ticket_draft_status(conn)
     _migrate_ticket_worktree(conn)
-    _migrate_ticket_drop_wave(conn)
+    _migrate_ticket_drop_legacy_order(conn)
     _migrate_ticket_drop_skills(conn)
     _migrate_notes_identity_status(conn)
     _migrate_completion_tables(conn)

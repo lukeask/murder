@@ -44,7 +44,6 @@ def test_kickoff_reaps_stale_running_agents_when_ticket_still_ready(
         Ticket(
             id="t099",
             title="stale crow blocks kickoff",
-            wave=1,
             status=TicketStatus.READY,
             created_at=now,
             updated_at=now,
@@ -98,7 +97,6 @@ def test_force_ticket_status_reaps_crow_agents(repo_root: Path) -> None:
         Ticket(
             id="t098",
             title="force done",
-            wave=1,
             status=TicketStatus.IN_PROGRESS,
             created_at=now,
             updated_at=now,
@@ -135,7 +133,6 @@ def test_set_schedule_at_updates_ticket_timestamp(repo_root: Path) -> None:
         Ticket(
             id="t097a",
             title="schedule me",
-            wave=1,
             status=TicketStatus.PLANNED,
             created_at=created,
             updated_at=created,
@@ -246,7 +243,6 @@ def test_transition_done_heals_ready_status(repo_root: Path) -> None:
         Ticket(
             id="t097",
             title="ready but crow finished",
-            wave=1,
             status=TicketStatus.READY,
             created_at=now,
             updated_at=now,

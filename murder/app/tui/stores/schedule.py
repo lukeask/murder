@@ -12,7 +12,7 @@ Usage drill-in pattern mirrors the document body loader in documents.py:
 
 Derived fields (moved store-side for Phase 2 component library):
   - ``sorted_rows``: active + recent_done + archived tickets pre-sorted for the
-    ScheduleTicketsTable roster (wave/status/title sort order).
+    ScheduleTicketsTable roster.
   - ``as_of``: re-exposed so duck-type callers (widgets accepting either the raw
     ScheduleSnapshot or the store snapshot) can use it for last_update_cell.
 """

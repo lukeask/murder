@@ -25,7 +25,6 @@ def _row(
     return ScheduleTicketRow(
         id=ticket_id,
         title=f"Ticket {ticket_id}",
-        wave=1,
         status=status,
         last_update_at=updated_at,
         last_update_label=label,
@@ -47,7 +46,6 @@ def test_schedule_snapshot_exposes_last_update_fields_and_active_order(repo_root
         Ticket(
             id="t100",
             title="failed",
-            wave=1,
             status=TicketStatus.FAILED,
             created_at=now,
             updated_at=now - timedelta(minutes=5),
@@ -55,7 +53,6 @@ def test_schedule_snapshot_exposes_last_update_fields_and_active_order(repo_root
         Ticket(
             id="t101",
             title="conflict",
-            wave=1,
             status=TicketStatus.PLANNED,
             created_at=now,
             updated_at=now - timedelta(minutes=15),
@@ -63,7 +60,6 @@ def test_schedule_snapshot_exposes_last_update_fields_and_active_order(repo_root
         Ticket(
             id="t102",
             title="parse",
-            wave=1,
             status=TicketStatus.READY,
             created_at=now,
             updated_at=now - timedelta(minutes=30),
@@ -71,7 +67,6 @@ def test_schedule_snapshot_exposes_last_update_fields_and_active_order(repo_root
         Ticket(
             id="t103",
             title="failed only",
-            wave=1,
             status=TicketStatus.FAILED,
             created_at=now,
             updated_at=now - timedelta(minutes=45),
@@ -81,13 +76,12 @@ def test_schedule_snapshot_exposes_last_update_fields_and_active_order(repo_root
         conn.execute(
             """
             INSERT INTO tickets(
-                id, title, wave, status, harness, model, attempts, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                id, title, status, harness, model, attempts, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 ticket.id,
                 ticket.title,
-                ticket.wave,
                 ticket.status.value,
                 ticket.harness,
                 ticket.model,
@@ -195,6 +189,6 @@ def test_schedule_tickets_table_sorts_by_last_update_desc() -> None:
             table.refresh_from_snapshot(snapshot)
             await pilot.pause()
             assert table._ids == ["t201", "t199", "t200", "t198"]
-            assert table.get_row_at(0)[4] == "11:50 content"
+            assert table.get_row_at(0)[3] == "11:50 content"
 
     asyncio.run(_run())

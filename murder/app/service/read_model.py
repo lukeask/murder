@@ -59,9 +59,9 @@ class ServiceReadModel:
         with closing(self._connect()) as conn:
             rows = conn.execute(
                 """
-                SELECT id, title, status, wave, harness, model
+                SELECT id, title, status, harness, model
                   FROM tickets
-                 ORDER BY wave, id
+                 ORDER BY id
                 """
             ).fetchall()
         tickets = tuple(
@@ -69,7 +69,6 @@ class ServiceReadModel:
                 id=str(row["id"]),
                 title=str(row["title"]),
                 status=TicketStatus(str(row["status"])),
-                wave=int(row["wave"]),
                 harness=_optional_str(row["harness"]),
                 model=_optional_str(row["model"]),
             )
@@ -436,17 +435,13 @@ class ServiceReadModel:
             ticket = ticket_store.get_ticket(conn, ticket_id)
             if ticket is None:
                 return None
-            wave_rows = conn.execute(
-                "SELECT DISTINCT wave FROM tickets ORDER BY wave"
-            ).fetchall()
             dep_rows = conn.execute(
-                "SELECT id, title FROM tickets WHERE id != ? ORDER BY wave, id",
+                "SELECT id, title FROM tickets WHERE id != ? ORDER BY id",
                 (ticket_id,),
             ).fetchall()
         fields: dict[str, object] = {
             "status": ticket.status.value,
             "title": ticket.title,
-            "wave": ticket.wave,
             "schedule_at": ticket.schedule_at,
             "harness": ticket.harness,
             "model": ticket.model,
@@ -458,7 +453,6 @@ class ServiceReadModel:
         return TicketCarveSnapshot(
             ticket_id=ticket_id,
             fields=fields,
-            wave_options=tuple(int(r["wave"]) for r in wave_rows),
             dependency_options=tuple(
                 TicketRef(id=str(r["id"]), title=str(r["title"] or r["id"]))
                 for r in dep_rows

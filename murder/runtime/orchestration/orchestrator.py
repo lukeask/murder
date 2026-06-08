@@ -1,4 +1,4 @@
-"""Orchestration: spawn/kill agents; wave kickoff; ready computation."""
+"""Orchestration: spawn/kill agents; ready computation."""
 
 from __future__ import annotations
 
@@ -20,7 +20,6 @@ from murder.work import notes as notes_mod
 from murder.state.persistence.tickets import (
     get_ticket as _db_get_ticket,
     compute_ready as _db_compute_ready,
-    list_tickets_in_wave as _db_list_tickets_in_wave,
     update_ticket_status as _db_update_ticket_status,
     apply_ticket_carve_payload as _db_apply_ticket_carve_payload,
 )
@@ -274,7 +273,6 @@ class Orchestrator:
             ticket = Ticket(
                 id=ticket_id,
                 title=title,
-                wave=1,
                 status=TicketStatus.PLANNED,
                 created_at=now,
                 updated_at=now,
@@ -1164,13 +1162,6 @@ class Orchestrator:
             raise ValueError(f"could not retire note: {exc}") from exc
         return {"name": name, "dest_name": dest.name}
 
-    async def evaluate_wave_completion(self, wave: int) -> bool:
-        assert self.rt.db is not None
-        tickets = _db_list_tickets_in_wave(self.rt.db, wave)
-        if not tickets:
-            return True
-        return all(t["status"] == TicketStatus.DONE.value for t in tickets)
-
     async def reopen_ticket(self, ticket_id: str) -> list[str]:
         assert self.rt.db is not None
         cascaded = lifecycle.reopen(self.rt.db, ticket_id)
@@ -1209,11 +1200,6 @@ class Orchestrator:
         title = str(payload.get("title") or row.get("title") or "").strip()
         if not title:
             return {"handled": True, "ok": False, "error": "title is required"}
-        wave_raw = payload.get("wave")
-        try:
-            wave = int(wave_raw) if wave_raw is not None else int(row.get("wave", 0))
-        except (TypeError, ValueError):
-            return {"handled": True, "ok": False, "error": "wave must be an integer"}
         harness = str(payload.get("harness") or row.get("harness") or "cursor").strip()
         model = payload.get("model") or None
         if model is not None:
@@ -1229,8 +1215,8 @@ class Orchestrator:
         checklist = [str(c) for c in (payload.get("checklist") or [])]
         with self.rt.db:
             self.rt.db.execute(
-                "UPDATE tickets SET wave=?, schedule_at=? WHERE id=?",
-                (wave, schedule_at, ticket_id),
+                "UPDATE tickets SET schedule_at=? WHERE id=?",
+                (schedule_at, ticket_id),
             )
             _db_apply_ticket_carve_payload(
                 self.rt.db,

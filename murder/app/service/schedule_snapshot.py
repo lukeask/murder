@@ -62,7 +62,7 @@ def build_schedule_snapshot(
     active = _ticket_rows(
         conn.execute(
             f"""
-            SELECT t.id, t.title, t.wave, t.status, t.updated_at, t.schedule_at,
+            SELECT t.id, t.title, t.status, t.updated_at, t.schedule_at,
                    t.harness, t.model, t.last_error,
                    t.metadata_sync_state, t.metadata_parse_error,
                    t.metadata_conflict_reason, {dep_subq} AS deps_ok
@@ -75,7 +75,7 @@ def build_schedule_snapshot(
     recent_done = _ticket_rows(
         conn.execute(
             f"""
-            SELECT t.id, t.title, t.wave, t.status, t.updated_at, t.schedule_at,
+            SELECT t.id, t.title, t.status, t.updated_at, t.schedule_at,
                    t.harness, t.model, t.last_error,
                    t.metadata_sync_state, t.metadata_parse_error,
                    t.metadata_conflict_reason, {dep_subq} AS deps_ok
@@ -89,7 +89,7 @@ def build_schedule_snapshot(
     archived = _ticket_rows(
         conn.execute(
             f"""
-            SELECT t.id, t.title, t.wave, t.status, t.updated_at, t.schedule_at,
+            SELECT t.id, t.title, t.status, t.updated_at, t.schedule_at,
                    t.harness, t.model, t.last_error,
                    t.metadata_sync_state, t.metadata_parse_error,
                    t.metadata_conflict_reason, {dep_subq} AS deps_ok
@@ -159,7 +159,6 @@ def _ticket_rows(rows: list[sqlite3.Row]) -> tuple[ScheduleTicketRow, ...]:
         ScheduleTicketRow(
             id=str(r["id"]),
             title=str(r["title"] or ""),
-            wave=int(r["wave"]),
             status=str(r["status"]),
             last_update_at=_parse_ticket_updated_at(r["updated_at"]),
             last_update_label=_last_update_label(r),
