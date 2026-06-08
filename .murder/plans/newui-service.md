@@ -308,12 +308,13 @@ green** — the next agent starts from a passing state.
   unchanged. *Deps: C4.*
   done: 7dc1726, schedule row DTO now carries pending dependency ids; focused snapshot and scheduler tests pass.
 
-- [ ] **C6 — Per-ticket worktree spawn (was B6).** `spawn_crow` reads `ticket.worktree` and
+- [x] **C6 — Per-ticket worktree spawn (was B6).** `spawn_crow` reads `ticket.worktree` and
   provisions a worktree iff set (reuse the rogue `worktree_path` plumbing; codex gets
   `--add-dir <main-repo>/.murder/tickets`). Remove `config.runtime.use_worktrees`. *Files:*
   `runtime/orchestration/orchestrator.py`, `config.py`. *Done when:* a ticket with `worktree`
   set spawns into a worktree editing the *canonical main-repo* ticket path; global flag gone.
   *Deps: C1.*
+  done: dd9ac29, per-ticket worktree spawn uses ticket.worktree; focused worktree and harness tests pass.
 
 - [ ] **C7 — Deprecate carve-YAML + `>>>CHECK` (was B7).** Delete the `carve.py` YAML path, the
   orchestrator yaml branch, the `init_cmd` ingest cmd, the `crow_handler.detect_checks` call,
