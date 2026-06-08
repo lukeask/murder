@@ -72,9 +72,11 @@ function setup(reply: CrowSnapshotReply = crowReply()) {
 }
 
 describe('createAppStore — boot & wiring', () => {
-  it('subscribes to the bus exactly once on construction', () => {
+  it('subscribes to the bus twice on construction (state.snapshot + conversation.block)', () => {
+    // C3 had one subscription (state.snapshot); C10 adds a second (conversation.block).
+    // Both unsubscribe on dispose (the contract: dispose tears down all wiring).
     const { fake, dispose } = setup();
-    expect(fake.subscriberCount).toBe(1);
+    expect(fake.subscriberCount).toBe(2);
     dispose();
     expect(fake.subscriberCount).toBe(0);
   });

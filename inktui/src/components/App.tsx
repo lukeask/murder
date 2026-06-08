@@ -47,6 +47,7 @@ import type { PanelId } from '../input/panels.js';
 import type { AppStoreApi } from '../store/store.js';
 import { BottomBar } from './BottomBar.js';
 import { ChatInput } from './ChatInput.js';
+import { CrowChatPanel } from './CrowChatPanel.js';
 import { CrowsPanel } from './CrowsPanel.js';
 import { NotesPanel } from './NotesPanel.js';
 import { Overlay, presentationHidesLayout } from './Overlay.js';
@@ -74,7 +75,15 @@ function renderPanel(id: PanelId): JSX.Element {
     case 'crows':
       // C9: CrowsPanel replaces the RosterPanel reference implementation here. The original
       // RosterPanel remains as the copy-reference; only this `case` changes.
-      return <CrowsPanel />;
+      // C10: CrowChatPanel is stacked below CrowsPanel — favorited crows get a history pane here.
+      // Visibility is tied to the crows toggle (panel 0); CrowChatPanel returns null when no
+      // favorited crows exist, so it's layout-safe.
+      return (
+        <Box flexDirection="column" flexGrow={1}>
+          <CrowsPanel />
+          <CrowChatPanel />
+        </Box>
+      );
     case 'plans':
       return <PlaceholderPanel id={id} title="Plans" filledBy="C6/plans-TBD" />;
     case 'notes':
