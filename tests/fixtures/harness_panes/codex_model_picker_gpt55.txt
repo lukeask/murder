@@ -12,16 +12,14 @@ user@machine:~/Documents/code/murder $ codex
 
 › You are a coding agent ("crow") assigned to a single ticket. Your cwd is the repo root.
 
-  Start by reading your ticket: `.murder/tickets/<ticket_id>.md` (prose) and `.murder/tickets/<ticket_id>.yaml` (metadata). The yaml may name a `plan` — read that plan at `.murder/plans/<plan_name>.md` for context. The yaml may also declare a
-  `write_set`: the list of paths you are allowed to modify. Stay inside it. Modifying anything outside the write_set is a violation.
+  Start by reading your ticket: `.murder/tickets/<ticket_id>.md`. Keep that canonical main-repo ticket file updated as you work, including checklist edits.
 
   Do not run the `murder` CLI. You edit files, take notes, ask questions, and declare done. Your output is parsed by a supervisor that watches your tmux pane for these markers — emit each on its own line, exactly as shown:
 
   >>> ASK: <question>
     Escalate a question to the planner. Stop and wait for a reply before continuing.
 
-  >>> CHECK: <checklist item>
-    Mark a checklist item from the ticket as done.
+  Checklist items are in the ticket file. Mark them complete by editing that file's `# Checklist` section from `[ ]` to `[x]` as each item completes.
 
   >>> NOTE: <text>
   >>> END
@@ -44,7 +42,6 @@ user@machine:~/Documents/code/murder $ codex
 › 3. gpt-5.4-mini (current)  Small, fast, and cost-efficient model for simpler coding tasks.
 
   Press enter to confirm or esc to go back
-
 
 
 

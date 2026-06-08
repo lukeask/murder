@@ -166,14 +166,27 @@ surface; designing to it now is what makes the bridge cheap — see inktui "Defe
 - `agent.message {agent_id, message}` — deliver a message to an agent.
 - `notetaker.capture.submit {…}` — submit a captured note.
 
-*New — added by B13 (the V-list closure; Ink F0 depends on these existing):*
-- `ticket.quick_create {…}` → new ticket id (replaces the direct `.md` write, V1).
-- `ticket.next_id {}` → next free ticket id (V4).
-- `ticket.exists {handle}` → bool (V5).
-- `editor.open {path}` — service-side editor launch (or `editor.binary {}` → editor cmd) (V6).
-- image upload — `image.upload {bytes|path}` → stored ref, **or** `notetaker.capture.submit`
-  extended to accept image bytes (V2). Pick one in B13; record the choice here.
-- `tui.save_favorites {…}` — persist favorites/star prefs (V3), generalized to plans/notes.
+*New — added by C14/B13 (the V-list closure; Ink F0 depends on these existing).
+IMPLEMENTED 2026-06-08, sha 74331dc — shapes below are final, mirror into [[newui-inktui]]:*
+- `ticket.quick_create {title}` → `{handled, ticket_id, title}` (replaces the direct
+  `.md` write, V1). Routed through `command.submit` (target_worker `orchestrator`,
+  kind `ticket.quick_create`) since it mutates DB+fs.
+- `ticket.next_id {}` → `{ok, ticket_id}` next free ticket id (V4). Direct RPC.
+- `ticket.exists {handle}` → `{ok, exists}` bool (V5). Direct RPC. Checks DB row OR
+  on-disk `.md` (the old `.yaml` sidecar check is dead post-C2/C3).
+- `editor.binary {preferred?}` → `{ok, editor}` — **CHOSEN over `editor.open`**: the
+  service is a tty-less daemon, so it returns the resolved editor *command* and the
+  client launches the subprocess locally (the client owns the user's terminal) (V6).
+- **`image.upload {bytes, ext?}` → `{ok, path}` (V2 — CHOSEN over extending
+  `notetaker.capture.submit`).** `bytes` is **base64** over JSON-RPC; `ext` defaults
+  to `png`. Images are pasted inline mid-draft and referenced as `![image](path)`
+  before submit (and there can be several), so a standalone upload fits the flow.
+  Stored under `.murder/images/note-img-<ts>-<hex>.<ext>`.
+- `tui.save_favorites {favorites: [id,…]}` → `{ok, favorites}` — persist favorite
+  agent ids (V3). **Paired with `tui.load_favorites {}` → `{ok, favorites: [id,…]}`**
+  (added so the Ink store can *read* them; the load path also had to leave `.murder/`).
+- `worktree.list {}` → `{ok, entries: [{path, branch, is_main},…]}` — list `.murder`
+  worktrees (V7; the spawn wizard's worktree options build off these). Direct RPC.
 
 ### Events / subscriptions (service → view)
 
@@ -323,44 +336,109 @@ green** — the next agent starts from a passing state.
   orchestrator, `init_cmd`. *Done when:* no YAML-carve or CHECK path remains; surviving markers
   still work. *Deps: C3.*
 
-- [ ] **C8 — `parse_duration()` util (was Bd).** Shared duration parser (`1d4h3m`, `1h1m`,
+- [x] **C8 — `parse_duration()` util (was Bd).** Shared duration parser (`1d4h3m`, `1h1m`,
   `34m`, `1h`) for schedule input. *Files:* new util in `work/` or `verdict/`. *Done when:*
   unit tests cover each documented format + malformed input. *No deps.* *(Small — could be
   folded into C5 if an agent finishes early, but kept separate for a clean queue.)*
+  done: 490f378, new pure `work/duration.py` returns timedelta and raises ValueError on
+  malformed input (anchored fullmatch rejects empty/bare-number/unknown-unit/out-of-order);
+  no prior duration-string parser existed; 18 focused tests + ruff green.
 
-- [ ] **C9 — Startup model discovery + cache (was B8).** Fire `discover_harness_models()` per
+- [x] **C9 — Startup model discovery + cache (was B8).** Fire `discover_harness_models()` per
   enabled harness after `start_supervisor_workers` (graceful timeout). Add
   `get_available_models(harness)` accessor (cache → classvar fallback); demote the 3
   `available_startup_models` classvars to fallback; route settings/spawn reads through the
   accessor. *Files:* `app/.../host.py`, new model-cache module, `llm/harnesses/*`. *Done when:*
   startup populates the cache; accessor falls back gracefully when discovery times out. *No
   hard deps (light on C1/C2).*
+  done: fe07a11, new `llm/harnesses/model_cache.py` (in-process cache + `get_available_models`
+  accessor cache→classvar fallback + `populate_model_cache` firing per discovery-capable harness
+  concurrently behind `asyncio.wait_for` per-harness timeouts, all failures swallowed); host fires
+  it as a tracked `_model_discovery_task` after `start_supervisor_workers` and cancels it in
+  `stop()` like the other poll tasks; rerouted the 3 settings/spawn reads (settings_screen,
+  spawn_wizard, roster) through the accessor (left orchestrator degraded-ok check + cursor's own
+  fallback untouched). Note: classvars demoted by *role* not renamed (kept for cursor-internal +
+  orchestrator getattr use); discovery-capable set is actually all 6 harnesses (the "3 classvars"
+  in the brief = the non-empty ones), handled uniformly. 10 focused cache tests + ruff green; the
+  pre-existing test_transcript[cc] failure is unrelated (claude_code grammar WIP).
+  C10/C14 note: `spawn_wizard._HARNESS_MODELS` still hardcodes claude_code/codex model lists
+  ahead of the accessor (only empty-list harnesses fall through to `get_available_models`); when
+  cross-process discovery delivery lands it will need to defer to discovered models for those two.
 
-- [ ] **C10 — `HARNESSES_AND_MODELS.md` generator (was B9).** Pure
+- [x] **C10 — `HARNESSES_AND_MODELS.md` generator (was B9).** Pure
   `render_harnesses_doc(enabled, models)`; write at startup (post-discovery) and after
   `SettingsService.save_project/save_global` (+ `reconfigure_collaborator`); planner prompt
   reads it iff writing a ticket. *Files:* new generator, `settings_service.py`,
   `prompts/planner.md`. *Done when:* doc regenerates on settings change and lists
   harnesses/models/effort levels. *Deps: C9.*
+  done: 9389874, new `llm/harnesses/harnesses_doc.py` — pure `render_harnesses_doc(enabled,
+  models)` (effort derived from adapter `supported_efforts` classvar, not a param; empty-model
+  harness listed as "(no models discovered)") + `write_harnesses_doc(repo_root)` I/O helper that
+  reads models via C9's `get_available_models` (cache→classvar fallback) and lists only the
+  project's *enabled* crow harnesses (from `Config.default_crow.harnesses` pool — same set the
+  settings screen edits, so a disabled harness with a non-empty classvar fallback like codex is
+  omitted and the planner can't assign it). Startup chains write after `populate_model_cache`
+  (host `_discover_then_write_models_doc`, not a racing 2nd task). Hooked into `save_global`,
+  `save_project`, and `orchestrator.reconfigure_collaborator`. `paths.harnesses_and_models_md` →
+  `.murder/HARNESSES_AND_MODELS.md`. Planner prompt gets one line to read the doc when carving.
+  13 doc tests + 3 settings-hook tests + ruff green; pre-existing test_transcript[cc] failure
+  unrelated (claude_code grammar WIP, fails on baseline). C11 note: spawn `effort` still TODO.
 
-- [ ] **C11 — Effort through the spawn bus (was B10).** Ensure the `crow.spawn_rogue` RPC
+- [x] **C11 — Effort through the spawn bus (was B10).** Ensure the `crow.spawn_rogue` RPC
   payload carries `effort` end-to-end → `spawn_rogue(effort=…)`. *Files:*
   `runtime/workers/orchestrator_worker.py`, orchestrator spawn payload. *Done when:* an effort
   value supplied at the RPC boundary reaches the adapter. *No deps.*
+  done: fa36727, backend path was ALREADY complete — no code change needed. Traced full path:
+  JSON-RPC ingress `host._command_submit` passes `payload` opaquely into `CommandEvent.payload`
+  (no per-method field whitelist) → `orchestrator_worker.on_command` forwards `dict(payload)`
+  verbatim to the spawn callable → `orchestrator.spawn_rogue_command` unpacks+validates `effort`
+  → `spawn_rogue(effort=…)` → `startup_effort` into `get_harness`/`CrowAgent`/`HarnessStartSpec`
+  → adapter. Effort was wired by the worktree-support work (435026f, 2026-05-30), predating this
+  chunk; the C10 "still TODO" note was stale. The ONLY drop is the Textual `app._do_spawn_rogue`
+  + `SpawnWizard.Confirmed` (no effort field) — intentionally deferred to the Ink wizard per the
+  plan, NOT in this chunk's Files list, so left untouched (no gold-plating a doomed frontend).
+  Deliverable = regression tests `tests/unit/test_spawn_effort_bus.py` (3 tests: worker forwards
+  full payload incl. effort; spawn_rogue_command forwards effort to spawn_rogue; non-string
+  effort rejected at the boundary). All green + ruff clean; existing test_orchestrator_worker
+  still passes.
 
-- [ ] **C12 — Attribution seam + metadata-error reprompt (was B11).** `attribute_edit(path) ->
+- [x] **C12 — Attribution seam + metadata-error reprompt (was B11).** `attribute_edit(path) ->
   agent_id | None` (convention impl: `planner-{plan}` owns its plan+tickets, `crow-{id}` owns
   its ticket). On a parse error, route a fix-message via `agent.message`. Keep the interface
   single/swappable (pane-derived later). *Files:* new attribution module; parse-error hook.
   *Done when:* a malformed `.murder/` artifact messages its owning agent. *Deps: C2.*
+  done: 21b47ba, new pure `work/attribution.py` (`attribute_edit(path, repo_root) -> agent_id |
+  None`; ticket→`crow-{stem}`, plan→`planner-{stem}`; string/path-based, no DB/live lookup;
+  deprecated_plans/ + non-.md guarded out). Planner-owns-carved-tickets case deliberately deferred
+  to the seam swap (ticket .md has no parent-plan field → not path-derivable). Notifier wired as
+  optional `parse_error_notifier` on both TicketSync (returns parse_error from sync `reconcile_path`,
+  awaits notify in async `reconcile_file`) and PlanSync (notifies in its async parse-error branch).
+  Spam guard: notify ONLY from the debounced edit-watch `reconcile_file`, suppressed in the
+  startup/shutdown bulk `reconcile_all` (verified markdown_loop.poll_once only calls reconcile_file
+  once per observed mtime/size change). FilesystemSyncSupervisor.set_parse_error_notifier composes
+  attribute_edit + message-build + send; host wires it to orchestrator.send_agent_message after the
+  orchestrator is built (sync loops start earlier in Runtime.start, so attached late). 14 focused
+  tests (pure attribution + ticket/plan notify-once + reconcile_all-no-notify + supervisor
+  end-to-end composition + unattributable-skip) + ruff green; full unit suite green except the
+  pre-existing `test_transcript[cc]` baseline failure (claude_code grammar WIP, unrelated).
 
-- [ ] **C13 — Templates (was B12).** `example_ticket.md` / `example_plan.md` (frontmatter +
+- [x] **C13 — Templates (was B12).** `example_ticket.md` / `example_plan.md` (frontmatter +
   `# Checklist` + incremental-check instruction); service restores the default ticket if
   removed (hidden from TUI). *Files:* `.murder` templates, service restore hook. *Done when:*
   deleting the default ticket triggers re-creation; templates are copyable and not surfaced in
   the TUI. *Deps: C2.*
+  done: 85827a1, canonical templates in tracked `murder/resources/templates/example_{ticket,plan}.md`
+  (copied to `.murder/` top level at runtime, gitignored). New pure `work/examples.py:seed_examples()`
+  (idempotent: restores only missing files, preserves user edits) wired into
+  `FilesystemSyncSupervisor.reconcile_all` (startup/shutdown → delete then next reconcile re-creates)
+  and `init_cmd._scaffold_project`. Hiding is symmetric+automatic: examples sit at `.murder/` top
+  level, NOT in `tickets/`/`plans/`, which both sync loops glob only their own subdir of — so neither
+  ingests them and neither surfaces in the TUI (the no-digit `_TICKET_ID_RE` guard would also reject
+  `example_ticket`, but top-level placement is the real mechanism and covers the plan too, whose
+  parser is non-forgiving). 7 focused tests (both parsers parse the templates clean, restore-after-
+  delete, idempotency/edit-preservation, supervisor end-to-end) + ruff green.
 
-- [ ] **C14 — New RPC methods / V-list closure (was B13).** `ticket.quick_create` (V1),
+- [x] **C14 — New RPC methods / V-list closure (was B13).** `ticket.quick_create` (V1),
   `ticket.next_id` (V4), `ticket.exists` (V5), `editor.open` (V6); pick + implement the
   image-upload path for V2 (**record the choice in the Bus contract block above**);
   `tui.save_favorites` or a prefs decision (V3); demote V7 backend imports to stateless
@@ -368,6 +446,25 @@ green** — the next agent starts from a passing state.
   V-row in the bus-coupling table is closed and the TUI no longer touches `.murder/`/DB
   directly. *Deps: C3.* **This is the last service chunk — it unblocks the Ink frontend
   ([[newui-inktui]] F0).**
+  done: 74331dc, all 7 V-rows closed. V1 ticket.quick_create (orchestrator command +
+  worker + bootstrap; quick_kick now delegates to quick_create_ticket — no double insert).
+  V4 ticket.next_id / V5 ticket.exists (direct RPC off orchestrator next_ticket_id()/
+  ticket_exists(); exists checks DB-row OR .md, dropped the dead .yaml check). V6 →
+  `editor.binary` NOT editor.open (service is tty-less; client launches subprocess with the
+  resolved cmd). V2 → `image.upload {bytes(base64), ext}` → {path} (chose standalone RPC over
+  extending capture.submit — inline multi-paste flow; recorded in Bus contract block above).
+  V3 → `tui.save_favorites` + added `tui.load_favorites` (both sides had to leave .murder/;
+  crows roster now uses async IO callables not a prefs_path). V7 → is_rogue_agent_id demoted
+  to pure `runtime/orchestration/agent_ids.py` (re-exported from orchestrator for back-compat);
+  `worktree.list` RPC returns WorktreeEntry DTOs; format_session_name was already pure.
+  Final grep: app/tui/ builds no .murder/ paths and imports no DB/persistence/backend helpers
+  (only TicketStatus enum + WorktreeEntry DTO remain — allowlisted); perf_log .murder/logs
+  writes left as out-of-scope diagnostics per the plan. 26 focused tests green (3 new files +
+  updated worker/effort/note tests); full unit suite green except the pre-existing
+  test_transcript[cc] (claude_code grammar WIP, modified+failing on baseline, untouched here).
+  CONTRACT DRIFT: the Bus contract block above was synced (V2 + editor.binary choice +
+  tui.load_favorites + worktree.list); [[newui-inktui]]'s verbatim copy needs the SAME four
+  edits — the Ink author builds against that block, so it must not rot.
 
 ---
 

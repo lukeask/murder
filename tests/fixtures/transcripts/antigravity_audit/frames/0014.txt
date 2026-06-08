@@ -1,0 +1,63 @@
+user@machine:~/Documents/code/murder $ agy
+
+      ▄▀▀▄        Antigravity CLI 1.0.5
+     ▀▀▀▀▀▀       user@machine.com
+    ▀▀▀▀▀▀▀▀      Gemini 3.5 Flash (Low)
+   ▄▀▀    ▀▀▄     ~/Documents/code/murder
+  ▄▀▀      ▀▀▄
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+> /
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+> /add-dir            Add a directory to the workspace
+  /agents             List available custom agents
+  /artifact           View and review artifacts
+  /btw                Ask a side question without interrupting the current task
+  /changelog          Show release notes and changes
+   ↓ 30 more
+
+  ↑/↓ Navigate · enter Select · tab Complete
+esc to cancel                                                                                          Gemini 3.5 Flash (Low)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

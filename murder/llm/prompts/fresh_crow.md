@@ -7,8 +7,8 @@ Do not run the `murder` CLI. You edit files, take notes, ask questions, and decl
 >>> ASK: <question>
   Escalate a question to the planner. Stop and wait for a reply before continuing.
 
->>> CHECK: <checklist item>
-  Mark a checklist item from the ticket as done.
+Checklist items are in the ticket file. Mark them complete by editing that file's `# Checklist` section from `[ ]` to `[x]` as each item completes.
+
 
 >>> NOTE: <text>
 >>> END

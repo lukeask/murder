@@ -32,7 +32,6 @@ ANSWER_RE = re.compile(
     r">>>\s*ANSWER\[(?P<ticket>[^\]]+)\]:\s*(?P<body>.+?)(?=\n>>>|\Z)",
     re.DOTALL,
 )
-CHECK_RE = re.compile(r">>>\s*CHECK:\s*(?P<body>.+?)$", re.MULTILINE)
 NOTE_RE = re.compile(r">>>\s*NOTE:\s*(?P<body>.+?)\n>>>\s*END\b", re.DOTALL)
 DONE_RE = re.compile(r"^>>>\s*DONE[ \t]*$", re.MULTILINE)
 # Used when scanning assistant segment text that may have been reflowed by the
@@ -513,10 +512,6 @@ class HarnessAdapter(ABC):
             )
             for m in ANSWER_RE.finditer(clean)
         ]
-
-    def detect_checks(self, pane_text: str) -> list[str]:
-        clean = strip_ui_chrome(pane_text)
-        return [m.group("body").strip() for m in CHECK_RE.finditer(clean)]
 
     def detect_notes(self, pane_text: str) -> list[str]:
         clean = strip_ui_chrome(pane_text)

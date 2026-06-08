@@ -101,6 +101,31 @@ def _cc_starts_block(lines: list[str], index: int) -> bool:
     )
 
 
+_CC_BANNER_GLYPHS = ("▐", "▝", "▘", "▛", "▜")
+
+
+def _cc_clip_preamble(lines: list[str]) -> list[str]:
+    """Drop everything up to and including the startup banner.
+
+    The box-drawing logo + ``Claude Code v…`` banner is rendered once at launch
+    and, because scrollback only ever grows, persists at the top of the captured
+    pane for the session's life. Anything *above* it is pre-conversation noise:
+    a shell prompt and the (often line-wrapped) launch command when claude
+    wasn't the pane's initial command, a resize redraw, an MOTD. Those un-indented
+    lines would otherwise be swept up by the bare-prose branch as a phantom
+    assistant turn. Clip to just after the banner so the conversation region is
+    clean. If no banner is present (we attached mid-session, or it never rendered),
+    keep everything — there is no preamble to strip.
+    """
+    last_banner = -1
+    for idx, line in enumerate(lines):
+        if _cc_starts_block(lines, idx):
+            break  # conversation has begun; the banner is behind us
+        if "Claude Code v" in line or line.strip().startswith(_CC_BANNER_GLYPHS):
+            last_banner = idx
+    return lines[last_banner + 1 :] if last_banner >= 0 else lines
+
+
 def _strip_expand_hint(text: str) -> str:
     return re.sub(r"\s*\(ctrl\+[ot][^)]*\)\s*$", "", text).rstrip()
 
@@ -163,6 +188,7 @@ def parse_lines(
     user_texts: list[str] | None = None,  # noqa: ARG001
 ) -> list[Segment]:
     segments: list[Segment] = []
+    lines = _cc_clip_preamble(lines)
     i = 0
     while i < len(lines):
         line = lines[i]

@@ -1,11 +1,9 @@
-"""Collaborator carving form: legacy YAML ingest + DB apply compatibility."""
+"""Collaborator carving form: structured DB apply compatibility."""
 
 from __future__ import annotations
 
 import sqlite3
 from typing import Any
-
-import yaml
 
 from murder.state.persistence import tickets as dbmod
 from murder.work.tickets import lifecycle
@@ -13,14 +11,7 @@ from murder.work.tickets.status import TicketStatus
 
 
 class CarveError(ValueError):
-    """Invalid carving YAML or ticket state."""
-
-
-def parse_carve_yaml(text: str) -> dict[str, Any]:
-    raw = yaml.safe_load(text)
-    if not isinstance(raw, dict):
-        raise CarveError("carve YAML must be a mapping at the top level")
-    return raw
+    """Invalid carving payload or ticket state."""
 
 
 def _require_str_list(spec: dict[str, Any], key: str) -> list[str]:
@@ -40,21 +31,6 @@ def _normalize_model(spec: dict[str, Any]) -> str | None:
     return s or None
 
 
-def ingest_carve_ready_spec(
-    *,
-    conn: sqlite3.Connection,
-    repo_root: str,
-    ticket_id: str,
-    spec: dict[str, Any],
-) -> TicketStatus:
-    """Compatibility ingest path: apply the parsed legacy YAML directly."""
-    yaml_id = spec.get("id")
-    if yaml_id != ticket_id:
-        raise CarveError(f"YAML id {yaml_id!r} does not match target ticket {ticket_id!r}")
-    del repo_root
-    return apply_carve_ready_spec(conn, ticket_id, spec)
-
-
 def apply_carve_ready_spec(
     conn: sqlite3.Connection,
     ticket_id: str,
@@ -64,9 +40,9 @@ def apply_carve_ready_spec(
 
     Runs in a single transaction. Emits no bus events (callers do that).
     """
-    yaml_id = spec.get("id")
-    if yaml_id != ticket_id:
-        raise CarveError(f"YAML id {yaml_id!r} does not match target ticket {ticket_id!r}")
+    payload_id = spec.get("id")
+    if payload_id != ticket_id:
+        raise CarveError(f"payload id {payload_id!r} does not match target ticket {ticket_id!r}")
 
     row = dbmod.get_ticket(conn, ticket_id)
     if row is None:
@@ -76,7 +52,7 @@ def apply_carve_ready_spec(
 
     title = spec.get("title")
     if not title or not str(title).strip():
-        raise CarveError("title is required in carving YAML")
+        raise CarveError("title is required in carving payload")
     title_s = str(title).strip()
 
     harness_raw = spec.get("harness_override")

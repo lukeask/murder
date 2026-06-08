@@ -218,7 +218,7 @@ class CrowHandler(Daemon):
             await self._orchestration_tick(pane)
 
     async def _orchestration_tick(self, pane: str) -> None:
-        from murder.state.persistence.tickets import get_ticket_status, check_off_item, checklist_progress
+        from murder.state.persistence.tickets import get_ticket_status, checklist_progress
         from murder.state.persistence.agents import heartbeat_agent
         from murder.bus import HeartbeatEvent, QuestionEvent, SummaryEvent
         from murder.state.storage.paths import ticket_md
@@ -248,9 +248,6 @@ class CrowHandler(Daemon):
                     recent_pane=tail,
                 )
             )
-
-        for check in self.harness.detect_checks(pane):
-            check_off_item(self.runtime.db, self.ticket_id, check)
 
         tpath = ticket_md(self.repo_root, self.ticket_id)
         for note in self.harness.detect_notes(tail):
