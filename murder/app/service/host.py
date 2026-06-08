@@ -21,6 +21,7 @@ from murder.bus.broker import DurableBroker
 from murder.bus.protocol import CommandEvent
 from murder.bus.transport_socket import SocketBusServer, default_socket_path
 from murder.config import Config
+from murder.llm.harnesses.model_cache import populate_model_cache
 from murder.runtime.orchestration.orchestrator import Orchestrator
 from murder.state.persistence.commands import get_command_status
 from murder.state.storage.paths import db_path
@@ -49,6 +50,7 @@ class ServiceHost:
     tcp_bound: tuple[str, int] | None = None
     _usage_poll_task: asyncio.Task[None] | None = field(default=None, repr=False)
     _projection_poll_task: asyncio.Task[None] | None = field(default=None, repr=False)
+    _model_discovery_task: asyncio.Task[None] | None = field(default=None, repr=False)
     _rpc_handlers: dict[str, RpcHandler] = field(default_factory=dict, repr=False)
     _service_session_name: str | None = field(default=None, repr=False)
 
@@ -342,6 +344,9 @@ class ServiceHost:
             orchestrator=self.orchestrator,
             broker=self.broker,
         )
+        self._model_discovery_task = asyncio.create_task(
+            populate_model_cache(self.repo_root), name="startup-model-discovery"
+        )
         self._usage_poll_task = asyncio.create_task(
             run_service_usage_poll_loop(self.broker, self.runtime.db, str(self.runtime.run_id)),
             name="usage-sample-poll",
@@ -397,6 +402,12 @@ class ServiceHost:
             with contextlib.suppress(asyncio.CancelledError):
                 await self._projection_poll_task
             self._projection_poll_task = None
+
+        if self._model_discovery_task is not None:
+            self._model_discovery_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._model_discovery_task
+            self._model_discovery_task = None
 
         if self.supervisor is not None:
             await self.supervisor.stop_all()

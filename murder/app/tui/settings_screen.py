@@ -18,11 +18,10 @@ from textual.containers import Container, Vertical, VerticalScroll
 from textual.screen import ModalScreen
 from textual.widgets import Static
 
-from murder.config import Config, HarnessKind, HarnessRoleConfig
-from murder.llm.harnesses import REGISTRY
-from murder.user_config import UserConfig, UserHarnessRolePatch
-
 from murder.app.service.settings_service import ProjectRoleModels, SettingsService
+from murder.config import Config, HarnessKind, HarnessRoleConfig
+from murder.llm.harnesses.model_cache import get_available_models
+from murder.user_config import UserConfig, UserHarnessRolePatch
 
 _HARNESS_ROWS: list[tuple[HarnessKind, str, str]] = [
     ("cursor", "Cursor CLI", "agent"),
@@ -135,7 +134,7 @@ def _build_ui_model_state(
     options_by_kind: dict[HarnessKind, list[tuple[str, str]]] = {}
     states_by_kind: dict[HarnessKind, dict[str, ModelState]] = {}
     for kind, _, _ in _HARNESS_ROWS:
-        options = list(REGISTRY[kind].available_startup_models)
+        options = list(get_available_models(kind))
         seen = {model_id for model_id, _ in options}
         for model_id in configured_models.get(kind, []):
             if model_id not in seen:

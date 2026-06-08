@@ -16,8 +16,6 @@ from textual.message import Message
 from textual.screen import ModalScreen
 from textual.widgets import DataTable, Input, SelectionList, Static, TextArea
 
-from murder.llm.harnesses import REGISTRY
-
 from murder.app.service.client_api import (
     ScheduleSnapshot,
     ScheduleTicketRow,
@@ -30,6 +28,7 @@ from murder.app.tui.dispatch.schedule_cells import (
     display_status_for,
     last_update_cell,
 )
+from murder.llm.harnesses.model_cache import get_available_models
 
 
 def parse_carve_paste(text: str) -> dict[str, Any]:
@@ -250,10 +249,8 @@ def _schedule_select_options(snapshot_at: str | None) -> list[tuple[str, str]]:
 
 def _model_select_options(harness: str, current_model: str | None) -> list[tuple[str, str]]:
     opts: list[tuple[str, str]] = [("(no model override)", "")]
-    cls = REGISTRY.get(harness)
-    if cls is not None:
-        for model_id, label in cls.available_startup_models:
-            opts.append((f"{label} ({model_id})", model_id))
+    for model_id, label in get_available_models(harness):
+        opts.append((f"{label} ({model_id})", model_id))
     if current_model and current_model not in {v for _, v in opts}:
         opts.append((f"Other: {current_model}", current_model))
     return opts

@@ -13,8 +13,9 @@ from textual.message import Message
 from textual.widget import Widget
 from textual.widgets import Input, Static
 
-from murder.llm.harnesses import REGISTRY, capabilities_for
 from murder.app.service.settings_service import ModelDiscoveryResult
+from murder.llm.harnesses import REGISTRY, capabilities_for
+from murder.llm.harnesses.model_cache import get_available_models
 from murder.state.storage.worktrees import WorktreeEntry
 
 _HARNESS_MODELS: dict[str, list[str]] = {
@@ -58,10 +59,7 @@ def _static_model_ids_for_harness(harness: str) -> list[str]:
     models = _HARNESS_MODELS.get(harness, [])
     if models:
         return list(models)
-    adapter_cls = REGISTRY.get(harness)
-    if adapter_cls is None:
-        return []
-    return [model_id for model_id, _label in adapter_cls.available_startup_models]
+    return [model_id for model_id, _label in get_available_models(harness)]
 
 
 @dataclass(frozen=True, slots=True)
