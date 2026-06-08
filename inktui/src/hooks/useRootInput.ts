@@ -35,6 +35,10 @@ export interface DeferredGlobalHandlers {
   spawn?: () => void;
   /** `ctrl+y`. Default: no-op until C14 wires the tmux toggle. */
   toggleTmux?: () => void;
+  /** `ctrl+p`. Default: no-op until C12 wires the new-plan dialog. */
+  newPlan?: () => void;
+  /** `ctrl+t`. Default: no-op until C12 wires the new-ticket dialog. */
+  newTicket?: () => void;
 }
 
 /**
@@ -63,6 +67,9 @@ export function useRootInput(deferred: DeferredGlobalHandlers = {}): void {
         },
         spawn: deferred.spawn ?? (() => focusState.focus(CHAT_FOCUS)),
         toggleTmux: deferred.toggleTmux ?? (() => {}),
+        // C12: newPlan / newTicket default to no-ops until the caller supplies real handlers.
+        newPlan: deferred.newPlan ?? (() => {}),
+        newTicket: deferred.newTicket ?? (() => {}),
       };
 
       const ctx: DispatchContext = {

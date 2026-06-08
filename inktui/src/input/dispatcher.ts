@@ -12,15 +12,19 @@
  *  0. **Active-mode capture** — if a transient mode is up (a popup dialog, an in-layout editor, a
  *     full-screen view — see {@link ./modeStore.js}), the event is captured and routed to that
  *     mode's *declared* keymap *only*. A matching chord fires the mode's intent (its dismiss key is
- *     just a declared chord); a non-match is **swallowed** so the lower layers (global chords, the
- *     focused panel) cannot fire underneath the modal surface — exclusive capture, the whole point of
- *     a mode. The one escape hatch is `mode.passThrough === true`: then a non-matching key *falls
- *     through* to layers 1–3 (so e.g. a full-screen tmux view can still honour `ctrl+<n>`). This
- *     layer is checked first, before global chords, on purpose: while a modal is up even `ctrl+<n>`
- *     must not summon a panel unless the mode opted into pass-through. A later agent must not "fix"
- *     this back below the chord layer — that would break exclusive capture.
+ *     just a declared chord); a non-match first consults the mode's optional `onUncaptured` hook
+ *     (C12 extension — lets text-input dialogs capture raw printable characters the keymap cannot
+ *     wildcard-match; C8 editor uses the same hook). If `onUncaptured` returns `false` or is absent,
+ *     the event is **swallowed** so the lower layers (global chords, the focused panel) cannot fire
+ *     underneath the modal surface — exclusive capture, the whole point of a mode. The one escape
+ *     hatch is `mode.passThrough === true`: then a non-matching key (not consumed by `onUncaptured`)
+ *     *falls through* to layers 1–3 (so e.g. a full-screen tmux view can still honour `ctrl+<n>`).
+ *     This layer is checked first, before global chords, on purpose: while a modal is up even
+ *     `ctrl+<n>` must not summon a panel unless the mode opted into pass-through. A later agent must
+ *     not "fix" this back below the chord layer — that would break exclusive capture.
  *  1. **Global chords** — `ctrl+<n>` (toggle/focus a panel), `ctrl+h/j/k/l` (vim directional nav),
- *     `ctrl+y` (tmux toggle), `ctrl+s` (spawn/star), `ctrl+f` (focus chat). These are app-wide and
+ *     `ctrl+y` (tmux toggle), `ctrl+s` (spawn/star), `ctrl+f` (focus chat), `ctrl+p` (new-plan
+ *     popup, C12), `ctrl+t` (new-ticket popup, C12). These are app-wide and
  *     always win, *including while chat is focused*, so the user can summon a panel mid-message.
  *     They are safe to check first because every one carries `ctrl`, which printable typing never
  *     does — so checking them ahead of the chat short-circuit cannot swallow a typed character.
@@ -49,6 +53,28 @@ import { matchKeymap, type PanelKeymap } from './keymap.js';
 import type { Mode } from './modeStore.js';
 import { type PanelId, panelForDigit } from './panels.js';
 
+/**
+ * C12 augmentation: optional raw-input escape hatch for modes that need to capture printable
+ * characters (e.g. text-input dialogs). When a mode is active and its declared keymap does NOT
+ * match a key event, `onUncaptured` is called if present. Returning `true` marks the key as
+ * handled (still captured by the mode); returning `false` falls through to the normal
+ * capture-or-passthrough logic. This is additive — modes that do not need raw char capture simply
+ * omit the field; `ConfirmModal` and all existing modes are unaffected.
+ *
+ * C13 copies this pattern for the spawn wizard's text fields.
+ */
+declare module './modeStore.js' {
+  interface Mode {
+    /**
+     * Optional raw-input handler, called when the mode's declared keymap produces no match.
+     * Return `true` to consume the event (the mode handled it); `false` to leave the normal
+     * capture/pass-through logic in charge (swallow if `!passThrough`, fall through if
+     * `passThrough === true`).
+     */
+    onUncaptured?: (input: string, key: Key) => boolean;
+  }
+}
+
 /** The app-wide intents the global-chord layer can fire. Handed to {@link dispatchKey} as callbacks
  * so the dispatcher stays decoupled from the stores — the wiring hook supplies handlers that drive
  * the focus/panel stores and the (future) tmux/spawn actions. */
@@ -63,6 +89,10 @@ export interface GlobalHandlers {
   spawn(): void;
   /** `ctrl+y`: toggle tmux-vs-parsed view (wired by C14). */
   toggleTmux(): void;
+  /** `ctrl+p`: open the new-plan popup (wired by C12). */
+  newPlan(): void;
+  /** `ctrl+t`: open the new-ticket popup (wired by C12). */
+  newTicket(): void;
 }
 
 /** The live input context for one key event: where focus is, and the focused panel's keymap (when a
@@ -123,6 +153,14 @@ function dispatchGlobalChord(input: string, key: Key, handlers: GlobalHandlers):
     case 'y':
       handlers.toggleTmux();
       return true;
+    case 'p':
+      // C12: ctrl+p → new-plan popup.
+      handlers.newPlan();
+      return true;
+    case 't':
+      // C12: ctrl+t → new-ticket popup.
+      handlers.newTicket();
+      return true;
     default:
       return false;
   }
@@ -144,11 +182,23 @@ export function dispatchKey(input: string, key: Key, ctx: DispatchContext): Disp
   // Layer 0 — active-mode capture. A live mode captures the event exclusively: its declared keymap is
   // tried, and on no match the event is swallowed so no lower layer fires under the modal — UNLESS the
   // mode opts into pass-through, in which case a non-match falls through to layers 1–3.
+  //
+  // Extension (C12): if the mode's keymap does not match and the mode defines `onUncaptured`, it is
+  // called before the swallow/pass-through decision. Returning `true` means the mode consumed it
+  // (e.g. a text-input dialog appended the char); returning `false` restores the original behaviour.
+  // This is additive — ConfirmModal and all existing modes omit `onUncaptured` and are unaffected.
   if (ctx.activeMode !== null) {
     const intent = matchKeymap(ctx.activeMode.keymap, input, key);
     if (intent !== null) {
       ctx.activeMode.onIntent(intent);
       return { layer: 'mode', handled: true };
+    }
+    // onUncaptured: let the mode handle a raw key before swallowing (e.g. for text-input fields).
+    if (ctx.activeMode.onUncaptured !== undefined) {
+      const consumed = ctx.activeMode.onUncaptured(input, key);
+      if (consumed) {
+        return { layer: 'mode', handled: true };
+      }
     }
     if (ctx.activeMode.passThrough !== true) {
       return { layer: 'mode', handled: false }; // captured-but-unmatched: swallow, don't leak down

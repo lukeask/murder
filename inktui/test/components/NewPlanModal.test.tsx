@@ -1,0 +1,266 @@
+/**
+ * NewPlanModal tests — verifies the `ctrl+p` new-plan modal mode against the C7M idiom.
+ *
+ * Copy recipe (mirrors ConfirmModal.test.tsx):
+ *  1. Build input stores, enter the mode imperatively.
+ *  2. Drive with simulated keys: open → assert paint → type → submit → assert RPC fired + focus
+ *     restored.
+ *  3. Esc dismisses without firing RPC.
+ *  4. Panel chord does NOT fire while the modal is up (exclusive capture).
+ *  5. Pure dispatcher test: ctrl+p fires `newPlan` handler, ctrl+t fires `newTicket` handler.
+ */
+
+import { render } from 'ink-testing-library';
+import type { JSX } from 'react';
+import { describe, expect, it, vi } from 'vitest';
+import { FakeBusClient } from '../../src/bus/FakeBusClient.js';
+import { NEW_PLAN_MODE_ID, newPlanMode } from '../../src/components/NewPlanModal.js';
+import { Overlay } from '../../src/components/Overlay.js';
+import { InputStoresProvider } from '../../src/hooks/useInputStores.js';
+import { useRootInput } from '../../src/hooks/useRootInput.js';
+import { createInputStores } from '../../src/input/createInputStores.js';
+import { selectActiveMode } from '../../src/input/modeStore.js';
+import { createDialogActions } from '../../src/store/dialogs/dialogActions.js';
+
+const ESC = '\x1b';
+
+/** Let Ink flush a render + post-render effects. */
+async function tick(): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, 20));
+}
+
+/** Runs the root input loop inside the providers. */
+function RootInput({
+  newPlan,
+  newTicket,
+}: {
+  readonly newPlan?: () => void;
+  readonly newTicket?: () => void;
+}): null {
+  // Build deferred handlers, only passing keys that have real values (exactOptionalPropertyTypes).
+  const deferred = {
+    ...(newPlan !== undefined ? { newPlan } : {}),
+    ...(newTicket !== undefined ? { newTicket } : {}),
+  };
+  useRootInput(deferred);
+  return null;
+}
+
+/** The harness: the overlay + root loop inside the providers. */
+function Harness({
+  stores,
+  newPlan,
+  newTicket,
+}: {
+  readonly stores: ReturnType<typeof createInputStores>;
+  readonly newPlan?: () => void;
+  readonly newTicket?: () => void;
+}): JSX.Element {
+  // Only pass defined handlers to avoid exactOptionalPropertyTypes violations.
+  const rootProps = {
+    ...(newPlan !== undefined ? { newPlan } : {}),
+    ...(newTicket !== undefined ? { newTicket } : {}),
+  };
+  return (
+    <InputStoresProvider value={stores}>
+      <RootInput {...rootProps} />
+      <Overlay />
+    </InputStoresProvider>
+  );
+}
+
+/** Build stores with tickets panel focused (the prior focus to restore). */
+function setup() {
+  const stores = createInputStores(['tickets'], 'tickets');
+  const bus = new FakeBusClient();
+  const actions = createDialogActions(bus);
+
+  bus.stubRpc('plan.create', { handled: true, plan_name: 'test', agent_id: 'agent-1' });
+
+  const enter = () => stores.modes.getState().enter(newPlanMode(stores.modes, actions, {}));
+  return { stores, bus, actions, enter };
+}
+
+describe('NewPlanModal — ctrl+p new-plan dialog', () => {
+  it('opens, paints the dialog, captures input, dismisses on Esc, and restores focus', async () => {
+    const { stores, enter } = setup();
+    const { lastFrame, stdin } = render(<Harness stores={stores} />);
+    await tick();
+    expect(lastFrame()).not.toContain('New Plan');
+
+    enter();
+    await tick();
+    expect(lastFrame()).toContain('New Plan');
+    expect(selectActiveMode(stores.modes)?.id).toBe(NEW_PLAN_MODE_ID);
+
+    // Esc dismisses.
+    stdin.write(ESC);
+    await tick();
+    expect(selectActiveMode(stores.modes)).toBeNull();
+    expect(lastFrame()).not.toContain('New Plan');
+    expect(stores.focus.getState().intendedId).toBe('tickets'); // prior focus restored
+  });
+
+  it('accepts printable char input via onUncaptured, renders updated value', async () => {
+    const { stores, enter } = setup();
+    const { lastFrame, stdin } = render(<Harness stores={stores} />);
+    enter();
+    await tick();
+    expect(lastFrame()).toContain('New Plan');
+
+    // Type plan name chars.
+    stdin.write('m');
+    stdin.write('y');
+    stdin.write('-');
+    stdin.write('p');
+    stdin.write('l');
+    stdin.write('a');
+    stdin.write('n');
+    await tick();
+    expect(lastFrame()).toContain('my-plan');
+  });
+
+  it('backspace deletes the last char', async () => {
+    const { stores, enter } = setup();
+    const { lastFrame, stdin } = render(<Harness stores={stores} />);
+    enter();
+    await tick();
+
+    stdin.write('a');
+    stdin.write('b');
+    await tick();
+    expect(lastFrame()).toContain('ab');
+
+    stdin.write('\x7f'); // backspace
+    await tick();
+    // After backspace: only 'a' in the plan name field, not 'ab' as an input value.
+    // The frame contains 'a█' (cursor after 'a') but not 'ab█'.
+    expect(lastFrame()).not.toContain('ab█');
+  });
+
+  it('submit fires the plan.create RPC and dismisses the modal', async () => {
+    const { stores, bus } = setup();
+    const onSubmit = vi.fn();
+    stores.modes
+      .getState()
+      .enter(newPlanMode(stores.modes, createDialogActions(bus), { onSubmit }));
+    const { stdin } = render(<Harness stores={stores} />);
+    await tick();
+
+    // Type a plan name.
+    stdin.write('m');
+    stdin.write('y');
+    stdin.write('-');
+    stdin.write('p');
+    stdin.write('l');
+    stdin.write('a');
+    stdin.write('n');
+    await tick();
+
+    // Press Enter to submit.
+    stdin.write('\r');
+    await tick();
+
+    expect(selectActiveMode(stores.modes)).toBeNull(); // modal dismissed
+    expect(stores.focus.getState().intendedId).toBe('tickets'); // focus restored
+
+    // Give the async RPC a tick to complete.
+    await tick();
+    expect(bus.rpcCalls.length).toBe(1);
+    expect(bus.rpcCalls[0]).toMatchObject({
+      method: 'plan.create',
+      params: { plan_name: 'my-plan', message: '' },
+    });
+    await tick();
+    expect(onSubmit).toHaveBeenCalledWith('my-plan', '');
+  });
+
+  it('submit with empty plan name shows an error and does NOT fire RPC', async () => {
+    const { stores, bus, enter } = setup();
+    const { lastFrame, stdin } = render(<Harness stores={stores} />);
+    enter();
+    await tick();
+
+    // Press Enter with empty name.
+    stdin.write('\r');
+    await tick();
+    expect(lastFrame()).toContain('Plan name is required');
+    expect(selectActiveMode(stores.modes)?.id).toBe(NEW_PLAN_MODE_ID); // still up
+    expect(bus.rpcCalls.length).toBe(0);
+  });
+
+  it('captures exclusively: ctrl+1 does NOT toggle a panel while the modal is up', async () => {
+    const { stores, enter } = setup();
+    const { stdin } = render(<Harness stores={stores} />);
+    enter();
+    await tick();
+
+    // ctrl+1 (\x01) would normally toggle the plans panel; must not while modal is up.
+    stdin.write('\x01');
+    await tick();
+    expect(selectActiveMode(stores.modes)?.id).toBe(NEW_PLAN_MODE_ID); // modal still up
+    // plans panel should NOT have been toggled on (it was not visible before).
+    expect(stores.panels.getState().visible.has('plans')).toBe(false);
+  });
+
+  it('tab cycles the active field', async () => {
+    const { stores, enter } = setup();
+    const { stdin } = render(<Harness stores={stores} />);
+    enter();
+    await tick();
+
+    // Initially focused on plan name; type something, tab to message field.
+    stdin.write('m');
+    stdin.write('y');
+    await tick();
+    stdin.write('\t'); // tab to message field
+    await tick();
+    stdin.write('h'); // type in message field
+    stdin.write('i');
+    await tick();
+
+    // The modal should still be up and contain the message.
+    expect(selectActiveMode(stores.modes)?.id).toBe(NEW_PLAN_MODE_ID);
+  });
+});
+
+describe('global chords — ctrl+p and ctrl+t', () => {
+  it('ctrl+p fires the newPlan handler', async () => {
+    const stores = createInputStores(['tickets'], 'tickets');
+    const newPlanFn = vi.fn();
+    const { stdin } = render(<Harness stores={stores} newPlan={newPlanFn} />);
+    await tick();
+
+    // ctrl+p = \x10
+    stdin.write('\x10');
+    await tick();
+    expect(newPlanFn).toHaveBeenCalledOnce();
+  });
+
+  it('ctrl+t fires the newTicket handler', async () => {
+    const stores = createInputStores(['tickets'], 'tickets');
+    const newTicketFn = vi.fn();
+    const { stdin } = render(<Harness stores={stores} newTicket={newTicketFn} />);
+    await tick();
+
+    // ctrl+t = \x14
+    stdin.write('\x14');
+    await tick();
+    expect(newTicketFn).toHaveBeenCalledOnce();
+  });
+
+  it('ctrl+p does NOT fire while the new-plan modal is up (exclusive capture)', async () => {
+    const { stores, enter } = setup();
+    const newPlanFn = vi.fn();
+    const { stdin } = render(<Harness stores={stores} newPlan={newPlanFn} />);
+    enter();
+    await tick();
+
+    stdin.write('\x10'); // ctrl+p
+    await tick();
+    // The modal is up (its onUncaptured gets \x10 with ctrl=true → returns false → swallowed).
+    // newPlanFn must NOT have been called.
+    expect(newPlanFn).not.toHaveBeenCalled();
+    expect(selectActiveMode(stores.modes)?.id).toBe(NEW_PLAN_MODE_ID);
+  });
+});
