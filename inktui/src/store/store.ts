@@ -48,6 +48,18 @@ import {
   createConversationsSlice,
   initialConversationsState,
 } from './conversations/conversationsSlice.js';
+import { createDocViewActions, type DocViewActions } from './docView/docViewActions.js';
+import {
+  createDocViewSlice,
+  type DocViewState,
+  initialDocViewState,
+} from './docView/docViewSlice.js';
+import { createFavoritesActions, type FavoritesActions } from './favorites/favoritesActions.js';
+import {
+  createFavoritesSlice,
+  type FavoritesState,
+  initialFavoritesState,
+} from './favorites/favoritesSlice.js';
 import { createNotesActions, type NotesActions } from './notes/notesActions.js';
 import {
   createNotesSlice,
@@ -55,6 +67,13 @@ import {
   NOTES_INVALIDATING_ENTITY,
   type NotesState,
 } from './notes/notesSlice.js';
+import { createPlansActions, type PlansActions } from './plans/plansActions.js';
+import {
+  createPlansSlice,
+  initialPlansState,
+  PLANS_INVALIDATING_ENTITY,
+  type PlansState,
+} from './plans/plansSlice.js';
 import { createReportsActions, type ReportsActions } from './reports/reportsActions.js';
 import {
   createReportsSlice,
@@ -97,12 +116,15 @@ import {
  * only via these (rule 3). One key per slice — copy the `roster` line to add a domain. */
 export interface AppActions {
   roster: RosterActions;
+  plans: PlansActions;
   notes: NotesActions;
   reports: ReportsActions;
   tickets: TicketsActions;
   usage: UsageActions;
   ticketDetail: TicketDetailActions;
   conversations: ConversationsActions;
+  favorites: FavoritesActions;
+  docView: DocViewActions;
 }
 
 /**
@@ -112,12 +134,15 @@ export interface AppActions {
  */
 export interface AppStore {
   roster: RosterState;
+  plans: PlansState;
   notes: NotesState;
   reports: ReportsState;
   tickets: TicketsState;
   usage: UsageState;
   ticketDetail: TicketDetailState;
   conversations: ConversationsState;
+  favorites: FavoritesState;
+  docView: DocViewState;
   actions: AppActions;
 }
 
@@ -150,12 +175,15 @@ export function createAppStore(bus: BusClient): {
   //    once the handle exists (below), so it starts as a typed placeholder.
   const store = createStore<AppStore>()((...a) => ({
     ...createRosterSlice(...a),
+    ...createPlansSlice(...a),
     ...createNotesSlice(...a),
     ...createReportsSlice(...a),
     ...createTicketsSlice(...a),
     ...createUsageSlice(...a),
     ...createTicketDetailSlice(...a),
     ...createConversationsSlice(...a),
+    ...createFavoritesSlice(...a),
+    ...createDocViewSlice(...a),
     // Placeholder; replaced in step 2 now that we have the handle the actions need to `setState`.
     actions: undefined as unknown as AppActions,
   }));
@@ -163,18 +191,22 @@ export function createAppStore(bus: BusClient): {
   // 2. Actions: bound to the bus + the live handle. This is the only place the bus is wired in.
   const actions: AppActions = {
     roster: createRosterActions(bus, store),
+    plans: createPlansActions(bus, store),
     notes: createNotesActions(bus, store),
     reports: createReportsActions(bus, store),
     tickets: createTicketsActions(bus, store),
     usage: createUsageActions(bus, store),
     ticketDetail: createTicketDetailActions(bus, store),
     conversations: createConversationsActions(bus, store),
+    favorites: createFavoritesActions(bus, store),
+    docView: createDocViewActions(bus, store),
   };
   store.setState({ actions });
 
   // 3. Invalidation table: entity → the slice refresh it triggers. One entry per slice.
   const invalidations: readonly SliceInvalidation[] = [
     { entity: ROSTER_INVALIDATING_ENTITY, refresh: () => void actions.roster.refresh() },
+    { entity: PLANS_INVALIDATING_ENTITY, refresh: () => void actions.plans.refresh() },
     { entity: NOTES_INVALIDATING_ENTITY, refresh: () => void actions.notes.refresh() },
     { entity: REPORTS_INVALIDATING_ENTITY, refresh: () => void actions.reports.refresh() },
     { entity: TICKETS_INVALIDATING_ENTITY, refresh: () => void actions.tickets.refresh() },
@@ -230,13 +262,25 @@ export function createAppStore(bus: BusClient): {
  * assert the boot value without reconstructing it. Mirrors each slice's `initialXState`. */
 export const initialAppState: Pick<
   AppStore,
-  'roster' | 'notes' | 'reports' | 'tickets' | 'usage' | 'ticketDetail' | 'conversations'
+  | 'roster'
+  | 'plans'
+  | 'notes'
+  | 'reports'
+  | 'tickets'
+  | 'usage'
+  | 'ticketDetail'
+  | 'conversations'
+  | 'favorites'
+  | 'docView'
 > = {
   roster: initialRosterState,
+  plans: initialPlansState,
   notes: initialNotesState,
   reports: initialReportsState,
   tickets: initialTicketsState,
   usage: initialUsageState,
   ticketDetail: initialTicketDetailState,
   conversations: initialConversationsState,
+  favorites: initialFavoritesState,
+  docView: initialDocViewState,
 };

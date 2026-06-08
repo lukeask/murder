@@ -23,11 +23,15 @@
  *     `ctrl+<n>` must not summon a panel unless the mode opted into pass-through. A later agent must
  *     not "fix" this back below the chord layer — that would break exclusive capture.
  *  1. **Global chords** — `ctrl+<n>` (toggle/focus a panel), `ctrl+h/j/k/l` (vim directional nav),
- *     `ctrl+y` (tmux toggle), `ctrl+s` (spawn/star), `ctrl+f` (focus chat), `ctrl+p` (new-plan
- *     popup, C12), `ctrl+t` (new-ticket popup, C12). These are app-wide and
+ *     `ctrl+y` (tmux toggle), `ctrl+s` (spawn/star — see below), `ctrl+f` (focus chat), `ctrl+p`
+ *     (new-plan popup, C12), `ctrl+t` (new-ticket popup, C12). These are app-wide and
  *     always win, *including while chat is focused*, so the user can summon a panel mid-message.
  *     They are safe to check first because every one carries `ctrl`, which printable typing never
  *     does — so checking them ahead of the chat short-circuit cannot swallow a typed character.
+ *     **`ctrl+s` is the one dual-purpose exception (C11):** it is a global chord (open the spawn
+ *     wizard) ONLY when chat is focused; when a panel is focused it declines here and falls through
+ *     to layer 3 so the focused panel stars its own (locally-tracked) highlighted row. See
+ *     {@link dispatchGlobalChord}'s doc for the rationale (keeps the cursor panel-local, rule 1).
  *     (The plan lists "chat short-circuit → global chords"; we resolve the apparent ordering by
  *     scoping the short-circuit to *non-chord* input, which is the only reading that lets `ctrl+<n>`
  *     work while typing. Documented here so a later agent doesn't "fix" it back.)
@@ -95,6 +99,25 @@ export interface GlobalHandlers {
   newTicket(): void;
 }
 
+/**
+ * The chat-input handler — the **persistent chat-input mode** (C11, part F), expressed as a layer-2
+ * callback rather than a {@link ./modeStore.js modeStore} frame. Chat is the app's permanent focus
+ * home: there is nothing to save/restore and nothing to dismiss, so it is NOT a transient mode (the
+ * modeStore contract is capture + focus-restore, which chat does not want). Instead, when the chat
+ * input is the effective focus, the dispatcher's layer 2 routes the (non-chord) event here. The
+ * handler buffers printable characters, sends on `return`, and reports whether it consumed the key.
+ *
+ * It sees the event ONLY after layer 1 (global ctrl-chords) has had its chance — so `ctrl+<n>`,
+ * `ctrl+s` (spawn, since chat is focused), `ctrl+y`, etc. still fire while the user is typing (every
+ * global chord carries `ctrl`, which printable typing never does). That ordering is why the persistent
+ * chat mode needs no special escape hatch: the global layer already preempts it.
+ */
+export interface ChatInputHandler {
+  /** Handle one chat key event. Return `true` if consumed (a char buffered, or a send fired), so the
+   * dispatcher reports `handled: true`; `false` to leave it unhandled (e.g. an unmapped control key). */
+  handleKey(input: string, key: Key): boolean;
+}
+
 /** The live input context for one key event: where focus is, and the focused panel's keymap (when a
  * panel is focused). `panelKeymaps` maps a visible/focusable panel to what it has declared; the
  * dispatcher reads only the focused panel's entry. */
@@ -107,6 +130,10 @@ export interface DispatchContext {
    * layered-dispatch doc above). Kept on the context (not a store reference) so {@link dispatchKey}
    * stays pure — the React glue reads the active mode and passes it in. */
   readonly activeMode: Mode | null;
+  /** The persistent chat-input handler (C11). Optional: when absent, layer 2 yields as before (the
+   * dispatcher declines to route, claiming nothing) — so chunks/tests that don't wire chat input are
+   * unaffected. When present, layer 2 routes chat-focused non-chord events to it. */
+  readonly chatInput?: ChatInputHandler;
 }
 
 /** The vim navigation chords, as data: `ctrl+<letter>` → direction. Declared here (not inlined in a
@@ -122,8 +149,26 @@ const VIM_NAV: Readonly<Record<string, Direction>> = {
  * Try the global-chord layer. Returns `true` if a global chord claimed the event. Only fires on
  * `ctrl`-modified events, so it never intercepts plain typing. Order within the layer is
  * deterministic: digit toggles, then vim nav, then the single-letter app chords.
+ *
+ * ## `ctrl+s` is the one deliberate dual-purpose chord (C11)
+ *
+ * Every *other* global chord wins unconditionally (it carries `ctrl`, so it can't swallow typing).
+ * `ctrl+s` is the documented exception: it is global ONLY when chat is focused (→ open the spawn
+ * wizard, C13's behaviour). When a *panel* is focused, `ctrl+s` means "star the highlighted row" —
+ * but the highlighted row is the panel's own local cursor (rule 1 — cursor stays local), which this
+ * global layer cannot see. So for a non-chat focus we return `false` for `'s'`, letting it fall
+ * through to layer 3 (the focused panel's declared keymap), which declares `ctrl+s → star` and
+ * stars its own cursor row. This is the "favorite the thing I'm pointing at; if I'm pointing at
+ * chat, spawn" rule (spec › Starring + Keybinds). It is NOT a layer re-ordering — `ctrl+s` simply
+ * does not claim the event in the global layer when a panel is focused. A later agent must not
+ * "fix" this to always-spawn: the dual purpose is the locked user decision.
  */
-function dispatchGlobalChord(input: string, key: Key, handlers: GlobalHandlers): boolean {
+function dispatchGlobalChord(
+  input: string,
+  key: Key,
+  handlers: GlobalHandlers,
+  focusedId: FocusId,
+): boolean {
   if (!key.ctrl) {
     return false;
   }
@@ -148,8 +193,13 @@ function dispatchGlobalChord(input: string, key: Key, handlers: GlobalHandlers):
       handlers.focusChat();
       return true;
     case 's':
-      handlers.spawn();
-      return true;
+      // Dual-purpose (see the fn doc): spawn only when chat is focused; otherwise fall through to
+      // the focused panel's `ctrl+s → star` keymap (return false → layer 3 handles it).
+      if (focusedId === CHAT_FOCUS) {
+        handlers.spawn();
+        return true;
+      }
+      return false;
     case 'y':
       handlers.toggleTmux();
       return true;
@@ -175,7 +225,7 @@ function dispatchGlobalChord(input: string, key: Key, handlers: GlobalHandlers):
 export type DispatchOutcome =
   | { readonly layer: 'mode'; readonly handled: boolean }
   | { readonly layer: 'global'; readonly handled: true }
-  | { readonly layer: 'chat'; readonly handled: false }
+  | { readonly layer: 'chat'; readonly handled: boolean }
   | { readonly layer: 'panel'; readonly handled: boolean };
 
 export function dispatchKey(input: string, key: Key, ctx: DispatchContext): DispatchOutcome {
@@ -206,14 +256,24 @@ export function dispatchKey(input: string, key: Key, ctx: DispatchContext): Disp
     // pass-through: fall out of layer 0 into the normal layers below.
   }
 
-  // Layer 1 — global chords (win even while chat is focused; ctrl-only, so typing is safe).
-  if (dispatchGlobalChord(input, key, ctx.handlers)) {
+  // Layer 1 — global chords (win even while chat is focused; ctrl-only, so typing is safe). The one
+  // exception is `ctrl+s`, which only claims the event when chat is focused; with a panel focused it
+  // declines here so layer 3 (the panel's `ctrl+s → star` keymap) handles it (C11 — see
+  // dispatchGlobalChord's doc). So the focus id is passed in.
+  if (dispatchGlobalChord(input, key, ctx.handlers, ctx.focusedId)) {
     return { layer: 'global', handled: true };
   }
 
-  // Layer 2 — chat short-circuit: a non-chord event while chat is focused belongs to the input.
-  // The dispatcher declines to route it; the chat component handles its own editing.
+  // Layer 2 — chat short-circuit: a non-chord event while chat is focused belongs to the input. C11:
+  // route it to the persistent chat-input handler (the "persistent chat mode"), if one is wired —
+  // it buffers printable chars and sends on Enter. Global ctrl-chords already had their turn in layer
+  // 1, so this only ever sees the events that genuinely belong to the text field. When no handler is
+  // wired (older chunks/tests), the dispatcher declines as before, claiming nothing.
   if (ctx.focusedId === CHAT_FOCUS) {
+    if (ctx.chatInput !== undefined) {
+      const consumed = ctx.chatInput.handleKey(input, key);
+      return { layer: 'chat', handled: consumed };
+    }
     return { layer: 'chat', handled: false };
   }
 

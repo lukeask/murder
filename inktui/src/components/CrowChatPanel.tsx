@@ -47,6 +47,7 @@ import {
   useFavoritesChatPanes,
 } from '../selectors/conversationsSelectors.js';
 import type { ConversationsState } from '../store/conversations/conversationsSlice.js';
+import type { FavoritesState } from '../store/favorites/favoritesSlice.js';
 import type { RosterState } from '../store/roster/rosterSlice.js';
 
 // ---------------------------------------------------------------------------
@@ -146,10 +147,11 @@ const CrowChatPane = memo(function CrowChatPane({
 export const CrowChatPanel = memo(function CrowChatPanel(): React.JSX.Element | null {
   const roster: RosterState = useAppStore((s) => s.roster, shallow);
   const conversations: ConversationsState = useAppStore((s) => s.conversations, shallow);
+  const favorites: FavoritesState = useAppStore((s) => s.favorites, shallow);
   const activePaneAgentId = useAppStore((s) => s.conversations.activePaneAgentId);
 
-  // Rule 2: selector derives favorited panes in spec order.
-  const { panes } = useFavoritesChatPanes(roster);
+  // Rule 2: selector derives favorited panes in spec order (default-favorited + explicitly starred).
+  const { panes } = useFavoritesChatPanes(roster, favorites);
 
   // send action ref — the only bus path for chat (rule 3). Not wired to a key here (rule 5:
   // no stray useInput); consumed by an external caller (ChatInput / C11 send seam) via

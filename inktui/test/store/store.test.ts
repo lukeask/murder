@@ -87,6 +87,16 @@ describe('createAppStore — boot & wiring', () => {
     // C6 slices also start idle.
     expect(store.getState().notes).toEqual({ rows: [], status: 'idle', error: null });
     expect(store.getState().reports).toEqual({ rows: [], status: 'idle', error: null });
+    // C11 slices start idle/closed.
+    expect(store.getState().plans).toEqual({ rows: [], status: 'idle', error: null });
+    expect(store.getState().favorites.status).toBe('idle');
+    expect(store.getState().favorites.ids.size).toBe(0);
+    expect(store.getState().docView).toEqual({
+      open: null,
+      body: null,
+      status: 'idle',
+      error: null,
+    });
   });
 
   it('exposes actions grouped by slice', () => {
@@ -99,6 +109,10 @@ describe('createAppStore — boot & wiring', () => {
     expect(typeof store.getState().actions.tickets.refresh).toBe('function');
     // C9 actions.
     expect(typeof store.getState().actions.usage.refresh).toBe('function');
+    // C11 actions.
+    expect(typeof store.getState().actions.plans.refresh).toBe('function');
+    expect(typeof store.getState().actions.favorites.toggle).toBe('function');
+    expect(typeof store.getState().actions.docView.open).toBe('function');
   });
 
   it('starts the tickets slice in its idle, pre-fetch state', () => {
@@ -127,15 +141,35 @@ describe('event-driven slice invalidation', () => {
     expect(store.getState().roster.rows[0]?.agentId).toBe('a-1');
   });
 
+  it('re-pulls the plans slice on a `plan` state.snapshot and projects the parent field (C11)', async () => {
+    const { fake, store } = setup();
+    fake.stubRpc('plan.get_snapshot', {
+      invalidation_key: 'iv-p',
+      plans: [
+        { name: 'parent', char_count: 10, updated_at: '2026-06-01T00:00:00' },
+        { name: 'child', char_count: 5, updated_at: '2026-06-02T00:00:00', parent: 'parent' },
+      ],
+    });
+
+    fake.emit(snapshot('plan'));
+    await flush();
+
+    expect(fake.rpcCalls).toContainEqual({ method: 'plan.get_snapshot', params: {} });
+    const plans = store.getState().plans;
+    expect(plans.status).toBe('ready');
+    expect(plans.rows).toHaveLength(2);
+    // The parent linkage is projected onto the row (defaulting an absent parent to null).
+    expect(plans.rows.find((r) => r.name === 'parent')?.parent).toBeNull();
+    expect(plans.rows.find((r) => r.name === 'child')?.parent).toBe('parent');
+  });
+
   it('does NOT re-pull roster on an entity event for a different slice', async () => {
-    // C6 wired `note` → notes.refresh and `report` → reports.refresh; C7 wired `ticket` →
-    // tickets.refresh. Those are no longer "unrelated" to the store. Use `plan`, `queue_row`,
-    // and `escalation` (not yet wired) to verify that an entity with no registered invalidation
-    // leaves the roster (and the rpc call list) untouched.
+    // C6 wired `note`/`report`; C7 wired `ticket`; C11 wired `plan` → plans.refresh. Those are no
+    // longer "unrelated". Use `queue_row` and `escalation` (still not wired) to verify that an
+    // entity with no registered invalidation leaves the roster (and its rpc call list) untouched.
     const { fake, store } = setup();
     const rosterBefore = store.getState().roster;
 
-    fake.emit(snapshot('plan'));
     fake.emit(snapshot('queue_row'));
     fake.emit(snapshot('escalation'));
     await flush();

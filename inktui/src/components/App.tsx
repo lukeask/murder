@@ -21,11 +21,10 @@
  *    root input loop with {@link useRootInput}. It is the only caller of that hook.
  *
  * Region/panel pattern: each region maps its panel ids to components, rendering a panel only when it
- * is in the visible set. The real panels today are `crows` ({@link CrowsPanel}, crows-by-type) and
- * `usage` ({@link UsagePanel}) — both landed by C9; the flat {@link RosterPanel} is kept aside as
- * the copyable reference implementation. The remaining ids are {@link PlaceholderPanel}s tagged with
- * the chunk that fills them. A later chunk swaps its placeholder for a real panel copied from
- * `RosterPanel`/`CrowsPanel` — *this file changes only at its `renderPanel` case for that id*. That
+ * is in the visible set. Every panel id now resolves to a real component (C11 filled the last
+ * placeholder, `plans`, with {@link PlansPanel}); the flat {@link RosterPanel} is kept aside as the
+ * copyable reference implementation. A later chunk that adds a panel swaps its `renderPanel` case for
+ * a real panel copied from `RosterPanel`/`CrowsPanel` — *this file changes only at that case*. That
  * is the skeleton's contract: stable composition, panels filled in independently.
  *
  * C13: `Shell` now wires the `spawn` deferred handler so `ctrl+s` opens the spawn wizard. The
@@ -34,9 +33,9 @@
  */
 
 import { Box } from 'ink';
-import type { JSX } from 'react';
+import { type JSX, useEffect } from 'react';
 import type { BusClient } from '../bus/BusClient.js';
-import { AppStoreProvider, useAppStoreApi } from '../hooks/useAppStore.js';
+import { AppStoreProvider, useAppStore, useAppStoreApi } from '../hooks/useAppStore.js';
 import { BusClientProvider, useBusClient } from '../hooks/useBusClient.js';
 import {
   type InputStores,
@@ -46,10 +45,12 @@ import {
   usePanelStore,
 } from '../hooks/useInputStores.js';
 import { useRootInput } from '../hooks/useRootInput.js';
-import { resolveFocus } from '../input/focusStore.js';
+import type { ChatInputHandler } from '../input/dispatcher.js';
 import { selectActiveMode } from '../input/modeStore.js';
 import type { PanelId } from '../input/panels.js';
+import { selectActiveAgentId } from '../selectors/conversationsSelectors.js';
 import { createSpawnActions } from '../store/dialogs/spawnActions.js';
+import { DOC_DIR } from '../store/docView/docViewSlice.js';
 import type { AppStoreApi } from '../store/store.js';
 import { BottomBar } from './BottomBar.js';
 import { ChatInput } from './ChatInput.js';
@@ -57,7 +58,7 @@ import { CrowChatPanel } from './CrowChatPanel.js';
 import { CrowsPanel } from './CrowsPanel.js';
 import { NotesPanel } from './NotesPanel.js';
 import { Overlay, presentationHidesLayout } from './Overlay.js';
-import { PlaceholderPanel } from './PlaceholderPanel.js';
+import { PlansPanel } from './PlansPanel.js';
 import { ReportsPanel } from './ReportsPanel.js';
 import type { SpawnContext } from './SpawnWizardModal.js';
 import { spawnWizardMode } from './SpawnWizardModal.js';
@@ -72,11 +73,10 @@ const LEFT_PANELS: readonly PanelId[] = ['plans', 'notes', 'reports', 'tickets']
 const RIGHT_PANELS: readonly PanelId[] = ['usage', 'crows'];
 
 /**
- * Render one panel by id — the single dispatch from a {@link PanelId} to its component. Most ids are
- * now real panels (`crows`, `usage`, `notes`, `reports`, `tickets`); `plans` is still a labelled
- * {@link PlaceholderPanel}. A later chunk replaces a placeholder `case` with the real panel it copies
- * from `RosterPanel`/`CrowsPanel`; nothing else in the shell changes. Defined as a function (not
- * inline) so the swap is one localised edit.
+ * Render one panel by id — the single dispatch from a {@link PanelId} to its component. Every id
+ * resolves to a real panel (`plans`, `notes`, `reports`, `tickets`, `usage`, `crows`); a future
+ * chunk that adds a panel adds its `case` here, copying `RosterPanel`/`CrowsPanel`, and nothing else
+ * in the shell changes. Defined as a function (not inline) so the swap is one localised edit.
  */
 function renderPanel(id: PanelId): JSX.Element {
   switch (id) {
@@ -93,7 +93,8 @@ function renderPanel(id: PanelId): JSX.Element {
         </Box>
       );
     case 'plans':
-      return <PlaceholderPanel id={id} title="Plans" filledBy="C6/plans-TBD" />;
+      // C11: PlansPanel fills the last placeholder — parent-plan indentation + star + doc-view.
+      return <PlansPanel />;
     case 'notes':
       return <NotesPanel />;
     case 'reports':
@@ -133,46 +134,88 @@ function PanelRegion({ panels }: { readonly panels: readonly PanelId[] }): JSX.E
 }
 
 /**
- * Derive the spawn context from the focus and app stores at `ctrl+s` invocation time.
- * Returns a {@link SpawnContext} when the focused panel is `notes` or `reports` AND at least one
- * row is available; otherwise `null` (no context step shown in the wizard).
+ * Derive the spawn context from the app store at `ctrl+s` invocation time. Returns a
+ * {@link SpawnContext} when a document (plan / note / report) is the **focused doc**, else `null`
+ * (no context step shown in the wizard).
  *
- * ## C11 seam — cursor-in-store
- * Each panel's cursor is currently local `useState`, inaccessible here. This function uses the
- * **first available row** as a best-effort proxy for the "selected" doc. When C11 lands
- * doc-toggle with cursor-in-store, update this function to use the real cursor index — the
- * {@link SpawnContext} shape and the wizard factory interface are already seam-ready; no changes
- * to `SpawnWizardModal` are needed.
+ * ## Focused-doc = the OPEN doc-view (C11 — replaces C13's first-row proxy)
+ * The spec's "focused-doc-wins — list row or opened doc widget alike" resolves cleanly here: when
+ * `ctrl+s` fires the spawn wizard, focus is on **chat** (that is the only focus where `ctrl+s`
+ * spawns rather than stars — see dispatcher.ts), so there is no live list cursor to read. The
+ * "focused doc" is therefore whatever doc the user last *opened* in the in-layout doc view
+ * ({@link ./DocViewMode.js}), held in the `docView` slice. Reading it replaces C13's first-row proxy
+ * with the real selected doc, and needs no lifted cursor — the open doc is already shared state with
+ * a real identity (`{ kind, name }`), so panel cursors stay local (rule 1).
+ *
+ * If no doc is open, there is no focused doc and the wizard skips the context step.
  *
  * ## Reference-by-path (locked mechanism)
- * The returned `path` is `.murder/<dir>/<name>.md`. The wizard builds:
- *   `"Please read ${path} before starting."`
- * which the rogue receives as its kickoff message — it reads the file, not an inlined body.
- *
- * ## Plans panel
- * Plans (panel 1) is a placeholder (C6 TBD) — its slice does not exist yet. Once C6 lands plans
- * rows, add a `'plans'` branch here mirroring the `'notes'` branch. No wizard changes needed.
+ * The returned `path` is `.murder/<dir>/<name>.md` (the dir from {@link DOC_DIR}). The wizard builds
+ * `"Please read ${path} before starting."` — the rogue reads the file, not an inlined body.
  */
-export function deriveSpawnContext(
-  focus: ReturnType<typeof import('../input/focusStore.js').createFocusStore>,
-  appStore: AppStoreApi,
-): SpawnContext | null {
-  const focused = resolveFocus(focus.getState().intendedId, focus.panels.getState().visible);
-  const state = appStore.getState();
+export function deriveSpawnContext(appStore: AppStoreApi): SpawnContext | null {
+  const open = appStore.getState().docView.open;
+  if (open === null) {
+    return null;
+  }
+  const dir = DOC_DIR[open.kind];
+  return { title: open.name, path: `.murder/${dir}/${open.name}.md` };
+}
 
-  if (focused === 'notes') {
-    const first = state.notes.rows[0];
-    if (first === undefined) return null;
-    return { title: first.name, path: `.murder/notes/${first.name}.md` };
-  }
-  if (focused === 'reports') {
-    const first = state.reports.rows[0];
-    if (first === undefined) return null;
-    return { title: first.name, path: `.murder/reports/${first.name}.md` };
-  }
-  // 'plans': placeholder — no rows yet (C6 TBD). See doc above.
-  // 'tickets', 'usage', 'crows', 'chat': not doc panels — no context.
-  return null;
+/**
+ * Build the **persistent chat-input handler** (C11, part F) over the chat buffer store + the app
+ * store. This is the layer-2 chat short-circuit's consumer (see {@link ../input/dispatcher.js}'s
+ * {@link ChatInputHandler}): chat is the permanent focus home, so it is NOT a transient mode — the
+ * buffer lives in `chatInput` and this handler edits it on each keystroke and sends on Enter.
+ *
+ * Routing (rule 3): on Enter, the active agent id is derived from the conversations + roster slices
+ * via {@link selectActiveAgentId} (the discriminated-union identity — no conversation-id parsing),
+ * and the message is sent through `actions.conversations.send` (the sole bus caller). The buffer is
+ * cleared after dispatch. An empty buffer or no active agent makes Enter a no-op (still consumed, so
+ * the dispatcher reports handled — Enter belongs to the chat field).
+ *
+ * Pure factory over the two stores: no React, exported so a test drives the keystroke→send path
+ * directly. Global ctrl-chords never reach here (layer 1 preempts layer 2), so this can treat every
+ * event it sees as chat text — it returns `false` only for control keys it does not own (so an
+ * unhandled control key isn't falsely reported as consumed).
+ */
+export function makeChatInputHandler(
+  chatInput: InputStores['chatInput'],
+  appStore: AppStoreApi,
+): ChatInputHandler {
+  return {
+    handleKey(input, key): boolean {
+      // Enter → send the buffer to the active agent, then clear. Always consumed (Enter is chat's).
+      if (key.return === true) {
+        const message = chatInput.getState().text;
+        if (message.length > 0) {
+          const agentId = selectActiveAgentId(
+            appStore.getState().conversations,
+            appStore.getState().roster,
+            appStore.getState().favorites,
+          );
+          if (agentId !== null) {
+            void appStore.getState().actions.conversations.send(agentId, message);
+          }
+        }
+        chatInput.getState().clear();
+        return true;
+      }
+      // Backspace/Delete → delete the last char. Consumed.
+      if (key.backspace === true || key.delete === true) {
+        chatInput.getState().backspace();
+        return true;
+      }
+      // A printable character (no modifier, single visible char) → append. Consumed.
+      // Reject empty/modified input: those are control keys the chat field doesn't own (return
+      // `false` so the dispatcher doesn't falsely report them handled).
+      if (input.length > 0 && key.ctrl !== true && key.meta !== true && key.escape !== true) {
+        chatInput.getState().append(input);
+        return true;
+      }
+      return false;
+    },
+  };
 }
 
 /**
@@ -181,26 +224,41 @@ export function deriveSpawnContext(
  * toggleable panel regions. The middle row holds left + right regions side by side; each collapses
  * when it has no visible panels.
  *
- * C13: wires the `spawn` deferred handler so `ctrl+s` opens the spawn wizard. The handler reads
- * the focus + app store at invocation time (not during render) so it always sees current state.
+ * C13: wires the `spawn` deferred handler so `ctrl+s` opens the spawn wizard. The handler reads the
+ * app store at invocation time (not during render) so it always sees current state.
+ *
+ * C11: `ctrl+s` is dual-purpose (spawn from chat; star from a panel) — the dispatcher routes it, so
+ * this `spawn` handler still only fires when chat is focused (see dispatcher.ts). The spawn context
+ * is the OPEN doc-view (focused-doc), via {@link deriveSpawnContext}. C11 also loads the persisted
+ * favorites once on mount via the favorites action.
  */
 function Shell(): JSX.Element {
-  const { modes, focus } = useInputStores();
+  const { modes, chatInput } = useInputStores();
   const appStore = useAppStoreApi();
   const bus = useBusClient();
+  const loadFavorites = useAppStore((s) => s.actions.favorites.load);
 
-  // `ctrl+s` → open the spawn wizard. Reads stores imperatively at call time (getState()) so no
-  // stale closure; does NOT need useMemo/useCallback — stores are stable references.
+  // Load persisted favorites once on mount (rule 3: via the action). Fire-and-forget; a rejection
+  // (e.g. the modeled-not-live prefs RPC against a real bus) lands in the slice's error and leaves
+  // favorites at their defaults — never crashes the shell.
+  useEffect(() => {
+    void loadFavorites();
+  }, [loadFavorites]);
+
+  // `ctrl+s` → open the spawn wizard (only fires when chat is focused; see dispatcher.ts). Reads the
+  // store imperatively at call time (getState()) so no stale closure; stores are stable references.
   const spawnHandler = (): void => {
-    // Snapshot the spawn context at invocation time (C11 seam: first-row proxy).
-    const spawnContext = deriveSpawnContext(focus, appStore);
+    // The focused doc is the open doc-view (C11 — replaces C13's first-row proxy).
+    const spawnContext = deriveSpawnContext(appStore);
     const actions = createSpawnActions(bus);
     modes.getState().enter(spawnWizardMode(modes, actions, { spawnContext }));
   };
 
   // The single root input loop for the whole app (rule 5) — installed exactly once, here.
-  // C13: `spawn` is now wired to the real spawn wizard handler.
-  useRootInput({ spawn: spawnHandler });
+  // C13: `spawn` wired to the spawn wizard handler. C11: `chatInput` wired to the persistent
+  // chat-input handler (buffers chars, sends on Enter to the active agent). Global ctrl-chords still
+  // preempt it (layer 1 < layer 2), so the user can summon panels mid-message.
+  useRootInput({ spawn: spawnHandler, chatInput: makeChatInputHandler(chatInput, appStore) });
 
   // A full-screen mode (C14 tmux) replaces the whole layout: when one is active the shell renders
   // only the {@link Overlay} (which paints the full-viewport surface), suppressing its own bars and

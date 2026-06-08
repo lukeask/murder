@@ -159,69 +159,53 @@ describe('App shell', () => {
   });
 });
 
-describe('deriveSpawnContext', () => {
-  /** Build a minimal FakeBusClient store + input stores with the given focus. */
-  function makeStores(focusId: PanelId | 'chat') {
+describe('deriveSpawnContext — focused doc = the open doc-view (C11)', () => {
+  /** Build a minimal FakeBusClient-backed store. */
+  function makeStore() {
     const fake = new FakeBusClient();
     fake.stubRpc('crow.get_snapshot', { invalidation_key: 'iv', sessions: [] });
-    const { store, dispose } = createAppStore(fake);
-    // Pass focusId as the initial focus; visible panels include the focused panel (except 'chat').
-    const panels: PanelId[] = focusId === 'chat' ? [] : [focusId as PanelId];
-    const inputStores = createInputStores(panels, focusId === 'chat' ? 'chat' : focusId);
-    return { store, dispose, focus: inputStores.focus };
+    return createAppStore(fake);
   }
 
-  it('returns null when notes is focused but has no rows', () => {
-    const { store, focus, dispose } = makeStores('notes');
-    const result = deriveSpawnContext(focus, store);
-    expect(result).toBeNull();
+  it('returns null when no doc is open (the closed doc-view default)', () => {
+    const { store, dispose } = makeStore();
+    expect(deriveSpawnContext(store)).toBeNull();
     dispose();
   });
 
-  it('returns SpawnContext for first notes row when notes is focused', () => {
-    const { store, focus, dispose } = makeStores('notes');
-    // Seed the notes slice directly via setState.
+  it('returns the open note as the focused doc (reference-by-path)', () => {
+    const { store, dispose } = makeStore();
     store.setState((s) => ({
-      ...s,
-      notes: { ...s.notes, rows: [{ name: 'my-note', charCount: 100, updatedAt: '2026-01-01' }] },
+      docView: { ...s.docView, open: { kind: 'note', name: 'my-note' } },
     }));
-    const result = deriveSpawnContext(focus, store);
-    expect(result).toEqual({ title: 'my-note', path: '.murder/notes/my-note.md' });
+    expect(deriveSpawnContext(store)).toEqual({
+      title: 'my-note',
+      path: '.murder/notes/my-note.md',
+    });
     dispose();
   });
 
-  it('returns null when reports is focused but has no rows', () => {
-    const { store, focus, dispose } = makeStores('reports');
-    const result = deriveSpawnContext(focus, store);
-    expect(result).toBeNull();
-    dispose();
-  });
-
-  it('returns SpawnContext for first reports row when reports is focused', () => {
-    const { store, focus, dispose } = makeStores('reports');
+  it('returns the open report as the focused doc', () => {
+    const { store, dispose } = makeStore();
     store.setState((s) => ({
-      ...s,
-      reports: {
-        ...s.reports,
-        rows: [{ name: 'my-report', charCount: 200, updatedAt: '2026-01-01' }],
-      },
+      docView: { ...s.docView, open: { kind: 'report', name: 'my-report' } },
     }));
-    const result = deriveSpawnContext(focus, store);
-    expect(result).toEqual({ title: 'my-report', path: '.murder/reports/my-report.md' });
+    expect(deriveSpawnContext(store)).toEqual({
+      title: 'my-report',
+      path: '.murder/reports/my-report.md',
+    });
     dispose();
   });
 
-  it('returns null when a non-doc panel (tickets) is focused', () => {
-    const { store, focus, dispose } = makeStores('tickets');
-    const result = deriveSpawnContext(focus, store);
-    expect(result).toBeNull();
-    dispose();
-  });
-
-  it('returns null when chat is focused', () => {
-    const { store, focus, dispose } = makeStores('chat');
-    const result = deriveSpawnContext(focus, store);
-    expect(result).toBeNull();
+  it('returns the open plan as the focused doc', () => {
+    const { store, dispose } = makeStore();
+    store.setState((s) => ({
+      docView: { ...s.docView, open: { kind: 'plan', name: 'my-plan' } },
+    }));
+    expect(deriveSpawnContext(store)).toEqual({
+      title: 'my-plan',
+      path: '.murder/plans/my-plan.md',
+    });
     dispose();
   });
 });

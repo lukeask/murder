@@ -37,7 +37,19 @@ import {
 const PANEL_ID: PanelId = 'crows';
 const PANEL_TITLE = 'Crows';
 
-type CrowsIntent = 'cursorDown' | 'cursorUp' | 'refresh' | 'toggleExpanded';
+type CrowsIntent = 'cursorDown' | 'cursorUp' | 'refresh' | 'toggleExpanded' | 'star';
+
+/** Flatten the grouped sections into one cursor-ordered list of agent ids — the order the cursor
+ * walks (sections in order, rows within each). Pure; lets `ctrl+s` resolve the highlighted crow. */
+function flatAgentIds(view: CrowsView): readonly string[] {
+  const ids: string[] = [];
+  for (const section of view.sections) {
+    for (const row of section.rows) {
+      ids.push(row.agentId);
+    }
+  }
+  return ids;
+}
 
 /**
  * One crow row in minimized mode: one line (name + status).
@@ -180,8 +192,10 @@ export const CrowsPanel = memo(function CrowsPanel(): React.JSX.Element {
   // Rule 2: view comes pre-grouped from the selector; no role/ticketId logic here.
   const roster = useAppStore((s) => s.roster, shallow);
   const view = useCrowsView(roster);
-  // Rule 3: bus reached only through the dispatched action.
+  // Rule 3: bus reached only through the dispatched actions.
   const refresh = useAppStore((s) => s.actions.roster.refresh);
+  const toggleFavorite = useAppStore((s) => s.actions.favorites.toggle);
+  const setActivePane = useAppStore((s) => s.actions.conversations.setActivePaneAgentId);
 
   // Local UI state: cursor position + minimized/maximized toggle (rule 1).
   const [cursor, setCursor] = useState(0);
@@ -199,6 +213,13 @@ export const CrowsPanel = memo(function CrowsPanel(): React.JSX.Element {
     [rowCount],
   );
 
+  // The highlighted crow's agentId at call time — local cursor (rule 1), flattened section order.
+  const agentIdAtCursor = useCallback((): string | null => {
+    const ids = flatAgentIds(view);
+    const clamped = Math.min(cursor, Math.max(ids.length - 1, 0));
+    return ids[clamped] ?? null;
+  }, [cursor, view]);
+
   // Rule 5: keymap as data + exhaustive intent handler; PanelKeymap in useMemo.
   const keymap: PanelKeymap<CrowsIntent> = useMemo(
     () => ({
@@ -207,6 +228,10 @@ export const CrowsPanel = memo(function CrowsPanel(): React.JSX.Element {
         { chord: { input: 'k' }, intent: 'cursorUp', description: 'prev crow' },
         { chord: { input: 'r' }, intent: 'refresh', description: 'refresh' },
         { chord: { input: 'm' }, intent: 'toggleExpanded', description: 'toggle maximized' },
+        // ctrl+s stars the highlighted crow (dispatcher routes ctrl+s here when a panel is focused)
+        // AND keeps that crow's chat pane active (spec: "ctrl+s while chatting a crow stars it and
+        // keeps that chat pane active").
+        { chord: { input: 's', key: { ctrl: true } }, intent: 'star', description: 'star' },
       ],
       onIntent(intent) {
         switch (intent) {
@@ -222,12 +247,20 @@ export const CrowsPanel = memo(function CrowsPanel(): React.JSX.Element {
           case 'toggleExpanded':
             setExpanded((e) => !e);
             return;
+          case 'star': {
+            const agentId = agentIdAtCursor();
+            if (agentId !== null) {
+              void toggleFavorite(agentId);
+              setActivePane(agentId); // keep this crow's chat pane active (spec)
+            }
+            return;
+          }
           default:
             return intent satisfies never;
         }
       },
     }),
-    [moveCursor, refresh],
+    [moveCursor, refresh, toggleFavorite, setActivePane, agentIdAtCursor],
   );
   usePanelKeymap(PANEL_ID, keymap);
 

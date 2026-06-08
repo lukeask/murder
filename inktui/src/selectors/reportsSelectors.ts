@@ -8,7 +8,9 @@
  */
 
 import { useMemo } from 'react';
+import type { FavoritesState } from '../store/favorites/favoritesSlice.js';
 import type { ReportRow, ReportsState } from '../store/reports/reportsSlice.js';
+import { isInFavoriteSet, stableSortStarredFirst } from './favoritesSelectors.js';
 
 /**
  * One report row as the component paints it: display-ready strings for both lines of the
@@ -20,6 +22,8 @@ export interface ReportRowView {
   readonly charCount: string;
   /** `updated_at` formatted as `YYYY-MM-DD HH:MM`. */
   readonly updatedAt: string;
+  /** Whether this report is starred (in the explicit favorite set). */
+  readonly starred: boolean;
 }
 
 /** The whole reports list, render-ready. Parallel to {@link NotesView}. */
@@ -41,11 +45,12 @@ function formatCharCount(n: number): string {
 }
 
 /** Project one domain row into its presentation tuple. */
-function toReportRowView(row: ReportRow): ReportRowView {
+function toReportRowView(row: ReportRow, starred: boolean): ReportRowView {
   return {
     name: row.name,
     charCount: formatCharCount(row.charCount),
     updatedAt: formatUpdatedAt(row.updatedAt),
+    starred,
   };
 }
 
@@ -56,10 +61,17 @@ function byUpdatedAtDescThenName(a: ReportRow, b: ReportRow): number {
 }
 
 /**
- * The pure view-model transform. Sorts a copy and projects each row.
+ * The pure view-model transform. Orders by recency, then floats starred reports to the top (stable —
+ * spec › "Starred shown at top"). Same input → same output, no React/store/bus.
  */
-export function selectReportsView(state: ReportsState): ReportsView {
-  const rows = [...state.rows].sort(byUpdatedAtDescThenName).map(toReportRowView);
+export function selectReportsView(state: ReportsState, favorites: FavoritesState): ReportsView {
+  const byRecency = [...state.rows].sort(byUpdatedAtDescThenName);
+  const ordered = stableSortStarredFirst(
+    byRecency,
+    (row) => row.name,
+    (id) => isInFavoriteSet(favorites, id),
+  );
+  const rows = ordered.map((row) => toReportRowView(row, isInFavoriteSet(favorites, row.name)));
   return {
     rows,
     status: state.status,
@@ -69,9 +81,8 @@ export function selectReportsView(state: ReportsState): ReportsView {
 }
 
 /**
- * Component-facing hook: memoizes {@link selectReportsView} on the slice identity. A component does:
- *   `const view = useReportsView(useAppStore((s) => s.reports));`
+ * Component-facing hook: memoizes {@link selectReportsView} on the (reports, favorites) identities.
  */
-export function useReportsView(state: ReportsState): ReportsView {
-  return useMemo(() => selectReportsView(state), [state]);
+export function useReportsView(state: ReportsState, favorites: FavoritesState): ReportsView {
+  return useMemo(() => selectReportsView(state, favorites), [state, favorites]);
 }

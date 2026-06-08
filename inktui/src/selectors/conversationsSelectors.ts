@@ -25,8 +25,10 @@ import type {
   ConversationBlock,
   ConversationsState,
 } from '../store/conversations/conversationsSlice.js';
+import type { FavoritesState } from '../store/favorites/favoritesSlice.js';
 import type { RosterState } from '../store/roster/rosterSlice.js';
 import { type AgentIdentity, deriveAgentIdentity, isDefaultFavorited } from './agentIdentity.js';
+import { isFavorited } from './favoritesSelectors.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -174,12 +176,25 @@ export function selectConversationView(
 /**
  * Derive the ordered list of favorited crow chat panes to render.
  * Ordering: collaborator → planners → rogue crows → ticket crows (spec order, same as CrowsPanel).
- * Filtered to: identities where `isDefaultFavorited` returns true (C11 adds prefs override).
+ *
+ * Filtered to: identities favorited per {@link ../selectors/favoritesSelectors.js isFavorited} —
+ * which ORs the kind-derived default ({@link ./agentIdentity.js isDefaultFavorited}: collaborator +
+ * rogues) with the explicit, persisted favorite set (C11). So a planner or ticket crow the user
+ * stars with `ctrl+s` now gets a chat pane too, not only the default-favorited kinds.
+ *
+ * `favorites` is optional: when omitted (C10-era callers), it falls back to defaults-only — the same
+ * behaviour as before C11, so nothing breaks if a caller hasn't been updated.
  */
 /** Spec-defined group order for favorites (collaborator → planner → rogue → ticket). */
 const FAVORITES_GROUP_ORDER = ['collaborator', 'planner', 'rogue', 'ticket'] as const;
 
-export function selectFavoritesChatPanes(rosterState: RosterState): FavoritesChatPanesView {
+/** An empty favorite set — the defaults-only fallback when no prefs slice is supplied. */
+const NO_FAVORITES: FavoritesState = { ids: new Set<string>(), status: 'idle', error: null };
+
+export function selectFavoritesChatPanes(
+  rosterState: RosterState,
+  favorites: FavoritesState = NO_FAVORITES,
+): FavoritesChatPanesView {
   const panes: AgentIdentity[] = [];
   // Collect by group so we maintain the spec order (collaborator → planner → rogue → ticket).
   const byGroup: Record<string, AgentIdentity[]> = {
@@ -191,7 +206,10 @@ export function selectFavoritesChatPanes(rosterState: RosterState): FavoritesCha
 
   for (const row of rosterState.rows) {
     const identity = deriveAgentIdentity(row);
-    if (identity !== null && isDefaultFavorited(identity)) {
+    if (
+      identity !== null &&
+      isFavorited(favorites, identity.agentId, isDefaultFavorited(identity))
+    ) {
       const groupKey = identity.kind === 'planner' ? 'planner' : identity.kind;
       (byGroup[groupKey] ?? []).push(identity);
     }
@@ -229,10 +247,14 @@ export function useConversationTurns(
 }
 
 /**
- * Memoised hook for the favorited chat panes list. Re-runs only when the roster ref-changes.
+ * Memoised hook for the favorited chat panes list. Re-runs when the roster OR favorites ref-changes
+ * (so starring a crow updates the pane list). `favorites` defaults to defaults-only when omitted.
  */
-export function useFavoritesChatPanes(rosterState: RosterState): FavoritesChatPanesView {
-  return useMemo(() => selectFavoritesChatPanes(rosterState), [rosterState]);
+export function useFavoritesChatPanes(
+  rosterState: RosterState,
+  favorites: FavoritesState = NO_FAVORITES,
+): FavoritesChatPanesView {
+  return useMemo(() => selectFavoritesChatPanes(rosterState, favorites), [rosterState, favorites]);
 }
 
 /**
@@ -249,10 +271,11 @@ export function useFavoritesChatPanes(rosterState: RosterState): FavoritesChatPa
 export function selectActiveAgentId(
   conversationsState: ConversationsState,
   rosterState: RosterState,
+  favorites: FavoritesState = NO_FAVORITES,
 ): string | null {
   if (conversationsState.activePaneAgentId !== null) {
     return conversationsState.activePaneAgentId;
   }
-  const { panes } = selectFavoritesChatPanes(rosterState);
+  const { panes } = selectFavoritesChatPanes(rosterState, favorites);
   return panes.length > 0 ? (panes[0]?.agentId ?? null) : null;
 }

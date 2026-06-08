@@ -297,8 +297,9 @@ describe('SpawnWizardModal — ctrl+s spawn wizard', () => {
 });
 
 describe('ctrl+s dispatcher test', () => {
-  it('ctrl+s fires the spawn handler', async () => {
-    const stores = createInputStores(['notes'], 'notes');
+  it('ctrl+s fires the spawn handler when CHAT is focused (C11 dual-purpose chord)', async () => {
+    // C11: ctrl+s spawns ONLY when chat is focused; from a panel it stars the highlighted row.
+    const stores = createInputStores([], 'chat');
     const spawnFn = vi.fn();
     const { stdin } = render(<Harness stores={stores} spawn={spawnFn} />);
     await tick();

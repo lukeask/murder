@@ -4,6 +4,7 @@
  */
 
 import { selectReportsView } from '../../src/selectors/reportsSelectors.js';
+import type { FavoritesState } from '../../src/store/favorites/favoritesSlice.js';
 import type { ReportRow, ReportsState } from '../../src/store/reports/reportsSlice.js';
 
 function row(overrides: Partial<ReportRow> = {}): ReportRow {
@@ -19,6 +20,12 @@ function state(rows: readonly ReportRow[], overrides: Partial<ReportsState> = {}
   return { rows, status: 'ready', error: null, ...overrides };
 }
 
+function favs(ids: readonly string[] = []): FavoritesState {
+  return { ids: new Set(ids), status: 'ready', error: null };
+}
+
+const NO_FAVS = favs();
+
 describe('selectReportsView — presentation', () => {
   it('orders rows by updatedAt descending (most recent first), then name', () => {
     const view = selectReportsView(
@@ -28,25 +35,26 @@ describe('selectReportsView — presentation', () => {
         row({ name: 'd', updatedAt: '2026-04-01T00:00:00' }),
         row({ name: 'c', updatedAt: '2026-06-01T00:00:00' }),
       ]),
+      NO_FAVS,
     );
     expect(view.rows.map((r) => r.name)).toEqual(['a', 'c', 'b', 'd']);
   });
 
   it('formats updatedAt as YYYY-MM-DD HH:MM', () => {
-    const view = selectReportsView(state([row({ updatedAt: '2026-06-08T09:15:00.000' })]));
+    const view = selectReportsView(state([row({ updatedAt: '2026-06-08T09:15:00.000' })]), NO_FAVS);
     expect(view.rows[0]?.updatedAt).toBe('2026-06-08 09:15');
   });
 
   it('formats charCount with "chars" suffix', () => {
-    const view = selectReportsView(state([row({ charCount: 999 })]));
+    const view = selectReportsView(state([row({ charCount: 999 })]), NO_FAVS);
     expect(view.rows[0]?.charCount).toContain('chars');
     expect(view.rows[0]?.charCount).toContain('999');
   });
 
   it('carries load flags through and computes isEmpty', () => {
-    expect(selectReportsView(state([])).isEmpty).toBe(true);
-    expect(selectReportsView(state([row()])).isEmpty).toBe(false);
-    const err = selectReportsView(state([], { status: 'error', error: 'fail' }));
+    expect(selectReportsView(state([]), NO_FAVS).isEmpty).toBe(true);
+    expect(selectReportsView(state([row()]), NO_FAVS).isEmpty).toBe(false);
+    const err = selectReportsView(state([], { status: 'error', error: 'fail' }), NO_FAVS);
     expect(err.status).toBe('error');
     expect(err.error).toBe('fail');
   });
@@ -57,7 +65,19 @@ describe('selectReportsView — presentation', () => {
       row({ name: 'a', updatedAt: '2026-06-01T00:00:00' }),
     ];
     const original = [...rows];
-    selectReportsView(state(rows));
+    selectReportsView(state(rows), NO_FAVS);
     expect(rows).toEqual(original);
+  });
+
+  it('floats starred reports to the top (rule 2)', () => {
+    const view = selectReportsView(
+      state([
+        row({ name: 'recent', updatedAt: '2026-06-07T00:00:00' }),
+        row({ name: 'starred-old', updatedAt: '2026-01-01T00:00:00' }),
+      ]),
+      favs(['starred-old']),
+    );
+    expect(view.rows.map((r) => r.name)).toEqual(['starred-old', 'recent']);
+    expect(view.rows[0]?.starred).toBe(true);
   });
 });
