@@ -11,7 +11,7 @@
 import { render } from 'ink-testing-library';
 import { describe, expect, it } from 'vitest';
 import { FakeBusClient } from '../src/bus/FakeBusClient.js';
-import { App } from '../src/components/App.js';
+import { App, deriveSpawnContext } from '../src/components/App.js';
 import { TMUX_MODE_ID, tmuxMode } from '../src/components/TmuxMode.js';
 import { createInputStores } from '../src/input/createInputStores.js';
 import type { PanelId } from '../src/input/panels.js';
@@ -155,6 +155,73 @@ describe('App shell', () => {
     await tick();
     expect(lastFrame()).toContain('crows₀');
 
+    dispose();
+  });
+});
+
+describe('deriveSpawnContext', () => {
+  /** Build a minimal FakeBusClient store + input stores with the given focus. */
+  function makeStores(focusId: PanelId | 'chat') {
+    const fake = new FakeBusClient();
+    fake.stubRpc('crow.get_snapshot', { invalidation_key: 'iv', sessions: [] });
+    const { store, dispose } = createAppStore(fake);
+    // Pass focusId as the initial focus; visible panels include the focused panel (except 'chat').
+    const panels: PanelId[] = focusId === 'chat' ? [] : [focusId as PanelId];
+    const inputStores = createInputStores(panels, focusId === 'chat' ? 'chat' : focusId);
+    return { store, dispose, focus: inputStores.focus };
+  }
+
+  it('returns null when notes is focused but has no rows', () => {
+    const { store, focus, dispose } = makeStores('notes');
+    const result = deriveSpawnContext(focus, store);
+    expect(result).toBeNull();
+    dispose();
+  });
+
+  it('returns SpawnContext for first notes row when notes is focused', () => {
+    const { store, focus, dispose } = makeStores('notes');
+    // Seed the notes slice directly via setState.
+    store.setState((s) => ({
+      ...s,
+      notes: { ...s.notes, rows: [{ name: 'my-note', charCount: 100, updatedAt: '2026-01-01' }] },
+    }));
+    const result = deriveSpawnContext(focus, store);
+    expect(result).toEqual({ title: 'my-note', path: '.murder/notes/my-note.md' });
+    dispose();
+  });
+
+  it('returns null when reports is focused but has no rows', () => {
+    const { store, focus, dispose } = makeStores('reports');
+    const result = deriveSpawnContext(focus, store);
+    expect(result).toBeNull();
+    dispose();
+  });
+
+  it('returns SpawnContext for first reports row when reports is focused', () => {
+    const { store, focus, dispose } = makeStores('reports');
+    store.setState((s) => ({
+      ...s,
+      reports: {
+        ...s.reports,
+        rows: [{ name: 'my-report', charCount: 200, updatedAt: '2026-01-01' }],
+      },
+    }));
+    const result = deriveSpawnContext(focus, store);
+    expect(result).toEqual({ title: 'my-report', path: '.murder/reports/my-report.md' });
+    dispose();
+  });
+
+  it('returns null when a non-doc panel (tickets) is focused', () => {
+    const { store, focus, dispose } = makeStores('tickets');
+    const result = deriveSpawnContext(focus, store);
+    expect(result).toBeNull();
+    dispose();
+  });
+
+  it('returns null when chat is focused', () => {
+    const { store, focus, dispose } = makeStores('chat');
+    const result = deriveSpawnContext(focus, store);
+    expect(result).toBeNull();
     dispose();
   });
 });
