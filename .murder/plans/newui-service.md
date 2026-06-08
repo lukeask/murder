@@ -284,12 +284,13 @@ green** — the next agent starts from a passing state.
   done: 58c5de7, focused ticket parser tests and touched-file ruff pass; broader wave-era
   schedule snapshot test still needs C4 cleanup.
 
-- [ ] **C3 — Unified ticket sync worker (was B3).** Replace `TicketSync` + `TicketMetadataSync`;
+- [x] **C3 — Unified ticket sync worker (was B3).** Replace `TicketSync` + `TicketMetadataSync`;
   delete `sidecar.py` / `sidecar_sync.py`. Frontmatter→DB, body→DB checklist (**preserve
   `done_at`** on existing items), seed missing `.md`; synchronous `reconcile_ticket_md()`; drop
   the skills edge-sync. *Files:* new `work/tickets/sync.py`; delete `sidecar*.py`;
   `app/service/filesystem_sync.py`. *Done when:* a `.md` edit reflects in the DB; checklist
   toggles persist with `done_at` preserved; no sidecar references remain. *Deps: C1, C2.*
+  done: f8fdf17, unified ticket markdown sync replaces sidecar loops; focused sync/parser/schema tests pass.
 
 - [ ] **C4 — Cut `wave` everywhere (was B4).** Records, tickets DAO,
   `scheduler_policy._ticket_sort_key` → `(schedule_at is None, schedule_at, id)`, scheduler
