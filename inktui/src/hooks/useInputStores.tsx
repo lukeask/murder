@@ -19,6 +19,7 @@
 import type { DOMElement } from 'ink';
 import { createContext, useContext, useEffect, useRef } from 'react';
 import { useStoreWithEqualityFn } from 'zustand/traditional';
+import type { ChatInputState, ChatInputStoreApi } from '../input/chatInputStore.js';
 import {
   type FocusId,
   type FocusState,
@@ -38,6 +39,7 @@ export interface InputStores {
   readonly focus: FocusStoreApi;
   readonly keymaps: KeymapRegistryApi;
   readonly modes: ModeStoreApi;
+  readonly chatInput: ChatInputStoreApi;
 }
 
 /** `null` outside a provider so the hooks fail loudly on a wiring bug (mirrors `useAppStore`). */
@@ -91,6 +93,16 @@ export function useModeStore<T>(
 ): T {
   const { modes } = useInputStores();
   return useStoreWithEqualityFn(modes, selector, equality);
+}
+
+/** Subscribe to a selected view of the chat-input buffer (C11). The {@link ../components/ChatInput.js
+ * ChatInput} reads `s.text` to render the live message + cursor. */
+export function useChatInputStore<T>(
+  selector: (state: ChatInputState) => T,
+  equality?: (a: T, b: T) => boolean,
+): T {
+  const { chatInput } = useInputStores();
+  return useStoreWithEqualityFn(chatInput, selector, equality);
 }
 
 /**

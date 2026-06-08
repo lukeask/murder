@@ -15,7 +15,9 @@
  */
 
 import { useMemo } from 'react';
+import type { FavoritesState } from '../store/favorites/favoritesSlice.js';
 import type { NoteRow, NotesState } from '../store/notes/notesSlice.js';
+import { isInFavoriteSet, stableSortStarredFirst } from './favoritesSelectors.js';
 
 /**
  * One note row as the component paints it: display-ready strings for both lines of the two-line
@@ -27,6 +29,8 @@ export interface NoteRowView {
   readonly charCount: string;
   /** `updated_at` formatted as `YYYY-MM-DD HH:MM` (ISO with T replaced by space, 16 chars). */
   readonly updatedAt: string;
+  /** Whether this note is starred (in the explicit favorite set) — the panel renders a marker. */
+  readonly starred: boolean;
 }
 
 /** The whole notes list, render-ready. Parallel to {@link RosterView}. */
@@ -48,11 +52,12 @@ function formatCharCount(n: number): string {
 }
 
 /** Project one domain row into its presentation tuple. */
-function toNoteRowView(row: NoteRow): NoteRowView {
+function toNoteRowView(row: NoteRow, starred: boolean): NoteRowView {
   return {
     name: row.name,
     charCount: formatCharCount(row.charCount),
     updatedAt: formatUpdatedAt(row.updatedAt),
+    starred,
   };
 }
 
@@ -64,11 +69,18 @@ function byUpdatedAtDescThenName(a: NoteRow, b: NoteRow): number {
 }
 
 /**
- * The pure view-model transform. Sorts a copy (never mutates the slice's readonly array) and
- * projects each row. Same input → same output, no React, no store, no bus.
+ * The pure view-model transform. Orders by recency, then floats starred notes to the top (stable —
+ * the recency order is preserved within the starred and unstarred blocks; spec › "Starred shown at
+ * top"). Never mutates the slice's readonly array. Same input → same output, no React/store/bus.
  */
-export function selectNotesView(state: NotesState): NotesView {
-  const rows = [...state.rows].sort(byUpdatedAtDescThenName).map(toNoteRowView);
+export function selectNotesView(state: NotesState, favorites: FavoritesState): NotesView {
+  const byRecency = [...state.rows].sort(byUpdatedAtDescThenName);
+  const ordered = stableSortStarredFirst(
+    byRecency,
+    (row) => row.name,
+    (id) => isInFavoriteSet(favorites, id),
+  );
+  const rows = ordered.map((row) => toNoteRowView(row, isInFavoriteSet(favorites, row.name)));
   return {
     rows,
     status: state.status,
@@ -78,9 +90,9 @@ export function selectNotesView(state: NotesState): NotesView {
 }
 
 /**
- * Component-facing hook: memoizes {@link selectNotesView} on the slice identity. A component does:
- *   `const view = useNotesView(useAppStore((s) => s.notes));`
+ * Component-facing hook: memoizes {@link selectNotesView} on the (notes, favorites) slice identities.
+ *   `const view = useNotesView(useAppStore((s) => s.notes), useAppStore((s) => s.favorites));`
  */
-export function useNotesView(state: NotesState): NotesView {
-  return useMemo(() => selectNotesView(state), [state]);
+export function useNotesView(state: NotesState, favorites: FavoritesState): NotesView {
+  return useMemo(() => selectNotesView(state, favorites), [state, favorites]);
 }

@@ -22,6 +22,7 @@ import type { NotesSnapshotReply } from '../../src/store/notes/notesActions.js';
 import { createAppStore } from '../../src/store/store.js';
 
 const CTRL_F = '\x06';
+const CTRL_S = '\x13';
 
 async function tick(): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, 20));
@@ -74,6 +75,8 @@ async function setup(reply: NotesSnapshotReply = twoNotes(), focused = true) {
   fake.stubRpc('note.get_snapshot', reply);
   // Also stub crow.get_snapshot so createAppStore doesn't choke on any stray event.
   fake.stubRpc('crow.get_snapshot', { invalidation_key: 'iv', sessions: [] });
+  // C11: the favorites prefs RPC (modeled-not-live) — stub so ctrl+s star persistence resolves.
+  fake.stubRpc('tui.save_favorites', { ok: true, favorites: [] });
   const { store, dispose } = createAppStore(fake);
   await store.getState().actions.notes.refresh();
   const inputStores = createInputStores(['notes'], focused ? 'notes' : 'chat');
@@ -140,6 +143,33 @@ describe('NotesPanel', () => {
     const { lastFrame } = render(<Harness store={store} inputStores={inputStores} />);
     await tick();
     expect(lastFrame()).toContain('no notes');
+    dispose();
+  });
+
+  it('ctrl+s stars the highlighted note: prefs RPC fires, star marker shows, sorts to top (C11)', async () => {
+    // bravo-note is the older note (sorts second by recency). Move the cursor to it and star it;
+    // it must jump to the top with a ★ marker, and tui.save_favorites must fire with its id.
+    const { fake, store, inputStores, dispose } = await setup(twoNotes(), true);
+    const { lastFrame, stdin } = render(<Harness store={store} inputStores={inputStores} />);
+    await tick();
+
+    // Cursor starts on alpha-note (most recent). Press j to move to bravo-note.
+    stdin.write('j');
+    await tick();
+    // ctrl+s stars the highlighted (bravo) note — routed to the panel keymap (chat isn't focused).
+    stdin.write(CTRL_S);
+    await tick();
+
+    // Prefs persistence fired with bravo-note's id (the star-toggle + prefs-RPC DoD).
+    const saveCalls = fake.rpcCalls.filter((c) => c.method === 'tui.save_favorites');
+    expect(saveCalls.length).toBe(1);
+    expect(saveCalls[0]?.params).toEqual({ favorites: ['bravo-note'] });
+    expect(store.getState().favorites.ids.has('bravo-note')).toBe(true);
+
+    // Starred-to-top: bravo-note now renders above alpha-note, with a ★ marker.
+    const frame = lastFrame() ?? '';
+    expect(frame).toContain('★');
+    expect(frame.indexOf('bravo-note')).toBeLessThan(frame.indexOf('alpha-note'));
     dispose();
   });
 });

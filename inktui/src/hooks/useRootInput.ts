@@ -24,7 +24,12 @@
 
 import { useInput, useStdin } from 'ink';
 import { TMUX_MODE_ID, tmuxMode } from '../components/TmuxMode.js';
-import { type DispatchContext, dispatchKey, type GlobalHandlers } from '../input/dispatcher.js';
+import {
+  type ChatInputHandler,
+  type DispatchContext,
+  dispatchKey,
+  type GlobalHandlers,
+} from '../input/dispatcher.js';
 import { CHAT_FOCUS, resolveFocus } from '../input/focusStore.js';
 import { selectActiveMode } from '../input/modeStore.js';
 import { useInputStores } from './useInputStores.js';
@@ -40,6 +45,12 @@ export interface DeferredGlobalHandlers {
   newPlan?: () => void;
   /** `ctrl+t`. Default: no-op until C12 wires the new-ticket dialog. */
   newTicket?: () => void;
+  /**
+   * The persistent chat-input handler (C11, part F). Supplied by the shell (it needs both the chat
+   * buffer store and the send action). When absent, layer 2 declines as before — so older
+   * chunks/tests are unaffected. See {@link ChatInputHandler} and the dispatcher's layer 2.
+   */
+  chatInput?: ChatInputHandler;
 }
 
 /**
@@ -94,6 +105,9 @@ export function useRootInput(deferred: DeferredGlobalHandlers = {}): void {
         // Layer 0: the live active mode (stack top), or null. Read per-event so a mode entered/exited
         // mid-session takes effect on the very next key without re-installing the loop.
         activeMode: selectActiveMode(modes),
+        // Layer 2: the persistent chat-input handler (C11). Only set the key when supplied
+        // (exactOptionalPropertyTypes — an explicit `undefined` would differ from absent).
+        ...(deferred.chatInput !== undefined ? { chatInput: deferred.chatInput } : {}),
       };
 
       dispatchKey(input, key, ctx);

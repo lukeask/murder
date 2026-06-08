@@ -173,14 +173,33 @@ describe('layer 1 — global chords', () => {
     expect(h.navigate.mock.calls.map((c) => c[0])).toEqual(['left', 'down', 'up', 'right']);
   });
 
-  it('ctrl+f focuses chat, ctrl+s spawns, ctrl+y toggles tmux', () => {
+  it('ctrl+f focuses chat, ctrl+y toggles tmux', () => {
     const h = handlers();
     dispatchKey('f', makeKey({ ctrl: true }), ctx('plans', h));
-    dispatchKey('s', makeKey({ ctrl: true }), ctx('plans', h));
     dispatchKey('y', makeKey({ ctrl: true }), ctx('plans', h));
     expect(h.focusChat).toHaveBeenCalledOnce();
-    expect(h.spawn).toHaveBeenCalledOnce();
     expect(h.toggleTmux).toHaveBeenCalledOnce();
+  });
+
+  it('ctrl+s spawns ONLY when chat is focused (C11 dual-purpose chord)', () => {
+    const h = handlers();
+    const out = dispatchKey('s', makeKey({ ctrl: true }), ctx(CHAT_FOCUS, h));
+    expect(h.spawn).toHaveBeenCalledOnce();
+    expect(out).toEqual({ layer: 'global', handled: true });
+  });
+
+  it('ctrl+s does NOT spawn when a panel is focused — it falls through to the panel keymap', () => {
+    const h = handlers();
+    const onIntent = vi.fn();
+    // A panel that declares ctrl+s → star (the C11 generalized starring pattern).
+    const starKeymap: PanelKeymap = {
+      keymap: [{ chord: { input: 's', key: { ctrl: true } }, intent: 'star', description: 'star' }],
+      onIntent,
+    };
+    const out = dispatchKey('s', makeKey({ ctrl: true }), ctx('plans', h, { plans: starKeymap }));
+    expect(h.spawn).not.toHaveBeenCalled(); // global layer declined ctrl+s
+    expect(onIntent).toHaveBeenCalledWith('star'); // layer 3 (panel keymap) handled it
+    expect(out).toEqual({ layer: 'panel', handled: true });
   });
 
   it('ctrl+p fires newPlan (C12 new-plan chord)', () => {
