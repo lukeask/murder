@@ -28,6 +28,7 @@ function eventKind(event: BusEvent): string {
     case 'scheduler.decision':
     case 'usage.reset':
     case 'conversation.block':
+    case 'tmux.frame':
       return event.type;
     default: {
       const unreachable: never = event;

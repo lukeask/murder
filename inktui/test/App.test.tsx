@@ -12,6 +12,7 @@ import { render } from 'ink-testing-library';
 import { describe, expect, it } from 'vitest';
 import { FakeBusClient } from '../src/bus/FakeBusClient.js';
 import { App } from '../src/components/App.js';
+import { TMUX_MODE_ID, tmuxMode } from '../src/components/TmuxMode.js';
 import { createInputStores } from '../src/input/createInputStores.js';
 import type { PanelId } from '../src/input/panels.js';
 import { createAppStore } from '../src/store/store.js';
@@ -27,7 +28,7 @@ function setup(visible: readonly PanelId[]) {
   fake.stubRpc('crow.get_snapshot', { invalidation_key: 'iv', sessions: [] });
   const { store, dispose } = createAppStore(fake);
   const inputStores = createInputStores(visible);
-  const tree = render(<App store={store} inputStores={inputStores} />);
+  const tree = render(<App store={store} inputStores={inputStores} bus={fake} />);
   return { fake, store, dispose, inputStores, ...tree };
 }
 
@@ -103,6 +104,31 @@ describe('App shell', () => {
     expect(visible.has('plans')).toBe(true);
     expect(visible.has('crows')).toBe(true);
     expect(visible.has('notes')).toBe(false);
+    dispose();
+  });
+
+  it('fullscreen tmux mode suppresses bars and panels (presentationHidesLayout)', async () => {
+    // Render with 'crows' visible so the top bar label is present before entering the mode.
+    const { lastFrame, inputStores, dispose } = setup(['crows']);
+    await tick();
+
+    // Before: the normal layout is showing — crows₀ label is present in the top bar.
+    expect(lastFrame()).toContain('crows₀');
+
+    // Enter fullscreen tmux mode via the store (same path useRootInput.ts toggleTmux takes).
+    inputStores.modes.getState().enter(tmuxMode(inputStores.modes));
+    await tick();
+
+    // After: Shell saw presentationHidesLayout → returned only <Overlay /> (the TmuxFrame surface).
+    // The top-bar chrome (crows₀) must be gone, and the waiting placeholder must be present.
+    expect(lastFrame()).not.toContain('crows₀');
+    expect(lastFrame()).toContain('waiting');
+
+    // Exit and verify the layout is restored.
+    inputStores.modes.getState().exit(TMUX_MODE_ID);
+    await tick();
+    expect(lastFrame()).toContain('crows₀');
+
     dispose();
   });
 });

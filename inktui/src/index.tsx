@@ -47,7 +47,7 @@ async function main(): Promise<void> {
   void store.getState().actions.roster.refresh();
   void store.getState().actions.usage.refresh();
 
-  const instance = render(<App store={store} inputStores={inputStores} />);
+  const instance = render(<App store={store} inputStores={inputStores} bus={bus} />);
   // Smoke-only: unmount on the next tick so the dev run terminates instead of blocking. The standing
   // input loop (which keeps the app alive) lands with the live runner; here we just prove it paints.
   setImmediate(() => {

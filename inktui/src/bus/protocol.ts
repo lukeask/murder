@@ -202,6 +202,31 @@ export interface ConversationBlockEvent extends BaseEvent {
   block: Record<string, unknown>;
 }
 
+/**
+ * Raw ANSI frame from tmux for the focused pane. Streamed **only** while the tmux fullscreen mode
+ * is active (`ctrl+y`); the subscription is opened on enter and closed on exit (no standing cost).
+ *
+ * CONTRACT GAP (C14): This event is a **speculative forward-declaration** not yet present in the
+ * Python `murder/bus/protocol.py`. `PROTOCOL_VERSION` is intentionally NOT bumped — bumping only
+ * the TS side would cause `UdsBusClient`'s handshake to refuse the real service permanently.
+ * The correct path: add a matching event type to the Python protocol, then bump `PROTOCOL_VERSION`
+ * in both files in lockstep. Until that backend change lands, live `tmux.frame` events will never
+ * arrive from the service; `FakeBusClient.emit` drives the full path in tests.
+ *
+ * **Pane-scoping note for the service:** the current filter shape has no `pane_id` field. The
+ * service should either add `pane_id` to `EventFilter` (and populate it on these events) so
+ * clients can subscribe to only the focused pane, or deliver a single frame stream and let the
+ * client subscribe unfiltered. Flagged for service confirmation before live integration.
+ *
+ * The frame carries the rendered ANSI output as a single string. Ink `<Text>` renders ANSI escape
+ * sequences natively, so the component simply displays it verbatim.
+ */
+export interface TmuxFrameEvent extends BaseEvent {
+  type: 'tmux.frame';
+  /** The rendered ANSI content for the focused tmux pane. */
+  frame: string;
+}
+
 /** Discriminated union of every server-pushed inner event. `type` is the discriminant. */
 export type BusEvent =
   | HeartbeatEvent
@@ -216,7 +241,8 @@ export type BusEvent =
   | SchedulerModeEvent
   | SchedulerDecisionEvent
   | UsageResetEvent
-  | ConversationBlockEvent;
+  | ConversationBlockEvent
+  | TmuxFrameEvent;
 
 /** The string literal `type` discriminant of every {@link BusEvent}. */
 export type BusEventType = BusEvent['type'];

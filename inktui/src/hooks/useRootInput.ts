@@ -23,6 +23,7 @@
  */
 
 import { useInput, useStdin } from 'ink';
+import { TMUX_MODE_ID, tmuxMode } from '../components/TmuxMode.js';
 import { type DispatchContext, dispatchKey, type GlobalHandlers } from '../input/dispatcher.js';
 import { CHAT_FOCUS, resolveFocus } from '../input/focusStore.js';
 import { selectActiveMode } from '../input/modeStore.js';
@@ -66,7 +67,20 @@ export function useRootInput(deferred: DeferredGlobalHandlers = {}): void {
           focusState.focus(CHAT_FOCUS);
         },
         spawn: deferred.spawn ?? (() => focusState.focus(CHAT_FOCUS)),
-        toggleTmux: deferred.toggleTmux ?? (() => {}),
+        toggleTmux:
+          deferred.toggleTmux ??
+          (() => {
+            // C14 wiring: toggle the tmux fullscreen mode. If the mode is already active, exit it
+            // (restores prior focus via C7M). If not active, enter it (saves current focus).
+            // `passThrough: true` on the mode lets ctrl+y fall through from layer 0 to layer 1
+            // (the global-chord layer) so this handler fires on the "exit" press too.
+            const modesState = modes.getState();
+            if (selectActiveMode(modes)?.id === TMUX_MODE_ID) {
+              modesState.exit(TMUX_MODE_ID);
+            } else {
+              modesState.enter(tmuxMode(modes));
+            }
+          }),
         // C12: newPlan / newTicket default to no-ops until the caller supplies real handlers.
         newPlan: deferred.newPlan ?? (() => {}),
         newTicket: deferred.newTicket ?? (() => {}),
