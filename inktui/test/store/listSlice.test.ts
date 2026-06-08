@@ -15,7 +15,7 @@ import { createAppStore } from '../../src/store/store.js';
 function crowReply(): CrowSnapshotReply {
   return {
     invalidation_key: 'iv-1',
-    sessions: [{ agent_id: 'a-1', status: 'running' }],
+    sessions: [{ agent_id: 'a-1', role: 'crow', status: 'running' }],
   };
 }
 

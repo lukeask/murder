@@ -1,22 +1,19 @@
 /**
  * Usage slice — domain state for the usage panel (panel 9).
  *
- * Copied from {@link ../roster/rosterSlice.js} per the C3 copy recipe. Changes vs. the roster:
- *  - Row shape mirrors {@link UsageGaugeSummary} from `murder/app/service/client_api.py`
- *    (harness, window_key, pct, t_until_reset_minutes, t_period_minutes).
- *  - Invalidating entity: `'agent'` — the same entity as the roster. Usage changes when agents
- *    run, and there is no dedicated `'usage'` entity key in the Python `Entity` enum. Multiple
- *    slices keying the same entity is supported: the invalidation loop fires all matches.
- *  - Presentation (pct formatting, bar-width, time-remaining label) stays out of this file —
- *    it belongs in the selector (rule 2). The slice holds raw, wire-faithful domain data only.
+ * A thin shell over the shared list-slice factory (`../listSlice.js`), exactly like the roster
+ * reference (`../roster/rosterSlice.js`). The `{ rows, status, error }` mechanics live in the
+ * factory once; this file supplies only the row type, the slice key (`usage`), and the
+ * invalidating entity. Presentation (pct formatting, bar-width, time-remaining label) stays out
+ * of this file — it belongs in the selector (rule 2). The slice holds raw, wire-faithful domain
+ * data only.
  *
- * Copy this file to add slice X: rename state/row types, swap row fields for X's DTO,
- * change USAGE_INVALIDATING_ENTITY to X's Entity key, rename the slice key + initial const.
+ * Copy this file to add slice X: rename `UsageRow`→`XRow` and its fields for X's DTO, point
+ * `USAGE_INVALIDATING_ENTITY` at X's {@link Entity} key, and pass X's key to `createListSlice`.
  */
 
-import type { StateCreator } from 'zustand';
 import type { Entity } from '../../bus/protocol.js';
-import type { AppStore } from '../store.js';
+import { createListSlice, initialListState, type ListState } from '../listSlice.js';
 
 /**
  * One usage gauge as the usage slice cares about it — a faithful, presentation-free projection
@@ -35,16 +32,10 @@ export interface UsageRow {
 }
 
 /**
- * The usage slice's state. Same shape as {@link RosterState}: `rows` is domain data, `status`
- * makes the load lifecycle explicit so a component can distinguish "not fetched yet" from
- * "fetched, empty". Every field is readonly — ref-swapped wholesale on change.
+ * The usage slice's state — the shared {@link ListState} shape specialized to {@link UsageRow}.
+ * Selectors read `UsageState['status']`, so the union is part of the contract.
  */
-export interface UsageState {
-  readonly rows: readonly UsageRow[];
-  readonly status: 'idle' | 'loading' | 'ready' | 'error';
-  /** Set when the last refresh rejected; cleared on the next successful load. */
-  readonly error: string | null;
-}
+export type UsageState = ListState<UsageRow>;
 
 /**
  * The {@link Entity} key whose `state.snapshot` events invalidate this slice. Usage changes as
@@ -56,16 +47,11 @@ export interface UsageState {
 export const USAGE_INVALIDATING_ENTITY: Entity = 'agent';
 
 /** The initial, pre-fetch slice value. A fresh store has not talked to the bus yet → `idle`. */
-export const initialUsageState: UsageState = {
-  rows: [],
-  status: 'idle',
-  error: null,
-};
+export const initialUsageState: UsageState = initialListState<UsageRow>();
 
 /**
- * Slice factory in Zustand's standard `StateCreator` shape, scoped to the combined
- * {@link AppStore}. Contributes only the `usage` key; `../store.ts` composes it with siblings.
+ * Slice factory — the trivial Zustand `StateCreator` that seeds the `usage` key, built from the
+ * shared {@link createListSlice}. Contributes only its own key; `../store.ts` composes it with
+ * siblings. No bus dependency here (rule 4) — mutation is the action layer's job.
  */
-export const createUsageSlice: StateCreator<AppStore, [], [], { usage: UsageState }> = () => ({
-  usage: initialUsageState,
-});
+export const createUsageSlice = createListSlice('usage', initialUsageState);

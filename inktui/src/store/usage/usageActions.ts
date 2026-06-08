@@ -1,23 +1,21 @@
 /**
  * Usage actions — the *only* code that calls the bus for usage gauge data (rule 3).
  *
- * Copied from {@link ../roster/rosterActions.js} per the C3 copy recipe. Changes vs. the roster:
- *  - RPC is `usage.get_snapshot` (modeled per bus-contract naming `domain.verb`). NOT yet on the
- *    live bus — the Python service exposes usage gauges embedded in `ScheduleSnapshot.usage_gauges`
- *    (from `get_schedule_snapshot()`), not as a standalone RPC. This models the intended dedicated
- *    surface. Confirm name/shape and implement server side when B13 lands.
- *  - Reply shape is {@link UsageSnapshotReply} (mirrors `UsageGaugeSummary` from
- *    `murder/app/service/client_api.py`).
- *  - Projection is `toUsageRow` (wire DTO → presentation-free {@link UsageRow}).
- *  - Ref-swaps `state.usage`, not `state.roster`.
- *  - `declare module` augments `RpcMethods` with `'usage.get_snapshot'` — distinct from every
- *    other slice's key; never redeclares an existing one.
+ * A thin shell over the shared {@link createRefreshAction} factory (`../listSlice.js`), exactly
+ * like the roster reference (`../roster/rosterActions.js`). The loading→ready/error lifecycle +
+ * ref-swap-only-this-key mechanics come from the factory; this file supplies only the three
+ * per-domain pieces: the RPC method (+ its reply type, declared below), and the DTO→rows
+ * `project` fn.
+ *
+ * Copy this file to add slice X: swap the RPC method + its reply shape (the `declare module`
+ * block), swap the projection, and pass X's slice key + method + project to `createRefreshAction`.
  */
 
 import type { StoreApi } from 'zustand';
 import type { BusClient } from '../../bus/BusClient.js';
+import { createRefreshAction } from '../listSlice.js';
 import type { AppStore } from '../store.js';
-import type { UsageRow, UsageState } from './usageSlice.js';
+import type { UsageRow } from './usageSlice.js';
 
 /**
  * Declares the usage read RPC via declaration merging. `usage.get_snapshot` is the bus-contract
@@ -73,8 +71,8 @@ function toUsageRow(dto: UsageGaugeDto): UsageRow {
 }
 
 /**
- * The usage actions, bound to one `BusClient` + store handle. Returned to `../store.ts`,
- * which hangs them off the store so components dispatch `store.getState().actions.usage.refresh()`.
+ * The usage actions, bound to one `BusClient` + store handle. Returned to `../store.ts`, which
+ * hangs them off the store so components dispatch `store.getState().actions.usage.refresh()`.
  */
 export interface UsageActions {
   /**
@@ -87,22 +85,9 @@ export interface UsageActions {
 }
 
 export function createUsageActions(bus: BusClient, store: StoreApi<AppStore>): UsageActions {
-  return {
-    async refresh(): Promise<void> {
-      // Ref-swap ONLY the usage slice — sibling slices keep identity (invalidation-granularity
-      // contract). Mirrors the roster action's loading→ready/error lifecycle exactly.
-      store.setState((state) => ({ usage: { ...state.usage, status: 'loading' } }));
-      try {
-        const reply = await bus.rpc('usage.get_snapshot', {});
-        const rows = reply.gauges.map(toUsageRow);
-        const next: UsageState = { rows, status: 'ready', error: null };
-        store.setState({ usage: next });
-      } catch (error: unknown) {
-        const message = error instanceof Error ? error.message : String(error);
-        store.setState((state) => ({
-          usage: { ...state.usage, status: 'error', error: message },
-        }));
-      }
-    },
-  };
+  return createRefreshAction(bus, store, {
+    key: 'usage',
+    method: 'usage.get_snapshot',
+    project: (reply) => reply.gauges.map(toUsageRow),
+  });
 }
