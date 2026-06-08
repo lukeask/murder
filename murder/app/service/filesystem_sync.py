@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from murder.work.attribution import attribute_edit
+from murder.work.examples import seed_examples
 from murder.work.notes.sync import NoteSync, NotetakerContextSync
 from murder.work.plans.sync import PlanSync
 from murder.work.tickets.sync import TicketSync
@@ -88,6 +89,8 @@ class FilesystemSyncSupervisor:
         self.ticket_sync.parse_error_notifier = _notify
 
     async def reconcile_all(self) -> None:
+        if self.repo_root is not None:
+            seed_examples(self.repo_root)
         await self.plan_sync.reconcile_all()
         await self.note_sync.reconcile_all()
         await self.notetaker_context_sync.reconcile_all()

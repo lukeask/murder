@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import shutil
 import sqlite3
-import sys
 from datetime import datetime
 from importlib import resources
 from pathlib import Path
@@ -18,7 +17,7 @@ from murder.config import project_env_path
 from murder.state.persistence.schema import get_db, init_db
 from murder.state.persistence.tickets import insert_ticket
 from murder.state.storage.paths import agents_dir, db_path, ticket_md
-from murder.work.tickets import carve
+from murder.work.examples import seed_examples
 from murder.work.tickets import parser as ticket_parser
 from murder.work.tickets.schema import ChecklistItem, Ticket
 
@@ -82,6 +81,8 @@ def _scaffold_project(repo: Path, *, force: bool = False) -> Path:
         tpl_root.joinpath("env.example").read_text(encoding="utf-8"), encoding="utf-8"
     )
     _append_gitignore_entries(repo, tpl_root.joinpath("gitignore").read_text(encoding="utf-8"))
+
+    seed_examples(repo)
 
     conn = get_db(db_path(repo))
     init_db(conn)
@@ -212,45 +213,3 @@ def cmd_ticket_create(
     ticket_parser.write_ticket_md(md_path, sections)
     typer.echo(f"Created {ticket_id}: {title}")
     typer.echo(f"Markdown: {md_path.relative_to(repo)}")
-
-
-@tickets_app.command("ingest-carve")
-def cmd_ticket_ingest_carve(
-    ticket_id: Annotated[str, typer.Argument(help="Ticket id; must match YAML id field.")],
-    file: Annotated[
-        Path | None,
-        typer.Option(
-            "--file",
-            "-f",
-            exists=True,
-            file_okay=True,
-            dir_okay=False,
-            readable=True,
-            help="YAML carving form; omit to read stdin.",
-        ),
-    ] = None,
-) -> None:
-    """Apply collaborator carving YAML: deps/checklist + planned → ready."""
-    raw = file.read_text(encoding="utf-8") if file is not None else sys.stdin.read()
-    if not raw.strip():
-        typer.secho("Empty YAML input.", err=True)
-        raise typer.Exit(1)
-    repo = _repo_root()
-    conn = _open_existing_db(repo)
-    try:
-        spec = carve.parse_carve_yaml(raw)
-        carve.ingest_carve_ready_spec(
-            conn=conn,
-            repo_root=str(repo),
-            ticket_id=ticket_id,
-            spec=spec,
-        )
-    except carve.CarveError as e:
-        typer.secho(str(e), err=True)
-        raise typer.Exit(1) from e
-    except Exception as e:
-        typer.secho(f"ingest-carve failed: {e}", err=True)
-        raise typer.Exit(1) from e
-    finally:
-        conn.close()
-    typer.echo(f"{ticket_id}: carve applied; status=ready")
