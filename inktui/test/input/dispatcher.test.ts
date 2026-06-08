@@ -25,6 +25,8 @@ interface SpyHandlers {
   readonly focusChat: ReturnType<typeof vi.fn<GlobalHandlers['focusChat']>>;
   readonly spawn: ReturnType<typeof vi.fn<GlobalHandlers['spawn']>>;
   readonly toggleTmux: ReturnType<typeof vi.fn<GlobalHandlers['toggleTmux']>>;
+  readonly newPlan: ReturnType<typeof vi.fn<GlobalHandlers['newPlan']>>;
+  readonly newTicket: ReturnType<typeof vi.fn<GlobalHandlers['newTicket']>>;
 }
 
 function handlers(): SpyHandlers {
@@ -34,6 +36,8 @@ function handlers(): SpyHandlers {
     focusChat: vi.fn<GlobalHandlers['focusChat']>(),
     spawn: vi.fn<GlobalHandlers['spawn']>(),
     toggleTmux: vi.fn<GlobalHandlers['toggleTmux']>(),
+    newPlan: vi.fn<GlobalHandlers['newPlan']>(),
+    newTicket: vi.fn<GlobalHandlers['newTicket']>(),
   };
 }
 
@@ -101,6 +105,42 @@ describe('layer 0 — active-mode capture', () => {
     expect(h.focusPanel).toHaveBeenCalledWith('plans');
     expect(out).toEqual({ layer: 'global', handled: true });
   });
+
+  it('calls onUncaptured for unmatched keys when present — returns handled:true if consumed', () => {
+    onModeIntent.mockClear();
+    const consumed: string[] = [];
+    const modeWithUncaptured: Mode = {
+      ...captureMode(),
+      onUncaptured(input) {
+        if (input.length > 0 && input !== '\x01') {
+          consumed.push(input);
+          return true;
+        }
+        return false;
+      },
+    };
+    const h = handlers();
+    // 'a' is not in the mode keymap, but onUncaptured returns true → mode consumed it.
+    const out = dispatchKey('a', makeKey(), ctx('tickets', h, {}, modeWithUncaptured));
+    expect(consumed).toEqual(['a']);
+    expect(out).toEqual({ layer: 'mode', handled: true });
+    expect(h.focusPanel).not.toHaveBeenCalled();
+  });
+
+  it('onUncaptured returning false still swallows when passThrough is off', () => {
+    onModeIntent.mockClear();
+    const modeWithUncaptured: Mode = {
+      ...captureMode(),
+      onUncaptured(_input) {
+        return false; // not consumed
+      },
+    };
+    const h = handlers();
+    // ctrl+1 unmatched; onUncaptured returns false; no pass-through → swallow (handled:false).
+    const out = dispatchKey('1', makeKey({ ctrl: true }), ctx('chat', h, {}, modeWithUncaptured));
+    expect(h.focusPanel).not.toHaveBeenCalled(); // global chord suppressed by modal
+    expect(out).toEqual({ layer: 'mode', handled: false });
+  });
 });
 
 describe('layer 1 — global chords', () => {
@@ -141,6 +181,20 @@ describe('layer 1 — global chords', () => {
     expect(h.focusChat).toHaveBeenCalledOnce();
     expect(h.spawn).toHaveBeenCalledOnce();
     expect(h.toggleTmux).toHaveBeenCalledOnce();
+  });
+
+  it('ctrl+p fires newPlan (C12 new-plan chord)', () => {
+    const h = handlers();
+    const out = dispatchKey('p', makeKey({ ctrl: true }), ctx('plans', h));
+    expect(h.newPlan).toHaveBeenCalledOnce();
+    expect(out).toEqual({ layer: 'global', handled: true });
+  });
+
+  it('ctrl+t fires newTicket (C12 new-ticket chord)', () => {
+    const h = handlers();
+    const out = dispatchKey('t', makeKey({ ctrl: true }), ctx('plans', h));
+    expect(h.newTicket).toHaveBeenCalledOnce();
+    expect(out).toEqual({ layer: 'global', handled: true });
   });
 
   it('a plain (non-ctrl) char is not a global chord', () => {
