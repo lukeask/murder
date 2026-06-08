@@ -1,0 +1,143 @@
+from __future__ import annotations
+
+from murder.work.tickets.parser import parse_ticket
+from murder.work.tickets.render import render_ticket_frontmatter
+
+
+def test_parse_ticket_accepts_aliases_and_unknown_keys_as_extras() -> None:
+    parsed = parse_ticket(
+        """---
+title: Alias ticket
+dependencies: [t001, t002]
+harness_override: codex
+model: gpt-5.5
+priority: high
+---
+# Body
+"""
+    )
+
+    assert parsed.parse_error is None
+    assert parsed.title == "Alias ticket"
+    assert parsed.deps == ["t001", "t002"]
+    assert parsed.harness == "codex"
+    assert parsed.model == "gpt-5.5"
+    assert parsed.worktree is None
+    assert parsed.extras == {"priority": "high"}
+
+
+def test_parse_ticket_reports_missing_required_fields_without_raising() -> None:
+    parsed = parse_ticket(
+        """---
+deps: []
+---
+# Body
+"""
+    )
+
+    assert parsed.title is None
+    assert parsed.deps == []
+    assert parsed.body == "# Body\n"
+    assert parsed.parse_error is not None
+    assert "title" in parsed.parse_error
+    assert "harness" in parsed.parse_error
+    assert "model" in parsed.parse_error
+
+
+def test_parse_ticket_reports_malformed_yaml_without_raising() -> None:
+    parsed = parse_ticket(
+        """---
+title: [unterminated
+---
+# Body
+"""
+    )
+
+    assert parsed.parse_error is not None
+    assert "invalid ticket frontmatter YAML" in parsed.parse_error
+    assert parsed.body == "# Body\n"
+
+
+def test_parse_ticket_checklist_reads_only_level_one_checklist_marker_lines() -> None:
+    parsed = parse_ticket(
+        """---
+title: Checklist ticket
+harness: cc
+model: opus
+deps: []
+worktree:
+---
+# Intro
+[ ] not in checklist
+
+# Checklist
+[ ] first item
+[x] done item
+- [ ] ignored markdown task
+plain text ignored
+## Nested heading ignored
+[X] uppercase done
+# Later
+[ ] after next h1 ignored
+"""
+    )
+
+    assert parsed.parse_error is None
+    assert [(item.text, item.done) for item in parsed.checklist] == [
+        ("first item", False),
+        ("done item", True),
+        ("uppercase done", True),
+    ]
+
+
+def test_ticket_parse_render_parse_round_trip_is_stable() -> None:
+    source = """---
+title: Round trip
+deps: [t001]
+harness: codex
+model: gpt-5.5
+worktree: feature-x
+ignored: value
+---
+# Checklist
+[ ] keep this
+[x] and this
+"""
+    first = parse_ticket(source)
+    rendered = render_ticket_frontmatter(first) + first.body
+    second = parse_ticket(rendered)
+    rendered_again = render_ticket_frontmatter(second) + second.body
+
+    assert first.parse_error is None
+    assert second.parse_error is None
+    assert rendered_again == rendered
+    assert second.extras == {}
+    assert [(item.text, item.done) for item in second.checklist] == [
+        ("keep this", False),
+        ("and this", True),
+    ]
+
+
+def test_render_ticket_frontmatter_emits_exact_canonical_keys() -> None:
+    parsed = parse_ticket(
+        """---
+title: Canonical
+harness: cc
+model: opus
+extra: ignored
+---
+Body
+"""
+    )
+
+    frontmatter = render_ticket_frontmatter(parsed)
+
+    assert frontmatter == (
+        "---\n"
+        "title: Canonical\n"
+        "deps: []\n"
+        "harness: cc\n"
+        "model: opus\n"
+        "worktree: null\n"
+        "---\n"
+    )
