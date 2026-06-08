@@ -5,14 +5,15 @@ from datetime import datetime, timedelta
 
 from textual.app import App, ComposeResult
 
-from murder.state.persistence.schema import get_db, init_db
 from murder.app.service.client_api import ScheduleSnapshot, ScheduleTicketRow
 from murder.app.service.schedule_snapshot import build_schedule_snapshot
+from murder.app.tui.dispatch.roster import ScheduleTicketsTable
+from murder.app.tui.dispatch.schedule_cells import last_update_cell
+from murder.state.persistence.schema import get_db, init_db
+from murder.state.persistence.tickets import compute_ready
 from murder.state.storage.paths import db_path
 from murder.work.tickets.schema import Ticket
 from murder.work.tickets.status import TicketStatus
-from murder.app.tui.dispatch.roster import ScheduleTicketsTable
-from murder.app.tui.dispatch.schedule_cells import last_update_cell
 
 
 def _row(
@@ -34,7 +35,7 @@ def _row(
         metadata_sync_state="synced",
         metadata_parse_error=None,
         metadata_conflict_reason=None,
-        deps_ok=True,
+        pending_dep_ids=(),
     )
 
 
@@ -125,6 +126,53 @@ def test_schedule_snapshot_exposes_last_update_fields_and_active_order(repo_root
     assert snapshot.active_tickets[1].last_update_label == "metadata conflict"
     assert snapshot.active_tickets[2].last_update_label == "metadata parse error"
     assert snapshot.active_tickets[3].last_update_label == "status failed"
+
+
+def test_schedule_snapshot_exposes_pending_dep_ids(repo_root) -> None:
+    conn = get_db(db_path(repo_root))
+    init_db(conn)
+    now = datetime(2026, 6, 2, 12, 0, 0)
+    for ticket_id, status in (
+        ("t100", "ready"),
+        ("t101", "planned"),
+        ("t102", "done"),
+        ("t103", "archived"),
+        ("t104", "blocked"),
+        ("t105", "ready"),
+    ):
+        conn.execute(
+            """
+            INSERT INTO tickets(
+                id, title, status, attempts, created_at, updated_at
+            ) VALUES (?, ?, ?, 0, ?, ?)
+            """,
+            (
+                ticket_id,
+                ticket_id,
+                status,
+                now.isoformat(timespec="seconds"),
+                now.isoformat(timespec="seconds"),
+            ),
+        )
+    conn.executemany(
+        "INSERT INTO ticket_deps(ticket_id, depends_on_id) VALUES (?, ?)",
+        (
+            ("t100", "t101"),
+            ("t100", "t102"),
+            ("t100", "t103"),
+            ("t100", "t104"),
+            ("t105", "t103"),
+        ),
+    )
+    conn.commit()
+
+    snapshot = build_schedule_snapshot(conn, as_of=now, invalidation_key="k")
+
+    row = next(row for row in snapshot.active_tickets if row.id == "t100")
+    assert row.pending_dep_ids == ("t101", "t103", "t104")
+    archived_only_row = next(row for row in snapshot.active_tickets if row.id == "t105")
+    assert archived_only_row.pending_dep_ids == ("t103",)
+    assert compute_ready(conn) == ["t105"]
 
 
 def test_last_update_cell_formats_recent_and_older_dates() -> None:

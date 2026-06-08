@@ -6,19 +6,19 @@ from typing import Any
 
 from murder.app.service.client_api import (
     ConversationBlockSummary,
-    ConversationSummary,
     ConversationsSnapshot,
+    ConversationSummary,
     CrowSessionSummary,
     CrowSnapshot,
     DispatchSnapshot,
-    EscalationSummary,
     EscalationsSnapshot,
-    NoteSummary,
+    EscalationSummary,
     NotesSnapshot,
-    PlanSummary,
+    NoteSummary,
     PlansSnapshot,
-    ReportSummary,
+    PlanSummary,
     ReportsSnapshot,
+    ReportSummary,
     ScheduleSnapshot,
     ScheduleTicketRow,
     TicketSummary,
@@ -132,7 +132,7 @@ def factory_schedule_ticket_row(
         metadata_sync_state="synced",
         metadata_parse_error=None,
         metadata_conflict_reason=None,
-        deps_ok=True,
+        pending_dep_ids=(),
     )
 
 

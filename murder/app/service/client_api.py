@@ -9,8 +9,8 @@ from enum import Enum
 from types import MappingProxyType, UnionType
 from typing import Any, ClassVar, Protocol, Union, get_args, get_origin, get_type_hints
 
-from murder.work.tickets.status import TicketStatus
 from murder.bus.protocol import BusEvent
+from murder.work.tickets.status import TicketStatus
 
 
 class CommandStatus(str, Enum):
@@ -215,7 +215,10 @@ class ScheduleTicketRow:
     metadata_sync_state: str
     metadata_parse_error: str | None
     metadata_conflict_reason: str | None
-    deps_ok: bool
+    pending_dep_ids: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "pending_dep_ids", tuple(self.pending_dep_ids))
 
 
 @dataclass(frozen=True, slots=True)

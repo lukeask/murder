@@ -6,7 +6,7 @@ from collections import defaultdict
 from collections.abc import Sequence
 from datetime import datetime, timedelta
 
-from murder.app.service.client_api import ScheduleTicketRow, SchedulerDecisionSummary
+from murder.app.service.client_api import SchedulerDecisionSummary, ScheduleTicketRow
 from murder.work.tickets.status import TicketStatus
 
 
@@ -86,5 +86,5 @@ def last_update_cell(row: ScheduleTicketRow, as_of: datetime) -> str:
 
 def deps_cell_for(row: ScheduleTicketRow) -> str:
     if row.status in {"planned", "ready"}:
-        return "ok" if row.deps_ok else "wait"
+        return "ok" if not row.pending_dep_ids else "wait"
     return "—"
