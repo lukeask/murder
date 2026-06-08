@@ -45,6 +45,7 @@ from murder.config import (
     resolve_default_crow_startup_model,
 )
 from murder.llm.harnesses import get as get_harness
+from murder.llm.harnesses.harnesses_doc import write_harnesses_doc
 from murder.work.plans.parser import (
     render as _render_plan_markdown,
     write as _write_plan_markdown,
@@ -1088,6 +1089,7 @@ class Orchestrator:
         new_config = Config.load(self.rt.repo_root)
         self.rt.config = new_config
         current_harness = new_config.collaborator.harness
+        write_harnesses_doc(self.rt.repo_root)
 
         restarted = False
         agent_id = _db_get_active_agent_by_role(self.rt.db, "collaborator")
@@ -1277,34 +1279,20 @@ class Orchestrator:
     async def apply_ticket_carve_ready(
         self, ticket_id: str, payload: dict[str, object]
     ) -> dict[str, object]:
-        """Apply carved ticket metadata from structured ``carve`` or legacy ``yaml`` string."""
+        """Apply carved ticket metadata from a structured ``carve`` payload."""
         assert self.rt.db is not None
         carve_body = payload.get("carve")
-        yaml_text = payload.get("yaml")
         try:
             if isinstance(carve_body, dict) and carve_body:
                 spec = dict(carve_body)
                 if spec.get("id") is None:
                     spec["id"] = ticket_id
-                prev = carve.ingest_carve_ready_spec(
-                    conn=self.rt.db,
-                    repo_root=str(self.rt.repo_root),
-                    ticket_id=ticket_id,
-                    spec=spec,
-                )
-            elif isinstance(yaml_text, str) and yaml_text.strip():
-                spec = carve.parse_carve_yaml(yaml_text)
-                prev = carve.ingest_carve_ready_spec(
-                    conn=self.rt.db,
-                    repo_root=str(self.rt.repo_root),
-                    ticket_id=ticket_id,
-                    spec=spec,
-                )
+                prev = carve.apply_carve_ready_spec(self.rt.db, ticket_id, spec)
             else:
                 return {
                     "handled": True,
                     "ok": False,
-                    "error": "payload must include non-empty 'carve' object or 'yaml' string",
+                    "error": "payload must include non-empty 'carve' object",
                 }
         except carve.CarveError as exc:
             return {"handled": True, "ok": False, "error": str(exc)}

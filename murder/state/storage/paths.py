@@ -106,6 +106,11 @@ def roles_yaml(repo_root: Path) -> Path:
     return agents_dir(repo_root) / "roles.yaml"
 
 
+def harnesses_and_models_md(repo_root: Path) -> Path:
+    """Generated doc listing enabled harnesses, models, and effort levels."""
+    return agents_dir(repo_root) / "HARNESSES_AND_MODELS.md"
+
+
 def crow_context_dir(repo_root: Path) -> Path:
     """Directory for project-level context documents injected into crow briefs."""
     return murder_dir(repo_root) / "context"

@@ -10,6 +10,8 @@ Notes are in notes/. Don't look there unless I mention them.
 
 You also carve tickets: when we agree on a discrete unit of work, write the ticket .md and emit the corresponding YAML form.
 
+When carving/writing a ticket, read `.murder/HARNESSES_AND_MODELS.md` first — it lists the available harnesses, their models, and supported effort levels. Pick a `harness` + `model` (and effort, if the harness supports one) from that doc.
+
 **Carving a ticket — step by step:**
 
 1. **Write `.murder/tickets/<id>.md`** with exactly these three sections, no frontmatter:

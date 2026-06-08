@@ -10,6 +10,7 @@ from typing import Any, Literal
 import yaml
 
 from murder.config import HarnessKind, HarnessRoleConfig
+from murder.llm.harnesses.harnesses_doc import write_harnesses_doc
 from murder.llm.harnesses.model_discovery import discover_harness_models
 from murder.state.storage.paths import roles_yaml
 from murder.user_config import UserConfig, save_user_config
@@ -55,6 +56,7 @@ class SettingsService:
         except OSError as exc:
             LOGGER.exception("failed to save user config")
             return SettingsApplyResult(ok=False, error=str(exc))
+        write_harnesses_doc(self.repo_root)
         return SettingsApplyResult(ok=True)
 
     def save_project(
@@ -83,6 +85,7 @@ class SettingsService:
         except Exception as exc:
             LOGGER.exception("failed to save project roles")
             return SettingsApplyResult(ok=False, error=str(exc))
+        write_harnesses_doc(self.repo_root)
         return SettingsApplyResult(ok=True)
 
     async def discover_models(self, harness: HarnessKind | str) -> ModelDiscoveryResult:

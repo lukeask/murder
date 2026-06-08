@@ -21,6 +21,7 @@ from murder.bus.broker import DurableBroker
 from murder.bus.protocol import CommandEvent
 from murder.bus.transport_socket import SocketBusServer, default_socket_path
 from murder.config import Config
+from murder.llm.harnesses.harnesses_doc import write_harnesses_doc
 from murder.llm.harnesses.model_cache import populate_model_cache
 from murder.runtime.orchestration.orchestrator import Orchestrator
 from murder.state.persistence.commands import get_command_status
@@ -345,7 +346,7 @@ class ServiceHost:
             broker=self.broker,
         )
         self._model_discovery_task = asyncio.create_task(
-            populate_model_cache(self.repo_root), name="startup-model-discovery"
+            self._discover_then_write_models_doc(), name="startup-model-discovery"
         )
         self._usage_poll_task = asyncio.create_task(
             run_service_usage_poll_loop(self.broker, self.runtime.db, str(self.runtime.run_id)),
@@ -358,6 +359,16 @@ class ServiceHost:
             await self.orchestrator.start_question_listener()
         session = write_service_session(self.repo_root, self.socket_path)
         self._service_session_name = session.name
+
+    async def _discover_then_write_models_doc(self) -> None:
+        """Populate the model cache, then write ``HARNESSES_AND_MODELS.md``.
+
+        Chained (not two parallel tasks) so the startup doc reflects the
+        *discovered* model lists rather than racing discovery and capturing the
+        classvar fallback.
+        """
+        await populate_model_cache(self.repo_root)
+        write_harnesses_doc(self.repo_root)
 
     async def _run_projection_poll_loop(self) -> None:
         """Single service-owned ticker that projects every harness-backed agent's
