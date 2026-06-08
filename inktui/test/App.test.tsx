@@ -27,7 +27,7 @@ function setup(visible: readonly PanelId[]) {
   fake.stubRpc('crow.get_snapshot', { invalidation_key: 'iv', sessions: [] });
   const { store, dispose } = createAppStore(fake);
   const inputStores = createInputStores(visible);
-  const tree = render(<App store={store} inputStores={inputStores} />);
+  const tree = render(<App store={store} inputStores={inputStores} bus={fake} />);
   return { fake, store, dispose, inputStores, ...tree };
 }
 

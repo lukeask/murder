@@ -30,7 +30,9 @@
 
 import { Box } from 'ink';
 import type { JSX } from 'react';
+import type { BusClient } from '../bus/BusClient.js';
 import { AppStoreProvider } from '../hooks/useAppStore.js';
+import { BusClientProvider } from '../hooks/useBusClient.js';
 import {
   type InputStores,
   InputStoresProvider,
@@ -142,21 +144,29 @@ function Shell(): JSX.Element {
 }
 
 /**
- * The app root. Mounts the store + input-store providers (both bundles injected as props — rule 4)
- * and renders the shell inside them. This is the whole composition: providers wrap, {@link Shell}
- * composes, panels fill in.
+ * The app root. Mounts the store + input-store + bus-client providers (all bundles injected as
+ * props — rule 4) and renders the shell inside them. This is the whole composition: providers wrap,
+ * {@link Shell} composes, panels fill in.
+ *
+ * `bus` is threaded here so the {@link TmuxFrame} component can open a transient subscription
+ * via {@link BusClientProvider} / {@link useBusClient}. Actions remain the only domain-data path
+ * (rule 3); the bus context is for streaming display data only (C14 tmux frames).
  */
 export function App({
   store,
   inputStores,
+  bus,
 }: {
   readonly store: AppStoreApi;
   readonly inputStores: InputStores;
+  readonly bus: BusClient;
 }): JSX.Element {
   return (
     <AppStoreProvider value={store}>
       <InputStoresProvider value={inputStores}>
-        <Shell />
+        <BusClientProvider value={bus}>
+          <Shell />
+        </BusClientProvider>
       </InputStoresProvider>
     </AppStoreProvider>
   );
