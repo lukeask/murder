@@ -346,7 +346,7 @@ def _migrate_agents_harness(conn: sqlite3.Connection) -> None:
 
 
 def _migrate_ticket_metadata_columns(conn: sqlite3.Connection) -> None:
-    """Add additive ticket metadata/scheduling columns for YAML sidecar sync."""
+    """Add additive ticket metadata/scheduling columns for file sync."""
     ticket_cols = {row["name"] for row in conn.execute("PRAGMA table_info(tickets)").fetchall()}
     migrations: tuple[tuple[str, str], ...] = (
         ("schedule_at", "TEXT"),

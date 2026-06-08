@@ -255,4 +255,4 @@ def cmd_ticket_ingest_carve(
         raise typer.Exit(1) from e
     finally:
         conn.close()
-    typer.echo(f"{ticket_id}: sidecar applied; status=ready")
+    typer.echo(f"{ticket_id}: carve applied; status=ready")

@@ -4,15 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 
-import sqlite3
-
-from murder.work.notes.sync import NoteSync
-from murder.work.notes.sync import NotetakerContextSync
+from murder.work.notes.sync import NoteSync, NotetakerContextSync
 from murder.work.plans.sync import PlanSync
-from murder.work.tickets.sidecar_sync import TicketMetadataSync
 from murder.work.tickets.sync import TicketSync
 
 SYNC_TASK_KEYS = (
@@ -20,7 +17,6 @@ SYNC_TASK_KEYS = (
     "note_sync",
     "notetaker_context_sync",
     "ticket_sync",
-    "ticket_metadata_sync",
 )
 
 
@@ -32,7 +28,6 @@ class FilesystemSyncSupervisor:
     note_sync: NoteSync
     notetaker_context_sync: NotetakerContextSync
     ticket_sync: TicketSync
-    ticket_metadata_sync: TicketMetadataSync
 
     @classmethod
     def attach(cls, repo_root: Path, db: sqlite3.Connection) -> FilesystemSyncSupervisor:
@@ -41,7 +36,6 @@ class FilesystemSyncSupervisor:
             note_sync=NoteSync(repo_root, db),
             notetaker_context_sync=NotetakerContextSync(repo_root, db),
             ticket_sync=TicketSync(repo_root, db),
-            ticket_metadata_sync=TicketMetadataSync(repo_root, db),
         )
 
     async def reconcile_all(self) -> None:
@@ -49,7 +43,6 @@ class FilesystemSyncSupervisor:
         await self.note_sync.reconcile_all()
         await self.notetaker_context_sync.reconcile_all()
         await self.ticket_sync.reconcile_all()
-        await self.ticket_metadata_sync.reconcile_all()
 
     def spawn_tasks(self) -> dict[str, asyncio.Task[None]]:
         return {
@@ -57,7 +50,6 @@ class FilesystemSyncSupervisor:
             "note_sync": asyncio.create_task(self.note_sync.run()),
             "notetaker_context_sync": asyncio.create_task(self.notetaker_context_sync.run()),
             "ticket_sync": asyncio.create_task(self.ticket_sync.run()),
-            "ticket_metadata_sync": asyncio.create_task(self.ticket_metadata_sync.run()),
         }
 
     async def shutdown(self, tasks: dict[str, asyncio.Task[None]]) -> None:

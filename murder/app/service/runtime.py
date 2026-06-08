@@ -26,30 +26,35 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from murder.runtime.terminal import tmux
-from murder.state.persistence.schema import get_db as _db_connect, init_db as _db_init_schema
-from murder.state.persistence.runs import insert_run as _db_insert_run, end_run as _db_end_run
-from murder.state.persistence.agents import upsert_agent as _db_upsert_agent, set_agent_status as _db_set_agent_status
-from murder.bus import AgentStatus, Bus, EventFilter, SubscriptionHandle
-from murder.runtime.agents.events import AgentEventSink, LoggingAgentEventSink
 from murder.app.service.agent_registry import AgentRegistry
-from murder.llm.harnesses.versioning import HarnessVersionRegistry
 from murder.app.service.document_access import DocumentAccess
 from murder.app.service.filesystem_sync import FilesystemSyncSupervisor
 from murder.app.service.recovery import reconcile_agents_vs_tmux
-from murder.state.persistence.conversation import mark_stale_conversations
 from murder.app.service.runtime_lifecycle import shutdown_live_agents
+from murder.bus import Bus, EventFilter, SubscriptionHandle
+from murder.llm.harnesses.versioning import HarnessVersionRegistry
+from murder.runtime.agents.events import AgentEventSink, LoggingAgentEventSink
+from murder.runtime.terminal import tmux
+from murder.state.persistence.agents import (
+    set_agent_status as _db_set_agent_status,
+)
+from murder.state.persistence.agents import (
+    upsert_agent as _db_upsert_agent,
+)
+from murder.state.persistence.conversation import mark_stale_conversations
+from murder.state.persistence.runs import end_run as _db_end_run
+from murder.state.persistence.runs import insert_run as _db_insert_run
+from murder.state.persistence.schema import get_db as _db_connect
+from murder.state.persistence.schema import init_db as _db_init_schema
 from murder.state.storage.filesystem import acquire_flock, release_flock
 from murder.state.storage.paths import db_path, lock_path
 from murder.state.storage.run_id_allocation import allocate_run_id
 
 if TYPE_CHECKING:
-    from murder.runtime.agents.base import LifecycleParticipant
     from murder.config import Config
-    from murder.work.notes.sync import NoteSync
-    from murder.work.notes.sync import NotetakerContextSync
+    from murder.runtime.agents.base import LifecycleParticipant
+    from murder.work.notes.sync import NoteSync, NotetakerContextSync
     from murder.work.plans.sync import PlanSync
-    from murder.work.tickets.sidecar_sync import TicketMetadataSync
     from murder.work.tickets.sync import TicketSync
 
 Handler = Callable[[Any], Awaitable[None]]
@@ -77,7 +82,6 @@ class Runtime:
         self.note_sync: NoteSync | None = None
         self.notetaker_context_sync: NotetakerContextSync | None = None
         self.ticket_sync: TicketSync | None = None
-        self.ticket_metadata_sync: TicketMetadataSync | None = None
         self.documents = DocumentAccess(self.repo_root)
 
     async def __aenter__(self) -> Runtime:
@@ -111,7 +115,6 @@ class Runtime:
         self.note_sync = self._sync.note_sync
         self.notetaker_context_sync = self._sync.notetaker_context_sync
         self.ticket_sync = self._sync.ticket_sync
-        self.ticket_metadata_sync = self._sync.ticket_metadata_sync
         self.documents = DocumentAccess(
             self.repo_root,
             self.db,
@@ -142,7 +145,6 @@ class Runtime:
         self.note_sync = None
         self.notetaker_context_sync = None
         self.ticket_sync = None
-        self.ticket_metadata_sync = None
         self.documents = DocumentAccess(self.repo_root)
         self.bus = None
         self.run_id = None

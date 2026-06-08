@@ -256,7 +256,7 @@ class Orchestrator:
                     max_n = max(max_n, int(m2.group(1)))
         ticket_id = f"t{max_n + 1:03d}"
 
-        # Write the markdown file so the sidecar sync stays consistent.
+        # Write the markdown file so the ticket sync stays consistent.
         path = ticket_md(repo_root, ticket_id)
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(f"# {title}\n\n## Plan\n\n## Working Notes\n")
@@ -1283,7 +1283,7 @@ class Orchestrator:
     async def apply_ticket_carve_ready(
         self, ticket_id: str, payload: dict[str, object]
     ) -> dict[str, object]:
-        """Apply carved sidecar from structured ``carve`` or legacy ``yaml`` string."""
+        """Apply carved ticket metadata from structured ``carve`` or legacy ``yaml`` string."""
         assert self.rt.db is not None
         carve_body = payload.get("carve")
         yaml_text = payload.get("yaml")
