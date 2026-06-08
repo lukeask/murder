@@ -52,6 +52,15 @@ import {
   ROSTER_INVALIDATING_ENTITY,
   type RosterState,
 } from './roster/rosterSlice.js';
+import {
+  createTicketDetailActions,
+  type TicketDetailActions,
+} from './ticketDetail/ticketDetailActions.js';
+import {
+  createTicketDetailSlice,
+  initialTicketDetailState,
+  type TicketDetailState,
+} from './ticketDetail/ticketDetailSlice.js';
 import { createTicketsActions, type TicketsActions } from './tickets/ticketsActions.js';
 import {
   createTicketsSlice,
@@ -67,6 +76,7 @@ export interface AppActions {
   notes: NotesActions;
   reports: ReportsActions;
   tickets: TicketsActions;
+  ticketDetail: TicketDetailActions;
 }
 
 /**
@@ -79,6 +89,7 @@ export interface AppStore {
   notes: NotesState;
   reports: ReportsState;
   tickets: TicketsState;
+  ticketDetail: TicketDetailState;
   actions: AppActions;
 }
 
@@ -114,6 +125,7 @@ export function createAppStore(bus: BusClient): {
     ...createNotesSlice(...a),
     ...createReportsSlice(...a),
     ...createTicketsSlice(...a),
+    ...createTicketDetailSlice(...a),
     // Placeholder; replaced in step 2 now that we have the handle the actions need to `setState`.
     actions: undefined as unknown as AppActions,
   }));
@@ -124,6 +136,7 @@ export function createAppStore(bus: BusClient): {
     notes: createNotesActions(bus, store),
     reports: createReportsActions(bus, store),
     tickets: createTicketsActions(bus, store),
+    ticketDetail: createTicketDetailActions(bus, store),
   };
   store.setState({ actions });
 
@@ -164,9 +177,13 @@ export function createAppStore(bus: BusClient): {
 
 /** The pre-fetch state of a freshly created store — exported so a test (or a hook's default) can
  * assert the boot value without reconstructing it. Mirrors each slice's `initialXState`. */
-export const initialAppState: Pick<AppStore, 'roster' | 'notes' | 'reports' | 'tickets'> = {
+export const initialAppState: Pick<
+  AppStore,
+  'roster' | 'notes' | 'reports' | 'tickets' | 'ticketDetail'
+> = {
   roster: initialRosterState,
   notes: initialNotesState,
   reports: initialReportsState,
   tickets: initialTicketsState,
+  ticketDetail: initialTicketDetailState,
 };

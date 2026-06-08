@@ -34,7 +34,7 @@
  */
 
 import { Box, Text } from 'ink';
-import { memo, useCallback, useMemo, useState } from 'react';
+import { memo, useCallback, useMemo, useRef, useState } from 'react';
 import { shallow } from 'zustand/shallow';
 import { useAppStore } from '../hooks/useAppStore.js';
 import {
@@ -50,11 +50,12 @@ import {
   type TicketsView,
   useTicketsView,
 } from '../selectors/ticketsSelectors.js';
+import { useTicketEditor } from './TicketEditorMode.js';
 
 const PANEL_ID: PanelId = 'tickets';
 const PANEL_TITLE = 'Tickets';
 
-type TicketsIntent = 'cursorDown' | 'cursorUp' | 'refresh';
+type TicketsIntent = 'cursorDown' | 'cursorUp' | 'refresh' | 'open';
 
 /**
  * One ticket entry rendered as a **2-row × 5-column** block with alternating background.
@@ -179,9 +180,17 @@ export const TicketsPanel = memo(function TicketsPanel(): React.JSX.Element {
   // Rule 3: bus reached only through the dispatched action.
   const refresh = useAppStore((s) => s.actions.tickets.refresh);
 
+  // C8: editor lifecycle — openEditor(ticketId) enters the inlayout editor mode.
+  const openEditor = useTicketEditor();
+
   // Rule 1: cursor is local UI state.
   const [cursor, setCursor] = useState(0);
   const rowCount = view.rows.length;
+  // Stable ref so the keymap useMemo doesn't churn on every cursor change.
+  const cursorRef = useRef(cursor);
+  cursorRef.current = cursor;
+  const rowsRef = useRef(view.rows);
+  rowsRef.current = view.rows;
 
   const moveCursor = useCallback(
     (delta: number) => {
@@ -197,13 +206,16 @@ export const TicketsPanel = memo(function TicketsPanel(): React.JSX.Element {
   );
 
   // Rule 5: keymap as data, wrapped in useMemo so the registry effect doesn't churn.
-  // C8 will add an 'open' intent bound to 'return' (enter) for the editor handoff.
+  // `cursor` and `view.rows` are read via refs inside the intent handler so they stay
+  // up-to-date without being in the deps array — the keymap object stays stable across
+  // cursor moves and row updates, which keeps `usePanelKeymap`'s registration effect stable.
   const keymap: PanelKeymap<TicketsIntent> = useMemo(
     () => ({
       keymap: [
         { chord: { input: 'j' }, intent: 'cursorDown', description: 'next ticket' },
         { chord: { input: 'k' }, intent: 'cursorUp', description: 'prev ticket' },
         { chord: { input: 'r' }, intent: 'refresh', description: 'refresh' },
+        { chord: { key: { return: true } }, intent: 'open', description: 'open ticket' },
       ],
       onIntent(intent) {
         switch (intent) {
@@ -216,12 +228,23 @@ export const TicketsPanel = memo(function TicketsPanel(): React.JSX.Element {
           case 'refresh':
             void refresh();
             return;
+          case 'open': {
+            // C8: open the in-layout editor for the highlighted ticket.
+            // Read cursor + rows via refs so this closure doesn't go stale.
+            const rows = rowsRef.current;
+            const safeIndex = Math.min(cursorRef.current, Math.max(rows.length - 1, 0));
+            const row = rows[safeIndex];
+            if (row !== undefined) {
+              openEditor(row.id);
+            }
+            return;
+          }
           default:
             return intent satisfies never;
         }
       },
     }),
-    [moveCursor, refresh],
+    [moveCursor, refresh, openEditor],
   );
   usePanelKeymap(PANEL_ID, keymap);
 
