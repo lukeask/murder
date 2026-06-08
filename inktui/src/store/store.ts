@@ -60,6 +60,15 @@ import {
   ROSTER_INVALIDATING_ENTITY,
   type RosterState,
 } from './roster/rosterSlice.js';
+import {
+  createTicketDetailActions,
+  type TicketDetailActions,
+} from './ticketDetail/ticketDetailActions.js';
+import {
+  createTicketDetailSlice,
+  initialTicketDetailState,
+  type TicketDetailState,
+} from './ticketDetail/ticketDetailSlice.js';
 import { createTicketsActions, type TicketsActions } from './tickets/ticketsActions.js';
 import {
   createTicketsSlice,
@@ -83,6 +92,7 @@ export interface AppActions {
   reports: ReportsActions;
   tickets: TicketsActions;
   usage: UsageActions;
+  ticketDetail: TicketDetailActions;
 }
 
 /**
@@ -96,6 +106,7 @@ export interface AppStore {
   reports: ReportsState;
   tickets: TicketsState;
   usage: UsageState;
+  ticketDetail: TicketDetailState;
   actions: AppActions;
 }
 
@@ -132,6 +143,7 @@ export function createAppStore(bus: BusClient): {
     ...createReportsSlice(...a),
     ...createTicketsSlice(...a),
     ...createUsageSlice(...a),
+    ...createTicketDetailSlice(...a),
     // Placeholder; replaced in step 2 now that we have the handle the actions need to `setState`.
     actions: undefined as unknown as AppActions,
   }));
@@ -143,6 +155,7 @@ export function createAppStore(bus: BusClient): {
     reports: createReportsActions(bus, store),
     tickets: createTicketsActions(bus, store),
     usage: createUsageActions(bus, store),
+    ticketDetail: createTicketDetailActions(bus, store),
   };
   store.setState({ actions });
 
@@ -184,11 +197,14 @@ export function createAppStore(bus: BusClient): {
 
 /** The pre-fetch state of a freshly created store — exported so a test (or a hook's default) can
  * assert the boot value without reconstructing it. Mirrors each slice's `initialXState`. */
-export const initialAppState: Pick<AppStore, 'roster' | 'notes' | 'reports' | 'tickets' | 'usage'> =
-  {
-    roster: initialRosterState,
-    notes: initialNotesState,
-    reports: initialReportsState,
-    tickets: initialTicketsState,
-    usage: initialUsageState,
-  };
+export const initialAppState: Pick<
+  AppStore,
+  'roster' | 'notes' | 'reports' | 'tickets' | 'usage' | 'ticketDetail'
+> = {
+  roster: initialRosterState,
+  notes: initialNotesState,
+  reports: initialReportsState,
+  tickets: initialTicketsState,
+  usage: initialUsageState,
+  ticketDetail: initialTicketDetailState,
+};
