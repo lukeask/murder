@@ -21,11 +21,12 @@
  *    root input loop with {@link useRootInput}. It is the only caller of that hook.
  *
  * Region/panel pattern: each region maps its panel ids to components, rendering a panel only when it
- * is in the visible set. Today only `crows` is a real panel ({@link RosterPanel} — the reference);
- * the rest are {@link PlaceholderPanel}s tagged with the chunk that fills them. A later chunk swaps
- * its placeholder for a real panel copied from `RosterPanel` — *this file does not change*, only the
- * component the map points at for that id. That is the skeleton's contract: stable composition,
- * panels filled in independently.
+ * is in the visible set. The real panels today are `crows` ({@link CrowsPanel}, crows-by-type) and
+ * `usage` ({@link UsagePanel}) — both landed by C9; the flat {@link RosterPanel} is kept aside as
+ * the copyable reference implementation. The remaining ids are {@link PlaceholderPanel}s tagged with
+ * the chunk that fills them. A later chunk swaps its placeholder for a real panel copied from
+ * `RosterPanel`/`CrowsPanel` — *this file changes only at its `renderPanel` case for that id*. That
+ * is the skeleton's contract: stable composition, panels filled in independently.
  */
 
 import { Box } from 'ink';
@@ -62,10 +63,11 @@ const LEFT_PANELS: readonly PanelId[] = ['plans', 'notes', 'reports', 'tickets']
 const RIGHT_PANELS: readonly PanelId[] = ['usage', 'crows'];
 
 /**
- * Render one panel by id — the single dispatch from a {@link PanelId} to its component. Only `crows`
- * is a real panel yet (the reference {@link RosterPanel}); the rest are labelled placeholders. A
- * later chunk replaces its `case` with the real panel it copies from `RosterPanel`; nothing else in
- * the shell changes. Defined as a function (not inline) so the swap is one localised edit.
+ * Render one panel by id — the single dispatch from a {@link PanelId} to its component. Most ids are
+ * now real panels (`crows`, `usage`, `notes`, `reports`, `tickets`); `plans` is still a labelled
+ * {@link PlaceholderPanel}. A later chunk replaces a placeholder `case` with the real panel it copies
+ * from `RosterPanel`/`CrowsPanel`; nothing else in the shell changes. Defined as a function (not
+ * inline) so the swap is one localised edit.
  */
 function renderPanel(id: PanelId): JSX.Element {
   switch (id) {
