@@ -1,22 +1,29 @@
 /**
  * Roster actions — the *only* code that calls the bus for crow data (rule 3).
  *
- * An action is a closure over the injected {@link BusClient} and the store's `set`/`get`. It issues
- * one RPC, projects the wire DTO into the slice's presentation-free {@link RosterRow}s, and
- * ref-swaps *only* the `roster` slice. Components and selectors never reach the bus — they dispatch
- * these actions (exposed off the store handle) or read the slice. This file is the seam a future
+ * An action is a closure over the injected {@link BusClient} and the store's `set`. It issues one
+ * RPC, projects the wire DTO into the slice's presentation-free {@link RosterRow}s, and ref-swaps
+ * *only* the `roster` slice. Components and selectors never reach the bus — they dispatch these
+ * actions (exposed off the store handle) or read the slice. This file is the seam a future
  * web/phone client reuses unchanged: no Ink, no terminal, no socket — just `BusClient` + the store.
  *
- * Copy this file to add slice X: swap the RPC method + its `CrowSnapshotReply` shape, swap the
- * projection, and ref-swap `state.x` instead of `state.roster`. The augmentation block below is how
- * a read RPC that is not yet on the shared {@link RpcMethods} registry is declared without editing
- * the frozen C1 bus files — see its comment.
+ * The loading→ready/error lifecycle + ref-swap-only-this-key mechanics now come from the shared
+ * {@link createRefreshAction} factory in `../listSlice.js` — this file supplies only the three
+ * per-domain pieces: the RPC method (+ its reply type, declared below), and the DTO→rows
+ * `project` fn. That projection is the divergence injection point; the generic never special-cases
+ * a domain.
+ *
+ * Copy this file to add slice X: swap the RPC method + its reply shape (the `declare module` block),
+ * swap the projection, and pass X's slice key + method + project to `createRefreshAction`. The
+ * augmentation block is how a read RPC not yet on the shared {@link RpcMethods} registry is declared
+ * without editing the frozen C1 bus files — see its comment.
  */
 
 import type { StoreApi } from 'zustand';
 import type { BusClient } from '../../bus/BusClient.js';
+import { createRefreshAction } from '../listSlice.js';
 import type { AppStore } from '../store.js';
-import type { RosterRow, RosterState } from './rosterSlice.js';
+import type { RosterRow } from './rosterSlice.js';
 
 /**
  * The crow-roster read RPC and its reply shape, declared here via TypeScript declaration merging
@@ -89,23 +96,9 @@ export interface RosterActions {
 }
 
 export function createRosterActions(bus: BusClient, store: StoreApi<AppStore>): RosterActions {
-  return {
-    async refresh(): Promise<void> {
-      // Mark loading by ref-swapping ONLY this slice — sibling slices keep their identity, so their
-      // `useStore(s => s.x, shallow)` subscribers do not re-render (the invalidation-granularity
-      // contract this whole chunk exists to demonstrate).
-      store.setState((state) => ({ roster: { ...state.roster, status: 'loading' } }));
-      try {
-        const reply = await bus.rpc('crow.get_snapshot', {});
-        const rows = reply.sessions.map(toRosterRow);
-        const next: RosterState = { rows, status: 'ready', error: null };
-        store.setState({ roster: next });
-      } catch (error: unknown) {
-        const message = error instanceof Error ? error.message : String(error);
-        store.setState((state) => ({
-          roster: { ...state.roster, status: 'error', error: message },
-        }));
-      }
-    },
-  };
+  return createRefreshAction(bus, store, {
+    key: 'roster',
+    method: 'crow.get_snapshot',
+    project: (reply) => reply.sessions.map(toRosterRow),
+  });
 }

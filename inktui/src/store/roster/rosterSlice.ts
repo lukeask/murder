@@ -8,15 +8,18 @@
  * here is domain data only, exactly as the service delivers it, so the slice stays reusable by a
  * future React-DOM client (rule 4).
  *
- * Copy this file to add slice X: rename `RosterState`→`XState`/`RosterRow`→`XRow`, swap the row
- * fields for X's DTO, point `INVALIDATING_ENTITY` at X's {@link Entity} key, and rename the slice
- * key. The composition wiring in `../store.ts` and the action in `./rosterActions.ts` follow the
- * same copy recipe — three small files, no framework glue to re-derive.
+ * The shared `{ rows, status, error }` mechanics now come from the generic {@link ListState} +
+ * {@link createListSlice} factory in `../listSlice.js` — this file is a thin shell over it. Only
+ * the row type, the slice key (`roster`), and the invalidating entity are domain-specific here.
+ *
+ * Copy this file to add slice X: rename `RosterRow`→`XRow` and its fields for X's DTO, point
+ * `INVALIDATING_ENTITY` at X's {@link Entity} key, and pass X's key to `createListSlice`. The
+ * action (`./rosterActions.ts`) and selector (`../selectors/rosterSelectors.ts`) follow the same
+ * copy recipe; the loading/error/ref-swap mechanics are inherited from the factory, not re-derived.
  */
 
-import type { StateCreator } from 'zustand';
 import type { Entity } from '../../bus/protocol.js';
-import type { AppStore } from '../store.js';
+import { createListSlice, initialListState, type ListState } from '../listSlice.js';
 
 /**
  * One crow as the roster cares about it — a faithful, presentation-free projection of the service's
@@ -35,17 +38,12 @@ export interface RosterRow {
 }
 
 /**
- * The roster slice's state. `rows` is the domain data; `status` makes the load lifecycle explicit so
- * a component can distinguish "not fetched yet" from "fetched, empty" without a sentinel. Every
- * field is readonly: the slice is ref-swapped wholesale on change (the invalidation-granularity
- * contract), never mutated in place.
+ * The roster slice's state — the shared {@link ListState} shape specialized to {@link RosterRow}.
+ * `rows` is the domain data; `status` makes the load lifecycle explicit so a component can
+ * distinguish "not fetched yet" from "fetched, empty". Selectors read `RosterState['status']`, so
+ * the union is part of the contract (it stays `'idle' | 'loading' | 'ready' | 'error'`).
  */
-export interface RosterState {
-  readonly rows: readonly RosterRow[];
-  readonly status: 'idle' | 'loading' | 'ready' | 'error';
-  /** Set when the last refresh rejected; cleared on the next successful load. */
-  readonly error: string | null;
-}
+export type RosterState = ListState<RosterRow>;
 
 /**
  * The {@link Entity} key whose `state.snapshot` events invalidate this slice. The service emits
@@ -55,19 +53,12 @@ export interface RosterState {
 export const ROSTER_INVALIDATING_ENTITY: Entity = 'agent';
 
 /** The initial, pre-fetch slice value. A fresh store has not talked to the bus yet → `idle`. */
-export const initialRosterState: RosterState = {
-  rows: [],
-  status: 'idle',
-  error: null,
-};
+export const initialRosterState: RosterState = initialListState<RosterRow>();
 
 /**
- * Slice factory in Zustand's standard `StateCreator` shape, scoped to the combined {@link AppStore}
- * via the `[]` middleware tuple + the slice's own state as the fourth type arg. It contributes only
- * its own keys; `../store.ts` composes it with sibling slices into the one root store. The slice
- * holds state, not actions: mutation is done by the action layer calling `set` through the store
- * handle, keeping the bus dependency out of this framework-/transport-agnostic file (rule 4).
+ * Slice factory — the trivial Zustand `StateCreator` that seeds the `roster` key, built from the
+ * shared {@link createListSlice}. It contributes only its own key; `../store.ts` composes it with
+ * sibling slices into the one root store. No bus dependency here (rule 4) — mutation is the
+ * action layer's job.
  */
-export const createRosterSlice: StateCreator<AppStore, [], [], { roster: RosterState }> = () => ({
-  roster: initialRosterState,
-});
+export const createRosterSlice = createListSlice('roster', initialRosterState);

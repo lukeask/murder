@@ -6,13 +6,17 @@
  *  - Reply shape mirrors Python `ReportsSnapshot` (reports[] with name/char_count/updated_at).
  *  - `declare module` augments `RpcMethods` with `'report.get_snapshot'` (distinct key — never
  *    redeclare an existing one).
- *  - Ref-swaps `state.reports`, not `state.notes`.
+ *  - Passes the `reports` slice key to `createRefreshAction`.
+ *
+ * The loading→ready/error + ref-swap-only-this-key mechanics come from the shared
+ * {@link createRefreshAction} factory in `../listSlice.js`.
  */
 
 import type { StoreApi } from 'zustand';
 import type { BusClient } from '../../bus/BusClient.js';
+import { createRefreshAction } from '../listSlice.js';
 import type { AppStore } from '../store.js';
-import type { ReportRow, ReportsState } from './reportsSlice.js';
+import type { ReportRow } from './reportsSlice.js';
 
 /**
  * Declares the reports read RPC via declaration merging. `report.get_snapshot` is the bus-contract
@@ -66,20 +70,9 @@ export interface ReportsActions {
 }
 
 export function createReportsActions(bus: BusClient, store: StoreApi<AppStore>): ReportsActions {
-  return {
-    async refresh(): Promise<void> {
-      store.setState((state) => ({ reports: { ...state.reports, status: 'loading' } }));
-      try {
-        const reply = await bus.rpc('report.get_snapshot', {});
-        const rows = reply.reports.map(toReportRow);
-        const next: ReportsState = { rows, status: 'ready', error: null };
-        store.setState({ reports: next });
-      } catch (error: unknown) {
-        const message = error instanceof Error ? error.message : String(error);
-        store.setState((state) => ({
-          reports: { ...state.reports, status: 'error', error: message },
-        }));
-      }
-    },
-  };
+  return createRefreshAction(bus, store, {
+    key: 'reports',
+    method: 'report.get_snapshot',
+    project: (reply) => reply.reports.map(toReportRow),
+  });
 }

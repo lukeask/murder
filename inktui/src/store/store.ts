@@ -3,10 +3,14 @@
  * slice-invalidation wiring that replaced the old poll-everything `IngestionCoordinator`.
  *
  * Shape (locked here as THE reference):
- *  - **One root store, many slices.** Each domain contributes a top-level key (`roster`, later
- *    `tickets`, `plans`, …). A change ref-swaps just that key's object, so `useStore(s => s.roster,
+ *  - **One root store, many slices.** Each domain contributes a top-level key (`roster`, `notes`,
+ *    `reports`, `tickets`, …). A change ref-swaps just that key's object, so `useStore(s => s.roster,
  *    shallow)` re-renders only roster subscribers — slice-granular re-render for free, no hand-rolled
  *    diff. (Contrast the Python store, which polled every snapshot every tick.)
+ *  - **Each domain is a thin shell over the shared list-slice factory** (`./listSlice.ts`). The
+ *    identical `{ rows, status, error }` shape + loading/error/ref-swap mechanics live there once;
+ *    a domain supplies only its row type, RPC method, and DTO→rows `project` fn. The four current
+ *    slices differ only in those; tickets' 3-bucket flatten is just its `project` (no special case).
  *  - **Actions hang off `state.actions`,** grouped by slice. Components dispatch
  *    `useAppStore(s => s.actions.roster.refresh)`; nothing but an action calls the bus (rule 3).
  *  - **Built with `zustand/vanilla` `createStore`,** not the React `create` — the store layer must
@@ -19,13 +23,17 @@
  *   ref-swaps only itself. An unrelated entity matches no slice → no re-pull. This is the whole
  *   perf story: the wire carries change granularity; the store never polls and never deep-diffs.
  *
- * To add slice X (≈5 local edits here, all additive — the compiler guides you through each):
+ * To add slice X: first write its three thin-shell files (`xSlice.ts`/`xActions.ts` +
+ * `xSelectors.ts`) over the shared `./listSlice.ts` factory — copy the roster files and supply
+ * only X's row type, RPC method (+ reply type), and `project` fn (see `roster/rosterSlice.ts` for
+ * the canonical example). Then wire it here (≈5 local edits, all additive — the compiler guides you):
  *   1. import `createXSlice`, `createXActions`, `X_INVALIDATING_ENTITY`, `initialXState`, `XState`;
  *   2. add `x: XState;` to the `AppStore` interface and `x: XActions;` to `AppActions`;
  *   3. spread `...createXSlice(...a)` into the store initializer;
  *   4. add `x: createXActions(bus, store)` to the `actions` object and one entry to `invalidations`;
  *   5. add `x: initialXState` to `initialAppState` (keep it mirroring every slice).
- * The pattern does not fan out — no dispatch/wiring logic changes, only these additions.
+ * The pattern does not fan out — no dispatch/wiring logic changes, only these additions, and the
+ * `{ rows, status, error }` mechanics are never re-derived (they come from the factory).
  */
 
 import { createStore, type StoreApi } from 'zustand/vanilla';

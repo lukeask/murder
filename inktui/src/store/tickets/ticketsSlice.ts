@@ -1,30 +1,31 @@
 /**
  * Tickets slice — domain state for the tickets list (panel 4).
  *
- * Copied from {@link ../roster/rosterSlice.js} per the C3 copy recipe. Changes vs. the roster:
+ * Copied from {@link ../roster/rosterSlice.js} per the copy recipe. Changes vs. the roster:
  *  - Row shape mirrors {@link ScheduleTicketRow} from `murder/app/service/client_api.py`
  *    (id, title, status, last_update_at, last_update_label, schedule_at, harness, model,
  *    pending_dep_ids). `plan` and `worktree` are NOT on the wire DTO (contract gap — see
  *    C7 status note in the plan); the selector renders `'—'` for those cells until B13 lands.
  *  - Invalidating entity: `'ticket'` (already in `protocol.ts` — no contract gap here).
- *  - The reply bundles active/recent_done/archived tickets; the action projects all three into one
- *    sorted list (active first, then recent_done, then archived — sort is the selector's job per
- *    rule 2, but grouping at the row level keeps the DTO stable).
+ *  - The reply bundles active/recent_done/archived tickets; the action's `project` fn flattens all
+ *    three into one list (active first). That flatten is the tickets-specific divergence — it lives
+ *    in the injected projection, not in the generic factory (see ticketsActions.ts).
  *  - `pending_dep_ids` carries the non-done dep ids as a string array (the bus DTO replaces
  *    the old `deps_ok: bool` per the Bus contract's DTO note — service B5).
  *  - Runtime state (status, schedule_at, attempts) is DB-only, delivered in the row DTO, never
  *    in the ticket body the editor (C8) shows.
  *
  * Presentation (sort, truncation, deps cell, alternating-row parity) stays out of this file —
- * that is the selector's job (rule 2). The slice holds raw, wire-faithful domain data only.
+ * that is the selector's job (rule 2). The slice holds raw, wire-faithful domain data only. The
+ * shared `{ rows, status, error }` mechanics come from the generic {@link ListState} +
+ * {@link createListSlice} factory in `../listSlice.js`.
  *
- * Copy this file to add slice X: rename state/row types, swap row fields for X's DTO,
- * change TICKETS_INVALIDATING_ENTITY to X's Entity key, rename the slice key + initial const.
+ * Copy this file to add slice X: rename the row type + its fields for X's DTO, change
+ * TICKETS_INVALIDATING_ENTITY to X's Entity key, and pass X's key to `createListSlice`.
  */
 
-import type { StateCreator } from 'zustand';
 import type { Entity } from '../../bus/protocol.js';
-import type { AppStore } from '../store.js';
+import { createListSlice, initialListState, type ListState } from '../listSlice.js';
 
 /**
  * One ticket as the tickets slice cares about it — a faithful, presentation-free projection of
@@ -56,15 +57,12 @@ export interface TicketRow {
 }
 
 /**
- * The tickets slice's state. Same shape as {@link RosterState}: `rows` is domain data, `status`
- * makes the load lifecycle explicit. Every field is readonly — ref-swapped wholesale on change.
+ * The tickets slice's state — the shared {@link ListState} shape specialized to {@link TicketRow}.
+ * `rows` is domain data, `status` makes the load lifecycle explicit. Selectors read
+ * `TicketsState['status']`, so the `'idle' | 'loading' | 'ready' | 'error'` union is part of the
+ * contract.
  */
-export interface TicketsState {
-  readonly rows: readonly TicketRow[];
-  readonly status: 'idle' | 'loading' | 'ready' | 'error';
-  /** Set when the last refresh rejected; cleared on the next successful load. */
-  readonly error: string | null;
-}
+export type TicketsState = ListState<TicketRow>;
 
 /**
  * The {@link Entity} key whose `state.snapshot` events invalidate this slice. Tickets use the
@@ -75,21 +73,10 @@ export interface TicketsState {
 export const TICKETS_INVALIDATING_ENTITY: Entity = 'ticket';
 
 /** The initial, pre-fetch slice value. A fresh store has not talked to the bus yet → `idle`. */
-export const initialTicketsState: TicketsState = {
-  rows: [],
-  status: 'idle',
-  error: null,
-};
+export const initialTicketsState: TicketsState = initialListState<TicketRow>();
 
 /**
- * Slice factory in Zustand's standard `StateCreator` shape, scoped to the combined
- * {@link AppStore}. Contributes only the `tickets` key; `../store.ts` composes it with siblings.
+ * Slice factory — the trivial Zustand `StateCreator` that seeds the `tickets` key, built from the
+ * shared {@link createListSlice}. Contributes only the `tickets` key; `../store.ts` composes it.
  */
-export const createTicketsSlice: StateCreator<
-  AppStore,
-  [],
-  [],
-  { tickets: TicketsState }
-> = () => ({
-  tickets: initialTicketsState,
-});
+export const createTicketsSlice = createListSlice('tickets', initialTicketsState);

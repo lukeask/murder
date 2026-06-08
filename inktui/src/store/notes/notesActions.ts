@@ -1,19 +1,23 @@
 /**
  * Notes actions — the *only* code that calls the bus for notes data (rule 3).
  *
- * Copied from {@link ../roster/rosterActions.js} per the C3 copy recipe. Changes vs. the roster:
+ * Copied from {@link ../roster/rosterActions.js} per the copy recipe. Changes vs. the roster:
  *  - RPC is `note.get_snapshot` (modeled per bus contract naming — NOT yet on the live bus; B13).
  *  - Reply shape mirrors Python `NotesSnapshot` (notes[] with name/char_count/updated_at).
  *  - Projection is `toNoteRow` (name → name, char_count, updated_at as strings).
- *  - Ref-swaps `state.notes`, not `state.roster`.
+ *  - Passes the `notes` slice key to `createRefreshAction`.
  *  - `declare module` augments `RpcMethods` with `'note.get_snapshot'` (distinct from the roster's
  *    `'crow.get_snapshot'` — each slice owns its own key; never redeclare an existing one).
+ *
+ * The loading→ready/error + ref-swap-only-this-key mechanics come from the shared
+ * {@link createRefreshAction} factory in `../listSlice.js`.
  */
 
 import type { StoreApi } from 'zustand';
 import type { BusClient } from '../../bus/BusClient.js';
+import { createRefreshAction } from '../listSlice.js';
 import type { AppStore } from '../store.js';
-import type { NoteRow, NotesState } from './notesSlice.js';
+import type { NoteRow } from './notesSlice.js';
 
 /**
  * Declares the notes read RPC via declaration merging rather than editing the frozen C1 bus files.
@@ -69,22 +73,9 @@ export interface NotesActions {
 }
 
 export function createNotesActions(bus: BusClient, store: StoreApi<AppStore>): NotesActions {
-  return {
-    async refresh(): Promise<void> {
-      // Ref-swap ONLY the notes slice — sibling slices keep identity (the invalidation-granularity
-      // contract). Mirrors the roster action's loading→ready/error lifecycle exactly.
-      store.setState((state) => ({ notes: { ...state.notes, status: 'loading' } }));
-      try {
-        const reply = await bus.rpc('note.get_snapshot', {});
-        const rows = reply.notes.map(toNoteRow);
-        const next: NotesState = { rows, status: 'ready', error: null };
-        store.setState({ notes: next });
-      } catch (error: unknown) {
-        const message = error instanceof Error ? error.message : String(error);
-        store.setState((state) => ({
-          notes: { ...state.notes, status: 'error', error: message },
-        }));
-      }
-    },
-  };
+  return createRefreshAction(bus, store, {
+    key: 'notes',
+    method: 'note.get_snapshot',
+    project: (reply) => reply.notes.map(toNoteRow),
+  });
 }

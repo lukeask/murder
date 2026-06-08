@@ -1,19 +1,21 @@
 /**
  * Notes slice — domain state for the notes list (panel 2).
  *
- * Copied from {@link ../roster/rosterSlice.js} per the C3 copy recipe. Only these change vs.
- * the roster: the row shape mirrors {@link NoteSummary} from `murder/app/service/client_api.py`
+ * Copied from {@link ../roster/rosterSlice.js} per the copy recipe. Only these change vs. the
+ * roster: the row shape mirrors {@link NoteSummary} from `murder/app/service/client_api.py`
  * (name + char_count + updated_at), and the invalidating entity is `'note'` (not `'agent'`).
  * Presentation (sort order, updated_at formatting) stays out of this file — it belongs in the
  * selector (rule 2). The slice holds raw, wire-faithful domain data only.
  *
- * Copy this file to add slice X: rename state/row types, swap the row fields for X's DTO,
- * change NOTES_INVALIDATING_ENTITY to X's Entity key, rename the slice key + initial const.
+ * The shared `{ rows, status, error }` mechanics come from the generic {@link ListState} +
+ * {@link createListSlice} factory in `../listSlice.js` — this file is a thin shell over it.
+ *
+ * Copy this file to add slice X: rename the row type + its fields for X's DTO, change
+ * NOTES_INVALIDATING_ENTITY to X's Entity key, and pass X's key to `createListSlice`.
  */
 
-import type { StateCreator } from 'zustand';
 import type { Entity } from '../../bus/protocol.js';
-import type { AppStore } from '../store.js';
+import { createListSlice, initialListState, type ListState } from '../listSlice.js';
 
 /**
  * One note as the notes slice cares about it — a faithful, presentation-free projection of the
@@ -28,16 +30,12 @@ export interface NoteRow {
 }
 
 /**
- * The notes slice's state. Same shape as {@link RosterState}: `rows` is domain data, `status`
- * makes the load lifecycle explicit so a component can distinguish "not fetched" from "fetched,
- * empty". Every field is readonly — the slice is ref-swapped wholesale, never mutated in place.
+ * The notes slice's state — the shared {@link ListState} shape specialized to {@link NoteRow}.
+ * `rows` is domain data, `status` makes the load lifecycle explicit. Selectors read
+ * `NotesState['status']`, so the `'idle' | 'loading' | 'ready' | 'error'` union is part of the
+ * contract.
  */
-export interface NotesState {
-  readonly rows: readonly NoteRow[];
-  readonly status: 'idle' | 'loading' | 'ready' | 'error';
-  /** Set when the last refresh rejected; cleared on the next successful load. */
-  readonly error: string | null;
-}
+export type NotesState = ListState<NoteRow>;
 
 /**
  * The {@link Entity} key whose `state.snapshot` events invalidate this slice. The service emits
@@ -47,16 +45,10 @@ export interface NotesState {
 export const NOTES_INVALIDATING_ENTITY: Entity = 'note';
 
 /** The initial, pre-fetch slice value. A fresh store has not talked to the bus yet → `idle`. */
-export const initialNotesState: NotesState = {
-  rows: [],
-  status: 'idle',
-  error: null,
-};
+export const initialNotesState: NotesState = initialListState<NoteRow>();
 
 /**
- * Slice factory in Zustand's standard `StateCreator` shape, scoped to the combined
- * {@link AppStore}. Contributes only the `notes` key; `../store.ts` composes it with siblings.
+ * Slice factory — the trivial Zustand `StateCreator` that seeds the `notes` key, built from the
+ * shared {@link createListSlice}. Contributes only the `notes` key; `../store.ts` composes it.
  */
-export const createNotesSlice: StateCreator<AppStore, [], [], { notes: NotesState }> = () => ({
-  notes: initialNotesState,
-});
+export const createNotesSlice = createListSlice('notes', initialNotesState);
