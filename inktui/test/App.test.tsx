@@ -107,6 +107,32 @@ describe('App shell', () => {
     dispose();
   });
 
+  it('C10: CrowChatPanel mounts below CrowsPanel when crows panel is on + favorited crows exist', async () => {
+    // App-path test: renders the full App (not just the component harness) and proves that
+    // CrowChatPanel is actually mounted — not just that it renders in isolation.
+    const fake = new FakeBusClient();
+    fake.stubRpc('crow.get_snapshot', {
+      invalidation_key: 'iv',
+      sessions: [
+        { agent_id: 'collab-1', role: 'collaborator', status: 'idle', session_name: 'TestCollab' },
+      ],
+    });
+    fake.stubRpc('agent.message', {});
+    const { store, dispose } = createAppStore(fake);
+    await store.getState().actions.roster.refresh();
+
+    const inputStores = createInputStores(['crows']);
+    const { lastFrame } = render(<App store={store} inputStores={inputStores} bus={fake} />);
+    await tick();
+
+    const frame = lastFrame() ?? '';
+    // CrowsPanel header is present (confirms crows region rendered).
+    expect(frame).toContain('Crows');
+    // CrowChatPanel shows a pane for the collaborator (proves it was mounted under App).
+    expect(frame).toContain('TestCollab');
+    dispose();
+  });
+
   it('fullscreen tmux mode suppresses bars and panels (presentationHidesLayout)', async () => {
     // Render with 'crows' visible so the top bar label is present before entering the mode.
     const { lastFrame, inputStores, dispose } = setup(['crows']);

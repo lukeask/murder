@@ -38,7 +38,16 @@
 
 import { createStore, type StoreApi } from 'zustand/vanilla';
 import type { BusClient } from '../bus/BusClient.js';
-import type { Entity, StateSnapshotEvent } from '../bus/protocol.js';
+import type { ConversationBlockEvent, Entity, StateSnapshotEvent } from '../bus/protocol.js';
+import {
+  type ConversationsActions,
+  createConversationsActions,
+} from './conversations/conversationsActions.js';
+import {
+  type ConversationsState,
+  createConversationsSlice,
+  initialConversationsState,
+} from './conversations/conversationsSlice.js';
 import { createNotesActions, type NotesActions } from './notes/notesActions.js';
 import {
   createNotesSlice,
@@ -93,6 +102,7 @@ export interface AppActions {
   tickets: TicketsActions;
   usage: UsageActions;
   ticketDetail: TicketDetailActions;
+  conversations: ConversationsActions;
 }
 
 /**
@@ -107,6 +117,7 @@ export interface AppStore {
   tickets: TicketsState;
   usage: UsageState;
   ticketDetail: TicketDetailState;
+  conversations: ConversationsState;
   actions: AppActions;
 }
 
@@ -144,6 +155,7 @@ export function createAppStore(bus: BusClient): {
     ...createTicketsSlice(...a),
     ...createUsageSlice(...a),
     ...createTicketDetailSlice(...a),
+    ...createConversationsSlice(...a),
     // Placeholder; replaced in step 2 now that we have the handle the actions need to `setState`.
     actions: undefined as unknown as AppActions,
   }));
@@ -156,6 +168,7 @@ export function createAppStore(bus: BusClient): {
     tickets: createTicketsActions(bus, store),
     usage: createUsageActions(bus, store),
     ticketDetail: createTicketDetailActions(bus, store),
+    conversations: createConversationsActions(bus, store),
   };
   store.setState({ actions });
 
@@ -172,7 +185,7 @@ export function createAppStore(bus: BusClient): {
   //    the slice(s) the named entity invalidates. No poll loop, no deep-diff — the event's `entity`
   //    is the change granularity. `void` the promise: invalidation is fire-and-forget (the action
   //    routes its own errors into the slice's `error` field).
-  const unsubscribe = bus.subscribe(
+  const unsubscribeSnapshot = bus.subscribe(
     (event) => {
       // The server filter already narrows to `state.snapshot`, but re-narrow in code so the type
       // refines to `StateSnapshotEvent` (and a fake/test that emits unfiltered is handled correctly).
@@ -189,9 +202,27 @@ export function createAppStore(bus: BusClient): {
     { type: 'state.snapshot' },
   );
 
+  // 5. Conversation-block subscription. A SECOND bus.subscribe filtered to `conversation.block`
+  //    routes content-bearing events to the conversations slice. `conversation` is NOT in the Entity
+  //    union, so these events never flow through the snapshot invalidation loop above — they need
+  //    their own subscription. The action is `applyBlock` (pure setState, no bus call).
+  const unsubscribeConversations = bus.subscribe(
+    (event) => {
+      if (event.type !== 'conversation.block') {
+        return;
+      }
+      const blockEvent: ConversationBlockEvent = event;
+      actions.conversations.applyBlock(blockEvent);
+    },
+    { type: 'conversation.block' },
+  );
+
   return {
     store,
-    dispose: unsubscribe,
+    dispose: () => {
+      unsubscribeSnapshot();
+      unsubscribeConversations();
+    },
   };
 }
 
@@ -199,7 +230,7 @@ export function createAppStore(bus: BusClient): {
  * assert the boot value without reconstructing it. Mirrors each slice's `initialXState`. */
 export const initialAppState: Pick<
   AppStore,
-  'roster' | 'notes' | 'reports' | 'tickets' | 'usage' | 'ticketDetail'
+  'roster' | 'notes' | 'reports' | 'tickets' | 'usage' | 'ticketDetail' | 'conversations'
 > = {
   roster: initialRosterState,
   notes: initialNotesState,
@@ -207,4 +238,5 @@ export const initialAppState: Pick<
   tickets: initialTicketsState,
   usage: initialUsageState,
   ticketDetail: initialTicketDetailState,
+  conversations: initialConversationsState,
 };
