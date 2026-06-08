@@ -301,11 +301,12 @@ green** — the next agent starts from a passing state.
   *Deps: C1.*
   done: 47abe4a, backend wave references removed; scheduler ordering and affected DTO tests pass.
 
-- [ ] **C5 — Deps-display data (was B5).** `ScheduleTicketRow.deps_ok: bool` →
+- [x] **C5 — Deps-display data (was B5).** `ScheduleTicketRow.deps_ok: bool` →
   `pending_dep_ids: tuple[str, …]` (SQL `GROUP_CONCAT` of non-done deps across the 3 selects);
   the scheduler's own `NOT EXISTS` *filter* stays unchanged. *Files:* `schedule_snapshot.py`,
   `client_api.py`. *Done when:* row DTO carries pending ids; scheduler gating behaviour
   unchanged. *Deps: C4.*
+  done: 7dc1726, schedule row DTO now carries pending dependency ids; focused snapshot and scheduler tests pass.
 
 - [ ] **C6 — Per-ticket worktree spawn (was B6).** `spawn_crow` reads `ticket.worktree` and
   provisions a worktree iff set (reuse the rogue `worktree_path` plumbing; codex gets
