@@ -32,6 +32,7 @@ def _migrate_ticket_archived_status(conn: sqlite3.Connection) -> None:
     conn.executescript(
         """
         PRAGMA foreign_keys = OFF;
+        PRAGMA legacy_alter_table = ON;
         BEGIN;
         ALTER TABLE tickets RENAME TO tickets_old_archived_migration;
         CREATE TABLE tickets (
@@ -67,6 +68,7 @@ def _migrate_ticket_archived_status(conn: sqlite3.Connection) -> None:
         FROM tickets_old_archived_migration;
         DROP TABLE tickets_old_archived_migration;
         COMMIT;
+        PRAGMA legacy_alter_table = OFF;
         PRAGMA foreign_keys = ON;
         """
     )
@@ -82,6 +84,7 @@ def _migrate_ticket_draft_status(conn: sqlite3.Connection) -> None:
     conn.executescript(
         """
         PRAGMA foreign_keys = OFF;
+        PRAGMA legacy_alter_table = ON;
         BEGIN;
         ALTER TABLE tickets RENAME TO tickets_old_draft_migration;
         CREATE TABLE tickets (
@@ -117,9 +120,101 @@ def _migrate_ticket_draft_status(conn: sqlite3.Connection) -> None:
         FROM tickets_old_draft_migration;
         DROP TABLE tickets_old_draft_migration;
         COMMIT;
+        PRAGMA legacy_alter_table = OFF;
         PRAGMA foreign_keys = ON;
         """
     )
+
+
+def _migrate_ticket_worktree(conn: sqlite3.Connection) -> None:
+    """Add per-ticket worktree selection."""
+    row = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'tickets'"
+    ).fetchone()
+    if row is None:
+        return
+    cols = {row["name"] for row in conn.execute("PRAGMA table_info(tickets)").fetchall()}
+    if "worktree" not in cols:
+        conn.execute("ALTER TABLE tickets ADD COLUMN worktree TEXT")
+
+
+def _migrate_ticket_drop_wave(conn: sqlite3.Connection) -> None:
+    """Drop tickets.wave via table recreation."""
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'tickets'"
+    ).fetchone()
+    if row is None or "wave" not in str(row["sql"]):
+        return
+
+    conn.execute("PRAGMA foreign_keys = OFF")
+    conn.execute("PRAGMA legacy_alter_table = ON")
+    conn.execute("BEGIN")
+    try:
+        conn.execute("ALTER TABLE tickets RENAME TO tickets_old_wave_migration")
+        conn.execute(
+            """
+            CREATE TABLE tickets (
+                id            TEXT PRIMARY KEY,
+                title         TEXT NOT NULL,
+                status        TEXT NOT NULL CHECK (status IN
+                              ('draft','planned','ready','in_progress','blocked','done','failed','archived')),
+                harness       TEXT,
+                model         TEXT,
+                worktree      TEXT,
+                schedule_at   TEXT,
+                metadata_hash TEXT,
+                metadata_file_hash TEXT,
+                metadata_last_materialized_hash TEXT,
+                metadata_materialized_path TEXT,
+                metadata_sync_state TEXT NOT NULL DEFAULT 'synced',
+                metadata_parse_error TEXT,
+                metadata_conflict_reason TEXT,
+                attempts      INTEGER NOT NULL DEFAULT 0,
+                last_error    TEXT,
+                created_at    TEXT NOT NULL,
+                updated_at    TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO tickets (
+                id, title, status, harness, model, worktree, schedule_at,
+                metadata_hash, metadata_file_hash, metadata_last_materialized_hash,
+                metadata_materialized_path, metadata_sync_state, metadata_parse_error,
+                metadata_conflict_reason, attempts, last_error, created_at, updated_at
+            )
+            SELECT
+                id, title, status, harness, model, worktree, schedule_at,
+                metadata_hash, metadata_file_hash, metadata_last_materialized_hash,
+                metadata_materialized_path, metadata_sync_state, metadata_parse_error,
+                metadata_conflict_reason, attempts, last_error, created_at, updated_at
+            FROM tickets_old_wave_migration
+            """
+        )
+        conn.execute("DROP TABLE tickets_old_wave_migration")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_tickets_status ON tickets(status)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_tickets_schedule_at ON tickets(schedule_at)")
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_tickets_metadata_sync_state "
+            "ON tickets(metadata_sync_state)"
+        )
+        conn.execute("COMMIT")
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
+    finally:
+        conn.execute("PRAGMA legacy_alter_table = OFF")
+        conn.execute("PRAGMA foreign_keys = ON")
+
+
+def _migrate_ticket_drop_skills(conn: sqlite3.Connection) -> None:
+    """Drop the hallucinated ticket_skills edge table."""
+    row = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'ticket_skills'"
+    ).fetchone()
+    if row is not None:
+        conn.execute("DROP TABLE ticket_skills")
 
 
 def _migrate_notes_identity_status(conn: sqlite3.Connection) -> None:

@@ -26,11 +26,11 @@ CREATE TABLE IF NOT EXISTS runs (
 CREATE TABLE IF NOT EXISTS tickets (
     id            TEXT PRIMARY KEY,
     title         TEXT NOT NULL,
-    wave          INTEGER NOT NULL,
     status        TEXT NOT NULL CHECK (status IN
                   ('draft','planned','ready','in_progress','blocked','done','failed','archived')),
     harness       TEXT,
     model         TEXT,
+    worktree      TEXT,
     schedule_at   TEXT,
     metadata_hash TEXT,
     metadata_file_hash TEXT,
@@ -45,7 +45,6 @@ CREATE TABLE IF NOT EXISTS tickets (
     updated_at    TEXT NOT NULL
 );
 
-CREATE INDEX IF NOT EXISTS idx_tickets_wave   ON tickets(wave);
 CREATE INDEX IF NOT EXISTS idx_tickets_status ON tickets(status);
 
 CREATE TABLE IF NOT EXISTS ticket_deps (
@@ -53,12 +52,6 @@ CREATE TABLE IF NOT EXISTS ticket_deps (
     depends_on_id  TEXT NOT NULL REFERENCES tickets(id) ON DELETE CASCADE,
     PRIMARY KEY (ticket_id, depends_on_id),
     CHECK (ticket_id != depends_on_id)
-);
-
-CREATE TABLE IF NOT EXISTS ticket_skills (
-    ticket_id  TEXT NOT NULL REFERENCES tickets(id) ON DELETE CASCADE,
-    skill      TEXT NOT NULL,
-    PRIMARY KEY (ticket_id, skill)
 );
 
 CREATE TABLE IF NOT EXISTS checklist (
@@ -424,8 +417,11 @@ def init_db(conn: sqlite3.Connection) -> None:
         _migrate_role_names,
         _migrate_ticket_archived_status,
         _migrate_ticket_draft_status,
+        _migrate_ticket_drop_skills,
+        _migrate_ticket_drop_wave,
         _migrate_ticket_last_error,
         _migrate_ticket_metadata_columns,
+        _migrate_ticket_worktree,
     )
     from murder.state.persistence.notetaker import ensure_notetaker_context_row
 
@@ -438,6 +434,9 @@ def init_db(conn: sqlite3.Connection) -> None:
     _migrate_role_names(conn)
     _migrate_ticket_archived_status(conn)
     _migrate_ticket_draft_status(conn)
+    _migrate_ticket_worktree(conn)
+    _migrate_ticket_drop_wave(conn)
+    _migrate_ticket_drop_skills(conn)
     _migrate_notes_identity_status(conn)
     _migrate_completion_tables(conn)
     _migrate_drop_sentinel(conn)
