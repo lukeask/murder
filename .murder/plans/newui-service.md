@@ -292,13 +292,14 @@ green** — the next agent starts from a passing state.
   toggles persist with `done_at` preserved; no sidecar references remain. *Deps: C1, C2.*
   done: f8fdf17, unified ticket markdown sync replaces sidecar loops; focused sync/parser/schema tests pass.
 
-- [ ] **C4 — Cut `wave` everywhere (was B4).** Records, tickets DAO,
+- [x] **C4 — Cut `wave` everywhere (was B4).** Records, tickets DAO,
   `scheduler_policy._ticket_sort_key` → `(schedule_at is None, schedule_at, id)`, scheduler
   `worker.py`, `client_api` DTOs, `schedule_snapshot`, `read_model`,
   `orchestrator.evaluate_wave_completion` (delete), `waves.py` (delete), `service_cmd` lint,
   `init_cmd`. *(~14 files — grep `wave` to confirm full set before starting.)* *Done when:*
   `grep -ri wave` over the backend returns only unrelated hits; scheduler ordering tests pass.
   *Deps: C1.*
+  done: 47abe4a, backend wave references removed; scheduler ordering and affected DTO tests pass.
 
 - [ ] **C5 — Deps-display data (was B5).** `ScheduleTicketRow.deps_ok: bool` →
   `pending_dep_ids: tuple[str, …]` (SQL `GROUP_CONCAT` of non-done deps across the 3 selects);
