@@ -1,21 +1,56 @@
 #!/usr/bin/env node
 import { render } from 'ink';
+import { FakeBusClient } from './bus/FakeBusClient.js';
 import { App } from './components/App.js';
+import { createInputStores } from './input/createInputStores.js';
+import { createAppStore } from './store/store.js';
 
 /**
- * Process entrypoint. Renders the Ink tree and resolves when it unmounts. For the C0 scaffold
- * the app paints once and exits clean (no input loop yet) so `npm run dev` is a non-hanging
- * smoke test of the toolchain. C4 introduces the root `useInput` dispatcher that keeps it
- * alive; at that point this stays the thin entrypoint and the lifecycle lives in the app shell.
+ * Process entrypoint — constructs the injected stores and renders the real app shell (rule 4: the
+ * bus is wired in exactly here, never imported by a component).
+ *
+ * Backbone note: C5 builds against the {@link FakeBusClient} (the live `UdsBusClient` lands with the
+ * service per the plan's "backbone first" section), so `npm run dev` renders the real shell — top
+ * bar, the reference crows panel, chat input, bottom bar — driven by a fake bus seeded with one
+ * crow. Swapping in `UdsBusClient` here is a one-line change when the socket is live; nothing above
+ * this file knows which client it is. The smoke loop paints once and exits clean so `npm run dev`
+ * doesn't block the terminal — the standing input loop arrives with the live runner.
  */
+function makeDevBus(): FakeBusClient {
+  const fake = new FakeBusClient();
+  fake.stubRpc('crow.get_snapshot', {
+    invalidation_key: 'dev',
+    sessions: [
+      {
+        agent_id: 'collaborator',
+        status: 'idle',
+        harness: 'claude',
+        model: 'anthropic/claude-opus',
+        session_name: 'collaborator',
+      },
+    ],
+  });
+  return fake;
+}
+
 async function main(): Promise<void> {
-  const instance = render(<App />);
-  // Scaffold-only: unmount on the next tick so the smoke test terminates instead of blocking
-  // the terminal. Remove once C4 owns the input lifecycle.
+  const bus = makeDevBus();
+  const { store, dispose } = createAppStore(bus);
+  // Seed a couple of panels on so the shell paints both regions for the smoke test (the crows
+  // reference panel on the right, a placeholder on the left).
+  const inputStores = createInputStores(['plans', 'crows']);
+  // Prime the reference panel with the fake bus's canned roster (the live app pulls on the first
+  // `state.snapshot`; the smoke test has no live events, so kick one refresh).
+  void store.getState().actions.roster.refresh();
+
+  const instance = render(<App store={store} inputStores={inputStores} />);
+  // Smoke-only: unmount on the next tick so the dev run terminates instead of blocking. The standing
+  // input loop (which keeps the app alive) lands with the live runner; here we just prove it paints.
   setImmediate(() => {
     instance.unmount();
   });
   await instance.waitUntilExit();
+  dispose();
 }
 
 main().catch((error: unknown) => {

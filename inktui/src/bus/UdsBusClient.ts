@@ -422,25 +422,41 @@ export class UdsBusClient implements BusClient {
       },
     };
 
-    await this.handshakeExchange(socket, hello, correlationId);
+    // The handshake reads through `this.lineBuffer` (reset empty above), so any bytes the ack's
+    // chunk carries *past* the ack line — a complete pipelined frame, or a trailing partial —
+    // stay in `this.lineBuffer` for the steady-state read loop rather than being dropped with a
+    // throwaway local buffer. `handshakeExchange` returns the complete lines that followed the ack.
+    const trailingLines = await this.handshakeExchange(socket, hello, correlationId);
     this.state = 'connected';
     // Re-establish every standing subscription so the store never re-subscribes (error policy).
     for (const subscription of this.subscriptions) {
       subscription.correlationId = `sub-${randomUUID()}`;
       this.sendSubscription(socket, subscription);
     }
+    // Dispatch any frames the server pipelined into the ack's chunk *after* subscriptions are
+    // replayed, so a pipelined `pub` is fanned out exactly as a steady-state frame would be (and
+    // a pipelined `ack`/`err` settles its correlated RPC). Without this they would be silently
+    // lost — they never reach `readUntilClosed`'s loop.
+    for (const line of trailingLines) {
+      const message = parseWireMessage(line);
+      if (message !== undefined) {
+        this.dispatch(message);
+      }
+    }
   }
 
   /** Send Hello and consume inbound frames until the matching Ack (success) or an Err
    * (version-mismatch → permanent) arrives; wake frames are skipped, exactly as the Python client
-   * `continue`s past them. */
+   * `continue`s past them. Reads through `this.lineBuffer` so a pipelined frame riding the ack's
+   * chunk survives the handoff: this resolves with the **complete lines that followed the ack** in
+   * that same chunk (the caller dispatches them through the steady-state path), while any trailing
+   * partial remains in `this.lineBuffer` for the read loop to reassemble. */
   private handshakeExchange(
     socket: Socket,
     hello: HelloMessage,
     correlationId: string,
-  ): Promise<void> {
-    return new Promise<void>((resolve, reject) => {
-      const buffer = new LineBuffer();
+  ): Promise<string[]> {
+    return new Promise<string[]>((resolve, reject) => {
       let settled = false;
 
       const settle = (action: () => void): void => {
@@ -455,7 +471,12 @@ export class UdsBusClient implements BusClient {
       };
 
       const onData = (chunk: Buffer): void => {
-        for (const line of buffer.push(chunk.toString('utf8'))) {
+        const lines = this.lineBuffer.push(chunk.toString('utf8'));
+        for (let i = 0; i < lines.length; i += 1) {
+          const line = lines[i];
+          if (line === undefined) {
+            continue;
+          }
           const message = parseWireMessage(line);
           if (message === undefined) {
             continue;
@@ -474,7 +495,9 @@ export class UdsBusClient implements BusClient {
             return;
           }
           if (message.op === 'ack' && message.correlation_id === correlationId) {
-            settle(resolve);
+            // Hand the caller every complete line that followed the ack in this same chunk so it
+            // is dispatched through the steady-state path instead of being dropped.
+            settle(() => resolve(lines.slice(i + 1)));
             return;
           }
           // Any other op before the handshake completes is unexpected; ignore and keep waiting,

@@ -88,6 +88,11 @@ class ScriptedBusServer {
     this.broadcast(frame);
   }
 
+  /** When set, the next handshake writes the Ack and a pipelined `pub` event in a *single*
+   * `socket.write()` — forcing them into one TCP segment / `data` event so the client's handshake
+   * read sees them in the same chunk. This reproduces the pipelined-frame drop. */
+  pipelineEventWithAck: BusEvent | undefined;
+
   /** Send an interleaved `wake` frame to every client (the client must skip these). */
   emitWake(): void {
     const frame: WireMessage = {
@@ -136,6 +141,24 @@ class ScriptedBusServer {
           return;
         }
         this.handshakeCount += 1;
+        if (this.pipelineEventWithAck !== undefined) {
+          // Pipeline path: write the Ack *and* a subsequent `pub` frame in ONE write() so they
+          // share a single chunk on the client. The trailing event must not be dropped.
+          const ackLine = `${JSON.stringify({
+            op: 'ack',
+            schema_version: PROTOCOL_VERSION,
+            correlation_id: message.correlation_id,
+            body: { kind: 'subscribed' },
+          })}\n`;
+          const pubLine = `${JSON.stringify({
+            op: 'pub',
+            schema_version: PROTOCOL_VERSION,
+            correlation_id: `pub-${randomUUID()}`,
+            event: this.pipelineEventWithAck,
+          })}\n`;
+          socket.write(ackLine + pubLine);
+          return;
+        }
         // Reply Ack, then an interleaved wake the client must already tolerate post-handshake.
         this.send(socket, {
           op: 'ack',
@@ -340,6 +363,23 @@ describe('UdsBusClient — subscriptions', () => {
     // Only the snapshot, never the wake.
     expect(received).toHaveLength(1);
     expect((received[0] as { type: string }).type).toBe('state.snapshot');
+  });
+
+  it('delivers a pub frame pipelined into the handshake-ack chunk (no drop)', async () => {
+    // Regression: the server writes the Hello-ack AND a pub event in a SINGLE write(), so they
+    // land in one chunk during the client's handshake read. The handshake must complete AND the
+    // pipelined event must reach the subscriber (it must not be dropped with the handshake buffer).
+    server.pipelineEventWithAck = snapshot('T-pipelined');
+    const received: BusEvent[] = [];
+    // Subscribe before connecting (as the other sub tests do) so the listener exists when the
+    // pipelined frame is dispatched right after the handshake.
+    client.subscribe((event) => received.push(event));
+
+    await client.connect();
+    expect(server.handshakeCount).toBe(1);
+
+    await waitFor(() => received.length === 1);
+    expect((received[0] as { key: string }).key).toBe('T-pipelined');
   });
 
   it('stops delivering after unsubscribe', async () => {

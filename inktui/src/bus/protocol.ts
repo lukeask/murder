@@ -43,8 +43,21 @@ export type AgentStatus =
 export type CommandStatus = 'pending' | 'in_flight' | 'done' | 'failed' | 'cancelled';
 
 /** Entity kind named by a key-only {@link StateSnapshotEvent}. Closed — adding a value bumps
- * PROTOCOL_VERSION. These are the slice names the store invalidates against. */
-export type Entity = 'ticket' | 'agent' | 'plan' | 'note' | 'escalation' | 'queue_row';
+ * PROTOCOL_VERSION. These are the slice names the store invalidates against.
+ *
+ * CONTRACT GAP (C6): `'report'` is added here as a **speculative forward-declaration** to wire
+ * the reports slice (panel 3). It is NOT yet present in the Python `Entity` enum in
+ * `murder/bus/protocol.py`. `PROTOCOL_VERSION` is intentionally NOT bumped here — bumping only
+ * the TS side while Python stays at version 1 would cause `UdsBusClient`'s handshake to refuse
+ * the real service permanently (version-mismatch error, rule: never retry). The correct path is:
+ * add `REPORT = "report"` to the Python `Entity` enum, then bump `PROTOCOL_VERSION` in both
+ * `protocol.ts` and `murder/bus/protocol.py` in lockstep. Until that backend change lands, live
+ * `report`-entity events will never arrive from the service; the reports slice will only refresh
+ * via explicit `actions.reports.refresh()` calls (e.g. on a `state.snapshot` of another entity
+ * or a manual trigger). `FakeBusClient` tests drive the full path correctly regardless.
+ *
+ * NOTE: `note` already exists in Python (clean path); only `report` is the gap. */
+export type Entity = 'ticket' | 'agent' | 'plan' | 'note' | 'report' | 'escalation' | 'queue_row';
 
 export type PresenceState = 'attended' | 'headless';
 
