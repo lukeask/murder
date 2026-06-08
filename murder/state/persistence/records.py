@@ -47,6 +47,7 @@ class TicketRecord:
     status: TicketStatus
     harness: str | None
     model: str | None
+    worktree: str | None
     attempts: int
     created_at: str
     updated_at: str
@@ -70,6 +71,7 @@ class TicketRecord:
             "status": self.status.value,
             "harness": self.harness,
             "model": self.model,
+            "worktree": self.worktree,
             "attempts": self.attempts,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
@@ -225,6 +227,7 @@ def ticket_record_from_row(
         status=TicketStatus(str(row["status"])),
         harness=row["harness"],
         model=row["model"],
+        worktree=row["worktree"],
         attempts=int(row["attempts"] or 0),
         created_at=str(row["created_at"]),
         updated_at=str(row["updated_at"]),

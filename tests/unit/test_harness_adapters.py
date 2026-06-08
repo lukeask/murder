@@ -182,6 +182,14 @@ class TestCodexAdapter:
         cmd = CodexAdapter(startup_model="gpt-5.4-mini").startup_cmd(Path("/tmp/repo"))
         assert cmd[cmd.index("--model") + 1] == "gpt-5.4-mini"
 
+    def test_startup_cmd_adds_extra_workspace_dirs(self):
+        adapter = CodexAdapter()
+        adapter.additional_workspace_dirs = (Path("/tmp/repo/.murder/tickets"),)
+
+        cmd = adapter.startup_cmd(Path("/tmp/repo"))
+
+        assert cmd[cmd.index("--add-dir") + 1] == "/tmp/repo/.murder/tickets"
+
     # ── "busy" fixture — known gap: • Working is not detected ─────────────────
 
     def test_codex_bullet_working_is_busy(self):

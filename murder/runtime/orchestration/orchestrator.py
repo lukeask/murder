@@ -53,7 +53,6 @@ from murder.work.plans.schema import Plan, PlanStatus
 from murder.work.plans.sync import content_hash as _plan_content_hash
 from murder.state.storage.paths import plan_md, ticket_md, tickets_dir
 from murder.state.storage.worktrees import (
-    ensure_crow_worktree,
     ensure_named_worktree,
     prune_terminal_crow_worktree,
 )
@@ -316,10 +315,18 @@ class Orchestrator:
             self.rt.config.default_crow, row, harness_kind
         )
         startup_effort = resolve_default_crow_startup_effort(self.rt.config.default_crow, row)
+        worktree_name = row.get("worktree")
         worktree_path: str | None = None
-        if self.rt.config.runtime.use_worktrees:
-            worktree = await ensure_crow_worktree(self.rt.repo_root, ticket_id)
+        if isinstance(worktree_name, str) and worktree_name.strip():
+            worktree = await ensure_named_worktree(
+                self.rt.repo_root,
+                worktree_name.strip(),
+                category="crow",
+            )
             worktree_path = str(worktree.path)
+        additional_workspace_dirs: tuple[str, ...] = ()
+        if harness_kind == "codex" and worktree_path is not None:
+            additional_workspace_dirs = (str(tickets_dir(self.rt.repo_root).resolve()),)
         ctx = BriefContext(
             role=AgentRole.CROW,
             repo_root=self.rt.repo_root,
@@ -336,6 +343,7 @@ class Orchestrator:
             model=startup_model,
             effort=startup_effort,
             startup_prompt=brief,
+            additional_workspace_dirs=additional_workspace_dirs,
         )
         handle = await spawn_agent(spec, rt=self.rt, event_sink=self.rt.event_sink)
         return handle.session_name

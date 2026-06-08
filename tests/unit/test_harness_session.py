@@ -129,6 +129,32 @@ def test_start_spec_model_is_bound_before_startup_cmd(fake_tmux: FakeTmux):
     assert hs.adapter.startup_model == "gpt-5.4-mini"
 
 
+def test_start_spec_additional_workspace_dirs_are_bound_before_startup_cmd(
+    fake_tmux: FakeTmux,
+):
+    fake_tmux.queue_pane(CODEX_IDLE)
+    hs = _make_session(CodexAdapter())
+    ticket_dir = Path("/tmp/repo/.murder/tickets")
+
+    result = asyncio.run(
+        hs.start(
+            HarnessStartSpec(
+                cwd=Path("/tmp/repo/.murder/worktrees/crow/feature"),
+                additional_workspace_dirs=(ticket_dir,),
+                ready_timeout_s=0.4,
+                poll_interval_s=0.4,
+            )
+        )
+    )
+
+    assert result.ok
+    create_calls = fake_tmux.calls_to("create_session")
+    assert len(create_calls) == 1
+    _session_name, _cwd, cmd = create_calls[0][0]
+    assert cmd[cmd.index("--add-dir") + 1] == str(ticket_dir)
+    assert hs.adapter.additional_workspace_dirs == (ticket_dir,)
+
+
 def test_adapter_startup_model_is_enough_to_skip_codex_runtime_picker(
     fake_tmux: FakeTmux,
 ):

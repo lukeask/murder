@@ -106,6 +106,9 @@ class HarnessSession:
             self.adapter.startup_model = start_spec.startup_model
         if start_spec.startup_effort is not None:
             self.adapter.startup_effort = start_spec.startup_effort
+        self.adapter.additional_workspace_dirs = tuple(
+            Path(path) for path in start_spec.additional_workspace_dirs
+        )
         await tmux.create_session(
             self.session,
             start_spec.cwd,
@@ -334,6 +337,7 @@ class HarnessAdapter(ABC):
         # message. Set by the agent at start() so markerless transcript parsers
         # (cursor, pi) can strip it instead of mislabelling it as chat turns.
         self.system_prompt: str | None = None
+        self.additional_workspace_dirs: tuple[Path, ...] = ()
 
     @classmethod
     def declared_capabilities(cls) -> HarnessCapabilities:

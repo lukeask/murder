@@ -161,6 +161,8 @@ class CodexAdapter(HarnessAdapter):
         ]
         if self.startup_model:
             cmd.extend(["--model", self.startup_model])
+        for path in self.additional_workspace_dirs:
+            cmd.extend(["--add-dir", str(path)])
         return cmd
 
     def is_ready(self, pane_text: str) -> bool:

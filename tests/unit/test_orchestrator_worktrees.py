@@ -4,17 +4,16 @@ import asyncio
 from dataclasses import dataclass
 from pathlib import Path
 
-from murder.runtime.agents.base import AgentRole
 from murder.config import (
     Config,
     CrowHandlerConfig,
     HarnessRoleConfig,
     ProjectConfig,
-    RuntimeConfig,
 )
+from murder.runtime.agents.base import AgentRole
 from murder.runtime.orchestration.orchestrator import Orchestrator
-from murder.state.persistence.schema import get_db, init_db
 from murder.state.persistence.agents import upsert_agent
+from murder.state.persistence.schema import get_db, init_db
 from murder.state.storage.worktrees import WorktreeRef
 
 
@@ -186,7 +185,13 @@ def test_spawn_crow_defaults_to_main_checkout(repo_root: Path, monkeypatch) -> N
     rt = _Runtime(repo_root=repo_root, config=config, db=conn)
     captured = {}
 
-    async def fake_ensure(_repo: Path, _ticket_id: str) -> WorktreeRef:
+    async def fake_ensure(
+        _repo: Path,
+        _branch_name: str,
+        *,
+        category: str = "rogue",
+    ) -> WorktreeRef:
+        del category
         raise AssertionError("worktrees must be opt-in")
 
     async def fake_spawn_agent(spec, *, rt, event_sink):
@@ -199,8 +204,14 @@ def test_spawn_crow_defaults_to_main_checkout(repo_root: Path, monkeypatch) -> N
         def build(self, _ctx) -> str:
             return "brief"
 
-    monkeypatch.setattr("murder.runtime.orchestration.orchestrator.ensure_crow_worktree", fake_ensure)
-    monkeypatch.setattr("murder.runtime.orchestration.orchestrator.spawn_agent", fake_spawn_agent)
+    monkeypatch.setattr(
+        "murder.runtime.orchestration.orchestrator.ensure_named_worktree",
+        fake_ensure,
+    )
+    monkeypatch.setattr(
+        "murder.runtime.orchestration.orchestrator.spawn_agent",
+        fake_spawn_agent,
+    )
     monkeypatch.setattr(
         "murder.runtime.orchestration.orchestrator.assembler_for",
         lambda _ctx: _FakeAssembler(),
@@ -213,6 +224,7 @@ def test_spawn_crow_defaults_to_main_checkout(repo_root: Path, monkeypatch) -> N
     assert spec.role == AgentRole.CROW
     assert spec.scope.ticket_id == "t001"
     assert spec.scope.worktree_path is None
+    assert spec.additional_workspace_dirs == ()
 
 
 def test_spawn_crow_provisions_opt_in_worktree_and_puts_it_in_agent_scope(
@@ -222,8 +234,8 @@ def test_spawn_crow_provisions_opt_in_worktree_and_puts_it_in_agent_scope(
     init_db(conn)
     conn.execute(
         """
-        INSERT INTO tickets(id, title, status, created_at, updated_at)
-        VALUES ('t001', 'Fix thing', 'ready', '2026-01-01', '2026-01-01')
+        INSERT INTO tickets(id, title, status, worktree, created_at, updated_at)
+        VALUES ('t001', 'Fix thing', 'ready', 'feature/c6', '2026-01-01', '2026-01-01')
         """
     )
     config = Config(
@@ -231,15 +243,19 @@ def test_spawn_crow_provisions_opt_in_worktree_and_puts_it_in_agent_scope(
         collaborator=HarnessRoleConfig(harness="codex"),
         default_crow=HarnessRoleConfig(harness="codex"),
         crow_handler=CrowHandlerConfig(model="test-model"),
-        runtime=RuntimeConfig(use_worktrees=True),
     )
     rt = _Runtime(repo_root=repo_root, config=config, db=conn)
-    worktree = repo_root / ".murder" / "worktrees" / "crow" / "t001"
+    worktree = repo_root / ".murder" / "worktrees" / "crow" / "feature-c6"
     captured = {}
 
-    async def fake_ensure(repo: Path, ticket_id: str) -> WorktreeRef:
-        captured["ensure"] = (repo, ticket_id)
-        return WorktreeRef(branch="murder/crow/t001", path=worktree)
+    async def fake_ensure(
+        repo: Path,
+        branch_name: str,
+        *,
+        category: str = "rogue",
+    ) -> WorktreeRef:
+        captured["ensure"] = (repo, branch_name, category)
+        return WorktreeRef(branch="feature/c6", path=worktree)
 
     async def fake_spawn_agent(spec, *, rt, event_sink):
         captured["spec"] = spec
@@ -251,8 +267,14 @@ def test_spawn_crow_provisions_opt_in_worktree_and_puts_it_in_agent_scope(
         def build(self, _ctx) -> str:
             return "brief"
 
-    monkeypatch.setattr("murder.runtime.orchestration.orchestrator.ensure_crow_worktree", fake_ensure)
-    monkeypatch.setattr("murder.runtime.orchestration.orchestrator.spawn_agent", fake_spawn_agent)
+    monkeypatch.setattr(
+        "murder.runtime.orchestration.orchestrator.ensure_named_worktree",
+        fake_ensure,
+    )
+    monkeypatch.setattr(
+        "murder.runtime.orchestration.orchestrator.spawn_agent",
+        fake_spawn_agent,
+    )
     monkeypatch.setattr(
         "murder.runtime.orchestration.orchestrator.assembler_for",
         lambda _ctx: _FakeAssembler(),
@@ -261,8 +283,11 @@ def test_spawn_crow_provisions_opt_in_worktree_and_puts_it_in_agent_scope(
     session = asyncio.run(Orchestrator(rt).spawn_crow("t001"))  # type: ignore[arg-type]
 
     assert session == "murder_repo_crow_t001"
-    assert captured["ensure"] == (repo_root, "t001")
+    assert captured["ensure"] == (repo_root, "feature/c6", "crow")
     spec = captured["spec"]
     assert spec.role == AgentRole.CROW
     assert spec.scope.ticket_id == "t001"
     assert spec.scope.worktree_path == str(worktree)
+    assert spec.additional_workspace_dirs == (
+        str((repo_root / ".murder" / "tickets").resolve()),
+    )

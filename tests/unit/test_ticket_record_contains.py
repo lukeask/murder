@@ -25,6 +25,7 @@ def test_ticket_record_contains() -> None:
         status=TicketStatus.READY,
         harness=None,
         model=None,
+        worktree=None,
         attempts=0,
         created_at="",
         updated_at="",

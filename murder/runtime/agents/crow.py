@@ -30,6 +30,7 @@ class CrowAgent(HarnessBackedAgent):
         startup_model: str | None = None,
         startup_effort: str | None = None,
         worktree_path: Path | None = None,
+        additional_workspace_dirs: tuple[Path, ...] = (),
         runtime: Runtime | None = None,
     ) -> None:
         self.id = agent_id
@@ -38,6 +39,9 @@ class CrowAgent(HarnessBackedAgent):
         self.harness = harness
         self.repo_root = Path(repo_root)
         self.worktree_path = Path(worktree_path) if worktree_path is not None else None
+        self.additional_workspace_dirs = tuple(
+            Path(path) for path in additional_workspace_dirs
+        )
         self.startup_model = startup_model
         self.startup_effort = startup_effort
         self.runtime = runtime
@@ -57,6 +61,7 @@ class CrowAgent(HarnessBackedAgent):
                 cwd=self.repo_root,
                 startup_model=self.startup_model,
                 startup_effort=self.startup_effort,
+                additional_workspace_dirs=self.additional_workspace_dirs,
             )
         )
         if not start_result.ok:

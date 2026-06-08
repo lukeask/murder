@@ -57,4 +57,3 @@ tui:
 runtime:
   run_dir: .murder/runs
   session_name_template: "murder_{project}_{role}{suffix}"
-  use_worktrees: false
