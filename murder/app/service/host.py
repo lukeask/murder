@@ -329,6 +329,15 @@ class ServiceHost:
             self.broker.register_rpc_handler(method, handler)
 
         self.orchestrator = Orchestrator(self.runtime)
+        # Route malformed-artifact parse errors back to the owning agent now
+        # that the orchestrator (which delivers `agent.message`) exists.
+        if self.runtime._sync is not None:
+            orch = self.orchestrator
+
+            async def _send_parse_error(agent_id: str, message: str) -> None:
+                await orch.send_agent_message(agent_id, message, None)
+
+            self.runtime._sync.set_parse_error_notifier(_send_parse_error)
         self.socket_server = SocketBusServer(
             self.broker,
             run_id=self.runtime.run_id,

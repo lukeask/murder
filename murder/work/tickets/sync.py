@@ -6,6 +6,7 @@ import hashlib
 import re
 import sqlite3
 from collections import defaultdict, deque
+from collections.abc import Awaitable, Callable
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -16,6 +17,10 @@ from murder.state.storage.paths import ticket_md, tickets_dir
 from murder.work.tickets.parser import ParsedTicket, TicketChecklistItem, parse_ticket
 from murder.work.tickets.render import render_ticket_frontmatter
 from murder.work.tickets.status import TicketStatus
+
+# (path, parse_error) -> deliver a fix-message to the owning agent. Injected by
+# the runtime; pure parsing/DB code never reaches the bus directly.
+ParseErrorNotifier = Callable[[Path, str], Awaitable[None]]
 
 # Accept legacy `t007`, slug-style `T01-scaffold`, and numeric-prefix `01-msg-types`.
 # Require at least one digit to avoid importing arbitrary prose files.
@@ -47,28 +52,42 @@ class TicketSync(MarkdownSyncLoop):
         *,
         poll_s: float = 1.5,
         debounce_s: float = 0.75,
+        parse_error_notifier: ParseErrorNotifier | None = None,
     ) -> None:
         super().__init__(repo_root, poll_s=poll_s, debounce_s=debounce_s)
         self.db = db
+        self.parse_error_notifier = parse_error_notifier
 
     async def reconcile_all(self) -> None:
         tickets_dir(self.repo_root).mkdir(parents=True, exist_ok=True)
         self._materialize_missing_md()
+        # `reconcile_all` is the startup/shutdown bulk pass, not an edit-watch.
+        # Suppress notification here so idle malformed files don't re-prompt the
+        # owning agent every run; only `reconcile_file` (a debounced, observed
+        # change) notifies.
         for path in self.scan_paths():
-            await self.reconcile_file(path)
+            self.reconcile_path(path)
 
     async def reconcile_file(self, path: Path) -> None:
-        self.reconcile_path(path)
+        parse_error = self.reconcile_path(path)
+        if parse_error is not None and self.parse_error_notifier is not None:
+            await self.parse_error_notifier(path, parse_error)
 
-    def reconcile_path(self, path: Path) -> None:
+    def reconcile_path(self, path: Path) -> str | None:
+        """Reconcile one ticket `.md` into the DB.
+
+        Returns the parse-error message if the file failed to parse this call
+        (so the async edit-watch caller can re-prompt the owning agent), else
+        ``None``.
+        """
         ticket_id = path.stem
         if not _TICKET_ID_RE.fullmatch(ticket_id):
-            return
+            return None
         try:
             raw = path.read_text(encoding="utf-8")
         except FileNotFoundError:
             self._materialize_ticket_id(ticket_id)
-            return
+            return None
 
         file_hash = content_hash(raw)
         parsed = parse_ticket(raw, default_title=ticket_id)
@@ -80,7 +99,7 @@ class TicketSync(MarkdownSyncLoop):
                     file_hash=file_hash,
                     parse_error=parsed.parse_error,
                 )
-            return
+            return parsed.parse_error
 
         rel = str(path.relative_to(self.repo_root))
         self.db.execute("BEGIN")
@@ -102,6 +121,7 @@ class TicketSync(MarkdownSyncLoop):
         except Exception:
             self.db.execute("ROLLBACK")
             raise
+        return None
 
     def scan_paths(self) -> list[Path]:
         root = tickets_dir(self.repo_root)

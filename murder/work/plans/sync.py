@@ -8,14 +8,18 @@ import json
 import os
 import shlex
 import shutil
+from collections.abc import Awaitable, Callable
 from datetime import datetime
 from pathlib import Path
 
 from murder.state.persistence import plans as dbmod
-from murder.work.plans.parser import parse, render, write
-from murder.work.plans.schema import Plan, PlanStatus
 from murder.state.storage.markdown_loop import MarkdownSyncLoop
 from murder.state.storage.paths import deprecated_plans_dir, plan_md, plans_dir
+from murder.work.plans.parser import parse, render, write
+from murder.work.plans.schema import Plan, PlanStatus
+
+# (path, parse_error) -> deliver a fix-message to the owning planner agent.
+ParseErrorNotifier = Callable[[Path, str], Awaitable[None]]
 
 
 def content_hash(text: str) -> str:
@@ -32,9 +36,15 @@ class PlanSync(MarkdownSyncLoop):
         *,
         poll_s: float = 1.5,
         debounce_s: float = 0.75,
+        parse_error_notifier: ParseErrorNotifier | None = None,
     ) -> None:
         super().__init__(repo_root, poll_s=poll_s, debounce_s=debounce_s)
         self.db = db
+        self.parse_error_notifier = parse_error_notifier
+        # Suppressed during the startup/shutdown bulk pass so idle malformed
+        # plans don't re-prompt their planner every run; only observed
+        # (debounced) edits notify.
+        self._suppress_notify = False
 
     async def reconcile_all(self) -> None:
         plans_dir(self.repo_root).mkdir(parents=True, exist_ok=True)
@@ -42,8 +52,12 @@ class PlanSync(MarkdownSyncLoop):
             path = self.repo_root / row["materialized_path"]
             if not path.exists():
                 self.materialize_row(row)
-        for path in self.scan_paths():
-            await self.reconcile_file(path)
+        self._suppress_notify = True
+        try:
+            for path in self.scan_paths():
+                await self.reconcile_file(path)
+        finally:
+            self._suppress_notify = False
 
     async def reconcile_name(self, name: str) -> None:
         row = dbmod.get_plan_row(self.db, name)
@@ -197,6 +211,8 @@ class PlanSync(MarkdownSyncLoop):
                     file_hash=file_hash,
                     parse_error=str(exc),
                 )
+            if not self._suppress_notify and self.parse_error_notifier is not None:
+                await self.parse_error_notifier(path, str(exc))
             return
 
         rendered = render(plan)
