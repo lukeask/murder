@@ -46,9 +46,14 @@ export interface CrowSnapshotReply {
   invalidation_key: string;
 }
 
-/** One session row as it crosses the wire (Python `CrowSessionSummary`). Presentation-free. */
+/**
+ * One session row as it crosses the wire (Python `CrowSessionSummary`). Presentation-free.
+ * `role` mirrors `murder/bus/protocol.py`'s `Role` enum (`'collaborator' | 'planner' | 'crow' |
+ * …`). The slice stores it as a raw string; `crowsSelectors.ts` (C9) uses it for type-grouping.
+ */
 export interface CrowSessionDto {
   agent_id: string;
+  role: string;
   ticket_id?: string | null;
   ticket_title?: string | null;
   harness?: string | null;
@@ -62,6 +67,7 @@ export interface CrowSessionDto {
 function toRosterRow(session: CrowSessionDto): RosterRow {
   return {
     agentId: session.agent_id,
+    role: session.role,
     ticketId: session.ticket_id ?? null,
     ticketTitle: session.ticket_title ?? null,
     harness: session.harness ?? null,

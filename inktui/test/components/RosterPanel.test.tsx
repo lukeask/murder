@@ -41,6 +41,7 @@ function twoCrows(): CrowSnapshotReply {
     sessions: [
       {
         agent_id: 'a-1',
+        role: 'crow',
         status: 'running',
         harness: 'claude',
         model: 'anthropic/claude-opus',
@@ -48,6 +49,7 @@ function twoCrows(): CrowSnapshotReply {
       },
       {
         agent_id: 'b-2',
+        role: 'crow',
         status: 'idle',
         harness: 'codex',
         model: 'openai/gpt-5',

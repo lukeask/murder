@@ -44,13 +44,14 @@ import type { PanelId } from '../input/panels.js';
 import type { AppStoreApi } from '../store/store.js';
 import { BottomBar } from './BottomBar.js';
 import { ChatInput } from './ChatInput.js';
+import { CrowsPanel } from './CrowsPanel.js';
 import { NotesPanel } from './NotesPanel.js';
 import { Overlay, presentationHidesLayout } from './Overlay.js';
 import { PlaceholderPanel } from './PlaceholderPanel.js';
 import { ReportsPanel } from './ReportsPanel.js';
-import { RosterPanel } from './RosterPanel.js';
 import { TicketsPanel } from './TicketsPanel.js';
 import { TopBar } from './TopBar.js';
+import { UsagePanel } from './UsagePanel.js';
 
 /** The left region's panels in screen order (plan: `1` plans · `2` notes · `3` reports · `4`
  * tickets). The right region (plan: `9` usage · `0` crows — usage left of crows). One ordered list
@@ -67,7 +68,9 @@ const RIGHT_PANELS: readonly PanelId[] = ['usage', 'crows'];
 function renderPanel(id: PanelId): JSX.Element {
   switch (id) {
     case 'crows':
-      return <RosterPanel />;
+      // C9: CrowsPanel replaces the RosterPanel reference implementation here. The original
+      // RosterPanel remains as the copy-reference; only this `case` changes.
+      return <CrowsPanel />;
     case 'plans':
       return <PlaceholderPanel id={id} title="Plans" filledBy="C6/plans-TBD" />;
     case 'notes':
@@ -77,7 +80,9 @@ function renderPanel(id: PanelId): JSX.Element {
     case 'tickets':
       return <TicketsPanel />;
     case 'usage':
-      return <PlaceholderPanel id={id} title="Usage" filledBy="C9" />;
+      // C9: UsagePanel fills the right-region slot. Usage sits to the LEFT of crows because
+      // RIGHT_PANELS = ['usage', 'crows'] (App.tsx line 59) — array order = left-to-right.
+      return <UsagePanel />;
     default:
       return id satisfies never;
   }

@@ -23,9 +23,14 @@ import type { AppStore } from '../store.js';
  * crow-session DTO (Python `CrowSessionSummary`). No sort key, no truncated label, no column tuple:
  * those are the selector's output, never the store's (rule 2). `null` mirrors the wire's optional
  * fields so a missing value is explicit, never an empty-string sentinel.
+ *
+ * `role` mirrors the Python `Role` enum string (`'collaborator' | 'planner' | 'crow' | …`); it is
+ * stored as a raw string so the slice stays wire-faithful and a future consumer (C10 discriminated-
+ * union agent identity) can narrow it without the slice pre-judging the shape.
  */
 export interface RosterRow {
   readonly agentId: string;
+  readonly role: string;
   readonly ticketId: string | null;
   readonly ticketTitle: string | null;
   readonly harness: string | null;

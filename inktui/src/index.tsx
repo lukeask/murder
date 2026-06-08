@@ -23,6 +23,7 @@ function makeDevBus(): FakeBusClient {
     sessions: [
       {
         agent_id: 'collaborator',
+        role: 'collaborator',
         status: 'idle',
         harness: 'claude',
         model: 'anthropic/claude-opus',
@@ -30,6 +31,8 @@ function makeDevBus(): FakeBusClient {
       },
     ],
   });
+  // C9: stub usage RPC so UsagePanel renders idle state on dev startup.
+  fake.stubRpc('usage.get_snapshot', { invalidation_key: 'dev', gauges: [] });
   return fake;
 }
 
@@ -38,10 +41,11 @@ async function main(): Promise<void> {
   const { store, dispose } = createAppStore(bus);
   // Seed a couple of panels on so the shell paints both regions for the smoke test (the crows
   // reference panel on the right, a placeholder on the left).
-  const inputStores = createInputStores(['plans', 'crows']);
-  // Prime the reference panel with the fake bus's canned roster (the live app pulls on the first
-  // `state.snapshot`; the smoke test has no live events, so kick one refresh).
+  const inputStores = createInputStores(['plans', 'usage', 'crows']);
+  // Prime the panels with the fake bus's canned data (the live app pulls on the first
+  // `state.snapshot`; the smoke test has no live events, so kick one refresh each).
   void store.getState().actions.roster.refresh();
+  void store.getState().actions.usage.refresh();
 
   const instance = render(<App store={store} inputStores={inputStores} />);
   // Smoke-only: unmount on the next tick so the dev run terminates instead of blocking. The standing
