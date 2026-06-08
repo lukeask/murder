@@ -1,0 +1,36 @@
+{
+  "name": "inktui",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Ink (React-for-terminal) rewrite of the murder TUI; consumes the service over the Unix-socket JSON-RPC bus.",
+  "type": "module",
+  "engines": {
+    "node": ">=20.18.0"
+  },
+  "bin": {
+    "inktui": "./dist/index.js"
+  },
+  "scripts": {
+    "dev": "tsx src/index.tsx",
+    "build": "tsc --build",
+    "typecheck": "tsc --build && tsc --noEmit -p tsconfig.test.json",
+    "lint": "biome check src test",
+    "lint:fix": "biome check --write src test",
+    "format": "biome format --write src test",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "ink": "^7.0.5",
+    "react": "^19.2.0",
+    "zustand": "^5.0.14"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.4.16",
+    "@types/node": "^24.0.0",
+    "@types/react": "^19.2.0",
+    "ink-testing-library": "^4.0.0",
+    "tsx": "^4.22.4",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.8"
+  }
+}

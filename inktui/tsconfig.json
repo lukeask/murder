@@ -1,0 +1,41 @@
+{
+  // Toolchain anchor for every later chunk. Full strictness is deliberate: a typed seam
+  // (BusClient, wire protocol, discriminated-union agent identity) only pays off if the
+  // compiler refuses the unsound shortcuts the old Textual app took. Each non-default flag
+  // below is justified in inktui/README.md § "Why these tsconfig flags".
+  "compilerOptions": {
+    // --- Output ---
+    "target": "ES2023",
+    "lib": ["ES2023"],
+    "types": ["node"],
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "outDir": "dist",
+    "rootDir": "src",
+    "sourceMap": true,
+    "declaration": true,
+    "declarationMap": true,
+    "composite": true,
+    "tsBuildInfoFile": "dist/.tsbuildinfo",
+
+    // --- React / Ink ---
+    "jsx": "react-jsx",
+
+    // --- Strictness (the point of this file) ---
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "noImplicitReturns": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noPropertyAccessFromIndexSignature": true,
+    "forceConsistentCasingInFileNames": true,
+    "useUnknownInCatchVariables": true,
+    "isolatedModules": true,
+    "verbatimModuleSyntax": true,
+    "skipLibCheck": true
+  },
+  "include": ["src/**/*"]
+}
