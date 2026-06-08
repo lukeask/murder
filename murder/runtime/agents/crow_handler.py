@@ -220,9 +220,7 @@ class CrowHandler(Daemon):
     async def _orchestration_tick(self, pane: str) -> None:
         from murder.state.persistence.tickets import get_ticket_status, check_off_item, checklist_progress
         from murder.state.persistence.agents import heartbeat_agent
-        from murder.bus import HeartbeatEvent, QuestionEvent, SummaryEvent
-        from murder.state.storage.paths import ticket_md
-        from murder.work.tickets import parser as ticket_parser
+        from murder.bus import HeartbeatEvent, NoteEvent, QuestionEvent, SummaryEvent
 
         # Stop if ticket reached a terminal state via any path.
         ticket_status = get_ticket_status(self.runtime.db, self.ticket_id)
@@ -252,9 +250,20 @@ class CrowHandler(Daemon):
         for check in self.harness.detect_checks(pane):
             check_off_item(self.runtime.db, self.ticket_id, check)
 
-        tpath = ticket_md(self.repo_root, self.ticket_id)
+        # DB-owns-runtime: working notes land in the events table (audit log)
+        # via the bus, not the ticket .md. The bus persists every event before
+        # fan-out, so the note is durable without clobbering ticket frontmatter
+        # or the body checklist.
         for note in self.harness.detect_notes(tail):
-            ticket_parser.append_section(tpath, "Working notes", f">>> NOTE: {note}")
+            await self.runtime.bus.publish(
+                NoteEvent(
+                    run_id=self.runtime.run_id,
+                    agent_id=self.id,
+                    role=self.role,
+                    ticket_id=self.ticket_id,
+                    note=note,
+                )
+            )
 
         # Stuck detection: compare pane hash between consecutive orchestration ticks.
         h = hashlib.sha256(pane.encode("utf-8", errors="replace")).hexdigest()
