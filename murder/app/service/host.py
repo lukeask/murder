@@ -315,6 +315,114 @@ class ServiceHost:
 
         self.register_rpc_handler("settings.discover_models", _settings_discover_models)
 
+        def _orchestrator() -> Orchestrator:
+            if self.orchestrator is None:
+                raise RuntimeError("orchestrator unavailable")
+            return self.orchestrator
+
+        def _ticket_next_id(_body: dict[str, Any]) -> dict[str, Any]:
+            return {"ok": True, "ticket_id": _orchestrator().next_ticket_id()}
+
+        def _ticket_exists(body: dict[str, Any]) -> dict[str, Any]:
+            handle = str(body.get("handle", "")).strip()
+            if not handle:
+                raise ValueError("ticket.exists requires handle")
+            return {"ok": True, "exists": _orchestrator().ticket_exists(handle)}
+
+        def _editor_binary(_body: dict[str, Any]) -> dict[str, Any]:
+            # Resolve the editor command server-side (folds the backend
+            # ``choose_editor`` import out of the TUI, V6). The client still
+            # launches the subprocess — it owns the user's terminal/tty; the
+            # service is a daemon with no tty.
+            from murder.work.plans.sync import choose_editor
+
+            preferred = str(_body.get("preferred") or "").strip() or None
+            return {"ok": True, "editor": choose_editor(preferred)}
+
+        def _image_upload(body: dict[str, Any]) -> dict[str, Any]:
+            # V2: store a pasted clipboard image under .murder/images and return
+            # the stored path the note draft references. Bytes ride base64 over
+            # JSON-RPC.
+            import base64
+            import secrets
+            from datetime import datetime as _dt
+
+            from murder.state.storage.paths import murder_dir as _murder_dir
+
+            data_b64 = body.get("bytes")
+            if not isinstance(data_b64, str) or not data_b64:
+                raise ValueError("image.upload requires base64 bytes")
+            try:
+                data = base64.b64decode(data_b64, validate=True)
+            except Exception as exc:  # noqa: BLE001
+                return {"ok": False, "error": f"invalid base64: {exc}"}
+            ext = str(body.get("ext") or "png").lstrip(".") or "png"
+            images_dir = _murder_dir(self.repo_root) / "images"
+            images_dir.mkdir(parents=True, exist_ok=True)
+            ts = _dt.now().strftime("%Y%m%d%H%M%S")
+            fname = f"note-img-{ts}-{secrets.token_hex(2)}.{ext}"
+            fpath = images_dir / fname
+            fpath.write_bytes(data)
+            return {"ok": True, "path": str(fpath)}
+
+        def _tui_prefs_file() -> Path:
+            from murder.state.storage.paths import tui_prefs_path as _tui_prefs_path
+
+            return _tui_prefs_path(self.repo_root)
+
+        def _tui_load_favorites(_body: dict[str, Any]) -> dict[str, Any]:
+            import json
+
+            path = _tui_prefs_file()
+            if not path.exists():
+                return {"ok": True, "favorites": []}
+            try:
+                data = json.loads(path.read_text())
+                favorites = data.get("favorites", [])
+                if not isinstance(favorites, list):
+                    favorites = []
+            except Exception:  # noqa: BLE001
+                favorites = []
+            return {"ok": True, "favorites": [str(item) for item in favorites]}
+
+        def _tui_save_favorites(body: dict[str, Any]) -> dict[str, Any]:
+            import json
+
+            favorites = body.get("favorites")
+            if not isinstance(favorites, list):
+                raise ValueError("tui.save_favorites requires favorites list")
+            ids = sorted({str(item) for item in favorites})
+            path = _tui_prefs_file()
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = path.with_suffix(".tmp")
+            tmp.write_text(json.dumps({"favorites": ids}))
+            tmp.replace(path)
+            return {"ok": True, "favorites": ids}
+
+        def _worktree_list(_body: dict[str, Any]) -> dict[str, Any]:
+            from murder.state.storage.worktrees import list_murder_worktrees_sync
+
+            entries = list_murder_worktrees_sync(self.repo_root)
+            return {
+                "ok": True,
+                "entries": [
+                    {
+                        "path": str(entry.path),
+                        "branch": entry.branch,
+                        "is_main": entry.is_main,
+                    }
+                    for entry in entries
+                ],
+            }
+
+        self.register_rpc_handler("ticket.next_id", _ticket_next_id)
+        self.register_rpc_handler("ticket.exists", _ticket_exists)
+        self.register_rpc_handler("editor.binary", _editor_binary)
+        self.register_rpc_handler("image.upload", _image_upload)
+        self.register_rpc_handler("tui.load_favorites", _tui_load_favorites)
+        self.register_rpc_handler("tui.save_favorites", _tui_save_favorites)
+        self.register_rpc_handler("worktree.list", _worktree_list)
+
     async def start(self) -> None:
         self.runtime = Runtime(self.config, self.repo_root)
         await self.runtime.start()
@@ -386,8 +494,8 @@ class ServiceHost:
         concern, decoupled from ticket orchestration (CrowHandler) so ticketless
         rogues and collaborators are covered too."""
         from murder.runtime.agents.base import (
-            HarnessBackedAgent,
             PROJECTION_INTERVAL_S,
+            HarnessBackedAgent,
         )
         from murder.runtime.terminal import tmux
 

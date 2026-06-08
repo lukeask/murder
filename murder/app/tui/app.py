@@ -23,11 +23,9 @@ from textual.widget import Widget
 from textual.widgets import Footer, Static
 
 from murder.config import Config
-from murder.runtime.orchestration.orchestrator import is_rogue_agent_id
+from murder.runtime.orchestration.agent_ids import is_rogue_agent_id
 from murder.app.service.client_api import EscalationSummary
 from murder.app.service.settings_service import SettingsService
-from murder.state.storage.paths import murder_dir, ticket_md, tickets_dir, tui_prefs_path
-from murder.state.storage.worktrees import list_murder_worktrees_sync
 from murder.runtime.terminal.session_names import format_session_name
 from murder.app.tui.chat_input import ChatInput
 from murder.app.tui.chat_target_cycle import (
@@ -96,22 +94,18 @@ _COLON_RAW_KEYS: dict[str, str] = {
 _TNUM_RE = re.compile(r"^t(\d+)$", re.IGNORECASE)
 
 
-def _next_ticket_id(repo_root: Path) -> str:
-    """Return the next t<NNN> id, scanning the tickets dir for the current max."""
-    root = tickets_dir(repo_root)
-    max_n = 0
-    if root.exists():
-        for p in root.glob("*.md"):
-            m = _TNUM_RE.match(p.stem)
-            if m:
-                max_n = max(max_n, int(m.group(1)))
-    return f"t{max_n + 1:03d}"
+def _looks_like_ticket_handle(handle: str) -> bool:
+    """Pure local short-circuit: ``t<NNN>`` is always a ticket handle (V5)."""
+    return bool(_TNUM_RE.match(handle))
 
 
-def _is_ticket_handle(handle: str, repo_root: Path) -> bool:
-    if _TNUM_RE.match(handle):
-        return True
-    return (tickets_dir(repo_root) / f"{handle}.yaml").exists()
+def _favorites_io_for(runtime: object) -> tuple[object, object] | None:
+    """Service-backed favorites load/save pair, or None if unavailable (V3)."""
+    load = getattr(runtime, "load_favorites", None)
+    save = getattr(runtime, "save_favorites", None)
+    if load is None or save is None:
+        return None
+    return (load, save)
 
 
 def _parse_delay_command(text: str) -> tuple[float, str] | None:
@@ -384,7 +378,7 @@ class MurderApp(App[None]):
             project_name=runtime.config.project.name,
             perf=self.perf,
             capture_pane=self._bus_capture_pane,
-            prefs_path=tui_prefs_path(runtime.repo_root),
+            favorites_io=_favorites_io_for(runtime),
             usage_drill_in_loader=getattr(runtime, "get_usage_gauge_drill_in", None),
         )
 
@@ -785,8 +779,9 @@ class MurderApp(App[None]):
     async def _open_plan(self, name: str) -> None:
         await self.runtime.reconcile_plan(name)
         path = await self.runtime.plan_path_for(name)
+        editor = await self.runtime.resolve_editor(self._user_config.tui.editor)
         with self.suspend():
-            code = self.runtime.open_editor_blocking(path, self._user_config.tui.editor)
+            code = self.runtime.launch_editor_blocking(path, editor)
         if code != 0:
             self.notify(f"editor exited with {code}", severity="warning", timeout=5)
         await self.runtime.reconcile_plan(name)
@@ -820,8 +815,9 @@ class MurderApp(App[None]):
             if mat_path
             else await self.runtime.note_path_for(name)
         )
+        editor = await self.runtime.resolve_editor(self._user_config.tui.editor)
         with self.suspend():
-            code = self.runtime.open_editor_blocking(path, self._user_config.tui.editor)
+            code = self.runtime.launch_editor_blocking(path, editor)
         if code != 0:
             self.notify(f"editor exited with {code}", severity="warning", timeout=5)
         if self.runtime.note_sync is not None:
@@ -844,8 +840,9 @@ class MurderApp(App[None]):
 
     async def _open_report(self, name: str) -> None:
         path = await self.runtime.report_path_for(name)
+        editor = await self.runtime.resolve_editor(self._user_config.tui.editor)
         with self.suspend():
-            code = self.runtime.open_editor_blocking(path, self._user_config.tui.editor)
+            code = self.runtime.launch_editor_blocking(path, editor)
         if code != 0:
             self.notify(f"editor exited with {code}", severity="warning", timeout=5)
         # Evict cached body so _render_report (request_body) re-fetches fresh content.
@@ -1099,8 +1096,13 @@ class MurderApp(App[None]):
             self.notify("spawn wizard unavailable", severity="error", timeout=4)
             return
         self._chat.display = False
+        self.run_worker(self._open_spawn_wizard(parent), exclusive=False, group="spawn_wizard")
+
+    async def _open_spawn_wizard(self, parent: Widget) -> None:
+        if self._spawn_wizard is not None:
+            return
         try:
-            worktree_entries = list_murder_worktrees_sync(self.runtime.repo_root)
+            worktree_entries = await self.runtime.list_worktrees()
         except Exception:
             worktree_entries = []
         worktree_options = build_worktree_options(self.runtime.repo_root, worktree_entries)
@@ -1335,7 +1337,7 @@ class MurderApp(App[None]):
                 text = body
                 if not body:
                     return
-            elif _is_ticket_handle(handle, self.runtime.repo_root):
+            elif _looks_like_ticket_handle(handle) or await self.runtime.ticket_exists(handle):
                 target_id = f"crow-{handle}"
             else:
                 target_id = f"planner-{handle}"
@@ -1736,7 +1738,7 @@ class MurderApp(App[None]):
         screen = NoteCaptureScreen(
             initial_draft=self._note_capture_draft,
             load_recent_rows=self._sync_recent_note_entries,
-            images_dir=murder_dir(self.runtime.repo_root) / "images",
+            upload_image=self.runtime.upload_image,
         )
         self.push_screen(screen, self._on_note_capture_closed)
 
@@ -1787,16 +1789,19 @@ class MurderApp(App[None]):
             self.notify(short_vers or "note saved", timeout=5)
 
     async def _quick_create_ticket(self, title: str) -> None:
-        """Write a .murder/tickets/<id>.md; TicketSync imports it as PLANNED."""
-        try:
-            ticket_id = _next_ticket_id(self.runtime.repo_root)
-            path = ticket_md(self.runtime.repo_root, ticket_id)
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(f"# {title}\n\n## Plan\n\n## Working Notes\n")
-        except Exception as exc:
-            self.notify(f"ticket create failed: {exc}", severity="error", timeout=6)
+        """Create a ticket via the service (V1); the service owns id + file + DB."""
+        result = await self._submit_command(
+            target_worker="orchestrator",
+            kind="ticket.quick_create",
+            payload={"title": title},
+            timeout_s=30.0,
+            notify_errors=True,
+        )
+        if result is None:
             return
+        ticket_id = str(result.get("ticket_id") or "")
         self.notify(f"ticket {ticket_id}: {title}", timeout=5)
+        self._refresh_service_views()
 
     async def _quick_kick_ticket(self, title: str) -> None:
         """Create a ticket and immediately kick it via the service."""

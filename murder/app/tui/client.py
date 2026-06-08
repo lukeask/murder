@@ -34,6 +34,7 @@ from murder.app.tui.pane_capture import PaneCaptureError
 from murder.bus.client import SocketBusClient
 from murder.bus.protocol import BusEvent, ClientKind, EventFilter
 from murder.config import Config
+from murder.state.storage.worktrees import WorktreeEntry
 
 COMMAND_POLL_S = 0.05
 STATE_RPC_TIMEOUT_S = 10.0
@@ -101,13 +102,86 @@ class TuiRuntimeClient:
             )
         )
 
-    def open_editor_blocking(self, path: Path, preferred_editor: str | None = None) -> int:
-        from murder.work.plans.sync import choose_editor
+    async def resolve_editor(self, preferred_editor: str | None = None) -> str:
+        """Resolve the editor command via the service (V6 — no backend import)."""
+        body: dict[str, object] = {}
+        if preferred_editor:
+            body["preferred"] = preferred_editor
+        reply = await self.bus.request("editor.binary", body, timeout_s=STATE_RPC_TIMEOUT_S)
+        if not reply.get("ok"):
+            raise RuntimeError(str(reply.get("error") or "editor.binary failed"))
+        return str(reply.get("editor") or "vi")
 
-        editor = choose_editor(preferred_editor)
+    def launch_editor_blocking(self, path: Path, editor: str) -> int:
+        """Launch the (already-resolved) editor on ``path``.
+
+        The TUI owns the user's terminal/tty; the service is a tty-less daemon,
+        so the subprocess must be spawned client-side. Resolve the editor
+        command first via :meth:`resolve_editor`.
+        """
         argv = shlex.split(editor) or ["vi"]
         proc = subprocess.run([*argv, str(path)], check=False)
         return int(proc.returncode)
+
+    async def next_ticket_id(self) -> str:
+        """Next free ticket id via the service (V4)."""
+        reply = await self.bus.request("ticket.next_id", {}, timeout_s=STATE_RPC_TIMEOUT_S)
+        if not reply.get("ok"):
+            raise RuntimeError(str(reply.get("error") or "ticket.next_id failed"))
+        return str(reply.get("ticket_id") or "")
+
+    async def ticket_exists(self, handle: str) -> bool:
+        """True if ``handle`` names an existing ticket (V5)."""
+        reply = await self.bus.request(
+            "ticket.exists", {"handle": handle}, timeout_s=STATE_RPC_TIMEOUT_S
+        )
+        if not reply.get("ok"):
+            raise RuntimeError(str(reply.get("error") or "ticket.exists failed"))
+        return bool(reply.get("exists"))
+
+    async def upload_image(self, data: bytes, *, ext: str = "png") -> Path:
+        """Upload a pasted clipboard image; return the stored .murder path (V2)."""
+        import base64
+
+        reply = await self.bus.request(
+            "image.upload",
+            {"bytes": base64.b64encode(data).decode("ascii"), "ext": ext},
+            timeout_s=STATE_RPC_TIMEOUT_S,
+        )
+        if not reply.get("ok"):
+            raise RuntimeError(str(reply.get("error") or "image.upload failed"))
+        return Path(str(reply.get("path") or ""))
+
+    async def load_favorites(self) -> set[str]:
+        """Load persisted favorite agent ids (V3)."""
+        reply = await self.bus.request("tui.load_favorites", {}, timeout_s=STATE_RPC_TIMEOUT_S)
+        if not reply.get("ok"):
+            return set()
+        return {str(item) for item in (reply.get("favorites") or [])}
+
+    async def save_favorites(self, favorites: set[str]) -> None:
+        """Persist favorite agent ids (V3)."""
+        reply = await self.bus.request(
+            "tui.save_favorites",
+            {"favorites": sorted(favorites)},
+            timeout_s=STATE_RPC_TIMEOUT_S,
+        )
+        if not reply.get("ok"):
+            raise RuntimeError(str(reply.get("error") or "tui.save_favorites failed"))
+
+    async def list_worktrees(self) -> list[WorktreeEntry]:
+        """List .murder worktrees via the service (V7)."""
+        reply = await self.bus.request("worktree.list", {}, timeout_s=STATE_RPC_TIMEOUT_S)
+        if not reply.get("ok"):
+            return []
+        return [
+            WorktreeEntry(
+                path=Path(str(entry.get("path") or "")),
+                branch=(entry.get("branch") if entry.get("branch") else None),
+                is_main=bool(entry.get("is_main")),
+            )
+            for entry in (reply.get("entries") or [])
+        ]
 
     async def submit_command(
         self,

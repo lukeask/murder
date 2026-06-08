@@ -54,7 +54,6 @@ from murder.app.tui.planning_mode_widgets import (
 from murder.app.tui.ticket_grid import TicketGrid
 
 if TYPE_CHECKING:
-    from pathlib import Path
     from murder.app.tui.coordinator import IngestionCoordinator
 
 
@@ -77,7 +76,7 @@ class DefaultLayout:
         project_name: str,
         perf: PerfLog | None = None,
         capture_pane: CapturePaneFn | None = None,
-        prefs_path: Path | None = None,
+        favorites_io: Any | None = None,
         usage_drill_in_loader: Any | None = None,
     ) -> None:
         self._coordinator = coordinator
@@ -88,7 +87,7 @@ class DefaultLayout:
         self.crows = CrowsView(
             perf_log=perf,
             capture_pane=capture_pane,
-            prefs_path=prefs_path,
+            favorites_io=favorites_io,
         )
         self.plans = PlanList()
         self.plan_doc = PlanDocument()

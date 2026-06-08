@@ -70,6 +70,7 @@ async def test_worker_forwards_full_spawn_payload_including_effort() -> None:
         rename_plan=_noop,
         deprecate_plan=_noop,
         quick_kick_ticket=_noop,
+        quick_create_ticket=lambda _title: {"handled": True},
         spawn_rogue=spy_spawn_rogue,
         reconfigure_collaborator=_noop,
     )

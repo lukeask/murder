@@ -26,6 +26,7 @@ ScaffoldPlan = Callable[[str, str], Awaitable[dict[str, Any]]]
 RenamePlan = Callable[[str, str], Awaitable[dict[str, Any]]]
 DeprecatePlan = Callable[[str], Awaitable[dict[str, Any]]]
 QuickKickTicket = Callable[[str], Awaitable[dict[str, Any]]]
+QuickCreateTicket = Callable[[str], dict[str, Any]]
 SpawnRogue = Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]
 ReconfigureCollaborator = Callable[[], Awaitable[dict[str, Any]]]
 
@@ -53,6 +54,7 @@ class OrchestratorCommandWorker(Worker):
         rename_plan: RenamePlan,
         deprecate_plan: DeprecatePlan,
         quick_kick_ticket: QuickKickTicket,
+        quick_create_ticket: QuickCreateTicket,
         spawn_rogue: SpawnRogue,
         reconfigure_collaborator: ReconfigureCollaborator,
     ) -> None:
@@ -80,6 +82,7 @@ class OrchestratorCommandWorker(Worker):
                     "plan.rename",
                     "plan.deprecate",
                     "ticket.quick_kick",
+                    "ticket.quick_create",
                     "crow.spawn_rogue",
                     "collaborator.reconfigure",
                 ),
@@ -104,6 +107,7 @@ class OrchestratorCommandWorker(Worker):
         self._rename_plan = rename_plan
         self._deprecate_plan = deprecate_plan
         self._quick_kick_ticket = quick_kick_ticket
+        self._quick_create_ticket = quick_create_ticket
         self._spawn_rogue = spawn_rogue
         self._reconfigure_collaborator = reconfigure_collaborator
 
@@ -122,13 +126,9 @@ class OrchestratorCommandWorker(Worker):
             if not isinstance(ticket_id, str) or not ticket_id.strip():
                 raise ValueError("ticket.apply_carve_ready requires ticket_id")
             carve = command.payload.get("carve")
-            yaml_text = command.payload.get("yaml")
-            if not (
-                (isinstance(carve, dict) and carve)
-                or (isinstance(yaml_text, str) and yaml_text.strip())
-            ):
+            if not (isinstance(carve, dict) and carve):
                 raise ValueError(
-                    "ticket.apply_carve_ready requires non-empty 'carve' or 'yaml' in payload"
+                    "ticket.apply_carve_ready requires non-empty 'carve' in payload"
                 )
             return await self._apply_carve_ready(ticket_id.strip(), command.payload)
         if command.kind == "notetaker.capture.submit":
@@ -256,6 +256,11 @@ class OrchestratorCommandWorker(Worker):
             if not isinstance(title, str) or not title.strip():
                 raise ValueError("ticket.quick_kick requires title")
             return await self._quick_kick_ticket(title.strip())
+        if command.kind == "ticket.quick_create":
+            title = command.payload.get("title")
+            if not isinstance(title, str) or not title.strip():
+                raise ValueError("ticket.quick_create requires title")
+            return self._quick_create_ticket(title.strip())
         if command.kind == "crow.spawn_rogue":
             return await self._spawn_rogue(dict(command.payload))
         if command.kind == "collaborator.reconfigure":

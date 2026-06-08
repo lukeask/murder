@@ -101,9 +101,9 @@ def _harness_prefix(harness_kind: str) -> str:
     return first_word[:8] or "rogue"
 
 
-def is_rogue_agent_id(agent_id: str) -> bool:
-    """True for any rogue agent id regardless of harness prefix."""
-    return "rogue-" in agent_id
+# Re-exported from the pure-util module so existing backend callers keep
+# importing it from here; renderer-agnostic clients import the util directly.
+from murder.runtime.orchestration.agent_ids import is_rogue_agent_id  # noqa: E402
 
 
 def _codex_startup_model_degraded_ok(
@@ -235,13 +235,16 @@ class Orchestrator:
             kicked.append(tid)
         return kicked
 
-    async def quick_kick_ticket(self, title: str) -> dict[str, Any]:
-        """Create a ticket, insert it into the DB as PLANNED, and immediately kick it."""
+    def next_ticket_id(self) -> str:
+        """Return the next ``t<NNN>`` id, scanning DB + filesystem for the max.
+
+        Authoritative server-side id allocation; checks both the DB and the
+        on-disk ``.md`` files so it stays consistent across the TicketSync poll
+        window.
+        """
         assert self.rt.db is not None
         conn = self.rt.db
         repo_root = self.rt.repo_root
-
-        # Derive next ID from DB + file system to avoid races with TicketSync.
         max_n = 0
         for row in conn.execute("SELECT id FROM tickets WHERE id LIKE 't%'").fetchall():
             m = _TNUM_RE.match(str(row["id"]))
@@ -253,7 +256,31 @@ class Orchestrator:
                 m2 = _TNUM_RE.match(p.stem)
                 if m2:
                     max_n = max(max_n, int(m2.group(1)))
-        ticket_id = f"t{max_n + 1:03d}"
+        return f"t{max_n + 1:03d}"
+
+    def ticket_exists(self, handle: str) -> bool:
+        """True if ``handle`` names an existing ticket (DB row or on-disk ``.md``)."""
+        assert self.rt.db is not None
+        handle = handle.strip()
+        if not handle:
+            return False
+        row = self.rt.db.execute(
+            "SELECT 1 FROM tickets WHERE id = ?", (handle,)
+        ).fetchone()
+        if row is not None:
+            return True
+        return ticket_md(self.rt.repo_root, handle).exists()
+
+    def quick_create_ticket(self, title: str) -> dict[str, Any]:
+        """Create a ticket .md + insert it as PLANNED, without kicking it.
+
+        Server-side id allocation + file write + DB insert — the authority the
+        TUI's old direct ``.md`` write bypassed (V1).
+        """
+        assert self.rt.db is not None
+        conn = self.rt.db
+        repo_root = self.rt.repo_root
+        ticket_id = self.next_ticket_id()
 
         # Write the markdown file so the ticket sync stays consistent.
         path = ticket_md(repo_root, ticket_id)
@@ -281,7 +308,12 @@ class Orchestrator:
                 _db_insert_ticket(conn, ticket)
             except Exception:
                 pass  # TicketSync may have raced us
+        return {"handled": True, "ticket_id": ticket_id, "title": title}
 
+    async def quick_kick_ticket(self, title: str) -> dict[str, Any]:
+        """Create a ticket, insert it into the DB as PLANNED, and immediately kick it."""
+        created = self.quick_create_ticket(title)
+        ticket_id = str(created["ticket_id"])
         kicked = await self.kickoff_ready(only=ticket_id)
         return {"handled": True, "ticket_id": ticket_id, "title": title, "kicked": kicked}
 

@@ -14,11 +14,9 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import json
 import logging
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import replace
-from pathlib import Path
 from typing import Any
 
 from textual import events
@@ -29,18 +27,17 @@ from textual.containers import Container, Grid, ScrollableContainer
 from textual.message import Message
 from textual.reactive import reactive
 from textual.widget import Widget
-from textual.widgets import RichLog, Static
+from textual.widgets import Static
 
 from murder.app.service.client_api import CrowSnapshot
 from murder.app.tui.cc_multiple_choice_wizard import CCMultipleChoiceWizard
+from murder.app.tui.components.base import StoreComponent
 from murder.app.tui.crow_health import Health
 from murder.app.tui.live_log import LiveRichLog
 from murder.app.tui.pane_capture import CapturePaneFn, PaneCaptureError
 from murder.app.tui.pane_mirror import PaneMirror
 from murder.app.tui.perf_log import PerfLog
-from murder.app.tui.components.base import StoreComponent
 from murder.app.tui.stores.roster import (
-    CrowDisplayLabels,
     CrowEntry,
     RosterSnapshot,
     _crow_display_labels,
@@ -63,6 +60,10 @@ GRID_TARGET_COLS = 3
 """Tail-wall packs roughly into this many columns; rows scale by count."""
 
 logger = logging.getLogger(__name__)
+
+# Favorites are persisted through the service (V3 — no direct .murder/ access).
+LoadFavoritesFn = Callable[[], Awaitable[set[str]]]
+SaveFavoritesFn = Callable[[set[str]], Awaitable[None]]
 
 
 class CrowRosterRow(Widget):
@@ -212,34 +213,37 @@ class CrowRosterList(ScrollableContainer):
         self._kill_pending: str | None = None
         self._rows: dict[str, CrowRosterRow] = {}
         self._order: list[str] = []
-        self._prefs_path: Path | None = None
+        self._load_favorites_fn: LoadFavoritesFn | None = None
+        self._save_favorites_fn: SaveFavoritesFn | None = None
         self._last_entries: list[CrowEntry] = []
 
-    def set_prefs_path(self, path: Path) -> None:
-        self._prefs_path = path
-        self._load_favorites()
+    def set_favorites_io(
+        self, load: LoadFavoritesFn, save: SaveFavoritesFn
+    ) -> None:
+        """Wire service-backed favorites persistence (V3) and load now."""
+        self._load_favorites_fn = load
+        self._save_favorites_fn = save
+        self.run_worker(self._load_favorites(), exclusive=False, group="favorites_load")
 
-    def _load_favorites(self) -> None:
-        if self._prefs_path is None or not self._prefs_path.exists():
+    async def _load_favorites(self) -> None:
+        if self._load_favorites_fn is None:
             return
         try:
-            data = json.loads(self._prefs_path.read_text())
-            favorites = data.get("favorites", [])
-            if isinstance(favorites, list):
-                self._favorites = {str(agent_id) for agent_id in favorites}
+            self._favorites = await self._load_favorites_fn()
         except Exception:
-            logger.debug("failed to load TUI favorites from %s", self._prefs_path, exc_info=True)
+            logger.debug("failed to load TUI favorites", exc_info=True)
+            return
+        self.reconcile(self._last_entries)
 
     def _save_favorites(self) -> None:
-        if self._prefs_path is None:
+        if self._save_favorites_fn is None:
             return
-        try:
-            self._prefs_path.parent.mkdir(parents=True, exist_ok=True)
-            tmp = self._prefs_path.with_suffix(".tmp")
-            tmp.write_text(json.dumps({"favorites": sorted(self._favorites)}))
-            tmp.replace(self._prefs_path)
-        except Exception:
-            logger.debug("failed to save TUI favorites to %s", self._prefs_path, exc_info=True)
+        snapshot = set(self._favorites)
+        self.run_worker(
+            self._save_favorites_fn(snapshot),
+            exclusive=False,
+            group="favorites_save",
+        )
 
     def reconcile(self, entries: list[CrowEntry]) -> None:
         self._last_entries = list(entries)
@@ -1117,12 +1121,12 @@ class CrowsView(StoreComponent, Container):
         perf_log: PerfLog | None = None,
         *,
         capture_pane: CapturePaneFn | None = None,
-        prefs_path: Path | None = None,
+        favorites_io: tuple[LoadFavoritesFn, SaveFavoritesFn] | None = None,
     ) -> None:
         super().__init__()
         self._perf = perf_log
         self._capture_pane = capture_pane
-        self._prefs_path = prefs_path
+        self._favorites_io = favorites_io
         self._wall = TailWall()
         self._roster = CrowRosterList()
         self._mirror = PaneMirror(perf=self._perf, capture_pane=capture_pane)
@@ -1153,8 +1157,8 @@ class CrowsView(StoreComponent, Container):
         yield self._mirror
 
     def on_mount(self) -> None:
-        if self._prefs_path is not None:
-            self._roster.set_prefs_path(self._prefs_path)
+        if self._favorites_io is not None:
+            self._roster.set_favorites_io(*self._favorites_io)
         self._apply_mode()
         # StoreComponent.on_mount is dispatched separately by Textual's MRO
         # event dispatch. The explicit super().on_mount() call is omitted here

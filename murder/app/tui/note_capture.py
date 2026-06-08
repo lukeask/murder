@@ -3,9 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-import datetime
 import inspect
-import secrets
 import time
 from collections.abc import Awaitable, Callable
 from pathlib import Path
@@ -20,6 +18,9 @@ from textual.screen import ModalScreen
 from textual.widgets import DataTable, Footer, Static, TextArea
 
 LoadRecentFn = Callable[[], list[dict[str, Any]] | Awaitable[list[dict[str, Any]]]]
+# Upload a pasted image's bytes via the service; returns the stored .murder path
+# the draft references (V2 — the screen no longer writes .murder/ directly).
+UploadImageFn = Callable[[bytes], Awaitable[Path]]
 DismissPayload = tuple[bool, str]
 
 RECENT_NOTE_ROWS = 12
@@ -173,14 +174,11 @@ class NoteCaptureScreen(ModalScreen[DismissPayload]):
             if data is None:
                 replacement = "[Image paste failed]"
             else:
-                images_dir = outer._images_dir
-                images_dir.mkdir(parents=True, exist_ok=True)
-                ts = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
-                hex4 = secrets.token_hex(2)
-                fname = f"note-img-{ts}-{hex4}.png"
-                fpath = images_dir / fname
-                fpath.write_bytes(data)
-                replacement = f"![image]({fpath})"
+                try:
+                    fpath = await outer._upload_image(data)
+                    replacement = f"![image]({fpath})"
+                except Exception:
+                    replacement = "[Image upload failed]"
 
             self.text = self.text.replace(placeholder, replacement, 1)
 
@@ -189,12 +187,12 @@ class NoteCaptureScreen(ModalScreen[DismissPayload]):
         *,
         initial_draft: str,
         load_recent_rows: LoadRecentFn,
-        images_dir: Path,
+        upload_image: UploadImageFn,
     ) -> None:
         super().__init__()
         self._initial_draft = initial_draft
         self._load_recent_rows = load_recent_rows
-        self._images_dir = images_dir
+        self._upload_image = upload_image
         self._paste_counter = 0
         self._rows: list[dict[str, Any]] = []
         self._draft_esc_armed_at: float | None = None
