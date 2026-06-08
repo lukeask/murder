@@ -11,6 +11,7 @@ import type { ReportsSnapshotReply } from '../../src/store/reports/reportsAction
 import type { CrowSnapshotReply } from '../../src/store/roster/rosterActions.js';
 import { createAppStore } from '../../src/store/store.js';
 import type { TicketSnapshotReply } from '../../src/store/tickets/ticketsActions.js';
+import type { UsageSnapshotReply } from '../../src/store/usage/usageActions.js';
 
 /** A `state.snapshot` event for `entity`, defaulting to the crow-roster entity. */
 function snapshot(
@@ -37,6 +38,7 @@ function crowReply(overrides: Partial<CrowSnapshotReply> = {}): CrowSnapshotRepl
     sessions: [
       {
         agent_id: 'a-1',
+        role: 'crow',
         ticket_id: 'T-1',
         ticket_title: 'Title',
         harness: 'claude',
@@ -49,10 +51,22 @@ function crowReply(overrides: Partial<CrowSnapshotReply> = {}): CrowSnapshotRepl
   };
 }
 
-/** Build a store wired to a FakeBusClient with the roster RPC stubbed. */
+/** A canned `usage.get_snapshot` reply (empty gauges — sufficient for most tests). */
+function usageReply(overrides: Partial<UsageSnapshotReply> = {}): UsageSnapshotReply {
+  return { invalidation_key: 'iv-u', gauges: [], ...overrides };
+}
+
+/**
+ * Build a store wired to a FakeBusClient with the roster + usage RPCs stubbed.
+ * NOTE: Both roster and usage key on the `'agent'` entity (C9: usage invalidates with roster
+ * since there is no dedicated `'usage'` entity key in the Python protocol). So an `'agent'`
+ * snapshot fires BOTH `crow.get_snapshot` and `usage.get_snapshot`. Tests that assert on
+ * `rpcCalls` must filter by method or use `toContainEqual` rather than exact equality.
+ */
 function setup(reply: CrowSnapshotReply = crowReply()) {
   const fake = new FakeBusClient();
   fake.stubRpc('crow.get_snapshot', reply);
+  fake.stubRpc('usage.get_snapshot', usageReply());
   const { store, dispose } = createAppStore(fake);
   return { fake, store, dispose };
 }
@@ -81,22 +95,31 @@ describe('createAppStore — boot & wiring', () => {
     expect(typeof store.getState().actions.reports.refresh).toBe('function');
     // C7 actions.
     expect(typeof store.getState().actions.tickets.refresh).toBe('function');
+    // C9 actions.
+    expect(typeof store.getState().actions.usage.refresh).toBe('function');
   });
 
   it('starts the tickets slice in its idle, pre-fetch state', () => {
     const { store } = setup();
     expect(store.getState().tickets).toEqual({ rows: [], status: 'idle', error: null });
   });
+
+  it('starts the usage slice in its idle, pre-fetch state (C9)', () => {
+    const { store } = setup();
+    expect(store.getState().usage).toEqual({ rows: [], status: 'idle', error: null });
+  });
 });
 
 describe('event-driven slice invalidation', () => {
-  it('re-pulls the named slice on its state.snapshot — exactly one rpc call', async () => {
+  it('re-pulls the roster on its state.snapshot and updates the slice', async () => {
     const { fake, store } = setup();
 
     fake.emit(snapshot('agent'));
     await flush();
 
-    expect(fake.rpcCalls).toEqual([{ method: 'crow.get_snapshot', params: {} }]);
+    // Both roster and usage key on 'agent' (C9: usage has no dedicated entity key).
+    // Assert on the roster call specifically; usage.get_snapshot will also be present.
+    expect(fake.rpcCalls).toContainEqual({ method: 'crow.get_snapshot', params: {} });
     expect(store.getState().roster.status).toBe('ready');
     expect(store.getState().roster.rows).toHaveLength(1);
     expect(store.getState().roster.rows[0]?.agentId).toBe('a-1');
@@ -386,6 +409,69 @@ describe('C7 — tickets slice invalidation', () => {
     expect(store.getState().notes).toBe(notesBefore);
     expect(store.getState().reports).toBe(reportsBefore);
     expect(store.getState().tickets.status).toBe('ready');
+  });
+});
+
+// ---- C9: usage slice invalidation ----
+
+describe('C9 — usage slice invalidation', () => {
+  it('re-pulls usage on an agent-entity state.snapshot (same entity as roster)', async () => {
+    const fake = new FakeBusClient();
+    fake.stubRpc('crow.get_snapshot', crowReply());
+    fake.stubRpc('usage.get_snapshot', {
+      invalidation_key: 'iv-u',
+      gauges: [{ harness: 'claude', window_key: 'h1', pct: 50, t_until_reset_minutes: 10 }],
+    });
+    const { store } = createAppStore(fake);
+    expect(store.getState().usage.status).toBe('idle');
+
+    fake.emit(snapshot('agent'));
+    await flush();
+
+    expect(fake.rpcCalls).toContainEqual({ method: 'usage.get_snapshot', params: {} });
+    expect(store.getState().usage.status).toBe('ready');
+    expect(store.getState().usage.rows).toHaveLength(1);
+    expect(store.getState().usage.rows[0]?.harness).toBe('claude');
+  });
+
+  it('ref-swaps ONLY usage on an agent event — notes, reports, tickets keep identity', async () => {
+    const fake = new FakeBusClient();
+    fake.stubRpc('crow.get_snapshot', crowReply());
+    fake.stubRpc('usage.get_snapshot', { invalidation_key: 'iv-u', gauges: [] });
+    fake.stubRpc('note.get_snapshot', notesReply());
+    fake.stubRpc('report.get_snapshot', reportsReply());
+    fake.stubRpc('ticket.get_snapshot', ticketsReply());
+    const { store } = createAppStore(fake);
+    const notesBefore = store.getState().notes;
+    const reportsBefore = store.getState().reports;
+    const ticketsBefore = store.getState().tickets;
+
+    fake.emit(snapshot('agent'));
+    await flush();
+
+    // notes, reports, tickets are not keyed on 'agent' — they keep identity.
+    expect(store.getState().notes).toBe(notesBefore);
+    expect(store.getState().reports).toBe(reportsBefore);
+    expect(store.getState().tickets).toBe(ticketsBefore);
+    // Both roster and usage ref-swap (both key on 'agent').
+    expect(store.getState().usage.status).toBe('ready');
+  });
+
+  it('routes a rejected usage rpc into usage.error, never thrown past the action', async () => {
+    const fake = new FakeBusClient();
+    fake.stubRpc('crow.get_snapshot', crowReply());
+    fake.stubRpc('usage.get_snapshot', () => {
+      throw new Error('usage down');
+    });
+    const { store } = createAppStore(fake);
+
+    fake.emit(snapshot('agent'));
+    await flush();
+
+    expect(store.getState().usage.status).toBe('error');
+    expect(store.getState().usage.error).toBe('usage down');
+    // The roster should still succeed (each action has its own error isolation).
+    expect(store.getState().roster.status).toBe('ready');
   });
 });
 

@@ -9,6 +9,7 @@ import type { RosterRow, RosterState } from '../../src/store/roster/rosterSlice.
 function row(overrides: Partial<RosterRow> = {}): RosterRow {
   return {
     agentId: 'a-1',
+    role: 'crow',
     ticketId: 'T-1',
     ticketTitle: 'Title',
     harness: 'claude',

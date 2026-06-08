@@ -67,6 +67,13 @@ import {
   TICKETS_INVALIDATING_ENTITY,
   type TicketsState,
 } from './tickets/ticketsSlice.js';
+import { createUsageActions, type UsageActions } from './usage/usageActions.js';
+import {
+  createUsageSlice,
+  initialUsageState,
+  USAGE_INVALIDATING_ENTITY,
+  type UsageState,
+} from './usage/usageSlice.js';
 
 /** Every slice's actions, grouped by domain. Components dispatch through here; the bus is reached
  * only via these (rule 3). One key per slice — copy the `roster` line to add a domain. */
@@ -75,6 +82,7 @@ export interface AppActions {
   notes: NotesActions;
   reports: ReportsActions;
   tickets: TicketsActions;
+  usage: UsageActions;
 }
 
 /**
@@ -87,6 +95,7 @@ export interface AppStore {
   notes: NotesState;
   reports: ReportsState;
   tickets: TicketsState;
+  usage: UsageState;
   actions: AppActions;
 }
 
@@ -122,6 +131,7 @@ export function createAppStore(bus: BusClient): {
     ...createNotesSlice(...a),
     ...createReportsSlice(...a),
     ...createTicketsSlice(...a),
+    ...createUsageSlice(...a),
     // Placeholder; replaced in step 2 now that we have the handle the actions need to `setState`.
     actions: undefined as unknown as AppActions,
   }));
@@ -132,6 +142,7 @@ export function createAppStore(bus: BusClient): {
     notes: createNotesActions(bus, store),
     reports: createReportsActions(bus, store),
     tickets: createTicketsActions(bus, store),
+    usage: createUsageActions(bus, store),
   };
   store.setState({ actions });
 
@@ -141,6 +152,7 @@ export function createAppStore(bus: BusClient): {
     { entity: NOTES_INVALIDATING_ENTITY, refresh: () => void actions.notes.refresh() },
     { entity: REPORTS_INVALIDATING_ENTITY, refresh: () => void actions.reports.refresh() },
     { entity: TICKETS_INVALIDATING_ENTITY, refresh: () => void actions.tickets.refresh() },
+    { entity: USAGE_INVALIDATING_ENTITY, refresh: () => void actions.usage.refresh() },
   ];
 
   // 4. Event-driven invalidation. Subscribe filtered to `state.snapshot`; on each, re-pull exactly
@@ -172,9 +184,11 @@ export function createAppStore(bus: BusClient): {
 
 /** The pre-fetch state of a freshly created store — exported so a test (or a hook's default) can
  * assert the boot value without reconstructing it. Mirrors each slice's `initialXState`. */
-export const initialAppState: Pick<AppStore, 'roster' | 'notes' | 'reports' | 'tickets'> = {
-  roster: initialRosterState,
-  notes: initialNotesState,
-  reports: initialReportsState,
-  tickets: initialTicketsState,
-};
+export const initialAppState: Pick<AppStore, 'roster' | 'notes' | 'reports' | 'tickets' | 'usage'> =
+  {
+    roster: initialRosterState,
+    notes: initialNotesState,
+    reports: initialReportsState,
+    tickets: initialTicketsState,
+    usage: initialUsageState,
+  };
