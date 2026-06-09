@@ -15,6 +15,7 @@ from murder.work.attribution import attribute_edit
 from murder.work.examples import seed_examples
 from murder.work.notes.sync import NoteSync, NotetakerContextSync
 from murder.work.plans.sync import PlanSync
+from murder.work.reports.sync import ReportSync
 from murder.work.tickets.sync import TicketSync
 
 if TYPE_CHECKING:
@@ -43,22 +44,24 @@ SYNC_TASK_KEYS = (
     "note_sync",
     "notetaker_context_sync",
     "ticket_sync",
+    "report_sync",
 )
 
 
 @dataclass
 class FilesystemSyncSupervisor:
-    """Owns plan/note/ticket sync instances and their background tasks."""
+    """Owns plan/note/ticket/report sync instances and their background tasks."""
 
     plan_sync: PlanSync
     note_sync: NoteSync
     notetaker_context_sync: NotetakerContextSync
     ticket_sync: TicketSync
+    report_sync: ReportSync
 
     repo_root: Path | None = None
     # Bus handle + run_id for the async emit seam (F5.1).  Set at construct time
-    # when the broker exists (Runtime.start).  Kept here so Agent 2's F5.3/F5.4
-    # wiring can call ``self._emit(entity, key)`` without any further indirection.
+    # when the broker exists (Runtime.start).  Kept here so the _emit callback
+    # is the one ``on_change`` passed to each SimpleDocSync (notes, reports).
     _bus: "Bus | None" = field(default=None, repr=False)
     _run_id: str | None = field(default=None, repr=False)
 
@@ -68,7 +71,7 @@ class FilesystemSyncSupervisor:
         Publishes a key-only StateSnapshotEvent from the filesystem sync path.
         No-ops if bus or run_id are not available (mirrors Runtime.emit_snapshot
         safety guard).  This is the callback passed as ``on_change`` to each
-        MarkdownSyncLoop that has been wired with F5.1 call sites by Agent 2.
+        MarkdownSyncLoop that uses the F5.1 notify_changed seam.
         """
         if self._bus is None or self._run_id is None:
             return
@@ -91,19 +94,23 @@ class FilesystemSyncSupervisor:
         *,
         on_ticket_change: Callable[[str], None] | None = None,
         on_plan_change: Callable[[str], None] | None = None,
-        on_note_change: Callable[[str], None] | None = None,
         bus: "Bus | None" = None,
         run_id: str | None = None,
-    ) -> FilesystemSyncSupervisor:
-        sup = cls(
-            plan_sync=PlanSync(repo_root, db, on_plan_change=on_plan_change),
-            note_sync=NoteSync(repo_root, db, on_note_change=on_note_change),
-            notetaker_context_sync=NotetakerContextSync(repo_root, db),
-            ticket_sync=TicketSync(repo_root, db, on_ticket_change=on_ticket_change),
-            repo_root=repo_root,
-            _bus=bus,
-            _run_id=run_id,
-        )
+    ) -> "FilesystemSyncSupervisor":
+        # Build the supervisor first so _emit is available as the on_change
+        # callback for notes and reports.  We need the instance before we can
+        # reference _emit, so we build it in two steps.
+        sup = cls.__new__(cls)
+        # Initialise dataclass fields manually (avoid __init__ arg ordering issues).
+        sup.repo_root = repo_root
+        sup._bus = bus
+        sup._run_id = run_id
+
+        sup.plan_sync = PlanSync(repo_root, db, on_plan_change=on_plan_change)
+        sup.note_sync = NoteSync(repo_root, db, on_change=sup._emit)
+        sup.notetaker_context_sync = NotetakerContextSync(repo_root, db)
+        sup.ticket_sync = TicketSync(repo_root, db, on_ticket_change=on_ticket_change)
+        sup.report_sync = ReportSync(repo_root, db, on_change=sup._emit)
         return sup
 
     def set_parse_error_notifier(self, send_message: MessageSender) -> None:
@@ -139,6 +146,7 @@ class FilesystemSyncSupervisor:
         await self.note_sync.reconcile_all()
         await self.notetaker_context_sync.reconcile_all()
         await self.ticket_sync.reconcile_all()
+        await self.report_sync.reconcile_all()
 
     def spawn_tasks(self) -> dict[str, asyncio.Task[None]]:
         return {
@@ -146,6 +154,7 @@ class FilesystemSyncSupervisor:
             "note_sync": asyncio.create_task(self.note_sync.run()),
             "notetaker_context_sync": asyncio.create_task(self.notetaker_context_sync.run()),
             "ticket_sync": asyncio.create_task(self.ticket_sync.run()),
+            "report_sync": asyncio.create_task(self.report_sync.run()),
         }
 
     async def shutdown(self, tasks: dict[str, asyncio.Task[None]]) -> None:
