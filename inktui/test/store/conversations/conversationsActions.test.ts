@@ -32,7 +32,16 @@ function setup() {
   return { fake, store, dispose };
 }
 
-/** Build a minimal `ConversationBlockEvent` for a given agent. */
+/**
+ * Build a minimal `ConversationBlockEvent` for a given agent.
+ *
+ * NOTE: this uses a SIMPLIFIED flat `{type,id,text}` block to keep the store-mechanics tests
+ * (push/replace/ref-swap) readable. `parseBlock` accepts it via its defensive fallback (no
+ * `payload` → treat the row as the segment). The REAL storage-row wire shape (nested `payload`,
+ * numeric `id`, `kind` discriminant) and its rendering are pinned by the cross-language golden
+ * contract test — see `conversationBlockContract.test.ts`. These two files are complementary:
+ * this one tests slice mechanics, that one tests the Python⇆Ink shape contract.
+ */
 function makeBlockEvent(
   agentId: string,
   blockType: string,

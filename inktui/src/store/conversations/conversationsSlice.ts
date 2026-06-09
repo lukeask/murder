@@ -24,32 +24,59 @@ import type { AppStore } from '../store.js';
 
 /**
  * One conversation block as it arrives over the wire (`ConversationBlockEvent.block`).
- * The wire type is `Record<string,unknown>` (opaque above the transport seam); we layer a minimal
- * typed DTO above it here for selector use. `type` is the block discriminant; `id` is the
- * block's own identity (used by `block-updated` to find and replace the trailing block).
  *
- * Only fields the selector/view uses are typed; others flow through as unknown and are ignored.
- * This is intentional: the block schema is service-side; we don't want to couple tightly.
+ * IMPORTANT — the real wire shape (Python `block_to_wire`, see
+ * `murder/state/persistence/conversation.py`) is the conversation_blocks ROW, not the segment:
+ *   `{ id: int, conversation_id, ordinal, kind, payload, sealed, service_received_at }`
+ * The original parsed segment dict (`{type:'user'|'assistant'|'tool_call'|…, text, title, …}`)
+ * lives *nested* under `payload`. `kind` is the storage discriminant (e.g. `assistant_intermediate`
+ * vs `assistant_final`); the segment's own `payload.type` is the display discriminant the
+ * selectors switch on. `id` is a NUMERIC row id.
+ *
+ * This DTO normalises that wire row into a selector-friendly shape:
+ *  - `type` is `payload.type` (the segment discriminant the selectors render on).
+ *  - `id` is `String(wire.id)` — the row id, stringified so `block-updated` replace-by-id matches.
+ *  - `raw` is the `payload` (the segment dict) — so selectors read content fields directly off it.
+ *
+ * Anchored by the cross-language golden contract test
+ * (`inktui/test/store/conversations/conversationBlockContract.test.ts` +
+ * `tests/unit/test_conversation_block_golden.py`): if either side's keys/types drift, a test fails.
  */
 export interface ConversationBlock {
-  /** Wire block discriminant (e.g. 'user', 'assistant', 'tool_call', 'plan_update', …). */
+  /** Segment discriminant (`payload.type`: 'user', 'assistant', 'tool_call', 'plan_update', …). */
   readonly type: string;
-  /** Block's own id — used by `block-updated` to replace a trailing block in place. */
+  /** Row id (stringified) — used by `block-updated` to replace a trailing block in place. */
   readonly id?: string | null;
-  /** Raw wire record for fields the selector reads but the DTO doesn't name. */
+  /** The segment dict (`payload`) — selectors read content fields (text/title/options/…) off it. */
   readonly raw: Record<string, unknown>;
 }
 
-/** Parse a wire `Record<string,unknown>` block into our typed DTO. Pure. */
+/**
+ * Parse a wire `ConversationBlockEvent.block` row into our typed DTO. Pure.
+ *
+ * Unwraps the storage row: reads the numeric `id`, and pulls the segment dict out of `payload`.
+ * The segment's `type` (not the row's `kind`) is the selector discriminant. Defensive: if `payload`
+ * is absent (a future flat shape or a malformed event), falls back to treating the row itself as the
+ * segment so nothing crashes — but the golden contract test pins the real nested shape.
+ */
 export function parseBlock(raw: Record<string, unknown>): ConversationBlock {
   // biome-ignore lint/complexity/useLiteralKeys: noPropertyAccessFromIndexSignature (tsconfig strict) requires bracket notation on index-signature types; these are runtime field reads on an opaque wire record.
-  const typeVal = raw['type'];
-  // biome-ignore lint/complexity/useLiteralKeys: same — opaque wire record requires bracket access
   const idVal = raw['id'];
+  // biome-ignore lint/complexity/useLiteralKeys: same — opaque wire record requires bracket access
+  const payloadVal = raw['payload'];
+  const payload =
+    payloadVal !== null && typeof payloadVal === 'object' && !Array.isArray(payloadVal)
+      ? (payloadVal as Record<string, unknown>)
+      : raw;
+  // biome-ignore lint/complexity/useLiteralKeys: same — opaque segment record requires bracket access
+  const typeVal = payload['type'];
+  // `id` is a numeric row id on the wire; stringify it so block-updated replace-by-id matches.
+  // (A string id — e.g. a hand-built test/legacy event — is taken as-is.)
+  const id = typeof idVal === 'number' ? String(idVal) : typeof idVal === 'string' ? idVal : null;
   return {
     type: typeof typeVal === 'string' ? typeVal : 'unknown',
-    id: typeof idVal === 'string' ? idVal : null,
-    raw,
+    id,
+    raw: payload,
   };
 }
 
