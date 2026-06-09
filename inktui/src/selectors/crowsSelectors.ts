@@ -157,11 +157,18 @@ function rowToGroup(row: RosterRow): CrowGroup | null {
 
 function toRowView(row: RosterRow, nowMs: number): CrowRowView {
   // Parse the ISO-8601 last_seen into milliseconds; null if absent or unparseable.
+  //
+  // Python `read_model.py` uses `datetime.utcnow()` — naive UTC datetimes — so `.isoformat()`
+  // produces a suffix-less string (e.g. "2026-06-09T04:56:09.123456"). `Date.parse` treats a
+  // no-offset ISO string as LOCAL time (ES2015+), which would make nowMs − lastSeenMs wrong by
+  // the local TZ offset. Normalise: append "Z" when no tz-offset marker (+/-/Z) is present so
+  // that `Date.parse` always interprets the value as UTC, matching Python naive-UTC convention.
   const rawLastSeen = row.lastSeen ?? null;
   const lastSeenMs: number | null =
     rawLastSeen !== null
       ? (() => {
-          const ms = Date.parse(rawLastSeen);
+          const normalised = /[+Z]/.test(rawLastSeen) ? rawLastSeen : `${rawLastSeen}Z`;
+          const ms = Date.parse(normalised);
           return Number.isNaN(ms) ? null : ms;
         })()
       : null;

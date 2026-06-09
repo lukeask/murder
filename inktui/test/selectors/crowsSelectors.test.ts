@@ -282,4 +282,19 @@ describe('selectCrowsView — rich-field health plumbing (A#6)', () => {
     );
     expect(healthOf(view, 'esc-stuck')).toBe('red');
   });
+
+  it('YELLOW for a naive-UTC (suffix-less) last_seen string (Python datetime.utcnow() wire format)', () => {
+    // Python read_model.py uses datetime.utcnow() — naive datetimes. isoformat() produces no
+    // offset suffix (e.g. "2026-06-09T04:56:09.123456"). Without the "Z" normalisation the
+    // Date.parse would interpret it as local time and stuck detection would be off by TZ offset.
+    const staleNaive = new Date(NOW - 90_000).toISOString().replace('Z', ''); // strip Z → naive
+    const view = selectCrowsView(
+      state([
+        row({ agentId: 'naive-stuck', role: 'crow', ticketId: null, status: 'running',
+              lastSeen: staleNaive, openEscalations: 0, maxSeverity: 0 }),
+      ]),
+      NOW,
+    );
+    expect(healthOf(view, 'naive-stuck')).toBe('yellow');
+  });
 });
