@@ -61,7 +61,6 @@
 import type { Buffer } from 'node:buffer';
 import { randomUUID } from 'node:crypto';
 import { connect as netConnect, type Socket } from 'node:net';
-import { join } from 'node:path';
 
 import type {
   BusClient,
@@ -71,6 +70,7 @@ import type {
   RpcResult,
   Unsubscribe,
 } from './BusClient.js';
+import { matchesFilter } from './matchesFilter.js';
 import {
   type BusEvent,
   type ClientKind,
@@ -79,11 +79,10 @@ import {
   type HelloMessage,
   PROTOCOL_VERSION,
   type RpcMessage,
-  SOCKET_BASENAME,
-  SOCKET_RUNTIME_SUBDIR,
   type SubMessage,
   type WireMessage,
 } from './protocol.js';
+import { unwrapReadReply } from './readEnvelope.js';
 
 /** A minimal logger surface so the client can report reconnects/transport errors without coupling
  * to any logging library. Injected (rule 4); a test can pass a no-op, production can pass a real
@@ -142,7 +141,8 @@ const REAL_CLOCK: Clock = {
 /** Constructor dependencies — all injected so the client stays testable (rule 4). Everything but
  * `socketPath` has a production-sane default. */
 export interface UdsBusClientOptions {
-  /** Absolute path to the bus socket. Use {@link defaultSocketPath} to derive it from a runtime dir. */
+  /** Absolute path to the bus socket. In live mode the app reads it from the bus-socket env var the
+   * supervisor exports (the path carries a per-session segment), so the caller wires it at startup. */
   socketPath: string;
   /** Identifies this client to the supervisor; defaults to `'tui'`. */
   clientKind?: ClientKind;
@@ -301,24 +301,10 @@ export class UdsBusClient implements BusClient {
       };
       this.writeMessage(socket, message);
     });
-    // Read-RPC envelope unwrap. The service wraps every `state.*` read handler's DTO as
-    // `{ ok: true, value: <dto> }` (the `_value()` helper in `murder/app/service/host.py`), a
-    // shape the still-live Textual client depends on (`_request_value`/`_request_optional` read
-    // `reply["value"]`). The Ink store reads read-RPC fields at TOP LEVEL (`reply.sessions`,
-    // `reply.body`, projections in `listSlice.ts`), matching the unwrapped DTO that `FakeBusClient`
-    // returns. So unwrap the envelope HERE, at the single real-transport seam, gated on the
-    // `state.` prefix: every wrapped handler is `state.*`, and writes/commands (`command.*`,
-    // `ticket.*`, `agent.*`, `image.*`) already return `{ ok, ...fields }` top-level and must NOT
-    // be unwrapped. Doing it here (not in the store layer) keeps the shared store code and all
-    // fake-backed tests untouched. See `.murder/notes/ink-service-integration-gaps.md` §2.
-    if (method.startsWith('state.') && isReadEnvelope(result)) {
-      // Return `.value` verbatim — including `null`, which `_state_ticket_detail` (and the
-      // `*_display` reads) emit for not-found via `_value(None)`. That `null` is the not-found signal
-      // the store's detail/doc-view paths key on, and it matches the unwrapped DTO `FakeBusClient`
-      // returns; coercing it (e.g. `?? {}`) would resurrect the fake-vs-live divergence this fixes.
-      return result.value as RpcResult<M>;
-    }
-    return result as RpcResult<M>;
+    // Read-RPC envelope unwrap at the single real-transport seam. The `state.`-gating and
+    // null-not-found semantics live in {@link unwrapReadReply} (shared with {@link FakeBusClient} so
+    // the two impls cannot drift); see its docstring for the full contract.
+    return unwrapReadReply(method, result) as RpcResult<M>;
   }
 
   /** {@inheritDoc BusClient.subscribe} */
@@ -767,53 +753,10 @@ function isWireMessage(value: unknown): value is WireMessage {
   );
 }
 
-/**
- * Server-side {@link EventFilter} semantics, mirrored client-side for fanout on the multiplexed
- * connection: fields compose with AND; an absent filter field matches any. Identical to
- * `FakeBusClient`'s `matchesFilter` — kept private here to avoid the bus layer's only two impls
- * importing each other.
- */
-function matchesFilter(event: BusEvent, filter: EventFilter | undefined): boolean {
-  if (filter === undefined) {
-    return true;
-  }
-  const record = event as unknown as Record<string, unknown>;
-  return (
-    fieldMatches(filter.role, record['role']) &&
-    fieldMatches(filter.ticket_id, record['ticket_id']) &&
-    fieldMatches(filter.type, event.type) &&
-    fieldMatches(filter.entity, record['entity']) &&
-    fieldMatches(filter.target_worker, record['target_worker']) &&
-    fieldMatches(filter.kind, record['kind'])
-  );
-}
-
-function fieldMatches<T>(expected: T | undefined, actual: unknown): boolean {
-  return expected === undefined || expected === actual;
-}
-
 function stringifyError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
-}
-
-/**
- * Recognize the service's read-RPC envelope `{ ok: true, value: <dto> }` so {@link UdsBusClient.rpc}
- * can unwrap it to the bare DTO the store reads top-level. A reply that lacks a `value` key (a
- * write/command result, which is `{ ok, ...fields }`) is left untouched. See the unwrap call site.
- */
-function isReadEnvelope(reply: Record<string, unknown>): reply is { value: unknown } {
-  return 'value' in reply;
 }
 
 /** Compile-time exhaustiveness guard for the {@link WireMessage} switch: an un-handled `op` makes
  * this call a type error. */
 function assertNever(_value: never): void {}
-
-/**
- * Resolve the bus socket path from a runtime directory, mirroring the Python layout: the socket is
- * `<runtimeDir>/<SOCKET_RUNTIME_SUBDIR>/<SOCKET_BASENAME>`. Pass the same runtime dir the service
- * uses (per-repo); the caller wires this at app startup.
- */
-export function defaultSocketPath(runtimeDir: string): string {
-  return join(runtimeDir, SOCKET_RUNTIME_SUBDIR, SOCKET_BASENAME);
-}
