@@ -32,6 +32,7 @@ import type { KeymapRegistryApi, KeymapRegistryState } from '../input/keymapRegi
 import type { ModeState, ModeStoreApi } from '../input/modeStore.js';
 import type { PanelState, PanelStoreApi } from '../input/panelStore.js';
 import type { PanelId } from '../input/panels.js';
+import { useTerminalSize } from './useTerminalSize.js';
 
 /** The input stores, carried as one context value so the provider wires them together once. */
 export interface InputStores {
@@ -168,9 +169,23 @@ function measureRect(node: DOMElement): Rect {
  * Bridge an Ink box's measured absolute rect into the focus store so directional nav can target it.
  * Pass the focusable's id and the ref you put on its `<Box>`; on every layout this measures the box
  * and records the rect (the store dedupes unchanged rects). C5's panels call this once per panel.
+ *
+ * ## Re-measure under reflow (Phase 2)
+ * A terminal resize / orientation flip changes every focusable's Yoga rect, so `ctrl+h/j/k/l` must
+ * score over the NEW geometry. The effect below has no dependency array, so it re-measures on every
+ * render — but that only helps if the component actually re-renders on a resize. The panels are
+ * `React.memo`'d with no props (`<PlansPanel/>`), and a bare resize changes none of the slices they
+ * subscribe to (focus intent, visible set, their data) — so without this hook they would NOT
+ * re-render, the depless effect would NOT run, and the stored rect would go stale (the bug the spec
+ * warns about). We subscribe to {@link useTerminalSize} HERE so a resize re-renders every focusable
+ * that calls this hook → its measure effect re-runs → its rect refreshes. One subscription covers all
+ * panels + chat; the store dedupes unchanged rects, so a no-op resize causes no re-render churn.
  */
 export function useMeasureFocus(id: FocusId, ref: React.RefObject<DOMElement | null>): void {
   const measure = useFocusStore((s) => s.measure);
+  // Subscribe to the live terminal size: a resize re-renders this focusable (it's otherwise a
+  // no-prop memo that wouldn't re-render), which re-runs the depless measure effect → fresh rect.
+  useTerminalSize();
   useEffect(() => {
     if (ref.current !== null) {
       measure(id, measureRect(ref.current));

@@ -19,6 +19,12 @@
  * *renders* the buffer (read via `useChatInputStore`) with a {@link ./TextInput.js TextInput} — it
  * adds NO `useInput` (rule 5: still exactly one in the tree). Global ctrl-chords still fire while
  * typing because layer 1 preempts layer 2 in the dispatcher.
+ *
+ * ## Inline-title border (Phase 2 spec nit)
+ * The input box wears the same `╭─ › ─────────╮` inline-title border as {@link ./Pane.tsx Pane}, via
+ * the shared {@link ./paneBorder.js PaneBorderTop} row + a content box with `borderTop={false}`. The
+ * title segment is the `›` prompt (green focused / white blurred, matching {@link ./Pane.tsx
+ * paneColors}); the send target (`→ label`) + the text field live inside the bordered content row.
  */
 
 import { Box, Text } from 'ink';
@@ -34,6 +40,7 @@ import {
 import { SPAN_CLOSE, SPAN_OPEN } from '../input/chatInputStore.js';
 import { CHAT_FOCUS } from '../input/focusStore.js';
 import { useActiveAgent } from '../selectors/conversationsSelectors.js';
+import { PaneBorderTop } from './paneBorder.js';
 import { TextInput } from './TextInput.js';
 
 /** Matches one marked image span (`U+E000 <id> U+E001`) for render-time substitution. */
@@ -62,13 +69,25 @@ export const ChatInput = memo(function ChatInput(): React.JSX.Element {
   const targetLabel = target === null ? 'no target' : target.label;
   // F9: marked image spans (invisible PUA-wrapped ids) render as derived `[Image N]` labels.
   const display = displayBuffer(text);
+  const borderColor = focused ? 'green' : 'gray';
+  const titleColor = focused ? 'green' : 'white';
   return (
-    <Box ref={ref} borderStyle="round" borderColor={focused ? 'green' : 'gray'} paddingX={1}>
-      <Text bold color={focused ? 'green' : 'gray'} wrap="truncate">
-        {`→ ${targetLabel} `}
-      </Text>
-      <Text dimColor={!focused}>{focused ? '› ' : '  '}</Text>
-      <TextInput value={display} placeholder="type a message…" focused={focused} />
+    // Inline-title border (Pane recipe): the `›` prompt sits on the top border line; the send target
+    // + text field live inside the content box, which supplies the other three sides + padding.
+    <Box ref={ref} flexDirection="column">
+      <PaneBorderTop title="›" borderColor={borderColor} titleColor={titleColor} bold={focused} />
+      <Box
+        flexDirection="row"
+        borderStyle="round"
+        borderTop={false}
+        borderColor={borderColor}
+        paddingX={1}
+      >
+        <Text bold color={focused ? 'green' : 'gray'} wrap="truncate">
+          {`→ ${targetLabel} `}
+        </Text>
+        <TextInput value={display} placeholder="type a message…" focused={focused} />
+      </Box>
     </Box>
   );
 });

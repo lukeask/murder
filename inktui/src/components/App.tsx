@@ -42,8 +42,8 @@ import {
   InputStoresProvider,
   useInputStores,
   useModeStore,
-  usePanelStore,
 } from '../hooks/useInputStores.js';
+import { useOrientation } from '../hooks/useOrientation.js';
 import { useRootInput } from '../hooks/useRootInput.js';
 import { useTerminalSize } from '../hooks/useTerminalSize.js';
 import { expandSpans, spanIds } from '../input/chatInputStore.js';
@@ -69,6 +69,7 @@ import { CrowsPanel } from './CrowsPanel.js';
 import { NotesPanel } from './NotesPanel.js';
 import { Overlay, presentationHidesLayout } from './Overlay.js';
 import { PlansPanel } from './PlansPanel.js';
+import { Rail } from './Rail.js';
 import { ReportsPanel } from './ReportsPanel.js';
 import type { SpawnContext } from './SpawnWizardModal.js';
 import { spawnWizardMode } from './SpawnWizardModal.js';
@@ -119,32 +120,6 @@ function renderPanel(id: PanelId): JSX.Element {
     default:
       return id satisfies never;
   }
-}
-
-/**
- * One region (left or right): renders, in order, each of its panels that is currently visible, or
- * nothing when none are — so the region's box collapses out of the layout when empty (the plan's
- * "left panel visible if any of 1–4 active", "right panel visible if 0 or 9 active"). Pure over the
- * visible set + the region's panel order.
- */
-function PanelRegion({ panels }: { readonly panels: readonly PanelId[] }): JSX.Element | null {
-  const visible = usePanelStore((s) => s.visible);
-  const shown = panels.filter((id) => visible.has(id));
-  if (shown.length === 0) {
-    return null;
-  }
-  return (
-    // `minHeight={0}` + `overflow="hidden"` so a region that is taller than its bounded height clips
-    // instead of growing the frame past the terminal (which breaks Ink's in-place redraw — see
-    // {@link ../hooks/useTerminalSize.js}). Each panel wrapper clips the same way.
-    <Box flexDirection="row" columnGap={1} flexGrow={1} minHeight={0} overflow="hidden">
-      {shown.map((id) => (
-        <Box key={id} flexGrow={1} minHeight={0} overflow="hidden">
-          {renderPanel(id)}
-        </Box>
-      ))}
-    </Box>
-  );
 }
 
 /**
@@ -275,9 +250,24 @@ export function makeChatInputHandler(
 
 /**
  * The shell body — runs inside both providers so it can read the stores. Installs the one root input
- * loop, then lays out the always-visible chrome (top bar, chat input, bottom bar) around the two
- * toggleable panel regions. The middle row holds left + right regions side by side; each collapses
- * when it has no visible panels.
+ * loop, then lays out the always-visible chrome (top bar, chat input, bottom bar) around the
+ * orientation-aware Body.
+ *
+ * ## Orientation-aware Body (Phase 2)
+ * The Body is `[ Rail(left) · Stage · Rail(right) ]`, laid out along an axis chosen by the single
+ * {@link useOrientation} call here (one source of truth, threaded to both Rails so they never
+ * diverge mid-tree — see the hook's handoff note):
+ *  - landscape → Body is a `row`: the rails sit on the left/right of a center Stage (each Rail then
+ *    stacks its own panels in a column);
+ *  - portrait  → Body is a `column`: the rails stack above/below the Stage (each Rail lays its own
+ *    panels out in a row).
+ * Each Rail collapses to nothing when it has no visible panels, so the Stage grows to fill whatever
+ * the rails leave (full width when both rails are off).
+ *
+ * ## Stage slot (Phase 4 handoff)
+ * The center is an empty `flexGrow` placeholder for now. Phase 4 mounts the Stage there (chat-history
+ * panes + doc-view panes); see the "Phase 4: Stage" marker below. Until then it's an invisible
+ * spacer that lets the rails take their natural share and keeps the layout honest.
  *
  * C13: wires the `spawn` deferred handler so `ctrl+s` opens the spawn wizard. The handler reads the
  * app store at invocation time (not during render) so it always sees current state.
@@ -294,6 +284,8 @@ function Shell({ project }: { readonly project?: string | undefined }): JSX.Elem
   const loadFavorites = useAppStore((s) => s.actions.favorites.load);
   // Live terminal height — bounds the root box so the frame always fits one screen (see the return).
   const { rows } = useTerminalSize();
+  // The ONE orientation read (rule: one source of truth) — threaded to both Rails and the Body axis.
+  const orientation = useOrientation();
 
   // F9: the image-draft store owns the `image.upload` bus call + the FIFO upload queue (it writes a
   // file, doesn't mutate a conversation — so rule 3's "send lives in conversations" doesn't apply).
@@ -354,16 +346,34 @@ function Shell({ project }: { readonly project?: string | undefined }): JSX.Elem
       <Box flexShrink={0} flexDirection="column">
         <TopBar project={project} />
       </Box>
+      {/* Orientation-aware Body: landscape lays the rails + Stage out in a row (side-by-side),
+          portrait stacks them in a column. `flexBasis={0}` so the Body's tall content can't push the
+          chrome past `rows` (see the comment above); `overflow="hidden"` is the clip. */}
       <Box
-        flexDirection="row"
-        columnGap={1}
+        flexDirection={orientation === 'landscape' ? 'row' : 'column'}
+        columnGap={orientation === 'landscape' ? 1 : 0}
+        rowGap={orientation === 'portrait' ? 1 : 0}
         flexGrow={1}
         flexBasis={0}
         minHeight={0}
         overflow="hidden"
       >
-        <PanelRegion panels={LEFT_PANELS} />
-        <PanelRegion panels={RIGHT_PANELS} />
+        <Rail
+          side="left"
+          orientation={orientation}
+          panels={LEFT_PANELS}
+          renderPanel={renderPanel}
+        />
+        {/* Phase 4: Stage center region mounts here (chat-history panes + doc-view panes). For now a
+            minimal empty placeholder that grows to fill whatever the rails leave (full width/height
+            when both rails are off), with the standard clip discipline. */}
+        <Box flexGrow={1} minHeight={0} overflow="hidden" />
+        <Rail
+          side="right"
+          orientation={orientation}
+          panels={RIGHT_PANELS}
+          renderPanel={renderPanel}
+        />
       </Box>
       <Box flexShrink={0} flexDirection="column">
         <ChatInput />

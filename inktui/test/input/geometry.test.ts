@@ -77,4 +77,34 @@ describe('directionalFocusTarget', () => {
     const cands = [at('center', center), at('offset', offset), at('overlapping', overlapping)];
     expect(directionalFocusTarget('right', 'center', cands)).toBe('overlapping');
   });
+
+  // Phase 2: prove hjkl follows the on-screen geometry in BOTH orientations. The kernel is purely
+  // rect-based, so a landscape arrangement (panes side-by-side) and a portrait one (panes stacked)
+  // differ only in the hand-fed rects — the same kernel picks the right neighbour for each, which is
+  // exactly what makes directional focus adapt for free when the layout reflows on a terminal resize.
+  describe('orientation reflow (rect-based, both layouts)', () => {
+    it('landscape: panes side-by-side → ctrl+l moves right (and ctrl+h back)', () => {
+      // A landscape Body lays the rails out in a row: left Rail | (Stage) | right Rail. Two panes sit
+      // side-by-side at the same y, so the right pane is the `right` neighbour of the left pane.
+      const leftPane: Rect = { x: 0, y: 0, width: 30, height: 20 };
+      const rightPane: Rect = { x: 30, y: 0, width: 30, height: 20 };
+      const cands = [at('left', leftPane), at('right', rightPane)];
+      expect(directionalFocusTarget('right', 'left', cands)).toBe('right');
+      expect(directionalFocusTarget('left', 'right', cands)).toBe('left');
+      // No neighbour up/down in a single side-by-side row.
+      expect(directionalFocusTarget('down', 'left', cands)).toBeNull();
+    });
+
+    it('portrait: panes stacked → ctrl+j moves down (and ctrl+k back)', () => {
+      // A portrait Body stacks the rails in a column: top Rail / (Stage) / bottom Rail. Two panes are
+      // stacked at the same x, so the lower pane is the `down` neighbour of the upper pane.
+      const topPane: Rect = { x: 0, y: 0, width: 60, height: 10 };
+      const bottomPane: Rect = { x: 0, y: 10, width: 60, height: 10 };
+      const cands = [at('top', topPane), at('bottom', bottomPane)];
+      expect(directionalFocusTarget('down', 'top', cands)).toBe('bottom');
+      expect(directionalFocusTarget('up', 'bottom', cands)).toBe('top');
+      // No neighbour left/right in a single stacked column.
+      expect(directionalFocusTarget('right', 'top', cands)).toBeNull();
+    });
+  });
 });

@@ -57,8 +57,9 @@
  *    if it does, extract the title-row JSX into a small shared helper rather than re-deriving it.
  */
 
-import { Box, type DOMElement, Text } from 'ink';
+import { Box, type DOMElement } from 'ink';
 import { forwardRef, memo } from 'react';
+import { PaneBorderTop } from './paneBorder.js';
 
 /** Focus-driven colors for the border/corners/fill (`border`) and the title segment (`title`). */
 export interface PaneColors {
@@ -101,31 +102,15 @@ export const Pane = memo(
     const { border: borderColor, title: titleColor } = paneColors(focused);
     return (
       <Box ref={ref} flexDirection="column" flexGrow={flexGrow} minHeight={0} overflow="hidden">
-        {/* Top border line with the inline title. `height={1}` keeps the `─` fill on a single line
-            (otherwise `wrap="hard"` would wrap the 256-char run vertically). Fixed segments never
-            shrink; the fill (flexGrow + overflow:hidden) absorbs the slack and clips cleanly. */}
-        <Box flexDirection="row" flexShrink={0} width="100%" height={1}>
-          <Box flexShrink={0}>
-            <Text color={borderColor}>{'╭─ '}</Text>
-          </Box>
-          <Box flexShrink={0}>
-            <Text color={titleColor} bold={focused} wrap="truncate-end">
-              {title}
-            </Text>
-            {titleExtra}
-          </Box>
-          <Box flexShrink={0}>
-            <Text color={borderColor}> </Text>
-          </Box>
-          <Box flexGrow={1} flexShrink={1} overflow="hidden">
-            <Text color={borderColor} wrap="hard">
-              {'─'.repeat(256)}
-            </Text>
-          </Box>
-          <Box flexShrink={0}>
-            <Text color={borderColor}>╮</Text>
-          </Box>
-        </Box>
+        {/* Top border line with the inline title — the shared {@link ./paneBorder.js} recipe (also
+            used by ChatInput). Fixed segments never shrink; the `─` fill absorbs the slack + clips. */}
+        <PaneBorderTop
+          title={title}
+          borderColor={borderColor}
+          titleColor={titleColor}
+          bold={focused}
+          titleExtra={titleExtra}
+        />
         {/* Content box supplies the other three sides + padding + height clamp. */}
         <Box
           flexDirection="column"
