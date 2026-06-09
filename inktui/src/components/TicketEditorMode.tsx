@@ -404,6 +404,7 @@ function TicketEditorSurface({ ui }: { readonly ui: EditorUiState }): JSX.Elemen
   const error = useAppStore((s) => s.ticketDetail.error);
   const scheduleInput = useAppStore((s) => s.ticketDetail.scheduleInput);
   const scheduleValid = useAppStore((s) => s.ticketDetail.scheduleValid);
+  const scheduleAt = useAppStore((s) => s.ticketDetail.frontmatter?.scheduleAt ?? null);
 
   const lines = editedBody !== null ? toLines(editedBody) : [];
   const cursor = lines.length === 0 ? 0 : Math.min(ui.cursorLine, lines.length - 1);
@@ -482,7 +483,11 @@ function TicketEditorSurface({ ui }: { readonly ui: EditorUiState }): JSX.Elemen
 
       {/* Schedule input (separate from body — `ticket.schedule` RPC) */}
       <Box flexDirection="row" columnGap={1} marginTop={1}>
-        <Text dimColor>{'schedule:'}</Text>
+        <Text dimColor>{'scheduled:'}</Text>
+        <Text color="cyan">{scheduleAt ?? '(none)'}</Text>
+      </Box>
+      <Box flexDirection="row" columnGap={1}>
+        <Text dimColor>{'reschedule:'}</Text>
         {ui.scheduleFocused ? (
           <Text color="cyan" inverse>
             {scheduleInput !== '' ? scheduleInput : ''}
@@ -515,6 +520,7 @@ function EditorHeader({ frontmatter }: { readonly frontmatter: TicketFrontmatter
   return (
     <>
       <Text bold>{frontmatter.title}</Text>
+      <Text color="cyan">{`status:${frontmatter.status}`}</Text>
       {frontmatter.harness !== null && <Text dimColor>{`harness:${frontmatter.harness}`}</Text>}
       {frontmatter.model !== null && <Text dimColor>{`model:${frontmatter.model}`}</Text>}
       {frontmatter.deps !== '' && <Text dimColor>{`deps:${frontmatter.deps}`}</Text>}

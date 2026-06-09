@@ -63,10 +63,12 @@ const SNAPSHOT_REPLY: ScheduleSnapshotReply = {
 const DETAIL_REPLY: TicketDetailReply = {
   id: 'T-1',
   title: 'Alpha ticket',
-  deps: '',
+  status: 'in_progress',
+  deps: [],
   harness: 'claude',
   model: 'anthropic/claude-opus',
   worktree: null,
+  schedule_at: null,
   body: TICKET_BODY,
 };
 

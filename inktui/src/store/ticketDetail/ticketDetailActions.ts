@@ -8,13 +8,17 @@
  *     updates `schedule_at`. The raw string (e.g. `"1d4h3m"`) is sent as-is; the backend is
  *     authoritative. Client-side regex validation (`DURATION_RE`) provides inline UX only.
  *
- * The `state.ticket_detail` response carries:
+ * The `state.ticket_detail` response (Python `TicketDetailSnapshot`, unwrapped from `{ok, value}`)
+ * carries:
  *  - `body: string` — the full markdown body (includes `# Checklist` section with `[ ]`/`[x]`
  *    lines). This is the editable document; the editor toggles checklist items as normal body edits.
  *  - Frontmatter fields for display-only context in the editor header (`title`, `deps`, `harness`,
  *    `model`, `worktree`). These are NOT editable here — the editor shows them read-only.
- *  - Runtime state (`status`, `schedule_at`) is DB-only and belongs to the tickets list row DTO,
- *    never in the detail doc (bus contract invariant).
+ *  - Runtime state `status` (ticket lifecycle) and `schedule_at` (current scheduled time), now
+ *    delivered alongside the doc and shown read-only in the header / schedule row.
+ *  - `checklist` (structured `{text, done}[]`) — carried for contract fidelity, NOT rendered; the
+ *    body is the single checklist source (C8 line 167).
+ *  - `plan_md`/`working_notes_md` — Textual back-compat only; Ink ignores them.
  *
  * Duration grammar (mirrors `murder/work/duration.py`):
  *  Accepted: `1d4h3m`, `1h1m`, `34m`, `1h`, `2d`. Units d/h/m in order, each at most once.
@@ -75,23 +79,51 @@ declare module '../../bus/BusClient.js' {
 // ── Wire DTO ────────────────────────────────────────────────────────────────────────────────────
 
 /**
- * The `state.ticket_detail` reply. Frontmatter fields for display-only context; `body` is the
- * editable markdown string. Runtime state (`status`, `schedule_at`) is NOT included — it lives
- * in the tickets list row DTO only (bus contract invariant).
- *
- * Mirrors `TicketDetailSnapshot` from `murder/app/service/client_api.py` but shaped for the
- * Ink editor's needs: one `body` string (not plan_md/working_notes_md/checklist[] — those are
- * the service's internal composition that the new service B13 surface reconciles into one body).
+ * One structured checklist item from the detail reply (`{text, done}`). Mirrors the Python
+ * `ChecklistItem` dataclass (`murder/app/service/client_api.py`). NOTE: the editor does NOT render
+ * from this — per newui-inktui C8 (line 167) the checklist **rides inside `body`** under the
+ * `# Checklist` heading as `[ ]`/`[x]` lines, and the editor toggles those body lines directly
+ * (`toggleChecklist` in `TicketEditorMode.tsx`). This field is carried for contract fidelity with
+ * the wire DTO (and for any non-editing consumer that wants the parsed form), not consumed for
+ * rendering — picking ONE source of truth (the body) avoids a divergent second checklist view.
+ */
+export interface ChecklistItem {
+  text: string;
+  done: boolean;
+}
+
+/**
+ * The `state.ticket_detail` reply — the wire shape of the Python `TicketDetailSnapshot`
+ * (`murder/app/service/client_api.py`), unwrapped from the `{ok, value}` read envelope by the
+ * shared bus util before it reaches here. Field-by-field with the dataclass:
+ *  - `id`, `title`, `body` — strings (`body` is frontmatter-stripped and INCLUDES the `# Checklist`
+ *    `[ ]`/`[x]` section per C8 line 167; it is the editable document).
+ *  - `status` — the ticket lifecycle status (`TicketStatus` enum value, e.g. `"planned"`).
+ *    Display-only in the editor header; distinct from the slice's load `status`.
+ *  - `deps` — `string[]` (pending dependency ids). Joined to a comma string for the header.
+ *  - `harness`/`model`/`worktree` — nullable display-only header fields.
+ *  - `schedule_at` — nullable ISO timestamp the ticket is currently scheduled for; backs the
+ *    schedule row display. NOT the same as the free-form duration the user types (`scheduleInput`).
+ *  - `checklist` — structured `{text, done}[]`; carried for contract fidelity, NOT rendered (body
+ *    is the single source — see {@link ChecklistItem}).
+ * The reply also carries `plan_md`/`working_notes_md`/`as_of`/`invalidation_key` for Textual
+ * back-compat — Ink IGNORES those (not declared here).
  */
 export interface TicketDetailReply {
   id: string;
   title: string;
-  deps: string;
+  status: string;
+  /** Pending dependency ids. Python sends an array; joined to a string for the header. */
+  deps: string[];
   harness?: string | null;
   model?: string | null;
   worktree?: string | null;
-  /** Full markdown body including `# Checklist` section. The editable document. */
+  /** Nullable ISO timestamp the ticket is currently scheduled for (display-only). */
+  schedule_at?: string | null;
+  /** Full markdown body including the `# Checklist` section. The editable document. */
   body: string;
+  /** Structured checklist mirror — carried for contract fidelity, NOT rendered (body is the source). */
+  checklist?: ChecklistItem[];
 }
 
 // ── Duration validation (client-side, display-only — mirrors murder/work/duration.py) ──────────
@@ -166,10 +198,13 @@ export interface TicketDetailActions {
 function toFrontmatter(dto: TicketDetailReply): TicketFrontmatter {
   return {
     title: dto.title,
-    deps: dto.deps,
+    status: dto.status,
+    // Python sends pending dep ids as an array; join to a comma string for the header.
+    deps: (dto.deps ?? []).join(', '),
     harness: dto.harness ?? null,
     model: dto.model ?? null,
     worktree: dto.worktree ?? null,
+    scheduleAt: dto.schedule_at ?? null,
   };
 }
 
