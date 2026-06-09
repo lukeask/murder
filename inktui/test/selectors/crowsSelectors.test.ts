@@ -171,3 +171,31 @@ describe('selectCrowsView — grouping and ordering', () => {
     expect(rows).toEqual(original);
   });
 });
+
+describe('selectCrowsView — crow-health on row views', () => {
+  // The row view carries the ported health classification (status-only today; the escalation/stuck
+  // branches stay dormant until the wire grows the fields — see crowHealthSelectors.ts).
+  function healthOf(s: ReturnType<typeof selectCrowsView>, agentId: string): string | undefined {
+    for (const section of s.sections) {
+      for (const r of section.rows) {
+        if (r.agentId === agentId) return r.health;
+      }
+    }
+    return undefined;
+  }
+
+  it('classifies each row from its status', () => {
+    const view = selectCrowsView(
+      state([
+        row({ agentId: 'run', role: 'crow', ticketId: null, status: 'running' }),
+        row({ agentId: 'fail', role: 'crow', ticketId: null, status: 'failed' }),
+        row({ agentId: 'esc', role: 'crow', ticketId: null, status: 'escalating' }),
+        row({ agentId: 'done', role: 'crow', ticketId: null, status: 'done' }),
+      ]),
+    );
+    expect(healthOf(view, 'run')).toBe('green');
+    expect(healthOf(view, 'fail')).toBe('red');
+    expect(healthOf(view, 'esc')).toBe('red');
+    expect(healthOf(view, 'done')).toBe('neutral');
+  });
+});

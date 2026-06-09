@@ -143,6 +143,8 @@ describe('CrowsPanel — sections and grouping', () => {
     expect(frame).toContain('plan-alpha');
     expect(frame).toContain('rogue-one');
     expect(frame).toContain('ticket-crow');
+    // The crow-health left-edge glyph (F9 port) is painted on each row's first line.
+    expect(frame).toContain('▎');
     dispose();
   });
 
