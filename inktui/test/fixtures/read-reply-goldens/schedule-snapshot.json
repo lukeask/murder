@@ -1,0 +1,51 @@
+{
+  "ok": true,
+  "value": {
+    "scheduler_mode": "auto",
+    "mode_rationale": "capacity available",
+    "active_tickets": [
+      {
+        "id": "T-101",
+        "title": "Wire the detail pane",
+        "status": "in_progress",
+        "last_update_at": "2026-06-09T12:30:00",
+        "last_update_label": "2m ago",
+        "schedule_at": null,
+        "harness": "cc",
+        "model": "opus",
+        "metadata_sync_state": "synced",
+        "metadata_parse_error": null,
+        "metadata_conflict_reason": null,
+        "pending_dep_ids": [
+          "T-100"
+        ]
+      }
+    ],
+    "recent_done_tickets": [],
+    "archived_tickets": [],
+    "scheduler_decisions": [
+      {
+        "harness": "cc",
+        "decision": 1,
+        "rationale": "kick",
+        "kicked_ticket_id": "T-101"
+      }
+    ],
+    "usage_gauges": [
+      {
+        "harness": "cc",
+        "window_key": "5h",
+        "pct": 42.5,
+        "t_until_reset_minutes": 120.0,
+        "t_period_minutes": 300.0
+      }
+    ],
+    "calendar_harnesses": [
+      "cc"
+    ],
+    "running_agents": [],
+    "scheduled_tickets": [],
+    "as_of": "2026-06-09T00:00:00",
+    "invalidation_key": "schedule"
+  }
+}
