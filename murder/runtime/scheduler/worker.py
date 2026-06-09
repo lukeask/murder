@@ -354,7 +354,7 @@ class SchedulerWorker(Worker):
         should_kick = decision.action == "kick"
         ticket_id = decision.ticket_id
 
-        self._upsert_decision_cache(
+        visible_changed = self._upsert_decision_cache(
             ctx,
             harness,
             window_key,
@@ -378,6 +378,7 @@ class SchedulerWorker(Worker):
             threshold,
             decision.rationale,
             ticket_id,
+            emit_queue_row=visible_changed,
         )
 
         if not should_kick or ticket_id is None:
@@ -416,9 +417,30 @@ class SchedulerWorker(Worker):
         threshold: float,
         rationale: str,
         kicked_ticket_id: str | None,
-    ) -> None:
+    ) -> bool:
+        """Upsert the decision cache; return True iff a *rendered* field changed.
+
+        F11 H1: only ``decision`` / ``rationale`` / ``kicked_ticket_id`` are read
+        back into ``state.schedule_snapshot`` (``_load_crow_magic`` / ``_crow_rationale``
+        in ``schedule_snapshot.py``); ``usage`` / ``threshold`` / ``t_until_reset``
+        are continuous, tick-by-tick values that are NOT rendered from this row (the
+        usage gauges read ``harness_usage_snapshots`` instead). So we compare only the
+        rendered columns against the prior row and report whether a visible change
+        occurred — the caller emits the key-only ``queue_row`` invalidation ONLY then,
+        bounding refetches to genuine decision flips rather than every 10s tick.
+        """
         assert ctx.db is not None
         now = datetime.now(timezone.utc).isoformat()
+        prior = ctx.db.execute(
+            "SELECT decision, rationale, kicked_ticket_id"
+            "  FROM scheduler_decision_cache WHERE harness = ? AND window_key = ?",
+            (harness, window_key),
+        ).fetchone()
+        visible_changed = prior is None or (
+            int(prior["decision"]) != int(decision)
+            or str(prior["rationale"] or "") != str(rationale or "")
+            or (prior["kicked_ticket_id"] or None) != (kicked_ticket_id or None)
+        )
         ctx.db.execute(
             """
             INSERT INTO scheduler_decision_cache
@@ -450,6 +472,7 @@ class SchedulerWorker(Worker):
                 now,
             ),
         )
+        return visible_changed
 
     async def _emit_decision(
         self,
@@ -463,6 +486,7 @@ class SchedulerWorker(Worker):
         threshold: float,
         rationale: str,
         kicked_ticket_id: str | None,
+        emit_queue_row: bool = True,
     ) -> None:
         if ctx.bus is None or ctx.run_id is None:
             return
@@ -482,27 +506,27 @@ class SchedulerWorker(Worker):
                 kicked_ticket_id=kicked_ticket_id,
             )
         )
-        # F1 (queue_row chunk): `_upsert_decision_cache` always runs immediately
-        # before this emit, so `scheduler_decision_cache` is the read-model state
-        # that just changed (decisions/threshold/usage shown in the usage gauges
-        # embedded in `state.schedule_snapshot`). Emit the key-only
-        # `state.snapshot{queue_row}` beside the existing typed
-        # `SchedulerDecisionEvent` -- exactly the backbone's "async callers await
-        # bus.publish(StateSnapshotEvent(...)) directly" rule (this is a thread
-        # worker with a live `ctx.bus`; Runtime.emit_snapshot is unavailable here).
-        # Key = `harness:window_key` (the decision-cache primary key); no queue_row
-        # table exists (plan line 322), and Ink refetches the whole usage slice on
-        # any queue_row event regardless. Same ~10s tick cadence as the typed event
-        # already here -> no new bus-storm risk; coalescing deferred (matches the
-        # plan chunk's merge_transcript deferral).
-        await ctx.bus.publish(
-            StateSnapshotEvent(
-                run_id=ctx.run_id,
-                agent_id=self.name,
-                entity=Entity.QUEUE_ROW,
-                key=f"{harness}:{window_key}",
+        # F1 (queue_row chunk) + F11 H1 coalescing: the rich `SchedulerDecisionEvent`
+        # above is an internal detail; the CLIENT-facing invalidation is the key-only
+        # `state.snapshot{queue_row}`, and Ink refetches the whole schedule slice on
+        # ANY queue_row event. The crow_magic tick runs every ~10s per (harness, window)
+        # and recomputes usage/threshold/t_until_reset each time, but `state.schedule_snapshot`
+        # only renders `decision` / `rationale` / `kicked_ticket_id` from this cache row
+        # (the usage gauges read `harness_usage_snapshots` instead). So we emit only when
+        # `_upsert_decision_cache` reports a change to one of those rendered fields
+        # (`emit_queue_row`), bounding refetches to genuine decision flips rather than
+        # every tick. Key = `harness:window_key` (the decision-cache primary key); no
+        # queue_row table exists (plan line 322). This is a thread worker with a live
+        # `ctx.bus`; Runtime.emit_snapshot is unavailable here, so we await directly.
+        if emit_queue_row:
+            await ctx.bus.publish(
+                StateSnapshotEvent(
+                    run_id=ctx.run_id,
+                    agent_id=self.name,
+                    entity=Entity.QUEUE_ROW,
+                    key=f"{harness}:{window_key}",
+                )
             )
-        )
 
     async def on_command(self, command: CommandEvent, ctx: WorkerCtx) -> dict[str, Any]:
         if command.kind == self.SET_MODE:

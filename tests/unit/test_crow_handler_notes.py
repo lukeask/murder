@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -58,6 +58,7 @@ def handler(db, tmp_path: Path) -> CrowHandler:
     runtime.bus = Bus(run_id="test-run", db_conn=db)
     runtime.run_id = "test-run"
     runtime.sync_agent = MagicMock()
+    runtime.publish_snapshot = AsyncMock()
     return CrowHandler(
         agent_id="crow_handler-t001",
         ticket_id="t001",

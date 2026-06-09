@@ -69,6 +69,9 @@ class CrowHandler(Daemon):
         self._terminal_failure = False
         self._last_orchestration_t: float = 0.0
         self._last_orchestration_pane_hash: str | None = None
+        # F11 H1: index of the last heartbeat bucket we emitted `agent` for, so a
+        # plain beat only invalidates the Ink roster on a bucket crossing (not 5Hz).
+        self._last_heartbeat_emit_bucket: int | None = None
 
     async def start(self, brief: str, ctx: dict[str, Any]) -> None:
         from murder.runtime.terminal import tmux
@@ -219,8 +222,9 @@ class CrowHandler(Daemon):
 
     async def _orchestration_tick(self, pane: str) -> None:
         from murder.state.persistence.tickets import get_ticket_status, checklist_progress
-        from murder.state.persistence.agents import heartbeat_agent
+        from murder.state.persistence.agents import heartbeat_agent, heartbeat_bucket
         from murder.bus import HeartbeatEvent, NoteEvent, QuestionEvent, SummaryEvent
+        from murder.bus.protocol import Entity
 
         # Stop if ticket reached a terminal state via any path.
         ticket_status = get_ticket_status(self.runtime.db, self.ticket_id)
@@ -310,6 +314,14 @@ class CrowHandler(Daemon):
                 )
             )
         heartbeat_agent(self.runtime.db, self.id)
+        # F11 H1: the DB write above always lands, but the key-only `agent`
+        # invalidation is coalesced to one emit per HEARTBEAT_EMIT_BUCKET_S so a
+        # steady 5Hz heartbeat does not storm the Ink roster refetch. Status
+        # changes still invalidate immediately via `sync_agent`.
+        bucket = heartbeat_bucket(time.monotonic())
+        if bucket != self._last_heartbeat_emit_bucket:
+            self._last_heartbeat_emit_bucket = bucket
+            await self.runtime.publish_snapshot(Entity.AGENT, self.id)
 
     async def _run_completion(self) -> None:
         from murder.verdict.completion.coordinator import DoneHandleResult

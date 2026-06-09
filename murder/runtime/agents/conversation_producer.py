@@ -42,11 +42,20 @@ class ConversationProducer:
         self._acc = TranscriptAccumulator(harness_kind, system_prompt=system_prompt)
         self._last_pane_hash: str | None = None
 
-    async def poll(self, pane: str) -> None:
-        """Feed a new pane capture; no-op if the pane hasn't changed since last poll."""
+    async def poll(self, pane: str) -> bool:
+        """Feed a new pane capture; no-op if the pane hasn't changed since last poll.
+
+        Returns ``True`` iff this poll produced real block changes (i.e. the pane
+        hash advanced AND the reconcile yielded at least one ConversationBlockChange).
+        The caller (``project_once``) uses this to gate the key-only ``plan`` re-sort
+        invalidation (F11 H1): ``project_parsed_doc_with_changes`` rewrites
+        ``agent_messages`` and so bumps the planner's MAX(captured_at) that
+        ``get_plans_snapshot`` orders by — but only when content actually grew, not on
+        every hash-skipped poll tick.
+        """
         h = hashlib.sha256(pane.encode("utf-8", errors="replace")).hexdigest()
         if h == self._last_pane_hash:
-            return
+            return False
         self._last_pane_hash = h
 
         # Refresh murder-owned user turns so markerless grammars can recognise
@@ -60,3 +69,4 @@ class ConversationProducer:
         )
         for change in changes:
             await self._publish(str(change.action), conv_store.block_to_wire(change.block))
+        return bool(changes)

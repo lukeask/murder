@@ -166,7 +166,30 @@ class HarnessBackedAgent(LifecycleParticipant):
             lines=TRANSCRIPT_SCROLLBACK_LINES,
             escapes=wants_ansi(self.harness.kind),
         )
-        await self._producer.poll(pane)
+        had_changes = await self._producer.poll(pane)
+        await self._emit_plan_resort_if_planner(had_changes)
+
+    async def _emit_plan_resort_if_planner(self, had_changes: bool) -> None:
+        """F11 H1: emit the key-only ``plan`` re-sort invalidation, gated.
+
+        The conversation rebuild (``project_parsed_doc_with_changes`` ->
+        ``replace_agent_messages``) bumps a planner's MAX(captured_at), which is the
+        ordering key for ``get_plans_snapshot`` — so a planner's transcript growth
+        re-sorts the plans list with no plans-table write. Emit ``plan`` ONLY for a
+        planner AND ONLY when this poll produced real block changes (the producer
+        hash-skips unchanged panes, so an idle planner polled by the service ticker
+        yields no changes and emits nothing). This bounds ``plan`` invalidations to
+        genuine transcript growth, not the poll cadence. Content itself rides
+        ``conversation.block``; this is purely the list re-sort.
+        """
+        if not had_changes or not self.id.startswith("planner-"):
+            return
+        runtime = getattr(self, "runtime", None)
+        if runtime is None:
+            return
+        from murder.bus.protocol import Entity
+
+        await runtime.publish_snapshot(Entity.PLAN, self.id[len("planner-"):])
 
     def record_user_block(self, text: str) -> None:
         """Record a ground-truth ``user`` turn at the send boundary.
@@ -276,6 +299,9 @@ class HarnessBackedAgent(LifecycleParticipant):
 
         merged, changes = conversation.project_parsed_doc_with_changes(runtime.db, self.id, doc)
         await self._publish_conversation_changes(changes)
+        # F11 H1: same plan re-sort gate as project_once (the producer hot path), so
+        # the on-demand refresh path emits the bounded `plan` invalidation too.
+        await self._emit_plan_resort_if_planner(bool(changes))
         return merged
 
     async def refresh_transcript_doc(self) -> dict[str, Any]:
