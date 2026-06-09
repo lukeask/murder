@@ -8,6 +8,9 @@ dist/
 .venv/
 venv/
 
+# Ink TUI bundle — generated into the wheel by the hatch build hook; never committed.
+murder/_inktui/
+
 # Environment
 .env
 

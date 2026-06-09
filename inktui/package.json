@@ -13,6 +13,7 @@
   "scripts": {
     "dev": "tsx src/index.tsx",
     "build": "tsc --build",
+    "bundle": "esbuild src/index.tsx --bundle --platform=node --format=esm --target=node20 --outfile=dist/bundle/index.js --alias:react-devtools-core=./stubs/react-devtools-core.js --banner:js=\"import { createRequire as __cr } from 'node:module'; const require = __cr(import.meta.url);\"",
     "typecheck": "tsc --build && tsc --noEmit -p tsconfig.test.json",
     "lint": "biome check src test",
     "lint:fix": "biome check --write src test",
@@ -29,6 +30,7 @@
     "@biomejs/biome": "^2.4.16",
     "@types/node": "^24.0.0",
     "@types/react": "^19.2.0",
+    "esbuild": "^0.28.0",
     "ink-testing-library": "^4.0.0",
     "tsx": "^4.22.4",
     "typescript": "^6.0.3",
