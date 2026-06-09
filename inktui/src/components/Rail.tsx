@@ -90,9 +90,11 @@ export function Rail({
       rowGap={orientation === 'landscape' ? 1 : 0}
       columnGap={orientation === 'portrait' ? 1 : 0}
       flexGrow={fixedColumn ? 0 : 1}
-      flexShrink={0}
+      flexShrink={fixedColumn ? 0 : 1}
+      flexBasis={fixedColumn ? undefined : 0}
       width={fixedColumn ? landscapeWidth : undefined}
       minHeight={0}
+      minWidth={0}
       overflow="hidden"
     >
       {shown.map((id) => (
