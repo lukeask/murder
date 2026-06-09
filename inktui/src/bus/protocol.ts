@@ -15,7 +15,7 @@
  * you're in the wrong file"). Framing/handshake logic lives in the `UdsBusClient` (C2).
  */
 
-export const PROTOCOL_VERSION = 2;
+export const PROTOCOL_VERSION = 3;
 
 // === Closed enums ============================================================
 // Modeled as union types of string literals rather than TS `enum`s: the wire carries the bare
@@ -200,24 +200,19 @@ export interface ConversationBlockEvent extends BaseEvent {
  * Raw ANSI frame from tmux for the focused pane. Streamed **only** while the tmux fullscreen mode
  * is active (`ctrl+y`); the subscription is opened on enter and closed on exit (no standing cost).
  *
- * CONTRACT GAP (C14): This event is a **speculative forward-declaration** not yet present in the
- * Python `murder/bus/protocol.py`. `PROTOCOL_VERSION` is intentionally NOT bumped — bumping only
- * the TS side would cause `UdsBusClient`'s handshake to refuse the real service permanently.
- * The correct path: add a matching event type to the Python protocol, then bump `PROTOCOL_VERSION`
- * in both files in lockstep. Until that backend change lands, live `tmux.frame` events will never
- * arrive from the service; `FakeBusClient.emit` drives the full path in tests.
+ * Mirrors `TmuxFrameEvent` in `murder/bus/protocol.py` — both added in F6, `PROTOCOL_VERSION`
+ * bumped to 3 in lockstep across both files.
  *
- * **Pane-scoping note for the service:** the current filter shape has no `pane_id` field. The
- * service should either add `pane_id` to `EventFilter` (and populate it on these events) so
- * clients can subscribe to only the focused pane, or deliver a single frame stream and let the
- * client subscribe unfiltered. Flagged for service confirmation before live integration.
+ * The frame carries the full rendered ANSI output of the pane as a snapshot string (from
+ * `tmux capture-pane -e`). The consumer replaces its display on every event (no incremental
+ * patching). Ink `<Text>` renders ANSI escape sequences natively.
  *
- * The frame carries the rendered ANSI output as a single string. Ink `<Text>` renders ANSI escape
- * sequences natively, so the component simply displays it verbatim.
+ * Pane-scoping note: the current {@link EventFilter} has no `pane_id` field. The service delivers
+ * a single stream for the configured focused pane; per-pane multiplexing is deferred (C14).
  */
 export interface TmuxFrameEvent extends BaseEvent {
   type: 'tmux.frame';
-  /** The rendered ANSI content for the focused tmux pane. */
+  /** The full rendered ANSI content for the focused tmux pane (snapshot, not incremental). */
   frame: string;
 }
 

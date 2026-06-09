@@ -33,12 +33,9 @@
  * `passThrough: true`, a key the mode's keymap does not match falls through to layer 1. We still
  * declare Escape as a first-class dismiss chord so dismissal via Escape is also handled cleanly.
  *
- * ## CONTRACT GAP
- * The `tmux.frame` event type (`TmuxFrameEvent`) is a speculative forward-declaration not yet in
- * the Python service. See the contract-gap note in `protocol.ts`. Live events will not arrive until
- * the service implements the stream; `FakeBusClient.emit` drives the tests correctly regardless.
- * Pane-scoping (filtering to a specific focused pane) has no `pane_id` filter field yet — flagged
- * for service confirmation before live integration.
+ * ## Pane-scoping
+ * The current {@link EventFilter} has no `pane_id` field.  The service delivers a single stream
+ * for its configured focused pane; per-pane multiplexing is deferred (C14 follow-up).
  */
 
 import { Box, Text } from 'ink';

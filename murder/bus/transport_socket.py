@@ -5,6 +5,7 @@ import contextlib
 import errno
 import json
 import logging
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -27,9 +28,18 @@ from murder.bus.protocol import (
     PubMessage,
     RpcMessage,
     SubMessage,
+    TmuxFrameEvent,
     WakeBody,
     WakeMessage,
 )
+
+# Callable that returns the current ANSI frame for the focused pane.
+# Injected into SocketBusServer so tests can supply a controllable fake.
+TmuxFrameCapture = Callable[[], Awaitable[str]]
+
+# Default interval between frame captures (seconds).  Chosen to be responsive
+# without hammering tmux; Ink renders at terminal frame-rate so 100ms is plenty.
+TMUX_FRAME_INTERVAL_S = 0.1
 from murder.state.storage.service_registry import socket_path_for_repo
 
 
@@ -56,11 +66,15 @@ class SocketBusServer:
         run_id: str,
         socket_path: Path | None = None,
         disconnect_debounce_s: float = PRESENCE_DISCONNECT_DEBOUNCE_S,
+        tmux_frame_capture: TmuxFrameCapture | None = None,
+        tmux_frame_interval_s: float = TMUX_FRAME_INTERVAL_S,
     ) -> None:
         self._broker = broker
         self._run_id = run_id
         self._socket_path = socket_path or default_socket_path()
         self._disconnect_debounce_s = disconnect_debounce_s
+        self._tmux_frame_capture = tmux_frame_capture
+        self._tmux_frame_interval_s = tmux_frame_interval_s
         self._server: asyncio.AbstractServer | None = None
         self._tcp_server: asyncio.AbstractServer | None = None
         self._clients: dict[int, _ClientSession] = {}
@@ -296,6 +310,23 @@ class SocketBusServer:
             correlation_id=msg.correlation_id,
             kind="subscribed",
         )
+
+        # tmux.frame subscriptions bypass the broker entirely: no DB persistence,
+        # no replay, no fan-out.  We complete the normal handshake (replay_done with
+        # the current watermark) so the client's subscription state machine finishes,
+        # then enter a capture loop that runs only for the lifetime of this task.
+        # Cancelling the task (on unsubscribe / disconnect / server stop) stops the
+        # loop immediately — zero standing cost when nobody is subscribed.
+        if filt.type == "tmux.frame":
+            await self._send_ack(
+                transport,
+                correlation_id=msg.correlation_id,
+                kind="replay_done",
+                watermark=watermark,
+            )
+            await self._run_tmux_frame_stream(transport, msg.correlation_id)
+            return
+
         for _, event in self._broker.replay(
             filt,
             since_id=msg.args.since_id or 0,
@@ -314,6 +345,40 @@ class SocketBusServer:
                 await self._send_pub(transport, msg.correlation_id, retained)
         async for _, event in self._broker.tail(filt, since_id=watermark):
             await self._send_pub(transport, msg.correlation_id, event)
+
+    async def _run_tmux_frame_stream(
+        self,
+        transport: UdsTransport,
+        correlation_id: str,
+    ) -> None:
+        """Capture-poll loop for the focused tmux pane.
+
+        Runs for the lifetime of the subscription task.  The loop is
+        cancelled (and therefore closed) when:
+        - the client disconnects (``_handle_client`` finally cancels tasks);
+        - the server shuts down (``stop()`` cancels tasks);
+        - a future ``unsub`` wire op is added (not yet in the protocol).
+
+        If no ``tmux_frame_capture`` was injected, the loop exits immediately
+        (no-op) so tests that don't care about frame content still pass.
+        """
+        capture = self._tmux_frame_capture
+        if capture is None:
+            return
+        while True:
+            try:
+                frame_text = await capture()
+            except Exception:
+                # tmux not running, session gone, etc. — skip this tick.
+                await asyncio.sleep(self._tmux_frame_interval_s)
+                continue
+            event = TmuxFrameEvent(
+                run_id=self._run_id,
+                agent_id="supervisor",
+                frame=frame_text,
+            )
+            await self._send_pub(transport, correlation_id, event)
+            await asyncio.sleep(self._tmux_frame_interval_s)
 
     async def _send_pub(
         self,
