@@ -85,6 +85,7 @@ import { createRosterActions, type RosterActions } from './roster/rosterActions.
 import {
   createRosterSlice,
   initialRosterState,
+  ROSTER_ESCALATION_INVALIDATING_ENTITY,
   ROSTER_INVALIDATING_ENTITY,
   type RosterState,
 } from './roster/rosterSlice.js';
@@ -203,9 +204,12 @@ export function createAppStore(bus: BusClient): {
   };
   store.setState({ actions });
 
-  // 3. Invalidation table: entity → the slice refresh it triggers. One entry per slice.
+  // 3. Invalidation table: entity → the slice refresh it triggers. Usually one entry per slice, but
+  //    a slice may be invalidated by more than one entity (the roster carries JOINed escalation
+  //    counts, so both `agent` and `escalation` changes re-pull it).
   const invalidations: readonly SliceInvalidation[] = [
     { entity: ROSTER_INVALIDATING_ENTITY, refresh: () => void actions.roster.refresh() },
+    { entity: ROSTER_ESCALATION_INVALIDATING_ENTITY, refresh: () => void actions.roster.refresh() },
     { entity: PLANS_INVALIDATING_ENTITY, refresh: () => void actions.plans.refresh() },
     { entity: NOTES_INVALIDATING_ENTITY, refresh: () => void actions.notes.refresh() },
     { entity: REPORTS_INVALIDATING_ENTITY, refresh: () => void actions.reports.refresh() },

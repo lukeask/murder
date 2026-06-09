@@ -169,15 +169,31 @@ describe('event-driven slice invalidation', () => {
     expect(plans.rows.find((r) => r.name === 'child')?.parent).toBe('parent');
   });
 
+  it('re-pulls the roster on an `escalation` state.snapshot (escalation counts are JOINed in the crow snapshot)', async () => {
+    // finalpush9: the crow snapshot carries `open_escalations`/`max_severity`, so an escalation
+    // created/resolved without a coincident `agent` change must still re-pull the roster to keep
+    // those counts fresh. `escalation` is a SECOND invalidating entity for the roster slice.
+    const { fake, store } = setup();
+    const rosterBefore = store.getState().roster;
+
+    fake.emit(snapshot('escalation'));
+    await flush();
+
+    expect(fake.rpcCalls).toContainEqual({ method: 'state.crow_snapshot', params: {} });
+    expect(store.getState().roster.status).toBe('ready');
+    // Ref-swapped — escalation subscribers re-render off the same path as `agent` changes.
+    expect(store.getState().roster).not.toBe(rosterBefore);
+  });
+
   it('does NOT re-pull roster on an entity event for a different slice', async () => {
-    // C6 wired `note`/`report`; C7 wired `ticket`; C11 wired `plan` → plans.refresh. Those are no
-    // longer "unrelated". Use `queue_row` and `escalation` (still not wired) to verify that an
-    // entity with no registered invalidation leaves the roster (and its rpc call list) untouched.
+    // C6 wired `note`/`report`; C7 wired `ticket`; C11 wired `plan` → plans.refresh; finalpush9
+    // wired `escalation` → roster.refresh. Those are no longer "unrelated". `queue_row` routes to
+    // usage and never touches roster, so it stays a valid probe that an entity with no roster
+    // invalidation leaves the roster (and its rpc call list) untouched.
     const { fake, store } = setup();
     const rosterBefore = store.getState().roster;
 
     fake.emit(snapshot('queue_row'));
-    fake.emit(snapshot('escalation'));
     await flush();
 
     // No roster rpc was issued (notes/reports/tickets rpc calls may appear for their slices but
