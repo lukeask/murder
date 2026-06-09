@@ -20,24 +20,17 @@
 import type { BusEvent, EventFilter } from './protocol.js';
 
 /**
- * Typed registry of RPC methods: method name -> { params, result }. The bus contract's "Methods
- * (view -> service)" list lands here as it stabilizes (`ticket.quick_kick`, `crow.spawn_rogue`,
- * `agent.message`, `ticket.quick_create`, …). C1 seeds it with the contract's no-new-RPC methods
- * so the type is real, not a placeholder; later chunks add a line per method as the service (B13)
- * exposes it.
- *
- * Each entry's `params` is the RPC body and `result` the reply payload. Both default-extend
- * `RpcPayload` so an under-specified method is still type-safe, never `any`.
+ * Typed registry of RPC methods: method name -> { params, result }. Only genuine
+ * request/response RPCs belong here (e.g. `crow.spawn_rogue`, `command.submit`,
+ * `command.status`, `image.upload`). Orchestrator *command kinds* (`ticket.quick_kick`,
+ * `agent.message`, `notetaker.capture.submit`, …) are NOT direct RPCs — they route through
+ * `command.submit` via {@link submitCommand}. Each entry's `params` is the RPC body and
+ * `result` the reply payload. Both default-extend `RpcPayload` so an under-specified method
+ * is still type-safe, never `any`.
  */
 export type RpcPayload = Record<string, unknown>;
 
 export interface RpcMethods {
-  /** Kick an existing ticket. */
-  'ticket.quick_kick': { params: { ticket_id: string }; result: RpcPayload };
-  /** Deliver a message to an agent (chat). */
-  'agent.message': { params: { agent_id: string; message: string }; result: RpcPayload };
-  /** Submit a captured note. */
-  'notetaker.capture.submit': { params: RpcPayload; result: RpcPayload };
   /**
    * Submit a command to the orchestrator command bus (live `command.submit`). Returns the assigned
    * `command_id`; callers poll {@link RpcMethods['command.status']} for the terminal result. This is
