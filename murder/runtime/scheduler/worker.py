@@ -14,8 +14,10 @@ from murder.state.persistence.commands import enqueue_command
 from murder.state.persistence.usage_status import UsageStatusSnapshot, UsageWindow
 from murder.bus.protocol import (
     CommandEvent,
+    Entity,
     SchedulerDecisionEvent,
     SchedulerModeEvent,
+    StateSnapshotEvent,
     UsageResetEvent,
 )
 from murder.verdict.policy.scheduler_policy import (
@@ -478,6 +480,27 @@ class SchedulerWorker(Worker):
                 threshold=threshold,
                 rationale=rationale,
                 kicked_ticket_id=kicked_ticket_id,
+            )
+        )
+        # F1 (queue_row chunk): `_upsert_decision_cache` always runs immediately
+        # before this emit, so `scheduler_decision_cache` is the read-model state
+        # that just changed (decisions/threshold/usage shown in the usage gauges
+        # embedded in `state.schedule_snapshot`). Emit the key-only
+        # `state.snapshot{queue_row}` beside the existing typed
+        # `SchedulerDecisionEvent` -- exactly the backbone's "async callers await
+        # bus.publish(StateSnapshotEvent(...)) directly" rule (this is a thread
+        # worker with a live `ctx.bus`; Runtime.emit_snapshot is unavailable here).
+        # Key = `harness:window_key` (the decision-cache primary key); no queue_row
+        # table exists (plan line 322), and Ink refetches the whole usage slice on
+        # any queue_row event regardless. Same ~10s tick cadence as the typed event
+        # already here -> no new bus-storm risk; coalescing deferred (matches the
+        # plan chunk's merge_transcript deferral).
+        await ctx.bus.publish(
+            StateSnapshotEvent(
+                run_id=ctx.run_id,
+                agent_id=self.name,
+                entity=Entity.QUEUE_ROW,
+                key=f"{harness}:{window_key}",
             )
         )
 

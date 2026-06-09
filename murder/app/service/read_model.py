@@ -6,7 +6,7 @@ import json
 import sqlite3
 from collections import defaultdict
 from contextlib import closing
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from murder.app.service.client_api import (
@@ -45,6 +45,32 @@ from murder.state.persistence.schema import get_db
 from murder.state.storage.paths import reports_dir
 from murder.work.tickets.parser import read_ticket_md
 from murder.work.tickets.status import TicketStatus
+
+# Ticket states that indicate the work item is closed; a failed agent on such a
+# ticket is droppable once its heartbeat goes stale.
+TERMINAL_TICKET_STATUSES = frozenset({"done", "failed"})
+
+# Hide failed agents after this long without a recent heartbeat.
+FAILED_STALE_AFTER = timedelta(hours=2)
+
+
+def _keep_failed_session(session: CrowSessionSummary, *, now: datetime) -> bool:
+    """Whether a failed agent should remain on the wire roster.
+
+    Mirrors the Textual roster predicate: keep failed agents whose ticket is
+    still active, or whose heartbeat is recent; drop the rest. ``now`` and the
+    session timestamps are all naive UTC (see ``datetime.utcnow``), so they are
+    compared directly without tz normalisation.
+    """
+    if session.status != "failed":
+        return True
+    ticket_status = session.ticket_status or ""
+    if ticket_status and ticket_status not in TERMINAL_TICKET_STATUSES:
+        return True
+    last_seen = session.last_seen or session.started_at
+    if last_seen is None:
+        return True
+    return now - last_seen <= FAILED_STALE_AFTER
 
 
 class ServiceReadModel:
@@ -265,6 +291,9 @@ class ServiceReadModel:
             )
             for row in rows
         )
+        # done/dead are excluded in SQL; drop stale failed agents here so the
+        # wire roster never carries them (Ink does no client-side filtering).
+        sessions = tuple(s for s in sessions if _keep_failed_session(s, now=as_of))
         return CrowSnapshot(
             sessions=sessions,
             as_of=as_of,
