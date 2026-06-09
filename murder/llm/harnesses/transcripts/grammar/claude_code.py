@@ -21,8 +21,12 @@ from murder.llm.harnesses.transcripts._shared import (
 _CC_PROMPT_RE = re.compile(r"^\s*❯[\s ]*(.*)$")
 _CC_CHOICE_OPTION_PROMPT_RE = re.compile(r"^\s*❯[\s\xa0]*\d+\.\s+")
 _CC_BULLET_RE = re.compile(r"^●\s+(.*)$")
+# A completion marker's tail is a *duration* (`3m 59s`, `45s`, `1h 2m`), not
+# arbitrary text. Constraining the capture to a duration shape keeps spinner
+# status lines like `✻ Waiting for 1 background agent to finish` from being
+# misread as final-phase elapsed markers.
 _CC_COMPLETION_RE = re.compile(
-    r"^\s*[✻✶✳✽✢]\s+[A-Z][\w-]+\s+for\s+(\d.+?)\s*$"
+    r"^\s*[✻✶✳✽✢]\s+[A-Z][\w-]+\s+for\s+(\d+\s*[hms](?:\s+\d+\s*[hms])*)\s*$"
 )
 _CC_AGENT_DONE_RE = re.compile(r'^●\s+Agent\s+"(.+?)"\s+completed\s+·\s+(.+?)\s*$')
 _CC_AGENT_START_RE = re.compile(r"^●\s+Agent\((.+?)\)\s*$")
