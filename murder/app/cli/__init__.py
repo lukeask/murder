@@ -16,7 +16,6 @@ from murder.app.cli.service_cmd import (
     _run_async_entry,
     cmd_down,
     cmd_id,
-    cmd_kick,
     cmd_lint,
     cmd_ls,
     cmd_reopen,
@@ -56,7 +55,6 @@ def _root(
 
 
 app.command("init")(cmd_init)
-app.command("kick")(cmd_kick)
 app.command("up")(cmd_up)
 app.command("serviced", hidden=True)(cmd_serviced)
 app.command("down")(cmd_down)

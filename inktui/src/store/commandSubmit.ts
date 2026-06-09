@@ -6,7 +6,7 @@
  * dispatched through the live `command.submit` / `command.status` pair (registered in
  * `murder/app/service/host.py`; the orchestrator worker dispatches on `command.kind` —
  * `murder/runtime/workers/orchestrator_worker.py`). This helper encapsulates the submit-then-poll
- * protocol the Textual client uses (`murder/app/tui/client.py`) so each caller supplies only the
+ * protocol defined in the service host so each caller supplies only the
  * `kind` + `payload` and receives the parsed terminal result.
  *
  * Protocol (mirrors the live handler):

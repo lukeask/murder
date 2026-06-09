@@ -1,7 +1,7 @@
 /**
  * crowHealthSelectors tests — the classifier is a pure function (no React, store, or clock-by-default),
  * so every branch of the ported Textual precedence is asserted directly. Mirrors the branch coverage
- * of `murder/app/tui/crow_health.py`'s test surface.
+ * of the legacy Textual crow_health module's test surface.
  *
  * Precedence under test (first match wins):
  *   RED    — open escalation, or severity ≥ 2, or a red status (escalating/blocked/failed/dead)

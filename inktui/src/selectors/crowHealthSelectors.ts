@@ -1,5 +1,5 @@
 /**
- * Crow-health classification — the Ink port of Textual's `murder/app/tui/crow_health.py:34-66`.
+ * Crow-health classification — the Ink port of the legacy Textual crow_health classifier.
  *
  * Health is a *client-side* fact: the border/edge colour of one crow, derived from its agent status,
  * any open escalation linked to its ticket, and a 60-second stuck-heartbeat rule. The classifier is

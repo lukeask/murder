@@ -2,7 +2,7 @@
  * `focusStore` — focus as a state machine with a *derived* candidate set and a *derived* re-home
  * invariant. This is the file that kills the old "nothing highlighted, must ctrl+f" bug class.
  *
- * The smells in the Textual app (`murder/app/tui/app.py`): three hard-coded per-view focus
+ * The smells in the legacy Textual app: three hard-coded per-view focus
  * candidate lists, focus re-homing scattered imperatively after every toggle, and a `check_action`
  * gating table deciding what may be focused where. The cure here is three properties:
  *

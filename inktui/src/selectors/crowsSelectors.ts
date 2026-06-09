@@ -121,7 +121,7 @@ function modelBasename(model: string | null): string {
  * Classify a `RosterRow.role` string into one of the four display groups, or `null` to exclude
  * internal/infrastructure roles.
  *
- * Role→group mapping (from `murder/app/tui/chat_target_cycle.py` + `murder/bus/protocol.py`):
+ * Role→group mapping (from `murder/bus/protocol.py`):
  *   'collaborator'    → collaborator
  *   'planner'         → planners   (user-facing planning agent)
  *   'crow' + !ticketId → rogue     (rogue crow: no ticket assigned)

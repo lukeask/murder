@@ -3,7 +3,7 @@
 The TUI is the Ink (Node) frontend (F8). `murder` brings the daemon up, resolves the bus socket,
 then spawns the Node Ink process pointed at that socket via `MURDER_BUS_SOCKET`. The Node side never
 re-derives the per-project socket path — it connects to exactly the absolute path it is handed
-(Open decision #2). The legacy in-process Textual `MurderApp` is retired separately (F10).
+(Open decision #2). The legacy in-process Textual `MurderApp` has been retired (F10).
 """
 
 from __future__ import annotations

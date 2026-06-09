@@ -40,7 +40,7 @@ them so the *path of least resistance* is the correct pattern, not the old one.
 - Stringly-typed `_view` / `_active_document` and conversation-id string-prefix parsing. Use
   **discriminated unions** for agent identity and a `panelStore` toggle set for view state.
 - The hand-rolled `useSyncExternalStore` mixin (`StoreComponent`) and the ~2200-line
-  `MurderApp`. Zustand + `useStore(selector, shallow)` is the store layer; the app is a
+  Textual `MurderApp` (retired in F10). Zustand + `useStore(selector, shallow)` is the store layer; the app is a
   decomposed component tree.
 
 ## Toolchain

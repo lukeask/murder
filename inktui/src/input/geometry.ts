@@ -1,6 +1,6 @@
 /**
- * Directional-focus geometry — the `_directional_focus_target` kernel from the Textual app
- * (`murder/app/tui/app.py`), ported as a **pure function over measured rects**.
+ * Directional-focus geometry — the `_directional_focus_target` kernel from the legacy Textual app,
+ * ported as a **pure function over measured rects**.
  *
  * Why a pure fn and not a method on the focus store: the original lived on the 2200-line
  * `MurderApp` and read `widget.region` straight off live Textual widgets, which made it
