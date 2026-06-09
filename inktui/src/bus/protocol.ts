@@ -297,14 +297,20 @@ export interface AckBody {
 export interface ErrBody {
   code: string;
   message: string;
-  details: Record<string, unknown>;
+  /** Optional: Python `ErrBody.details` defaults to `{}` (`Field(default_factory=dict)`) and is
+   * omitted on the wire when empty, so the client must not require it (C-D3). */
+  details?: Record<string, unknown>;
 }
 
-/** Per-client signal on connect/reconnect — distinct from the broadcast {@link PresenceEvent}.
+/** Per-client signal on connect — distinct from the broadcast {@link PresenceEvent}.
  * Names the entities whose state is most likely stale for the joining client. Not persisted. */
 export interface WakeBody {
   client_id: string;
-  reason: 'connect' | 'reconnect';
+  /** Only `'connect'` is ever sent today: the Python server constructs `WakeBody` with
+   * `reason="connect"` in exactly one place (`transport_socket.py`) and never `"reconnect"`. The
+   * Python type keeps `"reconnect"` as a forward-compat Literal, but the consumer models only what
+   * is actually emitted (C-LM-5). Re-add `'reconnect'` here if the server starts sending it. */
+  reason: 'connect';
   fresh_state_hints: Entity[];
 }
 

@@ -217,6 +217,22 @@ export function createAppStore(bus: BusClient): {
     { entity: USAGE_INVALIDATING_ENTITY, refresh: () => void actions.usage.refresh() },
   ];
 
+  // A-D4 exhaustiveness guard. The `invalidations` table above is hand-maintained, and its entries
+  // are typed `Entity` (widened), so nothing forces every Entity value to be wired. This parallel
+  // record is literal-keyed by Entity: omitting a key — or adding a value to the `Entity` union in
+  // protocol.ts without wiring it — is a COMPILE error here. Runtime-inert; exists only for tsc.
+  // Mirror any change to `invalidations` here (and vice versa).
+  const _INVALIDATION_COVERAGE = {
+    ticket: TICKETS_INVALIDATING_ENTITY,
+    agent: ROSTER_INVALIDATING_ENTITY,
+    plan: PLANS_INVALIDATING_ENTITY,
+    note: NOTES_INVALIDATING_ENTITY,
+    report: REPORTS_INVALIDATING_ENTITY,
+    escalation: ROSTER_ESCALATION_INVALIDATING_ENTITY,
+    queue_row: USAGE_INVALIDATING_ENTITY,
+  } satisfies Record<Entity, Entity>;
+  void _INVALIDATION_COVERAGE;
+
   // 4. Event-driven invalidation. Subscribe filtered to `state.snapshot`; on each, re-pull exactly
   //    the slice(s) the named entity invalidates. No poll loop, no deep-diff — the event's `entity`
   //    is the change granularity. `void` the promise: invalidation is fire-and-forget (the action
