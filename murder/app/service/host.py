@@ -329,6 +329,29 @@ class ServiceHost:
                 raise ValueError("ticket.exists requires handle")
             return {"ok": True, "exists": _orchestrator().ticket_exists(handle)}
 
+        async def _ticket_save_body(body: dict[str, Any]) -> dict[str, Any]:
+            ticket_id = str(body.get("ticket_id", "")).strip()
+            if not ticket_id:
+                raise ValueError("ticket.save_body requires ticket_id")
+            md = body.get("body")
+            if not isinstance(md, str):
+                raise ValueError("ticket.save_body requires body string")
+            return await _orchestrator().save_ticket_body(ticket_id, md)
+
+        async def _ticket_schedule(body: dict[str, Any]) -> dict[str, Any]:
+            ticket_id = str(body.get("ticket_id", "")).strip()
+            if not ticket_id:
+                raise ValueError("ticket.schedule requires ticket_id")
+            duration = str(body.get("duration", ""))
+            return await _orchestrator().schedule_ticket(ticket_id, duration)
+
+        async def _plan_create(body: dict[str, Any]) -> dict[str, Any]:
+            plan_name = str(body.get("plan_name", "")).strip()
+            if not plan_name:
+                raise ValueError("plan.create requires plan_name")
+            message = str(body.get("message", ""))
+            return await _orchestrator().create_plan(plan_name, message)
+
         def _editor_binary(_body: dict[str, Any]) -> dict[str, Any]:
             # Resolve the editor command server-side (folds the backend
             # ``choose_editor`` import out of the TUI, V6). The client still
@@ -417,6 +440,9 @@ class ServiceHost:
 
         self.register_rpc_handler("ticket.next_id", _ticket_next_id)
         self.register_rpc_handler("ticket.exists", _ticket_exists)
+        self.register_rpc_handler("ticket.save_body", _ticket_save_body)
+        self.register_rpc_handler("ticket.schedule", _ticket_schedule)
+        self.register_rpc_handler("plan.create", _plan_create)
         self.register_rpc_handler("editor.binary", _editor_binary)
         self.register_rpc_handler("image.upload", _image_upload)
         self.register_rpc_handler("tui.load_favorites", _tui_load_favorites)

@@ -1276,6 +1276,110 @@ class Orchestrator:
         await self.rt.publish_snapshot(Entity.TICKET, ticket_id)
         return {"handled": True, "ticket_id": ticket_id, "schedule_at": schedule_at}
 
+    async def save_ticket_body(self, ticket_id: str, body: str) -> dict[str, Any]:
+        """Persist the edited markdown body for a ticket (the editor's save).
+
+        The Ink ticket editor sends only the markdown *body* (everything after
+        the frontmatter: ``## Plan`` / ``## Working Notes`` prose and the
+        ``# Checklist`` section). The frontmatter (title/deps/harness/model/
+        worktree) is read-only in the editor and absent from the payload, so we
+        re-attach the *current* frontmatter rather than wiping it. We write the
+        ``.md`` file (the authoritative ticket writer is the filesystem->DB
+        reconcile path) then reconcile it synchronously into the DB so the save
+        is durable before the RPC returns, closing the 1.5 s TicketSync poll gap.
+        """
+        assert self.rt.db is not None
+        from murder.work.tickets.parser import parse_ticket
+        from murder.work.tickets.render import render_ticket_frontmatter
+        from murder.work.tickets.sync import reconcile_ticket_md
+
+        ticket_id = ticket_id.strip()
+        if not ticket_id:
+            raise ValueError("ticket.save_body requires ticket_id")
+        path = ticket_md(self.rt.repo_root, ticket_id)
+        # Source the read-only frontmatter from the current file when present,
+        # else fall back to the DB row so we never drop metadata on save.
+        if path.exists():
+            frontmatter = render_ticket_frontmatter(
+                parse_ticket(path.read_text(encoding="utf-8"), default_title=ticket_id)
+            )
+        else:
+            row = _db_get_ticket(self.rt.db, ticket_id)
+            if row is None:
+                return {"handled": True, "ok": False, "error": f"ticket not found: {ticket_id}"}
+            deps = [
+                str(r["depends_on_id"])
+                for r in self.rt.db.execute(
+                    "SELECT depends_on_id FROM ticket_deps WHERE ticket_id = ? "
+                    "ORDER BY depends_on_id",
+                    (ticket_id,),
+                ).fetchall()
+            ]
+            frontmatter = render_ticket_frontmatter(
+                {
+                    "title": row.get("title") or ticket_id,
+                    "deps": deps,
+                    "harness": row.get("harness"),
+                    "model": row.get("model"),
+                    "worktree": row.get("worktree"),
+                }
+            )
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(frontmatter + body.rstrip("\n") + "\n", encoding="utf-8")
+        reconcile_ticket_md(conn=self.rt.db, repo_root=self.rt.repo_root, ticket_id=ticket_id)
+        # ``reconcile_ticket_md`` builds a throwaway TicketSync with no
+        # on_ticket_change callback, so the F1 snapshot does not fire from it.
+        # Emit explicitly after the reconcile commits.
+        await self.rt.publish_snapshot(Entity.TICKET, ticket_id)
+        return {"handled": True, "ok": True, "ticket_id": ticket_id}
+
+    async def schedule_ticket(self, ticket_id: str, duration: str) -> dict[str, Any]:
+        """Set/clear a ticket's schedule from a free-form duration string.
+
+        The Ink editor sends a raw duration (``1d4h3m``, ``34m``); the backend is
+        authoritative. An empty/whitespace duration clears the schedule; any
+        non-empty value is parsed via ``parse_duration`` and added to *now*.
+        Delegates the DB write + snapshot emit to ``set_schedule_at``.
+
+        Stores a UTC timestamp (``utcnow``), matching the rest of the codebase's
+        persisted clock (``scaffold_plan``, ``TicketSync._now``, the schedule
+        read model) so the scheduler/calendar consumers — which compute "now" in
+        UTC — see the intended offset rather than one skewed by the local tz.
+        """
+        from murder.work.duration import parse_duration
+
+        ticket_id = ticket_id.strip()
+        if not ticket_id:
+            raise ValueError("ticket.schedule requires ticket_id")
+        text = (duration or "").strip()
+        if not text:
+            return await self.set_schedule_at(ticket_id, None)
+        delta = parse_duration(text)
+        schedule_at = (datetime.utcnow() + delta).isoformat(timespec="seconds")
+        return await self.set_schedule_at(ticket_id, schedule_at)
+
+    async def create_plan(self, plan_name: str, message: str) -> dict[str, Any]:
+        """Create a new plan and (optionally) seed its planning agent.
+
+        Thin composition of existing machinery: ``scaffold_plan`` writes the
+        plan row + materialized markdown (and emits the plan snapshot), then —
+        when an initial ``message`` is supplied — ``send_agent_message`` to the
+        ``planner-{name}`` agent, which lazily spawns the planner via
+        ``ensure_planning_agent``. Mirrors the Textual ctrl+p new-plan flow
+        (scaffold + focus ``planner-{name}`` as chat target).
+        """
+        plan_name = (plan_name or "").strip()
+        if not plan_name:
+            raise ValueError("plan.create requires plan_name")
+        scaffolded = await self.scaffold_plan(plan_name, "# Plan Name\n")
+        name = str(scaffolded.get("name") or plan_name)
+        agent_id: str | None = None
+        text = (message or "").strip()
+        if text:
+            agent_id = f"planner-{name}"
+            await self.send_agent_message(agent_id, text, None)
+        return {"handled": True, "plan_name": name, "agent_id": agent_id}
+
     async def update_ticket_metadata(
         self, ticket_id: str, payload: dict[str, Any]
     ) -> dict[str, Any]:
