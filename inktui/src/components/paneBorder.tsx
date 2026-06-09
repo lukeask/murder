@@ -63,7 +63,7 @@ export function PaneBorderTop({
       <Box flexShrink={0}>
         <Text color={borderColor}> </Text>
       </Box>
-      <Box flexGrow={1} flexShrink={1} overflow="hidden">
+      <Box flexGrow={1} flexShrink={1} minWidth={0} overflow="hidden">
         <Text color={borderColor} wrap="hard">
           {'─'.repeat(256)}
         </Text>

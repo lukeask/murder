@@ -98,7 +98,7 @@ export function Rail({
       overflow="hidden"
     >
       {shown.map((id) => (
-        <Box key={id} flexGrow={1} minHeight={0} overflow="hidden">
+        <Box key={id} flexGrow={1} flexBasis={0} minHeight={0} minWidth={0} overflow="hidden">
           {renderPanel(id)}
         </Box>
       ))}

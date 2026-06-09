@@ -256,7 +256,7 @@ export const Stage = memo(function Stage(): JSX.Element {
 
   if (panes.length === 0 && openDoc === null) {
     // Nothing on the Stage: an invisible spacer that holds the center open (see the doc above).
-    return <Box flexGrow={1} minHeight={0} overflow="hidden" />;
+    return <Box flexGrow={1} flexBasis={0} minHeight={0} minWidth={0} overflow="hidden" />;
   }
 
   // Landscape: doc sits in a column to the RIGHT of the chat row. Portrait: doc stacks BELOW in a row.
@@ -267,7 +267,9 @@ export const Stage = memo(function Stage(): JSX.Element {
     <Box
       flexDirection={landscape ? 'row' : 'column'}
       flexGrow={1}
+      flexBasis={0}
       minHeight={0}
+      minWidth={0}
       overflow="hidden"
       columnGap={landscape ? 1 : 0}
       rowGap={landscape ? 0 : 1}
