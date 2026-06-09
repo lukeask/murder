@@ -439,6 +439,43 @@ describe('UdsBusClient — reconnect', () => {
     expect((received[0] as { key: string }).key).toBe('T-after-reconnect');
   });
 
+  it('fires onConnect on first connect and again on every reconnect (re-prime hook)', async () => {
+    let connects = 0;
+    client.onConnect(() => {
+      connects += 1;
+    });
+    await client.connect();
+    await waitFor(() => connects === 1);
+    expect(connects).toBe(1);
+
+    server.dropAllConnections();
+    await waitFor(() => connects === 2);
+    expect(connects).toBe(2);
+  });
+
+  it('fires onConnect immediately when registered after the handshake (no first-connect race)', async () => {
+    await client.connect();
+    let connects = 0;
+    client.onConnect(() => {
+      connects += 1;
+    });
+    expect(connects).toBe(1);
+  });
+
+  it('stops firing onConnect after its disposer runs', async () => {
+    let connects = 0;
+    const unhook = client.onConnect(() => {
+      connects += 1;
+    });
+    await client.connect();
+    await waitFor(() => connects === 1);
+
+    unhook();
+    server.dropAllConnections();
+    await waitFor(() => server.handshakeCount === 2);
+    expect(connects).toBe(1);
+  });
+
   it('rejects an outstanding rpc when the connection drops', async () => {
     await client.connect();
     server.rpcHandler = () => undefined; // never answers

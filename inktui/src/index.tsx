@@ -58,19 +58,26 @@ export function resolveSocketPath(env: NodeJS.ProcessEnv = process.env): string 
  * exits. The store opens its bus subscriptions on construction; we additionally prime the visible
  * slices so the first paint shows live data on a quiescent service too (subscribe replay only
  * carries already-persisted events, and a fresh slice would otherwise sit empty until the next
- * server-side change — so we pull once, exactly as the smoke path did). Returns when the app exits.
+ * server-side change — so we pull). Returns when the app exits.
+ *
+ * Priming runs on **every (re)connect**, not just at startup. Subscriptions survive reconnect and
+ * slice invalidation is key-only, so a slice that changed while the socket was down would otherwise
+ * stay stale until the next unrelated event — re-priming on connect closes that gap. We hook the
+ * client's {@link UdsBusClient.onConnect} (fires once per live handshake, and immediately if already
+ * connected at registration time), so first connect and every reconnect both prime exactly once.
  */
 export async function runLive(busFactory: () => BusClient = makeLiveBus): Promise<void> {
   const bus = busFactory();
   const { store, dispose } = createAppStore(bus);
   const inputStores = createInputStores(STARTUP_PANELS);
 
-  // Prime the visible slices so the shell paints live data immediately. Fire-and-forget: the actions
-  // route their own errors into each slice's `error` field, and the subscription keeps the slices
-  // live thereafter via key-only invalidation.
-  void store.getState().actions.roster.refresh();
-  void store.getState().actions.usage.refresh();
-  void store.getState().actions.plans.refresh();
+  // Re-prime the visible slices on every (re)connect. If the client exposes `onConnect` (the live
+  // UdsBusClient does; the fake does not), hook it; otherwise prime once as a fallback so a non-
+  // hooking transport still paints live data on first connect.
+  const unhookConnect = onConnectIfSupported(bus, () => primeSlices(store));
+  if (unhookConnect === undefined) {
+    primeSlices(store);
+  }
 
   const instance = render(<App store={store} inputStores={inputStores} bus={bus} />);
   // No unmount-on-tick here (that was the smoke scaffold): the app stays mounted. Ink keeps the
@@ -78,9 +85,30 @@ export async function runLive(busFactory: () => BusClient = makeLiveBus): Promis
   try {
     await instance.waitUntilExit();
   } finally {
+    unhookConnect?.();
     dispose();
     closeIfSupported(bus);
   }
+}
+
+/**
+ * Pull the visible slices so the shell paints live data. Fire-and-forget: the actions route their
+ * own errors into each slice's `error` field, and the subscription keeps the slices live thereafter
+ * via key-only invalidation. Re-run on every (re)connect — see {@link runLive}.
+ */
+function primeSlices(store: ReturnType<typeof createAppStore>['store']): void {
+  void store.getState().actions.roster.refresh();
+  void store.getState().actions.usage.refresh();
+  void store.getState().actions.plans.refresh();
+}
+
+/** Register a (re)connect listener if the client exposes `onConnect` (the live {@link UdsBusClient}
+ * does; the fake does not). Narrowed structurally so the seam stays the transport-agnostic
+ * {@link BusClient}, exactly as {@link closeIfSupported} does. Returns the disposer, or `undefined`
+ * when unsupported so the caller can fall back to a one-shot prime. */
+function onConnectIfSupported(bus: BusClient, listener: () => void): (() => void) | undefined {
+  const maybe = bus as BusClient & { onConnect?: (listener: () => void) => () => void };
+  return maybe.onConnect?.(listener);
 }
 
 /** Close the bus connection if the client exposes a `close()` (the live {@link UdsBusClient} does;
