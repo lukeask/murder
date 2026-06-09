@@ -26,6 +26,7 @@ import { Box, Text } from 'ink';
 import type { JSX } from 'react';
 import type { Mode, ModeStoreApi } from '../input/modeStore.js';
 import type { DialogActions } from '../store/dialogs/dialogActions.js';
+import { toastStore } from '../store/toast/toastStore.js';
 import { deleteLastChar, insertChar, TextInput } from './TextInput.js';
 
 // Import the dispatcher augmentation so Mode gets the `onUncaptured` field at the TS level.
@@ -125,9 +126,13 @@ export function newTicketMode(
             .then((result) => {
               opts.onSubmit?.(result.ticket_id, result.title);
             })
-            .catch(() => {
-              // B13: RPC not live. On failure, focus is already restored; the error is silently
-              // dropped. When the bus is live (post-B13), surface this via a toast/notification.
+            .catch((error: unknown) => {
+              // Exit-then-act: the modal is already gone and focus restored, so an inline field
+              // error has nowhere to render. Surface the action-level RPC rejection on the global
+              // toastStore (a singleton, independent of this unmounted modal's lifecycle), using the
+              // structured `rpc error [code]: message` text from UdsBusClient's rejection.
+              const message = error instanceof Error ? error.message : String(error);
+              toastStore.getState().push(message, { severity: 'error', ttlMs: 6000 });
             });
           break;
         }

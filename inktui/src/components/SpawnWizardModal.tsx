@@ -53,6 +53,7 @@ import { Box, Text } from 'ink';
 import type { JSX } from 'react';
 import type { Mode, ModeStoreApi } from '../input/modeStore.js';
 import type { SpawnActions } from '../store/dialogs/spawnActions.js';
+import { toastStore } from '../store/toast/toastStore.js';
 
 /** Intent union for the spawn wizard — all key actions. No printable-char capture needed since
  * effort is a selection list and the context step is a yes/no. */
@@ -198,8 +199,13 @@ export function spawnWizardMode(
       .then(() => {
         opts.onSubmit?.(effort, kickoffMessage);
       })
-      .catch(() => {
-        // Bus error: focus is already restored. Silent drop — surface via toast when bus is live.
+      .catch((error: unknown) => {
+        // Exit-then-act: the wizard is already gone and focus restored, so an inline error has
+        // nowhere to render. Surface the action-level RPC rejection on the global toastStore (a
+        // singleton, independent of this unmounted wizard's lifecycle), using the structured
+        // `rpc error [code]: message` text from UdsBusClient's rejection.
+        const message = error instanceof Error ? error.message : String(error);
+        toastStore.getState().push(message, { severity: 'error', ttlMs: 6000 });
       });
   }
 

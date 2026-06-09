@@ -9,9 +9,16 @@
  *  - a save rejection lands in `error` without rolling back the optimistic local set.
  */
 
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 import { FakeBusClient } from '../../src/bus/FakeBusClient.js';
 import { createAppStore } from '../../src/store/store.js';
+import { selectLiveToasts, toastStore } from '../../src/store/toast/toastStore.js';
+
+/** All live error toasts on the singleton at the current instant. */
+function errorToasts() {
+  const live = selectLiveToasts(toastStore.getState().toasts, Date.now());
+  return live.filter((t) => t.severity === 'error');
+}
 
 function setup() {
   const fake = new FakeBusClient();
@@ -24,6 +31,11 @@ function setup() {
 }
 
 describe('favorites actions', () => {
+  // The toast singleton is shared global state; reset it between cases (toastStore's own idiom).
+  beforeEach(() => {
+    toastStore.getState().clear();
+  });
+
   it('load() fires tui.load_favorites and fills the id set', async () => {
     const { fake, store, dispose } = setup();
     fake.stubRpc('tui.load_favorites', { ok: true, favorites: ['plan-a', 'agent-7'] });
@@ -69,17 +81,29 @@ describe('favorites actions', () => {
     dispose();
   });
 
-  it('a save rejection sets error but keeps the optimistic local set', async () => {
+  it('a save rejection sets error, keeps the optimistic local set, AND surfaces a toast', async () => {
     const { fake, store, dispose } = setup();
     fake.stubRpc('tui.save_favorites', () => {
-      throw new Error('bus down');
+      throw new Error('rpc error [internal]: bus down');
     });
 
     await store.getState().actions.favorites.toggle('plan-y');
     const favs = store.getState().favorites;
     // Local set still reflects the user's intent (no rollback).
     expect(favs.ids.has('plan-y')).toBe(true);
-    expect(favs.error).toBe('bus down');
+    expect(favs.error).toBe('rpc error [internal]: bus down');
+    // The fire-and-forget persist rejection has no open form / rendered slice error to host it,
+    // so it must surface on the global toast (severity error, the structured message).
+    const errs = errorToasts();
+    expect(errs).toHaveLength(1);
+    expect(errs[0]?.text).toBe('rpc error [internal]: bus down');
+    dispose();
+  });
+
+  it('a successful toggle persist pushes NO error toast', async () => {
+    const { store, dispose } = setup(); // setup() stubs save to resolve
+    await store.getState().actions.favorites.toggle('plan-z');
+    expect(errorToasts()).toHaveLength(0);
     dispose();
   });
 

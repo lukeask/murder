@@ -10,7 +10,7 @@
 
 import { render } from 'ink-testing-library';
 import type { JSX } from 'react';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { FakeBusClient } from '../../src/bus/FakeBusClient.js';
 import { NEW_TICKET_MODE_ID, newTicketMode } from '../../src/components/NewTicketModal.js';
 import { Overlay } from '../../src/components/Overlay.js';
@@ -19,6 +19,7 @@ import { useRootInput } from '../../src/hooks/useRootInput.js';
 import { createInputStores } from '../../src/input/createInputStores.js';
 import { selectActiveMode } from '../../src/input/modeStore.js';
 import { createDialogActions } from '../../src/store/dialogs/dialogActions.js';
+import { selectLiveToasts, toastStore } from '../../src/store/toast/toastStore.js';
 
 const ESC = '\x1b';
 
@@ -68,7 +69,18 @@ function setup() {
   return { stores, bus, actions, enter };
 }
 
+/** All live error toasts on the singleton at the current instant. */
+function errorToasts() {
+  const live = selectLiveToasts(toastStore.getState().toasts, Date.now());
+  return live.filter((t) => t.severity === 'error');
+}
+
 describe('NewTicketModal — ctrl+t new-ticket dialog', () => {
+  // The toast singleton is shared global state; reset it between cases (toastStore's own idiom).
+  beforeEach(() => {
+    toastStore.getState().clear();
+  });
+
   it('opens, paints the dialog, Esc dismisses and restores focus', async () => {
     const { stores, enter } = setup();
     const { lastFrame, stdin } = render(<Harness stores={stores} />);
@@ -154,6 +166,47 @@ describe('NewTicketModal — ctrl+t new-ticket dialog', () => {
     expect(onSubmit).toHaveBeenCalledWith('t-001', 'my ticket');
   });
 
+  it('successful submit pushes NO error toast', async () => {
+    const { stores, enter } = setup(); // setup() stubs the command to resolve
+    enter();
+    const { stdin } = render(<Harness stores={stores} />);
+    await tick();
+    for (const ch of 'fix bug') stdin.write(ch);
+    await tick();
+    stdin.write('\r');
+    await tick();
+    await tick();
+    await tick();
+    expect(errorToasts()).toHaveLength(0);
+  });
+
+  it('a rejected ticket create pushes an error toast with the rejection message', async () => {
+    const stores = createInputStores(['tickets'], 'tickets');
+    const bus = new FakeBusClient();
+    // `ticket.quick_create` routes through `command.submit`; reject at the submit choke point so
+    // `quickCreateTicket` rejects. Exit-then-act: the modal is gone before this lands; the toast
+    // must still fire on the global singleton with the structured UdsBusClient text.
+    bus.stubRpc('command.submit', () => {
+      throw new Error('rpc error [internal]: ticket create failed');
+    });
+    stores.modes.getState().enter(newTicketMode(stores.modes, createDialogActions(bus), {}));
+    const { stdin } = render(<Harness stores={stores} />);
+    await tick();
+
+    for (const ch of 'fix bug') stdin.write(ch);
+    await tick();
+    stdin.write('\r'); // submit
+    await tick();
+
+    expect(selectActiveMode(stores.modes)).toBeNull(); // dismissed (exit-then-act)
+    await tick();
+    await tick();
+
+    const errs = errorToasts();
+    expect(errs).toHaveLength(1);
+    expect(errs[0]?.text).toBe('rpc error [internal]: ticket create failed');
+  });
+
   it('submit with empty title shows an error and does NOT fire RPC', async () => {
     const { stores, bus, enter } = setup();
     const { lastFrame, stdin } = render(<Harness stores={stores} />);
@@ -165,6 +218,8 @@ describe('NewTicketModal — ctrl+t new-ticket dialog', () => {
     expect(lastFrame()).toContain('Ticket title is required');
     expect(selectActiveMode(stores.modes)?.id).toBe(NEW_TICKET_MODE_ID); // still up
     expect(bus.rpcCalls.length).toBe(0);
+    // Field validation stays INLINE (modal open) — it must NOT also fire an error toast.
+    expect(errorToasts()).toHaveLength(0);
   });
 
   it('captures exclusively: ctrl+f does NOT focus chat while the modal is up', async () => {

@@ -14,7 +14,7 @@
 
 import { render } from 'ink-testing-library';
 import type { JSX } from 'react';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { FakeBusClient } from '../../src/bus/FakeBusClient.js';
 import { Overlay } from '../../src/components/Overlay.js';
 import {
@@ -28,6 +28,7 @@ import { useRootInput } from '../../src/hooks/useRootInput.js';
 import { createInputStores } from '../../src/input/createInputStores.js';
 import { selectActiveMode } from '../../src/input/modeStore.js';
 import { createSpawnActions } from '../../src/store/dialogs/spawnActions.js';
+import { selectLiveToasts, toastStore } from '../../src/store/toast/toastStore.js';
 
 const ESC = '\x1b';
 
@@ -111,7 +112,18 @@ const TEST_CONTEXT: SpawnContext = {
   path: '.murder/notes/my-note.md',
 };
 
+/** All live error toasts on the singleton at the current instant. */
+function errorToasts() {
+  const live = selectLiveToasts(toastStore.getState().toasts, Date.now());
+  return live.filter((t) => t.severity === 'error');
+}
+
 describe('SpawnWizardModal — ctrl+s spawn wizard', () => {
+  // The toast singleton is shared global state; reset it between cases (toastStore's own idiom).
+  beforeEach(() => {
+    toastStore.getState().clear();
+  });
+
   it('opens, paints the wizard title, Esc dismisses and restores focus', async () => {
     const { stores, enter } = setup();
     const { lastFrame, stdin } = render(<Harness stores={stores} />);
@@ -193,6 +205,45 @@ describe('SpawnWizardModal — ctrl+s spawn wizard', () => {
     expect(submitKinds(bus)).toEqual(['crow.spawn_rogue']);
     await tick();
     expect(onSubmit).toHaveBeenCalledWith('medium', null);
+  });
+
+  it('successful submit pushes NO error toast', async () => {
+    const { stores, enter } = setup(null); // setup() stubs the command to resolve
+    enter();
+    const { stdin } = render(<Harness stores={stores} />);
+    await tick();
+    stdin.write('\r'); // confirm effort → submit (no context)
+    await tick();
+    await tick();
+    await tick();
+    expect(errorToasts()).toHaveLength(0);
+  });
+
+  it('a rejected spawn pushes an error toast with the rejection message', async () => {
+    const stores = createInputStores(['notes'], 'notes');
+    const bus = new FakeBusClient();
+    // `crow.spawn_rogue` routes through `command.submit`; reject at the submit choke point so
+    // `spawnRogue` rejects. Exit-then-act: the wizard is gone before this lands; the toast must
+    // still fire on the global singleton with the structured UdsBusClient text.
+    bus.stubRpc('command.submit', () => {
+      throw new Error('rpc error [internal]: spawn failed');
+    });
+    stores.modes
+      .getState()
+      .enter(spawnWizardMode(stores.modes, createSpawnActions(bus), { spawnContext: null }));
+    const { stdin } = render(<Harness stores={stores} />);
+    await tick();
+
+    stdin.write('\r'); // confirm effort → submit (no context)
+    await tick();
+
+    expect(selectActiveMode(stores.modes)).toBeNull(); // dismissed (exit-then-act)
+    await tick();
+    await tick();
+
+    const errs = errorToasts();
+    expect(errs).toHaveLength(1);
+    expect(errs[0]?.text).toBe('rpc error [internal]: spawn failed');
   });
 
   it('shows context step after effort when spawnContext is provided', async () => {

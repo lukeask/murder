@@ -12,7 +12,7 @@
 
 import { render } from 'ink-testing-library';
 import type { JSX } from 'react';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { FakeBusClient } from '../../src/bus/FakeBusClient.js';
 import { NEW_PLAN_MODE_ID, newPlanMode } from '../../src/components/NewPlanModal.js';
 import { Overlay } from '../../src/components/Overlay.js';
@@ -21,6 +21,7 @@ import { useRootInput } from '../../src/hooks/useRootInput.js';
 import { createInputStores } from '../../src/input/createInputStores.js';
 import { selectActiveMode } from '../../src/input/modeStore.js';
 import { createDialogActions } from '../../src/store/dialogs/dialogActions.js';
+import { selectLiveToasts, toastStore } from '../../src/store/toast/toastStore.js';
 
 const ESC = '\x1b';
 
@@ -81,7 +82,18 @@ function setup() {
   return { stores, bus, actions, enter };
 }
 
+/** All live error toasts on the singleton at the current instant. */
+function errorToasts() {
+  const live = selectLiveToasts(toastStore.getState().toasts, Date.now());
+  return live.filter((t) => t.severity === 'error');
+}
+
 describe('NewPlanModal — ctrl+p new-plan dialog', () => {
+  // The toast singleton is shared global state; reset it between cases (toastStore's own idiom).
+  beforeEach(() => {
+    toastStore.getState().clear();
+  });
+
   it('opens, paints the dialog, captures input, dismisses on Esc, and restores focus', async () => {
     const { stores, enter } = setup();
     const { lastFrame, stdin } = render(<Harness stores={stores} />);
@@ -175,6 +187,44 @@ describe('NewPlanModal — ctrl+p new-plan dialog', () => {
     expect(onSubmit).toHaveBeenCalledWith('my-plan', '');
   });
 
+  it('successful submit pushes NO error toast', async () => {
+    const { stores } = setup(); // setup() stubs plan.create to resolve
+    const { stdin } = render(<Harness stores={stores} />);
+    await tick();
+    for (const ch of 'my-plan') stdin.write(ch);
+    await tick();
+    stdin.write('\r');
+    await tick();
+    await tick();
+    expect(errorToasts()).toHaveLength(0);
+  });
+
+  it('a rejected plan.create pushes an error toast with the rejection message', async () => {
+    const { stores } = setup();
+    const bus = new FakeBusClient();
+    // Exit-then-act: the modal is gone before this rejects; the toast must still fire on the
+    // global singleton (not tied to the unmounted modal). Use the structured UdsBusClient text.
+    bus.stubRpc('plan.create', () => {
+      throw new Error('rpc error [internal]: plan create failed');
+    });
+    stores.modes.getState().enter(newPlanMode(stores.modes, createDialogActions(bus), {}));
+    const { stdin } = render(<Harness stores={stores} />);
+    await tick();
+
+    for (const ch of 'my-plan') stdin.write(ch);
+    await tick();
+    stdin.write('\r'); // submit
+    await tick();
+
+    // Modal dismissed (exit-then-act), then the rejection lands.
+    expect(selectActiveMode(stores.modes)).toBeNull();
+    await tick();
+
+    const errs = errorToasts();
+    expect(errs).toHaveLength(1);
+    expect(errs[0]?.text).toBe('rpc error [internal]: plan create failed');
+  });
+
   it('submit with empty plan name shows an error and does NOT fire RPC', async () => {
     const { stores, bus, enter } = setup();
     const { lastFrame, stdin } = render(<Harness stores={stores} />);
@@ -187,6 +237,8 @@ describe('NewPlanModal — ctrl+p new-plan dialog', () => {
     expect(lastFrame()).toContain('Plan name is required');
     expect(selectActiveMode(stores.modes)?.id).toBe(NEW_PLAN_MODE_ID); // still up
     expect(bus.rpcCalls.length).toBe(0);
+    // Field validation stays INLINE (modal open) — it must NOT also fire an error toast.
+    expect(errorToasts()).toHaveLength(0);
   });
 
   it('captures exclusively: ctrl+1 does NOT toggle a panel while the modal is up', async () => {
