@@ -139,6 +139,17 @@ class QuestionEvent(_BaseEvent):
     recent_pane: str = ""
 
 
+class NoteEvent(_BaseEvent):
+    """A free-text working note emitted by a crow via a ``>>> NOTE:`` marker.
+
+    Under DB-owns-runtime these land in the ``events`` table (audit log), not
+    the ticket ``.md`` — the bus persists every event before fan-out.
+    """
+
+    type: Literal["note"] = "note"
+    note: str
+
+
 class EscalationEvent(_BaseEvent):
     type: Literal["escalation"] = "escalation"
     to: Literal["user", "collaborator"]
@@ -308,6 +319,7 @@ BusEvent = Annotated[
     HeartbeatEvent
     | SummaryEvent
     | QuestionEvent
+    | NoteEvent
     | EscalationEvent
     | StatusChangeEvent
     | ErrorEvent
@@ -523,6 +535,7 @@ __all__ = [
     "HeartbeatEvent",
     "SummaryEvent",
     "QuestionEvent",
+    "NoteEvent",
     "EscalationEvent",
     "StatusChangeEvent",
     "ErrorEvent",
