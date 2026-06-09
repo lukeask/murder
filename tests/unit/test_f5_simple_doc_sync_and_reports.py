@@ -184,7 +184,7 @@ async def test_simple_doc_sync_edit_updates_report(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_simple_doc_sync_noop_no_emit_note(tmp_path: Path) -> None:
-    """Unchanged note file → no DB write, no emit."""
+    """Unchanged note file → no DB write, no emit, no revision bump."""
     from murder.work.notes.sync import NoteSync
 
     repo = _make_repo(tmp_path)
@@ -198,6 +198,10 @@ async def test_simple_doc_sync_noop_no_emit_note(tmp_path: Path) -> None:
     seed = NoteSync(repo, conn)
     await seed.reconcile_file(note_path)
 
+    from murder.state.persistence.notes import list_note_revisions
+
+    revisions_after_seed = len(list_note_revisions(conn, "stable"))
+
     emitted: list[tuple[Entity, str]] = []
 
     async def cb(entity: Entity, key: str) -> None:
@@ -207,11 +211,14 @@ async def test_simple_doc_sync_noop_no_emit_note(tmp_path: Path) -> None:
     await sync.reconcile_file(note_path)
 
     assert emitted == [], "no emit for unchanged note"
+    assert len(list_note_revisions(conn, "stable")) == revisions_after_seed, (
+        "revision count must not bump on no-op reconcile"
+    )
 
 
 @pytest.mark.asyncio
 async def test_simple_doc_sync_noop_no_emit_report(tmp_path: Path) -> None:
-    """Unchanged report file → no DB write, no emit (parity)."""
+    """Unchanged report file → no DB write, no emit, no revision bump (parity)."""
     from murder.work.reports.sync import ReportSync
 
     repo = _make_repo(tmp_path)
@@ -225,6 +232,10 @@ async def test_simple_doc_sync_noop_no_emit_report(tmp_path: Path) -> None:
     seed = ReportSync(repo, conn)
     await seed.reconcile_file(report_path)
 
+    from murder.state.persistence.reports import list_report_revisions
+
+    revisions_after_seed = len(list_report_revisions(conn, "stable"))
+
     emitted: list[tuple[Entity, str]] = []
 
     async def cb(entity: Entity, key: str) -> None:
@@ -234,6 +245,9 @@ async def test_simple_doc_sync_noop_no_emit_report(tmp_path: Path) -> None:
     await sync.reconcile_file(report_path)
 
     assert emitted == [], "no emit for unchanged report"
+    assert len(list_report_revisions(conn, "stable")) == revisions_after_seed, (
+        "revision count must not bump on no-op reconcile"
+    )
 
 
 # ---------------------------------------------------------------------------

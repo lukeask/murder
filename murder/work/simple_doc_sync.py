@@ -22,12 +22,12 @@ from __future__ import annotations
 import hashlib
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from murder.state.storage.filesystem import atomic_write_text
 from murder.state.storage.markdown_loop import MarkdownSyncLoop
 
-if False:  # TYPE_CHECKING — avoid runtime bus.protocol import from state.storage
+if TYPE_CHECKING:  # avoid runtime bus.protocol import from state.storage
     from murder.bus.protocol import Entity
 
 
