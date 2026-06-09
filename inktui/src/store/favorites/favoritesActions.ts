@@ -27,6 +27,7 @@
 import type { StoreApi } from 'zustand';
 import type { BusClient } from '../../bus/BusClient.js';
 import type { AppStore } from '../store.js';
+import { toastStore } from '../toast/toastStore.js';
 
 /**
  * C11's prefs RPC declarations, augmenting the shared {@link RpcMethods} registry without editing
@@ -87,7 +88,12 @@ export function createFavoritesActions(
       await bus.rpc('tui.save_favorites', { favorites: [...ids] });
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : String(error);
+      // `persist` is an optimistic fire-and-forget write (the star already toggled locally; there is
+      // no open form to host an inline error, and the slice `error` field is rendered by no view).
+      // So the action-level rejection surfaces via the global toast. The slice `error` is still set
+      // (the documented "intent stands; reconnect re-loads" model) but the toast is what the user sees.
       store.setState((state) => ({ favorites: { ...state.favorites, error: message } }));
+      toastStore.getState().push(message, { severity: 'error', ttlMs: 6000 });
     }
   }
 
