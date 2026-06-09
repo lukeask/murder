@@ -13,12 +13,19 @@
  *  9. Sole-RPC-caller invariant: only ticketDetailActions calls the three bus methods.
  */
 
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 import { FakeBusClient } from '../../src/bus/FakeBusClient.js';
 import { createAppStore, initialAppState } from '../../src/store/store.js';
 import type { TicketDetailReply } from '../../src/store/ticketDetail/ticketDetailActions.js';
 import { isValidDuration } from '../../src/store/ticketDetail/ticketDetailActions.js';
 import { initialTicketDetailState } from '../../src/store/ticketDetail/ticketDetailSlice.js';
+import { selectLiveToasts, toastStore } from '../../src/store/toast/toastStore.js';
+
+/** All live error toasts on the singleton at the current instant (toast test idiom, commit 73d7110). */
+function errorToasts() {
+  const live = selectLiveToasts(toastStore.getState().toasts, Date.now());
+  return live.filter((t) => t.severity === 'error');
+}
 
 // ── Helpers ─────────────────────────────────────────────────────────────────────────────────────
 
@@ -27,11 +34,17 @@ const TICKET_BODY = `## Plan\nDo the thing.\n\n# Checklist\n- [ ] first item\n- 
 const DETAIL_REPLY: TicketDetailReply = {
   id: 'T-1',
   title: 'Alpha ticket',
-  deps: 'T-0',
+  status: 'in_progress',
+  deps: ['T-0', 'T-2'],
   harness: 'claude',
   model: 'anthropic/claude-opus',
   worktree: '.murder/worktrees/t1',
+  schedule_at: '2026-06-10T09:00:00',
   body: TICKET_BODY,
+  checklist: [
+    { text: 'first item', done: false },
+    { text: 'done item', done: true },
+  ],
 };
 
 /** Filter rpcCalls by method name. */
@@ -80,12 +93,51 @@ describe('ticketDetailActions.open', () => {
     expect(detail.editedBody).toBe(TICKET_BODY);
     expect(detail.frontmatter).not.toBeNull();
     expect(detail.frontmatter?.title).toBe('Alpha ticket');
-    expect(detail.frontmatter?.deps).toBe('T-0');
+    expect(detail.frontmatter?.deps).toBe('T-0, T-2');
     expect(detail.frontmatter?.harness).toBe('claude');
     expect(detail.frontmatter?.model).toBe('anthropic/claude-opus');
     expect(detail.frontmatter?.worktree).toBe('.murder/worktrees/t1');
     expect(detail.scheduleInput).toBe('');
     expect(detail.error).toBeNull();
+    dispose();
+  });
+
+  it('consumes the new wire fields: status, schedule_at, and array deps from state.ticket_detail', async () => {
+    // Field-by-field with the Python TicketDetailSnapshot wire shape: status (TicketStatus value),
+    // deps (string[]), schedule_at (ISO string | null). These now ride in the detail snapshot and
+    // surface as display-only header context (frontmatter).
+    const { store, dispose } = setup();
+    await store.getState().actions.ticketDetail.open('T-1');
+    const fm = store.getState().ticketDetail.frontmatter;
+    expect(fm?.status).toBe('in_progress');
+    expect(fm?.scheduleAt).toBe('2026-06-10T09:00:00');
+    // deps[] is joined to a display string (header renders it as `deps:<...>`).
+    expect(fm?.deps).toBe('T-0, T-2');
+    dispose();
+  });
+
+  it('checklist rides in the body (C8 line 167) — the body carries the `# Checklist` `[ ]`/`[x]` lines', async () => {
+    // The structured `checklist` field is carried for contract fidelity but NOT the editor's source;
+    // the editable body is the single source of truth and contains the checklist lines verbatim.
+    const { store, dispose } = setup();
+    await store.getState().actions.ticketDetail.open('T-1');
+    const body = store.getState().ticketDetail.savedBody ?? '';
+    expect(body).toContain('# Checklist');
+    expect(body).toContain('- [ ] first item');
+    expect(body).toContain('- [x] done item');
+    dispose();
+  });
+
+  it('tolerates a null schedule_at and empty deps[] (nullable header fields)', async () => {
+    const { store, dispose } = setup({
+      ...DETAIL_REPLY,
+      schedule_at: null,
+      deps: [],
+    });
+    await store.getState().actions.ticketDetail.open('T-1');
+    const fm = store.getState().ticketDetail.frontmatter;
+    expect(fm?.scheduleAt).toBeNull();
+    expect(fm?.deps).toBe('');
     dispose();
   });
 
@@ -186,6 +238,11 @@ describe('ticketDetailActions.setScheduleInput', () => {
 // ── saveBody() ───────────────────────────────────────────────────────────────────────────────────
 
 describe('ticketDetailActions.saveBody', () => {
+  // The toast singleton is shared global state; reset it between cases (toastStore's own idiom).
+  beforeEach(() => {
+    toastStore.getState().clear();
+  });
+
   it('calls ticket.save_body with the edited body and updates savedBody', async () => {
     const { fake, store, dispose } = setup();
     await store.getState().actions.ticketDetail.open('T-1');
@@ -221,6 +278,41 @@ describe('ticketDetailActions.saveBody', () => {
     await store.getState().actions.ticketDetail.saveBody();
     expect(store.getState().ticketDetail.status).toBe('error');
     expect(store.getState().ticketDetail.error).toContain('write failed');
+    dispose();
+  });
+
+  it('routes a soft-fail (resolved {ok:false, error}) to the error path + error toast, NOT success', async () => {
+    // The service can RESOLVE (not reject) with {handled:true, ok:false, error} — e.g. ticket not
+    // found (orchestrator.py save_ticket_body). Without the ok===false guard this would take the
+    // success branch → savedBody updated, status 'ready' → silent data loss. Prove it now errors.
+    const fake = new FakeBusClient();
+    fake.stubRpc('state.ticket_detail', DETAIL_REPLY);
+    fake.stubRpc('ticket.save_body', { ok: false, error: 'ticket not found: T-1' });
+    fake.stubRpc('state.crow_snapshot', { invalidation_key: 'iv', sessions: [] });
+    const { store, dispose } = createAppStore(fake);
+    await store.getState().actions.ticketDetail.open('T-1');
+    store.getState().actions.ticketDetail.setEditedBody('## Updated body');
+    await store.getState().actions.ticketDetail.saveBody();
+
+    // Did NOT take the success branch: status is error, savedBody unchanged from the loaded body.
+    expect(store.getState().ticketDetail.status).toBe('error');
+    expect(store.getState().ticketDetail.error).toBe('ticket not found: T-1');
+    expect(store.getState().ticketDetail.savedBody).toBe(TICKET_BODY);
+
+    // Surfaced via the SAME mechanism as write-RPC rejections: a global error toast.
+    const errs = errorToasts();
+    expect(errs).toHaveLength(1);
+    expect(errs[0]?.text).toBe('ticket not found: T-1');
+    dispose();
+  });
+
+  it('a successful save ({ok:true}) pushes NO error toast', async () => {
+    const { store, dispose } = setup();
+    await store.getState().actions.ticketDetail.open('T-1');
+    store.getState().actions.ticketDetail.setEditedBody('## Updated body');
+    await store.getState().actions.ticketDetail.saveBody();
+    expect(store.getState().ticketDetail.status).toBe('ready');
+    expect(errorToasts()).toHaveLength(0);
     dispose();
   });
 });

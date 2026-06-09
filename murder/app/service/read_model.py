@@ -111,7 +111,8 @@ class ServiceReadModel:
         with closing(self._connect()) as conn:
             rows = conn.execute(
                 """
-                SELECT p.name, p.status, p.sync_state,
+                SELECT p.name, p.status, p.sync_state, p.updated_at,
+                       p.frontmatter_json, length(p.body) AS body_chars,
                        (SELECT COUNT(*) FROM plan_revisions r WHERE r.plan_name = p.name)
                            AS revisions
                   FROM plans p
@@ -130,6 +131,9 @@ class ServiceReadModel:
                 status=str(row["status"]),
                 revision_count=int(row["revisions"]),
                 sync_state=str(row["sync_state"]),
+                parent=_plan_parent_from_frontmatter(row["frontmatter_json"]),
+                updated_at=_parse_datetime(row["updated_at"]) or as_of,
+                char_count=int(row["body_chars"] or 0),
             )
             for row in rows
         )
@@ -222,9 +226,15 @@ class ServiceReadModel:
             id=ticket.id,
             title=ticket.title,
             status=ticket.status,
+            body=prose["body"],
+            checklist=checklist,
+            deps=tuple(ticket.deps),
+            harness=ticket.harness,
+            model=ticket.model,
+            worktree=ticket.worktree,
+            schedule_at=ticket.schedule_at,
             plan_md=prose["plan"],
             working_notes_md=prose["working_notes"],
-            checklist=checklist,
             as_of=as_of,
             invalidation_key=self.current_key(InvalidationKeys.ticket_detail(ticket_id)),
         )
@@ -579,12 +589,59 @@ class ServiceReadModel:
     def _read_ticket_prose(self, ticket_id: str) -> dict[str, str]:
         path = self.db_path.parent / "tickets" / f"{ticket_id}.md"
         if not path.exists():
-            return {"plan": "", "working_notes": ""}
+            return {"plan": "", "working_notes": "", "body": ""}
+        raw = path.read_text(encoding="utf-8")
         sections = read_ticket_md(path)
         return {
             "plan": sections.get("plan", ""),
             "working_notes": sections.get("working_notes", ""),
+            # The frontmatter-stripped body the C8 editor renders/edits verbatim. Unlike
+            # the parsed plan/working_notes split, this preserves the `# Checklist` lines
+            # the editor toggles. Falls back to the whole file if no frontmatter delimiter.
+            "body": _strip_frontmatter(raw),
         }
+
+
+def _plan_parent_from_frontmatter(frontmatter_json: object) -> str | None:
+    """Extract a plan's parent-plan name from its persisted frontmatter.
+
+    The plans table holds no dedicated parent column; the only non-derived parent
+    metadata is a `parent` key in the plan's frontmatter (C11 expects the parent
+    plan's NAME or null). Returns None when absent, blank, or non-string.
+    """
+    if not isinstance(frontmatter_json, str) or not frontmatter_json:
+        return None
+    try:
+        data = json.loads(frontmatter_json)
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    parent = data.get("parent")
+    if isinstance(parent, str) and parent.strip():
+        return parent.strip()
+    return None
+
+
+_FRONTMATTER_DELIM = "---"
+
+
+def _strip_frontmatter(md_text: str) -> str:
+    """Return the ticket body with leading YAML frontmatter removed.
+
+    Mirrors ``murder.work.tickets.parser._split_frontmatter`` so the C8 editor
+    receives exactly the frontmatter-stripped body (preserving the ``# Checklist``
+    section). Falls back to the whole text when there is no valid frontmatter block.
+    """
+    if not md_text.startswith(f"{_FRONTMATTER_DELIM}\n"):
+        return md_text
+    try:
+        _front, body = md_text[4:].split(f"\n{_FRONTMATTER_DELIM}", 1)
+    except ValueError:
+        return md_text
+    if body.startswith("\n"):
+        body = body[1:]
+    return body
 
 
 def _optional_str(value: object) -> str | None:

@@ -2,8 +2,8 @@
  * Plans actions — the *only* code that calls the bus for plans data (rule 3).
  *
  * Copied from {@link ../notes/notesActions.js} per the copy recipe. Changes vs. notes:
- *  - RPC is `state.plans_snapshot` (modeled per bus-contract naming — NOT yet on the live bus; B13).
- *  - Reply/DTO carry the extra `parent` field (the plan-tree linkage; bus contract › DTO shapes).
+ *  - RPC is `state.plans_snapshot` (registered in `host.py`; live on the bus).
+ *  - Reply/DTO carry the extra `parent`, `updated_at`, and `char_count` fields from the backend.
  *  - Projection is `toPlanRow` (adds `parent`, normalising an absent value to `null`).
  *  - Passes the `plans` slice key to `createRefreshAction`.
  *  - `declare module` augments `RpcMethods` with `'state.plans_snapshot'` (its own distinct key).
@@ -20,12 +20,11 @@ import type { PlanRow } from './plansSlice.js';
 
 /**
  * Declares the plans read RPC via declaration merging (the C1/C2 bus files stay byte-identical).
- * `state.plans_snapshot` is the bus-contract name (`domain.verb`). NOT yet on the live bus — modeled
- * per the contract; confirm the name/shape when service B13 lands.
+ * `state.plans_snapshot` is the bus-contract name (`domain.verb`), registered in `host.py` and live.
  */
 declare module '../../bus/BusClient.js' {
   interface RpcMethods {
-    /** Fetch the full plans list (with parent linkage). Re-pulled on each `plan`-entity snapshot. */
+    /** Fetch the full plans list (with parent/updated_at/char_count). Re-pulled on each `plan`-entity snapshot. */
     'state.plans_snapshot': { params: Record<string, never>; result: PlansSnapshotReply };
   }
 }

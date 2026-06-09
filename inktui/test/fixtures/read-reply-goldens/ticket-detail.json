@@ -1,0 +1,31 @@
+{
+  "ok": true,
+  "value": {
+    "id": "T-101",
+    "title": "Wire the detail pane",
+    "status": "in_progress",
+    "body": "# Body\n\nDo the thing.\n\n# Checklist\n- [x] read files\n- [ ] write code\n",
+    "checklist": [
+      {
+        "text": "read files",
+        "done": true
+      },
+      {
+        "text": "write code",
+        "done": false
+      }
+    ],
+    "deps": [
+      "T-100",
+      "T-099"
+    ],
+    "harness": "cc",
+    "model": "opus",
+    "worktree": "/wt/t-101",
+    "schedule_at": null,
+    "plan_md": "# Body\n\nDo the thing.\n",
+    "working_notes_md": "started reading\n",
+    "as_of": "2026-06-09T00:00:00",
+    "invalidation_key": "ticket_detail:T-101"
+  }
+}
