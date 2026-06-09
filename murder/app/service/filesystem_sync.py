@@ -7,14 +7,19 @@ import contextlib
 import logging
 import sqlite3
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from murder.work.attribution import attribute_edit
 from murder.work.examples import seed_examples
 from murder.work.notes.sync import NoteSync, NotetakerContextSync
 from murder.work.plans.sync import PlanSync
 from murder.work.tickets.sync import TicketSync
+
+if TYPE_CHECKING:
+    from murder.bus import Bus
+    from murder.bus.protocol import Entity, StateSnapshotEvent
 
 LOGGER = logging.getLogger(__name__)
 
@@ -51,6 +56,32 @@ class FilesystemSyncSupervisor:
     ticket_sync: TicketSync
 
     repo_root: Path | None = None
+    # Bus handle + run_id for the async emit seam (F5.1).  Set at construct time
+    # when the broker exists (Runtime.start).  Kept here so Agent 2's F5.3/F5.4
+    # wiring can call ``self._emit(entity, key)`` without any further indirection.
+    _bus: "Bus | None" = field(default=None, repr=False)
+    _run_id: str | None = field(default=None, repr=False)
+
+    async def _emit(self, entity: "Entity", key: str) -> None:
+        """Async emit helper for the F5.1 notify_changed seam.
+
+        Publishes a key-only StateSnapshotEvent from the filesystem sync path.
+        No-ops if bus or run_id are not available (mirrors Runtime.emit_snapshot
+        safety guard).  This is the callback passed as ``on_change`` to each
+        MarkdownSyncLoop that has been wired with F5.1 call sites by Agent 2.
+        """
+        if self._bus is None or self._run_id is None:
+            return
+        from murder.bus.protocol import StateSnapshotEvent  # avoid top-level circular
+
+        await self._bus.publish(
+            StateSnapshotEvent(
+                run_id=self._run_id,
+                agent_id="filesystem-sync",
+                entity=entity,
+                key=key,
+            )
+        )
 
     @classmethod
     def attach(
@@ -61,14 +92,19 @@ class FilesystemSyncSupervisor:
         on_ticket_change: Callable[[str], None] | None = None,
         on_plan_change: Callable[[str], None] | None = None,
         on_note_change: Callable[[str], None] | None = None,
+        bus: "Bus | None" = None,
+        run_id: str | None = None,
     ) -> FilesystemSyncSupervisor:
-        return cls(
+        sup = cls(
             plan_sync=PlanSync(repo_root, db, on_plan_change=on_plan_change),
             note_sync=NoteSync(repo_root, db, on_note_change=on_note_change),
             notetaker_context_sync=NotetakerContextSync(repo_root, db),
             ticket_sync=TicketSync(repo_root, db, on_ticket_change=on_ticket_change),
             repo_root=repo_root,
+            _bus=bus,
+            _run_id=run_id,
         )
+        return sup
 
     def set_parse_error_notifier(self, send_message: MessageSender) -> None:
         """Route malformed-artifact parse errors to the owning agent.
