@@ -45,7 +45,7 @@ from pydantic import BaseModel, Field, TypeAdapter
 
 from murder.work.tickets.status import TicketStatus
 
-PROTOCOL_VERSION = 2
+PROTOCOL_VERSION = 3
 
 
 # === Closed enums ============================================================
@@ -280,6 +280,28 @@ class ConversationBlockEvent(_BaseEvent):
     block: dict[str, Any]
 
 
+class TmuxFrameEvent(_BaseEvent):
+    """Raw ANSI frame from tmux for the focused pane.
+
+    Streamed **only** while the tmux fullscreen mode is active (``ctrl+y``
+    in the Ink TUI); the bus subscription is opened on enter and closed on
+    exit. There is **no standing cost** when nobody is subscribed — the
+    capture loop runs only for the lifetime of the subscription task.
+
+    The ``frame`` field carries the full rendered ANSI output of the pane
+    as a single snapshot string (from ``tmux capture-pane -e``). The
+    consumer replaces its display on every event (no incremental patching).
+
+    Pane-scoping note: the current ``EventFilter`` has no ``pane_id``
+    field.  The server delivers a single stream for the configured focused
+    pane; per-pane multiplexing is deferred (flagged in ``protocol.ts``
+    C14 note).
+    """
+
+    type: Literal["tmux.frame"] = "tmux.frame"
+    frame: str
+
+
 # --- Discriminated union of inner events ------------------------------------
 
 BusEvent = Annotated[
@@ -295,7 +317,8 @@ BusEvent = Annotated[
     | SchedulerModeEvent
     | SchedulerDecisionEvent
     | UsageResetEvent
-    | ConversationBlockEvent,
+    | ConversationBlockEvent
+    | TmuxFrameEvent,
     Field(discriminator="type"),
 ]
 
@@ -510,6 +533,7 @@ __all__ = [
     "SchedulerDecisionEvent",
     "UsageResetEvent",
     "ConversationBlockEvent",
+    "TmuxFrameEvent",
     "BusEvent",
     "AgentEvent",
     "BUS_EVENT_ADAPTER",

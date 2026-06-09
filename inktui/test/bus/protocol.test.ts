@@ -57,7 +57,8 @@ function wireOp(message: WireMessage): string {
 
 describe('protocol', () => {
   it('pins PROTOCOL_VERSION to the Python source (murder/bus/protocol.py)', () => {
-    expect(PROTOCOL_VERSION).toBe(2);
+    // F6 bumped from 2 to 3 (TmuxFrameEvent added in lockstep on both sides).
+    expect(PROTOCOL_VERSION).toBe(3);
   });
 
   it('carries the socket-path constants for the real client (C2)', () => {
