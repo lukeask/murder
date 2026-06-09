@@ -54,13 +54,16 @@ def test_editor_binary_falls_back(repo_root: Path, monkeypatch) -> None:
     assert reply["editor"] == "emacs"
 
 
-def test_image_upload_stores_under_murder_images(repo_root: Path) -> None:
+def test_image_upload_uses_client_minted_name(repo_root: Path) -> None:
+    # F9 contract: the client mints the filename `name` (stem); the server writes
+    # `{name}.{ext}` under .murder/images and no longer mints its own.
     host = _host(repo_root)
     payload = base64.b64encode(b"\x89PNG fake bytes").decode("ascii")
-    reply = _call(host, "image.upload", {"bytes": payload, "ext": "png"})
+    reply = _call(host, "image.upload", {"name": "img-123-abc", "bytes": payload, "ext": "png"})
     assert reply["ok"] is True
     path = Path(reply["path"])
     assert path.exists()
+    assert path.name == "img-123-abc.png"
     assert path.read_bytes() == b"\x89PNG fake bytes"
     assert (repo_root / ".murder" / "images") in path.parents
 
@@ -68,14 +71,58 @@ def test_image_upload_stores_under_murder_images(repo_root: Path) -> None:
 def test_image_upload_rejects_missing_bytes(repo_root: Path) -> None:
     host = _host(repo_root)
     with pytest.raises(ValueError, match="requires base64 bytes"):
-        _call(host, "image.upload", {})
+        _call(host, "image.upload", {"name": "x"})
 
 
 def test_image_upload_reports_invalid_base64(repo_root: Path) -> None:
     host = _host(repo_root)
-    reply = _call(host, "image.upload", {"bytes": "!!!not base64!!!"})
+    reply = _call(host, "image.upload", {"name": "x", "bytes": "!!!not base64!!!"})
     assert reply["ok"] is False
     assert "invalid base64" in reply["error"]
+
+
+def test_image_upload_rejects_empty_name(repo_root: Path) -> None:
+    # The server never trusts the wire: an absent/empty (or all-illegal-chars) name
+    # is rejected rather than written to a bare-extension path.
+    host = _host(repo_root)
+    payload = base64.b64encode(b"x").decode("ascii")
+    reply = _call(host, "image.upload", {"name": "", "bytes": payload})
+    assert reply["ok"] is False
+    assert "non-empty name" in reply["error"]
+    # All-illegal characters (slashes only) sanitize to empty → same rejection.
+    reply2 = _call(host, "image.upload", {"name": "///", "bytes": payload})
+    assert reply2["ok"] is False
+    assert "non-empty name" in reply2["error"]
+
+
+def test_image_upload_sanitizes_path_traversal_in_name(repo_root: Path) -> None:
+    # A traversal attempt in `name` is scrubbed to a basename — the slashes/dots
+    # forming `../` are stripped, so the write stays inside .murder/images.
+    host = _host(repo_root)
+    payload = base64.b64encode(b"safe").decode("ascii")
+    reply = _call(host, "image.upload", {"name": "../../etc/foo", "bytes": payload, "ext": "png"})
+    assert reply["ok"] is True
+    path = Path(reply["path"])
+    images_dir = repo_root / ".murder" / "images"
+    assert path.parent == images_dir
+    # The separators are gone; only the basename charset survives.
+    assert "/" not in path.name
+    assert path.name == "....etcfoo.png"
+    assert path.exists()
+
+
+def test_image_upload_sanitizes_ext(repo_root: Path) -> None:
+    # `ext` is equally wire-controlled and joined into the path — it is scrubbed too,
+    # so a traversal-shaped ext can't escape .murder/images.
+    host = _host(repo_root)
+    payload = base64.b64encode(b"e").decode("ascii")
+    reply = _call(host, "image.upload", {"name": "pic", "bytes": payload, "ext": "../png"})
+    assert reply["ok"] is True
+    path = Path(reply["path"])
+    assert path.parent == (repo_root / ".murder" / "images")
+    assert "/" not in path.name
+    # `../png` → lstrip('.') → `/png` → sanitize → `png`
+    assert path.name == "pic.png"
 
 
 def test_favorites_round_trip(repo_root: Path) -> None:

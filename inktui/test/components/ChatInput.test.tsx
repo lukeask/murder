@@ -21,6 +21,7 @@ import { AppStoreProvider } from '../../src/hooks/useAppStore.js';
 import { InputStoresProvider } from '../../src/hooks/useInputStores.js';
 import { useRootInput } from '../../src/hooks/useRootInput.js';
 import { createInputStores } from '../../src/input/createInputStores.js';
+import { createImageDraftStore } from '../../src/store/imageDraft/imageDraftStore.js';
 import { createAppStore } from '../../src/store/store.js';
 
 const RETURN = '\r';
@@ -58,10 +59,12 @@ function Harness({
   readonly spawn?: () => void;
 }): JSX.Element {
   function Root(): null {
-    // Wire the persistent chat handler exactly as App.tsx's Shell does.
+    // Wire the persistent chat handler exactly as App.tsx's Shell does. F9: an image-draft store is
+    // threaded in (no images pasted in these tests, so a bare FakeBusClient-backed one suffices).
+    const imageDraft = createImageDraftStore(new FakeBusClient());
     useRootInput({
       ...(spawn !== undefined ? { spawn } : {}),
-      chatInput: makeChatInputHandler(inputStores.chatInput, store),
+      chatInput: makeChatInputHandler(inputStores.chatInput, store, imageDraft),
     });
     return null;
   }

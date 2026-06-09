@@ -5,10 +5,11 @@
  * or in components. The `ConversationsState` stores raw `ConversationBlock`s; this selector
  * produces ordered `ChatTurn[]` arrays ready to paint.
  *
- * Block→turn formatting mirrors the shape of Python `conversations.py`'s `_segment_to_turn`,
- * but only the subset the chat pane actually renders: user, assistant, tool_call, plan_update.
- * We intentionally do NOT port every branch of `_segment_to_turn` — only what the component needs
- * to display. Unknown block types are passed through with a fallback label so new service events
+ * Block→turn formatting mirrors the Python Textual `_segment_text` (`crows_view.py:464-544`):
+ * user, assistant, tool_call, plan_update, agent_event, choice_prompt, notice. The
+ * choice_prompt branch also carries the live-prompt trailing-segment heuristic
+ * (`crows_view.py:595-608`) via `ChatTurn.isLivePrompt` — see that field's doc.
+ * Unknown block types are passed through with a fallback label so new service events
  * don't silently vanish.
  *
  * Two layers (mirrors `crowsSelectors.ts`):
@@ -35,7 +36,15 @@ import { isFavorited } from './favoritesSelectors.js';
 // ---------------------------------------------------------------------------
 
 /** The speaker of a chat turn. */
-export type TurnSpeaker = 'user' | 'assistant' | 'tool' | 'plan' | 'agent' | 'notice' | 'unknown';
+export type TurnSpeaker =
+  | 'user'
+  | 'assistant'
+  | 'tool'
+  | 'plan'
+  | 'agent'
+  | 'prompt'
+  | 'notice'
+  | 'unknown';
 
 /** A single display-ready chat turn. */
 export interface ChatTurn {
@@ -45,6 +54,19 @@ export interface ChatTurn {
   readonly text: string;
   /** The originating block's id, if any (for keying in React lists). */
   readonly blockId: string | null;
+  /**
+   * True only for an unanswered `choice_prompt` that is the trailing block of the transcript —
+   * i.e. a still-open live multiple-choice dialog the user can answer. Ports the Textual
+   * `_live_choice_prompt` trailing-segment heuristic (`crows_view.py:595-608`): a live wizard is
+   * always the last segment (the grammar appends it last while the pane shows it, and marks it
+   * `answered` once it's gone), so liveness is "unanswered AND trailing", not a `live_state` field.
+   *
+   * The turn *text* is identical whether live or finalized (Textual's `_segment_text` keys the
+   * answered/unanswered branch on `answered`, not position) — this flag is the only thing the
+   * heuristic adds at this layer, letting a future wizard component swap on it. Absent/false on
+   * every other turn.
+   */
+  readonly isLivePrompt?: boolean;
 }
 
 /** Chat history view-model for one agent. */
@@ -127,6 +149,49 @@ function formatBlock(block: ConversationBlock): ChatTurn | null {
       }
       return { speaker: 'plan', text: lines.join('\n'), blockId };
     }
+    case 'agent_event': {
+      // status · name · elapsed (status first), dropping empties; null if all empty.
+      const parts = [
+        str(raw, 'status').trim(),
+        str(raw, 'name').trim(),
+        str(raw, 'elapsed').trim(),
+      ];
+      const present = parts.filter((p) => p);
+      if (present.length === 0) return null;
+      return { speaker: 'agent', text: present.join(' · '), blockId };
+    }
+    case 'choice_prompt': {
+      const question = str(raw, 'question').trim();
+      if (!question) return null;
+      const options = field(raw, 'options');
+      const lines: string[] = [question];
+      if (field(raw, 'answered') === true) {
+        // Finalized: show only the chosen option ("selected: N. label").
+        const chosen = field(raw, 'chosen');
+        if (Array.isArray(options)) {
+          for (const option of options) {
+            if (option === null || typeof option !== 'object' || Array.isArray(option)) continue;
+            const optRec = option as Readonly<Record<string, unknown>>;
+            if (field(optRec, 'number') !== chosen) continue;
+            const label = str(optRec, 'label').trim();
+            if (label) lines.push(`selected: ${String(chosen)}. ${label}`);
+            break;
+          }
+        }
+        return { speaker: 'prompt', text: lines.join('\n'), blockId };
+      }
+      // Unanswered: list every numbered option ("N. label").
+      if (Array.isArray(options)) {
+        for (const option of options) {
+          if (option === null || typeof option !== 'object' || Array.isArray(option)) continue;
+          const optRec = option as Readonly<Record<string, unknown>>;
+          const number = field(optRec, 'number');
+          const label = str(optRec, 'label').trim();
+          if (label) lines.push(`${String(number)}. ${label}`);
+        }
+      }
+      return { speaker: 'prompt', text: lines.join('\n'), blockId };
+    }
     case 'notice': {
       const rawMsg = str(raw, 'message').trim() || str(raw, 'text').trim();
       if (!rawMsg) return null;
@@ -154,9 +219,25 @@ export function selectConversationTurns(
 ): readonly ChatTurn[] {
   if (!blocks || blocks.length === 0) return [];
   const turns: ChatTurn[] = [];
-  for (const block of blocks) {
+  const lastBlock = blocks[blocks.length - 1];
+  // Trailing-segment heuristic (Textual `_live_choice_prompt`): the final block is a still-open
+  // live prompt iff it is an unanswered `choice_prompt`. Computed here, where block position is
+  // known — `formatBlock` is position-blind. The text is identical live-vs-finalized; only the
+  // `isLivePrompt` flag changes.
+  const lastIsLivePrompt =
+    lastBlock !== undefined &&
+    lastBlock.type === 'choice_prompt' &&
+    field(lastBlock.raw, 'answered') !== true;
+  for (let i = 0; i < blocks.length; i++) {
+    const block = blocks[i];
+    if (block === undefined) continue;
     const turn = formatBlock(block);
-    if (turn !== null) turns.push(turn);
+    if (turn === null) continue;
+    if (i === blocks.length - 1 && lastIsLivePrompt) {
+      turns.push({ ...turn, isLivePrompt: true });
+    } else {
+      turns.push(turn);
+    }
   }
   return turns;
 }

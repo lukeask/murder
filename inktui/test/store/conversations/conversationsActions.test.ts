@@ -12,11 +12,12 @@
  * Pattern: FakeBusClient + createAppStore (the C3/C8 store-test idiom).
  */
 
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 import { FakeBusClient } from '../../../src/bus/FakeBusClient.js';
 import type { ConversationBlockEvent } from '../../../src/bus/protocol.js';
 import { initialConversationsState } from '../../../src/store/conversations/conversationsSlice.js';
 import { createAppStore, initialAppState } from '../../../src/store/store.js';
+import { toastStore } from '../../../src/store/toast/toastStore.js';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────────────────────────
 
@@ -228,6 +229,70 @@ describe('conversationsActions.send', () => {
         c.method === 'command.submit' && (c.params as { kind: string }).kind === 'agent.message',
     );
     expect(agentMessageCalls).toHaveLength(1);
+    dispose();
+  });
+});
+
+// ── F9: send pushes a toast on bus ack (TODO-T) ─────────────────────────────────────────────────
+
+describe('conversationsActions.send — toast on bus ack (F9)', () => {
+  /** Build a store whose `agent.message` command resolves with a given `result_json` body, so the
+   * send action sees the branch under test (success / queued / handled-false). */
+  function setupWithResult(resultJson: string) {
+    const fake = new FakeBusClient();
+    fake.stubRpc('state.crow_snapshot', { invalidation_key: 'iv', sessions: [] });
+    fake.stubRpc('command.submit', { ok: true, command_id: 'cmd-1' });
+    fake.stubRpc('command.status', { ok: true, status: 'done', result_json: resultJson });
+    const { store, dispose } = createAppStore(fake);
+    return { store, dispose };
+  }
+
+  beforeEach(() => {
+    // The send action pushes to the toastStore singleton — reset it between cases.
+    toastStore.getState().clear();
+  });
+
+  it('pushes "→ {agentId}" (info) on a successful ack — not at keypress, on the ack', async () => {
+    const { store, dispose } = setupWithResult('{}');
+    expect(toastStore.getState().toasts).toHaveLength(0); // nothing before the ack
+
+    await store.getState().actions.conversations.send('crow-7', 'hi');
+
+    const toasts = toastStore.getState().toasts;
+    expect(toasts).toHaveLength(1);
+    expect(toasts[0]?.text).toBe('→ crow-7');
+    expect(toasts[0]?.severity).toBe('info');
+    toastStore.getState().clear();
+    dispose();
+  });
+
+  it('pushes "message queued (crow busy)" when the ack reports queued', async () => {
+    const { store, dispose } = setupWithResult(JSON.stringify({ queued: true }));
+
+    await store.getState().actions.conversations.send('crow-7', 'hi');
+
+    const toasts = toastStore.getState().toasts;
+    expect(toasts).toHaveLength(1);
+    expect(toasts[0]?.text).toBe('message queued (crow busy)');
+    expect(toasts[0]?.severity).toBe('info');
+    toastStore.getState().clear();
+    dispose();
+  });
+
+  it('pushes an error toast (and skips the → toast + pane-set) when handled === false', async () => {
+    const { store, dispose } = setupWithResult(
+      JSON.stringify({ handled: false, error: 'agent did not handle message' }),
+    );
+
+    await store.getState().actions.conversations.send('crow-7', 'hi');
+
+    const toasts = toastStore.getState().toasts;
+    expect(toasts).toHaveLength(1);
+    expect(toasts[0]?.text).toBe('agent did not handle message');
+    expect(toasts[0]?.severity).toBe('error');
+    // Faithful to Textual: a rejected message does not become the active pane.
+    expect(store.getState().conversations.activePaneAgentId).toBeNull();
+    toastStore.getState().clear();
     dispose();
   });
 });

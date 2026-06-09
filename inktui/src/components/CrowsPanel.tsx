@@ -27,6 +27,7 @@ import {
 } from '../hooks/useInputStores.js';
 import type { PanelKeymap } from '../input/keymap.js';
 import type { PanelId } from '../input/panels.js';
+import { HEALTH_EDGE_COLOR } from '../selectors/crowHealthSelectors.js';
 import {
   type CrowRowView,
   type CrowSection,
@@ -62,10 +63,13 @@ const CrowEntryMin = memo(function CrowEntryMin({
   readonly row: CrowRowView;
   readonly selected: boolean;
 }): React.JSX.Element {
-  const marker = selected ? '▌' : ' ';
+  // The left-edge glyph is the crow-health border (ported from Textual's per-row `border-left`):
+  // always painted, coloured by `row.health`. The cursor adds an inverse highlight over the line.
+  const edgeColor = HEALTH_EDGE_COLOR[row.health];
   return (
     <Text inverse={selected} wrap="truncate">
-      {`${marker} ${row.name}  `}
+      <Text color={edgeColor}>{selected ? '▌' : '▎'}</Text>
+      {` ${row.name}  `}
       <Text color="cyan">{row.status}</Text>
     </Text>
   );
@@ -82,11 +86,13 @@ const CrowEntryMax = memo(function CrowEntryMax({
   readonly row: CrowRowView;
   readonly selected: boolean;
 }): React.JSX.Element {
-  const marker = selected ? '▌' : ' ';
+  // Left-edge crow-health border (see CrowEntryMin); the second line aligns under it with a space.
+  const edgeColor = HEALTH_EDGE_COLOR[row.health];
   return (
     <Box flexDirection="column">
       <Text inverse={selected} wrap="truncate">
-        {`${marker} ${row.name}  `}
+        <Text color={edgeColor}>{selected ? '▌' : '▎'}</Text>
+        {` ${row.name}  `}
         <Text color="cyan">{row.status}</Text>
       </Text>
       <Text dimColor={!selected} inverse={selected} wrap="truncate">

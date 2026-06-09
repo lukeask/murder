@@ -28,6 +28,7 @@
 
 import { useMemo } from 'react';
 import type { RosterRow, RosterState } from '../store/roster/rosterSlice.js';
+import { classifyCrowHealth, type Health } from './crowHealthSelectors.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -63,6 +64,12 @@ export interface CrowRowView {
   readonly harness: string;
   /** Model, basename-only and truncated. Used in the maximized second line. */
   readonly model: string;
+  /**
+   * Client-side health for the crow's left-edge marker (ported from Textual `crow_health.py`).
+   * Derived from `status` today; the escalation/stuck branches are dormant until the wire grows
+   * `open_escalations`/`max_severity`/`last_seen` (see `crowHealthSelectors.ts` DATA-SHAPE GAP).
+   */
+  readonly health: Health;
 }
 
 /** One section as the component paints it: a header label + the rows under it. */
@@ -154,6 +161,10 @@ function toRowView(row: RosterRow): CrowRowView {
     status: row.status,
     harness: row.harness ?? '—',
     model: modelBasename(row.model),
+    // Status-only today: the wire (`RosterRow`/`CrowSessionDto`) carries no escalation count,
+    // severity, or heartbeat, so escalation-RED and stuck-YELLOW pass their defaults and stay
+    // dormant until the service adds those fields. See crowHealthSelectors.ts DATA-SHAPE GAP.
+    health: classifyCrowHealth({ status: row.status }),
   };
 }
 
