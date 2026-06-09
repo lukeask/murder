@@ -140,6 +140,25 @@ def get_plan_row(conn: sqlite3.Connection, name: str) -> dict[str, Any] | None:
     return dict(row) if row else None
 
 
+# A plan is "live" (and so owns its name) unless it has been superseded.
+# Mirrors the notes precedent (``active_note_name_exists`` treats only
+# ``status == 'active'`` rows as name-owning); the not-live plan status is
+# ``superseded`` (set by ``deprecate_plan``). ``draft`` and ``accepted`` are live.
+_LIVE_PLAN_STATUSES = ("draft", "accepted")
+
+
+def live_plan_name_exists(conn: sqlite3.Connection, name: str) -> bool:
+    """True iff a *live* (non-superseded) plan already owns ``name``.
+
+    Status-aware existence guard for ``plan.create`` (the plans analogue of
+    notes' ``active_note_name_exists``): a superseded plan does not block reuse
+    of its name, but a live plan does — creating over a live name would clobber
+    its body via the scaffold upsert, the data-integrity violation we forbid.
+    """
+    row = get_plan_row(conn, name)
+    return row is not None and str(row.get("status", "")) in _LIVE_PLAN_STATUSES
+
+
 def get_plan_row_by_materialized_path(
     conn: sqlite3.Connection,
     materialized_path: str,

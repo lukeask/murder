@@ -25,6 +25,8 @@ from murder.state.persistence.tickets import (
 )
 from murder.state.persistence.plans import (
     get_plan_row as _db_get_plan_row,
+    live_plan_name_exists as _db_live_plan_name_exists,
+    rename_plan as _db_rename_plan,
     upsert_plan as _db_upsert_plan,
 )
 from murder.state.persistence.agents import (
@@ -142,6 +144,33 @@ def _validate_plan_filename_stem(name: str, *, command: str) -> str:
     if not name or "/" in name or "\\" in name or name in {".", ".."}:
         raise ValueError(f"{command} name must be a single filename stem")
     return name
+
+
+def _free_superseded_plan_name(db: Any, name: str) -> str:
+    """Release ``name`` from the superseded plan that currently owns it.
+
+    Renames the superseded DB row (PRIMARY KEY ``plans.name``) to a collision-
+    safe archived key so a fresh plan can take ``name``. All of the old plan's
+    data — body, revisions, related tickets, and its deprecated-dir markdown —
+    is preserved; only the DB key changes (its ``materialized_path`` is carried
+    through unchanged so the on-disk file is not orphaned). Returns the new key.
+
+    F3b: this is the chosen resolution of the schema/app uniqueness tension —
+    free the superseded row's name at create-time (option (a)). No schema change
+    or migration, and it reuses the existing data-preserving ``rename_plan``.
+    """
+    row = _db_get_plan_row(db, name)
+    assert row is not None
+    materialized_path = str(row.get("materialized_path") or "")
+    base = f"{name}-superseded"
+    archived = base
+    i = 2
+    while _db_get_plan_row(db, archived) is not None:
+        archived = f"{base}-{i}"
+        i += 1
+    with db:
+        _db_rename_plan(db, name, archived, materialized_path=materialized_path)
+    return archived
 
 
 class Orchestrator:
@@ -1371,6 +1400,28 @@ class Orchestrator:
         plan_name = (plan_name or "").strip()
         if not plan_name:
             raise ValueError("plan.create requires plan_name")
+        assert self.rt.db is not None
+        # Data-integrity guard (F3b): scaffold_plan UPSERTs, so creating over an
+        # existing name would silently clobber that plan's body. A *live* plan
+        # owns its name — reject and never overwrite. A *superseded* plan does
+        # not block reuse, but the plans.name PRIMARY KEY still forbids a second
+        # row, so free the superseded row's name first (rename it to an archived
+        # key, preserving all its data + its deprecated-dir markdown) before the
+        # scaffold INSERT. This keeps the DB constraint and the app guard in
+        # exact agreement at INSERT time. Mirrors notes' status-aware guard.
+        if _db_live_plan_name_exists(self.rt.db, plan_name):
+            raise FileExistsError(
+                f"a plan named {plan_name!r} already exists; "
+                "choose a different name or rename the existing plan"
+            )
+        existing = _db_get_plan_row(self.rt.db, plan_name)
+        if existing is not None:
+            # Superseded row holds the name — archive it (data fully preserved)
+            # so the scaffold can take the name. Atomic with no markdown change
+            # to the archived plan: rename_plan carries its materialized_path
+            # through, so its deprecated-dir file is not orphaned.
+            archived = _free_superseded_plan_name(self.rt.db, plan_name)
+            await self.rt.publish_snapshot(Entity.PLAN, archived)
         scaffolded = await self.scaffold_plan(plan_name, "# Plan Name\n")
         name = str(scaffolded.get("name") or plan_name)
         agent_id: str | None = None
