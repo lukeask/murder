@@ -92,6 +92,106 @@ describe('selectConversationTurns', () => {
     expect(turns[0]?.text).toBe('warning: something happened');
   });
 
+  it('formats agent_event as "status · name · elapsed", dropping empties', () => {
+    const turns = selectConversationTurns([
+      block('agent_event', { status: 'running', name: 'crow-7', elapsed: '12s' }),
+    ]);
+    expect(turns[0]?.speaker).toBe('agent');
+    expect(turns[0]?.text).toBe('running · crow-7 · 12s');
+  });
+
+  it('agent_event drops empty parts and preserves status · name · elapsed order', () => {
+    const turns = selectConversationTurns([
+      block('agent_event', { status: '', name: 'crow-7', elapsed: '' }),
+    ]);
+    expect(turns[0]?.text).toBe('crow-7');
+  });
+
+  it('agent_event with all-empty parts is skipped', () => {
+    const turns = selectConversationTurns([
+      block('agent_event', { status: '  ', name: '', elapsed: '' }),
+    ]);
+    expect(turns).toHaveLength(0);
+  });
+
+  it('formats answered choice_prompt showing only the chosen option', () => {
+    const turns = selectConversationTurns([
+      block('choice_prompt', {
+        question: 'Pick one',
+        answered: true,
+        chosen: 2,
+        options: [
+          { number: 1, label: 'Alpha' },
+          { number: 2, label: 'Beta' },
+        ],
+      }),
+    ]);
+    expect(turns[0]?.speaker).toBe('prompt');
+    expect(turns[0]?.text).toBe('Pick one\nselected: 2. Beta');
+    expect(turns[0]?.isLivePrompt).toBeUndefined();
+  });
+
+  it('formats unanswered choice_prompt listing every numbered option', () => {
+    const turns = selectConversationTurns([
+      block('user', { text: 'go' }),
+      block('choice_prompt', {
+        question: 'Pick one',
+        options: [
+          { number: 1, label: 'Alpha' },
+          { number: 2, label: 'Beta' },
+        ],
+      }),
+    ]);
+    // Covers the unanswered listing text (every numbered option). This prompt is trailing,
+    // so it also carries isLivePrompt=true — asserted separately in the heuristic tests below.
+    const prompt = turns.find((t) => t.speaker === 'prompt');
+    expect(prompt?.text).toBe('Pick one\n1. Alpha\n2. Beta');
+  });
+
+  it('choice_prompt with no question is skipped', () => {
+    const turns = selectConversationTurns([
+      block('choice_prompt', { question: '  ', options: [] }),
+    ]);
+    expect(turns).toHaveLength(0);
+  });
+
+  it('marks a trailing unanswered choice_prompt as a live prompt (heuristic)', () => {
+    const turns = selectConversationTurns([
+      block('assistant', { text: 'thinking' }),
+      block('choice_prompt', {
+        question: 'Pick one',
+        options: [{ number: 1, label: 'Alpha' }],
+      }),
+    ]);
+    const last = turns[turns.length - 1];
+    expect(last?.speaker).toBe('prompt');
+    expect(last?.isLivePrompt).toBe(true);
+  });
+
+  it('does NOT mark an answered trailing choice_prompt as live', () => {
+    const turns = selectConversationTurns([
+      block('choice_prompt', {
+        question: 'Pick one',
+        answered: true,
+        chosen: 1,
+        options: [{ number: 1, label: 'Alpha' }],
+      }),
+    ]);
+    expect(turns[turns.length - 1]?.isLivePrompt).toBeUndefined();
+  });
+
+  it('does NOT mark a non-trailing unanswered choice_prompt as live', () => {
+    const turns = selectConversationTurns([
+      block('choice_prompt', {
+        question: 'Pick one',
+        options: [{ number: 1, label: 'Alpha' }],
+      }),
+      block('assistant', { text: 'moved on' }),
+    ]);
+    const prompt = turns.find((t) => t.speaker === 'prompt');
+    expect(prompt?.isLivePrompt).toBeUndefined();
+  });
+
   it('unknown block type passes through with fallback label', () => {
     const turns = selectConversationTurns([block('future_type', {})]);
     expect(turns[0]?.speaker).toBe('unknown');
