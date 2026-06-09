@@ -363,12 +363,20 @@ class ServiceHost:
             return {"ok": True, "editor": choose_editor(preferred)}
 
         def _image_upload(body: dict[str, Any]) -> dict[str, Any]:
-            # V2: store a pasted clipboard image under .murder/images and return
-            # the stored path the note draft references. Bytes ride base64 over
-            # JSON-RPC.
+            # F9: store a pasted clipboard image under .murder/images and return
+            # the stored path. Bytes ride base64 over JSON-RPC.
+            #
+            # The client now mints the filename ``stem`` at paste time and passes
+            # it as ``name`` (so the label<->file binding is known instantly,
+            # client-side). The server no longer mints it. But the service NEVER
+            # trusts a path from the wire: both ``name`` and ``ext`` are
+            # sanitized to the basename charset before being joined into the
+            # path, so a traversal attempt (``../../etc/foo``) collapses to a
+            # harmless basename. This guard is unconditional (the bus is a local
+            # UDS with only our own TUI as client, but the invariant holds
+            # regardless).
             import base64
-            import secrets
-            from datetime import datetime as _dt
+            import re
 
             from murder.state.storage.paths import murder_dir as _murder_dir
 
@@ -379,12 +387,18 @@ class ServiceHost:
                 data = base64.b64decode(data_b64, validate=True)
             except Exception as exc:  # noqa: BLE001
                 return {"ok": False, "error": f"invalid base64: {exc}"}
-            ext = str(body.get("ext") or "png").lstrip(".") or "png"
+
+            def _sanitize(value: str) -> str:
+                return re.sub(r"[^a-zA-Z0-9._-]", "", value)
+
+            stem = _sanitize(str(body.get("name") or ""))
+            if not stem:
+                return {"ok": False, "error": "image.upload requires a non-empty name"}
+            ext = _sanitize(str(body.get("ext") or "png").lstrip(".")) or "png"
+
             images_dir = _murder_dir(self.repo_root) / "images"
             images_dir.mkdir(parents=True, exist_ok=True)
-            ts = _dt.now().strftime("%Y%m%d%H%M%S")
-            fname = f"note-img-{ts}-{secrets.token_hex(2)}.{ext}"
-            fpath = images_dir / fname
+            fpath = images_dir / f"{stem}.{ext}"
             fpath.write_bytes(data)
             return {"ok": True, "path": str(fpath)}
 

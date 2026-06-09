@@ -47,6 +47,31 @@ export interface RpcMethods {
   'command.submit': { params: CommandSubmitParams; result: CommandSubmitResult };
   /** Poll a submitted command's status (live `command.status`). */
   'command.status': { params: { command_id: string }; result: CommandStatusResult };
+  /**
+   * Store a pasted clipboard image and return its on-disk path (F9 image-paste UX). A *direct* RPC,
+   * not a `command.submit`: it writes a file and returns a path (the service is the sole disk writer)
+   * — it does NOT mutate a conversation entity, so it does not route through the command choke point.
+   * The client mints the filename `stem` at paste time and passes it as `name`; the server sanitizes
+   * it (never trusts the wire) before writing `images_dir/{name}.{ext}`. Bytes ride base64.
+   */
+  'image.upload': { params: ImageUploadParams; result: ImageUploadResult };
+}
+
+/** Params for `image.upload`: the client-minted filename stem, the extension, and base64 bytes. */
+export interface ImageUploadParams extends Record<string, unknown> {
+  /** The client-minted `uuid+timestamp` stem — the filename (sans extension). Sanitized server-side. */
+  readonly name: string;
+  /** The file extension (e.g. `'png'`). Sanitized server-side. */
+  readonly ext: string;
+  /** The image bytes, base64-encoded. */
+  readonly bytes: string;
+}
+
+/** Reply from `image.upload`: the stored path on success, or an error on failure. */
+export interface ImageUploadResult extends RpcPayload {
+  readonly ok: boolean;
+  readonly path?: string;
+  readonly error?: string;
 }
 
 /** Params for the live `command.submit` RPC (mirrors `murder/app/service/host.py`). */

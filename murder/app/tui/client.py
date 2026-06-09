@@ -140,12 +140,25 @@ class TuiRuntimeClient:
         return bool(reply.get("exists"))
 
     async def upload_image(self, data: bytes, *, ext: str = "png") -> Path:
-        """Upload a pasted clipboard image; return the stored .murder path (V2)."""
-        import base64
+        """Upload a pasted clipboard image; return the stored .murder path (V2).
 
+        F9 contract: the client mints the filename ``name`` (stem); the server
+        sanitizes it and no longer mints. The Ink frontend mints a
+        uuid+timestamp stem; this legacy Textual client mints an equivalent.
+        """
+        import base64
+        import secrets
+        from datetime import datetime as _dt
+
+        ts = _dt.now().strftime("%Y%m%d%H%M%S")
+        name = f"note-img-{ts}-{secrets.token_hex(2)}"
         reply = await self.bus.request(
             "image.upload",
-            {"bytes": base64.b64encode(data).decode("ascii"), "ext": ext},
+            {
+                "name": name,
+                "bytes": base64.b64encode(data).decode("ascii"),
+                "ext": ext,
+            },
             timeout_s=STATE_RPC_TIMEOUT_S,
         )
         if not reply.get("ok"):

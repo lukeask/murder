@@ -33,7 +33,7 @@
  */
 
 import { Box } from 'ink';
-import { type JSX, useEffect } from 'react';
+import { type JSX, useEffect, useMemo } from 'react';
 import type { BusClient } from '../bus/BusClient.js';
 import { AppStoreProvider, useAppStore, useAppStoreApi } from '../hooks/useAppStore.js';
 import { BusClientProvider, useBusClient } from '../hooks/useBusClient.js';
@@ -45,13 +45,20 @@ import {
   usePanelStore,
 } from '../hooks/useInputStores.js';
 import { useRootInput } from '../hooks/useRootInput.js';
+import { readClipboardImage } from '../input/clipboardImage.js';
+import { expandSpans, spanIds } from '../input/chatInputStore.js';
 import type { ChatInputHandler } from '../input/dispatcher.js';
 import { selectActiveMode } from '../input/modeStore.js';
 import type { PanelId } from '../input/panels.js';
 import { selectActiveAgentId } from '../selectors/conversationsSelectors.js';
 import { createSpawnActions } from '../store/dialogs/spawnActions.js';
 import { DOC_DIR } from '../store/docView/docViewSlice.js';
+import {
+  createImageDraftStore,
+  type ImageDraftStoreApi,
+} from '../store/imageDraft/imageDraftStore.js';
 import type { AppStoreApi } from '../store/store.js';
+import { toastStore } from '../store/toast/toastStore.js';
 import { BottomBar } from './BottomBar.js';
 import { ChatInput } from './ChatInput.js';
 import { CrowChatPanel } from './CrowChatPanel.js';
@@ -183,28 +190,69 @@ export function deriveSpawnContext(appStore: AppStoreApi): SpawnContext | null {
 export function makeChatInputHandler(
   chatInput: InputStores['chatInput'],
   appStore: AppStoreApi,
+  imageDraft: ImageDraftStoreApi,
 ): ChatInputHandler {
   return {
     handleKey(input, key): boolean {
       // Enter → send the buffer to the active agent, then clear. Always consumed (Enter is chat's).
+      //
+      // F9 submit-while-uploading policy (per-state, because the states differ by *path availability*
+      // — the full path only comes back from the server on resolve):
+      //  - any span still `uploading` → BLOCK the send (no path yet to expand): info toast, keep the
+      //    buffer intact so nothing is lost. Least-surprising: the user just waits a beat.
+      //  - `done` spans  → expanded to `![image]({path})` via `expandSpans`.
+      //  - `failed` spans → STRIPPED from the outgoing markdown (their id is absent from `pathsById`),
+      //    so a failed upload never traps the buffer; the in-text marker the user saw is simply dropped.
       if (key.return === true) {
-        const message = chatInput.getState().text;
-        if (message.length > 0) {
-          const agentId = selectActiveAgentId(
-            appStore.getState().conversations,
-            appStore.getState().roster,
-            appStore.getState().favorites,
-          );
-          if (agentId !== null) {
-            void appStore.getState().actions.conversations.send(agentId, message);
+        const buffer = chatInput.getState().text;
+        if (buffer.length > 0) {
+          const draftState = imageDraft.getState();
+          const ids = spanIds(buffer);
+          const stillUploading = ids.some((id) => draftState.drafts[id]?.status === 'uploading');
+          if (stillUploading) {
+            // Block: leave the buffer untouched and tell the user why (consumed — Enter is chat's).
+            toastStore.getState().push('image still uploading…', { ttlMs: 2000 });
+            return true;
+          }
+          const message = expandSpans(buffer, draftState.pathsById());
+          if (message.length > 0) {
+            const agentId = selectActiveAgentId(
+              appStore.getState().conversations,
+              appStore.getState().roster,
+              appStore.getState().favorites,
+            );
+            if (agentId !== null) {
+              void appStore.getState().actions.conversations.send(agentId, message);
+            }
+          }
+          // Drop the drafts now that they're expanded/stripped — the buffer is clearing.
+          for (const id of ids) {
+            imageDraft.getState().drop(id);
           }
         }
         chatInput.getState().clear();
         return true;
       }
-      // Backspace/Delete → delete the last char. Consumed.
+      // ctrl+v → image paste. Read the clipboard client-side; if it holds an image, mint a draft +
+      // wrap a span into the buffer (the label→file binding is known instantly — see imageDraftStore).
+      // If no image, decline (return false): plain-text paste is the terminal's job, not ours.
+      if (key.ctrl === true && input === 'v') {
+        void readClipboardImage().then((image) => {
+          if (image === null) {
+            return;
+          }
+          const id = imageDraft.getState().paste(image.bytes, image.ext);
+          chatInput.getState().appendImageSpan(id);
+        });
+        return true;
+      }
+      // Backspace/Delete → delete at the trailing edge. A trailing image span is removed whole and its
+      // id returned, so we drop its imageDraftStore entry (cancel/ignore the in-flight upload). Consumed.
       if (key.backspace === true || key.delete === true) {
-        chatInput.getState().backspace();
+        const removedId = chatInput.getState().backspace();
+        if (removedId !== null) {
+          imageDraft.getState().drop(removedId);
+        }
         return true;
       }
       // A printable character (no modifier, single visible char) → append. Consumed.
@@ -239,6 +287,11 @@ function Shell(): JSX.Element {
   const bus = useBusClient();
   const loadFavorites = useAppStore((s) => s.actions.favorites.load);
 
+  // F9: the image-draft store owns the `image.upload` bus call + the FIFO upload queue (it writes a
+  // file, doesn't mutate a conversation — so rule 3's "send lives in conversations" doesn't apply).
+  // One instance per bus; toasts go to the app singleton. Stable across renders (the bus is stable).
+  const imageDraft = useMemo(() => createImageDraftStore(bus, toastStore), [bus]);
+
   // Load persisted favorites once on mount (rule 3: via the action). Fire-and-forget; a rejection
   // (e.g. the modeled-not-live prefs RPC against a real bus) lands in the slice's error and leaves
   // favorites at their defaults — never crashes the shell.
@@ -259,7 +312,10 @@ function Shell(): JSX.Element {
   // C13: `spawn` wired to the spawn wizard handler. C11: `chatInput` wired to the persistent
   // chat-input handler (buffers chars, sends on Enter to the active agent). Global ctrl-chords still
   // preempt it (layer 1 < layer 2), so the user can summon panels mid-message.
-  useRootInput({ spawn: spawnHandler, chatInput: makeChatInputHandler(chatInput, appStore) });
+  useRootInput({
+    spawn: spawnHandler,
+    chatInput: makeChatInputHandler(chatInput, appStore, imageDraft),
+  });
 
   // A full-screen mode (C14 tmux) replaces the whole layout: when one is active the shell renders
   // only the {@link Overlay} (which paints the full-viewport surface), suppressing its own bars and

@@ -30,7 +30,19 @@ import {
   useMeasureFocus,
 } from '../hooks/useInputStores.js';
 import { CHAT_FOCUS } from '../input/focusStore.js';
+import { SPAN_CLOSE, SPAN_OPEN } from '../input/chatInputStore.js';
 import { TextInput } from './TextInput.js';
+
+/** Matches one marked image span (`U+E000 <id> U+E001`) for render-time substitution. */
+const SPAN_RE = new RegExp(`${SPAN_OPEN}[^${SPAN_OPEN}${SPAN_CLOSE}]*${SPAN_CLOSE}`, 'g');
+
+/** Render-time display of the buffer: replace each invisible marked span with its derived visible
+ * `[Image N]` label, numbered by position. The buffer holds *ids*, never the visible number, so this
+ * positional counting renumbers for free when a span is deleted (F9). Plain text passes through. */
+export function displayBuffer(text: string): string {
+  let n = 0;
+  return text.replace(SPAN_RE, () => `[Image ${++n}]`);
+}
 
 export const ChatInput = memo(function ChatInput(): React.JSX.Element {
   const ref = useFocusRef();
@@ -38,10 +50,12 @@ export const ChatInput = memo(function ChatInput(): React.JSX.Element {
   useMeasureFocus(CHAT_FOCUS, ref);
   // Rule 1: read exactly the chat buffer text. The dispatcher's chat handler owns mutation (rule 5).
   const text = useChatInputStore((s) => s.text);
+  // F9: marked image spans (invisible PUA-wrapped ids) render as derived `[Image N]` labels.
+  const display = displayBuffer(text);
   return (
     <Box ref={ref} borderStyle="round" borderColor={focused ? 'green' : 'gray'} paddingX={1}>
       <Text dimColor={!focused}>{focused ? '› ' : '  '}</Text>
-      <TextInput value={text} placeholder="message the collaborator…" focused={focused} />
+      <TextInput value={display} placeholder="message the collaborator…" focused={focused} />
     </Box>
   );
 });
