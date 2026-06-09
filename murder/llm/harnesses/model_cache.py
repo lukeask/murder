@@ -1,11 +1,15 @@
 """In-process cache of discovered harness models with classvar fallback.
 
-The service process runs :func:`populate_model_cache` once at startup (after
-``start_supervisor_workers``); it fires :func:`discover_harness_models` per
-``model_discovery``-capable harness behind a graceful timeout and records the
-result here. Reads go through :func:`get_available_models`, which returns the
-discovered list when the cache is populated and otherwise falls back to the
-adapter's hardcoded ``available_startup_models`` classvar.
+The service process runs :func:`refresh_and_persist_harness_models` once at
+startup (after ``start_supervisor_workers``); it fires
+:func:`discover_harness_models` per ``model_discovery``-capable harness behind
+a graceful timeout, records the result in the in-process cache, and persists
+the per-harness rows to the SQLite DB so the Ink frontend can pull last-good
+values via the ``state.harness_models_snapshot`` RPC.
+
+Reads go through :func:`get_available_models`, which returns the discovered
+list when the cache is populated and otherwise falls back to the adapter's
+hardcoded ``available_startup_models`` classvar.
 
 The cache is process-local by design: the TUI runs in a separate process and
 simply sees the classvar fallback. Cross-process delivery of discovered models
@@ -17,6 +21,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import sqlite3
+from datetime import datetime
 from pathlib import Path
 
 from murder.llm.harnesses import REGISTRY, capabilities_for
@@ -70,26 +76,106 @@ def enabled_harnesses() -> list[str]:
     return [kind for kind in REGISTRY if capabilities_for(kind).model_discovery]
 
 
-async def _discover_one(harness: str, repo_root: Path, *, timeout_s: float) -> None:
+# ---------------------------------------------------------------------------
+# Per-harness discovery with error capture (returns result tuple)
+# ---------------------------------------------------------------------------
+
+async def _discover_one_with_result(
+    harness: str,
+    repo_root: Path,
+    *,
+    timeout_s: float,
+) -> tuple[list[tuple[str, str]], str | None]:
+    """Run discovery for one harness and return ``(models, error_msg)``.
+
+    *models* is the discovered list (may be empty on failure).
+    *error_msg* is None on success, non-None on any failure/timeout.
+    Never raises.
+    """
+    error: str | None = None
     try:
         result = await asyncio.wait_for(
             discover_harness_models(harness, repo_root), timeout=timeout_s
         )
     except (TimeoutError, asyncio.TimeoutError):
         LOGGER.info("model discovery for %s timed out; using fallback", harness)
-        return
-    except Exception:
+        return [], "timeout"
+    except Exception as exc:  # noqa: BLE001
         LOGGER.debug("model discovery for %s raised; using fallback", harness, exc_info=True)
-        return
+        return [], str(exc) or "unknown error"
     if result.ok and result.data:
-        set_discovered_models(harness, list(result.data))
-        LOGGER.info("discovered %d models for %s", len(result.data), harness)
+        models = list(result.data)
+        LOGGER.info("discovered %d models for %s", len(models), harness)
+        return models, None
     else:
-        LOGGER.info(
-            "model discovery for %s failed (%s); using fallback",
-            harness,
-            result.message,
-        )
+        msg = result.message or "discovery returned no models"
+        LOGGER.info("model discovery for %s failed (%s); using fallback", harness, msg)
+        error = msg
+        return [], error
+
+
+async def refresh_and_persist_harness_models(
+    repo_root: Path,
+    db: sqlite3.Connection | None = None,
+    *,
+    timeout_s: float = DISCOVERY_TIMEOUT_S,
+) -> None:
+    """Discover models for all enabled harnesses, update the in-process cache,
+    and persist results to the SQLite DB if *db* is provided.
+
+    This is the canonical single-pass discovery function.  It replaces the
+    ``populate_model_cache`` call at startup so discovery fires exactly once.
+    Each per-harness probe runs concurrently; failures are captured in
+    ``discovery_error`` and never poison the batch.  The in-process cache
+    (``_CACHE``) is updated on success so callers using ``get_available_models``
+    see fresh data immediately.
+
+    *db* — an open SQLite connection (from ``get_db``/``init_db``). When None
+    the DB write is skipped (useful in tests that only exercise the cache).
+    """
+    harnesses = enabled_harnesses()
+    if not harnesses:
+        return
+
+    tasks = [
+        _discover_one_with_result(h, repo_root, timeout_s=timeout_s)
+        for h in harnesses
+    ]
+    results = await asyncio.gather(*tasks)
+
+    fetched_at = datetime.utcnow().isoformat(timespec="seconds")
+
+    for harness, (models, error) in zip(harnesses, results):
+        # Update in-process cache for successes.
+        if models:
+            set_discovered_models(harness, models)
+
+        # Persist to DB if provided.
+        if db is not None:
+            try:
+                from murder.state.persistence.harness_models import upsert_harness_models
+
+                # Models to persist: use discovered if available, else fallback.
+                persist_models = models if models else [
+                    {"id": mid, "label": label}
+                    for mid, label in _fallback_models(harness)
+                ]
+                # If discovery succeeded, models came as tuples; convert to dicts.
+                if models:
+                    persist_models = [{"id": mid, "label": label} for mid, label in models]
+
+                upsert_harness_models(
+                    db,
+                    harness=harness,
+                    models=persist_models,
+                    fetched_at=fetched_at,
+                    discovery_error=error,
+                )
+                db.commit()
+            except Exception:  # noqa: BLE001
+                LOGGER.debug(
+                    "failed to persist model discovery for %s to DB", harness, exc_info=True
+                )
 
 
 async def populate_model_cache(
@@ -97,16 +183,12 @@ async def populate_model_cache(
 ) -> None:
     """Discover models for every enabled harness concurrently and cache them.
 
-    Never raises and never blocks indefinitely: each per-harness probe is
-    wrapped in its own timeout and all failures are swallowed so a hung or
-    broken harness can't poison startup or the rest of the discovery batch.
+    Kept for backward compatibility.  New callers that also need DB persistence
+    should use :func:`refresh_and_persist_harness_models` directly.
+
+    Never raises and never blocks indefinitely.
     """
-    harnesses = enabled_harnesses()
-    if not harnesses:
-        return
-    await asyncio.gather(
-        *(_discover_one(h, repo_root, timeout_s=timeout_s) for h in harnesses)
-    )
+    await refresh_and_persist_harness_models(repo_root, db=None, timeout_s=timeout_s)
 
 
 __all__ = [
@@ -115,5 +197,6 @@ __all__ = [
     "enabled_harnesses",
     "get_available_models",
     "populate_model_cache",
+    "refresh_and_persist_harness_models",
     "set_discovered_models",
 ]

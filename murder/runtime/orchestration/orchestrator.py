@@ -1173,10 +1173,18 @@ class Orchestrator:
 
     async def reconfigure_collaborator(self) -> dict[str, Any]:
         """Reload project config and restart the collaborator if its live harness changed."""
+        from murder.llm.harnesses.model_cache import refresh_and_persist_harness_models
+
         new_config = Config.load(self.rt.repo_root)
         self.rt.config = new_config
         current_harness = new_config.collaborator.harness
         write_harnesses_doc(self.rt.repo_root)
+        # Best-effort re-scrape: newly-enabled harnesses get discovered and
+        # persisted. Failures are swallowed inside refresh_and_persist.
+        try:
+            await refresh_and_persist_harness_models(self.rt.repo_root, self.rt.db)
+        except Exception:  # noqa: BLE001
+            LOGGER.debug("model re-scrape after reconfigure_collaborator failed", exc_info=True)
 
         restarted = False
         agent_id = _db_get_active_agent_by_role(self.rt.db, "collaborator")

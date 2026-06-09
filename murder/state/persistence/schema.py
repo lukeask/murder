@@ -393,6 +393,17 @@ CREATE TABLE IF NOT EXISTS scheduler_decision_cache (
     updated_at           TEXT NOT NULL,
     PRIMARY KEY (harness, window_key)
 );
+
+-- Persisted model discovery results (one row per harness kind).
+-- models_json: JSON array of {"id": ..., "label": ...} objects.
+-- discovery_error: non-null when the last probe failed (null on success).
+-- fetched_at: ISO8601 UTC timestamp of the last discovery attempt.
+CREATE TABLE IF NOT EXISTS harness_models (
+    harness         TEXT PRIMARY KEY,
+    fetched_at      TEXT NOT NULL,
+    models_json     TEXT NOT NULL,
+    discovery_error TEXT
+);
 """
 # fmt: on
 
