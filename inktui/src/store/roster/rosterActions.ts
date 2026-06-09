@@ -57,6 +57,13 @@ export interface CrowSnapshotReply {
  * One session row as it crosses the wire (Python `CrowSessionSummary`). Presentation-free.
  * `role` mirrors `murder/bus/protocol.py`'s `Role` enum (`'collaborator' | 'planner' | 'crow' |
  * …`). The slice stores it as a raw string; `crowsSelectors.ts` (C9) uses it for type-grouping.
+ *
+ * Rich fields added from Python `CrowSessionSummary` (client_api.py:102-116):
+ * - `last_seen` / `started_at`: ISO-8601 datetime strings (Python `datetime.isoformat()`), or null.
+ * - `open_escalations`: count of open escalations linked to this crow's ticket (default 0).
+ * - `max_severity`: max severity across open escalations (default 0).
+ * - `ticket_status`: the ticket's current status string, or null.
+ * - `worktree_path`: filesystem path of the crow's worktree, or null.
  */
 export interface CrowSessionDto {
   agent_id: string;
@@ -67,6 +74,18 @@ export interface CrowSessionDto {
   model?: string | null;
   status: string;
   session_name?: string | null;
+  /** ISO-8601 string from Python datetime.isoformat(), or null. Used for stuck-heartbeat detection. */
+  last_seen?: string | null;
+  /** ISO-8601 string from Python datetime.isoformat(), or null. */
+  started_at?: string | null;
+  /** The ticket's current status string (mirrors Python `TicketStatus`), or null. */
+  ticket_status?: string | null;
+  /** Filesystem path of the crow's worktree, or null. */
+  worktree_path?: string | null;
+  /** Count of open escalations linked to this crow's ticket. Python default 0. */
+  open_escalations?: number;
+  /** Max severity across this crow's open escalations. Python default 0. */
+  max_severity?: number;
 }
 
 /** Project one wire session into the slice's row. Pure: the single place the DTO→domain mapping
@@ -81,6 +100,9 @@ function toRosterRow(session: CrowSessionDto): RosterRow {
     model: session.model ?? null,
     status: session.status,
     session: session.session_name ?? null,
+    lastSeen: session.last_seen ?? null,
+    openEscalations: session.open_escalations ?? 0,
+    maxSeverity: session.max_severity ?? 0,
   };
 }
 

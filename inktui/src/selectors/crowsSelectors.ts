@@ -28,7 +28,7 @@
 
 import { useMemo } from 'react';
 import type { RosterRow, RosterState } from '../store/roster/rosterSlice.js';
-import { classifyCrowHealth, type Health } from './crowHealthSelectors.js';
+import { classifyCrowHealth, isStuck, type Health } from './crowHealthSelectors.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -66,8 +66,9 @@ export interface CrowRowView {
   readonly model: string;
   /**
    * Client-side health for the crow's left-edge marker (ported from Textual `crow_health.py`).
-   * Derived from `status` today; the escalation/stuck branches are dormant until the wire grows
-   * `open_escalations`/`max_severity`/`last_seen` (see `crowHealthSelectors.ts` DATA-SHAPE GAP).
+   * Derived from `status`, `openEscalations`, `maxSeverity`, and the 60s stuck-heartbeat rule
+   * using `last_seen`. All four branches of `classifyCrowHealth` are now live: RED (escalation /
+   * severity / red-status), YELLOW (stuck), GREEN (running/idle), NEUTRAL (done/unknown).
    */
   readonly health: Health;
 }
@@ -154,17 +155,31 @@ function rowToGroup(row: RosterRow): CrowGroup | null {
   }
 }
 
-function toRowView(row: RosterRow): CrowRowView {
+function toRowView(row: RosterRow, nowMs: number): CrowRowView {
+  // Parse the ISO-8601 last_seen into milliseconds; null if absent or unparseable.
+  const rawLastSeen = row.lastSeen ?? null;
+  const lastSeenMs: number | null =
+    rawLastSeen !== null
+      ? (() => {
+          const ms = Date.parse(rawLastSeen);
+          return Number.isNaN(ms) ? null : ms;
+        })()
+      : null;
+
+  const stuck = isStuck({ status: row.status, lastSeenMs, nowMs });
+
   return {
     agentId: row.agentId,
     name: row.session ?? row.agentId,
     status: row.status,
     harness: row.harness ?? '—',
     model: modelBasename(row.model),
-    // Status-only today: the wire (`RosterRow`/`CrowSessionDto`) carries no escalation count,
-    // severity, or heartbeat, so escalation-RED and stuck-YELLOW pass their defaults and stay
-    // dormant until the service adds those fields. See crowHealthSelectors.ts DATA-SHAPE GAP.
-    health: classifyCrowHealth({ status: row.status }),
+    health: classifyCrowHealth({
+      status: row.status,
+      openEscalations: row.openEscalations ?? 0,
+      maxSeverity: row.maxSeverity ?? 0,
+      stuck,
+    }),
   };
 }
 
@@ -183,9 +198,12 @@ function byStatusThenId(a: RosterRow, b: RosterRow): number {
  * sorts within each group by status then id. Omits empty groups from the output. Omits
  * internal/infrastructure roles (`notetaker`, `crow_handler`, etc.).
  *
- * Same input → same output; no React, no store, no bus.
+ * `nowMs` is the current epoch-ms, used to compute the stuck-heartbeat (YELLOW health). It
+ * defaults to `Date.now()` so callers that don't care about stuck detection need no change.
+ * Pass an explicit `nowMs` in tests for determinism (the pure core never calls `Date.now()`
+ * internally). `useCrowsView` injects the real clock as the single live-data injection point.
  */
-export function selectCrowsView(state: RosterState): CrowsView {
+export function selectCrowsView(state: RosterState, nowMs: number = Date.now()): CrowsView {
   // Sort a copy (never mutate the readonly slice) before grouping so within-group order is stable.
   const sorted = [...state.rows].sort(byStatusThenId);
 
@@ -206,7 +224,7 @@ export function selectCrowsView(state: RosterState): CrowsView {
       sections.push({
         group,
         label: CROW_GROUP_LABEL[group],
-        rows: rows.map(toRowView),
+        rows: rows.map((r) => toRowView(r, nowMs)),
       });
     }
   }
@@ -225,8 +243,13 @@ export function selectCrowsView(state: RosterState): CrowsView {
  * store ref-swaps the whole `roster` slice only on change, `state` is referentially stable
  * between unrelated re-renders, so this re-groups only when the roster actually changed.
  *
+ * `Date.now()` is intentionally captured inside the memo factory — each re-render driven by a
+ * slice change gets a fresh clock reading, which is the correct behaviour for stuck-heartbeat
+ * detection. The pure `selectCrowsView` never calls `Date.now()` itself; this hook is the sole
+ * clock injection point.
+ *
  * Usage: `const view = useCrowsView(useAppStore((s) => s.roster));`
  */
 export function useCrowsView(state: RosterState): CrowsView {
-  return useMemo(() => selectCrowsView(state), [state]);
+  return useMemo(() => selectCrowsView(state, Date.now()), [state]);
 }

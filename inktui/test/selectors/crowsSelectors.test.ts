@@ -173,8 +173,8 @@ describe('selectCrowsView — grouping and ordering', () => {
 });
 
 describe('selectCrowsView — crow-health on row views', () => {
-  // The row view carries the ported health classification (status-only today; the escalation/stuck
-  // branches stay dormant until the wire grows the fields — see crowHealthSelectors.ts).
+  // The row view carries the ported health classification. All four branches are live now that
+  // RosterRow carries openEscalations, maxSeverity, and lastSeen (A#6 fix).
   function healthOf(s: ReturnType<typeof selectCrowsView>, agentId: string): string | undefined {
     for (const section of s.sections) {
       for (const r of section.rows) {
@@ -197,5 +197,89 @@ describe('selectCrowsView — crow-health on row views', () => {
     expect(healthOf(view, 'fail')).toBe('red');
     expect(healthOf(view, 'esc')).toBe('red');
     expect(healthOf(view, 'done')).toBe('neutral');
+  });
+});
+
+describe('selectCrowsView — rich-field health plumbing (A#6)', () => {
+  // Proves the DTO→RosterRow→classifyCrowHealth pipeline actually uses open_escalations,
+  // max_severity, and last_seen. Before A#6 all three branches were hardcoded to defaults and
+  // could never fire from real wire data.
+
+  const NOW = 1_000_000_000_000; // fixed epoch-ms for determinism
+
+  function healthOf(s: ReturnType<typeof selectCrowsView>, agentId: string): string | undefined {
+    for (const section of s.sections) {
+      for (const r of section.rows) {
+        if (r.agentId === agentId) return r.health;
+      }
+    }
+    return undefined;
+  }
+
+  it('RED when openEscalations > 0, even for a running crow (escalation-RED branch)', () => {
+    const view = selectCrowsView(
+      state([
+        row({ agentId: 'esc-crow', role: 'crow', ticketId: 'T-1', status: 'running',
+              openEscalations: 1, maxSeverity: 0 }),
+      ]),
+      NOW,
+    );
+    expect(healthOf(view, 'esc-crow')).toBe('red');
+  });
+
+  it('RED when maxSeverity >= 2, even with zero open escalations (severity-RED branch)', () => {
+    const view = selectCrowsView(
+      state([
+        row({ agentId: 'sev-crow', role: 'crow', ticketId: 'T-2', status: 'idle',
+              openEscalations: 0, maxSeverity: 2 }),
+      ]),
+      NOW,
+    );
+    expect(healthOf(view, 'sev-crow')).toBe('red');
+  });
+
+  it('YELLOW when running crow last_seen > 60s ago (stuck-heartbeat branch)', () => {
+    const staleIso = new Date(NOW - 90_000).toISOString(); // 90s ago → stuck
+    const view = selectCrowsView(
+      state([
+        row({ agentId: 'stuck-crow', role: 'crow', ticketId: null, status: 'running',
+              lastSeen: staleIso, openEscalations: 0, maxSeverity: 0 }),
+      ]),
+      NOW,
+    );
+    expect(healthOf(view, 'stuck-crow')).toBe('yellow');
+  });
+
+  it('GREEN when running crow last_seen is recent (< 60s), no escalations', () => {
+    const recentIso = new Date(NOW - 10_000).toISOString(); // 10s ago → not stuck
+    const view = selectCrowsView(
+      state([
+        row({ agentId: 'healthy-crow', role: 'crow', ticketId: null, status: 'running',
+              lastSeen: recentIso, openEscalations: 0, maxSeverity: 0 }),
+      ]),
+      NOW,
+    );
+    expect(healthOf(view, 'healthy-crow')).toBe('green');
+  });
+
+  it('GREEN for a running crow with no rich fields (optional-field backward-compat)', () => {
+    // Rows built without the new fields (e.g. existing tests) default to 0/null and stay GREEN.
+    const view = selectCrowsView(
+      state([row({ agentId: 'basic', role: 'crow', ticketId: null, status: 'running' })]),
+      NOW,
+    );
+    expect(healthOf(view, 'basic')).toBe('green');
+  });
+
+  it('escalation-RED wins over stuck-YELLOW (precedence)', () => {
+    const staleIso = new Date(NOW - 90_000).toISOString();
+    const view = selectCrowsView(
+      state([
+        row({ agentId: 'esc-stuck', role: 'crow', ticketId: 'T-3', status: 'running',
+              lastSeen: staleIso, openEscalations: 1, maxSeverity: 0 }),
+      ]),
+      NOW,
+    );
+    expect(healthOf(view, 'esc-stuck')).toBe('red');
   });
 });
