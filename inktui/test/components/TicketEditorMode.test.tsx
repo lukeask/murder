@@ -103,7 +103,7 @@ function Harness({
 async function setup() {
   const fake = new FakeBusClient();
   fake.stubRpc('state.schedule_snapshot', SNAPSHOT_REPLY);
-  fake.stubRpc('ticket.get_detail', DETAIL_REPLY);
+  fake.stubRpc('state.ticket_detail', DETAIL_REPLY);
   fake.stubRpc('ticket.save_body', { ok: true });
   fake.stubRpc('ticket.schedule', { ok: true });
   fake.stubRpc('state.crow_snapshot', { invalidation_key: 'iv', sessions: [] });

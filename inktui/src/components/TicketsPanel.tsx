@@ -30,7 +30,7 @@
  * C8 should add an `'open'` intent to this panel's keymap (bound to `enter`) that pushes the
  * selected ticket id to the editor. The `TicketRowView` fields are all display-ready strings;
  * C8's editor needs the raw `TicketRow` from the slice (via the store), not the view-model strings.
- * The editor will call `ticket.get_detail { ticket_id }` for the body/frontmatter separately.
+ * The editor will call `state.ticket_detail { ticket_id }` for the body/frontmatter separately.
  */
 
 import { Box, Text } from 'ink';

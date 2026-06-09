@@ -2,13 +2,13 @@
  * Ticket-detail actions — the *only* code that calls the bus for ticket detail data (rule 3).
  *
  * Three modeled RPCs (NOT yet on the live bus — FakeBusClient only until service B13):
- *  1. `ticket.get_detail {ticket_id}` → body string + frontmatter for display.
+ *  1. `state.ticket_detail {ticket_id}` → body string + frontmatter for display.
  *  2. `ticket.save_body {ticket_id, body}` → `{ok}` — service syncs the markdown body to DB.
  *  3. `ticket.schedule {ticket_id, duration}` → `{ok}` — service runs `parse_duration()` and
  *     updates `schedule_at`. The raw string (e.g. `"1d4h3m"`) is sent as-is; the backend is
  *     authoritative. Client-side regex validation (`DURATION_RE`) provides inline UX only.
  *
- * The `ticket.get_detail` response carries:
+ * The `state.ticket_detail` response carries:
  *  - `body: string` — the full markdown body (includes `# Checklist` section with `[ ]`/`[x]`
  *    lines). This is the editable document; the editor toggles checklist items as normal body edits.
  *  - Frontmatter fields for display-only context in the editor header (`title`, `deps`, `harness`,
@@ -42,7 +42,7 @@ declare module '../../bus/BusClient.js' {
      * The service's `get_ticket_detail(ticket_id)` returns `TicketDetailSnapshot`; this models
      * the RPC surface. Body contains `# Checklist` with `[ ]`/`[x]` lines.
      */
-    'ticket.get_detail': {
+    'state.ticket_detail': {
       params: { ticket_id: string };
       result: TicketDetailReply;
     };
@@ -69,7 +69,7 @@ declare module '../../bus/BusClient.js' {
 // ── Wire DTO ────────────────────────────────────────────────────────────────────────────────────
 
 /**
- * The `ticket.get_detail` reply. Frontmatter fields for display-only context; `body` is the
+ * The `state.ticket_detail` reply. Frontmatter fields for display-only context; `body` is the
  * editable markdown string. Runtime state (`status`, `schedule_at`) is NOT included — it lives
  * in the tickets list row DTO only (bus contract invariant).
  *
@@ -187,7 +187,7 @@ export function createTicketDetailActions(
         },
       }));
       try {
-        const reply = await bus.rpc('ticket.get_detail', { ticket_id: ticketId });
+        const reply = await bus.rpc('state.ticket_detail', { ticket_id: ticketId });
         const next: TicketDetailState = {
           ticketId,
           frontmatter: toFrontmatter(reply),

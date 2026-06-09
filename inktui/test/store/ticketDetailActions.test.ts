@@ -44,7 +44,7 @@ function callsFor(
 
 function setup(detailReply: TicketDetailReply = DETAIL_REPLY) {
   const fake = new FakeBusClient();
-  fake.stubRpc('ticket.get_detail', detailReply);
+  fake.stubRpc('state.ticket_detail', detailReply);
   fake.stubRpc('ticket.save_body', { ok: true });
   fake.stubRpc('ticket.schedule', { ok: true });
   // Stub sibling RPCs so the store doesn't reject on side-effects.
@@ -89,10 +89,10 @@ describe('ticketDetailActions.open', () => {
     dispose();
   });
 
-  it('calls ticket.get_detail exactly once with the ticket_id', async () => {
+  it('calls state.ticket_detail exactly once with the ticket_id', async () => {
     const { fake, store, dispose } = setup();
     await store.getState().actions.ticketDetail.open('T-1');
-    const calls = callsFor(fake, 'ticket.get_detail');
+    const calls = callsFor(fake, 'state.ticket_detail');
     expect(calls).toHaveLength(1);
     expect(calls[0]?.params).toEqual({ ticket_id: 'T-1' });
     dispose();
@@ -110,7 +110,7 @@ describe('ticketDetailActions.open', () => {
 
   it('sets status error on rejection', async () => {
     const fake = new FakeBusClient();
-    fake.stubRpc('ticket.get_detail', () => {
+    fake.stubRpc('state.ticket_detail', () => {
       throw new Error('not found');
     });
     fake.stubRpc('state.crow_snapshot', { invalidation_key: 'iv', sessions: [] });
@@ -211,7 +211,7 @@ describe('ticketDetailActions.saveBody', () => {
 
   it('sets status error on save failure', async () => {
     const fake = new FakeBusClient();
-    fake.stubRpc('ticket.get_detail', DETAIL_REPLY);
+    fake.stubRpc('state.ticket_detail', DETAIL_REPLY);
     fake.stubRpc('ticket.save_body', () => {
       throw new Error('write failed');
     });
