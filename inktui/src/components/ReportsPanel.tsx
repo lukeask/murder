@@ -50,13 +50,29 @@ type ReportsIntent = 'cursorDown' | 'cursorUp' | 'refresh' | 'star' | 'open';
  */
 function renderReportEntry(row: ReportRowView, ctx: LedgerEntryContext): React.ReactNode {
   const marker = ctx.selected ? '▌' : ' ';
-  const star = row.starred ? '★ ' : '';
+  // FIXED-WIDTH star gutter (bug 2): `★ ` when starred, two spaces otherwise — name column is fixed.
+  const star = row.starred ? '★ ' : '  ';
   return (
+    // Line-2 indent is marker(1)+space(1)+star(2)=4 so `charCount` sits under `name`.
     <Box flexDirection="column" flexGrow={1} flexShrink={0}>
       <Text wrap="truncate">{`${marker} ${star}${row.name}`}</Text>
       <Text dimColor={!ctx.selected} wrap="truncate">
-        {`  ${row.charCount} · ${row.updatedAt}`}
+        {`    ${row.charCount} · ${row.updatedAt}`}
       </Text>
+    </Box>
+  );
+}
+
+/**
+ * The Ledger column-titles key — a dim two-line block labeling the entry lines: `name` over
+ * `size · updated`. The 4-space leading indent matches {@link renderReportEntry}'s gutters
+ * (marker + space + star) so the labels sit directly above the data columns (bug 1).
+ */
+function renderReportsHeader(): React.ReactNode {
+  return (
+    <Box flexDirection="column" flexShrink={0}>
+      <Text dimColor>{'    name'}</Text>
+      <Text dimColor>{'    size · updated'}</Text>
     </Box>
   );
 }
@@ -90,6 +106,8 @@ function ReportsList({
       minColumns={1}
       maxColumns={1}
       renderEntry={renderReportEntry}
+      header={renderReportsHeader}
+      overflowIndent={4}
       rowKey={(row) => row.name}
     />
   );

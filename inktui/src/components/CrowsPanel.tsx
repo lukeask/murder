@@ -148,6 +148,20 @@ function renderCrowRow(
   );
 }
 
+/**
+ * The Ledger column-titles key for crows — a single dim line labeling the crow row layout: a 2-col
+ * leading gutter (matching the glyph + space) then `crow · status` (bug 1). The grouped section labels
+ * are in-band rows; this top key explains what a crow LINE means. Rendered above the rows; it doesn't
+ * participate in the flat cursor mapping (headers/keys are never selectable).
+ */
+function renderCrowsHeader(): React.ReactNode {
+  return (
+    <Box flexShrink={0}>
+      <Text dimColor>{'  crow · status'}</Text>
+    </Box>
+  );
+}
+
 /** The list body: loading/error/empty chrome (Ledger renders nothing for zero rows), else the
  * flattened sections + crow rows via {@link Ledger}. */
 function CrowsList({
@@ -181,6 +195,7 @@ function CrowsList({
       minColumns={1}
       maxColumns={1}
       renderEntry={(ledgerRow, ctx) => renderCrowRow(ledgerRow, ctx, expanded)}
+      header={renderCrowsHeader}
       rowKey={(ledgerRow) =>
         ledgerRow.kind === 'header' ? `h:${ledgerRow.group}` : `c:${ledgerRow.row.agentId}`
       }

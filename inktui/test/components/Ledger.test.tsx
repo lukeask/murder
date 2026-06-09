@@ -103,35 +103,138 @@ describe('computeWindow — overflow math', () => {
   });
 });
 
+/**
+ * SCROLLOFF = 1 spec (bug 4 — "the highlighted item must stay on screen; keep 1 row visible above
+ * AND below the cursor, except at the list edges"). These pin the user's EXACT reported example and
+ * the invariant `start <= cursor < end` at every cursor position, plus the list-edge exceptions and a
+ * tiny-capacity degenerate case. This is the authoritative scroll test — the render tests can't catch
+ * a live windowing bug because the measured height comes from the real terminal, not these budgets.
+ *
+ * The user's example: item1..item7 (7 rows, 0-indexed 0..6), a viewport that fits 3 entries plus a
+ * top `…` and a bottom `…` (availableHeight 5, 1 line/entry, no header → with both indicators,
+ * capacity = floor((5-1-1)/1) = 3). Cursor on item5 (index 4) shows `…item4 [item5] item6 …`; moving
+ * to item6 (index 5) scrolls one row to `…item5 [item6] item7` (still a row visible below — here the
+ * bottom edge, so the bottom `…` drops).
+ */
+describe('computeWindow — SCROLLOFF=1 spec (bug 4)', () => {
+  const ROWS = 7; // item1..item7
+  const H = 5; // fits 3 entries + top … + bottom … (capacity 3 when both indicators present)
+
+  it("user's example: cursor on item5 (idx 4) shows item4..item6 with both … ", () => {
+    const w = computeWindow(ROWS, 4, 1, H, false);
+    expect(w).toEqual({ start: 3, end: 6, moreAbove: true, moreBelow: true });
+    // 1 row visible above (item4=idx3) AND below (item6=idx5) the cursor (item5=idx4).
+    expect(w.start).toBeLessThan(4);
+    expect(w.end).toBeGreaterThan(5);
+  });
+
+  it("user's example: moving to item6 (idx 5) scrolls down, still shows a row above AND below", () => {
+    const w = computeWindow(ROWS, 5, 1, H, false);
+    // item7 (idx 6) is the last row, so the bottom margin is the list edge → the bottom `…` drops,
+    // which frees a line and grows the window to 4 rows (item4..item7, idx 3..6). The cursor (item6,
+    // idx 5) keeps a row visible above (item5, idx 4) and below (item7, idx 6) — the SCROLLOFF intent.
+    expect(w).toEqual({ start: 3, end: 7, moreAbove: true, moreBelow: false });
+    expect(w.start).toBeLessThan(5); // ≥1 row visible above the cursor
+    expect(w.end).toBeGreaterThan(6); // ≥1 row visible below the cursor
+    expect(5 >= w.start && 5 < w.end).toBe(true); // cursor on screen
+  });
+
+  it('cursor at row 0 has no top margin (start pinned to 0)', () => {
+    const w = computeWindow(ROWS, 0, 1, H, false);
+    expect(w.start).toBe(0);
+    expect(w.moreAbove).toBe(false);
+    expect(w.moreBelow).toBe(true);
+    expect(0 >= w.start && 0 < w.end).toBe(true);
+  });
+
+  it('cursor at the last row has no bottom margin (end pinned to rowCount)', () => {
+    const last = ROWS - 1;
+    const w = computeWindow(ROWS, last, 1, H, false);
+    expect(w.end).toBe(ROWS);
+    expect(w.moreBelow).toBe(false);
+    expect(w.moreAbove).toBe(true);
+    expect(last >= w.start && last < w.end).toBe(true);
+  });
+
+  it('cursor in the middle keeps exactly one row above and one below', () => {
+    for (let cursor = 1; cursor < ROWS - 1; cursor++) {
+      const w = computeWindow(ROWS, cursor, 1, H, false);
+      // Invariant: cursor strictly inside the window.
+      expect(cursor >= w.start && cursor < w.end).toBe(true);
+      // Interior cursor → a row visible both above and below (the SCROLLOFF=1 guarantee).
+      expect(w.start).toBeLessThanOrEqual(cursor - 1);
+      expect(w.end).toBeGreaterThanOrEqual(cursor + 2);
+    }
+  });
+
+  it('cursor is ALWAYS within [start, end) for every position (sweep)', () => {
+    for (let cursor = 0; cursor < ROWS; cursor++) {
+      const w = computeWindow(ROWS, cursor, 1, H, false);
+      expect(cursor >= w.start && cursor < w.end).toBe(true);
+    }
+  });
+
+  it('walking j down one row at a time always keeps the cursor on screen', () => {
+    // Simulate the exact j/k failure mode: at each step the highlighted row must be inside the window.
+    for (let cursor = 0; cursor < ROWS; cursor++) {
+      const w = computeWindow(ROWS, cursor, 1, H, false);
+      expect(cursor).toBeGreaterThanOrEqual(w.start);
+      expect(cursor).toBeLessThan(w.end);
+    }
+  });
+
+  it('tiny capacity (height fits a single entry) still contains the cursor', () => {
+    // height 1, 1 line/entry, no header: capacity collapses to 1; the window must be exactly the
+    // cursor row (no room for scrolloff), never empty, cursor always inside.
+    for (let cursor = 0; cursor < ROWS; cursor++) {
+      const w = computeWindow(ROWS, cursor, 1, 1, false);
+      expect(w.end - w.start).toBeGreaterThanOrEqual(1);
+      expect(cursor >= w.start && cursor < w.end).toBe(true);
+    }
+  });
+
+  it('with a header present, the cursor still stays on screen at every position', () => {
+    // A header costs `linesPerEntry` lines when not scrolled; the top `…` replaces it when scrolled.
+    for (let cursor = 0; cursor < ROWS; cursor++) {
+      const w = computeWindow(ROWS, cursor, 1, H, true);
+      expect(cursor >= w.start && cursor < w.end).toBe(true);
+    }
+  });
+});
+
 describe('Ledger — rendering', () => {
   it('renders the date field only when columns fit (collapse)', () => {
+    // Ledger self-measures its OWN box width (ink-testing-library's measureElement returns real
+    // dims here, ~100 cols, NOT zero), so to exercise column collapse the test bounds the WIDTH via
+    // a wrapping Box rather than relying on the availableWidth fallback prop (which the measurement
+    // overrides). A wide wrapper keeps both columns; a narrow one collapses to one.
     const wide = render(
-      <Ledger
-        rows={rows(2)}
-        cursor={0}
-        focused
-        linesPerEntry={1}
-        minColumns={1}
-        maxColumns={2}
-        availableHeight={10}
-        availableWidth={80}
-        renderEntry={renderDemo}
-      />,
+      <Box width={80} height={10}>
+        <Ledger
+          rows={rows(2)}
+          cursor={0}
+          focused
+          linesPerEntry={1}
+          minColumns={1}
+          maxColumns={2}
+          renderEntry={renderDemo}
+        />
+      </Box>,
     );
     expect(wide.lastFrame()).toContain('d0');
 
     const narrow = render(
-      <Ledger
-        rows={rows(2)}
-        cursor={0}
-        focused
-        linesPerEntry={1}
-        minColumns={1}
-        maxColumns={2}
-        availableHeight={10}
-        availableWidth={10}
-        renderEntry={renderDemo}
-      />,
+      <Box width={10} height={10}>
+        <Ledger
+          rows={rows(2)}
+          cursor={0}
+          focused
+          linesPerEntry={1}
+          minColumns={1}
+          maxColumns={2}
+          renderEntry={renderDemo}
+        />
+      </Box>,
     );
     const frame = narrow.lastFrame() ?? '';
     expect(frame).toContain('row0');

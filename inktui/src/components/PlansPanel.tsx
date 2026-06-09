@@ -50,17 +50,8 @@ import { Pane } from './Pane.js';
 const PANEL_ID: PanelId = 'plans';
 const PANEL_TITLE = 'Plans';
 
-/**
- * Fixed Ledger budget until the Pane measures and passes down its inner content size.
- *
- * TODO(Phase 3/4 — Pane-measures-inner-size handoff, see {@link ./Ledger.tsx}'s "Sizing" note and
- * {@link ./Pane.tsx}'s handoff): the Pane should measure its own inner rect (its `useMeasureFocus`
- * rect minus border + padding) and pass `availableHeight`/`availableWidth` down, so the Ledger's
- * overflow window tracks the live panel size. Until then this is a reasonable static budget — the
- * Ledger clips via its window, and the Pane's `overflow="hidden"` is the hard safety clip regardless.
- */
-const LEDGER_HEIGHT = 40;
-const LEDGER_WIDTH = 40;
+// The Ledger self-measures its own inner size now (see {@link ./Ledger.tsx}'s "Sizing" note), so no
+// fixed budget is passed: its overflow window tracks the live panel size, the cursor stays on screen.
 
 type PlansIntent = 'cursorDown' | 'cursorUp' | 'refresh' | 'star' | 'open';
 
@@ -73,15 +64,18 @@ type PlansIntent = 'cursorDown' | 'cursorUp' | 'refresh' | 'star' | 'open';
  */
 function renderPlanEntry(row: PlanRowView, ctx: LedgerEntryContext): React.ReactNode {
   const marker = ctx.selected ? '▌' : ' ';
-  const star = row.starred ? '★ ' : '';
+  // FIXED-WIDTH star gutter (bug 2): `★ ` when starred, two spaces otherwise, so the name column
+  // starts at the same x on every row regardless of star state. Both occupy 2 columns.
+  const star = row.starred ? '★ ' : '  ';
   return (
     // The LedgerRow wraps this in a `row` Box (with the full-width highlight/alt-bg background), so a
     // two-line entry must compose its own `column` here. `flexGrow={1}` lets the background span the
-    // full row width behind both lines; `flexShrink={0}` so Yoga doesn't sample/drop a line.
+    // full row width behind both lines; `flexShrink={0}` so Yoga doesn't sample/drop a line. The
+    // line-2 indent is `marker(1)+space(1)+star(2)` = 4 cols so `charCount` sits under `name`.
     <Box flexDirection="column" flexGrow={1} flexShrink={0}>
       <Text wrap="truncate">{`${marker} ${star}${row.name}`}</Text>
       <Text dimColor={!ctx.selected} wrap="truncate">
-        {`  ${row.charCount} · ${row.updatedAt}`}
+        {`    ${row.charCount} · ${row.updatedAt}`}
       </Text>
     </Box>
   );
@@ -89,17 +83,18 @@ function renderPlanEntry(row: PlanRowView, ctx: LedgerEntryContext): React.React
 
 /**
  * The Ledger column-titles key — a dim two-line block (matching `linesPerEntry=2`) labeling what the
- * entry lines mean: `name` over `size · updated`. Aligned to the entry layout — the 2-space leading
- * indent matches {@link renderPlanEntry}'s marker column (marker + space) on line 1 and its line-2
- * `  ` indent — so the labels sit directly above the data columns. THE reference header shape Phase
- * 3 panels copy: a `header={renderPlansHeader}` prop that returns this two-line key. (`columns` is
- * unused here — plans is single-column; a multi-column panel would key each field per `columns`.)
+ * entry lines mean: `name` over `size · updated`. Aligned to the entry layout — the 4-space leading
+ * indent matches {@link renderPlanEntry}'s leading gutters (marker(1) + space(1) + star(2)) on line 1
+ * and its identical line-2 indent — so the labels sit directly above the data columns. THE reference
+ * header shape Phase 3 panels copy: a `header={renderPlansHeader}` prop that returns this two-line
+ * key. (`columns` is unused here — plans is single-column; a multi-column panel keys each field per
+ * `columns`.)
  */
 function renderPlansHeader(): React.ReactNode {
   return (
     <Box flexDirection="column" flexShrink={0}>
-      <Text dimColor>{'  name'}</Text>
-      <Text dimColor>{'  size · updated'}</Text>
+      <Text dimColor>{'    name'}</Text>
+      <Text dimColor>{'    size · updated'}</Text>
     </Box>
   );
 }
@@ -132,9 +127,9 @@ function PlansList({
       linesPerEntry={2}
       minColumns={1}
       maxColumns={1}
-      availableHeight={LEDGER_HEIGHT}
-      availableWidth={LEDGER_WIDTH}
       renderEntry={renderPlanEntry}
+      header={renderPlansHeader}
+      overflowIndent={4}
       rowKey={(row) => row.id}
     />
   );

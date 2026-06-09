@@ -32,7 +32,12 @@ import {
 } from '../hooks/useInputStores.js';
 import type { PanelKeymap } from '../input/keymap.js';
 import type { PanelId } from '../input/panels.js';
-import { type UsageGaugeView, type UsageView, useUsageView } from '../selectors/usageSelectors.js';
+import {
+  USAGE_BAR_WIDTH,
+  type UsageGaugeView,
+  type UsageView,
+  useUsageView,
+} from '../selectors/usageSelectors.js';
 import { Pane } from './Pane.js';
 
 const PANEL_ID: PanelId = 'usage';
@@ -122,6 +127,28 @@ function GaugeLine({
   );
 }
 
+/**
+ * A dim key line labeling the gauge columns (bug 1): `usage` over the bar, then `pct`, `window`,
+ * `reset`. Aligned to {@link GaugeLine}'s layout — 2-col leading gutter (marker + space), the bar
+ * width, then the same `pct`/`period`/`reset` column widths/spacing — so each label sits over its
+ * data. Rendered once at the top of the body, above the provider blocks. `flexShrink={0}` so the tight
+ * right rail doesn't sample it away.
+ */
+function UsageKeyLine(): JSX.Element {
+  return (
+    <Box flexShrink={0} width="100%">
+      <Text dimColor wrap="truncate">
+        {'  '}
+        {'usage'.padEnd(USAGE_BAR_WIDTH)}
+        {'  '}
+        {'pct'.padStart(4)}
+        {'  '}
+        {'win'.padEnd(3)} {'reset'.padStart(7)}
+      </Text>
+    </Box>
+  );
+}
+
 /** The list body: loading/error/empty chrome, else one block per provider (header + gauge lines).
  * A single running index across all gauges drives the cursor highlight. */
 function UsageBody({
@@ -145,6 +172,7 @@ function UsageBody({
   let gaugeIndex = -1;
   return (
     <Box flexDirection="column" flexShrink={0}>
+      <UsageKeyLine />
       {view.groups.map((group) => (
         <Box key={group.harness} flexDirection="column" flexShrink={0}>
           <HeaderLine harness={group.harness} />

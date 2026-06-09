@@ -39,9 +39,20 @@ function formatUpdatedAt(iso: string): string {
   return iso.slice(0, 16).replace('T', ' ');
 }
 
-/** Format a character count as a compact, human-readable display string. */
+/**
+ * Width the formatted char-count field is right-padded to, so the trailing `· updated` column aligns
+ * across rows regardless of digit count (`5,000 chars` vs `50,000 chars`). `"9,999,999 chars"` is 15
+ * chars; a longer value simply isn't padded (never truncates). Alignment is formatting, so it lives
+ * HERE in the selector (rule 2). Mirrors notes/plans.
+ */
+const CHAR_COUNT_FIELD_WIDTH = 15;
+
+/**
+ * Format a character count as a compact, human-readable display string, right-padded to a fixed width
+ * so the following `·`/`updated` column lines up across rows (see {@link CHAR_COUNT_FIELD_WIDTH}).
+ */
 function formatCharCount(n: number): string {
-  return `${n.toLocaleString()} chars`;
+  return `${n.toLocaleString()} chars`.padEnd(CHAR_COUNT_FIELD_WIDTH);
 }
 
 /** Project one domain row into its presentation tuple. */

@@ -98,7 +98,10 @@ function Harness({
     <AppStoreProvider value={store}>
       <InputStoresProvider value={inputStores}>
         <RootInput />
-        <Box>
+        {/* Height-bounded like the live app's fullscreen layout, so the Ledger's self-measurement
+            returns the AVAILABLE height (not the collapsed content height a bare Box yields under
+            ink-testing-library) — this exercises the real measurement path. */}
+        <Box height={24}>
           <CrowsPanel />
         </Box>
       </InputStoresProvider>

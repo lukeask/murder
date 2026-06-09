@@ -125,6 +125,45 @@ function renderTicketEntry(row: TicketRowView, ctx: LedgerEntryContext): React.R
   );
 }
 
+/**
+ * The Ledger column-titles key for tickets — mirrors {@link renderTicketEntry}'s structure exactly so
+ * each label sits above its cell column (bug 1): a leading 2-col marker gutter (`  `, matching
+ * `marker + space`), then the leftmost `columns` of the 5 column headers, each a `column` Box with the
+ * same `marginRight={2}` as the cells. Single dim line per column (the cells are 2 lines but the key
+ * needs only the field name); `flexShrink={0}` so the header isn't sampled away. Responsive: renders
+ * exactly `ctx.columns` headers so it collapses in lock-step with the cells.
+ */
+function renderTicketsHeader(columns: number): React.ReactNode {
+  return (
+    <Box flexDirection="row" flexShrink={0}>
+      <Text dimColor>{'  '}</Text>
+      <Box marginRight={2}>
+        <Text dimColor>id / title</Text>
+      </Box>
+      {columns >= 2 ? (
+        <Box marginRight={2}>
+          <Text dimColor>status / updated</Text>
+        </Box>
+      ) : null}
+      {columns >= 3 ? (
+        <Box marginRight={2}>
+          <Text dimColor>deps / schedule</Text>
+        </Box>
+      ) : null}
+      {columns >= 4 ? (
+        <Box marginRight={2}>
+          <Text dimColor>harness / model</Text>
+        </Box>
+      ) : null}
+      {columns >= 5 ? (
+        <Box>
+          <Text dimColor>plan / worktree</Text>
+        </Box>
+      ) : null}
+    </Box>
+  );
+}
+
 /** The list body: empty/loading/error chrome (Ledger renders nothing for zero rows), else the
  * two-line × multi-column entries via {@link Ledger}. */
 function TicketsList({
@@ -154,6 +193,7 @@ function TicketsList({
       minColumns={1}
       maxColumns={5}
       renderEntry={renderTicketEntry}
+      header={renderTicketsHeader}
       rowKey={(row) => row.id}
     />
   );

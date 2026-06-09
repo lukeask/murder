@@ -54,7 +54,10 @@ function Harness({
     <AppStoreProvider value={store}>
       <InputStoresProvider value={inputStores}>
         <RootInput />
-        <Box>
+        {/* Height-bounded like the live app's fullscreen layout, so the Ledger's self-measurement
+            returns the AVAILABLE height (not the collapsed content height a bare Box yields under
+            ink-testing-library) — this exercises the real measurement path. */}
+        <Box height={24}>
           <PlansPanel />
         </Box>
       </InputStoresProvider>
@@ -88,10 +91,14 @@ describe('PlansPanel (Pane + Ledger reference)', () => {
     // Pane inline title: `╭─ Plans ─…` on the top border (not a plain border + "Plans" text line).
     expect(frame).toContain('╭─ Plans');
     // Two-line entries: name on line 1, char count · formatted date on line 2 (selector-formatted).
+    // The char count is right-padded to a fixed width for column alignment (CHAR_COUNT_FIELD_WIDTH),
+    // so the `· date` follows pad spaces — assert the count and the date independently.
     expect(frame).toContain('alpha-plan');
-    expect(frame).toContain('1,234 chars · 2026-06-08 10:00');
+    expect(frame).toContain('1,234 chars');
+    expect(frame).toContain('· 2026-06-08 10:00');
     expect(frame).toContain('bravo-plan');
-    expect(frame).toContain('567 chars · 2026-06-01 08:00');
+    expect(frame).toContain('567 chars');
+    expect(frame).toContain('· 2026-06-01 08:00');
     dispose();
   });
 

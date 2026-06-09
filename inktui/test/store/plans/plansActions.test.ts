@@ -168,18 +168,17 @@ describe('plansActions — wire→selector: C11 indentation + recency ordering f
   it('selector formats char_count and updated_at from the live wire fields', async () => {
     const { store, dispose } = setup({
       invalidation_key: 'iv-p',
-      plans: [
-        { name: 'demo-plan', char_count: 4200, updated_at: '2026-06-09T14:30:00' },
-      ],
+      plans: [{ name: 'demo-plan', char_count: 4200, updated_at: '2026-06-09T14:30:00' }],
     });
 
     await store.getState().actions.plans.refresh();
 
     const view = selectPlansView(store.getState().plans, store.getState().favorites);
     const row = view.rows[0];
-    // formatCharCount: n.toLocaleString() + ' chars' — exact locale output is env-dependent,
-    // so assert the suffix rather than the exact string.
-    expect(row?.charCount).toMatch(/chars$/);
+    // formatCharCount: n.toLocaleString() + ' chars', right-padded to a fixed width for column
+    // alignment (see plansSelectors CHAR_COUNT_FIELD_WIDTH) — exact locale output is env-dependent
+    // and the value is now space-padded, so assert the suffix allowing trailing pad spaces.
+    expect(row?.charCount).toMatch(/chars\s*$/);
     // formatUpdatedAt: iso.slice(0,16).replace('T',' ') → '2026-06-09 14:30'
     expect(row?.updatedAt).toBe('2026-06-09 14:30');
     dispose();
