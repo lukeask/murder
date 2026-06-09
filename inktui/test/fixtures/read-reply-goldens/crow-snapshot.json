@@ -1,0 +1,41 @@
+{
+  "ok": true,
+  "value": {
+    "sessions": [
+      {
+        "agent_id": "crow-7",
+        "role": "crow",
+        "ticket_id": "T-101",
+        "ticket_title": "Wire the detail pane",
+        "status": "running",
+        "session_name": "crow-7-sess",
+        "harness": "cc",
+        "last_seen": "2026-06-09T12:30:00",
+        "started_at": "2026-06-09T00:00:00",
+        "ticket_status": "in_progress",
+        "worktree_path": "/wt/t-101",
+        "model": "opus",
+        "open_escalations": 2,
+        "max_severity": 3
+      },
+      {
+        "agent_id": "planner-1",
+        "role": "planner",
+        "ticket_id": null,
+        "ticket_title": null,
+        "status": "idle",
+        "session_name": null,
+        "harness": null,
+        "last_seen": null,
+        "started_at": null,
+        "ticket_status": null,
+        "worktree_path": null,
+        "model": null,
+        "open_escalations": 0,
+        "max_severity": 0
+      }
+    ],
+    "as_of": "2026-06-09T00:00:00",
+    "invalidation_key": "crows"
+  }
+}

@@ -1,0 +1,27 @@
+{
+  "ok": true,
+  "value": {
+    "plans": [
+      {
+        "name": "root-plan",
+        "status": "active",
+        "revision_count": 3,
+        "sync_state": "synced",
+        "parent": null,
+        "updated_at": "2026-06-09T12:30:00",
+        "char_count": 4096
+      },
+      {
+        "name": "child-plan",
+        "status": "draft",
+        "revision_count": 1,
+        "sync_state": "dirty",
+        "parent": "root-plan",
+        "updated_at": "2026-06-09T00:00:00",
+        "char_count": 512
+      }
+    ],
+    "as_of": "2026-06-09T00:00:00",
+    "invalidation_key": "plans"
+  }
+}
