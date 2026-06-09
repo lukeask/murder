@@ -44,10 +44,7 @@ from murder.work.tickets import lifecycle
 from murder.work.tickets.schema import ChecklistItem, Ticket
 from murder.work.tickets.sync import TicketSync
 from murder.app.tui.client import TuiRuntimeClient
-
-
-def _repo_root() -> Path:
-    return Path.cwd().resolve()
+from murder.app.cli._util import repo_root as _repo_root
 
 
 def _open_existing_db(repo: Path):  # type: ignore[return]

@@ -21,13 +21,10 @@ from murder.app.cli.service_cmd import (
     _run_async_entry,
 )
 from murder.bus.transport_socket import default_socket_path
+from murder.app.cli._util import repo_root as _repo_root
 
 # Node runtime floor (current LTS). Ink 5 needs >=18; 20 is the future-proof floor we ship against.
 MIN_NODE_MAJOR = 20
-
-
-def _repo_root() -> Path:
-    return Path.cwd().resolve()
 
 
 class InkLaunchError(RuntimeError):
