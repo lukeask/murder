@@ -45,13 +45,15 @@ import {
   usePanelStore,
 } from '../hooks/useInputStores.js';
 import { useRootInput } from '../hooks/useRootInput.js';
-import { readClipboardImage } from '../input/clipboardImage.js';
 import { expandSpans, spanIds } from '../input/chatInputStore.js';
+import { readClipboardImage } from '../input/clipboardImage.js';
 import type { ChatInputHandler } from '../input/dispatcher.js';
 import { selectActiveMode } from '../input/modeStore.js';
 import type { PanelId } from '../input/panels.js';
 import { selectActiveAgentId } from '../selectors/conversationsSelectors.js';
+import { createHarnessModelsActions } from '../store/dialogs/harnessModelsActions.js';
 import { createSpawnActions } from '../store/dialogs/spawnActions.js';
+import { createWorktreeOptionsActions } from '../store/dialogs/worktreeOptionsActions.js';
 import { DOC_DIR } from '../store/docView/docViewSlice.js';
 import {
   createImageDraftStore,
@@ -305,7 +307,11 @@ function Shell(): JSX.Element {
     // The focused doc is the open doc-view (C11 — replaces C13's first-row proxy).
     const spawnContext = deriveSpawnContext(appStore);
     const actions = createSpawnActions(bus);
-    modes.getState().enter(spawnWizardMode(modes, actions, { spawnContext }));
+    const modelActions = createHarnessModelsActions(bus);
+    const worktreeActions = createWorktreeOptionsActions(bus);
+    modes
+      .getState()
+      .enter(spawnWizardMode(modes, actions, { spawnContext, modelActions, worktreeActions }));
   };
 
   // The single root input loop for the whole app (rule 5) — installed exactly once, here.

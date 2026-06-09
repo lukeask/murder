@@ -38,6 +38,16 @@ export interface SpawnRogueParams {
   /** Optional rogue name. */
   readonly name?: string;
   /**
+   * Optional existing-worktree path to run the rogue in. Mutually exclusive with `worktreeBranch`.
+   * Threaded to the live handler's `worktree_path` param (orchestrator.py:487).
+   */
+  readonly worktreePath?: string;
+  /**
+   * Optional new-worktree branch name. When set, the live handler creates a named worktree on that
+   * branch and runs the rogue there. Threaded to `worktree_branch` (orchestrator.py:488).
+   */
+  readonly worktreeBranch?: string;
+  /**
    * Optional kickoff instruction. When present, it is delivered AFTER the spawn as a separate
    * `agent.message` command to the spawned agent (the live `crow.spawn_rogue` handler ignores any
    * kickoff field, so it must be sent out-of-band). The locked mechanism is reference-by-path:
@@ -85,6 +95,13 @@ export function createSpawnActions(bus: BusClient): SpawnActions {
       }
       if (params.name != null) {
         payload['name'] = params.name;
+      }
+      // Worktree threading (snake_case to match the live handler). worktree_branch wins if both are
+      // somehow set, mirroring the handler's branch-first precedence (orchestrator.py:512).
+      if (params.worktreeBranch != null && params.worktreeBranch !== '') {
+        payload['worktree_branch'] = params.worktreeBranch;
+      } else if (params.worktreePath != null && params.worktreePath !== '') {
+        payload['worktree_path'] = params.worktreePath;
       }
       const result = await submitCommand(bus, 'crow.spawn_rogue', payload);
       const agentId = result['agent_id'] != null ? String(result['agent_id']) : undefined;
