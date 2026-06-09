@@ -3,6 +3,7 @@ import { rm } from 'node:fs/promises';
 import { createServer, type Server, type Socket } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import type { RpcMethod } from '../../src/bus/BusClient.js';
 import { type BusEvent, PROTOCOL_VERSION, type WireMessage } from '../../src/bus/protocol.js';
 import {
   type BackoffConfig,
@@ -289,6 +290,31 @@ describe('UdsBusClient — rpc', () => {
     server.rpcHandler = (target, body) => ({ echoed: target, ...body });
     const result = await client.rpc('ticket.quick_kick', { ticket_id: 'T-42' });
     expect(result).toEqual({ echoed: 'ticket.quick_kick', ticket_id: 'T-42' });
+  });
+
+  it('unwraps the read-RPC `{ ok, value }` envelope for `state.*` methods', async () => {
+    // The service wraps read-handler DTOs as `{ ok: true, value: <dto> }` (`_value()` in host.py);
+    // the store reads read replies top-level, so the client unwraps `.value` for `state.*` methods.
+    server.rpcHandler = () => ({ ok: true, value: { sessions: ['c1', 'c2'] } });
+    // `state.*` read methods are augmented onto RpcMethods in the store slices; cast here so this
+    // transport-level test stays independent of the store layer.
+    const result = await client.rpc('state.crow_snapshot' as RpcMethod, {} as never);
+    expect(result).toEqual({ sessions: ['c1', 'c2'] });
+  });
+
+  it('preserves a `value: null` read envelope as `null` (not-found signal)', async () => {
+    // `_state_ticket_detail` returns `_value(None)` → `{ ok: true, value: null }` for a missing
+    // ticket; the store keys not-found on that `null`, so the unwrap must NOT coerce it to `{}`.
+    server.rpcHandler = () => ({ ok: true, value: null });
+    const result = await client.rpc('state.ticket_detail' as RpcMethod, {} as never);
+    expect(result).toBeNull();
+  });
+
+  it('leaves a write/command reply (no `value` key) untouched', async () => {
+    // Writes return `{ ok, ...fields }` top-level and must NOT be unwrapped.
+    server.rpcHandler = () => ({ ok: true, ticket_id: 'T-9' });
+    const result = await client.rpc('ticket.quick_kick', { ticket_id: 'T-9' });
+    expect(result).toEqual({ ok: true, ticket_id: 'T-9' });
   });
 
   it('rejects an rpc that the server never answers (timeout)', async () => {

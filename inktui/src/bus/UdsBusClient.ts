@@ -301,6 +301,23 @@ export class UdsBusClient implements BusClient {
       };
       this.writeMessage(socket, message);
     });
+    // Read-RPC envelope unwrap. The service wraps every `state.*` read handler's DTO as
+    // `{ ok: true, value: <dto> }` (the `_value()` helper in `murder/app/service/host.py`), a
+    // shape the still-live Textual client depends on (`_request_value`/`_request_optional` read
+    // `reply["value"]`). The Ink store reads read-RPC fields at TOP LEVEL (`reply.sessions`,
+    // `reply.body`, projections in `listSlice.ts`), matching the unwrapped DTO that `FakeBusClient`
+    // returns. So unwrap the envelope HERE, at the single real-transport seam, gated on the
+    // `state.` prefix: every wrapped handler is `state.*`, and writes/commands (`command.*`,
+    // `ticket.*`, `agent.*`, `image.*`) already return `{ ok, ...fields }` top-level and must NOT
+    // be unwrapped. Doing it here (not in the store layer) keeps the shared store code and all
+    // fake-backed tests untouched. See `.murder/notes/ink-service-integration-gaps.md` §2.
+    if (method.startsWith('state.') && isReadEnvelope(result)) {
+      // Return `.value` verbatim — including `null`, which `_state_ticket_detail` (and the
+      // `*_display` reads) emit for not-found via `_value(None)`. That `null` is the not-found signal
+      // the store's detail/doc-view paths key on, and it matches the unwrapped DTO `FakeBusClient`
+      // returns; coercing it (e.g. `?? {}`) would resurrect the fake-vs-live divergence this fixes.
+      return result.value as RpcResult<M>;
+    }
     return result as RpcResult<M>;
   }
 
@@ -777,6 +794,15 @@ function fieldMatches<T>(expected: T | undefined, actual: unknown): boolean {
 
 function stringifyError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * Recognize the service's read-RPC envelope `{ ok: true, value: <dto> }` so {@link UdsBusClient.rpc}
+ * can unwrap it to the bare DTO the store reads top-level. A reply that lacks a `value` key (a
+ * write/command result, which is `{ ok, ...fields }`) is left untouched. See the unwrap call site.
+ */
+function isReadEnvelope(reply: Record<string, unknown>): reply is { value: unknown } {
+  return 'value' in reply;
 }
 
 /** Compile-time exhaustiveness guard for the {@link WireMessage} switch: an un-handled `op` makes
