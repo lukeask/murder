@@ -24,7 +24,13 @@ import type {
   RpcResult,
   Unsubscribe,
 } from './BusClient.js';
+import { matchesFilter } from './matchesFilter.js';
 import type { BusEvent, EventFilter } from './protocol.js';
+import { unwrapReadReply } from './readEnvelope.js';
+
+// Re-exported so the bus seam exposes one `matchesFilter` symbol; tests historically import it from
+// here. The implementation is the shared single source of truth in `./matchesFilter.js`.
+export { matchesFilter };
 
 /** A recorded RPC call, in invocation order. */
 export interface RecordedRpcCall {
@@ -99,7 +105,17 @@ export class FakeBusClient implements BusClient {
     }
     // Route through Promise.resolve so a synchronous throw in the handler surfaces as a rejection,
     // matching the real client's always-async contract.
-    return Promise.resolve().then(() => handler(params) as RpcResult<M> | Promise<RpcResult<M>>);
+    return Promise.resolve().then(() => {
+      const stubbed = handler(params);
+      // Model the live transport faithfully so the fake exercises the SAME read-RPC envelope
+      // contract the real server emits. A `state.*` read handler on the wire returns
+      // `{ ok: true, value: <dto> }`; a stub here returns the bare DTO. Wrap it into that envelope,
+      // then run the SAME shared unwrap {@link UdsBusClient} runs, so callers receive the unwrapped
+      // DTO exactly as they do live — and the wrap/unwrap round-trip (incl. `null` not-found) is now
+      // genuinely covered by every fake-backed test rather than silently bypassed.
+      const reply = method.startsWith('state.') ? { ok: true, value: stubbed } : stubbed;
+      return unwrapReadReply(method, reply as Record<string, unknown>) as RpcResult<M>;
+    });
   }
 
   subscribe(listener: BusEventListener, filter?: EventFilter): Unsubscribe {
@@ -109,34 +125,4 @@ export class FakeBusClient implements BusClient {
       this.subscriptions.delete(subscription);
     };
   }
-}
-
-/**
- * Replicates the server-side {@link EventFilter} semantics (Python `EventFilter.matches`): fields
- * compose with AND; an absent filter field matches any. Exported so a test can reason about which
- * events a filtered subscription should receive.
- */
-export function matchesFilter(event: BusEvent, filter: EventFilter | undefined): boolean {
-  if (filter === undefined) {
-    return true;
-  }
-  return (
-    fieldMatches(filter.role, getField(event, 'role')) &&
-    fieldMatches(filter.ticket_id, getField(event, 'ticket_id')) &&
-    fieldMatches(filter.type, event.type) &&
-    fieldMatches(filter.entity, getField(event, 'entity')) &&
-    fieldMatches(filter.target_worker, getField(event, 'target_worker')) &&
-    fieldMatches(filter.kind, getField(event, 'kind'))
-  );
-}
-
-/** A filter field matches when it is absent, or equal to the event's value for that field. */
-function fieldMatches<T>(expected: T | undefined, actual: unknown): boolean {
-  return expected === undefined || expected === actual;
-}
-
-/** Reads an optional field present on only some event kinds, without `any`. Returns `undefined`
- * when the event kind lacks the field (so a filter on it can't match a partial). */
-function getField(event: BusEvent, field: string): unknown {
-  return (event as unknown as Record<string, unknown>)[field];
 }
