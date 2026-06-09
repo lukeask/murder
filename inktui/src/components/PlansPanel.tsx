@@ -43,7 +43,7 @@ import {
 import type { PanelKeymap } from '../input/keymap.js';
 import type { PanelId } from '../input/panels.js';
 import { type PlanRowView, type PlansView, usePlansView } from '../selectors/plansSelectors.js';
-import { useDocView } from './DocViewMode.js';
+import { useDocView } from './DocPane.js';
 import { Ledger, type LedgerEntryContext } from './Ledger.js';
 import { Pane } from './Pane.js';
 

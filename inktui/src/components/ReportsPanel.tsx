@@ -31,7 +31,7 @@ import {
   type ReportsView,
   useReportsView,
 } from '../selectors/reportsSelectors.js';
-import { useDocView } from './DocViewMode.js';
+import { useDocView } from './DocPane.js';
 import { Ledger, type LedgerEntryContext } from './Ledger.js';
 import { Pane } from './Pane.js';
 

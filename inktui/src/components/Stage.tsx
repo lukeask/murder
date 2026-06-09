@@ -32,13 +32,21 @@
  *  - Rule 3: send stays the conversations action (unchanged; not wired here — chat input owns send).
  *  - Rule 5: NO `useInput`. The pane declares a keymap to the registry; the one root dispatcher routes.
  *
- * ## Phase 4b handoff (the documented seam)
- * When a document is open (`docView.open`), it renders as a {@link Pane} to the RIGHT of the chat
- * panes (stacking below when narrow) — see the marked seam in the layout below. A doc pane slots into
- * the SAME {@link StagePaneId} scheme: focus id `stage:doc:<name>`, the same `useFocusRef` +
- * `useMeasureFocus(id, ref)` wiring, the same `useEffectiveFocus() === id` highlight. No focus-model
- * change is needed for Phase 4b — `StagePaneId` and `mountedStagePanesOf` already cover it; Phase 4b
- * only adds the doc Pane render + reads the `docView` slice (which Phase 4a does NOT touch).
+ * ## Phase 4b: the document pane (landed)
+ * When a document is open (`docView.open`), it renders as a {@link StageDocPane} ({@link Pane}) to the
+ * RIGHT of the chat panes when the terminal is wide (landscape), stacking BELOW them when narrow
+ * (portrait) — the same orientation reflow the Rails use, so the doc reads as a tall column beside the
+ * chat in landscape and a wide strip under it in portrait. The doc pane slots into the SAME
+ * {@link StagePaneId} scheme: focus id `stage:doc:<name>`, the same `useFocusRef` +
+ * `useMeasureFocus(id, ref)` wiring, the same `useEffectiveFocus() === id` highlight (all inside
+ * {@link ./DocPane.js}). No focus-model change was needed — `StagePaneId` + `mountedStagePanesOf`
+ * already cover it; the Stage only had to read the `docView.open` slice key (so opening a doc
+ * re-renders it) and add the pane. The doc pane is keyed by the open doc's NAME so opening a different
+ * doc remounts it (resetting its scroll offset + re-registering its keymap under the new focus id).
+ *
+ * The doc-view used to be an in-layout *mode* painting into the Overlay; it was retired in favour of a
+ * Stage pane — see {@link ./DocPane.js}'s header for why (a doc is a focusable thing on the Stage you
+ * can nav away from, not a focus-takeover modal).
  */
 
 import { Box, Text } from 'ink';
@@ -51,6 +59,7 @@ import {
   useMeasureFocus,
   usePanelKeymap,
 } from '../hooks/useInputStores.js';
+import { useOrientation } from '../hooks/useOrientation.js';
 import type { FocusId, StagePaneId } from '../input/focusStore.js';
 import type { PanelKeymap } from '../input/keymap.js';
 import type { AgentIdentity } from '../selectors/agentIdentity.js';
@@ -60,8 +69,10 @@ import {
   useFavoritesChatPanes,
 } from '../selectors/conversationsSelectors.js';
 import type { ConversationsState } from '../store/conversations/conversationsSlice.js';
+import type { OpenDoc } from '../store/docView/docViewSlice.js';
 import type { FavoritesState } from '../store/favorites/favoritesSlice.js';
 import type { RosterState } from '../store/roster/rosterSlice.js';
+import { StageDocPane } from './DocPane.js';
 import { Pane } from './Pane.js';
 
 /** The Stage focus id for a crow's chat pane. The single place the `stage:chat:` scheme is minted, so
@@ -215,38 +226,67 @@ const EMPTY_KEYMAP: PanelKeymap<ScrollIntent> = { keymap: [], onIntent() {} };
 // ---------------------------------------------------------------------------
 
 /**
- * The Stage region. Renders one focusable chat Pane per favorited crow, tiled in the center. Grows to
- * fill whatever the Rails leave. When there are no favorited crows, renders an empty `flexGrow` box so
- * the layout doesn't collapse oddly (the Rails keep their natural share and the Body stays balanced) —
- * chosen over `null` because returning `null` would let the Rails expand to fill the freed center,
- * which looks wrong on a wide terminal.
+ * The Stage region. Renders one focusable chat Pane per favorited crow tiled in the center, and — when
+ * a document is open (`docView.open`) — a focusable {@link StageDocPane} beside them: to the RIGHT in
+ * landscape, stacked BELOW in portrait (the orientation reflow the Rails use). Grows to fill whatever
+ * the Rails leave.
  *
- * Rule 1: `React.memo` + narrow selectors (`shallow` on roster/conversations/favorites).
- * Rule 2: `useFavoritesChatPanes` decides which panes exist (spec order, default + starred).
+ * When the Stage has nothing to show (no favorited crows AND no open doc), it renders an empty
+ * `flexGrow` box so the layout doesn't collapse oddly (the Rails keep their natural share and the Body
+ * stays balanced) — chosen over `null` because returning `null` would let the Rails expand to fill the
+ * freed center, which looks wrong on a wide terminal. The guard checks the doc too: a doc can be open
+ * with no chat panes, and it must still appear.
+ *
+ * Rule 1: `React.memo` + narrow selectors (`shallow` on roster/conversations/favorites; the doc pane
+ * reads its own `docView` body/status). The Stage subscribes to `docView.open` (the identity of the
+ * open doc) so opening/closing a doc — or switching to a different one — re-renders + re-keys the pane.
+ * Rule 2: `useFavoritesChatPanes` decides which chat panes exist (spec order, default + starred).
  */
 export const Stage = memo(function Stage(): JSX.Element {
   const roster: RosterState = useAppStore((s) => s.roster, shallow);
   const conversations: ConversationsState = useAppStore((s) => s.conversations, shallow);
   const favorites: FavoritesState = useAppStore((s) => s.favorites, shallow);
+  // The open doc's identity (or null) — subscribing here is what makes opening a doc re-render the
+  // Stage and mount the doc pane. `shallow` so a body/status change inside the slice doesn't churn the
+  // Stage (the doc pane reads those itself); only the `{kind,name}` identity flips this.
+  const openDoc: OpenDoc | null = useAppStore((s) => s.docView.open, shallow);
+  const orientation = useOrientation();
 
   const { panes } = useFavoritesChatPanes(roster, favorites);
 
-  if (panes.length === 0) {
-    // No chat panes: an invisible spacer that holds the center open (see the doc above).
+  if (panes.length === 0 && openDoc === null) {
+    // Nothing on the Stage: an invisible spacer that holds the center open (see the doc above).
     return <Box flexGrow={1} minHeight={0} overflow="hidden" />;
   }
 
+  // Landscape: doc sits in a column to the RIGHT of the chat row. Portrait: doc stacks BELOW in a row.
+  // One flex axis flip, mirroring the Rail reflow — the chat panes always tile in a row among
+  // themselves; only the doc's placement relative to them changes.
+  const landscape = orientation === 'landscape';
   return (
-    <Box flexDirection="row" flexGrow={1} minHeight={0} overflow="hidden" columnGap={1}>
-      {/* Chat-history panes tile across the center, splitting the width evenly (each Pane flexGrow 1). */}
-      <Box flexDirection="row" flexGrow={1} minHeight={0} overflow="hidden" columnGap={1}>
-        {panes.map((identity) => (
-          <ChatPane key={identity.agentId} identity={identity} conversations={conversations} />
-        ))}
-      </Box>
-      {/* Phase 4b: open document renders as a Pane to the RIGHT of chat panes here (focus id
-          `stage:doc:<name>`, same useFocusRef + useMeasureFocus wiring). Reads the `docView` slice —
-          untouched by Phase 4a. Stacks below when the terminal is too narrow for a side-by-side split. */}
+    <Box
+      flexDirection={landscape ? 'row' : 'column'}
+      flexGrow={1}
+      minHeight={0}
+      overflow="hidden"
+      columnGap={landscape ? 1 : 0}
+      rowGap={landscape ? 0 : 1}
+    >
+      {/* Chat-history panes tile across the center, splitting the width evenly (each Pane flexGrow 1,
+          so chat keeps the lion's share next to / above the doc). Rendered only when there ARE chat
+          panes: an empty `flexGrow={1}` chat box would still claim half the Stage, leaving the doc at
+          half width (an empty left half) when a doc is open with no favorited crows — so when panes
+          is empty the doc pane (also `flexGrow={1}`) fills the Stage on its own. */}
+      {panes.length > 0 && (
+        <Box flexDirection="row" flexGrow={1} minHeight={0} overflow="hidden" columnGap={1}>
+          {panes.map((identity) => (
+            <ChatPane key={identity.agentId} identity={identity} conversations={conversations} />
+          ))}
+        </Box>
+      )}
+      {/* The open document, a focusable Stage pane (focus id `stage:doc:<name>`). Keyed by the doc
+          NAME so opening a different doc remounts it (resets scroll + re-registers its keymap). */}
+      {openDoc !== null && <StageDocPane key={openDoc.name} open={openDoc} />}
     </Box>
   );
 });

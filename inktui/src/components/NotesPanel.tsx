@@ -12,7 +12,7 @@
  *      (it is global-for-chat-only; see dispatcher.ts). The panel stars its OWN cursor row (rule 1 —
  *      the cursor stays local; the global layer never sees it). This is THE generalized starring
  *      pattern plans/reports copy.
- *    - `open` is fired by `enter` — toggles the in-layout doc view ({@link ./DocViewMode.js}).
+ *    - `open` is fired by `enter` — toggles the doc-view Stage pane ({@link ./DocPane.js}).
  *  - Row key: `name` (notes are keyed by filename, not an agent id).
  *
  * ## Phase 3: Pane + Ledger conversion
@@ -45,7 +45,7 @@ import {
 import type { PanelKeymap } from '../input/keymap.js';
 import type { PanelId } from '../input/panels.js';
 import { type NoteRowView, type NotesView, useNotesView } from '../selectors/notesSelectors.js';
-import { useDocView } from './DocViewMode.js';
+import { useDocView } from './DocPane.js';
 import { Ledger, type LedgerEntryContext } from './Ledger.js';
 import { Pane } from './Pane.js';
 

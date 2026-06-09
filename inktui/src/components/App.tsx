@@ -127,8 +127,8 @@ function renderPanel(id: PanelId): JSX.Element {
  * The spec's "focused-doc-wins — list row or opened doc widget alike" resolves cleanly here: when
  * `ctrl+s` fires the spawn wizard, focus is on **chat** (that is the only focus where `ctrl+s`
  * spawns rather than stars — see dispatcher.ts), so there is no live list cursor to read. The
- * "focused doc" is therefore whatever doc the user last *opened* in the in-layout doc view
- * ({@link ./DocViewMode.js}), held in the `docView` slice. Reading it replaces C13's first-row proxy
+ * "focused doc" is therefore whatever doc the user last *opened* in the doc-view Stage pane
+ * ({@link ./DocPane.js}), held in the `docView` slice. Reading it replaces C13's first-row proxy
  * with the real selected doc, and needs no lifted cursor — the open doc is already shared state with
  * a real identity (`{ kind, name }`), so panel cursors stay local (rule 1).
  *
