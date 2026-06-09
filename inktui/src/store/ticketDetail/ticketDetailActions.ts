@@ -24,6 +24,7 @@
 import type { StoreApi } from 'zustand';
 import type { BusClient } from '../../bus/BusClient.js';
 import type { AppStore } from '../store.js';
+import { toastStore } from '../toast/toastStore.js';
 import type { TicketDetailState, TicketFrontmatter } from './ticketDetailSlice.js';
 
 // ── RPC declarations ────────────────────────────────────────────────────────────────────────────
@@ -52,7 +53,12 @@ declare module '../../bus/BusClient.js' {
      */
     'ticket.save_body': {
       params: { ticket_id: string; body: string };
-      result: { ok: boolean };
+      /**
+       * The service can SOFT-fail: `{handled:true, ok:false, error}` (e.g. ticket not found —
+       * `orchestrator.py` `save_ticket_body`). This resolves the promise (does NOT reject), so the
+       * `ok` flag must be checked or a failed save is mistaken for success (silent data loss).
+       */
+      result: { ok: boolean; error?: string };
     };
     /**
      * Schedule a ticket using a free-form duration string (`1d4h3m`, `34m`).
@@ -246,7 +252,20 @@ export function createTicketDetailActions(
       }
       store.setState((state) => ({ ticketDetail: { ...state.ticketDetail, status: 'saving' } }));
       try {
-        await bus.rpc('ticket.save_body', { ticket_id: ticketId, body: editedBody });
+        const reply = await bus.rpc('ticket.save_body', { ticket_id: ticketId, body: editedBody });
+        // SOFT-FAIL guard: the service can resolve (not reject) with `{ok:false, error}` (e.g.
+        // ticket not found). Without this check that reply takes the success branch → the user
+        // thinks the body saved when it did not (silent data loss). Route it to the SAME error
+        // path as a thrown rejection: slice `error` + the global error toast (the landed write-RPC
+        // surfacing mechanism, commit 73d7110).
+        if (reply.ok === false) {
+          const message = reply.error ?? 'save failed';
+          store.setState((state) => ({
+            ticketDetail: { ...state.ticketDetail, status: 'error', error: message },
+          }));
+          toastStore.getState().push(message, { severity: 'error', ttlMs: 6000 });
+          return;
+        }
         store.setState((state) => ({
           ticketDetail: {
             ...state.ticketDetail,

@@ -13,12 +13,19 @@
  *  9. Sole-RPC-caller invariant: only ticketDetailActions calls the three bus methods.
  */
 
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 import { FakeBusClient } from '../../src/bus/FakeBusClient.js';
 import { createAppStore, initialAppState } from '../../src/store/store.js';
 import type { TicketDetailReply } from '../../src/store/ticketDetail/ticketDetailActions.js';
 import { isValidDuration } from '../../src/store/ticketDetail/ticketDetailActions.js';
 import { initialTicketDetailState } from '../../src/store/ticketDetail/ticketDetailSlice.js';
+import { selectLiveToasts, toastStore } from '../../src/store/toast/toastStore.js';
+
+/** All live error toasts on the singleton at the current instant (toast test idiom, commit 73d7110). */
+function errorToasts() {
+  const live = selectLiveToasts(toastStore.getState().toasts, Date.now());
+  return live.filter((t) => t.severity === 'error');
+}
 
 // ── Helpers ─────────────────────────────────────────────────────────────────────────────────────
 
@@ -186,6 +193,11 @@ describe('ticketDetailActions.setScheduleInput', () => {
 // ── saveBody() ───────────────────────────────────────────────────────────────────────────────────
 
 describe('ticketDetailActions.saveBody', () => {
+  // The toast singleton is shared global state; reset it between cases (toastStore's own idiom).
+  beforeEach(() => {
+    toastStore.getState().clear();
+  });
+
   it('calls ticket.save_body with the edited body and updates savedBody', async () => {
     const { fake, store, dispose } = setup();
     await store.getState().actions.ticketDetail.open('T-1');
@@ -221,6 +233,41 @@ describe('ticketDetailActions.saveBody', () => {
     await store.getState().actions.ticketDetail.saveBody();
     expect(store.getState().ticketDetail.status).toBe('error');
     expect(store.getState().ticketDetail.error).toContain('write failed');
+    dispose();
+  });
+
+  it('routes a soft-fail (resolved {ok:false, error}) to the error path + error toast, NOT success', async () => {
+    // The service can RESOLVE (not reject) with {handled:true, ok:false, error} — e.g. ticket not
+    // found (orchestrator.py save_ticket_body). Without the ok===false guard this would take the
+    // success branch → savedBody updated, status 'ready' → silent data loss. Prove it now errors.
+    const fake = new FakeBusClient();
+    fake.stubRpc('state.ticket_detail', DETAIL_REPLY);
+    fake.stubRpc('ticket.save_body', { ok: false, error: 'ticket not found: T-1' });
+    fake.stubRpc('state.crow_snapshot', { invalidation_key: 'iv', sessions: [] });
+    const { store, dispose } = createAppStore(fake);
+    await store.getState().actions.ticketDetail.open('T-1');
+    store.getState().actions.ticketDetail.setEditedBody('## Updated body');
+    await store.getState().actions.ticketDetail.saveBody();
+
+    // Did NOT take the success branch: status is error, savedBody unchanged from the loaded body.
+    expect(store.getState().ticketDetail.status).toBe('error');
+    expect(store.getState().ticketDetail.error).toBe('ticket not found: T-1');
+    expect(store.getState().ticketDetail.savedBody).toBe(TICKET_BODY);
+
+    // Surfaced via the SAME mechanism as write-RPC rejections: a global error toast.
+    const errs = errorToasts();
+    expect(errs).toHaveLength(1);
+    expect(errs[0]?.text).toBe('ticket not found: T-1');
+    dispose();
+  });
+
+  it('a successful save ({ok:true}) pushes NO error toast', async () => {
+    const { store, dispose } = setup();
+    await store.getState().actions.ticketDetail.open('T-1');
+    store.getState().actions.ticketDetail.setEditedBody('## Updated body');
+    await store.getState().actions.ticketDetail.saveBody();
+    expect(store.getState().ticketDetail.status).toBe('ready');
+    expect(errorToasts()).toHaveLength(0);
     dispose();
   });
 });
