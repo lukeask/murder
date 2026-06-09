@@ -63,6 +63,7 @@ import { ReportsPanel } from './ReportsPanel.js';
 import type { SpawnContext } from './SpawnWizardModal.js';
 import { spawnWizardMode } from './SpawnWizardModal.js';
 import { TicketsPanel } from './TicketsPanel.js';
+import { Toast } from './Toast.js';
 import { TopBar } from './TopBar.js';
 import { UsagePanel } from './UsagePanel.js';
 
@@ -280,6 +281,9 @@ function Shell(): JSX.Element {
       <ChatInput />
       <BottomBar />
       <Overlay />
+      {/* F9: the transient toast rack — bottom-right, subtle. Last child so it rides below the bars;
+          reads the toastStore singleton (pushed by the conversations send action + the image slice). */}
+      <Toast />
     </Box>
   );
 }

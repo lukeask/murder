@@ -24,6 +24,7 @@ import type { BusClient } from '../../bus/BusClient.js';
 import type { ConversationBlockEvent } from '../../bus/protocol.js';
 import { submitCommand } from '../commandSubmit.js';
 import type { AppStore } from '../store.js';
+import { toastStore } from '../toast/toastStore.js';
 import { parseBlock } from './conversationsSlice.js';
 
 /** The conversations actions, bound to one `BusClient` + store handle. */
@@ -72,7 +73,26 @@ export function createConversationsActions(
       try {
         // `agent.message` is an orchestrator command kind, not a standalone RPC — route it through
         // the live `command.submit` choke point (F2). The orchestrator worker dispatches on the kind.
-        await submitCommand(bus, 'agent.message', { agent_id: agentId, message });
+        const result = await submitCommand(bus, 'agent.message', { agent_id: agentId, message });
+        // F9 (TODO-T): the send toast is *truth* — pushed here, on the bus ack, not at the keypress
+        // (the keypress already cleared the input optimistically; this confirms the round-trip). The
+        // branches mirror Textual's `_send_chat` (app.py:1370-1392) faithfully:
+        //  - `handled === false` → the agent rejected the message; surface the error and stop (no `→`).
+        //  - `queued` (crow busy) → "message queued (crow busy)".
+        //  - otherwise → "→ {label}", with the agentId as the label (Textual's own fallback when no
+        //    friendly label is threaded; this action only carries agentId — rule 2 keeps labels out).
+        // The `→ collaborator` path is NOT reachable here: collaborator chat goes through a different
+        // command kind absent from this action, so we don't invent it.
+        if (result['handled'] === false) {
+          const errorText = String(result['error'] ?? 'agent did not handle message');
+          toastStore.getState().push(errorText, { severity: 'error', ttlMs: 6000 });
+          return;
+        }
+        if (result['queued'] === true) {
+          toastStore.getState().push('message queued (crow busy)', { ttlMs: 3000 });
+        } else {
+          toastStore.getState().push(`→ ${agentId}`, { ttlMs: 2000 });
+        }
         // Keep the pane for this agent active after sending.
         store.setState((state) => ({
           conversations: { ...state.conversations, activePaneAgentId: agentId },
