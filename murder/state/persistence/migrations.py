@@ -514,6 +514,7 @@ def _migrate_plans_single_master(conn: sqlite3.Connection) -> None:
     conn.executescript(
         """
         PRAGMA foreign_keys = OFF;
+        PRAGMA legacy_alter_table = ON;
         BEGIN;
         ALTER TABLE plans RENAME TO plans_old_single_master_migration;
         CREATE TABLE plans (
@@ -543,9 +544,97 @@ def _migrate_plans_single_master(conn: sqlite3.Connection) -> None:
         DROP TABLE plans_old_single_master_migration;
         CREATE INDEX IF NOT EXISTS idx_plans_status ON plans(status);
         COMMIT;
+        PRAGMA legacy_alter_table = OFF;
         PRAGMA foreign_keys = ON;
         """
     )
+
+
+def _migrate_repair_plans_dangling_fk(conn: sqlite3.Connection) -> None:
+    """Repair child tables whose FK still references the migration temp table.
+
+    A historical bug in ``_migrate_plans_single_master`` renamed ``plans`` without
+    ``PRAGMA legacy_alter_table = ON``, so SQLite rewrote the foreign keys in
+    ``plan_revisions`` / ``plan_related_tickets`` to point at the temporary
+    ``plans_old_single_master_migration`` table. That temp table was then dropped,
+    leaving the children with a dangling FK target — any INSERT raises
+    ``no such table: main.plans_old_single_master_migration``.
+
+    This migration rebuilds each affected child table with the canonical schema
+    (FK → ``plans(name)``), preserving all existing rows. It is idempotent and a
+    no-op once no dangling reference remains.
+    """
+    # Only consider the known child tables; the LIKE match would otherwise also
+    # match the temp table's own CREATE statement if a prior migration was
+    # interrupted before the DROP.
+    affected = [
+        row["name"]
+        for row in conn.execute(
+            """
+            SELECT name FROM sqlite_master
+             WHERE type = 'table'
+               AND name IN ('plan_revisions', 'plan_related_tickets')
+               AND sql LIKE '%plans_old_single_master_migration%'
+            """
+        ).fetchall()
+    ]
+    if not affected:
+        return
+
+    # Canonical correct-schema DDL, mirroring murder/state/persistence/schema.py.
+    rebuilds: dict[str, tuple[str, str, tuple[str, ...]]] = {
+        "plan_revisions": (
+            """
+            CREATE TABLE plan_revisions (
+                id               INTEGER PRIMARY KEY AUTOINCREMENT,
+                plan_name        TEXT NOT NULL REFERENCES plans(name) ON DELETE CASCADE,
+                created_at       TEXT NOT NULL,
+                source           TEXT NOT NULL CHECK (source IN ('file','db','import')),
+                status           TEXT NOT NULL,
+                body             TEXT NOT NULL,
+                frontmatter_json TEXT NOT NULL DEFAULT '{}',
+                content_hash     TEXT NOT NULL
+            )
+            """,
+            "id, plan_name, created_at, source, status, body, frontmatter_json, content_hash",
+            (
+                "CREATE INDEX IF NOT EXISTS idx_plan_revisions_plan "
+                "ON plan_revisions(plan_name, id)",
+            ),
+        ),
+        "plan_related_tickets": (
+            """
+            CREATE TABLE plan_related_tickets (
+                plan_name TEXT NOT NULL REFERENCES plans(name) ON DELETE CASCADE,
+                ticket_id TEXT NOT NULL,
+                PRIMARY KEY (plan_name, ticket_id)
+            )
+            """,
+            "plan_name, ticket_id",
+            (),
+        ),
+    }
+
+    conn.execute("PRAGMA foreign_keys = OFF")
+    conn.execute("PRAGMA legacy_alter_table = ON")
+    conn.execute("BEGIN")
+    try:
+        for table in affected:
+            create_sql, columns, indexes = rebuilds[table]
+            temp = f"{table}_dangling_fk_repair"
+            conn.execute(f"ALTER TABLE {table} RENAME TO {temp}")
+            conn.execute(create_sql)
+            conn.execute(f"INSERT INTO {table} ({columns}) SELECT {columns} FROM {temp}")
+            conn.execute(f"DROP TABLE {temp}")
+            for index_sql in indexes:
+                conn.execute(index_sql)
+        conn.execute("COMMIT")
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
+    finally:
+        conn.execute("PRAGMA legacy_alter_table = OFF")
+        conn.execute("PRAGMA foreign_keys = ON")
 
 
 def _migrate_drop_ticket_write_set(conn: sqlite3.Connection) -> None:

@@ -450,6 +450,7 @@ def init_db(conn: sqlite3.Connection) -> None:
         _migrate_events_schema_version,
         _migrate_notes_identity_status,
         _migrate_plans_single_master,
+        _migrate_repair_plans_dangling_fk,
         _migrate_role_names,
         _migrate_ticket_archived_status,
         _migrate_ticket_draft_status,
@@ -477,6 +478,7 @@ def init_db(conn: sqlite3.Connection) -> None:
     _migrate_completion_tables(conn)
     _migrate_drop_sentinel(conn)
     _migrate_plans_single_master(conn)
+    _migrate_repair_plans_dangling_fk(conn)
     _migrate_agents_harness(conn)
     _migrate_agents_model(conn)
     _migrate_agents_worktree_path(conn)
