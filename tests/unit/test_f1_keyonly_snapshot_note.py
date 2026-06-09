@@ -6,8 +6,8 @@ Sibling of ``test_f1_keyonly_snapshot.py`` (AGENT backbone),
 mutations funnel a single key-only ``state.snapshot{entity=note, key=<note_id>}``
 through the established choke points:
 
-- ``NoteSync`` (PRIMARY filesystem->DB writer) via the injected ``on_note_change``
-  callback wired to ``Runtime.emit_snapshot`` -- fires on reconcile insert and on
+- ``NoteSync`` (PRIMARY filesystem->DB writer) via the ``on_change`` callback
+  wired via the F5.1 notify_changed seam -- fires on reconcile insert and on
   a body/path edit, but NOT on an unchanged reconcile;
 - ``DocumentAccess.note_path_for`` (the second live ``ensure_note`` path, behind
   the ``document.note_path`` RPC) -- emits when it CREATES the row, not when the
@@ -76,7 +76,8 @@ def _note_snapshots(captured: list[object], name: str) -> list[StateSnapshotEven
 async def _drain(rt: Runtime) -> None:
     # Sync choke points (emit_snapshot) schedule fire-and-forget tasks; conftest
     # noop-patches asyncio.sleep so we drain explicitly. Async paths
-    # (publish_snapshot) have already awaited by the time we get here.
+    # (publish_snapshot, notify_changed) have already awaited by the time we
+    # get here.
     if rt._emit_tasks:
         await asyncio.gather(*list(rt._emit_tasks))
 
@@ -91,6 +92,20 @@ def _write_note(repo_root: Path, name: str, body: str = "# Note body\n") -> Path
 
 
 # === filesystem->DB primary writer (NoteSync) ==============================
+# NoteSync now uses the async notify_changed seam (F5.3): on_change=(Entity,str)->coro.
+# Pass rt.bus.publish as on_change so events appear on the real bus.
+
+
+async def _bus_emit(rt: Runtime, entity: Entity, key: str) -> None:
+    """Async on_change callback that publishes directly to the bus."""
+    await rt.bus.publish(
+        StateSnapshotEvent(
+            run_id=rt.run_id,
+            agent_id="filesystem-sync",
+            entity=entity,
+            key=key,
+        )
+    )
 
 
 @pytest.mark.asyncio
@@ -107,12 +122,12 @@ async def test_note_sync_reconcile_insert_emits_one_key_only_note_snapshot(
     sync = NoteSync(
         repo_root,
         rt.db,
-        on_note_change=lambda name: rt.emit_snapshot(Entity.NOTE, name),
+        on_change=lambda entity, key: _bus_emit(rt, entity, key),
     )
     # Drive ONE reconcile directly -- never NoteSync.run() (a poll loop that would
     # busy-spin under conftest's noop sleep).
     await sync.reconcile_file(path)
-    await _drain(rt)
+    # on_change is async and awaited directly in reconcile_file; no _drain needed.
 
     snaps = _note_snapshots(captured, "alpha")
     assert len(snaps) == 1
@@ -139,10 +154,9 @@ async def test_note_sync_reconcile_edit_emits_one_key_only_note_snapshot(
     sync = NoteSync(
         repo_root,
         rt.db,
-        on_note_change=lambda name: rt.emit_snapshot(Entity.NOTE, name),
+        on_change=lambda entity, key: _bus_emit(rt, entity, key),
     )
     await sync.reconcile_file(path)
-    await _drain(rt)
 
     assert len(_note_snapshots(captured, "beta")) == 1
 
@@ -163,10 +177,9 @@ async def test_note_sync_unchanged_reconcile_does_not_emit(repo_root: Path) -> N
     sync = NoteSync(
         repo_root,
         rt.db,
-        on_note_change=lambda name: rt.emit_snapshot(Entity.NOTE, name),
+        on_change=lambda entity, key: _bus_emit(rt, entity, key),
     )
     await sync.reconcile_file(path)
-    await _drain(rt)
 
     assert _note_snapshots(captured, "gamma") == []
 

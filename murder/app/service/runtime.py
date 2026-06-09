@@ -56,6 +56,7 @@ if TYPE_CHECKING:
     from murder.runtime.agents.base import LifecycleParticipant
     from murder.work.notes.sync import NoteSync, NotetakerContextSync
     from murder.work.plans.sync import PlanSync
+    from murder.work.simple_doc_sync import SimpleDocSync
     from murder.work.tickets.sync import TicketSync
 
 Handler = Callable[[Any], Awaitable[None]]
@@ -88,6 +89,7 @@ class Runtime:
         self.note_sync: NoteSync | None = None
         self.notetaker_context_sync: NotetakerContextSync | None = None
         self.ticket_sync: TicketSync | None = None
+        self.report_sync: SimpleDocSync | None = None
         self.documents = DocumentAccess(self.repo_root)
 
     async def __aenter__(self) -> Runtime:
@@ -121,12 +123,16 @@ class Runtime:
             self.db,
             on_ticket_change=lambda tid: self.emit_snapshot(Entity.TICKET, tid),
             on_plan_change=lambda name: self.emit_snapshot(Entity.PLAN, name),
-            on_note_change=lambda name: self.emit_snapshot(Entity.NOTE, name),
+            # Notes and reports use the async notify_changed seam (F5.1/F5.3):
+            # pass bus + run_id so _emit is live; on_note_change is removed.
+            bus=self.bus,
+            run_id=self.run_id,
         )
         self.plan_sync = self._sync.plan_sync
         self.note_sync = self._sync.note_sync
         self.notetaker_context_sync = self._sync.notetaker_context_sync
         self.ticket_sync = self._sync.ticket_sync
+        self.report_sync = self._sync.report_sync
         self.documents = DocumentAccess(
             self.repo_root,
             self.db,
@@ -162,6 +168,7 @@ class Runtime:
         self.note_sync = None
         self.notetaker_context_sync = None
         self.ticket_sync = None
+        self.report_sync = None
         self.documents = DocumentAccess(self.repo_root)
         self.bus = None
         self.run_id = None

@@ -215,6 +215,31 @@ CREATE TABLE IF NOT EXISTS note_revisions (
 CREATE INDEX IF NOT EXISTS idx_note_revisions_note
     ON note_revisions(note_name, id);
 
+CREATE TABLE IF NOT EXISTS reports (
+    id                TEXT PRIMARY KEY,
+    name              TEXT NOT NULL UNIQUE,
+    created_at        TEXT NOT NULL,
+    updated_at        TEXT NOT NULL,
+    status            TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','retired')),
+    retired_at        TEXT,
+    body              TEXT NOT NULL DEFAULT '',
+    materialized_path TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_reports_updated ON reports(updated_at);
+
+CREATE TABLE IF NOT EXISTS report_revisions (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    report_name   TEXT NOT NULL REFERENCES reports(name) ON DELETE CASCADE,
+    created_at    TEXT NOT NULL,
+    source        TEXT NOT NULL CHECK (source IN ('agent','file_import','bootstrap')),
+    body          TEXT NOT NULL,
+    content_hash  TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_report_revisions_report
+    ON report_revisions(report_name, id);
+
 CREATE TABLE IF NOT EXISTS notetaker_context (
     id                INTEGER PRIMARY KEY CHECK (id = 1),
     body              TEXT NOT NULL DEFAULT '',

@@ -42,7 +42,7 @@ from murder.app.service.schedule_snapshot import (
 )
 from murder.state.persistence import tickets as ticket_store
 from murder.state.persistence.schema import get_db
-from murder.state.storage.paths import reports_dir
+from murder.state.storage.paths import report_md
 from murder.work.tickets.parser import read_ticket_md
 from murder.work.tickets.status import TicketStatus
 
@@ -176,19 +176,30 @@ class ServiceReadModel:
 
     def get_reports_snapshot(self) -> ReportsSnapshot:
         as_of = datetime.utcnow()
-        root = reports_dir(self.db_path.parent.parent)
-        root.mkdir(parents=True, exist_ok=True)
+        with closing(self._connect()) as conn:
+            # Guard: reports table may not exist on a very old DB that predates
+            # F5.2 schema migration (get_db does not call init_db).
+            table_exists = conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='reports'"
+            ).fetchone()
+            if table_exists:
+                rows = conn.execute(
+                    """
+                    SELECT name, length(body) AS size, updated_at
+                      FROM reports
+                     WHERE status = 'active'
+                     ORDER BY updated_at DESC, name
+                    """
+                ).fetchall()
+            else:
+                rows = []
         reports = tuple(
             ReportSummary(
-                name=path.stem,
-                char_count=path.stat().st_size,
-                updated_at=datetime.fromtimestamp(path.stat().st_mtime),
+                name=str(row["name"]),
+                char_count=int(row["size"]),
+                updated_at=_parse_datetime(row["updated_at"]) or as_of,
             )
-            for path in sorted(
-                root.glob("*.md"),
-                key=lambda candidate: (-candidate.stat().st_mtime, candidate.name),
-            )
-            if path.is_file()
+            for row in rows
         )
         return ReportsSnapshot(
             reports=reports,
@@ -438,7 +449,7 @@ class ServiceReadModel:
         return NoteDisplaySnapshot(name=name, markdown=text)
 
     def get_report_display(self, name: str) -> ReportDisplaySnapshot | None:
-        path = reports_dir(self.db_path.parent.parent) / f"{name}.md"
+        path = report_md(self.db_path.parent.parent, name)
         if not path.exists() or not path.is_file():
             return None
         text = path.read_text(encoding="utf-8")
