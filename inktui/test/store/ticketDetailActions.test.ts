@@ -34,11 +34,17 @@ const TICKET_BODY = `## Plan\nDo the thing.\n\n# Checklist\n- [ ] first item\n- 
 const DETAIL_REPLY: TicketDetailReply = {
   id: 'T-1',
   title: 'Alpha ticket',
-  deps: 'T-0',
+  status: 'in_progress',
+  deps: ['T-0', 'T-2'],
   harness: 'claude',
   model: 'anthropic/claude-opus',
   worktree: '.murder/worktrees/t1',
+  schedule_at: '2026-06-10T09:00:00',
   body: TICKET_BODY,
+  checklist: [
+    { text: 'first item', done: false },
+    { text: 'done item', done: true },
+  ],
 };
 
 /** Filter rpcCalls by method name. */
@@ -87,12 +93,51 @@ describe('ticketDetailActions.open', () => {
     expect(detail.editedBody).toBe(TICKET_BODY);
     expect(detail.frontmatter).not.toBeNull();
     expect(detail.frontmatter?.title).toBe('Alpha ticket');
-    expect(detail.frontmatter?.deps).toBe('T-0');
+    expect(detail.frontmatter?.deps).toBe('T-0, T-2');
     expect(detail.frontmatter?.harness).toBe('claude');
     expect(detail.frontmatter?.model).toBe('anthropic/claude-opus');
     expect(detail.frontmatter?.worktree).toBe('.murder/worktrees/t1');
     expect(detail.scheduleInput).toBe('');
     expect(detail.error).toBeNull();
+    dispose();
+  });
+
+  it('consumes the new wire fields: status, schedule_at, and array deps from state.ticket_detail', async () => {
+    // Field-by-field with the Python TicketDetailSnapshot wire shape: status (TicketStatus value),
+    // deps (string[]), schedule_at (ISO string | null). These now ride in the detail snapshot and
+    // surface as display-only header context (frontmatter).
+    const { store, dispose } = setup();
+    await store.getState().actions.ticketDetail.open('T-1');
+    const fm = store.getState().ticketDetail.frontmatter;
+    expect(fm?.status).toBe('in_progress');
+    expect(fm?.scheduleAt).toBe('2026-06-10T09:00:00');
+    // deps[] is joined to a display string (header renders it as `deps:<...>`).
+    expect(fm?.deps).toBe('T-0, T-2');
+    dispose();
+  });
+
+  it('checklist rides in the body (C8 line 167) — the body carries the `# Checklist` `[ ]`/`[x]` lines', async () => {
+    // The structured `checklist` field is carried for contract fidelity but NOT the editor's source;
+    // the editable body is the single source of truth and contains the checklist lines verbatim.
+    const { store, dispose } = setup();
+    await store.getState().actions.ticketDetail.open('T-1');
+    const body = store.getState().ticketDetail.savedBody ?? '';
+    expect(body).toContain('# Checklist');
+    expect(body).toContain('- [ ] first item');
+    expect(body).toContain('- [x] done item');
+    dispose();
+  });
+
+  it('tolerates a null schedule_at and empty deps[] (nullable header fields)', async () => {
+    const { store, dispose } = setup({
+      ...DETAIL_REPLY,
+      schedule_at: null,
+      deps: [],
+    });
+    await store.getState().actions.ticketDetail.open('T-1');
+    const fm = store.getState().ticketDetail.frontmatter;
+    expect(fm?.scheduleAt).toBeNull();
+    expect(fm?.deps).toBe('');
     dispose();
   });
 

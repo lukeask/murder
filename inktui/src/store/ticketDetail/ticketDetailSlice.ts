@@ -5,10 +5,11 @@
  *  - This is NOT an event-invalidated slice (no `INVALIDATING_ENTITY` — the detail is loaded on
  *    demand when the user presses enter on a ticket, not on every bus snapshot). The editor
  *    controls loading/saving explicitly via its actions.
- *  - The editable document is the ticket **body** (a markdown string). Frontmatter fields
- *    (`title`, `deps`, `harness`, `model`, `worktree`) are display-only context delivered here
- *    for rendering the editor header — they are NOT part of the editable body, and runtime state
- *    (`status`, `schedule_at`, `attempts`) is DB-only and lives only in the tickets list row DTO.
+ *  - The editable document is the ticket **body** (a markdown string). Display-only context
+ *    (`title`, `status`, `deps`, `harness`, `model`, `worktree`, `scheduleAt`) is delivered here
+ *    for rendering the editor header — none of it is part of the editable body. The body carries
+ *    the `# Checklist` `[ ]`/`[x]` lines (C8 line 167); the schedule is changed via the free-form
+ *    duration input + `ticket.schedule`, never by editing `scheduleAt`.
  *  - `editedBody` is the *in-progress* editor buffer (may differ from `savedBody` if the user
  *    has made edits); `savedBody` is the last-persisted version from the service.
  *  - `scheduleInput` is the free-form duration string the user types (`1d4h3m`, `34m`); it is
@@ -27,17 +28,23 @@ import type { StateCreator } from 'zustand';
 import type { AppStore } from '../store.js';
 
 /**
- * Frontmatter fields carried in the detail reply for display-only context in the editor header.
- * These are NOT editable here — the editor shows them as read-only context (title, deps, harness,
- * model, worktree). Matches the ticket frontmatter from `murder/work/tickets/`.
+ * Display-only context carried in the detail reply, shown read-only in the editor header. Combines
+ * the ticket frontmatter (`title, deps, harness, model, worktree`) with the runtime state the
+ * service now delivers alongside the doc (`status`, `scheduleAt`). None of these are editable here —
+ * the body (and its `# Checklist` lines) is the only editable surface; the schedule is changed via
+ * the free-form duration input + `ticket.schedule`, not by editing `scheduleAt`.
  */
 export interface TicketFrontmatter {
   readonly title: string;
-  /** Dependency ticket ids (comma-separated string as it appears in the .md frontmatter). */
+  /** Ticket lifecycle status (e.g. `"planned"`, `"in_progress"`). Display-only. */
+  readonly status: string;
+  /** Dependency ticket ids, joined to a comma-separated string for display. */
   readonly deps: string;
   readonly harness: string | null;
   readonly model: string | null;
   readonly worktree: string | null;
+  /** ISO timestamp the ticket is currently scheduled for, or `null`. Display-only. */
+  readonly scheduleAt: string | null;
 }
 
 /**
