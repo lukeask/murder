@@ -27,13 +27,37 @@ import { InputStoresProvider } from '../../src/hooks/useInputStores.js';
 import { useRootInput } from '../../src/hooks/useRootInput.js';
 import { createInputStores } from '../../src/input/createInputStores.js';
 import { selectActiveMode } from '../../src/input/modeStore.js';
-import { createSpawnActions, type SpawnRogueParams } from '../../src/store/dialogs/spawnActions.js';
+import { createSpawnActions } from '../../src/store/dialogs/spawnActions.js';
 
 const ESC = '\x1b';
 
 /** Let Ink flush a render + post-render effects. */
 async function tick(): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, 20));
+}
+
+/** The `kind`s of every `command.submit` call, in order — spawn (+ optional kickoff agent.message). */
+function submitKinds(bus: FakeBusClient): string[] {
+  return bus.rpcCalls
+    .filter((c) => c.method === 'command.submit')
+    .map((c) => String((c.params as { kind: string }).kind));
+}
+
+/** The payload of the `crow.spawn_rogue` command submit (the spawn params crossing the wire). */
+function spawnSubmitPayload(bus: FakeBusClient): Record<string, unknown> {
+  const call = bus.rpcCalls.find(
+    (c) =>
+      c.method === 'command.submit' && (c.params as { kind: string }).kind === 'crow.spawn_rogue',
+  );
+  return (call?.params as { payload: Record<string, unknown> }).payload;
+}
+
+/** The payload of the kickoff `agent.message` command submit, if one was sent. */
+function kickoffSubmitPayload(bus: FakeBusClient): Record<string, unknown> | undefined {
+  const call = bus.rpcCalls.find(
+    (c) => c.method === 'command.submit' && (c.params as { kind: string }).kind === 'agent.message',
+  );
+  return call ? (call.params as { payload: Record<string, unknown> }).payload : undefined;
 }
 
 /** Runs the root input loop inside the providers, with an optional spawn handler override. */
@@ -65,7 +89,15 @@ function Harness({
 function setup(spawnContext: SpawnContext | null = null) {
   const stores = createInputStores(['notes'], 'notes');
   const bus = new FakeBusClient();
-  bus.stubRpc('crow.spawn_rogue', { handled: true, agent_id: 'rogue-001' });
+  // F2: `crow.spawn_rogue` is an orchestrator command kind routed through `command.submit` +
+  // `command.status`. The submit returns the spawned `agent_id` (in `result_json`); the kickoff
+  // message, when present, is delivered as a separate `agent.message` command (also via submit).
+  bus.stubRpc('command.submit', { ok: true, command_id: 'cmd-1' });
+  bus.stubRpc('command.status', {
+    ok: true,
+    status: 'done',
+    result_json: JSON.stringify({ handled: true, agent_id: 'rogue-001' }),
+  });
   const actions = createSpawnActions(bus);
   const enter = (opts: Parameters<typeof spawnWizardMode>[2] = {}) =>
     stores.modes
@@ -152,15 +184,13 @@ describe('SpawnWizardModal — ctrl+s spawn wizard', () => {
     expect(selectActiveMode(stores.modes)).toBeNull(); // wizard dismissed
     expect(stores.focus.getState().intendedId).toBe('notes'); // focus restored
 
-    await tick(); // let the async RPC settle
-    expect(bus.rpcCalls.length).toBe(1);
-    expect(bus.rpcCalls[0]).toMatchObject({
-      method: 'crow.spawn_rogue',
-      params: { effort: 'medium' },
-    });
-    // kickoff_message must NOT be present when no context.
-    const params0 = bus.rpcCalls[0]?.params as SpawnRogueParams;
-    expect(params0.kickoff_message).toBeUndefined();
+    await tick(); // let the async command (submit → poll → resolve) settle
+    await tick();
+    const spawnPayload = spawnSubmitPayload(bus);
+    // The spawn command carries the required harness + model + the chosen effort.
+    expect(spawnPayload).toMatchObject({ harness: 'claude', model: 'sonnet', effort: 'medium' });
+    // No kickoff: only the spawn command was submitted (no follow-up agent.message).
+    expect(submitKinds(bus)).toEqual(['crow.spawn_rogue']);
     await tick();
     expect(onSubmit).toHaveBeenCalledWith('medium', null);
   });
@@ -195,11 +225,14 @@ describe('SpawnWizardModal — ctrl+s spawn wizard', () => {
 
     expect(selectActiveMode(stores.modes)).toBeNull();
     await tick();
-    expect(bus.rpcCalls.length).toBe(1);
-    const params = bus.rpcCalls[0]?.params as SpawnRogueParams;
-    expect(params.effort).toBe('low'); // first option (cursor 0)
-    // Reference-by-path: kickoff_message tells rogue to READ the path.
-    expect(params.kickoff_message).toBe(`Please read ${TEST_CONTEXT.path} before starting.`);
+    await tick();
+    expect(spawnSubmitPayload(bus)).toMatchObject({ effort: 'low' }); // first option (cursor 0)
+    // Reference-by-path: the kickoff is delivered as a separate agent.message to the spawned rogue.
+    expect(submitKinds(bus)).toEqual(['crow.spawn_rogue', 'agent.message']);
+    expect(kickoffSubmitPayload(bus)).toMatchObject({
+      agent_id: 'rogue-001',
+      message: `Please read ${TEST_CONTEXT.path} before starting.`,
+    });
     await tick();
     expect(onSubmit).toHaveBeenCalledWith(
       'low',
@@ -220,9 +253,10 @@ describe('SpawnWizardModal — ctrl+s spawn wizard', () => {
 
     expect(selectActiveMode(stores.modes)).toBeNull();
     await tick();
-    const params = bus.rpcCalls[0]?.params as SpawnRogueParams;
-    expect(typeof params.kickoff_message).toBe('string');
-    expect(params.kickoff_message).toContain('.murder/notes/my-note.md');
+    await tick();
+    const kickoff = kickoffSubmitPayload(bus);
+    expect(typeof kickoff?.['message']).toBe('string');
+    expect(String(kickoff?.['message'])).toContain('.murder/notes/my-note.md');
   });
 
   it('context step n declines context — fires without kickoff_message', async () => {
@@ -240,10 +274,11 @@ describe('SpawnWizardModal — ctrl+s spawn wizard', () => {
 
     expect(selectActiveMode(stores.modes)).toBeNull();
     await tick();
-    expect(bus.rpcCalls.length).toBe(1);
-    const params = bus.rpcCalls[0]?.params as SpawnRogueParams;
-    expect(params.effort).toBe('low');
-    expect(params.kickoff_message).toBeUndefined();
+    await tick();
+    expect(spawnSubmitPayload(bus)).toMatchObject({ effort: 'low' });
+    // Declined context → no kickoff agent.message, only the spawn command.
+    expect(submitKinds(bus)).toEqual(['crow.spawn_rogue']);
+    expect(kickoffSubmitPayload(bus)).toBeUndefined();
     await tick();
     expect(onSubmit).toHaveBeenCalledWith('low', null);
   });
@@ -314,7 +349,7 @@ describe('ctrl+s dispatcher test', () => {
     const stores = createInputStores(['notes'], 'notes');
     const spawnFn = vi.fn();
     const bus = new FakeBusClient();
-    bus.stubRpc('crow.spawn_rogue', { handled: true });
+    bus.stubRpc('command.submit', { ok: true, command_id: 'cmd-1' });
     const actions = createSpawnActions(bus);
     stores.modes.getState().enter(spawnWizardMode(stores.modes, actions, { spawnContext: null }));
 

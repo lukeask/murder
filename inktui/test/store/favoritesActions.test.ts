@@ -18,7 +18,7 @@ function setup() {
   // Default stubs so an unrelated load/save resolves; tests override as needed.
   fake.stubRpc('tui.load_favorites', { ok: true, favorites: [] });
   fake.stubRpc('tui.save_favorites', { ok: true, favorites: [] });
-  fake.stubRpc('crow.get_snapshot', { invalidation_key: 'iv', sessions: [] });
+  fake.stubRpc('state.crow_snapshot', { invalidation_key: 'iv', sessions: [] });
   const { store, dispose } = createAppStore(fake);
   return { fake, store, dispose };
 }

@@ -92,8 +92,10 @@ function Harness({
 
 async function setup(reply: CrowSnapshotReply = twoFavoritedCrows()) {
   const fake = new FakeBusClient();
-  fake.stubRpc('crow.get_snapshot', reply);
-  fake.stubRpc('agent.message', {});
+  fake.stubRpc('state.crow_snapshot', reply);
+  // F2: chat sends route through command.submit (agent.message command kind), not a direct RPC.
+  fake.stubRpc('command.submit', { ok: true, command_id: 'cmd-1' });
+  fake.stubRpc('command.status', { ok: true, status: 'done', result_json: '{}' });
   const { store, dispose } = createAppStore(fake);
   await store.getState().actions.roster.refresh();
   const inputStores = createInputStores(['crows'], 'crows');
@@ -179,11 +181,17 @@ describe('CrowChatPanel — chat history rendering', () => {
     // Directly dispatch send — proves rule 3: only conversations.send calls the bus for chat.
     await store.getState().actions.conversations.send('collab-1', 'test send');
 
-    // Filter to only agent.message calls (setup() also calls crow.get_snapshot via refresh()).
-    const sendCalls = fake.rpcCalls.filter((c) => c.method === 'agent.message');
+    // The send rides command.submit as the agent.message command kind (rule 3: only
+    // conversations.send calls the bus for chat).
+    const sendCalls = fake.rpcCalls.filter(
+      (c) =>
+        c.method === 'command.submit' && (c.params as { kind: string }).kind === 'agent.message',
+    );
     expect(sendCalls).toHaveLength(1);
-    expect(sendCalls[0]?.method).toBe('agent.message');
-    expect(sendCalls[0]?.params).toMatchObject({ agent_id: 'collab-1', message: 'test send' });
+    expect(sendCalls[0]?.params).toMatchObject({
+      kind: 'agent.message',
+      payload: { agent_id: 'collab-1', message: 'test send' },
+    });
     dispose();
   });
 });

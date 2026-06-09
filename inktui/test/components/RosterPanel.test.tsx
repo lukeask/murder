@@ -89,7 +89,7 @@ function RootInput(): null {
 /** Build store (with stubbed RPC + an initial refresh) + input stores, panel focused by default. */
 async function setup(reply: CrowSnapshotReply = twoCrows(), focused = true) {
   const fake = new FakeBusClient();
-  fake.stubRpc('crow.get_snapshot', reply);
+  fake.stubRpc('state.crow_snapshot', reply);
   const { store, dispose } = createAppStore(fake);
   await store.getState().actions.roster.refresh();
   const inputStores = createInputStores(['crows'], focused ? 'crows' : 'chat');

@@ -61,12 +61,12 @@ function Harness({
 
 async function setup() {
   const fake = new FakeBusClient();
-  fake.stubRpc('plan.get_snapshot', {
+  fake.stubRpc('state.plans_snapshot', {
     invalidation_key: 'iv',
     plans: [{ name: 'my-plan', char_count: 100, updated_at: '2026-06-01T00:00:00', parent: null }],
   });
-  fake.stubRpc('doc.get', { body: DOC_BODY });
-  fake.stubRpc('crow.get_snapshot', { invalidation_key: 'iv', sessions: [] });
+  fake.stubRpc('state.plan_display', { name: 'my-plan', markdown: DOC_BODY });
+  fake.stubRpc('state.crow_snapshot', { invalidation_key: 'iv', sessions: [] });
   const { store, dispose } = createAppStore(fake);
   await store.getState().actions.plans.refresh();
   const inputStores = createInputStores(['plans'], 'plans');
@@ -83,7 +83,7 @@ describe('DocViewMode — open / minimize / restore + focus', () => {
 
     stdin.write(RETURN);
     await tick();
-    await tick(); // async doc.get settles
+    await tick(); // async state.plan_display settles
 
     expect(selectActiveMode(inputStores.modes)?.id).toBe(DOC_VIEW_MODE_ID);
     const frame = lastFrame() ?? '';

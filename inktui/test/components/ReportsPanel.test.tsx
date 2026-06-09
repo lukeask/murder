@@ -1,6 +1,6 @@
 /**
  * ReportsPanel test — copied from {@link ./NotesPanel.test.tsx}.
- * Changes: uses `report.get_snapshot`, panel id `'reports'`, empty chrome `'no reports'`.
+ * Changes: uses `state.reports_snapshot`, panel id `'reports'`, empty chrome `'no reports'`.
  */
 
 import { Box } from 'ink';
@@ -66,8 +66,8 @@ function RootInput(): null {
 
 async function setup(reply: ReportsSnapshotReply = twoReports(), focused = true) {
   const fake = new FakeBusClient();
-  fake.stubRpc('report.get_snapshot', reply);
-  fake.stubRpc('crow.get_snapshot', { invalidation_key: 'iv', sessions: [] });
+  fake.stubRpc('state.reports_snapshot', reply);
+  fake.stubRpc('state.crow_snapshot', { invalidation_key: 'iv', sessions: [] });
   const { store, dispose } = createAppStore(fake);
   await store.getState().actions.reports.refresh();
   const inputStores = createInputStores(['reports'], focused ? 'reports' : 'chat');

@@ -76,8 +76,31 @@ export interface SpawnContext {
   readonly path: string;
 }
 
+/**
+ * The default harness/model the wizard spawns with when the call site does not supply them.
+ *
+ * F2 GAP (noted in the plan): the live `crow.spawn_rogue` command REQUIRES `harness` + `model`, but
+ * the wizard collects only `effort` + an optional context doc — there is no harness/model selection
+ * UI in Ink yet (Textual's spawn flow gets them from a prior selection step that has no Ink port).
+ * Until that selection UI lands, the wizard must still send valid `harness`/`model`, so the call
+ * site passes them (from a session default / future settings slice) and these constants are the
+ * fallback. Wiring a real picker is follow-up work, not F2.
+ */
+export const DEFAULT_SPAWN_HARNESS = 'claude';
+export const DEFAULT_SPAWN_MODEL = 'sonnet';
+
 /** Options passed to the spawn wizard mode factory. */
 export interface SpawnWizardModeOptions {
+  /**
+   * The harness the rogue spawns with. REQUIRED by the live handler; defaults to
+   * {@link DEFAULT_SPAWN_HARNESS} when the call site has no selection (see the F2 gap note above).
+   */
+  readonly harness?: string;
+  /**
+   * The model the rogue spawns with. REQUIRED by the live handler; defaults to
+   * {@link DEFAULT_SPAWN_MODEL} when the call site has no selection.
+   */
+  readonly model?: string;
   /**
    * Per-harness effort options. Passed from the `spawn` handler so they can be customised per
    * session/harness. Defaults to `DEFAULT_EFFORT_OPTIONS` if absent.
@@ -135,6 +158,8 @@ export function spawnWizardMode(
   const id = SPAWN_WIZARD_MODE_ID;
   const effortOptions = opts.effortOptions ?? DEFAULT_EFFORT_OPTIONS;
   const spawnContext = opts.spawnContext ?? null;
+  const harness = opts.harness ?? DEFAULT_SPAWN_HARNESS;
+  const model = opts.model ?? DEFAULT_SPAWN_MODEL;
 
   // Mutable local state in the closure — not React state.
   const s: SpawnWizardState = {
@@ -165,10 +190,11 @@ export function spawnWizardMode(
     modes.getState().exit(id);
     const effort = effortOptions[s.effortCursor] ?? effortOptions[0] ?? 'medium';
     const kickoffMessage = buildKickoffMessage();
-    const params =
-      kickoffMessage !== null ? { effort, kickoff_message: kickoffMessage } : { effort };
+    // The live `crow.spawn_rogue` command requires harness + model; effort is optional. The kickoff
+    // message is delivered out-of-band (a separate `agent.message`) by the action — the spawn
+    // handler ignores any kickoff field — so it is passed through `kickoffMessage`, not dropped.
     void actions
-      .spawnRogue(params)
+      .spawnRogue({ harness, model, effort, kickoffMessage })
       .then(() => {
         opts.onSubmit?.(effort, kickoffMessage);
       })

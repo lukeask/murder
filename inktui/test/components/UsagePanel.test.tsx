@@ -19,7 +19,7 @@ import { InputStoresProvider } from '../../src/hooks/useInputStores.js';
 import { useRootInput } from '../../src/hooks/useRootInput.js';
 import { createInputStores } from '../../src/input/createInputStores.js';
 import { createAppStore } from '../../src/store/store.js';
-import type { UsageSnapshotReply } from '../../src/store/usage/usageActions.js';
+import type { ScheduleSnapshotReply } from '../../src/store/tickets/ticketsActions.js';
 
 const CTRL_F = '\x06';
 
@@ -27,10 +27,14 @@ async function tick(): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, 20));
 }
 
-function twoGauges(): UsageSnapshotReply {
+// Usage gauges are embedded in the schedule snapshot (F2) — the usage slice reads `usage_gauges`.
+function twoGauges(): ScheduleSnapshotReply {
   return {
     invalidation_key: 'iv',
-    gauges: [
+    active_tickets: [],
+    recent_done_tickets: [],
+    archived_tickets: [],
+    usage_gauges: [
       {
         harness: 'claude',
         window_key: 'h1',
@@ -73,13 +77,13 @@ function Harness({
   );
 }
 
-async function setup(reply: UsageSnapshotReply = twoGauges(), focused = true) {
+async function setup(reply: ScheduleSnapshotReply = twoGauges(), focused = true) {
   const fake = new FakeBusClient();
-  fake.stubRpc('crow.get_snapshot', {
+  fake.stubRpc('state.crow_snapshot', {
     invalidation_key: 'iv',
     sessions: [],
   });
-  fake.stubRpc('usage.get_snapshot', reply);
+  fake.stubRpc('state.schedule_snapshot', reply);
   const { store, dispose } = createAppStore(fake);
   await store.getState().actions.usage.refresh();
   const inputStores = createInputStores(['usage'], focused ? 'usage' : 'chat');
@@ -157,7 +161,13 @@ describe('UsagePanel — rendering', () => {
 
   it('renders empty chrome when the slice has no rows', async () => {
     const { store, inputStores, dispose } = await setup(
-      { invalidation_key: 'iv', gauges: [] },
+      {
+        invalidation_key: 'iv',
+        active_tickets: [],
+        recent_done_tickets: [],
+        archived_tickets: [],
+        usage_gauges: [],
+      },
       true,
     );
     const { lastFrame } = render(<Harness store={store} inputStores={inputStores} />);

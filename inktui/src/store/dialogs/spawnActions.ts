@@ -1,70 +1,52 @@
 /**
- * Spawn actions — the *only* code that calls the bus for spawning a rogue crow (rule 3).
+ * Spawn actions — the *only* code that spawns a rogue crow (rule 3).
  *
  * Covers the spawn operation triggered from the C13 spawn wizard (`ctrl+s`):
- *  - `crow.spawn_rogue` — spawn a new rogue crow with an effort level and an optional
- *    spawn-context kickoff message (reference-by-path, not inline body).
+ *  - `crow.spawn_rogue` — spawn a new rogue crow.
  *
- * ## Bus status
+ * ## Bus status — command kind, not a standalone RPC (F2)
  *
- * `crow.spawn_rogue` is listed in the bus contract as **already on the bus** (service B10 carries
- * `effort` end-to-end). The TS signature is declared here via `declare module` augmentation (the
- * C1/C2 bus files stay byte-identical — rule 4 / the seam). The shape here may need confirming
- * against the live service; flag any wire-shape divergence at B13 review time.
+ * `crow.spawn_rogue` is an **orchestrator command kind**, dispatched through the LIVE
+ * `command.submit` choke point ({@link ../commandSubmit.js}), not a direct RPC. The live handler
+ * (`Orchestrator.spawn_rogue_command`, `murder/runtime/orchestration/orchestrator.py`) REQUIRES
+ * `harness` + `model` and accepts optional `effort` / `name` / `worktree_*`. It does NOT accept a
+ * `kickoff_message` — the kickoff is delivered separately as an `agent.message` command to the
+ * freshly spawned agent (the submit returns its `agent_id`).
  *
- * The RpcMethods augmentation keeps the C1/C2 bus files byte-identical (rule 4 — the seam).
+ * The `command.submit`/`command.status` RPC types live in the base `RpcMethods` (`../../bus/
+ * BusClient.ts`); no per-slice `declare module` is needed here.
  */
 
 import type { BusClient } from '../../bus/BusClient.js';
+import { submitCommand } from '../commandSubmit.js';
 
 /**
- * C13's RPC method declaration, augmenting the shared {@link RpcMethods} registry without
- * editing the frozen C1/C2 bus files. The key is distinct from every other slice's keys.
+ * The params for spawning a rogue crow — the fields the LIVE `crow.spawn_rogue` command handler
+ * requires/accepts. `harness` + `model` are required; `effort` + `name` are optional.
  *
- * **Bus status:** `crow.spawn_rogue` is on the bus per the bus contract (service B10). The params
- * shape here models `{ effort, kickoff_message? }` per the spec; confirm wire shape when verifying
- * against the live service.
+ * NOTE: `kickoff_message` is NOT a field here — the live handler ignores it. The kickoff is
+ * delivered as a separate `agent.message` command after the spawn resolves with an `agent_id`
+ * (see {@link SpawnActions.spawnRogue}).
  */
-declare module '../../bus/BusClient.js' {
-  interface RpcMethods {
-    /**
-     * Spawn a new rogue crow. `effort` is a per-harness effort enum string (passed through
-     * end-to-end by service B10). `kickoff_message` is an optional initial instruction — when a
-     * spawn-context doc was selected, the wizard sets this to "Please read .murder/<dir>/<name>.md"
-     * (reference-by-path, not inlined body — the locked mechanism from the spec's keybinds section).
-     *
-     * Bus status: already on the bus (service B10 carries `effort`). Confirm the exact param names
-     * and result shape against the running service.
-     */
-    'crow.spawn_rogue': {
-      params: SpawnRogueParams;
-      result: SpawnRogueResult;
-    };
-  }
-}
-
-/**
- * The params for `crow.spawn_rogue`.
- *
- * Note: extends `Record<string, unknown>` (via `RpcPayload` compatibility) so the interface
- * satisfies the `RpcMethods` params constraint. Both fields are optional at the index-signature
- * level; the required `effort` is enforced at the call site.
- */
-export interface SpawnRogueParams extends Record<string, unknown> {
-  /** Per-harness effort enum string (e.g. `'low'`, `'medium'`, `'high'`). */
-  effort: string;
+export interface SpawnRogueParams {
+  /** Harness id (e.g. `'claude'`, `'codex'`). REQUIRED by the live handler. */
+  readonly harness: string;
+  /** Model id. REQUIRED by the live handler. */
+  readonly model: string;
+  /** Per-harness effort enum string (e.g. `'low'`, `'medium'`, `'high'`). Optional. */
+  readonly effort?: string;
+  /** Optional rogue name. */
+  readonly name?: string;
   /**
-   * Optional kickoff instruction injected by the spawn wizard when a context doc is selected.
-   * The locked mechanism is reference-by-path: the message tells the rogue to *read*
-   * `.murder/<dir>/<name>.md` rather than inlining the body. This primes the rogue's engagement
-   * with the doc (same rationale as ticket crows reading their own ticket).
-   *
-   * Absent when no context doc was selected (the user pressed `n` or no focused doc was available).
+   * Optional kickoff instruction. When present, it is delivered AFTER the spawn as a separate
+   * `agent.message` command to the spawned agent (the live `crow.spawn_rogue` handler ignores any
+   * kickoff field, so it must be sent out-of-band). The locked mechanism is reference-by-path:
+   * the message tells the rogue to *read* `.murder/<dir>/<name>.md` rather than inlining the body.
    */
-  kickoff_message?: string;
+  readonly kickoffMessage?: string | null;
 }
 
-/** Reply from `crow.spawn_rogue`. Shape modeled from the bus contract; confirm when B10/service verified. */
+/** Reply from spawning a rogue: the orchestrator worker returns the spawned agent's id. */
 export interface SpawnRogueResult {
   /** Whether the spawn was accepted. */
   readonly handled: boolean;
@@ -75,9 +57,11 @@ export interface SpawnRogueResult {
 /** The actions exposed to the spawn wizard for writing operations. */
 export interface SpawnActions {
   /**
-   * Spawn a new rogue crow via `crow.spawn_rogue`.
-   * Resolves with the result on success; rejects on bus error.
-   * The caller (wizard `onIntent`) handles the rejection.
+   * Spawn a new rogue crow via the `crow.spawn_rogue` command kind (through `command.submit`).
+   * Sends the fields the live handler requires (`harness`, `model`, optional `effort`/`name`).
+   * When `kickoffMessage` is set, delivers it AFTER the spawn as an `agent.message` command to the
+   * returned `agent_id` (the live spawn handler ignores kickoff fields, so it rides out-of-band).
+   * Resolves with the result on success; rejects on bus/command error — the caller handles it.
    */
   spawnRogue(params: SpawnRogueParams): Promise<SpawnRogueResult>;
 }
@@ -92,7 +76,30 @@ export interface SpawnActions {
 export function createSpawnActions(bus: BusClient): SpawnActions {
   return {
     async spawnRogue(params: SpawnRogueParams): Promise<SpawnRogueResult> {
-      return bus.rpc('crow.spawn_rogue', params);
+      const payload: Record<string, unknown> = {
+        harness: params.harness,
+        model: params.model,
+      };
+      if (params.effort != null) {
+        payload['effort'] = params.effort;
+      }
+      if (params.name != null) {
+        payload['name'] = params.name;
+      }
+      const result = await submitCommand(bus, 'crow.spawn_rogue', payload);
+      const agentId = result['agent_id'] != null ? String(result['agent_id']) : undefined;
+
+      // Deliver the kickoff message out-of-band: the live spawn handler ignores it, so it must go
+      // to the freshly spawned agent as a separate `agent.message` command (reference-by-path).
+      if (params.kickoffMessage != null && params.kickoffMessage !== '' && agentId !== undefined) {
+        await submitCommand(bus, 'agent.message', {
+          agent_id: agentId,
+          message: params.kickoffMessage,
+        });
+      }
+
+      const handled = result['handled'] === true || agentId !== undefined;
+      return agentId !== undefined ? { handled, agent_id: agentId } : { handled };
     },
   };
 }

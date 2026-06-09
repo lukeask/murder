@@ -2,11 +2,11 @@
  * Tickets actions — the *only* code that calls the bus for ticket data (rule 3).
  *
  * Copied from {@link ../roster/rosterActions.js} per the copy recipe. Changes vs. the roster:
- *  - RPC is `ticket.get_snapshot` (modeled per bus-contract naming `domain.verb`, mirrors Python
- *    `RuntimeClient.get_schedule_snapshot()`). NOT yet on the live bus — flag not-live; confirm
- *    name/shape when service B13 lands.
- *  - Reply shape is {@link TicketSnapshotReply} (mirrors Python `ScheduleSnapshot`). The reply
- *    bundles active_tickets / recent_done_tickets / archived_tickets.
+ *  - RPC is the LIVE `state.schedule_snapshot` (mirrors Python `MurderServiceClient.
+ *    get_schedule_snapshot()`; registered in `murder/app/service/host.py`).
+ *  - Reply shape is {@link ScheduleSnapshotReply} (mirrors Python `ScheduleSnapshot`). The reply
+ *    bundles active_tickets / recent_done_tickets / archived_tickets AND `usage_gauges` (the usage
+ *    slice consumes the same reply — usage is embedded in the schedule snapshot, not its own RPC).
  *  - **Tickets-specific divergence:** the `project` fn FLATTENS all three buckets into one row list
  *    (active first, then recent_done, then archived — matching the Textual `sorted_rows`
  *    convention) before mapping with `toTicketRow`. This 3-bucket flatten is exactly why `project`
@@ -15,8 +15,9 @@
  *    `.map`; tickets passes a flatten-then-map. The divergence is data, not a branch in the factory.
  *  - Passes the `tickets` slice key to `createRefreshAction`.
  *  - `pending_dep_ids` replaces the old `deps_ok: bool` — the non-done dep ids (service B5).
- *  - `declare module` augments `RpcMethods` with `'ticket.get_snapshot'` — distinct from every
- *    other slice's key; never redeclare an existing one.
+ *  - `declare module` augments `RpcMethods` with `'state.schedule_snapshot'`; this module is the
+ *    SOLE declaration of that key (the usage slice consumes the reply type without re-declaring —
+ *    a second augmentation with a different `result` would be a TS 2717 collision).
  *
  * The loading→ready/error + ref-swap-only-this-key mechanics come from the shared
  * {@link createRefreshAction} factory in `../listSlice.js`.
@@ -29,28 +30,50 @@ import type { AppStore } from '../store.js';
 import type { TicketRow } from './ticketsSlice.js';
 
 /**
- * Declares the ticket-schedule read RPC via declaration merging. `ticket.get_snapshot` is the
- * bus-contract name (`domain.verb`, mirrors Python `get_schedule_snapshot()`). NOT yet on the
- * live bus — modeled per the contract's "view → service = RPC methods" rule; confirm name/shape
- * when service B13 lands. Augments `RpcMethods` with its OWN key (never redeclares an existing).
+ * Declares the schedule read RPC via declaration merging. `state.schedule_snapshot` is the LIVE
+ * server name (registered in `murder/app/service/host.py`; mirrors Python `get_schedule_snapshot()`).
  */
 declare module '../../bus/BusClient.js' {
   interface RpcMethods {
-    /** Fetch the full ticket schedule snapshot. Re-pulled on each `ticket`-entity `state.snapshot`. */
-    'ticket.get_snapshot': { params: Record<string, never>; result: TicketSnapshotReply };
+    /**
+     * Fetch the full schedule snapshot (live name `state.schedule_snapshot`). Re-pulled on each
+     * `ticket`-entity `state.snapshot`. The reply is the live `ScheduleSnapshot` DTO and bundles
+     * BOTH the 3 ticket buckets (this slice's domain) AND `usage_gauges` (the usage slice reads the
+     * same reply — usage is embedded in the schedule snapshot, not a separate RPC). This `declare
+     * module` is the SOLE declaration of `state.schedule_snapshot`; the usage slice consumes
+     * {@link ScheduleSnapshotReply} without re-declaring the key (a second augmentation with a
+     * different `result` would be a TS 2717 collision).
+     */
+    'state.schedule_snapshot': { params: Record<string, never>; result: ScheduleSnapshotReply };
   }
 }
 
 /**
- * The `ticket.get_snapshot` reply, mirroring the service's `ScheduleSnapshot` DTO from
- * `murder/app/service/client_api.py`. Only the fields the tickets slice projects are typed;
- * the wire may carry more (e.g. scheduler_decisions, usage_gauges — those are C9's domain).
+ * The `state.schedule_snapshot` reply, mirroring the live service's `ScheduleSnapshot` DTO from
+ * `murder/app/service/client_api.py`. Only the fields the tickets + usage slices project are typed;
+ * the wire may carry more (e.g. scheduler_decisions, calendar fields). Tickets read the 3 buckets;
+ * the usage slice reads `usage_gauges`.
  */
-export interface TicketSnapshotReply {
+export interface ScheduleSnapshotReply {
   active_tickets: readonly TicketDto[];
   recent_done_tickets: readonly TicketDto[];
   archived_tickets: readonly TicketDto[];
+  /** Usage gauges, embedded in the schedule snapshot (live `ScheduleSnapshot.usage_gauges`). */
+  usage_gauges: readonly ScheduleUsageGaugeDto[];
   invalidation_key: string;
+}
+
+/**
+ * One usage gauge as it crosses the wire (Python `UsageGaugeSummary`), embedded in the schedule
+ * snapshot. The usage slice's action projects these; declared here because this module owns the
+ * `ScheduleSnapshotReply` shape. Presentation-free — formatting is the selector's job (rule 2).
+ */
+export interface ScheduleUsageGaugeDto {
+  harness: string;
+  window_key: string;
+  pct: number;
+  t_until_reset_minutes: number;
+  t_period_minutes?: number;
 }
 
 /**
@@ -94,7 +117,7 @@ function toTicketRow(dto: TicketDto): TicketRow {
  * shared {@link createRefreshAction} via its `project` parameter — the generic stays domain-blind.
  * The selector applies the final display sort (last_update_at desc — rule 2).
  */
-function projectTickets(reply: TicketSnapshotReply): readonly TicketRow[] {
+function projectTickets(reply: ScheduleSnapshotReply): readonly TicketRow[] {
   return [...reply.active_tickets, ...reply.recent_done_tickets, ...reply.archived_tickets].map(
     toTicketRow,
   );
@@ -120,7 +143,7 @@ export interface TicketsActions {
 export function createTicketsActions(bus: BusClient, store: StoreApi<AppStore>): TicketsActions {
   return createRefreshAction(bus, store, {
     key: 'tickets',
-    method: 'ticket.get_snapshot',
+    method: 'state.schedule_snapshot',
     project: projectTickets,
   });
 }

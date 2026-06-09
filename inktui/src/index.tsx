@@ -18,7 +18,7 @@ import { createAppStore } from './store/store.js';
  */
 function makeDevBus(): FakeBusClient {
   const fake = new FakeBusClient();
-  fake.stubRpc('crow.get_snapshot', {
+  fake.stubRpc('state.crow_snapshot', {
     invalidation_key: 'dev',
     sessions: [
       {
@@ -31,8 +31,14 @@ function makeDevBus(): FakeBusClient {
       },
     ],
   });
-  // C9: stub usage RPC so UsagePanel renders idle state on dev startup.
-  fake.stubRpc('usage.get_snapshot', { invalidation_key: 'dev', gauges: [] });
+  // C9: usage is embedded in the schedule snapshot; stub it so UsagePanel renders idle on startup.
+  fake.stubRpc('state.schedule_snapshot', {
+    invalidation_key: 'dev',
+    active_tickets: [],
+    recent_done_tickets: [],
+    archived_tickets: [],
+    usage_gauges: [],
+  });
   return fake;
 }
 

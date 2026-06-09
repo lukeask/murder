@@ -2,24 +2,27 @@
  * Conversations actions — the only code that calls the bus for chat operations (rule 3).
  *
  * Two actions:
- *  1. `send(agentId, message)` — the sole caller of `bus.rpc('agent.message', …)`. Routes to the
- *     agent identified by `agentId`; the discriminated-union identity (deriving the right agentId)
- *     lives in the selectors/CrowChatPanel, NOT here (rule 2). This action receives the resolved
- *     agentId from its caller, never parses a conversation_id (rule 1 / anti-pattern).
+ *  1. `send(agentId, message)` — the sole sender of chat messages. `agent.message` is an
+ *     orchestrator command kind (not a standalone RPC), so this routes through the live
+ *     `command.submit` choke point ({@link ../commandSubmit.js}). Routes to the agent identified by
+ *     `agentId`; the discriminated-union identity (deriving the right agentId) lives in the
+ *     selectors/CrowChatPanel, NOT here (rule 2). This action receives the resolved agentId from its
+ *     caller, never parses a conversation_id (rule 1 / anti-pattern).
  *
  *  2. `applyBlock(event)` — pure setState, no bus call. Called by the second `bus.subscribe` in
  *     `store.ts` on each `conversation.block` event. Handles both `block-appended` (push) and
  *     `block-updated` (replace trailing block with matching id). Ref-swaps only the affected
  *     agent's transcript array — sibling agents keep identity.
  *
- * `agent.message` is ALREADY in `RpcMethods` (BusClient.ts line 38):
- *   `'agent.message': { params: { agent_id: string; message: string }; result: RpcPayload }`
- * No `declare module` augmentation needed — just call it directly.
+ * `agent.message` is dispatched as an orchestrator command kind via `command.submit` (the live
+ * write seam) rather than as a direct RPC — see {@link ../commandSubmit.js}. The discriminated-union
+ * agent identity is resolved by the caller (rule 2); this action just submits the command.
  */
 
 import type { StoreApi } from 'zustand';
 import type { BusClient } from '../../bus/BusClient.js';
 import type { ConversationBlockEvent } from '../../bus/protocol.js';
+import { submitCommand } from '../commandSubmit.js';
 import type { AppStore } from '../store.js';
 import { parseBlock } from './conversationsSlice.js';
 
@@ -67,8 +70,9 @@ export function createConversationsActions(
   return {
     async send(agentId: string, message: string): Promise<void> {
       try {
-        // `agent.message` is already in RpcMethods — no declare module needed.
-        await bus.rpc('agent.message', { agent_id: agentId, message });
+        // `agent.message` is an orchestrator command kind, not a standalone RPC — route it through
+        // the live `command.submit` choke point (F2). The orchestrator worker dispatches on the kind.
+        await submitCommand(bus, 'agent.message', { agent_id: agentId, message });
         // Keep the pane for this agent active after sending.
         store.setState((state) => ({
           conversations: { ...state.conversations, activePaneAgentId: agentId },

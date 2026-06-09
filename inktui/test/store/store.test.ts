@@ -10,8 +10,7 @@ import type { NotesSnapshotReply } from '../../src/store/notes/notesActions.js';
 import type { ReportsSnapshotReply } from '../../src/store/reports/reportsActions.js';
 import type { CrowSnapshotReply } from '../../src/store/roster/rosterActions.js';
 import { createAppStore } from '../../src/store/store.js';
-import type { TicketSnapshotReply } from '../../src/store/tickets/ticketsActions.js';
-import type { UsageSnapshotReply } from '../../src/store/usage/usageActions.js';
+import type { ScheduleSnapshotReply } from '../../src/store/tickets/ticketsActions.js';
 
 /** A `state.snapshot` event for `entity`, defaulting to the crow-roster entity. */
 function snapshot(
@@ -31,7 +30,7 @@ function snapshot(
   };
 }
 
-/** A canned `crow.get_snapshot` reply with one session. */
+/** A canned `state.crow_snapshot` reply with one session. */
 function crowReply(overrides: Partial<CrowSnapshotReply> = {}): CrowSnapshotReply {
   return {
     invalidation_key: 'iv-1',
@@ -51,22 +50,30 @@ function crowReply(overrides: Partial<CrowSnapshotReply> = {}): CrowSnapshotRepl
   };
 }
 
-/** A canned `usage.get_snapshot` reply (empty gauges — sufficient for most tests). */
-function usageReply(overrides: Partial<UsageSnapshotReply> = {}): UsageSnapshotReply {
-  return { invalidation_key: 'iv-u', gauges: [], ...overrides };
+/**
+ * A canned `state.schedule_snapshot` reply (empty buckets + empty gauges). F2: usage is embedded in
+ * the schedule snapshot (`usage_gauges`); both the tickets and usage slices read this reply.
+ */
+function scheduleReply(overrides: Partial<ScheduleSnapshotReply> = {}): ScheduleSnapshotReply {
+  return {
+    invalidation_key: 'iv-u',
+    active_tickets: [],
+    recent_done_tickets: [],
+    archived_tickets: [],
+    usage_gauges: [],
+    ...overrides,
+  };
 }
 
 /**
- * Build a store wired to a FakeBusClient with the roster + usage RPCs stubbed.
- * NOTE: Both roster and usage key on the `'agent'` entity (C9: usage invalidates with roster
- * since there is no dedicated `'usage'` entity key in the Python protocol). So an `'agent'`
- * snapshot fires BOTH `crow.get_snapshot` and `usage.get_snapshot`. Tests that assert on
- * `rpcCalls` must filter by method or use `toContainEqual` rather than exact equality.
+ * Build a store wired to a FakeBusClient with the roster + schedule RPCs stubbed. Roster keys on
+ * `'agent'`; usage keys on `'queue_row'` (F1 locked map) and reads `state.schedule_snapshot`'s
+ * `usage_gauges`. Tests that assert on `rpcCalls` must filter by method or use `toContainEqual`.
  */
 function setup(reply: CrowSnapshotReply = crowReply()) {
   const fake = new FakeBusClient();
-  fake.stubRpc('crow.get_snapshot', reply);
-  fake.stubRpc('usage.get_snapshot', usageReply());
+  fake.stubRpc('state.crow_snapshot', reply);
+  fake.stubRpc('state.schedule_snapshot', scheduleReply());
   const { store, dispose } = createAppStore(fake);
   return { fake, store, dispose };
 }
@@ -133,9 +140,8 @@ describe('event-driven slice invalidation', () => {
     fake.emit(snapshot('agent'));
     await flush();
 
-    // Both roster and usage key on 'agent' (C9: usage has no dedicated entity key).
-    // Assert on the roster call specifically; usage.get_snapshot will also be present.
-    expect(fake.rpcCalls).toContainEqual({ method: 'crow.get_snapshot', params: {} });
+    // Roster keys on 'agent' (usage keys on 'queue_row' — F1 map — so it does NOT fire here).
+    expect(fake.rpcCalls).toContainEqual({ method: 'state.crow_snapshot', params: {} });
     expect(store.getState().roster.status).toBe('ready');
     expect(store.getState().roster.rows).toHaveLength(1);
     expect(store.getState().roster.rows[0]?.agentId).toBe('a-1');
@@ -143,7 +149,7 @@ describe('event-driven slice invalidation', () => {
 
   it('re-pulls the plans slice on a `plan` state.snapshot and projects the parent field (C11)', async () => {
     const { fake, store } = setup();
-    fake.stubRpc('plan.get_snapshot', {
+    fake.stubRpc('state.plans_snapshot', {
       invalidation_key: 'iv-p',
       plans: [
         { name: 'parent', char_count: 10, updated_at: '2026-06-01T00:00:00' },
@@ -154,7 +160,7 @@ describe('event-driven slice invalidation', () => {
     fake.emit(snapshot('plan'));
     await flush();
 
-    expect(fake.rpcCalls).toContainEqual({ method: 'plan.get_snapshot', params: {} });
+    expect(fake.rpcCalls).toContainEqual({ method: 'state.plans_snapshot', params: {} });
     const plans = store.getState().plans;
     expect(plans.status).toBe('ready');
     expect(plans.rows).toHaveLength(2);
@@ -176,7 +182,7 @@ describe('event-driven slice invalidation', () => {
 
     // No roster rpc was issued (notes/reports/tickets rpc calls may appear for their slices but
     // the *roster* slice must be untouched).
-    const rosterCalls = fake.rpcCalls.filter((c) => c.method === 'crow.get_snapshot');
+    const rosterCalls = fake.rpcCalls.filter((c) => c.method === 'state.crow_snapshot');
     expect(rosterCalls).toEqual([]);
     // The roster slice object identity is unchanged — no ref-swap, no re-render of roster subscribers.
     expect(store.getState().roster).toBe(rosterBefore);
@@ -215,7 +221,7 @@ describe('event-driven slice invalidation', () => {
 describe('actions are the only bus caller (rule 3)', () => {
   it('routes a rejected rpc into the slice error field, never thrown past the action', async () => {
     const fake = new FakeBusClient();
-    fake.stubRpc('crow.get_snapshot', () => {
+    fake.stubRpc('state.crow_snapshot', () => {
       throw new Error('bus down');
     });
     const { store } = createAppStore(fake);
@@ -231,7 +237,7 @@ describe('actions are the only bus caller (rule 3)', () => {
     let resolveReply: (r: CrowSnapshotReply) => void = () => {};
     const fake = new FakeBusClient();
     fake.stubRpc(
-      'crow.get_snapshot',
+      'state.crow_snapshot',
       () =>
         new Promise<CrowSnapshotReply>((resolve) => {
           resolveReply = resolve;
@@ -270,15 +276,15 @@ function reportsReply(overrides: Partial<ReportsSnapshotReply> = {}): ReportsSna
 describe('C6 — notes slice invalidation', () => {
   it('re-pulls notes on a note-entity state.snapshot', async () => {
     const fake = new FakeBusClient();
-    fake.stubRpc('crow.get_snapshot', crowReply());
-    fake.stubRpc('note.get_snapshot', notesReply());
+    fake.stubRpc('state.crow_snapshot', crowReply());
+    fake.stubRpc('state.notes_snapshot', notesReply());
     const { store } = createAppStore(fake);
     expect(store.getState().notes.status).toBe('idle');
 
     fake.emit(snapshot('note'));
     await flush();
 
-    expect(fake.rpcCalls).toContainEqual({ method: 'note.get_snapshot', params: {} });
+    expect(fake.rpcCalls).toContainEqual({ method: 'state.notes_snapshot', params: {} });
     expect(store.getState().notes.status).toBe('ready');
     expect(store.getState().notes.rows).toHaveLength(1);
     expect(store.getState().notes.rows[0]?.name).toBe('my-note');
@@ -286,9 +292,9 @@ describe('C6 — notes slice invalidation', () => {
 
   it('ref-swaps ONLY notes on a note event — roster and reports keep identity', async () => {
     const fake = new FakeBusClient();
-    fake.stubRpc('crow.get_snapshot', crowReply());
-    fake.stubRpc('note.get_snapshot', notesReply());
-    fake.stubRpc('report.get_snapshot', reportsReply());
+    fake.stubRpc('state.crow_snapshot', crowReply());
+    fake.stubRpc('state.notes_snapshot', notesReply());
+    fake.stubRpc('state.reports_snapshot', reportsReply());
     const { store } = createAppStore(fake);
     const rosterBefore = store.getState().roster;
     const reportsBefore = store.getState().reports;
@@ -305,15 +311,15 @@ describe('C6 — notes slice invalidation', () => {
 describe('C6 — reports slice invalidation', () => {
   it('re-pulls reports on a report-entity state.snapshot', async () => {
     const fake = new FakeBusClient();
-    fake.stubRpc('crow.get_snapshot', crowReply());
-    fake.stubRpc('report.get_snapshot', reportsReply());
+    fake.stubRpc('state.crow_snapshot', crowReply());
+    fake.stubRpc('state.reports_snapshot', reportsReply());
     const { store } = createAppStore(fake);
     expect(store.getState().reports.status).toBe('idle');
 
     fake.emit(snapshot('report'));
     await flush();
 
-    expect(fake.rpcCalls).toContainEqual({ method: 'report.get_snapshot', params: {} });
+    expect(fake.rpcCalls).toContainEqual({ method: 'state.reports_snapshot', params: {} });
     expect(store.getState().reports.status).toBe('ready');
     expect(store.getState().reports.rows).toHaveLength(1);
     expect(store.getState().reports.rows[0]?.name).toBe('my-report');
@@ -321,9 +327,9 @@ describe('C6 — reports slice invalidation', () => {
 
   it('ref-swaps ONLY reports on a report event — roster and notes keep identity', async () => {
     const fake = new FakeBusClient();
-    fake.stubRpc('crow.get_snapshot', crowReply());
-    fake.stubRpc('note.get_snapshot', notesReply());
-    fake.stubRpc('report.get_snapshot', reportsReply());
+    fake.stubRpc('state.crow_snapshot', crowReply());
+    fake.stubRpc('state.notes_snapshot', notesReply());
+    fake.stubRpc('state.reports_snapshot', reportsReply());
     const { store } = createAppStore(fake);
     const rosterBefore = store.getState().roster;
     const notesBefore = store.getState().notes;
@@ -339,7 +345,7 @@ describe('C6 — reports slice invalidation', () => {
 
 // ---- C7: tickets slice invalidation ----
 
-function ticketsReply(overrides: Partial<TicketSnapshotReply> = {}): TicketSnapshotReply {
+function ticketsReply(overrides: Partial<ScheduleSnapshotReply> = {}): ScheduleSnapshotReply {
   return {
     invalidation_key: 'iv-t',
     active_tickets: [
@@ -357,6 +363,7 @@ function ticketsReply(overrides: Partial<TicketSnapshotReply> = {}): TicketSnaps
     ],
     recent_done_tickets: [],
     archived_tickets: [],
+    usage_gauges: [],
     ...overrides,
   };
 }
@@ -364,15 +371,15 @@ function ticketsReply(overrides: Partial<TicketSnapshotReply> = {}): TicketSnaps
 describe('C7 — tickets slice invalidation', () => {
   it('re-pulls tickets on a ticket-entity state.snapshot', async () => {
     const fake = new FakeBusClient();
-    fake.stubRpc('crow.get_snapshot', crowReply());
-    fake.stubRpc('ticket.get_snapshot', ticketsReply());
+    fake.stubRpc('state.crow_snapshot', crowReply());
+    fake.stubRpc('state.schedule_snapshot', ticketsReply());
     const { store } = createAppStore(fake);
     expect(store.getState().tickets.status).toBe('idle');
 
     fake.emit(snapshot('ticket'));
     await flush();
 
-    expect(fake.rpcCalls).toContainEqual({ method: 'ticket.get_snapshot', params: {} });
+    expect(fake.rpcCalls).toContainEqual({ method: 'state.schedule_snapshot', params: {} });
     expect(store.getState().tickets.status).toBe('ready');
     expect(store.getState().tickets.rows).toHaveLength(1);
     expect(store.getState().tickets.rows[0]?.id).toBe('T-1');
@@ -380,9 +387,9 @@ describe('C7 — tickets slice invalidation', () => {
 
   it('flattens active + recent_done + archived into one row list', async () => {
     const fake = new FakeBusClient();
-    fake.stubRpc('crow.get_snapshot', crowReply());
+    fake.stubRpc('state.crow_snapshot', crowReply());
     fake.stubRpc(
-      'ticket.get_snapshot',
+      'state.schedule_snapshot',
       ticketsReply({
         active_tickets: [
           {
@@ -429,10 +436,10 @@ describe('C7 — tickets slice invalidation', () => {
 
   it('ref-swaps ONLY tickets on a ticket event — roster, notes, reports keep identity', async () => {
     const fake = new FakeBusClient();
-    fake.stubRpc('crow.get_snapshot', crowReply());
-    fake.stubRpc('note.get_snapshot', notesReply());
-    fake.stubRpc('report.get_snapshot', reportsReply());
-    fake.stubRpc('ticket.get_snapshot', ticketsReply());
+    fake.stubRpc('state.crow_snapshot', crowReply());
+    fake.stubRpc('state.notes_snapshot', notesReply());
+    fake.stubRpc('state.reports_snapshot', reportsReply());
+    fake.stubRpc('state.schedule_snapshot', ticketsReply());
     const { store } = createAppStore(fake);
     const rosterBefore = store.getState().roster;
     const notesBefore = store.getState().notes;
@@ -452,19 +459,22 @@ describe('C7 — tickets slice invalidation', () => {
 
 describe('C9 — usage slice invalidation', () => {
   it('re-pulls usage on a queue_row-entity state.snapshot (F1 locked map: queue_row → usage)', async () => {
+    // F2: usage reads `state.schedule_snapshot`'s `usage_gauges` (no separate usage RPC).
     const fake = new FakeBusClient();
-    fake.stubRpc('crow.get_snapshot', crowReply());
-    fake.stubRpc('usage.get_snapshot', {
-      invalidation_key: 'iv-u',
-      gauges: [{ harness: 'claude', window_key: 'h1', pct: 50, t_until_reset_minutes: 10 }],
-    });
+    fake.stubRpc('state.crow_snapshot', crowReply());
+    fake.stubRpc(
+      'state.schedule_snapshot',
+      scheduleReply({
+        usage_gauges: [{ harness: 'claude', window_key: 'h1', pct: 50, t_until_reset_minutes: 10 }],
+      }),
+    );
     const { store } = createAppStore(fake);
     expect(store.getState().usage.status).toBe('idle');
 
     fake.emit(snapshot('queue_row'));
     await flush();
 
-    expect(fake.rpcCalls).toContainEqual({ method: 'usage.get_snapshot', params: {} });
+    expect(fake.rpcCalls).toContainEqual({ method: 'state.schedule_snapshot', params: {} });
     expect(store.getState().usage.status).toBe('ready');
     expect(store.getState().usage.rows).toHaveLength(1);
     expect(store.getState().usage.rows[0]?.harness).toBe('claude');
@@ -472,11 +482,10 @@ describe('C9 — usage slice invalidation', () => {
 
   it('does NOT re-pull usage on an agent event (usage keys on queue_row, not agent)', async () => {
     const fake = new FakeBusClient();
-    fake.stubRpc('crow.get_snapshot', crowReply());
-    fake.stubRpc('usage.get_snapshot', { invalidation_key: 'iv-u', gauges: [] });
-    fake.stubRpc('note.get_snapshot', notesReply());
-    fake.stubRpc('report.get_snapshot', reportsReply());
-    fake.stubRpc('ticket.get_snapshot', ticketsReply());
+    fake.stubRpc('state.crow_snapshot', crowReply());
+    fake.stubRpc('state.notes_snapshot', notesReply());
+    fake.stubRpc('state.reports_snapshot', reportsReply());
+    fake.stubRpc('state.schedule_snapshot', ticketsReply());
     const { store } = createAppStore(fake);
     const notesBefore = store.getState().notes;
     const reportsBefore = store.getState().reports;
@@ -486,20 +495,21 @@ describe('C9 — usage slice invalidation', () => {
     fake.emit(snapshot('agent'));
     await flush();
 
-    // notes, reports, tickets, usage are not keyed on 'agent' — they keep identity.
+    // notes, reports, tickets, usage are not keyed on 'agent' — they keep identity. (usage +
+    // tickets share `state.schedule_snapshot` but both key off non-agent entities.)
     expect(store.getState().notes).toBe(notesBefore);
     expect(store.getState().reports).toBe(reportsBefore);
     expect(store.getState().tickets).toBe(ticketsBefore);
     expect(store.getState().usage).toBe(usageBefore);
-    expect(fake.rpcCalls).not.toContainEqual({ method: 'usage.get_snapshot', params: {} });
+    expect(fake.rpcCalls).not.toContainEqual({ method: 'state.schedule_snapshot', params: {} });
     // Only roster ref-swaps on an agent event.
     expect(store.getState().roster.status).toBe('ready');
   });
 
   it('routes a rejected usage rpc into usage.error, never thrown past the action', async () => {
     const fake = new FakeBusClient();
-    fake.stubRpc('crow.get_snapshot', crowReply());
-    fake.stubRpc('usage.get_snapshot', () => {
+    fake.stubRpc('state.crow_snapshot', crowReply());
+    fake.stubRpc('state.schedule_snapshot', () => {
       throw new Error('usage down');
     });
     const { store } = createAppStore(fake);

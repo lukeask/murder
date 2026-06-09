@@ -2,9 +2,9 @@
  * Reports actions — the *only* code that calls the bus for reports data (rule 3).
  *
  * Copied from {@link ../notes/notesActions.js}. Changes vs. notes:
- *  - RPC is `report.get_snapshot` (NOT yet on the live bus; modeled per contract naming).
+ *  - RPC is `state.reports_snapshot` (NOT yet on the live bus; modeled per contract naming).
  *  - Reply shape mirrors Python `ReportsSnapshot` (reports[] with name/char_count/updated_at).
- *  - `declare module` augments `RpcMethods` with `'report.get_snapshot'` (distinct key — never
+ *  - `declare module` augments `RpcMethods` with `'state.reports_snapshot'` (distinct key — never
  *    redeclare an existing one).
  *  - Passes the `reports` slice key to `createRefreshAction`.
  *
@@ -19,7 +19,7 @@ import type { AppStore } from '../store.js';
 import type { ReportRow } from './reportsSlice.js';
 
 /**
- * Declares the reports read RPC via declaration merging. `report.get_snapshot` is the bus-contract
+ * Declares the reports read RPC via declaration merging. `state.reports_snapshot` is the bus-contract
  * name (`domain.verb`, mirrors Python `RuntimeClient.get_reports_snapshot`). NOT yet on the live
  * bus — modeled here per the contract's "view → service = RPC methods" rule. Confirm name/shape
  * when service B13 lands. CONTRACT GAP: also requires the `'report'` Entity to be added to the
@@ -28,12 +28,12 @@ import type { ReportRow } from './reportsSlice.js';
 declare module '../../bus/BusClient.js' {
   interface RpcMethods {
     /** Fetch the full reports list. Re-pulled on each `report`-entity `state.snapshot`. */
-    'report.get_snapshot': { params: Record<string, never>; result: ReportsSnapshotReply };
+    'state.reports_snapshot': { params: Record<string, never>; result: ReportsSnapshotReply };
   }
 }
 
 /**
- * The `report.get_snapshot` reply, mirroring the service's `ReportsSnapshot` DTO from
+ * The `state.reports_snapshot` reply, mirroring the service's `ReportsSnapshot` DTO from
  * `murder/app/service/client_api.py`.
  */
 export interface ReportsSnapshotReply {
@@ -72,7 +72,7 @@ export interface ReportsActions {
 export function createReportsActions(bus: BusClient, store: StoreApi<AppStore>): ReportsActions {
   return createRefreshAction(bus, store, {
     key: 'reports',
-    method: 'report.get_snapshot',
+    method: 'state.reports_snapshot',
     project: (reply) => reply.reports.map(toReportRow),
   });
 }

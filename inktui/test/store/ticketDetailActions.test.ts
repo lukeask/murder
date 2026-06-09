@@ -48,7 +48,7 @@ function setup(detailReply: TicketDetailReply = DETAIL_REPLY) {
   fake.stubRpc('ticket.save_body', { ok: true });
   fake.stubRpc('ticket.schedule', { ok: true });
   // Stub sibling RPCs so the store doesn't reject on side-effects.
-  fake.stubRpc('crow.get_snapshot', { invalidation_key: 'iv', sessions: [] });
+  fake.stubRpc('state.crow_snapshot', { invalidation_key: 'iv', sessions: [] });
   const { store, dispose } = createAppStore(fake);
   return { fake, store, dispose };
 }
@@ -113,7 +113,7 @@ describe('ticketDetailActions.open', () => {
     fake.stubRpc('ticket.get_detail', () => {
       throw new Error('not found');
     });
-    fake.stubRpc('crow.get_snapshot', { invalidation_key: 'iv', sessions: [] });
+    fake.stubRpc('state.crow_snapshot', { invalidation_key: 'iv', sessions: [] });
     const { store, dispose } = createAppStore(fake);
     await store.getState().actions.ticketDetail.open('T-99');
     const detail = store.getState().ticketDetail;
@@ -215,7 +215,7 @@ describe('ticketDetailActions.saveBody', () => {
     fake.stubRpc('ticket.save_body', () => {
       throw new Error('write failed');
     });
-    fake.stubRpc('crow.get_snapshot', { invalidation_key: 'iv', sessions: [] });
+    fake.stubRpc('state.crow_snapshot', { invalidation_key: 'iv', sessions: [] });
     const { store, dispose } = createAppStore(fake);
     await store.getState().actions.ticketDetail.open('T-1');
     await store.getState().actions.ticketDetail.saveBody();

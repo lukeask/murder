@@ -32,7 +32,7 @@ import { createInputStores } from '../../src/input/createInputStores.js';
 import { selectActiveMode } from '../../src/input/modeStore.js';
 import { createAppStore } from '../../src/store/store.js';
 import type { TicketDetailReply } from '../../src/store/ticketDetail/ticketDetailActions.js';
-import type { TicketSnapshotReply } from '../../src/store/tickets/ticketsActions.js';
+import type { ScheduleSnapshotReply } from '../../src/store/tickets/ticketsActions.js';
 
 const CTRL_S = '\x13';
 const ESC = '\x1b';
@@ -40,7 +40,7 @@ const RETURN = '\r';
 
 const TICKET_BODY = '## Plan\nDo the thing.\n\n# Checklist\n- [ ] first item\n- [x] done item';
 
-const SNAPSHOT_REPLY: TicketSnapshotReply = {
+const SNAPSHOT_REPLY: ScheduleSnapshotReply = {
   invalidation_key: 'iv',
   active_tickets: [
     {
@@ -57,6 +57,7 @@ const SNAPSHOT_REPLY: TicketSnapshotReply = {
   ],
   recent_done_tickets: [],
   archived_tickets: [],
+  usage_gauges: [],
 };
 
 const DETAIL_REPLY: TicketDetailReply = {
@@ -101,11 +102,11 @@ function Harness({
 
 async function setup() {
   const fake = new FakeBusClient();
-  fake.stubRpc('ticket.get_snapshot', SNAPSHOT_REPLY);
+  fake.stubRpc('state.schedule_snapshot', SNAPSHOT_REPLY);
   fake.stubRpc('ticket.get_detail', DETAIL_REPLY);
   fake.stubRpc('ticket.save_body', { ok: true });
   fake.stubRpc('ticket.schedule', { ok: true });
-  fake.stubRpc('crow.get_snapshot', { invalidation_key: 'iv', sessions: [] });
+  fake.stubRpc('state.crow_snapshot', { invalidation_key: 'iv', sessions: [] });
   const { store, dispose } = createAppStore(fake);
   await store.getState().actions.tickets.refresh();
   // Seed tickets panel visible and focused.

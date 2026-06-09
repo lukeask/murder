@@ -38,6 +38,44 @@ export interface RpcMethods {
   'agent.message': { params: { agent_id: string; message: string }; result: RpcPayload };
   /** Submit a captured note. */
   'notetaker.capture.submit': { params: RpcPayload; result: RpcPayload };
+  /**
+   * Submit a command to the orchestrator command bus (live `command.submit`). Returns the assigned
+   * `command_id`; callers poll {@link RpcMethods['command.status']} for the terminal result. This is
+   * the write seam for orchestrator operations (`ticket.quick_create`, `crow.spawn_rogue`,
+   * `agent.message`-as-command) — see {@link submitCommand}.
+   */
+  'command.submit': { params: CommandSubmitParams; result: CommandSubmitResult };
+  /** Poll a submitted command's status (live `command.status`). */
+  'command.status': { params: { command_id: string }; result: CommandStatusResult };
+}
+
+/** Params for the live `command.submit` RPC (mirrors `murder/app/service/host.py`). */
+export interface CommandSubmitParams extends Record<string, unknown> {
+  /** The worker that handles this command kind (e.g. `'orchestrator'`). */
+  readonly target_worker: string;
+  /** The command kind the worker dispatches on (e.g. `'crow.spawn_rogue'`). */
+  readonly kind: string;
+  /** The command payload — shape depends on `kind`. */
+  readonly payload: RpcPayload;
+  /** The submitting agent id (defaults server-side to `'rpc-client'`). */
+  readonly agent_id?: string;
+  readonly correlation_id?: string;
+  readonly idempotency_key?: string;
+}
+
+/** Reply from `command.submit`: the assigned command id. */
+export interface CommandSubmitResult {
+  readonly ok: boolean;
+  readonly command_id: string;
+}
+
+/** Reply from `command.status`: terminal/in-flight state. `result_json` is a JSON-encoded string. */
+export interface CommandStatusResult {
+  readonly ok: boolean;
+  readonly status?: string;
+  readonly result_json?: string | null;
+  readonly last_error?: string | null;
+  readonly command_id?: string;
 }
 
 /** A method name known to {@link RpcMethods}. */

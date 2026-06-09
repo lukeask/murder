@@ -77,8 +77,10 @@ function Harness({
 
 async function setup() {
   const fake = new FakeBusClient();
-  fake.stubRpc('crow.get_snapshot', ROSTER_REPLY);
-  fake.stubRpc('agent.message', { ok: true });
+  fake.stubRpc('state.crow_snapshot', ROSTER_REPLY);
+  // F2: chat sends route through command.submit (agent.message command kind), not a direct RPC.
+  fake.stubRpc('command.submit', { ok: true, command_id: 'cmd-1' });
+  fake.stubRpc('command.status', { ok: true, status: 'done', result_json: '{}' });
   const { store, dispose } = createAppStore(fake);
   await store.getState().actions.roster.refresh();
   // Chat is the focus home — no visible panels, focus 'chat'.
@@ -109,9 +111,15 @@ describe('ChatInput — persistent chat-input send (C11)', () => {
     stdin.write(RETURN);
     await tick();
 
-    const sendCalls = fake.rpcCalls.filter((c) => c.method === 'agent.message');
+    const sendCalls = fake.rpcCalls.filter(
+      (c) =>
+        c.method === 'command.submit' && (c.params as { kind: string }).kind === 'agent.message',
+    );
     expect(sendCalls.length).toBe(1);
-    expect(sendCalls[0]?.params).toEqual({ agent_id: 'collab-1', message: 'hello there' });
+    expect(sendCalls[0]?.params).toMatchObject({
+      kind: 'agent.message',
+      payload: { agent_id: 'collab-1', message: 'hello there' },
+    });
     // Buffer cleared after send.
     expect(inputStores.chatInput.getState().text).toBe('');
     dispose();
@@ -124,7 +132,7 @@ describe('ChatInput — persistent chat-input send (C11)', () => {
 
     stdin.write(RETURN);
     await tick();
-    expect(fake.rpcCalls.filter((c) => c.method === 'agent.message').length).toBe(0);
+    expect(fake.rpcCalls.filter((c) => c.method === 'command.submit').length).toBe(0);
     dispose();
   });
 

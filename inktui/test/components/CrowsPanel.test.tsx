@@ -102,8 +102,14 @@ function Harness({
 
 async function setup(reply: CrowSnapshotReply = mixedCrows(), focused = true) {
   const fake = new FakeBusClient();
-  fake.stubRpc('crow.get_snapshot', reply);
-  fake.stubRpc('usage.get_snapshot', { invalidation_key: 'iv', gauges: [] });
+  fake.stubRpc('state.crow_snapshot', reply);
+  fake.stubRpc('state.schedule_snapshot', {
+    invalidation_key: 'iv',
+    active_tickets: [],
+    recent_done_tickets: [],
+    archived_tickets: [],
+    usage_gauges: [],
+  });
   const { store, dispose } = createAppStore(fake);
   await store.getState().actions.roster.refresh();
   const inputStores = createInputStores(['crows'], focused ? 'crows' : 'chat');

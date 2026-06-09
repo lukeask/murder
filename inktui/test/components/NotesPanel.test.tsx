@@ -2,7 +2,7 @@
  * NotesPanel test — copied from {@link ./RosterPanel.test.tsx} per the C5 idiom.
  *
  * Recipe summary (same as the reference, with notes-specific stubs):
- *  1. Build `FakeBusClient`, stub `note.get_snapshot`, build the store.
+ *  1. Build `FakeBusClient`, stub `state.notes_snapshot`, build the store.
  *  2. Build C4 input stores, seeding `notes` visible and optionally focused.
  *  3. Render inside both providers + `useRootInput`.
  *  4. Assert two-line rows, focus highlight, keymap intent only when focused.
@@ -72,9 +72,9 @@ function RootInput(): null {
 
 async function setup(reply: NotesSnapshotReply = twoNotes(), focused = true) {
   const fake = new FakeBusClient();
-  fake.stubRpc('note.get_snapshot', reply);
-  // Also stub crow.get_snapshot so createAppStore doesn't choke on any stray event.
-  fake.stubRpc('crow.get_snapshot', { invalidation_key: 'iv', sessions: [] });
+  fake.stubRpc('state.notes_snapshot', reply);
+  // Also stub state.crow_snapshot so createAppStore doesn't choke on any stray event.
+  fake.stubRpc('state.crow_snapshot', { invalidation_key: 'iv', sessions: [] });
   // C11: the favorites prefs RPC (modeled-not-live) — stub so ctrl+s star persistence resolves.
   fake.stubRpc('tui.save_favorites', { ok: true, favorites: [] });
   const { store, dispose } = createAppStore(fake);

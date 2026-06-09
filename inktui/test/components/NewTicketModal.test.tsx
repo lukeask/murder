@@ -52,10 +52,14 @@ function setup() {
   const stores = createInputStores(['tickets'], 'tickets');
   const bus = new FakeBusClient();
 
-  bus.stubRpc('ticket.quick_create', {
-    handled: true,
-    ticket_id: 't-001',
-    title: 'my ticket',
+  // F2: `ticket.quick_create` is an orchestrator command kind routed through `command.submit` +
+  // `command.status` (not a standalone RPC). Status returns `'done'` on the first poll with the
+  // worker reply JSON-encoded in `result_json` (matching the live `command.status` shape).
+  bus.stubRpc('command.submit', { ok: true, command_id: 'cmd-1' });
+  bus.stubRpc('command.status', {
+    ok: true,
+    status: 'done',
+    result_json: JSON.stringify({ handled: true, ticket_id: 't-001', title: 'my ticket' }),
   });
 
   const actions = createDialogActions(bus);
@@ -137,12 +141,14 @@ describe('NewTicketModal — ctrl+t new-ticket dialog', () => {
     expect(selectActiveMode(stores.modes)).toBeNull(); // modal dismissed
     expect(stores.focus.getState().intendedId).toBe('tickets'); // focus restored
 
-    // Allow the async RPC to settle.
+    // Allow the async command (submit → poll → resolve) to settle.
     await tick();
-    expect(bus.rpcCalls.length).toBe(1);
-    expect(bus.rpcCalls[0]).toMatchObject({
-      method: 'ticket.quick_create',
-      params: { title: 'fix bug' },
+    await tick();
+    // The submit carries the `ticket.quick_create` command kind + the title payload.
+    const submitCall = bus.rpcCalls.find((c) => c.method === 'command.submit');
+    expect(submitCall?.params).toMatchObject({
+      kind: 'ticket.quick_create',
+      payload: { title: 'fix bug' },
     });
     await tick();
     expect(onSubmit).toHaveBeenCalledWith('t-001', 'my ticket');

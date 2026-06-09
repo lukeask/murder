@@ -23,8 +23,10 @@ import { createAppStore, initialAppState } from '../../../src/store/store.js';
 function setup() {
   const fake = new FakeBusClient();
   // Stub sibling RPCs so the store doesn't reject.
-  fake.stubRpc('crow.get_snapshot', { invalidation_key: 'iv', sessions: [] });
-  fake.stubRpc('agent.message', {});
+  fake.stubRpc('state.crow_snapshot', { invalidation_key: 'iv', sessions: [] });
+  // F2: `agent.message` is an orchestrator command kind routed through command.submit + status.
+  fake.stubRpc('command.submit', { ok: true, command_id: 'cmd-1' });
+  fake.stubRpc('command.status', { ok: true, status: 'done', result_json: '{}' });
   const { store, dispose } = createAppStore(fake);
   return { fake, store, dispose };
 }
@@ -178,14 +180,17 @@ describe('conversations — event-driven: ConversationBlockEvent via subscribe',
 // ── send action (the sole bus caller for chat) ────────────────────────────────────────────────────
 
 describe('conversationsActions.send', () => {
-  it('calls bus.rpc("agent.message") exactly once with the correct agent_id + message', async () => {
+  it('submits an agent.message command with the correct agent_id + message', async () => {
     const { fake, store, dispose } = setup();
 
     await store.getState().actions.conversations.send('agent-42', 'test message');
 
-    expect(fake.rpcCalls).toHaveLength(1);
-    expect(fake.rpcCalls[0]?.method).toBe('agent.message');
-    expect(fake.rpcCalls[0]?.params).toEqual({ agent_id: 'agent-42', message: 'test message' });
+    // The message rides the `command.submit` choke point as the `agent.message` command kind.
+    const submit = fake.rpcCalls.find((c) => c.method === 'command.submit');
+    expect(submit?.params).toMatchObject({
+      kind: 'agent.message',
+      payload: { agent_id: 'agent-42', message: 'test message' },
+    });
     dispose();
   });
 
@@ -200,9 +205,9 @@ describe('conversationsActions.send', () => {
 
   it('swallows bus errors (fire-and-forget from UI perspective)', async () => {
     const fake = new FakeBusClient();
-    // Stub agent.message to reject by not stubbing it — FakeBusClient rejects unknown methods.
-    // We use crow.get_snapshot stub to let the store init pass, but leave agent.message unstubbed.
-    fake.stubRpc('crow.get_snapshot', { invalidation_key: 'iv', sessions: [] });
+    // Leave `command.submit` unstubbed — FakeBusClient rejects unknown methods, so the underlying
+    // agent.message command rejects; `send` must swallow it. state.crow_snapshot lets store init pass.
+    fake.stubRpc('state.crow_snapshot', { invalidation_key: 'iv', sessions: [] });
     const { store, dispose } = createAppStore(fake);
 
     // Should not throw — send swallows the rejection.
@@ -212,13 +217,16 @@ describe('conversationsActions.send', () => {
     dispose();
   });
 
-  it('is the SOLE caller of agent.message — no other path calls the bus for chat', async () => {
-    // This test proves the rule-3 invariant: only conversationsActions.send calls agent.message.
-    // We verify by checking that after a send, only one rpc call appears.
+  it('is the SOLE caller for chat — exactly one agent.message command is submitted', async () => {
+    // This test proves the rule-3 invariant: only conversationsActions.send sends chat. We verify
+    // by checking exactly one `agent.message`-kind command.submit appears after a send.
     const { fake, store, dispose } = setup();
 
     await store.getState().actions.conversations.send('agent-1', 'msg');
-    const agentMessageCalls = fake.rpcCalls.filter((c) => c.method === 'agent.message');
+    const agentMessageCalls = fake.rpcCalls.filter(
+      (c) =>
+        c.method === 'command.submit' && (c.params as { kind: string }).kind === 'agent.message',
+    );
     expect(agentMessageCalls).toHaveLength(1);
     dispose();
   });

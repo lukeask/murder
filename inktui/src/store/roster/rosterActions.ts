@@ -29,9 +29,9 @@ import type { RosterRow } from './rosterSlice.js';
  * The crow-roster read RPC and its reply shape, declared here via TypeScript declaration merging
  * rather than by editing `src/bus/BusClient.ts` (frozen at C1/C2). The registry was designed to be
  * extended "a line per method as the service exposes it"; doing it from the consuming slice keeps
- * the bus seam byte-identical while still giving `bus.rpc('crow.get_snapshot', …)` full type safety.
+ * the bus seam byte-identical while still giving `bus.rpc('state.crow_snapshot', …)` full type safety.
  *
- * NOTE FOR THE SERVICE: `crow.get_snapshot` is **not yet on the live bus** — it is the RPC the
+ * NOTE FOR THE SERVICE: `state.crow_snapshot` is **not yet on the live bus** — it is the RPC the
  * Python `RuntimeClient.get_crow_snapshot()` exposes locally, modeled here per the Bus contract's
  * "view → service = RPC methods" rule (namespaced `domain.verb`, like `ticket.quick_kick`). When
  * service B13 lands the read surface, confirm this name/shape or update both sides in lockstep.
@@ -39,12 +39,12 @@ import type { RosterRow } from './rosterSlice.js';
 declare module '../../bus/BusClient.js' {
   interface RpcMethods {
     /** Fetch the full crow roster. Re-pulled on each `agent`-entity `state.snapshot`. */
-    'crow.get_snapshot': { params: Record<string, never>; result: CrowSnapshotReply };
+    'state.crow_snapshot': { params: Record<string, never>; result: CrowSnapshotReply };
   }
 }
 
 /**
- * The `crow.get_snapshot` reply, mirroring the service's `CrowSnapshot` DTO (`murder/app/service/
+ * The `state.crow_snapshot` reply, mirroring the service's `CrowSnapshot` DTO (`murder/app/service/
  * client_api.py`). Only the fields the roster projects are typed; the wire may carry more. Optional
  * fields are `?: T | null` to match the Python `T | None` columns exactly.
  */
@@ -104,7 +104,7 @@ export interface RosterActions {
 export function createRosterActions(bus: BusClient, store: StoreApi<AppStore>): RosterActions {
   return createRefreshAction(bus, store, {
     key: 'roster',
-    method: 'crow.get_snapshot',
+    method: 'state.crow_snapshot',
     project: (reply) => reply.sessions.map(toRosterRow),
   });
 }

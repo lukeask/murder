@@ -2,11 +2,11 @@
  * Plans actions — the *only* code that calls the bus for plans data (rule 3).
  *
  * Copied from {@link ../notes/notesActions.js} per the copy recipe. Changes vs. notes:
- *  - RPC is `plan.get_snapshot` (modeled per bus-contract naming — NOT yet on the live bus; B13).
+ *  - RPC is `state.plans_snapshot` (modeled per bus-contract naming — NOT yet on the live bus; B13).
  *  - Reply/DTO carry the extra `parent` field (the plan-tree linkage; bus contract › DTO shapes).
  *  - Projection is `toPlanRow` (adds `parent`, normalising an absent value to `null`).
  *  - Passes the `plans` slice key to `createRefreshAction`.
- *  - `declare module` augments `RpcMethods` with `'plan.get_snapshot'` (its own distinct key).
+ *  - `declare module` augments `RpcMethods` with `'state.plans_snapshot'` (its own distinct key).
  *
  * The loading→ready/error + ref-swap-only-this-key mechanics come from the shared
  * {@link createRefreshAction} factory in `../listSlice.js`.
@@ -20,18 +20,18 @@ import type { PlanRow } from './plansSlice.js';
 
 /**
  * Declares the plans read RPC via declaration merging (the C1/C2 bus files stay byte-identical).
- * `plan.get_snapshot` is the bus-contract name (`domain.verb`). NOT yet on the live bus — modeled
+ * `state.plans_snapshot` is the bus-contract name (`domain.verb`). NOT yet on the live bus — modeled
  * per the contract; confirm the name/shape when service B13 lands.
  */
 declare module '../../bus/BusClient.js' {
   interface RpcMethods {
     /** Fetch the full plans list (with parent linkage). Re-pulled on each `plan`-entity snapshot. */
-    'plan.get_snapshot': { params: Record<string, never>; result: PlansSnapshotReply };
+    'state.plans_snapshot': { params: Record<string, never>; result: PlansSnapshotReply };
   }
 }
 
 /**
- * The `plan.get_snapshot` reply. Mirrors the service's plans-snapshot DTO. Only the fields the
+ * The `state.plans_snapshot` reply. Mirrors the service's plans-snapshot DTO. Only the fields the
  * plans slice projects are typed.
  */
 export interface PlansSnapshotReply {
@@ -75,7 +75,7 @@ export interface PlansActions {
 export function createPlansActions(bus: BusClient, store: StoreApi<AppStore>): PlansActions {
   return createRefreshAction(bus, store, {
     key: 'plans',
-    method: 'plan.get_snapshot',
+    method: 'state.plans_snapshot',
     project: (reply) => reply.plans.map(toPlanRow),
   });
 }

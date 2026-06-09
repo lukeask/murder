@@ -1,50 +1,39 @@
 /**
  * Dialog actions — the *only* code that calls the bus for dialog operations (rule 3).
  *
- * Covers two operations triggered from the C12 modal dialogs:
- *  - `ticket.quick_create` — create a new ticket from the new-ticket dialog (`ctrl+t`).
- *  - `ticket.next_id` — fetch the next free ticket id for the new-ticket dialog.
- *  - `ticket.exists` — check if a ticket handle already exists.
- *  - `plan.create` — message a fresh planning agent for the new-plan dialog (`ctrl+p`). Uses the
- *    existing `agent.message` RPC surface; the plan-create RPC is modeled here as `plan.create`
- *    (a `domain.verb` name mirroring the bus-contract style — NOT yet on the live bus, flagged below).
+ * Covers operations triggered from the C12 modal dialogs:
+ *  - `ticket.quick_create` — create a new ticket (`ctrl+t`). NOT a standalone RPC: it is an
+ *    orchestrator command kind, routed through the LIVE `command.submit` choke point (F2). See
+ *    {@link ../commandSubmit.js}.
+ *  - `ticket.next_id` — fetch the next free ticket id. LIVE RPC.
+ *  - `ticket.exists` — check if a ticket handle already exists. LIVE RPC.
+ *  - `plan.create` — message a fresh planning agent for the new-plan dialog (`ctrl+p`). The
+ *    plan-create RPC is modeled as `plan.create` — NOT yet on the live bus (built in F3, flagged
+ *    below).
  *
- * ## B13 dependency flag
+ * ## F3 dependency flag
  *
- * `ticket.quick_create`, `ticket.next_id`, `ticket.exists`, and `plan.create` are ALL service B13
- * methods (the V-list). They are **modeled here but NOT yet live on the bus**. Tests drive against
- * `FakeBusClient` with canned stubs. When service B13 lands:
- *  1. Confirm the method names + shapes against the running service.
- *  2. Update `QuickCreateResult`, `NextIdResult`, `ExistsResult`, and `PlanCreateResult` if the
- *     wire shapes differ from what is modeled here.
- *  3. Remove this B13 flag from the doc comment.
+ * `plan.create` is the only method here still **modeled but NOT yet live on the bus** (F3 builds it).
+ * Tests drive it against `FakeBusClient`. When F3 lands, confirm the name/shape and remove this flag.
  *
  * The RpcMethods augmentation below keeps the C1/C2 bus files byte-identical (rule 4 — the seam).
  */
 
 import type { BusClient } from '../../bus/BusClient.js';
+import { submitCommand } from '../commandSubmit.js';
 
 /**
  * C12's RPC method declarations, augmenting the shared {@link RpcMethods} registry without
  * editing the frozen C1/C2 bus files. Each key is distinct from every other slice's keys —
  * the compiler will catch a collision if a later chunk redeclares the same method name.
  *
- * **B13 flag: ALL four methods below are modeled (not live).** Confirm shapes when B13 lands.
+ * `ticket.next_id` + `ticket.exists` are LIVE; `plan.create` is still modeled (F3 builds it).
  */
 declare module '../../bus/BusClient.js' {
   interface RpcMethods {
     /**
-     * Create a new ticket from a title string.
-     * Returns the new ticket's id and title.
-     * B13 / V1 — NOT yet live on the bus.
-     */
-    'ticket.quick_create': {
-      params: { title: string };
-      result: QuickCreateResult;
-    };
-    /**
      * Fetch the next free ticket id (the id the service would assign to a new ticket).
-     * B13 / V4 — NOT yet live on the bus.
+     * LIVE — registered in `murder/app/service/host.py`.
      */
     'ticket.next_id': {
       params: Record<string, never>;
@@ -52,7 +41,7 @@ declare module '../../bus/BusClient.js' {
     };
     /**
      * Check whether a ticket handle already exists.
-     * B13 / V5 — NOT yet live on the bus.
+     * LIVE — registered in `murder/app/service/host.py`.
      */
     'ticket.exists': {
       params: { handle: string };
@@ -71,19 +60,19 @@ declare module '../../bus/BusClient.js' {
   }
 }
 
-/** Reply from `ticket.quick_create`. B13 shape — confirm when service lands. */
+/** Worker reply for the `ticket.quick_create` command kind (via command.submit). */
 export interface QuickCreateResult {
   readonly handled: boolean;
   readonly ticket_id: string;
   readonly title: string;
 }
 
-/** Reply from `ticket.next_id`. B13 shape — confirm when service lands. */
+/** Reply from the LIVE `ticket.next_id` RPC. */
 export interface NextIdResult {
   readonly next_id: string;
 }
 
-/** Reply from `ticket.exists`. B13 shape — confirm when service lands. */
+/** Reply from the LIVE `ticket.exists` RPC. */
 export interface ExistsResult {
   readonly exists: boolean;
 }
@@ -100,22 +89,18 @@ export interface DialogActions {
   /**
    * Create a new ticket via `ticket.quick_create`. Resolves with the created ticket's id.
    * Rejects on bus error — the caller (modal's onIntent) handles the rejection.
-   * B13 dependency: not live; FakeBusClient only until B13 lands.
    */
   quickCreateTicket(title: string): Promise<QuickCreateResult>;
   /**
    * Fetch the next free ticket id via `ticket.next_id`.
-   * B13 dependency: not live; FakeBusClient only until B13 lands.
    */
   fetchNextTicketId(): Promise<NextIdResult>;
   /**
    * Check if a ticket handle exists via `ticket.exists`.
-   * B13 dependency: not live; FakeBusClient only until B13 lands.
    */
   ticketExists(handle: string): Promise<ExistsResult>;
   /**
    * Message a fresh planning agent to create a plan via `plan.create`.
-   * B13 dependency: not live; FakeBusClient only until B13 lands.
    */
   createPlan(planName: string, message: string): Promise<PlanCreateResult>;
 }
@@ -130,7 +115,14 @@ export interface DialogActions {
 export function createDialogActions(bus: BusClient): DialogActions {
   return {
     async quickCreateTicket(title: string): Promise<QuickCreateResult> {
-      return bus.rpc('ticket.quick_create', { title });
+      // `ticket.quick_create` is an orchestrator command kind, not a standalone RPC — route it
+      // through the live `command.submit` choke point. The worker returns `{ ticket_id, title }`.
+      const result = await submitCommand(bus, 'ticket.quick_create', { title });
+      return {
+        handled: result['handled'] === true,
+        ticket_id: String(result['ticket_id'] ?? ''),
+        title: String(result['title'] ?? title),
+      };
     },
 
     async fetchNextTicketId(): Promise<NextIdResult> {

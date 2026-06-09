@@ -25,7 +25,7 @@ async function tick(): Promise<void> {
 /** Build the shell against fakes with a given visible-panel set. */
 function setup(visible: readonly PanelId[]) {
   const fake = new FakeBusClient();
-  fake.stubRpc('crow.get_snapshot', { invalidation_key: 'iv', sessions: [] });
+  fake.stubRpc('state.crow_snapshot', { invalidation_key: 'iv', sessions: [] });
   const { store, dispose } = createAppStore(fake);
   const inputStores = createInputStores(visible);
   const tree = render(<App store={store} inputStores={inputStores} bus={fake} />);
@@ -111,13 +111,15 @@ describe('App shell', () => {
     // App-path test: renders the full App (not just the component harness) and proves that
     // CrowChatPanel is actually mounted — not just that it renders in isolation.
     const fake = new FakeBusClient();
-    fake.stubRpc('crow.get_snapshot', {
+    fake.stubRpc('state.crow_snapshot', {
       invalidation_key: 'iv',
       sessions: [
         { agent_id: 'collab-1', role: 'collaborator', status: 'idle', session_name: 'TestCollab' },
       ],
     });
-    fake.stubRpc('agent.message', {});
+    // F2: chat sends route through command.submit (agent.message command kind), not a direct RPC.
+    fake.stubRpc('command.submit', { ok: true, command_id: 'cmd-1' });
+    fake.stubRpc('command.status', { ok: true, status: 'done', result_json: '{}' });
     const { store, dispose } = createAppStore(fake);
     await store.getState().actions.roster.refresh();
 
@@ -163,7 +165,7 @@ describe('deriveSpawnContext — focused doc = the open doc-view (C11)', () => {
   /** Build a minimal FakeBusClient-backed store. */
   function makeStore() {
     const fake = new FakeBusClient();
-    fake.stubRpc('crow.get_snapshot', { invalidation_key: 'iv', sessions: [] });
+    fake.stubRpc('state.crow_snapshot', { invalidation_key: 'iv', sessions: [] });
     return createAppStore(fake);
   }
 

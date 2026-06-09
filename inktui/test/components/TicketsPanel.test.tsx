@@ -2,7 +2,7 @@
  * TicketsPanel test — copied from {@link ./NotesPanel.test.tsx} per the C5 idiom.
  *
  * Recipe summary (same as the reference, with tickets-specific stubs):
- *  1. Build `FakeBusClient`, stub `ticket.get_snapshot`, build the store.
+ *  1. Build `FakeBusClient`, stub `state.schedule_snapshot`, build the store.
  *  2. Build C4 input stores, seeding `tickets` visible and optionally focused.
  *  3. Render inside both providers + `useRootInput`.
  *  4. Assert 2-row entries (both rows), deps cell content (empty + non-empty),
@@ -22,7 +22,7 @@ import { InputStoresProvider } from '../../src/hooks/useInputStores.js';
 import { useRootInput } from '../../src/hooks/useRootInput.js';
 import { createInputStores } from '../../src/input/createInputStores.js';
 import { createAppStore } from '../../src/store/store.js';
-import type { TicketSnapshotReply } from '../../src/store/tickets/ticketsActions.js';
+import type { ScheduleSnapshotReply } from '../../src/store/tickets/ticketsActions.js';
 
 const CTRL_F = '\x06';
 
@@ -30,7 +30,7 @@ async function tick(): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, 20));
 }
 
-function twoTickets(): TicketSnapshotReply {
+function twoTickets(): ScheduleSnapshotReply {
   return {
     invalidation_key: 'iv',
     active_tickets: [
@@ -59,6 +59,7 @@ function twoTickets(): TicketSnapshotReply {
     ],
     recent_done_tickets: [],
     archived_tickets: [],
+    usage_gauges: [],
   };
 }
 
@@ -86,13 +87,13 @@ function RootInput(): null {
   return null;
 }
 
-async function setup(reply: TicketSnapshotReply = twoTickets(), focused = true) {
+async function setup(reply: ScheduleSnapshotReply = twoTickets(), focused = true) {
   const fake = new FakeBusClient();
-  fake.stubRpc('ticket.get_snapshot', reply);
+  fake.stubRpc('state.schedule_snapshot', reply);
   // Stub sibling slices so createAppStore doesn't choke on any stray events.
-  fake.stubRpc('crow.get_snapshot', { invalidation_key: 'iv', sessions: [] });
-  fake.stubRpc('note.get_snapshot', { invalidation_key: 'iv', notes: [] });
-  fake.stubRpc('report.get_snapshot', { invalidation_key: 'iv', reports: [] });
+  fake.stubRpc('state.crow_snapshot', { invalidation_key: 'iv', sessions: [] });
+  fake.stubRpc('state.notes_snapshot', { invalidation_key: 'iv', notes: [] });
+  fake.stubRpc('state.reports_snapshot', { invalidation_key: 'iv', reports: [] });
   const { store, dispose } = createAppStore(fake);
   await store.getState().actions.tickets.refresh();
   const inputStores = createInputStores(['tickets'], focused ? 'tickets' : 'chat');
@@ -193,6 +194,7 @@ describe('TicketsPanel', () => {
         active_tickets: [],
         recent_done_tickets: [],
         archived_tickets: [],
+        usage_gauges: [],
       },
       true,
     );

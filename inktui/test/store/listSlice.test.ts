@@ -27,7 +27,7 @@ async function flush(): Promise<void> {
 describe('createRefreshAction — shared list-slice mechanics', () => {
   it('projects the reply into rows and flips the slice to ready', async () => {
     const fake = new FakeBusClient();
-    fake.stubRpc('crow.get_snapshot', crowReply());
+    fake.stubRpc('state.crow_snapshot', crowReply());
     const { store } = createAppStore(fake);
 
     await store.getState().actions.roster.refresh();
@@ -40,17 +40,17 @@ describe('createRefreshAction — shared list-slice mechanics', () => {
 
   it('issues exactly one rpc for the slice it is bound to', async () => {
     const fake = new FakeBusClient();
-    fake.stubRpc('crow.get_snapshot', crowReply());
+    fake.stubRpc('state.crow_snapshot', crowReply());
     const { store } = createAppStore(fake);
 
     await store.getState().actions.roster.refresh();
 
-    expect(fake.rpcCalls).toEqual([{ method: 'crow.get_snapshot', params: {} }]);
+    expect(fake.rpcCalls).toEqual([{ method: 'state.crow_snapshot', params: {} }]);
   });
 
   it('ref-swaps ONLY its own slice key — siblings keep identity', async () => {
     const fake = new FakeBusClient();
-    fake.stubRpc('crow.get_snapshot', crowReply());
+    fake.stubRpc('state.crow_snapshot', crowReply());
     const { store } = createAppStore(fake);
     const notesBefore = store.getState().notes;
     const reportsBefore = store.getState().reports;
@@ -67,7 +67,7 @@ describe('createRefreshAction — shared list-slice mechanics', () => {
 
   it('routes a rejected rpc into the slice error field, never thrown past the action', async () => {
     const fake = new FakeBusClient();
-    fake.stubRpc('crow.get_snapshot', () => {
+    fake.stubRpc('state.crow_snapshot', () => {
       throw new Error('bus down');
     });
     const { store } = createAppStore(fake);
@@ -82,7 +82,7 @@ describe('createRefreshAction — shared list-slice mechanics', () => {
     let resolveReply: (r: CrowSnapshotReply) => void = () => {};
     const fake = new FakeBusClient();
     fake.stubRpc(
-      'crow.get_snapshot',
+      'state.crow_snapshot',
       () =>
         new Promise<CrowSnapshotReply>((resolve) => {
           resolveReply = resolve;
