@@ -4,8 +4,9 @@
  * Three actions:
  *  1. `refresh()` — explicit boot-prime pull. Calls `state.conversations_snapshot` to hydrate the
  *     transcripts map on connect (cold-start, before any `conversation.block` events arrive). The
- *     reply is a map of agentId → block array; each block is parsed through `parseBlock` exactly as
- *     `applyBlock` does, so the seam is consistent. Errors are swallowed into the `conversations`
+ *     reply is a list of `ConversationSummary` entries (in-progress conversations); each entry's
+ *     `agent_id` becomes the key and its `blocks` are parsed through `parseBlock` (same wire shape
+ *     as the event block, so the seam is consistent). Errors are swallowed into the `conversations`
  *     slice (future: add an `error` field when needed). Called from `primeSlices` in `index.tsx` on
  *     every (re)connect.
  *
@@ -43,9 +44,11 @@ import { parseBlock, type ConversationBlock } from './conversationsSlice.js';
 declare module '../../bus/BusClient.js' {
   interface RpcMethods {
     /**
-     * Fetch all agent transcripts as a snapshot. Re-pulled on connect (boot-prime); individual
-     * block updates arrive via `conversation.block` events thereafter. The reply is a map of
-     * agentId → block rows (same wire shape as `ConversationBlockEvent.block`).
+     * Fetch all in-progress agent conversations as a snapshot. Re-pulled on connect (boot-prime);
+     * individual block updates arrive via `conversation.block` events thereafter. The reply is a
+     * list of `ConversationSummary` entries (one per in-progress conversation), each carrying the
+     * agent_id and the full block history (same `ConversationBlockSummary` wire shape as the event
+     * block, so `parseBlock` applies unchanged).
      */
     'state.conversations_snapshot': {
       params: Record<string, never>;
@@ -55,14 +58,49 @@ declare module '../../bus/BusClient.js' {
 }
 
 /**
+ * One block as it appears inside `ConversationSummary.blocks` (the `ConversationBlockSummary` DTO,
+ * `murder/app/service/client_api.py`). Same nested shape as `ConversationBlockEvent.block`, so
+ * `parseBlock` applies unchanged: `id` is numeric, `payload` is the segment dict with `type`.
+ */
+export interface ConversationBlockSummaryDto {
+  id: number | null;
+  conversation_id: string;
+  ordinal: number;
+  kind: string;
+  /** The segment dict — `payload.type` is the selector discriminant ('user', 'assistant', …). */
+  payload: Record<string, unknown>;
+  sealed: boolean;
+  service_received_at: string;
+}
+
+/**
+ * One conversation entry in the snapshot list (the `ConversationSummary` DTO,
+ * `murder/app/service/client_api.py`). Only `in_progress` conversations are included.
+ */
+export interface ConversationSummaryDto {
+  conversation_id: string;
+  agent_id: string;
+  harness: string | null;
+  model: string | null;
+  harness_session_id: string | null;
+  live_state: string | null;
+  condensed: string | null;
+  status: string;
+  blocks: readonly ConversationBlockSummaryDto[];
+}
+
+/**
  * The `state.conversations_snapshot` reply. Mirrors the service's `ConversationsSnapshot` DTO
- * (`murder/app/service/client_api.py`). `transcripts` is a map from agentId to an ordered array of
- * raw block rows (the same wire shape as `ConversationBlockEvent.block`), so `parseBlock` applies
- * unchanged.
+ * (`murder/app/service/client_api.py`). `conversations` is a list of `ConversationSummary` entries
+ * (only `in_progress` conversations), each carrying the full block history for that agent.
+ * Keying is by `agent_id` (CONTRACT ASSUMPTION: one active conversation per agent — same assumption
+ * the slice already makes for `conversation.block` events). `parseBlock` applies to each block row
+ * unchanged since `ConversationBlockSummary` has the same `id`/`payload` shape as the event block.
  */
 export interface ConversationsSnapshotReply {
-  /** Per-agent block rows, keyed by agentId. Only agents with at least one block are included. */
-  transcripts: Readonly<Record<string, readonly Record<string, unknown>[]>>;
+  conversations: readonly ConversationSummaryDto[];
+  /** ISO-8601 datetime string — when the snapshot was taken. */
+  as_of: string;
   invalidation_key: string;
 }
 
@@ -121,11 +159,15 @@ export function createConversationsActions(
     async refresh(): Promise<void> {
       try {
         const reply = await bus.rpc('state.conversations_snapshot', {});
-        // Project the wire block rows through parseBlock — the same normalisation as applyBlock
-        // uses for live events, so the transcript shape is always consistent.
+        // Project each ConversationSummary into the transcripts map keyed by agent_id.
+        // CONTRACT ASSUMPTION: one active conversation per agent (same assumption the slice makes
+        // for `conversation.block` events). `parseBlock` applies to each ConversationBlockSummary
+        // row unchanged — the `id`/`payload` shape is identical to the event block shape.
         const parsed: Record<string, readonly ConversationBlock[]> = {};
-        for (const [agentId, blocks] of Object.entries(reply.transcripts)) {
-          parsed[agentId] = blocks.map(parseBlock);
+        for (const conv of reply.conversations) {
+          parsed[conv.agent_id] = conv.blocks.map((b) =>
+            parseBlock(b as Record<string, unknown>),
+          );
         }
         store.setState((state) => ({
           conversations: {

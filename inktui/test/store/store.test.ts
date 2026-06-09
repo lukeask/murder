@@ -550,15 +550,34 @@ describe('boot-priming — slice refresh actions exist for all primed domains', 
     const fake = new FakeBusClient();
     fake.stubRpc('state.crow_snapshot', crowReply());
     fake.stubRpc('state.schedule_snapshot', scheduleReply());
+    // Wire shape: ConversationsSnapshot.conversations is a list of ConversationSummary entries.
+    // Each entry has agent_id + blocks (ConversationBlockSummary rows — id numeric, payload nested).
     fake.stubRpc('state.conversations_snapshot', {
+      conversations: [
+        {
+          conversation_id: 'conv-1',
+          agent_id: 'collaborator',
+          harness: 'claude',
+          model: 'claude-sonnet-4-6',
+          harness_session_id: null,
+          live_state: null,
+          condensed: null,
+          status: 'in_progress',
+          blocks: [
+            {
+              id: 1,
+              conversation_id: 'conv-1',
+              ordinal: 0,
+              kind: 'user_message',
+              payload: { type: 'user', text: 'hello' },
+              sealed: true,
+              service_received_at: '2026-06-09T00:00:00',
+            },
+          ],
+        },
+      ],
+      as_of: '2026-06-09T00:00:00',
       invalidation_key: 'iv-c',
-      transcripts: {
-        'collaborator': [
-          // Wire block row shape (same as ConversationBlockEvent.block):
-          // id (numeric), payload with type + text.
-          { id: 1, kind: 'user_message', payload: { type: 'user', text: 'hello' }, ordinal: 0, sealed: true },
-        ],
-      },
     });
     const { store } = createAppStore(fake);
     expect(store.getState().conversations.transcripts).toEqual({});
@@ -577,10 +596,31 @@ describe('boot-priming — slice refresh actions exist for all primed domains', 
     fake.stubRpc('state.crow_snapshot', crowReply());
     fake.stubRpc('state.schedule_snapshot', scheduleReply());
     fake.stubRpc('state.conversations_snapshot', {
+      conversations: [
+        {
+          conversation_id: 'conv-2',
+          agent_id: 'crow-1',
+          harness: null,
+          model: null,
+          harness_session_id: null,
+          live_state: null,
+          condensed: null,
+          status: 'in_progress',
+          blocks: [
+            {
+              id: 2,
+              conversation_id: 'conv-2',
+              ordinal: 0,
+              kind: 'assistant_final',
+              payload: { type: 'assistant', text: 'done' },
+              sealed: true,
+              service_received_at: '2026-06-09T00:00:00',
+            },
+          ],
+        },
+      ],
+      as_of: '2026-06-09T00:00:00',
       invalidation_key: 'iv-c2',
-      transcripts: {
-        'crow-1': [{ id: 2, kind: 'assistant_final', payload: { type: 'assistant', text: 'done' }, ordinal: 0, sealed: true }],
-      },
     });
     const { store } = createAppStore(fake);
 
@@ -591,10 +631,11 @@ describe('boot-priming — slice refresh actions exist for all primed domains', 
     expect(store.getState().conversations.transcripts['crow-1']).toHaveLength(1);
   });
 
-  it('conversations.refresh swallows errors — transcripts stay empty, no throw', async () => {
+  it('conversations.refresh swallows RPC errors — transcripts stay empty, no throw', async () => {
     const fake = new FakeBusClient();
     fake.stubRpc('state.crow_snapshot', crowReply());
     fake.stubRpc('state.schedule_snapshot', scheduleReply());
+    // Handler throws — models a service that does not yet expose state.conversations_snapshot.
     fake.stubRpc('state.conversations_snapshot', () => {
       throw new Error('snapshot service down');
     });
