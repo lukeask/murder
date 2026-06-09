@@ -1,15 +1,22 @@
 /**
  * Conversations actions — the only code that calls the bus for chat operations (rule 3).
  *
- * Two actions:
- *  1. `send(agentId, message)` — the sole sender of chat messages. `agent.message` is an
+ * Three actions:
+ *  1. `refresh()` — explicit boot-prime pull. Calls `state.conversations_snapshot` to hydrate the
+ *     transcripts map on connect (cold-start, before any `conversation.block` events arrive). The
+ *     reply is a map of agentId → block array; each block is parsed through `parseBlock` exactly as
+ *     `applyBlock` does, so the seam is consistent. Errors are swallowed into the `conversations`
+ *     slice (future: add an `error` field when needed). Called from `primeSlices` in `index.tsx` on
+ *     every (re)connect.
+ *
+ *  2. `send(agentId, message)` — the sole sender of chat messages. `agent.message` is an
  *     orchestrator command kind (not a standalone RPC), so this routes through the live
  *     `command.submit` choke point ({@link ../commandSubmit.js}). Routes to the agent identified by
  *     `agentId`; the discriminated-union identity (deriving the right agentId) lives in the
  *     selectors/CrowChatPanel, NOT here (rule 2). This action receives the resolved agentId from its
  *     caller, never parses a conversation_id (rule 1 / anti-pattern).
  *
- *  2. `applyBlock(event)` — pure setState, no bus call. Called by the second `bus.subscribe` in
+ *  3. `applyBlock(event)` — pure setState, no bus call. Called by the second `bus.subscribe` in
  *     `store.ts` on each `conversation.block` event. Handles both `block-appended` (push) and
  *     `block-updated` (replace trailing block with matching id). Ref-swaps only the affected
  *     agent's transcript array — sibling agents keep identity.
@@ -25,10 +32,52 @@ import type { ConversationBlockEvent } from '../../bus/protocol.js';
 import { submitCommand } from '../commandSubmit.js';
 import type { AppStore } from '../store.js';
 import { toastStore } from '../toast/toastStore.js';
-import { parseBlock } from './conversationsSlice.js';
+import { parseBlock, type ConversationBlock } from './conversationsSlice.js';
+
+/**
+ * Declares the conversations read RPC via declaration merging rather than editing the frozen C1 bus
+ * files. `state.conversations_snapshot` is the bus-contract name (`domain.verb`, mirrors Python
+ * `RuntimeClient.get_conversations_snapshot`). Called on connect to prime the transcripts map so a
+ * cold-start service (no `conversation.block` events yet) paints populated chat panes immediately.
+ */
+declare module '../../bus/BusClient.js' {
+  interface RpcMethods {
+    /**
+     * Fetch all agent transcripts as a snapshot. Re-pulled on connect (boot-prime); individual
+     * block updates arrive via `conversation.block` events thereafter. The reply is a map of
+     * agentId → block rows (same wire shape as `ConversationBlockEvent.block`).
+     */
+    'state.conversations_snapshot': {
+      params: Record<string, never>;
+      result: ConversationsSnapshotReply;
+    };
+  }
+}
+
+/**
+ * The `state.conversations_snapshot` reply. Mirrors the service's `ConversationsSnapshot` DTO
+ * (`murder/app/service/client_api.py`). `transcripts` is a map from agentId to an ordered array of
+ * raw block rows (the same wire shape as `ConversationBlockEvent.block`), so `parseBlock` applies
+ * unchanged.
+ */
+export interface ConversationsSnapshotReply {
+  /** Per-agent block rows, keyed by agentId. Only agents with at least one block are included. */
+  transcripts: Readonly<Record<string, readonly Record<string, unknown>[]>>;
+  invalidation_key: string;
+}
 
 /** The conversations actions, bound to one `BusClient` + store handle. */
 export interface ConversationsActions {
+  /**
+   * Boot-prime: pull all agent transcripts from `state.conversations_snapshot` and populate the
+   * transcripts map. Called from `primeSlices` in `index.tsx` on every (re)connect so a cold-start
+   * service (no `conversation.block` events yet) shows populated chat panes immediately.
+   *
+   * Errors are swallowed (fire-and-forget from the priming path; transcripts remain empty rather
+   * than crashing, and live `conversation.block` events will populate them as they arrive).
+   */
+  refresh(): Promise<void>;
+
   /**
    * Send a message to the agent identified by `agentId` via `agent.message`.
    * The sole bus caller for chat sends — rule 3. The caller (chat pane / CrowChatPanel)
@@ -69,6 +118,26 @@ export function createConversationsActions(
   store: StoreApi<AppStore>,
 ): ConversationsActions {
   return {
+    async refresh(): Promise<void> {
+      try {
+        const reply = await bus.rpc('state.conversations_snapshot', {});
+        // Project the wire block rows through parseBlock — the same normalisation as applyBlock
+        // uses for live events, so the transcript shape is always consistent.
+        const parsed: Record<string, readonly ConversationBlock[]> = {};
+        for (const [agentId, blocks] of Object.entries(reply.transcripts)) {
+          parsed[agentId] = blocks.map(parseBlock);
+        }
+        store.setState((state) => ({
+          conversations: {
+            ...state.conversations,
+            transcripts: { ...state.conversations.transcripts, ...parsed },
+          },
+        }));
+      } catch {
+        // Swallow: priming is best-effort; live events will hydrate the transcripts when they arrive.
+      }
+    },
+
     async send(agentId: string, message: string): Promise<void> {
       try {
         // `agent.message` is an orchestrator command kind, not a standalone RPC — route it through
