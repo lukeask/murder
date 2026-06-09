@@ -108,15 +108,19 @@ def _resolve_ink_entrypoint(repo: Path) -> tuple[list[str], Path | None]:
     return ["node", str(bundle_path)], None
 
 
-def _spawn_ink(argv: list[str], cwd: Path | None, socket_path: Path) -> int:
+def _spawn_ink(argv: list[str], cwd: Path | None, socket_path: Path, project: str) -> int:
     """Spawn the resolved Ink runner against the bus socket, inheriting the tty, and wait.
 
     The child owns the terminal (inherited stdio) and shares our process group, so ctrl+c reaches
     it directly. We do **not** tear the daemon down on exit — the service is authoritative and keeps
     running, matching the prior in-process launch. Returns the child's exit code.
+
+    `project` is the repo directory name, passed via `MURDER_PROJECT` purely for the top-bar
+    branding (`murder · <project>`) — the TUI's own cwd is unreliable (in dev it runs from `inktui/`).
     """
     env = dict(os.environ)
     env["MURDER_BUS_SOCKET"] = str(socket_path)
+    env["MURDER_PROJECT"] = project
     proc = subprocess.run(argv, cwd=str(cwd) if cwd is not None else None, env=env, check=False)
     return proc.returncode
 
@@ -129,7 +133,7 @@ async def _launch_tui() -> None:
     argv, cwd = _resolve_ink_entrypoint(repo)
     _require_node()
     await _ensure_supervisor(repo, socket_path)
-    _spawn_ink(argv, cwd, socket_path)
+    _spawn_ink(argv, cwd, socket_path, repo.name)
 
 
 def cmd_up() -> None:

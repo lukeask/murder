@@ -89,9 +89,9 @@ export function newTicketMode(
     keymap: [
       // Backspace: delete last char.
       { chord: { key: { backspace: true } }, intent: 'backspace', description: 'delete char' },
-      // Ctrl+U: clear field.
+      // Alt+U: clear field.
       {
-        chord: { input: 'u', key: { ctrl: true } },
+        chord: { input: 'u', key: { meta: true } },
         intent: 'deleteAll',
         description: 'clear field',
       },

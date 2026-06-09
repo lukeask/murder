@@ -5,15 +5,14 @@
  * layered decision. No component below this calls `useInput`.
  *
  * Global-intent wiring lives here because it is where the input stores meet:
- *  - `focusPanel(id)` = **show the panel, then focus it** — the plan's "`ctrl+<n>` brings highlight
- *    to that component, toggling it on if off". Show-then-focus (not toggle) so the chord is "go
- *    there", never "hide the thing I'm trying to reach". (A second `ctrl+<n>` to *hide* is a later
- *    UX call; the primitive `panelStore.toggle` is there if a chunk wants it.)
+ *  - `focusPanel(id)` = panel shortcut semantics: show+focus when hidden; hide when visible. Hiding
+ *    the focused panel explicitly returns focus intent to chat; hiding another panel leaves focus
+ *    where it was.
  *  - `navigate(dir)` delegates to the focus store's geometry-driven `navigate`.
- *  - `focusChat()` points focus at chat (`ctrl+f`).
+ *  - `focusChat()` points focus at chat (`alt+f`).
  *  - `spawn()` / `toggleTmux()` are owned by later chunks (C13 spawn wizard, C14 tmux); they are
  *    injectable so those chunks supply real handlers, defaulting to safe no-ops (spawn defaults to
- *    focusing chat, matching the plan's "`ctrl+s` → highlight to text input").
+ *    focusing chat, matching the plan's "`alt+s` → highlight to text input").
  *
  * Raw-mode guard: `useInput` puts stdin in raw mode, which a non-TTY stdin (a piped `npm run dev`
  * smoke run, CI, a `< /dev/null` invocation) does not support — Ink throws if asked. So the loop is
@@ -30,20 +29,22 @@ import {
   dispatchKey,
   type GlobalHandlers,
 } from '../input/dispatcher.js';
-import { CHAT_FOCUS, resolveFocus } from '../input/focusStore.js';
+import { CHAT_FOCUS, type FocusStoreApi, resolveFocus } from '../input/focusStore.js';
 import { selectActiveMode } from '../input/modeStore.js';
+import type { PanelStoreApi } from '../input/panelStore.js';
+import type { PanelId } from '../input/panels.js';
 import { useInputStores } from './useInputStores.js';
 
 /** Handlers for the global chords owned by *later* chunks, injected so this hook stays complete now
  * without stubbing their behaviour. Both default to safe behaviour described on {@link useRootInput}. */
 export interface DeferredGlobalHandlers {
-  /** `ctrl+s`. Default: focus chat (the text input that becomes the spawn wizard, C13). */
+  /** `alt+s`. Default: focus chat (the text input that becomes the spawn wizard, C13). */
   spawn?: () => void;
-  /** `ctrl+y`. Default: no-op until C14 wires the tmux toggle. */
+  /** `alt+y`. Default: no-op until C14 wires the tmux toggle. */
   toggleTmux?: () => void;
-  /** `ctrl+p`. Default: no-op until C12 wires the new-plan dialog. */
+  /** `alt+p`. Default: no-op until C12 wires the new-plan dialog. */
   newPlan?: () => void;
-  /** `ctrl+t`. Default: no-op until C12 wires the new-ticket dialog. */
+  /** `alt+t`. Default: no-op until C12 wires the new-ticket dialog. */
   newTicket?: () => void;
   /**
    * The persistent chat-input handler (C11, part F). Supplied by the shell (it needs both the chat
@@ -51,6 +52,34 @@ export interface DeferredGlobalHandlers {
    * chunks/tests are unaffected. See {@link ChatInputHandler} and the dispatcher's layer 2.
    */
   chatInput?: ChatInputHandler;
+}
+
+/**
+ * Shared panel-shortcut behaviour. Visibility and focus meet here:
+ *  - hidden panel: show it and focus it
+ *  - visible panel while focused: hide it and focus chat
+ *  - visible panel while something else is focused: hide it and leave focus intent unchanged
+ */
+export function togglePanelFromShortcut(
+  id: PanelId,
+  panels: PanelStoreApi,
+  focus: FocusStoreApi,
+): void {
+  const panelState = panels.getState();
+  const focusState = focus.getState();
+  const visible = panelState.visible;
+  const effectiveFocus = resolveFocus(focusState.intendedId, visible);
+
+  if (!visible.has(id)) {
+    panelState.show(id);
+    focusState.focus(id);
+    return;
+  }
+
+  panelState.hide(id);
+  if (effectiveFocus === id) {
+    focusState.focus(CHAT_FOCUS);
+  }
 }
 
 /**
@@ -68,8 +97,7 @@ export function useRootInput(deferred: DeferredGlobalHandlers = {}): void {
       const focusState = focus.getState();
       const handlers: GlobalHandlers = {
         focusPanel(id) {
-          panels.getState().show(id);
-          focusState.focus(id);
+          togglePanelFromShortcut(id, panels, focus);
         },
         navigate(direction) {
           focusState.navigate(direction);
@@ -83,7 +111,7 @@ export function useRootInput(deferred: DeferredGlobalHandlers = {}): void {
           (() => {
             // C14 wiring: toggle the tmux fullscreen mode. If the mode is already active, exit it
             // (restores prior focus via C7M). If not active, enter it (saves current focus).
-            // `passThrough: true` on the mode lets ctrl+y fall through from layer 0 to layer 1
+            // `passThrough: true` on the mode lets alt+y fall through from layer 0 to layer 1
             // (the global-chord layer) so this handler fires on the "exit" press too.
             const modesState = modes.getState();
             if (selectActiveMode(modes)?.id === TMUX_MODE_ID) {

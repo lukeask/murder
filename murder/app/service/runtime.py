@@ -30,7 +30,7 @@ from murder.app.service.agent_registry import AgentRegistry
 from murder.app.service.document_access import DocumentAccess
 from murder.app.service.filesystem_sync import FilesystemSyncSupervisor
 from murder.app.service.recovery import reconcile_agents_vs_tmux
-from murder.app.service.runtime_lifecycle import shutdown_live_agents
+from murder.app.service.runtime_lifecycle import kill_project_tmux_sessions, shutdown_live_agents
 from murder.bus import Bus, EventFilter, SubscriptionHandle
 from murder.bus.protocol import Entity, StateSnapshotEvent
 from murder.llm.harnesses.versioning import HarnessVersionRegistry
@@ -109,6 +109,9 @@ class Runtime:
         report = reconcile_agents_vs_tmux(self.db, live_sessions)
         if report:
             logging.getLogger(__name__).info("startup reconcile: %s", report.summary())
+        for session in report.sessions_to_kill:
+            with contextlib.suppress(Exception):
+                await tmux.kill_session(session)
         stale_count = mark_stale_conversations(self.db)
         if stale_count:
             logging.getLogger(__name__).info(
@@ -158,6 +161,8 @@ class Runtime:
         self._tasks.clear()
         graceful = self._external_stop.is_set()
         await shutdown_live_agents(self._agents, graceful=graceful)
+        with contextlib.suppress(Exception):
+            await kill_project_tmux_sessions(self)
         if self.run_id and self.db is not None:
             _db_end_run(self.db, self.run_id)
         if self.db is not None:

@@ -23,14 +23,17 @@
 
 import { Box, Text } from 'ink';
 import { memo } from 'react';
+import { shallow } from 'zustand/shallow';
+import { useAppStore } from '../hooks/useAppStore.js';
 import {
   useChatInputStore,
   useEffectiveFocus,
   useFocusRef,
   useMeasureFocus,
 } from '../hooks/useInputStores.js';
-import { CHAT_FOCUS } from '../input/focusStore.js';
 import { SPAN_CLOSE, SPAN_OPEN } from '../input/chatInputStore.js';
+import { CHAT_FOCUS } from '../input/focusStore.js';
+import { useActiveAgent } from '../selectors/conversationsSelectors.js';
 import { TextInput } from './TextInput.js';
 
 /** Matches one marked image span (`U+E000 <id> U+E001`) for render-time substitution. */
@@ -50,12 +53,22 @@ export const ChatInput = memo(function ChatInput(): React.JSX.Element {
   useMeasureFocus(CHAT_FOCUS, ref);
   // Rule 1: read exactly the chat buffer text. The dispatcher's chat handler owns mutation (rule 5).
   const text = useChatInputStore((s) => s.text);
+  // The active send target (rule 2: derived in the selector), so the box shows *who* a typed message
+  // goes to — the same resolution the Enter handler uses, surfaced live.
+  const conversations = useAppStore((s) => s.conversations, shallow);
+  const roster = useAppStore((s) => s.roster, shallow);
+  const favorites = useAppStore((s) => s.favorites, shallow);
+  const target = useActiveAgent(conversations, roster, favorites);
+  const targetLabel = target === null ? 'no target' : target.label;
   // F9: marked image spans (invisible PUA-wrapped ids) render as derived `[Image N]` labels.
   const display = displayBuffer(text);
   return (
     <Box ref={ref} borderStyle="round" borderColor={focused ? 'green' : 'gray'} paddingX={1}>
+      <Text bold color={focused ? 'green' : 'gray'} wrap="truncate">
+        {`→ ${targetLabel} `}
+      </Text>
       <Text dimColor={!focused}>{focused ? '› ' : '  '}</Text>
-      <TextInput value={display} placeholder="message the collaborator…" focused={focused} />
+      <TextInput value={display} placeholder="type a message…" focused={focused} />
     </Box>
   );
 });

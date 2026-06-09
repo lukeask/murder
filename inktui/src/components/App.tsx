@@ -45,6 +45,7 @@ import {
   usePanelStore,
 } from '../hooks/useInputStores.js';
 import { useRootInput } from '../hooks/useRootInput.js';
+import { useTerminalSize } from '../hooks/useTerminalSize.js';
 import { expandSpans, spanIds } from '../input/chatInputStore.js';
 import { readClipboardImage } from '../input/clipboardImage.js';
 import type { ChatInputHandler } from '../input/dispatcher.js';
@@ -133,9 +134,12 @@ function PanelRegion({ panels }: { readonly panels: readonly PanelId[] }): JSX.E
     return null;
   }
   return (
-    <Box flexDirection="row" columnGap={1} flexGrow={1}>
+    // `minHeight={0}` + `overflow="hidden"` so a region that is taller than its bounded height clips
+    // instead of growing the frame past the terminal (which breaks Ink's in-place redraw — see
+    // {@link ../hooks/useTerminalSize.js}). Each panel wrapper clips the same way.
+    <Box flexDirection="row" columnGap={1} flexGrow={1} minHeight={0} overflow="hidden">
       {shown.map((id) => (
-        <Box key={id} flexGrow={1}>
+        <Box key={id} flexGrow={1} minHeight={0} overflow="hidden">
           {renderPanel(id)}
         </Box>
       ))}
@@ -283,11 +287,13 @@ export function makeChatInputHandler(
  * is the OPEN doc-view (focused-doc), via {@link deriveSpawnContext}. C11 also loads the persisted
  * favorites once on mount via the favorites action.
  */
-function Shell(): JSX.Element {
+function Shell({ project }: { readonly project?: string | undefined }): JSX.Element {
   const { modes, chatInput } = useInputStores();
   const appStore = useAppStoreApi();
   const bus = useBusClient();
   const loadFavorites = useAppStore((s) => s.actions.favorites.load);
+  // Live terminal height — bounds the root box so the frame always fits one screen (see the return).
+  const { rows } = useTerminalSize();
 
   // F9: the image-draft store owns the `image.upload` bus call + the FIFO upload queue (it writes a
   // file, doesn't mutate a conversation — so rule 3's "send lives in conversations" doesn't apply).
@@ -333,15 +339,36 @@ function Shell(): JSX.Element {
   if (active !== null && presentationHidesLayout(active.presentation)) {
     return <Overlay />;
   }
+  // Bound the whole app to the terminal height: a frame taller than the screen breaks Ink's in-place
+  // redraw (it can only erase up to the screen height, so each re-render stacks a fresh full copy into
+  // scrollback). This is the standard header/scroll/footer flex idiom:
+  //  - root: fixed `height={rows}` + `overflow="hidden"` — the final safety clip, so nothing is ever
+  //    drawn past the screen even if a child mis-measures.
+  //  - chrome (top bar, chat, bottom bar): `flexShrink={0}` — keep their natural height, never squeezed.
+  //  - middle region: `flexGrow={1} flexBasis={0}` — take *exactly* the remaining space (basis 0 so its
+  //    tall content doesn't push the chrome out of the box), and `overflow="hidden"` clips the panels.
+  // Without `flexBasis={0}` the region's basis is its (huge) content height, Yoga never bounds it, the
+  // chrome is shoved past `rows`, and nothing clips — which is the "still way too tall" failure.
   return (
-    <Box flexDirection="column" width="100%">
-      <TopBar />
-      <Box flexDirection="row" columnGap={1} flexGrow={1}>
+    <Box flexDirection="column" width="100%" height={rows} overflow="hidden">
+      <Box flexShrink={0} flexDirection="column">
+        <TopBar project={project} />
+      </Box>
+      <Box
+        flexDirection="row"
+        columnGap={1}
+        flexGrow={1}
+        flexBasis={0}
+        minHeight={0}
+        overflow="hidden"
+      >
         <PanelRegion panels={LEFT_PANELS} />
         <PanelRegion panels={RIGHT_PANELS} />
       </Box>
-      <ChatInput />
-      <BottomBar />
+      <Box flexShrink={0} flexDirection="column">
+        <ChatInput />
+        <BottomBar />
+      </Box>
       <Overlay />
       {/* F9: the transient toast rack — bottom-right, subtle. Last child so it rides below the bars;
           reads the toastStore singleton (pushed by the conversations send action + the image slice). */}
@@ -363,16 +390,19 @@ export function App({
   store,
   inputStores,
   bus,
+  project,
 }: {
   readonly store: AppStoreApi;
   readonly inputStores: InputStores;
   readonly bus: BusClient;
+  /** Current project/repo name for the top-bar branding; from `MURDER_PROJECT` (see index.tsx). */
+  readonly project?: string | undefined;
 }): JSX.Element {
   return (
     <AppStoreProvider value={store}>
       <InputStoresProvider value={inputStores}>
         <BusClientProvider value={bus}>
-          <Shell />
+          <Shell project={project} />
         </BusClientProvider>
       </InputStoresProvider>
     </AppStoreProvider>

@@ -6,7 +6,7 @@
  * user would). Covers the DoD requirements:
  *  - type → the buffer renders live in the ChatInput.
  *  - enter → `agent.message` fires with the active agent_id, and the buffer clears.
- *  - a global chord (`ctrl+s` → spawn handler) still fires while the buffer has text (proving layer
+ *  - a global chord (`alt+s` → spawn handler) still fires while the buffer has text (proving layer
  *    1 preempts the layer-2 chat handler — the persistent mode never swallows global chords).
  *  - backspace deletes from the buffer.
  */
@@ -25,7 +25,7 @@ import { createImageDraftStore } from '../../src/store/imageDraft/imageDraftStor
 import { createAppStore } from '../../src/store/store.js';
 
 const RETURN = '\r';
-const CTRL_S = '\x13';
+const ALT_S = '\x1bs';
 const BACKSPACE = '\x7f';
 
 async function tick(): Promise<void> {
@@ -152,20 +152,20 @@ describe('ChatInput — persistent chat-input send (C11)', () => {
     dispose();
   });
 
-  it('a global chord (ctrl+s) STILL fires while the chat buffer has text (layer 1 > layer 2)', async () => {
+  it('a global chord (alt+s) STILL fires while the chat buffer has text (layer 1 > layer 2)', async () => {
     const { store, inputStores, dispose } = await setup();
     const spawnFn = vi.fn();
     const { stdin } = render(<Harness store={store} inputStores={inputStores} spawn={spawnFn} />);
     await tick();
 
-    // Type a partial message, then hit ctrl+s — the global chord must preempt the chat handler.
+    // Type a partial message, then hit alt+s — the global chord must preempt the chat handler.
     stdin.write('draft message');
     await tick();
-    stdin.write(CTRL_S);
+    stdin.write(ALT_S);
     await tick();
 
     expect(spawnFn).toHaveBeenCalledOnce();
-    // The buffer is untouched — ctrl+s did not get appended or cleared.
+    // The buffer is untouched — alt+s did not get appended or cleared.
     expect(inputStores.chatInput.getState().text).toBe('draft message');
     dispose();
   });

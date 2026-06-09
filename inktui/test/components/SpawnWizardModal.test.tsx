@@ -1,5 +1,5 @@
 /**
- * SpawnWizardModal tests — the `ctrl+s` dependent-field spawn wizard against the C7M idiom.
+ * SpawnWizardModal tests — the `alt+s` dependent-field spawn wizard against the C7M idiom.
  *
  * Flow: harness → model → effort → worktree → [branch] → name → [context].
  *
@@ -15,7 +15,7 @@
  *  9. Context step appears last when a doc is focused; y/n reference-by-path.
  * 10. Exclusive capture.
  *
- * The H4 payload-contract + ctrl+s dispatcher suites below are extended from F11.
+ * The H4 payload-contract + alt+s dispatcher suites below are extended from F11.
  */
 
 import { render } from 'ink-testing-library';
@@ -587,18 +587,18 @@ describe('H4 — spawn payload contract (real spawn action)', () => {
   });
 });
 
-describe('ctrl+s dispatcher test', () => {
-  it('ctrl+s fires the spawn handler when CHAT is focused', async () => {
+describe('alt+s dispatcher test', () => {
+  it('alt+s fires the spawn handler when CHAT is focused', async () => {
     const stores = createInputStores([], 'chat');
     const spawnFn = vi.fn();
     const { stdin } = render(<Harness stores={stores} spawn={spawnFn} />);
     await tick();
-    stdin.write('\x13'); // ctrl+s
+    stdin.write('\x1bs'); // alt+s
     await tick();
     expect(spawnFn).toHaveBeenCalledOnce();
   });
 
-  it('ctrl+s does NOT fire spawn while wizard is already up (exclusive capture)', async () => {
+  it('alt+s does NOT fire spawn while wizard is already up (exclusive capture)', async () => {
     const stores = createInputStores(['notes'], 'notes');
     const spawnFn = vi.fn();
     const bus = new FakeBusClient();
@@ -607,7 +607,7 @@ describe('ctrl+s dispatcher test', () => {
     stores.modes.getState().enter(spawnWizardMode(stores.modes, actions, { spawnContext: null }));
     const { stdin } = render(<Harness stores={stores} spawn={spawnFn} />);
     await tick();
-    stdin.write('\x13');
+    stdin.write('\x1bs');
     await tick();
     expect(spawnFn).not.toHaveBeenCalled();
     expect(selectActiveMode(stores.modes)?.id).toBe(SPAWN_WIZARD_MODE_ID);

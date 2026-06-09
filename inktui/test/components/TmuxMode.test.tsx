@@ -8,12 +8,12 @@
  *     active and MUST be closed (subscriberCount drops to 0) after exit, on BOTH exit paths.
  *  2. **Frame re-render** — `FakeBusClient.emit` drives a second frame and we assert it replaces
  *     the waiting placeholder.
- *  3. **ctrl+y exits** (not just Escape) — the headline feature; tests that `passThrough: true`
- *     actually works end-to-end (the bug class this catches: passThrough missing → ctrl+y swallowed
+ *  3. **alt+y exits** (not just Escape) — the headline feature; tests that `passThrough: true`
+ *     actually works end-to-end (the bug class this catches: passThrough missing → alt+y swallowed
  *     by layer 0 → mode never exits on the second press).
  *  4. **Fullscreen suppresses layout** — while the mode is active, bars/panels are not rendered
  *     (the shell's `presentationHidesLayout` path).
- *  5. **Pure dispatch test** — ctrl+y maps to `toggleTmux` (a unit test over the dispatcher, no
+ *  5. **Pure dispatch test** — alt+y maps to `toggleTmux` (a unit test over the dispatcher, no
  *     rendering needed).
  */
 
@@ -31,7 +31,7 @@ import { dispatchKey } from '../../src/input/dispatcher.js';
 import { selectActiveMode } from '../../src/input/modeStore.js';
 import { makeKey } from '../input/key.js';
 
-const CTRL_Y = '\x19'; // ctrl+y
+const ALT_Y = '\x1by'; // alt+y — ESC + 'y', which Ink parses as { input: 'y', meta: true }
 
 /** Let Ink flush a render + post-render effects. */
 async function tick(): Promise<void> {
@@ -74,7 +74,7 @@ function setup() {
   return { bus, stores, enter };
 }
 
-describe('TmuxMode — ctrl+y fullscreen tmux mode', () => {
+describe('TmuxMode — alt+y fullscreen tmux mode', () => {
   it('enters, renders waiting placeholder, receives a frame, then exits via Escape and closes subscription', async () => {
     const { bus, stores, enter } = setup();
     const { lastFrame, stdin } = render(<Harness stores={stores} bus={bus} />);
@@ -121,19 +121,19 @@ describe('TmuxMode — ctrl+y fullscreen tmux mode', () => {
     expect(stores.focus.getState().intendedId).toBe('tickets'); // prior focus restored
   });
 
-  it('ctrl+y again exits the mode (toggle off) and closes the subscription', async () => {
+  it('alt+y again exits the mode (toggle off) and closes the subscription', async () => {
     const { bus, stores } = setup();
     const { stdin } = render(<Harness stores={stores} bus={bus} />);
     await tick();
 
-    // ctrl+y enters the mode (via the default toggleTmux handler in useRootInput)
-    stdin.write(CTRL_Y);
+    // alt+y enters the mode (via the default toggleTmux handler in useRootInput)
+    stdin.write(ALT_Y);
     await tick();
     expect(selectActiveMode(stores.modes)?.id).toBe(TMUX_MODE_ID);
     expect(bus.subscriberCount).toBe(1); // subscription open
 
-    // ctrl+y again exits (passThrough lets it reach the global chord layer → toggleTmux → exit)
-    stdin.write(CTRL_Y);
+    // alt+y again exits (passThrough lets it reach the global chord layer → toggleTmux → exit)
+    stdin.write(ALT_Y);
     await tick();
     expect(selectActiveMode(stores.modes)).toBeNull(); // mode exited
     expect(bus.subscriberCount).toBe(0); // subscription closed — no leak
@@ -179,8 +179,8 @@ describe('TmuxMode — ctrl+y fullscreen tmux mode', () => {
     enter();
     await tick();
 
-    // ctrl+f would normally focus chat; with passThrough:true it still falls through to layer 1
-    // (global chords) which fires focusChat. So ctrl+f DOES work while tmux is up (by design: passThrough).
+    // alt+f would normally focus chat; with passThrough:true it still falls through to layer 1
+    // (global chords) which fires focusChat. So alt+f DOES work while tmux is up (by design: passThrough).
     // But a plain panel key like 'j' (not a global chord) does NOT fire since panel keymaps are layer 3.
     const beforeFocus = stores.focus.getState().intendedId;
     stdin.write('j'); // panel key — should be swallowed by mode (no passThrough to panel layer)
@@ -192,8 +192,8 @@ describe('TmuxMode — ctrl+y fullscreen tmux mode', () => {
   });
 });
 
-describe('ctrl+y dispatch — pure unit test (no rendering)', () => {
-  it('ctrl+y fires toggleTmux in the global-chord layer', () => {
+describe('alt+y dispatch — pure unit test (no rendering)', () => {
+  it('alt+y fires toggleTmux in the global-chord layer', () => {
     let toggleCalled = false;
     const ctx = {
       focusedId: 'chat' as const,
@@ -211,7 +211,7 @@ describe('ctrl+y dispatch — pure unit test (no rendering)', () => {
       },
       activeMode: null,
     };
-    const outcome = dispatchKey('y', makeKey({ ctrl: true }), ctx);
+    const outcome = dispatchKey('y', makeKey({ meta: true }), ctx);
     expect(outcome).toEqual({ layer: 'global', handled: true });
     expect(toggleCalled).toBe(true);
   });

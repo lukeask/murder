@@ -33,8 +33,9 @@ import { createAppStore } from './store/store.js';
  * real entrypoint, so a test can import this module and drive each path without spawning a run.
  */
 
-/** The panels seeded visible on startup so the shell paints both regions with live data. */
-const STARTUP_PANELS: readonly PanelId[] = ['plans', 'usage', 'crows'];
+/** Panels seeded visible on startup. Temporarily just `plans` to isolate the double-spacing repro to
+ * a single panel (all minimal-Ink probe variants render clean, so the artifact is app-specific). */
+const STARTUP_PANELS: readonly PanelId[] = ['plans'];
 
 /**
  * Read the bus socket path from `MURDER_BUS_SOCKET`. The Python launcher resolves the per-project
@@ -51,6 +52,20 @@ export function resolveSocketPath(env: NodeJS.ProcessEnv = process.env): string 
     );
   }
   return socketPath;
+}
+
+/**
+ * The current project/repo name for the top-bar branding, taken from `MURDER_PROJECT` (the launcher
+ * sets it to the repo directory name — the TUI's own cwd is unreliable, since in dev it runs from
+ * `inktui/`). Optional and purely cosmetic: a missing var just means the bar shows the bare `murder`
+ * mark with no project suffix, so this never fails the run.
+ */
+export function resolveProject(env: NodeJS.ProcessEnv = process.env): string | undefined {
+  const project = env['MURDER_PROJECT'];
+  if (project === undefined || project.trim().length === 0) {
+    return undefined;
+  }
+  return project.trim();
 }
 
 /**
@@ -79,7 +94,19 @@ export async function runLive(busFactory: () => BusClient = makeLiveBus): Promis
     primeSlices(store);
   }
 
-  const instance = render(<App store={store} inputStores={inputStores} bus={bus} />);
+  // `alternateScreen: true` is the keystone for a full-screen TUI: Ink draws on the terminal's
+  // alternate screen buffer (like vim/less/Textual), which has NO scrollback. Without it, Ink renders
+  // inline and erases by counting lines — once the frame fills the terminal height, writing the bottom
+  // line scrolls the viewport and Ink's next erase is off by a line, so every repaint leaves residue
+  // and full frames stack into scrollback. The alternate screen removes that failure mode entirely
+  // (and Ink also drops the trailing newline on fullscreen frames, avoiding the bottom-line scroll).
+  // Ink restores the primary screen + cursor on unmount, so exit is clean.
+  const instance = render(
+    <App store={store} inputStores={inputStores} bus={bus} project={resolveProject()} />,
+    {
+      alternateScreen: true,
+    },
+  );
   // No unmount-on-tick here (that was the smoke scaffold): the app stays mounted. Ink keeps the
   // process alive and resolves `waitUntilExit` when the user exits (ctrl+c by default).
   try {

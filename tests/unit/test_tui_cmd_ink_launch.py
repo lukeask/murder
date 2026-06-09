@@ -135,11 +135,13 @@ def test_spawn_sets_bus_socket_env(monkeypatch):
 
     monkeypatch.setattr(tui_cmd.subprocess, "run", _fake_run)
     socket_path = Path("/run/user/1000/murder/proj-abc/bus.sock")
-    rc = _spawn_ink(["node", "/x/index.js"], None, socket_path)
+    rc = _spawn_ink(["node", "/x/index.js"], None, socket_path, "murder")
 
     assert rc == 0
     assert captured["argv"] == ["node", "/x/index.js"]
     assert captured["env"]["MURDER_BUS_SOCKET"] == str(socket_path)
+    # The repo name rides along via MURDER_PROJECT for the top-bar branding.
+    assert captured["env"]["MURDER_PROJECT"] == "murder"
     assert captured["cwd"] is None
 
 
@@ -152,6 +154,6 @@ def test_spawn_passes_cwd_for_dev(monkeypatch):
 
     monkeypatch.setattr(tui_cmd.subprocess, "run", _fake_run)
     expected_rc = 3
-    rc = _spawn_ink(["tsx", "src/index.tsx"], Path("/repo/inktui"), Path("/s.sock"))
+    rc = _spawn_ink(["tsx", "src/index.tsx"], Path("/repo/inktui"), Path("/s.sock"), "murder")
     assert rc == expected_rc
     assert captured["cwd"] == "/repo/inktui"

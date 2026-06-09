@@ -263,7 +263,7 @@ export function ticketEditorMode(
     keymap: [
       // Dismiss / save — handled identically to confirmMode.
       { chord: { key: { escape: true } }, intent: 'dismiss', description: 'discard & close' },
-      { chord: { input: 's', key: { ctrl: true } }, intent: 'save', description: 'save & close' },
+      { chord: { input: 's', key: { meta: true } }, intent: 'save', description: 'save & close' },
       // Tab toggles the schedule field focus.
       { chord: { key: { tab: true } }, intent: 'toggleSchedule', description: 'schedule field' },
       // Arrow navigation (NORMAL line nav; mirrors j/k).

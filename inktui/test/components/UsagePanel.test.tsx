@@ -21,7 +21,7 @@ import { createInputStores } from '../../src/input/createInputStores.js';
 import { createAppStore } from '../../src/store/store.js';
 import type { ScheduleSnapshotReply } from '../../src/store/tickets/ticketsActions.js';
 
-const CTRL_F = '\x06';
+const ALT_F = '\x1bf';
 
 async function tick(): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, 20));
@@ -150,7 +150,7 @@ describe('UsagePanel — rendering', () => {
     expect(afterDown.indexOf('▌')).toBeGreaterThan(afterDown.indexOf('claude'));
 
     // Unfocus; k should not affect the cursor.
-    stdin.write(CTRL_F);
+    stdin.write(ALT_F);
     await tick();
     const beforeUnfocused = lastFrame() ?? '';
     stdin.write('k');

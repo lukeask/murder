@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import os
 import time
+import asyncio
+import contextlib
 from pathlib import Path
 
 from murder.runtime.terminal import tmux
@@ -14,6 +16,19 @@ from murder.llm.harnesses.results import SimpleResult, fail_result
 
 def _probe_session_name(prefix: str, kind: str) -> str:
     return f"murder_{prefix}_{kind}_{os.getpid()}_{time.monotonic_ns() % 1_000_000}"
+
+
+async def _cleanup_probe_session(session: str) -> Exception | None:
+    cleanup = asyncio.create_task(tmux.kill_session(session))
+    try:
+        await asyncio.shield(cleanup)
+    except asyncio.CancelledError:
+        with contextlib.suppress(Exception):
+            await cleanup
+        raise
+    except Exception as exc:  # noqa: BLE001
+        return exc
+    return None
 
 
 async def discover_harness_models(
@@ -55,13 +70,15 @@ async def discover_harness_models(
                 )
     except Exception as exc:
         result = fail_result(f"{kind} /models discovery probe failed: {exc}")
+    finally:
+        cleanup_error = await _cleanup_probe_session(session)
 
-    try:
-        await tmux.kill_session(session)
-    except Exception as exc:
+    if cleanup_error is not None:
         if result.ok:
-            return fail_result(f"{kind} /models discovery cleanup failed for {session}: {exc}")
-        return fail_result(f"{result.message}; cleanup also failed for {session}: {exc}")
+            return fail_result(
+                f"{kind} /models discovery cleanup failed for {session}: {cleanup_error}"
+            )
+        return fail_result(f"{result.message}; cleanup also failed for {session}: {cleanup_error}")
     return result
 
 
@@ -95,11 +112,13 @@ async def probe_invalid_harness_model(
                 )
     except Exception as exc:
         result = fail_result(f"{kind} invalid model probe failed: {exc}")
+    finally:
+        cleanup_error = await _cleanup_probe_session(session)
 
-    try:
-        await tmux.kill_session(session)
-    except Exception as exc:
+    if cleanup_error is not None:
         if result.ok:
-            return fail_result(f"{kind} invalid model probe cleanup failed for {session}: {exc}")
-        return fail_result(f"{result.message}; cleanup also failed for {session}: {exc}")
+            return fail_result(
+                f"{kind} invalid model probe cleanup failed for {session}: {cleanup_error}"
+            )
+        return fail_result(f"{result.message}; cleanup also failed for {session}: {cleanup_error}")
     return result

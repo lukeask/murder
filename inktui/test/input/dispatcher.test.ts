@@ -1,8 +1,8 @@
 /**
  * dispatcher tests — the layered dispatch decision, pure over synthesised key events. Covers the
- * three layers, the global chords (including `ctrl+<n>`, which a real terminal can't byte-encode but
- * the pure dispatcher routes on `key.ctrl + input`), and the rule that a panel's declared key fires
- * only when that panel is focused.
+ * three layers, the global chords (alt/meta-modified: the dispatcher routes on `key.meta + input`,
+ * chosen over ctrl because terminals can't byte-encode Ctrl+digit but DO send Alt+<key> as an
+ * ESC-prefixed `meta` event), and the rule that a panel's declared key fires only when focused.
  */
 
 import { describe, expect, it, vi } from 'vitest';
@@ -90,8 +90,8 @@ describe('layer 0 — active-mode capture', () => {
   it('SWALLOWS an unmatched key (no pass-through) — global chords suppressed under the modal', () => {
     onModeIntent.mockClear();
     const h = handlers();
-    // ctrl+1 would normally focus a panel; under a capturing modal it must NOT.
-    const out = dispatchKey('1', makeKey({ ctrl: true }), ctx('chat', h, {}, captureMode()));
+    // alt+1 would normally focus a panel; under a capturing modal it must NOT.
+    const out = dispatchKey('1', makeKey({ meta: true }), ctx('chat', h, {}, captureMode()));
     expect(h.focusPanel).not.toHaveBeenCalled();
     expect(onModeIntent).not.toHaveBeenCalled();
     expect(out).toEqual({ layer: 'mode', handled: false });
@@ -100,8 +100,8 @@ describe('layer 0 — active-mode capture', () => {
   it('falls through to lower layers when the mode declares pass-through', () => {
     onModeIntent.mockClear();
     const h = handlers();
-    // ctrl+1 unmatched by the mode, but pass-through is on → layer 1 fires.
-    const out = dispatchKey('1', makeKey({ ctrl: true }), ctx('chat', h, {}, captureMode(true)));
+    // alt+1 unmatched by the mode, but pass-through is on → layer 1 fires.
+    const out = dispatchKey('1', makeKey({ meta: true }), ctx('chat', h, {}, captureMode(true)));
     expect(h.focusPanel).toHaveBeenCalledWith('plans');
     expect(out).toEqual({ layer: 'global', handled: true });
   });
@@ -136,89 +136,89 @@ describe('layer 0 — active-mode capture', () => {
       },
     };
     const h = handlers();
-    // ctrl+1 unmatched; onUncaptured returns false; no pass-through → swallow (handled:false).
-    const out = dispatchKey('1', makeKey({ ctrl: true }), ctx('chat', h, {}, modeWithUncaptured));
+    // alt+1 unmatched; onUncaptured returns false; no pass-through → swallow (handled:false).
+    const out = dispatchKey('1', makeKey({ meta: true }), ctx('chat', h, {}, modeWithUncaptured));
     expect(h.focusPanel).not.toHaveBeenCalled(); // global chord suppressed by modal
     expect(out).toEqual({ layer: 'mode', handled: false });
   });
 });
 
 describe('layer 1 — global chords', () => {
-  it('ctrl+<n> focuses the mapped panel (1 → plans), even while chat is focused', () => {
+  it('alt+<n> focuses the mapped panel (1 → plans), even while chat is focused', () => {
     const h = handlers();
-    const out = dispatchKey('1', makeKey({ ctrl: true }), ctx(CHAT_FOCUS, h));
+    const out = dispatchKey('1', makeKey({ meta: true }), ctx(CHAT_FOCUS, h));
     expect(h.focusPanel).toHaveBeenCalledWith('plans');
     expect(out).toEqual({ layer: 'global', handled: true });
   });
 
-  it('ctrl+0 maps to crows (right region, screen-position mapping)', () => {
+  it('alt+0 maps to crows (right region, screen-position mapping)', () => {
     const h = handlers();
-    dispatchKey('0', makeKey({ ctrl: true }), ctx(CHAT_FOCUS, h));
+    dispatchKey('0', makeKey({ meta: true }), ctx(CHAT_FOCUS, h));
     expect(h.focusPanel).toHaveBeenCalledWith('crows');
   });
 
-  it('a reserved digit (ctrl+5) is a no-op', () => {
+  it('a reserved digit (alt+5) is a no-op', () => {
     const h = handlers();
-    const out = dispatchKey('5', makeKey({ ctrl: true }), ctx(CHAT_FOCUS, h));
+    const out = dispatchKey('5', makeKey({ meta: true }), ctx(CHAT_FOCUS, h));
     expect(h.focusPanel).not.toHaveBeenCalled();
     expect(out.layer).toBe('chat'); // falls through to the chat short-circuit
   });
 
-  it('ctrl+h/j/k/l navigate', () => {
+  it('alt+h/j/k/l navigate', () => {
     const h = handlers();
-    dispatchKey('h', makeKey({ ctrl: true }), ctx('plans', h));
-    dispatchKey('j', makeKey({ ctrl: true }), ctx('plans', h));
-    dispatchKey('k', makeKey({ ctrl: true }), ctx('plans', h));
-    dispatchKey('l', makeKey({ ctrl: true }), ctx('plans', h));
+    dispatchKey('h', makeKey({ meta: true }), ctx('plans', h));
+    dispatchKey('j', makeKey({ meta: true }), ctx('plans', h));
+    dispatchKey('k', makeKey({ meta: true }), ctx('plans', h));
+    dispatchKey('l', makeKey({ meta: true }), ctx('plans', h));
     expect(h.navigate.mock.calls.map((c) => c[0])).toEqual(['left', 'down', 'up', 'right']);
   });
 
-  it('ctrl+f focuses chat, ctrl+y toggles tmux', () => {
+  it('alt+f focuses chat, alt+y toggles tmux', () => {
     const h = handlers();
-    dispatchKey('f', makeKey({ ctrl: true }), ctx('plans', h));
-    dispatchKey('y', makeKey({ ctrl: true }), ctx('plans', h));
+    dispatchKey('f', makeKey({ meta: true }), ctx('plans', h));
+    dispatchKey('y', makeKey({ meta: true }), ctx('plans', h));
     expect(h.focusChat).toHaveBeenCalledOnce();
     expect(h.toggleTmux).toHaveBeenCalledOnce();
   });
 
-  it('ctrl+s spawns ONLY when chat is focused (C11 dual-purpose chord)', () => {
+  it('alt+s spawns ONLY when chat is focused (C11 dual-purpose chord)', () => {
     const h = handlers();
-    const out = dispatchKey('s', makeKey({ ctrl: true }), ctx(CHAT_FOCUS, h));
+    const out = dispatchKey('s', makeKey({ meta: true }), ctx(CHAT_FOCUS, h));
     expect(h.spawn).toHaveBeenCalledOnce();
     expect(out).toEqual({ layer: 'global', handled: true });
   });
 
-  it('ctrl+s does NOT spawn when a panel is focused — it falls through to the panel keymap', () => {
+  it('alt+s does NOT spawn when a panel is focused — it falls through to the panel keymap', () => {
     const h = handlers();
     const onIntent = vi.fn();
-    // A panel that declares ctrl+s → star (the C11 generalized starring pattern).
+    // A panel that declares alt+s → star (the C11 generalized starring pattern).
     const starKeymap: PanelKeymap = {
-      keymap: [{ chord: { input: 's', key: { ctrl: true } }, intent: 'star', description: 'star' }],
+      keymap: [{ chord: { input: 's', key: { meta: true } }, intent: 'star', description: 'star' }],
       onIntent,
     };
-    const out = dispatchKey('s', makeKey({ ctrl: true }), ctx('plans', h, { plans: starKeymap }));
-    expect(h.spawn).not.toHaveBeenCalled(); // global layer declined ctrl+s
+    const out = dispatchKey('s', makeKey({ meta: true }), ctx('plans', h, { plans: starKeymap }));
+    expect(h.spawn).not.toHaveBeenCalled(); // global layer declined alt+s
     expect(onIntent).toHaveBeenCalledWith('star'); // layer 3 (panel keymap) handled it
     expect(out).toEqual({ layer: 'panel', handled: true });
   });
 
-  it('ctrl+p fires newPlan (C12 new-plan chord)', () => {
+  it('alt+p fires newPlan (C12 new-plan chord)', () => {
     const h = handlers();
-    const out = dispatchKey('p', makeKey({ ctrl: true }), ctx('plans', h));
+    const out = dispatchKey('p', makeKey({ meta: true }), ctx('plans', h));
     expect(h.newPlan).toHaveBeenCalledOnce();
     expect(out).toEqual({ layer: 'global', handled: true });
   });
 
-  it('ctrl+t fires newTicket (C12 new-ticket chord)', () => {
+  it('alt+t fires newTicket (C12 new-ticket chord)', () => {
     const h = handlers();
-    const out = dispatchKey('t', makeKey({ ctrl: true }), ctx('plans', h));
+    const out = dispatchKey('t', makeKey({ meta: true }), ctx('plans', h));
     expect(h.newTicket).toHaveBeenCalledOnce();
     expect(out).toEqual({ layer: 'global', handled: true });
   });
 
-  it('a plain (non-ctrl) char is not a global chord', () => {
+  it('a plain (non-alt) char is not a global chord', () => {
     const h = handlers();
-    const out = dispatchKey('1', makeKey({ ctrl: false }), ctx(CHAT_FOCUS, h));
+    const out = dispatchKey('1', makeKey({ meta: false }), ctx(CHAT_FOCUS, h));
     expect(h.focusPanel).not.toHaveBeenCalled();
     expect(out.layer).toBe('chat');
   });

@@ -21,8 +21,8 @@ import { createInputStores } from '../../src/input/createInputStores.js';
 import type { NotesSnapshotReply } from '../../src/store/notes/notesActions.js';
 import { createAppStore } from '../../src/store/store.js';
 
-const CTRL_F = '\x06';
-const CTRL_S = '\x13';
+const ALT_F = '\x1bf';
+const ALT_S = '\x1bs';
 
 async function tick(): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, 20));
@@ -75,7 +75,7 @@ async function setup(reply: NotesSnapshotReply = twoNotes(), focused = true) {
   fake.stubRpc('state.notes_snapshot', reply);
   // Also stub state.crow_snapshot so createAppStore doesn't choke on any stray event.
   fake.stubRpc('state.crow_snapshot', { invalidation_key: 'iv', sessions: [] });
-  // C11: the favorites prefs RPC (modeled-not-live) — stub so ctrl+s star persistence resolves.
+  // C11: the favorites prefs RPC (modeled-not-live) — stub so alt+s star persistence resolves.
   fake.stubRpc('tui.save_favorites', { ok: true, favorites: [] });
   const { store, dispose } = createAppStore(fake);
   await store.getState().actions.notes.refresh();
@@ -124,8 +124,8 @@ describe('NotesPanel', () => {
     const afterDown = lastFrame() ?? '';
     expect(afterDown.indexOf('▌')).toBeGreaterThan(afterDown.indexOf('alpha-note'));
 
-    // Unfocus: ctrl+f → chat; 'k' no longer routes to the panel.
-    stdin.write(CTRL_F);
+    // Unfocus: alt+f → chat; 'k' no longer routes to the panel.
+    stdin.write(ALT_F);
     await tick();
     expect(inputStores.focus.getState().intendedId).toBe('chat');
     const beforeUnfocused = lastFrame() ?? '';
@@ -146,7 +146,7 @@ describe('NotesPanel', () => {
     dispose();
   });
 
-  it('ctrl+s stars the highlighted note: prefs RPC fires, star marker shows, sorts to top (C11)', async () => {
+  it('alt+s stars the highlighted note: prefs RPC fires, star marker shows, sorts to top (C11)', async () => {
     // bravo-note is the older note (sorts second by recency). Move the cursor to it and star it;
     // it must jump to the top with a ★ marker, and tui.save_favorites must fire with its id.
     const { fake, store, inputStores, dispose } = await setup(twoNotes(), true);
@@ -156,8 +156,8 @@ describe('NotesPanel', () => {
     // Cursor starts on alpha-note (most recent). Press j to move to bravo-note.
     stdin.write('j');
     await tick();
-    // ctrl+s stars the highlighted (bravo) note — routed to the panel keymap (chat isn't focused).
-    stdin.write(CTRL_S);
+    // alt+s stars the highlighted (bravo) note — routed to the panel keymap (chat isn't focused).
+    stdin.write(ALT_S);
     await tick();
 
     // Prefs persistence fired with bravo-note's id (the star-toggle + prefs-RPC DoD).

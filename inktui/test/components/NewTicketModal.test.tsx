@@ -1,5 +1,5 @@
 /**
- * NewTicketModal tests — verifies the `ctrl+t` new-ticket modal mode against the C7M idiom.
+ * NewTicketModal tests — verifies the `alt+t` new-ticket modal mode against the C7M idiom.
  *
  * Copy recipe (mirrors ConfirmModal.test.tsx — identical harness structure):
  *  1. Build input stores with a panel focused, enter the mode imperatively.
@@ -75,7 +75,7 @@ function errorToasts() {
   return live.filter((t) => t.severity === 'error');
 }
 
-describe('NewTicketModal — ctrl+t new-ticket dialog', () => {
+describe('NewTicketModal — alt+t new-ticket dialog', () => {
   // The toast singleton is shared global state; reset it between cases (toastStore's own idiom).
   beforeEach(() => {
     toastStore.getState().clear();
@@ -222,20 +222,20 @@ describe('NewTicketModal — ctrl+t new-ticket dialog', () => {
     expect(errorToasts()).toHaveLength(0);
   });
 
-  it('captures exclusively: ctrl+f does NOT focus chat while the modal is up', async () => {
+  it('captures exclusively: alt+f does NOT focus chat while the modal is up', async () => {
     const { stores, enter } = setup();
     const { stdin } = render(<Harness stores={stores} />);
     enter();
     await tick();
 
-    // ctrl+f (\x06) would normally focus chat; must be swallowed under the modal.
-    stdin.write('\x06');
+    // alt+f (\x1bf) would normally focus chat; must be swallowed under the modal.
+    stdin.write('\x1bf');
     await tick();
     expect(stores.focus.getState().intendedId).toBe('tickets'); // focus unmoved
     expect(selectActiveMode(stores.modes)?.id).toBe(NEW_TICKET_MODE_ID); // modal still up
   });
 
-  it('ctrl+u clears the field', async () => {
+  it('alt+u clears the field', async () => {
     const { stores, enter } = setup();
     const { lastFrame, stdin } = render(<Harness stores={stores} />);
     enter();
@@ -247,7 +247,7 @@ describe('NewTicketModal — ctrl+t new-ticket dialog', () => {
     await tick();
     expect(lastFrame()).toContain('abc');
 
-    stdin.write('\x15'); // ctrl+u
+    stdin.write('\x1bu'); // alt+u
     await tick();
     expect(lastFrame()).not.toContain('abc');
     // The placeholder should appear again.

@@ -27,7 +27,7 @@ import { createInputStores } from '../../src/input/createInputStores.js';
 import type { CrowSnapshotReply } from '../../src/store/roster/rosterActions.js';
 import { createAppStore } from '../../src/store/store.js';
 
-const CTRL_F = '\x06'; // ctrl+f → focus chat (representable in a terminal; ctrl+digit is not)
+const ALT_F = '\x1bf'; // alt+f → focus chat (representable in a terminal; ctrl+digit is not)
 
 /** Let Ink flush a render + the post-layout measure/keymap-registration effects. */
 async function tick(): Promise<void> {
@@ -146,7 +146,7 @@ describe('RosterPanel — reference panel', () => {
     expect(afterDown.indexOf('▌')).toBeGreaterThan(afterDown.indexOf('alpha'));
 
     // Move focus to chat; 'j' now goes to the input, not the panel → cursor is unchanged.
-    stdin.write(CTRL_F);
+    stdin.write(ALT_F);
     await tick();
     expect(inputStores.focus.getState().intendedId).toBe('chat');
     const beforeUnfocused = lastFrame() ?? '';

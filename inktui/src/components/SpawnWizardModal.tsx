@@ -379,7 +379,7 @@ export function spawnWizardMode(
       { chord: { key: { upArrow: true } }, intent: 'cursorUp', description: 'prev option' },
       { chord: { key: { return: true } }, intent: 'confirm', description: 'confirm' },
       { chord: { key: { backspace: true } }, intent: 'backspace', description: 'delete char' },
-      { chord: { input: 'u', key: { ctrl: true } }, intent: 'deleteAll', description: 'clear' },
+      { chord: { input: 'u', key: { meta: true } }, intent: 'deleteAll', description: 'clear' },
       { chord: { key: { escape: true } }, intent: 'dismiss', description: 'cancel' },
     ],
     onIntent(intent) {

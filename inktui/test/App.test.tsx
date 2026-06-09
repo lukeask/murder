@@ -41,7 +41,7 @@ describe('App shell', () => {
     expect(frame).toContain('plans₁');
     expect(frame).toContain('crows₀');
     // Chat input is always visible — even with no panels toggled on.
-    expect(frame).toContain('message the collaborator');
+    expect(frame).toContain('type a message');
     // Bottom bar: the global hints are always present.
     expect(frame).toContain('chat');
     dispose();

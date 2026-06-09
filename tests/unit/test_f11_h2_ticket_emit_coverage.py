@@ -267,6 +267,69 @@ def test_recovery_force_fail_runs_before_bus_exists_so_cannot_emit(repo_root: Pa
     _ = _lc  # imported for documentation context
 
 
+def test_startup_recovery_marks_planners_dead_even_when_tmux_session_exists(repo_root: Path) -> None:
+    """Planner agents are process-lifetime only.
+
+    If the service goes down and later starts back up, old planner tmux sessions
+    must not be treated as resumed live planners. They stay alive while the
+    service is running, but startup recovery marks persisted planner rows dead
+    and asks Runtime.start() to kill the carried-over tmux sessions.
+    """
+    from murder.app.service import recovery
+    from murder.state.persistence.agents import upsert_agent
+
+    conn = get_db(repo_root / ".murder" / "murder.db")
+    init_db(conn)
+    upsert_agent(
+        conn,
+        agent_id="planner-alpha",
+        role="planner",
+        ticket_id=None,
+        session="murder_demo_planner_alpha",
+        status="idle",
+    )
+    upsert_agent(
+        conn,
+        agent_id="planning_handler-alpha",
+        role="planning_handler",
+        ticket_id=None,
+        session="murder_demo_planning_handler_alpha",
+        status="running",
+    )
+    upsert_agent(
+        conn,
+        agent_id="collaborator",
+        role="collaborator",
+        ticket_id=None,
+        session="murder_demo_collaborator",
+        status="idle",
+    )
+
+    report = recovery.reconcile_agents_vs_tmux(
+        conn,
+        {
+            "murder_demo_planner_alpha",
+            "murder_demo_planning_handler_alpha",
+            "murder_demo_collaborator",
+        },
+    )
+
+    assert report.agents_marked_dead == ["planner-alpha", "planning_handler-alpha"]
+    assert report.sessions_to_kill == [
+        "murder_demo_planner_alpha",
+        "murder_demo_planning_handler_alpha",
+    ]
+    rows = {
+        row["agent_id"]: row["status"]
+        for row in conn.execute(
+            "SELECT agent_id, status FROM agents ORDER BY agent_id"
+        ).fetchall()
+    }
+    assert rows["planner-alpha"] == "dead"
+    assert rows["planning_handler-alpha"] == "dead"
+    assert rows["collaborator"] == "idle"
+
+
 # === documented-behavior site: CLI retry (separate process, no bus) ==========
 
 

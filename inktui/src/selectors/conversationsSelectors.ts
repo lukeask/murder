@@ -360,3 +360,45 @@ export function selectActiveAgentId(
   const { panes } = selectFavoritesChatPanes(rosterState, favorites);
   return panes.length > 0 ? (panes[0]?.agentId ?? null) : null;
 }
+
+/**
+ * The currently-targeted agent's identity (label + kind), for the chat input to display *who a typed
+ * message will go to*. Resolves the active `agentId` via {@link selectActiveAgentId}, then maps it
+ * back to its roster row → {@link AgentIdentity} (carrying the human label). Returns `null` when there
+ * is no target (empty roster) — the chat input then shows its neutral placeholder.
+ *
+ * Falls back to a synthetic collaborator-shaped identity (label = the raw id) if the active id is set
+ * but no longer in the roster, so a pinned-but-departed target still names itself rather than vanish.
+ */
+export function selectActiveAgent(
+  conversationsState: ConversationsState,
+  rosterState: RosterState,
+  favorites: FavoritesState = NO_FAVORITES,
+): AgentIdentity | null {
+  const agentId = selectActiveAgentId(conversationsState, rosterState, favorites);
+  if (agentId === null) {
+    return null;
+  }
+  for (const row of rosterState.rows) {
+    if (row.agentId === agentId) {
+      const identity = deriveAgentIdentity(row);
+      if (identity !== null) {
+        return identity;
+      }
+    }
+  }
+  return { kind: 'collaborator', agentId, label: agentId };
+}
+
+/** Memoised hook for the active chat target's identity — re-runs when conversations/roster/favorites
+ * ref-change. Used by the {@link ../components/ChatInput.js ChatInput} to label its target. */
+export function useActiveAgent(
+  conversationsState: ConversationsState,
+  rosterState: RosterState,
+  favorites: FavoritesState = NO_FAVORITES,
+): AgentIdentity | null {
+  return useMemo(
+    () => selectActiveAgent(conversationsState, rosterState, favorites),
+    [conversationsState, rosterState, favorites],
+  );
+}

@@ -6,7 +6,7 @@
  *  - Editor opens via `enter` key on the TicketsPanel (the 'open' intent path), not a dev button.
  *  - The body renders in the overlay slot (below the panels in Shell's Box tree).
  *  - After entering the mode, a panel chord (`j`) must NOT fire (exclusive capture).
- *  - Save path: `ctrl+s` calls `onIntent('save')`; dismiss path: `Esc` calls `onIntent('dismiss')`.
+ *  - Save path: `alt+s` calls `onIntent('save')`; dismiss path: `Esc` calls `onIntent('dismiss')`.
  *  - Focus is restored after dismiss (the C7M primitive's job).
  *
  * What this test covers:
@@ -15,7 +15,7 @@
  *  3. A panel key (`j`) does NOT move the cursor while the editor mode is active (exclusive capture).
  *  4. Checklist toggle: `x` in NORMAL mode on a `- [ ]` line toggles it to `- [x]`.
  *  5. Dismiss: `Esc` from NORMAL mode dismisses the editor; focus is restored to the tickets panel.
- *  6. Save: `ctrl+s` dismisses + calls `saveBody` (asserted by spying on the action).
+ *  6. Save: `alt+s` dismisses + calls `saveBody` (asserted by spying on the action).
  */
 
 import { Box } from 'ink';
@@ -34,7 +34,7 @@ import { createAppStore } from '../../src/store/store.js';
 import type { TicketDetailReply } from '../../src/store/ticketDetail/ticketDetailActions.js';
 import type { ScheduleSnapshotReply } from '../../src/store/tickets/ticketsActions.js';
 
-const CTRL_S = '\x13';
+const ALT_S = '\x1bs';
 const ESC = '\x1b';
 const RETURN = '\r';
 
@@ -144,7 +144,7 @@ describe('TicketEditorMode — in-layout editor mode', () => {
   });
 
   it('layer-0 swallows global chords while editor is active (exclusive capture proof)', async () => {
-    // `ctrl+f` is the `focusChat` global chord — if layer 0 swallows it, focus stays on
+    // `alt+f` is the `focusChat` global chord — if layer 0 swallows it, focus stays on
     // 'tickets'; if capture were broken the chord would fire and flip intendedId to 'chat'.
     // This is the unambiguous capture assertion the C7M recipe requires.
     const { store, inputStores, dispose } = await setup();
@@ -160,7 +160,7 @@ describe('TicketEditorMode — in-layout editor mode', () => {
     await tick();
     expect(selectActiveMode(inputStores.modes)?.id).toBe('ticket-editor');
 
-    // While the editor is active, write ctrl+f (\x06) — the focusChat global chord.
+    // While the editor is active, write alt+f (\x06) — the focusChat global chord.
     // Layer 0 must swallow it; focus must remain 'tickets'.
     stdin.write('\x06');
     await tick();
@@ -168,7 +168,7 @@ describe('TicketEditorMode — in-layout editor mode', () => {
     // If layer 0 capture works: intendedId is still 'tickets'.
     // If capture were broken: focusChat() would have fired → 'chat'.
     expect(inputStores.focus.getState().intendedId).toBe('tickets');
-    // Mode is still active (ctrl+f didn't pop it).
+    // Mode is still active (alt+f didn't pop it).
     expect(selectActiveMode(inputStores.modes)?.id).toBe('ticket-editor');
 
     void store; // used by setup
@@ -199,7 +199,7 @@ describe('TicketEditorMode — in-layout editor mode', () => {
     dispose();
   });
 
-  it('ctrl+s saves the body and dismisses the editor', async () => {
+  it('alt+s saves the body and dismisses the editor', async () => {
     const { fake, store, inputStores, dispose } = await setup();
     const { stdin } = render(<Harness store={store} inputStores={inputStores} />);
     await tick();
@@ -210,8 +210,8 @@ describe('TicketEditorMode — in-layout editor mode', () => {
     await tick();
     expect(selectActiveMode(inputStores.modes)?.id).toBe('ticket-editor');
 
-    // ctrl+s triggers onIntent('save') → exit + saveBody.
-    stdin.write(CTRL_S);
+    // alt+s triggers onIntent('save') → exit + saveBody.
+    stdin.write(ALT_S);
     await tick();
     await tick();
 

@@ -48,7 +48,10 @@ const PlanEntry = memo(function PlanEntry({
   const marker = selected ? '▌' : ' ';
   const star = row.starred ? '★ ' : '';
   return (
-    <Box flexDirection="column">
+    // `flexShrink={0}`: when the list overflows the panel's clamped height, Yoga must NOT shrink the
+    // entries to fit (that drops/samples rows — "every ~3rd line shown"). With shrink off, each entry
+    // keeps height 2 and the overflow is clipped to a contiguous top slice. (Real windowing later.)
+    <Box flexDirection="column" flexShrink={0}>
       <Text inverse={selected} wrap="truncate">
         {`${marker} ${star}${row.name}`}
       </Text>
@@ -123,7 +126,7 @@ export const PlansPanel = memo(function PlansPanel(): React.JSX.Element {
         { chord: { input: 'j' }, intent: 'cursorDown', description: 'next plan' },
         { chord: { input: 'k' }, intent: 'cursorUp', description: 'prev plan' },
         { chord: { input: 'r' }, intent: 'refresh', description: 'refresh' },
-        { chord: { input: 's', key: { ctrl: true } }, intent: 'star', description: 'star' },
+        { chord: { input: 's', key: { meta: true } }, intent: 'star', description: 'star' },
         { chord: { key: { return: true } }, intent: 'open', description: 'view doc' },
       ],
       onIntent(intent) {

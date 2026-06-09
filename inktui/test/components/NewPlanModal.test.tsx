@@ -1,5 +1,5 @@
 /**
- * NewPlanModal tests — verifies the `ctrl+p` new-plan modal mode against the C7M idiom.
+ * NewPlanModal tests — verifies the `alt+p` new-plan modal mode against the C7M idiom.
  *
  * Copy recipe (mirrors ConfirmModal.test.tsx):
  *  1. Build input stores, enter the mode imperatively.
@@ -7,7 +7,7 @@
  *     restored.
  *  3. Esc dismisses without firing RPC.
  *  4. Panel chord does NOT fire while the modal is up (exclusive capture).
- *  5. Pure dispatcher test: ctrl+p fires `newPlan` handler, ctrl+t fires `newTicket` handler.
+ *  5. Pure dispatcher test: alt+p fires `newPlan` handler, alt+t fires `newTicket` handler.
  */
 
 import { render } from 'ink-testing-library';
@@ -88,7 +88,7 @@ function errorToasts() {
   return live.filter((t) => t.severity === 'error');
 }
 
-describe('NewPlanModal — ctrl+p new-plan dialog', () => {
+describe('NewPlanModal — alt+p new-plan dialog', () => {
   // The toast singleton is shared global state; reset it between cases (toastStore's own idiom).
   beforeEach(() => {
     toastStore.getState().clear();
@@ -276,41 +276,41 @@ describe('NewPlanModal — ctrl+p new-plan dialog', () => {
   });
 });
 
-describe('global chords — ctrl+p and ctrl+t', () => {
-  it('ctrl+p fires the newPlan handler', async () => {
+describe('global chords — alt+p and alt+t', () => {
+  it('alt+p fires the newPlan handler', async () => {
     const stores = createInputStores(['tickets'], 'tickets');
     const newPlanFn = vi.fn();
     const { stdin } = render(<Harness stores={stores} newPlan={newPlanFn} />);
     await tick();
 
-    // ctrl+p = \x10
-    stdin.write('\x10');
+    // alt+p = \x1bp
+    stdin.write('\x1bp');
     await tick();
     expect(newPlanFn).toHaveBeenCalledOnce();
   });
 
-  it('ctrl+t fires the newTicket handler', async () => {
+  it('alt+t fires the newTicket handler', async () => {
     const stores = createInputStores(['tickets'], 'tickets');
     const newTicketFn = vi.fn();
     const { stdin } = render(<Harness stores={stores} newTicket={newTicketFn} />);
     await tick();
 
-    // ctrl+t = \x14
-    stdin.write('\x14');
+    // alt+t = \x1bt
+    stdin.write('\x1bt');
     await tick();
     expect(newTicketFn).toHaveBeenCalledOnce();
   });
 
-  it('ctrl+p does NOT fire while the new-plan modal is up (exclusive capture)', async () => {
+  it('alt+p does NOT fire while the new-plan modal is up (exclusive capture)', async () => {
     const { stores, enter } = setup();
     const newPlanFn = vi.fn();
     const { stdin } = render(<Harness stores={stores} newPlan={newPlanFn} />);
     enter();
     await tick();
 
-    stdin.write('\x10'); // ctrl+p
+    stdin.write('\x1bp'); // alt+p
     await tick();
-    // The modal is up (its onUncaptured gets \x10 with ctrl=true → returns false → swallowed).
+    // The modal is up (its onUncaptured gets \x1bp with meta=true → returns false → swallowed).
     // newPlanFn must NOT have been called.
     expect(newPlanFn).not.toHaveBeenCalled();
     expect(selectActiveMode(stores.modes)?.id).toBe(NEW_PLAN_MODE_ID);

@@ -52,9 +52,9 @@ export interface BottomBarHint {
 /** The always-present global hints — the chords the root dispatcher owns regardless of focus. Shown
  * first so the navigation keys are always discoverable. */
 const GLOBAL_HINTS: readonly BottomBarHint[] = [
-  { key: '^1–0', description: 'panels' },
-  { key: '^hjkl', description: 'nav' },
-  { key: '^f', description: 'chat' },
+  { key: 'alt+1–0', description: 'panels' },
+  { key: 'alt+hjkl', description: 'nav' },
+  { key: 'alt+f', description: 'chat' },
 ];
 
 /** Render a chord's key for the hint bar: prefer its printable char, else name the special key. */
