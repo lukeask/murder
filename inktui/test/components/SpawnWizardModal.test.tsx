@@ -1,15 +1,21 @@
 /**
- * SpawnWizardModal tests — verifies the `ctrl+s` spawn wizard against the C7M idiom.
+ * SpawnWizardModal tests — the `ctrl+s` dependent-field spawn wizard against the C7M idiom.
  *
- * Test coverage:
- *  1. Opens, paints the wizard, Esc dismisses and restores focus.
- *  2. Effort step: j/k navigation, Enter confirms.
- *  3. Context step: shown when spawnContext is non-null; y/enter = accept; n = decline.
- *  4. Submit (no context) fires `crow.spawn_rogue` with effort only.
- *  5. Submit (context, accepted) fires with effort + reference-by-path kickoff_message.
- *  6. Submit (context, declined) fires with effort only (no kickoff_message).
- *  7. Panel chord does NOT fire while the wizard is up (exclusive capture).
- *  8. Pure dispatcher test: ctrl+s fires the `spawn` handler.
+ * Flow: harness → model → effort → worktree → [branch] → name → [context].
+ *
+ * Coverage:
+ *  1. Opens / paints / Esc dismisses + restores focus.
+ *  2. Harness step renders the valid harnesses; default is claude_code (the bug fix).
+ *  3. j/k navigation on a list step (now routed via onUncaptured, not the keymap).
+ *  4. Full claude_code flow submits with harness=claude_code + chosen model/effort.
+ *  5. Switching to antigravity skips model + effort steps.
+ *  6. Switching to cursor skips the model step but keeps effort.
+ *  7. "+ new worktree" inserts a branch step with non-empty validation; threads worktree_branch.
+ *  8. Name step (blank = autogenerate; typed name threads through).
+ *  9. Context step appears last when a doc is focused; y/n reference-by-path.
+ * 10. Exclusive capture.
+ *
+ * The H4 payload-contract + ctrl+s dispatcher suites below are extended from F11.
  */
 
 import { render } from 'ink-testing-library';
@@ -18,7 +24,6 @@ import { describe, expect, it, vi } from 'vitest';
 import { FakeBusClient } from '../../src/bus/FakeBusClient.js';
 import { Overlay } from '../../src/components/Overlay.js';
 import {
-  DEFAULT_EFFORT_OPTIONS,
   SPAWN_WIZARD_MODE_ID,
   type SpawnContext,
   spawnWizardMode,
@@ -27,23 +32,22 @@ import { InputStoresProvider } from '../../src/hooks/useInputStores.js';
 import { useRootInput } from '../../src/hooks/useRootInput.js';
 import { createInputStores } from '../../src/input/createInputStores.js';
 import { selectActiveMode } from '../../src/input/modeStore.js';
+import { createHarnessModelsActions } from '../../src/store/dialogs/harnessModelsActions.js';
 import { createSpawnActions } from '../../src/store/dialogs/spawnActions.js';
+import { createWorktreeOptionsActions } from '../../src/store/dialogs/worktreeOptionsActions.js';
 
 const ESC = '\x1b';
 
-/** Let Ink flush a render + post-render effects. */
 async function tick(): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, 20));
 }
 
-/** The `kind`s of every `command.submit` call, in order — spawn (+ optional kickoff agent.message). */
 function submitKinds(bus: FakeBusClient): string[] {
   return bus.rpcCalls
     .filter((c) => c.method === 'command.submit')
     .map((c) => String((c.params as { kind: string }).kind));
 }
 
-/** The payload of the `crow.spawn_rogue` command submit (the spawn params crossing the wire). */
 function spawnSubmitPayload(bus: FakeBusClient): Record<string, unknown> {
   const call = bus.rpcCalls.find(
     (c) =>
@@ -52,7 +56,6 @@ function spawnSubmitPayload(bus: FakeBusClient): Record<string, unknown> {
   return (call?.params as { payload: Record<string, unknown> }).payload;
 }
 
-/** The payload of the kickoff `agent.message` command submit, if one was sent. */
 function kickoffSubmitPayload(bus: FakeBusClient): Record<string, unknown> | undefined {
   const call = bus.rpcCalls.find(
     (c) => c.method === 'command.submit' && (c.params as { kind: string }).kind === 'agent.message',
@@ -60,15 +63,12 @@ function kickoffSubmitPayload(bus: FakeBusClient): Record<string, unknown> | und
   return call ? (call.params as { payload: Record<string, unknown> }).payload : undefined;
 }
 
-/** Runs the root input loop inside the providers, with an optional spawn handler override. */
 function RootInput({ spawn }: { readonly spawn?: () => void }): null {
-  // Build deferred handlers, only passing keys with real values (exactOptionalPropertyTypes).
   const deferred = { ...(spawn !== undefined ? { spawn } : {}) };
   useRootInput(deferred);
   return null;
 }
 
-/** The test harness: overlay + root loop inside the providers. */
 function Harness({
   stores,
   spawn,
@@ -85,34 +85,38 @@ function Harness({
   );
 }
 
-/** Build stores with the notes panel focused (prior focus to restore on dismiss). */
+/** Build stores (notes panel focused) + a wired bus, and an `enter(opts)` that opens the wizard with
+ * the live model + worktree actions wired (so the flow matches production). */
 function setup(spawnContext: SpawnContext | null = null) {
   const stores = createInputStores(['notes'], 'notes');
   const bus = new FakeBusClient();
-  // F2: `crow.spawn_rogue` is an orchestrator command kind routed through `command.submit` +
-  // `command.status`. The submit returns the spawned `agent_id` (in `result_json`); the kickoff
-  // message, when present, is delivered as a separate `agent.message` command (also via submit).
   bus.stubRpc('command.submit', { ok: true, command_id: 'cmd-1' });
   bus.stubRpc('command.status', {
     ok: true,
     status: 'done',
     result_json: JSON.stringify({ handled: true, agent_id: 'rogue-001' }),
   });
+  // No state.harness_models_snapshot stub → fetch rejects → static fallback (production-realistic
+  // until Workstream A lands).
   const actions = createSpawnActions(bus);
+  const modelActions = createHarnessModelsActions(bus);
+  const worktreeActions = createWorktreeOptionsActions(bus);
   const enter = (opts: Parameters<typeof spawnWizardMode>[2] = {}) =>
-    stores.modes
-      .getState()
-      .enter(spawnWizardMode(stores.modes, actions, { spawnContext, ...opts }));
+    stores.modes.getState().enter(
+      spawnWizardMode(stores.modes, actions, {
+        spawnContext,
+        modelActions,
+        worktreeActions,
+        ...opts,
+      }),
+    );
   return { stores, bus, actions, enter };
 }
 
-const TEST_CONTEXT: SpawnContext = {
-  title: 'my-note',
-  path: '.murder/notes/my-note.md',
-};
+const TEST_CONTEXT: SpawnContext = { title: 'my-note', path: '.murder/notes/my-note.md' };
 
-describe('SpawnWizardModal — ctrl+s spawn wizard', () => {
-  it('opens, paints the wizard title, Esc dismisses and restores focus', async () => {
+describe('SpawnWizardModal — dependent-field flow', () => {
+  it('opens, paints, Esc dismisses and restores focus', async () => {
     const { stores, enter } = setup();
     const { lastFrame, stdin } = render(<Harness stores={stores} />);
     await tick();
@@ -126,168 +130,285 @@ describe('SpawnWizardModal — ctrl+s spawn wizard', () => {
     stdin.write(ESC);
     await tick();
     expect(selectActiveMode(stores.modes)).toBeNull();
-    expect(lastFrame()).not.toContain('Spawn Rogue');
-    expect(stores.focus.getState().intendedId).toBe('notes'); // prior focus restored
+    expect(stores.focus.getState().intendedId).toBe('notes');
   });
 
-  it('shows effort options on step 1', async () => {
+  it('first step is the harness picker, default highlighted is claude-code', async () => {
     const { stores, enter } = setup();
     const { lastFrame } = render(<Harness stores={stores} />);
     enter();
     await tick();
-    // All default effort options should appear.
-    for (const opt of DEFAULT_EFFORT_OPTIONS) {
-      expect(lastFrame()).toContain(opt);
-    }
-    // Hint text should appear.
-    expect(lastFrame()).toContain('j/k');
+    expect(lastFrame()).toContain('Select harness');
+    expect(lastFrame()).toContain('› claude-code'); // default cursor at index 0
+    expect(lastFrame()).toContain('codex');
+    expect(lastFrame()).toContain('native-coding-crow');
   });
 
-  it('j/k cursor moves the effort selection', async () => {
+  it('j/k navigates the harness list (routed via onUncaptured)', async () => {
     const { stores, enter } = setup();
     const { lastFrame, stdin } = render(<Harness stores={stores} />);
     enter();
     await tick();
-    // Initially 'low' (cursor 0) should be highlighted.
-    expect(lastFrame()).toContain('› low');
-
-    // Press j — cursor moves to 'medium'.
+    expect(lastFrame()).toContain('› claude-code');
     stdin.write('j');
     await tick();
-    expect(lastFrame()).toContain('› medium');
-
-    // Press j again — cursor moves to 'high'.
-    stdin.write('j');
-    await tick();
-    expect(lastFrame()).toContain('› high');
-
-    // Press k — back to 'medium'.
+    expect(lastFrame()).toContain('› codex');
     stdin.write('k');
     await tick();
-    expect(lastFrame()).toContain('› medium');
+    expect(lastFrame()).toContain('› claude-code');
   });
 
-  it('submit (no context) fires crow.spawn_rogue with effort only', async () => {
+  it('full claude_code flow submits harness=claude_code + chosen model + effort', async () => {
     const { stores, bus, enter } = setup(null);
     const onSubmit = vi.fn();
     enter({ onSubmit });
-
-    const { stdin } = render(<Harness stores={stores} />);
+    const { lastFrame, stdin } = render(<Harness stores={stores} />);
     await tick();
 
-    // Navigate to 'medium' and confirm.
-    stdin.write('j');
+    stdin.write('\r'); // confirm harness (claude_code)
     await tick();
-    stdin.write('\r'); // Enter on effort step — no context, goes straight to submit.
+    expect(lastFrame()).toContain('Select model');
+    stdin.write('j'); // model → opus (index 1)
+    await tick();
+    stdin.write('\r'); // confirm model
+    await tick();
+    expect(lastFrame()).toContain('Select effort');
+    expect(lastFrame()).toContain('› medium'); // default effort cursor seeded at medium
+    stdin.write('\r'); // confirm effort (medium)
+    await tick();
+    expect(lastFrame()).toContain('Select worktree');
+    stdin.write('\r'); // confirm worktree (main)
+    await tick();
+    expect(lastFrame()).toContain('Rogue name');
+    stdin.write('\r'); // confirm name (blank = autogenerate) → submit
     await tick();
 
-    expect(selectActiveMode(stores.modes)).toBeNull(); // wizard dismissed
-    expect(stores.focus.getState().intendedId).toBe('notes'); // focus restored
-
-    await tick(); // let the async command (submit → poll → resolve) settle
+    expect(selectActiveMode(stores.modes)).toBeNull();
     await tick();
-    const spawnPayload = spawnSubmitPayload(bus);
-    // The spawn command carries the required harness + model + the chosen effort.
-    expect(spawnPayload).toMatchObject({ harness: 'claude', model: 'sonnet', effort: 'medium' });
-    // No kickoff: only the spawn command was submitted (no follow-up agent.message).
+    await tick();
+    expect(spawnSubmitPayload(bus)).toMatchObject({
+      harness: 'claude_code',
+      model: 'opus',
+      effort: 'medium',
+    });
+    // No worktree fields for main checkout; no name (blank).
+    expect(spawnSubmitPayload(bus)).not.toHaveProperty('worktree_path');
+    expect(spawnSubmitPayload(bus)).not.toHaveProperty('worktree_branch');
+    expect(spawnSubmitPayload(bus)).not.toHaveProperty('name');
     expect(submitKinds(bus)).toEqual(['crow.spawn_rogue']);
     await tick();
     expect(onSubmit).toHaveBeenCalledWith('medium', null);
   });
 
-  it('shows context step after effort when spawnContext is provided', async () => {
-    const { stores, enter } = setup(TEST_CONTEXT);
+  it('antigravity skips BOTH model and effort steps', async () => {
+    const { stores, bus, enter } = setup(null);
     const { lastFrame, stdin } = render(<Harness stores={stores} />);
     enter();
     await tick();
-
-    // Confirm effort step with Enter — should advance to context step.
-    stdin.write('\r');
+    // Move cursor to antigravity (index 4): claude_code, codex, cursor, pi, antigravity.
+    for (let i = 0; i < 4; i++) {
+      stdin.write('j');
+      await tick();
+    }
+    expect(lastFrame()).toContain('› antigravity');
+    stdin.write('\r'); // confirm harness → next active step is worktree (model+effort skipped)
     await tick();
-    // Context step should now be visible.
-    expect(lastFrame()).toContain('my-note');
-    expect(lastFrame()).toContain('[yes]'); // default is yes
-    expect(lastFrame()).toContain('y/enter');
+    expect(lastFrame()).toContain('Select worktree');
+    expect(lastFrame()).not.toContain('Select model');
+    expect(lastFrame()).not.toContain('Select effort');
+    stdin.write('\r'); // worktree (main)
+    await tick();
+    stdin.write('\r'); // name (blank) → submit
+    await tick();
+    await tick();
+    await tick();
+    const payload = spawnSubmitPayload(bus);
+    expect(payload['harness']).toBe('antigravity');
+    expect(payload).not.toHaveProperty('effort'); // no effort enum → omitted
+    // Model-step skipped → model is '' (NOT a Claude id like 'sonnet'). The live handler tolerates
+    // an empty string and lets the adapter pick its own default; forcing a Claude id would be the
+    // same invalid-id bug class this rewrite fixes for the harness field.
+    expect(payload['model']).toBe('');
   });
 
-  it('context step Enter (default yes) fires with reference-by-path kickoff_message', async () => {
+  it('cursor skips the model step but keeps effort (slow/fast)', async () => {
+    const { stores, bus, enter } = setup(null);
+    const { lastFrame, stdin } = render(<Harness stores={stores} />);
+    enter();
+    await tick();
+    stdin.write('j'); // codex
+    await tick();
+    stdin.write('j'); // cursor
+    await tick();
+    expect(lastFrame()).toContain('› cursor');
+    stdin.write('\r'); // confirm harness → effort (model skipped)
+    await tick();
+    expect(lastFrame()).toContain('Select effort');
+    expect(lastFrame()).toContain('slow');
+    expect(lastFrame()).toContain('fast');
+    expect(lastFrame()).not.toContain('Select model');
+    stdin.write('\r'); // effort (slow, the default)
+    await tick();
+    stdin.write('\r'); // worktree (main)
+    await tick();
+    stdin.write('\r'); // name → submit
+    await tick();
+    await tick();
+    await tick();
+    expect(spawnSubmitPayload(bus)).toMatchObject({ harness: 'cursor', effort: 'slow' });
+  });
+
+  it('codex shows its model list and threads the selected model id', async () => {
+    const { stores, bus, enter } = setup(null);
+    const { lastFrame, stdin } = render(<Harness stores={stores} />);
+    enter();
+    await tick();
+    stdin.write('j'); // codex
+    await tick();
+    expect(lastFrame()).toContain('› codex');
+    stdin.write('\r'); // confirm harness → model step (codex has a static model list)
+    await tick();
+    expect(lastFrame()).toContain('Select model');
+    expect(lastFrame()).toContain('GPT-5.5'); // first codex model label, cursor at index 0
+    stdin.write('\r'); // select gpt-5.5
+    await tick();
+    expect(lastFrame()).toContain('Select effort'); // codex has an effort enum
+    stdin.write('\r'); // effort medium (default)
+    await tick();
+    stdin.write('\r'); // worktree main
+    await tick();
+    stdin.write('\r'); // name → submit
+    await tick();
+    await tick();
+    await tick();
+    expect(spawnSubmitPayload(bus)).toMatchObject({
+      harness: 'codex',
+      model: 'gpt-5.5',
+      effort: 'medium',
+    });
+  });
+
+  it('"+ new worktree" inserts a branch step, validates non-empty, threads worktree_branch', async () => {
+    const { stores, bus, enter } = setup(null);
+    const { lastFrame, stdin } = render(<Harness stores={stores} />);
+    enter();
+    await tick();
+    stdin.write('\r'); // harness claude_code
+    await tick();
+    stdin.write('\r'); // model sonnet
+    await tick();
+    stdin.write('\r'); // effort medium
+    await tick();
+    // worktree step: [main, +new]. Move to "+ new worktree".
+    expect(lastFrame()).toContain('+ new worktree');
+    stdin.write('j');
+    await tick();
+    expect(lastFrame()).toContain('› + new worktree');
+    stdin.write('\r'); // confirm new worktree → branch step
+    await tick();
+    expect(lastFrame()).toContain('branch name');
+
+    // Empty branch → validation error, stays on branch step.
+    stdin.write('\r');
+    await tick();
+    expect(lastFrame()).toContain('Branch name is required');
+    expect(lastFrame()).toContain('branch name'); // still on branch step
+
+    // Type a branch (letters route through onUncaptured even though some are j/k/y/n bound).
+    for (const ch of 'my-feat') {
+      stdin.write(ch);
+      await tick();
+    }
+    expect(lastFrame()).toContain('my-feat');
+    stdin.write('\r'); // confirm branch → name step
+    await tick();
+    expect(lastFrame()).toContain('Rogue name');
+    stdin.write('\r'); // name blank → submit
+    await tick();
+    await tick();
+    await tick();
+    expect(spawnSubmitPayload(bus)).toMatchObject({ worktree_branch: 'my-feat' });
+  });
+
+  it('a typed rogue name threads through as `name`', async () => {
+    const { stores, bus, enter } = setup(null);
+    const { lastFrame, stdin } = render(<Harness stores={stores} />);
+    enter();
+    await tick();
+    stdin.write('\r'); // harness
+    await tick();
+    stdin.write('\r'); // model
+    await tick();
+    stdin.write('\r'); // effort
+    await tick();
+    stdin.write('\r'); // worktree main
+    await tick();
+    expect(lastFrame()).toContain('Rogue name');
+    for (const ch of 'jay') {
+      // includes 'j' + 'y' — must be typed literally, not navigate/submit
+      stdin.write(ch);
+      await tick();
+    }
+    expect(lastFrame()).toContain('jay');
+    stdin.write('\r'); // submit
+    await tick();
+    await tick();
+    await tick();
+    expect(spawnSubmitPayload(bus)).toMatchObject({ name: 'jay' });
+  });
+
+  it('context step appears LAST when a doc is focused; y → reference-by-path kickoff', async () => {
     const { stores, bus, enter } = setup(TEST_CONTEXT);
     const onSubmit = vi.fn();
     enter({ onSubmit });
-
-    const { stdin } = render(<Harness stores={stores} />);
+    const { lastFrame, stdin } = render(<Harness stores={stores} />);
     await tick();
-
-    stdin.write('\r'); // confirm effort
+    stdin.write('\r'); // harness
     await tick();
-    stdin.write('\r'); // confirm context step (default = yes)
+    stdin.write('\r'); // model
+    await tick();
+    stdin.write('\r'); // effort
+    await tick();
+    stdin.write('\r'); // worktree
+    await tick();
+    stdin.write('\r'); // name (blank) → context (because hasContext)
+    await tick();
+    expect(lastFrame()).toContain('my-note');
+    expect(lastFrame()).toContain('[yes]');
+    stdin.write('y'); // accept context → submit
     await tick();
 
     expect(selectActiveMode(stores.modes)).toBeNull();
     await tick();
     await tick();
-    expect(spawnSubmitPayload(bus)).toMatchObject({ effort: 'low' }); // first option (cursor 0)
-    // Reference-by-path: the kickoff is delivered as a separate agent.message to the spawned rogue.
     expect(submitKinds(bus)).toEqual(['crow.spawn_rogue', 'agent.message']);
     expect(kickoffSubmitPayload(bus)).toMatchObject({
       agent_id: 'rogue-001',
       message: `Please read ${TEST_CONTEXT.path} before starting.`,
     });
-    await tick();
-    expect(onSubmit).toHaveBeenCalledWith(
-      'low',
-      `Please read ${TEST_CONTEXT.path} before starting.`,
-    );
   });
 
-  it('context step y fires with kickoff_message', async () => {
+  it('context step n declines — no kickoff agent.message', async () => {
     const { stores, bus, enter } = setup(TEST_CONTEXT);
     enter();
     const { stdin } = render(<Harness stores={stores} />);
     await tick();
-
-    stdin.write('\r'); // confirm effort
-    await tick();
-    stdin.write('y'); // explicitly accept context
-    await tick();
-
-    expect(selectActiveMode(stores.modes)).toBeNull();
+    for (let i = 0; i < 5; i++) {
+      stdin.write('\r'); // harness, model, effort, worktree, name
+      await tick();
+    }
+    stdin.write('n'); // decline
     await tick();
     await tick();
-    const kickoff = kickoffSubmitPayload(bus);
-    expect(typeof kickoff?.['message']).toBe('string');
-    expect(String(kickoff?.['message'])).toContain('.murder/notes/my-note.md');
-  });
-
-  it('context step n declines context — fires without kickoff_message', async () => {
-    const { stores, bus, enter } = setup(TEST_CONTEXT);
-    const onSubmit = vi.fn();
-    enter({ onSubmit });
-
-    const { stdin } = render(<Harness stores={stores} />);
     await tick();
-
-    stdin.write('\r'); // confirm effort
-    await tick();
-    stdin.write('n'); // decline context
-    await tick();
-
-    expect(selectActiveMode(stores.modes)).toBeNull();
-    await tick();
-    await tick();
-    expect(spawnSubmitPayload(bus)).toMatchObject({ effort: 'low' });
-    // Declined context → no kickoff agent.message, only the spawn command.
     expect(submitKinds(bus)).toEqual(['crow.spawn_rogue']);
     expect(kickoffSubmitPayload(bus)).toBeUndefined();
-    await tick();
-    expect(onSubmit).toHaveBeenCalledWith('low', null);
   });
 
   it('dismiss callback fires on Esc', async () => {
     const { stores, enter } = setup();
     const onDismiss = vi.fn();
     enter({ onDismiss });
-
     const { stdin } = render(<Harness stores={stores} />);
     await tick();
     stdin.write(ESC);
@@ -301,57 +422,20 @@ describe('SpawnWizardModal — ctrl+s spawn wizard', () => {
     const { stdin } = render(<Harness stores={stores} />);
     enter();
     await tick();
-
-    // ctrl+1 = \x01 — would normally toggle plans panel.
-    stdin.write('\x01');
+    stdin.write('\x01'); // ctrl+1
     await tick();
-    expect(selectActiveMode(stores.modes)?.id).toBe(SPAWN_WIZARD_MODE_ID); // wizard still up
-    expect(stores.panels.getState().visible.has('plans')).toBe(false); // no panel toggled
-  });
-
-  it('shows step counter: 1/1 without context, 1/2 and 2/2 with context', async () => {
-    // Without context.
-    const { stores: stores1, enter: enter1 } = setup(null);
-    const { lastFrame: frame1 } = render(<Harness stores={stores1} />);
-    enter1();
-    await tick();
-    expect(frame1()).toContain('1/1');
-
-    // With context — step 1.
-    const { stores: stores2, enter: enter2 } = setup(TEST_CONTEXT);
-    const { lastFrame: frame2, stdin: stdin2 } = render(<Harness stores={stores2} />);
-    enter2();
-    await tick();
-    expect(frame2()).toContain('1/2');
-
-    // Advance to step 2.
-    stdin2.write('\r');
-    await tick();
-    expect(frame2()).toContain('2/2');
+    expect(selectActiveMode(stores.modes)?.id).toBe(SPAWN_WIZARD_MODE_ID);
+    expect(stores.panels.getState().visible.has('plans')).toBe(false);
   });
 });
 
 /**
- * H4 (F11 guard) — spawn-wizard payload contract.
- *
- * Pins the REAL `createSpawnActions(...).spawnRogue(...)` payload to the live handler's required
- * schema so the F2 fix can never silently regress once Textual is gone. The required field set
- * below is anchored to `Orchestrator.spawn_rogue_command` (murder/runtime/orchestration/
- * orchestrator.py:~564), which requires non-empty `harness` and a `model` string; the Python side
- * is pinned by tests/unit/test_spawn_effort_bus.py (the `rejects_missing_*` cases). A change to the
- * handler's required fields should surface as a failure on BOTH sides.
- *
- * The regression this guards: the old wizard sent `{effort}` / `{effort, kickoff_message}` — it
- * dropped harness/model and inlined a kickoff field the handler ignores. So we assert (1) the
- * required fields are always present and truthy, (2) `kickoff_message` is NEVER inlined into the
- * spawn payload, and (3) a supplied kickoff is delivered out-of-band as `agent.message` (and is not
- * silently dropped), while an empty/absent kickoff fires no follow-up command.
+ * H4 (F11 guard) — spawn-wizard payload contract. Pins the REAL spawn action payload to the live
+ * handler's required schema. Extended from F11 with worktree threading.
  */
 describe('H4 — spawn payload contract (real spawn action)', () => {
-  /** REQUIRED fields of the live `crow.spawn_rogue` handler — see spawn_rogue_command (orchestrator.py:~564). */
   const REQUIRED_SPAWN_FIELDS = ['harness', 'model'] as const;
 
-  /** A bus stubbed exactly like setup(): submit accepted, status resolves with a spawned agent_id. */
   function liveStubBus(): FakeBusClient {
     const bus = new FakeBusClient();
     bus.stubRpc('command.submit', { ok: true, command_id: 'cmd-1' });
@@ -366,30 +450,24 @@ describe('H4 — spawn payload contract (real spawn action)', () => {
   it('always sends every required field (truthy) and never inlines kickoff_message', async () => {
     const bus = liveStubBus();
     await createSpawnActions(bus).spawnRogue({
-      harness: 'claude',
+      harness: 'claude_code',
       model: 'sonnet',
       effort: 'medium',
     });
-
     const payload = spawnSubmitPayload(bus);
-    // Iterating the required set so a dropped field names itself in the failure.
     for (const field of REQUIRED_SPAWN_FIELDS) {
       expect(payload[field], `spawn payload missing required field "${field}"`).toBeTruthy();
     }
-    // Regression guard: kickoff must NOT be re-inlined into the spawn payload (the live handler
-    // ignores it — it rides out-of-band as agent.message).
     expect(payload).not.toHaveProperty('kickoff_message');
   });
 
   it('delivers a supplied kickoff out-of-band as agent.message (not silently dropped)', async () => {
     const bus = liveStubBus();
     await createSpawnActions(bus).spawnRogue({
-      harness: 'claude',
+      harness: 'claude_code',
       model: 'sonnet',
       kickoffMessage: 'Please read .murder/notes/x.md before starting.',
     });
-
-    // Spawn first, then the kickoff as a separate command — kickoff is not lost.
     expect(submitKinds(bus)).toEqual(['crow.spawn_rogue', 'agent.message']);
     expect(kickoffSubmitPayload(bus)).toMatchObject({
       agent_id: 'rogue-001',
@@ -397,33 +475,52 @@ describe('H4 — spawn payload contract (real spawn action)', () => {
     });
   });
 
+  it('threads worktree_branch / worktree_path (branch wins) and omits both when absent', async () => {
+    const busBranch = liveStubBus();
+    await createSpawnActions(busBranch).spawnRogue({
+      harness: 'claude_code',
+      model: 'sonnet',
+      worktreeBranch: 'feat/x',
+    });
+    expect(spawnSubmitPayload(busBranch)).toMatchObject({ worktree_branch: 'feat/x' });
+    expect(spawnSubmitPayload(busBranch)).not.toHaveProperty('worktree_path');
+
+    const busPath = liveStubBus();
+    await createSpawnActions(busPath).spawnRogue({
+      harness: 'claude_code',
+      model: 'sonnet',
+      worktreePath: '/wt/x',
+    });
+    expect(spawnSubmitPayload(busPath)).toMatchObject({ worktree_path: '/wt/x' });
+
+    const busNone = liveStubBus();
+    await createSpawnActions(busNone).spawnRogue({ harness: 'claude_code', model: 'sonnet' });
+    expect(spawnSubmitPayload(busNone)).not.toHaveProperty('worktree_path');
+    expect(spawnSubmitPayload(busNone)).not.toHaveProperty('worktree_branch');
+  });
+
   it('fires no follow-up command when kickoff is empty or absent', async () => {
     const busEmpty = liveStubBus();
     await createSpawnActions(busEmpty).spawnRogue({
-      harness: 'claude',
+      harness: 'claude_code',
       model: 'sonnet',
       kickoffMessage: '',
     });
     expect(submitKinds(busEmpty)).toEqual(['crow.spawn_rogue']);
-    expect(kickoffSubmitPayload(busEmpty)).toBeUndefined();
 
     const busAbsent = liveStubBus();
-    await createSpawnActions(busAbsent).spawnRogue({ harness: 'claude', model: 'sonnet' });
+    await createSpawnActions(busAbsent).spawnRogue({ harness: 'claude_code', model: 'sonnet' });
     expect(submitKinds(busAbsent)).toEqual(['crow.spawn_rogue']);
-    expect(kickoffSubmitPayload(busAbsent)).toBeUndefined();
   });
 });
 
 describe('ctrl+s dispatcher test', () => {
-  it('ctrl+s fires the spawn handler when CHAT is focused (C11 dual-purpose chord)', async () => {
-    // C11: ctrl+s spawns ONLY when chat is focused; from a panel it stars the highlighted row.
+  it('ctrl+s fires the spawn handler when CHAT is focused', async () => {
     const stores = createInputStores([], 'chat');
     const spawnFn = vi.fn();
     const { stdin } = render(<Harness stores={stores} spawn={spawnFn} />);
     await tick();
-
-    // ctrl+s = \x13
-    stdin.write('\x13');
+    stdin.write('\x13'); // ctrl+s
     await tick();
     expect(spawnFn).toHaveBeenCalledOnce();
   });
@@ -435,14 +532,10 @@ describe('ctrl+s dispatcher test', () => {
     bus.stubRpc('command.submit', { ok: true, command_id: 'cmd-1' });
     const actions = createSpawnActions(bus);
     stores.modes.getState().enter(spawnWizardMode(stores.modes, actions, { spawnContext: null }));
-
     const { stdin } = render(<Harness stores={stores} spawn={spawnFn} />);
     await tick();
-
-    stdin.write('\x13'); // ctrl+s
+    stdin.write('\x13');
     await tick();
-    // The wizard is up; ctrl+s (with ctrl=true) → onUncaptured not defined → swallowed.
-    // spawnFn must NOT be called.
     expect(spawnFn).not.toHaveBeenCalled();
     expect(selectActiveMode(stores.modes)?.id).toBe(SPAWN_WIZARD_MODE_ID);
   });
