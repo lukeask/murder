@@ -538,6 +538,168 @@ describe('C9 — usage slice invalidation', () => {
   });
 });
 
+// ---- A#7/A#8/C-LM-7: boot-priming — tickets/notes/reports/conversations on connect ----
+
+describe('boot-priming — slice refresh actions exist for all primed domains', () => {
+  it('exposes a conversations.refresh action (boot-prime pull)', () => {
+    const { store } = setup();
+    expect(typeof store.getState().actions.conversations.refresh).toBe('function');
+  });
+
+  it('conversations.refresh calls state.conversations_snapshot and hydrates transcripts', async () => {
+    const fake = new FakeBusClient();
+    fake.stubRpc('state.crow_snapshot', crowReply());
+    fake.stubRpc('state.schedule_snapshot', scheduleReply());
+    // Wire shape: ConversationsSnapshot.conversations is a list of ConversationSummary entries.
+    // Each entry has agent_id + blocks (ConversationBlockSummary rows — id numeric, payload nested).
+    fake.stubRpc('state.conversations_snapshot', {
+      conversations: [
+        {
+          conversation_id: 'conv-1',
+          agent_id: 'collaborator',
+          harness: 'claude',
+          model: 'claude-sonnet-4-6',
+          harness_session_id: null,
+          live_state: null,
+          condensed: null,
+          status: 'in_progress',
+          blocks: [
+            {
+              id: 1,
+              conversation_id: 'conv-1',
+              ordinal: 0,
+              kind: 'user_message',
+              payload: { type: 'user', text: 'hello' },
+              sealed: true,
+              service_received_at: '2026-06-09T00:00:00',
+            },
+          ],
+        },
+      ],
+      as_of: '2026-06-09T00:00:00',
+      invalidation_key: 'iv-c',
+    });
+    const { store } = createAppStore(fake);
+    expect(store.getState().conversations.transcripts).toEqual({});
+
+    await store.getState().actions.conversations.refresh();
+
+    expect(fake.rpcCalls).toContainEqual({ method: 'state.conversations_snapshot', params: {} });
+    const transcripts = store.getState().conversations.transcripts;
+    expect(Object.keys(transcripts)).toContain('collaborator');
+    expect(transcripts['collaborator']).toHaveLength(1);
+    expect(transcripts['collaborator']?.[0]?.type).toBe('user');
+  });
+
+  it('conversations.refresh merges into existing transcripts (does not wipe agent-pane state)', async () => {
+    const fake = new FakeBusClient();
+    fake.stubRpc('state.crow_snapshot', crowReply());
+    fake.stubRpc('state.schedule_snapshot', scheduleReply());
+    fake.stubRpc('state.conversations_snapshot', {
+      conversations: [
+        {
+          conversation_id: 'conv-2',
+          agent_id: 'crow-1',
+          harness: null,
+          model: null,
+          harness_session_id: null,
+          live_state: null,
+          condensed: null,
+          status: 'in_progress',
+          blocks: [
+            {
+              id: 2,
+              conversation_id: 'conv-2',
+              ordinal: 0,
+              kind: 'assistant_final',
+              payload: { type: 'assistant', text: 'done' },
+              sealed: true,
+              service_received_at: '2026-06-09T00:00:00',
+            },
+          ],
+        },
+      ],
+      as_of: '2026-06-09T00:00:00',
+      invalidation_key: 'iv-c2',
+    });
+    const { store } = createAppStore(fake);
+
+    await store.getState().actions.conversations.refresh();
+
+    // activePaneAgentId should be unaffected — refresh only touches transcripts.
+    expect(store.getState().conversations.activePaneAgentId).toBeNull();
+    expect(store.getState().conversations.transcripts['crow-1']).toHaveLength(1);
+  });
+
+  it('conversations.refresh swallows RPC errors — transcripts stay empty, no throw', async () => {
+    const fake = new FakeBusClient();
+    fake.stubRpc('state.crow_snapshot', crowReply());
+    fake.stubRpc('state.schedule_snapshot', scheduleReply());
+    // Handler throws — models a service that does not yet expose state.conversations_snapshot.
+    fake.stubRpc('state.conversations_snapshot', () => {
+      throw new Error('snapshot service down');
+    });
+    const { store } = createAppStore(fake);
+
+    // Must not throw; transcripts remain empty.
+    await expect(store.getState().actions.conversations.refresh()).resolves.toBeUndefined();
+    expect(store.getState().conversations.transcripts).toEqual({});
+  });
+
+  it('tickets.refresh, notes.refresh, and reports.refresh are available for priming', () => {
+    // Belt-and-suspenders: verify the store exposes the three other primed slice actions so
+    // primeSlices in index.tsx can call them at connect time.
+    const { store } = setup();
+    expect(typeof store.getState().actions.tickets.refresh).toBe('function');
+    expect(typeof store.getState().actions.notes.refresh).toBe('function');
+    expect(typeof store.getState().actions.reports.refresh).toBe('function');
+  });
+
+  it('calling tickets.refresh primes the tickets slice from state.schedule_snapshot', async () => {
+    const fake = new FakeBusClient();
+    fake.stubRpc('state.crow_snapshot', crowReply());
+    fake.stubRpc('state.schedule_snapshot', ticketsReply());
+    const { store } = createAppStore(fake);
+    expect(store.getState().tickets.status).toBe('idle');
+
+    await store.getState().actions.tickets.refresh();
+
+    expect(fake.rpcCalls).toContainEqual({ method: 'state.schedule_snapshot', params: {} });
+    expect(store.getState().tickets.status).toBe('ready');
+    expect(store.getState().tickets.rows).toHaveLength(1);
+  });
+
+  it('calling notes.refresh primes the notes slice from state.notes_snapshot', async () => {
+    const fake = new FakeBusClient();
+    fake.stubRpc('state.crow_snapshot', crowReply());
+    fake.stubRpc('state.schedule_snapshot', scheduleReply());
+    fake.stubRpc('state.notes_snapshot', notesReply());
+    const { store } = createAppStore(fake);
+    expect(store.getState().notes.status).toBe('idle');
+
+    await store.getState().actions.notes.refresh();
+
+    expect(fake.rpcCalls).toContainEqual({ method: 'state.notes_snapshot', params: {} });
+    expect(store.getState().notes.status).toBe('ready');
+    expect(store.getState().notes.rows).toHaveLength(1);
+  });
+
+  it('calling reports.refresh primes the reports slice from state.reports_snapshot', async () => {
+    const fake = new FakeBusClient();
+    fake.stubRpc('state.crow_snapshot', crowReply());
+    fake.stubRpc('state.schedule_snapshot', scheduleReply());
+    fake.stubRpc('state.reports_snapshot', reportsReply());
+    const { store } = createAppStore(fake);
+    expect(store.getState().reports.status).toBe('idle');
+
+    await store.getState().actions.reports.refresh();
+
+    expect(fake.rpcCalls).toContainEqual({ method: 'state.reports_snapshot', params: {} });
+    expect(store.getState().reports.status).toBe('ready');
+    expect(store.getState().reports.rows).toHaveLength(1);
+  });
+});
+
 /** Let the FakeBusClient's Promise-routed rpc settle (it resolves on a microtask). */
 async function flush(): Promise<void> {
   await Promise.resolve();

@@ -95,11 +95,20 @@ export async function runLive(busFactory: () => BusClient = makeLiveBus): Promis
  * Pull the visible slices so the shell paints live data. Fire-and-forget: the actions route their
  * own errors into each slice's `error` field, and the subscription keeps the slices live thereafter
  * via key-only invalidation. Re-run on every (re)connect — see {@link runLive}.
+ *
+ * Tickets/notes/reports/conversations rely on event REPLAY for incremental updates, but on a
+ * cold-start service (no events yet) those panels would be blank without an explicit pull. Priming
+ * all six slices here closes the gap: a quiescent or freshly-started service shows populated data
+ * on the very first frame.
  */
 function primeSlices(store: ReturnType<typeof createAppStore>['store']): void {
   void store.getState().actions.roster.refresh();
   void store.getState().actions.usage.refresh();
   void store.getState().actions.plans.refresh();
+  void store.getState().actions.tickets.refresh();
+  void store.getState().actions.notes.refresh();
+  void store.getState().actions.reports.refresh();
+  void store.getState().actions.conversations.refresh();
 }
 
 /** Register a (re)connect listener if the client exposes `onConnect` (the live {@link UdsBusClient}
