@@ -30,26 +30,46 @@
  * Parity is by absolute row index so it stays stable as the window scrolls.
  *
  * ## Overflow windowing (real, not fake clip)
- * The visible slice is computed from `cursor` + `availableHeight / linesPerEntry`, keeping the
- * cursor on screen (see {@link computeWindow}):
+ * The visible slice is computed from `cursor` + the measured height / linesPerEntry, keeping the
+ * cursor on screen with a one-row scrolloff margin (see {@link computeWindow}):
  *  - more rows BELOW the window → reserve the bottom line for a `…` indicator.
  *  - scrolled down (rows hidden ABOVE) → the header/titles row is dropped and replaced by a top `…`
  *    indicator (you can't show titles and a "more above" marker at once in a tight budget).
  *  - `flexShrink={0}` stays on each entry row so Yoga doesn't sample/drop lines within the window.
+ *  - **scrolloff = 1:** the window is placed so at least one row stays visible BOTH above and below
+ *    the cursor, except at the list edges (cursor on row 0 has no top margin; cursor on the last row
+ *    has no bottom margin). So moving onto the last visible row scrolls one row to keep a row below.
  *
- * ## Sizing — props, not self-measurement (Phase 1 choice)
- * Ledger receives `availableHeight`/`availableWidth` as PROPS rather than measuring itself. This is
- * the spec-sanctioned testable choice: tests feed an exact budget and assert the slice + indicators
- * deterministically. **Phase 2 handoff:** the Pane measures its inner content size (its own
- * `useMeasureFocus`-style rect minus border/padding) and passes it down as these two props. Until
- * then a panel can pass a fixed budget. Ledger never reads the store or the terminal.
+ * ## Sizing — self-measurement (the keystone)
+ * Ledger measures its OWN available inner size rather than trusting a fixed prop. The misleading
+ * fixed budgets the panels used to pass made `computeWindow` think every row fit (so it never
+ * windowed) while the Pane's `overflow="hidden"` silently clipped rows below the fold — the cursor
+ * could walk off-screen and never scroll. The fix:
+ *  - The Ledger's OUTER Box is a fill box: `flexGrow={1}` + `minHeight={0}` + `overflow="hidden"`, so
+ *    it sizes to the Pane's inner content area INDEPENDENT of how many rows it renders. (Critically
+ *    NOT `flexShrink={0}` — a content-sized box would measure the rows we drew, not the room we have,
+ *    and the measurement would oscillate with the row count, defeating the loop guard.)
+ *  - A `useLayoutEffect` (no dep array, runs after every layout) reads the box's measured
+ *    `{width, height}` via Ink's `measureElement` and stores it in `useState`. The setter is GUARDED:
+ *    it writes ONLY when a dimension actually changed, so a stable layout settles in a single extra
+ *    render and never loops. Because the fill box's size is row-count-independent, the second measure
+ *    equals the first → the guard holds.
+ *  - First paint (before any measurement, or a non-TTY test where Yoga reports 0): fall back to the
+ *    optional `availableHeight`/`availableWidth` props if given, else a conservative internal default
+ *    ({@link DEFAULT_HEIGHT}×{@link DEFAULT_WIDTH}). So the first frame renders a safe slice around the
+ *    cursor — never empty, never a crash, never a loop.
+ *  - The `availableHeight`/`availableWidth` props are now OPTIONAL fallbacks, kept so the pure
+ *    windowing stays deterministically unit-testable (a test feeds exact budgets via these props and
+ *    the measurement never fires under ink-testing-library's sizeless render). Ledger still never
+ *    reads the store or the terminal directly.
  *
  * ## Rules
  *  - Presentational (rule 1): pure function of props, no store/selector/bus, no `useInput` (rule 5).
  *  - j/k movement is the PANEL's keymap; Ledger only reflects `cursor`. The panel owns cursor state.
  */
 
-import { Box, Text } from 'ink';
+import { Box, type DOMElement, measureElement, Text } from 'ink';
+import { useLayoutEffect, useRef, useState } from 'react';
 
 /** Context handed to `renderEntry`/`header` so they emit the right number of fields. */
 export interface LedgerEntryContext {
@@ -74,10 +94,14 @@ export interface LedgerProps<Row> {
   readonly minColumns: number;
   /** Maximum fields-per-line when width allows. */
   readonly maxColumns: number;
-  /** Total vertical lines the Ledger may use (from the Pane's inner height — see header). */
-  readonly availableHeight: number;
-  /** Total columns the Ledger may use (from the Pane's inner width — see header). */
-  readonly availableWidth: number;
+  /**
+   * OPTIONAL fallback vertical line budget, used only until the Ledger measures its own box (first
+   * paint) or when measurement yields 0 (non-TTY test). The Ledger normally self-measures — see the
+   * header's "Sizing" note. Tests pass this to drive {@link computeWindow} deterministically.
+   */
+  readonly availableHeight?: number;
+  /** OPTIONAL fallback column budget — see {@link availableHeight}. */
+  readonly availableWidth?: number;
   /** Renders one row's cells for the active `ctx.columns`/`linesPerEntry`. */
   readonly renderEntry: (row: Row, ctx: LedgerEntryContext) => React.ReactNode;
   /** Optional column-titles block (`columns × linesPerEntry`); dropped when scrolled. */
@@ -90,6 +114,11 @@ export interface LedgerProps<Row> {
 const ALT_BG = '#1e1e2e';
 /** Approximate terminal columns one field needs before Ledger drops to fewer columns. */
 const WIDTH_PER_COLUMN = 18;
+/** Conservative first-paint dims (before measurement / no fallback prop) — a sane 24×80 screen. */
+const DEFAULT_HEIGHT = 24;
+const DEFAULT_WIDTH = 80;
+/** Rows kept visible above AND below the cursor (except at the list edges). User spec: 1. */
+const SCROLLOFF = 1;
 
 /**
  * Coarse width→columns heuristic: how many fields fit in `width`, clamped to `[min, max]`. Pure so
@@ -155,9 +184,21 @@ export function computeWindow(
       1,
       Math.floor((availableHeight - topLines - bottomLines) / linesPerEntry),
     );
-    // Place the window so the cursor sits within it, preferring the cursor near the bottom edge once
-    // we've scrolled (a simple follow-the-cursor window), clamped to the row range.
-    start = Math.max(0, Math.min(clampedCursor - capacity + 1, rowCount - capacity));
+    // Place the window with a scrolloff margin: keep at least SCROLLOFF rows visible both above and
+    // below the cursor (except at the list edges). This is a stateless follow-the-cursor window — we
+    // scroll the MINIMUM needed, so we seed `start` at the lowest value that satisfies the bottom
+    // margin (cursor sits SCROLLOFF rows from the bottom edge), then cap it so the top margin holds
+    // (cursor sits SCROLLOFF rows from the top edge), then clamp to the valid row range:
+    //  - minStart = cursor - capacity + 1 + SCROLLOFF  (bottom-margin floor; scrolling onto the last
+    //    visible row scrolls one row down so a row stays visible below — the user's exact spec).
+    //  - maxStart = cursor - SCROLLOFF                 (top-margin ceiling).
+    // The list edges fall out of the [0, rowCount-capacity] clamp for free: cursor 0 forces start 0
+    // (no top margin possible), cursor last forces start = rowCount-capacity (no bottom margin).
+    const minStart = clampedCursor - capacity + 1 + SCROLLOFF;
+    const maxStart = clampedCursor - SCROLLOFF;
+    // Seed at the bottom-margin floor (scroll the minimum), but never past the top-margin ceiling.
+    start = Math.min(minStart, maxStart);
+    start = Math.max(0, Math.min(start, rowCount - capacity));
     end = Math.min(start + capacity, rowCount);
     const nextAbove = start > 0;
     const nextBelow = end < rowCount;
@@ -201,9 +242,26 @@ function LedgerRow<Row>({
 }
 
 /**
- * The Ledger. Computes the active column count + visible window from its budget props, then paints
- * the optional header (only when not scrolled past the top), the windowed entries with full-width
- * highlight + alternating background, and the `…` overflow indicators. `linesPerEntry` /
+ * A `…` overflow indicator, styled as a full-width list row (NOT a bare left-floating `…`). It reads
+ * as "there are more items here," consistent with the entry rows: a `flexShrink={0}` + `width="100%"`
+ * row (like {@link LedgerRow}) with the `…` indented one column to sit under the entries' marker
+ * column (the leading space the `▌`/` ` cursor marker occupies — Ledger can't know a panel's deeper
+ * indent, so it aligns to the one column it does control). Dim so it recedes behind real entries.
+ */
+function OverflowRow(): React.JSX.Element {
+  return (
+    <Box flexShrink={0} width="100%">
+      <Text dimColor> …</Text>
+    </Box>
+  );
+}
+
+/**
+ * The Ledger. Self-measures its OUTER fill box (see the header's "Sizing" note) to learn the real
+ * inner height/width the Pane gives it, then computes the active column count + visible window from
+ * THAT (falling back to the optional props / a default before the first measurement). Paints the
+ * optional header (only when not scrolled past the top), the windowed entries with full-width
+ * highlight + alternating background, and the styled `…` overflow rows. `linesPerEntry` /
  * `min`/`maxColumns` shape the layout; the panel supplies cell placement via `renderEntry`.
  */
 export function Ledger<Row>({
@@ -219,20 +277,46 @@ export function Ledger<Row>({
   header,
   rowKey,
 }: LedgerProps<Row>): React.JSX.Element {
-  const columns = columnsForWidth(availableWidth, minColumns, maxColumns);
+  const boxRef = useRef<DOMElement | null>(null);
+  // Measured inner dims; 0 means "not measured yet" (first paint / sizeless non-TTY render).
+  const [measured, setMeasured] = useState<{ width: number; height: number }>({
+    width: 0,
+    height: 0,
+  });
+  // Runs after every layout (no dep array). Reads the fill box's real size and stores it ONLY when a
+  // dimension changed — the guard against a render loop. The fill box is row-count-independent
+  // (flexGrow, not flexShrink), so the second measure equals the first and this settles in one pass.
+  useLayoutEffect(() => {
+    if (boxRef.current === null) {
+      return;
+    }
+    const { width, height } = measureElement(boxRef.current);
+    if (width !== measured.width || height !== measured.height) {
+      setMeasured({ width, height });
+    }
+  });
+
+  // Drive layout from the measured dims; fall back to the props (tests), then a conservative default,
+  // so the first frame renders a safe slice instead of nothing.
+  const effectiveHeight = measured.height > 0 ? measured.height : (availableHeight ?? DEFAULT_HEIGHT);
+  const effectiveWidth = measured.width > 0 ? measured.width : (availableWidth ?? DEFAULT_WIDTH);
+
+  const columns = columnsForWidth(effectiveWidth, minColumns, maxColumns);
   const win = computeWindow(
     rows.length,
     cursor,
     linesPerEntry,
-    availableHeight,
+    effectiveHeight,
     header !== undefined,
   );
   // The header shows only when present AND not scrolled past the top (a top `…` replaces it).
   const showHeader = header !== undefined && !win.moreAbove;
   const visible = rows.slice(win.start, win.end);
   return (
-    <Box flexDirection="column" flexShrink={0}>
-      {win.moreAbove ? <Text dimColor>…</Text> : null}
+    // Fill box: sizes to the Pane's inner content area regardless of row count (flexGrow + clip), so
+    // `measureElement` reports the room we HAVE, not the rows we drew (see the header's "Sizing"note).
+    <Box ref={boxRef} flexDirection="column" flexGrow={1} minHeight={0} overflow="hidden">
+      {win.moreAbove ? <OverflowRow /> : null}
       {showHeader ? <Box flexShrink={0}>{header(columns)}</Box> : null}
       {visible.map((row, i) => {
         const index = win.start + i;
@@ -248,7 +332,7 @@ export function Ledger<Row>({
           />
         );
       })}
-      {win.moreBelow ? <Text dimColor>…</Text> : null}
+      {win.moreBelow ? <OverflowRow /> : null}
     </Box>
   );
 }

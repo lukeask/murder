@@ -87,6 +87,23 @@ function renderPlanEntry(row: PlanRowView, ctx: LedgerEntryContext): React.React
   );
 }
 
+/**
+ * The Ledger column-titles key — a dim two-line block (matching `linesPerEntry=2`) labeling what the
+ * entry lines mean: `name` over `size · updated`. Aligned to the entry layout — the 2-space leading
+ * indent matches {@link renderPlanEntry}'s marker column (marker + space) on line 1 and its line-2
+ * `  ` indent — so the labels sit directly above the data columns. THE reference header shape Phase
+ * 3 panels copy: a `header={renderPlansHeader}` prop that returns this two-line key. (`columns` is
+ * unused here — plans is single-column; a multi-column panel would key each field per `columns`.)
+ */
+function renderPlansHeader(): React.ReactNode {
+  return (
+    <Box flexDirection="column" flexShrink={0}>
+      <Text dimColor>{'  name'}</Text>
+      <Text dimColor>{'  size · updated'}</Text>
+    </Box>
+  );
+}
+
 /** The list body: empty/loading/error chrome (Ledger renders nothing for zero rows), else the
  * two-line entries via {@link Ledger} (in selector order, with the full-width selection highlight). */
 function PlansList({

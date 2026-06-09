@@ -370,6 +370,9 @@ function Shell({ project }: { readonly project?: string | undefined }): JSX.Elem
           orientation={orientation}
           panels={RIGHT_PANELS}
           renderPanel={renderPanel}
+          // The right rail (usage · crows) is a thin fixed-width column in landscape — the Stage and
+          // left rail split the remainder — rather than an even third of the width.
+          landscapeWidth="24%"
         />
       </Box>
       <Box flexShrink={0} flexDirection="column">

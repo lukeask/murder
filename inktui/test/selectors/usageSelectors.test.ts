@@ -1,8 +1,9 @@
 /**
  * usageSelectors tests — the view-model is a pure transform; no React, no store, no bus.
  *
- * Rule 2 proof: all formatting (pct label, bar, reset label, isHigh flag) lives here.
- * The component receives pre-formatted strings and does zero arithmetic.
+ * Rule 2 proof: all formatting (pct label, period label, reset label, bar geometry, isHigh flag)
+ * lives here. The component receives display-ready groups and does zero arithmetic — it only paints
+ * colors from `isHigh` and the bar geometry (`filledCount` / `markerPos`).
  */
 
 import { selectUsageView, USAGE_BAR_WIDTH } from '../../src/selectors/usageSelectors.js';
@@ -23,73 +24,80 @@ function state(rows: readonly UsageRow[], overrides: Partial<UsageState> = {}): 
   return { rows, status: 'ready', error: null, ...overrides };
 }
 
+/** First gauge of the first group — the common single-row assertion target. */
+function firstGauge(rows: readonly UsageRow[]) {
+  return selectUsageView(state(rows)).groups[0]?.gauges[0];
+}
+
 describe('selectUsageView — formatting', () => {
   it('formats pct as a rounded percentage label', () => {
-    const view = selectUsageView(state([row({ pct: 73.4 })]));
-    expect(view.rows[0]?.pctLabel).toBe('73%');
+    expect(firstGauge([row({ pct: 73.4 })])?.pctLabel).toBe('73%');
   });
 
-  it('builds a bar of exactly USAGE_BAR_WIDTH characters', () => {
-    const view = selectUsageView(state([row({ pct: 50 })]));
-    expect(view.rows[0]?.bar).toHaveLength(USAGE_BAR_WIDTH);
+  it('reports a bar width of exactly USAGE_BAR_WIDTH', () => {
+    expect(firstGauge([row({ pct: 50 })])?.barWidth).toBe(USAGE_BAR_WIDTH);
   });
 
-  it('bar is all filled at 100%', () => {
-    const view = selectUsageView(state([row({ pct: 100 })]));
-    expect(view.rows[0]?.bar).not.toContain('░');
+  it('filledCount is the whole width at 100%', () => {
+    expect(firstGauge([row({ pct: 100 })])?.filledCount).toBe(USAGE_BAR_WIDTH);
   });
 
-  it('bar is all empty at 0%', () => {
-    const view = selectUsageView(state([row({ pct: 0 })]));
-    expect(view.rows[0]?.bar).not.toContain('█');
+  it('filledCount is 0 at 0%', () => {
+    expect(firstGauge([row({ pct: 0 })])?.filledCount).toBe(0);
+  });
+
+  it('formats the window length as a period label (days / hours)', () => {
+    expect(firstGauge([row({ tPeriodMinutes: 7 * 24 * 60 })])?.periodLabel).toBe('7d');
+    expect(firstGauge([row({ tPeriodMinutes: 5 * 60 })])?.periodLabel).toBe('5h');
+    expect(firstGauge([row({ tPeriodMinutes: 30 * 24 * 60 })])?.periodLabel).toBe('30d');
+    expect(firstGauge([row({ tPeriodMinutes: 0 })])?.periodLabel).toBe('');
+  });
+
+  it('places the time-through-period marker by fraction elapsed', () => {
+    // 6 days into a 7-day window → 6/7 elapsed → floor(6/7 * 12) = 10.
+    const g = firstGauge([row({ tPeriodMinutes: 7 * 24 * 60, tUntilResetMinutes: 1 * 24 * 60 })]);
+    expect(g?.markerPos).toBe(10);
+  });
+
+  it('marker is null when the period or remaining time is unknown', () => {
+    expect(firstGauge([row({ tPeriodMinutes: 0 })])?.markerPos).toBeNull();
+    expect(firstGauge([row({ tUntilResetMinutes: 0 })])?.markerPos).toBeNull();
   });
 
   it('formats reset minutes as "Xm" for < 60 minutes', () => {
-    const view = selectUsageView(state([row({ tUntilResetMinutes: 4.2 })]));
-    expect(view.rows[0]?.resetLabel).toBe('5m'); // ceil(4.2) = 5
+    expect(firstGauge([row({ tUntilResetMinutes: 4.2 })])?.resetLabel).toBe('5m'); // ceil(4.2) = 5
   });
 
   it('formats reset minutes as "Xh" for whole hours', () => {
-    const view = selectUsageView(state([row({ tUntilResetMinutes: 120 })]));
-    expect(view.rows[0]?.resetLabel).toBe('2h');
+    expect(firstGauge([row({ tUntilResetMinutes: 120 })])?.resetLabel).toBe('2h');
   });
 
   it('formats reset minutes as "XhYm" for non-whole hours', () => {
-    const view = selectUsageView(state([row({ tUntilResetMinutes: 90 })]));
-    expect(view.rows[0]?.resetLabel).toBe('1h30m');
+    expect(firstGauge([row({ tUntilResetMinutes: 90 })])?.resetLabel).toBe('1h30m');
   });
 
   it('formats 0 reset time as "—"', () => {
-    const view = selectUsageView(state([row({ tUntilResetMinutes: 0 })]));
-    expect(view.rows[0]?.resetLabel).toBe('—');
+    expect(firstGauge([row({ tUntilResetMinutes: 0 })])?.resetLabel).toBe('—');
   });
 
   it('isHigh true when pct >= 80', () => {
-    const high = selectUsageView(state([row({ pct: 80 })]));
-    expect(high.rows[0]?.isHigh).toBe(true);
-
-    const notHigh = selectUsageView(state([row({ pct: 79.9 })]));
-    expect(notHigh.rows[0]?.isHigh).toBe(false);
+    expect(firstGauge([row({ pct: 80 })])?.isHigh).toBe(true);
+    expect(firstGauge([row({ pct: 79.9 })])?.isHigh).toBe(false);
   });
+});
 
-  it('sorts rows by pct descending', () => {
+describe('selectUsageView — grouping', () => {
+  it('groups windows under their harness in first-seen order', () => {
     const view = selectUsageView(
       state([
-        row({ harness: 'codex', pct: 30 }),
-        row({ harness: 'claude', pct: 70 }),
-        row({ harness: 'cursor', pct: 50 }),
+        row({ harness: 'codex', windowKey: '5h', pct: 30 }),
+        row({ harness: 'codex', windowKey: 'weekly', pct: 70 }),
+        row({ harness: 'cursor', windowKey: 'api', pct: 50 }),
       ]),
     );
-    const harnessOrder = view.rows.map((r) => r.harness);
-    expect(harnessOrder).toEqual(['claude', 'cursor', 'codex']);
-  });
-
-  it('sorts by harness name for equal pct (stable tiebreak)', () => {
-    const view = selectUsageView(
-      state([row({ harness: 'z-harness', pct: 50 }), row({ harness: 'a-harness', pct: 50 })]),
-    );
-    expect(view.rows[0]?.harness).toBe('a-harness');
-    expect(view.rows[1]?.harness).toBe('z-harness');
+    expect(view.groups.map((g) => g.harness)).toEqual(['codex', 'cursor']);
+    expect(view.groups[0]?.gauges.map((g) => g.windowKey)).toEqual(['5h', 'weekly']);
+    expect(view.groups[1]?.gauges).toHaveLength(1);
   });
 
   it('carries load flags through and computes isEmpty', () => {
@@ -100,7 +108,7 @@ describe('selectUsageView — formatting', () => {
     expect(err.error).toBe('boom');
   });
 
-  it('does not mutate the input slice (sorts a copy)', () => {
+  it('does not mutate the input slice', () => {
     const rows = [row({ harness: 'b', pct: 30 }), row({ harness: 'a', pct: 70 })];
     const original = [...rows];
     selectUsageView(state(rows));

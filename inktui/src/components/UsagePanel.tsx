@@ -1,27 +1,27 @@
 /**
- * UsagePanel — the usage right panel (panel 9, C9).
+ * UsagePanel — the usage right-rail panel (panel 9, C9).
  *
- * Copied from {@link RosterPanel.tsx} per the C5 copy recipe. Changes vs. RosterPanel:
- *  - Slice: `useAppStore((s) => s.usage, shallow)`.
- *  - Selector: `useUsageView` (formats pct, bar, reset-label; rule 2: zero formatting here).
- *  - `PANEL_ID`: `'usage'` (already in PanelId; no panels.ts edit needed).
- *  - Layout: one line per gauge (harness + bar + pct + reset time). Narrow single-line format
- *    suitable for the right region where `usage` sits left of `crows`.
+ * ## Grouped, not a uniform list (why no Ledger here)
+ * Phase 3 converted every list panel to {@link ./Pane.tsx Pane} + {@link ./Ledger.tsx Ledger}, but
+ * usage is no longer a flat uniform-row list: it renders 2–3 lines per provider — a dark **header**
+ * line (the harness name) then one transparent **gauge** line per rate-limit window. That grouped
+ * shape with semantic per-line backgrounds fights the Ledger's uniform-row + alternating-parity
+ * model, so this panel keeps the Pane chrome but renders its grouped body directly. The provider set
+ * is fixed (claude_code / codex / cursor × a couple of windows ≈ ≤9 lines), so the Ledger's overflow
+ * windowing isn't needed; the Pane clips if the share is tight.
  *
- * ## Phase 3: Pane + Ledger conversion
- * Converted to the layout primitives following {@link ./PlansPanel.tsx}. The bordered chrome is now
- * a {@link ./Pane.tsx Pane} and the gauge list is a {@link ./Ledger.tsx Ledger} with
- * `linesPerEntry=1` (single column). The cursor `useState`, keymap, selector usage, and focus
- * wiring are unchanged. The Ledger owns the full-width highlight + alternating background, so
- * `renderEntry` does NOT set `inverse`; it uses `ctx.selected` only for the `▌` marker. The
- * per-segment colors (bar/pct) come from the selector's `isHigh` flag (rule 2 — no formatting here).
+ * ## The gauge bar
+ * The selector emits each bar as *geometry* (`filledCount` + `markerPos`), not a finished string, so
+ * this component paints the segments: filled cells `█` (green, or red when `isHigh`), empty cells `░`
+ * (dim), and a grey `│` overlaid at `markerPos` to show how far through the *time* window we are
+ * (e.g. 6 days into a 7-day window → marker near the right, independent of how much quota is used).
  *
- * The panel is `React.memo`'d (rule 1) and reaches the bus only through the dispatched
- * `actions.usage.refresh` action (rule 3).
+ * The panel is `React.memo`'d (rule 1), owns a local cursor over the flat gauge list, declares its
+ * keymap (rule 5), and reaches the bus only through the dispatched `actions.usage.refresh` (rule 3).
  */
 
 import { Box, Text } from 'ink';
-import { memo, useMemo, useState } from 'react';
+import { type JSX, memo, useMemo, useState } from 'react';
 import { shallow } from 'zustand/shallow';
 import { useAppStore } from '../hooks/useAppStore.js';
 import {
@@ -32,52 +32,99 @@ import {
 } from '../hooks/useInputStores.js';
 import type { PanelKeymap } from '../input/keymap.js';
 import type { PanelId } from '../input/panels.js';
-import { type UsageRowView, type UsageView, useUsageView } from '../selectors/usageSelectors.js';
-import { Ledger, type LedgerEntryContext } from './Ledger.js';
+import { type UsageGaugeView, type UsageView, useUsageView } from '../selectors/usageSelectors.js';
 import { Pane } from './Pane.js';
 
 const PANEL_ID: PanelId = 'usage';
 const PANEL_TITLE = 'Usage';
 
-/**
- * Fixed Ledger budget until the Pane measures and passes down its inner content size (see the
- * matching TODO + handoff note in {@link ./PlansPanel.tsx} / {@link ./Ledger.tsx}).
- */
-const LEDGER_HEIGHT = 40;
-const LEDGER_WIDTH = 40;
+/** Solid dark background for a provider header line (the "dark on provider" request). */
+const HEADER_BG = '#181825';
+/** Subtle highlight background for the cursor-selected gauge line (gauges are otherwise transparent). */
+const SELECTED_BG = '#313244';
 
 type UsageIntent = 'cursorDown' | 'cursorUp' | 'refresh';
 
 /**
- * Render one usage gauge as a single-line Ledger entry: harness label, block bar, percentage, reset
- * countdown. The Ledger owns the full-width highlight + alt-bg, so this only uses `ctx.selected` for
- * the `▌` marker (no `inverse`). Single column (`maxColumns=1`). Per-segment colors come from the
- * selector's `isHigh` flag (rule 2).
+ * Paint the gauge bar from its geometry: filled `█` (green / red when high), empty `░` (dim), and a
+ * grey `│` marker at `markerPos`. Built as runs of same-style cells so each contiguous segment is a
+ * single `<Text>` (the marker is its own one-char span). Returns inline `<Text>` nodes for the parent
+ * `<Text>` row.
  */
-function renderUsageEntry(row: UsageRowView, ctx: LedgerEntryContext): React.ReactNode {
-  const marker = ctx.selected ? '▌' : ' ';
-  const barColor = row.isHigh ? 'red' : 'green';
+function renderBar(g: UsageGaugeView): JSX.Element {
+  const filledColor = g.isHigh ? 'red' : 'green';
+  const nodes: JSX.Element[] = [];
+  let run = '';
+  let runStyle: 'filled' | 'empty' = 'filled';
+  const flush = (key: string): void => {
+    if (run.length === 0) return;
+    nodes.push(
+      runStyle === 'filled' ? (
+        <Text key={key} color={filledColor}>
+          {run}
+        </Text>
+      ) : (
+        <Text key={key} dimColor>
+          {run}
+        </Text>
+      ),
+    );
+    run = '';
+  };
+  for (let i = 0; i < g.barWidth; i++) {
+    if (i === g.markerPos) {
+      flush(`r${i}`);
+      nodes.push(
+        <Text key={`m${i}`} color="gray">
+          │
+        </Text>,
+      );
+      continue;
+    }
+    const style = i < g.filledCount ? 'filled' : 'empty';
+    if (style !== runStyle && run.length > 0) flush(`r${i}`);
+    runStyle = style;
+    run += style === 'filled' ? '█' : '░';
+  }
+  flush('end');
+  return <>{nodes}</>;
+}
+
+/** A provider header line: bold harness name on a solid dark, full-width background. */
+function HeaderLine({ harness }: { readonly harness: string }): JSX.Element {
   return (
-    // Single-line entry, but still a `column` Box so the Ledger's full-width background spans it
-    // (rule (b) from the PlansPanel reference). `flexShrink={0}` so Yoga doesn't drop the line.
-    <Box flexDirection="column" flexGrow={1} flexShrink={0}>
+    <Box flexShrink={0} width="100%" backgroundColor={HEADER_BG}>
+      <Text bold wrap="truncate">{` ${harness}`}</Text>
+    </Box>
+  );
+}
+
+/** One gauge line: cursor marker, segmented bar, pct, window-length, and reset countdown. Transparent
+ * background unless selected (a subtle highlight). */
+function GaugeLine({
+  gauge,
+  selected,
+}: {
+  readonly gauge: UsageGaugeView;
+  readonly selected: boolean;
+}): JSX.Element {
+  return (
+    <Box flexShrink={0} width="100%" backgroundColor={selected ? SELECTED_BG : undefined}>
       <Text wrap="truncate">
-        {`${marker} `}
-        <Text bold>{row.harness.padEnd(8)}</Text>
+        {selected ? '▌' : ' '} {renderBar(gauge)}
         {'  '}
-        <Text color={barColor}>{row.bar}</Text>
+        <Text color={gauge.isHigh ? 'red' : 'white'}>{gauge.pctLabel.padStart(4)}</Text>
         {'  '}
-        <Text color={row.isHigh ? 'red' : 'white'}>{row.pctLabel.padStart(4)}</Text>
-        {'  '}
-        <Text dimColor>{row.resetLabel}</Text>
+        <Text dimColor>{gauge.periodLabel.padEnd(3)}</Text>{' '}
+        <Text dimColor>{gauge.resetLabel.padStart(7)}</Text>
       </Text>
     </Box>
   );
 }
 
-/** The list body: loading/error/empty chrome (Ledger renders nothing for zero rows), else one
- * single-line entry per gauge via {@link Ledger}. */
-function UsageList({
+/** The list body: loading/error/empty chrome, else one block per provider (header + gauge lines).
+ * A single running index across all gauges drives the cursor highlight. */
+function UsageBody({
   view,
   cursor,
   focused,
@@ -85,7 +132,7 @@ function UsageList({
   readonly view: UsageView;
   readonly cursor: number;
   readonly focused: boolean;
-}): React.JSX.Element {
+}): JSX.Element {
   if (view.status === 'error') {
     return <Text color="red">{`error: ${view.error ?? 'unknown'}`}</Text>;
   }
@@ -95,38 +142,48 @@ function UsageList({
   if (view.isEmpty) {
     return <Text dimColor>no usage data</Text>;
   }
+  let gaugeIndex = -1;
   return (
-    <Ledger
-      rows={view.rows}
-      cursor={cursor}
-      focused={focused}
-      linesPerEntry={1}
-      minColumns={1}
-      maxColumns={1}
-      availableHeight={LEDGER_HEIGHT}
-      availableWidth={LEDGER_WIDTH}
-      renderEntry={renderUsageEntry}
-      rowKey={(row) => `${row.harness}-${row.windowKey}`}
-    />
+    <Box flexDirection="column" flexShrink={0}>
+      {view.groups.map((group) => (
+        <Box key={group.harness} flexDirection="column" flexShrink={0}>
+          <HeaderLine harness={group.harness} />
+          {group.gauges.map((gauge) => {
+            gaugeIndex += 1;
+            return (
+              <GaugeLine
+                key={`${group.harness}-${gauge.windowKey}`}
+                gauge={gauge}
+                selected={focused && gaugeIndex === cursor}
+              />
+            );
+          })}
+        </Box>
+      ))}
+    </Box>
   );
 }
 
+/** Total gauge count across all provider groups (the flat cursor range). */
+function countGauges(view: UsageView): number {
+  return view.groups.reduce((n, g) => n + g.gauges.length, 0);
+}
+
 /**
- * The usage panel. Reads the usage slice, runs the selector to a display-ready view, owns a
- * local cursor, declares its keymap, and paints a focus-highlighted Pane of single-line Ledger
- * entries. `React.memo`'d (rule 1) so it re-renders only when its own state changes.
+ * The usage panel. Reads the usage slice, runs the selector to grouped display-ready data, owns a
+ * local cursor over the flat gauge list, declares its keymap, and paints a focus-highlighted Pane of
+ * provider blocks. `React.memo`'d (rule 1) so it re-renders only when its own state changes.
  */
-export const UsagePanel = memo(function UsagePanel(): React.JSX.Element {
-  // Rule 1: narrow selector (shallow).
-  // Rule 2: selector produces display-ready rows; no formatting here.
+export const UsagePanel = memo(function UsagePanel(): JSX.Element {
+  // Rule 1: narrow selector (shallow). Rule 2: selector produces display-ready groups.
   const usage = useAppStore((s) => s.usage, shallow);
   const view = useUsageView(usage);
   // Rule 3: bus reached only through the dispatched action.
   const refresh = useAppStore((s) => s.actions.usage.refresh);
 
-  // Local UI state: cursor (rule 1).
+  // Local UI state: cursor over the flat gauge list (rule 1).
   const [cursor, setCursor] = useState(0);
-  const rowCount = view.rows.length;
+  const gaugeCount = countGauges(view);
 
   // Rule 5: keymap as data in useMemo.
   const keymap: PanelKeymap<UsageIntent> = useMemo(
@@ -139,7 +196,7 @@ export const UsagePanel = memo(function UsagePanel(): React.JSX.Element {
       onIntent(intent) {
         switch (intent) {
           case 'cursorDown':
-            setCursor((c) => (rowCount === 0 ? 0 : Math.min(c + 1, rowCount - 1)));
+            setCursor((c) => (gaugeCount === 0 ? 0 : Math.min(c + 1, gaugeCount - 1)));
             return;
           case 'cursorUp':
             setCursor((c) => Math.max(c - 1, 0));
@@ -152,7 +209,7 @@ export const UsagePanel = memo(function UsagePanel(): React.JSX.Element {
         }
       },
     }),
-    [rowCount, refresh],
+    [gaugeCount, refresh],
   );
   usePanelKeymap(PANEL_ID, keymap);
 
@@ -163,9 +220,9 @@ export const UsagePanel = memo(function UsagePanel(): React.JSX.Element {
 
   return (
     <Pane ref={ref} title={PANEL_TITLE} focused={focused}>
-      <UsageList
+      <UsageBody
         view={view}
-        cursor={Math.min(cursor, Math.max(rowCount - 1, 0))}
+        cursor={Math.min(cursor, Math.max(gaugeCount - 1, 0))}
         focused={focused}
       />
     </Pane>

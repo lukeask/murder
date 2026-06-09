@@ -63,12 +63,8 @@ import { Pane } from './Pane.js';
 const PANEL_ID: PanelId = 'crows';
 const PANEL_TITLE = 'Crows';
 
-/**
- * Fixed Ledger budget until the Pane measures and passes down its inner content size (see the
- * matching TODO + handoff note in {@link ./PlansPanel.tsx} / {@link ./Ledger.tsx}).
- */
-const LEDGER_HEIGHT = 40;
-const LEDGER_WIDTH = 40;
+// The Ledger self-measures its own inner size now (see {@link ./Ledger.tsx}'s "Sizing" note), so no
+// fixed budget is passed: its overflow window tracks the live panel size.
 
 type CrowsIntent = 'cursorDown' | 'cursorUp' | 'refresh' | 'toggleExpanded' | 'star';
 
@@ -184,8 +180,6 @@ function CrowsList({
       linesPerEntry={expanded ? 2 : 1}
       minColumns={1}
       maxColumns={1}
-      availableHeight={LEDGER_HEIGHT}
-      availableWidth={LEDGER_WIDTH}
       renderEntry={(ledgerRow, ctx) => renderCrowRow(ledgerRow, ctx, expanded)}
       rowKey={(ledgerRow) =>
         ledgerRow.kind === 'header' ? `h:${ledgerRow.group}` : `c:${ledgerRow.row.agentId}`

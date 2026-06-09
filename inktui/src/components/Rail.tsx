@@ -54,6 +54,11 @@ export interface RailProps {
   /** The {@link PanelId} → component dispatch (App.tsx's `renderPanel`), injected so Rail stays a
    * pure arranger and doesn't import the panel components itself. */
   readonly renderPanel: (id: PanelId) => JSX.Element;
+  /** Optional fixed width for this rail in **landscape** only (e.g. `'24%'`), so a side can be a thin
+   * column instead of taking an even `flexGrow` share. When set, the rail uses `flexGrow={0}` +
+   * `width` in landscape (the Stage + other rail split the remainder); ignored in portrait, where the
+   * rail stacks across the top/bottom and width is full. Unset → the even `flexGrow={1}` share. */
+  readonly landscapeWidth?: string;
 }
 
 /**
@@ -62,20 +67,31 @@ export interface RailProps {
  * side-by-side, split width). The cross-axis gap (`rowGap`/`columnGap`) gives a one-cell breather
  * between stacked/adjacent panels, matching the old region's `columnGap={1}`.
  */
-export function Rail({ side, orientation, panels, renderPanel }: RailProps): JSX.Element | null {
+export function Rail({
+  side,
+  orientation,
+  panels,
+  renderPanel,
+  landscapeWidth,
+}: RailProps): JSX.Element | null {
   const visible = usePanelStore((s) => s.visible);
   const shown = panels.filter((id) => visible.has(id));
   if (shown.length === 0) {
     return null;
   }
   const flexDirection = orientation === 'landscape' ? 'column' : 'row';
+  // A fixed-width column only makes sense in landscape (rails stacked side-by-side with the Stage).
+  // In portrait the rail spans the full width across the top/bottom, so the fixed width is ignored.
+  const fixedColumn = orientation === 'landscape' && landscapeWidth !== undefined;
   return (
     <Box
       key={side}
       flexDirection={flexDirection}
       rowGap={orientation === 'landscape' ? 1 : 0}
       columnGap={orientation === 'portrait' ? 1 : 0}
-      flexGrow={1}
+      flexGrow={fixedColumn ? 0 : 1}
+      flexShrink={0}
+      width={fixedColumn ? landscapeWidth : undefined}
       minHeight={0}
       overflow="hidden"
     >

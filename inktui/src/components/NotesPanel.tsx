@@ -52,17 +52,8 @@ import { Pane } from './Pane.js';
 const PANEL_ID: PanelId = 'notes';
 const PANEL_TITLE = 'Notes';
 
-/**
- * Fixed Ledger budget until the Pane measures and passes down its inner content size.
- *
- * TODO(Phase 3/4 — Pane-measures-inner-size handoff, see {@link ./Ledger.tsx}'s "Sizing" note and
- * {@link ./Pane.tsx}'s handoff): the Pane should measure its own inner rect and pass
- * `availableHeight`/`availableWidth` down so the Ledger's overflow window tracks the live panel
- * size. Until then this is a reasonable static budget — the Ledger clips via its window and the
- * Pane's `overflow="hidden"` is the hard safety clip regardless.
- */
-const LEDGER_HEIGHT = 40;
-const LEDGER_WIDTH = 40;
+// The Ledger self-measures its own inner size now (see {@link ./Ledger.tsx}'s "Sizing" note), so no
+// fixed budget is passed: its overflow window tracks the live panel size, the cursor stays on screen.
 
 type NotesIntent = 'cursorDown' | 'cursorUp' | 'refresh' | 'star' | 'open';
 
@@ -116,8 +107,6 @@ function NotesList({
       linesPerEntry={2}
       minColumns={1}
       maxColumns={1}
-      availableHeight={LEDGER_HEIGHT}
-      availableWidth={LEDGER_WIDTH}
       renderEntry={renderNoteEntry}
       rowKey={(row) => row.name}
     />

@@ -1,10 +1,12 @@
 /**
  * UsagePanel test — copied from RosterPanel.test.tsx per the C5 copy recipe.
  *
- * Phase 3: asserts the Pane inline-title border (`╭─ Usage ─…`) + the single-line Ledger entries.
+ * Asserts the Pane inline-title border (`╭─ Usage ─…`) + the grouped provider blocks (a header line
+ * per harness, then one gauge line per window).
  *
  * Tests:
- *  - Renders usage gauge rows with harness + bar + pct + reset label.
+ *  - Renders provider blocks with harness + pct + reset label.
+ *  - Providers appear in first-seen (group) order.
  *  - Focus highlight behaviour.
  *  - Cursor navigation keys (j/k) fire only when focused.
  *  - Empty state chrome ("no usage data").
@@ -93,7 +95,7 @@ async function setup(reply: ScheduleSnapshotReply = twoGauges(), focused = true)
 }
 
 describe('UsagePanel — rendering', () => {
-  it('renders gauge rows with harness, pct, and reset time', async () => {
+  it('renders provider blocks with harness, pct, and reset time', async () => {
     const { store, inputStores, dispose } = await setup();
     const { lastFrame } = render(<Harness store={store} inputStores={inputStores} />);
     await tick();
@@ -112,12 +114,12 @@ describe('UsagePanel — rendering', () => {
     dispose();
   });
 
-  it('renders higher usage gauge first (sorted by pct desc)', async () => {
+  it('renders providers in first-seen group order', async () => {
     const { store, inputStores, dispose } = await setup();
     const { lastFrame } = render(<Harness store={store} inputStores={inputStores} />);
     await tick();
     const frame = lastFrame() ?? '';
-    // 'claude' (65%) should appear before 'codex' (30%).
+    // 'claude' is the first harness in the wire order, so its block comes before 'codex'.
     expect(frame.indexOf('claude')).toBeLessThan(frame.indexOf('codex'));
     dispose();
   });
@@ -141,17 +143,17 @@ describe('UsagePanel — rendering', () => {
     const { stdin, lastFrame } = render(<Harness store={store} inputStores={inputStores} />);
     await tick();
 
-    // Initially cursor on row 0 (claude, highest pct).
+    // Initially cursor on gauge 0 (claude's window) — its marker sits after the 'claude' header but
+    // before the 'codex' block.
     const before = lastFrame() ?? '';
-    const markerPos = before.indexOf('▌');
-    const claudePos = before.indexOf('claude');
-    expect(markerPos).toBeLessThan(claudePos + 20);
+    expect(before.indexOf('▌')).toBeGreaterThan(before.indexOf('claude'));
+    expect(before.indexOf('▌')).toBeLessThan(before.indexOf('codex'));
 
-    // Press j → cursor moves to row 1 (codex).
+    // Press j → cursor moves to gauge 1 (codex's window): the marker is now after 'codex'.
     stdin.write('j');
     await tick();
     const afterDown = lastFrame() ?? '';
-    expect(afterDown.indexOf('▌')).toBeGreaterThan(afterDown.indexOf('claude'));
+    expect(afterDown.indexOf('▌')).toBeGreaterThan(afterDown.indexOf('codex'));
 
     // Unfocus; k should not affect the cursor.
     stdin.write(ALT_F);

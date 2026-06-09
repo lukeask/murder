@@ -73,9 +73,21 @@ function formatUpdatedAt(iso: string): string {
   return iso.slice(0, 16).replace('T', ' ');
 }
 
-/** Format a character count as a compact, human-readable display string. */
+/**
+ * Width the formatted char-count field is right-padded to, so the trailing `· updated` column aligns
+ * across rows regardless of digit count (`5,000 chars` vs `50,000 chars`). Sized to a generous
+ * realistic max — `"9,999,999 chars"` is 15 chars — so even a multi-megabyte plan doesn't overrun
+ * (a longer value simply isn't padded; it never truncates). Alignment is a formatting concern, so it
+ * lives HERE in the selector (rule 2), not in the component.
+ */
+const CHAR_COUNT_FIELD_WIDTH = 15;
+
+/**
+ * Format a character count as a compact, human-readable display string, right-padded to a fixed
+ * width so the following `·`/`updated` column lines up across rows (see {@link CHAR_COUNT_FIELD_WIDTH}).
+ */
 function formatCharCount(n: number): string {
-  return `${n.toLocaleString()} chars`;
+  return `${n.toLocaleString()} chars`.padEnd(CHAR_COUNT_FIELD_WIDTH);
 }
 
 /** A parent and its (recency-ordered) children — the unit ordering operates over. */

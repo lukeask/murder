@@ -38,12 +38,8 @@ import { Pane } from './Pane.js';
 const PANEL_ID: PanelId = 'reports';
 const PANEL_TITLE = 'Reports';
 
-/**
- * Fixed Ledger budget until the Pane measures and passes down its inner content size (see the
- * matching TODO + handoff note in {@link ./NotesPanel.tsx} / {@link ./Ledger.tsx}).
- */
-const LEDGER_HEIGHT = 40;
-const LEDGER_WIDTH = 40;
+// The Ledger self-measures its own inner size now (see {@link ./Ledger.tsx}'s "Sizing" note), so no
+// fixed budget is passed: its overflow window tracks the live panel size.
 
 type ReportsIntent = 'cursorDown' | 'cursorUp' | 'refresh' | 'star' | 'open';
 
@@ -93,8 +89,6 @@ function ReportsList({
       linesPerEntry={2}
       minColumns={1}
       maxColumns={1}
-      availableHeight={LEDGER_HEIGHT}
-      availableWidth={LEDGER_WIDTH}
       renderEntry={renderReportEntry}
       rowKey={(row) => row.name}
     />

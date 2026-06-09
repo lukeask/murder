@@ -64,15 +64,10 @@ import { useTicketEditor } from './TicketEditorMode.js';
 const PANEL_ID: PanelId = 'tickets';
 const PANEL_TITLE = 'Tickets';
 
-/**
- * Fixed Ledger budget until the Pane measures and passes down its inner content size. Width is set
- * HIGH (100) so `columnsForWidth(100, 1, 5) === 5` — the static budget renders all 5 columns,
- * matching the old always-5 layout. Column-collapse to fewer columns is exercised by Ledger's own
- * unit tests; once the Pane passes a measured width (Phase 3/4 handoff, see {@link ./Ledger.tsx}),
- * a narrow tickets pane will degrade gracefully right-to-left.
- */
-const LEDGER_HEIGHT = 40;
-const LEDGER_WIDTH = 100;
+// The Ledger self-measures its own inner size now (see {@link ./Ledger.tsx}'s "Sizing" note), so no
+// fixed budget is passed: its overflow window AND its column-collapse (maxColumns=5 → fewer when the
+// measured width is narrow) both track the live panel size. A wide tickets pane shows all 5 columns;
+// a narrow one degrades gracefully right-to-left.
 
 type TicketsIntent = 'cursorDown' | 'cursorUp' | 'refresh' | 'open';
 
@@ -158,8 +153,6 @@ function TicketsList({
       linesPerEntry={2}
       minColumns={1}
       maxColumns={5}
-      availableHeight={LEDGER_HEIGHT}
-      availableWidth={LEDGER_WIDTH}
       renderEntry={renderTicketEntry}
       rowKey={(row) => row.id}
     />
