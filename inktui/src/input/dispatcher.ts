@@ -123,7 +123,7 @@ export interface ChatInputHandler {
  * dispatcher reads only the focused panel's entry. */
 export interface DispatchContext {
   readonly focusedId: FocusId;
-  readonly panelKeymaps: Partial<Record<PanelId, PanelKeymap>>;
+  readonly panelKeymaps: Partial<Record<FocusId, PanelKeymap>>;
   readonly handlers: GlobalHandlers;
   /** The active transient mode, or `null` when none is up. Supplied by {@link useRootInput} from the
    * live {@link ./modeStore.js mode store}. When non-null, layer 0 captures the event (see the

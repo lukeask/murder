@@ -107,9 +107,10 @@ describe('App shell', () => {
     dispose();
   });
 
-  it('C10: CrowChatPanel mounts below CrowsPanel when crows panel is on + favorited crows exist', async () => {
-    // App-path test: renders the full App (not just the component harness) and proves that
-    // CrowChatPanel is actually mounted — not just that it renders in isolation.
+  it('Phase 4a: the Stage mounts a chat pane for a favorited crow (center region, not the crows Rail)', async () => {
+    // App-path test: renders the full App (not just the component harness) and proves the favorited
+    // crow's chat-history pane is mounted in the center Stage. (Pre-4a this lived in CrowChatPanel
+    // stacked under CrowsPanel in the right Rail; 4a moved it into the always-mounted Stage.)
     const fake = new FakeBusClient();
     fake.stubRpc('state.crow_snapshot', {
       invalidation_key: 'iv',
@@ -130,7 +131,7 @@ describe('App shell', () => {
     const frame = lastFrame() ?? '';
     // CrowsPanel header is present (confirms crows region rendered).
     expect(frame).toContain('Crows');
-    // CrowChatPanel shows a pane for the collaborator (proves it was mounted under App).
+    // The Stage shows a pane titled for the collaborator (proves it was mounted under App's center).
     expect(frame).toContain('TestCollab');
     dispose();
   });

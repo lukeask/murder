@@ -22,6 +22,23 @@
  * panel store so it can read the visible set when resolving; it subscribes to nothing and schedules
  * no effects — resolution is pull-based (computed on read), which is what makes the invariant a pure
  * function instead of an effect that can race a toggle.
+ *
+ * ## Phase 4a — dynamic Stage panes
+ *
+ * The Stage (the center region, {@link ../components/Stage.js}) tiles chat-history panes that are NOT
+ * toggleable panels: they appear/disappear as crows are favorited, not as a `ctrl/alt+<digit>` toggle.
+ * They are still focusable (hjkl must reach them), so {@link FocusId} widens beyond the six
+ * {@link PanelId}s + chat to include {@link StagePaneId} (`stage:<...>`, e.g. `stage:chat:<agentId>`;
+ * Phase 4b adds `stage:doc:<name>` under the same scheme — no further type change needed).
+ *
+ * A Stage pane has no `visible` toggle to gate it, so its analogue of "is this a live candidate?" is
+ * **"does it have a measured rect right now?"**. A pane that is painted has measured itself (via the
+ * component-layer measure effect); a pane that unmounted called {@link FocusState.unmeasure} and
+ * dropped its rect. So the set of *mounted* Stage panes is derived from the rects map keys
+ * ({@link mountedStagePanesOf}), not a second store — and the re-home invariant for a Stage pane is
+ * "resolve to itself iff still mounted, else fall home to chat", the exact mirror of the panel rule.
+ * This keeps the derived-invariant style: "focused on an unmounted Stage pane" is not a representable
+ * effective state.
  */
 
 import { createStore, type StoreApi } from 'zustand/vanilla';
@@ -43,31 +60,78 @@ function rectsEqual(a: Rect, b: Rect): boolean {
   return a.x === b.x && a.y === b.y && a.width === b.width && a.height === b.height;
 }
 
-/** Anything that can hold focus: a panel (when visible) or the always-present chat input. */
-export type FocusId = PanelId | typeof CHAT_FOCUS;
+/** A focusable Stage pane (Phase 4a): a chat-history pane (`stage:chat:<agentId>`), and — Phase 4b —
+ * an open document pane (`stage:doc:<name>`). Not a {@link PanelId}: Stage panes are not toggleable;
+ * they are "mounted" (have a measured rect) or not. The `stage:` prefix is the discriminator the
+ * {@link isStagePaneId} guard keys on. */
+export type StagePaneId = `stage:${string}`;
+
+/** Anything that can hold focus: a panel (when visible), a mounted Stage pane, or the always-present
+ * chat input. */
+export type FocusId = PanelId | typeof CHAT_FOCUS | StagePaneId;
+
+/** Type guard: is this focus id a {@link StagePaneId}? Used to split the rects map into "panels +
+ * chat" vs "Stage panes" without a second store. Chat (`'chat'`) and the `PanelId`s never start with
+ * `stage:`, so the prefix test is an exact partition. */
+export function isStagePaneId(id: FocusId): id is StagePaneId {
+  return typeof id === 'string' && id.startsWith('stage:');
+}
 
 /**
- * Resolve *intended* focus to *effective* focus against the visible set — the re-home invariant as
- * a pure function. If the intended target is a panel that is not visible, focus falls home to chat.
- * `'chat'` always resolves to itself (it can't be hidden). This is the only place the invariant is
- * expressed; every reader goes through it, so "focused on a hidden panel" never escapes.
+ * The set of *mounted* Stage panes, derived from the rects map keys. A Stage pane is "mounted" iff it
+ * currently has a measured rect (it painted itself, hasn't unmounted+`unmeasure`d). This is the Stage
+ * analogue of the panel store's `visible` set — co-located with `intendedId` in the same store, so
+ * every {@link resolveFocus} caller already holds the rects it needs and never threads a new store.
+ * Pure over the map; stable output when `measure`'s dedupe keeps the map identity (a no-op resize).
  */
-export function resolveFocus(intended: FocusId, visible: ReadonlySet<PanelId>): FocusId {
+export function mountedStagePanesOf(rects: ReadonlyMap<FocusId, Rect>): ReadonlySet<StagePaneId> {
+  const set = new Set<StagePaneId>();
+  for (const id of rects.keys()) {
+    if (isStagePaneId(id)) {
+      set.add(id);
+    }
+  }
+  return set;
+}
+
+/**
+ * Resolve *intended* focus to *effective* focus — the re-home invariant as a pure function. The home
+ * (chat) is always present and resolves to itself. A panel resolves to itself iff visible; a Stage
+ * pane resolves to itself iff still mounted (in `mountedStagePanes`). Anything else falls home to
+ * chat. This is the only place the invariant is expressed; every reader goes through it, so "focused
+ * on a hidden panel" / "focused on an unmounted Stage pane" never escapes.
+ *
+ * `mountedStagePanes` is required (not optional-with-default) on purpose: it makes "did I update every
+ * caller for the Stage extension?" a typecheck rather than a silent empty-set bug at a missed call
+ * site (a focused Stage pane wrongly reading as chat would short-circuit its keys to the text field).
+ */
+export function resolveFocus(
+  intended: FocusId,
+  visible: ReadonlySet<PanelId>,
+  mountedStagePanes: ReadonlySet<StagePaneId>,
+): FocusId {
   if (intended === CHAT_FOCUS) {
     return CHAT_FOCUS;
+  }
+  if (isStagePaneId(intended)) {
+    return mountedStagePanes.has(intended) ? intended : CHAT_FOCUS;
   }
   return visible.has(intended) ? intended : CHAT_FOCUS;
 }
 
 /**
- * The derived candidate set: the visible panels in screen order, then chat. Screen order (not
- * insertion order) so `ctrl+vim` navigation and any ring traversal are spatially stable. Chat is
- * last by convention (it sits at the bottom of the layout). Pure — computed from the visible set,
- * never stored.
+ * The derived candidate set, in tiebreak order: the visible panels in screen order, then the mounted
+ * Stage panes (rects-map insertion order), then chat. Geometry dominates focus selection — this order
+ * is only the *final* tiebreak ({@link directionalFocusTarget}'s declaration-index field), so panels
+ * before Stage panes before chat just gives a stable, spatially-sensible ring when scores tie. Chat
+ * is last (it sits at the bottom of the layout). Pure — computed from the live sets, never stored.
  */
-export function focusCandidates(visible: ReadonlySet<PanelId>): readonly FocusId[] {
+export function focusCandidates(
+  visible: ReadonlySet<PanelId>,
+  mountedStagePanes: ReadonlySet<StagePaneId>,
+): readonly FocusId[] {
   const panels = PANEL_IDS.filter((id) => visible.has(id));
-  return [...panels, CHAT_FOCUS];
+  return [...panels, ...mountedStagePanes, CHAT_FOCUS];
 }
 
 /** The focus store's state: the intended target plus the focus verbs. The *effective* focus is not
@@ -90,6 +154,11 @@ export interface FocusState {
   /** Record a focusable's measured rect. Idempotent for an unchanged rect (keeps map identity so a
    * re-measure on an unrelated re-render does not churn). Called from a component's measure effect. */
   measure(id: FocusId, rect: Rect): void;
+  /** Drop a focusable's rect — a Stage pane calls this on UNMOUNT (its component left the tree). It
+   * removes the pane from the rects map, so {@link mountedStagePanesOf} no longer lists it and
+   * {@link resolveFocus} re-homes focus to chat if it was the focused pane (the Stage analogue of
+   * hiding a focused panel). Idempotent for an absent id (keeps map identity → no re-render churn). */
+  unmeasure(id: FocusId): void;
   /** `ctrl+vim`: move focus to the geometric neighbour of the *effective* focus in `direction`,
    * over the visible candidates' measured rects. No neighbour in that direction → focus unchanged
    * (the layout edge). The whole nav policy is here so the dispatcher just calls `navigate(dir)`. */
@@ -118,15 +187,28 @@ export function createFocusStore(
         return { rects: new Map(state.rects).set(id, rect) };
       });
     },
+    unmeasure(id) {
+      set((state) => {
+        if (!state.rects.has(id)) {
+          return state; // absent — keep map identity, no re-render churn
+        }
+        const next = new Map(state.rects);
+        next.delete(id);
+        return { rects: next };
+      });
+    },
     navigate(direction) {
-      // Candidates are the *effective* visible set + chat, in screen order (the geometry kernel's
-      // final tiebreak is declaration order), each paired with its measured rect. A focusable with
-      // no rect yet (not painted/measured) is dropped — it has no position to navigate to.
+      // Candidates are the *effective* visible panels + mounted Stage panes + chat, in screen order
+      // (the geometry kernel's final tiebreak is declaration order), each paired with its measured
+      // rect. A focusable with no rect yet (not painted/measured) is dropped — it has no position to
+      // navigate to. Stage panes are derived from the rects map (mountedStagePanesOf) — the same map
+      // we read for the rects below, so the candidate set and its geometry are always consistent.
       const visible = panels.getState().visible;
-      const current = resolveFocus(get().intendedId, visible);
       const rects = get().rects;
+      const mounted = mountedStagePanesOf(rects);
+      const current = resolveFocus(get().intendedId, visible, mounted);
       const candidates: FocusCandidate<FocusId>[] = [];
-      for (const id of focusCandidates(visible)) {
+      for (const id of focusCandidates(visible, mounted)) {
         const rect = rects.get(id);
         if (rect !== undefined) {
           candidates.push({ id, rect });
@@ -154,5 +236,10 @@ export type FocusStoreApi = StoreApi<FocusState> & { readonly panels: PanelStore
  * focused panel. Pure read across both stores — no mutation, so it is safe to call in render.
  */
 export function selectEffectiveFocus(focus: FocusStoreApi): FocusId {
-  return resolveFocus(focus.getState().intendedId, focus.panels.getState().visible);
+  const state = focus.getState();
+  return resolveFocus(
+    state.intendedId,
+    focus.panels.getState().visible,
+    mountedStagePanesOf(state.rects),
+  );
 }

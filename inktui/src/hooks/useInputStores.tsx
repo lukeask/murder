@@ -24,6 +24,7 @@ import {
   type FocusId,
   type FocusState,
   type FocusStoreApi,
+  mountedStagePanesOf,
   resolveFocus,
 } from '../input/focusStore.js';
 import type { Rect } from '../input/geometry.js';
@@ -31,7 +32,6 @@ import type { PanelKeymap } from '../input/keymap.js';
 import type { KeymapRegistryApi, KeymapRegistryState } from '../input/keymapRegistry.js';
 import type { ModeState, ModeStoreApi } from '../input/modeStore.js';
 import type { PanelState, PanelStoreApi } from '../input/panelStore.js';
-import type { PanelId } from '../input/panels.js';
 import { useTerminalSize } from './useTerminalSize.js';
 
 /** The input stores, carried as one context value so the provider wires them together once. */
@@ -113,7 +113,7 @@ export function useChatInputStore<T>(
  * `Keymap` and its intent handler, and the root dispatcher routes matching keys to it when focused.
  */
 export function usePanelKeymap<Intent extends string>(
-  id: PanelId,
+  id: FocusId,
   keymap: PanelKeymap<Intent>,
 ): void {
   const { keymaps } = useInputStores();
@@ -135,7 +135,12 @@ export function usePanelKeymap<Intent extends string>(
 export function useEffectiveFocus(): FocusId {
   const intended = useFocusStore((s) => s.intendedId);
   const visible = usePanelStore((s) => s.visible);
-  return resolveFocus(intended, visible);
+  // Phase 4a: mounted Stage panes are derived from the rects map (co-located with `intendedId` in the
+  // focus store). `measure` dedupes unchanged rects, so the map identity is stable and this memo only
+  // recomputes when a Stage pane mounts/unmounts (or any rect changes) — a re-home-correct re-render.
+  const rects = useFocusStore((s) => s.rects);
+  const mountedStagePanes = mountedStagePanesOf(rects);
+  return resolveFocus(intended, visible, mountedStagePanes);
 }
 
 /**
@@ -180,9 +185,21 @@ function measureRect(node: DOMElement): Rect {
  * warns about). We subscribe to {@link useTerminalSize} HERE so a resize re-renders every focusable
  * that calls this hook → its measure effect re-runs → its rect refreshes. One subscription covers all
  * panels + chat; the store dedupes unchanged rects, so a no-op resize causes no re-render churn.
+ *
+ * ## Unmount cleanup (Phase 4a — Stage panes)
+ * A Stage pane ({@link ../components/Stage.js}) is a dynamic focusable: it leaves the tree when its
+ * crow is un-favorited. On unmount it must drop its rect so {@link mountedStagePanesOf} stops listing
+ * it and {@link resolveFocus} re-homes focus to chat (the Stage analogue of hiding a focused panel).
+ * The cleanup lives in a SEPARATE unmount-only effect (deps `[id, unmeasure]`), NOT folded into the
+ * depless measure effect above: that effect's cleanup runs on every render, so unmeasuring there
+ * would unmeasure→remeasure each render and transiently drop the pane from the candidate set. This is
+ * uniform across all focusables (panels unmount on toggle-off too; cleaning their stale rect is
+ * strictly fine — `focusCandidates` already excludes a non-visible panel — and keeps the hook one
+ * shape). `id` accepts any {@link FocusId}, so a Stage pane passes `stage:chat:<agentId>` unchanged.
  */
 export function useMeasureFocus(id: FocusId, ref: React.RefObject<DOMElement | null>): void {
   const measure = useFocusStore((s) => s.measure);
+  const unmeasure = useFocusStore((s) => s.unmeasure);
   // Subscribe to the live terminal size: a resize re-renders this focusable (it's otherwise a
   // no-prop memo that wouldn't re-render), which re-runs the depless measure effect → fresh rect.
   useTerminalSize();
@@ -191,6 +208,9 @@ export function useMeasureFocus(id: FocusId, ref: React.RefObject<DOMElement | n
       measure(id, measureRect(ref.current));
     }
   });
+  // Unmount-only: drop this focusable's rect when it leaves the tree (Phase 4a re-home for Stage
+  // panes). Deps `[id, unmeasure]` so it does NOT run on every render (see the header note).
+  useEffect(() => () => unmeasure(id), [id, unmeasure]);
 }
 
 /** A stable ref for a measured focusable `<Box>`. Sugar so a panel writes `const ref = useFocusRef()`

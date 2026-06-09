@@ -64,7 +64,6 @@ import type { AppStoreApi } from '../store/store.js';
 import { toastStore } from '../store/toast/toastStore.js';
 import { BottomBar } from './BottomBar.js';
 import { ChatInput } from './ChatInput.js';
-import { CrowChatPanel } from './CrowChatPanel.js';
 import { CrowsPanel } from './CrowsPanel.js';
 import { NotesPanel } from './NotesPanel.js';
 import { Overlay, presentationHidesLayout } from './Overlay.js';
@@ -73,6 +72,7 @@ import { Rail } from './Rail.js';
 import { ReportsPanel } from './ReportsPanel.js';
 import type { SpawnContext } from './SpawnWizardModal.js';
 import { spawnWizardMode } from './SpawnWizardModal.js';
+import { Stage } from './Stage.js';
 import { TicketsPanel } from './TicketsPanel.js';
 import { Toast } from './Toast.js';
 import { TopBar } from './TopBar.js';
@@ -95,15 +95,11 @@ function renderPanel(id: PanelId): JSX.Element {
     case 'crows':
       // C9: CrowsPanel replaces the RosterPanel reference implementation here. The original
       // RosterPanel remains as the copy-reference; only this `case` changes.
-      // C10: CrowChatPanel is stacked below CrowsPanel — favorited crows get a history pane here.
-      // Visibility is tied to the crows toggle (panel 0); CrowChatPanel returns null when no
-      // favorited crows exist, so it's layout-safe.
-      return (
-        <Box flexDirection="column" flexGrow={1}>
-          <CrowsPanel />
-          <CrowChatPanel />
-        </Box>
-      );
+      // Phase 4a: the favorited-crow chat-history panes MOVED out of here into the {@link ./Stage.js}
+      // center region (they used to stack below CrowsPanel via the retired CrowChatPanel). The crows
+      // panel `0` is now just the roster pane; the chat panes live in the Stage and are reached by
+      // hjkl directional focus, not the crows toggle.
+      return <CrowsPanel />;
     case 'plans':
       // C11: PlansPanel fills the last placeholder — parent-plan indentation + star + doc-view.
       return <PlansPanel />;
@@ -264,10 +260,11 @@ export function makeChatInputHandler(
  * Each Rail collapses to nothing when it has no visible panels, so the Stage grows to fill whatever
  * the rails leave (full width when both rails are off).
  *
- * ## Stage slot (Phase 4 handoff)
- * The center is an empty `flexGrow` placeholder for now. Phase 4 mounts the Stage there (chat-history
- * panes + doc-view panes); see the "Phase 4: Stage" marker below. Until then it's an invisible
- * spacer that lets the rails take their natural share and keeps the layout honest.
+ * ## Stage slot (Phase 4a)
+ * The center hosts the {@link ./Stage.js Stage}: the favorited-crow chat-history Panes, each a
+ * focusable Stage pane reachable by `alt+h/j/k/l`. It grows to fill whatever the rails leave (full
+ * width when both rails are off) and clips its own overflow. Phase 4b adds open-document panes to the
+ * Stage's right; the `docView` slice is untouched here.
  *
  * C13: wires the `spawn` deferred handler so `ctrl+s` opens the spawn wizard. The handler reads the
  * app store at invocation time (not during render) so it always sees current state.
@@ -364,10 +361,10 @@ function Shell({ project }: { readonly project?: string | undefined }): JSX.Elem
           panels={LEFT_PANELS}
           renderPanel={renderPanel}
         />
-        {/* Phase 4: Stage center region mounts here (chat-history panes + doc-view panes). For now a
-            minimal empty placeholder that grows to fill whatever the rails leave (full width/height
-            when both rails are off), with the standard clip discipline. */}
-        <Box flexGrow={1} minHeight={0} overflow="hidden" />
+        {/* Phase 4a: the Stage center region — tiles the favorited-crow chat-history Panes, growing to
+            fill whatever the rails leave (full width when both rails are off). Phase 4b adds doc-view
+            panes to its right; the doc slice is untouched here. The Stage itself clips/grows. */}
+        <Stage />
         <Rail
           side="right"
           orientation={orientation}

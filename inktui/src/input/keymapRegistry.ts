@@ -11,17 +11,25 @@
  */
 
 import { createStore, type StoreApi } from 'zustand/vanilla';
+import type { FocusId } from './focusStore.js';
 import type { PanelKeymap } from './keymap.js';
-import type { PanelId } from './panels.js';
 
-/** The registry state: the declared keymaps by panel, plus register/unregister verbs. */
+/** The registry state: the declared keymaps by focusable, plus register/unregister verbs.
+ *
+ * ## Phase 4a — keyed by {@link FocusId}, not {@link PanelId}
+ * The dispatcher routes a matched key to `keymaps[focusedId]`, where `focusedId` is now a `FocusId`
+ * (a panel, chat, or a mounted Stage pane). Keying the registry by `FocusId` lets a focusable Stage
+ * pane (`stage:chat:<agentId>`) declare its own keymap (e.g. `j`/`k` to scroll its history) the same
+ * way a panel does — `usePanelKeymap` passes any `FocusId`. Panels still pass a `PanelId` (a `FocusId`
+ * subtype), so every existing caller is unchanged; chat declares nothing (it has the persistent
+ * chat-input handler, not a registry entry). */
 export interface KeymapRegistryState {
-  /** The currently registered panel keymaps. Read-only to callers; replaced on change. */
-  readonly keymaps: Partial<Record<PanelId, PanelKeymap>>;
-  /** Register (or replace) a panel's declared keymap + intent handler. */
-  register(id: PanelId, keymap: PanelKeymap): void;
-  /** Remove a panel's keymap (on unmount). Idempotent. */
-  unregister(id: PanelId): void;
+  /** The currently registered keymaps, keyed by focusable. Read-only to callers; replaced on change. */
+  readonly keymaps: Partial<Record<FocusId, PanelKeymap>>;
+  /** Register (or replace) a focusable's declared keymap + intent handler. */
+  register(id: FocusId, keymap: PanelKeymap): void;
+  /** Remove a focusable's keymap (on unmount). Idempotent. */
+  unregister(id: FocusId): void;
 }
 
 /** Create a keymap registry store. */

@@ -29,7 +29,12 @@ import {
   dispatchKey,
   type GlobalHandlers,
 } from '../input/dispatcher.js';
-import { CHAT_FOCUS, type FocusStoreApi, resolveFocus } from '../input/focusStore.js';
+import {
+  CHAT_FOCUS,
+  type FocusStoreApi,
+  mountedStagePanesOf,
+  resolveFocus,
+} from '../input/focusStore.js';
 import { selectActiveMode } from '../input/modeStore.js';
 import type { PanelStoreApi } from '../input/panelStore.js';
 import type { PanelId } from '../input/panels.js';
@@ -68,7 +73,11 @@ export function togglePanelFromShortcut(
   const panelState = panels.getState();
   const focusState = focus.getState();
   const visible = panelState.visible;
-  const effectiveFocus = resolveFocus(focusState.intendedId, visible);
+  const effectiveFocus = resolveFocus(
+    focusState.intendedId,
+    visible,
+    mountedStagePanesOf(focusState.rects),
+  );
 
   if (!visible.has(id)) {
     panelState.show(id);
@@ -127,7 +136,13 @@ export function useRootInput(deferred: DeferredGlobalHandlers = {}): void {
 
       const ctx: DispatchContext = {
         // Effective focus, so layer 2/3 route against where the highlight actually is (post re-home).
-        focusedId: resolveFocus(focusState.intendedId, panels.getState().visible),
+        // Stage panes are derived from the rects map (mountedStagePanesOf) so a focused chat pane
+        // resolves to itself, not chat — otherwise layer 2 would short-circuit its keys to the input.
+        focusedId: resolveFocus(
+          focusState.intendedId,
+          panels.getState().visible,
+          mountedStagePanesOf(focusState.rects),
+        ),
         panelKeymaps: keymaps.getState().keymaps,
         handlers,
         // Layer 0: the live active mode (stack top), or null. Read per-event so a mode entered/exited
