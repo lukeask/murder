@@ -93,6 +93,15 @@ export interface QuestionEvent extends BaseEvent {
   recent_pane: string;
 }
 
+/** A free-text working note emitted by a crow via a `>>> NOTE:` marker. Under DB-owns-runtime
+ * these land in the events table (audit log), not the ticket `.md`. Carried for union
+ * completeness; the store re-pulls the notes slice via the `note` {@link Entity} `state.snapshot`,
+ * so this event needs no dedicated handler. Mirrors Python `NoteEvent`. */
+export interface NoteEvent extends BaseEvent {
+  type: 'note';
+  note: string;
+}
+
 export interface EscalationEvent extends BaseEvent {
   type: 'escalation';
   to: 'user' | 'collaborator';
@@ -221,6 +230,7 @@ export type BusEvent =
   | HeartbeatEvent
   | SummaryEvent
   | QuestionEvent
+  | NoteEvent
   | EscalationEvent
   | StatusChangeEvent
   | ErrorEvent

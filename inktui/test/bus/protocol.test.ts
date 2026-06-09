@@ -18,6 +18,7 @@ function eventKind(event: BusEvent): string {
     case 'heartbeat':
     case 'summary':
     case 'question':
+    case 'note':
     case 'escalation':
     case 'status_change':
     case 'error':
