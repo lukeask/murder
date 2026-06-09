@@ -67,9 +67,9 @@ export interface QuickCreateResult {
   readonly title: string;
 }
 
-/** Reply from the LIVE `ticket.next_id` RPC. */
+/** Reply from the LIVE `ticket.next_id` RPC. Python returns `ticket_id` (not `next_id`). */
 export interface NextIdResult {
-  readonly next_id: string;
+  readonly ticket_id: string;
 }
 
 /** Reply from the LIVE `ticket.exists` RPC. */
