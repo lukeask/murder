@@ -21,6 +21,13 @@ from murder.work.plans.schema import Plan, PlanStatus
 # (path, parse_error) -> deliver a fix-message to the owning planner agent.
 ParseErrorNotifier = Callable[[Path, str], Awaitable[None]]
 
+# (plan_name) -> emit a key-only ``state.snapshot{entity=plan}``. Injected by the
+# runtime so this pure parse/DB loop never touches the bus directly; the callback
+# funnels the filesystem->DB reconcile path (the PRIMARY plan writer) plus the
+# rename / deprecate / parse-error mutations into F1's key-only emit. The PlanSync
+# analog of TicketSync's ``on_ticket_change``. See ``Runtime.emit_snapshot``.
+PlanChangeNotifier = Callable[[str], None]
+
 
 def content_hash(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
@@ -37,11 +44,18 @@ class PlanSync(MarkdownSyncLoop):
         poll_s: float = 1.5,
         debounce_s: float = 0.75,
         parse_error_notifier: ParseErrorNotifier | None = None,
+        on_plan_change: PlanChangeNotifier | None = None,
     ) -> None:
         super().__init__(repo_root, poll_s=poll_s, debounce_s=debounce_s)
         self.db = db
         self.parse_error_notifier = parse_error_notifier
+        self.on_plan_change = on_plan_change
         # Suppressed during the startup/shutdown bulk pass so idle malformed
+        #
+        # NOTE: ``_suppress_notify`` gates ONLY the parse-error notifier (planner
+        # re-prompt), NOT the key-only snapshot emit. Per the ticket precedent
+        # (which emits on ``reconcile_all`` startup churn), ``on_plan_change``
+        # fires regardless of suppression -- a client refetch is cheap.
         # plans don't re-prompt their planner every run; only observed
         # (debounced) edits notify.
         self._suppress_notify = False
@@ -134,6 +148,12 @@ class PlanSync(MarkdownSyncLoop):
                     new_name,
                 ),
             )
+        # Rename moves the plan's identity: the old key leaves the plans list and
+        # the new key appears. Emit a key-only snapshot for BOTH so a client that
+        # had either selected refetches. (Fires after COMMIT.)
+        if self.on_plan_change is not None:
+            self.on_plan_change(old_name)
+            self.on_plan_change(new_name)
         return dbmod.get_plan_row(self.db, new_name) or {}
 
     def deprecate_plan(self, name: str) -> dict[str, object]:
@@ -191,6 +211,10 @@ class PlanSync(MarkdownSyncLoop):
                     default=str,
                 ),
             )
+        # Supersede drops the plan from the active list (snapshot filters
+        # ``status != 'superseded'``). Emit so the client refetches and drops it.
+        if self.on_plan_change is not None:
+            self.on_plan_change(name)
         return row
 
     async def reconcile_file(self, path: Path) -> None:
@@ -211,6 +235,12 @@ class PlanSync(MarkdownSyncLoop):
                     file_hash=file_hash,
                     parse_error=str(exc),
                 )
+                # The row's ``sync_state`` flipped to parse_error (a visible badge
+                # in the plans list), so emit even though the plan body didn't
+                # ingest. Only when a row exists -- a brand-new malformed file has
+                # nothing to refetch.
+                if self.on_plan_change is not None:
+                    self.on_plan_change(row["name"])
             if not self._suppress_notify and self.parse_error_notifier is not None:
                 await self.parse_error_notifier(path, str(exc))
             return
@@ -229,6 +259,8 @@ class PlanSync(MarkdownSyncLoop):
                 create_revision=True,
                 revision_source="import",
             )
+            if self.on_plan_change is not None:
+                self.on_plan_change(plan.name)
             return
 
         file_changed = row["file_hash"] != file_hash
@@ -248,6 +280,8 @@ class PlanSync(MarkdownSyncLoop):
                 create_revision=(rendered_hash != row["body_hash"]),
                 revision_source="file",
             )
+            if self.on_plan_change is not None:
+                self.on_plan_change(plan.name)
 
     def materialize_row(self, row: dict[str, object]) -> Path:
         related = self.db.execute(

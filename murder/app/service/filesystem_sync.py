@@ -59,9 +59,10 @@ class FilesystemSyncSupervisor:
         db: sqlite3.Connection,
         *,
         on_ticket_change: Callable[[str], None] | None = None,
+        on_plan_change: Callable[[str], None] | None = None,
     ) -> FilesystemSyncSupervisor:
         return cls(
-            plan_sync=PlanSync(repo_root, db),
+            plan_sync=PlanSync(repo_root, db, on_plan_change=on_plan_change),
             note_sync=NoteSync(repo_root, db),
             notetaker_context_sync=NotetakerContextSync(repo_root, db),
             ticket_sync=TicketSync(repo_root, db, on_ticket_change=on_ticket_change),

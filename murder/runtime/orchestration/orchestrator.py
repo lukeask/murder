@@ -674,6 +674,15 @@ class Orchestrator:
                 block=conversation.block_to_wire(block),
             )
         )
+        # F1 (plan sort-order): the plans list orders by MAX(captured_at) of each
+        # plan's ``planner-{name}`` messages (read_model.get_plans_snapshot), so a
+        # user turn to a planner reorders the list WITHOUT any plans-table write.
+        # This is the low-rate, plan-scoped, runtime-layer choke point for that
+        # reorder; emit a key-only plan snapshot. (The high-rate poll-driven
+        # ``merge_transcript`` rebuild that ALSO re-sorts is deferred per the
+        # plan's coalescing caveat -- see commit message follow-up.)
+        if agent_id.startswith("planner-"):
+            await self.rt.publish_snapshot(Entity.PLAN, agent_id[len("planner-"):])
 
     async def send_agent_message(
         self, agent_id: str, message: str, ticket_id: str | None
@@ -954,6 +963,12 @@ class Orchestrator:
             )
             _write_plan_markdown(path, plan)
         row = _db_get_plan_row(self.rt.db, name) or {}
+        # scaffold_plan writes the plans/plan_revisions rows DIRECTLY (not via
+        # PlanSync.reconcile_file), so the on_plan_change callback never fires for
+        # it. Emit here: a new/refreshed draft -> the plans list changed. Async
+        # path -> await publish_snapshot (closes the 1.5 s poll gap the direct DB
+        # write opens before PlanSync would re-reconcile the materialized file).
+        await self.rt.publish_snapshot(Entity.PLAN, name)
         return {
             "handled": True,
             "name": name,

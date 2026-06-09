@@ -120,6 +120,7 @@ class Runtime:
             self.repo_root,
             self.db,
             on_ticket_change=lambda tid: self.emit_snapshot(Entity.TICKET, tid),
+            on_plan_change=lambda name: self.emit_snapshot(Entity.PLAN, name),
         )
         self.plan_sync = self._sync.plan_sync
         self.note_sync = self._sync.note_sync
