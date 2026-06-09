@@ -451,7 +451,7 @@ describe('C7 — tickets slice invalidation', () => {
 // ---- C9: usage slice invalidation ----
 
 describe('C9 — usage slice invalidation', () => {
-  it('re-pulls usage on an agent-entity state.snapshot (same entity as roster)', async () => {
+  it('re-pulls usage on a queue_row-entity state.snapshot (F1 locked map: queue_row → usage)', async () => {
     const fake = new FakeBusClient();
     fake.stubRpc('crow.get_snapshot', crowReply());
     fake.stubRpc('usage.get_snapshot', {
@@ -461,7 +461,7 @@ describe('C9 — usage slice invalidation', () => {
     const { store } = createAppStore(fake);
     expect(store.getState().usage.status).toBe('idle');
 
-    fake.emit(snapshot('agent'));
+    fake.emit(snapshot('queue_row'));
     await flush();
 
     expect(fake.rpcCalls).toContainEqual({ method: 'usage.get_snapshot', params: {} });
@@ -470,7 +470,7 @@ describe('C9 — usage slice invalidation', () => {
     expect(store.getState().usage.rows[0]?.harness).toBe('claude');
   });
 
-  it('ref-swaps ONLY usage on an agent event — notes, reports, tickets keep identity', async () => {
+  it('does NOT re-pull usage on an agent event (usage keys on queue_row, not agent)', async () => {
     const fake = new FakeBusClient();
     fake.stubRpc('crow.get_snapshot', crowReply());
     fake.stubRpc('usage.get_snapshot', { invalidation_key: 'iv-u', gauges: [] });
@@ -481,16 +481,19 @@ describe('C9 — usage slice invalidation', () => {
     const notesBefore = store.getState().notes;
     const reportsBefore = store.getState().reports;
     const ticketsBefore = store.getState().tickets;
+    const usageBefore = store.getState().usage;
 
     fake.emit(snapshot('agent'));
     await flush();
 
-    // notes, reports, tickets are not keyed on 'agent' — they keep identity.
+    // notes, reports, tickets, usage are not keyed on 'agent' — they keep identity.
     expect(store.getState().notes).toBe(notesBefore);
     expect(store.getState().reports).toBe(reportsBefore);
     expect(store.getState().tickets).toBe(ticketsBefore);
-    // Both roster and usage ref-swap (both key on 'agent').
-    expect(store.getState().usage.status).toBe('ready');
+    expect(store.getState().usage).toBe(usageBefore);
+    expect(fake.rpcCalls).not.toContainEqual({ method: 'usage.get_snapshot', params: {} });
+    // Only roster ref-swaps on an agent event.
+    expect(store.getState().roster.status).toBe('ready');
   });
 
   it('routes a rejected usage rpc into usage.error, never thrown past the action', async () => {
@@ -501,13 +504,11 @@ describe('C9 — usage slice invalidation', () => {
     });
     const { store } = createAppStore(fake);
 
-    fake.emit(snapshot('agent'));
+    fake.emit(snapshot('queue_row'));
     await flush();
 
     expect(store.getState().usage.status).toBe('error');
     expect(store.getState().usage.error).toBe('usage down');
-    // The roster should still succeed (each action has its own error isolation).
-    expect(store.getState().roster.status).toBe('ready');
   });
 });
 

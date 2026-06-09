@@ -57,7 +57,7 @@ function wireOp(message: WireMessage): string {
 
 describe('protocol', () => {
   it('pins PROTOCOL_VERSION to the Python source (murder/bus/protocol.py)', () => {
-    expect(PROTOCOL_VERSION).toBe(1);
+    expect(PROTOCOL_VERSION).toBe(2);
   });
 
   it('carries the socket-path constants for the real client (C2)', () => {

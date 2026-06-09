@@ -15,7 +15,7 @@
  * you're in the wrong file"). Framing/handshake logic lives in the `UdsBusClient` (C2).
  */
 
-export const PROTOCOL_VERSION = 1;
+export const PROTOCOL_VERSION = 2;
 
 // === Closed enums ============================================================
 // Modeled as union types of string literals rather than TS `enum`s: the wire carries the bare
@@ -45,18 +45,8 @@ export type CommandStatus = 'pending' | 'in_flight' | 'done' | 'failed' | 'cance
 /** Entity kind named by a key-only {@link StateSnapshotEvent}. Closed — adding a value bumps
  * PROTOCOL_VERSION. These are the slice names the store invalidates against.
  *
- * CONTRACT GAP (C6): `'report'` is added here as a **speculative forward-declaration** to wire
- * the reports slice (panel 3). It is NOT yet present in the Python `Entity` enum in
- * `murder/bus/protocol.py`. `PROTOCOL_VERSION` is intentionally NOT bumped here — bumping only
- * the TS side while Python stays at version 1 would cause `UdsBusClient`'s handshake to refuse
- * the real service permanently (version-mismatch error, rule: never retry). The correct path is:
- * add `REPORT = "report"` to the Python `Entity` enum, then bump `PROTOCOL_VERSION` in both
- * `protocol.ts` and `murder/bus/protocol.py` in lockstep. Until that backend change lands, live
- * `report`-entity events will never arrive from the service; the reports slice will only refresh
- * via explicit `actions.reports.refresh()` calls (e.g. on a `state.snapshot` of another entity
- * or a manual trigger). `FakeBusClient` tests drive the full path correctly regardless.
- *
- * NOTE: `note` already exists in Python (clean path); only `report` is the gap. */
+ * Mirrors the Python `Entity` enum (`murder/bus/protocol.py`) 1:1, including `report` (added to
+ * Python in F1; the former C6 forward-declaration is now backed by the real backend enum). */
 export type Entity = 'ticket' | 'agent' | 'plan' | 'note' | 'report' | 'escalation' | 'queue_row';
 
 export type PresenceState = 'attended' | 'headless';
@@ -151,6 +141,10 @@ export interface StateSnapshotEvent extends BaseEvent {
   entity: Entity;
   key: string;
   entity_version: number;
+  /** Reserved forward-compat field (F1, unused now). The contract stays key-only: clients refetch
+   * the named slice. A future low-bandwidth mode MAY inline the changed data here to skip the
+   * refetch round-trip. Absent on the wire today; do not build a translation layer off it. */
+  payload?: Record<string, unknown> | null;
 }
 
 export interface PresenceEvent extends BaseEvent {

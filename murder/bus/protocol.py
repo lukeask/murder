@@ -45,7 +45,7 @@ from pydantic import BaseModel, Field, TypeAdapter
 
 from murder.work.tickets.status import TicketStatus
 
-PROTOCOL_VERSION = 1
+PROTOCOL_VERSION = 2
 
 
 # === Closed enums ============================================================
@@ -85,6 +85,7 @@ class Entity(StrEnum):
     AGENT = "agent"
     PLAN = "plan"
     NOTE = "note"
+    REPORT = "report"
     ESCALATION = "escalation"
     QUEUE_ROW = "queue_row"
 
@@ -201,6 +202,14 @@ class StateSnapshotEvent(_BaseEvent):
     entity: Entity
     key: str
     entity_version: int = 0
+    # Reserved forward-compat field (F1, unused now). The bus->client contract
+    # stays key-only: default behaviour is a tiny key-only push and the client
+    # refetches the named slice. A future low-bandwidth mode MAY inline the
+    # changed data here (paired with field-masked snapshot RPCs) to skip the
+    # refetch round-trip. This is a superset of what clients consume today --
+    # no second event format, no migration. Do NOT build a translation layer
+    # off this field as part of F1.
+    payload: dict[str, Any] | None = None
 
 
 class PresenceEvent(_BaseEvent):

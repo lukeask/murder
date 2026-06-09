@@ -38,13 +38,14 @@ export interface UsageRow {
 export type UsageState = ListState<UsageRow>;
 
 /**
- * The {@link Entity} key whose `state.snapshot` events invalidate this slice. Usage changes as
- * agents run, so it keys on `'agent'` — the same entity as the roster slice. There is no
- * dedicated `'usage'` entity in the Python `Entity` enum; using `'agent'` is the closest fit
- * and correct for refresh granularity. The invalidation loop fires all matching slices on the
- * same entity, so both roster and usage refresh when an `'agent'`-entity event arrives.
+ * The {@link Entity} key whose `state.snapshot` events invalidate this slice. Usage gauges are
+ * embedded in the schedule snapshot and are driven by `harness_usage_snapshots` / scheduler
+ * decision-cache writes, which the service emits under the `'queue_row'` entity (F1 locked map:
+ * `queue_row → usage`). Keying here on `'queue_row'` keeps the invalidation table 1:1 with the
+ * `Entity` enum (one entity → one slice), so usage refreshes on usage-visible mutations rather
+ * than piggybacking on every agent change.
  */
-export const USAGE_INVALIDATING_ENTITY: Entity = 'agent';
+export const USAGE_INVALIDATING_ENTITY: Entity = 'queue_row';
 
 /** The initial, pre-fetch slice value. A fresh store has not talked to the bus yet → `idle`. */
 export const initialUsageState: UsageState = initialListState<UsageRow>();

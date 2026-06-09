@@ -32,6 +32,7 @@ from murder.app.service.filesystem_sync import FilesystemSyncSupervisor
 from murder.app.service.recovery import reconcile_agents_vs_tmux
 from murder.app.service.runtime_lifecycle import shutdown_live_agents
 from murder.bus import Bus, EventFilter, SubscriptionHandle
+from murder.bus.protocol import Entity, StateSnapshotEvent
 from murder.llm.harnesses.versioning import HarnessVersionRegistry
 from murder.runtime.agents.events import AgentEventSink, LoggingAgentEventSink
 from murder.runtime.terminal import tmux
@@ -73,6 +74,11 @@ class Runtime:
         self.agents = self._agents
         self.event_sink: AgentEventSink = LoggingAgentEventSink()
         self._tasks: dict[str, asyncio.Task[None]] = {}
+        # Holds in-flight key-only state.snapshot publish tasks scheduled from
+        # sync choke points (see ``emit_snapshot``). Retaining the reference
+        # keeps a fire-and-forget task from being GC'd mid-publish, and lets
+        # ``stop()`` (and tests) drain pending emits deterministically.
+        self._emit_tasks: set[asyncio.Task[None]] = set()
         self._shutdown = asyncio.Event()
         self.harness_versions = HarnessVersionRegistry()
         self._external_stop = asyncio.Event()
@@ -126,6 +132,10 @@ class Runtime:
 
     async def stop(self) -> None:
         self._shutdown.set()
+        if self._emit_tasks:
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await asyncio.gather(*list(self._emit_tasks), return_exceptions=True)
+            self._emit_tasks.clear()
         if self._sync is not None:
             await self._sync.shutdown(self._tasks)
         for t in list(self._tasks.values()):
@@ -154,8 +164,59 @@ class Runtime:
             with contextlib.suppress(FileNotFoundError, OSError):
                 lock_path(self.repo_root).unlink()
 
+    def emit_snapshot(self, entity: Entity, key: str) -> None:
+        """Schedule a key-only ``state.snapshot`` from a SYNC choke point.
+
+        THE F1 CHOKE-POINT / EMIT PATTERN (copy this verbatim for sibling
+        entities — ticket / plan / note / queue_row):
+
+        - Each read-model domain has ONE sync persistence choke point that all
+          its mutations funnel through (for ``agent`` that is ``sync_agent``;
+          for tickets it is the lifecycle/status hook, etc.). Emit the key-only
+          ``state.snapshot{entity, key}`` from that single hook, NOT at every
+          call site, so coverage is "one helper call" rather than "21 scattered
+          emits."
+        - ``bus.publish`` is ASYNC but these choke points are SYNC. Every sync
+          mutation runs on the Runtime's asyncio loop thread, so we grab the
+          running loop and schedule the publish as a task. We retain the task in
+          ``self._emit_tasks`` (a) so a fire-and-forget coroutine can't be GC'd
+          mid-publish and (b) so ``stop()`` / tests can drain pending emits.
+        - ASYNC callers (orchestrator, workers) that already sit in a coroutine
+          should ``await bus.publish(StateSnapshotEvent(...))`` directly rather
+          than route through here -- this helper exists ONLY for the sync gap.
+        - The contract is key-only: emit just ``entity`` + ``key``; never inline
+          the changed body (the client refetches the named slice).
+
+        No-ops before the bus exists or outside a running loop (e.g. tests
+        calling the sync method without a loop) so persistence never fails.
+        """
+        if self.bus is None or self.run_id is None:
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        task = loop.create_task(
+            self.bus.publish(
+                StateSnapshotEvent(
+                    run_id=self.run_id,
+                    agent_id="runtime",
+                    entity=entity,
+                    key=key,
+                )
+            )
+        )
+        self._emit_tasks.add(task)
+        task.add_done_callback(self._emit_tasks.discard)
+
     def sync_agent(self, agent: LifecycleParticipant) -> None:
-        """Persist current agent fields to SQLite."""
+        """Persist current agent fields to SQLite, then emit a key-only snapshot.
+
+        This is the single agent-mutation choke point: ~21 sites
+        (spawn / status change / stop / rename / reap side-effects) call here,
+        so emitting ``state.snapshot{entity=agent}`` once at the end covers them
+        all. See ``emit_snapshot`` for the sync->async pattern siblings reuse.
+        """
         if self.db is None:
             return
         worktree_path = getattr(agent, "worktree_path", None)
@@ -172,6 +233,7 @@ class Runtime:
             worktree_path=str(worktree_path) if worktree_path is not None else None,
             pid=None,
         )
+        self.emit_snapshot(Entity.AGENT, agent.id)
 
     def register_agent(self, agent: LifecycleParticipant) -> None:
         self._agents.register(agent, persist=self.sync_agent)
