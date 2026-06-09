@@ -22,7 +22,7 @@ from murder.bus.protocol import CommandEvent
 from murder.bus.transport_socket import SocketBusServer, default_socket_path
 from murder.config import Config
 from murder.llm.harnesses.harnesses_doc import write_harnesses_doc
-from murder.llm.harnesses.model_cache import populate_model_cache
+from murder.llm.harnesses.model_cache import refresh_and_persist_harness_models
 from murder.runtime.orchestration.orchestrator import Orchestrator
 from murder.state.persistence.commands import get_command_status
 from murder.state.storage.paths import db_path
@@ -224,6 +224,9 @@ class ServiceHost:
                 )
             )
 
+        def _state_harness_models_snapshot(_body: dict[str, Any]) -> dict[str, Any]:
+            return _value(_read_model().get_harness_models_snapshot())
+
         async def _document_reconcile_plan(body: dict[str, Any]) -> dict[str, Any]:
             rt = self.runtime
             if rt is None:
@@ -279,6 +282,10 @@ class ServiceHost:
         self.register_rpc_handler(
             "state.notetaker_recent_entries",
             _state_notetaker_recent_entries,
+        )
+        self.register_rpc_handler(
+            "state.harness_models_snapshot",
+            _state_harness_models_snapshot,
         )
         self.register_rpc_handler("document.reconcile_plan", _document_reconcile_plan)
         self.register_rpc_handler("document.plan_path", _document_plan_path)
@@ -537,13 +544,15 @@ class ServiceHost:
         self._service_session_name = session.name
 
     async def _discover_then_write_models_doc(self) -> None:
-        """Populate the model cache, then write ``HARNESSES_AND_MODELS.md``.
+        """Discover harness models, persist to DB, then write ``HARNESSES_AND_MODELS.md``.
 
         Chained (not two parallel tasks) so the startup doc reflects the
         *discovered* model lists rather than racing discovery and capturing the
-        classvar fallback.
+        classvar fallback.  Discovery fires exactly once; results are written
+        to both the in-process cache and the SQLite DB.
         """
-        await populate_model_cache(self.repo_root)
+        db = self.runtime.db if self.runtime is not None else None
+        await refresh_and_persist_harness_models(self.repo_root, db)
         write_harnesses_doc(self.repo_root)
 
     async def _run_projection_poll_loop(self) -> None:
