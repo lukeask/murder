@@ -15,7 +15,6 @@ from murder.app.service.bootstrap import start_supervisor_workers
 from murder.app.service.client_api import dto_to_wire
 from murder.app.service.read_model import ServiceReadModel
 from murder.app.service.runtime import Runtime
-from murder.app.service.settings_service import SettingsService
 from murder.app.service.supervisor import Supervisor
 from murder.bus.broker import DurableBroker
 from murder.bus.protocol import CommandEvent
@@ -141,9 +140,6 @@ class ServiceHost:
         def _value(value: Any) -> dict[str, Any]:
             return {"ok": True, "value": dto_to_wire(value)}
 
-        def _state_dispatch_snapshot(_body: dict[str, Any]) -> dict[str, Any]:
-            return _value(_read_model().get_dispatch_snapshot())
-
         def _state_schedule_snapshot(_body: dict[str, Any]) -> dict[str, Any]:
             return _value(_read_model().get_schedule_snapshot())
 
@@ -152,9 +148,6 @@ class ServiceHost:
 
         def _state_conversations_snapshot(_body: dict[str, Any]) -> dict[str, Any]:
             return _value(_read_model().get_conversations_snapshot())
-
-        def _state_escalations_snapshot(_body: dict[str, Any]) -> dict[str, Any]:
-            return _value(_read_model().get_escalations_snapshot())
 
         def _state_plans_snapshot(_body: dict[str, Any]) -> dict[str, Any]:
             return _value(_read_model().get_plans_snapshot())
@@ -192,83 +185,12 @@ class ServiceHost:
                 raise ValueError("state.report_display requires name")
             return _value(_read_model().get_report_display(name))
 
-        def _state_usage_gauge_drill_in(body: dict[str, Any]) -> dict[str, Any]:
-            harness = str(body.get("harness", "")).strip()
-            window_key = str(body.get("window_key", "")).strip()
-            if not harness or not window_key:
-                raise ValueError("state.usage_gauge_drill_in requires harness and window_key")
-            return _value(
-                _read_model().get_usage_gauge_drill_in(
-                    harness=harness,
-                    window_key=window_key,
-                    t_period_minutes=float(body.get("t_period_minutes", 0.0)),
-                )
-            )
-
-        def _state_ticket_carve(body: dict[str, Any]) -> dict[str, Any]:
-            ticket_id = str(body.get("ticket_id", "")).strip()
-            if not ticket_id:
-                raise ValueError("state.ticket_carve requires ticket_id")
-            return _value(_read_model().get_ticket_carve_snapshot(ticket_id))
-
-        def _state_ticket_status(body: dict[str, Any]) -> dict[str, Any]:
-            ticket_id = str(body.get("ticket_id", "")).strip()
-            if not ticket_id:
-                raise ValueError("state.ticket_status requires ticket_id")
-            return _value(_read_model().get_ticket_status(ticket_id))
-
-        def _state_notetaker_recent_entries(body: dict[str, Any]) -> dict[str, Any]:
-            return _value(
-                _read_model().get_notetaker_recent_entries(
-                    int(body.get("limit") or 50),
-                )
-            )
-
         def _state_harness_models_snapshot(_body: dict[str, Any]) -> dict[str, Any]:
             return _value(_read_model().get_harness_models_snapshot())
 
-        async def _document_reconcile_plan(body: dict[str, Any]) -> dict[str, Any]:
-            rt = self.runtime
-            if rt is None:
-                raise RuntimeError("runtime unavailable")
-            name = str(body.get("name", "")).strip()
-            if not name:
-                raise ValueError("document.reconcile_plan requires name")
-            await rt.reconcile_plan(name)
-            return {"ok": True}
-
-        def _document_plan_path(body: dict[str, Any]) -> dict[str, Any]:
-            rt = self.runtime
-            if rt is None:
-                raise RuntimeError("runtime unavailable")
-            name = str(body.get("name", "")).strip()
-            if not name:
-                raise ValueError("document.plan_path requires name")
-            return _value(str(rt.plan_path_for(name)))
-
-        def _document_note_path(body: dict[str, Any]) -> dict[str, Any]:
-            rt = self.runtime
-            if rt is None:
-                raise RuntimeError("runtime unavailable")
-            name = str(body.get("name", "")).strip()
-            if not name:
-                raise ValueError("document.note_path requires name")
-            return _value(str(rt.note_path_for(name)))
-
-        def _document_report_path(body: dict[str, Any]) -> dict[str, Any]:
-            rt = self.runtime
-            if rt is None:
-                raise RuntimeError("runtime unavailable")
-            name = str(body.get("name", "")).strip()
-            if not name:
-                raise ValueError("document.report_path requires name")
-            return _value(str(rt.report_path_for(name)))
-
-        self.register_rpc_handler("state.dispatch_snapshot", _state_dispatch_snapshot)
         self.register_rpc_handler("state.schedule_snapshot", _state_schedule_snapshot)
         self.register_rpc_handler("state.crow_snapshot", _state_crow_snapshot)
         self.register_rpc_handler("state.conversations_snapshot", _state_conversations_snapshot)
-        self.register_rpc_handler("state.escalations_snapshot", _state_escalations_snapshot)
         self.register_rpc_handler("state.plans_snapshot", _state_plans_snapshot)
         self.register_rpc_handler("state.notes_snapshot", _state_notes_snapshot)
         self.register_rpc_handler("state.reports_snapshot", _state_reports_snapshot)
@@ -276,69 +198,10 @@ class ServiceHost:
         self.register_rpc_handler("state.plan_display", _state_plan_display)
         self.register_rpc_handler("state.note_display", _state_note_display)
         self.register_rpc_handler("state.report_display", _state_report_display)
-        self.register_rpc_handler("state.usage_gauge_drill_in", _state_usage_gauge_drill_in)
-        self.register_rpc_handler("state.ticket_carve", _state_ticket_carve)
-        self.register_rpc_handler("state.ticket_status", _state_ticket_status)
-        self.register_rpc_handler(
-            "state.notetaker_recent_entries",
-            _state_notetaker_recent_entries,
-        )
         self.register_rpc_handler(
             "state.harness_models_snapshot",
             _state_harness_models_snapshot,
         )
-        self.register_rpc_handler("document.reconcile_plan", _document_reconcile_plan)
-        self.register_rpc_handler("document.plan_path", _document_plan_path)
-        self.register_rpc_handler("document.note_path", _document_note_path)
-        self.register_rpc_handler("document.report_path", _document_report_path)
-
-        async def _tmux_capture_pane(body: dict[str, Any]) -> dict[str, Any]:
-            from murder.runtime.terminal import tmux
-
-            session = str(body.get("session", "")).strip()
-            if not session:
-                raise ValueError("tmux.capture_pane requires session")
-            lines = int(body.get("lines") or 200)
-            try:
-                text = await tmux.capture_pane(session, lines=lines)
-            except tmux.TmuxError as exc:
-                return {"ok": False, "error": str(exc)}
-            return {"ok": True, "text": text}
-
-        async def _tmux_shell_run(body: dict[str, Any]) -> dict[str, Any]:
-            import time
-
-            from murder.runtime.terminal import tmux
-
-            command = str(body.get("command", "")).strip()
-            if not command:
-                raise ValueError("tmux.shell_run requires command")
-            prior = body.get("prior_session")
-            if isinstance(prior, str) and prior.strip():
-                with contextlib.suppress(tmux.TmuxError):
-                    await tmux.kill_session(prior.strip())
-            session_name = f"murder-shell-{int(time.monotonic() * 1000) % 1_000_000}"
-            await tmux.create_session(session_name, self.repo_root)
-            await tmux.send_keys(session_name, command)
-            return {"ok": True, "session_name": session_name}
-
-        self.register_rpc_handler("tmux.capture_pane", _tmux_capture_pane)
-        self.register_rpc_handler("tmux.shell_run", _tmux_shell_run)
-
-        settings = SettingsService(self.repo_root)
-
-        async def _settings_discover_models(body: dict[str, Any]) -> dict[str, Any]:
-            harness = str(body.get("harness", "")).strip()
-            if not harness:
-                raise ValueError("settings.discover_models requires harness")
-            result = await settings.discover_models(harness)
-            return {
-                "ok": result.ok,
-                "message": result.message,
-                "models": [{"id": mid, "label": label} for mid, label in result.models],
-            }
-
-        self.register_rpc_handler("settings.discover_models", _settings_discover_models)
 
         def _orchestrator() -> Orchestrator:
             if self.orchestrator is None:
@@ -376,16 +239,6 @@ class ServiceHost:
                 raise ValueError("plan.create requires plan_name")
             message = str(body.get("message", ""))
             return await _orchestrator().create_plan(plan_name, message)
-
-        def _editor_binary(_body: dict[str, Any]) -> dict[str, Any]:
-            # Resolve the editor command server-side (folds the backend
-            # ``choose_editor`` import out of the TUI, V6). The client still
-            # launches the subprocess — it owns the user's terminal/tty; the
-            # service is a daemon with no tty.
-            from murder.work.plans.sync import choose_editor
-
-            preferred = str(_body.get("preferred") or "").strip() or None
-            return {"ok": True, "editor": choose_editor(preferred)}
 
         def _image_upload(body: dict[str, Any]) -> dict[str, Any]:
             # F9: store a pasted clipboard image under .murder/images and return
@@ -482,7 +335,6 @@ class ServiceHost:
         self.register_rpc_handler("ticket.save_body", _ticket_save_body)
         self.register_rpc_handler("ticket.schedule", _ticket_schedule)
         self.register_rpc_handler("plan.create", _plan_create)
-        self.register_rpc_handler("editor.binary", _editor_binary)
         self.register_rpc_handler("image.upload", _image_upload)
         self.register_rpc_handler("tui.load_favorites", _tui_load_favorites)
         self.register_rpc_handler("tui.save_favorites", _tui_save_favorites)

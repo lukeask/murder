@@ -1,8 +1,8 @@
-"""C14 / V-list closure — host-side RPC handlers for V2/V3/V6/V7.
+"""C14 / V-list closure — host-side RPC handlers for V2/V3/V7.
 
 These exercise the stateless filesystem/util handlers registered on the
 ``ServiceHost`` so the TUI never touches ``.murder/`` or backend imports
-directly: editor.binary (V6), image.upload (V2), tui.{load,save}_favorites (V3),
+directly: image.upload (V2), tui.{load,save}_favorites (V3),
 worktree.list (V7).
 """
 
@@ -38,20 +38,6 @@ def _host(repo_root: Path) -> ServiceHost:
 
 def _call(host: ServiceHost, method: str, body: dict) -> dict:
     return host._rpc_handlers[method](body)  # type: ignore[return-value]
-
-
-def test_editor_binary_prefers_explicit(repo_root: Path) -> None:
-    host = _host(repo_root)
-    reply = _call(host, "editor.binary", {"preferred": "nvim -p"})
-    assert reply["ok"] is True
-    assert reply["editor"] == "nvim -p"
-
-
-def test_editor_binary_falls_back(repo_root: Path, monkeypatch) -> None:
-    host = _host(repo_root)
-    monkeypatch.setenv("EDITOR", "emacs")
-    reply = _call(host, "editor.binary", {})
-    assert reply["editor"] == "emacs"
 
 
 def test_image_upload_uses_client_minted_name(repo_root: Path) -> None:

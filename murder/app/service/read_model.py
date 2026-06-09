@@ -16,9 +16,6 @@ from murder.app.service.client_api import (
     ConversationSummary,
     CrowSessionSummary,
     CrowSnapshot,
-    DispatchSnapshot,
-    EscalationsSnapshot,
-    EscalationSummary,
     InvalidationKeys,
     NoteDisplaySnapshot,
     NotesSnapshot,
@@ -30,21 +27,13 @@ from murder.app.service.client_api import (
     ReportsSnapshot,
     ReportSummary,
     ScheduleSnapshot,
-    TicketCarveSnapshot,
     TicketDetailSnapshot,
-    TicketRef,
-    TicketSummary,
-    UsageGaugeDrillInSnapshot,
 )
-from murder.app.service.schedule_snapshot import (
-    build_schedule_snapshot,
-    build_usage_gauge_drill_in,
-)
+from murder.app.service.schedule_snapshot import build_schedule_snapshot
 from murder.state.persistence import tickets as ticket_store
 from murder.state.persistence.schema import get_db
 from murder.state.storage.paths import report_md
 from murder.work.tickets.parser import read_ticket_md
-from murder.work.tickets.status import TicketStatus
 
 # Ticket states that indicate the work item is closed; a failed agent on such a
 # ticket is droppable once its heartbeat goes stale.
@@ -79,32 +68,6 @@ class ServiceReadModel:
     def __init__(self, db_path: Path) -> None:
         self.db_path = Path(db_path)
         self._generations: dict[str, int] = defaultdict(int)
-
-    def get_dispatch_snapshot(self) -> DispatchSnapshot:
-        as_of = datetime.utcnow()
-        with closing(self._connect()) as conn:
-            rows = conn.execute(
-                """
-                SELECT id, title, status, harness, model
-                  FROM tickets
-                 ORDER BY id
-                """
-            ).fetchall()
-        tickets = tuple(
-            TicketSummary(
-                id=str(row["id"]),
-                title=str(row["title"]),
-                status=TicketStatus(str(row["status"])),
-                harness=_optional_str(row["harness"]),
-                model=_optional_str(row["model"]),
-            )
-            for row in rows
-        )
-        return DispatchSnapshot(
-            tickets=tickets,
-            as_of=as_of,
-            invalidation_key=self.current_key(InvalidationKeys.dispatch),
-        )
 
     def get_plans_snapshot(self) -> PlansSnapshot:
         as_of = datetime.utcnow()
@@ -380,38 +343,6 @@ class ServiceReadModel:
             invalidation_key=self.current_key(InvalidationKeys.conversations),
         )
 
-    def get_escalations_snapshot(self) -> EscalationsSnapshot:
-        as_of = datetime.utcnow()
-        with closing(self._connect()) as conn:
-            active_rows = conn.execute(
-                """
-                SELECT e.id, e.ts, e.ticket_id, e.severity, e.reason, e.to_recipient,
-                       e.body_path, e.resolved_at, e.source_event_id, t.status AS ticket_status
-                  FROM escalations e
-                  LEFT JOIN tickets t ON t.id = e.ticket_id
-                 WHERE e.resolved = 0
-                   AND (t.status IS NULL OR t.status != 'archived')
-                 ORDER BY e.ts DESC
-                """
-            ).fetchall()
-            history_rows = conn.execute(
-                """
-                SELECT e.id, e.ts, e.ticket_id, e.severity, e.reason, e.to_recipient,
-                       e.body_path, e.resolved_at, e.source_event_id, t.status AS ticket_status
-                  FROM escalations e
-                  LEFT JOIN tickets t ON t.id = e.ticket_id
-                 WHERE e.resolved_at IS NOT NULL
-                 ORDER BY e.resolved_at DESC
-                 LIMIT 20
-                """
-            ).fetchall()
-        return EscalationsSnapshot(
-            active=tuple(_escalation_summary_from_row(row) for row in active_rows),
-            history=tuple(_escalation_summary_from_row(row) for row in history_rows),
-            as_of=as_of,
-            invalidation_key=self.current_key(InvalidationKeys.escalations),
-        )
-
     def get_plan_display(self, name: str) -> PlanDisplaySnapshot | None:
         with closing(self._connect()) as conn:
             row = conn.execute(
@@ -464,68 +395,6 @@ class ServiceReadModel:
             return None
         text = path.read_text(encoding="utf-8")
         return ReportDisplaySnapshot(name=name, markdown=text)
-
-    def get_usage_gauge_drill_in(
-        self,
-        *,
-        harness: str,
-        window_key: str,
-        t_period_minutes: float,
-    ) -> UsageGaugeDrillInSnapshot:
-        with closing(self._connect()) as conn:
-            return build_usage_gauge_drill_in(
-                conn,
-                harness=harness,
-                window_key=window_key,
-                t_period_minutes=t_period_minutes,
-            )
-
-    def get_ticket_carve_snapshot(self, ticket_id: str) -> TicketCarveSnapshot | None:
-        with closing(self._connect()) as conn:
-            ticket = ticket_store.get_ticket(conn, ticket_id)
-            if ticket is None:
-                return None
-            dep_rows = conn.execute(
-                "SELECT id, title FROM tickets WHERE id != ? ORDER BY id",
-                (ticket_id,),
-            ).fetchall()
-        fields: dict[str, object] = {
-            "status": ticket.status.value,
-            "title": ticket.title,
-            "schedule_at": ticket.schedule_at,
-            "harness": ticket.harness,
-            "model": ticket.model,
-            "deps": list(ticket.deps),
-            "checklist": [
-                {"text": item.text, "done": item.done} for item in ticket.checklist
-            ],
-        }
-        return TicketCarveSnapshot(
-            ticket_id=ticket_id,
-            fields=fields,
-            dependency_options=tuple(
-                TicketRef(id=str(r["id"]), title=str(r["title"] or r["id"]))
-                for r in dep_rows
-            ),
-        )
-
-    def get_ticket_status(self, ticket_id: str) -> str | None:
-        with closing(self._connect()) as conn:
-            ticket = ticket_store.get_ticket(conn, ticket_id)
-        return ticket.status.value if ticket is not None else None
-
-    def get_notetaker_recent_entries(self, limit: int = 50) -> list[dict[str, object]]:
-        with closing(self._connect()) as conn:
-            rows = conn.execute(
-                """
-                SELECT id, ts, raw, cleaned, short_vers
-                  FROM notes_entries
-                 ORDER BY ts DESC, id DESC
-                 LIMIT ?
-                """,
-                (limit,),
-            ).fetchall()
-        return [dict(r) for r in rows]
 
     def get_harness_models_snapshot(self) -> dict[str, object]:
         """Return the locked RPC payload for ``state.harness_models_snapshot``.
@@ -657,18 +526,6 @@ def _parse_datetime(value: object) -> datetime | None:
         return datetime.fromisoformat(value)
     except ValueError:
         return None
-
-
-def _escalation_summary_from_row(row: sqlite3.Row) -> EscalationSummary:
-    return EscalationSummary(
-        id=int(row["id"]),
-        ticket_id=_optional_str(row["ticket_id"]),
-        severity=int(row["severity"]),
-        reason=str(row["reason"]),
-        to_recipient=str(row["to_recipient"]),
-        body_path=_optional_str(row["body_path"]),
-        ticket_status=_optional_str(row["ticket_status"]),
-    )
 
 
 __all__ = ["ServiceReadModel"]
