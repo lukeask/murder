@@ -139,3 +139,39 @@ async def test_spawn_rogue_command_rejects_non_string_effort() -> None:
         await orch.spawn_rogue_command(
             {"harness": "codex", "model": "gpt-5.3-codex", "effort": 3}
         )
+
+
+# --- H4 (F11): required-field guard, pinned on the Python side ----------------
+# These pin the live handler's REQUIRED fields so the Ink contract test
+# (inktui/test/components/SpawnWizardModal.test.tsx — "H4 — spawn payload
+# contract") and this handler can never drift apart silently. The Ink side
+# asserts the payload always carries `harness` + `model`; here we assert the
+# handler actually rejects payloads that omit them.
+
+
+@pytest.mark.asyncio
+async def test_spawn_rogue_command_rejects_missing_harness() -> None:
+    """Required field guard: a payload without `harness` is rejected before spawn."""
+    orch = object.__new__(Orchestrator)
+
+    async def unused_spawn_rogue(*_args: Any, **_kwargs: Any) -> str:  # pragma: no cover
+        raise AssertionError("spawn_rogue should not be reached without harness")
+
+    orch.spawn_rogue = unused_spawn_rogue  # type: ignore[method-assign]
+
+    with pytest.raises(ValueError, match="requires harness"):
+        await orch.spawn_rogue_command({"model": "sonnet"})
+
+
+@pytest.mark.asyncio
+async def test_spawn_rogue_command_rejects_missing_model() -> None:
+    """Required field guard: a payload without `model` is rejected before spawn."""
+    orch = object.__new__(Orchestrator)
+
+    async def unused_spawn_rogue(*_args: Any, **_kwargs: Any) -> str:  # pragma: no cover
+        raise AssertionError("spawn_rogue should not be reached without model")
+
+    orch.spawn_rogue = unused_spawn_rogue  # type: ignore[method-assign]
+
+    with pytest.raises(ValueError, match="requires model"):
+        await orch.spawn_rogue_command({"harness": "claude"})

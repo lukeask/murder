@@ -331,6 +331,89 @@ describe('SpawnWizardModal — ctrl+s spawn wizard', () => {
   });
 });
 
+/**
+ * H4 (F11 guard) — spawn-wizard payload contract.
+ *
+ * Pins the REAL `createSpawnActions(...).spawnRogue(...)` payload to the live handler's required
+ * schema so the F2 fix can never silently regress once Textual is gone. The required field set
+ * below is anchored to `Orchestrator.spawn_rogue_command` (murder/runtime/orchestration/
+ * orchestrator.py:~564), which requires non-empty `harness` and a `model` string; the Python side
+ * is pinned by tests/unit/test_spawn_effort_bus.py (the `rejects_missing_*` cases). A change to the
+ * handler's required fields should surface as a failure on BOTH sides.
+ *
+ * The regression this guards: the old wizard sent `{effort}` / `{effort, kickoff_message}` — it
+ * dropped harness/model and inlined a kickoff field the handler ignores. So we assert (1) the
+ * required fields are always present and truthy, (2) `kickoff_message` is NEVER inlined into the
+ * spawn payload, and (3) a supplied kickoff is delivered out-of-band as `agent.message` (and is not
+ * silently dropped), while an empty/absent kickoff fires no follow-up command.
+ */
+describe('H4 — spawn payload contract (real spawn action)', () => {
+  /** REQUIRED fields of the live `crow.spawn_rogue` handler — see spawn_rogue_command (orchestrator.py:~564). */
+  const REQUIRED_SPAWN_FIELDS = ['harness', 'model'] as const;
+
+  /** A bus stubbed exactly like setup(): submit accepted, status resolves with a spawned agent_id. */
+  function liveStubBus(): FakeBusClient {
+    const bus = new FakeBusClient();
+    bus.stubRpc('command.submit', { ok: true, command_id: 'cmd-1' });
+    bus.stubRpc('command.status', {
+      ok: true,
+      status: 'done',
+      result_json: JSON.stringify({ handled: true, agent_id: 'rogue-001' }),
+    });
+    return bus;
+  }
+
+  it('always sends every required field (truthy) and never inlines kickoff_message', async () => {
+    const bus = liveStubBus();
+    await createSpawnActions(bus).spawnRogue({
+      harness: 'claude',
+      model: 'sonnet',
+      effort: 'medium',
+    });
+
+    const payload = spawnSubmitPayload(bus);
+    // Iterating the required set so a dropped field names itself in the failure.
+    for (const field of REQUIRED_SPAWN_FIELDS) {
+      expect(payload[field], `spawn payload missing required field "${field}"`).toBeTruthy();
+    }
+    // Regression guard: kickoff must NOT be re-inlined into the spawn payload (the live handler
+    // ignores it — it rides out-of-band as agent.message).
+    expect(payload).not.toHaveProperty('kickoff_message');
+  });
+
+  it('delivers a supplied kickoff out-of-band as agent.message (not silently dropped)', async () => {
+    const bus = liveStubBus();
+    await createSpawnActions(bus).spawnRogue({
+      harness: 'claude',
+      model: 'sonnet',
+      kickoffMessage: 'Please read .murder/notes/x.md before starting.',
+    });
+
+    // Spawn first, then the kickoff as a separate command — kickoff is not lost.
+    expect(submitKinds(bus)).toEqual(['crow.spawn_rogue', 'agent.message']);
+    expect(kickoffSubmitPayload(bus)).toMatchObject({
+      agent_id: 'rogue-001',
+      message: 'Please read .murder/notes/x.md before starting.',
+    });
+  });
+
+  it('fires no follow-up command when kickoff is empty or absent', async () => {
+    const busEmpty = liveStubBus();
+    await createSpawnActions(busEmpty).spawnRogue({
+      harness: 'claude',
+      model: 'sonnet',
+      kickoffMessage: '',
+    });
+    expect(submitKinds(busEmpty)).toEqual(['crow.spawn_rogue']);
+    expect(kickoffSubmitPayload(busEmpty)).toBeUndefined();
+
+    const busAbsent = liveStubBus();
+    await createSpawnActions(busAbsent).spawnRogue({ harness: 'claude', model: 'sonnet' });
+    expect(submitKinds(busAbsent)).toEqual(['crow.spawn_rogue']);
+    expect(kickoffSubmitPayload(busAbsent)).toBeUndefined();
+  });
+});
+
 describe('ctrl+s dispatcher test', () => {
   it('ctrl+s fires the spawn handler when CHAT is focused (C11 dual-purpose chord)', async () => {
     // C11: ctrl+s spawns ONLY when chat is focused; from a panel it stars the highlighted row.
