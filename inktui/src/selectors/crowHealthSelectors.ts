@@ -6,17 +6,12 @@
  * intentionally pure (no React, no store, no clock-by-default) so every branch is unit-testable in
  * isolation — the same property the Python module guards.
  *
- * ── DATA-SHAPE GAP (flag for the service / B13) ───────────────────────────────────────────────────
- * The live Ink crow snapshot (`CrowSessionDto` in `store/roster/rosterActions.ts`, projected to
- * `RosterRow`) carries ONLY `status`. The Python `CrowSessionSummary` additionally carries
- * `open_escalations`, `max_severity`, and `last_seen`, which feed the escalation-RED and stuck-YELLOW
- * branches. Until the service adds those fields to `state.crow_snapshot`, the selector passes the
- * defaults (`openEscalations: 0`, `maxSeverity: 0`, `stuck: false`), so in practice only the
- * status-driven branches (RED for failed/dead/blocked/escalating, GREEN for running/idle, NEUTRAL
- * otherwise) are exercised on live data. The escalation/stuck branches are fully implemented and
- * tested here; they light up automatically the instant the wire grows the fields and the projection
- * forwards them. DO NOT invent the fields on the wire — that is the service's call (mirrors the
- * "NOTE FOR THE SERVICE" convention in `rosterActions.ts`).
+ * ── DATA-SHAPE — all branches now live ────────────────────────────────────────────────────────────
+ * `CrowSessionDto` (`store/roster/rosterActions.ts`) now carries `open_escalations`, `max_severity`,
+ * and `last_seen` from the Python `CrowSessionSummary`. These are projected into `RosterRow` and
+ * forwarded through `crowsSelectors.ts`→`classifyCrowHealth`, so all four health branches
+ * (escalation-RED, severity-RED, stuck-YELLOW, status-based) are live on real wire data.
+ * A#6 cleanup — 2026-06-09.
  */
 
 /** The four health states a crow's border edge can take. Mirrors Python `Health`. */

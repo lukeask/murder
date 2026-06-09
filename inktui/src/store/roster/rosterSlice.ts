@@ -40,6 +40,25 @@ export interface RosterRow {
   readonly model: string | null;
   readonly status: string;
   readonly session: string | null;
+  /**
+   * ISO-8601 heartbeat timestamp, or null when not available. Used by `crowsSelectors.ts` to
+   * compute the stuck-but-alive (YELLOW) health branch via `isStuck`. Python serialises
+   * `datetime` fields as `datetime.isoformat()`, so this is always an ISO-8601 string on the wire.
+   * Optional on `RosterRow` so existing test factories don't require the field.
+   */
+  readonly lastSeen?: string | null;
+  /**
+   * Count of open escalations linked to this crow's ticket. Fed from Python
+   * `CrowSessionSummary.open_escalations` (default 0). Drives the escalation-RED health branch.
+   * Optional on `RosterRow` so existing test factories don't require the field.
+   */
+  readonly openEscalations?: number;
+  /**
+   * Max severity across this crow's open escalations. Fed from Python
+   * `CrowSessionSummary.max_severity` (default 0). Drives the severity-RED health branch.
+   * Optional on `RosterRow` so existing test factories don't require the field.
+   */
+  readonly maxSeverity?: number;
 }
 
 /**
