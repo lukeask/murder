@@ -33,7 +33,7 @@ import type { ConversationBlockEvent } from '../../bus/protocol.js';
 import { submitCommand } from '../commandSubmit.js';
 import type { AppStore } from '../store.js';
 import { toastStore } from '../toast/toastStore.js';
-import { parseBlock, type ConversationBlock } from './conversationsSlice.js';
+import { type ConversationBlock, parseBlock } from './conversationsSlice.js';
 
 /**
  * Declares the conversations read RPC via declaration merging rather than editing the frozen C1 bus
@@ -166,7 +166,7 @@ export function createConversationsActions(
         const parsed: Record<string, readonly ConversationBlock[]> = {};
         for (const conv of reply.conversations) {
           parsed[conv.agent_id] = conv.blocks.map((b) =>
-            parseBlock(b as Record<string, unknown>),
+            parseBlock(b as unknown as Record<string, unknown>),
           );
         }
         store.setState((state) => ({

@@ -105,41 +105,41 @@ describe('FakeBusClient — events', () => {
 describe('FakeBusClient — rpc', () => {
   it('resolves with a canned fixed reply', async () => {
     const fake = new FakeBusClient();
-    fake.stubRpc('agent.message', { delivered: true });
+    fake.stubRpc('test.echo', { delivered: true });
 
-    const result = await fake.rpc('agent.message', { agent_id: 'a1', message: 'hi' });
+    const result = await fake.rpc('test.echo', { agent_id: 'a1', message: 'hi' });
 
     expect(result).toEqual({ delivered: true });
   });
 
   it('resolves with a reply computed from the params', async () => {
     const fake = new FakeBusClient();
-    fake.stubRpc('ticket.quick_kick', (params) => ({ kicked: params.ticket_id }));
+    fake.stubRpc('test.echo', (params) => ({ kicked: params['ticket_id'] }));
 
-    const result = await fake.rpc('ticket.quick_kick', { ticket_id: 'T-42' });
+    const result = await fake.rpc('test.echo', { ticket_id: 'T-42' });
 
     expect(result).toEqual({ kicked: 'T-42' });
   });
 
   it('records every rpc call in order for assertions', async () => {
     const fake = new FakeBusClient();
-    fake.stubRpc('agent.message', {});
-    fake.stubRpc('ticket.quick_kick', {});
+    fake.stubRpc('test.echo', {});
+    fake.stubRpc('test.echo', {});
 
-    await fake.rpc('agent.message', { agent_id: 'a1', message: 'one' });
-    await fake.rpc('ticket.quick_kick', { ticket_id: 'T-1' });
+    await fake.rpc('test.echo', { agent_id: 'a1', message: 'one' });
+    await fake.rpc('test.echo', { ticket_id: 'T-1' });
 
     const expected: RecordedRpcCall[] = [
-      { method: 'agent.message', params: { agent_id: 'a1', message: 'one' } },
-      { method: 'ticket.quick_kick', params: { ticket_id: 'T-1' } },
+      { method: 'test.echo', params: { agent_id: 'a1', message: 'one' } },
+      { method: 'test.echo', params: { ticket_id: 'T-1' } },
     ];
     expect(fake.rpcCalls).toEqual(expected);
   });
 
   it('rpcCalls returns a copy that cannot mutate the internal log', async () => {
     const fake = new FakeBusClient();
-    fake.stubRpc('agent.message', {});
-    await fake.rpc('agent.message', { agent_id: 'a1', message: 'one' });
+    fake.stubRpc('test.echo', {});
+    await fake.rpc('test.echo', { agent_id: 'a1', message: 'one' });
 
     const calls = fake.rpcCalls as RecordedRpcCall[];
     calls.pop();
@@ -149,36 +149,36 @@ describe('FakeBusClient — rpc', () => {
 
   it('rejects when no stub is registered for the method', async () => {
     const fake = new FakeBusClient();
-    await expect(fake.rpc('agent.message', { agent_id: 'a1', message: 'hi' })).rejects.toThrow(
-      "no rpc stub for method 'agent.message'",
+    await expect(fake.rpc('test.echo', { agent_id: 'a1', message: 'hi' })).rejects.toThrow(
+      "no rpc stub for method 'test.echo'",
     );
   });
 
   it('surfaces a synchronous throw in a handler as a rejection (error path)', async () => {
     const fake = new FakeBusClient();
-    fake.stubRpc('agent.message', () => {
+    fake.stubRpc('test.echo', () => {
       throw new Error('service unavailable');
     });
-    await expect(fake.rpc('agent.message', { agent_id: 'a1', message: 'hi' })).rejects.toThrow(
+    await expect(fake.rpc('test.echo', { agent_id: 'a1', message: 'hi' })).rejects.toThrow(
       'service unavailable',
     );
   });
 
   it('re-stubbing a method replaces the prior stub', async () => {
     const fake = new FakeBusClient();
-    fake.stubRpc('agent.message', { v: 1 });
-    fake.stubRpc('agent.message', { v: 2 });
+    fake.stubRpc('test.echo', { v: 1 });
+    fake.stubRpc('test.echo', { v: 2 });
 
-    await expect(fake.rpc('agent.message', { agent_id: 'a1', message: 'hi' })).resolves.toEqual({
+    await expect(fake.rpc('test.echo', { agent_id: 'a1', message: 'hi' })).resolves.toEqual({
       v: 2,
     });
   });
 
   it('still records a call even when the method is unstubbed', async () => {
     const fake = new FakeBusClient();
-    await fake.rpc('agent.message', { agent_id: 'a1', message: 'hi' }).catch(() => {});
+    await fake.rpc('test.echo', { agent_id: 'a1', message: 'hi' }).catch(() => {});
     expect(fake.rpcCalls).toEqual([
-      { method: 'agent.message', params: { agent_id: 'a1', message: 'hi' } },
+      { method: 'test.echo', params: { agent_id: 'a1', message: 'hi' } },
     ]);
   });
 });

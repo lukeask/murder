@@ -15,6 +15,18 @@ import {
   UdsBusClient,
 } from '../../src/bus/UdsBusClient.js';
 
+// Test-only RPC method for exercising the generic rpc() plumbing (round-trip, envelope unwrap,
+// timeout, connection-drop) with an arbitrary method name. Real orchestrator command kinds
+// (`ticket.quick_kick`, `agent.message`, …) are deliberately NOT in `RpcMethods` — they route via
+// `command.submit` — so these transport tests use this throwaway method instead. Declared once here;
+// `tsconfig.test.json` compiles all test files together, so it's visible program-wide (incl.
+// FakeBusClient.test.ts).
+declare module '../../src/bus/BusClient.js' {
+  interface RpcMethods {
+    'test.echo': { params: Record<string, unknown>; result: Record<string, unknown> };
+  }
+}
+
 // The C2 test idiom: stand up a real in-process Unix-socket server (`net.createServer`) on a temp
 // path that speaks the handshake + a scripted reply/event, point a UdsBusClient at it, and assert
 // on the observable behavior. No live murder service is needed — the server here *is* the contract.
@@ -288,8 +300,8 @@ describe('UdsBusClient — rpc', () => {
 
   it('round-trips an rpc paired by correlation_id', async () => {
     server.rpcHandler = (target, body) => ({ echoed: target, ...body });
-    const result = await client.rpc('ticket.quick_kick', { ticket_id: 'T-42' });
-    expect(result).toEqual({ echoed: 'ticket.quick_kick', ticket_id: 'T-42' });
+    const result = await client.rpc('test.echo', { ticket_id: 'T-42' });
+    expect(result).toEqual({ echoed: 'test.echo', ticket_id: 'T-42' });
   });
 
   it('unwraps the read-RPC `{ ok, value }` envelope for `state.*` methods', async () => {
@@ -313,7 +325,7 @@ describe('UdsBusClient — rpc', () => {
   it('leaves a write/command reply (no `value` key) untouched', async () => {
     // Writes return `{ ok, ...fields }` top-level and must NOT be unwrapped.
     server.rpcHandler = () => ({ ok: true, ticket_id: 'T-9' });
-    const result = await client.rpc('ticket.quick_kick', { ticket_id: 'T-9' });
+    const result = await client.rpc('test.echo', { ticket_id: 'T-9' });
     expect(result).toEqual({ ok: true, ticket_id: 'T-9' });
   });
 
@@ -327,7 +339,7 @@ describe('UdsBusClient — rpc', () => {
     });
     server.rpcHandler = () => undefined;
     await expect(
-      timeoutClient.rpc('agent.message', { agent_id: 'a1', message: 'hi' }),
+      timeoutClient.rpc('test.echo', { agent_id: 'a1', message: 'hi' }),
     ).rejects.toBeInstanceOf(RpcTimeoutError);
     timeoutClient.close();
   });
@@ -505,7 +517,7 @@ describe('UdsBusClient — reconnect', () => {
   it('rejects an outstanding rpc when the connection drops', async () => {
     await client.connect();
     server.rpcHandler = () => undefined; // never answers
-    const pending = client.rpc('agent.message', { agent_id: 'a1', message: 'hi' });
+    const pending = client.rpc('test.echo', { agent_id: 'a1', message: 'hi' });
     // Attach the rejection assertion before dropping so the rejection is observed.
     const assertion = expect(pending).rejects.toBeInstanceOf(ConnectionLostError);
     await waitFor(() => server.handshakeCount === 1);
@@ -523,7 +535,7 @@ describe('UdsBusClient — close', () => {
     client.close();
 
     await expect(
-      client.rpc('agent.message', { agent_id: 'a1', message: 'hi' }),
+      client.rpc('test.echo', { agent_id: 'a1', message: 'hi' }),
     ).rejects.toBeInstanceOf(ConnectionLostError);
     await server.stop();
   });
