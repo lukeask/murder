@@ -57,6 +57,14 @@ export type RosterState = ListState<RosterRow>;
  */
 export const ROSTER_INVALIDATING_ENTITY: Entity = 'agent';
 
+/**
+ * A SECOND {@link Entity} key that invalidates this slice. Each crow's `state.crow_snapshot` reply
+ * carries escalation counts (`open_escalations` / `max_severity`, JOINed in the Python DTO), so an
+ * `escalation` change must re-pull the roster to keep those counts fresh — an escalation can be
+ * created or resolved without a coincident `agent` change, which would otherwise leave them stale.
+ */
+export const ROSTER_ESCALATION_INVALIDATING_ENTITY: Entity = 'escalation';
+
 /** The initial, pre-fetch slice value. A fresh store has not talked to the bus yet → `idle`. */
 export const initialRosterState: RosterState = initialListState<RosterRow>();
 
