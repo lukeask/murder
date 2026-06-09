@@ -11,6 +11,7 @@ from murder.runtime.agents.events import AgentEventSink
 
 if TYPE_CHECKING:
     from murder.runtime.agents.base import LifecycleParticipant
+    from murder.bus.protocol import Entity
     from murder.config import Config
 
 
@@ -23,6 +24,11 @@ class AgentLifecycleHost(Protocol):
     run_id: str | None
 
     def sync_agent(self, agent: LifecycleParticipant) -> None: ...
+
+    # F1 key-only snapshot choke points (sync + async; see Runtime).
+    def emit_snapshot(self, entity: Entity, key: str) -> None: ...
+
+    async def publish_snapshot(self, entity: Entity, key: str) -> None: ...
 
     def get_crow(self, ticket_id: str) -> LifecycleParticipant | None: ...
 

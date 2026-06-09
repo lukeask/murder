@@ -116,7 +116,11 @@ class Runtime:
         snap = json.dumps(self.config.model_dump(mode="json"), default=str)
         _db_insert_run(self.db, self.run_id, snap)
         self.bus = Bus(self.run_id, self.db)
-        self._sync = FilesystemSyncSupervisor.attach(self.repo_root, self.db)
+        self._sync = FilesystemSyncSupervisor.attach(
+            self.repo_root,
+            self.db,
+            on_ticket_change=lambda tid: self.emit_snapshot(Entity.TICKET, tid),
+        )
         self.plan_sync = self._sync.plan_sync
         self.note_sync = self._sync.note_sync
         self.notetaker_context_sync = self._sync.notetaker_context_sync
@@ -208,6 +212,29 @@ class Runtime:
         )
         self._emit_tasks.add(task)
         task.add_done_callback(self._emit_tasks.discard)
+
+    async def publish_snapshot(self, entity: Entity, key: str) -> None:
+        """Emit a key-only ``state.snapshot`` from an ASYNC choke point.
+
+        The async counterpart to ``emit_snapshot``: callers already inside a
+        coroutine (orchestrator / coordinator / outcome RPC handlers) ``await``
+        this directly rather than scheduling a task. It is exactly the backbone-
+        sanctioned "async callers ``await bus.publish(StateSnapshotEvent(...))``
+        directly" pattern with the envelope factored out so the ~8 ticket sites
+        don't retype it (and can't typo the entity). Key-only by contract.
+
+        No-ops before the bus / run id exist so handlers never fail on it.
+        """
+        if self.bus is None or self.run_id is None:
+            return
+        await self.bus.publish(
+            StateSnapshotEvent(
+                run_id=self.run_id,
+                agent_id="runtime",
+                entity=entity,
+                key=key,
+            )
+        )
 
     def sync_agent(self, agent: LifecycleParticipant) -> None:
         """Persist current agent fields to SQLite, then emit a key-only snapshot.

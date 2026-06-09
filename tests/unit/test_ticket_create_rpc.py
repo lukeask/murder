@@ -37,6 +37,15 @@ class _Runtime:
     bus: object | None = None
     run_id: str | None = None
 
+    def emit_snapshot(self, entity: object, key: str) -> None:
+        # No bus in these unit doubles -> matches Runtime.emit_snapshot's
+        # no-bus no-op; the F1 ticket emit is exercised in
+        # tests/unit/test_f1_keyonly_snapshot_ticket.py.
+        return None
+
+    async def publish_snapshot(self, entity: object, key: str) -> None:
+        return None
+
 
 def _orch(repo_root: Path) -> Orchestrator:
     conn = get_db(repo_root / ".murder" / "murder.db")

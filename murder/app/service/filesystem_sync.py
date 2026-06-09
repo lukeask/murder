@@ -53,12 +53,18 @@ class FilesystemSyncSupervisor:
     repo_root: Path | None = None
 
     @classmethod
-    def attach(cls, repo_root: Path, db: sqlite3.Connection) -> FilesystemSyncSupervisor:
+    def attach(
+        cls,
+        repo_root: Path,
+        db: sqlite3.Connection,
+        *,
+        on_ticket_change: Callable[[str], None] | None = None,
+    ) -> FilesystemSyncSupervisor:
         return cls(
             plan_sync=PlanSync(repo_root, db),
             note_sync=NoteSync(repo_root, db),
             notetaker_context_sync=NotetakerContextSync(repo_root, db),
-            ticket_sync=TicketSync(repo_root, db),
+            ticket_sync=TicketSync(repo_root, db, on_ticket_change=on_ticket_change),
             repo_root=repo_root,
         )
 

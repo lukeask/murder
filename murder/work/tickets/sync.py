@@ -22,6 +22,12 @@ from murder.work.tickets.status import TicketStatus
 # the runtime; pure parsing/DB code never reaches the bus directly.
 ParseErrorNotifier = Callable[[Path, str], Awaitable[None]]
 
+# (ticket_id) -> emit a key-only ``state.snapshot{entity=ticket}``. Injected by
+# the runtime so this pure parse/DB loop never touches the bus directly; the
+# callback funnels the filesystem->DB reconcile path (the PRIMARY ticket writer)
+# into F1's key-only emit. See ``Runtime.emit_snapshot``.
+TicketChangeNotifier = Callable[[str], None]
+
 # Accept legacy `t007`, slug-style `T01-scaffold`, and numeric-prefix `01-msg-types`.
 # Require at least one digit to avoid importing arbitrary prose files.
 _TICKET_ID_RE = re.compile(r"^(?=.*\d)[A-Za-z0-9][A-Za-z0-9_-]*$")
@@ -53,10 +59,12 @@ class TicketSync(MarkdownSyncLoop):
         poll_s: float = 1.5,
         debounce_s: float = 0.75,
         parse_error_notifier: ParseErrorNotifier | None = None,
+        on_ticket_change: TicketChangeNotifier | None = None,
     ) -> None:
         super().__init__(repo_root, poll_s=poll_s, debounce_s=debounce_s)
         self.db = db
         self.parse_error_notifier = parse_error_notifier
+        self.on_ticket_change = on_ticket_change
 
     async def reconcile_all(self) -> None:
         tickets_dir(self.repo_root).mkdir(parents=True, exist_ok=True)
@@ -121,6 +129,13 @@ class TicketSync(MarkdownSyncLoop):
         except Exception:
             self.db.execute("ROLLBACK")
             raise
+        # PRIMARY filesystem->DB ticket writer: emit one key-only ticket
+        # snapshot after the reconcile commits. Placed after COMMIT so the
+        # parse-error early-return and the FileNotFound->materialize path do not
+        # emit. ``reconcile_all`` loops this over every ticket at startup, which
+        # is acceptable refresh churn (no change-detection by design).
+        if self.on_ticket_change is not None:
+            self.on_ticket_change(ticket_id)
         return None
 
     def scan_paths(self) -> list[Path]:

@@ -115,6 +115,7 @@ def test_force_ticket_status_reaps_crow_agents(repo_root: Path) -> None:
         run_id="test-run",
         repo_root=repo_root,
         reap=_reap,
+        publish_snapshot=AsyncMock(),
     )
     orch = Orchestrator(rt)
 
@@ -138,7 +139,10 @@ def test_set_schedule_at_updates_ticket_timestamp(repo_root: Path) -> None:
             updated_at=created,
         ),
     )
-    rt = SimpleNamespace(db=conn, repo_root=repo_root, bus=None, run_id=None)
+    rt = SimpleNamespace(
+        db=conn, repo_root=repo_root, bus=None, run_id=None,
+        publish_snapshot=AsyncMock(),
+    )
     orch = Orchestrator(rt)
 
     asyncio.run(orch.set_schedule_at("t097a", "2026-05-29T09:00:00"))
@@ -248,7 +252,10 @@ def test_transition_done_heals_ready_status(repo_root: Path) -> None:
             updated_at=now,
         ),
     )
-    rt = SimpleNamespace(db=conn, repo_root=repo_root, bus=None, run_id=None)
+    rt = SimpleNamespace(
+        db=conn, repo_root=repo_root, bus=None, run_id=None,
+        publish_snapshot=AsyncMock(),
+    )
     coordinator = CompletionCoordinator(rt, CheckRegistry())
 
     asyncio.run(

@@ -36,7 +36,7 @@ from murder.state.persistence.agents import (
 from murder.runtime.agents.base import AgentRole, AgentStatus
 from murder.runtime.agents.crow_handler import CrowHandler
 from murder.runtime.agents.planning_handler import PlanningHandler
-from murder.bus import StatusChangeEvent, TicketStatus
+from murder.bus import Entity, StatusChangeEvent, TicketStatus
 from murder.llm.clients import resolve_role_client
 from murder.config import (
     Config,
@@ -173,6 +173,7 @@ class Orchestrator:
             repo_root=self.rt.repo_root,
             escalations=self._escalations(),
             emit_status=self._emit_ticket_status,
+            emit_snapshot=lambda tid: self.rt.publish_snapshot(Entity.TICKET, tid),
         )
 
     async def kickoff_ready(self, only: str | None = None) -> list[str]:
@@ -308,6 +309,11 @@ class Orchestrator:
                 _db_insert_ticket(conn, ticket)
             except Exception:
                 pass  # TicketSync may have raced us
+        # Sync method (no surrounding coroutine): use the sync emit_snapshot
+        # choke point. New ticket -> the schedule snapshot's planned bucket
+        # changed. (TicketSync would also emit on its next reconcile, but this
+        # closes the 1.5 s poll gap the direct DB insert opens.)
+        self.rt.emit_snapshot(Entity.TICKET, ticket_id)
         return {"handled": True, "ticket_id": ticket_id, "title": title}
 
     async def quick_kick_ticket(self, title: str) -> dict[str, Any]:
@@ -335,6 +341,11 @@ class Orchestrator:
                 to_status=to_status,
             )
         )
+        # F1: the status-transition choke point also emits the key-only
+        # state.snapshot{ticket}. ~5 sites funnel here (kickoff / retry / force /
+        # carve-ready, and outcome.fail_ticket via the injected emit_status), so
+        # the snapshot rides alongside the existing typed event in one place.
+        await self.rt.publish_snapshot(Entity.TICKET, ticket_id)
 
     async def _fail_ticket(self, ticket_id: str, reason: str) -> None:
         await self._outcomes().fail_ticket(ticket_id, reason)
@@ -1209,6 +1220,9 @@ class Orchestrator:
         cascaded = lifecycle.reopen(self.rt.db, ticket_id)
         for tid in {ticket_id, *cascaded}:
             await self._reap_ticket_crow_agents(tid)
+            # F1: reopen cascade has no StatusChangeEvent today; emit the
+            # key-only ticket snapshot for every ticket whose status changed.
+            await self.rt.publish_snapshot(Entity.TICKET, tid)
         return list(cascaded)
 
     async def retry_failed_ticket(self, ticket_id: str) -> dict[str, Any]:
@@ -1229,6 +1243,7 @@ class Orchestrator:
             (schedule_at, now, ticket_id),
         )
         self.rt.db.commit()
+        await self.rt.publish_snapshot(Entity.TICKET, ticket_id)
         return {"handled": True, "ticket_id": ticket_id, "schedule_at": schedule_at}
 
     async def update_ticket_metadata(
@@ -1270,6 +1285,7 @@ class Orchestrator:
                 skills=skills,
                 checklist=checklist,
             )
+        await self.rt.publish_snapshot(Entity.TICKET, ticket_id)
         return {"handled": True, "ok": True, "ticket_id": ticket_id}
 
     async def force_ticket_status(self, ticket_id: str, status: str) -> dict[str, Any]:
