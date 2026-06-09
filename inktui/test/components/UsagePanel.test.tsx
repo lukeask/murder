@@ -1,6 +1,8 @@
 /**
  * UsagePanel test — copied from RosterPanel.test.tsx per the C5 copy recipe.
  *
+ * Phase 3: asserts the Pane inline-title border (`╭─ Usage ─…`) + the single-line Ledger entries.
+ *
  * Tests:
  *  - Renders usage gauge rows with harness + bar + pct + reset label.
  *  - Focus highlight behaviour.
@@ -96,6 +98,8 @@ describe('UsagePanel — rendering', () => {
     const { lastFrame } = render(<Harness store={store} inputStores={inputStores} />);
     await tick();
     const frame = lastFrame() ?? '';
+    // Pane inline title on the top border (Phase 3 Pane + Ledger structure).
+    expect(frame).toContain('╭─ Usage');
     // Both harnesses appear.
     expect(frame).toContain('claude');
     expect(frame).toContain('codex');

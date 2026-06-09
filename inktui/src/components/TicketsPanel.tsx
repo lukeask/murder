@@ -2,35 +2,42 @@
  * TicketsPanel — the tickets list, panel 4 (ctrl+4).
  *
  * Copied from {@link ./NotesPanel.tsx} per the C5 copy recipe. The key difference from notes/reports
- * is the **2-row × 5-column layout** with **alternating background color every 2 terminal lines**
- * (every ticket occupies exactly 2 lines). The component does layout/color; the selector does ALL
- * formatting (rule 2 — the C7 risk: with multiple columns it's tempting to format inline here).
+ * is the **2-row × 5-column layout**: every ticket occupies exactly 2 terminal lines and lays out 5
+ * field-columns side-by-side. The component does layout/color; the selector does ALL formatting
+ * (rule 2 — the C7 risk: with multiple columns it's tempting to format inline here).
  *
  * Changes vs. NotesPanel:
  *  - Slice: `s.tickets` (via `useTicketsView`).
  *  - `PANEL_ID`: `'tickets'`.
- *  - Row layout: 5 `flexDirection="column"` boxes side-by-side, each with 2 `<Text>` lines:
+ *  - Row layout: marker + up to 5 `flexDirection="column"` boxes side-by-side, each with 2 lines:
  *      col 1: `idCell` / `titleCell`
  *      col 2: `statusCell` / `lastUpdateCell`
  *      col 3: `depsCell` / `scheduleCell`
  *      col 4: `harnessCell` / `modelCell`
  *      col 5: `planCell` / `worktreeCell`
- *  - Alternating background: `row.rowParity` (0 or 1) from the selector drives `backgroundColor`
- *    (`'#2a2a2a'` on odd parity, `undefined` on even) — every 2 terminal lines alternate subtly.
  *  - `row.depsSatisfied` drives deps cell color; no string-matching in the component (rule 2 proof).
  *  - Empty chrome: `'no tickets'`.
  *  - Row key: `id` (tickets keyed by ticket id).
- *  - Intents: `'cursorDown' | 'cursorUp' | 'refresh'` (C8 will add `'open'` for enter-to-edit).
+ *  - Intents: `'cursorDown' | 'cursorUp' | 'refresh' | 'open'`.
  *
- * Everything else — `React.memo`, `useAppStore` narrow selector, `usePanelKeymap`, `useMemo`
- * keymap, `useFocusRef`, `useEffectiveFocus`, `useMeasureFocus` — is verbatim from the reference
- * panel. These are the framework glue that every panel gets for free by copying.
+ * ## Phase 3: Pane + Ledger conversion — THE multi-column panel
+ * Converted to the layout primitives. The bordered chrome is now a {@link ./Pane.tsx Pane}; the
+ * 2-line × 5-column list is a {@link ./Ledger.tsx Ledger} with `linesPerEntry=2`,
+ * `minColumns=1`/`maxColumns=5`. This is where the Ledger's responsive columns earn their keep:
+ *  - The Ledger computes the active field count from its width budget and passes it as `ctx.columns`.
+ *    `renderEntry` renders the leftmost `ctx.columns` of the 5 cell-columns — narrow drops the
+ *    right-most first (worktree/plan → harness/model → …), and col 1 (id/title) is always present.
+ *  - The alternating background now comes from the Ledger (by absolute row index), so the panel's old
+ *    `rowParity`/`altBg` logic is GONE here. The selector still exposes `rowParity` (other code/tests
+ *    may depend on it); the component just no longer applies it — Ledger owns parity.
+ *  - The Ledger owns the full-width selection highlight, so `renderEntry` does NOT set `inverse`; it
+ *    uses `ctx.selected` only for the `▌` marker. The deps (`depsSatisfied`) + status colors per cell
+ *    are preserved (they don't fight the highlight).
+ * The cursor `useState`, keymap, selector usage, and focus wiring are unchanged.
  *
- * **C8 handoff note:** The local cursor identifies the selected ticket by `view.rows[cursor]?.id`.
- * C8 should add an `'open'` intent to this panel's keymap (bound to `enter`) that pushes the
- * selected ticket id to the editor. The `TicketRowView` fields are all display-ready strings;
- * C8's editor needs the raw `TicketRow` from the slice (via the store), not the view-model strings.
- * The editor will call `state.ticket_detail { ticket_id }` for the body/frontmatter separately.
+ * **Rule 2 proof:** this component contains ZERO formatting logic. Every string comes from
+ * {@link useTicketsView}; the component only places cells in Boxes and wires layout/color/focus.
+ * Notably: deps color uses `depsSatisfied` (a boolean from the selector), not string-matching.
  */
 
 import { Box, Text } from 'ink';
@@ -50,98 +57,89 @@ import {
   type TicketsView,
   useTicketsView,
 } from '../selectors/ticketsSelectors.js';
+import { Ledger, type LedgerEntryContext } from './Ledger.js';
+import { Pane } from './Pane.js';
 import { useTicketEditor } from './TicketEditorMode.js';
 
 const PANEL_ID: PanelId = 'tickets';
 const PANEL_TITLE = 'Tickets';
 
+/**
+ * Fixed Ledger budget until the Pane measures and passes down its inner content size. Width is set
+ * HIGH (100) so `columnsForWidth(100, 1, 5) === 5` — the static budget renders all 5 columns,
+ * matching the old always-5 layout. Column-collapse to fewer columns is exercised by Ledger's own
+ * unit tests; once the Pane passes a measured width (Phase 3/4 handoff, see {@link ./Ledger.tsx}),
+ * a narrow tickets pane will degrade gracefully right-to-left.
+ */
+const LEDGER_HEIGHT = 40;
+const LEDGER_WIDTH = 100;
+
 type TicketsIntent = 'cursorDown' | 'cursorUp' | 'refresh' | 'open';
 
 /**
- * One ticket entry rendered as a **2-row × 5-column** block with alternating background.
- *
- * 5 `flexDirection="column"` boxes side by side (each 2 terminal lines):
- *   col 1: `idCell` / `titleCell`
- *   col 2: `statusCell` / `lastUpdateCell`
- *   col 3: `depsCell` / `scheduleCell`
- *   col 4: `harnessCell` / `modelCell`
- *   col 5: `planCell` / `worktreeCell`
- *
- * `rowParity` (from the selector) drives the alternating background so every other 2-line ticket
- * block gets a subtle shade — "alternating color every 2 lines" (spec). The component receives
- * display-ready strings and the `depsSatisfied` boolean from the selector; no formatting here,
- * no string-matching on sentinel values (rule 2 proof).
- *
- * Memoised on row + cursor flag so only the entries whose selected-ness changes repaint.
+ * Render one ticket as a **2-row × up-to-5-column** Ledger entry. The cursor marker is the first
+ * child (spanning both lines via the outer row Box); then the leftmost `ctx.columns` of the 5 cell
+ * columns are rendered (col 1 always present; right-most drop first when narrow). The Ledger owns
+ * the highlight + alternating background, so this sets NO `inverse`/`altBg` — only `ctx.selected`
+ * for the `▌` marker. Deps color uses `depsSatisfied` (selector boolean), never string-matching.
  */
-const TicketEntry = memo(function TicketEntry({
-  row,
-  selected,
-}: {
-  readonly row: TicketRowView;
-  readonly selected: boolean;
-}): React.JSX.Element {
-  const marker = selected ? '▌' : ' ';
-  // Alternating background: odd-parity rows get a slightly different shade so every other ticket
-  // block stands apart visually. The parity comes from the selector (rule 2 — no index arithmetic
-  // here). Selection (inverse) overrides the alternating shade.
-  const altBg = row.rowParity === 1 && !selected ? '#1e1e2e' : undefined;
+function renderTicketEntry(row: TicketRowView, ctx: LedgerEntryContext): React.ReactNode {
+  const marker = ctx.selected ? '▌' : ' ';
+  const cols = ctx.columns;
   return (
-    <Box flexDirection="row" backgroundColor={altBg}>
+    // Rule (b) for a MULTI-column entry: this is a `row` (not a `column`) so the 5 cell-columns lay
+    // out side-by-side; `flexGrow={1}` lets the Ledger's full-width background span it, `flexShrink={0}`
+    // so Yoga doesn't drop a line.
+    <Box flexDirection="row" flexGrow={1} flexShrink={0}>
       {/* Cursor marker — spans both lines by being in the outer row box */}
-      <Text inverse={selected}>{marker} </Text>
-      {/* col 1: id / title */}
+      <Text>{marker} </Text>
+      {/* col 1: id / title (always present — minColumns=1) */}
       <Box flexDirection="column" marginRight={2}>
-        <Text bold={selected} inverse={selected}>
-          {row.idCell}
-        </Text>
-        <Text dimColor={!selected}>{row.titleCell}</Text>
+        <Text bold={ctx.selected}>{row.idCell}</Text>
+        <Text dimColor={!ctx.selected}>{row.titleCell}</Text>
       </Box>
       {/* col 2: status / last-update */}
-      <Box flexDirection="column" marginRight={2}>
-        {selected ? (
-          <Text inverse>{row.statusCell}</Text>
-        ) : (
+      {cols >= 2 ? (
+        <Box flexDirection="column" marginRight={2}>
           <Text color="cyan">{row.statusCell}</Text>
-        )}
-        <Text dimColor={!selected}>{row.lastUpdateCell}</Text>
-      </Box>
-      {/* col 3: deps / schedule */}
-      <Box flexDirection="column" marginRight={2}>
-        {selected ? (
-          <Text inverse>{row.depsCell}</Text>
-        ) : row.depsSatisfied ? (
-          <Text color="green">{row.depsCell}</Text>
-        ) : (
-          <Text color="yellow">{row.depsCell}</Text>
-        )}
-        <Text dimColor={!selected}>{row.scheduleCell}</Text>
-      </Box>
+          <Text dimColor={!ctx.selected}>{row.lastUpdateCell}</Text>
+        </Box>
+      ) : null}
+      {/* col 3: deps / schedule — deps color from `depsSatisfied` (rule 2 proof) */}
+      {cols >= 3 ? (
+        <Box flexDirection="column" marginRight={2}>
+          <Text color={row.depsSatisfied ? 'green' : 'yellow'}>{row.depsCell}</Text>
+          <Text dimColor={!ctx.selected}>{row.scheduleCell}</Text>
+        </Box>
+      ) : null}
       {/* col 4: harness / model */}
-      <Box flexDirection="column" marginRight={2}>
-        <Text bold={selected} inverse={selected}>
-          {row.harnessCell}
-        </Text>
-        <Text dimColor={!selected}>{row.modelCell}</Text>
-      </Box>
+      {cols >= 4 ? (
+        <Box flexDirection="column" marginRight={2}>
+          <Text bold={ctx.selected}>{row.harnessCell}</Text>
+          <Text dimColor={!ctx.selected}>{row.modelCell}</Text>
+        </Box>
+      ) : null}
       {/* col 5: plan / worktree (CONTRACT GAP — both '—' until B13) */}
-      <Box flexDirection="column">
-        <Text dimColor={!selected} inverse={selected}>
-          {row.planCell}
-        </Text>
-        <Text dimColor={!selected}>{row.worktreeCell}</Text>
-      </Box>
+      {cols >= 5 ? (
+        <Box flexDirection="column">
+          <Text dimColor={!ctx.selected}>{row.planCell}</Text>
+          <Text dimColor={!ctx.selected}>{row.worktreeCell}</Text>
+        </Box>
+      ) : null}
     </Box>
   );
-});
+}
 
-/** The list body: empty/loading/error chrome, else the two-line entries with alternating color. */
+/** The list body: empty/loading/error chrome (Ledger renders nothing for zero rows), else the
+ * two-line × multi-column entries via {@link Ledger}. */
 function TicketsList({
   view,
   cursor,
+  focused,
 }: {
   readonly view: TicketsView;
   readonly cursor: number;
+  readonly focused: boolean;
 }): React.JSX.Element {
   if (view.status === 'error') {
     return <Text color="red">{`error: ${view.error ?? 'unknown'}`}</Text>;
@@ -153,25 +151,25 @@ function TicketsList({
     return <Text dimColor>no tickets</Text>;
   }
   return (
-    <Box flexDirection="column">
-      {view.rows.map((row, index) => (
-        <TicketEntry key={row.id} row={row} selected={index === cursor} />
-      ))}
-    </Box>
+    <Ledger
+      rows={view.rows}
+      cursor={cursor}
+      focused={focused}
+      linesPerEntry={2}
+      minColumns={1}
+      maxColumns={5}
+      availableHeight={LEDGER_HEIGHT}
+      availableWidth={LEDGER_WIDTH}
+      renderEntry={renderTicketEntry}
+      rowKey={(row) => row.id}
+    />
   );
 }
 
 /**
  * The tickets panel. Reads its slice, runs the selector, owns a local cursor, declares its keymap,
- * and paints a focus-highlighted bordered box of 2-row ticket entries with alternating color.
- * `React.memo`'d (rule 1) so it re-renders only when the tickets slice changes or focus changes.
- *
- * **Rule 2 proof:** this component contains ZERO formatting logic. Every string in `TicketEntry`
- * (`idCell`, `titleCell`, `statusCell`, `lastUpdateCell`, `depsCell`, `depsSatisfied`,
- * `scheduleCell`, `harnessCell`, `modelCell`, `planCell`, `worktreeCell`, `rowParity`) comes from
- * {@link useTicketsView}. The component only places them in Boxes and wires layout/color/focus.
- * Notably: deps color uses `depsSatisfied` (a boolean from the selector), not string-matching on
- * `depsCell === 'ok'` — this is the C7 rule-2 hardening the advisor recommended.
+ * and paints a focus-highlighted Pane of 2-row ticket entries. `React.memo`'d (rule 1) so it
+ * re-renders only when the tickets slice changes or focus changes.
  */
 export const TicketsPanel = memo(function TicketsPanel(): React.JSX.Element {
   // Rule 1: read exactly this slice (shallow), rule 2: selector produces the view-model.
@@ -254,18 +252,12 @@ export const TicketsPanel = memo(function TicketsPanel(): React.JSX.Element {
   useMeasureFocus(PANEL_ID, ref);
 
   return (
-    <Box
-      ref={ref}
-      flexDirection="column"
-      borderStyle="round"
-      borderColor={focused ? 'green' : 'gray'}
-      paddingX={1}
-      flexGrow={1}
-    >
-      <Text bold color={focused ? 'green' : 'white'}>
-        {PANEL_TITLE}
-      </Text>
-      <TicketsList view={view} cursor={Math.min(cursor, Math.max(rowCount - 1, 0))} />
-    </Box>
+    <Pane ref={ref} title={PANEL_TITLE} focused={focused}>
+      <TicketsList
+        view={view}
+        cursor={Math.min(cursor, Math.max(rowCount - 1, 0))}
+        focused={focused}
+      />
+    </Pane>
   );
 });

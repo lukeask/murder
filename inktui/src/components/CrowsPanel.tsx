@@ -5,14 +5,42 @@
  *  - Slice: `useAppStore((s) => s.roster, shallow)` (same slice — crows come from roster).
  *  - Selector: `useCrowsView` from `crowsSelectors.ts` (groups by collaborator → planners →
  *    rogue → ticket; rule 2: ALL grouping/ordering is in the selector, not here).
- *  - Layout: sections with a header label, then two-line entries per row.
+ *  - Layout: sections with a header label, then one/two-line entries per row.
  *  - minimized / maximized: a `useState` boolean toggled by `'m'` key. Minimized = one line
  *    per crow (name + status only). Maximized = two lines (name+status, harness · model).
- *    The selector produces both shapes per row; the component picks based on `expanded`.
- *  - `PANEL_ID`: `'crows'` (unchanged — already in PanelId; no panels.ts edit needed).
+ *  - `PANEL_ID`: `'crows'`.
  *
  * Rule 2 proof: the component never reads `row.role` or `row.ticketId` — those are the
  * selector's grouping inputs. The component receives `CrowsView.sections` and paints them.
+ *
+ * ## Phase 3: Pane + Ledger conversion — the trickiest panel (section headers + flat cursor)
+ * Converted to the layout primitives. The bordered chrome is now a {@link ./Pane.tsx Pane} (with the
+ * `[min]`/`[max]` mode label passed as a pre-styled `titleExtra`). The grouped sections are now a
+ * single {@link ./Ledger.tsx Ledger} via **option (ii): flatten sections + headers into one row
+ * list** where header rows are a row-kind `renderEntry` switches on. This keeps the cursor + the
+ * Ledger windowing on a single flat array, which is cleaner than nesting a Ledger per section.
+ *
+ * The cursor-index trap and how it's handled:
+ *  - The panel's `cursor` counts CROW rows only (unchanged — keymap, `moveCursor`, `agentIdAtCursor`,
+ *    and starring all still index into `flatAgentIds`). The Ledger, however, highlights by its OWN
+ *    flat-array index. So we derive a separate `ledgerCursor` = the flat-array index of the
+ *    cursor-th crow row and pass THAT to the Ledger. Header rows therefore never equal `ledgerCursor`
+ *    and are never highlighted — for free.
+ *  - The flat `{kind:'header'|'crow'}` list is built in the component via `useMemo` over
+ *    `view.sections` (this is LAYOUT, not formatting — the selector stays untouched). `rowKey` is
+ *    unique across kinds (`h:${group}` / `c:${agentId}`) so React keys don't collide.
+ *  - `linesPerEntry` is driven by `expanded` (1 minimized / 2 maximized). The health left-edge glyph
+ *    color + section labels are preserved; `renderEntry` sets NO `inverse` (Ledger owns the
+ *    full-width highlight); the glyph uses `ctx.selected` (`▌`) vs `▎`.
+ *
+ * ## Two documented compromises of folding headers into a uniform-height Ledger:
+ *  1. Header rows are 1 line, but the Ledger reserves `linesPerEntry` lines per row uniformly. In
+ *     `[max]` mode (linesPerEntry=2) a header occupies a 2-line slot, so the overflow window's height
+ *     math slightly over-counts header rows. Harmless under the fixed 40-line budget (the Pane's
+ *     `overflow="hidden"` is the hard clip); revisit if/when the Pane passes a measured height.
+ *  2. The Ledger's alternating-background parity counts by absolute row index INCLUDING headers, so a
+ *     header row may occasionally pick up the subtle shade. Acceptable — the shade is intentionally
+ *     subtle and headers are dim-bold regardless.
  */
 
 import { Box, Text } from 'ink';
@@ -28,20 +56,33 @@ import {
 import type { PanelKeymap } from '../input/keymap.js';
 import type { PanelId } from '../input/panels.js';
 import { HEALTH_EDGE_COLOR } from '../selectors/crowHealthSelectors.js';
-import {
-  type CrowRowView,
-  type CrowSection,
-  type CrowsView,
-  useCrowsView,
-} from '../selectors/crowsSelectors.js';
+import { type CrowRowView, type CrowsView, useCrowsView } from '../selectors/crowsSelectors.js';
+import { Ledger, type LedgerEntryContext } from './Ledger.js';
+import { Pane } from './Pane.js';
 
 const PANEL_ID: PanelId = 'crows';
 const PANEL_TITLE = 'Crows';
 
+/**
+ * Fixed Ledger budget until the Pane measures and passes down its inner content size (see the
+ * matching TODO + handoff note in {@link ./PlansPanel.tsx} / {@link ./Ledger.tsx}).
+ */
+const LEDGER_HEIGHT = 40;
+const LEDGER_WIDTH = 40;
+
 type CrowsIntent = 'cursorDown' | 'cursorUp' | 'refresh' | 'toggleExpanded' | 'star';
 
+/**
+ * A flattened Ledger row: either a section header (a label) or a crow row. Headers are interleaved
+ * in cursor-walk order (sections in order, rows within each). This is layout shaping in the
+ * component — the selector still owns the grouping/ordering (rule 2); we only flatten its sections.
+ */
+type CrowLedgerRow =
+  | { readonly kind: 'header'; readonly group: string; readonly label: string }
+  | { readonly kind: 'crow'; readonly row: CrowRowView };
+
 /** Flatten the grouped sections into one cursor-ordered list of agent ids — the order the cursor
- * walks (sections in order, rows within each). Pure; lets `ctrl+s` resolve the highlighted crow. */
+ * walks (sections in order, rows within each). Pure; lets `alt+s` resolve the highlighted crow. */
 function flatAgentIds(view: CrowsView): readonly string[] {
   const ids: string[] = [];
   for (const section of view.sections) {
@@ -53,97 +94,78 @@ function flatAgentIds(view: CrowsView): readonly string[] {
 }
 
 /**
- * One crow row in minimized mode: one line (name + status).
- * Memoised on row + cursor flag so only changed-selected rows repaint.
+ * Build the flat Ledger row list (headers interleaved with crow rows) AND a parallel map from the
+ * crow-only cursor index to its flat-array index. The Ledger highlights by flat index, but the
+ * panel's cursor counts crow rows only — so `crowToFlat[cursor]` is the `ledgerCursor` to pass down.
  */
-const CrowEntryMin = memo(function CrowEntryMin({
-  row,
-  selected,
-}: {
-  readonly row: CrowRowView;
-  readonly selected: boolean;
-}): React.JSX.Element {
-  // The left-edge glyph is the crow-health border (ported from Textual's per-row `border-left`):
-  // always painted, coloured by `row.health`. The cursor adds an inverse highlight over the line.
-  const edgeColor = HEALTH_EDGE_COLOR[row.health];
-  return (
-    <Text inverse={selected} wrap="truncate">
-      <Text color={edgeColor}>{selected ? '▌' : '▎'}</Text>
-      {` ${row.name}  `}
-      <Text color="cyan">{row.status}</Text>
-    </Text>
-  );
-});
+function buildFlatRows(view: CrowsView): {
+  readonly rows: readonly CrowLedgerRow[];
+  readonly crowToFlat: readonly number[];
+} {
+  const rows: CrowLedgerRow[] = [];
+  const crowToFlat: number[] = [];
+  for (const section of view.sections) {
+    rows.push({ kind: 'header', group: section.group, label: section.label });
+    for (const row of section.rows) {
+      crowToFlat.push(rows.length);
+      rows.push({ kind: 'crow', row });
+    }
+  }
+  return { rows, crowToFlat };
+}
 
 /**
- * One crow row in maximized mode: two lines (name+status, then harness · model).
- * Memoised on row + cursor flag.
+ * Render one flat row. Headers are a dim-bold label line; crow rows show the health left-edge glyph
+ * + name + status (and, in maximized mode, a second harness · model line). The Ledger owns the
+ * full-width highlight + alt-bg, so this sets NO `inverse` — only `ctx.selected` flips the glyph to
+ * `▌`. `expanded` drives the second line (it matches the Ledger's `linesPerEntry`).
  */
-const CrowEntryMax = memo(function CrowEntryMax({
-  row,
-  selected,
-}: {
-  readonly row: CrowRowView;
-  readonly selected: boolean;
-}): React.JSX.Element {
-  // Left-edge crow-health border (see CrowEntryMin); the second line aligns under it with a space.
+function renderCrowRow(
+  ledgerRow: CrowLedgerRow,
+  ctx: LedgerEntryContext,
+  expanded: boolean,
+): React.ReactNode {
+  if (ledgerRow.kind === 'header') {
+    return (
+      <Box flexDirection="column" flexGrow={1} flexShrink={0}>
+        <Text dimColor bold wrap="truncate">
+          {ledgerRow.label}
+        </Text>
+      </Box>
+    );
+  }
+  const { row } = ledgerRow;
   const edgeColor = HEALTH_EDGE_COLOR[row.health];
   return (
-    <Box flexDirection="column">
-      <Text inverse={selected} wrap="truncate">
-        <Text color={edgeColor}>{selected ? '▌' : '▎'}</Text>
+    <Box flexDirection="column" flexGrow={1} flexShrink={0}>
+      <Text wrap="truncate">
+        <Text color={edgeColor}>{ctx.selected ? '▌' : '▎'}</Text>
         {` ${row.name}  `}
         <Text color="cyan">{row.status}</Text>
       </Text>
-      <Text dimColor={!selected} inverse={selected} wrap="truncate">
-        {`  ${row.harness} · ${row.model}`}
-      </Text>
-    </Box>
-  );
-});
-
-/** One section: a dimmed header label followed by its crow entries. */
-function CrowSectionView({
-  section,
-  expanded,
-  cursorStart,
-  cursor,
-}: {
-  readonly section: CrowSection;
-  readonly expanded: boolean;
-  /** The global cursor index of the first row in this section. */
-  readonly cursorStart: number;
-  readonly cursor: number;
-}): React.JSX.Element {
-  return (
-    <Box flexDirection="column">
-      <Text dimColor bold>
-        {section.label}
-      </Text>
-      {section.rows.map((row, i) => {
-        const selected = cursorStart + i === cursor;
-        return expanded ? (
-          <CrowEntryMax key={row.agentId} row={row} selected={selected} />
-        ) : (
-          <CrowEntryMin key={row.agentId} row={row} selected={selected} />
-        );
-      })}
+      {expanded ? (
+        <Text dimColor={!ctx.selected} wrap="truncate">
+          {`  ${row.harness} · ${row.model}`}
+        </Text>
+      ) : null}
     </Box>
   );
 }
 
-/**
- * The list body: loading/error/empty chrome, else the grouped sections.
- * Split out so keymap + focus wiring in `CrowsPanel` stays readable.
- */
+/** The list body: loading/error/empty chrome (Ledger renders nothing for zero rows), else the
+ * flattened sections + crow rows via {@link Ledger}. */
 function CrowsList({
   view,
   expanded,
-  cursor,
+  ledgerRows,
+  ledgerCursor,
+  focused,
 }: {
   readonly view: CrowsView;
   readonly expanded: boolean;
-  readonly cursor: number;
+  readonly ledgerRows: readonly CrowLedgerRow[];
+  readonly ledgerCursor: number;
+  readonly focused: boolean;
 }): React.JSX.Element {
   if (view.status === 'error') {
     return <Text color="red">{`error: ${view.error ?? 'unknown'}`}</Text>;
@@ -154,44 +176,28 @@ function CrowsList({
   if (view.isEmpty) {
     return <Text dimColor>no crows</Text>;
   }
-
-  // Build cursor offsets: each section's first row has a global cursor index.
-  const sectionOffsets: number[] = [];
-  let offset = 0;
-  for (const section of view.sections) {
-    sectionOffsets.push(offset);
-    offset += section.rows.length;
-  }
-
   return (
-    <Box flexDirection="column">
-      {view.sections.map((section, si) => (
-        <CrowSectionView
-          key={section.group}
-          section={section}
-          expanded={expanded}
-          cursorStart={sectionOffsets[si] ?? 0}
-          cursor={cursor}
-        />
-      ))}
-    </Box>
+    <Ledger
+      rows={ledgerRows}
+      cursor={ledgerCursor}
+      focused={focused}
+      linesPerEntry={expanded ? 2 : 1}
+      minColumns={1}
+      maxColumns={1}
+      availableHeight={LEDGER_HEIGHT}
+      availableWidth={LEDGER_WIDTH}
+      renderEntry={(ledgerRow, ctx) => renderCrowRow(ledgerRow, ctx, expanded)}
+      rowKey={(ledgerRow) =>
+        ledgerRow.kind === 'header' ? `h:${ledgerRow.group}` : `c:${ledgerRow.row.agentId}`
+      }
+    />
   );
-}
-
-/**
- * Count the total rows across all sections (for cursor clamping).
- * Pure utility used only by CrowsPanel to avoid ad-hoc reduce in the render.
- */
-function totalRows(view: CrowsView): number {
-  let n = 0;
-  for (const s of view.sections) n += s.rows.length;
-  return n;
 }
 
 /**
  * The crows panel. Reads the roster slice, runs `useCrowsView` for type-grouped sections,
  * owns a local cursor + expanded flag, declares its keymap, and paints a focus-highlighted
- * bordered box. `React.memo`'d (rule 1) so it re-renders only when its own state changes.
+ * Pane. `React.memo`'d (rule 1) so it re-renders only when its own state changes.
  */
 export const CrowsPanel = memo(function CrowsPanel(): React.JSX.Element {
   // Rule 1: narrow selector (shallow) — only re-renders when the roster slice ref-changes.
@@ -203,10 +209,14 @@ export const CrowsPanel = memo(function CrowsPanel(): React.JSX.Element {
   const toggleFavorite = useAppStore((s) => s.actions.favorites.toggle);
   const setActivePane = useAppStore((s) => s.actions.conversations.setActivePaneAgentId);
 
-  // Local UI state: cursor position + minimized/maximized toggle (rule 1).
+  // Local UI state: cursor position (CROW rows only) + minimized/maximized toggle (rule 1).
   const [cursor, setCursor] = useState(0);
   const [expanded, setExpanded] = useState(false);
-  const rowCount = totalRows(view);
+
+  // Flatten sections + headers into one Ledger list (layout, not formatting). `crowToFlat` maps the
+  // crow-only cursor to its flat-array index so the Ledger highlights the right row (headers excluded).
+  const { rows: ledgerRows, crowToFlat } = useMemo(() => buildFlatRows(view), [view]);
+  const rowCount = crowToFlat.length;
 
   const moveCursor = useCallback(
     (delta: number) => {
@@ -276,22 +286,27 @@ export const CrowsPanel = memo(function CrowsPanel(): React.JSX.Element {
   useMeasureFocus(PANEL_ID, ref);
 
   const clampedCursor = Math.min(cursor, Math.max(rowCount - 1, 0));
+  // Map the crow-only cursor to the Ledger's flat-array index (headers excluded). When there are no
+  // crow rows the empty chrome renders instead, so 0 is a safe default.
+  const ledgerCursor = crowToFlat[clampedCursor] ?? 0;
   const modeLabel = expanded ? '[max]' : '[min]';
 
   return (
-    <Box
+    // `titleExtra` is the `[min]`/`[max]` mode label, pre-styled per Pane's contract (the caller owns
+    // its color — Pane renders it outside the green/white title segment).
+    <Pane
       ref={ref}
-      flexDirection="column"
-      borderStyle="round"
-      borderColor={focused ? 'green' : 'gray'}
-      paddingX={1}
-      flexGrow={1}
+      title={PANEL_TITLE}
+      focused={focused}
+      titleExtra={<Text dimColor>{` ${modeLabel}`}</Text>}
     >
-      <Text bold color={focused ? 'green' : 'white'}>
-        {`${PANEL_TITLE} `}
-        <Text dimColor>{modeLabel}</Text>
-      </Text>
-      <CrowsList view={view} expanded={expanded} cursor={clampedCursor} />
-    </Box>
+      <CrowsList
+        view={view}
+        expanded={expanded}
+        ledgerRows={ledgerRows}
+        ledgerCursor={ledgerCursor}
+        focused={focused}
+      />
+    </Pane>
   );
 });

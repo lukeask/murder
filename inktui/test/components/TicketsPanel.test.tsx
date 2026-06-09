@@ -5,10 +5,13 @@
  *  1. Build `FakeBusClient`, stub `state.schedule_snapshot`, build the store.
  *  2. Build C4 input stores, seeding `tickets` visible and optionally focused.
  *  3. Render inside both providers + `useRootInput`.
- *  4. Assert 2-row entries (both rows), deps cell content (empty + non-empty),
- *     focus highlight, keymap intent only when focused.
- *     Note: alternating background color is asserted at the selector level (rowParity tests in
- *     ticketsSelectors.test.ts) because ink-testing-library strips ANSI escapes in non-TTY env.
+ *  4. Assert the Pane inline-title border, 2-row × 5-col entries (both rows), deps cell content
+ *     (empty + non-empty), focus highlight, keymap intent only when focused.
+ *     Note: alternating background color is now owned by the Ledger (by absolute row index) and the
+ *     selector still exposes `rowParity`; both are asserted at the selector level (ticketsSelectors
+ *     / Ledger unit tests) because ink-testing-library strips ANSI escapes in non-TTY env. The
+ *     panel's static `LEDGER_WIDTH=100` keeps all 5 columns visible (column-collapse is covered by
+ *     Ledger's own unit tests).
  */
 
 import { Box } from 'ink';
@@ -106,6 +109,9 @@ describe('TicketsPanel', () => {
     const { lastFrame } = render(<Harness store={store} inputStores={inputStores} />);
     await tick();
     const frame = lastFrame() ?? '';
+
+    // Pane inline title on the top border (Phase 3 Pane + Ledger structure).
+    expect(frame).toContain('╭─ Tickets');
 
     // Row 1 content for T-1: id, title, status.
     expect(frame).toContain('T-1');

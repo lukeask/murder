@@ -12,6 +12,12 @@
  *
  * Rule 2 proof: we assert section headers appear in spec order without the component
  * ever seeing `row.role` — that stays in the selector.
+ *
+ * Phase 3: the panel is now a {@link ../../src/components/Pane.tsx Pane} (inline-title border +
+ * `[min]`/`[max]` mode label as `titleExtra`) wrapping a single {@link ../../src/components/Ledger.tsx
+ * Ledger} over the FLATTENED sections+headers list (option (ii)). The cursor still counts crow rows
+ * only; the Ledger highlights via a derived flat-array index so headers are never highlighted. These
+ * tests assert the same section order / names / mode toggle / cursor behaviour against that structure.
  */
 
 import { Box } from 'ink';
@@ -122,6 +128,8 @@ describe('CrowsPanel — sections and grouping', () => {
     const { lastFrame } = render(<Harness store={store} inputStores={inputStores} />);
     await tick();
     const frame = lastFrame() ?? '';
+    // Pane inline title on the top border (Phase 3 Pane + Ledger structure; mode label is titleExtra).
+    expect(frame).toContain('╭─ Crows');
     // Section headers appear in spec order.
     const collabPos = frame.indexOf('Collaborator');
     const plannersPos = frame.indexOf('Planning Agents');

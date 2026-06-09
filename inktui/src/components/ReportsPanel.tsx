@@ -4,6 +4,14 @@
  * Copied from {@link ./NotesPanel.tsx} (including C11's star + open-doc extensions). Only these
  * differ: slice `s.reports`, `PANEL_ID` `'reports'`, doc kind `'report'`, empty chrome `'no
  * reports'`, keymap descriptions say "report". Everything else is verbatim.
+ *
+ * ## Phase 3: Pane + Ledger conversion
+ * Converted to the layout primitives following {@link ./PlansPanel.tsx} / {@link ./NotesPanel.tsx}.
+ * The bordered chrome is now a {@link ./Pane.tsx Pane} and the two-line list is a
+ * {@link ./Ledger.tsx Ledger} (single column, `linesPerEntry=2`). The cursor `useState`, keymap,
+ * selector usage, and focus wiring are unchanged; only the rendering moved to the primitives.
+ * `renderEntry` does NOT set `inverse` (Ledger owns the full-width highlight + alt-bg); it uses
+ * `ctx.selected` only for the `▌` marker + line-2 dim.
  */
 
 import { Box, Text } from 'ink';
@@ -24,47 +32,49 @@ import {
   useReportsView,
 } from '../selectors/reportsSelectors.js';
 import { useDocView } from './DocViewMode.js';
+import { Ledger, type LedgerEntryContext } from './Ledger.js';
+import { Pane } from './Pane.js';
 
 const PANEL_ID: PanelId = 'reports';
 const PANEL_TITLE = 'Reports';
 
+/**
+ * Fixed Ledger budget until the Pane measures and passes down its inner content size (see the
+ * matching TODO + handoff note in {@link ./NotesPanel.tsx} / {@link ./Ledger.tsx}).
+ */
+const LEDGER_HEIGHT = 40;
+const LEDGER_WIDTH = 40;
+
 type ReportsIntent = 'cursorDown' | 'cursorUp' | 'refresh' | 'star' | 'open';
 
 /**
- * One report entry rendered as a two-line block.
- * Line 1: star marker + name. Line 2: char count · updated time.
- * Memoised on row + cursor + starred.
+ * Render one report row as a two-line Ledger entry. Line 1: cursor marker + star + name. Line 2:
+ * char count · updated time. Ledger owns the highlight + alt-bg, so this only uses `ctx.selected`
+ * for the `▌` marker + line-2 dim (no `inverse`). Single column (`maxColumns=1`).
  */
-const ReportEntry = memo(function ReportEntry({
-  row,
-  selected,
-  starred,
-}: {
-  readonly row: ReportRowView;
-  readonly selected: boolean;
-  readonly starred: boolean;
-}): React.JSX.Element {
-  const marker = selected ? '▌' : ' ';
-  const star = starred ? '★ ' : '';
+function renderReportEntry(row: ReportRowView, ctx: LedgerEntryContext): React.ReactNode {
+  const marker = ctx.selected ? '▌' : ' ';
+  const star = row.starred ? '★ ' : '';
   return (
-    <Box flexDirection="column">
-      <Text inverse={selected} wrap="truncate">
-        {`${marker} ${star}${row.name}`}
-      </Text>
-      <Text dimColor={!selected} inverse={selected} wrap="truncate">
+    <Box flexDirection="column" flexGrow={1} flexShrink={0}>
+      <Text wrap="truncate">{`${marker} ${star}${row.name}`}</Text>
+      <Text dimColor={!ctx.selected} wrap="truncate">
         {`  ${row.charCount} · ${row.updatedAt}`}
       </Text>
     </Box>
   );
-});
+}
 
-/** The list body: empty/loading/error chrome, else the two-line entries. */
+/** The list body: empty/loading/error chrome (Ledger renders nothing for zero rows), else the
+ * two-line entries via {@link Ledger}. */
 function ReportsList({
   view,
   cursor,
+  focused,
 }: {
   readonly view: ReportsView;
   readonly cursor: number;
+  readonly focused: boolean;
 }): React.JSX.Element {
   if (view.status === 'error') {
     return <Text color="red">{`error: ${view.error ?? 'unknown'}`}</Text>;
@@ -76,16 +86,23 @@ function ReportsList({
     return <Text dimColor>no reports</Text>;
   }
   return (
-    <Box flexDirection="column">
-      {view.rows.map((row, index) => (
-        <ReportEntry key={row.name} row={row} selected={index === cursor} starred={row.starred} />
-      ))}
-    </Box>
+    <Ledger
+      rows={view.rows}
+      cursor={cursor}
+      focused={focused}
+      linesPerEntry={2}
+      minColumns={1}
+      maxColumns={1}
+      availableHeight={LEDGER_HEIGHT}
+      availableWidth={LEDGER_WIDTH}
+      renderEntry={renderReportEntry}
+      rowKey={(row) => row.name}
+    />
   );
 }
 
 /** The reports panel. Reads its slice, runs the selector, owns a local cursor, declares its
- * keymap, and paints a focus-highlighted bordered box of two-line entries. `React.memo`'d (rule 1). */
+ * keymap, and paints a focus-highlighted Pane of two-line Ledger entries. `React.memo`'d (rule 1). */
 export const ReportsPanel = memo(function ReportsPanel(): React.JSX.Element {
   const reports = useAppStore((s) => s.reports, shallow);
   const favorites = useAppStore((s) => s.favorites, shallow);
@@ -163,18 +180,12 @@ export const ReportsPanel = memo(function ReportsPanel(): React.JSX.Element {
   useMeasureFocus(PANEL_ID, ref);
 
   return (
-    <Box
-      ref={ref}
-      flexDirection="column"
-      borderStyle="round"
-      borderColor={focused ? 'green' : 'gray'}
-      paddingX={1}
-      flexGrow={1}
-    >
-      <Text bold color={focused ? 'green' : 'white'}>
-        {PANEL_TITLE}
-      </Text>
-      <ReportsList view={view} cursor={Math.min(cursor, Math.max(rowCount - 1, 0))} />
-    </Box>
+    <Pane ref={ref} title={PANEL_TITLE} focused={focused}>
+      <ReportsList
+        view={view}
+        cursor={Math.min(cursor, Math.max(rowCount - 1, 0))}
+        focused={focused}
+      />
+    </Pane>
   );
 });

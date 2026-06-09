@@ -1,11 +1,16 @@
 /**
- * NotesPanel test — copied from {@link ./RosterPanel.test.tsx} per the C5 idiom.
+ * NotesPanel test — the doc-panel recipe, asserting the Phase 3 Pane + Ledger structure.
+ *
+ * Modeled on {@link ./PlansPanel.test.tsx}: asserts the {@link ../../src/components/Pane.tsx Pane}
+ * inline-title border (`╭─ Notes ─…`) and the {@link ../../src/components/Ledger.tsx Ledger}
+ * two-line entries with the focus-gated `▌` cursor marker, plus the unchanged local cursor + j/k
+ * keymap + star sort + focus wiring (rule 1).
  *
  * Recipe summary (same as the reference, with notes-specific stubs):
  *  1. Build `FakeBusClient`, stub `state.notes_snapshot`, build the store.
  *  2. Build C4 input stores, seeding `notes` visible and optionally focused.
  *  3. Render inside both providers + `useRootInput`.
- *  4. Assert two-line rows, focus highlight, keymap intent only when focused.
+ *  4. Assert the inline-title border + two-line rows, focus highlight, keymap intent only when focused.
  */
 
 import { Box } from 'ink';
@@ -89,6 +94,8 @@ describe('NotesPanel', () => {
     const { lastFrame } = render(<Harness store={store} inputStores={inputStores} />);
     await tick();
     const frame = lastFrame() ?? '';
+    // Pane inline title: `╭─ Notes ─…` on the top border (not a plain border + "Notes" text line).
+    expect(frame).toContain('╭─ Notes');
     // Line 1: name. Line 2: char count and formatted date.
     expect(frame).toContain('alpha-note');
     expect(frame).toContain('2026-06-08 10:00');

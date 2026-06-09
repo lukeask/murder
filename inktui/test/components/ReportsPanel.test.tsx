@@ -1,6 +1,7 @@
 /**
  * ReportsPanel test — copied from {@link ./NotesPanel.test.tsx}.
  * Changes: uses `state.reports_snapshot`, panel id `'reports'`, empty chrome `'no reports'`.
+ * Phase 3: asserts the Pane inline-title border (`╭─ Reports ─…`) + the Ledger two-line entries.
  */
 
 import { Box } from 'ink';
@@ -80,6 +81,8 @@ describe('ReportsPanel', () => {
     const { lastFrame } = render(<Harness store={store} inputStores={inputStores} />);
     await tick();
     const frame = lastFrame() ?? '';
+    // Pane inline title on the top border (not a plain border + "Reports" text line).
+    expect(frame).toContain('╭─ Reports');
     expect(frame).toContain('alpha-report');
     expect(frame).toContain('2026-06-07 12:00');
     expect(frame).toContain('bravo-report');
