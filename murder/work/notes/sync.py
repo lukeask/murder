@@ -7,6 +7,7 @@ Contains two sync loops:
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 
 from murder.work.notes import content_hash
@@ -15,6 +16,13 @@ from murder.state.persistence import notetaker as _notetaker_db
 from murder.state.storage.filesystem import atomic_write_text
 from murder.state.storage.markdown_loop import MarkdownSyncLoop
 from murder.state.storage.paths import note_md, notes_dir, notetaker_context_md
+
+# (note_name) -> emit a key-only ``state.snapshot{entity=note}``. Injected by the
+# runtime so this pure parse/DB loop never touches the bus directly; the callback
+# funnels the filesystem->DB reconcile path (the PRIMARY note writer) into F1's
+# key-only emit. The NoteSync analog of TicketSync's ``on_ticket_change`` and
+# PlanSync's ``on_plan_change``. See ``Runtime.emit_snapshot``.
+NoteChangeNotifier = Callable[[str], None]
 
 
 class NoteSync(MarkdownSyncLoop):
@@ -27,9 +35,11 @@ class NoteSync(MarkdownSyncLoop):
         *,
         poll_s: float = 1.5,
         debounce_s: float = 0.75,
+        on_note_change: NoteChangeNotifier | None = None,
     ) -> None:
         super().__init__(repo_root, poll_s=poll_s, debounce_s=debounce_s)
         self.db = db
+        self.on_note_change = on_note_change
 
     async def reconcile_all(self) -> None:
         notes_dir(self.repo_root).mkdir(parents=True, exist_ok=True)
@@ -56,6 +66,11 @@ class NoteSync(MarkdownSyncLoop):
                 body=body,
                 content_hash=content_hash(body),
             )
+            # New file import -> a note appeared in the active list. Emit only on
+            # this write branch (not the unchanged early-return below). Fires on
+            # reconcile_all startup churn too, matching the ticket/plan precedent.
+            if self.on_note_change is not None:
+                self.on_note_change(name)
             return
         if str(row["body"]) != body or str(row["materialized_path"]) != rel:
             _notes_db.upsert_note(self.db, name, body=body, materialized_path=rel)
@@ -67,6 +82,9 @@ class NoteSync(MarkdownSyncLoop):
                     body=body,
                     content_hash=content_hash(body),
                 )
+            # Existing note's body/path changed (a visible edit). Emit once.
+            if self.on_note_change is not None:
+                self.on_note_change(name)
 
     def scan_paths(self) -> list[Path]:
         return self._scan_paths()

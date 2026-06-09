@@ -60,10 +60,11 @@ class FilesystemSyncSupervisor:
         *,
         on_ticket_change: Callable[[str], None] | None = None,
         on_plan_change: Callable[[str], None] | None = None,
+        on_note_change: Callable[[str], None] | None = None,
     ) -> FilesystemSyncSupervisor:
         return cls(
             plan_sync=PlanSync(repo_root, db, on_plan_change=on_plan_change),
-            note_sync=NoteSync(repo_root, db),
+            note_sync=NoteSync(repo_root, db, on_note_change=on_note_change),
             notetaker_context_sync=NotetakerContextSync(repo_root, db),
             ticket_sync=TicketSync(repo_root, db, on_ticket_change=on_ticket_change),
             repo_root=repo_root,

@@ -1208,7 +1208,7 @@ class Orchestrator:
             )
 
         client = resolve_role_client(self.rt.config.notetaker)
-        return await notes_mod.submit_capture(
+        result = await notes_mod.submit_capture(
             repo_root=self.rt.repo_root,
             conn=self.rt.db,
             raw=raw.strip(),
@@ -1216,10 +1216,22 @@ class Orchestrator:
             config=self.rt.config.notetaker,
             note_name=notes_mod.today_name(),
         )
+        # submit_capture writes notes rows DIRECTLY (bypassing NoteSync), creating
+        # and possibly renaming the note within this RPC. The provisional name is
+        # never observed by a client before the rename, so emit once on the final
+        # resolved name from the return dict. Async path -> publish_snapshot.
+        resolved = result.get("note_name")
+        if isinstance(resolved, str) and resolved:
+            await self.rt.publish_snapshot(Entity.NOTE, resolved)
+        return result
 
     async def ensure_note(self, name: str) -> dict[str, Any]:
         assert self.rt.db is not None
         row = notes_mod.ensure_note(self.rt.db, self.rt.repo_root, name)
+        # ensure_note writes the notes row directly (bypassing NoteSync); a new
+        # note may have appeared in the active list. Emit key-only via the async
+        # choke point.
+        await self.rt.publish_snapshot(Entity.NOTE, name)
         return {"name": name, "materialized_path": str(row.get("materialized_path", ""))}
 
     async def retire_note(self, name: str) -> dict[str, Any]:
@@ -1228,6 +1240,9 @@ class Orchestrator:
             dest = notes_mod.retire_note(self.rt.db, self.rt.repo_root, name)
         except Exception as exc:
             raise ValueError(f"could not retire note: {exc}") from exc
+        # Retire flips status away from 'active' -> the note drops from the notes
+        # snapshot (status='active' filter). Emit so the client refetches and drops it.
+        await self.rt.publish_snapshot(Entity.NOTE, name)
         return {"name": name, "dest_name": dest.name}
 
     async def reopen_ticket(self, ticket_id: str) -> list[str]:

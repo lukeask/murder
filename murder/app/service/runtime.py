@@ -121,6 +121,7 @@ class Runtime:
             self.db,
             on_ticket_change=lambda tid: self.emit_snapshot(Entity.TICKET, tid),
             on_plan_change=lambda name: self.emit_snapshot(Entity.PLAN, name),
+            on_note_change=lambda name: self.emit_snapshot(Entity.NOTE, name),
         )
         self.plan_sync = self._sync.plan_sync
         self.note_sync = self._sync.note_sync
@@ -131,6 +132,7 @@ class Runtime:
             self.db,
             plan_sync=self.plan_sync,
             note_sync=self.note_sync,
+            on_note_change=lambda name: self.emit_snapshot(Entity.NOTE, name),
         )
         await self._sync.reconcile_all()
         self._tasks.update(self._sync.spawn_tasks())
