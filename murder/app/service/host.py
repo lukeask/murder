@@ -26,7 +26,11 @@ from murder.llm.harnesses.model_cache import populate_model_cache
 from murder.runtime.orchestration.orchestrator import Orchestrator
 from murder.state.persistence.commands import get_command_status
 from murder.state.storage.paths import db_path
-from murder.state.storage.service_registry import remove_service_session, write_service_session
+from murder.state.storage.service_registry import (
+    project_session_name,
+    remove_service_session,
+    write_service_session,
+)
 from murder.usage_sample_command import run_service_usage_poll_loop
 
 LOGGER = logging.getLogger(__name__)
@@ -54,6 +58,20 @@ class ServiceHost:
     _model_discovery_task: asyncio.Task[None] | None = field(default=None, repr=False)
     _rpc_handlers: dict[str, RpcHandler] = field(default_factory=dict, repr=False)
     _service_session_name: str | None = field(default=None, repr=False)
+
+    async def _capture_tmux_frame(self) -> str:
+        """Return the current ANSI frame for the service's tmux session.
+
+        Called by the ``tmux.frame`` stream on every capture tick.  Uses the
+        deterministic session name so it works as soon as the host is
+        constructed (no dependency on ``_service_session_name`` being set).
+        """
+        from murder.runtime.terminal import tmux
+
+        return await tmux.capture_pane(
+            project_session_name(self.repo_root),
+            escapes=True,
+        )
 
     def register_rpc_handler(self, method: str, handler: RpcHandler) -> None:
         self._rpc_handlers[method] = handler
@@ -476,6 +494,7 @@ class ServiceHost:
             self.broker,
             run_id=self.runtime.run_id,
             socket_path=self.socket_path,
+            tmux_frame_capture=self._capture_tmux_frame,
         )
         await self.socket_server.start()
         if self.tcp_port is not None:

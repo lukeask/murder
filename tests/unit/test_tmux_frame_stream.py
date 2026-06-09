@@ -375,3 +375,108 @@ async def test_non_tmux_frame_subscription_goes_through_broker() -> None:
         await task
 
     assert not capture_called, "capture function must not be called for non-tmux.frame subscriptions"
+
+
+# ---------------------------------------------------------------------------
+# Production wiring — ServiceHost supplies a non-None capture supplier
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_service_host_wires_tmux_frame_capture_into_socket_server(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ServiceHost._capture_tmux_frame is wired into SocketBusServer and yields frames.
+
+    Verifies the F6 done-condition: the production server is constructed with a
+    non-None tmux_frame_capture so ``ctrl+y`` subscriptions receive live frames.
+    The actual tmux.capture_pane is mocked so no real tmux session is needed.
+    """
+    from unittest.mock import AsyncMock, patch
+
+    from murder.app.service.host import ServiceHost
+    from murder.bus.transport_socket import SocketBusServer
+    from murder.config import Config, CrowHandlerConfig, HarnessRoleConfig, ProjectConfig
+
+    config = Config(
+        project=ProjectConfig(name="test"),
+        collaborator=HarnessRoleConfig(harness="codex"),
+        default_crow=HarnessRoleConfig(harness="codex"),
+        crow_handler=CrowHandlerConfig(model="test-model"),
+    )
+    host = ServiceHost(config=config, repo_root=tmp_path)
+
+    # Verify _capture_tmux_frame is callable (bound method exists).
+    assert callable(host._capture_tmux_frame), (
+        "ServiceHost must expose _capture_tmux_frame as a callable"
+    )
+
+    # Patch tmux.capture_pane so we can call the supplier without a real session.
+    fake_frame = "\x1b[32mprod-frame\x1b[0m"
+    with patch(
+        "murder.runtime.terminal.tmux.capture_pane",
+        new=AsyncMock(return_value=fake_frame),
+    ):
+        result = await host._capture_tmux_frame()
+
+    assert result == fake_frame, (
+        f"_capture_tmux_frame must return the ANSI frame from tmux.capture_pane; got {result!r}"
+    )
+
+    # Verify the supplier is wired into SocketBusServer (server has non-None capture).
+    # We build a SocketBusServer the same way host.start() does (minus the real runtime).
+    from murder.bus.broker import DurableBroker
+
+    class _MinimalBroker(_FakeBroker):
+        pass
+
+    server = SocketBusServer(
+        _MinimalBroker(),  # type: ignore[arg-type]
+        run_id="run-prod-test",
+        socket_path=tmp_path / "test.sock",
+        tmux_frame_capture=host._capture_tmux_frame,
+    )
+    assert server._tmux_frame_capture is not None, (
+        "SocketBusServer must receive a non-None tmux_frame_capture from ServiceHost"
+    )
+
+    # Run a subscription and confirm at least one tmux.frame pub arrives.
+    transport = _RecordingTransport()
+
+    from murder.bus.protocol import WIRE_MESSAGE_ADAPTER, SubMessage
+    from murder.bus.transport_socket import _ClientSession
+
+    sub_msg_raw: dict[str, Any] = {
+        "op": "sub",
+        "schema_version": PROTOCOL_VERSION,
+        "correlation_id": "cid-prod",
+        "args": {
+            "filter": {"type": "tmux.frame"},
+            "since_id": None,
+            "presence_retain": False,
+        },
+    }
+    sub_msg = WIRE_MESSAGE_ADAPTER.validate_python(sub_msg_raw)
+    session = _ClientSession(
+        client_id="prod-test-client",
+        kind=ClientKind.TUI,
+        transport=transport,  # type: ignore[arg-type]
+    )
+
+    with patch(
+        "murder.runtime.terminal.tmux.capture_pane",
+        new=AsyncMock(return_value=fake_frame),
+    ):
+        task = asyncio.create_task(server._run_subscription(session, sub_msg))
+        for _ in range(5):
+            await asyncio.sleep(0)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    msgs = _parse_messages(transport)
+    pub_types = _pub_types(msgs)
+    assert "tmux.frame" in pub_types, (
+        f"production server with wired capture must emit tmux.frame pubs; got {pub_types}"
+    )

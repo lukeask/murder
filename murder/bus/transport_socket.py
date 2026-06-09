@@ -37,10 +37,11 @@ from murder.bus.protocol import (
 # Injected into SocketBusServer so tests can supply a controllable fake.
 TmuxFrameCapture = Callable[[], Awaitable[str]]
 
+from murder.state.storage.service_registry import socket_path_for_repo
+
 # Default interval between frame captures (seconds).  Chosen to be responsive
 # without hammering tmux; Ink renders at terminal frame-rate so 100ms is plenty.
 TMUX_FRAME_INTERVAL_S = 0.1
-from murder.state.storage.service_registry import socket_path_for_repo
 
 
 LOGGER = logging.getLogger(__name__)
