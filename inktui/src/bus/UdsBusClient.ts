@@ -240,6 +240,10 @@ export class UdsBusClient implements BusClient {
   private readonly subscriptions = new Set<Subscription>();
   private readonly pendingRpcs = new Map<string, PendingRpc>();
 
+  /** Listeners fired after every successful (re)handshake — the app uses this to re-prime its
+   * slices on reconnect (see {@link onConnect}). */
+  private readonly connectListeners = new Set<() => void>();
+
   /** Tracks the active backoff wait so {@link close} can abort it. */
   private pendingSleep: { cancel: () => void } | undefined;
   /** Resolves once the handshake completes, so {@link rpc}/{@link subscribe} can wait for a live
@@ -327,6 +331,41 @@ export class UdsBusClient implements BusClient {
     };
   }
 
+  /**
+   * Register a listener fired after every successful (re)handshake — once per live connection. The
+   * app hooks this to **re-prime its slices on (re)connect**: subscriptions survive reconnect and
+   * slice invalidation is key-only, so a slice that changed while disconnected would otherwise stay
+   * stale until the next unrelated event; re-priming on connect closes that gap.
+   *
+   * Fires immediately if already connected at registration time, so a listener registered after a
+   * fast first handshake still primes exactly once (no race against the initial connect, no
+   * double-fire). Returns an {@link Unsubscribe} disposer. Not on the {@link BusClient} interface —
+   * the app narrows for it structurally, exactly as it does for {@link close}, so the fake stays
+   * untouched.
+   */
+  onConnect(listener: () => void): Unsubscribe {
+    this.connectListeners.add(listener);
+    if (this.state === 'connected') {
+      listener();
+    }
+    return () => {
+      this.connectListeners.delete(listener);
+    };
+  }
+
+  /** Fire every connect listener. Each is fire-and-forget from the connect loop's perspective; a
+   * throwing or async listener must not stall reconnect, so failures are swallowed (the listener
+   * owns its own error policy — the store actions route errors into their slice's `error` field). */
+  private notifyConnected(): void {
+    for (const listener of [...this.connectListeners]) {
+      try {
+        listener();
+      } catch {
+        // A connect listener's failure is its own concern; never let it tear down the connection.
+      }
+    }
+  }
+
   /** Stop reconnection, reject every outstanding RPC, and close the socket. Idempotent. */
   close(): void {
     if (this.state === 'closed') {
@@ -336,6 +375,7 @@ export class UdsBusClient implements BusClient {
     this.pendingSleep?.cancel();
     this.failAllPendingRpcs(new ConnectionLostError('client closed'));
     this.subscriptions.clear();
+    this.connectListeners.clear();
     this.teardownSocket();
   }
 
@@ -443,6 +483,9 @@ export class UdsBusClient implements BusClient {
         this.dispatch(message);
       }
     }
+    // Now the connection is fully live (subscriptions replayed, pipelined frames dispatched): tell
+    // the app it (re)connected so it can re-prime its slices. Fire-and-forget — see `notifyConnected`.
+    this.notifyConnected();
   }
 
   /** Send Hello and consume inbound frames until the matching Ack (success) or an Err
