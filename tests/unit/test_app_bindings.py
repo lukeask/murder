@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -68,3 +69,30 @@ def test_check_action_global_bindings_always_enabled() -> None:
             "refresh_now",
         ):
             assert app.check_action(action, ()) is True
+
+
+def test_view_switch_updates_header_active_tab() -> None:
+    """Ctrl+2/Ctrl+3 must move the header's active-tab highlight, not just focus."""
+    app = MurderApp(_runtime())
+
+    async def _run() -> None:
+        async with app.run_test() as pilot:
+            header = app._header  # noqa: SLF001
+            assert header is app._layout.header  # noqa: SLF001 - single live instance
+            assert header._view == "planning"  # noqa: SLF001
+
+            await pilot.press("ctrl+2")
+            await pilot.pause()
+            assert app._view == "crows"  # noqa: SLF001
+            assert header._view == "crows"  # noqa: SLF001
+            # render() yields a Content; its .markup carries the active-tab
+            # styling spans (str() drops them), so assert on markup.
+            markup = header.render().markup
+            assert "[b" in markup and "]crows[/" in markup
+
+            await pilot.press("ctrl+3")
+            await pilot.pause()
+            assert header._view == "schedule"  # noqa: SLF001
+            assert "]dispatch[/" in header.render().markup
+
+    asyncio.run(_run())

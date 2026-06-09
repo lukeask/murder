@@ -449,6 +449,56 @@ class _CrowsApp(_CrowThemedApp):
         yield self._view
 
 
+def test_spawned_rogue_appears_in_roster_via_store_path() -> None:
+    """Regression: a newly spawned rogue must surface as a roster row.
+
+    Exercises the production seam — CrowsView bound to a RosterStore as a
+    StoreComponent — rather than the direct ``render_from_snapshot`` bridge
+    used by the other view tests.  A poll after spawn ingests a snapshot that
+    now contains the rogue session; the store notifies, and the bound view
+    must reconcile a brand-new roster row (not merely update an existing one).
+    """
+    from murder.app.tui.stores.roster import RosterStore
+
+    store = RosterStore()
+    view = CrowsView()
+    view.bind_stores(roster=store)
+
+    empty = CrowSnapshot(
+        sessions=(),
+        as_of=datetime.now(timezone.utc),
+        invalidation_key="crows-0",
+    )
+    with_rogue = CrowSnapshot(
+        sessions=(
+            factory_crow_session(
+                agent_id="claude-rogue-tailwall",
+                role="crow",
+                ticket_id="",
+                ticket_title="claude-rogue-tailwall",
+                session_name="murder_repo_crow_claude_rogue_tailwall",
+                harness="claude_code",
+            ),
+        ),
+        as_of=datetime.now(timezone.utc),
+        invalidation_key="crows-0",
+    )
+
+    async def _run() -> None:
+        app = _CrowsApp(view)
+        async with app.run_test() as pilot:
+            store.ingest_snapshot(empty)
+            await pilot.pause()
+            assert "claude-rogue-tailwall" not in view.roster._rows  # noqa: SLF001
+
+            # Simulate the post-spawn poll tick: the rogue now exists in the DB.
+            store.ingest_snapshot(with_rogue)
+            await pilot.pause()
+            assert "claude-rogue-tailwall" in view.roster._rows  # noqa: SLF001
+
+    asyncio.run(_run())
+
+
 def test_crows_view_refresh_tails_uses_keyword_lines_capture() -> None:
     calls: list[tuple[str, int]] = []
 

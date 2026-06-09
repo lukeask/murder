@@ -17,6 +17,68 @@ from tests.support.fake_tmux import FakeTmux
 
 _FIXTURES = Path(__file__).parent.parent / "fixtures" / "harness_panes"
 CC_IDLE = (_FIXTURES / "cc_idle.txt").read_text(encoding="utf-8")
+CC_BUSY = (_FIXTURES / "cc_busy.txt").read_text(encoding="utf-8")
+
+
+def test_start_rearms_idle_gate_so_first_user_send_waits_for_input(
+    fake_tmux: FakeTmux,
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    """Regression: the brief send returns while the harness is still working on
+    the brief. The first real user message (delivered by the worker right after
+    ensure_collaborator() returns) must wait for the pane to come back to
+    input-ready instead of landing keystrokes in a busy harness — where the text
+    would sit unsubmitted and never run as a turn (the observed
+    collaborator-never-runs-a-turn bug). Mirrors the Crow deliver-when-idle gate.
+    """
+
+    async def _session_exists(_session: str) -> bool:
+        return True
+
+    monkeypatch.setattr(tmux, "session_exists", _session_exists)
+    # Boot: every poll during start() sees an idle pane.
+    fake_tmux.queue_pane(CC_IDLE)
+    conn = get_db(tmp_path / "state.db")
+    init_db(conn)
+    runtime = SimpleNamespace(db=conn, bus=None, run_id=None, sync_agent=MagicMock())
+    agent = CollaboratorAgent(
+        agent_id="collaborator-0",
+        session="murder_test_collaborator",
+        harness=ClaudeCodeAdapter(),
+        repo_root=tmp_path,
+        runtime=runtime,
+    )
+
+    asyncio.run(agent.start("fresh brief", {}))
+
+    # The gate must be re-armed after the brief: the next send is a *first* send
+    # again and is obligated to wait for input-ready.
+    assert agent.harness_session._first_send_idle_gate_pending is True  # noqa: SLF001
+
+    # Now the harness is busy with the brief, then returns to idle. The user send
+    # must poll the busy pane (and NOT deliver) until the idle pane appears.
+    fake_tmux.reset_queue()
+    fake_tmux.queue_pane(CC_BUSY)  # first input-ready poll: still working
+    fake_tmux.queue_pane(CC_IDLE)  # second poll: back to input-ready
+
+    send_calls_before = len(fake_tmux.calls_to("send_keys"))
+    result = asyncio.run(agent.send("real user question"))
+
+    assert result.ok
+    # The user text was delivered exactly once, only after the gate cleared.
+    user_sends = [
+        args for args, _kw in fake_tmux.calls_to("send_keys") if args[1] == "real user question"
+    ]
+    assert len(user_sends) == 1
+    # And the gate forced at least one input-ready poll before delivery: more
+    # capture_pane calls than a gateless straight-through send would make.
+    assert len(fake_tmux.calls_to("send_keys")) == send_calls_before + 1
+    assert any(
+        name == "capture_pane" for name, *_ in fake_tmux.calls
+    ), "gate must poll the pane for input-ready before delivering"
+    # Gate is consumed by this delivery (one-shot).
+    assert agent.harness_session._first_send_idle_gate_pending is False  # noqa: SLF001
 
 
 def test_collaborator_start_clears_prior_conversation(

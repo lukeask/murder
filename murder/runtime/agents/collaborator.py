@@ -78,6 +78,14 @@ class CollaboratorAgent(HarnessBackedAgent):
             message = send_result.message or "collaborator startup prompt failed"
             await self._fail_startup(message)
             raise RuntimeError(message)
+        # The brief send returns as soon as the keystrokes are delivered — the
+        # harness is now *working on the brief*, not idle. Re-arm the first-send
+        # idle gate so the user's first real message (delivered by the worker
+        # right after ensure_collaborator() returns) waits for the pane to come
+        # back to input-ready instead of landing in a busy harness, where the
+        # text sits unsubmitted and never runs as a turn. This mirrors the Crow
+        # path's deliver-only-when-idle guarantee (CrowHandler.queue_message).
+        self.harness_session.require_first_send_idle_gate()
         # If the harness binary launched but then exited (e.g. an unanswered
         # interactive prompt, a crash, or a missing/broken install), the tmux
         # session is already gone — say so plainly instead of leaving the pane
