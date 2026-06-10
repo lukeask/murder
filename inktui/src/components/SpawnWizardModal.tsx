@@ -62,7 +62,7 @@ import {
   resolveWorktreePayload,
 } from '../store/dialogs/worktreeOptionsActions.js';
 import { toastStore } from '../store/toast/toastStore.js';
-import { theme } from '../theme.js';
+import { useTheme } from '../theme/themeStore.js';
 import {
   DEFAULT_HARNESS,
   defaultEffortCursor,
@@ -485,6 +485,7 @@ function SpawnWizardDialog({
   readonly hasContext: boolean;
   readonly spawnContext: SpawnContext | null;
 }): JSX.Element {
+  const theme = useTheme();
   const progress = stepProgress(s.step, conditions(s, hasContext));
 
   return (
@@ -572,6 +573,7 @@ function SelectList({
   readonly items: readonly string[];
   readonly cursor: number;
 }): JSX.Element {
+  const theme = useTheme();
   return (
     <Box marginTop={1} flexDirection="column">
       <Text>{header}</Text>
@@ -609,6 +611,7 @@ function TextStep({
   readonly value: string;
   readonly placeholder: string;
 }): JSX.Element {
+  const theme = useTheme();
   return (
     <Box marginTop={1} flexDirection="column">
       <Text>{label}</Text>
@@ -630,6 +633,7 @@ function ContextStep({
   readonly spawnContext: SpawnContext;
   readonly contextAccepted: boolean;
 }): JSX.Element {
+  const theme = useTheme();
   return (
     <Box marginTop={1} flexDirection="column">
       <Text>

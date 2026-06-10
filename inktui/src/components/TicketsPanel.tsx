@@ -57,7 +57,8 @@ import {
   type TicketsView,
   useTicketsView,
 } from '../selectors/ticketsSelectors.js';
-import { theme } from '../theme.js';
+import type { Theme } from '../theme/buildTheme.js';
+import { useTheme } from '../theme/themeStore.js';
 import { Ledger, type LedgerEntryContext } from './Ledger.js';
 import { Pane } from './Pane.js';
 import { useTicketEditor } from './TicketEditorMode.js';
@@ -79,7 +80,11 @@ type TicketsIntent = 'cursorDown' | 'cursorUp' | 'refresh' | 'open';
  * the highlight + alternating background, so this sets NO `inverse`/`altBg` — only `ctx.selected`
  * for the `▌` marker. Deps color uses `depsSatisfied` (selector boolean), never string-matching.
  */
-function renderTicketEntry(row: TicketRowView, ctx: LedgerEntryContext): React.ReactNode {
+function renderTicketEntry(
+  row: TicketRowView,
+  ctx: LedgerEntryContext,
+  theme: Theme,
+): React.ReactNode {
   const marker = ctx.selected ? '▌' : ' ';
   const cols = ctx.columns;
   return (
@@ -176,6 +181,7 @@ function TicketsList({
   readonly cursor: number;
   readonly focused: boolean;
 }): React.JSX.Element {
+  const theme = useTheme();
   if (view.status === 'error') {
     return <Text color={theme.error}>{`error: ${view.error ?? 'unknown'}`}</Text>;
   }
@@ -193,7 +199,7 @@ function TicketsList({
       linesPerEntry={2}
       minColumns={1}
       maxColumns={5}
-      renderEntry={renderTicketEntry}
+      renderEntry={(row, ctx) => renderTicketEntry(row, ctx, theme)}
       header={renderTicketsHeader}
       rowKey={(row) => row.id}
     />

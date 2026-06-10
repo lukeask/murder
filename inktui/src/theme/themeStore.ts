@@ -1,0 +1,70 @@
+/**
+ * themeStore — the live UI color scheme: the selected {@link ThemeId} and the {@link Theme} built
+ * from its palette.
+ *
+ * Unlike the per-context input stores, the theme is process-global (one scheme paints the whole UI),
+ * so this is a module-level singleton vanilla-Zustand store. Components read it via {@link useTheme}
+ * (re-render on change); non-React call sites (pure helpers like `paneColors`, selectors) read the
+ * current value via {@link getTheme} or — preferred — take the theme as a parameter so the call site
+ * stays decoupled from this store.
+ *
+ * Default scheme is {@link DEFAULT_THEME_ID} (everforest-dark), so the UI looks identical to before
+ * runtime switching existed. A later settings phase calls {@link setTheme} from the settings RPC
+ * bridge; nothing else mutates it.
+ */
+
+import { useStoreWithEqualityFn } from 'zustand/traditional';
+import { createStore, type StoreApi } from 'zustand/vanilla';
+import { buildTheme, type Theme } from './buildTheme.js';
+import { DEFAULT_THEME_ID, PALETTES, type ThemeId } from './palettes.js';
+
+/** The theme store's state: the selected scheme id, its built theme, and the setter. */
+export interface ThemeState {
+  /** The selected scheme. */
+  readonly id: ThemeId;
+  /** The semantic theme built from `id`'s palette. Replaced whenever `id` changes. */
+  readonly theme: Theme;
+  /** Select a scheme and rebuild `theme`. No-op-cheap: a fresh `theme` object identity on change. */
+  setTheme(id: ThemeId): void;
+}
+
+/** The handle type, re-exported so callers needn't import `zustand/vanilla`. */
+export type ThemeStoreApi = StoreApi<ThemeState>;
+
+/** Build the store seeded at `id`. Factored out for tests (a fresh, isolated store per case). */
+export function createThemeStore(id: ThemeId = DEFAULT_THEME_ID): ThemeStoreApi {
+  return createStore<ThemeState>()((set) => ({
+    id,
+    theme: buildTheme(PALETTES[id], id),
+    setTheme(next) {
+      set({ id: next, theme: buildTheme(PALETTES[next], next) });
+    },
+  }));
+}
+
+/** The process-global theme store. */
+export const themeStore: ThemeStoreApi = createThemeStore();
+
+/** Select the live scheme. Mutates the global store; subscribers (`useTheme`) re-render. */
+export function setTheme(id: ThemeId): void {
+  themeStore.getState().setTheme(id);
+}
+
+/**
+ * Escape hatch for non-React call sites (pure helpers, selectors): the current semantic theme. Reads
+ * a snapshot — it does NOT subscribe, so a caller that needs to react to scheme changes must use
+ * {@link useTheme} or take the theme as a parameter instead.
+ */
+export function getTheme(): Theme {
+  return themeStore.getState().theme;
+}
+
+/** The live semantic theme. Re-renders the calling component when the scheme changes. */
+export function useTheme(): Theme {
+  return useStoreWithEqualityFn(themeStore, (s) => s.theme);
+}
+
+/** The live scheme id (for the settings menu's current-selection indicator). */
+export function useThemeId(): ThemeId {
+  return useStoreWithEqualityFn(themeStore, (s) => s.id);
+}

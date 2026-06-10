@@ -58,7 +58,8 @@ import type { PanelKeymap } from '../input/keymap.js';
 import type { PanelId } from '../input/panels.js';
 import { HEALTH_EDGE_COLOR } from '../selectors/crowHealthSelectors.js';
 import { type CrowRowView, type CrowsView, useCrowsView } from '../selectors/crowsSelectors.js';
-import { theme } from '../theme.js';
+import type { Theme } from '../theme/buildTheme.js';
+import { useTheme } from '../theme/themeStore.js';
 import { Ledger, type LedgerEntryContext } from './Ledger.js';
 import { Pane } from './Pane.js';
 
@@ -122,6 +123,7 @@ function renderCrowRow(
   ledgerRow: CrowLedgerRow,
   ctx: LedgerEntryContext,
   expanded: boolean,
+  theme: Theme,
 ): React.ReactNode {
   if (ledgerRow.kind === 'header') {
     return (
@@ -179,6 +181,7 @@ function CrowsList({
   readonly ledgerCursor: number;
   readonly focused: boolean;
 }): React.JSX.Element {
+  const theme = useTheme();
   if (view.status === 'error') {
     return <Text color={theme.error}>{`error: ${view.error ?? 'unknown'}`}</Text>;
   }
@@ -196,7 +199,7 @@ function CrowsList({
       linesPerEntry={expanded ? 2 : 1}
       minColumns={1}
       maxColumns={1}
-      renderEntry={(ledgerRow, ctx) => renderCrowRow(ledgerRow, ctx, expanded)}
+      renderEntry={(ledgerRow, ctx) => renderCrowRow(ledgerRow, ctx, expanded, theme)}
       header={renderCrowsHeader}
       rowKey={(ledgerRow) =>
         ledgerRow.kind === 'header' ? `h:${ledgerRow.group}` : `c:${ledgerRow.row.agentId}`

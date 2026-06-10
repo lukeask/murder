@@ -13,13 +13,14 @@ import { Box, Text } from 'ink';
 import { memo, useMemo } from 'react';
 import { usePanelStore } from '../hooks/useInputStores.js';
 import { selectTopBar } from '../selectors/barSelectors.js';
-import { theme } from '../theme.js';
+import { useTheme } from '../theme/themeStore.js';
 
 export const TopBar = memo(function TopBar({
   project,
 }: {
   readonly project?: string | undefined;
 }): React.JSX.Element {
+  const theme = useTheme();
   const visible = usePanelStore((s) => s.visible);
   // The selector turns the visible set into render-ready labels; memoised on the set identity (the
   // panel store ref-swaps the set only on change, so this re-formats only on a real toggle).

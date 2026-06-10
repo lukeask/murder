@@ -39,16 +39,12 @@ import {
   type UsageView,
   useUsageView,
 } from '../selectors/usageSelectors.js';
-import { theme } from '../theme.js';
+import type { Theme } from '../theme/buildTheme.js';
+import { useTheme } from '../theme/themeStore.js';
 import { Pane } from './Pane.js';
 
 const PANEL_ID: PanelId = 'usage';
 const PANEL_TITLE = 'Usage';
-
-/** Solid dark background for a provider header line (the "dark on provider" request). */
-const HEADER_BG = theme.panelHeaderBg;
-/** Subtle highlight background for the cursor-selected gauge line (gauges are otherwise transparent). */
-const SELECTED_BG = theme.panelSelectedBg;
 
 /**
  * The compact bar width the `mini` tier paints (R9). The full bar is {@link USAGE_BAR_WIDTH}=12; mini
@@ -70,7 +66,7 @@ type UsageIntent = 'cursorDown' | 'cursorUp' | 'refresh';
  * Built as runs of same-style cells so each contiguous segment is a single `<Text>` (the marker is its
  * own one-char span). Returns inline `<Text>` nodes for the parent `<Text>` row.
  */
-function renderBar(g: UsageGaugeView, width: number = g.barWidth): JSX.Element {
+function renderBar(g: UsageGaugeView, theme: Theme, width: number = g.barWidth): JSX.Element {
   const filledColor = g.isHigh ? theme.gaugeHigh : theme.gaugeNormal;
   // Rescale the geometry from the selector's full-width bar to the requested width (mini shrinks it).
   const scale = width / g.barWidth;
@@ -123,6 +119,7 @@ function HeaderLine({
   readonly harness: string;
   readonly tier: UsageTier;
 }): JSX.Element {
+  const theme = useTheme();
   if (tier === 'mini') {
     // Mini: no solid band (it crowds a thin column); a dim caret + name reads as a quiet group label.
     return (
@@ -132,7 +129,7 @@ function HeaderLine({
     );
   }
   return (
-    <Box flexShrink={0} width="100%" backgroundColor={HEADER_BG}>
+    <Box flexShrink={0} width="100%" backgroundColor={theme.panelHeaderBg}>
       <Text bold wrap="truncate">{` ${harness}`}</Text>
     </Box>
   );
@@ -156,21 +153,30 @@ function GaugeLine({
   readonly selected: boolean;
   readonly tier: UsageTier;
 }): JSX.Element {
+  const theme = useTheme();
   const marker = selected ? '▌' : ' ';
   if (tier === 'mini') {
     return (
-      <Box flexShrink={0} width="100%" backgroundColor={selected ? SELECTED_BG : undefined}>
+      <Box
+        flexShrink={0}
+        width="100%"
+        backgroundColor={selected ? theme.panelSelectedBg : undefined}
+      >
         <Text wrap="truncate">
-          {marker} {renderBar(gauge, MINI_BAR_WIDTH)}
+          {marker} {renderBar(gauge, theme, MINI_BAR_WIDTH)}
         </Text>
       </Box>
     );
   }
   if (tier === 'medium') {
     return (
-      <Box flexShrink={0} width="100%" backgroundColor={selected ? SELECTED_BG : undefined}>
+      <Box
+        flexShrink={0}
+        width="100%"
+        backgroundColor={selected ? theme.panelSelectedBg : undefined}
+      >
         <Text wrap="truncate">
-          {marker} {renderBar(gauge)}
+          {marker} {renderBar(gauge, theme)}
           {'  '}
           <Text color={gauge.isHigh ? theme.error : theme.text}>{gauge.pctLabel.padStart(4)}</Text>
         </Text>
@@ -179,9 +185,9 @@ function GaugeLine({
   }
   // large — the full render: bar + pct + window-length + reset countdown.
   return (
-    <Box flexShrink={0} width="100%" backgroundColor={selected ? SELECTED_BG : undefined}>
+    <Box flexShrink={0} width="100%" backgroundColor={selected ? theme.panelSelectedBg : undefined}>
       <Text wrap="truncate">
-        {marker} {renderBar(gauge)}
+        {marker} {renderBar(gauge, theme)}
         {'  '}
         <Text color={gauge.isHigh ? theme.error : theme.text}>{gauge.pctLabel.padStart(4)}</Text>
         {'  '}
@@ -244,6 +250,7 @@ function UsageBody({
   readonly focused: boolean;
   readonly tier: UsageTier;
 }): JSX.Element {
+  const theme = useTheme();
   if (view.status === 'error') {
     return <Text color={theme.error}>{`error: ${view.error ?? 'unknown'}`}</Text>;
   }

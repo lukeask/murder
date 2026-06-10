@@ -11,7 +11,7 @@ import { useBindings, useEffectiveFocus, useKeymapRegistry } from '../hooks/useI
 import { useTerminalSize } from '../hooks/useTerminalSize.js';
 import { CHAT_FOCUS } from '../input/focusStore.js';
 import { type BottomBarHint, selectBottomBar } from '../selectors/barSelectors.js';
-import { theme } from '../theme.js';
+import { useTheme } from '../theme/themeStore.js';
 
 /** Horizontal gap (cells) between hints on a line — matches the rendered `columnGap`. */
 const HINT_GAP = 2;
@@ -76,6 +76,7 @@ export function useBottomBarLines(): BottomBarHint[][] {
 }
 
 export const BottomBar = memo(function BottomBar(): React.JSX.Element {
+  const theme = useTheme();
   const lines = useBottomBarLines();
   return (
     <Box flexDirection="column" width="100%" paddingX={1}>

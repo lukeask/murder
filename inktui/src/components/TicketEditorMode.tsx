@@ -62,7 +62,7 @@ import { useInputStores } from '../hooks/useInputStores.js';
 import type { Mode, ModeStoreApi } from '../input/modeStore.js';
 import type { AppStoreApi } from '../store/store.js';
 import type { TicketFrontmatter } from '../store/ticketDetail/ticketDetailSlice.js';
-import { theme } from '../theme.js';
+import { useTheme } from '../theme/themeStore.js';
 
 // Import the dispatcher augmentation so Mode gets the `onUncaptured` field at the TS level.
 // The augmentation is declared in dispatcher.ts; importing it brings the declaration into scope.
@@ -405,6 +405,7 @@ export function ticketEditorMode(
  * Overlay's inlayout slot so surrounding panels stay visible above.
  */
 function TicketEditorSurface({ ui }: { readonly ui: EditorUiState }): JSX.Element {
+  const theme = useTheme();
   // Rule 1: read exactly the ticketDetail slice for the rendered body/frontmatter/status.
   const editedBody = useAppStore((s) => s.ticketDetail.editedBody);
   const savedBody = useAppStore((s) => s.ticketDetail.savedBody);
@@ -526,6 +527,7 @@ function TicketEditorSurface({ ui }: { readonly ui: EditorUiState }): JSX.Elemen
 
 /** The frontmatter header row — display-only context (rule 1). */
 function EditorHeader({ frontmatter }: { readonly frontmatter: TicketFrontmatter }): JSX.Element {
+  const theme = useTheme();
   return (
     <>
       <Text bold>{frontmatter.title}</Text>

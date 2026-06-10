@@ -1,0 +1,49 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`buildTheme — per-palette role mapping > snapshots the semantic theme for everforest-dark 1`] = `
+{
+  "accent": "#7fbbb3",
+  "active": "#a7c080",
+  "borderBlurred": "#7a8478",
+  "brand": "#e67e80",
+  "error": "#e67e80",
+  "focus": "#a7c080",
+  "gaugeHigh": "#e67e80",
+  "gaugeNormal": "#a7c080",
+  "heading": "#83c092",
+  "inactive": "#7a8478",
+  "muted": "#859289",
+  "panelHeaderBg": "#272e33",
+  "panelSelectedBg": "#374145",
+  "rowAltBg": "#2e383c",
+  "rowSelectedBg": "#3c4841",
+  "success": "#a7c080",
+  "text": "#d3c6aa",
+  "titleBlurred": "#d3c6aa",
+  "warning": "#dbbc7f",
+}
+`;
+
+exports[`buildTheme — per-palette role mapping > snapshots the semantic theme for everforest-light 1`] = `
+{
+  "accent": "#3a94c5",
+  "active": "#8da101",
+  "borderBlurred": "#a6b0a0",
+  "brand": "#f85552",
+  "error": "#f85552",
+  "focus": "#8da101",
+  "gaugeHigh": "#f85552",
+  "gaugeNormal": "#8da101",
+  "heading": "#35a77c",
+  "inactive": "#a6b0a0",
+  "muted": "#939f91",
+  "panelHeaderBg": "#e8e5d5",
+  "panelSelectedBg": "#bec5b2",
+  "rowAltBg": "#f2efdf",
+  "rowSelectedBg": "#f3f5d9",
+  "success": "#8da101",
+  "text": "#5c6a72",
+  "titleBlurred": "#5c6a72",
+  "warning": "#dfa000",
+}
+`;

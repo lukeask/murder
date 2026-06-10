@@ -49,7 +49,7 @@ import {
   type RosterView,
   useRosterView,
 } from '../selectors/rosterSelectors.js';
-import { theme } from '../theme.js';
+import { useTheme } from '../theme/themeStore.js';
 
 /** The panel id this component owns — its `ctrl+<n>` digit, focus identity, and region all derive
  * from this one constant (see `src/input/panels.ts`). A copy changes only this and the slice. */
@@ -79,6 +79,7 @@ const RosterEntry = memo(function RosterEntry({
   readonly row: RosterRowView;
   readonly selected: boolean;
 }): React.JSX.Element {
+  const theme = useTheme();
   const marker = selected ? '▌' : ' ';
   return (
     <Box flexDirection="column">
@@ -102,6 +103,7 @@ function RosterList({
   readonly view: RosterView;
   readonly cursor: number;
 }): React.JSX.Element {
+  const theme = useTheme();
   if (view.status === 'error') {
     return <Text color={theme.error}>{`error: ${view.error ?? 'unknown'}`}</Text>;
   }
@@ -132,6 +134,7 @@ export const RosterPanel = memo(function RosterPanel(): React.JSX.Element {
   const view = useRosterView(roster);
   // Rule 3: the bus is reached only through the dispatched action; the component never imports it.
   const refresh = useAppStore((s) => s.actions.roster.refresh);
+  const theme = useTheme();
 
   // Rule 1: cursor is local UI state — a view concern, not domain state, so it lives here.
   const [cursor, setCursor] = useState(0);

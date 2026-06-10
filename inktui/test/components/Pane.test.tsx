@@ -61,11 +61,11 @@ describe('Pane — focus color', () => {
   // ink-testing-library strips ANSI from `lastFrame()` by default, so the color flip is verified on
   // the pure `paneColors` helper (the single source of truth the component reads).
   it('uses the focus accent for both border + title when focused', () => {
-    expect(paneColors(true)).toEqual({ border: theme.focus, title: theme.focus });
+    expect(paneColors(true, theme)).toEqual({ border: theme.focus, title: theme.focus });
   });
 
   it('uses a recessed border + readable title when blurred (not uniform)', () => {
-    const blurred = paneColors(false);
+    const blurred = paneColors(false, theme);
     expect(blurred).toEqual({ border: theme.borderBlurred, title: theme.titleBlurred });
     // The two segments differ when blurred — a readable title on a recessed border.
     expect(blurred.border).not.toBe(blurred.title);
