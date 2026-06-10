@@ -24,6 +24,7 @@
 import { Box, Text } from 'ink';
 import type { JSX } from 'react';
 import type { Mode, ModeStoreApi } from '../input/modeStore.js';
+import { theme } from '../theme.js';
 
 /** The choice a confirm dialog resolves to. */
 export type ConfirmChoice = 'confirm' | 'dismiss';
@@ -98,7 +99,13 @@ function ConfirmDialog({
   readonly dismissLabel: string;
 }): JSX.Element {
   return (
-    <Box flexDirection="column" borderStyle="round" borderColor="yellow" paddingX={2} paddingY={1}>
+    <Box
+      flexDirection="column"
+      borderStyle="round"
+      borderColor={theme.warning}
+      paddingX={2}
+      paddingY={1}
+    >
       <Text bold>{message}</Text>
       <Text dimColor>{`y: ${confirmLabel}   n/esc: ${dismissLabel}`}</Text>
     </Box>

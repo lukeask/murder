@@ -11,6 +11,7 @@ import { useEffectiveFocus, useKeymapRegistry } from '../hooks/useInputStores.js
 import { useTerminalSize } from '../hooks/useTerminalSize.js';
 import { CHAT_FOCUS } from '../input/focusStore.js';
 import { type BottomBarHint, selectBottomBar } from '../selectors/barSelectors.js';
+import { theme } from '../theme.js';
 
 /** Horizontal gap (cells) between hints on a line — matches the rendered `columnGap`. */
 const HINT_GAP = 2;
@@ -78,7 +79,7 @@ export const BottomBar = memo(function BottomBar(): React.JSX.Element {
         <Box key={line.map((h) => h.key).join('|')} flexDirection="row" columnGap={HINT_GAP}>
           {line.map((hint) => (
             <Text key={`${hint.key}:${hint.description}`} dimColor>
-              <Text color="yellow">{hint.key}</Text> {hint.description}
+              <Text color={theme.warning}>{hint.key}</Text> {hint.description}
             </Text>
           ))}
         </Box>

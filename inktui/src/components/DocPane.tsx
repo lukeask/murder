@@ -48,6 +48,7 @@ import {
 import type { FocusId, StagePaneId } from '../input/focusStore.js';
 import type { PanelKeymap } from '../input/keymap.js';
 import { DOC_DIR, type DocKind, type OpenDoc } from '../store/docView/docViewSlice.js';
+import { theme } from '../theme.js';
 import { Pane } from './Pane.js';
 
 /** The Stage focus id for an open document pane. The single place the `stage:doc:` scheme is minted
@@ -159,7 +160,7 @@ export const StageDocPane = memo(function StageDocPane({
       focused={focused}
       titleExtra={<Text dimColor>[doc]</Text>}
     >
-      {status === 'error' && error !== null && <Text color="red">{`error: ${error}`}</Text>}
+      {status === 'error' && error !== null && <Text color={theme.error}>{`error: ${error}`}</Text>}
       {status === 'loading' && <Text dimColor>loading…</Text>}
       {clamped > 0 && <Text dimColor>…</Text>}
       {status === 'ready' && lines.length === 0 ? (

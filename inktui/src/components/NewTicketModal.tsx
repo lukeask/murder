@@ -27,6 +27,7 @@ import type { JSX } from 'react';
 import type { Mode, ModeStoreApi } from '../input/modeStore.js';
 import type { DialogActions } from '../store/dialogs/dialogActions.js';
 import { toastStore } from '../store/toast/toastStore.js';
+import { theme } from '../theme.js';
 import { deleteLastChar, insertChar, TextInput } from './TextInput.js';
 
 // Import the dispatcher augmentation so Mode gets the `onUncaptured` field at the TS level.
@@ -173,12 +174,12 @@ function NewTicketDialog({
     <Box
       flexDirection="column"
       borderStyle="round"
-      borderColor="green"
+      borderColor={theme.success}
       paddingX={2}
       paddingY={1}
       width={60}
     >
-      <Text bold color="green">
+      <Text bold color={theme.success}>
         New Ticket
       </Text>
       <Box marginTop={1} flexDirection="column">
@@ -187,7 +188,7 @@ function NewTicketDialog({
       </Box>
       {error !== null && (
         <Box marginTop={1}>
-          <Text color="red">{error}</Text>
+          <Text color={theme.error}>{error}</Text>
         </Box>
       )}
       <Box marginTop={1}>

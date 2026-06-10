@@ -64,22 +64,25 @@
 
 import { Box, type DOMElement } from 'ink';
 import { forwardRef, memo } from 'react';
+import { theme } from '../theme.js';
 import { PaneBorderTop } from './paneBorder.js';
 
 /** Focus-driven colors for the border/corners/fill (`border`) and the title segment (`title`). */
 export interface PaneColors {
-  readonly border: 'green' | 'gray';
-  readonly title: 'green' | 'white';
+  readonly border: string;
+  readonly title: string;
 }
 
 /**
- * Pure color choice for a Pane given focus. Border + corners + `─` fill follow green/gray; the title
- * follows green/white (so a blurred Pane is a white title on a gray border, not one uniform shade —
- * matching the old panels). Exported so the focus color-flip is unit-testable without color-capable
- * render output (ink-testing-library strips ANSI by default).
+ * Pure color choice for a Pane given focus, resolved through {@link theme}. A focused Pane uses the
+ * focus accent for both border and title; a blurred Pane keeps a readable title (`titleBlurred`) on a
+ * recessed border (`borderBlurred`) so it doesn't vanish. Exported so the focus color-flip stays
+ * unit-testable against the theme roles.
  */
 export function paneColors(focused: boolean): PaneColors {
-  return focused ? { border: 'green', title: 'green' } : { border: 'gray', title: 'white' };
+  return focused
+    ? { border: theme.focus, title: theme.focus }
+    : { border: theme.borderBlurred, title: theme.titleBlurred };
 }
 
 export interface PaneProps {

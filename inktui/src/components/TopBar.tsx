@@ -13,6 +13,7 @@ import { Box, Text } from 'ink';
 import { memo, useMemo } from 'react';
 import { usePanelStore } from '../hooks/useInputStores.js';
 import { selectTopBar } from '../selectors/barSelectors.js';
+import { theme } from '../theme.js';
 
 export const TopBar = memo(function TopBar({
   project,
@@ -27,16 +28,20 @@ export const TopBar = memo(function TopBar({
     <Box flexDirection="row" paddingX={1}>
       {/* Branding: a bold `murder` mark + the dim project name, then a gap before the panel labels. */}
       <Box flexDirection="row" columnGap={1} marginRight={3}>
-        <Text bold color="redBright">
+        <Text bold color={theme.brand}>
           murder
         </Text>
-        {project !== undefined && project.length > 0 && <Text color="gray">{project}</Text>}
+        {project !== undefined && project.length > 0 && <Text color={theme.muted}>{project}</Text>}
       </Box>
       <Box flexDirection="row" columnGap={1}>
         {labels.map((label) => (
           // Toggled panels are bold/coloured; off panels are dim — so the bar reads view state at a
           // glance (the plan's whole point: the top bar shows what's on, not just the active view).
-          <Text key={label.id} bold={label.active} color={label.active ? 'green' : 'gray'}>
+          <Text
+            key={label.id}
+            bold={label.active}
+            color={label.active ? theme.active : theme.inactive}
+          >
             {label.text}
           </Text>
         ))}

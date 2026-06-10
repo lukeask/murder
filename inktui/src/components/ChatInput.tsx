@@ -40,6 +40,7 @@ import {
 import { SPAN_CLOSE, SPAN_OPEN } from '../input/chatInputStore.js';
 import { CHAT_FOCUS } from '../input/focusStore.js';
 import { useActiveAgent } from '../selectors/conversationsSelectors.js';
+import { theme } from '../theme.js';
 import { PaneBorderTop } from './paneBorder.js';
 import { TextInput } from './TextInput.js';
 
@@ -69,8 +70,8 @@ export const ChatInput = memo(function ChatInput(): React.JSX.Element {
   const targetLabel = target === null ? 'no target' : target.label;
   // F9: marked image spans (invisible PUA-wrapped ids) render as derived `[Image N]` labels.
   const display = displayBuffer(text);
-  const borderColor = focused ? 'green' : 'gray';
-  const titleColor = focused ? 'green' : 'white';
+  const borderColor = focused ? theme.active : theme.inactive;
+  const titleColor = focused ? theme.focus : theme.text;
   return (
     // Inline-title border (Pane recipe): the `›` prompt sits on the top border line; the send target
     // + text field live inside the content box, which supplies the other three sides + padding.
@@ -83,7 +84,7 @@ export const ChatInput = memo(function ChatInput(): React.JSX.Element {
         borderColor={borderColor}
         paddingX={1}
       >
-        <Text bold color={focused ? 'green' : 'gray'} wrap="truncate">
+        <Text bold color={focused ? theme.active : theme.inactive} wrap="truncate">
           {`→ ${targetLabel} `}
         </Text>
         <TextInput value={display} placeholder="type a message" focused={focused} />

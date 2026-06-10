@@ -26,7 +26,7 @@
  * across blur) but drawn un-highlighted, so re-focusing restores the visible selection.
  *
  * ## Alternating background
- * Even/odd entries alternate a subtle background (`#1e1e2e` / none). Selection overrides alt-bg.
+ * Even/odd entries alternate a subtle background (`theme.rowAltBg` / none). Selection overrides it.
  * Parity is by absolute row index so it stays stable as the window scrolls.
  *
  * ## Overflow windowing (real, not fake clip)
@@ -70,6 +70,7 @@
 
 import { Box, type DOMElement, measureElement, Text } from 'ink';
 import { useLayoutEffect, useRef, useState } from 'react';
+import { theme } from '../theme.js';
 
 /** Context handed to `renderEntry`/`header` so they emit the right number of fields. */
 export interface LedgerEntryContext {
@@ -110,8 +111,6 @@ export interface LedgerProps<Row> {
   readonly rowKey?: (row: Row, index: number) => string;
 }
 
-/** Subtle alternating-background shade (matches TicketsPanel's `#1e1e2e`). */
-const ALT_BG = '#1e1e2e';
 /** Approximate terminal columns one field needs before Ledger drops to fewer columns. */
 const WIDTH_PER_COLUMN = 18;
 /** Conservative first-paint dims (before measurement / no fallback prop) — a sane 24×80 screen. */
@@ -240,7 +239,11 @@ function LedgerRow<Row>({
 }): React.JSX.Element {
   const selected = focused && index === ledgerCursor;
   // Selection background spans the full width; otherwise alternating parity (by absolute index).
-  const backgroundColor = selected ? 'blue' : index % 2 === 1 ? ALT_BG : undefined;
+  const backgroundColor = selected
+    ? theme.rowSelectedBg
+    : index % 2 === 1
+      ? theme.rowAltBg
+      : undefined;
   return (
     <Box flexShrink={0} width="100%" backgroundColor={backgroundColor}>
       {renderEntry(row, { selected, focused, columns })}
@@ -258,7 +261,7 @@ function LedgerRow<Row>({
  * Dim so it recedes behind real entries.
  */
 function OverflowRow({ index }: { readonly index: number }): React.JSX.Element {
-  const backgroundColor = index % 2 === 1 ? ALT_BG : undefined;
+  const backgroundColor = index % 2 === 1 ? theme.rowAltBg : undefined;
   return (
     <Box flexShrink={0} width="100%" justifyContent="center" backgroundColor={backgroundColor}>
       <Text dimColor>…</Text>

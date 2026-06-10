@@ -40,6 +40,7 @@ import type { JSX } from 'react';
 import type { Mode, ModeStoreApi } from '../input/modeStore.js';
 import type { DialogActions } from '../store/dialogs/dialogActions.js';
 import { toastStore } from '../store/toast/toastStore.js';
+import { theme } from '../theme.js';
 import { deleteLastChar, insertChar, TextInput } from './TextInput.js';
 
 // Import the dispatcher augmentation so Mode gets the `onUncaptured` field at the TS level.
@@ -245,37 +246,37 @@ function NewPlanDialog({
     <Box
       flexDirection="column"
       borderStyle="round"
-      borderColor="cyan"
+      borderColor={theme.heading}
       paddingX={2}
       paddingY={1}
       width={60}
     >
-      <Text bold color="cyan">
+      <Text bold color={theme.heading}>
         New Plan
       </Text>
       <Box marginTop={1} flexDirection="column">
-        <Text color={activeField === FIELD_PLAN_NAME ? 'white' : 'gray'}>Plan name:</Text>
+        <Text color={activeField === FIELD_PLAN_NAME ? theme.text : theme.muted}>Plan name:</Text>
         <TextInput
           value={planName}
           placeholder="e.g. refactor-auth"
           focused={activeField === FIELD_PLAN_NAME}
-          color={activeField === FIELD_PLAN_NAME ? 'white' : 'gray'}
+          color={activeField === FIELD_PLAN_NAME ? theme.text : theme.muted}
         />
       </Box>
       <Box marginTop={1} flexDirection="column">
-        <Text color={activeField === FIELD_MESSAGE ? 'white' : 'gray'}>
+        <Text color={activeField === FIELD_MESSAGE ? theme.text : theme.muted}>
           Message to planning agent:
         </Text>
         <TextInput
           value={message}
           placeholder="Describe the plan goal…"
           focused={activeField === FIELD_MESSAGE}
-          color={activeField === FIELD_MESSAGE ? 'white' : 'gray'}
+          color={activeField === FIELD_MESSAGE ? theme.text : theme.muted}
         />
       </Box>
       {error !== null && (
         <Box marginTop={1}>
-          <Text color="red">{error}</Text>
+          <Text color={theme.error}>{error}</Text>
         </Box>
       )}
       <Box marginTop={1}>

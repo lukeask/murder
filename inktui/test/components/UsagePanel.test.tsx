@@ -76,7 +76,7 @@ function Harness({
       <InputStoresProvider value={inputStores}>
         <RootInput />
         <Box>
-          <UsagePanel tier={tier} />
+          <UsagePanel {...(tier === undefined ? {} : { tier })} />
         </Box>
       </InputStoresProvider>
     </AppStoreProvider>

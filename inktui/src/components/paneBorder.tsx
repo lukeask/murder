@@ -45,10 +45,10 @@ import { Box, Text } from 'ink';
 export interface PaneBorderTopProps {
   /** Display-ready title text shown inline on the border (e.g. `Plans`, or `›` for the chat input). */
   readonly title: string;
-  /** Border + corner + `─`-fill color (green focused / gray blurred). */
-  readonly borderColor: 'green' | 'gray';
-  /** Title-segment color (green focused / white blurred — see {@link ./Pane.tsx paneColors}). */
-  readonly titleColor: 'green' | 'white';
+  /** Border + corner + `─`-fill color — a {@link ../theme.js theme} role resolved by `paneColors`. */
+  readonly borderColor: string;
+  /** Title-segment color — a {@link ../theme.js theme} role (see {@link ./Pane.tsx paneColors}). */
+  readonly titleColor: string;
   /** True → render the title bold (matches the focused emphasis the old panels used). */
   readonly bold?: boolean;
   /** Optional trailing node placed right after the title text, inside the title segment. The CALLER

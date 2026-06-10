@@ -52,7 +52,7 @@ export interface PlanRowView {
   readonly name: string;
   /** Char count formatted as a compact display string. */
   readonly charCount: string;
-  /** `updated_at` formatted `YYYY-MM-DD HH:MM`. */
+  /** `updated_at` formatted `Mon. dd HH:MM` (e.g. `Jun. 10 09:32`). */
   readonly updatedAt: string;
   /** Tree depth: 0 top-level, 1 child. The indent is already in `name`; this is for optional styling. */
   readonly depth: number;
@@ -68,26 +68,41 @@ export interface PlansView {
   readonly isEmpty: boolean;
 }
 
-/** Format an ISO-8601 datetime to `YYYY-MM-DD HH:MM` (mirrors notes/reports formatting). */
+/** Three-letter month abbreviations, indexed by 0-based month, for {@link formatUpdatedAt}. */
+const MONTHS = [
+  'Jan',
+  'Feb',
+  'Mar',
+  'Apr',
+  'May',
+  'Jun',
+  'Jul',
+  'Aug',
+  'Sep',
+  'Oct',
+  'Nov',
+  'Dec',
+] as const;
+
+/**
+ * Format an ISO-8601 datetime to `Mon. dd HH:MM` (e.g. `Jun. 10 09:32`). Parsed by slicing the fixed
+ * ISO layout `YYYY-MM-DDTHH:MM:SS` — no Date object, so it's timezone-stable (the stored time is shown
+ * verbatim) and matches the rest of the selectors' string-slice formatting.
+ */
 function formatUpdatedAt(iso: string): string {
-  return iso.slice(0, 16).replace('T', ' ');
+  const month = MONTHS[Number(iso.slice(5, 7)) - 1] ?? '???';
+  const day = iso.slice(8, 10);
+  const time = iso.slice(11, 16);
+  return `${month}. ${day} ${time}`;
 }
 
 /**
- * Width the formatted char-count field is right-padded to, so the trailing `· updated` column aligns
- * across rows regardless of digit count (`5,000 chars` vs `50,000 chars`). Sized to a generous
- * realistic max — `"9,999,999 chars"` is 15 chars — so even a multi-megabyte plan doesn't overrun
- * (a longer value simply isn't padded; it never truncates). Alignment is a formatting concern, so it
- * lives HERE in the selector (rule 2), not in the component.
- */
-const CHAR_COUNT_FIELD_WIDTH = 15;
-
-/**
- * Format a character count as a compact, human-readable display string, right-padded to a fixed
- * width so the following `·`/`updated` column lines up across rows (see {@link CHAR_COUNT_FIELD_WIDTH}).
+ * Format a character count as a compact, human-readable display string (e.g. `3,998 chars`). No
+ * padding — the `· updated` column follows the count directly with a single separator, so a short
+ * count doesn't carry a run of trailing spaces before the `·`.
  */
 function formatCharCount(n: number): string {
-  return `${n.toLocaleString()} chars`.padEnd(CHAR_COUNT_FIELD_WIDTH);
+  return `${n.toLocaleString()} chars`;
 }
 
 /** A parent and its (recency-ordered) children — the unit ordering operates over. */

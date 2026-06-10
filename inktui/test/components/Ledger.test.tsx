@@ -352,8 +352,10 @@ describe('Ledger — full-width highlight + alternating bg (forced color)', () =
   const { FORCE_COLOR } = process.env;
   const colorOn = Boolean(FORCE_COLOR);
   it.skipIf(!colorOn)('paints a full-width selection bg + alternating odd-row bg', () => {
-    const BLUE_BG = '\x1b[44m';
-    const ALT_BG = '\x1b[48;2;30;30;46m'; // #1e1e2e
+    // The Ledger colors come from `theme`: selection = `rowSelectedBg` (everforest bg_green #3c4841),
+    // alternating = `rowAltBg` (everforest bg1 #2e383c). At truecolor these are the SGR codes below.
+    const SELECTED_BG = '\x1b[48;2;60;72;65m'; // #3c4841
+    const ALT_BG = '\x1b[48;2;46;56;60m'; // #2e383c
     const { lastFrame } = render(
       <Ledger
         rows={rows(4)}
@@ -368,7 +370,7 @@ describe('Ledger — full-width highlight + alternating bg (forced color)', () =
       />,
     );
     const frame = lastFrame() ?? '';
-    expect(frame).toContain(BLUE_BG);
+    expect(frame).toContain(SELECTED_BG);
     expect(frame).toContain(ALT_BG);
   });
 });

@@ -52,7 +52,6 @@ import type { Mode, ModeStoreApi } from '../input/modeStore.js';
 import type { HarnessModel, HarnessModelsActions } from '../store/dialogs/harnessModelsActions.js';
 import { modelsFor, STATIC_HARNESS_MODELS } from '../store/dialogs/harnessModelsActions.js';
 import type { SpawnActions } from '../store/dialogs/spawnActions.js';
-import { toastStore } from '../store/toast/toastStore.js';
 import type {
   WorktreeOption,
   WorktreeOptionsActions,
@@ -62,6 +61,8 @@ import {
   NEW_WORKTREE_KEY,
   resolveWorktreePayload,
 } from '../store/dialogs/worktreeOptionsActions.js';
+import { toastStore } from '../store/toast/toastStore.js';
+import { theme } from '../theme.js';
 import {
   DEFAULT_HARNESS,
   defaultEffortCursor,
@@ -490,13 +491,13 @@ function SpawnWizardDialog({
     <Box
       flexDirection="column"
       borderStyle="round"
-      borderColor="yellow"
+      borderColor={theme.warning}
       paddingX={2}
       paddingY={1}
       width={64}
     >
       <Box flexDirection="row" justifyContent="space-between">
-        <Text bold color="yellow">
+        <Text bold color={theme.warning}>
           Spawn Rogue
         </Text>
         <Text dimColor>
@@ -554,7 +555,7 @@ function SpawnWizardDialog({
 
       {s.error !== null && (
         <Box marginTop={1}>
-          <Text color="red">{s.error}</Text>
+          <Text color={theme.error}>{s.error}</Text>
         </Box>
       )}
     </Box>
@@ -578,7 +579,7 @@ function SelectList({
         {items.map((item, i) => (
           <Box key={item}>
             {i === cursor ? (
-              <Text color="yellow" bold>
+              <Text color={theme.warning} bold>
                 {'› '}
                 {item}
               </Text>
@@ -612,7 +613,7 @@ function TextStep({
     <Box marginTop={1} flexDirection="column">
       <Text>{label}</Text>
       <Box marginTop={1}>
-        <TextInput value={value} placeholder={placeholder} focused color="white" />
+        <TextInput value={value} placeholder={placeholder} focused color={theme.text} />
       </Box>
       <Box marginTop={1}>
         <Text dimColor>enter: confirm · esc: cancel</Text>
@@ -633,16 +634,16 @@ function ContextStep({
     <Box marginTop={1} flexDirection="column">
       <Text>
         Include{' '}
-        <Text color="cyan" bold>
+        <Text color={theme.heading} bold>
           {spawnContext.title}
         </Text>{' '}
         as context?
       </Text>
       <Box marginTop={1} flexDirection="row" columnGap={2}>
-        <Text color={contextAccepted ? 'yellow' : 'gray'} bold={contextAccepted}>
+        <Text color={contextAccepted ? theme.warning : theme.muted} bold={contextAccepted}>
           {contextAccepted ? '[yes]' : 'yes'}
         </Text>
-        <Text color={!contextAccepted ? 'yellow' : 'gray'} bold={!contextAccepted}>
+        <Text color={!contextAccepted ? theme.warning : theme.muted} bold={!contextAccepted}>
           {!contextAccepted ? '[no]' : 'no'}
         </Text>
       </Box>

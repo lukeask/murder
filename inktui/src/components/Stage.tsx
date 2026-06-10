@@ -72,6 +72,7 @@ import type { ConversationsState } from '../store/conversations/conversationsSli
 import type { OpenDoc } from '../store/docView/docViewSlice.js';
 import type { FavoritesState } from '../store/favorites/favoritesSlice.js';
 import type { RosterState } from '../store/roster/rosterSlice.js';
+import { theme } from '../theme.js';
 import { StageDocPane } from './DocPane.js';
 import { Pane } from './Pane.js';
 
@@ -110,16 +111,16 @@ const WINDOW = 20;
 const TurnLine = memo(function TurnLine({ turn }: { readonly turn: ChatTurn }): JSX.Element {
   const color =
     turn.speaker === 'user'
-      ? 'green'
+      ? theme.success
       : turn.speaker === 'assistant'
-        ? 'white'
+        ? theme.text
         : turn.speaker === 'tool'
-          ? 'yellow'
+          ? theme.warning
           : turn.speaker === 'plan'
-            ? 'cyan'
+            ? theme.heading
             : turn.speaker === 'notice'
-              ? 'red'
-              : 'gray';
+              ? theme.error
+              : theme.muted;
   const lines = turn.text.split('\n');
   return (
     <Box flexDirection="column" flexShrink={0}>

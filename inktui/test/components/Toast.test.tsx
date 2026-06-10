@@ -20,6 +20,10 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { Toast } from '../../src/components/Toast.js';
 import { MAX_VISIBLE_TOASTS, toastStore } from '../../src/store/toast/toastStore.js';
 
+// Error toasts paint in `theme.error` (everforest red #e67e80). At chalk level 3 (truecolor, set
+// above) that emits this foreground SGR — the colour signal the assertions key on.
+const ERROR_SGR = '\x1b[38;2;230;126;128m';
+
 /** Let Ink flush a render. */
 async function tick(): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, 20));
@@ -46,9 +50,9 @@ describe('<Toast>', () => {
     await tick();
     const frame = lastFrame() ?? '';
     expect(frame).toContain('→ crow-7');
-    // info is dim — the dim SGR (2) is present, the red SGR (31) is not.
+    // info is dim — the dim SGR (2) is present, the error colour is not.
     expect(frame).toContain('\x1b[2m');
-    expect(frame).not.toContain('\x1b[31m');
+    expect(frame).not.toContain(ERROR_SGR);
     unmount();
   });
 
@@ -61,7 +65,7 @@ describe('<Toast>', () => {
     await tick();
     const frame = lastFrame() ?? '';
     expect(frame).toContain('agent did not handle message');
-    expect(frame).toContain('\x1b[31m'); // red SGR
+    expect(frame).toContain(ERROR_SGR); // theme.error truecolor SGR
     unmount();
   });
 

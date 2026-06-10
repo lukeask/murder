@@ -5,7 +5,8 @@
  * primitives rather than the old hand-rolled chrome:
  *  - the {@link ../../src/components/Pane.tsx Pane} draws the inline-title border (`╭─ Plans ─…`),
  *  - the {@link ../../src/components/Ledger.tsx Ledger} draws the two-line entries with the
- *    full-width selection highlight (the `▌` cursor marker on the selected row),
+ *    full-width selection highlight (a green background on the cursor row; the marker is a plain
+ *    space now, so the highlight assertions are FORCE_COLOR-gated — see `selectedLines` below),
  *  - the panel keeps its local cursor + j/k keymap + star sort + focus wiring (rule 1).
  *
  * Recipe: stub the `state.plans_snapshot` RPC, build the store + C4 input stores (seeded `plans`
@@ -27,6 +28,20 @@ import { createAppStore } from '../../src/store/store.js';
 
 const ALT_F = '\x1bf';
 const ALT_S = '\x1bs';
+
+// The cursor marker is now a plain space (PlansPanel's `CURSOR_GLYPH`), so the selected row is
+// signalled ONLY by the Ledger's full-width selection background (`theme.rowSelectedBg`, everforest
+// `bg_green` = #3c4841 → truecolor `48;2;60;72;65`). ink-testing-library strips ANSI unless color is
+// forced, so — exactly like the Ledger color test — these selection assertions run only under
+// FORCE_COLOR; without it they skip (the highlight is verified by-eye, and key routing is covered by
+// the dispatcher tests). The non-visual behavior elsewhere in this file stays ANSI-independent.
+const { FORCE_COLOR } = process.env;
+const colorOn = Boolean(FORCE_COLOR);
+const SELECTED_BG = '\x1b[48;2;60;72;65m';
+/** Frame lines carrying the full-width selection background (a 2-line entry tags both its lines). */
+function selectedLines(frame: string): string[] {
+  return frame.split('\n').filter((line) => line.includes(SELECTED_BG));
+}
 
 async function tick(): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, 20));
@@ -91,53 +106,59 @@ describe('PlansPanel (Pane + Ledger reference)', () => {
     // Pane inline title: `╭─ Plans ─…` on the top border (not a plain border + "Plans" text line).
     expect(frame).toContain('╭─ Plans');
     // Two-line entries: name on line 1, char count · formatted date on line 2 (selector-formatted).
-    // The char count is right-padded to a fixed width for column alignment (CHAR_COUNT_FIELD_WIDTH),
-    // so the `· date` follows pad spaces — assert the count and the date independently.
+    // The count is unpadded and the date is `Mon. dd HH:MM` — assert the count and the date together
+    // so the `count · date` shape (single separator, no pad spaces) is covered.
     expect(frame).toContain('alpha-plan');
     expect(frame).toContain('1,234 chars');
-    expect(frame).toContain('· 2026-06-08 10:00');
+    expect(frame).toContain('· Jun. 08 10:00');
     expect(frame).toContain('bravo-plan');
     expect(frame).toContain('567 chars');
-    expect(frame).toContain('· 2026-06-01 08:00');
+    expect(frame).toContain('· Jun. 01 08:00');
     dispose();
   });
 
-  it('shows the focus highlight (cursor marker) only when it is the effective focus', async () => {
-    const focusedSetup = await setup(twoPlans(), true);
-    const focusedRender = render(
-      <Harness store={focusedSetup.store} inputStores={focusedSetup.inputStores} />,
-    );
-    await tick();
-    expect(focusedSetup.inputStores.focus.getState().intendedId).toBe('plans');
-    // Focused → the Ledger paints the cursor marker on the selected (first) row.
-    expect(focusedRender.lastFrame() ?? '').toContain('▌');
-    focusedSetup.dispose();
+  it.skipIf(!colorOn)(
+    'paints the full-width selection highlight on the cursor row only when it is the effective focus',
+    async () => {
+      const focusedSetup = await setup(twoPlans(), true);
+      const focusedRender = render(
+        <Harness store={focusedSetup.store} inputStores={focusedSetup.inputStores} />,
+      );
+      await tick();
+      expect(focusedSetup.inputStores.focus.getState().intendedId).toBe('plans');
+      // Focused → the selection background sits on the cursor (first) row, not the other.
+      const sel = selectedLines(focusedRender.lastFrame() ?? '');
+      expect(sel.some((line) => line.includes('alpha-plan'))).toBe(true);
+      expect(sel.some((line) => line.includes('bravo-plan'))).toBe(false);
+      focusedSetup.dispose();
 
-    const unfocusedSetup = await setup(twoPlans(), false);
-    const unfocusedRender = render(
-      <Harness store={unfocusedSetup.store} inputStores={unfocusedSetup.inputStores} />,
-    );
-    await tick();
-    expect(unfocusedSetup.inputStores.focus.getState().intendedId).toBe('chat');
-    // Blurred → no cursor marker (the Ledger only highlights when focused).
-    expect(unfocusedRender.lastFrame() ?? '').not.toContain('▌');
-    unfocusedSetup.dispose();
-  });
+      const unfocusedSetup = await setup(twoPlans(), false);
+      const unfocusedRender = render(
+        <Harness store={unfocusedSetup.store} inputStores={unfocusedSetup.inputStores} />,
+      );
+      await tick();
+      expect(unfocusedSetup.inputStores.focus.getState().intendedId).toBe('chat');
+      // Blurred → no selection highlight at all (the Ledger only highlights when focused).
+      expect(unfocusedRender.lastFrame() ?? '').not.toContain(SELECTED_BG);
+      unfocusedSetup.dispose();
+    },
+  );
 
-  it('moves the local cursor on a declared key only when focused', async () => {
+  it.skipIf(!colorOn)('moves the local cursor on a declared key only when focused', async () => {
     const { store, inputStores, dispose } = await setup(twoPlans(), true);
     const { stdin, lastFrame } = render(<Harness store={store} inputStores={inputStores} />);
     await tick();
 
-    // Focused: cursor starts on alpha-plan; 'j' fires cursorDown → marker moves past alpha-plan.
-    const before = lastFrame() ?? '';
-    expect(before.indexOf('▌')).toBeLessThan(before.indexOf('bravo-plan'));
+    // Focused: cursor starts on alpha-plan; 'j' fires cursorDown → highlight moves to bravo-plan.
+    const before = selectedLines(lastFrame() ?? '');
+    expect(before.some((line) => line.includes('alpha-plan'))).toBe(true);
     stdin.write('j');
     await tick();
-    const afterDown = lastFrame() ?? '';
-    expect(afterDown.indexOf('▌')).toBeGreaterThan(afterDown.indexOf('alpha-plan'));
+    const afterDown = selectedLines(lastFrame() ?? '');
+    expect(afterDown.some((line) => line.includes('bravo-plan'))).toBe(true);
+    expect(afterDown.some((line) => line.includes('alpha-plan'))).toBe(false);
 
-    // Unfocus: alt+f → chat; 'k' no longer routes to the panel (frame unchanged).
+    // Unfocus: alt+f → chat; 'k' no longer routes to the panel (highlight stays on bravo-plan).
     stdin.write(ALT_F);
     await tick();
     expect(inputStores.focus.getState().intendedId).toBe('chat');

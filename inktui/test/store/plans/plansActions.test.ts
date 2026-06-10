@@ -175,12 +175,11 @@ describe('plansActions — wire→selector: C11 indentation + recency ordering f
 
     const view = selectPlansView(store.getState().plans, store.getState().favorites);
     const row = view.rows[0];
-    // formatCharCount: n.toLocaleString() + ' chars', right-padded to a fixed width for column
-    // alignment (see plansSelectors CHAR_COUNT_FIELD_WIDTH) — exact locale output is env-dependent
-    // and the value is now space-padded, so assert the suffix allowing trailing pad spaces.
-    expect(row?.charCount).toMatch(/chars\s*$/);
-    // formatUpdatedAt: iso.slice(0,16).replace('T',' ') → '2026-06-09 14:30'
-    expect(row?.updatedAt).toBe('2026-06-09 14:30');
+    // formatCharCount: n.toLocaleString() + ' chars', unpadded (no trailing pad spaces) — exact
+    // locale output is env-dependent, so assert the suffix with no trailing whitespace.
+    expect(row?.charCount).toMatch(/chars$/);
+    // formatUpdatedAt: `Mon. dd HH:MM` from the ISO slice → 'Jun. 09 14:30'.
+    expect(row?.updatedAt).toBe('Jun. 09 14:30');
     dispose();
   });
 });

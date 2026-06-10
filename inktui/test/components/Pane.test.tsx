@@ -14,6 +14,7 @@ import { Box, Text } from 'ink';
 import { render } from 'ink-testing-library';
 import { describe, expect, it } from 'vitest';
 import { Pane, paneColors } from '../../src/components/Pane.js';
+import { theme } from '../../src/theme.js';
 
 /** Pane is width-driven by its parent; wrap in a fixed-width Box for deterministic frames. */
 function Fixed({ children }: { readonly children: React.ReactNode }): React.JSX.Element {
@@ -59,14 +60,14 @@ describe('Pane — inline title border', () => {
 describe('Pane — focus color', () => {
   // ink-testing-library strips ANSI from `lastFrame()` by default, so the color flip is verified on
   // the pure `paneColors` helper (the single source of truth the component reads).
-  it('uses green border + green title when focused', () => {
-    expect(paneColors(true)).toEqual({ border: 'green', title: 'green' });
+  it('uses the focus accent for both border + title when focused', () => {
+    expect(paneColors(true)).toEqual({ border: theme.focus, title: theme.focus });
   });
 
-  it('uses gray border + white title when blurred (not uniform)', () => {
+  it('uses a recessed border + readable title when blurred (not uniform)', () => {
     const blurred = paneColors(false);
-    expect(blurred).toEqual({ border: 'gray', title: 'white' });
-    // The two segments differ when blurred — a white title on a gray border.
+    expect(blurred).toEqual({ border: theme.borderBlurred, title: theme.titleBlurred });
+    // The two segments differ when blurred — a readable title on a recessed border.
     expect(blurred.border).not.toBe(blurred.title);
   });
 });

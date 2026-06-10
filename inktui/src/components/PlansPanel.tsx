@@ -43,6 +43,7 @@ import {
 import type { PanelKeymap } from '../input/keymap.js';
 import type { PanelId } from '../input/panels.js';
 import { type PlanRowView, type PlansView, usePlansView } from '../selectors/plansSelectors.js';
+import { theme } from '../theme.js';
 import { useDocView } from './DocPane.js';
 import { Ledger, type LedgerEntryContext } from './Ledger.js';
 import { Pane } from './Pane.js';
@@ -50,32 +51,45 @@ import { Pane } from './Pane.js';
 const PANEL_ID: PanelId = 'plans';
 const PANEL_TITLE = 'Plans';
 
+/**
+ * Glyph painted in the cursor row's first column. Currently a plain space — the Ledger's full-width
+ * highlight marks the selection on its own, and a glyph here renders as a half-block in the default
+ * foreground over the highlight (a stray off-color cell). Set back to `'▌'` (or any glyph) to restore
+ * a left-edge accent bar; the gutter is already reserved (1 col) so re-enabling is this one line.
+ */
+const CURSOR_GLYPH = ' ';
+
 // The Ledger self-measures its own inner size now (see {@link ./Ledger.tsx}'s "Sizing" note), so no
 // fixed budget is passed: its overflow window tracks the live panel size, the cursor stays on screen.
 
 type PlansIntent = 'cursorDown' | 'cursorUp' | 'refresh' | 'star' | 'open';
 
 /**
- * Render one plan row as a two-line Ledger entry. Line 1: cursor marker + star + (already-indented)
- * name. Line 2: char count · updated time. The Ledger paints the full-width selection background and
- * the alternating-row shade, so this only uses `ctx.selected` for the `▌` marker + line-2 dim — it
- * does NOT set `inverse` (that would fight the Ledger's background). Single column (`maxColumns=1`),
- * so `ctx.columns` is unused. Memo-free: it's a plain render callback the Ledger drives per visible row.
+ * Render one plan row as a two-line Ledger entry. Line 1: optional cursor marker + optional star +
+ * the (already-indented) name. Line 2: char count · updated time. The Ledger paints the full-width
+ * selection background and the alternating-row shade, so this only uses `ctx.selected` for the line-2
+ * dim (and the marker, when the glyph is enabled) — it does NOT set `inverse` (that would fight the
+ * Ledger's background). Single column (`maxColumns=1`), so `ctx.columns` is unused. Memo-free.
  */
 function renderPlanEntry(row: PlanRowView, ctx: LedgerEntryContext): React.ReactNode {
-  const marker = ctx.selected ? '▌' : ' ';
-  // FIXED-WIDTH star gutter (bug 2): `★ ` when starred, two spaces otherwise, so the name column
-  // starts at the same x on every row regardless of star state. Both occupy 2 columns.
-  const star = row.starred ? '★ ' : '  ';
+  // Cursor marker occupies a column ONLY when the glyph feature is enabled. Disabled (the default —
+  // CURSOR_GLYPH is a space), it contributes NOTHING, so a top-level plan's name sits flush at the
+  // left edge (no spurious indent); selection is shown by the Ledger's full-width highlight. Re-enable
+  // by setting CURSOR_GLYPH to '▌': the selected row then gets the glyph and others a 1-col space.
+  const marker = CURSOR_GLYPH === ' ' ? '' : ctx.selected ? CURSOR_GLYPH : ' ';
+  // Star prefix shown ONLY when starred — no fixed-width reservation. A reserved gutter would indent
+  // every row (the spurious indent we're removing), so unstarred rows start right at the name and the
+  // child indent (baked into `row.name` by the selector) is the ONLY indent — one level for a child.
+  const star = row.starred ? '★ ' : '';
   return (
     // The LedgerRow wraps this in a `row` Box (with the full-width highlight/alt-bg background), so a
     // two-line entry must compose its own `column` here. `flexGrow={1}` lets the background span the
-    // full row width behind both lines; `flexShrink={0}` so Yoga doesn't sample/drop a line. The
-    // leading gutter is `marker(1)+star(2)` = 3 cols; line-2's 3-space indent matches so `charCount` sits under `name`.
+    // full row width behind both lines; `flexShrink={0}` so Yoga doesn't sample/drop a line. Line 1 is
+    // `[marker][star]name` with marker/star present only when active; line 2 + header sit flush left.
     <Box flexDirection="column" flexGrow={1} flexShrink={0}>
       <Text wrap="truncate">{`${marker}${star}${row.name}`}</Text>
       <Text dimColor={!ctx.selected} wrap="truncate">
-        {`   ${row.charCount} · ${row.updatedAt}`}
+        {`${row.charCount} · ${row.updatedAt}`}
       </Text>
     </Box>
   );
@@ -83,18 +97,17 @@ function renderPlanEntry(row: PlanRowView, ctx: LedgerEntryContext): React.React
 
 /**
  * The Ledger column-titles key — a dim two-line block (matching `linesPerEntry=2`) labeling what the
- * entry lines mean: `name` over `size · updated`. Aligned to the entry layout — the 3-space leading
- * indent matches {@link renderPlanEntry}'s leading gutter (marker(1) + star(2)) on line 1
- * and its identical line-2 indent — so the labels sit directly above the data columns. THE reference
- * header shape Phase 3 panels copy: a `header={renderPlansHeader}` prop that returns this two-line
- * key. (`columns` is unused here — plans is single-column; a multi-column panel keys each field per
- * `columns`.)
+ * entry lines mean: `name` over `size · updated`. Both labels sit flush left, matching the entry's
+ * flush-left line 2 (line 1 carries the marker/star gutter; line 2 and the header do not). THE
+ * reference header shape Phase 3 panels copy: a `header={renderPlansHeader}` prop that returns this
+ * two-line key. (`columns` is unused here — plans is single-column; a multi-column panel keys each
+ * field per `columns`.)
  */
 function renderPlansHeader(): React.ReactNode {
   return (
     <Box flexDirection="column" flexShrink={0}>
-      <Text dimColor>{'   name'}</Text>
-      <Text dimColor>{'   size · updated'}</Text>
+      <Text dimColor>{'name'}</Text>
+      <Text dimColor>{'size · updated'}</Text>
     </Box>
   );
 }
@@ -111,7 +124,7 @@ function PlansList({
   readonly focused: boolean;
 }): React.JSX.Element {
   if (view.status === 'error') {
-    return <Text color="red">{`error: ${view.error ?? 'unknown'}`}</Text>;
+    return <Text color={theme.error}>{`error: ${view.error ?? 'unknown'}`}</Text>;
   }
   if (view.status === 'loading' && view.isEmpty) {
     return <Text dimColor>loading…</Text>;

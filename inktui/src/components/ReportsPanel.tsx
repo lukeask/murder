@@ -31,6 +31,7 @@ import {
   type ReportsView,
   useReportsView,
 } from '../selectors/reportsSelectors.js';
+import { theme } from '../theme.js';
 import { useDocView } from './DocPane.js';
 import { Ledger, type LedgerEntryContext } from './Ledger.js';
 import { Pane } from './Pane.js';
@@ -89,7 +90,7 @@ function ReportsList({
   readonly focused: boolean;
 }): React.JSX.Element {
   if (view.status === 'error') {
-    return <Text color="red">{`error: ${view.error ?? 'unknown'}`}</Text>;
+    return <Text color={theme.error}>{`error: ${view.error ?? 'unknown'}`}</Text>;
   }
   if (view.status === 'loading' && view.isEmpty) {
     return <Text dimColor>loading…</Text>;

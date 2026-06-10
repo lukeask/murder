@@ -61,6 +61,7 @@ import { useInputStores } from '../hooks/useInputStores.js';
 import type { Mode, ModeStoreApi } from '../input/modeStore.js';
 import type { AppStoreApi } from '../store/store.js';
 import type { TicketFrontmatter } from '../store/ticketDetail/ticketDetailSlice.js';
+import { theme } from '../theme.js';
 
 // Import the dispatcher augmentation so Mode gets the `onUncaptured` field at the TS level.
 // The augmentation is declared in dispatcher.ts; importing it brings the declaration into scope.
@@ -414,14 +415,14 @@ function TicketEditorSurface({ ui }: { readonly ui: EditorUiState }): JSX.Elemen
     <Box
       flexDirection="column"
       borderStyle="round"
-      borderColor="blue"
+      borderColor={theme.accent}
       paddingX={1}
       paddingY={0}
       marginTop={1}
     >
       {/* Header: frontmatter (display-only context) */}
       <Box flexDirection="row" columnGap={2}>
-        <Text bold color="blue">
+        <Text bold color={theme.accent}>
           {'[editor]'}
         </Text>
         {frontmatter !== null ? (
@@ -429,17 +430,17 @@ function TicketEditorSurface({ ui }: { readonly ui: EditorUiState }): JSX.Elemen
         ) : (
           <Text dimColor>loading…</Text>
         )}
-        {hasUnsavedChanges && <Text color="yellow">{'[modified]'}</Text>}
+        {hasUnsavedChanges && <Text color={theme.warning}>{'[modified]'}</Text>}
       </Box>
 
       {/* Status / error bar */}
-      {status === 'error' && error !== null && <Text color="red">{`error: ${error}`}</Text>}
+      {status === 'error' && error !== null && <Text color={theme.error}>{`error: ${error}`}</Text>}
       {status === 'loading' && <Text dimColor>{'loading…'}</Text>}
       {status === 'saving' && <Text dimColor>{'saving…'}</Text>}
 
       {/* Vim mode indicator */}
       <Box flexDirection="row" columnGap={2}>
-        <Text color={ui.vimMode === 'insert' ? 'green' : 'yellow'}>
+        <Text color={ui.vimMode === 'insert' ? theme.success : theme.warning}>
           {ui.vimMode === 'insert' ? '-- INSERT --' : '-- NORMAL --'}
         </Text>
         {ui.pendingD && <Text dimColor>{'d_'}</Text>}
@@ -462,7 +463,7 @@ function TicketEditorSurface({ ui }: { readonly ui: EditorUiState }): JSX.Elemen
                   checklistDone ? (
                     <Text
                       inverse={selected && ui.vimMode === 'normal'}
-                      color="green"
+                      color={theme.success}
                       dimColor={!selected}
                     >
                       {line}
@@ -484,20 +485,20 @@ function TicketEditorSurface({ ui }: { readonly ui: EditorUiState }): JSX.Elemen
       {/* Schedule input (separate from body — `ticket.schedule` RPC) */}
       <Box flexDirection="row" columnGap={1} marginTop={1}>
         <Text dimColor>{'scheduled:'}</Text>
-        <Text color="cyan">{scheduleAt ?? '(none)'}</Text>
+        <Text color={theme.heading}>{scheduleAt ?? '(none)'}</Text>
       </Box>
       <Box flexDirection="row" columnGap={1}>
         <Text dimColor>{'reschedule:'}</Text>
         {ui.scheduleFocused ? (
-          <Text color="cyan" inverse>
+          <Text color={theme.heading} inverse>
             {scheduleInput !== '' ? scheduleInput : ''}
-            <Text color="cyan">{'█'}</Text>
+            <Text color={theme.heading}>{'█'}</Text>
           </Text>
         ) : (
           <Text dimColor>{scheduleInput !== '' ? scheduleInput : '—'}</Text>
         )}
         {scheduleInput !== '' && (
-          <Text color={scheduleValid ? 'green' : 'red'}>
+          <Text color={scheduleValid ? theme.success : theme.error}>
             {scheduleValid ? '✓' : '✗ invalid (e.g. 1d4h3m)'}
           </Text>
         )}
@@ -520,7 +521,7 @@ function EditorHeader({ frontmatter }: { readonly frontmatter: TicketFrontmatter
   return (
     <>
       <Text bold>{frontmatter.title}</Text>
-      <Text color="cyan">{`status:${frontmatter.status}`}</Text>
+      <Text color={theme.heading}>{`status:${frontmatter.status}`}</Text>
       {frontmatter.harness !== null && <Text dimColor>{`harness:${frontmatter.harness}`}</Text>}
       {frontmatter.model !== null && <Text dimColor>{`model:${frontmatter.model}`}</Text>}
       {frontmatter.deps !== '' && <Text dimColor>{`deps:${frontmatter.deps}`}</Text>}

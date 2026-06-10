@@ -49,6 +49,7 @@ import {
   type RosterView,
   useRosterView,
 } from '../selectors/rosterSelectors.js';
+import { theme } from '../theme.js';
 
 /** The panel id this component owns — its `ctrl+<n>` digit, focus identity, and region all derive
  * from this one constant (see `src/input/panels.ts`). A copy changes only this and the slice. */
@@ -83,7 +84,7 @@ const RosterEntry = memo(function RosterEntry({
     <Box flexDirection="column">
       <Text inverse={selected} wrap="truncate">
         {`${marker} ${row.name}  `}
-        <Text color="cyan">{row.status}</Text>
+        <Text color={theme.heading}>{row.status}</Text>
       </Text>
       <Text dimColor={!selected} inverse={selected} wrap="truncate">
         {`  ${row.harness} · ${row.model}`}
@@ -102,7 +103,7 @@ function RosterList({
   readonly cursor: number;
 }): React.JSX.Element {
   if (view.status === 'error') {
-    return <Text color="red">{`error: ${view.error ?? 'unknown'}`}</Text>;
+    return <Text color={theme.error}>{`error: ${view.error ?? 'unknown'}`}</Text>;
   }
   if (view.status === 'loading' && view.isEmpty) {
     return <Text dimColor>loading…</Text>;
@@ -190,11 +191,11 @@ export const RosterPanel = memo(function RosterPanel(): React.JSX.Element {
       ref={ref}
       flexDirection="column"
       borderStyle="round"
-      borderColor={focused ? 'green' : 'gray'}
+      borderColor={focused ? theme.active : theme.inactive}
       paddingX={1}
       flexGrow={1}
     >
-      <Text bold color={focused ? 'green' : 'white'}>
+      <Text bold color={focused ? theme.focus : theme.text}>
         {PANEL_TITLE}
       </Text>
       <RosterList view={view} cursor={Math.min(cursor, Math.max(rowCount - 1, 0))} />

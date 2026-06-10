@@ -39,15 +39,16 @@ import {
   type UsageView,
   useUsageView,
 } from '../selectors/usageSelectors.js';
+import { theme } from '../theme.js';
 import { Pane } from './Pane.js';
 
 const PANEL_ID: PanelId = 'usage';
 const PANEL_TITLE = 'Usage';
 
 /** Solid dark background for a provider header line (the "dark on provider" request). */
-const HEADER_BG = '#181825';
+const HEADER_BG = theme.panelHeaderBg;
 /** Subtle highlight background for the cursor-selected gauge line (gauges are otherwise transparent). */
-const SELECTED_BG = '#313244';
+const SELECTED_BG = theme.panelSelectedBg;
 
 /**
  * The compact bar width the `mini` tier paints (R9). The full bar is {@link USAGE_BAR_WIDTH}=12; mini
@@ -70,7 +71,7 @@ type UsageIntent = 'cursorDown' | 'cursorUp' | 'refresh';
  * own one-char span). Returns inline `<Text>` nodes for the parent `<Text>` row.
  */
 function renderBar(g: UsageGaugeView, width: number = g.barWidth): JSX.Element {
-  const filledColor = g.isHigh ? 'red' : 'green';
+  const filledColor = g.isHigh ? theme.gaugeHigh : theme.gaugeNormal;
   // Rescale the geometry from the selector's full-width bar to the requested width (mini shrinks it).
   const scale = width / g.barWidth;
   const filledCount = Math.round(g.filledCount * scale);
@@ -98,7 +99,7 @@ function renderBar(g: UsageGaugeView, width: number = g.barWidth): JSX.Element {
     if (i === markerPos) {
       flush(`r${i}`);
       nodes.push(
-        <Text key={`m${i}`} color="gray">
+        <Text key={`m${i}`} color={theme.muted}>
           │
         </Text>,
       );
@@ -171,7 +172,7 @@ function GaugeLine({
         <Text wrap="truncate">
           {marker} {renderBar(gauge)}
           {'  '}
-          <Text color={gauge.isHigh ? 'red' : 'white'}>{gauge.pctLabel.padStart(4)}</Text>
+          <Text color={gauge.isHigh ? theme.error : theme.text}>{gauge.pctLabel.padStart(4)}</Text>
         </Text>
       </Box>
     );
@@ -182,7 +183,7 @@ function GaugeLine({
       <Text wrap="truncate">
         {marker} {renderBar(gauge)}
         {'  '}
-        <Text color={gauge.isHigh ? 'red' : 'white'}>{gauge.pctLabel.padStart(4)}</Text>
+        <Text color={gauge.isHigh ? theme.error : theme.text}>{gauge.pctLabel.padStart(4)}</Text>
         {'  '}
         <Text dimColor>{gauge.periodLabel.padEnd(3)}</Text>{' '}
         <Text dimColor>{gauge.resetLabel.padStart(7)}</Text>
@@ -244,7 +245,7 @@ function UsageBody({
   readonly tier: UsageTier;
 }): JSX.Element {
   if (view.status === 'error') {
-    return <Text color="red">{`error: ${view.error ?? 'unknown'}`}</Text>;
+    return <Text color={theme.error}>{`error: ${view.error ?? 'unknown'}`}</Text>;
   }
   if (view.status === 'loading' && view.isEmpty) {
     return <Text dimColor>loading…</Text>;

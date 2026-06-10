@@ -57,6 +57,7 @@ import {
   type TicketsView,
   useTicketsView,
 } from '../selectors/ticketsSelectors.js';
+import { theme } from '../theme.js';
 import { Ledger, type LedgerEntryContext } from './Ledger.js';
 import { Pane } from './Pane.js';
 import { useTicketEditor } from './TicketEditorMode.js';
@@ -96,14 +97,14 @@ function renderTicketEntry(row: TicketRowView, ctx: LedgerEntryContext): React.R
       {/* col 2: status / last-update */}
       {cols >= 2 ? (
         <Box flexDirection="column" marginRight={2}>
-          <Text color="cyan">{row.statusCell}</Text>
+          <Text color={theme.heading}>{row.statusCell}</Text>
           <Text dimColor={!ctx.selected}>{row.lastUpdateCell}</Text>
         </Box>
       ) : null}
       {/* col 3: deps / schedule — deps color from `depsSatisfied` (rule 2 proof) */}
       {cols >= 3 ? (
         <Box flexDirection="column" marginRight={2}>
-          <Text color={row.depsSatisfied ? 'green' : 'yellow'}>{row.depsCell}</Text>
+          <Text color={row.depsSatisfied ? theme.success : theme.warning}>{row.depsCell}</Text>
           <Text dimColor={!ctx.selected}>{row.scheduleCell}</Text>
         </Box>
       ) : null}
@@ -176,7 +177,7 @@ function TicketsList({
   readonly focused: boolean;
 }): React.JSX.Element {
   if (view.status === 'error') {
-    return <Text color="red">{`error: ${view.error ?? 'unknown'}`}</Text>;
+    return <Text color={theme.error}>{`error: ${view.error ?? 'unknown'}`}</Text>;
   }
   if (view.status === 'loading' && view.isEmpty) {
     return <Text dimColor>loading…</Text>;

@@ -31,6 +31,7 @@
 
 import { Box, Text } from 'ink';
 import type { JSX } from 'react';
+import { theme } from '../theme.js';
 
 /** Props for the controlled text input display. */
 export interface TextInputProps {
@@ -81,7 +82,7 @@ export function TextInput({
   value,
   placeholder,
   focused = false,
-  color = 'white',
+  color = theme.text,
 }: TextInputProps): JSX.Element {
   if (value.length === 0 && placeholder !== undefined) {
     // Phantom placeholder. Focused → cursor on the first glyph; blurred → plain dim phantom text.
@@ -105,7 +106,7 @@ export function TextInput({
     <Box>
       <Text color={color}>{value}</Text>
       {focused && (
-        <Text color="white" bold>
+        <Text color={theme.text} bold>
           {'█'}
         </Text>
       )}

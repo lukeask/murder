@@ -57,6 +57,7 @@ import type { PanelKeymap } from '../input/keymap.js';
 import type { PanelId } from '../input/panels.js';
 import { HEALTH_EDGE_COLOR } from '../selectors/crowHealthSelectors.js';
 import { type CrowRowView, type CrowsView, useCrowsView } from '../selectors/crowsSelectors.js';
+import { theme } from '../theme.js';
 import { Ledger, type LedgerEntryContext } from './Ledger.js';
 import { Pane } from './Pane.js';
 
@@ -137,7 +138,7 @@ function renderCrowRow(
       <Text wrap="truncate">
         <Text color={edgeColor}>{ctx.selected ? '▌' : '▎'}</Text>
         {` ${row.name}  `}
-        <Text color="cyan">{row.status}</Text>
+        <Text color={theme.heading}>{row.status}</Text>
       </Text>
       {expanded ? (
         <Text dimColor={!ctx.selected} wrap="truncate">
@@ -178,7 +179,7 @@ function CrowsList({
   readonly focused: boolean;
 }): React.JSX.Element {
   if (view.status === 'error') {
-    return <Text color="red">{`error: ${view.error ?? 'unknown'}`}</Text>;
+    return <Text color={theme.error}>{`error: ${view.error ?? 'unknown'}`}</Text>;
   }
   if (view.status === 'loading' && view.isEmpty) {
     return <Text dimColor>loading…</Text>;
