@@ -142,9 +142,9 @@ function renderCrowRow(
     <Box flexDirection="column" flexGrow={1} flexShrink={0}>
       <Text wrap="truncate">
         <Text color={edgeColor}>{ctx.selected ? '▌' : '▎'}</Text>
-        {/* `★ ` precedes a favorited crow's name (item 9d); plain space otherwise so the names stay
-            column-aligned whether or not the row is starred. */}
-        {row.favorited ? ' ★ ' : ' '}
+        {/* FIXED-WIDTH star gutter (matches Notes/Reports): `★ ` when favorited, spaces otherwise,
+            so the names stay column-aligned whether or not the row is starred. */}
+        {row.favorited ? ' ★ ' : '   '}
         {`${row.name}  `}
         <Text color={theme.heading}>{row.status}</Text>
       </Text>
