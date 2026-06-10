@@ -176,9 +176,9 @@ export const NotesPanel = memo(function NotesPanel(): React.JSX.Element {
         { chord: { input: 'j' }, intent: 'cursorDown', description: 'next note' },
         { chord: { input: 'k' }, intent: 'cursorUp', description: 'prev note' },
         { chord: { input: 'r' }, intent: 'refresh', description: 'refresh' },
-        // alt+s stars the highlighted note (the dispatcher routes alt+s here when a panel — not
+        // alt+f stars the highlighted note (the dispatcher routes alt+f here when a panel — not
         // chat — is focused; the global layer never sees this panel's local cursor, rule 1).
-        { chord: { input: 's', key: { meta: true } }, intent: 'star', description: 'star' },
+        { chord: { input: 'f', key: { meta: true } }, intent: 'star', description: 'favorite' },
         { chord: { key: { return: true } }, intent: 'open', description: 'view doc' },
       ],
       onIntent(intent) {

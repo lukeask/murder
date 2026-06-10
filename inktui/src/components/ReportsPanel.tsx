@@ -150,7 +150,7 @@ export const ReportsPanel = memo(function ReportsPanel(): React.JSX.Element {
         { chord: { input: 'j' }, intent: 'cursorDown', description: 'next report' },
         { chord: { input: 'k' }, intent: 'cursorUp', description: 'prev report' },
         { chord: { input: 'r' }, intent: 'refresh', description: 'refresh' },
-        { chord: { input: 's', key: { meta: true } }, intent: 'star', description: 'star' },
+        { chord: { input: 'f', key: { meta: true } }, intent: 'star', description: 'favorite' },
         { chord: { key: { return: true } }, intent: 'open', description: 'view doc' },
       ],
       onIntent(intent) {

@@ -54,7 +54,7 @@ export interface BottomBarHint {
 const GLOBAL_HINTS: readonly BottomBarHint[] = [
   { key: 'alt+1–0', description: 'panels' },
   { key: 'alt+hjkl', description: 'nav' },
-  { key: 'alt+f', description: 'chat' },
+  { key: 'alt+space', description: 'chat' },
 ];
 
 /** Render a chord's key for the hint bar: prefer its printable char, else name the special key. */

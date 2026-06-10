@@ -26,8 +26,8 @@ import { createInputStores } from '../../src/input/createInputStores.js';
 import type { PlansSnapshotReply } from '../../src/store/plans/plansActions.js';
 import { createAppStore } from '../../src/store/store.js';
 
-const ALT_F = '\x1bf';
-const ALT_S = '\x1bs';
+const ALT_F = '\x1bf'; // star/favorite the highlighted row
+const ALT_SPACE = '\x1b '; // focus chat (was alt+f)
 
 // The cursor marker is now a plain space (PlansPanel's `CURSOR_GLYPH`), so the selected row is
 // signalled ONLY by the Ledger's full-width selection background (`theme.rowSelectedBg`, everforest
@@ -158,8 +158,8 @@ describe('PlansPanel (Pane + Ledger reference)', () => {
     expect(afterDown.some((line) => line.includes('bravo-plan'))).toBe(true);
     expect(afterDown.some((line) => line.includes('alpha-plan'))).toBe(false);
 
-    // Unfocus: alt+f → chat; 'k' no longer routes to the panel (highlight stays on bravo-plan).
-    stdin.write(ALT_F);
+    // Unfocus: alt+space → chat; 'k' no longer routes to the panel (highlight stays on bravo-plan).
+    stdin.write(ALT_SPACE);
     await tick();
     expect(inputStores.focus.getState().intendedId).toBe('chat');
     const beforeUnfocused = lastFrame() ?? '';
@@ -180,7 +180,7 @@ describe('PlansPanel (Pane + Ledger reference)', () => {
     dispose();
   });
 
-  it('alt+s stars the highlighted plan: prefs RPC fires, ★ shows, sorts to top', async () => {
+  it('alt+f stars the highlighted plan: prefs RPC fires, ★ shows, sorts to top', async () => {
     // bravo-plan is older (sorts second). Move the cursor to it and star it; it must jump to the top
     // with a ★ marker, and tui.save_favorites must fire with its id.
     const { fake, store, inputStores, dispose } = await setup(twoPlans(), true);
@@ -189,7 +189,7 @@ describe('PlansPanel (Pane + Ledger reference)', () => {
 
     stdin.write('j'); // cursor → bravo-plan
     await tick();
-    stdin.write(ALT_S); // star the highlighted (bravo) plan
+    stdin.write(ALT_F); // star the highlighted (bravo) plan
     await tick();
 
     const saveCalls = fake.rpcCalls.filter((c) => c.method === 'tui.save_favorites');

@@ -49,7 +49,7 @@ describe('packHints', () => {
     const hints = [
       h('alt+1–0', 'panels'),
       h('alt+hjkl', 'nav'),
-      h('alt+f', 'chat'),
+      h('alt+space', 'chat'),
       h('j', 'next crow'),
       h('k', 'prev crow'),
       h('r', 'refresh'),

@@ -254,10 +254,10 @@ export const CrowsPanel = memo(function CrowsPanel(): React.JSX.Element {
         { chord: { input: 'k' }, intent: 'cursorUp', description: 'prev crow' },
         { chord: { input: 'r' }, intent: 'refresh', description: 'refresh' },
         { chord: { input: 'm' }, intent: 'toggleExpanded', description: 'toggle maximized' },
-        // alt+s stars the highlighted crow (dispatcher routes alt+s here when a panel is focused)
-        // AND keeps that crow's chat pane active (spec: "alt+s while chatting a crow stars it and
+        // alt+f stars the highlighted crow (dispatcher routes alt+f here when a panel is focused)
+        // AND keeps that crow's chat pane active (spec: "favorite while chatting a crow stars it and
         // keeps that chat pane active").
-        { chord: { input: 's', key: { meta: true } }, intent: 'star', description: 'star' },
+        { chord: { input: 'f', key: { meta: true } }, intent: 'star', description: 'favorite' },
       ],
       onIntent(intent) {
         switch (intent) {

@@ -179,8 +179,8 @@ describe('TmuxMode — alt+y fullscreen tmux mode', () => {
     enter();
     await tick();
 
-    // alt+f would normally focus chat; with passThrough:true it still falls through to layer 1
-    // (global chords) which fires focusChat. So alt+f DOES work while tmux is up (by design: passThrough).
+    // alt+space would normally focus chat; with passThrough:true it still falls through to layer 1
+    // (global chords) which fires focusChat. So alt+space DOES work while tmux is up (by design: passThrough).
     // But a plain panel key like 'j' (not a global chord) does NOT fire since panel keymaps are layer 3.
     const beforeFocus = stores.focus.getState().intendedId;
     stdin.write('j'); // panel key — should be swallowed by mode (no passThrough to panel layer)

@@ -21,7 +21,7 @@
  * ## Design (the in-layout C7M mode recipe — ONE input owner, rule 5)
  *
  * 1. **Declare a Mode** — `ticketEditorMode(modes, store, options)` builds a {@link Mode} with
- *    `presentation: 'inlayout'`, a declared keymap for the special keys (esc/ctrl+s/tab/return/
+ *    `presentation: 'inlayout'`, a declared keymap for the special keys (esc/tab/return/
  *    backspace/arrows), an `onUncaptured` for printable chars + vim command letters, and a `render`
  *    thunk over a pure component.
  * 2. **Enter it** — `TicketsPanel`'s `'open'` intent calls `modes.enter(ticketEditorMode(...))`.
@@ -39,11 +39,12 @@
  * ## Vim modes
  *
  * NORMAL mode: cursor-line navigation (`j`/`k` or arrows), `i` → INSERT, `dd` → delete line,
- *   `x` → toggle checklist item on cursor line, `q` → discard (Esc also dismisses),
- *   `ctrl+s` → save (also in INSERT), `tab` → focus the schedule field.
+ *   `x` → toggle checklist item on cursor line, `w` → save & close, `q` → discard & close,
+ *   `tab` → focus the schedule field.
  * INSERT mode: printable chars appended to cursor line; `Backspace` → delete last char;
- *   `Return` → new line after cursor; `Esc` → dismiss (the mode's Esc chord). The editor does not
- *   distinguish "Esc back to NORMAL" from "Esc discard" — Esc is the mode's declared dismiss chord.
+ *   `Return` → new line after cursor; `Esc` → back to NORMAL. Esc is a proper mode toggle and never
+ *   discards: in INSERT it returns to NORMAL, with the schedule field focused it blurs it, and in
+ *   NORMAL it is a no-op (swallowed). Discard is only `q` in NORMAL.
  *
  * ## What this is the reference for (C12 plan/note editors)
  *
@@ -75,23 +76,20 @@ import '../input/dispatcher.js';
  * `onUncaptured`, because what they do is context-dependent on the vim mode (a `j` is navigation in
  * NORMAL but a literal character in INSERT), which a static keymap cannot express.
  */
-type EditorIntent =
-  | 'save'
-  | 'dismiss'
-  | 'navUp'
-  | 'navDown'
-  | 'newline'
-  | 'backspace'
-  | 'toggleSchedule';
+type EditorIntent = 'escape' | 'navUp' | 'navDown' | 'newline' | 'backspace' | 'toggleSchedule';
+
+// Note: save (`w`) and discard (`q`) are NORMAL-mode command letters handled in
+// `handleNormalCommand` via `onUncaptured`, not declared keymap intents — they are context-
+// dependent on the vim mode, which a static keymap cannot express.
 
 /** Stable mode id so re-entry is idempotent (the modeStore pattern). */
 const EDITOR_MODE_ID = 'ticket-editor';
 
 /** What the caller supplies to open the editor. */
 export interface TicketEditorModeOptions {
-  /** Called when the user saves (ctrl+s). The action layer (via the store) does the bus call. */
+  /** Called when the user saves (NORMAL `w`). The action layer (via the store) does the bus call. */
   readonly onSave: () => void;
-  /** Called when the user dismisses without saving (Esc, `q`). */
+  /** Called when the user discards without saving (NORMAL `q`). */
   readonly onDiscard: () => void;
 }
 
@@ -233,6 +231,12 @@ export function ticketEditorMode(
         }
         return true;
       }
+      case 'w':
+        // Save: exit the mode then run the caller's save handler (exit-then-act).
+        modes.getState().exit(id);
+        options.onSave();
+        ui.pendingD = false;
+        return true;
       case 'q':
         // Discard: exit the mode then run the caller's discard handler (exit-then-act).
         modes.getState().exit(id);
@@ -262,9 +266,9 @@ export function ticketEditorMode(
     presentation: 'inlayout',
     // No passThrough: the editor captures everything. Panel/global chords do NOT fire underneath.
     keymap: [
-      // Dismiss / save — handled identically to confirmMode.
-      { chord: { key: { escape: true } }, intent: 'dismiss', description: 'discard & close' },
-      { chord: { input: 's', key: { meta: true } }, intent: 'save', description: 'save & close' },
+      // Esc is mode-aware (see the 'escape' intent): blur the schedule field, or INSERT→NORMAL, or a
+      // NORMAL no-op. It NEVER discards+closes — discard is `q` in NORMAL, save is `w` in NORMAL.
+      { chord: { key: { escape: true } }, intent: 'escape', description: 'normal mode' },
       // Tab toggles the schedule field focus.
       { chord: { key: { tab: true } }, intent: 'toggleSchedule', description: 'schedule field' },
       // Arrow navigation (NORMAL line nav; mirrors j/k).
@@ -278,16 +282,20 @@ export function ticketEditorMode(
     ],
     onIntent(intent) {
       switch (intent) {
-        case 'save':
-          // Exit first (restores focus), then run the caller's handler — confirmMode's
-          // "exit-then-act" contract so a save that opens another mode stacks correctly.
-          modes.getState().exit(id);
-          options.onSave();
-          return;
-        case 'dismiss':
-          modes.getState().exit(id);
-          options.onDiscard();
-          return;
+        case 'escape':
+          // Mode-aware Esc. Never discards+closes (discard is `q` in NORMAL).
+          if (ui.scheduleFocused) {
+            ui.scheduleFocused = false; // blur the schedule field
+            refresh();
+            return;
+          }
+          if (ui.vimMode === 'insert') {
+            ui.vimMode = 'normal'; // INSERT → NORMAL toggle
+            ui.pendingD = false;
+            refresh();
+            return;
+          }
+          return; // NORMAL, no schedule: swallow (do NOT exit the editor)
         case 'toggleSchedule':
           ui.scheduleFocused = !ui.scheduleFocused;
           ui.pendingD = false;
@@ -508,8 +516,8 @@ function TicketEditorSurface({ ui }: { readonly ui: EditorUiState }): JSX.Elemen
       <Box flexDirection="row" columnGap={2} marginTop={0}>
         <Text dimColor>
           {ui.vimMode === 'normal'
-            ? 'j/k:nav  i:insert  x:toggle-checklist  dd:del-line  q:discard  tab:schedule  ctrl+s:save'
-            : 'type text  esc:discard  ctrl+s:save'}
+            ? 'j/k:nav  i:insert  x:toggle-checklist  dd:del-line  w:save  q:discard  tab:schedule'
+            : 'type text  esc:normal'}
         </Text>
       </Box>
     </Box>

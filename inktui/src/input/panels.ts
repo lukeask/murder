@@ -65,7 +65,9 @@ export const DIGIT_TO_PANEL: Readonly<Record<PanelDigit, PanelId>> = Object.from
  * unbound/reserved. The dispatcher receives the raw input char from Ink, so this takes a string and
  * does the narrowing in one place. */
 export function panelForDigit(input: string): PanelId | null {
-  if (input.length !== 1) {
+  // Must be exactly one ASCII digit `0`–`9`. (Guard against `Number(' ')`/`Number('')` === 0, which
+  // would otherwise map whitespace/empty input to digit 0's panel — e.g. alt+space hitting crows.)
+  if (input.length !== 1 || input < '0' || input > '9') {
     return null;
   }
   const n = Number(input);

@@ -173,12 +173,28 @@ describe('layer 1 — global chords', () => {
     expect(h.navigate.mock.calls.map((c) => c[0])).toEqual(['left', 'down', 'up', 'right']);
   });
 
-  it('alt+f focuses chat, alt+y toggles tmux', () => {
+  it('alt+space focuses chat, alt+y toggles tmux', () => {
     const h = handlers();
-    dispatchKey('f', makeKey({ meta: true }), ctx('plans', h));
+    dispatchKey(' ', makeKey({ meta: true }), ctx('plans', h));
     dispatchKey('y', makeKey({ meta: true }), ctx('plans', h));
     expect(h.focusChat).toHaveBeenCalledOnce();
     expect(h.toggleTmux).toHaveBeenCalledOnce();
+  });
+
+  it('alt+f does NOT claim at the global layer — it falls through to the focused panel keymap', () => {
+    const h = handlers();
+    const onIntent = vi.fn();
+    // A panel that declares alt+f → star (the generalized favorite/star pattern).
+    const starKeymap: PanelKeymap = {
+      keymap: [
+        { chord: { input: 'f', key: { meta: true } }, intent: 'star', description: 'favorite' },
+      ],
+      onIntent,
+    };
+    const out = dispatchKey('f', makeKey({ meta: true }), ctx('plans', h, { plans: starKeymap }));
+    expect(h.focusChat).not.toHaveBeenCalled(); // global layer declined alt+f
+    expect(onIntent).toHaveBeenCalledWith('star'); // layer 3 (panel keymap) handled it
+    expect(out).toEqual({ layer: 'panel', handled: true });
   });
 
   it('alt+s spawns ONLY when chat is focused (C11 dual-purpose chord)', () => {
@@ -188,18 +204,13 @@ describe('layer 1 — global chords', () => {
     expect(out).toEqual({ layer: 'global', handled: true });
   });
 
-  it('alt+s does NOT spawn when a panel is focused — it falls through to the panel keymap', () => {
+  it('alt+s does NOT spawn when a panel is focused — it falls through (panels no longer use alt+s)', () => {
     const h = handlers();
-    const onIntent = vi.fn();
-    // A panel that declares alt+s → star (the C11 generalized starring pattern).
-    const starKeymap: PanelKeymap = {
-      keymap: [{ chord: { input: 's', key: { meta: true } }, intent: 'star', description: 'star' }],
-      onIntent,
-    };
-    const out = dispatchKey('s', makeKey({ meta: true }), ctx('plans', h, { plans: starKeymap }));
-    expect(h.spawn).not.toHaveBeenCalled(); // global layer declined alt+s
-    expect(onIntent).toHaveBeenCalledWith('star'); // layer 3 (panel keymap) handled it
-    expect(out).toEqual({ layer: 'panel', handled: true });
+    // Panels no longer declare an alt+s binding; the global layer declines and it falls through to
+    // layer 3, where the focused panel declares nothing for it → unhandled.
+    const out = dispatchKey('s', makeKey({ meta: true }), ctx('plans', h, {}));
+    expect(h.spawn).not.toHaveBeenCalled(); // global layer declined alt+s (not chat-focused)
+    expect(out).toEqual({ layer: 'panel', handled: false });
   });
 
   it('alt+p fires newPlan (C12 new-plan chord)', () => {

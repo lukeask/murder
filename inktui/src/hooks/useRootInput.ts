@@ -9,7 +9,7 @@
  *    the focused panel explicitly returns focus intent to chat; hiding another panel leaves focus
  *    where it was.
  *  - `navigate(dir)` delegates to the focus store's geometry-driven `navigate`.
- *  - `focusChat()` points focus at chat (`alt+f`).
+ *  - `focusChat()` points focus at chat (`alt+space`).
  *  - `spawn()` / `toggleTmux()` are owned by later chunks (C13 spawn wizard, C14 tmux); they are
  *    injectable so those chunks supply real handlers, defaulting to safe no-ops (spawn defaults to
  *    focusing chat, matching the plan's "`alt+s` → highlight to text input").

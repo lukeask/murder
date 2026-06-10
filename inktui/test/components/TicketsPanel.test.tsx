@@ -27,7 +27,7 @@ import { createInputStores } from '../../src/input/createInputStores.js';
 import { createAppStore } from '../../src/store/store.js';
 import type { ScheduleSnapshotReply } from '../../src/store/tickets/ticketsActions.js';
 
-const ALT_F = '\x1bf';
+const ALT_SPACE = '\x1b '; // alt+space → focus chat (was alt+f, which now stars in panels)
 
 async function tick(): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, 20));
@@ -185,8 +185,8 @@ describe('TicketsPanel', () => {
     // After moving down, the marker is now on/after T-2's block.
     expect(afterDown.indexOf('▌')).toBeGreaterThan(afterDown.indexOf('T-1'));
 
-    // Unfocus: alt+f → chat; 'k' no longer routes to the panel.
-    stdin.write(ALT_F);
+    // Unfocus: alt+space → chat; 'k' no longer routes to the panel.
+    stdin.write(ALT_SPACE);
     await tick();
     expect(inputStores.focus.getState().intendedId).toBe('chat');
     const beforeUnfocused = lastFrame() ?? '';

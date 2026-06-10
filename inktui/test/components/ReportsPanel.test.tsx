@@ -17,7 +17,7 @@ import { createInputStores } from '../../src/input/createInputStores.js';
 import type { ReportsSnapshotReply } from '../../src/store/reports/reportsActions.js';
 import { createAppStore } from '../../src/store/store.js';
 
-const ALT_F = '\x1bf';
+const ALT_SPACE = '\x1b '; // alt+space → focus chat (was alt+f, which now stars in panels)
 
 async function tick(): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, 20));
@@ -118,7 +118,7 @@ describe('ReportsPanel', () => {
     expect(afterDown.indexOf('▌')).toBeGreaterThan(afterDown.indexOf('alpha-report'));
 
     // Unfocus to chat; 'k' no longer routes to the panel.
-    stdin.write(ALT_F);
+    stdin.write(ALT_SPACE);
     await tick();
     expect(inputStores.focus.getState().intendedId).toBe('chat');
     const beforeUnfocused = lastFrame() ?? '';

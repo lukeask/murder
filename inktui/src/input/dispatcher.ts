@@ -23,18 +23,22 @@
  *     `alt+<n>` must not summon a panel unless the mode opted into pass-through. A later agent must
  *     not "fix" this back below the chord layer — that would break exclusive capture.
  *  1. **Global chords** — `alt+<n>` (toggle/focus a panel), `alt+h/j/k/l` (vim directional nav),
- *     `alt+y` (tmux toggle), `alt+s` (spawn/star — see below), `alt+f` (focus chat), `alt+p`
+ *     `alt+y` (tmux toggle), `alt+s` (spawn wizard — see below), `alt+space` (focus chat), `alt+p`
  *     (new-plan popup, C12), `alt+t` (new-ticket popup, C12). These are app-wide and
  *     always win, *including while chat is focused*, so the user can summon a panel mid-message.
  *     They are safe to check first because every one carries `meta`, which printable typing never
  *     does — so checking them ahead of the chat short-circuit cannot swallow a typed character.
- *     **`alt+s` is the one dual-purpose exception (C11):** it is a global chord (open the spawn
- *     wizard) ONLY when chat is focused; when a panel is focused it declines here and falls through
- *     to layer 3 so the focused panel stars its own (locally-tracked) highlighted row. See
- *     {@link dispatchGlobalChord}'s doc for the rationale (keeps the cursor panel-local, rule 1).
+ *     **`alt+s` only claims when chat is focused:** it opens the spawn wizard ONLY when chat is the
+ *     effective focus; with a panel focused it declines here (returns false) and the event falls
+ *     through to layer 3. Panels no longer bind `alt+s` (favorite/star is `alt+f` now), so the
+ *     fall-through is simply unhandled at the panel layer. See {@link dispatchGlobalChord}'s doc.
  *     (The plan lists "chat short-circuit → global chords"; we resolve the apparent ordering by
  *     scoping the short-circuit to *non-chord* input, which is the only reading that lets `alt+<n>`
  *     work while typing. Documented here so a later agent doesn't "fix" it back.)
+ *
+ *     **`alt+f` is NOT a global chord** — it falls through the global layer (the `switch` default
+ *     returns false) so the focused panel's keymap can bind it to favorite/star its local cursor row
+ *     (rule 1 — the cursor stays panel-local, which the global layer cannot see).
  *  2. **Chat short-circuit** — if the effective focus is the chat input, the (non-chord) event
  *     belongs to the text field; the dispatcher yields so the chat component's own editing handles
  *     it. The dispatcher claims nothing here beyond declining to route it elsewhere.
@@ -87,9 +91,9 @@ export interface GlobalHandlers {
   focusPanel(id: PanelId): void;
   /** `alt+h/j/k/l`: move focus to the geometric neighbour in `direction`. */
   navigate(direction: Direction): void;
-  /** `alt+f`: focus the chat input. */
+  /** `alt+space`: focus the chat input. */
   focusChat(): void;
-  /** `alt+s`: spawn/star context key (the spawn wizard / star, wired by later chunks). */
+  /** `alt+s`: open the spawn wizard (only when chat is focused; wired by C13). */
   spawn(): void;
   /** `alt+y`: toggle tmux-vs-parsed view (wired by C14). */
   toggleTmux(): void;
@@ -108,7 +112,7 @@ export interface GlobalHandlers {
  * handler buffers printable characters, sends on `return`, and reports whether it consumed the key.
  *
  * It sees the event ONLY after layer 1 (global alt-chords) has had its chance — so `alt+<n>`,
- * `alt+s` (spawn, since chat is focused), `alt+y`, etc. still fire while the user is typing (every
+ * `alt+s` (spawn wizard, since chat is focused), `alt+y`, etc. still fire while the user is typing (every
  * global chord carries `meta`, which printable typing never does). That ordering is why the persistent
  * chat mode needs no special escape hatch: the global layer already preempts it.
  */
@@ -150,18 +154,18 @@ const VIM_NAV: Readonly<Record<string, Direction>> = {
  * `meta`(alt)-modified events, so it never intercepts plain typing. Order within the layer is
  * deterministic: digit toggles, then vim nav, then the single-letter app chords.
  *
- * ## `alt+s` is the one deliberate dual-purpose chord (C11)
+ * ## `alt+s` only claims the event when chat is focused
  *
  * Every *other* global chord wins unconditionally (it carries `meta`, so it can't swallow typing).
- * `alt+s` is the documented exception: it is global ONLY when chat is focused (→ open the spawn
- * wizard, C13's behaviour). When a *panel* is focused, `alt+s` means "star the highlighted row" —
- * but the highlighted row is the panel's own local cursor (rule 1 — cursor stays local), which this
- * global layer cannot see. So for a non-chat focus we return `false` for `'s'`, letting it fall
- * through to layer 3 (the focused panel's declared keymap), which declares `alt+s → star` and
- * stars its own cursor row. This is the "favorite the thing I'm pointing at; if I'm pointing at
- * chat, spawn" rule (spec › Starring + Keybinds). It is NOT a layer re-ordering — `alt+s` simply
- * does not claim the event in the global layer when a panel is focused. A later agent must not
- * "fix" this to always-spawn: the dual purpose is the locked user decision.
+ * `alt+s` is the documented exception: it opens the spawn wizard ONLY when chat is focused. When a
+ * *panel* is focused we return `false` for `'s'`, letting it fall through to layer 3 — but panels no
+ * longer bind `alt+s` (favorite/star moved to `alt+f`), so it is simply unhandled there. Keeping the
+ * chat-only guard means `alt+s` never fires the spawn wizard from a panel. A later agent must not
+ * "fix" this to always-spawn: the chat-scoped spawn is the locked user decision.
+ *
+ * `alt+f` (favorite/star) is handled entirely by the panel layer — it is intentionally absent from
+ * this global switch (the `default` returns false), so it falls through to the focused panel's
+ * keymap, which stars the panel's own local cursor row (rule 1 — the cursor stays panel-local).
  */
 function dispatchGlobalChord(
   input: string,
@@ -193,12 +197,13 @@ function dispatchGlobalChord(
 
   // The single-letter app chords.
   switch (input) {
-    case 'f':
+    case ' ':
+      // alt+space → focus the chat input (was alt+f, which now stars in panels).
       handlers.focusChat();
       return true;
     case 's':
-      // Dual-purpose (see the fn doc): spawn only when chat is focused; otherwise fall through to
-      // the focused panel's `alt+s → star` keymap (return false → layer 3 handles it).
+      // Spawn wizard only when chat is focused (see the fn doc); otherwise decline (return false →
+      // falls through to layer 3, where panels no longer bind alt+s, so it is unhandled).
       if (focusedId === CHAT_FOCUS) {
         handlers.spawn();
         return true;
@@ -261,9 +266,9 @@ export function dispatchKey(input: string, key: Key, ctx: DispatchContext): Disp
   }
 
   // Layer 1 — global chords (win even while chat is focused; meta-only, so typing is safe). The one
-  // exception is `alt+s`, which only claims the event when chat is focused; with a panel focused it
-  // declines here so layer 3 (the panel's `alt+s → star` keymap) handles it (C11 — see
-  // dispatchGlobalChord's doc). So the focus id is passed in.
+  // exception is `alt+s`, which only claims the event when chat is focused (→ spawn wizard); with a
+  // panel focused it declines so the event falls through (alt+f is the panel-layer favorite/star
+  // chord — see dispatchGlobalChord's doc). So the focus id is passed in.
   if (dispatchGlobalChord(input, key, ctx.handlers, ctx.focusedId)) {
     return { layer: 'global', handled: true };
   }

@@ -26,8 +26,8 @@ import { createInputStores } from '../../src/input/createInputStores.js';
 import type { NotesSnapshotReply } from '../../src/store/notes/notesActions.js';
 import { createAppStore } from '../../src/store/store.js';
 
-const ALT_F = '\x1bf';
-const ALT_S = '\x1bs';
+const ALT_F = '\x1bf'; // star/favorite the highlighted row
+const ALT_SPACE = '\x1b '; // focus chat (was alt+f)
 
 async function tick(): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, 20));
@@ -131,8 +131,8 @@ describe('NotesPanel', () => {
     const afterDown = lastFrame() ?? '';
     expect(afterDown.indexOf('▌')).toBeGreaterThan(afterDown.indexOf('alpha-note'));
 
-    // Unfocus: alt+f → chat; 'k' no longer routes to the panel.
-    stdin.write(ALT_F);
+    // Unfocus: alt+space → chat; 'k' no longer routes to the panel.
+    stdin.write(ALT_SPACE);
     await tick();
     expect(inputStores.focus.getState().intendedId).toBe('chat');
     const beforeUnfocused = lastFrame() ?? '';
@@ -153,7 +153,7 @@ describe('NotesPanel', () => {
     dispose();
   });
 
-  it('alt+s stars the highlighted note: prefs RPC fires, star marker shows, sorts to top (C11)', async () => {
+  it('alt+f stars the highlighted note: prefs RPC fires, star marker shows, sorts to top (C11)', async () => {
     // bravo-note is the older note (sorts second by recency). Move the cursor to it and star it;
     // it must jump to the top with a ★ marker, and tui.save_favorites must fire with its id.
     const { fake, store, inputStores, dispose } = await setup(twoNotes(), true);
@@ -163,8 +163,8 @@ describe('NotesPanel', () => {
     // Cursor starts on alpha-note (most recent). Press j to move to bravo-note.
     stdin.write('j');
     await tick();
-    // alt+s stars the highlighted (bravo) note — routed to the panel keymap (chat isn't focused).
-    stdin.write(ALT_S);
+    // alt+f stars the highlighted (bravo) note — routed to the panel keymap (chat isn't focused).
+    stdin.write(ALT_F);
     await tick();
 
     // Prefs persistence fired with bravo-note's id (the star-toggle + prefs-RPC DoD).

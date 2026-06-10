@@ -33,7 +33,7 @@ import { createInputStores } from '../../src/input/createInputStores.js';
 import type { CrowSnapshotReply } from '../../src/store/roster/rosterActions.js';
 import { createAppStore } from '../../src/store/store.js';
 
-const ALT_F = '\x1bf';
+const ALT_SPACE = '\x1b '; // alt+space → focus chat (was alt+f, which now stars)
 
 async function tick(): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, 20));
@@ -296,8 +296,8 @@ describe('CrowsPanel — focus highlight and keymap', () => {
     // After pressing j, the marker should have moved to a later position in the frame.
     expect(markerAfter).toBeGreaterThan(markerStart);
 
-    // Unfocus via alt+f; k should no longer affect cursor.
-    stdin.write(ALT_F);
+    // Unfocus via alt+space; k should no longer affect cursor.
+    stdin.write(ALT_SPACE);
     await tick();
     expect(inputStores.focus.getState().intendedId).toBe('chat');
     const beforeUnfocused = lastFrame() ?? '';

@@ -222,14 +222,14 @@ describe('NewTicketModal — alt+t new-ticket dialog', () => {
     expect(errorToasts()).toHaveLength(0);
   });
 
-  it('captures exclusively: alt+f does NOT focus chat while the modal is up', async () => {
+  it('captures exclusively: alt+space does NOT focus chat while the modal is up', async () => {
     const { stores, enter } = setup();
     const { stdin } = render(<Harness stores={stores} />);
     enter();
     await tick();
 
-    // alt+f (\x1bf) would normally focus chat; must be swallowed under the modal.
-    stdin.write('\x1bf');
+    // alt+space (\x1b ) would normally focus chat (a global chord); must be swallowed under the modal.
+    stdin.write('\x1b ');
     await tick();
     expect(stores.focus.getState().intendedId).toBe('tickets'); // focus unmoved
     expect(selectActiveMode(stores.modes)?.id).toBe(NEW_TICKET_MODE_ID); // modal still up

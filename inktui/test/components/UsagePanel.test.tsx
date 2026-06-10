@@ -25,7 +25,7 @@ import { createInputStores } from '../../src/input/createInputStores.js';
 import { createAppStore } from '../../src/store/store.js';
 import type { ScheduleSnapshotReply } from '../../src/store/tickets/ticketsActions.js';
 
-const ALT_F = '\x1bf';
+const ALT_SPACE = '\x1b '; // alt+space → focus chat (was alt+f, which now stars in panels)
 
 async function tick(): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, 20));
@@ -158,7 +158,7 @@ describe('UsagePanel — rendering', () => {
     expect(afterDown.indexOf('▌')).toBeGreaterThan(afterDown.indexOf('codex'));
 
     // Unfocus; k should not affect the cursor.
-    stdin.write(ALT_F);
+    stdin.write(ALT_SPACE);
     await tick();
     const beforeUnfocused = lastFrame() ?? '';
     stdin.write('k');
