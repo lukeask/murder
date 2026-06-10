@@ -22,7 +22,16 @@ import type { BusClient, RpcPayload } from '../bus/BusClient.js';
 /** Default worker for orchestrator command kinds. */
 export const ORCHESTRATOR_WORKER = 'orchestrator';
 
-/** Poll interval (ms) between `command.status` checks. Mirrors the Textual client's cadence. */
+/**
+ * Poll interval (ms) between `command.status` checks. The poll exists because the live bus exposes
+ * command lifecycle ONLY through the `command.submit` + `command.status` request/response pair — the
+ * service does not (yet) push command-completion/terminal events. So this loop mirrors the SERVER's
+ * contract, not any legacy client; it is a deliberate, timeout-bounded choke point confined to this
+ * one helper.
+ *
+ * Follow-up: once the Python service pushes command-terminal events over the bus, this poll loop can
+ * be deleted in favour of awaiting that event.
+ */
 const POLL_INTERVAL_MS = 100;
 
 /** Max number of status polls before giving up (keeps a failed/stuck command from hanging forever). */
