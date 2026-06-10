@@ -83,7 +83,9 @@ export function buildHelpGroups(
     title: 'Global',
     entries: [
       {
-        key: `${bindings.label('global.focusChat').split('/')[0] ?? 'M-'}1–0`,
+        // The modifier prefix(es) (`M-`, `C-`, or `M-/C-`), derived by stripping the key name from
+        // the focusChat label so the digit row tracks the user's modifier choice.
+        key: `${bindings.label('global.focusChat').replaceAll('space', '')}1–0`,
         description: 'toggle/focus panels',
       },
       { key: 'h/j/k/l', description: 'panel nav (with command modifier)' },
@@ -304,10 +306,6 @@ function HelpDialog({ state: s }: { readonly state: HelpState }): JSX.Element {
             ))}
           </Box>
         ))}
-      </Box>
-
-      <Box marginTop={1}>
-        <Text dimColor>{multiPage ? 'h/l ←→: pages · esc: quit' : 'esc: quit'}</Text>
       </Box>
     </Box>
   );

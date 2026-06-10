@@ -248,13 +248,13 @@ function flagPrefix(flag: CommandFlag): string {
   return flag === 'meta' ? 'M-' : 'C-';
 }
 
-/** Render a plain chord's key for a label: its printable char, else its first special-key flag. */
+/** Render a plain chord's key for a label: its printable char (or first non-modifier special-key
+ * flag), prefixed `C-`/`M-` when the chord itself carries ctrl/meta (e.g. ctrl+n → `C-n`). */
 function plainLabel(chord: KeyChord): string {
-  if (chord.input !== undefined) {
-    return chord.input;
-  }
   const flags = chord.key === undefined ? [] : Object.keys(chord.key);
-  return flags[0] ?? '?';
+  const base = chord.input ?? flags.find((flag) => flag !== 'ctrl' && flag !== 'meta') ?? '?';
+  const prefix = chord.key?.ctrl === true ? 'C-' : chord.key?.meta === true ? 'M-' : '';
+  return `${prefix}${base}`;
 }
 
 /**
