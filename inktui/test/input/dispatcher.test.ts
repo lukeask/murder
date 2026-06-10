@@ -6,6 +6,7 @@
  */
 
 import { describe, expect, it, vi } from 'vitest';
+import { resolveBindings } from '../../src/input/bindings.js';
 import {
   type DispatchContext,
   dispatchKey,
@@ -46,8 +47,11 @@ function ctx(
   h: SpyHandlers,
   panelKeymaps: DispatchContext['panelKeymaps'] = {},
   activeMode: DispatchContext['activeMode'] = null,
+  bindings?: DispatchContext['bindings'],
 ): DispatchContext {
-  return { focusedId, handlers: h, panelKeymaps, activeMode };
+  // Omitting `bindings` exercises the DEFAULT_BINDINGS fallback (today's alt behavior) — the
+  // zero-behavior-change guarantee for existing call sites.
+  return { focusedId, handlers: h, panelKeymaps, activeMode, ...(bindings ? { bindings } : {}) };
 }
 
 describe('layer 0 — active-mode capture', () => {
@@ -270,5 +274,90 @@ describe('layer 3 — focused panel keymap', () => {
     const out = dispatchKey('z', makeKey(), ctx('plans', handlers(), { plans: plansKeymap }));
     expect(onIntent).not.toHaveBeenCalled();
     expect(out).toEqual({ layer: 'panel', handled: false });
+  });
+});
+
+describe('command modifier — ctrl', () => {
+  const ctrlBindings = resolveBindings('ctrl', true, {});
+
+  it('ctrl+<n> focuses the mapped panel (digit gate honours ctrl)', () => {
+    const h = handlers();
+    const out = dispatchKey(
+      '1',
+      makeKey({ ctrl: true }),
+      ctx(CHAT_FOCUS, h, {}, null, ctrlBindings),
+    );
+    expect(h.focusPanel).toHaveBeenCalledWith('plans');
+    expect(out).toEqual({ layer: 'global', handled: true });
+  });
+
+  it('ctrl+y toggles tmux, ctrl+space focuses chat', () => {
+    const h = handlers();
+    dispatchKey('y', makeKey({ ctrl: true }), ctx('plans', h, {}, null, ctrlBindings));
+    dispatchKey(' ', makeKey({ ctrl: true }), ctx('plans', h, {}, null, ctrlBindings));
+    expect(h.toggleTmux).toHaveBeenCalledOnce();
+    expect(h.focusChat).toHaveBeenCalledOnce();
+  });
+
+  it('ctrl+s spawns only when chat is focused', () => {
+    const h = handlers();
+    const chatOut = dispatchKey(
+      's',
+      makeKey({ ctrl: true }),
+      ctx(CHAT_FOCUS, h, {}, null, ctrlBindings),
+    );
+    expect(h.spawn).toHaveBeenCalledOnce();
+    expect(chatOut).toEqual({ layer: 'global', handled: true });
+    const panelOut = dispatchKey(
+      's',
+      makeKey({ ctrl: true }),
+      ctx('plans', h, {}, null, ctrlBindings),
+    );
+    expect(panelOut).toEqual({ layer: 'panel', handled: false });
+  });
+
+  it('alt+<n> is NOT a command chord under ctrl-only (degraded to chat short-circuit)', () => {
+    const h = handlers();
+    const out = dispatchKey(
+      '1',
+      makeKey({ meta: true }),
+      ctx(CHAT_FOCUS, h, {}, null, ctrlBindings),
+    );
+    expect(h.focusPanel).not.toHaveBeenCalled();
+    expect(out.layer).toBe('chat');
+  });
+
+  it('a panel-resolved ctrl+f stars (panel keymap built from the same bindings)', () => {
+    const h = handlers();
+    const onIntent = vi.fn();
+    const starKeymap: PanelKeymap = {
+      keymap: [{ chord: ctrlBindings.chordsFor('panel.star'), intent: 'star', description: 'fav' }],
+      onIntent,
+    };
+    const out = dispatchKey(
+      'f',
+      makeKey({ ctrl: true }),
+      ctx('plans', h, { plans: starKeymap }, null, ctrlBindings),
+    );
+    expect(onIntent).toHaveBeenCalledWith('star');
+    expect(out).toEqual({ layer: 'panel', handled: true });
+  });
+});
+
+describe('command modifier — both (alt still works)', () => {
+  const bothBindings = resolveBindings('both', true, {});
+
+  it('alt+<n> AND ctrl+<n> both focus the panel', () => {
+    const h = handlers();
+    dispatchKey('1', makeKey({ meta: true }), ctx(CHAT_FOCUS, h, {}, null, bothBindings));
+    dispatchKey('2', makeKey({ ctrl: true }), ctx(CHAT_FOCUS, h, {}, null, bothBindings));
+    expect(h.focusPanel.mock.calls.map((c) => c[0])).toEqual(['plans', 'notes']);
+  });
+
+  it('alt+y and ctrl+y both toggle tmux', () => {
+    const h = handlers();
+    dispatchKey('y', makeKey({ meta: true }), ctx('plans', h, {}, null, bothBindings));
+    dispatchKey('y', makeKey({ ctrl: true }), ctx('plans', h, {}, null, bothBindings));
+    expect(h.toggleTmux).toHaveBeenCalledTimes(2);
   });
 });

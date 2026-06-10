@@ -19,6 +19,7 @@ import { memo, useCallback, useMemo, useState } from 'react';
 import { shallow } from 'zustand/shallow';
 import { useAppStore } from '../hooks/useAppStore.js';
 import {
+  useBindings,
   useEffectiveFocus,
   useFocusRef,
   useMeasureFocus,
@@ -144,13 +145,17 @@ export const ReportsPanel = memo(function ReportsPanel(): React.JSX.Element {
     return view.rows[clamped]?.name ?? null;
   }, [cursor, rowCount, view.rows]);
 
+  // The favorite/star chord comes from the central registry (`panel.star`); `bindings` is a stable
+  // identity that changes only on a settings change, so it is a safe keymap dep (no churn).
+  const bindings = useBindings();
+
   const keymap: PanelKeymap<ReportsIntent> = useMemo(
     () => ({
       keymap: [
         { chord: { input: 'j' }, intent: 'cursorDown', description: 'next report' },
         { chord: { input: 'k' }, intent: 'cursorUp', description: 'prev report' },
         { chord: { input: 'r' }, intent: 'refresh', description: 'refresh' },
-        { chord: { input: 'f', key: { meta: true } }, intent: 'star', description: 'favorite' },
+        { chord: bindings.chordsFor('panel.star'), intent: 'star', description: 'favorite' },
         { chord: { key: { return: true } }, intent: 'open', description: 'view doc' },
       ],
       onIntent(intent) {
@@ -183,7 +188,7 @@ export const ReportsPanel = memo(function ReportsPanel(): React.JSX.Element {
         }
       },
     }),
-    [moveCursor, refresh, toggleFavorite, toggleDoc, rowNameAtCursor],
+    [moveCursor, refresh, toggleFavorite, toggleDoc, rowNameAtCursor, bindings],
   );
   usePanelKeymap(PANEL_ID, keymap);
 

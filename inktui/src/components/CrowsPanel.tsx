@@ -48,6 +48,7 @@ import { memo, useCallback, useMemo, useState } from 'react';
 import { shallow } from 'zustand/shallow';
 import { useAppStore } from '../hooks/useAppStore.js';
 import {
+  useBindings,
   useEffectiveFocus,
   useFocusRef,
   useMeasureFocus,
@@ -246,6 +247,10 @@ export const CrowsPanel = memo(function CrowsPanel(): React.JSX.Element {
     return ids[clamped] ?? null;
   }, [cursor, view]);
 
+  // The favorite/star chord comes from the central registry (`panel.star`); `bindings` is a stable
+  // identity that changes only on a settings change, so it is a safe keymap dep (no churn).
+  const bindings = useBindings();
+
   // Rule 5: keymap as data + exhaustive intent handler; PanelKeymap in useMemo.
   const keymap: PanelKeymap<CrowsIntent> = useMemo(
     () => ({
@@ -254,10 +259,10 @@ export const CrowsPanel = memo(function CrowsPanel(): React.JSX.Element {
         { chord: { input: 'k' }, intent: 'cursorUp', description: 'prev crow' },
         { chord: { input: 'r' }, intent: 'refresh', description: 'refresh' },
         { chord: { input: 'm' }, intent: 'toggleExpanded', description: 'toggle maximized' },
-        // alt+f stars the highlighted crow (dispatcher routes alt+f here when a panel is focused)
-        // AND keeps that crow's chat pane active (spec: "favorite while chatting a crow stars it and
-        // keeps that chat pane active").
-        { chord: { input: 'f', key: { meta: true } }, intent: 'star', description: 'favorite' },
+        // The command-modified chord (alt+f by default) stars the highlighted crow (dispatcher routes
+        // it here when a panel is focused) AND keeps that crow's chat pane active (spec: "favorite
+        // while chatting a crow stars it and keeps that chat pane active").
+        { chord: bindings.chordsFor('panel.star'), intent: 'star', description: 'favorite' },
       ],
       onIntent(intent) {
         switch (intent) {
@@ -286,7 +291,7 @@ export const CrowsPanel = memo(function CrowsPanel(): React.JSX.Element {
         }
       },
     }),
-    [moveCursor, refresh, toggleFavorite, setActivePane, agentIdAtCursor],
+    [moveCursor, refresh, toggleFavorite, setActivePane, agentIdAtCursor, bindings],
   );
   usePanelKeymap(PANEL_ID, keymap);
 

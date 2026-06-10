@@ -37,6 +37,7 @@ import { memo, useCallback, useMemo, useState } from 'react';
 import { shallow } from 'zustand/shallow';
 import { useAppStore } from '../hooks/useAppStore.js';
 import {
+  useBindings,
   useEffectiveFocus,
   useFocusRef,
   useMeasureFocus,
@@ -169,6 +170,10 @@ export const NotesPanel = memo(function NotesPanel(): React.JSX.Element {
     return view.rows[clamped]?.name ?? null;
   }, [cursor, rowCount, view.rows]);
 
+  // The favorite/star chord comes from the central registry (`panel.star`); `bindings` is a stable
+  // identity that changes only on a settings change, so it is a safe keymap dep (no churn).
+  const bindings = useBindings();
+
   // Rule 5: keymap as data, wrapped in useMemo so the registry effect doesn't churn.
   const keymap: PanelKeymap<NotesIntent> = useMemo(
     () => ({
@@ -176,9 +181,10 @@ export const NotesPanel = memo(function NotesPanel(): React.JSX.Element {
         { chord: { input: 'j' }, intent: 'cursorDown', description: 'next note' },
         { chord: { input: 'k' }, intent: 'cursorUp', description: 'prev note' },
         { chord: { input: 'r' }, intent: 'refresh', description: 'refresh' },
-        // alt+f stars the highlighted note (the dispatcher routes alt+f here when a panel — not
-        // chat — is focused; the global layer never sees this panel's local cursor, rule 1).
-        { chord: { input: 'f', key: { meta: true } }, intent: 'star', description: 'favorite' },
+        // The command-modified chord (alt+f by default) stars the highlighted note. The dispatcher
+        // routes it here when a panel — not chat — is focused; the global layer never sees this
+        // panel's local cursor, rule 1.
+        { chord: bindings.chordsFor('panel.star'), intent: 'star', description: 'favorite' },
         { chord: { key: { return: true } }, intent: 'open', description: 'view doc' },
       ],
       onIntent(intent) {
@@ -211,7 +217,7 @@ export const NotesPanel = memo(function NotesPanel(): React.JSX.Element {
         }
       },
     }),
-    [moveCursor, refresh, toggleFavorite, toggleDoc, rowNameAtCursor],
+    [moveCursor, refresh, toggleFavorite, toggleDoc, rowNameAtCursor, bindings],
   );
   usePanelKeymap(PANEL_ID, keymap);
 

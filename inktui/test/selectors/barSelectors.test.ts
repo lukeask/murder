@@ -4,6 +4,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
+import { DEFAULT_BINDINGS } from '../../src/input/bindings.js';
 import { CHAT_FOCUS } from '../../src/input/focusStore.js';
 import type { Keymap } from '../../src/input/keymap.js';
 import type { PanelId } from '../../src/input/panels.js';
@@ -36,13 +37,13 @@ describe('selectBottomBar', () => {
   ];
 
   it('shows only the global hints when chat is focused', () => {
-    const hints = selectBottomBar(CHAT_FOCUS, undefined);
+    const hints = selectBottomBar(CHAT_FOCUS, undefined, DEFAULT_BINDINGS);
     expect(hints.every((h) => h.description !== 'open doc')).toBe(true);
     expect(hints.length).toBeGreaterThan(0);
   });
 
   it('appends the focused panel keys, naming special keys', () => {
-    const hints = selectBottomBar('plans', keymap);
+    const hints = selectBottomBar('plans', keymap, DEFAULT_BINDINGS);
     const descriptions = hints.map((h) => h.description);
     expect(descriptions).toContain('open doc');
     expect(descriptions).toContain('star');

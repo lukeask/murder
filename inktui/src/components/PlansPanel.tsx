@@ -35,6 +35,7 @@ import { memo, useCallback, useMemo, useState } from 'react';
 import { shallow } from 'zustand/shallow';
 import { useAppStore } from '../hooks/useAppStore.js';
 import {
+  useBindings,
   useEffectiveFocus,
   useFocusRef,
   useMeasureFocus,
@@ -179,13 +180,18 @@ export const PlansPanel = memo(function PlansPanel(): React.JSX.Element {
     return view.rows[clamped]?.id ?? null;
   }, [cursor, rowCount, view.rows]);
 
+  // The favorite/star chord comes from the central registry (`panel.star`), so the modifier setting
+  // and any rebind are honoured. `bindings` is a stable identity that changes only on a settings
+  // change — safe as the keymap's sole input-related dep (no per-render re-registration).
+  const bindings = useBindings();
+
   const keymap: PanelKeymap<PlansIntent> = useMemo(
     () => ({
       keymap: [
         { chord: { input: 'j' }, intent: 'cursorDown', description: 'next plan' },
         { chord: { input: 'k' }, intent: 'cursorUp', description: 'prev plan' },
         { chord: { input: 'r' }, intent: 'refresh', description: 'refresh' },
-        { chord: { input: 'f', key: { meta: true } }, intent: 'star', description: 'favorite' },
+        { chord: bindings.chordsFor('panel.star'), intent: 'star', description: 'favorite' },
         { chord: { key: { return: true } }, intent: 'open', description: 'view doc' },
       ],
       onIntent(intent) {
@@ -218,7 +224,7 @@ export const PlansPanel = memo(function PlansPanel(): React.JSX.Element {
         }
       },
     }),
-    [moveCursor, refresh, toggleFavorite, toggleDoc, rowIdAtCursor],
+    [moveCursor, refresh, toggleFavorite, toggleDoc, rowIdAtCursor, bindings],
   );
   usePanelKeymap(PANEL_ID, keymap);
 

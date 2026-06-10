@@ -38,7 +38,10 @@ export type KeyChord =
  * panel's intent handler is exhaustively typed against its own keymap.
  */
 export interface KeymapEntry<Intent extends string> {
-  readonly chord: KeyChord;
+  /** The chord(s) that fire this intent. A single {@link KeyChord}, or a list (any of which matches)
+   * — the list form lets a binding resolved from the registry (see {@link ./bindings.js}) bind the
+   * same intent to more than one chord, e.g. alt+key AND ctrl+key under the `both` modifier. */
+  readonly chord: KeyChord | readonly KeyChord[];
   readonly intent: Intent;
   readonly description: string;
 }
@@ -75,7 +78,10 @@ export function matchKeymap<Intent extends string>(
   key: Key,
 ): Intent | null {
   for (const entry of keymap) {
-    if (chordMatches(entry.chord, input, key)) {
+    // An entry's `chord` is a single chord or a list of equivalent chords (the `both`-modifier
+    // expansion); the entry fires if ANY of its chords matches.
+    const chords = Array.isArray(entry.chord) ? entry.chord : [entry.chord];
+    if (chords.some((chord) => chordMatches(chord, input, key))) {
       return entry.intent;
     }
   }

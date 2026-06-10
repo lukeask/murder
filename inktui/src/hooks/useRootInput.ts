@@ -51,6 +51,10 @@ export interface DeferredGlobalHandlers {
   newPlan?: () => void;
   /** `alt+t`. Default: no-op until C12 wires the new-ticket dialog. */
   newTicket?: () => void;
+  /** `alt+,` (the `global.settings` action). Default: no-op until a later phase wires the settings
+   * modal. Present now so the action's handler slot exists end-to-end (the registry already declares
+   * the chord); the dispatcher does not yet route to it — it is wired when the modal lands. */
+  openSettings?: () => void;
   /**
    * The persistent chat-input handler (C11, part F). Supplied by the shell (it needs both the chat
    * buffer store and the send action). When absent, layer 2 declines as before — so older
@@ -97,7 +101,7 @@ export function togglePanelFromShortcut(
  * Returns nothing — it is an effect-like hook; call it once in the shell.
  */
 export function useRootInput(deferred: DeferredGlobalHandlers = {}): void {
-  const { panels, focus, keymaps, modes } = useInputStores();
+  const { panels, focus, keymaps, modes, bindings } = useInputStores();
   // Only claim raw mode when the terminal supports it (see the raw-mode note above).
   const { isRawModeSupported } = useStdin();
 
@@ -145,6 +149,9 @@ export function useRootInput(deferred: DeferredGlobalHandlers = {}): void {
         ),
         panelKeymaps: keymaps.getState().keymaps,
         handlers,
+        // The live resolved binding table (modifier + rebinds). Read per-event so a settings change
+        // takes effect on the very next key without re-installing the loop.
+        bindings: bindings.getState().resolved,
         // Layer 0: the live active mode (stack top), or null. Read per-event so a mode entered/exited
         // mid-session takes effect on the very next key without re-installing the loop.
         activeMode: selectActiveMode(modes),

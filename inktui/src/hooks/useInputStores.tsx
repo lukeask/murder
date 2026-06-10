@@ -19,6 +19,8 @@
 import type { DOMElement } from 'ink';
 import { createContext, useContext, useEffect, useRef } from 'react';
 import { useStoreWithEqualityFn } from 'zustand/traditional';
+import type { ResolvedBindings } from '../input/bindings.js';
+import type { BindingsState, BindingsStoreApi } from '../input/bindingsStore.js';
 import type { ChatInputState, ChatInputStoreApi } from '../input/chatInputStore.js';
 import {
   type FocusId,
@@ -41,6 +43,7 @@ export interface InputStores {
   readonly keymaps: KeymapRegistryApi;
   readonly modes: ModeStoreApi;
   readonly chatInput: ChatInputStoreApi;
+  readonly bindings: BindingsStoreApi;
 }
 
 /** `null` outside a provider so the hooks fail loudly on a wiring bug (mirrors `useAppStore`). */
@@ -104,6 +107,26 @@ export function useChatInputStore<T>(
 ): T {
   const { chatInput } = useInputStores();
   return useStoreWithEqualityFn(chatInput, selector, equality);
+}
+
+/** Subscribe to a selected view of the bindings store. Pass a selector that returns part of
+ * {@link BindingsState}; the common case is {@link useBindings} (the resolved table). */
+export function useBindingsStore<T>(
+  selector: (state: BindingsState) => T,
+  equality?: (a: T, b: T) => boolean,
+): T {
+  const { bindings } = useInputStores();
+  return useStoreWithEqualityFn(bindings, selector, equality);
+}
+
+/**
+ * The resolved binding table — the deep view callers use to ask `chordsFor(id)` / `label(id)` /
+ * `matches(...)` without inspecting the modifier. The store swaps in a fresh `resolved` object only
+ * when settings actually change, so this is a stable `useMemo`/effect dependency (panels re-register
+ * their keymaps only on a real settings change, not every render).
+ */
+export function useBindings(): ResolvedBindings {
+  return useBindingsStore((s) => s.resolved);
 }
 
 /**

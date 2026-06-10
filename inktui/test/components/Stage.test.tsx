@@ -173,7 +173,8 @@ describe('Stage — chat-history panes as focusable Stage panes', () => {
     stdin.write(ALT_L);
     await tick();
     const chords = (inputStores.keymaps.getState().keymaps[STAGE_PANE]?.keymap ?? []).map(
-      (entry) => entry.chord.input,
+      // These entries use single chords (not the list form); narrow for the assertion.
+      (entry) => (Array.isArray(entry.chord) ? entry.chord[0] : entry.chord).input,
     );
     expect(chords).toEqual(['k', 'j']);
     dispose();

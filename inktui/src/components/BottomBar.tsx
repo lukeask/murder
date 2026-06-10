@@ -7,7 +7,7 @@
 
 import { Box, Text } from 'ink';
 import { memo, useMemo } from 'react';
-import { useEffectiveFocus, useKeymapRegistry } from '../hooks/useInputStores.js';
+import { useBindings, useEffectiveFocus, useKeymapRegistry } from '../hooks/useInputStores.js';
 import { useTerminalSize } from '../hooks/useTerminalSize.js';
 import { CHAT_FOCUS } from '../input/focusStore.js';
 import { type BottomBarHint, selectBottomBar } from '../selectors/barSelectors.js';
@@ -66,7 +66,11 @@ export function useBottomBarLines(): BottomBarHint[][] {
   const focusedKeymap = useKeymapRegistry((s) =>
     focused === CHAT_FOCUS ? undefined : s.keymaps[focused]?.keymap,
   );
-  const hints = useMemo(() => selectBottomBar(focused, focusedKeymap), [focused, focusedKeymap]);
+  const bindings = useBindings();
+  const hints = useMemo(
+    () => selectBottomBar(focused, focusedKeymap, bindings),
+    [focused, focusedKeymap, bindings],
+  );
   const { columns } = useTerminalSize();
   return useMemo(() => packHints(hints, Math.max(1, columns - BAR_PADDING)), [hints, columns]);
 }
