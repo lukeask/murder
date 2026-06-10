@@ -420,9 +420,31 @@ async def resolve_capture_note(
     note_name: str,
     client: APIClient | None,
     config: NotetakerConfig,
+    title: str | None = None,
 ) -> dict[str, Any]:
-    """Update short_vers/title metadata and rename provisional timestamp notes."""
+    """Update short_vers/title metadata and rename provisional timestamp notes.
+
+    When ``title`` is supplied the LLM titling call is skipped entirely: the
+    note is renamed to the slugified user title and ``short_vers`` is derived
+    cheaply from the first line of the capture.
+    """
     body = raw.strip()
+    if title is not None and title.strip():
+        short_vers = _fallback_short_vers(body.splitlines()[0] if body else body)
+        notetaker_db.update_notes_entry_short_vers(conn, entry_id, short_vers)
+        resolved_name = note_name
+        slug = _slugify_title(title)
+        if slug:
+            target = _collision_safe_name(conn, repo_root, slug, exclude=note_name)
+            if target != note_name:
+                resolved_name = rename_note(conn, repo_root, note_name, target)
+        return {
+            "entry_id": entry_id,
+            "note_name": resolved_name,
+            "cleaned": body,
+            "short_vers": short_vers,
+            "reply": short_vers,
+        }
     system = _load_prompt("notetaker")
     meta = await llm_capture_metadata(
         raw=body,
@@ -472,6 +494,7 @@ async def submit_capture(
     config: NotetakerConfig,
     note_name: str | None = None,
     entry_id: int | None = None,
+    title: str | None = None,
 ) -> dict[str, Any]:
     """Persist raw immediately, set short_vers/title, and maybe rename the note."""
     body = raw.strip()
@@ -510,4 +533,5 @@ async def submit_capture(
         note_name=note_name,
         client=client,
         config=config,
+        title=title,
     )

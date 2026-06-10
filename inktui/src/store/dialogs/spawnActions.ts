@@ -17,8 +17,10 @@
  * BusClient.ts`); no per-slice `declare module` is needed here.
  */
 
+import type { StoreApi } from 'zustand';
 import type { BusClient } from '../../bus/BusClient.js';
 import { submitCommand } from '../commandSubmit.js';
+import type { AppStore } from '../store.js';
 
 /**
  * The params for spawning a rogue crow — the fields the LIVE `crow.spawn_rogue` command handler
@@ -77,13 +79,17 @@ export interface SpawnActions {
 }
 
 /**
- * Build the spawn actions bound to one injected {@link BusClient}. No store ref needed —
- * spawn is a fire-and-resolve operation, not a slice invalidation (the rogue's appearance
- * in the crows panel will come via a `state.snapshot` event from the service).
+ * Build the spawn actions bound to one injected {@link BusClient}, and (optionally) the app store
+ * handle so a successful spawn can auto-open the rogue's chat pane (item 9e).
+ *
+ * When `store` is supplied, `spawnRogue` opens the spawned rogue's chat pane override and pins it as
+ * the active pane the moment the spawn resolves with an `agent_id` — so the rogue's history appears
+ * on the Stage with no manual step (the roster row itself arrives via a later `state.snapshot`
+ * event). When `store` is omitted the spawn still works; only the auto-open side effect is skipped.
  *
  * Rule 3: this is the ONLY caller of the bus for spawn. Components never touch bus.rpc.
  */
-export function createSpawnActions(bus: BusClient): SpawnActions {
+export function createSpawnActions(bus: BusClient, store?: StoreApi<AppStore>): SpawnActions {
   return {
     async spawnRogue(params: SpawnRogueParams): Promise<SpawnRogueResult> {
       const payload: Record<string, unknown> = {
@@ -113,6 +119,14 @@ export function createSpawnActions(bus: BusClient): SpawnActions {
           agent_id: agentId,
           message: params.kickoffMessage,
         });
+      }
+
+      // Auto-open the rogue's chat pane on the Stage (item 9e): force its pane override open and pin
+      // it active. Guarded on `store` so a store-less construction (e.g. a bare unit test) is inert.
+      if (agentId !== undefined && store !== undefined) {
+        const conversations = store.getState().actions.conversations;
+        conversations.setChatPaneOpen(agentId, true);
+        conversations.setActivePaneAgentId(agentId);
       }
 
       const handled = result['handled'] === true || agentId !== undefined;

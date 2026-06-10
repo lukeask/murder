@@ -534,9 +534,9 @@ describe('UdsBusClient — close', () => {
     await client.connect();
     client.close();
 
-    await expect(
-      client.rpc('test.echo', { agent_id: 'a1', message: 'hi' }),
-    ).rejects.toBeInstanceOf(ConnectionLostError);
+    await expect(client.rpc('test.echo', { agent_id: 'a1', message: 'hi' })).rejects.toBeInstanceOf(
+      ConnectionLostError,
+    );
     await server.stop();
   });
 });

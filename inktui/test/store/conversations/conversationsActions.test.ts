@@ -320,3 +320,35 @@ describe('conversationsActions.setActivePaneAgentId', () => {
     dispose();
   });
 });
+
+// ── pane open/close model (item 9b/9c) ───────────────────────────────────────────────────────────
+
+describe('conversationsActions — chat-pane overrides', () => {
+  it('setChatPaneOpen writes an override entry', () => {
+    const { store, dispose } = setup();
+    store.getState().actions.conversations.setChatPaneOpen('agent-7', true);
+    expect(store.getState().conversations.paneOverrides.get('agent-7')).toBe(true);
+    store.getState().actions.conversations.setChatPaneOpen('agent-7', false);
+    expect(store.getState().conversations.paneOverrides.get('agent-7')).toBe(false);
+    dispose();
+  });
+
+  it('toggleChatPane records the flip of the passed currentlyOpen state', () => {
+    const { store, dispose } = setup();
+    // Currently open → toggle records false (close).
+    store.getState().actions.conversations.toggleChatPane('agent-9', true);
+    expect(store.getState().conversations.paneOverrides.get('agent-9')).toBe(false);
+    // Currently closed → toggle records true (open).
+    store.getState().actions.conversations.toggleChatPane('agent-9', false);
+    expect(store.getState().conversations.paneOverrides.get('agent-9')).toBe(true);
+    dispose();
+  });
+
+  it('ref-swaps the overrides map on each mutation (granularity contract)', () => {
+    const { store, dispose } = setup();
+    const before = store.getState().conversations.paneOverrides;
+    store.getState().actions.conversations.setChatPaneOpen('a', true);
+    expect(store.getState().conversations.paneOverrides).not.toBe(before);
+    dispose();
+  });
+});

@@ -235,10 +235,17 @@ class ServiceHost:
 
         async def _plan_create(body: dict[str, Any]) -> dict[str, Any]:
             plan_name = str(body.get("plan_name", "")).strip()
-            if not plan_name:
-                raise ValueError("plan.create requires plan_name")
+            auto_name = bool(body.get("auto_name", False))
+            if not plan_name and not auto_name:
+                raise ValueError("plan.create requires plan_name or auto_name")
             message = str(body.get("message", ""))
-            return await _orchestrator().create_plan(plan_name, message)
+            plan_body = body.get("body")
+            return await _orchestrator().create_plan(
+                plan_name,
+                message,
+                body=plan_body if isinstance(plan_body, str) else None,
+                auto_name=auto_name,
+            )
 
         def _image_upload(body: dict[str, Any]) -> dict[str, Any]:
             # F9: store a pasted clipboard image under .murder/images and return
@@ -399,7 +406,9 @@ class ServiceHost:
             orch = self.orchestrator
 
             async def _send_parse_error(agent_id: str, message: str) -> None:
-                await orch.send_agent_message(agent_id, message, None)
+                await orch.send_agent_message(
+                    agent_id, message, None, spawn_if_needed=False
+                )
 
             self.runtime._sync.set_parse_error_notifier(_send_parse_error)
         self.socket_server = SocketBusServer(

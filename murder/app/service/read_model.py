@@ -260,7 +260,7 @@ class ServiceReadModel:
             CrowSessionSummary(
                 agent_id=str(row["agent_id"]),
                 role=str(row["role"]),
-                ticket_id=_optional_str(row["ticket_id"]),
+                ticket_id=_optional_str(row["ticket_id"]) or None,
                 ticket_title=str(row["title"] or ""),
                 status=str(row["status"]),
                 session_name=_optional_str(row["session"]),

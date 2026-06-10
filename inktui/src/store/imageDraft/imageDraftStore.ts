@@ -39,7 +39,7 @@
 import { randomUUID } from 'node:crypto';
 import { createStore, type StoreApi } from 'zustand/vanilla';
 import type { BusClient } from '../../bus/BusClient.js';
-import { toastStore, type ToastStoreApi } from '../toast/toastStore.js';
+import { type ToastStoreApi, toastStore } from '../toast/toastStore.js';
 
 /** The lifecycle of one pasted image. `uploading` → `done` (path filled) | `failed`. */
 export type ImageDraftStatus = 'uploading' | 'done' | 'failed';

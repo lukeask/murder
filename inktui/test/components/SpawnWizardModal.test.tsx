@@ -26,6 +26,7 @@ import { Overlay } from '../../src/components/Overlay.js';
 import {
   SPAWN_WIZARD_MODE_ID,
   type SpawnContext,
+  spawnWizardHints,
   spawnWizardMode,
 } from '../../src/components/SpawnWizardModal.js';
 import { InputStoresProvider } from '../../src/hooks/useInputStores.js';
@@ -35,6 +36,7 @@ import { selectActiveMode } from '../../src/input/modeStore.js';
 import { createHarnessModelsActions } from '../../src/store/dialogs/harnessModelsActions.js';
 import { createSpawnActions } from '../../src/store/dialogs/spawnActions.js';
 import { createWorktreeOptionsActions } from '../../src/store/dialogs/worktreeOptionsActions.js';
+import { createAppStore } from '../../src/store/store.js';
 import { selectLiveToasts, toastStore } from '../../src/store/toast/toastStore.js';
 
 const ESC = '\x1b';
@@ -461,6 +463,50 @@ describe('SpawnWizardModal — dependent-field flow', () => {
     });
   });
 
+  it('context step is a navigable radio: l/→ moves to "no", Enter submits the highlight (item 7)', async () => {
+    const { stores, bus, enter } = setup(TEST_CONTEXT);
+    enter();
+    const { lastFrame, stdin } = render(<Harness stores={stores} />);
+    await tick();
+    for (let i = 0; i < 5; i++) {
+      stdin.write('\r'); // harness, model, effort, worktree, name → context
+      await tick();
+    }
+    expect(lastFrame()).toContain('[yes]'); // highlight starts on yes
+    stdin.write('l'); // move highlight to "no" (does NOT submit)
+    await tick();
+    expect(lastFrame()).toContain('[no]');
+    expect(selectActiveMode(stores.modes)?.id).toBe(SPAWN_WIZARD_MODE_ID); // still up
+    stdin.write('\r'); // Enter submits the highlighted "no" → no kickoff
+    await tick();
+    await tick();
+    await tick();
+    expect(submitKinds(bus)).toEqual(['crow.spawn_rogue']);
+    expect(kickoffSubmitPayload(bus)).toBeUndefined();
+  });
+
+  it('context step arrows move the highlight: → then ← returns to "yes" and Enter includes', async () => {
+    const { stores, bus, enter } = setup(TEST_CONTEXT);
+    enter();
+    const { lastFrame, stdin } = render(<Harness stores={stores} />);
+    await tick();
+    for (let i = 0; i < 5; i++) {
+      stdin.write('\r');
+      await tick();
+    }
+    stdin.write('\x1b[C'); // right arrow → no
+    await tick();
+    expect(lastFrame()).toContain('[no]');
+    stdin.write('\x1b[D'); // left arrow → yes
+    await tick();
+    expect(lastFrame()).toContain('[yes]');
+    stdin.write('\r'); // Enter submits the highlighted "yes" → kickoff included
+    await tick();
+    await tick();
+    await tick();
+    expect(submitKinds(bus)).toEqual(['crow.spawn_rogue', 'agent.message']);
+  });
+
   it('context step n declines — no kickoff agent.message', async () => {
     const { stores, bus, enter } = setup(TEST_CONTEXT);
     enter();
@@ -548,6 +594,25 @@ describe('H4 — spawn payload contract (real spawn action)', () => {
     });
   });
 
+  it('auto-opens the spawned rogue chat pane + pins it active when a store is supplied (item 9e)', async () => {
+    const bus = liveStubBus();
+    bus.stubRpc('state.crow_snapshot', { invalidation_key: 'iv', sessions: [] });
+    bus.stubRpc('state.conversations_snapshot', {
+      conversations: [],
+      as_of: '',
+      invalidation_key: 'iv',
+    });
+    const { store, dispose } = createAppStore(bus);
+    const result = await createSpawnActions(bus, store).spawnRogue({
+      harness: 'claude_code',
+      model: 'sonnet',
+    });
+    expect(result.agent_id).toBe('rogue-001');
+    expect(store.getState().conversations.paneOverrides.get('rogue-001')).toBe(true);
+    expect(store.getState().conversations.activePaneAgentId).toBe('rogue-001');
+    dispose();
+  });
+
   it('threads worktree_branch / worktree_path (branch wins) and omits both when absent', async () => {
     const busBranch = liveStubBus();
     await createSpawnActions(busBranch).spawnRogue({
@@ -584,6 +649,43 @@ describe('H4 — spawn payload contract (real spawn action)', () => {
     const busAbsent = liveStubBus();
     await createSpawnActions(busAbsent).spawnRogue({ harness: 'claude_code', model: 'sonnet' });
     expect(submitKinds(busAbsent)).toEqual(['crow.spawn_rogue']);
+  });
+});
+
+describe('spawnWizardHints — bottom-bar hints per step (item 4b/4c)', () => {
+  it('list steps advertise j/k nav + confirm + cancel', () => {
+    for (const step of ['harness', 'model', 'effort', 'worktree'] as const) {
+      const keys = spawnWizardHints(step).map((h) => h.key);
+      expect(keys).toContain('j/k');
+      expect(keys).toContain('enter');
+      expect(keys).toContain('esc');
+    }
+  });
+
+  it('text steps drop nav but keep confirm + cancel', () => {
+    for (const step of ['branch', 'name'] as const) {
+      const keys = spawnWizardHints(step).map((h) => h.key);
+      expect(keys).not.toContain('j/k');
+      expect(keys).toEqual(['enter', 'esc']);
+    }
+  });
+
+  it('context step advertises h/l nav + y/n + confirm + cancel (item 7)', () => {
+    const keys = spawnWizardHints('context').map((h) => h.key);
+    expect(keys).toEqual(['h/l', 'enter', 'y/n', 'esc']);
+  });
+});
+
+describe('spawn wizard — hints moved out of the modal box (item 4c)', () => {
+  it('the modal no longer renders the inline hint line; the mode supplies bar hints instead', async () => {
+    const { stores, enter } = setup();
+    enter();
+    const { lastFrame } = render(<Harness stores={stores} />);
+    await tick();
+    // The old hardcoded modal hint line is gone.
+    expect(lastFrame()).not.toContain('j/k: navigate · enter: confirm · esc: cancel');
+    // The mode advertises its hints to the bottom bar instead.
+    expect(selectActiveMode(stores.modes)?.hints?.map((h) => h.key)).toContain('j/k');
   });
 });
 

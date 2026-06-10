@@ -66,10 +66,13 @@ function PresentedMode({
 
   switch (presentation) {
     case 'modal':
-      // Centered over the full terminal: the mode's box floats in the middle; its own render decides
-      // its size/border. The container fills the screen so centering is against the whole viewport.
+      // Centered within the region the shell hands it (item 4d: the Body slot between TopBar and the
+      // bottom chrome). The container fills that slot (`flexGrow` + 100% cross-axis) so centering is
+      // against the body box, keeping the TopBar pinned top and the BottomBar bottom while the mode's
+      // box (its own border/size) floats in the middle. We no longer size to the full terminal here —
+      // that would overflow the body and clip; the shell's `overflow="hidden"` would crop the modal.
       return (
-        <Box width={columns} height={rows} justifyContent="center" alignItems="center">
+        <Box width="100%" height="100%" flexGrow={1} justifyContent="center" alignItems="center">
           {children}
         </Box>
       );

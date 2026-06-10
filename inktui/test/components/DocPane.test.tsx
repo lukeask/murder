@@ -22,6 +22,7 @@ import { render } from 'ink-testing-library';
 import type { JSX } from 'react';
 import { describe, expect, it } from 'vitest';
 import { FakeBusClient } from '../../src/bus/FakeBusClient.js';
+import { computeDocWindow, computeScrollThumb } from '../../src/components/DocPane.js';
 import { PlansPanel } from '../../src/components/PlansPanel.js';
 import { Stage } from '../../src/components/Stage.js';
 import { AppStoreProvider } from '../../src/hooks/useAppStore.js';
@@ -34,7 +35,9 @@ import { createAppStore } from '../../src/store/store.js';
 
 const RETURN = '\r';
 const ESC = '\x1b';
-// A body long enough that `j` scrolls a visible line off the top (the window is 14 lines).
+// A body long enough that `j` scrolls a visible line off the top. Under ink-testing-library's sizeless
+// render `measureElement` reports 0, so the window falls back to FALLBACK_HEIGHT (14) — line-0 sits at
+// the top of that window and scrolls off on the first `j`.
 const DOC_BODY = Array.from({ length: 30 }, (_, i) => `line-${i}`).join('\n');
 
 async function tick(): Promise<void> {
@@ -79,6 +82,68 @@ async function setup() {
   const inputStores = createInputStores(['plans'], 'plans');
   return { fake, store, dispose, inputStores };
 }
+
+describe('computeDocWindow — window math (the test seam)', () => {
+  it('returns the full body when it fits the height', () => {
+    expect(computeDocWindow(5, 0, 14)).toEqual({ start: 0, end: 14, maxScroll: 0 });
+  });
+
+  it('windows a tall body and exposes maxScroll', () => {
+    // 30 lines, 14-row window → can scroll to 16 (30 - 14).
+    expect(computeDocWindow(30, 0, 14)).toEqual({ start: 0, end: 14, maxScroll: 16 });
+    expect(computeDocWindow(30, 5, 14)).toEqual({ start: 5, end: 19, maxScroll: 16 });
+  });
+
+  it('clamps an over-scrolled offset to maxScroll (short body cannot strand the window)', () => {
+    expect(computeDocWindow(30, 999, 14)).toEqual({ start: 16, end: 30, maxScroll: 16 });
+  });
+
+  it('clamps a negative offset to 0', () => {
+    expect(computeDocWindow(30, -5, 14)).toEqual({ start: 0, end: 14, maxScroll: 16 });
+  });
+
+  it('treats a non-positive height as at least 1 row', () => {
+    expect(computeDocWindow(30, 0, 0)).toEqual({ start: 0, end: 1, maxScroll: 29 });
+  });
+});
+
+describe('computeScrollThumb — scrollbar geometry', () => {
+  it('returns null when the content fits (no scrollbar drawn)', () => {
+    expect(computeScrollThumb(10, 0, 14)).toBeNull();
+    expect(computeScrollThumb(14, 0, 14)).toBeNull();
+  });
+
+  it('sits the thumb at the top when scrolled to 0', () => {
+    expect(computeScrollThumb(30, 0, 14)?.offset).toBe(0);
+  });
+
+  it('sits the thumb at the bottom when scrolled to the end', () => {
+    const thumb = computeScrollThumb(30, 16, 14);
+    expect(thumb).not.toBeNull();
+    // offset + size reaches the track bottom (height).
+    expect(
+      (thumb as { size: number; offset: number }).offset + (thumb as { size: number }).size,
+    ).toBe(14);
+  });
+
+  it('sizes the thumb to the visible fraction (min 1 cell)', () => {
+    // h*h/total = 14*14/30 ≈ 6.53 → 7.
+    expect(computeScrollThumb(30, 0, 14)?.size).toBe(7);
+    // A very long body still gets a 1-cell thumb.
+    expect(computeScrollThumb(10000, 0, 14)?.size).toBe(1);
+  });
+
+  it('never overruns the track', () => {
+    for (let scroll = 0; scroll <= 16; scroll++) {
+      const thumb = computeScrollThumb(30, scroll, 14);
+      if (thumb === null) {
+        continue;
+      }
+      expect(thumb.offset).toBeGreaterThanOrEqual(0);
+      expect(thumb.offset + thumb.size).toBeLessThanOrEqual(14);
+    }
+  });
+});
 
 describe('DocPane — open / scroll / close as a Stage pane', () => {
   it('enter opens the doc as a Stage pane (path title + body), NOT a mode', async () => {

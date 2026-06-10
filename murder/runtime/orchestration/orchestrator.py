@@ -714,12 +714,20 @@ class Orchestrator:
             await self.rt.publish_snapshot(Entity.PLAN, agent_id[len("planner-"):])
 
     async def send_agent_message(
-        self, agent_id: str, message: str, ticket_id: str | None
+        self,
+        agent_id: str,
+        message: str,
+        ticket_id: str | None,
+        *,
+        spawn_if_needed: bool = True,
     ) -> dict[str, Any]:
         """Deliver a message to an agent by id.
 
         Planner targets are restored on demand so a selected plan can receive
-        chat even if its tmux session has not been started yet.
+        chat even if its tmux session has not been started yet. Set
+        ``spawn_if_needed=False`` to deliver only to an already-live planner —
+        a non-live planner is left dormant (no ``ensure_planning_agent``), so
+        system nudges such as plan parse-error notifications never wake it.
         """
         del ticket_id
 
@@ -729,6 +737,13 @@ class Orchestrator:
             if not plan_name:
                 return {"handled": False, "error": "planner agent_id requires a plan name"}
             if agent is None or not await self._agent_is_live(agent):
+                if not spawn_if_needed:
+                    LOGGER.info(
+                        "send_agent_message: planner %s not live and spawn_if_needed=False; "
+                        "skipping spawn",
+                        agent_id,
+                    )
+                    return {"handled": False, "reason": "agent-not-live"}
                 await self.ensure_planning_agent(plan_name)
                 agent = self.rt.get_agent(agent_id)
         if agent_id.startswith("crow-"):
@@ -1244,6 +1259,12 @@ class Orchestrator:
                 "notetaker.capture.submit requires non-empty payload.raw or payload.text"
             )
 
+        title = payload.get("title")
+        if not isinstance(title, str) or not title.strip():
+            title = None
+        else:
+            title = title.strip()
+
         client = resolve_role_client(self.rt.config.notetaker)
         result = await notes_mod.submit_capture(
             repo_root=self.rt.repo_root,
@@ -1252,6 +1273,7 @@ class Orchestrator:
             client=client,
             config=self.rt.config.notetaker,
             note_name=notes_mod.today_name(),
+            title=title,
         )
         # submit_capture writes notes rows DIRECTLY (bypassing NoteSync), creating
         # and possibly renaming the note within this RPC. The provisional name is
@@ -1395,7 +1417,38 @@ class Orchestrator:
         schedule_at = (datetime.utcnow() + delta).isoformat(timespec="seconds")
         return await self.set_schedule_at(ticket_id, schedule_at)
 
-    async def create_plan(self, plan_name: str, message: str) -> dict[str, Any]:
+    async def _derive_plan_name(self, body: str) -> str:
+        """Derive a slugified plan name from ``body`` via a one-shot mini-LLM call.
+
+        Reuses the notes ``llm_capture_metadata`` shape with the ``plan_namer``
+        system prompt. Falls back to a timestamp slug when no client is
+        configured or the model returns nothing usable.
+        """
+        text = (body or "").strip()
+        client = resolve_role_client(self.rt.config.notetaker)
+        if client is not None and text:
+            try:
+                meta = await notes_mod.llm_capture_metadata(
+                    raw=text,
+                    system=notes_mod._load_prompt("plan_namer"),
+                    client=client,
+                    config=self.rt.config.notetaker,
+                )
+                slug = notes_mod._slugify_title(meta.get("one_or_two_word_title", ""))
+                if slug:
+                    return slug
+            except Exception:
+                LOGGER.exception("plan auto-name failed; falling back to timestamp slug")
+        return f"plan-{datetime.utcnow().strftime('%Y%m%d-%H%M%S')}"
+
+    async def create_plan(
+        self,
+        plan_name: str | None,
+        message: str,
+        *,
+        body: str | None = None,
+        auto_name: bool = False,
+    ) -> dict[str, Any]:
         """Create a new plan and (optionally) seed its planning agent.
 
         Thin composition of existing machinery: ``scaffold_plan`` writes the
@@ -1404,8 +1457,16 @@ class Orchestrator:
         ``planner-{name}`` agent, which lazily spawns the planner via
         ``ensure_planning_agent``. Mirrors the Textual ctrl+p new-plan flow
         (scaffold + focus ``planner-{name}`` as chat target).
+
+        ``body`` seeds the plan's markdown body (defaulting to the legacy
+        ``"# Plan Name\\n"`` stub). ``auto_name`` derives the plan name from
+        ``body`` via a mini-LLM naming call, creating under the FINAL name (no
+        rename in the happy path).
         """
+        seed_body = body if body is not None else "# Plan Name\n"
         plan_name = (plan_name or "").strip()
+        if auto_name:
+            plan_name = await self._derive_plan_name(seed_body)
         if not plan_name:
             raise ValueError("plan.create requires plan_name")
         assert self.rt.db is not None
@@ -1430,14 +1491,14 @@ class Orchestrator:
             # through, so its deprecated-dir file is not orphaned.
             archived = _free_superseded_plan_name(self.rt.db, plan_name)
             await self.rt.publish_snapshot(Entity.PLAN, archived)
-        scaffolded = await self.scaffold_plan(plan_name, "# Plan Name\n")
+        scaffolded = await self.scaffold_plan(plan_name, seed_body)
         name = str(scaffolded.get("name") or plan_name)
         agent_id: str | None = None
         text = (message or "").strip()
         if text:
             agent_id = f"planner-{name}"
             await self.send_agent_message(agent_id, text, None)
-        return {"handled": True, "plan_name": name, "agent_id": agent_id}
+        return {"handled": True, "ok": True, "plan_name": name, "agent_id": agent_id}
 
     async def update_ticket_metadata(
         self, ticket_id: str, payload: dict[str, Any]

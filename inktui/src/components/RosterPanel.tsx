@@ -159,8 +159,16 @@ export const RosterPanel = memo(function RosterPanel(): React.JSX.Element {
   const keymap: PanelKeymap<RosterIntent> = useMemo(
     () => ({
       keymap: [
-        { chord: { input: 'j' }, intent: 'cursorDown', description: 'next crow' },
-        { chord: { input: 'k' }, intent: 'cursorUp', description: 'prev crow' },
+        {
+          chord: [{ input: 'j' }, { key: { downArrow: true } }],
+          intent: 'cursorDown',
+          description: 'next crow',
+        },
+        {
+          chord: [{ input: 'k' }, { key: { upArrow: true } }],
+          intent: 'cursorUp',
+          description: 'prev crow',
+        },
         { chord: { input: 'r' }, intent: 'refresh', description: 'refresh' },
       ],
       onIntent(intent) {

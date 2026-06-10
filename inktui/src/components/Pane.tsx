@@ -50,7 +50,8 @@
  *    Pane attaches `ref` to its OUTER Box so `useMeasureFocus` measures the whole bordered region
  *    (title row + content) — this keeps the directional-focus rects correct under reflow. Do NOT add
  *    a focus hook inside Pane; that would couple a presentational primitive to panel identity.
- *  - Put the list body (a `Ledger`, or any node) as `children`. The Pane provides `paddingX={1}` and
+ *  - Put the list body (a `Ledger`, or any node) as `children`. The Pane provides `paddingX={1}` (the
+ *    right side is the optional `paddingRight` prop, default 1) and
  *    the height-clamping flex discipline (`minHeight={0}` + `overflow="hidden"`) so an overflowing
  *    child clips instead of growing the frame past the terminal height.
  *  - `flexGrow` lets a Rail split its height/width evenly across stacked Panes (default 1).
@@ -97,6 +98,10 @@ export interface PaneProps {
   readonly titleExtra?: React.ReactNode;
   /** Flex weight for a Rail splitting space across stacked/side-by-side Panes (default 1). */
   readonly flexGrow?: number;
+  /** Right padding inside the content box (default 1). Set to 0 to reclaim the column for a child that
+   * draws its own right gutter (e.g. {@link ./DocPane.js}'s 1-char scrollbar) — net content width is
+   * unchanged. The left padding stays `1` regardless. */
+  readonly paddingRight?: number;
 }
 
 /**
@@ -105,7 +110,7 @@ export interface PaneProps {
  */
 export const Pane = memo(
   forwardRef<DOMElement, PaneProps>(function Pane(
-    { title, focused, children, titleExtra, flexGrow = 1 },
+    { title, focused, children, titleExtra, flexGrow = 1, paddingRight = 1 },
     ref,
   ): React.JSX.Element {
     const theme = useTheme();
@@ -130,7 +135,8 @@ export const Pane = memo(
           borderStyle="round"
           borderTop={false}
           borderColor={borderColor}
-          paddingX={1}
+          paddingLeft={1}
+          paddingRight={paddingRight}
         >
           {children}
         </Box>

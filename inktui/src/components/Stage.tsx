@@ -66,7 +66,7 @@ import type { AgentIdentity } from '../selectors/agentIdentity.js';
 import {
   type ChatTurn,
   useConversationTurns,
-  useFavoritesChatPanes,
+  useOpenChatPanes,
 } from '../selectors/conversationsSelectors.js';
 import type { ConversationsState } from '../store/conversations/conversationsSlice.js';
 import type { OpenDoc } from '../store/docView/docViewSlice.js';
@@ -242,7 +242,8 @@ const EMPTY_KEYMAP: PanelKeymap<ScrollIntent> = { keymap: [], onIntent() {} };
  * Rule 1: `React.memo` + narrow selectors (`shallow` on roster/conversations/favorites; the doc pane
  * reads its own `docView` body/status). The Stage subscribes to `docView.open` (the identity of the
  * open doc) so opening/closing a doc — or switching to a different one — re-renders + re-keys the pane.
- * Rule 2: `useFavoritesChatPanes` decides which chat panes exist (spec order, default + starred).
+ * Rule 2: `useOpenChatPanes` decides which chat panes exist (spec order; favorites default merged
+ * with the explicit open/close overrides — item 9b).
  */
 export const Stage = memo(function Stage({
   minCells,
@@ -271,7 +272,9 @@ export const Stage = memo(function Stage({
   const openDoc: OpenDoc | null = useAppStore((s) => s.docView.open, shallow);
   const orientation = useOrientation();
 
-  const { panes } = useFavoritesChatPanes(roster, favorites);
+  // Open panes = favorites default merged with the explicit open/close overrides (item 9b). The
+  // overrides map ref-swaps on every toggle, so the hook re-tiles when a pane opens/closes.
+  const { panes } = useOpenChatPanes(roster, favorites, conversations.paneOverrides);
 
   if (panes.length === 0 && openDoc === null) {
     // Nothing on the Stage: an invisible spacer that holds the center open (see the doc above). It

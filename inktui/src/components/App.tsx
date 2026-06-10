@@ -434,7 +434,7 @@ function Shell({
   const spawnHandler = (): void => {
     // The focused doc is the open doc-view (C11 — replaces C13's first-row proxy).
     const spawnContext = deriveSpawnContext(appStore);
-    const actions = createSpawnActions(bus);
+    const actions = createSpawnActions(bus, appStore);
     const modelActions = createHarnessModelsActions(bus);
     const worktreeActions = createWorktreeOptionsActions(bus);
     modes
@@ -483,6 +483,10 @@ function Shell({
   if (active !== null && presentationHidesLayout(active.presentation)) {
     return <Overlay />;
   }
+  // Item 4a: while a capturing (non-passThrough) mode is up, the chat input can't be typed into — it
+  // owns input exclusively — so hide it. Its hints (and the chat field's role) move to the bottom
+  // bar (item 4b). A `passThrough` mode (e.g. an inlayout editor that still lets chat work) keeps it.
+  const chatInputHidden = active !== null && active.passThrough !== true;
   // Bound the whole app to the terminal height: a frame taller than the screen breaks Ink's in-place
   // redraw (it can only erase up to the screen height, so each re-render stacks a fresh full copy into
   // scrollback). This is the standard header/scroll/footer flex idiom:
@@ -498,49 +502,61 @@ function Shell({
       <Box ref={topbarRef} flexShrink={0} flexDirection="column">
         <TopBar project={project} />
       </Box>
-      {/* Orientation-aware Body: landscape lays the rails + Stage out in a row (side-by-side),
-          portrait stacks them in a column. `flexBasis={0}` so the Body's tall content can't push the
-          chrome past `rows` (see the comment above); `overflow="hidden"` is the clip. */}
-      <Box
-        flexDirection={orientation === 'landscape' ? 'row' : 'column'}
-        columnGap={orientation === 'landscape' ? 1 : 0}
-        rowGap={orientation === 'portrait' ? 1 : 0}
-        flexGrow={1}
-        flexBasis={0}
-        minHeight={0}
-        overflow="hidden"
-      >
-        <Rail
-          side="left"
-          orientation={orientation}
-          panels={LEFT_PANELS}
-          renderPanel={dispatchPanel}
-          // Explicit, budget-computed cross-axis size — only as wide as its widest ledger row (R1/R2),
-          // compressed (so trailing columns drop) when the Stage's 60% floor needs the room (R3).
-          cells={bodyLayout.leftRailCells}
-        />
-        {/* Phase 4a: the Stage center region — tiles the favorited-crow chat-history Panes, growing to
-            fill whatever the rails leave (full width when both rails are off). It carries the budget
-            floor (R3/R4) so it can never be sized below its guaranteed ≥60% share. Phase 4b adds
-            doc-view panes to its right; the doc slice is untouched here. The Stage itself clips/grows. */}
-        <Stage minCells={bodyLayout.stageCells} axis={bodyLayout.axis} />
-        <Rail
-          side="right"
-          orientation={orientation}
-          panels={RIGHT_PANELS}
-          renderPanel={dispatchPanel}
-          // The right rail (usage · crows) is sized to the crow-ledger width when crows are on (R6),
-          // computed relative to the live terminal — no `"24%"` absolute anymore (R5).
-          cells={bodyLayout.rightRailCells}
-        />
+      {/* The Body region: a fixed-height flex slot between the always-on TopBar and the bottom chrome.
+          `flexGrow={1} flexBasis={0}` takes exactly the remaining height; `overflow="hidden"` clips.
+          A `modal`/`inlayout` mode (item 4d) renders the {@link Overlay} centered INSIDE this slot —
+          so the TopBar stays pinned at the top and the BottomBar at the bottom, the modal floating in
+          the body — rather than the old float-up where the Overlay was a sibling AFTER the bottom
+          chrome. When no mode is up the panels (rails + Stage) fill the slot. */}
+      <Box flexGrow={1} flexBasis={0} minHeight={0} overflow="hidden" flexDirection="column">
+        {active !== null ? (
+          <Overlay />
+        ) : (
+          // Orientation-aware panels: landscape lays the rails + Stage out in a row (side-by-side),
+          // portrait stacks them in a column.
+          <Box
+            flexDirection={orientation === 'landscape' ? 'row' : 'column'}
+            columnGap={orientation === 'landscape' ? 1 : 0}
+            rowGap={orientation === 'portrait' ? 1 : 0}
+            flexGrow={1}
+            flexBasis={0}
+            minHeight={0}
+            overflow="hidden"
+          >
+            <Rail
+              side="left"
+              orientation={orientation}
+              panels={LEFT_PANELS}
+              renderPanel={dispatchPanel}
+              // Explicit, budget-computed cross-axis size — only as wide as its widest ledger row (R1/R2),
+              // compressed (so trailing columns drop) when the Stage's 60% floor needs the room (R3).
+              cells={bodyLayout.leftRailCells}
+            />
+            {/* Phase 4a: the Stage center region — tiles the favorited-crow chat-history Panes, growing to
+                fill whatever the rails leave (full width when both rails are off). It carries the budget
+                floor (R3/R4) so it can never be sized below its guaranteed ≥60% share. Phase 4b adds
+                doc-view panes to its right; the doc slice is untouched here. The Stage itself clips/grows. */}
+            <Stage minCells={bodyLayout.stageCells} axis={bodyLayout.axis} />
+            <Rail
+              side="right"
+              orientation={orientation}
+              panels={RIGHT_PANELS}
+              renderPanel={dispatchPanel}
+              // The right rail (usage · crows) is sized to the crow-ledger width when crows are on (R6),
+              // computed relative to the live terminal — no `"24%"` absolute anymore (R5).
+              cells={bodyLayout.rightRailCells}
+            />
+          </Box>
+        )}
       </Box>
       <Box flexShrink={0} flexDirection="column">
-        <Box ref={chatInputRef} flexDirection="column">
-          <ChatInput />
-        </Box>
+        {!chatInputHidden && (
+          <Box ref={chatInputRef} flexDirection="column">
+            <ChatInput />
+          </Box>
+        )}
         <BottomBar />
       </Box>
-      <Overlay />
       {/* F9: the transient toast rack — bottom-right, subtle. Last child so it rides below the bars;
           reads the toastStore singleton (pushed by the conversations send action + the image slice). */}
       <Toast />

@@ -56,6 +56,8 @@ import {
 } from '../hooks/useInputStores.js';
 import type { PanelKeymap } from '../input/keymap.js';
 import type { PanelId } from '../input/panels.js';
+import { deriveAgentIdentity } from '../selectors/agentIdentity.js';
+import { isChatPaneOpen } from '../selectors/conversationsSelectors.js';
 import { HEALTH_EDGE_COLOR } from '../selectors/crowHealthSelectors.js';
 import { type CrowRowView, type CrowsView, useCrowsView } from '../selectors/crowsSelectors.js';
 import type { Theme } from '../theme/buildTheme.js';
@@ -69,7 +71,7 @@ const PANEL_TITLE = 'Crows';
 // The Ledger self-measures its own inner size now (see {@link ./Ledger.tsx}'s "Sizing" note), so no
 // fixed budget is passed: its overflow window tracks the live panel size.
 
-type CrowsIntent = 'cursorDown' | 'cursorUp' | 'refresh' | 'toggleExpanded' | 'star';
+type CrowsIntent = 'cursorDown' | 'cursorUp' | 'refresh' | 'toggleExpanded' | 'star' | 'openChat';
 
 /**
  * A flattened Ledger row: either a section header (a label) or a crow row. Headers are interleaved
@@ -140,7 +142,10 @@ function renderCrowRow(
     <Box flexDirection="column" flexGrow={1} flexShrink={0}>
       <Text wrap="truncate">
         <Text color={edgeColor}>{ctx.selected ? '▌' : '▎'}</Text>
-        {` ${row.name}  `}
+        {/* `★ ` precedes a favorited crow's name (item 9d); plain space otherwise so the names stay
+            column-aligned whether or not the row is starred. */}
+        {row.favorited ? ' ★ ' : ' '}
+        {`${row.name}  `}
         <Text color={theme.heading}>{row.status}</Text>
       </Text>
       {expanded ? (
@@ -217,11 +222,15 @@ export const CrowsPanel = memo(function CrowsPanel(): React.JSX.Element {
   // Rule 1: narrow selector (shallow) — only re-renders when the roster slice ref-changes.
   // Rule 2: view comes pre-grouped from the selector; no role/ticketId logic here.
   const roster = useAppStore((s) => s.roster, shallow);
-  const view = useCrowsView(roster);
+  const favorites = useAppStore((s) => s.favorites, shallow);
+  const conversations = useAppStore((s) => s.conversations, shallow);
+  // Favorites feed the selector so favorited crows sort to the top of their group + show `★ ` (9d).
+  const view = useCrowsView(roster, favorites);
   // Rule 3: bus reached only through the dispatched actions.
   const refresh = useAppStore((s) => s.actions.roster.refresh);
   const toggleFavorite = useAppStore((s) => s.actions.favorites.toggle);
   const setActivePane = useAppStore((s) => s.actions.conversations.setActivePaneAgentId);
+  const toggleChatPane = useAppStore((s) => s.actions.conversations.toggleChatPane);
 
   // Local UI state: cursor position (CROW rows only) + minimized/maximized toggle (rule 1).
   const [cursor, setCursor] = useState(0);
@@ -250,6 +259,23 @@ export const CrowsPanel = memo(function CrowsPanel(): React.JSX.Element {
     return ids[clamped] ?? null;
   }, [cursor, view]);
 
+  // Toggle the highlighted crow's chat pane on/off (item 9c). Resolves the cursor agent's identity
+  // from the roster, computes its CURRENT open state (favorites default + override) so the toggle
+  // flips it, and — when OPENING — pins it as the active pane. Reads the live slices imperatively at
+  // call time so no stale closure on `conversations`/`favorites`.
+  const openChatAtCursor = useCallback(() => {
+    const agentId = agentIdAtCursor();
+    if (agentId === null) return;
+    const rosterRow = roster.rows.find((r) => r.agentId === agentId);
+    const identity = rosterRow !== undefined ? deriveAgentIdentity(rosterRow) : null;
+    if (identity === null) return;
+    const currentlyOpen = isChatPaneOpen(identity, favorites, conversations.paneOverrides);
+    toggleChatPane(agentId, currentlyOpen);
+    if (!currentlyOpen) {
+      setActivePane(agentId); // opening → make this the active chat pane (spec)
+    }
+  }, [agentIdAtCursor, roster, favorites, conversations, toggleChatPane, setActivePane]);
+
   // The favorite/star chord comes from the central registry (`panel.star`); `bindings` is a stable
   // identity that changes only on a settings change, so it is a safe keymap dep (no churn).
   const bindings = useBindings();
@@ -258,8 +284,19 @@ export const CrowsPanel = memo(function CrowsPanel(): React.JSX.Element {
   const keymap: PanelKeymap<CrowsIntent> = useMemo(
     () => ({
       keymap: [
-        { chord: { input: 'j' }, intent: 'cursorDown', description: 'next crow' },
-        { chord: { input: 'k' }, intent: 'cursorUp', description: 'prev crow' },
+        // hjkl + arrows (item 5: every list cursor also accepts the arrow keys).
+        {
+          chord: [{ input: 'j' }, { key: { downArrow: true } }],
+          intent: 'cursorDown',
+          description: 'next crow',
+        },
+        {
+          chord: [{ input: 'k' }, { key: { upArrow: true } }],
+          intent: 'cursorUp',
+          description: 'prev crow',
+        },
+        // Enter toggles the highlighted crow's chat pane on/off (item 9c).
+        { chord: { key: { return: true } }, intent: 'openChat', description: 'toggle chat pane' },
         { chord: { input: 'r' }, intent: 'refresh', description: 'refresh' },
         { chord: { input: 'm' }, intent: 'toggleExpanded', description: 'toggle maximized' },
         // The command-modified chord (alt+f by default) stars the highlighted crow (dispatcher routes
@@ -281,6 +318,9 @@ export const CrowsPanel = memo(function CrowsPanel(): React.JSX.Element {
           case 'toggleExpanded':
             setExpanded((e) => !e);
             return;
+          case 'openChat':
+            openChatAtCursor();
+            return;
           case 'star': {
             const agentId = agentIdAtCursor();
             if (agentId !== null) {
@@ -294,7 +334,15 @@ export const CrowsPanel = memo(function CrowsPanel(): React.JSX.Element {
         }
       },
     }),
-    [moveCursor, refresh, toggleFavorite, setActivePane, agentIdAtCursor, bindings],
+    [
+      moveCursor,
+      refresh,
+      toggleFavorite,
+      setActivePane,
+      agentIdAtCursor,
+      openChatAtCursor,
+      bindings,
+    ],
   );
   usePanelKeymap(PANEL_ID, keymap);
 

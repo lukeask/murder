@@ -153,8 +153,16 @@ export const ReportsPanel = memo(function ReportsPanel(): React.JSX.Element {
   const keymap: PanelKeymap<ReportsIntent> = useMemo(
     () => ({
       keymap: [
-        { chord: { input: 'j' }, intent: 'cursorDown', description: 'next report' },
-        { chord: { input: 'k' }, intent: 'cursorUp', description: 'prev report' },
+        {
+          chord: [{ input: 'j' }, { key: { downArrow: true } }],
+          intent: 'cursorDown',
+          description: 'next report',
+        },
+        {
+          chord: [{ input: 'k' }, { key: { upArrow: true } }],
+          intent: 'cursorUp',
+          description: 'prev report',
+        },
         { chord: { input: 'r' }, intent: 'refresh', description: 'refresh' },
         { chord: bindings.chordsFor('panel.star'), intent: 'star', description: 'favorite' },
         { chord: { key: { return: true } }, intent: 'open', description: 'view doc' },

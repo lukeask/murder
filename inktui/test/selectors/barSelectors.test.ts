@@ -51,4 +51,21 @@ describe('selectBottomBar', () => {
     expect(hints.find((h) => h.description === 'open doc')?.key).toBe('o');
     expect(hints.find((h) => h.description === 'star')?.key).toBe('return');
   });
+
+  it('mode hints replace the panel keys (globals still lead) when a mode owns the bar', () => {
+    const modeHints = [
+      { key: 'j/k', description: 'nav' },
+      { key: 'esc', description: 'cancel' },
+    ];
+    const hints = selectBottomBar('plans', keymap, DEFAULT_BINDINGS, modeHints);
+    const descriptions = hints.map((h) => h.description);
+    // The mode's hints are present…
+    expect(descriptions).toContain('nav');
+    expect(descriptions).toContain('cancel');
+    // …and the focused panel's keys are NOT (the mode captures input).
+    expect(descriptions).not.toContain('open doc');
+    expect(descriptions).not.toContain('star');
+    // Globals still lead.
+    expect(hints.length).toBeGreaterThan(modeHints.length);
+  });
 });

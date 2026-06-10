@@ -219,8 +219,14 @@ describe('selectCrowsView — rich-field health plumbing (A#6)', () => {
   it('RED when openEscalations > 0, even for a running crow (escalation-RED branch)', () => {
     const view = selectCrowsView(
       state([
-        row({ agentId: 'esc-crow', role: 'crow', ticketId: 'T-1', status: 'running',
-              openEscalations: 1, maxSeverity: 0 }),
+        row({
+          agentId: 'esc-crow',
+          role: 'crow',
+          ticketId: 'T-1',
+          status: 'running',
+          openEscalations: 1,
+          maxSeverity: 0,
+        }),
       ]),
       NOW,
     );
@@ -230,8 +236,14 @@ describe('selectCrowsView — rich-field health plumbing (A#6)', () => {
   it('RED when maxSeverity >= 2, even with zero open escalations (severity-RED branch)', () => {
     const view = selectCrowsView(
       state([
-        row({ agentId: 'sev-crow', role: 'crow', ticketId: 'T-2', status: 'idle',
-              openEscalations: 0, maxSeverity: 2 }),
+        row({
+          agentId: 'sev-crow',
+          role: 'crow',
+          ticketId: 'T-2',
+          status: 'idle',
+          openEscalations: 0,
+          maxSeverity: 2,
+        }),
       ]),
       NOW,
     );
@@ -242,8 +254,15 @@ describe('selectCrowsView — rich-field health plumbing (A#6)', () => {
     const staleIso = new Date(NOW - 90_000).toISOString(); // 90s ago → stuck
     const view = selectCrowsView(
       state([
-        row({ agentId: 'stuck-crow', role: 'crow', ticketId: null, status: 'running',
-              lastSeen: staleIso, openEscalations: 0, maxSeverity: 0 }),
+        row({
+          agentId: 'stuck-crow',
+          role: 'crow',
+          ticketId: null,
+          status: 'running',
+          lastSeen: staleIso,
+          openEscalations: 0,
+          maxSeverity: 0,
+        }),
       ]),
       NOW,
     );
@@ -254,8 +273,15 @@ describe('selectCrowsView — rich-field health plumbing (A#6)', () => {
     const recentIso = new Date(NOW - 10_000).toISOString(); // 10s ago → not stuck
     const view = selectCrowsView(
       state([
-        row({ agentId: 'healthy-crow', role: 'crow', ticketId: null, status: 'running',
-              lastSeen: recentIso, openEscalations: 0, maxSeverity: 0 }),
+        row({
+          agentId: 'healthy-crow',
+          role: 'crow',
+          ticketId: null,
+          status: 'running',
+          lastSeen: recentIso,
+          openEscalations: 0,
+          maxSeverity: 0,
+        }),
       ]),
       NOW,
     );
@@ -275,8 +301,15 @@ describe('selectCrowsView — rich-field health plumbing (A#6)', () => {
     const staleIso = new Date(NOW - 90_000).toISOString();
     const view = selectCrowsView(
       state([
-        row({ agentId: 'esc-stuck', role: 'crow', ticketId: 'T-3', status: 'running',
-              lastSeen: staleIso, openEscalations: 1, maxSeverity: 0 }),
+        row({
+          agentId: 'esc-stuck',
+          role: 'crow',
+          ticketId: 'T-3',
+          status: 'running',
+          lastSeen: staleIso,
+          openEscalations: 1,
+          maxSeverity: 0,
+        }),
       ]),
       NOW,
     );
@@ -290,11 +323,79 @@ describe('selectCrowsView — rich-field health plumbing (A#6)', () => {
     const staleNaive = new Date(NOW - 90_000).toISOString().replace('Z', ''); // strip Z → naive
     const view = selectCrowsView(
       state([
-        row({ agentId: 'naive-stuck', role: 'crow', ticketId: null, status: 'running',
-              lastSeen: staleNaive, openEscalations: 0, maxSeverity: 0 }),
+        row({
+          agentId: 'naive-stuck',
+          role: 'crow',
+          ticketId: null,
+          status: 'running',
+          lastSeen: staleNaive,
+          openEscalations: 0,
+          maxSeverity: 0,
+        }),
       ]),
       NOW,
     );
     expect(healthOf(view, 'naive-stuck')).toBe('yellow');
+  });
+});
+
+// ── favorites: starred-first sort + favorited flag + star glyph (item 9d) ────────────────────────
+
+import type { FavoritesState } from '../../src/store/favorites/favoritesSlice.js';
+
+function favs(...ids: string[]): FavoritesState {
+  return { ids: new Set(ids), status: 'ready', error: null };
+}
+
+describe('selectCrowsView — favorites (item 9d)', () => {
+  const NOW = 1_000_000;
+
+  it('sorts an explicitly-starred crow to the top of its group (stable within group)', () => {
+    // Two planners (NOT default-favorited); star the second so it jumps above the first.
+    const rows = [
+      row({ agentId: 'p1', role: 'planner', status: 'idle', session: 'murder_murder_planner_a' }),
+      row({ agentId: 'p2', role: 'planner', status: 'idle', session: 'murder_murder_planner_b' }),
+    ];
+    const view = selectCrowsView(state(rows), NOW, favs('p2'));
+    const planners = view.sections.find((s) => s.group === 'planners');
+    expect(planners?.rows.map((r) => r.agentId)).toEqual(['p2', 'p1']);
+    expect(planners?.rows[0]?.favorited).toBe(true);
+    expect(planners?.rows[1]?.favorited).toBe(false);
+  });
+
+  it('marks default-favorited kinds (collaborator + rogue) as favorited with no explicit star', () => {
+    const rows = [
+      row({ agentId: 'c1', role: 'collaborator', session: 'murder_murder_collaborator' }),
+      row({
+        agentId: 'r1',
+        role: 'crow',
+        ticketId: '',
+        session: 'murder_murder_crow_claude_rogue_x',
+      }),
+      row({ agentId: 'p1', role: 'planner', session: 'murder_murder_planner_a' }),
+    ];
+    const view = selectCrowsView(state(rows), NOW);
+    const favById = new Map(
+      view.sections.flatMap((s) => s.rows.map((r) => [r.agentId, r.favorited] as const)),
+    );
+    expect(favById.get('c1')).toBe(true);
+    expect(favById.get('r1')).toBe(true);
+    expect(favById.get('p1')).toBe(false);
+  });
+
+  it('a rogue with empty-string ticket_id groups under Rogue Crows (item 9a)', () => {
+    const rows = [
+      row({
+        agentId: 'r1',
+        role: 'crow',
+        ticketId: '',
+        session: 'murder_murder_crow_claude_rogue_tony',
+      }),
+    ];
+    const view = selectCrowsView(state(rows), NOW);
+    const rogue = view.sections.find((s) => s.group === 'rogue');
+    expect(rogue?.rows.map((r) => r.agentId)).toEqual(['r1']);
+    expect(rogue?.rows[0]?.name).toBe('tony');
+    expect(view.sections.find((s) => s.group === 'ticket')).toBeUndefined();
   });
 });

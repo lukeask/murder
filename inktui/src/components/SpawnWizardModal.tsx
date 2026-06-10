@@ -48,7 +48,7 @@
 import type { Key } from 'ink';
 import { Box, Text } from 'ink';
 import type { JSX } from 'react';
-import type { Mode, ModeStoreApi } from '../input/modeStore.js';
+import type { Mode, ModeHint, ModeStoreApi } from '../input/modeStore.js';
 import type { HarnessModel, HarnessModelsActions } from '../store/dialogs/harnessModelsActions.js';
 import { modelsFor, STATIC_HARNESS_MODELS } from '../store/dialogs/harnessModelsActions.js';
 import type { SpawnActions } from '../store/dialogs/spawnActions.js';
@@ -83,6 +83,8 @@ import '../input/dispatcher.js';
 type SpawnWizardIntent =
   | 'cursorUp'
   | 'cursorDown'
+  | 'cursorLeft'
+  | 'cursorRight'
   | 'confirm'
   | 'backspace'
   | 'deleteAll'
@@ -152,6 +154,34 @@ interface SpawnWizardState {
   effortCursor: number;
   worktreeCursor: number;
   error: string | null;
+}
+
+/**
+ * The bottom-bar hints for the active wizard step (item 4b/4c — hints moved out of the modal box into
+ * the bottom bar). List steps advertise nav + confirm + cancel; text steps drop nav; the context step
+ * advertises its yes/no nav (item 7). Pure over the step so it tests without the bar.
+ */
+export function spawnWizardHints(step: WizardStep): readonly ModeHint[] {
+  const cancel: ModeHint = { key: 'esc', description: 'cancel' };
+  switch (step) {
+    case 'harness':
+    case 'model':
+    case 'effort':
+    case 'worktree':
+      return [{ key: 'j/k', description: 'nav' }, { key: 'enter', description: 'confirm' }, cancel];
+    case 'branch':
+    case 'name':
+      return [{ key: 'enter', description: 'confirm' }, cancel];
+    case 'context':
+      return [
+        { key: 'h/l', description: 'nav' },
+        { key: 'enter', description: 'confirm' },
+        { key: 'y/n', description: 'include/skip' },
+        cancel,
+      ];
+    default:
+      return [cancel];
+  }
 }
 
 /** Build the {@link StepConditions} from current closure state — the input to the pure machine. */
@@ -374,10 +404,19 @@ export function spawnWizardMode(
   const mode: Mode<SpawnWizardIntent> = {
     id,
     presentation: 'modal',
+    // Item 4b/4c: the step's hints live in the bottom bar, not inside the modal box. A getter so the
+    // bar (which re-reads on every mode-stack change — `refresh()` re-enters the frame) always shows
+    // the CURRENT step's hints.
+    get hints(): readonly ModeHint[] {
+      return spawnWizardHints(s.step);
+    },
     // Structural keys only — printable chars (j/k/y/n + free text) ride `onUncaptured`.
     keymap: [
       { chord: { key: { downArrow: true } }, intent: 'cursorDown', description: 'next option' },
       { chord: { key: { upArrow: true } }, intent: 'cursorUp', description: 'prev option' },
+      // Item 7: ←/→ move the context step's yes/no highlight (h/l ride onUncaptured).
+      { chord: { key: { leftArrow: true } }, intent: 'cursorLeft', description: 'prev choice' },
+      { chord: { key: { rightArrow: true } }, intent: 'cursorRight', description: 'next choice' },
       { chord: { key: { return: true } }, intent: 'confirm', description: 'confirm' },
       { chord: { key: { backspace: true } }, intent: 'backspace', description: 'delete char' },
       { chord: { input: 'u', key: { meta: true } }, intent: 'deleteAll', description: 'clear' },
@@ -393,6 +432,19 @@ export function spawnWizardMode(
           break;
         case 'cursorDown':
           if (isList) moveCursor(1);
+          break;
+        case 'cursorLeft':
+          // Item 7: the context step's yes/no is a two-cell radio; ← highlights "yes".
+          if (s.step === 'context' && !s.contextAccepted) {
+            s.contextAccepted = true;
+            refresh();
+          }
+          break;
+        case 'cursorRight':
+          if (s.step === 'context' && s.contextAccepted) {
+            s.contextAccepted = false;
+            refresh();
+          }
           break;
         case 'confirm':
           advance();
@@ -449,6 +501,7 @@ export function spawnWizardMode(
           refresh();
           return true;
         case 'context':
+          // Item 7: y/n are immediate-submit binds; h/l move the highlight (Enter then submits it).
           if (input === 'y') {
             s.contextAccepted = true;
             doSubmit();
@@ -457,6 +510,20 @@ export function spawnWizardMode(
           if (input === 'n') {
             s.contextAccepted = false;
             doSubmit();
+            return true;
+          }
+          if (input === 'h') {
+            if (!s.contextAccepted) {
+              s.contextAccepted = true;
+              refresh();
+            }
+            return true;
+          }
+          if (input === 'l') {
+            if (s.contextAccepted) {
+              s.contextAccepted = false;
+              refresh();
+            }
             return true;
           }
           return false;
@@ -594,9 +661,6 @@ function SelectList({
           </Box>
         ))}
       </Box>
-      <Box marginTop={1}>
-        <Text dimColor>j/k: navigate · enter: confirm · esc: cancel</Text>
-      </Box>
     </Box>
   );
 }
@@ -617,9 +681,6 @@ function TextStep({
       <Text>{label}</Text>
       <Box marginTop={1}>
         <TextInput value={value} placeholder={placeholder} focused color={theme.text} />
-      </Box>
-      <Box marginTop={1}>
-        <Text dimColor>enter: confirm · esc: cancel</Text>
       </Box>
     </Box>
   );
@@ -650,9 +711,6 @@ function ContextStep({
         <Text color={!contextAccepted ? theme.warning : theme.muted} bold={!contextAccepted}>
           {!contextAccepted ? '[no]' : 'no'}
         </Text>
-      </Box>
-      <Box marginTop={1}>
-        <Text dimColor>y/enter: include · n: skip · esc: cancel</Text>
       </Box>
     </Box>
   );

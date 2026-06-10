@@ -149,6 +149,20 @@ export interface ConversationsActions {
    * (tui.save_favorites) is C11's responsibility.
    */
   setActivePaneAgentId(agentId: string | null): void;
+
+  /**
+   * Explicitly open or close a chat pane (item 9b). Writes a `paneOverrides` entry that layers over
+   * the favorites-derived default — so `open=true` forces a non-favorited agent's pane visible, and
+   * `open=false` hides a default-favorited one. No bus call. Used by `spawnRogue`'s auto-open (9e).
+   */
+  setChatPaneOpen(agentId: string, open: boolean): void;
+
+  /**
+   * Toggle a chat pane open/closed (item 9c). `currentlyOpen` is the pane's CURRENT effective open
+   * state (the caller computes it via `selectOpenChatPanes`, which merges the favorites default with
+   * the existing override); the action records the override that flips it. No bus call.
+   */
+  toggleChatPane(agentId: string, currentlyOpen: boolean): void;
 }
 
 export function createConversationsActions(
@@ -261,6 +275,22 @@ export function createConversationsActions(
       store.setState((state) => ({
         conversations: { ...state.conversations, activePaneAgentId: agentId },
       }));
+    },
+
+    setChatPaneOpen(agentId: string, open: boolean): void {
+      store.setState((state) => {
+        const next = new Map(state.conversations.paneOverrides);
+        next.set(agentId, open);
+        return { conversations: { ...state.conversations, paneOverrides: next } };
+      });
+    },
+
+    toggleChatPane(agentId: string, currentlyOpen: boolean): void {
+      store.setState((state) => {
+        const next = new Map(state.conversations.paneOverrides);
+        next.set(agentId, !currentlyOpen);
+        return { conversations: { ...state.conversations, paneOverrides: next } };
+      });
     },
   };
 }

@@ -78,10 +78,24 @@ export interface Mode<Intent extends string = string> extends PanelKeymap<Intent
   /** When `true`, a captured key the mode's keymap does not match falls through to the lower
    * dispatch layers; default `false` (capture everything). See the module doc. */
   readonly passThrough?: boolean;
+  /** Optional bottom-bar hints this mode contributes. When present, the bottom bar shows THESE
+   * instead of the focused panel's keys for the duration of the mode (the mode captures input, so its
+   * keys are the only relevant ones — e.g. the spawn wizard's `j/k nav · enter confirm · esc cancel`).
+   * Each hint is `{ key, description }`; the bottom bar selector ({@link
+   * ../selectors/barSelectors.js}) renders them like any other hint. */
+  readonly hints?: readonly ModeHint[];
   /** The thin component that draws the surface. Carried opaquely — the store never calls it (the
    * {@link ../components/Overlay.js Overlay} does, at the React layer). Type-only React dependency so
    * the store itself stays framework-agnostic (rule 4). */
   readonly render: () => ReactNode;
+}
+
+/** A bottom-bar hint a mode contributes — the structural shape shared with {@link
+ * ../selectors/barSelectors.js}'s `BottomBarHint` (kept structural here so the input layer doesn't
+ * import the selectors). */
+export interface ModeHint {
+  readonly key: string;
+  readonly description: string;
 }
 
 /** A pushed stack frame: the mode plus the effective focus that was live when it was pushed, so the

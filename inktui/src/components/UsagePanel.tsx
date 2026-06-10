@@ -320,8 +320,16 @@ export const UsagePanel = memo(function UsagePanel({
   const keymap: PanelKeymap<UsageIntent> = useMemo(
     () => ({
       keymap: [
-        { chord: { input: 'j' }, intent: 'cursorDown', description: 'next gauge' },
-        { chord: { input: 'k' }, intent: 'cursorUp', description: 'prev gauge' },
+        {
+          chord: [{ input: 'j' }, { key: { downArrow: true } }],
+          intent: 'cursorDown',
+          description: 'next gauge',
+        },
+        {
+          chord: [{ input: 'k' }, { key: { upArrow: true } }],
+          intent: 'cursorUp',
+          description: 'prev gauge',
+        },
         { chord: { input: 'r' }, intent: 'refresh', description: 'refresh' },
       ],
       onIntent(intent) {

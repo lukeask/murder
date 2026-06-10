@@ -20,6 +20,67 @@
 import type { RosterRow } from '../store/roster/rosterSlice.js';
 
 // ---------------------------------------------------------------------------
+// Session-name label helper (item 11 — strip the `murder_<repo>_<role…>_` prefix)
+// ---------------------------------------------------------------------------
+
+/**
+ * Strip the `murder_<repo>_<role…>_` prefix from a tmux session name so the UI shows only the
+ * agent's own name. The single home for this transform — used by both {@link deriveAgentIdentity}
+ * (the chat target label) and `crowsSelectors.toRowView` (the Crows-pane row name), so the two
+ * never drift.
+ *
+ * The grammar comes from `murder/runtime/terminal/session_names.py` —
+ * `session_name_template = "murder_{project}_{role}{suffix}"` — and the real `role`/`suffix`
+ * shapes the orchestrator/runner produce:
+ *   - planner            → `murder_<repo>_planner_<plan>`                    → `<plan>`
+ *   - planning_handler   → `murder_<repo>_planning_handler_<plan>`           → `<plan>`
+ *   - ticket crow        → `murder_<repo>_crow_<ticketId>`                   → `<ticketId>`
+ *   - crow_handler       → `murder_<repo>_crow_handler_<ticketId>`          → `<ticketId>`
+ *   - rogue crow         → `murder_<repo>_crow_<harness>_rogue_<name>`       → `<name>`
+ *   - collaborator       → `murder_<repo>_collaborator`                      → (no suffix; unchanged)
+ *   - notetaker          → `murder_<repo>_notetaker_<x>`                     → `<x>`
+ *
+ * The `<repo>` segment is matched non-greedily so a single-token project name peels off before the
+ * role token; rogue is checked FIRST (its `crow_<harness>_rogue_` form must not be mistaken for the
+ * plain `crow_` ticket prefix). When nothing matches (a non-conforming or already-bare name) the raw
+ * session is returned unchanged — fall-through, never a throw.
+ */
+export function stripSessionPrefix(session: string): string {
+  // Rogue: `murder_<repo>_crow_<harness>_rogue_<name>` → `<name>`. Matched first so the embedded
+  // `crow_` doesn't get peeled as a plain ticket-crow prefix below.
+  const rogue = /^murder_.+?_crow_[^_]+_rogue_(.+)$/.exec(session);
+  if (rogue?.[1]) {
+    return rogue[1];
+  }
+  // Every other role: `murder_<repo>_<role>_<name>` → `<name>`. The role tokens are listed
+  // longest-first (`planning_handler` before `planner`, `crow_handler` before `crow`) so the
+  // alternation never half-matches a longer role.
+  const role =
+    /^murder_.+?_(?:planning_handler|planner|crow_handler|crow|collaborator|notetaker)_(.+)$/.exec(
+      session,
+    );
+  if (role?.[1]) {
+    return role[1];
+  }
+  // No suffix (e.g. a bare `murder_<repo>_collaborator`) or a non-conforming name: leave it as-is.
+  return session;
+}
+
+/**
+ * Whether a `crow` row is assigned to a ticket — the rogue-vs-ticket discriminant (item 9a).
+ *
+ * The wire `ticket_id` for a rogue crow is an **empty string**, not null: the orchestrator registers
+ * a rogue with `ticket_id=''`, the read-model's `_optional_str('')` returns `''` (not `None`), and
+ * the slice's `session.ticket_id ?? null` keeps `''` (empty string is not nullish). So the old
+ * `ticketId === null` test mis-classified every rogue as a ticket crow, which is why rogues never
+ * landed in the Rogue Crows group. Treat null AND empty/whitespace as "no ticket" so a rogue is a
+ * rogue regardless of which sentinel the backend sends.
+ */
+export function hasTicket(ticketId: string | null): ticketId is string {
+  return ticketId !== null && ticketId.trim() !== '';
+}
+
+// ---------------------------------------------------------------------------
 // The discriminated union
 // ---------------------------------------------------------------------------
 
@@ -88,26 +149,29 @@ export type AgentIdentity = CollaboratorIdentity | PlannerIdentity | RogueIdenti
  * If the service assigns a ticket_id to a rogue crow, its identity becomes 'ticket', not 'rogue'.
  */
 export function deriveAgentIdentity(row: RosterRow): AgentIdentity | null {
+  // The session name carries the `murder_<repo>_<role…>_` prefix; the label shows only the agent's
+  // own name (item 11). One shared helper so this matches the Crows-pane row name exactly.
+  const sessionLabel = row.session !== null ? stripSessionPrefix(row.session) : row.agentId;
   switch (row.role) {
     case 'collaborator':
       return {
         kind: 'collaborator',
         agentId: row.agentId,
-        label: row.session ?? row.agentId,
+        label: sessionLabel,
       };
     case 'planner':
       return {
         kind: 'planner',
         agentId: row.agentId,
-        label: row.session ?? row.agentId,
-        plan: row.session ?? row.agentId,
+        label: sessionLabel,
+        plan: sessionLabel,
       };
     case 'crow':
-      if (row.ticketId === null) {
+      if (!hasTicket(row.ticketId)) {
         return {
           kind: 'rogue',
           agentId: row.agentId,
-          label: row.session ?? row.agentId,
+          label: sessionLabel,
           id: row.agentId,
         };
       }

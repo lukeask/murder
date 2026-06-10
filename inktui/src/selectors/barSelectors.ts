@@ -48,6 +48,9 @@ export interface BottomBarHint {
   /** The printable chord char (`j`), or a special-key name (`enter`) for display. */
   readonly key: string;
   readonly description: string;
+  /** When `'right'`, the bar pins this hint to the FAR right of the bar (item 12 prep — the help
+   * hint a new user can always find). Omitted/`'left'` = normal left-to-right flow. */
+  readonly align?: 'left' | 'right';
 }
 
 /** The modifier prefix for the digit/nav hints, derived from the resolved bindings so the footer
@@ -98,15 +101,25 @@ function hintKey(entry: Keymap<string>[number]): string {
 /**
  * The bottom bar's hints: the global chords, then the *focused* panel's own declared keys (the plan's
  * "Bottom bar: contextual hints", sourced from the keymap so a declared key is self-documenting —
- * see keymap.ts). When chat is focused there is no panel keymap, so only the globals show. Pure over
- * the effective focus + that panel's keymap, both passed in by the shell.
+ * see keymap.ts). When chat is focused there is no panel keymap, so only the globals show.
+ *
+ * When an active mode supplies its own `modeHints` (the spawn wizard, the help overlay, etc.), THOSE
+ * replace the panel keys entirely — the mode captures input, so its keys are the only relevant ones
+ * (the panels underneath can't be driven). The globals still lead so the navigation keys stay
+ * discoverable. Pure over the effective focus, that panel's keymap, and the active mode's hints,
+ * all passed in by the shell.
  */
 export function selectBottomBar(
   focused: FocusId,
   focusedKeymap: Keymap<string> | undefined,
   bindings: ResolvedBindings,
+  modeHints?: readonly BottomBarHint[],
 ): readonly BottomBarHint[] {
   const globals = globalHints(bindings);
+  if (modeHints !== undefined) {
+    // A mode owns the bar: globals (still discoverable) then the mode's own hints; no panel keys.
+    return [...globals, ...modeHints];
+  }
   if (focused === CHAT_FOCUS || focusedKeymap === undefined) {
     return globals;
   }

@@ -15,10 +15,7 @@
         "done": false
       }
     ],
-    "deps": [
-      "T-100",
-      "T-099"
-    ],
+    "deps": ["T-100", "T-099"],
     "harness": "cc",
     "model": "opus",
     "worktree": "/wt/t-101",

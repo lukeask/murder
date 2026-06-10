@@ -16,9 +16,7 @@
         "metadata_sync_state": "synced",
         "metadata_parse_error": null,
         "metadata_conflict_reason": null,
-        "pending_dep_ids": [
-          "T-100"
-        ]
+        "pending_dep_ids": ["T-100"]
       }
     ],
     "recent_done_tickets": [],
@@ -40,9 +38,7 @@
         "t_period_minutes": 300.0
       }
     ],
-    "calendar_harnesses": [
-      "cc"
-    ],
+    "calendar_harnesses": ["cc"],
     "running_agents": [],
     "scheduled_tickets": [],
     "as_of": "2026-06-09T00:00:00",

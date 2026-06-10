@@ -27,17 +27,17 @@
 
 import { describe, expect, it } from 'vitest';
 import { FakeBusClient } from '../../src/bus/FakeBusClient.js';
-import { createAppStore } from '../../src/store/store.js';
-import type { CrowSnapshotReply } from '../../src/store/roster/rosterActions.js';
-import type { PlansSnapshotReply } from '../../src/store/plans/plansActions.js';
 import type { NotesSnapshotReply } from '../../src/store/notes/notesActions.js';
+import type { PlansSnapshotReply } from '../../src/store/plans/plansActions.js';
 import type { ReportsSnapshotReply } from '../../src/store/reports/reportsActions.js';
-import type { ScheduleSnapshotReply } from '../../src/store/tickets/ticketsActions.js';
+import type { CrowSnapshotReply } from '../../src/store/roster/rosterActions.js';
+import { createAppStore } from '../../src/store/store.js';
 import type { TicketDetailReply } from '../../src/store/ticketDetail/ticketDetailActions.js';
+import type { ScheduleSnapshotReply } from '../../src/store/tickets/ticketsActions.js';
 
 import crowGolden from '../fixtures/read-reply-goldens/crow-snapshot.json' with { type: 'json' };
-import plansGolden from '../fixtures/read-reply-goldens/plans-snapshot.json' with { type: 'json' };
 import notesGolden from '../fixtures/read-reply-goldens/notes-snapshot.json' with { type: 'json' };
+import plansGolden from '../fixtures/read-reply-goldens/plans-snapshot.json' with { type: 'json' };
 import reportsGolden from '../fixtures/read-reply-goldens/reports-snapshot.json' with {
   type: 'json',
 };

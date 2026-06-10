@@ -99,12 +99,22 @@ export interface ConversationsState {
    * "keep active on send" behavior.
    */
   readonly activePaneAgentId: string | null;
+  /**
+   * Explicit open/close overrides for chat panes, layered OVER the favorites-derived default
+   * (item 9b). A `true` opens a pane that the favorites default would close (e.g. a planner the
+   * user hasn't starred); a `false` closes a pane the favorites default would open (e.g. a rogue,
+   * which is default-favorited). Absent (no entry) → fall through to the favorites default. The map
+   * is the user's explicit "show this pane / hide this pane" intent; `selectOpenChatPanes` merges it
+   * with the favorites default to decide which panes the Stage tiles.
+   */
+  readonly paneOverrides: ReadonlyMap<string, boolean>;
 }
 
 /** Initial (empty) state — no transcripts, no active pane. */
 export const initialConversationsState: ConversationsState = {
   transcripts: {},
   activePaneAgentId: null,
+  paneOverrides: new Map<string, boolean>(),
 };
 
 /**

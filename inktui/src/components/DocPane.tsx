@@ -35,8 +35,8 @@
  *    no longer enters a mode — it focuses the doc pane instead.
  */
 
-import { Text } from 'ink';
-import { type JSX, memo, useCallback, useMemo, useState } from 'react';
+import { Box, type DOMElement, measureElement, Text } from 'ink';
+import { type JSX, memo, useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useAppStore, useAppStoreApi } from '../hooks/useAppStore.js';
 import {
   useEffectiveFocus,
@@ -57,11 +57,48 @@ export function docPaneFocusId(name: string): StagePaneId {
   return `stage:doc:${name}`;
 }
 
-/** Lines shown at once in the doc pane's scroll window (the body scrolls within this window). Ported
- * from the retired mode's `VIEWPORT_LINES`; a real measured window is a later refinement (Ledger-style). */
-const VIEWPORT_LINES = 14;
-/** How many lines `j`/`k`/arrows scroll per press; `space` pages by a full window. */
+/** Fallback window height before the fill box has been measured (first paint, or a sizeless non-TTY
+ * test render where Yoga reports 0) — the old fixed `VIEWPORT_LINES`. Once {@link measureElement}
+ * reports a real height the measured value drives the window (the Ledger fill-box pattern). */
+const FALLBACK_HEIGHT = 14;
+/** How many lines `j`/`k`/arrows scroll per press; `space`/`pageUp` page by a full window. */
 const SCROLL_STEP = 1;
+
+// ---------------------------------------------------------------------------
+// Pure window + scrollbar math (the test seam, mirroring Ledger's computeWindow)
+// ---------------------------------------------------------------------------
+
+/** The visible slice of `lines` for a scroll offset, clamped so a short body can't strand the window
+ * past its end. `height` is the measured (or fallback) number of rows the fill box can show. */
+export function computeDocWindow(
+  total: number,
+  scroll: number,
+  height: number,
+): { start: number; end: number; maxScroll: number } {
+  const h = Math.max(height, 1);
+  const maxScroll = Math.max(total - h, 0);
+  const start = Math.min(Math.max(scroll, 0), maxScroll);
+  return { start, end: start + h, maxScroll };
+}
+
+/** Scrollbar thumb geometry for a window of `height` rows over `total` content lines at `scroll`.
+ * `null` when the content fits (no scrollbar drawn). Thumb size is proportional to the visible
+ * fraction (min 1 cell); its offset maps the scroll fraction across the free track. */
+export function computeScrollThumb(
+  total: number,
+  scroll: number,
+  height: number,
+): { size: number; offset: number } | null {
+  const h = Math.max(height, 1);
+  if (total <= h) {
+    return null;
+  }
+  const maxScroll = total - h;
+  const size = Math.max(1, Math.round((h * h) / total));
+  const clampedScroll = Math.min(Math.max(scroll, 0), maxScroll);
+  const offset = maxScroll > 0 ? Math.round((clampedScroll / maxScroll) * (h - size)) : 0;
+  return { size, offset: Math.min(offset, h - size) };
+}
 
 /** The `.murder/<dir>/<name>.md` path for the open doc — the title shown inline on the Pane's border
  * and the same path the spawn wizard references (derived identically in {@link ./App.js}). */
@@ -71,7 +108,7 @@ export function docPath(open: OpenDoc): string {
 
 /** The doc pane's intents: scroll the body window, or close the doc. `enter`/`esc` both close (the
  * old mode treated `enter`-on-shown as "minimise", which closes the slice — same effect). */
-type DocIntent = 'close' | 'scrollDown' | 'scrollUp' | 'pageDown';
+type DocIntent = 'close' | 'scrollDown' | 'scrollUp' | 'pageDown' | 'pageUp';
 
 // ---------------------------------------------------------------------------
 // StageDocPane
@@ -111,9 +148,31 @@ export const StageDocPane = memo(function StageDocPane({
   // shorter body can't strand the window past its end.
   const [scroll, setScroll] = useState(0);
   const lines = body !== null ? body.split('\n') : [];
-  const maxScroll = Math.max(lines.length - VIEWPORT_LINES, 0);
-  const clamped = Math.min(scroll, maxScroll);
-  const window = lines.slice(clamped, clamped + VIEWPORT_LINES);
+
+  // Measured window height — the Ledger fill-box pattern. The content fill box (below) is row-count-
+  // independent (flexGrow, NOT flexShrink), so `measureElement` reports the room we HAVE, not the rows
+  // we drew; the guarded setter writes only on a real change so a stable layout settles in one extra
+  // render and never loops. `0` (first paint / sizeless test render) falls back to FALLBACK_HEIGHT.
+  const boxRef = useRef<DOMElement | null>(null);
+  const [measuredHeight, setMeasuredHeight] = useState(0);
+  useLayoutEffect(() => {
+    if (boxRef.current === null) {
+      return;
+    }
+    const { height } = measureElement(boxRef.current);
+    if (height !== measuredHeight) {
+      setMeasuredHeight(height);
+    }
+  });
+  const effectiveHeight = measuredHeight > 0 ? measuredHeight : FALLBACK_HEIGHT;
+
+  const {
+    start: clamped,
+    end,
+    maxScroll,
+  } = computeDocWindow(lines.length, scroll, effectiveHeight);
+  const window = lines.slice(clamped, end);
+  const thumb = computeScrollThumb(lines.length, clamped, effectiveHeight);
 
   // Scroll/close keymap (rule 5: declared, not handled). `alt+j`/`alt+k` are the global directional
   // layer (pane-to-pane), so they never reach here — plain `j`/`k`/arrows/`space` are this pane's.
@@ -129,6 +188,7 @@ export const StageDocPane = memo(function StageDocPane({
         { chord: { input: 'k' }, intent: 'scrollUp', description: 'scroll up' },
         { chord: { key: { upArrow: true } }, intent: 'scrollUp', description: 'scroll up' },
         { chord: { input: ' ' }, intent: 'pageDown', description: 'page down' },
+        { chord: { input: 'b' }, intent: 'pageUp', description: 'page up' },
       ],
       onIntent(intent) {
         switch (intent) {
@@ -143,38 +203,52 @@ export const StageDocPane = memo(function StageDocPane({
             setScroll((s) => Math.max(s - SCROLL_STEP, 0));
             return;
           case 'pageDown':
-            setScroll((s) => Math.min(s + VIEWPORT_LINES, maxScroll));
+            setScroll((s) => Math.min(s + effectiveHeight, maxScroll));
+            return;
+          case 'pageUp':
+            setScroll((s) => Math.max(s - effectiveHeight, 0));
             return;
           default:
             return intent satisfies never;
         }
       },
     }),
-    [maxScroll, closeAction],
+    [maxScroll, effectiveHeight, closeAction],
   );
   usePanelKeymap(focusId, focused ? keymap : EMPTY_KEYMAP);
 
   return (
+    // `paddingRight={0}` reclaims the Pane's right gutter for the 1-char scrollbar column below, so net
+    // content width is unchanged versus a normal Pane.
     <Pane
       ref={ref}
       title={docPath(open)}
       focused={focused}
       titleExtra={<Text dimColor>[doc]</Text>}
+      paddingRight={0}
     >
-      {status === 'error' && error !== null && <Text color={theme.error}>{`error: ${error}`}</Text>}
-      {status === 'loading' && <Text dimColor>loading…</Text>}
-      {clamped > 0 && <Text dimColor>…</Text>}
-      {status === 'ready' && lines.length === 0 ? (
-        <Text dimColor>(empty document)</Text>
-      ) : (
-        window.map((line, index) => (
-          // biome-ignore lint/suspicious/noArrayIndexKey: body lines are position-keyed (markdown can repeat; the windowed index is the stable identity for the visible slice).
-          <Text key={clamped + index} wrap="truncate">
-            {line === '' ? ' ' : line}
-          </Text>
-        ))
-      )}
-      {clamped + VIEWPORT_LINES < lines.length && <Text dimColor>…</Text>}
+      {/* Fill box: sizes to the Pane's inner content area regardless of line count (flexGrow + clip),
+          so `measureElement` reports the room we HAVE, not the rows we drew (the Ledger pattern). The
+          text column grows; the 1-char scrollbar column is fixed-width and never shrinks. */}
+      <Box ref={boxRef} flexDirection="row" flexGrow={1} minHeight={0} overflow="hidden">
+        <Box flexDirection="column" flexGrow={1} minHeight={0} overflow="hidden">
+          {status === 'error' && error !== null && (
+            <Text color={theme.error}>{`error: ${error}`}</Text>
+          )}
+          {status === 'loading' && <Text dimColor>loading…</Text>}
+          {status === 'ready' && lines.length === 0 ? (
+            <Text dimColor>(empty document)</Text>
+          ) : (
+            window.map((line, index) => (
+              // biome-ignore lint/suspicious/noArrayIndexKey: body lines are position-keyed (markdown can repeat; the windowed index is the stable identity for the visible slice).
+              <Text key={clamped + index} wrap="truncate">
+                {line === '' ? ' ' : line}
+              </Text>
+            ))
+          )}
+        </Box>
+        <Scrollbar height={effectiveHeight} thumb={thumb} />
+      </Box>
     </Pane>
   );
 });
@@ -182,6 +256,37 @@ export const StageDocPane = memo(function StageDocPane({
 /** A stable empty keymap for a blurred doc pane (so the registration identity doesn't churn). Typed
  * `PanelKeymap<DocIntent>` so the `focused ? keymap : EMPTY_KEYMAP` ternary is one type. */
 const EMPTY_KEYMAP: PanelKeymap<DocIntent> = { keymap: [], onIntent() {} };
+
+/**
+ * The 1-char scrollbar column: a thumb (`█`) drawn over a dim `│` track. `thumb === null` (content
+ * fits) renders nothing so the column collapses and the body keeps the full width. Otherwise the
+ * column is exactly `height` rows tall, with `thumb.size` filled cells starting at `thumb.offset`.
+ * Pure function of its props (rule 1) — the geometry is computed by {@link computeScrollThumb}.
+ */
+const Scrollbar = memo(function Scrollbar({
+  height,
+  thumb,
+}: {
+  readonly height: number;
+  readonly thumb: { size: number; offset: number } | null;
+}): JSX.Element | null {
+  if (thumb === null) {
+    return null;
+  }
+  const rows = Array.from({ length: height }, (_, i) =>
+    i >= thumb.offset && i < thumb.offset + thumb.size ? '█' : '│',
+  );
+  return (
+    <Box flexDirection="column" width={1} flexShrink={0}>
+      {rows.map((glyph, i) => (
+        // biome-ignore lint/suspicious/noArrayIndexKey: fixed-length row index is the cell's stable identity.
+        <Text key={i} dimColor={glyph === '│'}>
+          {glyph}
+        </Text>
+      ))}
+    </Box>
+  );
+});
 
 // ---------------------------------------------------------------------------
 // useDocView hook

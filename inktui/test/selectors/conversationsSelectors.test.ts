@@ -9,13 +9,18 @@
  */
 
 import { describe, expect, it } from 'vitest';
+import { deriveAgentIdentity } from '../../src/selectors/agentIdentity.js';
 import {
+  isChatPaneOpen,
   selectActiveAgentId,
   selectConversationTurns,
   selectFavoritesChatPanes,
+  selectOpenChatPanes,
 } from '../../src/selectors/conversationsSelectors.js';
 import type { ConversationBlock } from '../../src/store/conversations/conversationsSlice.js';
 import { initialConversationsState } from '../../src/store/conversations/conversationsSlice.js';
+import type { FavoritesState } from '../../src/store/favorites/favoritesSlice.js';
+import { initialFavoritesState } from '../../src/store/favorites/favoritesSlice.js';
 import type { RosterRow } from '../../src/store/roster/rosterSlice.js';
 import { initialRosterState } from '../../src/store/roster/rosterSlice.js';
 
@@ -278,5 +283,65 @@ describe('selectActiveAgentId', () => {
     const roster = { ...initialRosterState, rows, status: 'ready' as const };
     const result = selectActiveAgentId(initialConversationsState, roster);
     expect(result).toBe('collab'); // collaborator is first in spec order
+  });
+});
+
+// ── isChatPaneOpen / selectOpenChatPanes — pane open/close model (item 9b) ───────────────────────
+
+function favSet(...ids: string[]): FavoritesState {
+  return { ...initialFavoritesState, ids: new Set(ids), status: 'ready' };
+}
+
+describe('isChatPaneOpen — favorites default merged with overrides', () => {
+  const rogue = deriveAgentIdentity(rosterRow({ role: 'crow', ticketId: null, agentId: 'r1' }))!;
+  const planner = deriveAgentIdentity(rosterRow({ role: 'planner', agentId: 'p1' }))!;
+
+  it('default-favorited (rogue) is open with no override', () => {
+    expect(isChatPaneOpen(rogue, initialFavoritesState, new Map())).toBe(true);
+  });
+
+  it('non-favorited (planner) is closed with no override', () => {
+    expect(isChatPaneOpen(planner, initialFavoritesState, new Map())).toBe(false);
+  });
+
+  it('override true opens a non-favorited planner', () => {
+    expect(isChatPaneOpen(planner, initialFavoritesState, new Map([['p1', true]]))).toBe(true);
+  });
+
+  it('override false closes a default-favorited rogue', () => {
+    expect(isChatPaneOpen(rogue, initialFavoritesState, new Map([['r1', false]]))).toBe(false);
+  });
+
+  it('explicit star (favorites set) opens a planner with no override', () => {
+    expect(isChatPaneOpen(planner, favSet('p1'), new Map())).toBe(true);
+  });
+});
+
+describe('selectOpenChatPanes — open set = favorites default + overrides', () => {
+  const rows: RosterRow[] = [
+    rosterRow({ role: 'collaborator', agentId: 'collab', session: 'collab' }),
+    rosterRow({ role: 'planner', agentId: 'p1', session: 'murder_murder_planner_alpha' }),
+    rosterRow({
+      role: 'crow',
+      ticketId: null,
+      agentId: 'r1',
+      session: 'murder_murder_crow_claude_rogue_tony',
+    }),
+  ];
+  const roster = { ...initialRosterState, rows, status: 'ready' as const };
+
+  it('defaults: collaborator + rogue open, planner closed', () => {
+    const { panes } = selectOpenChatPanes(roster, initialFavoritesState, new Map());
+    expect(panes.map((p) => p.agentId)).toEqual(['collab', 'r1']);
+  });
+
+  it('override opens the planner, in spec order (collaborator → planner → rogue)', () => {
+    const { panes } = selectOpenChatPanes(roster, initialFavoritesState, new Map([['p1', true]]));
+    expect(panes.map((p) => p.agentId)).toEqual(['collab', 'p1', 'r1']);
+  });
+
+  it('override closes the default-favorited rogue', () => {
+    const { panes } = selectOpenChatPanes(roster, initialFavoritesState, new Map([['r1', false]]));
+    expect(panes.map((p) => p.agentId)).toEqual(['collab']);
   });
 });

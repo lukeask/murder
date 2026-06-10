@@ -318,3 +318,51 @@ describe('CrowsPanel — focus highlight and keymap', () => {
     dispose();
   });
 });
+
+// ── favorites + chat-pane toggle (items 9c/9d) ───────────────────────────────────────────────────
+
+const RETURN = '\r';
+
+describe('CrowsPanel — favorites glyph and chat-pane toggle', () => {
+  it('shows the ★ glyph before default-favorited crows (collaborator + rogue) and not others', async () => {
+    const { store, inputStores, dispose } = await setup();
+    const { lastFrame } = render(<Harness store={store} inputStores={inputStores} />);
+    await tick();
+    const frame = lastFrame() ?? '';
+    // Collaborator + rogue are favorited-by-default → starred name. Planner + ticket crow → no star.
+    expect(frame).toContain('★ collab');
+    expect(frame).toContain('★ rogue-one');
+    expect(frame).not.toContain('★ plan-alpha');
+    expect(frame).not.toContain('★ ticket-crow');
+    dispose();
+  });
+
+  it('enter toggles the highlighted crow chat pane on/off (override) and pins it active', async () => {
+    const { store, inputStores, dispose } = await setup();
+    const { stdin } = render(<Harness store={store} inputStores={inputStores} />);
+    await tick();
+    // Cursor starts on the first crow (collaborator 'collab-1'). Enter → close its default-open pane.
+    stdin.write(RETURN);
+    await tick();
+    expect(store.getState().conversations.paneOverrides.get('collab-1')).toBe(false);
+    // Enter again → re-open + pin active.
+    stdin.write(RETURN);
+    await tick();
+    expect(store.getState().conversations.paneOverrides.get('collab-1')).toBe(true);
+    expect(store.getState().conversations.activePaneAgentId).toBe('collab-1');
+    dispose();
+  });
+
+  it('arrow keys move the cursor (item 5)', async () => {
+    const { store, inputStores, dispose } = await setup();
+    const { lastFrame, stdin } = render(<Harness store={store} inputStores={inputStores} />);
+    await tick();
+    const markerOf = (f: string): number => f.indexOf('▌');
+    const start = markerOf(lastFrame() ?? '');
+    stdin.write('\x1b[B'); // down arrow
+    await tick();
+    const after = markerOf(lastFrame() ?? '');
+    expect(after).toBeGreaterThan(start);
+    dispose();
+  });
+});

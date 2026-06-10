@@ -250,8 +250,16 @@ export const TicketsPanel = memo(function TicketsPanel(): React.JSX.Element {
   const keymap: PanelKeymap<TicketsIntent> = useMemo(
     () => ({
       keymap: [
-        { chord: { input: 'j' }, intent: 'cursorDown', description: 'next ticket' },
-        { chord: { input: 'k' }, intent: 'cursorUp', description: 'prev ticket' },
+        {
+          chord: [{ input: 'j' }, { key: { downArrow: true } }],
+          intent: 'cursorDown',
+          description: 'next ticket',
+        },
+        {
+          chord: [{ input: 'k' }, { key: { upArrow: true } }],
+          intent: 'cursorUp',
+          description: 'prev ticket',
+        },
         { chord: { input: 'r' }, intent: 'refresh', description: 'refresh' },
         { chord: { key: { return: true } }, intent: 'open', description: 'open ticket' },
       ],

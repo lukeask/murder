@@ -82,6 +82,12 @@ export interface FavoritesChatPanesView {
   readonly panes: readonly AgentIdentity[];
 }
 
+/** The ordered list of crow identities whose chat panes are currently OPEN — the favorites default
+ * merged with the explicit `paneOverrides` (item 9b). The Stage tiles exactly these. */
+export interface OpenChatPanesView {
+  readonly panes: readonly AgentIdentity[];
+}
+
 // ---------------------------------------------------------------------------
 // Block→turn formatting (rule 2: presentation here, not in the store)
 // ---------------------------------------------------------------------------
@@ -309,6 +315,69 @@ export function selectFavoritesChatPanes(
   return { panes };
 }
 
+/**
+ * Whether one agent's chat pane is OPEN — the favorites default merged with the explicit override
+ * (item 9b). An explicit `paneOverrides` entry wins (the user said open/close); absent, it falls
+ * through to the favorites default (`isFavorited` ORs the explicit star set with the kind-default,
+ * so collaborator + rogues are open by default). The single home for the "is this pane open?"
+ * question, used by `selectOpenChatPanes` and `CrowsPanel`'s toggle.
+ */
+export function isChatPaneOpen(
+  identity: AgentIdentity,
+  favorites: FavoritesState,
+  overrides: ReadonlyMap<string, boolean>,
+): boolean {
+  const override = overrides.get(identity.agentId);
+  if (override !== undefined) {
+    return override;
+  }
+  return isFavorited(favorites, identity.agentId, isDefaultFavorited(identity));
+}
+
+/**
+ * Derive the ordered list of OPEN chat panes (item 9b) — the favorites default layered under the
+ * explicit `paneOverrides`. Replaces {@link selectFavoritesChatPanes} at the Stage call site: an
+ * agent's pane is open iff {@link isChatPaneOpen}, so a toggled-open planner appears and a
+ * toggled-closed rogue disappears. Ordering is the same spec order (collaborator → planner → rogue
+ * → ticket). `favorites`/`overrides` default to empty so a bare caller still renders the kind-default
+ * panes.
+ */
+export function selectOpenChatPanes(
+  rosterState: RosterState,
+  favorites: FavoritesState = NO_FAVORITES,
+  overrides: ReadonlyMap<string, boolean> = NO_OVERRIDES,
+): OpenChatPanesView {
+  const panes: AgentIdentity[] = [];
+  const byGroup: Record<string, AgentIdentity[]> = {
+    collaborator: [],
+    planner: [],
+    rogue: [],
+    ticket: [],
+  };
+
+  for (const row of rosterState.rows) {
+    const identity = deriveAgentIdentity(row);
+    if (identity !== null && isChatPaneOpen(identity, favorites, overrides)) {
+      const groupKey = identity.kind === 'planner' ? 'planner' : identity.kind;
+      (byGroup[groupKey] ?? []).push(identity);
+    }
+  }
+
+  for (const kind of FAVORITES_GROUP_ORDER) {
+    const group = byGroup[kind];
+    if (group) {
+      for (const identity of group) {
+        panes.push(identity);
+      }
+    }
+  }
+
+  return { panes };
+}
+
+/** An empty pane-override map — the defaults-only fallback. */
+const NO_OVERRIDES: ReadonlyMap<string, boolean> = new Map<string, boolean>();
+
 // ---------------------------------------------------------------------------
 // Component-facing hooks (rule 2: memoised on slice identity)
 // ---------------------------------------------------------------------------
@@ -339,6 +408,22 @@ export function useFavoritesChatPanes(
 }
 
 /**
+ * Memoised hook for the OPEN chat panes (item 9b). Re-runs when the roster, favorites, OR the
+ * `paneOverrides` map ref-changes (every override mutation ref-swaps the map). The Stage uses this
+ * in place of {@link useFavoritesChatPanes} so toggling a pane open/closed re-tiles the center.
+ */
+export function useOpenChatPanes(
+  rosterState: RosterState,
+  favorites: FavoritesState = NO_FAVORITES,
+  overrides: ReadonlyMap<string, boolean> = NO_OVERRIDES,
+): OpenChatPanesView {
+  return useMemo(
+    () => selectOpenChatPanes(rosterState, favorites, overrides),
+    [rosterState, favorites, overrides],
+  );
+}
+
+/**
  * Derive the `agentId` for the currently active chat pane.
  * Used by the ChatInput (or a future integrated send path) to route `ctrl+enter` to the right agent.
  *
@@ -357,7 +442,9 @@ export function selectActiveAgentId(
   if (conversationsState.activePaneAgentId !== null) {
     return conversationsState.activePaneAgentId;
   }
-  const { panes } = selectFavoritesChatPanes(rosterState, favorites);
+  // Default the target to the first OPEN pane (item 9b: open = favorites default + overrides) so the
+  // chat input names a target whose pane is actually on the Stage.
+  const { panes } = selectOpenChatPanes(rosterState, favorites, conversationsState.paneOverrides);
   return panes.length > 0 ? (panes[0]?.agentId ?? null) : null;
 }
 

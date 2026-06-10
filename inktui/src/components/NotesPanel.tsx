@@ -179,8 +179,16 @@ export const NotesPanel = memo(function NotesPanel(): React.JSX.Element {
   const keymap: PanelKeymap<NotesIntent> = useMemo(
     () => ({
       keymap: [
-        { chord: { input: 'j' }, intent: 'cursorDown', description: 'next note' },
-        { chord: { input: 'k' }, intent: 'cursorUp', description: 'prev note' },
+        {
+          chord: [{ input: 'j' }, { key: { downArrow: true } }],
+          intent: 'cursorDown',
+          description: 'next note',
+        },
+        {
+          chord: [{ input: 'k' }, { key: { upArrow: true } }],
+          intent: 'cursorUp',
+          description: 'prev note',
+        },
         { chord: { input: 'r' }, intent: 'refresh', description: 'refresh' },
         // The command-modified chord (alt+f by default) stars the highlighted note. The dispatcher
         // routes it here when a panel — not chat — is focused; the global layer never sees this

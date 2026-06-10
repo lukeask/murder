@@ -27,8 +27,16 @@
  */
 
 import { useMemo } from 'react';
+import type { FavoritesState } from '../store/favorites/favoritesSlice.js';
 import type { RosterRow, RosterState } from '../store/roster/rosterSlice.js';
-import { classifyCrowHealth, isStuck, type Health } from './crowHealthSelectors.js';
+import {
+  deriveAgentIdentity,
+  hasTicket,
+  isDefaultFavorited,
+  stripSessionPrefix,
+} from './agentIdentity.js';
+import { classifyCrowHealth, type Health, isStuck } from './crowHealthSelectors.js';
+import { isFavorited, stableSortStarredFirst } from './favoritesSelectors.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -48,6 +56,9 @@ export const CROW_GROUP_LABEL: Readonly<Record<CrowGroup, string>> = {
 /** Spec-defined group order (collaborator → planners → rogue → ticket). */
 const GROUP_ORDER: readonly CrowGroup[] = ['collaborator', 'planners', 'rogue', 'ticket'];
 
+/** An empty favorite set — the defaults-only fallback when no prefs slice is supplied. */
+const NO_FAVORITES: FavoritesState = { ids: new Set<string>(), status: 'idle', error: null };
+
 /** Column width budget for the model cell (matches rosterSelectors). */
 const MODEL_WIDTH = 18;
 
@@ -57,8 +68,12 @@ const MODEL_WIDTH = 18;
  */
 export interface CrowRowView {
   readonly agentId: string;
-  /** Display name: session name or agentId fallback. */
+  /** Display name: the session name with its `murder_<repo>_<role…>_` prefix stripped (item 11),
+   * or the agentId when no session is set. */
   readonly name: string;
+  /** True when this crow is favorited (explicit star OR kind-default) — drives the `★ ` glyph and
+   * the starred-first sort within the group (item 9d). */
+  readonly favorited: boolean;
   readonly status: string;
   /** Harness, or `'—'` when absent. Used in the maximized second line. */
   readonly harness: string;
@@ -148,14 +163,16 @@ function rowToGroup(row: RosterRow): CrowGroup | null {
     case 'planner':
       return 'planners';
     case 'crow':
-      return row.ticketId === null ? 'rogue' : 'ticket';
+      // `hasTicket` (not `=== null`) so a rogue's empty-string `ticket_id` still reads as no-ticket
+      // → rogue group (item 9a; see agentIdentity.hasTicket for the empty-vs-null backend story).
+      return hasTicket(row.ticketId) ? 'ticket' : 'rogue';
     default:
       // 'planning_handler' | 'crow_handler' | 'notetaker' | any unknown → exclude.
       return null;
   }
 }
 
-function toRowView(row: RosterRow, nowMs: number): CrowRowView {
+function toRowView(row: RosterRow, nowMs: number, favorited: boolean): CrowRowView {
   // Parse the ISO-8601 last_seen into milliseconds; null if absent or unparseable.
   //
   // Python `read_model.py` uses `datetime.utcnow()` — naive UTC datetimes — so `.isoformat()`
@@ -177,7 +194,8 @@ function toRowView(row: RosterRow, nowMs: number): CrowRowView {
 
   return {
     agentId: row.agentId,
-    name: row.session ?? row.agentId,
+    name: row.session !== null ? stripSessionPrefix(row.session) : row.agentId,
+    favorited,
     status: row.status,
     harness: row.harness ?? '—',
     model: modelBasename(row.model),
@@ -202,17 +220,31 @@ function byStatusThenId(a: RosterRow, b: RosterRow): number {
 
 /**
  * The pure view-model transform — the testable core. Groups rows by type in spec order,
- * sorts within each group by status then id. Omits empty groups from the output. Omits
- * internal/infrastructure roles (`notetaker`, `crow_handler`, etc.).
+ * sorts within each group by status then id, then re-partitions favorited crows to the top of
+ * their group (item 9d). Omits empty groups from the output. Omits internal/infrastructure roles
+ * (`notetaker`, `crow_handler`, etc.). `favorites` defaults to defaults-only (collaborator + rogue
+ * are kind-favorited) when no prefs slice is supplied.
  *
  * `nowMs` is the current epoch-ms, used to compute the stuck-heartbeat (YELLOW health). It
  * defaults to `Date.now()` so callers that don't care about stuck detection need no change.
  * Pass an explicit `nowMs` in tests for determinism (the pure core never calls `Date.now()`
  * internally). `useCrowsView` injects the real clock as the single live-data injection point.
  */
-export function selectCrowsView(state: RosterState, nowMs: number = Date.now()): CrowsView {
+export function selectCrowsView(
+  state: RosterState,
+  nowMs: number = Date.now(),
+  favorites: FavoritesState = NO_FAVORITES,
+): CrowsView {
   // Sort a copy (never mutate the readonly slice) before grouping so within-group order is stable.
   const sorted = [...state.rows].sort(byStatusThenId);
+
+  // Whether a roster row is favorited — ORs the explicit star set with the kind-derived default
+  // (collaborator + rogue), exactly like the chat-pane decision (item 9d). Derived from the row's
+  // identity so the default matches `isDefaultFavorited`; rows with no identity are never favorited.
+  const isRowFavorited = (row: RosterRow): boolean => {
+    const identity = deriveAgentIdentity(row);
+    return identity !== null && isFavorited(favorites, row.agentId, isDefaultFavorited(identity));
+  };
 
   // Accumulate rows per group.
   const grouped = new Map<CrowGroup, RosterRow[]>(GROUP_ORDER.map((g) => [g, []]));
@@ -223,15 +255,22 @@ export function selectCrowsView(state: RosterState, nowMs: number = Date.now()):
     }
   }
 
-  // Build sections in spec order; omit empty groups.
+  // Build sections in spec order; omit empty groups. Within each group, favorited crows sort to the
+  // top (stable re-partition over the status order — item 9d).
   const sections: CrowSection[] = [];
   for (const group of GROUP_ORDER) {
     const rows = grouped.get(group);
     if (rows !== undefined && rows.length > 0) {
+      const favById = new Map(rows.map((r) => [r.agentId, isRowFavorited(r)]));
+      const starredFirst = stableSortStarredFirst(
+        rows,
+        (r) => r.agentId,
+        (id) => favById.get(id) ?? false,
+      );
       sections.push({
         group,
         label: CROW_GROUP_LABEL[group],
-        rows: rows.map((r) => toRowView(r, nowMs)),
+        rows: starredFirst.map((r) => toRowView(r, nowMs, favById.get(r.agentId) ?? false)),
       });
     }
   }
@@ -257,6 +296,9 @@ export function selectCrowsView(state: RosterState, nowMs: number = Date.now()):
  *
  * Usage: `const view = useCrowsView(useAppStore((s) => s.roster));`
  */
-export function useCrowsView(state: RosterState): CrowsView {
-  return useMemo(() => selectCrowsView(state, Date.now()), [state]);
+export function useCrowsView(
+  state: RosterState,
+  favorites: FavoritesState = NO_FAVORITES,
+): CrowsView {
+  return useMemo(() => selectCrowsView(state, Date.now(), favorites), [state, favorites]);
 }

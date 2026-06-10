@@ -206,7 +206,7 @@ async def test_create_plan_no_message_scaffolds_and_emits(repo_root: Path) -> No
 
     result = await _orch(rt).create_plan("my-plan", "")
 
-    assert result == {"handled": True, "plan_name": "my-plan", "agent_id": None}
+    assert result == {"handled": True, "ok": True, "plan_name": "my-plan", "agent_id": None}
     assert plan_md(repo_root, "my-plan").exists()
     row = rt.db.execute("SELECT name FROM plans WHERE name = ?", ("my-plan",)).fetchone()
     assert row is not None
@@ -230,6 +230,7 @@ async def test_create_plan_with_message_seeds_planner(repo_root: Path) -> None:
 
     assert result == {
         "handled": True,
+        "ok": True,
         "plan_name": "seeded-plan",
         "agent_id": "planner-seeded-plan",
     }
@@ -258,7 +259,14 @@ class _StubOrch:
         self.calls.append(("schedule_ticket", ticket_id, duration))
         return {"handled": True, "ticket_id": ticket_id, "schedule_at": None}
 
-    async def create_plan(self, plan_name: str, message: str) -> dict[str, object]:
+    async def create_plan(
+        self,
+        plan_name: str,
+        message: str,
+        *,
+        body: str | None = None,
+        auto_name: bool = False,
+    ) -> dict[str, object]:
         self.calls.append(("create_plan", plan_name, message))
         return {"handled": True, "plan_name": plan_name, "agent_id": None}
 

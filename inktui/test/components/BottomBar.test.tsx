@@ -45,6 +45,29 @@ describe('packHints', () => {
     expect(lines.some((line) => line.length === 1 && line[0] === big)).toBe(true);
   });
 
+  it('pins a right-aligned hint to the last line, after the left flow (item 12 prep)', () => {
+    const right: BottomBarHint = { key: 'alt+/', description: 'help', align: 'right' };
+    const lines = packHints([h('a', 'bb'), h('c', 'dd'), right], 80);
+    // Everything fits on one line; the right hint trails the left ones.
+    expect(lines).toHaveLength(1);
+    expect(lines[0]?.at(-1)).toEqual(right);
+    // It is detectable as right-aligned so the renderer can space-between it.
+    expect(lines[0]?.some((hint) => hint.align === 'right')).toBe(true);
+  });
+
+  it('appends the right-aligned hint to the LAST wrapped line, not its own line', () => {
+    const right: BottomBarHint = { key: 'alt+/', description: 'help', align: 'right' };
+    // Force a wrap with the left hints, then the right hint joins the final line.
+    const lines = packHints([h('a', 'bb'), h('c', 'dd'), right], 9);
+    expect(lines).toHaveLength(2);
+    expect(lines.at(-1)).toContain(right);
+  });
+
+  it('a lone right-aligned hint gets its own line when there are no left hints', () => {
+    const right: BottomBarHint = { key: 'alt+/', description: 'help', align: 'right' };
+    expect(packHints([right], 80)).toEqual([[right]]);
+  });
+
   it('each produced line fits the width (except a lone oversized hint)', () => {
     const hints = [
       h('alt+1–0', 'panels'),

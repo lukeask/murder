@@ -12,16 +12,44 @@
  * `worktree_path` (use an existing worktree) XOR `worktree_branch` (create a new named worktree).
  * The wizard threads exactly those snake_case keys into the `crow.spawn_rogue` payload.
  *
- * ## INTEGRATION SWAP POINT (no Ink worktree-list RPC exists yet)
+ * ## Wire RPC (`worktree.list`)
  *
- * There is no `state.*_snapshot` for worktrees on the Ink bus. Until one lands, {@link fetchWorktreeOptions}
- * resolves to just `[main, +new]` (always-functional: the user can always run on main or spin up a
- * new branch). When a worktree-list RPC lands, swap the body of `fetchWorktreeOptions` to pull
- * existing entries and splice them between main and "+ new" via {@link buildWorktreeOptions} — the
- * wizard consumes the returned list verbatim, so no wizard change is needed.
+ * The backend exposes `worktree.list` (host.py) → `list_murder_worktrees_sync`, returning every
+ * `.murder/worktrees/*` entry plus the main checkout as `{ ok, entries: [{ path, branch, is_main }] }`.
+ * {@link createWorktreeOptionsActions} calls it, drops the main entry (the picker always synthesizes
+ * a `main checkout` head), and splices the rest between main and "+ new" via {@link buildWorktreeOptions}.
+ * On any rejection the fetch falls back to `[main, +new]` (always-functional: the user can still run
+ * on main or spin up a new branch).
  */
 
 import type { BusClient } from '../../bus/BusClient.js';
+
+/**
+ * The `worktree.list` read RPC and its reply shape, declared here via TypeScript declaration merging
+ * rather than by editing `src/bus/BusClient.ts` (frozen at C1/C2) — the same pattern as
+ * {@link ../roster/rosterActions.js}. The registry was designed to be extended a line per method as
+ * the service exposes it; declaring it from the consuming slice keeps the bus seam byte-identical
+ * while giving `bus.rpc('worktree.list', {})` full type safety.
+ */
+declare module '../../bus/BusClient.js' {
+  interface RpcMethods {
+    /** Enumerate the repo's worktrees (main + `.murder/worktrees/*`). */
+    'worktree.list': { params: Record<string, never>; result: WorktreeListReply };
+  }
+}
+
+/** The `worktree.list` reply, mirroring the service handler (host.py `_worktree_list`). */
+export interface WorktreeListReply {
+  readonly ok: boolean;
+  readonly entries: readonly WorktreeEntryDto[];
+}
+
+/** One worktree row as it crosses the wire (Python `list_murder_worktrees_sync`). */
+export interface WorktreeEntryDto {
+  readonly path: string;
+  readonly branch: string | null;
+  readonly is_main: boolean;
+}
 
 /** Sentinel key: run on the repo's main checkout (no worktree threading). */
 export const MAIN_WORKTREE_KEY = '__main__';
@@ -47,8 +75,8 @@ export interface ExistingWorktree {
 export function buildWorktreeOptions(existing: readonly ExistingWorktree[]): WorktreeOption[] {
   const options: WorktreeOption[] = [{ key: MAIN_WORKTREE_KEY, label: 'main checkout' }];
   for (const wt of existing) {
-    const branch = wt.branch ?? wt.path;
-    options.push({ key: wt.path, label: `${branch} (${wt.path})` });
+    const name = wt.branch ?? wt.path.split('/').filter(Boolean).pop() ?? wt.path;
+    options.push({ key: wt.path, label: `${name} (${wt.path})` });
   }
   options.push({ key: NEW_WORKTREE_KEY, label: '+ new worktree' });
   return options;
@@ -77,22 +105,34 @@ export function resolveWorktreePayload(
 /** The actions exposed to the spawn wizard for the worktree list (rule 3). */
 export interface WorktreeOptionsActions {
   /**
-   * Fetch the worktree picker options. Always resolves (never throws): `[main, +new]` today; when a
-   * worktree-list RPC lands, splice existing entries in via {@link buildWorktreeOptions}.
+   * Fetch the worktree picker options. Always resolves (never throws): pulls existing entries via
+   * `worktree.list` and splices them between main and "+ new" via {@link buildWorktreeOptions};
+   * a rejection falls back to `[main, +new]`.
    */
   fetch(): Promise<readonly WorktreeOption[]>;
 }
 
 /**
- * Build the worktree-options actions bound to one injected {@link BusClient}. The bus is unused
- * today (no worktree RPC); it is threaded for the integration swap so the signature is stable.
+ * Build the worktree-options actions bound to one injected {@link BusClient}. `fetch` calls
+ * `worktree.list`, drops the main entry (the picker synthesizes its own `main checkout` head) and
+ * splices the remaining (non-main) worktrees in via {@link buildWorktreeOptions}.
  */
-export function createWorktreeOptionsActions(_bus: BusClient): WorktreeOptionsActions {
+export function createWorktreeOptionsActions(bus: BusClient): WorktreeOptionsActions {
   return {
-    fetch(): Promise<readonly WorktreeOption[]> {
-      // INTEGRATION SWAP: when a worktree-list RPC exists, pull existing entries here and pass them
-      // to buildWorktreeOptions. Until then, main + new are always available (functional, no list).
-      return Promise.resolve(buildWorktreeOptions([]));
+    async fetch(): Promise<readonly WorktreeOption[]> {
+      try {
+        const reply = await bus.rpc('worktree.list', {});
+        const existing: ExistingWorktree[] = reply.entries
+          .filter((entry) => !entry.is_main)
+          .map((entry) => ({
+            path: entry.path,
+            ...(entry.branch !== null ? { branch: entry.branch } : {}),
+          }));
+        return buildWorktreeOptions(existing);
+      } catch {
+        // Never block the wizard: main + new are always available.
+        return buildWorktreeOptions([]);
+      }
     },
   };
 }
