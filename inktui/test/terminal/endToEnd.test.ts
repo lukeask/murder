@@ -60,6 +60,10 @@ describe('ctrl+1 raw bytes → shim → dispatch → focusPanel(plans)', () => {
       newPlan: vi.fn(),
       newTicket: vi.fn(),
       openSettings: vi.fn(),
+      keyHelp: vi.fn(),
+      cycleTargetPrev: vi.fn(),
+      cycleTargetNext: vi.fn(),
+      toggleTargetPane: vi.fn(),
     };
     const ctx: DispatchContext = {
       focusedId: CHAT_FOCUS,
@@ -109,6 +113,10 @@ describe('ctrl+j raw bytes → shim → dispatch → navigate(down)', () => {
       newPlan: vi.fn(),
       newTicket: vi.fn(),
       openSettings: vi.fn(),
+      keyHelp: vi.fn(),
+      cycleTargetPrev: vi.fn(),
+      cycleTargetNext: vi.fn(),
+      toggleTargetPane: vi.fn(),
     };
     const ctx: DispatchContext = {
       focusedId: CHAT_FOCUS,

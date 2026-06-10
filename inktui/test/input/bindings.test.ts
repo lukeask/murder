@@ -117,4 +117,24 @@ describe('ACTIONS table', () => {
   it('ACTION_IDS matches the ACTIONS keys', () => {
     expect(new Set(ACTION_IDS)).toEqual(new Set(Object.keys(ACTIONS)));
   });
+
+  it('global.keyHelp is a plain ? — modifier-independent and labelled as the bare key', () => {
+    const alt = resolveBindings('alt', false, {});
+    const ctrl = resolveBindings('ctrl', true, {});
+    // A plain binding ignores the modifier: ? under both alt and ctrl, no M-/C- prefix.
+    expect(alt.label('global.keyHelp')).toBe('?');
+    expect(ctrl.label('global.keyHelp')).toBe('?');
+    expect(alt.matches('global.keyHelp', '?', makeKey())).toBe(true);
+    expect(ctrl.matches('global.keyHelp', '?', makeKey())).toBe(true);
+  });
+
+  it('the item-9 super-chords are command actions (track the modifier)', () => {
+    const alt = resolveBindings('alt', false, {});
+    expect(alt.label('global.cycleTargetPrev')).toBe('M-h');
+    expect(alt.label('global.cycleTargetNext')).toBe('M-l');
+    expect(alt.label('global.toggleTargetPane')).toBe('M-w');
+    expect(alt.matches('global.toggleTargetPane', 'w', makeKey({ meta: true }))).toBe(true);
+    const ctrl = resolveBindings('ctrl', true, {});
+    expect(ctrl.label('global.toggleTargetPane')).toBe('C-w');
+  });
 });

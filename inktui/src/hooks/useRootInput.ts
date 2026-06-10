@@ -61,6 +61,17 @@ export interface DeferredGlobalHandlers {
    * modal. The chord is routed in the dispatcher ahead of the command-modifier gate, so this slot is
    * live; the shell supplies the real handler. */
   quickNote?: () => void;
+  /** `?` (the `global.keyHelp` action). Default: no-op until the shell supplies the help-overlay
+   * handler. The dispatcher already routes the chord (gated to non-chat focus). */
+  keyHelp?: () => void;
+  /** `alt+h`/`ctrl+h` (`global.cycleTargetPrev`). Default: no-op until the shell wires chat-target
+   * cycling. Fires only while chat is focused (item 9 super-chords). */
+  cycleTargetPrev?: () => void;
+  /** `alt+l`/`ctrl+l` (`global.cycleTargetNext`). Default: no-op (see cycleTargetPrev). */
+  cycleTargetNext?: () => void;
+  /** `alt+w`/`ctrl+w` (`global.toggleTargetPane`). Default: no-op until the shell wires the pane
+   * toggle. Fires only while chat is focused (item 9 super-chords). */
+  toggleTargetPane?: () => void;
   /**
    * The persistent chat-input handler (C11, part F). Supplied by the shell (it needs both the chat
    * buffer store and the send action). When absent, layer 2 declines as before — so older
@@ -208,6 +219,12 @@ export function useRootInput(
         openSettings: deferred.openSettings ?? (() => {}),
         // ctrl+n: open the quick-note capture. Default no-op until the shell wires it.
         quickNote: deferred.quickNote ?? (() => {}),
+        // Item 12 / item 9 super-chords: help overlay + chat-target cycling/toggle. Default to no-ops
+        // until the shell supplies handlers; the dispatcher already routes the chords.
+        keyHelp: deferred.keyHelp ?? (() => {}),
+        cycleTargetPrev: deferred.cycleTargetPrev ?? (() => {}),
+        cycleTargetNext: deferred.cycleTargetNext ?? (() => {}),
+        toggleTargetPane: deferred.toggleTargetPane ?? (() => {}),
       };
 
       const ctx: DispatchContext = {

@@ -30,6 +30,10 @@ interface SpyHandlers {
   readonly newTicket: ReturnType<typeof vi.fn<GlobalHandlers['newTicket']>>;
   readonly openSettings: ReturnType<typeof vi.fn<GlobalHandlers['openSettings']>>;
   readonly quickNote: ReturnType<typeof vi.fn<GlobalHandlers['quickNote']>>;
+  readonly keyHelp: ReturnType<typeof vi.fn<GlobalHandlers['keyHelp']>>;
+  readonly cycleTargetPrev: ReturnType<typeof vi.fn<GlobalHandlers['cycleTargetPrev']>>;
+  readonly cycleTargetNext: ReturnType<typeof vi.fn<GlobalHandlers['cycleTargetNext']>>;
+  readonly toggleTargetPane: ReturnType<typeof vi.fn<GlobalHandlers['toggleTargetPane']>>;
 }
 
 function handlers(): SpyHandlers {
@@ -43,6 +47,10 @@ function handlers(): SpyHandlers {
     newTicket: vi.fn<GlobalHandlers['newTicket']>(),
     openSettings: vi.fn<GlobalHandlers['openSettings']>(),
     quickNote: vi.fn<GlobalHandlers['quickNote']>(),
+    keyHelp: vi.fn<GlobalHandlers['keyHelp']>(),
+    cycleTargetPrev: vi.fn<GlobalHandlers['cycleTargetPrev']>(),
+    cycleTargetNext: vi.fn<GlobalHandlers['cycleTargetNext']>(),
+    toggleTargetPane: vi.fn<GlobalHandlers['toggleTargetPane']>(),
   };
 }
 
@@ -268,6 +276,54 @@ describe('layer 1 — global chords', () => {
     const out = dispatchKey('n', makeKey({ ctrl: true }), ctx(CHAT_FOCUS, h));
     expect(h.quickNote).toHaveBeenCalledOnce();
     expect(out).toEqual({ layer: 'global', handled: true });
+  });
+  it('plain ? fires keyHelp when a panel is focused (item 12, no modifier needed)', () => {
+    const h = handlers();
+    const out = dispatchKey('?', makeKey(), ctx('plans', h));
+    expect(h.keyHelp).toHaveBeenCalledOnce();
+    expect(out).toEqual({ layer: 'global', handled: true });
+  });
+
+  it('plain ? does NOT fire keyHelp while chat is focused (falls to the input as a literal)', () => {
+    const h = handlers();
+    const out = dispatchKey('?', makeKey(), ctx(CHAT_FOCUS, h));
+    expect(h.keyHelp).not.toHaveBeenCalled();
+    expect(out.layer).toBe('chat');
+  });
+});
+
+describe('layer 1 — chat-target super-chords (item 9)', () => {
+  it('alt+h / alt+l cycle the chat target while chat is focused', () => {
+    const h = handlers();
+    const prev = dispatchKey('h', makeKey({ meta: true }), ctx(CHAT_FOCUS, h));
+    const next = dispatchKey('l', makeKey({ meta: true }), ctx(CHAT_FOCUS, h));
+    expect(h.cycleTargetPrev).toHaveBeenCalledOnce();
+    expect(h.cycleTargetNext).toHaveBeenCalledOnce();
+    expect(prev).toEqual({ layer: 'global', handled: true });
+    expect(next).toEqual({ layer: 'global', handled: true });
+    // The geometric nav must NOT fire for h/l while chat is focused (the cycle chords preempt it).
+    expect(h.navigate).not.toHaveBeenCalled();
+  });
+
+  it('alt+w toggles the target pane while chat is focused', () => {
+    const h = handlers();
+    const out = dispatchKey('w', makeKey({ meta: true }), ctx(CHAT_FOCUS, h));
+    expect(h.toggleTargetPane).toHaveBeenCalledOnce();
+    expect(out).toEqual({ layer: 'global', handled: true });
+  });
+
+  it('alt+h is geometric nav (NOT target cycling) when a panel is focused', () => {
+    const h = handlers();
+    dispatchKey('h', makeKey({ meta: true }), ctx('plans', h));
+    expect(h.navigate).toHaveBeenCalledWith('left');
+    expect(h.cycleTargetPrev).not.toHaveBeenCalled();
+  });
+
+  it('alt+w is unbound (no-op) when a panel is focused', () => {
+    const h = handlers();
+    const out = dispatchKey('w', makeKey({ meta: true }), ctx('plans', h));
+    expect(h.toggleTargetPane).not.toHaveBeenCalled();
+    expect(out).toEqual({ layer: 'panel', handled: false });
   });
 });
 

@@ -14,6 +14,8 @@ import {
   isChatPaneOpen,
   selectActiveAgentId,
   selectConversationTurns,
+  selectCycledTarget,
+  selectCycleTargets,
   selectFavoritesChatPanes,
   selectOpenChatPanes,
 } from '../../src/selectors/conversationsSelectors.js';
@@ -343,5 +345,72 @@ describe('selectOpenChatPanes — open set = favorites default + overrides', () 
   it('override closes the default-favorited rogue', () => {
     const { panes } = selectOpenChatPanes(roster, initialFavoritesState, new Map([['r1', false]]));
     expect(panes.map((p) => p.agentId)).toEqual(['collab']);
+  });
+});
+
+// ── selectCycleTargets / selectCycledTarget — chat-target cycling (item 9 super-chords) ───────────
+
+describe('chat-target cycling (item 9)', () => {
+  const rows: RosterRow[] = [
+    rosterRow({ role: 'collaborator', agentId: 'collab', session: 'collab' }),
+    rosterRow({ role: 'planner', agentId: 'p1', session: 'murder_murder_planner_alpha' }),
+    rosterRow({
+      role: 'crow',
+      ticketId: null,
+      agentId: 'r1',
+      session: 'murder_murder_crow_claude_rogue_tony',
+    }),
+  ];
+  const roster = { ...initialRosterState, rows, status: 'ready' as const };
+
+  it('cycle order = open panes (Stage order) then favorited crows whose panes are closed', () => {
+    // p1 (planner) is favorited but its pane is overridden CLOSED → it lands in the closed-favorite
+    // tail after the open collab + rogue panes.
+    const conversations = {
+      ...initialConversationsState,
+      paneOverrides: new Map([['p1', false]]),
+    };
+    const targets = selectCycleTargets(conversations, roster, favSet('p1'));
+    expect(targets.map((t) => t.agentId)).toEqual(['collab', 'r1', 'p1']);
+  });
+
+  it('a favorite that is open (default) appears once in the open section, not the tail', () => {
+    // p1 favorited → open by default → in the open section between collab and r1; not duplicated.
+    const targets = selectCycleTargets(initialConversationsState, roster, favSet('p1'));
+    expect(targets.map((t) => t.agentId)).toEqual(['collab', 'p1', 'r1']);
+  });
+
+  it('next steps forward through the cycle from the current target', () => {
+    // Active = collab (first open pane). Next → r1.
+    const result = selectCycledTarget(initialConversationsState, roster, initialFavoritesState, 1);
+    expect(result).toEqual({ agentId: 'r1', needsOpen: false });
+  });
+
+  it('prev wraps around to the last entry', () => {
+    // Active = collab; prev wraps to the last cycle target (r1 — the only other open pane).
+    const result = selectCycledTarget(initialConversationsState, roster, initialFavoritesState, -1);
+    expect(result).toEqual({ agentId: 'r1', needsOpen: false });
+  });
+
+  it('landing on a closed-pane favorite flags needsOpen', () => {
+    // p1 favorited but overridden CLOSED → cycle = [collab, r1, p1]. From r1 (active), next = p1,
+    // whose pane is closed, so the caller must open it.
+    const conversations = {
+      ...initialConversationsState,
+      activePaneAgentId: 'r1',
+      paneOverrides: new Map([['p1', false]]),
+    };
+    const result = selectCycledTarget(conversations, roster, favSet('p1'), 1);
+    expect(result).toEqual({ agentId: 'p1', needsOpen: true });
+  });
+
+  it('returns null when there is nothing to cycle to', () => {
+    const result = selectCycledTarget(
+      initialConversationsState,
+      initialRosterState,
+      initialFavoritesState,
+      1,
+    );
+    expect(result).toBeNull();
   });
 });

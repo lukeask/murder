@@ -117,15 +117,23 @@ export function selectBottomBar(
 ): readonly BottomBarHint[] {
   const globals = globalHints(bindings);
   if (modeHints !== undefined) {
-    // A mode owns the bar: globals (still discoverable) then the mode's own hints; no panel keys.
+    // A mode owns the bar: globals (still discoverable) then the mode's own hints; no panel keys, and
+    // no help hint (a modal's keys are the only relevant ones).
     return [...globals, ...modeHints];
   }
+  // Item 12: the keybinding-help hint, ALWAYS pinned to the far right so a new user can find it. The
+  // label is derived from the resolved `global.keyHelp` binding (so a rebind tracks here too).
+  const helpHint: BottomBarHint = {
+    key: bindings.label('global.keyHelp'),
+    description: 'help',
+    align: 'right',
+  };
   if (focused === CHAT_FOCUS || focusedKeymap === undefined) {
-    return globals;
+    return [...globals, helpHint];
   }
   const panelHints = focusedKeymap.map((entry) => ({
     key: hintKey(entry),
     description: entry.description,
   }));
-  return [...globals, ...panelHints];
+  return [...globals, ...panelHints, helpHint];
 }

@@ -448,6 +448,71 @@ export function selectActiveAgentId(
   return panes.length > 0 ? (panes[0]?.agentId ?? null) : null;
 }
 
+/** The result of cycling the chat target (item 9 super-chords): the agent now targeted, and whether
+ * its pane needs opening (it was a favorited crow whose pane is currently closed). `null` when there
+ * is nothing to cycle to. */
+export interface CycleTargetResult {
+  readonly agentId: string;
+  /** True when the landed-on target's pane is currently closed, so the caller must open it. */
+  readonly needsOpen: boolean;
+}
+
+/**
+ * The ordered list of chat-target identities to cycle through (item 9 super-chords): the OPEN chat
+ * panes first (Stage order — {@link selectOpenChatPanes}), then the favorited crows whose panes are
+ * currently CLOSED (so cycling reaches a favorite that isn't pinned to the Stage yet, opening it when
+ * landed on). De-duplicated by `agentId` (a favorite that is already open appears once, in the open
+ * section). Pure over roster + favorites + the pane overrides.
+ */
+export function selectCycleTargets(
+  conversationsState: ConversationsState,
+  rosterState: RosterState,
+  favorites: FavoritesState = NO_FAVORITES,
+): readonly AgentIdentity[] {
+  const overrides = conversationsState.paneOverrides;
+  const open = selectOpenChatPanes(rosterState, favorites, overrides).panes;
+  const seen = new Set(open.map((p) => p.agentId));
+  // Favorited crows not already open, in the same spec group order.
+  const closedFavorites = selectFavoritesChatPanes(rosterState, favorites).panes.filter(
+    (p) => !seen.has(p.agentId),
+  );
+  return [...open, ...closedFavorites];
+}
+
+/**
+ * Compute the chat target after stepping `direction` (+1 next, −1 prev) from the current active
+ * target through {@link selectCycleTargets}. Wraps around the list. When the current target is not in
+ * the list (or there is no current target), starts from the first/last entry so the chord still has an
+ * effect. Returns `null` when there is nothing to cycle to (no open panes and no favorites).
+ *
+ * The returned `needsOpen` flag tells the caller to open the landed-on pane (a closed favorite):
+ * cycling *onto* a closed-pane target opens its pane (per item 9).
+ */
+export function selectCycledTarget(
+  conversationsState: ConversationsState,
+  rosterState: RosterState,
+  favorites: FavoritesState,
+  direction: 1 | -1,
+): CycleTargetResult | null {
+  const targets = selectCycleTargets(conversationsState, rosterState, favorites);
+  if (targets.length === 0) {
+    return null;
+  }
+  const current = selectActiveAgentId(conversationsState, rosterState, favorites);
+  const currentIndex = targets.findIndex((t) => t.agentId === current);
+  // Not found → step from before the start (next) / after the end (prev) so the first chord lands on
+  // the first/last entry.
+  const from = currentIndex === -1 ? (direction === 1 ? -1 : targets.length) : currentIndex;
+  const len = targets.length;
+  const nextIndex = (((from + direction) % len) + len) % len;
+  const landed = targets[nextIndex];
+  if (landed === undefined) {
+    return null;
+  }
+  const needsOpen = !isChatPaneOpen(landed, favorites, conversationsState.paneOverrides);
+  return { agentId: landed.agentId, needsOpen };
+}
+
 /**
  * The currently-targeted agent's identity (label + kind), for the chat input to display *who a typed
  * message will go to*. Resolves the active `agentId` via {@link selectActiveAgentId}, then maps it
