@@ -46,6 +46,7 @@ function noopHandlers(): GlobalHandlers {
     newTicket: vi.fn(),
     openSettings: vi.fn(),
     keyHelp: vi.fn(),
+    quickNote: vi.fn(),
     cycleTargetPrev: vi.fn(),
     cycleTargetNext: vi.fn(),
     toggleTargetPane: vi.fn(),

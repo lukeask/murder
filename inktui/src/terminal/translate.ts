@@ -10,8 +10,9 @@
  *  2. **A side-channel {@link Chord}** for combos legacy encoding *cannot* represent — ctrl+digit,
  *     ctrl+i/m/h/j (collide with Tab/Enter/Backspace/Enter), ctrl+space. These never go downstream as bytes
  *     (there are no bytes that mean them); instead the shim emits a `chord` event the dispatcher
- *     subscribes to. This is the whole reason for the kitty opt-in: these chords are the new command
- *     space.
+ *     subscribes to. ctrl+i/m carry the special-key NAME they collide with (Tab/Enter); ctrl+h/j carry
+ *     the plain *letter* (their dispatch target is the vim-nav letter, not the special key). This is the
+ *     whole reason for the kitty opt-in: these chords are the new command space.
  *
  * The split keeps the change behavior-neutral for everything legacy already handled (we synthesise
  * the same bytes the terminal would have sent without kitty) and additive for everything it could
@@ -33,8 +34,8 @@ const MOD_CTRL = 4;
  * it the same way it matches an Ink key event: by the base key (`input`) plus the modifier flags. The
  * shape mirrors the relevant subset of Ink's `Key` so the existing matching logic applies unchanged. */
 export interface Chord {
-  /** The base key as a printable char where one exists (`'1'`, ` ` for space, `'j'` for ctrl+j),
-   * else the special-key name (`'tab'`, `'return'`, `'backspace'` for the ctrl+i/m/h collisions). */
+  /** The base key as a printable char where one exists (`'1'`, ` ` for space, `'j'` for ctrl+j,
+   * `'h'` for ctrl+h), else the special-key name (`'tab'`, `'return'` for the ctrl+i/m collisions). */
   readonly input: string;
   readonly ctrl: boolean;
   readonly alt: boolean;
@@ -59,27 +60,31 @@ function decodeMods(mods: number | undefined): { ctrl: boolean; alt: boolean; sh
 
 /** Ctrl+letter codepoints whose clean legacy control byte already means a *special* key, so Ink's
  * parser reports that special key (NOT `{ctrl, input:<letter>}`): i (Tab, 0x09), m (Enter/return,
- * 0x0d), h (Backspace, 0x08). These map to the special-key NAME the dispatcher would otherwise see,
- * so a binding can target them explicitly via the side channel.
+ * 0x0d). These map to the special-key NAME the dispatcher would otherwise see, so a binding can
+ * target them explicitly via the side channel. (h also collides — Backspace, 0x08 — but its dispatch
+ * target is the *letter* h, so it lives in {@link CTRL_LETTER_PLAIN_CHORD} alongside j, not here.)
  *
  * AUDIT (vs `node_modules/ink`'s parse-keypress over bytes 0x01–0x1a): exactly four ctrl+letters do
- * NOT round-trip to `{ctrl:true, input:<letter>}` — h/i/m hit the special-key branches above, and j
- * (byte 0x0A `\n`) is reported by Ink as `name:'enter'` with `ctrl:false`. j is handled separately
- * (see {@link CTRL_LETTER_PLAIN_CHORD}) because its dispatch target is the *letter* j (vim-nav down),
- * not a special key — so its chord carries the printable char, not a special name. ctrl+c/d/z are
- * deliberately left as literal control bytes (exit/EOF/SIGTSTP passthrough) and are not audited here.
- * All other ctrl+letters (a,b,e,f,g,k,l,n,o,p,q,r,s,t,u,v,w,x,y) are clean and stay legacy bytes. */
+ * NOT round-trip to `{ctrl:true, input:<letter>}` — i/m hit the special-key branches above, h (byte
+ * 0x08 Backspace) and j (byte 0x0A `\n`, reported by Ink as `name:'enter'` with `ctrl:false`) are
+ * handled separately (see {@link CTRL_LETTER_PLAIN_CHORD}) because their dispatch targets are the
+ * *letters* h/j (vim-nav left/down — and ctrl+h is also `global.cycleTargetPrev`), not special keys,
+ * so their chords carry the printable char, not a special name. ctrl+c/d/z are deliberately left as
+ * literal control bytes (exit/EOF/SIGTSTP passthrough) and are not audited here. All other
+ * ctrl+letters (a,b,e,f,g,k,l,n,o,p,q,r,s,t,u,v,w,x,y) are clean and stay legacy bytes. */
 const CTRL_LETTER_COLLISIONS: Readonly<Record<number, string>> = {
   105: 'tab', // ctrl+i ≡ Tab (0x09)
   109: 'return', // ctrl+m ≡ Enter (0x0d)
-  104: 'backspace', // ctrl+h ≡ Backspace (0x08)
 };
 
 /** Ctrl+letter codepoints whose legacy byte Ink reports as a special key, but whose dispatch target
- * is the *letter itself* (so the chord must carry the printable char, not a special-key name). Only
- * j today: byte 0x0A (`\n`) → Ink `name:'enter', ctrl:false`, which would shadow vim-nav down. */
+ * is the *letter itself* (so the chord must carry the printable char, not a special-key name): j and
+ * h. byte 0x0A (`\n`) → Ink `name:'enter', ctrl:false`; byte 0x08 → Ink `name:'backspace'`. Routing
+ * these as plain-char chords restores ctrl+j (vim-nav down) and ctrl+h (vim-nav left +
+ * `global.cycleTargetPrev` when chat is focused) — which a special-key name would shadow. */
 const CTRL_LETTER_PLAIN_CHORD: ReadonlySet<number> = new Set([
   0x6a, // ctrl+j ≡ Enter byte (0x0a); routed as chord { input:'j', ctrl } for vim-nav down
+  0x68, // ctrl+h ≡ Backspace byte (0x08); routed as chord { input:'h', ctrl } for vim-nav left + cycleTargetPrev
 ]);
 
 /** Codepoint of the printable base key, when it is one (letters, digits, space, punctuation in the
@@ -101,10 +106,12 @@ function printableChar(code: number): string | null {
  *    untouched.
  *  - **Esc** (code 27, no mods) → `\x1b`.
  *  - **ctrl + digit / space** → side-channel chord (no legacy byte exists).
- *  - **ctrl + i/m/h** → side-channel chord with the collision's special-key name (the legacy byte is
- *    ambiguous with Tab/Enter/Backspace, so we must not emit it as a ctrl chord).
- *  - **ctrl + j** → side-channel chord with the plain char `j` (byte 0x0A is reported by Ink as
- *    `enter`, never `{ctrl, input:'j'}`; the chord restores ctrl+j for vim-nav down).
+ *  - **ctrl + i/m** → side-channel chord with the collision's special-key name (the legacy byte is
+ *    ambiguous with Tab/Enter, so we must not emit it as a ctrl chord).
+ *  - **ctrl + j/h** → side-channel chord with the plain char (`j`/`h`). Their legacy bytes are
+ *    reported by Ink as `enter` (0x0A) / `backspace` (0x08), never `{ctrl, input:<letter>}`; the
+ *    chord restores ctrl+j (vim-nav down) and ctrl+h (vim-nav left + cycleTargetPrev when chat
+ *    is focused).
  *  - **ctrl + other letter** → the clean legacy control byte (`ctrl+a` → 0x01, …).
  *  - **alt + key** → legacy ESC-prefixed form (`ESC <char>`); Ink reports `key.meta`, as today.
  *  - **plain printable** → its UTF-8 bytes.
@@ -133,12 +140,12 @@ export function translate(token: CsiKeyToken): Translation {
     if ((code >= 0x30 && code <= 0x39) || code === 0x20) {
       return chordOf(code === 0x20 ? ' ' : String.fromCodePoint(code), { ctrl, alt, shift });
     }
-    // ctrl + i/m/h collide with Tab/Enter/Backspace bytes → side channel with the special name.
+    // ctrl + i/m collide with Tab/Enter bytes → side channel with the special name.
     const collision = CTRL_LETTER_COLLISIONS[code];
     if (collision !== undefined) {
       return chordOf(collision, { ctrl, alt, shift });
     }
-    // ctrl + j collides with the Enter byte but dispatches as the letter → side channel as char 'j'.
+    // ctrl + j/h collide with Enter/Backspace bytes but dispatch as the letter → side channel as the char.
     if (CTRL_LETTER_PLAIN_CHORD.has(code)) {
       return chordOf(String.fromCodePoint(code), { ctrl, alt, shift });
     }

@@ -7,7 +7,7 @@ import contextlib
 from collections.abc import Awaitable, Callable
 
 from murder.bus.transport import Transport
-from murder.bus.transport_socket import TransportClosedError, TransportWriteQueueFullError
+from murder.bus.transport_socket import TransportClosedError
 
 _SENTINEL = object()
 
@@ -62,14 +62,10 @@ class TcpTransport(Transport):
         return self._connected
 
     async def send(self, data: bytes) -> None:
+        # Blocks on a full queue (backpressure) — see UdsTransport.send.
         if not self._connected:
             raise TransportClosedError("transport is not connected")
-        try:
-            self._write_queue.put_nowait(data)
-        except asyncio.QueueFull as exc:
-            raise TransportWriteQueueFullError(
-                f"write queue full ({self._WRITE_QUEUE_MAX} items)"
-            ) from exc
+        await self._write_queue.put(data)
 
     async def recv(self) -> bytes:
         if self._reader is None:
@@ -95,6 +91,12 @@ class TcpTransport(Transport):
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await self._drain_task
             self._drain_task = None
+        # Release senders blocked on a full queue (see UdsTransport.close).
+        while True:
+            try:
+                self._write_queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
         if self._writer is not None:
             self._writer.close()
             with contextlib.suppress(Exception):

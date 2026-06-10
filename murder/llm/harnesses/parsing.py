@@ -265,8 +265,57 @@ def parse_numbered_effort_choices(pane_text: str) -> list[HarnessEffortChoice]:
     return choices
 
 
+# Claude Code's `/model` radio dialog renders one numbered row per model the
+# harness presents. Each row is `<label>  <description>`; the slash-command id
+# (`/model <id>`) is derived from the *label*, not a coarse family match — so
+# distinct rows that share a family (e.g. plain Sonnet vs `Sonnet (1M context)`,
+# or Opus vs Opus Plan Mode) keep distinct ids instead of collapsing. The id set
+# is whatever the live menu presents; we never hardcode an allowlist of which
+# models are "real".
+#
+# Confirmed against Claude Code v2.1.172's live `/model` menu + `/model <id>`
+# round-trips (2026-06-10): Default→`default`, `Sonnet (1M context)`→`sonnet[1m]`,
+# Fable→`fable`, Opus→`opus`, Haiku→`haiku`. Opus Plan Mode (`opusplan`) is
+# handled for harness versions that present it though it wasn't in this capture.
+def _claude_code_slash_id(label: str) -> str | None:
+    """Derive the `/model <id>` slash arg from a Claude Code menu row label.
+
+    ``label`` is the leading row text (before the long description). Returns the
+    slash id Claude Code's `/model` command accepts, or ``None`` for rows that
+    aren't selectable models (e.g. the ``Custom model`` reflection row).
+    """
+    text = re.sub(r"\s+", " ", label).strip().rstrip("·-:").strip().lower()
+    if not text:
+        return None
+    # "Default (recommended)" → default.
+    if text.startswith("default"):
+        return "default"
+    # "Sonnet (1M context)" / "Sonnet 1M" → sonnet[1m]; plain Sonnet → sonnet.
+    if "sonnet" in text:
+        if re.search(r"\b1m\b|1m\s*context|\[1m\]", text):
+            return "sonnet[1m]"
+        return "sonnet"
+    # "Opus Plan Mode" / "Opus (plan)" → opusplan; plain Opus → opus.
+    if "opus" in text:
+        if "plan" in text:
+            return "opusplan"
+        return "opus"
+    if "haiku" in text:
+        return "haiku"
+    if "fable" in text:
+        return "fable"
+    return None
+
+
 def parse_claude_code_model_choices(pane_text: str) -> list[HarnessModelChoice]:
-    """Parse Claude Code's `/model` radio dialog into slash-command ids."""
+    """Parse every model row Claude Code's `/model` radio dialog presents.
+
+    Keeps one entry per numbered row, deriving the `/model <id>` slash arg from
+    the row label (so same-family variants stay distinct) and deduping by that
+    id. Robust to leading selection ornaments / trailing ``✔`` markers / box
+    chrome via the shared strip helpers. The current/selected row (marked by a
+    leading ``❯``/``>`` pointer or a ``✓``/``current`` marker) is flagged.
+    """
     rows: list[HarnessModelChoice] = []
     seen: set[str] = set()
     for raw_line in strip_ui_chrome(pane_text).splitlines():
@@ -275,14 +324,20 @@ def parse_claude_code_model_choices(pane_text: str) -> list[HarnessModelChoice]:
         if match is None:
             continue
         body = re.sub(r"\s+", " ", match.group("body")).strip()
-        lowered = body.lower()
-        model_id: str | None = None
-        if "opus" in lowered:
-            model_id = "opus"
-        elif "sonnet" in lowered:
-            model_id = "sonnet"
-        elif "haiku" in lowered:
-            model_id = "haiku"
+        # The row is `<label>  <description>`; split on the first run of 2+
+        # spaces in the *raw* body to isolate the label the id is derived from.
+        raw_body = match.group("body")
+        segments = re.split(r"\s{2,}", raw_body.strip(), maxsplit=1)
+        label_part = segments[0].strip()
+        description = segments[1].strip() if len(segments) > 1 else ""
+        # The "Custom model" row is Claude Code echoing a `--model <alias>`
+        # override, not one of the menu's offered models — skip it (the alias it
+        # reflects already maps onto a presented row, or onto the same id).
+        if description.lower().startswith("custom model"):
+            continue
+        # Strip the trailing selection marker (`✔`/`✓`) from the label text.
+        label_part = re.sub(r"[✓✔]", "", label_part).strip()
+        model_id = _claude_code_slash_id(label_part)
         if model_id is None or model_id in seen:
             continue
         seen.add(model_id)
@@ -291,7 +346,7 @@ def parse_claude_code_model_choices(pane_text: str) -> list[HarnessModelChoice]:
                 index=int(match.group("index")),
                 model_id=model_id,
                 label=body,
-                current=bool(_CURRENT_MARKER_RE.search(body) or raw.lstrip().startswith(">")),
+                current=bool(_CURRENT_MARKER_RE.search(body) or raw.lstrip().startswith((">", "❯"))),
             )
         )
     return rows

@@ -61,6 +61,7 @@ describe('ctrl+1 raw bytes → shim → dispatch → focusPanel(plans)', () => {
       newTicket: vi.fn(),
       openSettings: vi.fn(),
       keyHelp: vi.fn(),
+      quickNote: vi.fn(),
       cycleTargetPrev: vi.fn(),
       cycleTargetNext: vi.fn(),
       toggleTargetPane: vi.fn(),
@@ -114,6 +115,7 @@ describe('ctrl+j raw bytes → shim → dispatch → navigate(down)', () => {
       newTicket: vi.fn(),
       openSettings: vi.fn(),
       keyHelp: vi.fn(),
+      quickNote: vi.fn(),
       cycleTargetPrev: vi.fn(),
       cycleTargetNext: vi.fn(),
       toggleTargetPane: vi.fn(),
@@ -129,5 +131,87 @@ describe('ctrl+j raw bytes → shim → dispatch → navigate(down)', () => {
 
     expect(outcome).toEqual({ layer: 'global', handled: true });
     expect(navigate).toHaveBeenCalledWith('down');
+  });
+});
+
+describe('ctrl+h raw bytes → shim → dispatch (travel-left + cycleTargetPrev)', () => {
+  /** Drive raw kitty bytes for ctrl+h through the shim and lift the resulting chord to an Ink
+   * (input, key), exactly as useRootInput does. Returns the lifted event for the dispatcher. */
+  function liftCtrlH(): { input: string; key: ReturnType<typeof chordToKey>['key'] } {
+    const real = new FakeStdin();
+    const shim = new StdinShim(real);
+    shim.setBypass(false);
+    const chords: Chord[] = [];
+    shim.on('chord', (c: Chord) => chords.push(c));
+
+    // Raw kitty bytes for ctrl+h: CSI 104 ; 5 u (code 104='h', mods 5=ctrl). Ink would otherwise
+    // report byte 0x08 as `backspace` — the chord restores the plain letter h.
+    real.push('\x1b[104;5u');
+    expect(chords).toHaveLength(1);
+    const chord = chords[0];
+    if (chord === undefined) throw new Error('no chord');
+    expect(chord.input).toBe('h');
+
+    const { input, key } = chordToKey(chord);
+    expect(input).toBe('h');
+    expect(key.ctrl).toBe(true);
+    expect(key.meta).toBe(false);
+    expect(key.backspace).toBe(false);
+    return { input, key };
+  }
+
+  function makeHandlers(over: Partial<GlobalHandlers> = {}): GlobalHandlers {
+    return {
+      focusPanel: vi.fn(),
+      navigate: vi.fn(),
+      focusChat: vi.fn(),
+      spawn: vi.fn(),
+      toggleTmux: vi.fn(),
+      newPlan: vi.fn(),
+      newTicket: vi.fn(),
+      openSettings: vi.fn(),
+      keyHelp: vi.fn(),
+      quickNote: vi.fn(),
+      cycleTargetPrev: vi.fn(),
+      cycleTargetNext: vi.fn(),
+      toggleTargetPane: vi.fn(),
+      ...over,
+    };
+  }
+
+  it('drives navigate(left) when a panel is focused (vim-nav left)', () => {
+    const { input, key } = liftCtrlH();
+    const navigate = vi.fn<GlobalHandlers['navigate']>();
+    const handlers = makeHandlers({ navigate });
+    const ctx: DispatchContext = {
+      focusedId: 'plans',
+      panelKeymaps: {},
+      handlers,
+      activeMode: null,
+      bindings: resolveBindings('ctrl', true, {}),
+    };
+    const outcome = dispatchKey(input, key, ctx);
+
+    expect(outcome).toEqual({ layer: 'global', handled: true });
+    expect(navigate).toHaveBeenCalledWith('left');
+    expect(handlers.cycleTargetPrev).not.toHaveBeenCalled();
+  });
+
+  it('drives cycleTargetPrev when chat is focused (super-chord)', () => {
+    const { input, key } = liftCtrlH();
+    const cycleTargetPrev = vi.fn<GlobalHandlers['cycleTargetPrev']>();
+    const handlers = makeHandlers({ cycleTargetPrev });
+    const ctx: DispatchContext = {
+      focusedId: CHAT_FOCUS,
+      panelKeymaps: {},
+      handlers,
+      activeMode: null,
+      bindings: resolveBindings('ctrl', true, {}),
+    };
+    const outcome = dispatchKey(input, key, ctx);
+
+    expect(outcome).toEqual({ layer: 'global', handled: true });
+    expect(cycleTargetPrev).toHaveBeenCalledTimes(1);
+    expect(handlers.navigate).not.toHaveBeenCalled();
   });
 });

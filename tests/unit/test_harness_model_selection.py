@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from murder.llm.harnesses.claude_code import ClaudeCodeAdapter
+from murder.llm.harnesses.claude_code import ClaudeCodeAdapter, _claude_model_id
 from murder.llm.harnesses.codex import CodexAdapter
 from murder.llm.harnesses.cursor import CursorAdapter
 from murder.llm.harnesses.cursor import _cursor_model_id_from_label
@@ -51,16 +51,39 @@ def _pane(name: str) -> str:
 
 CODEX_MODEL_LIST = _pane("codex_model_list.txt")
 PI_MODEL_PICKER = _pane("pi_model_picker.txt")
+# Real Claude Code v2.1.172 `/model` radio dialog (captured live 2026-06-10 via
+# tmux). Six numbered rows: five presented models plus a "Custom model" echo of
+# the `--model sonnet` override (row 6), which is not a selectable menu model.
 CC_MODEL_PICKER = """
-Select Model
-Switch between Claude models. Your pick becomes the default for new sessions.
+  Select model
+  Switch between Claude models. Your pick becomes the default for new sessions. For
+  other/previous model names, specify with --model.
 
-  1. Default (recommended)  Sonnet 4.6 · Best for everyday tasks
-  2. Sonnet (1M context)   Sonnet 4.6 with 1M context
-> 3. Opus ✓                Opus 4.8 · Most capable for complex work
-  4. Haiku                 Haiku 4.5 · Fastest for quick answers
+    1. Default (recommended)  Sonnet 4.6 · Efficient for routine tasks
+    2. Sonnet (1M context)    Sonnet 4.6 with 1M context · Draws from usage credits ·
+                              $3/$15 per Mtok
+    3. Fable                  Fable 5 · Most capable for your hardest and longest-running
+                              tasks · Uses your limits ~2× faster than Opus
+    4. Opus                   Opus 4.8 · Best for everyday, complex tasks · ~2× usage vs
+                              Sonnet
+    5. Haiku                  Haiku 4.5 · Fastest for quick answers
+  ❯ 6. sonnet ✔               Custom model
 
-● High effort (default) ←/→ to adjust
+  ◐ Medium effort ←/→ to adjust
+
+  Use /fast to turn on Fast mode (Opus 4.8).
+
+  Enter to set as default · s to use this session only · Esc to cancel
+"""
+# Synthetic Opus Plan Mode variant — Claude Code versions that present an
+# "Opus Plan Mode" row must derive the `opusplan` slash id distinct from `opus`.
+CC_MODEL_PICKER_WITH_PLAN = """
+  Select model
+
+    1. Default (recommended)  Sonnet 4.6 · Efficient for routine tasks
+    2. Opus                   Opus 4.8 · Best for everyday, complex tasks
+  ❯ 3. Opus Plan Mode ✔       Opus 4.8 · Plans with Opus, executes with Sonnet
+    4. Haiku                  Haiku 4.5 · Fastest for quick answers
 """
 CODEX_REASONING_PICKER = """
 Select Reasoning Level for modelnamefoo
@@ -212,16 +235,47 @@ def test_codex_reasoning_choices_parse_extra_high():
     assert by_effort["xhigh"].index == 4
 
 
-def test_cc_model_picker_extracts_runtime_model_ids():
+def test_cc_model_picker_extracts_all_presented_models():
+    # Every presented row must survive with its correct `/model <id>` slash id;
+    # the "Custom model" echo row (6) is dropped (not a selectable menu model).
     choices = parse_claude_code_model_choices(CC_MODEL_PICKER)
     ids = [choice.model_id for choice in choices]
-    assert ids == ["sonnet", "opus", "haiku"]
+    assert ids == ["default", "sonnet[1m]", "fable", "opus", "haiku"]
 
 
-def test_cc_model_picker_marks_current_model():
+def test_cc_model_picker_keeps_sonnet_variants_distinct():
+    # `Default` and `Sonnet (1M context)` are the same family but distinct ids;
+    # the coarse-family dedupe of the old parser collapsed them.
     choices = parse_claude_code_model_choices(CC_MODEL_PICKER)
-    current = [choice.model_id for choice in choices if choice.current]
-    assert current == ["opus"]
+    ids = [choice.model_id for choice in choices]
+    assert "default" in ids
+    assert "sonnet[1m]" in ids
+    assert len(ids) == len(set(ids))
+
+
+def test_cc_model_picker_preserves_row_indices_and_labels():
+    by_id = {c.model_id: c for c in parse_claude_code_model_choices(CC_MODEL_PICKER)}
+    assert by_id["default"].index == 1
+    assert by_id["sonnet[1m]"].index == 2
+    assert by_id["fable"].index == 3
+    assert by_id["opus"].index == 4
+    assert by_id["haiku"].index == 5
+    assert by_id["fable"].label.startswith("Fable")
+
+
+def test_cc_model_picker_drops_custom_model_echo_row():
+    choices = parse_claude_code_model_choices(CC_MODEL_PICKER)
+    # The custom `--model sonnet` echo (row 6, "Custom model") must not appear as
+    # a plain `sonnet` entry alongside the menu models.
+    assert all(c.label.lower() != "sonnet" for c in choices)
+
+
+def test_cc_model_picker_opus_plan_distinct_from_opus():
+    choices = parse_claude_code_model_choices(CC_MODEL_PICKER_WITH_PLAN)
+    ids = [c.model_id for c in choices]
+    assert ids == ["default", "opus", "opusplan", "haiku"]
+    current = [c.model_id for c in choices if c.current]
+    assert current == ["opusplan"]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -231,6 +285,36 @@ def test_cc_model_picker_marks_current_model():
 
 def test_cc_model_list_command_is_slash_model():
     assert ClaudeCodeAdapter.model_list_command == "/model"
+
+
+def test_cc_available_startup_models_cover_full_real_set():
+    ids = [m[0] for m in ClaudeCodeAdapter.available_startup_models]
+    assert ids == ["default", "sonnet[1m]", "fable", "opus", "haiku"]
+
+
+def test_cc_claude_model_id_passes_through_live_slash_ids():
+    # Ids produced by live discovery round-trip back to the exact slash arg.
+    assert _claude_model_id("default") == "default"
+    assert _claude_model_id("sonnet[1m]") == "sonnet[1m]"
+    assert _claude_model_id("opusplan") == "opusplan"
+    assert _claude_model_id("fable") == "fable"
+    assert _claude_model_id("opus") == "opus"
+    assert _claude_model_id("haiku") == "haiku"
+
+
+def test_cc_claude_model_id_derives_from_human_labels():
+    assert _claude_model_id("Sonnet (1M context)") == "sonnet[1m]"
+    assert _claude_model_id("Opus Plan Mode") == "opusplan"
+    assert _claude_model_id("Default (recommended)") == "default"
+    assert _claude_model_id("Opus 4.8") == "opus"
+    assert _claude_model_id("Haiku 4.5") == "haiku"
+    assert _claude_model_id("Fable 5") == "fable"
+
+
+def test_cc_claude_model_id_rejects_unknown_and_empty():
+    assert _claude_model_id(None) is None
+    assert _claude_model_id("") is None
+    assert _claude_model_id("not-a-model") is None
 
 
 def test_cursor_model_list_command_is_slash_model():

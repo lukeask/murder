@@ -151,7 +151,7 @@ async def test_tmux_frame_subscription_sends_frames_while_task_runs() -> None:
     frames_captured = 0
     call_count = 0
 
-    async def _capture() -> str:
+    async def _capture(agent_id: str | None = None) -> str:
         nonlocal call_count
         call_count += 1
         return f"\x1b[1mframe-{call_count}\x1b[0m"
@@ -223,7 +223,7 @@ async def test_tmux_frame_subscription_stops_on_task_cancel() -> None:
     """Once the task is cancelled the capture function is no longer called."""
     call_log: list[int] = []
 
-    async def _capture() -> str:
+    async def _capture(agent_id: str | None = None) -> str:
         call_log.append(len(call_log))
         return "frame"
 
@@ -329,7 +329,7 @@ async def test_non_tmux_frame_subscription_goes_through_broker() -> None:
     broker = _FakeBroker()
     capture_called = False
 
-    async def _capture() -> str:
+    async def _capture(agent_id: str | None = None) -> str:
         nonlocal capture_called
         capture_called = True
         return "frame"
@@ -375,6 +375,114 @@ async def test_non_tmux_frame_subscription_goes_through_broker() -> None:
         await task
 
     assert not capture_called, "capture function must not be called for non-tmux.frame subscriptions"
+
+
+# ---------------------------------------------------------------------------
+# Agent scoping — the filter's agent_id selects which pane is captured
+# ---------------------------------------------------------------------------
+
+
+def _tmux_frame_sub_msg(correlation_id: str, agent_id: str | None = None) -> Any:
+    from murder.bus.protocol import WIRE_MESSAGE_ADAPTER, SubMessage
+
+    filt: dict[str, Any] = {"type": "tmux.frame"}
+    if agent_id is not None:
+        filt["agent_id"] = agent_id
+    msg = WIRE_MESSAGE_ADAPTER.validate_python(
+        {
+            "op": "sub",
+            "schema_version": PROTOCOL_VERSION,
+            "correlation_id": correlation_id,
+            "args": {"filter": filt, "since_id": None, "presence_retain": False},
+        }
+    )
+    assert isinstance(msg, SubMessage)
+    return msg
+
+
+@pytest.mark.asyncio
+async def test_tmux_frame_subscription_passes_filter_agent_id_to_capture() -> None:
+    """An agent-scoped subscription captures that agent's pane and stamps the events."""
+    seen_agent_ids: list[str | None] = []
+
+    async def _capture(agent_id: str | None = None) -> str:
+        seen_agent_ids.append(agent_id)
+        return "frame"
+
+    server = SocketBusServer(
+        _FakeBroker(),  # type: ignore[arg-type]
+        run_id="run-test",
+        socket_path=Path("/tmp/nonexistent-test.sock"),
+        tmux_frame_capture=_capture,
+        tmux_frame_interval_s=0,
+    )
+    transport = _RecordingTransport()
+    from murder.bus.transport_socket import _ClientSession
+
+    session = _ClientSession(
+        client_id="test-client",
+        kind=ClientKind.TUI,
+        transport=transport,  # type: ignore[arg-type]
+    )
+
+    task = asyncio.create_task(
+        server._run_subscription(session, _tmux_frame_sub_msg("cid-agent", "claude-rogue-x"))
+    )
+    for _ in range(5):
+        await asyncio.sleep(0)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert seen_agent_ids, "capture never called"
+    assert all(a == "claude-rogue-x" for a in seen_agent_ids)
+    frame_events = [
+        m["event"] for m in _parse_messages(transport) if m.get("op") == "pub"
+    ]
+    assert frame_events and all(e["agent_id"] == "claude-rogue-x" for e in frame_events)
+
+
+@pytest.mark.asyncio
+async def test_tmux_frame_subscription_surfaces_capture_failure_as_frame() -> None:
+    """A failing capture emits a diagnostic frame instead of silence.
+
+    The raw view is the backup when parsing breaks; an eternal
+    '[waiting for tmux frame…]' would hide exactly the failure it exists to show.
+    """
+
+    async def _capture(agent_id: str | None = None) -> str:
+        raise RuntimeError("session not found: murder_crow_x")
+
+    server = SocketBusServer(
+        _FakeBroker(),  # type: ignore[arg-type]
+        run_id="run-test",
+        socket_path=Path("/tmp/nonexistent-test.sock"),
+        tmux_frame_capture=_capture,
+        tmux_frame_interval_s=0,
+    )
+    transport = _RecordingTransport()
+    from murder.bus.transport_socket import _ClientSession
+
+    session = _ClientSession(
+        client_id="test-client",
+        kind=ClientKind.TUI,
+        transport=transport,  # type: ignore[arg-type]
+    )
+
+    task = asyncio.create_task(
+        server._run_subscription(session, _tmux_frame_sub_msg("cid-fail"))
+    )
+    for _ in range(5):
+        await asyncio.sleep(0)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    frames = [
+        m["event"]["frame"] for m in _parse_messages(transport) if m.get("op") == "pub"
+    ]
+    assert frames, "no frame emitted on capture failure"
+    assert all("tmux capture failed" in f for f in frames)
 
 
 # ---------------------------------------------------------------------------

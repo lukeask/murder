@@ -65,11 +65,14 @@ export function deleteLastChar(value: string): string {
 }
 
 /**
- * A multi-line text display with an optional trailing cursor — the multi-line sibling of
+ * A multi-line text display with an optional inline cursor — the multi-line sibling of
  * {@link TextInput}, for modal body/draft boxes (the new-plan form, the note-capture surface). Renders
  * the whole value as a single Ink `<Text>` (Ink honours embedded `\n` as line breaks), so it needs no
  * per-line array keys and wraps long lines naturally. When `value` is empty a dim `placeholder` shows;
- * `focused` appends a `█` cursor after the text (on the placeholder's first glyph when empty).
+ * `focused` renders a `█` cursor as a *nested* `<Text>` child of the value text — so the glyph stays in
+ * the same text flow and lands immediately after the last character across both explicit `\n` breaks and
+ * soft-wraps (a sibling `<Text>` would be laid out top-right of the multi-row block by flex). When the
+ * value is empty the cursor sits on the placeholder's first glyph instead.
  */
 export function MultiLineText({
   value,
@@ -89,14 +92,14 @@ export function MultiLineText({
     );
   }
   return (
-    <Box>
-      <Text color={color ?? theme.text}>{value}</Text>
-      {focused && (
+    <Text color={color ?? theme.text}>
+      {value}
+      {focused ? (
         <Text color={theme.text} bold>
           {'█'}
         </Text>
-      )}
-    </Box>
+      ) : null}
+    </Text>
   );
 }
 
@@ -111,6 +114,12 @@ export function MultiLineText({
  * soon as the user types, `value` is non-empty: the phantom text vanishes and the cursor returns to
  * its normal trailing-block position after the typed text. The placeholder never becomes part of
  * `value`, so it cannot leak into what gets sent.
+ *
+ * ## Non-empty = cursor nested inside the value Text (inline, not a sibling)
+ * For non-empty values the `█` cursor is a *nested* `<Text>` child of the value `<Text>`, not a sibling
+ * laid out beside it. This keeps the glyph in the same text flow so it lands immediately after the last
+ * character even when the value soft-wraps across the box width onto multiple rows (a sibling `<Text>`
+ * in the default flex-row `<Box>` ends up top-right of the multi-row block instead).
  *
  * C13 (spawn wizard) copies this component alongside the modal pattern.
  */
@@ -141,13 +150,13 @@ export function TextInput({
     );
   }
   return (
-    <Box>
-      <Text color={valueColor}>{value}</Text>
-      {focused && (
+    <Text color={valueColor}>
+      {value}
+      {focused ? (
         <Text color={theme.text} bold>
           {'█'}
         </Text>
-      )}
-    </Box>
+      ) : null}
+    </Text>
   );
 }

@@ -20,6 +20,7 @@ from murder.llm.harnesses.base import (
 )
 from murder.llm.harnesses.models import HarnessModelState, HarnessUsageStatus
 from murder.llm.harnesses.parsing import (
+    _claude_code_slash_id,
     extract_last_message_heuristic,
     normalize_effort,
     parse_claude_code_model_choices,
@@ -57,19 +58,52 @@ _TRUST_PROMPT_RE = re.compile(
 )
 
 
+# Slash ids Claude Code's `/model <id>` accepts directly (confirmed against the
+# live menu round-trip on v2.1.172): pass them through unchanged so a model id
+# chosen from live discovery (e.g. `sonnet[1m]`, `opusplan`, `default`, `fable`)
+# round-trips back to the exact slash arg.
+_CC_DIRECT_SLASH_IDS = frozenset(
+    {"default", "opus", "opusplan", "sonnet", "sonnet[1m]", "haiku", "fable"}
+)
+
+
 def _claude_model_id(model: str | None) -> str | None:
+    """Map a chosen/stored model back to the `/model <id>` slash arg.
+
+    Accepts both a slash id already produced by live discovery (passed through
+    unchanged, so `sonnet[1m]`/`opusplan`/`default`/`fable` round-trip) and a
+    human label/banner string, which is run through the same label→id derivation
+    the menu parser uses.
+    """
     if model is None:
         return None
     lowered = model.strip().lower()
     if not lowered:
         return None
-    if "opus" in lowered:
-        return "opus"
-    if "sonnet" in lowered:
-        return "sonnet"
-    if "haiku" in lowered:
-        return "haiku"
-    return None
+    if lowered in _CC_DIRECT_SLASH_IDS:
+        return lowered
+    return _claude_code_slash_id(lowered)
+
+
+# Map each slash id onto the model family the post-switch banner reports, so
+# `set_model`'s verification can match a desired `sonnet[1m]`/`default` against
+# the "Sonnet …" banner Claude Code paints (it doesn't echo the slash id).
+_CC_SLASH_ID_FAMILY = {
+    "default": "sonnet",
+    "sonnet": "sonnet",
+    "sonnet[1m]": "sonnet",
+    "opus": "opus",
+    "opusplan": "opus",
+    "haiku": "haiku",
+    "fable": "fable",
+}
+
+
+def _cc_model_family(slash_id: str | None) -> str | None:
+    """Coarse model family for a slash id (used only for set_model verification)."""
+    if slash_id is None:
+        return None
+    return _CC_SLASH_ID_FAMILY.get(slash_id, slash_id)
 
 
 def _shortest_effort_keys(current: str, desired: str) -> list[str]:
@@ -110,9 +144,14 @@ class ClaudeCodeAdapter(HarnessAdapter):
     # CC 2.x: "Esc to interrupt" appears in status bar ONLY while actively generating.
     _CC2_GENERATING_RE = re.compile(r"Esc to interrupt", re.IGNORECASE)
     crow_system_prompt: ClassVar[str] = "see prompts/crow_claude_code.md"
+    # Last-good fallback shown before live `/model` discovery resolves. Mirrors
+    # the full set Claude Code's menu presents (v2.1.172 capture, 2026-06-10):
+    # id is the `/model <id>` slash arg, label is the menu row label.
     available_startup_models: ClassVar[list[tuple[str, str]]] = [
+        ("default", "Default (recommended)"),
+        ("sonnet[1m]", "Sonnet (1M context)"),
+        ("fable", "Fable"),
         ("opus", "Opus"),
-        ("sonnet", "Sonnet"),
         ("haiku", "Haiku"),
     ]
 
@@ -181,7 +220,10 @@ class ClaudeCodeAdapter(HarnessAdapter):
 
         pane = await tmux.capture_pane(session, lines=200)
         state = self.parse_active_model_state(pane)
-        if state is None or state.model != desired_model:
+        # The post-switch banner reports a model family ("Sonnet 4.6 …"), not the
+        # slash id, so verify family-equivalence: `sonnet[1m]`/`default` both read
+        # back as the sonnet family, `opusplan` as opus.
+        if state is None or _cc_model_family(state.model) != _cc_model_family(desired_model):
             return False
         # Only reject on effort mismatch when effort is readable; if the pane
         # doesn't show effort text (older CC, or freshly-switched), trust the

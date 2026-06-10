@@ -170,6 +170,45 @@ describe('TmuxMode — alt+y fullscreen tmux mode', () => {
     expect(bus.subscriberCount).toBe(0); // closed on exit — confirmed no leak
   });
 
+  it('agent-scoped mode subscribes with agent_id: only that agent’s frames render', async () => {
+    const { bus, stores } = setup();
+    const { lastFrame } = render(<Harness stores={stores} bus={bus} />);
+    await tick();
+
+    stores.modes.getState().enter(tmuxMode(stores.modes, 'claude-rogue-test'));
+    await tick();
+    expect(bus.subscriberCount).toBe(1);
+
+    // A frame for a DIFFERENT agent must not render (filter agent_id mismatch).
+    bus.emit({
+      type: 'tmux.frame',
+      frame: 'OTHER_AGENT_FRAME',
+      id: 'ev1',
+      ts: '2026-01-01T00:00:00Z',
+      run_id: 'r1',
+      agent_id: 'codex-rogue-other',
+    });
+    await tick();
+    expect(lastFrame()).toContain('waiting');
+    expect(lastFrame()).not.toContain('OTHER_AGENT_FRAME');
+
+    // A frame for the scoped agent renders.
+    bus.emit({
+      type: 'tmux.frame',
+      frame: 'ROGUE_FRAME',
+      id: 'ev2',
+      ts: '2026-01-01T00:00:01Z',
+      run_id: 'r1',
+      agent_id: 'claude-rogue-test',
+    });
+    await tick();
+    expect(lastFrame()).toContain('ROGUE_FRAME');
+
+    stores.modes.getState().exit(TMUX_MODE_ID);
+    await tick();
+    expect(bus.subscriberCount).toBe(0);
+  });
+
   it('captures exclusively while active: non-tmux key is not routed to panel keymap (mode swallows)', async () => {
     // The mode uses passThrough:true, so keys NOT in the mode's keymap fall through to global chords
     // only. But the panel keymap is NOT a global chord, so a panel intent should NOT fire.
@@ -210,6 +249,7 @@ describe('alt+y dispatch — pure unit test (no rendering)', () => {
         newTicket: () => {},
         openSettings: () => {},
         keyHelp: () => {},
+        quickNote: () => {},
         cycleTargetPrev: () => {},
         cycleTargetNext: () => {},
         toggleTargetPane: () => {},

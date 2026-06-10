@@ -127,6 +127,13 @@ export function createSpawnActions(bus: BusClient, store?: StoreApi<AppStore>): 
         const conversations = store.getState().actions.conversations;
         conversations.setChatPaneOpen(agentId, true);
         conversations.setActivePaneAgentId(agentId);
+
+        // Proactively re-pull the roster so the freshly spawned crow appears in the Crows panel
+        // immediately, rather than waiting for the next `state.snapshot`/`entity:'agent'` event to
+        // arrive and trigger the snapshot-driven invalidation (store.ts). Belt-and-braces: this is
+        // the same action that invalidation calls, so it's correct whether or not the backend also
+        // emits the snapshot promptly. `void` it to match the file's fire-and-forget side-effect style.
+        void store.getState().actions.roster.refresh();
       }
 
       const handled = result['handled'] === true || agentId !== undefined;

@@ -21,7 +21,8 @@ export function matchesFilter(event: BusEvent, filter: EventFilter | undefined):
     fieldMatches(filter.type, event.type) &&
     fieldMatches(filter.entity, getField(event, 'entity')) &&
     fieldMatches(filter.target_worker, getField(event, 'target_worker')) &&
-    fieldMatches(filter.kind, getField(event, 'kind'))
+    fieldMatches(filter.kind, getField(event, 'kind')) &&
+    fieldMatches(filter.agent_id, getField(event, 'agent_id'))
   );
 }
 

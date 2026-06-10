@@ -58,19 +58,28 @@ class ServiceHost:
     _rpc_handlers: dict[str, RpcHandler] = field(default_factory=dict, repr=False)
     _service_session_name: str | None = field(default=None, repr=False)
 
-    async def _capture_tmux_frame(self) -> str:
-        """Return the current ANSI frame for the service's tmux session.
+    async def _capture_tmux_frame(self, agent_id: str | None = None) -> str:
+        """Return the current ANSI frame for *agent_id*'s tmux session.
 
-        Called by the ``tmux.frame`` stream on every capture tick.  Uses the
-        deterministic session name so it works as soon as the host is
-        constructed (no dependency on ``_service_session_name`` being set).
+        Called by the ``tmux.frame`` stream on every capture tick. The raw
+        view exists as the backup when transcript parsing breaks, so it must
+        show the pane of the crow the user is looking at — each agent runs in
+        its own tmux session, found via the registry. Without an agent (or for
+        an unknown id) fall back to the deterministic project session name,
+        which works as soon as the host is constructed.
         """
         from murder.runtime.terminal import tmux
 
-        return await tmux.capture_pane(
-            project_session_name(self.repo_root),
-            escapes=True,
-        )
+        session = project_session_name(self.repo_root)
+        if agent_id is not None:
+            if self.runtime is None:
+                raise RuntimeError("service not started")
+            agent = self.runtime.agents.get_agent(agent_id)
+            agent_session = getattr(agent, "session", None)
+            if agent_session is None:
+                raise ValueError(f"no live agent session for {agent_id!r}")
+            session = agent_session
+        return await tmux.capture_pane(session, escapes=True)
 
     def register_rpc_handler(self, method: str, handler: RpcHandler) -> None:
         self._rpc_handlers[method] = handler

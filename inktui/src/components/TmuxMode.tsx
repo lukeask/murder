@@ -34,8 +34,10 @@
  * declare Escape as a first-class dismiss chord so dismissal via Escape is also handled cleanly.
  *
  * ## Pane-scoping
- * The current {@link EventFilter} has no `pane_id` field.  The service delivers a single stream
- * for its configured focused pane; per-pane multiplexing is deferred (C14 follow-up).
+ * The subscription carries the focused chat pane's agent id in the filter's `agent_id` field, so
+ * the service streams that agent's own tmux session — the raw backup view for exactly the crow the
+ * user is looking at. Without a focused chat pane the filter is unscoped and the service falls back
+ * to its project session.
  */
 
 import { Box, Text } from 'ink';
@@ -62,7 +64,7 @@ type TmuxIntent = 'dismiss';
  * Escape is declared as an explicit dismiss chord for keyboard-friendly dismissal without needing
  * the toggle.
  */
-export function tmuxMode(modes: ModeStoreApi): Mode<TmuxIntent> {
+export function tmuxMode(modes: ModeStoreApi, agentId?: string): Mode<TmuxIntent> {
   return {
     id: TMUX_MODE_ID,
     presentation: 'fullscreen',
@@ -82,7 +84,7 @@ export function tmuxMode(modes: ModeStoreApi): Mode<TmuxIntent> {
           return intent satisfies never;
       }
     },
-    render: () => <TmuxFrame />,
+    render: () => <TmuxFrame agentId={agentId} />,
   };
 }
 
@@ -102,13 +104,14 @@ const WAITING_TEXT = '[waiting for tmux frame…]';
  * doc for the reasoning. The component is still a pure renderer of its local `frame` state (the bus
  * subscription is a side-effect that updates that state, not a store query).
  */
-function TmuxFrame(): JSX.Element {
+function TmuxFrame({ agentId }: { agentId?: string | undefined }): JSX.Element {
   const bus = useBusClient();
   const [frame, setFrame] = useState<string>('');
 
   useEffect(() => {
-    // Open the tmux frame subscription filtered to the frame event type. The subscription is opened
-    // here (on mount) and closed in the cleanup (on unmount). This is the only place it is managed.
+    // Open the tmux frame subscription filtered to the frame event type, scoped to the focused
+    // agent's own tmux session when one is known (raw view = the parsing backup for that crow).
+    // The subscription is opened here (on mount) and closed in the cleanup (on unmount).
     const unsubscribe = bus.subscribe(
       (event) => {
         if (event.type !== 'tmux.frame') {
@@ -117,12 +120,12 @@ function TmuxFrame(): JSX.Element {
         const tmuxEvent: TmuxFrameEvent = event;
         setFrame(tmuxEvent.frame);
       },
-      { type: 'tmux.frame' },
+      agentId === undefined ? { type: 'tmux.frame' } : { type: 'tmux.frame', agent_id: agentId },
     );
     // Cleanup: close the subscription when the component unmounts (i.e. when the mode exits,
     // whether via ctrl+y, Escape, or any other path). This is the leak-free guarantee.
     return unsubscribe;
-  }, [bus]);
+  }, [bus, agentId]);
 
   return (
     <Box flexDirection="column" width="100%" height="100%">

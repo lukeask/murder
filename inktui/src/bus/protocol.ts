@@ -216,8 +216,8 @@ export interface ConversationBlockEvent extends BaseEvent {
  * `tmux capture-pane -e`). The consumer replaces its display on every event (no incremental
  * patching). Ink `<Text>` renders ANSI escape sequences natively.
  *
- * Pane-scoping note: the current {@link EventFilter} has no `pane_id` field. The service delivers
- * a single stream for the configured focused pane; per-pane multiplexing is deferred (C14).
+ * Pane-scoping: subscribe with `agent_id` in the {@link EventFilter} to stream that agent's own
+ * tmux session; without it the service falls back to its project session.
  */
 export interface TmuxFrameEvent extends BaseEvent {
   type: 'tmux.frame';
@@ -257,6 +257,7 @@ export interface EventFilter {
   entity?: Entity;
   target_worker?: string;
   kind?: string;
+  agent_id?: string;
 }
 
 // === Envelope bodies =========================================================

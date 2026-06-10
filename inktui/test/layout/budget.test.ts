@@ -16,6 +16,7 @@ import {
   computeBodyLayout,
   FILENAME_CAP,
   MIN_PANEL_WIDTH,
+  MIN_PORTRAIT_RAIL_HEIGHT,
   type RailContent,
   STAGE_MIN_FRACTION,
   USAGE_PANE_CHROME,
@@ -361,10 +362,11 @@ describe('computeBodyLayout — PORTRAIT rows-axis budget (R4 / L4b)', () => {
     expect(layout.rightRailCells).toBe(4);
   });
 
-  it('clamps both strips to the rows budget when their heights exceed it (no row-min floor)', () => {
-    // 30 rows: floor=18, gaps=2 → railBudget=10; naturals 20+20=40 > 10 → split proportionally, each
-    // ≤ its natural height, total ≤ budget. Crucially NO 12-row MIN_PANEL_WIDTH floor (that is a WIDTH
-    // minimum) — a strip can drop below 12 rows so the Stage floor + the other strip both survive.
+  it('clamps both strips to the rows budget when their heights exceed it (well below the WIDTH-min)', () => {
+    // 30 rows: floor=18, gaps=2 → railBudget=10; naturals 20+20=40 > 10 → compressed, total ≤ budget.
+    // A strip can drop below the 12-cell `MIN_PANEL_WIDTH` (that is a WIDTH minimum, not a height one),
+    // so the Stage floor + the other strip both survive. The height floor that DOES apply is the much
+    // smaller `MIN_PORTRAIT_RAIL_HEIGHT`.
     const layout = computeBodyLayout(portrait(30, railH(20), railH(20)));
     expect(layout.leftRailCells + layout.rightRailCells).toBeLessThanOrEqual(10);
     expect(layout.leftRailCells).toBeLessThan(MIN_PANEL_WIDTH); // below the width-min — allowed
@@ -372,13 +374,26 @@ describe('computeBodyLayout — PORTRAIT rows-axis budget (R4 / L4b)', () => {
     expect(layout.stageCells).toBeGreaterThanOrEqual(Math.ceil(0.6 * 30)); // Stage floor still wins
   });
 
-  it('a present strip never collapses the OTHER to 0 (no width-min stealing the budget)', () => {
-    // The landscape bug this avoids: a 12-row width-min on one strip would force the other to 0 at a
-    // small height. Here both strips keep a share proportional to their natural height.
+  it('floors each present strip at MIN_PORTRAIT_RAIL_HEIGHT when the budget seats both', () => {
+    // 40 rows: floor=24, gaps=2 → railBudget=14; naturals 20+20 exceed it, but both legible-height
+    // floors (6+6=12) fit → every strip keeps ≥ the floor, so the chrome-heavy Usage strip still shows
+    // a couple of gauges (the "can't see the graphs in vertical mode" fix) and the Stage floor holds.
+    const layout = computeBodyLayout(portrait(40, railH(20), railH(20)));
+    expect(layout.leftRailCells).toBeGreaterThanOrEqual(MIN_PORTRAIT_RAIL_HEIGHT);
+    expect(layout.rightRailCells).toBeGreaterThanOrEqual(MIN_PORTRAIT_RAIL_HEIGHT);
+    expect(layout.stageCells).toBeGreaterThanOrEqual(Math.ceil(0.6 * 40));
+  });
+
+  it('protects the RIGHT dashboard strip first when both floors cannot fit', () => {
+    // 30 rows: railBudget=10 < the two 6-row floors (12). The Stage floor is the hard invariant, so the
+    // lower-priority LEFT strip yields toward 0 first and the RIGHT (usage/crows dashboard) keeps its
+    // legible floor — the deliberate priority flip from the old "taller strip keeps more" split. Both
+    // still stay > 0, so neither collapses entirely.
     const layout = computeBodyLayout(portrait(30, railH(20), railH(10)));
     expect(layout.leftRailCells).toBeGreaterThan(0);
     expect(layout.rightRailCells).toBeGreaterThan(0);
-    expect(layout.leftRailCells).toBeGreaterThan(layout.rightRailCells); // taller strip keeps more
+    expect(layout.rightRailCells).toBeGreaterThanOrEqual(layout.leftRailCells); // dashboard protected
+    expect(layout.stageCells).toBeGreaterThanOrEqual(Math.ceil(0.6 * 30));
   });
 
   it('a collapsed strip contributes nothing and no gap in portrait', () => {

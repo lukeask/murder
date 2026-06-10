@@ -113,15 +113,18 @@ describe('unrepresentable command combos → side-channel chord', () => {
       chord: { input: 'return', ctrl: true, alt: false, shift: false },
     });
   });
-  it('ctrl+h → chord "backspace"', () => {
+  it('ctrl+h → chord { input:"h" } (byte 0x08 is `backspace` to Ink, not ctrl+h)', () => {
+    // Like ctrl+j, ctrl+h carries its PLAIN char `h` (not the `backspace` special name): its dispatch
+    // targets are the letter h (vim-nav left + global.cycleTargetPrev), and Ink would otherwise report
+    // byte 0x08 as `backspace`.
     const t = translate(key(0x68, mods({ ctrl: true })));
     expect(t).toEqual({
       kind: 'chord',
-      chord: { input: 'backspace', ctrl: true, alt: false, shift: false },
+      chord: { input: 'h', ctrl: true, alt: false, shift: false },
     });
   });
   it('ctrl+j → chord { input:"j" } (byte 0x0a is `enter` to Ink, not ctrl+j)', () => {
-    // Unlike i/m/h, ctrl+j carries its PLAIN char `j` (not a special-key name): its dispatch target
+    // Unlike i/m, ctrl+j carries its PLAIN char `j` (not a special-key name): its dispatch target
     // is the letter (vim-nav down), and Ink would otherwise report byte 0x0a as `enter`/`return`.
     const t = translate(key(0x6a, mods({ ctrl: true })));
     expect(t).toEqual({

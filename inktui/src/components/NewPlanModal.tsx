@@ -30,6 +30,7 @@
 import type { Key } from 'ink';
 import { Box, Text } from 'ink';
 import type { JSX } from 'react';
+import { useTerminalSize } from '../hooks/useTerminalSize.js';
 import type { Mode, ModeHint, ModeStoreApi } from '../input/modeStore.js';
 import type { CreatePlanInput, DialogActions } from '../store/dialogs/dialogActions.js';
 import { toastStore } from '../store/toast/toastStore.js';
@@ -335,6 +336,13 @@ function NewPlanForm({
   readonly error: string | null;
 }): JSX.Element {
   const theme = useTheme();
+  // The form fills ~90% of the available screen real estate so a long plan body has room to wrap and
+  // read (item 3): width is 90% of the live terminal columns (floored so it stays usable on a narrow
+  // pane), and `height="90%"` fills 90% of the Overlay's body slot — the modal floats centered with a
+  // ~5% margin all round. The body textbox `flexGrow={1}`s to claim the tall middle, pushing the
+  // naming/name controls to the bottom.
+  const { columns } = useTerminalSize();
+  const width = Math.max(48, Math.floor(columns * 0.9));
   return (
     <Box
       flexDirection="column"
@@ -342,14 +350,15 @@ function NewPlanForm({
       borderColor={theme.heading}
       paddingX={2}
       paddingY={1}
-      width={64}
+      width={width}
+      height="90%"
     >
       <Text bold color={theme.heading}>
         New Plan
       </Text>
 
-      {/* Body textbox (multi-line). */}
-      <Box marginTop={1} flexDirection="column">
+      {/* Body textbox (multi-line) — grows to fill the tall modal so the draft has room to wrap. */}
+      <Box marginTop={1} flexDirection="column" flexGrow={1}>
         <Text color={focus === 'body' ? theme.text : theme.muted}>Plan body:</Text>
         <MultiLineText
           value={body}

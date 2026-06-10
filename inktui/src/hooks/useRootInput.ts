@@ -208,7 +208,18 @@ export function useRootInput(
             if (selectActiveMode(modes)?.id === TMUX_MODE_ID) {
               modesState.exit(TMUX_MODE_ID);
             } else {
-              modesState.enter(tmuxMode(modes));
+              // Scope the frame stream to the focused chat pane's crow: the raw view is the
+              // parsing backup for the conversation under the cursor. A non-chat focus (roster,
+              // a panel) yields no agent — the mode then streams the service's own session.
+              const effective = resolveFocus(
+                focusState.intendedId,
+                panels.getState().visible,
+                mountedStagePanesOf(focusState.rects),
+              );
+              const agentId = effective.startsWith('stage:chat:')
+                ? effective.slice('stage:chat:'.length)
+                : undefined;
+              modesState.enter(tmuxMode(modes, agentId));
             }
           }),
         // C12: newPlan / newTicket default to no-ops until the caller supplies real handlers.

@@ -556,6 +556,13 @@ class Orchestrator:
             # Rogues bypass CrowAgent.start(), so kick off transcript projection
             # here: a fresh session ⇒ fresh accumulator + producer loop.
             agent.start_conversation()
+            # Broadcast the freshly spawned agent so the Ink roster / Crows panel
+            # picks it up immediately. Without this, rogue spawn emitted no `agent`
+            # snapshot (unlike the ticket/plan/note handlers and the crow heartbeat
+            # at crow_handler.py), so the new rogue only surfaced on the next
+            # unrelated `agent` invalidation. The frontend also refreshes proactively
+            # on spawn; this keeps the backend consistent with the event-driven design.
+            await self.rt.publish_snapshot(Entity.AGENT, agent_id)
         except BaseException:
             await self.rt.reap(agent_id)
             raise

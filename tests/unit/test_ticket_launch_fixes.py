@@ -75,6 +75,7 @@ def test_kickoff_reaps_stale_running_agents_when_ticket_still_ready(
         reap=_reap,
         get_crow=lambda _tid: None,
         sync_agent=MagicMock(),
+        publish_snapshot=AsyncMock(),
     )
     orch = Orchestrator(rt)
     monkeypatch.setattr(orch, "spawn_crow", AsyncMock(return_value="crow-sess"))
@@ -203,6 +204,7 @@ def test_codex_rogue_keeps_startup_session_on_startup_failure(
         get_agent=lambda agent_id: agents.get(agent_id),
         register_agent=lambda agent: agents.setdefault(agent.id, agent),
         sync_agent=MagicMock(),
+        publish_snapshot=AsyncMock(),
         reap=_reap,
     )
     orch = Orchestrator(rt)

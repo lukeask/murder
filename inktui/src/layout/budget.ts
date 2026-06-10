@@ -26,9 +26,11 @@
  *
  * ## Two axes, two rail policies (L4b)
  * Landscape budgets WIDTH with the `MIN_PANEL_WIDTH` compression above; portrait budgets the ROWS
- * axis with NO width-minimum (it is a width concept) — a rail STRIP is simply as tall as its tallest
- * panel needs, capped to its share of the rows budget. So the two orientations have distinct
- * branches; only the Stage's ≥60% floor + the gap accounting are shared. See `computeBodyLayout`.
+ * axis with its own height floor ({@link MIN_PORTRAIT_RAIL_HEIGHT}, not the width minimum) — a rail
+ * STRIP is as tall as its tallest panel needs, capped to its share of the rows budget but never
+ * compressed below the smallest height its content stays readable at. So the two orientations have
+ * distinct branches; only the Stage's ≥60% floor + the gap accounting are shared. See
+ * `computeBodyLayout`.
  */
 
 /**
@@ -44,6 +46,17 @@ export const MIN_PANEL_WIDTH = 12;
  * legible right rail without a `…` clip (L4d). Smallest-legible-form absolute (R7).
  */
 export const MIN_USAGE_WIDTH = 8;
+
+/**
+ * The smallest legible HEIGHT (rows) a portrait rail strip may compress to before its content stops
+ * being readable — the height-axis analogue of {@link MIN_PANEL_WIDTH} (R7). Derived from the most
+ * chrome-heavy right-rail panel, Usage: 2 Pane border lines + 1 key line + 1 provider-header line + 2
+ * gauge rows = 6, the smallest strip that still shows a couple of usage gauges (the "can't see the
+ * graphs in vertical mode" bug — without a height floor the proportional split starved the right strip
+ * to 2–5 rows, all of it Pane chrome). Best-effort like `MIN_PANEL_WIDTH`: the Stage's ≥60% floor still
+ * wins, and the lower-priority LEFT strip yields first when even the minimums don't fit.
+ */
+export const MIN_PORTRAIT_RAIL_HEIGHT = 6;
 
 /** The Stage's hard floor as a fraction of the axis total (R3 landscape / R4 portrait). */
 export const STAGE_MIN_FRACTION = 0.6;
@@ -319,14 +332,15 @@ function compressLandscapeRails(
 }
 
 /**
- * PORTRAIT rail-strip heights (R4, L4b). Each present strip takes `min(naturalHeight, its share of
- * the rail budget)`, where the budget is what remains after the Stage's ≥60%-rows floor and the gaps.
- * There is NO `MIN_PANEL_WIDTH` (it is a WIDTH minimum and would impose a spurious row floor) — a
- * strip is simply as tall as its tallest panel, capped to its budget share. Slack case (both fit):
- * each gets its natural height. Tight case: the budget is split proportional to natural height (so a
- * taller strip keeps more rows), each still capped to its natural height. The Stage absorbs the rest,
- * so it always keeps ≥60% of rows. Pure — non-negative integers, no NaN even when budget or naturals
- * are 0.
+ * PORTRAIT rail-strip heights (R4, L4b). Slack case (both fit): each strip gets its natural height and
+ * the Stage takes the (>60%) rest. Tight case: honour {@link MIN_PORTRAIT_RAIL_HEIGHT} on every present
+ * strip first — the smallest height its content stays readable at — then split the remaining slack
+ * proportional to natural height, each still capped to its natural height. Without that floor a pure
+ * proportional split starved the shorter strip toward 0 (a chrome-only Usage strip with no visible
+ * gauges — the "can't see the graphs in vertical mode" bug). When even the minimums overflow the
+ * budget the Stage floor wins (it is the hard invariant): the lower-priority LEFT strip yields toward 0
+ * first so the right strip (the compact usage/crows dashboard) stays legible. Pure — non-negative
+ * integers, no NaN even when budget or naturals are 0.
  */
 function computePortraitRails(
   leftNatural: number,
@@ -338,9 +352,24 @@ function computePortraitRails(
   if (desired <= railBudget) {
     return { leftCells: leftNatural, rightCells: rightNatural };
   }
-  // Tight case: split the budget proportional to natural height, capped to each strip's natural
-  // height. `desired > 0` here (the slack branch handles `desired === 0`), so the divide is safe.
-  const leftCells = Math.min(leftNatural, Math.floor((railBudget * leftNatural) / desired));
-  const rightCells = Math.min(rightNatural, Math.floor((railBudget * rightNatural) / desired));
-  return { leftCells, rightCells };
+  // Compression. First reserve each present strip's smallest legible height (never above its natural
+  // height — a 1-row panel needs only 1 row). If both minimums fit, distribute the slack above them
+  // proportional to natural height; if they overflow the budget, protect the Stage by yielding the
+  // LEFT strip first (the right dashboard stays readable), then the right.
+  const leftMin = leftNatural > 0 ? Math.min(MIN_PORTRAIT_RAIL_HEIGHT, leftNatural) : 0;
+  const rightMin = rightNatural > 0 ? Math.min(MIN_PORTRAIT_RAIL_HEIGHT, rightNatural) : 0;
+  if (leftMin + rightMin > railBudget) {
+    const rightCells = Math.min(rightMin, railBudget);
+    const leftCells = Math.max(0, Math.min(leftMin, railBudget - rightCells));
+    return { leftCells, rightCells };
+  }
+  // The minimums fit; share the SLACK above them proportional to each strip's natural height, never
+  // growing a strip past its natural height. `desired > 0` here (the slack branch handles 0).
+  const slack = railBudget - (leftMin + rightMin);
+  const leftSlack = Math.floor((slack * leftNatural) / desired);
+  const rightSlack = Math.floor((slack * rightNatural) / desired);
+  return {
+    leftCells: Math.min(leftNatural, leftMin + leftSlack),
+    rightCells: Math.min(rightNatural, rightMin + rightSlack),
+  };
 }

@@ -33,9 +33,10 @@ from murder.bus.protocol import (
     WakeMessage,
 )
 
-# Callable that returns the current ANSI frame for the focused pane.
-# Injected into SocketBusServer so tests can supply a controllable fake.
-TmuxFrameCapture = Callable[[], Awaitable[str]]
+# Callable that returns the current ANSI frame for an agent's pane (or the
+# service's own session when ``agent_id`` is None). Injected into
+# SocketBusServer so tests can supply a controllable fake.
+TmuxFrameCapture = Callable[[str | None], Awaitable[str]]
 
 from murder.state.storage.service_registry import socket_path_for_repo
 
@@ -235,7 +236,9 @@ class SocketBusServer:
                         name=f"bus-sub:{msg.correlation_id}",
                     )
                     session.subscriptions.add(task)
-                    task.add_done_callback(session.subscriptions.discard)
+                    task.add_done_callback(
+                        lambda t, s=session: self._on_subscription_done(s, t)
+                    )
                     continue
                 if isinstance(msg, PubMessage):
                     await self._broker.publish(msg.event)
@@ -270,6 +273,29 @@ class SocketBusServer:
                 self._clients.pop(session_key, None)
                 await self._on_disconnect(session.kind)
             await transport.close()
+
+    def _on_subscription_done(self, session: _ClientSession, task: asyncio.Task[None]) -> None:
+        """Retrieve a finished subscription task's outcome.
+
+        A subscription that dies while its connection lives is a zombie: the
+        client's state machine still believes it is subscribed, so it renders
+        nothing forever (the original 'no chat history / waiting for tmux
+        frame' failure). On an unexpected error, close the whole connection —
+        the client observes EOF and reconnects with fresh subscriptions.
+        """
+        session.subscriptions.discard(task)
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc is None or isinstance(exc, TransportClosedError):
+            return
+        LOGGER.warning(
+            "subscription %s failed; closing client %s so it reconnects",
+            task.get_name(),
+            session.client_id,
+            exc_info=exc,
+        )
+        asyncio.get_running_loop().create_task(session.transport.close())
 
     async def _read_hello(self, reader: asyncio.StreamReader) -> HelloMessage:
         raw = await reader.readline()
@@ -325,7 +351,9 @@ class SocketBusServer:
                 kind="replay_done",
                 watermark=watermark,
             )
-            await self._run_tmux_frame_stream(transport, msg.correlation_id)
+            await self._run_tmux_frame_stream(
+                transport, msg.correlation_id, agent_id=filt.agent_id
+            )
             return
 
         for _, event in self._broker.replay(
@@ -351,8 +379,10 @@ class SocketBusServer:
         self,
         transport: UdsTransport,
         correlation_id: str,
+        agent_id: str | None = None,
     ) -> None:
-        """Capture-poll loop for the focused tmux pane.
+        """Capture-poll loop for one tmux pane (``agent_id``'s session, or the
+        service's own session when the filter carries no agent).
 
         Runs for the lifetime of the subscription task.  The loop is
         cancelled (and therefore closed) when:
@@ -368,14 +398,16 @@ class SocketBusServer:
             return
         while True:
             try:
-                frame_text = await capture()
-            except Exception:
-                # tmux not running, session gone, etc. — skip this tick.
-                await asyncio.sleep(self._tmux_frame_interval_s)
-                continue
+                frame_text = await capture(agent_id)
+            except Exception as exc:
+                # tmux not running, session gone, etc. Surface the failure as
+                # the frame itself: the raw view is the parsing *backup*, so an
+                # eternal '[waiting for tmux frame…]' hides exactly the state
+                # the user opened it to inspect.
+                frame_text = f"[tmux capture failed: {exc}]"
             event = TmuxFrameEvent(
                 run_id=self._run_id,
-                agent_id="supervisor",
+                agent_id=agent_id or "supervisor",
                 frame=frame_text,
             )
             await self._send_pub(transport, correlation_id, event)
@@ -529,10 +561,12 @@ class UdsTransport(Transport):
         closed.  Default 300 s.
 
     * **Backpressure** — the queue has a bounded capacity
-      (``_WRITE_QUEUE_MAX``).  If a caller calls ``send()`` when the queue
-      is full the call raises ``TransportWriteQueueFullError`` immediately
-      rather than blocking indefinitely.  Callers must handle this and
-      decide whether to retry or drop.
+      (``_WRITE_QUEUE_MAX``).  ``send()`` blocks while the queue is full,
+      throttling bursty producers (e.g. a subscription replaying thousands
+      of broker events without yielding) to socket drain speed.  It never
+      raises on a full queue: the previous fail-fast behaviour silently
+      killed server-side subscription tasks on every large replay, leaving
+      clients connected but receiving nothing.
     """
 
     _WRITE_QUEUE_MAX = 256
@@ -598,18 +632,15 @@ class UdsTransport(Transport):
     async def send(self, data: bytes) -> None:
         """Enqueue *data* for the drain loop.
 
-        Raises ``TransportWriteQueueFullError`` immediately if the queue
-        is at capacity (backpressure: drop-with-error, not silent drop or
-        unbounded block).
+        Blocks while the queue is at capacity (backpressure), pacing the
+        caller to socket drain speed. A genuinely stuck peer is handled at
+        the connection level: the reader side times out / EOFs, the
+        connection handler cancels its subscription tasks, and that
+        cancellation propagates into any ``put`` blocked here.
         """
         if not self._connected:
             raise TransportClosedError("transport is not connected")
-        try:
-            self._write_queue.put_nowait(data)
-        except asyncio.QueueFull as exc:
-            raise TransportWriteQueueFullError(
-                f"write queue full ({self._WRITE_QUEUE_MAX} items)"
-            ) from exc
+        await self._write_queue.put(data)
 
     async def recv(self) -> bytes:
         """Read the next chunk from the remote end.
@@ -643,6 +674,14 @@ class UdsTransport(Transport):
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await self._drain_task
             self._drain_task = None
+        # Release any senders blocked on a full queue: with the drain loop gone
+        # nothing else will ever pop items, so their pending ``put`` calls would
+        # otherwise never resolve. The data is dropped — the peer is gone.
+        while True:
+            try:
+                self._write_queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
         if self._writer is not None:
             self._writer.close()
             with contextlib.suppress(Exception):
@@ -681,20 +720,9 @@ class TransportClosedError(TransportError):
     """Raised when an operation is attempted on a closed transport."""
 
 
-class TransportWriteQueueFullError(TransportError):
-    """Raised when the outbound write queue is at capacity.
-
-    Policy: **error on full** — callers receive an exception immediately
-    rather than blocking or silently dropping.  This makes backpressure
-    visible to the layer above, which can decide to retry, shed load, or
-    propagate the error.
-    """
-
-
 __all__ = [
     "UdsTransport",
     "attach_stream_transport",
     "TransportError",
     "TransportClosedError",
-    "TransportWriteQueueFullError",
 ]

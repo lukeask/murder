@@ -368,9 +368,12 @@ class EventFilter(BaseModel):
     entity: Entity | None = None
     target_worker: str | None = None
     kind: str | None = None
+    agent_id: str | None = None
 
     def matches(self, event: BaseModel) -> bool:
         if self.role is not None and getattr(event, "role", None) != self.role:
+            return False
+        if self.agent_id is not None and getattr(event, "agent_id", None) != self.agent_id:
             return False
         if self.ticket_id is not None and getattr(event, "ticket_id", None) != self.ticket_id:
             return False
