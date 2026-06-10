@@ -9,8 +9,24 @@
  * stays decoupled from this store.
  *
  * Default scheme is {@link DEFAULT_THEME_ID} (everforest-dark), so the UI looks identical to before
- * runtime switching existed. A later settings phase calls {@link setTheme} from the settings RPC
- * bridge; nothing else mutates it.
+ * runtime switching existed.
+ *
+ * ## Source of truth: persisted scheme = `settingsSlice.theme`; this store = what's painted now
+ * `settings.theme` (see `../store/settings/settingsSlice.ts`) is the source of truth for the
+ * *persisted/committed* scheme. This `themeStore` holds the scheme *currently painted*, which is
+ * normally a mirror of `settings.theme` but may transiently diverge during a live preview. It is
+ * process-global so non-React code can read the palette synchronously (via {@link getTheme}).
+ *
+ * Two sanctioned callers of {@link setTheme}:
+ *   1. The Shell's settings→theme bridge (`../components/App.tsx`) commits the persisted value:
+ *      when `settings.theme` changes it pushes that id here (validated against {@link PALETTES}).
+ *   2. `SettingsModal` (`../components/SettingsModal.tsx`) *previews* a browsed theme by calling
+ *      {@link setTheme} directly — deliberately bypassing settings so the preview stays transient.
+ *      It commits through `actions.settings.update` on Save (which flows back via caller 1) and
+ *      reverts with `setTheme(persistedTheme)` on cancel.
+ *
+ * So: to *change the persisted scheme*, write through `actions.settings.update`, never `setTheme`.
+ * Direct {@link setTheme} is reserved for the transient preview path above.
  */
 
 import { useStoreWithEqualityFn } from 'zustand/traditional';

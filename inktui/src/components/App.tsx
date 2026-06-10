@@ -418,6 +418,8 @@ function Shell({
     };
     const syncTheme = (theme: string): void => {
       // Validate against the known palette ids; unknown → default (never an uncolored UI).
+      // Commit path: push the persisted settings.theme (source of truth) → themeStore. SettingsModal
+      // also calls setTheme directly for transient live preview — see themeStore.ts's source-of-truth note.
       const id: ThemeId = theme in PALETTES ? (theme as ThemeId) : DEFAULT_THEME_ID;
       setTheme(id);
     };
