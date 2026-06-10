@@ -47,6 +47,7 @@ import {
 import { useOrientation } from '../hooks/useOrientation.js';
 import { type TerminalEvents, useRootInput } from '../hooks/useRootInput.js';
 import { useTerminalSize } from '../hooks/useTerminalSize.js';
+import type { ActionId } from '../input/bindings.js';
 import { expandSpans, spanIds } from '../input/chatInputStore.js';
 import { readClipboardImage } from '../input/clipboardImage.js';
 import type { ChatInputHandler } from '../input/dispatcher.js';
@@ -62,6 +63,7 @@ import {
   createImageDraftStore,
   type ImageDraftStoreApi,
 } from '../store/imageDraft/imageDraftStore.js';
+import type { SettingsModifier } from '../store/settings/settingsSlice.js';
 import type { AppStoreApi } from '../store/store.js';
 import { toastStore } from '../store/toast/toastStore.js';
 import { BottomBar, useBottomBarLines } from './BottomBar.js';
@@ -292,10 +294,11 @@ function Shell({
    * root input loop subscribes to it; omitted in smoke/tests (no shim → no side-channel chords). */
   readonly terminalEvents?: TerminalEvents | undefined;
 }): JSX.Element {
-  const { modes, chatInput } = useInputStores();
+  const { modes, chatInput, bindings } = useInputStores();
   const appStore = useAppStoreApi();
   const bus = useBusClient();
   const loadFavorites = useAppStore((s) => s.actions.favorites.load);
+  const loadSettings = useAppStore((s) => s.actions.settings.load);
   // Live terminal height — bounds the root box so the frame always fits one screen (see the return).
   const { rows } = useTerminalSize();
   // The ONE orientation read (rule: one source of truth) — threaded to both Rails and the Body axis.
@@ -371,6 +374,41 @@ function Shell({
   useEffect(() => {
     void loadFavorites();
   }, [loadFavorites]);
+
+  // Phase 3: load persisted settings once on mount, next to favorites (rule 3: via the action).
+  // Same fire-and-forget contract — a rejection lands in the slice's error and leaves settings at
+  // their defaults (alt modifier, no rebinds), never crashing the shell.
+  useEffect(() => {
+    void loadSettings();
+  }, [loadSettings]);
+
+  // Phase 3: the settings → input bridge. The settings slice owns the persisted preferences; the
+  // input layer's bindingsStore must stay bus-free (it has no idea the bus exists), so this one
+  // subscription mirrors { modifier, keyOverrides } onto it whenever either changes. It runs once
+  // at mount (priming the bindings store from the loaded settings) and then on every settings
+  // change (the optimistic `update` path → instant dispatcher/keymap/footer reaction).
+  //
+  // theme bridge wired in phase 5 (the theme store is built in a parallel phase; settings.theme is
+  // loaded into the slice here but not yet mirrored anywhere).
+  useEffect(() => {
+    const sync = (modifier: SettingsModifier, keyOverrides: Record<string, string>): void => {
+      const bindingsState = bindings.getState();
+      bindingsState.setModifier(modifier);
+      // The slice stores keyOverrides opaquely (string keys); the bindings store narrows them onto
+      // the ActionId union. A stray non-ActionId key is harmless (resolveBindings ignores it).
+      bindingsState.setOverrides(keyOverrides as Partial<Record<ActionId, string>>);
+    };
+    const current = appStore.getState().settings;
+    sync(current.modifier, current.keyOverrides as Record<string, string>);
+    return appStore.subscribe((state, prev) => {
+      if (
+        state.settings.modifier !== prev.settings.modifier ||
+        state.settings.keyOverrides !== prev.settings.keyOverrides
+      ) {
+        sync(state.settings.modifier, state.settings.keyOverrides as Record<string, string>);
+      }
+    });
+  }, [appStore, bindings]);
 
   // `ctrl+s` → open the spawn wizard (only fires when chat is focused; see dispatcher.ts). Reads the
   // store imperatively at call time (getState()) so no stale closure; stores are stable references.
