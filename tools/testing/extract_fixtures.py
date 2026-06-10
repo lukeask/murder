@@ -160,9 +160,9 @@ def _pi_model_list(frames: list[dict[str, object]]) -> int:
 def _codex_busy(frames: list[dict[str, object]]) -> int:
     """Frame where Codex shows its ``• Working`` busy indicator.
 
-    Note: the current CodexAdapter._BUSY_RE does not match this ``•``-prefixed
-    line (requires ``^\\s*working``), so ``is_idle=True`` on this fixture
-    despite the agent actively generating. The test documents this known gap.
+    CodexAdapter._BUSY_RE is bullet-aware (``(?:[•·]\\s*)?working``), so this
+    ``•``-prefixed line matches: ``is_busy=True`` / ``is_idle=False`` on this
+    fixture while the agent is generating. The tests assert that real behavior.
     """
 
     def ok(text: str) -> bool:

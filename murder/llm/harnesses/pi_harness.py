@@ -18,11 +18,15 @@ from murder.llm.harnesses.base import (
 from murder.llm.harnesses.models import HarnessModelState
 from murder.llm.harnesses.parsing import (
     extract_last_message_heuristic,
-    is_rule_line,
-    is_status_spinner_line,
     normalize_effort,
     parse_harness_model_list,
     strip_ansi,
+)
+# The pi chrome predicate and reasoning-prefix regex live in the grammar module
+# (core/grammars import no adapter; adapter→grammar is the allowed direction).
+from murder.llm.harnesses.transcripts.grammar.pi import (
+    _PI_REASONING_PREFIX_RE,
+    _is_pi_chrome,
 )
 from murder.llm.harnesses.results import SimpleResult, fail_result, ok_result
 from murder.runtime.terminal import tmux
@@ -48,61 +52,11 @@ _AUTH_RE = re.compile(
     r"\b(login|authenticate|api key|required|no provider|configure provider)\b",
     re.IGNORECASE,
 )
-_PI_STATUS_RE = re.compile(r"\b\d+(?:\.\d+)?%/\d+(?:\.\d+)?[kKmM]\s+\([^)]*\)")
 _PI_ACTIVE_MODEL_RE = re.compile(
     r"\((?P<provider>[a-z][a-z0-9_-]*)\)\s+"
     r"(?P<model>[A-Za-z0-9][A-Za-z0-9._+-]*)(?:\s*[•·]\s*(?P<effort>low|medium|high))?",
     re.IGNORECASE,
 )
-_PI_CWD_RE = re.compile(r"^(?:~/|/|\./|\.\./).*(?:\s+\([^)]+\))?$")
-_PI_CHROME_RE = re.compile(
-    r"""
-    ^\s*(?:
-        pi\s+v\d+\b
-        |escape\s+interrupt\b
-        |press\s+ctrl\+o\b
-        |pi\s+can\s+explain\b
-        |extend\s+pi\.
-        |warning:\s+tmux\s+extended-keys\b
-        |scope:\s+all\s+\|\s+scoped\b
-        |tab\s+scope\b
-        |model\s+scope:
-        |model\s+name:
-        |.*ctrl\+p\s+to\s+cycle\b
-        |.*\brestart\s+tmux\.?\s*$
-        |use\s+/login\b
-        |.*docs/(?:providers|models)\.md\s*$
-        |update\s+available\b
-        |new\s+version\s+\d
-        |changelog:\s+https?://
-        |https?://\S
-        |.*\.(?:g|gg|ggu|gguf|bin|safetensors)\b
-    )
-    """,
-    re.IGNORECASE | re.VERBOSE,
-)
-_PI_REASONING_PREFIX_RE = re.compile(
-    r"""
-    ^\s*(?:
-        the\s+user\s+(?:wants|asked|is\s+asking)\b
-        |i\s+(?:need|should|will|can)\b
-        |we\s+need\b
-        |need\s+to\b
-    )
-    """,
-    re.IGNORECASE | re.VERBOSE,
-)
-
-
-def _is_pi_chrome(line: str) -> bool:
-    s = line.strip()
-    if not s:
-        return False
-    if is_rule_line(line) or is_status_spinner_line(line):
-        return True
-    return bool(_PI_STATUS_RE.search(s) or _PI_CWD_RE.match(s) or _PI_CHROME_RE.match(s))
-
-
 def _strip_pi_chrome(pane_text: str) -> str:
     return "\n".join(line for line in strip_ansi(pane_text).splitlines() if not _is_pi_chrome(line))
 

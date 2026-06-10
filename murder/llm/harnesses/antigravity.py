@@ -67,13 +67,6 @@ class AntigravityAdapter(HarnessAdapter):
     default_effort: ClassVar[str] = "medium"
     assume_default_effort_when_omitted: ClassVar[bool] = False
     available_startup_models: ClassVar[list[tuple[str, str]]] = []
-    transcript_prompt_markers: ClassVar[tuple[str, ...]] = (">",)
-    transcript_drop_substrings: ClassVar[tuple[str, ...]] = (
-        "antigravity cli",
-        "? for shortcuts",
-        "esc to cancel",
-        "↑/↓ navigate",
-    )
 
     def startup_cmd(self, cwd: Path) -> list[str]:
         del cwd

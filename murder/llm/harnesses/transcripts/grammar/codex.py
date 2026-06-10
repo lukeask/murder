@@ -4,13 +4,22 @@ from __future__ import annotations
 
 import re
 
-from murder.llm.harnesses.transcripts.segments import PlanItem, Segment
+from murder.llm.harnesses.transcripts.segments import PlanItem, Segment, SpannedSegment
 from murder.llm.harnesses.transcripts._shared import (
-    _RULE_RE,
-    _dedupe_adjacent,
+    dedupe_adjacent_spanned,
     truncate_title,
     normalize_codex_text,
     reflow_paragraphs,
+)
+from murder.llm.harnesses.transcripts.toolkit import (
+    BASE_CHROME_RULES,
+    attribute_completion,
+    chrome_matcher,
+    record_dropped_completion,
+    regex_match_rule,
+    stripped_startswith_rule,
+    stripped_substring_rule,
+    substring_rule,
 )
 
 # ---- codex regexes --------------------------------------------------------- #
@@ -35,22 +44,15 @@ _CODEX_TOOL_VERBS = (
 _CODEX_PLACEHOLDER_RE = re.compile(r"^Find and fix a bug in @filename$")
 
 
-def _codex_is_chrome(line: str) -> bool:
-    stripped = line.strip()
-    return bool(
-        not stripped
-        or _RULE_RE.match(line)
-        or stripped.startswith("gpt-")
-        or stripped.startswith("tokens")
-        or "esc to interrupt" in line
-        or "background terminals running" in line
-        or "/ps to view" in line
-        or "ctrl + t to view transcript" in stripped
-        or "ctrl+t to view transcript" in stripped
-        or stripped.startswith(("╭", "│", "╰", "■"))
-        or stripped.startswith("Tip:")
-        or _CODEX_PROMPT_RE.match(line)
-    )
+# Codex chrome: shared base plus codex's status bars, box-drawing frame glyphs,
+# the model-id footer (``gpt-…``) and the (submitted-or-live) ``›`` prompt line.
+_codex_is_chrome = chrome_matcher(
+    *BASE_CHROME_RULES,
+    stripped_startswith_rule("gpt-", "tokens", "Tip:", "╭", "│", "╰", "■"),
+    substring_rule("esc to interrupt", "background terminals running", "/ps to view"),
+    stripped_substring_rule("ctrl + t to view transcript", "ctrl+t to view transcript"),
+    regex_match_rule(_CODEX_PROMPT_RE),
+)
 
 
 def _codex_starts_block(lines: list[str], index: int) -> bool:
@@ -154,13 +156,22 @@ def _parse_codex_tool(label: str, lines: list[str], i: int) -> tuple[Segment, in
 
 def parse_lines(
     lines: list[str],
+    system_prompt: str | None = None,
+    user_texts: list[str] | None = None,
+) -> list[Segment]:
+    return [s.segment for s in parse_spanned(lines, system_prompt, user_texts)]
+
+
+def parse_spanned(
+    lines: list[str],
     system_prompt: str | None = None,  # noqa: ARG001
     user_texts: list[str] | None = None,  # noqa: ARG001
-) -> list[Segment]:
-    segments: list[Segment] = []
+) -> list[SpannedSegment]:
+    spanned: list[SpannedSegment] = []
     i = 0
     while i < len(lines):
         line = lines[i]
+        block_start = i
 
         prompt = _CODEX_PROMPT_RE.match(line)
         if prompt:
@@ -170,17 +181,21 @@ def parse_lines(
                 and not _CODEX_PLACEHOLDER_RE.match(text)
                 and not _is_codex_live_prompt(lines, i)
             ):
-                segments.append({"type": "user", "text": normalize_codex_text(text)})
+                spanned.append(
+                    SpannedSegment(
+                        {"type": "user", "text": normalize_codex_text(text)},
+                        block_start,
+                        i + 1,
+                    )
+                )
             i += 1
             continue
 
         completion = _CODEX_COMPLETION_RE.match(line)
         if completion:
-            for segment in reversed(segments):
-                if segment["type"] == "assistant":
-                    segment["phase"] = "final"
-                    segment["elapsed"] = completion.group(1)
-                    break
+            attribute_completion(
+                spanned, completion.group(1), i + 1, on_drop=record_dropped_completion
+            )
             i += 1
             continue
 
@@ -200,11 +215,11 @@ def parse_lines(
         if label == "Updated Plan":
             segment, i = _parse_codex_plan(lines, i + 1)
             if segment is not None:
-                segments.append(segment)
+                spanned.append(SpannedSegment(segment, block_start, i))
             continue
         if label.startswith(_CODEX_TOOL_VERBS):
             segment, i = _parse_codex_tool(label, lines, i + 1)
-            segments.append(segment)
+            spanned.append(SpannedSegment(segment, block_start, i))
             continue
 
         body = [label]
@@ -217,15 +232,19 @@ def parse_lines(
             i += 1
         text = _reflow_codex_prose(body)
         if text:
-            segments.append(
-                {
-                    "type": "assistant",
-                    "phase": "intermediate",
-                    "text": text,
-                    "elapsed": None,
-                }
+            spanned.append(
+                SpannedSegment(
+                    {
+                        "type": "assistant",
+                        "phase": "intermediate",
+                        "text": text,
+                        "elapsed": None,
+                    },
+                    block_start,
+                    i,
+                )
             )
-    return _dedupe_adjacent(segments)
+    return dedupe_adjacent_spanned(spanned)
 
 
 def is_idle(pane_text: str) -> bool:
