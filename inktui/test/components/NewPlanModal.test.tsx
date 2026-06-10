@@ -1,13 +1,14 @@
 /**
- * NewPlanModal tests — verifies the `alt+p` new-plan modal mode against the C7M idiom.
+ * NewPlanModal tests — verifies the `super+p` new-plan single-form wizard (item 3) against the C7M
+ * idiom. The form has three focus groups (body → naming radio → custom-name); Enter confirms a group
+ * and advances. Drives the real dispatcher (via the root loop) with simulated keys.
  *
- * Copy recipe (mirrors ConfirmModal.test.tsx):
- *  1. Build input stores, enter the mode imperatively.
- *  2. Drive with simulated keys: open → assert paint → type → submit → assert RPC fired + focus
- *     restored.
- *  3. Esc dismisses without firing RPC.
- *  4. Panel chord does NOT fire while the modal is up (exclusive capture).
- *  5. Pure dispatcher test: alt+p fires `newPlan` handler, alt+t fires `newTicket` handler.
+ *  1. Open → paint → type body → Enter advances → naming radio nav → submit.
+ *  2. Auto path: Enter on the auto radio submits with `auto_name: true`.
+ *  3. Custom path: choosing "name it myself" reveals a name input; submit sends `plan_name`.
+ *  4. Esc dismisses without firing the RPC + restores focus.
+ *  5. Exclusive capture: ctrl+1 does NOT toggle a panel while the modal is up.
+ *  6. The `super+p` global chord fires the `newPlan` handler (and not while a modal is up).
  */
 
 import { render } from 'ink-testing-library';
@@ -38,7 +39,6 @@ function RootInput({
   readonly newPlan?: () => void;
   readonly newTicket?: () => void;
 }): null {
-  // Build deferred handlers, only passing keys that have real values (exactOptionalPropertyTypes).
   const deferred = {
     ...(newPlan !== undefined ? { newPlan } : {}),
     ...(newTicket !== undefined ? { newTicket } : {}),
@@ -57,7 +57,6 @@ function Harness({
   readonly newPlan?: () => void;
   readonly newTicket?: () => void;
 }): JSX.Element {
-  // Only pass defined handlers to avoid exactOptionalPropertyTypes violations.
   const rootProps = {
     ...(newPlan !== undefined ? { newPlan } : {}),
     ...(newTicket !== undefined ? { newTicket } : {}),
@@ -76,9 +75,12 @@ function setup() {
   const bus = new FakeBusClient();
   const actions = createDialogActions(bus);
 
-  bus.stubRpc('plan.create', { handled: true, plan_name: 'test', agent_id: 'agent-1' });
+  bus.stubRpc('plan.create', { handled: true, ok: true, plan_name: 'auto-named', agent_id: 'a-1' });
 
-  const enter = () => stores.modes.getState().enter(newPlanMode(stores.modes, actions, {}));
+  const enter = (onSubmit?: (name: string) => void) =>
+    stores.modes
+      .getState()
+      .enter(newPlanMode(stores.modes, actions, onSubmit !== undefined ? { onSubmit } : {}));
   return { stores, bus, actions, enter };
 }
 
@@ -88,13 +90,12 @@ function errorToasts() {
   return live.filter((t) => t.severity === 'error');
 }
 
-describe('NewPlanModal — alt+p new-plan dialog', () => {
-  // The toast singleton is shared global state; reset it between cases (toastStore's own idiom).
+describe('NewPlanModal — super+p new-plan wizard', () => {
   beforeEach(() => {
     toastStore.getState().clear();
   });
 
-  it('opens, paints the dialog, captures input, dismisses on Esc, and restores focus', async () => {
+  it('opens, paints the form, types the body, dismisses on Esc, restores focus', async () => {
     const { stores, enter } = setup();
     const { lastFrame, stdin } = render(<Harness stores={stores} />);
     await tick();
@@ -103,107 +104,98 @@ describe('NewPlanModal — alt+p new-plan dialog', () => {
     enter();
     await tick();
     expect(lastFrame()).toContain('New Plan');
+    expect(lastFrame()).toContain('Plan body');
     expect(selectActiveMode(stores.modes)?.id).toBe(NEW_PLAN_MODE_ID);
 
-    // Esc dismisses.
+    for (const ch of 'do the thing') stdin.write(ch);
+    await tick();
+    expect(lastFrame()).toContain('do the thing');
+
     stdin.write(ESC);
     await tick();
     expect(selectActiveMode(stores.modes)).toBeNull();
-    expect(lastFrame()).not.toContain('New Plan');
     expect(stores.focus.getState().intendedId).toBe('tickets'); // prior focus restored
   });
 
-  it('accepts printable char input via onUncaptured, renders updated value', async () => {
-    const { stores, enter } = setup();
-    const { lastFrame, stdin } = render(<Harness stores={stores} />);
-    enter();
-    await tick();
-    expect(lastFrame()).toContain('New Plan');
-
-    // Type plan name chars.
-    stdin.write('m');
-    stdin.write('y');
-    stdin.write('-');
-    stdin.write('p');
-    stdin.write('l');
-    stdin.write('a');
-    stdin.write('n');
-    await tick();
-    expect(lastFrame()).toContain('my-plan');
-  });
-
-  it('backspace deletes the last char', async () => {
-    const { stores, enter } = setup();
-    const { lastFrame, stdin } = render(<Harness stores={stores} />);
-    enter();
-    await tick();
-
-    stdin.write('a');
-    stdin.write('b');
-    await tick();
-    expect(lastFrame()).toContain('ab');
-
-    stdin.write('\x7f'); // backspace
-    await tick();
-    // After backspace: only 'a' in the plan name field, not 'ab' as an input value.
-    // The frame contains 'a█' (cursor after 'a') but not 'ab█'.
-    expect(lastFrame()).not.toContain('ab█');
-  });
-
-  it('submit fires the plan.create RPC and dismisses the modal', async () => {
+  it('auto path: body → Enter → Enter (auto radio) submits with auto_name + body + message', async () => {
     const { stores, bus } = setup();
     const onSubmit = vi.fn();
     stores.modes
       .getState()
       .enter(newPlanMode(stores.modes, createDialogActions(bus), { onSubmit }));
+    bus.stubRpc('plan.create', { handled: true, ok: true, plan_name: 'auto-named' });
     const { stdin } = render(<Harness stores={stores} />);
     await tick();
 
-    // Type a plan name.
-    stdin.write('m');
-    stdin.write('y');
-    stdin.write('-');
-    stdin.write('p');
-    stdin.write('l');
-    stdin.write('a');
-    stdin.write('n');
+    for (const ch of 'plan body text') stdin.write(ch);
+    await tick();
+    stdin.write('\r'); // advance body → naming (auto preselected)
+    await tick();
+    stdin.write('\r'); // confirm auto → submit
+    await tick();
     await tick();
 
-    // Press Enter to submit.
-    stdin.write('\r');
-    await tick();
-
-    expect(selectActiveMode(stores.modes)).toBeNull(); // modal dismissed
-    expect(stores.focus.getState().intendedId).toBe('tickets'); // focus restored
-
-    // Give the async RPC a tick to complete.
-    await tick();
     expect(bus.rpcCalls.length).toBe(1);
     expect(bus.rpcCalls[0]).toMatchObject({
       method: 'plan.create',
-      params: { plan_name: 'my-plan', message: '' },
+      params: { auto_name: true, body: 'plan body text', message: 'plan body text' },
     });
-    await tick();
-    expect(onSubmit).toHaveBeenCalledWith('my-plan', '');
+    expect(selectActiveMode(stores.modes)).toBeNull();
+    expect(onSubmit).toHaveBeenCalledWith('auto-named');
   });
 
-  it('successful submit pushes NO error toast', async () => {
-    const { stores } = setup(); // setup() stubs plan.create to resolve
-    const { stdin } = render(<Harness stores={stores} />);
+  it('custom path: choosing "name it myself" reveals a name field; submit sends plan_name', async () => {
+    const { stores, bus } = setup();
+    stores.modes.getState().enter(newPlanMode(stores.modes, createDialogActions(bus), {}));
+    bus.stubRpc('plan.create', { handled: true, ok: true, plan_name: 'my-plan' });
+    const { lastFrame, stdin } = render(<Harness stores={stores} />);
     await tick();
+
+    for (const ch of 'body') stdin.write(ch);
+    await tick();
+    stdin.write('\r'); // advance to naming
+    await tick();
+    stdin.write('l'); // move highlight to "name it myself"
+    await tick();
+    stdin.write('\r'); // confirm custom → advance to name field
+    await tick();
+    expect(lastFrame()).toContain('Plan name');
+
     for (const ch of 'my-plan') stdin.write(ch);
     await tick();
-    stdin.write('\r');
+    stdin.write('\r'); // submit
     await tick();
     await tick();
-    expect(errorToasts()).toHaveLength(0);
+
+    expect(bus.rpcCalls.length).toBe(1);
+    expect(bus.rpcCalls[0]).toMatchObject({
+      method: 'plan.create',
+      params: { plan_name: 'my-plan', body: 'body', message: 'body' },
+    });
+    expect(selectActiveMode(stores.modes)).toBeNull();
   });
 
-  it('a rejected plan.create pushes an error toast with the rejection message', async () => {
+  it('empty body still submits (auto) with a stock kickoff message', async () => {
+    const { stores, bus } = setup();
+    stores.modes.getState().enter(newPlanMode(stores.modes, createDialogActions(bus), {}));
+    bus.stubRpc('plan.create', { handled: true, ok: true, plan_name: 'x' });
+    const { stdin } = render(<Harness stores={stores} />);
+    await tick();
+
+    stdin.write('\r'); // body → naming
+    await tick();
+    stdin.write('\r'); // confirm auto → submit
+    await tick();
+    await tick();
+
+    expect(bus.rpcCalls.length).toBe(1);
+    const params = bus.rpcCalls[0]?.params as { message?: string };
+    expect(params.message).toBeTruthy(); // a non-empty stock kickoff
+  });
+
+  it('a rejected plan.create pushes an error toast and keeps the form up', async () => {
     const { stores } = setup();
     const bus = new FakeBusClient();
-    // Exit-then-act: the modal is gone before this rejects; the toast must still fire on the
-    // global singleton (not tied to the unmounted modal). Use the structured UdsBusClient text.
     bus.stubRpc('plan.create', () => {
       throw new Error('rpc error [internal]: plan create failed');
     });
@@ -211,34 +203,16 @@ describe('NewPlanModal — alt+p new-plan dialog', () => {
     const { stdin } = render(<Harness stores={stores} />);
     await tick();
 
-    for (const ch of 'my-plan') stdin.write(ch);
+    stdin.write('\r'); // body → naming
     await tick();
-    stdin.write('\r'); // submit
+    stdin.write('\r'); // confirm auto → submit
     await tick();
-
-    // Modal dismissed (exit-then-act), then the rejection lands.
-    expect(selectActiveMode(stores.modes)).toBeNull();
     await tick();
 
     const errs = errorToasts();
     expect(errs).toHaveLength(1);
     expect(errs[0]?.text).toBe('rpc error [internal]: plan create failed');
-  });
-
-  it('submit with empty plan name shows an error and does NOT fire RPC', async () => {
-    const { stores, bus, enter } = setup();
-    const { lastFrame, stdin } = render(<Harness stores={stores} />);
-    enter();
-    await tick();
-
-    // Press Enter with empty name.
-    stdin.write('\r');
-    await tick();
-    expect(lastFrame()).toContain('Plan name is required');
-    expect(selectActiveMode(stores.modes)?.id).toBe(NEW_PLAN_MODE_ID); // still up
-    expect(bus.rpcCalls.length).toBe(0);
-    // Field validation stays INLINE (modal open) — it must NOT also fire an error toast.
-    expect(errorToasts()).toHaveLength(0);
+    expect(selectActiveMode(stores.modes)?.id).toBe(NEW_PLAN_MODE_ID); // still up to retry
   });
 
   it('captures exclusively: ctrl+1 does NOT toggle a panel while the modal is up', async () => {
@@ -247,32 +221,10 @@ describe('NewPlanModal — alt+p new-plan dialog', () => {
     enter();
     await tick();
 
-    // ctrl+1 (\x01) would normally toggle the plans panel; must not while modal is up.
-    stdin.write('\x01');
+    stdin.write('\x01'); // ctrl+1 would normally toggle the plans panel
     await tick();
-    expect(selectActiveMode(stores.modes)?.id).toBe(NEW_PLAN_MODE_ID); // modal still up
-    // plans panel should NOT have been toggled on (it was not visible before).
-    expect(stores.panels.getState().visible.has('plans')).toBe(false);
-  });
-
-  it('tab cycles the active field', async () => {
-    const { stores, enter } = setup();
-    const { stdin } = render(<Harness stores={stores} />);
-    enter();
-    await tick();
-
-    // Initially focused on plan name; type something, tab to message field.
-    stdin.write('m');
-    stdin.write('y');
-    await tick();
-    stdin.write('\t'); // tab to message field
-    await tick();
-    stdin.write('h'); // type in message field
-    stdin.write('i');
-    await tick();
-
-    // The modal should still be up and contain the message.
     expect(selectActiveMode(stores.modes)?.id).toBe(NEW_PLAN_MODE_ID);
+    expect(stores.panels.getState().visible.has('plans')).toBe(false);
   });
 });
 
@@ -283,8 +235,7 @@ describe('global chords — alt+p and alt+t', () => {
     const { stdin } = render(<Harness stores={stores} newPlan={newPlanFn} />);
     await tick();
 
-    // alt+p = \x1bp
-    stdin.write('\x1bp');
+    stdin.write('\x1bp'); // alt+p
     await tick();
     expect(newPlanFn).toHaveBeenCalledOnce();
   });
@@ -295,8 +246,7 @@ describe('global chords — alt+p and alt+t', () => {
     const { stdin } = render(<Harness stores={stores} newTicket={newTicketFn} />);
     await tick();
 
-    // alt+t = \x1bt
-    stdin.write('\x1bt');
+    stdin.write('\x1bt'); // alt+t
     await tick();
     expect(newTicketFn).toHaveBeenCalledOnce();
   });
@@ -310,8 +260,6 @@ describe('global chords — alt+p and alt+t', () => {
 
     stdin.write('\x1bp'); // alt+p
     await tick();
-    // The modal is up (its onUncaptured gets \x1bp with meta=true → returns false → swallowed).
-    // newPlanFn must NOT have been called.
     expect(newPlanFn).not.toHaveBeenCalled();
     expect(selectActiveMode(stores.modes)?.id).toBe(NEW_PLAN_MODE_ID);
   });

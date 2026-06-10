@@ -7,14 +7,8 @@
  *    {@link ../commandSubmit.js}.
  *  - `ticket.next_id` — fetch the next free ticket id. LIVE RPC.
  *  - `ticket.exists` — check if a ticket handle already exists. LIVE RPC.
- *  - `plan.create` — message a fresh planning agent for the new-plan dialog (`ctrl+p`). The
- *    plan-create RPC is modeled as `plan.create` — NOT yet on the live bus (built in F3, flagged
- *    below).
- *
- * ## F3 dependency flag
- *
- * `plan.create` is the only method here still **modeled but NOT yet live on the bus** (F3 builds it).
- * Tests drive it against `FakeBusClient`. When F3 lands, confirm the name/shape and remove this flag.
+ *  - `plan.create` — create a plan + start its planning agent for the new-plan form (`super+p`).
+ *    LIVE — registered in `murder/app/service/host.py` (`_plan_create`).
  *
  * The RpcMethods augmentation below keeps the C1/C2 bus files byte-identical (rule 4 — the seam).
  */
@@ -27,7 +21,7 @@ import { submitCommand } from '../commandSubmit.js';
  * editing the frozen C1/C2 bus files. Each key is distinct from every other slice's keys —
  * the compiler will catch a collision if a later chunk redeclares the same method name.
  *
- * `ticket.next_id` + `ticket.exists` are LIVE; `plan.create` is still modeled (F3 builds it).
+ * `ticket.next_id`, `ticket.exists`, and `plan.create` are all LIVE on the bus.
  */
 declare module '../../bus/BusClient.js' {
   interface RpcMethods {
@@ -48,13 +42,22 @@ declare module '../../bus/BusClient.js' {
       result: ExistsResult;
     };
     /**
-     * Create a new plan by messaging a fresh planning agent with the plan name and an initial
-     * message. Modeled on the existing `agent.message` RPC surface, lifted to a plan-scoped
-     * method so the service can start the planning agent and wire the plan document.
-     * B13 — NOT yet live on the bus.
+     * Create a new plan and start its planning agent. LIVE — registered in
+     * `murder/app/service/host.py` (`_plan_create` → `Orchestrator.create_plan`).
+     *
+     * Payload (all optional individually, but one of `plan_name`/`auto_name` is required by the
+     * service): `body` seeds the plan's markdown; `auto_name: true` derives the name from `body` via a
+     * mini-LLM naming call (created under the FINAL name — no rename); a non-empty `message` starts the
+     * planning agent. The new-plan form always sends a message (the body or a stock kickoff) so submit =
+     * create + start planner. Returns the FINAL `plan_name` (the auto-named result, when `auto_name`).
      */
     'plan.create': {
-      params: { plan_name: string; message: string };
+      params: {
+        plan_name?: string;
+        body?: string;
+        message?: string;
+        auto_name?: boolean;
+      };
       result: PlanCreateResult;
     };
   }
@@ -77,11 +80,29 @@ export interface ExistsResult {
   readonly exists: boolean;
 }
 
-/** Reply from `plan.create`. B13 shape — confirm when service lands. */
+/** Reply from `plan.create`. The service returns the FINAL `plan_name` (the auto-named result when
+ * `auto_name` was set), plus the spawned planner's `agent_id`. */
 export interface PlanCreateResult {
   readonly handled: boolean;
+  readonly ok?: boolean;
   readonly plan_name: string;
   readonly agent_id?: string;
+}
+
+/**
+ * The new-plan submit input. The form fills `body` (the typed plan content) and either asks for an
+ * auto name (`autoName: true`) or supplies a `planName`. `message` is the kickoff text sent to the
+ * planning agent (the form always sends one so submit = create + start planner).
+ */
+export interface CreatePlanInput {
+  /** The plan's markdown body (whatever was typed in the body box). */
+  readonly body: string;
+  /** When `true`, the service derives the plan name from `body` via the mini-LLM naming call. */
+  readonly autoName: boolean;
+  /** The user-chosen plan name; ignored when `autoName` is set. */
+  readonly planName?: string;
+  /** The kickoff message that starts the planning agent. */
+  readonly message: string;
 }
 
 /** The actions exposed to the dialog components for writing operations. */
@@ -100,9 +121,10 @@ export interface DialogActions {
    */
   ticketExists(handle: string): Promise<ExistsResult>;
   /**
-   * Message a fresh planning agent to create a plan via `plan.create`.
+   * Create a plan and start its planning agent via `plan.create`. Resolves with the FINAL plan name
+   * (the auto-named result when `autoName` was set). Rejects on bus error — the caller handles it.
    */
-  createPlan(planName: string, message: string): Promise<PlanCreateResult>;
+  createPlan(input: CreatePlanInput): Promise<PlanCreateResult>;
 }
 
 /**
@@ -133,8 +155,13 @@ export function createDialogActions(bus: BusClient): DialogActions {
       return bus.rpc('ticket.exists', { handle });
     },
 
-    async createPlan(planName: string, message: string): Promise<PlanCreateResult> {
-      return bus.rpc('plan.create', { plan_name: planName, message });
+    async createPlan(input: CreatePlanInput): Promise<PlanCreateResult> {
+      // Auto path: send `auto_name` + body, no plan_name (the service derives it). Custom path: send
+      // the chosen plan_name. Always send the body + a message so submit = create + start planner.
+      const params = input.autoName
+        ? { auto_name: true, body: input.body, message: input.message }
+        : { plan_name: input.planName ?? '', body: input.body, message: input.message };
+      return bus.rpc('plan.create', params);
     },
   };
 }

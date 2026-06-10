@@ -57,6 +57,10 @@ export interface DeferredGlobalHandlers {
    * modal. Present now so the action's handler slot exists end-to-end (the registry already declares
    * the chord); the dispatcher does not yet route to it — it is wired when the modal lands. */
   openSettings?: () => void;
+  /** `ctrl+n` (the `global.quickNote` action). Default: no-op until the shell wires the note-capture
+   * modal. The chord is routed in the dispatcher ahead of the command-modifier gate, so this slot is
+   * live; the shell supplies the real handler. */
+  quickNote?: () => void;
   /**
    * The persistent chat-input handler (C11, part F). Supplied by the shell (it needs both the chat
    * buffer store and the send action). When absent, layer 2 declines as before — so older
@@ -202,6 +206,8 @@ export function useRootInput(
         // Phase 5: openSettings defaults to a no-op until the shell supplies the settings-modal
         // handler. The `global.settings` chord is now routed in the dispatcher, so this slot is live.
         openSettings: deferred.openSettings ?? (() => {}),
+        // ctrl+n: open the quick-note capture. Default no-op until the shell wires it.
+        quickNote: deferred.quickNote ?? (() => {}),
       };
 
       const ctx: DispatchContext = {

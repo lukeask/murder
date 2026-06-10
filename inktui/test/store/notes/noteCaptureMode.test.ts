@@ -91,12 +91,16 @@ describe('noteCaptureMode — ESC double-tap → dismiss', () => {
     store.getState().reset();
   });
 
-  it('two quick ESCs commit → onCancel + mode dismissed', () => {
-    const { onCancel, modes, press } = setup();
+  it('two quick ESCs commit → onCancel + mode dismissed; draft PERSISTS (item 10)', () => {
+    const { store, onCancel, modes, press } = setup();
+    store.getState().setDraft('half-written');
     press('', { escape: true });
     press('', { escape: true }); // immediate second press — well inside the 0.45s window
     expect(onCancel).toHaveBeenCalledTimes(1);
     expect(selectActiveMode(modes)).toBeNull(); // mode exited
+    // Cancel does NOT reset the FSM — the draft survives for the next open (item 10).
+    expect(store.getState().draftText).toBe('half-written');
+    store.getState().reset();
   });
 });
 
@@ -147,8 +151,10 @@ describe('noteCaptureMode — submit + plain entry', () => {
 
     store.getState().setDraft('a real note');
     press('', { return: true });
-    expect(onSubmit).toHaveBeenCalledWith('a real note');
+    expect(onSubmit).toHaveBeenCalledWith('a real note', undefined);
     expect(selectActiveMode(modes)).toBeNull();
+    // Submit resets the FSM so a captured note never leaks into the next capture (item 10).
+    expect(store.getState().draftText).toBe('');
   });
 
   it('ordinary characters append to the draft and never arm ESC', () => {
