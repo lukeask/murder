@@ -45,7 +45,7 @@ import {
   useModeStore,
 } from '../hooks/useInputStores.js';
 import { useOrientation } from '../hooks/useOrientation.js';
-import { useRootInput } from '../hooks/useRootInput.js';
+import { type TerminalEvents, useRootInput } from '../hooks/useRootInput.js';
 import { useTerminalSize } from '../hooks/useTerminalSize.js';
 import { expandSpans, spanIds } from '../input/chatInputStore.js';
 import { readClipboardImage } from '../input/clipboardImage.js';
@@ -283,7 +283,15 @@ export function makeChatInputHandler(
  * is the OPEN doc-view (focused-doc), via {@link deriveSpawnContext}. C11 also loads the persisted
  * favorites once on mount via the favorites action.
  */
-function Shell({ project }: { readonly project?: string | undefined }): JSX.Element {
+function Shell({
+  project,
+  terminalEvents,
+}: {
+  readonly project?: string | undefined;
+  /** The kitty stdin shim's chord channel (Phase 2), passed from the live entrypoint like `bus`. The
+   * root input loop subscribes to it; omitted in smoke/tests (no shim → no side-channel chords). */
+  readonly terminalEvents?: TerminalEvents | undefined;
+}): JSX.Element {
   const { modes, chatInput } = useInputStores();
   const appStore = useAppStoreApi();
   const bus = useBusClient();
@@ -381,10 +389,13 @@ function Shell({ project }: { readonly project?: string | undefined }): JSX.Elem
   // C13: `spawn` wired to the spawn wizard handler. C11: `chatInput` wired to the persistent
   // chat-input handler (buffers chars, sends on Enter to the active agent). Global ctrl-chords still
   // preempt it (layer 1 < layer 2), so the user can summon panels mid-message.
-  useRootInput({
-    spawn: spawnHandler,
-    chatInput: makeChatInputHandler(chatInput, appStore, imageDraft),
-  });
+  useRootInput(
+    {
+      spawn: spawnHandler,
+      chatInput: makeChatInputHandler(chatInput, appStore, imageDraft),
+    },
+    terminalEvents,
+  );
 
   // A full-screen mode (C14 tmux) replaces the whole layout: when one is active the shell renders
   // only the {@link Overlay} (which paints the full-viewport surface), suppressing its own bars and
@@ -475,18 +486,22 @@ export function App({
   inputStores,
   bus,
   project,
+  terminalEvents,
 }: {
   readonly store: AppStoreApi;
   readonly inputStores: InputStores;
   readonly bus: BusClient;
   /** Current project/repo name for the top-bar branding; from `MURDER_PROJECT` (see index.tsx). */
   readonly project?: string | undefined;
+  /** The kitty stdin shim's chord channel (Phase 2), injected at the live entrypoint like `bus`.
+   * Omitted in smoke/tests. */
+  readonly terminalEvents?: TerminalEvents | undefined;
 }): JSX.Element {
   return (
     <AppStoreProvider value={store}>
       <InputStoresProvider value={inputStores}>
         <BusClientProvider value={bus}>
-          <Shell project={project} />
+          <Shell project={project} terminalEvents={terminalEvents} />
         </BusClientProvider>
       </InputStoresProvider>
     </AppStoreProvider>
