@@ -3,6 +3,10 @@
  * *subscription* side (rule 4: the client is injected, never imported by a component).
  *
  * This context is narrow by design: **actions are still the only view→bus RPC path** (rule 3).
+ * Rule 3 governs *writes*, and those still go through action factories — building them is itself one
+ * use of this hook (the Shell reads the injected client here to wire them up). The hook's *other* use
+ * is the sanctioned exception: subscribing to a high-rate read *stream* directly rather than via a
+ * slice — currently raw tmux frames alone (`TmuxMode`).
  * The `useBusClient` hook is exposed solely so a component that manages a transient streaming
  * subscription (C14's `TmuxFrame`) can open and close it without threading the bus through a
  * domain action. Streaming ANSI frames are transient display data, not a domain slice; they have
