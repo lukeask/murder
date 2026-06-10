@@ -55,6 +55,7 @@
  */
 
 import type { Key } from 'ink';
+import { DEFAULT_BINDINGS, type ResolvedBindings } from './bindings.js';
 import { CHAT_FOCUS, type FocusId } from './focusStore.js';
 import type { Direction } from './geometry.js';
 import { matchKeymap, type PanelKeymap } from './keymap.js';
@@ -101,6 +102,8 @@ export interface GlobalHandlers {
   newPlan(): void;
   /** `alt+t`: open the new-ticket popup (wired by C12). */
   newTicket(): void;
+  /** `alt+o` / `ctrl+o` (the `global.settings` action): open the settings modal (wired by Phase 5). */
+  openSettings(): void;
 }
 
 /**
@@ -138,6 +141,15 @@ export interface DispatchContext {
    * dispatcher declines to route, claiming nothing) — so chunks/tests that don't wire chat input are
    * unaffected. When present, layer 2 routes chat-focused non-chord events to it. */
   readonly chatInput?: ChatInputHandler;
+  /**
+   * The resolved binding table (see {@link ./bindings.js}). The dispatcher reads it to (a) gate the
+   * digit/vim-nav layer via {@link ResolvedBindings.isCommandModified} instead of a hardcoded
+   * `key.meta`, and (b) match the named global chords via {@link ResolvedBindings.matches} — so the
+   * command modifier (alt/ctrl/both) and any rebinds are honoured without the dispatcher knowing
+   * which modifier is in play (a deep module). Optional: when absent, {@link DEFAULT_BINDINGS}
+   * (today's alt behavior) is used, so existing call sites/tests need no change.
+   */
+  readonly bindings?: ResolvedBindings;
 }
 
 /** The vim navigation chords, as data: `alt+<letter>` → direction. Declared here (not inlined in a
@@ -172,57 +184,67 @@ function dispatchGlobalChord(
   key: Key,
   handlers: GlobalHandlers,
   focusedId: FocusId,
+  bindings: ResolvedBindings,
 ): boolean {
-  // Global chords carry **alt/meta** (not ctrl): standard terminals can't transmit Ctrl+digit, but
-  // Alt+<key> is an ESC-prefixed sequence Ink reports as `key.meta` reliably across terminals —
-  // including Alt+digit. Meta is never set by plain typing, so checking these first can't swallow a
-  // typed character (same safety property the old ctrl gate had).
-  if (!key.meta) {
+  // The command modifier (alt by default; ctrl/both via settings) gates the whole layer. The
+  // registry knows which flag(s) qualify, so this is no longer a hardcoded `key.meta` — but the
+  // safety property is unchanged: the command modifier is never set by plain typing, so checking
+  // these first can't swallow a typed character.
+  if (!bindings.isCommandModified(key)) {
     return false;
   }
 
-  // alt+<n>: panel toggle/focus. `panelForDigit` returns null for reserved/unbound digits → no-op.
+  // <mod>+<n>: panel toggle/focus. `panelForDigit` returns null for reserved/unbound digits → no-op.
   const panel = panelForDigit(input);
   if (panel !== null) {
     handlers.focusPanel(panel);
     return true;
   }
 
-  // alt+h/j/k/l: directional nav.
+  // <mod>+h/j/k/l: directional nav.
   const direction = VIM_NAV[input];
   if (direction !== undefined) {
     handlers.navigate(direction);
     return true;
   }
 
-  // The single-letter app chords.
-  switch (input) {
-    case ' ':
-      // alt+space → focus the chat input (was alt+f, which now stars in panels).
-      handlers.focusChat();
-      return true;
-    case 's':
-      // Spawn wizard only when chat is focused (see the fn doc); otherwise decline (return false →
-      // falls through to layer 3, where panels no longer bind alt+s, so it is unhandled).
-      if (focusedId === CHAT_FOCUS) {
-        handlers.spawn();
-        return true;
-      }
-      return false;
-    case 'y':
-      handlers.toggleTmux();
-      return true;
-    case 'p':
-      // C12: alt+p → new-plan popup.
-      handlers.newPlan();
-      return true;
-    case 't':
-      // C12: alt+t → new-ticket popup.
-      handlers.newTicket();
-      return true;
-    default:
-      return false;
+  // The named single-purpose app chords, matched against the resolved bindings (so a rebind or a
+  // different modifier is honoured without touching this code).
+  if (bindings.matches('global.focusChat', input, key)) {
+    // focus the chat input (was alt+f, which now stars in panels).
+    handlers.focusChat();
+    return true;
   }
+  if (bindings.matches('global.spawn', input, key)) {
+    // Spawn wizard only when chat is focused (see the fn doc); otherwise decline (return false →
+    // falls through to layer 3, where panels no longer bind the spawn chord, so it is unhandled).
+    if (focusedId === CHAT_FOCUS) {
+      handlers.spawn();
+      return true;
+    }
+    return false;
+  }
+  if (bindings.matches('global.tmux', input, key)) {
+    handlers.toggleTmux();
+    return true;
+  }
+  if (bindings.matches('global.newPlan', input, key)) {
+    // C12: new-plan popup.
+    handlers.newPlan();
+    return true;
+  }
+  if (bindings.matches('global.newTicket', input, key)) {
+    // C12: new-ticket popup.
+    handlers.newTicket();
+    return true;
+  }
+  if (bindings.matches('global.settings', input, key)) {
+    // Phase 5: the settings modal. Like the other app chords it wins app-wide (it carries the
+    // command modifier, so it never swallows typing) — opens the settings modal from any focus.
+    handlers.openSettings();
+    return true;
+  }
+  return false;
 }
 
 /**
@@ -238,6 +260,9 @@ export type DispatchOutcome =
   | { readonly layer: 'panel'; readonly handled: boolean };
 
 export function dispatchKey(input: string, key: Key, ctx: DispatchContext): DispatchOutcome {
+  // Default to today's alt behavior when a context omits bindings (existing call sites/tests) — the
+  // zero-behavior-change guarantee. Production wires the live resolved table from the bindings store.
+  const bindings = ctx.bindings ?? DEFAULT_BINDINGS;
   // Layer 0 — active-mode capture. A live mode captures the event exclusively: its declared keymap is
   // tried, and on no match the event is swallowed so no lower layer fires under the modal — UNLESS the
   // mode opts into pass-through, in which case a non-match falls through to layers 1–3.
@@ -269,7 +294,7 @@ export function dispatchKey(input: string, key: Key, ctx: DispatchContext): Disp
   // exception is `alt+s`, which only claims the event when chat is focused (→ spawn wizard); with a
   // panel focused it declines so the event falls through (alt+f is the panel-layer favorite/star
   // chord — see dispatchGlobalChord's doc). So the focus id is passed in.
-  if (dispatchGlobalChord(input, key, ctx.handlers, ctx.focusedId)) {
+  if (dispatchGlobalChord(input, key, ctx.handlers, ctx.focusedId, bindings)) {
     return { layer: 'global', handled: true };
   }
 

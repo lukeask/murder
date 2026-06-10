@@ -8,6 +8,9 @@ import { App } from './components/App.js';
 import { createInputStores } from './input/createInputStores.js';
 import type { PanelId } from './input/panels.js';
 import { createAppStore } from './store/store.js';
+import { capsStore } from './terminal/capsStore.js';
+import { createKittyDriver, type KeyProtocolDriver } from './terminal/kittyDriver.js';
+import { StdinShim } from './terminal/StdinShim.js';
 
 /**
  * Process entrypoint — the **standing live runner** (F7). It constructs the injected stores and
@@ -94,6 +97,13 @@ export async function runLive(busFactory: () => BusClient = makeLiveBus): Promis
     primeSlices(store);
   }
 
+  // Phase 2 — the kitty stdin shim. Constructed in BYPASS (pure passthrough) and handed to Ink as its
+  // stdin, so until the protocol is actually enabled Ink sees the identical byte stream it always did
+  // (behavior-neutral under the alt default). `terminalEvents = shim` carries the side-channel `chord`
+  // events into the root input loop. Detection + enable/disable is driven post-render by
+  // `setupTerminal` (the parser owns stdin, so the protocol replies never reach Ink).
+  const shim = new StdinShim(process.stdin);
+
   // `alternateScreen: true` is the keystone for a full-screen TUI: Ink draws on the terminal's
   // alternate screen buffer (like vim/less/Textual), which has NO scrollback. Without it, Ink renders
   // inline and erases by counting lines — once the frame fills the terminal height, writing the bottom
@@ -102,20 +112,114 @@ export async function runLive(busFactory: () => BusClient = makeLiveBus): Promis
   // (and Ink also drops the trailing newline on fullscreen frames, avoiding the bottom-line scroll).
   // Ink restores the primary screen + cursor on unmount, so exit is clean.
   const instance = render(
-    <App store={store} inputStores={inputStores} bus={bus} project={resolveProject()} />,
+    <App
+      store={store}
+      inputStores={inputStores}
+      bus={bus}
+      project={resolveProject()}
+      terminalEvents={shim}
+    />,
     {
+      // The shim is a `Readable` that implements the stdin surface Ink actually uses (data events,
+      // isTTY, setRawMode, ref/unref, resume/pause/setEncoding). Ink's option types it as the full
+      // `NodeJS.ReadStream`; we provide the consumed subset, so cast through `unknown`.
+      stdin: shim as unknown as NodeJS.ReadStream,
       alternateScreen: true,
     },
   );
+  // Wire the protocol lifecycle through the shim now that it is Ink's stdin: detect support, feed
+  // `ctrlAvailable`, and enable the protocol only when the user's modifier wants ctrl AND it is
+  // supported. Returns a teardown that pops the protocol (best-effort).
+  const teardownTerminal = await setupTerminal(shim, inputStores);
   // No unmount-on-tick here (that was the smoke scaffold): the app stays mounted. Ink keeps the
   // process alive and resolves `waitUntilExit` when the user exits (ctrl+c by default).
   try {
     await instance.waitUntilExit();
   } finally {
+    teardownTerminal();
+    shim.dispose();
     unhookConnect?.();
     dispose();
     closeIfSupported(bus);
   }
+}
+
+/**
+ * Wire the kitty stdin shim's protocol lifecycle (Phase 2). Run *after* `render` so the shim is
+ * already Ink's stdin and detection's reply bytes are owned by the shim's parser (Ink never sees
+ * them). Steps:
+ *
+ *  1. Build the kitty driver over `process.stdout` + the shim (its {@link StdinShim.subscribe} token
+ *     source). Use the process-global {@link capsStore caps store}.
+ *  2. `detect()` through the shim; record the result in the caps store AND the bindings store's
+ *     `ctrlAvailable` (so `ctrl`/`both` degrade to alt when unsupported — see `resolveBindings`).
+ *  3. Apply the current modifier: enable the protocol + leave bypass iff the modifier wants ctrl
+ *     (`ctrl`/`both`) and it is supported; otherwise stay in bypass (behavior-neutral). Subscribe to
+ *     the bindings store so a live settings change re-applies (alt → disable+bypass).
+ *  4. Register best-effort `exit`/`SIGTERM` pops so a crash without the normal teardown does not leave
+ *     the parent shell's protocol flags pushed (which would garble its input).
+ *
+ * Returns a teardown fn (idempotent disable + listener cleanup) for the `finally` path.
+ */
+export async function setupTerminal(
+  shim: StdinShim,
+  inputStores: ReturnType<typeof createInputStores>,
+): Promise<() => void> {
+  const caps = capsStore;
+  const driver: KeyProtocolDriver = createKittyDriver(
+    { write: (data) => process.stdout.write(data) },
+    shim,
+  );
+  const bindings = inputStores.bindings;
+
+  // Detect (through the shim). A non-answering terminal resolves false on the driver's timeout.
+  const supported = await detectIfTty(shim, driver);
+  caps.getState().setKittySupported(supported);
+  bindings.getState().setCtrlAvailable(supported);
+
+  // Apply the protocol state for a given modifier: enable + active iff ctrl is wanted and supported.
+  let enabled = false;
+  const apply = (): void => {
+    const wantsCtrl = bindings.getState().modifier !== 'alt';
+    const shouldEnable = wantsCtrl && supported;
+    if (shouldEnable && !enabled) {
+      driver.enable();
+      shim.setBypass(false);
+      enabled = true;
+    } else if (!shouldEnable && enabled) {
+      driver.disable();
+      shim.setBypass(true);
+      enabled = false;
+    }
+  };
+  apply();
+  const unsubscribe = bindings.subscribe(apply);
+
+  // Best-effort pop on abnormal exit so the parent shell's input isn't left in protocol mode.
+  const popOnExit = (): void => {
+    if (enabled) {
+      driver.disable();
+      enabled = false;
+    }
+  };
+  process.on('exit', popOnExit);
+  process.on('SIGTERM', popOnExit);
+
+  return () => {
+    unsubscribe();
+    process.off('exit', popOnExit);
+    process.off('SIGTERM', popOnExit);
+    popOnExit();
+  };
+}
+
+/** Detect kitty support only on a real interactive TTY; a non-TTY stdin (piped/CI) can't carry the
+ * protocol, so we skip the probe and report unsupported without writing a query to a non-terminal. */
+function detectIfTty(shim: StdinShim, driver: KeyProtocolDriver): Promise<boolean> {
+  if (shim.isTTY !== true || process.stdout.isTTY !== true) {
+    return Promise.resolve(false);
+  }
+  return driver.detect();
 }
 
 /**

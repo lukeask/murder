@@ -45,8 +45,9 @@ import {
   useModeStore,
 } from '../hooks/useInputStores.js';
 import { useOrientation } from '../hooks/useOrientation.js';
-import { useRootInput } from '../hooks/useRootInput.js';
+import { type TerminalEvents, useRootInput } from '../hooks/useRootInput.js';
 import { useTerminalSize } from '../hooks/useTerminalSize.js';
+import type { ActionId } from '../input/bindings.js';
 import { expandSpans, spanIds } from '../input/chatInputStore.js';
 import { readClipboardImage } from '../input/clipboardImage.js';
 import type { ChatInputHandler } from '../input/dispatcher.js';
@@ -62,8 +63,11 @@ import {
   createImageDraftStore,
   type ImageDraftStoreApi,
 } from '../store/imageDraft/imageDraftStore.js';
+import type { SettingsModifier } from '../store/settings/settingsSlice.js';
 import type { AppStoreApi } from '../store/store.js';
 import { toastStore } from '../store/toast/toastStore.js';
+import { DEFAULT_THEME_ID, PALETTES, type ThemeId } from '../theme/palettes.js';
+import { setTheme } from '../theme/themeStore.js';
 import { BottomBar, useBottomBarLines } from './BottomBar.js';
 import { ChatInput } from './ChatInput.js';
 import { CrowsPanel } from './CrowsPanel.js';
@@ -72,6 +76,7 @@ import { Overlay, presentationHidesLayout } from './Overlay.js';
 import { PlansPanel } from './PlansPanel.js';
 import { Rail } from './Rail.js';
 import { ReportsPanel } from './ReportsPanel.js';
+import { settingsMode } from './SettingsModal.js';
 import type { SpawnContext } from './SpawnWizardModal.js';
 import { spawnWizardMode } from './SpawnWizardModal.js';
 import { Stage } from './Stage.js';
@@ -283,11 +288,20 @@ export function makeChatInputHandler(
  * is the OPEN doc-view (focused-doc), via {@link deriveSpawnContext}. C11 also loads the persisted
  * favorites once on mount via the favorites action.
  */
-function Shell({ project }: { readonly project?: string | undefined }): JSX.Element {
-  const { modes, chatInput } = useInputStores();
+function Shell({
+  project,
+  terminalEvents,
+}: {
+  readonly project?: string | undefined;
+  /** The kitty stdin shim's chord channel (Phase 2), passed from the live entrypoint like `bus`. The
+   * root input loop subscribes to it; omitted in smoke/tests (no shim → no side-channel chords). */
+  readonly terminalEvents?: TerminalEvents | undefined;
+}): JSX.Element {
+  const { modes, chatInput, bindings } = useInputStores();
   const appStore = useAppStoreApi();
   const bus = useBusClient();
   const loadFavorites = useAppStore((s) => s.actions.favorites.load);
+  const loadSettings = useAppStore((s) => s.actions.settings.load);
   // Live terminal height — bounds the root box so the frame always fits one screen (see the return).
   const { rows } = useTerminalSize();
   // The ONE orientation read (rule: one source of truth) — threaded to both Rails and the Body axis.
@@ -364,6 +378,57 @@ function Shell({ project }: { readonly project?: string | undefined }): JSX.Elem
     void loadFavorites();
   }, [loadFavorites]);
 
+  // Phase 3: load persisted settings once on mount, next to favorites (rule 3: via the action).
+  // Same fire-and-forget contract — a rejection lands in the slice's error and leaves settings at
+  // their defaults (alt modifier, no rebinds), never crashing the shell.
+  useEffect(() => {
+    void loadSettings();
+  }, [loadSettings]);
+
+  // Phase 3/5: the settings → store bridges. The settings slice owns the persisted preferences; the
+  // input layer's bindingsStore and the global themeStore must stay bus-free (neither knows the bus
+  // exists), so this one subscription mirrors the relevant fields onto them whenever they change. It
+  // runs once at mount (priming both stores from the loaded settings) and then on every settings
+  // change (the optimistic `update` path → instant dispatcher/keymap/footer/theme reaction).
+  //
+  // Phase 5: the theme bridge. The slice stores `theme` as an opaque string (server authority); we
+  // validate it against the known PALETTES before applying — an unknown id (a stale/foreign config)
+  // falls back to the default scheme so a bad value can never leave the UI uncolored.
+  useEffect(() => {
+    const syncBindings = (
+      modifier: SettingsModifier,
+      keyOverrides: Record<string, string>,
+    ): void => {
+      const bindingsState = bindings.getState();
+      bindingsState.setModifier(modifier);
+      // The slice stores keyOverrides opaquely (string keys); the bindings store narrows them onto
+      // the ActionId union. A stray non-ActionId key is harmless (resolveBindings ignores it).
+      bindingsState.setOverrides(keyOverrides as Partial<Record<ActionId, string>>);
+    };
+    const syncTheme = (theme: string): void => {
+      // Validate against the known palette ids; unknown → default (never an uncolored UI).
+      const id: ThemeId = theme in PALETTES ? (theme as ThemeId) : DEFAULT_THEME_ID;
+      setTheme(id);
+    };
+    const current = appStore.getState().settings;
+    syncBindings(current.modifier, current.keyOverrides as Record<string, string>);
+    syncTheme(current.theme);
+    return appStore.subscribe((state, prev) => {
+      if (
+        state.settings.modifier !== prev.settings.modifier ||
+        state.settings.keyOverrides !== prev.settings.keyOverrides
+      ) {
+        syncBindings(
+          state.settings.modifier,
+          state.settings.keyOverrides as Record<string, string>,
+        );
+      }
+      if (state.settings.theme !== prev.settings.theme) {
+        syncTheme(state.settings.theme);
+      }
+    });
+  }, [appStore, bindings]);
+
   // `ctrl+s` → open the spawn wizard (only fires when chat is focused; see dispatcher.ts). Reads the
   // store imperatively at call time (getState()) so no stale closure; stores are stable references.
   const spawnHandler = (): void => {
@@ -377,14 +442,36 @@ function Shell({ project }: { readonly project?: string | undefined }): JSX.Elem
       .enter(spawnWizardMode(modes, actions, { spawnContext, modelActions, worktreeActions }));
   };
 
+  // `alt+o` / `ctrl+o` → open the settings modal. Reads the persisted slice at call time so the modal opens
+  // reflecting the live preferences; commits route back through `actions.settings.update`. The slice
+  // stores `theme`/`keyOverrides` opaquely, so we narrow them onto the modal's typed shape here (an
+  // unknown theme falls back to the default, mirroring the theme bridge above).
+  const openSettingsHandler = (): void => {
+    const settings = appStore.getState().settings;
+    const settingsActions = appStore.getState().actions.settings;
+    const theme: ThemeId =
+      settings.theme in PALETTES ? (settings.theme as ThemeId) : DEFAULT_THEME_ID;
+    modes.getState().enter(
+      settingsMode(modes, settingsActions, {
+        modifier: settings.modifier,
+        theme,
+        keyOverrides: settings.keyOverrides as Record<string, string>,
+      }),
+    );
+  };
+
   // The single root input loop for the whole app (rule 5) — installed exactly once, here.
   // C13: `spawn` wired to the spawn wizard handler. C11: `chatInput` wired to the persistent
   // chat-input handler (buffers chars, sends on Enter to the active agent). Global ctrl-chords still
   // preempt it (layer 1 < layer 2), so the user can summon panels mid-message.
-  useRootInput({
-    spawn: spawnHandler,
-    chatInput: makeChatInputHandler(chatInput, appStore, imageDraft),
-  });
+  useRootInput(
+    {
+      spawn: spawnHandler,
+      openSettings: openSettingsHandler,
+      chatInput: makeChatInputHandler(chatInput, appStore, imageDraft),
+    },
+    terminalEvents,
+  );
 
   // A full-screen mode (C14 tmux) replaces the whole layout: when one is active the shell renders
   // only the {@link Overlay} (which paints the full-viewport surface), suppressing its own bars and
@@ -475,18 +562,22 @@ export function App({
   inputStores,
   bus,
   project,
+  terminalEvents,
 }: {
   readonly store: AppStoreApi;
   readonly inputStores: InputStores;
   readonly bus: BusClient;
   /** Current project/repo name for the top-bar branding; from `MURDER_PROJECT` (see index.tsx). */
   readonly project?: string | undefined;
+  /** The kitty stdin shim's chord channel (Phase 2), injected at the live entrypoint like `bus`.
+   * Omitted in smoke/tests. */
+  readonly terminalEvents?: TerminalEvents | undefined;
 }): JSX.Element {
   return (
     <AppStoreProvider value={store}>
       <InputStoresProvider value={inputStores}>
         <BusClientProvider value={bus}>
-          <Shell project={project} />
+          <Shell project={project} terminalEvents={terminalEvents} />
         </BusClientProvider>
       </InputStoresProvider>
     </AppStoreProvider>

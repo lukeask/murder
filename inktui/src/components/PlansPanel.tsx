@@ -35,6 +35,7 @@ import { memo, useCallback, useMemo, useState } from 'react';
 import { shallow } from 'zustand/shallow';
 import { useAppStore } from '../hooks/useAppStore.js';
 import {
+  useBindings,
   useEffectiveFocus,
   useFocusRef,
   useMeasureFocus,
@@ -43,7 +44,7 @@ import {
 import type { PanelKeymap } from '../input/keymap.js';
 import type { PanelId } from '../input/panels.js';
 import { type PlanRowView, type PlansView, usePlansView } from '../selectors/plansSelectors.js';
-import { theme } from '../theme.js';
+import { useTheme } from '../theme/themeStore.js';
 import { useDocView } from './DocPane.js';
 import { Ledger, type LedgerEntryContext } from './Ledger.js';
 import { Pane } from './Pane.js';
@@ -123,6 +124,7 @@ function PlansList({
   readonly cursor: number;
   readonly focused: boolean;
 }): React.JSX.Element {
+  const theme = useTheme();
   if (view.status === 'error') {
     return <Text color={theme.error}>{`error: ${view.error ?? 'unknown'}`}</Text>;
   }
@@ -179,13 +181,18 @@ export const PlansPanel = memo(function PlansPanel(): React.JSX.Element {
     return view.rows[clamped]?.id ?? null;
   }, [cursor, rowCount, view.rows]);
 
+  // The favorite/star chord comes from the central registry (`panel.star`), so the modifier setting
+  // and any rebind are honoured. `bindings` is a stable identity that changes only on a settings
+  // change — safe as the keymap's sole input-related dep (no per-render re-registration).
+  const bindings = useBindings();
+
   const keymap: PanelKeymap<PlansIntent> = useMemo(
     () => ({
       keymap: [
         { chord: { input: 'j' }, intent: 'cursorDown', description: 'next plan' },
         { chord: { input: 'k' }, intent: 'cursorUp', description: 'prev plan' },
         { chord: { input: 'r' }, intent: 'refresh', description: 'refresh' },
-        { chord: { input: 'f', key: { meta: true } }, intent: 'star', description: 'favorite' },
+        { chord: bindings.chordsFor('panel.star'), intent: 'star', description: 'favorite' },
         { chord: { key: { return: true } }, intent: 'open', description: 'view doc' },
       ],
       onIntent(intent) {
@@ -218,7 +225,7 @@ export const PlansPanel = memo(function PlansPanel(): React.JSX.Element {
         }
       },
     }),
-    [moveCursor, refresh, toggleFavorite, toggleDoc, rowIdAtCursor],
+    [moveCursor, refresh, toggleFavorite, toggleDoc, rowIdAtCursor, bindings],
   );
   usePanelKeymap(PANEL_ID, keymap);
 

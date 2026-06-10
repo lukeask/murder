@@ -48,7 +48,7 @@ import {
 import type { FocusId, StagePaneId } from '../input/focusStore.js';
 import type { PanelKeymap } from '../input/keymap.js';
 import { DOC_DIR, type DocKind, type OpenDoc } from '../store/docView/docViewSlice.js';
-import { theme } from '../theme.js';
+import { useTheme } from '../theme/themeStore.js';
 import { Pane } from './Pane.js';
 
 /** The Stage focus id for an open document pane. The single place the `stage:doc:` scheme is minted
@@ -94,6 +94,7 @@ export const StageDocPane = memo(function StageDocPane({
 }: {
   readonly open: OpenDoc;
 }): JSX.Element {
+  const theme = useTheme();
   const focusId: FocusId = docPaneFocusId(open.name);
   const body = useAppStore((s) => s.docView.body);
   const status = useAppStore((s) => s.docView.status);

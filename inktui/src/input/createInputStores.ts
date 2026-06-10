@@ -4,6 +4,7 @@
  * bundle through here, so the wiring (focus ← panels) lives in exactly one place.
  */
 
+import { createBindingsStore } from './bindingsStore.js';
 import { createChatInputStore } from './chatInputStore.js';
 import { createFocusStore, type FocusId } from './focusStore.js';
 import { createKeymapRegistry } from './keymapRegistry.js';
@@ -18,6 +19,7 @@ export interface InputStoreBundle {
   readonly keymaps: ReturnType<typeof createKeymapRegistry>;
   readonly modes: ReturnType<typeof createModeStore>;
   readonly chatInput: ReturnType<typeof createChatInputStore>;
+  readonly bindings: ReturnType<typeof createBindingsStore>;
 }
 
 /** Build the bundle. `initialVisible` seeds the toggled-on panels; `initialFocus` seeds intended
@@ -33,5 +35,8 @@ export function createInputStores(
   const keymaps = createKeymapRegistry();
   const modes = createModeStore(focus);
   const chatInput = createChatInputStore();
-  return { panels, focus, keymaps, modes, chatInput };
+  // The bindings store starts at today's behavior (alt modifier, ctrl unavailable, no overrides); a
+  // later settings phase mutates it from the settings RPC bridge.
+  const bindings = createBindingsStore();
+  return { panels, focus, keymaps, modes, chatInput, bindings };
 }

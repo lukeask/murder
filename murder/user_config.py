@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 import yaml
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 UserHarnessKind = Literal[
     "cursor", "claude_code", "codex", "pi", "antigravity", "native_coding_crow"
@@ -23,8 +23,23 @@ UserHarnessKind = Literal[
 
 
 class TuiUserConfig(BaseModel):
-    theme: str | None = None
-    editor: str | None = None
+    """User-facing TUI preferences round-tripped by the `settings.{get,update}` RPC pair.
+
+    The frontend's binding registry (`inktui/src/input/bindings.ts`) is the authority on
+    `ActionId`s, so `key_overrides` is stored opaquely here (an `ActionId -> key char` map);
+    pydantic only validates the closed `modifier`/`theme` shape.
+
+    `extra="ignore"` is load-bearing: a stale `config.yaml` from the old schema (which had
+    `tui.editor` and a free-form `tui.theme`) must still load without error — unknown tui keys
+    are dropped on read rather than raising.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    theme: str = "everforest-dark"
+    modifier: Literal["alt", "ctrl", "both"] = "alt"
+    # ActionId -> key char. Stored as-is; the TS registry validates ids.
+    key_overrides: dict[str, str] = Field(default_factory=dict)
 
 
 class UserHarnessRolePatch(BaseModel):

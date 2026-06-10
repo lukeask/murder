@@ -19,6 +19,7 @@ import { memo, useCallback, useMemo, useState } from 'react';
 import { shallow } from 'zustand/shallow';
 import { useAppStore } from '../hooks/useAppStore.js';
 import {
+  useBindings,
   useEffectiveFocus,
   useFocusRef,
   useMeasureFocus,
@@ -31,7 +32,7 @@ import {
   type ReportsView,
   useReportsView,
 } from '../selectors/reportsSelectors.js';
-import { theme } from '../theme.js';
+import { useTheme } from '../theme/themeStore.js';
 import { useDocView } from './DocPane.js';
 import { Ledger, type LedgerEntryContext } from './Ledger.js';
 import { Pane } from './Pane.js';
@@ -89,6 +90,7 @@ function ReportsList({
   readonly cursor: number;
   readonly focused: boolean;
 }): React.JSX.Element {
+  const theme = useTheme();
   if (view.status === 'error') {
     return <Text color={theme.error}>{`error: ${view.error ?? 'unknown'}`}</Text>;
   }
@@ -144,13 +146,17 @@ export const ReportsPanel = memo(function ReportsPanel(): React.JSX.Element {
     return view.rows[clamped]?.name ?? null;
   }, [cursor, rowCount, view.rows]);
 
+  // The favorite/star chord comes from the central registry (`panel.star`); `bindings` is a stable
+  // identity that changes only on a settings change, so it is a safe keymap dep (no churn).
+  const bindings = useBindings();
+
   const keymap: PanelKeymap<ReportsIntent> = useMemo(
     () => ({
       keymap: [
         { chord: { input: 'j' }, intent: 'cursorDown', description: 'next report' },
         { chord: { input: 'k' }, intent: 'cursorUp', description: 'prev report' },
         { chord: { input: 'r' }, intent: 'refresh', description: 'refresh' },
-        { chord: { input: 'f', key: { meta: true } }, intent: 'star', description: 'favorite' },
+        { chord: bindings.chordsFor('panel.star'), intent: 'star', description: 'favorite' },
         { chord: { key: { return: true } }, intent: 'open', description: 'view doc' },
       ],
       onIntent(intent) {
@@ -183,7 +189,7 @@ export const ReportsPanel = memo(function ReportsPanel(): React.JSX.Element {
         }
       },
     }),
-    [moveCursor, refresh, toggleFavorite, toggleDoc, rowNameAtCursor],
+    [moveCursor, refresh, toggleFavorite, toggleDoc, rowNameAtCursor, bindings],
   );
   usePanelKeymap(PANEL_ID, keymap);
 

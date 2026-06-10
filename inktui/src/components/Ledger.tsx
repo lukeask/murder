@@ -70,7 +70,7 @@
 
 import { Box, type DOMElement, measureElement, Text } from 'ink';
 import { useLayoutEffect, useRef, useState } from 'react';
-import { theme } from '../theme.js';
+import { useTheme } from '../theme/themeStore.js';
 
 /** Context handed to `renderEntry`/`header` so they emit the right number of fields. */
 export interface LedgerEntryContext {
@@ -237,6 +237,7 @@ function LedgerRow<Row>({
   readonly columns: number;
   readonly renderEntry: (row: Row, ctx: LedgerEntryContext) => React.ReactNode;
 }): React.JSX.Element {
+  const theme = useTheme();
   const selected = focused && index === ledgerCursor;
   // Selection background spans the full width; otherwise alternating parity (by absolute index).
   const backgroundColor = selected
@@ -261,6 +262,7 @@ function LedgerRow<Row>({
  * Dim so it recedes behind real entries.
  */
 function OverflowRow({ index }: { readonly index: number }): React.JSX.Element {
+  const theme = useTheme();
   const backgroundColor = index % 2 === 1 ? theme.rowAltBg : undefined;
   return (
     <Box flexShrink={0} width="100%" justifyContent="center" backgroundColor={backgroundColor}>

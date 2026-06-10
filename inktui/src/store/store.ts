@@ -89,6 +89,12 @@ import {
   ROSTER_INVALIDATING_ENTITY,
   type RosterState,
 } from './roster/rosterSlice.js';
+import { createSettingsActions, type SettingsActions } from './settings/settingsActions.js';
+import {
+  createSettingsSlice,
+  initialSettingsState,
+  type SettingsState,
+} from './settings/settingsSlice.js';
 import {
   createTicketDetailActions,
   type TicketDetailActions,
@@ -126,6 +132,7 @@ export interface AppActions {
   conversations: ConversationsActions;
   favorites: FavoritesActions;
   docView: DocViewActions;
+  settings: SettingsActions;
 }
 
 /**
@@ -144,6 +151,7 @@ export interface AppStore {
   conversations: ConversationsState;
   favorites: FavoritesState;
   docView: DocViewState;
+  settings: SettingsState;
   actions: AppActions;
 }
 
@@ -185,6 +193,7 @@ export function createAppStore(bus: BusClient): {
     ...createConversationsSlice(...a),
     ...createFavoritesSlice(...a),
     ...createDocViewSlice(...a),
+    ...createSettingsSlice(...a),
     // Placeholder; replaced in step 2 now that we have the handle the actions need to `setState`.
     actions: undefined as unknown as AppActions,
   }));
@@ -201,6 +210,7 @@ export function createAppStore(bus: BusClient): {
     conversations: createConversationsActions(bus, store),
     favorites: createFavoritesActions(bus, store),
     docView: createDocViewActions(bus, store),
+    settings: createSettingsActions(bus, store),
   };
   store.setState({ actions });
 
@@ -292,6 +302,7 @@ export const initialAppState: Pick<
   | 'conversations'
   | 'favorites'
   | 'docView'
+  | 'settings'
 > = {
   roster: initialRosterState,
   plans: initialPlansState,
@@ -303,4 +314,5 @@ export const initialAppState: Pick<
   conversations: initialConversationsState,
   favorites: initialFavoritesState,
   docView: initialDocViewState,
+  settings: initialSettingsState,
 };

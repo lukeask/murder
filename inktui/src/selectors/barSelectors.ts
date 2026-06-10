@@ -5,8 +5,9 @@
  * labels, the hint list) is a tested pure transform, not inline JSX logic.
  */
 
+import type { ResolvedBindings } from '../input/bindings.js';
 import { CHAT_FOCUS, type FocusId } from '../input/focusStore.js';
-import type { Keymap } from '../input/keymap.js';
+import type { KeyChord, Keymap } from '../input/keymap.js';
 import { PANELS, type PanelId } from '../input/panels.js';
 
 /** Unicode subscript digits 0–9, indexed by the digit — for the top bar's `plans₁ … crows₀` labels
@@ -49,21 +50,48 @@ export interface BottomBarHint {
   readonly description: string;
 }
 
+/** The modifier prefix for the digit/nav hints, derived from the resolved bindings so the footer
+ * tracks the user's modifier choice. Reads `global.focusChat`'s label (always present) and keeps just
+ * its prefix (`M-`, `C-`, or `M-/C-` under both). */
+function modifierPrefix(bindings: ResolvedBindings): string {
+  // The label is e.g. `M-space`; strip the key part to get the prefix(es). Under `both` it is
+  // `M-space/C-space` → `M-/C-`.
+  return bindings
+    .label('global.focusChat')
+    .split('/')
+    .map((part) => part.replace(/space$/, ''))
+    .join('/');
+}
+
 /** The always-present global hints — the chords the root dispatcher owns regardless of focus. Shown
- * first so the navigation keys are always discoverable. */
-const GLOBAL_HINTS: readonly BottomBarHint[] = [
-  { key: 'alt+1–0', description: 'panels' },
-  { key: 'alt+hjkl', description: 'nav' },
-  { key: 'alt+space', description: 'chat' },
-];
+ * first so the navigation keys are always discoverable. Built from the resolved bindings so the
+ * labels track the modifier + any rebinds. */
+function globalHints(bindings: ResolvedBindings): readonly BottomBarHint[] {
+  const prefix = modifierPrefix(bindings);
+  return [
+    { key: `${prefix}1–0`, description: 'panels' },
+    { key: `${prefix}hjkl`, description: 'nav' },
+    { key: bindings.label('global.focusChat'), description: 'chat' },
+  ];
+}
+
+/** Normalize a keymap entry's chord(s) to the first chord (the list form binds equivalent chords;
+ * the hint shows one). A list always has at least one chord (resolved bindings never empty). */
+function firstChord(chord: KeyChord | readonly KeyChord[]): KeyChord {
+  if (Array.isArray(chord)) {
+    return (chord as readonly KeyChord[])[0] as KeyChord;
+  }
+  return chord as KeyChord;
+}
 
 /** Render a chord's key for the hint bar: prefer its printable char, else name the special key. */
 function hintKey(entry: Keymap<string>[number]): string {
-  if (entry.chord.input !== undefined) {
-    return entry.chord.input;
+  const chord = firstChord(entry.chord);
+  if (chord.input !== undefined) {
+    return chord.input;
   }
   // A key-only chord (e.g. Enter): name the first listed special flag.
-  const flags = entry.chord.key === undefined ? [] : Object.keys(entry.chord.key);
+  const flags = chord.key === undefined ? [] : Object.keys(chord.key);
   return flags[0] ?? '?';
 }
 
@@ -76,13 +104,15 @@ function hintKey(entry: Keymap<string>[number]): string {
 export function selectBottomBar(
   focused: FocusId,
   focusedKeymap: Keymap<string> | undefined,
+  bindings: ResolvedBindings,
 ): readonly BottomBarHint[] {
+  const globals = globalHints(bindings);
   if (focused === CHAT_FOCUS || focusedKeymap === undefined) {
-    return GLOBAL_HINTS;
+    return globals;
   }
   const panelHints = focusedKeymap.map((entry) => ({
     key: hintKey(entry),
     description: entry.description,
   }));
-  return [...GLOBAL_HINTS, ...panelHints];
+  return [...globals, ...panelHints];
 }

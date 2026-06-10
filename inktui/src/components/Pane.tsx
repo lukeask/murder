@@ -64,7 +64,8 @@
 
 import { Box, type DOMElement } from 'ink';
 import { forwardRef, memo } from 'react';
-import { theme } from '../theme.js';
+import type { Theme } from '../theme/buildTheme.js';
+import { useTheme } from '../theme/themeStore.js';
 import { PaneBorderTop } from './paneBorder.js';
 
 /** Focus-driven colors for the border/corners/fill (`border`) and the title segment (`title`). */
@@ -74,12 +75,12 @@ export interface PaneColors {
 }
 
 /**
- * Pure color choice for a Pane given focus, resolved through {@link theme}. A focused Pane uses the
- * focus accent for both border and title; a blurred Pane keeps a readable title (`titleBlurred`) on a
- * recessed border (`borderBlurred`) so it doesn't vanish. Exported so the focus color-flip stays
- * unit-testable against the theme roles.
+ * Pure color choice for a Pane given focus, resolved through the passed {@link Theme}. A focused Pane
+ * uses the focus accent for both border and title; a blurred Pane keeps a readable title
+ * (`titleBlurred`) on a recessed border (`borderBlurred`) so it doesn't vanish. Theme is a parameter
+ * (not a store read) so the helper stays pure and unit-testable against the theme roles.
  */
-export function paneColors(focused: boolean): PaneColors {
+export function paneColors(focused: boolean, theme: Theme): PaneColors {
   return focused
     ? { border: theme.focus, title: theme.focus }
     : { border: theme.borderBlurred, title: theme.titleBlurred };
@@ -107,7 +108,8 @@ export const Pane = memo(
     { title, focused, children, titleExtra, flexGrow = 1 },
     ref,
   ): React.JSX.Element {
-    const { border: borderColor, title: titleColor } = paneColors(focused);
+    const theme = useTheme();
+    const { border: borderColor, title: titleColor } = paneColors(focused, theme);
     return (
       <Box ref={ref} flexDirection="column" flexGrow={flexGrow} minHeight={0} overflow="hidden">
         {/* Top border line with the inline title — the shared {@link ./paneBorder.js} recipe (also
