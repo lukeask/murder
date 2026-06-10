@@ -37,7 +37,10 @@ export type SettingsModifier = 'alt' | 'ctrl' | 'both';
  * wholesale on change.
  */
 export interface SettingsState {
-  /** The selected theme id. Defaults to the hard Everforest Dark build (matches the Python default). */
+  /** The selected theme id. Defaults to the hard Everforest Dark build (matches the Python default).
+   * This is the source of truth for the *persisted* scheme; the process-global
+   * `../../theme/themeStore.ts` mirrors it (what's painted now) for synchronous non-React palette
+   * reads, and may transiently diverge from this during a SettingsModal live preview. */
   readonly theme: string;
   /** The command modifier (alt / ctrl / both). Bridged onto the bindings store. */
   readonly modifier: SettingsModifier;
