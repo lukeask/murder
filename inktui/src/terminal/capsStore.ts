@@ -13,6 +13,7 @@
  * directly. It starts in `'detecting'` and resolves to a boolean once the driver's probe settles.
  */
 
+import { useStoreWithEqualityFn } from 'zustand/traditional';
 import { createStore, type StoreApi } from 'zustand/vanilla';
 
 /** Whether the kitty keyboard protocol is supported. `'detecting'` is the transient startup state
@@ -38,4 +39,20 @@ export function createCapsStore(initial: KittySupport = 'detecting'): CapsStoreA
       set({ kittySupported: supported });
     },
   }));
+}
+
+/**
+ * The process-global capability store. Like {@link ../theme/themeStore.js themeStore} this is a
+ * module-level singleton: terminal capability is a single process-wide fact (one terminal), written
+ * once by detection in `index.tsx` and read both by that wiring and — via {@link useKittySupport} —
+ * by the settings modal's ctrl-availability notice. A test seeds it directly with
+ * {@link CapsState.setKittySupported}. Starts in `'detecting'` so a modal opened before detection
+ * settles shows no premature "unsupported" notice.
+ */
+export const capsStore: CapsStoreApi = createCapsStore();
+
+/** The live kitty-support fact. Re-renders the calling component when detection resolves or changes
+ * (so the settings modal's notice appears the moment detection reports `false`). */
+export function useKittySupport(): KittySupport {
+  return useStoreWithEqualityFn(capsStore, (s) => s.kittySupported);
 }

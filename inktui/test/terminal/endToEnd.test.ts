@@ -59,6 +59,7 @@ describe('ctrl+1 raw bytes → shim → dispatch → focusPanel(plans)', () => {
       toggleTmux: vi.fn(),
       newPlan: vi.fn(),
       newTicket: vi.fn(),
+      openSettings: vi.fn(),
     };
     const ctx: DispatchContext = {
       focusedId: CHAT_FOCUS,

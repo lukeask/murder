@@ -44,6 +44,7 @@ function noopHandlers(): GlobalHandlers {
     toggleTmux: vi.fn(),
     newPlan: vi.fn(),
     newTicket: vi.fn(),
+    openSettings: vi.fn(),
   };
 }
 

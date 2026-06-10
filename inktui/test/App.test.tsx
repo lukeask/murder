@@ -9,13 +9,15 @@
  */
 
 import { render } from 'ink-testing-library';
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { FakeBusClient } from '../src/bus/FakeBusClient.js';
 import { App, deriveSpawnContext } from '../src/components/App.js';
 import { TMUX_MODE_ID, tmuxMode } from '../src/components/TmuxMode.js';
 import { createInputStores } from '../src/input/createInputStores.js';
 import type { PanelId } from '../src/input/panels.js';
 import { createAppStore } from '../src/store/store.js';
+import { DEFAULT_THEME_ID } from '../src/theme/palettes.js';
+import { themeStore } from '../src/theme/themeStore.js';
 
 /** Let Ink flush a render + the post-layout measure effects. */
 async function tick(): Promise<void> {
@@ -209,6 +211,70 @@ describe('deriveSpawnContext — focused doc = the open doc-view (C11)', () => {
       title: 'my-plan',
       path: '.murder/plans/my-plan.md',
     });
+    dispose();
+  });
+});
+
+describe('theme bridge (Phase 5) — settings.theme → themeStore', () => {
+  beforeEach(() => {
+    themeStore.getState().setTheme(DEFAULT_THEME_ID);
+  });
+  afterEach(() => {
+    themeStore.getState().setTheme(DEFAULT_THEME_ID);
+  });
+
+  it('loads the persisted theme into the global themeStore on mount', async () => {
+    const fake = new FakeBusClient();
+    fake.stubRpc('state.crow_snapshot', { invalidation_key: 'iv', sessions: [] });
+    // settings.get resolves with the light theme → the bridge applies it after load.
+    fake.stubRpc('settings.get', {
+      ok: true,
+      settings: { theme: 'everforest-light', modifier: 'alt', key_overrides: {} },
+    });
+    const { store, dispose } = createAppStore(fake);
+    const inputStores = createInputStores([]);
+    const { unmount } = render(<App store={store} inputStores={inputStores} bus={fake} />);
+    await tick();
+    expect(themeStore.getState().id).toBe('everforest-light');
+    unmount();
+    dispose();
+  });
+
+  it('reacts to a live settings.theme change (the optimistic update path)', async () => {
+    const fake = new FakeBusClient();
+    fake.stubRpc('state.crow_snapshot', { invalidation_key: 'iv', sessions: [] });
+    fake.stubRpc('settings.update', {
+      ok: true,
+      settings: { theme: 'everforest-light', modifier: 'alt', key_overrides: {} },
+    });
+    const { store, dispose } = createAppStore(fake);
+    const inputStores = createInputStores([]);
+    const { unmount } = render(<App store={store} inputStores={inputStores} bus={fake} />);
+    await tick();
+    expect(themeStore.getState().id).toBe(DEFAULT_THEME_ID);
+
+    // An optimistic update overlays the slice synchronously; the bridge subscription mirrors it.
+    await store.getState().actions.settings.update({ theme: 'everforest-light' });
+    await tick();
+    expect(themeStore.getState().id).toBe('everforest-light');
+    unmount();
+    dispose();
+  });
+
+  it('falls back to the default theme for an unknown persisted id', async () => {
+    const fake = new FakeBusClient();
+    fake.stubRpc('state.crow_snapshot', { invalidation_key: 'iv', sessions: [] });
+    fake.stubRpc('settings.get', {
+      ok: true,
+      settings: { theme: 'solarized-unknown', modifier: 'alt', key_overrides: {} },
+    });
+    const { store, dispose } = createAppStore(fake);
+    const inputStores = createInputStores([]);
+    const { unmount } = render(<App store={store} inputStores={inputStores} bus={fake} />);
+    await tick();
+    // Unknown id → validated to the default scheme (never an uncolored UI).
+    expect(themeStore.getState().id).toBe(DEFAULT_THEME_ID);
+    unmount();
     dispose();
   });
 });

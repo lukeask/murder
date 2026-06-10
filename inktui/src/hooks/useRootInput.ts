@@ -199,6 +199,9 @@ export function useRootInput(
         // C12: newPlan / newTicket default to no-ops until the caller supplies real handlers.
         newPlan: deferred.newPlan ?? (() => {}),
         newTicket: deferred.newTicket ?? (() => {}),
+        // Phase 5: openSettings defaults to a no-op until the shell supplies the settings-modal
+        // handler. The `global.settings` chord is now routed in the dispatcher, so this slot is live.
+        openSettings: deferred.openSettings ?? (() => {}),
       };
 
       const ctx: DispatchContext = {

@@ -8,7 +8,7 @@ import { App } from './components/App.js';
 import { createInputStores } from './input/createInputStores.js';
 import type { PanelId } from './input/panels.js';
 import { createAppStore } from './store/store.js';
-import { createCapsStore } from './terminal/capsStore.js';
+import { capsStore } from './terminal/capsStore.js';
 import { createKittyDriver, type KeyProtocolDriver } from './terminal/kittyDriver.js';
 import { StdinShim } from './terminal/StdinShim.js';
 
@@ -150,7 +150,7 @@ export async function runLive(busFactory: () => BusClient = makeLiveBus): Promis
  * them). Steps:
  *
  *  1. Build the kitty driver over `process.stdout` + the shim (its {@link StdinShim.subscribe} token
- *     source). Seed a {@link createCapsStore caps store}.
+ *     source). Use the process-global {@link capsStore caps store}.
  *  2. `detect()` through the shim; record the result in the caps store AND the bindings store's
  *     `ctrlAvailable` (so `ctrl`/`both` degrade to alt when unsupported — see `resolveBindings`).
  *  3. Apply the current modifier: enable the protocol + leave bypass iff the modifier wants ctrl
@@ -165,7 +165,7 @@ export async function setupTerminal(
   shim: StdinShim,
   inputStores: ReturnType<typeof createInputStores>,
 ): Promise<() => void> {
-  const caps = createCapsStore();
+  const caps = capsStore;
   const driver: KeyProtocolDriver = createKittyDriver(
     { write: (data) => process.stdout.write(data) },
     shim,

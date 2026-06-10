@@ -208,6 +208,7 @@ describe('alt+y dispatch — pure unit test (no rendering)', () => {
         },
         newPlan: () => {},
         newTicket: () => {},
+        openSettings: () => {},
       },
       activeMode: null,
     };

@@ -28,6 +28,7 @@ interface SpyHandlers {
   readonly toggleTmux: ReturnType<typeof vi.fn<GlobalHandlers['toggleTmux']>>;
   readonly newPlan: ReturnType<typeof vi.fn<GlobalHandlers['newPlan']>>;
   readonly newTicket: ReturnType<typeof vi.fn<GlobalHandlers['newTicket']>>;
+  readonly openSettings: ReturnType<typeof vi.fn<GlobalHandlers['openSettings']>>;
 }
 
 function handlers(): SpyHandlers {
@@ -39,6 +40,7 @@ function handlers(): SpyHandlers {
     toggleTmux: vi.fn<GlobalHandlers['toggleTmux']>(),
     newPlan: vi.fn<GlobalHandlers['newPlan']>(),
     newTicket: vi.fn<GlobalHandlers['newTicket']>(),
+    openSettings: vi.fn<GlobalHandlers['openSettings']>(),
   };
 }
 
@@ -228,6 +230,20 @@ describe('layer 1 — global chords', () => {
     const h = handlers();
     const out = dispatchKey('t', makeKey({ meta: true }), ctx('plans', h));
     expect(h.newTicket).toHaveBeenCalledOnce();
+    expect(out).toEqual({ layer: 'global', handled: true });
+  });
+
+  it('alt+, fires openSettings (Phase 5 settings chord)', () => {
+    const h = handlers();
+    const out = dispatchKey(',', makeKey({ meta: true }), ctx('plans', h));
+    expect(h.openSettings).toHaveBeenCalledOnce();
+    expect(out).toEqual({ layer: 'global', handled: true });
+  });
+
+  it('alt+, fires openSettings even while chat is focused (app-wide chord)', () => {
+    const h = handlers();
+    const out = dispatchKey(',', makeKey({ meta: true }), ctx(CHAT_FOCUS, h));
+    expect(h.openSettings).toHaveBeenCalledOnce();
     expect(out).toEqual({ layer: 'global', handled: true });
   });
 

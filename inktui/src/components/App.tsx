@@ -66,6 +66,8 @@ import {
 import type { SettingsModifier } from '../store/settings/settingsSlice.js';
 import type { AppStoreApi } from '../store/store.js';
 import { toastStore } from '../store/toast/toastStore.js';
+import { DEFAULT_THEME_ID, PALETTES, type ThemeId } from '../theme/palettes.js';
+import { setTheme } from '../theme/themeStore.js';
 import { BottomBar, useBottomBarLines } from './BottomBar.js';
 import { ChatInput } from './ChatInput.js';
 import { CrowsPanel } from './CrowsPanel.js';
@@ -74,6 +76,7 @@ import { Overlay, presentationHidesLayout } from './Overlay.js';
 import { PlansPanel } from './PlansPanel.js';
 import { Rail } from './Rail.js';
 import { ReportsPanel } from './ReportsPanel.js';
+import { settingsMode } from './SettingsModal.js';
 import type { SpawnContext } from './SpawnWizardModal.js';
 import { spawnWizardMode } from './SpawnWizardModal.js';
 import { Stage } from './Stage.js';
@@ -382,30 +385,46 @@ function Shell({
     void loadSettings();
   }, [loadSettings]);
 
-  // Phase 3: the settings → input bridge. The settings slice owns the persisted preferences; the
-  // input layer's bindingsStore must stay bus-free (it has no idea the bus exists), so this one
-  // subscription mirrors { modifier, keyOverrides } onto it whenever either changes. It runs once
-  // at mount (priming the bindings store from the loaded settings) and then on every settings
-  // change (the optimistic `update` path → instant dispatcher/keymap/footer reaction).
+  // Phase 3/5: the settings → store bridges. The settings slice owns the persisted preferences; the
+  // input layer's bindingsStore and the global themeStore must stay bus-free (neither knows the bus
+  // exists), so this one subscription mirrors the relevant fields onto them whenever they change. It
+  // runs once at mount (priming both stores from the loaded settings) and then on every settings
+  // change (the optimistic `update` path → instant dispatcher/keymap/footer/theme reaction).
   //
-  // theme bridge wired in phase 5 (the theme store is built in a parallel phase; settings.theme is
-  // loaded into the slice here but not yet mirrored anywhere).
+  // Phase 5: the theme bridge. The slice stores `theme` as an opaque string (server authority); we
+  // validate it against the known PALETTES before applying — an unknown id (a stale/foreign config)
+  // falls back to the default scheme so a bad value can never leave the UI uncolored.
   useEffect(() => {
-    const sync = (modifier: SettingsModifier, keyOverrides: Record<string, string>): void => {
+    const syncBindings = (
+      modifier: SettingsModifier,
+      keyOverrides: Record<string, string>,
+    ): void => {
       const bindingsState = bindings.getState();
       bindingsState.setModifier(modifier);
       // The slice stores keyOverrides opaquely (string keys); the bindings store narrows them onto
       // the ActionId union. A stray non-ActionId key is harmless (resolveBindings ignores it).
       bindingsState.setOverrides(keyOverrides as Partial<Record<ActionId, string>>);
     };
+    const syncTheme = (theme: string): void => {
+      // Validate against the known palette ids; unknown → default (never an uncolored UI).
+      const id: ThemeId = theme in PALETTES ? (theme as ThemeId) : DEFAULT_THEME_ID;
+      setTheme(id);
+    };
     const current = appStore.getState().settings;
-    sync(current.modifier, current.keyOverrides as Record<string, string>);
+    syncBindings(current.modifier, current.keyOverrides as Record<string, string>);
+    syncTheme(current.theme);
     return appStore.subscribe((state, prev) => {
       if (
         state.settings.modifier !== prev.settings.modifier ||
         state.settings.keyOverrides !== prev.settings.keyOverrides
       ) {
-        sync(state.settings.modifier, state.settings.keyOverrides as Record<string, string>);
+        syncBindings(
+          state.settings.modifier,
+          state.settings.keyOverrides as Record<string, string>,
+        );
+      }
+      if (state.settings.theme !== prev.settings.theme) {
+        syncTheme(state.settings.theme);
       }
     });
   }, [appStore, bindings]);
@@ -423,6 +442,24 @@ function Shell({
       .enter(spawnWizardMode(modes, actions, { spawnContext, modelActions, worktreeActions }));
   };
 
+  // `alt+,` → open the settings modal. Reads the persisted slice at call time so the modal opens
+  // reflecting the live preferences; commits route back through `actions.settings.update`. The slice
+  // stores `theme`/`keyOverrides` opaquely, so we narrow them onto the modal's typed shape here (an
+  // unknown theme falls back to the default, mirroring the theme bridge above).
+  const openSettingsHandler = (): void => {
+    const settings = appStore.getState().settings;
+    const settingsActions = appStore.getState().actions.settings;
+    const theme: ThemeId =
+      settings.theme in PALETTES ? (settings.theme as ThemeId) : DEFAULT_THEME_ID;
+    modes.getState().enter(
+      settingsMode(modes, settingsActions, {
+        modifier: settings.modifier,
+        theme,
+        keyOverrides: settings.keyOverrides as Record<string, string>,
+      }),
+    );
+  };
+
   // The single root input loop for the whole app (rule 5) — installed exactly once, here.
   // C13: `spawn` wired to the spawn wizard handler. C11: `chatInput` wired to the persistent
   // chat-input handler (buffers chars, sends on Enter to the active agent). Global ctrl-chords still
@@ -430,6 +467,7 @@ function Shell({
   useRootInput(
     {
       spawn: spawnHandler,
+      openSettings: openSettingsHandler,
       chatInput: makeChatInputHandler(chatInput, appStore, imageDraft),
     },
     terminalEvents,

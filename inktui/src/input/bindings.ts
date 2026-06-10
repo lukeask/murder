@@ -117,6 +117,14 @@ export const ACTIONS: Readonly<Record<ActionId, ActionDef>> = {
   },
   'global.settings': {
     id: 'global.settings',
+    // Plan-locked default: alt+, . IMPORTANT (Phase 5 live finding): Ink's legacy keypress parser
+    // (`parse-keypress.js`, `metaKeyCodeRe = /^\x1b([a-zA-Z0-9])$/`) only sets `key.meta` for an
+    // ESC-prefixed *alphanumeric* — an ESC-prefixed punctuation byte (alt+,) parses as a bare `,`
+    // with `meta:false`, so this chord is UNREACHABLE on the legacy/alt path. It DOES work under the
+    // kitty protocol (modifier=ctrl/both on a capable terminal), where the CSI-u shim delivers the
+    // modifier itself. Until a non-kitty terminal can deliver alt+punctuation (the eventual
+    // modifyOtherKeys driver, or a rebind to an alphanumeric key), the menu opens via ctrl+, under
+    // kitty, or via a user rebind. Left as the plan's locked default; flagged here as a follow-up.
     default: command(','),
     description: 'settings',
     rebindable: false,

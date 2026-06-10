@@ -102,6 +102,8 @@ export interface GlobalHandlers {
   newPlan(): void;
   /** `alt+t`: open the new-ticket popup (wired by C12). */
   newTicket(): void;
+  /** `alt+,` (the `global.settings` action): open the settings modal (wired by Phase 5). */
+  openSettings(): void;
 }
 
 /**
@@ -234,6 +236,12 @@ function dispatchGlobalChord(
   if (bindings.matches('global.newTicket', input, key)) {
     // C12: new-ticket popup.
     handlers.newTicket();
+    return true;
+  }
+  if (bindings.matches('global.settings', input, key)) {
+    // Phase 5: the settings modal. Like the other app chords it wins app-wide (it carries the
+    // command modifier, so it never swallows typing) — opens the settings modal from any focus.
+    handlers.openSettings();
     return true;
   }
   return false;
