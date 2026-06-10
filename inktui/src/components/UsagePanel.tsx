@@ -32,6 +32,7 @@ import {
 } from '../hooks/useInputStores.js';
 import type { PanelKeymap } from '../input/keymap.js';
 import type { PanelId } from '../input/panels.js';
+import type { UsageTier } from '../layout/budget.js';
 import {
   USAGE_BAR_WIDTH,
   type UsageGaugeView,
@@ -48,16 +49,33 @@ const HEADER_BG = '#181825';
 /** Subtle highlight background for the cursor-selected gauge line (gauges are otherwise transparent). */
 const SELECTED_BG = '#313244';
 
+/**
+ * The compact bar width the `mini` tier paints (R9). The full bar is {@link USAGE_BAR_WIDTH}=12; mini
+ * shrinks it so the whole line — marker(1) + space(1) + bar — fits the INNER width even at the smallest
+ * right rail. A crows+usage rail can compress to `MIN_PANEL_WIDTH=12`, whose Pane inner width is
+ * `12 − USAGE_PANE_CHROME(4) = 8`; so the mini line must be ≤ 8: 1 + 1 + 6 = 8 (L4d — at the old 8-cell
+ * bar the 10-cell line clipped with `…` in the 8-cell inner space). The geometry is rescaled to this
+ * width (see {@link renderBar}) so the fill + marker stay proportionally correct in the shorter bar.
+ */
+const MINI_BAR_WIDTH = 6;
+
 type UsageIntent = 'cursorDown' | 'cursorUp' | 'refresh';
 
 /**
- * Paint the gauge bar from its geometry: filled `█` (green / red when high), empty `░` (dim), and a
- * grey `│` marker at `markerPos`. Built as runs of same-style cells so each contiguous segment is a
- * single `<Text>` (the marker is its own one-char span). Returns inline `<Text>` nodes for the parent
- * `<Text>` row.
+ * Paint the gauge bar from its geometry at the requested `width`: filled `█` (green / red when high),
+ * empty `░` (dim), and a grey `│` marker at the time-through-period position. The selector emits the
+ * geometry against the full {@link USAGE_BAR_WIDTH}; when a tier asks for a shorter bar (mini) we
+ * RESCALE the filled count + marker cell proportionally so the bar reads correctly at any width.
+ * Built as runs of same-style cells so each contiguous segment is a single `<Text>` (the marker is its
+ * own one-char span). Returns inline `<Text>` nodes for the parent `<Text>` row.
  */
-function renderBar(g: UsageGaugeView): JSX.Element {
+function renderBar(g: UsageGaugeView, width: number = g.barWidth): JSX.Element {
   const filledColor = g.isHigh ? 'red' : 'green';
+  // Rescale the geometry from the selector's full-width bar to the requested width (mini shrinks it).
+  const scale = width / g.barWidth;
+  const filledCount = Math.round(g.filledCount * scale);
+  const markerPos =
+    g.markerPos === null ? null : Math.min(width - 1, Math.floor(g.markerPos * scale));
   const nodes: JSX.Element[] = [];
   let run = '';
   let runStyle: 'filled' | 'empty' = 'filled';
@@ -76,8 +94,8 @@ function renderBar(g: UsageGaugeView): JSX.Element {
     );
     run = '';
   };
-  for (let i = 0; i < g.barWidth; i++) {
-    if (i === g.markerPos) {
+  for (let i = 0; i < width; i++) {
+    if (i === markerPos) {
       flush(`r${i}`);
       nodes.push(
         <Text key={`m${i}`} color="gray">
@@ -86,7 +104,7 @@ function renderBar(g: UsageGaugeView): JSX.Element {
       );
       continue;
     }
-    const style = i < g.filledCount ? 'filled' : 'empty';
+    const style = i < filledCount ? 'filled' : 'empty';
     if (style !== runStyle && run.length > 0) flush(`r${i}`);
     runStyle = style;
     run += style === 'filled' ? '█' : '░';
@@ -95,8 +113,23 @@ function renderBar(g: UsageGaugeView): JSX.Element {
   return <>{nodes}</>;
 }
 
-/** A provider header line: bold harness name on a solid dark, full-width background. */
-function HeaderLine({ harness }: { readonly harness: string }): JSX.Element {
+/** A provider header line: bold harness name on a solid dark, full-width background. Mini drops the
+ * solid background (too heavy for a thin column) and shows a dim, lower-cased lead-in instead. */
+function HeaderLine({
+  harness,
+  tier,
+}: {
+  readonly harness: string;
+  readonly tier: UsageTier;
+}): JSX.Element {
+  if (tier === 'mini') {
+    // Mini: no solid band (it crowds a thin column); a dim caret + name reads as a quiet group label.
+    return (
+      <Box flexShrink={0} width="100%">
+        <Text dimColor wrap="truncate">{`· ${harness}`}</Text>
+      </Box>
+    );
+  }
   return (
     <Box flexShrink={0} width="100%" backgroundColor={HEADER_BG}>
       <Text bold wrap="truncate">{` ${harness}`}</Text>
@@ -104,19 +137,50 @@ function HeaderLine({ harness }: { readonly harness: string }): JSX.Element {
   );
 }
 
-/** One gauge line: cursor marker, segmented bar, pct, window-length, and reset countdown. Transparent
- * background unless selected (a subtle highlight). */
+/**
+ * One gauge line, rendered for the active {@link UsageTier} (R9):
+ *  - `mini`   — cursor marker + a compact ({@link MINI_BAR_WIDTH}) bar only; no labels (the bar IS the
+ *               signal at the smallest legible width).
+ *  - `medium` — marker + full bar + percentage; the window/reset trail is dropped.
+ *  - `large`  — marker + full bar + pct + window-length + reset countdown (the complete render).
+ * Transparent background unless selected (a subtle highlight). Each tier is laid out deliberately —
+ * aligned columns, fixed-width labels — so it reads as a designed variant, not a truncation.
+ */
 function GaugeLine({
   gauge,
   selected,
+  tier,
 }: {
   readonly gauge: UsageGaugeView;
   readonly selected: boolean;
+  readonly tier: UsageTier;
 }): JSX.Element {
+  const marker = selected ? '▌' : ' ';
+  if (tier === 'mini') {
+    return (
+      <Box flexShrink={0} width="100%" backgroundColor={selected ? SELECTED_BG : undefined}>
+        <Text wrap="truncate">
+          {marker} {renderBar(gauge, MINI_BAR_WIDTH)}
+        </Text>
+      </Box>
+    );
+  }
+  if (tier === 'medium') {
+    return (
+      <Box flexShrink={0} width="100%" backgroundColor={selected ? SELECTED_BG : undefined}>
+        <Text wrap="truncate">
+          {marker} {renderBar(gauge)}
+          {'  '}
+          <Text color={gauge.isHigh ? 'red' : 'white'}>{gauge.pctLabel.padStart(4)}</Text>
+        </Text>
+      </Box>
+    );
+  }
+  // large — the full render: bar + pct + window-length + reset countdown.
   return (
     <Box flexShrink={0} width="100%" backgroundColor={selected ? SELECTED_BG : undefined}>
       <Text wrap="truncate">
-        {selected ? '▌' : ' '} {renderBar(gauge)}
+        {marker} {renderBar(gauge)}
         {'  '}
         <Text color={gauge.isHigh ? 'red' : 'white'}>{gauge.pctLabel.padStart(4)}</Text>
         {'  '}
@@ -128,13 +192,29 @@ function GaugeLine({
 }
 
 /**
- * A dim key line labeling the gauge columns (bug 1): `usage` over the bar, then `pct`, `window`,
- * `reset`. Aligned to {@link GaugeLine}'s layout — 2-col leading gutter (marker + space), the bar
- * width, then the same `pct`/`period`/`reset` column widths/spacing — so each label sits over its
- * data. Rendered once at the top of the body, above the provider blocks. `flexShrink={0}` so the tight
- * right rail doesn't sample it away.
+ * A dim key line labeling the gauge columns (bug 1), rendered per tier so the labels always sit over
+ * the columns the tier actually shows: `large` labels usage/pct/window/reset; `medium` labels just
+ * usage/pct; `mini` shows no key line at all (the compact bars carry no labels to title). Aligned to
+ * {@link GaugeLine}'s layout — 2-col leading gutter (marker + space), the bar width, then the same
+ * column widths/spacing — so each label sits over its data. `flexShrink={0}` so the tight right rail
+ * doesn't sample it away.
  */
-function UsageKeyLine(): JSX.Element {
+function UsageKeyLine({ tier }: { readonly tier: UsageTier }): JSX.Element | null {
+  if (tier === 'mini') {
+    return null;
+  }
+  if (tier === 'medium') {
+    return (
+      <Box flexShrink={0} width="100%">
+        <Text dimColor wrap="truncate">
+          {'  '}
+          {'usage'.padEnd(USAGE_BAR_WIDTH)}
+          {'  '}
+          {'pct'.padStart(4)}
+        </Text>
+      </Box>
+    );
+  }
   return (
     <Box flexShrink={0} width="100%">
       <Text dimColor wrap="truncate">
@@ -150,15 +230,18 @@ function UsageKeyLine(): JSX.Element {
 }
 
 /** The list body: loading/error/empty chrome, else one block per provider (header + gauge lines).
- * A single running index across all gauges drives the cursor highlight. */
+ * A single running index across all gauges drives the cursor highlight. The {@link UsageTier} chooses
+ * the gauge/header/key-line variant (R9). */
 function UsageBody({
   view,
   cursor,
   focused,
+  tier,
 }: {
   readonly view: UsageView;
   readonly cursor: number;
   readonly focused: boolean;
+  readonly tier: UsageTier;
 }): JSX.Element {
   if (view.status === 'error') {
     return <Text color="red">{`error: ${view.error ?? 'unknown'}`}</Text>;
@@ -172,10 +255,10 @@ function UsageBody({
   let gaugeIndex = -1;
   return (
     <Box flexDirection="column" flexShrink={0}>
-      <UsageKeyLine />
+      <UsageKeyLine tier={tier} />
       {view.groups.map((group) => (
         <Box key={group.harness} flexDirection="column" flexShrink={0}>
-          <HeaderLine harness={group.harness} />
+          <HeaderLine harness={group.harness} tier={tier} />
           {group.gauges.map((gauge) => {
             gaugeIndex += 1;
             return (
@@ -183,6 +266,7 @@ function UsageBody({
                 key={`${group.harness}-${gauge.windowKey}`}
                 gauge={gauge}
                 selected={focused && gaugeIndex === cursor}
+                tier={tier}
               />
             );
           })}
@@ -201,8 +285,19 @@ function countGauges(view: UsageView): number {
  * The usage panel. Reads the usage slice, runs the selector to grouped display-ready data, owns a
  * local cursor over the flat gauge list, declares its keymap, and paints a focus-highlighted Pane of
  * provider blocks. `React.memo`'d (rule 1) so it re-renders only when its own state changes.
+ *
+ * The `tier` (R9, L4) is threaded from the budget engine via App's `renderPanel`: it is the largest
+ * gauge variant the right-rail width allots usage (`mini`|`medium`|`large`). The panel forwards it to
+ * {@link UsageBody}, which picks the gauge/header/key-line render for that width — the responsive
+ * "mini/medium/large version depending on available screen real estate" the spec asks for.
  */
-export const UsagePanel = memo(function UsagePanel(): JSX.Element {
+export const UsagePanel = memo(function UsagePanel({
+  tier = 'large',
+}: {
+  /** The gauge variant for the current right-rail width (R9). Defaults to `large` when mounted bare
+   * (e.g. a test rendering UsagePanel outside the Rail) so the full render is the unguarded default. */
+  readonly tier?: UsageTier;
+}): JSX.Element {
   // Rule 1: narrow selector (shallow). Rule 2: selector produces display-ready groups.
   const usage = useAppStore((s) => s.usage, shallow);
   const view = useUsageView(usage);
@@ -252,6 +347,7 @@ export const UsagePanel = memo(function UsagePanel(): JSX.Element {
         view={view}
         cursor={Math.min(cursor, Math.max(gaugeCount - 1, 0))}
         focused={focused}
+        tier={tier}
       />
     </Pane>
   );

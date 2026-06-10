@@ -71,11 +71,11 @@ function renderPlanEntry(row: PlanRowView, ctx: LedgerEntryContext): React.React
     // The LedgerRow wraps this in a `row` Box (with the full-width highlight/alt-bg background), so a
     // two-line entry must compose its own `column` here. `flexGrow={1}` lets the background span the
     // full row width behind both lines; `flexShrink={0}` so Yoga doesn't sample/drop a line. The
-    // line-2 indent is `marker(1)+space(1)+star(2)` = 4 cols so `charCount` sits under `name`.
+    // leading gutter is `marker(1)+star(2)` = 3 cols; line-2's 3-space indent matches so `charCount` sits under `name`.
     <Box flexDirection="column" flexGrow={1} flexShrink={0}>
-      <Text wrap="truncate">{`${marker} ${star}${row.name}`}</Text>
+      <Text wrap="truncate">{`${marker}${star}${row.name}`}</Text>
       <Text dimColor={!ctx.selected} wrap="truncate">
-        {`    ${row.charCount} · ${row.updatedAt}`}
+        {`   ${row.charCount} · ${row.updatedAt}`}
       </Text>
     </Box>
   );
@@ -83,8 +83,8 @@ function renderPlanEntry(row: PlanRowView, ctx: LedgerEntryContext): React.React
 
 /**
  * The Ledger column-titles key — a dim two-line block (matching `linesPerEntry=2`) labeling what the
- * entry lines mean: `name` over `size · updated`. Aligned to the entry layout — the 4-space leading
- * indent matches {@link renderPlanEntry}'s leading gutters (marker(1) + space(1) + star(2)) on line 1
+ * entry lines mean: `name` over `size · updated`. Aligned to the entry layout — the 3-space leading
+ * indent matches {@link renderPlanEntry}'s leading gutter (marker(1) + star(2)) on line 1
  * and its identical line-2 indent — so the labels sit directly above the data columns. THE reference
  * header shape Phase 3 panels copy: a `header={renderPlansHeader}` prop that returns this two-line
  * key. (`columns` is unused here — plans is single-column; a multi-column panel keys each field per
@@ -93,8 +93,8 @@ function renderPlanEntry(row: PlanRowView, ctx: LedgerEntryContext): React.React
 function renderPlansHeader(): React.ReactNode {
   return (
     <Box flexDirection="column" flexShrink={0}>
-      <Text dimColor>{'    name'}</Text>
-      <Text dimColor>{'    size · updated'}</Text>
+      <Text dimColor>{'   name'}</Text>
+      <Text dimColor>{'   size · updated'}</Text>
     </Box>
   );
 }
@@ -129,7 +129,6 @@ function PlansList({
       maxColumns={1}
       renderEntry={renderPlanEntry}
       header={renderPlansHeader}
-      overflowIndent={4}
       rowKey={(row) => row.id}
     />
   );

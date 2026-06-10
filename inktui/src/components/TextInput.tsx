@@ -64,9 +64,16 @@ export function deleteLastChar(value: string): string {
 }
 
 /**
- * The controlled text input display. Renders the value (or a dim placeholder when empty) with an
- * optional cursor block. Pure over its props — no store/bus knowledge (rule 1). The mode that hosts
- * it owns input via its keymap + `onUncaptured`; this component just draws.
+ * The controlled text input display. Pure over its props — no store/bus knowledge (rule 1). The mode
+ * that hosts it owns input via its keymap + `onUncaptured`; this component just draws.
+ *
+ * ## Empty = phantom placeholder with the cursor on its first glyph
+ * When `value` is empty and a `placeholder` is given, we render the placeholder as dim *phantom*
+ * text. If also `focused`, the cursor sits ON the first character (inverse video) instead of trailing
+ * the text — so an empty input reads as `‹cursor›ype a message`, the cursor blinking over the `t`. As
+ * soon as the user types, `value` is non-empty: the phantom text vanishes and the cursor returns to
+ * its normal trailing-block position after the typed text. The placeholder never becomes part of
+ * `value`, so it cannot leak into what gets sent.
  *
  * C13 (spawn wizard) copies this component alongside the modal pattern.
  */
@@ -76,14 +83,27 @@ export function TextInput({
   focused = false,
   color = 'white',
 }: TextInputProps): JSX.Element {
-  const isEmpty = value.length === 0;
+  if (value.length === 0 && placeholder !== undefined) {
+    // Phantom placeholder. Focused → cursor on the first glyph; blurred → plain dim phantom text.
+    if (!focused || placeholder.length === 0) {
+      return (
+        <Box>
+          <Text dimColor>{placeholder}</Text>
+        </Box>
+      );
+    }
+    return (
+      <Box>
+        <Text dimColor inverse>
+          {placeholder.slice(0, 1)}
+        </Text>
+        <Text dimColor>{placeholder.slice(1)}</Text>
+      </Box>
+    );
+  }
   return (
     <Box>
-      {isEmpty && placeholder !== undefined ? (
-        <Text dimColor>{placeholder}</Text>
-      ) : (
-        <Text color={color}>{value}</Text>
-      )}
+      <Text color={color}>{value}</Text>
       {focused && (
         <Text color="white" bold>
           {'█'}

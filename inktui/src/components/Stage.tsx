@@ -242,7 +242,24 @@ const EMPTY_KEYMAP: PanelKeymap<ScrollIntent> = { keymap: [], onIntent() {} };
  * open doc) so opening/closing a doc — or switching to a different one — re-renders + re-keys the pane.
  * Rule 2: `useFavoritesChatPanes` decides which chat panes exist (spec order, default + starred).
  */
-export const Stage = memo(function Stage(): JSX.Element {
+export const Stage = memo(function Stage({
+  minCells,
+  axis,
+}: {
+  /**
+   * The Stage's guaranteed minimum cross-axis size in CELLS (R3/R4 — `≥ 60%` of the terminal),
+   * computed by the layout-budget engine and threaded from App. Applied as `minWidth` (landscape) or
+   * `minHeight` (portrait) so the Stage can never be starved below its floor even if a rail mis-sizes
+   * (belt-and-suspenders with the rails' explicit, budget-bounded sizes). Defaults to 0 so the Stage
+   * renders sanely if a caller omits it (e.g. a test mounting it bare).
+   */
+  readonly minCells?: number;
+  /** Which dimension `minCells` floors: `'width'` in landscape, `'height'` in portrait. */
+  readonly axis?: 'width' | 'height';
+} = {}): JSX.Element {
+  const floor = minCells ?? 0;
+  const floorWidth = axis === 'width' ? floor : undefined;
+  const floorHeight = axis === 'height' ? floor : undefined;
   const roster: RosterState = useAppStore((s) => s.roster, shallow);
   const conversations: ConversationsState = useAppStore((s) => s.conversations, shallow);
   const favorites: FavoritesState = useAppStore((s) => s.favorites, shallow);
@@ -255,8 +272,17 @@ export const Stage = memo(function Stage(): JSX.Element {
   const { panes } = useFavoritesChatPanes(roster, favorites);
 
   if (panes.length === 0 && openDoc === null) {
-    // Nothing on the Stage: an invisible spacer that holds the center open (see the doc above).
-    return <Box flexGrow={1} flexBasis={0} minHeight={0} minWidth={0} overflow="hidden" />;
+    // Nothing on the Stage: an invisible spacer that holds the center open (see the doc above). It
+    // still carries the budget floor so an empty Stage keeps its guaranteed ≥60% share.
+    return (
+      <Box
+        flexGrow={1}
+        flexBasis={0}
+        minWidth={floorWidth}
+        minHeight={floorHeight ?? 0}
+        overflow="hidden"
+      />
+    );
   }
 
   // Landscape: doc sits in a column to the RIGHT of the chat row. Portrait: doc stacks BELOW in a row.
@@ -268,8 +294,10 @@ export const Stage = memo(function Stage(): JSX.Element {
       flexDirection={landscape ? 'row' : 'column'}
       flexGrow={1}
       flexBasis={0}
-      minHeight={0}
-      minWidth={0}
+      // The budget floor (R3/R4): the Stage can never be sized below its guaranteed ≥60% share.
+      // `minHeight` defaults to 0 (the f26b77a clip discipline) when the axis is width, and vice versa.
+      minWidth={floorWidth}
+      minHeight={floorHeight ?? 0}
       overflow="hidden"
       columnGap={landscape ? 1 : 0}
       rowGap={landscape ? 0 : 1}

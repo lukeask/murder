@@ -108,14 +108,6 @@ export interface LedgerProps<Row> {
   readonly header?: (columns: number) => React.ReactNode;
   /** Stable key for a row (defaults to the row index). */
   readonly rowKey?: (row: Row, index: number) => string;
-  /**
-   * Leading columns the `…` overflow indicator is indented by so it sits under the entry's TEXT
-   * column (past the panel's marker/star gutters), reading as "more items here" rather than a bare
-   * left-floating `…` (bug 3). Ledger can't know a panel's gutter widths, so the panel passes the same
-   * leading width its `renderEntry` uses (doc panels: marker(1)+space(1)+star(2) = 4; default 2 =
-   * marker+space). Optional — defaults to {@link DEFAULT_OVERFLOW_INDENT}.
-   */
-  readonly overflowIndent?: number;
 }
 
 /** Subtle alternating-background shade (matches TicketsPanel's `#1e1e2e`). */
@@ -127,8 +119,6 @@ const DEFAULT_HEIGHT = 24;
 const DEFAULT_WIDTH = 80;
 /** Rows kept visible above AND below the cursor (except at the list edges). User spec: 1. */
 const SCROLLOFF = 1;
-/** Default `…` indent: under the cursor-marker + one space (the columns every panel reserves). */
-const DEFAULT_OVERFLOW_INDENT = 2;
 
 /**
  * Coarse width→columns heuristic: how many fields fit in `width`, clamped to `[min, max]`. Pure so
@@ -259,16 +249,19 @@ function LedgerRow<Row>({
 }
 
 /**
- * A `…` overflow indicator, styled as a full-width list row (NOT a bare left-floating `…`). It reads
- * as "there are more items here," consistent with the entry rows: a `flexShrink={0}` + `width="100%"`
- * row (like {@link LedgerRow}) with the `…` indented `indent` columns so it sits directly under the
- * entry TEXT column (past the panel's marker + star gutters — the panel passes the same leading width
- * its `renderEntry` uses). Dim so it recedes behind real entries.
+ * A `…` overflow indicator, styled as a COMPACT full-width list row (NOT a bare floating `…`). It
+ * reads as "there are more items here," consistent with the entry rows: a `flexShrink={0}` +
+ * `width="100%"` row whose `…` is horizontally centered (`justifyContent="center"`) and which carries
+ * the SAME alternating-background shade as the entries — `index` is its absolute row position (the
+ * slot just above `start` for a top indicator, just below `end` for a bottom one) so the parity
+ * continues the alternation seamlessly. Always a single line (1lh), never the 2lh of a real entry.
+ * Dim so it recedes behind real entries.
  */
-function OverflowRow({ indent }: { readonly indent: number }): React.JSX.Element {
+function OverflowRow({ index }: { readonly index: number }): React.JSX.Element {
+  const backgroundColor = index % 2 === 1 ? ALT_BG : undefined;
   return (
-    <Box flexShrink={0} width="100%">
-      <Text dimColor>{`${' '.repeat(indent)}…`}</Text>
+    <Box flexShrink={0} width="100%" justifyContent="center" backgroundColor={backgroundColor}>
+      <Text dimColor>…</Text>
     </Box>
   );
 }
@@ -293,7 +286,6 @@ export function Ledger<Row>({
   renderEntry,
   header,
   rowKey,
-  overflowIndent = DEFAULT_OVERFLOW_INDENT,
 }: LedgerProps<Row>): React.JSX.Element {
   const boxRef = useRef<DOMElement | null>(null);
   // Measured inner dims; 0 means "not measured yet" (first paint / sizeless non-TTY render).
@@ -335,7 +327,7 @@ export function Ledger<Row>({
     // Fill box: sizes to the Pane's inner content area regardless of row count (flexGrow + clip), so
     // `measureElement` reports the room we HAVE, not the rows we drew (see the header's "Sizing"note).
     <Box ref={boxRef} flexDirection="column" flexGrow={1} minHeight={0} overflow="hidden">
-      {win.moreAbove ? <OverflowRow indent={overflowIndent} /> : null}
+      {win.moreAbove ? <OverflowRow index={win.start - 1} /> : null}
       {showHeader ? <Box flexShrink={0}>{header(columns)}</Box> : null}
       {visible.map((row, i) => {
         const index = win.start + i;
@@ -351,7 +343,7 @@ export function Ledger<Row>({
           />
         );
       })}
-      {win.moreBelow ? <OverflowRow indent={overflowIndent} /> : null}
+      {win.moreBelow ? <OverflowRow index={win.end} /> : null}
     </Box>
   );
 }

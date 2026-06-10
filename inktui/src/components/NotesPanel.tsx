@@ -70,11 +70,13 @@ function renderNoteEntry(row: NoteRowView, ctx: LedgerEntryContext): React.React
   return (
     // The LedgerRow wraps this in a full-width `row` Box (with the highlight/alt-bg background); a
     // two-line entry composes its own `column` here. `flexGrow={1}` spans the background; `flexShrink={0}`
-    // so Yoga doesn't drop a line. Line-2 indent is marker(1)+space(1)+star(2)=4 so it sits under name.
+    // so Yoga doesn't drop a line. Leading gutter is marker(1)+star(2)=3 (the cursor bar abuts the
+    // star, whose trailing space separates it from the name) so the name sits close to the left edge;
+    // line-2's 3-space indent matches it so `charCount` sits under `name`.
     <Box flexDirection="column" flexGrow={1} flexShrink={0}>
-      <Text wrap="truncate">{`${marker} ${star}${row.name}`}</Text>
+      <Text wrap="truncate">{`${marker}${star}${row.name}`}</Text>
       <Text dimColor={!ctx.selected} wrap="truncate">
-        {`    ${row.charCount} · ${row.updatedAt}`}
+        {`   ${row.charCount} · ${row.updatedAt}`}
       </Text>
     </Box>
   );
@@ -82,14 +84,14 @@ function renderNoteEntry(row: NoteRowView, ctx: LedgerEntryContext): React.React
 
 /**
  * The Ledger column-titles key — a dim two-line block labeling the entry lines: `name` over
- * `size · updated`. The 4-space leading indent matches {@link renderNoteEntry}'s gutters
- * (marker + space + star) so the labels sit directly above the data columns (bug 1).
+ * `size · updated`. The 3-space leading indent matches {@link renderNoteEntry}'s gutter
+ * (marker + star) so the labels sit directly above the data columns (bug 1).
  */
 function renderNotesHeader(): React.ReactNode {
   return (
     <Box flexDirection="column" flexShrink={0}>
-      <Text dimColor>{'    name'}</Text>
-      <Text dimColor>{'    size · updated'}</Text>
+      <Text dimColor>{'   name'}</Text>
+      <Text dimColor>{'   size · updated'}</Text>
     </Box>
   );
 }
@@ -124,7 +126,6 @@ function NotesList({
       maxColumns={1}
       renderEntry={renderNoteEntry}
       header={renderNotesHeader}
-      overflowIndent={4}
       rowKey={(row) => row.name}
     />
   );

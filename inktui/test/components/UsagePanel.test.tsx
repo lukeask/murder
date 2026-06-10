@@ -65,16 +65,18 @@ function RootInput(): null {
 function Harness({
   store,
   inputStores,
+  tier,
 }: {
   readonly store: ReturnType<typeof createAppStore>['store'];
   readonly inputStores: ReturnType<typeof createInputStores>;
+  readonly tier?: 'mini' | 'medium' | 'large';
 }): JSX.Element {
   return (
     <AppStoreProvider value={store}>
       <InputStoresProvider value={inputStores}>
         <RootInput />
         <Box>
-          <UsagePanel />
+          <UsagePanel tier={tier} />
         </Box>
       </InputStoresProvider>
     </AppStoreProvider>
@@ -163,6 +165,42 @@ describe('UsagePanel — rendering', () => {
     await tick();
     expect(lastFrame()).toBe(beforeUnfocused);
     dispose();
+  });
+
+  it('renders the gauge variant for its tier (R9): large shows reset, medium hides it, mini hides pct', async () => {
+    // large (default) — the full render: pct AND the reset countdown both visible.
+    const large = await setup();
+    const largeRender = render(
+      <Harness store={large.store} inputStores={large.inputStores} tier="large" />,
+    );
+    await tick();
+    const largeFrame = largeRender.lastFrame() ?? '';
+    expect(largeFrame).toContain('65%'); // pct
+    expect(largeFrame).toContain('20m'); // reset countdown (large only)
+    large.dispose();
+
+    // medium — bar + pct, but the window/reset trail is dropped.
+    const medium = await setup();
+    const mediumRender = render(
+      <Harness store={medium.store} inputStores={medium.inputStores} tier="medium" />,
+    );
+    await tick();
+    const mediumFrame = mediumRender.lastFrame() ?? '';
+    expect(mediumFrame).toContain('65%'); // pct still shown
+    expect(mediumFrame).not.toContain('20m'); // reset dropped at medium
+    medium.dispose();
+
+    // mini — the compact bar only; no pct, no reset labels.
+    const mini = await setup();
+    const miniRender = render(
+      <Harness store={mini.store} inputStores={mini.inputStores} tier="mini" />,
+    );
+    await tick();
+    const miniFrame = miniRender.lastFrame() ?? '';
+    expect(miniFrame).not.toContain('65%'); // no pct label at mini
+    expect(miniFrame).not.toContain('20m'); // no reset at mini
+    expect(miniFrame).toContain('█'); // the compact bar is still drawn
+    mini.dispose();
   });
 
   it('renders empty chrome when the slice has no rows', async () => {

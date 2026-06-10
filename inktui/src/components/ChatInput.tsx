@@ -86,7 +86,7 @@ export const ChatInput = memo(function ChatInput(): React.JSX.Element {
         <Text bold color={focused ? 'green' : 'gray'} wrap="truncate">
           {`→ ${targetLabel} `}
         </Text>
-        <TextInput value={display} placeholder="type a message…" focused={focused} />
+        <TextInput value={display} placeholder="type a message" focused={focused} />
       </Box>
     </Box>
   );

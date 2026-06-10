@@ -22,8 +22,13 @@
  * it doesn't fight the panel's focus ref (the outer Box keeps the single forwarded ref).
  *
  * Discovered Ink quirks the layout relies on (verified via ink-testing-library before building):
- *  - The fixed segments (`╭─ `, title, leading space, `╮`) must each be `flexShrink={0}` so only the
- *    fill absorbs the slack; otherwise Yoga shrinks the title too and it renders as `Pla…`.
+ *  - The CORNER segments (`╭─ `, the leading space, `╮`) are `flexShrink={0}` so the corners are
+ *    always drawn at any width. The TITLE segment is `flexShrink={1}` + `overflow="hidden"` so a
+ *    title/`titleExtra` wider than the rail truncates instead of pushing `╮` off the edge (the L3b
+ *    overflow fix). This works ONLY because the fill box is `flexBasis={0}`: with the default `auto`
+ *    basis the 256-char fill would make the row perpetually overflow and Yoga would elide the title
+ *    even when wide (the old `Pla…` bug — do NOT revert the title to `flexShrink={0}` or the fill to
+ *    `auto` basis). See {@link ./paneBorder.tsx}'s L3b note for the full mechanism.
  *  - The fill text uses `wrap="hard"` (NOT `truncate`): `truncate` appends an ellipsis where we want
  *    a clean `─` edge; `wrap="hard"` hard-wraps the run to box width and `overflow="hidden"` clips it
  *    to one crisp line. (`wrap="end"` is identical visually but not in Ink's `wrap` type.)

@@ -54,45 +54,58 @@ export interface RailProps {
   /** The {@link PanelId} → component dispatch (App.tsx's `renderPanel`), injected so Rail stays a
    * pure arranger and doesn't import the panel components itself. */
   readonly renderPanel: (id: PanelId) => JSX.Element;
-  /** Optional fixed width for this rail in **landscape** only (e.g. `'24%'`), so a side can be a thin
-   * column instead of taking an even `flexGrow` share. When set, the rail uses `flexGrow={0}` +
-   * `width` in landscape (the Stage + other rail split the remainder); ignored in portrait, where the
-   * rail stacks across the top/bottom and width is full. Unset → the even `flexGrow={1}` share. */
-  readonly landscapeWidth?: string;
+  /**
+   * Explicit cross-axis size for this rail in CELLS, computed relative to the live terminal by the
+   * layout-budget engine ({@link ../layout/budget.js}, threaded via {@link ../hooks/useBodyLayout.js}).
+   * Landscape → the rail's `width` (rails sit beside the Stage); portrait → its `height` (rails stack
+   * above/below the Stage). The rail is `flexGrow={0}`/`flexShrink={0}` at this size so every spare
+   * cell goes to the Stage (R1) — it does NOT take an even share, and there is no `"24%"` absolute
+   * anymore (R5: all sizes are relative). The Ledger inside reacts to the resulting width by dropping
+   * trailing columns when it's compressed (R3). */
+  readonly cells: number;
 }
 
 /**
  * Arrange this side's visible panels. Returns `null` when the region has no visible panels (collapse
  * out of the layout). landscape → `column` (panels stack, split height); portrait → `row` (panels
- * side-by-side, split width). The cross-axis gap (`rowGap`/`columnGap`) gives a one-cell breather
- * between stacked/adjacent panels, matching the old region's `columnGap={1}`.
+ * side-by-side, split width). Stacked panes (landscape) sit flush — each Pane's border/header is
+ * the separator, so no `rowGap` is spent; portrait keeps a one-cell `columnGap` breather between
+ * the side-by-side strips.
  */
 export function Rail({
   side,
   orientation,
   panels,
   renderPanel,
-  landscapeWidth,
+  cells,
 }: RailProps): JSX.Element | null {
   const visible = usePanelStore((s) => s.visible);
   const shown = panels.filter((id) => visible.has(id));
   if (shown.length === 0) {
     return null;
   }
-  const flexDirection = orientation === 'landscape' ? 'column' : 'row';
-  // A fixed-width column only makes sense in landscape (rails stacked side-by-side with the Stage).
-  // In portrait the rail spans the full width across the top/bottom, so the fixed width is ignored.
-  const fixedColumn = orientation === 'landscape' && landscapeWidth !== undefined;
+  const landscape = orientation === 'landscape';
+  const flexDirection = landscape ? 'column' : 'row';
+  // The rail takes EXACTLY its budgeted cross-axis size and never grows (flexGrow 0) or shrinks
+  // (flexShrink 0), so every spare cell goes to the Stage (R1). Landscape → the rail's `width` (it
+  // sits beside the Stage); portrait → its `height` (it stacks above/below). The engine guarantees
+  // the Stage's 60% floor, so this fixed size never starves the center. `minWidth`/`minHeight={0}`
+  // + `overflow="hidden"` keep a too-tall/-wide panel clipping rather than overflowing off-screen
+  // (the f26b77a clipping discipline — do NOT remove).
   return (
     <Box
       key={side}
       flexDirection={flexDirection}
-      rowGap={orientation === 'landscape' ? 1 : 0}
-      columnGap={orientation === 'portrait' ? 1 : 0}
-      flexGrow={fixedColumn ? 0 : 1}
-      flexShrink={fixedColumn ? 0 : 1}
-      flexBasis={fixedColumn ? undefined : 0}
-      width={fixedColumn ? landscapeWidth : undefined}
+      // No inter-pane gap when stacking (landscape column): each Pane already draws its own
+      // border/header, which supplies the visual separation — an extra blank line between stacked
+      // panes just wastes a scarce vertical cell. Portrait keeps a 1-col breather between the
+      // side-by-side strips (no border edge faces a neighbour there).
+      rowGap={0}
+      columnGap={landscape ? 0 : 1}
+      flexGrow={0}
+      flexShrink={0}
+      width={landscape ? cells : undefined}
+      height={landscape ? undefined : cells}
       minHeight={0}
       minWidth={0}
       overflow="hidden"
