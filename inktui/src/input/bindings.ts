@@ -51,7 +51,7 @@ export type ActionId =
   | 'global.tmux' // alt+y — toggle the tmux/parsed fullscreen view
   | 'global.newPlan' // alt+p — open the new-plan popup
   | 'global.newTicket' // alt+t — open the new-ticket popup
-  | 'global.settings' // alt+, — open the settings modal (wired in a later phase)
+  | 'global.settings' // alt+o / ctrl+o — open the settings modal
   | 'panel.star'; // alt+f — favorite/star the focused panel's cursor row
 
 /**
@@ -82,7 +82,7 @@ function command(key: string): BindingSpec {
 /**
  * The action table — the single source of truth for named chords. Mirrors today's behavior exactly:
  * the `key` chars are the current alt+<key> literals (alt+space, alt+s, alt+y, alt+p, alt+t, alt+f),
- * plus `global.settings` (alt+, default, wired later). Adding a feature is one entry here.
+ * plus `global.settings` (alt+o / ctrl+o default). Adding a feature is one entry here.
  */
 export const ACTIONS: Readonly<Record<ActionId, ActionDef>> = {
   'global.focusChat': {
@@ -117,15 +117,15 @@ export const ACTIONS: Readonly<Record<ActionId, ActionDef>> = {
   },
   'global.settings': {
     id: 'global.settings',
-    // Plan-locked default: alt+, . IMPORTANT (Phase 5 live finding): Ink's legacy keypress parser
-    // (`parse-keypress.js`, `metaKeyCodeRe = /^\x1b([a-zA-Z0-9])$/`) only sets `key.meta` for an
-    // ESC-prefixed *alphanumeric* — an ESC-prefixed punctuation byte (alt+,) parses as a bare `,`
-    // with `meta:false`, so this chord is UNREACHABLE on the legacy/alt path. It DOES work under the
-    // kitty protocol (modifier=ctrl/both on a capable terminal), where the CSI-u shim delivers the
-    // modifier itself. Until a non-kitty terminal can deliver alt+punctuation (the eventual
-    // modifyOtherKeys driver, or a rebind to an alphanumeric key), the menu opens via ctrl+, under
-    // kitty, or via a user rebind. Left as the plan's locked default; flagged here as a follow-up.
-    default: command(','),
+    // Default: alt+o / ctrl+o. WHY NOT ',' (the original plan-locked default): Ink's legacy keypress
+    // parser (`parse-keypress.js`, `metaKeyCodeRe = /^\x1b([a-zA-Z0-9])$/`) only sets `key.meta` for
+    // an ESC-prefixed *alphanumeric* — an ESC-prefixed punctuation byte (alt+,) parses as a bare `,`
+    // with `meta:false`, so alt+, was UNREACHABLE on the legacy/alt path (live finding). An
+    // alphanumeric key avoids that: alt+o gets `key.meta` from the legacy parser, and ctrl+o's byte
+    // (0x0f) is a clean control byte the shim/parser deliver as `{ctrl, input:'o'}` — so the menu is
+    // reachable under both the alt and ctrl/kitty modifiers. 'o' (mnemonic: "open settings") is unused
+    // by any other action and is not a meaningful panel-local plain key.
+    default: command('o'),
     description: 'settings',
     rebindable: false,
   },

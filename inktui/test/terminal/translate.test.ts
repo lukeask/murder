@@ -2,7 +2,7 @@
  * translate tests — the token→{legacy bytes | side-channel chord} decision table. The key
  * invariants: ctrl+c is ALWAYS literal \x03; legacy-representable keys synthesise the same bytes the
  * terminal would have sent without kitty; the unrepresentable command combos (ctrl+digit/space/i/m/h)
- * become chords.
+ * become chords (the unrepresentable command combos are ctrl+digit/space/i/m/h/j).
  */
 
 import { describe, expect, it } from 'vitest';
@@ -69,6 +69,9 @@ describe('ctrl+letter → clean legacy control byte', () => {
   it('ctrl+s → 0x13', () => {
     expect(bytesOf(translate(key(0x73, mods({ ctrl: true }))))).toEqual([0x13]);
   });
+  it('ctrl+o → 0x0f (clean byte; the settings default)', () => {
+    expect(bytesOf(translate(key(0x6f, mods({ ctrl: true }))))).toEqual([0x0f]);
+  });
   it('ctrl+S (uppercase) normalises to 0x13', () => {
     expect(bytesOf(translate(key(0x53, mods({ ctrl: true }))))).toEqual([0x13]);
   });
@@ -115,6 +118,15 @@ describe('unrepresentable command combos → side-channel chord', () => {
     expect(t).toEqual({
       kind: 'chord',
       chord: { input: 'backspace', ctrl: true, alt: false, shift: false },
+    });
+  });
+  it('ctrl+j → chord { input:"j" } (byte 0x0a is `enter` to Ink, not ctrl+j)', () => {
+    // Unlike i/m/h, ctrl+j carries its PLAIN char `j` (not a special-key name): its dispatch target
+    // is the letter (vim-nav down), and Ink would otherwise report byte 0x0a as `enter`/`return`.
+    const t = translate(key(0x6a, mods({ ctrl: true })));
+    expect(t).toEqual({
+      kind: 'chord',
+      chord: { input: 'j', ctrl: true, alt: false, shift: false },
     });
   });
 });

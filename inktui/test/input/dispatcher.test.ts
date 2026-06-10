@@ -233,16 +233,16 @@ describe('layer 1 — global chords', () => {
     expect(out).toEqual({ layer: 'global', handled: true });
   });
 
-  it('alt+, fires openSettings (Phase 5 settings chord)', () => {
+  it('alt+o fires openSettings (Phase 5 settings chord)', () => {
     const h = handlers();
-    const out = dispatchKey(',', makeKey({ meta: true }), ctx('plans', h));
+    const out = dispatchKey('o', makeKey({ meta: true }), ctx('plans', h));
     expect(h.openSettings).toHaveBeenCalledOnce();
     expect(out).toEqual({ layer: 'global', handled: true });
   });
 
-  it('alt+, fires openSettings even while chat is focused (app-wide chord)', () => {
+  it('alt+o fires openSettings even while chat is focused (app-wide chord)', () => {
     const h = handlers();
-    const out = dispatchKey(',', makeKey({ meta: true }), ctx(CHAT_FOCUS, h));
+    const out = dispatchKey('o', makeKey({ meta: true }), ctx(CHAT_FOCUS, h));
     expect(h.openSettings).toHaveBeenCalledOnce();
     expect(out).toEqual({ layer: 'global', handled: true });
   });

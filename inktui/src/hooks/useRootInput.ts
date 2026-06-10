@@ -53,7 +53,7 @@ export interface DeferredGlobalHandlers {
   newPlan?: () => void;
   /** `alt+t`. Default: no-op until C12 wires the new-ticket dialog. */
   newTicket?: () => void;
-  /** `alt+,` (the `global.settings` action). Default: no-op until a later phase wires the settings
+  /** `alt+o` / `ctrl+o` (the `global.settings` action). Default: no-op until a later phase wires the settings
    * modal. Present now so the action's handler slot exists end-to-end (the registry already declares
    * the chord); the dispatcher does not yet route to it — it is wired when the modal lands. */
   openSettings?: () => void;

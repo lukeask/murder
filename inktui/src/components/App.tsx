@@ -442,7 +442,7 @@ function Shell({
       .enter(spawnWizardMode(modes, actions, { spawnContext, modelActions, worktreeActions }));
   };
 
-  // `alt+,` → open the settings modal. Reads the persisted slice at call time so the modal opens
+  // `alt+o` / `ctrl+o` → open the settings modal. Reads the persisted slice at call time so the modal opens
   // reflecting the live preferences; commits route back through `actions.settings.update`. The slice
   // stores `theme`/`keyOverrides` opaquely, so we narrow them onto the modal's typed shape here (an
   // unknown theme falls back to the default, mirroring the theme bridge above).

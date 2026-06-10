@@ -1,9 +1,9 @@
 /**
- * SettingsModal tests — the `alt+,` settings menu against the C7M modal idiom.
+ * SettingsModal tests — the `alt+o` / `ctrl+o` settings menu against the C7M modal idiom.
  *
  * Coverage:
  *  1. Opens / paints the three sections / Esc dismisses + restores focus.
- *  2. The settings chord (`alt+,`) opens the modal end-to-end through the dispatcher.
+ *  2. The settings chord (`alt+o`) opens the modal end-to-end through the dispatcher.
  *  3. Modifier radio: selecting `alt` commits via `update`; ctrl/both disabled + notice when kitty
  *     is unsupported (and the disabled rows refuse selection).
  *  4. Theme select: cursor-move live-previews (setTheme fires); Esc reverts to the persisted theme.
@@ -117,9 +117,8 @@ describe('SettingsModal', () => {
 
   it('the openSettings handler opens the modal (the chord→handler→modal wiring)', async () => {
     // The dispatcher routing of the `global.settings` chord → `openSettings` is proven in the
-    // dispatcher suite (ink-testing-library can't synthesize alt+punctuation via raw bytes). Here we
-    // prove the handler half: firing `openSettings` (as the shell wires it to `settingsMode`) opens
-    // the modal and it paints.
+    // dispatcher suite. Here we prove the handler half: firing `openSettings` (as the shell wires it
+    // to `settingsMode`) opens the modal and it paints.
     const { stores, enter } = setup();
     const open = (): void => enter();
     const { lastFrame } = render(<Harness stores={stores} openSettings={open} />);

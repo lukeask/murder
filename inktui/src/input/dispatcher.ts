@@ -102,7 +102,7 @@ export interface GlobalHandlers {
   newPlan(): void;
   /** `alt+t`: open the new-ticket popup (wired by C12). */
   newTicket(): void;
-  /** `alt+,` (the `global.settings` action): open the settings modal (wired by Phase 5). */
+  /** `alt+o` / `ctrl+o` (the `global.settings` action): open the settings modal (wired by Phase 5). */
   openSettings(): void;
 }
 

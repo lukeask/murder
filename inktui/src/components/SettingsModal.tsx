@@ -1,5 +1,5 @@
 /**
- * `SettingsModal` — the `alt+,` (`global.settings`) settings menu: a **modal C7M mode** (the
+ * `SettingsModal` — the `alt+o` / `ctrl+o` (`global.settings`) settings menu: a **modal C7M mode** (the
  * {@link ./SpawnWizardModal.js} mode-factory idiom — `settingsMode(...)`, `presentation: 'modal'`,
  * rendered through the {@link ./Overlay.js Overlay}). Three sections, navigated as one flat cursor
  * list of rows (j/k or arrows move the cursor; Enter acts on the focused row):

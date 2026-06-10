@@ -74,3 +74,52 @@ describe('ctrl+1 raw bytes → shim → dispatch → focusPanel(plans)', () => {
     expect(focusPanel).toHaveBeenCalledWith('plans');
   });
 });
+
+describe('ctrl+j raw bytes → shim → dispatch → navigate(down)', () => {
+  it('drives vim-nav down via the side-channel chord (byte 0x0a would be `enter` to Ink)', () => {
+    // ctrl+j's legacy byte is 0x0a, which Ink's parser reports as `enter`/`return` — never
+    // `{ctrl, input:'j'}` — so it must travel the side channel as a chord, exactly like ctrl+i/m/h.
+    const real = new FakeStdin();
+    const shim = new StdinShim(real);
+    shim.setBypass(false);
+    const chords: Chord[] = [];
+    shim.on('chord', (c: Chord) => chords.push(c));
+
+    // Raw kitty bytes for ctrl+j: CSI 106 ; 5 u (code 106='j', mods 5=ctrl).
+    real.push('\x1b[106;5u');
+    expect(chords).toHaveLength(1);
+
+    // The chord carries the plain letter `j` (NOT a special-key name), so vim-nav can match it.
+    const chord = chords[0];
+    if (chord === undefined) throw new Error('no chord');
+    expect(chord.input).toBe('j');
+    const { input, key } = chordToKey(chord);
+    expect(input).toBe('j');
+    expect(key.ctrl).toBe(true);
+    expect(key.meta).toBe(false);
+    expect(key.return).toBe(false);
+
+    const navigate = vi.fn<GlobalHandlers['navigate']>();
+    const handlers: GlobalHandlers = {
+      focusPanel: vi.fn(),
+      navigate,
+      focusChat: vi.fn(),
+      spawn: vi.fn(),
+      toggleTmux: vi.fn(),
+      newPlan: vi.fn(),
+      newTicket: vi.fn(),
+      openSettings: vi.fn(),
+    };
+    const ctx: DispatchContext = {
+      focusedId: CHAT_FOCUS,
+      panelKeymaps: {},
+      handlers,
+      activeMode: null,
+      bindings: resolveBindings('ctrl', true, {}),
+    };
+    const outcome = dispatchKey(input, key, ctx);
+
+    expect(outcome).toEqual({ layer: 'global', handled: true });
+    expect(navigate).toHaveBeenCalledWith('down');
+  });
+});
