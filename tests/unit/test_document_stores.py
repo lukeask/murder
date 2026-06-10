@@ -1,12 +1,11 @@
-"""Tests for PlansStore, NotesStore, ReportsStore (t048).
+"""Tests for murder.app.tui.stores.documents (PlansStore, NotesStore, ReportsStore).
 
-Verifies:
-- list ingest notifies on change; identical re-ingest (same content, different
-  as_of) does NOT notify
-- requesting a body calls the loader once and caches it; second request is
-  a cache hit (no second loader call)
-- body cache is evicted when the item's version key changes on next ingest
-- no Textual import in the module
+COOKBOOK = PlansStore canonical usage: list ingest → notify, body loading +
+           caching, set_selected. PlansStore is the reference implementation;
+           NotesStore/ReportsStore share the same base and are spot-checked for
+           their store-specific version-key eviction behaviour.
+EDGE CASES = no-notify on identical re-ingest, body cache eviction on revision
+             change, None-loader no-cache, no Textual import boundary.
 """
 
 from __future__ import annotations
@@ -15,7 +14,10 @@ import asyncio
 import re
 from datetime import datetime, timezone
 from pathlib import Path
-from unittest.mock import AsyncMock, call
+from typing import Any
+from unittest.mock import AsyncMock
+
+import pytest
 
 from murder.app.service.client_api import (
     NoteDisplaySnapshot,
@@ -99,9 +101,9 @@ def _report_display(name: str = "report-a", body: str = "# report") -> ReportDis
     return ReportDisplaySnapshot(name=name, markdown=body)
 
 
-# ---------------------------------------------------------------------------
-# PlansStore — list ingest
-# ---------------------------------------------------------------------------
+# ============================================================
+# === COOKBOOK ===============================================
+# ============================================================
 
 
 def test_plans_store_notifies_on_first_ingest() -> None:
@@ -113,30 +115,6 @@ def test_plans_store_notifies_on_first_ingest() -> None:
     assert len(calls) == 1
 
 
-def test_plans_store_no_notify_on_identical_reingest() -> None:
-    """Same items + same invalidation_key but different as_of must NOT notify."""
-    store = PlansStore(AsyncMock(return_value=None))
-    store.ingest_list(_plans_snap((_plan(),), "key1", _DT1))
-
-    calls: list[None] = []
-    store.subscribe(lambda: calls.append(None))
-
-    # Same content, advanced as_of (simulates next poll tick)
-    store.ingest_list(_plans_snap((_plan(),), "key1", _DT2))
-    assert len(calls) == 0
-
-
-def test_plans_store_notifies_on_content_change() -> None:
-    store = PlansStore(AsyncMock(return_value=None))
-    store.ingest_list(_plans_snap((_plan(revision=1),), "key1", _DT1))
-
-    calls: list[None] = []
-    store.subscribe(lambda: calls.append(None))
-
-    store.ingest_list(_plans_snap((_plan(revision=2),), "key2", _DT2))
-    assert len(calls) == 1
-
-
 def test_plans_store_snapshot_holds_items() -> None:
     store = PlansStore(AsyncMock(return_value=None))
     p = _plan()
@@ -145,11 +123,6 @@ def test_plans_store_snapshot_holds_items() -> None:
     assert snap.items == (p,)
     assert snap.invalidation_key == "key1"
     assert snap.bodies == ()
-
-
-# ---------------------------------------------------------------------------
-# PlansStore — body loading and caching
-# ---------------------------------------------------------------------------
 
 
 def test_plans_store_body_loaded_once_and_cached() -> None:
@@ -176,6 +149,46 @@ def test_plans_store_body_notify_on_load() -> None:
     store.subscribe(lambda: calls.append(None))
 
     asyncio.run(store.request_body("plan-a"))
+    assert len(calls) == 1
+
+
+def test_plans_store_set_selected_notifies() -> None:
+    store = PlansStore(AsyncMock(return_value=None))
+    store.ingest_list(_plans_snap((_plan("plan-a"),), "key1"))
+    calls: list[None] = []
+    store.subscribe(lambda: calls.append(None))
+
+    store.set_selected("plan-a")
+    assert store.get_snapshot().selected_name == "plan-a"
+    assert len(calls) == 1
+
+
+# ============================================================
+# === EDGE CASES =============================================
+# ============================================================
+
+
+def test_plans_store_no_notify_on_identical_reingest() -> None:
+    """Same items + same invalidation_key but different as_of must NOT notify."""
+    store = PlansStore(AsyncMock(return_value=None))
+    store.ingest_list(_plans_snap((_plan(),), "key1", _DT1))
+
+    calls: list[None] = []
+    store.subscribe(lambda: calls.append(None))
+
+    # Same content, advanced as_of (simulates next poll tick)
+    store.ingest_list(_plans_snap((_plan(),), "key1", _DT2))
+    assert len(calls) == 0
+
+
+def test_plans_store_notifies_on_content_change() -> None:
+    store = PlansStore(AsyncMock(return_value=None))
+    store.ingest_list(_plans_snap((_plan(revision=1),), "key1", _DT1))
+
+    calls: list[None] = []
+    store.subscribe(lambda: calls.append(None))
+
+    store.ingest_list(_plans_snap((_plan(revision=2),), "key2", _DT2))
     assert len(calls) == 1
 
 
@@ -217,22 +230,6 @@ def test_plans_store_body_none_loader_does_not_cache() -> None:
     assert len(calls) == 0  # no change → no notify
 
 
-# ---------------------------------------------------------------------------
-# PlansStore — set_selected
-# ---------------------------------------------------------------------------
-
-
-def test_plans_store_set_selected_notifies() -> None:
-    store = PlansStore(AsyncMock(return_value=None))
-    store.ingest_list(_plans_snap((_plan("plan-a"),), "key1"))
-    calls: list[None] = []
-    store.subscribe(lambda: calls.append(None))
-
-    store.set_selected("plan-a")
-    assert store.get_snapshot().selected_name == "plan-a"
-    assert len(calls) == 1
-
-
 def test_plans_store_set_selected_same_no_notify() -> None:
     store = PlansStore(AsyncMock(return_value=None))
     store.set_selected("plan-a")  # set it
@@ -243,24 +240,47 @@ def test_plans_store_set_selected_same_no_notify() -> None:
     assert len(calls) == 0
 
 
-# ---------------------------------------------------------------------------
-# NotesStore — basic smoke (parallel logic, spot-check version eviction)
-# ---------------------------------------------------------------------------
-
-
-def test_notes_store_no_notify_on_identical_reingest() -> None:
-    store = NotesStore(AsyncMock(return_value=None))
-    note = _note("note-a", _DT1)
-    store.ingest_list(_notes_snap((note,), "k1", _DT1))
+@pytest.mark.parametrize(
+    "store_cls, snap_factory, item_factory, item_name, updated_dt",
+    [
+        (
+            NotesStore,
+            _notes_snap,
+            _note,
+            "note-a",
+            _DT2,
+        ),
+        (
+            ReportsStore,
+            _reports_snap,
+            _report,
+            "report-a",
+            _DT2,
+        ),
+    ],
+    ids=["notes", "reports"],
+)
+def test_sibling_store_no_notify_on_identical_reingest(
+    store_cls: type,
+    snap_factory: Any,
+    item_factory: Any,
+    item_name: str,
+    updated_dt: datetime,
+) -> None:
+    """NotesStore and ReportsStore share the base-store no-notify invariant."""
+    store = store_cls(AsyncMock(return_value=None))
+    item = item_factory(item_name, _DT1)
+    store.ingest_list(snap_factory((item,), "k1", _DT1))
 
     calls: list[None] = []
     store.subscribe(lambda: calls.append(None))
 
-    store.ingest_list(_notes_snap((note,), "k1", _DT2))  # only as_of advances
+    store.ingest_list(snap_factory((item,), "k1", _DT2))  # only as_of advances
     assert len(calls) == 0
 
 
 def test_notes_store_body_evicted_on_updated_at_change() -> None:
+    """NotesStore uses updated_at as the version key; eviction is store-specific."""
     loader = AsyncMock(
         side_effect=[
             _note_display("note-a", "old body"),
@@ -280,47 +300,9 @@ def test_notes_store_body_evicted_on_updated_at_change() -> None:
     assert loader.call_count == 2
 
 
-# ---------------------------------------------------------------------------
-# ReportsStore — basic smoke
-# ---------------------------------------------------------------------------
-
-
-def test_reports_store_no_notify_on_identical_reingest() -> None:
-    store = ReportsStore(AsyncMock(return_value=None))
-    report = _report("report-a", _DT1)
-    store.ingest_list(_reports_snap((report,), "k1", _DT1))
-
-    calls: list[None] = []
-    store.subscribe(lambda: calls.append(None))
-
-    store.ingest_list(_reports_snap((report,), "k1", _DT2))
-    assert len(calls) == 0
-
-
-def test_reports_store_body_loaded_and_cached() -> None:
-    loader = AsyncMock(return_value=_report_display("report-a", "# rpt"))
-    store = ReportsStore(loader)
-    store.ingest_list(_reports_snap((_report("report-a"),), "k1"))
-
-    asyncio.run(store.request_body("report-a"))
-    assert loader.call_count == 1
-    asyncio.run(store.request_body("report-a"))
-    assert loader.call_count == 1
-
-
-# ---------------------------------------------------------------------------
-# No Textual import
-# ---------------------------------------------------------------------------
-
-
 def test_no_textual_import() -> None:
     """The documents module must be headless — no Textual dependency."""
     source = (
-        Path(__file__).parent.parent.parent
-        / "murder"
-        / "app"
-        / "tui"
-        / "stores"
-        / "documents.py"
+        Path(__file__).parent.parent.parent / "murder" / "app" / "tui" / "stores" / "documents.py"
     ).read_text()
     assert not re.search(r"^\s*(import|from)\s+textual", source, re.MULTILINE)

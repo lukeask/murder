@@ -1,4 +1,10 @@
-"""ConversationProducer — portable projection unit tests."""
+"""Tests for murder.runtime.agents.conversation_producer.
+
+COOKBOOK = hash-skip noop (same pane twice → no new events) + growing-pane
+           append (later frame adds blocks) — the two most common caller patterns.
+EDGE CASES = per-frame monotonic accumulation invariants across all harness
+             fixture sets; conversation-id isolation between concurrent producers.
+"""
 
 from __future__ import annotations
 
@@ -12,11 +18,12 @@ from murder.runtime.agents.conversation_producer import ConversationProducer
 from murder.state.persistence.conversation import read_conversation_blocks, read_conversation_doc
 from murder.state.persistence.schema import get_db, init_db
 
-_FRAMES_DIR = Path(__file__).parent.parent / "fixtures" / "transcripts" / "cc" / "frames"
-_CODEX_FRAMES_DIR = Path(__file__).parent.parent / "fixtures" / "transcripts" / "codex" / "frames"
-_PI_FRAMES_DIR = Path(__file__).parent.parent / "fixtures" / "transcripts" / "pi" / "frames"
-_AGY_FRAMES_DIR = Path(__file__).parent.parent / "fixtures" / "transcripts" / "antigravity" / "frames"
-_CURSOR_FRAMES_DIR = Path(__file__).parent.parent / "fixtures" / "transcripts" / "cursor" / "frames"
+_FIXTURES = Path(__file__).parent.parent / "fixtures" / "transcripts"
+_FRAMES_DIR = _FIXTURES / "cc" / "frames"
+_CODEX_FRAMES_DIR = _FIXTURES / "codex" / "frames"
+_PI_FRAMES_DIR = _FIXTURES / "pi" / "frames"
+_AGY_FRAMES_DIR = _FIXTURES / "antigravity" / "frames"
+_CURSOR_FRAMES_DIR = _FIXTURES / "cursor" / "frames"
 
 
 @pytest.fixture()
@@ -46,27 +53,13 @@ def _make_producer(
     )
 
 
-def _load_frame(n: int) -> str:
-    return (_FRAMES_DIR / f"{n:04d}.txt").read_text(encoding="utf-8", errors="replace")
+def _load_frame(frames_dir: Path, n: int) -> str:
+    return (frames_dir / f"{n:04d}.txt").read_text(encoding="utf-8", errors="replace")
 
 
-def _load_codex_frame(n: int) -> str:
-    return (_CODEX_FRAMES_DIR / f"{n:04d}.txt").read_text(encoding="utf-8", errors="replace")
-
-
-def _load_pi_frame(n: int) -> str:
-    return (_PI_FRAMES_DIR / f"{n:04d}.txt").read_text(encoding="utf-8", errors="replace")
-
-
-def _load_agy_frame(n: int) -> str:
-    return (_AGY_FRAMES_DIR / f"{n:04d}.txt").read_text(encoding="utf-8", errors="replace")
-
-
-def _load_cursor_frame(n: int) -> str:
-    return (_CURSOR_FRAMES_DIR / f"{n:04d}.txt").read_text(encoding="utf-8", errors="replace")
-
-
-# ---------------------------------------------------------------------------
+# ============================================================
+# === COOKBOOK ===============================================
+# ============================================================
 
 
 def test_poll_persists_assistant_block_and_sets_harness(conn: sqlite3.Connection) -> None:
@@ -78,8 +71,7 @@ def test_poll_persists_assistant_block_and_sets_harness(conn: sqlite3.Connection
 
     # Feed enough frames to get a complete transcript
     for i in range(len(list(_FRAMES_DIR.iterdir()))):
-        frame = _load_frame(i)
-        asyncio.run(producer.poll(frame))
+        asyncio.run(producer.poll(_load_frame(_FRAMES_DIR, i)))
 
     blocks = read_conversation_blocks(conn, "crow-t001")
     kinds = {b.kind for b in blocks}
@@ -101,7 +93,7 @@ def test_poll_hash_skip_is_noop(conn: sqlite3.Connection) -> None:
 
     import asyncio
 
-    pane = _load_frame(50)
+    pane = _load_frame(_FRAMES_DIR, 50)
     asyncio.run(producer.poll(pane))
     after_first = len(published)
 
@@ -118,35 +110,62 @@ def test_poll_growing_pane_appends(conn: sqlite3.Connection) -> None:
     import asyncio
 
     # Start with an early frame that has fewer segments.
-    asyncio.run(producer.poll(_load_frame(20)))
+    asyncio.run(producer.poll(_load_frame(_FRAMES_DIR, 20)))
     blocks_after_early = read_conversation_blocks(conn, "crow-t001")
 
     # Feed a later frame; the parser should see more content.
-    asyncio.run(producer.poll(_load_frame(80)))
+    asyncio.run(producer.poll(_load_frame(_FRAMES_DIR, 80)))
     blocks_after_late = read_conversation_blocks(conn, "crow-t001")
 
     # The store should not have shrunk.
     assert len(blocks_after_late) >= len(blocks_after_early)
 
 
-def test_per_frame_accumulation_invariants(conn: sqlite3.Connection) -> None:
-    """Feed cc fixture frames one at a time; assert DB invariants at every step.
+# ============================================================
+# === EDGE CASES =============================================
+# ============================================================
+
+
+@pytest.mark.parametrize(
+    "harness_kind, conversation_id, frames_dir",
+    [
+        ("claude_code", "crow-t001", _FRAMES_DIR),
+        ("codex", "codex-t001", _CODEX_FRAMES_DIR),
+        ("pi", "pi-t001", _PI_FRAMES_DIR),
+        ("antigravity", "agy-t001", _AGY_FRAMES_DIR),
+        ("cursor", "cursor-t001", _CURSOR_FRAMES_DIR),
+    ],
+    ids=["cc", "codex", "pi", "antigravity", "cursor"],
+)
+def test_per_frame_accumulation_invariants(
+    conn: sqlite3.Connection,
+    harness_kind: str,
+    conversation_id: str,
+    frames_dir: Path,
+) -> None:
+    """Feed fixture frames one at a time; assert DB invariants at every step.
 
     Catches regressions where the system prompt leaks into conversation blocks
     or where monotonicity breaks (blocks disappear between frames).
     """
     published: list[tuple[str, dict[str, Any]]] = []
     system_prompt = "You are a collaborator.\n\nPlease help the user with their request."
-    producer = _make_producer(conn, published, system_prompt=system_prompt)
+    producer = _make_producer(
+        conn,
+        published,
+        conversation_id=conversation_id,
+        harness_kind=harness_kind,
+        system_prompt=system_prompt,
+    )
 
     import asyncio
 
-    frame_count = len(list(_FRAMES_DIR.iterdir()))
+    frame_count = len(list(frames_dir.iterdir()))
     prev_block_count = 0
     for i in range(frame_count):
-        asyncio.run(producer.poll(_load_frame(i)))
+        asyncio.run(producer.poll(_load_frame(frames_dir, i)))
 
-        blocks = read_conversation_blocks(conn, "crow-t001")
+        blocks = read_conversation_blocks(conn, conversation_id)
 
         # Blocks are monotonically non-decreasing (no block disappears mid-session).
         assert len(blocks) >= prev_block_count, (
@@ -168,150 +187,6 @@ def test_per_frame_accumulation_invariants(conn: sqlite3.Connection) -> None:
                 )
 
 
-def test_per_frame_accumulation_invariants_codex(conn: sqlite3.Connection) -> None:
-    """Feed codex fixture frames one at a time; assert DB invariants at every step."""
-    published: list[tuple[str, dict[str, Any]]] = []
-    system_prompt = "You are a collaborator.\n\nPlease help the user with their request."
-    producer = _make_producer(
-        conn, published,
-        conversation_id="codex-t001",
-        harness_kind="codex",
-        system_prompt=system_prompt,
-    )
-
-    import asyncio
-
-    frame_count = len(list(_CODEX_FRAMES_DIR.iterdir()))
-    prev_block_count = 0
-    for i in range(frame_count):
-        asyncio.run(producer.poll(_load_codex_frame(i)))
-
-        blocks = read_conversation_blocks(conn, "codex-t001")
-
-        assert len(blocks) >= prev_block_count, (
-            f"block count shrank at frame {i}: {prev_block_count} → {len(blocks)}"
-        )
-        prev_block_count = len(blocks)
-
-        kinds = {b.kind for b in blocks}
-        assert "user" not in kinds, f"frame {i}: parser wrote a user block (should be stripped)"
-
-        for block in blocks:
-            payload_str = str(block.payload)
-            for fragment in ("You are a collaborator", "Please help the user"):
-                assert fragment not in payload_str, (
-                    f"frame {i}: system prompt fragment {fragment!r} found in block {block.kind}"
-                )
-
-
-def test_per_frame_accumulation_invariants_pi(conn: sqlite3.Connection) -> None:
-    """Feed pi fixture frames one at a time; assert DB invariants at every step."""
-    published: list[tuple[str, dict[str, Any]]] = []
-    system_prompt = "You are a collaborator.\n\nPlease help the user with their request."
-    producer = _make_producer(
-        conn, published,
-        conversation_id="pi-t001",
-        harness_kind="pi",
-        system_prompt=system_prompt,
-    )
-
-    import asyncio
-
-    frame_count = len(list(_PI_FRAMES_DIR.iterdir()))
-    prev_block_count = 0
-    for i in range(frame_count):
-        asyncio.run(producer.poll(_load_pi_frame(i)))
-
-        blocks = read_conversation_blocks(conn, "pi-t001")
-
-        assert len(blocks) >= prev_block_count, (
-            f"block count shrank at frame {i}: {prev_block_count} → {len(blocks)}"
-        )
-        prev_block_count = len(blocks)
-
-        kinds = {b.kind for b in blocks}
-        assert "user" not in kinds, f"frame {i}: parser wrote a user block (should be stripped)"
-
-        for block in blocks:
-            payload_str = str(block.payload)
-            for fragment in ("You are a collaborator", "Please help the user"):
-                assert fragment not in payload_str, (
-                    f"frame {i}: system prompt fragment {fragment!r} found in block {block.kind}"
-                )
-
-
-def test_per_frame_accumulation_invariants_antigravity(conn: sqlite3.Connection) -> None:
-    """Feed antigravity fixture frames one at a time; assert DB invariants at every step."""
-    published: list[tuple[str, dict[str, Any]]] = []
-    system_prompt = "You are a collaborator.\n\nPlease help the user with their request."
-    producer = _make_producer(
-        conn, published,
-        conversation_id="agy-t001",
-        harness_kind="antigravity",
-        system_prompt=system_prompt,
-    )
-
-    import asyncio
-
-    frame_count = len(list(_AGY_FRAMES_DIR.iterdir()))
-    prev_block_count = 0
-    for i in range(frame_count):
-        asyncio.run(producer.poll(_load_agy_frame(i)))
-
-        blocks = read_conversation_blocks(conn, "agy-t001")
-
-        assert len(blocks) >= prev_block_count, (
-            f"block count shrank at frame {i}: {prev_block_count} → {len(blocks)}"
-        )
-        prev_block_count = len(blocks)
-
-        kinds = {b.kind for b in blocks}
-        assert "user" not in kinds, f"frame {i}: parser wrote a user block (should be stripped)"
-
-        for block in blocks:
-            payload_str = str(block.payload)
-            for fragment in ("You are a collaborator", "Please help the user"):
-                assert fragment not in payload_str, (
-                    f"frame {i}: system prompt fragment {fragment!r} found in block {block.kind}"
-                )
-
-
-def test_per_frame_accumulation_invariants_cursor(conn: sqlite3.Connection) -> None:
-    """Feed cursor fixture frames one at a time; assert DB invariants at every step."""
-    published: list[tuple[str, dict[str, Any]]] = []
-    system_prompt = "You are a collaborator.\n\nPlease help the user with their request."
-    producer = _make_producer(
-        conn, published,
-        conversation_id="cursor-t001",
-        harness_kind="cursor",
-        system_prompt=system_prompt,
-    )
-
-    import asyncio
-
-    frame_count = len(list(_CURSOR_FRAMES_DIR.iterdir()))
-    prev_block_count = 0
-    for i in range(frame_count):
-        asyncio.run(producer.poll(_load_cursor_frame(i)))
-
-        blocks = read_conversation_blocks(conn, "cursor-t001")
-
-        assert len(blocks) >= prev_block_count, (
-            f"block count shrank at frame {i}: {prev_block_count} → {len(blocks)}"
-        )
-        prev_block_count = len(blocks)
-
-        kinds = {b.kind for b in blocks}
-        assert "user" not in kinds, f"frame {i}: parser wrote a user block (should be stripped)"
-
-        for block in blocks:
-            payload_str = str(block.payload)
-            for fragment in ("You are a collaborator", "Please help the user"):
-                assert fragment not in payload_str, (
-                    f"frame {i}: system prompt fragment {fragment!r} found in block {block.kind}"
-                )
-
-
 def test_poll_different_conversation_ids_are_isolated(conn: sqlite3.Connection) -> None:
     """Two producers with different conversation_ids write to separate stores."""
     published_a: list[tuple[str, dict[str, Any]]] = []
@@ -321,7 +196,7 @@ def test_poll_different_conversation_ids_are_isolated(conn: sqlite3.Connection) 
 
     import asyncio
 
-    pane = _load_frame(50)
+    pane = _load_frame(_FRAMES_DIR, 50)
     asyncio.run(prod_a.poll(pane))
     asyncio.run(prod_b.poll(pane))
 

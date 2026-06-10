@@ -1,18 +1,33 @@
-"""Tests for ChatInput ctrl+v image paste (Part C of plan-image-paste)."""
+"""Tests for ChatInput ctrl+v image paste (Part C of plan-image-paste).
+
+COOKBOOK = the paste→token→send-substitution→cleanup contract.
+EDGE CASES = no-image passthrough and clipboard-read failure.
+
+The token-substitution / temp-file / cleanup logic lives inside the live
+TextArea (`self.text`, `self.insert`, `self._pending_image_paths`), so these
+exercise a real Textual widget rather than a pure-data unit.  The AsyncMock on
+clip_mod is an I/O-boundary patch (the clipboard subprocess), not the unit
+under test.
+
+TODO(support): a `drive_chat_input` helper belongs in simulators.py once the
+pilot-driver pattern is shared across chat-input tests.
+"""
 
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Awaitable, Callable
 from pathlib import Path
+from typing import TypeVar
 from unittest.mock import AsyncMock
-
-import pytest
 
 from textual.app import App, ComposeResult
 from textual.widgets import Label
 
 import murder.app.tui.clipboard_image as clip_mod
 from murder.app.tui.chat_input import ChatInput
+
+_T = TypeVar("_T")
 
 
 class _ChatApp(App[None]):
@@ -34,133 +49,111 @@ class _ChatApp(App[None]):
         self.received_messages.append(event.text)
 
 
-def test_ctrl_v_no_image_does_not_insert_token(monkeypatch) -> None:
-    monkeypatch.setattr(clip_mod, "has_clipboard_image", AsyncMock(return_value=False))
-    monkeypatch.setattr(clip_mod, "read_clipboard_image_png", AsyncMock(return_value=None))
+def _patch_clipboard(monkeypatch, *, has_image: bool, png: bytes | None) -> None:
+    monkeypatch.setattr(clip_mod, "has_clipboard_image", AsyncMock(return_value=has_image))
+    monkeypatch.setattr(clip_mod, "read_clipboard_image_png", AsyncMock(return_value=png))
 
-    async def _run() -> str:
+
+def _drive(body: Callable[[_ChatApp, object], Awaitable[_T]]) -> _T:
+    """Boot a headless ChatApp, run `body(app, pilot)`, return its result."""
+
+    async def _run() -> _T:
         app = _ChatApp()
         async with app.run_test() as pilot:
             assert app.chat is not None
-            await pilot.press("ctrl+v")
-            await pilot.pause()
-            await pilot.pause()
-            return app.chat.text
+            return await body(app, pilot)
 
-    text = asyncio.run(_run())
-    assert "[Image #" not in text
-    assert "pasting" not in text
+    return asyncio.run(_run())
 
 
-def test_ctrl_v_with_image_writes_tmp_file_and_inserts_token(
-    tmp_path: Path, monkeypatch
-) -> None:
+async def _paste(app: _ChatApp, pilot) -> None:
+    await pilot.press("ctrl+v")
+    await pilot.pause()
+    await pilot.pause()
+
+
+# ============================================================
+# === COOKBOOK ===============================================
+# ============================================================
+
+
+def test_ctrl_v_with_image_writes_tmp_file_and_inserts_token(monkeypatch) -> None:
     png_bytes = b"\x89PNG\r\n\x1a\nfakedata"
-    monkeypatch.setattr(clip_mod, "has_clipboard_image", AsyncMock(return_value=True))
-    monkeypatch.setattr(
-        clip_mod, "read_clipboard_image_png", AsyncMock(return_value=png_bytes)
-    )
+    _patch_clipboard(monkeypatch, has_image=True, png=png_bytes)
 
-    written_paths: list[Path] = []
+    async def _body(app, pilot):
+        await _paste(app, pilot)
+        return app.chat.text, dict(app.chat._pending_image_paths)
 
-    async def _run() -> tuple[str, dict]:
-        app = _ChatApp()
-        async with app.run_test() as pilot:
-            assert app.chat is not None
-            await pilot.press("ctrl+v")
-            await pilot.pause()
-            await pilot.pause()
-            text = app.chat.text
-            pending = dict(app.chat._pending_image_paths)
-            written_paths.extend(pending.values())
-            return text, pending
+    text, pending = _drive(_body)
 
-    text, pending = asyncio.run(_run())
-
-    # Token stays visible in the widget
+    # Token stays visible in the widget; one temp file mapped to it.
     assert "[Image #1]" in text
-    # Path map has one entry
     assert len(pending) == 1
-    # Temp file was created with correct content
-    assert len(written_paths) == 1
-    p = written_paths[0]
+    (p,) = pending.values()
     assert p.exists()
     assert p.read_bytes() == png_bytes
     assert p.name.startswith("murder-clipboard-")
     assert p.suffix == ".png"
 
 
-def test_ctrl_v_read_failure_replaces_token_with_failed(monkeypatch) -> None:
-    monkeypatch.setattr(clip_mod, "has_clipboard_image", AsyncMock(return_value=True))
-    monkeypatch.setattr(
-        clip_mod, "read_clipboard_image_png", AsyncMock(return_value=None)
-    )
-
-    async def _run() -> str:
-        app = _ChatApp()
-        async with app.run_test() as pilot:
-            assert app.chat is not None
-            await pilot.press("ctrl+v")
-            await pilot.pause()
-            await pilot.pause()
-            return app.chat.text
-
-    text = asyncio.run(_run())
-    assert "[Image paste failed]" in text
-    assert "[Image #" not in text
-
-
 def test_send_substitutes_token_with_absolute_path(monkeypatch) -> None:
-    png_bytes = b"\x89PNG\r\n\x1a\n"
-    monkeypatch.setattr(clip_mod, "has_clipboard_image", AsyncMock(return_value=True))
-    monkeypatch.setattr(
-        clip_mod, "read_clipboard_image_png", AsyncMock(return_value=png_bytes)
-    )
+    _patch_clipboard(monkeypatch, has_image=True, png=b"\x89PNG\r\n\x1a\n")
 
-    async def _run() -> list[str]:
-        app = _ChatApp()
-        async with app.run_test() as pilot:
-            assert app.chat is not None
-            await pilot.press("ctrl+v")
-            await pilot.pause()
-            await pilot.pause()
-            await pilot.press("enter")
-            await pilot.pause()
-            return list(app.received_messages)
+    async def _body(app, pilot):
+        await _paste(app, pilot)
+        await pilot.press("enter")
+        await pilot.pause()
+        return list(app.received_messages)
 
-    messages = asyncio.run(_run())
+    messages = _drive(_body)
     assert len(messages) == 1
     msg = messages[0]
-    # Token replaced by absolute path, ending in .png
+    # Token replaced by an absolute path that exists on disk.
     assert "[Image #" not in msg
     assert msg.endswith(".png")
-    # The path actually exists on disk
     assert Path(msg).exists()
 
 
 def test_ctrl_d_cleans_up_temp_file(monkeypatch) -> None:
-    png_bytes = b"\x89PNG\r\n\x1a\n"
-    monkeypatch.setattr(clip_mod, "has_clipboard_image", AsyncMock(return_value=True))
-    monkeypatch.setattr(
-        clip_mod, "read_clipboard_image_png", AsyncMock(return_value=png_bytes)
-    )
+    _patch_clipboard(monkeypatch, has_image=True, png=b"\x89PNG\r\n\x1a\n")
 
-    saved_paths: list[Path] = []
+    async def _body(app, pilot):
+        await _paste(app, pilot)
+        saved = list(app.chat._pending_image_paths.values())
+        await pilot.press("ctrl+d")
+        await pilot.pause()
+        return saved
 
-    async def _run() -> None:
-        app = _ChatApp()
-        async with app.run_test() as pilot:
-            assert app.chat is not None
-            await pilot.press("ctrl+v")
-            await pilot.pause()
-            await pilot.pause()
-            saved_paths.extend(app.chat._pending_image_paths.values())
-            # ctrl+d clears and cleans up
-            await pilot.press("ctrl+d")
-            await pilot.pause()
+    saved = _drive(_body)
+    assert len(saved) == 1
+    assert not saved[0].exists()
 
-    asyncio.run(_run())
 
-    assert len(saved_paths) == 1
-    # File should have been deleted
-    assert not saved_paths[0].exists()
+# ============================================================
+# === EDGE CASES =============================================
+# ============================================================
+
+
+def test_ctrl_v_no_image_does_not_insert_token(monkeypatch) -> None:
+    _patch_clipboard(monkeypatch, has_image=False, png=None)
+
+    async def _body(app, pilot):
+        await _paste(app, pilot)
+        return app.chat.text
+
+    text = _drive(_body)
+    assert "[Image #" not in text
+    assert "pasting" not in text
+
+
+def test_ctrl_v_read_failure_replaces_token_with_failed(monkeypatch) -> None:
+    _patch_clipboard(monkeypatch, has_image=True, png=None)
+
+    async def _body(app, pilot):
+        await _paste(app, pilot)
+        return app.chat.text
+
+    text = _drive(_body)
+    assert "[Image paste failed]" in text
+    assert "[Image #" not in text

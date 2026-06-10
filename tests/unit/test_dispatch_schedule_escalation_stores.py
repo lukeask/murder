@@ -1,10 +1,12 @@
-"""Tests for DispatchStore, ScheduleStore, EscalationsStore (t049).
+"""Tests for DispatchStore, ScheduleStore, EscalationsStore.
 
-Verifies:
-- each store notifies on changed ingest; identical re-ingest (same content,
-  different as_of) does NOT notify
-- ScheduleStore usage drill-in loader is invoked lazily and cached
-- no Textual import in the three store modules
+COOKBOOK = the store ingest/notify/get_snapshot contract each domain store
+shares, plus the ScheduleStore drill-in lazy-load path.
+EDGE CASES = notify suppression on identical reingest, drill-in caching and
+eviction, noop for unknown gauges, and the no-Textual-import invariant.
+
+The notify contract pinned here: ingest notifies iff observable content changed
+(same invalidation_key + same content but newer as_of must NOT notify).
 """
 
 from __future__ import annotations
@@ -16,18 +18,12 @@ from pathlib import Path
 from unittest.mock import AsyncMock
 
 from murder.app.service.client_api import (
-    CalendarRunningAgent,
-    CalendarScheduledTicket,
-    EscalationSummary,
     EscalationsSnapshot,
+    EscalationSummary,
     ScheduleSnapshot,
-    SchedulerDecisionSummary,
-    ScheduleTicketRow,
     TicketSummary,
     UsageGaugeDrillInSnapshot,
     UsageGaugeSummary,
-    UsageBurnRow,
-    UsageResetEvent,
 )
 from murder.app.tui.stores.dispatch import DispatchStore
 from murder.app.tui.stores.escalations import EscalationsStore
@@ -44,9 +40,7 @@ _DT2 = datetime(2026, 1, 2, tzinfo=timezone.utc)
 
 
 def _ticket(tid: str = "t001", status: str = "open") -> TicketSummary:
-    return TicketSummary(
-        id=tid, title="Test", status=status, wave=1, harness=None, model=None
-    )
+    return TicketSummary(id=tid, title="Test", status=status, wave=1, harness=None, model=None)
 
 
 def _escalation(eid: int = 1) -> EscalationSummary:
@@ -71,7 +65,9 @@ def _escalations_snap(
     )
 
 
-def _gauge(harness: str = "claude_code", window_key: str = "5h", pct: float = 0.5) -> UsageGaugeSummary:
+def _gauge(
+    harness: str = "claude_code", window_key: str = "5h", pct: float = 0.5
+) -> UsageGaugeSummary:
     return UsageGaugeSummary(
         harness=harness,
         window_key=window_key,
@@ -112,22 +108,72 @@ def _schedule_snap(
     )
 
 
-# ---------------------------------------------------------------------------
-# DispatchStore
-# ---------------------------------------------------------------------------
+# ============================================================
+# === COOKBOOK ===============================================
+# ============================================================
 
 
-def test_dispatch_notifies_on_first_ingest() -> None:
+def test_dispatch_ingest_notifies_subscriber_and_holds_tickets() -> None:
+    """First ingest notifies subscribers; the snapshot exposes the ingested tickets."""
     store = DispatchStore()
     calls: list[None] = []
     store.subscribe(lambda: calls.append(None))
 
-    store.ingest_snapshot(factory_dispatch_snapshot((_ticket(),), "k1"))
+    t = _ticket()
+    store.ingest_snapshot(factory_dispatch_snapshot((t,), "k1"))
+    assert len(calls) == 1
+
+    snap = store.get_snapshot()
+    assert snap.tickets == (t,)
+    assert snap.invalidation_key == "k1"
+
+
+def test_escalations_ingest_notifies_subscriber_and_holds_active_and_history() -> None:
+    store = EscalationsStore()
+    calls: list[None] = []
+    store.subscribe(lambda: calls.append(None))
+
+    e = _escalation()
+    store.ingest_snapshot(_escalations_snap((e,), (e,), "k1"))
+    assert len(calls) == 1
+
+    snap = store.get_snapshot()
+    assert snap.active == (e,)
+    assert snap.history == (e,)
+
+
+def test_schedule_ingest_notifies_subscriber() -> None:
+    # TODO: replace inline AsyncMock loaders with FakeAsyncLoader in simulators.py.
+    store = ScheduleStore(AsyncMock(return_value=_drill_in()))
+    calls: list[None] = []
+    store.subscribe(lambda: calls.append(None))
+
+    store.ingest_snapshot(_schedule_snap((_gauge(),), "k1"))
     assert len(calls) == 1
 
 
+def test_schedule_drill_in_lazy_loads_and_notifies() -> None:
+    """request_drill_in invokes the injected loader once and notifies subscribers."""
+    loader = AsyncMock(return_value=_drill_in())
+    store = ScheduleStore(loader)
+    store.ingest_snapshot(_schedule_snap((_gauge(),), "k1"))
+
+    calls: list[None] = []
+    store.subscribe(lambda: calls.append(None))
+
+    asyncio.run(store.request_drill_in("claude_code", "5h"))
+    assert loader.call_count == 1
+    assert len(calls) == 1
+    assert len(store.get_snapshot().drill_ins) == 1
+
+
+# ============================================================
+# === EDGE CASES =============================================
+# ============================================================
+
+
 def test_dispatch_no_notify_on_identical_reingest() -> None:
-    """Same tickets + same invalidation_key but different as_of must NOT notify."""
+    """Same tickets + same invalidation_key but newer as_of must NOT notify."""
     store = DispatchStore()
     t = _ticket()
     store.ingest_snapshot(factory_dispatch_snapshot((t,), "k1", _DT1))
@@ -147,29 +193,6 @@ def test_dispatch_notifies_on_content_change() -> None:
     store.subscribe(lambda: calls.append(None))
 
     store.ingest_snapshot(factory_dispatch_snapshot((_ticket("t002"),), "k2"))
-    assert len(calls) == 1
-
-
-def test_dispatch_snapshot_holds_tickets() -> None:
-    store = DispatchStore()
-    t = _ticket()
-    store.ingest_snapshot(factory_dispatch_snapshot((t,), "k1"))
-    snap = store.get_snapshot()
-    assert snap.tickets == (t,)
-    assert snap.invalidation_key == "k1"
-
-
-# ---------------------------------------------------------------------------
-# EscalationsStore
-# ---------------------------------------------------------------------------
-
-
-def test_escalations_notifies_on_first_ingest() -> None:
-    store = EscalationsStore()
-    calls: list[None] = []
-    store.subscribe(lambda: calls.append(None))
-
-    store.ingest_snapshot(_escalations_snap((_escalation(),), (), "k1"))
     assert len(calls) == 1
 
 
@@ -196,30 +219,6 @@ def test_escalations_notifies_on_content_change() -> None:
     assert len(calls) == 1
 
 
-def test_escalations_snapshot_holds_active_and_history() -> None:
-    store = EscalationsStore()
-    e = _escalation()
-    store.ingest_snapshot(_escalations_snap((e,), (e,), "k1"))
-    snap = store.get_snapshot()
-    assert snap.active == (e,)
-    assert snap.history == (e,)
-    assert snap.invalidation_key == "k1"
-
-
-# ---------------------------------------------------------------------------
-# ScheduleStore — ingest
-# ---------------------------------------------------------------------------
-
-
-def test_schedule_notifies_on_first_ingest() -> None:
-    store = ScheduleStore(AsyncMock(return_value=_drill_in()))
-    calls: list[None] = []
-    store.subscribe(lambda: calls.append(None))
-
-    store.ingest_snapshot(_schedule_snap((_gauge(),), "k1"))
-    assert len(calls) == 1
-
-
 def test_schedule_no_notify_on_identical_reingest() -> None:
     store = ScheduleStore(AsyncMock(return_value=_drill_in()))
     g = _gauge()
@@ -243,38 +242,20 @@ def test_schedule_notifies_on_content_change() -> None:
     assert len(calls) == 1
 
 
-# ---------------------------------------------------------------------------
-# ScheduleStore — usage drill-in lazy load and caching
-# ---------------------------------------------------------------------------
-
-
-def test_schedule_drill_in_loaded_once_and_cached() -> None:
+def test_schedule_drill_in_cached_after_first_load() -> None:
+    """A second request for the same gauge is a cache hit — loader is not re-invoked."""
     loader = AsyncMock(return_value=_drill_in())
     store = ScheduleStore(loader)
     store.ingest_snapshot(_schedule_snap((_gauge(),), "k1"))
 
+    asyncio.run(store.request_drill_in("claude_code", "5h"))
     asyncio.run(store.request_drill_in("claude_code", "5h"))
     assert loader.call_count == 1
-    snap = store.get_snapshot()
-    assert len(snap.drill_ins) == 1
-
-    asyncio.run(store.request_drill_in("claude_code", "5h"))
-    assert loader.call_count == 1  # cache hit
-
-
-def test_schedule_drill_in_notify_on_load() -> None:
-    loader = AsyncMock(return_value=_drill_in())
-    store = ScheduleStore(loader)
-    store.ingest_snapshot(_schedule_snap((_gauge(),), "k1"))
-
-    calls: list[None] = []
-    store.subscribe(lambda: calls.append(None))
-
-    asyncio.run(store.request_drill_in("claude_code", "5h"))
-    assert len(calls) == 1
+    assert len(store.get_snapshot().drill_ins) == 1
 
 
 def test_schedule_drill_in_evicted_when_gauge_removed() -> None:
+    """Removing a gauge evicts its cached drill-in; re-adding forces a fresh load."""
     loader = AsyncMock(side_effect=[_drill_in(), _drill_in()])
     store = ScheduleStore(loader)
     store.ingest_snapshot(_schedule_snap((_gauge(),), "k1"))
@@ -304,13 +285,10 @@ def test_schedule_drill_in_noop_for_unknown_gauge() -> None:
 
 
 # ---------------------------------------------------------------------------
-# No Textual import
+# Store modules must stay free of Textual imports (headless contract).
 # ---------------------------------------------------------------------------
 
-_STORE_FILES = ["dispatch.py", "schedule.py", "escalations.py"]
-_STORES_DIR = (
-    Path(__file__).parent.parent.parent / "murder" / "app" / "tui" / "stores"
-)
+_STORES_DIR = Path(__file__).parent.parent.parent / "murder" / "app" / "tui" / "stores"
 
 
 def test_no_textual_import_dispatch() -> None:

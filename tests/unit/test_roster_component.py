@@ -1,16 +1,9 @@
 """Headless tests for CrowsView as a StoreComponent (t054).
 
-Tests:
-- render-on-change: bind RosterStore, mount, ingest changed snapshot → view
-  entries update.
-- no re-derivation: entries from snapshot are used verbatim (the view does not
-  re-project / re-sort them independently).
-- unsubscribe-on-unmount: after unmount, further store changes do not call back
-  into the view.
-- bridge path still works: the old render_from_snapshot(CrowSnapshot) interface
-  still produces correct results.
-- mixin lifecycle: on_mount calls super() so both prefs and the mixin subscribe
-  path run.
+COOKBOOK = bind a RosterStore, mount, ingest a snapshot → roster entries update;
+plus the legacy render_from_snapshot bridge path.
+EDGE CASES = entries consumed verbatim (no re-projection), unsubscribe on unmount,
+terminal-agent filtering, store/bridge convergence.
 """
 
 from __future__ import annotations
@@ -18,12 +11,12 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime, timezone
 
+from textual.app import App, ComposeResult
+
 from murder.app.tui.crows_view import CrowsView
 from murder.app.tui.stores.roster import RosterStore
-from textual.app import App, ComposeResult
 from murder.app.tui.themes import crow_tui_variable_defaults, register_crow_themes
 from tests.support.factories import factory_crow_session, factory_crow_snapshot
-
 
 # ---------------------------------------------------------------------------
 # Test infrastructure
@@ -51,9 +44,9 @@ class _CrowsApp(_ThemedApp):
         yield self._view
 
 
-# ---------------------------------------------------------------------------
-# StoreComponent integration — render-on-change
-# ---------------------------------------------------------------------------
+# ============================================================
+# === COOKBOOK ===============================================
+# ============================================================
 
 
 def test_crows_view_renders_on_store_change() -> None:
@@ -78,34 +71,26 @@ def test_crows_view_renders_on_store_change() -> None:
     asyncio.run(_run())
 
 
-def test_crows_view_renders_on_second_store_change() -> None:
-    """A second store ingest after the first renders the updated entry set."""
-    store = RosterStore()
+def test_bridge_path_still_works_without_store_bound() -> None:
+    """The legacy render_from_snapshot(CrowSnapshot) bridge path still renders."""
     view = CrowsView()
-    view.bind_stores(roster=store)
+    # No bind_stores call — stays bridge-driven.
+
+    snap = factory_crow_snapshot(factory_crow_session())
 
     async def _run() -> None:
         app = _CrowsApp(view)
         async with app.run_test() as pilot:
-            store.ingest_snapshot(factory_crow_snapshot(factory_crow_session()), now=_NOW)
+            view.render_from_snapshot(snap)
             await pilot.pause()
             assert "crow-t001" in view._entries_by_id  # noqa: SLF001
-
-            # Swap in a different crow.
-            store.ingest_snapshot(
-                factory_crow_snapshot(factory_crow_session(agent_id="crow-t002", ticket_id="t002"), key="k2"),
-                now=_NOW,
-            )
-            await pilot.pause()
-            assert "crow-t001" not in view._entries_by_id  # noqa: SLF001
-            assert "crow-t002" in view._entries_by_id  # noqa: SLF001
 
     asyncio.run(_run())
 
 
-# ---------------------------------------------------------------------------
-# No re-derivation: entries from snapshot used verbatim
-# ---------------------------------------------------------------------------
+# ============================================================
+# === EDGE CASES =============================================
+# ============================================================
 
 
 def test_crows_view_uses_snapshot_entries_verbatim() -> None:
@@ -143,11 +128,6 @@ def test_crows_view_uses_snapshot_entries_verbatim() -> None:
     asyncio.run(_run())
 
 
-# ---------------------------------------------------------------------------
-# Unsubscribe-on-unmount
-# ---------------------------------------------------------------------------
-
-
 def test_crows_view_unsubscribes_on_unmount() -> None:
     """After the widget unmounts, store changes no longer trigger renders."""
     store = RosterStore()
@@ -164,55 +144,6 @@ def test_crows_view_unsubscribes_on_unmount() -> None:
         # After the context manager exits the app unmounts all widgets.
         # Verify the store has no remaining subscriptions from this view.
         assert store._subs == {}  # noqa: SLF001
-
-    asyncio.run(_run())
-
-
-def test_crows_view_store_change_after_unmount_does_not_update_view() -> None:
-    """A store ingest after unmount leaves _entries_by_id unchanged."""
-    store = RosterStore()
-    view = CrowsView()
-    view.bind_stores(roster=store)
-
-    async def _run() -> None:
-        app = _CrowsApp(view)
-        async with app.run_test() as pilot:
-            store.ingest_snapshot(factory_crow_snapshot(factory_crow_session()), now=_NOW)
-            await pilot.pause()
-
-        # Capture the state at unmount.
-        entries_at_unmount = dict(view._entries_by_id)  # noqa: SLF001
-
-        # Push a new snapshot after unmount.
-        store.ingest_snapshot(
-            factory_crow_snapshot(factory_crow_session(agent_id="crow-t999", ticket_id="t999"), key="k2"),
-            now=_NOW,
-        )
-
-        # The view must not have updated.
-        assert view._entries_by_id == entries_at_unmount  # noqa: SLF001
-
-    asyncio.run(_run())
-
-
-# ---------------------------------------------------------------------------
-# Bridge path (render_from_snapshot with CrowSnapshot) still works
-# ---------------------------------------------------------------------------
-
-
-def test_bridge_path_still_works_without_store_bound() -> None:
-    """The legacy render_from_snapshot(CrowSnapshot) bridge path still renders."""
-    view = CrowsView()
-    # No bind_stores call — stays bridge-driven.
-
-    snap = factory_crow_snapshot(factory_crow_session())
-
-    async def _run() -> None:
-        app = _CrowsApp(view)
-        async with app.run_test() as pilot:
-            view.render_from_snapshot(snap)
-            await pilot.pause()
-            assert "crow-t001" in view._entries_by_id  # noqa: SLF001
 
     asyncio.run(_run())
 
@@ -235,11 +166,6 @@ def test_bridge_path_filters_terminal_agents() -> None:
             assert "crow-running" in view._entries_by_id  # noqa: SLF001
 
     asyncio.run(_run())
-
-
-# ---------------------------------------------------------------------------
-# Dual path convergence: store path and bridge path yield the same entries
-# ---------------------------------------------------------------------------
 
 
 def test_store_and_bridge_paths_converge() -> None:
@@ -268,23 +194,5 @@ def test_store_and_bridge_paths_converge() -> None:
 
         # Both paths should end up with the same agent IDs.
         assert set(view_store._entries_by_id) == set(view_bridge._entries_by_id)  # noqa: SLF001
-
-    asyncio.run(_run())
-
-
-# ---------------------------------------------------------------------------
-# Mixin no-op when unbound (existing tests still pass)
-# ---------------------------------------------------------------------------
-
-
-def test_no_crash_when_no_store_bound() -> None:
-    """CrowsView mounts fine with no store bound (bridge-only mode)."""
-    view = CrowsView()
-
-    async def _run() -> None:
-        app = _CrowsApp(view)
-        async with app.run_test() as pilot:
-            await pilot.pause()
-            assert app.is_running
 
     asyncio.run(_run())

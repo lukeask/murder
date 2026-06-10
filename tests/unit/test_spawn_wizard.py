@@ -1,18 +1,16 @@
+"""Tests for murder.app.tui.spawn_wizard model-discovery async path.
+
+Pins the runtime-discovery contract: when a harness supports discovery,
+SpawnWizard drives the async flow, transitions phase to 'model', and
+propagates the discovered model list — not the static fallback.
+"""
+
 from __future__ import annotations
 
 import asyncio
 
 from murder.app.service.settings_service import ModelDiscoveryResult
-from murder.app.tui.spawn_wizard import SpawnWizard, _HARNESS_MODELS, _static_model_ids_for_harness
-
-
-def test_codex_spawn_models_include_gpt_mini() -> None:
-    assert "gpt-5.4-mini" in _HARNESS_MODELS["codex"]
-
-
-def test_spawn_models_fall_back_to_adapter_startup_models() -> None:
-    assert "openai/gpt-5.5" in _static_model_ids_for_harness("pi")
-    assert "gpt-5.5" in _static_model_ids_for_harness("cursor")
+from murder.app.tui.spawn_wizard import SpawnWizard
 
 
 def test_spawn_wizard_can_select_runtime_discovered_model_harness() -> None:

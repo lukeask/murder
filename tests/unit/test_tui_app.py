@@ -1,3 +1,11 @@
+"""Tests for murder.app.tui.app (MurderApp) substantive contracts.
+
+COOKBOOK = canonical delay scheduling, choice prompt confirmation, chat
+           recipient sync.
+EDGE CASES = bus-timeout swallowing in pane tick, delay parsing boundaries,
+             colon body forwarding.
+"""
+
 from __future__ import annotations
 
 import asyncio
@@ -73,47 +81,9 @@ class _ChoicePromptApp(_QuietMurderApp):
         return {"handled": True, "session": "murder_demo_crow_t001"}
 
 
-def test_interval_pane_refresh_swallows_transient_bus_timeout() -> None:
-    # A slow capture_pane RPC raising TimeoutError must skip the tick, not
-    # crash the TUI message pump (regression for the interval pane tick
-    # being awaited directly instead of run in an exit_on_error=False worker).
-    app = _QuietMurderApp()
-    calls: list[dict[str, object]] = []
-
-    def _run_worker(coro, **kwargs):  # type: ignore[no-untyped-def]
-        calls.append({"coro": coro, **kwargs})
-        coro.close()
-        return SimpleNamespace()
-
-    app.run_worker = _run_worker  # type: ignore[method-assign]
-
-    app._run_pane_tick()  # noqa: SLF001 - the interval callback
-
-    assert len(calls) == 1
-    assert calls[0]["exclusive"] is True
-    assert calls[0]["group"] == "pane_refresh"
-    assert calls[0]["exit_on_error"] is False
-
-
-def test_delay_command_parses_compact_duration_and_message() -> None:
-    assert _parse_delay_command(":delay 5m check status") == (300.0, "check status")
-    assert _parse_delay_command(":delay 3h1m anothermessage") == (
-        10860.0,
-        "anothermessage",
-    )
-    assert _parse_delay_command(":delay 10s :delay 1h nested") == (
-        10.0,
-        ":delay 1h nested",
-    )
-    assert _format_delay(10860.0) == "3h1m"
-
-
-def test_delay_command_rejects_missing_or_invalid_parts() -> None:
-    assert _parse_delay_command(":delay") is None
-    assert _parse_delay_command(":delay 5m") is None
-    assert _parse_delay_command(":delay 0m nope") is None
-    assert _parse_delay_command(":delay 1x nope") is None
-    assert _parse_delay_command(":delay 1m2 nope") is None
+# ============================================================
+# === COOKBOOK ===============================================
+# ============================================================
 
 
 def test_delay_command_schedules_current_chat_target_snapshot() -> None:
@@ -201,6 +171,8 @@ def test_sync_chat_recipient_uses_live_crow_title_label() -> None:
         model="gpt-5.4",
     )
 
+    # _sync_chat_recipient has no public callback; patching visible_wall_chat_targets
+    # is the only drive hook available without a running event loop.
     app._crows.visible_wall_chat_targets = lambda: (  # type: ignore[method-assign]  # noqa: SLF001
         [entry.agent_id],
         {entry.agent_id: entry},
@@ -231,9 +203,7 @@ def test_choice_prompt_confirmation_drives_pane_with_enter_and_logs_user_input()
         return SimpleNamespace()
 
     app.run_worker = _run_worker  # type: ignore[method-assign]
-    app.on_crow_tile_choice_prompt_confirmed(
-        CrowTile.ChoicePromptConfirmed(entry, 2, "No, exit")
-    )
+    app.on_crow_tile_choice_prompt_confirmed(CrowTile.ChoicePromptConfirmed(entry, 2, "No, exit"))
     assert len(coroutines) == 1
     asyncio.run(coroutines[0])
 
@@ -250,3 +220,51 @@ def test_choice_prompt_confirmation_drives_pane_with_enter_and_logs_user_input()
             },
         }
     ]
+
+
+# ============================================================
+# === EDGE CASES =============================================
+# ============================================================
+
+
+def test_interval_pane_refresh_swallows_transient_bus_timeout() -> None:
+    # A slow capture_pane RPC raising TimeoutError must skip the tick, not
+    # crash the TUI message pump (regression for the interval pane tick
+    # being awaited directly instead of run in an exit_on_error=False worker).
+    app = _QuietMurderApp()
+    calls: list[dict[str, object]] = []
+
+    def _run_worker(coro, **kwargs):  # type: ignore[no-untyped-def]
+        calls.append({"coro": coro, **kwargs})
+        coro.close()
+        return SimpleNamespace()
+
+    app.run_worker = _run_worker  # type: ignore[method-assign]
+
+    app._run_pane_tick()  # noqa: SLF001 - the interval callback
+
+    assert len(calls) == 1
+    assert calls[0]["exclusive"] is True
+    assert calls[0]["group"] == "pane_refresh"
+    assert calls[0]["exit_on_error"] is False
+
+
+def test_delay_command_parses_compact_duration_and_message() -> None:
+    assert _parse_delay_command(":delay 5m check status") == (300.0, "check status")
+    assert _parse_delay_command(":delay 3h1m anothermessage") == (
+        10860.0,
+        "anothermessage",
+    )
+    assert _parse_delay_command(":delay 10s :delay 1h nested") == (
+        10.0,
+        ":delay 1h nested",
+    )
+    assert _format_delay(10860.0) == "3h1m"
+
+
+def test_delay_command_rejects_missing_or_invalid_parts() -> None:
+    assert _parse_delay_command(":delay") is None
+    assert _parse_delay_command(":delay 5m") is None
+    assert _parse_delay_command(":delay 0m nope") is None
+    assert _parse_delay_command(":delay 1x nope") is None
+    assert _parse_delay_command(":delay 1m2 nope") is None

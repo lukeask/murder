@@ -1,10 +1,30 @@
-"""Crow TUI tokens — pane focus must not reuse health hues."""
+"""Tests for murder.app.tui.themes crow color-token invariants.
+
+COOKBOOK = canonical token-merge usage showing how theme variables compose.
+EDGE CASES = color-distinctness invariant across all themes; everforest regression.
+"""
 
 from __future__ import annotations
 
 from textual.theme import BUILTIN_THEMES
 
 from murder.app.tui.themes import CUSTOM_THEMES, crow_theme_variables, theme_with_crow_variables
+
+# ============================================================
+# === COOKBOOK ===============================================
+# ============================================================
+
+
+def test_theme_with_crow_variables_merges_into_registered_theme() -> None:
+    base = BUILTIN_THEMES["textual-dark"]
+    merged = theme_with_crow_variables(base)
+    assert merged.variables["pane-focus"]
+    assert merged.variables["crow-health-red"] == base.error
+
+
+# ============================================================
+# === EDGE CASES =============================================
+# ============================================================
 
 
 def test_pane_focus_is_distinct_from_crow_health_on_all_themes() -> None:
@@ -27,10 +47,3 @@ def test_everforest_neutral_health_is_not_green() -> None:
     tokens = crow_theme_variables(EVERFOREST_DARK_HARD)
     assert tokens["crow-health-neutral"] != tokens["crow-health-green"]
     assert tokens["crow-health-neutral"] == "#374a40"
-
-
-def test_theme_with_crow_variables_merges_into_registered_theme() -> None:
-    base = BUILTIN_THEMES["textual-dark"]
-    merged = theme_with_crow_variables(base)
-    assert merged.variables["pane-focus"]
-    assert merged.variables["crow-health-red"] == base.error

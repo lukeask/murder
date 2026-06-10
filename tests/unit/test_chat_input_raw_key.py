@@ -1,4 +1,8 @@
-"""Raw-key mode key mapping for chat input."""
+"""Tests for murder.app.tui.chat_input raw-key mapping and confirm-mode dispatch.
+
+COOKBOOK = canonical _harness_delivery usage covering the three key categories.
+EDGE CASES = murder_confirm_mode dispatch: confirm keys, cancel fallthrough.
+"""
 
 from __future__ import annotations
 
@@ -7,12 +11,16 @@ from types import SimpleNamespace
 
 from textual.app import App, ComposeResult
 
-from murder.app.tui.chat_input import ChatInput
-from murder.app.tui.chat_input import _harness_delivery
+from murder.app.tui.chat_input import ChatInput, _harness_delivery
 
 
 def _key(*, key: str, character: str | None = None, is_printable: bool = False) -> SimpleNamespace:
     return SimpleNamespace(key=key, character=character, is_printable=is_printable)
+
+
+# ============================================================
+# === COOKBOOK ===============================================
+# ============================================================
 
 
 def test_printable_character_is_literal() -> None:
@@ -24,11 +32,19 @@ def test_named_special_keys() -> None:
     assert _harness_delivery(_key(key="enter")) == ("Enter", False)
     # space has a printable character but must use the named key so the
     # notification shows "Space" rather than an invisible trailing space
-    assert _harness_delivery(_key(key="space", character=" ", is_printable=True)) == ("Space", False)
+    assert _harness_delivery(_key(key="space", character=" ", is_printable=True)) == (
+        "Space",
+        False,
+    )
 
 
 def test_ctrl_combo() -> None:
     assert _harness_delivery(_key(key="ctrl+c")) == ("C-c", False)
+
+
+# ============================================================
+# === EDGE CASES =============================================
+# ============================================================
 
 
 class _ChatInputApp(App[None]):

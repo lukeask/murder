@@ -1,4 +1,8 @@
-"""Headless unit tests for the Store base contract (t045)."""
+"""Tests for murder.app.tui.stores.base.
+
+COOKBOOK = canonical subscribe/notify/get_snapshot usage; copyable by widget authors.
+EDGE CASES = identity-on-equal invariant, no-fire-on-equal snapshot, registry KeyError.
+"""
 
 from __future__ import annotations
 
@@ -10,6 +14,11 @@ from murder.app.tui.stores.base import BaseStore, StoreRegistry
 @dataclass(frozen=True)
 class _Snap:
     value: int
+
+
+# ============================================================
+# === COOKBOOK ===============================================
+# ============================================================
 
 
 def test_subscribe_callback_fires_on_change() -> None:
@@ -29,17 +38,11 @@ def test_unsubscribe_handle_stops_callbacks() -> None:
     assert calls == []
 
 
-def test_set_equal_snapshot_does_not_fire_callbacks() -> None:
-    store: BaseStore[_Snap] = BaseStore(_Snap(42))
-    calls: list[int] = []
-    store.subscribe(lambda: calls.append(1))
-    # Two *distinct* objects that are value-equal — adversarial case
-    a = _Snap(42)
-    b = _Snap(42)
-    assert a is not b
-    store._set(a)
-    store._set(b)
-    assert calls == []
+def test_get_snapshot_returns_latest_value() -> None:
+    store: BaseStore[_Snap] = BaseStore(_Snap(0))
+    assert store.get_snapshot() == _Snap(0)
+    store._set(_Snap(99))
+    assert store.get_snapshot() == _Snap(99)
 
 
 def test_set_changed_snapshot_fires_all_subscribers_exactly_once() -> None:
@@ -53,11 +56,30 @@ def test_set_changed_snapshot_fires_all_subscribers_exactly_once() -> None:
     assert calls_b == [1]
 
 
-def test_get_snapshot_returns_latest_value() -> None:
+def test_store_registry_register_and_get() -> None:
+    registry = StoreRegistry()
     store: BaseStore[_Snap] = BaseStore(_Snap(0))
-    assert store.get_snapshot() == _Snap(0)
-    store._set(_Snap(99))
-    assert store.get_snapshot() == _Snap(99)
+    registry.register("snap", store)
+    assert registry.get("snap") is store
+    assert "snap" in registry
+
+
+# ============================================================
+# === EDGE CASES =============================================
+# ============================================================
+
+
+def test_set_equal_snapshot_does_not_fire_callbacks() -> None:
+    store: BaseStore[_Snap] = BaseStore(_Snap(42))
+    calls: list[int] = []
+    store.subscribe(lambda: calls.append(1))
+    # Two *distinct* objects that are value-equal — adversarial case
+    a = _Snap(42)
+    b = _Snap(42)
+    assert a is not b
+    store._set(a)
+    store._set(b)
+    assert calls == []
 
 
 def test_equal_snapshot_preserves_object_identity() -> None:
@@ -70,6 +92,15 @@ def test_equal_snapshot_preserves_object_identity() -> None:
     assert store.get_snapshot() is initial
 
 
+def test_store_registry_missing_key_raises() -> None:
+    registry = StoreRegistry()
+    try:
+        registry.get("missing")
+        raise AssertionError("expected KeyError")
+    except KeyError:
+        pass
+
+
 def test_no_textual_import_in_base_module() -> None:
     """Stores must be headless — no Textual dependency."""
     import re
@@ -80,20 +111,3 @@ def test_no_textual_import_in_base_module() -> None:
     ).read_text()
     # Check for actual import statements, not mentions in comments/docstrings
     assert not re.search(r"^\s*(import|from)\s+textual", source, re.MULTILINE)
-
-
-def test_store_registry_register_and_get() -> None:
-    registry = StoreRegistry()
-    store: BaseStore[_Snap] = BaseStore(_Snap(0))
-    registry.register("snap", store)
-    assert registry.get("snap") is store
-    assert "snap" in registry
-
-
-def test_store_registry_missing_key_raises() -> None:
-    registry = StoreRegistry()
-    try:
-        registry.get("missing")
-        raise AssertionError("expected KeyError")
-    except KeyError:
-        pass

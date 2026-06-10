@@ -1,10 +1,9 @@
-"""Headless unit tests for ConversationsStore (t046).
+"""Tests for murder.app.tui.stores.conversations.
 
-Covers:
-- bootstrap + stream event → updated snapshot + notification
-- no-op duplicate block → snapshot identity preserved, no notification
-- conversation_for / agent-prefix lookup
-- no Textual import in the store module
+COOKBOOK = bootstrap + apply_event roundtrip (canonical usage); copyable by
+           store consumers and integration tests.
+EDGE CASES = no-op duplicate block (snapshot identity + no notification),
+             query helpers, snapshot ordering, no Textual import boundary.
 """
 
 from __future__ import annotations
@@ -19,7 +18,6 @@ from tests.support.factories import (
     factory_conversation_summary,
     factory_conversations_snapshot,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -48,9 +46,9 @@ def _stream_event(
     )
 
 
-# ---------------------------------------------------------------------------
-# bootstrap
-# ---------------------------------------------------------------------------
+# ============================================================
+# === COOKBOOK ===============================================
+# ============================================================
 
 
 def test_bootstrap_empty_snapshot_produces_empty_snapshot() -> None:
@@ -74,20 +72,6 @@ def test_bootstrap_notifies_subscribers() -> None:
     store.subscribe(lambda: calls.append(1))
     store.bootstrap(factory_conversations_snapshot(factory_conversation_summary()))
     assert calls == [1]
-
-
-def test_bootstrap_snapshot_is_frozen() -> None:
-    store = ConversationsStore()
-    store.bootstrap(factory_conversations_snapshot(factory_conversation_summary(blocks=(factory_conversation_block(0),))))
-    snap = store.get_snapshot()
-    assert isinstance(snap.conversations, tuple)
-    with pytest.raises((TypeError, AttributeError)):
-        snap.conversations = ()  # type: ignore[misc]
-
-
-# ---------------------------------------------------------------------------
-# apply_event
-# ---------------------------------------------------------------------------
 
 
 def test_apply_event_after_bootstrap_updates_snapshot() -> None:
@@ -114,23 +98,50 @@ def test_apply_event_notifies_subscribers() -> None:
     assert calls == [1]
 
 
-def test_apply_event_returns_conversation_id() -> None:
+@pytest.mark.parametrize(
+    "event_kwargs, expected_result",
+    [
+        (
+            {"conversation_id": "conv-abc", "ordinal": 0},
+            "conv-abc",
+        ),
+        (
+            {},  # malformed — no conversation_id attribute
+            None,
+        ),
+    ],
+    ids=["valid-event-returns-conversation-id", "invalid-event-returns-none"],
+)
+def test_apply_event_return_value_contract(event_kwargs: dict, expected_result: object) -> None:
+    """apply_event returns the conversation_id on success, None on malformed input."""
     store = ConversationsStore()
     store.bootstrap(factory_conversations_snapshot())
-    result = store.apply_event(_stream_event("conv-abc", ordinal=0))
-    assert result == "conv-abc"
+
+    if event_kwargs:
+        event = _stream_event(**event_kwargs)
+    else:
+        event = types.SimpleNamespace()  # no conversation_id
+
+    result = store.apply_event(event)
+    assert result == expected_result
 
 
-def test_apply_event_invalid_event_returns_none() -> None:
+# ============================================================
+# === EDGE CASES =============================================
+# ============================================================
+
+
+def test_bootstrap_snapshot_is_frozen() -> None:
     store = ConversationsStore()
-    store.bootstrap(factory_conversations_snapshot())
-    result = store.apply_event(types.SimpleNamespace())
-    assert result is None
-
-
-# ---------------------------------------------------------------------------
-# No-op duplicate block: snapshot identity preserved, no notification
-# ---------------------------------------------------------------------------
+    store.bootstrap(
+        factory_conversations_snapshot(
+            factory_conversation_summary(blocks=(factory_conversation_block(0),))
+        )
+    )
+    snap = store.get_snapshot()
+    assert isinstance(snap.conversations, tuple)
+    with pytest.raises((TypeError, AttributeError)):
+        snap.conversations = ()  # type: ignore[misc]
 
 
 def test_duplicate_block_preserves_snapshot_identity() -> None:
@@ -160,14 +171,11 @@ def test_duplicate_block_does_not_notify() -> None:
     assert calls == []
 
 
-# ---------------------------------------------------------------------------
-# Query helpers
-# ---------------------------------------------------------------------------
-
-
 def test_conversation_for_returns_render_conversation() -> None:
     store = ConversationsStore()
-    summary = factory_conversation_summary(blocks=(factory_conversation_block(0, payload={"type": "user", "text": "q"}),))
+    summary = factory_conversation_summary(
+        blocks=(factory_conversation_block(0, payload={"type": "user", "text": "q"}),)
+    )
     store.bootstrap(factory_conversations_snapshot(summary))
 
     conv = store.conversation_for("conv-1")
@@ -224,11 +232,6 @@ def test_conversation_id_for_agent_prefix_unknown_returns_none() -> None:
     assert store.conversation_id_for_agent_prefix("no-such") is None
 
 
-# ---------------------------------------------------------------------------
-# Snapshot ordering is deterministic (sorted by conversation_id)
-# ---------------------------------------------------------------------------
-
-
 def test_snapshot_conversations_sorted_by_id() -> None:
     store = ConversationsStore()
     s1 = factory_conversation_summary("conv-zzz", "agent-1")
@@ -237,11 +240,6 @@ def test_snapshot_conversations_sorted_by_id() -> None:
 
     ids = [c.conversation_id for c in store.get_snapshot().conversations]
     assert ids == sorted(ids)
-
-
-# ---------------------------------------------------------------------------
-# No Textual import
-# ---------------------------------------------------------------------------
 
 
 def test_no_textual_import_in_store_module() -> None:

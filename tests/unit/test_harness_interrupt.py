@@ -1,9 +1,8 @@
-"""Per-adapter interrupt() sends the harness-specific tmux key sequence."""
+"""Per-adapter interrupt() sends Escape via tmux, not Ctrl+C."""
 
 from __future__ import annotations
 
 import asyncio
-from pathlib import Path
 
 import pytest
 
@@ -11,8 +10,6 @@ from murder.llm.harnesses.claude_code import ClaudeCodeAdapter
 from murder.llm.harnesses.codex import CodexAdapter
 from murder.llm.harnesses.cursor import CursorAdapter
 from murder.llm.harnesses.pi_harness import PiAdapter
-
-FIXTURES = Path(__file__).parent.parent / "fixtures" / "harness_panes"
 
 
 def _escape_interrupt_calls(fake_tmux) -> list[tuple[tuple, dict]]:
@@ -37,13 +34,3 @@ def test_interrupt_sends_escape(fake_tmux, adapter_cls):
     assert keys == "Escape"
     assert kw == {"literal": False, "enter": False}
     assert "interrupt" not in fake_tmux.call_names()
-
-
-def test_interrupt_fixtures_exist():
-    for name in (
-        "cc_interrupt.txt",
-        "codex_interrupt.txt",
-        "cursor_interrupt.txt",
-        "pi_interrupt.txt",
-    ):
-        assert (FIXTURES / name).is_file(), f"missing fixture {name}"

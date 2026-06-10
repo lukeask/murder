@@ -1,15 +1,13 @@
-"""Tests for the Phase 1.b JSON conversation store.
+"""Tests for murder.state.persistence.conversation.
 
-Covers:
-- Round-trip: parsed doc → blocks → read back
-- Merge reconciliation (longer replaces, shorter ignored, live tail updates)
-- Status transitions (in_progress → complete | stale)
-- Session-id set via set_harness_session_id
-- Timestamps stored and readable
-- "live block" rule: at most one sealed=0 row per conversation
-- segment_to_block_kind mapping
-- mark_stale_conversations startup reconciliation
-- init_db idempotency on existing DB
+COOKBOOK = canonical persist→read flow: upsert a conversation, append blocks,
+read them back.  Shows the intended API shape and is copyable as a starting
+point for callers.
+
+EDGE CASES = reconciliation and failure modes for the mature persistence
+contract: merge_conversation_doc semantics (shorter-ignored /
+equal-count-update / longer-replaces / live-block rule), status transitions,
+init_db idempotency, CC fixture round-trip.
 """
 
 from __future__ import annotations
@@ -20,10 +18,8 @@ from pathlib import Path
 
 import pytest
 
-from murder.state.persistence.schema import get_db, init_db
 from murder.state.persistence.conversation import (
     BLOCK_KINDS,
-    ConversationBlock,
     append_block,
     mark_stale_conversations,
     merge_conversation_doc,
@@ -32,9 +28,10 @@ from murder.state.persistence.conversation import (
     segment_to_block_kind,
     set_conversation_status,
     set_harness_session_id,
-    upsert_conversation,
     update_live_block,
+    upsert_conversation,
 )
+from murder.state.persistence.schema import get_db, init_db
 
 _CC_EXPECTED = Path(__file__).parent.parent / "fixtures" / "transcripts" / "cc" / "expected.json"
 
@@ -52,7 +49,9 @@ def conn(tmp_path: Path) -> sqlite3.Connection:
     return db
 
 
-def _make_conv(conn: sqlite3.Connection, conv_id: str = "conv-1", agent_id: str = "agent-1") -> None:
+def _make_conv(
+    conn: sqlite3.Connection, conv_id: str = "conv-1", agent_id: str = "agent-1"
+) -> None:
     upsert_conversation(
         conn,
         conversation_id=conv_id,
@@ -63,48 +62,110 @@ def _make_conv(conn: sqlite3.Connection, conv_id: str = "conv-1", agent_id: str 
     )
 
 
-# ---------------------------------------------------------------------------
-# segment_to_block_kind
-# ---------------------------------------------------------------------------
+# ============================================================
+# === COOKBOOK ===============================================
+# ============================================================
 
 
-def test_segment_to_block_kind_user():
-    assert segment_to_block_kind({"type": "user", "text": "hi"}) == "user"
+def test_persist_and_read_back_conversation(conn):
+    """Canonical usage: upsert → append blocks → read_conversation_doc round-trip.
+
+    Copyable as a starting point for any caller that writes and then reads
+    conversation state.
+    """
+    # TODO: factory_segment in factories.py
+    upsert_conversation(
+        conn,
+        conversation_id="conv-1",
+        agent_id="agent-1",
+        harness="cc",
+        model="opus",
+        status="in_progress",
+    )
+
+    segs = [
+        {"type": "user", "text": "hi"},
+        {"type": "assistant", "phase": "final", "text": "hello"},
+    ]
+    for seg in segs:
+        append_block(conn, "conv-1", seg)
+
+    doc = read_conversation_doc(conn, "conv-1")
+    assert doc is not None
+    assert doc["harness"] == "cc"
+    assert len(doc["segments"]) == 2
+    assert doc["segments"][0] == segs[0]
+    assert doc["segments"][1] == segs[1]
+
+    blocks = read_conversation_blocks(conn, "conv-1")
+    assert len(blocks) == 2
+    assert blocks[0].payload == segs[0]
+    assert blocks[1].payload == segs[1]
 
 
-def test_segment_to_block_kind_tool_call():
-    assert segment_to_block_kind({"type": "tool_call", "name": "Bash"}) == "tool_call"
+def test_merge_conversation_doc_roundtrip_cc_fixture(conn):
+    """Round-trip the full CC fixture through merge → read_conversation_doc."""
+    original_doc = json.loads(_CC_EXPECTED.read_text(encoding="utf-8"))
+    _make_conv(conn, conv_id="conv-cc")
+
+    merge_conversation_doc(conn, "conv-cc", original_doc)
+
+    recovered = read_conversation_doc(conn, "conv-cc")
+    assert recovered is not None
+    assert recovered["harness"] == original_doc["harness"]
+    # All segments are stored (live trailing block is the last one).
+    stored_segments = recovered["segments"]
+    assert len(stored_segments) == len(original_doc["segments"])
+    # Payloads must match exactly — lossless round-trip.
+    for stored, orig in zip(stored_segments, original_doc["segments"]):
+        assert stored == orig
 
 
-def test_segment_to_block_kind_assistant_intermediate():
-    seg = {"type": "assistant", "phase": "intermediate", "text": "thinking..."}
-    assert segment_to_block_kind(seg) == "assistant_intermediate"
+# ============================================================
+# === EDGE CASES =============================================
+# ============================================================
 
 
-def test_segment_to_block_kind_assistant_final():
-    seg = {"type": "assistant", "phase": "final", "text": "done"}
-    assert segment_to_block_kind(seg) == "assistant_final"
+# --- segment_to_block_kind ---
+
+
+@pytest.mark.parametrize(
+    "seg,expected_kind",
+    [
+        ({"type": "user", "text": "hi"}, "user"),
+        ({"type": "tool_call", "name": "Bash"}, "tool_call"),
+        (
+            {"type": "assistant", "phase": "intermediate", "text": "thinking..."},
+            "assistant_intermediate",
+        ),
+        ({"type": "assistant", "phase": "final", "text": "done"}, "assistant_final"),
+    ],
+)
+def test_segment_to_block_kind_maps_segment_type_to_kind(seg, expected_kind):
+    assert segment_to_block_kind(seg) == expected_kind
 
 
 def test_segment_to_block_kind_all_block_kinds_valid():
     """Every BLOCK_KINDS entry must be a valid kind recognised by the schema."""
     valid = {
-        "user", "assistant_intermediate", "assistant_final",
-        "tool_call", "plan_update", "agent_event", "choice_prompt", "notice",
+        "user",
+        "assistant_intermediate",
+        "assistant_final",
+        "tool_call",
+        "plan_update",
+        "agent_event",
+        "choice_prompt",
+        "notice",
     }
     assert set(BLOCK_KINDS) == valid
 
 
-# ---------------------------------------------------------------------------
-# upsert_conversation
-# ---------------------------------------------------------------------------
+# --- upsert_conversation ---
 
 
 def test_upsert_creates_row(conn):
     _make_conv(conn)
-    row = conn.execute(
-        "SELECT * FROM conversations WHERE conversation_id = 'conv-1'"
-    ).fetchone()
+    row = conn.execute("SELECT * FROM conversations WHERE conversation_id = 'conv-1'").fetchone()
     assert row is not None
     assert row["agent_id"] == "agent-1"
     assert row["harness"] == "cc"
@@ -115,14 +176,18 @@ def test_upsert_creates_row(conn):
 def test_upsert_idempotent_does_not_duplicate(conn):
     _make_conv(conn)
     _make_conv(conn)
-    count = conn.execute("SELECT COUNT(*) FROM conversations WHERE conversation_id = 'conv-1'").fetchone()[0]
+    count = conn.execute(
+        "SELECT COUNT(*) FROM conversations WHERE conversation_id = 'conv-1'"
+    ).fetchone()[0]
     assert count == 1
 
 
 def test_upsert_updates_harness_on_second_call(conn):
     _make_conv(conn)
     upsert_conversation(conn, conversation_id="conv-1", agent_id="agent-1", harness="codex")
-    row = conn.execute("SELECT harness FROM conversations WHERE conversation_id = 'conv-1'").fetchone()
+    row = conn.execute(
+        "SELECT harness FROM conversations WHERE conversation_id = 'conv-1'"
+    ).fetchone()
     assert row["harness"] == "codex"
 
 
@@ -135,36 +200,27 @@ def test_upsert_stores_timestamps(conn):
     assert row["updated_at"] is not None
 
 
-# ---------------------------------------------------------------------------
-# set_conversation_status
-# ---------------------------------------------------------------------------
+# --- set_conversation_status ---
 
 
-def test_set_status_complete(conn):
+@pytest.mark.parametrize(
+    "transitions",
+    [
+        ["complete"],
+        ["stale"],
+        ["complete", "in_progress"],
+    ],
+)
+def test_set_status_applies_transition(conn, transitions):
+    """Status setter stores each value correctly across all legal transitions."""
     _make_conv(conn)
-    set_conversation_status(conn, "conv-1", "complete")
+    for status in transitions:
+        set_conversation_status(conn, "conv-1", status)
     row = conn.execute("SELECT status FROM conversations WHERE conversation_id='conv-1'").fetchone()
-    assert row["status"] == "complete"
+    assert row["status"] == transitions[-1]
 
 
-def test_set_status_stale(conn):
-    _make_conv(conn)
-    set_conversation_status(conn, "conv-1", "stale")
-    row = conn.execute("SELECT status FROM conversations WHERE conversation_id='conv-1'").fetchone()
-    assert row["status"] == "stale"
-
-
-def test_set_status_back_to_in_progress(conn):
-    _make_conv(conn)
-    set_conversation_status(conn, "conv-1", "complete")
-    set_conversation_status(conn, "conv-1", "in_progress")
-    row = conn.execute("SELECT status FROM conversations WHERE conversation_id='conv-1'").fetchone()
-    assert row["status"] == "in_progress"
-
-
-# ---------------------------------------------------------------------------
-# set_harness_session_id
-# ---------------------------------------------------------------------------
+# --- set_harness_session_id ---
 
 
 def test_set_harness_session_id_stores_value(conn):
@@ -178,16 +234,18 @@ def test_set_harness_session_id_stores_value(conn):
 
 def test_set_harness_session_id_updates_updated_at(conn):
     _make_conv(conn)
-    row_before = conn.execute("SELECT updated_at FROM conversations WHERE conversation_id='conv-1'").fetchone()
+    row_before = conn.execute(
+        "SELECT updated_at FROM conversations WHERE conversation_id='conv-1'"
+    ).fetchone()
     set_harness_session_id(conn, "conv-1", "sess-xyz")
-    row_after = conn.execute("SELECT updated_at FROM conversations WHERE conversation_id='conv-1'").fetchone()
+    row_after = conn.execute(
+        "SELECT updated_at FROM conversations WHERE conversation_id='conv-1'"
+    ).fetchone()
     # updated_at must be at least as recent (seconds precision might be equal in fast tests)
     assert row_after["updated_at"] >= row_before["updated_at"]
 
 
-# ---------------------------------------------------------------------------
-# append_block
-# ---------------------------------------------------------------------------
+# --- append_block ---
 
 
 def test_append_block_creates_row(conn):
@@ -229,14 +287,16 @@ def test_append_block_seals_previous_live_block(conn):
     b0 = append_block(conn, "conv-1", {"type": "assistant", "phase": "intermediate", "text": "..."})
     assert b0.sealed is False
     # append a new segment — should seal b0
-    b1 = append_block(conn, "conv-1", {"type": "user", "text": "next"}, seal_previous=True)
+    append_block(conn, "conv-1", {"type": "user", "text": "next"}, seal_previous=True)
     row = conn.execute("SELECT sealed FROM conversation_blocks WHERE id = ?", (b0.id,)).fetchone()
     assert row["sealed"] == 1
 
 
 def test_append_block_stores_timestamp(conn):
     _make_conv(conn)
-    block = append_block(conn, "conv-1", {"type": "user", "text": "t"}, received_at="2026-01-01T10:00:00")
+    block = append_block(
+        conn, "conv-1", {"type": "user", "text": "t"}, received_at="2026-01-01T10:00:00"
+    )
     assert block.service_received_at == "2026-01-01T10:00:00"
 
 
@@ -244,16 +304,16 @@ def test_live_block_rule_at_most_one_unsealed(conn):
     """The 'live block' rule: at most one sealed=0 row per conversation at any time."""
     _make_conv(conn)
     for i in range(5):
-        append_block(conn, "conv-1", {"type": "assistant", "phase": "intermediate", "text": f"chunk {i}"})
+        append_block(
+            conn, "conv-1", {"type": "assistant", "phase": "intermediate", "text": f"chunk {i}"}
+        )
     count = conn.execute(
         "SELECT COUNT(*) FROM conversation_blocks WHERE conversation_id='conv-1' AND sealed=0"
     ).fetchone()[0]
     assert count == 1
 
 
-# ---------------------------------------------------------------------------
-# update_live_block
-# ---------------------------------------------------------------------------
+# --- update_live_block ---
 
 
 def test_update_live_block_updates_payload(conn):
@@ -263,7 +323,9 @@ def test_update_live_block_updates_payload(conn):
     seg2 = {"type": "assistant", "phase": "intermediate", "text": "hello world"}
     updated = update_live_block(conn, "conv-1", seg2)
     assert updated is True
-    row = conn.execute("SELECT payload_json FROM conversation_blocks WHERE id=?", (b.id,)).fetchone()
+    row = conn.execute(
+        "SELECT payload_json FROM conversation_blocks WHERE id=?", (b.id,)
+    ).fetchone()
     assert json.loads(row["payload_json"])["text"] == "hello world"
 
 
@@ -281,32 +343,18 @@ def test_update_live_block_returns_false_if_no_live_block(conn):
     _make_conv(conn)
     seg = {"type": "user", "text": "done"}
     append_block(conn, "conv-1", seg)  # user blocks are sealed immediately
-    result = update_live_block(conn, "conv-1", {"type": "assistant", "phase": "intermediate", "text": "?"})
+    result = update_live_block(
+        conn, "conv-1", {"type": "assistant", "phase": "intermediate", "text": "?"}
+    )
     assert result is False
 
 
-# ---------------------------------------------------------------------------
-# read_conversation_blocks
-# ---------------------------------------------------------------------------
+# --- read_conversation_blocks ---
 
 
 def test_read_conversation_blocks_empty(conn):
     _make_conv(conn)
     assert read_conversation_blocks(conn, "conv-1") == []
-
-
-def test_read_conversation_blocks_round_trip(conn):
-    _make_conv(conn)
-    segs = [
-        {"type": "user", "text": "hi"},
-        {"type": "assistant", "phase": "final", "text": "hello"},
-    ]
-    for seg in segs:
-        append_block(conn, "conv-1", seg)
-    blocks = read_conversation_blocks(conn, "conv-1")
-    assert len(blocks) == 2
-    assert blocks[0].payload == segs[0]
-    assert blocks[1].payload == segs[1]
 
 
 def test_read_conversation_blocks_ordered_by_ordinal(conn):
@@ -327,30 +375,20 @@ def test_read_conversation_blocks_returns_correct_kinds(conn):
     assert [b.kind for b in blocks] == ["user", "tool_call", "assistant_final"]
 
 
-# ---------------------------------------------------------------------------
-# read_conversation_doc
-# ---------------------------------------------------------------------------
+# --- read_conversation_doc ---
 
 
 def test_read_conversation_doc_returns_none_for_unknown(conn):
     assert read_conversation_doc(conn, "no-such-conv") is None
 
 
-def test_read_conversation_doc_round_trip(conn):
-    _make_conv(conn)
-    append_block(conn, "conv-1", {"type": "user", "text": "hi"})
-    append_block(conn, "conv-1", {"type": "assistant", "phase": "final", "text": "bye"})
-    doc = read_conversation_doc(conn, "conv-1")
-    assert doc is not None
-    assert doc["harness"] == "cc"
-    assert len(doc["segments"]) == 2
-    assert doc["segments"][0] == {"type": "user", "text": "hi"}
-
-
 def test_read_conversation_doc_has_harness_and_state(conn):
     upsert_conversation(
-        conn, conversation_id="conv-2", agent_id="a",
-        harness="codex", live_state="working",
+        conn,
+        conversation_id="conv-2",
+        agent_id="a",
+        harness="codex",
+        live_state="working",
     )
     append_block(conn, "conv-2", {"type": "user", "text": "test"})
     doc = read_conversation_doc(conn, "conv-2")
@@ -358,27 +396,7 @@ def test_read_conversation_doc_has_harness_and_state(conn):
     assert doc["state"] == "working"
 
 
-# ---------------------------------------------------------------------------
-# merge_conversation_doc — round-trip from a parsed TranscriptDoc fixture
-# ---------------------------------------------------------------------------
-
-
-def test_merge_conversation_doc_roundtrip_cc_fixture(conn):
-    """Round-trip the full CC fixture through merge → read_conversation_doc."""
-    original_doc = json.loads(_CC_EXPECTED.read_text(encoding="utf-8"))
-    _make_conv(conn, conv_id="conv-cc")
-
-    merge_conversation_doc(conn, "conv-cc", original_doc)
-
-    recovered = read_conversation_doc(conn, "conv-cc")
-    assert recovered is not None
-    assert recovered["harness"] == original_doc["harness"]
-    # All segments are stored (live trailing block is the last one).
-    stored_segments = recovered["segments"]
-    assert len(stored_segments) == len(original_doc["segments"])
-    # Payloads must match exactly — lossless round-trip.
-    for stored, orig in zip(stored_segments, original_doc["segments"]):
-        assert stored == orig
+# --- merge_conversation_doc reconciliation ---
 
 
 def test_merge_conversation_doc_longer_replaces(conn):
@@ -480,16 +498,28 @@ def test_merge_conversation_doc_equal_count_flip_to_final_seals(conn):
     block sealed=0 on the intermediate→final transition.
     """
     _make_conv(conn)
-    merge_conversation_doc(conn, "conv-1", {"segments": [
-        {"type": "user", "text": "q"},
-        {"type": "assistant", "phase": "intermediate", "text": "thinking..."},
-    ]})
+    merge_conversation_doc(
+        conn,
+        "conv-1",
+        {
+            "segments": [
+                {"type": "user", "text": "q"},
+                {"type": "assistant", "phase": "intermediate", "text": "thinking..."},
+            ]
+        },
+    )
     assert read_conversation_blocks(conn, "conv-1")[-1].sealed is False
 
-    merge_conversation_doc(conn, "conv-1", {"segments": [
-        {"type": "user", "text": "q"},
-        {"type": "assistant", "phase": "final", "text": "done"},
-    ]})
+    merge_conversation_doc(
+        conn,
+        "conv-1",
+        {
+            "segments": [
+                {"type": "user", "text": "q"},
+                {"type": "assistant", "phase": "final", "text": "done"},
+            ]
+        },
+    )
     tail = read_conversation_blocks(conn, "conv-1")[-1]
     assert tail.kind == "assistant_final"
     assert tail.sealed is True
@@ -523,9 +553,7 @@ def test_merge_conversation_doc_timestamps_stored(conn):
     assert blocks[0].service_received_at == ts
 
 
-# ---------------------------------------------------------------------------
-# mark_stale_conversations
-# ---------------------------------------------------------------------------
+# --- mark_stale_conversations ---
 
 
 def test_mark_stale_conversations_flips_in_progress(conn):
@@ -542,7 +570,9 @@ def test_mark_stale_conversations_leaves_complete_alone(conn):
     """complete rows must not be touched by startup reconciliation."""
     upsert_conversation(conn, conversation_id="conv-done", agent_id="a", status="complete")
     mark_stale_conversations(conn)
-    row = conn.execute("SELECT status FROM conversations WHERE conversation_id='conv-done'").fetchone()
+    row = conn.execute(
+        "SELECT status FROM conversations WHERE conversation_id='conv-done'"
+    ).fetchone()
     assert row["status"] == "complete"
 
 
@@ -552,9 +582,7 @@ def test_mark_stale_conversations_returns_zero_when_nothing_to_do(conn):
     assert count == 0
 
 
-# ---------------------------------------------------------------------------
-# init_db idempotency
-# ---------------------------------------------------------------------------
+# --- init_db idempotency ---
 
 
 def test_init_db_idempotent(conn):
@@ -572,14 +600,15 @@ def test_init_db_idempotent(conn):
 
 
 def test_init_db_creates_conversations_table(conn):
-    tables = {r["name"] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+    tables = {
+        r["name"]
+        for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
+    }
     assert "conversations" in tables
     assert "conversation_blocks" in tables
 
 
-# ---------------------------------------------------------------------------
-# No behavior change to agent_messages (legacy path)
-# ---------------------------------------------------------------------------
+# --- isolation: agent_messages unaffected ---
 
 
 def test_agent_messages_unaffected_by_conversation_store(conn):

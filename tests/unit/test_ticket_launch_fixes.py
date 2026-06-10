@@ -1,4 +1,9 @@
-"""Cookbook tests for ticket launch / completion footgun fixes."""
+"""Tests for ticket launch / completion footgun fixes.
+
+COOKBOOK = canonical kickoff, force-status, scheduling usage.
+EDGE CASES = real failure modes caught in production: startup failures keeping
+session alive, stale-agent reaping, ready-status healing.
+"""
 
 from __future__ import annotations
 
@@ -10,28 +15,28 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from murder.runtime.agents.crow_handler import CrowHandler
-from murder.verdict.completion.coordinator import CompletionCoordinator
-from murder.verdict.completion.registry import CheckRegistry
-from murder.config import CrowHandlerConfig
-from murder.llm.harnesses.claude_code import ClaudeCodeAdapter
 from murder.llm.harnesses.base import HarnessSession
 from murder.llm.harnesses.results import fail_result
 from murder.runtime.orchestration.orchestrator import Orchestrator
-from murder.runtime.orchestration.outcome import TicketOutcomeService
 from murder.state.persistence.agents import upsert_agent
 from murder.state.persistence.schema import get_db, init_db
 from murder.state.persistence.tickets import get_ticket_status, insert_ticket
 from murder.state.storage.paths import db_path
+from murder.verdict.completion.coordinator import CompletionCoordinator
+from murder.verdict.completion.registry import CheckRegistry
 from murder.work.tickets.schema import Ticket
 from murder.work.tickets.status import TicketStatus
-from tests.unit.test_harness_adapters import CC_IDLE
 
 
 def _connect(repo_root: Path):
     conn = get_db(db_path(repo_root))
     init_db(conn)
     return conn
+
+
+# ============================================================
+# === COOKBOOK ===============================================
+# ============================================================
 
 
 def test_kickoff_reaps_stale_running_agents_when_ticket_still_ready(
@@ -153,9 +158,26 @@ def test_set_schedule_at_updates_ticket_timestamp(repo_root: Path) -> None:
     assert row["updated_at"] != created.isoformat(timespec="seconds")
 
 
-def test_codex_rogue_keeps_startup_model_session_on_runtime_picker_failure(
+# ============================================================
+# === EDGE CASES =============================================
+# ============================================================
+
+
+# Both startup-failure variants share the same code path: startup fails →
+# session is kept alive, not reaped.  They differ only by error trigger
+# (runtime-picker failure vs. idle-timeout), so they are parametrized together.
+@pytest.mark.parametrize(
+    "error_message",
+    [
+        "codex failed to select runtime model 'gpt-5.4-mini' with effort 'medium'",
+        "Harness not idle in time: session=murder_test_crow_codex_rogue_test",
+    ],
+    ids=["runtime_picker_failure", "idle_timeout"],
+)
+def test_codex_rogue_keeps_startup_session_on_startup_failure(
     repo_root: Path,
     monkeypatch: pytest.MonkeyPatch,
+    error_message: str,
 ) -> None:
     agents: dict[str, object] = {}
     reaped: list[str] = []
@@ -163,12 +185,10 @@ def test_codex_rogue_keeps_startup_model_session_on_runtime_picker_failure(
     async def _reap(agent_id: str) -> None:
         reaped.append(agent_id)
 
-    async def _fail_model_selection(self: HarnessSession, spec) -> object:
-        return fail_result(
-            "codex failed to select runtime model 'gpt-5.4-mini' with effort 'medium'"
-        )
+    async def _fail_start(self: HarnessSession, spec) -> object:
+        return fail_result(error_message)
 
-    monkeypatch.setattr(HarnessSession, "start", _fail_model_selection)
+    monkeypatch.setattr(HarnessSession, "start", _fail_start)
 
     rt = SimpleNamespace(
         db=MagicMock(),
@@ -191,49 +211,8 @@ def test_codex_rogue_keeps_startup_model_session_on_runtime_picker_failure(
     assert agent_id in agents
     assert reaped == []
     agent = agents[agent_id]
-    assert agent.harness_session._first_send_idle_gate_pending is True  # noqa: SLF001
-    rt.sync_agent.assert_called_once()
-
-
-def test_codex_rogue_keeps_startup_model_session_on_idle_timeout(
-    repo_root: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    agents: dict[str, object] = {}
-    reaped: list[str] = []
-
-    async def _reap(agent_id: str) -> None:
-        reaped.append(agent_id)
-
-    async def _fail_idle_wait(self: HarnessSession, spec) -> object:
-        return fail_result("Harness not idle in time: session=murder_test_crow_codex_rogue_test")
-
-    def _get_agent(agent_id: str) -> object | None:
-        return agents.get(agent_id)
-
-    monkeypatch.setattr(HarnessSession, "start", _fail_idle_wait)
-
-    rt = SimpleNamespace(
-        db=MagicMock(),
-        bus=MagicMock(),
-        run_id="test-run",
-        repo_root=repo_root,
-        config=SimpleNamespace(
-            project=SimpleNamespace(name="test"),
-            runtime=SimpleNamespace(session_name_template="murder_{project}_{role}{suffix}"),
-        ),
-        get_agent=_get_agent,
-        register_agent=lambda agent: agents.setdefault(agent.id, agent),
-        sync_agent=MagicMock(),
-        reap=_reap,
-    )
-    orch = Orchestrator(rt)
-
-    agent_id = asyncio.run(orch.spawn_rogue("codex", "gpt-5.4-mini"))
-
-    assert agent_id in agents
-    assert reaped == []
-    agent = agents[agent_id]
+    # _first_send_idle_gate_pending is the only observable that the session is
+    # held open awaiting a manual first send rather than being torn down.
     assert agent.harness_session._first_send_idle_gate_pending is True  # noqa: SLF001
     rt.sync_agent.assert_called_once()
 
