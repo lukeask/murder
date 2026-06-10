@@ -52,6 +52,7 @@ export type ActionId =
   | 'global.newPlan' // alt+p — open the new-plan popup
   | 'global.newTicket' // alt+t — open the new-ticket popup
   | 'global.settings' // alt+o / ctrl+o — open the settings modal
+  | 'global.quickNote' // ctrl+n — open the quick-note capture (plain, not command-modified)
   | 'panel.star'; // alt+f — favorite/star the focused panel's cursor row
 
 /**
@@ -127,6 +128,17 @@ export const ACTIONS: Readonly<Record<ActionId, ActionDef>> = {
     // by any other action and is not a meaningful panel-local plain key.
     default: command('o'),
     description: 'settings',
+    rebindable: false,
+  },
+  'global.quickNote': {
+    id: 'global.quickNote',
+    // A `plain` (NOT command-modified) chord: ctrl+n arrives as the clean legacy byte 0x0e which Ink
+    // reports as `{ ctrl: true, input: 'n' }`. It is deliberately modifier-independent — the quick-note
+    // capture stays on ctrl+n regardless of the user's command-modifier choice (alt/ctrl/both), and the
+    // dispatcher matches it BEFORE the command-modifier gate so a `modifier=ctrl`/`both` setting can't
+    // shadow it. Not rebindable for now (a single fixed muscle-memory chord, like the legacy TUI).
+    default: { kind: 'plain', chord: { input: 'n', key: { ctrl: true } } },
+    description: 'note',
     rebindable: false,
   },
   'panel.star': {

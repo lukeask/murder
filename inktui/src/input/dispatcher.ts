@@ -104,6 +104,9 @@ export interface GlobalHandlers {
   newTicket(): void;
   /** `alt+o` / `ctrl+o` (the `global.settings` action): open the settings modal (wired by Phase 5). */
   openSettings(): void;
+  /** `ctrl+n` (the `global.quickNote` action): open the quick-note capture modal. Modifier-independent
+   * (a `plain` chord), matched ahead of the command-modifier gate so a ctrl/both setting can't shadow it. */
+  quickNote(): void;
 }
 
 /**
@@ -186,6 +189,17 @@ function dispatchGlobalChord(
   focusedId: FocusId,
   bindings: ResolvedBindings,
 ): boolean {
+  // `global.quickNote` (ctrl+n) is a `plain` chord, matched BEFORE the command-modifier gate so a
+  // `modifier=ctrl`/`both` setting can't shadow it: under those settings `isCommandModified` is true
+  // for any ctrl event, and the gate below would route ctrl+n into the digit/vim/named-command branch
+  // where it has no entry — silently swallowing it. Checking the explicit plain chord first keeps
+  // ctrl+n reaching the note capture under every modifier choice. It carries ctrl, which plain typing
+  // never does, so checking it ahead of typing is safe (same property the rest of the layer relies on).
+  if (bindings.matches('global.quickNote', input, key)) {
+    handlers.quickNote();
+    return true;
+  }
+
   // The command modifier (alt by default; ctrl/both via settings) gates the whole layer. The
   // registry knows which flag(s) qualify, so this is no longer a hardcoded `key.meta` — but the
   // safety property is unchanged: the command modifier is never set by plain typing, so checking

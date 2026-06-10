@@ -65,6 +65,42 @@ export function deleteLastChar(value: string): string {
 }
 
 /**
+ * A multi-line text display with an optional trailing cursor — the multi-line sibling of
+ * {@link TextInput}, for modal body/draft boxes (the new-plan form, the note-capture surface). Renders
+ * the whole value as a single Ink `<Text>` (Ink honours embedded `\n` as line breaks), so it needs no
+ * per-line array keys and wraps long lines naturally. When `value` is empty a dim `placeholder` shows;
+ * `focused` appends a `█` cursor after the text (on the placeholder's first glyph when empty).
+ */
+export function MultiLineText({
+  value,
+  placeholder,
+  focused = false,
+  color,
+}: TextInputProps): JSX.Element {
+  const theme = useTheme();
+  if (value.length === 0 && placeholder !== undefined) {
+    return (
+      <TextInput
+        value=""
+        placeholder={placeholder}
+        focused={focused}
+        {...(color ? { color } : {})}
+      />
+    );
+  }
+  return (
+    <Box>
+      <Text color={color ?? theme.text}>{value}</Text>
+      {focused && (
+        <Text color={theme.text} bold>
+          {'█'}
+        </Text>
+      )}
+    </Box>
+  );
+}
+
+/**
  * The controlled text input display. Pure over its props — no store/bus knowledge (rule 1). The mode
  * that hosts it owns input via its keymap + `onUncaptured`; this component just draws.
  *

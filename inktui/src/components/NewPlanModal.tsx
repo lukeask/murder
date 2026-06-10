@@ -1,93 +1,97 @@
 /**
- * `NewPlanModal` — the `ctrl+p` new-plan popup: a **modal C7M mode** with two text fields:
- * a plan name and an initial message to send to a fresh planning agent.
+ * `NewPlanModal` — the `super+p` new-plan flow: a **single-form wizard** {@link Mode} (item 3), NOT a
+ * multi-step pager. One filled-out form with three focus groups, navigated top-to-bottom:
  *
- * ## Recipe (C12 modal pattern — the reference C13 copies)
+ *  1. **Body textbox** (multi-line) — whatever is typed becomes the plan's markdown body. Printable
+ *     chars append; Shift+Enter inserts a newline; Enter advances to the naming group.
+ *  2. **Naming radio** — `auto` (mini-LLM names the plan from the body) vs `name-it-yourself`. `j/k`,
+ *     `h/l`, and the arrow keys move the highlight; Enter confirms the choice and advances focus.
+ *  3. **Name input** — shown only when `custom` is chosen; the typed plan name. Enter submits.
  *
- * Copy this file alongside {@link TextInput} and {@link ../store/dialogs/dialogActions.js} to build a
- * new multi-field dialog:
+ * On submit it calls `actions.createPlan(...)` → `plan.create` RPC (the service derives the name when
+ * `auto`, seeds the body, and starts the planning agent from the kickoff message). A brief `naming…`
+ * pending state covers the auto path's mini-LLM round-trip. On success the caller's `onSubmit` runs
+ * (toast + open the plan's doc pane).
  *
- *  1. **Define an intent union** for every special key action in the dialog (`backspace`,
- *     `deleteAll`, `nextField`, `prevField`, `submit`, `dismiss`). Printable characters are
- *     routed through `onUncaptured` (the C12 dispatcher extension — not the keymap), which lets
- *     the mode handle raw chars the keymap does not declare without any keymap wildcard entry.
- *  2. **Build the mode with `newPlanMode(modes, actions, opts)`** — a factory that returns a
- *     {@link Mode} with: `presentation: 'modal'`, a declared keymap, an `onIntent` for special
- *     keys, an `onUncaptured` for printable characters, and a `render` thunk over a pure component.
- *  3. **Enter it** from a global chord handler:
- *     `modes.getState().enter(newPlanMode(modes, actions, {}))`.
- *  4. The {@link ../components/Overlay.js Overlay} centers it; the C7M primitive handles
- *     capture and focus restore — the consumer writes none of that.
+ * ## Field + state model (the C12 modal recipe)
  *
- * ## Field + state model
+ * Modal state (the body/name text, the naming choice, the focused group, pending/error) lives in a
+ * mutable object inside the mode factory closure — not React state (the mode is plain data). The
+ * `render` thunk closes over it; after each mutation the mode store is poked (re-enter same id → new
+ * stack ref → Zustand re-renders subscribers), the same pattern the spawn wizard uses.
  *
- * Modal state (field values, focused field index, error, submitting) lives in a mutable object
- * inside the mode factory closure — not in React state (the mode is plain data, not a component).
- * The `render` thunk closes over the object; after each mutation the mode store is poked (re-enter
- * same id → new stack ref → Zustand re-renders subscribers). C13 uses the same pattern.
+ * Bottom-bar hints come from the mode's `hints` getter (wave 1 made the BottomBar mode-aware) — there
+ * is no hint line inside the modal box.
  *
- * ## `passThrough: false` (default)
- *
- * The modal captures every key while up — global chords cannot fire underneath it. `onUncaptured`
- * handles printable chars before the swallow decision in the dispatcher.
- *
- * **B13 flag:** `actions.createPlan` calls `plan.create` — not yet live on the bus.
+ * `passThrough: false` (default): the modal captures every key while up; `onUncaptured` handles the
+ * printable text chars before the dispatcher's swallow decision.
  */
 
 import type { Key } from 'ink';
 import { Box, Text } from 'ink';
 import type { JSX } from 'react';
-import type { Mode, ModeStoreApi } from '../input/modeStore.js';
-import type { DialogActions } from '../store/dialogs/dialogActions.js';
+import type { Mode, ModeHint, ModeStoreApi } from '../input/modeStore.js';
+import type { CreatePlanInput, DialogActions } from '../store/dialogs/dialogActions.js';
 import { toastStore } from '../store/toast/toastStore.js';
 import { useTheme } from '../theme/themeStore.js';
-import { deleteLastChar, insertChar, TextInput } from './TextInput.js';
+import { deleteLastChar, insertChar, MultiLineText, TextInput } from './TextInput.js';
 
 // Import the dispatcher augmentation so Mode gets the `onUncaptured` field at the TS level.
-// The augmentation is declared in dispatcher.ts; importing it brings the declaration into scope.
 import '../input/dispatcher.js';
 
-/** Intent union for the new-plan dialog — special key actions only. Printable chars go through
+/** Intent union for the new-plan form — special key actions only. Printable chars go through
  * `onUncaptured`, not the keymap, so they are not listed here. */
-type NewPlanIntent = 'backspace' | 'deleteAll' | 'nextField' | 'prevField' | 'submit' | 'dismiss';
+type NewPlanIntent =
+  | 'backspace'
+  | 'newline'
+  | 'advance'
+  | 'navPrev'
+  | 'navNext'
+  | 'submit'
+  | 'dismiss';
+
+/** The naming choice the radio group offers. */
+type Naming = 'auto' | 'custom';
+
+/** Which focus group has the highlight. `body` → naming → (`name` only when custom is chosen). */
+type FocusGroup = 'body' | 'naming' | 'name';
+
+/** A stock kickoff sent to the planning agent when the body is empty, so submit always starts the
+ * planner (the service spawns iff `message` is non-empty). */
+const STOCK_KICKOFF = 'Start planning. Read the plan body and propose the first steps.';
 
 /** Options passed to the mode factory. */
 export interface NewPlanModeOptions {
-  /** Called with the plan name and message after a successful submit (fired after mode exits). */
-  readonly onSubmit?: (planName: string, message: string) => void;
-  /** Called when the dialog is dismissed without submitting (fired after mode exits). */
+  /** Called with the FINAL plan name after a successful submit (fired after mode exits). The shell
+   * uses it to open the plan's doc pane. */
+  readonly onSubmit?: (planName: string) => void;
+  /** Called when the form is dismissed without submitting (fired after mode exits). */
   readonly onDismiss?: () => void;
 }
 
 /** The stable mode id so a re-enter is idempotent. */
 export const NEW_PLAN_MODE_ID = 'new-plan';
 
-/** The number of fields in the new-plan dialog. */
-const FIELD_COUNT = 2;
-/** Field indices. */
-const FIELD_PLAN_NAME = 0;
-const FIELD_MESSAGE = 1;
-
 /**
  * Mutable local state inside the mode closure. Not React state — the mode is plain data.
  * Mutated in `onIntent` / `onUncaptured`; `render` reads it at call time.
  */
 interface NewPlanState {
+  body: string;
+  naming: Naming;
   planName: string;
-  message: string;
-  activeField: number;
+  focus: FocusGroup;
+  /** True while the `plan.create` RPC is in flight (the `naming…` pending state). */
+  pending: boolean;
   error: string | null;
 }
 
+/** The two naming options, in highlight order (left→right / top→bottom). */
+const NAMING_ORDER: readonly Naming[] = ['auto', 'custom'];
+
 /**
  * Build the new-plan {@link Mode}. Pass `modes` (for self-dismiss), `actions` (for the RPC), and
- * optional callbacks. The mode is self-dismissing: `submit` calls `modes.exit(id)` before the
- * async RPC (exit-then-act, same order as ConfirmModal so the restore happens first).
- *
- * Enter via: `modes.getState().enter(newPlanMode(modes, actions, {}))`.
- * The global chord handler in `useRootInput` calls this when `ctrl+p` fires.
- *
- * **B13 flag:** `actions.createPlan` → `plan.create` not yet on the live bus.
+ * optional callbacks. Enter via: `modes.getState().enter(newPlanMode(modes, actions, opts))`.
  */
 export function newPlanMode(
   modes: ModeStoreApi,
@@ -96,11 +100,12 @@ export function newPlanMode(
 ): Mode<NewPlanIntent> {
   const id = NEW_PLAN_MODE_ID;
 
-  // Mutable local state in the closure — not React state.
   const s: NewPlanState = {
+    body: '',
+    naming: 'auto',
     planName: '',
-    message: '',
-    activeField: FIELD_PLAN_NAME,
+    focus: 'body',
+    pending: false,
     error: null,
   };
 
@@ -112,116 +117,176 @@ export function newPlanMode(
     }
   }
 
+  /** Fire the `plan.create` RPC and dismiss. Exit-then-act so focus restores before the async call;
+   * a `naming…` pending state is shown briefly for the auto path's mini-LLM round-trip. */
+  function submit(): void {
+    if (s.pending) {
+      return;
+    }
+    const autoName = s.naming === 'auto';
+    const planName = s.planName.trim();
+    if (!autoName && planName.length === 0) {
+      s.error = 'Plan name is required (or pick "auto").';
+      s.focus = 'name';
+      refresh();
+      return;
+    }
+    s.pending = true;
+    s.error = null;
+    refresh();
+    // Always send a message so the service starts the planner: the body if present, else a stock kickoff.
+    const body = s.body;
+    const message = body.trim().length > 0 ? body : STOCK_KICKOFF;
+    const input: CreatePlanInput = autoName
+      ? { body, autoName: true, message }
+      : { body, autoName: false, planName, message };
+    void actions
+      .createPlan(input)
+      .then((result) => {
+        modes.getState().exit(id);
+        opts.onSubmit?.(result.plan_name);
+      })
+      .catch((error: unknown) => {
+        // The modal is still up (we only exit on success), so surface the error inline AND keep the
+        // form so the user can retry. The toast covers the case where focus has already moved.
+        const text = error instanceof Error ? error.message : String(error);
+        s.pending = false;
+        s.error = text;
+        refresh();
+        toastStore.getState().push(text, { severity: 'error', ttlMs: 6000 });
+      });
+  }
+
+  /** Move the naming-radio highlight by `delta` (wrapping), used by both axes (h/l, j/k, arrows). */
+  function moveNaming(delta: number): void {
+    const i = NAMING_ORDER.indexOf(s.naming);
+    const next = (i + delta + NAMING_ORDER.length) % NAMING_ORDER.length;
+    s.naming = NAMING_ORDER[next] ?? 'auto';
+    refresh();
+  }
+
   const mode: Mode<NewPlanIntent> = {
     id,
     presentation: 'modal',
-    // No pass-through: the dialog captures every key while up.
+    // Hints live in the bottom bar (wave 1 mode-aware BottomBar). A getter so the bar always shows the
+    // CURRENT focus group's keys (refresh() re-enters the frame, re-deriving them).
+    get hints(): readonly ModeHint[] {
+      return newPlanHints(s.focus);
+    },
+    // Structural keys only — printable chars (body/name text + the radio's h/l/j/k) ride `onUncaptured`.
     keymap: [
-      // Tab / Shift-Tab: cycle fields.
-      { chord: { key: { tab: true } }, intent: 'nextField', description: 'next field' },
-      {
-        chord: { key: { shift: true, tab: true } },
-        intent: 'prevField',
-        description: 'prev field',
-      },
-      // Backspace: delete last char.
+      { chord: { key: { shift: true, return: true } }, intent: 'newline', description: 'newline' },
+      { chord: { key: { return: true } }, intent: 'advance', description: 'confirm' },
+      { chord: { key: { upArrow: true } }, intent: 'navPrev', description: 'prev' },
+      { chord: { key: { downArrow: true } }, intent: 'navNext', description: 'next' },
+      { chord: { key: { leftArrow: true } }, intent: 'navPrev', description: 'prev' },
+      { chord: { key: { rightArrow: true } }, intent: 'navNext', description: 'next' },
       { chord: { key: { backspace: true } }, intent: 'backspace', description: 'delete char' },
-      // Alt+U: clear field.
-      {
-        chord: { input: 'u', key: { meta: true } },
-        intent: 'deleteAll',
-        description: 'clear field',
-      },
-      // Enter: submit.
-      { chord: { key: { return: true } }, intent: 'submit', description: 'create plan' },
-      // Escape: dismiss.
+      { chord: { key: { tab: true } }, intent: 'submit', description: 'create' },
       { chord: { key: { escape: true } }, intent: 'dismiss', description: 'cancel' },
     ],
     onIntent(intent) {
+      if (s.pending && intent !== 'dismiss') {
+        return; // ignore edits while the RPC is in flight
+      }
       switch (intent) {
         case 'backspace': {
-          if (s.activeField === FIELD_PLAN_NAME) {
+          if (s.focus === 'body') {
+            s.body = deleteLastChar(s.body);
+          } else if (s.focus === 'name') {
             s.planName = deleteLastChar(s.planName);
-          } else {
-            s.message = deleteLastChar(s.message);
           }
           refresh();
-          break;
+          return;
         }
-        case 'deleteAll': {
-          if (s.activeField === FIELD_PLAN_NAME) {
-            s.planName = '';
-          } else {
-            s.message = '';
+        case 'newline': {
+          // Shift+Enter: a literal newline in the body box (a no-op in the radio/name groups).
+          if (s.focus === 'body') {
+            s.body = `${s.body}\n`;
+            refresh();
           }
-          refresh();
-          break;
+          return;
         }
-        case 'nextField': {
-          s.activeField = (s.activeField + 1) % FIELD_COUNT;
-          refresh();
-          break;
+        case 'advance': {
+          // Enter: confirm the current group and advance focus (or submit at the end).
+          if (s.focus === 'body') {
+            s.focus = 'naming';
+            refresh();
+          } else if (s.focus === 'naming') {
+            if (s.naming === 'custom') {
+              s.focus = 'name';
+              refresh();
+            } else {
+              submit();
+            }
+          } else {
+            submit();
+          }
+          return;
         }
-        case 'prevField': {
-          s.activeField = (s.activeField - 1 + FIELD_COUNT) % FIELD_COUNT;
-          refresh();
-          break;
+        case 'navPrev': {
+          if (s.focus === 'naming') {
+            moveNaming(-1);
+          }
+          return;
+        }
+        case 'navNext': {
+          if (s.focus === 'naming') {
+            moveNaming(1);
+          }
+          return;
         }
         case 'submit': {
-          if (s.planName.trim().length === 0) {
-            s.error = 'Plan name is required.';
-            refresh();
-            break;
-          }
-          // Exit-then-act: exit (restores focus) before the async RPC, per ConfirmModal precedent.
-          modes.getState().exit(id);
-          const planName = s.planName.trim();
-          const message = s.message.trim();
-          void actions
-            .createPlan(planName, message)
-            .then(() => {
-              opts.onSubmit?.(planName, message);
-            })
-            .catch((error: unknown) => {
-              // Exit-then-act: the modal is already gone and focus restored, so an inline field
-              // error has nowhere to render. Surface the action-level RPC rejection on the global
-              // toastStore (a singleton, independent of this unmounted modal's lifecycle), using the
-              // structured `rpc error [code]: message` text from UdsBusClient's rejection.
-              const message = error instanceof Error ? error.message : String(error);
-              toastStore.getState().push(message, { severity: 'error', ttlMs: 6000 });
-            });
-          break;
+          // Tab: submit from anywhere (a quick-create escape hatch).
+          submit();
+          return;
         }
         case 'dismiss': {
           modes.getState().exit(id);
           opts.onDismiss?.();
-          break;
+          return;
         }
         default:
           return intent satisfies never;
       }
     },
-    // onUncaptured: handle printable characters for text field input (C12 dispatcher extension).
-    // The dispatcher calls this when the keymap has no match. We accept printable chars (non-empty
-    // input string, no ctrl/alt modifiers) and append them to the active field.
+    // onUncaptured: printable text entry + the radio's hjkl navigation. The dispatcher calls this when
+    // the declared keymap has no match (the C12 hook).
     onUncaptured(input: string, key: Key): boolean {
       if (input.length === 0 || key.ctrl || key.meta || key.escape) {
-        return false; // special key — let the dispatcher swallow it (not our char to handle)
+        return false; // special/modified key — not our char to handle
       }
-      if (s.activeField === FIELD_PLAN_NAME) {
-        s.planName = insertChar(s.planName, input);
+      if (s.pending) {
+        return true; // swallow edits while submitting
+      }
+      if (s.focus === 'naming') {
+        // hjkl moves the radio highlight (arrows ride the keymap above).
+        if (input === 'h' || input === 'k') {
+          moveNaming(-1);
+          return true;
+        }
+        if (input === 'l' || input === 'j') {
+          moveNaming(1);
+          return true;
+        }
+        return true; // swallow other chars while the radio is focused (no text field here)
+      }
+      if (s.focus === 'body') {
+        s.body = insertChar(s.body, input);
       } else {
-        s.message = insertChar(s.message, input);
+        s.planName = insertChar(s.planName, input);
       }
       s.error = null;
       refresh();
       return true;
     },
     render: () => (
-      <NewPlanDialog
+      <NewPlanForm
+        body={s.body}
+        naming={s.naming}
         planName={s.planName}
-        message={s.message}
-        activeField={s.activeField}
+        focus={s.focus}
+        pending={s.pending}
         error={s.error}
       />
     ),
@@ -230,16 +295,43 @@ export function newPlanMode(
   return mode;
 }
 
-/** The dialog's visual presentation — a pure function of its props (rule 1). No store/bus knowledge. */
-function NewPlanDialog({
+/** The bottom-bar hints for the active focus group. Pure over the group so it tests without the bar. */
+export function newPlanHints(focus: FocusGroup): readonly ModeHint[] {
+  const cancel: ModeHint = { key: 'esc', description: 'cancel' };
+  switch (focus) {
+    case 'body':
+      return [
+        { key: 'shift+enter', description: 'newline' },
+        { key: 'enter', description: 'next' },
+        cancel,
+      ];
+    case 'naming':
+      return [
+        { key: 'h/l/j/k/←→', description: 'choose' },
+        { key: 'enter', description: 'confirm' },
+        cancel,
+      ];
+    case 'name':
+      return [{ key: 'enter', description: 'create' }, cancel];
+    default:
+      return [cancel];
+  }
+}
+
+/** The form's visual presentation — a pure function of its props (rule 1). No store/bus knowledge. */
+function NewPlanForm({
+  body,
+  naming,
   planName,
-  message,
-  activeField,
+  focus,
+  pending,
   error,
 }: {
+  readonly body: string;
+  readonly naming: Naming;
   readonly planName: string;
-  readonly message: string;
-  readonly activeField: number;
+  readonly focus: FocusGroup;
+  readonly pending: boolean;
   readonly error: string | null;
 }): JSX.Element {
   const theme = useTheme();
@@ -250,39 +342,79 @@ function NewPlanDialog({
       borderColor={theme.heading}
       paddingX={2}
       paddingY={1}
-      width={60}
+      width={64}
     >
       <Text bold color={theme.heading}>
         New Plan
       </Text>
+
+      {/* Body textbox (multi-line). */}
       <Box marginTop={1} flexDirection="column">
-        <Text color={activeField === FIELD_PLAN_NAME ? theme.text : theme.muted}>Plan name:</Text>
-        <TextInput
-          value={planName}
-          placeholder="e.g. refactor-auth"
-          focused={activeField === FIELD_PLAN_NAME}
-          color={activeField === FIELD_PLAN_NAME ? theme.text : theme.muted}
+        <Text color={focus === 'body' ? theme.text : theme.muted}>Plan body:</Text>
+        <MultiLineText
+          value={body}
+          placeholder="Describe the plan…"
+          focused={focus === 'body'}
+          color={focus === 'body' ? theme.text : theme.muted}
         />
       </Box>
+
+      {/* Naming radio group. */}
       <Box marginTop={1} flexDirection="column">
-        <Text color={activeField === FIELD_MESSAGE ? theme.text : theme.muted}>
-          Message to planning agent:
-        </Text>
-        <TextInput
-          value={message}
-          placeholder="Describe the plan goal…"
-          focused={activeField === FIELD_MESSAGE}
-          color={activeField === FIELD_MESSAGE ? theme.text : theme.muted}
-        />
+        <Text color={focus === 'naming' ? theme.text : theme.muted}>Name:</Text>
+        <Box flexDirection="row" columnGap={3}>
+          <NamingOption label="auto" selected={naming === 'auto'} active={focus === 'naming'} />
+          <NamingOption
+            label="name it myself"
+            selected={naming === 'custom'}
+            active={focus === 'naming'}
+          />
+        </Box>
       </Box>
+
+      {/* Custom-name input — shown only when the custom radio is chosen. */}
+      {naming === 'custom' && (
+        <Box marginTop={1} flexDirection="column">
+          <Text color={focus === 'name' ? theme.text : theme.muted}>Plan name:</Text>
+          <TextInput
+            value={planName}
+            placeholder="e.g. refactor-auth"
+            focused={focus === 'name'}
+            color={focus === 'name' ? theme.text : theme.muted}
+          />
+        </Box>
+      )}
+
+      {pending && (
+        <Box marginTop={1}>
+          <Text color={theme.muted}>naming…</Text>
+        </Box>
+      )}
       {error !== null && (
         <Box marginTop={1}>
           <Text color={theme.error}>{error}</Text>
         </Box>
       )}
-      <Box marginTop={1}>
-        <Text dimColor>tab: next field enter: create esc: cancel ctrl+u: clear</Text>
-      </Box>
     </Box>
+  );
+}
+
+/** One radio option: a `( )`/`(•)` marker + label, highlighted when the group is focused + selected. */
+function NamingOption({
+  label,
+  selected,
+  active,
+}: {
+  readonly label: string;
+  readonly selected: boolean;
+  readonly active: boolean;
+}): JSX.Element {
+  const theme = useTheme();
+  const color = selected && active ? theme.heading : selected ? theme.text : theme.muted;
+  return (
+    <Text color={color} bold={selected && active}>
+      {selected ? '(•) ' : '( ) '}
+      {label}
+    </Text>
   );
 }

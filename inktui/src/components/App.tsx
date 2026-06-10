@@ -55,6 +55,8 @@ import { selectActiveMode } from '../input/modeStore.js';
 import type { PanelId } from '../input/panels.js';
 import type { UsageTier } from '../layout/budget.js';
 import { selectActiveAgentId } from '../selectors/conversationsSelectors.js';
+import { submitCommand } from '../store/commandSubmit.js';
+import { createDialogActions } from '../store/dialogs/dialogActions.js';
 import { createHarnessModelsActions } from '../store/dialogs/harnessModelsActions.js';
 import { createSpawnActions } from '../store/dialogs/spawnActions.js';
 import { createWorktreeOptionsActions } from '../store/dialogs/worktreeOptionsActions.js';
@@ -63,6 +65,8 @@ import {
   createImageDraftStore,
   type ImageDraftStoreApi,
 } from '../store/imageDraft/imageDraftStore.js';
+import { noteCaptureMode } from '../store/notes/noteCaptureMode.js';
+import { noteCaptureStore } from '../store/notes/noteCaptureStore.js';
 import type { SettingsModifier } from '../store/settings/settingsSlice.js';
 import type { AppStoreApi } from '../store/store.js';
 import { toastStore } from '../store/toast/toastStore.js';
@@ -71,6 +75,7 @@ import { setTheme } from '../theme/themeStore.js';
 import { BottomBar, useBottomBarLines } from './BottomBar.js';
 import { ChatInput } from './ChatInput.js';
 import { CrowsPanel } from './CrowsPanel.js';
+import { newPlanMode } from './NewPlanModal.js';
 import { NotesPanel } from './NotesPanel.js';
 import { Overlay, presentationHidesLayout } from './Overlay.js';
 import { PlansPanel } from './PlansPanel.js';
@@ -460,6 +465,42 @@ function Shell({
     );
   };
 
+  // `super+p` → open the new-plan single-form wizard (item 3). On success: toast + open the plan's doc
+  // pane (the auto path returns the FINAL name). Reads stores at call time (no stale closure).
+  const newPlanHandler = (): void => {
+    const actions = createDialogActions(bus);
+    const docViewActions = appStore.getState().actions.docView;
+    modes.getState().enter(
+      newPlanMode(modes, actions, {
+        onSubmit(planName) {
+          toastStore.getState().push(`plan "${planName}" created`, { ttlMs: 3000 });
+          void docViewActions.open('plan', planName);
+        },
+      }),
+    );
+  };
+
+  // `ctrl+n` → open the quick-note capture (item 10). Draft persists across cancel/reopen (the mode
+  // resets the FSM only on a confirmed submit); submit is fire-and-forget via `notetaker.capture.submit`
+  // (close instantly + toast). Title is auto/LLM (empty title field).
+  const quickNoteHandler = (): void => {
+    modes.getState().enter(
+      noteCaptureMode(modes, noteCaptureStore, {
+        onSubmit(draft, title) {
+          void submitCommand(bus, 'notetaker.capture.submit', {
+            raw: draft,
+            ...(title !== undefined && title.trim() !== '' ? { title: title.trim() } : {}),
+          }).catch((error: unknown) => {
+            const message = error instanceof Error ? error.message : String(error);
+            toastStore.getState().push(message, { severity: 'error', ttlMs: 6000 });
+          });
+          toastStore.getState().push('note captured', { ttlMs: 3000 });
+        },
+        onCancel() {},
+      }),
+    );
+  };
+
   // The single root input loop for the whole app (rule 5) — installed exactly once, here.
   // C13: `spawn` wired to the spawn wizard handler. C11: `chatInput` wired to the persistent
   // chat-input handler (buffers chars, sends on Enter to the active agent). Global ctrl-chords still
@@ -468,6 +509,8 @@ function Shell({
     {
       spawn: spawnHandler,
       openSettings: openSettingsHandler,
+      newPlan: newPlanHandler,
+      quickNote: quickNoteHandler,
       chatInput: makeChatInputHandler(chatInput, appStore, imageDraft),
     },
     terminalEvents,

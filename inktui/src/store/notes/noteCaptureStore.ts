@@ -64,6 +64,9 @@ export interface NoteCaptureState {
   /** The draft text. The capture surface's TextArea mirrors this; the FSM clears/restores it on the
    * delete and undo chords. (Ordinary character entry appends here, via the mode's `onUncaptured`.) */
   readonly draftText: string;
+  /** The optional note title (item 3b). Empty → the backend auto/LLM-titles the note. Held here (next
+   * to the draft) so it persists across cancel/reopen exactly as the draft does; `reset()` clears it. */
+  readonly titleText: string;
   /** Where focus is. `draft` until the blur timer fires, then `list`. */
   readonly focus: CaptureFocus;
   /** Absolute `now()`-scale timestamp of the first ESC, or `null` when not armed. The second ESC
@@ -80,6 +83,9 @@ export interface NoteCaptureState {
   /** Set the draft text (the surface's editor pushes edits here; tests seed it). Does not touch FSM
    * arming — plain typing must not arm ESC. */
   setDraft(text: string): void;
+
+  /** Set the title text (the title field's edits push here). Does not touch FSM arming. */
+  setTitle(text: string): void;
 
   /**
    * Handle an `escape` keypress in the draft (Textual `handle_escape_from_draft`). If a prior ESC is
@@ -153,6 +159,7 @@ export function createNoteCaptureStore(): NoteCaptureStoreApi {
 
     return {
       draftText: '',
+      titleText: '',
       focus: 'draft',
       escArmedAt: null,
       blurTimerActive: false,
@@ -160,6 +167,10 @@ export function createNoteCaptureStore(): NoteCaptureStoreApi {
 
       setDraft(text) {
         set({ draftText: text });
+      },
+
+      setTitle(text) {
+        set({ titleText: text });
       },
 
       pressEscape(now = Date.now()) {
@@ -201,6 +212,7 @@ export function createNoteCaptureStore(): NoteCaptureStoreApi {
         cancelBlur();
         set({
           draftText: '',
+          titleText: '',
           focus: 'draft',
           escArmedAt: null,
           blurTimerActive: false,

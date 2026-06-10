@@ -29,6 +29,7 @@ interface SpyHandlers {
   readonly newPlan: ReturnType<typeof vi.fn<GlobalHandlers['newPlan']>>;
   readonly newTicket: ReturnType<typeof vi.fn<GlobalHandlers['newTicket']>>;
   readonly openSettings: ReturnType<typeof vi.fn<GlobalHandlers['openSettings']>>;
+  readonly quickNote: ReturnType<typeof vi.fn<GlobalHandlers['quickNote']>>;
 }
 
 function handlers(): SpyHandlers {
@@ -41,6 +42,7 @@ function handlers(): SpyHandlers {
     newPlan: vi.fn<GlobalHandlers['newPlan']>(),
     newTicket: vi.fn<GlobalHandlers['newTicket']>(),
     openSettings: vi.fn<GlobalHandlers['openSettings']>(),
+    quickNote: vi.fn<GlobalHandlers['quickNote']>(),
   };
 }
 
@@ -253,6 +255,20 @@ describe('layer 1 — global chords', () => {
     expect(h.focusPanel).not.toHaveBeenCalled();
     expect(out.layer).toBe('chat');
   });
+
+  it('ctrl+n fires quickNote (plain chord, app-wide) under the default alt modifier', () => {
+    const h = handlers();
+    const out = dispatchKey('n', makeKey({ ctrl: true }), ctx('plans', h));
+    expect(h.quickNote).toHaveBeenCalledOnce();
+    expect(out).toEqual({ layer: 'global', handled: true });
+  });
+
+  it('ctrl+n fires quickNote even while chat is focused', () => {
+    const h = handlers();
+    const out = dispatchKey('n', makeKey({ ctrl: true }), ctx(CHAT_FOCUS, h));
+    expect(h.quickNote).toHaveBeenCalledOnce();
+    expect(out).toEqual({ layer: 'global', handled: true });
+  });
 });
 
 describe('layer 2 — chat short-circuit', () => {
@@ -330,6 +346,16 @@ describe('command modifier — ctrl', () => {
       ctx('plans', h, {}, null, ctrlBindings),
     );
     expect(panelOut).toEqual({ layer: 'panel', handled: false });
+  });
+
+  it('ctrl+n fires quickNote under modifier=ctrl (plain chord, NOT shadowed by the command gate)', () => {
+    // Regression guard for item 10: under modifier=ctrl, `isCommandModified` is true for ctrl+n, so a
+    // naive gate-first order would route it into the digit/named-command branch (no match → swallowed).
+    // The dispatcher matches the plain quickNote chord BEFORE the gate, so it still reaches the handler.
+    const h = handlers();
+    const out = dispatchKey('n', makeKey({ ctrl: true }), ctx('plans', h, {}, null, ctrlBindings));
+    expect(h.quickNote).toHaveBeenCalledOnce();
+    expect(out).toEqual({ layer: 'global', handled: true });
   });
 
   it('alt+<n> is NOT a command chord under ctrl-only (degraded to chat short-circuit)', () => {
