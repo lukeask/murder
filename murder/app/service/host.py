@@ -314,6 +314,43 @@ class ServiceHost:
             tmp.replace(path)
             return {"ok": True, "favorites": ids}
 
+        def _settings_payload(tui: Any) -> dict[str, Any]:
+            return {
+                "theme": tui.theme,
+                "modifier": tui.modifier,
+                "key_overrides": dict(tui.key_overrides),
+            }
+
+        def _settings_get(_body: dict[str, Any]) -> dict[str, Any]:
+            from murder.user_config import load_user_config
+
+            cfg = load_user_config()
+            return {"ok": True, "settings": _settings_payload(cfg.tui)}
+
+        def _settings_update(body: dict[str, Any]) -> dict[str, Any]:
+            # Partial merge: load the persisted user config, overlay only the provided tui keys,
+            # re-validate via pydantic (modifier/theme), and persist. We call load/save directly
+            # rather than SettingsService.save_global to avoid its model-discovery side effects.
+            from murder.user_config import (
+                TuiUserConfig,
+                load_user_config,
+                save_user_config,
+            )
+
+            partial = body.get("settings")
+            if not isinstance(partial, dict):
+                raise ValueError("settings.update requires a settings object")
+
+            cfg = load_user_config()
+            merged: dict[str, Any] = _settings_payload(cfg.tui)
+            for key in ("theme", "modifier", "key_overrides"):
+                if key in partial:
+                    merged[key] = partial[key]
+            # Re-validate the merged tui block; an invalid modifier/theme/key_overrides raises here.
+            cfg.tui = TuiUserConfig.model_validate(merged)
+            save_user_config(cfg)
+            return {"ok": True, "settings": _settings_payload(cfg.tui)}
+
         def _worktree_list(_body: dict[str, Any]) -> dict[str, Any]:
             from murder.state.storage.worktrees import list_murder_worktrees_sync
 
@@ -338,6 +375,8 @@ class ServiceHost:
         self.register_rpc_handler("image.upload", _image_upload)
         self.register_rpc_handler("tui.load_favorites", _tui_load_favorites)
         self.register_rpc_handler("tui.save_favorites", _tui_save_favorites)
+        self.register_rpc_handler("settings.get", _settings_get)
+        self.register_rpc_handler("settings.update", _settings_update)
         self.register_rpc_handler("worktree.list", _worktree_list)
 
     async def start(self) -> None:
