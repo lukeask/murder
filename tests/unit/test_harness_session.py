@@ -1,20 +1,11 @@
 """Tests for ``HarnessSession`` — the live-session facade in ``harnesses/base.py``.
 
+COOKBOOK = canonical start → first-send → wait_idle → send lifecycle per adapter.
+EDGE CASES = timeout, TmuxError, idle gate, send retry, trust dialog, picker routing.
+
 All tmux I/O is intercepted via ``FakeTmux`` (see ``tests/support/fake_tmux.py``).
 ``asyncio.sleep`` is patched to a no-op so timing delays don't slow tests.
 Tests use ``asyncio.run()`` directly (consistent with the rest of the test suite).
-
-Coverage goals per the plan:
-  - start() success — create_session called; startup_ready gate; configure path;
-    _first_send_idle_gate_pending set to True
-  - start() ready timeout — fail_result with "not ready in time"
-  - start() TmuxError during ready poll — fail_result with "Session lost during startup"
-  - start() set_model failure propagates
-  - First send_prompt waits for idle; subsequent sends skip the wait
-  - wait_idle timeout → fail_result
-  - wait_idle TmuxError → fail_result "Session lost during idle-wait"
-  - interrupt() delegates to tmux.interrupt
-  - set_model() on non-runtime-selectable adapter returns fail_result
 """
 
 from __future__ import annotations
@@ -68,7 +59,9 @@ def fake_tmux(monkeypatch):
     return ft
 
 
-def _start_spec(cwd: Path = Path("/tmp/test-repo"), *, model: str | None = None) -> HarnessStartSpec:
+def _start_spec(
+    cwd: Path = Path("/tmp/test-repo"), *, model: str | None = None
+) -> HarnessStartSpec:
     """Minimal spec that tries only 1 startup poll (avoids 600-iteration loops)."""
     return HarnessStartSpec(
         cwd=cwd,
@@ -83,15 +76,13 @@ def _make_session(adapter=None, session: str = "test-session") -> HarnessSession
     return HarnessSession(adapter, session, Path("/tmp/test-repo"))
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# start() — success path
-# ─────────────────────────────────────────────────────────────────────────────
+# ============================================================
+# === COOKBOOK ===============================================
+# ============================================================
 
 
 def test_start_success_creates_tmux_session(fake_tmux: FakeTmux):
     fake_tmux.queue_pane(CC_IDLE)  # ready poll → is_ready=True
-    # initialize_defaults polls capture_pane until is_idle; CC_IDLE is idle
-    # wait_idle at end of _configure_started_session also uses CC_IDLE (repeated)
 
     hs = _make_session(ClaudeCodeAdapter())
     result = asyncio.run(hs.start(_start_spec()))
@@ -113,6 +104,175 @@ def test_start_success_passes_correct_cmd_to_create_session(fake_tmux: FakeTmux)
     assert session_name == "test-session"
     assert "claude" in cmd
     assert "--dangerously-skip-permissions" in cmd
+
+
+def test_start_success_polls_capture_pane_for_ready(fake_tmux: FakeTmux):
+    # startup_ready loop must call capture_pane at least once
+    fake_tmux.queue_pane(CC_IDLE)
+    hs = _make_session(ClaudeCodeAdapter())
+    asyncio.run(hs.start(_start_spec()))
+
+    assert "capture_pane" in fake_tmux.call_names()
+
+
+def test_first_send_prompt_waits_for_idle(fake_tmux: FakeTmux):
+    # After start(), _first_send_idle_gate_pending=True; first send_prompt
+    # must call capture_pane before send_keys.
+    fake_tmux.queue_pane(CC_IDLE)
+    hs = _make_session(ClaudeCodeAdapter())
+    asyncio.run(hs.start(_start_spec()))
+    fake_tmux.calls.clear()
+
+    fake_tmux.queue_pane(CC_IDLE)  # wait_idle poll
+    asyncio.run(hs.send_prompt("hello world"))
+
+    names = fake_tmux.call_names()
+    # capture_pane (idle check) must precede send_keys
+    assert "capture_pane" in names
+    assert "send_keys" in names
+    assert names.index("capture_pane") < names.index("send_keys")
+
+
+def test_first_send_prompt_waits_for_stable_input_ready(fake_tmux: FakeTmux):
+    fake_tmux.queue_pane(CC_IDLE)
+    hs = _make_session(ClaudeCodeAdapter())
+    asyncio.run(hs.start(_start_spec()))
+    fake_tmux.calls.clear()
+
+    fake_tmux.reset_queue()
+    fake_tmux.queue_pane(CC_BUSY)
+    fake_tmux.queue_pane(CC_IDLE)
+    fake_tmux.queue_pane(CC_IDLE)
+
+    result = asyncio.run(hs.send_prompt("hello world"))
+
+    assert result.ok
+    names = fake_tmux.call_names()
+    assert names[:4] == ["capture_pane", "capture_pane", "capture_pane", "send_keys"]
+
+
+def test_wait_idle_succeeds_on_idle_pane(fake_tmux: FakeTmux):
+    hs = _make_session(ClaudeCodeAdapter())
+    fake_tmux.queue_pane(CC_IDLE)
+
+    result = asyncio.run(hs.wait_idle(timeout_s=0.4))
+    assert result.ok
+
+
+def test_wait_ready_succeeds_on_ready_pane(fake_tmux: FakeTmux):
+    hs = _make_session(ClaudeCodeAdapter())
+    fake_tmux.queue_pane(CC_IDLE)
+
+    result = asyncio.run(hs.wait_ready(timeout_s=0.4))
+    assert result.ok
+
+
+def test_send_prompt_passes_text_to_send_keys(fake_tmux: FakeTmux):
+    hs = _make_session(ClaudeCodeAdapter())
+
+    asyncio.run(hs.send_prompt("implement feature X"))
+
+    send_calls = fake_tmux.calls_to("send_keys")
+    texts = [args[1] for args, _ in send_calls]
+    assert "implement feature X" in texts
+
+
+def test_interrupt_calls_adapter_escape(fake_tmux: FakeTmux):
+    hs = _make_session(ClaudeCodeAdapter())
+
+    result = asyncio.run(hs.interrupt())
+
+    assert result.ok
+    send_calls = fake_tmux.calls_to("send_keys")
+    assert len(send_calls) == 1
+    (session_arg, keys), kw = send_calls[0]
+    assert session_arg == "test-session"
+    assert keys == "Escape"
+    assert kw == {"literal": False, "enter": False}
+
+
+# ============================================================
+# === EDGE CASES =============================================
+# ============================================================
+
+
+# ── start() — failure paths ──────────────────────────────────────────────────
+
+
+def test_start_ready_timeout_returns_fail_result(fake_tmux: FakeTmux):
+    # Queue a non-ready pane; with ready_timeout_s=0.4 only 1 attempt is made
+    fake_tmux.queue_pane("$ ")  # no CC banner → is_ready=False
+    hs = _make_session(ClaudeCodeAdapter())
+
+    result = asyncio.run(hs.start(_start_spec()))
+
+    assert not result.ok
+    assert result.message is not None
+    assert "not ready in time" in result.message
+
+
+def test_start_tmux_error_during_ready_poll_returns_fail_result(fake_tmux: FakeTmux):
+    # TmuxError from capture_pane → "Session lost during startup"
+    fake_tmux.queue_error("pane exited")
+    hs = _make_session(ClaudeCodeAdapter())
+
+    result = asyncio.run(hs.start(_start_spec()))
+
+    assert not result.ok
+    assert result.message is not None
+    assert "Session lost during startup" in result.message
+
+
+def test_start_set_model_fail_returns_fail_result(fake_tmux: FakeTmux):
+    # Unknown CC model ids fail before the startup prompt is sent.
+    fake_tmux.queue_pane(CC_IDLE)
+    adapter = ClaudeCodeAdapter()
+    hs = _make_session(adapter)
+    spec = HarnessStartSpec(
+        cwd=Path("/tmp/repo"),
+        startup_model="not-a-claude-model",
+        ready_timeout_s=0.4,
+        poll_interval_s=0.4,
+    )
+
+    result = asyncio.run(hs.start(spec))
+
+    assert not result.ok
+    assert "failed to select runtime model" in (result.message or "")
+
+
+def test_start_with_startup_model_calls_set_model(fake_tmux: FakeTmux):
+    # Cursor supports runtime model selection via set_model → True
+    fake_tmux.queue_pane(
+        "  → Plan, search, build anything\n  Composer 2.5   Auto-run\n  ~/repo · main"
+    )
+    adapter = CursorAdapter(startup_model="gpt-5.5")
+    hs = _make_session(adapter)
+
+    asyncio.run(hs.start(_start_spec(model="gpt-5.5")))
+
+    # set_model for Cursor calls send_keys with "/model gpt-5.5"
+    send_calls = fake_tmux.calls_to("send_keys")
+    model_cmds = [args[1] for args, _ in send_calls if "/model" in args[1]]
+    assert len(model_cmds) >= 1, "Expected at least one /model command"
+
+
+def test_cursor_default_composer_startup_skips_runtime_model_selection(fake_tmux: FakeTmux):
+    # Composer 2.5 is the Cursor default; startup_model match → no /model command sent.
+    fake_tmux.queue_pane(
+        "  → Plan, search, build anything\n  Composer 2.5   Auto-run\n  ~/repo · main"
+    )
+    adapter = CursorAdapter(startup_model="composer-2.5")
+    hs = _make_session(adapter)
+
+    result = asyncio.run(hs.start(_start_spec(model="composer-2.5")))
+
+    assert result.ok
+    send_texts = [args[1] for args, _ in fake_tmux.calls_to("send_keys")]
+    assert not any(text.startswith("/model") for text in send_texts)
+
+
+# ── start() — startup model binding ─────────────────────────────────────────
 
 
 def test_start_spec_model_is_bound_before_startup_cmd(fake_tmux: FakeTmux):
@@ -158,6 +318,7 @@ def test_start_spec_additional_workspace_dirs_are_bound_before_startup_cmd(
 def test_adapter_startup_model_is_enough_to_skip_codex_runtime_picker(
     fake_tmux: FakeTmux,
 ):
+    # When startup_model is already set on the adapter, start() must not call set_model.
     fake_tmux.queue_pane(CODEX_IDLE_MINI)
     hs = _make_session(CodexAdapter(startup_model="gpt-5.4-mini"))
 
@@ -172,6 +333,7 @@ def test_adapter_startup_model_is_enough_to_skip_codex_runtime_picker(
 
 
 def test_set_model_accepts_codex_startup_selected_model(fake_tmux: FakeTmux):
+    # Codex startup_model already active → set_model returns ok without any send_keys.
     hs = _make_session(CodexAdapter(startup_model="gpt-5.4-mini"))
 
     result = asyncio.run(hs.set_model("gpt-5.4-mini", "medium"))
@@ -180,7 +342,12 @@ def test_set_model_accepts_codex_startup_selected_model(fake_tmux: FakeTmux):
     assert fake_tmux.calls_to("send_keys") == []
 
 
+# ── idle gate ────────────────────────────────────────────────────────────────
+
+
 def test_start_success_sets_first_send_idle_gate(fake_tmux: FakeTmux):
+    # _first_send_idle_gate_pending is the only observable for "gate was armed".
+    # Behavioral consequence is verified by test_first_send_prompt_waits_for_idle.
     fake_tmux.queue_pane(CC_IDLE)
     hs = _make_session(ClaudeCodeAdapter())
 
@@ -189,130 +356,9 @@ def test_start_success_sets_first_send_idle_gate(fake_tmux: FakeTmux):
     assert hs._first_send_idle_gate_pending is True
 
 
-def test_start_success_polls_capture_pane_for_ready(fake_tmux: FakeTmux):
-    # startup_ready loop must call capture_pane at least once
-    fake_tmux.queue_pane(CC_IDLE)
-    hs = _make_session(ClaudeCodeAdapter())
-    asyncio.run(hs.start(_start_spec()))
-
-    assert "capture_pane" in fake_tmux.call_names()
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# start() — failure paths
-# ─────────────────────────────────────────────────────────────────────────────
-
-
-def test_start_ready_timeout_returns_fail_result(fake_tmux: FakeTmux):
-    # Queue a non-ready pane; with ready_timeout_s=0.4 only 1 attempt is made
-    fake_tmux.queue_pane("$ ")  # no CC banner → is_ready=False
-    hs = _make_session(ClaudeCodeAdapter())
-
-    result = asyncio.run(hs.start(_start_spec()))
-
-    assert not result.ok
-    assert result.message is not None
-    assert "not ready in time" in result.message
-
-
-def test_start_tmux_error_during_ready_poll_returns_fail_result(fake_tmux: FakeTmux):
-    # TmuxError from capture_pane → "Session lost during startup"
-    fake_tmux.queue_error("pane exited")
-    hs = _make_session(ClaudeCodeAdapter())
-
-    result = asyncio.run(hs.start(_start_spec()))
-
-    assert not result.ok
-    assert result.message is not None
-    assert "Session lost during startup" in result.message
-
-
-def test_start_with_startup_model_calls_set_model(fake_tmux: FakeTmux):
-    # Cursor supports runtime model selection via set_model → True
-    fake_tmux.queue_pane("  → Plan, search, build anything\n  Composer 2.5   Auto-run\n  ~/repo · main")
-    adapter = CursorAdapter(startup_model="gpt-5.5")
-    hs = _make_session(adapter)
-
-    result = asyncio.run(hs.start(_start_spec(model="gpt-5.5")))
-
-    # set_model for Cursor calls send_keys with "/model gpt-5.5"
-    send_calls = fake_tmux.calls_to("send_keys")
-    model_cmds = [args[1] for args, _ in send_calls if "/model" in args[1]]
-    assert len(model_cmds) >= 1, "Expected at least one /model command"
-
-
-def test_cursor_default_composer_startup_skips_runtime_model_selection(fake_tmux: FakeTmux):
-    fake_tmux.queue_pane("  → Plan, search, build anything\n  Composer 2.5   Auto-run\n  ~/repo · main")
-    adapter = CursorAdapter(startup_model="composer-2.5")
-    hs = _make_session(adapter)
-
-    result = asyncio.run(hs.start(_start_spec(model="composer-2.5")))
-
-    assert result.ok
-    send_texts = [args[1] for args, _ in fake_tmux.calls_to("send_keys")]
-    assert not any(text.startswith("/model") for text in send_texts)
-
-
-def test_start_set_model_fail_returns_fail_result(fake_tmux: FakeTmux):
-    # Unknown CC model ids fail before the startup prompt is sent.
-    fake_tmux.queue_pane(CC_IDLE)
-    adapter = ClaudeCodeAdapter()
-    hs = _make_session(adapter)
-    spec = HarnessStartSpec(
-        cwd=Path("/tmp/repo"),
-        startup_model="not-a-claude-model",
-        ready_timeout_s=0.4,
-        poll_interval_s=0.4,
-    )
-
-    result = asyncio.run(hs.start(spec))
-
-    assert not result.ok
-    assert "failed to select runtime model" in (result.message or "")
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# send_prompt() — idle gate
-# ─────────────────────────────────────────────────────────────────────────────
-
-
-def test_first_send_prompt_waits_for_idle(fake_tmux: FakeTmux):
-    # After start(), _first_send_idle_gate_pending=True; first send_prompt
-    # must call capture_pane before send_keys.
-    fake_tmux.queue_pane(CC_IDLE)
-    hs = _make_session(ClaudeCodeAdapter())
-    asyncio.run(hs.start(_start_spec()))
-    fake_tmux.calls.clear()
-
-    fake_tmux.queue_pane(CC_IDLE)  # wait_idle poll
-    asyncio.run(hs.send_prompt("hello world"))
-
-    names = fake_tmux.call_names()
-    # capture_pane (idle check) must precede send_keys
-    assert "capture_pane" in names
-    assert "send_keys" in names
-    assert names.index("capture_pane") < names.index("send_keys")
-
-
-def test_first_send_prompt_waits_for_stable_input_ready(fake_tmux: FakeTmux):
-    fake_tmux.queue_pane(CC_IDLE)
-    hs = _make_session(ClaudeCodeAdapter())
-    asyncio.run(hs.start(_start_spec()))
-    fake_tmux.calls.clear()
-
-    fake_tmux.reset_queue()
-    fake_tmux.queue_pane(CC_BUSY)
-    fake_tmux.queue_pane(CC_IDLE)
-    fake_tmux.queue_pane(CC_IDLE)
-
-    result = asyncio.run(hs.send_prompt("hello world"))
-
-    assert result.ok
-    names = fake_tmux.call_names()
-    assert names[:4] == ["capture_pane", "capture_pane", "capture_pane", "send_keys"]
-
-
 def test_first_send_prompt_clears_gate(fake_tmux: FakeTmux):
+    # _first_send_idle_gate_pending is the only direct observable for gate clearance;
+    # the behavioral complement is test_second_send_prompt_skips_idle_poll.
     fake_tmux.queue_pane(CC_IDLE)
     hs = _make_session(ClaudeCodeAdapter())
     asyncio.run(hs.start(_start_spec()))
@@ -324,6 +370,7 @@ def test_first_send_prompt_clears_gate(fake_tmux: FakeTmux):
 
 
 def test_second_send_prompt_skips_idle_poll(fake_tmux: FakeTmux):
+    # Gate cleared after first send — second send goes straight to send_keys.
     fake_tmux.queue_pane(CC_IDLE)
     hs = _make_session(ClaudeCodeAdapter())
     asyncio.run(hs.start(_start_spec()))
@@ -351,16 +398,6 @@ def test_send_prompt_without_start_skips_gate(fake_tmux: FakeTmux):
     assert "capture_pane" not in names
 
 
-def test_send_prompt_passes_text_to_send_keys(fake_tmux: FakeTmux):
-    hs = _make_session(ClaudeCodeAdapter())
-
-    asyncio.run(hs.send_prompt("implement feature X"))
-
-    send_calls = fake_tmux.calls_to("send_keys")
-    texts = [args[1] for args, _ in send_calls]
-    assert "implement feature X" in texts
-
-
 def test_send_prompt_idle_timeout_returns_fail_result(fake_tmux: FakeTmux):
     # Gate pending but wait_idle times out (only 1 attempt with 0.4s timeout)
     fake_tmux.queue_pane(CC_IDLE)
@@ -378,6 +415,7 @@ def test_send_prompt_idle_timeout_returns_fail_result(fake_tmux: FakeTmux):
 
 
 def test_codex_first_send_startup_busy_pane_does_not_send(fake_tmux: FakeTmux):
+    # Gate active + busy pane → prompt never reaches send_keys; gate stays armed.
     hs = _make_session(CodexAdapter())
     hs.require_first_send_idle_gate()
     fake_tmux.queue_pane(CODEX_STARTUP)
@@ -391,6 +429,7 @@ def test_codex_first_send_startup_busy_pane_does_not_send(fake_tmux: FakeTmux):
 
 
 def test_codex_first_send_idle_pane_sends_and_clears_gate(fake_tmux: FakeTmux):
+    # Gate active + idle pane → prompt sent, gate cleared.
     hs = _make_session(CodexAdapter())
     hs.require_first_send_idle_gate()
     fake_tmux.queue_pane(CODEX_IDLE)
@@ -406,17 +445,7 @@ def test_codex_first_send_idle_pane_sends_and_clears_gate(fake_tmux: FakeTmux):
     assert "Enter" in texts
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# wait_idle() — timeout and TmuxError branches
-# ─────────────────────────────────────────────────────────────────────────────
-
-
-def test_wait_idle_succeeds_on_idle_pane(fake_tmux: FakeTmux):
-    hs = _make_session(ClaudeCodeAdapter())
-    fake_tmux.queue_pane(CC_IDLE)
-
-    result = asyncio.run(hs.wait_idle(timeout_s=0.4))
-    assert result.ok
+# ── wait_idle() / wait_ready() ───────────────────────────────────────────────
 
 
 def test_wait_idle_timeout_returns_fail_result(fake_tmux: FakeTmux):
@@ -439,19 +468,6 @@ def test_wait_idle_tmux_error_returns_fail_result(fake_tmux: FakeTmux):
     assert "Session lost during idle-wait" in (result.message or "")
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# wait_ready()
-# ─────────────────────────────────────────────────────────────────────────────
-
-
-def test_wait_ready_succeeds_on_ready_pane(fake_tmux: FakeTmux):
-    hs = _make_session(ClaudeCodeAdapter())
-    fake_tmux.queue_pane(CC_IDLE)
-
-    result = asyncio.run(hs.wait_ready(timeout_s=0.4))
-    assert result.ok
-
-
 def test_wait_ready_timeout_returns_fail_result(fake_tmux: FakeTmux):
     hs = _make_session(ClaudeCodeAdapter())
     fake_tmux.queue_pane("$ ")  # not ready
@@ -472,28 +488,7 @@ def test_wait_ready_tmux_error_returns_fail_result(fake_tmux: FakeTmux):
     assert "Session lost during ready-wait" in (result.message or "")
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# interrupt() — delegates to adapter (CC sends Escape, not Ctrl+C)
-# ─────────────────────────────────────────────────────────────────────────────
-
-
-def test_interrupt_calls_adapter_escape(fake_tmux: FakeTmux):
-    hs = _make_session(ClaudeCodeAdapter())
-
-    result = asyncio.run(hs.interrupt())
-
-    assert result.ok
-    send_calls = fake_tmux.calls_to("send_keys")
-    assert len(send_calls) == 1
-    (session_arg, keys), kw = send_calls[0]
-    assert session_arg == "test-session"
-    assert keys == "Escape"
-    assert kw == {"literal": False, "enter": False}
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# set_model() — capability routing
-# ─────────────────────────────────────────────────────────────────────────────
+# ── set_model() — capability routing ─────────────────────────────────────────
 
 
 def test_set_model_fails_for_non_runtime_selectable_adapter(fake_tmux: FakeTmux):
@@ -508,9 +503,7 @@ def test_set_model_fails_for_non_runtime_selectable_adapter(fake_tmux: FakeTmux)
 def test_set_model_succeeds_when_model_matches_startup(fake_tmux: FakeTmux):
     adapter = ClaudeCodeAdapter()
     hs = _make_session(adapter)
-    fake_tmux.queue_pane(
-        "Claude Code v2.1.150\nHaiku 4.5 with medium effort · Claude Pro\n❯ \n"
-    )
+    fake_tmux.queue_pane("Claude Code v2.1.150\nHaiku 4.5 with medium effort · Claude Pro\n❯ \n")
 
     result = asyncio.run(hs.set_model("haiku"))
 
@@ -531,9 +524,7 @@ def test_set_model_cursor_sends_slash_model_command(fake_tmux: FakeTmux):
     assert any("/model gpt-5.5" in t for t in texts)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# status_from_pane() — pure function, no tmux I/O
-# ─────────────────────────────────────────────────────────────────────────────
+# ── status_from_pane() — pure function, no tmux I/O ─────────────────────────
 
 
 def test_status_from_idle_pane(fake_tmux: FakeTmux):
@@ -554,9 +545,7 @@ def test_status_from_busy_pane(fake_tmux: FakeTmux):
     assert state.busy is True
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# initialize_defaults() — trust dialog and auto-run
-# ─────────────────────────────────────────────────────────────────────────────
+# ── initialize_defaults() — trust dialog and auto-run ────────────────────────
 
 
 def test_cc_start_dismisses_trust_dialog(fake_tmux: FakeTmux):
@@ -567,7 +556,7 @@ def test_cc_start_dismisses_trust_dialog(fake_tmux: FakeTmux):
 
     fake_tmux.queue_pane(cc_trust)  # _wait_startup_ready: is_ready=True (banner present)
     fake_tmux.queue_pane(cc_trust)  # initialize_defaults: first poll sees dialog
-    fake_tmux.queue_pane(CC_IDLE)   # initialize_defaults: after "1", polls as idle
+    fake_tmux.queue_pane(CC_IDLE)  # initialize_defaults: after "1", polls as idle
     # wait_idle at the end of _configure_started_session → CC_IDLE (repeated)
 
     hs = _make_session(ClaudeCodeAdapter())
@@ -614,9 +603,7 @@ def test_cursor_send_prompt_clears_input_before_typing(fake_tmux: FakeTmux):
     assert send_calls[1][1] == {"literal": True, "enter": True}
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Codex send_prompt override — Tab+Enter submit path
-# ─────────────────────────────────────────────────────────────────────────────
+# ── Codex send_prompt override — Tab+Enter submit path ───────────────────────
 
 
 def test_codex_small_prompt_uses_send_keys_with_tab_enter(fake_tmux: FakeTmux):
@@ -664,6 +651,7 @@ gpt-5.5 medium · ~/repo
 def test_codex_small_prompt_retries_when_wrapped_prompt_stays_in_composer(
     fake_tmux: FakeTmux,
 ):
+    # Prompt wraps to two lines in the composer; retry logic must detect it.
     adapter = CodexAdapter()
     prompt = "Write a Python function that checks if a number is prime using trial division"
     live_prompt = """
@@ -730,6 +718,7 @@ def test_codex_large_prompt_uses_paste_buffer_chunks(fake_tmux: FakeTmux):
 
 
 def test_codex_large_prompt_all_chunks_sum_to_original(fake_tmux: FakeTmux):
+    # Chunked paste must be lossless — all pieces reassemble to the original text.
     adapter = CodexAdapter()
     large_prompt = "abc" * 400  # 1200 bytes
     asyncio.run(adapter.send_prompt("test-session", large_prompt))

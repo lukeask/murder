@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import Any, cast
 
@@ -74,15 +75,18 @@ def test_build_summary_prompt_uses_segments_prior_condensed_and_state() -> None:
     assert payload["segments"][2]["title"] == "sed -n transcripts/core.py"
 
 
-@pytest.mark.asyncio
-async def test_summarize_segments_uses_stubbed_provider_without_network() -> None:
+def test_summarize_segments_uses_stubbed_provider_without_network() -> None:
     provider = StubSummaryProvider("Agent added a deterministic summarizer test.")
 
-    summary = await summarize_transcript(
-        prior_condensed="Agent read the plan.",
-        state="awaiting_input",
-        segments=[{"type": "assistant", "phase": "final", "text": "Tests pass.", "elapsed": None}],
-        provider=provider,
+    summary = asyncio.run(
+        summarize_transcript(
+            prior_condensed="Agent read the plan.",
+            state="awaiting_input",
+            segments=[
+                {"type": "assistant", "phase": "final", "text": "Tests pass.", "elapsed": None}
+            ],
+            provider=provider,
+        )
     )
 
     assert summary == "Agent added a deterministic summarizer test."
@@ -93,8 +97,7 @@ async def test_summarize_segments_uses_stubbed_provider_without_network() -> Non
     assert payload["segments"][0]["text"] == "Tests pass."
 
 
-@pytest.mark.asyncio
-async def test_summarize_doc_returns_copy_with_condensed() -> None:
+def test_summarize_doc_returns_copy_with_condensed() -> None:
     provider = StubSummaryProvider("Agent is waiting for input after finishing.")
     doc = {
         "harness": "codex",
@@ -103,7 +106,7 @@ async def test_summarize_doc_returns_copy_with_condensed() -> None:
         "segments": [{"type": "assistant", "phase": "final", "text": "Done.", "elapsed": "13s"}],
     }
 
-    updated = await summarize_doc(doc, provider=provider)
+    updated = asyncio.run(summarize_doc(doc, provider=provider))
 
     assert updated is not doc
     assert updated["condensed"] == "Agent is waiting for input after finishing."

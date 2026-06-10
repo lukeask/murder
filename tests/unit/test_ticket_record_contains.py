@@ -1,7 +1,15 @@
+"""Tests for the Mapping-like __contains__ contract on persistence records.
+
+All four record types expose __contains__ as part of a dict-compatible
+protocol. One parametrized test pins the shared contract: field membership,
+missing-field rejection, and non-string key rejection.
+"""
+
 from __future__ import annotations
 
-import murder.state.persistence.tickets as _tickets  # noqa: F401 — break records ↔ tickets cycle
+import pytest
 
+import murder.state.persistence.tickets as _tickets  # noqa: F401 — break records ↔ tickets cycle
 from murder.state.persistence.records import (
     ChecklistItemRecord,
     CommandRecord,
@@ -11,15 +19,12 @@ from murder.state.persistence.records import (
 from murder.work.tickets.status import TicketStatus
 
 
-def test_checklist_item_record_contains() -> None:
-    record = ChecklistItemRecord(id=0, ord=0, text="item", done=False)
-    assert "text" in record
-    assert "nonexistent_field_xyz" not in record
-    assert 0 not in record
+def _make_checklist_item() -> ChecklistItemRecord:
+    return ChecklistItemRecord(id=0, ord=0, text="item", done=False)
 
 
-def test_ticket_record_contains() -> None:
-    record = TicketRecord(
+def _make_ticket() -> TicketRecord:
+    return TicketRecord(
         id="t001",
         title="dummy",
         status=TicketStatus.READY,
@@ -33,13 +38,10 @@ def test_ticket_record_contains() -> None:
         skills=(),
         checklist=(),
     )
-    assert "schedule_at" in record
-    assert "nonexistent_field_xyz" not in record
-    assert 0 not in record
 
 
-def test_command_record_contains() -> None:
-    record = CommandRecord(
+def _make_command() -> CommandRecord:
+    return CommandRecord(
         id="",
         created_at="",
         updated_at="",
@@ -60,13 +62,10 @@ def test_command_record_contains() -> None:
         result_json=None,
         last_error=None,
     )
-    assert "status" in record
-    assert "nonexistent_field_xyz" not in record
-    assert 0 not in record
 
 
-def test_escalation_record_contains() -> None:
-    record = EscalationRecord(
+def _make_escalation() -> EscalationRecord:
+    return EscalationRecord(
         id=0,
         ts="",
         ticket_id=None,
@@ -78,6 +77,18 @@ def test_escalation_record_contains() -> None:
         resolved_at=None,
         source_event_id=None,
     )
-    assert "reason" in record
+
+
+@pytest.mark.parametrize(
+    "record, present_field",
+    [
+        (_make_checklist_item(), "text"),
+        (_make_ticket(), "schedule_at"),
+        (_make_command(), "status"),
+        (_make_escalation(), "reason"),
+    ],
+)
+def test_record_contains_present_field_not_missing_not_nonstring(record, present_field) -> None:
+    assert present_field in record
     assert "nonexistent_field_xyz" not in record
     assert 0 not in record
