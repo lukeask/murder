@@ -40,7 +40,7 @@ import type { JSX } from 'react';
 import type { Mode, ModeStoreApi } from '../input/modeStore.js';
 import type { DialogActions } from '../store/dialogs/dialogActions.js';
 import { toastStore } from '../store/toast/toastStore.js';
-import { theme } from '../theme.js';
+import { useTheme } from '../theme/themeStore.js';
 import { deleteLastChar, insertChar, TextInput } from './TextInput.js';
 
 // Import the dispatcher augmentation so Mode gets the `onUncaptured` field at the TS level.
@@ -242,6 +242,7 @@ function NewPlanDialog({
   readonly activeField: number;
   readonly error: string | null;
 }): JSX.Element {
+  const theme = useTheme();
   return (
     <Box
       flexDirection="column"

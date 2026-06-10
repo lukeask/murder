@@ -39,7 +39,7 @@ import {
   type ToastSeverity,
   toastStore,
 } from '../store/toast/toastStore.js';
-import { theme } from '../theme.js';
+import { useTheme } from '../theme/themeStore.js';
 
 /** How often the rack re-evaluates liveness while toasts are present. Fine-grained enough that a
  * toast disappears within a frame of its deadline; only runs while the rack is non-empty. */
@@ -53,6 +53,7 @@ function ToastRow({
   readonly severity: ToastSeverity;
   readonly text: string;
 }): JSX.Element {
+  const theme = useTheme();
   if (severity === 'error') {
     return <Text color={theme.error}>{text}</Text>;
   }

@@ -24,7 +24,7 @@
 import { Box, Text } from 'ink';
 import type { JSX } from 'react';
 import type { Mode, ModeStoreApi } from '../input/modeStore.js';
-import { theme } from '../theme.js';
+import { useTheme } from '../theme/themeStore.js';
 
 /** The choice a confirm dialog resolves to. */
 export type ConfirmChoice = 'confirm' | 'dismiss';
@@ -98,6 +98,7 @@ function ConfirmDialog({
   readonly confirmLabel: string;
   readonly dismissLabel: string;
 }): JSX.Element {
+  const theme = useTheme();
   return (
     <Box
       flexDirection="column"

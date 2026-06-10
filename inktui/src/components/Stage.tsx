@@ -72,7 +72,7 @@ import type { ConversationsState } from '../store/conversations/conversationsSli
 import type { OpenDoc } from '../store/docView/docViewSlice.js';
 import type { FavoritesState } from '../store/favorites/favoritesSlice.js';
 import type { RosterState } from '../store/roster/rosterSlice.js';
-import { theme } from '../theme.js';
+import { useTheme } from '../theme/themeStore.js';
 import { StageDocPane } from './DocPane.js';
 import { Pane } from './Pane.js';
 
@@ -109,6 +109,7 @@ const WINDOW = 20;
 /** One chat turn line. Speaker determines the color. (Ported verbatim from CrowChatPanel — the
  * formatting is the selector's; this is just the per-speaker color map + the `›`/`·` prefix.) */
 const TurnLine = memo(function TurnLine({ turn }: { readonly turn: ChatTurn }): JSX.Element {
+  const theme = useTheme();
   const color =
     turn.speaker === 'user'
       ? theme.success

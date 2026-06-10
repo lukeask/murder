@@ -40,7 +40,7 @@ import {
 import { SPAN_CLOSE, SPAN_OPEN } from '../input/chatInputStore.js';
 import { CHAT_FOCUS } from '../input/focusStore.js';
 import { useActiveAgent } from '../selectors/conversationsSelectors.js';
-import { theme } from '../theme.js';
+import { useTheme } from '../theme/themeStore.js';
 import { PaneBorderTop } from './paneBorder.js';
 import { TextInput } from './TextInput.js';
 
@@ -56,6 +56,7 @@ export function displayBuffer(text: string): string {
 }
 
 export const ChatInput = memo(function ChatInput(): React.JSX.Element {
+  const theme = useTheme();
   const ref = useFocusRef();
   const focused = useEffectiveFocus() === CHAT_FOCUS;
   useMeasureFocus(CHAT_FOCUS, ref);
