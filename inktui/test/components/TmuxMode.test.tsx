@@ -209,6 +209,10 @@ describe('alt+y dispatch — pure unit test (no rendering)', () => {
         newPlan: () => {},
         newTicket: () => {},
         openSettings: () => {},
+        keyHelp: () => {},
+        cycleTargetPrev: () => {},
+        cycleTargetNext: () => {},
+        toggleTargetPane: () => {},
       },
       activeMode: null,
     };

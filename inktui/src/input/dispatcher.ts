@@ -104,6 +104,18 @@ export interface GlobalHandlers {
   newTicket(): void;
   /** `alt+o` / `ctrl+o` (the `global.settings` action): open the settings modal (wired by Phase 5). */
   openSettings(): void;
+  /** `?` (the `global.keyHelp` action): open the keybinding help overlay (item 12). Fires only when
+   * chat is NOT focused (so a literal `?` typed into the chat field is never stolen). */
+  keyHelp(): void;
+  /** `alt+h`/`ctrl+h` (`global.cycleTargetPrev`): cycle the chat target to the previous one. Fires
+   * ONLY while chat has focus — otherwise alt+h is geometric panel nav (item 9 super-chords). */
+  cycleTargetPrev(): void;
+  /** `alt+l`/`ctrl+l` (`global.cycleTargetNext`): cycle the chat target to the next one. Chat-focus
+   * only (item 9 super-chords). */
+  cycleTargetNext(): void;
+  /** `alt+w`/`ctrl+w` (`global.toggleTargetPane`): toggle the current chat target's pane. Chat-focus
+   * only (item 9 super-chords). */
+  toggleTargetPane(): void;
 }
 
 /**
@@ -186,12 +198,41 @@ function dispatchGlobalChord(
   focusedId: FocusId,
   bindings: ResolvedBindings,
 ): boolean {
+  // Item 12: the keybinding help overlay (`global.keyHelp`, a *plain* `?` — no command modifier, so it
+  // is reachable in every terminal). It claims the event ONLY when chat is NOT focused, so a literal
+  // `?` typed into the chat field is never stolen (chat-focused `?` falls through to layer 2). Checked
+  // before the command-modifier gate precisely because it is a plain key, not a command chord.
+  if (focusedId !== CHAT_FOCUS && bindings.matches('global.keyHelp', input, key)) {
+    handlers.keyHelp();
+    return true;
+  }
+
   // The command modifier (alt by default; ctrl/both via settings) gates the whole layer. The
   // registry knows which flag(s) qualify, so this is no longer a hardcoded `key.meta` — but the
   // safety property is unchanged: the command modifier is never set by plain typing, so checking
   // these first can't swallow a typed character.
   if (!bindings.isCommandModified(key)) {
     return false;
+  }
+
+  // Item 9 super-chords — chat-target cycling + pane toggle, active ONLY while the chat input has
+  // focus. Gated here (the chat-focus branch of the global layer), NOT as unconditional globals,
+  // because away from chat the same `alt+h`/`alt+l` are geometric panel nav (handled just below by
+  // VIM_NAV) and `alt+w` is unbound. Checked before VIM_NAV so the cycle chords win over nav while
+  // typing a message.
+  if (focusedId === CHAT_FOCUS) {
+    if (bindings.matches('global.cycleTargetPrev', input, key)) {
+      handlers.cycleTargetPrev();
+      return true;
+    }
+    if (bindings.matches('global.cycleTargetNext', input, key)) {
+      handlers.cycleTargetNext();
+      return true;
+    }
+    if (bindings.matches('global.toggleTargetPane', input, key)) {
+      handlers.toggleTargetPane();
+      return true;
+    }
   }
 
   // <mod>+<n>: panel toggle/focus. `panelForDigit` returns null for reserved/unbound digits → no-op.

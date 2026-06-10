@@ -52,6 +52,10 @@ export type ActionId =
   | 'global.newPlan' // alt+p — open the new-plan popup
   | 'global.newTicket' // alt+t — open the new-ticket popup
   | 'global.settings' // alt+o / ctrl+o — open the settings modal
+  | 'global.keyHelp' // ? — open the keybinding help overlay (see the ACTIONS note on reachability)
+  | 'global.cycleTargetPrev' // alt+h / ctrl+h — cycle the chat target to the previous one (chat-focus only)
+  | 'global.cycleTargetNext' // alt+l / ctrl+l — cycle the chat target to the next one (chat-focus only)
+  | 'global.toggleTargetPane' // alt+w / ctrl+w — toggle the current chat target's pane (chat-focus only)
   | 'panel.star'; // alt+f — favorite/star the focused panel's cursor row
 
 /**
@@ -77,6 +81,11 @@ export interface ActionDef {
 /** Sugar for a command-modified default. */
 function command(key: string): BindingSpec {
   return { kind: 'command', key };
+}
+
+/** Sugar for a plain (modifier-independent) default. */
+function plain(chord: KeyChord): BindingSpec {
+  return { kind: 'plain', chord };
 }
 
 /**
@@ -128,6 +137,49 @@ export const ACTIONS: Readonly<Record<ActionId, ActionDef>> = {
     default: command('o'),
     description: 'settings',
     rebindable: false,
+  },
+  'global.keyHelp': {
+    id: 'global.keyHelp',
+    // Item 12 wanted `super+/` (command('/')). WHY PLAIN '?' INSTEAD (flagged for arbitration):
+    // alt+/ is UNREACHABLE on the legacy/alt path — Ink's `metaKeyCodeRe = /^\x1b([a-zA-Z0-9])$/`
+    // only sets `key.meta` for an ESC-prefixed *alphanumeric*, so alt+/ parses as a bare `/` with
+    // `meta:false` (the same live finding that moved `global.settings` off ','). command('/') would
+    // therefore only resolve under the ctrl/kitty modifier (ctrl+/ rides the side-channel), leaving
+    // help unreachable for the *default* alt modifier — the majority case. A `plain` binding sidesteps
+    // the modifier entirely: bare `?` is reachable in every terminal under every modifier setting. The
+    // dispatcher gates it to the global layer ONLY when chat is NOT focused, so a literal `?` typed
+    // into the chat field is never stolen. `?` is the conventional help key and matches the spec's own
+    // "slash and `?` share a key" framing. Not rebindable (its reach property is intrinsic to the key).
+    default: plain({ input: '?' }),
+    description: 'help',
+    rebindable: false,
+  },
+  'global.cycleTargetPrev': {
+    id: 'global.cycleTargetPrev',
+    // Item 9 super-chords: alt+h / ctrl+h — cycle the chat target to the previous one. Active ONLY
+    // while the chat input has focus (otherwise alt+h is geometric panel nav); the dispatcher gates
+    // this in the chat-focus branch of the global layer, NOT as an unconditional global.
+    default: command('h'),
+    description: 'prev target',
+    rebindable: true,
+  },
+  'global.cycleTargetNext': {
+    id: 'global.cycleTargetNext',
+    // alt+l / ctrl+l — cycle the chat target to the next one. Chat-focus only (see cycleTargetPrev).
+    default: command('l'),
+    description: 'next target',
+    rebindable: true,
+  },
+  'global.toggleTargetPane': {
+    id: 'global.toggleTargetPane',
+    // Item 9: toggle the current chat target's pane from the chat box. The plan suggested command('o')
+    // but 'o' is TAKEN by `global.settings` (and the plan's proposed fix — moving settings to ',' — is
+    // itself unreachable, the alt+, problem). 'w' (mnemonic: toggle the chat *window*/pane) is
+    // unclaimed by any other action, reachable under both alt (alt+w) and ctrl (ctrl+w rides a clean
+    // control byte 0x17), and is not a panel-local plain key. Chat-focus only. FLAGGED for arbitration.
+    default: command('w'),
+    description: 'toggle pane',
+    rebindable: true,
   },
   'panel.star': {
     id: 'panel.star',

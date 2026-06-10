@@ -52,6 +52,25 @@ describe('selectBottomBar', () => {
     expect(hints.find((h) => h.description === 'star')?.key).toBe('return');
   });
 
+  it('pins a right-aligned help hint (item 12) on the normal bar, labelled from the binding', () => {
+    const chatHints = selectBottomBar(CHAT_FOCUS, undefined, DEFAULT_BINDINGS);
+    const panelHints = selectBottomBar('plans', keymap, DEFAULT_BINDINGS);
+    for (const hints of [chatHints, panelHints]) {
+      const help = hints.find((h) => h.description === 'help');
+      expect(help).toBeDefined();
+      expect(help?.align).toBe('right');
+      // The label is the resolved global.keyHelp binding (a plain ?).
+      expect(help?.key).toBe(DEFAULT_BINDINGS.label('global.keyHelp'));
+    }
+  });
+
+  it('omits the help hint when a mode owns the bar (a modal has its own keys)', () => {
+    const hints = selectBottomBar('plans', keymap, DEFAULT_BINDINGS, [
+      { key: 'esc', description: 'quit' },
+    ]);
+    expect(hints.find((h) => h.description === 'help')).toBeUndefined();
+  });
+
   it('mode hints replace the panel keys (globals still lead) when a mode owns the bar', () => {
     const modeHints = [
       { key: 'j/k', description: 'nav' },

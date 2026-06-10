@@ -54,7 +54,12 @@ import type { ChatInputHandler } from '../input/dispatcher.js';
 import { selectActiveMode } from '../input/modeStore.js';
 import type { PanelId } from '../input/panels.js';
 import type { UsageTier } from '../layout/budget.js';
-import { selectActiveAgentId } from '../selectors/conversationsSelectors.js';
+import { deriveAgentIdentity } from '../selectors/agentIdentity.js';
+import {
+  isChatPaneOpen,
+  selectActiveAgentId,
+  selectCycledTarget,
+} from '../selectors/conversationsSelectors.js';
 import { createHarnessModelsActions } from '../store/dialogs/harnessModelsActions.js';
 import { createSpawnActions } from '../store/dialogs/spawnActions.js';
 import { createWorktreeOptionsActions } from '../store/dialogs/worktreeOptionsActions.js';
@@ -71,6 +76,7 @@ import { setTheme } from '../theme/themeStore.js';
 import { BottomBar, useBottomBarLines } from './BottomBar.js';
 import { ChatInput } from './ChatInput.js';
 import { CrowsPanel } from './CrowsPanel.js';
+import { helpMode } from './HelpOverlay.js';
 import { NotesPanel } from './NotesPanel.js';
 import { Overlay, presentationHidesLayout } from './Overlay.js';
 import { PlansPanel } from './PlansPanel.js';
@@ -297,7 +303,7 @@ function Shell({
    * root input loop subscribes to it; omitted in smoke/tests (no shim → no side-channel chords). */
   readonly terminalEvents?: TerminalEvents | undefined;
 }): JSX.Element {
-  const { modes, chatInput, bindings } = useInputStores();
+  const { modes, chatInput, bindings, keymaps } = useInputStores();
   const appStore = useAppStoreApi();
   const bus = useBusClient();
   const loadFavorites = useAppStore((s) => s.actions.favorites.load);
@@ -460,6 +466,52 @@ function Shell({
     );
   };
 
+  // Item 12: `?` → open the keybinding help overlay. Reads the live resolved bindings + keymap
+  // registry at call time so the overlay reflects the current modifier/rebinds and the panels that
+  // are actually registered.
+  const keyHelpHandler = (): void => {
+    modes.getState().enter(helpMode(modes, bindings.getState().resolved, keymaps));
+  };
+
+  // Item 9 super-chords: cycle the chat target (prev/−1, next/+1). Cycle order = open chat panes
+  // (Stage order) then favorited crows whose panes are closed; landing on a closed-pane target opens
+  // it (per item 9). Reads the store imperatively at call time so it always sees current state.
+  const cycleTarget = (direction: 1 | -1): void => {
+    const state = appStore.getState();
+    const result = selectCycledTarget(
+      state.conversations,
+      state.roster,
+      state.favorites,
+      direction,
+    );
+    if (result === null) {
+      return;
+    }
+    const actions = state.actions.conversations;
+    if (result.needsOpen) {
+      actions.setChatPaneOpen(result.agentId, true);
+    }
+    actions.setActivePaneAgentId(result.agentId);
+  };
+
+  // Item 9 super-chord: toggle the current chat target's pane from the chat box.
+  const toggleTargetPaneHandler = (): void => {
+    const state = appStore.getState();
+    const agentId = selectActiveAgentId(state.conversations, state.roster, state.favorites);
+    if (agentId === null) {
+      return;
+    }
+    // `toggleChatPane` needs the current open state (it writes the opposite override). Derive it via
+    // the agent's identity so the kind-default favorite is honoured for an un-overridden pane.
+    const row = state.roster.rows.find((r) => r.agentId === agentId);
+    const identity = row === undefined ? null : deriveAgentIdentity(row);
+    const currentlyOpen =
+      identity === null
+        ? state.conversations.paneOverrides.get(agentId) === true
+        : isChatPaneOpen(identity, state.favorites, state.conversations.paneOverrides);
+    state.actions.conversations.toggleChatPane(agentId, currentlyOpen);
+  };
+
   // The single root input loop for the whole app (rule 5) — installed exactly once, here.
   // C13: `spawn` wired to the spawn wizard handler. C11: `chatInput` wired to the persistent
   // chat-input handler (buffers chars, sends on Enter to the active agent). Global ctrl-chords still
@@ -468,6 +520,10 @@ function Shell({
     {
       spawn: spawnHandler,
       openSettings: openSettingsHandler,
+      keyHelp: keyHelpHandler,
+      cycleTargetPrev: () => cycleTarget(-1),
+      cycleTargetNext: () => cycleTarget(1),
+      toggleTargetPane: toggleTargetPaneHandler,
       chatInput: makeChatInputHandler(chatInput, appStore, imageDraft),
     },
     terminalEvents,
