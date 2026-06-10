@@ -10,6 +10,7 @@ Mirrors tests/fixtures/transcripts/SCHEMA.md.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Literal, TypedDict
 
 
@@ -76,6 +77,28 @@ Segment = (
     | AgentEventSegment
     | ChoicePromptSegment
 )
+
+@dataclass(slots=True)
+class SpannedSegment:
+    """A parsed segment plus the absolute scrollback line range it came from.
+
+    The span is internal-only commitment metadata: ``[start, end)`` in the
+    accumulator's absolute (epoch-relative) line coordinates, plus the epoch the
+    coordinates belong to. It never reaches ``to_dict`` / the bus payload — the
+    accumulator strips it. ``end == start`` (an empty range) marks a pinned
+    injected segment (e.g. a live choice prompt) that has no backing scrollback
+    lines; commitment treats pinned segments as always-provisional.
+    """
+
+    segment: Segment
+    start: int
+    end: int
+    epoch: int = 0
+
+    @property
+    def pinned(self) -> bool:
+        return self.end <= self.start
+
 
 # Canonical list of segment `type` discriminants.
 SEGMENT_TYPES: tuple[str, ...] = (

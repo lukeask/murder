@@ -190,7 +190,7 @@ class TestCodexAdapter:
 
         assert cmd[cmd.index("--add-dir") + 1] == "/tmp/repo/.murder/tickets"
 
-    # ── "busy" fixture — known gap: • Working is not detected ─────────────────
+    # ── "busy" fixture — • Working is detected via bullet-aware _BUSY_RE ───────
 
     def test_codex_bullet_working_is_busy(self):
         # "• Working (0s • esc to interrupt)" is detected via bullet-aware _BUSY_RE

@@ -1,14 +1,18 @@
 """Maps harness kind to grammar plugin module.
 
-The grammar module protocol (duck-typed, not a formal Protocol class):
-  parse_lines(lines, system_prompt=None, user_texts=None) -> list[Segment]
-  is_idle(pane_text) -> bool
+The grammar module protocol (duck-typed, not a formal Protocol class). Required
+callables, all invoked by ``TranscriptAccumulator.feed`` / ``to_dict``:
+  parse_spanned(lines, system_prompt=None, user_texts=None) -> list[SpannedSegment]
+      the parse: each segment carries its absolute scrollback span. (Grammars
+      also expose a span-stripped ``parse_lines`` projection for callers that
+      want bare segments, but the accumulator only calls ``parse_spanned``.)
+  is_idle(pane_text) -> bool                  is the pane awaiting input?
   detect_live_choice_prompt(frame) -> MultipleChoicePrompt | None
   close_last_turn(segments) -> None  (mutates in place; called at idle)
 
-Optional module attributes:
-  WANTS_ANSI: bool          capture the pane with SGR escapes (tmux -e)
+Optional hooks / attributes (probed with ``hasattr`` / ``getattr``):
   preprocess_frame(frame) -> str   transform a raw frame before scrollback
+  WANTS_ANSI: bool                 capture the pane with SGR escapes (tmux -e)
 
 No harness adapter is imported at module level here, keeping the
 transcripts package free of circular imports with adapters.
