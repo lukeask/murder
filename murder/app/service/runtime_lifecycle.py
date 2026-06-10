@@ -7,6 +7,8 @@ import contextlib
 
 from murder.runtime.agents.base import AgentStatus, LifecycleParticipant
 from murder.app.service.agent_registry import AgentRegistry
+from murder.runtime.terminal import tmux
+from murder.runtime.terminal.session_names import project_session_prefix
 
 
 async def shutdown_live_agents(
@@ -34,4 +36,20 @@ async def shutdown_live_agents(
     registry.clear()
 
 
-__all__ = ["shutdown_live_agents"]
+async def kill_project_tmux_sessions(scope: object) -> list[str]:
+    """Kill every tmux session owned by this murder project.
+
+    This is the authoritative service-stop sweep. Registered agents are stopped
+    first; this catches any project-scoped sessions that are no longer in the
+    in-memory registry.
+    """
+    prefix = project_session_prefix(scope)  # type: ignore[arg-type]
+    sessions = await tmux.list_sessions(prefix=prefix)
+    await asyncio.gather(
+        *(tmux.kill_session(session) for session in sessions),
+        return_exceptions=True,
+    )
+    return sessions
+
+
+__all__ = ["kill_project_tmux_sessions", "shutdown_live_agents"]

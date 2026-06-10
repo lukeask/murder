@@ -9,8 +9,8 @@ from enum import Enum
 from types import MappingProxyType, UnionType
 from typing import Any, ClassVar, Protocol, Union, get_args, get_origin, get_type_hints
 
-from murder.work.tickets.status import TicketStatus
 from murder.bus.protocol import BusEvent
+from murder.work.tickets.status import TicketStatus
 
 
 class CommandStatus(str, Enum):
@@ -66,7 +66,6 @@ class TicketSummary:
     id: str
     title: str
     status: TicketStatus
-    wave: int
     harness: str | None
     model: str | None
 
@@ -89,14 +88,32 @@ class TicketDetailSnapshot:
     id: str
     title: str
     status: TicketStatus
+    # Unified frontmatter-stripped markdown body the C8 editor renders and edits.
+    # Carries the `# Checklist` `[ ]`/`[x]` lines the editor toggles (newui-inktui C8,
+    # lines 164-167: "Ticket = frontmatter + body"; "Checklist rides in the body").
+    body: str
+    checklist: tuple[ChecklistItem, ...]
+    # Display-only frontmatter header fields the C8 editor shows above the body
+    # (line 244: harness+model are display-only; deps/worktree round out the header).
+    # Sourced from the ticket record (frontmatter persisted in the tickets table /
+    # ticket_deps). `worktree`/`harness`/`model` are nullable when the ticket omits them.
+    deps: tuple[str, ...]
+    harness: str | None
+    model: str | None
+    worktree: str | None
+    # Runtime state delivered alongside the doc (DB-only per line 165). The editor shows
+    # status; schedule_at backs the free-form schedule input (line 245).
+    schedule_at: str | None
+    # Legacy split sections retained for backward compatibility with existing consumers
+    # (the Textual client / older tests). Ink reads `body`; these mirror the same prose.
     plan_md: str
     working_notes_md: str
-    checklist: tuple[ChecklistItem, ...]
     as_of: datetime
     invalidation_key: str
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "checklist", tuple(self.checklist))
+        object.__setattr__(self, "deps", tuple(self.deps))
 
 
 @dataclass(frozen=True, slots=True)
@@ -149,6 +166,16 @@ class PlanSummary:
     status: str
     revision_count: int
     sync_state: str
+    # C11 plans panel render inputs (newui-inktui line 169 + C11 row 423):
+    #  - `parent`: parent plan's NAME (matched against another row) for 4-space
+    #    indentation; null/absent for a top-level plan. Sourced from the plan's
+    #    frontmatter `parent` key (the only non-derived parent metadata the store
+    #    holds); null when unset.
+    #  - `updated_at`: recency timestamp driving the effective-recency ordering.
+    #  - `char_count`: plan body size shown in the row.
+    parent: str | None = None
+    updated_at: datetime | None = None
+    char_count: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -207,7 +234,6 @@ class SchedulerDecisionSummary:
 class ScheduleTicketRow:
     id: str
     title: str
-    wave: int
     status: str
     last_update_at: datetime
     last_update_label: str
@@ -217,7 +243,10 @@ class ScheduleTicketRow:
     metadata_sync_state: str
     metadata_parse_error: str | None
     metadata_conflict_reason: str | None
-    deps_ok: bool
+    pending_dep_ids: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "pending_dep_ids", tuple(self.pending_dep_ids))
 
 
 @dataclass(frozen=True, slots=True)
@@ -279,7 +308,6 @@ class TicketRef:
 class TicketCarveSnapshot:
     ticket_id: str
     fields: Mapping[str, object]
-    wave_options: tuple[int, ...]
     dependency_options: tuple[TicketRef, ...]
 
     def __post_init__(self) -> None:

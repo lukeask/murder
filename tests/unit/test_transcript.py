@@ -535,6 +535,26 @@ def test_cc_multiline_brief_captured_as_single_user_turn():
         assert "architecture and interfaces" not in asst.get("text", "")
 
 
+def test_cc_slash_command_echo_is_not_a_user_turn():
+    """A ``❯ /model opus`` prompt echo is CC chrome (the harness echoing a slash
+    command), not a user turn — it must not produce a user segment. A real typed
+    question still does. Regression: the parse_spanned user branch emitted any
+    non-empty non-live ``❯`` line, resurrecting fake slash-command turns the old
+    parsing.py suppressed via _SLASH_COMMAND_RE."""
+    from murder.llm.harnesses.transcripts.grammar import claude_code as cc
+
+    slash = cc.parse_lines(["❯ /model opus", "● ok"])
+    assert [s for s in slash if s["type"] == "user"] == []
+
+    clear = cc.parse_lines(["❯ /clear", "● ok"])
+    assert [s for s in clear if s["type"] == "user"] == []
+
+    real = cc.parse_lines(["❯ what does this function do?", "● ok"])
+    real_users = [s for s in real if s["type"] == "user"]
+    assert len(real_users) == 1
+    assert "what does this function" in real_users[0]["text"]
+
+
 def _cursor_paint_user_blocks(frame: str, user_texts: list[str]) -> str:
     """Re-create Cursor's user-input background colour around the given lines.
 

@@ -1,16 +1,21 @@
+"""Tests for adapter-level model selection (``set_model``, ``parse_active_model_state``).
+
+COOKBOOK = canonical set_model flow per adapter (CC, Codex, Cursor, Antigravity, Pi).
+EDGE CASES = early-exit when model already selected, picker fallbacks, effort/reasoning
+             picker edge cases, Cursor page-scroll, startup-model trust, picker-mismatch.
+"""
+
 from __future__ import annotations
 
 import asyncio
 from pathlib import Path
 
-import pytest
-
 from murder.llm.harnesses.antigravity import AntigravityAdapter
 from murder.llm.harnesses.claude_code import ClaudeCodeAdapter
 from murder.llm.harnesses.codex import CodexAdapter
 from murder.llm.harnesses.cursor import CursorAdapter
-from murder.llm.harnesses.pi_harness import PiAdapter
 from murder.llm.harnesses.parsing import parse_antigravity_model_choices
+from murder.llm.harnesses.pi_harness import PiAdapter
 from tests.support.fake_tmux import FakeTmux
 
 _FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "harness_panes"
@@ -18,6 +23,7 @@ _FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "harness_panes"
 
 def _pane(name: str) -> str:
     return (_FIXTURES / name).read_text(encoding="utf-8")
+
 
 CC_MENU_OPUS_HIGH = """
 Select Model
@@ -77,6 +83,11 @@ CODEX_IDLE_MINI_LOW = """
 """
 
 
+# ============================================================
+# === COOKBOOK ===============================================
+# ============================================================
+
+
 def test_cc_active_model_state_from_chat_input() -> None:
     state = ClaudeCodeAdapter().parse_active_model_state(CC_IDLE_OPUS_MEDIUM)
 
@@ -91,14 +102,6 @@ def test_codex_active_model_state_from_bottom_left() -> None:
     assert state is not None
     assert state.model == "modelnamefoo"
     assert state.effort == "medium"
-
-
-def test_codex_active_model_state_allows_missing_effort() -> None:
-    state = CodexAdapter().parse_active_model_state(CODEX_IDLE_MINI_NO_EFFORT)
-
-    assert state is not None
-    assert state.model == "gpt-5.4-mini"
-    assert state.effort is None
 
 
 def test_cc_set_model_selects_model_and_adjusts_effort(fake_tmux: FakeTmux) -> None:
@@ -133,7 +136,59 @@ def test_codex_set_model_uses_picker_indices_then_reasoning_index(fake_tmux: Fak
     assert ("2", {"literal": True, "enter": False}) in sent
 
 
+def test_antigravity_set_model_navigates_picker(fake_tmux: FakeTmux) -> None:
+    fake_tmux.queue_pane(AGY_MODEL_PICKER)
+    fake_tmux.queue_pane(AGY_IDLE.replace("Gemini 3.1 Pro (Low)", "Gemini 3.5 Flash (Medium)"))
+
+    ok = asyncio.run(AntigravityAdapter().set_model("sess", "gemini-3-5-flash", effort="medium"))
+
+    assert ok is True
+    sent = [args[1] for args, _ in fake_tmux.calls_to("send_keys")]
+    assert "/model" in sent
+    assert "Up" in sent
+
+
+def test_pi_set_model_filters_picker_then_confirms(fake_tmux: FakeTmux) -> None:
+    fake_tmux.queue_pane(PI_MODEL_PICKER)
+    fake_tmux.queue_pane(PI_IDLE)
+
+    ok = asyncio.run(PiAdapter().set_model("sess", "deepseek/deepseek-v4-flash"))
+
+    assert ok is True
+    sent = [args[1] for args, _ in fake_tmux.calls_to("send_keys")]
+    assert "/model" in sent
+    assert "deepseek-v4-flash" in sent
+
+
+def test_cursor_set_composer_speed_tabs_until_slow(fake_tmux: FakeTmux) -> None:
+    idle_slow = CURSOR_IDLE_COMPOSER_FAST.replace("Fast", "Slow")
+    fake_tmux.queue_pane(CURSOR_COMPOSER_MENU_SLOW)
+    fake_tmux.queue_pane(idle_slow)
+    fake_tmux.queue_pane(idle_slow)
+
+    ok = asyncio.run(CursorAdapter().set_model("sess", "composer-2.5", effort="slow"))
+
+    assert ok
+    sent = [args[1] for args, _ in fake_tmux.calls_to("send_keys")]
+    assert "/model" in sent
+    assert "Composer 2.5" in sent
+
+
+# ============================================================
+# === EDGE CASES =============================================
+# ============================================================
+
+
+def test_codex_active_model_state_allows_missing_effort() -> None:
+    state = CodexAdapter().parse_active_model_state(CODEX_IDLE_MINI_NO_EFFORT)
+
+    assert state is not None
+    assert state.model == "gpt-5.4-mini"
+    assert state.effort is None
+
+
 def test_codex_set_model_accepts_existing_startup_model(fake_tmux: FakeTmux) -> None:
+    # Early-exit: active model already matches — no picker interaction expected.
     fake_tmux.queue_pane(CODEX_IDLE_FOO_MEDIUM)
 
     ok = asyncio.run(CodexAdapter().set_model("sess", "modelnamefoo", effort="medium"))
@@ -144,6 +199,7 @@ def test_codex_set_model_accepts_existing_startup_model(fake_tmux: FakeTmux) -> 
 
 
 def test_codex_set_model_accepts_existing_model_when_effort_missing(fake_tmux: FakeTmux) -> None:
+    # Active model matches but effort field is absent — still treated as a match.
     fake_tmux.queue_pane(CODEX_IDLE_MINI_NO_EFFORT)
 
     ok = asyncio.run(CodexAdapter().set_model("sess", "gpt-5.4-mini", effort="medium"))
@@ -237,6 +293,8 @@ def test_codex_set_model_applies_nondefault_effort_to_startup_model(
 
 
 def test_codex_set_model_trusts_startup_model_after_picker_mismatch(fake_tmux: FakeTmux) -> None:
+    # Picker confirms a different model than what was requested; fall back to
+    # startup-model trust rather than looping or failing.
     fake_tmux.queue_pane(CODEX_IDLE_FOO_MEDIUM)
     fake_tmux.queue_pane(CODEX_IDLE_FOO_MEDIUM)
     fake_tmux.queue_pane(CODEX_MODEL_PICKER.replace("modelnamefoo", "gpt-5.4-mini"))
@@ -328,14 +386,13 @@ PI_IDLE = """
 """
 
 
-@pytest.mark.asyncio
-async def test_cursor_collect_available_models_scrolls_pages(fake_tmux: FakeTmux) -> None:
+def test_cursor_collect_available_models_scrolls_pages(fake_tmux: FakeTmux) -> None:
     fake_tmux.queue_pane(CURSOR_MODEL_LIST_PAGE1)
     fake_tmux.queue_pane(CURSOR_MODEL_LIST_PAGE2)
     fake_tmux.queue_pane(CURSOR_MODEL_LIST_PAGE3)
     fake_tmux.queue_pane(CURSOR_MODEL_LIST_PAGE3)
 
-    result = await CursorAdapter().collect_available_models("sess")
+    result = asyncio.run(CursorAdapter().collect_available_models("sess"))
 
     assert result.ok, result.message
     assert result.data is not None
@@ -363,56 +420,41 @@ def test_cursor_active_model_state_parses_composer_speed() -> None:
     assert state.effort == "fast"
 
 
-@pytest.mark.asyncio
-async def test_cursor_set_model_accepts_current_default_composer_without_opening_picker(
+def test_cursor_set_model_accepts_current_default_composer_without_opening_picker(
     fake_tmux: FakeTmux,
 ) -> None:
+    # Early-exit: Composer 2.5 with no speed annotation is the default → no picker.
     fake_tmux.queue_pane(CURSOR_IDLE_COMPOSER_NO_SPEED)
 
-    ok = await CursorAdapter().set_model("sess", "composer-2.5", effort="slow")
+    ok = asyncio.run(CursorAdapter().set_model("sess", "composer-2.5", effort="slow"))
 
     assert ok
     sent = [args[1] for args, _ in fake_tmux.calls_to("send_keys")]
     assert "/model" not in sent
 
 
-@pytest.mark.asyncio
-async def test_cursor_set_model_waits_briefly_for_default_composer_footer(
+def test_cursor_set_model_waits_briefly_for_default_composer_footer(
     fake_tmux: FakeTmux,
 ) -> None:
+    # Footer not visible on first poll (empty pane), but appears on second — still skips picker.
     fake_tmux.queue_pane("")
     fake_tmux.queue_pane(CURSOR_IDLE_COMPOSER_NO_SPEED)
 
-    ok = await CursorAdapter().set_model("sess", "composer-2.5", effort="slow")
+    ok = asyncio.run(CursorAdapter().set_model("sess", "composer-2.5", effort="slow"))
 
     assert ok
     sent = [args[1] for args, _ in fake_tmux.calls_to("send_keys")]
     assert "/model" not in sent
 
 
-@pytest.mark.asyncio
-async def test_cursor_set_composer_speed_tabs_until_slow(fake_tmux: FakeTmux) -> None:
-    idle_slow = CURSOR_IDLE_COMPOSER_FAST.replace("Fast", "Slow")
-    fake_tmux.queue_pane(CURSOR_COMPOSER_MENU_SLOW)
-    fake_tmux.queue_pane(idle_slow)
-    fake_tmux.queue_pane(idle_slow)
-
-    ok = await CursorAdapter().set_model("sess", "composer-2.5", effort="slow")
-
-    assert ok
-    sent = [args[1] for args, _ in fake_tmux.calls_to("send_keys")]
-    assert "/model" in sent
-    assert "Composer 2.5" in sent
-
-
-@pytest.mark.asyncio
-async def test_cursor_set_composer_speed_accepts_checkbox_ui_for_slow(
+def test_cursor_set_composer_speed_accepts_checkbox_ui_for_slow(
     fake_tmux: FakeTmux,
 ) -> None:
+    # Checkbox UI variant: Fast is unchecked → already slow, no Space toggle needed.
     fake_tmux.queue_pane(CURSOR_COMPOSER_EDIT_PARAMETERS_SLOW)
     fake_tmux.queue_pane(CURSOR_IDLE_COMPOSER_NO_SPEED)
 
-    ok = await CursorAdapter().set_model("sess", "composer-2.5", effort="slow")
+    ok = asyncio.run(CursorAdapter().set_model("sess", "composer-2.5", effort="slow"))
 
     assert ok
     sent = [args[1] for args, _ in fake_tmux.calls_to("send_keys")]
@@ -421,16 +463,16 @@ async def test_cursor_set_composer_speed_accepts_checkbox_ui_for_slow(
     assert "Space" not in sent
 
 
-@pytest.mark.asyncio
-async def test_cursor_set_composer_speed_toggles_checkbox_ui_for_fast(
+def test_cursor_set_composer_speed_toggles_checkbox_ui_for_fast(
     fake_tmux: FakeTmux,
 ) -> None:
+    # Checkbox UI variant: Fast is unchecked → must toggle with Space to enable fast.
     fake_tmux.queue_pane(CURSOR_IDLE_COMPOSER_NO_SPEED)
     fake_tmux.queue_pane(CURSOR_COMPOSER_EDIT_PARAMETERS_SLOW)
     fake_tmux.queue_pane(CURSOR_COMPOSER_EDIT_PARAMETERS_FAST)
     fake_tmux.queue_pane(CURSOR_IDLE_COMPOSER_FAST)
 
-    ok = await CursorAdapter().set_model("sess", "composer-2.5", effort="fast")
+    ok = asyncio.run(CursorAdapter().set_model("sess", "composer-2.5", effort="fast"))
 
     assert ok
     sent = [args[1] for args, _ in fake_tmux.calls_to("send_keys")]
@@ -454,23 +496,10 @@ def test_antigravity_active_model_state_from_status_line() -> None:
     assert state.effort == "low"
 
 
-def test_antigravity_set_model_navigates_picker(fake_tmux: FakeTmux) -> None:
-    fake_tmux.queue_pane(AGY_MODEL_PICKER)
-    fake_tmux.queue_pane(AGY_IDLE.replace("Gemini 3.1 Pro (Low)", "Gemini 3.5 Flash (Medium)"))
-
-    ok = asyncio.run(
-        AntigravityAdapter().set_model("sess", "gemini-3-5-flash", effort="medium")
-    )
-
-    assert ok is True
-    sent = [args[1] for args, _ in fake_tmux.calls_to("send_keys")]
-    assert "/model" in sent
-    assert "Up" in sent
-
-
 def test_antigravity_set_model_without_effort_accepts_available_variant(
     fake_tmux: FakeTmux,
 ) -> None:
+    # No effort specified — the adapter should select whatever variant is available.
     fake_tmux.queue_pane(AGY_MODEL_PICKER)
     fake_tmux.queue_pane(AGY_IDLE)
 
@@ -488,15 +517,3 @@ def test_pi_active_model_state_from_status_bar() -> None:
     assert state is not None
     assert state.model == "deepseek/deepseek-v4-flash"
     assert state.effort == "high"
-
-
-def test_pi_set_model_filters_picker_then_confirms(fake_tmux: FakeTmux) -> None:
-    fake_tmux.queue_pane(PI_MODEL_PICKER)
-    fake_tmux.queue_pane(PI_IDLE)
-
-    ok = asyncio.run(PiAdapter().set_model("sess", "deepseek/deepseek-v4-flash"))
-
-    assert ok is True
-    sent = [args[1] for args, _ in fake_tmux.calls_to("send_keys")]
-    assert "/model" in sent
-    assert "deepseek-v4-flash" in sent

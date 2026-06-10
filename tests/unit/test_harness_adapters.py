@@ -182,7 +182,15 @@ class TestCodexAdapter:
         cmd = CodexAdapter(startup_model="gpt-5.4-mini").startup_cmd(Path("/tmp/repo"))
         assert cmd[cmd.index("--model") + 1] == "gpt-5.4-mini"
 
-    # ── "busy" fixture — known gap: • Working is not detected ─────────────────
+    def test_startup_cmd_adds_extra_workspace_dirs(self):
+        adapter = CodexAdapter()
+        adapter.additional_workspace_dirs = (Path("/tmp/repo/.murder/tickets"),)
+
+        cmd = adapter.startup_cmd(Path("/tmp/repo"))
+
+        assert cmd[cmd.index("--add-dir") + 1] == "/tmp/repo/.murder/tickets"
+
+    # ── "busy" fixture — • Working is detected via bullet-aware _BUSY_RE ───────
 
     def test_codex_bullet_working_is_busy(self):
         # "• Working (0s • esc to interrupt)" is detected via bullet-aware _BUSY_RE
@@ -453,7 +461,7 @@ class TestAntigravityAdapter:
 # ─────────────────────────────────────────────────────────────────────────────
 
 class TestSentinelDetection:
-    """detect_ask / detect_done / detect_checks / detect_notes use base regexes
+    """ASK / DONE / NOTE / ANSWER marker detection uses base regexes
     on any adapter; tested here via ClaudeCodeAdapter as representative."""
 
     cc = ClaudeCodeAdapter()
@@ -526,15 +534,15 @@ class TestSentinelDetection:
         pane = "❯ Fix bug.\n● Fixed the issue.\n>>> DONE\n"
         assert self.cc.detect_done(pane) is True
 
-    def test_detect_checks(self):
-        pane = ">>> CHECK: run tests\n>>> CHECK: push branch\n"
-        checks = self.cc.detect_checks(pane)
-        assert checks == ["run tests", "push branch"]
-
     def test_detect_notes(self):
         pane = ">>> NOTE: important context here\n>>> END\n"
         notes = self.cc.detect_notes(pane)
         assert notes == ["important context here"]
+
+    def test_detect_answers(self):
+        pane = ">>> ANSWER[t123]: use pytest\n>>> DONE\n"
+        answers = self.cc.detect_answers(pane)
+        assert answers == [("t123", "use pytest")]
 
     def test_detect_asks_multiple(self):
         pane = ">>> ASK: first question\n>>> ASK: second question\n"

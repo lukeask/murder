@@ -8,7 +8,7 @@ from typing import Protocol
 
 from murder.runtime.agents.base import AgentRole
 from murder.llm.harnesses.capabilities import HarnessCapabilities
-from murder.state.storage.paths import crow_context_dir
+from murder.state.storage.paths import crow_context_dir, ticket_md
 
 
 @dataclass(frozen=True)
@@ -60,8 +60,10 @@ class BriefAssembler:
 
 
 def _template_vars(ctx: BriefContext) -> dict[str, str]:
+    ticket_id = ctx.ticket["id"] if ctx.ticket else ""
     return {
-        "ticket_id": ctx.ticket["id"] if ctx.ticket else "",
+        "ticket_id": ticket_id,
+        "ticket_path": str(ticket_md(ctx.repo_root, ticket_id)) if ticket_id else "",
         "plan_name": ctx.plan_name or "",
         "harness": ctx.harness_name,
         "model": ctx.model or "",

@@ -1,0 +1,63 @@
+user@machine:~/Documents/code/murder $ agy
+
+      ▄▀▀▄        Antigravity CLI 1.0.5
+     ▀▀▀▀▀▀       user@machine.com
+    ▀▀▀▀▀▀▀▀      Gemini 3.1 Pro (High)
+   ▄▀▀    ▀▀▄     ~/Documents/code/murder
+  ▄▀▀      ▀▀▄
+
+> /model
+  ⎿  Model set to Gemini 3.1 Pro (High)
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+> Please read phase1-decomposition.md and anotherparserplan.md. Then audit the current codebase for completion o
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+? for shortcuts                                                                                         Gemini 3.1 Pro (High)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

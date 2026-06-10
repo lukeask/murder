@@ -1,0 +1,14 @@
+{
+  "ok": true,
+  "value": {
+    "reports": [
+      {
+        "name": "review-report",
+        "char_count": 1024,
+        "updated_at": "2026-06-09T12:30:00"
+      }
+    ],
+    "as_of": "2026-06-09T00:00:00",
+    "invalidation_key": "reports"
+  }
+}

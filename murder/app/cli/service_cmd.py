@@ -41,14 +41,9 @@ from murder.state.storage.service_registry import (
     resolve_service_session_selector,
 )
 from murder.work.tickets import lifecycle
-from murder.work.tickets import waves as waves_mod
 from murder.work.tickets.schema import ChecklistItem, Ticket
 from murder.work.tickets.sync import TicketSync
-from murder.app.tui.client import TuiRuntimeClient
-
-
-def _repo_root() -> Path:
-    return Path.cwd().resolve()
+from murder.app.cli._util import repo_root as _repo_root
 
 
 def _open_existing_db(repo: Path):  # type: ignore[return]
@@ -148,40 +143,6 @@ def _friendly_lock_message(repo: Path) -> str:
     )
 
 
-def _require_git_head(repo: Path) -> None:
-    inside = subprocess.run(
-        ["git", "-C", str(repo), "rev-parse", "--is-inside-work-tree"],
-        capture_output=True,
-        check=False,
-        text=True,
-    )
-    if inside.returncode != 0 or inside.stdout.strip() != "true":
-        raise RuntimeError("murder kick requires a git checkout with at least one commit.")
-    head = subprocess.run(
-        ["git", "-C", str(repo), "rev-parse", "HEAD"],
-        capture_output=True,
-        check=False,
-        text=True,
-    )
-    if head.returncode != 0:
-        raise RuntimeError(
-            "git repo has no commits yet; make an initial commit before `murder kick`."
-        )
-
-
-def kick_preflight(cfg: Config, repo: Path) -> None:
-    _require_git_head(repo)
-    if cfg.project.name == "TODO_SET_ME":
-        typer.secho(
-            (
-                "Warning: project.name is still TODO_SET_ME; "
-                "open Settings (ctrl+p) in the TUI to set it."
-            ),
-            fg=typer.colors.YELLOW,
-            err=True,
-        )
-
-
 def _run_async_entry(coro) -> None:  # type: ignore[no-untyped-def]
     try:
         asyncio.run(coro)
@@ -191,27 +152,6 @@ def _run_async_entry(coro) -> None:  # type: ignore[no-untyped-def]
     except RuntimeError as e:
         typer.secho(str(e), fg=typer.colors.RED, err=True)
         raise typer.Exit(1) from e
-
-
-async def _bare_kickoff(ticket: str | None) -> None:
-    repo = _repo_root()
-    cfg = Config.load(repo)
-    kick_preflight(cfg, repo)
-    socket_path = default_socket_path(repo)
-    await _ensure_supervisor(repo, socket_path)
-    client = TuiRuntimeClient(repo, socket_path, cfg, client_kind=ClientKind.CLI_EPHEMERAL)
-    await client.connect()
-    try:
-        result = await client.submit_command(
-            target_worker="orchestrator",
-            kind="scheduler.kickoff_ready",
-            payload={"only": ticket},
-            timeout_s=30.0,
-        )
-    finally:
-        await client.close()
-    kicked = list(result.get("kicked", []))
-    typer.echo(f"Kicked off tickets: {', '.join(kicked) if kicked else '(none)'}")
 
 
 async def _run_supervisor_only(tcp_port: int | None = None) -> None:
@@ -227,13 +167,6 @@ async def _run_supervisor_only(tcp_port: int | None = None) -> None:
             with contextlib.suppress(Exception):
                 if host.runtime is not None:
                     host.runtime._external_stop.clear()
-
-
-def cmd_kick(
-    ticket: str = typer.Argument(..., help="Ticket id to kick off."),
-) -> None:
-    """Kick off a single ticket's Crow from the CLI (no TUI)."""
-    _run_async_entry(_bare_kickoff(ticket))
 
 
 def cmd_serviced(
@@ -448,7 +381,6 @@ def cmd_lint() -> None:
             Ticket(
                 id=trow["id"],
                 title=trow["title"],
-                wave=trow["wave"],
                 status=TicketStatus(trow["status"]),
                 harness=trow.get("harness"),
                 model=trow.get("model"),
@@ -469,16 +401,21 @@ def cmd_lint() -> None:
                 ],
             )
         )
-    by_wave: dict[int, list[Ticket]] = {}
-    for t in tickets:
-        by_wave.setdefault(t.wave, []).append(t)
-    for w, ts in by_wave.items():
-        try:
-            waves_mod.topo_partition(ts)
-        except waves_mod.CycleError as e:
-            issues.append(f"wave {w}: {e}")
-        for tid, dep in waves_mod.misordered_deps(ts):
-            issues.append(f"wave {w}: misordered dep {tid} -> {dep}")
+    ticket_by_id = {ticket.id: ticket for ticket in tickets}
+    for ticket in tickets:
+        seen: set[str] = set()
+        stack = list(ticket.deps)
+        while stack:
+            dep_id = stack.pop()
+            if dep_id == ticket.id:
+                issues.append(f"ticket {ticket.id}: dependency cycle")
+                break
+            if dep_id in seen:
+                continue
+            seen.add(dep_id)
+            dep = ticket_by_id.get(dep_id)
+            if dep is not None:
+                stack.extend(dep.deps)
     conn.close()
     if issues:
         for i in issues:

@@ -6,7 +6,7 @@ import json
 import sqlite3
 from collections import defaultdict
 from contextlib import closing
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from murder.app.service.client_api import (
@@ -16,9 +16,6 @@ from murder.app.service.client_api import (
     ConversationSummary,
     CrowSessionSummary,
     CrowSnapshot,
-    DispatchSnapshot,
-    EscalationsSnapshot,
-    EscalationSummary,
     InvalidationKeys,
     NoteDisplaySnapshot,
     NotesSnapshot,
@@ -30,21 +27,39 @@ from murder.app.service.client_api import (
     ReportsSnapshot,
     ReportSummary,
     ScheduleSnapshot,
-    TicketCarveSnapshot,
     TicketDetailSnapshot,
-    TicketRef,
-    TicketSummary,
-    UsageGaugeDrillInSnapshot,
 )
-from murder.app.service.schedule_snapshot import (
-    build_schedule_snapshot,
-    build_usage_gauge_drill_in,
-)
+from murder.app.service.schedule_snapshot import build_schedule_snapshot
 from murder.state.persistence import tickets as ticket_store
 from murder.state.persistence.schema import get_db
-from murder.state.storage.paths import reports_dir
+from murder.state.storage.paths import report_md
 from murder.work.tickets.parser import read_ticket_md
-from murder.work.tickets.status import TicketStatus
+
+# Ticket states that indicate the work item is closed; a failed agent on such a
+# ticket is droppable once its heartbeat goes stale.
+TERMINAL_TICKET_STATUSES = frozenset({"done", "failed"})
+
+# Hide failed agents after this long without a recent heartbeat.
+FAILED_STALE_AFTER = timedelta(hours=2)
+
+
+def _keep_failed_session(session: CrowSessionSummary, *, now: datetime) -> bool:
+    """Whether a failed agent should remain on the wire roster.
+
+    Mirrors the Textual roster predicate: keep failed agents whose ticket is
+    still active, or whose heartbeat is recent; drop the rest. ``now`` and the
+    session timestamps are all naive UTC (see ``datetime.utcnow``), so they are
+    compared directly without tz normalisation.
+    """
+    if session.status != "failed":
+        return True
+    ticket_status = session.ticket_status or ""
+    if ticket_status and ticket_status not in TERMINAL_TICKET_STATUSES:
+        return True
+    last_seen = session.last_seen or session.started_at
+    if last_seen is None:
+        return True
+    return now - last_seen <= FAILED_STALE_AFTER
 
 
 class ServiceReadModel:
@@ -54,39 +69,13 @@ class ServiceReadModel:
         self.db_path = Path(db_path)
         self._generations: dict[str, int] = defaultdict(int)
 
-    def get_dispatch_snapshot(self) -> DispatchSnapshot:
-        as_of = datetime.utcnow()
-        with closing(self._connect()) as conn:
-            rows = conn.execute(
-                """
-                SELECT id, title, status, wave, harness, model
-                  FROM tickets
-                 ORDER BY wave, id
-                """
-            ).fetchall()
-        tickets = tuple(
-            TicketSummary(
-                id=str(row["id"]),
-                title=str(row["title"]),
-                status=TicketStatus(str(row["status"])),
-                wave=int(row["wave"]),
-                harness=_optional_str(row["harness"]),
-                model=_optional_str(row["model"]),
-            )
-            for row in rows
-        )
-        return DispatchSnapshot(
-            tickets=tickets,
-            as_of=as_of,
-            invalidation_key=self.current_key(InvalidationKeys.dispatch),
-        )
-
     def get_plans_snapshot(self) -> PlansSnapshot:
         as_of = datetime.utcnow()
         with closing(self._connect()) as conn:
             rows = conn.execute(
                 """
-                SELECT p.name, p.status, p.sync_state,
+                SELECT p.name, p.status, p.sync_state, p.updated_at,
+                       p.frontmatter_json, length(p.body) AS body_chars,
                        (SELECT COUNT(*) FROM plan_revisions r WHERE r.plan_name = p.name)
                            AS revisions
                   FROM plans p
@@ -105,6 +94,9 @@ class ServiceReadModel:
                 status=str(row["status"]),
                 revision_count=int(row["revisions"]),
                 sync_state=str(row["sync_state"]),
+                parent=_plan_parent_from_frontmatter(row["frontmatter_json"]),
+                updated_at=_parse_datetime(row["updated_at"]) or as_of,
+                char_count=int(row["body_chars"] or 0),
             )
             for row in rows
         )
@@ -151,19 +143,30 @@ class ServiceReadModel:
 
     def get_reports_snapshot(self) -> ReportsSnapshot:
         as_of = datetime.utcnow()
-        root = reports_dir(self.db_path.parent.parent)
-        root.mkdir(parents=True, exist_ok=True)
+        with closing(self._connect()) as conn:
+            # Guard: reports table may not exist on a very old DB that predates
+            # F5.2 schema migration (get_db does not call init_db).
+            table_exists = conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='reports'"
+            ).fetchone()
+            if table_exists:
+                rows = conn.execute(
+                    """
+                    SELECT name, length(body) AS size, updated_at
+                      FROM reports
+                     WHERE status = 'active'
+                     ORDER BY updated_at DESC, name
+                    """
+                ).fetchall()
+            else:
+                rows = []
         reports = tuple(
             ReportSummary(
-                name=path.stem,
-                char_count=path.stat().st_size,
-                updated_at=datetime.fromtimestamp(path.stat().st_mtime),
+                name=str(row["name"]),
+                char_count=int(row["size"]),
+                updated_at=_parse_datetime(row["updated_at"]) or as_of,
             )
-            for path in sorted(
-                root.glob("*.md"),
-                key=lambda candidate: (-candidate.stat().st_mtime, candidate.name),
-            )
-            if path.is_file()
+            for row in rows
         )
         return ReportsSnapshot(
             reports=reports,
@@ -186,9 +189,15 @@ class ServiceReadModel:
             id=ticket.id,
             title=ticket.title,
             status=ticket.status,
+            body=prose["body"],
+            checklist=checklist,
+            deps=tuple(ticket.deps),
+            harness=ticket.harness,
+            model=ticket.model,
+            worktree=ticket.worktree,
+            schedule_at=ticket.schedule_at,
             plan_md=prose["plan"],
             working_notes_md=prose["working_notes"],
-            checklist=checklist,
             as_of=as_of,
             invalidation_key=self.current_key(InvalidationKeys.ticket_detail(ticket_id)),
         )
@@ -266,6 +275,9 @@ class ServiceReadModel:
             )
             for row in rows
         )
+        # done/dead are excluded in SQL; drop stale failed agents here so the
+        # wire roster never carries them (Ink does no client-side filtering).
+        sessions = tuple(s for s in sessions if _keep_failed_session(s, now=as_of))
         return CrowSnapshot(
             sessions=sessions,
             as_of=as_of,
@@ -331,38 +343,6 @@ class ServiceReadModel:
             invalidation_key=self.current_key(InvalidationKeys.conversations),
         )
 
-    def get_escalations_snapshot(self) -> EscalationsSnapshot:
-        as_of = datetime.utcnow()
-        with closing(self._connect()) as conn:
-            active_rows = conn.execute(
-                """
-                SELECT e.id, e.ts, e.ticket_id, e.severity, e.reason, e.to_recipient,
-                       e.body_path, e.resolved_at, e.source_event_id, t.status AS ticket_status
-                  FROM escalations e
-                  LEFT JOIN tickets t ON t.id = e.ticket_id
-                 WHERE e.resolved = 0
-                   AND (t.status IS NULL OR t.status != 'archived')
-                 ORDER BY e.ts DESC
-                """
-            ).fetchall()
-            history_rows = conn.execute(
-                """
-                SELECT e.id, e.ts, e.ticket_id, e.severity, e.reason, e.to_recipient,
-                       e.body_path, e.resolved_at, e.source_event_id, t.status AS ticket_status
-                  FROM escalations e
-                  LEFT JOIN tickets t ON t.id = e.ticket_id
-                 WHERE e.resolved_at IS NOT NULL
-                 ORDER BY e.resolved_at DESC
-                 LIMIT 20
-                """
-            ).fetchall()
-        return EscalationsSnapshot(
-            active=tuple(_escalation_summary_from_row(row) for row in active_rows),
-            history=tuple(_escalation_summary_from_row(row) for row in history_rows),
-            as_of=as_of,
-            invalidation_key=self.current_key(InvalidationKeys.escalations),
-        )
-
     def get_plan_display(self, name: str) -> PlanDisplaySnapshot | None:
         with closing(self._connect()) as conn:
             row = conn.execute(
@@ -410,78 +390,61 @@ class ServiceReadModel:
         return NoteDisplaySnapshot(name=name, markdown=text)
 
     def get_report_display(self, name: str) -> ReportDisplaySnapshot | None:
-        path = reports_dir(self.db_path.parent.parent) / f"{name}.md"
+        path = report_md(self.db_path.parent.parent, name)
         if not path.exists() or not path.is_file():
             return None
         text = path.read_text(encoding="utf-8")
         return ReportDisplaySnapshot(name=name, markdown=text)
 
-    def get_usage_gauge_drill_in(
-        self,
-        *,
-        harness: str,
-        window_key: str,
-        t_period_minutes: float,
-    ) -> UsageGaugeDrillInSnapshot:
-        with closing(self._connect()) as conn:
-            return build_usage_gauge_drill_in(
-                conn,
-                harness=harness,
-                window_key=window_key,
-                t_period_minutes=t_period_minutes,
-            )
+    def get_harness_models_snapshot(self) -> dict[str, object]:
+        """Return the locked RPC payload for ``state.harness_models_snapshot``.
 
-    def get_ticket_carve_snapshot(self, ticket_id: str) -> TicketCarveSnapshot | None:
-        with closing(self._connect()) as conn:
-            ticket = ticket_store.get_ticket(conn, ticket_id)
-            if ticket is None:
-                return None
-            wave_rows = conn.execute(
-                "SELECT DISTINCT wave FROM tickets ORDER BY wave"
-            ).fetchall()
-            dep_rows = conn.execute(
-                "SELECT id, title FROM tickets WHERE id != ? ORDER BY wave, id",
-                (ticket_id,),
-            ).fetchall()
-        fields: dict[str, object] = {
-            "status": ticket.status.value,
-            "title": ticket.title,
-            "wave": ticket.wave,
-            "schedule_at": ticket.schedule_at,
-            "harness": ticket.harness,
-            "model": ticket.model,
-            "deps": list(ticket.deps),
-            "checklist": [
-                {"text": item.text, "done": item.done} for item in ticket.checklist
-            ],
-        }
-        return TicketCarveSnapshot(
-            ticket_id=ticket_id,
-            fields=fields,
-            wave_options=tuple(int(r["wave"]) for r in wave_rows),
-            dependency_options=tuple(
-                TicketRef(id=str(r["id"]), title=str(r["title"] or r["id"]))
-                for r in dep_rows
-            ),
-        )
+        Shape (wrapped by ``_value(...)`` in the host)::
 
-    def get_ticket_status(self, ticket_id: str) -> str | None:
-        with closing(self._connect()) as conn:
-            ticket = ticket_store.get_ticket(conn, ticket_id)
-        return ticket.status.value if ticket is not None else None
+            {
+              "models": {
+                "<harness_kind>": [{"id": "...", "label": "..."}, ...],
+                ...
+              },
+              "as_of": "<ISO8601 UTC string>" | null
+            }
 
-    def get_notetaker_recent_entries(self, limit: int = 50) -> list[dict[str, object]]:
+        *as_of* is the most-recent ``fetched_at`` across all rows (null when
+        the table is empty or does not yet exist). Only harnesses that have
+        been persisted appear as keys; a missing key is valid — the frontend
+        falls back to the classvar default.
+        """
+        import json as _json
+
         with closing(self._connect()) as conn:
+            # Guard: table may not exist on an old DB (idempotent CREATE TABLE
+            # runs at init_db, but get_db does not call init_db).
+            table_exists = conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='harness_models'"
+            ).fetchone()
+            if not table_exists:
+                return {"models": {}, "as_of": None}
             rows = conn.execute(
-                """
-                SELECT id, ts, raw, cleaned, short_vers
-                  FROM notes_entries
-                 ORDER BY ts DESC, id DESC
-                 LIMIT ?
-                """,
-                (limit,),
+                "SELECT harness, fetched_at, models_json FROM harness_models"
             ).fetchall()
-        return [dict(r) for r in rows]
+
+        if not rows:
+            return {"models": {}, "as_of": None}
+
+        models_map: dict[str, list[dict[str, str]]] = {}
+        fetched_timestamps: list[str] = []
+
+        for row in rows:
+            harness = str(row["harness"])
+            fetched_timestamps.append(str(row["fetched_at"]))
+            try:
+                models = _json.loads(str(row["models_json"] or "[]"))
+            except (ValueError, TypeError):
+                models = []
+            models_map[harness] = models
+
+        as_of = max(fetched_timestamps) if fetched_timestamps else None
+        return {"models": models_map, "as_of": as_of}
 
     def invalidate(self, key: str) -> None:
         self._generations[key] += 1
@@ -495,12 +458,59 @@ class ServiceReadModel:
     def _read_ticket_prose(self, ticket_id: str) -> dict[str, str]:
         path = self.db_path.parent / "tickets" / f"{ticket_id}.md"
         if not path.exists():
-            return {"plan": "", "working_notes": ""}
+            return {"plan": "", "working_notes": "", "body": ""}
+        raw = path.read_text(encoding="utf-8")
         sections = read_ticket_md(path)
         return {
             "plan": sections.get("plan", ""),
             "working_notes": sections.get("working_notes", ""),
+            # The frontmatter-stripped body the C8 editor renders/edits verbatim. Unlike
+            # the parsed plan/working_notes split, this preserves the `# Checklist` lines
+            # the editor toggles. Falls back to the whole file if no frontmatter delimiter.
+            "body": _strip_frontmatter(raw),
         }
+
+
+def _plan_parent_from_frontmatter(frontmatter_json: object) -> str | None:
+    """Extract a plan's parent-plan name from its persisted frontmatter.
+
+    The plans table holds no dedicated parent column; the only non-derived parent
+    metadata is a `parent` key in the plan's frontmatter (C11 expects the parent
+    plan's NAME or null). Returns None when absent, blank, or non-string.
+    """
+    if not isinstance(frontmatter_json, str) or not frontmatter_json:
+        return None
+    try:
+        data = json.loads(frontmatter_json)
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    parent = data.get("parent")
+    if isinstance(parent, str) and parent.strip():
+        return parent.strip()
+    return None
+
+
+_FRONTMATTER_DELIM = "---"
+
+
+def _strip_frontmatter(md_text: str) -> str:
+    """Return the ticket body with leading YAML frontmatter removed.
+
+    Mirrors ``murder.work.tickets.parser._split_frontmatter`` so the C8 editor
+    receives exactly the frontmatter-stripped body (preserving the ``# Checklist``
+    section). Falls back to the whole text when there is no valid frontmatter block.
+    """
+    if not md_text.startswith(f"{_FRONTMATTER_DELIM}\n"):
+        return md_text
+    try:
+        _front, body = md_text[4:].split(f"\n{_FRONTMATTER_DELIM}", 1)
+    except ValueError:
+        return md_text
+    if body.startswith("\n"):
+        body = body[1:]
+    return body
 
 
 def _optional_str(value: object) -> str | None:
@@ -516,18 +526,6 @@ def _parse_datetime(value: object) -> datetime | None:
         return datetime.fromisoformat(value)
     except ValueError:
         return None
-
-
-def _escalation_summary_from_row(row: sqlite3.Row) -> EscalationSummary:
-    return EscalationSummary(
-        id=int(row["id"]),
-        ticket_id=_optional_str(row["ticket_id"]),
-        severity=int(row["severity"]),
-        reason=str(row["reason"]),
-        to_recipient=str(row["to_recipient"]),
-        body_path=_optional_str(row["body_path"]),
-        ticket_status=_optional_str(row["ticket_status"]),
-    )
 
 
 __all__ = ["ServiceReadModel"]

@@ -76,6 +76,7 @@ async def start_supervisor_workers(
             rename_plan=orchestrator.rename_plan,
             deprecate_plan=orchestrator.deprecate_plan,
             quick_kick_ticket=orchestrator.quick_kick_ticket,
+            quick_create_ticket=orchestrator.quick_create_ticket,
             spawn_rogue=orchestrator.spawn_rogue_command,
             reconfigure_collaborator=orchestrator.reconfigure_collaborator,
         )

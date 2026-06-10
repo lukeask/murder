@@ -1,0 +1,238 @@
+[
+  {
+    "type": "conversation.block",
+    "agent_id": "crow-7",
+    "conversation_id": "crow-7",
+    "action": "block-appended",
+    "block": {
+      "id": 1,
+      "conversation_id": "crow-7",
+      "ordinal": 0,
+      "kind": "user",
+      "payload": {
+        "type": "user",
+        "text": "build the thing"
+      },
+      "sealed": true,
+      "service_received_at": "2026-06-09T00:00:00"
+    }
+  },
+  {
+    "type": "conversation.block",
+    "agent_id": "crow-7",
+    "conversation_id": "crow-7",
+    "action": "block-appended",
+    "block": {
+      "id": 2,
+      "conversation_id": "crow-7",
+      "ordinal": 1,
+      "kind": "assistant_intermediate",
+      "payload": {
+        "type": "assistant",
+        "phase": "intermediate",
+        "text": "Sure, starting",
+        "elapsed": null
+      },
+      "sealed": false,
+      "service_received_at": "2026-06-09T00:00:00"
+    }
+  },
+  {
+    "type": "conversation.block",
+    "agent_id": "crow-7",
+    "conversation_id": "crow-7",
+    "action": "block-updated",
+    "block": {
+      "id": 2,
+      "conversation_id": "crow-7",
+      "ordinal": 1,
+      "kind": "assistant_intermediate",
+      "payload": {
+        "type": "assistant",
+        "phase": "intermediate",
+        "text": "Sure, starting \u2014 reading files",
+        "elapsed": null
+      },
+      "sealed": false,
+      "service_received_at": "2026-06-09T00:00:00"
+    }
+  },
+  {
+    "type": "conversation.block",
+    "agent_id": "crow-7",
+    "conversation_id": "crow-7",
+    "action": "block-appended",
+    "block": {
+      "id": 3,
+      "conversation_id": "crow-7",
+      "ordinal": 2,
+      "kind": "tool_call",
+      "payload": {
+        "type": "tool_call",
+        "title": "Bash",
+        "input": "ls -la",
+        "result": "total 0",
+        "elided": true,
+        "running": false
+      },
+      "sealed": true,
+      "service_received_at": "2026-06-09T00:00:00"
+    }
+  },
+  {
+    "type": "conversation.block",
+    "agent_id": "crow-7",
+    "conversation_id": "crow-7",
+    "action": "block-appended",
+    "block": {
+      "id": 4,
+      "conversation_id": "crow-7",
+      "ordinal": 3,
+      "kind": "plan_update",
+      "payload": {
+        "type": "plan_update",
+        "title": "Updated Plan",
+        "items": [
+          {
+            "done": true,
+            "text": "read files"
+          },
+          {
+            "done": false,
+            "text": "write code"
+          }
+        ]
+      },
+      "sealed": true,
+      "service_received_at": "2026-06-09T00:00:00"
+    }
+  },
+  {
+    "type": "conversation.block",
+    "agent_id": "crow-7",
+    "conversation_id": "crow-7",
+    "action": "block-appended",
+    "block": {
+      "id": 5,
+      "conversation_id": "crow-7",
+      "ordinal": 4,
+      "kind": "agent_event",
+      "payload": {
+        "type": "agent_event",
+        "name": "explorer",
+        "status": "completed",
+        "elapsed": "12s"
+      },
+      "sealed": true,
+      "service_received_at": "2026-06-09T00:00:00"
+    }
+  },
+  {
+    "type": "conversation.block",
+    "agent_id": "crow-7",
+    "conversation_id": "crow-7",
+    "action": "block-appended",
+    "block": {
+      "id": 6,
+      "conversation_id": "crow-7",
+      "ordinal": 5,
+      "kind": "choice_prompt",
+      "payload": {
+        "type": "choice_prompt",
+        "question": "Pick an approach",
+        "options": [
+          {
+            "number": 1,
+            "label": "rewrite",
+            "description": null
+          },
+          {
+            "number": 2,
+            "label": "patch",
+            "description": "smaller diff"
+          }
+        ],
+        "footer": null,
+        "selected": 2,
+        "answered": true,
+        "chosen": 2
+      },
+      "sealed": true,
+      "service_received_at": "2026-06-09T00:00:00"
+    }
+  },
+  {
+    "type": "conversation.block",
+    "agent_id": "crow-7",
+    "conversation_id": "crow-7",
+    "action": "block-appended",
+    "block": {
+      "id": 7,
+      "conversation_id": "crow-7",
+      "ordinal": 6,
+      "kind": "assistant_final",
+      "payload": {
+        "type": "assistant",
+        "phase": "final",
+        "text": "Done.",
+        "elapsed": "1m 02s"
+      },
+      "sealed": true,
+      "service_received_at": "2026-06-09T00:00:00"
+    }
+  },
+  {
+    "type": "conversation.block",
+    "agent_id": "crow-7",
+    "conversation_id": "crow-7",
+    "action": "block-appended",
+    "block": {
+      "id": 8,
+      "conversation_id": "crow-7",
+      "ordinal": 7,
+      "kind": "notice",
+      "payload": {
+        "type": "notice",
+        "message": "rate limit approaching",
+        "severity": "warning",
+        "text": "rate limit approaching"
+      },
+      "sealed": true,
+      "service_received_at": "2026-06-09T00:00:00"
+    }
+  },
+  {
+    "type": "conversation.block",
+    "agent_id": "crow-7",
+    "conversation_id": "crow-7",
+    "action": "block-appended",
+    "block": {
+      "id": 9,
+      "conversation_id": "crow-7",
+      "ordinal": 8,
+      "kind": "choice_prompt",
+      "payload": {
+        "type": "choice_prompt",
+        "question": "Continue?",
+        "options": [
+          {
+            "number": 1,
+            "label": "yes",
+            "description": null
+          },
+          {
+            "number": 2,
+            "label": "no",
+            "description": null
+          }
+        ],
+        "footer": "\u2191/\u2193 to choose",
+        "selected": 1,
+        "answered": false,
+        "chosen": null
+      },
+      "sealed": true,
+      "service_received_at": "2026-06-09T00:00:00"
+    }
+  }
+]

@@ -48,7 +48,7 @@ async def submit_harness_usage_sample_inprocess(
 ) -> dict[str, object] | None:
     """Publish a usage sample command and block until the commands row settles.
 
-    Mirrors the in-process branch of :meth:`murder.app.tui.app.MurderApp._submit_command`.
+    Used by harness agents to report usage metrics over the bus.
     """
     payload = harness_usage_sample_payload(trigger=trigger)
     command = CommandEvent(

@@ -69,6 +69,9 @@ class CrowHandler(Daemon):
         self._terminal_failure = False
         self._last_orchestration_t: float = 0.0
         self._last_orchestration_pane_hash: str | None = None
+        # F11 H1: index of the last heartbeat bucket we emitted `agent` for, so a
+        # plain beat only invalidates the Ink roster on a bucket crossing (not 5Hz).
+        self._last_heartbeat_emit_bucket: int | None = None
 
     async def start(self, brief: str, ctx: dict[str, Any]) -> None:
         from murder.runtime.terminal import tmux
@@ -218,11 +221,10 @@ class CrowHandler(Daemon):
             await self._orchestration_tick(pane)
 
     async def _orchestration_tick(self, pane: str) -> None:
-        from murder.state.persistence.tickets import get_ticket_status, check_off_item, checklist_progress
-        from murder.state.persistence.agents import heartbeat_agent
-        from murder.bus import HeartbeatEvent, QuestionEvent, SummaryEvent
-        from murder.state.storage.paths import ticket_md
-        from murder.work.tickets import parser as ticket_parser
+        from murder.state.persistence.tickets import get_ticket_status, checklist_progress
+        from murder.state.persistence.agents import heartbeat_agent, heartbeat_bucket
+        from murder.bus import HeartbeatEvent, NoteEvent, QuestionEvent, SummaryEvent
+        from murder.bus.protocol import Entity
 
         # Stop if ticket reached a terminal state via any path.
         ticket_status = get_ticket_status(self.runtime.db, self.ticket_id)
@@ -249,12 +251,20 @@ class CrowHandler(Daemon):
                 )
             )
 
-        for check in self.harness.detect_checks(pane):
-            check_off_item(self.runtime.db, self.ticket_id, check)
-
-        tpath = ticket_md(self.repo_root, self.ticket_id)
+        # DB-owns-runtime: working notes land in the events table (audit log)
+        # via the bus, not the ticket .md. The bus persists every event before
+        # fan-out, so the note is durable without clobbering ticket frontmatter
+        # or the body checklist.
         for note in self.harness.detect_notes(tail):
-            ticket_parser.append_section(tpath, "Working notes", f">>> NOTE: {note}")
+            await self.runtime.bus.publish(
+                NoteEvent(
+                    run_id=self.runtime.run_id,
+                    agent_id=self.id,
+                    role=self.role,
+                    ticket_id=self.ticket_id,
+                    note=note,
+                )
+            )
 
         # Stuck detection: compare pane hash between consecutive orchestration ticks.
         h = hashlib.sha256(pane.encode("utf-8", errors="replace")).hexdigest()
@@ -304,6 +314,14 @@ class CrowHandler(Daemon):
                 )
             )
         heartbeat_agent(self.runtime.db, self.id)
+        # F11 H1: the DB write above always lands, but the key-only `agent`
+        # invalidation is coalesced to one emit per HEARTBEAT_EMIT_BUCKET_S so a
+        # steady 5Hz heartbeat does not storm the Ink roster refetch. Status
+        # changes still invalidate immediately via `sync_agent`.
+        bucket = heartbeat_bucket(time.monotonic())
+        if bucket != self._last_heartbeat_emit_bucket:
+            self._last_heartbeat_emit_bucket = bucket
+            await self.runtime.publish_snapshot(Entity.AGENT, self.id)
 
     async def _run_completion(self) -> None:
         from murder.verdict.completion.coordinator import DoneHandleResult

@@ -15,16 +15,21 @@ from murder.app.service.bootstrap import start_supervisor_workers
 from murder.app.service.client_api import dto_to_wire
 from murder.app.service.read_model import ServiceReadModel
 from murder.app.service.runtime import Runtime
-from murder.app.service.settings_service import SettingsService
 from murder.app.service.supervisor import Supervisor
 from murder.bus.broker import DurableBroker
 from murder.bus.protocol import CommandEvent
 from murder.bus.transport_socket import SocketBusServer, default_socket_path
 from murder.config import Config
+from murder.llm.harnesses.harnesses_doc import write_harnesses_doc
+from murder.llm.harnesses.model_cache import refresh_and_persist_harness_models
 from murder.runtime.orchestration.orchestrator import Orchestrator
 from murder.state.persistence.commands import get_command_status
 from murder.state.storage.paths import db_path
-from murder.state.storage.service_registry import remove_service_session, write_service_session
+from murder.state.storage.service_registry import (
+    project_session_name,
+    remove_service_session,
+    write_service_session,
+)
 from murder.usage_sample_command import run_service_usage_poll_loop
 
 LOGGER = logging.getLogger(__name__)
@@ -49,8 +54,23 @@ class ServiceHost:
     tcp_bound: tuple[str, int] | None = None
     _usage_poll_task: asyncio.Task[None] | None = field(default=None, repr=False)
     _projection_poll_task: asyncio.Task[None] | None = field(default=None, repr=False)
+    _model_discovery_task: asyncio.Task[None] | None = field(default=None, repr=False)
     _rpc_handlers: dict[str, RpcHandler] = field(default_factory=dict, repr=False)
     _service_session_name: str | None = field(default=None, repr=False)
+
+    async def _capture_tmux_frame(self) -> str:
+        """Return the current ANSI frame for the service's tmux session.
+
+        Called by the ``tmux.frame`` stream on every capture tick.  Uses the
+        deterministic session name so it works as soon as the host is
+        constructed (no dependency on ``_service_session_name`` being set).
+        """
+        from murder.runtime.terminal import tmux
+
+        return await tmux.capture_pane(
+            project_session_name(self.repo_root),
+            escapes=True,
+        )
 
     def register_rpc_handler(self, method: str, handler: RpcHandler) -> None:
         self._rpc_handlers[method] = handler
@@ -120,9 +140,6 @@ class ServiceHost:
         def _value(value: Any) -> dict[str, Any]:
             return {"ok": True, "value": dto_to_wire(value)}
 
-        def _state_dispatch_snapshot(_body: dict[str, Any]) -> dict[str, Any]:
-            return _value(_read_model().get_dispatch_snapshot())
-
         def _state_schedule_snapshot(_body: dict[str, Any]) -> dict[str, Any]:
             return _value(_read_model().get_schedule_snapshot())
 
@@ -131,9 +148,6 @@ class ServiceHost:
 
         def _state_conversations_snapshot(_body: dict[str, Any]) -> dict[str, Any]:
             return _value(_read_model().get_conversations_snapshot())
-
-        def _state_escalations_snapshot(_body: dict[str, Any]) -> dict[str, Any]:
-            return _value(_read_model().get_escalations_snapshot())
 
         def _state_plans_snapshot(_body: dict[str, Any]) -> dict[str, Any]:
             return _value(_read_model().get_plans_snapshot())
@@ -171,80 +185,12 @@ class ServiceHost:
                 raise ValueError("state.report_display requires name")
             return _value(_read_model().get_report_display(name))
 
-        def _state_usage_gauge_drill_in(body: dict[str, Any]) -> dict[str, Any]:
-            harness = str(body.get("harness", "")).strip()
-            window_key = str(body.get("window_key", "")).strip()
-            if not harness or not window_key:
-                raise ValueError("state.usage_gauge_drill_in requires harness and window_key")
-            return _value(
-                _read_model().get_usage_gauge_drill_in(
-                    harness=harness,
-                    window_key=window_key,
-                    t_period_minutes=float(body.get("t_period_minutes", 0.0)),
-                )
-            )
+        def _state_harness_models_snapshot(_body: dict[str, Any]) -> dict[str, Any]:
+            return _value(_read_model().get_harness_models_snapshot())
 
-        def _state_ticket_carve(body: dict[str, Any]) -> dict[str, Any]:
-            ticket_id = str(body.get("ticket_id", "")).strip()
-            if not ticket_id:
-                raise ValueError("state.ticket_carve requires ticket_id")
-            return _value(_read_model().get_ticket_carve_snapshot(ticket_id))
-
-        def _state_ticket_status(body: dict[str, Any]) -> dict[str, Any]:
-            ticket_id = str(body.get("ticket_id", "")).strip()
-            if not ticket_id:
-                raise ValueError("state.ticket_status requires ticket_id")
-            return _value(_read_model().get_ticket_status(ticket_id))
-
-        def _state_notetaker_recent_entries(body: dict[str, Any]) -> dict[str, Any]:
-            return _value(
-                _read_model().get_notetaker_recent_entries(
-                    int(body.get("limit") or 50),
-                )
-            )
-
-        async def _document_reconcile_plan(body: dict[str, Any]) -> dict[str, Any]:
-            rt = self.runtime
-            if rt is None:
-                raise RuntimeError("runtime unavailable")
-            name = str(body.get("name", "")).strip()
-            if not name:
-                raise ValueError("document.reconcile_plan requires name")
-            await rt.reconcile_plan(name)
-            return {"ok": True}
-
-        def _document_plan_path(body: dict[str, Any]) -> dict[str, Any]:
-            rt = self.runtime
-            if rt is None:
-                raise RuntimeError("runtime unavailable")
-            name = str(body.get("name", "")).strip()
-            if not name:
-                raise ValueError("document.plan_path requires name")
-            return _value(str(rt.plan_path_for(name)))
-
-        def _document_note_path(body: dict[str, Any]) -> dict[str, Any]:
-            rt = self.runtime
-            if rt is None:
-                raise RuntimeError("runtime unavailable")
-            name = str(body.get("name", "")).strip()
-            if not name:
-                raise ValueError("document.note_path requires name")
-            return _value(str(rt.note_path_for(name)))
-
-        def _document_report_path(body: dict[str, Any]) -> dict[str, Any]:
-            rt = self.runtime
-            if rt is None:
-                raise RuntimeError("runtime unavailable")
-            name = str(body.get("name", "")).strip()
-            if not name:
-                raise ValueError("document.report_path requires name")
-            return _value(str(rt.report_path_for(name)))
-
-        self.register_rpc_handler("state.dispatch_snapshot", _state_dispatch_snapshot)
         self.register_rpc_handler("state.schedule_snapshot", _state_schedule_snapshot)
         self.register_rpc_handler("state.crow_snapshot", _state_crow_snapshot)
         self.register_rpc_handler("state.conversations_snapshot", _state_conversations_snapshot)
-        self.register_rpc_handler("state.escalations_snapshot", _state_escalations_snapshot)
         self.register_rpc_handler("state.plans_snapshot", _state_plans_snapshot)
         self.register_rpc_handler("state.notes_snapshot", _state_notes_snapshot)
         self.register_rpc_handler("state.reports_snapshot", _state_reports_snapshot)
@@ -252,65 +198,147 @@ class ServiceHost:
         self.register_rpc_handler("state.plan_display", _state_plan_display)
         self.register_rpc_handler("state.note_display", _state_note_display)
         self.register_rpc_handler("state.report_display", _state_report_display)
-        self.register_rpc_handler("state.usage_gauge_drill_in", _state_usage_gauge_drill_in)
-        self.register_rpc_handler("state.ticket_carve", _state_ticket_carve)
-        self.register_rpc_handler("state.ticket_status", _state_ticket_status)
         self.register_rpc_handler(
-            "state.notetaker_recent_entries",
-            _state_notetaker_recent_entries,
+            "state.harness_models_snapshot",
+            _state_harness_models_snapshot,
         )
-        self.register_rpc_handler("document.reconcile_plan", _document_reconcile_plan)
-        self.register_rpc_handler("document.plan_path", _document_plan_path)
-        self.register_rpc_handler("document.note_path", _document_note_path)
-        self.register_rpc_handler("document.report_path", _document_report_path)
 
-        async def _tmux_capture_pane(body: dict[str, Any]) -> dict[str, Any]:
-            from murder.runtime.terminal import tmux
+        def _orchestrator() -> Orchestrator:
+            if self.orchestrator is None:
+                raise RuntimeError("orchestrator unavailable")
+            return self.orchestrator
 
-            session = str(body.get("session", "")).strip()
-            if not session:
-                raise ValueError("tmux.capture_pane requires session")
-            lines = int(body.get("lines") or 200)
+        def _ticket_next_id(_body: dict[str, Any]) -> dict[str, Any]:
+            return {"ok": True, "ticket_id": _orchestrator().next_ticket_id()}
+
+        def _ticket_exists(body: dict[str, Any]) -> dict[str, Any]:
+            handle = str(body.get("handle", "")).strip()
+            if not handle:
+                raise ValueError("ticket.exists requires handle")
+            return {"ok": True, "exists": _orchestrator().ticket_exists(handle)}
+
+        async def _ticket_save_body(body: dict[str, Any]) -> dict[str, Any]:
+            ticket_id = str(body.get("ticket_id", "")).strip()
+            if not ticket_id:
+                raise ValueError("ticket.save_body requires ticket_id")
+            md = body.get("body")
+            if not isinstance(md, str):
+                raise ValueError("ticket.save_body requires body string")
+            return await _orchestrator().save_ticket_body(ticket_id, md)
+
+        async def _ticket_schedule(body: dict[str, Any]) -> dict[str, Any]:
+            ticket_id = str(body.get("ticket_id", "")).strip()
+            if not ticket_id:
+                raise ValueError("ticket.schedule requires ticket_id")
+            duration = str(body.get("duration", ""))
+            return await _orchestrator().schedule_ticket(ticket_id, duration)
+
+        async def _plan_create(body: dict[str, Any]) -> dict[str, Any]:
+            plan_name = str(body.get("plan_name", "")).strip()
+            if not plan_name:
+                raise ValueError("plan.create requires plan_name")
+            message = str(body.get("message", ""))
+            return await _orchestrator().create_plan(plan_name, message)
+
+        def _image_upload(body: dict[str, Any]) -> dict[str, Any]:
+            # F9: store a pasted clipboard image under .murder/images and return
+            # the stored path. Bytes ride base64 over JSON-RPC.
+            #
+            # The client now mints the filename ``stem`` at paste time and passes
+            # it as ``name`` (so the label<->file binding is known instantly,
+            # client-side). The server no longer mints it. But the service NEVER
+            # trusts a path from the wire: both ``name`` and ``ext`` are
+            # sanitized to the basename charset before being joined into the
+            # path, so a traversal attempt (``../../etc/foo``) collapses to a
+            # harmless basename. This guard is unconditional (the bus is a local
+            # UDS with only our own TUI as client, but the invariant holds
+            # regardless).
+            import base64
+            import re
+
+            from murder.state.storage.paths import murder_dir as _murder_dir
+
+            data_b64 = body.get("bytes")
+            if not isinstance(data_b64, str) or not data_b64:
+                raise ValueError("image.upload requires base64 bytes")
             try:
-                text = await tmux.capture_pane(session, lines=lines)
-            except tmux.TmuxError as exc:
-                return {"ok": False, "error": str(exc)}
-            return {"ok": True, "text": text}
+                data = base64.b64decode(data_b64, validate=True)
+            except Exception as exc:  # noqa: BLE001
+                return {"ok": False, "error": f"invalid base64: {exc}"}
 
-        async def _tmux_shell_run(body: dict[str, Any]) -> dict[str, Any]:
-            import time
+            def _sanitize(value: str) -> str:
+                return re.sub(r"[^a-zA-Z0-9._-]", "", value)
 
-            from murder.runtime.terminal import tmux
+            stem = _sanitize(str(body.get("name") or ""))
+            if not stem:
+                return {"ok": False, "error": "image.upload requires a non-empty name"}
+            ext = _sanitize(str(body.get("ext") or "png").lstrip(".")) or "png"
 
-            command = str(body.get("command", "")).strip()
-            if not command:
-                raise ValueError("tmux.shell_run requires command")
-            prior = body.get("prior_session")
-            if isinstance(prior, str) and prior.strip():
-                with contextlib.suppress(tmux.TmuxError):
-                    await tmux.kill_session(prior.strip())
-            session_name = f"murder-shell-{int(time.monotonic() * 1000) % 1_000_000}"
-            await tmux.create_session(session_name, self.repo_root)
-            await tmux.send_keys(session_name, command)
-            return {"ok": True, "session_name": session_name}
+            images_dir = _murder_dir(self.repo_root) / "images"
+            images_dir.mkdir(parents=True, exist_ok=True)
+            fpath = images_dir / f"{stem}.{ext}"
+            fpath.write_bytes(data)
+            return {"ok": True, "path": str(fpath)}
 
-        self.register_rpc_handler("tmux.capture_pane", _tmux_capture_pane)
-        self.register_rpc_handler("tmux.shell_run", _tmux_shell_run)
+        def _tui_prefs_file() -> Path:
+            from murder.state.storage.paths import tui_prefs_path as _tui_prefs_path
 
-        settings = SettingsService(self.repo_root)
+            return _tui_prefs_path(self.repo_root)
 
-        async def _settings_discover_models(body: dict[str, Any]) -> dict[str, Any]:
-            harness = str(body.get("harness", "")).strip()
-            if not harness:
-                raise ValueError("settings.discover_models requires harness")
-            result = await settings.discover_models(harness)
+        def _tui_load_favorites(_body: dict[str, Any]) -> dict[str, Any]:
+            import json
+
+            path = _tui_prefs_file()
+            if not path.exists():
+                return {"ok": True, "favorites": []}
+            try:
+                data = json.loads(path.read_text())
+                favorites = data.get("favorites", [])
+                if not isinstance(favorites, list):
+                    favorites = []
+            except Exception:  # noqa: BLE001
+                favorites = []
+            return {"ok": True, "favorites": [str(item) for item in favorites]}
+
+        def _tui_save_favorites(body: dict[str, Any]) -> dict[str, Any]:
+            import json
+
+            favorites = body.get("favorites")
+            if not isinstance(favorites, list):
+                raise ValueError("tui.save_favorites requires favorites list")
+            ids = sorted({str(item) for item in favorites})
+            path = _tui_prefs_file()
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = path.with_suffix(".tmp")
+            tmp.write_text(json.dumps({"favorites": ids}))
+            tmp.replace(path)
+            return {"ok": True, "favorites": ids}
+
+        def _worktree_list(_body: dict[str, Any]) -> dict[str, Any]:
+            from murder.state.storage.worktrees import list_murder_worktrees_sync
+
+            entries = list_murder_worktrees_sync(self.repo_root)
             return {
-                "ok": result.ok,
-                "message": result.message,
-                "models": [{"id": mid, "label": label} for mid, label in result.models],
+                "ok": True,
+                "entries": [
+                    {
+                        "path": str(entry.path),
+                        "branch": entry.branch,
+                        "is_main": entry.is_main,
+                    }
+                    for entry in entries
+                ],
             }
 
-        self.register_rpc_handler("settings.discover_models", _settings_discover_models)
+        self.register_rpc_handler("ticket.next_id", _ticket_next_id)
+        self.register_rpc_handler("ticket.exists", _ticket_exists)
+        self.register_rpc_handler("ticket.save_body", _ticket_save_body)
+        self.register_rpc_handler("ticket.schedule", _ticket_schedule)
+        self.register_rpc_handler("plan.create", _plan_create)
+        self.register_rpc_handler("image.upload", _image_upload)
+        self.register_rpc_handler("tui.load_favorites", _tui_load_favorites)
+        self.register_rpc_handler("tui.save_favorites", _tui_save_favorites)
+        self.register_rpc_handler("worktree.list", _worktree_list)
 
     async def start(self) -> None:
         self.runtime = Runtime(self.config, self.repo_root)
@@ -326,10 +354,20 @@ class ServiceHost:
             self.broker.register_rpc_handler(method, handler)
 
         self.orchestrator = Orchestrator(self.runtime)
+        # Route malformed-artifact parse errors back to the owning agent now
+        # that the orchestrator (which delivers `agent.message`) exists.
+        if self.runtime._sync is not None:
+            orch = self.orchestrator
+
+            async def _send_parse_error(agent_id: str, message: str) -> None:
+                await orch.send_agent_message(agent_id, message, None)
+
+            self.runtime._sync.set_parse_error_notifier(_send_parse_error)
         self.socket_server = SocketBusServer(
             self.broker,
             run_id=self.runtime.run_id,
             socket_path=self.socket_path,
+            tmux_frame_capture=self._capture_tmux_frame,
         )
         await self.socket_server.start()
         if self.tcp_port is not None:
@@ -341,6 +379,9 @@ class ServiceHost:
             runtime=self.runtime,
             orchestrator=self.orchestrator,
             broker=self.broker,
+        )
+        self._model_discovery_task = asyncio.create_task(
+            self._discover_then_write_models_doc(), name="startup-model-discovery"
         )
         self._usage_poll_task = asyncio.create_task(
             run_service_usage_poll_loop(self.broker, self.runtime.db, str(self.runtime.run_id)),
@@ -354,6 +395,18 @@ class ServiceHost:
         session = write_service_session(self.repo_root, self.socket_path)
         self._service_session_name = session.name
 
+    async def _discover_then_write_models_doc(self) -> None:
+        """Discover harness models, persist to DB, then write ``HARNESSES_AND_MODELS.md``.
+
+        Chained (not two parallel tasks) so the startup doc reflects the
+        *discovered* model lists rather than racing discovery and capturing the
+        classvar fallback.  Discovery fires exactly once; results are written
+        to both the in-process cache and the SQLite DB.
+        """
+        db = self.runtime.db if self.runtime is not None else None
+        await refresh_and_persist_harness_models(self.repo_root, db)
+        write_harnesses_doc(self.repo_root)
+
     async def _run_projection_poll_loop(self) -> None:
         """Single service-owned ticker that projects every harness-backed agent's
         pane into the conversation store. One loop for crows, rogues,
@@ -361,8 +414,8 @@ class ServiceHost:
         concern, decoupled from ticket orchestration (CrowHandler) so ticketless
         rogues and collaborators are covered too."""
         from murder.runtime.agents.base import (
-            HarnessBackedAgent,
             PROJECTION_INTERVAL_S,
+            HarnessBackedAgent,
         )
         from murder.runtime.terminal import tmux
 
@@ -397,6 +450,12 @@ class ServiceHost:
             with contextlib.suppress(asyncio.CancelledError):
                 await self._projection_poll_task
             self._projection_poll_task = None
+
+        if self._model_discovery_task is not None:
+            self._model_discovery_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._model_discovery_task
+            self._model_discovery_task = None
 
         if self.supervisor is not None:
             await self.supervisor.stop_all()

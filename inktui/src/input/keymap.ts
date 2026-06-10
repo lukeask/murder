@@ -1,0 +1,94 @@
+/**
+ * Keymap-as-data — the canonical shape by which a panel **declares** its keys (rule 5: input is
+ * data, not gating). This is the format every future panel copies, so it is built to make declaring
+ * a keymap the path of least resistance and imperative key handling the awkward path.
+ *
+ * The old app put key handling in a central `check_action` table and per-widget `on_key` methods
+ * with scattered conditionals — adding a panel meant editing the central table. Here a panel owns a
+ * `Keymap`: a list of `{ chord, intent, description }`. The root dispatcher
+ * (see {@link ./dispatcher.js}) is the *only* code that reads Ink key events; it matches them
+ * against the focused panel's declared chords and fires the matched intent. A panel never calls
+ * `useInput` and never sees a raw key — it provides data and an intent handler.
+ *
+ * `description` is mandatory, not decorative: the bottom bar renders contextual hints straight from
+ * the focused panel's keymap (the plan's "Bottom bar: contextual hints"), so a declared key is a
+ * self-documenting key.
+ */
+
+import type { Key } from 'ink';
+
+/**
+ * A key chord to match against an Ink `(input, key)` event. Fields are ANDed; an omitted field is
+ * "don't care". Two shapes cover everything:
+ *  - `input`: the printable char (`'j'`, `'1'`). Match is case-sensitive on the raw char.
+ *  - `key`: required modifier/special-key flags (`{ ctrl: true }`, `{ return: true }`). Only the
+ *    listed flags must be true; unlisted flags are ignored, so `{ key: { return: true } }` matches
+ *    Enter regardless of whether some other modifier flag happens to be set.
+ *
+ * At least one of `input`/`key` must be present (a chord matching nothing is meaningless); the type
+ * enforces this with a union so an empty `{}` is a compile error.
+ */
+export type KeyChord =
+  | { readonly input: string; readonly key?: Partial<Key> }
+  | { readonly input?: string; readonly key: Partial<Key> };
+
+/**
+ * One declared binding: a chord, the intent it fires, and a human description for the hint bar.
+ * `Intent` is the panel's own action-name union (a string union, e.g. `'open' | 'star'`), so the
+ * panel's intent handler is exhaustively typed against its own keymap.
+ */
+export interface KeymapEntry<Intent extends string> {
+  readonly chord: KeyChord;
+  readonly intent: Intent;
+  readonly description: string;
+}
+
+/** A panel's full keymap: its declared bindings. Order matters only for first-match-wins on an
+ * (unlikely) overlapping chord; otherwise it is just the panel's binding list. */
+export type Keymap<Intent extends string> = readonly KeymapEntry<Intent>[];
+
+/** True if an Ink `(input, key)` event satisfies `chord` (all present fields match). The single
+ * matching predicate the dispatcher uses, exported so a panel's test can assert its keymap matches
+ * the keys it means to without standing up the whole dispatcher. */
+export function chordMatches(chord: KeyChord, input: string, key: Key): boolean {
+  if (chord.input !== undefined && chord.input !== input) {
+    return false;
+  }
+  if (chord.key !== undefined) {
+    for (const flag of Object.keys(chord.key) as (keyof Key)[]) {
+      if (chord.key[flag] && !key[flag]) {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
+/**
+ * Find the intent a `(input, key)` event fires in `keymap`, or `null` if no chord matches. First
+ * match wins. This is what the dispatcher calls after it has decided the event belongs to the
+ * focused panel — pure over the keymap, so it tests without Ink.
+ */
+export function matchKeymap<Intent extends string>(
+  keymap: Keymap<Intent>,
+  input: string,
+  key: Key,
+): Intent | null {
+  for (const entry of keymap) {
+    if (chordMatches(entry.chord, input, key)) {
+      return entry.intent;
+    }
+  }
+  return null;
+}
+
+/**
+ * What a panel registers with the dispatcher: its declared keymap plus the handler that runs the
+ * matched intent. The handler is the panel's own — it closes over the panel's store actions / local
+ * state. This pair (data + its interpreter) is the whole contract a panel implements to be
+ * keyboard-driven; nothing else couples a panel to input.
+ */
+export interface PanelKeymap<Intent extends string = string> {
+  readonly keymap: Keymap<Intent>;
+  readonly onIntent: (intent: Intent) => void;
+}

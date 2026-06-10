@@ -9,20 +9,36 @@ from murder.llm.harnesses.transcripts.segments import (
     ChoiceOptionDict,
     ChoicePromptSegment,
     Segment,
+    SpannedSegment,
 )
 from murder.llm.harnesses.transcripts._shared import (
-    _RULE_RE,
-    _dedupe_adjacent,
+    dedupe_adjacent_spanned,
     truncate_title,
     reflow_paragraphs,
+)
+from murder.llm.harnesses.transcripts.toolkit import (
+    BASE_CHROME_RULES,
+    attribute_completion,
+    chrome_matcher,
+    is_rule_sandwiched,
+    record_dropped_completion,
+    regex_match_rule,
+    regex_search_rule,
+    stripped_startswith_rule,
+    stripped_substring_rule,
+    substring_rule,
 )
 
 # ---- claude_code regexes --------------------------------------------------- #
 _CC_PROMPT_RE = re.compile(r"^\s*❯[\s ]*(.*)$")
 _CC_CHOICE_OPTION_PROMPT_RE = re.compile(r"^\s*❯[\s\xa0]*\d+\.\s+")
 _CC_BULLET_RE = re.compile(r"^●\s+(.*)$")
+# A completion marker's tail is a *duration* (`3m 59s`, `45s`, `1h 2m`), not
+# arbitrary text. Constraining the capture to a duration shape keeps spinner
+# status lines like `✻ Waiting for 1 background agent to finish` from being
+# misread as final-phase elapsed markers.
 _CC_COMPLETION_RE = re.compile(
-    r"^\s*[✻✶✳✽✢]\s+[A-Z][\w-]+\s+for\s+(\d.+?)\s*$"
+    r"^\s*[✻✶✳✽✢]\s+[A-Z][\w-]+\s+for\s+(\d+\s*[hms](?:\s+\d+\s*[hms])*)\s*$"
 )
 _CC_AGENT_DONE_RE = re.compile(r'^●\s+Agent\s+"(.+?)"\s+completed\s+·\s+(.+?)\s*$')
 _CC_AGENT_START_RE = re.compile(r"^●\s+Agent\((.+?)\)\s*$")
@@ -47,48 +63,52 @@ _CC_UNCACHED_NOTICE_RE = re.compile(
 )
 _CC_RESULT_RE = re.compile(r"^\s*⎿\s?(.*)$")
 _CC_ELIDED_RE = re.compile(r"…\s*\+\d+\s+lines")
+# A `❯` prompt whose body is just a slash-command echo (`/model opus`, `/clear`)
+# is CC chrome, not a user turn — the harness echoes the command into the prompt
+# box but the user never "said" it to the model. Suppress it (the old parsing.py
+# did the same via this regex). Only CC needs it today; keep it local.
+_SLASH_COMMAND_RE = re.compile(r"/[A-Za-z][\w-]*(?:\s+.*)?\Z")
 
 
 def _is_live_prompt(lines: list[str], index: int) -> bool:
     """A `❯` line is the live input box when it sits between two horizontal rules."""
-    before = index - 1
-    while before >= 0 and not lines[before].strip():
-        before -= 1
-    after = index + 1
-    while after < len(lines) and not lines[after].strip():
-        after += 1
-    return (
-        before >= 0
-        and after < len(lines)
-        and bool(_RULE_RE.match(lines[before]))
-        and bool(_RULE_RE.match(lines[after]))
-    )
+    return is_rule_sandwiched(lines, index)
 
 
-def _cc_is_chrome(line: str) -> bool:
-    stripped = line.strip()
+def _cc_empty_prompt(line: str) -> bool:
+    """A bare ``❯`` with nothing typed after it — the resting input box."""
     prompt_m = _CC_PROMPT_RE.match(line)
-    return bool(
-        not stripped
-        or _RULE_RE.match(line)
-        or _CC_SPINNER_RE.match(line)
-        or _CC_SHELL_PROMPT_RE.match(line)
-        or _CC_AGENT_ROSTER_RE.match(line)
-        or (prompt_m is not None and not (prompt_m.group(1) or "").strip())
-        or "bypass permissions" in line
-        or "esc to interrupt" in line
-        or "shift+tab to cycle" in line
-        or _CC_UNCACHED_NOTICE_RE.search(line)
-        or "/clear to start fresh" in line
-        or "↑/↓ to " in line
-        or "to manage" in line
-        or "Backgrounded agent" in stripped
-        or stripped.startswith("Tip:")
-        or (stripped.startswith("⎿") and "Tip:" in stripped)
-        or stripped.startswith(("▐", "▝", "▘", "▛", "▜"))
-        or "Claude Code v" in line
-        or "Waiting for" in stripped
-    )
+    return prompt_m is not None and not (prompt_m.group(1) or "").strip()
+
+
+def _cc_result_tip(line: str) -> bool:
+    """A ``⎿`` result row that is actually a ``Tip:`` hint, not tool output."""
+    s = line.strip()
+    return s.startswith("⎿") and "Tip:" in s
+
+
+# CC chrome: shared base (blank + rule) plus CC's own status bars, spinners,
+# shell prompts, banners and one-off hint substrings, as composable rules.
+_cc_is_chrome = chrome_matcher(
+    *BASE_CHROME_RULES,
+    regex_match_rule(_CC_SPINNER_RE),
+    regex_match_rule(_CC_SHELL_PROMPT_RE),
+    regex_match_rule(_CC_AGENT_ROSTER_RE),
+    _cc_empty_prompt,
+    substring_rule(
+        "bypass permissions",
+        "esc to interrupt",
+        "shift+tab to cycle",
+        "/clear to start fresh",
+        "↑/↓ to ",
+        "to manage",
+        "Claude Code v",
+    ),
+    regex_search_rule(_CC_UNCACHED_NOTICE_RE),
+    stripped_substring_rule("Backgrounded agent", "Waiting for"),
+    stripped_startswith_rule("Tip:", "▐", "▝", "▘", "▛", "▜"),
+    _cc_result_tip,
+)
 
 
 def _cc_starts_block(lines: list[str], index: int) -> bool:
@@ -99,6 +119,36 @@ def _cc_starts_block(lines: list[str], index: int) -> bool:
         or _CC_COMPLETION_RE.match(line)
         or _CC_SUMMARY_RE.match(line)
     )
+
+
+_CC_BANNER_GLYPHS = ("▐", "▝", "▘", "▛", "▜")
+
+
+def _cc_clip_preamble(lines: list[str]) -> tuple[list[str], int]:
+    """Drop everything up to and including the startup banner.
+
+    Returns the clipped lines and the absolute index of the first kept line
+    (the offset that maps clipped-coordinate spans back to scrollback coords).
+
+    The box-drawing logo + ``Claude Code v…`` banner is rendered once at launch
+    and, because scrollback only ever grows, persists at the top of the captured
+    pane for the session's life. Anything *above* it is pre-conversation noise:
+    a shell prompt and the (often line-wrapped) launch command when claude
+    wasn't the pane's initial command, a resize redraw, an MOTD. Those un-indented
+    lines would otherwise be swept up by the bare-prose branch as a phantom
+    assistant turn. Clip to just after the banner so the conversation region is
+    clean. If no banner is present (we attached mid-session, or it never rendered),
+    keep everything — there is no preamble to strip.
+    """
+    last_banner = -1
+    for idx, line in enumerate(lines):
+        if _cc_starts_block(lines, idx):
+            break  # conversation has begun; the banner is behind us
+        if "Claude Code v" in line or line.strip().startswith(_CC_BANNER_GLYPHS):
+            last_banner = idx
+    if last_banner >= 0:
+        return lines[last_banner + 1 :], last_banner + 1
+    return lines, 0
 
 
 def _strip_expand_hint(text: str) -> str:
@@ -159,13 +209,30 @@ def _cc_collect_result(lines: list[str], i: int) -> tuple[str | None, bool, int]
 
 def parse_lines(
     lines: list[str],
+    system_prompt: str | None = None,
+    user_texts: list[str] | None = None,
+) -> list[Segment]:
+    return [s.segment for s in parse_spanned(lines, system_prompt, user_texts)]
+
+
+def parse_spanned(
+    lines: list[str],
     system_prompt: str | None = None,  # noqa: ARG001
     user_texts: list[str] | None = None,  # noqa: ARG001
-) -> list[Segment]:
-    segments: list[Segment] = []
+) -> list[SpannedSegment]:
+    """Span-annotated parse: each segment carries the absolute scrollback line
+    range it was built from. ``parse_lines`` is the span-stripped projection."""
+    spanned: list[SpannedSegment] = []
+    clipped, base = _cc_clip_preamble(lines)
+
+    def emit(seg: Segment, start: int, end: int) -> None:
+        spanned.append(SpannedSegment(seg, base + start, base + end))
+
+    lines = clipped
     i = 0
     while i < len(lines):
         line = lines[i]
+        block_start = i
 
         prompt = _CC_PROMPT_RE.match(line)
         if (
@@ -173,6 +240,7 @@ def parse_lines(
             and prompt.group(1).strip()
             and not _is_live_prompt(lines, i)
             and not _CC_CHOICE_OPTION_PROMPT_RE.match(line)
+            and not _SLASH_COMMAND_RE.fullmatch(prompt.group(1).strip())
         ):
             body = [prompt.group(1)]
             i += 1
@@ -195,44 +263,46 @@ def parse_lines(
                         break
                 else:
                     break
-            segments.append({"type": "user", "text": _reflow_user(body)})
+            emit({"type": "user", "text": _reflow_user(body)}, block_start, i)
             continue
 
         done = _CC_AGENT_DONE_RE.match(line)
         if done:
-            segments.append(
+            emit(
                 {
                     "type": "agent_event",
                     "name": done.group(1),
                     "status": "completed",
                     "elapsed": done.group(2),
-                }
+                },
+                block_start,
+                i + 1,
             )
             i += 1
             continue
 
         start = _CC_AGENT_START_RE.match(line)
         if start:
-            segments.append(
+            i += 1
+            while i < len(lines) and not _cc_starts_block(lines, i):
+                i += 1
+            emit(
                 {
                     "type": "agent_event",
                     "name": start.group(1),
                     "status": "dispatched",
                     "elapsed": None,
-                }
+                },
+                block_start,
+                i,
             )
-            i += 1
-            while i < len(lines) and not _cc_starts_block(lines, i):
-                i += 1
             continue
 
         completion = _CC_COMPLETION_RE.match(line)
         if completion:
-            for segment in reversed(segments):
-                if segment["type"] == "assistant":
-                    segment["phase"] = "final"
-                    segment["elapsed"] = completion.group(1)
-                    break
+            attribute_completion(
+                spanned, completion.group(1), base + i + 1, on_drop=record_dropped_completion
+            )
             i += 1
             continue
 
@@ -253,7 +323,7 @@ def parse_lines(
             command = re.sub(r"\)\s*$", "", body)
             command = _strip_expand_hint(re.sub(r"\s+", " ", command).strip())
             result, elided, i = _cc_collect_result(lines, i)
-            segments.append(
+            emit(
                 {
                     "type": "tool_call",
                     "title": truncate_title(command),
@@ -261,7 +331,9 @@ def parse_lines(
                     "result": result,
                     "elided": elided or result is None,
                     "running": False,
-                }
+                },
+                block_start,
+                i,
             )
             continue
 
@@ -273,7 +345,7 @@ def parse_lines(
             title = _strip_expand_hint(line.strip())
             i += 1
             result, elided, i = _cc_collect_result(lines, i)
-            segments.append(
+            emit(
                 {
                     "type": "tool_call",
                     "title": truncate_title(title),
@@ -281,7 +353,9 @@ def parse_lines(
                     "result": result,
                     "elided": elided or result is None,
                     "running": False,
-                }
+                },
+                block_start,
+                i,
             )
             continue
 
@@ -302,13 +376,15 @@ def parse_lines(
                 i += 1
             text = _reflow_prose(body)
             if text:
-                segments.append(
+                emit(
                     {
                         "type": "assistant",
                         "phase": "intermediate",
                         "text": text,
                         "elapsed": None,
-                    }
+                    },
+                    block_start,
+                    i,
                 )
             continue
 
@@ -335,18 +411,20 @@ def parse_lines(
                 i += 1
             text = _reflow_prose(body)
             if text:
-                segments.append(
+                emit(
                     {
                         "type": "assistant",
                         "phase": "intermediate",
                         "text": text,
                         "elapsed": None,
-                    }
+                    },
+                    block_start,
+                    i,
                 )
             continue
 
         i += 1
-    return _dedupe_adjacent(segments)
+    return dedupe_adjacent_spanned(spanned)
 
 
 def choice_prompt_segment(prompt: Any) -> ChoicePromptSegment:

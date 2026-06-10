@@ -4,7 +4,7 @@ import asyncio
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-from murder.bus.protocol import CommandEvent
+from murder.bus.protocol import CommandEvent, Entity, StateSnapshotEvent
 from murder.config import Config
 from murder.llm.harnesses.usage_sampling import (
     UsageSamplingContext,
@@ -93,6 +93,30 @@ class UsageProbeWorker(Worker):
             return {"handled": False}
         sampled_kinds = self._kinds_provider(ctx)
         stored, failures = await self._sampler(ctx)
+        # F1 (queue_row chunk): the sampler INSERTs into `harness_usage_snapshots`,
+        # the read-model state behind the usage gauges embedded in
+        # `state.schedule_snapshot`. Emit one key-only `state.snapshot{queue_row}`
+        # per sampled harness when at least one snapshot stored -> the client
+        # refetches the usage slice. Async caller with a live `ctx.bus` -> await
+        # bus.publish directly (backbone pattern; no Runtime handle in a worker).
+        # Key = harness (per-harness gauges; no queue_row table -- plan line 322).
+        # CROSS-PROCESS NOTE: `UsageProbeWorker` runs in a subprocess in production
+        # (supervisor `_start_subprocess_runner`), where the parent never injects a
+        # bus. `process_targets.py` now constructs a DB-backed `Bus(run_id, conn)`
+        # in the child; `Bus.publish` persists to the shared `events` table before
+        # fan-out and the client tails that table (DurableBroker.tail), so the emit
+        # reaches subscribers across the process boundary. A `ctx.bus is None`
+        # guard keeps the in-process / test paths safe.
+        if stored > 0 and ctx.bus is not None and ctx.run_id is not None:
+            for kind in sampled_kinds:
+                await ctx.bus.publish(
+                    StateSnapshotEvent(
+                        run_id=ctx.run_id,
+                        agent_id=self.name,
+                        entity=Entity.QUEUE_ROW,
+                        key=kind,
+                    )
+                )
         return {
             "handled": True,
             "stored": stored,

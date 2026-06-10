@@ -1,4 +1,10 @@
-"""Regression tests for ticket vs rogue crow launch ordering (launch fix plan §7)."""
+"""Tests for ticket and rogue crow launch sequencing invariants.
+
+COOKBOOK = canonical launch ordering: model before brief, trust before model,
+           effort defaulting, rogue-never-briefed.
+EDGE CASES = rejection detection, brief-paste failure, codex picker bypass,
+             cursor set_model rejection.
+"""
 
 from __future__ import annotations
 
@@ -9,8 +15,6 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 import murder.runtime.terminal.tmux as tmux_mod
-from murder.runtime.agents.base import AgentStatus
-from murder.runtime.agents.crow import CrowAgent
 from murder.llm.harnesses.antigravity import AntigravityAdapter
 from murder.llm.harnesses.base import HarnessSession
 from murder.llm.harnesses.claude_code import ClaudeCodeAdapter
@@ -18,6 +22,8 @@ from murder.llm.harnesses.codex import CodexAdapter
 from murder.llm.harnesses.cursor import CursorAdapter
 from murder.llm.harnesses.models import HarnessStartSpec
 from murder.llm.harnesses.results import fail_result, ok_result
+from murder.runtime.agents.base import AgentStatus
+from murder.runtime.agents.crow import CrowAgent
 from tests.support.fake_tmux import FakeTmux
 
 _FIXTURES = Path(__file__).parent.parent / "fixtures" / "harness_panes"
@@ -62,6 +68,10 @@ def _send_texts(ft: FakeTmux) -> list[str]:
     return [args[1] for args, _ in ft.calls_to("send_keys")]
 
 
+# ============================================================
+# === COOKBOOK ===============================================
+# ============================================================
+
 # ── 7.1 — ticket crow: model before brief ────────────────────────────────────
 
 
@@ -95,14 +105,116 @@ def test_rogue_harness_start_never_sends_brief(fake_tmux_launch: FakeTmux) -> No
     context_text = "rogue must not receive this context body"
 
     hs = HarnessSession(CursorAdapter(startup_model="gpt-5.5"), "rogue-sess", Path("/tmp/repo"))
-    result = asyncio.run(
-        hs.start(_fast_spec(startup_model="gpt-5.5", startup_effort=None))
-    )
+    result = asyncio.run(hs.start(_fast_spec(startup_model="gpt-5.5", startup_effort=None)))
 
     assert result.ok
     texts = _send_texts(fake_tmux_launch)
     assert not any(context_text in t for t in texts)
 
+
+# ── 7.4 — CC trust dismissed before /model ───────────────────────────────────
+
+
+def test_cc_trust_dialog_dismissed_before_model_command(fake_tmux_launch: FakeTmux) -> None:
+    fake_tmux_launch.queue_pane(CC_TRUST)
+    fake_tmux_launch.queue_pane(CC_TRUST)
+    fake_tmux_launch.queue_pane(CC_IDLE)
+
+    hs = HarnessSession(ClaudeCodeAdapter(), "cc-sess", Path("/tmp/repo"))
+
+    async def _spy_set_model(model: str, effort: str | None = None):
+        await tmux_mod.send_keys(hs.session, f"/model {model}", literal=True, enter=True)
+        return ok_result()
+
+    hs.set_model = _spy_set_model  # type: ignore[method-assign]
+
+    result = asyncio.run(
+        hs._configure_started_session(_fast_spec(startup_model="haiku"))  # noqa: SLF001
+    )
+
+    assert result.ok
+    texts = _send_texts(fake_tmux_launch)
+    assert "1" in texts
+    model_cmds = [i for i, t in enumerate(texts) if t.startswith("/model")]
+    assert model_cmds, "expected /model during configured startup"
+    assert texts.index("1") < model_cmds[0]
+
+
+# ── 7.5 — effort defaults and preservation ───────────────────────────────────
+
+
+def test_configure_session_defaults_effort_to_medium(fake_tmux_launch: FakeTmux) -> None:
+    fake_tmux_launch.queue_pane(CC_IDLE)
+    captured: dict[str, object] = {}
+
+    hs = HarnessSession(ClaudeCodeAdapter(), "claude-sess", Path("/tmp/repo"))
+
+    async def _spy_set_model(model: str, effort: str | None = None):
+        captured["effort"] = effort
+        return ok_result()
+
+    hs.set_model = _spy_set_model  # type: ignore[method-assign]
+
+    result = asyncio.run(
+        hs._configure_started_session(  # noqa: SLF001
+            _fast_spec(startup_model="gpt-5.5", startup_effort=None)
+        )
+    )
+
+    assert result.ok
+    assert captured["effort"] == "medium"
+
+
+def test_antigravity_configure_session_keeps_effort_unset_when_omitted(
+    fake_tmux_launch: FakeTmux,
+) -> None:
+    fake_tmux_launch.queue_pane(_load("agy_idle.txt"))
+    captured: dict[str, object] = {}
+
+    hs = HarnessSession(AntigravityAdapter(), "agy-sess", Path("/tmp/repo"))
+
+    async def _spy_set_model(model: str, effort: str | None = None):
+        captured["model"] = model
+        captured["effort"] = effort
+        return ok_result()
+
+    hs.set_model = _spy_set_model  # type: ignore[method-assign]
+
+    result = asyncio.run(
+        hs._configure_started_session(  # noqa: SLF001
+            _fast_spec(startup_model="gemini-3-1-pro", startup_effort=None)
+        )
+    )
+
+    assert result.ok
+    assert captured == {"model": "gemini-3-1-pro", "effort": None}
+
+
+def test_configure_session_preserves_explicit_effort(fake_tmux_launch: FakeTmux) -> None:
+    fake_tmux_launch.queue_pane(CC_IDLE)
+    captured: dict[str, object] = {}
+
+    hs = HarnessSession(ClaudeCodeAdapter(), "claude-sess", Path("/tmp/repo"))
+
+    async def _spy_set_model(model: str, effort: str | None = None):
+        captured["effort"] = effort
+        return ok_result()
+
+    hs.set_model = _spy_set_model  # type: ignore[method-assign]
+
+    result = asyncio.run(
+        hs._configure_started_session(  # noqa: SLF001
+            _fast_spec(startup_model="gpt-5.5", startup_effort="high")
+        )
+    )
+
+    assert result.ok
+    assert captured["effort"] == "high"
+
+
+# ============================================================
+# === EDGE CASES =============================================
+# ============================================================
 
 # ── 7.3 — send_prompt failure after successful harness start ─────────────────
 
@@ -154,105 +266,7 @@ def test_crow_agent_send_propagates_failed_result(monkeypatch: pytest.MonkeyPatc
     assert result.message == "delivery failed"
 
 
-# ── 7.4 — CC trust dismissed before /model ───────────────────────────────────
-
-
-def test_cc_trust_dialog_dismissed_before_model_command(fake_tmux_launch: FakeTmux) -> None:
-    fake_tmux_launch.queue_pane(CC_TRUST)
-    fake_tmux_launch.queue_pane(CC_TRUST)
-    fake_tmux_launch.queue_pane(CC_IDLE)
-
-    hs = HarnessSession(ClaudeCodeAdapter(), "cc-sess", Path("/tmp/repo"))
-
-    async def _spy_set_model(model: str, effort: str | None = None):
-        await tmux_mod.send_keys(hs.session, f"/model {model}", literal=True, enter=True)
-        return ok_result()
-
-    hs.set_model = _spy_set_model  # type: ignore[method-assign]
-
-    result = asyncio.run(
-        hs._configure_started_session(_fast_spec(startup_model="haiku"))  # noqa: SLF001
-    )
-
-    assert result.ok
-    texts = _send_texts(fake_tmux_launch)
-    assert "1" in texts
-    model_cmds = [i for i, t in enumerate(texts) if t.startswith("/model")]
-    assert model_cmds, "expected /model during configured startup"
-    assert texts.index("1") < model_cmds[0]
-
-
-# ── 7.5 — effort defaults to medium when unset ───────────────────────────────
-
-
-def test_configure_session_defaults_effort_to_medium(fake_tmux_launch: FakeTmux) -> None:
-    fake_tmux_launch.queue_pane(CC_IDLE)
-    captured: dict[str, object] = {}
-
-    hs = HarnessSession(ClaudeCodeAdapter(), "claude-sess", Path("/tmp/repo"))
-
-    async def _spy_set_model(model: str, effort: str | None = None):
-        captured["effort"] = effort
-        return ok_result()
-
-    hs.set_model = _spy_set_model  # type: ignore[method-assign]
-
-    result = asyncio.run(
-        hs._configure_started_session(  # noqa: SLF001
-            _fast_spec(startup_model="gpt-5.5", startup_effort=None)
-        )
-    )
-
-    assert result.ok
-    assert captured["effort"] == "medium"
-    assert CodexAdapter.default_effort == "medium"
-
-
-def test_antigravity_configure_session_keeps_effort_unset_when_omitted(
-    fake_tmux_launch: FakeTmux,
-) -> None:
-    fake_tmux_launch.queue_pane(_load("agy_idle.txt"))
-    captured: dict[str, object] = {}
-
-    hs = HarnessSession(AntigravityAdapter(), "agy-sess", Path("/tmp/repo"))
-
-    async def _spy_set_model(model: str, effort: str | None = None):
-        captured["model"] = model
-        captured["effort"] = effort
-        return ok_result()
-
-    hs.set_model = _spy_set_model  # type: ignore[method-assign]
-
-    result = asyncio.run(
-        hs._configure_started_session(  # noqa: SLF001
-            _fast_spec(startup_model="gemini-3-1-pro", startup_effort=None)
-        )
-    )
-
-    assert result.ok
-    assert captured == {"model": "gemini-3-1-pro", "effort": None}
-
-
-def test_configure_session_preserves_explicit_effort(fake_tmux_launch: FakeTmux) -> None:
-    fake_tmux_launch.queue_pane(CC_IDLE)
-    captured: dict[str, object] = {}
-
-    hs = HarnessSession(ClaudeCodeAdapter(), "claude-sess", Path("/tmp/repo"))
-
-    async def _spy_set_model(model: str, effort: str | None = None):
-        captured["effort"] = effort
-        return ok_result()
-
-    hs.set_model = _spy_set_model  # type: ignore[method-assign]
-
-    result = asyncio.run(
-        hs._configure_started_session(  # noqa: SLF001
-            _fast_spec(startup_model="gpt-5.5", startup_effort="high")
-        )
-    )
-
-    assert result.ok
-    assert captured["effort"] == "high"
+# ── 7.5 — codex startup model skips runtime picker ───────────────────────────
 
 
 def test_codex_startup_model_skips_runtime_picker(fake_tmux_launch: FakeTmux) -> None:

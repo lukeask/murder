@@ -10,6 +10,7 @@ from typing import Any, Literal
 import yaml
 
 from murder.config import HarnessKind, HarnessRoleConfig
+from murder.llm.harnesses.harnesses_doc import write_harnesses_doc
 from murder.llm.harnesses.model_discovery import discover_harness_models
 from murder.state.storage.paths import roles_yaml
 from murder.user_config import UserConfig, save_user_config
@@ -55,6 +56,8 @@ class SettingsService:
         except OSError as exc:
             LOGGER.exception("failed to save user config")
             return SettingsApplyResult(ok=False, error=str(exc))
+        write_harnesses_doc(self.repo_root)
+        self._schedule_model_refresh()
         return SettingsApplyResult(ok=True)
 
     def save_project(
@@ -83,7 +86,35 @@ class SettingsService:
         except Exception as exc:
             LOGGER.exception("failed to save project roles")
             return SettingsApplyResult(ok=False, error=str(exc))
+        write_harnesses_doc(self.repo_root)
+        self._schedule_model_refresh()
         return SettingsApplyResult(ok=True)
+
+    def _schedule_model_refresh(self) -> None:
+        """Fire-and-forget model re-discovery on the running event loop.
+
+        Best-effort: if no running loop exists (e.g. called from a sync test
+        or the Textual TUI in a non-async context), the refresh is silently
+        skipped.  DB persistence is skipped here since ``SettingsService`` has
+        no DB reference; the full persist path goes through
+        ``reconfigure_collaborator`` (which is async and holds the DB).
+        """
+        import asyncio
+
+        from murder.llm.harnesses.model_cache import refresh_and_persist_harness_models
+
+        repo_root = self.repo_root
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        try:
+            loop.create_task(
+                refresh_and_persist_harness_models(repo_root, db=None),
+                name="settings-model-refresh",
+            )
+        except Exception:  # noqa: BLE001
+            LOGGER.debug("failed to schedule model refresh after settings save", exc_info=True)
 
     async def discover_models(self, harness: HarnessKind | str) -> ModelDiscoveryResult:
         kind = harness if isinstance(harness, str) else str(harness)

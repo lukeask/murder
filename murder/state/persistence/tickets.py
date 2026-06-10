@@ -1,4 +1,4 @@
-"""Persistence for tickets, ticket_deps, ticket_skills, and checklist tables."""
+"""Persistence for tickets, ticket_deps, and checklist tables."""
 
 from __future__ import annotations
 
@@ -27,14 +27,13 @@ def insert_ticket(conn: sqlite3.Connection, ticket: Ticket) -> None:
     try:
         conn.execute(
             """
-            INSERT INTO tickets(id, title, wave, status, harness, model, attempts,
+            INSERT INTO tickets(id, title, status, harness, model, attempts,
                                 created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 ticket.id,
                 ticket.title,
-                ticket.wave,
                 ticket.status.value,
                 ticket.harness,
                 ticket.model,
@@ -47,11 +46,6 @@ def insert_ticket(conn: sqlite3.Connection, ticket: Ticket) -> None:
             conn.execute(
                 "INSERT INTO ticket_deps(ticket_id, depends_on_id) VALUES (?, ?)",
                 (ticket.id, dep),
-            )
-        for skill in ticket.skills:
-            conn.execute(
-                "INSERT INTO ticket_skills(ticket_id, skill) VALUES (?, ?)",
-                (ticket.id, skill),
             )
         for item in ticket.checklist:
             conn.execute(
@@ -93,12 +87,7 @@ def apply_ticket_carve_payload(
             "INSERT INTO ticket_deps(ticket_id, depends_on_id) VALUES (?, ?)",
             (ticket_id, dep),
         )
-    conn.execute("DELETE FROM ticket_skills WHERE ticket_id = ?", (ticket_id,))
-    for skill in skills:
-        conn.execute(
-            "INSERT INTO ticket_skills(ticket_id, skill) VALUES (?, ?)",
-            (ticket_id, skill),
-        )
+    del skills
     conn.execute("DELETE FROM checklist WHERE ticket_id = ?", (ticket_id,))
     for ord_, text in enumerate(checklist):
         conn.execute(
@@ -118,10 +107,6 @@ def get_ticket(conn: sqlite3.Connection, ticket_id: str) -> TicketRecord | None:
             "SELECT depends_on_id FROM ticket_deps WHERE ticket_id = ?", (ticket_id,)
         )
     ]
-    skills = [
-        str(r["skill"])
-        for r in conn.execute("SELECT skill FROM ticket_skills WHERE ticket_id = ?", (ticket_id,))
-    ]
     checklist = [
         ChecklistItemRecord(
             id=int(r["id"]),
@@ -138,25 +123,15 @@ def get_ticket(conn: sqlite3.Connection, ticket_id: str) -> TicketRecord | None:
     return ticket_record_from_row(
         row,
         deps=deps,
-        skills=skills,
+        skills=[],
         checklist=checklist,
     )
 
 
 def list_tickets_by_status(conn: sqlite3.Connection, status: str) -> list[TicketRecord]:
     rows = conn.execute(
-        "SELECT id FROM tickets WHERE status = ? ORDER BY wave, id", (status,)
+        "SELECT id FROM tickets WHERE status = ? ORDER BY id", (status,)
     ).fetchall()
-    out: list[TicketRecord] = []
-    for r in rows:
-        t = get_ticket(conn, str(r["id"]))
-        if t is not None:
-            out.append(t)
-    return out
-
-
-def list_tickets_in_wave(conn: sqlite3.Connection, wave: int) -> list[TicketRecord]:
-    rows = conn.execute("SELECT id FROM tickets WHERE wave = ? ORDER BY id", (wave,)).fetchall()
     out: list[TicketRecord] = []
     for r in rows:
         t = get_ticket(conn, str(r["id"]))
@@ -180,8 +155,8 @@ def get_ticket_status(conn: sqlite3.Connection, ticket_id: str) -> str | None:
 def compute_ready(conn: sqlite3.Connection) -> list[str]:
     """Tickets whose deps are all ``done`` and that are currently ``ready``.
 
-    A ticket with no deps qualifies trivially. Result is sorted by wave then id
-    so kickoff order is stable.
+    A ticket with no deps qualifies trivially. Result is sorted by id so kickoff order is
+    stable.
     """
     rows = conn.execute(
         """
@@ -194,7 +169,7 @@ def compute_ready(conn: sqlite3.Connection) -> list[str]:
                  WHERE d.ticket_id = t.id
                    AND dep.status NOT IN ('done', 'archived')
             )
-          ORDER BY t.wave, t.id
+          ORDER BY t.id
         """
     ).fetchall()
     return [r["id"] for r in rows]

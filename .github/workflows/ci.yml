@@ -1,0 +1,44 @@
+name: ci
+
+# Smoke gate: prove the murder wheel builds (the hatch hook + esbuild bundle assemble) and the
+# shipped Ink bundle loads under each supported Node version — catching a broken inktui/src or a
+# busted build hook BEFORE a release tag, not during. Linux-only; the only axis that varies across
+# distros is the Node version, so we matrix that.
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:                 # kill stale runs on rapid re-push (saves minutes)
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node: [20, 22, latest]   # the axis that actually varies; distros do not
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      # Build the wheel (proves the hook + esbuild bundle assemble), install it, then run the
+      # shipped bundle's --smoke (F7) resolved exactly as the launcher resolves it at runtime —
+      # via importlib.resources, from the installed package, not the repo tree. `python -m build`
+      # builds the wheel from the sdist in a temp dir, so the bundle does NOT land at the repo path.
+      - run: python -m pip install build
+      - run: python -m build
+      - run: python -m pip install dist/*.whl
+      - name: Smoke the shipped Ink bundle
+        # Resolve + run from outside the checkout so `murder` resolves to the installed wheel (the
+        # repo's own murder/ package would otherwise shadow it on the implicit path).
+        working-directory: ${{ runner.temp }}
+        run: |
+          BUNDLE="$(python -c 'import importlib.resources as r; print(r.files("murder") / "_inktui" / "index.js")')"
+          echo "Bundle: $BUNDLE"
+          node "$BUNDLE" --smoke

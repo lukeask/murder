@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import re
 
-from murder.llm.harnesses.parsing import strip_ansi
+from murder.llm.harnesses.parsing import is_rule_line, is_status_spinner_line, strip_ansi
 from murder.llm.harnesses.transcripts._shared import (
-    _dedupe_adjacent,
+    dedupe_adjacent_spanned,
     murder_owned_anchors,
     normalize_prompt_match,
 )
-from murder.llm.harnesses.transcripts.segments import Segment
+from murder.llm.harnesses.transcripts.toolkit import collect_chrome_delimited_blocks
+from murder.llm.harnesses.transcripts.segments import Segment, SpannedSegment
 
 # Cursor colour-codes every submitted *user-input* block with one SGR
 # background and the live composer (input box) with another, so both turn role
@@ -27,6 +28,54 @@ _CHROME_MARK = "\x02"
 # ---- cursor regexes -------------------------------------------------------- #
 _CURSOR_INPUT_LINE_RE = re.compile(r"^\s*→\s*\S")
 _CURSOR_STARTUP_HINT_RE = re.compile(r"^(?:Use\s+/\S|Try\s+Composer\b)", re.IGNORECASE)
+
+# The cursor *chrome* predicate and the regexes it owns live here (the grammar
+# owns them); the cursor adapter imports ``_is_cursor_chrome`` back, plus the few
+# regexes that double as live-state markers. Layering: adapter→grammar is allowed,
+# grammar→adapter is not.
+_BUSY_INPUT_HINT_RE = re.compile(r"ctrl\+c to stop", re.IGNORECASE)
+_BUSY_SPINNER_RE = re.compile(
+    r"^\s*\S+\s+(Composing|Running|Generating|Thinking)\b",
+    re.MULTILINE,
+)
+_CURSOR_CWD_RE = re.compile(r"^\s*(?:~/|/|\./|\.\./).*\s+·\s+\S+\s*$")
+_CURSOR_COMPOSER_RE = re.compile(r"^\s*Composer\b.*\bAuto-run\b", re.IGNORECASE)
+_CURSOR_PLACEHOLDER_RE = re.compile(
+    r"^\s*→\s*(?:Add a follow-up|Plan,\s*search,\s*build anything)\b",
+    re.IGNORECASE,
+)
+_CURSOR_CHROME_RE = re.compile(
+    r"""
+    ^\s*(?:
+        Cursor\s+Agent
+        |v\d{4}\.\d{2}\.\d{2}-[A-Za-z0-9]+
+        |⚠\s*Workspace\s+Trust\s+Required
+        |Cursor\s+Agent\s+can\s+execute\s+code\b
+        |Do\s+you\s+trust\s+the\s+contents\b
+        |\[[aq]\]\s+
+        |⏳\s*Trusting\s+workspace
+    )
+    """,
+    re.IGNORECASE | re.VERBOSE,
+)
+
+
+def _is_cursor_chrome(line: str) -> bool:
+    """True if a pane line is cursor UI chrome (busy markers, cwd, banner, prompt
+    placeholder). Doubles as the busy/composer marker source for the adapter."""
+    s = line.strip()
+    if not s:
+        return False
+    if is_rule_line(line) or is_status_spinner_line(line):
+        return True
+    return bool(
+        _CURSOR_PLACEHOLDER_RE.match(s)
+        or _CURSOR_COMPOSER_RE.match(s)
+        or _CURSOR_CWD_RE.match(s)
+        or _BUSY_INPUT_HINT_RE.search(s)
+        or _BUSY_SPINNER_RE.match(s)
+        or _CURSOR_CHROME_RE.match(s)
+    )
 
 
 def preprocess_frame(frame: str) -> str:
@@ -64,12 +113,9 @@ def _classify(line: str) -> tuple[bool, bool, str]:
 def _cursor_is_chrome(line: str) -> bool:
     """Chrome predicate for cursor transcript parsing.
 
-    Extends `_is_cursor_chrome` from cursor.py with patterns that are not
-    needed for idle/busy state detection but must be suppressed in the parsed
-    transcript.
+    Extends `_is_cursor_chrome` with patterns that are not needed for idle/busy
+    state detection but must be suppressed in the parsed transcript.
     """
-    from murder.llm.harnesses.cursor import _is_cursor_chrome  # noqa: PLC0415
-
     _is_user, is_chrome, line = _classify(line)
     if is_chrome:
         return True
@@ -89,7 +135,15 @@ def parse_lines(
     system_prompt: str | None = None,
     user_texts: list[str] | None = None,
 ) -> list[Segment]:
-    """Parse cursor scrollback into segments.
+    return [s.segment for s in parse_spanned(lines, system_prompt, user_texts)]
+
+
+def parse_spanned(
+    lines: list[str],
+    system_prompt: str | None = None,
+    user_texts: list[str] | None = None,
+) -> list[SpannedSegment]:
+    """Parse cursor scrollback into span-annotated segments.
 
     Cursor has no *syntactic* role markers, but it colour-codes user-input
     blocks; ``preprocess_frame`` tags those lines with ``_USER_MARK``. We split
@@ -103,34 +157,27 @@ def parse_lines(
     user blocks, so the only job here is to keep genuine assistant prose and
     discard murder's own echoed content.
     """
-    blocks: list[list[str]] = []
-    current: list[str] = []
-    for line in lines:
-        if _cursor_is_chrome(line):
-            if current:
-                blocks.append(current)
-                current = []
-        else:
-            current.append(line)
-    if current:
-        blocks.append(current)
-
+    blocks = collect_chrome_delimited_blocks(lines, _cursor_is_chrome)
     anchors = murder_owned_anchors(system_prompt, user_texts)
 
-    segments: list[Segment] = []
-    for block in blocks:
+    spanned: list[SpannedSegment] = []
+    for block, start, end in blocks:
         classified = [_classify(line) for line in block]
         is_user = any(is_u for is_u, _is_chrome, _plain in classified)
         text = " ".join(plain.strip() for _is_u, _is_chrome, plain in classified if plain.strip())
         if not text:
             continue
         if is_user or normalize_prompt_match(text) in anchors:
-            segments.append({"type": "user", "text": text})
+            spanned.append(SpannedSegment({"type": "user", "text": text}, start, end))
         else:
-            segments.append(
-                {"type": "assistant", "phase": "intermediate", "text": text, "elapsed": None}
+            spanned.append(
+                SpannedSegment(
+                    {"type": "assistant", "phase": "intermediate", "text": text, "elapsed": None},
+                    start,
+                    end,
+                )
             )
-    return _dedupe_adjacent(segments)
+    return dedupe_adjacent_spanned(spanned)
 
 
 def is_idle(pane_text: str) -> bool:

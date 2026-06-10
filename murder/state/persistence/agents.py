@@ -80,11 +80,43 @@ def upsert_agent(
         )
 
 
+# F11 H1 — heartbeat emit coalescing.
+#
+# A plain heartbeat only bumps ``last_heartbeat_at``; the ONLY thing the
+# ``state.crow_snapshot`` consumer derives from that field is the client-side
+# "stuck" flag (Ink ``isStuck``: ``now - last_seen > STUCK_AFTER``, mirrored from
+# Python ``read_model.STUCK_AFTER`` / ``crow_health.STUCK_AFTER = 60s``). The Ink
+# roster is event-driven (re-pulled ONLY on an ``agent``-entity ``state.snapshot``;
+# there is no client refetch timer), so we cannot drop the heartbeat emit entirely
+# or a healthy crow's ``last_seen`` would freeze and it would render as falsely
+# "stuck" after 60s. But emitting ``agent`` on every ~5s beat is the antipattern
+# (a refetch storm Ink can't use — it renders no sub-bucket heartbeat precision).
+#
+# Policy: emit ``agent`` only when ``floor(now / HEARTBEAT_EMIT_BUCKET_S)`` advances,
+# i.e. at most once per bucket per agent. The bucket is half ``STUCK_AFTER`` so the
+# client's worst-case ``last_seen`` staleness (bucket + bus latency) stays well under
+# the 60s stuck threshold and a live crow never flips to false-stuck. Status changes
+# go through the ``sync_agent`` choke point (which already emits ``agent``) and are
+# unaffected by this gate.
+HEARTBEAT_EMIT_BUCKET_S: float = 30.0
+
+
 def heartbeat_agent(conn: sqlite3.Connection, agent_id: str) -> None:
     conn.execute(
         "UPDATE agents SET last_heartbeat_at = ? WHERE agent_id = ?",
         (_now(), agent_id),
     )
+
+
+def heartbeat_bucket(now_s: float, *, bucket_s: float = HEARTBEAT_EMIT_BUCKET_S) -> int:
+    """The coalescing bucket index for a monotonic-clock reading ``now_s``.
+
+    Pure integer arithmetic on an injected clock (no wall-clock, no sleep) so the
+    emit-coalescing gate is fully deterministic under the test conftest's
+    noop-``asyncio.sleep`` patch. The caller emits ``agent`` only when this index
+    advances between heartbeats.
+    """
+    return int(now_s // max(1e-9, bucket_s))
 
 
 def set_agent_status(conn: sqlite3.Connection, agent_id: str, status: str) -> None:

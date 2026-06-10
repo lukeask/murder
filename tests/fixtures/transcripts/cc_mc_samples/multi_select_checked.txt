@@ -1,0 +1,33 @@
+# source: tools/testing/recordings/20260606-060051/frames.jsonl frame 276
+# terminal width ~253 cols; CC AskUserQuestion multi-select tab with several boxes toggled [✔]; cursor on Feature 3
+
+user@machine:~/Documents/code/murder $ claude
+ ▐▛███▜▌   Claude Code v2.1.167
+▝▜█████▛▘  Opus 4.8 with medium effort · Claude Pro
+  ▘▘ ▝▝    ~/Documents/code/murder
+
+  Feature of the week: /loop — run a prompt or slash command on a recurring interval
+
+
+❯ please present me with a multiple choice menu and a multiple check box menu
+
+● I'll present both menus for you to try out.
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+←  ☒ Single pick  ☒ Multi pick  ✔ Submit  →
+
+Which options do you want enabled? (pick any number)
+
+  1. [✔] Feature 1
+  Enable the first feature.
+  2. [✔] Feature 2
+  Enable the second feature.
+❯ 3. [✔] Feature 3
+  Enable the third feature.
+  4. [ ] Feature 4
+  Enable the fourth feature.
+  5. [ ] Type something
+     Submit
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  6. Chat about this
+
+Enter to select · Tab/Arrow keys to navigate · Esc to cancel

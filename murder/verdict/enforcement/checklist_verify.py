@@ -1,8 +1,8 @@
 """Anti-faking checklist verification.
 
-A crow can mark a checklist item done by emitting `>>> CHECK: <text>`.
-That tells us nothing about whether the work actually landed. This module
-inspects each item's text for cited file/symbol references and verifies
+Checklist state is synced from ticket markdown. A checked item still does not
+prove the work landed, so this module inspects each item's text for cited
+file/symbol references and verifies
 against the working tree:
 
 - Cited path exists.

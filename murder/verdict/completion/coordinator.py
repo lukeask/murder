@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol
 
-from murder.bus import Bus
+from murder.bus import Bus, Entity
 from murder.bus import Role as AgentRole
 
 from .checks.base import CheckResult, CheckStatus, CompletionContext
@@ -42,6 +42,9 @@ class CoordinatorHost(Protocol):
     def get_crow(self, ticket_id: str) -> Agent | None: ...
 
     def get_agent(self, agent_id: str) -> Agent | None: ...
+
+    # F1: key-only ticket snapshot emit (async choke point; see Runtime).
+    async def publish_snapshot(self, entity: Entity, key: str) -> None: ...
 
 
 EnsurePlanner = Callable[[str], Awaitable[str]]
@@ -258,6 +261,11 @@ class CompletionCoordinator:
                     to_status=TicketStatus.DONE.value,
                 )
             )
+            # F1: this path bypasses orchestrator._emit_ticket_status, so emit
+            # the key-only ticket snapshot here beside the typed event. Note the
+            # ready->in_progress pre-transition above is part of the SAME logical
+            # "done", so we emit once (not per lifecycle.transition call).
+            await self._rt.publish_snapshot(Entity.TICKET, ticket_id)
         await self._prune_terminal_worktree(ticket_id)
 
     async def _fail_ticket(self, ticket_id: str, reason: str) -> None:
@@ -290,6 +298,7 @@ class CompletionCoordinator:
                     to_status=TicketStatus.FAILED.value,
                 )
             )
+            await self._rt.publish_snapshot(Entity.TICKET, ticket_id)
         await self._make_escalation_service().record_ticket_failure(ticket_id, reason)
         await self._prune_terminal_worktree(ticket_id)
 
@@ -304,6 +313,8 @@ class CompletionCoordinator:
         from murder.state.persistence.tickets import update_ticket_status
         update_ticket_status(self._rt.db, ticket_id, TicketStatus.BLOCKED.value)
         self._rt.db.commit()
+        # F1: block has no StatusChangeEvent today; emit the key-only snapshot.
+        await self._rt.publish_snapshot(Entity.TICKET, ticket_id)
 
     def _make_escalation_service(self) -> object:
         from murder.verdict.escalations.service import EscalationService

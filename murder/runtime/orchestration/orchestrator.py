@@ -1,4 +1,4 @@
-"""Orchestration: spawn/kill agents; wave kickoff; ready computation."""
+"""Orchestration: spawn/kill agents; ready computation."""
 
 from __future__ import annotations
 
@@ -20,12 +20,13 @@ from murder.work import notes as notes_mod
 from murder.state.persistence.tickets import (
     get_ticket as _db_get_ticket,
     compute_ready as _db_compute_ready,
-    list_tickets_in_wave as _db_list_tickets_in_wave,
     update_ticket_status as _db_update_ticket_status,
     apply_ticket_carve_payload as _db_apply_ticket_carve_payload,
 )
 from murder.state.persistence.plans import (
     get_plan_row as _db_get_plan_row,
+    live_plan_name_exists as _db_live_plan_name_exists,
+    rename_plan as _db_rename_plan,
     upsert_plan as _db_upsert_plan,
 )
 from murder.state.persistence.agents import (
@@ -37,7 +38,7 @@ from murder.state.persistence.agents import (
 from murder.runtime.agents.base import AgentRole, AgentStatus
 from murder.runtime.agents.crow_handler import CrowHandler
 from murder.runtime.agents.planning_handler import PlanningHandler
-from murder.bus import StatusChangeEvent, TicketStatus
+from murder.bus import Entity, StatusChangeEvent, TicketStatus
 from murder.llm.clients import resolve_role_client
 from murder.config import (
     Config,
@@ -46,6 +47,7 @@ from murder.config import (
     resolve_default_crow_startup_model,
 )
 from murder.llm.harnesses import get as get_harness
+from murder.llm.harnesses.harnesses_doc import write_harnesses_doc
 from murder.work.plans.parser import (
     render as _render_plan_markdown,
     write as _write_plan_markdown,
@@ -54,7 +56,6 @@ from murder.work.plans.schema import Plan, PlanStatus
 from murder.work.plans.sync import content_hash as _plan_content_hash
 from murder.state.storage.paths import plan_md, ticket_md, tickets_dir
 from murder.state.storage.worktrees import (
-    ensure_crow_worktree,
     ensure_named_worktree,
     prune_terminal_crow_worktree,
 )
@@ -102,9 +103,9 @@ def _harness_prefix(harness_kind: str) -> str:
     return first_word[:8] or "rogue"
 
 
-def is_rogue_agent_id(agent_id: str) -> bool:
-    """True for any rogue agent id regardless of harness prefix."""
-    return "rogue-" in agent_id
+# Re-exported from the pure-util module so existing backend callers keep
+# importing it from here; renderer-agnostic clients import the util directly.
+from murder.runtime.orchestration.agent_ids import is_rogue_agent_id  # noqa: E402
 
 
 def _codex_startup_model_degraded_ok(
@@ -145,6 +146,33 @@ def _validate_plan_filename_stem(name: str, *, command: str) -> str:
     return name
 
 
+def _free_superseded_plan_name(db: Any, name: str) -> str:
+    """Release ``name`` from the superseded plan that currently owns it.
+
+    Renames the superseded DB row (PRIMARY KEY ``plans.name``) to a collision-
+    safe archived key so a fresh plan can take ``name``. All of the old plan's
+    data — body, revisions, related tickets, and its deprecated-dir markdown —
+    is preserved; only the DB key changes (its ``materialized_path`` is carried
+    through unchanged so the on-disk file is not orphaned). Returns the new key.
+
+    F3b: this is the chosen resolution of the schema/app uniqueness tension —
+    free the superseded row's name at create-time (option (a)). No schema change
+    or migration, and it reuses the existing data-preserving ``rename_plan``.
+    """
+    row = _db_get_plan_row(db, name)
+    assert row is not None
+    materialized_path = str(row.get("materialized_path") or "")
+    base = f"{name}-superseded"
+    archived = base
+    i = 2
+    while _db_get_plan_row(db, archived) is not None:
+        archived = f"{base}-{i}"
+        i += 1
+    with db:
+        _db_rename_plan(db, name, archived, materialized_path=materialized_path)
+    return archived
+
+
 class Orchestrator:
     def __init__(self, rt: OrchestratorHost) -> None:
         self.rt = rt
@@ -174,6 +202,7 @@ class Orchestrator:
             repo_root=self.rt.repo_root,
             escalations=self._escalations(),
             emit_status=self._emit_ticket_status,
+            emit_snapshot=lambda tid: self.rt.publish_snapshot(Entity.TICKET, tid),
         )
 
     async def kickoff_ready(self, only: str | None = None) -> list[str]:
@@ -236,13 +265,16 @@ class Orchestrator:
             kicked.append(tid)
         return kicked
 
-    async def quick_kick_ticket(self, title: str) -> dict[str, Any]:
-        """Create a ticket, insert it into the DB as PLANNED, and immediately kick it."""
+    def next_ticket_id(self) -> str:
+        """Return the next ``t<NNN>`` id, scanning DB + filesystem for the max.
+
+        Authoritative server-side id allocation; checks both the DB and the
+        on-disk ``.md`` files so it stays consistent across the TicketSync poll
+        window.
+        """
         assert self.rt.db is not None
         conn = self.rt.db
         repo_root = self.rt.repo_root
-
-        # Derive next ID from DB + file system to avoid races with TicketSync.
         max_n = 0
         for row in conn.execute("SELECT id FROM tickets WHERE id LIKE 't%'").fetchall():
             m = _TNUM_RE.match(str(row["id"]))
@@ -254,9 +286,33 @@ class Orchestrator:
                 m2 = _TNUM_RE.match(p.stem)
                 if m2:
                     max_n = max(max_n, int(m2.group(1)))
-        ticket_id = f"t{max_n + 1:03d}"
+        return f"t{max_n + 1:03d}"
 
-        # Write the markdown file so the sidecar sync stays consistent.
+    def ticket_exists(self, handle: str) -> bool:
+        """True if ``handle`` names an existing ticket (DB row or on-disk ``.md``)."""
+        assert self.rt.db is not None
+        handle = handle.strip()
+        if not handle:
+            return False
+        row = self.rt.db.execute(
+            "SELECT 1 FROM tickets WHERE id = ?", (handle,)
+        ).fetchone()
+        if row is not None:
+            return True
+        return ticket_md(self.rt.repo_root, handle).exists()
+
+    def quick_create_ticket(self, title: str) -> dict[str, Any]:
+        """Create a ticket .md + insert it as PLANNED, without kicking it.
+
+        Server-side id allocation + file write + DB insert — the authority the
+        TUI's old direct ``.md`` write bypassed (V1).
+        """
+        assert self.rt.db is not None
+        conn = self.rt.db
+        repo_root = self.rt.repo_root
+        ticket_id = self.next_ticket_id()
+
+        # Write the markdown file so the ticket sync stays consistent.
         path = ticket_md(repo_root, ticket_id)
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(f"# {title}\n\n## Plan\n\n## Working Notes\n")
@@ -274,7 +330,6 @@ class Orchestrator:
             ticket = Ticket(
                 id=ticket_id,
                 title=title,
-                wave=1,
                 status=TicketStatus.PLANNED,
                 created_at=now,
                 updated_at=now,
@@ -283,7 +338,17 @@ class Orchestrator:
                 _db_insert_ticket(conn, ticket)
             except Exception:
                 pass  # TicketSync may have raced us
+        # Sync method (no surrounding coroutine): use the sync emit_snapshot
+        # choke point. New ticket -> the schedule snapshot's planned bucket
+        # changed. (TicketSync would also emit on its next reconcile, but this
+        # closes the 1.5 s poll gap the direct DB insert opens.)
+        self.rt.emit_snapshot(Entity.TICKET, ticket_id)
+        return {"handled": True, "ticket_id": ticket_id, "title": title}
 
+    async def quick_kick_ticket(self, title: str) -> dict[str, Any]:
+        """Create a ticket, insert it into the DB as PLANNED, and immediately kick it."""
+        created = self.quick_create_ticket(title)
+        ticket_id = str(created["ticket_id"])
         kicked = await self.kickoff_ready(only=ticket_id)
         return {"handled": True, "ticket_id": ticket_id, "title": title, "kicked": kicked}
 
@@ -305,6 +370,11 @@ class Orchestrator:
                 to_status=to_status,
             )
         )
+        # F1: the status-transition choke point also emits the key-only
+        # state.snapshot{ticket}. ~5 sites funnel here (kickoff / retry / force /
+        # carve-ready, and outcome.fail_ticket via the injected emit_status), so
+        # the snapshot rides alongside the existing typed event in one place.
+        await self.rt.publish_snapshot(Entity.TICKET, ticket_id)
 
     async def _fail_ticket(self, ticket_id: str, reason: str) -> None:
         await self._outcomes().fail_ticket(ticket_id, reason)
@@ -318,10 +388,18 @@ class Orchestrator:
             self.rt.config.default_crow, row, harness_kind
         )
         startup_effort = resolve_default_crow_startup_effort(self.rt.config.default_crow, row)
+        worktree_name = row.get("worktree")
         worktree_path: str | None = None
-        if self.rt.config.runtime.use_worktrees:
-            worktree = await ensure_crow_worktree(self.rt.repo_root, ticket_id)
+        if isinstance(worktree_name, str) and worktree_name.strip():
+            worktree = await ensure_named_worktree(
+                self.rt.repo_root,
+                worktree_name.strip(),
+                category="crow",
+            )
             worktree_path = str(worktree.path)
+        additional_workspace_dirs: tuple[str, ...] = ()
+        if harness_kind == "codex" and worktree_path is not None:
+            additional_workspace_dirs = (str(tickets_dir(self.rt.repo_root).resolve()),)
         ctx = BriefContext(
             role=AgentRole.CROW,
             repo_root=self.rt.repo_root,
@@ -338,6 +416,7 @@ class Orchestrator:
             model=startup_model,
             effort=startup_effort,
             startup_prompt=brief,
+            additional_workspace_dirs=additional_workspace_dirs,
         )
         handle = await spawn_agent(spec, rt=self.rt, event_sink=self.rt.event_sink)
         return handle.session_name
@@ -624,6 +703,15 @@ class Orchestrator:
                 block=conversation.block_to_wire(block),
             )
         )
+        # F1 (plan sort-order): the plans list orders by MAX(captured_at) of each
+        # plan's ``planner-{name}`` messages (read_model.get_plans_snapshot), so a
+        # user turn to a planner reorders the list WITHOUT any plans-table write.
+        # This is the low-rate, plan-scoped, runtime-layer choke point for that
+        # reorder; emit a key-only plan snapshot. (The high-rate poll-driven
+        # ``merge_transcript`` rebuild that ALSO re-sorts is deferred per the
+        # plan's coalescing caveat -- see commit message follow-up.)
+        if agent_id.startswith("planner-"):
+            await self.rt.publish_snapshot(Entity.PLAN, agent_id[len("planner-"):])
 
     async def send_agent_message(
         self, agent_id: str, message: str, ticket_id: str | None
@@ -904,6 +992,12 @@ class Orchestrator:
             )
             _write_plan_markdown(path, plan)
         row = _db_get_plan_row(self.rt.db, name) or {}
+        # scaffold_plan writes the plans/plan_revisions rows DIRECTLY (not via
+        # PlanSync.reconcile_file), so the on_plan_change callback never fires for
+        # it. Emit here: a new/refreshed draft -> the plans list changed. Async
+        # path -> await publish_snapshot (closes the 1.5 s poll gap the direct DB
+        # write opens before PlanSync would re-reconcile the materialized file).
+        await self.rt.publish_snapshot(Entity.PLAN, name)
         return {
             "handled": True,
             "name": name,
@@ -1079,9 +1173,18 @@ class Orchestrator:
 
     async def reconfigure_collaborator(self) -> dict[str, Any]:
         """Reload project config and restart the collaborator if its live harness changed."""
+        from murder.llm.harnesses.model_cache import refresh_and_persist_harness_models
+
         new_config = Config.load(self.rt.repo_root)
         self.rt.config = new_config
         current_harness = new_config.collaborator.harness
+        write_harnesses_doc(self.rt.repo_root)
+        # Best-effort re-scrape: newly-enabled harnesses get discovered and
+        # persisted. Failures are swallowed inside refresh_and_persist.
+        try:
+            await refresh_and_persist_harness_models(self.rt.repo_root, self.rt.db)
+        except Exception:  # noqa: BLE001
+            LOGGER.debug("model re-scrape after reconfigure_collaborator failed", exc_info=True)
 
         restarted = False
         agent_id = _db_get_active_agent_by_role(self.rt.db, "collaborator")
@@ -1142,7 +1245,7 @@ class Orchestrator:
             )
 
         client = resolve_role_client(self.rt.config.notetaker)
-        return await notes_mod.submit_capture(
+        result = await notes_mod.submit_capture(
             repo_root=self.rt.repo_root,
             conn=self.rt.db,
             raw=raw.strip(),
@@ -1150,10 +1253,22 @@ class Orchestrator:
             config=self.rt.config.notetaker,
             note_name=notes_mod.today_name(),
         )
+        # submit_capture writes notes rows DIRECTLY (bypassing NoteSync), creating
+        # and possibly renaming the note within this RPC. The provisional name is
+        # never observed by a client before the rename, so emit once on the final
+        # resolved name from the return dict. Async path -> publish_snapshot.
+        resolved = result.get("note_name")
+        if isinstance(resolved, str) and resolved:
+            await self.rt.publish_snapshot(Entity.NOTE, resolved)
+        return result
 
     async def ensure_note(self, name: str) -> dict[str, Any]:
         assert self.rt.db is not None
         row = notes_mod.ensure_note(self.rt.db, self.rt.repo_root, name)
+        # ensure_note writes the notes row directly (bypassing NoteSync); a new
+        # note may have appeared in the active list. Emit key-only via the async
+        # choke point.
+        await self.rt.publish_snapshot(Entity.NOTE, name)
         return {"name": name, "materialized_path": str(row.get("materialized_path", ""))}
 
     async def retire_note(self, name: str) -> dict[str, Any]:
@@ -1162,20 +1277,19 @@ class Orchestrator:
             dest = notes_mod.retire_note(self.rt.db, self.rt.repo_root, name)
         except Exception as exc:
             raise ValueError(f"could not retire note: {exc}") from exc
+        # Retire flips status away from 'active' -> the note drops from the notes
+        # snapshot (status='active' filter). Emit so the client refetches and drops it.
+        await self.rt.publish_snapshot(Entity.NOTE, name)
         return {"name": name, "dest_name": dest.name}
-
-    async def evaluate_wave_completion(self, wave: int) -> bool:
-        assert self.rt.db is not None
-        tickets = _db_list_tickets_in_wave(self.rt.db, wave)
-        if not tickets:
-            return True
-        return all(t["status"] == TicketStatus.DONE.value for t in tickets)
 
     async def reopen_ticket(self, ticket_id: str) -> list[str]:
         assert self.rt.db is not None
         cascaded = lifecycle.reopen(self.rt.db, ticket_id)
         for tid in {ticket_id, *cascaded}:
             await self._reap_ticket_crow_agents(tid)
+            # F1: reopen cascade has no StatusChangeEvent today; emit the
+            # key-only ticket snapshot for every ticket whose status changed.
+            await self.rt.publish_snapshot(Entity.TICKET, tid)
         return list(cascaded)
 
     async def retry_failed_ticket(self, ticket_id: str) -> dict[str, Any]:
@@ -1196,7 +1310,134 @@ class Orchestrator:
             (schedule_at, now, ticket_id),
         )
         self.rt.db.commit()
+        await self.rt.publish_snapshot(Entity.TICKET, ticket_id)
         return {"handled": True, "ticket_id": ticket_id, "schedule_at": schedule_at}
+
+    async def save_ticket_body(self, ticket_id: str, body: str) -> dict[str, Any]:
+        """Persist the edited markdown body for a ticket (the editor's save).
+
+        The Ink ticket editor sends only the markdown *body* (everything after
+        the frontmatter: ``## Plan`` / ``## Working Notes`` prose and the
+        ``# Checklist`` section). The frontmatter (title/deps/harness/model/
+        worktree) is read-only in the editor and absent from the payload, so we
+        re-attach the *current* frontmatter rather than wiping it. We write the
+        ``.md`` file (the authoritative ticket writer is the filesystem->DB
+        reconcile path) then reconcile it synchronously into the DB so the save
+        is durable before the RPC returns, closing the 1.5 s TicketSync poll gap.
+        """
+        assert self.rt.db is not None
+        from murder.work.tickets.parser import parse_ticket
+        from murder.work.tickets.render import render_ticket_frontmatter
+        from murder.work.tickets.sync import reconcile_ticket_md
+
+        ticket_id = ticket_id.strip()
+        if not ticket_id:
+            raise ValueError("ticket.save_body requires ticket_id")
+        path = ticket_md(self.rt.repo_root, ticket_id)
+        # Source the read-only frontmatter from the current file when present,
+        # else fall back to the DB row so we never drop metadata on save.
+        if path.exists():
+            frontmatter = render_ticket_frontmatter(
+                parse_ticket(path.read_text(encoding="utf-8"), default_title=ticket_id)
+            )
+        else:
+            row = _db_get_ticket(self.rt.db, ticket_id)
+            if row is None:
+                return {"handled": True, "ok": False, "error": f"ticket not found: {ticket_id}"}
+            deps = [
+                str(r["depends_on_id"])
+                for r in self.rt.db.execute(
+                    "SELECT depends_on_id FROM ticket_deps WHERE ticket_id = ? "
+                    "ORDER BY depends_on_id",
+                    (ticket_id,),
+                ).fetchall()
+            ]
+            frontmatter = render_ticket_frontmatter(
+                {
+                    "title": row.get("title") or ticket_id,
+                    "deps": deps,
+                    "harness": row.get("harness"),
+                    "model": row.get("model"),
+                    "worktree": row.get("worktree"),
+                }
+            )
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(frontmatter + body.rstrip("\n") + "\n", encoding="utf-8")
+        reconcile_ticket_md(conn=self.rt.db, repo_root=self.rt.repo_root, ticket_id=ticket_id)
+        # ``reconcile_ticket_md`` builds a throwaway TicketSync with no
+        # on_ticket_change callback, so the F1 snapshot does not fire from it.
+        # Emit explicitly after the reconcile commits.
+        await self.rt.publish_snapshot(Entity.TICKET, ticket_id)
+        return {"handled": True, "ok": True, "ticket_id": ticket_id}
+
+    async def schedule_ticket(self, ticket_id: str, duration: str) -> dict[str, Any]:
+        """Set/clear a ticket's schedule from a free-form duration string.
+
+        The Ink editor sends a raw duration (``1d4h3m``, ``34m``); the backend is
+        authoritative. An empty/whitespace duration clears the schedule; any
+        non-empty value is parsed via ``parse_duration`` and added to *now*.
+        Delegates the DB write + snapshot emit to ``set_schedule_at``.
+
+        Stores a UTC timestamp (``utcnow``), matching the rest of the codebase's
+        persisted clock (``scaffold_plan``, ``TicketSync._now``, the schedule
+        read model) so the scheduler/calendar consumers — which compute "now" in
+        UTC — see the intended offset rather than one skewed by the local tz.
+        """
+        from murder.work.duration import parse_duration
+
+        ticket_id = ticket_id.strip()
+        if not ticket_id:
+            raise ValueError("ticket.schedule requires ticket_id")
+        text = (duration or "").strip()
+        if not text:
+            return await self.set_schedule_at(ticket_id, None)
+        delta = parse_duration(text)
+        schedule_at = (datetime.utcnow() + delta).isoformat(timespec="seconds")
+        return await self.set_schedule_at(ticket_id, schedule_at)
+
+    async def create_plan(self, plan_name: str, message: str) -> dict[str, Any]:
+        """Create a new plan and (optionally) seed its planning agent.
+
+        Thin composition of existing machinery: ``scaffold_plan`` writes the
+        plan row + materialized markdown (and emits the plan snapshot), then —
+        when an initial ``message`` is supplied — ``send_agent_message`` to the
+        ``planner-{name}`` agent, which lazily spawns the planner via
+        ``ensure_planning_agent``. Mirrors the Textual ctrl+p new-plan flow
+        (scaffold + focus ``planner-{name}`` as chat target).
+        """
+        plan_name = (plan_name or "").strip()
+        if not plan_name:
+            raise ValueError("plan.create requires plan_name")
+        assert self.rt.db is not None
+        # Data-integrity guard (F3b): scaffold_plan UPSERTs, so creating over an
+        # existing name would silently clobber that plan's body. A *live* plan
+        # owns its name — reject and never overwrite. A *superseded* plan does
+        # not block reuse, but the plans.name PRIMARY KEY still forbids a second
+        # row, so free the superseded row's name first (rename it to an archived
+        # key, preserving all its data + its deprecated-dir markdown) before the
+        # scaffold INSERT. This keeps the DB constraint and the app guard in
+        # exact agreement at INSERT time. Mirrors notes' status-aware guard.
+        if _db_live_plan_name_exists(self.rt.db, plan_name):
+            raise FileExistsError(
+                f"a plan named {plan_name!r} already exists; "
+                "choose a different name or rename the existing plan"
+            )
+        existing = _db_get_plan_row(self.rt.db, plan_name)
+        if existing is not None:
+            # Superseded row holds the name — archive it (data fully preserved)
+            # so the scaffold can take the name. Atomic with no markdown change
+            # to the archived plan: rename_plan carries its materialized_path
+            # through, so its deprecated-dir file is not orphaned.
+            archived = _free_superseded_plan_name(self.rt.db, plan_name)
+            await self.rt.publish_snapshot(Entity.PLAN, archived)
+        scaffolded = await self.scaffold_plan(plan_name, "# Plan Name\n")
+        name = str(scaffolded.get("name") or plan_name)
+        agent_id: str | None = None
+        text = (message or "").strip()
+        if text:
+            agent_id = f"planner-{name}"
+            await self.send_agent_message(agent_id, text, None)
+        return {"handled": True, "plan_name": name, "agent_id": agent_id}
 
     async def update_ticket_metadata(
         self, ticket_id: str, payload: dict[str, Any]
@@ -1209,11 +1450,6 @@ class Orchestrator:
         title = str(payload.get("title") or row.get("title") or "").strip()
         if not title:
             return {"handled": True, "ok": False, "error": "title is required"}
-        wave_raw = payload.get("wave")
-        try:
-            wave = int(wave_raw) if wave_raw is not None else int(row.get("wave", 0))
-        except (TypeError, ValueError):
-            return {"handled": True, "ok": False, "error": "wave must be an integer"}
         harness = str(payload.get("harness") or row.get("harness") or "cursor").strip()
         model = payload.get("model") or None
         if model is not None:
@@ -1229,8 +1465,8 @@ class Orchestrator:
         checklist = [str(c) for c in (payload.get("checklist") or [])]
         with self.rt.db:
             self.rt.db.execute(
-                "UPDATE tickets SET wave=?, schedule_at=? WHERE id=?",
-                (wave, schedule_at, ticket_id),
+                "UPDATE tickets SET schedule_at=? WHERE id=?",
+                (schedule_at, ticket_id),
             )
             _db_apply_ticket_carve_payload(
                 self.rt.db,
@@ -1242,6 +1478,7 @@ class Orchestrator:
                 skills=skills,
                 checklist=checklist,
             )
+        await self.rt.publish_snapshot(Entity.TICKET, ticket_id)
         return {"handled": True, "ok": True, "ticket_id": ticket_id}
 
     async def force_ticket_status(self, ticket_id: str, status: str) -> dict[str, Any]:
@@ -1283,34 +1520,20 @@ class Orchestrator:
     async def apply_ticket_carve_ready(
         self, ticket_id: str, payload: dict[str, object]
     ) -> dict[str, object]:
-        """Apply carved sidecar from structured ``carve`` or legacy ``yaml`` string."""
+        """Apply carved ticket metadata from a structured ``carve`` payload."""
         assert self.rt.db is not None
         carve_body = payload.get("carve")
-        yaml_text = payload.get("yaml")
         try:
             if isinstance(carve_body, dict) and carve_body:
                 spec = dict(carve_body)
                 if spec.get("id") is None:
                     spec["id"] = ticket_id
-                prev = carve.ingest_carve_ready_spec(
-                    conn=self.rt.db,
-                    repo_root=str(self.rt.repo_root),
-                    ticket_id=ticket_id,
-                    spec=spec,
-                )
-            elif isinstance(yaml_text, str) and yaml_text.strip():
-                spec = carve.parse_carve_yaml(yaml_text)
-                prev = carve.ingest_carve_ready_spec(
-                    conn=self.rt.db,
-                    repo_root=str(self.rt.repo_root),
-                    ticket_id=ticket_id,
-                    spec=spec,
-                )
+                prev = carve.apply_carve_ready_spec(self.rt.db, ticket_id, spec)
             else:
                 return {
                     "handled": True,
                     "ok": False,
-                    "error": "payload must include non-empty 'carve' object or 'yaml' string",
+                    "error": "payload must include non-empty 'carve' object",
                 }
         except carve.CarveError as exc:
             return {"handled": True, "ok": False, "error": str(exc)}

@@ -1,0 +1,63 @@
+user@machine:~/Documents/code/murder $ agy
+
+      ▄▀▀▄        Antigravity CLI 1.0.5
+     ▀▀▀▀▀▀       user@machine.com
+    ▀▀▀▀▀▀▀▀      Gemini 3.1 Pro (High)
+   ▄▀▀    ▀▀▄     ~/Documents/code/murder
+  ▄▀▀      ▀▀▄
+
+> /model
+  ⎿  Model set to Gemini 3.1 Pro (High)
+
+────────────────────────────────────────────────────────────
+> Please read phase1-decomposition.md and anotherparserplan.md. Then audit the current codebase for completion of 1.a-1.f.
+  1.g is still about to land. Does the code match the spec? No code edits, just let me know.
+
+▸ Thought for 8s, 572 tokens
+  Prioritizing Tool Usage
+
+▸ Thought for 7s, 122 tokens
+  Locating Essential Files
+
+● Bash(find . -name "*.md") (ctrl+o to expand)
+
+Command
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+  Requesting permission for: find . -name "*.md"
+
+Do you want to proceed?
+> 1. Yes
+  2. Yes, and always allow in this conversation for commands that start with 'find'
+  3. Yes, and always allow for commands that start with 'find' (Persist to settings.json)
+  4. No
+
+  ↑/↓ Navigate · tab Amend · e edit command
+esc to cancel                                                                                           Gemini 3.1 Pro (High)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

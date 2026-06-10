@@ -47,11 +47,20 @@ def test_get_plan_display_reads_repo_relative_materialized_path(repo_root) -> No
 
 
 def test_get_reports_snapshot_lists_markdown_reports(repo_root) -> None:
+    # F5.4: get_reports_snapshot reads the reports DB table, not disk.
+    # Seed the DB row so it appears; the disk file is still written for
+    # parity (materialized_path recorded) but the snapshot reads from DB.
+    from murder.state.persistence.reports import upsert_report
+
     conn = get_db(db_path(repo_root))
     init_db(conn)
-    conn.close()
     reports_dir(repo_root).mkdir(parents=True, exist_ok=True)
-    report_md(repo_root, "first").write_text("# First\n\nbody\n", encoding="utf-8")
+    body = "# First\n\nbody\n"
+    report_md(repo_root, "first").write_text(body, encoding="utf-8")
+    rel = str(report_md(repo_root, "first").relative_to(repo_root))
+    upsert_report(conn, "first", body=body, materialized_path=rel)
+    conn.close()
+    # Non-md file on disk — should still be ignored.
     (reports_dir(repo_root) / "ignore.txt").write_text("not a report", encoding="utf-8")
 
     snapshot = ServiceReadModel(db_path(repo_root)).get_reports_snapshot()

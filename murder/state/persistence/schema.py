@@ -26,11 +26,11 @@ CREATE TABLE IF NOT EXISTS runs (
 CREATE TABLE IF NOT EXISTS tickets (
     id            TEXT PRIMARY KEY,
     title         TEXT NOT NULL,
-    wave          INTEGER NOT NULL,
     status        TEXT NOT NULL CHECK (status IN
                   ('draft','planned','ready','in_progress','blocked','done','failed','archived')),
     harness       TEXT,
     model         TEXT,
+    worktree      TEXT,
     schedule_at   TEXT,
     metadata_hash TEXT,
     metadata_file_hash TEXT,
@@ -45,7 +45,6 @@ CREATE TABLE IF NOT EXISTS tickets (
     updated_at    TEXT NOT NULL
 );
 
-CREATE INDEX IF NOT EXISTS idx_tickets_wave   ON tickets(wave);
 CREATE INDEX IF NOT EXISTS idx_tickets_status ON tickets(status);
 
 CREATE TABLE IF NOT EXISTS ticket_deps (
@@ -53,12 +52,6 @@ CREATE TABLE IF NOT EXISTS ticket_deps (
     depends_on_id  TEXT NOT NULL REFERENCES tickets(id) ON DELETE CASCADE,
     PRIMARY KEY (ticket_id, depends_on_id),
     CHECK (ticket_id != depends_on_id)
-);
-
-CREATE TABLE IF NOT EXISTS ticket_skills (
-    ticket_id  TEXT NOT NULL REFERENCES tickets(id) ON DELETE CASCADE,
-    skill      TEXT NOT NULL,
-    PRIMARY KEY (ticket_id, skill)
 );
 
 CREATE TABLE IF NOT EXISTS checklist (
@@ -222,6 +215,31 @@ CREATE TABLE IF NOT EXISTS note_revisions (
 CREATE INDEX IF NOT EXISTS idx_note_revisions_note
     ON note_revisions(note_name, id);
 
+CREATE TABLE IF NOT EXISTS reports (
+    id                TEXT PRIMARY KEY,
+    name              TEXT NOT NULL UNIQUE,
+    created_at        TEXT NOT NULL,
+    updated_at        TEXT NOT NULL,
+    status            TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','retired')),
+    retired_at        TEXT,
+    body              TEXT NOT NULL DEFAULT '',
+    materialized_path TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_reports_updated ON reports(updated_at);
+
+CREATE TABLE IF NOT EXISTS report_revisions (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    report_name   TEXT NOT NULL REFERENCES reports(name) ON DELETE CASCADE,
+    created_at    TEXT NOT NULL,
+    source        TEXT NOT NULL CHECK (source IN ('agent','file_import','bootstrap')),
+    body          TEXT NOT NULL,
+    content_hash  TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_report_revisions_report
+    ON report_revisions(report_name, id);
+
 CREATE TABLE IF NOT EXISTS notetaker_context (
     id                INTEGER PRIMARY KEY CHECK (id = 1),
     body              TEXT NOT NULL DEFAULT '',
@@ -375,6 +393,17 @@ CREATE TABLE IF NOT EXISTS scheduler_decision_cache (
     updated_at           TEXT NOT NULL,
     PRIMARY KEY (harness, window_key)
 );
+
+-- Persisted model discovery results (one row per harness kind).
+-- models_json: JSON array of {"id": ..., "label": ...} objects.
+-- discovery_error: non-null when the last probe failed (null on success).
+-- fetched_at: ISO8601 UTC timestamp of the last discovery attempt.
+CREATE TABLE IF NOT EXISTS harness_models (
+    harness         TEXT PRIMARY KEY,
+    fetched_at      TEXT NOT NULL,
+    models_json     TEXT NOT NULL,
+    discovery_error TEXT
+);
 """
 # fmt: on
 
@@ -421,11 +450,15 @@ def init_db(conn: sqlite3.Connection) -> None:
         _migrate_events_schema_version,
         _migrate_notes_identity_status,
         _migrate_plans_single_master,
+        _migrate_repair_plans_dangling_fk,
         _migrate_role_names,
         _migrate_ticket_archived_status,
         _migrate_ticket_draft_status,
+        _migrate_ticket_drop_skills,
+        _migrate_ticket_drop_legacy_order,
         _migrate_ticket_last_error,
         _migrate_ticket_metadata_columns,
+        _migrate_ticket_worktree,
     )
     from murder.state.persistence.notetaker import ensure_notetaker_context_row
 
@@ -438,10 +471,14 @@ def init_db(conn: sqlite3.Connection) -> None:
     _migrate_role_names(conn)
     _migrate_ticket_archived_status(conn)
     _migrate_ticket_draft_status(conn)
+    _migrate_ticket_worktree(conn)
+    _migrate_ticket_drop_legacy_order(conn)
+    _migrate_ticket_drop_skills(conn)
     _migrate_notes_identity_status(conn)
     _migrate_completion_tables(conn)
     _migrate_drop_sentinel(conn)
     _migrate_plans_single_master(conn)
+    _migrate_repair_plans_dangling_fk(conn)
     _migrate_agents_harness(conn)
     _migrate_agents_model(conn)
     _migrate_agents_worktree_path(conn)

@@ -1,0 +1,63 @@
+   ▄▀▀    ▀▀▄     ~/Documents/code/murder
+  ▄▀▀      ▀▀▄
+
+> /model
+  ⎿  Model set to Gemini 3.1 Pro (High)
+
+────────────────────────────────────────────────────────────
+> Please read phase1-decomposition.md and anotherparserplan.md. Then audit the current codebase for completion of 1.a-1.f.
+  1.g is still about to land. Does the code match the spec? No code edits, just let me know.
+
+▸ Thought for 8s, 572 tokens
+  Prioritizing Tool Usage
+
+▸ Thought for 7s, 122 tokens
+  Locating Essential Files
+
+● Bash(find . -name "*.md") (ctrl+o to expand)
+
+▸ Thought for 6s, 381 tokens
+  Prioritizing Tool Usage
+
+● Read(/home/user/Documents/code/murder/.murder/plans/phase1-decomposition.md)
+● Read(/home/user/Documents/code/murder/.murder/plans/anotherparserplan.md) (ctrl+o to expand)
+⢿ Loading...
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+>
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+Antigravity CLI   general    commands    shortcuts   (←/→ or tab to cycle)
+Keyboard Shortcuts
+  /keybindings to customize
+
+  /                               Open slash commands
+  \ + enter                       Insert newline fallback
+  alt+enter, ctrl+j, shift+enter  Insert newline
+  alt+j                           Manage subagent
+  ctrl+_, ctrl+shift+-            Undo
+  ctrl+c, esc                     Go back / dismiss
+  ctrl+d                          Exit
+  ctrl+end                        Go to bottom
+  ctrl+g                          Open prompt in $EDITOR
+  ctrl+home                       Go to top
+  ctrl+k                          Approve subagent fast
+> ctrl+l                          Clear CLI screen
+  ctrl+o                          Toggle trajectory view
+  ctrl+r                          Review artifact
+  ctrl+shift+z                    Redo
+  ctrl+v                          Paste image/video
+  ctrl+y                          Yank (paste from kill ring)
+  ctrl+z                          Suspend CLI
+  down                            Move down
+  e                               Edit command
+  enter                           Send message or confirm
+  left                            Move left / Prev tab
+  pgdown, shift+down              Page down
+  pgup, shift+up                  Page up
+  right                           Move right / Next tab
+  shift/alt+click                 Select and copy text
+  tab                             Tab
+  up                              Move up
+
+Keyboard: ↑/↓ Navigate  ←/→ Switch View  esc Close
+
+esc to cancel                                                                                           Gemini 3.1 Pro (High)

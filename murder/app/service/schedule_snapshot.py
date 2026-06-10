@@ -5,18 +5,18 @@ from __future__ import annotations
 import sqlite3
 from datetime import datetime, timedelta, timezone
 
-from murder.state.persistence.usage_status import UsageStatusSnapshot
 from murder.app.service.client_api import (
     CalendarRunningAgent,
     CalendarScheduledTicket,
+    SchedulerDecisionSummary,
     ScheduleSnapshot,
     ScheduleTicketRow,
-    SchedulerDecisionSummary,
     UsageBurnRow,
     UsageGaugeDrillInSnapshot,
     UsageGaugeSummary,
     UsageResetEvent,
 )
+from murder.state.persistence.usage_status import UsageStatusSnapshot
 
 _PERIOD_MINUTES: dict[tuple[str, str], float] = {
     ("claude_code", "current_session"): 5 * 60.0,
@@ -51,21 +51,26 @@ def build_schedule_snapshot(
         ).fetchall()
     )
 
-    dep_subq = """
-        NOT EXISTS (
-            SELECT 1 FROM ticket_deps AS d
-              JOIN tickets AS dep ON dep.id = d.depends_on_id
-             WHERE d.ticket_id = t.id
-               AND dep.status NOT IN ('done', 'archived')
+    pending_deps_subq = """
+        (
+            SELECT GROUP_CONCAT(pending_dep_id, ',')
+              FROM (
+                    SELECT dep.id AS pending_dep_id
+                      FROM ticket_deps AS d
+                      JOIN tickets AS dep ON dep.id = d.depends_on_id
+                     WHERE d.ticket_id = t.id
+                       AND dep.status != 'done'
+                     ORDER BY dep.id
+                   )
         )
     """
     active = _ticket_rows(
         conn.execute(
             f"""
-            SELECT t.id, t.title, t.wave, t.status, t.updated_at, t.schedule_at,
+            SELECT t.id, t.title, t.status, t.updated_at, t.schedule_at,
                    t.harness, t.model, t.last_error,
                    t.metadata_sync_state, t.metadata_parse_error,
-                   t.metadata_conflict_reason, {dep_subq} AS deps_ok
+                   t.metadata_conflict_reason, {pending_deps_subq} AS pending_dep_ids
               FROM tickets AS t
              WHERE t.status IN ('planned', 'ready', 'in_progress', 'blocked', 'failed')
              ORDER BY datetime(t.updated_at) DESC, t.id
@@ -75,10 +80,10 @@ def build_schedule_snapshot(
     recent_done = _ticket_rows(
         conn.execute(
             f"""
-            SELECT t.id, t.title, t.wave, t.status, t.updated_at, t.schedule_at,
+            SELECT t.id, t.title, t.status, t.updated_at, t.schedule_at,
                    t.harness, t.model, t.last_error,
                    t.metadata_sync_state, t.metadata_parse_error,
-                   t.metadata_conflict_reason, {dep_subq} AS deps_ok
+                   t.metadata_conflict_reason, {pending_deps_subq} AS pending_dep_ids
               FROM tickets AS t
              WHERE t.status = 'done'
              ORDER BY datetime(t.updated_at) DESC, t.id
@@ -89,10 +94,10 @@ def build_schedule_snapshot(
     archived = _ticket_rows(
         conn.execute(
             f"""
-            SELECT t.id, t.title, t.wave, t.status, t.updated_at, t.schedule_at,
+            SELECT t.id, t.title, t.status, t.updated_at, t.schedule_at,
                    t.harness, t.model, t.last_error,
                    t.metadata_sync_state, t.metadata_parse_error,
-                   t.metadata_conflict_reason, {dep_subq} AS deps_ok
+                   t.metadata_conflict_reason, {pending_deps_subq} AS pending_dep_ids
               FROM tickets AS t
              WHERE t.status = 'archived'
              ORDER BY datetime(t.updated_at) DESC, t.id
@@ -159,7 +164,6 @@ def _ticket_rows(rows: list[sqlite3.Row]) -> tuple[ScheduleTicketRow, ...]:
         ScheduleTicketRow(
             id=str(r["id"]),
             title=str(r["title"] or ""),
-            wave=int(r["wave"]),
             status=str(r["status"]),
             last_update_at=_parse_ticket_updated_at(r["updated_at"]),
             last_update_label=_last_update_label(r),
@@ -173,10 +177,16 @@ def _ticket_rows(rows: list[sqlite3.Row]) -> tuple[ScheduleTicketRow, ...]:
             metadata_conflict_reason=str(r["metadata_conflict_reason"])
             if r["metadata_conflict_reason"]
             else None,
-            deps_ok=bool(int(r["deps_ok"])),
+            pending_dep_ids=_split_pending_dep_ids(r["pending_dep_ids"]),
         )
         for r in rows
     )
+
+
+def _split_pending_dep_ids(raw: object) -> tuple[str, ...]:
+    if raw is None:
+        return ()
+    return tuple(dep_id for dep_id in str(raw).split(",") if dep_id)
 
 
 def _parse_ticket_updated_at(raw: object) -> datetime:

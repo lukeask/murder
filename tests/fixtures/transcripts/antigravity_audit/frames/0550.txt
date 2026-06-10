@@ -1,0 +1,63 @@
+  -c                              Short alias for --continue
+  --continue                      Continue the most recent conversation
+  --conversation                  Resume a previous conversation by ID
+  --dangerously-skip-permissions  Auto-approve all tool permission requests without prompting
+  -i                              Short alias for --prompt-interactive
+  --log-file                      Override CLI log file path
+  --model                         Model for the current CLI session
+  -p                              Short alias for --print
+  --print                         Run a single prompt non-interactively and print the response
+  --print-timeout                 Timeout for print mode wait (default 5m0s)
+  --prompt                        Alias for --print
+  --prompt-interactive            Run an initial prompt interactively and continue the session
+  --sandbox                       Run in a sandbox with terminal restrictions enabled
+
+Available subcommands:
+  changelog       Show changelog and release notes
+  help            Show help for subcommands
+  install         Configure environment paths and shell settings
+  models          List available models
+  plugin          Manage plugins (install, uninstall, list, enable, disable)
+  plugins         Alias for plugin
+  update          Update CLI
+user@machine:~/Documents/code/murder $ agy --dangerously-skip-permissions
+
+      ▄▀▀▄        Antigravity CLI 1.0.6
+     ▀▀▀▀▀▀       user@machine.com
+    ▀▀▀▀▀▀▀▀      Gemini 3.1 Pro (High)
+   ▄▀▀    ▀▀▄     ~/Documents/code/murder
+  ▄▀▀      ▀▀▄
+
+────────────────────────────────────────────────────────────
+> Please read phase1-decomposition.md and anotherparserplan.md. Then audit the current codebase for completion of 1.a-1.f.
+  1.g is still about to land. Does the code match the spec? No code edits, just let me know.
+
+▸ Thought for 11s, 416 tokens
+  Prioritizing Tool Usage
+
+● ListDir(/home/user/Documents/code/murder) (ctrl+o to expand)
+
+▸ Thought for 8s, 379 tokens
+  Prioritizing Tool Usage
+
+● Bash(find . -name "phase1-decomposition.md" -o -name "anotherparserplan.md") (ctrl+o to expand)
+
+▸ Thought for 14s, 311 tokens
+  Prioritizing Tool Usage
+
+● Read(/home/user/Documents/code/murder/.murder/plans/phase1-decomposition.md) (ctrl+o to expand)
+
+▸ Thought for 7s, 311 tokens
+  Prioritizing Tool Usage
+
+● Read(/home/user/Documents/code/murder/.murder/plans/anotherparserplan.md) (ctrl+o to expand)
+
+▸ Thought for 3s, 886 tokens
+  Prioritizing Tool Usage
+
+● ListDir(/home/user/Documents/code/murder/murder/llm/harnesses) (ctrl+o to expand)
+⡿  Prioritizing Tool Usage...
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+>
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+esc to cancel                                                                                           Gemini 3.1 Pro (High)

@@ -34,8 +34,6 @@ from murder.llm.harnesses.base import (
 from murder.llm.harnesses.models import HarnessModelState, HarnessStartSpec, HarnessUsageStatus
 from murder.llm.harnesses.parsing import (
     extract_last_message_heuristic,
-    is_rule_line,
-    is_status_spinner_line,
     normalize_effort,
     parse_cursor_model_list,
     parse_cursor_model_page,
@@ -43,6 +41,15 @@ from murder.llm.harnesses.parsing import (
     parse_pointed_model_choices,
     slug_model_label,
     strip_ansi,
+)
+# The cursor chrome predicate and the regexes it owns live in the grammar module
+# (core/grammars import no adapter; adapter→grammar is the allowed direction).
+# Some of those regexes double as live-state markers, so import them back here.
+from murder.llm.harnesses.transcripts.grammar.cursor import (
+    _BUSY_INPUT_HINT_RE,
+    _BUSY_SPINNER_RE,
+    _CURSOR_COMPOSER_RE,
+    _is_cursor_chrome,
 )
 from murder.llm.harnesses.results import SimpleResult, fail_result, ok_result
 from murder.runtime.terminal import tmux
@@ -62,14 +69,7 @@ _IDLE_PLACEHOLDER_RE = re.compile(
     r"(Add a follow-up|Plan,\s*search,\s*build anything)",
     re.IGNORECASE,
 )
-_BUSY_INPUT_HINT_RE = re.compile(r"ctrl\+c to stop", re.IGNORECASE)
-_BUSY_SPINNER_RE = re.compile(
-    r"^\s*\S+\s+(Composing|Running|Generating|Thinking)\b",
-    re.MULTILINE,
-)
 _TRUST_PROMPT_RE = re.compile(r"Workspace Trust Required", re.IGNORECASE)
-_CURSOR_CWD_RE = re.compile(r"^\s*(?:~/|/|\./|\.\./).*\s+·\s+\S+\s*$")
-_CURSOR_COMPOSER_RE = re.compile(r"^\s*Composer\b.*\bAuto-run\b", re.IGNORECASE)
 _CURSOR_SPEED_IN_LINE_RE = re.compile(r"\b(Slow|Fast)\b", re.IGNORECASE)
 _CURSOR_COMPOSER_EDIT_RE = re.compile(
     r"composer\s+2(?:\.5)?\s+[—-]\s*edit\s+parameters",
@@ -79,25 +79,7 @@ _CURSOR_FAST_CHECKBOX_RE = re.compile(
     r"\[\s*(?P<mark>[xX✓]?)\s*\]\s*Fast\b",
     re.IGNORECASE,
 )
-_CURSOR_PLACEHOLDER_RE = re.compile(
-    r"^\s*→\s*(?:Add a follow-up|Plan,\s*search,\s*build anything)\b",
-    re.IGNORECASE,
-)
 _CURSOR_INPUT_RE = re.compile(r"^\s*→\s*\S", re.IGNORECASE | re.MULTILINE)
-_CURSOR_CHROME_RE = re.compile(
-    r"""
-    ^\s*(?:
-        Cursor\s+Agent
-        |v\d{4}\.\d{2}\.\d{2}-[A-Za-z0-9]+
-        |⚠\s*Workspace\s+Trust\s+Required
-        |Cursor\s+Agent\s+can\s+execute\s+code\b
-        |Do\s+you\s+trust\s+the\s+contents\b
-        |\[[aq]\]\s+
-        |⏳\s*Trusting\s+workspace
-    )
-    """,
-    re.IGNORECASE | re.VERBOSE,
-)
 
 
 def _tail(pane_text: str) -> str:
@@ -105,22 +87,6 @@ def _tail(pane_text: str) -> str:
     while lines and not lines[-1].strip():
         lines.pop()
     return "\n".join(lines[-_TAIL_LINES:])
-
-
-def _is_cursor_chrome(line: str) -> bool:
-    s = line.strip()
-    if not s:
-        return False
-    if is_rule_line(line) or is_status_spinner_line(line):
-        return True
-    return bool(
-        _CURSOR_PLACEHOLDER_RE.match(s)
-        or _CURSOR_COMPOSER_RE.match(s)
-        or _CURSOR_CWD_RE.match(s)
-        or _BUSY_INPUT_HINT_RE.search(s)
-        or _BUSY_SPINNER_RE.match(s)
-        or _CURSOR_CHROME_RE.match(s)
-    )
 
 
 def _strip_cursor_chrome(pane_text: str) -> str:

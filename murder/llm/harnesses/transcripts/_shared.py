@@ -10,7 +10,7 @@ import copy
 import re
 from collections.abc import Callable
 
-from murder.llm.harnesses.transcripts.segments import Segment
+from murder.llm.harnesses.transcripts.segments import Segment, SpannedSegment
 
 # Shared chrome
 _RULE_RE = re.compile(r"^\s*[─━═]{8,}\s*$")
@@ -179,6 +179,42 @@ def _dedupe_adjacent(segments: list[Segment]) -> list[Segment]:
             result[-1] = replacement
             continue
         result.append(segment)
+    return result
+
+
+def _merge_span(a: SpannedSegment, b: SpannedSegment) -> tuple[int, int, int]:
+    """Span covering both inputs. Pinned (empty) spans are ignored so a real
+    backing range is never lost to a pinned neighbour; epoch follows the later
+    (larger-coordinate) contributor."""
+    reals = [s for s in (a, b) if not s.pinned]
+    if not reals:
+        return a.start, a.end, max(a.epoch, b.epoch)
+    start = min(s.start for s in reals)
+    end = max(s.end for s in reals)
+    epoch = max(s.epoch for s in reals)
+    return start, end, epoch
+
+
+def dedupe_adjacent_spanned(spanned: list[SpannedSegment]) -> list[SpannedSegment]:
+    """Span-carrying twin of :func:`_dedupe_adjacent`.
+
+    Identical collapse rules; when two renders of one logical block merge, the
+    survivor's span is widened to cover both so commitment sees the full backing
+    range. Segment payloads are reconciled by reusing ``_dedupe_adjacent`` on the
+    two-element window, keeping a single source of truth for the merge policy.
+    """
+    result: list[SpannedSegment] = []
+    for item in spanned:
+        if not result:
+            result.append(item)
+            continue
+        prev = result[-1]
+        collapsed = _dedupe_adjacent([prev.segment, item.segment])
+        if len(collapsed) == 1:
+            start, end, epoch = _merge_span(prev, item)
+            result[-1] = SpannedSegment(collapsed[0], start, end, epoch)
+        else:
+            result.append(item)
     return result
 
 

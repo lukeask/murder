@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -26,6 +26,7 @@ def handler(fake_tmux, tmp_path: Path) -> CrowHandler:
     runtime.bus = MagicMock()
     runtime.run_id = "test-run"
     runtime.sync_agent = MagicMock()
+    runtime.publish_snapshot = AsyncMock()
     outcome = MagicMock(spec=TicketOutcomeService)
     coordinator = MagicMock()
     return CrowHandler(

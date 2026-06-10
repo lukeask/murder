@@ -108,10 +108,7 @@ cd /home/user/Documents/code/murder/.murder/worktrees/tui-component-library
 # Run tests
 python -m pytest tests/unit -q
 
-# Verify import
-python -c "import murder.app.tui.app"
-
-# Run the app (requires a live murder runtime)
+# Run the app (requires a live murder runtime + Node >= 20)
 python -m murder
 ```
 

@@ -26,6 +26,7 @@ dependencies = [
 [dependency-groups]
 dev = [
     "pytest>=8.0",
+    "pytest-asyncio>=0.23",
     "mypy>=1.8",
     "ruff>=0.4",
 ]
@@ -40,8 +41,36 @@ include = [
     "murder/resources/templates/*",
 ]
 
+# Bundles the Ink TUI into the wheel (esbuild → murder/_inktui/index.js). Picks up hatch_build.py.
+[tool.hatch.build.hooks.custom]
+
+# The sdist must carry the bundle's *inputs* (inktui source + lockfile + stubs + the hook), because
+# `python -m build` builds the wheel from the sdist — the hook runs `npm run bundle` in `inktui/`
+# there. dist/ and node_modules are excluded so we ship source only.
+[tool.hatch.build.targets.sdist]
+include = [
+    "murder/",
+    "tests/",
+    "inktui/src/",
+    "inktui/stubs/",
+    "inktui/package.json",
+    "inktui/package-lock.json",
+    "inktui/tsconfig.json",
+    "inktui/biome.json",
+    "hatch_build.py",
+    "pyproject.toml",
+    "README.md",
+]
+exclude = [
+    "inktui/node_modules/",
+    "inktui/dist/",
+]
+
 [tool.hatch.build.targets.wheel]
 packages = ["murder"]
+# The bundle is generated + gitignored; the hook force-includes it, and this keeps it in the wheel
+# even though it is not tracked by VCS.
+artifacts = ["murder/_inktui/*"]
 
 [tool.ruff]
 line-length = 100

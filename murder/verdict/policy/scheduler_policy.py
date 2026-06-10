@@ -30,7 +30,6 @@ class SchedulerCaps:
 @dataclass(frozen=True)
 class TicketRecord:
     id: str
-    wave: int
     schedule_at: str | None
     harness: str | None
 
@@ -66,11 +65,10 @@ def usage_reset_detected(
     return prev_pct >= prev_min and curr_pct <= curr_max
 
 
-def _ticket_sort_key(ticket: TicketRecord) -> tuple[int, int, str, str]:
+def _ticket_sort_key(ticket: TicketRecord) -> tuple[bool, str | None, str]:
     return (
-        ticket.wave,
-        1 if ticket.schedule_at is None else 0,
-        ticket.schedule_at or "",
+        ticket.schedule_at is None,
+        ticket.schedule_at,
         ticket.id,
     )
 

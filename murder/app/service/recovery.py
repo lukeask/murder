@@ -22,9 +22,10 @@ from murder.work.tickets import lifecycle
 class ReconcileReport:
     agents_marked_dead: list[str] = field(default_factory=list)
     tickets_reset_to_failed: list[str] = field(default_factory=list)
+    sessions_to_kill: list[str] = field(default_factory=list)
 
     def __bool__(self) -> bool:
-        return bool(self.agents_marked_dead or self.tickets_reset_to_failed)
+        return bool(self.agents_marked_dead or self.tickets_reset_to_failed or self.sessions_to_kill)
 
     def summary(self) -> str:
         parts = []
@@ -32,12 +33,15 @@ class ReconcileReport:
             parts.append(f"marked dead: {', '.join(self.agents_marked_dead)}")
         if self.tickets_reset_to_failed:
             parts.append(f"tickets → failed: {', '.join(self.tickets_reset_to_failed)}")
+        if self.sessions_to_kill:
+            parts.append(f"sessions to kill: {', '.join(self.sessions_to_kill)}")
         return "; ".join(parts) if parts else "nothing to reconcile"
 
 
 # Statuses that we consider "should be live" — if the session is gone,
 # the agent is a zombie and must be cleaned up.
 _LIVE_STATUSES = frozenset({"running", "idle", "blocked", "escalating", "failed"})
+_NON_RESUMABLE_ROLES = frozenset({"planner", "planning_handler"})
 
 
 def reconcile_agents_vs_tmux(
@@ -65,6 +69,12 @@ def reconcile_agents_vs_tmux(
 
     for row in rows:
         session = row["session"]
+        if row["role"] in _NON_RESUMABLE_ROLES:
+            _db_set_agent_status(conn, row["agent_id"], "dead")
+            report.agents_marked_dead.append(row["agent_id"])
+            if session:
+                report.sessions_to_kill.append(session)
+            continue
         # Agents with no session (pure-coroutine roles) are managed entirely
         # by the runtime; skip them — they'll be re-registered on startup.
         if not session:

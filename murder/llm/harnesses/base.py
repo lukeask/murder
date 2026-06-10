@@ -32,7 +32,6 @@ ANSWER_RE = re.compile(
     r">>>\s*ANSWER\[(?P<ticket>[^\]]+)\]:\s*(?P<body>.+?)(?=\n>>>|\Z)",
     re.DOTALL,
 )
-CHECK_RE = re.compile(r">>>\s*CHECK:\s*(?P<body>.+?)$", re.MULTILINE)
 NOTE_RE = re.compile(r">>>\s*NOTE:\s*(?P<body>.+?)\n>>>\s*END\b", re.DOTALL)
 DONE_RE = re.compile(r"^>>>\s*DONE[ \t]*$", re.MULTILINE)
 # Used when scanning assistant segment text that may have been reflowed by the
@@ -106,6 +105,9 @@ class HarnessSession:
             self.adapter.startup_model = start_spec.startup_model
         if start_spec.startup_effort is not None:
             self.adapter.startup_effort = start_spec.startup_effort
+        self.adapter.additional_workspace_dirs = tuple(
+            Path(path) for path in start_spec.additional_workspace_dirs
+        )
         await tmux.create_session(
             self.session,
             start_spec.cwd,
@@ -334,6 +336,7 @@ class HarnessAdapter(ABC):
         # message. Set by the agent at start() so markerless transcript parsers
         # (cursor, pi) can strip it instead of mislabelling it as chat turns.
         self.system_prompt: str | None = None
+        self.additional_workspace_dirs: tuple[Path, ...] = ()
 
     @classmethod
     def declared_capabilities(cls) -> HarnessCapabilities:
@@ -509,10 +512,6 @@ class HarnessAdapter(ABC):
             )
             for m in ANSWER_RE.finditer(clean)
         ]
-
-    def detect_checks(self, pane_text: str) -> list[str]:
-        clean = strip_ui_chrome(pane_text)
-        return [m.group("body").strip() for m in CHECK_RE.finditer(clean)]
 
     def detect_notes(self, pane_text: str) -> list[str]:
         clean = strip_ui_chrome(pane_text)

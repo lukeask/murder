@@ -63,6 +63,9 @@ async def spawn_agent(
             startup_model=spec.model,
             startup_effort=spec.effort,
             worktree_path=worktree_path,
+            additional_workspace_dirs=tuple(
+                Path(path) for path in spec.additional_workspace_dirs
+            ),
             runtime=rt,
         )
 

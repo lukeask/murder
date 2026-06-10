@@ -1,1 +1,1 @@
-"""Orchestration package – spawn/kill agents, wave kickoff, ready computation."""
+"""Orchestration package - spawn/kill agents and ready computation."""

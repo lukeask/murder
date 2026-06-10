@@ -131,8 +131,8 @@ async def capture_pane(
 ) -> str:
     """Capture the last `lines` lines from the session's active pane.
 
-    Optional ``perf`` is a :class:`murder.app.tui.perf_log.PerfLog` (duck-typed:
-    ``enabled`` and sync ``span``); used only by TUI call sites.
+    Optional ``perf`` is a duck-typed perf logger (``enabled`` and sync ``span``); used only by
+    TUI call sites.
 
     ``escapes`` adds tmux's ``-e`` flag so SGR (colour/style) escape sequences
     are preserved in the output. Markerless harnesses that colour-code their

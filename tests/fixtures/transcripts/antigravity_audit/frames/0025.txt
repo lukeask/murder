@@ -1,0 +1,63 @@
+user@machine:~/Documents/code/murder $ agy
+
+      ▄▀▀▄        Antigravity CLI 1.0.5
+     ▀▀▀▀▀▀       user@machine.com
+    ▀▀▀▀▀▀▀▀      Gemini 3.5 Flash (Low)
+   ▄▀▀    ▀▀▄     ~/Documents/code/murder
+  ▄▀▀      ▀▀▄
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+>
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+Switch Model
+
+  Gemini 3.5 Flash (Medium)
+  Gemini 3.5 Flash (High)
+  Gemini 3.5 Flash (Low)       (current)
+  Gemini 3.1 Pro (Low)
+  Gemini 3.1 Pro (High)
+  Claude Sonnet 4.6 (Thinking)
+  Claude Opus 4.6 (Thinking)
+> GPT-OSS 120B (Medium)
+
+Keyboard: ↑/↓ Navigate  enter Select  esc Go Back
+
+esc to cancel                                                                                          Gemini 3.5 Flash (Low)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

@@ -99,6 +99,38 @@ def test_parse_test_select_footer() -> None:
     assert "Enter to select" in result.footer
 
 
+def test_parse_multi_select_detects_mc() -> None:
+    result = parse_claude_code_choice_prompt(_load("multi_select.txt"))
+    assert result is not None
+
+
+def test_parse_multi_select_question_and_options() -> None:
+    result = parse_claude_code_choice_prompt(_load("multi_select.txt"))
+    assert result is not None
+    assert result.question == "Which options do you want enabled? (pick any number)"
+    assert [opt.number for opt in result.options] == [1, 2, 3, 4, 5, 6]
+    assert result.options[0].label == "[ ] Feature 1"
+    assert result.options[0].description == "Enable the first feature."
+
+
+def test_parse_multi_select_none_checked_cursor_on_first() -> None:
+    # No box is toggled yet and the cursor (❯) is on the first option.
+    result = parse_claude_code_choice_prompt(_load("multi_select.txt"))
+    assert result is not None
+    assert result.selected_index == 0
+    assert all("[✔]" not in opt.label for opt in result.options)
+
+
+def test_parse_multi_select_checked_reflects_toggles_and_cursor() -> None:
+    # Features 1–3 are toggled [✔]; the cursor (❯) has moved to Feature 3.
+    result = parse_claude_code_choice_prompt(_load("multi_select_checked.txt"))
+    assert result is not None
+    assert result.selected_index == 2
+    checked = [opt.number for opt in result.options if "[✔]" in opt.label]
+    assert checked == [1, 2, 3]
+    assert result.options[3].label == "[ ] Feature 4"
+
+
 def test_parse_idle_cc_pane_returns_none() -> None:
     idle_pane = (
         "user@machine:~/Documents/code/murder $ claude\n"

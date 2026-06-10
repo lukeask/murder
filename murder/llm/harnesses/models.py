@@ -9,6 +9,7 @@ class HarnessStartSpec:
     cwd: Path
     startup_model: str | None = None
     startup_effort: str | None = None
+    additional_workspace_dirs: tuple[Path, ...] = ()
     ready_timeout_s: float = 240.0
     poll_interval_s: float = 0.4
     auto_run: bool | None = None

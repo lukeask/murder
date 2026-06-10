@@ -61,8 +61,8 @@ def test_crow_snapshot_exposes_worktree_path(repo_root: Path) -> None:
     init_db(conn)
     conn.execute(
         """
-        INSERT INTO tickets(id, title, wave, status, created_at, updated_at)
-        VALUES ('t001', 'Fix thing', 1, 'in_progress', '2026-01-01', '2026-01-01')
+        INSERT INTO tickets(id, title, status, created_at, updated_at)
+        VALUES ('t001', 'Fix thing', 'in_progress', '2026-01-01', '2026-01-01')
         """
     )
     worktree_path = repo_root / ".murder" / "worktrees" / "crow" / "t001"

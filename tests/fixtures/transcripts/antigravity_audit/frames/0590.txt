@@ -1,0 +1,63 @@
+  plugin          Manage plugins (install, uninstall, list, enable, disable)
+  plugins         Alias for plugin
+  update          Update CLI
+user@machine:~/Documents/code/murder $ agy --dangerously-skip-permissions
+
+      ▄▀▀▄        Antigravity CLI 1.0.6
+     ▀▀▀▀▀▀       user@machine.com
+    ▀▀▀▀▀▀▀▀      Gemini 3.1 Pro (High)
+   ▄▀▀    ▀▀▄     ~/Documents/code/murder
+  ▄▀▀      ▀▀▄
+
+────────────────────────────────────────────────────────────
+> Please read phase1-decomposition.md and anotherparserplan.md. Then audit the current codebase for completion of 1.a-1.f.
+  1.g is still about to land. Does the code match the spec? No code edits, just let me know.
+
+▸ Thought for 11s, 416 tokens
+  Prioritizing Tool Usage
+
+● ListDir(/home/user/Documents/code/murder) (ctrl+o to expand)
+
+▸ Thought for 8s, 379 tokens
+  Prioritizing Tool Usage
+
+● Bash(find . -name "phase1-decomposition.md" -o -name "anotherparserplan.md") (ctrl+o to expand)
+
+▸ Thought for 14s, 311 tokens
+  Prioritizing Tool Usage
+
+● Read(/home/user/Documents/code/murder/.murder/plans/phase1-decomposition.md) (ctrl+o to expand)
+
+▸ Thought for 7s, 311 tokens
+  Prioritizing Tool Usage
+
+● Read(/home/user/Documents/code/murder/.murder/plans/anotherparserplan.md) (ctrl+o to expand)
+
+▸ Thought for 3s, 886 tokens
+  Prioritizing Tool Usage
+
+● ListDir(/home/user/Documents/code/murder/murder/llm/harnesses) (ctrl+o to expand)
+
+▸ Thought for 1s, 411 tokens
+  Prioritizing Tool Usage
+
+● ListDir(/home/user/Documents/code/murder/murder/llm/harnesses/transcripts)
+● Read(/home/user/Documents/code/murder/murder/state/persistence/schema.py)
+● Search(Search for event) (ctrl+o to expand)
+
+▸ Thought for 1s, 457 tokens
+  Prioritizing Tool Usage
+
+● Search(Search _transcript_acc)
+● Search(Search notice)
+● Search(Search refresh_transcript) (ctrl+o to expand)
+
+Prioritizing Tool Usage  (7s)
+
+● Search(Search append_notice)
+● Search(Search snapshot) (ctrl+o to expand)
+⣟  Prioritizing Tool Usage...
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+>
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+esc to cancel                                                                                           Gemini 3.1 Pro (High)

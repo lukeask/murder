@@ -46,9 +46,15 @@ class AgentSpec:
     effort: str | None = None
     startup_prompt: str | None = None
     escalation_target: str | None = None
+    additional_workspace_dirs: tuple[str, ...] = ()
     capabilities_required: frozenset[str] = field(default_factory=frozenset)
 
     def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "additional_workspace_dirs",
+            tuple(str(path) for path in self.additional_workspace_dirs),
+        )
         object.__setattr__(
             self,
             "capabilities_required",

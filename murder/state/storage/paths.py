@@ -50,7 +50,7 @@ def panes_dir(repo_root: Path, run_id: str) -> Path:
 
 
 def tickets_dir(repo_root: Path) -> Path:
-    """Flat per D9 — wave is in DB."""
+    """Flat ticket markdown directory."""
     return agents_dir(repo_root) / "tickets"
 
 
@@ -104,6 +104,11 @@ def shelved_dir(repo_root: Path) -> Path:
 
 def roles_yaml(repo_root: Path) -> Path:
     return agents_dir(repo_root) / "roles.yaml"
+
+
+def harnesses_and_models_md(repo_root: Path) -> Path:
+    """Generated doc listing enabled harnesses, models, and effort levels."""
+    return agents_dir(repo_root) / "HARNESSES_AND_MODELS.md"
 
 
 def crow_context_dir(repo_root: Path) -> Path:
