@@ -83,7 +83,7 @@ export function buildHelpGroups(
     title: 'Global',
     entries: [
       {
-        // The modifier prefix(es) (`M-`, `C-`, or `M-/C-`), derived by stripping the key name from
+        // The modifier prefix(es) (`A-`, `C-`, or `A-/C-`), derived by stripping the key name from
         // the focusChat label so the digit row tracks the user's modifier choice.
         key: `${bindings.label('global.focusChat').replaceAll('space', '')}1–0`,
         description: 'toggle/focus panels',

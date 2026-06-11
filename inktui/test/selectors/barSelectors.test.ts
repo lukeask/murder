@@ -4,7 +4,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_BINDINGS } from '../../src/input/bindings.js';
+import { DEFAULT_BINDINGS, resolveBindings } from '../../src/input/bindings.js';
 import { CHAT_FOCUS } from '../../src/input/focusStore.js';
 import type { Keymap } from '../../src/input/keymap.js';
 import type { PanelId } from '../../src/input/panels.js';
@@ -50,6 +50,23 @@ describe('selectBottomBar', () => {
     // A printable chord renders its char; a key-only chord renders the special-key name.
     expect(hints.find((h) => h.description === 'open doc')?.key).toBe('o');
     expect(hints.find((h) => h.description === 'star')?.key).toBe('return');
+  });
+
+  it("shows a command-modified panel key's modifier, varying A-↔C- with the configured modifier", () => {
+    // A panel that binds a key through the registry (e.g. star = the command modifier + `f`) must show
+    // the modifier in its hint — a bare `f` would read as un-pressable. The prefix tracks the user's
+    // configured modifier exactly like the global/nav hints.
+    const starKeymap: Keymap<'star'> = [
+      { chord: { input: 'f', key: { meta: true } }, intent: 'star', description: 'favorite' },
+    ];
+    const alt = selectBottomBar('plans', starKeymap, resolveBindings('alt', false, {}));
+    expect(alt.find((h) => h.description === 'favorite')?.key).toBe('A-f');
+
+    const ctrlKeymap: Keymap<'star'> = [
+      { chord: { input: 'f', key: { ctrl: true } }, intent: 'star', description: 'favorite' },
+    ];
+    const ctrl = selectBottomBar('plans', ctrlKeymap, resolveBindings('ctrl', true, {}));
+    expect(ctrl.find((h) => h.description === 'favorite')?.key).toBe('C-f');
   });
 
   it('pins a right-aligned help hint (item 12) on the normal bar, labelled from the binding', () => {

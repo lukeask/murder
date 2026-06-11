@@ -82,6 +82,10 @@ export interface DeferredGlobalHandlers {
   murderConfirm?: () => void;
   /** Any other key while armed cancels (without consuming the event). Default: no-op. */
   murderCancel?: () => void;
+  /** `ctrl+q` (`global.closePane`): close the highlighted Stage pane. Default: no-op until the shell
+   * supplies the handler (it needs the app store's docView / conversations actions, which this hook
+   * does not hold). The dispatcher already routes the chord (gated to Stage-pane focus). */
+  closePane?: () => void;
   /**
    * The persistent chat-input handler (C11, part F). Supplied by the shell (it needs both the chat
    * buffer store and the send action). When absent, layer 2 declines as before — so older
@@ -252,6 +256,9 @@ export function useRootInput(
         murderPending: deferred.murderPending ?? (() => false),
         murderConfirm: deferred.murderConfirm ?? (() => {}),
         murderCancel: deferred.murderCancel ?? (() => {}),
+        // ctrl+q close-pane: default no-op until the shell wires the docView/conversations actions.
+        // The dispatcher only fires this when a Stage pane holds focus.
+        closePane: deferred.closePane ?? (() => {}),
       };
 
       const ctx: DispatchContext = {

@@ -14,6 +14,7 @@ import { FakeBusClient } from '../src/bus/FakeBusClient.js';
 import { App, deriveSpawnContext } from '../src/components/App.js';
 import { TMUX_MODE_ID, tmuxMode } from '../src/components/TmuxMode.js';
 import { createInputStores } from '../src/input/createInputStores.js';
+import { CHAT_FOCUS, selectEffectiveFocus } from '../src/input/focusStore.js';
 import type { PanelId } from '../src/input/panels.js';
 import { createAppStore } from '../src/store/store.js';
 import { DEFAULT_THEME_ID } from '../src/theme/palettes.js';
@@ -164,7 +165,7 @@ describe('App shell', () => {
   });
 });
 
-describe('deriveSpawnContext — focused doc = the open doc-view (C11)', () => {
+describe('deriveSpawnContext — doc file context gated by the highlighted Stage pane (stagelayout)', () => {
   /** Build a minimal FakeBusClient-backed store. */
   function makeStore() {
     const fake = new FakeBusClient();
@@ -174,43 +175,138 @@ describe('deriveSpawnContext — focused doc = the open doc-view (C11)', () => {
 
   it('returns null when no doc is open (the closed doc-view default)', () => {
     const { store, dispose } = makeStore();
-    expect(deriveSpawnContext(store)).toBeNull();
+    expect(deriveSpawnContext(store, 'stage:doc:anything')).toBeNull();
     dispose();
   });
 
-  it('returns the open note as the focused doc (reference-by-path)', () => {
+  it('returns the open note when the doc pane is highlighted (reference-by-path)', () => {
     const { store, dispose } = makeStore();
     store.setState((s) => ({
       docView: { ...s.docView, open: { kind: 'note', name: 'my-note' } },
     }));
-    expect(deriveSpawnContext(store)).toEqual({
+    expect(deriveSpawnContext(store, 'stage:doc:my-note')).toEqual({
       title: 'my-note',
       path: '.murder/notes/my-note.md',
     });
     dispose();
   });
 
-  it('returns the open report as the focused doc', () => {
+  it('returns the open report when the doc pane is highlighted', () => {
     const { store, dispose } = makeStore();
     store.setState((s) => ({
       docView: { ...s.docView, open: { kind: 'report', name: 'my-report' } },
     }));
-    expect(deriveSpawnContext(store)).toEqual({
+    expect(deriveSpawnContext(store, 'stage:doc:my-report')).toEqual({
       title: 'my-report',
       path: '.murder/reports/my-report.md',
     });
     dispose();
   });
 
-  it('returns the open plan as the focused doc', () => {
+  it('returns the open plan when the doc pane is highlighted', () => {
     const { store, dispose } = makeStore();
     store.setState((s) => ({
       docView: { ...s.docView, open: { kind: 'plan', name: 'my-plan' } },
     }));
-    expect(deriveSpawnContext(store)).toEqual({
+    expect(deriveSpawnContext(store, 'stage:doc:my-plan')).toEqual({
       title: 'my-plan',
       path: '.murder/plans/my-plan.md',
     });
+    dispose();
+  });
+
+  it('returns null when a CHAT pane is highlighted, even though a doc is open elsewhere', () => {
+    // stagelayout requirement: a highlighted chat-history pane gets NO file prompt, even if a doc
+    // happens to be open on the Stage — the file context follows the highlight, not the open slice.
+    const { store, dispose } = makeStore();
+    store.setState((s) => ({
+      docView: { ...s.docView, open: { kind: 'plan', name: 'my-plan' } },
+    }));
+    expect(deriveSpawnContext(store, 'stage:chat:crow-1')).toBeNull();
+    dispose();
+  });
+
+  it('returns null when the chat input is focused (no Stage pane highlighted)', () => {
+    const { store, dispose } = makeStore();
+    store.setState((s) => ({
+      docView: { ...s.docView, open: { kind: 'plan', name: 'my-plan' } },
+    }));
+    expect(deriveSpawnContext(store, CHAT_FOCUS)).toBeNull();
+    dispose();
+  });
+});
+
+describe('ctrl+q — close the highlighted Stage pane (stagelayout)', () => {
+  // ctrl+q rides the clean legacy byte 0x11, which Ink reports as `{ ctrl: true, input: 'q' }`.
+  const CTRL_Q = '\x11';
+
+  /** A full App against fakes, with a roster carrying one default-favorited collaborator (→ one Stage
+   * chat pane) so ctrl+q has a chat pane to close. */
+  async function setupApp() {
+    const fake = new FakeBusClient();
+    fake.stubRpc('state.crow_snapshot', {
+      invalidation_key: 'iv',
+      sessions: [
+        { agent_id: 'collab-1', role: 'collaborator', status: 'idle', session_name: 'TestCollab' },
+      ],
+    });
+    fake.stubRpc('state.plan_display', { name: 'my-plan', markdown: 'doc body line' });
+    const { store, dispose } = createAppStore(fake);
+    await store.getState().actions.roster.refresh();
+    const inputStores = createInputStores([]);
+    const tree = render(<App store={store} inputStores={inputStores} bus={fake} />);
+    return { fake, store, dispose, inputStores, ...tree };
+  }
+
+  it('closes the highlighted chat-history pane and re-homes focus to chat', async () => {
+    const { store, inputStores, stdin, dispose } = await setupApp();
+    await tick();
+
+    // The default-favorited collaborator's chat pane is open + mounted; focus it.
+    inputStores.focus.getState().focus('stage:chat:collab-1');
+    await tick();
+    expect(selectEffectiveFocus(inputStores.focus)).toBe('stage:chat:collab-1');
+
+    stdin.write(CTRL_Q);
+    await tick();
+
+    // The pane closed: an explicit `false` paneOverride hides even the default-favorited collaborator.
+    expect(store.getState().conversations.paneOverrides.get('collab-1')).toBe(false);
+    // The pane unmounted → focus re-homes to chat (the derived invariant).
+    expect(selectEffectiveFocus(inputStores.focus)).toBe(CHAT_FOCUS);
+    dispose();
+  });
+
+  it('closes the highlighted doc pane', async () => {
+    const { store, inputStores, stdin, dispose } = await setupApp();
+    await tick();
+
+    // Open a doc and focus its Stage pane.
+    await store.getState().actions.docView.open('plan', 'my-plan');
+    inputStores.focus.getState().focus('stage:doc:my-plan');
+    await tick();
+    expect(store.getState().docView.open).not.toBeNull();
+    expect(selectEffectiveFocus(inputStores.focus)).toBe('stage:doc:my-plan');
+
+    stdin.write(CTRL_Q);
+    await tick();
+
+    expect(store.getState().docView.open).toBeNull();
+    expect(selectEffectiveFocus(inputStores.focus)).toBe(CHAT_FOCUS);
+    dispose();
+  });
+
+  it('does nothing when the chat input is focused (no Stage pane highlighted)', async () => {
+    const { store, inputStores, stdin, dispose } = await setupApp();
+    await tick();
+    // Focus stays on chat (the default home).
+    expect(selectEffectiveFocus(inputStores.focus)).toBe(CHAT_FOCUS);
+
+    stdin.write(CTRL_Q);
+    await tick();
+
+    // No pane override written; the collaborator pane remains open.
+    expect(store.getState().conversations.paneOverrides.has('collab-1')).toBe(false);
     dispose();
   });
 });

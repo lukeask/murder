@@ -67,7 +67,7 @@ import { Box, type DOMElement } from 'ink';
 import { forwardRef, memo } from 'react';
 import type { Theme } from '../theme/buildTheme.js';
 import { useTheme } from '../theme/themeStore.js';
-import { PaneBorderBottom, PaneBorderTop } from './paneBorder.js';
+import { PaneBorderTop } from './paneBorder.js';
 
 /** Focus-driven colors for the border/corners/fill (`border`) and the title segment (`title`). */
 export interface PaneColors {
@@ -105,8 +105,9 @@ export interface PaneProps {
   /** Rows hidden ABOVE the viewport. `> 0` draws a `▴ N` indicator on the top border; 0/undefined
    * leaves the top border byte-identical to today. */
   readonly overflowAbove?: number | undefined;
-  /** Rows hidden BELOW the viewport. `> 0` draws a `▾ N` indicator on the bottom border; 0/undefined
-   * leaves the bottom border byte-identical to today. */
+  /** Rows hidden BELOW the viewport. `> 0` draws a `▾ N` indicator on the TOP border (beside any `▴ N`
+   * — see {@link ./paneBorder.js PaneBorderTop}; it lives on the top border, not the bottom, so the
+   * bottom can be Ink's clip-robust own border). 0/undefined renders nothing extra. */
   readonly overflowBelow?: number | undefined;
 }
 
@@ -141,10 +142,15 @@ export const Pane = memo(
           bold={focused}
           titleExtra={titleExtra}
           overflowAbove={overflowAbove}
+          overflowBelow={overflowBelow}
         />
-        {/* Content box supplies the LEFT + RIGHT sides + padding + height clamp. The TOP border is the
-            hand-composed title row above; the BOTTOM is the sibling PaneBorderBottom row below (so it
-            can carry a `▾ N` count Ink's own border can't) — hence borderTop AND borderBottom false. */}
+        {/* Content box supplies the LEFT + RIGHT sides + the BOTTOM border + padding + height clamp.
+            Only the TOP is `false` (the hand-composed title row above draws it). The bottom is Ink's
+            OWN border (`╰──╯`), NOT a separate sibling row: a fixed-height bottom row clips off when the
+            pane's height rounds to a half-cell (the `[top, flexGrow, bottom]` split loses its trailing
+            fixed cell at fractional heights — e.g. two panels splitting an odd rail height), whereas
+            Ink's border, drawn on this flexGrow box, stays on-grid at any height. The `▾ N`
+            scroll-below count the old bottom row carried now rides the TOP border (see PaneBorderTop). */}
         <Box
           flexDirection="column"
           flexGrow={1}
@@ -152,17 +158,12 @@ export const Pane = memo(
           overflow="hidden"
           borderStyle="round"
           borderTop={false}
-          borderBottom={false}
           borderColor={borderColor}
           paddingLeft={1}
           paddingRight={paddingRight}
         >
           {children}
         </Box>
-        {/* Bottom border line — a sibling `height={1}` row (the content box no longer draws its own
-            bottom). Net pane height is unchanged: the line that was the content box's bottom border is
-            now this row. Carries the `▾ N` scroll-below indicator when overflowBelow > 0. */}
-        <PaneBorderBottom borderColor={borderColor} overflowBelow={overflowBelow} />
       </Box>
     );
   }),

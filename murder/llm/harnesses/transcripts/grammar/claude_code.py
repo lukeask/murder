@@ -52,7 +52,8 @@ _CC_RUNNING_SUMMARY_RE = re.compile(
     r"|Finding|Found|Fetching|Fetched)\b.*…"
 )
 _CC_SPINNER_RE = re.compile(
-    r"^\s*[·*✻✶✳✽✢⠁-⣿◐◓◑◒]?\s*[A-Z][\w-]+…+\s*(?:\([^)]*(?:tokens|thought|↑|↓|esc to)[^)]*\))?\s*$"
+    r"^\s*(?:[·*✻✶✳✽✢⠁-⣿◐◓◑◒]\s*)*[A-Z][\w-]+…+\s*"
+    r"(?:\([^)]*(?:tokens|thought|thinking|effort|↑|↓|esc to)[^)]*\))?\s*$"
 )
 _CC_SHELL_PROMPT_RE = re.compile(r"^\w+@\w[-\w.]*:[~\w/]*\s*\$\s")
 _CC_AGENT_ROSTER_RE = re.compile(r"^\s*[●◯]\s+(?:main|general-purpose)\b")

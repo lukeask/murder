@@ -51,7 +51,7 @@ import type { ActionId } from '../input/bindings.js';
 import { expandSpans, spanIds } from '../input/chatInputStore.js';
 import { readClipboardImage } from '../input/clipboardImage.js';
 import type { ChatInputHandler } from '../input/dispatcher.js';
-import { selectEffectiveFocus } from '../input/focusStore.js';
+import { type FocusId, selectEffectiveFocus } from '../input/focusStore.js';
 import { selectActiveMode } from '../input/modeStore.js';
 import type { PanelId } from '../input/panels.js';
 import { deriveAgentIdentity } from '../selectors/agentIdentity.js';
@@ -146,25 +146,33 @@ function renderPanel(id: PanelId, usageInnerWidth: number): JSX.Element {
 
 /**
  * Derive the spawn context from the app store at `ctrl+s` invocation time. Returns a
- * {@link SpawnContext} when a document (plan / note / report) is the **focused doc**, else `null`
- * (no context step shown in the wizard).
+ * {@link SpawnContext} when the **highlighted pane is the open document** (`stage:doc:<name>`), else
+ * `null` (no "include this file in context" step shown in the wizard).
  *
- * ## Focused-doc = the OPEN doc-view (C11 — replaces C13's first-row proxy)
- * The spec's "focused-doc-wins — list row or opened doc widget alike" resolves cleanly here: when
- * `ctrl+s` fires the spawn wizard, focus is on **chat** (that is the only focus where `ctrl+s`
- * spawns rather than stars — see dispatcher.ts), so there is no live list cursor to read. The
- * "focused doc" is therefore whatever doc the user last *opened* in the doc-view Stage pane
- * ({@link ./DocPane.js}), held in the `docView` slice. Reading it replaces C13's first-row proxy
- * with the real selected doc, and needs no lifted cursor — the open doc is already shared state with
- * a real identity (`{ kind, name }`), so panel cursors stay local (rule 1).
+ * ## Doc-vs-chat is decided by the EFFECTIVE FOCUS (stagelayout plan)
+ * `ctrl+s` now spawns from chat OR any highlighted Stage pane (a chat-history pane or the open doc).
+ * The plan's requirement is that the doc file is included ONLY when the **document** pane is the one
+ * highlighted; when a chat-history pane is highlighted there is NO file prompt, even if a doc happens
+ * to be open elsewhere on the Stage. So this consults `focusedId` (the effective focus passed in by
+ * the spawn handler), not merely `docView.open`:
+ *  - focus is `stage:doc:<name>` → return the open doc's reference-by-path context (the context step
+ *    appears).
+ *  - focus is a chat pane or the chat input → return `null` (no context step), regardless of whether
+ *    a doc is open.
  *
- * If no doc is open, there is no focused doc and the wizard skips the context step.
+ * The open doc is already shared state with a real identity (`{ kind, name }`), so panel cursors stay
+ * local (rule 1) — we read the slice for the path, and the focus only gates whether to use it.
  *
  * ## Reference-by-path (locked mechanism)
  * The returned `path` is `.murder/<dir>/<name>.md` (the dir from {@link DOC_DIR}). The wizard builds
  * `"Please read ${path} before starting."` — the rogue reads the file, not an inlined body.
  */
-export function deriveSpawnContext(appStore: AppStoreApi): SpawnContext | null {
+export function deriveSpawnContext(appStore: AppStoreApi, focusedId: FocusId): SpawnContext | null {
+  // The file context is included ONLY when the highlighted pane is the open doc. A chat pane / the
+  // chat input never includes the file, even when a doc is open elsewhere on the Stage.
+  if (!focusedId.startsWith('stage:doc:')) {
+    return null;
+  }
   const open = appStore.getState().docView.open;
   if (open === null) {
     return null;
@@ -295,10 +303,12 @@ export function makeChatInputHandler(
  * C13: wires the `spawn` deferred handler so `ctrl+s` opens the spawn wizard. The handler reads the
  * app store at invocation time (not during render) so it always sees current state.
  *
- * C11: `ctrl+s` is dual-purpose (spawn from chat; star from a panel) — the dispatcher routes it, so
- * this `spawn` handler still only fires when chat is focused (see dispatcher.ts). The spawn context
- * is the OPEN doc-view (focused-doc), via {@link deriveSpawnContext}. C11 also loads the persisted
- * favorites once on mount via the favorites action.
+ * `ctrl+s` spawns from chat OR a highlighted Stage pane (a chat-history pane or the open doc); the
+ * dispatcher routes it (declines on a list panel, where alt+f stays the star chord). The doc file is
+ * included in the spawn context ONLY when the highlighted pane is the document — see
+ * {@link deriveSpawnContext}, which reads the effective focus. `ctrl+q` closes the highlighted Stage
+ * pane (see `closePaneHandler`). C11 also loads the persisted favorites once on mount via the favorites
+ * action.
  */
 function Shell({
   project,
@@ -448,11 +458,14 @@ function Shell({
     });
   }, [appStore, bindings]);
 
-  // `ctrl+s` → open the spawn wizard (only fires when chat is focused; see dispatcher.ts). Reads the
-  // store imperatively at call time (getState()) so no stale closure; stores are stable references.
+  // `ctrl+s` → open the spawn wizard (fires when chat OR a highlighted Stage pane is focused; see
+  // dispatcher.ts). Reads the store imperatively at call time (getState()) so no stale closure; stores
+  // are stable references.
   const spawnHandler = (): void => {
-    // The focused doc is the open doc-view (C11 — replaces C13's first-row proxy).
-    const spawnContext = deriveSpawnContext(appStore);
+    // Doc-vs-chat file context is decided by the effective focus (stagelayout plan): include the doc
+    // file ONLY when the highlighted pane is the open doc; a highlighted chat pane / the chat input
+    // gets no file prompt, even if a doc is open elsewhere on the Stage.
+    const spawnContext = deriveSpawnContext(appStore, selectEffectiveFocus(focus));
     const actions = createSpawnActions(bus, appStore);
     const modelActions = createHarnessModelsActions(bus);
     const worktreeActions = createWorktreeOptionsActions(bus);
@@ -599,6 +612,27 @@ function Shell({
       });
   };
 
+  // ctrl+q close-pane chord (stagelayout plan): close the currently-highlighted Stage pane. The
+  // dispatcher only fires this when a Stage pane holds the effective focus, so this reads the effective
+  // focus and routes by pane kind:
+  //  - `stage:doc:<name>` → close the open doc via the docView action (rule 3). The pane unmounts →
+  //    focus re-homes to chat via the derived invariant (no imperative re-home).
+  //  - `stage:chat:<agentId>` → close that chat pane via `conversations.setChatPaneOpen(id, false)`.
+  //    This writes an explicit `false` paneOverride that overrides the favorites default, so even a
+  //    default-favorited collaborator/rogue pane disappears (a bare `toggleChatPane` would need the
+  //    current open state; the explicit `false` is unconditional, which is what close means).
+  const closePaneHandler = (): void => {
+    const effective = selectEffectiveFocus(focus);
+    if (effective.startsWith('stage:doc:')) {
+      appStore.getState().actions.docView.close();
+      return;
+    }
+    if (effective.startsWith('stage:chat:')) {
+      const agentId = effective.slice('stage:chat:'.length);
+      appStore.getState().actions.conversations.setChatPaneOpen(agentId, false);
+    }
+  };
+
   // The single root input loop for the whole app (rule 5) — installed exactly once, here.
   // C13: `spawn` wired to the spawn wizard handler. C11: `chatInput` wired to the persistent
   // chat-input handler (buffers chars, sends on Enter to the active agent). Global ctrl-chords still
@@ -617,6 +651,7 @@ function Shell({
       murderPending: () => murderConfirmStore.getState().pending !== null,
       murderConfirm: murderConfirmHandler,
       murderCancel: () => murderConfirmStore.getState().clear(),
+      closePane: closePaneHandler,
       chatInput: makeChatInputHandler(chatInput, appStore, imageDraft),
     },
     terminalEvents,

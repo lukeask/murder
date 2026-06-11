@@ -257,6 +257,7 @@ describe('alt+y dispatch — pure unit test (no rendering)', () => {
         murderPending: () => false,
         murderConfirm: () => {},
         murderCancel: () => {},
+        closePane: () => {},
       },
       activeMode: null,
     };

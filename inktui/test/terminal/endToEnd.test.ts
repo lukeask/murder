@@ -69,6 +69,7 @@ describe('ctrl+1 raw bytes → shim → dispatch → focusPanel(plans)', () => {
       murderPending: vi.fn(() => false),
       murderConfirm: vi.fn(),
       murderCancel: vi.fn(),
+      closePane: vi.fn(),
     };
     const ctx: DispatchContext = {
       focusedId: CHAT_FOCUS,
@@ -127,6 +128,7 @@ describe('ctrl+j raw bytes → shim → dispatch → navigate(down)', () => {
       murderPending: vi.fn(() => false),
       murderConfirm: vi.fn(),
       murderCancel: vi.fn(),
+      closePane: vi.fn(),
     };
     const ctx: DispatchContext = {
       focusedId: CHAT_FOCUS,
@@ -187,6 +189,7 @@ describe('ctrl+h raw bytes → shim → dispatch (travel-left + cycleTargetPrev)
       murderPending: vi.fn(() => false),
       murderConfirm: vi.fn(),
       murderCancel: vi.fn(),
+      closePane: vi.fn(),
       ...over,
     };
   }
@@ -272,6 +275,7 @@ describe('ctrl+m raw bytes → shim → dispatch (murder arm + pending confirm)'
       murderPending: vi.fn(() => false),
       murderConfirm: vi.fn(),
       murderCancel: vi.fn(),
+      closePane: vi.fn(),
       ...over,
     };
   }

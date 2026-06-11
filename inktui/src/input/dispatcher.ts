@@ -28,10 +28,13 @@
  *     always win, *including while chat is focused*, so the user can summon a panel mid-message.
  *     They are safe to check first because every one carries `meta`, which printable typing never
  *     does — so checking them ahead of the chat short-circuit cannot swallow a typed character.
- *     **`alt+s` only claims when chat is focused:** it opens the spawn wizard ONLY when chat is the
- *     effective focus; with a panel focused it declines here (returns false) and the event falls
- *     through to layer 3. Panels no longer bind `alt+s` (favorite/star is `alt+f` now), so the
- *     fall-through is simply unhandled at the panel layer. See {@link dispatchGlobalChord}'s doc.
+ *     **`alt+s` claims when chat OR a Stage pane is focused:** it opens the spawn wizard when the
+ *     effective focus is the chat input or a Stage pane (a chat-history pane / the open doc); with a
+ *     *list panel* focused it declines here (returns false) and the event falls through to layer 3.
+ *     Panels no longer bind `alt+s` (favorite/star is `alt+f` now), so the fall-through is simply
+ *     unhandled at the panel layer. `ctrl+q` (`global.closePane`) is the symmetric "close the
+ *     highlighted Stage pane" chord, also a plain chord scoped to Stage-pane focus. See
+ *     {@link dispatchGlobalChord}'s doc.
  *     (The plan lists "chat short-circuit → global chords"; we resolve the apparent ordering by
  *     scoping the short-circuit to *non-chord* input, which is the only reading that lets `alt+<n>`
  *     work while typing. Documented here so a later agent doesn't "fix" it back.)
@@ -56,7 +59,7 @@
 
 import type { Key } from 'ink';
 import { DEFAULT_BINDINGS, type ResolvedBindings } from './bindings.js';
-import { CHAT_FOCUS, type FocusId } from './focusStore.js';
+import { CHAT_FOCUS, type FocusId, isStagePaneId } from './focusStore.js';
 import type { Direction } from './geometry.js';
 import { matchKeymap, type PanelKeymap } from './keymap.js';
 import type { Mode } from './modeStore.js';
@@ -134,6 +137,11 @@ export interface GlobalHandlers {
   /** Cancel the armed murder. Fired (without consuming the event) when any non-confirm key arrives
    * while pending — the key then keeps its normal meaning in the lower layers. */
   murderCancel(): void;
+  /** `ctrl+q` (the `global.closePane` action): close the currently-highlighted Stage pane — the open
+   * doc pane (`stage:doc:<name>`) or a chat-history pane (`stage:chat:<agentId>`). Fired ONLY when the
+   * effective focus is a Stage pane; from chat/a panel the chord falls through (does nothing). The
+   * closed pane unmounts → focus re-homes to chat via the derived invariant (no imperative re-home). */
+  closePane(): void;
 }
 
 /**
@@ -196,14 +204,19 @@ const VIM_NAV: Readonly<Record<string, Direction>> = {
  * `meta`(alt)-modified events, so it never intercepts plain typing. Order within the layer is
  * deterministic: digit toggles, then vim nav, then the single-letter app chords.
  *
- * ## `alt+s` only claims the event when chat is focused
+ * ## `alt+s` claims the event when chat OR a Stage pane is focused
  *
  * Every *other* global chord wins unconditionally (it carries `meta`, so it can't swallow typing).
- * `alt+s` is the documented exception: it opens the spawn wizard ONLY when chat is focused. When a
- * *panel* is focused we return `false` for `'s'`, letting it fall through to layer 3 — but panels no
- * longer bind `alt+s` (favorite/star moved to `alt+f`), so it is simply unhandled there. Keeping the
- * chat-only guard means `alt+s` never fires the spawn wizard from a panel. A later agent must not
- * "fix" this to always-spawn: the chat-scoped spawn is the locked user decision.
+ * `alt+s` is the documented exception: it opens the spawn wizard when the effective focus is the chat
+ * input OR a Stage pane (a chat-history pane `stage:chat:<agentId>` or the open doc `stage:doc:<name>`).
+ * When a *list panel* is focused we return `false` for `'s'`, letting it fall through to layer 3 —
+ * panels no longer bind `alt+s` (favorite/star moved to `alt+f`), so it is simply unhandled there.
+ * Keeping the chat-or-Stage guard means `alt+s` never fires the spawn wizard from a list panel, while
+ * still letting the user spawn from a highlighted chat-history or doc pane (the stagelayout plan's
+ * requirement). The doc-vs-chat file-context decision is made by the spawn handler reading the
+ * effective focus (see {@link ../components/App.js}'s `deriveSpawnContext`), NOT here — the dispatcher
+ * only routes the chord. A later agent must not "fix" this back to chat-only: spawning from a
+ * highlighted Stage pane is the locked user decision.
  *
  * `alt+f` (favorite/star) is handled entirely by the panel layer — it is intentionally absent from
  * this global switch (the `default` returns false), so it falls through to the focused panel's
@@ -253,6 +266,22 @@ function dispatchGlobalChord(
   if (bindings.matches('global.quickNote', input, key)) {
     handlers.quickNote();
     return true;
+  }
+
+  // `global.closePane` (ctrl+q, a `plain` chord) closes the currently-highlighted Stage pane (a chat-
+  // history pane or the open doc). Matched BEFORE the command-modifier gate (like quickNote — under a
+  // ctrl/both modifier the gate would otherwise route ctrl+q into the digit/named-command branch and
+  // swallow it). It claims the event ONLY when a Stage pane holds the effective focus; from chat or a
+  // list panel it DECLINES (returns false → falls through), so ctrl+q does nothing there rather than a
+  // surprising close. There is ONE close mechanism for both pane kinds (chat panes have no close key of
+  // their own); a later agent must not move this onto per-pane keymaps. ctrl+q carries ctrl, which plain
+  // typing never does, so checking it ahead of typing is safe.
+  if (bindings.matches('global.closePane', input, key)) {
+    if (isStagePaneId(focusedId)) {
+      handlers.closePane();
+      return true;
+    }
+    return false;
   }
 
   // Item 12: the keybinding help overlay (`global.keyHelp`, a *plain* `?` — no command modifier, so it
@@ -314,9 +343,11 @@ function dispatchGlobalChord(
     return true;
   }
   if (bindings.matches('global.spawn', input, key)) {
-    // Spawn wizard only when chat is focused (see the fn doc); otherwise decline (return false →
-    // falls through to layer 3, where panels no longer bind the spawn chord, so it is unhandled).
-    if (focusedId === CHAT_FOCUS) {
+    // Spawn wizard when chat OR a Stage pane (chat-history / doc) holds focus (see the fn doc);
+    // otherwise (a list panel) decline (return false → falls through to layer 3, where panels no
+    // longer bind the spawn chord, so it is unhandled). The spawn handler reads the effective focus to
+    // decide whether to include the doc file in context (doc pane → yes; chat pane → no).
+    if (focusedId === CHAT_FOCUS || isStagePaneId(focusedId)) {
       handlers.spawn();
       return true;
     }
@@ -388,10 +419,10 @@ export function dispatchKey(input: string, key: Key, ctx: DispatchContext): Disp
     // pass-through: fall out of layer 0 into the normal layers below.
   }
 
-  // Layer 1 — global chords (win even while chat is focused; meta-only, so typing is safe). The one
-  // exception is `alt+s`, which only claims the event when chat is focused (→ spawn wizard); with a
-  // panel focused it declines so the event falls through (alt+f is the panel-layer favorite/star
-  // chord — see dispatchGlobalChord's doc). So the focus id is passed in.
+  // Layer 1 — global chords (win even while chat is focused; meta-only, so typing is safe). The
+  // focus-scoped exceptions are `alt+s` (spawn — claims when chat OR a Stage pane is focused, declines
+  // on a list panel so alt+f stays the panel favorite/star chord) and `ctrl+q` (`global.closePane` —
+  // claims ONLY when a Stage pane is focused). So the focus id is passed in. See dispatchGlobalChord's doc.
   if (dispatchGlobalChord(input, key, ctx.handlers, ctx.focusedId, bindings)) {
     return { layer: 'global', handled: true };
   }

@@ -84,6 +84,13 @@ export interface PaneBorderTopProps {
   /** Rows hidden ABOVE the viewport. When `> 0`, a fixed `─ ▴ N ──` indicator is drawn on the border
    * tail (right of the `─`-fill, before `╮`); absent/0 renders nothing extra — byte-identical to today. */
   readonly overflowAbove?: number | undefined;
+  /** Rows hidden BELOW the viewport. When `> 0`, a fixed `─ ▾ N ──` indicator is drawn on the border
+   * tail (right of any `▴ N`, before `╮`). It lives on the TOP border — NOT a separate bottom row —
+   * because a fixed-height bottom row clips off at fractional pane heights (the split `[top, flexGrow,
+   * bottom]` column loses its trailing fixed cell when the pane's height rounds to a half-cell, while
+   * Ink's own border, drawn ON the content box, never does). So the content box draws the robust Ink
+   * bottom border and BOTH scroll indicators ride the top border. Absent/0 renders nothing extra. */
+  readonly overflowBelow?: number | undefined;
 }
 
 /**
@@ -100,6 +107,7 @@ export function PaneBorderTop({
   bold = false,
   titleExtra,
   overflowAbove,
+  overflowBelow,
 }: PaneBorderTopProps): React.JSX.Element {
   return (
     <Box flexDirection="row" flexShrink={0} width="100%" height={1}>
@@ -132,10 +140,16 @@ export function PaneBorderTop({
           {'─'.repeat(256)}
         </Text>
       </Box>
-      {/* Scroll-overflow tail — fixed (never shrinks) so the count survives a narrow rail (the title
-          clips first). Absent/0 → nothing here → row byte-identical to the pre-feature top border. */}
+      {/* Scroll-overflow tail — fixed (never shrinks) so the counts survive a narrow rail (the title
+          clips first). BOTH indicators ride the top border: `▴ N` (above) then `▾ N` (below). The
+          below indicator was moved here off a separate bottom row that clipped at fractional pane
+          heights (see overflowBelow's prop doc). Absent/0 → nothing here → byte-identical to the
+          pre-feature top border. */}
       {overflowAbove !== undefined && overflowAbove > 0 && (
         <OverflowIndicator tri={TRI_UP} count={overflowAbove} borderColor={borderColor} />
+      )}
+      {overflowBelow !== undefined && overflowBelow > 0 && (
+        <OverflowIndicator tri={TRI_DOWN} count={overflowBelow} borderColor={borderColor} />
       )}
       <Box flexShrink={0}>
         <Text color={borderColor}>╮</Text>
@@ -144,41 +158,8 @@ export function PaneBorderTop({
   );
 }
 
-export interface PaneBorderBottomProps {
-  /** Border + corner + `─`-fill color — a {@link ../theme.js theme} role resolved by `paneColors`. */
-  readonly borderColor: string;
-  /** Rows hidden BELOW the viewport. When `> 0`, a fixed `─ ▾ N ──` indicator is drawn on the border
-   * tail (right of the `─`-fill, before `╯`); absent/0 renders nothing extra — byte-identical to the
-   * round-style bottom border (`╰` + dashes + `╯`) it replaces. */
-  readonly overflowBelow?: number | undefined;
-}
-
-/**
- * The hand-composed BOTTOM border row — a no-title mirror of {@link PaneBorderTop}. It replaces the
- * `borderStyle="round"` bottom that Ink used to draw on the content box (which can't carry a count):
- * `╰` + `─`-fill + `╯`, same chars at the same width, so with no overflow it is byte-identical to the
- * old bottom. When `overflowBelow > 0` the same fixed `─ ▾ N ──` indicator sits on the tail before `╯`.
- */
-export function PaneBorderBottom({
-  borderColor,
-  overflowBelow,
-}: PaneBorderBottomProps): React.JSX.Element {
-  return (
-    <Box flexDirection="row" flexShrink={0} width="100%" height={1}>
-      <Box flexShrink={0}>
-        <Text color={borderColor}>╰</Text>
-      </Box>
-      <Box flexGrow={1} flexShrink={1} flexBasis={0} minWidth={0} overflow="hidden">
-        <Text color={borderColor} wrap="hard">
-          {'─'.repeat(256)}
-        </Text>
-      </Box>
-      {overflowBelow !== undefined && overflowBelow > 0 && (
-        <OverflowIndicator tri={TRI_DOWN} count={overflowBelow} borderColor={borderColor} />
-      )}
-      <Box flexShrink={0}>
-        <Text color={borderColor}>╯</Text>
-      </Box>
-    </Box>
-  );
-}
+// NOTE: there is no `PaneBorderBottom` row anymore. The bottom border is drawn by Ink's OWN border on
+// the {@link ./Pane.tsx Pane}'s content box, which never clips off at fractional pane heights (a
+// hand-composed fixed-height bottom ROW did — the `[top, flexGrow, bottom]` split loses its trailing
+// cell when the pane rounds to a half-cell, e.g. two panels splitting an odd rail height). The `▾ N`
+// scroll-below count that row used to carry now rides {@link PaneBorderTop} beside the `▴ N` count.

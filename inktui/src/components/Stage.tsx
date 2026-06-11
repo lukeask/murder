@@ -34,9 +34,9 @@
  *
  * ## Phase 4b: the document pane (landed)
  * When a document is open (`docView.open`), it renders as a {@link StageDocPane} ({@link Pane}) to the
- * RIGHT of the chat panes when the terminal is wide (landscape), stacking BELOW them when narrow
- * (portrait) — the same orientation reflow the Rails use, so the doc reads as a tall column beside the
- * chat in landscape and a wide strip under it in portrait. The doc pane slots into the SAME
+ * LEFT of the chat grid when the terminal is wide (landscape), stacking ABOVE it when narrow
+ * (portrait) — documents are left/top-aligned and chats right/bottom-aligned (see
+ * {@link ../layout/stageTiling.ts} for the split + grid rules). The doc pane slots into the SAME
  * {@link StagePaneId} scheme: focus id `stage:doc:<name>`, the same `useFocusRef` +
  * `useMeasureFocus(id, ref)` wiring, the same `useEffectiveFocus() === id` highlight (all inside
  * {@link ./DocPane.js}). No focus-model change was needed — `StagePaneId` + `mountedStagePanesOf`
@@ -62,9 +62,11 @@ import {
 import { useOrientation } from '../hooks/useOrientation.js';
 import type { FocusId, StagePaneId } from '../input/focusStore.js';
 import type { PanelKeymap } from '../input/keymap.js';
+import { computeStageLayout } from '../layout/stageTiling.js';
 import type { AgentIdentity } from '../selectors/agentIdentity.js';
 import {
   type ChatTurn,
+  type TurnSpeaker,
   useConversationTurns,
   useOpenChatPanes,
 } from '../selectors/conversationsSelectors.js';
@@ -115,29 +117,49 @@ export function formatTurnText(turn: ChatTurn): string {
     .join('\n');
 }
 
-/** One chat turn block. Speaker determines the color. Renders the whole turn as a single Ink
- * `<Text>` (like {@link ./TextInput.js MultiLineText} in the new-plan form — commit 892d6ae) so long
- * lines soft-wrap to the pane width instead of truncating with an ellipsis. */
-const TurnLine = memo(function TurnLine({ turn }: { readonly turn: ChatTurn }): JSX.Element {
-  const theme = useTheme();
-  const color =
-    turn.speaker === 'user'
-      ? theme.success
-      : turn.speaker === 'assistant'
-        ? theme.text
-        : turn.speaker === 'tool'
-          ? theme.warning
-          : turn.speaker === 'plan'
-            ? theme.heading
-            : turn.speaker === 'notice'
-              ? theme.error
-              : theme.muted;
-  return (
-    <Box flexShrink={0}>
-      <Text color={color}>{formatTurnText(turn)}</Text>
-    </Box>
-  );
-});
+/** The theme color for a turn's speaker (user green, assistant body text, tool warning, …). Pulled
+ * out of the old `TurnLine` so a single flattened history line can be colored by its source speaker. */
+function speakerColor(speaker: TurnSpeaker, theme: ReturnType<typeof useTheme>): string {
+  switch (speaker) {
+    case 'user':
+      return theme.success;
+    case 'assistant':
+      return theme.text;
+    case 'tool':
+      return theme.warning;
+    case 'plan':
+      return theme.heading;
+    case 'notice':
+      return theme.error;
+    default:
+      return theme.muted;
+  }
+}
+
+/** One physical line of chat history: a single text row carrying its source speaker (for color). The
+ * chat pane windows over THESE, not over whole turns — see {@link flattenTurns}. */
+interface ChatLine {
+  readonly speaker: TurnSpeaker;
+  readonly text: string;
+}
+
+/**
+ * Flatten ordered turns into the physical lines they render as — each turn's {@link formatTurnText}
+ * output split on `\n`, every line tagged with its turn's speaker. This is the fix for dead scrolling
+ * on long chats: the pane must window by *line* (the unit it draws and the unit `measureElement`
+ * counts), exactly as {@link ./DocPane.js StageDocPane} windows the document body. Windowing by whole
+ * turns made `maxScrollUp = turns.length − height`, which is ≤ 0 whenever a few long multi-line turns
+ * fill the viewport — so `k`/`j` had nothing to move and the history was stuck. Pure (no React).
+ */
+function flattenTurns(turns: readonly ChatTurn[]): readonly ChatLine[] {
+  const lines: ChatLine[] = [];
+  for (const turn of turns) {
+    for (const text of formatTurnText(turn).split('\n')) {
+      lines.push({ speaker: turn.speaker, text });
+    }
+  }
+  return lines;
+}
 
 /**
  * One crow's chat-history Pane — a focusable Stage pane. Owns its scroll window (`useState`, rule 1),
@@ -153,6 +175,7 @@ const ChatPane = memo(function ChatPane({
   readonly identity: AgentIdentity;
   readonly conversations: ConversationsState;
 }): JSX.Element {
+  const theme = useTheme();
   const focusId: FocusId = chatPaneFocusId(identity.agentId);
   const turns = useConversationTurns(identity.agentId, conversations);
 
@@ -179,7 +202,10 @@ const ChatPane = memo(function ChatPane({
   });
   const effectiveHeight = measuredHeight > 0 ? measuredHeight : FALLBACK_HEIGHT;
 
-  const maxScrollUp = Math.max(turns.length - effectiveHeight, 0);
+  // Window by physical LINE (the unit drawn + measured), exactly as StageDocPane windows the document
+  // body — NOT by whole turns. See flattenTurns for why turn-count windowing left long chats stuck.
+  const lines = useMemo(() => flattenTurns(turns), [turns]);
+  const maxScrollUp = Math.max(lines.length - effectiveHeight, 0);
   const clampedScroll = Math.min(scrollUp, maxScrollUp);
 
   // History-scroll keymap (rule 5: declared, not handled). `j`/`k` move the window; `alt+j`/`alt+k`
@@ -189,8 +215,16 @@ const ChatPane = memo(function ChatPane({
   const keymap: PanelKeymap<ScrollIntent> = useMemo(
     () => ({
       keymap: [
-        { chord: [{ input: 'k' }, { key: { upArrow: true } }], intent: 'scrollUp', description: 'older' },
-        { chord: [{ input: 'j' }, { key: { downArrow: true } }], intent: 'scrollDown', description: 'newer' },
+        {
+          chord: [{ input: 'k' }, { key: { upArrow: true } }],
+          intent: 'scrollUp',
+          description: 'older',
+        },
+        {
+          chord: [{ input: 'j' }, { key: { downArrow: true } }],
+          intent: 'scrollDown',
+          description: 'newer',
+        },
       ],
       onIntent(intent) {
         if (intent === 'scrollUp') {
@@ -207,12 +241,12 @@ const ChatPane = memo(function ChatPane({
   // only consults the FOCUSED id's entry anyway, so this is belt-and-suspenders for clarity.
   usePanelKeymap(focusId, focused ? keymap : EMPTY_KEYMAP);
 
-  // The visible window: the effectiveHeight newest turns shifted up by the (clamped) scroll offset.
-  // Slice arithmetic keeps the most recent turns by default (scroll 0 → the tail).
-  const end = turns.length - clampedScroll;
+  // The visible window: the effectiveHeight newest LINES shifted up by the (clamped) scroll offset.
+  // Slice arithmetic keeps the most recent lines by default (scroll 0 → pinned to the tail/newest).
+  const end = lines.length - clampedScroll;
   const start = Math.max(end - effectiveHeight, 0);
-  const visibleTurns = turns.slice(start, end);
-  const thumb = computeScrollThumb(turns.length, start, effectiveHeight);
+  const visibleLines = lines.slice(start, end);
+  const thumb = computeScrollThumb(lines.length, start, effectiveHeight);
 
   return (
     <Pane
@@ -226,10 +260,15 @@ const ChatPane = memo(function ChatPane({
           measureElement reports the room we HAVE. Text column grows; scrollbar column is fixed. */}
       <Box ref={boxRef} flexDirection="row" flexGrow={1} minHeight={0} overflow="hidden">
         <Box flexDirection="column" flexGrow={1} minHeight={0} overflow="hidden">
-          {visibleTurns.length === 0 ? (
+          {visibleLines.length === 0 ? (
             <Text dimColor>no history</Text>
           ) : (
-            visibleTurns.map((turn, i) => <TurnLine key={turn.blockId ?? `${start + i}`} turn={turn} />)
+            visibleLines.map((line, i) => (
+              // biome-ignore lint/suspicious/noArrayIndexKey: history lines are position-keyed (the windowed index is the stable identity for the visible slice, mirroring StageDocPane).
+              <Text key={start + i} color={speakerColor(line.speaker, theme)}>
+                {line.text === '' ? ' ' : line.text}
+              </Text>
+            ))
           )}
         </Box>
         <Scrollbar height={effectiveHeight} thumb={thumb} />
@@ -250,10 +289,11 @@ const EMPTY_KEYMAP: PanelKeymap<ScrollIntent> = { keymap: [], onIntent() {} };
 // ---------------------------------------------------------------------------
 
 /**
- * The Stage region. Renders one focusable chat Pane per favorited crow tiled in the center, and — when
- * a document is open (`docView.open`) — a focusable {@link StageDocPane} beside them: to the RIGHT in
- * landscape, stacked BELOW in portrait (the orientation reflow the Rails use). Grows to fill whatever
- * the Rails leave.
+ * The Stage region. Renders one focusable chat Pane per favorited crow tiled in a grid, and — when a
+ * document is open (`docView.open`) — a focusable {@link StageDocPane} beside them: to the LEFT in
+ * landscape, stacked ABOVE in portrait (documents left/top-aligned, chats right/bottom-aligned). The
+ * doc/chat split and the chat grid shape are the pure {@link ../layout/stageTiling.ts computeStageLayout}.
+ * Grows to fill whatever the Rails leave.
  *
  * When the Stage has nothing to show (no favorited crows AND no open doc), it renders an empty
  * `flexGrow` box so the layout doesn't collapse oddly (the Rails keep their natural share and the Body
@@ -317,10 +357,11 @@ export const Stage = memo(function Stage({
     );
   }
 
-  // Landscape: doc sits in a column to the RIGHT of the chat row. Portrait: doc stacks BELOW in a row.
-  // One flex axis flip, mirroring the Rail reflow — the chat panes always tile in a row among
-  // themselves; only the doc's placement relative to them changes.
+  // The arrangement (region weights + chat grid rows) is the pure {@link computeStageLayout}. Landscape
+  // lays the doc region LEFT of the chat grid (a `row`); portrait stacks the doc ABOVE it (a `column`)
+  // — the same orientation flip the Rails use, with documents left/top-aligned and chats right/bottom.
   const landscape = orientation === 'landscape';
+  const { docWeight, chatWeight, rows } = computeStageLayout(panes, openDoc !== null, orientation);
   return (
     <Box
       flexDirection={landscape ? 'row' : 'column'}
@@ -336,21 +377,67 @@ export const Stage = memo(function Stage({
       columnGap={landscape ? paneGap : 0}
       rowGap={landscape ? 0 : paneGap}
     >
-      {/* Chat-history panes tile across the center, splitting the width evenly (each Pane flexGrow 1,
-          so chat keeps the lion's share next to / above the doc). Rendered only when there ARE chat
-          panes: an empty `flexGrow={1}` chat box would still claim half the Stage, leaving the doc at
-          half width (an empty left half) when a doc is open with no favorited crows — so when panes
-          is empty the doc pane (also `flexGrow={1}`) fills the Stage on its own. */}
-      {panes.length > 0 && (
-        <Box flexDirection="row" flexGrow={1} minHeight={0} overflow="hidden" columnGap={paneGap}>
-          {panes.map((identity) => (
-            <ChatPane key={identity.agentId} identity={identity} conversations={conversations} />
+      {/* Documents region — LEFT in landscape, TOP in portrait. A weighted cell (`flexBasis={0}` so its
+          size is purely weight-driven, never content- or mount-order-driven). Rendered only when a doc
+          is open; otherwise the chat region fills the Stage on its own. */}
+      {openDoc !== null && (
+        <Box
+          flexGrow={docWeight}
+          flexBasis={0}
+          minWidth={0}
+          minHeight={0}
+          overflow="hidden"
+          flexDirection="column"
+        >
+          {/* Keyed by the doc NAME so opening a different doc remounts it (resets scroll + re-registers
+              its keymap under the new `stage:doc:<name>` focus id). */}
+          <StageDocPane key={openDoc.name} open={openDoc} />
+        </Box>
+      )}
+      {/* Chat-history region — RIGHT in landscape, BOTTOM in portrait. A grid: one cross-axis line per
+          `rows` entry, each cell `flexBasis={0}` so the panes split their line evenly regardless of
+          content width or the order crows were favorited (the old single-row tiling produced skinny,
+          order-dependent columns — see {@link ../layout/stageTiling.ts}). The user's `paneGap` spaces
+          the grid: a `rowGap` between stacked grid lines, a `columnGap` between side-by-side panes in
+          a line (0 = flush borders, the default). */}
+      {rows.length > 0 && (
+        <Box
+          flexGrow={chatWeight}
+          flexBasis={0}
+          minWidth={0}
+          minHeight={0}
+          overflow="hidden"
+          flexDirection="column"
+          rowGap={paneGap}
+        >
+          {rows.map((row) => (
+            <Box
+              key={row.map((identity) => identity.agentId).join(',')}
+              flexDirection="row"
+              flexGrow={1}
+              flexBasis={0}
+              minWidth={0}
+              minHeight={0}
+              overflow="hidden"
+              columnGap={paneGap}
+            >
+              {row.map((identity) => (
+                <Box
+                  key={identity.agentId}
+                  flexGrow={1}
+                  flexBasis={0}
+                  minWidth={0}
+                  minHeight={0}
+                  overflow="hidden"
+                  flexDirection="column"
+                >
+                  <ChatPane identity={identity} conversations={conversations} />
+                </Box>
+              ))}
+            </Box>
           ))}
         </Box>
       )}
-      {/* The open document, a focusable Stage pane (focus id `stage:doc:<name>`). Keyed by the doc
-          NAME so opening a different doc remounts it (resets scroll + re-registers its keymap). */}
-      {openDoc !== null && <StageDocPane key={openDoc.name} open={openDoc} />}
     </Box>
   );
 });
