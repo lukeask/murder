@@ -56,6 +56,12 @@ _CC_SPINNER_RE = re.compile(
     r"(?:\([^)]*(?:tokens|thought|thinking|effort|↑|↓|esc to)[^)]*\))?\s*$"
 )
 _CC_SHELL_PROMPT_RE = re.compile(r"^\w+@\w[-\w.]*:[~\w/]*\s*\$\s")
+# The background-agent spinner (`✻ Waiting for 1 background agent to finish`).
+# Anchored to the `N background agent(s)` shape so a real continuation line
+# like "Waiting for your reply…" isn't eaten as chrome.
+_CC_WAITING_AGENTS_RE = re.compile(
+    r"^\s*[·*✻✶✳✽✢⠁-⣿◐◓◑◒]?\s*Waiting for\s+\d+\s+background\s+agents?\b"
+)
 _CC_AGENT_ROSTER_RE = re.compile(r"^\s*[●◯]\s+(?:main|general-purpose)\b")
 _CC_UNCACHED_NOTICE_RE = re.compile(
     r"(?:~?\d[\d.,]*(?:\s*[kKmM])?(?:\s+tokens)?)\s+uncached\b"
@@ -102,11 +108,12 @@ _cc_is_chrome = chrome_matcher(
         "shift+tab to cycle",
         "/clear to start fresh",
         "↑/↓ to ",
-        "to manage",
+        "↓ to manage",
         "Claude Code v",
     ),
     regex_search_rule(_CC_UNCACHED_NOTICE_RE),
-    stripped_substring_rule("Backgrounded agent", "Waiting for"),
+    regex_match_rule(_CC_WAITING_AGENTS_RE),
+    stripped_substring_rule("Backgrounded agent"),
     stripped_startswith_rule("Tip:", "▐", "▝", "▘", "▛", "▜"),
     _cc_result_tip,
 )

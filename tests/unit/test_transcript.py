@@ -576,6 +576,33 @@ def test_cc_thinking_effort_spinner_is_chrome():
         )
 
 
+def test_cc_chrome_substrings_dont_eat_real_continuations():
+    """The 'to manage' / 'Waiting for' chrome rules are anchored to their actual
+    UI shapes (`↓ to manage`, `✻ Waiting for N background agents`). Plain English
+    uses of those phrases on wrapped continuation lines must survive. Regression:
+    bare substring matching dropped real user/assistant lines."""
+    from murder.llm.harnesses.transcripts.grammar import claude_code as cc
+
+    segs = cc.parse_lines(["❯ I built a tool", "  that I use to manage worktrees", "● ok"])
+    users = [s for s in segs if s["type"] == "user"]
+    assert len(users) == 1 and "to manage worktrees" in users[0]["text"]
+
+    segs = cc.parse_lines(["❯ hi", "● ok then", "  Waiting for your reply on the design question."])
+    asst = [s["text"] for s in segs if s["type"] == "assistant"]
+    assert any("Waiting for your reply" in t for t in asst)
+
+    # The real chrome lines are still suppressed.
+    chrome_frame = [
+        "❯ hi",
+        "● ok",
+        "✻ Waiting for 1 background agent to finish",
+        "  ⎿  Backgrounded agent (↓ to manage · ctrl+o to expand)",
+    ]
+    blob = json.dumps(cc.parse_lines(chrome_frame), ensure_ascii=False)
+    assert "background agent" not in blob
+    assert "↓ to manage" not in blob
+
+
 def _cursor_paint_user_blocks(frame: str, user_texts: list[str]) -> str:
     """Re-create Cursor's user-input background colour around the given lines.
 
