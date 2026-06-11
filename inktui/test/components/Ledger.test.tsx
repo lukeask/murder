@@ -4,8 +4,9 @@
  * Two layers:
  *  - Pure kernels (`columnsForWidth`, `computeWindow`): column collapse + overflow windowing math,
  *    deterministic and terminal-free.
- *  - Rendered behavior (ink-testing-library): full-width highlight, alternating bg, `…` overflow
- *    indicators, header drop when scrolled, highlight suppressed when blurred.
+ *  - Rendered behavior (ink-testing-library): full-width highlight, alternating bg, header always
+ *    shown (overflow indicators moved to the pane border — NO interior `…`), highlight suppressed
+ *    when blurred.
  *
  * Ledger is presentational (props in, no store/bus), so a plain render with a fixed budget suffices.
  */
@@ -68,14 +69,14 @@ describe('computeWindow — overflow math', () => {
     });
   });
 
-  it('reserves a bottom … when rows are below the viewport', () => {
+  it('flags more-below when rows are below the viewport', () => {
     // 20 rows, 1 line each, height 5, no header, cursor at top.
     const w = computeWindow(20, 0, 1, 5, false);
     expect(w.start).toBe(0);
     expect(w.moreAbove).toBe(false);
     expect(w.moreBelow).toBe(true);
-    // One line spent on the bottom … → 4 visible entries.
-    expect(w.end).toBe(4);
+    // Indicators cost no interior lines now → capacity = floor(5/1) = 5 visible entries.
+    expect(w.end).toBe(5);
   });
 
   it('keeps the cursor visible when scrolled down', () => {
@@ -98,8 +99,8 @@ describe('computeWindow — overflow math', () => {
     // height 10, 2 lines/entry, no header → 5 entries fit; 8 rows → scrolls.
     const w = computeWindow(8, 0, 2, 10, false);
     expect(w.moreBelow).toBe(true);
-    // bottom … costs 1 line → floor((10-1)/2)=4 entries.
-    expect(w.end).toBe(4);
+    // Indicators cost no interior lines → floor(10/2) = 5 entries.
+    expect(w.end).toBe(5);
   });
 });
 
@@ -110,30 +111,29 @@ describe('computeWindow — overflow math', () => {
  * tiny-capacity degenerate case. This is the authoritative scroll test — the render tests can't catch
  * a live windowing bug because the measured height comes from the real terminal, not these budgets.
  *
- * The user's example: item1..item7 (7 rows, 0-indexed 0..6), a viewport that fits 3 entries plus a
- * top `…` and a bottom `…` (availableHeight 5, 1 line/entry, no header → with both indicators,
- * capacity = floor((5-1-1)/1) = 3). Cursor on item5 (index 4) shows `…item4 [item5] item6 …`; moving
- * to item6 (index 5) scrolls one row to `…item5 [item6] item7` (still a row visible below — here the
- * bottom edge, so the bottom `…` drops).
+ * The user's example: item1..item7 (7 rows, 0-indexed 0..6). Overflow indicators now live in the pane
+ * border and cost ZERO interior lines, so capacity = floor(5/1) = 5 (availableHeight 5, 1 line/entry,
+ * no header). Cursor on item5 (index 4) shows a 5-row window idx 1..5 with a row visible above and
+ * below; moving to item6 (index 5) scrolls one row to idx 2..6 (still a row visible above and below —
+ * here the bottom edge, so `moreBelow` drops).
  */
 describe('computeWindow — SCROLLOFF=1 spec (bug 4)', () => {
   const ROWS = 7; // item1..item7
-  const H = 5; // fits 3 entries + top … + bottom … (capacity 3 when both indicators present)
+  const H = 5; // capacity = floor(5/1) = 5 (indicators cost no interior lines now)
 
-  it("user's example: cursor on item5 (idx 4) shows item4..item6 with both … ", () => {
+  it("user's example: cursor on item5 (idx 4) keeps a row visible above AND below", () => {
     const w = computeWindow(ROWS, 4, 1, H, false);
-    expect(w).toEqual({ start: 3, end: 6, moreAbove: true, moreBelow: true });
-    // 1 row visible above (item4=idx3) AND below (item6=idx5) the cursor (item5=idx4).
+    expect(w).toEqual({ start: 1, end: 6, moreAbove: true, moreBelow: true });
+    // 1 row visible above (idx 3) AND below (idx 5) the cursor (idx 4).
     expect(w.start).toBeLessThan(4);
     expect(w.end).toBeGreaterThan(5);
   });
 
   it("user's example: moving to item6 (idx 5) scrolls down, still shows a row above AND below", () => {
     const w = computeWindow(ROWS, 5, 1, H, false);
-    // item7 (idx 6) is the last row, so the bottom margin is the list edge → the bottom `…` drops,
-    // which frees a line and grows the window to 4 rows (item4..item7, idx 3..6). The cursor (item6,
-    // idx 5) keeps a row visible above (item5, idx 4) and below (item7, idx 6) — the SCROLLOFF intent.
-    expect(w).toEqual({ start: 3, end: 7, moreAbove: true, moreBelow: false });
+    // item7 (idx 6) is the last row, so the bottom margin is the list edge → `moreBelow` drops. The
+    // window is idx 2..6; the cursor (idx 5) keeps a row visible above (idx 4) and below (idx 6).
+    expect(w).toEqual({ start: 2, end: 7, moreAbove: true, moreBelow: false });
     expect(w.start).toBeLessThan(5); // ≥1 row visible above the cursor
     expect(w.end).toBeGreaterThan(6); // ≥1 row visible below the cursor
     expect(5 >= w.start && 5 < w.end).toBe(true); // cursor on screen
@@ -241,7 +241,7 @@ describe('Ledger — rendering', () => {
     expect(frame).not.toContain('d0');
   });
 
-  it('shows … indicators when the list overflows the height budget', () => {
+  it('draws NO interior … indicator even when the list overflows (overflow → border)', () => {
     const { lastFrame } = render(
       <Ledger
         rows={rows(20)}
@@ -256,13 +256,14 @@ describe('Ledger — rendering', () => {
       />,
     );
     const frame = lastFrame() ?? '';
-    // Top rows visible, a bottom … indicator, and rows past the window absent.
+    // Top rows visible, rows past the window absent — but overflow is now invisible at the Ledger
+    // level (it lives in the pane border, which the Ledger does not render): NO `…` (U+2026) anywhere.
     expect(frame).toContain('row0');
-    expect(frame).toContain('…');
     expect(frame).not.toContain('row19');
+    expect(frame).not.toContain('…');
   });
 
-  it('drops the header and shows a top … when scrolled past the top', () => {
+  it('keeps the header visible at the top AND when scrolled, with no interior …', () => {
     const header = (columns: number): React.ReactNode => (
       <Text>{columns >= 2 ? 'NAME DATE' : 'NAME'}</Text>
     );
@@ -280,8 +281,10 @@ describe('Ledger — rendering', () => {
         header={header}
       />,
     );
-    // At the top the header shows.
-    expect(top.lastFrame()).toContain('NAME');
+    // At the top the header shows and there is no overflow `…` in the interior.
+    const topFrame = top.lastFrame() ?? '';
+    expect(topFrame).toContain('NAME');
+    expect(topFrame).not.toContain('…');
 
     const scrolled = render(
       <Ledger
@@ -298,10 +301,11 @@ describe('Ledger — rendering', () => {
       />,
     );
     const frame = scrolled.lastFrame() ?? '';
-    // Scrolled to the bottom: the header is gone, replaced by a top … indicator; cursor row shows.
-    expect(frame).not.toContain('NAME');
-    expect(frame).toContain('…');
+    // Scrolled to the bottom: the header is STILL shown (overflow now lives in the border, not the
+    // interior), the cursor row shows, and there is no `…` anywhere.
+    expect(frame).toContain('NAME');
     expect(frame).toContain('row19');
+    expect(frame).not.toContain('…');
   });
 
   it('marks the cursor row as selected only when focused', () => {

@@ -41,6 +41,33 @@
  */
 
 import { Box, Text } from 'ink';
+import { TRI_DOWN, TRI_UP } from './glyphs.js';
+
+/**
+ * The scroll-overflow indicator drawn on the border tail: ` ─ ▴ N ──` (top) / ` ─ ▾ N ──` (bottom).
+ * ONE `flexShrink={0}` Box so it NEVER shrinks — on a too-narrow rail the title/fill clip but the
+ * count stays legible. The triangle + dashes are `borderColor`, the count is `dimColor`. Slot it
+ * BETWEEN the `─`-fill and the closing corner so it reads as `…──── ▴ N ──╮`.
+ */
+function OverflowIndicator({
+  tri,
+  count,
+  borderColor,
+}: {
+  readonly tri: string;
+  readonly count: number;
+  readonly borderColor: string;
+}): React.JSX.Element {
+  return (
+    <Box flexShrink={0}>
+      <Text color={borderColor}>{`─ ${tri} `}</Text>
+      <Text color={borderColor} dimColor>
+        {String(count)}
+      </Text>
+      <Text color={borderColor}>{' ──'}</Text>
+    </Box>
+  );
+}
 
 export interface PaneBorderTopProps {
   /** Display-ready title text shown inline on the border (e.g. `Plans`, or `›` for the chat input). */
@@ -54,6 +81,9 @@ export interface PaneBorderTopProps {
   /** Optional trailing node placed right after the title text, inside the title segment. The CALLER
    * owns its color (pass a styled node) — see Pane's `titleExtra` handoff note. */
   readonly titleExtra?: React.ReactNode;
+  /** Rows hidden ABOVE the viewport. When `> 0`, a fixed `─ ▴ N ──` indicator is drawn on the border
+   * tail (right of the `─`-fill, before `╮`); absent/0 renders nothing extra — byte-identical to today. */
+  readonly overflowAbove?: number | undefined;
 }
 
 /**
@@ -69,6 +99,7 @@ export function PaneBorderTop({
   titleColor,
   bold = false,
   titleExtra,
+  overflowAbove,
 }: PaneBorderTopProps): React.JSX.Element {
   return (
     <Box flexDirection="row" flexShrink={0} width="100%" height={1}>
@@ -101,8 +132,52 @@ export function PaneBorderTop({
           {'─'.repeat(256)}
         </Text>
       </Box>
+      {/* Scroll-overflow tail — fixed (never shrinks) so the count survives a narrow rail (the title
+          clips first). Absent/0 → nothing here → row byte-identical to the pre-feature top border. */}
+      {overflowAbove !== undefined && overflowAbove > 0 && (
+        <OverflowIndicator tri={TRI_UP} count={overflowAbove} borderColor={borderColor} />
+      )}
       <Box flexShrink={0}>
         <Text color={borderColor}>╮</Text>
+      </Box>
+    </Box>
+  );
+}
+
+export interface PaneBorderBottomProps {
+  /** Border + corner + `─`-fill color — a {@link ../theme.js theme} role resolved by `paneColors`. */
+  readonly borderColor: string;
+  /** Rows hidden BELOW the viewport. When `> 0`, a fixed `─ ▾ N ──` indicator is drawn on the border
+   * tail (right of the `─`-fill, before `╯`); absent/0 renders nothing extra — byte-identical to the
+   * round-style bottom border (`╰` + dashes + `╯`) it replaces. */
+  readonly overflowBelow?: number | undefined;
+}
+
+/**
+ * The hand-composed BOTTOM border row — a no-title mirror of {@link PaneBorderTop}. It replaces the
+ * `borderStyle="round"` bottom that Ink used to draw on the content box (which can't carry a count):
+ * `╰` + `─`-fill + `╯`, same chars at the same width, so with no overflow it is byte-identical to the
+ * old bottom. When `overflowBelow > 0` the same fixed `─ ▾ N ──` indicator sits on the tail before `╯`.
+ */
+export function PaneBorderBottom({
+  borderColor,
+  overflowBelow,
+}: PaneBorderBottomProps): React.JSX.Element {
+  return (
+    <Box flexDirection="row" flexShrink={0} width="100%" height={1}>
+      <Box flexShrink={0}>
+        <Text color={borderColor}>╰</Text>
+      </Box>
+      <Box flexGrow={1} flexShrink={1} flexBasis={0} minWidth={0} overflow="hidden">
+        <Text color={borderColor} wrap="hard">
+          {'─'.repeat(256)}
+        </Text>
+      </Box>
+      {overflowBelow !== undefined && overflowBelow > 0 && (
+        <OverflowIndicator tri={TRI_DOWN} count={overflowBelow} borderColor={borderColor} />
+      )}
+      <Box flexShrink={0}>
+        <Text color={borderColor}>╯</Text>
       </Box>
     </Box>
   );

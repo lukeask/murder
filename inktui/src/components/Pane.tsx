@@ -67,7 +67,7 @@ import { Box, type DOMElement } from 'ink';
 import { forwardRef, memo } from 'react';
 import type { Theme } from '../theme/buildTheme.js';
 import { useTheme } from '../theme/themeStore.js';
-import { PaneBorderTop } from './paneBorder.js';
+import { PaneBorderBottom, PaneBorderTop } from './paneBorder.js';
 
 /** Focus-driven colors for the border/corners/fill (`border`) and the title segment (`title`). */
 export interface PaneColors {
@@ -102,6 +102,12 @@ export interface PaneProps {
    * draws its own right gutter (e.g. {@link ./DocPane.js}'s 1-char scrollbar) — net content width is
    * unchanged. The left padding stays `1` regardless. */
   readonly paddingRight?: number;
+  /** Rows hidden ABOVE the viewport. `> 0` draws a `▴ N` indicator on the top border; 0/undefined
+   * leaves the top border byte-identical to today. */
+  readonly overflowAbove?: number | undefined;
+  /** Rows hidden BELOW the viewport. `> 0` draws a `▾ N` indicator on the bottom border; 0/undefined
+   * leaves the bottom border byte-identical to today. */
+  readonly overflowBelow?: number | undefined;
 }
 
 /**
@@ -110,7 +116,16 @@ export interface PaneProps {
  */
 export const Pane = memo(
   forwardRef<DOMElement, PaneProps>(function Pane(
-    { title, focused, children, titleExtra, flexGrow = 1, paddingRight = 1 },
+    {
+      title,
+      focused,
+      children,
+      titleExtra,
+      flexGrow = 1,
+      paddingRight = 1,
+      overflowAbove,
+      overflowBelow,
+    },
     ref,
   ): React.JSX.Element {
     const theme = useTheme();
@@ -125,8 +140,11 @@ export const Pane = memo(
           titleColor={titleColor}
           bold={focused}
           titleExtra={titleExtra}
+          overflowAbove={overflowAbove}
         />
-        {/* Content box supplies the other three sides + padding + height clamp. */}
+        {/* Content box supplies the LEFT + RIGHT sides + padding + height clamp. The TOP border is the
+            hand-composed title row above; the BOTTOM is the sibling PaneBorderBottom row below (so it
+            can carry a `▾ N` count Ink's own border can't) — hence borderTop AND borderBottom false. */}
         <Box
           flexDirection="column"
           flexGrow={1}
@@ -134,12 +152,17 @@ export const Pane = memo(
           overflow="hidden"
           borderStyle="round"
           borderTop={false}
+          borderBottom={false}
           borderColor={borderColor}
           paddingLeft={1}
           paddingRight={paddingRight}
         >
           {children}
         </Box>
+        {/* Bottom border line — a sibling `height={1}` row (the content box no longer draws its own
+            bottom). Net pane height is unchanged: the line that was the content box's bottom border is
+            now this row. Carries the `▾ N` scroll-below indicator when overflowBelow > 0. */}
+        <PaneBorderBottom borderColor={borderColor} overflowBelow={overflowBelow} />
       </Box>
     );
   }),
