@@ -20,12 +20,12 @@ import { FakeBusClient } from '../../src/bus/FakeBusClient.js';
 import type { ConversationBlockEvent } from '../../src/bus/protocol.js';
 import { PlansPanel } from '../../src/components/PlansPanel.js';
 import { formatTurnText, Stage } from '../../src/components/Stage.js';
-import type { ChatTurn } from '../../src/selectors/conversationsSelectors.js';
 import { AppStoreProvider } from '../../src/hooks/useAppStore.js';
 import { InputStoresProvider } from '../../src/hooks/useInputStores.js';
 import { useRootInput } from '../../src/hooks/useRootInput.js';
 import { createInputStores } from '../../src/input/createInputStores.js';
 import { selectEffectiveFocus } from '../../src/input/focusStore.js';
+import type { ChatTurn } from '../../src/selectors/conversationsSelectors.js';
 import type { CrowSnapshotReply } from '../../src/store/roster/rosterActions.js';
 import { createAppStore } from '../../src/store/store.js';
 
@@ -216,6 +216,45 @@ describe('Stage — chat-history panes as focusable Stage panes', () => {
     const frame = lastFrame() ?? '';
     expect(frame).toContain(long.slice(0, 20));
     expect(frame).not.toContain('…');
+    dispose();
+  });
+
+  it('scrolls a SINGLE long multi-line turn (line-based window, not turn-based)', async () => {
+    // The regression: one tall turn (50 lines) used to leave maxScrollUp = turns.length(1) − height ≤ 0,
+    // so k/j were dead and the top of a long message was unreachable. Line-based windowing fixes it.
+    const { fake, store, inputStores, dispose } = await setup();
+    const body = Array.from({ length: 50 }, (_, i) => `line-${String(i).padStart(2, '0')}`).join(
+      '\n',
+    );
+    const event: ConversationBlockEvent = {
+      type: 'conversation.block',
+      id: 'ev-tall',
+      ts: '2026-06-08T00:00:00Z',
+      run_id: 'run-1',
+      agent_id: 'collab-1',
+      conversation_id: 'conv-collab-1',
+      action: 'block-appended',
+      block: { type: 'assistant', id: 'block-tall', text: body },
+    };
+    fake.emit(event);
+    const { stdin, lastFrame } = render(<Harness store={store} inputStores={inputStores} />);
+    await tick();
+
+    // Pinned to the newest lines by default: the tail shows, the head is scrolled off above.
+    const initial = lastFrame() ?? '';
+    expect(initial).toContain('line-49');
+    expect(initial).not.toContain('line-00');
+
+    // Focus the pane and scroll up to saturation → the head of the message becomes reachable.
+    stdin.write(ALT_L);
+    await tick();
+    for (let i = 0; i < 60; i++) {
+      stdin.write('k');
+    }
+    await tick();
+    const scrolled = lastFrame() ?? '';
+    expect(scrolled).toContain('line-00');
+    expect(scrolled).not.toContain('line-49');
     dispose();
   });
 

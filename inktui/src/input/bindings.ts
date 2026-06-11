@@ -58,6 +58,7 @@ export type ActionId =
   | 'global.cycleTargetNext' // alt+l / ctrl+l — cycle the chat target to the next one (chat-focus only)
   | 'global.toggleTargetPane' // alt+w / ctrl+w — toggle the current chat target's pane (chat-focus only)
   | 'global.murder' // ctrl+m — arm the murder confirm for the targeted crow (plain, kitty side-channel)
+  | 'global.closePane' // ctrl+q — close the highlighted Stage pane (chat history / doc); plain chord
   | 'panel.star'; // alt+f — favorite/star the focused panel's cursor row
 
 /**
@@ -214,6 +215,18 @@ export const ACTIONS: Readonly<Record<ActionId, ActionDef>> = {
     // murder is a destructive chord and silently degrading it onto Enter would be far worse.
     default: { kind: 'plain', chord: { key: { ctrl: true, return: true } }, label: 'C-m' },
     description: 'murder crow',
+    rebindable: false,
+  },
+  'global.closePane': {
+    id: 'global.closePane',
+    // ctrl+q — close the currently-highlighted Stage pane (a chat-history pane or the open doc). A
+    // `plain` (NOT command-modified) chord: ctrl+q arrives as the clean legacy byte 0x11, which Ink
+    // reports as `{ ctrl: true, input: 'q' }` — the same modifier-independent shape as `global.quickNote`
+    // (ctrl+n). The dispatcher matches it ahead of the command-modifier gate and only claims it when a
+    // Stage pane holds focus, so it never shadows typing or a panel key. Not rebindable (a single fixed
+    // muscle-memory chord, like quickNote).
+    default: { kind: 'plain', chord: { input: 'q', key: { ctrl: true } } },
+    description: 'close pane',
     rebindable: false,
   },
   'panel.star': {

@@ -39,6 +39,7 @@ interface SpyHandlers {
   readonly murderPending: ReturnType<typeof vi.fn<GlobalHandlers['murderPending']>>;
   readonly murderConfirm: ReturnType<typeof vi.fn<GlobalHandlers['murderConfirm']>>;
   readonly murderCancel: ReturnType<typeof vi.fn<GlobalHandlers['murderCancel']>>;
+  readonly closePane: ReturnType<typeof vi.fn<GlobalHandlers['closePane']>>;
 }
 
 function handlers(): SpyHandlers {
@@ -60,6 +61,7 @@ function handlers(): SpyHandlers {
     murderPending: vi.fn<GlobalHandlers['murderPending']>(() => false),
     murderConfirm: vi.fn<GlobalHandlers['murderConfirm']>(),
     murderCancel: vi.fn<GlobalHandlers['murderCancel']>(),
+    closePane: vi.fn<GlobalHandlers['closePane']>(),
   };
 }
 
@@ -229,13 +231,27 @@ describe('layer 1 — global chords', () => {
     expect(out).toEqual({ layer: 'global', handled: true });
   });
 
-  it('alt+s does NOT spawn when a panel is focused — it falls through (panels no longer use alt+s)', () => {
+  it('alt+s does NOT spawn when a list panel is focused — it falls through (panels no longer use alt+s)', () => {
     const h = handlers();
     // Panels no longer declare an alt+s binding; the global layer declines and it falls through to
     // layer 3, where the focused panel declares nothing for it → unhandled.
     const out = dispatchKey('s', makeKey({ meta: true }), ctx('plans', h, {}));
-    expect(h.spawn).not.toHaveBeenCalled(); // global layer declined alt+s (not chat-focused)
+    expect(h.spawn).not.toHaveBeenCalled(); // global layer declined alt+s (not chat/Stage focus)
     expect(out).toEqual({ layer: 'panel', handled: false });
+  });
+
+  it('alt+s spawns when a chat-history Stage pane is highlighted (stagelayout)', () => {
+    const h = handlers();
+    const out = dispatchKey('s', makeKey({ meta: true }), ctx('stage:chat:crow-1', h));
+    expect(h.spawn).toHaveBeenCalledOnce();
+    expect(out).toEqual({ layer: 'global', handled: true });
+  });
+
+  it('alt+s spawns when the open doc Stage pane is highlighted (stagelayout)', () => {
+    const h = handlers();
+    const out = dispatchKey('s', makeKey({ meta: true }), ctx('stage:doc:my-plan', h));
+    expect(h.spawn).toHaveBeenCalledOnce();
+    expect(out).toEqual({ layer: 'global', handled: true });
   });
 
   it('alt+p fires newPlan (C12 new-plan chord)', () => {
@@ -298,6 +314,47 @@ describe('layer 1 — global chords', () => {
     const out = dispatchKey('?', makeKey(), ctx(CHAT_FOCUS, h));
     expect(h.keyHelp).not.toHaveBeenCalled();
     expect(out.layer).toBe('chat');
+  });
+});
+
+describe('global.closePane — ctrl+q closes the highlighted Stage pane (stagelayout)', () => {
+  // ctrl+q is a plain chord delivered as the clean legacy byte → `{ ctrl: true, input: 'q' }`.
+  const CTRL_Q = makeKey({ ctrl: true });
+
+  it('ctrl+q closes a highlighted chat-history Stage pane (claimed at the global layer)', () => {
+    const h = handlers();
+    const out = dispatchKey('q', CTRL_Q, ctx('stage:chat:crow-1', h));
+    expect(h.closePane).toHaveBeenCalledOnce();
+    expect(out).toEqual({ layer: 'global', handled: true });
+  });
+
+  it('ctrl+q closes a highlighted doc Stage pane', () => {
+    const h = handlers();
+    const out = dispatchKey('q', CTRL_Q, ctx('stage:doc:my-plan', h));
+    expect(h.closePane).toHaveBeenCalledOnce();
+    expect(out).toEqual({ layer: 'global', handled: true });
+  });
+
+  it('ctrl+q does NOTHING when chat is focused (falls through to the chat short-circuit)', () => {
+    const h = handlers();
+    const out = dispatchKey('q', CTRL_Q, ctx(CHAT_FOCUS, h));
+    expect(h.closePane).not.toHaveBeenCalled();
+    expect(out.layer).toBe('chat');
+  });
+
+  it('ctrl+q does NOTHING when a list panel is focused (falls through to the panel keymap)', () => {
+    const h = handlers();
+    const out = dispatchKey('q', CTRL_Q, ctx('plans', h, {}));
+    expect(h.closePane).not.toHaveBeenCalled();
+    expect(out).toEqual({ layer: 'panel', handled: false });
+  });
+
+  it('ctrl+q fires close-pane under modifier=ctrl too (plain chord, not shadowed by the gate)', () => {
+    const h = handlers();
+    const ctrlBindings = resolveBindings('ctrl', true, {});
+    const out = dispatchKey('q', CTRL_Q, ctx('stage:doc:my-plan', h, {}, null, ctrlBindings));
+    expect(h.closePane).toHaveBeenCalledOnce();
+    expect(out).toEqual({ layer: 'global', handled: true });
   });
 });
 

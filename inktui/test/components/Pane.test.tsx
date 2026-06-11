@@ -142,7 +142,7 @@ describe('Pane — scroll-overflow border indicators', () => {
     expect((withProps.lastFrame() ?? '').split('\n')).toHaveLength(baseLines);
   });
 
-  it('renders ▴ N on the top line and ▾ N on the bottom line, right of the dash-fill', () => {
+  it('renders BOTH ▴ N and ▾ N on the top line (right of the dash-fill); bottom is plain ╰…╯', () => {
     const { lastFrame } = render(
       <Fixed width={40}>
         <Pane title="Notes" focused overflowAbove={4} overflowBelow={7}>
@@ -153,15 +153,15 @@ describe('Pane — scroll-overflow border indicators', () => {
     const lines = (lastFrame() ?? '').split('\n').map(stripAnsi);
     const top = lines[0] ?? '';
     const bottom = lines.at(-1) ?? '';
-    // Top: ▴ and 4 present.
-    expect(top).toContain('▴');
-    expect(top).toContain('4');
-    // The indicator sits after a run of dashes and before the corner ╮.
-    expect(top).toMatch(/─.*▴ 4 .*╮/u);
-    // Bottom: ▾ and 7 present, likewise right of the fill, before ╯.
-    expect(bottom).toContain('▾');
-    expect(bottom).toContain('7');
-    expect(bottom).toMatch(/─.*▾ 7 .*╯/u);
+    // Both indicators ride the TOP border now (the bottom is Ink's own border, which can't carry a
+    // count and — unlike a hand-composed bottom row — never clips at fractional pane heights). Order:
+    // ▴ 4 (above) then ▾ 7 (below), both after the dash-fill and before the corner ╮.
+    expect(top).toMatch(/─.*▴ 4 .*▾ 7 .*╮/u);
+    // The Ink bottom border is a clean ╰…╯ with no triangle leaking onto it.
+    expect(bottom).toContain('╰');
+    expect(bottom).toContain('╯');
+    expect(bottom).not.toContain('▾');
+    expect(bottom).not.toContain('▴');
   });
 
   it('keeps the ▴ indicator on a narrow rail even when the long title elides', () => {
