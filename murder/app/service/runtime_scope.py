@@ -10,6 +10,8 @@ from murder.bus import Bus
 from murder.runtime.agents.events import AgentEventSink
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from murder.runtime.agents.base import LifecycleParticipant
     from murder.bus.protocol import Entity
     from murder.config import Config
@@ -46,6 +48,14 @@ class OrchestratorHost(AgentLifecycleHost, Protocol):
     def get_agent(self, agent_id: str) -> LifecycleParticipant | None: ...
 
     async def reap(self, agent_id: str) -> None: ...
+
+    def rename_agent(
+        self,
+        old_agent_id: str,
+        new_agent_id: str,
+        *,
+        persist: Callable[[LifecycleParticipant], None] | None = None,
+    ) -> LifecycleParticipant | None: ...
 
 
 __all__ = [

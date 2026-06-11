@@ -23,74 +23,92 @@ def _command(payload: dict[str, Any]) -> CommandEvent:
     )
 
 
-def _worker(calls: list[tuple[str, dict[str, Any]]]) -> OrchestratorCommandWorker:
-    async def apply_carve_ready(ticket_id: str, payload: dict[str, Any]) -> dict[str, Any]:
-        calls.append((ticket_id, payload))
+class _StubOrchestrator:
+    """Minimal object implementing the ``OrchestratorCommands`` Protocol.
+
+    Records the ``apply_ticket_carve_ready`` calls the carve tests assert on;
+    every other method returns the inert ``{"handled": True}`` placeholder.
+    """
+
+    def __init__(self, calls: list[tuple[str, dict[str, Any]]]) -> None:
+        self._calls = calls
+
+    async def apply_ticket_carve_ready(
+        self, ticket_id: str, payload: dict[str, Any]
+    ) -> dict[str, Any]:
+        self._calls.append((ticket_id, payload))
         return {"handled": True, "ok": True, "ticket_id": ticket_id}
 
-    async def kickoff_ready(_only: str | None) -> list[str]:
+    async def kickoff_ready(self, _only: str | None) -> list[str]:
         return []
 
-    async def dict_result(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
+    async def submit_notetaker_capture(self, _payload: dict[str, Any]) -> dict[str, Any]:
         return {"handled": True}
 
-    async def agent_message(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
+    async def retry_failed_ticket(self, _ticket_id: str) -> dict[str, Any]:
         return {"handled": True}
 
-    async def agent_key(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
+    async def set_schedule_at(
+        self, _ticket_id: str, _schedule_at: str | None
+    ) -> dict[str, Any]:
         return {"handled": True}
 
-    async def note_name(_name: str) -> dict[str, Any]:
+    async def update_ticket_metadata(
+        self, _ticket_id: str, _payload: dict[str, Any]
+    ) -> dict[str, Any]:
         return {"handled": True}
 
-    async def ticket_str(_ticket_id: str) -> dict[str, Any]:
+    async def force_ticket_status(self, _ticket_id: str, _status: str) -> dict[str, Any]:
         return {"handled": True}
 
-    async def ticket_schedule(_ticket_id: str, _schedule_at: str | None) -> dict[str, Any]:
+    async def ensure_note(self, _name: str) -> dict[str, Any]:
         return {"handled": True}
 
-    async def ticket_metadata(_ticket_id: str, _payload: dict[str, Any]) -> dict[str, Any]:
+    async def retire_note(self, _name: str) -> dict[str, Any]:
         return {"handled": True}
 
-    async def ticket_status(_ticket_id: str, _status: str) -> dict[str, Any]:
+    async def send_agent_message(self, *_args: Any, **_kwargs: Any) -> dict[str, Any]:
         return {"handled": True}
 
-    async def rename(_old: str, _new: str) -> dict[str, Any]:
+    async def send_agent_key(self, *_args: Any, **_kwargs: Any) -> dict[str, Any]:
         return {"handled": True}
 
-    async def scaffold(_name: str, _title: str) -> dict[str, Any]:
+    async def refresh_agent_transcript(self, _agent_id: str) -> dict[str, Any]:
         return {"handled": True}
 
-    async def deprecate(_name: str) -> dict[str, Any]:
+    async def interrupt_agent(self, _agent_id: str) -> dict[str, Any]:
         return {"handled": True}
 
-    async def noargs() -> dict[str, Any]:
+    async def stop_agent(self, _agent_id: str) -> dict[str, Any]:
         return {"handled": True}
 
-    return OrchestratorCommandWorker(
-        kickoff_ready=kickoff_ready,
-        apply_carve_ready=apply_carve_ready,
-        capture_submit=dict_result,
-        retry_failed=ticket_str,
-        set_schedule_at=ticket_schedule,
-        update_metadata=ticket_metadata,
-        force_status=ticket_status,
-        note_ensure=note_name,
-        note_retire=note_name,
-        send_agent_message=agent_message,
-        send_agent_key=agent_key,
-        refresh_agent_transcript=ticket_str,
-        interrupt_agent=ticket_str,
-        stop_agent=ticket_str,
-        rename_rogue=rename,
-        scaffold_plan=scaffold,
-        rename_plan=rename,
-        deprecate_plan=deprecate,
-        quick_kick_ticket=ticket_str,
-        quick_create_ticket=lambda _title: {"handled": True},
-        spawn_rogue=dict_result,
-        reconfigure_collaborator=noargs,
-    )
+    async def rename_rogue_agent(self, _agent_id: str, _name: str) -> dict[str, Any]:
+        return {"handled": True}
+
+    async def scaffold_plan(self, _name: str, _body: str) -> dict[str, Any]:
+        return {"handled": True}
+
+    async def rename_plan(self, _old: str, _new: str) -> dict[str, Any]:
+        return {"handled": True}
+
+    async def deprecate_plan(self, _name: str) -> dict[str, Any]:
+        return {"handled": True}
+
+    async def quick_kick_ticket(self, _title: str) -> dict[str, Any]:
+        return {"handled": True}
+
+    def quick_create_ticket(self, _title: str) -> dict[str, Any]:
+        return {"handled": True}
+
+    async def spawn_rogue_command(self, _payload: dict[str, Any]) -> dict[str, Any]:
+        return {"handled": True}
+
+    async def reconfigure_collaborator(self) -> dict[str, Any]:
+        return {"handled": True}
+
+
+def _worker(calls: list[tuple[str, dict[str, Any]]]) -> OrchestratorCommandWorker:
+    return OrchestratorCommandWorker(_StubOrchestrator(calls))
 
 
 @pytest.mark.asyncio

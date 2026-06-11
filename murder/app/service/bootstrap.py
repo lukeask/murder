@@ -55,32 +55,7 @@ async def start_supervisor_workers(
             get_agent=runtime.get_agent,
         )
     )
-    await supervisor.start_worker(
-        OrchestratorCommandWorker(
-            kickoff_ready=orchestrator.kickoff_ready,
-            apply_carve_ready=orchestrator.apply_ticket_carve_ready,
-            capture_submit=orchestrator.submit_notetaker_capture,
-            retry_failed=orchestrator.retry_failed_ticket,
-            set_schedule_at=orchestrator.set_schedule_at,
-            update_metadata=orchestrator.update_ticket_metadata,
-            force_status=orchestrator.force_ticket_status,
-            note_ensure=orchestrator.ensure_note,
-            note_retire=orchestrator.retire_note,
-            send_agent_message=orchestrator.send_agent_message,
-            send_agent_key=orchestrator.send_agent_key,
-            refresh_agent_transcript=orchestrator.refresh_agent_transcript,
-            interrupt_agent=orchestrator.interrupt_agent,
-            stop_agent=orchestrator.stop_agent,
-            rename_rogue=orchestrator.rename_rogue_agent,
-            scaffold_plan=orchestrator.scaffold_plan,
-            rename_plan=orchestrator.rename_plan,
-            deprecate_plan=orchestrator.deprecate_plan,
-            quick_kick_ticket=orchestrator.quick_kick_ticket,
-            quick_create_ticket=orchestrator.quick_create_ticket,
-            spawn_rogue=orchestrator.spawn_rogue_command,
-            reconfigure_collaborator=orchestrator.reconfigure_collaborator,
-        )
-    )
+    await supervisor.start_worker(OrchestratorCommandWorker(orchestrator))
     return supervisor
 
 

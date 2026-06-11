@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import json
+import logging
 import math
 import sqlite3
 import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
-from uuid import UUID, uuid4
+from uuid import UUID
 
 from murder.bus.protocol import (
     COMMAND_REAPER_INTERVAL_S,
@@ -25,6 +26,8 @@ from murder.state.persistence import commands as cmd_db
 
 if TYPE_CHECKING:
     from murder.bus.broker import Bus
+
+LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(slots=True)
@@ -52,9 +55,19 @@ class CommandDispatcher:
         )
         if row is None:
             return None
+        row_id = str(row["id"])
+        try:
+            event = command_from_row(row)
+        except ValueError as exc:
+            # Quarantine a corrupt row (non-UUID id) so it leaves the pending
+            # set instead of wedging the claim loop. This indicates corruption
+            # or an out-of-band write, so fail loudly and move on.
+            LOGGER.error("dropping corrupt command row: %s", exc)
+            self.fail(row_id, "non-UUID command id", retryable=False)
+            return None
         return ClaimedCommand(
-            command_id=str(row["id"]),
-            event=command_from_row(row),
+            command_id=row_id,
+            event=event,
         )
 
     def complete(self, command_id: str, result: dict[str, Any] | None) -> None:
@@ -77,16 +90,21 @@ class CommandDispatcher:
         result: dict[str, Any],
     ) -> None:
         if result.get("handled") is False:
-            # ``handled: False`` covers two cases: a worker that genuinely has
-            # no branch for this kind, and a handler reporting a soft business
-            # failure via an ``error`` field (e.g. "no agent named X"). Prefer
-            # the specific message so the caller sees the real reason instead of
-            # the generic "did not handle" text.
+            # Wiring miss: a command was routed to a worker that has no branch
+            # for this kind. That is a programming bug, not a runtime condition,
+            # so fail loudly at ERROR level.
+            message = f"worker {worker_name!r} did not handle {command.kind!r}"
+            LOGGER.error(message)
+            self.fail(command_id, message, retryable=False)
+            return
+        if result.get("ok") is False:
+            # Domain failure: the handler ran fine and hit a normal business
+            # error (e.g. "no agent named X"). Surface the handler's own error.
             error = result.get("error")
             message = (
                 str(error)
                 if error
-                else f"worker {worker_name!r} did not handle {command.kind!r}"
+                else f"command {command.kind!r} failed"
             )
             self.fail(command_id, message, retryable=False)
             return
@@ -132,8 +150,8 @@ def command_from_row(row: dict[str, Any]) -> CommandEvent:
     status = row.get("status") or CommandStatus.PENDING.value
     try:
         event_id = UUID(str(row["id"]))
-    except ValueError:
-        event_id = uuid4()
+    except ValueError as exc:
+        raise ValueError(f"commands row has non-UUID id: {row['id']!r}") from exc
     return CommandEvent(
         id=event_id,
         run_id=row["run_id"],

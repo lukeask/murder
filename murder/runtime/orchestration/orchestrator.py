@@ -7,33 +7,22 @@ import contextlib
 import logging
 import re
 import sqlite3
-from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 from uuid import uuid4
 
 _TNUM_RE = re.compile(r"^t(\d+)$")
 
 LOGGER = logging.getLogger(__name__)
 
-from murder.work import notes as notes_mod
 from murder.state.persistence.tickets import (
     get_ticket as _db_get_ticket,
     compute_ready as _db_compute_ready,
-    update_ticket_status as _db_update_ticket_status,
-    apply_ticket_carve_payload as _db_apply_ticket_carve_payload,
-)
-from murder.state.persistence.plans import (
-    get_plan_row as _db_get_plan_row,
-    live_plan_name_exists as _db_live_plan_name_exists,
-    rename_plan as _db_rename_plan,
-    upsert_plan as _db_upsert_plan,
 )
 from murder.state.persistence.agents import (
     upsert_agent as _db_upsert_agent,
     get_active_agent_by_role as _db_get_active_agent_by_role,
     set_agent_status as _db_set_agent_status,
-    rename_agent as _db_rename_agent,
 )
 from murder.runtime.agents.base import AgentRole, AgentStatus
 from murder.runtime.agents.crow_handler import CrowHandler
@@ -48,20 +37,13 @@ from murder.config import (
 )
 from murder.llm.harnesses import get as get_harness
 from murder.llm.harnesses.harnesses_doc import write_harnesses_doc
-from murder.work.plans.parser import (
-    render as _render_plan_markdown,
-    write as _write_plan_markdown,
-)
-from murder.work.plans.schema import Plan, PlanStatus
-from murder.work.plans.sync import content_hash as _plan_content_hash
-from murder.state.storage.paths import plan_md, ticket_md, tickets_dir
+from murder.state.storage.paths import tickets_dir
 from murder.state.storage.worktrees import (
     ensure_named_worktree,
-    prune_terminal_crow_worktree,
 )
 from murder.runtime.terminal import tmux
 from murder.runtime.terminal.session_names import format_session_name
-from murder.work.tickets import carve, lifecycle
+from murder.work.tickets import lifecycle
 
 from murder.runtime.agents.crow import CrowAgent
 from murder.runtime.agents.runner import spawn_agent
@@ -70,6 +52,10 @@ from murder.llm.harnesses.models import HarnessStartSpec
 from murder.verdict.completion import CheckRegistry, CompletionCoordinator
 from murder.llm.harnesses import capabilities_for
 from murder.runtime.orchestration.brief import BriefContext, assembler_for
+from murder.runtime.orchestration.ticket_ops import TicketOps
+from murder.runtime.orchestration.note_ops import NoteOps
+from murder.runtime.orchestration.plan_ops import PlanOps
+from murder.runtime.orchestration.agent_ops import AgentOps
 from murder.app.service.runtime_scope import OrchestratorHost
 
 from murder.verdict.escalations.service import EscalationService
@@ -105,7 +91,7 @@ def _harness_prefix(harness_kind: str) -> str:
 
 # Re-exported from the pure-util module so existing backend callers keep
 # importing it from here; renderer-agnostic clients import the util directly.
-from murder.runtime.orchestration.agent_ids import is_rogue_agent_id  # noqa: E402
+from murder.runtime.orchestration.agent_ids import is_rogue_agent_id  # noqa: E402, F401
 
 
 def _codex_startup_model_degraded_ok(
@@ -126,53 +112,6 @@ def _codex_startup_model_degraded_ok(
     return "failed to select runtime model" in msg or "not idle in time" in msg
 
 
-def _crow_handler_companion(agent_id: str) -> str:
-    """The crow_handler id paired with a ``crow-<ticket>`` agent, else itself.
-
-    Used to tear down both halves of a ticket crow when force-stopping an
-    agent the runtime no longer tracks. Returns ``agent_id`` unchanged when
-    there is no separate handler (e.g. rogue crows), so callers can pass it
-    to a query without a special case.
-    """
-    if agent_id.startswith("crow-"):
-        return f"crow_handler-{agent_id[len('crow-'):]}"
-    return agent_id
-
-
-def _validate_plan_filename_stem(name: str, *, command: str) -> str:
-    name = name.strip()
-    if not name or "/" in name or "\\" in name or name in {".", ".."}:
-        raise ValueError(f"{command} name must be a single filename stem")
-    return name
-
-
-def _free_superseded_plan_name(db: Any, name: str) -> str:
-    """Release ``name`` from the superseded plan that currently owns it.
-
-    Renames the superseded DB row (PRIMARY KEY ``plans.name``) to a collision-
-    safe archived key so a fresh plan can take ``name``. All of the old plan's
-    data — body, revisions, related tickets, and its deprecated-dir markdown —
-    is preserved; only the DB key changes (its ``materialized_path`` is carried
-    through unchanged so the on-disk file is not orphaned). Returns the new key.
-
-    F3b: this is the chosen resolution of the schema/app uniqueness tension —
-    free the superseded row's name at create-time (option (a)). No schema change
-    or migration, and it reuses the existing data-preserving ``rename_plan``.
-    """
-    row = _db_get_plan_row(db, name)
-    assert row is not None
-    materialized_path = str(row.get("materialized_path") or "")
-    base = f"{name}-superseded"
-    archived = base
-    i = 2
-    while _db_get_plan_row(db, archived) is not None:
-        archived = f"{base}-{i}"
-        i += 1
-    with db:
-        _db_rename_plan(db, name, archived, materialized_path=materialized_path)
-    return archived
-
-
 class Orchestrator:
     def __init__(self, rt: OrchestratorHost) -> None:
         self.rt = rt
@@ -182,6 +121,26 @@ class Orchestrator:
             rt,
             CheckRegistry(),
             ensure_planning_agent=self.ensure_planning_agent,
+        )
+        # Concern services. Cross-concern hooks are injected as late-bound
+        # closures over ``self`` so a facade-level monkeypatch (the test
+        # convention) is honored at call time rather than frozen at construction.
+        self.tickets = TicketOps(rt, emit_ticket_status=self._emit_ticket_status)
+        self.notes = NoteOps(rt)
+        self.plans = PlanOps(
+            rt,
+            send_agent_message=lambda *a, **k: self.send_agent_message(*a, **k),
+            planner_spawn_locks=self._planner_spawn_locks,
+        )
+        self.agent_ops = AgentOps(
+            rt,
+            ensure_planning_agent=lambda *a, **k: self.ensure_planning_agent(*a, **k),
+            ensure_collaborator=lambda *a, **k: self.ensure_collaborator(*a, **k),
+            reap_ticket_crow_agents=lambda *a, **k: self.tickets._reap_ticket_crow_agents(
+                *a, **k
+            ),
+            rogue_slug=_rogue_slug,
+            agent_is_live=lambda agent: self._agent_is_live(agent),
         )
 
     def _escalations(self) -> EscalationService:
@@ -266,84 +225,13 @@ class Orchestrator:
         return kicked
 
     def next_ticket_id(self) -> str:
-        """Return the next ``t<NNN>`` id, scanning DB + filesystem for the max.
-
-        Authoritative server-side id allocation; checks both the DB and the
-        on-disk ``.md`` files so it stays consistent across the TicketSync poll
-        window.
-        """
-        assert self.rt.db is not None
-        conn = self.rt.db
-        repo_root = self.rt.repo_root
-        max_n = 0
-        for row in conn.execute("SELECT id FROM tickets WHERE id LIKE 't%'").fetchall():
-            m = _TNUM_RE.match(str(row["id"]))
-            if m:
-                max_n = max(max_n, int(m.group(1)))
-        root = tickets_dir(repo_root)
-        if root.exists():
-            for p in root.glob("*.md"):
-                m2 = _TNUM_RE.match(p.stem)
-                if m2:
-                    max_n = max(max_n, int(m2.group(1)))
-        return f"t{max_n + 1:03d}"
+        return self.tickets.next_ticket_id()
 
     def ticket_exists(self, handle: str) -> bool:
-        """True if ``handle`` names an existing ticket (DB row or on-disk ``.md``)."""
-        assert self.rt.db is not None
-        handle = handle.strip()
-        if not handle:
-            return False
-        row = self.rt.db.execute(
-            "SELECT 1 FROM tickets WHERE id = ?", (handle,)
-        ).fetchone()
-        if row is not None:
-            return True
-        return ticket_md(self.rt.repo_root, handle).exists()
+        return self.tickets.ticket_exists(handle)
 
     def quick_create_ticket(self, title: str) -> dict[str, Any]:
-        """Create a ticket .md + insert it as PLANNED, without kicking it.
-
-        Server-side id allocation + file write + DB insert — the authority the
-        TUI's old direct ``.md`` write bypassed (V1).
-        """
-        assert self.rt.db is not None
-        conn = self.rt.db
-        repo_root = self.rt.repo_root
-        ticket_id = self.next_ticket_id()
-
-        # Write the markdown file so the ticket sync stays consistent.
-        path = ticket_md(repo_root, ticket_id)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(f"# {title}\n\n## Plan\n\n## Working Notes\n")
-
-        # Insert directly into DB — bypasses the 1.5 s TicketSync poll.
-        from murder.state.persistence.tickets import insert_ticket as _db_insert_ticket
-        from murder.work.tickets.schema import Ticket
-        from murder.work.tickets.status import TicketStatus
-
-        now = datetime.utcnow().replace(microsecond=0)
-        row_existing = conn.execute(
-            "SELECT id FROM tickets WHERE id = ?", (ticket_id,)
-        ).fetchone()
-        if row_existing is None:
-            ticket = Ticket(
-                id=ticket_id,
-                title=title,
-                status=TicketStatus.PLANNED,
-                created_at=now,
-                updated_at=now,
-            )
-            try:
-                _db_insert_ticket(conn, ticket)
-            except Exception:
-                pass  # TicketSync may have raced us
-        # Sync method (no surrounding coroutine): use the sync emit_snapshot
-        # choke point. New ticket -> the schedule snapshot's planned bucket
-        # changed. (TicketSync would also emit on its next reconcile, but this
-        # closes the 1.5 s poll gap the direct DB insert opens.)
-        self.rt.emit_snapshot(Entity.TICKET, ticket_id)
-        return {"handled": True, "ticket_id": ticket_id, "title": title}
+        return self.tickets.quick_create_ticket(title)
 
     async def quick_kick_ticket(self, title: str) -> dict[str, Any]:
         """Create a ticket, insert it into the DB as PLANNED, and immediately kick it."""
@@ -680,45 +568,7 @@ class Orchestrator:
             return agent_id
 
     async def _record_user_block(self, agent_id: str, text: str) -> None:
-        """Record a ground-truth user turn at the send boundary.
-
-        Writes directly through the runtime db keyed by ``agent_id`` (the
-        conversation id), so the exact text the user sent is stored
-        authoritatively instead of re-derived from a noisy pane capture — the
-        source of the collaborator corruption. No-op without a db.
-        """
-        db = getattr(self.rt, "db", None)
-        if db is None:
-            return
-        from murder.bus import ConversationBlockEvent
-        from murder.state.persistence import conversation
-
-        block = conversation.append_user_message(db, agent_id, text)
-        bus = getattr(self.rt, "bus", None)
-        run_id = getattr(self.rt, "run_id", None)
-        if block is None or bus is None or run_id is None:
-            return
-        agent = self.rt.get_agent(agent_id)
-        await bus.publish(
-            ConversationBlockEvent(
-                run_id=str(run_id),
-                agent_id=agent_id,
-                role=getattr(agent, "role", None),
-                ticket_id=getattr(agent, "ticket_id", None),
-                conversation_id=agent_id,
-                action="block-appended",
-                block=conversation.block_to_wire(block),
-            )
-        )
-        # F1 (plan sort-order): the plans list orders by MAX(captured_at) of each
-        # plan's ``planner-{name}`` messages (read_model.get_plans_snapshot), so a
-        # user turn to a planner reorders the list WITHOUT any plans-table write.
-        # This is the low-rate, plan-scoped, runtime-layer choke point for that
-        # reorder; emit a key-only plan snapshot. (The high-rate poll-driven
-        # ``merge_transcript`` rebuild that ALSO re-sorts is deferred per the
-        # plan's coalescing caveat -- see commit message follow-up.)
-        if agent_id.startswith("planner-"):
-            await self.rt.publish_snapshot(Entity.PLAN, agent_id[len("planner-"):])
+        await self.agent_ops._record_user_block(agent_id, text)
 
     async def send_agent_message(
         self,
@@ -728,59 +578,9 @@ class Orchestrator:
         *,
         spawn_if_needed: bool = True,
     ) -> dict[str, Any]:
-        """Deliver a message to an agent by id.
-
-        Planner targets are restored on demand so a selected plan can receive
-        chat even if its tmux session has not been started yet. Set
-        ``spawn_if_needed=False`` to deliver only to an already-live planner —
-        a non-live planner is left dormant (no ``ensure_planning_agent``), so
-        system nudges such as plan parse-error notifications never wake it.
-        """
-        del ticket_id
-
-        agent = self.rt.get_agent(agent_id)
-        if agent_id.startswith("planner-"):
-            plan_name = agent_id[len("planner-") :]
-            if not plan_name:
-                return {"handled": False, "error": "planner agent_id requires a plan name"}
-            if agent is None or not await self._agent_is_live(agent):
-                if not spawn_if_needed:
-                    LOGGER.info(
-                        "send_agent_message: planner %s not live and spawn_if_needed=False; "
-                        "skipping spawn",
-                        agent_id,
-                    )
-                    return {"handled": False, "reason": "agent-not-live"}
-                await self.ensure_planning_agent(plan_name)
-                agent = self.rt.get_agent(agent_id)
-        if agent_id.startswith("crow-"):
-            ticket_id = agent_id[len("crow-") :]
-            if not ticket_id:
-                return {"handled": False, "error": "crow agent_id requires a ticket id"}
-            handler = self.rt.get_crow_handler(ticket_id)
-            if handler is not None:
-                queue_result = await handler.queue_message(message)
-                if queue_result.get("ok") is False:
-                    return {
-                        "handled": False,
-                        "error": str(queue_result.get("error") or "crow message delivery failed"),
-                        **queue_result,
-                    }
-                # Ground truth: record the user turn on the crow's own
-                # conversation once the handler accepts immediate or queued
-                # delivery.
-                await self._record_user_block(agent_id, message)
-                return {"handled": True, **queue_result}
-        if agent is None:
-            return {"handled": False, "error": f"no agent named {agent_id}"}
-        send_result = await agent.send(message)
-        if send_result is not None and getattr(send_result, "ok", True) is False:
-            return {
-                "handled": False,
-                "error": getattr(send_result, "message", None) or "agent message delivery failed",
-            }
-        await self._record_user_block(agent_id, message)
-        return {"handled": True, "queued": False}
+        return await self.agent_ops.send_agent_message(
+            agent_id, message, ticket_id, spawn_if_needed=spawn_if_needed
+        )
 
     async def send_agent_key(
         self,
@@ -791,364 +591,46 @@ class Orchestrator:
         enter: bool = False,
         log_user_input: str | None = None,
     ) -> dict[str, Any]:
-        """Send a raw tmux key (name or literal text) to an agent harness pane."""
-        if agent_id is None:
-            agent_id = await self.ensure_collaborator()
-
-        agent = self.rt.get_agent(agent_id)
-        if agent_id.startswith("planner-"):
-            plan_name = agent_id[len("planner-") :]
-            if not plan_name:
-                return {"handled": False, "error": "planner agent_id requires a plan name"}
-            if agent is None or not await self._agent_is_live(agent):
-                await self.ensure_planning_agent(plan_name)
-                agent = self.rt.get_agent(agent_id)
-        if agent is None:
-            return {"handled": False, "error": f"no agent named {agent_id}"}
-
-        session = getattr(agent, "session", None)
-        if not isinstance(session, str) or not session:
-            return {"handled": False, "error": f"agent {agent_id} has no tmux session"}
-
-        await tmux.send_keys(session, key, literal=literal, enter=enter)
-        # Ground truth: record raw-key user input authoritatively in both the
-        # JSON store and the flat log (always-log-user-input is non-negotiable).
-        if isinstance(log_user_input, str) and log_user_input.strip():
-            await self._record_user_block(agent_id, log_user_input)
-        return {
-            "handled": True,
-            "agent_id": agent_id,
-            "session": session,
-            "key": key,
-            "literal": literal,
-            "enter": enter,
-            "logged_user_input": bool(log_user_input and log_user_input.strip()),
-        }
+        return await self.agent_ops.send_agent_key(
+            agent_id,
+            key,
+            literal=literal,
+            enter=enter,
+            log_user_input=log_user_input,
+        )
 
     async def refresh_agent_transcript(self, agent_id: str) -> dict[str, Any]:
-        """Project an agent's pane server-side and return the rich conversation
-        doc for the TUI to render (crows + planners).
-
-        This is the server-side mirror of the collaborator's
-        ``collaborator.transcript.refresh`` RPC: parsing happens here, never in
-        the TUI. Planner targets are restored on demand. Returns
-        ``available=False`` with an empty doc when the agent or its parser is
-        absent (the TUI falls back to the raw pane mirror).
-        """
-        agent = self.rt.get_agent(agent_id)
-        if agent_id.startswith("planner-"):
-            plan_name = agent_id[len("planner-") :]
-            if plan_name and (agent is None or not await self._agent_is_live(agent)):
-                await self.ensure_planning_agent(plan_name)
-                agent = self.rt.get_agent(agent_id)
-        if agent is None or not hasattr(agent, "refresh_transcript_doc"):
-            return {"handled": True, "available": False, "doc": None}
-        doc = await agent.refresh_transcript_doc()
-        return {
-            "handled": True,
-            "available": True,
-            "doc": doc,
-            "has_parser": agent.harness.has_transcript_parser(),
-            "harness_kind": str(agent.harness.kind),
-            "session": str(agent.session),
-        }
+        return await self.agent_ops.refresh_agent_transcript(agent_id)
 
     async def stop_agent(self, agent_id: str) -> dict[str, Any]:
-        """Stop a live agent and tear down its tmux session."""
-        if self.rt.get_agent(agent_id) is None:
-            # Not in the in-memory registry. The roster derives "running" from
-            # the agents table, so a crow spawned in a prior service run shows
-            # up as killable even though its handle was never re-registered
-            # (its tmux session may well still be live). Tear it down directly
-            # so murda works after a service restart instead of bailing with
-            # "no agent named X".
-            return await self._force_stop_unregistered_agent(agent_id)
-        if agent_id.startswith("crow-"):
-            ticket_id = agent_id[len("crow-") :]
-            if ticket_id:
-                await self._reap_ticket_crow_agents(ticket_id)
-                return {"handled": True, "agent_id": agent_id}
-        await self.rt.reap(agent_id)
-        return {"handled": True, "agent_id": agent_id}
+        return await self.agent_ops.stop_agent(agent_id)
 
     async def _force_stop_unregistered_agent(self, agent_id: str) -> dict[str, Any]:
-        """Kill the tmux session and mark dead an agent the runtime forgot."""
-        db = self.rt.db
-        if db is None:
-            return {"handled": False, "error": f"no agent named {agent_id}"}
-        rows = db.execute(
-            """
-            SELECT agent_id, session FROM agents
-             WHERE (agent_id = ? OR agent_id = ?)
-               AND status NOT IN ('done', 'dead')
-            """,
-            (agent_id, _crow_handler_companion(agent_id)),
-        ).fetchall()
-        if not rows:
-            return {"handled": False, "error": f"no agent named {agent_id}"}
-        for row in rows:
-            session = row["session"]
-            if session and await tmux.session_exists(session):
-                with contextlib.suppress(tmux.TmuxError):
-                    await tmux.kill_session(session)
-            _db_set_agent_status(db, row["agent_id"], AgentStatus.DEAD.value)
-        return {"handled": True, "agent_id": agent_id}
+        return await self.agent_ops._force_stop_unregistered_agent(agent_id)
 
     async def rename_rogue_agent(self, agent_id: str, name: str) -> dict[str, Any]:
-        """Rename a live rogue crow without restarting its harness."""
-        if not is_rogue_agent_id(agent_id):
-            return {"handled": False, "error": "rename is only supported for rogue crows"}
-        agent = self.rt.get_agent(agent_id)
-        if agent is None:
-            return {"handled": False, "error": f"no agent named {agent_id}"}
-        match = re.match(r"^(.+)-rogue-(.+)$", agent_id)
-        if match is None:
-            return {"handled": False, "error": f"cannot parse rogue agent id {agent_id}"}
-        prefix = match.group(1)
-        slug = _rogue_slug(name)
-        new_agent_id = f"{prefix}-rogue-{slug}"
-        if new_agent_id == agent_id:
-            return {"handled": True, "agent_id": agent_id}
-        if self.rt.get_agent(new_agent_id) is not None:
-            return {"handled": False, "error": f"agent already exists: {new_agent_id}"}
-
-        old_session = getattr(agent, "session", None)
-        new_session = format_session_name(self.rt, "crow", f"_{prefix}_rogue_{slug}")
-        if (
-            isinstance(old_session, str)
-            and old_session != new_session
-            and await tmux.session_exists(new_session)
-        ):
-            return {"handled": False, "error": f"session already exists: {new_session}"}
-
-        renamed = self.rt.agents.rename_agent(
-            agent_id,
-            new_agent_id,
-            persist=self.rt.sync_agent,
-        )
-        if renamed is None:
-            return {"handled": False, "error": f"failed to rename {agent_id}"}
-        if isinstance(old_session, str) and old_session != new_session:
-            if await tmux.session_exists(old_session):
-                await tmux.rename_session(old_session, new_session)
-            renamed.session = new_session
-            harness_session = getattr(renamed, "harness_session", None)
-            if harness_session is not None:
-                harness_session.session = new_session
-        if self.rt.db is not None:
-            with self.rt.db:
-                _db_rename_agent(
-                    self.rt.db,
-                    agent_id,
-                    new_agent_id,
-                    session=getattr(renamed, "session", None),
-                )
-            self.rt.sync_agent(renamed)
-        return {
-            "handled": True,
-            "old_agent_id": agent_id,
-            "agent_id": new_agent_id,
-        }
+        return await self.agent_ops.rename_rogue_agent(agent_id, name)
 
     async def interrupt_agent(self, agent_id: str) -> dict[str, Any]:
-        if is_rogue_agent_id(agent_id):
-            agent = self.rt.get_agent(agent_id)
-            if agent is None:
-                return {"handled": False, "error": f"no agent named {agent_id}"}
-            harness_session = getattr(agent, "harness_session", None)
-            if harness_session is None:
-                return {"handled": False, "error": f"agent {agent_id} has no harness session"}
-            await harness_session.interrupt()
-            return {"handled": True}
-        if not agent_id.startswith("crow-"):
-            return {"handled": False, "error": "interrupt is only supported for crow agents"}
-        ticket_id = agent_id[len("crow-") :]
-        if not ticket_id:
-            return {"handled": False, "error": "crow agent_id requires a ticket id"}
-        handler = self.rt.get_crow_handler(ticket_id)
-        if handler is None:
-            return {"handled": False, "error": f"no crow_handler for {ticket_id}"}
-        await handler.interrupt_crow()
-        return {"handled": True}
+        return await self.agent_ops.interrupt_agent(agent_id)
 
     async def _agent_is_live(self, agent: Any) -> bool:
-        try:
-            live = bool(await agent.is_live())
-        except Exception:
-            return False
-        if getattr(agent, "role", None) == AgentRole.PLANNER:
-            session = getattr(agent, "session", None)
-            if not isinstance(session, str) or not session:
-                return False
-            return live and await tmux.session_exists(session)
-        return live
+        return await self.agent_ops._agent_is_live(agent)
 
     async def scaffold_plan(self, name: str, body: str) -> dict[str, Any]:
-        """Create or refresh a draft plan row and its materialized markdown."""
-        assert self.rt.db is not None
-        name = _validate_plan_filename_stem(name, command="plan.scaffold")
-        now = datetime.utcnow()
-        plan = Plan(
-            name=name,
-            status=PlanStatus.DRAFT,
-            created_at=now,
-            updated_at=now,
-            related_tickets=[],
-            frontmatter={},
-            body=body,
-        )
-        path = plan_md(self.rt.repo_root, name)
-        materialized_path = str(path.relative_to(self.rt.repo_root))
-        rendered = _render_plan_markdown(plan)
-        content_hash = _plan_content_hash(rendered)
-        with self.rt.db:
-            _db_upsert_plan(
-                self.rt.db,
-                plan,
-                content_hash=content_hash,
-                materialized_path=materialized_path,
-                file_hash=content_hash,
-                sync_state="synced",
-                create_revision=True,
-                revision_source="db",
-            )
-            _write_plan_markdown(path, plan)
-        row = _db_get_plan_row(self.rt.db, name) or {}
-        # scaffold_plan writes the plans/plan_revisions rows DIRECTLY (not via
-        # PlanSync.reconcile_file), so the on_plan_change callback never fires for
-        # it. Emit here: a new/refreshed draft -> the plans list changed. Async
-        # path -> await publish_snapshot (closes the 1.5 s poll gap the direct DB
-        # write opens before PlanSync would re-reconcile the materialized file).
-        await self.rt.publish_snapshot(Entity.PLAN, name)
-        return {
-            "handled": True,
-            "name": name,
-            "materialized_path": materialized_path,
-            "revision_count": row.get("revision_count"),
-        }
+        return await self.plans.scaffold_plan(name, body)
 
     async def rename_plan(self, old_name: str, new_name: str) -> dict[str, Any]:
-        """Explicit first-class plan rename with live planner continuity."""
-        assert self.rt.db is not None
-        old_name = _validate_plan_filename_stem(old_name, command="plan.rename")
-        new_name = _validate_plan_filename_stem(new_name, command="plan.rename")
-        if old_name == new_name:
-            row = _db_get_plan_row(self.rt.db, old_name)
-            if row is None:
-                raise KeyError(old_name)
-            return {
-                "handled": True,
-                "old_name": old_name,
-                "name": new_name,
-                "materialized_path": row["materialized_path"],
-                "revision_count": row.get("revision_count"),
-            }
-        if _db_get_plan_row(self.rt.db, old_name) is None:
-            raise KeyError(old_name)
-        if _db_get_plan_row(self.rt.db, new_name) is not None:
-            raise ValueError(f"plan already exists: {new_name}")
-        await self._preflight_plan_runtime_rename(old_name, new_name)
-        if self.rt.plan_sync is None:
-            raise RuntimeError("plan sync not available")
-        row = self.rt.plan_sync.rename_plan(old_name, new_name)
-        await self._retarget_plan_runtime(old_name, new_name)
-        return {
-            "handled": True,
-            "old_name": old_name,
-            "name": new_name,
-            "materialized_path": row.get("materialized_path"),
-            "revision_count": row.get("revision_count"),
-        }
+        return await self.plans.rename_plan(old_name, new_name)
 
     async def deprecate_plan(self, name: str) -> dict[str, Any]:
-        """Mark a plan superseded and remove it from active planning."""
-        assert self.rt.db is not None
-        name = _validate_plan_filename_stem(name, command="plan.deprecate")
-        if self.rt.plan_sync is None:
-            raise RuntimeError("plan sync not available")
-        row = self.rt.plan_sync.deprecate_plan(name)
-        for agent_id in (f"planning_handler-{name}", f"planner-{name}"):
-            if self.rt.get_agent(agent_id) is not None:
-                await self.rt.reap(agent_id)
-            else:
-                _db_set_agent_status(self.rt.db, agent_id, AgentStatus.DEAD.value)
-        return {
-            "handled": True,
-            "name": name,
-            "status": row.get("status"),
-            "materialized_path": row.get("materialized_path"),
-            "revision_count": row.get("revision_count"),
-        }
+        return await self.plans.deprecate_plan(name)
 
     async def _preflight_plan_runtime_rename(self, old_name: str, new_name: str) -> None:
-        planner = self.rt.get_agent(f"planner-{old_name}")
-        if planner is not None:
-            old_session = format_session_name(self.rt, "planner", f"_{old_name}")
-            new_session = format_session_name(self.rt, "planner", f"_{new_name}")
-            if await tmux.session_exists(old_session) and await tmux.session_exists(
-                new_session
-            ):
-                raise tmux.TmuxError(f"session already exists: {new_session}")
-        handler = self.rt.get_agent(f"planning_handler-{old_name}")
-        if handler is not None:
-            old_session = format_session_name(self.rt, "planning_handler", f"_{old_name}")
-            new_session = format_session_name(self.rt, "planning_handler", f"_{new_name}")
-            if await tmux.session_exists(old_session) and await tmux.session_exists(
-                new_session
-            ):
-                raise tmux.TmuxError(f"session already exists: {new_session}")
+        await self.plans._preflight_plan_runtime_rename(old_name, new_name)
 
     async def _retarget_plan_runtime(self, old_name: str, new_name: str) -> None:
-        assert self.rt.db is not None
-        old_lock = self._planner_spawn_locks.pop(old_name, None)
-        if old_lock is not None:
-            self._planner_spawn_locks[new_name] = old_lock
-
-        old_planner_id = f"planner-{old_name}"
-        new_planner_id = f"planner-{new_name}"
-        old_planner_session = format_session_name(self.rt, "planner", f"_{old_name}")
-        new_planner_session = format_session_name(self.rt, "planner", f"_{new_name}")
-        planner = self.rt.agents.rename_agent(old_planner_id, new_planner_id)
-        await tmux.rename_session(old_planner_session, new_planner_session)
-        if planner is not None:
-            planner.session = new_planner_session
-            if hasattr(planner, "plan_name"):
-                planner.plan_name = new_name
-            harness_session = getattr(planner, "harness_session", None)
-            if harness_session is not None:
-                harness_session.session = new_planner_session
-
-        old_handler_id = f"planning_handler-{old_name}"
-        new_handler_id = f"planning_handler-{new_name}"
-        old_handler_session = format_session_name(self.rt, "planning_handler", f"_{old_name}")
-        new_handler_session = format_session_name(self.rt, "planning_handler", f"_{new_name}")
-        handler = self.rt.agents.rename_agent(old_handler_id, new_handler_id)
-        await tmux.rename_session(old_handler_session, new_handler_session)
-        if handler is not None:
-            handler.session = new_handler_session
-            if hasattr(handler, "plan_name"):
-                handler.plan_name = new_name
-            if hasattr(handler, "planner_session"):
-                handler.planner_session = new_planner_session
-
-        with self.rt.db:
-            _db_rename_agent(
-                self.rt.db,
-                old_planner_id,
-                new_planner_id,
-                session=new_planner_session,
-            )
-            _db_rename_agent(
-                self.rt.db,
-                old_handler_id,
-                new_handler_id,
-                session=new_handler_session,
-            )
-            if planner is not None:
-                self.rt.sync_agent(planner)
-            if handler is not None:
-                self.rt.sync_agent(handler)
-
+        await self.plans._retarget_plan_runtime(old_name, new_name)
     async def ensure_collaborator(self) -> str:
         agent_id = _db_get_active_agent_by_role(self.rt.db, "collaborator")
         if agent_id:
@@ -1239,7 +721,7 @@ class Orchestrator:
                 reason = f"Collaborator startup failed: {e}"
                 await self._escalations().record_collaborator_startup_failure(reason)
                 return {
-                    "handled": False,
+                    "ok": False,
                     "changed": True,
                     "previous_harness": live_harness,
                     "harness": current_harness,
@@ -1256,197 +738,31 @@ class Orchestrator:
         }
 
     async def submit_notetaker_capture(self, payload: dict[str, Any]) -> dict[str, Any]:
-        assert self.rt.db is not None
-
-        raw = payload.get("raw")
-        if raw is None:
-            raw = payload.get("text")
-        if not isinstance(raw, str) or not raw.strip():
-            raise ValueError(
-                "notetaker.capture.submit requires non-empty payload.raw or payload.text"
-            )
-
-        title = payload.get("title")
-        if not isinstance(title, str) or not title.strip():
-            title = None
-        else:
-            title = title.strip()
-
-        client = resolve_role_client(self.rt.config.notetaker)
-        result = await notes_mod.submit_capture(
-            repo_root=self.rt.repo_root,
-            conn=self.rt.db,
-            raw=raw.strip(),
-            client=client,
-            config=self.rt.config.notetaker,
-            note_name=notes_mod.today_name(),
-            title=title,
-        )
-        # submit_capture writes notes rows DIRECTLY (bypassing NoteSync), creating
-        # and possibly renaming the note within this RPC. The provisional name is
-        # never observed by a client before the rename, so emit once on the final
-        # resolved name from the return dict. Async path -> publish_snapshot.
-        resolved = result.get("note_name")
-        if isinstance(resolved, str) and resolved:
-            await self.rt.publish_snapshot(Entity.NOTE, resolved)
-        return result
+        return await self.notes.submit_notetaker_capture(payload)
 
     async def ensure_note(self, name: str) -> dict[str, Any]:
-        assert self.rt.db is not None
-        row = notes_mod.ensure_note(self.rt.db, self.rt.repo_root, name)
-        # ensure_note writes the notes row directly (bypassing NoteSync); a new
-        # note may have appeared in the active list. Emit key-only via the async
-        # choke point.
-        await self.rt.publish_snapshot(Entity.NOTE, name)
-        return {"name": name, "materialized_path": str(row.get("materialized_path", ""))}
+        return await self.notes.ensure_note(name)
 
     async def retire_note(self, name: str) -> dict[str, Any]:
-        assert self.rt.db is not None
-        try:
-            dest = notes_mod.retire_note(self.rt.db, self.rt.repo_root, name)
-        except Exception as exc:
-            raise ValueError(f"could not retire note: {exc}") from exc
-        # Retire flips status away from 'active' -> the note drops from the notes
-        # snapshot (status='active' filter). Emit so the client refetches and drops it.
-        await self.rt.publish_snapshot(Entity.NOTE, name)
-        return {"name": name, "dest_name": dest.name}
+        return await self.notes.retire_note(name)
 
     async def reopen_ticket(self, ticket_id: str) -> list[str]:
-        assert self.rt.db is not None
-        cascaded = lifecycle.reopen(self.rt.db, ticket_id)
-        for tid in {ticket_id, *cascaded}:
-            await self._reap_ticket_crow_agents(tid)
-            # F1: reopen cascade has no StatusChangeEvent today; emit the
-            # key-only ticket snapshot for every ticket whose status changed.
-            await self.rt.publish_snapshot(Entity.TICKET, tid)
-        return list(cascaded)
+        return await self.tickets.reopen_ticket(ticket_id)
 
     async def retry_failed_ticket(self, ticket_id: str) -> dict[str, Any]:
-        """Transition a failed ticket back to ready and clear its last_error."""
-        assert self.rt.db is not None
-        prev = lifecycle.transition(self.rt.db, ticket_id, TicketStatus.READY, reason="retry")
-        lifecycle.clear_last_error(self.rt.db, ticket_id)
-        await self._reap_ticket_crow_agents(ticket_id)
-        await self._emit_ticket_status(ticket_id, prev, TicketStatus.READY.value)
-        return {"handled": True, "ticket_id": ticket_id, "prev_status": prev.value}
+        return await self.tickets.retry_failed_ticket(ticket_id)
 
     async def set_schedule_at(self, ticket_id: str, schedule_at: str | None) -> dict[str, Any]:
-        """Update the schedule_at timestamp for a ticket."""
-        assert self.rt.db is not None
-        now = datetime.now().isoformat(timespec="seconds")
-        self.rt.db.execute(
-            "UPDATE tickets SET schedule_at = ?, updated_at = ? WHERE id = ?",
-            (schedule_at, now, ticket_id),
-        )
-        self.rt.db.commit()
-        await self.rt.publish_snapshot(Entity.TICKET, ticket_id)
-        return {"handled": True, "ticket_id": ticket_id, "schedule_at": schedule_at}
+        return await self.tickets.set_schedule_at(ticket_id, schedule_at)
 
     async def save_ticket_body(self, ticket_id: str, body: str) -> dict[str, Any]:
-        """Persist the edited markdown body for a ticket (the editor's save).
-
-        The Ink ticket editor sends only the markdown *body* (everything after
-        the frontmatter: ``## Plan`` / ``## Working Notes`` prose and the
-        ``# Checklist`` section). The frontmatter (title/deps/harness/model/
-        worktree) is read-only in the editor and absent from the payload, so we
-        re-attach the *current* frontmatter rather than wiping it. We write the
-        ``.md`` file (the authoritative ticket writer is the filesystem->DB
-        reconcile path) then reconcile it synchronously into the DB so the save
-        is durable before the RPC returns, closing the 1.5 s TicketSync poll gap.
-        """
-        assert self.rt.db is not None
-        from murder.work.tickets.parser import parse_ticket
-        from murder.work.tickets.render import render_ticket_frontmatter
-        from murder.work.tickets.sync import reconcile_ticket_md
-
-        ticket_id = ticket_id.strip()
-        if not ticket_id:
-            raise ValueError("ticket.save_body requires ticket_id")
-        path = ticket_md(self.rt.repo_root, ticket_id)
-        # Source the read-only frontmatter from the current file when present,
-        # else fall back to the DB row so we never drop metadata on save.
-        if path.exists():
-            frontmatter = render_ticket_frontmatter(
-                parse_ticket(path.read_text(encoding="utf-8"), default_title=ticket_id)
-            )
-        else:
-            row = _db_get_ticket(self.rt.db, ticket_id)
-            if row is None:
-                return {"handled": True, "ok": False, "error": f"ticket not found: {ticket_id}"}
-            deps = [
-                str(r["depends_on_id"])
-                for r in self.rt.db.execute(
-                    "SELECT depends_on_id FROM ticket_deps WHERE ticket_id = ? "
-                    "ORDER BY depends_on_id",
-                    (ticket_id,),
-                ).fetchall()
-            ]
-            frontmatter = render_ticket_frontmatter(
-                {
-                    "title": row.get("title") or ticket_id,
-                    "deps": deps,
-                    "harness": row.get("harness"),
-                    "model": row.get("model"),
-                    "worktree": row.get("worktree"),
-                }
-            )
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(frontmatter + body.rstrip("\n") + "\n", encoding="utf-8")
-        reconcile_ticket_md(conn=self.rt.db, repo_root=self.rt.repo_root, ticket_id=ticket_id)
-        # ``reconcile_ticket_md`` builds a throwaway TicketSync with no
-        # on_ticket_change callback, so the F1 snapshot does not fire from it.
-        # Emit explicitly after the reconcile commits.
-        await self.rt.publish_snapshot(Entity.TICKET, ticket_id)
-        return {"handled": True, "ok": True, "ticket_id": ticket_id}
+        return await self.tickets.save_ticket_body(ticket_id, body)
 
     async def schedule_ticket(self, ticket_id: str, duration: str) -> dict[str, Any]:
-        """Set/clear a ticket's schedule from a free-form duration string.
-
-        The Ink editor sends a raw duration (``1d4h3m``, ``34m``); the backend is
-        authoritative. An empty/whitespace duration clears the schedule; any
-        non-empty value is parsed via ``parse_duration`` and added to *now*.
-        Delegates the DB write + snapshot emit to ``set_schedule_at``.
-
-        Stores a UTC timestamp (``utcnow``), matching the rest of the codebase's
-        persisted clock (``scaffold_plan``, ``TicketSync._now``, the schedule
-        read model) so the scheduler/calendar consumers — which compute "now" in
-        UTC — see the intended offset rather than one skewed by the local tz.
-        """
-        from murder.work.duration import parse_duration
-
-        ticket_id = ticket_id.strip()
-        if not ticket_id:
-            raise ValueError("ticket.schedule requires ticket_id")
-        text = (duration or "").strip()
-        if not text:
-            return await self.set_schedule_at(ticket_id, None)
-        delta = parse_duration(text)
-        schedule_at = (datetime.utcnow() + delta).isoformat(timespec="seconds")
-        return await self.set_schedule_at(ticket_id, schedule_at)
+        return await self.tickets.schedule_ticket(ticket_id, duration)
 
     async def _derive_plan_name(self, body: str) -> str:
-        """Derive a slugified plan name from ``body`` via a one-shot mini-LLM call.
-
-        Reuses the notes ``llm_capture_metadata`` shape with the ``plan_namer``
-        system prompt. Falls back to a timestamp slug when no client is
-        configured or the model returns nothing usable.
-        """
-        text = (body or "").strip()
-        client = resolve_role_client(self.rt.config.notetaker)
-        if client is not None and text:
-            try:
-                meta = await notes_mod.llm_capture_metadata(
-                    raw=text,
-                    system=notes_mod._load_prompt("plan_namer"),
-                    client=client,
-                    config=self.rt.config.notetaker,
-                )
-                slug = notes_mod._slugify_title(meta.get("one_or_two_word_title", ""))
-                if slug:
-                    return slug
-            except Exception:
-                LOGGER.exception("plan auto-name failed; falling back to timestamp slug")
-        return f"plan-{datetime.utcnow().strftime('%Y%m%d-%H%M%S')}"
+        return await self.plans._derive_plan_name(body)
 
     async def create_plan(
         self,
@@ -1456,154 +772,22 @@ class Orchestrator:
         body: str | None = None,
         auto_name: bool = False,
     ) -> dict[str, Any]:
-        """Create a new plan and (optionally) seed its planning agent.
-
-        Thin composition of existing machinery: ``scaffold_plan`` writes the
-        plan row + materialized markdown (and emits the plan snapshot), then —
-        when an initial ``message`` is supplied — ``send_agent_message`` to the
-        ``planner-{name}`` agent, which lazily spawns the planner via
-        ``ensure_planning_agent``. Mirrors the Textual ctrl+p new-plan flow
-        (scaffold + focus ``planner-{name}`` as chat target).
-
-        ``body`` seeds the plan's markdown body (defaulting to the legacy
-        ``"# Plan Name\\n"`` stub). ``auto_name`` derives the plan name from
-        ``body`` via a mini-LLM naming call, creating under the FINAL name (no
-        rename in the happy path).
-        """
-        seed_body = body if body is not None else "# Plan Name\n"
-        plan_name = (plan_name or "").strip()
-        if auto_name:
-            plan_name = await self._derive_plan_name(seed_body)
-        if not plan_name:
-            raise ValueError("plan.create requires plan_name")
-        assert self.rt.db is not None
-        # Data-integrity guard (F3b): scaffold_plan UPSERTs, so creating over an
-        # existing name would silently clobber that plan's body. A *live* plan
-        # owns its name — reject and never overwrite. A *superseded* plan does
-        # not block reuse, but the plans.name PRIMARY KEY still forbids a second
-        # row, so free the superseded row's name first (rename it to an archived
-        # key, preserving all its data + its deprecated-dir markdown) before the
-        # scaffold INSERT. This keeps the DB constraint and the app guard in
-        # exact agreement at INSERT time. Mirrors notes' status-aware guard.
-        if _db_live_plan_name_exists(self.rt.db, plan_name):
-            raise FileExistsError(
-                f"a plan named {plan_name!r} already exists; "
-                "choose a different name or rename the existing plan"
-            )
-        existing = _db_get_plan_row(self.rt.db, plan_name)
-        if existing is not None:
-            # Superseded row holds the name — archive it (data fully preserved)
-            # so the scaffold can take the name. Atomic with no markdown change
-            # to the archived plan: rename_plan carries its materialized_path
-            # through, so its deprecated-dir file is not orphaned.
-            archived = _free_superseded_plan_name(self.rt.db, plan_name)
-            await self.rt.publish_snapshot(Entity.PLAN, archived)
-        scaffolded = await self.scaffold_plan(plan_name, seed_body)
-        name = str(scaffolded.get("name") or plan_name)
-        agent_id: str | None = None
-        text = (message or "").strip()
-        if text:
-            agent_id = f"planner-{name}"
-            await self.send_agent_message(agent_id, text, None)
-        return {"handled": True, "ok": True, "plan_name": name, "agent_id": agent_id}
+        return await self.plans.create_plan(
+            plan_name, message, body=body, auto_name=auto_name
+        )
 
     async def update_ticket_metadata(
         self, ticket_id: str, payload: dict[str, Any]
     ) -> dict[str, Any]:
-        """Update metadata fields directly without state-machine transitions."""
-        assert self.rt.db is not None
-        row = _db_get_ticket(self.rt.db, ticket_id)
-        if row is None:
-            return {"handled": True, "ok": False, "error": f"ticket not found: {ticket_id}"}
-        title = str(payload.get("title") or row.get("title") or "").strip()
-        if not title:
-            return {"handled": True, "ok": False, "error": "title is required"}
-        harness = str(payload.get("harness") or row.get("harness") or "cursor").strip()
-        model = payload.get("model") or None
-        if model is not None:
-            model = str(model).strip() or None
-        schedule_at = payload.get("schedule_at")
-        if schedule_at is not None:
-            schedule_at = str(schedule_at).strip() or None
-        deps = [str(d) for d in (payload.get("deps") or [])]
-        if "skills" in payload:
-            skills = [str(s) for s in (payload.get("skills") or [])]
-        else:
-            skills = [str(s) for s in (row.get("skills") or [])]
-        checklist = [str(c) for c in (payload.get("checklist") or [])]
-        with self.rt.db:
-            self.rt.db.execute(
-                "UPDATE tickets SET schedule_at=? WHERE id=?",
-                (schedule_at, ticket_id),
-            )
-            _db_apply_ticket_carve_payload(
-                self.rt.db,
-                ticket_id,
-                title=title,
-                harness=harness,
-                model=model,
-                deps=deps,
-                skills=skills,
-                checklist=checklist,
-            )
-        await self.rt.publish_snapshot(Entity.TICKET, ticket_id)
-        return {"handled": True, "ok": True, "ticket_id": ticket_id}
+        return await self.tickets.update_ticket_metadata(ticket_id, payload)
 
     async def force_ticket_status(self, ticket_id: str, status: str) -> dict[str, Any]:
-        """Force-set ticket status regardless of current state."""
-        assert self.rt.db is not None
-        valid = {"planned", "ready", "in_progress", "blocked", "failed", "done", "archived"}
-        if status not in valid:
-            return {"handled": True, "ok": False, "error": f"invalid status: {status!r}"}
-        row = _db_get_ticket(self.rt.db, ticket_id)
-        if row is None:
-            return {"handled": True, "ok": False, "error": f"ticket not found: {ticket_id}"}
-        prev_str = str(row.get("status") or "planned")
-        with self.rt.db:
-            _db_update_ticket_status(self.rt.db, ticket_id, status)
-            if prev_str == "failed" and status != "failed":
-                lifecycle.clear_last_error(self.rt.db, ticket_id)
-        try:
-            prev = TicketStatus(prev_str)
-        except ValueError:
-            prev = TicketStatus.PLANNED
-        await self._emit_ticket_status(ticket_id, prev, status)
-        if status in (
-            TicketStatus.DONE.value,
-            TicketStatus.FAILED.value,
-            TicketStatus.ARCHIVED.value,
-        ):
-            await self._reap_ticket_crow_agents(ticket_id)
-            if self.rt.db is not None:
-                with contextlib.suppress(Exception):
-                    await prune_terminal_crow_worktree(
-                        self.rt.db, self.rt.repo_root, ticket_id
-                    )
-        return {"handled": True, "ok": True, "ticket_id": ticket_id, "prev_status": prev_str}
+        return await self.tickets.force_ticket_status(ticket_id, status)
 
     async def _reap_ticket_crow_agents(self, ticket_id: str) -> None:
-        await self.rt.reap(f"crow-{ticket_id}")
-        await self.rt.reap(f"crow_handler-{ticket_id}")
+        await self.tickets._reap_ticket_crow_agents(ticket_id)
 
     async def apply_ticket_carve_ready(
         self, ticket_id: str, payload: dict[str, object]
     ) -> dict[str, object]:
-        """Apply carved ticket metadata from a structured ``carve`` payload."""
-        assert self.rt.db is not None
-        carve_body = payload.get("carve")
-        try:
-            if isinstance(carve_body, dict) and carve_body:
-                spec = dict(carve_body)
-                if spec.get("id") is None:
-                    spec["id"] = ticket_id
-                prev = carve.apply_carve_ready_spec(self.rt.db, ticket_id, spec)
-            else:
-                return {
-                    "handled": True,
-                    "ok": False,
-                    "error": "payload must include non-empty 'carve' object",
-                }
-        except carve.CarveError as exc:
-            return {"handled": True, "ok": False, "error": str(exc)}
-        await self._emit_ticket_status(ticket_id, prev, TicketStatus.READY.value)
-        return {"handled": True, "ok": True, "ticket_id": ticket_id}
+        return await self.tickets.apply_ticket_carve_ready(ticket_id, payload)

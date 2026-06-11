@@ -174,7 +174,13 @@ def test_retarget_plan_runtime_rekeys_live_planner_and_handler(
             status=agent.status.value,
         )
 
-    rt = SimpleNamespace(db=conn, agents=registry, config=config, sync_agent=sync_agent)
+    rt = SimpleNamespace(
+        db=conn,
+        agents=registry,
+        config=config,
+        sync_agent=sync_agent,
+        rename_agent=registry.rename_agent,
+    )
     planner = SimpleNamespace(
         id="planner-old",
         role=AgentRole.PLANNER,

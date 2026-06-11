@@ -132,7 +132,7 @@ def test_send_agent_message_reports_delivery_failure_without_user_block(
     result = asyncio.run(orch.send_agent_message("crow-t001", "hello", None))
 
     assert result == {
-        "handled": False,
+        "ok": False,
         "error": "Harness not awaiting input in time: session=crow-t001",
     }
     assert get_agent_messages(db, "crow-t001") == []
