@@ -17,9 +17,23 @@ import { Pane, paneColors } from '../../src/components/Pane.js';
 import { theme } from '../../src/theme.js';
 
 /** Pane is width-driven by its parent; wrap in a fixed-width Box for deterministic frames. */
-function Fixed({ children }: { readonly children: React.ReactNode }): React.JSX.Element {
-  return <Box width={28}>{children}</Box>;
+function Fixed({
+  children,
+  width = 28,
+}: {
+  readonly children: React.ReactNode;
+  readonly width?: number;
+}): React.JSX.Element {
+  return <Box width={width}>{children}</Box>;
 }
+
+/** ink-testing-library strips ANSI unless FORCE_COLOR is set; color-gated cases run only then. */
+// biome-ignore lint/complexity/useLiteralKeys: tsc's noPropertyAccessFromIndexSignature requires bracket access on process.env.
+const colorOn = Boolean(process.env['FORCE_COLOR']);
+
+/** Strip ANSI SGR escapes so structural (character-position) assertions hold under FORCE_COLOR too. */
+// biome-ignore lint/suspicious/noControlCharactersInRegex: matching the ESC control char is the point.
+const stripAnsi = (s: string): string => s.replace(/\[[0-9;]*m/g, '');
 
 describe('Pane — inline title border', () => {
   it('renders the title on the top border line, not a separate row', () => {
@@ -30,7 +44,7 @@ describe('Pane — inline title border', () => {
         </Pane>
       </Fixed>,
     );
-    const lines = (lastFrame() ?? '').split('\n');
+    const lines = (lastFrame() ?? '').split('\n').map(stripAnsi);
     // First line is the top border carrying the title between the corners.
     expect(lines[0]).toContain('╭─ Plans');
     expect(lines[0]).toContain('╮');
@@ -84,5 +98,100 @@ describe('Pane — titleExtra', () => {
     const lines = (lastFrame() ?? '').split('\n');
     expect(lines[0]).toContain('Crows');
     expect(lines[0]).toContain('[max]');
+  });
+});
+
+describe('Pane — scroll-overflow border indicators', () => {
+  it('with no overflow props, the bottom border is a single ╰…╯ line with no triangle', () => {
+    const { lastFrame } = render(
+      <Fixed>
+        <Pane title="Notes" focused>
+          <Text>body</Text>
+        </Pane>
+      </Fixed>,
+    );
+    const lines = (lastFrame() ?? '').split('\n');
+    // Exactly one bottom-border line, and it carries both round corners.
+    const bottomLines = lines.filter((l) => l.includes('╰') && l.includes('╯'));
+    expect(bottomLines).toHaveLength(1);
+    const bottom = bottomLines[0] ?? '';
+    // Byte-identical to the old round-style bottom: corners + dashes only, no overflow glyphs.
+    expect(bottom).not.toContain('▾');
+    expect(bottom).not.toContain('▴');
+    // And the top border is unchanged too (no triangle leaks in).
+    expect(lines[0]).not.toContain('▴');
+    expect(lines[0]).not.toContain('▾');
+  });
+
+  it('no-overflow frame has the same line count as the no-overflow baseline', () => {
+    const baseline = render(
+      <Fixed>
+        <Pane title="Notes" focused>
+          <Text>{'a\nb\nc'}</Text>
+        </Pane>
+      </Fixed>,
+    );
+    const baseLines = (baseline.lastFrame() ?? '').split('\n').length;
+    const withProps = render(
+      <Fixed>
+        <Pane title="Notes" focused overflowAbove={0} overflowBelow={0}>
+          <Text>{'a\nb\nc'}</Text>
+        </Pane>
+      </Fixed>,
+    );
+    expect((withProps.lastFrame() ?? '').split('\n')).toHaveLength(baseLines);
+  });
+
+  it('renders ▴ N on the top line and ▾ N on the bottom line, right of the dash-fill', () => {
+    const { lastFrame } = render(
+      <Fixed width={40}>
+        <Pane title="Notes" focused overflowAbove={4} overflowBelow={7}>
+          <Text>body</Text>
+        </Pane>
+      </Fixed>,
+    );
+    const lines = (lastFrame() ?? '').split('\n').map(stripAnsi);
+    const top = lines[0] ?? '';
+    const bottom = lines.at(-1) ?? '';
+    // Top: ▴ and 4 present.
+    expect(top).toContain('▴');
+    expect(top).toContain('4');
+    // The indicator sits after a run of dashes and before the corner ╮.
+    expect(top).toMatch(/─.*▴ 4 .*╮/u);
+    // Bottom: ▾ and 7 present, likewise right of the fill, before ╯.
+    expect(bottom).toContain('▾');
+    expect(bottom).toContain('7');
+    expect(bottom).toMatch(/─.*▾ 7 .*╯/u);
+  });
+
+  it('keeps the ▴ indicator on a narrow rail even when the long title elides', () => {
+    const { lastFrame } = render(
+      <Fixed width={24}>
+        <Pane title="A very long notes title that elides" focused overflowAbove={4}>
+          <Text>body</Text>
+        </Pane>
+      </Fixed>,
+    );
+    const top = (lastFrame() ?? '').split('\n')[0] ?? '';
+    // The fixed indicator never shrinks: triangle + count survive though the title truncates.
+    expect(top).toContain('▴');
+    expect(top).toContain('4');
+    expect(top).toContain('╮');
+  });
+
+  it.skipIf(!colorOn)('paints the count dim and the triangle in the border color', () => {
+    const { lastFrame } = render(
+      <Fixed width={40}>
+        <Pane title="Notes" focused overflowAbove={4} overflowBelow={7}>
+          <Text>body</Text>
+        </Pane>
+      </Fixed>,
+    );
+    const frame = lastFrame() ?? '';
+    // With color on, the frame retains ANSI escapes around the indicators.
+    expect(frame).toContain('▴');
+    expect(frame).toContain('▾');
+    // Dim SGR (code 2) appears in the frame for the count styling (the `[2m` escape body).
+    expect(frame).toContain('[2m');
   });
 });

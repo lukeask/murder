@@ -179,12 +179,14 @@ function CrowsList({
   ledgerRows,
   ledgerCursor,
   focused,
+  onOverflow,
 }: {
   readonly view: CrowsView;
   readonly expanded: boolean;
   readonly ledgerRows: readonly CrowLedgerRow[];
   readonly ledgerCursor: number;
   readonly focused: boolean;
+  readonly onOverflow: (o: { above: number; below: number }) => void;
 }): React.JSX.Element {
   const theme = useTheme();
   if (view.status === 'error') {
@@ -209,6 +211,11 @@ function CrowsList({
       rowKey={(ledgerRow) =>
         ledgerRow.kind === 'header' ? `h:${ledgerRow.group}` : `c:${ledgerRow.row.agentId}`
       }
+      // The Ledger's rows are the FLAT array (interleaved section headers + crow rows), so the overflow
+      // counts map against `ledgerRows.length`, NOT the crow-only count. KNOWN-HARMLESS over-count: hidden
+      // section-header flat-rows are included, so `▴ N` / `▾ N` can over-count by the number of hidden
+      // section headers. Documented-acceptable per the plan's uniformity invariant — do NOT special-case.
+      onWindow={(win) => onOverflow({ above: win.start, below: ledgerRows.length - win.end })}
     />
   );
 }
@@ -235,6 +242,14 @@ export const CrowsPanel = memo(function CrowsPanel(): React.JSX.Element {
   // Local UI state: cursor position (CROW rows only) + minimized/maximized toggle (rule 1).
   const [cursor, setCursor] = useState(0);
   const [expanded, setExpanded] = useState(false);
+  // Scroll-overflow counts fed up from the Ledger's window (via the list's onOverflow) into the Pane
+  // border's ▴/▾ indicators. Mapped against the FLAT row count in the list. Reset to {0,0} when there
+  // are no crow rows (the Ledger doesn't render, so onWindow never fires to clear a stale count) — see
+  // the rowCount===0 guard at the Pane below.
+  const [overflow, setOverflow] = useState<{ above: number; below: number }>({
+    above: 0,
+    below: 0,
+  });
 
   // Flatten sections + headers into one Ledger list (layout, not formatting). `crowToFlat` maps the
   // crow-only cursor to its flat-array index so the Ledger highlights the right row (headers excluded).
@@ -365,6 +380,8 @@ export const CrowsPanel = memo(function CrowsPanel(): React.JSX.Element {
       title={PANEL_TITLE}
       focused={focused}
       titleExtra={<Text dimColor>{` ${modeLabel}`}</Text>}
+      overflowAbove={rowCount === 0 ? 0 : overflow.above}
+      overflowBelow={rowCount === 0 ? 0 : overflow.below}
     >
       <CrowsList
         view={view}
@@ -372,6 +389,7 @@ export const CrowsPanel = memo(function CrowsPanel(): React.JSX.Element {
         ledgerRows={ledgerRows}
         ledgerCursor={ledgerCursor}
         focused={focused}
+        onOverflow={setOverflow}
       />
     </Pane>
   );

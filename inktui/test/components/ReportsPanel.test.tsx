@@ -41,18 +41,33 @@ function twoReports(): ReportsSnapshotReply {
   };
 }
 
+function manyReports(n: number): ReportsSnapshotReply {
+  return {
+    invalidation_key: 'iv',
+    reports: Array.from({ length: n }, (_, i) => ({
+      name: `report-${String(i).padStart(2, '0')}`,
+      char_count: 100 + i,
+      updated_at: '2026-06-07T12:00:00',
+    })),
+  };
+}
+
 function Harness({
   store,
   inputStores,
+  height,
 }: {
   readonly store: ReturnType<typeof createAppStore>['store'];
   readonly inputStores: ReturnType<typeof createInputStores>;
+  readonly height?: number;
 }): JSX.Element {
   return (
     <AppStoreProvider value={store}>
       <InputStoresProvider value={inputStores}>
         <RootInput />
-        <Box>
+        {/* When `height` is given, bound the pane so ink-testing-library's measureElement reports a
+            small inner height — that forces the Ledger to window and the Pane to draw ▴/▾ indicators. */}
+        <Box height={height}>
           <ReportsPanel />
         </Box>
       </InputStoresProvider>
@@ -125,6 +140,31 @@ describe('ReportsPanel', () => {
     stdin.write('k');
     await tick();
     expect(lastFrame()).toBe(beforeUnfocused);
+    dispose();
+  });
+
+  it('draws border scroll indicators (▴/▾) — not interior … — when the list overflows', async () => {
+    // Many reports (2 lines each) into a height-bounded pane → the Ledger windows and the Pane's
+    // top/bottom border carry the ▴/▾ overflow indicators. This is the end-to-end wiring: Ledger
+    // onWindow → list onOverflow → panel state → Pane overflowAbove/Below → paneBorder triangles.
+    const { store, inputStores, dispose } = await setup(manyReports(12), true);
+    // Start at the top, then move the cursor down a few rows so rows exist BOTH above and below the
+    // window — top shows ▴ N and bottom shows ▾ N.
+    const { stdin, lastFrame } = render(
+      <Harness store={store} inputStores={inputStores} height={8} />,
+    );
+    await tick();
+    stdin.write('j');
+    stdin.write('j');
+    stdin.write('j');
+    await tick();
+    const frame = lastFrame() ?? '';
+    // A triangle indicator appears in the frame when rows overflow…
+    expect(frame).toMatch(/[▴▾]/);
+    // …with a count digit alongside it (the dim N in `─ ▴ N ──`).
+    expect(frame).toMatch(/[▴▾]\s*\d/);
+    // …and the old interior `…` overflow marker is gone (overflow lives in the border now).
+    expect(frame).not.toContain('…');
     dispose();
   });
 

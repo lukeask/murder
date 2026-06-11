@@ -45,6 +45,7 @@ import { isDefaultFavorited } from '../selectors/agentIdentity.js';
 import { useActiveAgent } from '../selectors/conversationsSelectors.js';
 import { isFavorited } from '../selectors/favoritesSelectors.js';
 import { useTheme } from '../theme/themeStore.js';
+import { TRI_RIGHT } from './glyphs.js';
 import { PaneBorderTop } from './paneBorder.js';
 import { TextInput } from './TextInput.js';
 
@@ -72,8 +73,8 @@ export const ChatInput = memo(function ChatInput(): React.JSX.Element {
   const roster = useAppStore((s) => s.roster, shallow);
   const favorites = useAppStore((s) => s.favorites, shallow);
   const target = useActiveAgent(conversations, roster, favorites);
-  // The target moves onto the top border as `→ <label>` (item 2; the `›` prompt is dropped — the `→`
-  // suffices). A `★ ` precedes the name when the target is favorited (explicit star OR kind-default),
+  // The target moves onto the top border as `▸ <label>` (item 2; the `›` prompt is dropped — the
+  // triangle suffices). A `★ ` precedes the name when the target is favorited (explicit star OR kind-default),
   // mirroring the Crows-pane glyph.
   const starred =
     target !== null && isFavorited(favorites, target.agentId, isDefaultFavorited(target));
@@ -82,11 +83,11 @@ export const ChatInput = memo(function ChatInput(): React.JSX.Element {
   const display = displayBuffer(text);
   const borderColor = focused ? theme.active : theme.inactive;
   return (
-    // Inline-title border (Pane recipe): the `→ <target>` sits on the top border line (item 2); the
+    // Inline-title border (Pane recipe): the `▸ <target>` sits on the top border line (item 2); the
     // content box below is a bare cursor-input line that grows in height as a long draft wraps.
     <Box ref={ref} flexDirection="column">
       <PaneBorderTop
-        title={`→ ${targetLabel}`}
+        title={`${TRI_RIGHT} ${targetLabel}`}
         borderColor={borderColor}
         titleColor={focused ? theme.active : theme.inactive}
         bold={focused}

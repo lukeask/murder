@@ -104,13 +104,13 @@ describe('ChatInput — persistent chat-input send (C11)', () => {
     dispose();
   });
 
-  it('renders the target on the top border as → <label>, with ★ when favorited (item 2)', async () => {
+  it('renders the target on the top border as ▸ <label>, with ★ when favorited (item 2)', async () => {
     // The only roster row is a collaborator (default-favorited) → starred target on the border.
     const { store, inputStores, dispose } = await setup();
     const { lastFrame } = render(<Harness store={store} inputStores={inputStores} />);
     await tick();
     const frame = lastFrame() ?? '';
-    expect(frame).toContain('→ ★ collab-1');
+    expect(frame).toContain('▸ ★ collab-1');
     // The dropped `›` prompt is gone from the border.
     expect(frame).not.toContain('─ ›');
     dispose();

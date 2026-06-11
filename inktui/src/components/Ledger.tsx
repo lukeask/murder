@@ -32,9 +32,10 @@
  * ## Overflow windowing (real, not fake clip)
  * The visible slice is computed from `cursor` + the measured height / linesPerEntry, keeping the
  * cursor on screen with a one-row scrolloff margin (see {@link computeWindow}):
- *  - more rows BELOW the window → reserve the bottom line for a `…` indicator.
- *  - scrolled down (rows hidden ABOVE) → the header/titles row is dropped and replaced by a top `…`
- *    indicator (you can't show titles and a "more above" marker at once in a tight budget).
+ *  - overflow indicators ("more above/below") are NOT drawn in the interior anymore — they live in the
+ *    pane BORDER. The Ledger emits the computed window via `onWindow` and the parent feeds the counts
+ *    (above = `start`, below = `rows.length - end`) to the border. Indicators thus cost ZERO interior
+ *    lines, so the freed capacity goes to entries and the header is always shown.
  *  - `flexShrink={0}` stays on each entry row so Yoga doesn't sample/drop lines within the window.
  *  - **scrolloff = 1:** the window is placed so at least one row stays visible BOTH above and below
  *    the cursor, except at the list edges (cursor on row 0 has no top margin; cursor on the last row
@@ -68,8 +69,8 @@
  *  - j/k movement is the PANEL's keymap; Ledger only reflects `cursor`. The panel owns cursor state.
  */
 
-import { Box, type DOMElement, measureElement, Text } from 'ink';
-import { useLayoutEffect, useRef, useState } from 'react';
+import { Box, type DOMElement, measureElement } from 'ink';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useTheme } from '../theme/themeStore.js';
 
 /** Context handed to `renderEntry`/`header` so they emit the right number of fields. */
@@ -105,10 +106,16 @@ export interface LedgerProps<Row> {
   readonly availableWidth?: number;
   /** Renders one row's cells for the active `ctx.columns`/`linesPerEntry`. */
   readonly renderEntry: (row: Row, ctx: LedgerEntryContext) => React.ReactNode;
-  /** Optional column-titles block (`columns × linesPerEntry`); dropped when scrolled. */
+  /** Optional column-titles block (`columns × linesPerEntry`); always shown (overflow → border). */
   readonly header?: (columns: number) => React.ReactNode;
   /** Stable key for a row (defaults to the row index). */
   readonly rowKey?: (row: Row, index: number) => string;
+  /**
+   * Optional callback fired (from an effect, not during render) whenever the computed visible window
+   * changes, so the parent can feed the overflow counts to the pane border (above = `win.start`,
+   * below = `rows.length - win.end`). Fired only when the window value actually changes.
+   */
+  readonly onWindow?: (win: LedgerWindow) => void;
 }
 
 /** Approximate terminal columns one field needs before Ledger drops to fewer columns. */
@@ -134,17 +141,19 @@ export interface LedgerWindow {
   readonly start: number;
   /** One past the last visible row index (exclusive). */
   readonly end: number;
-  /** Rows exist above the window → show a top `…` (and suppress the header). */
+  /** Rows exist above the window → the pane border draws a "more above" indicator. */
   readonly moreAbove: boolean;
-  /** Rows exist below the window → reserve the bottom line for a `…`. */
+  /** Rows exist below the window → the pane border draws a "more below" indicator. */
   readonly moreBelow: boolean;
 }
 
 /**
  * Pure windowing kernel. Given the row count, cursor, lines-per-entry, available height, and whether
- * a header is present, compute the visible slice keeping the cursor on screen and decide the `…`
- * indicators. Reserving a line for an indicator costs entry capacity, so this is iterative but
- * bounded: at most a couple of passes (add bottom `…`, then top `…`, re-fit). Exported for tests.
+ * a header is present, compute the visible slice keeping the cursor on screen and report the
+ * `moreAbove`/`moreBelow` overflow flags. Single-pass: the overflow indicators now live in the pane
+ * BORDER (fed via `onWindow`) and cost ZERO interior lines, and the header is always shown, so the
+ * entry capacity is a fixed `floor((height - header)/linesPerEntry)` — no fixed-point loop needed.
+ * Exported for tests.
  */
 export function computeWindow(
   rowCount: number,
@@ -158,63 +167,41 @@ export function computeWindow(
   }
   const clampedCursor = Math.max(0, Math.min(cursor, rowCount - 1));
 
-  // Cheap case: everything fits with the header shown and no `…` reserved → no scrolling.
+  // The header (when present) always shows now — a top `…` no longer replaces it — so it always costs
+  // `headerLines`. Indicators are drawn in the border, not the interior, so they cost no entry lines.
+  // The capacity is therefore fixed (no longer depends on the overflow flags), so we compute it once.
   const headerLines = hasHeader ? linesPerEntry : 0;
-  const fullCapacity = Math.floor((availableHeight - headerLines) / linesPerEntry);
-  if (fullCapacity >= rowCount && fullCapacity >= 1) {
+  const capacity = Math.max(1, Math.floor((availableHeight - headerLines) / linesPerEntry));
+
+  // Cheap case: everything fits → no scrolling, no indicators.
+  if (capacity >= rowCount) {
     return { start: 0, end: rowCount, moreAbove: false, moreBelow: false };
   }
 
-  // We are scrolling. The presence of indicators changes how many entry lines remain, which changes
-  // the window, which changes the indicators — so iterate to a fixed point over the candidate
-  // `{moreAbove, moreBelow}` flags (at most a few passes; bounded). Each pass: spend lines on the
-  // indicators we currently believe are present (top `…` replaces the header; bottom `…` costs one
-  // line), fit as many entries as the remainder allows, place the window to keep the cursor visible,
-  // then recompute the flags from the resulting window.
-  let moreAbove = false;
-  let moreBelow = false;
-  let start = 0;
-  let end = rowCount;
-  for (let pass = 0; pass < 4; pass++) {
-    // Header is shown only when NOT scrolled past the top; a top `…` takes its place (1 line).
-    const topLines = moreAbove ? 1 : headerLines;
-    const bottomLines = moreBelow ? 1 : 0;
-    const capacity = Math.max(
-      1,
-      Math.floor((availableHeight - topLines - bottomLines) / linesPerEntry),
-    );
-    // Place the window with a scrolloff margin: keep at least SCROLLOFF rows visible both above and
-    // below the cursor (except at the list edges). This is a stateless follow-the-cursor window — we
-    // scroll the MINIMUM needed, so we seed `start` at the lowest value that satisfies the bottom
-    // margin (cursor sits SCROLLOFF rows from the bottom edge), then cap it so the top margin holds
-    // (cursor sits SCROLLOFF rows from the top edge), then clamp to the valid row range:
-    //  - minStart = cursor - capacity + 1 + SCROLLOFF  (bottom-margin floor; scrolling onto the last
-    //    visible row scrolls one row down so a row stays visible below — the user's exact spec).
-    //  - maxStart = cursor - SCROLLOFF                 (top-margin ceiling).
-    // The list edges fall out of the [0, rowCount-capacity] clamp for free: cursor 0 forces start 0
-    // (no top margin possible), cursor last forces start = rowCount-capacity (no bottom margin).
-    const minStart = clampedCursor - capacity + 1 + SCROLLOFF;
-    const maxStart = clampedCursor - SCROLLOFF;
-    // Seed at the bottom-margin floor (scroll the minimum), but never past the top-margin ceiling.
-    start = Math.min(minStart, maxStart);
-    start = Math.max(0, Math.min(start, rowCount - capacity));
-    // HARD invariant: the cursor MUST be inside the window — cursor visibility wins over the scrolloff
-    // margin. When `capacity` is too small to honour SCROLLOFF on both sides (e.g. capacity 1 after an
-    // indicator eats a line, so `minStart > maxStart`), the seed above can place `start` off the
-    // cursor; this final clamp pulls it back into `[cursor - capacity + 1, cursor]` so the highlight
-    // is never scrolled off-screen. Roomy viewports are unaffected (the seed already satisfies this).
-    start = Math.max(clampedCursor - capacity + 1, Math.min(start, clampedCursor));
-    start = Math.max(0, Math.min(start, rowCount - capacity));
-    end = Math.min(start + capacity, rowCount);
-    const nextAbove = start > 0;
-    const nextBelow = end < rowCount;
-    if (nextAbove === moreAbove && nextBelow === moreBelow) {
-      break;
-    }
-    moreAbove = nextAbove;
-    moreBelow = nextBelow;
-  }
-  return { start, end, moreAbove, moreBelow };
+  // Place the window with a scrolloff margin: keep at least SCROLLOFF rows visible both above and
+  // below the cursor (except at the list edges). This is a stateless follow-the-cursor window — we
+  // scroll the MINIMUM needed, so we seed `start` at the lowest value that satisfies the bottom
+  // margin (cursor sits SCROLLOFF rows from the bottom edge), then cap it so the top margin holds
+  // (cursor sits SCROLLOFF rows from the top edge), then clamp to the valid row range:
+  //  - minStart = cursor - capacity + 1 + SCROLLOFF  (bottom-margin floor; scrolling onto the last
+  //    visible row scrolls one row down so a row stays visible below — the user's exact spec).
+  //  - maxStart = cursor - SCROLLOFF                 (top-margin ceiling).
+  // The list edges fall out of the [0, rowCount-capacity] clamp for free: cursor 0 forces start 0
+  // (no top margin possible), cursor last forces start = rowCount-capacity (no bottom margin).
+  const minStart = clampedCursor - capacity + 1 + SCROLLOFF;
+  const maxStart = clampedCursor - SCROLLOFF;
+  // Seed at the bottom-margin floor (scroll the minimum), but never past the top-margin ceiling.
+  let start = Math.min(minStart, maxStart);
+  start = Math.max(0, Math.min(start, rowCount - capacity));
+  // HARD invariant: the cursor MUST be inside the window — cursor visibility wins over the scrolloff
+  // margin. When `capacity` is too small to honour SCROLLOFF on both sides (e.g. capacity 1), the seed
+  // above can place `start` off the cursor; this final clamp pulls it back into
+  // `[cursor - capacity + 1, cursor]` so the highlight is never scrolled off-screen. Roomy viewports
+  // are unaffected (the seed already satisfies this).
+  start = Math.max(clampedCursor - capacity + 1, Math.min(start, clampedCursor));
+  start = Math.max(0, Math.min(start, rowCount - capacity));
+  const end = Math.min(start + capacity, rowCount);
+  return { start, end, moreAbove: start > 0, moreBelow: end < rowCount };
 }
 
 /**
@@ -253,31 +240,14 @@ function LedgerRow<Row>({
 }
 
 /**
- * A `…` overflow indicator, styled as a COMPACT full-width list row (NOT a bare floating `…`). It
- * reads as "there are more items here," consistent with the entry rows: a `flexShrink={0}` +
- * `width="100%"` row whose `…` is horizontally centered (`justifyContent="center"`) and which carries
- * the SAME alternating-background shade as the entries — `index` is its absolute row position (the
- * slot just above `start` for a top indicator, just below `end` for a bottom one) so the parity
- * continues the alternation seamlessly. Always a single line (1lh), never the 2lh of a real entry.
- * Dim so it recedes behind real entries.
- */
-function OverflowRow({ index }: { readonly index: number }): React.JSX.Element {
-  const theme = useTheme();
-  const backgroundColor = index % 2 === 1 ? theme.rowAltBg : undefined;
-  return (
-    <Box flexShrink={0} width="100%" justifyContent="center" backgroundColor={backgroundColor}>
-      <Text dimColor>…</Text>
-    </Box>
-  );
-}
-
-/**
  * The Ledger. Self-measures its OUTER fill box (see the header's "Sizing" note) to learn the real
  * inner height/width the Pane gives it, then computes the active column count + visible window from
  * THAT (falling back to the optional props / a default before the first measurement). Paints the
- * optional header (only when not scrolled past the top), the windowed entries with full-width
- * highlight + alternating background, and the styled `…` overflow rows. `linesPerEntry` /
- * `min`/`maxColumns` shape the layout; the panel supplies cell placement via `renderEntry`.
+ * optional header (always shown) and the windowed entries with full-width highlight + alternating
+ * background. Overflow is no longer drawn in the interior — the computed window is emitted via
+ * `onWindow` so the parent can render "more above/below" indicators in the pane border.
+ * `linesPerEntry` / `min`/`maxColumns` shape the layout; the panel supplies cell placement via
+ * `renderEntry`.
  */
 export function Ledger<Row>({
   rows,
@@ -291,6 +261,7 @@ export function Ledger<Row>({
   renderEntry,
   header,
   rowKey,
+  onWindow,
 }: LedgerProps<Row>): React.JSX.Element {
   const boxRef = useRef<DOMElement | null>(null);
   // Measured inner dims; 0 means "not measured yet" (first paint / sizeless non-TTY render).
@@ -325,14 +296,37 @@ export function Ledger<Row>({
     effectiveHeight,
     header !== undefined,
   );
-  // The header shows only when present AND not scrolled past the top (a top `…` replaces it).
-  const showHeader = header !== undefined && !win.moreAbove;
+
+  // Keep `onWindow` in a ref so the emit effect can stay keyed on the window VALUE, not the callback
+  // identity — the parent typically passes an inline closure that changes every render, and keying the
+  // effect on it would re-fire (and risk a setState loop) on every render. We read the latest callback
+  // from the ref instead.
+  const onWindowRef = useRef(onWindow);
+  onWindowRef.current = onWindow;
+  // Remember the last-emitted window so we only fire when the value actually changes (the effect's dep
+  // tuple already gates most re-runs, but this also guards the first paint vs. measurement re-render).
+  const lastEmitted = useRef<{ start: number; end: number; len: number } | null>(null);
+  // Capture the scalar window fields + row count so the effect closure depends on the VALUES, not the
+  // `win` object identity (which is fresh every render) nor the `onWindow` callback identity (read
+  // from the ref). This is what lets an inline parent callback NOT re-fire the emit each render.
+  const { start: winStart, end: winEnd, moreAbove, moreBelow } = win;
+  const len = rows.length;
+  useEffect(() => {
+    const prev = lastEmitted.current;
+    if (prev !== null && prev.start === winStart && prev.end === winEnd && prev.len === len) {
+      return;
+    }
+    lastEmitted.current = { start: winStart, end: winEnd, len };
+    onWindowRef.current?.({ start: winStart, end: winEnd, moreAbove, moreBelow });
+  }, [winStart, winEnd, len, moreAbove, moreBelow]);
+
+  // The header is always shown now — overflow indicators live in the pane border, not the interior.
+  const showHeader = header !== undefined;
   const visible = rows.slice(win.start, win.end);
   return (
     // Fill box: sizes to the Pane's inner content area regardless of row count (flexGrow + clip), so
     // `measureElement` reports the room we HAVE, not the rows we drew (see the header's "Sizing"note).
     <Box ref={boxRef} flexDirection="column" flexGrow={1} minHeight={0} overflow="hidden">
-      {win.moreAbove ? <OverflowRow index={win.start - 1} /> : null}
       {showHeader ? <Box flexShrink={0}>{header(columns)}</Box> : null}
       {visible.map((row, i) => {
         const index = win.start + i;
@@ -348,7 +342,6 @@ export function Ledger<Row>({
           />
         );
       })}
-      {win.moreBelow ? <OverflowRow index={win.end} /> : null}
     </Box>
   );
 }

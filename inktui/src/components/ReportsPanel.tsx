@@ -85,10 +85,12 @@ function ReportsList({
   view,
   cursor,
   focused,
+  onOverflow,
 }: {
   readonly view: ReportsView;
   readonly cursor: number;
   readonly focused: boolean;
+  readonly onOverflow: (o: { above: number; below: number }) => void;
 }): React.JSX.Element {
   const theme = useTheme();
   if (view.status === 'error') {
@@ -111,6 +113,7 @@ function ReportsList({
       renderEntry={renderReportEntry}
       header={renderReportsHeader}
       rowKey={(row) => row.name}
+      onWindow={(win) => onOverflow({ above: win.start, below: view.rows.length - win.end })}
     />
   );
 }
@@ -126,6 +129,13 @@ export const ReportsPanel = memo(function ReportsPanel(): React.JSX.Element {
   const toggleDoc = useDocView('report');
 
   const [cursor, setCursor] = useState(0);
+  // Scroll-overflow counts fed up from the Ledger's window (via the list's onOverflow) into the Pane
+  // border's ▴/▾ indicators. Reset to {0,0} when there are no rows (the Ledger doesn't render, so
+  // onWindow never fires to clear a stale count) — see the rowCount===0 guard at the Pane below.
+  const [overflow, setOverflow] = useState<{ above: number; below: number }>({
+    above: 0,
+    below: 0,
+  });
   const rowCount = view.rows.length;
 
   const moveCursor = useCallback(
@@ -206,11 +216,18 @@ export const ReportsPanel = memo(function ReportsPanel(): React.JSX.Element {
   useMeasureFocus(PANEL_ID, ref);
 
   return (
-    <Pane ref={ref} title={PANEL_TITLE} focused={focused}>
+    <Pane
+      ref={ref}
+      title={PANEL_TITLE}
+      focused={focused}
+      overflowAbove={rowCount === 0 ? 0 : overflow.above}
+      overflowBelow={rowCount === 0 ? 0 : overflow.below}
+    >
       <ReportsList
         view={view}
         cursor={Math.min(cursor, Math.max(rowCount - 1, 0))}
         focused={focused}
+        onOverflow={setOverflow}
       />
     </Pane>
   );

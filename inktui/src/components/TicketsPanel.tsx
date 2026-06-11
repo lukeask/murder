@@ -176,10 +176,12 @@ function TicketsList({
   view,
   cursor,
   focused,
+  onOverflow,
 }: {
   readonly view: TicketsView;
   readonly cursor: number;
   readonly focused: boolean;
+  readonly onOverflow: (o: { above: number; below: number }) => void;
 }): React.JSX.Element {
   const theme = useTheme();
   if (view.status === 'error') {
@@ -202,6 +204,7 @@ function TicketsList({
       renderEntry={(row, ctx) => renderTicketEntry(row, ctx, theme)}
       header={renderTicketsHeader}
       rowKey={(row) => row.id}
+      onWindow={(win) => onOverflow({ above: win.start, below: view.rows.length - win.end })}
     />
   );
 }
@@ -223,6 +226,13 @@ export const TicketsPanel = memo(function TicketsPanel(): React.JSX.Element {
 
   // Rule 1: cursor is local UI state.
   const [cursor, setCursor] = useState(0);
+  // Scroll-overflow counts fed up from the Ledger's window (via the list's onOverflow) into the Pane
+  // border's ▴/▾ indicators. Reset to {0,0} when there are no rows (the Ledger doesn't render, so
+  // onWindow never fires to clear a stale count) — see the rowCount===0 guard at the Pane below.
+  const [overflow, setOverflow] = useState<{ above: number; below: number }>({
+    above: 0,
+    below: 0,
+  });
   const rowCount = view.rows.length;
   // Stable ref so the keymap useMemo doesn't churn on every cursor change.
   const cursorRef = useRef(cursor);
@@ -300,11 +310,18 @@ export const TicketsPanel = memo(function TicketsPanel(): React.JSX.Element {
   useMeasureFocus(PANEL_ID, ref);
 
   return (
-    <Pane ref={ref} title={PANEL_TITLE} focused={focused}>
+    <Pane
+      ref={ref}
+      title={PANEL_TITLE}
+      focused={focused}
+      overflowAbove={rowCount === 0 ? 0 : overflow.above}
+      overflowBelow={rowCount === 0 ? 0 : overflow.below}
+    >
       <TicketsList
         view={view}
         cursor={Math.min(cursor, Math.max(rowCount - 1, 0))}
         focused={focused}
+        onOverflow={setOverflow}
       />
     </Pane>
   );
