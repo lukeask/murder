@@ -211,7 +211,7 @@ class PlanOps:
         new_planner_id = f"planner-{new_name}"
         old_planner_session = format_session_name(self.rt, "planner", f"_{old_name}")
         new_planner_session = format_session_name(self.rt, "planner", f"_{new_name}")
-        planner = self.rt.agents.rename_agent(old_planner_id, new_planner_id)
+        planner = self.rt.rename_agent(old_planner_id, new_planner_id)
         await tmux.rename_session(old_planner_session, new_planner_session)
         if planner is not None:
             planner.session = new_planner_session
@@ -225,7 +225,7 @@ class PlanOps:
         new_handler_id = f"planning_handler-{new_name}"
         old_handler_session = format_session_name(self.rt, "planning_handler", f"_{old_name}")
         new_handler_session = format_session_name(self.rt, "planning_handler", f"_{new_name}")
-        handler = self.rt.agents.rename_agent(old_handler_id, new_handler_id)
+        handler = self.rt.rename_agent(old_handler_id, new_handler_id)
         await tmux.rename_session(old_handler_session, new_handler_session)
         if handler is not None:
             handler.session = new_handler_session

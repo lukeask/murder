@@ -41,6 +41,9 @@ class _Runtime:
     async def reap(self, _agent_id: str) -> None:
         return None
 
+    def rename_agent(self, _old_agent_id: str, _new_agent_id: str, *, persist=None):
+        return None
+
 
 class _LiveHarness:
     kind = "codex"

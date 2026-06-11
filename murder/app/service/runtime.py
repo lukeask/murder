@@ -297,6 +297,15 @@ class Runtime:
             set_dead=_db_set_agent_status,
         )
 
+    def rename_agent(
+        self,
+        old_agent_id: str,
+        new_agent_id: str,
+        *,
+        persist: Callable[[LifecycleParticipant], None] | None = None,
+    ) -> LifecycleParticipant | None:
+        return self._agents.rename_agent(old_agent_id, new_agent_id, persist=persist)
+
     async def supervise(self, agent_id: str) -> None:
         """Restart policy placeholder — daemons own their poll loops."""
         return None

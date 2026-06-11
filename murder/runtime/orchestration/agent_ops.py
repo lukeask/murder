@@ -318,7 +318,7 @@ class AgentOps:
         ):
             return {"ok": False, "error": f"session already exists: {new_session}"}
 
-        renamed = self.rt.agents.rename_agent(
+        renamed = self.rt.rename_agent(
             agent_id,
             new_agent_id,
             persist=self.rt.sync_agent,
