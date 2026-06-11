@@ -229,7 +229,7 @@ describe('theme bridge (Phase 5) — settings.theme → themeStore', () => {
     // settings.get resolves with the light theme → the bridge applies it after load.
     fake.stubRpc('settings.get', {
       ok: true,
-      settings: { theme: 'everforest-light', modifier: 'alt', key_overrides: {} },
+      settings: { theme: 'everforest-light', modifier: 'alt', key_overrides: {}, pane_gap: 0 },
     });
     const { store, dispose } = createAppStore(fake);
     const inputStores = createInputStores([]);
@@ -245,7 +245,7 @@ describe('theme bridge (Phase 5) — settings.theme → themeStore', () => {
     fake.stubRpc('state.crow_snapshot', { invalidation_key: 'iv', sessions: [] });
     fake.stubRpc('settings.update', {
       ok: true,
-      settings: { theme: 'everforest-light', modifier: 'alt', key_overrides: {} },
+      settings: { theme: 'everforest-light', modifier: 'alt', key_overrides: {}, pane_gap: 0 },
     });
     const { store, dispose } = createAppStore(fake);
     const inputStores = createInputStores([]);
@@ -266,7 +266,7 @@ describe('theme bridge (Phase 5) — settings.theme → themeStore', () => {
     fake.stubRpc('state.crow_snapshot', { invalidation_key: 'iv', sessions: [] });
     fake.stubRpc('settings.get', {
       ok: true,
-      settings: { theme: 'solarized-unknown', modifier: 'alt', key_overrides: {} },
+      settings: { theme: 'solarized-unknown', modifier: 'alt', key_overrides: {}, pane_gap: 0 },
     });
     const { store, dispose } = createAppStore(fake);
     const inputStores = createInputStores([]);

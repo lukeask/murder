@@ -55,6 +55,11 @@ type SettingsIntent = 'cursorUp' | 'cursorDown' | 'confirm' | 'cancel';
 /** The modifier choices in display order. */
 const MODIFIERS: readonly Modifier[] = ['alt', 'ctrl', 'both'];
 
+/** The pane-gap choices in display order — spaces between adjacent pane borders. `0` = flush
+ * borders (the default); `1`–`4` add spacing. Mirrors the Python `TuiUserConfig.pane_gap` range
+ * (`ge=0, le=4`). */
+const GAP_OPTIONS: readonly number[] = [0, 1, 2, 3, 4];
+
 /** The rebindable actions, in registry order — the rows the bindings section shows. */
 const REBINDABLE: readonly ActionId[] = ACTION_IDS.filter((id) => ACTIONS[id].rebindable);
 
@@ -92,6 +97,7 @@ type Row =
   | { readonly kind: 'header'; readonly label: string }
   | { readonly kind: 'modifier'; readonly value: Modifier }
   | { readonly kind: 'theme'; readonly value: ThemeId }
+  | { readonly kind: 'gap'; readonly value: number }
   | { readonly kind: 'binding'; readonly action: ActionId };
 
 /** Build the flat row list (headers + selectable rows) in section order. Pure — depends only on the
@@ -104,6 +110,10 @@ function buildRows(): readonly Row[] {
   rows.push({ kind: 'header', label: 'Theme' });
   for (const value of Object.keys(PALETTES) as ThemeId[]) {
     rows.push({ kind: 'theme', value });
+  }
+  rows.push({ kind: 'header', label: 'Pane gap' });
+  for (const value of GAP_OPTIONS) {
+    rows.push({ kind: 'gap', value });
   }
   rows.push({ kind: 'header', label: 'Key bindings' });
   for (const action of REBINDABLE) {
@@ -130,6 +140,8 @@ interface SettingsState {
   persistedTheme: ThemeId;
   /** The draft theme (the live-previewed selection; committed on Save). */
   theme: ThemeId;
+  /** The draft pane-gap (committed via `update` on selection — the layout reacts at once). */
+  paneGap: number;
   /** The draft per-action key overrides (`ActionId -> key char`). */
   overrides: Record<string, string>;
   /** The action currently capturing its next-key rebind, or `null` when not capturing. */
@@ -175,6 +187,7 @@ export function settingsMode(
   current: {
     readonly modifier: Modifier;
     readonly theme: ThemeId;
+    readonly paneGap: number;
     readonly keyOverrides: Record<string, string>;
   },
   opts: SettingsModeOptions = {},
@@ -186,6 +199,7 @@ export function settingsMode(
     modifier: current.modifier,
     persistedTheme: current.theme,
     theme: current.theme,
+    paneGap: current.paneGap,
     overrides: { ...current.keyOverrides },
     capturing: null,
     notice: null,
@@ -236,6 +250,14 @@ export function settingsMode(
     }
     s.modifier = value;
     void actions.update({ modifier: value });
+    s.notice = null;
+    refresh();
+  }
+
+  /** Commit the draft pane gap (optimistic update). The Body/Stage/Rail react at once via the slice. */
+  function selectGap(value: number): void {
+    s.paneGap = value;
+    void actions.update({ pane_gap: value });
     s.notice = null;
     refresh();
   }
@@ -294,6 +316,9 @@ export function settingsMode(
         void actions.update({ theme: row.value });
         s.notice = 'Theme saved';
         refresh();
+        break;
+      case 'gap':
+        selectGap(row.value);
         break;
       case 'binding':
         beginCapture(row.action);
@@ -467,6 +492,8 @@ function rowKey(row: Row): string {
       return `modifier:${row.value}`;
     case 'theme':
       return `theme:${row.value}`;
+    case 'gap':
+      return `gap:${row.value}`;
     case 'binding':
       return `binding:${row.action}`;
   }
@@ -525,6 +552,28 @@ function RowView({
           {cursor}
           {mark}
           {row.value}
+        </Text>
+      </Box>
+    );
+  }
+
+  if (row.kind === 'gap') {
+    const selected = row.value === s.paneGap;
+    const mark = selected ? '(•) ' : '( ) ';
+    const color = focused ? theme.warning : theme.text;
+    // A live border preview: `│` + N spaces + `│` shows exactly the gap N produces between panes.
+    const preview = `│${' '.repeat(row.value)}│`;
+    return (
+      <Box>
+        <Text color={color} bold={focused}>
+          {cursor}
+          {mark}
+          {row.value}
+          {row.value === 0 ? ' (flush)' : ''}
+        </Text>
+        <Text color={theme.muted}>
+          {'  '}
+          {preview}
         </Text>
       </Box>
     );

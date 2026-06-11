@@ -270,6 +270,7 @@ const EMPTY_KEYMAP: PanelKeymap<ScrollIntent> = { keymap: [], onIntent() {} };
 export const Stage = memo(function Stage({
   minCells,
   axis,
+  paneGap = 0,
 }: {
   /**
    * The Stage's guaranteed minimum cross-axis size in CELLS (R3/R4 — `≥ 60%` of the terminal),
@@ -281,6 +282,10 @@ export const Stage = memo(function Stage({
   readonly minCells?: number;
   /** Which dimension `minCells` floors: `'width'` in landscape, `'height'` in portrait. */
   readonly axis?: 'width' | 'height';
+  /** The user-configured spaces between adjacent pane borders (the "Pane gap" setting, 0–4). Applied
+   * between the chat panes (their row's `columnGap`) and between the chat group and the doc pane
+   * (the outer box's `columnGap` in landscape, `rowGap` in portrait). Defaults to 0 (flush borders). */
+  readonly paneGap?: number;
 } = {}): JSX.Element {
   const floor = minCells ?? 0;
   const floorWidth = axis === 'width' ? floor : undefined;
@@ -326,8 +331,10 @@ export const Stage = memo(function Stage({
       minWidth={floorWidth}
       minHeight={floorHeight ?? 0}
       overflow="hidden"
-      columnGap={0}
-      rowGap={0}
+      // Inter-region gap between the chat group and the doc pane: a horizontal gap in landscape (they
+      // sit side-by-side), a vertical gap in portrait (they stack). `0` = flush (the default).
+      columnGap={landscape ? paneGap : 0}
+      rowGap={landscape ? 0 : paneGap}
     >
       {/* Chat-history panes tile across the center, splitting the width evenly (each Pane flexGrow 1,
           so chat keeps the lion's share next to / above the doc). Rendered only when there ARE chat
@@ -335,7 +342,7 @@ export const Stage = memo(function Stage({
           half width (an empty left half) when a doc is open with no favorited crows — so when panes
           is empty the doc pane (also `flexGrow={1}`) fills the Stage on its own. */}
       {panes.length > 0 && (
-        <Box flexDirection="row" flexGrow={1} minHeight={0} overflow="hidden" columnGap={0}>
+        <Box flexDirection="row" flexGrow={1} minHeight={0} overflow="hidden" columnGap={paneGap}>
           {panes.map((identity) => (
             <ChatPane key={identity.agentId} identity={identity} conversations={conversations} />
           ))}

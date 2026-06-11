@@ -59,6 +59,7 @@ def test_settings_get_returns_defaults_when_no_config(repo_root: Path, xdg: Path
         "theme": "everforest-dark",
         "modifier": "alt",
         "key_overrides": {},
+        "pane_gap": 0,
     }
 
 
@@ -74,6 +75,7 @@ def test_settings_update_persists_and_roundtrips(repo_root: Path, xdg: Path) -> 
         "theme": "everforest-dark",
         "modifier": "ctrl",
         "key_overrides": {"global.spawn": "x"},
+        "pane_gap": 0,
     }
     # Persisted: a fresh get sees it, and the file actually exists.
     assert config_path().exists()
@@ -92,13 +94,28 @@ def test_settings_update_is_partial_merge(repo_root: Path, xdg: Path) -> None:
         "theme": "everforest-dark",
         "modifier": "both",
         "key_overrides": {},
+        "pane_gap": 0,
     }
+
+
+def test_settings_update_persists_pane_gap(repo_root: Path, xdg: Path) -> None:
+    host = _host(repo_root)
+    reply = _call(host, "settings.update", {"settings": {"pane_gap": 3}})
+    assert reply["settings"]["pane_gap"] == 3
+    again = _call(host, "settings.get", {})
+    assert again["settings"]["pane_gap"] == 3
 
 
 def test_settings_update_rejects_invalid_modifier(repo_root: Path, xdg: Path) -> None:
     host = _host(repo_root)
     with pytest.raises(ValidationError):  # the Literal["alt","ctrl","both"] rejects it
         _call(host, "settings.update", {"settings": {"modifier": "hyper"}})
+
+
+def test_settings_update_rejects_out_of_range_pane_gap(repo_root: Path, xdg: Path) -> None:
+    host = _host(repo_root)
+    with pytest.raises(ValidationError):  # ge=0/le=4 rejects 5
+        _call(host, "settings.update", {"settings": {"pane_gap": 5}})
 
 
 def test_settings_update_rejects_non_object(repo_root: Path, xdg: Path) -> None:

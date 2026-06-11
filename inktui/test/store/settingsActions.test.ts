@@ -27,11 +27,11 @@ function setup() {
   // Default stubs so an unrelated load/update resolves; tests override as needed.
   fake.stubRpc('settings.get', {
     ok: true,
-    settings: { theme: 'everforest-dark', modifier: 'alt', key_overrides: {} },
+    settings: { theme: 'everforest-dark', modifier: 'alt', key_overrides: {}, pane_gap: 0 },
   });
   fake.stubRpc('settings.update', {
     ok: true,
-    settings: { theme: 'everforest-dark', modifier: 'alt', key_overrides: {} },
+    settings: { theme: 'everforest-dark', modifier: 'alt', key_overrides: {}, pane_gap: 0 },
   });
   fake.stubRpc('state.crow_snapshot', { invalidation_key: 'iv', sessions: [] });
   const { store, dispose } = createAppStore(fake);
@@ -51,6 +51,7 @@ describe('settings actions', () => {
         theme: 'everforest-light',
         modifier: 'ctrl',
         key_overrides: { 'global.spawn': 'x' },
+        pane_gap: 3,
       },
     });
 
@@ -62,6 +63,19 @@ describe('settings actions', () => {
     expect(s.theme).toBe('everforest-light');
     expect(s.modifier).toBe('ctrl');
     expect(s.keyOverrides).toEqual({ 'global.spawn': 'x' });
+    expect(s.paneGap).toBe(3);
+    dispose();
+  });
+
+  it('update(pane_gap) overlays locally AND persists via settings.update', async () => {
+    const { fake, store, dispose } = setup();
+
+    await store.getState().actions.settings.update({ pane_gap: 2 });
+
+    expect(store.getState().settings.paneGap).toBe(2);
+    const updates = fake.rpcCalls.filter((c) => c.method === 'settings.update');
+    expect(updates.length).toBe(1);
+    expect(updates[0]?.params).toEqual({ settings: { pane_gap: 2 } });
     dispose();
   });
 

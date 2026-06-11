@@ -335,6 +335,7 @@ class ServiceHost:
                 "theme": tui.theme,
                 "modifier": tui.modifier,
                 "key_overrides": dict(tui.key_overrides),
+                "pane_gap": tui.pane_gap,
             }
 
         def _settings_get(_body: dict[str, Any]) -> dict[str, Any]:
@@ -359,7 +360,7 @@ class ServiceHost:
 
             cfg = load_user_config()
             merged: dict[str, Any] = _settings_payload(cfg.tui)
-            for key in ("theme", "modifier", "key_overrides"):
+            for key in ("theme", "modifier", "key_overrides", "pane_gap"):
                 if key in partial:
                     merged[key] = partial[key]
             # Re-validate the merged tui block; an invalid modifier/theme/key_overrides raises here.

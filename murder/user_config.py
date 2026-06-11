@@ -40,6 +40,9 @@ class TuiUserConfig(BaseModel):
     modifier: Literal["alt", "ctrl", "both"] = "alt"
     # ActionId -> key char. Stored as-is; the TS registry validates ids.
     key_overrides: dict[str, str] = Field(default_factory=dict)
+    # Spaces of horizontal gap between adjacent pane borders (rail<->stage, stage panes,
+    # rail panes). 0 = flush borders (the default look); capped at 4 (the radio select's range).
+    pane_gap: int = Field(default=0, ge=0, le=4)
 
 
 class UserHarnessRolePatch(BaseModel):

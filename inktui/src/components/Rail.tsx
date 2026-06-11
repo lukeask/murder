@@ -63,14 +63,18 @@ export interface RailProps {
    * anymore (R5: all sizes are relative). The Ledger inside reacts to the resulting width by dropping
    * trailing columns when it's compressed (R3). */
   readonly cells: number;
+  /** The user-configured spaces between this rail's adjacent panes (the "Pane gap" setting, 0–4):
+   * a `rowGap` between vertically stacked panes in landscape, a `columnGap` between side-by-side panes
+   * in portrait. Defaults to 0 (flush borders — each Pane's own border is the separator). */
+  readonly paneGap?: number;
 }
 
 /**
  * Arrange this side's visible panels. Returns `null` when the region has no visible panels (collapse
  * out of the layout). landscape → `column` (panels stack, split height); portrait → `row` (panels
- * side-by-side, split width). Stacked panes (landscape) sit flush — each Pane's border/header is
- * the separator, so no `rowGap` is spent; portrait side-by-side strips are also flush (no
- * `columnGap`) so adjacent pane borders meet directly.
+ * side-by-side, split width). Adjacent panes are separated by the user's `paneGap` (a `rowGap` when
+ * stacked in landscape, a `columnGap` when side-by-side in portrait); at the default `0` they sit
+ * flush, each Pane's own border/header being the separator.
  */
 export function Rail({
   side,
@@ -78,6 +82,7 @@ export function Rail({
   panels,
   renderPanel,
   cells,
+  paneGap = 0,
 }: RailProps): JSX.Element | null {
   const visible = usePanelStore((s) => s.visible);
   const shown = panels.filter((id) => visible.has(id));
@@ -96,10 +101,11 @@ export function Rail({
     <Box
       key={side}
       flexDirection={flexDirection}
-      // No inter-pane gap: each Pane already draws its own border/header, which supplies the visual
-      // separation — an extra blank cell between adjacent panes just wastes scarce terminal space.
-      rowGap={0}
-      columnGap={0}
+      // Inter-pane gap = the user's "Pane gap" setting. 0 (the default) keeps adjacent panes flush —
+      // each Pane already draws its own border/header as the separator; >0 inserts that many blank
+      // cells between them (a rowGap when stacked in landscape, a columnGap when side-by-side in portrait).
+      rowGap={paneGap}
+      columnGap={paneGap}
       flexGrow={0}
       flexShrink={0}
       width={landscape ? cells : undefined}

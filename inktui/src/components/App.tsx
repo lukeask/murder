@@ -318,6 +318,11 @@ function Shell({
   const { rows } = useTerminalSize();
   // The ONE orientation read (rule: one source of truth) — threaded to both Rails and the Body axis.
   const orientation = useOrientation();
+  // The user-configured inter-pane-border gap (settings: "Pane gap", 0–4). One read here, threaded
+  // to the budget engine (so the Stage floor accounts for it) AND down to the Body box / Stage / Rails
+  // as their `columnGap`/`rowGap` — the single source of truth for inter-pane spacing (mirrors the
+  // single orientation read). `0` = flush borders (the default).
+  const paneGap = useAppStore((s) => s.settings.paneGap);
   // L4c-fix2: portrait budgets the rows axis, so it must know the height the Body region actually
   // occupies = `rows − topbar − ChatInput − footer`. Two of those are MEASURED and one is COMPUTED:
   //   • topbar + ChatInput — measured via `measureElement` on their `flexShrink={0}` boxes. They are
@@ -366,7 +371,7 @@ function Shell({
   // call here, threaded down to both Rails and the Stage — the single source of truth for the Body's
   // sizing, mirroring the single `useOrientation()` read. Portrait budgets against the MEASURED Body
   // height (L4c) so nothing overflows into the chrome; landscape is unaffected (budgets width).
-  const bodyLayout = useBodyLayout(bodyHeight);
+  const bodyLayout = useBodyLayout(bodyHeight, paneGap);
   // The {@link PanelId} → component dispatch, closing over the current usage inner width (L4/R9) so
   // the UsagePanel sizes its fluid gauge line to the width its right rail supports. Memoised on that
   // width so a Rail (which is `memo`-free but cheap) only re-derives when it actually changes, not on
@@ -469,6 +474,7 @@ function Shell({
       settingsMode(modes, settingsActions, {
         modifier: settings.modifier,
         theme,
+        paneGap: settings.paneGap,
         keyOverrides: settings.keyOverrides as Record<string, string>,
       }),
     );
@@ -659,8 +665,8 @@ function Shell({
           // portrait stacks them in a column.
           <Box
             flexDirection={orientation === 'landscape' ? 'row' : 'column'}
-            columnGap={orientation === 'landscape' ? 1 : 0}
-            rowGap={orientation === 'portrait' ? 1 : 0}
+            columnGap={orientation === 'landscape' ? paneGap : 0}
+            rowGap={orientation === 'portrait' ? paneGap : 0}
             flexGrow={1}
             flexBasis={0}
             minHeight={0}
@@ -674,12 +680,14 @@ function Shell({
               // Explicit, budget-computed cross-axis size — only as wide as its widest ledger row (R1/R2),
               // compressed (so trailing columns drop) when the Stage's 60% floor needs the room (R3).
               cells={bodyLayout.leftRailCells}
+              // User-configured spacing between this rail's stacked/side-by-side panes.
+              paneGap={paneGap}
             />
             {/* Phase 4a: the Stage center region — tiles the favorited-crow chat-history Panes, growing to
                 fill whatever the rails leave (full width when both rails are off). It carries the budget
                 floor (R3/R4) so it can never be sized below its guaranteed ≥60% share. Phase 4b adds
                 doc-view panes to its right; the doc slice is untouched here. The Stage itself clips/grows. */}
-            <Stage minCells={bodyLayout.stageCells} axis={bodyLayout.axis} />
+            <Stage minCells={bodyLayout.stageCells} axis={bodyLayout.axis} paneGap={paneGap} />
             <Rail
               side="right"
               orientation={orientation}
@@ -688,6 +696,8 @@ function Shell({
               // The right rail (usage · crows) is sized to the crow-ledger width when crows are on (R6),
               // computed relative to the live terminal — no `"24%"` absolute anymore (R5).
               cells={bodyLayout.rightRailCells}
+              // User-configured spacing between this rail's stacked/side-by-side panes.
+              paneGap={paneGap}
             />
           </Box>
         )}

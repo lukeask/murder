@@ -9,9 +9,10 @@
  * only injects the live inputs. App calls it once and threads the result down (one source of truth,
  * like the single `useOrientation()` call).
  *
- * The `gap` is 1 to match the App Body's `columnGap`/`rowGap` of 1 between each region — the engine
- * reserves one gap per PRESENT rail so the Stage floor accounts for the inter-region spacing Yoga
- * draws. (Whether a 0-cell present rail still draws a gap is a flex concern verified in L7.)
+ * The `gap` is the user's "Pane gap" setting (0–4), passed by App so it matches the App Body's
+ * `columnGap`/`rowGap` between each region — the engine reserves one gap per PRESENT rail so the Stage
+ * floor accounts for the inter-region spacing Yoga draws. A `0` gap (the default) reserves nothing.
+ * (Whether a 0-cell present rail still draws a gap is a flex concern verified in L7.)
  *
  * ## Portrait budgets the BODY height, not the terminal rows (L4c / L4c-fix2)
  * In portrait the rails are horizontal strips stacked above/below the Stage WITHIN the Body region —
@@ -44,8 +45,11 @@ import { usePanelStore } from './useInputStores.js';
 import { useOrientation } from './useOrientation.js';
 import { useTerminalSize } from './useTerminalSize.js';
 
-/** The inter-region gap (cells) the App Body renders between each rail and the Stage. */
-const BODY_GAP = 1;
+/** The default inter-region gap (cells) between each rail and the Stage, used when the caller does
+ * not pass a user-configured {@link useBodyLayout} `gap`. The Body's `columnGap`/`rowGap` is now the
+ * user's "Pane gap" setting (0–4), threaded in by App; this constant is only the bare-call fallback
+ * (a test mounting the hook without a gap). */
+const BODY_GAP = 0;
 
 /** The right region's panels (mirrors App's `RIGHT_PANELS`) — used to count the present ones so the
  * engine can derive usage's per-orientation inner width (portrait splits the strip width with crows). */
@@ -57,8 +61,11 @@ const RIGHT_PANELS: readonly PanelId[] = ['usage', 'crows'];
  * @param bodyHeight - The MEASURED height (in terminal lines) of the App Body region, used as the
  *   portrait rows-total so the strips + Stage never overflow into the surrounding chrome (L4c).
  *   `0`/omitted (first paint, non-TTY test) → fall back to the terminal `rows`. Ignored in landscape.
+ * @param gap - The user-configured inter-region gap in cells (the "Pane gap" setting, 0–4). Threaded
+ *   from App so the budget engine reserves exactly the spacing the Body box draws. Omitted (a bare
+ *   test mount) → {@link BODY_GAP} (`0`).
  */
-export function useBodyLayout(bodyHeight = 0): BodyLayout {
+export function useBodyLayout(bodyHeight = 0, gap = BODY_GAP): BodyLayout {
   const { rows, columns } = useTerminalSize();
   const orientation = useOrientation();
   const left = useRailContent('left');
@@ -74,7 +81,7 @@ export function useBodyLayout(bodyHeight = 0): BodyLayout {
     cols: columns,
     rows: orientation === 'portrait' ? portraitRows : rows,
     orientation,
-    gap: BODY_GAP,
+    gap,
     left,
     right,
     rightPanelCount,

@@ -73,6 +73,7 @@ function setup(
   current: Parameters<typeof settingsMode>[2] = {
     modifier: 'alt',
     theme: DEFAULT_THEME_ID,
+    paneGap: 0,
     keyOverrides: {},
   },
 ) {
@@ -106,6 +107,7 @@ describe('SettingsModal', () => {
     expect(frame).toContain('Settings');
     expect(frame).toContain('Command modifier');
     expect(frame).toContain('Theme');
+    expect(frame).toContain('Pane gap');
     expect(frame).toContain('Key bindings');
     expect(selectActiveMode(stores.modes)?.id).toBe(SETTINGS_MODE_ID);
 
@@ -137,6 +139,7 @@ describe('SettingsModal', () => {
     const { stores, patches, enter } = setup({
       modifier: 'both',
       theme: DEFAULT_THEME_ID,
+      paneGap: 0,
       keyOverrides: {},
     });
     const { stdin } = render(<Harness stores={stores} />);
@@ -146,6 +149,22 @@ describe('SettingsModal', () => {
     stdin.write('\r');
     await tick();
     expect(patches).toContainEqual({ modifier: 'alt' });
+  });
+
+  it('selecting a pane-gap option commits via update', async () => {
+    // Start at gap 0; navigate to the second gap row (value 1) and Enter → update({ pane_gap: 1 }).
+    const { stores, patches, enter } = setup();
+    const { stdin } = render(<Harness stores={stores} />);
+    enter();
+    await tick();
+    // Selectable rows: 3 modifiers + 2 themes precede the gap section; one more `j` lands on gap row 1.
+    for (let i = 0; i < 6; i++) {
+      stdin.write('j');
+      await tick();
+    }
+    stdin.write('\r');
+    await tick();
+    expect(patches).toContainEqual({ pane_gap: 1 });
   });
 
   it('ctrl/both are disabled with a notice when kitty is unsupported', async () => {
@@ -214,9 +233,9 @@ describe('SettingsModal', () => {
     // Walk to the first binding row (the first row whose render shows the press-a-key affordance after
     // Enter). Bindings come last; navigate down until the focused row is a binding. We detect the
     // binding section by its label being present and just step down past modifiers + themes.
-    // Modifiers (3) + themes (2) selectable rows precede bindings; press `j` 5 times to reach the
-    // first binding row.
-    for (let i = 0; i < 5; i++) {
+    // Modifiers (3) + themes (2) + pane-gap options (5) selectable rows precede bindings; press `j`
+    // 10 times to reach the first binding row.
+    for (let i = 0; i < 10; i++) {
       stdin.write('j');
       await tick();
     }
@@ -236,7 +255,7 @@ describe('SettingsModal', () => {
     const { lastFrame, stdin } = render(<Harness stores={stores} />);
     enter();
     await tick();
-    for (let i = 0; i < 5; i++) {
+    for (let i = 0; i < 10; i++) {
       stdin.write('j');
       await tick();
     }
@@ -253,7 +272,7 @@ describe('SettingsModal', () => {
     const { lastFrame, stdin } = render(<Harness stores={stores} />);
     enter();
     await tick();
-    for (let i = 0; i < 5; i++) {
+    for (let i = 0; i < 10; i++) {
       stdin.write('j');
       await tick();
     }

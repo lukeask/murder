@@ -46,6 +46,10 @@ export interface SettingsState {
   readonly modifier: SettingsModifier;
   /** Per-action key-char rebinds, opaque `ActionId -> key char`. Bridged onto the bindings store. */
   readonly keyOverrides: Readonly<Record<string, string>>;
+  /** Spaces of horizontal gap between adjacent pane borders (rail↔stage, stage panes, rail panes).
+   * `0` = flush borders (the default look); `1`–`4` add spacing. Threaded into the Body/Stage/Rail
+   * `columnGap`/`rowGap` and the budget engine's inter-region gap (see `App.tsx`/`useBodyLayout.ts`). */
+  readonly paneGap: number;
   /** Load/save lifecycle: `idle` before the first `load`, `ready` after, `error` on a failed RPC. */
   readonly status: 'idle' | 'loading' | 'ready' | 'error';
   /** Set when the last load/save rejected; cleared on the next success. */
@@ -58,6 +62,7 @@ export const initialSettingsState: SettingsState = {
   theme: 'everforest-dark',
   modifier: 'alt',
   keyOverrides: {},
+  paneGap: 0,
   status: 'idle',
   error: null,
 };

@@ -37,6 +37,8 @@ export interface SettingsWire {
   readonly theme: string;
   readonly modifier: SettingsModifier;
   readonly key_overrides: Readonly<Record<string, string>>;
+  /** Spaces of inter-pane-border gap (0–4). Mirrors the Python `TuiUserConfig.pane_gap`. */
+  readonly pane_gap: number;
 }
 
 /** A partial settings patch for `update` — any subset of the wire fields. */
@@ -89,6 +91,7 @@ function applyWire(prev: SettingsState, wire: SettingsWire | undefined): Setting
     theme: wire.theme ?? prev.theme,
     modifier: wire.modifier ?? prev.modifier,
     keyOverrides: wire.key_overrides ?? prev.keyOverrides,
+    paneGap: wire.pane_gap ?? prev.paneGap,
     status: 'ready',
     error: null,
   };
@@ -117,6 +120,7 @@ export function createSettingsActions(bus: BusClient, store: StoreApi<AppStore>)
           ...(partial.theme !== undefined ? { theme: partial.theme } : {}),
           ...(partial.modifier !== undefined ? { modifier: partial.modifier } : {}),
           ...(partial.key_overrides !== undefined ? { keyOverrides: partial.key_overrides } : {}),
+          ...(partial.pane_gap !== undefined ? { paneGap: partial.pane_gap } : {}),
           status: 'ready',
           error: null,
         },
