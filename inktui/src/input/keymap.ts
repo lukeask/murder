@@ -48,6 +48,10 @@ export interface KeymapEntry<Intent extends string> {
   readonly chord: KeyChord | readonly KeyChord[];
   readonly intent: Intent;
   readonly description: string;
+  /** When true, the entry is omitted from the bottom bar's hints. For mechanical sub-steps of a
+   * multi-key gesture (e.g. the go-to-line digit accumulator) that would flood the bar without
+   * being discoverable bindings in their own right. Matching is unaffected. */
+  readonly hidden?: boolean;
 }
 
 /** A panel's full keymap: its declared bindings. Order matters only for first-match-wins on an

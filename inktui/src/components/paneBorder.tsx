@@ -163,3 +163,46 @@ export function PaneBorderTop({
 // hand-composed fixed-height bottom ROW did — the `[top, flexGrow, bottom]` split loses its trailing
 // cell when the pane rounds to a half-cell, e.g. two panels splitting an odd rail height). The `▾ N`
 // scroll-below count that row used to carry now rides {@link PaneBorderTop} beside the `▴ N` count.
+
+/** The thumb glyph: a HEAVY vertical stroke, so the scroll position reads as a thicker run of the
+ * border itself (vs the light `│` track) — not a separate widget glyph like the old `█` column. */
+const THUMB = '┃';
+/** The track glyph — Ink's round-border side, so a thumb-less column is byte-identical to a border. */
+const TRACK = '│';
+
+/**
+ * The scrollbar-as-right-border column for a scrollable {@link ./Pane.tsx Pane} — the pane's RIGHT
+ * border doubles as the scroll track: the thumb is a heavy `┃` run rolling along the light `│` side,
+ * and the column's last cell is the `╯` bottom corner (the content box disables its own right border
+ * via `borderRight={false}`, so its Ink bottom border ends `╰──` and this corner completes it). This
+ * replaced the old separate 1-char scrollbar column inside the border (`█` over a dim track).
+ *
+ * `height` is the pane's measured inner row count (the same fill-box measurement that drives the
+ * window), so the column draws `height` track cells + the corner = exactly the content box's height.
+ * A `null` thumb (content fits) draws a plain `│` track — visually just the border. Pure function of
+ * its props (rule 1); the thumb geometry is {@link ../components/DocPane.js computeScrollThumb}.
+ */
+export function PaneBorderRight({
+  height,
+  thumb,
+  color,
+}: {
+  readonly height: number;
+  readonly thumb: { readonly size: number; readonly offset: number } | null;
+  readonly color: string;
+}): React.JSX.Element {
+  const cells = Array.from({ length: Math.max(height, 0) }, (_, i) =>
+    thumb !== null && i >= thumb.offset && i < thumb.offset + thumb.size ? THUMB : TRACK,
+  );
+  return (
+    <Box flexDirection="column" width={1} flexShrink={0} minHeight={0} overflow="hidden">
+      {cells.map((glyph, i) => (
+        // biome-ignore lint/suspicious/noArrayIndexKey: fixed-length border cells are position-keyed.
+        <Text key={i} color={color}>
+          {glyph}
+        </Text>
+      ))}
+      <Text color={color}>╯</Text>
+    </Box>
+  );
+}

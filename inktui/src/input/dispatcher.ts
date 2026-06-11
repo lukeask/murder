@@ -445,6 +445,24 @@ export function dispatchKey(input: string, key: Key, ctx: DispatchContext): Disp
   if (panelKeymap === undefined) {
     return { layer: 'panel', handled: false };
   }
+  // A coalesced printable run (fast typing over a slow pty, tmux send-keys, paste) reaches Ink as
+  // ONE event whose `input` is the whole string — which a single-key chord can never match, so the
+  // run would be silently dropped. Split it and offer each char: two fast `j`s must scroll twice,
+  // and `g3` must start-then-extend the go-to-line capture (whose digit entries are pre-registered
+  // for exactly this — all chars match against the same per-event keymap snapshot). Safe here at the
+  // bottom layer only: modes (layer 0) and the chat field (layer 2) already had the full string —
+  // text input is never split.
+  if (input.length > 1) {
+    let handledAny = false;
+    for (const ch of input) {
+      const charIntent = matchKeymap(panelKeymap.keymap, ch, key);
+      if (charIntent !== null) {
+        panelKeymap.onIntent(charIntent);
+        handledAny = true;
+      }
+    }
+    return { layer: 'panel', handled: handledAny };
+  }
   const intent = matchKeymap(panelKeymap.keymap, input, key);
   if (intent === null) {
     return { layer: 'panel', handled: false };

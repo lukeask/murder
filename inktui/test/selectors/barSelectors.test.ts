@@ -54,6 +54,23 @@ describe('selectBottomBar', () => {
     expect(hints.find((h) => h.description === 'star')?.key).toBe('return');
   });
 
+  it('omits `hidden` entries (gesture sub-steps like the go-to-line digits) from the hints', () => {
+    const gestureKeymap: Keymap<'goto.start' | 'goto.digit.3'> = [
+      { chord: { input: 'g' }, intent: 'goto.start', description: 'go to line' },
+      {
+        chord: { input: '3' },
+        intent: 'goto.digit.3',
+        description: 'go-to-line digit',
+        hidden: true,
+      },
+    ];
+    const descriptions = selectBottomBar('plans', gestureKeymap, DEFAULT_BINDINGS).map(
+      (h) => h.description,
+    );
+    expect(descriptions).toContain('go to line');
+    expect(descriptions).not.toContain('go-to-line digit');
+  });
+
   it("shows a command-modified panel key's modifier, varying A-↔C- with the configured modifier", () => {
     // A panel that binds a key through the registry (e.g. star = the command modifier + `f`) must show
     // the modifier in its hint — a bare `f` would read as un-pressable. The prefix tracks the user's

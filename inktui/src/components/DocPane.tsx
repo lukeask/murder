@@ -38,6 +38,7 @@
 import { Box, type DOMElement, measureElement, Text } from 'ink';
 import { type JSX, memo, useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useAppStore, useAppStoreApi } from '../hooks/useAppStore.js';
+import { type GotoIntent, useGotoLine } from '../hooks/useGotoLine.js';
 import {
   useEffectiveFocus,
   useFocusRef,
@@ -175,13 +176,21 @@ export const StageDocPane = memo(function StageDocPane({
   const window = lines.slice(clamped, end);
   const thumb = computeScrollThumb(lines.length, clamped, effectiveHeight);
 
+  // `g<digits>` go-to-line (the shared gesture — see useGotoLine): each digit jumps live, putting the
+  // 1-based target line at the top of the window, clamped to the scroll range.
+  const jump = useCallback((line: number) => setScroll(Math.min(line - 1, maxScroll)), [maxScroll]);
+  const goto = useGotoLine(jump);
+
   // Scroll/close keymap (rule 5: declared, not handled). `alt+j`/`alt+k` are the global directional
   // layer (pane-to-pane), so they never reach here — plain `j`/`k`/arrows/`space` are this pane's.
   // Registered only while focused; memoised on the scroll bound + close action so the handler closes
-  // over a fresh `maxScroll` without re-registering every render.
-  const keymap: PanelKeymap<DocIntent> = useMemo(
+  // over a fresh `maxScroll` without re-registering every render. The goto entries are spread FIRST
+  // so a live `g` capture's digits/`enter`/`esc` win over the pane's own chords (`enter` must end the
+  // capture, not close the doc).
+  const keymap: PanelKeymap<DocIntent | GotoIntent> = useMemo(
     () => ({
       keymap: [
+        ...goto.entries,
         { chord: { key: { return: true } }, intent: 'close', description: 'close' },
         { chord: { key: { escape: true } }, intent: 'close', description: 'close' },
         { chord: { input: 'j' }, intent: 'scrollDown', description: 'scroll down' },
@@ -205,7 +214,15 @@ export const StageDocPane = memo(function StageDocPane({
           : []),
       ],
       onIntent(intent) {
-        switch (intent) {
+        // Goto intents are consumed by the gesture; any OTHER intent ends a live capture and then
+        // acts with its normal meaning (the useGotoLine contract). `handle` returning false proves
+        // the intent is the pane's own, so the narrowing cast below is sound.
+        if (goto.handle(intent)) {
+          return;
+        }
+        goto.clear();
+        const docIntent = intent as DocIntent;
+        switch (docIntent) {
           case 'close':
             // Close via the slice action (rule 3) — unmounting the pane re-homes focus to chat.
             closeAction();
@@ -226,83 +243,54 @@ export const StageDocPane = memo(function StageDocPane({
             void spawnPlanner(open.name);
             return;
           default:
-            return intent satisfies never;
+            return docIntent satisfies never;
         }
       },
     }),
     // `open` is per-mount constant (the Stage keys this pane by doc name), so it isn't a churn risk.
-    [maxScroll, effectiveHeight, closeAction, spawnPlanner, open],
+    [maxScroll, effectiveHeight, closeAction, spawnPlanner, open, goto],
   );
   usePanelKeymap(focusId, focused ? keymap : EMPTY_KEYMAP);
 
   return (
-    // `paddingRight={0}` reclaims the Pane's right gutter for the 1-char scrollbar column below, so net
-    // content width is unchanged versus a normal Pane.
+    // The right border doubles as the scroll track (the Pane's `scrollbar` prop) — no separate
+    // scrollbar column, so the content keeps the default right gutter.
     <Pane
       ref={ref}
       title={docPath(open)}
       focused={focused}
-      titleExtra={<Text dimColor>[doc]</Text>}
-      paddingRight={0}
+      titleExtra={
+        <>
+          <Text dimColor>[doc]</Text>
+          {/* Live `g<digits>` capture indicator — shows the line number as it is typed. */}
+          {goto.pending !== null && <Text color={theme.warning}>{` g${goto.pending}`}</Text>}
+        </>
+      }
+      scrollbar={{ height: effectiveHeight, thumb }}
     >
       {/* Fill box: sizes to the Pane's inner content area regardless of line count (flexGrow + clip),
-          so `measureElement` reports the room we HAVE, not the rows we drew (the Ledger pattern). The
-          text column grows; the 1-char scrollbar column is fixed-width and never shrinks. */}
-      <Box ref={boxRef} flexDirection="row" flexGrow={1} minHeight={0} overflow="hidden">
-        <Box flexDirection="column" flexGrow={1} minHeight={0} overflow="hidden">
-          {status === 'error' && error !== null && (
-            <Text color={theme.error}>{`error: ${error}`}</Text>
-          )}
-          {status === 'loading' && <Text dimColor>loading…</Text>}
-          {status === 'ready' && lines.length === 0 ? (
-            <Text dimColor>(empty document)</Text>
-          ) : (
-            window.map((line, index) => (
-              // biome-ignore lint/suspicious/noArrayIndexKey: body lines are position-keyed (markdown can repeat; the windowed index is the stable identity for the visible slice).
-              <Text key={clamped + index}>{line === '' ? ' ' : line}</Text>
-            ))
-          )}
-        </Box>
-        <Scrollbar height={effectiveHeight} thumb={thumb} />
+          so `measureElement` reports the room we HAVE, not the rows we drew (the Ledger pattern). */}
+      <Box ref={boxRef} flexDirection="column" flexGrow={1} minHeight={0} overflow="hidden">
+        {status === 'error' && error !== null && (
+          <Text color={theme.error}>{`error: ${error}`}</Text>
+        )}
+        {status === 'loading' && <Text dimColor>loading…</Text>}
+        {status === 'ready' && lines.length === 0 ? (
+          <Text dimColor>(empty document)</Text>
+        ) : (
+          window.map((line, index) => (
+            // biome-ignore lint/suspicious/noArrayIndexKey: body lines are position-keyed (markdown can repeat; the windowed index is the stable identity for the visible slice).
+            <Text key={clamped + index}>{line === '' ? ' ' : line}</Text>
+          ))
+        )}
       </Box>
     </Pane>
   );
 });
 
 /** A stable empty keymap for a blurred doc pane (so the registration identity doesn't churn). Typed
- * `PanelKeymap<DocIntent>` so the `focused ? keymap : EMPTY_KEYMAP` ternary is one type. */
-const EMPTY_KEYMAP: PanelKeymap<DocIntent> = { keymap: [], onIntent() {} };
-
-/**
- * The 1-char scrollbar column: a thumb (`█`) drawn over a dim `│` track. `thumb === null` (content
- * fits) renders nothing so the column collapses and the body keeps the full width. Otherwise the
- * column is exactly `height` rows tall, with `thumb.size` filled cells starting at `thumb.offset`.
- * Pure function of its props (rule 1) — the geometry is computed by {@link computeScrollThumb}.
- */
-export const Scrollbar = memo(function Scrollbar({
-  height,
-  thumb,
-}: {
-  readonly height: number;
-  readonly thumb: { size: number; offset: number } | null;
-}): JSX.Element | null {
-  if (thumb === null) {
-    return null;
-  }
-  const rows = Array.from({ length: height }, (_, i) =>
-    i >= thumb.offset && i < thumb.offset + thumb.size ? '█' : '│',
-  );
-  return (
-    <Box flexDirection="column" width={1} flexShrink={0}>
-      {rows.map((glyph, i) => (
-        // biome-ignore lint/suspicious/noArrayIndexKey: fixed-length row index is the cell's stable identity.
-        <Text key={i} dimColor={glyph === '│'}>
-          {glyph}
-        </Text>
-      ))}
-    </Box>
-  );
-});
+ * to the pane's full intent union so the `focused ? keymap : EMPTY_KEYMAP` ternary is one type. */
+const EMPTY_KEYMAP: PanelKeymap<DocIntent | GotoIntent> = { keymap: [], onIntent() {} };
 
 // ---------------------------------------------------------------------------
 // useDocView hook

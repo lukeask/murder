@@ -139,9 +139,13 @@ export function selectBottomBar(
   if (focused === CHAT_FOCUS || focusedKeymap === undefined) {
     return [...globals, helpHint];
   }
-  const panelHints = focusedKeymap.map((entry) => ({
-    key: hintKey(entry),
-    description: entry.description,
-  }));
+  // `hidden` entries (mechanical sub-steps of a gesture, e.g. go-to-line digits) stay matchable but
+  // are not hints — see keymap.ts.
+  const panelHints = focusedKeymap
+    .filter((entry) => entry.hidden !== true)
+    .map((entry) => ({
+      key: hintKey(entry),
+      description: entry.description,
+    }));
   return [...globals, ...panelHints, helpHint];
 }
