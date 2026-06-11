@@ -833,12 +833,15 @@ def mark_stale_conversations(conn: sqlite3.Connection) -> int:
     """Flip all in_progress conversations to stale.
 
     Called during startup reconciliation (1.g) — any conversation left
-    in_progress from a prior run has no live pane; mark it stale.
+    in_progress from a prior run has no live pane; mark it stale. Also
+    clears ``queued_message``: graceful stop clears it in on_session_end,
+    but a SIGKILL bypasses that path and would leave a stale queued badge
+    in the TUI after restart.
     Returns the number of rows updated.
     """
     cur = conn.execute(
-        "UPDATE conversations SET status = 'stale', updated_at = ?"
-        " WHERE status = 'in_progress'",
+        "UPDATE conversations SET status = 'stale', queued_message = NULL,"
+        " updated_at = ? WHERE status = 'in_progress'",
         (_now(),),
     )
     return cur.rowcount

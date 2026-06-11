@@ -28,6 +28,7 @@ from murder.state.persistence.conversation import (
     segment_to_block_kind,
     set_conversation_status,
     set_harness_session_id,
+    set_queued_message,
     update_live_block,
     upsert_conversation,
 )
@@ -574,6 +575,19 @@ def test_mark_stale_conversations_leaves_complete_alone(conn):
         "SELECT status FROM conversations WHERE conversation_id='conv-done'"
     ).fetchone()
     assert row["status"] == "complete"
+
+
+def test_mark_stale_conversations_clears_queued_message(conn):
+    """SIGKILL crash-survival: a queued message left by a hard-killed run
+    must not survive startup reconciliation as a stale badge."""
+    upsert_conversation(conn, conversation_id="conv-q", agent_id="a", status="in_progress")
+    set_queued_message(conn, "conv-q", "held while busy")
+    mark_stale_conversations(conn)
+    row = conn.execute(
+        "SELECT status, queued_message FROM conversations WHERE conversation_id='conv-q'"
+    ).fetchone()
+    assert row["status"] == "stale"
+    assert row["queued_message"] is None
 
 
 def test_mark_stale_conversations_returns_zero_when_nothing_to_do(conn):
