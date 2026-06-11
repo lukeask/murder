@@ -1,0 +1,15 @@
+# source: live tmux capture 2026-06-11, Claude Code v2.1.173 after `/model fable`
+ ▐▛███▜▌   Claude Code v2.1.173
+▝▜█████▛▘  Fable 5 with medium effort · Claude Pro
+  ▘▘ ▝▝    ~/Documents/code/murder
+
+ ▎ Fable 5 is here! Our newest model for complex, long-running work
+ ▎ Included in your plan limits until Jun 22, then switch to usage credits to continue.
+
+❯ /model fable
+  ⎿  Set model to Fable 5 and saved as your default for new sessions
+
+─────────────────────────────────────────────────────────
+❯
+─────────────────────────────────────────────────────────
+  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← for agents

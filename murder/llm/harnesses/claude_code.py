@@ -33,15 +33,17 @@ _MODEL_CAPTURE_DELAY_S = 0.6
 _MODEL_MENU_DELAY_S = 0.4
 _CC_EFFORT_ORDER = ("low", "medium", "high", "xhigh", "max")
 _CC_MODEL_LINE_RE = re.compile(
-    r"\b(?P<model>Opus|Sonnet|Haiku)\b(?:\s+\d+(?:\.\d+)*)?.*?"
+    r"\b(?P<model>Opus|Sonnet|Haiku|Fable)\b(?:\s+\d+(?:\.\d+)*)?.*?"
     r"\bwith\s+(?P<effort>low|medium|high|x\s*high|xhigh|max)\s+effort\b",
     re.IGNORECASE,
 )
 # Fallback: banner line "Haiku 4.5 · Claude Pro" without effort text. The
 # trailing " ·" anchors this to the banner/status line so a bare "Opus 4.x"
 # mentioned in conversation prose can't be misread as the active model.
+# Fable's banner version has no minor component ("Fable 5 · Claude Pro"),
+# hence the optional decimal part.
 _CC_BANNER_MODEL_RE = re.compile(
-    r"\b(?P<model>Opus|Sonnet|Haiku)\s+\d+\.\d+\s+·",
+    r"\b(?P<model>Opus|Sonnet|Haiku|Fable)\s+\d+(?:\.\d+)*\s+·",
     re.IGNORECASE,
 )
 _CC_EFFORT_STATUS_RE = re.compile(
