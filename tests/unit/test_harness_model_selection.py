@@ -435,6 +435,35 @@ def test_cc_model_picker_effort_max_parses():
     assert result.effort == "max"
 
 
+def test_cc_fable_banner_reports_model_and_effort():
+    """Fable banner ("Fable 5 with medium effort · Claude Pro") must parse.
+
+    Regression: the banner regexes only knew Opus/Sonnet/Haiku, so after
+    `/model fable` the post-switch verification in set_model() saw no model,
+    returned False, and the spawn was failed even though the switch succeeded.
+    """
+    adapter = ClaudeCodeAdapter()
+    result = adapter.parse_active_model_state(_pane("cc_fable_banner.txt"))
+    assert result is not None
+    assert result.model == "fable"
+    assert result.effort == "medium"
+
+
+def test_cc_fable_banner_without_effort_text_reports_model():
+    """Banner-only fallback must match Fable's single-digit version ("Fable 5 ·")."""
+    adapter = ClaudeCodeAdapter()
+    result = adapter.parse_active_model_state("▝▜█▛▘  Fable 5 · Claude Pro")
+    assert result is not None
+    assert result.model == "fable"
+
+
+def test_cc_fable_promo_prose_is_not_a_model():
+    """The "Fable 5 is here!" promo line must not be misread as the active model."""
+    adapter = ClaudeCodeAdapter()
+    pane = " ▎ Fable 5 is here! Our newest model for complex, long-running work"
+    assert adapter.parse_active_model_state(pane) is None
+
+
 def test_cc_advisor_active_idle_reports_model_and_effort():
     """Advisor-active CC pane (status bar changed) still reports model + effort."""
     adapter = ClaudeCodeAdapter()
