@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -20,6 +21,13 @@ from murder.llm.harnesses.base import HarnessAdapter
 
 if TYPE_CHECKING:
     from murder.app.service.runtime_scope import AgentLifecycleHost as Runtime
+
+LOGGER = logging.getLogger(__name__)
+
+# After this many *consecutive* poll-loop failures, publish one ErrorEvent so
+# the operator sees a stuck planner relay. The loop keeps running; a clean tick
+# resets the counter and re-arms the escalation.
+POLL_FAILURE_ESCALATION_THRESHOLD = 5
 
 
 @dataclass
@@ -61,6 +69,7 @@ class PlanningHandler(Daemon):
         # ticket's answer once.
         self._routed: set[str] = set()
         self._log_path: Path | None = None
+        self._consecutive_poll_failures = 0
 
     async def start(self, brief: str, ctx: dict[str, Any]) -> None:
         del brief, ctx
@@ -104,11 +113,46 @@ class PlanningHandler(Daemon):
                 await self.tick()
             except asyncio.CancelledError:
                 raise
-            except Exception:
+            except Exception as exc:
                 # A transient planner pane read failure should not terminate
-                # the handler. relay_ask() will surface dead sessions.
-                pass
+                # the handler; relay_ask() will surface dead sessions. But a
+                # *sustained* failure run is now visible (logged every tick and
+                # escalated once on the bus) instead of silently swallowed.
+                await self._record_poll_failure(exc)
+            else:
+                self._consecutive_poll_failures = 0
             await asyncio.sleep(self.config.poll_interval_s)
+
+    async def _record_poll_failure(self, exc: Exception) -> bool:
+        """Account one poll-loop failure. Returns True iff an ErrorEvent was published."""
+        self._consecutive_poll_failures += 1
+        LOGGER.warning(
+            "planning_handler %s poll tick failed (%d consecutive): %s",
+            self.plan_name,
+            self._consecutive_poll_failures,
+            exc,
+        )
+        if self._consecutive_poll_failures != POLL_FAILURE_ESCALATION_THRESHOLD:
+            # Only escalate on the threshold-crossing tick; a reset re-arms it.
+            return False
+        if not (self.runtime.bus and self.runtime.run_id):
+            return False
+        from murder.bus import ErrorEvent
+
+        await self.runtime.bus.publish(
+            ErrorEvent(
+                run_id=self.runtime.run_id,
+                agent_id=self.id,
+                role=self.role,
+                ticket_id=None,
+                message=(
+                    f"planning_handler for plan {self.plan_name} has failed "
+                    f"{self._consecutive_poll_failures} consecutive poll ticks: {exc}"
+                ),
+                recoverable=True,
+            )
+        )
+        return True
 
     async def stop(self, *, failed: bool = False, kill_session: bool = True) -> None:
         del kill_session

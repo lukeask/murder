@@ -448,8 +448,23 @@ class ServiceHost:
         self._projection_poll_task = asyncio.create_task(
             self._run_projection_poll_loop(), name="transcript-projection-poll"
         )
-        with contextlib.suppress(Exception):
+        try:
             await self.orchestrator.start_question_listener()
+        except Exception as exc:
+            LOGGER.error("start_question_listener failed: %s", exc, exc_info=True)
+            if self.runtime is not None and self.runtime.bus and self.runtime.run_id:
+                from murder.bus import ErrorEvent
+
+                with contextlib.suppress(Exception):
+                    await self.runtime.bus.publish(
+                        ErrorEvent(
+                            run_id=str(self.runtime.run_id),
+                            agent_id="system",
+                            ticket_id=None,
+                            message=f"start_question_listener failed: {exc}",
+                            recoverable=False,
+                        )
+                    )
         session = write_service_session(self.repo_root, self.socket_path)
         self._service_session_name = session.name
 

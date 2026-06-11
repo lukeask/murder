@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import logging
 import re
 from collections.abc import Awaitable, Callable
 from datetime import datetime
@@ -22,6 +23,8 @@ from murder.state.persistence.tickets import (
 from murder.state.storage.paths import ticket_md, tickets_dir
 from murder.state.storage.worktrees import prune_terminal_crow_worktree
 from murder.work.tickets import carve, lifecycle
+
+LOGGER = logging.getLogger(__name__)
 
 _TNUM_RE = re.compile(r"^t(\d+)$")
 
@@ -115,8 +118,13 @@ class TicketOps:
             )
             try:
                 _db_insert_ticket(conn, ticket)
-            except Exception:
-                pass  # TicketSync may have raced us
+            except Exception as exc:
+                # TicketSync may have raced us between the SELECT and INSERT.
+                LOGGER.debug(
+                    "quick_create_ticket insert raced TicketSync for %s: %s",
+                    ticket_id,
+                    exc,
+                )
         # Sync method (no surrounding coroutine): use the sync emit_snapshot
         # choke point. New ticket -> the schedule snapshot's planned bucket
         # changed. (TicketSync would also emit on its next reconcile, but this

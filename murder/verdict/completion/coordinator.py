@@ -130,11 +130,12 @@ class CompletionCoordinator:
             return DoneHandleResult(completed=True)
 
         reprompt_msgs: list[str] = []
+        ticket_failed = False
         for name, result in failures:
             n = get_attempts(conn, ticket_id, name)
             bump_attempts(conn, ticket_id, name)
             owner = resolution_policy(name, n)
-            await self._dispatch(
+            ticket_failed = await self._dispatch(
                 owner,
                 ticket_id=ticket_id,
                 check_name=name,
@@ -142,8 +143,12 @@ class CompletionCoordinator:
                 crow_session=crow_session,
                 reprompt_msgs=reprompt_msgs,
             )
+            if ticket_failed:
+                # The ticket is now terminal. Stop dispatching remaining checks
+                # and never send a reprompt to a crow whose ticket has failed.
+                break
 
-        if reprompt_msgs:
+        if not ticket_failed and reprompt_msgs:
             crow = self._rt.get_crow(ticket_id)
             if crow is not None:
                 combined = "The following checks failed. Please fix them:\n\n" + "\n\n".join(reprompt_msgs)
@@ -163,7 +168,8 @@ class CompletionCoordinator:
         result: CheckResult | None,
         crow_session: str,
         reprompt_msgs: list[str],
-    ) -> None:
+    ) -> bool:
+        """Dispatch one resolution action. Returns True iff the ticket was failed."""
         if owner == Owner.REPROMPT:
             if result is not None:
                 msg = result.hint or result.message
@@ -176,7 +182,7 @@ class CompletionCoordinator:
 
         elif owner == Owner.ASK_USER:
             if self._rt.db is None:
-                return
+                return False
             reason = self._format_failure_reason(check_name, result)
             await self._escalate_to_user(ticket_id, reason)
             await self._block_ticket(ticket_id)
@@ -184,6 +190,9 @@ class CompletionCoordinator:
         elif owner == Owner.FAIL_TICKET:
             reason = self._format_failure_reason(check_name, result)
             await self._fail_ticket(ticket_id, reason)
+            return True
+
+        return False
 
     async def _ask_planner(
         self,
