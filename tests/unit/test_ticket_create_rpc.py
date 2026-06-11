@@ -102,31 +102,18 @@ async def _noop(*_a: Any, **_k: Any) -> dict[str, Any]:
     return {"handled": True}
 
 
+class _StubOrch:
+    """Stub orchestrator: only ``quick_create_ticket`` is wired; rest are noops."""
+
+    def __init__(self, quick_create) -> None:
+        self.quick_create_ticket = quick_create
+
+    def __getattr__(self, _name: str):
+        return _noop
+
+
 def _make_worker(quick_create) -> OrchestratorCommandWorker:
-    return OrchestratorCommandWorker(
-        kickoff_ready=_noop,
-        apply_carve_ready=_noop,
-        capture_submit=_noop,
-        retry_failed=_noop,
-        set_schedule_at=_noop,
-        update_metadata=_noop,
-        force_status=_noop,
-        note_ensure=_noop,
-        note_retire=_noop,
-        send_agent_message=_noop,
-        send_agent_key=_noop,
-        refresh_agent_transcript=_noop,
-        interrupt_agent=_noop,
-        stop_agent=_noop,
-        rename_rogue=_noop,
-        scaffold_plan=_noop,
-        rename_plan=_noop,
-        deprecate_plan=_noop,
-        quick_kick_ticket=_noop,
-        quick_create_ticket=quick_create,
-        spawn_rogue=_noop,
-        reconfigure_collaborator=_noop,
-    )
+    return OrchestratorCommandWorker(_StubOrch(quick_create))
 
 
 def _create_command(title: Any) -> CommandEvent:

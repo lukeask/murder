@@ -50,30 +50,13 @@ async def test_worker_forwards_full_spawn_payload_including_effort() -> None:
     async def _noop(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
         return {"handled": True}
 
-    worker = OrchestratorCommandWorker(
-        kickoff_ready=_noop,
-        apply_carve_ready=_noop,
-        capture_submit=_noop,
-        retry_failed=_noop,
-        set_schedule_at=_noop,
-        update_metadata=_noop,
-        force_status=_noop,
-        note_ensure=_noop,
-        note_retire=_noop,
-        send_agent_message=_noop,
-        send_agent_key=_noop,
-        refresh_agent_transcript=_noop,
-        interrupt_agent=_noop,
-        stop_agent=_noop,
-        rename_rogue=_noop,
-        scaffold_plan=_noop,
-        rename_plan=_noop,
-        deprecate_plan=_noop,
-        quick_kick_ticket=_noop,
-        quick_create_ticket=lambda _title: {"handled": True},
-        spawn_rogue=spy_spawn_rogue,
-        reconfigure_collaborator=_noop,
-    )
+    class _StubOrch:
+        spawn_rogue_command = staticmethod(spy_spawn_rogue)
+
+        def __getattr__(self, _name: str):
+            return _noop
+
+    worker = OrchestratorCommandWorker(_StubOrch())
     ctx = WorkerCtx(repo_root=Path("."))
 
     result = await worker.on_command(
