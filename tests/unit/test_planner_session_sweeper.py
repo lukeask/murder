@@ -112,6 +112,28 @@ def test_planning_handler_follows_same_rules():
     assert _ids(rows) == {"planning_handler-p6"}
 
 
+def test_iso_t_timestamps_compare_correctly():
+    """Real rows store ISO-T timestamps ('2026-06-11T17:00:00'); SQLite's
+    datetime('now', ...) is space-separated. Raw string comparison would make
+    same-day anchors never 'old' ('T' > ' '); the predicate must normalize."""
+    conn = _db()
+    # Anchor 2 hours ago in ISO-T form → older than 30 min → sweepable.
+    old_iso_t = conn.execute(
+        "SELECT strftime('%Y-%m-%dT%H:%M:%S', datetime('now', '-2 hours')) AS t"
+    ).fetchone()["t"]
+    _insert_plan(conn, "p9", "superseded", updated_at=old_iso_t)
+    _insert_agent(conn, "planner-p9", "planner", "running", "planner-p9-sess")
+    # Anchor just now in ISO-T form → NOT sweepable.
+    now_iso_t = conn.execute(
+        "SELECT strftime('%Y-%m-%dT%H:%M:%S', 'now') AS t"
+    ).fetchone()["t"]
+    _insert_plan(conn, "p10", "superseded", updated_at=now_iso_t)
+    _insert_agent(conn, "planner-p10", "planner", "running", "planner-p10-sess")
+
+    rows = list_orphaned_planner_sessions(conn, older_than_minutes=30)
+    assert _ids(rows) == {"planner-p9"}
+
+
 def test_null_session_rows_never_returned():
     conn = _db()
     _insert_agent(conn, "planner-p8", "planner", "dead", None)

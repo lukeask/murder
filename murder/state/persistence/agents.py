@@ -237,7 +237,7 @@ def list_stale_done_crow_sessions(
          WHERE a.role = 'crow'
            AND a.session IS NOT NULL
            AND t.status IN ('done', 'failed')
-           AND t.updated_at < datetime('now', ? || ' minutes')
+           AND datetime(t.updated_at) < datetime('now', ? || ' minutes')
         """,
         (f"-{older_than_minutes}",),
     ).fetchall()
@@ -310,8 +310,11 @@ def list_orphaned_planner_sessions(
             out.append({"agent_id": agent_id, "session": row["session"], "status": status})
             continue
 
+        # datetime(?) normalizes our ISO-T timestamps ('2026-06-11T17:00:00')
+        # to SQLite's space-separated form so the comparison is not defeated
+        # by 'T' sorting above ' ' on same-day values.
         older = conn.execute(
-            "SELECT ? < datetime('now', ? || ' minutes') AS is_old",
+            "SELECT datetime(?) < datetime('now', ? || ' minutes') AS is_old",
             (age_anchor, f"-{older_than_minutes}"),
         ).fetchone()
         if older is not None and older["is_old"]:
