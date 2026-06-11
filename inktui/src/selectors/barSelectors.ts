@@ -5,7 +5,7 @@
  * labels, the hint list) is a tested pure transform, not inline JSX logic.
  */
 
-import type { ResolvedBindings } from '../input/bindings.js';
+import { chordLabel, type ResolvedBindings } from '../input/bindings.js';
 import { CHAT_FOCUS, type FocusId } from '../input/focusStore.js';
 import type { KeyChord, Keymap } from '../input/keymap.js';
 import { PANELS, type PanelId } from '../input/panels.js';
@@ -55,10 +55,10 @@ export interface BottomBarHint {
 
 /** The modifier prefix for the digit/nav hints, derived from the resolved bindings so the footer
  * tracks the user's modifier choice. Reads `global.focusChat`'s label (always present) and keeps just
- * its prefix (`M-`, `C-`, or `M-/C-` under both). */
+ * its prefix (`A-`, `C-`, or `A-/C-` under both). */
 function modifierPrefix(bindings: ResolvedBindings): string {
-  // The label is e.g. `M-space`; strip the key part to get the prefix(es). Under `both` it is
-  // `M-space/C-space` → `M-/C-`.
+  // The label is e.g. `A-space`; strip the key part to get the prefix(es). Under `both` it is
+  // `A-space/C-space` → `A-/C-`.
   return bindings
     .label('global.focusChat')
     .split('/')
@@ -87,15 +87,15 @@ function firstChord(chord: KeyChord | readonly KeyChord[]): KeyChord {
   return chord as KeyChord;
 }
 
-/** Render a chord's key for the hint bar: prefer its printable char, else name the special key. */
+/**
+ * Render a chord's key for the hint bar via the shared {@link chordLabel} — so a command-modified
+ * panel key (e.g. star = alt+f) shows its modifier prefix (`A-f` / `C-f`, varying with the configured
+ * modifier) instead of a bare, un-pressable `f`, while a plain key (`j`, Enter) reads as itself. One
+ * label rule for the panel hints and the globals, so the focused pane's keys never display a modifier
+ * the bar's nav/chat hints don't.
+ */
 function hintKey(entry: Keymap<string>[number]): string {
-  const chord = firstChord(entry.chord);
-  if (chord.input !== undefined) {
-    return chord.input;
-  }
-  // A key-only chord (e.g. Enter): name the first listed special flag.
-  const flags = chord.key === undefined ? [] : Object.keys(chord.key);
-  return flags[0] ?? '?';
+  return chordLabel(firstChord(entry.chord));
 }
 
 /**

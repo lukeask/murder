@@ -15,8 +15,8 @@ describe('buildHelpGroups', () => {
     const ctrlGroups = buildHelpGroups(resolveBindings('ctrl', true, {}), registry);
     const altGlobal = altGroups.find((g) => g.title === 'Global');
     const ctrlGlobal = ctrlGroups.find((g) => g.title === 'Global');
-    // The spawn bind reads M-s under alt, C-s under ctrl.
-    expect(altGlobal?.entries.find((e) => e.description === 'spawn')?.key).toBe('M-s');
+    // The spawn bind reads A-s under alt, C-s under ctrl.
+    expect(altGlobal?.entries.find((e) => e.description === 'spawn')?.key).toBe('A-s');
     expect(ctrlGlobal?.entries.find((e) => e.description === 'spawn')?.key).toBe('C-s');
     // The help bind is the plain ? under both.
     expect(altGlobal?.entries.find((e) => e.description === 'help')?.key).toBe('?');

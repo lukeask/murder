@@ -35,9 +35,9 @@ describe("resolveBindings — alt (today's default)", () => {
     expect(b.isCommandModified(makeKey())).toBe(false);
   });
 
-  it('labels read as M-<key> (space spelled out)', () => {
-    expect(b.label('panel.star')).toBe('M-f');
-    expect(b.label('global.focusChat')).toBe('M-space');
+  it('labels read as A-<key> (alt prefix, space spelled out)', () => {
+    expect(b.label('panel.star')).toBe('A-f');
+    expect(b.label('global.focusChat')).toBe('A-space');
   });
 
   it('DEFAULT_BINDINGS equals resolveBindings(alt,false,{})', () => {
@@ -62,7 +62,7 @@ describe('resolveBindings — ctrl', () => {
     expect(b.chordsFor('panel.star')).toEqual([{ input: 'f', key: { meta: true } }]);
     expect(b.matches('panel.star', 'f', makeKey({ meta: true }))).toBe(true);
     expect(b.matches('panel.star', 'f', makeKey({ ctrl: true }))).toBe(false);
-    expect(b.label('panel.star')).toBe('M-f');
+    expect(b.label('panel.star')).toBe('A-f');
   });
 });
 
@@ -77,14 +77,14 @@ describe('resolveBindings — both', () => {
     expect(b.matches('panel.star', 'f', makeKey({ ctrl: true }))).toBe(true);
     expect(b.isCommandModified(makeKey({ meta: true }))).toBe(true);
     expect(b.isCommandModified(makeKey({ ctrl: true }))).toBe(true);
-    expect(b.label('panel.star')).toBe('M-f/C-f');
+    expect(b.label('panel.star')).toBe('A-f/C-f');
   });
 
   it('collapses to alt-only when ctrl is unavailable', () => {
     const b = resolveBindings('both', false, {});
     expect(b.chordsFor('panel.star')).toEqual([{ input: 'f', key: { meta: true } }]);
     expect(b.matches('panel.star', 'f', makeKey({ ctrl: true }))).toBe(false);
-    expect(b.label('panel.star')).toBe('M-f');
+    expect(b.label('panel.star')).toBe('A-f');
   });
 });
 
@@ -94,7 +94,7 @@ describe('resolveBindings — overrides', () => {
     expect(b.chordsFor('panel.star')).toEqual([{ input: 'b', key: { meta: true } }]);
     expect(b.matches('panel.star', 'b', makeKey({ meta: true }))).toBe(true);
     expect(b.matches('panel.star', 'f', makeKey({ meta: true }))).toBe(false);
-    expect(b.label('panel.star')).toBe('M-b');
+    expect(b.label('panel.star')).toBe('A-b');
   });
 
   it('an override expands under both too', () => {
@@ -121,7 +121,7 @@ describe('ACTIONS table', () => {
   it('global.keyHelp is a plain ? — modifier-independent and labelled as the bare key', () => {
     const alt = resolveBindings('alt', false, {});
     const ctrl = resolveBindings('ctrl', true, {});
-    // A plain binding ignores the modifier: ? under both alt and ctrl, no M-/C- prefix.
+    // A plain binding ignores the modifier: ? under both alt and ctrl, no A-/C- prefix.
     expect(alt.label('global.keyHelp')).toBe('?');
     expect(ctrl.label('global.keyHelp')).toBe('?');
     expect(alt.matches('global.keyHelp', '?', makeKey())).toBe(true);
@@ -130,9 +130,9 @@ describe('ACTIONS table', () => {
 
   it('the item-9 super-chords are command actions (track the modifier)', () => {
     const alt = resolveBindings('alt', false, {});
-    expect(alt.label('global.cycleTargetPrev')).toBe('M-h');
-    expect(alt.label('global.cycleTargetNext')).toBe('M-l');
-    expect(alt.label('global.toggleTargetPane')).toBe('M-w');
+    expect(alt.label('global.cycleTargetPrev')).toBe('A-h');
+    expect(alt.label('global.cycleTargetNext')).toBe('A-l');
+    expect(alt.label('global.toggleTargetPane')).toBe('A-w');
     expect(alt.matches('global.toggleTargetPane', 'w', makeKey({ meta: true }))).toBe(true);
     const ctrl = resolveBindings('ctrl', true, {});
     expect(ctrl.label('global.toggleTargetPane')).toBe('C-w');
