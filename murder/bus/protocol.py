@@ -291,6 +291,23 @@ class ConversationBlockEvent(_BaseEvent):
     block: dict[str, Any]
 
 
+class ConversationStateEvent(_BaseEvent):
+    """Content-bearing conversation liveness push event.
+
+    Companion to ``ConversationBlockEvent`` on the same additive-event-kind
+    seam: emitted whenever a conversation's parsed harness UI state
+    (``working`` / ``awaiting_input`` / ``awaiting_approval``) or its queued
+    -but-undelivered user message changes. Key-only ``StateSnapshotEvent``
+    semantics do not fit here: the TUI renders the queued line / awaiting
+    badge live and there is no snapshot entity for conversations.
+    """
+
+    type: Literal["conversation.state"] = "conversation.state"
+    conversation_id: str
+    live_state: str | None = None
+    queued_message: str | None = None
+
+
 class TmuxFrameEvent(_BaseEvent):
     """Raw ANSI frame from tmux for the focused pane.
 
@@ -330,6 +347,7 @@ BusEvent = Annotated[
     | SchedulerDecisionEvent
     | UsageResetEvent
     | ConversationBlockEvent
+    | ConversationStateEvent
     | TmuxFrameEvent,
     Field(discriminator="type"),
 ]
@@ -549,6 +567,7 @@ __all__ = [
     "SchedulerDecisionEvent",
     "UsageResetEvent",
     "ConversationBlockEvent",
+    "ConversationStateEvent",
     "TmuxFrameEvent",
     "BusEvent",
     "AgentEvent",

@@ -205,6 +205,20 @@ export interface ConversationBlockEvent extends BaseEvent {
   block: Record<string, unknown>;
 }
 
+/** Content-bearing conversation liveness push. Companion to {@link ConversationBlockEvent} on the
+ * same additive-event-kind seam (mirrors `ConversationStateEvent` in `murder/bus/protocol.py`):
+ * emitted whenever a conversation's parsed harness UI state (`working` / `awaiting_input` /
+ * `awaiting_approval`) or its queued-but-undelivered user message changes. The conversations slice
+ * stores both per agent so the chat input can render the queued line + awaiting badge live. */
+export interface ConversationStateEvent extends BaseEvent {
+  type: 'conversation.state';
+  conversation_id: string;
+  /** Parsed harness UI state at last projection: working | awaiting_input | awaiting_approval. */
+  live_state: string | null;
+  /** A user message accepted while the harness was busy, held for idle delivery; null when none. */
+  queued_message: string | null;
+}
+
 /**
  * Raw ANSI frame from tmux for the focused pane. Streamed **only** while the tmux fullscreen mode
  * is active (`ctrl+y`); the subscription is opened on enter and closed on exit (no standing cost).
@@ -241,6 +255,7 @@ export type BusEvent =
   | SchedulerDecisionEvent
   | UsageResetEvent
   | ConversationBlockEvent
+  | ConversationStateEvent
   | TmuxFrameEvent;
 
 /** The string literal `type` discriminant of every {@link BusEvent}. */

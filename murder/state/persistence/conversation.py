@@ -221,6 +221,37 @@ def set_conversation_status(
     )
 
 
+def set_queued_message(
+    conn: sqlite3.Connection,
+    conversation_id: str,
+    message: str | None,
+) -> None:
+    """Record (or clear, with ``None``) the busy-crow queued user message.
+
+    DB-owns-runtime: the queued line the TUI renders survives a service or
+    client restart because it lives here, not in agent memory alone.
+    """
+    conn.execute(
+        "UPDATE conversations SET queued_message = ?, updated_at = ? WHERE conversation_id = ?",
+        (message, _now(), conversation_id),
+    )
+
+
+def get_queued_message(
+    conn: sqlite3.Connection,
+    conversation_id: str,
+) -> str | None:
+    """Read the queued-but-undelivered user message for a conversation."""
+    row = conn.execute(
+        "SELECT queued_message FROM conversations WHERE conversation_id = ?",
+        (conversation_id,),
+    ).fetchone()
+    if row is None:
+        return None
+    value = row["queued_message"]
+    return str(value) if isinstance(value, str) and value else None
+
+
 def set_harness_session_id(
     conn: sqlite3.Connection,
     conversation_id: str,
@@ -247,6 +278,20 @@ def _seal_live_block(conn: sqlite3.Connection, conversation_id: str) -> None:
         "UPDATE conversation_blocks SET sealed = 1 WHERE conversation_id = ? AND sealed = 0",
         (conversation_id,),
     )
+
+
+def _block_is_live(kind: str, seg: dict[str, Any]) -> bool:
+    """Whether a freshly written block stays mutable (sealed = 0).
+
+    Two block kinds are live: an intermediate assistant turn (it grows as the
+    pane streams), and an UNANSWERED choice_prompt (the dialog cursor /
+    checkboxes move as the user navigates — the chat-input takeover renders
+    them from block-updated events, so the row must accept in-place updates
+    until the prompt resolves to ``answered``).
+    """
+    if kind == "assistant_intermediate":
+        return True
+    return kind == "choice_prompt" and not seg.get("answered")
 
 
 def append_block(
@@ -279,9 +324,10 @@ def append_block(
     ).fetchone()
     ordinal = int(row["next_ord"]) if row is not None else 0
 
-    # final-phase assistant blocks and all non-assistant blocks seal immediately;
-    # intermediate assistant blocks stay live (may be updated in place by merge).
-    sealed = 0 if kind == "assistant_intermediate" else 1
+    # Live blocks (see _block_is_live: streaming assistant turns + unanswered
+    # choice prompts) stay unsealed for in-place merge updates; everything else
+    # seals immediately.
+    sealed = 0 if _block_is_live(kind, seg) else 1
 
     conn.execute(
         """
@@ -324,7 +370,7 @@ def update_live_block(
     """
     ts = received_at or _now()
     kind = segment_to_block_kind(seg)
-    sealed = 0 if kind == "assistant_intermediate" else 1
+    sealed = 0 if _block_is_live(kind, seg) else 1
     cur = conn.execute(
         """
         SELECT id FROM conversation_blocks

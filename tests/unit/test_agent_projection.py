@@ -66,9 +66,13 @@ def test_rogue_project_once_persists_assistant_reply(
     kinds = {b.kind for b in blocks}
     assert kinds & {"assistant_final", "assistant_intermediate"}, kinds
     bus.publish.assert_awaited()
-    event = bus.publish.await_args.args[0]
-    assert isinstance(event, ConversationBlockEvent)
-    assert event.conversation_id == "claude-rogue-testingpostworker"
+    # The tick publishes block events for the parsed content, then a trailing
+    # conversation.state push (live_state/queued pair) — assert the block event
+    # among all published events rather than positionally.
+    events = [call.args[0] for call in bus.publish.await_args_list]
+    block_events = [e for e in events if isinstance(e, ConversationBlockEvent)]
+    assert block_events, events
+    assert block_events[-1].conversation_id == "claude-rogue-testingpostworker"
 
 
 def test_project_once_is_noop_without_producer(fake_tmux: FakeTmux, tmp_path: Path) -> None:

@@ -1,0 +1,40 @@
+claude --model haiku
+luke@monsoon:~/Documents/code/testingmurderharness $ claude --model haiku
+ ▐▛███▜▌   Claude Code v2.1.173
+▝▜█████▛▘  Haiku 4.5 · Claude Pro
+  ▘▘ ▝▝    ~/Documents/code/testingmurderharness
+
+ ▎ Meet Fable 5, our newest model for complex, long-running work. Try anytime with /model.
+ ▎ Included in your plan limits until Jun 22, then switch to usage credits to continue.
+
+❯ Use the AskUserQuestion tool to ask me ONE single-select question: 'Which color?' with options Red, Green, Blue,
+  Yellow (each with a short description). Do not answer it yourself.
+
+● User declined to answer questions
+  ⎿  · Which color? (Red / Green / Blue / Yellow)
+
+❯ Now use the AskUserQuestion tool to ask me ONE multi-select question (multiSelect true): 'Which toppings?' with
+  options Cheese, Mushroom, Olive, Pepper (each with a short description). Do not answer it yourself.
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+←  ☒ Toppings  ✔ Submit  →
+
+Which toppings?
+
+  1. [ ] Cheese
+  Creamy and savory
+❯ 2. [✔] Mushroom
+  Earthy and umami
+  3. [ ] Olive
+  Briny and tangy
+  4. [ ] Pepper
+  Spicy and sharp
+  5. [ ] Type something
+     Submit
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  6. Chat about this
+
+Enter to select · ↑/↓ to navigate · Esc to cancel
+
+
+
+

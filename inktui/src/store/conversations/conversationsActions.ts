@@ -29,11 +29,11 @@
 
 import type { StoreApi } from 'zustand';
 import type { BusClient } from '../../bus/BusClient.js';
-import type { ConversationBlockEvent } from '../../bus/protocol.js';
+import type { ConversationBlockEvent, ConversationStateEvent } from '../../bus/protocol.js';
 import { submitCommand } from '../commandSubmit.js';
 import type { AppStore } from '../store.js';
 import { toastStore } from '../toast/toastStore.js';
-import { type ConversationBlock, parseBlock } from './conversationsSlice.js';
+import { type ConversationBlock, type ConversationMeta, parseBlock } from './conversationsSlice.js';
 
 /**
  * Declares the conversations read RPC via declaration merging rather than editing the frozen C1 bus
@@ -85,6 +85,8 @@ export interface ConversationSummaryDto {
   harness_session_id: string | null;
   live_state: string | null;
   condensed: string | null;
+  /** A user message accepted while the harness was busy, held for idle delivery (or null). */
+  queued_message?: string | null;
   status: string;
   blocks: readonly ConversationBlockSummaryDto[];
 }
@@ -143,6 +145,32 @@ export interface ConversationsActions {
   applyBlock(event: ConversationBlockEvent): void;
 
   /**
+   * Apply a `ConversationStateEvent` to the per-agent meta map. Pure `setState` — no bus call.
+   * Called by the `store.ts` subscription on each `conversation.state` event. Ref-swaps only the
+   * affected agent's meta entry (granularity contract, same as `applyBlock`).
+   */
+  applyState(event: ConversationStateEvent): void;
+
+  /**
+   * Forward one raw key to the agent's harness pane via the `agent.send_key` orchestrator command.
+   * The chat input's multiple-choice takeover uses this to drive a live CC choice dialog (arrows /
+   * space / digits / Enter / Esc) — the dialog's ground truth stays in the pane; the parser's
+   * `choice_prompt` block updates reflect the move on the next projection tick. `literal=true`
+   * sends the key as literal text (printable chars for the dialog's inline "type something" field);
+   * `literal=false` sends a tmux key name (`Up`, `Down`, `Enter`, `Escape`, `Space`, `BSpace`).
+   * Fire-and-forget from the UI perspective (errors are swallowed like `send`).
+   */
+  sendKey(agentId: string, key: string, literal: boolean): Promise<void>;
+
+  /**
+   * Interrupt the agent's harness (the `agent.interrupt` orchestrator command). Used by the chat
+   * input when a queued message is pending and the user presses Enter: the interrupt stops the
+   * current turn, the pane goes input-ready, and the service delivers the queued message on the
+   * next projection tick ("send now"). Fire-and-forget; surfaces a toast on submit.
+   */
+  interrupt(agentId: string): Promise<void>;
+
+  /**
    * Explicitly set the active chat pane. Called by the CrowChatPanel when the user navigates
    * between panes or the "keep pane active" path fires. Does not call the bus.
    * C11 seam: this slot is here for ctrl+s "keep pane active"; the full starring/prefs system
@@ -178,15 +206,21 @@ export function createConversationsActions(
         // for `conversation.block` events). `parseBlock` applies to each ConversationBlockSummary
         // row unchanged — the `id`/`payload` shape is identical to the event block shape.
         const parsed: Record<string, readonly ConversationBlock[]> = {};
+        const meta: Record<string, ConversationMeta> = {};
         for (const conv of reply.conversations) {
           parsed[conv.agent_id] = conv.blocks.map((b) =>
             parseBlock(b as unknown as Record<string, unknown>),
           );
+          meta[conv.agent_id] = {
+            liveState: conv.live_state ?? null,
+            queuedMessage: conv.queued_message ?? null,
+          };
         }
         store.setState((state) => ({
           conversations: {
             ...state.conversations,
             transcripts: { ...state.conversations.transcripts, ...parsed },
+            meta: { ...state.conversations.meta, ...meta },
           },
         }));
       } catch {
@@ -269,6 +303,55 @@ export function createConversationsActions(
           },
         };
       });
+    },
+
+    applyState(event: ConversationStateEvent): void {
+      const agentId = event.agent_id;
+      const next: ConversationMeta = {
+        liveState: event.live_state ?? null,
+        queuedMessage: event.queued_message ?? null,
+      };
+      store.setState((state) => {
+        const prev = state.conversations.meta[agentId];
+        // Identity-preserve when nothing changed so memoised consumers skip re-render.
+        if (
+          prev !== undefined &&
+          prev.liveState === next.liveState &&
+          prev.queuedMessage === next.queuedMessage
+        ) {
+          return state;
+        }
+        return {
+          conversations: {
+            ...state.conversations,
+            meta: { ...state.conversations.meta, [agentId]: next },
+          },
+        };
+      });
+    },
+
+    async sendKey(agentId: string, key: string, literal: boolean): Promise<void> {
+      try {
+        await submitCommand(bus, 'agent.send_key', {
+          agent_id: agentId,
+          key,
+          literal,
+          enter: false,
+        });
+      } catch (error: unknown) {
+        // Fire-and-forget, same policy as send(): the pane mirror shows the dialog's true state.
+        void error;
+      }
+    },
+
+    async interrupt(agentId: string): Promise<void> {
+      try {
+        toastStore.getState().push('interrupt → queued message will send', { ttlMs: 2500 });
+        await submitCommand(bus, 'agent.interrupt', { agent_id: agentId });
+      } catch (error: unknown) {
+        toastStore.getState().push('interrupt failed', { severity: 'error', ttlMs: 4000 });
+        void error;
+      }
     },
 
     setActivePaneAgentId(agentId: string | null): void {

@@ -647,6 +647,19 @@ def _migrate_drop_ticket_write_set(conn: sqlite3.Connection) -> None:
     conn.execute("DROP TABLE ticket_write_set")
 
 
+def _migrate_conversation_queued_message(conn: sqlite3.Connection) -> None:
+    """Add conversations.queued_message (busy-crow chat held for idle delivery).
+
+    Idempotent: no-ops when the column already exists (fresh DBs get it from
+    SCHEMA_SQL; this handles DBs created before the column landed).
+    """
+    existing = conn.execute(
+        "SELECT 1 FROM pragma_table_info('conversations') WHERE name = 'queued_message'"
+    ).fetchone()
+    if existing is None:
+        conn.execute("ALTER TABLE conversations ADD COLUMN queued_message TEXT")
+
+
 def _migrate_conversation_store(conn: sqlite3.Connection) -> None:
     """Add conversations + conversation_blocks tables (Phase 1.b JSON store).
 

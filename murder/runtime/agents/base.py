@@ -102,6 +102,14 @@ class HarnessBackedAgent(LifecycleParticipant):
     # CrowHandler, which keeps rogues (no handler) and collaborators projecting
     # too. The producer is built (no I/O, no task) by start_conversation().
     _producer: Any = None
+    # Busy-harness chat queue: a user message accepted while the pane was not
+    # input-ready, held for delivery at the next awaiting_input projection tick.
+    # Mirrored into conversations.queued_message (DB-owns-runtime) and pushed to
+    # clients via ConversationStateEvent so the TUI can render the queued line.
+    _queued_message: str | None = None
+    # The last (live_state, queued_message) pair pushed over the bus, so the
+    # projection tick only publishes on change (not 2.5Hz).
+    _last_pushed_conv_state: Any = None
 
     async def is_live(self) -> bool:
         from murder.runtime.terminal import tmux
@@ -168,6 +176,11 @@ class HarnessBackedAgent(LifecycleParticipant):
         )
         had_changes = await self._producer.poll(pane)
         await self._emit_plan_resort_if_planner(had_changes)
+        # Busy-harness chat queue: deliver once the parser reports the pane is
+        # input-ready, and push the (live_state, queued) pair to clients when it
+        # changed (cheap no-op otherwise — the publish is change-gated).
+        await self._deliver_queued_if_ready()
+        await self._publish_conversation_state()
 
     async def _emit_plan_resort_if_planner(self, had_changes: bool) -> None:
         """F11 H1: emit the key-only ``plan`` re-sort invalidation, gated.
@@ -190,6 +203,109 @@ class HarnessBackedAgent(LifecycleParticipant):
         from murder.bus.protocol import Entity
 
         await runtime.publish_snapshot(Entity.PLAN, self.id[len("planner-"):])
+
+    @property
+    def pending_message(self) -> str | None:
+        """The queued-but-undelivered chat message, if any."""
+        return self._queued_message
+
+    async def queue_message(self, msg: str) -> dict[str, Any]:
+        """Deliver ``msg`` now if the harness pane is input-ready; else queue it.
+
+        The queued message is held until the projection tick sees the parser
+        report ``awaiting_input`` (see :meth:`project_once`), so a busy crow —
+        including one showing a multiple-choice dialog (``awaiting_approval``)
+        — never has chat typed into the wrong surface. A second message queued
+        while one is pending appends (the queue is the not-yet-sent prompt, not
+        a mailbox). Returns ``{"queued": bool}`` plus error fields on failure,
+        matching the CrowHandler contract.
+
+        Idleness is judged by the parser's live state — the same source that
+        drives delivery (:meth:`_deliver_queued_if_ready`) and the TUI's
+        ``working`` indicator — so the three can never disagree. The adapter's
+        ``is_idle`` pane heuristic is only a fallback for when no state has
+        been parsed yet; it is unreliable on harnesses that keep their input
+        box visible while working (codex), which would type into a busy pane.
+        """
+        from murder.runtime.terminal import tmux
+
+        idle = False
+        if self._queued_message is None:
+            state = self._current_live_state()
+            if state is not None:
+                idle = state == "awaiting_input"
+            else:
+                try:
+                    pane = await tmux.capture_pane(self.session, lines=120)
+                except tmux.TmuxError:
+                    pane = ""
+                idle = self.harness.is_idle(pane)
+        if idle:
+            result = await self.send(msg)
+            if result is not None and getattr(result, "ok", True) is False:
+                return {
+                    "queued": False,
+                    "ok": False,
+                    "error": getattr(result, "message", None) or "message delivery failed",
+                }
+            return {"queued": False}
+        combined = msg if self._queued_message is None else f"{self._queued_message}\n\n{msg}"
+        await self._set_queued_message(combined)
+        return {"queued": True}
+
+    async def _set_queued_message(self, msg: str | None) -> None:
+        """Update the queue in memory + DB and push the state event."""
+        self._queued_message = msg
+        runtime = getattr(self, "runtime", None)
+        if runtime is not None and runtime.db is not None:
+            from murder.state.persistence import conversation
+
+            conversation.set_queued_message(runtime.db, self.id, msg)
+        await self._publish_conversation_state()
+
+    def _current_live_state(self) -> str | None:
+        producer = self._producer
+        return getattr(producer, "last_state", None) if producer is not None else None
+
+    async def _publish_conversation_state(self) -> None:
+        """Push a ``conversation.state`` event when (live_state, queued) changed."""
+        runtime = getattr(self, "runtime", None)
+        if runtime is None or runtime.bus is None or runtime.run_id is None:
+            return
+        state = (self._current_live_state(), self._queued_message)
+        if state == self._last_pushed_conv_state:
+            return
+        self._last_pushed_conv_state = state
+        from murder.bus import ConversationStateEvent
+
+        await runtime.bus.publish(
+            ConversationStateEvent(
+                run_id=str(runtime.run_id),
+                agent_id=self.id,
+                role=self.role,
+                ticket_id=self.ticket_id,
+                conversation_id=self.id,
+                live_state=state[0],
+                queued_message=state[1],
+            )
+        )
+
+    async def _deliver_queued_if_ready(self) -> None:
+        """Send the queued message once the parser reports ``awaiting_input``.
+
+        Called from the projection tick (after the producer poll updated
+        ``last_state``). Clears the queue first so a delivery failure surfaces
+        as a notice rather than a silent every-tick retry storm.
+        """
+        if self._queued_message is None or self._current_live_state() != "awaiting_input":
+            return
+        queued = self._queued_message
+        await self._set_queued_message(None)
+        result = await self.send(queued)
+        if result is not None and getattr(result, "ok", True) is False:
+            await self.record_notice_block_event(
+                f"queued message delivery failed: {getattr(result, 'message', None) or 'unknown error'}"
+            )
 
     def record_user_block(self, text: str) -> None:
         """Record a ground-truth ``user`` turn at the send boundary.
@@ -343,6 +459,11 @@ class HarnessBackedAgent(LifecycleParticipant):
 
         if session_id is not None:
             conversation.set_harness_session_id(runtime.db, self.id, session_id)
+        # A queued-but-undelivered message dies with the session — clear it so
+        # the TUI never renders a stale queued line for a finished agent.
+        if self._queued_message is not None:
+            with contextlib.suppress(Exception):
+                await self._set_queued_message(None)
         conversation.set_conversation_status(runtime.db, self.id, "complete")
 
     async def refresh_transcript(self) -> list[tuple[str, str]]:

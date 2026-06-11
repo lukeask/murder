@@ -109,7 +109,9 @@ def test_parse_multi_select_question_and_options() -> None:
     assert result is not None
     assert result.question == "Which options do you want enabled? (pick any number)"
     assert [opt.number for opt in result.options] == [1, 2, 3, 4, 5, 6]
-    assert result.options[0].label == "[ ] Feature 1"
+    assert result.multi_select is True
+    assert result.options[0].label == "Feature 1"
+    assert result.options[0].checked is False
     assert result.options[0].description == "Enable the first feature."
 
 
@@ -118,7 +120,7 @@ def test_parse_multi_select_none_checked_cursor_on_first() -> None:
     result = parse_claude_code_choice_prompt(_load("multi_select.txt"))
     assert result is not None
     assert result.selected_index == 0
-    assert all("[✔]" not in opt.label for opt in result.options)
+    assert result.checked_numbers == ()
 
 
 def test_parse_multi_select_checked_reflects_toggles_and_cursor() -> None:
@@ -126,9 +128,9 @@ def test_parse_multi_select_checked_reflects_toggles_and_cursor() -> None:
     result = parse_claude_code_choice_prompt(_load("multi_select_checked.txt"))
     assert result is not None
     assert result.selected_index == 2
-    checked = [opt.number for opt in result.options if "[✔]" in opt.label]
-    assert checked == [1, 2, 3]
-    assert result.options[3].label == "[ ] Feature 4"
+    assert result.checked_numbers == (1, 2, 3)
+    assert result.options[3].label == "Feature 4"
+    assert result.options[3].checked is False
 
 
 def test_parse_idle_cc_pane_returns_none() -> None:
@@ -166,3 +168,44 @@ def test_parse_ignores_stray_numbered_lines_in_scrollback() -> None:
     assert result.question == "Where should we focus this planning session?"
     assert [opt.number for opt in result.options] == [1, 2, 3, 4, 5, 6]
     assert result.options[0].label == "Settle open questions"
+
+
+def test_parse_multiselect_cursor_on_submit_row_stays_live() -> None:
+    # Multi-select dialogs have an unnumbered Submit row; with the cursor there
+    # no numbered option carries the ❯ — the dialog must still parse as live.
+    pane = (
+        "Which toppings?\n"
+        "\n"
+        "  1. [✔] Cheese\n"
+        "  Creamy and savory\n"
+        "  2. [✔] Mushroom\n"
+        "  3. [ ] Olive\n"
+        "  4. [ ] Pepper\n"
+        "  5. [ ] Type something\n"
+        "❯    Submit\n"
+        "────────────────\n"
+        "  6. Chat about this\n"
+        "\n"
+        "Enter to select · ↑/↓ to navigate · Esc to cancel\n"
+    )
+    result = parse_claude_code_choice_prompt(pane)
+    assert result is not None
+    assert result.submit_selected is True
+    assert result.multi_select is True
+    assert result.checked_numbers == (1, 2)
+    # The cursored Submit row is chrome, never an option description.
+    assert result.options[4].description == ""
+
+
+def test_parse_cursor_on_option_has_submit_selected_false() -> None:
+    pane = (
+        "Which toppings?\n"
+        "  1. [✔] Cheese\n"
+        "❯ 2. [ ] Mushroom\n"
+        "     Submit\n"
+        "Enter to select\n"
+    )
+    result = parse_claude_code_choice_prompt(pane)
+    assert result is not None
+    assert result.submit_selected is False
+    assert result.selected_option.number == 2

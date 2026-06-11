@@ -41,6 +41,10 @@ class ConversationProducer:
         self._publish = publish
         self._acc = TranscriptAccumulator(harness_kind, system_prompt=system_prompt)
         self._last_pane_hash: str | None = None
+        # The parsed harness UI state from the most recent non-skipped poll
+        # (working / awaiting_input / awaiting_approval). Read by the agent's
+        # projection tick for queued-message delivery + conversation.state push.
+        self.last_state: str | None = None
 
     async def poll(self, pane: str) -> bool:
         """Feed a new pane capture; no-op if the pane hasn't changed since last poll.
@@ -63,6 +67,7 @@ class ConversationProducer:
         self._acc.user_texts = conv_store.read_user_texts(self._db, self.conversation_id)
         self._acc.feed(pane)
         doc = self._acc.to_dict()
+        self.last_state = doc.get("state")
 
         _merged, changes = conv_store.project_parsed_doc_with_changes(
             self._db, self.conversation_id, doc

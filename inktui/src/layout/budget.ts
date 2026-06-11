@@ -117,7 +117,7 @@ export interface BodyLayoutInput {
   /** Inter-region gap in cells (App renders `columnGap`/`rowGap` = 1 between each region). */
   readonly gap: number;
   readonly left: RailContent;
-  /** `right.naturalWidth` = the crow-ledger width when crows are on (R6); usage adapts to the rail. */
+  /** `right.naturalWidth` = max of the crow-ledger width and usage's full-gauge-line reserve. */
   readonly right: RailContent;
   /**
    * Count of PRESENT right-rail panels (usage and/or crows). In LANDSCAPE the usage gauge stacks at

@@ -38,7 +38,12 @@
 
 import { createStore, type StoreApi } from 'zustand/vanilla';
 import type { BusClient } from '../bus/BusClient.js';
-import type { ConversationBlockEvent, Entity, StateSnapshotEvent } from '../bus/protocol.js';
+import type {
+  ConversationBlockEvent,
+  ConversationStateEvent,
+  Entity,
+  StateSnapshotEvent,
+} from '../bus/protocol.js';
 import {
   type ConversationsActions,
   createConversationsActions,
@@ -279,11 +284,26 @@ export function createAppStore(bus: BusClient): {
     { type: 'conversation.block' },
   );
 
+  // 6. Conversation-state subscription. Same additive content-event seam as conversation.block:
+  //    per-agent liveness (live_state) + the queued-but-undelivered message, routed to the
+  //    conversations slice's meta map via `applyState` (pure setState, no bus call).
+  const unsubscribeConversationState = bus.subscribe(
+    (event) => {
+      if (event.type !== 'conversation.state') {
+        return;
+      }
+      const stateEvent: ConversationStateEvent = event;
+      actions.conversations.applyState(stateEvent);
+    },
+    { type: 'conversation.state' },
+  );
+
   return {
     store,
     dispose: () => {
       unsubscribeSnapshot();
       unsubscribeConversations();
+      unsubscribeConversationState();
     },
   };
 }

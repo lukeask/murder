@@ -69,6 +69,11 @@ _CC_UNCACHED_NOTICE_RE = re.compile(
     re.IGNORECASE,
 )
 _CC_RESULT_RE = re.compile(r"^\s*⎿\s?(.*)$")
+# The AskUserQuestion dialog's tab header (`←  ☐ Toppings  ✔ Submit  →`) —
+# dialog chrome, never assistant prose. Rendered while a (multi-)select
+# question is live; the question/options are carried by the choice_prompt
+# segment, so this line must not leak into an assistant block.
+_CC_DIALOG_TAB_RE = re.compile(r"^\s*←\s+.*\s+→\s*$")
 _CC_ELIDED_RE = re.compile(r"…\s*\+\d+\s+lines")
 # A `❯` prompt whose body is just a slash-command echo (`/model opus`, `/clear`)
 # is CC chrome, not a user turn — the harness echoes the command into the prompt
@@ -113,6 +118,7 @@ _cc_is_chrome = chrome_matcher(
     ),
     regex_search_rule(_CC_UNCACHED_NOTICE_RE),
     regex_match_rule(_CC_WAITING_AGENTS_RE),
+    regex_match_rule(_CC_DIALOG_TAB_RE),
     stripped_substring_rule("Backgrounded agent"),
     stripped_startswith_rule("Tip:", "▐", "▝", "▘", "▛", "▜"),
     _cc_result_tip,
@@ -442,6 +448,7 @@ def choice_prompt_segment(prompt: Any) -> ChoicePromptSegment:
             "number": option.number,
             "label": option.label,
             "description": option.description or None,
+            "checked": option.checked,
         }
         for option in prompt.options
     ]
@@ -450,9 +457,14 @@ def choice_prompt_segment(prompt: Any) -> ChoicePromptSegment:
         "question": prompt.question,
         "options": options,
         "footer": prompt.footer or None,
-        "selected": prompt.selected_option.number,
+        "selected": (
+            None
+            if getattr(prompt, "submit_selected", False)
+            else prompt.selected_option.number
+        ),
         "answered": False,
         "chosen": None,
+        "multi": bool(getattr(prompt, "multi_select", False)),
     }
 
 

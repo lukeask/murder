@@ -291,7 +291,7 @@ class ServiceReadModel:
             conv_rows = conn.execute(
                 """
                 SELECT conversation_id, agent_id, harness, model, harness_session_id,
-                       live_state, condensed, status
+                       live_state, condensed, queued_message, status
                   FROM conversations
                  WHERE status = 'in_progress'
                  ORDER BY updated_at DESC, conversation_id
@@ -332,6 +332,7 @@ class ServiceReadModel:
                 harness_session_id=_optional_str(row["harness_session_id"]),
                 live_state=_optional_str(row["live_state"]),
                 condensed=_optional_str(row["condensed"]),
+                queued_message=_optional_str(row["queued_message"]),
                 status=str(row["status"]),
                 blocks=tuple(blocks_by_conversation[str(row["conversation_id"])]),
             )

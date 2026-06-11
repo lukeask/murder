@@ -57,16 +57,12 @@ describe('TextInput / MultiLineText cursor rendering', () => {
   });
 
   it('renders no cursor when not focused', () => {
-    const { lastFrame } = render(
-      <MultiLineText value={'a\nb'} focused={false} color="white" />,
-    );
+    const { lastFrame } = render(<MultiLineText value={'a\nb'} focused={false} color="white" />);
     expect(lastFrame() ?? '').not.toContain(CURSOR);
   });
 
   it('keeps the empty-placeholder cursor on the first glyph (unchanged behavior)', () => {
-    const { lastFrame } = render(
-      <TextInput value="" placeholder="type a message" focused />,
-    );
+    const { lastFrame } = render(<TextInput value="" placeholder="type a message" focused />);
     // No trailing block cursor; the phantom placeholder text is shown.
     const frame = lastFrame() ?? '';
     expect(frame).not.toContain(CURSOR);

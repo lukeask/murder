@@ -24,6 +24,7 @@
 import { useMemo } from 'react';
 import type {
   ConversationBlock,
+  ConversationMeta,
   ConversationsState,
 } from '../store/conversations/conversationsSlice.js';
 import type { FavoritesState } from '../store/favorites/favoritesSlice.js';
@@ -172,28 +173,32 @@ function formatBlock(block: ConversationBlock): ChatTurn | null {
       const options = field(raw, 'options');
       const lines: string[] = [question];
       if (field(raw, 'answered') === true) {
-        // Finalized: show only the chosen option ("selected: N. label").
+        // Finalized: show only the chosen option(s). Single-select `chosen` is a number;
+        // multi-select (CC AskUserQuestion multiSelect) `chosen` is the checked-number array.
         const chosen = field(raw, 'chosen');
+        const chosenSet = new Set(Array.isArray(chosen) ? chosen : [chosen]);
         if (Array.isArray(options)) {
           for (const option of options) {
             if (option === null || typeof option !== 'object' || Array.isArray(option)) continue;
             const optRec = option as Readonly<Record<string, unknown>>;
-            if (field(optRec, 'number') !== chosen) continue;
+            const number = field(optRec, 'number');
+            if (!chosenSet.has(number)) continue;
             const label = str(optRec, 'label').trim();
-            if (label) lines.push(`selected: ${String(chosen)}. ${label}`);
-            break;
+            if (label) lines.push(`selected: ${String(number)}. ${label}`);
           }
         }
         return { speaker: 'prompt', text: lines.join('\n'), blockId };
       }
-      // Unanswered: list every numbered option ("N. label").
+      // Unanswered: list every numbered option ("N. label"; multi-select shows checkboxes).
       if (Array.isArray(options)) {
         for (const option of options) {
           if (option === null || typeof option !== 'object' || Array.isArray(option)) continue;
           const optRec = option as Readonly<Record<string, unknown>>;
           const number = field(optRec, 'number');
           const label = str(optRec, 'label').trim();
-          if (label) lines.push(`${String(number)}. ${label}`);
+          const checked = field(optRec, 'checked');
+          const box = typeof checked === 'boolean' ? (checked ? '[✔] ' : '[ ] ') : '';
+          if (label) lines.push(`${String(number)}. ${box}${label}`);
         }
       }
       return { speaker: 'prompt', text: lines.join('\n'), blockId };
@@ -540,6 +545,92 @@ export function selectActiveAgent(
     }
   }
   return { kind: 'collaborator', agentId, label: agentId };
+}
+
+// ---------------------------------------------------------------------------
+// Live choice prompt (chat-input takeover) + conversation meta
+// ---------------------------------------------------------------------------
+
+/** One option of a live multiple-choice dialog, display-ready. `checked` is null on single-select
+ * menus and the checkbox state on multi-select (CC AskUserQuestion multiSelect) menus. */
+export interface ChoicePromptOptionView {
+  readonly number: number;
+  readonly label: string;
+  readonly description: string | null;
+  readonly checked: boolean | null;
+}
+
+/** The live (unanswered, trailing) choice prompt for an agent — the view the chat input's
+ * multiple-choice takeover renders. `selected` is the option NUMBER under the dialog cursor
+ * (parser ground truth, updated via block-updated events as the cursor moves in the pane), or
+ * null when the cursor sits on the multi-select's dedicated unnumbered Submit row. */
+export interface LiveChoicePromptView {
+  readonly question: string;
+  readonly options: readonly ChoicePromptOptionView[];
+  readonly selected: number | null;
+  readonly multi: boolean;
+  readonly footer: string | null;
+}
+
+/**
+ * The still-open multiple-choice dialog for `agentId`, or null. Same trailing-segment heuristic as
+ * `ChatTurn.isLivePrompt` (a live wizard is always the trailing block, unanswered) — this selector
+ * surfaces it as a typed view for the chat-input takeover instead of a text turn flag.
+ */
+export function selectLiveChoicePrompt(
+  state: ConversationsState,
+  agentId: string | null,
+): LiveChoicePromptView | null {
+  if (agentId === null) return null;
+  const blocks = state.transcripts[agentId];
+  if (!blocks || blocks.length === 0) return null;
+  const last = blocks[blocks.length - 1];
+  if (last === undefined || last.type !== 'choice_prompt') return null;
+  const raw = last.raw;
+  if (field(raw, 'answered') === true) return null;
+  const question = str(raw, 'question').trim();
+  const rawOptions = field(raw, 'options');
+  if (!question || !Array.isArray(rawOptions)) return null;
+  const options: ChoicePromptOptionView[] = [];
+  for (const option of rawOptions) {
+    if (option === null || typeof option !== 'object' || Array.isArray(option)) continue;
+    const optRec = option as Readonly<Record<string, unknown>>;
+    const number = field(optRec, 'number');
+    const label = str(optRec, 'label').trim();
+    if (typeof number !== 'number' || !label) continue;
+    const desc = str(optRec, 'description').trim();
+    const checked = field(optRec, 'checked');
+    options.push({
+      number,
+      label,
+      description: desc || null,
+      checked: typeof checked === 'boolean' ? checked : null,
+    });
+  }
+  if (options.length === 0) return null;
+  const selected = field(raw, 'selected');
+  const footer = str(raw, 'footer').trim();
+  const multi = field(raw, 'multi') === true;
+  return {
+    question,
+    options,
+    // `selected: null` is the parser saying the cursor is on the multi-select Submit row; on a
+    // single-select it can only mean a malformed payload, so fall back to the first option.
+    selected: typeof selected === 'number' ? selected : multi ? null : (options[0]?.number ?? 1),
+    multi,
+    footer: footer || null,
+  };
+}
+
+/** Null-safe meta lookup: the agent's liveness pair, defaulting to nulls when unknown. */
+const EMPTY_META: ConversationMeta = { liveState: null, queuedMessage: null };
+
+export function selectConversationMeta(
+  state: ConversationsState,
+  agentId: string | null,
+): ConversationMeta {
+  if (agentId === null) return EMPTY_META;
+  return state.meta[agentId] ?? EMPTY_META;
 }
 
 /** Memoised hook for the active chat target's identity — re-runs when conversations/roster/favorites

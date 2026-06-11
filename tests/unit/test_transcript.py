@@ -325,6 +325,23 @@ def test_cc_choice_prompt_answered_fixture_matches_expected():
     assert doc == _scenario_expected("cc_mc_answered")
 
 
+def test_cc_choice_prompt_multiselect_fixture_matches_expected():
+    # Real haiku CC capture of an AskUserQuestion multiSelect menu: frame 0 has
+    # nothing checked (cursor on 1), frame 1 has Mushroom toggled (cursor on 2),
+    # frame 2 has Cheese+Mushroom checked with the cursor on the unnumbered
+    # Submit row (selected: None — the dialog must stay live, not resolve).
+    doc = transcripts.parse_frames("claude_code", _scenario_frames("cc_mc_multiselect"))
+    assert doc == _scenario_expected("cc_mc_multiselect")
+    prompt = doc["segments"][-1]
+    assert prompt["type"] == "choice_prompt"
+    assert prompt["multi"] is True
+    assert prompt["selected"] is None
+    assert prompt["answered"] is False
+    checked = [o["number"] for o in prompt["options"] if o["checked"]]
+    assert checked == [1, 2]
+    assert doc["state"] == "awaiting_approval"
+
+
 def test_cc_choice_prompt_cursor_motion_updates_in_place():
     acc = transcripts.TranscriptAccumulator("claude_code")
     frames = _scenario_frames("cc_mc_answered")

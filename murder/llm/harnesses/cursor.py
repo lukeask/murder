@@ -255,29 +255,39 @@ class CursorAdapter(HarnessAdapter):
             return None
         return HarnessModelState(model=model, effort=effort)
 
+    async def _type_picker_filter(self, session: str, text: str) -> None:
+        """Type ``text`` into the `/model` picker's filter one key at a time.
+
+        The picker (CLI ≥ 2026.06.11) drops bulk literal input as a paste
+        guard — a one-shot ``send_keys`` leaves the filter empty and a later
+        Enter selects whatever row the cursor is on (Auto). Per-key sends with
+        a small gap register as typing.
+        """
+        for ch in text:
+            await tmux.send_keys(session, ch, literal=True, enter=False)
+            await asyncio.sleep(0.06)
+
     async def _set_composer_speed(self, session: str, desired_speed: str) -> bool:
+        # Picker flow (CLI ≥ 2026.06.11): filter to Composer 2.5, Tab opens its
+        # "Edit Parameters" dialog with a single `[x] Fast` checkbox (slow =
+        # unchecked; there is no named Slow row), Enter toggles it, Escape
+        # returns to the picker, Enter commits the model.
         if desired_speed not in _CURSOR_SPEEDS:
             return False
         await tmux.send_keys(session, "/model", literal=True, enter=True)
         await asyncio.sleep(_MODEL_MENU_DELAY_S)
-        await tmux.send_keys(session, "Composer 2.5", literal=True, enter=False)
+        await self._type_picker_filter(session, "Composer 2.5")
+        await asyncio.sleep(0.25)
+        await tmux.send_keys(session, "Tab", literal=False, enter=False)
         await asyncio.sleep(0.25)
         pane = await tmux.capture_pane(session, lines=200)
-        current = self._parse_composer_speed(pane)
         if self._is_composer_edit_parameters(pane):
+            current = self._parse_composer_speed(pane)
             if current != desired_speed:
-                await tmux.send_keys(session, "Space", literal=False, enter=False)
-                await asyncio.sleep(0.12)
-                pane = await tmux.capture_pane(session, lines=200)
-                current = self._parse_composer_speed(pane)
-        else:
-            for _ in range(len(_CURSOR_SPEEDS) + 1):
-                if current == desired_speed:
-                    break
-                await tmux.send_keys(session, "Tab", literal=False, enter=False)
-                await asyncio.sleep(0.12)
-                pane = await tmux.capture_pane(session, lines=200)
-                current = self._parse_composer_speed(pane)
+                await tmux.send_keys(session, "Enter", literal=False, enter=False)
+                await asyncio.sleep(0.2)
+            await tmux.send_keys(session, "Escape", literal=False, enter=False)
+            await asyncio.sleep(0.2)
         await tmux.send_keys(session, "", literal=True, enter=True)
         for _ in range(_MODEL_VERIFY_ATTEMPTS):
             await asyncio.sleep(_MODEL_SETTLE_DELAY_S)

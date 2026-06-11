@@ -273,6 +273,8 @@ CREATE INDEX IF NOT EXISTS idx_agent_messages_agent ON agent_messages(agent_id);
 -- tests can insert without a matching agents row, mirroring agent_messages.
 -- harness_session_id: the resume-id captured on graceful /exit (1.g fills this).
 -- live_state: the harness UI state at last parse (working/awaiting_input/awaiting_approval).
+-- queued_message: a user message accepted while the harness was busy, held for
+--   delivery at the next awaiting_input parse (cleared on delivery).
 -- condensed: summary field from the transcript doc; stored for lossless round-trip.
 -- status:
 --   in_progress – conversation has an active tmux pane owned by murder.
@@ -290,6 +292,7 @@ CREATE TABLE IF NOT EXISTS conversations (
     harness_session_id TEXT,
     live_state         TEXT,
     condensed          TEXT,
+    queued_message     TEXT,
     status             TEXT NOT NULL DEFAULT 'in_progress'
                        CHECK (status IN ('in_progress','complete','stale')),
     created_at         TEXT NOT NULL,
@@ -445,6 +448,7 @@ def init_db(conn: sqlite3.Connection) -> None:
         _migrate_agents_worktree_path,
         _migrate_completion_tables,
         _migrate_conversation_store,
+        _migrate_conversation_queued_message,
         _migrate_drop_sentinel,
         _migrate_drop_ticket_write_set,
         _migrate_events_schema_version,
@@ -484,6 +488,7 @@ def init_db(conn: sqlite3.Connection) -> None:
     _migrate_agents_worktree_path(conn)
     _migrate_drop_ticket_write_set(conn)
     _migrate_conversation_store(conn)
+    _migrate_conversation_queued_message(conn)
     ensure_notetaker_context_row(conn)
 
 

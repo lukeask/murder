@@ -622,3 +622,59 @@ def test_agent_messages_unaffected_by_conversation_store(conn):
     rows = conn.execute("SELECT body FROM agent_messages WHERE agent_id='agent-1'").fetchall()
     assert len(rows) == 1
     assert rows[0]["body"] == "hello"
+
+
+# --- live choice_prompt blocks (chat-input takeover) ---
+
+
+def _choice_seg(*, selected: int = 1, answered: bool = False, checked: list[int] | None = None):
+    return {
+        "type": "choice_prompt",
+        "question": "Which?",
+        "options": [
+            {"number": 1, "label": "A", "description": None, "checked": (checked is not None and 1 in checked) if checked is not None else None},
+            {"number": 2, "label": "B", "description": None, "checked": (checked is not None and 2 in checked) if checked is not None else None},
+        ],
+        "footer": None,
+        "selected": selected,
+        "answered": answered,
+        "chosen": None,
+        "multi": checked is not None,
+    }
+
+
+def test_unanswered_choice_prompt_stays_live_and_updates_in_place(conn):
+    """Cursor/checkbox moves must reach the TUI as block-updated events: an
+    unanswered choice_prompt is a LIVE block (sealed=0) and merge updates it."""
+    from murder.state.persistence.conversation import merge_non_user_segments_with_changes
+
+    _make_conv(conn)
+    block = append_block(conn, "conv-1", _choice_seg(selected=1))
+    assert block.sealed is False
+
+    _, changes = merge_non_user_segments_with_changes(conn, "conv-1", [_choice_seg(selected=2)])
+    assert [(c.action, c.block.kind) for c in changes] == [("block-updated", "choice_prompt")]
+    assert changes[0].block.payload["selected"] == 2
+    assert changes[0].block.sealed is False
+
+
+def test_answered_choice_prompt_seals_on_update(conn):
+    """Resolution (answered=True) seals the block in place — no longer mutable."""
+    from murder.state.persistence.conversation import merge_non_user_segments_with_changes
+
+    _make_conv(conn)
+    append_block(conn, "conv-1", _choice_seg(selected=1))
+    resolved = _choice_seg(selected=1, answered=True)
+    resolved["chosen"] = 1
+    _, changes = merge_non_user_segments_with_changes(conn, "conv-1", [resolved])
+    assert changes and changes[0].action == "block-updated"
+    row = conn.execute(
+        "SELECT sealed FROM conversation_blocks WHERE conversation_id='conv-1'"
+    ).fetchone()
+    assert row["sealed"] == 1
+
+
+def test_answered_choice_prompt_seals_at_insert(conn):
+    _make_conv(conn)
+    block = append_block(conn, "conv-1", _choice_seg(selected=1, answered=True))
+    assert block.sealed is True

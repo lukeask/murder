@@ -89,9 +89,23 @@ export function parseBlock(raw: Record<string, unknown>): ConversationBlock {
  * the panel defaults to the collaborator or first favorited crow. This is C10's seam for
  * "keep chat pane active" (the ctrl+s/starring side is C11's job — see seam note at bottom).
  */
+/**
+ * Per-agent conversation liveness, fed by `ConversationStateEvent` (and primed from the
+ * `state.conversations_snapshot` `live_state`/`queued_message` columns). `liveState` is the parsed
+ * harness UI state (`working` / `awaiting_input` / `awaiting_approval`); `queuedMessage` is a user
+ * message the service accepted while the harness was busy, held for idle delivery — the chat input
+ * renders it as the one-line "queued" row and lets Enter interrupt-to-send-now.
+ */
+export interface ConversationMeta {
+  readonly liveState: string | null;
+  readonly queuedMessage: string | null;
+}
+
 export interface ConversationsState {
   /** Per-agent block transcript. Only agents with at least one block have an entry. */
   readonly transcripts: Readonly<Record<string, readonly ConversationBlock[]>>;
+  /** Per-agent liveness ({@link ConversationMeta}); absent entry = unknown (treated as nulls). */
+  readonly meta: Readonly<Record<string, ConversationMeta>>;
   /**
    * The chat pane currently pinned open by user action (`ctrl+s` "keep pane active" path).
    * `null` = no user-pinned selection; the panel derives the displayed pane from favorites.
@@ -113,6 +127,7 @@ export interface ConversationsState {
 /** Initial (empty) state — no transcripts, no active pane. */
 export const initialConversationsState: ConversationsState = {
   transcripts: {},
+  meta: {},
   activePaneAgentId: null,
   paneOverrides: new Map<string, boolean>(),
 };

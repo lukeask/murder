@@ -182,3 +182,255 @@ describe('ChatInput — persistent chat-input send (C11)', () => {
     dispose();
   });
 });
+
+// ---------------------------------------------------------------------------
+// Multiple-choice takeover + queued-message line
+// ---------------------------------------------------------------------------
+
+const DOWN_ARROW = '\x1b[B';
+
+/** Seed a LIVE (trailing, unanswered) choice_prompt into the collaborator's transcript. */
+function seedChoicePrompt(
+  store: ReturnType<typeof createAppStore>['store'],
+  { multi = false, selected = 1 }: { multi?: boolean; selected?: number | null } = {},
+): void {
+  store.setState((state) => ({
+    conversations: {
+      ...state.conversations,
+      transcripts: {
+        ...state.conversations.transcripts,
+        'collab-1': [
+          {
+            type: 'choice_prompt',
+            id: '7',
+            raw: {
+              type: 'choice_prompt',
+              question: 'Which color?',
+              options: [
+                { number: 1, label: 'Red', description: 'Warm', checked: multi ? false : null },
+                { number: 2, label: 'Blue', description: 'Cool', checked: multi ? true : null },
+              ],
+              footer: 'Enter to select',
+              selected,
+              answered: false,
+              chosen: null,
+              multi,
+            },
+          },
+        ],
+      },
+    },
+  }));
+}
+
+/** Seed a queued-but-undelivered message for the collaborator. */
+function seedQueued(store: ReturnType<typeof createAppStore>['store'], message: string): void {
+  store.setState((state) => ({
+    conversations: {
+      ...state.conversations,
+      meta: {
+        ...state.conversations.meta,
+        'collab-1': { liveState: 'working', queuedMessage: message },
+      },
+    },
+  }));
+}
+
+function submitsOfKind(fake: FakeBusClient, kind: string) {
+  return fake.rpcCalls.filter(
+    (c) => c.method === 'command.submit' && (c.params as { kind: string }).kind === kind,
+  );
+}
+
+describe('ChatInput — multiple-choice takeover', () => {
+  it('renders the live choice menu in place of the text input', async () => {
+    const { store, inputStores, dispose } = await setup();
+    seedChoicePrompt(store);
+    const { lastFrame } = render(<Harness store={store} inputStores={inputStores} />);
+    await tick();
+    const frame = lastFrame() ?? '';
+    expect(frame).toContain('Which color?');
+    expect(frame).toContain('❯ 1. Red');
+    expect(frame).toContain('2. Blue');
+    expect(frame).toContain('· choice');
+    expect(frame).not.toContain('type a message');
+    dispose();
+  });
+
+  it('renders checkboxes on a multi-select menu', async () => {
+    const { store, inputStores, dispose } = await setup();
+    seedChoicePrompt(store, { multi: true });
+    const { lastFrame } = render(<Harness store={store} inputStores={inputStores} />);
+    await tick();
+    const frame = lastFrame() ?? '';
+    expect(frame).toContain('[ ] Red');
+    expect(frame).toContain('[✔] Blue');
+    expect(frame).toContain('space toggle');
+    dispose();
+  });
+
+  it('forwards arrows/enter/digits to the agent pane instead of buffering', async () => {
+    const { fake, store, inputStores, dispose } = await setup();
+    seedChoicePrompt(store);
+    const { stdin } = render(<Harness store={store} inputStores={inputStores} />);
+    await tick();
+
+    stdin.write(DOWN_ARROW);
+    await tick();
+    stdin.write('2');
+    await tick();
+    stdin.write(RETURN);
+    await tick();
+
+    const keys = submitsOfKind(fake, 'agent.send_key').map(
+      (c) => (c.params as { payload: { key: string; literal: boolean } }).payload,
+    );
+    expect(keys).toEqual([
+      { agent_id: 'collab-1', key: 'Down', literal: false, enter: false },
+      { agent_id: 'collab-1', key: '2', literal: true, enter: false },
+      { agent_id: 'collab-1', key: 'Enter', literal: false, enter: false },
+    ]);
+    // Nothing was buffered and no chat message was sent.
+    expect(inputStores.chatInput.getState().text).toBe('');
+    expect(submitsOfKind(fake, 'agent.message').length).toBe(0);
+    dispose();
+  });
+
+  it('renders the multi-select Submit row, uncursored while an option is selected', async () => {
+    const { store, inputStores, dispose } = await setup();
+    seedChoicePrompt(store, { multi: true });
+    const { lastFrame } = render(<Harness store={store} inputStores={inputStores} />);
+    await tick();
+    const frame = lastFrame() ?? '';
+    expect(frame).toContain('❯ 1. [ ] Red');
+    expect(frame).toMatch(/ {2}Submit/);
+    expect(frame).not.toContain('❯ Submit');
+    dispose();
+  });
+
+  it('keeps the takeover live with the cursor on Submit (selected: null) and forwards enter', async () => {
+    const { fake, store, inputStores, dispose } = await setup();
+    seedChoicePrompt(store, { multi: true, selected: null });
+    const { stdin, lastFrame } = render(<Harness store={store} inputStores={inputStores} />);
+    await tick();
+    const frame = lastFrame() ?? '';
+    // Cursor on the Submit row, no option cursored — and the takeover is still engaged.
+    expect(frame).toContain('❯ Submit');
+    expect(frame).not.toContain('❯ 1.');
+    expect(frame).not.toContain('type a message');
+
+    stdin.write(RETURN);
+    await tick();
+    const keys = submitsOfKind(fake, 'agent.send_key').map(
+      (c) => (c.params as { payload: { key: string } }).payload.key,
+    );
+    expect(keys).toEqual(['Enter']);
+    expect(submitsOfKind(fake, 'agent.message').length).toBe(0);
+    dispose();
+  });
+
+  it('forwards space as the multi-select toggle key', async () => {
+    const { fake, store, inputStores, dispose } = await setup();
+    seedChoicePrompt(store, { multi: true });
+    const { stdin } = render(<Harness store={store} inputStores={inputStores} />);
+    await tick();
+    stdin.write(' ');
+    await tick();
+    const keys = submitsOfKind(fake, 'agent.send_key').map(
+      (c) => (c.params as { payload: { key: string } }).payload.key,
+    );
+    expect(keys).toEqual(['Space']);
+    dispose();
+  });
+
+  it('does NOT take over for an answered (finalized) prompt', async () => {
+    const { fake, store, inputStores, dispose } = await setup();
+    seedChoicePrompt(store);
+    store.setState((state) => {
+      const blocks = state.conversations.transcripts['collab-1'] ?? [];
+      const last = blocks[blocks.length - 1];
+      if (last === undefined) return state;
+      return {
+        conversations: {
+          ...state.conversations,
+          transcripts: {
+            ...state.conversations.transcripts,
+            'collab-1': [{ ...last, raw: { ...last.raw, answered: true, chosen: 1 } }],
+          },
+        },
+      };
+    });
+    const { stdin, lastFrame } = render(<Harness store={store} inputStores={inputStores} />);
+    await tick();
+    expect(lastFrame() ?? '').toContain('type a message');
+    stdin.write('hi');
+    await tick();
+    expect(inputStores.chatInput.getState().text).toBe('hi');
+    expect(submitsOfKind(fake, 'agent.send_key').length).toBe(0);
+    dispose();
+  });
+});
+
+describe('ChatInput — queued-message line', () => {
+  it('renders the queued message one-line above the input with the send-now hint', async () => {
+    const { store, inputStores, dispose } = await setup();
+    seedQueued(store, 'please also check the tests\nand lint');
+    const { lastFrame } = render(<Harness store={store} inputStores={inputStores} />);
+    await tick();
+    const frame = lastFrame() ?? '';
+    expect(frame).toContain('⏸ queued · please also check the tests and lint');
+    expect(frame).toContain('interrupt & send now');
+    // The parser's working state rides the border title.
+    expect(frame).toContain('· working');
+    dispose();
+  });
+
+  it('enter on an empty buffer interrupts the agent (send now)', async () => {
+    const { fake, store, inputStores, dispose } = await setup();
+    seedQueued(store, 'held message');
+    const { stdin } = render(<Harness store={store} inputStores={inputStores} />);
+    await tick();
+    stdin.write(RETURN);
+    await tick();
+    const interrupts = submitsOfKind(fake, 'agent.interrupt');
+    expect(interrupts.length).toBe(1);
+    expect((interrupts[0]?.params as { payload: unknown }).payload).toMatchObject({
+      agent_id: 'collab-1',
+    });
+    expect(submitsOfKind(fake, 'agent.message').length).toBe(0);
+    dispose();
+  });
+
+  it('enter with text still sends the message normally (appends server-side)', async () => {
+    const { fake, store, inputStores, dispose } = await setup();
+    seedQueued(store, 'held message');
+    const { stdin } = render(<Harness store={store} inputStores={inputStores} />);
+    await tick();
+    stdin.write('more');
+    await tick();
+    stdin.write(RETURN);
+    await tick();
+    expect(submitsOfKind(fake, 'agent.interrupt').length).toBe(0);
+    expect(submitsOfKind(fake, 'agent.message').length).toBe(1);
+    dispose();
+  });
+
+  it('applyState updates the meta map from a conversation.state event', async () => {
+    const { store, dispose } = await setup();
+    store.getState().actions.conversations.applyState({
+      type: 'conversation.state',
+      event_id: 1,
+      ts: 'now',
+      run_id: 'r',
+      agent_id: 'collab-1',
+      conversation_id: 'collab-1',
+      live_state: 'awaiting_input',
+      queued_message: null,
+    } as never);
+    expect(store.getState().conversations.meta['collab-1']).toEqual({
+      liveState: 'awaiting_input',
+      queuedMessage: null,
+    });
+    dispose();
+  });
+});

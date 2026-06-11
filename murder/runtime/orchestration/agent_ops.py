@@ -150,6 +150,24 @@ class AgentOps:
                     return {"ok": False, "error": "agent-not-live"}
                 await self._ensure_planning_agent(plan_name)
                 agent = self.rt.get_agent(agent_id)
+        is_crow_target = agent_id.startswith("crow-") or is_rogue_agent_id(agent_id)
+        if is_crow_target and agent is not None and hasattr(agent, "queue_message"):
+            # Deliver-only-when-idle for every crow (ticketed AND rogue): the
+            # agent-level queue checks the harness pane and holds the message
+            # until the parser reports awaiting_input (HarnessBackedAgent.
+            # queue_message). The CrowHandler queue below remains only as the
+            # fallback when the agent handle is absent (e.g. pre-restart crow).
+            queue_result = await agent.queue_message(message)
+            if queue_result.get("ok") is False:
+                return {
+                    "ok": False,
+                    "error": str(queue_result.get("error") or "crow message delivery failed"),
+                    **queue_result,
+                }
+            # Ground truth: record the user turn once immediate or queued
+            # delivery is accepted.
+            await self._record_user_block(agent_id, message)
+            return {"handled": True, **queue_result}
         if agent_id.startswith("crow-"):
             ticket_id = agent_id[len("crow-") :]
             if not ticket_id:

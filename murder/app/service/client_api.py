@@ -368,6 +368,7 @@ class ConversationSummary:
     harness_session_id: str | None
     live_state: str | None
     condensed: str | None
+    queued_message: str | None
     status: str
     blocks: tuple[ConversationBlockSummary, ...]
 

@@ -14,38 +14,45 @@
         {
           "number": 1,
           "label": "Option A",
-          "description": "The first test option"
+          "description": "The first test option",
+          "checked": null
         },
         {
           "number": 2,
           "label": "Option B",
-          "description": "The second test option"
+          "description": "The second test option",
+          "checked": null
         },
         {
           "number": 3,
           "label": "Option C",
-          "description": "The third test option"
+          "description": "The third test option",
+          "checked": null
         },
         {
           "number": 4,
           "label": "Option D",
-          "description": "The fourth test option"
+          "description": "The fourth test option",
+          "checked": null
         },
         {
           "number": 5,
           "label": "Type something.",
-          "description": null
+          "description": null,
+          "checked": null
         },
         {
           "number": 6,
           "label": "Chat about this",
-          "description": null
+          "description": null,
+          "checked": null
         }
       ],
       "footer": "Enter to select · ↑/↓ to navigate · Esc to cancel",
       "selected": 6,
       "answered": true,
-      "chosen": 6
+      "chosen": 6,
+      "multi": false
     }
   ]
 }

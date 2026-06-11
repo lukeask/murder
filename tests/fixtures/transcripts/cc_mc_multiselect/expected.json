@@ -1,0 +1,72 @@
+{
+  "harness": "claude_code",
+  "state": "awaiting_approval",
+  "condensed": null,
+  "segments": [
+    {
+      "type": "user",
+      "text": "Use the AskUserQuestion tool to ask me ONE single-select question: 'Which color?' with options Red, Green, Blue, Yellow (each with a short description). Do not answer it yourself."
+    },
+    {
+      "type": "assistant",
+      "phase": "intermediate",
+      "text": "User declined to answer questions ⎿  · Which color? (Red / Green / Blue / Yellow)",
+      "elapsed": null
+    },
+    {
+      "type": "user",
+      "text": "Now use the AskUserQuestion tool to ask me ONE multi-select question (multiSelect true): 'Which toppings?' with options Cheese, Mushroom, Olive, Pepper (each with a short description). Do not answer it yourself."
+    },
+    {
+      "type": "user",
+      "text": "Submit"
+    },
+    {
+      "type": "choice_prompt",
+      "question": "Which toppings?",
+      "options": [
+        {
+          "number": 1,
+          "label": "Cheese",
+          "description": "Creamy and savory",
+          "checked": true
+        },
+        {
+          "number": 2,
+          "label": "Mushroom",
+          "description": "Earthy and umami",
+          "checked": true
+        },
+        {
+          "number": 3,
+          "label": "Olive",
+          "description": "Briny and tangy",
+          "checked": false
+        },
+        {
+          "number": 4,
+          "label": "Pepper",
+          "description": "Spicy and sharp",
+          "checked": false
+        },
+        {
+          "number": 5,
+          "label": "Type something",
+          "description": null,
+          "checked": false
+        },
+        {
+          "number": 6,
+          "label": "Chat about this",
+          "description": null,
+          "checked": null
+        }
+      ],
+      "footer": "Enter to select · ↑/↓ to navigate · Esc to cancel",
+      "selected": null,
+      "answered": false,
+      "chosen": null,
+      "multi": true
+    }
+  ]
+}

@@ -231,7 +231,7 @@
         "answered": false,
         "chosen": null
       },
-      "sealed": true,
+      "sealed": false,
       "service_received_at": "2026-06-09T00:00:00"
     }
   }

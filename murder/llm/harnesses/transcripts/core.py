@@ -317,7 +317,12 @@ def _resolve_choice_prompt(
             continue
         resolved = copy.deepcopy(segment)
         resolved["answered"] = True
-        resolved["chosen"] = prompt.selected_option.number
+        # Multi-select resolves to the set of checked numbers at the last live
+        # view; single-select to the cursor's option number.
+        if getattr(prompt, "multi_select", False):
+            resolved["chosen"] = list(prompt.checked_numbers)
+        else:
+            resolved["chosen"] = prompt.selected_option.number
         spanned[index] = SpannedSegment(
             resolved, spanned[index].start, spanned[index].end, spanned[index].epoch
         )

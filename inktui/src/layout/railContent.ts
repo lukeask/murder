@@ -37,9 +37,10 @@
  * ## Per-side reading (R6)
  *  - LEFT rail = plans/notes/reports/tickets. plans/notes/reports share one two-line `.name` row
  *    shape; tickets is a multi-column row whose natural width is its laid-out column widths.
- *  - RIGHT rail = the CROW-LEDGER row width when crows are visible (R6: the right rail is sized to the
- *    crows, and Usage adapts to it via its tiers — L4). When only Usage is on, the rail reserves a
- *    sane usage width; the precise tiered gauge widths are L4 (gated), so this reserves a constant.
+ *  - RIGHT rail = the max of the CROW-LEDGER row width (when crows are visible) and Usage's
+ *    full-gauge-line reserve (when usage is visible) — like the left side, every visible panel's
+ *    natural width participates, so a roomy terminal shows usage's win/reset trail. Compression on
+ *    tight terminals is the engine's job (the fluid gauge line sheds its labels there — L4).
  *
  * Two layers, like every selector:
  *  - Pure width functions (`*NaturalWidth`) — no React/store; unit-testable against varied row data.
@@ -87,8 +88,8 @@ const CROW_ROW_GUTTER = 2;
 const CROW_NAME_STATUS_GAP = 2;
 
 /**
- * The right-rail width usage reserves when it drives the rail ALONE (no crows). usage-alone should
- * show its FULLEST form (bar + win + reset — R9), so we reserve the rail width that yields the full
+ * The right-rail width usage reserves whenever it is visible. Usage should show its FULLEST form
+ * (bar + win + reset — R9) given the room, so we reserve the rail width that yields the full
  * gauge line at its nominal bar width: `USAGE_NATURAL_INNER_WIDTH(27)` of gauge glyphs +
  * `USAGE_PANE_CHROME(4)` of Pane border + padding = 31 (L4d, problem 2). The engine still compresses
  * this toward the budget on a narrow terminal (the Stage keeps its ≥60% floor) and the fluid gauge
@@ -337,7 +338,7 @@ const RIGHT_PANELS: readonly PanelId[] = ['usage', 'crows'];
 /**
  * Read the live {@link RailContent} for one side. `present` is true iff any of the side's panels are
  * toggled on; `naturalWidth` is the max over the visible panels of `max(widest body row, title row)`
- * (R2 + L3b), with the right side driven by the crow-ledger width when crows are on (R6);
+ * (R2 + L3b), with the right side the max of the crow-ledger width and usage's full-line reserve;
  * `naturalHeight` is the MAX over the visible panels of each panel's content height in lines (L4b),
  * for the portrait rows-axis budget.
  *
@@ -440,10 +441,14 @@ export function useRailContent(side: 'left' | 'right'): RailContent {
     };
   }
 
-  // Right side (R6): the crow-ledger width drives the rail when crows are on; Usage adapts to it via
-  // its tiers (L4), so it does NOT widen the rail — it only reserves its smallest legible form when it
-  // is the ONLY panel on the right. Height, however, IS the tallest of the present panels (a strip in
-  // portrait must hold both usage AND crows side-by-side), so both contribute to `naturalHeight`.
+  // Right side: the rail's natural width is the max over its present panels, like the left side.
+  // Usage reserves its FULL gauge line (bar + win + reset — {@link USAGE_RESERVE_WIDTH}) whenever it
+  // is visible, crows or not: on a roomy terminal the win/reset trail must show (the original R6
+  // "crows-driven, usage adapts" sizing capped the rail at the crow width, which silently dropped
+  // those labels even on a huge monitor). The reserve is only the rail's *desired* width — on a tight
+  // terminal the engine still compresses toward the budget (Stage ≥60% wins) and the fluid gauge line
+  // sheds win then reset, so the small-screen behavior is unchanged. Height is the tallest of the
+  // present panels (a strip in portrait must hold both usage AND crows side-by-side).
   let naturalWidth = 0;
   let naturalHeight = 0;
   if (visible.has('crows')) {
@@ -452,12 +457,8 @@ export function useRailContent(side: 'left' | 'right'): RailContent {
     naturalHeight = Math.max(naturalHeight, crowNaturalHeight(crowsView.sections, true));
   }
   if (visible.has('usage')) {
-    // Usage never widens the rail (R6 — it adapts via tiers), but it DOES set the strip height in
-    // portrait, and its title must fit when it is the only right panel.
+    naturalWidth = Math.max(naturalWidth, USAGE_RESERVE_WIDTH, titleRowWidth('Usage'));
     naturalHeight = Math.max(naturalHeight, usageNaturalHeight(usageView.groups));
-    if (!visible.has('crows')) {
-      naturalWidth = Math.max(naturalWidth, USAGE_RESERVE_WIDTH, titleRowWidth('Usage'));
-    }
   }
   // Floor a present rail's WIDTH at its smallest legible form (R7) — same reasoning as the left side;
   // the usage-only reserve already exceeds this, so the floor only bites the empty-crows case.

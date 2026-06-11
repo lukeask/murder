@@ -160,7 +160,9 @@ def test_pi_set_model_filters_picker_then_confirms(fake_tmux: FakeTmux) -> None:
     assert "deepseek-v4-flash" in sent
 
 
-def test_cursor_set_composer_speed_tabs_until_slow(fake_tmux: FakeTmux) -> None:
+def test_cursor_set_composer_speed_types_picker_filter_per_key(fake_tmux: FakeTmux) -> None:
+    # The /model picker (CLI ≥ 2026.06.11) drops bulk literal input as a paste
+    # guard — the filter must be typed one key at a time, never as one string.
     idle_slow = CURSOR_IDLE_COMPOSER_FAST.replace("Fast", "Slow")
     fake_tmux.queue_pane(CURSOR_COMPOSER_MENU_SLOW)
     fake_tmux.queue_pane(idle_slow)
@@ -171,7 +173,9 @@ def test_cursor_set_composer_speed_tabs_until_slow(fake_tmux: FakeTmux) -> None:
     assert ok
     sent = [args[1] for args, _ in fake_tmux.calls_to("send_keys")]
     assert "/model" in sent
-    assert "Composer 2.5" in sent
+    assert "Composer 2.5" not in sent
+    single_chars = [s for s in sent if len(s) == 1]
+    assert "".join(single_chars) == "Composer 2.5"
 
 
 # ============================================================
@@ -450,7 +454,9 @@ def test_cursor_set_model_waits_briefly_for_default_composer_footer(
 def test_cursor_set_composer_speed_accepts_checkbox_ui_for_slow(
     fake_tmux: FakeTmux,
 ) -> None:
-    # Checkbox UI variant: Fast is unchecked → already slow, no Space toggle needed.
+    # Edit-parameters dialog (Tab from the picker): Fast is unchecked → already
+    # slow, so no Enter toggle — just Escape back and commit.
+    fake_tmux.queue_pane(CURSOR_IDLE_COMPOSER_FAST)
     fake_tmux.queue_pane(CURSOR_COMPOSER_EDIT_PARAMETERS_SLOW)
     fake_tmux.queue_pane(CURSOR_IDLE_COMPOSER_NO_SPEED)
 
@@ -459,17 +465,18 @@ def test_cursor_set_composer_speed_accepts_checkbox_ui_for_slow(
     assert ok
     sent = [args[1] for args, _ in fake_tmux.calls_to("send_keys")]
     assert "/model" in sent
-    assert "Composer 2.5" in sent
-    assert "Space" not in sent
+    assert "Tab" in sent
+    assert "Enter" not in sent
+    assert "Escape" in sent
 
 
 def test_cursor_set_composer_speed_toggles_checkbox_ui_for_fast(
     fake_tmux: FakeTmux,
 ) -> None:
-    # Checkbox UI variant: Fast is unchecked → must toggle with Space to enable fast.
+    # Edit-parameters dialog: Fast is unchecked → toggle with Enter ("Enter to
+    # select" toggles the checkbox in CLI ≥ 2026.06.11; Space does nothing).
     fake_tmux.queue_pane(CURSOR_IDLE_COMPOSER_NO_SPEED)
     fake_tmux.queue_pane(CURSOR_COMPOSER_EDIT_PARAMETERS_SLOW)
-    fake_tmux.queue_pane(CURSOR_COMPOSER_EDIT_PARAMETERS_FAST)
     fake_tmux.queue_pane(CURSOR_IDLE_COMPOSER_FAST)
 
     ok = asyncio.run(CursorAdapter().set_model("sess", "composer-2.5", effort="fast"))
@@ -477,8 +484,9 @@ def test_cursor_set_composer_speed_toggles_checkbox_ui_for_fast(
     assert ok
     sent = [args[1] for args, _ in fake_tmux.calls_to("send_keys")]
     assert "/model" in sent
-    assert "Composer 2.5" in sent
-    assert "Space" in sent
+    assert "Tab" in sent
+    assert "Enter" in sent
+    assert "Space" not in sent
 
 
 def test_antigravity_model_choices_include_effort_tags() -> None:

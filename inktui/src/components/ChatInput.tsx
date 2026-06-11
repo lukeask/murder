@@ -27,9 +27,24 @@
  * suffices), with a `★ ` prefix when the target is favorited. The content row below is a bare
  * cursor input (the {@link ./TextInput.js TextInput}); a long draft wraps and the box grows in
  * height (cursor-at-end rendering suffices since the buffer is end-append).
+ *
+ * ## Multiple-choice takeover
+ * When the target's transcript ends in a LIVE (unanswered, trailing) `choice_prompt` — a CC
+ * AskUserQuestion / trust dialog parsed by the service — the input box is TAKEN OVER by the choice
+ * menu: the content area renders the question + options (cursor + checkboxes from parser ground
+ * truth) instead of the text field, and the chat handler (App.tsx) forwards keys to the agent's
+ * pane via `agent.send_key`. The pane is the source of truth; the parser's block-updated events
+ * move the rendered cursor. The same selector drives both ({@link selectLiveChoicePrompt}).
+ *
+ * ## Queued-message line
+ * When the service holds a queued-but-undelivered message for the target (accepted while the
+ * harness was busy — `ConversationMeta.queuedMessage`), a one-line styled row renders ABOVE the
+ * input border: `⏸ queued · <message>`, with an `⏎ interrupt & send now` hint when the input is
+ * not taken over (Enter then fires `agent.interrupt`; the service delivers the queued message at
+ * the next input-ready parse).
  */
 
-import { Box } from 'ink';
+import { Box, Text } from 'ink';
 import { memo } from 'react';
 import { shallow } from 'zustand/shallow';
 import { useAppStore } from '../hooks/useAppStore.js';
@@ -42,7 +57,12 @@ import {
 import { SPAN_CLOSE, SPAN_OPEN } from '../input/chatInputStore.js';
 import { CHAT_FOCUS } from '../input/focusStore.js';
 import { isDefaultFavorited } from '../selectors/agentIdentity.js';
-import { useActiveAgent } from '../selectors/conversationsSelectors.js';
+import {
+  type LiveChoicePromptView,
+  selectConversationMeta,
+  selectLiveChoicePrompt,
+  useActiveAgent,
+} from '../selectors/conversationsSelectors.js';
 import { isFavorited } from '../selectors/favoritesSelectors.js';
 import { useTheme } from '../theme/themeStore.js';
 import { TRI_RIGHT } from './glyphs.js';
@@ -60,6 +80,75 @@ export function displayBuffer(text: string): string {
   return text.replace(SPAN_RE, () => `[Image ${++n}]`);
 }
 
+/** Collapse a queued message to one renderable line (first line, whitespace-squashed). */
+export function queuedPreview(message: string): string {
+  return message.replace(/\s+/g, ' ').trim();
+}
+
+/** The live choice menu rendered inside the input box during the takeover. Pure view over the
+ * selector's {@link LiveChoicePromptView}; key routing lives in the chat handler (App.tsx). */
+function ChoiceMenu({ prompt }: { readonly prompt: LiveChoicePromptView }): React.JSX.Element {
+  const theme = useTheme();
+  const hint = prompt.multi
+    ? '↑/↓ move · space toggle · enter select · esc cancel'
+    : '↑/↓ move · 1-9 jump · enter select · esc cancel';
+  // Multi-select dialogs have a dedicated unnumbered Submit row; CC renders it between the last
+  // checkbox option and the checkbox-less trailing rows ("Chat about this"), so mirror that
+  // position — the pane cursor travels through it in that order. `selected === null` is the
+  // parser reporting the cursor is on it.
+  const submitAfter = prompt.multi
+    ? prompt.options.reduce((acc, o, i) => (o.checked !== null ? i : acc), -1)
+    : -1;
+  const submitCursor = prompt.multi && prompt.selected === null;
+  const submitRow = prompt.multi ? (
+    <Box key="submit" flexShrink={0}>
+      <Text
+        color={submitCursor ? theme.active : theme.text}
+        bold={submitCursor}
+        wrap="truncate-end"
+      >
+        {submitCursor ? '❯ ' : '  '}
+        Submit
+      </Text>
+    </Box>
+  ) : null;
+  return (
+    <Box flexDirection="column">
+      <Box flexShrink={0}>
+        <Text bold color={theme.text} wrap="truncate-end">
+          {prompt.question}
+        </Text>
+      </Box>
+      {prompt.options.flatMap((option, index) => {
+        const isCursor = prompt.selected !== null && option.number === prompt.selected;
+        const box = option.checked === null ? '' : option.checked ? '[✔] ' : '[ ] ';
+        const row = (
+          <Box key={option.number} flexShrink={0}>
+            <Text color={isCursor ? theme.active : theme.text} bold={isCursor} wrap="truncate-end">
+              {isCursor ? '❯ ' : '  '}
+              {option.number}. {box}
+              {option.label}
+              {option.description !== null ? (
+                <Text color={theme.muted} bold={false}>
+                  {'  '}
+                  {option.description}
+                </Text>
+              ) : null}
+            </Text>
+          </Box>
+        );
+        return index === submitAfter && submitRow !== null ? [row, submitRow] : [row];
+      })}
+      {submitAfter === -1 && submitRow !== null ? submitRow : null}
+      <Box flexShrink={0}>
+        <Text color={theme.muted} wrap="truncate-end">
+          {hint}
+        </Text>
+      </Box>
+    </Box>
+  );
+}
+
 export const ChatInput = memo(function ChatInput(): React.JSX.Element {
   const theme = useTheme();
   const ref = useFocusRef();
@@ -73,19 +162,41 @@ export const ChatInput = memo(function ChatInput(): React.JSX.Element {
   const roster = useAppStore((s) => s.roster, shallow);
   const favorites = useAppStore((s) => s.favorites, shallow);
   const target = useActiveAgent(conversations, roster, favorites);
+  const targetAgentId = target?.agentId ?? null;
+  // Liveness + takeover state for the target — the same selectors the chat handler reads, so what
+  // is rendered and how keys route can never disagree.
+  const meta = selectConversationMeta(conversations, targetAgentId);
+  const livePrompt = selectLiveChoicePrompt(conversations, targetAgentId);
   // The target moves onto the top border as `▸ <label>` (item 2; the `›` prompt is dropped — the
   // triangle suffices). A `★ ` precedes the name when the target is favorited (explicit star OR kind-default),
   // mirroring the Crows-pane glyph.
   const starred =
     target !== null && isFavorited(favorites, target.agentId, isDefaultFavorited(target));
-  const targetLabel = target === null ? 'no target' : `${starred ? '★ ' : ''}${target.label}`;
+  // The parser's live state rides the border title as a dim suffix: `· choice` while a dialog is
+  // up (takeover), `· working` while busy, nothing when input-ready/unknown.
+  const stateSuffix =
+    livePrompt !== null ? ' · choice' : meta.liveState === 'working' ? ' · working' : '';
+  const targetLabel =
+    target === null ? 'no target' : `${starred ? '★ ' : ''}${target.label}${stateSuffix}`;
   // F9: marked image spans (invisible PUA-wrapped ids) render as derived `[Image N]` labels.
   const display = displayBuffer(text);
   const borderColor = focused ? theme.active : theme.inactive;
+  const queued = meta.queuedMessage;
   return (
     // Inline-title border (Pane recipe): the `▸ <target>` sits on the top border line (item 2); the
-    // content box below is a bare cursor-input line that grows in height as a long draft wraps.
+    // content box below is a bare cursor-input line that grows in height as a long draft wraps —
+    // or, during the multiple-choice takeover, the live choice menu.
     <Box ref={ref} flexDirection="column">
+      {queued !== null ? (
+        <Box flexShrink={0} paddingX={1}>
+          <Text color={theme.warning} wrap="truncate-end">
+            ⏸ queued · {queuedPreview(queued)}
+            {livePrompt === null ? (
+              <Text color={theme.muted}> · ⏎ interrupt & send now</Text>
+            ) : null}
+          </Text>
+        </Box>
+      ) : null}
       <PaneBorderTop
         title={`${TRI_RIGHT} ${targetLabel}`}
         borderColor={borderColor}
@@ -93,7 +204,11 @@ export const ChatInput = memo(function ChatInput(): React.JSX.Element {
         bold={focused}
       />
       <Box borderStyle="round" borderTop={false} borderColor={borderColor} paddingX={1}>
-        <TextInput value={display} placeholder="type a message" focused={focused} />
+        {livePrompt !== null ? (
+          <ChoiceMenu prompt={livePrompt} />
+        ) : (
+          <TextInput value={display} placeholder="type a message" focused={focused} />
+        )}
       </Box>
     </Box>
   );

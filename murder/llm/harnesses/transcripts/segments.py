@@ -57,6 +57,8 @@ class ChoiceOptionDict(TypedDict):
     number: int
     label: str
     description: str | None
+    # None on single-select menus; the checkbox state on multi-select menus.
+    checked: bool | None
 
 
 class ChoicePromptSegment(TypedDict):
@@ -64,9 +66,15 @@ class ChoicePromptSegment(TypedDict):
     question: str
     options: list[ChoiceOptionDict]
     footer: str | None
-    selected: int
+    # The option number under the dialog cursor; None when the cursor sits on
+    # the multi-select's dedicated (unnumbered) Submit row.
+    selected: int | None
     answered: bool
-    chosen: int | None
+    # Single-select: the chosen option number. Multi-select: the list of
+    # checked option numbers at resolution. None while unanswered.
+    chosen: int | list[int] | None
+    # True for a multi-select (CC AskUserQuestion multiSelect) menu.
+    multi: bool
 
 
 Segment = (

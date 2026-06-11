@@ -32,7 +32,7 @@
  * (focused doc → reference-by-path). See {@link deriveSpawnContext} for the C11 seam note.
  */
 
-import { Box, type DOMElement, measureElement } from 'ink';
+import { Box, type DOMElement, type Key, measureElement } from 'ink';
 import { type JSX, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { BusClient } from '../bus/BusClient.js';
 import { AppStoreProvider, useAppStore, useAppStoreApi } from '../hooks/useAppStore.js';
@@ -58,7 +58,9 @@ import { deriveAgentIdentity } from '../selectors/agentIdentity.js';
 import {
   isChatPaneOpen,
   selectActiveAgentId,
+  selectConversationMeta,
   selectCycledTarget,
+  selectLiveChoicePrompt,
 } from '../selectors/conversationsSelectors.js';
 import { submitCommand } from '../store/commandSubmit.js';
 import { createDialogActions } from '../store/dialogs/dialogActions.js';
@@ -198,6 +200,32 @@ export function deriveSpawnContext(appStore: AppStoreApi, focusedId: FocusId): S
  * event it sees as chat text — it returns `false` only for control keys it does not own (so an
  * unhandled control key isn't falsely reported as consumed).
  */
+/**
+ * Map one chat key event to the tmux key to forward to a live choice dialog (the multiple-choice
+ * takeover). Named keys (`Up`, `Enter`, `Escape`, `Space`, `BSpace`, …) drive the dialog cursor /
+ * toggle / confirm; printable characters forward as literal text so the dialog's inline "type
+ * something" field works. Returns `null` for events the takeover does not own (e.g. ctrl-chords),
+ * which then fall through unhandled. Exported for unit tests.
+ */
+export function choiceKeyFor(
+  input: string,
+  key: Key,
+): { readonly key: string; readonly literal: boolean } | null {
+  if (key.upArrow === true) return { key: 'Up', literal: false };
+  if (key.downArrow === true) return { key: 'Down', literal: false };
+  if (key.leftArrow === true) return { key: 'Left', literal: false };
+  if (key.rightArrow === true) return { key: 'Right', literal: false };
+  if (key.tab === true) return { key: key.shift === true ? 'BTab' : 'Tab', literal: false };
+  if (key.return === true) return { key: 'Enter', literal: false };
+  if (key.escape === true) return { key: 'Escape', literal: false };
+  if (key.backspace === true || key.delete === true) return { key: 'BSpace', literal: false };
+  if (input === ' ') return { key: 'Space', literal: false };
+  if (input.length > 0 && key.ctrl !== true && key.meta !== true) {
+    return { key: input, literal: true };
+  }
+  return null;
+}
+
 export function makeChatInputHandler(
   chatInput: InputStores['chatInput'],
   appStore: AppStoreApi,
@@ -205,6 +233,37 @@ export function makeChatInputHandler(
 ): ChatInputHandler {
   return {
     handleKey(input, key): boolean {
+      // Multiple-choice takeover: when the active target's transcript ends in a LIVE choice_prompt
+      // (a CC AskUserQuestion / trust dialog), the chat input belongs to the dialog — keys forward
+      // to the agent's pane via `agent.send_key` (rule 3: through the conversations action). The
+      // pane is ground truth; the parser's block-updated events move the rendered cursor. Checked
+      // FIRST so Enter answers the dialog rather than sending the buffer.
+      {
+        const state = appStore.getState();
+        const agentId = selectActiveAgentId(state.conversations, state.roster, state.favorites);
+        if (agentId !== null) {
+          const livePrompt = selectLiveChoicePrompt(state.conversations, agentId);
+          if (livePrompt !== null) {
+            const forward = choiceKeyFor(input, key);
+            if (forward === null) {
+              return false;
+            }
+            void state.actions.conversations.sendKey(agentId, forward.key, forward.literal);
+            return true;
+          }
+          // Queued-message "send now": with a held message for the target, an Enter on an EMPTY
+          // buffer interrupts the agent — the service then delivers the queued message at the next
+          // input-ready parse. A non-empty buffer keeps normal send semantics (the new text appends
+          // to the queue server-side).
+          if (key.return === true && chatInput.getState().text.length === 0) {
+            const queued = selectConversationMeta(state.conversations, agentId).queuedMessage;
+            if (queued !== null) {
+              void state.actions.conversations.interrupt(agentId);
+              return true;
+            }
+          }
+        }
+      }
       // Enter → send the buffer to the active agent, then clear. Always consumed (Enter is chat's).
       //
       // F9 submit-while-uploading policy (per-state, because the states differ by *path availability*
