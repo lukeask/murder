@@ -15,6 +15,7 @@ from murder.runtime.workers import (
     DoneSessionSweeperWorker,
     HarnessVersionProbeWorker,
     OrchestratorCommandWorker,
+    PlannerSessionSweeperWorker,
     StateCommandWorker,
     UsageProbeWorker,
     WorkerCtx,
@@ -49,6 +50,7 @@ async def start_supervisor_workers(
     await supervisor.start_worker(UsageProbeWorker.from_worker_ctx(worker_ctx))
     await supervisor.start_worker(HarnessVersionProbeWorker.from_runtime(runtime))
     await supervisor.start_worker(DoneSessionSweeperWorker())
+    await supervisor.start_worker(PlannerSessionSweeperWorker())
     await supervisor.start_worker(
         CollaboratorWorker(
             ensure_collaborator=orchestrator.ensure_collaborator,

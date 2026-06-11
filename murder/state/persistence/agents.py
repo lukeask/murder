@@ -244,6 +244,82 @@ def list_stale_done_crow_sessions(
     return [dict(r) for r in rows]
 
 
+def list_orphaned_planner_sessions(
+    conn: sqlite3.Connection,
+    *,
+    older_than_minutes: int = 30,
+) -> list[dict[str, Any]]:
+    """Return planner / planning_handler agents whose tmux session should be reclaimed.
+
+    A row is orphaned when it has a non-NULL session AND either:
+      (a) the agent's own status is terminal (dead/done/failed) — no time gate; or
+      (b) the owning plan (derived from the ``planner-<plan>`` /
+          ``planning_handler-<plan>`` agent_id) is missing from the plans table,
+          or has status 'superseded', AND that state has been stable for at least
+          ``older_than_minutes``. The age clock uses the plan's ``updated_at`` when
+          the plan row exists, else the agent row's ``started_at``.
+
+    Live planners on draft/accepted plans are NEVER returned — they are
+    plan-scoped and long-lived by design.
+
+    Returns list of dicts with keys: agent_id, session, status.
+    """
+    candidates = conn.execute(
+        """
+        SELECT agent_id, session, status, role, started_at
+          FROM agents
+         WHERE role IN ('planner', 'planning_handler')
+           AND session IS NOT NULL
+        """
+    ).fetchall()
+
+    terminal = {"dead", "done", "failed"}
+    out: list[dict[str, Any]] = []
+    for row in candidates:
+        agent_id = row["agent_id"]
+        status = row["status"]
+        if status in terminal:
+            out.append({"agent_id": agent_id, "session": row["session"], "status": status})
+            continue
+
+        # Derive plan name from the agent_id naming convention.
+        plan_name: str | None = None
+        for prefix in ("planner-", "planning_handler-"):
+            if agent_id.startswith(prefix):
+                plan_name = agent_id[len(prefix):]
+                break
+        if not plan_name:
+            continue
+
+        plan = conn.execute(
+            "SELECT status, updated_at FROM plans WHERE name = ?",
+            (plan_name,),
+        ).fetchone()
+
+        if plan is None:
+            # Plan row missing — gate on the agent's own start time.
+            age_anchor = row["started_at"]
+        elif plan["status"] == "superseded":
+            age_anchor = plan["updated_at"]
+        else:
+            # draft / accepted — live, never sweep.
+            continue
+
+        if age_anchor is None:
+            # No timestamp to gate on; treat as old enough to reclaim.
+            out.append({"agent_id": agent_id, "session": row["session"], "status": status})
+            continue
+
+        older = conn.execute(
+            "SELECT ? < datetime('now', ? || ' minutes') AS is_old",
+            (age_anchor, f"-{older_than_minutes}"),
+        ).fetchone()
+        if older is not None and older["is_old"]:
+            out.append({"agent_id": agent_id, "session": row["session"], "status": status})
+
+    return out
+
+
 def clear_agent_session(conn: sqlite3.Connection, agent_id: str) -> None:
     """NULL out the session column for an agent (used after killing its tmux session)."""
     conn.execute("UPDATE agents SET session = NULL WHERE agent_id = ?", (agent_id,))
