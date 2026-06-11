@@ -555,6 +555,27 @@ def test_cc_slash_command_echo_is_not_a_user_turn():
     assert "what does this function" in real_users[0]["text"]
 
 
+def test_cc_thinking_effort_spinner_is_chrome():
+    """Spinner status lines whose parenthetical carries only a thinking-effort
+    tail (``(5s · thinking with high effort)`` — no token counts, no ``esc to``)
+    must be suppressed, including the double-glyph ``· ✻`` rendering. Regression:
+    these leaked through the bare-prose branch as phantom assistant turns."""
+    from murder.llm.harnesses.transcripts.grammar import claude_code as cc
+
+    spinners = [
+        "· ✻ Scampering… (5s · thinking with high effort)",
+        "✻ Scampering… (6s · thinking with high effort)",
+        "* Simmering… (1s · thinking with medium effort)",
+        "· · Scampering… (5s · thinking with high effort)",
+    ]
+    for spinner in spinners:
+        segs = cc.parse_lines(["❯ hello", "● working on it", spinner])
+        blob = json.dumps(segs, ensure_ascii=False)
+        assert "Scampering" not in blob and "Simmering" not in blob, (
+            f"spinner leaked into parse: {spinner!r}"
+        )
+
+
 def _cursor_paint_user_blocks(frame: str, user_texts: list[str]) -> str:
     """Re-create Cursor's user-input background colour around the given lines.
 
