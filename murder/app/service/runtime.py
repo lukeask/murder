@@ -29,7 +29,7 @@ from typing import TYPE_CHECKING, Any
 from murder.app.service.agent_registry import AgentRegistry
 from murder.app.service.document_access import DocumentAccess
 from murder.app.service.filesystem_sync import FilesystemSyncSupervisor
-from murder.app.service.recovery import reconcile_agents_vs_tmux
+from murder.app.service.recovery import ReconcileReport, reconcile_agents_vs_tmux
 from murder.app.service.runtime_lifecycle import kill_project_tmux_sessions, shutdown_live_agents
 from murder.bus import Bus, EventFilter, SubscriptionHandle
 from murder.bus.protocol import Entity, StateSnapshotEvent
@@ -91,6 +91,7 @@ class Runtime:
         self.ticket_sync: TicketSync | None = None
         self.report_sync: SimpleDocSync | None = None
         self.documents = DocumentAccess(self.repo_root)
+        self.startup_reconcile_report: ReconcileReport | None = None
 
     async def __aenter__(self) -> Runtime:
         await self.start()
@@ -107,6 +108,7 @@ class Runtime:
         _db_init_schema(self.db)
         live_sessions = set(await tmux.list_sessions())
         report = reconcile_agents_vs_tmux(self.db, live_sessions)
+        self.startup_reconcile_report = report
         if report:
             logging.getLogger(__name__).info("startup reconcile: %s", report.summary())
         for session in report.sessions_to_kill:

@@ -421,6 +421,20 @@ class ServiceHost:
                 )
 
             self.runtime._sync.set_parse_error_notifier(_send_parse_error)
+
+        # Startup recovery: reattach handlers to crows whose tmux session
+        # survived a service restart so DONE is consumed and the ticket finishes.
+        report = getattr(self.runtime, "startup_reconcile_report", None)
+        if report and report.crows_to_reattach:
+            for tid, crow_session in report.crows_to_reattach:
+                try:
+                    await self.orchestrator.reattach_crow(tid, crow_session)
+                    LOGGER.info(
+                        "reattached crow handler for %s (session %s)", tid, crow_session
+                    )
+                except Exception:
+                    LOGGER.error("failed to reattach crow for %s", tid, exc_info=True)
+
         self.socket_server = SocketBusServer(
             self.broker,
             run_id=self.runtime.run_id,

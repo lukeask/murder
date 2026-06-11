@@ -23,9 +23,18 @@ class ReconcileReport:
     agents_marked_dead: list[str] = field(default_factory=list)
     tickets_reset_to_failed: list[str] = field(default_factory=list)
     sessions_to_kill: list[str] = field(default_factory=list)
+    # in_progress tickets whose crow session is still alive after a restart:
+    # (ticket_id, crow_session). The caller rehydrates an in-memory CrowAgent +
+    # fresh handler so DONE is consumed and the ticket can finish.
+    crows_to_reattach: list[tuple[str, str]] = field(default_factory=list)
 
     def __bool__(self) -> bool:
-        return bool(self.agents_marked_dead or self.tickets_reset_to_failed or self.sessions_to_kill)
+        return bool(
+            self.agents_marked_dead
+            or self.tickets_reset_to_failed
+            or self.sessions_to_kill
+            or self.crows_to_reattach
+        )
 
     def summary(self) -> str:
         parts = []
@@ -35,6 +44,11 @@ class ReconcileReport:
             parts.append(f"tickets → failed: {', '.join(self.tickets_reset_to_failed)}")
         if self.sessions_to_kill:
             parts.append(f"sessions to kill: {', '.join(self.sessions_to_kill)}")
+        if self.crows_to_reattach:
+            parts.append(
+                "crows to reattach: "
+                + ", ".join(f"{tid}({session})" for tid, session in self.crows_to_reattach)
+            )
         return "; ".join(parts) if parts else "nothing to reconcile"
 
 
@@ -110,5 +124,28 @@ def reconcile_agents_vs_tmux(
             except Exception:
                 # Already in a terminal state or transition not allowed — skip.
                 pass
+            continue
+
+        # Crow IS alive: rehydrate it on startup instead of leaving the ticket
+        # stuck in in_progress with no handler to consume DONE.
+        crow_session = conn.execute(
+            "SELECT session FROM agents WHERE agent_id = ?",
+            (f"crow-{tid}",),
+        ).fetchone()["session"]
+        report.crows_to_reattach.append((tid, crow_session))
+
+        # The old handler row (and its debug log-tail session) is stale; mark it
+        # dead so the fresh handler spawned during reattach re-registers cleanly.
+        # The first loop may have already marked it dead if its tail session was
+        # gone — make this pass idempotent.
+        handler_row = conn.execute(
+            "SELECT status, session FROM agents WHERE agent_id = ?",
+            (f"crow_handler-{tid}",),
+        ).fetchone()
+        if handler_row is not None and handler_row["status"] not in ("dead", "done", "failed"):
+            _db_set_agent_status(conn, f"crow_handler-{tid}", "dead")
+            report.agents_marked_dead.append(f"crow_handler-{tid}")
+            if handler_row["session"]:
+                report.sessions_to_kill.append(handler_row["session"])
 
     return report

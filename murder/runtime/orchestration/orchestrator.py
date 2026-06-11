@@ -309,6 +309,61 @@ class Orchestrator:
         handle = await spawn_agent(spec, rt=self.rt, event_sink=self.rt.event_sink)
         return handle.session_name
 
+    async def reattach_crow(self, ticket_id: str, crow_session: str) -> None:
+        """Rehydrate an in-memory CrowAgent around an already-live tmux session.
+
+        Used on startup recovery: the crow's tmux session survived a service
+        restart but its in-memory agent/handler did not, so DONE would never be
+        consumed. We bind a fresh CrowAgent to the live pane (no harness start,
+        no prompt) and spawn a fresh handler. Transcript projection restarts from
+        the current scrollback.
+        """
+        row = _db_get_ticket(self.rt.db, ticket_id)
+        if row is None:
+            raise KeyError(ticket_id)
+        harness_kind = resolve_default_crow_harness(self.rt.config.default_crow, row)
+        startup_model = resolve_default_crow_startup_model(
+            self.rt.config.default_crow, row, harness_kind
+        )
+        startup_effort = resolve_default_crow_startup_effort(self.rt.config.default_crow, row)
+        harness = get_harness(
+            harness_kind,
+            startup_model=startup_model,
+            startup_effort=startup_effort,
+        )
+
+        repo_root = self.rt.repo_root
+        worktree_path: Path | None = None
+        worktree_name = row.get("worktree")
+        if isinstance(worktree_name, str) and worktree_name.strip():
+            worktree = await ensure_named_worktree(
+                self.rt.repo_root,
+                worktree_name.strip(),
+                category="crow",
+            )
+            repo_root = worktree.path
+            worktree_path = worktree.path
+
+        agent = CrowAgent(
+            agent_id=f"crow-{ticket_id}",
+            ticket_id=ticket_id,
+            session=crow_session,
+            harness=harness,
+            repo_root=repo_root,
+            startup_model=startup_model,
+            startup_effort=startup_effort,
+            worktree_path=worktree_path,
+            runtime=self.rt,
+        )
+        self.rt.register_agent(agent)
+        agent.status = AgentStatus.RUNNING
+        self.rt.sync_agent(agent)
+        # Fresh accumulator; reattach resumes transcript projection from the
+        # current pane scrollback rather than the original startup state.
+        agent.start_conversation()
+        await self.rt.publish_snapshot(Entity.AGENT, agent.id)
+        await self.spawn_crow_handler(ticket_id, crow_session)
+
     async def spawn_crow_handler(self, ticket_id: str, crow_session: str) -> str:
         row = _db_get_ticket(self.rt.db, ticket_id)
         if row is None:
