@@ -249,7 +249,7 @@ export interface ResolvedBindings {
   chordsFor(id: ActionId): readonly KeyChord[];
   /** True iff the Ink `(input, key)` event matches any chord bound to `id`. */
   matches(id: ActionId, input: string, key: Key): boolean;
-  /** A short label for hint bars — `M-s` (alt), `C-s` (ctrl), `M-s/C-s` (both), or a plain key name. */
+  /** A short label for hint bars — `A-s` (alt), `C-s` (ctrl), `A-s/C-s` (both), or a plain key name. */
   label(id: ActionId): string;
   /** True iff `key` carries the command modifier (gates digit toggles + vim nav). Under `both`,
    * either alt or ctrl qualifies. */
@@ -279,17 +279,32 @@ function commandChord(flag: CommandFlag, key: string): KeyChord {
   return { input: key, key: { [flag]: true } };
 }
 
-/** The label prefix for a command flag (`M-` alt, `C-` ctrl). */
+/** The hint-bar prefix for the alt/meta modifier. `A-` (alt) reads more plainly than the old `M-`
+ * (meta) and pairs with {@link CTRL_PREFIX} (`C-`) so the bar tells the user *which* modifier a chord
+ * needs — the prefix the focused pane's hints carry varies `A-`↔`C-` with the configured modifier. */
+const ALT_PREFIX = 'A-';
+/** The hint-bar prefix for the ctrl modifier (paired with {@link ALT_PREFIX}). */
+const CTRL_PREFIX = 'C-';
+
+/** The label prefix for a command flag (`A-` alt, `C-` ctrl). */
 function flagPrefix(flag: CommandFlag): string {
-  return flag === 'meta' ? 'M-' : 'C-';
+  return flag === 'meta' ? ALT_PREFIX : CTRL_PREFIX;
 }
 
-/** Render a plain chord's key for a label: its printable char (or first non-modifier special-key
- * flag), prefixed `C-`/`M-` when the chord itself carries ctrl/meta (e.g. ctrl+n → `C-n`). */
-function plainLabel(chord: KeyChord): string {
+/**
+ * The display label for a single chord: its printable char (or first non-modifier special-key flag),
+ * with the modifier prefix `A-` (meta/alt) or `C-` (ctrl) when the chord carries one, and a literal
+ * space spelled `space`. Shared by the resolved-binding labels (plain actions) AND the bottom bar's
+ * per-panel hints — so a command-modified panel chord (e.g. star = alt+f → `A-f`) reads with its
+ * modifier and varies `A-`↔`C-` with the user's setting, exactly like the global hints (ctrl+n →
+ * `C-n`). One place owns the prefix rule so the panel hints and the globals can never disagree.
+ */
+export function chordLabel(chord: KeyChord): string {
   const flags = chord.key === undefined ? [] : Object.keys(chord.key);
-  const base = chord.input ?? flags.find((flag) => flag !== 'ctrl' && flag !== 'meta') ?? '?';
-  const prefix = chord.key?.ctrl === true ? 'C-' : chord.key?.meta === true ? 'M-' : '';
+  const rawBase = chord.input ?? flags.find((flag) => flag !== 'ctrl' && flag !== 'meta') ?? '?';
+  const base = rawBase === ' ' ? 'space' : rawBase;
+  const prefix =
+    chord.key?.ctrl === true ? CTRL_PREFIX : chord.key?.meta === true ? ALT_PREFIX : '';
   return `${prefix}${base}`;
 }
 
@@ -331,7 +346,7 @@ export function resolveBindings(
   for (const id of ACTION_IDS) {
     const def = ACTIONS[id];
     if (def.default.kind === 'plain') {
-      labels[id] = def.default.label ?? plainLabel(def.default.chord);
+      labels[id] = def.default.label ?? chordLabel(def.default.chord);
       continue;
     }
     const key = overrides[id] ?? def.default.key;
