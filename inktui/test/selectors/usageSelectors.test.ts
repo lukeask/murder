@@ -3,7 +3,7 @@
  *
  * Rule 2 proof: all formatting (pct label, period label, reset label, bar geometry, isHigh flag)
  * lives here. The component receives display-ready groups and does zero arithmetic — it only paints
- * colors from `isHigh` and the bar geometry (`filledCount` / `markerPos`).
+ * colors from `isHigh` and the bar geometry (`filledCount` over `barWidth`).
  */
 
 import { selectUsageView, USAGE_BAR_WIDTH } from '../../src/selectors/usageSelectors.js';
@@ -51,17 +51,6 @@ describe('selectUsageView — formatting', () => {
     expect(firstGauge([row({ tPeriodMinutes: 5 * 60 })])?.periodLabel).toBe('5h');
     expect(firstGauge([row({ tPeriodMinutes: 30 * 24 * 60 })])?.periodLabel).toBe('30d');
     expect(firstGauge([row({ tPeriodMinutes: 0 })])?.periodLabel).toBe('');
-  });
-
-  it('places the time-through-period marker by fraction elapsed', () => {
-    // 6 days into a 7-day window → 6/7 elapsed → floor(6/7 * 12) = 10.
-    const g = firstGauge([row({ tPeriodMinutes: 7 * 24 * 60, tUntilResetMinutes: 1 * 24 * 60 })]);
-    expect(g?.markerPos).toBe(10);
-  });
-
-  it('marker is null when the period or remaining time is unknown', () => {
-    expect(firstGauge([row({ tPeriodMinutes: 0 })])?.markerPos).toBeNull();
-    expect(firstGauge([row({ tUntilResetMinutes: 0 })])?.markerPos).toBeNull();
   });
 
   it('formats reset minutes as "Xm" for < 60 minutes', () => {

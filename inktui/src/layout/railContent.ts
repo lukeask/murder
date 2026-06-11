@@ -62,8 +62,8 @@ import {
   MIN_PANEL_WIDTH,
   MIN_USAGE_WIDTH,
   type RailContent,
+  USAGE_NATURAL_INNER_WIDTH,
   USAGE_PANE_CHROME,
-  USAGE_TIER_LARGE_MIN,
 } from './budget.js';
 
 // ---------------------------------------------------------------------------
@@ -88,14 +88,18 @@ const CROW_NAME_STATUS_GAP = 2;
 
 /**
  * The right-rail width usage reserves when it drives the rail ALONE (no crows). usage-alone should
- * show its FULLEST form (the large tier — R9), so we reserve the rail width that yields a large-tier
- * inner width: `USAGE_TIER_LARGE_MIN(33)` of gauge glyphs + `USAGE_PANE_CHROME(4)` of Pane border +
- * padding = 37 (L4d, problem 2). The engine still compresses this toward the budget on a narrow
- * terminal (the Stage keeps its ≥60% floor), so usage drops to medium/mini there via the tiers; this
- * only sets the *desired* natural width so a wide terminal renders large instead of medium. Floored at
- * {@link MIN_USAGE_WIDTH} (degenerate guard; the large reserve always exceeds it).
+ * show its FULLEST form (bar + win + reset — R9), so we reserve the rail width that yields the full
+ * gauge line at its nominal bar width: `USAGE_NATURAL_INNER_WIDTH(27)` of gauge glyphs +
+ * `USAGE_PANE_CHROME(4)` of Pane border + padding = 31 (L4d, problem 2). The engine still compresses
+ * this toward the budget on a narrow terminal (the Stage keeps its ≥60% floor) and the fluid gauge
+ * line sheds its win/reset labels there; this only sets the *desired* natural width so a wide
+ * terminal renders the full form. Floored at {@link MIN_USAGE_WIDTH} (degenerate guard; the full
+ * reserve always exceeds it).
  */
-const USAGE_RESERVE_WIDTH = Math.max(MIN_USAGE_WIDTH, USAGE_TIER_LARGE_MIN + USAGE_PANE_CHROME);
+const USAGE_RESERVE_WIDTH = Math.max(
+  MIN_USAGE_WIDTH,
+  USAGE_NATURAL_INNER_WIDTH + USAGE_PANE_CHROME,
+);
 
 // ---------------------------------------------------------------------------
 // Title-row width (L3b) — the inline-title top-border line each Pane draws

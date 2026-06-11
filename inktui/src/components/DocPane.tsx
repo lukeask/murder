@@ -241,7 +241,7 @@ export const StageDocPane = memo(function StageDocPane({
           ) : (
             window.map((line, index) => (
               // biome-ignore lint/suspicious/noArrayIndexKey: body lines are position-keyed (markdown can repeat; the windowed index is the stable identity for the visible slice).
-              <Text key={clamped + index} wrap="truncate">
+              <Text key={clamped + index}>
                 {line === '' ? ' ' : line}
               </Text>
             ))
@@ -263,7 +263,7 @@ const EMPTY_KEYMAP: PanelKeymap<DocIntent> = { keymap: [], onIntent() {} };
  * column is exactly `height` rows tall, with `thumb.size` filled cells starting at `thumb.offset`.
  * Pure function of its props (rule 1) — the geometry is computed by {@link computeScrollThumb}.
  */
-const Scrollbar = memo(function Scrollbar({
+export const Scrollbar = memo(function Scrollbar({
   height,
   thumb,
 }: {

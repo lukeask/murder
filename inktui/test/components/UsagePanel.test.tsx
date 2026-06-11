@@ -65,18 +65,18 @@ function RootInput(): null {
 function Harness({
   store,
   inputStores,
-  tier,
+  innerWidth,
 }: {
   readonly store: ReturnType<typeof createAppStore>['store'];
   readonly inputStores: ReturnType<typeof createInputStores>;
-  readonly tier?: 'mini' | 'medium' | 'large';
+  readonly innerWidth?: number;
 }): JSX.Element {
   return (
     <AppStoreProvider value={store}>
       <InputStoresProvider value={inputStores}>
         <RootInput />
         <Box>
-          <UsagePanel {...(tier === undefined ? {} : { tier })} />
+          <UsagePanel {...(innerWidth === undefined ? {} : { innerWidth })} />
         </Box>
       </InputStoresProvider>
     </AppStoreProvider>
@@ -167,40 +167,65 @@ describe('UsagePanel — rendering', () => {
     dispose();
   });
 
-  it('renders the gauge variant for its tier (R9): large shows reset, medium hides it, mini hides pct', async () => {
-    // large (default) — the full render: pct AND the reset countdown both visible.
-    const large = await setup();
-    const largeRender = render(
-      <Harness store={large.store} inputStores={large.inputStores} tier="large" />,
-    );
+  it('embeds the pct in the bar and drops the time marker', async () => {
+    const { store, inputStores, dispose } = await setup();
+    const { lastFrame } = render(<Harness store={store} inputStores={inputStores} />);
     await tick();
-    const largeFrame = largeRender.lastFrame() ?? '';
-    expect(largeFrame).toContain('65%'); // pct
-    expect(largeFrame).toContain('20m'); // reset countdown (large only)
-    large.dispose();
+    const frame = lastFrame() ?? '';
+    // 65% over a 12-cell bar fills 8 cells ≥ 3, so the label leads the fill: `65%` + 5 solid cells,
+    // then the 4-cell track — CONTIGUOUS, with no time-through-period `│` marker cut into the bar.
+    expect(frame).toContain('65%█████░░░░');
+    // The pct column is gone from the key line (the label lives inside the bar now).
+    expect(frame).not.toContain('pct');
+    dispose();
+  });
 
-    // medium — bar + pct, but the window/reset trail is dropped.
-    const medium = await setup();
-    const mediumRender = render(
-      <Harness store={medium.store} inputStores={medium.inputStores} tier="medium" />,
-    );
+  it('right-aligns the pct on the grey track when the fill is under 3 cells', async () => {
+    const reply = twoGauges();
+    const { store, inputStores, dispose } = await setup({
+      ...reply,
+      usage_gauges: reply.usage_gauges.slice(0, 1).map((g) => ({ ...g, pct: 10 })),
+    });
+    const { lastFrame } = render(<Harness store={store} inputStores={inputStores} />);
     await tick();
-    const mediumFrame = mediumRender.lastFrame() ?? '';
-    expect(mediumFrame).toContain('65%'); // pct still shown
-    expect(mediumFrame).not.toContain('20m'); // reset dropped at medium
-    medium.dispose();
+    // 10% fills 1 of 12 cells (< 3): fill, then the grey track, then the right-aligned label.
+    expect(lastFrame() ?? '').toContain('█░░░░░░░░10%');
+    dispose();
+  });
 
-    // mini — the compact bar only; no pct, no reset labels.
-    const mini = await setup();
-    const miniRender = render(
-      <Harness store={mini.store} inputStores={mini.inputStores} tier="mini" />,
+  it('sheds the win label, then the reset countdown, as the inner width narrows (R9)', async () => {
+    // Full (default innerWidth 27 → bar 12 ≥ 8 with the whole trail): win + reset both shown.
+    const full = await setup();
+    const fullRender = render(<Harness store={full.store} inputStores={full.inputStores} />);
+    await tick();
+    const fullFrame = fullRender.lastFrame() ?? '';
+    expect(fullFrame).toContain('win'); // key line labels the win column
+    expect(fullFrame).toContain('1h'); // 60-minute window length
+    expect(fullFrame).toContain('20m'); // reset countdown
+    full.dispose();
+
+    // Reset-only (innerWidth 20 → the full trail would squeeze the bar to 5 < 8; without win it is 9).
+    const resetOnly = await setup();
+    const resetRender = render(
+      <Harness store={resetOnly.store} inputStores={resetOnly.inputStores} innerWidth={20} />,
     );
     await tick();
-    const miniFrame = miniRender.lastFrame() ?? '';
-    expect(miniFrame).not.toContain('65%'); // no pct label at mini
-    expect(miniFrame).not.toContain('20m'); // no reset at mini
-    expect(miniFrame).toContain('█'); // the compact bar is still drawn
-    mini.dispose();
+    const resetFrame = resetRender.lastFrame() ?? '';
+    expect(resetFrame).not.toContain('win'); // window-length column dropped first
+    expect(resetFrame).toContain('20m'); // reset countdown survives
+    resetOnly.dispose();
+
+    // Bare (innerWidth 8 → even reset alone would squeeze the bar under 8): the bar is all that's left.
+    const bare = await setup();
+    const bareRender = render(
+      <Harness store={bare.store} inputStores={bare.inputStores} innerWidth={8} />,
+    );
+    await tick();
+    const bareFrame = bareRender.lastFrame() ?? '';
+    expect(bareFrame).not.toContain('20m'); // reset dropped last
+    expect(bareFrame).not.toContain('reset'); // no key line at the bare layout
+    expect(bareFrame).toContain('█'); // the bar is still drawn
+    bare.dispose();
   });
 
   it('renders empty chrome when the slice has no rows', async () => {

@@ -4,21 +4,15 @@
  * Rule 2 in action: all formatting (pct label, period label, reset-countdown label, bar geometry)
  * lives here, never in the component. The UsagePanel receives a {@link UsageView} of display-ready
  * groups and does zero arithmetic or string-building. The ONE thing the selector deliberately does
- * NOT do is pick colors — `isHigh` is a flag and the bar is emitted as *geometry* (filled-cell count
- * + marker position), so the component paints the segments (green/red/grey). That mirrors the old
- * split where the component chose `barColor` from `isHigh`.
+ * NOT do is pick colors — `isHigh` is a flag and the bar is emitted as *geometry* (a filled-cell
+ * count), so the component paints the segments (green/red/grey). That mirrors the old split where
+ * the component chose `barColor` from `isHigh`.
  *
  * ## Grouping by provider (harness)
  * Usage now renders 2–3 lines per provider — a header line then one gauge line per rate-limit window
  * (e.g. codex → `5h` + `weekly`). So the view-model is GROUPED: `groups[]`, each a harness plus its
  * gauge windows, in first-seen order (the service already emits providers in `_PROVIDER_ORDER`, so
  * first-seen preserves that order). No global pct sort — grouping wins over ranking.
- *
- * ## The time-through-period marker
- * Each gauge carries `markerPos`: the cell index of a grey `│` the component overlays on the bar to
- * show how far through the *time* window we are (distinct from the usage fill). E.g. 6 days into a
- * 7-day window → the marker sits at ~6/7 of the bar, regardless of how much quota is used. `null`
- * when the period or reset time is unknown (no meaningful position).
  *
  * Two layers (mirrors rosterSelectors.ts):
  *  - **Pure transform** (`selectUsageView`) — no React, unit-testable in isolation.
@@ -38,23 +32,21 @@ export const USAGE_BAR_WIDTH = 12;
 
 /**
  * One usage gauge (a single rate-limit window) as the UsagePanel paints it. Labels are pre-formatted
- * strings; the bar is emitted as *geometry* (`filledCount` + `markerPos`) so the component owns the
+ * strings; the bar is emitted as *geometry* (`filledCount` over `barWidth`) so the component owns the
  * per-segment colors (rule 2 — the selector never picks a color).
  */
 export interface UsageGaugeView {
   readonly windowKey: string;
-  /** Formatted percentage string, e.g. `'73%'`. */
+  /** Formatted percentage string, e.g. `'73%'` — painted INSIDE the bar by the component. */
   readonly pctLabel: string;
   /** Window-length label, e.g. `'5h'`, `'7d'`, `'30d'`. `''` when unknown. */
   readonly periodLabel: string;
   /** Time until reset, formatted for display, e.g. `'1h52m'` or `'—'`. */
   readonly resetLabel: string;
-  /** Total bar width in cells (= {@link USAGE_BAR_WIDTH}); the component lays out exactly this many. */
+  /** Total bar width in cells (= {@link USAGE_BAR_WIDTH}); the component rescales to its live width. */
   readonly barWidth: number;
   /** How many leading cells are filled (`█`); the rest are empty (`░`). */
   readonly filledCount: number;
-  /** Cell index for the grey time-through-period `│` marker, or `null` when the period is unknown. */
-  readonly markerPos: number | null;
   /** True when usage is at or above 80% — the component paints the fill red. */
   readonly isHigh: boolean;
 }
@@ -85,22 +77,6 @@ function filledCells(pct: number, width: number): number {
   return Math.round((Math.min(Math.max(pct, 0), 100) / 100) * width);
 }
 
-/**
- * Cell index of the time-through-period marker, or `null` when it can't be placed. The fraction
- * elapsed is `(period − remaining) / period`, clamped to `[0, 1]`; multiplied by the width and
- * floored to a cell (capped at the last cell). Unknown period (or non-positive remaining) → `null`.
- */
-function markerCell(
-  tPeriodMinutes: number,
-  tUntilResetMinutes: number,
-  width: number,
-): number | null {
-  if (tPeriodMinutes <= 0 || tUntilResetMinutes <= 0) return null;
-  const elapsed = Math.min(Math.max(tPeriodMinutes - tUntilResetMinutes, 0), tPeriodMinutes);
-  const frac = elapsed / tPeriodMinutes;
-  return Math.min(width - 1, Math.floor(frac * width));
-}
-
 /** Format a window length as a coarse `Xd`/`Xh`/`Xm` label (days when a whole multiple of a day). */
 function formatPeriod(minutes: number): string {
   if (minutes <= 0) return '';
@@ -127,7 +103,6 @@ function toGaugeView(row: UsageRow): UsageGaugeView {
     resetLabel: formatMinutes(row.tUntilResetMinutes),
     barWidth: USAGE_BAR_WIDTH,
     filledCount: filledCells(row.pct, USAGE_BAR_WIDTH),
-    markerPos: markerCell(row.tPeriodMinutes, row.tUntilResetMinutes, USAGE_BAR_WIDTH),
     isHigh: row.pct >= 80,
   };
 }

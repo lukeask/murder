@@ -69,8 +69,8 @@ export interface RailProps {
  * Arrange this side's visible panels. Returns `null` when the region has no visible panels (collapse
  * out of the layout). landscape → `column` (panels stack, split height); portrait → `row` (panels
  * side-by-side, split width). Stacked panes (landscape) sit flush — each Pane's border/header is
- * the separator, so no `rowGap` is spent; portrait keeps a one-cell `columnGap` breather between
- * the side-by-side strips.
+ * the separator, so no `rowGap` is spent; portrait side-by-side strips are also flush (no
+ * `columnGap`) so adjacent pane borders meet directly.
  */
 export function Rail({
   side,
@@ -96,12 +96,10 @@ export function Rail({
     <Box
       key={side}
       flexDirection={flexDirection}
-      // No inter-pane gap when stacking (landscape column): each Pane already draws its own
-      // border/header, which supplies the visual separation — an extra blank line between stacked
-      // panes just wastes a scarce vertical cell. Portrait keeps a 1-col breather between the
-      // side-by-side strips (no border edge faces a neighbour there).
+      // No inter-pane gap: each Pane already draws its own border/header, which supplies the visual
+      // separation — an extra blank cell between adjacent panes just wastes scarce terminal space.
       rowGap={0}
-      columnGap={landscape ? 0 : 1}
+      columnGap={0}
       flexGrow={0}
       flexShrink={0}
       width={landscape ? cells : undefined}

@@ -5,7 +5,7 @@
  *  - rails get ≤ their natural size when there's slack;
  *  - compression + the MIN_PANEL_WIDTH clamp engage when tight;
  *  - the math is total — never negative/NaN down to the smallest legible form;
- *  - the usage-tier width thresholds;
+ *  - the usage INNER-width derivation (rail − chrome; portrait splits the strip with crows);
  *  - clipName / FILENAME_CAP bound a rail's width contribution.
  */
 
@@ -17,12 +17,11 @@ import {
   FILENAME_CAP,
   MIN_PANEL_WIDTH,
   MIN_PORTRAIT_RAIL_HEIGHT,
+  MIN_USAGE_WIDTH,
   type RailContent,
   STAGE_MIN_FRACTION,
+  USAGE_NATURAL_INNER_WIDTH,
   USAGE_PANE_CHROME,
-  USAGE_TIER_LARGE_MIN,
-  USAGE_TIER_MEDIUM_MIN,
-  usageTierFor,
 } from '../../src/layout/budget.js';
 
 /**
@@ -200,77 +199,35 @@ describe('computeBodyLayout — totality (no NaN / negative, smallest forms)', (
   });
 });
 
-describe('usageTierFor — INNER-width thresholds (R9, L4d)', () => {
-  it('picks large at/above the large INNER threshold (the gauges fit the full render)', () => {
-    expect(usageTierFor(USAGE_TIER_LARGE_MIN)).toBe('large');
-    expect(usageTierFor(USAGE_TIER_LARGE_MIN + 10)).toBe('large');
-  });
-
-  it('picks medium between the medium and large INNER thresholds', () => {
-    expect(usageTierFor(USAGE_TIER_MEDIUM_MIN)).toBe('medium');
-    expect(usageTierFor(USAGE_TIER_LARGE_MIN - 1)).toBe('medium');
-  });
-
-  it('picks mini below the medium INNER threshold', () => {
-    expect(usageTierFor(USAGE_TIER_MEDIUM_MIN - 1)).toBe('mini');
-    expect(usageTierFor(0)).toBe('mini');
-  });
-});
-
-describe('computeBodyLayout — usage tier from the gauges INNER width (L4d)', () => {
-  it('LANDSCAPE: the tier is chosen from rail − Pane chrome, NOT the raw rail width', () => {
-    // A crows-driven rail of 16 once picked MEDIUM off the raw width and the 20-cell medium line
-    // clipped with `…` in the 12-cell inner space. Now inner = 16 − 4 = 12 < 20 → mini (no clip).
+describe('computeBodyLayout — usage INNER width derivation (L4d)', () => {
+  it('LANDSCAPE: the inner width is rail − Pane chrome, NOT the raw rail width', () => {
+    // A crows-driven rail of 16 once sized the gauges off the raw width and the line clipped with
+    // `…` in the 12-cell inner space. The engine reports inner = 16 − 4 = 12 (no clip).
     const layout = computeBodyLayout(landscape(170, ABSENT, rail(16)));
     expect(layout.rightRailCells).toBe(16);
     expect(layout.usageInnerWidth).toBe(16 - USAGE_PANE_CHROME);
-    expect(layout.usageTier).toBe('mini');
   });
 
-  it('LANDSCAPE: a rail wide enough for the large inner width renders large', () => {
-    // inner must be ≥ USAGE_TIER_LARGE_MIN (33), so the rail must be ≥ 33 + chrome (37).
-    const layout = computeBodyLayout(
-      landscape(300, ABSENT, rail(USAGE_TIER_LARGE_MIN + USAGE_PANE_CHROME)),
-    );
-    expect(layout.usageInnerWidth).toBe(USAGE_TIER_LARGE_MIN);
-    expect(layout.usageTier).toBe('large');
-  });
-
-  it('LANDSCAPE: medium needs an inner width of exactly the medium threshold (no `…` clip)', () => {
-    // rail = 20 + chrome (24) → inner 20 → medium fits exactly; rail one narrower → inner 19 → mini.
-    const fits = computeBodyLayout(
-      landscape(300, ABSENT, rail(USAGE_TIER_MEDIUM_MIN + USAGE_PANE_CHROME)),
-    );
-    expect(fits.usageInnerWidth).toBe(USAGE_TIER_MEDIUM_MIN);
-    expect(fits.usageTier).toBe('medium');
-    const justUnder = computeBodyLayout(
-      landscape(300, ABSENT, rail(USAGE_TIER_MEDIUM_MIN + USAGE_PANE_CHROME - 1)),
-    );
-    expect(justUnder.usageInnerWidth).toBe(USAGE_TIER_MEDIUM_MIN - 1);
-    expect(justUnder.usageTier).toBe('mini');
-  });
-
-  it('PORTRAIT: the tier is derived from usage SHARE of the strip WIDTH, not the strip height', () => {
+  it('PORTRAIT: the inner width derives from usage SHARE of the strip WIDTH, not the strip height', () => {
     // The documented portrait mis-classification: rightRailCells is the strip HEIGHT in portrait, so
-    // classifying off it was wrong. With 1 right panel and a wide terminal the usage share is the full
-    // strip width → large; the strip height (a few rows) is irrelevant to the tier now.
+    // sizing off it was wrong. With 1 right panel the usage share is the full strip width; the strip
+    // height (a few rows) is irrelevant to the gauge width.
     const layout = computeBodyLayout({
       cols: 80,
       rows: 50,
       orientation: 'portrait',
       gap: 1,
       left: ABSENT,
-      right: railH(6), // a SHORT strip (6 rows) that would have classified as mini off its height
+      right: railH(6), // a SHORT strip (6 rows) that would have read as tiny off its height
       rightPanelCount: 1,
     });
     expect(layout.axis).toBe('height');
     expect(layout.usageInnerWidth).toBe(80 - USAGE_PANE_CHROME); // full strip width, 1 panel
-    expect(layout.usageTier).toBe('large');
   });
 
-  it('PORTRAIT: usage SPLITS the strip width with crows (2 panels), so its share picks a smaller tier', () => {
+  it('PORTRAIT: usage SPLITS the strip width with crows (2 panels), so its share shrinks', () => {
     // 2 present right panels share the strip width with one gap between → each gets ~half.
-    // cols 80, gap 1, count 2 → usage share = floor((80 − 1) / 2) = 39; inner = 39 − 4 = 35 → large.
+    // cols 80, gap 1, count 2 → usage share = floor((80 − 1) / 2) = 39; inner = 39 − 4 = 35.
     const wide = computeBodyLayout({
       cols: 80,
       rows: 50,
@@ -281,8 +238,7 @@ describe('computeBodyLayout — usage tier from the gauges INNER width (L4d)', (
       rightPanelCount: 2,
     });
     expect(wide.usageInnerWidth).toBe(Math.floor((80 - 1) / 2) - USAGE_PANE_CHROME);
-    expect(wide.usageTier).toBe('large');
-    // A narrower terminal: cols 48, count 2 → share floor((48−1)/2)=23; inner 23−4=19 → mini.
+    // A narrower terminal: cols 48, count 2 → share floor((48−1)/2)=23; inner 23−4=19.
     const narrow = computeBodyLayout({
       cols: 48,
       rows: 50,
@@ -293,29 +249,26 @@ describe('computeBodyLayout — usage tier from the gauges INNER width (L4d)', (
       rightPanelCount: 2,
     });
     expect(narrow.usageInnerWidth).toBe(Math.floor((48 - 1) / 2) - USAGE_PANE_CHROME);
-    expect(narrow.usageTier).toBe('mini');
   });
 
-  it('usage-alone reserve (large inner + chrome) → LARGE on a wide landscape terminal', () => {
-    // railContent reserves `USAGE_TIER_LARGE_MIN + USAGE_PANE_CHROME` for usage-alone; at that natural
-    // width on a roomy terminal the rail seats it whole → inner = large threshold → large tier.
-    const reserve = USAGE_TIER_LARGE_MIN + USAGE_PANE_CHROME;
+  it('usage-alone reserve (natural inner + chrome) seats the FULL gauge line on a wide terminal', () => {
+    // railContent reserves `USAGE_NATURAL_INNER_WIDTH + USAGE_PANE_CHROME` for usage-alone; at that
+    // natural width on a roomy terminal the rail seats it whole → inner = the full-line width.
+    const reserve = USAGE_NATURAL_INNER_WIDTH + USAGE_PANE_CHROME;
     const layout = computeBodyLayout(landscape(300, ABSENT, rail(reserve)));
     expect(layout.rightRailCells).toBe(reserve);
-    expect(layout.usageTier).toBe('large');
+    expect(layout.usageInnerWidth).toBe(USAGE_NATURAL_INNER_WIDTH);
   });
 
-  it('no `…` clip at the COMPRESSED floor: a crows+usage rail at MIN_PANEL_WIDTH still fits mini', () => {
+  it('no `…` clip at the COMPRESSED floor: a crows+usage rail at MIN_PANEL_WIDTH still fits a gauge', () => {
     // The tightest landscape: the right rail compresses to MIN_PANEL_WIDTH (12). Its inner width is
-    // 12 − 4 = 8 ≥ MIN_USAGE_WIDTH (the mini line `marker+space+MINI_BAR_WIDTH(6)` = 8), so mini draws
-    // without a `…` clip. This is the "no clip at ANY rail width" criterion at its worst case.
+    // 12 − 4 = 8 = MIN_USAGE_WIDTH (the bare line `marker+space+bar(6)`), so the gauge draws without
+    // a `…` clip. This is the "no clip at ANY rail width" criterion at its worst case.
     const layout = computeBodyLayout(landscape(60, rail(40), rail(40)));
     // Sanity: the right rail did compress to its min here (both naturals huge, budget tight).
     expect(layout.rightRailCells).toBeGreaterThanOrEqual(MIN_PANEL_WIDTH);
-    const innerAtMin = MIN_PANEL_WIDTH - USAGE_PANE_CHROME;
-    expect(usageTierFor(innerAtMin)).toBe('mini');
     // And the engine's reported inner width at this rail is ≥ that floor (never negative, never clips).
-    expect(layout.usageInnerWidth).toBeGreaterThanOrEqual(innerAtMin);
+    expect(layout.usageInnerWidth).toBeGreaterThanOrEqual(MIN_USAGE_WIDTH);
   });
 });
 

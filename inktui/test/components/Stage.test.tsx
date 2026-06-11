@@ -19,7 +19,8 @@ import { describe, expect, it } from 'vitest';
 import { FakeBusClient } from '../../src/bus/FakeBusClient.js';
 import type { ConversationBlockEvent } from '../../src/bus/protocol.js';
 import { PlansPanel } from '../../src/components/PlansPanel.js';
-import { Stage } from '../../src/components/Stage.js';
+import { formatTurnText, Stage } from '../../src/components/Stage.js';
+import type { ChatTurn } from '../../src/selectors/conversationsSelectors.js';
 import { AppStoreProvider } from '../../src/hooks/useAppStore.js';
 import { InputStoresProvider } from '../../src/hooks/useInputStores.js';
 import { useRootInput } from '../../src/hooks/useRootInput.js';
@@ -101,6 +102,22 @@ function emitTurns(fake: FakeBusClient, n: number): void {
   }
 }
 
+describe('formatTurnText', () => {
+  it('prefixes the first line and indents continuations', () => {
+    const turn: ChatTurn = {
+      blockId: 'b1',
+      speaker: 'assistant',
+      text: 'first\nsecond',
+    };
+    expect(formatTurnText(turn)).toBe('· first\n  second');
+  });
+
+  it('uses › for user turns', () => {
+    const turn: ChatTurn = { blockId: 'b2', speaker: 'user', text: 'hello' };
+    expect(formatTurnText(turn)).toBe('› hello');
+  });
+});
+
 async function setup(reply: CrowSnapshotReply = oneCollaborator()) {
   const fake = new FakeBusClient();
   fake.stubRpc('state.crow_snapshot', reply);
@@ -180,33 +197,56 @@ describe('Stage — chat-history panes as focusable Stage panes', () => {
     dispose();
   });
 
+  it('soft-wraps a long turn instead of truncating with an ellipsis', async () => {
+    const { fake, store, inputStores, dispose } = await setup();
+    const long = 'word '.repeat(30).trim();
+    const event: ConversationBlockEvent = {
+      type: 'conversation.block',
+      id: 'ev-long',
+      ts: '2026-06-08T00:00:00Z',
+      run_id: 'run-1',
+      agent_id: 'collab-1',
+      conversation_id: 'conv-collab-1',
+      action: 'block-appended',
+      block: { type: 'assistant', id: 'block-long', text: long },
+    };
+    fake.emit(event);
+    const { lastFrame } = render(<Harness store={store} inputStores={inputStores} />);
+    await tick();
+    const frame = lastFrame() ?? '';
+    expect(frame).toContain(long.slice(0, 20));
+    expect(frame).not.toContain('…');
+    dispose();
+  });
+
   it('scrolls the history window: newest turns by default, k reveals older turns', async () => {
     const { fake, store, inputStores, dispose } = await setup();
-    // Seed 25 turns (> WINDOW of 20) so there is something above the default window to scroll into.
-    emitTurns(fake, 25);
+    // Seed 50 turns (well above any measured window height) so there is always content above the
+    // default window to scroll into, regardless of the exact measured height the test harness reports.
+    emitTurns(fake, 50);
     void store; // store already wired to the same fake; emit feeds it via subscribe.
     const { stdin, lastFrame } = render(<Harness store={store} inputStores={inputStores} />);
     await tick();
 
     // Default (scroll 0): the window is pinned to the newest turns — the last is shown, the first is
-    // scrolled off above (a `…` indicator marks more-above).
+    // scrolled off above. The scrollbar column (not a `…` marker) now communicates position.
     const initial = lastFrame() ?? '';
-    expect(initial).toContain('msg-24'); // newest visible
+    expect(initial).toContain('msg-49'); // newest visible
     expect(initial).not.toContain('msg-00'); // oldest scrolled off the top
-    expect(initial).toContain('…'); // more-above indicator
 
-    // Focus the pane (alt+l), then press `k` five times to scroll the window up toward older turns.
+    // Focus the pane (alt+l), then press `k` many times to saturate scrollUp at maxScrollUp, ensuring
+    // msg-00 is in view regardless of the exact measured window height.
     stdin.write(ALT_L);
     await tick();
-    for (let i = 0; i < 5; i++) {
+    for (let i = 0; i < 50; i++) {
       stdin.write('k');
     }
     await tick();
 
-    // The window shifted up: the oldest turn is now visible, and the newest scrolled off the bottom.
+    // The window shifted to the top: the oldest turn is now visible, the newest scrolled off the bottom.
     const scrolled = lastFrame() ?? '';
-    expect(scrolled).toContain('msg-00'); // oldest now in view (5 up from a 25-turn, 20-window tail)
-    expect(scrolled).not.toContain('msg-24'); // newest scrolled off the bottom
+    expect(scrolled).toContain('msg-00'); // oldest now in view
+    expect(scrolled).not.toContain('msg-49'); // newest scrolled off the bottom
     dispose();
   });
 });

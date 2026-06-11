@@ -53,7 +53,6 @@ import { readClipboardImage } from '../input/clipboardImage.js';
 import type { ChatInputHandler } from '../input/dispatcher.js';
 import { selectActiveMode } from '../input/modeStore.js';
 import type { PanelId } from '../input/panels.js';
-import type { UsageTier } from '../layout/budget.js';
 import { deriveAgentIdentity } from '../selectors/agentIdentity.js';
 import {
   isChatPaneOpen,
@@ -108,13 +107,13 @@ const RIGHT_PANELS: readonly PanelId[] = ['usage', 'crows'];
  * chunk that adds a panel adds its `case` here, copying `RosterPanel`/`CrowsPanel`, and nothing else
  * in the shell changes. Defined as a function (not inline) so the swap is one localised edit.
  *
- * The `usageTier` (L4, R9) is threaded in so the {@link UsagePanel} renders the mini/medium/large
- * gauge variant the right-rail width allots it — the budget engine ({@link useBodyLayout}) classifies
- * the rail width into a tier and the Shell passes it here, the single place a layout signal reaches a
+ * The `usageInnerWidth` (L4, R9) is threaded in so the {@link UsagePanel} sizes its fluid gauge line
+ * to the width the right rail actually allots it — the budget engine ({@link useBodyLayout}) derives
+ * the gauges' inner width and the Shell passes it here, the single place a layout signal reaches a
  * panel. No other panel needs it, so it's a plain extra argument rather than threading the whole
  * {@link BodyLayout} through.
  */
-function renderPanel(id: PanelId, usageTier: UsageTier): JSX.Element {
+function renderPanel(id: PanelId, usageInnerWidth: number): JSX.Element {
   switch (id) {
     case 'crows':
       // C9: CrowsPanel replaces the RosterPanel reference implementation here. The original
@@ -136,8 +135,8 @@ function renderPanel(id: PanelId, usageTier: UsageTier): JSX.Element {
     case 'usage':
       // C9: UsagePanel fills the right-region slot. Usage sits to the LEFT of crows because
       // RIGHT_PANELS = ['usage', 'crows'] (App.tsx line 59) — array order = left-to-right.
-      // L4: the gauge tier is the largest variant the right-rail width allows (R9).
-      return <UsagePanel tier={usageTier} />;
+      // L4: the gauge line sizes itself to the inner width the right rail allows (R9).
+      return <UsagePanel innerWidth={usageInnerWidth} />;
     default:
       return id satisfies never;
   }
@@ -366,15 +365,15 @@ function Shell({
   // sizing, mirroring the single `useOrientation()` read. Portrait budgets against the MEASURED Body
   // height (L4c) so nothing overflows into the chrome; landscape is unaffected (budgets width).
   const bodyLayout = useBodyLayout(bodyHeight);
-  // The {@link PanelId} → component dispatch, closing over the current usage tier (L4/R9) so the
-  // UsagePanel renders the mini/medium/large gauge its right-rail width supports. Memoised on the tier
-  // so a Rail (which is `memo`-free but cheap) only re-derives when the tier actually changes, not on
-  // every Body re-render. Passed to BOTH Rails; only the usage case reads the tier.
+  // The {@link PanelId} → component dispatch, closing over the current usage inner width (L4/R9) so
+  // the UsagePanel sizes its fluid gauge line to the width its right rail supports. Memoised on that
+  // width so a Rail (which is `memo`-free but cheap) only re-derives when it actually changes, not on
+  // every Body re-render. Passed to BOTH Rails; only the usage case reads the width.
   const dispatchPanel = useMemo(
     () =>
       (id: PanelId): JSX.Element =>
-        renderPanel(id, bodyLayout.usageTier),
-    [bodyLayout.usageTier],
+        renderPanel(id, bodyLayout.usageInnerWidth),
+    [bodyLayout.usageInnerWidth],
   );
 
   // F9: the image-draft store owns the `image.upload` bus call + the FIFO upload queue (it writes a

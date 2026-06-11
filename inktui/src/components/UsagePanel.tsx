@@ -11,10 +11,16 @@
  * windowing isn't needed; the Pane clips if the share is tight.
  *
  * ## The gauge bar
- * The selector emits each bar as *geometry* (`filledCount` + `markerPos`), not a finished string, so
- * this component paints the segments: filled cells `█` (green, or red when `isHigh`), empty cells `░`
- * (dim), and a grey `│` overlaid at `markerPos` to show how far through the *time* window we are
- * (e.g. 6 days into a 7-day window → marker near the right, independent of how much quota is used).
+ * The selector emits each bar as *geometry* (`filledCount` over `barWidth`), not a finished string,
+ * so this component paints the segments: filled cells `█` (green, or red when `isHigh`), the unused
+ * remainder `░` in the grey track color, and the pct label EMBEDDED in the bar — over the fill (its
+ * background = the fill color) when the fill is wide enough, else right-aligned on the grey track.
+ *
+ * ## Fluid width (R9)
+ * The gauge line sizes off the INNER width the budget engine grants (threaded in as `innerWidth`):
+ * the bar greedily absorbs the width left after the win+reset trail, and when that would squeeze the
+ * bar under {@link MIN_GAUGE_BAR_WIDTH} the line sheds first the window-length label, then the reset
+ * countdown — the bar itself is the last thing standing.
  *
  * The panel is `React.memo`'d (rule 1), owns a local cursor over the flat gauge list, declares its
  * keymap (rule 5), and reaches the bus only through the dispatched `actions.usage.refresh` (rule 3).
@@ -32,7 +38,6 @@ import {
 } from '../hooks/useInputStores.js';
 import type { PanelKeymap } from '../input/keymap.js';
 import type { PanelId } from '../input/panels.js';
-import type { UsageTier } from '../layout/budget.js';
 import {
   USAGE_BAR_WIDTH,
   type UsageGaugeView,
@@ -46,82 +51,113 @@ import { Pane } from './Pane.js';
 const PANEL_ID: PanelId = 'usage';
 const PANEL_TITLE = 'Usage';
 
+/** Cursor-marker gutter every gauge/key line leads with: marker(1) + space(1). */
+const GUTTER_WIDTH = 2;
+/** Gap between the bar and its win/reset trail (and between the key line's column labels). */
+const TRAIL_GAP = 2;
+/** Fixed width of the window-length column (`5h`, `30d`, left-aligned). */
+const WIN_WIDTH = 3;
+/** Fixed width of the reset-countdown column (`1h52m`, right-aligned). */
+const RESET_WIDTH = 7;
 /**
- * The compact bar width the `mini` tier paints (R9). The full bar is {@link USAGE_BAR_WIDTH}=12; mini
- * shrinks it so the whole line — marker(1) + space(1) + bar — fits the INNER width even at the smallest
- * right rail. A crows+usage rail can compress to `MIN_PANEL_WIDTH=12`, whose Pane inner width is
- * `12 − USAGE_PANE_CHROME(4) = 8`; so the mini line must be ≤ 8: 1 + 1 + 6 = 8 (L4d — at the old 8-cell
- * bar the 10-cell line clipped with `…` in the 8-cell inner space). The geometry is rescaled to this
- * width (see {@link renderBar}) so the fill + marker stay proportionally correct in the shorter bar.
+ * The narrowest bar that still reads as a gauge. The bar absorbs the inner width greedily; when a
+ * label trail would squeeze it under this, the line sheds the win label first, then the reset
+ * countdown (see {@link gaugeLayoutFor}) — the bar itself is never given up.
  */
-const MINI_BAR_WIDTH = 6;
+const MIN_GAUGE_BAR_WIDTH = 8;
+/** Minimum leading filled cells for the pct label to sit ON the fill; under this it right-aligns on
+ * the grey track instead (a 1–2 cell fill can't carry a 3-char label legibly). */
+const MIN_EMBED_FILL = 3;
+/** The inner width assumed when mounted bare (e.g. a test rendering UsagePanel outside the Rail):
+ * the full line at the selector's nominal bar width, so the full render is the unguarded default. */
+const DEFAULT_INNER_WIDTH =
+  GUTTER_WIDTH + USAGE_BAR_WIDTH + TRAIL_GAP + WIN_WIDTH + 1 + RESET_WIDTH;
 
 type UsageIntent = 'cursorDown' | 'cursorUp' | 'refresh';
 
 /**
+ * What the fluid gauge line shows at a given inner width (R9): the bar's cell count plus which
+ * labels survive. Resolution order — full (bar + win + reset), then drop win, then drop reset; the
+ * bar greedily takes every cell the surviving trail leaves it, and a trail is dropped exactly when
+ * keeping it would squeeze the bar under {@link MIN_GAUGE_BAR_WIDTH}.
+ */
+interface GaugeLayout {
+  readonly barWidth: number;
+  readonly showWin: boolean;
+  readonly showReset: boolean;
+}
+
+/** Resolve the {@link GaugeLayout} for the inner width the budget engine granted. Pure; total — the
+ * bar is floored at 1 cell even at degenerate widths. */
+function gaugeLayoutFor(innerWidth: number): GaugeLayout {
+  const fullBar = innerWidth - GUTTER_WIDTH - TRAIL_GAP - WIN_WIDTH - 1 - RESET_WIDTH;
+  if (fullBar >= MIN_GAUGE_BAR_WIDTH) {
+    return { barWidth: fullBar, showWin: true, showReset: true };
+  }
+  const resetBar = innerWidth - GUTTER_WIDTH - TRAIL_GAP - RESET_WIDTH;
+  if (resetBar >= MIN_GAUGE_BAR_WIDTH) {
+    return { barWidth: resetBar, showWin: false, showReset: true };
+  }
+  return { barWidth: Math.max(1, innerWidth - GUTTER_WIDTH), showWin: false, showReset: false };
+}
+
+/**
  * Paint the gauge bar from its geometry at the requested `width`: filled `█` (green / red when high),
- * empty `░` (dim), and a grey `│` marker at the time-through-period position. The selector emits the
- * geometry against the full {@link USAGE_BAR_WIDTH}; when a tier asks for a shorter bar (mini) we
- * RESCALE the filled count + marker cell proportionally so the bar reads correctly at any width.
- * Built as runs of same-style cells so each contiguous segment is a single `<Text>` (the marker is its
- * own one-char span). Returns inline `<Text>` nodes for the parent `<Text>` row.
+ * the unused remainder `░` in the grey track color, and the pct label EMBEDDED in the bar:
+ *  - fill ≥ {@link MIN_EMBED_FILL} cells (and wide enough for the label) → the label leads the bar,
+ *    its background the fill color, the rest of the fill solid after it;
+ *  - otherwise → the label right-aligns at the bar's end on a grey band matching the track.
+ * The selector emits the geometry against the full {@link USAGE_BAR_WIDTH}; we RESCALE the filled
+ * count proportionally so the bar reads correctly at any width. Returns inline `<Text>` nodes for
+ * the parent `<Text>` row.
  */
 function renderBar(g: UsageGaugeView, theme: Theme, width: number = g.barWidth): JSX.Element {
   const filledColor = g.isHigh ? theme.gaugeHigh : theme.gaugeNormal;
-  // Rescale the geometry from the selector's full-width bar to the requested width (mini shrinks it).
-  const scale = width / g.barWidth;
-  const filledCount = Math.round(g.filledCount * scale);
-  const markerPos =
-    g.markerPos === null ? null : Math.min(width - 1, Math.floor(g.markerPos * scale));
-  const nodes: JSX.Element[] = [];
-  let run = '';
-  let runStyle: 'filled' | 'empty' = 'filled';
-  const flush = (key: string): void => {
-    if (run.length === 0) return;
-    nodes.push(
-      runStyle === 'filled' ? (
-        <Text key={key} color={filledColor}>
-          {run}
+  // Rescale the geometry from the selector's full-width bar to the requested width.
+  const filledCount = Math.min(width, Math.round((g.filledCount * width) / g.barWidth));
+  // Totality at degenerate widths: never let the label exceed the bar itself.
+  const label = g.pctLabel.length <= width ? g.pctLabel : g.pctLabel.slice(0, width);
+  if (filledCount >= Math.max(MIN_EMBED_FILL, label.length)) {
+    // The label sits ON the fill: same background as the solid cells, then the rest of the fill.
+    return (
+      <>
+        <Text color={theme.gaugeLabelText} backgroundColor={filledColor}>
+          {label}
         </Text>
-      ) : (
-        <Text key={key} dimColor>
-          {run}
-        </Text>
-      ),
+        <Text color={filledColor}>{'█'.repeat(filledCount - label.length)}</Text>
+        {filledCount < width ? (
+          <Text color={theme.gaugeTrack}>{'░'.repeat(width - filledCount)}</Text>
+        ) : null}
+      </>
     );
-    run = '';
-  };
-  for (let i = 0; i < width; i++) {
-    if (i === markerPos) {
-      flush(`r${i}`);
-      nodes.push(
-        <Text key={`m${i}`} color={theme.muted}>
-          │
-        </Text>,
-      );
-      continue;
-    }
-    const style = i < filledCount ? 'filled' : 'empty';
-    if (style !== runStyle && run.length > 0) flush(`r${i}`);
-    runStyle = style;
-    run += style === 'filled' ? '█' : '░';
   }
-  flush('end');
-  return <>{nodes}</>;
+  // Thin fill: the label right-aligns on a grey band matching the track; fill + track precede it.
+  const shownFilled = Math.min(filledCount, Math.max(0, width - label.length));
+  const trackCount = Math.max(0, width - shownFilled - label.length);
+  return (
+    <>
+      {shownFilled > 0 ? <Text color={filledColor}>{'█'.repeat(shownFilled)}</Text> : null}
+      {trackCount > 0 ? <Text color={theme.gaugeTrack}>{'░'.repeat(trackCount)}</Text> : null}
+      <Text color={theme.gaugeLabelText} backgroundColor={theme.gaugeTrack}>
+        {label}
+      </Text>
+    </>
+  );
 }
 
-/** A provider header line: bold harness name on a solid dark, full-width background. Mini drops the
- * solid background (too heavy for a thin column) and shows a dim, lower-cased lead-in instead. */
+/** A provider header line: bold harness name on a solid dark, full-width background. The bare layout
+ * (no labels survive) drops the solid background (too heavy for a thin column) and shows a dim,
+ * lower-cased lead-in instead. */
 function HeaderLine({
   harness,
-  tier,
+  compact,
 }: {
   readonly harness: string;
-  readonly tier: UsageTier;
+  readonly compact: boolean;
 }): JSX.Element {
   const theme = useTheme();
-  if (tier === 'mini') {
-    // Mini: no solid band (it crowds a thin column); a dim caret + name reads as a quiet group label.
+  if (compact) {
+    // No solid band (it crowds a thin column); a dim caret + name reads as a quiet group label.
     return (
       <Box flexShrink={0} width="100%">
         <Text dimColor wrap="truncate">{`· ${harness}`}</Text>
@@ -136,119 +172,80 @@ function HeaderLine({
 }
 
 /**
- * One gauge line, rendered for the active {@link UsageTier} (R9):
- *  - `mini`   — cursor marker + a compact ({@link MINI_BAR_WIDTH}) bar only; no labels (the bar IS the
- *               signal at the smallest legible width).
- *  - `medium` — marker + full bar + percentage; the window/reset trail is dropped.
- *  - `large`  — marker + full bar + pct + window-length + reset countdown (the complete render).
- * Transparent background unless selected (a subtle highlight). Each tier is laid out deliberately —
- * aligned columns, fixed-width labels — so it reads as a designed variant, not a truncation.
+ * One gauge line at the resolved {@link GaugeLayout}: cursor marker + the bar (pct embedded — see
+ * {@link renderBar}) + whichever of the win/reset trail survived the width. Transparent background
+ * unless selected (a subtle highlight). Fixed-width trail columns so the gauges align as a table.
  */
 function GaugeLine({
   gauge,
   selected,
-  tier,
+  layout,
 }: {
   readonly gauge: UsageGaugeView;
   readonly selected: boolean;
-  readonly tier: UsageTier;
+  readonly layout: GaugeLayout;
 }): JSX.Element {
   const theme = useTheme();
   const marker = selected ? '▌' : ' ';
-  if (tier === 'mini') {
-    return (
-      <Box
-        flexShrink={0}
-        width="100%"
-        backgroundColor={selected ? theme.panelSelectedBg : undefined}
-      >
-        <Text wrap="truncate">
-          {marker} {renderBar(gauge, theme, MINI_BAR_WIDTH)}
-        </Text>
-      </Box>
-    );
-  }
-  if (tier === 'medium') {
-    return (
-      <Box
-        flexShrink={0}
-        width="100%"
-        backgroundColor={selected ? theme.panelSelectedBg : undefined}
-      >
-        <Text wrap="truncate">
-          {marker} {renderBar(gauge, theme)}
-          {'  '}
-          <Text color={gauge.isHigh ? theme.error : theme.text}>{gauge.pctLabel.padStart(4)}</Text>
-        </Text>
-      </Box>
-    );
-  }
-  // large — the full render: bar + pct + window-length + reset countdown.
   return (
     <Box flexShrink={0} width="100%" backgroundColor={selected ? theme.panelSelectedBg : undefined}>
       <Text wrap="truncate">
-        {marker} {renderBar(gauge, theme)}
-        {'  '}
-        <Text color={gauge.isHigh ? theme.error : theme.text}>{gauge.pctLabel.padStart(4)}</Text>
-        {'  '}
-        <Text dimColor>{gauge.periodLabel.padEnd(3)}</Text>{' '}
-        <Text dimColor>{gauge.resetLabel.padStart(7)}</Text>
+        {marker} {renderBar(gauge, theme, layout.barWidth)}
+        {layout.showWin ? (
+          <>
+            {'  '}
+            <Text dimColor>{gauge.periodLabel.padEnd(WIN_WIDTH)}</Text>
+          </>
+        ) : null}
+        {layout.showReset ? (
+          <>
+            {layout.showWin ? ' ' : '  '}
+            <Text dimColor>{gauge.resetLabel.padStart(RESET_WIDTH)}</Text>
+          </>
+        ) : null}
       </Text>
     </Box>
   );
 }
 
 /**
- * A dim key line labeling the gauge columns (bug 1), rendered per tier so the labels always sit over
- * the columns the tier actually shows: `large` labels usage/pct/window/reset; `medium` labels just
- * usage/pct; `mini` shows no key line at all (the compact bars carry no labels to title). Aligned to
- * {@link GaugeLine}'s layout — 2-col leading gutter (marker + space), the bar width, then the same
- * column widths/spacing — so each label sits over its data. `flexShrink={0}` so the tight right rail
- * doesn't sample it away.
+ * A dim key line labeling the gauge columns (bug 1), rendered for the resolved {@link GaugeLayout}
+ * so the labels always sit over the columns the width actually shows: `usage` spans the bar (the pct
+ * is embedded in it, so it has no column of its own), then `win`/`reset` only when they survived.
+ * The bare layout shows no key line at all. Aligned to {@link GaugeLine}'s layout — 2-col leading
+ * gutter (marker + space), the live bar width, then the same column widths/spacing — so each label
+ * sits over its data. `flexShrink={0}` so the tight right rail doesn't sample it away.
  */
-function UsageKeyLine({ tier }: { readonly tier: UsageTier }): JSX.Element | null {
-  if (tier === 'mini') {
+function UsageKeyLine({ layout }: { readonly layout: GaugeLayout }): JSX.Element | null {
+  if (!layout.showReset) {
     return null;
-  }
-  if (tier === 'medium') {
-    return (
-      <Box flexShrink={0} width="100%">
-        <Text dimColor wrap="truncate">
-          {'  '}
-          {'usage'.padEnd(USAGE_BAR_WIDTH)}
-          {'  '}
-          {'pct'.padStart(4)}
-        </Text>
-      </Box>
-    );
   }
   return (
     <Box flexShrink={0} width="100%">
       <Text dimColor wrap="truncate">
         {'  '}
-        {'usage'.padEnd(USAGE_BAR_WIDTH)}
+        {'usage'.padEnd(layout.barWidth)}
         {'  '}
-        {'pct'.padStart(4)}
-        {'  '}
-        {'win'.padEnd(3)} {'reset'.padStart(7)}
+        {layout.showWin ? `${'win'.padEnd(WIN_WIDTH)} ` : ''}
+        {'reset'.padStart(RESET_WIDTH)}
       </Text>
     </Box>
   );
 }
 
 /** The list body: loading/error/empty chrome, else one block per provider (header + gauge lines).
- * A single running index across all gauges drives the cursor highlight. The {@link UsageTier} chooses
- * the gauge/header/key-line variant (R9). */
+ * A single running index across all gauges drives the cursor highlight. The resolved
+ * {@link GaugeLayout} chooses the gauge/header/key-line variant (R9). */
 function UsageBody({
   view,
   cursor,
   focused,
-  tier,
+  layout,
 }: {
   readonly view: UsageView;
   readonly cursor: number;
   readonly focused: boolean;
-  readonly tier: UsageTier;
+  readonly layout: GaugeLayout;
 }): JSX.Element {
   const theme = useTheme();
   if (view.status === 'error') {
@@ -263,10 +260,10 @@ function UsageBody({
   let gaugeIndex = -1;
   return (
     <Box flexDirection="column" flexShrink={0}>
-      <UsageKeyLine tier={tier} />
+      <UsageKeyLine layout={layout} />
       {view.groups.map((group) => (
         <Box key={group.harness} flexDirection="column" flexShrink={0}>
-          <HeaderLine harness={group.harness} tier={tier} />
+          <HeaderLine harness={group.harness} compact={!layout.showReset} />
           {group.gauges.map((gauge) => {
             gaugeIndex += 1;
             return (
@@ -274,7 +271,7 @@ function UsageBody({
                 key={`${group.harness}-${gauge.windowKey}`}
                 gauge={gauge}
                 selected={focused && gaugeIndex === cursor}
-                tier={tier}
+                layout={layout}
               />
             );
           })}
@@ -294,17 +291,18 @@ function countGauges(view: UsageView): number {
  * local cursor over the flat gauge list, declares its keymap, and paints a focus-highlighted Pane of
  * provider blocks. `React.memo`'d (rule 1) so it re-renders only when its own state changes.
  *
- * The `tier` (R9, L4) is threaded from the budget engine via App's `renderPanel`: it is the largest
- * gauge variant the right-rail width allots usage (`mini`|`medium`|`large`). The panel forwards it to
- * {@link UsageBody}, which picks the gauge/header/key-line render for that width — the responsive
- * "mini/medium/large version depending on available screen real estate" the spec asks for.
+ * The `innerWidth` (R9, L4) is threaded from the budget engine via App's `renderPanel`: the width
+ * the gauges actually draw in. The panel resolves it to a {@link GaugeLayout} (greedy bar; the win
+ * then reset labels shed as the bar would fall under {@link MIN_GAUGE_BAR_WIDTH}) and forwards that
+ * to {@link UsageBody} — the responsive render the spec asks for.
  */
 export const UsagePanel = memo(function UsagePanel({
-  tier = 'large',
+  innerWidth = DEFAULT_INNER_WIDTH,
 }: {
-  /** The gauge variant for the current right-rail width (R9). Defaults to `large` when mounted bare
-   * (e.g. a test rendering UsagePanel outside the Rail) so the full render is the unguarded default. */
-  readonly tier?: UsageTier;
+  /** The inner width the budget engine grants the gauges (R9). Defaults to the full line at the
+   * nominal bar width when mounted bare (e.g. a test rendering UsagePanel outside the Rail) so the
+   * full render is the unguarded default. */
+  readonly innerWidth?: number;
 }): JSX.Element {
   // Rule 1: narrow selector (shallow). Rule 2: selector produces display-ready groups.
   const usage = useAppStore((s) => s.usage, shallow);
@@ -363,7 +361,7 @@ export const UsagePanel = memo(function UsagePanel({
         view={view}
         cursor={Math.min(cursor, Math.max(gaugeCount - 1, 0))}
         focused={focused}
-        tier={tier}
+        layout={gaugeLayoutFor(innerWidth)}
       />
     </Pane>
   );

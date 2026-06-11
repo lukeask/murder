@@ -49,8 +49,8 @@
  * can nav away from, not a focus-takeover modal).
  */
 
-import { Box, Text } from 'ink';
-import { type JSX, memo, useMemo, useState } from 'react';
+import { Box, type DOMElement, measureElement, Text } from 'ink';
+import { type JSX, memo, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { shallow } from 'zustand/shallow';
 import { useAppStore } from '../hooks/useAppStore.js';
 import {
@@ -73,7 +73,7 @@ import type { OpenDoc } from '../store/docView/docViewSlice.js';
 import type { FavoritesState } from '../store/favorites/favoritesSlice.js';
 import type { RosterState } from '../store/roster/rosterSlice.js';
 import { useTheme } from '../theme/themeStore.js';
-import { StageDocPane } from './DocPane.js';
+import { computeScrollThumb, Scrollbar, StageDocPane } from './DocPane.js';
 import { Pane } from './Pane.js';
 
 /** The Stage focus id for a crow's chat pane. The single place the `stage:chat:` scheme is minted, so
@@ -98,16 +98,26 @@ function kindLabel(kind: AgentIdentity['kind']): string {
 
 /** How many turns scroll past per `j`/`k` (the window step). */
 const SCROLL_STEP = 1;
-/** How many of the most-recent turns the pane shows at once (the window size). Matches the old
- * CrowChatPanel `MAX_TURNS`; a real measured window is a later refinement (Ledger-style). */
-const WINDOW = 20;
+/** Fallback turn-window size before the fill box has been measured (first paint or sizeless test
+ * render). Once {@link measureElement} reports a real height that value drives the window. */
+const FALLBACK_HEIGHT = 20;
 
 // ---------------------------------------------------------------------------
 // Sub-components
 // ---------------------------------------------------------------------------
 
-/** One chat turn line. Speaker determines the color. (Ported verbatim from CrowChatPanel — the
- * formatting is the selector's; this is just the per-speaker color map + the `›`/`·` prefix.) */
+/** Format one turn for display: `›`/`·` on the first line, two-space indent on continuations. */
+export function formatTurnText(turn: ChatTurn): string {
+  const marker = turn.speaker === 'user' ? '›' : '·';
+  return turn.text
+    .split('\n')
+    .map((line, i) => (i === 0 ? `${marker} ${line}` : `  ${line}`))
+    .join('\n');
+}
+
+/** One chat turn block. Speaker determines the color. Renders the whole turn as a single Ink
+ * `<Text>` (like {@link ./TextInput.js MultiLineText} in the new-plan form — commit 892d6ae) so long
+ * lines soft-wrap to the pane width instead of truncating with an ellipsis. */
 const TurnLine = memo(function TurnLine({ turn }: { readonly turn: ChatTurn }): JSX.Element {
   const theme = useTheme();
   const color =
@@ -122,15 +132,9 @@ const TurnLine = memo(function TurnLine({ turn }: { readonly turn: ChatTurn }): 
             : turn.speaker === 'notice'
               ? theme.error
               : theme.muted;
-  const lines = turn.text.split('\n');
   return (
-    <Box flexDirection="column" flexShrink={0}>
-      {lines.map((line, i) => (
-        // biome-ignore lint/suspicious/noArrayIndexKey: lines within one block have no stable id
-        <Text key={i} color={color} wrap="truncate">
-          {i === 0 ? `${turn.speaker === 'user' ? '›' : '·'} ${line}` : `  ${line}`}
-        </Text>
-      ))}
+    <Box flexShrink={0}>
+      <Text color={color}>{formatTurnText(turn)}</Text>
     </Box>
   );
 });
@@ -162,7 +166,20 @@ const ChatPane = memo(function ChatPane({
   // newest turns (the bottom). Clamped to the available scroll range when rendering so a shrinking
   // transcript can't strand the window past its end.
   const [scrollUp, setScrollUp] = useState(0);
-  const maxScrollUp = Math.max(turns.length - WINDOW, 0);
+
+  // Measured window height — the Ledger fill-box pattern (mirrors StageDocPane). The fill box below
+  // is flexGrow so measureElement reports the room we HAVE, not the rows we drew. Fallback covers
+  // first paint and sizeless test renders.
+  const boxRef = useRef<DOMElement | null>(null);
+  const [measuredHeight, setMeasuredHeight] = useState(0);
+  useLayoutEffect(() => {
+    if (boxRef.current === null) return;
+    const { height } = measureElement(boxRef.current);
+    if (height !== measuredHeight) setMeasuredHeight(height);
+  });
+  const effectiveHeight = measuredHeight > 0 ? measuredHeight : FALLBACK_HEIGHT;
+
+  const maxScrollUp = Math.max(turns.length - effectiveHeight, 0);
   const clampedScroll = Math.min(scrollUp, maxScrollUp);
 
   // History-scroll keymap (rule 5: declared, not handled). `j`/`k` move the window; `alt+j`/`alt+k`
@@ -172,8 +189,8 @@ const ChatPane = memo(function ChatPane({
   const keymap: PanelKeymap<ScrollIntent> = useMemo(
     () => ({
       keymap: [
-        { chord: { input: 'k' }, intent: 'scrollUp', description: 'older' },
-        { chord: { input: 'j' }, intent: 'scrollDown', description: 'newer' },
+        { chord: [{ input: 'k' }, { key: { upArrow: true } }], intent: 'scrollUp', description: 'older' },
+        { chord: [{ input: 'j' }, { key: { downArrow: true } }], intent: 'scrollDown', description: 'newer' },
       ],
       onIntent(intent) {
         if (intent === 'scrollUp') {
@@ -190,13 +207,12 @@ const ChatPane = memo(function ChatPane({
   // only consults the FOCUSED id's entry anyway, so this is belt-and-suspenders for clarity.
   usePanelKeymap(focusId, focused ? keymap : EMPTY_KEYMAP);
 
-  // The visible window: the WINDOW newest turns, shifted up by the (clamped) scroll offset. Slice
-  // arithmetic keeps the most recent turns by default (scroll 0 → the tail).
+  // The visible window: the effectiveHeight newest turns shifted up by the (clamped) scroll offset.
+  // Slice arithmetic keeps the most recent turns by default (scroll 0 → the tail).
   const end = turns.length - clampedScroll;
-  const start = Math.max(end - WINDOW, 0);
+  const start = Math.max(end - effectiveHeight, 0);
   const visibleTurns = turns.slice(start, end);
-  const hasMoreAbove = start > 0;
-  const hasMoreBelow = clampedScroll > 0;
+  const thumb = computeScrollThumb(turns.length, start, effectiveHeight);
 
   return (
     <Pane
@@ -204,14 +220,20 @@ const ChatPane = memo(function ChatPane({
       title={identity.label}
       focused={focused}
       titleExtra={<Text dimColor>{`[${kindLabel(identity.kind)}]`}</Text>}
+      paddingRight={0}
     >
-      {hasMoreAbove && <Text dimColor>…</Text>}
-      {visibleTurns.length === 0 ? (
-        <Text dimColor>no history</Text>
-      ) : (
-        visibleTurns.map((turn, i) => <TurnLine key={turn.blockId ?? `${start + i}`} turn={turn} />)
-      )}
-      {hasMoreBelow && <Text dimColor>…</Text>}
+      {/* Fill box: sizes to the Pane's inner content area (flexGrow + overflow hidden), so
+          measureElement reports the room we HAVE. Text column grows; scrollbar column is fixed. */}
+      <Box ref={boxRef} flexDirection="row" flexGrow={1} minHeight={0} overflow="hidden">
+        <Box flexDirection="column" flexGrow={1} minHeight={0} overflow="hidden">
+          {visibleTurns.length === 0 ? (
+            <Text dimColor>no history</Text>
+          ) : (
+            visibleTurns.map((turn, i) => <TurnLine key={turn.blockId ?? `${start + i}`} turn={turn} />)
+          )}
+        </Box>
+        <Scrollbar height={effectiveHeight} thumb={thumb} />
+      </Box>
     </Pane>
   );
 });
@@ -304,8 +326,8 @@ export const Stage = memo(function Stage({
       minWidth={floorWidth}
       minHeight={floorHeight ?? 0}
       overflow="hidden"
-      columnGap={landscape ? 1 : 0}
-      rowGap={landscape ? 0 : 1}
+      columnGap={0}
+      rowGap={0}
     >
       {/* Chat-history panes tile across the center, splitting the width evenly (each Pane flexGrow 1,
           so chat keeps the lion's share next to / above the doc). Rendered only when there ARE chat
@@ -313,7 +335,7 @@ export const Stage = memo(function Stage({
           half width (an empty left half) when a doc is open with no favorited crows — so when panes
           is empty the doc pane (also `flexGrow={1}`) fills the Stage on its own. */}
       {panes.length > 0 && (
-        <Box flexDirection="row" flexGrow={1} minHeight={0} overflow="hidden" columnGap={1}>
+        <Box flexDirection="row" flexGrow={1} minHeight={0} overflow="hidden" columnGap={0}>
           {panes.map((identity) => (
             <ChatPane key={identity.agentId} identity={identity} conversations={conversations} />
           ))}

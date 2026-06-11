@@ -105,6 +105,11 @@ export function buildTheme(palette: Palette, id: ThemeId) {
     gaugeNormal: palette.green,
     /** A gauge at/over its high-water mark. */
     gaugeHigh: palette.red,
+    /** The unused remainder of a gauge track (and the band behind a right-aligned pct label). */
+    gaugeTrack: palette.grey1,
+    /** Text painted ON a gauge band (the embedded pct label) — the base surface so it reads against
+     * the saturated fill on dark schemes and the darker accents on light ones. */
+    gaugeLabelText: palette.bg0,
   } as const;
 }
 

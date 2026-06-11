@@ -40,10 +40,11 @@
 export const MIN_PANEL_WIDTH = 12;
 
 /**
- * The mini usage-gauge floor — the narrowest INNER width a usage gauge can still be read at: the mini
- * line `marker(1) + space(1) + MINI_BAR_WIDTH(6)` = 8 (see {@link ../components/UsagePanel.tsx}). It is
- * exactly `MIN_PANEL_WIDTH − USAGE_PANE_CHROME`, so a usage gauge always fits inside even the smallest
- * legible right rail without a `…` clip (L4d). Smallest-legible-form absolute (R7).
+ * The mini usage-gauge floor — the narrowest INNER width a usage gauge can still be read at: the
+ * bare line `marker(1) + space(1) + bar(6)` = 8 (see {@link ../components/UsagePanel.tsx} — at this
+ * width the gauge has long since dropped its win/reset trail and the bar takes all that remains). It
+ * is exactly `MIN_PANEL_WIDTH − USAGE_PANE_CHROME`, so a usage gauge always fits inside even the
+ * smallest legible right rail without a `…` clip (L4d). Smallest-legible-form absolute (R7).
  */
 export const MIN_USAGE_WIDTH = 8;
 
@@ -69,34 +70,25 @@ export const STAGE_MIN_FRACTION = 0.6;
  */
 export const FILENAME_CAP = 28;
 
-/** The three usage-gauge size variants (R9), chosen by the width the right rail allots the gauge. */
-export type UsageTier = 'mini' | 'medium' | 'large';
-
 /**
  * The Pane chrome a gauge renders INSIDE: border (1 each side) + `paddingX={1}` (1 each side) = 4
  * cells the rail width loses before any gauge glyph is drawn (see {@link ../components/Pane.tsx}). NOT
- * a free absolute (R7) — it is DERIVED from the Pane's fixed border+padding, so the tier is chosen from
- * the INNER width the gauges actually get (`rail − USAGE_PANE_CHROME`), not the raw rail width. (L4d:
- * the original bug was classifying off the raw rail width, so a crows-driven rail of ~16 picked
- * `medium` and the 20-cell medium line clipped with `…` in the 12-cell inner space.)
+ * a free absolute (R7) — it is DERIVED from the Pane's fixed border+padding, so the gauge layout is
+ * driven by the INNER width the gauges actually get (`rail − USAGE_PANE_CHROME`), not the raw rail
+ * width. (L4d: the original bug was classifying off the raw rail width, so a crows-driven rail of ~16
+ * drew a 20-cell line that clipped with `…` in the 12-cell inner space.)
  */
 export const USAGE_PANE_CHROME = 4;
 
 /**
- * Usage-tier INNER-width thresholds — the exact width each tier's widest line RENDERS at (derived from
- * the {@link ../components/UsagePanel.tsx} gauge/key-line layout, NOT free absolutes — R7). A gauge
- * line is `marker(1) + space(1) + bar + …labels`; a tier "fits" when the INNER width (rail minus
- * {@link USAGE_PANE_CHROME}) is at least its rendered width, so nothing is ever truncated to `…`:
- *  - `large`  = 33: `marker(1)+sp(1)+bar(12)+gap(2)+pct(4)+gap(2)+win(3)+sp(1)+reset(7)` = 33.
- *  - `medium` = 20: `marker(1)+sp(1)+bar(12)+gap(2)+pct(4)` = 20 (the window/reset trail dropped).
- *  - `mini`   = the compact bar only: `marker(1)+sp(1)+bar(MINI_BAR_WIDTH)` — floored at
- *    {@link MIN_USAGE_WIDTH}; sized so it fits even the smallest right rail's inner width
- *    (`MIN_PANEL_WIDTH − USAGE_PANE_CHROME` = 8), so a compressed crows+usage rail never clips it.
- * The actual mini/medium/large RENDERING is L4; this module classifies the inner width so the engine
- * can report which tier the gauges can draw without a `…` clip (the L4d "no clip at any rail width").
+ * The INNER width usage *wants* when it drives the rail alone — the full gauge line at its nominal
+ * bar width: `marker(1)+sp(1)+bar(USAGE_BAR_WIDTH=12)+gap(2)+win(3)+sp(1)+reset(7)` = 27 (derived
+ * from the {@link ../components/UsagePanel.tsx} gauge layout, NOT a free absolute — R7). The gauge
+ * line itself is fluid: the bar greedily absorbs whatever inner width the engine actually grants,
+ * and drops the win then the reset label as the bar would fall under its legible minimum (L4). This
+ * constant only sets the rail's *desired* natural width so a wide terminal shows the full form.
  */
-export const USAGE_TIER_LARGE_MIN = 33;
-export const USAGE_TIER_MEDIUM_MIN = 20;
+export const USAGE_NATURAL_INNER_WIDTH = 27;
 
 /** The natural cross-axis sizes + presence of one side's rail content (R2/R4/R6). */
 export interface RailContent {
@@ -138,7 +130,7 @@ export interface BodyLayoutInput {
   readonly rightPanelCount?: number;
 }
 
-/** The computed cell budget for the body's three regions (R1–R4) plus the usage tier (R9). */
+/** The computed cell budget for the body's three regions (R1–R4) plus the usage inner width (R9). */
 export interface BodyLayout {
   /** Explicit cross-axis cells for the left rail (width in landscape, height share in portrait); 0 if absent. */
   readonly leftRailCells: number;
@@ -146,12 +138,11 @@ export interface BodyLayout {
   readonly rightRailCells: number;
   /** Cells the Stage is guaranteed — always `≥ ceil(STAGE_MIN_FRACTION * total)` by construction. */
   readonly stageCells: number;
-  /** Largest usage tier whose rendered width ≤ the gauges' INNER width (R9; L4d — inner, not rail). */
-  readonly usageTier: UsageTier;
   /**
    * The INNER width (cells) the usage gauges actually get to draw in, after the Pane chrome and (in
-   * portrait) the side-by-side split with crows. The {@link usageTier} is `usageTierFor(usageInnerWidth)`.
-   * Exposed so a test (and live-verify) can check the derivation directly.
+   * portrait) the side-by-side split with crows (R9; L4d — inner, not rail). The UsagePanel sizes its
+   * fluid gauge line from this: the bar greedily fills it, shedding the win then the reset label as
+   * the bar would fall under its legible minimum.
    */
   readonly usageInnerWidth: number;
   /** Which dimension was budgeted: landscape → width, portrait → height. */
@@ -169,22 +160,6 @@ export function clipName(name: string, cap: number): string {
     return '';
   }
   return name.length <= cap ? name : name.slice(0, cap);
-}
-
-/**
- * Classify the gauges' INNER width into the largest usage tier that renders without a `…` clip (R9,
- * L4d). The argument is the width the gauges actually draw in (rail minus the Pane chrome, and in
- * portrait minus the side-by-side split with crows) — NOT the raw rail width. Pure; exported so the
- * tier boundary is unit-testable independently of the full body layout.
- */
-export function usageTierFor(usageInnerWidth: number): UsageTier {
-  if (usageInnerWidth >= USAGE_TIER_LARGE_MIN) {
-    return 'large';
-  }
-  if (usageInnerWidth >= USAGE_TIER_MEDIUM_MIN) {
-    return 'medium';
-  }
-  return 'mini';
 }
 
 /**
@@ -236,7 +211,7 @@ function usageInnerWidthFor(
  *  2. `gaps = gap * (number of PRESENT rails)` — App draws one gap between each present rail and Stage.
  *  3. `railBudget = max(0, total - stageFloor - gaps)` — the most the rails may collectively take.
  *  4. The rails take `≤ railBudget`, then `stageCells = total - left - right - gaps` (≥ stageFloor).
- *  5. `usageTier` = the largest tier that fits the right rail (R9; meaningful in landscape — width).
+ *  5. `usageInnerWidth` = the width the gauges actually draw in (R9), for the panel's fluid layout.
  */
 export function computeBodyLayout(input: BodyLayoutInput): BodyLayout {
   const { cols, rows, orientation, gap, left, right, rightPanelCount = 1 } = input;
@@ -271,8 +246,8 @@ export function computeBodyLayout(input: BodyLayoutInput): BodyLayout {
   // against any rounding so the contract "stageCells ≥ stageFloor" holds exactly.
   const stageCells = Math.max(stageFloor, total - leftCells - rightCells - gaps);
 
-  // The usage tier is chosen from the gauges' ACTUAL inner width (rail − Pane chrome; in portrait also
-  // the side-by-side split with crows), NOT the raw rail cells — so the chosen tier always renders
+  // The usage gauges size off their ACTUAL inner width (rail − Pane chrome; in portrait also the
+  // side-by-side split with crows), NOT the raw rail cells — so the fluid gauge line always renders
   // without a `…` clip and portrait is no longer mis-classified off the strip HEIGHT (L4d).
   const usageInnerWidth = usageInnerWidthFor(landscape, rightCells, cols, gap, rightPanelCount);
 
@@ -280,7 +255,6 @@ export function computeBodyLayout(input: BodyLayoutInput): BodyLayout {
     leftRailCells: leftCells,
     rightRailCells: rightCells,
     stageCells,
-    usageTier: usageTierFor(usageInnerWidth),
     usageInnerWidth,
     axis,
   };
