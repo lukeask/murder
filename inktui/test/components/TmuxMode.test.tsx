@@ -253,6 +253,10 @@ describe('alt+y dispatch — pure unit test (no rendering)', () => {
         cycleTargetPrev: () => {},
         cycleTargetNext: () => {},
         toggleTargetPane: () => {},
+        murder: () => {},
+        murderPending: () => false,
+        murderConfirm: () => {},
+        murderCancel: () => {},
       },
       activeMode: null,
     };

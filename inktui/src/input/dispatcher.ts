@@ -119,6 +119,21 @@ export interface GlobalHandlers {
   /** `alt+w`/`ctrl+w` (`global.toggleTargetPane`): toggle the current chat target's pane. Chat-focus
    * only (item 9 super-chords). */
   toggleTargetPane(): void;
+  /** `ctrl+m` (the `global.murder` action): ARM the two-press murder confirm for the targeted crow
+   * (the crow of the focused chat pane, else the active chat target). Fires from any focus EXCEPT the
+   * crows panel — there the chord falls through to the panel keymap, which arms with its own local
+   * cursor row (the same decline-to-panel pattern as `global.spawn`'s chat-only guard). */
+  murder(): void;
+  /** Whether a murder confirm is currently armed (pending). Read per-event so the dispatcher's
+   * pending check (the layer that claims the confirming `m`) stays pure — the shell supplies a
+   * closure over the live pending state. */
+  murderPending(): boolean;
+  /** Confirm the armed murder — the second press (`m` or ctrl+m) within the pending window. Kills
+   * the armed target and clears the pending state. */
+  murderConfirm(): void;
+  /** Cancel the armed murder. Fired (without consuming the event) when any non-confirm key arrives
+   * while pending — the key then keeps its normal meaning in the lower layers. */
+  murderCancel(): void;
 }
 
 /**
@@ -201,6 +216,34 @@ function dispatchGlobalChord(
   focusedId: FocusId,
   bindings: ResolvedBindings,
 ): boolean {
+  // The murder pending check — FIRST, even ahead of the other plain chords, because while armed the
+  // bare `m` is the confirm press and must not reach the chat field (typing) or a panel keymap
+  // (CrowsPanel's min/max toggle). This is the one sanctioned exception to "the global layer never
+  // claims plain typing": it is gated on `murderPending()`, a window the user just opened with ctrl+m
+  // and that self-expires in ~3s. Any OTHER key cancels the pending state and falls through with its
+  // normal meaning (it is NOT consumed — esc still closes a doc, a letter still types).
+  if (handlers.murderPending()) {
+    const confirmByM = input === 'm' && key.ctrl !== true && key.meta !== true;
+    if (confirmByM || bindings.matches('global.murder', input, key)) {
+      handlers.murderConfirm();
+      return true;
+    }
+    handlers.murderCancel();
+  }
+
+  // `global.murder` (ctrl+m, a plain chord) ARMS the confirm. Matched before the command-modifier
+  // gate (like quickNote — under a ctrl/both modifier the gate would swallow it). The crows panel is
+  // the documented decline: with `crows` focused the chord falls through to the panel keymap, which
+  // arms with its own LOCAL cursor row (rule 1 — the global layer cannot see panel cursors; the same
+  // decline-to-panel pattern as `global.spawn`'s chat-only guard).
+  if (bindings.matches('global.murder', input, key)) {
+    if (focusedId === 'crows') {
+      return false;
+    }
+    handlers.murder();
+    return true;
+  }
+
   // `global.quickNote` (ctrl+n) is a `plain` chord, matched BEFORE the command-modifier gate so a
   // `modifier=ctrl`/`both` setting can't shadow it: under those settings `isCommandModified` is true
   // for any ctrl event, and the gate below would route ctrl+n into the digit/vim/named-command branch

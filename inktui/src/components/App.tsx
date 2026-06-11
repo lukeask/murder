@@ -51,6 +51,7 @@ import type { ActionId } from '../input/bindings.js';
 import { expandSpans, spanIds } from '../input/chatInputStore.js';
 import { readClipboardImage } from '../input/clipboardImage.js';
 import type { ChatInputHandler } from '../input/dispatcher.js';
+import { selectEffectiveFocus } from '../input/focusStore.js';
 import { selectActiveMode } from '../input/modeStore.js';
 import type { PanelId } from '../input/panels.js';
 import { deriveAgentIdentity } from '../selectors/agentIdentity.js';
@@ -69,6 +70,7 @@ import {
   createImageDraftStore,
   type ImageDraftStoreApi,
 } from '../store/imageDraft/imageDraftStore.js';
+import { murderConfirmStore } from '../store/murder/murderConfirmStore.js';
 import { noteCaptureMode } from '../store/notes/noteCaptureMode.js';
 import { noteCaptureStore } from '../store/notes/noteCaptureStore.js';
 import type { SettingsModifier } from '../store/settings/settingsSlice.js';
@@ -307,7 +309,7 @@ function Shell({
    * root input loop subscribes to it; omitted in smoke/tests (no shim → no side-channel chords). */
   readonly terminalEvents?: TerminalEvents | undefined;
 }): JSX.Element {
-  const { modes, chatInput, bindings, keymaps } = useInputStores();
+  const { modes, chatInput, bindings, keymaps, focus } = useInputStores();
   const appStore = useAppStoreApi();
   const bus = useBusClient();
   const loadFavorites = useAppStore((s) => s.actions.favorites.load);
@@ -554,6 +556,43 @@ function Shell({
     state.actions.conversations.toggleChatPane(agentId, currentlyOpen);
   };
 
+  // ctrl+m murder chord. ARM resolves the targeted crow from the live UI state: the focused chat
+  // pane's crow when a `stage:chat:` pane holds focus, else the active chat target (the crow the
+  // user is chatting to). The crows-panel case never reaches this handler — the dispatcher declines
+  // there so the panel arms with its own local cursor row. The confirm/cancel handlers drive the
+  // shared {@link murderConfirmStore}, so the panel-armed and shell-armed paths confirm identically.
+  const murderHandler = (): void => {
+    const state = appStore.getState();
+    const effective = selectEffectiveFocus(focus);
+    const agentId = effective.startsWith('stage:chat:')
+      ? effective.slice('stage:chat:'.length)
+      : selectActiveAgentId(state.conversations, state.roster, state.favorites);
+    if (agentId === null) {
+      toastStore.getState().push('no crow to murder', { ttlMs: 2000 });
+      return;
+    }
+    const row = state.roster.rows.find((r) => r.agentId === agentId);
+    const identity = row === undefined ? null : deriveAgentIdentity(row);
+    murderConfirmStore.getState().arm({ agentId, name: identity?.label ?? agentId });
+  };
+  const murderConfirmHandler = (): void => {
+    const pending = murderConfirmStore.getState().pending;
+    murderConfirmStore.getState().clear();
+    if (pending === null) {
+      return;
+    }
+    // `agent.stop` is the live orchestrator kill (orchestrator_worker.py). Fire-and-forget with the
+    // outcome as a toast — the roster row update arrives via the `agent` entity snapshot.
+    void submitCommand(bus, 'agent.stop', { agent_id: pending.agentId })
+      .then(() => {
+        toastStore.getState().push(`murdered ${pending.name}`, { ttlMs: 3000 });
+      })
+      .catch((error: unknown) => {
+        const message = error instanceof Error ? error.message : String(error);
+        toastStore.getState().push(message, { severity: 'error', ttlMs: 6000 });
+      });
+  };
+
   // The single root input loop for the whole app (rule 5) — installed exactly once, here.
   // C13: `spawn` wired to the spawn wizard handler. C11: `chatInput` wired to the persistent
   // chat-input handler (buffers chars, sends on Enter to the active agent). Global ctrl-chords still
@@ -568,6 +607,10 @@ function Shell({
       cycleTargetPrev: () => cycleTarget(-1),
       cycleTargetNext: () => cycleTarget(1),
       toggleTargetPane: toggleTargetPaneHandler,
+      murder: murderHandler,
+      murderPending: () => murderConfirmStore.getState().pending !== null,
+      murderConfirm: murderConfirmHandler,
+      murderCancel: () => murderConfirmStore.getState().clear(),
       chatInput: makeChatInputHandler(chatInput, appStore, imageDraft),
     },
     terminalEvents,

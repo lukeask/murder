@@ -65,6 +65,10 @@ describe('ctrl+1 raw bytes → shim → dispatch → focusPanel(plans)', () => {
       cycleTargetPrev: vi.fn(),
       cycleTargetNext: vi.fn(),
       toggleTargetPane: vi.fn(),
+      murder: vi.fn(),
+      murderPending: vi.fn(() => false),
+      murderConfirm: vi.fn(),
+      murderCancel: vi.fn(),
     };
     const ctx: DispatchContext = {
       focusedId: CHAT_FOCUS,
@@ -119,6 +123,10 @@ describe('ctrl+j raw bytes → shim → dispatch → navigate(down)', () => {
       cycleTargetPrev: vi.fn(),
       cycleTargetNext: vi.fn(),
       toggleTargetPane: vi.fn(),
+      murder: vi.fn(),
+      murderPending: vi.fn(() => false),
+      murderConfirm: vi.fn(),
+      murderCancel: vi.fn(),
     };
     const ctx: DispatchContext = {
       focusedId: CHAT_FOCUS,
@@ -175,6 +183,10 @@ describe('ctrl+h raw bytes → shim → dispatch (travel-left + cycleTargetPrev)
       cycleTargetPrev: vi.fn(),
       cycleTargetNext: vi.fn(),
       toggleTargetPane: vi.fn(),
+      murder: vi.fn(),
+      murderPending: vi.fn(() => false),
+      murderConfirm: vi.fn(),
+      murderCancel: vi.fn(),
       ...over,
     };
   }
@@ -213,5 +225,92 @@ describe('ctrl+h raw bytes → shim → dispatch (travel-left + cycleTargetPrev)
     expect(outcome).toEqual({ layer: 'global', handled: true });
     expect(cycleTargetPrev).toHaveBeenCalledTimes(1);
     expect(handlers.navigate).not.toHaveBeenCalled();
+  });
+});
+
+describe('ctrl+m raw bytes → shim → dispatch (murder arm + pending confirm)', () => {
+  /** Drive raw kitty bytes for ctrl+m through the shim and lift the chord, exactly as useRootInput
+   * does. ctrl+m is a CTRL_LETTER_COLLISION: the terminal conflates it with CR, so the chord names
+   * the special key (`return`) and chordToKey lifts it to `{ ctrl: true, return: true }`. */
+  function liftCtrlM(): { input: string; key: ReturnType<typeof chordToKey>['key'] } {
+    const real = new FakeStdin();
+    const shim = new StdinShim(real);
+    shim.setBypass(false);
+    const chords: Chord[] = [];
+    shim.on('chord', (c: Chord) => chords.push(c));
+
+    // Raw kitty bytes for ctrl+m: CSI 109 ; 5 u (code 109='m', mods 5=ctrl).
+    real.push('\x1b[109;5u');
+    expect(chords).toHaveLength(1);
+    const chord = chords[0];
+    if (chord === undefined) throw new Error('no chord');
+    expect(chord.input).toBe('return');
+
+    const { input, key } = chordToKey(chord);
+    expect(input).toBe('');
+    expect(key.ctrl).toBe(true);
+    expect(key.return).toBe(true);
+    return { input, key };
+  }
+
+  function makeHandlers(over: Partial<GlobalHandlers> = {}): GlobalHandlers {
+    return {
+      focusPanel: vi.fn(),
+      navigate: vi.fn(),
+      focusChat: vi.fn(),
+      spawn: vi.fn(),
+      toggleTmux: vi.fn(),
+      newPlan: vi.fn(),
+      newTicket: vi.fn(),
+      openSettings: vi.fn(),
+      keyHelp: vi.fn(),
+      quickNote: vi.fn(),
+      cycleTargetPrev: vi.fn(),
+      cycleTargetNext: vi.fn(),
+      toggleTargetPane: vi.fn(),
+      murder: vi.fn(),
+      murderPending: vi.fn(() => false),
+      murderConfirm: vi.fn(),
+      murderCancel: vi.fn(),
+      ...over,
+    };
+  }
+
+  it('arms the murder confirm from chat focus (the chord never types or sends)', () => {
+    const { input, key } = liftCtrlM();
+    const murder = vi.fn<GlobalHandlers['murder']>();
+    const handlers = makeHandlers({ murder });
+    const ctx: DispatchContext = {
+      focusedId: CHAT_FOCUS,
+      panelKeymaps: {},
+      handlers,
+      activeMode: null,
+      bindings: resolveBindings('ctrl', true, {}),
+    };
+    const outcome = dispatchKey(input, key, ctx);
+
+    expect(outcome).toEqual({ layer: 'global', handled: true });
+    expect(murder).toHaveBeenCalledTimes(1);
+  });
+
+  it('confirms while pending (the second ctrl+m kills)', () => {
+    const { input, key } = liftCtrlM();
+    const murderConfirm = vi.fn<GlobalHandlers['murderConfirm']>();
+    const handlers = makeHandlers({
+      murderPending: vi.fn(() => true),
+      murderConfirm,
+    });
+    const ctx: DispatchContext = {
+      focusedId: CHAT_FOCUS,
+      panelKeymaps: {},
+      handlers,
+      activeMode: null,
+      bindings: resolveBindings('ctrl', true, {}),
+    };
+    const outcome = dispatchKey(input, key, ctx);
+
+    expect(outcome).toEqual({ layer: 'global', handled: true });
+    expect(murderConfirm).toHaveBeenCalledTimes(1);
+    expect(handlers.murder).not.toHaveBeenCalled();
   });
 });

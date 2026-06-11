@@ -260,3 +260,58 @@ describe('DocPane — open / scroll / close as a Stage pane', () => {
     dispose();
   });
 });
+
+describe('StageDocPane — p spawns a planner for a staged PLAN only', () => {
+  function stubSpawn(fake: FakeBusClient): void {
+    fake.stubRpc('command.submit', { ok: true, command_id: 'cmd-1' });
+    fake.stubRpc('command.status', {
+      ok: true,
+      status: 'done',
+      result_json: JSON.stringify({ handled: true, agent_id: 'rogue-1' }),
+    });
+  }
+
+  function spawnSubmits(fake: FakeBusClient) {
+    return fake.rpcCalls.filter(
+      (c) =>
+        c.method === 'command.submit' && (c.params as { kind: string }).kind === 'crow.spawn_rogue',
+    );
+  }
+
+  it('p on the focused plan doc spawns the planner for THAT plan', async () => {
+    const { fake, store, inputStores, dispose } = await setup();
+    stubSpawn(fake);
+    const { stdin } = render(<Harness store={store} inputStores={inputStores} />);
+    await tick();
+
+    stdin.write(RETURN); // open my-plan from the plans panel → doc pane focused
+    await tick();
+    stdin.write('p');
+    await tick();
+
+    const submits = spawnSubmits(fake);
+    expect(submits).toHaveLength(1);
+    expect((submits[0]?.params as { payload: { name: string } }).payload.name).toBe('plan-my-plan');
+    dispose();
+  });
+
+  it('p on a staged NOTE doc is not bound (no spawn lands)', async () => {
+    const { fake, store, inputStores, dispose } = await setup();
+    stubSpawn(fake);
+    fake.stubRpc('state.note_display', { name: 'my-note', markdown: DOC_BODY });
+    const { stdin } = render(<Harness store={store} inputStores={inputStores} />);
+    await tick();
+
+    // Stage a note and focus its doc pane directly (the harness panel only lists plans).
+    await store.getState().actions.docView.open('note', 'my-note');
+    inputStores.focus.getState().focus('stage:doc:my-note');
+    await tick();
+    expect(selectEffectiveFocus(inputStores.focus)).toBe('stage:doc:my-note');
+
+    stdin.write('p'); // a note doc declares no `p` — the key is simply unhandled
+    await tick();
+
+    expect(spawnSubmits(fake)).toHaveLength(0);
+    dispose();
+  });
+});

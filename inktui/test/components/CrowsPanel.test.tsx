@@ -30,8 +30,12 @@ import { AppStoreProvider } from '../../src/hooks/useAppStore.js';
 import { InputStoresProvider } from '../../src/hooks/useInputStores.js';
 import { useRootInput } from '../../src/hooks/useRootInput.js';
 import { createInputStores } from '../../src/input/createInputStores.js';
+import { matchKeymap } from '../../src/input/keymap.js';
+import { murderConfirmStore } from '../../src/store/murder/murderConfirmStore.js';
 import type { CrowSnapshotReply } from '../../src/store/roster/rosterActions.js';
 import { createAppStore } from '../../src/store/store.js';
+import { toastStore } from '../../src/store/toast/toastStore.js';
+import { makeKey } from '../input/key.js';
 
 const ALT_SPACE = '\x1b '; // alt+space → focus chat (was alt+f, which now stars)
 
@@ -363,6 +367,34 @@ describe('CrowsPanel — favorites glyph and chat-pane toggle', () => {
     await tick();
     const after = markerOf(lastFrame() ?? '');
     expect(after).toBeGreaterThan(start);
+    dispose();
+  });
+});
+
+describe('CrowsPanel — ctrl+m arms the murder confirm for the highlighted crow', () => {
+  it('declares the global.murder chord and arms the shared store with the cursor row', async () => {
+    murderConfirmStore.getState().clear();
+    const { store, inputStores, dispose } = await setup();
+    render(<Harness store={store} inputStores={inputStores} />);
+    await tick();
+
+    const registered = inputStores.keymaps.getState().keymaps['crows'];
+    expect(registered).toBeDefined();
+    if (registered === undefined) throw new Error('no crows keymap');
+
+    // The declared chord matches the lifted ctrl+m side-channel event ({ ctrl, return }) — the
+    // dispatcher's global layer declines it for the crows focus, so this panel entry receives it.
+    const intent = matchKeymap(registered.keymap, '', makeKey({ ctrl: true, return: true }));
+    expect(intent).toBe('murder');
+
+    registered.onIntent('murder');
+    // Cursor row 0 = the first crow in flattened section order (the collaborator).
+    expect(murderConfirmStore.getState().pending).toEqual({
+      agentId: 'collab-1',
+      name: 'collab',
+    });
+    murderConfirmStore.getState().clear();
+    toastStore.getState().clear();
     dispose();
   });
 });

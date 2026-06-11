@@ -14,8 +14,10 @@
 
 import type { StoreApi } from 'zustand';
 import type { BusClient } from '../../bus/BusClient.js';
+import { createSpawnActions, plannerSpawnParams } from '../dialogs/spawnActions.js';
 import { createRefreshAction } from '../listSlice.js';
 import type { AppStore } from '../store.js';
+import { toastStore } from '../toast/toastStore.js';
 import type { PlanRow } from './plansSlice.js';
 
 /**
@@ -69,12 +71,32 @@ export interface PlansActions {
    * data. Rejections land in `plans.error` — never thrown past the action.
    */
   refresh(): Promise<void>;
+  /**
+   * Spawn a planning agent over the named plan — the `p` bind in the Plans panel and on a staged
+   * plan doc. A plans-domain verb so components stay off the bus (rule 3); the spawn itself goes
+   * through {@link createSpawnActions} (rule 3's only spawner — pane auto-open + kickoff-by-path
+   * ride along for free) with the {@link plannerSpawnParams} defaults. Outcome lands as a toast;
+   * never throws past the action.
+   */
+  spawnPlanner(name: string): Promise<void>;
 }
 
 export function createPlansActions(bus: BusClient, store: StoreApi<AppStore>): PlansActions {
-  return createRefreshAction(bus, store, {
-    key: 'plans',
-    method: 'state.plans_snapshot',
-    project: (reply) => reply.plans.map(toPlanRow),
-  });
+  const spawn = createSpawnActions(bus, store);
+  return {
+    ...createRefreshAction(bus, store, {
+      key: 'plans',
+      method: 'state.plans_snapshot',
+      project: (reply) => reply.plans.map(toPlanRow),
+    }),
+    async spawnPlanner(name: string): Promise<void> {
+      try {
+        await spawn.spawnRogue(plannerSpawnParams(name));
+        toastStore.getState().push(`planner spawned for "${name}"`, { ttlMs: 3000 });
+      } catch (error: unknown) {
+        const message = error instanceof Error ? error.message : String(error);
+        toastStore.getState().push(message, { severity: 'error', ttlMs: 6000 });
+      }
+    },
+  };
 }

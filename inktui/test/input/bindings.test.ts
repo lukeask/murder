@@ -138,3 +138,21 @@ describe('ACTIONS table', () => {
     expect(ctrl.label('global.toggleTargetPane')).toBe('C-w');
   });
 });
+
+describe('global.murder — plain ctrl+m chord with a label override', () => {
+  it('resolves to the ctrl+return collision chord under every modifier (plain = modifier-independent)', () => {
+    for (const modifier of ['alt', 'ctrl', 'both'] as const) {
+      const bindings = resolveBindings(modifier, true, {});
+      expect(bindings.chordsFor('global.murder')).toEqual([{ key: { ctrl: true, return: true } }]);
+      // The lifted side-channel event ({ ctrl, return }, empty input) matches; plain Enter doesn't.
+      expect(bindings.matches('global.murder', '', makeKey({ ctrl: true, return: true }))).toBe(
+        true,
+      );
+      expect(bindings.matches('global.murder', '', makeKey({ return: true }))).toBe(false);
+    }
+  });
+
+  it('labels as C-m (the override), not the mechanical C-return', () => {
+    expect(resolveBindings('alt', false, {}).label('global.murder')).toBe('C-m');
+  });
+});

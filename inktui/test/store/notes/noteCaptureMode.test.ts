@@ -50,6 +50,10 @@ function noopHandlers(): GlobalHandlers {
     cycleTargetPrev: vi.fn(),
     cycleTargetNext: vi.fn(),
     toggleTargetPane: vi.fn(),
+    murder: vi.fn(),
+    murderPending: vi.fn(() => false),
+    murderConfirm: vi.fn(),
+    murderCancel: vi.fn(),
   };
 }
 

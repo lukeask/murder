@@ -63,7 +63,7 @@ const CURSOR_GLYPH = ' ';
 // The Ledger self-measures its own inner size now (see {@link ./Ledger.tsx}'s "Sizing" note), so no
 // fixed budget is passed: its overflow window tracks the live panel size, the cursor stays on screen.
 
-type PlansIntent = 'cursorDown' | 'cursorUp' | 'refresh' | 'star' | 'open';
+type PlansIntent = 'cursorDown' | 'cursorUp' | 'refresh' | 'star' | 'open' | 'spawnPlanner';
 
 /**
  * Render one plan row as a two-line Ledger entry. Line 1: optional cursor marker + optional star +
@@ -160,6 +160,7 @@ export const PlansPanel = memo(function PlansPanel(): React.JSX.Element {
   const view = usePlansView(plans, favorites);
   const refresh = useAppStore((s) => s.actions.plans.refresh);
   const toggleFavorite = useAppStore((s) => s.actions.favorites.toggle);
+  const spawnPlanner = useAppStore((s) => s.actions.plans.spawnPlanner);
   const toggleDoc = useDocView('plan');
 
   const [cursor, setCursor] = useState(0);
@@ -212,6 +213,9 @@ export const PlansPanel = memo(function PlansPanel(): React.JSX.Element {
         { chord: { input: 'r' }, intent: 'refresh', description: 'refresh' },
         { chord: bindings.chordsFor('panel.star'), intent: 'star', description: 'favorite' },
         { chord: { key: { return: true } }, intent: 'open', description: 'view doc' },
+        // `p` spawns a planning agent over the highlighted plan (the same intent the staged plan
+        // doc binds — both route through `actions.plans.spawnPlanner`, one defaults home).
+        { chord: { input: 'p' }, intent: 'spawnPlanner', description: 'spawn planner' },
       ],
       onIntent(intent) {
         switch (intent) {
@@ -238,12 +242,19 @@ export const PlansPanel = memo(function PlansPanel(): React.JSX.Element {
             }
             return;
           }
+          case 'spawnPlanner': {
+            const id = rowIdAtCursor();
+            if (id !== null) {
+              void spawnPlanner(id);
+            }
+            return;
+          }
           default:
             return intent satisfies never;
         }
       },
     }),
-    [moveCursor, refresh, toggleFavorite, toggleDoc, rowIdAtCursor, bindings],
+    [moveCursor, refresh, toggleFavorite, toggleDoc, spawnPlanner, rowIdAtCursor, bindings],
   );
   usePanelKeymap(PANEL_ID, keymap);
 

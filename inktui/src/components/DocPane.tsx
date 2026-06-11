@@ -108,7 +108,7 @@ export function docPath(open: OpenDoc): string {
 
 /** The doc pane's intents: scroll the body window, or close the doc. `enter`/`esc` both close (the
  * old mode treated `enter`-on-shown as "minimise", which closes the slice — same effect). */
-type DocIntent = 'close' | 'scrollDown' | 'scrollUp' | 'pageDown' | 'pageUp';
+type DocIntent = 'close' | 'scrollDown' | 'scrollUp' | 'pageDown' | 'pageUp' | 'spawnPlanner';
 
 // ---------------------------------------------------------------------------
 // StageDocPane
@@ -137,6 +137,7 @@ export const StageDocPane = memo(function StageDocPane({
   const status = useAppStore((s) => s.docView.status);
   const error = useAppStore((s) => s.docView.error);
   const closeAction = useAppStore((s) => s.actions.docView.close);
+  const spawnPlanner = useAppStore((s) => s.actions.plans.spawnPlanner);
 
   // Focus highlight + rect registration — the panel recipe with the Stage-pane focus id. On unmount
   // (close) useMeasureFocus drops the rect → resolveFocus re-homes focus to chat.
@@ -189,6 +190,19 @@ export const StageDocPane = memo(function StageDocPane({
         { chord: { key: { upArrow: true } }, intent: 'scrollUp', description: 'scroll up' },
         { chord: { input: ' ' }, intent: 'pageDown', description: 'page down' },
         { chord: { input: 'b' }, intent: 'pageUp', description: 'page up' },
+        // `p` spawns a planning agent over the staged PLAN — the same intent the Plans panel binds
+        // (both route through `actions.plans.spawnPlanner`). Declared only for `kind === 'plan'`:
+        // the entry is kind-gated DATA in the one shared doc pane, not a forked variant — a staged
+        // note/report simply doesn't declare the key.
+        ...(open.kind === 'plan'
+          ? [
+              {
+                chord: { input: 'p' },
+                intent: 'spawnPlanner',
+                description: 'spawn planner',
+              } as const,
+            ]
+          : []),
       ],
       onIntent(intent) {
         switch (intent) {
@@ -208,12 +222,16 @@ export const StageDocPane = memo(function StageDocPane({
           case 'pageUp':
             setScroll((s) => Math.max(s - effectiveHeight, 0));
             return;
+          case 'spawnPlanner':
+            void spawnPlanner(open.name);
+            return;
           default:
             return intent satisfies never;
         }
       },
     }),
-    [maxScroll, effectiveHeight, closeAction],
+    // `open` is per-mount constant (the Stage keys this pane by doc name), so it isn't a churn risk.
+    [maxScroll, effectiveHeight, closeAction, spawnPlanner, open],
   );
   usePanelKeymap(focusId, focused ? keymap : EMPTY_KEYMAP);
 
@@ -241,9 +259,7 @@ export const StageDocPane = memo(function StageDocPane({
           ) : (
             window.map((line, index) => (
               // biome-ignore lint/suspicious/noArrayIndexKey: body lines are position-keyed (markdown can repeat; the windowed index is the stable identity for the visible slice).
-              <Text key={clamped + index}>
-                {line === '' ? ' ' : line}
-              </Text>
+              <Text key={clamped + index}>{line === '' ? ' ' : line}</Text>
             ))
           )}
         </Box>

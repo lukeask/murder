@@ -60,6 +60,7 @@ import { deriveAgentIdentity } from '../selectors/agentIdentity.js';
 import { isChatPaneOpen } from '../selectors/conversationsSelectors.js';
 import { HEALTH_EDGE_COLOR } from '../selectors/crowHealthSelectors.js';
 import { type CrowRowView, type CrowsView, useCrowsView } from '../selectors/crowsSelectors.js';
+import { murderConfirmStore } from '../store/murder/murderConfirmStore.js';
 import type { Theme } from '../theme/buildTheme.js';
 import { useTheme } from '../theme/themeStore.js';
 import { Ledger, type LedgerEntryContext } from './Ledger.js';
@@ -71,7 +72,14 @@ const PANEL_TITLE = 'Crows';
 // The Ledger self-measures its own inner size now (see {@link ./Ledger.tsx}'s "Sizing" note), so no
 // fixed budget is passed: its overflow window tracks the live panel size.
 
-type CrowsIntent = 'cursorDown' | 'cursorUp' | 'refresh' | 'toggleExpanded' | 'star' | 'openChat';
+type CrowsIntent =
+  | 'cursorDown'
+  | 'cursorUp'
+  | 'refresh'
+  | 'toggleExpanded'
+  | 'star'
+  | 'openChat'
+  | 'murder';
 
 /**
  * A flattened Ledger row: either a section header (a label) or a crow row. Headers are interleaved
@@ -310,6 +318,15 @@ export const CrowsPanel = memo(function CrowsPanel(): React.JSX.Element {
           intent: 'cursorUp',
           description: 'prev crow',
         },
+        // ctrl+m ARMS the murder confirm for the highlighted crow. The dispatcher's global layer
+        // deliberately declines `global.murder` while this panel is focused so the chord lands here
+        // and targets the LOCAL cursor row (rule 1). Declared BEFORE the plain-Enter `openChat`
+        // entry: chord flags are subset-matched, so ctrl+return satisfies `{ return: true }` too —
+        // first-match order is what keeps ctrl+m off the pane toggle (a plain Enter carries no ctrl
+        // and can never match this entry, so the ordering costs Enter nothing). The confirm press
+        // (`m`/ctrl+m while armed) is claimed by the dispatcher's pending check BEFORE this keymap,
+        // so the plain-`m` min/max toggle below never fires during the confirm window.
+        { chord: bindings.chordsFor('global.murder'), intent: 'murder', description: 'murder' },
         // Enter toggles the highlighted crow's chat pane on/off (item 9c).
         { chord: { key: { return: true } }, intent: 'openChat', description: 'toggle chat pane' },
         { chord: { input: 'r' }, intent: 'refresh', description: 'refresh' },
@@ -344,6 +361,20 @@ export const CrowsPanel = memo(function CrowsPanel(): React.JSX.Element {
             }
             return;
           }
+          case 'murder': {
+            const agentId = agentIdAtCursor();
+            if (agentId === null) {
+              return;
+            }
+            // Arm only — the kill itself is the shell's confirm handler (App.tsx), which submits
+            // `agent.stop`; this panel never touches the bus (rule 3). The row's display name rides
+            // along for the "press m again to murder <name>" toast.
+            const name =
+              view.sections.flatMap((s) => s.rows).find((r) => r.agentId === agentId)?.name ??
+              agentId;
+            murderConfirmStore.getState().arm({ agentId, name });
+            return;
+          }
           default:
             return intent satisfies never;
         }
@@ -357,6 +388,7 @@ export const CrowsPanel = memo(function CrowsPanel(): React.JSX.Element {
       agentIdAtCursor,
       openChatAtCursor,
       bindings,
+      view,
     ],
   );
   usePanelKeymap(PANEL_ID, keymap);

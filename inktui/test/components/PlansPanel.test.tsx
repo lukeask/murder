@@ -204,3 +204,28 @@ describe('PlansPanel (Pane + Ledger reference)', () => {
     dispose();
   });
 });
+
+describe('PlansPanel — p spawns a planner for the highlighted plan', () => {
+  it('routes p through actions.plans.spawnPlanner (a crow.spawn_rogue lands on the bus)', async () => {
+    const { fake, store, inputStores, dispose } = await setup();
+    fake.stubRpc('command.submit', { ok: true, command_id: 'cmd-1' });
+    fake.stubRpc('command.status', {
+      ok: true,
+      status: 'done',
+      result_json: JSON.stringify({ handled: true, agent_id: 'rogue-1' }),
+    });
+    const { stdin } = render(<Harness store={store} inputStores={inputStores} />);
+    await tick();
+
+    stdin.write('p'); // cursor row 0 = alpha-plan (most recent sorts first)
+    await tick();
+
+    const spawn = fake.rpcCalls.find(
+      (c) =>
+        c.method === 'command.submit' && (c.params as { kind: string }).kind === 'crow.spawn_rogue',
+    );
+    expect(spawn).toBeDefined();
+    expect((spawn?.params as { payload: { name: string } }).payload.name).toBe('plan-alpha-plan');
+    dispose();
+  });
+});

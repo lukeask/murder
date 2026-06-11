@@ -72,6 +72,16 @@ export interface DeferredGlobalHandlers {
   /** `alt+w`/`ctrl+w` (`global.toggleTargetPane`). Default: no-op until the shell wires the pane
    * toggle. Fires only while chat is focused (item 9 super-chords). */
   toggleTargetPane?: () => void;
+  /** `ctrl+m` (`global.murder`): arm the murder confirm for the targeted crow. Default: no-op until
+   * the shell supplies the handler (the dispatcher already routes the chord + the pending check). */
+  murder?: () => void;
+  /** Whether a murder confirm is armed. Default: `false` (the pending check is inert), so chunks/
+   * tests that don't wire murder see zero behavior change. */
+  murderPending?: () => boolean;
+  /** The confirm press (`m`/ctrl+m while armed). Default: no-op. */
+  murderConfirm?: () => void;
+  /** Any other key while armed cancels (without consuming the event). Default: no-op. */
+  murderCancel?: () => void;
   /**
    * The persistent chat-input handler (C11, part F). Supplied by the shell (it needs both the chat
    * buffer store and the send action). When absent, layer 2 declines as before — so older
@@ -236,6 +246,12 @@ export function useRootInput(
         cycleTargetPrev: deferred.cycleTargetPrev ?? (() => {}),
         cycleTargetNext: deferred.cycleTargetNext ?? (() => {}),
         toggleTargetPane: deferred.toggleTargetPane ?? (() => {}),
+        // ctrl+m murder chord: arm/confirm/cancel + the pending query. Defaults keep the pending
+        // check inert (`false`) so unwired chunks/tests see zero behavior change.
+        murder: deferred.murder ?? (() => {}),
+        murderPending: deferred.murderPending ?? (() => false),
+        murderConfirm: deferred.murderConfirm ?? (() => {}),
+        murderCancel: deferred.murderCancel ?? (() => {}),
       };
 
       const ctx: DispatchContext = {

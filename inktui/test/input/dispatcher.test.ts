@@ -8,6 +8,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { resolveBindings } from '../../src/input/bindings.js';
 import {
+  type ChatInputHandler,
   type DispatchContext,
   dispatchKey,
   type GlobalHandlers,
@@ -34,6 +35,10 @@ interface SpyHandlers {
   readonly cycleTargetPrev: ReturnType<typeof vi.fn<GlobalHandlers['cycleTargetPrev']>>;
   readonly cycleTargetNext: ReturnType<typeof vi.fn<GlobalHandlers['cycleTargetNext']>>;
   readonly toggleTargetPane: ReturnType<typeof vi.fn<GlobalHandlers['toggleTargetPane']>>;
+  readonly murder: ReturnType<typeof vi.fn<GlobalHandlers['murder']>>;
+  readonly murderPending: ReturnType<typeof vi.fn<GlobalHandlers['murderPending']>>;
+  readonly murderConfirm: ReturnType<typeof vi.fn<GlobalHandlers['murderConfirm']>>;
+  readonly murderCancel: ReturnType<typeof vi.fn<GlobalHandlers['murderCancel']>>;
 }
 
 function handlers(): SpyHandlers {
@@ -51,6 +56,10 @@ function handlers(): SpyHandlers {
     cycleTargetPrev: vi.fn<GlobalHandlers['cycleTargetPrev']>(),
     cycleTargetNext: vi.fn<GlobalHandlers['cycleTargetNext']>(),
     toggleTargetPane: vi.fn<GlobalHandlers['toggleTargetPane']>(),
+    murder: vi.fn<GlobalHandlers['murder']>(),
+    murderPending: vi.fn<GlobalHandlers['murderPending']>(() => false),
+    murderConfirm: vi.fn<GlobalHandlers['murderConfirm']>(),
+    murderCancel: vi.fn<GlobalHandlers['murderCancel']>(),
   };
 }
 
@@ -457,5 +466,100 @@ describe('command modifier — both (alt still works)', () => {
     dispatchKey('y', makeKey({ meta: true }), ctx('plans', h, {}, null, bothBindings));
     dispatchKey('y', makeKey({ ctrl: true }), ctx('plans', h, {}, null, bothBindings));
     expect(h.toggleTmux).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('global.murder — ctrl+m arm + the pending confirm check', () => {
+  // ctrl+m rides the kitty side-channel as `chord { input: 'return', ctrl: true }`, lifted by
+  // chordToKey to an empty input with `{ ctrl, return }` flags — synthesise exactly that.
+  const CTRL_M = makeKey({ ctrl: true, return: true });
+
+  it('ctrl+m fires murder (arm) from chat focus', () => {
+    const h = handlers();
+    const out = dispatchKey('', CTRL_M, ctx(CHAT_FOCUS, h));
+    expect(out).toEqual({ layer: 'global', handled: true });
+    expect(h.murder).toHaveBeenCalledTimes(1);
+    expect(h.murderConfirm).not.toHaveBeenCalled();
+  });
+
+  it('ctrl+m never reaches the chat input (plain Enter still does)', () => {
+    const h = handlers();
+    const handleKey = vi.fn<ChatInputHandler['handleKey']>(() => true);
+    const context: DispatchContext = { ...ctx(CHAT_FOCUS, h), chatInput: { handleKey } };
+    dispatchKey('', CTRL_M, context);
+    expect(handleKey).not.toHaveBeenCalled();
+    // Plain Enter (no ctrl) is NOT the murder chord — it belongs to the chat field.
+    dispatchKey('', makeKey({ return: true }), context);
+    expect(h.murder).toHaveBeenCalledTimes(1);
+    expect(handleKey).toHaveBeenCalledTimes(1);
+  });
+
+  it('ctrl+m DECLINES with the crows panel focused (falls through to the panel keymap)', () => {
+    const h = handlers();
+    const onIntent = vi.fn();
+    const keymap = {
+      keymap: [
+        {
+          chord: { key: { ctrl: true, return: true } },
+          intent: 'murder',
+          description: 'murder',
+        },
+      ],
+      onIntent,
+    };
+    const out = dispatchKey('', CTRL_M, ctx('crows', h, { crows: keymap }));
+    expect(h.murder).not.toHaveBeenCalled();
+    expect(out).toEqual({ layer: 'panel', handled: true });
+    expect(onIntent).toHaveBeenCalledWith('murder');
+  });
+
+  it('while pending, a plain m confirms (claimed ahead of chat typing)', () => {
+    const h = handlers();
+    h.murderPending.mockReturnValue(true);
+    const handleKey = vi.fn<ChatInputHandler['handleKey']>(() => true);
+    const context: DispatchContext = { ...ctx(CHAT_FOCUS, h), chatInput: { handleKey } };
+    const out = dispatchKey('m', makeKey(), context);
+    expect(out).toEqual({ layer: 'global', handled: true });
+    expect(h.murderConfirm).toHaveBeenCalledTimes(1);
+    expect(handleKey).not.toHaveBeenCalled(); // the confirm m is never typed
+  });
+
+  it('while pending, ctrl+m again confirms', () => {
+    const h = handlers();
+    h.murderPending.mockReturnValue(true);
+    const out = dispatchKey('', CTRL_M, ctx(CHAT_FOCUS, h));
+    expect(out).toEqual({ layer: 'global', handled: true });
+    expect(h.murderConfirm).toHaveBeenCalledTimes(1);
+    expect(h.murder).not.toHaveBeenCalled(); // confirm, not a re-arm
+  });
+
+  it('while pending, any other key cancels WITHOUT being consumed (it keeps its meaning)', () => {
+    const h = handlers();
+    h.murderPending.mockReturnValue(true);
+    const handleKey = vi.fn<ChatInputHandler['handleKey']>(() => true);
+    const context: DispatchContext = { ...ctx(CHAT_FOCUS, h), chatInput: { handleKey } };
+    const out = dispatchKey('x', makeKey(), context);
+    expect(h.murderCancel).toHaveBeenCalledTimes(1);
+    expect(h.murderConfirm).not.toHaveBeenCalled();
+    // The x still types into the chat field — cancel does not swallow the event.
+    expect(handleKey).toHaveBeenCalledWith('x', expect.anything());
+    expect(out).toEqual({ layer: 'chat', handled: true });
+  });
+
+  it('while pending, alt+m (meta) is NOT the confirm — it cancels and falls through', () => {
+    const h = handlers();
+    h.murderPending.mockReturnValue(true);
+    dispatchKey('m', makeKey({ meta: true }), ctx('tickets', h));
+    expect(h.murderConfirm).not.toHaveBeenCalled();
+    expect(h.murderCancel).toHaveBeenCalledTimes(1);
+  });
+
+  it('not pending: a plain m is ordinary typing/panel input (no murder handlers fire)', () => {
+    const h = handlers();
+    const out = dispatchKey('m', makeKey(), ctx(CHAT_FOCUS, h));
+    expect(h.murder).not.toHaveBeenCalled();
+    expect(h.murderConfirm).not.toHaveBeenCalled();
+    expect(h.murderCancel).not.toHaveBeenCalled();
+    expect(out.layer).toBe('chat');
   });
 });

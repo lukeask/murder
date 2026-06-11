@@ -79,6 +79,33 @@ export interface SpawnActions {
 }
 
 /**
+ * The spawn params for a planning agent over one plan — the single home for the planner defaults
+ * (the `p` bind in the Plans panel and the staged plan doc both spawn through this, so the two entry
+ * points can never drift). Pure; exported for unit tests.
+ *
+ * Defaults, chosen once here:
+ *  - harness `claude_code` + model `opus` — planning is the deep-thinking tier, not the impl default.
+ *  - effort `high` — same reasoning; a planner that skims is worse than no planner.
+ *  - name `plan-<planName>` — the rogue is findable in the Crows panel by the plan it serves.
+ *  - kickoff is reference-by-path (the locked mechanism): the planner READS `.murder/plans/<name>.md`
+ *    and develops it in place; the body is never inlined.
+ *  - no worktree: the planner edits the plan document under `.murder/`, not the source tree.
+ */
+export function plannerSpawnParams(planName: string): SpawnRogueParams {
+  return {
+    harness: 'claude_code',
+    model: 'opus',
+    effort: 'high',
+    name: `plan-${planName}`,
+    kickoffMessage:
+      `You are a planning agent for the plan ".murder/plans/${planName}.md". ` +
+      `Read that file first, then develop the plan in place: sharpen the approach, decompose the ` +
+      `work into concrete chunks, and surface risks and open questions. Update the plan document ` +
+      `directly; do not start implementing.`,
+  };
+}
+
+/**
  * Build the spawn actions bound to one injected {@link BusClient}, and (optionally) the app store
  * handle so a successful spawn can auto-open the rogue's chat pane (item 9e).
  *

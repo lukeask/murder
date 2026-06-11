@@ -57,6 +57,7 @@ export type ActionId =
   | 'global.cycleTargetPrev' // alt+h / ctrl+h — cycle the chat target to the previous one (chat-focus only)
   | 'global.cycleTargetNext' // alt+l / ctrl+l — cycle the chat target to the next one (chat-focus only)
   | 'global.toggleTargetPane' // alt+w / ctrl+w — toggle the current chat target's pane (chat-focus only)
+  | 'global.murder' // ctrl+m — arm the murder confirm for the targeted crow (plain, kitty side-channel)
   | 'panel.star'; // alt+f — favorite/star the focused panel's cursor row
 
 /**
@@ -68,7 +69,14 @@ export type ActionId =
  */
 export type BindingSpec =
   | { readonly kind: 'command'; readonly key: string }
-  | { readonly kind: 'plain'; readonly chord: KeyChord };
+  | {
+      readonly kind: 'plain';
+      readonly chord: KeyChord;
+      /** Optional hint-bar label override, for a chord whose mechanical shape doesn't read as the
+       * key the user presses (ctrl+m arrives as `ctrl+return` via the side-channel — labelling it
+       * `C-return` would hide the actual binding). Omitted → derived from the chord. */
+      readonly label?: string;
+    };
 
 /** One action's definition: its id, default binding, a human description (for hint/settings UIs),
  * and whether the settings menu may rebind it. Modifier-only chords (digits) are never rebindable. */
@@ -193,6 +201,21 @@ export const ACTIONS: Readonly<Record<ActionId, ActionDef>> = {
     description: 'toggle pane',
     rebindable: true,
   },
+  'global.murder': {
+    id: 'global.murder',
+    // ctrl+m — arm the two-press murder confirm for the targeted crow (the confirm press — `m` or
+    // ctrl+m again — is routed by the dispatcher's pending check, not a second binding). A `plain`
+    // chord, NOT command-modified: ctrl+m is the deliberate muscle-memory chord, independent of the
+    // alt/ctrl modifier setting. Its mechanical shape is `ctrl+return` because the terminal conflates
+    // ctrl+m with CR — the kitty side-channel delivers it as `chord { input: 'return', ctrl: true }`
+    // (see translate.ts CTRL_LETTER_COLLISIONS), which `chordToKey` lifts to `{ ctrl, return }`. The
+    // `label` override keeps the hint honest ('C-m', what the user presses). Bypass mode (no kitty)
+    // cannot distinguish ctrl+m from Enter, so the binding is simply unreachable there — acceptable:
+    // murder is a destructive chord and silently degrading it onto Enter would be far worse.
+    default: { kind: 'plain', chord: { key: { ctrl: true, return: true } }, label: 'C-m' },
+    description: 'murder crow',
+    rebindable: false,
+  },
   'panel.star': {
     id: 'panel.star',
     default: command('f'),
@@ -295,7 +318,7 @@ export function resolveBindings(
   for (const id of ACTION_IDS) {
     const def = ACTIONS[id];
     if (def.default.kind === 'plain') {
-      labels[id] = plainLabel(def.default.chord);
+      labels[id] = def.default.label ?? plainLabel(def.default.chord);
       continue;
     }
     const key = overrides[id] ?? def.default.key;
