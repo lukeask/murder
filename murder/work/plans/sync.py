@@ -291,18 +291,25 @@ class PlanSync(MarkdownSyncLoop):
         row = {**row, "_related_rows": related}
         plan = plan_from_row(row)
         path = self.repo_root / str(row["materialized_path"])
-        plan.updated_at = datetime.utcnow()
+        # Re-materialization is a projection of existing DB state back onto disk
+        # (the file went missing -- e.g. wiped local .murder/, branch switch,
+        # fresh worktree), NOT an edit. Preserve the row's stored ``updated_at``
+        # both in the rendered frontmatter and in the DB, so a missing-file
+        # regeneration on startup does not mass-restamp untouched plans. We
+        # therefore neither bump ``plan.updated_at`` nor route through
+        # ``mark_plan_sync_state`` (which always stamps ``_now()``); the single
+        # UPDATE below sets sync state and hashes while leaving ``updated_at``.
         write(path, plan)
         raw = path.read_text(encoding="utf-8")
         h = content_hash(raw)
-        dbmod.mark_plan_sync_state(self.db, plan.name, "synced", file_hash=h)
         self.db.execute(
             """
             UPDATE plans
-               SET body_hash = ?, updated_at = ?
+               SET sync_state = 'synced', parse_error = NULL,
+                   file_hash = ?, body_hash = ?
              WHERE name = ?
             """,
-            (h, datetime.utcnow().isoformat(timespec="seconds"), plan.name),
+            (h, h, plan.name),
         )
         return path
 
