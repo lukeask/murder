@@ -23,6 +23,11 @@ if TYPE_CHECKING:
     from murder.app.service.runtime_scope import AgentLifecycleHost as Runtime
 
 
+# A single transient tmux/SQLite tick blip should not permanently fail a
+# ticket. Only after this many *consecutive* tick failures do we go terminal.
+TICK_FAILURE_BUDGET = 3
+
+
 class CrowHandler(Daemon):
     role = AgentRole.CROW_HANDLER
 
@@ -67,6 +72,7 @@ class CrowHandler(Daemon):
         self._done_pane_hash: str | None = None
         self._log_path: Path | None = None
         self._terminal_failure = False
+        self._consecutive_tick_failures = 0
         self._last_orchestration_t: float = 0.0
         self._last_orchestration_pane_hash: str | None = None
         # F11 H1: index of the last heartbeat bucket we emitted `agent` for, so a
@@ -117,7 +123,6 @@ class CrowHandler(Daemon):
                     raise
                 except Exception as e:
                     await self._handle_tick_failure(e)
-                    break
                 interval = (
                     self.config.idle_projection_interval_s
                     if self._idle_cached
@@ -355,8 +360,17 @@ class CrowHandler(Daemon):
 
         if self._terminal_failure:
             return
-        self._terminal_failure = True
+
         error = str(exc)
+        self._consecutive_tick_failures += 1
+        if self._consecutive_tick_failures < TICK_FAILURE_BUDGET:
+            self._log(
+                f"tick failure {self._consecutive_tick_failures}/{TICK_FAILURE_BUDGET} "
+                f"(transient, will retry): {error}"
+            )
+            return
+
+        self._terminal_failure = True
         self._log(f"tick failure — failing ticket: {error}")
         await self.outcome.fail_ticket(self.ticket_id, f"crow_handler tick failed: {error}")
 
