@@ -742,7 +742,7 @@ class Orchestrator:
         if agent_id.startswith("planner-"):
             plan_name = agent_id[len("planner-") :]
             if not plan_name:
-                return {"handled": False, "error": "planner agent_id requires a plan name"}
+                return {"ok": False, "error": "planner agent_id requires a plan name"}
             if agent is None or not await self._agent_is_live(agent):
                 if not spawn_if_needed:
                     LOGGER.info(
@@ -750,19 +750,19 @@ class Orchestrator:
                         "skipping spawn",
                         agent_id,
                     )
-                    return {"handled": False, "reason": "agent-not-live"}
+                    return {"ok": False, "error": "agent-not-live"}
                 await self.ensure_planning_agent(plan_name)
                 agent = self.rt.get_agent(agent_id)
         if agent_id.startswith("crow-"):
             ticket_id = agent_id[len("crow-") :]
             if not ticket_id:
-                return {"handled": False, "error": "crow agent_id requires a ticket id"}
+                return {"ok": False, "error": "crow agent_id requires a ticket id"}
             handler = self.rt.get_crow_handler(ticket_id)
             if handler is not None:
                 queue_result = await handler.queue_message(message)
                 if queue_result.get("ok") is False:
                     return {
-                        "handled": False,
+                        "ok": False,
                         "error": str(queue_result.get("error") or "crow message delivery failed"),
                         **queue_result,
                     }
@@ -772,11 +772,11 @@ class Orchestrator:
                 await self._record_user_block(agent_id, message)
                 return {"handled": True, **queue_result}
         if agent is None:
-            return {"handled": False, "error": f"no agent named {agent_id}"}
+            return {"ok": False, "error": f"no agent named {agent_id}"}
         send_result = await agent.send(message)
         if send_result is not None and getattr(send_result, "ok", True) is False:
             return {
-                "handled": False,
+                "ok": False,
                 "error": getattr(send_result, "message", None) or "agent message delivery failed",
             }
         await self._record_user_block(agent_id, message)
@@ -799,16 +799,16 @@ class Orchestrator:
         if agent_id.startswith("planner-"):
             plan_name = agent_id[len("planner-") :]
             if not plan_name:
-                return {"handled": False, "error": "planner agent_id requires a plan name"}
+                return {"ok": False, "error": "planner agent_id requires a plan name"}
             if agent is None or not await self._agent_is_live(agent):
                 await self.ensure_planning_agent(plan_name)
                 agent = self.rt.get_agent(agent_id)
         if agent is None:
-            return {"handled": False, "error": f"no agent named {agent_id}"}
+            return {"ok": False, "error": f"no agent named {agent_id}"}
 
         session = getattr(agent, "session", None)
         if not isinstance(session, str) or not session:
-            return {"handled": False, "error": f"agent {agent_id} has no tmux session"}
+            return {"ok": False, "error": f"agent {agent_id} has no tmux session"}
 
         await tmux.send_keys(session, key, literal=literal, enter=enter)
         # Ground truth: record raw-key user input authoritatively in both the
@@ -875,7 +875,7 @@ class Orchestrator:
         """Kill the tmux session and mark dead an agent the runtime forgot."""
         db = self.rt.db
         if db is None:
-            return {"handled": False, "error": f"no agent named {agent_id}"}
+            return {"ok": False, "error": f"no agent named {agent_id}"}
         rows = db.execute(
             """
             SELECT agent_id, session FROM agents
@@ -885,7 +885,7 @@ class Orchestrator:
             (agent_id, _crow_handler_companion(agent_id)),
         ).fetchall()
         if not rows:
-            return {"handled": False, "error": f"no agent named {agent_id}"}
+            return {"ok": False, "error": f"no agent named {agent_id}"}
         for row in rows:
             session = row["session"]
             if session and await tmux.session_exists(session):
@@ -897,20 +897,20 @@ class Orchestrator:
     async def rename_rogue_agent(self, agent_id: str, name: str) -> dict[str, Any]:
         """Rename a live rogue crow without restarting its harness."""
         if not is_rogue_agent_id(agent_id):
-            return {"handled": False, "error": "rename is only supported for rogue crows"}
+            return {"ok": False, "error": "rename is only supported for rogue crows"}
         agent = self.rt.get_agent(agent_id)
         if agent is None:
-            return {"handled": False, "error": f"no agent named {agent_id}"}
+            return {"ok": False, "error": f"no agent named {agent_id}"}
         match = re.match(r"^(.+)-rogue-(.+)$", agent_id)
         if match is None:
-            return {"handled": False, "error": f"cannot parse rogue agent id {agent_id}"}
+            return {"ok": False, "error": f"cannot parse rogue agent id {agent_id}"}
         prefix = match.group(1)
         slug = _rogue_slug(name)
         new_agent_id = f"{prefix}-rogue-{slug}"
         if new_agent_id == agent_id:
             return {"handled": True, "agent_id": agent_id}
         if self.rt.get_agent(new_agent_id) is not None:
-            return {"handled": False, "error": f"agent already exists: {new_agent_id}"}
+            return {"ok": False, "error": f"agent already exists: {new_agent_id}"}
 
         old_session = getattr(agent, "session", None)
         new_session = format_session_name(self.rt, "crow", f"_{prefix}_rogue_{slug}")
@@ -919,7 +919,7 @@ class Orchestrator:
             and old_session != new_session
             and await tmux.session_exists(new_session)
         ):
-            return {"handled": False, "error": f"session already exists: {new_session}"}
+            return {"ok": False, "error": f"session already exists: {new_session}"}
 
         renamed = self.rt.agents.rename_agent(
             agent_id,
@@ -927,7 +927,7 @@ class Orchestrator:
             persist=self.rt.sync_agent,
         )
         if renamed is None:
-            return {"handled": False, "error": f"failed to rename {agent_id}"}
+            return {"ok": False, "error": f"failed to rename {agent_id}"}
         if isinstance(old_session, str) and old_session != new_session:
             if await tmux.session_exists(old_session):
                 await tmux.rename_session(old_session, new_session)
@@ -954,20 +954,20 @@ class Orchestrator:
         if is_rogue_agent_id(agent_id):
             agent = self.rt.get_agent(agent_id)
             if agent is None:
-                return {"handled": False, "error": f"no agent named {agent_id}"}
+                return {"ok": False, "error": f"no agent named {agent_id}"}
             harness_session = getattr(agent, "harness_session", None)
             if harness_session is None:
-                return {"handled": False, "error": f"agent {agent_id} has no harness session"}
+                return {"ok": False, "error": f"agent {agent_id} has no harness session"}
             await harness_session.interrupt()
             return {"handled": True}
         if not agent_id.startswith("crow-"):
-            return {"handled": False, "error": "interrupt is only supported for crow agents"}
+            return {"ok": False, "error": "interrupt is only supported for crow agents"}
         ticket_id = agent_id[len("crow-") :]
         if not ticket_id:
-            return {"handled": False, "error": "crow agent_id requires a ticket id"}
+            return {"ok": False, "error": "crow agent_id requires a ticket id"}
         handler = self.rt.get_crow_handler(ticket_id)
         if handler is None:
-            return {"handled": False, "error": f"no crow_handler for {ticket_id}"}
+            return {"ok": False, "error": f"no crow_handler for {ticket_id}"}
         await handler.interrupt_crow()
         return {"handled": True}
 
@@ -1239,7 +1239,7 @@ class Orchestrator:
                 reason = f"Collaborator startup failed: {e}"
                 await self._escalations().record_collaborator_startup_failure(reason)
                 return {
-                    "handled": False,
+                    "ok": False,
                     "changed": True,
                     "previous_harness": live_harness,
                     "harness": current_harness,
@@ -1372,7 +1372,7 @@ class Orchestrator:
         else:
             row = _db_get_ticket(self.rt.db, ticket_id)
             if row is None:
-                return {"handled": True, "ok": False, "error": f"ticket not found: {ticket_id}"}
+                return {"ok": False, "error": f"ticket not found: {ticket_id}"}
             deps = [
                 str(r["depends_on_id"])
                 for r in self.rt.db.execute(
@@ -1514,10 +1514,10 @@ class Orchestrator:
         assert self.rt.db is not None
         row = _db_get_ticket(self.rt.db, ticket_id)
         if row is None:
-            return {"handled": True, "ok": False, "error": f"ticket not found: {ticket_id}"}
+            return {"ok": False, "error": f"ticket not found: {ticket_id}"}
         title = str(payload.get("title") or row.get("title") or "").strip()
         if not title:
-            return {"handled": True, "ok": False, "error": "title is required"}
+            return {"ok": False, "error": "title is required"}
         harness = str(payload.get("harness") or row.get("harness") or "cursor").strip()
         model = payload.get("model") or None
         if model is not None:
@@ -1554,10 +1554,10 @@ class Orchestrator:
         assert self.rt.db is not None
         valid = {"planned", "ready", "in_progress", "blocked", "failed", "done", "archived"}
         if status not in valid:
-            return {"handled": True, "ok": False, "error": f"invalid status: {status!r}"}
+            return {"ok": False, "error": f"invalid status: {status!r}"}
         row = _db_get_ticket(self.rt.db, ticket_id)
         if row is None:
-            return {"handled": True, "ok": False, "error": f"ticket not found: {ticket_id}"}
+            return {"ok": False, "error": f"ticket not found: {ticket_id}"}
         prev_str = str(row.get("status") or "planned")
         with self.rt.db:
             _db_update_ticket_status(self.rt.db, ticket_id, status)
@@ -1599,11 +1599,10 @@ class Orchestrator:
                 prev = carve.apply_carve_ready_spec(self.rt.db, ticket_id, spec)
             else:
                 return {
-                    "handled": True,
                     "ok": False,
                     "error": "payload must include non-empty 'carve' object",
                 }
         except carve.CarveError as exc:
-            return {"handled": True, "ok": False, "error": str(exc)}
+            return {"ok": False, "error": str(exc)}
         await self._emit_ticket_status(ticket_id, prev, TicketStatus.READY.value)
         return {"handled": True, "ok": True, "ticket_id": ticket_id}

@@ -75,7 +75,7 @@ class CollaboratorWorker(Worker):
             return {"handled": True, "agent_id": agent_id}
         if kind == "collaborator.swap_model":
             if self._swap_model is None:
-                return {"handled": True, "ok": False, "error": "not_implemented"}
+                return {"ok": False, "error": "swap_model not implemented"}
             result = await self._swap_model(payload, ctx)
             return {"handled": True, **(result or {})}
         if kind == "collaborator.transcript.refresh":

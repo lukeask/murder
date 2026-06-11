@@ -66,8 +66,8 @@ def test_send_message_no_spawn_when_planner_not_live(repo_root: Path) -> None:
         orch.send_agent_message("planner-demo", "your plan is malformed", None, spawn_if_needed=False)
     )
 
-    assert result["handled"] is False
-    assert result["reason"] == "agent-not-live"
+    assert result["ok"] is False
+    assert result["error"] == "agent-not-live"
     assert spawned == []
 
 
@@ -87,7 +87,7 @@ def test_send_message_spawns_when_planner_not_live_by_default(repo_root: Path) -
     result = asyncio.run(orch.send_agent_message("planner-demo", "hi", None))
 
     assert spawned == ["demo"]
-    assert result["handled"] is False  # no live agent materialized in the fake
+    assert result["ok"] is False  # no live agent materialized in the fake
 
 
 def test_send_message_delivers_to_live_planner_without_spawn(repo_root: Path) -> None:

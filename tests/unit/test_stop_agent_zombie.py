@@ -131,4 +131,4 @@ def test_stop_truly_unknown_agent_reports_real_error(repo_root: Path) -> None:
 
     result = asyncio.run(Orchestrator(rt).stop_agent("nope-rogue-ghost"))  # type: ignore[arg-type]
 
-    assert result == {"handled": False, "error": "no agent named nope-rogue-ghost"}
+    assert result == {"ok": False, "error": "no agent named nope-rogue-ghost"}

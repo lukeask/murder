@@ -68,6 +68,19 @@ class Worker(ABC):
         return False
 
     async def on_command(self, command: CommandEvent, ctx: WorkerCtx) -> dict[str, Any]:
+        """Handle a routed command and report the outcome as a result dict.
+
+        The dispatcher reads the result via a three-way contract:
+
+        - ``handled`` absent or ``True`` (no ``ok`` key, or ``ok: True``) →
+          success → the command is marked completed.
+        - ``{"ok": False, "error": <str>}`` → domain failure (the handler ran
+          but hit a normal business error) → the command is marked failed with
+          that error.
+        - ``{"handled": False}`` → wiring miss only (this worker has no branch
+          for the command kind) → the command is failed AND logged at ERROR,
+          because it indicates a routing bug, not a runtime condition.
+        """
         handled = await self.handle_command(
             WorkerCommand(command.kind, command.payload),
             ctx,
