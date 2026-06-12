@@ -11,9 +11,7 @@ from typing import Any, Literal, TypeAlias, cast
 import yaml
 from pydantic import BaseModel, Field, field_validator
 
-HarnessKind: TypeAlias = Literal[
-    "cursor", "claude_code", "codex", "pi", "antigravity", "native_coding_crow"
-]
+HarnessKind: TypeAlias = Literal["cursor", "claude_code", "codex", "pi", "antigravity"]
 
 try:  # python-dotenv is in dependencies but tests may stub
     from dotenv import load_dotenv
@@ -168,16 +166,26 @@ class Config(BaseModel):
         load_dotenv(repo_root / ".env", override=True)
 
         bundled = _load_bundled_defaults()
-        from murder.user_config import load_user_config
+        from murder.user_config import apply_llm_env, load_user_config
+
+        user_cfg = load_user_config()
+        # Apply user-scope provider credentials to the env (setdefault: env/.env win).
+        apply_llm_env(user_cfg)
 
         merged: dict[str, Any] = _deep_merge(
-            dict(bundled), load_user_config().model_dump(mode="json", exclude_none=True)
+            dict(bundled), user_cfg.model_dump(mode="json", exclude_none=True)
         )
         project = repo_root / ".murder" / "roles.yaml"
         if project.exists():
             with project.open("r", encoding="utf-8") as f:
                 user_yaml = yaml.safe_load(f) or {}
             merged = _deep_merge(merged, user_yaml)
+        # The native_coding_crow harness is gated out of v0; a project roles.yaml
+        # that still references it must fail loudly rather than silently degrade.
+        if _references_gated_harness(merged):
+            raise ValueError(
+                "native_coding_crow is not available in v0; remove it from roles.yaml"
+            )
         return cls.model_validate(merged)
 
 
@@ -196,6 +204,20 @@ def project_env_path(repo_root: Path) -> Path:
 def _load_bundled_defaults() -> dict[str, Any]:
     text = resources.files("murder.resources.templates").joinpath("roles.yaml").read_text(encoding="utf-8")
     return yaml.safe_load(text) or {}
+
+
+_GATED_HARNESS = "native_coding_crow"
+
+
+def _references_gated_harness(value: Any) -> bool:
+    """True if the gated harness string appears anywhere in a nested config dict."""
+    if isinstance(value, str):
+        return value == _GATED_HARNESS
+    if isinstance(value, Mapping):
+        return any(_references_gated_harness(v) for v in value.values())
+    if isinstance(value, (list, tuple)):
+        return any(_references_gated_harness(v) for v in value)
+    return False
 
 
 def _deep_merge(base: dict[str, Any], over: dict[str, Any]) -> dict[str, Any]:

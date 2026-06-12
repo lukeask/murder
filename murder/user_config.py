@@ -17,9 +17,7 @@ from typing import Any, Literal
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-UserHarnessKind = Literal[
-    "cursor", "claude_code", "codex", "pi", "antigravity", "native_coding_crow"
-]
+UserHarnessKind = Literal["cursor", "claude_code", "codex", "pi", "antigravity"]
 
 
 class TuiUserConfig(BaseModel):
@@ -115,11 +113,102 @@ class UserNotetakerPatch(BaseModel):
     max_context_tokens: int | None = None
 
 
+class UserLlmProviderSettings(BaseModel):
+    """User-scope API credentials/endpoint for one LLM provider.
+
+    Stored in ``config.yaml`` (chmod 0600); applied to the environment via
+    ``apply_llm_env`` at daemon start with ``os.environ.setdefault`` semantics
+    so env/.env always win.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    api_key: str | None = None
+    base_url: str | None = None
+
+
+class UserLlmTier(BaseModel):
+    """A named LLM tier: a (provider, model) pair the user can bind roles to."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    provider: Literal["openrouter", "anthropic", "openai", "local", "cerebras", "groq"]
+    model: str
+    auto_free: bool = False
+
+
+class UserLlmConfig(BaseModel):
+    """User-scope LLM config: provider credentials, named tiers, role->tier map."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    providers: dict[
+        Literal["groq", "cerebras", "openrouter", "local"], UserLlmProviderSettings
+    ] = Field(default_factory=dict)
+    tiers: dict[str, UserLlmTier] = Field(default_factory=dict)
+    # role name -> tier name
+    roles: dict[str, str] = Field(default_factory=dict)
+
+
 class UserConfig(BaseModel):
     tui: TuiUserConfig = Field(default_factory=TuiUserConfig)
     collaborator: UserHarnessRolePatch | None = None
     default_crow: UserHarnessRolePatch | None = None
     notetaker: UserNotetakerPatch | None = None
+    llm: UserLlmConfig | None = None
+
+
+# Built-in tiers, available even with no user `llm.tiers`. User-defined tiers of
+# the same name override these (see `resolve_tier`).
+BUILTIN_TIERS: dict[str, UserLlmTier] = {
+    "cheap": UserLlmTier(provider="groq", model="openai/gpt-oss-120b", auto_free=True),
+    "smart": UserLlmTier(provider="openrouter", model="anthropic/claude-sonnet-4.5"),
+}
+
+
+def resolve_tier(cfg: UserConfig | None, role: str) -> UserLlmTier | None:
+    """Resolve *role* to a tier: roles[role] -> tier name -> user tiers, then builtins.
+
+    Returns None when there's no role mapping or the tier name is unknown.
+    """
+    if cfg is None or cfg.llm is None:
+        return None
+    tier_name = cfg.llm.roles.get(role)
+    if tier_name is None:
+        return None
+    user_tier = cfg.llm.tiers.get(tier_name)
+    if user_tier is not None:
+        return user_tier
+    return BUILTIN_TIERS.get(tier_name)
+
+
+# config.yaml provider settings -> environment variable. local has no api-key env
+# mapping for api_key beyond LOCAL_OPENAI_API_KEY; see apply_llm_env.
+_PROVIDER_ENV_MAP: dict[tuple[str, str], str] = {
+    ("groq", "api_key"): "GROQ_API_KEY",
+    ("cerebras", "api_key"): "CEREBRAS_API_KEY",
+    ("openrouter", "api_key"): "OPENROUTER_API_KEY",
+    ("local", "base_url"): "LOCAL_OPENAI_BASE_URL",
+    ("local", "api_key"): "LOCAL_OPENAI_API_KEY",
+}
+
+
+def apply_llm_env(user_cfg: UserConfig | None) -> None:
+    """Apply config.yaml provider settings to ``os.environ`` with setdefault.
+
+    Only sets a var when it isn't already present (env/.env always win) and the
+    config value is non-empty. Testable in isolation; call from ``Config.load``.
+    """
+    if user_cfg is None or user_cfg.llm is None:
+        return
+    for provider, settings in user_cfg.llm.providers.items():
+        for attr in ("api_key", "base_url"):
+            env_name = _PROVIDER_ENV_MAP.get((provider, attr))
+            if env_name is None:
+                continue
+            value = getattr(settings, attr, None)
+            if value:
+                os.environ.setdefault(env_name, value)
 
 
 def config_dir() -> Path:
@@ -132,6 +221,39 @@ def config_path() -> Path:
     return config_dir() / "config.yaml"
 
 
+_GATED_HARNESS = "native_coding_crow"
+
+
+def _scrub_gated_harness(raw: dict[str, Any]) -> None:
+    """Drop user-scope references to a gated-out harness, in place.
+
+    User config must never brick loading: rather than raise on a stale
+    ``native_coding_crow`` reference, we silently drop the offending entry from
+    the ``collaborator`` / ``default_crow`` patch blocks.
+    """
+    for block_name in ("collaborator", "default_crow"):
+        block = raw.get(block_name)
+        if not isinstance(block, dict):
+            continue
+        # scalar harness key
+        if block.get("harness") == _GATED_HARNESS:
+            block.pop("harness", None)
+        # list harness pool
+        pool = block.get("harnesses")
+        if isinstance(pool, list):
+            filtered = [h for h in pool if h != _GATED_HARNESS]
+            if filtered:
+                block["harnesses"] = filtered
+            else:
+                block.pop("harnesses", None)
+        # per-harness startup model pools (dict keyed by harness)
+        by_harness = block.get("startup_models_by_harness")
+        if isinstance(by_harness, dict):
+            by_harness.pop(_GATED_HARNESS, None)
+            if not by_harness:
+                block.pop("startup_models_by_harness", None)
+
+
 def load_user_config(path: Path | None = None) -> UserConfig:
     cfg_path = path or config_path()
     if not cfg_path.exists():
@@ -140,6 +262,7 @@ def load_user_config(path: Path | None = None) -> UserConfig:
         raw = yaml.safe_load(f) or {}
     if not isinstance(raw, dict):
         raw = {}
+    _scrub_gated_harness(raw)
     return UserConfig.model_validate(raw)
 
 
@@ -149,3 +272,5 @@ def save_user_config(config: UserConfig, path: Path | None = None) -> None:
     data: dict[str, Any] = config.model_dump(mode="json", exclude_none=True)
     with cfg_path.open("w", encoding="utf-8") as f:
         yaml.safe_dump(data, f, sort_keys=True)
+    # config.yaml holds API keys: keep it owner-only on every write.
+    os.chmod(cfg_path, 0o600)
