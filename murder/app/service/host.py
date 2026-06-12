@@ -37,6 +37,21 @@ LOGGER = logging.getLogger(__name__)
 RpcHandler = Callable[[dict[str, Any]], Awaitable[dict[str, Any]] | dict[str, Any]]
 
 
+def _deep_merge_settings(base: dict[str, Any], over: dict[str, Any]) -> dict[str, Any]:
+    """Recursively merge *over* into *base*, returning a new dict.
+
+    Nested dicts merge key-by-key; everything else (scalars, lists) is replaced.
+    Used to apply a partial `llm` patch onto the stored block.
+    """
+    out = dict(base)
+    for k, v in over.items():
+        if k in out and isinstance(out[k], dict) and isinstance(v, dict):
+            out[k] = _deep_merge_settings(out[k], v)
+        else:
+            out[k] = v
+    return out
+
+
 @dataclass
 class ServiceHost:
     """Wires runtime, bus broker, socket server, orchestrator, and supervisor."""
@@ -330,26 +345,76 @@ class ServiceHost:
             tmp.replace(path)
             return {"ok": True, "favorites": ids}
 
-        def _settings_payload(tui: Any) -> dict[str, Any]:
+        def _mask_llm(llm: Any) -> dict[str, Any]:
+            # Dump the user llm block, masking every non-empty api_key as "***".
+            if llm is None:
+                return {}
+            data = llm.model_dump(mode="json")
+            for provider in (data.get("providers") or {}).values():
+                if isinstance(provider, dict) and provider.get("api_key"):
+                    provider["api_key"] = "***"
+            return data
+
+        def _crow_harnesses_override(cfg: Any) -> list[str] | None:
+            # The user-scope default_crow override: harnesses pool, or [harness]
+            # if only the scalar is set, else None (no override).
+            crow = cfg.default_crow
+            if crow is None:
+                return None
+            if crow.harnesses:
+                return list(crow.harnesses)
+            if crow.harness is not None:
+                return [crow.harness]
+            return None
+
+        def _settings_payload(cfg: Any) -> dict[str, Any]:
+            import os as _os
+
+            tui = cfg.tui
+            collab_override = (
+                cfg.collaborator.harness if cfg.collaborator is not None else None
+            )
+            live_crow = self.config.default_crow
+            effective_crow = (
+                list(live_crow.harnesses) if live_crow.harnesses else [live_crow.harness]
+            )
             return {
+                # --- existing tui fields (unchanged) ---
                 "theme": tui.theme,
                 "modifier": tui.modifier,
                 "key_overrides": dict(tui.key_overrides),
                 "pane_gap": tui.pane_gap,
+                # --- harness overrides + effective values ---
+                "collaborator_harness": collab_override,
+                "crow_harnesses": _crow_harnesses_override(cfg),
+                "effective_collaborator_harness": self.config.collaborator.harness,
+                "effective_crow_harnesses": effective_crow,
+                # --- llm provider/tier/role config (api keys masked) ---
+                "llm": _mask_llm(cfg.llm),
+                "llm_env": {
+                    "groq": bool(_os.environ.get("GROQ_API_KEY")),
+                    "cerebras": bool(_os.environ.get("CEREBRAS_API_KEY")),
+                    "openrouter": bool(_os.environ.get("OPENROUTER_API_KEY")),
+                },
             }
 
         def _settings_get(_body: dict[str, Any]) -> dict[str, Any]:
             from murder.user_config import load_user_config
 
             cfg = load_user_config()
-            return {"ok": True, "settings": _settings_payload(cfg.tui)}
+            return {"ok": True, "settings": _settings_payload(cfg)}
 
         def _settings_update(body: dict[str, Any]) -> dict[str, Any]:
-            # Partial merge: load the persisted user config, overlay only the provided tui keys,
-            # re-validate via pydantic (modifier/theme), and persist. We call load/save directly
-            # rather than SettingsService.save_global to avoid its model-discovery side effects.
+            # Partial merge: load the persisted user config, overlay only the provided keys,
+            # re-validate via pydantic, and persist. We call load/save directly rather than
+            # SettingsService.save_global to avoid its model-discovery side effects.
+            from typing import get_args
+
             from murder.user_config import (
                 TuiUserConfig,
+                UserHarnessKind,
+                UserHarnessRolePatch,
+                UserLlmConfig,
                 load_user_config,
                 save_user_config,
             )
@@ -359,14 +424,87 @@ class ServiceHost:
                 raise ValueError("settings.update requires a settings object")
 
             cfg = load_user_config()
-            merged: dict[str, Any] = _settings_payload(cfg.tui)
+
+            # --- tui keys (re-validate the merged tui block) ---
+            tui_merged: dict[str, Any] = {
+                "theme": cfg.tui.theme,
+                "modifier": cfg.tui.modifier,
+                "key_overrides": dict(cfg.tui.key_overrides),
+                "pane_gap": cfg.tui.pane_gap,
+            }
             for key in ("theme", "modifier", "key_overrides", "pane_gap"):
                 if key in partial:
-                    merged[key] = partial[key]
-            # Re-validate the merged tui block; an invalid modifier/theme/key_overrides raises here.
-            cfg.tui = TuiUserConfig.model_validate(merged)
+                    tui_merged[key] = partial[key]
+            cfg.tui = TuiUserConfig.model_validate(tui_merged)
+
+            valid_harnesses = set(get_args(UserHarnessKind))
+
+            # --- collaborator_harness override ---
+            if "collaborator_harness" in partial:
+                value = partial["collaborator_harness"]
+                if value is None:
+                    if cfg.collaborator is not None:
+                        cfg.collaborator.harness = None
+                else:
+                    if value not in valid_harnesses:
+                        raise ValueError(f"invalid collaborator harness: {value!r}")
+                    patch = cfg.collaborator or UserHarnessRolePatch()
+                    patch.harness = value
+                    cfg.collaborator = patch
+                    # Apply live so new spawns use it without a daemon restart.
+                    self.config.collaborator.harness = value
+
+            # --- crow_harnesses override (single -> harness; multi -> harnesses; null -> clear) ---
+            if "crow_harnesses" in partial:
+                value = partial["crow_harnesses"]
+                if value is None:
+                    if cfg.default_crow is not None:
+                        cfg.default_crow.harness = None
+                        cfg.default_crow.harnesses = None
+                else:
+                    if not isinstance(value, list) or not value:
+                        raise ValueError("crow_harnesses must be a non-empty list or null")
+                    for h in value:
+                        if h not in valid_harnesses:
+                            raise ValueError(f"invalid crow harness: {h!r}")
+                    patch = cfg.default_crow or UserHarnessRolePatch()
+                    if len(value) == 1:
+                        patch.harness = value[0]
+                        patch.harnesses = None
+                    else:
+                        patch.harness = value[0]
+                        patch.harnesses = list(value)
+                    cfg.default_crow = patch
+                    # Apply live so new spawns use it without a daemon restart.
+                    self.config.default_crow.harness = value[0]
+                    self.config.default_crow.harnesses = (
+                        list(value) if len(value) > 1 else None
+                    )
+
+            # --- llm block (deep-merge; "***" api_key sentinel = keep stored value) ---
+            if "llm" in partial:
+                incoming = partial["llm"]
+                if not isinstance(incoming, dict):
+                    raise ValueError("llm must be an object")
+                existing = (
+                    cfg.llm.model_dump(mode="json") if cfg.llm is not None else {}
+                )
+                merged_llm = _deep_merge_settings(existing, incoming)
+                # Resolve "***" sentinels: an incoming api_key of "***" means
+                # "unchanged" — restore the stored value (empty string clears).
+                stored_providers = (existing.get("providers") or {})
+                for name, provider in (merged_llm.get("providers") or {}).items():
+                    if not isinstance(provider, dict):
+                        continue
+                    if provider.get("api_key") == "***":
+                        stored = stored_providers.get(name) or {}
+                        provider["api_key"] = stored.get("api_key")
+                cfg.llm = UserLlmConfig.model_validate(merged_llm)
+
             save_user_config(cfg)
-            return {"ok": True, "settings": _settings_payload(cfg.tui)}
+            # NOTE: llm env changes are NOT applied live; they take effect at next
+            # daemon start via apply_llm_env in Config.load.
+            return {"ok": True, "settings": _settings_payload(cfg)}
 
         def _worktree_list(_body: dict[str, Any]) -> dict[str, Any]:
             from murder.state.storage.worktrees import list_murder_worktrees_sync
