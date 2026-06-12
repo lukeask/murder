@@ -11,6 +11,7 @@ import type { ReportsSnapshotReply } from '../../src/store/reports/reportsAction
 import type { CrowSnapshotReply } from '../../src/store/roster/rosterActions.js';
 import { createAppStore } from '../../src/store/store.js';
 import type { ScheduleSnapshotReply } from '../../src/store/tickets/ticketsActions.js';
+import { selectLiveToasts, toastStore } from '../../src/store/toast/toastStore.js';
 
 /** A `state.snapshot` event for `entity`, defaulting to the crow-roster entity. */
 function snapshot(
@@ -79,12 +80,12 @@ function setup(reply: CrowSnapshotReply = crowReply()) {
 }
 
 describe('createAppStore — boot & wiring', () => {
-  it('subscribes to the bus three times on construction (state.snapshot + conversation.block + conversation.state)', () => {
+  it('subscribes to the bus four times on construction (state.snapshot + conversation.block + conversation.state + error)', () => {
     // C3 had one subscription (state.snapshot); C10 added conversation.block; the queued-message /
-    // liveness work added conversation.state. All unsubscribe on dispose (the contract: dispose
-    // tears down all wiring).
+    // liveness work added conversation.state; first-run UX added the backend-error → toast route.
+    // All unsubscribe on dispose (the contract: dispose tears down all wiring).
     const { fake, dispose } = setup();
-    expect(fake.subscriberCount).toBe(3);
+    expect(fake.subscriberCount).toBe(4);
     dispose();
     expect(fake.subscriberCount).toBe(0);
   });
@@ -706,3 +707,45 @@ async function flush(): Promise<void> {
   await Promise.resolve();
   await Promise.resolve();
 }
+
+describe('first-run UX — backend error events surface as toasts', () => {
+  beforeEach(() => {
+    toastStore.getState().clear();
+  });
+  afterEach(() => {
+    toastStore.getState().clear();
+  });
+
+  it('routes a bus `error` event to the toast rack with error severity', () => {
+    const { fake, dispose } = setup();
+    fake.emit({
+      type: 'error',
+      id: 'evt-err-1',
+      ts: '2026-06-12T00:00:00Z',
+      run_id: 'run-1',
+      agent_id: 'a-1',
+      message: 'worker exploded',
+      recoverable: true,
+    });
+    const live = selectLiveToasts(toastStore.getState().toasts, Date.now());
+    expect(live).toHaveLength(1);
+    expect(live[0]?.text).toBe('worker exploded');
+    expect(live[0]?.severity).toBe('error');
+    dispose();
+  });
+
+  it('stops routing after dispose (the error subscription is torn down)', () => {
+    const { fake, dispose } = setup();
+    dispose();
+    fake.emit({
+      type: 'error',
+      id: 'evt-err-2',
+      ts: '2026-06-12T00:00:00Z',
+      run_id: 'run-1',
+      agent_id: 'a-1',
+      message: 'after dispose',
+      recoverable: false,
+    });
+    expect(toastStore.getState().toasts).toHaveLength(0);
+  });
+});

@@ -42,6 +42,7 @@ import type {
   ConversationBlockEvent,
   ConversationStateEvent,
   Entity,
+  ErrorEvent,
   StateSnapshotEvent,
 } from '../bus/protocol.js';
 import {
@@ -116,6 +117,7 @@ import {
   TICKETS_INVALIDATING_ENTITY,
   type TicketsState,
 } from './tickets/ticketsSlice.js';
+import { toastStore } from './toast/toastStore.js';
 import { createUsageActions, type UsageActions } from './usage/usageActions.js';
 import {
   createUsageSlice,
@@ -298,12 +300,30 @@ export function createAppStore(bus: BusClient): {
     { type: 'conversation.state' },
   );
 
+  // 7. Backend-error subscription. The service publishes `error` events for failures that have no
+  //    owning RPC caller (worker crashes, command failures, …). Nothing else subscribes to them, so
+  //    without this they are silently dropped at the dispatch layer. Route them to the toast rack —
+  //    the ambient-feedback primitive — with error severity and a longer TTL (an error deserves more
+  //    than a 2.5s glance). The traceback is deliberately NOT shown: the message is the user-facing
+  //    truth; the service logs carry the rest.
+  const unsubscribeErrors = bus.subscribe(
+    (event) => {
+      if (event.type !== 'error') {
+        return;
+      }
+      const errorEvent: ErrorEvent = event;
+      toastStore.getState().push(errorEvent.message, { severity: 'error', ttlMs: 6000 });
+    },
+    { type: 'error' },
+  );
+
   return {
     store,
     dispose: () => {
       unsubscribeSnapshot();
       unsubscribeConversations();
       unsubscribeConversationState();
+      unsubscribeErrors();
     },
   };
 }

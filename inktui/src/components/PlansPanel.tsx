@@ -128,7 +128,7 @@ function PlansList({
 }): React.JSX.Element {
   const theme = useTheme();
   if (view.status === 'error') {
-    return <Text color={theme.error}>{`error: ${view.error ?? 'unknown'}`}</Text>;
+    return <Text color={theme.error}>{`error: ${view.error ?? 'unknown'} (r to retry)`}</Text>;
   }
   if (view.status === 'loading' && view.isEmpty) {
     return <Text dimColor>loading…</Text>;
