@@ -71,6 +71,73 @@ def _dir_of(repo_rel: str) -> str:
     return "" if parent == "." else parent
 
 
+def _ancestor_dirs(repo_rel: str) -> list[str]:
+    """Every dir on the path from ``repo_rel`` up to (not including) the root.
+
+    Deepest first. ``"a/b/c.py"`` -> ``["a/b", "a"]``; root-level -> ``[]``.
+    """
+    out: list[str] = []
+    d = _dir_of(repo_rel)
+    while d:
+        out.append(d)
+        d = _dir_of(d)
+    return out
+
+
+def _dir_closure(paths: list[str]) -> set[str]:
+    """All dirs on every path from each file up to (not including) the root.
+
+    Shared by fresh and incremental builds so a dir holding only subdirectories
+    still gets a ``DIR.md`` (the incremental update re-rolls the ancestor chain;
+    each link must exist).
+    """
+    dirs: set[str] = set()
+    for repo_rel in paths:
+        dirs.update(_ancestor_dirs(repo_rel))
+    return dirs
+
+
+def _dir_children(
+    dir_rel: str,
+    *,
+    by_dir: dict[str, list[str]],
+    file_bodies: dict[str, str],
+    dir_bodies: dict[str, str],
+) -> list[ChildEntry]:
+    """A directory's roll-up children: its files + its immediate subdir bodies.
+
+    Files contribute ``(name, file-summary-body)``; immediate subdirectories
+    contribute ``(name + "/", DIR.md-body)``. Both sorted for determinism.
+    """
+    children: list[ChildEntry] = []
+    for repo_rel in sorted(by_dir.get(dir_rel, [])):
+        children.append((Path(repo_rel).name, file_bodies[repo_rel]))
+    for sub_rel in sorted(dir_bodies):
+        if _dir_of(sub_rel) == dir_rel:
+            children.append((Path(sub_rel).name + "/", dir_bodies[sub_rel]))
+    return children
+
+
+def _root_children(
+    *,
+    by_dir: dict[str, list[str]],
+    file_bodies: dict[str, str],
+    dir_bodies: dict[str, str],
+) -> list[ChildEntry]:
+    """ROOT's children: root-level files + TOP-LEVEL directory bodies only.
+
+    Nested dirs are already compressed into their parents' ``DIR.md`` — feeding
+    them to ROOT as well would double-count and break the pyramid.
+    """
+    children: list[ChildEntry] = []
+    for repo_rel in sorted(by_dir.get("", [])):
+        children.append((Path(repo_rel).name, file_bodies[repo_rel]))
+    for dir_rel in sorted(dir_bodies):
+        if "/" not in dir_rel:
+            children.append((dir_rel + "/", dir_bodies[dir_rel]))
+    return children
+
+
 async def fresh_build(
     repo_root: Path,
     summarizer: FileSummarizer,
@@ -134,33 +201,27 @@ async def fresh_build(
 
     # Render every file summary; group paths by their containing directory.
     by_dir: dict[str, list[str]] = {}
+    file_bodies: dict[str, str] = {}
     for repo_rel in paths:
         summary = summaries[repo_rel]
         render_file_summary(map_root, repo_rel, summary)
         if store is not None and commit_sha is not None:
             store.snapshot_file(db, repo_rel, commit_sha, summary)
+        file_bodies[repo_rel] = summary.body
         by_dir.setdefault(_dir_of(repo_rel), []).append(repo_rel)
 
     # Directory closure: every dir on the path from a file up to (but not
     # including) the repo root, so dirs holding only subdirectories still get
     # a DIR.md (t061 re-rolls the ancestor DIR.md chain — it must exist).
-    dirs: set[str] = set()
-    for repo_rel in paths:
-        d = _dir_of(repo_rel)
-        while d:
-            dirs.add(d)
-            d = _dir_of(d)
+    dirs = _dir_closure(paths)
 
     # Bottom-up dir roll-ups, deepest first. A directory's children are its
     # files plus the DIR summaries of its immediate subdirectories.
     dir_bodies: dict[str, str] = {}
     for dir_rel in sorted(dirs, key=lambda d: d.count("/"), reverse=True):
-        children: list[ChildEntry] = []
-        for repo_rel in sorted(by_dir.get(dir_rel, [])):
-            children.append((Path(repo_rel).name, summaries[repo_rel].body))
-        for sub_rel in sorted(dir_bodies):
-            if _dir_of(sub_rel) == dir_rel:
-                children.append((Path(sub_rel).name + "/", dir_bodies[sub_rel]))
+        children = _dir_children(
+            dir_rel, by_dir=by_dir, file_bodies=file_bodies, dir_bodies=dir_bodies
+        )
         body = await dir_summary(summarizer.client, dir_rel, children)
         dir_bodies[dir_rel] = body
         render_dir_summary(map_root, dir_rel, body)
@@ -170,20 +231,176 @@ async def fresh_build(
             )
 
     # Root roll-up: root-level files + TOP-LEVEL directory bodies only.
-    # Nested dirs are already compressed into their parents' DIR.md — feeding
-    # them to ROOT as well would double-count and break the pyramid.
-    root_children: list[ChildEntry] = []
-    for repo_rel in sorted(by_dir.get("", [])):
-        root_children.append((Path(repo_rel).name, summaries[repo_rel].body))
-    for dir_rel in sorted(dir_bodies):
-        if "/" not in dir_rel:
-            root_children.append((dir_rel + "/", dir_bodies[dir_rel]))
+    root_children = _root_children(
+        by_dir=by_dir, file_bodies=file_bodies, dir_bodies=dir_bodies
+    )
     root_body = await root_summary(summarizer.client, root_children)
     render_root(map_root, root_body)
     if store is not None and commit_sha is not None:
         store.snapshot_rollup(
             db, "ROOT", commit_sha, "root", root_body, summary_tokens=count_tokens(root_body)
         )
+
+
+async def incremental_update(
+    repo_root: Path,
+    summarizer: FileSummarizer,
+    *,
+    db: sqlite3.Connection,
+    base_sha: str,
+    head_sha: str,
+    concurrency: int = 8,
+) -> None:
+    """Re-summarize only changed files and re-roll the ancestor DIR.md chains.
+
+    Diff ``base_sha``..``head_sha``; for each changed *tracked text* file:
+    re-summarize it (render ``<file>.md`` + snapshot at ``head_sha``); a changed
+    file that was deleted has its rendered ``<file>.md`` removed. Then re-roll
+    ONLY the ancestor ``DIR.md`` chain(s) of changed paths, up to ROOT, reusing
+    the same closure / top-level-only rollup logic as :func:`fresh_build`.
+
+    Unchanged sibling bodies needed to re-roll a parent are read back from the
+    DB at ``base_sha`` (the canonical history), falling back to a fresh roll
+    when missing. Empty summaries (``summary_tokens == 0``) are fine throughout.
+    """
+    repo_root = Path(repo_root)
+    map_root = map_root_for(repo_root)
+
+    from murder.codebase_map import store as store_mod
+    from murder.verdict.enforcement.git_diff import changed_files
+
+    changed = [p for p in await changed_files(repo_root, base_sha, head_sha) if _is_text(p)]
+    if not changed:
+        return
+
+    # Which changed paths still exist as tracked text files at head (modified /
+    # added) vs. were deleted. ls-files reflects the working tree, which the
+    # worker drives at head — adequate for the poll-on-HEAD model.
+    tracked_now = {p for p in await _git_ls_files(repo_root) if _is_text(p)}
+    present = [p for p in changed if p in tracked_now]
+    deleted = [p for p in changed if p not in tracked_now]
+
+    # Re-summarize present changed files (fan-out, pre-warm to dodge the
+    # ChatCompletionsClient lazy-init race — same as fresh_build).
+    sources: dict[str, str] = {}
+    for repo_rel in present:
+        try:
+            sources[repo_rel] = (repo_root / repo_rel).read_text(encoding="utf-8")
+        except (UnicodeDecodeError, OSError):
+            # Vanished or undeclared-binary between diff and read — treat as
+            # deleted so its stale node is removed.
+            deleted.append(repo_rel)
+            continue
+
+    to_summarize = list(sources)
+    new_summaries: dict[str, FileSummary] = {}
+    if to_summarize:
+        sem = asyncio.Semaphore(concurrency)
+
+        async def _summarize(repo_rel: str) -> None:
+            async with sem:
+                new_summaries[repo_rel] = await summarizer.summarize(
+                    repo_rel, sources[repo_rel]
+                )
+
+        first = to_summarize[0]
+        await _summarize(first)
+        if len(to_summarize) > 1:
+            await asyncio.gather(*(_summarize(p) for p in to_summarize[1:]))
+
+    # Render + snapshot changed file rows at head; cache fresh bodies.
+    fresh_file_bodies: dict[str, str] = {}
+    for repo_rel, summary in new_summaries.items():
+        render_file_summary(map_root, repo_rel, summary)
+        store_mod.snapshot_file(db, repo_rel, head_sha, summary)
+        fresh_file_bodies[repo_rel] = summary.body
+
+    # Remove rendered nodes for deletions (the snapshot history at base_sha is
+    # retained; only the live working copy drops the file).
+    for repo_rel in deleted:
+        target = map_root / (repo_rel + ".md")
+        if target.exists():
+            target.unlink()
+
+    # Current tracked text files grouped by dir. The full dir closure (from
+    # head's ls-files) tells us, for any re-rolled dir, its complete set of
+    # immediate subdirectories — including unchanged ones we must re-feed.
+    by_dir: dict[str, list[str]] = {}
+    for repo_rel in sorted(tracked_now):
+        by_dir.setdefault(_dir_of(repo_rel), []).append(repo_rel)
+    all_dirs = _dir_closure(list(tracked_now))
+
+    # Dirs to re-roll: the ancestor chain of every changed path (present +
+    # deleted). A deletion still re-rolls its former parents.
+    affected_dirs = _dir_closure(present + deleted)
+
+    # Body of a file child — fresh if re-summarized this run, else the DB row at
+    # base_sha (canonical), else a fresh roll from disk (DB is the source of
+    # truth; the disk fallback only fires when a snapshot is missing).
+    async def _file_body(repo_rel: str) -> str:
+        if repo_rel in fresh_file_bodies:
+            return fresh_file_bodies[repo_rel]
+        row = store_mod.load_summary(db, repo_rel, base_sha)
+        if row is not None:
+            return row["body"] or ""
+        try:
+            src = (repo_root / repo_rel).read_text(encoding="utf-8")
+        except (UnicodeDecodeError, OSError):
+            return ""
+        summary = await summarizer.summarize(repo_rel, src)
+        fresh_file_bodies[repo_rel] = summary.body
+        return summary.body
+
+    # Body of an unchanged subdir child — the DB DIR row at base_sha (canon).
+    def _reused_dir_body(dir_rel: str) -> str:
+        row = store_mod.load_summary(db, dir_rel, base_sha)
+        return (row["body"] if row is not None else "") or ""
+
+    async def _build_children(dir_rel: str, dir_bodies: dict[str, str]) -> list[ChildEntry]:
+        """File + immediate-subdir children for ``dir_rel``.
+
+        Subdir bodies: re-rolled this run -> the fresh body in ``dir_bodies``;
+        otherwise read from the DB at base_sha (canonical).
+        """
+        file_bodies: dict[str, str] = {}
+        for repo_rel in by_dir.get(dir_rel, []):
+            file_bodies[repo_rel] = await _file_body(repo_rel)
+        sub_bodies = dict(dir_bodies)
+        for cand in all_dirs:
+            if _dir_of(cand) == dir_rel and cand not in sub_bodies:
+                sub_bodies[cand] = _reused_dir_body(cand)
+        return _dir_children(
+            dir_rel, by_dir=by_dir, file_bodies=file_bodies, dir_bodies=sub_bodies
+        )
+
+    # Bottom-up re-roll of the affected DIR.md chain, deepest first.
+    dir_bodies: dict[str, str] = {}
+    for dir_rel in sorted(affected_dirs, key=lambda d: d.count("/"), reverse=True):
+        children = await _build_children(dir_rel, dir_bodies)
+        body = await dir_summary(summarizer.client, dir_rel, children)
+        dir_bodies[dir_rel] = body
+        render_dir_summary(map_root, dir_rel, body)
+        store_mod.snapshot_rollup(
+            db, dir_rel, head_sha, "dir", body, summary_tokens=count_tokens(body)
+        )
+
+    # ROOT is always re-rolled: root-level files + TOP-LEVEL dir bodies. A
+    # top-level dir re-rolled this run uses its fresh body; otherwise base_sha.
+    root_file_bodies: dict[str, str] = {}
+    for repo_rel in by_dir.get("", []):
+        root_file_bodies[repo_rel] = await _file_body(repo_rel)
+    top_dir_bodies = dict(dir_bodies)
+    for cand in all_dirs:
+        if "/" not in cand and cand not in top_dir_bodies:
+            top_dir_bodies[cand] = _reused_dir_body(cand)
+    root_children = _root_children(
+        by_dir=by_dir, file_bodies=root_file_bodies, dir_bodies=top_dir_bodies
+    )
+    root_body = await root_summary(summarizer.client, root_children)
+    render_root(map_root, root_body)
+    store_mod.snapshot_rollup(
+        db, "ROOT", head_sha, "root", root_body, summary_tokens=count_tokens(root_body)
+    )
 
 
 async def _amain(repo_root: Path, *, use_db: bool) -> None:

@@ -30,3 +30,24 @@ async def head_commit(repo_root: Path) -> str:
     return out.strip()
 
 
+async def changed_files(
+    repo_root: Path,
+    base: str,
+    head: str,
+    *,
+    cwd: Path | None = None,
+) -> list[str]:
+    """Return the repo-relative paths changed between ``base`` and ``head``.
+
+    Mirrors :func:`head_commit`'s async ``create_subprocess_exec`` style:
+    ``git -C <cwd or repo_root> diff --name-only <base> <head>``. The ``cwd``
+    param exists so this doubles as the phase-2 agent touch-set helper (diff a
+    worktree's ``start_commit``..HEAD inside the worktree).
+    """
+    run_cwd = cwd if cwd is not None else repo_root
+    rc, out, err = await _git("diff", "--name-only", base, head, cwd=run_cwd)
+    if rc != 0:
+        raise RuntimeError(f"git diff --name-only failed: {err.strip()}")
+    return [line for line in out.splitlines() if line]
+
+
