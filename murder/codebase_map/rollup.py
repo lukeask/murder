@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import math
 
-from murder.codebase_map.tokens import count_tokens
+from murder.codebase_map.tokens import REASONING_HEADROOM, count_tokens
 from murder.llm.clients.base import APIClient
 from murder.llm.prompts import render as render_prompt
 
@@ -22,10 +22,11 @@ ROLLUP_MODEL = "codebase-map-rollup"
 # A child entry is (name, the child's rendered markdown body).
 ChildEntry = tuple[str, str]
 
-# Roll-ups are summaries-of-summaries; keep the cap a fraction of the combined
-# child input so the pyramid keeps compressing as it climbs.
+# Roll-ups are summaries-of-summaries; keep the budget a fraction of the
+# combined child input so the pyramid keeps compressing as it climbs. The
+# provider cap adds REASONING_HEADROOM on top (see tokens.py).
 ROLLUP_BUDGET_FRACTION = 0.5
-ROLLUP_BUDGET_FLOOR = 128
+ROLLUP_BUDGET_FLOOR = 256
 
 
 def _render_children(children: list[ChildEntry]) -> str:
@@ -46,16 +47,32 @@ async def _complete(client: APIClient, *, dir_path: str, children: list[ChildEnt
         "map_dir_rollup",
         dir_path=dir_path,
         children=_render_children(children),
+        budget_tokens=budget,
     )
+    messages = [{"role": "user", "content": "Write the directory summary now."}]
+    cap = budget + REASONING_HEADROOM
     result = await client.complete(
         model=ROLLUP_MODEL,
         system=system,
-        messages=[{"role": "user", "content": "Write the directory summary now."}],
+        messages=messages,
         tools=None,
-        max_tokens=budget,
+        max_tokens=cap,
         temperature=0.0,
     )
-    return (result.text or "").strip()
+    body = (result.text or "").strip()
+    if not body:
+        # Reasoning burned the whole cap before any content came out. Retry
+        # once with the cap doubled rather than render an empty map node.
+        result = await client.complete(
+            model=ROLLUP_MODEL,
+            system=system,
+            messages=messages,
+            tools=None,
+            max_tokens=cap * 2,
+            temperature=0.0,
+        )
+        body = (result.text or "").strip()
+    return body
 
 
 async def dir_summary(client: APIClient, dir_path: str, child_summaries: list[ChildEntry]) -> str:

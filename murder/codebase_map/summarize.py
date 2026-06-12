@@ -16,7 +16,7 @@ import math
 from dataclasses import dataclass
 
 from murder.codebase_map.extract import Symbol, extract_symbols
-from murder.codebase_map.tokens import count_tokens
+from murder.codebase_map.tokens import REASONING_HEADROOM, count_tokens
 from murder.llm.clients.base import APIClient
 from murder.llm.prompts import render as render_prompt
 
@@ -58,6 +58,20 @@ class FileSummarizer:
             budget_tokens=budget_tokens,
         )
 
+        if not body:
+            # Even with reasoning headroom the model can occasionally burn
+            # the whole cap thinking and emit no content. Retry once with the
+            # cap doubled; the budget checks below still clamp the result.
+            body, summary_tokens = await self._complete(
+                path=path,
+                symbols_text=symbols_text,
+                src=src,
+                budget_tokens=budget_tokens,
+                max_tokens=(budget_tokens + REASONING_HEADROOM) * 2,
+            )
+            # Starved twice -> body stays "" with summary_tokens 0: an honest
+            # empty summary, never a tighten/truncate of nothing.
+
         if summary_tokens > budget_tokens:
             # Re-prompt exactly once with the actual N vs limit M.
             body, summary_tokens = await self._complete(
@@ -89,6 +103,7 @@ class FileSummarizer:
         src: str,
         budget_tokens: int,
         tighten: tuple[int, int] | None = None,
+        max_tokens: int | None = None,
     ) -> tuple[str, int]:
         system = render_prompt(
             "map_file_summary",
@@ -112,14 +127,17 @@ class FileSummarizer:
             system=system,
             messages=[{"role": "user", "content": user}],
             tools=None,
-            max_tokens=budget_tokens,
+            # The provider cap covers reasoning + content on reasoning
+            # models; the *content* budget is enforced by the prompt and the
+            # local measurement below.
+            max_tokens=(budget_tokens + REASONING_HEADROOM) if max_tokens is None else max_tokens,
             temperature=0.0,
         )
         body = (result.text or "").strip()
-        # Prefer the provider's measured completion token count; fall back to
-        # the local approximation when it is not reported.
-        reported = getattr(result, "completion_tokens", 0) or 0
-        summary_tokens = reported if reported > 0 else count_tokens(body)
+        # Measure the body locally: provider completion_tokens includes
+        # reasoning tokens on reasoning models, which would mis-measure the
+        # content and trigger spurious tighten/truncate passes.
+        summary_tokens = count_tokens(body)
         return body, summary_tokens
 
 

@@ -1,6 +1,6 @@
 You roll up the summaries of a directory's children into one compact directory summary for a codebase map.
 
-The map lets agents understand the shape of a repo without reading the code. You are summarizing summaries — go one level more abstract than your inputs, and stay well under their combined length.
+The map lets agents understand the shape of a repo without reading the code. You are summarizing summaries — go one level more abstract than your inputs, and stay well under their combined length. Hard budget: at most {budget_tokens} tokens.
 
 Directory: {dir_path}
 

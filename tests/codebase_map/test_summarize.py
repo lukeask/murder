@@ -9,7 +9,7 @@ from __future__ import annotations
 import asyncio
 
 from murder.codebase_map.summarize import FileSummarizer
-from murder.codebase_map.tokens import count_tokens
+from murder.codebase_map.tokens import REASONING_HEADROOM, count_tokens
 from murder.llm.clients.base import CompletionResult
 
 
@@ -44,21 +44,25 @@ def test_budget_is_15pct_with_floor():
     summary = asyncio.run(summarizer.summarize("mod.py", _SRC))
 
     expected_budget = max((src_tokens * 15 + 99) // 100, 128)
-    # max_tokens passed to complete() == the computed budget.
-    assert client.calls[0]["max_tokens"] == expected_budget
+    # Provider cap == content budget + reasoning headroom (reasoning models
+    # spend completion tokens thinking; the content budget is enforced by the
+    # prompt + local measurement, not the cap).
+    assert client.calls[0]["max_tokens"] == expected_budget + REASONING_HEADROOM
     assert summary.source_tokens == src_tokens
-    assert summary.summary_tokens == 5
+    # Body is measured locally, not from provider completion_tokens (which
+    # would include reasoning tokens).
+    assert summary.summary_tokens == count_tokens("# summary")
 
 
 def test_tiny_file_gets_floor_budget():
     client = StubClient([("# tiny", 3)])
     summarizer = FileSummarizer(client)
     asyncio.run(summarizer.summarize("tiny.py", "x = 1\n"))
-    assert client.calls[0]["max_tokens"] == 128
+    assert client.calls[0]["max_tokens"] == 128 + REASONING_HEADROOM
 
 
 def test_over_budget_reprompts_once_then_truncates():
-    # Both replies report way over the floor budget (128).
+    # Both replies measure way over the floor budget (128).
     over_text = "word " * 2000
     client = StubClient([(over_text, 9999), (over_text, 9999)])
     summarizer = FileSummarizer(client)
@@ -66,9 +70,10 @@ def test_over_budget_reprompts_once_then_truncates():
 
     # Exactly two completion calls: initial + one re-prompt.
     assert len(client.calls) == 2
-    # The second call is the tighter re-prompt mentioning N vs M.
+    # The second call is the tighter re-prompt mentioning N (the locally
+    # measured body size) vs M (the budget).
     second_user = client.calls[1]["messages"][0]["content"]
-    assert "9999" in second_user
+    assert str(count_tokens(over_text.strip())) in second_user
     assert "128" in second_user
     # Truncated, never over budget, marker appended.
     assert summary.summary_tokens <= 128
@@ -81,6 +86,31 @@ def test_under_budget_no_reprompt():
     summary = asyncio.run(summarizer.summarize("tiny.py", "x = 1\n"))
     assert len(client.calls) == 1
     assert summary.body == "# fits"
+
+
+def test_empty_reply_retries_once_with_doubled_cap():
+    # Reasoning models can spend the whole cap thinking and emit no content
+    # (completion_tokens == cap, empty text). One retry at double the cap.
+    client = StubClient([("", 128), ("# recovered", 20)])
+    summarizer = FileSummarizer(client)
+    summary = asyncio.run(summarizer.summarize("tiny.py", "x = 1\n"))
+
+    assert len(client.calls) == 2
+    assert client.calls[0]["max_tokens"] == 128 + REASONING_HEADROOM
+    assert client.calls[1]["max_tokens"] == (128 + REASONING_HEADROOM) * 2
+    assert summary.body == "# recovered"
+    assert summary.summary_tokens == count_tokens("# recovered")
+
+
+def test_empty_reply_twice_yields_honest_empty():
+    # Starved twice -> empty body, zero tokens, no tighten/truncate calls.
+    client = StubClient([("", 128), ("", 256)])
+    summarizer = FileSummarizer(client)
+    summary = asyncio.run(summarizer.summarize("tiny.py", "x = 1\n"))
+
+    assert len(client.calls) == 2
+    assert summary.body == ""
+    assert summary.summary_tokens == 0
 
 
 def test_source_hash_stable():

@@ -19,4 +19,12 @@ def count_tokens(text: str) -> int:
     return len(text) // 4
 
 
-__all__ = ["count_tokens"]
+# Reasoning models spend completion tokens thinking before any content comes
+# out, so the provider ``max_tokens`` cap must include headroom beyond the
+# content budget or small-budget calls starve to empty output (observed live:
+# gpt-oss-120b returns completion_tokens == cap with empty text at caps of
+# 128-256). Content budgets are still enforced by prompt + local measurement.
+REASONING_HEADROOM = 1024
+
+
+__all__ = ["count_tokens", "REASONING_HEADROOM"]

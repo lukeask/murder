@@ -141,29 +141,43 @@ async def fresh_build(
             store.snapshot_file(db, repo_rel, commit_sha, summary)
         by_dir.setdefault(_dir_of(repo_rel), []).append(repo_rel)
 
+    # Directory closure: every dir on the path from a file up to (but not
+    # including) the repo root, so dirs holding only subdirectories still get
+    # a DIR.md (t061 re-rolls the ancestor DIR.md chain — it must exist).
+    dirs: set[str] = set()
+    for repo_rel in paths:
+        d = _dir_of(repo_rel)
+        while d:
+            dirs.add(d)
+            d = _dir_of(d)
+
     # Bottom-up dir roll-ups, deepest first. A directory's children are its
     # files plus the DIR summaries of its immediate subdirectories.
     dir_bodies: dict[str, str] = {}
-    for dir_rel in sorted(by_dir, key=lambda d: d.count("/") if d else -1, reverse=True):
+    for dir_rel in sorted(dirs, key=lambda d: d.count("/"), reverse=True):
         children: list[ChildEntry] = []
-        for repo_rel in sorted(by_dir[dir_rel]):
+        for repo_rel in sorted(by_dir.get(dir_rel, [])):
             children.append((Path(repo_rel).name, summaries[repo_rel].body))
-        for sub_rel, sub_body in dir_bodies.items():
-            if _dir_of(sub_rel) == dir_rel and sub_rel != dir_rel:
-                children.append((Path(sub_rel).name + "/", sub_body))
-        body = await dir_summary(summarizer.client, dir_rel or ".", children)
+        for sub_rel in sorted(dir_bodies):
+            if _dir_of(sub_rel) == dir_rel:
+                children.append((Path(sub_rel).name + "/", dir_bodies[sub_rel]))
+        body = await dir_summary(summarizer.client, dir_rel, children)
         dir_bodies[dir_rel] = body
         render_dir_summary(map_root, dir_rel, body)
         if store is not None and commit_sha is not None:
             store.snapshot_rollup(
-                db, dir_rel or ".", commit_sha, "dir", body, summary_tokens=count_tokens(body)
+                db, dir_rel, commit_sha, "dir", body, summary_tokens=count_tokens(body)
             )
 
-    # Root roll-up from the top-level directory bodies.
+    # Root roll-up: root-level files + TOP-LEVEL directory bodies only.
+    # Nested dirs are already compressed into their parents' DIR.md — feeding
+    # them to ROOT as well would double-count and break the pyramid.
     root_children: list[ChildEntry] = []
+    for repo_rel in sorted(by_dir.get("", [])):
+        root_children.append((Path(repo_rel).name, summaries[repo_rel].body))
     for dir_rel in sorted(dir_bodies):
-        name = dir_rel if dir_rel else "."
-        root_children.append((name, dir_bodies[dir_rel]))
+        if "/" not in dir_rel:
+            root_children.append((dir_rel + "/", dir_bodies[dir_rel]))
     root_body = await root_summary(summarizer.client, root_children)
     render_root(map_root, root_body)
     if store is not None and commit_sha is not None:

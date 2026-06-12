@@ -60,6 +60,25 @@ def test_root_summary_passes_dir_entries():
     assert "lib dir summary" in system
 
 
+def test_rollup_retries_once_on_empty_with_doubled_budget():
+    # Reasoning models can burn the whole max_tokens cap before emitting
+    # content; an empty reply triggers exactly one retry at double budget.
+    client = StubClient(["", "DIR BODY"])
+    body = asyncio.run(dir_summary(client, "pkg", [("a.py", "summary of a")]))
+
+    assert body == "DIR BODY"
+    assert len(client.calls) == 2
+    assert client.calls[1]["max_tokens"] == client.calls[0]["max_tokens"] * 2
+
+
+def test_rollup_empty_retry_is_bounded():
+    # Two empties in a row -> give up with empty body, no third call.
+    client = StubClient(["", ""])
+    body = asyncio.run(dir_summary(client, "pkg", [("a.py", "x")]))
+    assert body == ""
+    assert len(client.calls) == 2
+
+
 def test_rollup_budget_under_inputs():
     # Combined child input is large; the roll-up budget must be a fraction of it.
     big = "word " * 4000
