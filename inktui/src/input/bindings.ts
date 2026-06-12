@@ -59,7 +59,8 @@ export type ActionId =
   | 'global.toggleTargetPane' // alt+w / ctrl+w — toggle the current chat target's pane (chat-focus only)
   | 'global.murder' // ctrl+m — arm the murder confirm for the targeted crow (plain, kitty side-channel)
   | 'global.closePane' // ctrl+q — close the highlighted Stage pane (chat history / doc); plain chord
-  | 'panel.star'; // alt+f — favorite/star the focused panel's cursor row
+  | 'panel.star' // alt+f — favorite/star the focused panel's cursor row
+  | 'panel.resetCrow'; // x — arm the two-press reset for the crows panel's cursor row
 
 /**
  * How an action's default binding is expressed:
@@ -234,6 +235,17 @@ export const ACTIONS: Readonly<Record<ActionId, ActionDef>> = {
     default: command('f'),
     description: 'favorite',
     rebindable: true,
+  },
+  'panel.resetCrow': {
+    id: 'panel.resetCrow',
+    // Plain `x` — a panel-scoped chord, only consumed by the CrowsPanel keymap when that panel holds
+    // focus (so it never shadows chat typing; same property as the panel's plain `r`/`m` keys). Kept
+    // in the registry (not a raw panel literal) so the help overlay and any rebind tooling see it.
+    // Two-press: first `x` arms the reset confirm for the cursor row, second `x` (within the TTL)
+    // submits `crow.reset`. Not rebindable — plain chords take no command-modifier override.
+    default: { kind: 'plain', chord: { input: 'x' } },
+    description: 'reset crow',
+    rebindable: false,
   },
 };
 

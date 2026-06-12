@@ -142,6 +142,47 @@ class TicketOps:
             await self.rt.publish_snapshot(Entity.TICKET, tid)
         return list(cascaded)
 
+    async def reset_crow(self, ticket_id: str) -> dict[str, Any]:
+        """Kill a running crow and re-queue its ticket as ``ready`` in one step.
+
+        First-class replacement for the manual retry_failed → force_status →
+        kickoff_ready sequence: works from any non-terminal status (a stuck or
+        wrong-track crow is usually ``in_progress``, not ``failed``), reaps both
+        the crow and its handler, and leaves the ticket eligible for the
+        scheduler's next kickoff.
+        """
+        assert self.rt.db is not None
+        row = _db_get_ticket(self.rt.db, ticket_id)
+        if row is None:
+            return {"ok": False, "error": f"ticket not found: {ticket_id}"}
+        prev_str = str(row.get("status") or "planned")
+
+        # Reap in-memory agents (stops harness, kills tmux, marks rows dead).
+        await self._reap_ticket_crow_agents(ticket_id)
+        # Belt-and-suspenders: if the crow predates this process (no in-memory
+        # agent to reap), kill any session still recorded in the DB.
+        from murder.runtime.terminal import tmux
+        from murder.state.persistence.agents import clear_agent_session
+
+        for agent_id in (f"crow-{ticket_id}", f"crow_handler-{ticket_id}"):
+            srow = self.rt.db.execute(
+                "SELECT session FROM agents WHERE agent_id = ?", (agent_id,)
+            ).fetchone()
+            if srow is not None and srow["session"]:
+                with contextlib.suppress(Exception):
+                    await tmux.kill_session(srow["session"])
+                clear_agent_session(self.rt.db, agent_id)
+
+        with self.rt.db:
+            _db_update_ticket_status(self.rt.db, ticket_id, TicketStatus.READY.value)
+            lifecycle.clear_last_error(self.rt.db, ticket_id)
+        try:
+            prev = TicketStatus(prev_str)
+        except ValueError:
+            prev = TicketStatus.PLANNED
+        await self._emit_ticket_status(ticket_id, prev, TicketStatus.READY.value)
+        return {"handled": True, "ok": True, "ticket_id": ticket_id, "prev_status": prev_str}
+
     async def retry_failed_ticket(self, ticket_id: str) -> dict[str, Any]:
         """Transition a failed ticket back to ready and clear its last_error."""
         assert self.rt.db is not None

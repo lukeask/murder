@@ -25,6 +25,8 @@ class OrchestratorCommands(Protocol):
 
     async def retry_failed_ticket(self, ticket_id: str) -> dict[str, Any]: ...
 
+    async def reset_crow(self, ticket_id: str) -> dict[str, Any]: ...
+
     async def set_schedule_at(
         self, ticket_id: str, schedule_at: str | None
     ) -> dict[str, Any]: ...
@@ -224,6 +226,13 @@ async def _retry_failed(orch: OrchestratorCommands, payload: dict[str, Any]) -> 
     return await orch.retry_failed_ticket(ticket_id.strip())
 
 
+async def _crow_reset(orch: OrchestratorCommands, payload: dict[str, Any]) -> dict[str, Any]:
+    ticket_id = payload.get("ticket_id")
+    if not isinstance(ticket_id, str) or not ticket_id.strip():
+        raise ValueError("crow.reset requires ticket_id")
+    return await orch.reset_crow(ticket_id.strip())
+
+
 async def _set_schedule_at(orch: OrchestratorCommands, payload: dict[str, Any]) -> dict[str, Any]:
     ticket_id = payload.get("ticket_id")
     schedule_at = payload.get("schedule_at")
@@ -291,6 +300,7 @@ _HANDLERS: dict[str, Handler] = {
     "agent.interrupt": _agent_interrupt,
     "agent.stop": _agent_stop,
     "crow.rename_rogue": _rename_rogue,
+    "crow.reset": _crow_reset,
     "plan.scaffold": _scaffold_plan,
     "plan.rename": _rename_plan,
     "plan.deprecate": _deprecate_plan,

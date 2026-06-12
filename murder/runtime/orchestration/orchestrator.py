@@ -807,6 +807,9 @@ class Orchestrator:
     async def retry_failed_ticket(self, ticket_id: str) -> dict[str, Any]:
         return await self.tickets.retry_failed_ticket(ticket_id)
 
+    async def reset_crow(self, ticket_id: str) -> dict[str, Any]:
+        return await self.tickets.reset_crow(ticket_id)
+
     async def set_schedule_at(self, ticket_id: str, schedule_at: str | None) -> dict[str, Any]:
         return await self.tickets.set_schedule_at(ticket_id, schedule_at)
 

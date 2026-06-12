@@ -31,7 +31,7 @@ import { InputStoresProvider } from '../../src/hooks/useInputStores.js';
 import { useRootInput } from '../../src/hooks/useRootInput.js';
 import { createInputStores } from '../../src/input/createInputStores.js';
 import { matchKeymap } from '../../src/input/keymap.js';
-import { murderConfirmStore } from '../../src/store/murder/murderConfirmStore.js';
+import { murderConfirmStore, resetConfirmStore } from '../../src/store/murder/murderConfirmStore.js';
 import type { CrowSnapshotReply } from '../../src/store/roster/rosterActions.js';
 import { createAppStore } from '../../src/store/store.js';
 import { toastStore } from '../../src/store/toast/toastStore.js';
@@ -394,6 +394,83 @@ describe('CrowsPanel — ctrl+m arms the murder confirm for the highlighted crow
       name: 'collab',
     });
     murderConfirmStore.getState().clear();
+    toastStore.getState().clear();
+    dispose();
+  });
+});
+
+describe('CrowsPanel — x/x resets the highlighted crow (lifecycle Objective 1)', () => {
+  it('declares the panel.resetCrow chord, arms on first press, submits crow.reset on second', async () => {
+    resetConfirmStore.getState().clear();
+    const { fake, store, inputStores, dispose } = await setup();
+    // The confirm submits the `crow.reset` orchestrator command kind through the
+    // command.submit/command.status pair (mirrors the live host protocol).
+    fake.stubRpc('command.submit', { ok: true, command_id: 'cmd-1' });
+    fake.stubRpc('command.status', {
+      ok: true,
+      status: 'done',
+      result_json: JSON.stringify({ handled: true, ok: true, ticket_id: 'T-1' }),
+    });
+    render(<Harness store={store} inputStores={inputStores} />);
+    await tick();
+
+    const registered = inputStores.keymaps.getState().keymaps['crows'];
+    expect(registered).toBeDefined();
+    if (registered === undefined) throw new Error('no crows keymap');
+
+    // Plain `x` (the registry's panel.resetCrow chord) maps to the reset intent.
+    const intent = matchKeymap(registered.keymap, 'x', makeKey({}));
+    expect(intent).toBe('reset');
+
+    // Move the cursor to the ticket crow (flattened order: collab → planner → rogue → ticket-1).
+    registered.onIntent('cursorDown');
+    registered.onIntent('cursorDown');
+    registered.onIntent('cursorDown');
+    // Cursor is React state, so the panel re-registers a fresh keymap closure on re-render (the
+    // live dispatcher always reads the latest registration). Poll: press reset on the LATEST
+    // registration until the arm lands — stale closures see a no-ticket row (collab/planner/rogue
+    // all carry ticket_id null) and never arm, so only the ticket row at cursor 3 can satisfy this.
+    let pending = resetConfirmStore.getState().pending;
+    for (let attempt = 0; attempt < 25 && pending === null; attempt += 1) {
+      await tick();
+      inputStores.keymaps.getState().keymaps['crows']?.onIntent('reset');
+      pending = resetConfirmStore.getState().pending;
+    }
+    // First press arms the confirm with the cursor row's ticket; nothing is submitted yet.
+    expect(pending).toEqual({ ticketId: 'T-1', name: 'ticket-crow' });
+    expect(fake.rpcCalls.find((c) => c.method === 'command.submit')).toBeUndefined();
+
+    // Second press confirms: the `crow.reset` command kind goes out with the ticket id.
+    const moved = inputStores.keymaps.getState().keymaps['crows'];
+    if (moved === undefined) throw new Error('no crows keymap after cursor move');
+    moved.onIntent('reset');
+    await tick();
+    expect(resetConfirmStore.getState().pending).toBeNull();
+    const submit = fake.rpcCalls.find((c) => c.method === 'command.submit');
+    expect(submit?.params).toMatchObject({
+      kind: 'crow.reset',
+      payload: { ticket_id: 'T-1' },
+    });
+
+    resetConfirmStore.getState().clear();
+    toastStore.getState().clear();
+    dispose();
+  });
+
+  it('does not arm for a row without a ticket (collaborator/rogue)', async () => {
+    resetConfirmStore.getState().clear();
+    const { fake, store, inputStores, dispose } = await setup();
+    render(<Harness store={store} inputStores={inputStores} />);
+    await tick();
+
+    const registered = inputStores.keymaps.getState().keymaps['crows'];
+    if (registered === undefined) throw new Error('no crows keymap');
+
+    // Cursor row 0 = the collaborator: no ticket → no pending, no submit.
+    registered.onIntent('reset');
+    expect(resetConfirmStore.getState().pending).toBeNull();
+    expect(fake.rpcCalls.find((c) => c.method === 'command.submit')).toBeUndefined();
+
     toastStore.getState().clear();
     dispose();
   });

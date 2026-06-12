@@ -60,7 +60,8 @@ import { deriveAgentIdentity } from '../selectors/agentIdentity.js';
 import { isChatPaneOpen } from '../selectors/conversationsSelectors.js';
 import { HEALTH_EDGE_COLOR } from '../selectors/crowHealthSelectors.js';
 import { type CrowRowView, type CrowsView, useCrowsView } from '../selectors/crowsSelectors.js';
-import { murderConfirmStore } from '../store/murder/murderConfirmStore.js';
+import { murderConfirmStore, resetConfirmStore } from '../store/murder/murderConfirmStore.js';
+import { toastStore } from '../store/toast/toastStore.js';
 import type { Theme } from '../theme/buildTheme.js';
 import { useTheme } from '../theme/themeStore.js';
 import { Ledger, type LedgerEntryContext } from './Ledger.js';
@@ -79,7 +80,8 @@ type CrowsIntent =
   | 'toggleExpanded'
   | 'star'
   | 'openChat'
-  | 'murder';
+  | 'murder'
+  | 'reset';
 
 /**
  * A flattened Ledger row: either a section header (a label) or a crow row. Headers are interleaved
@@ -243,6 +245,7 @@ export const CrowsPanel = memo(function CrowsPanel(): React.JSX.Element {
   const view = useCrowsView(roster, favorites);
   // Rule 3: bus reached only through the dispatched actions.
   const refresh = useAppStore((s) => s.actions.roster.refresh);
+  const resetCrow = useAppStore((s) => s.actions.roster.resetCrow);
   const toggleFavorite = useAppStore((s) => s.actions.favorites.toggle);
   const setActivePane = useAppStore((s) => s.actions.conversations.setActivePaneAgentId);
   const toggleChatPane = useAppStore((s) => s.actions.conversations.toggleChatPane);
@@ -335,6 +338,12 @@ export const CrowsPanel = memo(function CrowsPanel(): React.JSX.Element {
         // it here when a panel is focused) AND keeps that crow's chat pane active (spec: "favorite
         // while chatting a crow stars it and keeps that chat pane active").
         { chord: bindings.chordsFor('panel.star'), intent: 'star', description: 'favorite' },
+        // Plain `x` — two-press crow reset (kill the crow, ticket → ready). Both presses land HERE
+        // (the chord only fires while this panel is focused), so the confirm needs no dispatcher
+        // pending-check: the handler re-derives the cursor row and confirms only when it still
+        // matches the armed target; otherwise the press re-arms for the new row. Registry-sourced
+        // (`panel.resetCrow`) so the help overlay lists it.
+        { chord: bindings.chordsFor('panel.resetCrow'), intent: 'reset', description: 'reset crow' },
       ],
       onIntent(intent) {
         switch (intent) {
@@ -375,6 +384,41 @@ export const CrowsPanel = memo(function CrowsPanel(): React.JSX.Element {
             murderConfirmStore.getState().arm({ agentId, name });
             return;
           }
+          case 'reset': {
+            const agentId = agentIdAtCursor();
+            if (agentId === null) {
+              return;
+            }
+            // Reset is ticket-scoped: only crow rows (which carry a ticket) are resettable. The
+            // ticket id comes from the roster slice row, not the view row (rule 2 — the view stays
+            // grouping-only).
+            const ticketId = roster.rows.find((r) => r.agentId === agentId)?.ticketId ?? null;
+            if (ticketId === null) {
+              toastStore.getState().push('no ticket to reset for this row', { ttlMs: 2000 });
+              return;
+            }
+            const pending = resetConfirmStore.getState().pending;
+            if (pending !== null && pending.ticketId === ticketId) {
+              // Second press on the same row within the TTL → confirm. Submit `crow.reset` via the
+              // roster action (rule 3) and surface the outcome as a toast; the row/ticket updates
+              // arrive via entity snapshots.
+              resetConfirmStore.getState().clear();
+              void resetCrow(ticketId)
+                .then(() => {
+                  toastStore.getState().push(`reset ${pending.name} → ready`, { ttlMs: 3000 });
+                })
+                .catch((error: unknown) => {
+                  const message = error instanceof Error ? error.message : String(error);
+                  toastStore.getState().push(message, { severity: 'error', ttlMs: 6000 });
+                });
+              return;
+            }
+            const name =
+              view.sections.flatMap((s) => s.rows).find((r) => r.agentId === agentId)?.name ??
+              agentId;
+            resetConfirmStore.getState().arm({ ticketId, name });
+            return;
+          }
           default:
             return intent satisfies never;
         }
@@ -383,12 +427,14 @@ export const CrowsPanel = memo(function CrowsPanel(): React.JSX.Element {
     [
       moveCursor,
       refresh,
+      resetCrow,
       toggleFavorite,
       setActivePane,
       agentIdAtCursor,
       openChatAtCursor,
       bindings,
       view,
+      roster,
     ],
   );
   usePanelKeymap(PANEL_ID, keymap);

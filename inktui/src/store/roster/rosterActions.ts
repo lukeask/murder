@@ -21,6 +21,7 @@
 
 import type { StoreApi } from 'zustand';
 import type { BusClient } from '../../bus/BusClient.js';
+import { submitCommand } from '../commandSubmit.js';
 import { createRefreshAction } from '../listSlice.js';
 import type { AppStore } from '../store.js';
 import type { RosterRow } from './rosterSlice.js';
@@ -121,12 +122,25 @@ export interface RosterActions {
    * event-invalidation loop in `../store.ts` stays fire-and-forget.
    */
   refresh(): Promise<void>;
+  /**
+   * Kill a stuck/wrong-track crow and re-queue its ticket as `ready` in one step (the lifecycle-
+   * robustness plan's Objective 1). Submits the `crow.reset` orchestrator command (kills the tmux
+   * session, reaps crow + handler, transitions the ticket to ready — NOT failed). Rejects on a
+   * failed command — the caller (CrowsPanel's confirm) surfaces the outcome as a toast. The roster
+   * row update arrives via the `agent`/`ticket` entity snapshots.
+   */
+  resetCrow(ticketId: string): Promise<void>;
 }
 
 export function createRosterActions(bus: BusClient, store: StoreApi<AppStore>): RosterActions {
-  return createRefreshAction(bus, store, {
-    key: 'roster',
-    method: 'state.crow_snapshot',
-    project: (reply) => reply.sessions.map(toRosterRow),
-  });
+  return {
+    ...createRefreshAction(bus, store, {
+      key: 'roster',
+      method: 'state.crow_snapshot',
+      project: (reply) => reply.sessions.map(toRosterRow),
+    }),
+    async resetCrow(ticketId: string): Promise<void> {
+      await submitCommand(bus, 'crow.reset', { ticket_id: ticketId });
+    },
+  };
 }

@@ -33,29 +33,36 @@ export interface MurderTarget {
   readonly name: string;
 }
 
-/** The store's state: the armed target (or null) plus the verbs. */
-export interface MurderConfirmState {
+/** A two-press confirm store's state, generic over the armed target shape. */
+export interface ConfirmState<T> {
   /** The currently armed target, or `null` when nothing is pending. */
-  readonly pending: MurderTarget | null;
+  readonly pending: T | null;
   /**
-   * Arm the confirm for `target`: set it pending, show the "press m again" toast, and schedule the
-   * self-expiry. Re-arming (another ctrl+m on a different target before confirming) replaces the
+   * Arm the confirm for `target`: set it pending, show the "press again" toast, and schedule the
+   * self-expiry. Re-arming (another arm press on a different target before confirming) replaces the
    * pending target and restarts the clock.
    */
-  arm(target: MurderTarget): void;
+  arm(target: T): void;
   /** Drop the pending target (confirm consumed it, another key cancelled it, or a test resets).
    * Cancels the expiry timer. Idempotent. */
   clear(): void;
 }
 
+/** The store's state: the armed target (or null) plus the verbs. */
+export type MurderConfirmState = ConfirmState<MurderTarget>;
+
 export type MurderConfirmStoreApi = StoreApi<MurderConfirmState>;
 
-/** Create an isolated murder-confirm store bound to a toast store (tests pass their own, and may
- * shorten `ttlMs` so the expiry is assertable on a real timer without a 3s wait). */
-export function createMurderConfirmStore(
+/**
+ * Create an isolated two-press confirm store bound to a toast store. Generic over the target shape;
+ * `message` renders the "press <key> again to …" cue for the arm toast. Tests pass their own toast
+ * store and may shorten `ttlMs` so the expiry is assertable on a real timer without a 3s wait.
+ */
+export function createConfirmStore<T>(
   toasts: ToastStoreApi,
+  message: (target: T) => string,
   ttlMs: number = ARM_TTL_MS,
-): MurderConfirmStoreApi {
+): StoreApi<ConfirmState<T>> {
   // The expiry timer handle is closure-private (not state) — exactly the toastStore timer pattern.
   let timer: ReturnType<typeof setTimeout> | null = null;
   const cancelTimer = (): void => {
@@ -65,12 +72,12 @@ export function createMurderConfirmStore(
     }
   };
 
-  return createStore<MurderConfirmState>()((set, get) => ({
+  return createStore<ConfirmState<T>>()((set, get) => ({
     pending: null,
     arm(target) {
       cancelTimer();
       set({ pending: target });
-      toasts.getState().push(`press m again to murder ${target.name}`, { ttlMs });
+      toasts.getState().push(message(target), { ttlMs });
       timer = setTimeout(() => {
         timer = null;
         get().clear();
@@ -85,5 +92,36 @@ export function createMurderConfirmStore(
   }));
 }
 
+/** Create an isolated murder-confirm store bound to a toast store (tests pass their own, and may
+ * shorten `ttlMs` so the expiry is assertable on a real timer without a 3s wait). */
+export function createMurderConfirmStore(
+  toasts: ToastStoreApi,
+  ttlMs: number = ARM_TTL_MS,
+): MurderConfirmStoreApi {
+  return createConfirmStore<MurderTarget>(
+    toasts,
+    (target) => `press m again to murder ${target.name}`,
+    ttlMs,
+  );
+}
+
 /** The app-level singleton — what the shell handlers and the CrowsPanel import. */
 export const murderConfirmStore: MurderConfirmStoreApi = createMurderConfirmStore(toastStore);
+
+/** The armed reset target: the ticket to re-queue and the cursor row's display label. */
+export interface ResetTarget {
+  readonly ticketId: string;
+  readonly name: string;
+}
+
+/**
+ * The crow-reset confirm singleton (`x`, `x` in the crows panel — Objective 1 of the lifecycle-
+ * robustness plan). Unlike the murder confirm, BOTH presses land in the CrowsPanel keymap (the
+ * plain `x` chord only fires while that panel is focused), so no dispatcher pending-check is
+ * needed: the panel re-derives the cursor row on the second press and confirms only when it still
+ * matches the armed ticket. The self-expiry guards the stale-arm case.
+ */
+export const resetConfirmStore: StoreApi<ConfirmState<ResetTarget>> = createConfirmStore<ResetTarget>(
+  toastStore,
+  (target) => `press x again to reset ${target.name}`,
+);
