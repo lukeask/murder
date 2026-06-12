@@ -90,6 +90,33 @@ def test_fresh_build_respects_concurrency_bound():
         assert client.max_in_flight <= 2
 
 
+def test_fresh_build_snapshots_to_db():
+    import sqlite3
+
+    from murder.codebase_map.store import latest_map_sha, rows_for_commit
+    from murder.state.persistence.schema import SCHEMA_SQL
+
+    with tempfile.TemporaryDirectory() as d:
+        root = Path(d)
+        _init_repo(root)
+        db = sqlite3.connect(":memory:")
+        db.row_factory = sqlite3.Row
+        db.executescript(SCHEMA_SQL)
+
+        client = ConcurrencyStubClient()
+        summarizer = FileSummarizer(client)
+        asyncio.run(fresh_build(root, summarizer, db=db, concurrency=2))
+
+        sha = latest_map_sha(db)
+        assert sha is not None
+        rows = rows_for_commit(db, sha)
+        paths = {r["path"] for r in rows}
+        kinds = {r["kind"] for r in rows}
+        # Every file + dir rollups + root snapshotted.
+        assert {"pkg/a.py", "pkg/b.py", "pkg/sub/c.py", "ROOT"} <= paths
+        assert {"file", "dir", "root"} <= kinds
+
+
 def test_fresh_build_blows_away_stale_tree():
     with tempfile.TemporaryDirectory() as d:
         root = Path(d)

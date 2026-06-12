@@ -407,6 +407,24 @@ CREATE TABLE IF NOT EXISTS harness_models (
     models_json     TEXT NOT NULL,
     discovery_error TEXT
 );
+
+-- Codebase-map summaries, snapshotted per build keyed by commit SHA (t060).
+-- One row per file/dir/root node: "what did the map look like at commit X".
+-- path: repo-relative source path, or the dir path / 'ROOT' sentinel.
+-- source_hash: sha256 of the source file (NULL for dir/root rollups).
+CREATE TABLE IF NOT EXISTS map_summaries (
+    path        TEXT NOT NULL,
+    commit_sha  TEXT NOT NULL,
+    kind        TEXT NOT NULL CHECK (kind IN ('file','dir','root')),
+    body        TEXT NOT NULL,
+    source_hash TEXT,
+    source_tokens  INTEGER,
+    summary_tokens INTEGER,
+    generated_at   TEXT NOT NULL,
+    PRIMARY KEY (path, commit_sha)
+);
+
+CREATE INDEX IF NOT EXISTS idx_map_summaries_commit ON map_summaries(commit_sha);
 """
 # fmt: on
 
@@ -452,6 +470,7 @@ def init_db(conn: sqlite3.Connection) -> None:
         _migrate_drop_sentinel,
         _migrate_drop_ticket_write_set,
         _migrate_events_schema_version,
+        _migrate_map_summaries,
         _migrate_notes_identity_status,
         _migrate_plans_single_master,
         _migrate_repair_plans_dangling_fk,
@@ -489,6 +508,7 @@ def init_db(conn: sqlite3.Connection) -> None:
     _migrate_drop_ticket_write_set(conn)
     _migrate_conversation_store(conn)
     _migrate_conversation_queued_message(conn)
+    _migrate_map_summaries(conn)
     ensure_notetaker_context_row(conn)
 
 

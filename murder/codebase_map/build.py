@@ -1,16 +1,17 @@
-"""Full fresh build of the codebase map (t059).
+"""Full fresh build of the codebase map (t059 + t060).
 
 ``fresh_build`` walks the repo's tracked text files, fans out per-file
 summaries under a concurrency cap, rolls them up bottom-up into ``DIR.md`` /
 ``ROOT.md``, and renders the whole ``.murder/map/`` mirror tree. A fresh build
 blows away and regenerates the tree.
 
-The ``db`` parameter is part of the locked signature; t060 fills the snapshot
-branch under ``db is not None``. For t059, ``db=None`` (render-only).
+When a ``db`` handle is supplied (t060) it also snapshots every file/dir/root
+summary to the ``map_summaries`` table keyed by the current HEAD commit, so the
+DB is the canonical history while disk is the live working copy.
 
 Manual entrypoint:
 
-    python -m murder.codebase_map.build [repo_root]
+    python -m murder.codebase_map.build [repo_root] [--no-db]
 """
 
 from __future__ import annotations
@@ -196,8 +197,8 @@ async def _amain(repo_root: Path, *, use_db: bool) -> None:
 
 def main(argv: list[str] | None = None) -> None:
     args = list(sys.argv[1:] if argv is None else argv)
-    # t059 ships render-only; t060 flips the default to open the repo DB.
-    use_db = False
+    # Default snapshots to the repo DB (t060); --no-db is render-only.
+    use_db = True
     if "--no-db" in args:
         use_db = False
         args = [a for a in args if a != "--no-db"]

@@ -660,6 +660,38 @@ def _migrate_conversation_queued_message(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE conversations ADD COLUMN queued_message TEXT")
 
 
+def _migrate_map_summaries(conn: sqlite3.Connection) -> None:
+    """Add the map_summaries table (codebase-map history, t060).
+
+    Idempotent: the CREATE TABLE IF NOT EXISTS in SCHEMA_SQL handles fresh DBs;
+    this migration handles existing DBs created before t060 landed.
+    """
+    existing = {
+        row["name"]
+        for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table'"
+        ).fetchall()
+    }
+    if "map_summaries" not in existing:
+        conn.executescript(
+            """
+            CREATE TABLE map_summaries (
+                path        TEXT NOT NULL,
+                commit_sha  TEXT NOT NULL,
+                kind        TEXT NOT NULL CHECK (kind IN ('file','dir','root')),
+                body        TEXT NOT NULL,
+                source_hash TEXT,
+                source_tokens  INTEGER,
+                summary_tokens INTEGER,
+                generated_at   TEXT NOT NULL,
+                PRIMARY KEY (path, commit_sha)
+            );
+            CREATE INDEX IF NOT EXISTS idx_map_summaries_commit
+                ON map_summaries(commit_sha);
+            """
+        )
+
+
 def _migrate_conversation_store(conn: sqlite3.Connection) -> None:
     """Add conversations + conversation_blocks tables (Phase 1.b JSON store).
 
