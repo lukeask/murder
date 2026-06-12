@@ -44,9 +44,9 @@ def test_render_derives_effort_from_classvars():
 
 
 def test_render_no_effort_harness_shows_none():
-    # native_coding_crow declares no supported_efforts
-    doc = render_harnesses_doc(["native_coding_crow"], {})
-    assert "## native_coding_crow" in doc
+    # pi declares no supported_efforts (native_coding_crow gated out of v0)
+    doc = render_harnesses_doc(["pi"], {})
+    assert "## pi" in doc
     assert "Effort levels: (none)" in doc
 
 

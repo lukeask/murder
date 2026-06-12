@@ -1,8 +1,10 @@
 """Harness adapter registry. See `.murder/harnesses_spec.md`.
 
 Adapters wrap interactive CLI harnesses (cursor, claude_code, codex, pi,
-antigravity, native_coding_crow) so the runner / CrowHandler / Sentinel
-can stay harness-agnostic.
+antigravity) so the runner / CrowHandler / Sentinel can stay harness-agnostic.
+
+`native_coding_crow` is gated out of the v0 public surface (its adapter file is
+kept for a future v2); it is intentionally absent from the registry.
 """
 
 from __future__ import annotations
@@ -17,7 +19,6 @@ from murder.llm.harnesses.claude_code import ClaudeCodeAdapter
 from murder.llm.harnesses.codex import CodexAdapter
 from murder.llm.harnesses.cursor import CursorAdapter
 from murder.llm.harnesses.models import HarnessPaneState, HarnessStartSpec
-from murder.llm.harnesses.native_coding_crow import NativeCodingCrowAdapter
 from murder.llm.harnesses.pi_harness import PiAdapter
 from murder.llm.harnesses.results import SimpleResult
 
@@ -27,7 +28,6 @@ REGISTRY: dict[str, type[HarnessAdapter]] = {
     "codex": CodexAdapter,
     "pi": PiAdapter,
     "antigravity": AntigravityAdapter,
-    "native_coding_crow": NativeCodingCrowAdapter,
 }
 
 CAPABILITY_REGISTRY: dict[str, HarnessCapabilities] = {

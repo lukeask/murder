@@ -32,7 +32,6 @@ _HARNESS_ORDER: tuple[str, ...] = (
     "cursor",
     "pi",
     "antigravity",
-    "native_coding_crow",
 )
 
 
