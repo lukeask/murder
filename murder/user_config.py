@@ -162,7 +162,7 @@ class UserConfig(BaseModel):
 # the same name override these (see `resolve_tier`).
 BUILTIN_TIERS: dict[str, UserLlmTier] = {
     "cheap": UserLlmTier(provider="groq", model="openai/gpt-oss-120b", auto_free=True),
-    "smart": UserLlmTier(provider="openrouter", model="anthropic/claude-sonnet-4.5"),
+    "smart": UserLlmTier(provider="openrouter", model="anthropic/claude-sonnet-4-6"),
 }
 
 
