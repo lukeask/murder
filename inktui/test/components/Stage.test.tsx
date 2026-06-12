@@ -128,6 +128,20 @@ async function setup(reply: CrowSnapshotReply = oneCollaborator()) {
   return { fake, store, dispose, inputStores };
 }
 
+describe('Stage — empty-Stage first-run hint', () => {
+  it('shows the spawn/star hint instead of a void when no panes and no doc are open', async () => {
+    const { store, inputStores, dispose } = await setup(emptyRoster());
+    const { lastFrame } = render(<Harness store={store} inputStores={inputStores} />);
+    await tick();
+
+    const frame = lastFrame() ?? '';
+    // Labels come from the live bindings (default modifier alt → A-s spawn, A-f star).
+    expect(frame).toContain('A-s spawn a crow');
+    expect(frame).toContain('A-f star one in the crows panel');
+    dispose();
+  });
+});
+
 describe('Stage — chat-history panes as focusable Stage panes', () => {
   it('mounts a Stage-pane rect for a favorited crow and titles the pane', async () => {
     const { store, inputStores, dispose } = await setup();

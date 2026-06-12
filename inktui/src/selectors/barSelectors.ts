@@ -123,8 +123,16 @@ export function selectBottomBar(
   }
   // Item 12: the keybinding-help hint, ALWAYS pinned to the far right so a new user can find it. The
   // label is derived from the resolved `global.keyHelp` binding (so a rebind tracks here too).
+  //
+  // While CHAT has focus, a bare `?` types into the input (the dispatcher deliberately never steals
+  // it — dispatcher.ts gates `global.keyHelp` to non-chat focus), so a plain `?  help` hint would be
+  // a lying affordance. Disambiguate by prefixing the nav-out chord: `A-hjkl ?  help` reads as
+  // "move focus off chat, then ?" — truthful, compact, and it tracks the configured modifier.
   const helpHint: BottomBarHint = {
-    key: bindings.label('global.keyHelp'),
+    key:
+      focused === CHAT_FOCUS
+        ? `${modifierPrefix(bindings)}hjkl ${bindings.label('global.keyHelp')}`
+        : bindings.label('global.keyHelp'),
     description: 'help',
     align: 'right',
   };

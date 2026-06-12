@@ -70,15 +70,23 @@ describe('selectBottomBar', () => {
   });
 
   it('pins a right-aligned help hint (item 12) on the normal bar, labelled from the binding', () => {
-    const chatHints = selectBottomBar(CHAT_FOCUS, undefined, DEFAULT_BINDINGS);
-    const panelHints = selectBottomBar('plans', keymap, DEFAULT_BINDINGS);
-    for (const hints of [chatHints, panelHints]) {
-      const help = hints.find((h) => h.description === 'help');
-      expect(help).toBeDefined();
-      expect(help?.align).toBe('right');
-      // The label is the resolved global.keyHelp binding (a plain ?).
-      expect(help?.key).toBe(DEFAULT_BINDINGS.label('global.keyHelp'));
-    }
+    const hints = selectBottomBar('plans', keymap, DEFAULT_BINDINGS);
+    const help = hints.find((h) => h.description === 'help');
+    expect(help).toBeDefined();
+    expect(help?.align).toBe('right');
+    // The label is the resolved global.keyHelp binding (a plain ?).
+    expect(help?.key).toBe(DEFAULT_BINDINGS.label('global.keyHelp'));
+  });
+
+  it('disambiguates the help hint while chat is focused (a bare ? would type into the input)', () => {
+    // First-run UX: in chat focus the dispatcher never steals `?`, so the hint must not present a
+    // bare `?` as pressable — it prefixes the nav-out chord ("move focus, then ?").
+    const help = selectBottomBar(CHAT_FOCUS, undefined, DEFAULT_BINDINGS).find(
+      (h) => h.description === 'help',
+    );
+    expect(help).toBeDefined();
+    expect(help?.align).toBe('right');
+    expect(help?.key).toBe(`A-hjkl ${DEFAULT_BINDINGS.label('global.keyHelp')}`);
   });
 
   it('omits the help hint when a mode owns the bar (a modal has its own keys)', () => {

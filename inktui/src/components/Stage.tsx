@@ -54,6 +54,7 @@ import { type JSX, memo, useLayoutEffect, useMemo, useRef, useState } from 'reac
 import { shallow } from 'zustand/shallow';
 import { useAppStore } from '../hooks/useAppStore.js';
 import {
+  useBindings,
   useEffectiveFocus,
   useFocusRef,
   useMeasureFocus,
@@ -338,14 +339,17 @@ export const Stage = memo(function Stage({
   // Stage (the doc pane reads those itself); only the `{kind,name}` identity flips this.
   const openDoc: OpenDoc | null = useAppStore((s) => s.docView.open, shallow);
   const orientation = useOrientation();
+  const bindings = useBindings();
 
   // Open panes = favorites default merged with the explicit open/close overrides (item 9b). The
   // overrides map ref-swaps on every toggle, so the hook re-tiles when a pane opens/closes.
   const { panes } = useOpenChatPanes(roster, favorites, conversations.paneOverrides);
 
   if (panes.length === 0 && openDoc === null) {
-    // Nothing on the Stage: an invisible spacer that holds the center open (see the doc above). It
-    // still carries the budget floor so an empty Stage keeps its guaranteed ≥60% share.
+    // Nothing on the Stage: a centered first-run hint instead of a void, in the same spacer that
+    // holds the center open. It still carries the budget floor so an empty Stage keeps its
+    // guaranteed ≥60% share. Labels come from the live bindings table so a modifier change (alt ⇄
+    // ctrl) keeps the hint truthful.
     return (
       <Box
         flexGrow={1}
@@ -353,7 +357,13 @@ export const Stage = memo(function Stage({
         minWidth={floorWidth}
         minHeight={floorHeight ?? 0}
         overflow="hidden"
-      />
+        flexDirection="column"
+        justifyContent="center"
+        alignItems="center"
+      >
+        <Text dimColor>{`${bindings.label('global.spawn')} spawn a crow`}</Text>
+        <Text dimColor>{`${bindings.label('panel.star')} star one in the crows panel to open its chat here`}</Text>
+      </Box>
     );
   }
 
