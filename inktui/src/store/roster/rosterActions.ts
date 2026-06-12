@@ -32,10 +32,9 @@ import type { RosterRow } from './rosterSlice.js';
  * extended "a line per method as the service exposes it"; doing it from the consuming slice keeps
  * the bus seam byte-identical while still giving `bus.rpc('state.crow_snapshot', …)` full type safety.
  *
- * NOTE FOR THE SERVICE: `state.crow_snapshot` is **not yet on the live bus** — it is the RPC the
- * Python `RuntimeClient.get_crow_snapshot()` exposes locally, modeled here per the Bus contract's
- * "view → service = RPC methods" rule (namespaced `domain.verb`, like `ticket.quick_kick`). When
- * service B13 lands the read surface, confirm this name/shape or update both sides in lockstep.
+ * `state.crow_snapshot` is LIVE — registered in `host.py`, backed by the Python
+ * `RuntimeClient.get_crow_snapshot()`, per the Bus contract's "view → service = RPC methods" rule
+ * (namespaced `domain.verb`, like `ticket.quick_kick`).
  */
 declare module '../../bus/BusClient.js' {
   interface RpcMethods {

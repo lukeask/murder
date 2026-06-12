@@ -2,7 +2,7 @@
  * Notes actions — the *only* code that calls the bus for notes data (rule 3).
  *
  * Copied from {@link ../roster/rosterActions.js} per the copy recipe. Changes vs. the roster:
- *  - RPC is `state.notes_snapshot` (modeled per bus contract naming — NOT yet on the live bus; B13).
+ *  - RPC is `state.notes_snapshot` (bus-contract naming; LIVE — registered in `host.py`).
  *  - Reply shape mirrors Python `NotesSnapshot` (notes[] with name/char_count/updated_at).
  *  - Projection is `toNoteRow` (name → name, char_count, updated_at as strings).
  *  - Passes the `notes` slice key to `createRefreshAction`.
@@ -22,8 +22,8 @@ import type { NoteRow } from './notesSlice.js';
 /**
  * Declares the notes read RPC via declaration merging rather than editing the frozen C1 bus files.
  * `state.notes_snapshot` is the bus-contract name (`domain.verb`, mirrors Python
- * `RuntimeClient.get_notes_snapshot`). NOT yet on the live bus — modeled here per the contract's
- * "view → service = RPC methods" rule; confirm the name/shape when service B13 lands.
+ * `RuntimeClient.get_notes_snapshot`). LIVE — registered in `host.py` as `state.notes_snapshot`,
+ * per the contract's "view → service = RPC methods" rule.
  */
 declare module '../../bus/BusClient.js' {
   interface RpcMethods {

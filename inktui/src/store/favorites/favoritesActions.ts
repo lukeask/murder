@@ -1,7 +1,7 @@
 /**
  * Favorites actions — the *only* code that calls the bus for starring/favorites (rule 3).
  *
- * Two RPCs, modeled per the bus contract's prefs pair (service B13's V3):
+ * Two RPCs, per the bus contract's prefs pair (both LIVE — registered in `host.py`):
  *  - `tui.load_favorites {}` → `{ ok, favorites: [id,…] }` — load the persisted starred-id list.
  *  - `tui.save_favorites { favorites: [id,…] }` → `{ ok, favorites }` — persist it.
  * Both directions are required (the prefs had to leave `.murder/` in both directions). Declared via
@@ -9,12 +9,12 @@
  * (`BusClient.ts`/`UdsBusClient.ts`) stay byte-identical — the seam (rule 4). The keys here
  * (`tui.load_favorites`/`tui.save_favorites`) are distinct from every other slice's keys.
  *
- * ## Bus status: MODELED, NOT LIVE
+ * ## Bus status: LIVE
  *
- * Neither method is on the live bus yet — they land with service B13 (V3). Until then, `load`
- * resolves against whatever the `FakeBusClient` stubs, and a live `UdsBusClient` would reject the
- * call. The action routes a rejection into the slice's `error` field (never throws past the action),
- * so a missing live method degrades to "favorites stay at their defaults" rather than crashing.
+ * Both methods are registered on the live bus (`host.py`: `tui.load_favorites` /
+ * `tui.save_favorites`). The action routes a rejection into the slice's `error` field (never
+ * throws past the action), so a transient failure degrades to "favorites stay at their defaults"
+ * rather than crashing.
  *
  * ## Optimistic local-first writes
  *
@@ -33,8 +33,8 @@ import { toastStore } from '../toast/toastStore.js';
  * C11's prefs RPC declarations, augmenting the shared {@link RpcMethods} registry without editing
  * the frozen C1/C2 bus files (rule 4 — the seam). Keys distinct from every other slice's.
  *
- * **Bus status:** both MODELED, NOT LIVE — they land with service B13 (V3). Shapes mirror the bus
- * contract's prefs pair: a flat starred-id list, round-tripped in both directions.
+ * **Bus status:** both LIVE (registered in `host.py`). Shapes mirror the bus contract's prefs
+ * pair: a flat starred-id list, round-tripped in both directions.
  */
 declare module '../../bus/BusClient.js' {
   interface RpcMethods {

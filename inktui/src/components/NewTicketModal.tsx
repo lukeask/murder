@@ -18,7 +18,8 @@
  *  - Exit-then-act in `submit`.
  *  - Pure presentational component in `render`.
  *
- * **B13 flag:** `actions.quickCreateTicket` calls `ticket.quick_create` — not yet live on the bus.
+ * `actions.quickCreateTicket` dispatches the `ticket.quick_create` command kind through the LIVE
+ * `command.submit` choke point (handled by `orchestrator_worker.py`).
  */
 
 import type { Key } from 'ink';
@@ -60,7 +61,7 @@ interface NewTicketState {
  * The mode is self-dismissing: `submit` calls `modes.exit(id)` before the async RPC
  * (exit-then-act — same as ConfirmModal and NewPlanModal).
  *
- * **B13 flag:** `actions.quickCreateTicket` → `ticket.quick_create` not yet on the live bus.
+ * `actions.quickCreateTicket` → `ticket.quick_create` command kind via the LIVE `command.submit`.
  */
 export function newTicketMode(
   modes: ModeStoreApi,

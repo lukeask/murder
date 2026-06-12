@@ -36,9 +36,12 @@ import { StdinShim } from './terminal/StdinShim.js';
  * real entrypoint, so a test can import this module and drive each path without spawning a run.
  */
 
-/** Panels seeded visible on startup. Temporarily just `plans` to isolate the double-spacing repro to
- * a single panel (all minimal-Ink probe variants render clean, so the artifact is app-specific). */
-const STARTUP_PANELS: readonly PanelId[] = ['plans'];
+/** Panels seeded visible on startup — the first-run default set. Two content panels with live
+ * server handlers (plans, tickets) plus the right rail (usage, crows); notes and reports stay
+ * opt-in via their panel toggles so a fresh service doesn't open with two empty lists. The smoke
+ * build shares this constant: its FakeBusClient stubs only some slices, so smoke paints empty
+ * panels for the rest — harmless for the "does it boot" gate. */
+const STARTUP_PANELS: readonly PanelId[] = ['plans', 'tickets', 'usage', 'crows'];
 
 /**
  * Read the bus socket path from `MURDER_BUS_SOCKET`. The Python launcher resolves the per-project

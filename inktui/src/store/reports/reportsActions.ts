@@ -2,7 +2,7 @@
  * Reports actions — the *only* code that calls the bus for reports data (rule 3).
  *
  * Copied from {@link ../notes/notesActions.js}. Changes vs. notes:
- *  - RPC is `state.reports_snapshot` (NOT yet on the live bus; modeled per contract naming).
+ *  - RPC is `state.reports_snapshot` (bus-contract naming; LIVE — registered in `host.py`).
  *  - Reply shape mirrors Python `ReportsSnapshot` (reports[] with name/char_count/updated_at).
  *  - `declare module` augments `RpcMethods` with `'state.reports_snapshot'` (distinct key — never
  *    redeclare an existing one).
@@ -20,10 +20,8 @@ import type { ReportRow } from './reportsSlice.js';
 
 /**
  * Declares the reports read RPC via declaration merging. `state.reports_snapshot` is the bus-contract
- * name (`domain.verb`, mirrors Python `RuntimeClient.get_reports_snapshot`). NOT yet on the live
- * bus — modeled here per the contract's "view → service = RPC methods" rule. Confirm name/shape
- * when service B13 lands. CONTRACT GAP: also requires the `'report'` Entity to be added to the
- * Python protocol (see reportsSlice.ts).
+ * name (`domain.verb`, mirrors Python `RuntimeClient.get_reports_snapshot`). LIVE — registered in
+ * `host.py`, per the contract's "view → service = RPC methods" rule.
  */
 declare module '../../bus/BusClient.js' {
   interface RpcMethods {
