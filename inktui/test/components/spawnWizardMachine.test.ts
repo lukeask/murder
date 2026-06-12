@@ -34,14 +34,7 @@ describe('spawnWizardMachine — defaults + ordering', () => {
   });
 
   it('lists the valid harnesses in the locked order', () => {
-    expect([...HARNESS_ORDER]).toEqual([
-      'claude_code',
-      'codex',
-      'cursor',
-      'pi',
-      'antigravity',
-      'native_coding_crow',
-    ]);
+    expect([...HARNESS_ORDER]).toEqual(['claude_code', 'codex', 'cursor', 'pi', 'antigravity']);
   });
 
   it('claude_code full flow: harness → model → effort → worktree → name', () => {
@@ -83,10 +76,9 @@ describe('spawnWizardMachine — effort matrix mirrors backend adapter enums', (
     expect(effortMatrixFor('cursor')).toEqual({ options: ['slow', 'fast'], default: 'slow' });
   });
 
-  it('antigravity / pi / native_coding_crow have NO effort enum', () => {
+  it('antigravity / pi have NO effort enum', () => {
     expect(effortMatrixFor('antigravity').options).toEqual([]);
     expect(effortMatrixFor('pi').options).toEqual([]);
-    expect(effortMatrixFor('native_coding_crow').options).toEqual([]);
   });
 
   it('unknown harness → no effort (graceful)', () => {
@@ -116,13 +108,8 @@ describe('spawnWizardMachine — harness change recomputes skips', () => {
     expect(stepsFor(cond({ harness: 'antigravity' }))).toEqual(['harness', 'worktree', 'name']);
   });
 
-  it('pi / native_coding_crow: skip model + effort', () => {
+  it('pi: skip model + effort', () => {
     expect(stepsFor(cond({ harness: 'pi' }))).toEqual(['harness', 'worktree', 'name']);
-    expect(stepsFor(cond({ harness: 'native_coding_crow' }))).toEqual([
-      'harness',
-      'worktree',
-      'name',
-    ]);
   });
 
   it('a live snapshot adding models to cursor restores its model step', () => {

@@ -19,7 +19,7 @@
  *     ({@link ../store/dialogs/harnessModelsActions.js}), fetched once on open with a static
  *     last-good fallback. Skipped when the harness has no models.
  *  3. **effort** (conditional) — the per-harness effort enum ({@link effortMatrixFor}). Skipped for
- *     `antigravity` / `pi` / `native_coding_crow` (no effort enum).
+ *     `antigravity` / `pi` (no effort enum).
  *  4. **worktree** — main checkout / existing worktrees / "+ new worktree"
  *     ({@link ../store/dialogs/worktreeOptionsActions.js}).
  *  5. **branch** (conditional) — a non-empty branch-name text field, inserted only after "+ new
@@ -372,7 +372,7 @@ export function spawnWizardMode(
     modes.getState().exit(id);
     const effort = effortMatrixFor(s.harness).options.length > 0 ? s.effort : '';
     // The model is the picker selection, or `''` for harnesses that skip the model step (cursor /
-    // antigravity / pi / native_coding_crow). The live handler requires a STRING but tolerates the
+    // antigravity / pi). The live handler requires a STRING but tolerates the
     // empty one (`model.strip() or None` → the adapter picks its own default), so we must NOT force
     // a Claude id like 'sonnet' onto a non-Claude harness — that is the same invalid-id bug class
     // this rewrite fixes for the harness field. See orchestrator.py:573 (isinstance str) + :504.

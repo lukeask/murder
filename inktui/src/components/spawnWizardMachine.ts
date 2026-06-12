@@ -21,14 +21,7 @@ import type { HarnessModel } from '../store/dialogs/harnessModelsActions.js';
 import { modelsFor } from '../store/dialogs/harnessModelsActions.js';
 
 /** The valid backend harness ids, in display order. `claude_code` is the default (NOT `claude`). */
-export const HARNESS_ORDER = [
-  'claude_code',
-  'codex',
-  'cursor',
-  'pi',
-  'antigravity',
-  'native_coding_crow',
-] as const;
+export const HARNESS_ORDER = ['claude_code', 'codex', 'cursor', 'pi', 'antigravity'] as const;
 
 export type HarnessKind = (typeof HARNESS_ORDER)[number];
 
@@ -41,7 +34,7 @@ export const DEFAULT_HARNESS: HarnessKind = 'claude_code';
  *  - claude_code: claude_code.py:33  `_CC_EFFORT_ORDER = ("low","medium","high","xhigh","max")`
  *  - codex:       codex.py:142       `supported_efforts = ("low","medium","high","xhigh")`
  *  - cursor:      cursor.py:60       `_CURSOR_SPEEDS = ("slow","fast")`
- *  - antigravity / pi / native_coding_crow: no effort enum (reasoning baked into the model / N/A).
+ *  - antigravity / pi: no effort enum (reasoning baked into the model / N/A).
  */
 export interface EffortSpec {
   readonly options: readonly string[];
@@ -54,7 +47,6 @@ const EFFORT_MATRIX: Record<HarnessKind, EffortSpec> = {
   cursor: { options: ['slow', 'fast'], default: 'slow' },
   antigravity: { options: [], default: '' },
   pi: { options: [], default: '' },
-  native_coding_crow: { options: [], default: '' },
 };
 
 /** Pure: the effort enum + default for a harness. Unknown harness → no effort (skip the step). */

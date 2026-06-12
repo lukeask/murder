@@ -60,7 +60,7 @@ declare module '../../bus/BusClient.js' {
 /**
  * Static last-good model map — the fallback shown instantly on open before (or instead of) the
  * live snapshot. Mirrors the old Textual wizard's `_HARNESS_MODELS` (spawn_wizard.py:21). Harnesses
- * with no static list (`cursor`, `pi`, `antigravity`, `native_coding_crow`) get `[]` → the model
+ * with no static list (`cursor`, `pi`, `antigravity`) get `[]` → the model
  * step is skipped unless the live snapshot supplies entries.
  */
 export const STATIC_HARNESS_MODELS: Record<string, readonly HarnessModel[]> = {
@@ -79,7 +79,6 @@ export const STATIC_HARNESS_MODELS: Record<string, readonly HarnessModel[]> = {
   cursor: [],
   pi: [],
   antigravity: [],
-  native_coding_crow: [],
 };
 
 /**
