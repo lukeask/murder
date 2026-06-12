@@ -31,18 +31,87 @@ import type { AppStore } from '../store.js';
 import { toastStore } from '../toast/toastStore.js';
 import type { SettingsModifier, SettingsState } from './settingsSlice.js';
 
-/** The on-the-wire settings record (snake_case, mirrors the Python `TuiUserConfig`). The frontend
+/** The four user-configurable LLM provider ids (mirrors the Python `UserLlmConfig.providers` keys).
+ * `local` is the OpenAI-compatible local endpoint (no api-key env flag). */
+export type LlmProviderId = 'groq' | 'cerebras' | 'openrouter' | 'local';
+
+/** The provider ids that carry an env-key flag (`local` has none — env beats config.yaml only for
+ * these three; see the Python `_settings_payload`'s `llm_env`). */
+export type LlmEnvProviderId = 'groq' | 'cerebras' | 'openrouter';
+
+/** The tier `provider` enum (a superset of {@link LlmProviderId} — tiers may point at `anthropic` /
+ * `openai` too; mirrors the Python `UserLlmTier.provider`). */
+export type LlmTierProvider = 'openrouter' | 'anthropic' | 'openai' | 'local' | 'cerebras' | 'groq';
+
+/** One provider's stored credentials. `api_key` is masked `"***"` on `get` when a key is stored,
+ * `null`/absent when unset; on `update` `"***"` means "leave unchanged" and `""` clears. `base_url`
+ * is meaningful for `local` (the OpenAI-compatible endpoint). */
+export interface LlmProviderWire {
+  readonly api_key?: string | null;
+  readonly base_url?: string | null;
+}
+
+/** A named tier: a `(provider, model)` pair a role can bind to. Mirrors the Python `UserLlmTier`. */
+export interface LlmTierWire {
+  readonly provider: LlmTierProvider;
+  readonly model: string;
+  readonly auto_free?: boolean;
+}
+
+/** The LLM block — `{}` when nothing is set. `tiers`/`roles` are open string-keyed maps; the built-in
+ * `cheap`/`smart` tiers exist server-side even when `tiers` is empty (the UI lists them regardless). */
+export interface LlmWire {
+  readonly providers?: Readonly<Partial<Record<LlmProviderId, LlmProviderWire>>>;
+  readonly tiers?: Readonly<Record<string, LlmTierWire>>;
+  readonly roles?: Readonly<Record<string, string>>;
+}
+
+/** Whether each env-flagged provider's api key is present in the daemon's environment (env/.env always
+ * beats config.yaml). When `true` the config value is ignored — display only. */
+export type LlmEnvWire = Readonly<Record<LlmEnvProviderId, boolean>>;
+
+/** The on-the-wire settings record (snake_case, mirrors the Python `_settings_payload`). The frontend
  * binding registry is the authority on `ActionId`s, so `key_overrides` is opaque here. */
 export interface SettingsWire {
+  // --- tui prefs (unchanged) ---
   readonly theme: string;
   readonly modifier: SettingsModifier;
   readonly key_overrides: Readonly<Record<string, string>>;
   /** Spaces of inter-pane-border gap (0–4). Mirrors the Python `TuiUserConfig.pane_gap`. */
   readonly pane_gap: number;
+  // --- harness overrides + daemon's live effective values ---
+  /** The user's collaborator-harness override, or `null` when none is set. */
+  readonly collaborator_harness: string | null;
+  /** The user's crow-harness pool override, or `null` when none is set. */
+  readonly crow_harnesses: readonly string[] | null;
+  /** The daemon's live merged collaborator harness (override → role default). */
+  readonly effective_collaborator_harness: string;
+  /** The daemon's live merged crow-harness pool. */
+  readonly effective_crow_harnesses: readonly string[];
+  // --- llm provider/tier/role config (api keys masked) ---
+  readonly llm: LlmWire;
+  readonly llm_env: LlmEnvWire;
 }
 
-/** A partial settings patch for `update` — any subset of the wire fields. */
-export type SettingsPatch = Partial<SettingsWire>;
+/** A partial LLM patch for `update` — deep-merged server-side. Sending an `api_key` of `"***"` leaves
+ * it unchanged; `""` clears it. The deep-merge cannot delete keys (so omit, never null, a tier/role). */
+export interface LlmPatch {
+  readonly providers?: Partial<Record<LlmProviderId, LlmProviderWire>>;
+  readonly tiers?: Record<string, LlmTierWire>;
+  readonly roles?: Record<string, string>;
+}
+
+/** A partial settings patch for `update`. Any subset of the tui keys, the harness overrides
+ * (`collaborator_harness: string|null`, `crow_harnesses: non-empty string[]|null`), and `llm`. */
+export interface SettingsPatch {
+  theme?: string;
+  modifier?: SettingsModifier;
+  key_overrides?: Readonly<Record<string, string>>;
+  pane_gap?: number;
+  collaborator_harness?: string | null;
+  crow_harnesses?: readonly string[] | null;
+  llm?: LlmPatch;
+}
 
 /**
  * Phase 3's settings RPC declarations, augmenting the shared {@link RpcMethods} registry without
@@ -92,6 +161,16 @@ function applyWire(prev: SettingsState, wire: SettingsWire | undefined): Setting
     modifier: wire.modifier ?? prev.modifier,
     keyOverrides: wire.key_overrides ?? prev.keyOverrides,
     paneGap: wire.pane_gap ?? prev.paneGap,
+    // Harness overrides are nullable on the wire (null = "no override"), so a `??` would wrongly keep
+    // the prior value when the server clears one. Honour `null` explicitly via the key-presence check.
+    collaboratorHarness:
+      'collaborator_harness' in wire ? wire.collaborator_harness : prev.collaboratorHarness,
+    crowHarnesses: 'crow_harnesses' in wire ? wire.crow_harnesses : prev.crowHarnesses,
+    effectiveCollaboratorHarness:
+      wire.effective_collaborator_harness ?? prev.effectiveCollaboratorHarness,
+    effectiveCrowHarnesses: wire.effective_crow_harnesses ?? prev.effectiveCrowHarnesses,
+    llm: wire.llm ?? prev.llm,
+    llmEnv: wire.llm_env ?? prev.llmEnv,
     status: 'ready',
     error: null,
   };
@@ -114,6 +193,10 @@ export function createSettingsActions(bus: BusClient, store: StoreApi<AppStore>)
 
     async update(partial: SettingsPatch): Promise<void> {
       // Optimistic local overlay — translate the wire patch onto the camelCase slice immediately.
+      // The tui prefs + harness overrides apply cleanly local-first (the dispatcher/layout/spawn flow
+      // react at once). The `llm` block is NOT overlaid optimistically: its api_key masking and the
+      // server-computed `effective_*`/built-in tiers make a faithful local merge impractical, so we
+      // rely on applying the reply's full payload below to refresh the llm view.
       store.setState((state) => ({
         settings: {
           ...state.settings,
@@ -121,12 +204,19 @@ export function createSettingsActions(bus: BusClient, store: StoreApi<AppStore>)
           ...(partial.modifier !== undefined ? { modifier: partial.modifier } : {}),
           ...(partial.key_overrides !== undefined ? { keyOverrides: partial.key_overrides } : {}),
           ...(partial.pane_gap !== undefined ? { paneGap: partial.pane_gap } : {}),
+          ...('collaborator_harness' in partial
+            ? { collaboratorHarness: partial.collaborator_harness ?? null }
+            : {}),
+          ...('crow_harnesses' in partial ? { crowHarnesses: partial.crow_harnesses ?? null } : {}),
           status: 'ready',
           error: null,
         },
       }));
       try {
-        await bus.rpc('settings.update', { settings: partial });
+        const reply = await bus.rpc('settings.update', { settings: partial });
+        // Apply the full merged reply — refreshes llm (masked keys), the `effective_*` harness values,
+        // and reconciles any server-side normalisation of the optimistic overlay.
+        store.setState((state) => ({ settings: applyWire(state.settings, reply.settings) }));
       } catch (error: unknown) {
         const message = error instanceof Error ? error.message : String(error);
         // Fire-and-forget persist rejection (the change already applied locally; no open form to host

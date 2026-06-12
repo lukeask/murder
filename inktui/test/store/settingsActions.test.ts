@@ -22,16 +22,32 @@ function errorToasts() {
   return live.filter((t) => t.severity === 'error');
 }
 
+/** A full default settings wire record (every extended field present), so a stubbed reply mirrors the
+ * real `_settings_payload`. Override fields per test via `{ ...wire(), ... }`. */
+function wire(over: Record<string, unknown> = {}) {
+  return {
+    theme: 'everforest-dark',
+    modifier: 'alt',
+    key_overrides: {},
+    pane_gap: 0,
+    collaborator_harness: null,
+    crow_harnesses: null,
+    effective_collaborator_harness: 'claude_code',
+    effective_crow_harnesses: ['claude_code'],
+    llm: {},
+    llm_env: { groq: false, cerebras: false, openrouter: false },
+    ...over,
+  };
+}
+
 function setup() {
   const fake = new FakeBusClient();
-  // Default stubs so an unrelated load/update resolves; tests override as needed.
-  fake.stubRpc('settings.get', {
-    ok: true,
-    settings: { theme: 'everforest-dark', modifier: 'alt', key_overrides: {}, pane_gap: 0 },
-  });
-  fake.stubRpc('settings.update', {
-    ok: true,
-    settings: { theme: 'everforest-dark', modifier: 'alt', key_overrides: {}, pane_gap: 0 },
+  // Default stubs so an unrelated load/update resolves; tests override as needed. `settings.update`
+  // echoes the patch onto the default record, mirroring the server's "reply = full merged payload".
+  fake.stubRpc('settings.get', { ok: true, settings: wire() });
+  fake.stubRpc('settings.update', (params) => {
+    const partial = (params.settings ?? {}) as Record<string, unknown>;
+    return { ok: true, settings: wire(partial) };
   });
   fake.stubRpc('state.crow_snapshot', { invalidation_key: 'iv', sessions: [] });
   const { store, dispose } = createAppStore(fake);
@@ -47,12 +63,12 @@ describe('settings actions', () => {
     const { fake, store, dispose } = setup();
     fake.stubRpc('settings.get', {
       ok: true,
-      settings: {
+      settings: wire({
         theme: 'everforest-light',
         modifier: 'ctrl',
         key_overrides: { 'global.spawn': 'x' },
         pane_gap: 3,
-      },
+      }),
     });
 
     await store.getState().actions.settings.load();
@@ -121,6 +137,73 @@ describe('settings actions', () => {
     const { store, dispose } = setup();
     await store.getState().actions.settings.update({ theme: 'everforest-light' });
     expect(errorToasts()).toHaveLength(0);
+    dispose();
+  });
+
+  it('load() fills the extended harness + llm fields (snake_case → camelCase)', async () => {
+    const { fake, store, dispose } = setup();
+    fake.stubRpc('settings.get', {
+      ok: true,
+      settings: wire({
+        collaborator_harness: 'codex',
+        crow_harnesses: ['cursor', 'pi'],
+        effective_collaborator_harness: 'codex',
+        effective_crow_harnesses: ['cursor', 'pi'],
+        llm: {
+          providers: { groq: { api_key: '***', base_url: null } },
+          tiers: { fast: { provider: 'groq', model: 'm', auto_free: true } },
+          roles: { notetaker: 'fast' },
+        },
+        llm_env: { groq: true, cerebras: false, openrouter: false },
+      }),
+    });
+
+    await store.getState().actions.settings.load();
+    const s = store.getState().settings;
+    expect(s.collaboratorHarness).toBe('codex');
+    expect(s.crowHarnesses).toEqual(['cursor', 'pi']);
+    expect(s.effectiveCollaboratorHarness).toBe('codex');
+    expect(s.effectiveCrowHarnesses).toEqual(['cursor', 'pi']);
+    expect(s.llm.providers?.groq?.api_key).toBe('***');
+    expect(s.llm.roles).toEqual({ notetaker: 'fast' });
+    expect(s.llmEnv.groq).toBe(true);
+    dispose();
+  });
+
+  it('update(collaborator_harness) overlays optimistically AND persists', async () => {
+    const { fake, store, dispose } = setup();
+    await store.getState().actions.settings.update({ collaborator_harness: 'codex' });
+    expect(store.getState().settings.collaboratorHarness).toBe('codex');
+    const updates = fake.rpcCalls.filter((c) => c.method === 'settings.update');
+    expect(updates[0]?.params).toEqual({ settings: { collaborator_harness: 'codex' } });
+    dispose();
+  });
+
+  it('update(collaborator_harness: null) clears the override locally', async () => {
+    const { store, dispose } = setup();
+    // First set it, then clear it.
+    await store.getState().actions.settings.update({ collaborator_harness: 'codex' });
+    await store.getState().actions.settings.update({ collaborator_harness: null });
+    expect(store.getState().settings.collaboratorHarness).toBeNull();
+    dispose();
+  });
+
+  it('update(crow_harnesses) overlays the list optimistically AND persists', async () => {
+    const { fake, store, dispose } = setup();
+    await store.getState().actions.settings.update({ crow_harnesses: ['cursor', 'pi'] });
+    expect(store.getState().settings.crowHarnesses).toEqual(['cursor', 'pi']);
+    const updates = fake.rpcCalls.filter((c) => c.method === 'settings.update');
+    expect(updates[0]?.params).toEqual({ settings: { crow_harnesses: ['cursor', 'pi'] } });
+    dispose();
+  });
+
+  it('update(llm) persists the patch and refreshes llm from the reply', async () => {
+    const { fake, store, dispose } = setup();
+    // The echo stub reflects the patch back as the merged llm payload.
+    await store.getState().actions.settings.update({ llm: { roles: { notetaker: 'smart' } } });
+    const updates = fake.rpcCalls.filter((c) => c.method === 'settings.update');
+    expect(updates[0]?.params).toEqual({ settings: { llm: { roles: { notetaker: 'smart' } } } });
+    expect(store.getState().settings.llm.roles).toEqual({ notetaker: 'smart' });
     dispose();
   });
 

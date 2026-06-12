@@ -25,6 +25,7 @@
 
 import type { StateCreator } from 'zustand';
 import type { AppStore } from '../store.js';
+import type { LlmEnvWire, LlmWire } from './settingsActions.js';
 
 /** The command modifier the user has chosen. Mirrors `bindings.ts`'s `Modifier` (kept structural
  * here so the slice does not depend on the input layer — the bridge couples them). */
@@ -50,6 +51,22 @@ export interface SettingsState {
    * `0` = flush borders (the default look); `1`–`4` add spacing. Threaded into the Body/Stage/Rail
    * `columnGap`/`rowGap` and the budget engine's inter-region gap (see `App.tsx`/`useBodyLayout.ts`). */
   readonly paneGap: number;
+  /** The user's collaborator-harness override, or `null` when none is set (falls back to
+   * `effectiveCollaboratorHarness`). Mirrors the wire `collaborator_harness`. */
+  readonly collaboratorHarness: string | null;
+  /** The user's crow-harness pool override, or `null` when none is set (falls back to
+   * `effectiveCrowHarnesses`). Mirrors the wire `crow_harnesses`. */
+  readonly crowHarnesses: readonly string[] | null;
+  /** The daemon's live merged collaborator harness (override → role default). Display fallback. */
+  readonly effectiveCollaboratorHarness: string;
+  /** The daemon's live merged crow-harness pool. Display fallback. */
+  readonly effectiveCrowHarnesses: readonly string[];
+  /** The LLM provider/tier/role config (api keys masked `***`). Stored in wire shape — its nested
+   * keys (`api_key`/`base_url`/`auto_free`) are opaque pass-throughs, not camelCased. `{}` when unset.
+   * Built-in `cheap`/`smart` tiers are NOT included here (server-side only); the UI overlays them. */
+  readonly llm: LlmWire;
+  /** Whether each env-flagged provider's key is present in the daemon's environment. */
+  readonly llmEnv: LlmEnvWire;
   /** Load/save lifecycle: `idle` before the first `load`, `ready` after, `error` on a failed RPC. */
   readonly status: 'idle' | 'loading' | 'ready' | 'error';
   /** Set when the last load/save rejected; cleared on the next success. */
@@ -63,6 +80,12 @@ export const initialSettingsState: SettingsState = {
   modifier: 'alt',
   keyOverrides: {},
   paneGap: 0,
+  collaboratorHarness: null,
+  crowHarnesses: null,
+  effectiveCollaboratorHarness: 'claude_code',
+  effectiveCrowHarnesses: ['claude_code'],
+  llm: {},
+  llmEnv: { groq: false, cerebras: false, openrouter: false },
   status: 'idle',
   error: null,
 };
