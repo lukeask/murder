@@ -5,6 +5,7 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 
 from murder.bus.protocol import CommandEvent
+from murder.runtime.terminal.tmux import TmuxError
 from murder.runtime.workers.base import Worker, WorkerCommand, WorkerCtx, WorkerSpec
 
 EnsureCollaborator = Callable[[], Awaitable[str]]
@@ -54,7 +55,29 @@ class CollaboratorWorker(Worker):
             agent = self._get_agent(agent_id)
             if agent is None:
                 raise RuntimeError(f"collaborator agent not found after ensure: {agent_id}")
-            send_result = await agent.send(text)
+            try:
+                send_result = await agent.send(text)
+            except TmuxError:
+                # The collaborator's tmux session died between ensure and send
+                # (or mid-send). If the session is genuinely gone, re-run
+                # ensure_collaborator — it detects the dead agent, reaps it, and
+                # respawns — then retry the send once and surface a one-line
+                # notice instead of failing the chat command.
+                if await agent.is_live():
+                    raise  # transient tmux error, session still alive
+                agent_id = await self._ensure_collaborator()
+                agent = self._get_agent(agent_id)
+                if agent is None:
+                    raise RuntimeError(
+                        f"collaborator agent not found after restart: {agent_id}"
+                    )
+                send_result = await agent.send(text)
+                if hasattr(agent, "record_notice_block_event"):
+                    await agent.record_notice_block_event(
+                        "Collaborator restarted after its tmux session died; "
+                        "message delivered to the new session.",
+                        severity="warning",
+                    )
             if send_result is not None and getattr(send_result, "ok", True) is False:
                 message = (
                     getattr(send_result, "message", None)
