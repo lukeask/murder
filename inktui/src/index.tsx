@@ -7,6 +7,7 @@ import { UdsBusClient } from './bus/UdsBusClient.js';
 import { App } from './components/App.js';
 import { createInputStores } from './input/createInputStores.js';
 import type { PanelId } from './input/panels.js';
+import { connectionStore } from './store/connection/connectionStore.js';
 import { createAppStore } from './store/store.js';
 import { capsStore } from './terminal/capsStore.js';
 import { createKittyDriver, type KeyProtocolDriver } from './terminal/kittyDriver.js';
@@ -100,6 +101,23 @@ export async function runLive(busFactory: () => BusClient = makeLiveBus): Promis
     primeSlices(store);
   }
 
+  // Connection-state badge wiring (mirrors the onConnect narrowing above). The transport drives the
+  // process-global connectionStore; the TopBar reads it. We set `'connecting'` explicitly before the
+  // first `connect()` (so the badge shows during the initial handshake), then let the hooks advance
+  // it: onConnect → connected, onDisconnect → reconnecting, onPermanentError → version-mismatch
+  // (the only permanent error today is a protocol-version mismatch, so it maps directly). A transport
+  // that exposes no hooks (the fake) simply leaves the store at its set value.
+  connectionStore.getState().setStatus('connecting');
+  const unhookConnectedStatus = onConnectIfSupported(bus, () =>
+    connectionStore.getState().setStatus('connected'),
+  );
+  const unhookDisconnect = onDisconnectIfSupported(bus, () =>
+    connectionStore.getState().setStatus('reconnecting'),
+  );
+  const unhookPermanentError = onPermanentErrorIfSupported(bus, () =>
+    connectionStore.getState().setStatus('version-mismatch'),
+  );
+
   // Phase 2 — the kitty stdin shim. Constructed in BYPASS (pure passthrough) and handed to Ink as its
   // stdin, so until the protocol is actually enabled Ink sees the identical byte stream it always did
   // (behavior-neutral under the alt default). `terminalEvents = shim` carries the side-channel `chord`
@@ -142,6 +160,9 @@ export async function runLive(busFactory: () => BusClient = makeLiveBus): Promis
     teardownTerminal();
     shim.dispose();
     unhookConnect?.();
+    unhookConnectedStatus?.();
+    unhookDisconnect?.();
+    unhookPermanentError?.();
     dispose();
     closeIfSupported(bus);
   }
@@ -252,6 +273,27 @@ function primeSlices(store: ReturnType<typeof createAppStore>['store']): void {
 function onConnectIfSupported(bus: BusClient, listener: () => void): (() => void) | undefined {
   const maybe = bus as BusClient & { onConnect?: (listener: () => void) => () => void };
   return maybe.onConnect?.(listener);
+}
+
+/** Register a disconnect listener if the client exposes `onDisconnect` (the live
+ * {@link UdsBusClient} does; the fake does not). Same structural narrowing as
+ * {@link onConnectIfSupported}; returns the disposer, or `undefined` when unsupported. */
+function onDisconnectIfSupported(bus: BusClient, listener: () => void): (() => void) | undefined {
+  const maybe = bus as BusClient & { onDisconnect?: (listener: () => void) => () => void };
+  return maybe.onDisconnect?.(listener);
+}
+
+/** Register a permanent-error listener if the client exposes `onPermanentError` (the live
+ * {@link UdsBusClient} does; the fake does not). Same structural narrowing as
+ * {@link onConnectIfSupported}; returns the disposer, or `undefined` when unsupported. */
+function onPermanentErrorIfSupported(
+  bus: BusClient,
+  listener: (error: Error) => void,
+): (() => void) | undefined {
+  const maybe = bus as BusClient & {
+    onPermanentError?: (listener: (error: Error) => void) => () => void;
+  };
+  return maybe.onPermanentError?.(listener);
 }
 
 /** Close the bus connection if the client exposes a `close()` (the live {@link UdsBusClient} does;

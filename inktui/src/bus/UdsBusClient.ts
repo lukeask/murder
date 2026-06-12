@@ -56,6 +56,13 @@
  *     handled here and are invisible to callers *except* through outstanding-RPC rejection (above).
  *     Transient transport errors are logged via the injected logger and retried via backoff; they
  *     do not bubble. The single fatal, non-retried condition is a protocol-version mismatch.
+ *   - **Connection-state visibility hooks** (off the {@link BusClient} interface, narrowed
+ *     structurally by the wiring, mirroring {@link UdsBusClient.onConnect}): {@link
+ *     UdsBusClient.onDisconnect} fires once each time an *established* connection drops (the UI
+ *     reads this as "reconnecting"), and {@link UdsBusClient.onPermanentError} fires when the loop
+ *     gives up permanently on a protocol-version mismatch — for BOTH the first-handshake and a
+ *     reconnect-handshake (the latter was previously silent). The {@link FakeBusClient} implements
+ *     none of these, so they are opt-in per transport.
  */
 
 import type { Buffer } from 'node:buffer';
@@ -244,6 +251,15 @@ export class UdsBusClient implements BusClient {
    * slices on reconnect (see {@link onConnect}). */
   private readonly connectListeners = new Set<() => void>();
 
+  /** Listeners fired once each time an established connection drops — the UI reads this as
+   * "reconnecting" (see {@link onDisconnect}). */
+  private readonly disconnectListeners = new Set<() => void>();
+
+  /** Listeners fired when the loop gives up permanently (a protocol-version mismatch on either the
+   * first or a reconnect handshake) — the UI reads this as "version-mismatch" (see
+   * {@link onPermanentError}). */
+  private readonly permanentErrorListeners = new Set<(error: Error) => void>();
+
   /** Tracks the active backoff wait so {@link close} can abort it. */
   private pendingSleep: { cancel: () => void } | undefined;
   /** Resolves once the handshake completes, so {@link rpc}/{@link subscribe} can wait for a live
@@ -369,6 +385,64 @@ export class UdsBusClient implements BusClient {
     }
   }
 
+  /**
+   * Register a listener fired once each time an *established* connection drops — i.e. a connection
+   * that completed its handshake then lost the socket, just before the connect loop fails the
+   * outstanding RPCs and backs off to retry. The wiring reads this as "reconnecting": while the
+   * backoff retries are themselves failing, the state is already reconnecting, so this fires once
+   * per established-connection drop, not once per failed retry.
+   *
+   * Returns an {@link Unsubscribe} disposer. Not on the {@link BusClient} interface — the app
+   * narrows for it structurally, exactly as it does for {@link onConnect}, so the fake stays
+   * untouched.
+   */
+  onDisconnect(listener: () => void): Unsubscribe {
+    this.disconnectListeners.add(listener);
+    return () => {
+      this.disconnectListeners.delete(listener);
+    };
+  }
+
+  /**
+   * Register a listener fired when the connect loop gives up *permanently*. Today the only such
+   * condition is a {@link ProtocolVersionMismatchError}, and it fires for BOTH the first-handshake
+   * case and a reconnect-handshake case (the latter used to set `state='closed'` and return
+   * silently — nothing learned of it). The wiring reads this as "version-mismatch" and prompts the
+   * user to restart murder.
+   *
+   * Returns an {@link Unsubscribe} disposer. Not on the {@link BusClient} interface (structurally
+   * narrowed, like {@link onConnect}). Cleared on {@link close} alongside the connect listeners.
+   */
+  onPermanentError(listener: (error: Error) => void): Unsubscribe {
+    this.permanentErrorListeners.add(listener);
+    return () => {
+      this.permanentErrorListeners.delete(listener);
+    };
+  }
+
+  /** Fire every disconnect listener. Fire-and-forget like {@link notifyConnected}: a throwing
+   * listener must never tear down the reconnect loop. */
+  private notifyDisconnected(): void {
+    for (const listener of [...this.disconnectListeners]) {
+      try {
+        listener();
+      } catch {
+        // A disconnect listener's failure is its own concern; never let it stall reconnect.
+      }
+    }
+  }
+
+  /** Fire every permanent-error listener. Fire-and-forget like {@link notifyConnected}. */
+  private notifyPermanentError(error: Error): void {
+    for (const listener of [...this.permanentErrorListeners]) {
+      try {
+        listener(error);
+      } catch {
+        // A permanent-error listener's failure is its own concern; never let it propagate.
+      }
+    }
+  }
+
   /** Stop reconnection, reject every outstanding RPC, and close the socket. Idempotent. */
   close(): void {
     if (this.state === 'closed') {
@@ -379,6 +453,8 @@ export class UdsBusClient implements BusClient {
     this.failAllPendingRpcs(new ConnectionLostError('client closed'));
     this.subscriptions.clear();
     this.connectListeners.clear();
+    this.disconnectListeners.clear();
+    this.permanentErrorListeners.clear();
     this.teardownSocket();
   }
 
@@ -405,6 +481,10 @@ export class UdsBusClient implements BusClient {
 
     const loop = async (): Promise<void> => {
       while (!this.isClosed()) {
+        // Whether this iteration reached the steady-state read loop (handshake completed). Only an
+        // *established* connection's drop should fire `onDisconnect`; a failed reconnect *attempt*
+        // (handshake never completed) is part of the ongoing "reconnecting" state, not a new drop.
+        let wasEstablished = false;
         try {
           await this.openAndHandshake();
           attempt = 0; // a clean handshake resets backoff
@@ -412,16 +492,20 @@ export class UdsBusClient implements BusClient {
             firstHandshakeSettled = true;
             resolveFirst();
           }
+          wasEstablished = true;
           await this.readUntilClosed();
         } catch (error) {
           if (error instanceof ProtocolVersionMismatchError) {
-            // Permanent disagreement — do not retry. Surface to the first caller and stop.
+            // Permanent disagreement — do not retry. Surface to the first caller (if this is the
+            // first handshake) AND to the permanent-error listeners (which fire for BOTH the first
+            // and a reconnect handshake — the reconnect case was previously silent), then stop.
             this.state = 'closed';
             if (!firstHandshakeSettled) {
               firstHandshakeSettled = true;
               rejectFirst(error);
             }
             this.failAllPendingRpcs(error);
+            this.notifyPermanentError(error);
             return;
           }
           this.logger.warn(`bus connection error: ${stringifyError(error)}`);
@@ -429,8 +513,12 @@ export class UdsBusClient implements BusClient {
         if (this.isClosed()) {
           break;
         }
-        // Drop with the connection lost: fail outstanding RPCs, then back off and retry.
+        // Drop with the connection lost: fail outstanding RPCs, then back off and retry. If this was
+        // an established connection dropping, tell the wiring (it reads this as "reconnecting").
         this.failAllPendingRpcs(new ConnectionLostError('connection dropped'));
+        if (wasEstablished) {
+          this.notifyDisconnected();
+        }
         const delay = this.nextBackoffMs(attempt);
         attempt += 1;
         this.logger.info(`bus reconnecting in ${Math.round(delay)}ms (attempt ${attempt})`);

@@ -13,6 +13,8 @@ import { Box, Text } from 'ink';
 import { memo, useMemo } from 'react';
 import { usePanelStore } from '../hooks/useInputStores.js';
 import { selectTopBar } from '../selectors/barSelectors.js';
+import { type ConnectionStatus, useConnectionStatus } from '../store/connection/connectionStore.js';
+import type { Theme } from '../theme/buildTheme.js';
 import { useTheme } from '../theme/themeStore.js';
 
 export const TopBar = memo(function TopBar({
@@ -21,32 +23,70 @@ export const TopBar = memo(function TopBar({
   readonly project?: string | undefined;
 }): React.JSX.Element {
   const theme = useTheme();
+  const status = useConnectionStatus();
   const visible = usePanelStore((s) => s.visible);
   // The selector turns the visible set into render-ready labels; memoised on the set identity (the
   // panel store ref-swaps the set only on change, so this re-formats only on a real toggle).
   const labels = useMemo(() => selectTopBar(visible), [visible]);
   return (
-    <Box flexDirection="row" paddingX={1}>
-      {/* Branding: a bold `murder` mark + the dim project name, then a gap before the panel labels. */}
-      <Box flexDirection="row" columnGap={1} marginRight={3}>
-        <Text bold color={theme.brand}>
-          murder
-        </Text>
-        {project !== undefined && project.length > 0 && <Text color={theme.muted}>{project}</Text>}
-      </Box>
-      <Box flexDirection="row" columnGap={1}>
-        {labels.map((label) => (
-          // Toggled panels are bold/coloured; off panels are dim — so the bar reads view state at a
-          // glance (the plan's whole point: the top bar shows what's on, not just the active view).
-          <Text
-            key={label.id}
-            bold={label.active}
-            color={label.active ? theme.active : theme.inactive}
-          >
-            {label.text}
+    // `justifyContent="space-between"` pins the connection badge to the right edge while the existing
+    // branding + panel-label group stays left, so neither shifts the other (the badge is silent —
+    // and absent — for the steady `connected`/`unknown` states, see `ConnectionBadge`).
+    <Box flexDirection="row" paddingX={1} justifyContent="space-between">
+      <Box flexDirection="row">
+        {/* Branding: a bold `murder` mark + the dim project name, then a gap before the panel labels. */}
+        <Box flexDirection="row" columnGap={1} marginRight={3}>
+          <Text bold color={theme.brand}>
+            murder
           </Text>
-        ))}
+          {project !== undefined && project.length > 0 && (
+            <Text color={theme.muted}>{project}</Text>
+          )}
+        </Box>
+        <Box flexDirection="row" columnGap={1}>
+          {labels.map((label) => (
+            // Toggled panels are bold/coloured; off panels are dim — so the bar reads view state at a
+            // glance (the plan's whole point: the top bar shows what's on, not just the active view).
+            <Text
+              key={label.id}
+              bold={label.active}
+              color={label.active ? theme.active : theme.inactive}
+            >
+              {label.text}
+            </Text>
+          ))}
+        </Box>
       </Box>
+      <ConnectionBadge status={status} theme={theme} />
     </Box>
   );
 });
+
+/**
+ * The connection-state badge, pinned right. Silent (renders nothing) for the two steady states a
+ * user need not be told about — `'connected'` (the happy path) and `'unknown'` (no wiring has
+ * reported, i.e. smoke/tests/fake-bus). The three transitional/broken states each earn a badge:
+ *  - `'connecting'` — a dim `connecting…` while the first handshake is in flight;
+ *  - `'reconnecting'` — a {@link Theme.warning warning}-coloured `[reconnecting]` while backoff retries;
+ *  - `'version-mismatch'` — a {@link Theme.error error}-coloured `[version mismatch — restart murder]`,
+ *    the one permanent, user-actionable failure.
+ */
+function ConnectionBadge({
+  status,
+  theme,
+}: {
+  readonly status: ConnectionStatus;
+  readonly theme: Theme;
+}): React.JSX.Element | null {
+  switch (status) {
+    case 'connecting':
+      return <Text dimColor>connecting…</Text>;
+    case 'reconnecting':
+      return <Text color={theme.warning}>[reconnecting]</Text>;
+    case 'version-mismatch':
+      return <Text color={theme.error}>[version mismatch — restart murder]</Text>;
+    default:
+      // 'connected' and 'unknown' show no badge.
+      return null;
+  }
+}

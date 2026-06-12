@@ -282,6 +282,16 @@ describe('UdsBusClient — handshake', () => {
     // Permanent: it must not have retried into a second handshake attempt.
     expect(server.handshakeCount).toBe(0);
   });
+
+  it('fires onPermanentError on a first-handshake version mismatch', async () => {
+    server.rejectVersion = true;
+    client = new UdsBusClient({ socketPath: server.socketPath, clock: instantClock() });
+    const errors: Error[] = [];
+    client.onPermanentError((error) => errors.push(error));
+    await expect(client.connect()).rejects.toBeInstanceOf(ProtocolVersionMismatchError);
+    await waitFor(() => errors.length === 1);
+    expect(errors[0]).toBeInstanceOf(ProtocolVersionMismatchError);
+  });
 });
 
 describe('UdsBusClient — rpc', () => {
@@ -514,6 +524,62 @@ describe('UdsBusClient — reconnect', () => {
     expect(connects).toBe(1);
   });
 
+  it('fires onDisconnect once when an established connection drops', async () => {
+    let disconnects = 0;
+    client.onDisconnect(() => {
+      disconnects += 1;
+    });
+    await client.connect();
+    expect(disconnects).toBe(0); // not fired on connect, only on drop
+
+    server.dropAllConnections();
+    // After the drop the loop re-handshakes; the disconnect fires exactly once for that drop.
+    await waitFor(() => server.handshakeCount === 2);
+    expect(disconnects).toBe(1);
+  });
+
+  it('stops firing onDisconnect after its disposer runs', async () => {
+    let disconnects = 0;
+    const unhook = client.onDisconnect(() => {
+      disconnects += 1;
+    });
+    await client.connect();
+    unhook();
+
+    server.dropAllConnections();
+    await waitFor(() => server.handshakeCount === 2);
+    expect(disconnects).toBe(0);
+  });
+
+  it('fires onPermanentError on a version mismatch during reconnect (previously-silent path)', async () => {
+    const errors: Error[] = [];
+    client.onPermanentError((error) => errors.push(error));
+    await client.connect();
+    expect(server.handshakeCount).toBe(1);
+
+    // The service now disagrees on version, then the connection drops. The reconnect handshake is
+    // refused; this used to set state='closed' and return silently — now it surfaces.
+    server.rejectVersion = true;
+    server.dropAllConnections();
+    await waitFor(() => errors.length === 1);
+    expect(errors[0]).toBeInstanceOf(ProtocolVersionMismatchError);
+    // It gave up permanently — no further handshake attempts.
+    expect(server.handshakeCount).toBe(1);
+  });
+
+  it('stops firing onPermanentError after its disposer runs', async () => {
+    const errors: Error[] = [];
+    const unhook = client.onPermanentError((error) => errors.push(error));
+    await client.connect();
+    unhook();
+
+    server.rejectVersion = true;
+    server.dropAllConnections();
+    // Give the refused reconnect time to settle; the disposed listener must not fire.
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(errors).toHaveLength(0);
+  });
+
   it('rejects an outstanding rpc when the connection drops', async () => {
     await client.connect();
     server.rpcHandler = () => undefined; // never answers
@@ -537,6 +603,33 @@ describe('UdsBusClient — close', () => {
     await expect(client.rpc('test.echo', { agent_id: 'a1', message: 'hi' })).rejects.toBeInstanceOf(
       ConnectionLostError,
     );
+    await server.stop();
+  });
+
+  it('clears disconnect/permanent-error listeners on close (they never fire afterward)', async () => {
+    const server = new ScriptedBusServer();
+    await server.start();
+    const client = new UdsBusClient({
+      socketPath: server.socketPath,
+      clock: instantClock(),
+      backoff: FAST_BACKOFF,
+    });
+    let disconnects = 0;
+    let errors = 0;
+    client.onDisconnect(() => {
+      disconnects += 1;
+    });
+    client.onPermanentError(() => {
+      errors += 1;
+    });
+    await client.connect();
+    client.close();
+
+    // After close the loop is stopped; dropping the (already-gone) connection must not fire anything.
+    server.dropAllConnections();
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(disconnects).toBe(0);
+    expect(errors).toBe(0);
     await server.stop();
   });
 });
