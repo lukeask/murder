@@ -29,6 +29,7 @@ function eventKind(event: BusEvent): string {
     case 'scheduler.decision':
     case 'usage.reset':
     case 'conversation.block':
+    case 'conversation.state':
     case 'tmux.frame':
       return event.type;
     default: {
