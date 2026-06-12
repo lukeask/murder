@@ -48,6 +48,7 @@
 import type { Key } from 'ink';
 import { Box, Text } from 'ink';
 import type { JSX } from 'react';
+import { useModalWidth } from '../hooks/useTerminalSize.js';
 import type { Mode, ModeHint, ModeStoreApi } from '../input/modeStore.js';
 import type { HarnessModel, HarnessModelsActions } from '../store/dialogs/harnessModelsActions.js';
 import { modelsFor, STATIC_HARNESS_MODELS } from '../store/dialogs/harnessModelsActions.js';
@@ -553,6 +554,8 @@ function SpawnWizardDialog({
   readonly spawnContext: SpawnContext | null;
 }): JSX.Element {
   const theme = useTheme();
+  // Design width 64, clamped to the live terminal so a narrow screen doesn't overflow the box.
+  const width = useModalWidth(64);
   const progress = stepProgress(s.step, conditions(s, hasContext));
 
   return (
@@ -562,7 +565,7 @@ function SpawnWizardDialog({
       borderColor={theme.warning}
       paddingX={2}
       paddingY={1}
-      width={64}
+      width={width}
     >
       <Box flexDirection="row" justifyContent="space-between">
         <Text bold color={theme.warning}>

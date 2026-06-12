@@ -22,6 +22,7 @@
 
 import { Box, Text } from 'ink';
 import type { JSX } from 'react';
+import { useModalWidth } from '../hooks/useTerminalSize.js';
 import { ACTION_IDS, ACTIONS, type ResolvedBindings } from '../input/bindings.js';
 import type { KeymapRegistryApi } from '../input/keymapRegistry.js';
 import type { Mode, ModeStoreApi } from '../input/modeStore.js';
@@ -264,6 +265,8 @@ export function helpMode(
 
 function HelpDialog({ state: s }: { readonly state: HelpState }): JSX.Element {
   const theme = useTheme();
+  // Design width 56, clamped to the live terminal so a narrow screen doesn't overflow the box.
+  const width = useModalWidth(56);
   const groups = s.pages[s.page] ?? [];
   const multiPage = s.pages.length > 1;
   // The widest key label on this page → align the descriptions into a column.
@@ -276,7 +279,7 @@ function HelpDialog({ state: s }: { readonly state: HelpState }): JSX.Element {
       borderColor={theme.heading}
       paddingX={2}
       paddingY={1}
-      width={56}
+      width={width}
     >
       <Box justifyContent="space-between">
         <Text bold color={theme.heading}>

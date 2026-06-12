@@ -40,3 +40,25 @@ export function useTerminalSize(): TerminalSize {
   }, [stdout]);
   return size;
 }
+
+/** The narrowest a clamped modal may go — wide enough for a bordered box with padded content to
+ * still render *something* sensible. Below this the min-terminal-size guard (App.tsx) has already
+ * replaced the whole shell anyway, so the floor is belt-and-suspenders. */
+const MODAL_MIN_WIDTH = 24;
+
+/**
+ * Clamp a modal's declared width to the live terminal: `min(preferred, columns − 2)`, floored at
+ * {@link MODAL_MIN_WIDTH}. The modals declare design widths (56–64) that overflow a narrow terminal
+ * and Ink's `Overlay` does not clip to the screen — so every sized modal routes its `width` through
+ * here. The pure clamp is exported separately ({@link clampModalWidth}) so tests cover the math
+ * without a render.
+ */
+export function useModalWidth(preferred: number): number {
+  const { columns } = useTerminalSize();
+  return clampModalWidth(preferred, columns);
+}
+
+/** The pure clamp behind {@link useModalWidth}. */
+export function clampModalWidth(preferred: number, columns: number): number {
+  return Math.max(MODAL_MIN_WIDTH, Math.min(preferred, columns - 2));
+}

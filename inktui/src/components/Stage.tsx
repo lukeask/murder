@@ -362,7 +362,9 @@ export const Stage = memo(function Stage({
         alignItems="center"
       >
         <Text dimColor>{`${bindings.label('global.spawn')} spawn a crow`}</Text>
-        <Text dimColor>{`${bindings.label('panel.star')} star one in the crows panel to open its chat here`}</Text>
+        <Text
+          dimColor
+        >{`${bindings.label('panel.star')} star one in the crows panel to open its chat here`}</Text>
       </Box>
     );
   }

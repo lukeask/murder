@@ -32,7 +32,7 @@
  * (focused doc → reference-by-path). See {@link deriveSpawnContext} for the C11 seam note.
  */
 
-import { Box, type DOMElement, type Key, measureElement } from 'ink';
+import { Box, type DOMElement, type Key, measureElement, Text } from 'ink';
 import { type JSX, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { BusClient } from '../bus/BusClient.js';
 import { AppStoreProvider, useAppStore, useAppStoreApi } from '../hooks/useAppStore.js';
@@ -104,6 +104,17 @@ import { UsagePanel } from './UsagePanel.js';
  * per region so the shell renders panels left-to-right without re-deriving order from {@link PANELS}. */
 const LEFT_PANELS: readonly PanelId[] = ['plans', 'notes', 'reports', 'tickets'];
 const RIGHT_PANELS: readonly PanelId[] = ['usage', 'crows'];
+
+/**
+ * The smallest terminal the shell will attempt to lay out (first-run UX: a too-small terminal gets
+ * a clear notice, not a mangled frame). 60 columns is where the rails + the Stage's ≥60% floor stop
+ * being co-satisfiable (and the 56–64-wide modals clamp to uselessness); 16 rows is the floor for
+ * the chrome (top bar + chat + bottom bar) plus a usable body. Exported for the guard's tests.
+ * Deliberately BELOW the 24×80 non-TTY fallback in {@link useTerminalSize}, so piped/CI renders
+ * never trip the guard.
+ */
+export const MIN_TERMINAL_COLUMNS = 60;
+export const MIN_TERMINAL_ROWS = 16;
 
 /**
  * Render one panel by id — the single dispatch from a {@link PanelId} to its component. Every id
@@ -383,8 +394,9 @@ function Shell({
   const bus = useBusClient();
   const loadFavorites = useAppStore((s) => s.actions.favorites.load);
   const loadSettings = useAppStore((s) => s.actions.settings.load);
-  // Live terminal height — bounds the root box so the frame always fits one screen (see the return).
-  const { rows } = useTerminalSize();
+  // Live terminal size — `rows` bounds the root box so the frame always fits one screen (see the
+  // return); `columns` feeds the min-terminal-size guard below.
+  const { rows, columns } = useTerminalSize();
   // The ONE orientation read (rule: one source of truth) — threaded to both Rails and the Body axis.
   const orientation = useOrientation();
   // The user-configured inter-pane-border gap (settings: "Pane gap", 0–4). One read here, threaded
@@ -723,6 +735,28 @@ function Shell({
   // hardcoded here, so a new full-screen-like presentation is honoured without editing the shell.
   useModeStore((s) => s.stack);
   const active = selectActiveMode(modes);
+  // Min-terminal-size guard (first-run UX): below the floor the layout degenerates (rails + Stage
+  // can't share 60-odd columns; modals clamp to ~24 wide; 16 rows barely fits chat + both bars), so
+  // render a full-screen notice instead of a broken shell. Checked AFTER every hook (rules of
+  // hooks) and BEFORE the fullscreen-mode return so a too-small terminal always shows the notice.
+  // The non-TTY fallback (24×80, useTerminalSize) passes the floor, so piped/CI runs never trip it.
+  if (columns < MIN_TERMINAL_COLUMNS || rows < MIN_TERMINAL_ROWS) {
+    return (
+      <Box
+        flexDirection="column"
+        width="100%"
+        height={rows}
+        overflow="hidden"
+        justifyContent="center"
+        alignItems="center"
+      >
+        <Text>terminal too small</Text>
+        <Text
+          dimColor
+        >{`need ≥ ${MIN_TERMINAL_COLUMNS}×${MIN_TERMINAL_ROWS}, have ${columns}×${rows}`}</Text>
+      </Box>
+    );
+  }
   if (active !== null && presentationHidesLayout(active.presentation)) {
     return <Overlay />;
   }

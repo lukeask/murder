@@ -32,6 +32,7 @@
 import type { Key } from 'ink';
 import { Box, Text } from 'ink';
 import type { JSX } from 'react';
+import { useModalWidth } from '../hooks/useTerminalSize.js';
 import {
   ACTION_IDS,
   ACTIONS,
@@ -433,6 +434,8 @@ const CTRL_UNSUPPORTED_NOTICE =
 
 function SettingsDialog({ state: s }: { readonly state: SettingsState }): JSX.Element {
   const theme = useTheme();
+  // Design width 64, clamped to the live terminal so a narrow screen doesn't overflow the box.
+  const width = useModalWidth(64);
   const kitty = useKittySupport();
   const ctrlAvailable = kitty === true;
 
@@ -443,7 +446,7 @@ function SettingsDialog({ state: s }: { readonly state: SettingsState }): JSX.El
       borderColor={theme.heading}
       paddingX={2}
       paddingY={1}
-      width={64}
+      width={width}
     >
       <Text bold color={theme.heading}>
         Settings
