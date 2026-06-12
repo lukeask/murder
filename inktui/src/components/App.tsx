@@ -560,6 +560,12 @@ function Shell({
         theme,
         paneGap: settings.paneGap,
         keyOverrides: settings.keyOverrides as Record<string, string>,
+        collaboratorHarness: settings.collaboratorHarness,
+        effectiveCollaborator: settings.effectiveCollaboratorHarness,
+        crowHarnesses: settings.crowHarnesses,
+        effectiveCrow: settings.effectiveCrowHarnesses,
+        llm: settings.llm,
+        llmEnv: settings.llmEnv,
       }),
     );
   };

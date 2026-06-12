@@ -36,6 +36,48 @@ async function tick(): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, 20));
 }
 
+/** Walk the cursor down (j) until the first binding row ("spawn", the first rebindable action) is
+ * focused. The list scrolls by cursor, so we step until that focused row is in the visible frame.
+ * Robust to the section ordering above the bindings (harnesses/providers/tiers/roles). */
+async function walkToFirstBinding(
+  stdin: { write: (s: string) => void },
+  lastFrame: () => string | undefined,
+): Promise<void> {
+  await walkUntilFocused(stdin, lastFrame, 'spawn');
+}
+
+/** Walk the cursor down (j) until the focused row (the line carrying the `›` cursor prefix) contains
+ * `marker`. Robust to the scroll-by-cursor window and the radio/checkbox mark glyphs. */
+async function walkUntilFocused(
+  stdin: { write: (s: string) => void },
+  lastFrame: () => string | undefined,
+  marker: string,
+): Promise<void> {
+  for (let i = 0; i < 80; i++) {
+    const focusedLine = (lastFrame() ?? '').split('\n').find((l) => l.includes('›'));
+    if (focusedLine?.includes(marker)) {
+      return;
+    }
+    stdin.write('j');
+    await tick();
+  }
+  throw new Error(`never focused a row matching "${marker}"`);
+}
+
+/** A `current` with the extended harness + llm data populated, for the new-section tests. */
+const RICH_CURRENT: Parameters<typeof settingsMode>[2] = {
+  modifier: 'alt',
+  theme: DEFAULT_THEME_ID,
+  paneGap: 0,
+  keyOverrides: {},
+  collaboratorHarness: null,
+  effectiveCollaborator: 'claude_code',
+  crowHarnesses: null,
+  effectiveCrow: ['claude_code'],
+  llm: {},
+  llmEnv: { groq: true, cerebras: false, openrouter: false },
+};
+
 /** A spy `SettingsActions` recording every `update` patch. `load` is unused by the modal. */
 function fakeActions(): { actions: SettingsActions; patches: SettingsPatch[] } {
   const patches: SettingsPatch[] = [];
@@ -95,7 +137,7 @@ describe('SettingsModal', () => {
     themeStore.getState().setTheme(DEFAULT_THEME_ID);
   });
 
-  it('opens, paints the three sections, Esc dismisses and restores focus', async () => {
+  it('opens, paints the top sections, Esc dismisses and restores focus', async () => {
     const { stores, enter } = setup();
     const { lastFrame, stdin } = render(<Harness stores={stores} />);
     await tick();
@@ -108,7 +150,9 @@ describe('SettingsModal', () => {
     expect(frame).toContain('Command modifier');
     expect(frame).toContain('Theme');
     expect(frame).toContain('Pane gap');
-    expect(frame).toContain('Key bindings');
+    // The row list now scrolls by cursor (it is far taller than the screen). The later sections —
+    // Collaborator harness, LLM providers, Tiers, Role → tier, Key bindings — come into view as the
+    // cursor descends; the top sections paint on open.
     expect(selectActiveMode(stores.modes)?.id).toBe(SETTINGS_MODE_ID);
 
     stdin.write(ESC);
@@ -230,15 +274,9 @@ describe('SettingsModal', () => {
     const { lastFrame, stdin } = render(<Harness stores={stores} />);
     enter();
     await tick();
-    // Walk to the first binding row (the first row whose render shows the press-a-key affordance after
-    // Enter). Bindings come last; navigate down until the focused row is a binding. We detect the
-    // binding section by its label being present and just step down past modifiers + themes.
-    // Modifiers (3) + themes (2) + pane-gap options (5) selectable rows precede bindings; press `j`
-    // 10 times to reach the first binding row.
-    for (let i = 0; i < 10; i++) {
-      stdin.write('j');
-      await tick();
-    }
+    // Walk to the first binding row ("spawn") — bindings are the last section, after the harness /
+    // LLM / tier / role sections, and the list scrolls by cursor.
+    await walkToFirstBinding(stdin, lastFrame);
     stdin.write('\r'); // begin capture
     await tick();
     expect(lastFrame()).toContain('press a key');
@@ -255,10 +293,7 @@ describe('SettingsModal', () => {
     const { lastFrame, stdin } = render(<Harness stores={stores} />);
     enter();
     await tick();
-    for (let i = 0; i < 10; i++) {
-      stdin.write('j');
-      await tick();
-    }
+    await walkToFirstBinding(stdin, lastFrame);
     stdin.write('\r'); // begin capture
     await tick();
     stdin.write('3'); // a reserved digit
@@ -272,10 +307,7 @@ describe('SettingsModal', () => {
     const { lastFrame, stdin } = render(<Harness stores={stores} />);
     enter();
     await tick();
-    for (let i = 0; i < 10; i++) {
-      stdin.write('j');
-      await tick();
-    }
+    await walkToFirstBinding(stdin, lastFrame);
     stdin.write('\r'); // begin capture on the FIRST binding row
     await tick();
     // The first rebindable action defaults to 's' (spawn); bind the first row to another action's
@@ -284,5 +316,149 @@ describe('SettingsModal', () => {
     await tick();
     expect(lastFrame()).toContain('already bound');
     expect(patches.find((p) => p.key_overrides !== undefined)).toBeUndefined();
+  });
+
+  // --- Harnesses section ---
+
+  it('collaborator radio: selecting a harness commits collaborator_harness', async () => {
+    const stores = createInputStores(['notes'], 'notes');
+    const { actions, patches } = fakeActions();
+    const { lastFrame, stdin } = render(<Harness stores={stores} />);
+    stores.modes.getState().enter(settingsMode(stores.modes, actions, RICH_CURRENT));
+    await tick();
+    await walkUntilFocused(stdin, lastFrame, 'codex');
+    stdin.write('\r');
+    await tick();
+    expect(patches).toContainEqual({ collaborator_harness: 'codex' });
+  });
+
+  it('collaborator "(default)" row commits collaborator_harness: null', async () => {
+    const stores = createInputStores(['notes'], 'notes');
+    const { actions, patches } = fakeActions();
+    const { lastFrame, stdin } = render(<Harness stores={stores} />);
+    // Start with an override set, so selecting "(default)" is an observable clear.
+    stores.modes
+      .getState()
+      .enter(
+        settingsMode(stores.modes, actions, { ...RICH_CURRENT, collaboratorHarness: 'codex' }),
+      );
+    await tick();
+    await walkUntilFocused(stdin, lastFrame, '(default)');
+    stdin.write('\r');
+    await tick();
+    expect(patches).toContainEqual({ collaborator_harness: null });
+  });
+
+  it('crow checkbox: toggling a harness commits the crow_harnesses list', async () => {
+    const stores = createInputStores(['notes'], 'notes');
+    const { actions, patches } = fakeActions();
+    const { lastFrame, stdin } = render(<Harness stores={stores} />);
+    // Effective default is [claude_code]; toggling codex on yields [claude_code, codex].
+    stores.modes.getState().enter(settingsMode(stores.modes, actions, RICH_CURRENT));
+    await tick();
+    // Two harnesses named "codex" exist (collaborator + crow); walk past the collaborator one by
+    // first focusing the crow reset row, then the crow codex row.
+    await walkUntilFocused(stdin, lastFrame, 'reset to default');
+    await walkUntilFocused(stdin, lastFrame, 'codex'); // now the crow codex row
+    stdin.write('\r');
+    await tick();
+    expect(patches).toContainEqual({ crow_harnesses: ['claude_code', 'codex'] });
+  });
+
+  it('crow checkbox: unchecking the last selected harness is blocked with a notice', async () => {
+    const stores = createInputStores(['notes'], 'notes');
+    const { actions, patches } = fakeActions();
+    const { lastFrame, stdin } = render(<Harness stores={stores} />);
+    // Override = exactly [codex]; unchecking codex must be refused.
+    stores.modes
+      .getState()
+      .enter(settingsMode(stores.modes, actions, { ...RICH_CURRENT, crowHarnesses: ['codex'] }));
+    await tick();
+    await walkUntilFocused(stdin, lastFrame, 'reset to default');
+    await walkUntilFocused(stdin, lastFrame, 'codex'); // the crow codex row (checked)
+    stdin.write('\r');
+    await tick();
+    expect(lastFrame()).toContain('At least one crow harness');
+    expect(patches.find((p) => p.crow_harnesses !== undefined)).toBeUndefined();
+  });
+
+  // --- LLM providers section ---
+
+  it('provider api_key: env-set provider shows "set via env"', async () => {
+    const stores = createInputStores(['notes'], 'notes');
+    const { actions } = fakeActions();
+    const { lastFrame, stdin } = render(<Harness stores={stores} />);
+    // groq has llm_env true → "set via env". Scroll the providers section into view first.
+    stores.modes.getState().enter(settingsMode(stores.modes, actions, RICH_CURRENT));
+    await tick();
+    await walkUntilFocused(stdin, lastFrame, 'groq api_key');
+    expect(lastFrame()).toContain('set via env');
+  });
+
+  it('provider api_key: text-entry commits llm.providers.<p>.api_key', async () => {
+    const stores = createInputStores(['notes'], 'notes');
+    const { actions, patches } = fakeActions();
+    const { lastFrame, stdin } = render(<Harness stores={stores} />);
+    // cerebras has no env key → editable. Focus its api_key row, type a key, Enter.
+    stores.modes.getState().enter(settingsMode(stores.modes, actions, RICH_CURRENT));
+    await tick();
+    await walkUntilFocused(stdin, lastFrame, 'cerebras api_key');
+    stdin.write('\r'); // begin edit
+    await tick();
+    stdin.write('k');
+    await tick();
+    stdin.write('e');
+    await tick();
+    stdin.write('y');
+    await tick();
+    stdin.write('\r'); // commit
+    await tick();
+    expect(patches).toContainEqual({ llm: { providers: { cerebras: { api_key: 'key' } } } });
+  });
+
+  it('local provider has a base_url row and commits llm.providers.local.base_url', async () => {
+    const stores = createInputStores(['notes'], 'notes');
+    const { actions, patches } = fakeActions();
+    const { lastFrame, stdin } = render(<Harness stores={stores} />);
+    stores.modes.getState().enter(settingsMode(stores.modes, actions, RICH_CURRENT));
+    await tick();
+    await walkUntilFocused(stdin, lastFrame, 'local base_url');
+    stdin.write('\r');
+    await tick();
+    stdin.write('u');
+    await tick();
+    stdin.write('\r');
+    await tick();
+    expect(patches).toContainEqual({ llm: { providers: { local: { base_url: 'u' } } } });
+  });
+
+  // --- Tiers & roles section ---
+
+  it('tiers section lists the built-in cheap/smart tiers read-only', async () => {
+    const stores = createInputStores(['notes'], 'notes');
+    const { actions } = fakeActions();
+    const { lastFrame, stdin } = render(<Harness stores={stores} />);
+    stores.modes.getState().enter(settingsMode(stores.modes, actions, RICH_CURRENT));
+    await tick();
+    // Scroll down toward the tiers section so the built-ins are in view.
+    await walkUntilFocused(stdin, lastFrame, 'local base_url');
+    const frame = lastFrame() ?? '';
+    expect(frame).toContain('cheap');
+    expect(frame).toContain('smart');
+    // The smart built-in is openrouter/anthropic/claude-sonnet-4-6.
+    expect(frame).toContain('anthropic/claude-sonnet-4-6');
+  });
+
+  it('role radio: selecting a tier commits llm.roles.<role>', async () => {
+    const stores = createInputStores(['notes'], 'notes');
+    const { actions, patches } = fakeActions();
+    const { lastFrame, stdin } = render(<Harness stores={stores} />);
+    stores.modes.getState().enter(settingsMode(stores.modes, actions, RICH_CURRENT));
+    await tick();
+    // Role rows render as "<role>: <tier>"; focus notetaker: smart and Enter.
+    await walkUntilFocused(stdin, lastFrame, 'notetaker: smart');
+    stdin.write('\r');
+    await tick();
+    expect(patches).toContainEqual({ llm: { roles: { notetaker: 'smart' } } });
   });
 });

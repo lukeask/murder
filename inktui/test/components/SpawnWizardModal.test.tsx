@@ -155,7 +155,7 @@ describe('SpawnWizardModal — dependent-field flow', () => {
     expect(lastFrame()).toContain('Select harness');
     expect(lastFrame()).toContain('› claude-code'); // default cursor at index 0
     expect(lastFrame()).toContain('codex');
-    expect(lastFrame()).toContain('native-coding-crow');
+    expect(lastFrame()).toContain('antigravity');
   });
 
   it('j/k navigates the harness list (routed via onUncaptured)', async () => {
