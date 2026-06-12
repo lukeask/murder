@@ -17,6 +17,7 @@ Manual entrypoint:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import shutil
 import sqlite3
 import sys
@@ -260,8 +261,12 @@ async def incremental_update(
     the same closure / top-level-only rollup logic as :func:`fresh_build`.
 
     Unchanged sibling bodies needed to re-roll a parent are read back from the
-    DB at ``base_sha`` (the canonical history), falling back to a fresh roll
-    when missing. Empty summaries (``summary_tokens == 0``) are fine throughout.
+    DB via the latest known row for that path (incremental rounds snapshot only
+    changed paths under the new head, so the newest sibling row may sit several
+    map shas back — an exact ``base_sha`` hit would miss it), falling back to a
+    fresh roll when missing. A directory left with no tracked text files (last
+    file deleted) has its ``DIR.md`` removed instead of being re-rolled empty.
+    Empty summaries (``summary_tokens == 0``) are fine throughout.
     """
     repo_root = Path(repo_root)
     map_root = map_root_for(repo_root)
@@ -331,16 +336,26 @@ async def incremental_update(
     all_dirs = _dir_closure(list(tracked_now))
 
     # Dirs to re-roll: the ancestor chain of every changed path (present +
-    # deleted). A deletion still re-rolls its former parents.
+    # deleted). A deletion still re-rolls its former parents — but a dir that
+    # no longer holds ANY tracked text file (last file deleted) has vanished:
+    # remove its DIR.md instead of re-rolling an empty node, deepest first.
     affected_dirs = _dir_closure(present + deleted)
+    vanished_dirs = affected_dirs - all_dirs
+    affected_dirs &= all_dirs
+    for dir_rel in sorted(vanished_dirs, key=lambda d: d.count("/"), reverse=True):
+        target = map_root / dir_rel / "DIR.md"
+        if target.exists():
+            target.unlink()
+        with contextlib.suppress(OSError):
+            (map_root / dir_rel).rmdir()
 
-    # Body of a file child — fresh if re-summarized this run, else the DB row at
-    # base_sha (canonical), else a fresh roll from disk (DB is the source of
+    # Body of a file child — fresh if re-summarized this run, else the latest
+    # DB row (canonical), else a fresh roll from disk (DB is the source of
     # truth; the disk fallback only fires when a snapshot is missing).
     async def _file_body(repo_rel: str) -> str:
         if repo_rel in fresh_file_bodies:
             return fresh_file_bodies[repo_rel]
-        row = store_mod.load_summary(db, repo_rel, base_sha)
+        row = store_mod.load_latest_summary(db, repo_rel)
         if row is not None:
             return row["body"] or ""
         try:
@@ -351,16 +366,16 @@ async def incremental_update(
         fresh_file_bodies[repo_rel] = summary.body
         return summary.body
 
-    # Body of an unchanged subdir child — the DB DIR row at base_sha (canon).
+    # Body of an unchanged subdir child — the latest DB DIR row (canonical).
     def _reused_dir_body(dir_rel: str) -> str:
-        row = store_mod.load_summary(db, dir_rel, base_sha)
+        row = store_mod.load_latest_summary(db, dir_rel)
         return (row["body"] if row is not None else "") or ""
 
     async def _build_children(dir_rel: str, dir_bodies: dict[str, str]) -> list[ChildEntry]:
         """File + immediate-subdir children for ``dir_rel``.
 
         Subdir bodies: re-rolled this run -> the fresh body in ``dir_bodies``;
-        otherwise read from the DB at base_sha (canonical).
+        otherwise the latest DB row (canonical).
         """
         file_bodies: dict[str, str] = {}
         for repo_rel in by_dir.get(dir_rel, []):
@@ -385,7 +400,8 @@ async def incremental_update(
         )
 
     # ROOT is always re-rolled: root-level files + TOP-LEVEL dir bodies. A
-    # top-level dir re-rolled this run uses its fresh body; otherwise base_sha.
+    # top-level dir re-rolled this run uses its fresh body; otherwise the
+    # latest DB row.
     root_file_bodies: dict[str, str] = {}
     for repo_rel in by_dir.get("", []):
         root_file_bodies[repo_rel] = await _file_body(repo_rel)

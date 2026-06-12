@@ -3,7 +3,7 @@
 A stub client serves file summaries and roll-ups; it records the system prompts
 so the test can assert which files were re-summarized (call counts) and which
 dirs were re-rolled. The DB is the canonical history — unchanged siblings are
-read back from it at base_sha.
+read back from their latest snapshot rows.
 """
 
 from __future__ import annotations
@@ -32,9 +32,11 @@ class RecordingStubClient:
     def __init__(self) -> None:
         self.file_paths: list[str] = []
         self.dir_paths: list[str] = []
+        self.systems: list[str] = []
 
     async def complete(self, **kwargs) -> CompletionResult:
         system = kwargs.get("system") or ""
+        self.systems.append(system)
         file_match = _FILE_PATH_RE.search(system)
         dir_match = _DIR_RE.search(system)
         if file_match:
@@ -147,7 +149,7 @@ def test_incremental_snapshots_rows_under_head_sha():
 
 
 def test_incremental_reuses_unchanged_sibling_from_db():
-    """Re-rolling pkg/ must re-feed pkg/b.py's body from the DB at base_sha,
+    """Re-rolling pkg/ must re-feed pkg/b.py's body from the DB,
     NOT re-summarize it."""
     with tempfile.TemporaryDirectory() as d:
         root = Path(d)
@@ -215,6 +217,88 @@ def test_incremental_noop_when_no_changes():
         )
         assert client.file_paths == []
         assert client.dir_paths == []
+
+
+def test_incremental_second_round_reuses_latest_sibling_rows():
+    """Round 2's base sha carries only round-1-changed rows; unchanged siblings
+    live at older shas. Read-back must use the LATEST row per path — an exact
+    base_sha lookup would re-summarize files from disk and feed EMPTY bodies
+    for unchanged subdirs (regression: Fable RT3 review)."""
+    with tempfile.TemporaryDirectory() as d:
+        root = Path(d)
+        _init_repo(root)
+        db = _db()
+        _seed(root, db)
+
+        # Round 1: edit pkg/a.py.
+        (root / "pkg" / "a.py").write_text("def a():\n    return 11\n")
+        _git(root, "add", "-A")
+        _git(root, "commit", "-q", "-m", "edit a r1")
+        head1 = asyncio.run(head_commit(root))
+        asyncio.run(
+            incremental_update(
+                root, FileSummarizer(RecordingStubClient()),
+                db=db, base_sha=latest_map_sha(db), head_sha=head1, concurrency=2,
+            )
+        )
+
+        # Round 2: edit pkg/a.py again. base is now head1, where pkg/b.py and
+        # pkg/sub have NO rows.
+        (root / "pkg" / "a.py").write_text("def a():\n    return 22\n")
+        _git(root, "add", "-A")
+        _git(root, "commit", "-q", "-m", "edit a r2")
+        head2 = asyncio.run(head_commit(root))
+
+        client = RecordingStubClient()
+        asyncio.run(
+            incremental_update(
+                root, FileSummarizer(client),
+                db=db, base_sha=head1, head_sha=head2, concurrency=2,
+            )
+        )
+
+        # Unchanged sibling NOT re-summarized from disk.
+        assert client.file_paths == ["pkg/a.py"]
+        # pkg/'s roll-up prompt re-fed pkg/b.py's and pkg/sub/'s real bodies,
+        # not empty strings.
+        pkg_prompts = [s for s in client.systems if "Directory: pkg\n" in s or s.rstrip().endswith("Directory: pkg")]
+        assert pkg_prompts, client.systems
+        assert any("summary of pkg/b.py" in s for s in pkg_prompts)
+        assert any("rollup of pkg/sub" in s for s in pkg_prompts)
+
+
+def test_incremental_deleting_last_file_removes_dirmd():
+    """Deleting the only file in a dir removes the dir's DIR.md instead of
+    re-rolling an empty node (regression: Fable RT3 review)."""
+    with tempfile.TemporaryDirectory() as d:
+        root = Path(d)
+        _init_repo(root)
+        db = _db()
+        base = _seed(root, db)
+        sub_dirmd = root / ".murder" / "map" / "pkg" / "sub" / "DIR.md"
+        assert sub_dirmd.exists()
+
+        (root / "pkg" / "sub" / "c.py").unlink()
+        _git(root, "add", "-A")
+        _git(root, "commit", "-q", "-m", "rm sub/c")
+        head = asyncio.run(head_commit(root))
+
+        client = RecordingStubClient()
+        asyncio.run(
+            incremental_update(
+                root, FileSummarizer(client), db=db, base_sha=base, head_sha=head, concurrency=2
+            )
+        )
+
+        # The vanished dir's nodes are gone, not re-rolled empty.
+        assert not sub_dirmd.exists()
+        assert not (root / ".murder" / "map" / "pkg" / "sub" / "c.py.md").exists()
+        assert "pkg/sub" not in client.dir_paths
+        # The surviving parent chain re-rolled, without the vanished child.
+        assert "pkg" in client.dir_paths
+        pkg_prompts = [s for s in client.systems if "Directory: pkg" in s and "Directory: pkg/sub" not in s]
+        assert pkg_prompts
+        assert not any("sub/" in s for s in pkg_prompts)
 
 
 def test_incremental_root_level_file_change_rerolls_root_only():

@@ -94,6 +94,28 @@ def load_summary(
     ).fetchone()
 
 
+def load_latest_summary(
+    db: sqlite3.Connection,
+    path: str,
+) -> sqlite3.Row | None:
+    """The most-recently-generated row for ``path``, any commit_sha.
+
+    Incremental updates snapshot ONLY changed/re-rolled paths under the new
+    head sha, so an unchanged sibling's newest row may sit several map shas
+    back — read-back must take the latest known row, not an exact-sha hit.
+    ``rowid DESC`` breaks generated_at ties (seconds resolution).
+    """
+    return db.execute(
+        """
+        SELECT * FROM map_summaries
+         WHERE path = ?
+         ORDER BY generated_at DESC, rowid DESC
+         LIMIT 1
+        """,
+        (path,),
+    ).fetchone()
+
+
 def latest_map_sha(db: sqlite3.Connection) -> str | None:
     """Most-recently-generated commit_sha present (the hinge for t061's diff)."""
     row = db.execute(
@@ -120,6 +142,7 @@ __all__ = [
     "snapshot_file",
     "snapshot_rollup",
     "load_summary",
+    "load_latest_summary",
     "latest_map_sha",
     "rows_for_commit",
 ]
