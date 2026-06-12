@@ -11,8 +11,12 @@ import re
 from pathlib import Path
 from typing import ClassVar
 
-from murder.llm.harnesses.base import HarnessAdapter
-from murder.llm.harnesses.models import HarnessModelState, HarnessStartSpec
+from murder.llm.harnesses.base import HarnessAdapter, UsageCollectionMode
+from murder.llm.harnesses.models import (
+    HarnessModelState,
+    HarnessStartSpec,
+    HarnessUsageStatus,
+)
 from murder.llm.harnesses.parsing import (
     extract_last_message_heuristic,
     normalize_effort,
@@ -21,11 +25,14 @@ from murder.llm.harnesses.parsing import (
     strip_ansi,
 )
 from murder.llm.harnesses.results import SimpleResult, fail_result, ok_result
+from murder.llm.harnesses.usage import parse_antigravity_usage_pane
 from murder.runtime.terminal import tmux
 
 _TAIL_LINES = 25
 _MODEL_MENU_DELAY_S = 0.5
 _MODEL_SETTLE_DELAY_S = 0.6
+_USAGE_DIALOG_DELAY_S = 0.6
+_USAGE_RETRY_DELAY_S = 0.6
 
 _BANNER_RE = re.compile(r"Antigravity CLI\s+\d", re.IGNORECASE)
 _SIGNING_IN_RE = re.compile(r"Signing in", re.IGNORECASE)
@@ -61,6 +68,7 @@ def _agy_label_parts(label: str) -> tuple[str, str | None]:
 class AntigravityAdapter(HarnessAdapter):
     kind: ClassVar[str] = "antigravity"
     crow_system_prompt: ClassVar[str] = "see prompts/crow_antigravity.md"
+    usage_collection_mode: ClassVar[UsageCollectionMode] = "tmux_slash"
     model_list_command: ClassVar[str | None] = "/model"
     model_list_capture_delay_s: ClassVar[float] = 0.8
     supported_efforts: ClassVar[tuple[str, ...]] = ("low", "medium", "high")
@@ -192,3 +200,23 @@ class AntigravityAdapter(HarnessAdapter):
 
     async def interrupt(self, session: str) -> None:
         await self.interrupt_generation(session)
+
+    async def request_usage_status(self, session: str) -> bool:
+        # If a prior /usage (or other) dialog is still open, dismiss it first
+        # so the slash command is submitted at the main prompt.
+        await tmux.send_keys(session, "Escape", literal=False, enter=False)
+        await asyncio.sleep(0.2)
+        await tmux.send_keys(session, "/usage", literal=True, enter=True)
+        await asyncio.sleep(_USAGE_DIALOG_DELAY_S)
+        return True
+
+    async def collect_usage_status(self, session: str) -> SimpleResult[HarnessUsageStatus]:
+        for attempt in range(2):
+            await self.request_usage_status(session)
+            pane = await tmux.capture_pane(session, lines=200)
+            status = parse_antigravity_usage_pane(pane)
+            if status.windows:
+                return ok_result(status)
+            if attempt == 0:
+                await asyncio.sleep(_USAGE_RETRY_DELAY_S)
+        return fail_result("antigravity /usage did not expose any quota windows")

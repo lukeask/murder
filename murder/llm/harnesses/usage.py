@@ -279,3 +279,130 @@ def parse_codex_status_pane(
         fetched_at=fetched_at or utc_now_iso(),
         windows=windows,
     )
+
+
+# Antigravity's `/usage` opens a "Model Quota" dialog (verified against agy
+# 1.0.7, fixture `agy_usage_dialog.txt`). Each model renders as three lines:
+#   `  Claude Opus 4.6 (Thinking)`
+#   `  ███████████ ░░░ ... 20%`          <- bar tracks quota REMAINING
+#   `  20% remaining · Refreshes in 12h 39m`   (or `Quota available`)
+# `percent_used` is normalized to consumed quota (100 - remaining), matching
+# the HarnessUsageWindow contract. `reset_at` is now + the "Refreshes in"
+# delta. Effort variants of the same base model with identical (percent,
+# reset) collapse into one window named by the base model so the usage panel
+# doesn't gain a row per effort level.
+_AGY_MODEL_LINE_RE = re.compile(
+    r"^\s{0,8}(?P<label>[A-Za-z][\w.\- ]{1,50}\((?:Low|Medium|High|Thinking)\))\s*$",
+)
+_AGY_EFFORT_SUFFIX_RE = re.compile(r"\s*\((?:Low|Medium|High|Thinking)\)\s*$")
+_AGY_BAR_PCT_RE = re.compile(r"(?P<pct>\d+(?:\.\d+)?)\s*%\s*$")
+_AGY_REMAINING_RE = re.compile(r"(?P<pct>\d+(?:\.\d+)?)\s*%\s*remaining", re.IGNORECASE)
+_AGY_AVAILABLE_RE = re.compile(r"Quota available", re.IGNORECASE)
+_AGY_REFRESH_RE = re.compile(
+    r"Refreshes in\s+(?:(?P<d>\d+)\s*d)?\s*(?:(?P<h>\d+)\s*h)?\s*(?:(?P<m>\d+)\s*m)?",
+    re.IGNORECASE,
+)
+_AGY_PLAN_RE = re.compile(r"\((?P<plan>[^()\n]*Quota[^()\n]*)\)")
+_AGY_FOOTER_RE = re.compile(r"esc to cancel|↑/↓ Scroll", re.IGNORECASE)
+
+
+def _agy_refresh_to_reset(line: str, now: datetime | None) -> str | None:
+    match = _AGY_REFRESH_RE.search(line)
+    if not match or not any(match.group(g) for g in ("d", "h", "m")):
+        return None
+    base = _local_clock_base(now)
+    delta = timedelta(
+        days=int(match.group("d") or 0),
+        hours=int(match.group("h") or 0),
+        minutes=int(match.group("m") or 0),
+    )
+    return (base + delta).replace(microsecond=0).isoformat()
+
+
+def parse_antigravity_usage_pane(
+    pane_text: str,
+    *,
+    fetched_at: str | None = None,
+    now: datetime | None = None,
+) -> HarnessUsageStatus:
+    clean = strip_ansi(pane_text)
+    plan_match = _AGY_PLAN_RE.search(clean)
+
+    # Scrollback safety: only parse below the LAST "Model Quota" dialog header.
+    anchor = clean.lower().rfind("model quota")
+    body = clean[anchor:] if anchor >= 0 else ""
+    lines = body.splitlines()
+
+    # raw rows: (full label, percent_used, reset_at) in display order
+    raw_rows: list[tuple[str, float, str | None]] = []
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        if _AGY_FOOTER_RE.search(line):
+            break
+        label_match = _AGY_MODEL_LINE_RE.match(line)
+        if not label_match:
+            i += 1
+            continue
+        label = re.sub(r"\s+", " ", label_match.group("label")).strip()
+        remaining: float | None = None
+        reset_at: str | None = None
+        # Look at the next few non-empty lines (bar + status) for this row.
+        j = i + 1
+        consumed = i
+        while j < min(i + 4, len(lines)):
+            row = lines[j]
+            if not row.strip():
+                j += 1
+                continue
+            if _AGY_MODEL_LINE_RE.match(row) or _AGY_FOOTER_RE.search(row):
+                break
+            if status_match := _AGY_REMAINING_RE.search(row):
+                remaining = float(status_match.group("pct"))
+                reset_at = _agy_refresh_to_reset(row, now)
+                consumed = j
+            elif _AGY_AVAILABLE_RE.search(row):
+                remaining = remaining if remaining is not None else 100.0
+                consumed = j
+            elif bar_match := _AGY_BAR_PCT_RE.search(row):
+                if remaining is None:
+                    remaining = float(bar_match.group("pct"))
+                consumed = j
+            j += 1
+        if remaining is not None:
+            used = round(max(0.0, min(100.0, 100.0 - remaining)), 4)
+            raw_rows.append((label, used, reset_at))
+        i = max(consumed, i) + 1
+
+    # Collapse effort variants: same base model AND identical (percent, reset)
+    # merge into one window named by the base model. Divergent variants keep
+    # their full labels so the difference stays visible.
+    by_base: dict[str, list[tuple[str, float, str | None]]] = {}
+    base_order: list[str] = []
+    for label, used, reset_at in raw_rows:
+        base = _AGY_EFFORT_SUFFIX_RE.sub("", label).strip()
+        if base not in by_base:
+            by_base[base] = []
+            base_order.append(base)
+        by_base[base].append((label, used, reset_at))
+
+    windows: list[HarnessUsageWindow] = []
+    for base in base_order:
+        rows = by_base[base]
+        stats = {(used, reset_at) for _, used, reset_at in rows}
+        if len(stats) == 1:
+            used, reset_at = next(iter(stats))
+            windows.append(HarnessUsageWindow(name=base, percent_used=used, reset_at=reset_at))
+        else:
+            for label, used, reset_at in rows:
+                windows.append(
+                    HarnessUsageWindow(name=label, percent_used=used, reset_at=reset_at)
+                )
+
+    return HarnessUsageStatus(
+        harness="antigravity",
+        source="slash:/usage",
+        fetched_at=fetched_at or utc_now_iso(),
+        plan=plan_match.group("plan").strip() if plan_match else None,
+        windows=windows,
+    )

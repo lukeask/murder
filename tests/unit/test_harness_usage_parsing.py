@@ -4,7 +4,11 @@ from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from murder.llm.harnesses.usage import parse_claude_usage_pane, parse_codex_status_pane
+from murder.llm.harnesses.usage import (
+    parse_antigravity_usage_pane,
+    parse_claude_usage_pane,
+    parse_codex_status_pane,
+)
 
 
 def _load_pane_fixture(name: str) -> str:
@@ -119,3 +123,76 @@ def test_claude_usage_dialog_wide_parses_block_bar_and_reset() -> None:
     assert reset_at.hour == 13 and reset_at.minute == 40
     t_until_minutes = (reset_at - now).total_seconds() / 60.0
     assert 3.5 * 60 < t_until_minutes < 4.0 * 60  # ~3h40m away
+
+
+def test_antigravity_usage_dialog_collapses_effort_variants() -> None:
+    # agy 1.0.7 /usage "Model Quota" dialog: 8 raw rows (effort variants) must
+    # collapse to 5 windows — variants sharing a base model and identical
+    # (percent, reset) merge under the base name.
+    pane = _load_pane_fixture("agy_usage_dialog.txt")
+    now = datetime(2026, 6, 12, 10, 0, tzinfo=ZoneInfo("America/New_York"))
+    status = parse_antigravity_usage_pane(pane, now=now)
+    assert status.harness == "antigravity"
+    assert status.source == "slash:/usage"
+    assert status.plan == "Antigravity Starter Quota"
+    assert [w.name for w in status.windows] == [
+        "Gemini 3.5 Flash",
+        "Gemini 3.1 Pro",
+        "Claude Sonnet 4.6",
+        "Claude Opus 4.6",
+        "GPT-OSS 120B",
+    ]
+    by_name = {w.name: w for w in status.windows}
+    # "Quota available" + full bar -> 0% consumed, no reset hint.
+    assert by_name["Gemini 3.5 Flash"].percent_used == 0.0
+    assert by_name["Gemini 3.5 Flash"].reset_at is None
+    assert by_name["Gemini 3.1 Pro"].percent_used == 0.0
+    # "20% remaining · Refreshes in 12h 39m" -> 80% consumed, reset now+12h39m.
+    for name in ("Claude Sonnet 4.6", "Claude Opus 4.6", "GPT-OSS 120B"):
+        window = by_name[name]
+        assert window.percent_used == 80.0
+        reset_at = datetime.fromisoformat(window.reset_at)
+        t_until_minutes = (reset_at - now).total_seconds() / 60.0
+        assert t_until_minutes == 12 * 60 + 39
+
+
+def test_antigravity_usage_divergent_variants_keep_full_labels() -> None:
+    pane = (
+        "└ Model Quota\n"
+        "\n"
+        "  Gemini 3.5 Flash (Low)\n"
+        "  ███ ░░░ 40%\n"
+        "  40% remaining · Refreshes in 2h 5m\n"
+        "\n"
+        "  Gemini 3.5 Flash (High)\n"
+        "  ███ ███ 100%\n"
+        "  Quota available\n"
+        "\n"
+        "  esc to cancel\n"
+    )
+    now = datetime(2026, 6, 12, 10, 0, tzinfo=ZoneInfo("America/New_York"))
+    status = parse_antigravity_usage_pane(pane, now=now)
+    assert [w.name for w in status.windows] == [
+        "Gemini 3.5 Flash (Low)",
+        "Gemini 3.5 Flash (High)",
+    ]
+    by_name = {w.name: w for w in status.windows}
+    assert by_name["Gemini 3.5 Flash (Low)"].percent_used == 60.0
+    reset_at = datetime.fromisoformat(by_name["Gemini 3.5 Flash (Low)"].reset_at)
+    assert (reset_at - now).total_seconds() / 60.0 == 125.0
+    assert by_name["Gemini 3.5 Flash (High)"].percent_used == 0.0
+    assert by_name["Gemini 3.5 Flash (High)"].reset_at is None
+
+
+def test_antigravity_usage_ignores_chrome_outside_dialog() -> None:
+    # The banner model line + the status-bar model name must not become
+    # windows; without a "Model Quota" anchor nothing parses at all.
+    pane = (
+        "  Antigravity CLI 1.0.7\n"
+        "  lukeask@gmail.com (Antigravity Starter Quota)\n"
+        "  Gemini 3.1 Pro (Low)\n"
+        "  ~/Documents/code/murder\n"
+        ">\n"
+    )
+    status = parse_antigravity_usage_pane(pane)
+    assert status.windows == []
