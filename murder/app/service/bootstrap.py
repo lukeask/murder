@@ -11,6 +11,7 @@ from murder.app.service.command_dispatch import CommandDispatcher
 from murder.app.service.runtime import Runtime
 from murder.app.service.supervisor import Supervisor
 from murder.runtime.workers import (
+    CodebaseMapWorker,
     CollaboratorWorker,
     DoneSessionSweeperWorker,
     HarnessVersionProbeWorker,
@@ -58,6 +59,7 @@ async def start_supervisor_workers(
         )
     )
     await supervisor.start_worker(OrchestratorCommandWorker(orchestrator))
+    await supervisor.start_worker(CodebaseMapWorker())
     return supervisor
 
 
