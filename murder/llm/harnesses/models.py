@@ -16,6 +16,10 @@ class HarnessStartSpec:
     # CC-only: when set, the harness launch resumes a prior session id
     # (``claude --resume <id>``) instead of starting a fresh conversation.
     resume_session_id: str | None = None
+    # Optional override for the harness CLI binary (argv[0]). None falls back to
+    # the adapter's built-in default (e.g. cursor → "agent"). Sourced from the
+    # ``binary`` field of the resolved HarnessRoleConfig.
+    binary: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

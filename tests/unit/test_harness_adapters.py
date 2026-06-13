@@ -254,6 +254,26 @@ class TestCodexAdapter:
 class TestCursorAdapter:
     cu = CursorAdapter()
 
+    # ── binary config field ───────────────────────────────────────────────────
+
+    def test_startup_cmd_default_binary_is_agent(self):
+        assert CursorAdapter().startup_cmd(Path("/tmp")) == ["agent", "--yolo"]
+
+    def test_startup_cmd_uses_binary_override(self):
+        adapter = CursorAdapter(binary="cursor-agent")
+        assert adapter.startup_cmd(Path("/tmp")) == ["cursor-agent", "--yolo"]
+
+    def test_start_spec_binary_propagates_to_startup_cmd(self):
+        from murder.llm.harnesses.models import HarnessStartSpec
+
+        adapter = CursorAdapter()
+        # HarnessSession.start() copies spec.binary onto the adapter; emulate the
+        # single line that does so to assert the wiring end to end.
+        spec = HarnessStartSpec(cwd=Path("/tmp/repo"), binary="custom-bin")
+        if spec.binary is not None:
+            adapter.binary = spec.binary
+        assert adapter.startup_cmd(Path("/tmp/repo")) == ["custom-bin", "--yolo"]
+
     # ── idle fixture ──────────────────────────────────────────────────────────
 
     def test_idle_pane_is_idle(self):

@@ -162,9 +162,14 @@ class CursorAdapter(HarnessAdapter):
         "see prompts/crow_cursor.md"
     )
 
+    # Default binary name for the Cursor agent CLI. Overridable via the
+    # ``binary`` field of the harness config (plumbed through HarnessStartSpec
+    # onto self.binary) for installs that expose a differently-named executable.
+    default_binary: ClassVar[str] = "agent"
+
     def startup_cmd(self, cwd: Path) -> list[str]:
         del cwd
-        return ["agent", "--yolo"]
+        return [self.binary or self.default_binary, "--yolo"]
 
     def startup_model_satisfies_runtime_request(
         self,
