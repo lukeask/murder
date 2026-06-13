@@ -30,8 +30,9 @@ from murder.state.persistence.schema import get_db, init_db
 
 
 def test_protocol_version_is_three() -> None:
-    # F6 bumped PROTOCOL_VERSION 2→3 (TmuxFrameEvent); history view bumped 3→4 (Entity.HISTORY).
-    assert PROTOCOL_VERSION == 4
+    # F6 bumped PROTOCOL_VERSION 2→3 (TmuxFrameEvent); history view bumped 3→4
+    # (Entity.HISTORY); transit view bumped 4→5 (Entity.TRANSIT).
+    assert PROTOCOL_VERSION == 5
 
 
 def test_entity_report_member_exists() -> None:

@@ -9,7 +9,7 @@ missing from the TS union for a while.
 This test pins the contract from the **Python side** and asserts the TS file
 agrees on the three things that matter for dispatch correctness:
 
-  - ``PROTOCOL_VERSION`` (both must be 4; a client refuses a mismatched server).
+  - ``PROTOCOL_VERSION`` (both must be 5; a client refuses a mismatched server).
   - the ``Entity`` enum value *set* (both directions — Python⊆TS and TS⊆Python —
     so adding or dropping a value on either side fails).
   - the ``BusEvent`` member *type names*, including ``NoteEvent`` / ``type "note"``
@@ -94,7 +94,7 @@ def _py_bus_event_type_literals() -> set[str]:
 
 
 def test_protocol_version_agrees(ts_source: str) -> None:
-    assert pyproto.PROTOCOL_VERSION == 4, "Python PROTOCOL_VERSION drifted from expected 4"
+    assert pyproto.PROTOCOL_VERSION == 5, "Python PROTOCOL_VERSION drifted from expected 5"
     assert _ts_protocol_version(ts_source) == pyproto.PROTOCOL_VERSION, (
         "PROTOCOL_VERSION mismatch between protocol.py and protocol.ts"
     )
@@ -103,7 +103,7 @@ def test_protocol_version_agrees(ts_source: str) -> None:
 def test_entity_enum_value_set_agrees(ts_source: str) -> None:
     py = _py_entity_values()
     ts = _ts_entity_values(ts_source)
-    assert len(py) == 8, f"expected 8 Entity values in Python, got {sorted(py)}"
+    assert len(py) == 9, f"expected 9 Entity values in Python, got {sorted(py)}"
     # Both directions so drift either way fails.
     assert py == ts, f"Entity value drift: only-in-py={py - ts}, only-in-ts={ts - py}"
 
