@@ -6,7 +6,7 @@ from typing import Any
 
 from murder.app.service.runtime_scope import OrchestratorHost
 from murder.bus import Entity
-from murder.llm.clients import resolve_role_client
+from murder.llm.clients import resolve_role_client_tiered
 from murder.work import notes as notes_mod
 
 
@@ -33,13 +33,15 @@ class NoteOps:
         else:
             title = title.strip()
 
-        client = resolve_role_client(self.rt.config.notetaker)
+        client, notetaker_cfg = resolve_role_client_tiered(
+            self.rt.config.notetaker, self.rt.user_cfg, "notetaker"
+        )
         result = await notes_mod.submit_capture(
             repo_root=self.rt.repo_root,
             conn=self.rt.db,
             raw=raw.strip(),
             client=client,
-            config=self.rt.config.notetaker,
+            config=notetaker_cfg,
             note_name=notes_mod.today_name(),
             title=title,
         )

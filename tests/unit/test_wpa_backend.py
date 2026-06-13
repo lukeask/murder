@@ -172,8 +172,8 @@ def test_create_plan_auto_name_uses_llm_slug(repo_root: Path, monkeypatch) -> No
 
     monkeypatch.setattr(notes_mod, "llm_capture_metadata", _fake_meta)
     monkeypatch.setattr(
-        "murder.runtime.orchestration.orchestrator.resolve_role_client",
-        lambda cfg: object(),
+        "murder.runtime.orchestration.plan_ops.resolve_role_client_tiered",
+        lambda cfg, user_cfg, role: (object(), cfg),
     )
 
     result = asyncio.run(

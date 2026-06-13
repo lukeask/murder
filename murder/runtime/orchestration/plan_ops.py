@@ -10,7 +10,7 @@ from typing import Any
 
 from murder.app.service.runtime_scope import OrchestratorHost
 from murder.bus import Entity
-from murder.llm.clients import resolve_role_client
+from murder.llm.clients import resolve_role_client_tiered
 from murder.runtime.agents.base import AgentStatus
 from murder.runtime.terminal import tmux
 from murder.runtime.terminal.session_names import format_session_name
@@ -260,14 +260,16 @@ class PlanOps:
         configured or the model returns nothing usable.
         """
         text = (body or "").strip()
-        client = resolve_role_client(self.rt.config.notetaker)
+        client, notetaker_cfg = resolve_role_client_tiered(
+            self.rt.config.notetaker, self.rt.user_cfg, "notetaker"
+        )
         if client is not None and text:
             try:
                 meta = await notes_mod.llm_capture_metadata(
                     raw=text,
                     system=notes_mod._load_prompt("plan_namer"),
                     client=client,
-                    config=self.rt.config.notetaker,
+                    config=notetaker_cfg,
                 )
                 slug = notes_mod._slugify_title(meta.get("one_or_two_word_title", ""))
                 if slug:

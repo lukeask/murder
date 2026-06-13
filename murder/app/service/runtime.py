@@ -54,6 +54,7 @@ from murder.state.storage.run_id_allocation import allocate_run_id
 if TYPE_CHECKING:
     from murder.config import Config
     from murder.runtime.agents.base import LifecycleParticipant
+    from murder.user_config import UserConfig
     from murder.work.notes.sync import NoteSync, NotetakerContextSync
     from murder.work.plans.sync import PlanSync
     from murder.work.simple_doc_sync import SimpleDocSync
@@ -65,9 +66,12 @@ Handler = Callable[[Any], Awaitable[None]]
 class Runtime:
     """Async context manager owning the murder process lifecycle."""
 
-    def __init__(self, config: Config, repo_root: Path) -> None:
+    def __init__(
+        self, config: Config, repo_root: Path, user_cfg: "UserConfig | None" = None
+    ) -> None:
         self.config = config
         self.repo_root = repo_root
+        self.user_cfg = user_cfg
         self.db: sqlite3.Connection | None = None
         self.bus: Bus | None = None
         self.run_id: str | None = None

@@ -535,7 +535,13 @@ class ServiceHost:
         self.register_rpc_handler("worktree.list", _worktree_list)
 
     async def start(self) -> None:
-        self.runtime = Runtime(self.config, self.repo_root)
+        from murder.user_config import load_user_config
+
+        try:
+            user_cfg = load_user_config()
+        except Exception:
+            user_cfg = None
+        self.runtime = Runtime(self.config, self.repo_root, user_cfg=user_cfg)
         await self.runtime.start()
         if self.runtime.db is None or self.runtime.bus is None or self.runtime.run_id is None:
             raise RuntimeError("runtime failed to initialize db/bus/run_id")

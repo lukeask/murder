@@ -1,6 +1,7 @@
 """Native LLM clients for CrowHandler and PlanningAgent."""
 
 import os
+from typing import TYPE_CHECKING
 
 from murder.llm.clients.auto_free import AutoFreeClient
 from murder.llm.clients.anthropic import AnthropicClient
@@ -10,6 +11,9 @@ from murder.llm.clients.groq import GroqClient
 from murder.llm.clients.openai_compatible import OPENAI_BASE, OpenAICompatibleClient
 from murder.config import ApiRoleConfig
 from murder.llm.clients.openrouter import OpenRouterClient
+
+if TYPE_CHECKING:
+    from murder.user_config import UserConfig
 
 
 def create_client(provider: str) -> APIClient | None:
@@ -45,6 +49,36 @@ def resolve_role_client(config: ApiRoleConfig) -> APIClient | None:
     return create_client(config.provider)
 
 
+def resolve_role_client_tiered(
+    config: ApiRoleConfig,
+    user_cfg: "UserConfig | None",
+    role: str,
+) -> tuple[APIClient | None, ApiRoleConfig]:
+    """Resolve a role's client honoring user-config tier overrides.
+
+    Returns ``(client, effective_config)``. When the role maps to a tier, the
+    effective config carries the tier's provider/model/auto_free so the right
+    model string reaches API calls. Any tier failure degrades to today's
+    behavior, returning the ORIGINAL config + original-path client.
+    """
+    from murder.user_config import resolve_tier
+
+    tier = resolve_tier(user_cfg, role)
+    if tier is None:
+        return (resolve_role_client(config), config)
+    effective_cfg = config.model_copy(
+        update={
+            "provider": tier.provider,
+            "model": tier.model,
+            "auto_free": tier.auto_free,
+        }
+    )
+    client = resolve_role_client(effective_cfg)
+    if client is None:
+        return (resolve_role_client(config), config)
+    return (client, effective_cfg)
+
+
 __all__ = [
     "APIClient",
     "AutoFreeClient",
@@ -55,4 +89,5 @@ __all__ = [
     "OpenRouterClient",
     "create_client",
     "resolve_role_client",
+    "resolve_role_client_tiered",
 ]

@@ -93,7 +93,7 @@ const PROVIDERS: readonly LlmProviderId[] = ['groq', 'cerebras', 'openrouter', '
 const ENV_PROVIDERS: ReadonlySet<string> = new Set(['groq', 'cerebras', 'openrouter']);
 
 /** The known roles a tier can be bound to (mirrors the Python role keys). */
-const ROLES: readonly string[] = ['notetaker', 'crow_handler'];
+const ROLES: readonly string[] = ['notetaker', 'crow_handler', 'codebase_map'];
 
 /** Built-in tiers, present server-side even when `llm.tiers` is empty. Mirrors the Python
  * `BUILTIN_TIERS`; user-defined tiers of the same name override these (see `resolve_tier`). */
