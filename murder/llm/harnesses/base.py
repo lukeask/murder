@@ -110,6 +110,8 @@ class HarnessSession:
         )
         if start_spec.resume_session_id is not None:
             self.adapter.resume_session_id = start_spec.resume_session_id
+        if start_spec.binary is not None:
+            self.adapter.binary = start_spec.binary
         await tmux.create_session(
             self.session,
             start_spec.cwd,
@@ -331,9 +333,14 @@ class HarnessAdapter(ABC):
         self,
         startup_model: str | None = None,
         startup_effort: str | None = None,
+        binary: str | None = None,
     ) -> None:
         self.startup_model = startup_model
         self.startup_effort = startup_effort
+        # Optional CLI binary override (argv[0]). None → adapter's built-in
+        # default. Set from the start spec in HarnessSession.start(); read by
+        # startup_cmd implementations that support a configurable binary.
+        self.binary = binary
         # The murder-owned system prompt injected as this session's first user
         # message. Set by the agent at start() so markerless transcript parsers
         # (cursor, pi) can strip it instead of mislabelling it as chat turns.

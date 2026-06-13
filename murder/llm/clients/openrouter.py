@@ -7,6 +7,7 @@ import os
 from murder.llm.clients.chat_completions import ChatCompletionsClient
 
 OPENROUTER_BASE = "https://openrouter.ai/api/v1"
+DEFAULT_REFERER = "https://github.com/murder-project/murder"
 
 
 class OpenRouterClient(ChatCompletionsClient):
@@ -14,9 +15,10 @@ class OpenRouterClient(ChatCompletionsClient):
         self,
         api_key: str | None = None,
         base_url: str = OPENROUTER_BASE,
-        http_referer: str = "https://github.com/lukeask/murder",
+        http_referer: str | None = None,
         app_title: str = "murder",
     ) -> None:
+        http_referer = http_referer or os.environ.get("OPENROUTER_REFERER") or DEFAULT_REFERER
         key = api_key or os.environ.get("OPENROUTER_API_KEY", "")
         if not key:
             raise RuntimeError("OPENROUTER_API_KEY is unset")

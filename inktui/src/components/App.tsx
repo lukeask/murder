@@ -50,6 +50,7 @@ import { useTerminalSize } from '../hooks/useTerminalSize.js';
 import type { ActionId } from '../input/bindings.js';
 import { expandSpans, spanIds } from '../input/chatInputStore.js';
 import { readClipboardImage } from '../input/clipboardImage.js';
+import { type CommandCtx, dispatchCommand } from '../input/commandDispatch.js';
 import type { ChatInputHandler } from '../input/dispatcher.js';
 import { type FocusId, selectEffectiveFocus } from '../input/focusStore.js';
 import { selectActiveMode } from '../input/modeStore.js';
@@ -254,6 +255,7 @@ export function makeChatInputHandler(
   chatInput: InputStores['chatInput'],
   appStore: AppStoreApi,
   imageDraft: ImageDraftStoreApi,
+  commandCtx: CommandCtx,
 ): ChatInputHandler {
   return {
     handleKey(input, key): boolean {
@@ -315,8 +317,12 @@ export function makeChatInputHandler(
               appStore.getState().roster,
               appStore.getState().favorites,
             );
-            if (agentId !== null) {
-              void appStore.getState().actions.conversations.send(agentId, message);
+            // Prefix dispatcher (Workstream E): `/` → harness passthrough, `:` → murder command,
+            // anything else → false (fall through to the normal send below). Routed in ONE place.
+            if (!dispatchCommand(message, agentId, commandCtx)) {
+              if (agentId !== null) {
+                void appStore.getState().actions.conversations.send(agentId, message);
+              }
             }
           }
           // Drop the drafts now that they're expanded/stripped — the buffer is clearing.
@@ -723,6 +729,28 @@ function Shell({
     }
   };
 
+  // Workstream E: the capability bag the chat-input prefix dispatcher (`commandDispatch`) needs.
+  // Built here where the bus, modes, and the help/note handlers are all in scope — the dispatcher
+  // stays a pure function over these capabilities (no store handles leak into it).
+  //  - `captureNote` mirrors `quickNoteHandler`'s submit path (fire-and-forget, auto-titled).
+  //  - `openHelp` reuses the `?` handler so `:help` and `?` open the identical overlay.
+  //  - `dismiss` is omitted for v0: the panel architecture has no uniform "dismiss" concept yet, so
+  //    `:dismiss` no-ops with a toast (see commandDispatch). Wire it when one exists.
+  const commandCtx: CommandCtx = {
+    sendKey: (agentId, key, literal) => {
+      void appStore.getState().actions.conversations.sendKey(agentId, key, literal);
+    },
+    openHelp: keyHelpHandler,
+    captureNote: (text) => {
+      void submitCommand(bus, 'notetaker.capture.submit', { raw: text }).catch((error: unknown) => {
+        const message = error instanceof Error ? error.message : String(error);
+        toastStore.getState().push(message, { severity: 'error', ttlMs: 6000 });
+      });
+      toastStore.getState().push('note captured', { ttlMs: 3000 });
+    },
+    pushToast: (text, options) => toastStore.getState().push(text, options),
+  };
+
   // The single root input loop for the whole app (rule 5) — installed exactly once, here.
   // C13: `spawn` wired to the spawn wizard handler. C11: `chatInput` wired to the persistent
   // chat-input handler (buffers chars, sends on Enter to the active agent). Global ctrl-chords still
@@ -742,7 +770,7 @@ function Shell({
       murderConfirm: murderConfirmHandler,
       murderCancel: () => murderConfirmStore.getState().clear(),
       closePane: closePaneHandler,
-      chatInput: makeChatInputHandler(chatInput, appStore, imageDraft),
+      chatInput: makeChatInputHandler(chatInput, appStore, imageDraft, commandCtx),
     },
     terminalEvents,
   );

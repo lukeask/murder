@@ -20,6 +20,7 @@ import { ChatInput } from '../../src/components/ChatInput.js';
 import { AppStoreProvider } from '../../src/hooks/useAppStore.js';
 import { InputStoresProvider } from '../../src/hooks/useInputStores.js';
 import { useRootInput } from '../../src/hooks/useRootInput.js';
+import type { CommandCtx } from '../../src/input/commandDispatch.js';
 import { createInputStores } from '../../src/input/createInputStores.js';
 import { createImageDraftStore } from '../../src/store/imageDraft/imageDraftStore.js';
 import { createAppStore } from '../../src/store/store.js';
@@ -62,9 +63,18 @@ function Harness({
     // Wire the persistent chat handler exactly as App.tsx's Shell does. F9: an image-draft store is
     // threaded in (no images pasted in these tests, so a bare FakeBusClient-backed one suffices).
     const imageDraft = createImageDraftStore(new FakeBusClient());
+    // Workstream E: the chat handler now takes a CommandCtx for the `:`/`/` prefix dispatcher. These
+    // tests never type a prefix, so a no-op ctx is sufficient (the dispatcher returns false → normal
+    // send path runs, exactly as before).
+    const commandCtx: CommandCtx = {
+      sendKey: () => {},
+      openHelp: () => {},
+      captureNote: () => {},
+      pushToast: () => 0,
+    };
     useRootInput({
       ...(spawn !== undefined ? { spawn } : {}),
-      chatInput: makeChatInputHandler(inputStores.chatInput, store, imageDraft),
+      chatInput: makeChatInputHandler(inputStores.chatInput, store, imageDraft, commandCtx),
     });
     return null;
   }

@@ -1,61 +1,35 @@
-<div align="center">
+# murder
 
-# 🐦‍⬛ murder
+Multi-agent AI orchestrator — run Claude Code, Codex, and Cursor crows side-by-side from a single terminal.
 
-**An agentic dev harness — a murder of crows for your codebase.**
+## Requirements
 
-[![python](https://img.shields.io/badge/python-≥3.10-blue?logo=python&logoColor=white)](pyproject.toml)
-[![status](https://img.shields.io/badge/status-WIP-orange)](README.md)
-[![license](https://img.shields.io/badge/license-MIT-lightgrey)](LICENSE)
+- Python 3.12+
+- Node.js 20+
+- tmux
 
-</div>
+## Install
 
-> [!NOTE]
-> Placeholder readme. Everything below is in flux.
-
-> *the crows have notes.*
-
-<details open>
-<summary><b>⚡ start</b></summary>
-
-```bash
-uv sync
-uv run murder init
-uv run murder
+```shell
+pip install murder
 ```
 
-Bare <kbd>murder</kbd> opens the TUI.
+## Quickstart
 
-</details>
+1. `murder init` — scaffold `.murder/` and `roles.yaml` in your project
+2. Set at least one API key (e.g. `ANTHROPIC_API_KEY=...`)
+3. `murder` — launch the TUI
 
-<details>
-<summary><b>🔪 commands</b></summary>
+Run `murder doctor` to check all prerequisites.
 
-| cmd | does |
-| --- | --- |
-| `murder` | launch the TUI |
-| `murder down` | stop the service |
-| `murder down -s NAME` | stop a named service from `murder ls` |
-| `murder id` | print this directory's service session id |
-| `murder ls` | list running service instances |
-| `murder kick` | kick off a ticket |
-| `murder init` | scaffold a project |
+## Harnesses
 
+murder supports three first-class AI coding harnesses: Claude Code, Codex, and Cursor. See [KNOWN_LIMITATIONS.md](KNOWN_LIMITATIONS.md) for current limitations and [CONTRIBUTING.md](CONTRIBUTING.md) for development setup.
 
-</details>
+## Keys (TUI)
 
-<details>
-<summary><b>🧪 dev</b></summary>
-
-```bash
-uv sync
-uv run pytest
-```
-
-→ [CONTRIBUTING.md](CONTRIBUTING.md)
-
-</details>
-
----
-
-<sub>readme subject to murder · v0.0.1</sub>
+- `?` — help overlay
+- `alt+s` — spawn a crow
+- `ctrl+1`–`ctrl+5` — switch panels (plans/crows/schedule/tickets/history)
+- `:help` — list commands
+- `/…` — pass command to active harness

@@ -315,6 +315,28 @@ def test_codex_set_model_trusts_startup_model_after_picker_mismatch(fake_tmux: F
     assert ok is True
 
 
+def test_codex_set_model_polls_for_late_effort_submenu(fake_tmux: FakeTmux) -> None:
+    # Regression for the fixed-sleep wrong-effort hazard: after picking the model
+    # row, the effort sub-menu can render a beat late. The old code captured once
+    # after a fixed 0.6s sleep, read an empty pane, and silently kept the default
+    # effort. The picker now POLLS for the sub-menu, so a late render still lands
+    # the requested effort. The empty pane below stands in for "not rendered yet".
+    fake_tmux.queue_pane(CODEX_IDLE_FOO_MEDIUM.replace("modelnamefoo", "modelnamebar"))
+    fake_tmux.queue_pane(CODEX_IDLE_FOO_MEDIUM.replace("modelnamefoo", "modelnamebar"))
+    fake_tmux.queue_pane(CODEX_MODEL_PICKER)
+    fake_tmux.queue_pane(CODEX_MODEL_PICKER)
+    fake_tmux.queue_pane("")  # effort sub-menu not painted on first poll
+    fake_tmux.queue_pane(CODEX_REASONING_PICKER)  # appears on a later poll
+    fake_tmux.queue_pane(CODEX_IDLE_FOO_MEDIUM)
+
+    ok = asyncio.run(CodexAdapter().set_model("sess", "modelnamefoo", effort="medium"))
+
+    assert ok is True
+    sent = [args[1] for args, _ in fake_tmux.calls_to("send_keys")]
+    # "2" = medium reasoning index — applied despite the first poll being blank.
+    assert "2" in sent
+
+
 CURSOR_COMPOSER_MENU_SLOW = """
 Available models
 
@@ -525,3 +547,21 @@ def test_pi_active_model_state_from_status_bar() -> None:
     assert state is not None
     assert state.model == "deepseek/deepseek-v4-flash"
     assert state.effort == "high"
+
+
+CURSOR_IDLE_COMPOSER_RUN_EVERYTHING = """
+  → Plan, search, build anything
+  Composer 2.5                                                                   Run Everything
+  ~/Documents/code/testingmurderharness
+"""
+
+
+def test_cursor_active_model_state_parses_run_everything_status_line() -> None:
+    # CLI ≥ 2026.06.11 renders the yolo mode as "Run Everything" where older
+    # builds said "Auto-run". The status line must still parse, or set_model's
+    # verify loop fails and the freshly spawned rogue is reaped as dead.
+    state = CursorAdapter().parse_active_model_state(CURSOR_IDLE_COMPOSER_RUN_EVERYTHING)
+
+    assert state is not None
+    assert state.model == "composer-2.5"
+    assert state.effort is None

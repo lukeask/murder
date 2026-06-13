@@ -56,6 +56,11 @@ CODEX_STARTUP = _load("codex_startup.txt")
 CURSOR_IDLE = _load("cursor_idle.txt")
 CURSOR_BUSY = _load("cursor_busy.txt")
 CURSOR_STARTUP = _load("cursor_startup.txt")
+# Real capture (CLI 2026.06.11): idle pane whose input box holds restored text
+# (after an interrupt-restart), so cursor paints the `→ <text>` line with the
+# input background. The transcript grammar marks input-bg lines as chrome; that
+# mark used to break is_idle and latch live_state at "working".
+CURSOR_IDLE_INPUT_FILLED = _load("cursor_idle_input_filled.txt")
 
 PI_IDLE = _load("pi_idle.txt")
 PI_BUSY = _load("pi_busy.txt")
@@ -249,6 +254,26 @@ class TestCodexAdapter:
 class TestCursorAdapter:
     cu = CursorAdapter()
 
+    # ── binary config field ───────────────────────────────────────────────────
+
+    def test_startup_cmd_default_binary_is_agent(self):
+        assert CursorAdapter().startup_cmd(Path("/tmp")) == ["agent", "--yolo"]
+
+    def test_startup_cmd_uses_binary_override(self):
+        adapter = CursorAdapter(binary="cursor-agent")
+        assert adapter.startup_cmd(Path("/tmp")) == ["cursor-agent", "--yolo"]
+
+    def test_start_spec_binary_propagates_to_startup_cmd(self):
+        from murder.llm.harnesses.models import HarnessStartSpec
+
+        adapter = CursorAdapter()
+        # HarnessSession.start() copies spec.binary onto the adapter; emulate the
+        # single line that does so to assert the wiring end to end.
+        spec = HarnessStartSpec(cwd=Path("/tmp/repo"), binary="custom-bin")
+        if spec.binary is not None:
+            adapter.binary = spec.binary
+        assert adapter.startup_cmd(Path("/tmp/repo")) == ["custom-bin", "--yolo"]
+
     # ── idle fixture ──────────────────────────────────────────────────────────
 
     def test_idle_pane_is_idle(self):
@@ -259,6 +284,24 @@ class TestCursorAdapter:
 
     def test_idle_pane_not_busy(self):
         assert self.cu.is_busy(CURSOR_IDLE) is False
+
+    def test_idle_with_filled_input_is_idle_raw_and_preprocessed(self):
+        # The input box holding restored text is still an idle pane. is_idle must
+        # report True on both the raw frame AND the grammar-preprocessed frame
+        # (input-bg lines marked as chrome) — otherwise the accumulator latches
+        # live_state at "working" and a queued message never delivers.
+        from murder.llm.harnesses.transcripts.grammar.cursor import preprocess_frame
+
+        assert self.cu.is_idle(CURSOR_IDLE_INPUT_FILLED) is True
+        assert self.cu.is_idle(preprocess_frame(CURSOR_IDLE_INPUT_FILLED)) is True
+        assert self.cu.is_busy(CURSOR_IDLE_INPUT_FILLED) is False
+
+    def test_idle_with_filled_input_accumulator_state_is_awaiting_input(self):
+        from murder.llm.harnesses.transcripts import TranscriptAccumulator
+
+        acc = TranscriptAccumulator("cursor")
+        acc.feed(CURSOR_IDLE_INPUT_FILLED)
+        assert acc.to_dict()["state"] == "awaiting_input"
 
     # ── startup fixture (same shape as idle for Cursor) ───────────────────────
 

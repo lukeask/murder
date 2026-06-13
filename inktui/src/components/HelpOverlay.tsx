@@ -113,6 +113,20 @@ export function buildHelpGroups(
     });
   }
 
+  // Command scope (Workstream E) — the chat-input prefix dispatcher's surface. `:` = murder command,
+  // `/` = verbatim passthrough to the active harness. Documented statically (these are input prefixes,
+  // not chords in the keymap registry).
+  groups.push({
+    title: 'Commands',
+    entries: [
+      { key: '/…', description: 'passthrough to harness' },
+      { key: ':help', description: 'this overlay' },
+      { key: ':note <text>', description: 'quick note' },
+      { key: ':compact', description: 'coming soon' },
+      { key: ':resume', description: 'use r in history panel' },
+    ],
+  });
+
   // Mode scope — the conventions shared by the modal surfaces (their keymaps only register while the
   // mode is up, so they are documented statically here).
   groups.push({
