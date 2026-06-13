@@ -223,6 +223,37 @@ class ReportsSnapshot:
 
 
 @dataclass(frozen=True, slots=True)
+class HistoryItemSummary:
+    """One user-message intention as the history view cares about it.
+
+    Derived (not stored) from the durable ``conversation_blocks kind='user'``
+    spine joined against the ``history_status`` overlay. ``status`` is the
+    zero-LLM v0 taxonomy (``open`` / ``stale`` / ``dismissed``). The
+    resumability triple (``harness`` / ``conversation_status`` / ``resumable``)
+    is carried from day one so the /resume keybind is additive on this panel.
+    """
+
+    item_id: str
+    text: str
+    target: str
+    ts: str
+    status: str
+    harness: str | None
+    conversation_status: str
+    resumable: bool
+
+
+@dataclass(frozen=True, slots=True)
+class HistorySnapshot:
+    items: tuple[HistoryItemSummary, ...]
+    as_of: datetime
+    invalidation_key: str
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "items", tuple(self.items))
+
+
+@dataclass(frozen=True, slots=True)
 class SchedulerDecisionSummary:
     harness: str
     decision: int
@@ -397,6 +428,7 @@ class InvalidationKeys:
     reports: ClassVar[str] = "reports"
     settings: ClassVar[str] = "settings"
     conversations: ClassVar[str] = "conversations"
+    history: ClassVar[str] = "history"
 
     @staticmethod
     def ticket_detail(ticket_id: str) -> str:
@@ -423,6 +455,8 @@ class MurderServiceClient(Protocol):
     async def get_notes_snapshot(self) -> NotesSnapshot: ...
 
     async def get_reports_snapshot(self) -> ReportsSnapshot: ...
+
+    async def get_history_snapshot(self) -> HistorySnapshot: ...
 
     async def get_conversations_snapshot(self) -> ConversationsSnapshot: ...
 

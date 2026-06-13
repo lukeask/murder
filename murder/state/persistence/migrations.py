@@ -716,6 +716,31 @@ def _migrate_scheduler_steering(conn: sqlite3.Connection) -> None:
         )
 
 
+def _migrate_history_status(conn: sqlite3.Connection) -> None:
+    """Add the history_status overlay table (history view, v0).
+
+    Idempotent: the CREATE TABLE IF NOT EXISTS in SCHEMA_SQL handles fresh DBs;
+    this migration handles existing DBs created before the history view landed.
+    """
+    existing = {
+        row["name"]
+        for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table'"
+        ).fetchall()
+    }
+    if "history_status" not in existing:
+        conn.executescript(
+            """
+            CREATE TABLE history_status (
+                item_id     TEXT PRIMARY KEY,
+                status      TEXT NOT NULL,
+                status_note TEXT,
+                updated_at  TEXT NOT NULL
+            );
+            """
+        )
+
+
 def _migrate_conversation_store(conn: sqlite3.Connection) -> None:
     """Add conversations + conversation_blocks tables (Phase 1.b JSON store).
 

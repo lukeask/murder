@@ -431,6 +431,18 @@ CREATE TABLE IF NOT EXISTS map_summaries (
 );
 
 CREATE INDEX IF NOT EXISTS idx_map_summaries_commit ON map_summaries(commit_sha);
+
+-- history_status: zero-LLM overlay over the durable user-message spine
+-- (conversation_blocks kind='user'). The history view derives OPEN/STALE from
+-- the block timestamp; a row here records an explicit terminal status. v0 only
+-- ever writes 'dismissed'; the later LLM resolver writes richer statuses into
+-- the same table without a schema change. Keyed by "<conversation_id>:<ordinal>".
+CREATE TABLE IF NOT EXISTS history_status (
+    item_id     TEXT PRIMARY KEY,
+    status      TEXT NOT NULL,
+    status_note TEXT,
+    updated_at  TEXT NOT NULL
+);
 """
 # fmt: on
 
@@ -476,6 +488,7 @@ def init_db(conn: sqlite3.Connection) -> None:
         _migrate_drop_sentinel,
         _migrate_drop_ticket_write_set,
         _migrate_events_schema_version,
+        _migrate_history_status,
         _migrate_map_summaries,
         _migrate_notes_identity_status,
         _migrate_plans_single_master,
@@ -517,6 +530,7 @@ def init_db(conn: sqlite3.Connection) -> None:
     _migrate_conversation_queued_message(conn)
     _migrate_map_summaries(conn)
     _migrate_scheduler_steering(conn)
+    _migrate_history_status(conn)
     ensure_notetaker_context_row(conn)
 
 

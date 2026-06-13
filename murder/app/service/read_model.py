@@ -16,6 +16,8 @@ from murder.app.service.client_api import (
     ConversationSummary,
     CrowSessionSummary,
     CrowSnapshot,
+    HistoryItemSummary,
+    HistorySnapshot,
     InvalidationKeys,
     NoteDisplaySnapshot,
     NotesSnapshot,
@@ -30,6 +32,7 @@ from murder.app.service.client_api import (
     TicketDetailSnapshot,
 )
 from murder.app.service.schedule_snapshot import build_schedule_snapshot
+from murder.state.persistence import history as history_store
 from murder.state.persistence import tickets as ticket_store
 from murder.state.persistence.schema import get_db
 from murder.state.storage.paths import report_md
@@ -41,6 +44,14 @@ TERMINAL_TICKET_STATUSES = frozenset({"done", "failed"})
 
 # Hide failed agents after this long without a recent heartbeat.
 FAILED_STALE_AFTER = timedelta(hours=2)
+
+# A still-OPEN user intention older than this (and not explicitly dismissed) is
+# surfaced as STALE — the zero-LLM "fell through the cracks" radar. v0 taxonomy.
+STALE_AFTER_HOURS = 48
+
+# The harness kind whose graceful-exit sessions can be resumed (/resume keybind,
+# built on this DTO's resumability triple). Mirrors ClaudeCodeAdapter.kind.
+RESUMABLE_HARNESS = "claude_code"
 
 
 def _keep_failed_session(session: CrowSessionSummary, *, now: datetime) -> bool:
@@ -172,6 +183,72 @@ class ServiceReadModel:
             reports=reports,
             as_of=as_of,
             invalidation_key=self.current_key(InvalidationKeys.reports),
+        )
+
+    def get_history_snapshot(self) -> HistorySnapshot:
+        """Build the user-intention history feed.
+
+        The spine is the durable ``conversation_blocks kind='user'`` record
+        (written at the send boundary). Each row is joined against its
+        conversation (for harness/session/status) and the ``history_status``
+        overlay, then a zero-LLM status is derived per row. The view filters
+        (loose-threads vs all) and orders client-side; this returns the full,
+        noise-filtered feed in newest-first order with derived state.
+        """
+        as_of = datetime.utcnow()
+        stale_before = as_of - timedelta(hours=STALE_AFTER_HOURS)
+        with closing(self._connect()) as conn:
+            overlay = history_store.get_status_map(conn)
+            rows = conn.execute(
+                """
+                SELECT b.conversation_id, b.ordinal, b.payload_json,
+                       b.service_received_at,
+                       c.agent_id, c.harness, c.harness_session_id,
+                       c.status AS conversation_status
+                  FROM conversation_blocks b
+                  JOIN conversations c
+                    ON c.conversation_id = b.conversation_id
+                 WHERE b.kind = 'user'
+                 ORDER BY b.service_received_at DESC, b.conversation_id, b.ordinal DESC
+                """
+            ).fetchall()
+        items: list[HistoryItemSummary] = []
+        for row in rows:
+            text = _extract_user_text(row["payload_json"])
+            if _is_noise(text):
+                continue
+            item_id = f"{row['conversation_id']}:{int(row['ordinal'])}"
+            ts = str(row["service_received_at"])
+            overlay_row = overlay.get(item_id)
+            if overlay_row is not None and overlay_row[0] == "dismissed":
+                status = "dismissed"
+            elif _is_stale(ts, stale_before):
+                status = "stale"
+            else:
+                status = "open"
+            harness = _optional_str(row["harness"])
+            conversation_status = str(row["conversation_status"])
+            resumable = (
+                harness == RESUMABLE_HARNESS
+                and conversation_status == "complete"
+                and bool(row["harness_session_id"])
+            )
+            items.append(
+                HistoryItemSummary(
+                    item_id=item_id,
+                    text=text,
+                    target=str(row["agent_id"]),
+                    ts=ts,
+                    status=status,
+                    harness=harness,
+                    conversation_status=conversation_status,
+                    resumable=resumable,
+                )
+            )
+        return HistorySnapshot(
+            items=tuple(items),
+            as_of=as_of,
+            invalidation_key=self.current_key(InvalidationKeys.history),
         )
 
     def get_ticket_detail(self, ticket_id: str) -> TicketDetailSnapshot:
@@ -512,6 +589,49 @@ def _strip_frontmatter(md_text: str) -> str:
     if body.startswith("\n"):
         body = body[1:]
     return body
+
+
+def _extract_user_text(payload_json: object) -> str:
+    """Extract the user turn's text from a stored block payload.
+
+    User blocks are stored as ``{"type": "user", "text": ...}`` (see
+    ``conversation.append_user_message``). Returns the stripped text, or the
+    empty string if the payload is malformed or has no text.
+    """
+    if not isinstance(payload_json, str) or not payload_json:
+        return ""
+    try:
+        data = json.loads(payload_json)
+    except (ValueError, TypeError):
+        return ""
+    if not isinstance(data, dict):
+        return ""
+    text = data.get("text")
+    return text.strip() if isinstance(text, str) else ""
+
+
+def _is_noise(text: str) -> bool:
+    """Whether a user line is command-ish noise the feed should drop.
+
+    Skips empty/whitespace lines and command-ish lines (leading ``!`` or ``:``).
+    Keeps ``@…`` lines — those are intentions aimed at a target, the feed's whole
+    point. Mirrors the plan's server-side noise filter.
+    """
+    if not text:
+        return True
+    return text[0] in ("!", ":")
+
+
+def _is_stale(ts: str, stale_before: datetime) -> bool:
+    """Whether a user block's timestamp is older than the stale cutoff.
+
+    A malformed/missing timestamp is treated as NOT stale (better to surface an
+    OPEN item than to hide it as stale on a parse failure).
+    """
+    parsed = _parse_datetime(ts)
+    if parsed is None:
+        return False
+    return parsed < stale_before
 
 
 def _optional_str(value: object) -> str | None:
