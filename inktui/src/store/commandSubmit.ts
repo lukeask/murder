@@ -37,9 +37,29 @@ const POLL_INTERVAL_MS = 100;
 /** Max number of status polls before giving up (keeps a failed/stuck command from hanging forever). */
 const MAX_POLLS = 600; // ~60s at 100ms — generous for spawn (the slowest command).
 
+/**
+ * Max consecutive `command.status` poll rejections to tolerate before giving up. A mid-command
+ * socket drop rejects the in-flight `command.status` RPC (the UdsBusClient fails all pending RPCs on
+ * disconnect), but the command is still running server-side under the SAME `command_id` — and the
+ * UdsBusClient auto-reconnects. So a transient blip should NOT orphan the command: we re-poll the
+ * same `command_id` until the connection comes back (resume-by-command_id), bounded so a truly dead
+ * connection still terminates instead of looping forever. A successful poll resets the counter.
+ */
+const MAX_POLL_RETRIES = 50; // ~5s of reconnect grace at 100ms between retries.
+
 /** Resolve after `ms` milliseconds. Extracted so tests can stub timing if needed. */
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Whether a `command.status` rejection is a permanent give-up (the client itself was closed/shut
+ * down) versus a transient drop the auto-reconnect will recover from. We detect the permanent case
+ * by message so this helper stays transport-agnostic (no import of the concrete error class).
+ */
+function isClientClosed(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.includes('client is closed') || message.includes('client closed');
 }
 
 /**
@@ -65,8 +85,23 @@ export async function submitCommand(
     throw new Error(`${kind}: command.submit returned no command_id`);
   }
 
+  let retries = 0;
   for (let i = 0; i < MAX_POLLS; i++) {
-    const status = await bus.rpc('command.status', { command_id: commandId });
+    let status: import('../bus/BusClient.js').CommandStatusResult;
+    try {
+      status = await bus.rpc('command.status', { command_id: commandId });
+    } catch (error: unknown) {
+      // Resume-by-command_id: a mid-command socket drop rejects this poll, but the command keeps
+      // running server-side and the UdsBusClient auto-reconnects. Re-poll the SAME `command_id`
+      // through the blip rather than reporting a phantom failure for a command that may still
+      // complete. Give up only if the client is permanently closed or we exhaust the retry grace.
+      if (isClientClosed(error) || ++retries > MAX_POLL_RETRIES) {
+        throw error;
+      }
+      await delay(POLL_INTERVAL_MS);
+      continue;
+    }
+    retries = 0; // a successful poll clears the transient-failure budget.
     if (status.status === 'done') {
       const raw = status.result_json;
       return raw != null && raw !== '' ? (JSON.parse(raw) as RpcPayload) : {};

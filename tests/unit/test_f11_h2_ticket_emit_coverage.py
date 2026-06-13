@@ -1,7 +1,7 @@
 """F11 H2 — Ticket-status emit-site coverage audit.
 
 Centerpiece of H2: a row-by-row walk of the F1 coverage table's TICKET section
-([[newui-finalpush]] § "F1 coverage audit"), asserting every ticket-status
+(v0push § "F1 coverage audit"), asserting every ticket-status
 mutation that runs *inside the service* funnels its key-only
 ``state.snapshot{entity=ticket, key=<ticket_id>}`` through the established choke
 points. The four sites the review flagged as "no typed event today" are the

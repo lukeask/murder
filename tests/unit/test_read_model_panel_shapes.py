@@ -1,7 +1,7 @@
 """Backend DTO-shape coverage for the C8 ticket editor and C11 plans panel.
 
 Asserts that the read-model snapshots carry the fields the canonical Ink render
-specs (newui-inktui C8 / C11) consume:
+specs (v0push C8 / C11) consume:
 
 * ``TicketDetailSnapshot``: a unified frontmatter-stripped ``body`` (preserving the
   ``# Checklist`` lines), display-only header fields (``deps``/``harness``/``model``/

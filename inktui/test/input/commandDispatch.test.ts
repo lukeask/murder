@@ -143,4 +143,16 @@ describe('dispatchCommand — plain text', () => {
     expect(dispatchCommand('see https://example.com', AGENT, ctx)).toBe(false);
     expect(dispatchCommand('ratio 3:4', AGENT, ctx)).toBe(false);
   });
+
+  it('a leading-whitespace prefix is plain text, not a command (anchored at index 0)', () => {
+    // The contract is "the FIRST character selects routing": `startsWith`, no trim. Leading
+    // whitespace before `:`/`/` must NOT route as a command, and crucially the prefix handlers must
+    // not fire. These cases fail under a `.includes(':')`-style check, unlike the cases above.
+    const ctx = makeCtx();
+    expect(dispatchCommand('  :help', AGENT, ctx)).toBe(false);
+    expect(dispatchCommand(' /compact', AGENT, ctx)).toBe(false);
+    expect(ctx.openHelp).not.toHaveBeenCalled();
+    expect(ctx.sendKey).not.toHaveBeenCalled();
+    expect(ctx.pushToast).not.toHaveBeenCalled();
+  });
 });

@@ -11,12 +11,15 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any
 
 # Re-export from bus to keep StrEnum definitions in one place.
 from murder.bus import AgentStatus
 from murder.bus import Role as AgentRole
+
+LOGGER = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from murder.llm.harnesses.base import HarnessAdapter
@@ -448,13 +451,19 @@ class HarnessBackedAgent(LifecycleParticipant):
         session_id: str | None = None
         exit_cmd = self.harness.graceful_exit_command()
         if exit_cmd is not None:
-            with contextlib.suppress(Exception):
+            try:
                 from murder.runtime.terminal import tmux
 
                 await tmux.send_keys(self.session, exit_cmd)
                 await asyncio.sleep(0.5)
                 pane = await tmux.capture_pane(self.session, lines=40)
                 session_id = self.harness.extract_resume_session_id(pane)
+            except Exception:
+                # Best-effort: a later /resume will report "no resumable session
+                # id"; leave a breadcrumb so the loss isn't silent.
+                LOGGER.debug(
+                    "resume session-id capture failed for %s", self.id, exc_info=True
+                )
         from murder.state.persistence import conversation
 
         if session_id is not None:

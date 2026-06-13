@@ -58,6 +58,15 @@ describe('spawnWizardMachine — defaults + ordering', () => {
 });
 
 describe('spawnWizardMachine — effort matrix mirrors backend adapter enums', () => {
+  // DRIFT RISK (code-review jun13): this matrix is hand-mirrored from the Python harness adapters
+  // and pinned by TS expectations ONLY — there is no cross-language golden, so backend changes here
+  // pass green while the spawn wizard silently diverges.
+  // KNOWN DIVERGENCE: `antigravity.py` now declares `supported_efforts = ("low", "medium", "high")`,
+  // `default_effort = "medium"` — but the TS source (`effortMatrixFor`) still returns NO effort for
+  // antigravity, and the case below pins that stale behavior. This is a real product drift in the TS
+  // source, not just a test gap; left here as a flagged follow-up (the source fix is out of scope for
+  // this test pass). Proper fix: have the Python adapter tests emit the per-harness effort matrices
+  // into a fixture this file imports, the way the DTO goldens already work.
   it('claude_code: low/medium/high/xhigh/max, default medium (claude_code.py:33)', () => {
     expect(effortMatrixFor('claude_code')).toEqual({
       options: ['low', 'medium', 'high', 'xhigh', 'max'],

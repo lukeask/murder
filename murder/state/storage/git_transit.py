@@ -79,7 +79,7 @@ def _resolve_main_branch(repo_root: Path, worktrees) -> str:
     Prefer the literal ``main``; otherwise fall back to the branch of the
     worktree git marks as the main checkout (``is_main``).
     """
-    rc, _out = _git(repo_root, "rev-parse", "--verify", "--quiet", "main")
+    rc, _out = _git(repo_root, "rev-parse", "--verify", "--quiet", "refs/heads/main")
     if rc == 0:
         return "main"
     for entry in worktrees:
@@ -122,13 +122,17 @@ def _parse_log(text: str) -> tuple[TransitCommit, ...]:
 
 
 def _lane_commits(repo_root: Path, branch: str) -> tuple[TransitCommit, ...]:
+    # Qualify the ref as refs/heads/<branch> so a branch name like ``--all`` or
+    # ``-n5`` can't be parsed as a git flag, and append ``--`` so it can't be
+    # taken as a pathspec.
     rc, out = _git(
         repo_root,
         "log",
-        branch,
         f"--max-count={TRANSIT_MAX_COMMITS}",
         f"--since={TRANSIT_SINCE}",
         f"--format={_LOG_FORMAT}",
+        f"refs/heads/{branch}",
+        "--",
     )
     if rc != 0:
         return ()
@@ -157,12 +161,24 @@ def build_transit_snapshot(repo_root: Path) -> TransitSnapshot:
     lanes: list[TransitLane] = []
     for branch, worktree_path in lane_specs:
         is_main = branch == main_branch
-        rc, head_out = _git(repo_root, "rev-parse", branch)
+        # Qualify as refs/heads/<branch> so the rev never resolves to a flag or
+        # pathspec; an unborn/detached HEAD or a non-existent main fails here.
+        rc, head_out = _git(repo_root, "rev-parse", "--verify", f"refs/heads/{branch}")
         head_sha = head_out.strip() if rc == 0 else ""
+        if not head_sha:
+            # No resolvable branch head (empty repo, detached HEAD, or a main
+            # that doesn't exist as a branch): skip the lane rather than emit one
+            # with an empty sha the rail can't render.
+            continue
 
         fork_sha: str | None = None
         if not is_main:
-            rc, mb_out = _git(repo_root, "merge-base", main_branch, branch)
+            rc, mb_out = _git(
+                repo_root,
+                "merge-base",
+                f"refs/heads/{main_branch}",
+                f"refs/heads/{branch}",
+            )
             if rc == 0 and mb_out.strip():
                 fork_sha = mb_out.strip()
 

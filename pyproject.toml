@@ -87,7 +87,14 @@ disallow_untyped_decorators = false
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# `auto` so an un-marked `async def test_...` actually runs instead of being
+# collected and silently passing without execution. Tests using the explicit
+# `@pytest.mark.asyncio` marker continue to work unchanged.
+asyncio_mode = "auto"
 markers = [
     "smoke: real cursor/CC/API; requires MURDER_MANUAL_SMOKE=1",
     "integration: needs a live tmux server",
+    "slow: slow test (real subprocess/git); deselect with -m 'not slow'",
+    "live: needs live vendor CLIs/network; gated behind an env var",
+    "quarantine: known-flaky; excluded from the default run",
 ]

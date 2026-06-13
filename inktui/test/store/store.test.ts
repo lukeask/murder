@@ -256,6 +256,33 @@ describe('event-driven slice invalidation', () => {
     expect(fake.rpcCalls).toEqual([]);
   });
 
+  it('survives a malformed state.snapshot (missing/null entity) without crashing or pulling', async () => {
+    // The bus is the one untrusted, cross-process/cross-language boundary. A garbage `state.snapshot`
+    // with a null/absent `entity` must not throw out of the subscription nor invalidate any slice —
+    // the entity comparison simply never matches, so no rpc fires and the store stays usable.
+    const { fake, store } = setup();
+    const rosterBefore = store.getState().roster;
+
+    expect(() => {
+      // Cast through unknown: this is a deliberately ill-typed payload, the kind a buggy producer
+      // could put on the wire.
+      fake.emit({
+        type: 'state.snapshot',
+        id: 'evt-bad',
+        ts: '2026-06-08T00:00:00Z',
+        run_id: 'run-1',
+        agent_id: '',
+        entity: null,
+        key: 'k-bad',
+        entity_version: 1,
+      } as unknown as StateSnapshotEvent);
+    }).not.toThrow();
+    await flush();
+
+    expect(fake.rpcCalls).toEqual([]);
+    expect(store.getState().roster).toBe(rosterBefore);
+  });
+
   it('ref-swaps ONLY the changed slice — sibling keys keep identity', async () => {
     const { fake, store } = setup();
     const rosterBefore = store.getState().roster;

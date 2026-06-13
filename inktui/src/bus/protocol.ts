@@ -229,8 +229,13 @@ export interface ConversationStateEvent extends BaseEvent {
 }
 
 /**
- * Raw ANSI frame from tmux for the focused pane. Streamed **only** while the tmux fullscreen mode
- * is active (`ctrl+y`); the subscription is opened on enter and closed on exit (no standing cost).
+ * Raw ANSI frame from tmux for the focused pane. The CLIENT subscribes on `ctrl+y` enter and
+ * disposes on exit. CAVEAT — the disposer is LOCAL-only: the wire protocol has no `unsub` op, so
+ * the server keeps streaming frames over the multiplexed connection until the whole connection
+ * closes; the client simply stops fanning them out (see `UdsBusClient.subscribe`'s disposer). So
+ * this is NOT a zero standing cost after exit — the frames keep arriving and are dropped client-
+ * side. Closing that gap for real needs a server-side per-subscription teardown op (a `unsub`
+ * frame the server honours), which the bus does not yet expose. Track that as the real fix.
  *
  * Mirrors `TmuxFrameEvent` in `murder/bus/protocol.py` — both added in F6, `PROTOCOL_VERSION`
  * bumped to 3 in lockstep across both files.

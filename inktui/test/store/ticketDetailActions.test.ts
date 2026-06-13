@@ -356,6 +356,12 @@ describe('ticketDetailActions.schedule', () => {
 // ── isValidDuration ──────────────────────────────────────────────────────────────────────────────
 
 describe('isValidDuration — mirrors murder/work/duration.py parse_duration', () => {
+  // DRIFT RISK (code-review jun13): this is a TS re-implementation pinned by TS expectations ONLY.
+  // Unlike the DTO/conversation goldens (which the Python suite regenerates into test/fixtures/ and
+  // re-asserts, so Python-side drift fails a Python test), there is NO cross-language anchor here.
+  // If `parse_duration` adds/changes an accepted form, these cases stay green while the TUI silently
+  // diverges from the backend. Follow-up: adopt the golden pattern — have the Python duration test
+  // emit its accepted/rejected corpus into a fixture this file imports — instead of hand-mirroring.
   // Accepted forms (from the Python module docstring).
   it.each([
     ['1d4h3m', true],

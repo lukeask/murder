@@ -2,7 +2,7 @@
 
 Pane regexes were validated empirically against
 `agent v2026.04.30-4edb302` on 2026-05-01. Captured fixtures live in
-`tests/fixtures/cursor_panes/`.
+`tests/fixtures/harness_panes/`.
 
 Markers we rely on, all visible in the bottom rendered frame:
 

@@ -11,6 +11,7 @@ on big ticket-startup prompts (5–10KB combined system+ticket prompts).
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
 import shlex
 import tempfile
@@ -91,7 +92,16 @@ async def create_session(
     if cmd:
         # tmux treats remaining argv as a command to run inside the new session's pane.
         args.extend(cmd)
-    await _tmux(*args)
+    try:
+        await _tmux(*args)
+    except TmuxError as exc:
+        # The has-session pre-check is not atomic: a concurrent caller (or a
+        # respawning sweeper) can create the same name in the window between the
+        # check and new-session. tmux serializes and fails with "duplicate
+        # session"; surface that as the intended "already exists" error.
+        if "duplicate session" in str(exc).lower():
+            raise TmuxError(f"session already exists: {name}") from exc
+        raise
 
 
 async def kill_session(name: str) -> None:
@@ -108,7 +118,14 @@ async def rename_session(old_name: str, new_name: str) -> bool:
         return False
     if await session_exists(new_name):
         raise TmuxError(f"session already exists: {new_name}")
-    await _tmux("rename-session", "-t", old_name, new_name)
+    try:
+        await _tmux("rename-session", "-t", old_name, new_name)
+    except TmuxError as exc:
+        # Same check-then-act race as create_session: another caller may have
+        # claimed new_name between the pre-check and rename.
+        if "duplicate session" in str(exc).lower():
+            raise TmuxError(f"session already exists: {new_name}") from exc
+        raise
     return True
 
 
@@ -118,8 +135,12 @@ async def list_sessions(prefix: str | None = None) -> list[str]:
         "-F",
         "#{session_name}",
         check=False,
-        timeout_s=0.5,
+        timeout_s=2.0,
     )
+    if rc == 124:
+        # A timeout is NOT "no sessions" — returning [] here would let callers
+        # wrongly conclude a murder-owned session is gone and respawn/duplicate.
+        raise TmuxError("tmux list-sessions timed out")
     if rc != 0:
         return []  # no server running → no sessions
     names = [line for line in out.splitlines() if line]
@@ -183,17 +204,26 @@ async def _paste_buffer_bytes(name: str, payload: bytes) -> None:
 
     buf_name = f"murder_{uuid.uuid4().hex[:8]}"
     fd, tmp_name = tempfile.mkstemp(prefix="murder_buf_", suffix=".txt")
+    loaded = False
     try:
         with os.fdopen(fd, "wb") as f:
             f.write(payload)
         await _tmux("load-buffer", "-b", buf_name, tmp_name)
+        loaded = True
         # -d deletes the buffer after paste so we don't leak buffer slots.
         await _tmux("paste-buffer", "-d", "-t", name, "-b", buf_name)
+        loaded = False
     finally:
         try:
             os.unlink(tmp_name)
         except OSError:
             pass
+        # If load-buffer succeeded but paste-buffer -d never fired (e.g. the
+        # session died between the two calls), the named buffer leaks a slot for
+        # the life of the tmux server. Delete it explicitly.
+        if loaded:
+            with contextlib.suppress(TmuxError):
+                await _tmux("delete-buffer", "-b", buf_name, check=False)
 
 
 async def paste_buffer_literal(name: str, text: str) -> None:

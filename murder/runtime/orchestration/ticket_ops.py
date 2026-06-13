@@ -6,7 +6,7 @@ import contextlib
 import logging
 import re
 from collections.abc import Awaitable, Callable
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from murder.app.service.runtime_scope import OrchestratorHost
@@ -94,9 +94,18 @@ class TicketOps:
         repo_root = self.rt.repo_root
         ticket_id = self.next_ticket_id()
 
-        # Write the markdown file so the ticket sync stays consistent.
+        # Write the markdown file so the ticket sync stays consistent. Guard
+        # against clobbering an existing file: if next_ticket_id() raced another
+        # create (or the id otherwise exists on disk), overwriting would destroy
+        # the prior ticket's body. Surface the collision instead.
         path = ticket_md(repo_root, ticket_id)
         path.parent.mkdir(parents=True, exist_ok=True)
+        if path.exists():
+            return {
+                "handled": False,
+                "ok": False,
+                "error": f"ticket id {ticket_id} already exists on disk (allocation collision)",
+            }
         path.write_text(f"# {title}\n\n## Plan\n\n## Working Notes\n")
 
         # Insert directly into DB — bypasses the 1.5 s TicketSync poll.
@@ -104,7 +113,9 @@ class TicketOps:
         from murder.work.tickets.schema import Ticket
         from murder.work.tickets.status import TicketStatus
 
-        now = datetime.utcnow().replace(microsecond=0)
+        # Naive UTC (no tzinfo) to match the rest of the ticket timestamps;
+        # utcnow() is deprecated since 3.12, so derive from an aware clock.
+        now = datetime.now(timezone.utc).replace(tzinfo=None, microsecond=0)
         row_existing = conn.execute(
             "SELECT id FROM tickets WHERE id = ?", (ticket_id,)
         ).fetchone()
@@ -119,7 +130,24 @@ class TicketOps:
             try:
                 _db_insert_ticket(conn, ticket)
             except Exception as exc:
-                # TicketSync may have raced us between the SELECT and INSERT.
+                # Distinguish a benign race (TicketSync inserted the same row
+                # between our SELECT and INSERT) from a genuine failure (schema
+                # error, locked DB). If the row now exists the race self-healed;
+                # otherwise the insert really failed and we must not lie with
+                # handled: True. The .md is already on disk for sync to retry.
+                row_after = conn.execute(
+                    "SELECT id FROM tickets WHERE id = ?", (ticket_id,)
+                ).fetchone()
+                if row_after is None:
+                    LOGGER.warning(
+                        "quick_create_ticket insert failed for %s: %s", ticket_id, exc
+                    )
+                    return {
+                        "handled": False,
+                        "ok": False,
+                        "ticket_id": ticket_id,
+                        "error": f"ticket insert failed: {exc}",
+                    }
                 LOGGER.debug(
                     "quick_create_ticket insert raced TicketSync for %s: %s",
                     ticket_id,
@@ -283,7 +311,8 @@ class TicketOps:
         if not text:
             return await self.set_schedule_at(ticket_id, None)
         delta = parse_duration(text)
-        schedule_at = (datetime.utcnow() + delta).isoformat(timespec="seconds")
+        now_naive = datetime.now(timezone.utc).replace(tzinfo=None)
+        schedule_at = (now_naive + delta).isoformat(timespec="seconds")
         return await self.set_schedule_at(ticket_id, schedule_at)
 
     async def update_ticket_metadata(

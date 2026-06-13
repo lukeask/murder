@@ -51,5 +51,11 @@ class APIClient(ABC):
         tools: list[ToolSpec] | None = None,
         max_tokens: int = 1024,
         temperature: float = 0.0,
+        **kwargs: Any,
     ) -> CompletionResult:
-        """One-shot completion (no streaming)."""
+        """One-shot completion (no streaming).
+
+        ``**kwargs`` is accepted (and ignored by concrete clients) so wrapper
+        clients (AutoFree / model-pinned) can forward caller-supplied extras
+        without a signature mismatch crashing the failover path.
+        """

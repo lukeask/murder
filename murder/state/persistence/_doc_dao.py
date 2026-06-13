@@ -97,6 +97,12 @@ def rename_doc(
     *,
     materialized_path: str,
 ) -> None:
+    # Guard the destination key (table has ``name UNIQUE``) so a collision raises
+    # a clear ValueError up front instead of an unguarded IntegrityError mid-
+    # transaction. Matches rename_plan's contract. The check covers retired rows
+    # too, since the unique index is not status-scoped.
+    if conn.execute(f"SELECT 1 FROM {table} WHERE name = ?", (new_name,)).fetchone() is not None:
+        raise ValueError(f"{table} already exists: {new_name}")
     now = _now()
     conn.execute("PRAGMA foreign_keys = OFF")
     conn.execute("BEGIN")

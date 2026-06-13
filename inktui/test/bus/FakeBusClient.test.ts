@@ -89,7 +89,10 @@ describe('FakeBusClient — events', () => {
     expect(order).toEqual(['first']);
   });
 
-  it('applies a subscription filter (server-side semantics)', () => {
+  // Note: the fake filters locally via the shared `matchesFilter` predicate — the same one
+  // UdsBusClient re-applies client-side. This is NOT the server-side filter; it only pins the
+  // shared predicate. The real wire filter is asserted in UdsBusClient.test.ts.
+  it('applies the shared matchesFilter predicate to delivered events', () => {
     const fake = new FakeBusClient();
     const tickets: BusEvent[] = [];
     fake.subscribe((event) => tickets.push(event), { entity: 'ticket' });

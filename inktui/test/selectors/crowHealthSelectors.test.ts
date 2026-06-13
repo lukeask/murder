@@ -3,6 +3,13 @@
  * so every branch of the ported Textual precedence is asserted directly. Mirrors the branch coverage
  * of the legacy Textual crow_health module's test surface.
  *
+ * DRIFT NOTE (code-review jun13): this precedence is hand-ported from the (now-retired) Textual
+ * crow_health module and pinned by TS expectations only — no cross-language golden. If a backend
+ * health rule re-orders or adds a precedence band, this stays green while the TUI diverges. Since
+ * Textual is retired the parallel-source risk is lower than the duration/effort mirrors, but if the
+ * precedence ever moves back to a live Python source, adopt the golden pattern (Python emits the
+ * classification corpus into a fixture this file imports) rather than re-hand-mirroring.
+ *
  * Precedence under test (first match wins):
  *   RED    — open escalation, or severity ≥ 2, or a red status (escalating/blocked/failed/dead)
  *   YELLOW — stuck-but-alive flag

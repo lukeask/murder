@@ -18,7 +18,6 @@ from murder.llm.harnesses.claude_code import ClaudeCodeAdapter
 from murder.llm.harnesses.results import fail_result
 from murder.runtime.agents.base import AgentStatus
 from murder.runtime.agents.collaborator import CollaboratorAgent
-from murder.runtime.terminal import tmux
 from murder.state.persistence.conversation import read_conversation_blocks, upsert_conversation
 from murder.state.persistence.schema import get_db, init_db
 from tests.support.fake_tmux import FakeTmux
@@ -30,7 +29,6 @@ CC_BUSY = (_FIXTURES / "cc_busy.txt").read_text(encoding="utf-8")
 
 def test_start_rearms_idle_gate_so_first_user_send_waits_for_input(
     fake_tmux: FakeTmux,
-    monkeypatch,
     tmp_path: Path,
 ) -> None:
     """Regression: the brief send returns while the harness is still working on
@@ -41,10 +39,7 @@ def test_start_rearms_idle_gate_so_first_user_send_waits_for_input(
     collaborator-never-runs-a-turn bug). Mirrors the Crow deliver-when-idle gate.
     """
 
-    async def _session_exists(_session: str) -> bool:
-        return True
-
-    monkeypatch.setattr(tmux, "session_exists", _session_exists)
+    fake_tmux.set_session_exists(True)
     # Boot: every poll during start() sees an idle pane.
     fake_tmux.queue_pane(CC_IDLE)
     conn = get_db(tmp_path / "state.db")
@@ -96,13 +91,9 @@ def test_start_rearms_idle_gate_so_first_user_send_waits_for_input(
 
 def test_collaborator_start_clears_prior_conversation(
     fake_tmux: FakeTmux,
-    monkeypatch,
     tmp_path: Path,
 ) -> None:
-    async def _session_exists(_session: str) -> bool:
-        return True
-
-    monkeypatch.setattr(tmux, "session_exists", _session_exists)
+    fake_tmux.set_session_exists(True)
     fake_tmux.queue_pane(CC_IDLE)
     conn = get_db(tmp_path / "state.db")
     init_db(conn)
@@ -217,7 +208,6 @@ def test_stop_preserve_session_leaves_conversation_in_progress(
 
 def test_collaborator_ground_truth_block_survives_refresh(
     fake_tmux: FakeTmux,
-    monkeypatch,
     tmp_path: Path,
 ) -> None:
     """Phase 1.c server-side path: a user turn recorded authoritatively at the
@@ -225,10 +215,7 @@ def test_collaborator_ground_truth_block_survives_refresh(
     and the projector reuses one persistent accumulator across refreshes.
     """
 
-    async def _session_exists(_session: str) -> bool:
-        return True
-
-    monkeypatch.setattr(tmux, "session_exists", _session_exists)
+    fake_tmux.set_session_exists(True)
     fake_tmux.queue_pane(CC_IDLE)
     conn = get_db(tmp_path / "state.db")
     init_db(conn)

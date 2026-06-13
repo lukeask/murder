@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import errno
+import ipaddress
 import json
 import logging
 from collections.abc import Awaitable, Callable
@@ -88,6 +89,7 @@ class SocketBusServer:
         self._accept_backoff_delay: float = 0.0
         self._accept_backoff_task: asyncio.Task[None] | None = None
         self._prior_exception_handler: Any = None
+        self._installed_exception_handler = False
 
     @property
     def socket_path(self) -> Path:
@@ -110,7 +112,19 @@ class SocketBusServer:
         Uses the same _handle_client path as the Unix socket — the protocol is
         identical, so any bus client that speaks the wire protocol can connect
         over TCP (useful for web adapters / remote tooling).
+
+        SECURITY (v0): this exposes the full wire protocol — publish, RPC, and
+        subscribe-to-everything (the entire audit log) — over plain TCP with
+        NO TLS and NO authentication. ``HelloBody.client_id`` is self-asserted,
+        so anyone who can reach the port can forge events and drive RPCs. We
+        therefore refuse non-loopback binds: exposing this beyond localhost
+        needs an auth/TLS story first.
         """
+        if not _is_loopback_host(host):
+            raise ValueError(
+                f"refusing to bind unauthenticated TCP bus listener to non-loopback host {host!r}; "
+                "the wire protocol has no auth/TLS (v0)"
+            )
         self._tcp_server = await asyncio.start_server(self._handle_client, host, port)
         sockets = self._tcp_server.sockets
         if not sockets:
@@ -125,8 +139,12 @@ class SocketBusServer:
             with contextlib.suppress(asyncio.CancelledError):
                 await self._accept_backoff_task
             self._accept_backoff_task = None
-        loop = asyncio.get_event_loop()
-        loop.set_exception_handler(self._prior_exception_handler)
+        # Only restore the loop handler if start() actually installed ours;
+        # otherwise we'd wipe a handler the host app (or another server) owns.
+        if self._installed_exception_handler:
+            loop = asyncio.get_event_loop()
+            loop.set_exception_handler(self._prior_exception_handler)
+            self._installed_exception_handler = False
         if self._presence_task is not None:
             self._presence_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
@@ -150,6 +168,7 @@ class SocketBusServer:
     def _install_accept_backoff_handler(self) -> None:
         loop = asyncio.get_event_loop()
         self._prior_exception_handler = loop.get_exception_handler()
+        self._installed_exception_handler = True
 
         def _handler(loop: asyncio.AbstractEventLoop, ctx: dict[str, Any]) -> None:
             exc = ctx.get("exception")
@@ -245,7 +264,7 @@ class SocketBusServer:
                     await self._send_ack(
                         transport,
                         correlation_id=msg.correlation_id,
-                        kind="pong",
+                        kind="published",
                     )
                     continue
                 if isinstance(msg, RpcMessage):
@@ -369,6 +388,13 @@ class SocketBusServer:
             watermark=watermark,
         )
         if msg.args.presence_retain:
+            # Synthesised from live in-memory state, so its version may be
+            # higher than a presence row persisted in the replay window — and
+            # tail (below) may then redeliver that older persisted row out of
+            # order. That is safe ONLY because PresenceEvent carries a monotonic
+            # ``version`` and subscribers MUST drop any non-strictly-greater
+            # version (protocol.py). No other event kind tolerates the seam, so
+            # presence_retain must stay presence-only.
             retained = self._presence_event()
             if filt.matches(retained):
                 await self._send_pub(transport, msg.correlation_id, retained)
@@ -531,6 +557,18 @@ def default_socket_path(repo_root: Path | None = None) -> Path:
     return socket_path_for_repo(repo_root or Path.cwd())
 
 
+def _is_loopback_host(host: str) -> bool:
+    """True if *host* is unambiguously loopback (refuse anything else for TCP)."""
+    if host in ("localhost", ""):
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        # Hostnames other than 'localhost' may resolve anywhere — treat as
+        # non-loopback rather than doing a DNS lookup here.
+        return False
+
+
 # ---------------------------------------------------------------------------
 # Client-side UDS Transport
 # ---------------------------------------------------------------------------
@@ -587,6 +625,29 @@ class UdsTransport(Transport):
         )
         self._drain_task: asyncio.Task[None] | None = None
         self._connected = False
+
+    @classmethod
+    def from_streams(
+        cls,
+        reader: asyncio.StreamReader,
+        writer: asyncio.StreamWriter,
+        *,
+        subscription_idle_timeout: float = 300.0,
+    ) -> UdsTransport:
+        """Build a server-side transport around an already-accepted stream pair.
+
+        The client path uses :meth:`connect`; on the server an accepted
+        connection arrives as a ``(reader, writer)`` pair, so this is the
+        sanctioned way to wrap it without poking private attributes.
+        """
+        transport = cls(subscription_idle_timeout=subscription_idle_timeout)
+        transport._reader = reader
+        transport._writer = writer
+        transport._connected = True
+        transport._drain_task = asyncio.create_task(
+            transport._drain_loop(), name="uds-stream-transport-drain"
+        )
+        return transport
 
     # ------------------------------------------------------------------
     # Connection lifecycle
@@ -697,14 +758,9 @@ def attach_stream_transport(
     subscription_idle_timeout: float = 300.0,
 ) -> UdsTransport:
     """Attach an accepted asyncio stream pair to ``UdsTransport`` (server-side)."""
-    transport = UdsTransport(subscription_idle_timeout=subscription_idle_timeout)
-    transport._reader = reader
-    transport._writer = writer
-    transport._connected = True
-    transport._drain_task = asyncio.create_task(
-        transport._drain_loop(), name="uds-stream-transport-drain"
+    return UdsTransport.from_streams(
+        reader, writer, subscription_idle_timeout=subscription_idle_timeout
     )
-    return transport
 
 
 # ---------------------------------------------------------------------------

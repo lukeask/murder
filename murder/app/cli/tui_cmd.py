@@ -21,6 +21,7 @@ from murder.app.cli.service_cmd import (
     _run_async_entry,
 )
 from murder.bus.transport_socket import default_socket_path
+from murder.app.cli._util import node_major_version as _node_major_version
 from murder.app.cli._util import repo_root as _repo_root
 
 # Node runtime floor (current LTS). Ink 5 needs >=18; 20 is the future-proof floor we ship against.
@@ -33,31 +34,6 @@ class InkLaunchError(RuntimeError):
     Carries a clear, actionable message; the CLI surfaces it via the shared `_run_async_entry`
     handler (RuntimeError → red message + non-zero exit), so we never spawn on failure.
     """
-
-
-def _node_major_version() -> int | None:
-    """Return Node's major version, or None if `node` is not on PATH.
-
-    Shells `node --version` (e.g. `v20.18.0`) and parses the major. A non-zero/garbage result is
-    treated as "unusable" (None) so the caller emits the install guidance rather than spawning.
-    """
-    try:
-        proc = subprocess.run(
-            ["node", "--version"],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-    except FileNotFoundError:
-        return None
-    if proc.returncode != 0:
-        return None
-    raw = proc.stdout.strip().lstrip("v")
-    head = raw.split(".", 1)[0]
-    try:
-        return int(head)
-    except ValueError:
-        return None
 
 
 def _require_node() -> None:

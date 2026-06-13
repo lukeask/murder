@@ -61,26 +61,28 @@ def _scaffold_project(repo: Path, *, force: bool = False) -> Path:
             err=True,
         )
         raise typer.Exit(1)
+    # Read every template up front, BEFORE the destructive rmtree, so a
+    # missing/unreadable template resource fails fast and leaves the user's
+    # existing .murder/ intact rather than deleting it and then discovering we
+    # can't rebuild (init --force footgun).
+    tpl_root = resources.files("murder.resources.templates")
+    project_name = repo.name
+    quoted_project_name = project_name.replace("'", "''")
+    roles_text = tpl_root.joinpath("roles.yaml").read_text(encoding="utf-8")
+    roles_text = roles_text.replace("name: TODO_SET_ME", f"name: '{quoted_project_name}'", 1)
+    env_example_text = tpl_root.joinpath("env.example").read_text(encoding="utf-8")
+    gitignore_text = tpl_root.joinpath("gitignore").read_text(encoding="utf-8")
+
     if ad.exists() and force:
         shutil.rmtree(ad)
     ad.mkdir(parents=True, exist_ok=True)
     for sub in ("tickets", "plans", "reports", "shelved", "escalations", "runs"):
         (ad / sub).mkdir(parents=True, exist_ok=True)
 
-    tpl_root = resources.files("murder.resources.templates")
-    project_name = repo.name
-
-    roles_text = tpl_root.joinpath("roles.yaml").read_text(encoding="utf-8")
-    quoted_project_name = project_name.replace("'", "''")
-    roles_text = roles_text.replace("name: TODO_SET_ME", f"name: '{quoted_project_name}'", 1)
     (ad / "roles.yaml").write_text(roles_text, encoding="utf-8")
-    (ad / "env.example").write_text(
-        tpl_root.joinpath("env.example").read_text(encoding="utf-8"), encoding="utf-8"
-    )
-    project_env_path(repo).write_text(
-        tpl_root.joinpath("env.example").read_text(encoding="utf-8"), encoding="utf-8"
-    )
-    _append_gitignore_entries(repo, tpl_root.joinpath("gitignore").read_text(encoding="utf-8"))
+    (ad / "env.example").write_text(env_example_text, encoding="utf-8")
+    project_env_path(repo).write_text(env_example_text, encoding="utf-8")
+    _append_gitignore_entries(repo, gitignore_text)
 
     seed_examples(repo)
 

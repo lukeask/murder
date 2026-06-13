@@ -4,7 +4,12 @@ import { createServer, type Server, type Socket } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { RpcMethod } from '../../src/bus/BusClient.js';
-import { type BusEvent, PROTOCOL_VERSION, type WireMessage } from '../../src/bus/protocol.js';
+import {
+  type BusEvent,
+  PROTOCOL_VERSION,
+  type SubArgs,
+  type WireMessage,
+} from '../../src/bus/protocol.js';
 import {
   type BackoffConfig,
   type Clock,
@@ -47,6 +52,9 @@ class ScriptedBusServer {
   handshakeCount = 0;
   /** Every `sub` correlation_id seen, in order — lets a test assert re-subscription on reconnect. */
   readonly subscribeCorrelationIds: string[] = [];
+  /** Every `sub` filter seen on the wire, in order — lets a test assert the client transmits the
+   * filter it was given (the server-side filtering contract starts with the client shipping it). */
+  readonly subscribeFilters: SubArgs['filter'][] = [];
   /** RPC handler: given (target, body), returns a reply object, or `undefined` to stay silent
    * (drives the timeout path). */
   rpcHandler: (
@@ -189,6 +197,7 @@ class ScriptedBusServer {
       }
       case 'sub': {
         this.subscribeCorrelationIds.push(message.correlation_id);
+        this.subscribeFilters.push(message.args.filter);
         this.send(socket, {
           op: 'ack',
           schema_version: PROTOCOL_VERSION,
@@ -397,6 +406,22 @@ describe('UdsBusClient — subscriptions', () => {
     await waitFor(() => received.length === 1);
 
     expect((received[0] as { key: string }).key).toBe('T-1');
+  });
+
+  it('transmits the subscription filter on the wire (server-side filtering contract)', async () => {
+    // The server applies the filter before fanout, but only if the client actually ships it. Pin
+    // that the non-empty filter the caller passed reaches the server's `sub` args verbatim — without
+    // this, the client could send `filter: {}` (or drop the field) and every other sub test would
+    // still pass because the scripted server broadcasts to everyone regardless.
+    client.subscribe(() => {}, { entity: 'ticket', agent_id: 'a1' });
+    await waitFor(() => server.subscribeFilters.length === 1);
+    expect(server.subscribeFilters[0]).toEqual({ entity: 'ticket', agent_id: 'a1' });
+  });
+
+  it('defaults to an empty filter when none is given', async () => {
+    client.subscribe(() => {});
+    await waitFor(() => server.subscribeFilters.length === 1);
+    expect(server.subscribeFilters[0]).toEqual({});
   });
 
   it('skips interleaved wake frames (does not deliver them as events)', async () => {

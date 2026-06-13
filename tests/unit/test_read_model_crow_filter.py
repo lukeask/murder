@@ -13,14 +13,11 @@ from murder.app.service.read_model import FAILED_STALE_AFTER, ServiceReadModel
 from murder.state.persistence.agents import upsert_agent
 from murder.state.persistence.schema import get_db, init_db
 from murder.state.storage.paths import db_path
+from tests.support import factories
 
 
 def _insert_ticket(conn, ticket_id: str, status: str) -> None:
-    ts = datetime.utcnow().isoformat(timespec="seconds")
-    conn.execute(
-        "INSERT INTO tickets (id, title, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
-        (ticket_id, f"title-{ticket_id}", status, ts, ts),
-    )
+    factories.insert_ticket(conn, ticket_id, title=f"title-{ticket_id}", status=status)
 
 
 def _age_heartbeat(conn, agent_id: str, when: datetime) -> None:

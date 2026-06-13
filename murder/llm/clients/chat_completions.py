@@ -4,12 +4,17 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import time
 from typing import Any
 
 import httpx
 
+from murder.llm.clients._retry import is_retryable_exc, retry_after_seconds
 from murder.llm.clients.base import APIClient, CompletionResult, ToolCall, ToolSpec
+
+LOGGER = logging.getLogger(__name__)
+MAX_ATTEMPTS = 3
 
 
 class ChatCompletionsClient(APIClient):
@@ -34,7 +39,9 @@ class ChatCompletionsClient(APIClient):
         tools: list[ToolSpec] | None = None,
         max_tokens: int = 1024,
         temperature: float = 0.0,
+        **kwargs: Any,
     ) -> CompletionResult:
+        del kwargs  # accepted for wrapper-client forwarding; not used here
         client = await self._ensure_client()
         payload: dict[str, Any] = {
             "model": model,
@@ -59,26 +66,28 @@ class ChatCompletionsClient(APIClient):
         url = f"{self.base_url}/chat/completions"
         last_exc: Exception | None = None
         backoff = 1.0
-        for attempt in range(3):
+        for attempt in range(MAX_ATTEMPTS):
             t0 = time.monotonic()
             try:
                 resp = await client.post(url, json=payload)
-                if resp.status_code >= 500:
-                    raise httpx.HTTPStatusError(
-                        f"server error {resp.status_code}",
-                        request=resp.request,
-                        response=resp,
-                    )
                 resp.raise_for_status()
                 data = resp.json()
                 latency_ms = (time.monotonic() - t0) * 1000
                 return parse_completion(data, model, latency_ms)
             except (httpx.HTTPStatusError, httpx.RequestError) as e:
                 last_exc = e
-                if attempt == 2:
+                # Terminal 4xx (400/401/413/…) will never succeed on retry.
+                if not is_retryable_exc(e):
+                    raise
+                if attempt == MAX_ATTEMPTS - 1:
                     break
-                await asyncio.sleep(backoff)
-                backoff *= 2
+                wait = retry_after_seconds(e)
+                if wait is None:
+                    wait = backoff
+                    backoff *= 2
+                else:
+                    LOGGER.warning("chat-completions rate-limited; honoring Retry-After=%.1fs", wait)
+                await asyncio.sleep(wait)
         assert last_exc is not None
         raise last_exc
 
@@ -110,6 +119,12 @@ def parse_completion(data: dict[str, Any], model: str, latency_ms: float) -> Com
             )
         )
     usage = data.get("usage") or {}
+    if not usage:
+        LOGGER.warning(
+            "chat-completions response missing usage block; "
+            "cost summary will under-report (model=%s)",
+            model,
+        )
     return CompletionResult(
         text=text,
         tool_calls=tool_calls,

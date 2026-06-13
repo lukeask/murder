@@ -66,6 +66,13 @@ def _clamp_handles_monotone(
             d2 *= 0.85
     P1 = (P0[0] + d1, P0[1] + slope0 * d1)
     P2 = (P3[0] - d2, P3[1] - slope3 * d2)
+    # _solve_bezier_t relies on x being monotone non-decreasing in t, which holds
+    # iff P0x <= P1x <= P2x <= P3x. The d1+d2 <= L clamp above guarantees this for
+    # valid inputs; assert it so out-of-range params (e.g. intensity > 1, a
+    # tweaked max_frac) trip loudly instead of letting bisection return garbage.
+    assert P0[0] <= P1[0] <= P2[0] <= P3[0], (
+        f"non-monotone Bezier x: {P0[0]}, {P1[0]}, {P2[0]}, {P3[0]}"
+    )
     return P1, P2
 
 

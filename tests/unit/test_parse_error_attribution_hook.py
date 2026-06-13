@@ -13,6 +13,7 @@ from murder.state.storage.paths import plan_md, ticket_md, tickets_dir
 from murder.work.plans.schema import Plan
 from murder.work.plans.sync import PlanSync
 from murder.work.tickets.sync import TicketSync
+from tests.support import factories
 
 
 def _conn(repo_root: Path):
@@ -24,15 +25,14 @@ def _conn(repo_root: Path):
 
 
 def _insert_ticket(conn, ticket_id: str) -> None:
-    conn.execute(
-        """
-        INSERT INTO tickets(
-            id, title, status, harness, model, attempts, created_at, updated_at
-        )
-        VALUES (?, 'T', 'planned', 'codex', 'gpt-5', 0,
-                '2026-06-08T00:00:00', '2026-06-08T00:00:00')
-        """,
-        (ticket_id,),
+    factories.insert_ticket(
+        conn,
+        ticket_id,
+        title="T",
+        harness="codex",
+        model="gpt-5",
+        created_at="2026-06-08T00:00:00",
+        updated_at="2026-06-08T00:00:00",
     )
 
 

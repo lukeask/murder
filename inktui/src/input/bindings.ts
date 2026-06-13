@@ -174,6 +174,11 @@ export const ACTIONS: Readonly<Record<ActionId, ActionDef>> = {
     // dispatcher gates it to the global layer ONLY when chat is NOT focused, so a literal `?` typed
     // into the chat field is never stolen. `?` is the conventional help key and matches the spec's own
     // "slash and `?` share a key" framing. Not rebindable (its reach property is intrinsic to the key).
+    //
+    // REACHABILITY FROM CHAT (the permanent focus home): because `?` is suppressed while chat is
+    // focused, the discoverable chat-focus path to help is the `:help` command (commandDispatch.ts),
+    // which survives chat focus — `?` only fires once focus is on a panel. The hint bar advertises
+    // `:help` as the chat-focus affordance so the documented help key is never dead in the boot state.
     default: plain({ input: '?' }),
     description: 'help',
     rebindable: false,
@@ -216,6 +221,16 @@ export const ACTIONS: Readonly<Record<ActionId, ActionDef>> = {
     // `label` override keeps the hint honest ('C-m', what the user presses). Bypass mode (no kitty)
     // cannot distinguish ctrl+m from Enter, so the binding is simply unreachable there — acceptable:
     // murder is a destructive chord and silently degrading it onto Enter would be far worse.
+    //
+    // LOAD-BEARING LIMITATION (no kitty = no murder, anywhere): this chord is the SOLE resolution for
+    // `global.murder`. The crows-panel local binding rides the same `chordsFor('global.murder')`
+    // result, so it is the identical `{ctrl, return}` kitty-only chord — it does NOT provide an
+    // alt/plain fallback. On a non-kitty terminal there is therefore no key path to arm a murder from
+    // anywhere; the confirm-second-press (`m`) is only reachable once the toast is already armed. This
+    // is deliberate (no destructive chord should degrade onto Enter), but it is a surfaced dead key,
+    // not a silent one: the doc viewer / settings advertise that ctrl chords require the kitty
+    // protocol, and a future fallback (if wanted) must be an explicit non-colliding chord, not a
+    // re-point of this one.
     default: { kind: 'plain', chord: { key: { ctrl: true, return: true } }, label: 'C-m' },
     description: 'murder crow',
     rebindable: false,
@@ -339,8 +354,10 @@ export function chordLabel(chord: KeyChord): string {
   const flags = chord.key === undefined ? [] : Object.keys(chord.key);
   const rawBase = chord.input ?? flags.find((flag) => flag !== 'ctrl' && flag !== 'meta') ?? '?';
   const base = rawBase === ' ' ? 'space' : rawBase;
+  // A chord can carry BOTH modifiers (no current action does, but the `label` path and any future
+  // combined chord can) — surface each it sets, rather than silently dropping meta when ctrl is set.
   const prefix =
-    chord.key?.ctrl === true ? CTRL_PREFIX : chord.key?.meta === true ? ALT_PREFIX : '';
+    (chord.key?.ctrl === true ? CTRL_PREFIX : '') + (chord.key?.meta === true ? ALT_PREFIX : '');
   return `${prefix}${base}`;
 }
 
@@ -407,10 +424,19 @@ export function resolveBindings(
   };
 }
 
-/** Local chord-vs-event predicate. Mirrors {@link ../input/keymap.js chordMatches} but kept private
+/** Local chord-vs-event predicate. Mirrors {@link ../input/keymap.js chordMatches} (including the
+ * strict ctrl/meta rule — an unlisted command modifier must be FALSE in the event) but kept private
  * here so `bindings` has no import cycle risk and the matching rule is co-located with resolution. */
 function chordMatchesEvent(chord: KeyChord, input: string, key: Key): boolean {
   if (chord.input !== undefined && chord.input !== input) {
+    return false;
+  }
+  // The command modifiers are never don't-care: an event carrying ctrl/meta the chord didn't ask for
+  // must NOT match (keeps a plain chord from absorbing its modified variants). Mirrors keymap.ts.
+  if (chord.key?.ctrl !== true && key.ctrl) {
+    return false;
+  }
+  if (chord.key?.meta !== true && key.meta) {
     return false;
   }
   if (chord.key !== undefined) {

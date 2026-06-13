@@ -23,6 +23,7 @@ import { submitCommand } from '../commandSubmit.js';
 import { createRefreshAction } from '../listSlice.js';
 import type { AppStore } from '../store.js';
 import type { ScheduleUsageGaugeDto } from '../tickets/ticketsActions.js';
+import { toastStore } from '../toast/toastStore.js';
 import type { UsageRow } from './usageSlice.js';
 
 /** Project one wire gauge into the slice's row. Pure: single DTO→domain mapping point. */
@@ -78,9 +79,13 @@ export function createUsageActions(bus: BusClient, store: StoreApi<AppStore>): U
         );
         await refresh();
       } catch (err) {
-        store.setState((s) => ({
-          usage: { ...s.usage, error: err instanceof Error ? err.message : String(err) },
-        }));
+        const message = err instanceof Error ? err.message : String(err);
+        store.setState((s) => ({ usage: { ...s.usage, error: message } }));
+        // Also surface a toast: `usage.error` is not reliably rendered by a view, and steering is a
+        // keypress-driven write — a silent failure would leave the user thinking it took effect.
+        toastStore
+          .getState()
+          .push(`steering failed: ${message}`, { severity: 'error', ttlMs: 6000 });
       }
     },
   };

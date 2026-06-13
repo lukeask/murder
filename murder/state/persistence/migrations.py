@@ -11,6 +11,32 @@ def _now() -> str:
     return datetime.utcnow().isoformat(timespec="seconds")
 
 
+def _executescript_fk_off(
+    conn: sqlite3.Connection, body: str, *, legacy_alter_table: bool = False
+) -> None:
+    """Run a table-recreation ``executescript`` with FK enforcement disabled.
+
+    ``foreign_keys`` is a connection-global pragma. The earlier pattern embedded
+    ``PRAGMA foreign_keys = OFF; ...; PRAGMA foreign_keys = ON;`` *inside* the
+    script, so any statement that raised mid-script (e.g. a NOT NULL/CHECK
+    violation during the data copy) aborted before the trailing ``ON`` ran and
+    left FK enforcement silently OFF for the rest of the connection's life.
+
+    Toggling the pragmas around the script with an explicit ``finally`` (matching
+    ``_migrate_ticket_drop_legacy_order``) guarantees they are restored even if
+    the copy throws. ``body`` must NOT contain the pragma toggles itself.
+    """
+    conn.execute("PRAGMA foreign_keys = OFF")
+    if legacy_alter_table:
+        conn.execute("PRAGMA legacy_alter_table = ON")
+    try:
+        conn.executescript(body)
+    finally:
+        if legacy_alter_table:
+            conn.execute("PRAGMA legacy_alter_table = OFF")
+        conn.execute("PRAGMA foreign_keys = ON")
+
+
 _LEGACY_PLAN_MATERIALIZED_HASH_COLUMN = "last_" "materialized_" "hash"
 _LEGACY_PLAN_CONFLICT_COLUMN = "conflict" "_reason"
 _LEGACY_TICKET_ORDER_COLUMN = "wa" "ve"
@@ -31,10 +57,9 @@ def _migrate_ticket_archived_status(conn: sqlite3.Connection) -> None:
     ).fetchone()
     if row is None or "'archived'" in str(row["sql"]):
         return
-    conn.executescript(
+    _executescript_fk_off(
+        conn,
         f"""
-        PRAGMA foreign_keys = OFF;
-        PRAGMA legacy_alter_table = ON;
         BEGIN;
         ALTER TABLE tickets RENAME TO tickets_old_archived_migration;
         CREATE TABLE tickets (
@@ -71,9 +96,8 @@ def _migrate_ticket_archived_status(conn: sqlite3.Connection) -> None:
         FROM tickets_old_archived_migration;
         DROP TABLE tickets_old_archived_migration;
         COMMIT;
-        PRAGMA legacy_alter_table = OFF;
-        PRAGMA foreign_keys = ON;
-        """
+        """,
+        legacy_alter_table=True,
     )
 
 
@@ -84,10 +108,9 @@ def _migrate_ticket_draft_status(conn: sqlite3.Connection) -> None:
     ).fetchone()
     if row is None or "'draft'" in str(row["sql"]):
         return
-    conn.executescript(
+    _executescript_fk_off(
+        conn,
         f"""
-        PRAGMA foreign_keys = OFF;
-        PRAGMA legacy_alter_table = ON;
         BEGIN;
         ALTER TABLE tickets RENAME TO tickets_old_draft_migration;
         CREATE TABLE tickets (
@@ -124,9 +147,8 @@ def _migrate_ticket_draft_status(conn: sqlite3.Connection) -> None:
         FROM tickets_old_draft_migration;
         DROP TABLE tickets_old_draft_migration;
         COMMIT;
-        PRAGMA legacy_alter_table = OFF;
-        PRAGMA foreign_keys = ON;
-        """
+        """,
+        legacy_alter_table=True,
     )
 
 
@@ -288,9 +310,9 @@ def _migrate_agents_notetaker_role(conn: sqlite3.Connection) -> None:
     ).fetchone()
     if row is None or "'notetaker'" in str(row["sql"]):
         return
-    conn.executescript(
+    _executescript_fk_off(
+        conn,
         """
-        PRAGMA foreign_keys = OFF;
         BEGIN;
         ALTER TABLE agents RENAME TO agents_old_notetaker_migration;
         CREATE TABLE agents (
@@ -314,8 +336,7 @@ def _migrate_agents_notetaker_role(conn: sqlite3.Connection) -> None:
           FROM agents_old_notetaker_migration;
         DROP TABLE agents_old_notetaker_migration;
         COMMIT;
-        PRAGMA foreign_keys = ON;
-        """
+        """,
     )
 
 
@@ -393,9 +414,9 @@ def _migrate_agents_failed_status(conn: sqlite3.Connection) -> None:
     ).fetchone()
     if row is None or "'failed'" in str(row["sql"]):
         return
-    conn.executescript(
+    _executescript_fk_off(
+        conn,
         """
-        PRAGMA foreign_keys = OFF;
         BEGIN;
         ALTER TABLE agents RENAME TO agents_old_failed_migration;
         CREATE TABLE agents (
@@ -419,8 +440,7 @@ def _migrate_agents_failed_status(conn: sqlite3.Connection) -> None:
           FROM agents_old_failed_migration;
         DROP TABLE agents_old_failed_migration;
         COMMIT;
-        PRAGMA foreign_keys = ON;
-        """
+        """,
     )
 
 
@@ -468,9 +488,9 @@ def _migrate_drop_sentinel(conn: sqlite3.Connection) -> None:
     if row is None or "'sentinel'" not in str(row["sql"]):
         return
 
-    conn.executescript(
+    _executescript_fk_off(
+        conn,
         """
-        PRAGMA foreign_keys = OFF;
         BEGIN;
         DELETE FROM agents WHERE role = 'sentinel';
         ALTER TABLE agents RENAME TO agents_old_sentinel_migration;
@@ -495,8 +515,7 @@ def _migrate_drop_sentinel(conn: sqlite3.Connection) -> None:
           FROM agents_old_sentinel_migration;
         DROP TABLE agents_old_sentinel_migration;
         COMMIT;
-        PRAGMA foreign_keys = ON;
-        """
+        """,
     )
 
 
@@ -511,10 +530,9 @@ def _migrate_plans_single_master(conn: sqlite3.Connection) -> None:
     cols = {column["name"] for column in conn.execute("PRAGMA table_info(plans)").fetchall()}
     if _LEGACY_PLAN_CONFLICT_COLUMN not in cols:
         return
-    conn.executescript(
+    _executescript_fk_off(
+        conn,
         """
-        PRAGMA foreign_keys = OFF;
-        PRAGMA legacy_alter_table = ON;
         BEGIN;
         ALTER TABLE plans RENAME TO plans_old_single_master_migration;
         CREATE TABLE plans (
@@ -544,9 +562,8 @@ def _migrate_plans_single_master(conn: sqlite3.Connection) -> None:
         DROP TABLE plans_old_single_master_migration;
         CREATE INDEX IF NOT EXISTS idx_plans_status ON plans(status);
         COMMIT;
-        PRAGMA legacy_alter_table = OFF;
-        PRAGMA foreign_keys = ON;
-        """
+        """,
+        legacy_alter_table=True,
     )
 
 

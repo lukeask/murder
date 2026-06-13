@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
 import os
 import signal
 import subprocess
@@ -43,7 +44,10 @@ from murder.state.storage.service_registry import (
 from murder.work.tickets import lifecycle
 from murder.work.tickets.schema import ChecklistItem, Ticket
 from murder.work.tickets.sync import TicketSync
+from murder.app.cli._util import pid_is_alive as _pid_is_alive
 from murder.app.cli._util import repo_root as _repo_root
+
+LOGGER = logging.getLogger(__name__)
 
 
 def _open_existing_db(repo: Path):  # type: ignore[return]
@@ -54,16 +58,6 @@ def _open_existing_db(repo: Path):  # type: ignore[return]
     conn = get_db(path)
     init_db(conn)
     return conn
-
-
-def _pid_is_alive(pid: int) -> bool:
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    return True
 
 
 def _live_service_sessions() -> list[ServiceSession]:
@@ -117,12 +111,17 @@ def _spawn_service_process(repo: Path) -> subprocess.Popen[bytes]:
 async def _ensure_supervisor(repo: Path, socket_path: Path) -> None:
     if await _supervisor_is_live(repo, socket_path):
         return
-    _spawn_service_process(repo)
+    proc = _spawn_service_process(repo)
     delays = (0.25, 0.5, 1.0, 1.0, 1.0, 1.0)
     for delay in delays:
         await asyncio.sleep(delay)
         if await _supervisor_is_live(repo, socket_path):
             return
+        # Fail fast if the child already died (e.g. crashed on import) instead
+        # of polling the full window for a process that's gone.
+        rc = proc.poll()
+        if rc is not None:
+            raise RuntimeError(f"supervisor process exited during startup (code {rc})")
     raise RuntimeError("supervisor did not become ready within 5s")
 
 
@@ -150,6 +149,10 @@ def _run_async_entry(coro) -> None:  # type: ignore[no-untyped-def]
         typer.secho(_friendly_lock_message(_repo_root()), fg=typer.colors.RED, err=True)
         raise typer.Exit(1) from None
     except RuntimeError as e:
+        # Flattened to a CLI line for the expected lock/readiness cases, but log
+        # the full traceback at DEBUG so a genuine programming RuntimeError isn't
+        # silently swallowed.
+        LOGGER.debug("service entry raised RuntimeError", exc_info=True)
         typer.secho(str(e), fg=typer.colors.RED, err=True)
         raise typer.Exit(1) from e
 
@@ -177,9 +180,19 @@ def cmd_serviced(
 
 
 def _signal_service(repo: Path, pid: int, *, session_name: str | None = None) -> None:
-    if pid is None:
-        typer.secho("No lock pid found (murder not running?).", err=True)
-        raise typer.Exit(1)
+    # Re-read the live lock pid right before signalling so we don't SIGTERM a
+    # recycled, unrelated process: between the session-registry read and here
+    # the daemon may have exited and its pid been reused. Only signal if the
+    # repo lock still names this exact pid; otherwise the old service is gone.
+    current = read_lock_pid(lock_path(repo))
+    if current != pid:
+        if current is None:
+            with contextlib.suppress(FileNotFoundError):
+                lock_path(repo).unlink()
+        if session_name is not None:
+            remove_service_session(session_name)
+        typer.echo(f"PID {pid} no longer holds the repo lock; nothing to signal.")
+        return
     try:
         os.kill(pid, signal.SIGTERM)
     except ProcessLookupError:
@@ -259,35 +272,39 @@ def cmd_status() -> None:
         typer.echo("No database — murder init")
         return
     conn = get_db(db_path(repo))
-    typer.echo("Tickets by status:")
-    for st in ("planned", "ready", "in_progress", "blocked", "done", "failed"):
-        n = conn.execute("SELECT COUNT(*) AS c FROM tickets WHERE status = ?", (st,)).fetchone()[
-            "c"
-        ]
-        typer.echo(f"  {st}: {n}")
-    typer.echo("Agents:")
-    for r in conn.execute(
-        "SELECT agent_id, role, ticket_id, status FROM agents ORDER BY started_at DESC LIMIT 20"
-    ).fetchall():
-        typer.echo(
-            f"  {r['agent_id']} role={r['role']} ticket={r['ticket_id']} status={r['status']}"
-        )
-    pend = list_pending_escalations(conn)
-    typer.echo(f"Pending escalations: {len(pend)}")
-    conn.close()
+    init_db(conn)
+    try:
+        typer.echo("Tickets by status:")
+        for st in ("planned", "ready", "in_progress", "blocked", "done", "failed"):
+            n = conn.execute(
+                "SELECT COUNT(*) AS c FROM tickets WHERE status = ?", (st,)
+            ).fetchone()["c"]
+            typer.echo(f"  {st}: {n}")
+        typer.echo("Agents:")
+        for r in conn.execute(
+            "SELECT agent_id, role, ticket_id, status FROM agents ORDER BY started_at DESC LIMIT 20"
+        ).fetchall():
+            typer.echo(
+                f"  {r['agent_id']} role={r['role']} ticket={r['ticket_id']} status={r['status']}"
+            )
+        pend = list_pending_escalations(conn)
+        typer.echo(f"Pending escalations: {len(pend)}")
+    finally:
+        conn.close()
 
 
 def cmd_reopen(ticket_id: str) -> None:
     """Mark a done ticket as planned and cascade to dependents (D7)."""
     repo = _repo_root()
     conn = get_db(db_path(repo))
+    init_db(conn)
     try:
         cascaded = lifecycle.reopen(conn, ticket_id)
     except lifecycle.InvalidTransition as e:
         typer.secho(str(e), err=True)
-        conn.close()
         raise typer.Exit(1) from e
-    conn.close()
+    finally:
+        conn.close()
     typer.echo(f"Reopened {ticket_id}; cascaded: {', '.join(cascaded) if cascaded else '(none)'}")
 
 
@@ -295,14 +312,15 @@ def cmd_retry(ticket_id: str) -> None:
     """Retry a failed ticket — transition failed → planned and clear its last_error."""
     repo = _repo_root()
     conn = get_db(db_path(repo))
+    init_db(conn)
     try:
         lifecycle.transition(conn, ticket_id, TicketStatus.PLANNED, reason="retry")
         lifecycle.clear_last_error(conn, ticket_id)
     except lifecycle.InvalidTransition as e:
         typer.secho(str(e), err=True)
-        conn.close()
         raise typer.Exit(1) from e
-    conn.close()
+    finally:
+        conn.close()
     typer.echo(f"Retried {ticket_id}; status=planned")
 
 
@@ -310,12 +328,15 @@ def cmd_replay(run_id: str) -> None:
     """Print events for a past run as a timeline."""
     repo = _repo_root()
     conn = get_db(db_path(repo))
-    rows = conn.execute(
-        "SELECT id, ts, type, agent_id, ticket_id, payload_json FROM events "
-        "WHERE run_id = ? ORDER BY id",
-        (run_id,),
-    ).fetchall()
-    conn.close()
+    init_db(conn)
+    try:
+        rows = conn.execute(
+            "SELECT id, ts, type, agent_id, ticket_id, payload_json FROM events "
+            "WHERE run_id = ? ORDER BY id",
+            (run_id,),
+        ).fetchall()
+    finally:
+        conn.close()
     if not rows:
         typer.secho(f"No events for run_id={run_id}", err=True)
         raise typer.Exit(1)
@@ -333,6 +354,14 @@ def cmd_lint() -> None:
         typer.secho("No murder.db — run murder init", err=True)
         raise typer.Exit(1)
     conn = get_db(db_path(repo))
+    init_db(conn)
+    try:
+        _run_lint_checks(repo, conn)
+    finally:
+        conn.close()
+
+
+def _run_lint_checks(repo: Path, conn) -> None:  # type: ignore[no-untyped-def]
     asyncio.run(PlanSync(repo, conn).reconcile_all())
     asyncio.run(TicketSync(repo, conn).reconcile_all())
     issues: list[str] = []
@@ -416,7 +445,6 @@ def cmd_lint() -> None:
             dep = ticket_by_id.get(dep_id)
             if dep is not None:
                 stack.extend(dep.deps)
-    conn.close()
     if issues:
         for i in issues:
             typer.echo(i)

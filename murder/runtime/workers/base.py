@@ -16,6 +16,12 @@ class WorkerSpec:
     name: str
     accepts: tuple[str, ...] = ()
     interests: tuple[EventFilter, ...] = ()
+    # "thread" is a historical label: these workers are NOT run on a dedicated
+    # thread. The supervisor schedules them as cooperative asyncio tasks on its
+    # single event loop (see supervisor.py), so their run/on_command bodies must
+    # not block (heavy synchronous SQLite/subprocess work stalls the bus, the
+    # heartbeat loop, and the UI). Only "subprocess" workers get a real
+    # SubprocessWorkerRunner with process isolation.
     process_model: Literal["thread", "subprocess"] = "thread"
     heartbeat_s: float = 5.0
     shutdown_grace_s: float = 2.0

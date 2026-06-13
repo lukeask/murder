@@ -4,18 +4,21 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import time
 from typing import Any
 
 import httpx
 
+from murder.llm.clients._retry import is_retryable_exc, retry_after_seconds
 from murder.llm.clients.base import APIClient, CompletionResult, ToolCall, ToolSpec
 
 ANTHROPIC_BASE = "https://api.anthropic.com/v1"
 ANTHROPIC_VERSION = "2023-06-01"
 MAX_ATTEMPTS = 3
-SERVER_ERROR_STATUS = 500
+
+LOGGER = logging.getLogger(__name__)
 
 
 class AnthropicClient(APIClient):
@@ -49,7 +52,9 @@ class AnthropicClient(APIClient):
         tools: list[ToolSpec] | None = None,
         max_tokens: int = 1024,
         temperature: float = 0.0,
+        **kwargs: Any,
     ) -> CompletionResult:
+        del kwargs  # accepted for wrapper-client forwarding; not used here
         client = await self._ensure_client()
         payload: dict[str, Any] = {
             "model": model,
@@ -75,22 +80,24 @@ class AnthropicClient(APIClient):
             t0 = time.monotonic()
             try:
                 resp = await client.post(url, json=payload)
-                if resp.status_code >= SERVER_ERROR_STATUS:
-                    raise httpx.HTTPStatusError(
-                        f"server error {resp.status_code}",
-                        request=resp.request,
-                        response=resp,
-                    )
                 resp.raise_for_status()
                 data = resp.json()
                 latency_ms = (time.monotonic() - t0) * 1000
                 return _parse_completion(data, model, latency_ms)
             except (httpx.HTTPStatusError, httpx.RequestError) as e:
                 last_exc = e
+                # Terminal 4xx (400/401/413/…) will never succeed on retry.
+                if not is_retryable_exc(e):
+                    raise
                 if attempt == MAX_ATTEMPTS - 1:
                     break
-                await asyncio.sleep(backoff)
-                backoff *= 2
+                wait = retry_after_seconds(e)
+                if wait is None:
+                    wait = backoff
+                    backoff *= 2
+                else:
+                    LOGGER.warning("anthropic rate-limited; honoring Retry-After=%.1fs", wait)
+                await asyncio.sleep(wait)
         assert last_exc is not None
         raise last_exc
 
@@ -119,6 +126,7 @@ def _to_anthropic_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any
             )
             continue
         if role not in ("user", "assistant"):
+            LOGGER.warning("dropping message with unsupported role %r from anthropic history", role)
             continue
         content: Any = msg.get("content") or ""
         tool_calls = msg.get("tool_calls") or []
@@ -161,6 +169,11 @@ def _parse_completion(data: dict[str, Any], model: str, latency_ms: float) -> Co
                 )
             )
     usage = data.get("usage") or {}
+    if not usage:
+        LOGGER.warning(
+            "anthropic response missing usage block; cost summary will under-report (model=%s)",
+            model,
+        )
     return CompletionResult(
         text="\n".join(p for p in text_parts if p) or None,
         tool_calls=tool_calls,

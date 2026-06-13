@@ -423,6 +423,11 @@ export const Stage = memo(function Stage({
           rowGap={paneGap}
         >
           {rows.map((row) => (
+            // Row key = its agent-id membership join. The inner panes key by stable agentId (below),
+            // so a pane that stays in the same row keeps its ChatPane scroll offset. But re-gridding
+            // that moves an agent to a different row changes that row's join-key, remounting the row
+            // and resetting the local scroll state of every pane in it — accepted for v0 (favoriting
+            // reshuffles rows rarely and a reset-to-bottom there is tolerable).
             <Box
               key={row.map((identity) => identity.agentId).join(',')}
               flexDirection="row"

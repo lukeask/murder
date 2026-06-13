@@ -10,14 +10,22 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import sqlite3
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Any, Protocol
-from uuid import UUID, uuid4
+from uuid import UUID, uuid5
 
 from murder.bus.protocol import BUS_EVENT_ADAPTER, BusEvent, EventFilter
+
+# Stable namespace for deriving a deterministic CommandEvent id from an
+# events-table row when the originating commands row is gone (see
+# ``_lookup_command_id``). Fixed so replay is reproducible across processes.
+_COMMAND_ID_NAMESPACE = UUID("6f1d2c3a-0000-4000-8000-636d646e7400")
+
+LOGGER = logging.getLogger(__name__)
 
 
 class BusBroker(Protocol):
@@ -84,9 +92,15 @@ class InProcessBroker:
     def __init__(self, bus: CallbackBus, *, queue_size: int = 1024) -> None:
         self._bus = bus
         self._queue_size = queue_size
+        self._dropped = 0
 
     async def publish(self, event: BusEvent) -> None:
         await self._bus.publish(event)
+
+    @property
+    def dropped_count(self) -> int:
+        """Number of events dropped from full subscriber queues so far."""
+        return self._dropped
 
     @asynccontextmanager
     async def _subscription(
@@ -97,7 +111,16 @@ class InProcessBroker:
 
         async def _handler(event: BusEvent) -> None:
             if queue.full():
+                # Drop-oldest on a slow consumer. The consumer has no gap
+                # signal, so at least log + expose a counter so the loss is
+                # observable rather than silent.
                 await queue.get()
+                self._dropped += 1
+                LOGGER.warning(
+                    "InProcessBroker subscriber queue full; dropped oldest "
+                    "event (total dropped=%d)",
+                    self._dropped,
+                )
             await queue.put(event)
 
         handle = self._bus.subscribe(_handler, filter)
@@ -173,6 +196,12 @@ class DurableBroker:
         *,
         timeout_s: float,
     ) -> dict:
+        # v0 limitation: RPC is server-process-local only. Handlers live in
+        # this process's ``_rpc_handlers`` dict; there is no routing to a
+        # handler hosted in a *different* worker process. A SocketBusClient in
+        # another process can reach handlers registered server-side, but
+        # worker-to-worker / client-hosted RPC is not yet implemented and
+        # surfaces here as UnsupportedRpcError.
         handler = self._rpc_handlers.get(target)
         if handler is None:
             raise UnsupportedRpcError(f"No RPC handler registered for target {target!r}")
@@ -230,6 +259,13 @@ class DurableBroker:
         *,
         since_id: int,
     ) -> AsyncIterator[tuple[int, BusEvent]]:
+        # v0 scaling limitation: live fan-out to socket subscribers is driven
+        # by polling the events table every ``poll_interval_s`` (default 50ms),
+        # NOT by the in-process Bus.publish callback fan-out. This costs every
+        # subscriber a 0–poll_interval latency tax and an O(clients × poll-rate)
+        # query load against the shared SQLite handle; an event that is
+        # published but never persisted is invisible here forever. A
+        # notify/condition-variable wakeup is the right fix before tier-3 scale.
         cursor = since_id
         while True:
             rows = self.replay(filter, since_id=cursor)
@@ -267,10 +303,13 @@ class DurableBroker:
         return BUS_EVENT_ADAPTER.validate_python(data)
 
     def _lookup_command_id(self, payload: dict[str, Any], row: sqlite3.Row) -> UUID:
+        # The CommandEvent UUID is excluded from payload_json on persist; it is
+        # recoverable from the commands table, keyed by the (unique)
+        # idempotency_key, where it is stored as the TEXT primary key.
         key = payload.get("idempotency_key")
         if isinstance(key, str):
             cmd = self._db.execute(
-                "SELECT id FROM commands WHERE idempotency_key = ? LIMIT 1",
+                "SELECT id FROM commands WHERE idempotency_key = ?",
                 (key,),
             ).fetchone()
             if cmd is not None:
@@ -278,10 +317,12 @@ class DurableBroker:
                     return UUID(str(cmd["id"]))
                 except ValueError:
                     pass
-        try:
-            return UUID(str(row["id"]))
-        except ValueError:
-            return uuid4()
+        # The commands row was reaped/deleted (or the key was missing). The
+        # events.id is an integer autoincrement, not a UUID, so deriving one
+        # deterministically (uuid5 over the row id) keeps replay reproducible —
+        # a random uuid4() would invent a fresh id on every replay of the same
+        # durable row.
+        return uuid5(_COMMAND_ID_NAMESPACE, str(row["id"]))
 
 
 __all__ = [

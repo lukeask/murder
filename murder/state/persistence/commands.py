@@ -169,19 +169,24 @@ def reap_stale_commands(
     now = _now()
     for row in rows:
         command_id = str(row["id"])
-        next_attempt = int(row["attempt_count"] or 0) + 1
-        if int(row["retryable"] or 0) == 1 and next_attempt < max_attempts:
+        # attempt_count already counts attempts made: claim_next_command does
+        # attempt_count + 1 at lease time, so a command with attempt_count == N
+        # has been dispatched N times. Re-pending leaves the count untouched and
+        # lets the next claim increment it; comparing attempts-used against
+        # max_attempts here (rather than a pre-incremented value) is what allows
+        # the full max_attempts dispatches instead of one fewer.
+        attempts_used = int(row["attempt_count"] or 0)
+        if int(row["retryable"] or 0) == 1 and attempts_used < max_attempts:
             conn.execute(
                 """
                 UPDATE commands
                    SET status = 'pending',
                        claimed_by = NULL,
                        lease_expires_at = NULL,
-                       attempt_count = ?,
                        updated_at = ?
                  WHERE id = ?
                 """,
-                (next_attempt, now, command_id),
+                (now, command_id),
             )
             retried.append(command_id)
             continue
@@ -191,12 +196,11 @@ def reap_stale_commands(
                SET status = 'failed',
                    claimed_by = NULL,
                    lease_expires_at = NULL,
-                   attempt_count = ?,
                    last_error = COALESCE(last_error, 'command lease expired'),
                    updated_at = ?
              WHERE id = ?
             """,
-            (next_attempt, now, command_id),
+            (now, command_id),
         )
         failed.append(command_id)
     return {"retried": retried, "failed": failed}

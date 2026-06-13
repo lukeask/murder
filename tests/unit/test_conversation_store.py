@@ -33,6 +33,7 @@ from murder.state.persistence.conversation import (
     upsert_conversation,
 )
 from murder.state.persistence.schema import get_db, init_db
+from tests.support import factories
 
 _CC_EXPECTED = Path(__file__).parent.parent / "fixtures" / "transcripts" / "cc" / "expected.json"
 
@@ -53,14 +54,7 @@ def conn(tmp_path: Path) -> sqlite3.Connection:
 def _make_conv(
     conn: sqlite3.Connection, conv_id: str = "conv-1", agent_id: str = "agent-1"
 ) -> None:
-    upsert_conversation(
-        conn,
-        conversation_id=conv_id,
-        agent_id=agent_id,
-        harness="cc",
-        model="opus",
-        status="in_progress",
-    )
+    factories.make_conversation(conn, conv_id, agent_id=agent_id)
 
 
 # ============================================================
@@ -74,7 +68,6 @@ def test_persist_and_read_back_conversation(conn):
     Copyable as a starting point for any caller that writes and then reads
     conversation state.
     """
-    # TODO: factory_segment in factories.py
     upsert_conversation(
         conn,
         conversation_id="conv-1",

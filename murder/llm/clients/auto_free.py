@@ -32,7 +32,12 @@ class AutoFreeClient(APIClient):
         temperature: float = 0.0,
         **kwargs: Any,
     ) -> CompletionResult:
-        del model
+        # The free pool is fixed (groq/cerebras gpt-oss); the caller's requested
+        # model is intentionally discarded. resolve_role_client_tiered may have
+        # copied a tier model into the effective config, but auto_free=True means
+        # that model is never used — the pool entries win.
+        if model:
+            LOGGER.debug("auto-free ignoring requested model %r; using fixed pool", model)
         for entry_client, entry_model in self.pool:
             try:
                 return await entry_client.complete(

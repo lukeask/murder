@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import logging
 
 from murder.runtime.workers.base import Worker, WorkerCtx, WorkerSpec
@@ -44,14 +43,29 @@ class DoneSessionSweeperWorker(Worker):
             for row in rows:
                 agent_id = row["agent_id"]
                 session = row["session"]
-                with contextlib.suppress(Exception):
+                # Only clear the DB session row once the tmux session is actually
+                # gone — otherwise a failing kill leaves a leaked session with no
+                # DB row pointing at it, so it would never be swept again.
+                try:
                     await tmux.kill_session(session)
                     LOGGER.info("swept stale crow session %s for agent %s", session, agent_id)
-                with contextlib.suppress(Exception):
+                except Exception:
+                    LOGGER.warning(
+                        "failed to kill stale crow session %s for agent %s; "
+                        "leaving DB row for retry",
+                        session,
+                        agent_id,
+                        exc_info=True,
+                    )
+                    continue
+                try:
                     clear_agent_session(ctx.db, agent_id)
-                    ctx.db.commit()
+                except Exception:
+                    LOGGER.warning(
+                        "failed to clear session row for agent %s", agent_id, exc_info=True
+                    )
                 if row.get("ticket_id"):
-                    with contextlib.suppress(Exception):
+                    try:
                         worktree_path = row.get("worktree_path")
                         removed = (
                             await prune_worktree_path(ctx.repo_root, worktree_path)
@@ -62,3 +76,9 @@ class DoneSessionSweeperWorker(Worker):
                             LOGGER.info(
                                 "pruned crow worktree for ticket %s", row["ticket_id"]
                             )
+                    except Exception:
+                        LOGGER.warning(
+                            "failed to prune crow worktree for ticket %s",
+                            row["ticket_id"],
+                            exc_info=True,
+                        )

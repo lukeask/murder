@@ -265,6 +265,10 @@ function primeSlices(store: ReturnType<typeof createAppStore>['store']): void {
   void store.getState().actions.reports.refresh();
   void store.getState().actions.history.refresh();
   void store.getState().actions.conversations.refresh();
+  // Re-load favorites on every (re)connect — the favorites docstring promises "a reconnect re-loads
+  // from the persisted truth", and without this the local star set diverges from the server after a
+  // disconnected optimistic toggle (or a failed save) until a full restart.
+  void store.getState().actions.favorites.load();
 }
 
 /** Register a (re)connect listener if the client exposes `onConnect` (the live {@link UdsBusClient}

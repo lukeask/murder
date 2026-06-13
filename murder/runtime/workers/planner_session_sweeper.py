@@ -10,7 +10,6 @@ plan-scoped and long-lived by design. See
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import logging
 
 from murder.runtime.workers.base import Worker, WorkerCtx, WorkerSpec
@@ -54,13 +53,28 @@ class PlannerSessionSweeperWorker(Worker):
                 agent_id = row["agent_id"]
                 session = row["session"]
                 status = row["status"]
-                with contextlib.suppress(Exception):
+                # Only clear the DB session row once the tmux session is actually
+                # gone — otherwise a failing kill leaves a leaked session with no
+                # DB row pointing at it, so it would never be swept again.
+                try:
                     await tmux.kill_session(session)
                     LOGGER.info(
                         "swept orphaned planner session %s for agent %s", session, agent_id
                     )
-                with contextlib.suppress(Exception):
+                except Exception:
+                    LOGGER.warning(
+                        "failed to kill orphaned planner session %s for agent %s; "
+                        "leaving DB row for retry",
+                        session,
+                        agent_id,
+                        exc_info=True,
+                    )
+                    continue
+                try:
                     clear_agent_session(ctx.db, agent_id)
                     if status not in terminal:
                         set_agent_status(ctx.db, agent_id, "dead")
-                    ctx.db.commit()
+                except Exception:
+                    LOGGER.warning(
+                        "failed to clear session row for agent %s", agent_id, exc_info=True
+                    )

@@ -386,6 +386,8 @@ class EventFilter(BaseModel):
     ticket_id: str | None = None
     type: str | None = None
     entity: Entity | None = None
+    entity_id: str | None = None
+    conversation_id: str | None = None
     target_worker: str | None = None
     kind: str | None = None
     agent_id: str | None = None
@@ -400,6 +402,13 @@ class EventFilter(BaseModel):
         if self.type is not None and getattr(event, "type", None) != self.type:
             return False
         if self.entity is not None and getattr(event, "entity", None) != self.entity:
+            return False
+        if self.entity_id is not None and getattr(event, "entity_id", None) != self.entity_id:
+            return False
+        if (
+            self.conversation_id is not None
+            and getattr(event, "conversation_id", None) != self.conversation_id
+        ):
             return False
         if (
             self.target_worker is not None
@@ -419,8 +428,13 @@ class HelloBody(BaseModel):
 
     Server responds with ``AckBody(kind="subscribed")`` after a successful
     handshake or ``ErrBody(code="protocol_version_mismatch")`` if versions
-    disagree. ``client_id`` is stable across reconnects so the supervisor
-    can resume in-flight RPC state and presence counting correctly.
+    disagree. ``client_id`` is intended to be stable across reconnects.
+
+    v0 NOTE: the server currently keys sessions by ``id(transport)``, not by
+    ``client_id`` — it does NOT resume in-flight RPC state on reconnect, and a
+    reconnect counts as a fresh presence increment. Two live connections that
+    share a ``client_id`` both bump presence. Resume/dedupe by ``client_id`` is
+    not yet implemented; don't rely on it.
     """
 
     protocol_version: int
@@ -451,7 +465,7 @@ class RpcArgs(BaseModel):
 
 
 class AckBody(BaseModel):
-    kind: Literal["subscribed", "replay_done", "rpc_reply", "pong"]
+    kind: Literal["subscribed", "replay_done", "rpc_reply", "pong", "published"]
     watermark: int | None = None
     result: dict[str, Any] | None = None
 

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 import os
 import sqlite3
 import struct
@@ -20,6 +21,8 @@ from zoneinfo import ZoneInfo
 
 from murder.llm.harnesses.models import HarnessUsageStatus, HarnessUsageWindow
 from murder.llm.harnesses.usage import utc_now_iso
+
+LOGGER = logging.getLogger(__name__)
 
 AUTH_URL = "https://api2.cursor.sh/auth/token"
 USAGE_URL = "https://api2.cursor.sh/aiserver.v1.DashboardService/GetCurrentPeriodUsage"
@@ -80,6 +83,8 @@ def _jwt_exp(token: str) -> int:
         data = json.loads(base64.urlsafe_b64decode(payload))
         return int(data["exp"])
     except Exception:
+        # Malformed token → treat as expired so a refresh is attempted.
+        LOGGER.debug("could not decode Cursor JWT exp; treating token as expired")
         return 0
 
 
@@ -94,8 +99,11 @@ def _refresh_token(refresh_token: str) -> str | None:
         with urllib.request.urlopen(request, timeout=10) as response:
             data = json.loads(response.read())
             value = data.get("access_token") or data.get("accessToken")
+            if not value:
+                LOGGER.warning("Cursor token refresh returned no access_token")
             return str(value) if value else None
     except Exception:
+        LOGGER.warning("Cursor token refresh failed; re-auth may be required", exc_info=True)
         return None
 
 
@@ -113,10 +121,16 @@ def get_access_token() -> str:
     if refresh and (new_token := _refresh_token(refresh)):
         return new_token
 
-    if access:
+    # Refresh failed or unavailable. An expired access token would only earn a
+    # 401 (surfaced later as a generic API error), so flag the auth problem here
+    # where it is actionable ("re-auth Cursor") rather than masking it.
+    if access and _jwt_exp(access) > time.time():
+        LOGGER.warning("Cursor access token unrefreshed but not yet expired; using it")
         return access
 
-    raise CursorNotAuthenticatedError("Cursor access token could not be refreshed")
+    raise CursorNotAuthenticatedError(
+        "Cursor access token expired and could not be refreshed; re-authenticate Cursor"
+    )
 
 
 def _decode_varint(data: bytes, pos: int) -> tuple[int, int]:

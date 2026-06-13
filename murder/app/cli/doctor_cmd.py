@@ -8,13 +8,15 @@ used for the exit code.
 from __future__ import annotations
 
 import os
-import re
 import shutil
 import subprocess
 from pathlib import Path
 
 import typer
 
+from murder.app.cli._util import node_major_version as _node_major_version
+from murder.app.cli._util import pid_is_alive as _pid_is_alive
+from murder.app.cli._util import repo_root as _repo_root
 from murder.config import Config, HarnessRoleConfig
 from murder.llm.harnesses import REGISTRY
 from murder.state.persistence.schema import get_db, init_db
@@ -33,10 +35,6 @@ _LLM_KEY_ENV_VARS = (
 _MIN_NODE_MAJOR = 20
 
 
-def _repo_root() -> Path:
-    return Path.cwd().resolve()
-
-
 def _ok(msg: str) -> None:
     typer.echo(f"✓ {msg}")
 
@@ -47,35 +45,6 @@ def _fail(msg: str) -> None:
 
 def _warn(msg: str) -> None:
     typer.echo(f"! {msg}")
-
-
-def _pid_is_alive(pid: int) -> bool:
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    return True
-
-
-def _node_major_version() -> int | None:
-    """Return node's major version, or None if node is absent/unparseable."""
-    if shutil.which("node") is None:
-        return None
-    try:
-        out = subprocess.run(
-            ["node", "--version"],
-            capture_output=True,
-            check=False,
-            text=True,
-        )
-    except OSError:
-        return None
-    m = re.match(r"\s*v?(\d+)", out.stdout)
-    if not m:
-        return None
-    return int(m.group(1))
 
 
 def _configured_harnesses(role_cfg: HarnessRoleConfig) -> list[str]:

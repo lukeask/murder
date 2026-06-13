@@ -90,8 +90,12 @@ export interface TransitActions {
 }
 
 export function createTransitActions(bus: BusClient, store: StoreApi<AppStore>): TransitActions {
+  // Per-slice request token — guards against a stale reply clobbering newer lanes when a burst of
+  // `transit` invalidations (or a reconnect re-prime) overlaps two refreshes (see listSlice.ts).
+  let seq = 0;
   return {
     async refresh(): Promise<void> {
+      const token = ++seq;
       // Mark loading by ref-swapping ONLY the transit slice — sibling slices keep their identity.
       store.setState((state) => {
         const current = state.transit;
@@ -99,9 +103,11 @@ export function createTransitActions(bus: BusClient, store: StoreApi<AppStore>):
       });
       try {
         const reply = await bus.rpc('state.transit_snapshot', {});
+        if (token !== seq) return;
         const next: TransitState = { lanes: project(reply), status: 'ready', error: null };
         store.setState({ transit: next });
       } catch (error: unknown) {
+        if (token !== seq) return;
         const message = error instanceof Error ? error.message : String(error);
         store.setState((state) => ({
           transit: { ...state.transit, status: 'error', error: message },

@@ -78,9 +78,16 @@ class SubprocessWorkerRunner:
     def _close_queue(self) -> None:
         if self._commands is None:
             return
-        with suppress(AttributeError):
+        # The child is dead by the time stop() calls this. If items were still
+        # buffered in the feeder thread when the process was killed,
+        # join_thread() can block forever — which would wedge supervisor
+        # shutdown (it holds the repo flock). cancel_join_thread() detaches the
+        # feeder so close() never blocks; abandoning unflushed items is safe
+        # since the consumer is gone. Suppress broadly: a hang here is worse
+        # than a stray queue error during teardown.
+        with suppress(Exception):
+            self._commands.cancel_join_thread()
+        with suppress(Exception):
             self._commands.close()
-        with suppress(AttributeError):
-            self._commands.join_thread()
         self._commands = None
         self._stop = None

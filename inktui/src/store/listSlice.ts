@@ -93,8 +93,14 @@ export function createRefreshAction<
   },
 ): { refresh(): Promise<void> } {
   const { key, method, project } = config;
+  // Per-slice request token: a burst of `state.snapshot` invalidations (or a reconnect re-prime)
+  // can fire `refresh()` repeatedly with no ordering guarantee on the RPCs. Without this guard an
+  // OLDER reply that resolves last would overwrite a newer one's rows as `ready` (stale clobber).
+  // Each call claims the next seq; a reply only applies if it is still the latest in flight.
+  let seq = 0;
   return {
     async refresh(): Promise<void> {
+      const token = ++seq;
       // Mark loading by ref-swapping ONLY this slice — sibling slices keep their identity, so their
       // `useStore(s => s.x, shallow)` subscribers do not re-render (the invalidation-granularity
       // contract this whole store layer is built around).
@@ -105,10 +111,13 @@ export function createRefreshAction<
       });
       try {
         const reply = await bus.rpc(method, {} as RpcMethods[Method]['params']);
+        // Drop a stale reply: a newer refresh has been issued since we started.
+        if (token !== seq) return;
         const rows = project(reply);
         const next: ListState<Row> = { rows, status: 'ready', error: null };
         store.setState({ [key]: next } as unknown as Partial<AppStore>);
       } catch (error: unknown) {
+        if (token !== seq) return;
         const message = error instanceof Error ? error.message : String(error);
         store.setState((state) => {
           const current = state[key] as ListState<Row>;

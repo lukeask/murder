@@ -45,7 +45,14 @@ export interface HelpGroup {
 export const HELP_MODE_ID = 'keyHelp';
 
 /** How many entry rows (across all groups, headers excluded) fit on one page. Conservative so the
- * modal stays within a small terminal even after its border + per-group headings. */
+ * modal stays within a small terminal even after its border + per-group headings.
+ *
+ * Left as a constant rather than derived from the live terminal height: pagination is computed once
+ * in {@link helpMode} (a non-React closure built at open), so it has no live `rows` to read, and the
+ * page count must stay stable across the open (re-paginating on resize would jump the user's page
+ * index). 14 fits comfortably above the app's own min-terminal floor (16 rows) once the
+ * border + headings are accounted for; if the help surface grows much larger, thread the live row
+ * count into {@link paginateHelp} at the {@link helpMode} call site instead. */
 const ROWS_PER_PAGE = 14;
 
 /** Human display label for one panel's scope heading. */
@@ -54,7 +61,9 @@ const PANEL_TITLE: Readonly<Record<string, string>> = {
   notes: 'Notes panel',
   reports: 'Reports panel',
   tickets: 'Tickets panel',
+  history: 'History panel',
   usage: 'Usage panel',
+  transit: 'Transit panel',
   crows: 'Crows panel',
 };
 

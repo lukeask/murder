@@ -77,8 +77,13 @@ class AgentRegistry:
         if agent is None:
             return
         if agent.ticket_id is not None:
-            self._crows.pop(agent.ticket_id, None)
-            self._crow_handlers.pop(agent.ticket_id, None)
+            # Only evict the index slot matching THIS agent's role; a crow and
+            # its handler share a ticket_id, so reaping one half must not blow
+            # away the other half's still-live index entry.
+            if agent.role == AgentRole.CROW:
+                self._crows.pop(agent.ticket_id, None)
+            elif agent.role == AgentRole.CROW_HANDLER:
+                self._crow_handlers.pop(agent.ticket_id, None)
         task = tasks.pop(agent_id, None)
         if task is not None:
             task.cancel()

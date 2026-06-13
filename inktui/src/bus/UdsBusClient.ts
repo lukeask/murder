@@ -344,9 +344,12 @@ export class UdsBusClient implements BusClient {
     }
     return () => {
       this.subscriptions.delete(subscription);
-      // The server tears the subscription down when the connection closes; with a multiplexed
-      // connection we cannot drop a single sub server-side, so unsubscribe is local: the listener
-      // simply stops being fanned out to. This is the disposer contract the store relies on.
+      // LOCAL-only unsubscribe: the wire protocol has no `unsub` op, so we cannot tell the server to
+      // drop a single subscription on a multiplexed connection — the server keeps producing matching
+      // events (e.g. tmux.frame, per protocol.ts) until the whole connection closes. Deleting the
+      // subscription here removes it from `fanout`'s set, so this client stops delivering AND stops
+      // matching/processing those events — the only teardown available without a server-side primitive.
+      // A true server-side unsub (to stop the upstream stream) needs a new protocol op; see TmuxFrameEvent.
     };
   }
 
@@ -714,7 +717,14 @@ export class UdsBusClient implements BusClient {
   private fanout(event: BusEvent): void {
     for (const subscription of [...this.subscriptions]) {
       if (matchesFilter(event, subscription.filter)) {
-        subscription.listener(event);
+        // Isolate each listener: a synchronous throw from one subscriber must NOT abort the loop and
+        // skip every later subscriber for this frame (the store registers several subscriptions; one
+        // throwing slice refresh would otherwise starve the rest). Mirrors `notifyConnected`'s policy.
+        try {
+          subscription.listener(event);
+        } catch {
+          // A subscriber's failure is its own concern; never let it skip sibling subscribers.
+        }
       }
     }
   }

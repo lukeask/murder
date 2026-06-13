@@ -229,22 +229,34 @@ export function createTicketDetailActions(
       }));
       try {
         const reply = await bus.rpc('state.ticket_detail', { ticket_id: ticketId });
-        const next: TicketDetailState = {
-          ticketId,
-          frontmatter: toFrontmatter(reply),
-          savedBody: reply.body,
-          editedBody: reply.body,
-          scheduleInput: '',
-          scheduleValid: false,
-          status: 'ready',
-          error: null,
-        };
-        store.setState({ ticketDetail: next });
+        store.setState((state) => {
+          // Stale-reply guard: a slow `open(A)` must NOT overwrite the slice once the user has
+          // opened/closed to a different ticket. Open A (slow) → escape + open B (fast); B resolves,
+          // then A resolves — without this check A's body lands under B's identity (silent corruption,
+          // mirrors the docView identity check). The slice's own `ticketId` is the identity.
+          if (state.ticketDetail.ticketId !== ticketId) {
+            return state;
+          }
+          const next: TicketDetailState = {
+            ticketId,
+            frontmatter: toFrontmatter(reply),
+            savedBody: reply.body,
+            editedBody: reply.body,
+            scheduleInput: '',
+            scheduleValid: false,
+            status: 'ready',
+            error: null,
+          };
+          return { ticketDetail: next };
+        });
       } catch (error: unknown) {
         const message = error instanceof Error ? error.message : String(error);
-        store.setState((state) => ({
-          ticketDetail: { ...state.ticketDetail, status: 'error', error: message },
-        }));
+        store.setState((state) => {
+          if (state.ticketDetail.ticketId !== ticketId) {
+            return state;
+          }
+          return { ticketDetail: { ...state.ticketDetail, status: 'error', error: message } };
+        });
       }
     },
 

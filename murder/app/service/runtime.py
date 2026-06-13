@@ -108,49 +108,70 @@ class Runtime:
         self._shutdown.clear()
         self._external_stop.clear()
         self._lock_fd = acquire_flock(lock_path(self.repo_root))
-        self.db = _db_connect(db_path(self.repo_root))
-        _db_init_schema(self.db)
-        live_sessions = set(await tmux.list_sessions())
-        report = reconcile_agents_vs_tmux(self.db, live_sessions)
-        self.startup_reconcile_report = report
-        if report:
-            logging.getLogger(__name__).info("startup reconcile: %s", report.summary())
-        for session in report.sessions_to_kill:
-            with contextlib.suppress(Exception):
-                await tmux.kill_session(session)
-        stale_count = mark_stale_conversations(self.db)
-        if stale_count:
-            logging.getLogger(__name__).info(
-                "startup: marked %d in_progress conversation(s) stale", stale_count
+        # Everything after the flock is fallible (tmux/subprocess, filesystem,
+        # DB). A throw here must not leave the repo flock held and the sqlite
+        # connection open -- ``stop()`` never runs because ``__aexit__`` only
+        # fires after ``__aenter__`` returns. Release the lock + close the DB
+        # on any failure before re-raising.
+        try:
+            self.db = _db_connect(db_path(self.repo_root))
+            _db_init_schema(self.db)
+            live_sessions = set(await tmux.list_sessions())
+            report = reconcile_agents_vs_tmux(self.db, live_sessions)
+            self.startup_reconcile_report = report
+            if report:
+                logging.getLogger(__name__).info("startup reconcile: %s", report.summary())
+            for session in report.sessions_to_kill:
+                with contextlib.suppress(Exception):
+                    await tmux.kill_session(session)
+            stale_count = mark_stale_conversations(self.db)
+            if stale_count:
+                logging.getLogger(__name__).info(
+                    "startup: marked %d in_progress conversation(s) stale", stale_count
+                )
+            self.run_id = allocate_run_id(self.repo_root)
+            snap = json.dumps(self.config.model_dump(mode="json"), default=str)
+            _db_insert_run(self.db, self.run_id, snap)
+            self.bus = Bus(self.run_id, self.db)
+            self._sync = FilesystemSyncSupervisor.attach(
+                self.repo_root,
+                self.db,
+                on_ticket_change=lambda tid: self.emit_snapshot(Entity.TICKET, tid),
+                on_plan_change=lambda name: self.emit_snapshot(Entity.PLAN, name),
+                # Notes and reports use the async notify_changed seam (F5.1/F5.3):
+                # pass bus + run_id so _emit is live; on_note_change is removed.
+                bus=self.bus,
+                run_id=self.run_id,
             )
-        self.run_id = allocate_run_id(self.repo_root)
-        snap = json.dumps(self.config.model_dump(mode="json"), default=str)
-        _db_insert_run(self.db, self.run_id, snap)
-        self.bus = Bus(self.run_id, self.db)
-        self._sync = FilesystemSyncSupervisor.attach(
-            self.repo_root,
-            self.db,
-            on_ticket_change=lambda tid: self.emit_snapshot(Entity.TICKET, tid),
-            on_plan_change=lambda name: self.emit_snapshot(Entity.PLAN, name),
-            # Notes and reports use the async notify_changed seam (F5.1/F5.3):
-            # pass bus + run_id so _emit is live; on_note_change is removed.
-            bus=self.bus,
-            run_id=self.run_id,
-        )
-        self.plan_sync = self._sync.plan_sync
-        self.note_sync = self._sync.note_sync
-        self.notetaker_context_sync = self._sync.notetaker_context_sync
-        self.ticket_sync = self._sync.ticket_sync
-        self.report_sync = self._sync.report_sync
-        self.documents = DocumentAccess(
-            self.repo_root,
-            self.db,
-            plan_sync=self.plan_sync,
-            note_sync=self.note_sync,
-            on_note_change=lambda name: self.emit_snapshot(Entity.NOTE, name),
-        )
-        await self._sync.reconcile_all()
-        self._tasks.update(self._sync.spawn_tasks())
+            self.plan_sync = self._sync.plan_sync
+            self.note_sync = self._sync.note_sync
+            self.notetaker_context_sync = self._sync.notetaker_context_sync
+            self.ticket_sync = self._sync.ticket_sync
+            self.report_sync = self._sync.report_sync
+            self.documents = DocumentAccess(
+                self.repo_root,
+                self.db,
+                plan_sync=self.plan_sync,
+                note_sync=self.note_sync,
+                on_note_change=lambda name: self.emit_snapshot(Entity.NOTE, name),
+            )
+            await self._sync.reconcile_all()
+            self._tasks.update(self._sync.spawn_tasks())
+        except BaseException:
+            with contextlib.suppress(Exception):
+                if self.db is not None:
+                    self.db.close()
+            self.db = None
+            self.bus = None
+            self.run_id = None
+            self._sync = None
+            if self._lock_fd is not None:
+                with contextlib.suppress(Exception):
+                    release_flock(self._lock_fd)
+                self._lock_fd = None
+                with contextlib.suppress(FileNotFoundError, OSError):
+                    lock_path(self.repo_root).unlink()
+            raise
 
     async def stop(self) -> None:
         self._shutdown.set()

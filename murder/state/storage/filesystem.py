@@ -37,16 +37,6 @@ def atomic_write_text(path: Path, text: str, encoding: str = "utf-8") -> None:
         raise
 
 
-def _pid_is_alive(pid: int) -> bool:
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    return True
-
-
 def _acquire_flock_inner(path: Path) -> int:
     path.parent.mkdir(parents=True, exist_ok=True)
     fd = os.open(str(path), os.O_RDWR | os.O_CREAT, 0o644)
@@ -68,18 +58,39 @@ def acquire_flock(path: Path) -> int:
 
     Caller stores fd to keep the lock alive (closing the fd releases the
     lock). Raises BlockingIOError if held by another process.
+
+    Stale-lock recovery is flock-first: a successful non-blocking ``flock`` on
+    the *existing* file's inode is itself proof the prior owner is gone (the
+    kernel releases a process's flocks on exit). We never delete-then-recreate
+    the lockfile on a pid heuristic — flock is inode-bound, so unlinking and
+    re-creating the path would hand the same logical lock to two live processes
+    (process B holding a fresh flock on the original inode while A flocks a
+    brand-new one). The recorded pid is read only as a corroborating signal.
     """
     try:
         return _acquire_flock_inner(path)
     except BlockingIOError:
-        recorded = read_lock_pid(path)
-        if recorded is None or not _pid_is_alive(recorded):
-            try:
-                path.unlink()
-            except FileNotFoundError:
-                pass
-            return _acquire_flock_inner(path)
+        pass
+
+    # The path exists and someone holds (or held) a flock on its inode. Open the
+    # same file and try a non-blocking flock: success means the prior holder's
+    # lock is gone and we now own this inode. This never deletes the file, so a
+    # still-live holder keeps its flock and we correctly fail below.
+    try:
+        fd = os.open(str(path), os.O_RDWR | os.O_CREAT, 0o644)
+    except OSError:
+        raise BlockingIOError(f"lock held: {path}") from None
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError as e:
+        os.close(fd)
+        if e.errno in (errno.EACCES, errno.EAGAIN):
+            raise BlockingIOError(f"lock held: {path}") from e
         raise
+    # We hold the flock — re-stamp our pid as the live owner.
+    os.ftruncate(fd, 0)
+    os.write(fd, f"{os.getpid()}\n".encode())
+    return fd
 
 
 def release_flock(fd: int) -> None:

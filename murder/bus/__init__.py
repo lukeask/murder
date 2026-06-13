@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING, Any
 
 from murder.bus.protocol import (
     BUS_EVENT_ADAPTER,
+    COMMAND_REAPER_INTERVAL_S,
     DEFAULT_HEARTBEAT_INTERVAL_S,
     DEFAULT_LEASE_TTL_S,
     DEFAULT_MAX_COMMAND_ATTEMPTS,
@@ -153,8 +154,16 @@ class Bus:
                         ts=event.ts.isoformat(timespec="seconds"),
                     )
             except Exception:
-                log.exception("bus: failed to persist event %s", event.type)
-                # Continue with fan-out even if persistence failed.
+                # Durability gap: this event reaches in-process handlers below
+                # but is NOT in the events table, so it will never replay to
+                # socket subscribers (they are DB-poll only). Log loudly so the
+                # split-brain is at least visible; we still fan out so live
+                # in-process consumers aren't silently starved.
+                log.exception(
+                    "bus: failed to persist event %s; live fan-out only, "
+                    "will NOT replay to socket subscribers",
+                    event.type,
+                )
 
         async with self._lock:
             handlers = list(self._subs.values())
@@ -232,4 +241,5 @@ __all__ = [
     "PRESENCE_USER_KINDS",
     "SUBSCRIBER_QUEUE_DEFAULT",
     "IDEMPOTENCY_WINDOW_S",
+    "COMMAND_REAPER_INTERVAL_S",
 ]

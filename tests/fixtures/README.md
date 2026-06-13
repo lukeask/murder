@@ -13,9 +13,9 @@ fixture or in the test that uses it.
 
 Expected subdirectories:
 
-- `harness_panes/` — tmux pane snapshots for harness adapter unit tests.
-  Regenerate from local recordings via
+- `harness_panes/` — tmux pane snapshots for harness adapter unit tests
+  (including the cursor grammar fixtures). Regenerate from local recordings via
   `python tools/testing/extract_fixtures.py` (source:
   `tools/testing/recordings/`).
-- `cursor_panes/`
-- `transcripts/`
+- `harness_state/` — manifest + frames recordings per harness.
+- `transcripts/` — parsed transcript ground-truth (see `transcripts/SCHEMA.md`).

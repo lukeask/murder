@@ -17,9 +17,16 @@
 /**
  * Recognize the service's read-RPC envelope `{ ok: true, value: <dto> }`. A reply that lacks a
  * `value` key (a write/command result, which is `{ ok, ...fields }`) is left untouched.
+ *
+ * Pinned on `ok === true` AND the `value` key — not on `value` alone. A future `state.*` method
+ * whose top-level result legitimately carries a `value` field (e.g. a `state.*` action/write added
+ * later via declaration merging) would otherwise be silently unwrapped to its inner value. The
+ * read envelope is specifically the success wrapper, so `ok === true` is the load-bearing guard.
  */
-export function isReadEnvelope(reply: Record<string, unknown>): reply is { value: unknown } {
-  return 'value' in reply;
+export function isReadEnvelope(
+  reply: Record<string, unknown>,
+): reply is { ok: true; value: unknown } {
+  return reply['ok'] === true && 'value' in reply;
 }
 
 /**

@@ -304,10 +304,21 @@ class ServiceHost:
             data_b64 = body.get("bytes")
             if not isinstance(data_b64, str) or not data_b64:
                 raise ValueError("image.upload requires base64 bytes")
+            # Cap the base64 payload before decoding so a malicious/oversized
+            # upload can't be expanded to disk. The TCP listener (optional, see
+            # ``start_tcp_listener``) makes this reachable from an
+            # unauthenticated client, so the bound is unconditional. 32 MiB
+            # decoded is generous for a pasted clipboard image.
+            _MAX_IMAGE_BYTES = 32 * 1024 * 1024
+            # base64 is 4/3 the size of the decoded bytes; reject early.
+            if len(data_b64) > (_MAX_IMAGE_BYTES * 4) // 3 + 16:
+                return {"ok": False, "error": "image too large"}
             try:
                 data = base64.b64decode(data_b64, validate=True)
             except Exception as exc:  # noqa: BLE001
                 return {"ok": False, "error": f"invalid base64: {exc}"}
+            if len(data) > _MAX_IMAGE_BYTES:
+                return {"ok": False, "error": "image too large"}
 
             def _sanitize(value: str) -> str:
                 return re.sub(r"[^a-zA-Z0-9._-]", "", value)
@@ -436,6 +447,11 @@ class ServiceHost:
                 raise ValueError("settings.update requires a settings object")
 
             cfg = load_user_config()
+            # Live-apply mutations are deferred until AFTER save_user_config
+            # succeeds, so a failed persist (disk full, validation) doesn't leave
+            # the in-memory config diverged from the file. Persist first, then
+            # apply.
+            live_apply: list[Callable[[], None]] = []
 
             # --- tui keys (re-validate the merged tui block) ---
             tui_merged: dict[str, Any] = {
@@ -464,7 +480,9 @@ class ServiceHost:
                     patch.harness = value
                     cfg.collaborator = patch
                     # Apply live so new spawns use it without a daemon restart.
-                    self.config.collaborator.harness = value
+                    live_apply.append(
+                        lambda v=value: setattr(self.config.collaborator, "harness", v)
+                    )
 
             # --- crow_harnesses override (single -> harness; multi -> harnesses; null -> clear) ---
             if "crow_harnesses" in partial:
@@ -488,10 +506,14 @@ class ServiceHost:
                         patch.harnesses = list(value)
                     cfg.default_crow = patch
                     # Apply live so new spawns use it without a daemon restart.
-                    self.config.default_crow.harness = value[0]
-                    self.config.default_crow.harnesses = (
-                        list(value) if len(value) > 1 else None
-                    )
+                    _live_harness = value[0]
+                    _live_harnesses = list(value) if len(value) > 1 else None
+
+                    def _apply_crow(h=_live_harness, hs=_live_harnesses) -> None:
+                        self.config.default_crow.harness = h
+                        self.config.default_crow.harnesses = hs
+
+                    live_apply.append(_apply_crow)
 
             # --- llm block (deep-merge; "***" api_key sentinel = keep stored value) ---
             if "llm" in partial:
@@ -514,6 +536,10 @@ class ServiceHost:
                 cfg.llm = UserLlmConfig.model_validate(merged_llm)
 
             save_user_config(cfg)
+            # Persist succeeded -> now apply the live mutations so in-memory and
+            # on-disk config stay in lock-step.
+            for apply in live_apply:
+                apply()
             # NOTE: llm env changes are NOT applied live; they take effect at next
             # daemon start via apply_llm_env in Config.load.
             return {"ok": True, "settings": _settings_payload(cfg)}
@@ -553,12 +579,30 @@ class ServiceHost:
             user_cfg = load_user_config()
         except Exception:
             user_cfg = None
-        self.runtime = Runtime(self.config, self.repo_root, user_cfg=user_cfg)
-        await self.runtime.start()
-        if self.runtime.db is None or self.runtime.bus is None or self.runtime.run_id is None:
-            raise RuntimeError("runtime failed to initialize db/bus/run_id")
-        self.read_model = ServiceReadModel(db_path(self.repo_root))
+        # Bringup is multi-step (runtime, socket, TCP, workers, poll tasks,
+        # question listener). If any step throws, the runtime is already
+        # started (flock held, tmux reconciled, agents reattached) and tasks
+        # may already exist -- nothing would call ``stop()`` because
+        # ``__aexit__`` only fires after ``start()`` returns. Roll back by
+        # running the (idempotent, None-tolerant) ``stop()`` on any failure
+        # before re-raising, so a half-started daemon never leaves the lock
+        # held or tmux sessions orphaned.
+        try:
+            self.runtime = Runtime(self.config, self.repo_root, user_cfg=user_cfg)
+            await self.runtime.start()
+            if self.runtime.db is None or self.runtime.bus is None or self.runtime.run_id is None:
+                raise RuntimeError("runtime failed to initialize db/bus/run_id")
+            self.read_model = ServiceReadModel(db_path(self.repo_root))
 
+            await self._start_inner()
+        except BaseException:
+            with contextlib.suppress(Exception):
+                await self.stop()
+            raise
+
+    async def _start_inner(self) -> None:
+        assert self.runtime is not None and self.runtime.bus is not None
+        assert self.runtime.db is not None and self.runtime.run_id is not None
         self.register_default_rpc_handlers()
 
         self.broker = DurableBroker(self.runtime.bus, self.runtime.db)

@@ -612,6 +612,10 @@ class Orchestrator:
         if bus is None:
             return
 
+        # Idempotent: drop any prior subscription so a repeat start (test
+        # harness, in-process restart) does not leak a handler closing over self.
+        self.stop_question_listener()
+
         async def _handle(event: Any) -> None:
             if getattr(event, "type", None) != "question":
                 return
@@ -621,6 +625,14 @@ class Orchestrator:
             await self.route_crow_ask(ticket_id, question, crow_session)
 
         self._question_listener = bus.subscribe(_handle, None)
+
+    def stop_question_listener(self) -> None:
+        """Cancel the QuestionEvent subscription if one is active."""
+        listener = self._question_listener
+        if listener is not None:
+            with contextlib.suppress(Exception):
+                listener.cancel()
+            self._question_listener = None
 
     async def route_crow_ask(
         self,
@@ -648,9 +660,11 @@ class Orchestrator:
         spawning the agent + its handler if needed."""
         assert self.rt.db is not None
         agent_id = f"planner-{plan_name}"
-        if plan_name not in self._planner_spawn_locks:
-            self._planner_spawn_locks[plan_name] = asyncio.Lock()
-        async with self._planner_spawn_locks[plan_name]:
+        # setdefault keeps the get-or-create atomic; never insert an await
+        # between resolving the lock and acquiring it, or two coroutines could
+        # each create a distinct Lock and defeat the mutual exclusion.
+        lock = self._planner_spawn_locks.setdefault(plan_name, asyncio.Lock())
+        async with lock:
             agent = self.rt.get_agent(agent_id)
             if agent is not None and await self._agent_is_live(agent):
                 handler = self.rt.get_agent(f"planning_handler-{plan_name}")

@@ -71,29 +71,40 @@ def apply_ticket_carve_payload(
 ) -> None:
     """Replace deps, skills, checklist and update ticket title/harness/model.
 
-    Caller must wrap in a transaction if combined with status changes.
+    The delete+reinsert of deps and checklist is wrapped in a ``SAVEPOINT`` so the
+    whole payload applies atomically (a mid-write FK violation or crash can't leave
+    the ticket with its deps wiped and only some checklist rows back). SAVEPOINT
+    nests safely whether or not the caller already has a transaction open (carve.py
+    wraps this in ``BEGIN``; ticket_ops applies it on an autocommit connection).
     """
-    conn.execute(
-        """
-        UPDATE tickets
-           SET title = ?, harness = ?, model = ?, updated_at = ?
-         WHERE id = ?
-        """,
-        (title, harness, model, _now(), ticket_id),
-    )
-    conn.execute("DELETE FROM ticket_deps WHERE ticket_id = ?", (ticket_id,))
-    for dep in deps:
+    conn.execute("SAVEPOINT carve_payload")
+    try:
         conn.execute(
-            "INSERT INTO ticket_deps(ticket_id, depends_on_id) VALUES (?, ?)",
-            (ticket_id, dep),
+            """
+            UPDATE tickets
+               SET title = ?, harness = ?, model = ?, updated_at = ?
+             WHERE id = ?
+            """,
+            (title, harness, model, _now(), ticket_id),
         )
-    del skills
-    conn.execute("DELETE FROM checklist WHERE ticket_id = ?", (ticket_id,))
-    for ord_, text in enumerate(checklist):
-        conn.execute(
-            "INSERT INTO checklist(ticket_id, ord, text, done) VALUES (?, ?, ?, 0)",
-            (ticket_id, ord_, text),
-        )
+        conn.execute("DELETE FROM ticket_deps WHERE ticket_id = ?", (ticket_id,))
+        for dep in deps:
+            conn.execute(
+                "INSERT INTO ticket_deps(ticket_id, depends_on_id) VALUES (?, ?)",
+                (ticket_id, dep),
+            )
+        del skills
+        conn.execute("DELETE FROM checklist WHERE ticket_id = ?", (ticket_id,))
+        for ord_, text in enumerate(checklist):
+            conn.execute(
+                "INSERT INTO checklist(ticket_id, ord, text, done) VALUES (?, ?, ?, 0)",
+                (ticket_id, ord_, text),
+            )
+        conn.execute("RELEASE carve_payload")
+    except Exception:
+        conn.execute("ROLLBACK TO carve_payload")
+        conn.execute("RELEASE carve_payload")
+        raise
 
 
 def get_ticket(conn: sqlite3.Connection, ticket_id: str) -> TicketRecord | None:

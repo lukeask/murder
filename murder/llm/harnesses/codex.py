@@ -275,14 +275,29 @@ class CodexAdapter(HarnessAdapter):
         if not await self.request_model_list(session):
             # Picker never rendered → trust the launch flag for the model
             # (effort stays best-effort in this degraded path).
-            return self.startup_model == model
+            degraded = self.startup_model == model
+            _log.warning(
+                "codex set_model degraded: picker never rendered for model=%r effort=%r; "
+                "returning %s on launch-flag match alone (model NOT pane-confirmed)",
+                model,
+                desired_effort,
+                degraded,
+            )
+            return degraded
         pane = await tmux.capture_pane(session, lines=200)
         choices = parse_numbered_model_choices(pane)
         choice = next((c for c in choices if c.model_id == model), None)
         if choice is None or choice.index is None:
             await tmux.send_keys(session, "Escape", literal=False, enter=False)
             # Model absent from the rendered list → same launch-flag fallback.
-            return self.startup_model == model
+            degraded = self.startup_model == model
+            _log.warning(
+                "codex set_model degraded: model=%r absent from rendered picker list; "
+                "returning %s on launch-flag match alone (model NOT pane-confirmed)",
+                model,
+                degraded,
+            )
+            return degraded
 
         await tmux.send_keys(session, str(choice.index), literal=True, enter=False)
 
@@ -320,7 +335,15 @@ class CodexAdapter(HarnessAdapter):
             return True
         # Picker was driven but the change didn't read back; trust the launch
         # flag for the model rather than failing on a slow/garbled pane read.
-        return self.startup_model == model
+        degraded = self.startup_model == model
+        _log.warning(
+            "codex set_model degraded: picker driven but model=%r effort=%r did not read "
+            "back; returning %s on launch-flag match alone (state NOT pane-confirmed)",
+            model,
+            desired_effort,
+            degraded,
+        )
+        return degraded
 
     def parse_active_model_state(self, pane_text: str) -> HarnessModelState | None:
         clean = strip_ansi(pane_text)

@@ -1,5 +1,6 @@
 """Native LLM clients for CrowHandler and PlanningAgent."""
 
+import logging
 import os
 from typing import TYPE_CHECKING
 
@@ -14,6 +15,8 @@ from murder.llm.clients.openrouter import OpenRouterClient
 
 if TYPE_CHECKING:
     from murder.user_config import UserConfig
+
+LOGGER = logging.getLogger(__name__)
 
 
 def create_client(provider: str) -> APIClient | None:
@@ -66,6 +69,13 @@ def resolve_role_client_tiered(
     tier = resolve_tier(user_cfg, role)
     if tier is None:
         return (resolve_role_client(config), config)
+    if tier.auto_free and tier.model:
+        LOGGER.warning(
+            "tier %r sets both auto_free and model=%r; the model is ignored "
+            "(auto-free uses its fixed free pool)",
+            role,
+            tier.model,
+        )
     effective_cfg = config.model_copy(
         update={
             "provider": tier.provider,

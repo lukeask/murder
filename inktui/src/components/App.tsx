@@ -33,7 +33,16 @@
  */
 
 import { Box, type DOMElement, type Key, measureElement, Text } from 'ink';
-import { type JSX, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import {
+  Component,
+  type JSX,
+  type ReactNode,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import type { BusClient } from '../bus/BusClient.js';
 import { AppStoreProvider, useAppStore, useAppStoreApi } from '../hooks/useAppStore.js';
 import { useBodyLayout } from '../hooks/useBodyLayout.js';
@@ -366,6 +375,38 @@ export function makeChatInputHandler(
       return false;
     },
   };
+}
+
+/**
+ * A render-path error boundary for the Body region (the one structural gap flagged in review). A
+ * throw inside any panel's render (a selector returning a malformed view, an undefined-index access
+ * in a `renderEntry`) would otherwise take down the entire Ink app — Ink has no per-subtree recovery
+ * of its own. Wrapping just the Body converts that into a degraded panel: the chrome (TopBar, chat,
+ * BottomBar) stays live and the body shows a "panel crashed" line instead of the process exiting.
+ *
+ * It must be a class component — `componentDidCatch`/`getDerivedStateFromError` have no hooks
+ * equivalent. The fallback uses bare Ink primitives (no `useTheme`, which is a hook) and a `dimColor`
+ * notice, matching the min-terminal guard's styling. Reset is intentionally manual (restart/resize);
+ * a silently self-resetting boundary would just re-throw on the next render of the same bad slice.
+ */
+class BodyErrorBoundary extends Component<{ readonly children: ReactNode }, { hasError: boolean }> {
+  override state = { hasError: false };
+
+  static getDerivedStateFromError(): { hasError: boolean } {
+    return { hasError: true };
+  }
+
+  override render(): ReactNode {
+    if (this.state.hasError) {
+      return (
+        <Box flexGrow={1} alignItems="center" justifyContent="center" flexDirection="column">
+          <Text>a panel crashed</Text>
+          <Text dimColor>the rest of the app is still live — restart to recover</Text>
+        </Box>
+      );
+    }
+    return this.props.children;
+  }
 }
 
 /**
@@ -849,49 +890,51 @@ function Shell({
           the body — rather than the old float-up where the Overlay was a sibling AFTER the bottom
           chrome. When no mode is up the panels (rails + Stage) fill the slot. */}
       <Box flexGrow={1} flexBasis={0} minHeight={0} overflow="hidden" flexDirection="column">
-        {active !== null ? (
-          <Overlay />
-        ) : (
-          // Orientation-aware panels: landscape lays the rails + Stage out in a row (side-by-side),
-          // portrait stacks them in a column.
-          <Box
-            flexDirection={orientation === 'landscape' ? 'row' : 'column'}
-            columnGap={orientation === 'landscape' ? paneGap : 0}
-            rowGap={orientation === 'portrait' ? paneGap : 0}
-            flexGrow={1}
-            flexBasis={0}
-            minHeight={0}
-            overflow="hidden"
-          >
-            <Rail
-              side="left"
-              orientation={orientation}
-              panels={LEFT_PANELS}
-              renderPanel={dispatchPanel}
-              // Explicit, budget-computed cross-axis size — only as wide as its widest ledger row (R1/R2),
-              // compressed (so trailing columns drop) when the Stage's 60% floor needs the room (R3).
-              cells={bodyLayout.leftRailCells}
-              // User-configured spacing between this rail's stacked/side-by-side panes.
-              paneGap={paneGap}
-            />
-            {/* Phase 4a: the Stage center region — tiles the favorited-crow chat-history Panes, growing to
+        <BodyErrorBoundary>
+          {active !== null ? (
+            <Overlay />
+          ) : (
+            // Orientation-aware panels: landscape lays the rails + Stage out in a row (side-by-side),
+            // portrait stacks them in a column.
+            <Box
+              flexDirection={orientation === 'landscape' ? 'row' : 'column'}
+              columnGap={orientation === 'landscape' ? paneGap : 0}
+              rowGap={orientation === 'portrait' ? paneGap : 0}
+              flexGrow={1}
+              flexBasis={0}
+              minHeight={0}
+              overflow="hidden"
+            >
+              <Rail
+                side="left"
+                orientation={orientation}
+                panels={LEFT_PANELS}
+                renderPanel={dispatchPanel}
+                // Explicit, budget-computed cross-axis size — only as wide as its widest ledger row (R1/R2),
+                // compressed (so trailing columns drop) when the Stage's 60% floor needs the room (R3).
+                cells={bodyLayout.leftRailCells}
+                // User-configured spacing between this rail's stacked/side-by-side panes.
+                paneGap={paneGap}
+              />
+              {/* Phase 4a: the Stage center region — tiles the favorited-crow chat-history Panes, growing to
                 fill whatever the rails leave (full width when both rails are off). It carries the budget
                 floor (R3/R4) so it can never be sized below its guaranteed ≥60% share. Phase 4b adds
                 doc-view panes to its right; the doc slice is untouched here. The Stage itself clips/grows. */}
-            <Stage minCells={bodyLayout.stageCells} axis={bodyLayout.axis} paneGap={paneGap} />
-            <Rail
-              side="right"
-              orientation={orientation}
-              panels={RIGHT_PANELS}
-              renderPanel={dispatchPanel}
-              // The right rail (usage · crows) is sized to the crow-ledger width when crows are on (R6),
-              // computed relative to the live terminal — no `"24%"` absolute anymore (R5).
-              cells={bodyLayout.rightRailCells}
-              // User-configured spacing between this rail's stacked/side-by-side panes.
-              paneGap={paneGap}
-            />
-          </Box>
-        )}
+              <Stage minCells={bodyLayout.stageCells} axis={bodyLayout.axis} paneGap={paneGap} />
+              <Rail
+                side="right"
+                orientation={orientation}
+                panels={RIGHT_PANELS}
+                renderPanel={dispatchPanel}
+                // The right rail (usage · crows) is sized to the crow-ledger width when crows are on (R6),
+                // computed relative to the live terminal — no `"24%"` absolute anymore (R5).
+                cells={bodyLayout.rightRailCells}
+                // User-configured spacing between this rail's stacked/side-by-side panes.
+                paneGap={paneGap}
+              />
+            </Box>
+          )}
+        </BodyErrorBoundary>
       </Box>
       <Box flexShrink={0} flexDirection="column">
         {!chatInputHidden && (

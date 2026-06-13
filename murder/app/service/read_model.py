@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 from collections import defaultdict
 from contextlib import closing
@@ -38,6 +39,8 @@ from murder.state.persistence.schema import get_db
 from murder.state.storage.git_transit import TransitSnapshot, build_transit_snapshot
 from murder.state.storage.paths import report_md
 from murder.work.tickets.parser import read_ticket_md
+
+LOGGER = logging.getLogger(__name__)
 
 # Ticket states that indicate the work item is closed; a failed agent on such a
 # ticket is droppable once its heartbeat goes stale.
@@ -531,6 +534,7 @@ class ServiceReadModel:
             try:
                 models = _json.loads(str(row["models_json"] or "[]"))
             except (ValueError, TypeError):
+                LOGGER.debug("harness_models row %r has unparseable models_json", harness)
                 models = []
             models_map[harness] = models
 
@@ -574,6 +578,7 @@ def _plan_parent_from_frontmatter(frontmatter_json: object) -> str | None:
     try:
         data = json.loads(frontmatter_json)
     except (ValueError, TypeError):
+        LOGGER.debug("plan frontmatter_json failed to parse; treating parent as None")
         return None
     if not isinstance(data, dict):
         return None
@@ -616,6 +621,7 @@ def _extract_user_text(payload_json: object) -> str:
     try:
         data = json.loads(payload_json)
     except (ValueError, TypeError):
+        LOGGER.debug("user-block payload_json failed to parse; returning empty text")
         return ""
     if not isinstance(data, dict):
         return ""

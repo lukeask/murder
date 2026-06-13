@@ -24,6 +24,7 @@ import logging
 import sqlite3
 from datetime import datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from murder.llm.harnesses import REGISTRY, capabilities_for
 from murder.llm.harnesses.model_discovery import discover_harness_models
@@ -56,7 +57,15 @@ def get_available_models(harness: str) -> list[tuple[str, str]]:
     cached = _CACHE.get(harness)
     if cached:
         return list(cached)
-    return _fallback_models(harness)
+    fallback = _fallback_models(harness)
+    if fallback:
+        LOGGER.warning(
+            "live model discovery unavailable for %s; using hardcoded "
+            "available_startup_models fallback (may be stale): %s",
+            harness,
+            [mid for mid, _ in fallback],
+        )
+    return fallback
 
 
 def set_discovered_models(harness: str, models: list[tuple[str, str]]) -> None:
@@ -143,7 +152,7 @@ async def refresh_and_persist_harness_models(
     ]
     results = await asyncio.gather(*tasks)
 
-    fetched_at = datetime.utcnow().isoformat(timespec="seconds")
+    fetched_at = datetime.now(tz=ZoneInfo("UTC")).isoformat(timespec="seconds")
 
     for harness, (models, error) in zip(harnesses, results):
         # Update in-process cache for successes.

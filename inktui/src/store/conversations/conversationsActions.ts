@@ -197,10 +197,15 @@ export function createConversationsActions(
   bus: BusClient,
   store: StoreApi<AppStore>,
 ): ConversationsActions {
+  // Per-call request token — guards against a stale reply replacing the authoritative set when a
+  // reconnect re-prime overlaps two refreshes (same pattern as listSlice.ts / transitActions).
+  let seq = 0;
   return {
     async refresh(): Promise<void> {
+      const token = ++seq;
       try {
         const reply = await bus.rpc('state.conversations_snapshot', {});
+        if (token !== seq) return;
         // Project each ConversationSummary into the transcripts map keyed by agent_id.
         // CONTRACT ASSUMPTION: one active conversation per agent (same assumption the slice makes
         // for `conversation.block` events). `parseBlock` applies to each ConversationBlockSummary
@@ -216,11 +221,15 @@ export function createConversationsActions(
             queuedMessage: conv.queued_message ?? null,
           };
         }
+        // REPLACE, do not union: the snapshot is authoritative for the in-progress set. A merge
+        // (`{...old, ...parsed}`) would keep an agent whose conversation has since ENDED (absent
+        // from the snapshot) forever — accumulating ghost panes/dead transcripts across reconnects.
+        // The map is rebuilt from exactly the snapshot's conversations.
         store.setState((state) => ({
           conversations: {
             ...state.conversations,
-            transcripts: { ...state.conversations.transcripts, ...parsed },
-            meta: { ...state.conversations.meta, ...meta },
+            transcripts: parsed,
+            meta,
           },
         }));
       } catch {
@@ -257,10 +266,12 @@ export function createConversationsActions(
           conversations: { ...state.conversations, activePaneAgentId: agentId },
         }));
       } catch (error: unknown) {
-        // Swallow: send is fire-and-forget from the UI perspective.
-        // The bus-level error policy (timeout/drop) is in UdsBusClient.
-        // A future retry/status mechanism belongs in a dedicated action.
-        void error;
+        // Surface, do NOT silently swallow: a dropped/timed-out send used to vanish with no signal,
+        // so the user saw "nothing happened" while a message may or may not have gone through. The
+        // round-trip failed from the client's view — say so. (The poll loop already resumes through
+        // a transient blip; reaching here means the client gave up or the command genuinely failed.)
+        const message = error instanceof Error ? error.message : String(error);
+        toastStore.getState().push(`send failed: ${message}`, { severity: 'error', ttlMs: 6000 });
       }
     },
 

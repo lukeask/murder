@@ -72,6 +72,10 @@ class CrowHandler(Daemon):
         self._done_pane_hash: str | None = None
         self._log_path: Path | None = None
         self._terminal_failure = False
+        # Set by a tick that detects a terminal ticket; the loop honours it and
+        # finalizes after returning, rather than cancelling its own poll task
+        # mid-tick via a fire-and-forget create_task(self.stop()).
+        self._stop_requested = False
         self._consecutive_tick_failures = 0
         self._last_orchestration_t: float = 0.0
         self._last_orchestration_pane_hash: str | None = None
@@ -115,7 +119,11 @@ class CrowHandler(Daemon):
 
     async def _loop(self) -> None:
         try:
-            while self.status == AgentStatus.RUNNING and not self._terminal_failure:
+            while (
+                self.status == AgentStatus.RUNNING
+                and not self._terminal_failure
+                and not self._stop_requested
+            ):
                 try:
                     await self.tick()
                     self._consecutive_tick_failures = 0
@@ -123,6 +131,8 @@ class CrowHandler(Daemon):
                     raise
                 except Exception as e:
                     await self._handle_tick_failure(e)
+                if self._stop_requested:
+                    break
                 interval = (
                     self.config.idle_projection_interval_s
                     if self._idle_cached
@@ -132,6 +142,12 @@ class CrowHandler(Daemon):
         finally:
             if self._terminal_failure:
                 await self._finalize_after_tick_failure()
+            elif self._stop_requested:
+                # We are running *inside* the poll task; clear the handle so
+                # super().stop() does not try to cancel-and-await the task we're
+                # in (a self-await deadlock). The loop has already exited.
+                self._poll_task = None
+                await self.stop()
 
     async def stop(self, *, failed: bool = False, kill_session: bool = True) -> None:
         del kill_session  # crow_handler has no real tmux session
@@ -235,7 +251,7 @@ class CrowHandler(Daemon):
         ticket_status = get_ticket_status(self.runtime.db, self.ticket_id)
         if TicketStatus(ticket_status) in (TicketStatus.DONE, TicketStatus.FAILED):
             self._log(f"ticket {self.ticket_id} is {ticket_status} — stopping handler")
-            asyncio.create_task(self.stop())
+            self._stop_requested = True
             return
 
         # Tail-slice for non-idempotent detectors: keep the same window as the

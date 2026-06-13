@@ -193,12 +193,19 @@ class SchedulerWorker(Worker):
             SELECT s.harness, s.status_json
               FROM harness_usage_snapshots s
               JOIN (
-                    SELECT harness, MAX(fetched_at) AS fetched_at
+                    -- Pick the single newest row per harness; the rowid tiebreak
+                    -- prevents duplicate-timestamp snapshots from selecting a
+                    -- harness twice in one tick (double-emit).
+                    SELECT harness, MAX(rowid) AS rowid
                       FROM harness_usage_snapshots
+                     WHERE fetched_at = (
+                           SELECT MAX(fetched_at)
+                             FROM harness_usage_snapshots AS inner_s
+                            WHERE inner_s.harness = harness_usage_snapshots.harness
+                       )
                      GROUP BY harness
                    ) latest
-                ON latest.harness = s.harness
-               AND latest.fetched_at = s.fetched_at
+                ON latest.rowid = s.rowid
             """
         ).fetchall()
 
@@ -224,7 +231,7 @@ class SchedulerWorker(Worker):
                 """
                 SELECT status_json FROM harness_usage_snapshots
                  WHERE harness = ?
-                 ORDER BY fetched_at DESC
+                 ORDER BY fetched_at DESC, rowid DESC
                  LIMIT 2
                 """,
                 (harness,),
@@ -350,7 +357,7 @@ class SchedulerWorker(Worker):
         harness_clause = "t.harness = ?" if reserve_null else "(t.harness = ? OR t.harness IS NULL)"
         ready_rows = ctx.db.execute(
             f"""
-            SELECT t.id, t.schedule_at, t.harness
+            SELECT t.id, t.schedule_at, t.harness, t.updated_at
               FROM tickets AS t
              WHERE t.status = 'ready'
                AND {harness_clause}
@@ -371,6 +378,12 @@ class SchedulerWorker(Worker):
             )
             for row in ready_rows
         ]
+        # ticket_id -> updated_at of its current `ready` row; folded into the
+        # kickoff idempotency key so a ticket that stays `ready` (kickoff
+        # enqueued but not yet flipped to in_progress) is NOT re-enqueued every
+        # tick, while a ticket that cycles back to `ready` (new updated_at)
+        # gets a fresh kickoff.
+        ready_state_token = {row["id"]: row["updated_at"] for row in ready_rows}
 
         policy_input = SchedulerInput(
             window=SchedulerWindow(
@@ -429,7 +442,14 @@ class SchedulerWorker(Worker):
             return
 
         command_id = str(uuid4())
-        idempotency_key = f"scheduler.kickoff_ready:{ctx.run_id}:{self._tick_seq}:{ticket_id}"
+        # Key on (ticket, ready-state token) rather than tick_seq: a stuck-ready
+        # ticket keeps the same key across ticks (IntegrityError → no re-enqueue),
+        # but a ticket that transitions out of and back into `ready` gets a new
+        # token and a fresh kickoff.
+        state_token = ready_state_token.get(ticket_id, "")
+        idempotency_key = (
+            f"scheduler.kickoff_ready:{ctx.run_id}:{ticket_id}:{state_token}"
+        )
         try:
             enqueue_command(
                 ctx.db,

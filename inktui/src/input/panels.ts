@@ -11,8 +11,8 @@
  *
  * Screen positions (from the plan's Layout section):
  *   1 plans · 2 notes · 3 reports · 4 tickets · 5 history   → the left region
- *   9 usage · 0 crows                                       → the right region
- *   6–8 reserved (settings, …) — deliberately absent so an unbound digit is a no-op.
+ *   8 transit · 9 usage · 0 crows                           → the right region
+ *   6–7 reserved — deliberately absent so an unbound digit is a no-op.
  */
 
 /** The closed set of panel ids. A string union keyed by domain, not by number, so code reads
@@ -40,7 +40,7 @@ export interface PanelPlacement {
 
 /** The digits that bind to a panel. A literal union (not `number`) so {@link DIGIT_TO_PANEL} is
  * checked total over exactly these and a stray digit can't silently map to nothing at a type
- * level. `6`–`8` are intentionally excluded (reserved). */
+ * level. `6`–`7` are intentionally excluded (reserved); `8` binds `transit`. */
 export type PanelDigit = 1 | 2 | 3 | 4 | 5 | 8 | 9 | 0;
 
 /**
@@ -64,7 +64,7 @@ export const PANEL_IDS: readonly PanelId[] = PANELS.map((p) => p.id);
 
 /**
  * Total map from a `ctrl+<n>` digit to the panel it toggles. Built from {@link PANELS} so the two
- * never drift. A digit not present (6–8, or any non-digit) is simply absent → the dispatcher treats
+ * never drift. A digit not present (6–7, or any non-digit) is simply absent → the dispatcher treats
  * `ctrl+<that>` as a no-op, which is the correct "reserved/unbound" behaviour.
  */
 export const DIGIT_TO_PANEL: Readonly<Record<PanelDigit, PanelId>> = Object.fromEntries(

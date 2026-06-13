@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from murder.app.service.runtime_scope import OrchestratorHost
@@ -90,7 +90,8 @@ class PlanOps:
         """Create or refresh a draft plan row and its materialized markdown."""
         assert self.rt.db is not None
         name = _validate_plan_filename_stem(name, command="plan.scaffold")
-        now = datetime.utcnow()
+        # Naive UTC (utcnow() is deprecated since 3.12) to match plan timestamps.
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
         plan = Plan(
             name=name,
             status=PlanStatus.DRAFT,
@@ -276,7 +277,7 @@ class PlanOps:
                     return slug
             except Exception:
                 LOGGER.exception("plan auto-name failed; falling back to timestamp slug")
-        return f"plan-{datetime.utcnow().strftime('%Y%m%d-%H%M%S')}"
+        return f"plan-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}"
 
     async def create_plan(
         self,

@@ -1,8 +1,8 @@
-# Parsed transcript ground-truth schema (parser v2)
+# Parsed transcript ground-truth schema
 
-Ground-truth fixtures for the **new** harness transcript parsing stack (the rewrite that
-replaces `murder/llm/harnesses/transcripts.py`'s flat `(role, text)` model). Each scenario dir
-holds an input frame sequence and the expected parsed document:
+Ground-truth fixtures for the harness transcript parsing stack
+(`murder/llm/harnesses/transcripts/`). Each scenario dir holds an input frame
+sequence and the expected parsed document:
 
 ```
 transcripts/<harness>/
@@ -59,11 +59,17 @@ small-LLM summarization pass over `segments`. It is `null` in every deterministi
 // CC background subagent lifecycle. status "dispatched" when launched, "completed" when done.
 { "type": "agent_event", "name": str, "status": "dispatched" | "completed", "elapsed": str | null }
 
-// live multiple-choice prompt. `selected` tracks the currently highlighted
-// option while the prompt is live; `chosen` is the submitted option once answered.
+// live multiple-choice prompt. `selected` tracks the currently highlighted option
+// while the prompt is live (null when the cursor sits on a multi-select's Submit
+// row); `chosen` is the submitted answer once answered — a single option number,
+// or a list of checked numbers on a multi-select. `multi` is true for a
+// multi-select (CC AskUserQuestion multiSelect) menu, in which case each option
+// carries `checked` (its checkbox state); `checked` is null on single-select menus.
 { "type": "choice_prompt", "question": str,
-  "options": [ { "number": int, "label": str, "description": str | null }, … ],
-  "footer": str | null, "selected": int, "answered": bool, "chosen": int | null }
+  "options": [ { "number": int, "label": str, "description": str | null,
+                 "checked": bool | null }, … ],
+  "footer": str | null, "selected": int | null, "answered": bool,
+  "chosen": int | (int[]) | null, "multi": bool }
 ```
 
 ## Suppressed entirely (never a segment)
