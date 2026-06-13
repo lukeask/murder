@@ -32,6 +32,7 @@ from murder.verdict.policy.scheduler_policy import (
 from murder.runtime.workers.base import Worker, WorkerCtx, WorkerSpec
 
 _VALID_MODES = frozenset({"manual", "autorun_ready", "crow_magic"})
+_VALID_STEERING = frozenset({"auto", "pause", "prefer"})
 _TICK_INTERVAL_S = 10.0
 _WINDOW_NAME_RE = re.compile(r"^(\d+)(h|d)$", re.IGNORECASE)
 _WINDOW_NAME_MINUTES = {"h": 60.0, "d": 1440.0}
@@ -102,12 +103,13 @@ class SchedulerWorker(Worker):
 
     SET_MODE = "scheduler.set_mode"
     SET_PARAMS = "scheduler.set_params"
+    SET_STEERING = "scheduler.set_steering"
 
     def __init__(self) -> None:
         super().__init__(
             WorkerSpec(
                 name="scheduler",
-                accepts=(self.SET_MODE, self.SET_PARAMS),
+                accepts=(self.SET_MODE, self.SET_PARAMS, self.SET_STEERING),
                 process_model="thread",
             )
         )
@@ -284,6 +286,47 @@ class SchedulerWorker(Worker):
         if t_period is None or t_period <= 0:
             return
 
+        # RT5 steering. `_evaluate_window` is only ever called from `_tick_crow_magic`,
+        # so steering is consumed in crow_magic mode only — no extra mode gate is needed.
+        steering, any_prefer = self._load_steering(ctx.db, harness)
+
+        if steering == "pause":
+            # Skip the policy entirely: never call decide(), never enqueue a kickoff.
+            # Still record the decision so the panel reflects the paused state.
+            usage = float(percent_used) / 100.0
+            visible_changed = self._upsert_decision_cache(
+                ctx,
+                harness,
+                window_key,
+                "crow_magic",
+                False,
+                usage,
+                t_until_reset,
+                t_period,
+                0.0,
+                "paused by user",
+                None,
+            )
+            await self._emit_decision(
+                ctx,
+                harness,
+                window_key,
+                False,
+                usage,
+                t_until_reset,
+                t_period,
+                0.0,
+                "paused by user",
+                None,
+                emit_queue_row=visible_changed,
+            )
+            return
+
+        # prefer: NULL-harness ready tickets are reserved for preferred harnesses
+        # while any prefer steering exists. A preferred harness (or any harness when
+        # no prefer exists) keeps today's NULL-inclusive eligibility.
+        reserve_null = any_prefer and steering != "prefer"
+
         # Load per-(harness, window_key) params; fall back to usage_threshold_curve defaults
         params_row = ctx.db.execute(
             "SELECT c_changeoff, t_alwaysyes, alwayscutoff, intensity, multiharness_cutoff "
@@ -304,12 +347,13 @@ class SchedulerWorker(Worker):
             ).fetchone()["n"]
             > 0
         )
+        harness_clause = "t.harness = ?" if reserve_null else "(t.harness = ? OR t.harness IS NULL)"
         ready_rows = ctx.db.execute(
-            """
+            f"""
             SELECT t.id, t.schedule_at, t.harness
               FROM tickets AS t
              WHERE t.status = 'ready'
-               AND (t.harness = ? OR t.harness IS NULL)
+               AND {harness_clause}
                AND NOT EXISTS (
                    SELECT 1 FROM ticket_deps AS d
                      JOIN tickets AS dep ON dep.id = d.depends_on_id
@@ -533,6 +577,8 @@ class SchedulerWorker(Worker):
             return await self._handle_set_mode(command, ctx)
         if command.kind == self.SET_PARAMS:
             return await self._handle_set_params(command, ctx)
+        if command.kind == self.SET_STEERING:
+            return await self._handle_set_steering(command, ctx)
         return {"handled": False}
 
     async def _handle_set_mode(self, command: CommandEvent, ctx: WorkerCtx) -> dict[str, Any]:
@@ -605,3 +651,61 @@ class SchedulerWorker(Worker):
             ),
         )
         return {"handled": True, "harness": harness, "window_key": window_key}
+
+    async def _handle_set_steering(
+        self, command: CommandEvent, ctx: WorkerCtx
+    ) -> dict[str, Any]:
+        if ctx.db is None:
+            raise RuntimeError("SchedulerWorker requires ctx.db")
+        raw_harness = command.payload.get("harness")
+        steering = command.payload.get("steering")
+        harness = (raw_harness or "").strip() if isinstance(raw_harness, str) else ""
+        if not harness:
+            raise ValueError("scheduler.set_steering: harness required")
+        if steering not in _VALID_STEERING:
+            raise ValueError(f"scheduler.set_steering: unknown steering {steering!r}")
+
+        now = datetime.now(timezone.utc).isoformat()
+        ctx.db.execute(
+            """
+            INSERT INTO scheduler_steering (harness, steering, updated_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(harness) DO UPDATE SET
+                steering   = excluded.steering,
+                updated_at = excluded.updated_at
+            """,
+            (harness, steering, now),
+        )
+        # Key-only client invalidation: queue_row already invalidates the Ink
+        # usage slice, which refetches the schedule snapshot (carrying steering).
+        if ctx.bus is not None and ctx.run_id is not None:
+            await ctx.bus.publish(
+                StateSnapshotEvent(
+                    run_id=ctx.run_id,
+                    agent_id=self.name,
+                    entity=Entity.QUEUE_ROW,
+                    key=f"steering:{harness}",
+                )
+            )
+        return {"handled": True, "harness": harness, "steering": steering}
+
+    def _load_steering(self, db: sqlite3.Connection, harness: str) -> tuple[str, bool]:
+        """Return (steering_for_harness, any_prefer_exists).
+
+        Fail-soft (locked decision): a missing row OR a value outside the valid
+        set coerces to 'auto', so a malformed table can never wedge scheduling.
+        """
+        row = db.execute(
+            "SELECT steering FROM scheduler_steering WHERE harness = ?",
+            (harness,),
+        ).fetchone()
+        steering = row["steering"] if row is not None else "auto"
+        if steering not in _VALID_STEERING:
+            steering = "auto"
+        any_prefer = (
+            db.execute(
+                "SELECT COUNT(*) AS n FROM scheduler_steering WHERE steering = 'prefer'"
+            ).fetchone()["n"]
+            > 0
+        )
+        return steering, any_prefer

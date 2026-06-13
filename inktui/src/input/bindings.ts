@@ -60,7 +60,8 @@ export type ActionId =
   | 'global.murder' // ctrl+m — arm the murder confirm for the targeted crow (plain, kitty side-channel)
   | 'global.closePane' // ctrl+q — close the highlighted Stage pane (chat history / doc); plain chord
   | 'panel.star' // alt+f — favorite/star the focused panel's cursor row
-  | 'panel.resetCrow'; // x — arm the two-press reset for the crows panel's cursor row
+  | 'panel.resetCrow' // x — arm the two-press reset for the crows panel's cursor row
+  | 'panel.usageSteering'; // s — cycle the usage panel's cursor gauge steering (auto→prefer→pause)
 
 /**
  * How an action's default binding is expressed:
@@ -245,6 +246,17 @@ export const ACTIONS: Readonly<Record<ActionId, ActionDef>> = {
     // submits `crow.reset`. Not rebindable — plain chords take no command-modifier override.
     default: { kind: 'plain', chord: { input: 'x' } },
     description: 'reset crow',
+    rebindable: false,
+  },
+  'panel.usageSteering': {
+    id: 'panel.usageSteering',
+    // Plain `s` — a panel-scoped chord, only consumed by the UsagePanel keymap when that panel
+    // holds focus (so it never shadows chat typing; same property as the crows panel's plain `x`).
+    // Kept in the registry (not a raw panel literal) so the help overlay sees it. Cycles the
+    // cursor gauge's harness steering auto→prefer→pause→auto. Not rebindable — plain chords take
+    // no command-modifier override.
+    default: { kind: 'plain', chord: { input: 's' } },
+    description: 'cycle steering',
     rebindable: false,
   },
 };

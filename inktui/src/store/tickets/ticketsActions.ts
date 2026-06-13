@@ -74,6 +74,8 @@ export interface ScheduleUsageGaugeDto {
   pct: number;
   t_until_reset_minutes: number;
   t_period_minutes?: number;
+  /** RT5 per-harness steering: 'auto' | 'pause' | 'prefer' (defaults 'auto' if absent). */
+  steering?: string;
 }
 
 /**

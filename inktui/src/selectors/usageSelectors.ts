@@ -55,6 +55,8 @@ export interface UsageGaugeView {
 export interface UsageGroupView {
   readonly harness: string;
   readonly gauges: readonly UsageGaugeView[];
+  /** RT5 steering for this harness ('auto' | 'pause' | 'prefer'), from the group's first row. */
+  readonly steering: string;
 }
 
 /** The whole usage view: provider groups in display order plus load-lifecycle flags. */
@@ -124,7 +126,8 @@ export function selectUsageView(state: UsageState): UsageView {
     if (gauges === undefined) {
       gauges = [];
       byHarness.set(row.harness, gauges);
-      groups.push({ harness: row.harness, gauges });
+      // steering is a per-harness value duplicated across the harness's rows; take the first.
+      groups.push({ harness: row.harness, gauges, steering: row.steering });
     }
     gauges.push(toGaugeView(row));
   }

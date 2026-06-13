@@ -248,6 +248,12 @@ def _load_gauges(conn: sqlite3.Connection) -> list[UsageGaugeSummary]:
          ORDER BY s.harness
         """
     ).fetchall()
+    # RT5: per-harness steering (auto/pause/prefer). Loaded once; coerce any
+    # unknown value to 'auto' (fail-soft, matching the worker's _load_steering).
+    steering_map: dict[str, str] = {}
+    for s_row in conn.execute("SELECT harness, steering FROM scheduler_steering").fetchall():
+        val = str(s_row["steering"])
+        steering_map[str(s_row["harness"])] = val if val in {"auto", "pause", "prefer"} else "auto"
     now = datetime.now(timezone.utc)
     gauges: list[UsageGaugeSummary] = []
     for snap_row in snap_rows:
@@ -278,6 +284,7 @@ def _load_gauges(conn: sqlite3.Connection) -> list[UsageGaugeSummary]:
                     pct=float(pct),
                     t_until_reset_minutes=t_until,
                     t_period_minutes=t_period,
+                    steering=steering_map.get(harness, "auto"),
                 )
             )
     order = {h: i for i, h in enumerate(_PROVIDER_ORDER)}

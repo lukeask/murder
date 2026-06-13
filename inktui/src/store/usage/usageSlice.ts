@@ -29,6 +29,8 @@ export interface UsageRow {
   readonly tUntilResetMinutes: number;
   /** Total window length in minutes. 0 when unknown. */
   readonly tPeriodMinutes: number;
+  /** RT5 per-harness steering: 'auto' | 'pause' | 'prefer'. Wire-faithful, presentation-free. */
+  readonly steering: string;
 }
 
 /**

@@ -382,6 +382,12 @@ CREATE TABLE IF NOT EXISTS scheduler_params (
     PRIMARY KEY (harness, window_key)
 );
 
+CREATE TABLE IF NOT EXISTS scheduler_steering (
+    harness    TEXT PRIMARY KEY,
+    steering   TEXT NOT NULL CHECK(steering IN ('auto','pause','prefer')),
+    updated_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS scheduler_decision_cache (
     harness              TEXT NOT NULL,
     window_key           TEXT NOT NULL,
@@ -475,6 +481,7 @@ def init_db(conn: sqlite3.Connection) -> None:
         _migrate_plans_single_master,
         _migrate_repair_plans_dangling_fk,
         _migrate_role_names,
+        _migrate_scheduler_steering,
         _migrate_ticket_archived_status,
         _migrate_ticket_draft_status,
         _migrate_ticket_drop_skills,
@@ -509,6 +516,7 @@ def init_db(conn: sqlite3.Connection) -> None:
     _migrate_conversation_store(conn)
     _migrate_conversation_queued_message(conn)
     _migrate_map_summaries(conn)
+    _migrate_scheduler_steering(conn)
     ensure_notetaker_context_row(conn)
 
 

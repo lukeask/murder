@@ -16,6 +16,7 @@ function row(overrides: Partial<UsageRow> = {}): UsageRow {
     pct: 50,
     tUntilResetMinutes: 10,
     tPeriodMinutes: 60,
+    steering: 'auto',
     ...overrides,
   };
 }

@@ -692,6 +692,30 @@ def _migrate_map_summaries(conn: sqlite3.Connection) -> None:
         )
 
 
+def _migrate_scheduler_steering(conn: sqlite3.Connection) -> None:
+    """Add the scheduler_steering table (RT5 per-harness usage-window steering).
+
+    Idempotent: the CREATE TABLE IF NOT EXISTS in SCHEMA_SQL handles fresh DBs;
+    this migration handles existing DBs created before RT5 landed.
+    """
+    existing = {
+        row["name"]
+        for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table'"
+        ).fetchall()
+    }
+    if "scheduler_steering" not in existing:
+        conn.executescript(
+            """
+            CREATE TABLE scheduler_steering (
+                harness    TEXT PRIMARY KEY,
+                steering   TEXT NOT NULL CHECK(steering IN ('auto','pause','prefer')),
+                updated_at TEXT NOT NULL
+            );
+            """
+        )
+
+
 def _migrate_conversation_store(conn: sqlite3.Connection) -> None:
     """Add conversations + conversation_blocks tables (Phase 1.b JSON store).
 

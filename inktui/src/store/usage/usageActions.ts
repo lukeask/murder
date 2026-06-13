@@ -15,12 +15,13 @@
 
 import type { StoreApi } from 'zustand';
 import type { BusClient } from '../../bus/BusClient.js';
-import { createRefreshAction } from '../listSlice.js';
-import type { AppStore } from '../store.js';
 // `state.schedule_snapshot` is declared once, by the tickets slice; usage consumes its reply type
 // and the `ScheduleUsageGaugeDto` shape without re-declaring the key (a second `declare module`
 // augmentation with a different `result` would be a TS 2717 collision). Usage data is embedded in
 // the schedule snapshot's `usage_gauges` — there is no separate usage RPC on the live bus.
+import { submitCommand } from '../commandSubmit.js';
+import { createRefreshAction } from '../listSlice.js';
+import type { AppStore } from '../store.js';
 import type { ScheduleUsageGaugeDto } from '../tickets/ticketsActions.js';
 import type { UsageRow } from './usageSlice.js';
 
@@ -32,6 +33,7 @@ function toUsageRow(dto: ScheduleUsageGaugeDto): UsageRow {
     pct: dto.pct,
     tUntilResetMinutes: dto.t_until_reset_minutes,
     tPeriodMinutes: dto.t_period_minutes ?? 0,
+    steering: dto.steering ?? 'auto',
   };
 }
 
@@ -47,12 +49,39 @@ export interface UsageActions {
    * fire-and-forget).
    */
   refresh(): Promise<void>;
+  /**
+   * RT5: set a harness's scheduler steering (`'auto' | 'pause' | 'prefer'`) via the
+   * `scheduler.set_steering` command on the `scheduler` worker, then refetch (belt-and-braces:
+   * the backend also emits a `queue_row` invalidation). Errors route into `usage.error` like a
+   * failed refresh — never thrown past the action (the keypress handler stays fire-and-forget).
+   */
+  setSteering(harness: string, steering: string): Promise<void>;
 }
 
 export function createUsageActions(bus: BusClient, store: StoreApi<AppStore>): UsageActions {
-  return createRefreshAction(bus, store, {
+  const { refresh } = createRefreshAction(bus, store, {
     key: 'usage',
     method: 'state.schedule_snapshot',
     project: (reply) => reply.usage_gauges.map(toUsageRow),
   });
+  return {
+    refresh,
+    async setSteering(harness: string, steering: string): Promise<void> {
+      try {
+        await submitCommand(
+          bus,
+          'scheduler.set_steering',
+          { harness, steering },
+          {
+            targetWorker: 'scheduler',
+          },
+        );
+        await refresh();
+      } catch (err) {
+        store.setState((s) => ({
+          usage: { ...s.usage, error: err instanceof Error ? err.message : String(err) },
+        }));
+      }
+    },
+  };
 }

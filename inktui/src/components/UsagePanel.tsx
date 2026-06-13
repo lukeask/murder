@@ -31,6 +31,7 @@ import { type JSX, memo, useMemo, useState } from 'react';
 import { shallow } from 'zustand/shallow';
 import { useAppStore } from '../hooks/useAppStore.js';
 import {
+  useBindings,
   useEffectiveFocus,
   useFocusRef,
   useMeasureFocus,
@@ -73,7 +74,19 @@ const MIN_EMBED_FILL = 3;
 const DEFAULT_INNER_WIDTH =
   GUTTER_WIDTH + USAGE_BAR_WIDTH + TRAIL_GAP + WIN_WIDTH + 1 + RESET_WIDTH;
 
-type UsageIntent = 'cursorDown' | 'cursorUp' | 'refresh';
+type UsageIntent = 'cursorDown' | 'cursorUp' | 'refresh' | 'cycleSteering';
+
+/** The steering cycle order applied on each `s` press: auto → prefer → pause → auto. */
+const STEERING_CYCLE: Record<string, string> = {
+  auto: 'prefer',
+  prefer: 'pause',
+  pause: 'auto',
+};
+
+/** Next steering value in the cycle; unknown values restart at 'prefer' (after 'auto'). */
+function nextSteering(current: string): string {
+  return STEERING_CYCLE[current] ?? 'prefer';
+}
 
 /**
  * What the fluid gauge line shows at a given inner width (R9): the bar's cell count plus which
@@ -151,22 +164,32 @@ function renderBar(g: UsageGaugeView, theme: Theme, width: number = g.barWidth):
 function HeaderLine({
   harness,
   compact,
+  steering,
 }: {
   readonly harness: string;
   readonly compact: boolean;
+  /** RT5 steering for this harness; a ` [paused]`/` [preferred]` tag trails the name (auto: none). */
+  readonly steering: string;
 }): JSX.Element {
   const theme = useTheme();
+  const tag = steering === 'pause' ? ' [paused]' : steering === 'prefer' ? ' [preferred]' : '';
   if (compact) {
     // No solid band (it crowds a thin column); a dim caret + name reads as a quiet group label.
     return (
       <Box flexShrink={0} width="100%">
-        <Text dimColor wrap="truncate">{`· ${harness}`}</Text>
+        <Text dimColor wrap="truncate">
+          {`· ${harness}`}
+          {tag ? <Text color={theme.accent}>{tag}</Text> : null}
+        </Text>
       </Box>
     );
   }
   return (
     <Box flexShrink={0} width="100%" backgroundColor={theme.panelHeaderBg}>
-      <Text bold wrap="truncate">{` ${harness}`}</Text>
+      <Text bold wrap="truncate">
+        {` ${harness}`}
+        {tag ? <Text color={theme.accent}>{tag}</Text> : null}
+      </Text>
     </Box>
   );
 }
@@ -263,7 +286,11 @@ function UsageBody({
       <UsageKeyLine layout={layout} />
       {view.groups.map((group) => (
         <Box key={group.harness} flexDirection="column" flexShrink={0}>
-          <HeaderLine harness={group.harness} compact={!layout.showReset} />
+          <HeaderLine
+            harness={group.harness}
+            compact={!layout.showReset}
+            steering={group.steering}
+          />
           {group.gauges.map((gauge) => {
             gaugeIndex += 1;
             return (
@@ -307,12 +334,17 @@ export const UsagePanel = memo(function UsagePanel({
   // Rule 1: narrow selector (shallow). Rule 2: selector produces display-ready groups.
   const usage = useAppStore((s) => s.usage, shallow);
   const view = useUsageView(usage);
-  // Rule 3: bus reached only through the dispatched action.
+  // Rule 3: bus reached only through the dispatched actions.
   const refresh = useAppStore((s) => s.actions.usage.refresh);
+  const setSteering = useAppStore((s) => s.actions.usage.setSteering);
+  // The cycle chord (`s`) comes from the central registry (`panel.usageSteering`); `bindings` is a
+  // stable handle, so it's a sound keymap dep.
+  const bindings = useBindings();
 
   // Local UI state: cursor over the flat gauge list (rule 1).
   const [cursor, setCursor] = useState(0);
   const gaugeCount = countGauges(view);
+  const clampedCursor = Math.min(cursor, Math.max(gaugeCount - 1, 0));
 
   // Rule 5: keymap as data in useMemo.
   const keymap: PanelKeymap<UsageIntent> = useMemo(
@@ -329,6 +361,11 @@ export const UsagePanel = memo(function UsagePanel({
           description: 'prev gauge',
         },
         { chord: { input: 'r' }, intent: 'refresh', description: 'refresh' },
+        {
+          chord: bindings.chordsFor('panel.usageSteering'),
+          intent: 'cycleSteering',
+          description: 'steering',
+        },
       ],
       onIntent(intent) {
         switch (intent) {
@@ -341,12 +378,26 @@ export const UsagePanel = memo(function UsagePanel({
           case 'refresh':
             void refresh();
             return;
+          case 'cycleSteering': {
+            if (gaugeCount === 0) return;
+            // Resolve the cursored gauge's harness by walking groups with the same flat index
+            // UsageBody uses, then cycle that group's steering and dispatch (bus only via actions).
+            let idx = clampedCursor;
+            for (const group of view.groups) {
+              if (idx < group.gauges.length) {
+                void setSteering(group.harness, nextSteering(group.steering));
+                return;
+              }
+              idx -= group.gauges.length;
+            }
+            return;
+          }
           default:
             return intent satisfies never;
         }
       },
     }),
-    [gaugeCount, refresh],
+    [gaugeCount, clampedCursor, refresh, setSteering, bindings, view.groups],
   );
   usePanelKeymap(PANEL_ID, keymap);
 
@@ -359,7 +410,7 @@ export const UsagePanel = memo(function UsagePanel({
     <Pane ref={ref} title={PANEL_TITLE} focused={focused}>
       <UsageBody
         view={view}
-        cursor={Math.min(cursor, Math.max(gaugeCount - 1, 0))}
+        cursor={clampedCursor}
         focused={focused}
         layout={gaugeLayoutFor(innerWidth)}
       />

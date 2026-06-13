@@ -228,6 +228,93 @@ describe('UsagePanel — rendering', () => {
     bare.dispose();
   });
 
+  it('renders [paused]/[preferred] header tags per harness steering (RT5)', async () => {
+    const reply = twoGauges();
+    const { store, inputStores, dispose } = await setup({
+      ...reply,
+      usage_gauges: [
+        {
+          harness: 'claude',
+          window_key: 'h1',
+          pct: 65,
+          t_until_reset_minutes: 20,
+          t_period_minutes: 60,
+          steering: 'pause',
+        },
+        {
+          harness: 'codex',
+          window_key: 'h1',
+          pct: 30,
+          t_until_reset_minutes: 5,
+          t_period_minutes: 60,
+          steering: 'prefer',
+        },
+      ],
+    });
+    const { lastFrame } = render(<Harness store={store} inputStores={inputStores} />);
+    await tick();
+    const frame = lastFrame() ?? '';
+    expect(frame).toContain('[paused]'); // claude is paused
+    expect(frame).toContain('[preferred]'); // codex is preferred
+    dispose();
+  });
+
+  it('renders no steering tag for auto (the default)', async () => {
+    const { store, inputStores, dispose } = await setup(); // no steering field → auto
+    const { lastFrame } = render(<Harness store={store} inputStores={inputStores} />);
+    await tick();
+    const frame = lastFrame() ?? '';
+    expect(frame).not.toContain('[paused]');
+    expect(frame).not.toContain('[preferred]');
+    dispose();
+  });
+
+  it('cycles steering on s: dispatches setSteering for the cursored gauge with the next value', async () => {
+    const reply = twoGauges();
+    const { fake, store, inputStores, dispose } = await setup({
+      ...reply,
+      // claude starts auto → s should request 'prefer'.
+      usage_gauges: [
+        {
+          harness: 'claude',
+          window_key: 'h1',
+          pct: 65,
+          t_until_reset_minutes: 20,
+          t_period_minutes: 60,
+          steering: 'auto',
+        },
+        {
+          harness: 'codex',
+          window_key: 'h1',
+          pct: 30,
+          t_until_reset_minutes: 5,
+          t_period_minutes: 60,
+          steering: 'auto',
+        },
+      ],
+    });
+    fake.stubRpc('command.submit', { ok: true, command_id: 'cmd-1' });
+    fake.stubRpc('command.status', {
+      ok: true,
+      status: 'done',
+      result_json: JSON.stringify({ handled: true, harness: 'claude', steering: 'prefer' }),
+    });
+    const { stdin } = render(<Harness store={store} inputStores={inputStores} />);
+    await tick();
+
+    // Cursor starts on gauge 0 (claude). Press the registry's panel.usageSteering chord (`s`).
+    stdin.write('s');
+    await tick();
+    await tick();
+    const submit = fake.rpcCalls.find((c) => c.method === 'command.submit');
+    expect(submit?.params).toMatchObject({
+      target_worker: 'scheduler',
+      kind: 'scheduler.set_steering',
+      payload: { harness: 'claude', steering: 'prefer' },
+    });
+    dispose();
+  });
+
   it('renders empty chrome when the slice has no rows', async () => {
     const { store, inputStores, dispose } = await setup(
       {

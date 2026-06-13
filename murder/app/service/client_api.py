@@ -256,6 +256,7 @@ class UsageGaugeSummary:
     pct: float
     t_until_reset_minutes: float
     t_period_minutes: float = 0.0
+    steering: str = "auto"
 
 
 @dataclass(frozen=True, slots=True)
