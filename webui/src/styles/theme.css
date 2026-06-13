@@ -1,0 +1,92 @@
+/*
+ * Theme variables + base reset.
+ *
+ * The `--color-*` custom properties are WRITTEN AT RUNTIME by `useThemeCssVars()` (see
+ * src/theme/useThemeCssVars.ts) from the active semantic theme. The fallback values below mirror
+ * the default everforest-dark theme so the first paint (before the hook's effect runs) already
+ * looks right and so this file documents the full variable contract in one place.
+ *
+ * To restyle: change these CSS files. To re-theme: switch the theme store scheme — the variables
+ * repaint everything. Never hard-code a hex in a component; always reference `var(--color-*)`.
+ */
+
+:root {
+  /* Branding */
+  --color-brand: #e67e80;
+
+  /* Text */
+  --color-text: #d3c6aa;
+  --color-muted: #859289;
+
+  /* Panel chrome / focus */
+  --color-focus: #a7c080;
+  --color-border-blurred: #4f5b58;
+  --color-title-blurred: #d3c6aa;
+
+  /* Lists */
+  --color-row-selected-bg: #475259;
+  --color-row-alt-bg: #2e383c;
+
+  /* Usage panel surfaces */
+  --color-panel-header-bg: #2d353b;
+  --color-panel-selected-bg: #343f44;
+
+  /* Status / semantic accents */
+  --color-error: #e67e80;
+  --color-warning: #dbbc7f;
+  --color-success: #a7c080;
+  --color-heading: #83c092;
+  --color-accent: #7fbbb3;
+
+  /* Toggles */
+  --color-active: #a7c080;
+  --color-inactive: #4f5b58;
+
+  /* Gauges */
+  --color-gauge-normal: #a7c080;
+  --color-gauge-high: #e67e80;
+  --color-gauge-track: #859289;
+  --color-gauge-label-text: #2d353b;
+
+  /* Non-thematic layout tokens (not theme-driven; tweak freely here) ─────────────────────────
+   * These govern spacing, radius, typography, and the rail widths. Change them to restyle the
+   * whole app's rhythm without touching any component. Breakpoint is documented (CSS media
+   * queries can't read a var, so the literal also lives in useMediaQuery.ts MOBILE_QUERY). */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --radius: 6px;
+  --radius-sm: 3px;
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  --font-sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+
+  /* Layout dimensions */
+  --rail-width: 320px;          /* desktop left/right rail column width */
+  --tabbar-height: 56px;        /* mobile bottom tab bar */
+  --header-height: 48px;
+  --bp-mobile: 768px;           /* DOCUMENTATION mirror of useMediaQuery MOBILE_QUERY */
+
+  /* Touch targets (mobile thumb-friendly minimum) */
+  --tap-min: 44px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  height: 100%;
+}
+
+body {
+  background: var(--color-panel-header-bg);
+  color: var(--color-text);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.4;
+}

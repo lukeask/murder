@@ -1,14 +1,20 @@
-"""Hatchling build hook: bundle the Ink TUI into the wheel.
+"""Hatchling build hook: bundle the Ink TUI and the web frontend into the wheel.
 
-The distributed `murder` wheel ships the Ink TUI as a single self-contained JS bundle at
-`murder/_inktui/index.js`, run by the user's Node at launch (see the build/release strategy in
-plan ``newui-finalpush6``). The bundle is **never committed** (``murder/_inktui/`` is gitignored);
-it is regenerated from ``inktui/src`` on every wheel build, so staleness is structurally impossible.
+The distributed `murder` wheel ships two generated, **never committed** front-end payloads, both
+regenerated from source on every wheel build so staleness is structurally impossible:
 
-This hook, during a **wheel** build, runs ``npm ci && npm run bundle`` in ``inktui/`` (esbuild →
-one self-contained ``dist/bundle/index.js``), copies the output into ``murder/_inktui/``, and
-force-includes it in the wheel. Because the destination is gitignored, hatchling would otherwise
-drop it from the VCS-derived file list — so we register it via ``build_data["force_include"]``.
+* The Ink TUI as a single self-contained JS bundle at ``murder/_inktui/index.js`` (esbuild),
+  run by the user's Node at launch.
+* The web/mobile React frontend as a static SPA at ``murder/_webui/`` (an ``index.html`` plus
+  hashed JS/CSS under ``assets/``), built by Vite and served by ``murder/web/bridge.py``. The
+  bridge resolves assets at ``murder/_webui/`` first, falling back to ``webui/dist`` in a source
+  checkout.
+
+This hook, during a **wheel** build, runs ``npm ci`` + the build for each front-end in its own
+dir (``inktui/`` → ``npm run bundle``; ``webui/`` → ``npm run build``), copies the output into
+``murder/_inktui/`` / ``murder/_webui/`` respectively, and force-includes both. Because the
+destinations are gitignored, hatchling would otherwise drop them from the VCS-derived file list —
+so we register them via ``build_data["force_include"]``.
 """
 
 from __future__ import annotations
@@ -22,17 +28,22 @@ from hatchling.builders.hooks.plugin.interface import BuildHookInterface
 
 
 class InkTuiBundleHook(BuildHookInterface):
-    """Build the Ink TUI bundle and ride it along in the wheel."""
+    """Build the Ink TUI bundle + the web frontend and ride them along in the wheel."""
 
     PLUGIN_NAME = "custom"
 
     def initialize(self, version: str, build_data: dict[str, Any]) -> None:
-        # Only the wheel ships the prebuilt bundle. Skip for sdist (which carries source only) and
-        # any other target, so we don't shell out to npm needlessly.
+        # Only the wheel ships the prebuilt front-ends. Skip for sdist (which carries source only)
+        # and any other target, so we don't shell out to npm needlessly.
         if self.target_name != "wheel":
             return
 
         repo_root = Path(self.root)
+        force_include = build_data.setdefault("force_include", {})
+        self._build_inktui(repo_root, force_include)
+        self._build_webui(repo_root, force_include)
+
+    def _build_inktui(self, repo_root: Path, force_include: dict[str, str]) -> None:
         inktui_dir = repo_root / "inktui"
         if not inktui_dir.is_dir():
             raise RuntimeError(
@@ -53,10 +64,12 @@ class InkTuiBundleHook(BuildHookInterface):
             )
 
         dest_dir = repo_root / "murder" / "_inktui"
+        # Start from a clean dir so a removed artifact can never linger in the wheel.
+        if dest_dir.exists():
+            shutil.rmtree(dest_dir)
         dest_dir.mkdir(parents=True, exist_ok=True)
         # Copy every bundle output (index.js, plus any sidecar such as a .wasm if the toolchain ever
         # emits one) so the packaged set always matches what esbuild produced.
-        force_include = build_data.setdefault("force_include", {})
         for artifact in sorted(bundle_dir.iterdir()):
             if not artifact.is_file():
                 continue
@@ -64,6 +77,43 @@ class InkTuiBundleHook(BuildHookInterface):
             shutil.copy2(artifact, dest)
             # Gitignored generated file → force it into the wheel under the murder package.
             force_include[str(dest)] = f"murder/_inktui/{artifact.name}"
+
+    def _build_webui(self, repo_root: Path, force_include: dict[str, str]) -> None:
+        webui_dir = repo_root / "webui"
+        if not webui_dir.is_dir():
+            raise RuntimeError(
+                f"hatch_build: expected webui/ at {webui_dir}; cannot build the web frontend."
+            )
+
+        # `npm ci` is reproducible and requires the committed lockfile; the web build imports the
+        # portable core from ../inktui/src via the `@core` alias (resolved at build time by Vite),
+        # so the sdist must also carry inktui/src — see pyproject sdist includes.
+        self._run(["npm", "ci"], cwd=webui_dir)
+        self._run(["npm", "run", "build"], cwd=webui_dir)
+
+        dist_dir = webui_dir / "dist"
+        index_html = dist_dir / "index.html"
+        if not index_html.is_file():
+            raise RuntimeError(
+                f"hatch_build: vite did not produce {index_html}; the web frontend is missing."
+            )
+
+        dest_dir = repo_root / "murder" / "_webui"
+        # Clean before copying so stale hashed assets from a previous build can't linger.
+        if dest_dir.exists():
+            shutil.rmtree(dest_dir)
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        # Copy the whole dist tree (index.html + assets/ + any other emitted files). The bridge
+        # serves this dir verbatim, so the packaged layout must mirror webui/dist exactly.
+        for src in sorted(dist_dir.rglob("*")):
+            if not src.is_file():
+                continue
+            rel = src.relative_to(dist_dir)
+            dest = dest_dir / rel
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src, dest)
+            # Gitignored generated tree → force it into the wheel under the murder package.
+            force_include[str(dest)] = f"murder/_webui/{rel.as_posix()}"
 
     def _run(self, cmd: list[str], *, cwd: Path) -> None:
         try:

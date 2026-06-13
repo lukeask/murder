@@ -1,0 +1,48 @@
+{
+  // Web frontend toolchain anchor. Mirrors inktui's strictness (the shared core is built against
+  // those flags, so loosening here would let web-only code drift below the bar the core holds).
+  // Module resolution is `bundler` (not inktui's NodeNext) because Vite/esbuild bundles for the
+  // browser: that mode resolves the core's `.js` import specifiers back onto the `.ts` sources and
+  // honors the `@core/*` path mapping into the sibling inktui tree.
+  "compilerOptions": {
+    // --- Output / target (browser) ---
+    "target": "ES2023",
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "types": ["node", "vite/client"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "noEmit": true,
+    "sourceMap": true,
+
+    // --- React ---
+    "jsx": "react-jsx",
+
+    // --- Cross-dir reuse: alias into the portable inktui core ---
+    "paths": {
+      "@core/*": ["../inktui/src/*"]
+    },
+
+    // --- Strictness (match inktui/tsconfig.json) ---
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "noImplicitReturns": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noPropertyAccessFromIndexSignature": true,
+    "forceConsistentCasingInFileNames": true,
+    "useUnknownInCatchVariables": true,
+    "isolatedModules": true,
+    "verbatimModuleSyntax": true,
+    "skipLibCheck": true,
+    "resolveJsonModule": true,
+    "allowImportingTsExtensions": true
+  },
+  // Include only the web sources + tests. tsc still type-checks the `@core` modules we actually
+  // import (it follows the import graph), but we deliberately do NOT add `../inktui/src` to
+  // `include` — that would eagerly compile the Ink components (which import `ink`, not installed
+  // here) and fail. We only reach the portable subset (store/bus/selectors/theme/hooks).
+  "include": ["src", "test", "vite.config.ts"]
+}
