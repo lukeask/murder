@@ -39,7 +39,11 @@ _BUSY_SPINNER_RE = re.compile(
     re.MULTILINE,
 )
 _CURSOR_CWD_RE = re.compile(r"^\s*(?:~/|/|\./|\.\./).*\s+·\s+\S+\s*$")
-_CURSOR_COMPOSER_RE = re.compile(r"^\s*Composer\b.*\bAuto-run\b", re.IGNORECASE)
+# Status line: model label + the auto-run mode on the right. CLI ≥ 2026.06.11
+# renders the yolo mode as "Run Everything" (older builds said "Auto-run").
+_CURSOR_COMPOSER_RE = re.compile(
+    r"^\s*Composer\b.*\b(?:Auto-run|Run\s+Everything)\b", re.IGNORECASE
+)
 _CURSOR_PLACEHOLDER_RE = re.compile(
     r"^\s*→\s*(?:Add a follow-up|Plan,\s*search,\s*build anything)\b",
     re.IGNORECASE,

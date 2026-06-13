@@ -48,7 +48,9 @@ from murder.llm.harnesses.parsing import (
 from murder.llm.harnesses.transcripts.grammar.cursor import (
     _BUSY_INPUT_HINT_RE,
     _BUSY_SPINNER_RE,
+    _CHROME_MARK,
     _CURSOR_COMPOSER_RE,
+    _USER_MARK,
     _is_cursor_chrome,
 )
 from murder.llm.harnesses.results import SimpleResult, fail_result, ok_result
@@ -82,8 +84,17 @@ _CURSOR_FAST_CHECKBOX_RE = re.compile(
 _CURSOR_INPUT_RE = re.compile(r"^\s*→\s*\S", re.IGNORECASE | re.MULTILINE)
 
 
+# The transcript grammar's preprocess_frame prefixes input-box / user-input
+# lines with these control-char marks. They survive strip_ansi, and a marked
+# input line (e.g. `\x02  → <restored prompt>` after an interrupt-restart) no
+# longer matches the `^\s*→` input-box anchor — which silently froze is_idle at
+# "not idle" and latched the conversation live_state at "working". State
+# detection must see through the marks, so strip them off the tail.
+_PREPROCESS_MARKS = str.maketrans("", "", _USER_MARK + _CHROME_MARK)
+
+
 def _tail(pane_text: str) -> str:
-    lines = pane_text.splitlines()
+    lines = pane_text.translate(_PREPROCESS_MARKS).splitlines()
     while lines and not lines[-1].strip():
         lines.pop()
     return "\n".join(lines[-_TAIL_LINES:])
@@ -236,7 +247,11 @@ class CursorAdapter(HarnessAdapter):
             if not _CURSOR_COMPOSER_RE.match(line.strip()):
                 continue
             label = line.strip()
-            model = _cursor_model_id_from_label(label.split("Auto-run", maxsplit=1)[0])
+            # Drop the right-side auto-run mode label ("Auto-run" on older
+            # CLIs, "Run Everything" on ≥ 2026.06.11) before parsing the model.
+            model = _cursor_model_id_from_label(
+                re.split(r"Auto-run|Run\s+Everything", label, maxsplit=1)[0]
+            )
             speed_match = _CURSOR_SPEED_IN_LINE_RE.search(label)
             if speed_match:
                 effort = normalize_effort(speed_match.group(1))

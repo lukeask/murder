@@ -525,3 +525,21 @@ def test_pi_active_model_state_from_status_bar() -> None:
     assert state is not None
     assert state.model == "deepseek/deepseek-v4-flash"
     assert state.effort == "high"
+
+
+CURSOR_IDLE_COMPOSER_RUN_EVERYTHING = """
+  → Plan, search, build anything
+  Composer 2.5                                                                   Run Everything
+  ~/Documents/code/testingmurderharness
+"""
+
+
+def test_cursor_active_model_state_parses_run_everything_status_line() -> None:
+    # CLI ≥ 2026.06.11 renders the yolo mode as "Run Everything" where older
+    # builds said "Auto-run". The status line must still parse, or set_model's
+    # verify loop fails and the freshly spawned rogue is reaped as dead.
+    state = CursorAdapter().parse_active_model_state(CURSOR_IDLE_COMPOSER_RUN_EVERYTHING)
+
+    assert state is not None
+    assert state.model == "composer-2.5"
+    assert state.effort is None
