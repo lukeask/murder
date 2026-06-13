@@ -40,6 +40,18 @@ describe('buildHelpGroups', () => {
     const groups = buildHelpGroups(resolveBindings('alt', false, {}), createKeymapRegistry());
     expect(groups.find((g) => g.title === 'Modals')).toBeDefined();
   });
+
+  it('includes the Commands group documenting the : / prefix surface', () => {
+    const groups = buildHelpGroups(resolveBindings('alt', false, {}), createKeymapRegistry());
+    const commands = groups.find((g) => g.title === 'Commands');
+    expect(commands).toBeDefined();
+    const keys = commands?.entries.map((e) => e.key) ?? [];
+    expect(keys).toContain('/…');
+    expect(keys).toContain(':help');
+    expect(keys).toContain(':note <text>');
+    expect(keys).toContain(':compact');
+    expect(keys).toContain(':resume');
+  });
 });
 
 describe('paginateHelp', () => {
