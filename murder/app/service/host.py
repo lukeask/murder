@@ -665,6 +665,11 @@ class ServiceHost:
         )
         from murder.runtime.terminal import tmux
 
+        # First-failure visibility: a projection exception repeating every tick
+        # silently freezes an agent's live_state (and with it queued-message
+        # delivery), so log the FIRST failure per agent at WARNING with the
+        # traceback; subsequent identical-cadence failures stay at DEBUG.
+        warned_agents: set[str] = set()
         while True:
             runtime = self.runtime
             if runtime is not None:
@@ -676,7 +681,19 @@ class ServiceHost:
                     except tmux.TmuxError:
                         pass
                     except Exception:
-                        LOGGER.debug("projection tick failed for %s", agent.id, exc_info=True)
+                        if agent.id not in warned_agents:
+                            warned_agents.add(agent.id)
+                            LOGGER.warning(
+                                "projection tick failed for %s (suppressing repeats)",
+                                agent.id,
+                                exc_info=True,
+                            )
+                        else:
+                            LOGGER.debug(
+                                "projection tick failed for %s", agent.id, exc_info=True
+                            )
+                    else:
+                        warned_agents.discard(agent.id)
             await asyncio.sleep(PROJECTION_INTERVAL_S)
 
     async def _run_transit_poll_loop(self) -> None:
