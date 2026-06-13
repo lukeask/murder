@@ -9,17 +9,15 @@ description = "Agentic dev harness — a murder of crows supervising a monkey."
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
-authors = [{ name = "luke" }]
+authors = [{ name = "Luke Ask", email = "lukeask@gmail.com" }]
 dependencies = [
-    # TODO(M0): pin minor versions once API surface stabilizes
-    "pydantic>=2.6",
-    "typer>=0.12",
-    "python-dotenv>=1.0",
-    "pyyaml>=6.0",
-    "httpx>=0.27",
-    "anyio>=4.3",
-    "textual>=0.60",
-    "watchfiles>=0.21",  # cross-platform inotify-ish watcher (D5)
+    "pydantic>=2.6,<3.0",
+    "typer>=0.12,<1.0",
+    "python-dotenv>=1.0,<2.0",
+    "pyyaml>=6.0,<7.0",
+    "httpx>=0.27,<1.0",
+    "anyio>=4.3,<5.0",
+    "watchfiles>=0.21,<2.0",  # cross-platform inotify-ish watcher (D5)
     # TODO(M0): tiktoken for D17 if/when context-cap enforcement lands
 ]
 
