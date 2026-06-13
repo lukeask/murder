@@ -23,7 +23,7 @@
 import { Box, Text } from 'ink';
 import type { JSX } from 'react';
 import { useModalWidth } from '../hooks/useTerminalSize.js';
-import { ACTION_IDS, ACTIONS, type ResolvedBindings } from '../input/bindings.js';
+import { ACTION_IDS, ACTIONS, chordLabel, type ResolvedBindings } from '../input/bindings.js';
 import type { KeymapRegistryApi } from '../input/keymapRegistry.js';
 import type { Mode, ModeStoreApi } from '../input/modeStore.js';
 import { PANELS } from '../input/panels.js';
@@ -57,15 +57,6 @@ const PANEL_TITLE: Readonly<Record<string, string>> = {
   usage: 'Usage panel',
   crows: 'Crows panel',
 };
-
-/** Render a chord's key for the label: prefer its printable char, else name the first special flag. */
-function chordLabel(chord: { input?: string; key?: object }): string {
-  if (chord.input !== undefined && chord.input !== '') {
-    return chord.input;
-  }
-  const flags = chord.key === undefined ? [] : Object.keys(chord.key);
-  return flags[0] ?? '?';
-}
 
 /**
  * Build the grouped help entries from the live bindings + keymap registry (pure — no React). The

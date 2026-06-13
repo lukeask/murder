@@ -68,9 +68,12 @@ describe('TopBar — connection badge', () => {
   });
 
   it('shows the restart prompt for version-mismatch', () => {
-    // Collapse whitespace: with more panel labels the 80-col test terminal may wrap the right-pinned
-    // badge across a line, so assert on the whitespace-normalized frame (the badge content is intact).
-    const normalized = frameFor('version-mismatch').replace(/\s+/g, ' ');
+    // The right-pinned badge wraps in the 80-col test terminal, and panel-label subscripts (₃ ₈)
+    // can interleave between the wrapped badge fragments. Strip whitespace AND the subscript glyphs
+    // so the assertion tracks the badge text, not the (irrelevant) wrap position of the panel labels.
+    const normalized = frameFor('version-mismatch')
+      .replace(/[₀₁₂₃₄₅₆₇₈₉]/g, '')
+      .replace(/\s+/g, ' ');
     expect(normalized).toContain('[version mismatch — restart murder]');
   });
 

@@ -81,6 +81,11 @@ export interface TicketRowView {
   // === Column 2: status / last-update ==========================================================
   /** Status, verbatim (already short). */
   readonly statusCell: string;
+  /**
+   * Semantic tone for the status cell, derived purely from `row.status` (rule 2 — no string-matching
+   * in the component). The component maps this to a theme color. See {@link statusToneOf}.
+   */
+  readonly statusTone: StatusTone;
   /** `last_update_at` + `last_update_label`, truncated to {@link LAST_UPDATE_WIDTH}. */
   readonly lastUpdateCell: string;
   // === Column 3: deps / schedule ===============================================================
@@ -160,6 +165,37 @@ function formatLastUpdateCell(lastUpdateAt: string, lastUpdateLabel: string): st
   return truncate(`${compact} ${lastUpdateLabel}`, LAST_UPDATE_WIDTH);
 }
 
+/** Semantic tone for a ticket status, consumed by the panel to pick a theme color. */
+export type StatusTone = 'error' | 'success' | 'warning' | 'neutral';
+
+/**
+ * Pure mapping from a backend ticket status string to a semantic tone (rule 2 — all status
+ * semantics live here, never string-matched in the component). Backend values are the
+ * `TicketStatus` StrEnum: planned/ready/in_progress/blocked/done/failed/archived. We also accept a
+ * few common synonyms so non-ticket callers (or future statuses) degrade gracefully.
+ */
+export function statusToneOf(status: string): StatusTone {
+  switch (status.toLowerCase()) {
+    case 'failed':
+    case 'error':
+    case 'blocked':
+      return 'error';
+    case 'done':
+    case 'success':
+    case 'complete':
+    case 'completed':
+      return 'success';
+    case 'in_progress':
+    case 'in-progress':
+    case 'running':
+    case 'active':
+    case 'ready':
+      return 'warning';
+    default:
+      return 'neutral';
+  }
+}
+
 /** Project one domain row into its display-ready presentation tuple. `index` drives `rowParity`. */
 function toTicketRowView(row: TicketRow, index: number): TicketRowView {
   const satisfied = row.pendingDepIds.length === 0;
@@ -170,6 +206,7 @@ function toTicketRowView(row: TicketRow, index: number): TicketRowView {
     titleCell: truncate(row.title, TITLE_WIDTH),
     // col 2
     statusCell: truncate(row.status, STATUS_WIDTH),
+    statusTone: statusToneOf(row.status),
     lastUpdateCell: formatLastUpdateCell(row.lastUpdateAt, row.lastUpdateLabel),
     // col 3
     depsCell: formatDepsCell(row.pendingDepIds),

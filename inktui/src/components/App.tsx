@@ -87,6 +87,7 @@ import { CrowsPanel } from './CrowsPanel.js';
 import { helpMode } from './HelpOverlay.js';
 import { HistoryPanel } from './HistoryPanel.js';
 import { newPlanMode } from './NewPlanModal.js';
+import { newTicketMode } from './NewTicketModal.js';
 import { NotesPanel } from './NotesPanel.js';
 import { Overlay, presentationHidesLayout } from './Overlay.js';
 import { PlansPanel } from './PlansPanel.js';
@@ -604,6 +605,20 @@ function Shell({
     );
   };
 
+  // `ctrl+t` → open the new-ticket single-form modal (BUG 1). Mirrors `newPlanHandler`: builds the
+  // dialog actions at call time and enters the modal mode; on success pushes a toast. The ticket id is
+  // delivered by the action but we only surface the title in the toast.
+  const newTicketHandler = (): void => {
+    const actions = createDialogActions(bus);
+    modes.getState().enter(
+      newTicketMode(modes, actions, {
+        onSubmit(_ticketId, title) {
+          toastStore.getState().push(`ticket "${title}" created`, { ttlMs: 3000 });
+        },
+      }),
+    );
+  };
+
   // `ctrl+n` → open the quick-note capture (item 10). Draft persists across cancel/reopen (the mode
   // resets the FSM only on a confirmed submit); submit is fire-and-forget via `notetaker.capture.submit`
   // (close instantly + toast). Title is auto/LLM (empty title field).
@@ -760,6 +775,7 @@ function Shell({
       spawn: spawnHandler,
       openSettings: openSettingsHandler,
       newPlan: newPlanHandler,
+      newTicket: newTicketHandler,
       quickNote: quickNoteHandler,
       keyHelp: keyHelpHandler,
       cycleTargetPrev: () => cycleTarget(-1),

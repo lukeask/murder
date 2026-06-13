@@ -29,6 +29,7 @@ import { useRootInput } from '../../src/hooks/useRootInput.js';
 import { createInputStores } from '../../src/input/createInputStores.js';
 import { dispatchKey } from '../../src/input/dispatcher.js';
 import { selectActiveMode } from '../../src/input/modeStore.js';
+import { toastStore } from '../../src/store/toast/toastStore.js';
 import { makeKey } from '../input/key.js';
 
 const ALT_Y = '\x1by'; // alt+y — ESC + 'y', which Ink parses as { input: 'y', meta: true }
@@ -72,6 +73,17 @@ function setup() {
   const stores = createInputStores(['tickets'], 'tickets');
   const enter = () => stores.modes.getState().enter(tmuxMode(stores.modes));
   return { bus, stores, enter };
+}
+
+/**
+ * Mount + focus a chat-history Stage pane for agent `a1` so the dispatcher's `toggleTmux` resolves a
+ * real `agentId`. `measure` registers the rect (which `mountedStagePanesOf` reads), then `focus`
+ * makes it the intended focus. Without a focused chat, the default handler now toasts instead of
+ * entering the mirror (it has no crow session to scope to).
+ */
+function focusChatPane(stores: ReturnType<typeof createInputStores>): void {
+  stores.focus.getState().measure('stage:chat:a1', { x: 0, y: 0, width: 40, height: 10 });
+  stores.focus.getState().focus('stage:chat:a1');
 }
 
 describe('TmuxMode — alt+y fullscreen tmux mode', () => {
@@ -123,6 +135,8 @@ describe('TmuxMode — alt+y fullscreen tmux mode', () => {
 
   it('alt+y again exits the mode (toggle off) and closes the subscription', async () => {
     const { bus, stores } = setup();
+    // A focused chat is required for the enter path: the mirror scopes to the focused crow's session.
+    focusChatPane(stores);
     const { stdin } = render(<Harness stores={stores} bus={bus} />);
     await tick();
 
@@ -137,7 +151,24 @@ describe('TmuxMode — alt+y fullscreen tmux mode', () => {
     await tick();
     expect(selectActiveMode(stores.modes)).toBeNull(); // mode exited
     expect(bus.subscriberCount).toBe(0); // subscription closed — no leak
-    expect(stores.focus.getState().intendedId).toBe('tickets'); // prior focus restored (was 'tickets')
+    expect(stores.focus.getState().intendedId).toBe('stage:chat:a1'); // prior focus restored
+  });
+
+  it('alt+y with no focused chat toasts instead of entering the mirror', async () => {
+    const { bus, stores } = setup(); // focus is on the tickets panel — no chat → no crow session
+    toastStore.getState().clear(); // singleton — start from a clean slate
+    const { stdin } = render(<Harness stores={stores} bus={bus} />);
+    await tick();
+
+    stdin.write(ALT_Y);
+    await tick();
+    // The mode must NOT enter (would otherwise stream the service's own nonexistent session and show
+    // a raw "can't find pane" error); a friendly toast is surfaced instead.
+    expect(selectActiveMode(stores.modes)).toBeNull();
+    expect(bus.subscriberCount).toBe(0); // no subscription opened
+    expect(toastStore.getState().toasts.some((t) => t.text.includes("focus a crow's chat"))).toBe(
+      true,
+    );
   });
 
   it('fullscreen mode: while active the overlay owns the whole screen (presentationHidesLayout)', async () => {

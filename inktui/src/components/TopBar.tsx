@@ -40,7 +40,9 @@ export const TopBar = memo(function TopBar({
             murder
           </Text>
           {project !== undefined && project.length > 0 && (
-            <Text color={theme.muted}>{project}</Text>
+            // A middot separator keeps the coral brand and the project name from running together
+            // (`murder · testingmurderharness`), since adjacent Text nodes otherwise abut visually.
+            <Text color={theme.muted}>{`· ${project}`}</Text>
           )}
         </Box>
         <Box flexDirection="row" columnGap={1}>

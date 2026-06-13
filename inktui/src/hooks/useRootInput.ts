@@ -39,6 +39,7 @@ import {
 import { selectActiveMode } from '../input/modeStore.js';
 import type { PanelStoreApi } from '../input/panelStore.js';
 import type { PanelId } from '../input/panels.js';
+import { toastStore } from '../store/toast/toastStore.js';
 import type { Chord } from '../terminal/translate.js';
 import { useInputStores } from './useInputStores.js';
 
@@ -233,6 +234,17 @@ export function useRootInput(
               const agentId = effective.startsWith('stage:chat:')
                 ? effective.slice('stage:chat:'.length)
                 : undefined;
+              if (agentId === undefined) {
+                // No focused chat → there's no crow session to mirror. Entering the mode here would
+                // stream the service's own (nonexistent) session and show a raw "can't find pane"
+                // error. Nudge the user to focus a chat first instead.
+                toastStore
+                  .getState()
+                  .push("focus a crow's chat to mirror it (C-hjkl into the Stage)", {
+                    ttlMs: 4000,
+                  });
+                return;
+              }
               modesState.enter(tmuxMode(modes, agentId));
             }
           }),

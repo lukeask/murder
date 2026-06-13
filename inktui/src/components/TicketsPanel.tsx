@@ -53,6 +53,7 @@ import {
 import type { PanelKeymap } from '../input/keymap.js';
 import type { PanelId } from '../input/panels.js';
 import {
+  type StatusTone,
   type TicketRowView,
   type TicketsView,
   useTicketsView,
@@ -72,6 +73,23 @@ const PANEL_TITLE = 'Tickets';
 // a narrow one degrades gracefully right-to-left.
 
 type TicketsIntent = 'cursorDown' | 'cursorUp' | 'refresh' | 'open';
+
+/**
+ * Map a selector-derived {@link StatusTone} to a theme color (rule 2 — the component only translates
+ * a semantic tone, it never string-matches the status). `neutral` keeps the prior heading aqua.
+ */
+function statusToneColor(tone: StatusTone, theme: Theme): string {
+  switch (tone) {
+    case 'error':
+      return theme.error;
+    case 'success':
+      return theme.success;
+    case 'warning':
+      return theme.warning;
+    default:
+      return theme.heading;
+  }
+}
 
 /**
  * Render one ticket as a **2-row × up-to-5-column** Ledger entry. The cursor marker is the first
@@ -102,7 +120,7 @@ function renderTicketEntry(
       {/* col 2: status / last-update */}
       {cols >= 2 ? (
         <Box flexDirection="column" marginRight={2}>
-          <Text color={theme.heading}>{row.statusCell}</Text>
+          <Text color={statusToneColor(row.statusTone, theme)}>{row.statusCell}</Text>
           <Text dimColor={!ctx.selected}>{row.lastUpdateCell}</Text>
         </Box>
       ) : null}
