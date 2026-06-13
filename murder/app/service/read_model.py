@@ -35,6 +35,7 @@ from murder.app.service.schedule_snapshot import build_schedule_snapshot
 from murder.state.persistence import history as history_store
 from murder.state.persistence import tickets as ticket_store
 from murder.state.persistence.schema import get_db
+from murder.state.storage.git_transit import TransitSnapshot, build_transit_snapshot
 from murder.state.storage.paths import report_md
 from murder.work.tickets.parser import read_ticket_md
 
@@ -250,6 +251,18 @@ class ServiceReadModel:
             as_of=as_of,
             invalidation_key=self.current_key(InvalidationKeys.history),
         )
+
+    def get_transit_snapshot(self) -> TransitSnapshot:
+        """Build the per-lane git commit-graph for the Transit panel.
+
+        Derived from git on demand (``main`` + ``.murder/worktrees`` branches),
+        not persisted. ``repo_root`` is recovered from ``db_path`` (which is
+        ``<repo_root>/.murder/murder.db``). The fingerprint doubles as the
+        ``invalidation_key`` so the poll loop's change detection and the
+        client's refetch keying agree.
+        """
+        repo_root = self.db_path.parent.parent
+        return build_transit_snapshot(repo_root)
 
     def get_ticket_detail(self, ticket_id: str) -> TicketDetailSnapshot:
         as_of = datetime.utcnow()

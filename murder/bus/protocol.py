@@ -45,7 +45,7 @@ from pydantic import BaseModel, Field, TypeAdapter
 
 from murder.work.tickets.status import TicketStatus
 
-PROTOCOL_VERSION = 4
+PROTOCOL_VERSION = 5
 
 
 # === Closed enums ============================================================
@@ -89,6 +89,7 @@ class Entity(StrEnum):
     ESCALATION = "escalation"
     QUEUE_ROW = "queue_row"
     HISTORY = "history"
+    TRANSIT = "transit"
 
 
 class PresenceState(StrEnum):

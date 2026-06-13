@@ -1,6 +1,7 @@
 /**
  * panels.ts mapping tests — the digit→panel single source of truth, with the history panel on
- * ctrl+5 (left rail, after tickets in screen order). Reserved digits (6–8) stay unbound.
+ * ctrl+5 (left rail, after tickets in screen order) and the transit panel on ctrl+8 (right rail,
+ * between usage and crows). Reserved digits 6–7 stay unbound.
  */
 
 import { describe, expect, it } from 'vitest';
@@ -14,14 +15,29 @@ describe('panels mapping', () => {
     expect(placement).toEqual({ id: 'history', digit: 5, region: 'left' });
   });
 
-  it('places history after tickets in screen order', () => {
-    expect(PANEL_IDS).toEqual(['plans', 'notes', 'reports', 'tickets', 'history', 'usage', 'crows']);
+  it('maps digit 8 to the transit panel (right rail, between usage and crows)', () => {
+    expect(panelForDigit('8')).toBe('transit');
+    expect(DIGIT_TO_PANEL[8]).toBe('transit');
+    const placement = PANELS.find((p) => p.id === 'transit');
+    expect(placement).toEqual({ id: 'transit', digit: 8, region: 'right' });
   });
 
-  it('leaves digits 6–8 unbound (reserved → no-op)', () => {
+  it('places history after tickets and transit between usage and crows in screen order', () => {
+    expect(PANEL_IDS).toEqual([
+      'plans',
+      'notes',
+      'reports',
+      'tickets',
+      'history',
+      'usage',
+      'transit',
+      'crows',
+    ]);
+  });
+
+  it('leaves digits 6–7 unbound (reserved → no-op)', () => {
     expect(panelForDigit('6')).toBeNull();
     expect(panelForDigit('7')).toBeNull();
-    expect(panelForDigit('8')).toBeNull();
   });
 
   it('still maps the existing left/right digits', () => {

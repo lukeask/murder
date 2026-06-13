@@ -17,7 +17,15 @@
 
 /** The closed set of panel ids. A string union keyed by domain, not by number, so code reads
  * intent (`'plans'`) while the *binding* to a number stays in {@link DIGIT_TO_PANEL}. */
-export type PanelId = 'plans' | 'notes' | 'reports' | 'tickets' | 'history' | 'usage' | 'crows';
+export type PanelId =
+  | 'plans'
+  | 'notes'
+  | 'reports'
+  | 'tickets'
+  | 'history'
+  | 'usage'
+  | 'transit'
+  | 'crows';
 
 /** Which screen region a panel renders in. The focus geometry and the shell layout both need this;
  * derived from the number (1–4 left, 9/0 right) but named so call sites don't re-derive it. */
@@ -33,7 +41,7 @@ export interface PanelPlacement {
 /** The digits that bind to a panel. A literal union (not `number`) so {@link DIGIT_TO_PANEL} is
  * checked total over exactly these and a stray digit can't silently map to nothing at a type
  * level. `6`–`8` are intentionally excluded (reserved). */
-export type PanelDigit = 1 | 2 | 3 | 4 | 5 | 9 | 0;
+export type PanelDigit = 1 | 2 | 3 | 4 | 5 | 8 | 9 | 0;
 
 /**
  * The single source of truth for panel placement, in screen order (left region first, then right).
@@ -47,6 +55,7 @@ export const PANELS: readonly PanelPlacement[] = [
   { id: 'tickets', digit: 4, region: 'left' },
   { id: 'history', digit: 5, region: 'left' },
   { id: 'usage', digit: 9, region: 'right' },
+  { id: 'transit', digit: 8, region: 'right' },
   { id: 'crows', digit: 0, region: 'right' },
 ];
 

@@ -20,6 +20,7 @@ describe('selectTopBar', () => {
       'tickets₄',
       'history₅',
       'usage₉',
+      'transit₈',
       'crows₀',
     ]);
   });

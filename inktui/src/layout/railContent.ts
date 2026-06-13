@@ -103,6 +103,26 @@ const USAGE_RESERVE_WIDTH = Math.max(
   USAGE_NATURAL_INNER_WIDTH + USAGE_PANE_CHROME,
 );
 
+/**
+ * The right-rail width Transit reserves whenever it is visible (analogous to {@link USAGE_RESERVE_WIDTH}).
+ * The railway wants a modest run of stations to read as a map, so we reserve ~42 cells — wider than
+ * usage so the rail grows a little for the graph, but the budget engine still compresses it toward the
+ * Stage's ≥60% floor (the selector then shows fewer stations on a tight terminal). Floored at
+ * {@link MIN_USAGE_WIDTH} (degenerate guard; the reserve always exceeds it).
+ */
+const TRANSIT_RESERVE_WIDTH = Math.max(MIN_USAGE_WIDTH, 42);
+
+/** Transit's natural content HEIGHT in lines (L4b — portrait): the 2 Pane borders + 2 lines per lane
+ * (railway + age) + 1 blank spacer + the fixed {@link ../components/TransitPanel.tsx INFO_LINES}=4
+ * info section. The lane count is read live by the hook. Pure. */
+export function transitNaturalHeight(laneCount: number): number {
+  if (laneCount <= 0) {
+    return PANE_BORDER_LINES + 1; // "no branches" chrome line
+  }
+  const TRANSIT_INFO_LINES = 4;
+  return PANE_BORDER_LINES + laneCount * 2 + 1 + TRANSIT_INFO_LINES;
+}
+
 // ---------------------------------------------------------------------------
 // Title-row width (L3b) — the inline-title top-border line each Pane draws
 // ---------------------------------------------------------------------------
@@ -362,7 +382,13 @@ export function crowNaturalHeight(
 /** The left region's panels in screen order (mirrors App's `LEFT_PANELS`). */
 const LEFT_PANELS: readonly PanelId[] = ['plans', 'notes', 'reports', 'tickets', 'history'];
 /** The right region's panels in screen order (mirrors App's `RIGHT_PANELS`). */
-const RIGHT_PANELS: readonly PanelId[] = ['usage', 'crows'];
+const RIGHT_PANELS: readonly PanelId[] = ['usage', 'transit', 'crows'];
+
+/** Transit's natural rail WIDTH: its fixed reserve (the railway scrolls to fit, so it has no
+ * data-driven natural width — it desires {@link TRANSIT_RESERVE_WIDTH} and compresses below). Pure. */
+export function transitNaturalWidth(): number {
+  return TRANSIT_RESERVE_WIDTH;
+}
 
 /**
  * Read the live {@link RailContent} for one side. `present` is true iff any of the side's panels are
@@ -406,6 +432,7 @@ export function useRailContent(side: 'left' | 'right'): RailContent {
   const history = useAppStore((s) => s.history);
   const roster = useAppStore((s) => s.roster);
   const usage = useAppStore((s) => s.usage);
+  const transit = useAppStore((s) => s.transit);
 
   const plansView = usePlansView(plans, favorites);
   const notesView = useNotesView(notes, favorites);
@@ -505,6 +532,10 @@ export function useRailContent(side: 'left' | 'right'): RailContent {
   if (visible.has('usage')) {
     naturalWidth = Math.max(naturalWidth, USAGE_RESERVE_WIDTH, titleRowWidth('Usage'));
     naturalHeight = Math.max(naturalHeight, usageNaturalHeight(usageView.groups));
+  }
+  if (visible.has('transit')) {
+    naturalWidth = Math.max(naturalWidth, transitNaturalWidth(), titleRowWidth('Transit'));
+    naturalHeight = Math.max(naturalHeight, transitNaturalHeight(transit.lanes.length));
   }
   // Floor a present rail's WIDTH at its smallest legible form (R7) — same reasoning as the left side;
   // the usage-only reserve already exceeds this, so the floor only bites the empty-crows case.

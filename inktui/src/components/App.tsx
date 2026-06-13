@@ -83,8 +83,8 @@ import { setTheme } from '../theme/themeStore.js';
 import { BottomBar, useBottomBarLines } from './BottomBar.js';
 import { ChatInput } from './ChatInput.js';
 import { CrowsPanel } from './CrowsPanel.js';
-import { HistoryPanel } from './HistoryPanel.js';
 import { helpMode } from './HelpOverlay.js';
+import { HistoryPanel } from './HistoryPanel.js';
 import { newPlanMode } from './NewPlanModal.js';
 import { NotesPanel } from './NotesPanel.js';
 import { Overlay, presentationHidesLayout } from './Overlay.js';
@@ -98,13 +98,19 @@ import { Stage } from './Stage.js';
 import { TicketsPanel } from './TicketsPanel.js';
 import { Toast } from './Toast.js';
 import { TopBar } from './TopBar.js';
+import { TransitPanel } from './TransitPanel.js';
 import { UsagePanel } from './UsagePanel.js';
 
 /** The left region's panels in screen order (plan: `1` plans · `2` notes · `3` reports · `4`
  * tickets). The right region (plan: `9` usage · `0` crows — usage left of crows). One ordered list
  * per region so the shell renders panels left-to-right without re-deriving order from {@link PANELS}. */
 const LEFT_PANELS: readonly PanelId[] = ['plans', 'notes', 'reports', 'tickets', 'history'];
-const RIGHT_PANELS: readonly PanelId[] = ['usage', 'crows'];
+const RIGHT_PANELS: readonly PanelId[] = ['usage', 'transit', 'crows'];
+
+/** Pane border + padding chrome around a right-rail panel's content (mirrors USAGE_PANE_CHROME): the
+ * left/right borders (2) + the default 1-cell padding each side (2) = 4. Transit's railway draws in
+ * `rightRailCells − this`. */
+const TRANSIT_PANE_CHROME = 4;
 
 /**
  * The smallest terminal the shell will attempt to lay out (first-run UX: a too-small terminal gets
@@ -129,7 +135,7 @@ export const MIN_TERMINAL_ROWS = 16;
  * panel. No other panel needs it, so it's a plain extra argument rather than threading the whole
  * {@link BodyLayout} through.
  */
-function renderPanel(id: PanelId, usageInnerWidth: number): JSX.Element {
+function renderPanel(id: PanelId, usageInnerWidth: number, rightRailCells: number): JSX.Element {
   switch (id) {
     case 'crows':
       // C9: CrowsPanel replaces the RosterPanel reference implementation here. The original
@@ -150,6 +156,10 @@ function renderPanel(id: PanelId, usageInnerWidth: number): JSX.Element {
       return <TicketsPanel />;
     case 'history':
       return <HistoryPanel />;
+    case 'transit':
+      // The railway scrolls to the inner width the right rail allots it (R9): full rail width below
+      // usage minus the Pane chrome, mirroring the usage landscape formula.
+      return <TransitPanel innerWidth={Math.max(0, rightRailCells - TRANSIT_PANE_CHROME)} />;
     case 'usage':
       // C9: UsagePanel fills the right-region slot. Usage sits to the LEFT of crows because
       // RIGHT_PANELS = ['usage', 'crows'] (App.tsx line 59) — array order = left-to-right.
@@ -463,8 +473,8 @@ function Shell({
   const dispatchPanel = useMemo(
     () =>
       (id: PanelId): JSX.Element =>
-        renderPanel(id, bodyLayout.usageInnerWidth),
-    [bodyLayout.usageInnerWidth],
+        renderPanel(id, bodyLayout.usageInnerWidth, bodyLayout.rightRailCells),
+    [bodyLayout.usageInnerWidth, bodyLayout.rightRailCells],
   );
 
   // F9: the image-draft store owns the `image.upload` bus call + the FIFO upload queue (it writes a

@@ -34,6 +34,9 @@ from murder.usage_sample_command import run_service_usage_poll_loop
 
 LOGGER = logging.getLogger(__name__)
 
+# Cadence for the Transit git-graph fingerprint poll (branch HEAD movement).
+TRANSIT_POLL_INTERVAL_S = 4.0
+
 RpcHandler = Callable[[dict[str, Any]], Awaitable[dict[str, Any]] | dict[str, Any]]
 
 
@@ -69,6 +72,7 @@ class ServiceHost:
     tcp_bound: tuple[str, int] | None = None
     _usage_poll_task: asyncio.Task[None] | None = field(default=None, repr=False)
     _projection_poll_task: asyncio.Task[None] | None = field(default=None, repr=False)
+    _transit_poll_task: asyncio.Task[None] | None = field(default=None, repr=False)
     _model_discovery_task: asyncio.Task[None] | None = field(default=None, repr=False)
     _rpc_handlers: dict[str, RpcHandler] = field(default_factory=dict, repr=False)
     _service_session_name: str | None = field(default=None, repr=False)
@@ -185,6 +189,9 @@ class ServiceHost:
         def _state_history_snapshot(_body: dict[str, Any]) -> dict[str, Any]:
             return _value(_read_model().get_history_snapshot())
 
+        def _state_transit_snapshot(_body: dict[str, Any]) -> dict[str, Any]:
+            return _value(_read_model().get_transit_snapshot())
+
         def _state_ticket_detail(body: dict[str, Any]) -> dict[str, Any]:
             ticket_id = str(body.get("ticket_id", "")).strip()
             if not ticket_id:
@@ -222,6 +229,7 @@ class ServiceHost:
         self.register_rpc_handler("state.notes_snapshot", _state_notes_snapshot)
         self.register_rpc_handler("state.reports_snapshot", _state_reports_snapshot)
         self.register_rpc_handler("state.history_snapshot", _state_history_snapshot)
+        self.register_rpc_handler("state.transit_snapshot", _state_transit_snapshot)
         self.register_rpc_handler("state.ticket_detail", _state_ticket_detail)
         self.register_rpc_handler("state.plan_display", _state_plan_display)
         self.register_rpc_handler("state.note_display", _state_note_display)
@@ -610,6 +618,9 @@ class ServiceHost:
         self._projection_poll_task = asyncio.create_task(
             self._run_projection_poll_loop(), name="transcript-projection-poll"
         )
+        self._transit_poll_task = asyncio.create_task(
+            self._run_transit_poll_loop(), name="transit-graph-poll"
+        )
         try:
             await self.orchestrator.start_question_listener()
         except Exception as exc:
@@ -668,6 +679,35 @@ class ServiceHost:
                         LOGGER.debug("projection tick failed for %s", agent.id, exc_info=True)
             await asyncio.sleep(PROJECTION_INTERVAL_S)
 
+    async def _run_transit_poll_loop(self) -> None:
+        """Service-owned ticker that republishes the Transit graph key when any
+        watched branch HEAD moves. Git changes have no UI write to hang an
+        invalidation off, so this lightweight poll computes the cheap
+        ``transit_fingerprint`` each tick and publishes a key-only
+        ``Entity.TRANSIT`` snapshot only when it changes (the client refetches
+        the full graph via ``state.transit_snapshot``). Modeled on
+        ``_run_projection_poll_loop`` so it stays compatible with the conftest
+        noop-sleep patch (no busy-spin)."""
+        from murder.bus import Entity
+        from murder.state.storage.git_transit import transit_fingerprint
+
+        last_fingerprint: str | None = None
+        while True:
+            runtime = self.runtime
+            if runtime is not None:
+                try:
+                    fingerprint = transit_fingerprint(self.repo_root)
+                except Exception:
+                    fingerprint = last_fingerprint
+                    LOGGER.debug("transit fingerprint tick failed", exc_info=True)
+                if fingerprint != last_fingerprint:
+                    last_fingerprint = fingerprint
+                    try:
+                        await runtime.publish_snapshot(Entity.TRANSIT, "*")
+                    except Exception:
+                        LOGGER.debug("transit snapshot publish failed", exc_info=True)
+            await asyncio.sleep(TRANSIT_POLL_INTERVAL_S)
+
     async def run_until_signal(self) -> None:
         if self.runtime is None:
             raise RuntimeError("ServiceHost.start() must be called first")
@@ -685,6 +725,12 @@ class ServiceHost:
             with contextlib.suppress(asyncio.CancelledError):
                 await self._projection_poll_task
             self._projection_poll_task = None
+
+        if self._transit_poll_task is not None:
+            self._transit_poll_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._transit_poll_task
+            self._transit_poll_task = None
 
         if self._model_discovery_task is not None:
             self._model_discovery_task.cancel()

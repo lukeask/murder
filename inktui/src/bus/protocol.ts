@@ -15,7 +15,7 @@
  * you're in the wrong file"). Framing/handshake logic lives in the `UdsBusClient` (C2).
  */
 
-export const PROTOCOL_VERSION = 4;
+export const PROTOCOL_VERSION = 5;
 
 // === Closed enums ============================================================
 // Modeled as union types of string literals rather than TS `enum`s: the wire carries the bare
@@ -55,7 +55,8 @@ export type Entity =
   | 'report'
   | 'escalation'
   | 'queue_row'
-  | 'history';
+  | 'history'
+  | 'transit';
 
 export type PresenceState = 'attended' | 'headless';
 
