@@ -8,9 +8,10 @@ instead of an alternate-screen buffer.
 from __future__ import annotations
 
 import asyncio
+import logging
 import re
 from pathlib import Path
-from typing import ClassVar
+from typing import Awaitable, Callable, ClassVar
 
 from murder.runtime.terminal import tmux
 from murder.llm.harnesses.base import (
@@ -27,6 +28,8 @@ from murder.llm.harnesses.parsing import (
 )
 from murder.llm.harnesses.results import SimpleResult, fail_result, ok_result
 from murder.llm.harnesses.usage import parse_codex_status_pane
+
+_log = logging.getLogger(__name__)
 
 _TAIL_LINES = 30
 
@@ -58,6 +61,13 @@ _MODEL_POLL_INTERVAL_S = 0.4
 _MODEL_STARTUP_POLL_TIMEOUT_S = 15.0
 _MODEL_CAPTURE_DELAY_S = 3.0
 _MODEL_STEP_DELAY_S = 0.6
+# Pane-change polling for the model picker (replaces fixed _MODEL_STEP_DELAY_S
+# waits between key injection and reading the next UI state). A fixed sleep that
+# is too short on a slow machine lets the picker read a stale pane and pick the
+# wrong model/effort; polling waits for the expected state up to the timeout and
+# fails soft (continues) so a slow render degrades gracefully instead of locking.
+_MODEL_STEP_POLL_INTERVAL_S = 0.1
+_MODEL_STEP_POLL_TIMEOUT_S = 2.0
 _PROMPT_SUBMIT_DELAY_S = 0.2
 _PROMPT_VERIFY_DELAY_S = 0.8
 _PROMPT_SUBMIT_RETRIES = 2
@@ -225,6 +235,31 @@ class CodexAdapter(HarnessAdapter):
             await self._submit_prompt(session)
         return ok_result()
 
+    async def _poll_pane_for(
+        self,
+        session: str,
+        predicate: Callable[[str], bool],
+        *,
+        what: str,
+        timeout_s: float = _MODEL_STEP_POLL_TIMEOUT_S,
+    ) -> str:
+        """Poll the pane until ``predicate`` holds, returning the latest capture.
+
+        Replaces fixed post-keystroke sleeps in the model picker: a key is sent,
+        then we wait for the pane to actually reach the expected state instead of
+        guessing a delay. Fails soft — on timeout we log a warning and return the
+        last capture so the caller proceeds (best-effort) rather than hanging.
+        """
+        attempts = max(1, int(timeout_s / _MODEL_STEP_POLL_INTERVAL_S))
+        pane = ""
+        for _ in range(attempts):
+            pane = await tmux.capture_pane(session, lines=200)
+            if predicate(pane):
+                return pane
+            await asyncio.sleep(_MODEL_STEP_POLL_INTERVAL_S)
+        _log.warning("codex model picker: timed out waiting for %s; proceeding", what)
+        return pane
+
     async def set_model(self, session: str, model: str, *, effort: str | None = None) -> bool:
         # The launch --model flag selects the model but not its reasoning effort,
         # so we cannot blanket-trust a startup model here: a non-default effort
@@ -250,17 +285,33 @@ class CodexAdapter(HarnessAdapter):
             return self.startup_model == model
 
         await tmux.send_keys(session, str(choice.index), literal=True, enter=False)
-        await asyncio.sleep(_MODEL_STEP_DELAY_S)
 
         effort_selection_available = False
         if desired_effort is not None:
-            effort_pane = await tmux.capture_pane(session, lines=200)
+            # Poll for the effort sub-menu to render rather than a fixed sleep:
+            # if we read the pane before the menu paints, parse returns empty and
+            # the effort is silently skipped → wrong (default) reasoning effort.
+            effort_pane = await self._poll_pane_for(
+                session,
+                lambda p: bool(parse_numbered_effort_choices(p)),
+                what="effort sub-menu",
+            )
             effort_choices = parse_numbered_effort_choices(effort_pane)
             effort_selection_available = bool(effort_choices)
             effort_choice = next((c for c in effort_choices if c.effort == desired_effort), None)
             if effort_choice is not None and effort_choice.index is not None:
                 await tmux.send_keys(session, str(effort_choice.index), literal=True, enter=False)
-                await asyncio.sleep(_MODEL_STEP_DELAY_S)
+                # Wait for the committed model/effort to read back instead of a
+                # blind sleep; fail-soft so the verify below still runs on timeout.
+                await self._poll_pane_for(
+                    session,
+                    lambda p: _model_state_matches(
+                        self.parse_active_model_state(p),
+                        model=model,
+                        effort=desired_effort,
+                    ),
+                    what="model+effort confirmation",
+                )
 
         pane = await tmux.capture_pane(session, lines=200)
         state = self.parse_active_model_state(pane)
