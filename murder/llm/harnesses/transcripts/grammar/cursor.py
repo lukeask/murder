@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import re
 
 from murder.llm.harnesses.parsing import is_rule_line, is_status_spinner_line, strip_ansi
@@ -24,6 +25,14 @@ _USER_BG_RE = re.compile(r"\x1b\[48;2;36;36;40m")  # submitted user-input block
 _INPUT_BG_RE = re.compile(r"\x1b\[48;2;21;21;21m")  # live composer / input box
 _USER_MARK = "\x01"
 _CHROME_MARK = "\x02"
+
+_log = logging.getLogger(__name__)
+
+# Fires once (process-wide) the first time preprocess_frame sees a frame with
+# real content but zero colour marks — the signal that ``-e`` colour capture is
+# missing or Cursor changed its background RGBs. Role detection degrades to the
+# anchor-only fallback in that case, so we want it loud but not flooding.
+_warned_no_marks = False
 
 # ---- cursor regexes -------------------------------------------------------- #
 _CURSOR_INPUT_LINE_RE = re.compile(r"^\s*→\s*\S")
@@ -93,15 +102,28 @@ def preprocess_frame(frame: str) -> str:
     so they travel with the line through scrollback. Frames captured without
     escapes carry no marks and fall through to the anchor-based classifier.
     """
+    global _warned_no_marks
     out: list[str] = []
+    marks = 0
+    has_content = False
     for raw in frame.splitlines():
         plain = strip_ansi(raw)
+        if plain.strip():
+            has_content = True
         if _INPUT_BG_RE.search(raw):
             out.append(_CHROME_MARK + plain)
+            marks += 1
         elif _USER_BG_RE.search(raw):
             out.append(_USER_MARK + plain)
+            marks += 1
         else:
             out.append(plain)
+    if has_content and marks == 0 and not _warned_no_marks:
+        _warned_no_marks = True
+        _log.warning(
+            "cursor: no ANSI colour marks found in frame — role detection "
+            "degraded (check tmux -e flag)"
+        )
     return "\n".join(out)
 
 
