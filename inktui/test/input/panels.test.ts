@@ -1,0 +1,33 @@
+/**
+ * panels.ts mapping tests — the digit→panel single source of truth, with the history panel on
+ * ctrl+5 (left rail, after tickets in screen order). Reserved digits (6–8) stay unbound.
+ */
+
+import { describe, expect, it } from 'vitest';
+import { DIGIT_TO_PANEL, PANEL_IDS, PANELS, panelForDigit } from '../../src/input/panels.js';
+
+describe('panels mapping', () => {
+  it('maps digit 5 to the history panel (left rail)', () => {
+    expect(panelForDigit('5')).toBe('history');
+    expect(DIGIT_TO_PANEL[5]).toBe('history');
+    const placement = PANELS.find((p) => p.id === 'history');
+    expect(placement).toEqual({ id: 'history', digit: 5, region: 'left' });
+  });
+
+  it('places history after tickets in screen order', () => {
+    expect(PANEL_IDS).toEqual(['plans', 'notes', 'reports', 'tickets', 'history', 'usage', 'crows']);
+  });
+
+  it('leaves digits 6–8 unbound (reserved → no-op)', () => {
+    expect(panelForDigit('6')).toBeNull();
+    expect(panelForDigit('7')).toBeNull();
+    expect(panelForDigit('8')).toBeNull();
+  });
+
+  it('still maps the existing left/right digits', () => {
+    expect(panelForDigit('1')).toBe('plans');
+    expect(panelForDigit('4')).toBe('tickets');
+    expect(panelForDigit('9')).toBe('usage');
+    expect(panelForDigit('0')).toBe('crows');
+  });
+});

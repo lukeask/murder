@@ -18,6 +18,7 @@ describe('selectTopBar', () => {
       'notes₂',
       'reports₃',
       'tickets₄',
+      'history₅',
       'usage₉',
       'crows₀',
     ]);

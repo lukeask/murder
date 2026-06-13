@@ -83,6 +83,7 @@ import { setTheme } from '../theme/themeStore.js';
 import { BottomBar, useBottomBarLines } from './BottomBar.js';
 import { ChatInput } from './ChatInput.js';
 import { CrowsPanel } from './CrowsPanel.js';
+import { HistoryPanel } from './HistoryPanel.js';
 import { helpMode } from './HelpOverlay.js';
 import { newPlanMode } from './NewPlanModal.js';
 import { NotesPanel } from './NotesPanel.js';
@@ -102,7 +103,7 @@ import { UsagePanel } from './UsagePanel.js';
 /** The left region's panels in screen order (plan: `1` plans · `2` notes · `3` reports · `4`
  * tickets). The right region (plan: `9` usage · `0` crows — usage left of crows). One ordered list
  * per region so the shell renders panels left-to-right without re-deriving order from {@link PANELS}. */
-const LEFT_PANELS: readonly PanelId[] = ['plans', 'notes', 'reports', 'tickets'];
+const LEFT_PANELS: readonly PanelId[] = ['plans', 'notes', 'reports', 'tickets', 'history'];
 const RIGHT_PANELS: readonly PanelId[] = ['usage', 'crows'];
 
 /**
@@ -147,6 +148,8 @@ function renderPanel(id: PanelId, usageInnerWidth: number): JSX.Element {
       return <ReportsPanel />;
     case 'tickets':
       return <TicketsPanel />;
+    case 'history':
+      return <HistoryPanel />;
     case 'usage':
       // C9: UsagePanel fills the right-region slot. Usage sits to the LEFT of crows because
       // RIGHT_PANELS = ['usage', 'crows'] (App.tsx line 59) — array order = left-to-right.

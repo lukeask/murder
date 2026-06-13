@@ -263,6 +263,7 @@ function primeSlices(store: ReturnType<typeof createAppStore>['store']): void {
   void store.getState().actions.tickets.refresh();
   void store.getState().actions.notes.refresh();
   void store.getState().actions.reports.refresh();
+  void store.getState().actions.history.refresh();
   void store.getState().actions.conversations.refresh();
 }
 

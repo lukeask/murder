@@ -98,6 +98,8 @@ describe('createAppStore — boot & wiring', () => {
     expect(store.getState().reports).toEqual({ rows: [], status: 'idle', error: null });
     // C11 slices start idle/closed.
     expect(store.getState().plans).toEqual({ rows: [], status: 'idle', error: null });
+    // History view slice starts idle too.
+    expect(store.getState().history).toEqual({ rows: [], status: 'idle', error: null });
     expect(store.getState().favorites.status).toBe('idle');
     expect(store.getState().favorites.ids.size).toBe(0);
     expect(store.getState().docView).toEqual({
@@ -120,6 +122,9 @@ describe('createAppStore — boot & wiring', () => {
     expect(typeof store.getState().actions.usage.refresh).toBe('function');
     // C11 actions.
     expect(typeof store.getState().actions.plans.refresh).toBe('function');
+    // History actions: refresh + dismiss.
+    expect(typeof store.getState().actions.history.refresh).toBe('function');
+    expect(typeof store.getState().actions.history.dismiss).toBe('function');
     expect(typeof store.getState().actions.favorites.toggle).toBe('function');
     expect(typeof store.getState().actions.docView.open).toBe('function');
   });
@@ -169,6 +174,36 @@ describe('event-driven slice invalidation', () => {
     // The parent linkage is projected onto the row (defaulting an absent parent to null).
     expect(plans.rows.find((r) => r.name === 'parent')?.parent).toBeNull();
     expect(plans.rows.find((r) => r.name === 'child')?.parent).toBe('parent');
+  });
+
+  it('re-pulls the history slice on a `history` state.snapshot and projects rows', async () => {
+    const { fake, store } = setup();
+    fake.stubRpc('state.history_snapshot', {
+      invalidation_key: 'iv-h',
+      items: [
+        {
+          item_id: 'collaborator:0',
+          text: 'fix the empty pane case',
+          target: 'collaborator',
+          ts: '2026-06-10T00:00:00',
+          status: 'open',
+          harness: null,
+          conversation_status: 'in_progress',
+          resumable: false,
+        },
+      ],
+    });
+
+    fake.emit(snapshot('history'));
+    await flush();
+
+    expect(fake.rpcCalls).toContainEqual({ method: 'state.history_snapshot', params: {} });
+    const history = store.getState().history;
+    expect(history.status).toBe('ready');
+    expect(history.rows).toHaveLength(1);
+    expect(history.rows[0]?.itemId).toBe('collaborator:0');
+    expect(history.rows[0]?.text).toBe('fix the empty pane case');
+    expect(history.rows[0]?.status).toBe('open');
   });
 
   it('re-pulls the roster on an `escalation` state.snapshot (escalation counts are JOINed in the crow snapshot)', async () => {

@@ -52,6 +52,7 @@ import { useAppStore } from '../hooks/useAppStore.js';
 import { usePanelStore } from '../hooks/useInputStores.js';
 import type { PanelId } from '../input/panels.js';
 import { useCrowsView } from '../selectors/crowsSelectors.js';
+import { useHistoryView } from '../selectors/historySelectors.js';
 import { useNotesView } from '../selectors/notesSelectors.js';
 import { usePlansView } from '../selectors/plansSelectors.js';
 import { useReportsView } from '../selectors/reportsSelectors.js';
@@ -217,6 +218,34 @@ export function docNaturalWidth(
 }
 
 /**
+ * Natural width of the history rail body. History is a two-line single-column Ledger: line 1 is
+ * `gutter + age(8) + target + "  " + STATUS`, line 2 is `4-space indent + intention text` (the text
+ * capped at {@link FILENAME_CAP} columns so a long intention can't inflate the rail — the panel
+ * truncates to fit). The wider of the two lines per row, maxed across rows. Pure — unit-testable.
+ */
+export function historyNaturalWidth(
+  rows: readonly {
+    readonly text: string;
+    readonly target: string;
+    readonly age: string;
+    readonly statusTag: string;
+  }[],
+): number {
+  let max = 0;
+  for (const row of rows) {
+    // Line 1 mirrors the panel: marker(1) + space(1) + age padEnd(8) + space(1) + target + "  " + tag.
+    const line1 = 2 + 8 + 1 + row.target.length + 2 + row.statusTag.length;
+    // Line 2 mirrors `    ${text}` (4-space indent); text capped to its contribution (R8).
+    const line2 = DOC_ROW_GUTTER + Math.min(row.text.length, FILENAME_CAP);
+    const w = Math.max(line1, line2);
+    if (w > max) {
+      max = w;
+    }
+  }
+  return max;
+}
+
+/**
  * Natural width of the tickets rail body. Tickets is a multi-column Ledger (up to 5 columns); its
  * natural width is the laid-out column block. We measure off the formatted cells: column 1 is
  * `gutter + max(idCell, titleCell)` and the remaining four columns each contribute their widest cell.
@@ -331,7 +360,7 @@ export function crowNaturalHeight(
 // ---------------------------------------------------------------------------
 
 /** The left region's panels in screen order (mirrors App's `LEFT_PANELS`). */
-const LEFT_PANELS: readonly PanelId[] = ['plans', 'notes', 'reports', 'tickets'];
+const LEFT_PANELS: readonly PanelId[] = ['plans', 'notes', 'reports', 'tickets', 'history'];
 /** The right region's panels in screen order (mirrors App's `RIGHT_PANELS`). */
 const RIGHT_PANELS: readonly PanelId[] = ['usage', 'crows'];
 
@@ -374,6 +403,7 @@ export function useRailContent(side: 'left' | 'right'): RailContent {
   const notes = useAppStore((s) => s.notes);
   const reports = useAppStore((s) => s.reports);
   const tickets = useAppStore((s) => s.tickets);
+  const history = useAppStore((s) => s.history);
   const roster = useAppStore((s) => s.roster);
   const usage = useAppStore((s) => s.usage);
 
@@ -381,6 +411,9 @@ export function useRailContent(side: 'left' | 'right'): RailContent {
   const notesView = useNotesView(notes, favorites);
   const reportsView = useReportsView(reports, favorites);
   const ticketsView = useTicketsView(tickets);
+  // History rail sizing is mode-independent: size to the LOOSE view (the default, OPEN+STALE) so the
+  // rail does not jump when the user toggles to the full feed — same stable-size discipline as crows.
+  const historyView = useHistoryView(history, 'loose');
   const crowsView = useCrowsView(roster);
   const usageView = useUsageView(usage);
 
@@ -430,6 +463,19 @@ export function useRailContent(side: 'left' | 'right'): RailContent {
       naturalHeight = Math.max(
         naturalHeight,
         listNaturalHeight(ticketsView.rows.length, DOC_LINES_PER_ENTRY, true),
+      );
+    }
+    if (visible.has('history')) {
+      naturalWidth = Math.max(
+        naturalWidth,
+        historyNaturalWidth(historyView.rows),
+        // Title carries the loose-thread digest; size to a representative width so the rail doesn't
+        // jump as the count's digit width changes.
+        titleRowWidth('History · 00 loose'),
+      );
+      naturalHeight = Math.max(
+        naturalHeight,
+        listNaturalHeight(historyView.rows.length, DOC_LINES_PER_ENTRY, true),
       );
     }
     // Floor a present rail's WIDTH at its smallest legible form (R7) so an empty/loading panel still

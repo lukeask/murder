@@ -66,6 +66,13 @@ import {
   type FavoritesState,
   initialFavoritesState,
 } from './favorites/favoritesSlice.js';
+import { createHistoryActions, type HistoryActions } from './history/historyActions.js';
+import {
+  createHistorySlice,
+  HISTORY_INVALIDATING_ENTITY,
+  type HistoryState,
+  initialHistoryState,
+} from './history/historySlice.js';
 import { createNotesActions, type NotesActions } from './notes/notesActions.js';
 import {
   createNotesSlice,
@@ -134,6 +141,7 @@ export interface AppActions {
   notes: NotesActions;
   reports: ReportsActions;
   tickets: TicketsActions;
+  history: HistoryActions;
   usage: UsageActions;
   ticketDetail: TicketDetailActions;
   conversations: ConversationsActions;
@@ -153,6 +161,7 @@ export interface AppStore {
   notes: NotesState;
   reports: ReportsState;
   tickets: TicketsState;
+  history: HistoryState;
   usage: UsageState;
   ticketDetail: TicketDetailState;
   conversations: ConversationsState;
@@ -195,6 +204,7 @@ export function createAppStore(bus: BusClient): {
     ...createNotesSlice(...a),
     ...createReportsSlice(...a),
     ...createTicketsSlice(...a),
+    ...createHistorySlice(...a),
     ...createUsageSlice(...a),
     ...createTicketDetailSlice(...a),
     ...createConversationsSlice(...a),
@@ -212,6 +222,7 @@ export function createAppStore(bus: BusClient): {
     notes: createNotesActions(bus, store),
     reports: createReportsActions(bus, store),
     tickets: createTicketsActions(bus, store),
+    history: createHistoryActions(bus, store),
     usage: createUsageActions(bus, store),
     ticketDetail: createTicketDetailActions(bus, store),
     conversations: createConversationsActions(bus, store),
@@ -231,6 +242,7 @@ export function createAppStore(bus: BusClient): {
     { entity: NOTES_INVALIDATING_ENTITY, refresh: () => void actions.notes.refresh() },
     { entity: REPORTS_INVALIDATING_ENTITY, refresh: () => void actions.reports.refresh() },
     { entity: TICKETS_INVALIDATING_ENTITY, refresh: () => void actions.tickets.refresh() },
+    { entity: HISTORY_INVALIDATING_ENTITY, refresh: () => void actions.history.refresh() },
     { entity: USAGE_INVALIDATING_ENTITY, refresh: () => void actions.usage.refresh() },
   ];
 
@@ -247,6 +259,7 @@ export function createAppStore(bus: BusClient): {
     report: REPORTS_INVALIDATING_ENTITY,
     escalation: ROSTER_ESCALATION_INVALIDATING_ENTITY,
     queue_row: USAGE_INVALIDATING_ENTITY,
+    history: HISTORY_INVALIDATING_ENTITY,
   } satisfies Record<Entity, Entity>;
   void _INVALIDATION_COVERAGE;
 
@@ -337,6 +350,7 @@ export const initialAppState: Pick<
   | 'notes'
   | 'reports'
   | 'tickets'
+  | 'history'
   | 'usage'
   | 'ticketDetail'
   | 'conversations'
@@ -349,6 +363,7 @@ export const initialAppState: Pick<
   notes: initialNotesState,
   reports: initialReportsState,
   tickets: initialTicketsState,
+  history: initialHistoryState,
   usage: initialUsageState,
   ticketDetail: initialTicketDetailState,
   conversations: initialConversationsState,

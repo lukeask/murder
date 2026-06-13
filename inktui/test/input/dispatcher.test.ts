@@ -184,9 +184,15 @@ describe('layer 1 — global chords', () => {
     expect(h.focusPanel).toHaveBeenCalledWith('crows');
   });
 
-  it('a reserved digit (alt+5) is a no-op', () => {
+  it('alt+5 toggles the history panel', () => {
     const h = handlers();
-    const out = dispatchKey('5', makeKey({ meta: true }), ctx(CHAT_FOCUS, h));
+    dispatchKey('5', makeKey({ meta: true }), ctx(CHAT_FOCUS, h));
+    expect(h.focusPanel).toHaveBeenCalledWith('history');
+  });
+
+  it('a reserved digit (alt+6) is a no-op', () => {
+    const h = handlers();
+    const out = dispatchKey('6', makeKey({ meta: true }), ctx(CHAT_FOCUS, h));
     expect(h.focusPanel).not.toHaveBeenCalled();
     expect(out.layer).toBe('chat'); // falls through to the chat short-circuit
   });
