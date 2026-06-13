@@ -7,6 +7,7 @@ from pathlib import Path
 import typer
 
 from murder import __version__
+from murder.app.cli.doctor_cmd import cmd_doctor
 from murder.app.cli.init_cmd import (
     _ensure_initialized_for_bare_command,
     cmd_init,
@@ -55,6 +56,7 @@ def _root(
 
 
 app.command("init")(cmd_init)
+app.command("doctor")(cmd_doctor)
 app.command("up")(cmd_up)
 app.command("serviced", hidden=True)(cmd_serviced)
 app.command("down")(cmd_down)
