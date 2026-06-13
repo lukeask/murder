@@ -41,6 +41,8 @@ class OrchestratorCommands(Protocol):
 
     async def retire_note(self, name: str) -> dict[str, Any]: ...
 
+    async def dismiss_history_item(self, item_id: str) -> dict[str, Any]: ...
+
     async def send_agent_message(
         self, agent_id: str, message: str, ticket_id: str | None
     ) -> dict[str, Any]: ...
@@ -116,6 +118,13 @@ async def _note_retire(orch: OrchestratorCommands, payload: dict[str, Any]) -> d
     if not isinstance(name, str) or not name.strip():
         raise ValueError("note.retire requires name")
     return await orch.retire_note(name.strip())
+
+
+async def _history_dismiss(orch: OrchestratorCommands, payload: dict[str, Any]) -> dict[str, Any]:
+    item_id = payload.get("item_id")
+    if not isinstance(item_id, str) or not item_id.strip():
+        raise ValueError("history.dismiss requires item_id")
+    return await orch.dismiss_history_item(item_id.strip())
 
 
 async def _agent_message(orch: OrchestratorCommands, payload: dict[str, Any]) -> dict[str, Any]:
@@ -294,6 +303,7 @@ _HANDLERS: dict[str, Handler] = {
     "notetaker.capture.submit": _capture_submit,
     "note.ensure": _note_ensure,
     "note.retire": _note_retire,
+    "history.dismiss": _history_dismiss,
     "agent.message": _agent_message,
     "agent.send_key": _agent_send_key,
     "agent.transcript.refresh": _agent_transcript_refresh,

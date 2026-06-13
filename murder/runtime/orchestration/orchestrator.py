@@ -53,6 +53,7 @@ from murder.verdict.completion import CheckRegistry, CompletionCoordinator
 from murder.llm.harnesses import capabilities_for
 from murder.runtime.orchestration.brief import BriefContext, assembler_for
 from murder.runtime.orchestration.ticket_ops import TicketOps
+from murder.runtime.orchestration.history_ops import HistoryOps
 from murder.runtime.orchestration.note_ops import NoteOps
 from murder.runtime.orchestration.plan_ops import PlanOps
 from murder.runtime.orchestration.agent_ops import AgentOps
@@ -127,6 +128,7 @@ class Orchestrator:
         # convention) is honored at call time rather than frozen at construction.
         self.tickets = TicketOps(rt, emit_ticket_status=self._emit_ticket_status)
         self.notes = NoteOps(rt)
+        self.history = HistoryOps(rt)
         self.plans = PlanOps(
             rt,
             send_agent_message=lambda *a, **k: self.send_agent_message(*a, **k),
@@ -802,6 +804,9 @@ class Orchestrator:
 
     async def retire_note(self, name: str) -> dict[str, Any]:
         return await self.notes.retire_note(name)
+
+    async def dismiss_history_item(self, item_id: str) -> dict[str, Any]:
+        return await self.history.dismiss(item_id)
 
     async def reopen_ticket(self, ticket_id: str) -> list[str]:
         return await self.tickets.reopen_ticket(ticket_id)

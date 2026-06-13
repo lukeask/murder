@@ -107,6 +107,10 @@ class AgentOps:
                 block=conversation.block_to_wire(block),
             )
         )
+        # History view: a new user turn is a new intention in the history feed.
+        # Emit a key-only history snapshot (mirroring the PLAN publish below) so
+        # connected clients refetch and surface it. Read-model spine, no extra write.
+        await self.rt.publish_snapshot(Entity.HISTORY, agent_id)
         # F1 (plan sort-order): the plans list orders by MAX(captured_at) of each
         # plan's ``planner-{name}`` messages (read_model.get_plans_snapshot), so a
         # user turn to a planner reorders the list WITHOUT any plans-table write.

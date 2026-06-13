@@ -59,8 +59,8 @@ def test_tmux_frame_event_type_discriminant() -> None:
 
 
 def test_protocol_version_is_3() -> None:
-    """PROTOCOL_VERSION must equal 3 after the F6 bump."""
-    assert PROTOCOL_VERSION == 3
+    """PROTOCOL_VERSION must equal 4 (history view added Entity.HISTORY, bumping 3→4)."""
+    assert PROTOCOL_VERSION == 4
 
 
 # ---------------------------------------------------------------------------

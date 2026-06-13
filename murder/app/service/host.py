@@ -182,6 +182,9 @@ class ServiceHost:
         def _state_reports_snapshot(_body: dict[str, Any]) -> dict[str, Any]:
             return _value(_read_model().get_reports_snapshot())
 
+        def _state_history_snapshot(_body: dict[str, Any]) -> dict[str, Any]:
+            return _value(_read_model().get_history_snapshot())
+
         def _state_ticket_detail(body: dict[str, Any]) -> dict[str, Any]:
             ticket_id = str(body.get("ticket_id", "")).strip()
             if not ticket_id:
@@ -218,6 +221,7 @@ class ServiceHost:
         self.register_rpc_handler("state.plans_snapshot", _state_plans_snapshot)
         self.register_rpc_handler("state.notes_snapshot", _state_notes_snapshot)
         self.register_rpc_handler("state.reports_snapshot", _state_reports_snapshot)
+        self.register_rpc_handler("state.history_snapshot", _state_history_snapshot)
         self.register_rpc_handler("state.ticket_detail", _state_ticket_detail)
         self.register_rpc_handler("state.plan_display", _state_plan_display)
         self.register_rpc_handler("state.note_display", _state_note_display)

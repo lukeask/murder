@@ -15,7 +15,7 @@
  * you're in the wrong file"). Framing/handshake logic lives in the `UdsBusClient` (C2).
  */
 
-export const PROTOCOL_VERSION = 3;
+export const PROTOCOL_VERSION = 4;
 
 // === Closed enums ============================================================
 // Modeled as union types of string literals rather than TS `enum`s: the wire carries the bare
@@ -47,7 +47,15 @@ export type CommandStatus = 'pending' | 'in_flight' | 'done' | 'failed' | 'cance
  *
  * Mirrors the Python `Entity` enum (`murder/bus/protocol.py`) 1:1, including `report` (added to
  * Python in F1; the former C6 forward-declaration is now backed by the real backend enum). */
-export type Entity = 'ticket' | 'agent' | 'plan' | 'note' | 'report' | 'escalation' | 'queue_row';
+export type Entity =
+  | 'ticket'
+  | 'agent'
+  | 'plan'
+  | 'note'
+  | 'report'
+  | 'escalation'
+  | 'queue_row'
+  | 'history';
 
 export type PresenceState = 'attended' | 'headless';
 
