@@ -132,6 +132,50 @@ describe('HistoryPanel', () => {
     dispose();
   });
 
+  it('resumes the cursor row on `r` when resumable (submits agent.resume_from_history)', async () => {
+    const resumableFirst: HistorySnapshotReply = {
+      invalidation_key: 'iv',
+      items: [
+        {
+          item_id: 'crow-t1:0',
+          text: 'resume me',
+          target: 'crow-t1',
+          ts: recentIso(),
+          status: 'open',
+          harness: 'claude_code',
+          conversation_status: 'complete',
+          resumable: true,
+        },
+      ],
+    };
+    const { fake, store, inputStores, dispose } = await setup(resumableFirst);
+    const { stdin } = render(<Harness store={store} inputStores={inputStores} />);
+    await tick();
+    stdin.write('r');
+    await tick();
+    const submit = fake.rpcCalls.find((c) => c.method === 'command.submit');
+    expect(submit?.params).toMatchObject({
+      kind: 'agent.resume_from_history',
+      payload: { conversation_id: 'crow-t1' },
+    });
+    dispose();
+  });
+
+  it('does not resume on `r` for a non-resumable row (no resume command)', async () => {
+    const { fake, store, inputStores, dispose } = await setup();
+    const { stdin } = render(<Harness store={store} inputStores={inputStores} />);
+    await tick();
+    stdin.write('r');
+    await tick();
+    const resume = fake.rpcCalls.find(
+      (c) =>
+        c.method === 'command.submit' &&
+        (c.params as { kind?: string }).kind === 'agent.resume_from_history',
+    );
+    expect(resume).toBeUndefined();
+    dispose();
+  });
+
   it('renders empty chrome when there are no loose threads', async () => {
     const { store, inputStores, dispose } = await setup({ invalidation_key: 'iv', items: [] }, true);
     const { lastFrame } = render(<Harness store={store} inputStores={inputStores} />);

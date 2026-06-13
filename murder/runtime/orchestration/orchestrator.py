@@ -433,8 +433,15 @@ class Orchestrator:
         *,
         worktree_path: str | None = None,
         worktree_branch: str | None = None,
+        resume_session_id: str | None = None,
     ) -> str:
-        """Start a ticketless crow session; inject model selection when supported."""
+        """Start a ticketless crow session; inject model selection when supported.
+
+        ``resume_session_id`` (CC-only) resumes a prior harness session in place
+        (``claude --resume <id>``) instead of starting a fresh conversation; it
+        is threaded onto the start spec and ignored by adapters that don't honor
+        it.
+        """
         harness_kind = harness.strip()
         if not harness_kind:
             raise ValueError("spawn_rogue requires harness")
@@ -488,6 +495,7 @@ class Orchestrator:
             cwd=cwd,
             startup_model=startup_model,
             startup_effort=startup_effort,
+            resume_session_id=resume_session_id,
         )
         try:
             start_result = await agent.harness_session.start(start_spec)
@@ -546,6 +554,54 @@ class Orchestrator:
             else None,
         )
         return {"handled": True, "agent_id": agent_id}
+
+    async def resume_conversation(self, conversation_id: str) -> dict[str, Any]:
+        """Resume a completed CC conversation as a fresh rogue crow.
+
+        Reads the conversation's harness/session id from the store, validates it
+        is a resumable Claude Code session, and (unless a crow is already live
+        for it) spawns a rogue CC crow launched with ``claude --resume <id>``.
+        Returns an error dict (never raises) when the conversation is missing,
+        not CC, or has no captured session id, so the history /resume keybind can
+        surface a toast instead of crashing the worker.
+        """
+        cid = conversation_id.strip()
+        if not cid:
+            return {"ok": False, "error": "resume requires conversation_id"}
+        db = self.rt.db
+        if db is None:
+            return {"ok": False, "error": "resume unavailable: no database"}
+        row = db.execute(
+            """
+            SELECT harness, harness_session_id, status
+              FROM conversations
+             WHERE conversation_id = ?
+            """,
+            (cid,),
+        ).fetchone()
+        if row is None:
+            return {"ok": False, "error": f"no conversation {cid}"}
+        harness = row["harness"]
+        session_id = row["harness_session_id"]
+        if harness != "claude_code" or not session_id:
+            reason = (
+                "resume is only supported for Claude Code sessions"
+                if harness != "claude_code"
+                else "conversation has no resumable session id"
+            )
+            return {"ok": False, "error": reason}
+        # A live crow for this conversation means resume would fork a second copy
+        # of the same session; bail with a friendly message instead.
+        existing = self.rt.get_agent(cid)
+        if existing is not None and await self._agent_is_live(existing):
+            return {"ok": False, "error": "a session is already running for this conversation"}
+        agent_id = await self.spawn_rogue(
+            "claude_code",
+            "",
+            name=f"resume_{cid}",
+            resume_session_id=str(session_id),
+        )
+        return {"handled": True, "agent_id": agent_id, "resumed_from": cid}
 
     async def start_question_listener(self) -> None:
         """Subscribe to QuestionEvents on the bus and route to the per-plan planning agent.

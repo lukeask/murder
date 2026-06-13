@@ -108,6 +108,8 @@ class HarnessSession:
         self.adapter.additional_workspace_dirs = tuple(
             Path(path) for path in start_spec.additional_workspace_dirs
         )
+        if start_spec.resume_session_id is not None:
+            self.adapter.resume_session_id = start_spec.resume_session_id
         await tmux.create_session(
             self.session,
             start_spec.cwd,
@@ -337,6 +339,10 @@ class HarnessAdapter(ABC):
         # (cursor, pi) can strip it instead of mislabelling it as chat turns.
         self.system_prompt: str | None = None
         self.additional_workspace_dirs: tuple[Path, ...] = ()
+        # CC-only: a prior harness session id to resume on launch. Set from the
+        # start spec in HarnessSession.start(); read by startup_cmd. None for a
+        # fresh session.
+        self.resume_session_id: str | None = None
 
     @classmethod
     def declared_capabilities(cls) -> HarnessCapabilities:

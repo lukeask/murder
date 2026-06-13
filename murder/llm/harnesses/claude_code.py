@@ -160,6 +160,10 @@ class ClaudeCodeAdapter(HarnessAdapter):
     def startup_cmd(self, cwd: Path) -> list[str]:
         del cwd
         cmd = ["claude", "--dangerously-skip-permissions"]
+        # Resume a prior CC session in place when the orchestrator launched this
+        # adapter from the history /resume path (set via HarnessStartSpec).
+        if self.resume_session_id:
+            cmd += ["--resume", self.resume_session_id]
         return cmd
 
     def is_ready(self, pane_text: str) -> bool:

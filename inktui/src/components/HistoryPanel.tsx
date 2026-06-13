@@ -39,7 +39,7 @@ import { Pane } from './Pane.js';
 
 const PANEL_ID: PanelId = 'history';
 
-type HistoryIntent = 'cursorDown' | 'cursorUp' | 'refresh' | 'toggleMode' | 'dismiss';
+type HistoryIntent = 'cursorDown' | 'cursorUp' | 'resumeOrRefresh' | 'toggleMode' | 'dismiss';
 
 /** Map a row status to a theme color for its tag. */
 function statusColor(status: string, theme: ReturnType<typeof useTheme>): string {
@@ -136,6 +136,7 @@ export const HistoryPanel = memo(function HistoryPanel(): React.JSX.Element {
   const view = useHistoryView(history, mode);
   const refresh = useAppStore((s) => s.actions.history.refresh);
   const dismiss = useAppStore((s) => s.actions.history.dismiss);
+  const resumeConversation = useAppStore((s) => s.actions.history.resumeConversation);
 
   const [cursor, setCursor] = useState(0);
   const [overflow, setOverflow] = useState<{ above: number; below: number }>({
@@ -159,9 +160,9 @@ export const HistoryPanel = memo(function HistoryPanel(): React.JSX.Element {
 
   // Resolve the cursor row's item id at call time — the cursor is local, so the panel is the only
   // place that knows which row `x` (dismiss) acts on.
-  const itemIdAtCursor = useCallback((): string | null => {
+  const rowAtCursor = useCallback((): HistoryRowView | null => {
     const clamped = Math.min(cursor, Math.max(rowCount - 1, 0));
-    return view.rows[clamped]?.itemId ?? null;
+    return view.rows[clamped] ?? null;
   }, [cursor, rowCount, view.rows]);
 
   const keymap: PanelKeymap<HistoryIntent> = useMemo(
@@ -177,7 +178,7 @@ export const HistoryPanel = memo(function HistoryPanel(): React.JSX.Element {
           intent: 'cursorUp',
           description: 'prev item',
         },
-        { chord: { input: 'r' }, intent: 'refresh', description: 'refresh' },
+        { chord: { input: 'r' }, intent: 'resumeOrRefresh', description: 'resume / refresh' },
         { chord: { input: 'a' }, intent: 'toggleMode', description: 'loose ↔ all' },
         { chord: { input: 'x' }, intent: 'dismiss', description: 'dismiss' },
       ],
@@ -189,16 +190,24 @@ export const HistoryPanel = memo(function HistoryPanel(): React.JSX.Element {
           case 'cursorUp':
             moveCursor(-1);
             return;
-          case 'refresh':
+          case 'resumeOrRefresh': {
+            // `r` resumes the cursor row's CC session when resumable; on any other row it falls
+            // through to a plain feed refresh (also the error-state "r to retry" affordance).
+            const row = rowAtCursor();
+            if (row !== null && row.resumable) {
+              void resumeConversation(row.target);
+              return;
+            }
             void refresh();
             return;
+          }
           case 'toggleMode':
             setMode((m) => (m === 'loose' ? 'all' : 'loose'));
             return;
           case 'dismiss': {
-            const itemId = itemIdAtCursor();
-            if (itemId !== null) {
-              void dismiss(itemId);
+            const row = rowAtCursor();
+            if (row !== null) {
+              void dismiss(row.itemId);
             }
             return;
           }
@@ -207,7 +216,7 @@ export const HistoryPanel = memo(function HistoryPanel(): React.JSX.Element {
         }
       },
     }),
-    [moveCursor, refresh, dismiss, itemIdAtCursor],
+    [moveCursor, refresh, dismiss, resumeConversation, rowAtCursor],
   );
   usePanelKeymap(PANEL_ID, keymap);
 

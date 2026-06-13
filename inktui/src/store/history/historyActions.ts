@@ -19,6 +19,7 @@ import type { BusClient } from '../../bus/BusClient.js';
 import { submitCommand } from '../commandSubmit.js';
 import { createRefreshAction } from '../listSlice.js';
 import type { AppStore } from '../store.js';
+import { toastStore } from '../toast/toastStore.js';
 import type { HistoryRow, HistoryState } from './historySlice.js';
 
 /**
@@ -73,6 +74,10 @@ export interface HistoryActions {
    * submits the `history.dismiss` command. Rejections are swallowed (the optimistic state is
    * reconciled by the authoritative refetch the dismiss op publishes). */
   dismiss(itemId: string): Promise<void>;
+  /** Resume a (CC-only) conversation as a fresh crow via the `agent.resume_from_history` command.
+   * `conversationId` is the row's `target` (the conversation/agent id). A backend rejection (non-CC,
+   * no session id, already running) surfaces as an error toast — never thrown past the action. */
+  resumeConversation(conversationId: string): Promise<void>;
 }
 
 export function createHistoryActions(bus: BusClient, store: StoreApi<AppStore>): HistoryActions {
@@ -99,6 +104,18 @@ export function createHistoryActions(bus: BusClient, store: StoreApi<AppStore>):
       } catch {
         // Swallow: the authoritative refetch (the dismiss op publishes a `history` snapshot key, and
         // a failed command leaves the server state unchanged) reconciles the optimistic row.
+      }
+    },
+    async resumeConversation(conversationId: string): Promise<void> {
+      try {
+        await submitCommand(bus, 'agent.resume_from_history', {
+          conversation_id: conversationId,
+        });
+      } catch (err) {
+        // The backend rejects non-resumable conversations (non-CC, no session id, already running);
+        // surface the reason as an error toast rather than failing silently.
+        const message = err instanceof Error ? err.message : String(err);
+        toastStore.getState().push(`resume failed: ${message}`, { severity: 'error', ttlMs: 6000 });
       }
     },
   };

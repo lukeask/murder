@@ -61,7 +61,8 @@ export type ActionId =
   | 'global.closePane' // ctrl+q — close the highlighted Stage pane (chat history / doc); plain chord
   | 'panel.star' // alt+f — favorite/star the focused panel's cursor row
   | 'panel.resetCrow' // x — arm the two-press reset for the crows panel's cursor row
-  | 'panel.usageSteering'; // s — cycle the usage panel's cursor gauge steering (auto→prefer→pause)
+  | 'panel.usageSteering' // s — cycle the usage panel's cursor gauge steering (auto→prefer→pause)
+  | 'panel.historyResume'; // r — resume the history panel's cursor row's CC session (when resumable)
 
 /**
  * How an action's default binding is expressed:
@@ -257,6 +258,17 @@ export const ACTIONS: Readonly<Record<ActionId, ActionDef>> = {
     // no command-modifier override.
     default: { kind: 'plain', chord: { input: 's' } },
     description: 'cycle steering',
+    rebindable: false,
+  },
+  'panel.historyResume': {
+    id: 'panel.historyResume',
+    // Plain `r` — a panel-scoped chord, only consumed by the HistoryPanel keymap when that panel
+    // holds focus (so it never shadows chat typing; same property as the crows panel's plain `x`).
+    // On a resumable row it resumes the CC session; on a non-resumable row it falls through to the
+    // panel's refresh. Kept in the registry (not a raw panel literal) so the help overlay sees it.
+    // Not rebindable — plain chords take no command-modifier override.
+    default: { kind: 'plain', chord: { input: 'r' } },
+    description: 'resume session',
     rebindable: false,
   },
 };

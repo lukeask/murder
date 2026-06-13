@@ -118,6 +118,14 @@ describe('ACTIONS table', () => {
     expect(new Set(ACTION_IDS)).toEqual(new Set(Object.keys(ACTIONS)));
   });
 
+  it('panel.historyResume is a plain `r` — modifier-independent (panel-scoped chord)', () => {
+    const b = resolveBindings('alt', false, {});
+    // A plain chord matches the bare key regardless of the active modifier setting.
+    expect(b.matches('panel.historyResume', 'r', makeKey())).toBe(true);
+    expect(b.matches('panel.historyResume', 'g', makeKey())).toBe(false);
+    expect(b.label('panel.historyResume')).toBe('r');
+  });
+
   it('global.keyHelp is a plain ? — modifier-independent and labelled as the bare key', () => {
     const alt = resolveBindings('alt', false, {});
     const ctrl = resolveBindings('ctrl', true, {});

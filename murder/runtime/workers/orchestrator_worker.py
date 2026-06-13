@@ -43,6 +43,8 @@ class OrchestratorCommands(Protocol):
 
     async def dismiss_history_item(self, item_id: str) -> dict[str, Any]: ...
 
+    async def resume_conversation(self, conversation_id: str) -> dict[str, Any]: ...
+
     async def send_agent_message(
         self, agent_id: str, message: str, ticket_id: str | None
     ) -> dict[str, Any]: ...
@@ -125,6 +127,13 @@ async def _history_dismiss(orch: OrchestratorCommands, payload: dict[str, Any]) 
     if not isinstance(item_id, str) or not item_id.strip():
         raise ValueError("history.dismiss requires item_id")
     return await orch.dismiss_history_item(item_id.strip())
+
+
+async def _history_resume(orch: OrchestratorCommands, payload: dict[str, Any]) -> dict[str, Any]:
+    conversation_id = payload.get("conversation_id")
+    if not isinstance(conversation_id, str) or not conversation_id.strip():
+        raise ValueError("agent.resume_from_history requires conversation_id")
+    return await orch.resume_conversation(conversation_id.strip())
 
 
 async def _agent_message(orch: OrchestratorCommands, payload: dict[str, Any]) -> dict[str, Any]:
@@ -304,6 +313,7 @@ _HANDLERS: dict[str, Handler] = {
     "note.ensure": _note_ensure,
     "note.retire": _note_retire,
     "history.dismiss": _history_dismiss,
+    "agent.resume_from_history": _history_resume,
     "agent.message": _agent_message,
     "agent.send_key": _agent_send_key,
     "agent.transcript.refresh": _agent_transcript_refresh,

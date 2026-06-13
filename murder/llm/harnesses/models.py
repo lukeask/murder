@@ -13,6 +13,9 @@ class HarnessStartSpec:
     ready_timeout_s: float = 240.0
     poll_interval_s: float = 0.4
     auto_run: bool | None = None
+    # CC-only: when set, the harness launch resumes a prior session id
+    # (``claude --resume <id>``) instead of starting a fresh conversation.
+    resume_session_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

@@ -102,4 +102,37 @@ describe('history actions', () => {
       payload: { item_id: 'collaborator:0' },
     });
   });
+
+  it('resumeConversation submits agent.resume_from_history with the conversation id', async () => {
+    const { fake, store } = setup();
+    fake.stubRpc('command.submit', { ok: true, command_id: 'cmd-r' });
+    fake.stubRpc('command.status', {
+      ok: true,
+      status: 'done',
+      result_json: JSON.stringify({ handled: true, agent_id: 'crow-rogue-resumed' }),
+    });
+
+    await store.getState().actions.history.resumeConversation('crow-t1');
+
+    const submit = fake.rpcCalls.find((c) => c.method === 'command.submit');
+    expect(submit?.params).toMatchObject({
+      kind: 'agent.resume_from_history',
+      payload: { conversation_id: 'crow-t1' },
+    });
+  });
+
+  it('resumeConversation swallows backend rejection (does not throw)', async () => {
+    const { fake, store } = setup();
+    fake.stubRpc('command.submit', { ok: true, command_id: 'cmd-r' });
+    fake.stubRpc('command.status', {
+      ok: true,
+      status: 'failed',
+      last_error: 'resume is only supported for Claude Code sessions',
+    });
+
+    // Must resolve (not reject): the action surfaces the error as a toast.
+    await expect(
+      store.getState().actions.history.resumeConversation('crow-cursor'),
+    ).resolves.toBeUndefined();
+  });
 });
