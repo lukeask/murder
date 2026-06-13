@@ -216,6 +216,29 @@ def test_pi_model_picker_status_bar_not_a_model():
     assert not any("%" in id_ for id_ in ids)
 
 
+def test_pi_model_picker_drops_extended_keys_control_row():
+    # Regression (dogfood bug #8): pi's picker leaked a non-model first row
+    # `Set  G Extended Keys On` — a terminal "enable extended keys" control
+    # string echoed as text, not a model. It must be filtered from the list.
+    from murder.llm.harnesses.transcripts.grammar.pi import _is_pi_chrome
+
+    pane = (
+        "Set  G Extended Keys On\n"
+        "> \n"
+        "  deepseek/deepseek-v4-pro [or]\n"
+        "  deepseek/deepseek-v4-flash [or]\n"
+    )
+    ids = [m[0] for m in parse_harness_model_list(pane)]
+    assert "deepseek/deepseek-v4-pro" in ids
+    assert "deepseek/deepseek-v4-flash" in ids
+    assert not any("extended" in id_.lower() for id_ in ids)
+    # The transcript chrome predicate (raw-pane mirror fallback) must also drop
+    # it so it never surfaces as a chat line.
+    assert _is_pi_chrome("Set  G Extended Keys On")
+    assert _is_pi_chrome("  Set  G  Extended Keys Off")
+    assert not _is_pi_chrome("deepseek/deepseek-v4-flash [or]")
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Adapter-specific numbered pickers
 # ─────────────────────────────────────────────────────────────────────────────

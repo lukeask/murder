@@ -35,6 +35,12 @@ _TAIL_LINES = 30
 _MODEL_MENU_DELAY_S = 0.5
 _MODEL_FILTER_DELAY_S = 0.35
 _MODEL_SETTLE_DELAY_S = 0.5
+# After confirming the picker, the status bar repaints a beat later. A single
+# fixed-sleep capture used to read the still-open picker (no status line),
+# parse no active model, and fail the whole boot. Poll for the confirmation to
+# read back instead of guessing a delay.
+_MODEL_CONFIRM_POLL_INTERVAL_S = 0.1
+_MODEL_CONFIRM_POLL_TIMEOUT_S = 3.0
 
 _READY_RE = re.compile(
     r"(/hotkeys|Ctrl\+[A-Z]|Ctrl\+o|Slash commands|[\d.]+%/[\d.]+[kKmM]|^\s*[>/]\s*$)",
@@ -158,9 +164,26 @@ class PiAdapter(HarnessAdapter):
         await tmux.send_keys(session, "", literal=True, enter=True)
         await asyncio.sleep(_MODEL_SETTLE_DELAY_S)
 
-        pane = await tmux.capture_pane(session, lines=200)
-        state = self.parse_active_model_state(pane)
-        return _pi_models_match(model, state.model if state else None)
+        return await self._confirm_active_model(session, model)
+
+    async def _confirm_active_model(self, session: str, model: str) -> bool:
+        """Poll the status bar until the selected model reads back (or time out).
+
+        Pi has no startup ``--model`` flag to fall back on, so a flaky single
+        capture that happens to read the still-open picker would hard-fail the
+        whole boot. Polling lets a late status-bar repaint still confirm the
+        selection.
+        """
+        attempts = max(
+            1, int(_MODEL_CONFIRM_POLL_TIMEOUT_S / _MODEL_CONFIRM_POLL_INTERVAL_S)
+        )
+        for _ in range(attempts):
+            pane = await tmux.capture_pane(session, lines=200)
+            state = self.parse_active_model_state(pane)
+            if _pi_models_match(model, state.model if state else None):
+                return True
+            await asyncio.sleep(_MODEL_CONFIRM_POLL_INTERVAL_S)
+        return False
 
     async def collect_available_models(self, session: str) -> SimpleResult[list[tuple[str, str]]]:
         requested = await self.request_model_list(session)

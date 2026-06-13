@@ -160,6 +160,37 @@ def test_pi_set_model_filters_picker_then_confirms(fake_tmux: FakeTmux) -> None:
     assert "deepseek-v4-flash" in sent
 
 
+def test_pi_set_model_polls_for_late_status_bar_confirmation(fake_tmux: FakeTmux) -> None:
+    # Regression (dogfood bug #2): pi boots without a launch --model flag, so
+    # the runtime picker is the *only* way to select the model — it has no
+    # startup-model fallback to trust. The status bar repaints a beat after the
+    # picker is confirmed; the old single fixed-sleep capture read the still-open
+    # picker (no status line), parsed no active model, returned False, and
+    # hard-failed the whole boot. The confirm step now POLLS, so a late repaint
+    # still confirms the selection. The blank pane stands in for "not painted yet".
+    fake_tmux.queue_pane(PI_MODEL_PICKER)  # request_model_list render
+    fake_tmux.queue_pane("")  # status bar not painted on first confirm poll
+    fake_tmux.queue_pane(PI_IDLE)  # repaints with the active model on a later poll
+
+    ok = asyncio.run(PiAdapter().set_model("sess", "deepseek/deepseek-v4-flash"))
+
+    assert ok is True
+    sent = [args[1] for args, _ in fake_tmux.calls_to("send_keys")]
+    assert "/model" in sent
+    assert "deepseek-v4-flash" in sent
+
+
+def test_pi_set_model_fails_when_confirmation_never_reads_back(fake_tmux: FakeTmux) -> None:
+    # The poll must still give up (return False) when the model never reads back,
+    # rather than spinning forever — the failure path that raises the boot toast.
+    fake_tmux.queue_pane(PI_MODEL_PICKER)  # request_model_list render
+    fake_tmux.queue_pane("")  # status bar never shows the selected model
+
+    ok = asyncio.run(PiAdapter().set_model("sess", "deepseek/deepseek-v4-flash"))
+
+    assert ok is False
+
+
 def test_cursor_set_composer_speed_types_picker_filter_per_key(fake_tmux: FakeTmux) -> None:
     # The /model picker (CLI ≥ 2026.06.11) drops bulk literal input as a paste
     # guard — the filter must be typed one key at a time, never as one string.

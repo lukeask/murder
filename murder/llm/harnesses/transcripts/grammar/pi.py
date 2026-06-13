@@ -27,6 +27,7 @@ _PI_CHROME_RE = re.compile(
         |pi\s+can\s+explain\b
         |extend\s+pi\.
         |warning:\s+tmux\s+extended-keys\b
+        |[>\s]*set\b.*\bextended\s+keys\s+(?:on|off)\b
         |scope:\s+all\s+\|\s+scoped\b
         |tab\s+scope\b
         |model\s+scope:

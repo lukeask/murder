@@ -113,6 +113,7 @@ _MODEL_SKIP_FRAGMENTS = (
     "%/",
     "update available",
     "new version",
+    "extended keys",
 )
 
 _NUMBERED_ROW_RE = re.compile(
