@@ -1,0 +1,9 @@
+{
+  "harness": "cursor",
+  "state": "awaiting_input",
+  "condensed": null,
+  "segments": [
+    {"type": "user", "text": "test"},
+    {"type": "assistant", "phase": "final", "text": "Here — what do you want to work on?", "elapsed": null}
+  ]
+}

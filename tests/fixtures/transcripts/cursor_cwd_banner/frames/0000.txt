@@ -1,0 +1,26 @@
+# source: synthetic regression — cursor leading-dot cwd banner bracketing a user turn
+# terminal width 120
+user@machine:~/Documents/code/testingmurderharness $ agent
+
+
+  Cursor Agent
+  v2026.06.11-abcdef0
+  Use /mcp to connect Cursor to your tools and data sources.
+
+  · ~/Documents/code/testingmurderharness
+
+
+  test
+
+
+  · ~/Documents/code/testingmurderharness
+
+  Here — what do you want to work on?
+
+
+ ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+  → Add a follow-up
+ ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+  Composer 2.5 · 3.1%                                                          Run Everything
+  · ~/Documents/code/testingmurderharness
+</content>

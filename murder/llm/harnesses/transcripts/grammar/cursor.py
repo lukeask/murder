@@ -48,6 +48,15 @@ _BUSY_SPINNER_RE = re.compile(
     re.MULTILINE,
 )
 _CURSOR_CWD_RE = re.compile(r"^\s*(?:~/|/|\./|\.\./).*\s+·\s+\S+\s*$")
+# Some Cursor builds (and narrower terminals) render the cwd banner with the
+# separator dot *leading* the path — ``· ~/Documents/code/project`` — instead of
+# ``~/path · branch``. That shape starts with ``·``, not ``~/``, so it slips past
+# _CURSOR_CWD_RE and, being indented, also past the bare-line fallback, leaking
+# the banner into the transcript (and duplicating around the first user turn,
+# since the banner repaints above and below it). Match the dot-first form too,
+# kept tight to a ``~/``- or ``/``-rooted path so a user's prose starting with
+# ``·`` is never swallowed.
+_CURSOR_CWD_LEADING_DOT_RE = re.compile(r"^\s*·\s+(?:~/|/)\S")
 # Status line: model label + the auto-run mode on the right. CLI ≥ 2026.06.11
 # renders the yolo mode as "Run Everything" (older builds said "Auto-run").
 _CURSOR_COMPOSER_RE = re.compile(
@@ -85,6 +94,7 @@ def _is_cursor_chrome(line: str) -> bool:
         _CURSOR_PLACEHOLDER_RE.match(s)
         or _CURSOR_COMPOSER_RE.match(s)
         or _CURSOR_CWD_RE.match(s)
+        or _CURSOR_CWD_LEADING_DOT_RE.match(s)
         or _BUSY_INPUT_HINT_RE.search(s)
         or _BUSY_SPINNER_RE.match(s)
         or _CURSOR_CHROME_RE.match(s)

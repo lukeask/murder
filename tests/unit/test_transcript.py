@@ -162,6 +162,32 @@ def test_cc_uncached_notice_suppressed_and_idle():
     assert acc.to_dict() == transcripts.parse_frames("claude_code", frames)
 
 
+def test_cursor_leading_dot_cwd_banner_stripped_and_not_duplicated():
+    """Cursor's cwd banner can render dot-first (``· ~/path``) instead of
+    ``~/path · branch``. That shape slipped past the cwd-banner chrome rule and
+    leaked into the transcript, *duplicating* around the first user turn
+    (repainted above and below it). Pin that it is suppressed: the fixture brackets
+    the user ``test`` turn with three copies of the banner, and the parse must
+    contain none of them — only the clean user + assistant segments."""
+    frames = _scenario_frames("cursor_cwd_banner")
+    banner = "· ~/Documents/code/testingmurderharness"
+    raw = "\n".join(frames)
+    assert raw.count(banner) >= 3, "fixture must paint the leading-dot banner multiple times"
+
+    doc = transcripts.parse_frames(
+        "cursor", frames, user_texts=_FIXTURE_USER_TEXTS_BANNER
+    )
+    assert doc == _scenario_expected("cursor_cwd_banner")
+    blob = json.dumps(doc, ensure_ascii=False)
+    assert banner not in blob, "leading-dot cwd banner leaked into a parsed segment"
+    # No duplication: exactly one user and one assistant segment survive.
+    types = [s["type"] for s in doc["segments"]]
+    assert types == ["user", "assistant"]
+
+
+_FIXTURE_USER_TEXTS_BANNER = ["test"]
+
+
 def test_cc_unsent_live_input_is_not_a_turn():
     """The final CC frame shows ``❯ yeah, sketch the diff3…`` then ``❯ d`` being
     typed — both are live input that was never submitted, so neither may appear
