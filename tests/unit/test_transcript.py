@@ -449,6 +449,19 @@ def test_cursor_has_no_tool_calls():
     assert not any(s["type"] == "tool_call" for s in segs)
 
 
+def test_cursor_blank_braille_spinner_is_chrome():
+    # Cursor animates its busy spinner with a leading BRAILLE BLANK cell, e.g.
+    # "⠀⠞ Editing  9.67k tokens" / "⠀⠞ Calling  10.21k tokens". U+2800 sat just
+    # below the spinner glyph range, so these frames leaked into assistant text.
+    from murder.llm.harnesses.parsing import is_status_spinner_line
+
+    for frame in ("⠀⠞ Editing  9.67k tokens", " ⠀⠞ Calling  10.21k tokens"):
+        assert is_status_spinner_line(frame), f"spinner frame not detected: {frame!r}"
+    # The tool-activity rollups that share those verbs must still be kept.
+    for keep in ("Editing usageSelectors.ts", "Edited usageSelectors.ts   +1 -1"):
+        assert not is_status_spinner_line(keep), f"rollup wrongly flagged: {keep!r}"
+
+
 def test_cursor_no_chrome_in_segments():
     cursor_chrome = [
         "Cursor Agent",

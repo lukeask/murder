@@ -27,8 +27,11 @@ _MODEL_TAG_RE = re.compile(
 # Lines that are purely box-drawing / rule separators (no real text).
 _SEPARATOR_CHARS = set("─━│┃╭╮╰╯┌┐└┘├┤┬┴┼╎╏╌╍┄┅┈┉▄▀▔▁▂▃▅▆▇█▌▐═║╔╗╚╝-=_")
 # Spinner / status lines a harness paints over its own output region.
+# The braille run starts at U+2800 (BRAILLE BLANK), not U+2801: Cursor animates
+# its spinner with frames like "⠀⠞ Editing  9.67k tokens" whose leading cell is
+# the blank glyph, so excluding U+2800 let those frames leak into the transcript.
 _SPINNER_LINE_RE = re.compile(
-    r"^\s*[✻✶✳✽✢⠁-⣿◐◓◑◒↻⟳]+\s+\w+",
+    r"^\s*[✻✶✳✽✢⠀-⣿◐◓◑◒↻⟳]+\s+\w+",
 )
 # CC 2.x thinking-status spinner: "* Recombobulating.. (8m 11s • ↓ 24.1k tokens)"
 # The leading * is animated (sometimes absent); anchor on the stable part: a
