@@ -74,7 +74,15 @@ function Harness({
     };
     useRootInput({
       ...(spawn !== undefined ? { spawn } : {}),
-      chatInput: makeChatInputHandler(inputStores.chatInput, store, imageDraft, commandCtx),
+      chatInput: makeChatInputHandler(
+        inputStores.chatInput,
+        store,
+        imageDraft,
+        commandCtx,
+        inputStores.chatHistory,
+        inputStores.chatVim,
+        inputStores.focus,
+      ),
     });
     return null;
   }
@@ -233,6 +241,42 @@ function seedChoicePrompt(
   }));
 }
 
+/** Seed a LIVE single-select choice with a freeform "Type something." option, cursor on it by
+ * default — the state that triggers the local-compose takeover. */
+function seedFreeformChoicePrompt(
+  store: ReturnType<typeof createAppStore>['store'],
+  { selected = 3 }: { selected?: number } = {},
+): void {
+  store.setState((state) => ({
+    conversations: {
+      ...state.conversations,
+      transcripts: {
+        ...state.conversations.transcripts,
+        'collab-1': [
+          {
+            type: 'choice_prompt',
+            id: '8',
+            raw: {
+              type: 'choice_prompt',
+              question: 'Want a fallback binding too?',
+              options: [
+                { number: 1, label: 'ctrl+enter + alt+enter', description: null, checked: null },
+                { number: 2, label: 'ctrl+enter only', description: null, checked: null },
+                { number: 3, label: 'Type something.', description: null, checked: null },
+              ],
+              footer: 'Enter to select',
+              selected,
+              answered: false,
+              chosen: null,
+              multi: false,
+            },
+          },
+        ],
+      },
+    },
+  }));
+}
+
 /** Seed a queued-but-undelivered message for the collaborator. */
 function seedQueued(store: ReturnType<typeof createAppStore>['store'], message: string): void {
   store.setState((state) => ({
@@ -350,6 +394,93 @@ describe('ChatInput — multiple-choice takeover', () => {
       (c) => (c.params as { payload: { key: string } }).payload.key,
     );
     expect(keys).toEqual(['Space']);
+    dispose();
+  });
+
+  it('freeform option: buffers typed chars LOCALLY without per-key sends, and echoes them inline', async () => {
+    const { fake, store, inputStores, dispose } = await setup();
+    seedFreeformChoicePrompt(store);
+    const { stdin, lastFrame } = render(<Harness store={store} inputStores={inputStores} />);
+    await tick();
+
+    stdin.write('a b3');
+    await tick();
+    // Typed into the local buffer (space included), not round-tripped to the pane.
+    expect(inputStores.chatInput.getState().text).toBe('a b3');
+    expect(submitsOfKind(fake, 'agent.send_key').length).toBe(0);
+    // The draft is echoed inline on the freeform row (with the caret), not the placeholder label.
+    const frame = lastFrame() ?? '';
+    expect(frame).toContain('a b3');
+    expect(frame).not.toContain('3. Type something.');
+    dispose();
+  });
+
+  it('freeform option: enter flushes the whole draft + newline in ONE literal send, then clears', async () => {
+    const { fake, store, inputStores, dispose } = await setup();
+    seedFreeformChoicePrompt(store);
+    const { stdin } = render(<Harness store={store} inputStores={inputStores} />);
+    await tick();
+
+    stdin.write('my custom answer');
+    await tick();
+    stdin.write(RETURN);
+    await tick();
+
+    const keys = submitsOfKind(fake, 'agent.send_key').map(
+      (c) => (c.params as { payload: { key: string; literal: boolean } }).payload,
+    );
+    // Exactly one send: the full answer + newline, literal. No per-character round-trips.
+    expect(keys).toEqual([
+      { agent_id: 'collab-1', key: 'my custom answer\n', literal: true, enter: false },
+    ]);
+    expect(inputStores.chatInput.getState().text).toBe('');
+    expect(submitsOfKind(fake, 'agent.message').length).toBe(0);
+    dispose();
+  });
+
+  it('freeform option: backspace edits the local draft (no pane send)', async () => {
+    const { fake, store, inputStores, dispose } = await setup();
+    seedFreeformChoicePrompt(store);
+    const { stdin } = render(<Harness store={store} inputStores={inputStores} />);
+    await tick();
+    stdin.write('abc');
+    await tick();
+    stdin.write(BACKSPACE);
+    await tick();
+    expect(inputStores.chatInput.getState().text).toBe('ab');
+    expect(submitsOfKind(fake, 'agent.send_key').length).toBe(0);
+    dispose();
+  });
+
+  it('freeform option: arrow nav abandons the draft and forwards the key to the pane', async () => {
+    const { fake, store, inputStores, dispose } = await setup();
+    seedFreeformChoicePrompt(store);
+    const { stdin } = render(<Harness store={store} inputStores={inputStores} />);
+    await tick();
+    stdin.write('half-typed');
+    await tick();
+    stdin.write(DOWN_ARROW);
+    await tick();
+    expect(inputStores.chatInput.getState().text).toBe('');
+    const keys = submitsOfKind(fake, 'agent.send_key').map(
+      (c) => (c.params as { payload: { key: string } }).payload.key,
+    );
+    expect(keys).toEqual(['Down']);
+    dispose();
+  });
+
+  it('non-freeform option: still forwards every key per-press (no local buffering)', async () => {
+    const { fake, store, inputStores, dispose } = await setup();
+    seedFreeformChoicePrompt(store, { selected: 1 }); // cursor on a normal option
+    const { stdin } = render(<Harness store={store} inputStores={inputStores} />);
+    await tick();
+    stdin.write('x');
+    await tick();
+    expect(inputStores.chatInput.getState().text).toBe('');
+    const keys = submitsOfKind(fake, 'agent.send_key').map(
+      (c) => (c.params as { payload: { key: string; literal: boolean } }).payload,
+    );
+    expect(keys).toEqual([{ agent_id: 'collab-1', key: 'x', literal: true, enter: false }]);
     dispose();
   });
 

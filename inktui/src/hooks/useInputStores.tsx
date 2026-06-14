@@ -21,7 +21,9 @@ import { createContext, useContext, useEffect, useRef } from 'react';
 import { useStoreWithEqualityFn } from 'zustand/traditional';
 import type { ResolvedBindings } from '../input/bindings.js';
 import type { BindingsState, BindingsStoreApi } from '../input/bindingsStore.js';
+import type { ChatHistoryState, ChatHistoryStoreApi } from '../input/chatHistoryStore.js';
 import type { ChatInputState, ChatInputStoreApi } from '../input/chatInputStore.js';
+import type { ChatVimState, ChatVimStoreApi } from '../input/chatVimStore.js';
 import {
   type FocusId,
   type FocusState,
@@ -43,6 +45,8 @@ export interface InputStores {
   readonly keymaps: KeymapRegistryApi;
   readonly modes: ModeStoreApi;
   readonly chatInput: ChatInputStoreApi;
+  readonly chatHistory: ChatHistoryStoreApi;
+  readonly chatVim: ChatVimStoreApi;
   readonly bindings: BindingsStoreApi;
 }
 
@@ -107,6 +111,28 @@ export function useChatInputStore<T>(
 ): T {
   const { chatInput } = useInputStores();
   return useStoreWithEqualityFn(chatInput, selector, equality);
+}
+
+/** Subscribe to a selected view of the murder-wide chat-history corpus (chat-input overhaul). The
+ * {@link ../components/ChatInput.js ChatInput} does not read it directly; the App boot seed + the
+ * handler do (via `getState()`), but the hook is here for symmetry/tests. */
+export function useChatHistoryStore<T>(
+  selector: (state: ChatHistoryState) => T,
+  equality?: (a: T, b: T) => boolean,
+): T {
+  const { chatHistory } = useInputStores();
+  return useStoreWithEqualityFn(chatHistory, selector, equality);
+}
+
+/** Subscribe to a selected view of the vim store (chat-input overhaul). The
+ * {@link ../components/ChatInput.js ChatInput} reads `s.submode` to render the `· NORMAL`/`· INSERT`
+ * border tag when vim mode is on. */
+export function useChatVimStore<T>(
+  selector: (state: ChatVimState) => T,
+  equality?: (a: T, b: T) => boolean,
+): T {
+  const { chatVim } = useInputStores();
+  return useStoreWithEqualityFn(chatVim, selector, equality);
 }
 
 /** Subscribe to a selected view of the bindings store. Pass a selector that returns part of

@@ -67,7 +67,7 @@ import { Box, type DOMElement } from 'ink';
 import { forwardRef, memo } from 'react';
 import type { Theme } from '../theme/buildTheme.js';
 import { useTheme } from '../theme/themeStore.js';
-import { PaneBorderTop } from './paneBorder.js';
+import { PaneBorderRight, PaneBorderTop } from './paneBorder.js';
 
 /** Focus-driven colors for the border/corners/fill (`border`) and the title segment (`title`). */
 export interface PaneColors {
@@ -109,6 +109,16 @@ export interface PaneProps {
    * — see {@link ./paneBorder.js PaneBorderTop}; it lives on the top border, not the bottom, so the
    * bottom can be Ink's clip-robust own border). 0/undefined renders nothing extra. */
   readonly overflowBelow?: number | undefined;
+  /** Scrollable panes (doc/chat) pass this to make the RIGHT border double as the scroll track: the
+   * thumb is a heavy `┃` run rolling along the `│` side (see {@link ./paneBorder.js PaneBorderRight}).
+   * `height` is the pane's measured inner row count (the same fill-box measurement that drives the
+   * pane's window); `thumb` is {@link ./DocPane.js computeScrollThumb}'s geometry, `null` when the
+   * content fits (the column then draws as a plain border). Omitted → Ink draws the right border as
+   * before (non-scrolling consumers are untouched). */
+  readonly scrollbar?: {
+    readonly height: number;
+    readonly thumb: { readonly size: number; readonly offset: number } | null;
+  };
 }
 
 /**
@@ -126,11 +136,35 @@ export const Pane = memo(
       paddingRight = 1,
       overflowAbove,
       overflowBelow,
+      scrollbar,
     },
     ref,
   ): React.JSX.Element {
     const theme = useTheme();
     const { border: borderColor, title: titleColor } = paneColors(focused, theme);
+    /* Content box supplies the LEFT (+ RIGHT, unless the scrollbar column replaces it) sides + the
+       BOTTOM border + padding + height clamp. Only the TOP is `false` (the hand-composed title row
+       draws it). The bottom is Ink's OWN border (`╰──╯`), NOT a separate sibling row: a fixed-height
+       bottom row clips off when the pane's height rounds to a half-cell (the `[top, flexGrow, bottom]`
+       split loses its trailing fixed cell at fractional heights — e.g. two panels splitting an odd
+       rail height), whereas Ink's border, drawn on this flexGrow box, stays on-grid at any height.
+       The `▾ N` scroll-below count the old bottom row carried now rides the TOP border. */
+    const content = (
+      <Box
+        flexDirection="column"
+        flexGrow={1}
+        minHeight={0}
+        overflow="hidden"
+        borderStyle="round"
+        borderTop={false}
+        borderRight={scrollbar === undefined}
+        borderColor={borderColor}
+        paddingLeft={1}
+        paddingRight={paddingRight}
+      >
+        {children}
+      </Box>
+    );
     return (
       <Box ref={ref} flexDirection="column" flexGrow={flexGrow} minHeight={0} overflow="hidden">
         {/* Top border line with the inline title — the shared {@link ./paneBorder.js} recipe (also
@@ -144,26 +178,21 @@ export const Pane = memo(
           overflowAbove={overflowAbove}
           overflowBelow={overflowBelow}
         />
-        {/* Content box supplies the LEFT + RIGHT sides + the BOTTOM border + padding + height clamp.
-            Only the TOP is `false` (the hand-composed title row above draws it). The bottom is Ink's
-            OWN border (`╰──╯`), NOT a separate sibling row: a fixed-height bottom row clips off when the
-            pane's height rounds to a half-cell (the `[top, flexGrow, bottom]` split loses its trailing
-            fixed cell at fractional heights — e.g. two panels splitting an odd rail height), whereas
-            Ink's border, drawn on this flexGrow box, stays on-grid at any height. The `▾ N`
-            scroll-below count the old bottom row carried now rides the TOP border (see PaneBorderTop). */}
-        <Box
-          flexDirection="column"
-          flexGrow={1}
-          minHeight={0}
-          overflow="hidden"
-          borderStyle="round"
-          borderTop={false}
-          borderColor={borderColor}
-          paddingLeft={1}
-          paddingRight={paddingRight}
-        >
-          {children}
-        </Box>
+        {scrollbar === undefined ? (
+          content
+        ) : (
+          /* Scrollable pane: the right border IS the scroll track. The content box keeps left/bottom
+             (its Ink bottom border ends `╰──` since borderRight is off); the hand-composed column
+             draws the `│`/`┃` track cells plus the closing `╯` corner — same net width as before. */
+          <Box flexDirection="row" flexGrow={1} minHeight={0} overflow="hidden">
+            {content}
+            <PaneBorderRight
+              height={scrollbar.height}
+              thumb={scrollbar.thumb}
+              color={borderColor}
+            />
+          </Box>
+        )}
       </Box>
     );
   }),

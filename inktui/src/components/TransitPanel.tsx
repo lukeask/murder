@@ -1,16 +1,18 @@
 /**
- * TransitPanel — the git commit-graph right-rail panel (panel 8, ctrl+8).
+ * TransitPanel — the "Git Tree" commit-graph right-rail panel (panel 8, ctrl+8).
  *
- * Custom {@link ./Pane.tsx Pane} body (like {@link ./UsagePanel.tsx}, NOT a Ledger): per lane it
- * draws TWO deterministic lines — the railway (commit stations + branch tag) and a position-aligned
- * sparse age-marker line — then a FIXED-height info section for the selected commit (sha · branch ·
- * age, subject, wrapped body). All geometry is the selector's (rule 2); this component owns only the
- * cursor + the `g`-jump capture buffer (panel-local `useState`, mirroring the doc-pane pending
- * pattern — it is intentionally NOT a named chord in `bindings.ts`).
+ * Custom {@link ./Pane.tsx Pane} body (like {@link ./UsagePanel.tsx}, NOT a Ledger). The selector
+ * renders a SWIMLANE DAG on a shared log-time axis: a single age RULER on top, then one row per
+ * branch (railway as colored run-length segments + a right-hand `▐ name ⌂ ▌` tag in the lane color,
+ * with fork connectors tying branches down to main), then a FIXED-height info section for the
+ * selected commit (sha · branch · age, then the wrapped commit message). All geometry/colour is the
+ * selector's (rule 2); this component owns only the cursor + the `g`-jump capture buffer (panel-local
+ * `useState`, mirroring the doc-pane pending pattern — intentionally NOT a named chord in
+ * `bindings.ts`). The SELECTED commit is a distinct glyph in the focus colour ("where you are").
  *
- * Row counts are deterministic (the selector builds each line to the known inner width), so this
- * never relies on `measureElement` for wrapped text (the measure-wrap trap). Every lane/info row Box
- * sets `flexShrink={0}` so Yoga never drops a line.
+ * Row/segment counts are deterministic (the selector builds each row to the known inner width and
+ * pre-wraps the message), so this never relies on `measureElement` for wrapped text (the measure-wrap
+ * trap). Every row Box sets `flexShrink={0}` so Yoga never drops a line.
  *
  * ## The g-jump capture (panel-local)
  * `g` enters `gPending`; while pending the bottom strip shows the lane-hint keys + `type 5d/20m +⏎`.
@@ -39,8 +41,13 @@ import {
 import type { KeymapEntry, PanelKeymap } from '../input/keymap.js';
 import type { PanelId } from '../input/panels.js';
 import {
+  CELL_BLANK,
+  CELL_SELECTED,
+  type CellColor,
   parseDuration,
+  type RailSegment,
   resolveDurationJump,
+  TAG_GAP,
   type TransitCursor,
   type TransitLaneView,
   type TransitView,
@@ -50,12 +57,37 @@ import { useTheme } from '../theme/themeStore.js';
 import { Pane } from './Pane.js';
 
 const PANEL_ID: PanelId = 'transit';
-const PANEL_TITLE = 'Transit';
+const PANEL_TITLE = 'Git Tree';
 
 /** The inner width assumed when mounted bare (a test rendering the panel outside the Rail). */
 const DEFAULT_INNER_WIDTH = 38;
-/** Reserved height (in lines) of the bottom info / hint section: sha line + subject + 2 body lines. */
-const INFO_LINES = 4;
+
+/** Map a cell's {@link CellColor} to a concrete hex: blank → undefined (uncolored), selected → the
+ * focus/border color ("where you are"), else a LANE color (main = `active`, other branches cycle the
+ * `laneColors` ring so each branch reads as its own accent). */
+function colorForCell(
+  color: CellColor,
+  mainIndex: number,
+  theme: ReturnType<typeof useTheme>,
+): string | undefined {
+  if (color === CELL_BLANK) {
+    return undefined;
+  }
+  if (color === CELL_SELECTED) {
+    return theme.focus;
+  }
+  return laneColor(color, mainIndex, theme);
+}
+
+/** A lane's accent: main owns the `active` green; every other branch takes a distinct color from the
+ * `laneColors` ring (keyed by its index so the assignment is stable). */
+function laneColor(index: number, mainIndex: number, theme: ReturnType<typeof useTheme>): string {
+  if (index === mainIndex) {
+    return theme.active;
+  }
+  const ring = theme.laneColors;
+  return ring[index % ring.length] ?? theme.text;
+}
 
 /** The panel's intent union: navigation + `g`-mode control + a per-char family (`char:<x>`). */
 type TransitIntent =
@@ -73,38 +105,50 @@ const DIGITS = '0123456789';
 /** Unit letters that extend a duration buffer while in `gPending`. */
 const UNIT_LETTERS = new Set(['m', 'h', 'd', 'w']);
 
-/** One lane block: the railway line (+ branch tag) then the aligned age-marker line. Both rows are
- * `flexShrink={0}` so Yoga never drops a line; the selected lane's tag is accented. */
-function LaneBlock({
+/** One lane ROW: the railway (colored segments on the shared time axis) followed by the lane's
+ * `▐ name ⌂ ▌` tag in the lane color (bold + a selection band when this is the cursor's lane). A
+ * single `flexShrink={0}` Text so Yoga never drops the line, and `wrap="truncate"` clamps it to the
+ * rail width. The selected COMMIT is colored within the segments (the {@link CELL_SELECTED} run). */
+function LaneRow({
   lane,
   selected,
+  mainIndex,
   theme,
 }: {
   readonly lane: TransitLaneView;
   readonly selected: boolean;
+  readonly mainIndex: number;
   readonly theme: ReturnType<typeof useTheme>;
 }): React.JSX.Element {
-  const tagColor = selected ? theme.focus : lane.isMain ? theme.active : theme.muted;
-  const arrow = selected ? '▸' : ' ';
+  const tagAccent = laneColor(lane.colorIndex, mainIndex, theme);
   return (
-    <Box flexDirection="column" flexShrink={0}>
-      <Box flexShrink={0}>
-        <Text wrap="truncate">
-          <Text color={selected ? theme.focus : theme.text}>{`${arrow} `}</Text>
-          <Text color={theme.success}>{lane.railwayLine}</Text>
-          {'  '}
-          <Text color={tagColor} bold={selected}>{`▐ ${lane.branchTag} ▌`}</Text>
+    <Box flexShrink={0}>
+      <Text wrap="truncate">
+        {lane.segments.map((seg: RailSegment, i: number) => {
+          const cellColor = colorForCell(seg.color, mainIndex, theme);
+          return (
+            // biome-ignore lint/suspicious/noArrayIndexKey: segments are a positional run-length list of the row; the index IS the stable identity.
+            <Text key={`seg-${i}`} {...(cellColor !== undefined ? { color: cellColor } : {})}>
+              {seg.text}
+            </Text>
+          );
+        })}
+        {' '.repeat(TAG_GAP)}
+        <Text
+          color={tagAccent}
+          bold={selected}
+          {...(selected ? { backgroundColor: theme.panelSelectedBg } : {})}
+        >
+          {lane.tag}
         </Text>
-      </Box>
-      <Box flexShrink={0}>
-        <Text dimColor wrap="truncate">{`  ${lane.ageLine}`}</Text>
-      </Box>
+      </Text>
     </Box>
   );
 }
 
 /** The fixed-height info section for the selected commit, OR the g-hint overlay when `gPending`. The
- * body is truncated to the lines remaining after the sha + subject lines (deterministic, no measure). */
+ * sha line is followed by the pre-WRAPPED commit message (subject + body) the selector produced —
+ * deterministic line count, so no `measureElement` (the measure-wrap trap). */
 function InfoSection({
   view,
   gPending,
@@ -141,9 +185,8 @@ function InfoSection({
       </Box>
     );
   }
-  // Body wrapped/truncated to the lines remaining after the sha line + subject line.
-  const bodyLines = Math.max(0, INFO_LINES - 2);
-  const body = selected.body.split('\n').slice(0, bodyLines);
+  // The commit message is pre-WRAPPED by the selector (deterministic line count — no measure-wrap):
+  // the sha line, then the wrapped subject + body lines.
   return (
     <Box flexDirection="column" flexShrink={0}>
       <Box flexShrink={0}>
@@ -154,15 +197,18 @@ function InfoSection({
           <Text dimColor>{` · ${selected.age}`}</Text>
         </Text>
       </Box>
-      <Box flexShrink={0}>
-        <Text wrap="truncate">{selected.subject}</Text>
-      </Box>
-      {body.map((line, i) => (
-        // biome-ignore lint/suspicious/noArrayIndexKey: body lines are position-keyed (commit bodies can repeat lines; the index IS the stable identity for the fixed-length slice).
-        <Box key={`body-${i}`} flexShrink={0}>
-          <Text dimColor wrap="truncate">
-            {line}
-          </Text>
+      {view.infoLines.map((line, i) => (
+        // biome-ignore lint/suspicious/noArrayIndexKey: wrapped message lines are position-keyed (a commit body can repeat lines; the index IS the stable identity for the fixed-length slice).
+        <Box key={`info-${i}`} flexShrink={0}>
+          {i === 0 ? (
+            <Text color={theme.text} wrap="truncate">
+              {line.length > 0 ? line : ' '}
+            </Text>
+          ) : (
+            <Text dimColor wrap="truncate">
+              {line.length > 0 ? line : ' '}
+            </Text>
+          )}
         </Box>
       ))}
     </Box>
@@ -193,11 +239,18 @@ function TransitBody({
   }
   return (
     <Box flexDirection="column" flexShrink={0}>
+      {/* The shared age ruler — one time axis above every lane (a column = the same instant). */}
+      <Box flexShrink={0}>
+        <Text dimColor wrap="truncate">
+          {view.ruler}
+        </Text>
+      </Box>
       {view.lanes.map((lane, idx) => (
-        <LaneBlock
+        <LaneRow
           key={lane.branch}
           lane={lane}
           selected={idx === cursor.laneIndex}
+          mainIndex={view.mainIndex}
           theme={theme}
         />
       ))}
@@ -378,7 +431,10 @@ export const TransitPanel = memo(function TransitPanel({
   const keymap: PanelKeymap<TransitIntent> = useMemo(() => {
     const charEntries: KeymapEntry<TransitIntent>[] = [];
     for (const ch of ALPHA + DIGITS) {
-      charEntries.push({ chord: { input: ch }, intent: `char:${ch}`, description: '' });
+      // `hidden`: these are mechanical sub-steps of the `g`-jump gesture (the per-lane label keys),
+      // matchable but never hinted — otherwise all 36 a–z/0–9 chords flood the footer. Same treatment
+      // as the go-to-line digits (keymap.ts); the live affordance is the single `jump (g)` hint.
+      charEntries.push({ chord: { input: ch }, intent: `char:${ch}`, description: '', hidden: true });
     }
     return {
       keymap: [

@@ -36,6 +36,9 @@ export interface PanelPlacement {
   readonly id: PanelId;
   readonly digit: PanelDigit;
   readonly region: PanelRegion;
+  /** The user-facing label for the top bar, when it must differ from the internal {@link id} (e.g.
+   * `transit` renders as `tree`). Omitted = the id doubles as the label. */
+  readonly label?: string;
 }
 
 /** The digits that bind to a panel. A literal union (not `number`) so {@link DIGIT_TO_PANEL} is
@@ -55,7 +58,7 @@ export const PANELS: readonly PanelPlacement[] = [
   { id: 'tickets', digit: 4, region: 'left' },
   { id: 'history', digit: 5, region: 'left' },
   { id: 'usage', digit: 9, region: 'right' },
-  { id: 'transit', digit: 8, region: 'right' },
+  { id: 'transit', digit: 8, region: 'right', label: 'tree' },
   { id: 'crows', digit: 0, region: 'right' },
 ];
 

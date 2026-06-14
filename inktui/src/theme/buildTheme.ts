@@ -110,6 +110,20 @@ export function buildTheme(palette: Palette, id: ThemeId) {
     /** Text painted ON a gauge band (the embedded pct label) — the base surface so it reads against
      * the saturated fill on dark schemes and the darker accents on light ones. */
     gaugeLabelText: palette.bg0,
+
+    // ── Swimlane / DAG lanes (Git Tree panel) ──────────────────────────────────────────────────
+    /** The per-branch accent ring the Git Tree panel cycles for NON-main lanes (one distinct color
+     * per branch so every branch's railway + tag reads as its own color). `green` is deliberately
+     * EXCLUDED — main owns it ({@link active}) and the selected-station glyph borrows {@link focus}
+     * (also green), so keeping non-main lanes off green avoids a three-way clash. */
+    laneColors: [
+      palette.aqua,
+      palette.purple,
+      palette.orange,
+      palette.yellow,
+      palette.blue,
+      palette.red,
+    ] as readonly string[],
   } as const;
 }
 

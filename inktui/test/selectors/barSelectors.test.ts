@@ -20,7 +20,7 @@ describe('selectTopBar', () => {
       'tickets₄',
       'history₅',
       'usage₉',
-      'transit₈',
+      'tree₈',
       'crows₀',
     ]);
   });
@@ -54,6 +54,23 @@ describe('selectBottomBar', () => {
     expect(hints.find((h) => h.description === 'star')?.key).toBe('return');
   });
 
+  it('omits `hidden` entries (gesture sub-steps like the go-to-line digits) from the hints', () => {
+    const gestureKeymap: Keymap<'goto.start' | 'goto.digit.3'> = [
+      { chord: { input: 'g' }, intent: 'goto.start', description: 'go to line' },
+      {
+        chord: { input: '3' },
+        intent: 'goto.digit.3',
+        description: 'go-to-line digit',
+        hidden: true,
+      },
+    ];
+    const descriptions = selectBottomBar('plans', gestureKeymap, DEFAULT_BINDINGS).map(
+      (h) => h.description,
+    );
+    expect(descriptions).toContain('go to line');
+    expect(descriptions).not.toContain('go-to-line digit');
+  });
+
   it("shows a command-modified panel key's modifier, varying A-↔C- with the configured modifier", () => {
     // A panel that binds a key through the registry (e.g. star = the command modifier + `f`) must show
     // the modifier in its hint — a bare `f` would read as un-pressable. The prefix tracks the user's
@@ -80,15 +97,82 @@ describe('selectBottomBar', () => {
     expect(help?.key).toBe(DEFAULT_BINDINGS.label('global.keyHelp'));
   });
 
-  it('disambiguates the help hint while chat is focused (a bare ? would type into the input)', () => {
-    // First-run UX: in chat focus the dispatcher never steals `?`, so the hint must not present a
-    // bare `?` as pressable — it prefixes the nav-out chord ("move focus, then ?").
+  it('shows the `:help` command (not a bare ?) as the chat-focus help hint', () => {
+    // First-run UX: in chat focus the dispatcher never steals `?` (it types into the input), so the
+    // hint advertises the reachable, self-describing `:help` command instead — no trailing word.
     const help = selectBottomBar(CHAT_FOCUS, undefined, DEFAULT_BINDINGS).find(
-      (h) => h.description === 'help',
+      (h) => h.align === 'right',
     );
     expect(help).toBeDefined();
-    expect(help?.align).toBe('right');
-    expect(help?.key).toBe(`A-hjkl ${DEFAULT_BINDINGS.label('global.keyHelp')}`);
+    expect(help?.key).toBe(':help');
+    expect(help?.description).toBe('');
+  });
+
+  it('surfaces the always-on globals usable from the focused panel (no longer just the nav trio)', () => {
+    // The regression this guards against: most globals were live but un-hinted. A list panel sees the
+    // always-on globals…
+    const descriptions = selectBottomBar('plans', keymap, DEFAULT_BINDINGS).map(
+      (h) => h.description,
+    );
+    for (const d of [
+      'panels',
+      'nav',
+      'chat',
+      'tmux',
+      'new plan',
+      'new ticket',
+      'settings',
+      'note',
+    ]) {
+      expect(descriptions).toContain(d);
+    }
+    // …but NOT the chat-only super-chords, the chat-or-stage spawn, nor the Stage-only close-pane.
+    expect(descriptions).not.toContain('prev target');
+    expect(descriptions).not.toContain('spawn');
+    expect(descriptions).not.toContain('close pane');
+  });
+
+  it('hides `spawn` on a list panel but shows it on a Stage pane (chat-or-stage scope)', () => {
+    const onPlans = selectBottomBar('plans', undefined, DEFAULT_BINDINGS).map((h) => h.description);
+    expect(onPlans).not.toContain('spawn');
+    const onStage = selectBottomBar('stage:doc:readme', undefined, DEFAULT_BINDINGS).map(
+      (h) => h.description,
+    );
+    expect(onStage).toContain('spawn');
+    // `ctrl+q close pane` is Stage-only: present on a Stage pane, absent on a list panel.
+    expect(onStage).toContain('close pane');
+    expect(onPlans).not.toContain('close pane');
+  });
+
+  it('shows the chat-target chords (collapsed into one `target` hint) only while chat is focused', () => {
+    const inChat = selectBottomBar(CHAT_FOCUS, undefined, DEFAULT_BINDINGS);
+    const descriptions = inChat.map((h) => h.description);
+    // The prev/next cycle chords collapse into a single `target` hint (A-hl) to save space…
+    const target = inChat.find((h) => h.description === 'target');
+    expect(target?.key).toBe('A-hl');
+    expect(descriptions).toContain('toggle pane');
+    // …so the separate `prev target` / `next target` labels are gone, as is close-pane.
+    expect(descriptions).not.toContain('prev target');
+    expect(descriptions).not.toContain('next target');
+    expect(descriptions).not.toContain('close pane');
+  });
+
+  it('hides murder on the crows panel (it falls to the panel keymap there)', () => {
+    const onCrows = selectBottomBar('crows', undefined, DEFAULT_BINDINGS).map((h) => h.description);
+    expect(onCrows).not.toContain('murder crow');
+    const onPlans = selectBottomBar('plans', undefined, DEFAULT_BINDINGS).map((h) => h.description);
+    expect(onPlans).toContain('murder crow');
+  });
+
+  it('shows only `A-jk` nav (not `A-hjkl`) in chat, where A-h/A-l cycle the target', () => {
+    const nav = selectBottomBar(CHAT_FOCUS, undefined, DEFAULT_BINDINGS).find(
+      (h) => h.description === 'nav',
+    );
+    expect(nav?.key).toBe('A-jk');
+    const panelNav = selectBottomBar('plans', undefined, DEFAULT_BINDINGS).find(
+      (h) => h.description === 'nav',
+    );
+    expect(panelNav?.key).toBe('A-hjkl');
   });
 
   it('omits the help hint when a mode owns the bar (a modal has its own keys)', () => {

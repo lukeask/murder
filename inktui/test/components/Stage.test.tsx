@@ -19,12 +19,12 @@ import { describe, expect, it } from 'vitest';
 import { FakeBusClient } from '../../src/bus/FakeBusClient.js';
 import type { ConversationBlockEvent } from '../../src/bus/protocol.js';
 import { PlansPanel } from '../../src/components/PlansPanel.js';
-import { formatTurnText, Stage } from '../../src/components/Stage.js';
+import { flattenTurns, formatTurnText, Stage } from '../../src/components/Stage.js';
 import { AppStoreProvider } from '../../src/hooks/useAppStore.js';
 import { InputStoresProvider } from '../../src/hooks/useInputStores.js';
 import { useRootInput } from '../../src/hooks/useRootInput.js';
 import { createInputStores } from '../../src/input/createInputStores.js';
-import { selectEffectiveFocus } from '../../src/input/focusStore.js';
+import { CHAT_FOCUS, selectEffectiveFocus } from '../../src/input/focusStore.js';
 import type { ChatTurn } from '../../src/selectors/conversationsSelectors.js';
 import type { CrowSnapshotReply } from '../../src/store/roster/rosterActions.js';
 import { createAppStore } from '../../src/store/store.js';
@@ -118,6 +118,28 @@ describe('formatTurnText', () => {
   });
 });
 
+describe('flattenTurns', () => {
+  it('separates consecutive turns with one blank line (a real ChatLine, so scroll math counts it)', () => {
+    const turns: ChatTurn[] = [
+      { blockId: 'b1', speaker: 'assistant', text: 'reply' },
+      { blockId: 'b2', speaker: 'user', text: 'question' },
+    ];
+    expect(flattenTurns(turns)).toEqual([
+      { speaker: 'assistant', text: '· reply' },
+      { speaker: 'user', text: '' },
+      { speaker: 'user', text: '› question' },
+    ]);
+  });
+
+  it('adds no separator around a single turn (no leading/trailing blank)', () => {
+    const turns: ChatTurn[] = [{ blockId: 'b1', speaker: 'assistant', text: 'one\ntwo' }];
+    expect(flattenTurns(turns)).toEqual([
+      { speaker: 'assistant', text: '· one' },
+      { speaker: 'assistant', text: '  two' },
+    ]);
+  });
+});
+
 async function setup(reply: CrowSnapshotReply = oneCollaborator()) {
   const fake = new FakeBusClient();
   fake.stubRpc('state.crow_snapshot', reply);
@@ -200,14 +222,22 @@ describe('Stage — chat-history panes as focusable Stage panes', () => {
     // Blurred (plans focused): the pane registers an EMPTY keymap, so it claims no chord.
     expect(inputStores.keymaps.getState().keymaps[STAGE_PANE]?.keymap ?? []).toEqual([]);
 
-    // Focus the pane → it registers its j/k history-scroll keymap (the dispatcher routes j/k to it).
+    // Focus the pane → it registers its keymap (the dispatcher routes the chords to it). The
+    // VISIBLE chords: the go-to-line `g` (the shared gesture) leads, then the j/k history-scroll
+    // pair; the gesture's hidden digit sub-steps ride along but are not hints.
     stdin.write(ALT_L);
     await tick();
-    const chords = (inputStores.keymaps.getState().keymaps[STAGE_PANE]?.keymap ?? []).map(
+    const entries = inputStores.keymaps.getState().keymaps[STAGE_PANE]?.keymap ?? [];
+    const visible = entries
+      .filter((entry) => entry.hidden !== true)
       // These entries use single chords (not the list form); narrow for the assertion.
-      (entry) => (Array.isArray(entry.chord) ? entry.chord[0] : entry.chord).input,
-    );
-    expect(chords).toEqual(['k', 'j']);
+      .map((entry) => (Array.isArray(entry.chord) ? entry.chord[0] : entry.chord).input);
+    expect(visible).toEqual(['g', 'k', 'j']);
+    // The pre-registered digits are present (so a same-chunk `g3` lands) but hidden.
+    const hiddenInputs = entries
+      .filter((entry) => entry.hidden === true)
+      .map((entry) => (Array.isArray(entry.chord) ? entry.chord[0] : entry.chord).input);
+    expect(hiddenInputs).toContain('0');
     dispose();
   });
 
@@ -288,10 +318,11 @@ describe('Stage — chat-history panes as focusable Stage panes', () => {
     expect(initial).not.toContain('msg-00'); // oldest scrolled off the top
 
     // Focus the pane (alt+l), then press `k` many times to saturate scrollUp at maxScrollUp, ensuring
-    // msg-00 is in view regardless of the exact measured window height.
+    // msg-00 is in view regardless of the exact measured window height. 50 turns flatten to ~99
+    // physical lines (one blank separator between turns), so saturation needs >99 presses.
     stdin.write(ALT_L);
     await tick();
-    for (let i = 0; i < 50; i++) {
+    for (let i = 0; i < 120; i++) {
       stdin.write('k');
     }
     await tick();
@@ -300,6 +331,53 @@ describe('Stage — chat-history panes as focusable Stage panes', () => {
     const scrolled = lastFrame() ?? '';
     expect(scrolled).toContain('msg-00'); // oldest now in view
     expect(scrolled).not.toContain('msg-49'); // newest scrolled off the bottom
+    dispose();
+  });
+});
+
+describe('Stage — chat-target highlight', () => {
+  // ink-testing-library strips ANSI unless FORCE_COLOR is set; the highlight is purely a color/bold
+  // flip on the pane chrome, so the visual case runs only under FORCE_COLOR (the Ledger convention).
+  // biome-ignore lint/complexity/useLiteralKeys: tsc's noPropertyAccessFromIndexSignature requires bracket access on process.env.
+  const colorOn = Boolean(process.env['FORCE_COLOR']);
+
+  it.skipIf(!colorOn)(
+    'highlights the chat-target pane while the chat input holds focus',
+    async () => {
+      const { store, inputStores, dispose } = await setup();
+      const { lastFrame } = render(<Harness store={store} inputStores={inputStores} />);
+      await tick();
+
+      // The raw (ANSI-carrying) chrome around the pane title — the only thing the highlight changes.
+      const segment = (frame: string): string => {
+        const idx = frame.indexOf('TestCollab');
+        return frame.slice(Math.max(idx - 40, 0), idx + 40);
+      };
+      // Plans focused: the pane neither holds focus nor is the chat input focused → blurred chrome.
+      expect(selectEffectiveFocus(inputStores.focus)).toBe('plans');
+      const blurred = segment(lastFrame() ?? '');
+
+      // Focus the chat input. The collaborator is the active send target (the only open pane), so its
+      // pane lights up even though the effective focus is the chat input, not the pane itself.
+      inputStores.focus.getState().focus(CHAT_FOCUS);
+      await tick();
+      const targeted = segment(lastFrame() ?? '');
+      expect(targeted).not.toBe(blurred);
+      dispose();
+    },
+  );
+
+  it('a target-highlighted pane does NOT claim j/k — its keymap stays gated on the real focus', async () => {
+    const { store, inputStores, dispose } = await setup();
+    render(<Harness store={store} inputStores={inputStores} />);
+    await tick();
+
+    // Chat focused → the pane is target-highlighted, but the registry must hold its EMPTY keymap
+    // (a highlighted-but-unfocused pane stealing `j`/`k` would eat typed characters).
+    inputStores.focus.getState().focus(CHAT_FOCUS);
+    await tick();
+    expect(selectEffectiveFocus(inputStores.focus)).toBe(CHAT_FOCUS);
+    expect(inputStores.keymaps.getState().keymaps[STAGE_PANE]?.keymap ?? []).toEqual([]);
     dispose();
   });
 });

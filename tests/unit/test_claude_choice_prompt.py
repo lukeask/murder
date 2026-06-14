@@ -197,6 +197,39 @@ def test_parse_multiselect_cursor_on_submit_row_stays_live() -> None:
     assert result.options[4].description == ""
 
 
+def test_parse_wrapped_multiline_question_is_captured_whole() -> None:
+    # On a narrow pane CC wraps a long question across physical lines. The full
+    # question must come through, not just the trailing fragment. A multi-question
+    # AskUserQuestion also renders a "← … →" tab bar above the question, which
+    # bounds the question run (it must not be swallowed into the question).
+    pane = (
+        "A few decisions genuinely change the build, so before I spin up the agents:\n"
+        "\n"
+        "←  ¤ Vim depth   ¤ Up at top   [ Newline key ]   Persistence  ✓ Submit  →\n"
+        "\n"
+        "ctrl+enter for newline only works under the kitty keyboard protocol (same limit as your ctrl\n"
+        "chords). Want a fallback binding too?\n"
+        "\n"
+        "❯ 1. ctrl+enter + alt+enter fallback\n"
+        "     Primary ctrl+enter; also bind alt+enter.\n"
+        "  2. ctrl+enter only\n"
+        "  3. Type something.\n"
+        "────────────────────────────────────────────\n"
+        "  4. Chat about this\n"
+        "\n"
+        "Enter to select · ↑/↓ to navigate · Esc to cancel\n"
+    )
+    result = parse_claude_code_choice_prompt(pane)
+    assert result is not None
+    assert result.question == (
+        "ctrl+enter for newline only works under the kitty keyboard protocol "
+        "(same limit as your ctrl chords). Want a fallback binding too?"
+    )
+    # The tab bar and the shared preamble are NOT part of the question.
+    assert "Submit" not in result.question
+    assert "spin up the agents" not in result.question
+
+
 def test_parse_cursor_on_option_has_submit_selected_false() -> None:
     pane = (
         "Which toppings?\n"

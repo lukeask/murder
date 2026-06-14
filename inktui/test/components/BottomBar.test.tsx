@@ -9,7 +9,7 @@ import type { BottomBarHint } from '../../src/selectors/barSelectors.js';
  * strip would clip into / overflow the chat input. These lock the packing contract.
  */
 const h = (key: string, description: string): BottomBarHint => ({ key, description });
-// width of a hint = key + ' ' + description; HINT_GAP = 2 between hints on a line.
+// width of a hint = key + ' ' + description; HINT_GAP = 1 between hints on a line.
 const w = (hint: BottomBarHint): number => hint.key.length + 1 + hint.description.length;
 
 describe('packHints', () => {
@@ -27,9 +27,9 @@ describe('packHints', () => {
   it('wraps to a new line when the next hint (plus the gap) would overflow', () => {
     const a = h('a', 'bb'); // width 4
     const b = h('c', 'dd'); // width 4
-    // 4 + GAP(2) + 4 = 10 fits exactly at avail 10, but not at 9.
-    expect(packHints([a, b], 10)).toHaveLength(1);
-    const wrapped = packHints([a, b], 9);
+    // 4 + GAP(1) + 4 = 9 fits exactly at avail 9, but not at 8.
+    expect(packHints([a, b], 9)).toHaveLength(1);
+    const wrapped = packHints([a, b], 8);
     expect(wrapped).toHaveLength(2);
     expect(wrapped[0]).toEqual([a]);
     expect(wrapped[1]).toEqual([b]);
@@ -55,12 +55,22 @@ describe('packHints', () => {
     expect(lines[0]?.some((hint) => hint.align === 'right')).toBe(true);
   });
 
-  it('appends the right-aligned hint to the LAST wrapped line, not its own line', () => {
-    const right: BottomBarHint = { key: 'alt+/', description: 'help', align: 'right' };
-    // Force a wrap with the left hints, then the right hint joins the final line.
-    const lines = packHints([h('a', 'bb'), h('c', 'dd'), right], 9);
+  it('joins the right-aligned hint to the last wrapped line when it still fits', () => {
+    const right: BottomBarHint = { key: '?', description: '', align: 'right' }; // width 1
+    // Left wraps to two lines; the slim right hint still fits after the final line's flow.
+    const lines = packHints([h('a', 'bb'), h('c', 'dd'), right], 8);
     expect(lines).toHaveLength(2);
     expect(lines.at(-1)).toContain(right);
+  });
+
+  it('drops the right-aligned hint to its own line when it would collide with the last line', () => {
+    const right: BottomBarHint = { key: 'alt+/', description: 'help', align: 'right' }; // width 10
+    // The last line's left flow plus a gap plus the right cluster overflows `avail`, so the right
+    // hint stacks onto a fresh line rather than overlapping the left hints under space-between.
+    const lines = packHints([h('aa', 'bbbb'), right], 9);
+    expect(lines).toHaveLength(2);
+    expect(lines[0]).not.toContain(right);
+    expect(lines.at(-1)).toEqual([right]);
   });
 
   it('a lone right-aligned hint gets its own line when there are no left hints', () => {
@@ -81,7 +91,7 @@ describe('packHints', () => {
     ];
     const avail = 60;
     for (const line of packHints(hints, avail)) {
-      const used = line.reduce((sum, hint) => sum + w(hint), 0) + 2 * (line.length - 1);
+      const used = line.reduce((sum, hint) => sum + w(hint), 0) + 1 * (line.length - 1);
       if (line.length > 1) {
         expect(used).toBeLessThanOrEqual(avail);
       }

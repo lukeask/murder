@@ -79,6 +79,8 @@ export interface SettingsWire {
   readonly key_overrides: Readonly<Record<string, string>>;
   /** Spaces of inter-pane-border gap (0–4). Mirrors the Python `TuiUserConfig.pane_gap`. */
   readonly pane_gap: number;
+  /** Whether vim-style editing is enabled in the chat input. Mirrors `TuiUserConfig.vim_mode`. */
+  readonly vim_mode: boolean;
   // --- harness overrides + daemon's live effective values ---
   /** The user's collaborator-harness override, or `null` when none is set. */
   readonly collaborator_harness: string | null;
@@ -108,6 +110,7 @@ export interface SettingsPatch {
   modifier?: SettingsModifier;
   key_overrides?: Readonly<Record<string, string>>;
   pane_gap?: number;
+  vim_mode?: boolean;
   collaborator_harness?: string | null;
   crow_harnesses?: readonly string[] | null;
   llm?: LlmPatch;
@@ -161,6 +164,7 @@ function applyWire(prev: SettingsState, wire: SettingsWire | undefined): Setting
     modifier: wire.modifier ?? prev.modifier,
     keyOverrides: wire.key_overrides ?? prev.keyOverrides,
     paneGap: wire.pane_gap ?? prev.paneGap,
+    vimMode: wire.vim_mode ?? prev.vimMode,
     // Harness overrides are nullable on the wire (null = "no override"), so a `??` would wrongly keep
     // the prior value when the server clears one. Honour `null` explicitly via the key-presence check.
     collaboratorHarness:
@@ -204,6 +208,7 @@ export function createSettingsActions(bus: BusClient, store: StoreApi<AppStore>)
           ...(partial.modifier !== undefined ? { modifier: partial.modifier } : {}),
           ...(partial.key_overrides !== undefined ? { keyOverrides: partial.key_overrides } : {}),
           ...(partial.pane_gap !== undefined ? { paneGap: partial.pane_gap } : {}),
+          ...(partial.vim_mode !== undefined ? { vimMode: partial.vim_mode } : {}),
           ...('collaborator_harness' in partial
             ? { collaboratorHarness: partial.collaborator_harness ?? null }
             : {}),

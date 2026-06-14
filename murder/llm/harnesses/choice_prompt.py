@@ -131,13 +131,32 @@ def parse_claude_code_choice_prompt(pane_text: str) -> MultipleChoicePrompt | No
             selected_index = idx
             break
 
+    # The question is the contiguous run of text lines directly above the first
+    # option. CC wraps a long question across several physical lines when the
+    # pane is narrow, so taking only the first line found (the old behaviour)
+    # surfaced just the trailing fragment — e.g. "chords). Want a fallback
+    # binding too?" instead of the whole sentence. Skip the blank/separator gap
+    # above the options, then gather lines until the run is bounded by a blank
+    # line, a separator rule, the category/tab header (a "☐ Category" line or the
+    # multi-question "← … →" tab bar), or the top of the pane.
     first_option_lineno = options_raw[0][0]
-    question = ""
-    for j in range(first_option_lineno - 1, -1, -1):
+    j = first_option_lineno - 1
+    while j >= 0 and (not lines[j].strip() or _SEPARATOR_RE.match(lines[j].strip())):
+        j -= 1
+    question_parts: list[str] = []
+    while j >= 0:
         candidate = lines[j].strip()
-        if candidate and not _SEPARATOR_RE.match(candidate):
-            question = candidate
+        if (
+            not candidate
+            or _SEPARATOR_RE.match(candidate)
+            or _MULTI_CHROME_RE.match(candidate)
+            or candidate.startswith("☐")
+        ):
             break
+        question_parts.append(candidate)
+        j -= 1
+    question_parts.reverse()
+    question = " ".join(question_parts)
 
     footer = ""
     last_option_lineno = options_raw[-1][0]

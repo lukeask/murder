@@ -192,6 +192,96 @@ describe('DocPane — open / scroll / close as a Stage pane', () => {
     dispose();
   });
 
+  it('g<digits> jumps to that 1-based line, live per digit; esc ends the capture WITHOUT closing', async () => {
+    const { store, inputStores, dispose } = await setup();
+    const { lastFrame, stdin } = render(<Harness store={store} inputStores={inputStores} />);
+    await tick();
+
+    stdin.write(RETURN); // open (focuses the doc pane)
+    await tick();
+    await tick();
+    expect(lastFrame() ?? '').toContain('line-0');
+
+    // `g` starts the capture; the title shows the live indicator once a digit lands.
+    stdin.write('g');
+    await tick();
+    // `1` jumps live to line 1 (scroll 0 — already there) and shows on the title.
+    stdin.write('1');
+    await tick();
+    expect(lastFrame() ?? '').toContain('g1');
+    expect(lastFrame() ?? '').toContain('line-0');
+    // `5` refines the capture to line 15 → the window now starts at body line index 14.
+    stdin.write('5');
+    await tick();
+    const jumped = lastFrame() ?? '';
+    expect(jumped).toContain('g15');
+    expect(jumped).toContain('line-14');
+    expect(jumped).not.toContain('line-13');
+
+    // esc ends the CAPTURE, not the doc: the indicator clears, the doc stays open at the jump.
+    stdin.write(ESC);
+    await tick();
+    const ended = lastFrame() ?? '';
+    expect(ended).not.toContain('g15');
+    expect(store.getState().docView.open).not.toBeNull();
+    expect(ended).toContain('line-14');
+
+    // With the capture over, a digit is no bound chord — the window does not move.
+    stdin.write('9');
+    await tick();
+    expect(lastFrame() ?? '').toContain('line-14');
+    // …and esc now closes the doc (the pane's own binding again).
+    stdin.write(ESC);
+    await tick();
+    expect(store.getState().docView.open).toBeNull();
+    dispose();
+  });
+
+  it('a fast g15 arriving in ONE stdin chunk still jumps (digits are pre-registered while idle)', async () => {
+    const { store, inputStores, dispose } = await setup();
+    const { lastFrame, stdin } = render(<Harness store={store} inputStores={inputStores} />);
+    await tick();
+
+    stdin.write(RETURN); // open
+    await tick();
+    await tick();
+
+    // One chunk: all three keys dispatch before React re-renders, so the digits must already be in
+    // the registered keymap (and the capture ref must advance synchronously) for the jump to land.
+    stdin.write('g15');
+    await tick();
+    const frame = lastFrame() ?? '';
+    expect(frame).toContain('g15');
+    expect(frame).toContain('line-14');
+    expect(frame).not.toContain('line-13');
+    dispose();
+  });
+
+  it('a scroll key during a live g-capture ends it and scrolls normally', async () => {
+    const { store, inputStores, dispose } = await setup();
+    const { lastFrame, stdin } = render(<Harness store={store} inputStores={inputStores} />);
+    await tick();
+
+    stdin.write(RETURN); // open
+    await tick();
+    await tick();
+
+    stdin.write('g');
+    await tick();
+    stdin.write('9'); // live-jump to line 9 → window starts at line-8
+    await tick();
+    expect(lastFrame() ?? '').toContain('g9');
+
+    // `j` is NOT a goto chord: it ends the capture and scrolls one line (8 → 9).
+    stdin.write('j');
+    await tick();
+    const frame = lastFrame() ?? '';
+    expect(frame).not.toContain('g9');
+    expect(frame).toContain('line-9');
+    expect(frame).not.toContain('line-8');
+    dispose();
+  });
+
   it('enter on the shown doc closes it (slice cleared) and re-homes focus to chat', async () => {
     const { store, inputStores, dispose } = await setup();
     const { stdin } = render(<Harness store={store} inputStores={inputStores} />);

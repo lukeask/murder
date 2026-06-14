@@ -32,7 +32,10 @@ export interface CommandCtx {
   /** Forward raw text to the active agent's harness pane (the `/` passthrough primitive). `literal`
    * sends the text verbatim (printable chars) rather than as a tmux key name. Mirrors the
    * `conversations.sendKey` action signature. */
-  readonly sendKey: (agentId: string, key: string, literal: boolean) => void;
+  readonly sendKey: (agentId: string, key: string, literal: boolean, enter?: boolean) => void;
+  /** Clear the local chat view for `agentId` (the `/clear` fix — user ask #5). Sets the per-agent
+   * cleared floor so the render selector hides the old (durably-logged) blocks. */
+  readonly clearTranscript: (agentId: string) => void;
   /** Open (or focus) the keybinding help overlay — the same action `?` triggers. */
   readonly openHelp: () => void;
   /** Capture a quick note (the `ctrl+n` quick-note submit path), with the text as the note body. */
@@ -113,7 +116,14 @@ export function dispatchCommand(text: string, agentId: string | null, ctx: Comma
       ctx.pushToast('no active agent for passthrough', { ttlMs: 2000 });
       return true; // still handled: a `/`-prefixed buffer is never an ordinary send.
     }
-    ctx.sendKey(agentId, `${text}\n`, true);
+    // User ask #5: send the text WITHOUT a trailing '\n' and WITH a real Return (enter:true). The old
+    // form sent `/clear\n` literally — the `\n` typed as text never submitted CC/Cursor's slash field.
+    ctx.sendKey(agentId, text, true, true);
+    // `/clear` also wipes murder's local chat view for this agent (the durable log lives server-side,
+    // so dropping the local view is safe). Forward the passthrough AND set the cleared floor.
+    if (text.trim().toLowerCase() === '/clear') {
+      ctx.clearTranscript(agentId);
+    }
     ctx.pushToast('[→ passthrough]', { ttlMs: 1500 });
     return true;
   }

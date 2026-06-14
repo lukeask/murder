@@ -51,6 +51,8 @@ export interface SettingsState {
    * `0` = flush borders (the default look); `1`–`4` add spacing. Threaded into the Body/Stage/Rail
    * `columnGap`/`rowGap` and the budget engine's inter-region gap (see `App.tsx`/`useBodyLayout.ts`). */
   readonly paneGap: number;
+  /** Whether vim-style editing is enabled in the chat input. Mirrors the wire `vim_mode`. */
+  readonly vimMode: boolean;
   /** The user's collaborator-harness override, or `null` when none is set (falls back to
    * `effectiveCollaboratorHarness`). Mirrors the wire `collaborator_harness`. */
   readonly collaboratorHarness: string | null;
@@ -80,6 +82,7 @@ export const initialSettingsState: SettingsState = {
   modifier: 'alt',
   keyOverrides: {},
   paneGap: 0,
+  vimMode: false,
   collaboratorHarness: null,
   crowHarnesses: null,
   effectiveCollaboratorHarness: 'claude_code',

@@ -30,6 +30,7 @@ function wire(over: Record<string, unknown> = {}) {
     modifier: 'alt',
     key_overrides: {},
     pane_gap: 0,
+    vim_mode: false,
     collaborator_harness: null,
     crow_harnesses: null,
     effective_collaborator_harness: 'claude_code',
@@ -92,6 +93,32 @@ describe('settings actions', () => {
     const updates = fake.rpcCalls.filter((c) => c.method === 'settings.update');
     expect(updates.length).toBe(1);
     expect(updates[0]?.params).toEqual({ settings: { pane_gap: 2 } });
+    dispose();
+  });
+
+  it('vimMode defaults to false before any load', () => {
+    const { store, dispose } = setup();
+    expect(store.getState().settings.vimMode).toBe(false);
+    dispose();
+  });
+
+  it('load() fills vimMode from the wire (vim_mode → vimMode)', async () => {
+    const { fake, store, dispose } = setup();
+    fake.stubRpc('settings.get', { ok: true, settings: wire({ vim_mode: true }) });
+    await store.getState().actions.settings.load();
+    expect(store.getState().settings.vimMode).toBe(true);
+    dispose();
+  });
+
+  it('update(vim_mode) overlays locally AND persists via settings.update', async () => {
+    const { fake, store, dispose } = setup();
+
+    await store.getState().actions.settings.update({ vim_mode: true });
+
+    expect(store.getState().settings.vimMode).toBe(true);
+    const updates = fake.rpcCalls.filter((c) => c.method === 'settings.update');
+    expect(updates.length).toBe(1);
+    expect(updates[0]?.params).toEqual({ settings: { vim_mode: true } });
     dispose();
   });
 

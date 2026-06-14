@@ -41,7 +41,7 @@ export interface UsageGaugeView {
   readonly pctLabel: string;
   /** Window-length label, e.g. `'5h'`, `'7d'`, `'30d'`. `''` when unknown. */
   readonly periodLabel: string;
-  /** Time until reset, formatted for display, e.g. `'1h52m'` or `'—'`. */
+  /** Time until reset, formatted for display, e.g. `'1h52m'`, `'6d9h'`, or `'—'`. */
   readonly resetLabel: string;
   /** Total bar width in cells (= {@link USAGE_BAR_WIDTH}); the component rescales to its live width. */
   readonly barWidth: number;
@@ -87,11 +87,19 @@ function formatPeriod(minutes: number): string {
   return `${Math.round(minutes)}m`;
 }
 
-/** Format minutes-until-reset as a human label (`Xm` / `Xh` / `XhYm`); `—` when none. */
+/** At most two unit letters (m/h/d). Under 48h: `Xm` / `Xh` / `XhYm`; longer: `Xd` / `XdYh` (hours rounded up). */
 function formatMinutes(minutes: number): string {
   if (minutes <= 0) return '—';
   const m = Math.ceil(minutes);
   if (m < MINUTES_PER_HOUR) return `${m}m`;
+
+  const totalHours = Math.ceil(m / MINUTES_PER_HOUR);
+  if (totalHours >= 48) {
+    const d = Math.floor(totalHours / 24);
+    const h = totalHours % 24;
+    return h === 0 ? `${d}d` : `${d}d${h}h`;
+  }
+
   const h = Math.floor(m / MINUTES_PER_HOUR);
   const rem = m % MINUTES_PER_HOUR;
   return rem === 0 ? `${h}h` : `${h}h${rem}m`;

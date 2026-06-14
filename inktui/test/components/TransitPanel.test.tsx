@@ -21,8 +21,8 @@ import { AppStoreProvider } from '../../src/hooks/useAppStore.js';
 import { InputStoresProvider } from '../../src/hooks/useInputStores.js';
 import { useRootInput } from '../../src/hooks/useRootInput.js';
 import { createInputStores } from '../../src/input/createInputStores.js';
-import type { TransitSnapshotReply } from '../../src/store/transit/transitActions.js';
 import { createAppStore } from '../../src/store/store.js';
+import type { TransitSnapshotReply } from '../../src/store/transit/transitActions.js';
 
 const RETURN = '\r';
 const ESC = '\x1b';
@@ -44,29 +44,127 @@ const DAY = 24 * HOUR;
  */
 function multiLaneReply(): TransitSnapshotReply {
   // Named so the branch lanes can splice in the shared pre-fork main ancestry without index access.
-  const m0 = { sha: 'm0aaaaa', short: 'm0aaaa', subject: 'main: latest tip', body: 'tip body line one\ntip body line two', ts_epoch: NOW - 5 * MIN, parents: ['m1bbbbb'] };
-  const m1 = { sha: 'm1bbbbb', short: 'm1bbbb', subject: 'main: an hour ago', body: 'hour body', ts_epoch: NOW - 65 * MIN, parents: ['m2ccccc'] };
-  const m2 = { sha: 'm2ccccc', short: 'm2cccc', subject: 'main: two hours', body: 'two hours body', ts_epoch: NOW - 2 * HOUR - 10 * MIN, parents: ['m3ddddd'] };
-  const m3 = { sha: 'm3ddddd', short: 'm3dddd', subject: 'main: three days ago (fork base)', body: 'fork base body', ts_epoch: NOW - 3 * DAY - HOUR, parents: ['m4eeeee'] };
-  const m4 = { sha: 'm4eeeee', short: 'm4eeee', subject: 'main: a week back', body: 'week back body', ts_epoch: NOW - 8 * DAY - HOUR, parents: ['m5fffff'] };
-  const m5 = { sha: 'm5fffff', short: 'm5ffff', subject: 'main: three weeks ago (old base)', body: 'old base body for the 20d jump', ts_epoch: NOW - 22 * DAY - HOUR, parents: [] };
+  const m0 = {
+    sha: 'm0aaaaa',
+    short: 'm0aaaa',
+    subject: 'main: latest tip',
+    body: 'tip body line one\ntip body line two',
+    ts_epoch: NOW - 5 * MIN,
+    parents: ['m1bbbbb'],
+  };
+  const m1 = {
+    sha: 'm1bbbbb',
+    short: 'm1bbbb',
+    subject: 'main: an hour ago',
+    body: 'hour body',
+    ts_epoch: NOW - 65 * MIN,
+    parents: ['m2ccccc'],
+  };
+  const m2 = {
+    sha: 'm2ccccc',
+    short: 'm2cccc',
+    subject: 'main: two hours',
+    body: 'two hours body',
+    ts_epoch: NOW - 2 * HOUR - 10 * MIN,
+    parents: ['m3ddddd'],
+  };
+  const m3 = {
+    sha: 'm3ddddd',
+    short: 'm3dddd',
+    subject: 'main: three days ago (fork base)',
+    body: 'fork base body',
+    ts_epoch: NOW - 3 * DAY - HOUR,
+    parents: ['m4eeeee'],
+  };
+  const m4 = {
+    sha: 'm4eeeee',
+    short: 'm4eeee',
+    subject: 'main: a week back',
+    body: 'week back body',
+    ts_epoch: NOW - 8 * DAY - HOUR,
+    parents: ['m5fffff'],
+  };
+  const m5 = {
+    sha: 'm5fffff',
+    short: 'm5ffff',
+    subject: 'main: three weeks ago (old base)',
+    body: 'old base body for the 20d jump',
+    ts_epoch: NOW - 22 * DAY - HOUR,
+    parents: [],
+  };
   const paneOwn = [
-    { sha: 'p0aaaaa', short: 'p0aaaa', subject: 'pane-polish: flex shrink fix', body: 'flexShrink=0 on lane rows', ts_epoch: NOW - 30 * MIN, parents: ['p1bbbbb'] },
-    { sha: 'p1bbbbb', short: 'p1bbbb', subject: 'pane-polish: age markers', body: 'sparse floored markers', ts_epoch: NOW - 4 * HOUR, parents: ['p2ccccc'] },
-    { sha: 'p2ccccc', short: 'p2cccc', subject: 'pane-polish: scaffold', body: 'initial scaffold', ts_epoch: NOW - 2 * DAY - HOUR, parents: ['m3ddddd'] },
+    {
+      sha: 'p0aaaaa',
+      short: 'p0aaaa',
+      subject: 'pane-polish: flex shrink fix',
+      body: 'flexShrink=0 on lane rows',
+      ts_epoch: NOW - 30 * MIN,
+      parents: ['p1bbbbb'],
+    },
+    {
+      sha: 'p1bbbbb',
+      short: 'p1bbbb',
+      subject: 'pane-polish: age markers',
+      body: 'sparse floored markers',
+      ts_epoch: NOW - 4 * HOUR,
+      parents: ['p2ccccc'],
+    },
+    {
+      sha: 'p2ccccc',
+      short: 'p2cccc',
+      subject: 'pane-polish: scaffold',
+      body: 'initial scaffold',
+      ts_epoch: NOW - 2 * DAY - HOUR,
+      parents: ['m3ddddd'],
+    },
   ];
   const usageOwn = [
-    { sha: 'u0aaaaa', short: 'u0aaaa', subject: 'usage-tiers: fluid width', body: 'greedy bar', ts_epoch: NOW - 90 * MIN, parents: ['u1bbbbb'] },
-    { sha: 'u1bbbbb', short: 'u1bbbb', subject: 'usage-tiers: start', body: 'start tiers', ts_epoch: NOW - 26 * HOUR, parents: ['m2ccccc'] },
+    {
+      sha: 'u0aaaaa',
+      short: 'u0aaaa',
+      subject: 'usage-tiers: fluid width',
+      body: 'greedy bar',
+      ts_epoch: NOW - 90 * MIN,
+      parents: ['u1bbbbb'],
+    },
+    {
+      sha: 'u1bbbbb',
+      short: 'u1bbbb',
+      subject: 'usage-tiers: start',
+      body: 'start tiers',
+      ts_epoch: NOW - 26 * HOUR,
+      parents: ['m2ccccc'],
+    },
   ];
   return {
     generated_at_epoch: NOW,
     invalidation_key: 'iv',
     lanes: [
-      { branch: 'main', is_main: true, worktree_path: null, head_sha: 'm0aaaaa', fork_sha: null, commits: [m0, m1, m2, m3, m4, m5] },
+      {
+        branch: 'main',
+        is_main: true,
+        worktree_path: null,
+        head_sha: 'm0aaaaa',
+        fork_sha: null,
+        commits: [m0, m1, m2, m3, m4, m5],
+      },
       // pane-polish forks off m3ddddd; its commits then include the pre-fork main ancestry (m3→m5).
-      { branch: 'pane-polish', is_main: false, worktree_path: '.murder/worktrees/pane', head_sha: 'p0aaaaa', fork_sha: 'm3ddddd', commits: [...paneOwn, m3, m4, m5] },
-      { branch: 'usage-tiers', is_main: false, worktree_path: '.murder/worktrees/usage', head_sha: 'u0aaaaa', fork_sha: 'm2ccccc', commits: [...usageOwn, m2, m3, m4, m5] },
+      {
+        branch: 'pane-polish',
+        is_main: false,
+        worktree_path: '.murder/worktrees/pane',
+        head_sha: 'p0aaaaa',
+        fork_sha: 'm3ddddd',
+        commits: [...paneOwn, m3, m4, m5],
+      },
+      {
+        branch: 'usage-tiers',
+        is_main: false,
+        worktree_path: '.murder/worktrees/usage',
+        head_sha: 'u0aaaaa',
+        fork_sha: 'm2ccccc',
+        commits: [...usageOwn, m2, m3, m4, m5],
+      },
     ],
   };
 }
@@ -107,96 +205,91 @@ async function setup(reply: TransitSnapshotReply = multiLaneReply(), focused = t
 }
 
 describe('TransitPanel — multi-lane render', () => {
-  it('renders without throwing: all lanes, stations, branch tags', async () => {
+  it('renders without throwing: Git Tree title, all lanes, stations, branch tags', async () => {
     const { store, inputStores, dispose } = await setup();
     const { lastFrame } = render(<Harness store={store} inputStores={inputStores} />);
     await tick();
     const frame = lastFrame() ?? '';
     // Eyeball aid in test logs (the real ASCII frame for the report).
-    console.log(`\n===== TRANSIT FRAME =====\n${frame}\n=========================`);
+    console.log(`\n===== GIT TREE FRAME =====\n${frame}\n=========================`);
 
-    // Pane title.
-    expect(frame).toContain('Transit');
-    // Each lane shows its branch tag.
-    expect(frame).toContain('main');
+    // Pane title (renamed Transit → Git Tree).
+    expect(frame).toContain('Git Tree');
+    // Each lane shows its branch tag (in the ▐ … ⌂ ▌ tag bar).
+    expect(frame).toContain('▐ main ⌂ ▌');
     expect(frame).toContain('pane-polish');
     expect(frame).toContain('usage-tiers');
-    // Railway glyphs present (HEAD cap + a station + track).
+    // Railway glyphs present (a HEAD cap on the un-selected lane heads + track).
     expect(frame).toContain('▶');
     expect(frame).toContain('━');
-    // Selected lane's selected station glyph.
-    expect(frame).toContain('◉');
+    // The selected commit's "you are here" glyph (main's head is selected by default).
+    expect(frame).toContain('◆');
     dispose();
   });
 
-  it('renders exactly the 3 lanes (no dropped lanes, no blank-every-other-line artifact)', async () => {
+  it('renders exactly the 3 lane rows (one tag bar each, no blank row between)', async () => {
     const { store, inputStores, dispose } = await setup();
     const { lastFrame } = render(<Harness store={store} inputStores={inputStores} />);
     await tick();
     const frame = lastFrame() ?? '';
     const lines = frame.split('\n');
-    // Count railway lines: each lane's railway row contains the HEAD cap '▶'.
-    const railwayLines = lines.filter((l) => l.includes('▶'));
-    expect(railwayLines).toHaveLength(3);
-    // No fully-blank line wedged BETWEEN the three railway rows (the every-other-line artifact). The
-    // railway rows are the lane blocks (railway + age line, no blank between within the lane stack).
-    const firstRail = lines.findIndex((l) => l.includes('▶'));
-    const lastRail = lines.map((l) => l.includes('▶')).lastIndexOf(true);
-    const between = lines.slice(firstRail, lastRail + 1);
-    // Within the lane stack (rail+age rows) there should be NO completely empty line.
-    const blankWithin = between.filter((l) => l.trim() === '');
-    expect(blankWithin).toHaveLength(0);
+    // Each lane row carries exactly one tag bar (the ▐ of `▐ name ⌂ ▌`); count them.
+    const tagLines = lines.filter((l) => l.includes('▐'));
+    expect(tagLines).toHaveLength(3);
+    // No fully-blank line wedged BETWEEN the three lane rows (they are consecutive).
+    const first = lines.findIndex((l) => l.includes('▐'));
+    const last = lines.map((l) => l.includes('▐')).lastIndexOf(true);
+    const between = lines.slice(first, last + 1);
+    expect(between.filter((l) => l.trim() === '')).toHaveLength(0);
     dispose();
   });
 
-  it('age markers are sparse and floored/deduped (not repeated every station)', async () => {
+  it('draws a shared age ruler above the lanes (a time label applies to all branches)', async () => {
     const { store, inputStores, dispose } = await setup();
     const { lastFrame } = render(<Harness store={store} inputStores={inputStores} />);
     await tick();
     const frame = lastFrame() ?? '';
-    // main lane newest→oldest ages: 0m, 1h, 2h, 3d, 8d, 22d → floored labels 0m/1h/2h/3d/8d/3w.
-    // We should see distinct labels appear, but NOT the same label repeated for adjacent same-age
-    // stations. The fixture has no adjacent dupes on main, so assert the floored values are present
-    // and that an age line is not packed wall-to-wall with labels (sparse).
-    expect(frame).toMatch(/\b1h\b/);
-    expect(frame).toMatch(/\b2h\b/);
-    // A day/week label appears for the older main commits.
-    expect(frame).toMatch(/\b3d\b|\b8d\b|\b3w\b/);
+    const lines = frame.split('\n');
+    // The ruler is the first content line above the lane rows; it carries coarse age labels.
+    const firstTag = lines.findIndex((l) => l.includes('▐'));
+    const rulerLine = lines.slice(0, firstTag).find((l) => /\d[mhdw]/.test(l)) ?? '';
+    expect(rulerLine).toMatch(/\d[mhdw]/);
     dispose();
   });
 
-  it('dedupes adjacent same-floored-age stations (a label only when the floored value changes)', async () => {
-    // A lane with TWO commits both ~2h ago (2h05m and 2h40m) then one ~5h ago: the two 2h stations
-    // must emit the label `2h` exactly ONCE (the older of the pair emits null), proving the sparse
-    // newest→oldest dedup walk.
+  it('wraps (does not truncate) the selected commit message body', async () => {
+    // A long single-line body whose tail word would be lost under truncation must appear on a wrap.
     const reply: TransitSnapshotReply = {
       generated_at_epoch: NOW,
       invalidation_key: 'iv',
       lanes: [
         {
-          branch: 'dedupe',
+          branch: 'main',
           is_main: true,
           worktree_path: null,
-          head_sha: 'd0',
+          head_sha: 'w0',
           fork_sha: null,
           commits: [
-            { sha: 'd0', short: 'd0', subject: 'newer 2h', body: 'b', ts_epoch: NOW - 2 * HOUR - 5 * MIN, parents: ['d1'] },
-            { sha: 'd1', short: 'd1', subject: 'older 2h', body: 'b', ts_epoch: NOW - 2 * HOUR - 40 * MIN, parents: ['d2'] },
-            { sha: 'd2', short: 'd2', subject: 'five h', body: 'b', ts_epoch: NOW - 5 * HOUR - 5 * MIN, parents: [] },
+            {
+              sha: 'w0',
+              short: 'w0aaaa',
+              subject: 'wrap me',
+              body: 'alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima TAILWORD',
+              ts_epoch: NOW - 5 * MIN,
+              parents: [],
+            },
           ],
         },
       ],
     };
     const { store, inputStores, dispose } = await setup(reply);
-    const { lastFrame } = render(<Harness store={store} inputStores={inputStores} />);
+    const { lastFrame } = render(
+      <Harness store={store} inputStores={inputStores} innerWidth={30} />,
+    );
     await tick();
     const frame = lastFrame() ?? '';
-    // The age line should contain exactly one `2h` (the two adjacent 2h stations dedupe to one label).
-    const ageLine = (frame.split('\n').find((l) => l.includes('2h')) ?? '');
-    const occurrences = ageLine.split('2h').length - 1;
-    expect(occurrences).toBe(1);
-    // The 5h station still gets its own distinct label.
-    expect(frame).toContain('5h');
+    // The tail word survives (it wrapped onto a later line rather than being truncated away).
+    expect(frame).toContain('TAILWORD');
     dispose();
   });
 
@@ -325,17 +418,14 @@ describe('TransitPanel — loading / empty guards', () => {
     const fake = new FakeBusClient();
     // Never resolve the snapshot: status stays 'loading' after refresh is invoked, so the panel must
     // paint its loading chrome (the dangling promise is torn down with the render at dispose).
-    fake.stubRpc(
-      'state.transit_snapshot',
-      () => new Promise<TransitSnapshotReply>(() => {}),
-    );
+    fake.stubRpc('state.transit_snapshot', () => new Promise<TransitSnapshotReply>(() => {}));
     const { store, dispose } = createAppStore(fake);
     void store.getState().actions.transit.refresh();
     const inputStores = createInputStores(['transit'], 'transit');
     const { lastFrame } = render(<Harness store={store} inputStores={inputStores} />);
     await tick();
     const frame = lastFrame() ?? '';
-    expect(frame).toContain('Transit');
+    expect(frame).toContain('Git Tree');
     expect(frame).toContain('loading');
     dispose();
   });
@@ -349,7 +439,7 @@ describe('TransitPanel — loading / empty guards', () => {
     const { lastFrame } = render(<Harness store={store} inputStores={inputStores} />);
     await tick();
     const frame = lastFrame() ?? '';
-    expect(frame).toContain('Transit');
+    expect(frame).toContain('Git Tree');
     expect(frame).toContain('no branches');
     dispose();
   });

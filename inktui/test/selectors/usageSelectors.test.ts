@@ -66,6 +66,17 @@ describe('selectUsageView — formatting', () => {
     expect(firstGauge([row({ tUntilResetMinutes: 90 })])?.resetLabel).toBe('1h30m');
   });
 
+  it('formats reset minutes as "XhYm" under 48h (e.g. 24h43m)', () => {
+    expect(firstGauge([row({ tUntilResetMinutes: 24 * 60 + 43 })])?.resetLabel).toBe('24h43m');
+    expect(firstGauge([row({ tUntilResetMinutes: 4 * 60 + 35 })])?.resetLabel).toBe('4h35m');
+  });
+
+  it('formats long resets as "Xd" / "XdYh" (hours rounded up, no minutes)', () => {
+    expect(firstGauge([row({ tUntilResetMinutes: 152 * 60 + 25 })])?.resetLabel).toBe('6d9h');
+    expect(firstGauge([row({ tUntilResetMinutes: 48 * 60 })])?.resetLabel).toBe('2d');
+    expect(firstGauge([row({ tUntilResetMinutes: 50 * 60 + 30 })])?.resetLabel).toBe('2d3h');
+  });
+
   it('formats 0 reset time as "—"', () => {
     expect(firstGauge([row({ tUntilResetMinutes: 0 })])?.resetLabel).toBe('—');
   });

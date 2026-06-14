@@ -255,14 +255,66 @@ export function selectConversationTurns(
 
 /**
  * Build the full view-model for one agent's conversation.
+ *
+ * `/clear` floor (user ask #5): blocks at or below `clearedFloors[agentId]` are filtered out before
+ * formatting, so a local `/clear` wipes the view even though the authoritative snapshot re-pulls the
+ * old (durably-logged) blocks on reconnect. Blocks with no numeric id are kept (they predate ids /
+ * can't be compared — never hide content we can't position). Absent floor = show everything.
  */
 export function selectConversationView(
   agentId: string,
   state: ConversationsState,
 ): ConversationView {
-  const blocks = state.transcripts[agentId];
+  const floor = state.clearedFloors[agentId];
+  const blocks =
+    floor === undefined
+      ? state.transcripts[agentId]
+      : aboveFloor(state.transcripts[agentId], floor);
   const turns = selectConversationTurns(blocks);
   return { agentId, turns, hasContent: turns.length > 0 };
+}
+
+/** Keep only blocks whose numeric id is strictly above `floor`; blocks with a non-numeric/absent id
+ * are kept (uncomparable → never hidden). Returns the input untouched when there is nothing to drop. */
+function aboveFloor(
+  blocks: readonly ConversationBlock[] | undefined,
+  floor: number,
+): readonly ConversationBlock[] | undefined {
+  if (blocks === undefined || blocks.length === 0) {
+    return blocks;
+  }
+  return blocks.filter((block) => {
+    const n = block.id === null || block.id === undefined ? Number.NaN : Number(block.id);
+    return !Number.isFinite(n) || n > floor;
+  });
+}
+
+/**
+ * Collect every user-typed message across ALL agents' transcripts (chat-input overhaul, user ask #4),
+ * sorted by numeric block id ascending (oldest→newest) — the seed for the murder-wide send-history
+ * recall ring ({@link ../input/chatHistoryStore.js}). Reads `type==='user'` blocks' `raw.text`; skips
+ * empty / non-numeric-id blocks (the latter have no stable sort position). Pure.
+ */
+export function selectUserHistory(state: ConversationsState): readonly string[] {
+  const collected: { id: number; text: string }[] = [];
+  for (const blocks of Object.values(state.transcripts)) {
+    for (const block of blocks) {
+      if (block.type !== 'user') {
+        continue;
+      }
+      const n = block.id === null || block.id === undefined ? Number.NaN : Number(block.id);
+      if (!Number.isFinite(n)) {
+        continue;
+      }
+      const text = str(block.raw, 'text').trim();
+      if (text === '') {
+        continue;
+      }
+      collected.push({ id: n, text });
+    }
+  }
+  collected.sort((a, b) => a.id - b.id);
+  return collected.map((c) => c.text);
 }
 
 /**
@@ -620,6 +672,23 @@ export function selectLiveChoicePrompt(
     multi,
     footer: footer || null,
   };
+}
+
+/** CC's freeform "Type something." option — selecting it puts the dialog into (or right before)
+ * free-text entry. Matched leniently because CC renders it "Type something." on single-select menus
+ * and "Type something" on multi-select ones. */
+export function isFreeformChoiceLabel(label: string): boolean {
+  return /^type something\.?$/i.test(label.trim());
+}
+
+/** True when the dialog cursor sits on the single-select freeform option. Only single-select menus
+ * get the local-compose takeover (multi-select drives checkboxes + a Submit row, a different flow),
+ * so this gates that path. Drives both key routing (App.tsx) and rendering (ChatInput.tsx) off one
+ * predicate, so what is shown and how keys are handled never disagree. */
+export function isFreeformChoiceSelected(prompt: LiveChoicePromptView): boolean {
+  if (prompt.multi || prompt.selected === null) return false;
+  const option = prompt.options.find((o) => o.number === prompt.selected);
+  return option !== undefined && isFreeformChoiceLabel(option.label);
 }
 
 /** Null-safe meta lookup: the agent's liveness pair, defaulting to nulls when unknown. */

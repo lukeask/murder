@@ -41,6 +41,8 @@ class TuiUserConfig(BaseModel):
     # Spaces of horizontal gap between adjacent pane borders (rail<->stage, stage panes,
     # rail panes). 0 = flush borders (the default look); capped at 4 (the radio select's range).
     pane_gap: int = Field(default=0, ge=0, le=4)
+    # Vim-style editing in the chat input (modal normal/insert + yank/paste). Off by default.
+    vim_mode: bool = False
 
 
 class UserHarnessRolePatch(BaseModel):

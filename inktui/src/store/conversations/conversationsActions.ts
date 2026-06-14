@@ -159,8 +159,20 @@ export interface ConversationsActions {
    * sends the key as literal text (printable chars for the dialog's inline "type something" field);
    * `literal=false` sends a tmux key name (`Up`, `Down`, `Enter`, `Escape`, `Space`, `BSpace`).
    * Fire-and-forget from the UI perspective (errors are swallowed like `send`).
+   *
+   * `enter` (default `false`) appends a real Return after the key — the `/clear` fix (user ask #5):
+   * `literal=true, enter=true` types the text then submits it (the bug was sending `/clear\n` as
+   * literal text, where the `\n` never submitted). Existing callers omit it (stay `enter:false`).
    */
-  sendKey(agentId: string, key: string, literal: boolean): Promise<void>;
+  sendKey(agentId: string, key: string, literal: boolean, enter?: boolean): Promise<void>;
+
+  /**
+   * Clear the local chat view for `agentId` (user ask #5): set the per-agent cleared floor to the
+   * current max numeric block id, so {@link ../../selectors/conversationsSelectors.js
+   * selectConversationView} hides every block at or below it. The authoritative snapshot still
+   * re-pulls the old (durably-logged) blocks on reconnect, but they stay below the floor. No bus call.
+   */
+  clearTranscript(agentId: string): void;
 
   /**
    * Interrupt the agent's harness (the `agent.interrupt` orchestrator command). Used by the chat
@@ -341,18 +353,39 @@ export function createConversationsActions(
       });
     },
 
-    async sendKey(agentId: string, key: string, literal: boolean): Promise<void> {
+    async sendKey(agentId: string, key: string, literal: boolean, enter = false): Promise<void> {
       try {
         await submitCommand(bus, 'agent.send_key', {
           agent_id: agentId,
           key,
           literal,
-          enter: false,
+          enter,
         });
       } catch (error: unknown) {
         // Fire-and-forget, same policy as send(): the pane mirror shows the dialog's true state.
         void error;
       }
+    },
+
+    clearTranscript(agentId: string): void {
+      store.setState((state) => {
+        const blocks = state.conversations.transcripts[agentId] ?? [];
+        // The floor is the max numeric block id present now. Blocks with no/non-numeric id are
+        // ignored (they can't be compared); an empty transcript yields a 0 floor (a no-op filter).
+        let maxId = 0;
+        for (const block of blocks) {
+          const n = block.id === null || block.id === undefined ? Number.NaN : Number(block.id);
+          if (Number.isFinite(n) && n > maxId) {
+            maxId = n;
+          }
+        }
+        return {
+          conversations: {
+            ...state.conversations,
+            clearedFloors: { ...state.conversations.clearedFloors, [agentId]: maxId },
+          },
+        };
+      });
     },
 
     async interrupt(agentId: string): Promise<void> {

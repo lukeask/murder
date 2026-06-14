@@ -14,6 +14,7 @@ interface FakeCtx {
   openHelp: Mock;
   captureNote: Mock;
   pushToast: Mock;
+  clearTranscript: Mock;
   dismiss?: Mock;
 }
 
@@ -25,6 +26,7 @@ function makeCtx(withDismiss = false): FakeCtx {
     openHelp: vi.fn(),
     captureNote: vi.fn(),
     pushToast: vi.fn(),
+    clearTranscript: vi.fn(),
   };
   if (withDismiss) {
     base.dismiss = vi.fn();
@@ -35,17 +37,27 @@ function makeCtx(withDismiss = false): FakeCtx {
 const AGENT = 'crow-1';
 
 describe('dispatchCommand — / passthrough', () => {
-  it('sends the buffer verbatim (with newline, literal) to the agent pane', () => {
+  it('sends the buffer literal WITH a real Return (enter:true), no trailing newline', () => {
     const ctx = makeCtx();
     const handled = dispatchCommand('/compact', AGENT, ctx);
     expect(handled).toBe(true);
-    expect(ctx.sendKey).toHaveBeenCalledWith(AGENT, '/compact\n', true);
+    // User ask #5: text without a trailing '\n', literal=true, enter=true (a real Return submits the
+    // harness slash field — a literal '\n' typed as text never did).
+    expect(ctx.sendKey).toHaveBeenCalledWith(AGENT, '/compact', true, true);
   });
 
   it('keeps the leading slash in the injected text (harness owns interpretation)', () => {
     const ctx = makeCtx();
     dispatchCommand('/some-new-cc-command arg', AGENT, ctx);
-    expect(ctx.sendKey).toHaveBeenCalledWith(AGENT, '/some-new-cc-command arg\n', true);
+    expect(ctx.sendKey).toHaveBeenCalledWith(AGENT, '/some-new-cc-command arg', true, true);
+  });
+
+  it('/clear also wipes the local transcript pane (forward + clearTranscript)', () => {
+    const ctx = makeCtx();
+    const handled = dispatchCommand('/clear', AGENT, ctx);
+    expect(handled).toBe(true);
+    expect(ctx.sendKey).toHaveBeenCalledWith(AGENT, '/clear', true, true);
+    expect(ctx.clearTranscript).toHaveBeenCalledWith(AGENT);
   });
 
   it('with no active agent: handled (consumed) but no send — surfaces a toast', () => {

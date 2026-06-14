@@ -101,6 +101,43 @@ describe('Pane — titleExtra', () => {
   });
 });
 
+describe('Pane — scrollbar-as-right-border', () => {
+  it('draws the thumb as a heavy ┃ run ON the right border, with the corner still closing', () => {
+    const { lastFrame } = render(
+      <Box width={20} height={6}>
+        <Pane title="Doc" focused scrollbar={{ height: 4, thumb: { size: 2, offset: 1 } }}>
+          <Text>body</Text>
+        </Pane>
+      </Box>,
+    );
+    const lines = (lastFrame() ?? '').split('\n').map(stripAnsi);
+    // 6 rows: top border, 4 content rows, bottom border.
+    expect(lines).toHaveLength(6);
+    // The right EDGE of the content rows is the scroll track: │ ┃ ┃ │ (thumb size 2 at offset 1) —
+    // there is no separate scrollbar column inside the border.
+    expect(lines.slice(1, 5).map((l) => l.at(-1))).toEqual(['│', '┃', '┃', '│']);
+    // The corners still close: ╮ tops the track, ╯ ends it (the content box's own right border is
+    // off, so the track column supplies the bottom-right corner).
+    expect(lines[0]?.at(-1)).toBe('╮');
+    expect(lines[5]?.at(-1)).toBe('╯');
+    expect(lines[5]).toContain('╰');
+  });
+
+  it('a null thumb (content fits) draws a plain │ border — no ┃ anywhere', () => {
+    const { lastFrame } = render(
+      <Box width={20} height={6}>
+        <Pane title="Doc" focused scrollbar={{ height: 4, thumb: null }}>
+          <Text>body</Text>
+        </Pane>
+      </Box>,
+    );
+    const lines = (lastFrame() ?? '').split('\n').map(stripAnsi);
+    expect(lastFrame() ?? '').not.toContain('┃');
+    expect(lines.slice(1, 5).map((l) => l.at(-1))).toEqual(['│', '│', '│', '│']);
+    expect(lines[5]?.at(-1)).toBe('╯');
+  });
+});
+
 describe('Pane — scroll-overflow border indicators', () => {
   it('with no overflow props, the bottom border is a single ╰…╯ line with no triangle', () => {
     const { lastFrame } = render(

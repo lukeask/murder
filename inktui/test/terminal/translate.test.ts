@@ -134,6 +134,29 @@ describe('unrepresentable command combos → side-channel chord', () => {
   });
 });
 
+describe('modified Enter (0x0d) → side-channel chord (chat-input overhaul)', () => {
+  it('shift+enter → chord "return" with shift (newline insertion)', () => {
+    // The whole reason for the change: a bare 0x0d byte cannot carry shift, so a modified Enter must
+    // ride the side channel to reach the chat field as { return:true, shift:true }.
+    const t = translate(key(13, mods({ shift: true })));
+    expect(t).toEqual({
+      kind: 'chord',
+      chord: { input: 'return', ctrl: false, alt: false, shift: true },
+    });
+  });
+  it('plain Enter (no modifier) stays the legacy CR byte (Ink return path untouched)', () => {
+    const t = translate(key(13, undefined));
+    expect(t).toEqual({ kind: 'bytes', bytes: Uint8Array.from([0x0d]) });
+  });
+  it('ctrl+Enter → chord { return, ctrl } (same as ctrl+m, the murder arm)', () => {
+    const t = translate(key(13, mods({ ctrl: true })));
+    expect(t).toEqual({
+      kind: 'chord',
+      chord: { input: 'return', ctrl: true, alt: false, shift: false },
+    });
+  });
+});
+
 describe('events', () => {
   it('drops a release event (event 3) → empty bytes', () => {
     const t = translate(key(0x73, mods({ ctrl: true }), 3));

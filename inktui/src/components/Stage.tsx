@@ -50,9 +50,10 @@
  */
 
 import { Box, type DOMElement, measureElement, Text } from 'ink';
-import { type JSX, memo, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { type JSX, memo, useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { shallow } from 'zustand/shallow';
 import { useAppStore } from '../hooks/useAppStore.js';
+import { type GotoIntent, useGotoLine } from '../hooks/useGotoLine.js';
 import {
   useBindings,
   useEffectiveFocus,
@@ -61,13 +62,14 @@ import {
   usePanelKeymap,
 } from '../hooks/useInputStores.js';
 import { useOrientation } from '../hooks/useOrientation.js';
-import type { FocusId, StagePaneId } from '../input/focusStore.js';
+import { CHAT_FOCUS, type FocusId, type StagePaneId } from '../input/focusStore.js';
 import type { PanelKeymap } from '../input/keymap.js';
 import { computeStageLayout } from '../layout/stageTiling.js';
 import type { AgentIdentity } from '../selectors/agentIdentity.js';
 import {
   type ChatTurn,
   type TurnSpeaker,
+  useActiveAgent,
   useConversationTurns,
   useOpenChatPanes,
 } from '../selectors/conversationsSelectors.js';
@@ -76,7 +78,7 @@ import type { OpenDoc } from '../store/docView/docViewSlice.js';
 import type { FavoritesState } from '../store/favorites/favoritesSlice.js';
 import type { RosterState } from '../store/roster/rosterSlice.js';
 import { useTheme } from '../theme/themeStore.js';
-import { computeScrollThumb, Scrollbar, StageDocPane } from './DocPane.js';
+import { computeScrollThumb, StageDocPane } from './DocPane.js';
 import { Pane } from './Pane.js';
 
 /** The Stage focus id for a crow's chat pane. The single place the `stage:chat:` scheme is minted, so
@@ -146,15 +148,22 @@ interface ChatLine {
 
 /**
  * Flatten ordered turns into the physical lines they render as — each turn's {@link formatTurnText}
- * output split on `\n`, every line tagged with its turn's speaker. This is the fix for dead scrolling
- * on long chats: the pane must window by *line* (the unit it draws and the unit `measureElement`
- * counts), exactly as {@link ./DocPane.js StageDocPane} windows the document body. Windowing by whole
- * turns made `maxScrollUp = turns.length − height`, which is ≤ 0 whenever a few long multi-line turns
- * fill the viewport — so `k`/`j` had nothing to move and the history was stuck. Pure (no React).
+ * output split on `\n`, every line tagged with its turn's speaker, with one BLANK separator line
+ * between consecutive turns (so messages read as visually distinct blocks, not a solid run of rows).
+ * This is the fix for dead scrolling on long chats: the pane must window by *line* (the unit it draws
+ * and the unit `measureElement` counts), exactly as {@link ./DocPane.js StageDocPane} windows the
+ * document body. Windowing by whole turns made `maxScrollUp = turns.length − height`, which is ≤ 0
+ * whenever a few long multi-line turns fill the viewport — so `k`/`j` had nothing to move and the
+ * history was stuck. The separator is a real ChatLine (not render-time spacing) so the window/scroll
+ * math and the scrollbar geometry count exactly what is drawn. Pure (no React); exported as the
+ * test seam.
  */
-function flattenTurns(turns: readonly ChatTurn[]): readonly ChatLine[] {
+export function flattenTurns(turns: readonly ChatTurn[]): readonly ChatLine[] {
   const lines: ChatLine[] = [];
   for (const turn of turns) {
+    if (lines.length > 0) {
+      lines.push({ speaker: turn.speaker, text: '' });
+    }
     for (const text of formatTurnText(turn).split('\n')) {
       lines.push({ speaker: turn.speaker, text });
     }
@@ -172,9 +181,14 @@ function flattenTurns(turns: readonly ChatTurn[]): readonly ChatLine[] {
 const ChatPane = memo(function ChatPane({
   identity,
   conversations,
+  chatTarget,
 }: {
   readonly identity: AgentIdentity;
   readonly conversations: ConversationsState;
+  /** True when this pane's crow is the chat input's active send target — while the chat input holds
+   * the effective focus, the targeted pane is highlighted too (so the user sees where a typed
+   * message will land without moving focus off the input). */
+  readonly chatTarget: boolean;
 }): JSX.Element {
   const theme = useTheme();
   const focusId: FocusId = chatPaneFocusId(identity.agentId);
@@ -183,7 +197,12 @@ const ChatPane = memo(function ChatPane({
   // Focus highlight + rect registration — the same recipe as every panel (rule 5), but with the
   // Stage-pane focus id. useMeasureFocus drops the rect on unmount → focus re-homes to chat.
   const ref = useFocusRef();
-  const focused = useEffectiveFocus() === focusId;
+  const effectiveFocus = useEffectiveFocus();
+  const focused = effectiveFocus === focusId;
+  // The Pane highlight is broader than focus: the chat input's send TARGET also lights up while the
+  // user is typing (chat holds the effective focus). The keymap registration below stays gated on
+  // the REAL focus — a target-highlighted pane must not claim `j`/`k` from the text field.
+  const highlighted = focused || (chatTarget && effectiveFocus === CHAT_FOCUS);
   useMeasureFocus(focusId, ref);
 
   // Local scroll offset (rule 1): how many turns are hidden ABOVE the window's top. 0 = pinned to the
@@ -209,13 +228,24 @@ const ChatPane = memo(function ChatPane({
   const maxScrollUp = Math.max(lines.length - effectiveHeight, 0);
   const clampedScroll = Math.min(scrollUp, maxScrollUp);
 
+  // `g<digits>` go-to-line (the shared gesture — see useGotoLine): the 1-based history line lands at
+  // the TOP of the window. `scrollUp` counts hidden lines from the tail, so line N maps to
+  // `maxScrollUp − (N − 1)`, clamped to the scroll range.
+  const jump = useCallback(
+    (line: number) => setScrollUp(Math.min(Math.max(maxScrollUp - (line - 1), 0), maxScrollUp)),
+    [maxScrollUp],
+  );
+  const goto = useGotoLine(jump);
+
   // History-scroll keymap (rule 5: declared, not handled). `j`/`k` move the window; `alt+j`/`alt+k`
   // are the global directional-nav layer (pane-to-pane), so they never reach here. Registered only
   // while focused — the registry then holds at most one chat-pane keymap. Memoised on the scroll
   // bounds so the handler closes over a fresh `maxScrollUp` without re-registering every render.
-  const keymap: PanelKeymap<ScrollIntent> = useMemo(
+  // The goto entries are spread FIRST so a live `g` capture's digits win over any pane chord.
+  const keymap: PanelKeymap<ScrollIntent | GotoIntent> = useMemo(
     () => ({
       keymap: [
+        ...goto.entries,
         {
           chord: [{ input: 'k' }, { key: { upArrow: true } }],
           intent: 'scrollUp',
@@ -228,6 +258,12 @@ const ChatPane = memo(function ChatPane({
         },
       ],
       onIntent(intent) {
+        // Goto intents are consumed by the gesture; any other intent ends a live capture and then
+        // acts with its normal meaning (the useGotoLine contract).
+        if (goto.handle(intent)) {
+          return;
+        }
+        goto.clear();
         if (intent === 'scrollUp') {
           setScrollUp((s) => Math.min(s + SCROLL_STEP, maxScrollUp));
         } else {
@@ -235,7 +271,7 @@ const ChatPane = memo(function ChatPane({
         }
       },
     }),
-    [maxScrollUp],
+    [maxScrollUp, goto],
   );
   // Register only while focused so a blurred pane doesn't own `j`/`k` (no-op keymap otherwise). An
   // empty keymap when blurred means the registry entry exists but matches nothing — the dispatcher
@@ -250,29 +286,34 @@ const ChatPane = memo(function ChatPane({
   const thumb = computeScrollThumb(lines.length, start, effectiveHeight);
 
   return (
+    // The right border doubles as the scroll track (the Pane's `scrollbar` prop) — no separate
+    // scrollbar column, so the content keeps the default right gutter.
     <Pane
       ref={ref}
       title={identity.label}
-      focused={focused}
-      titleExtra={<Text dimColor>{`[${kindLabel(identity.kind)}]`}</Text>}
-      paddingRight={0}
+      focused={highlighted}
+      titleExtra={
+        <>
+          <Text dimColor>{`[${kindLabel(identity.kind)}]`}</Text>
+          {/* Live `g<digits>` capture indicator — shows the line number as it is typed. */}
+          {goto.pending !== null && <Text color={theme.warning}>{` g${goto.pending}`}</Text>}
+        </>
+      }
+      scrollbar={{ height: effectiveHeight, thumb }}
     >
       {/* Fill box: sizes to the Pane's inner content area (flexGrow + overflow hidden), so
-          measureElement reports the room we HAVE. Text column grows; scrollbar column is fixed. */}
-      <Box ref={boxRef} flexDirection="row" flexGrow={1} minHeight={0} overflow="hidden">
-        <Box flexDirection="column" flexGrow={1} minHeight={0} overflow="hidden">
-          {visibleLines.length === 0 ? (
-            <Text dimColor>no history</Text>
-          ) : (
-            visibleLines.map((line, i) => (
-              // biome-ignore lint/suspicious/noArrayIndexKey: history lines are position-keyed (the windowed index is the stable identity for the visible slice, mirroring StageDocPane).
-              <Text key={start + i} color={speakerColor(line.speaker, theme)}>
-                {line.text === '' ? ' ' : line.text}
-              </Text>
-            ))
-          )}
-        </Box>
-        <Scrollbar height={effectiveHeight} thumb={thumb} />
+          measureElement reports the room we HAVE, not the rows we drew. */}
+      <Box ref={boxRef} flexDirection="column" flexGrow={1} minHeight={0} overflow="hidden">
+        {visibleLines.length === 0 ? (
+          <Text dimColor>no history</Text>
+        ) : (
+          visibleLines.map((line, i) => (
+            // biome-ignore lint/suspicious/noArrayIndexKey: history lines are position-keyed (the windowed index is the stable identity for the visible slice, mirroring StageDocPane).
+            <Text key={start + i} color={speakerColor(line.speaker, theme)}>
+              {line.text === '' ? ' ' : line.text}
+            </Text>
+          ))
+        )}
       </Box>
     </Pane>
   );
@@ -282,8 +323,8 @@ const ChatPane = memo(function ChatPane({
 type ScrollIntent = 'scrollUp' | 'scrollDown';
 
 /** A stable empty keymap for a blurred pane (so the `useMemo`/registration identity doesn't churn).
- * Typed `PanelKeymap<ScrollIntent>` so the `focused ? keymap : EMPTY_KEYMAP` ternary is one type. */
-const EMPTY_KEYMAP: PanelKeymap<ScrollIntent> = { keymap: [], onIntent() {} };
+ * Typed to the pane's full intent union so the `focused ? keymap : EMPTY_KEYMAP` ternary is one type. */
+const EMPTY_KEYMAP: PanelKeymap<ScrollIntent | GotoIntent> = { keymap: [], onIntent() {} };
 
 // ---------------------------------------------------------------------------
 // Stage
@@ -344,6 +385,10 @@ export const Stage = memo(function Stage({
   // Open panes = favorites default merged with the explicit open/close overrides (item 9b). The
   // overrides map ref-swaps on every toggle, so the hook re-tiles when a pane opens/closes.
   const { panes } = useOpenChatPanes(roster, favorites, conversations.paneOverrides);
+  // The chat input's active send target (the SAME resolution ChatInput displays on its border) — the
+  // targeted pane is highlighted while the chat input holds focus, so the user sees where a typed
+  // message will land. Resolved once here (not per-pane) and passed down as a boolean.
+  const target = useActiveAgent(conversations, roster, favorites);
 
   if (panes.length === 0 && openDoc === null) {
     // Nothing on the Stage: a centered first-run hint instead of a void, in the same spacer that
@@ -448,7 +493,11 @@ export const Stage = memo(function Stage({
                   overflow="hidden"
                   flexDirection="column"
                 >
-                  <ChatPane identity={identity} conversations={conversations} />
+                  <ChatPane
+                    identity={identity}
+                    conversations={conversations}
+                    chatTarget={target?.agentId === identity.agentId}
+                  />
                 </Box>
               ))}
             </Box>

@@ -20,14 +20,26 @@ import { selectActiveMode } from '../input/modeStore.js';
 import { type BottomBarHint, selectBottomBar } from '../selectors/barSelectors.js';
 import { useTheme } from '../theme/themeStore.js';
 
-/** Horizontal gap (cells) between hints on a line — matches the rendered `columnGap`. */
-const HINT_GAP = 2;
+/** Horizontal gap (cells) between hints on a line — matches the rendered `columnGap`. Single cell:
+ * the hints already carry their own key/description spacing, so a 1-cell gap reads as distinct chips
+ * while packing more onto each line (the user's tighter-footer ask). */
+const HINT_GAP = 1;
 /** `paddingX={1}` each side of the bar. */
 const BAR_PADDING = 2;
 
-/** Display width of one hint: `key` + a space + `description`. */
+/** Display width of one hint: `key` + a space + `description`. An empty description (e.g. the
+ * chat-focus `:help` hint, which is self-describing) drops the trailing word but keeps the chip. */
 function hintWidth(hint: BottomBarHint): number {
-  return hint.key.length + 1 + hint.description.length;
+  return hint.description.length === 0
+    ? hint.key.length
+    : hint.key.length + 1 + hint.description.length;
+}
+
+/** Rendered width of a whole line: each hint's width plus one {@link HINT_GAP} between adjacent ones. */
+function lineWidth(line: readonly BottomBarHint[]): number {
+  return (
+    line.reduce((sum, hint) => sum + hintWidth(hint), 0) + HINT_GAP * Math.max(0, line.length - 1)
+  );
 }
 
 /**
@@ -66,12 +78,15 @@ export function packHints(hints: readonly BottomBarHint[], avail: number): Botto
   }
   if (right.length > 0) {
     // Pin the right-aligned hints to the last line's far edge (a fresh line if there are no left
-    // hints), so the bar's row count stays minimal and the help hint always sits bottom-right.
-    if (lines.length === 0) {
-      lines.push([...right]);
-    } else {
-      const last = lines[lines.length - 1] as BottomBarHint[];
+    // hints), so the bar's row count stays minimal and the help hint always sits bottom-right. But
+    // only if the right cluster actually fits after the last line's left flow (plus a gap); otherwise
+    // it would collide with the left hints under `space-between`, so drop it onto its own line for a
+    // cleaner stack on a narrow terminal.
+    const last = lines[lines.length - 1];
+    if (last !== undefined && lineWidth(last) + HINT_GAP + lineWidth(right) <= avail) {
       last.push(...right);
+    } else {
+      lines.push([...right]);
     }
   }
   return lines;
@@ -104,9 +119,13 @@ export function useBottomBarLines(): BottomBarHint[][] {
   return useMemo(() => packHints(hints, Math.max(1, columns - BAR_PADDING)), [hints, columns]);
 }
 
-/** One hint chip — `key` (accented) then its description. */
+/** One hint chip — `key` (accented) then its description. A self-describing hint (empty description,
+ * e.g. chat-focus `:help`) renders the accented key alone, no trailing space. */
 function HintChip({ hint }: { readonly hint: BottomBarHint }): React.JSX.Element {
   const theme = useTheme();
+  if (hint.description.length === 0) {
+    return <Text color={theme.warning}>{hint.key}</Text>;
+  }
   return (
     <Text dimColor>
       <Text color={theme.warning}>{hint.key}</Text> {hint.description}
