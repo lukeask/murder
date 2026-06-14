@@ -66,6 +66,18 @@ _CURSOR_PLACEHOLDER_RE = re.compile(
     r"^\s*→\s*(?:Add a follow-up|Plan,\s*search,\s*build anything)\b",
     re.IGNORECASE,
 )
+# Cursor's ``/`` command palette / autocomplete dropdown, e.g.
+#   · /create-rule       Create Cursor rules for persistent AI guidance. …
+#   /babysit             Keep a PR merge-ready by triaging comments, …
+# It renders as an overlay above the input and repaints as you type, so it both
+# leaks into the scrollback and *duplicates* (the same /command row appearing 2-3
+# times in a row). Each row is a ``/command`` token followed by a column-aligned
+# gap (2+ spaces) then a description. The 2+-space gap after a ``/command`` at a
+# word boundary is the distinctive layout signal — required so file paths like
+# ``src/main`` (no word boundary before ``/``) and inline command mentions like
+# ``/help to reset`` (single space) are never swallowed. Matched anywhere on the
+# line so the wrapped/scrolled ``clear… /create-rule  …`` repaint form is caught.
+_CURSOR_SLASH_PALETTE_RE = re.compile(r"(?:^|[\s·•▸▶❯›>])/[a-z][a-z0-9-]*\s{2,}\S")
 _CURSOR_CHROME_RE = re.compile(
     r"""
     ^\s*(?:
@@ -159,6 +171,7 @@ def _cursor_is_chrome(line: str) -> bool:
     return bool(
         not s
         or _is_cursor_chrome(line)
+        or _CURSOR_SLASH_PALETTE_RE.search(line)
         or _CURSOR_INPUT_LINE_RE.match(line)
         or s.startswith("Tip:")
         or _CURSOR_STARTUP_HINT_RE.match(s)

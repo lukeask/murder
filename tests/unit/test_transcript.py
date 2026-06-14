@@ -188,6 +188,41 @@ def test_cursor_leading_dot_cwd_banner_stripped_and_not_duplicated():
 _FIXTURE_USER_TEXTS_BANNER = ["test"]
 
 
+def test_cursor_slash_command_palette_stripped():
+    """Cursor's ``/`` command palette renders as an overlay above the input and
+    repaints as you type, so its rows leak into the scrollback *and* duplicate
+    (the same /command appearing 2-3 times). Each row is ``/command`` + a 2+-space
+    column gap + a description. Pin that the palette is suppressed while genuine
+    assistant prose discussing the same binds survives."""
+    frame = (
+        "  Here is the binds roundup you asked for.\n"
+        "  mod+ is your configured command modifier (default alt).\n"
+        "\n"
+        "  · /create-rule       Create Cursor rules for persistent AI guidance. Use it\n"
+        "  · /babysit           Keep a PR merge-ready by triaging comments, resolving\n"
+        "  · /create-rule       Create Cursor rules for persistent AI guidance. Use it\n"
+        "  clear… /create-rule  Create Cursor rules for persistent AI guidance.\n"
+    )
+    doc = transcripts.parse_frames("cursor", [frame])
+    blob = json.dumps(doc, ensure_ascii=False)
+    assert "/create-rule" not in blob, f"slash palette leaked: {blob}"
+    assert "/babysit" not in blob, f"slash palette leaked: {blob}"
+    # Genuine assistant prose about the binds is kept.
+    assert "binds roundup you asked for" in blob
+    assert "configured command modifier" in blob
+
+
+def test_cursor_slash_palette_rule_spares_paths_and_inline_mentions():
+    """The palette rule keys on a 2+-space column gap after a ``/command`` at a
+    word boundary, so file paths (``src/main``) and single-spaced inline command
+    mentions (``/help to reset``) must never be mistaken for palette chrome."""
+    from murder.llm.harnesses.transcripts.grammar.cursor import _CURSOR_SLASH_PALETTE_RE
+
+    assert not _CURSOR_SLASH_PALETTE_RE.search("  edit src/main  then rebuild it")
+    assert not _CURSOR_SLASH_PALETTE_RE.search("  run /help to reset the session")
+    assert _CURSOR_SLASH_PALETTE_RE.search("  · /babysit           Keep a PR merge-ready")
+
+
 def test_cc_unsent_live_input_is_not_a_turn():
     """The final CC frame shows ``❯ yeah, sketch the diff3…`` then ``❯ d`` being
     typed — both are live input that was never submitted, so neither may appear
@@ -617,6 +652,37 @@ def test_cc_thinking_effort_spinner_is_chrome():
         assert "Scampering" not in blob and "Simmering" not in blob, (
             f"spinner leaked into parse: {spinner!r}"
         )
+
+
+def test_cc_multiword_status_spinner_is_chrome():
+    """Newer CC builds emit a contextual multi-word status phrase
+    (``Updating sizing and tests…``) instead of a single gerund. The animated
+    frames repaint every second, so when they leaked they flooded the transcript
+    with dozens of near-identical phantom assistant turns. Regression: the spinner
+    regex only matched single-word ``[A-Z][\\w-]+…`` status text."""
+    from murder.llm.harnesses.transcripts.grammar import claude_code as cc
+
+    frames = [
+        "· ✶ Updating sizing and tests… (11m 5s · ↓ 49.6k tokens)",
+        "· · Updating sizing and tests… (11m 6s · ↓ 49.6k tokens)",
+        "✻ Updating sizing and tests… (11m 7s · ↓ 49.7k tokens)",
+        "· ✽ Running the unit suite… (2m 1s · ↑ 3.2k tokens)",
+    ]
+    segs = cc.parse_lines(["❯ go", "● on it", *frames])
+    blob = json.dumps(segs, ensure_ascii=False)
+    assert "Updating sizing and tests" not in blob, f"multiword spinner leaked: {blob}"
+    assert "Running the unit suite" not in blob, f"multiword spinner leaked: {blob}"
+
+
+def test_cc_multiword_prose_ending_in_ellipsis_survives():
+    """The multi-word spinner widening must not eat a real assistant sentence that
+    happens to be a line of capitalised words ending in ``…`` — it has no leading
+    spinner glyph, so it is prose, not chrome."""
+    from murder.llm.harnesses.transcripts.grammar import claude_code as cc
+
+    segs = cc.parse_lines(["❯ hi", "● Looking at the failing tests now…"])
+    blob = json.dumps(segs, ensure_ascii=False)
+    assert "Looking at the failing tests now" in blob, f"prose dropped: {blob}"
 
 
 def test_cc_chrome_substrings_dont_eat_real_continuations():

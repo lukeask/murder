@@ -51,8 +51,15 @@ _CC_RUNNING_SUMMARY_RE = re.compile(
     r"^(Searching|Searched|Reading|Read|Writing|Wrote|Editing|Edited|Listing|Listed"
     r"|Finding|Found|Fetching|Fetched)\b.*…"
 )
+# The status text after the spinner glyph(s) is usually a single gerund
+# (``Cogitating…``) but newer CC builds emit a contextual multi-word phrase
+# (``Updating sizing and tests…``); the inner spaces broke the old single-token
+# ``[A-Z][\w-]+`` match, leaking dozens of near-identical animation frames as
+# phantom assistant prose. Allow the phrase to span words, and require ≥1 leading
+# glyph (every real spinner frame has one — incl. the dim ``·`` frame) so a plain
+# assistant sentence ending in ``…`` can't be mistaken for chrome.
 _CC_SPINNER_RE = re.compile(
-    r"^\s*(?:[·*✻✶✳✽✢⠁-⣿◐◓◑◒]\s*)*[A-Z][\w-]+…+\s*"
+    r"^\s*(?:[·*✻✶✳✽✢⠁-⣿◐◓◑◒]\s*)+[A-Z][\w-]+(?:[ \t][\w-]+)*…+\s*"
     r"(?:\([^)]*(?:tokens|thought|thinking|effort|↑|↓|esc to)[^)]*\))?\s*$"
 )
 _CC_SHELL_PROMPT_RE = re.compile(r"^\w+@\w[-\w.]*:[~\w/]*\s*\$\s")
