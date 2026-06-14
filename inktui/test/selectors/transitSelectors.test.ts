@@ -6,7 +6,11 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import type { DagColumn, TransitCursor } from '../../src/selectors/transitSelectors.js';
+import type {
+  DagColumn,
+  TransitCursor,
+  VisibleSlot,
+} from '../../src/selectors/transitSelectors.js';
 import {
   assignLaneHints,
   branchTag,
@@ -19,10 +23,12 @@ import {
   layoutDag,
   packColumns,
   parseDuration,
+  planVisibleColumns,
   resolveDurationJump,
   rowToSegments,
   SELECTED_GLYPH,
   STATION_FORK,
+  TRACK_GAP,
   tagColumnWidth,
   wrapText,
 } from '../../src/selectors/transitSelectors.js';
@@ -188,10 +194,11 @@ describe('layoutDag — swimlane grid', () => {
     expect(selectedSeg?.color).toBe(CELL_SELECTED);
   });
 
-  it('scrolls the column window to keep the selected commit visible when it sits in an old column', () => {
+  it('pins the cursor on a far-back commit across a dashed jump, keeping the newest in view', () => {
     // More commits than fit: at innerWidth 40, railwayWidth = 40 - tag(10) - gap(1) = 29, so
-    // fit = floor((29-1)/4)+1 = 8 columns. With 12 distinct-age commits the 8 newest would clip the
-    // 4 oldest off the left. Navigate the cursor onto the OLDEST commit and assert its ◆ still draws.
+    // fit = floor((29-1)/4)+1 = 8 slots. With 12 distinct-age commits the recent block + the pinned
+    // cursor column don't both fit contiguously, so the layout shows the newest block, a dashed JUMP,
+    // then the cursor's far-back column — newest AND selection both stay visible.
     const commits = Array.from({ length: 12 }, (_, i) =>
       // Each commit a distinct hour older so every commit gets its own column (no same-age collapse).
       commitAt(`c${i}`, (i + 1) * 3600),
@@ -202,12 +209,14 @@ describe('layoutDag — swimlane grid', () => {
     const { laneRows } = layoutDag([laneOf(commits)], oldCursor, 40, NOW);
     const row = laneRows[0];
     const text = (row?.segments ?? []).map((s) => s.text).join('');
-    // The selected glyph must be drawn (the window scrolled older to include the cursor's column).
+    // The selected glyph is drawn (its far-back column is pinned into view).
     expect(text).toContain(SELECTED_GLYPH);
     const selectedSeg = (row?.segments ?? []).find((s) => s.text.includes(SELECTED_GLYPH));
     expect(selectedSeg?.color).toBe(CELL_SELECTED);
-    // It scrolled to the OLD end: the oldest commit is the cursor, so no HEAD cap is in view.
-    expect(text).not.toContain(HEAD_CAP);
+    // The newest commit's HEAD cap stays in view (the recent block anchors the right edge)…
+    expect(text).toContain(HEAD_CAP);
+    // …and a dashed JUMP bridges the elided commits between the block and the pinned cursor column.
+    expect(text).toContain(TRACK_GAP);
   });
 
   it('draws a branch as its own colored row with a fork tee on main and a corner where it forks', () => {
@@ -239,6 +248,34 @@ describe('layoutDag — swimlane grid', () => {
     const teeSeg = (laneRows[0]?.segments ?? []).find((s) => s.text.includes(STATION_FORK));
     expect(teeSeg?.color).toBe(1);
   });
+
+  it('pins a FAR-BACK fork vertex into view across a dashed jump (the last-shared junction)', () => {
+    // main has 12 commits; a branch forks off an OLD one (m10) and adds one recent commit. The fork
+    // would clip off the left, so the layout JUMPS back to it: the `┳`/`╰` junction shows, reached by
+    // a dashed discontinuity, while the recent commits stay on the right.
+    const mainCommits = Array.from({ length: 12 }, (_, i) => commitAt(`m${i}`, (i + 1) * 3600));
+    const main = laneOf(mainCommits);
+    const branch: TransitLane = {
+      branch: 'feature',
+      isMain: false,
+      worktreePath: '/wt/f',
+      headSha: 'b0',
+      forkSha: 'm10', // forks off a far-back main commit
+      commits: [commitAt('b0', 120), ...mainCommits.slice(10)], // own recent commit, then shared tail
+    };
+    // Cursor on a recent (non-head) main commit so the newest still shows its HEAD cap.
+    const { laneRows } = layoutDag([main, branch], { laneIndex: 0, sha: 'm2' }, 44, NOW);
+    const mainText = (laneRows[0]?.segments ?? []).map((s) => s.text).join('');
+    const branchText = (laneRows[1]?.segments ?? []).map((s) => s.text).join('');
+    // The far-back junction is shown: tee on main, corner on the branch.
+    expect(mainText).toContain(STATION_FORK);
+    expect(branchText).toContain(CONNECTOR_CORNER);
+    // A dashed jump bridges the elided commits on BOTH lanes that span it.
+    expect(mainText).toContain(TRACK_GAP);
+    expect(branchText).toContain(TRACK_GAP);
+    // The newest commit's HEAD cap is still in view.
+    expect(mainText).toContain(HEAD_CAP);
+  });
 });
 
 describe('buildColumnRuler', () => {
@@ -263,11 +300,14 @@ describe('buildColumnRuler', () => {
       ]),
     },
   ];
+  /** Wrap a contiguous run of columns as `col` slots (rank = array index). */
+  const asSlots = (columns: readonly DagColumn[]): VisibleSlot[] =>
+    columns.map((column, rank) => ({ kind: 'col', rank, column }));
 
   it('places deduped labels oldest→newest left→right (the second 1h column is blank)', () => {
     const width = 24;
     const xOf = (k: number): number => width - 1 - k * 4; // stride 4
-    const ruler = buildColumnRuler(cols, xOf, width);
+    const ruler = buildColumnRuler(asSlots(cols), xOf, width);
     expect(ruler.length).toBe(width);
     // Left→right order: 1d, 2h, 1h, 10m, 3m (the c column's duplicate 1h is deduped to blank).
     const order = ['1d', '2h', '1h', '10m', '3m'].map((t) => ruler.indexOf(t));
@@ -279,8 +319,65 @@ describe('buildColumnRuler', () => {
     expect(ruler.trimEnd().endsWith('3m')).toBe(true);
   });
 
+  it('re-labels the column just past a JUMP even when its age repeats the pre-gap run', () => {
+    // newest 1h, 1h, then a gap, then an older 1h fork column: the post-jump 1h MUST re-print (the
+    // gap resets the dedupe), giving "room for the time label above that last shared vertex".
+    const width = 24;
+    const xOf = (k: number): number => width - 1 - k * 4;
+    const slots: VisibleSlot[] = [
+      { kind: 'col', rank: 0, column: { label: '1h', byLane: new Map([[0, 'a']]) } },
+      { kind: 'col', rank: 1, column: { label: '1h', byLane: new Map([[0, 'b']]) } },
+      { kind: 'gap' },
+      { kind: 'col', rank: 5, column: { label: '1h', byLane: new Map([[0, 'f']]) } },
+    ];
+    const ruler = buildColumnRuler(slots, xOf, width);
+    // Two `1h` labels: the pre-gap run (deduped to one) + the re-labelled post-gap column.
+    expect(ruler.split('1h').length - 1).toBe(2);
+  });
+
   it('returns an empty string for zero width', () => {
-    expect(buildColumnRuler(cols, () => 0, 0)).toBe('');
+    expect(buildColumnRuler(asSlots(cols), () => 0, 0)).toBe('');
+  });
+});
+
+describe('planVisibleColumns — recent block + pinned far-back forks across jumps', () => {
+  /** `n` distinct-age columns, each on the main lane (rank == array index, newest first). */
+  const linear = (n: number): DagColumn[] =>
+    Array.from({ length: n }, (_, rank) => ({
+      label: `${rank}h`,
+      byLane: new Map([[0, `c${rank}`]]),
+    }));
+
+  it('shows the newest contiguous block when everything fits (no gaps)', () => {
+    const slots = planVisibleColumns(linear(4), [], -1, 8);
+    expect(slots.every((s) => s.kind === 'col')).toBe(true);
+    expect(slots.map((s) => (s.kind === 'col' ? s.rank : 'gap'))).toEqual([0, 1, 2, 3]);
+  });
+
+  it('pins a far-back fork column with a single gap, dropping mid commits', () => {
+    // 12 columns, fork at rank 10, budget 8 slots. Expect: a recent block, ONE gap, then rank 10.
+    const slots = planVisibleColumns(linear(12), [10], -1, 8);
+    const gaps = slots.filter((s) => s.kind === 'gap').length;
+    expect(gaps).toBe(1);
+    // Newest (rank 0) and the fork (rank 10) are both present.
+    const ranks = slots.flatMap((s) => (s.kind === 'col' ? [s.rank] : []));
+    expect(ranks).toContain(0);
+    expect(ranks).toContain(10);
+    // Slot count never exceeds the budget.
+    expect(slots.length).toBeLessThanOrEqual(8);
+  });
+
+  it('prioritizes the cursor over an older fork when the budget is tight', () => {
+    // Two far-back pins (cursor at 6, fork at 11) but a small budget: the cursor must survive.
+    const slots = planVisibleColumns(linear(12), [11], 6, 4);
+    const ranks = slots.flatMap((s) => (s.kind === 'col' ? [s.rank] : []));
+    expect(ranks).toContain(0); // newest anchors the right edge
+    expect(ranks).toContain(6); // cursor pinned
+    expect(slots.length).toBeLessThanOrEqual(4);
+  });
+
+  it('returns [] for no columns', () => {
+    expect(planVisibleColumns([], [], -1, 8)).toEqual([]);
   });
 });
 

@@ -39,6 +39,10 @@ export const SELECTED_GLYPH = '◆';
 export const STATION_FORK = '┳';
 /** One cell of horizontal track between stations. */
 export const TRACK = '━';
+/** A DISCONTINUITY in the track: a dashed run drawn across a "jump" slot, where intervening commits
+ * were elided to pull a branch's far-back fork vertex into view (so the `┳`/`╰` last-shared junction
+ * always shows). Reads as "the line continues, but commits were skipped here". */
+export const TRACK_GAP = '┄';
 /** A vertical connector segment (a fork line passing through an intervening row). */
 export const CONNECTOR_VERT = '│';
 /** The corner where a branch's own track begins, turning up toward its fork tee (branches sit BELOW
@@ -144,6 +148,95 @@ export function packColumns(lanes: readonly TransitLane[], nowMs: number): DagCo
   return columns;
 }
 
+/** One slot in the laid-out, left→right-on-the-rail visible sequence. A `col` slot draws a real
+ * {@link DagColumn} (at its ordinal `rank` in the full packed sequence); a `gap` slot is a
+ * DISCONTINUITY — a "jump" rendered as dashed track where intervening commits were elided to pull a
+ * far-back column (a branch's fork vertex) into view. Slots are ordered NEWEST→OLDEST (index 0 is the
+ * newest, drawn at the right). */
+export type VisibleSlot =
+  | { readonly kind: 'col'; readonly rank: number; readonly column: DagColumn }
+  | { readonly kind: 'gap' };
+
+/** Count the rail slots a chosen set of column ranks needs: one per column, PLUS one `gap` slot for
+ * each break between non-adjacent ranks (a single dashed jump collapses any number of skipped
+ * columns). Pure helper for the budget in {@link planVisibleColumns}. */
+function slotCost(ranks: readonly number[]): number {
+  const sorted = [...ranks].sort((a, b) => a - b);
+  let cost = sorted.length;
+  for (let i = 1; i < sorted.length; i += 1) {
+    if ((sorted[i] ?? 0) - (sorted[i - 1] ?? 0) > 1) {
+      cost += 1; // one dashed jump bridges this break
+    }
+  }
+  return cost;
+}
+
+/**
+ * Decide which packed columns to show, and where the "jump" discontinuities go, within a `fit`-slot
+ * budget. The newest column is always shown; the recent block grows contiguously from it; and the
+ * REQUIRED far-back columns — each branch's fork vertex (its last commit shared with main) plus the
+ * cursor's column — are PINNED into view even when they sit far in the past, each reached across a
+ * single dashed `gap` slot. This is what lets the `┳`/`╰` last-split junction always show (with room
+ * for its age label above), per the spec: "when there are ≥2 branches, jump back to the last shared
+ * commit". Budget pressure drops the lowest-priority pins first (oldest forks), never the cursor.
+ *
+ * `forkRanks` are the ranks (in the full newest→oldest `allColumns`) that carry a branch fork on the
+ * MAIN row; `cursorRank` is the cursor's column (or -1). Returns slots NEWEST→OLDEST. Pure.
+ */
+export function planVisibleColumns(
+  allColumns: readonly DagColumn[],
+  forkRanks: readonly number[],
+  cursorRank: number,
+  fit: number,
+): VisibleSlot[] {
+  const n = allColumns.length;
+  if (n === 0 || fit <= 0) {
+    return [];
+  }
+  const included = new Set<number>([0]); // the newest column always anchors the right edge
+  // Pin the REQUIRED far-back columns by priority: the cursor first (selection must never vanish),
+  // then forks newest→oldest. Each is added only if the running slot budget still fits.
+  const pins: number[] = [];
+  if (cursorRank >= 0) {
+    pins.push(cursorRank);
+  }
+  for (const r of [...new Set(forkRanks)].sort((a, b) => a - b)) {
+    pins.push(r);
+  }
+  for (const r of pins) {
+    if (r < 0 || r >= n || included.has(r)) {
+      continue;
+    }
+    if (slotCost([...included, r]) <= fit) {
+      included.add(r);
+    }
+  }
+  // Grow the recent block contiguously from the newest; each added rank either fills a slot or bridges
+  // a jump (freeing it). Keep going while the budget holds — older commits surface as room allows.
+  for (let r = 1; r < n; r += 1) {
+    if (included.has(r)) {
+      continue;
+    }
+    if (slotCost([...included, r]) <= fit) {
+      included.add(r);
+    }
+  }
+  // Emit slots newest→oldest, inserting one `gap` between any two non-adjacent included ranks.
+  const ranks = [...included].sort((a, b) => a - b);
+  const slots: VisibleSlot[] = [];
+  for (let i = 0; i < ranks.length; i += 1) {
+    const rank = ranks[i] ?? 0;
+    if (i > 0 && rank - (ranks[i - 1] ?? 0) > 1) {
+      slots.push({ kind: 'gap' });
+    }
+    const column = allColumns[rank];
+    if (column !== undefined) {
+      slots.push({ kind: 'col', rank, column });
+    }
+  }
+  return slots;
+}
+
 /**
  * Greedy word-wrap `text` to `width` columns: split on existing newlines, then pack space-separated
  * words, hard-splitting any single token longer than `width`. Returns the wrapped lines (an empty
@@ -199,16 +292,18 @@ export function branchTag(name: string): string {
 }
 
 /**
- * Build the shared age-ruler line over the visible columns. `xOf(k)` is column `k`'s x (k=0 is the
- * newest, at the right). Walking newest→oldest, a column's floored label is placed (left-aligned at
- * its x) only when it DIFFERS from the last emitted — so a run of same-age columns prints the label
- * once, against the newest column of the run (e.g. two `1h` columns label only the newer one). Newer
- * labels are placed first and win their cells (blank-guard), and a label that would overflow the
- * right edge is pulled back to fit. Returns a `width`-wide string. Pure.
+ * Build the shared age-ruler line over the visible SLOTS. `xOf(i)` is slot `i`'s x (i=0 is the newest,
+ * at the right). Walking newest→oldest, a `col` slot's floored label is placed (left-aligned at its x)
+ * only when it DIFFERS from the last emitted — so a run of same-age columns prints the label once,
+ * against the newest of the run (e.g. two `1h` columns label only the newer one). A `gap` slot resets
+ * that tracking so the column just past a jump ALWAYS re-prints its (older) age — giving the spec's
+ * "room for the time label above that last shared vertex". Newer labels are placed first and win their
+ * cells (blank-guard); a label overflowing the right edge is pulled back to fit. Returns a
+ * `width`-wide string. Pure.
  */
 export function buildColumnRuler(
-  visible: readonly DagColumn[],
-  xOf: (k: number) => number,
+  slots: readonly VisibleSlot[],
+  xOf: (i: number) => number,
   width: number,
 ): string {
   if (width <= 0) {
@@ -216,18 +311,23 @@ export function buildColumnRuler(
   }
   const cells: string[] = new Array(width).fill(' ');
   let last: string | null = null;
-  for (let k = 0; k < visible.length; k += 1) {
-    const label = visible[k]?.label ?? '';
+  for (let i = 0; i < slots.length; i += 1) {
+    const slot = slots[i];
+    if (slot === undefined || slot.kind === 'gap') {
+      last = null; // a jump breaks the run — force the next column to re-label.
+      continue;
+    }
+    const label = slot.column.label;
     if (label === last) {
       continue;
     }
     last = label;
-    const x = xOf(k);
+    const x = xOf(i);
     const start = Math.max(0, Math.min(x, width - label.length));
-    for (let i = 0; i < label.length && start + i < width; i += 1) {
+    for (let j = 0; j < label.length && start + j < width; j += 1) {
       // Blank-guard: a newer column's label (placed earlier in this walk) keeps its cells.
-      if (cells[start + i] === ' ') {
-        cells[start + i] = label[i] ?? ' ';
+      if (cells[start + j] === ' ') {
+        cells[start + j] = label[j] ?? ' ';
       }
     }
   }
@@ -503,37 +603,64 @@ export function layoutDag(
     lanes.findIndex((l) => l.isMain),
   );
 
-  // Pack into ordinal columns (newest→oldest) and keep a window of `fit` that fits; x is by RANK, not
-  // time. The window is ANCHORED on the cursor: by default it shows the NEWEST `fit` columns (oldest
-  // clip off the left), but if the selected commit sits in an older, clipped column we scroll the
-  // window OLDER just enough to keep it in view — so navigating to an old commit never strands the
-  // selected ◆ off the left edge with no scroll control to recover it.
+  // Pack into ordinal columns (newest→oldest); x is by RANK, not time. {@link planVisibleColumns}
+  // then picks WHICH columns to show and where the dashed "jump" discontinuities fall: the newest
+  // column plus a contiguous recent block, with every branch's far-back FORK vertex (and the cursor's
+  // column) PINNED into view across a single dashed gap. So the `┳`/`╰` last-split junction always
+  // shows even when it is many commits back, per the spec.
   const allColumns = packColumns(lanes, nowMs);
   const fit = Math.max(1, Math.floor((railwayWidth - 1) / COL_STRIDE) + 1);
-  // The cursor's column index in the full (newest→oldest) sequence, or -1 when it isn't placed.
-  const cursorColumn =
+  // The rank (in the full newest→oldest sequence) of each branch's fork column — the column whose
+  // MAIN-row sha is the branch's forkSha (the merge-base lives on main's row) — and of the cursor.
+  const rankOfMainSha = (sha: string): number =>
+    allColumns.findIndex((col) => col.byLane.get(mainIndex) === sha);
+  const forkRanks: number[] = [];
+  for (const lane of lanes) {
+    if (lane.forkSha !== null) {
+      const fr = rankOfMainSha(lane.forkSha);
+      if (fr >= 0) {
+        forkRanks.push(fr);
+      }
+    }
+  }
+  const cursorRank =
     cursor.sha === null
       ? -1
       : allColumns.findIndex((col) => col.byLane.get(cursor.laneIndex) === cursor.sha);
-  // Newest visible column index: 0 normally; pushed older so the cursor's column is the oldest shown.
-  const maxStart = Math.max(0, allColumns.length - fit);
-  const start = cursorColumn < 0 ? 0 : Math.min(Math.max(0, cursorColumn - fit + 1), maxStart);
-  const visible = allColumns.slice(start, start + fit); // a `fit`-wide window anchored on the cursor
-  const xOf = (k: number): number => railwayWidth - 1 - k * COL_STRIDE; // k=0 newest visible → right
+  const slots = planVisibleColumns(allColumns, forkRanks, cursorRank, fit);
+  const xOf = (i: number): number => railwayWidth - 1 - i * COL_STRIDE; // i=0 newest slot → right
 
-  // The x of a branch's fork column: the visible column whose MAIN-row sha is the branch's forkSha
-  // (the merge-base lives on main's row). Null when the fork has clipped off the left edge.
+  // Where each rank lands on the rail (its slot's x), for forks/tracks. -1 when the rank isn't shown.
+  const xOfRank = (rank: number): number => {
+    for (let i = 0; i < slots.length; i += 1) {
+      const slot = slots[i];
+      if (slot?.kind === 'col' && slot.rank === rank) {
+        return xOf(i);
+      }
+    }
+    return -1;
+  };
   const forkColumnX = (lane: TransitLane): number | null => {
     if (lane.forkSha === null) {
       return null;
     }
-    for (let k = 0; k < visible.length; k += 1) {
-      if (visible[k]?.byLane.get(mainIndex) === lane.forkSha) {
-        return xOf(k);
-      }
-    }
-    return null;
+    const x = xOfRank(rankOfMainSha(lane.forkSha));
+    return x < 0 ? null : x;
   };
+
+  // The dashed "jump" cell ranges: the cells strictly between a gap slot's two neighbours' anchors.
+  // A track crossing one of these ranges is later redrawn dashed (the discontinuity), so a branch line
+  // visibly "jumps" the elided commits back to its fork vertex while staying continuous either side.
+  const gapSpans: { lo: number; hi: number }[] = [];
+  for (let i = 0; i < slots.length; i += 1) {
+    if (slots[i]?.kind !== 'gap') {
+      continue;
+    }
+    const xNewer = xOf(i - 1); // the col slot to the right (newer)
+    const xOlder = xOf(i + 1); // the col slot to the left (older)
+    gapSpans.push({ lo: xOlder + 1, hi: xNewer - 1 });
+  }
+  const inGap = (c: number): boolean => gapSpans.some((g) => c >= g.lo && c <= g.hi);
 
   // Pass A — each lane's track + stations (a station per visible column the lane occupies).
   const stationShasByRow: string[][] = lanes.map(() => []);
@@ -543,10 +670,14 @@ export function layoutDag(
       continue;
     }
     const stations: { x: number; sha: string }[] = [];
-    for (let k = 0; k < visible.length; k += 1) {
-      const sha = visible[k]?.byLane.get(r);
+    for (let i = 0; i < slots.length; i += 1) {
+      const slot = slots[i];
+      if (slot?.kind !== 'col') {
+        continue;
+      }
+      const sha = slot.column.byLane.get(r);
       if (sha !== undefined) {
-        stations.push({ x: xOf(k), sha });
+        stations.push({ x: xOf(i), sha });
       }
     }
     if (stations.length === 0) {
@@ -558,7 +689,7 @@ export function layoutDag(
     const startTrack = Math.min(...xs, forkX ?? Number.POSITIVE_INFINITY);
     const endTrack = Math.max(...xs);
     for (let c = startTrack; c <= endTrack; c += 1) {
-      set(r, c, TRACK, r);
+      set(r, c, inGap(c) ? TRACK_GAP : TRACK, r);
     }
     for (const station of stations) {
       const isSelected = r === cursor.laneIndex && station.sha === cursor.sha;
@@ -602,7 +733,7 @@ export function layoutDag(
 
   return {
     laneRows,
-    ruler: buildColumnRuler(visible, xOf, railwayWidth),
+    ruler: buildColumnRuler(slots, xOf, railwayWidth),
     railwayWidth,
     tagColWidth,
   };
