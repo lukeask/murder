@@ -462,6 +462,56 @@ def test_cursor_blank_braille_spinner_is_chrome():
         assert not is_status_spinner_line(keep), f"rollup wrongly flagged: {keep!r}"
 
 
+def test_cursor_tool_rollups_become_collapsed_tool_calls():
+    # Cursor paints tool activity as rollup lines that progressively redraw. They
+    # must parse as tool_call segments, each redraw chain collapsed to its final
+    # frame, distinct operations kept separate, and narration left as prose.
+    from murder.llm.harnesses.transcripts.grammar.cursor import parse_lines
+
+    scrollback = [
+        " Searching the codebase for where reset times are formatted.",
+        "",
+        ' Grepping, searching 1 grep, 1 search Grepped "reset" in .',
+        "",
+        ' Grepped, searched 1 grep, 1 search Grepped "reset" in . Searched "x" in .',
+        "",
+        " Editing usageSelectors.ts",
+        "",
+        " Edited usageSelectors.ts   +9 -1",
+        "",
+        " $ cd /repo && npm test",
+        "",
+        " All 15 tests pass; report written.",
+    ]
+    segs = parse_lines(scrollback)
+    kinds = [s["type"] for s in segs]
+    assert kinds == ["assistant", "tool_call", "tool_call", "tool_call", "assistant"]
+    # Grep redraw chain collapsed to its final (past-tense) frame, not the gerund.
+    assert segs[1]["title"].startswith("Grepped, searched")
+    # Editing -> Edited (same file) collapsed; shell command stays its own call.
+    assert segs[2]["title"] == "Edited usageSelectors.ts +9 -1"
+    assert segs[3]["title"] == "cd /repo && npm test"
+    # The leading narration ("Searching the codebase ...") is not a tool call.
+    assert segs[0]["text"].startswith("Searching the codebase")
+
+
+def test_cursor_tool_rollup_spares_narration():
+    from murder.llm.harnesses.transcripts.grammar.cursor import _is_cursor_tool_rollup
+
+    for prose in (
+        "Searching the codebase for where reset times are formatted",
+        "Updating formatMinutes to use d/h for long resets and adding tests",
+        "Writing the report from the bindings registry and per-pane keymaps",
+    ):
+        assert not _is_cursor_tool_rollup(prose), f"narration misread as tool: {prose!r}"
+    for rollup in (
+        'Grepped, searched 1 grep, 1 search Grepped "reset" in .',
+        "Edited allctrlbinds.md   +26",
+        "Read, grepped, globbed 17 files, 15 greps, 1 glob … 30 earlier items hidden",
+    ):
+        assert _is_cursor_tool_rollup(rollup), f"rollup missed: {rollup!r}"
+
+
 def test_cursor_no_chrome_in_segments():
     cursor_chrome = [
         "Cursor Agent",

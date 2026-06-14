@@ -10,6 +10,7 @@ from murder.llm.harnesses.transcripts._shared import (
     dedupe_adjacent_spanned,
     murder_owned_anchors,
     normalize_prompt_match,
+    truncate_title,
 )
 from murder.llm.harnesses.transcripts.toolkit import collect_chrome_delimited_blocks
 from murder.llm.harnesses.transcripts.segments import Segment, SpannedSegment
@@ -179,6 +180,152 @@ def _cursor_is_chrome(line: str) -> bool:
     )
 
 
+# ---- tool-activity rollups ------------------------------------------------- #
+# Cursor has no tool-call glyphs (unlike CC's ⏺/⎿); it paints tool activity as
+# rollup lines that progressively redraw as actions accumulate, e.g.
+#     Grepping, searching 1 grep, 1 search Grepped "pat" in . …      (in-progress)
+#     Grepped, searched 1 grep, 1 search Grepped "pat" in . …        (done)
+#     Editing allctrlbinds.md   →   Edited allctrlbinds.md   +26
+# We recover these as ``tool_call`` segments and collapse each consecutive redraw
+# run to its final, most-complete frame. The prose trap — "Searching the codebase
+# for where reset times are formatted" is narration, not a tool call — is handled
+# by requiring a hard tool *signal* (counts / path / quoted pattern / diffstat /
+# "Found N matches" / "… N earlier items hidden" / "lines X-Y") and rejecting an
+# article right after the verb.
+_ROLLUP_VERB = (
+    r"(?:Grepp(?:ing|ed)|Search(?:ing|ed)|Read(?:ing)?|Edit(?:ing|ed)|"
+    r"List(?:ing|ed)|Glob(?:bing|bed)|Call(?:ing|ed)|Runn(?:ing)?|Ran|"
+    r"Creat(?:ing|ed)|Delet(?:ing|ed)|Writ(?:ing)|Wrote|Fetch(?:ing|ed)|"
+    r"Mov(?:ing|ed)|Renam(?:ing|ed)|Append(?:ing|ed)|Remov(?:ing|ed))"
+)
+_ROLLUP_LEAD_RE = re.compile(rf"^\s*{_ROLLUP_VERB}(?:,\s*\w+)*\b", re.IGNORECASE)
+_ROLLUP_ARTICLE_RE = re.compile(
+    rf"^\s*{_ROLLUP_VERB}\s+(?:the|a|an|for|to|through|into|over|about|all|this|that|each|its|our|my)\b",
+    re.IGNORECASE,
+)
+_ROLLUP_GERUND_RE = re.compile(rf"^\s*{_ROLLUP_VERB}", re.IGNORECASE)
+_ROLLUP_SHELL_RE = re.compile(r"^\s*\$\s+\S")
+_ROLLUP_SIGNALS = (
+    re.compile(r"\b\d+\s+(?:grep|search|file|glob|match|line|edit|read|tool|command|terminal)s?\b", re.I),
+    re.compile(r"\bFound\s+\d+\s+(?:match|file)", re.I),
+    re.compile(r"…\s*\d+\s+earlier items hidden", re.I),
+    re.compile(r'"[^"]*"\s+in\s+\S'),
+    re.compile(r"\blines?\s+\d+-\d+\b", re.I),
+    re.compile(r"(?:^|\s)[+-]\d+(?:\s+[+-]\d+)?\s*$"),
+    re.compile(r"\b\S+/\S+\b"),
+    re.compile(r"\b[\w.-]+\.(?:ts|tsx|js|jsx|py|md|json|yaml|yml|txt|sh|toml|cfg|rs|go)\b"),
+)
+
+
+def _is_cursor_tool_rollup(text: str) -> bool:
+    """True if a chrome-stripped assistant block is a Cursor tool-activity rollup."""
+    s = text.strip()
+    if not s:
+        return False
+    if _ROLLUP_SHELL_RE.match(s):
+        return True
+    if not _ROLLUP_LEAD_RE.match(s) or _ROLLUP_ARTICLE_RE.match(s):
+        return False
+    return any(sig.search(s) for sig in _ROLLUP_SIGNALS)
+
+
+def _rollup_is_running(text: str) -> bool:
+    """True for the in-progress (gerund) redraw frame, e.g. 'Grepping …'."""
+    m = _ROLLUP_GERUND_RE.match(text.strip())
+    return bool(m and m.group(0).rstrip().lower().endswith("ing"))
+
+
+def _rollup_title(text: str) -> str:
+    """Compact title for a tool rollup.
+
+    Shell -> the command. Count-summary ("Grepped, read 3 files, 1 grep Read …")
+    -> the count head, dropping the expanded per-action detail. Single action
+    ("Reading inktui/src/foo.ts") -> the whole short line (the path is the point).
+    """
+    s = " ".join(text.split())
+    if _ROLLUP_SHELL_RE.match(s):
+        return truncate_title(s.lstrip("$ ").strip())
+    if _ROLLUP_COUNT_RE.search(s):  # trim expanded detail after the count summary
+        cut = re.search(r'\s(?="|[A-Za-z.]+/|…)', s)
+        if cut:
+            s = s[: cut.start()].strip() or s
+    return truncate_title(s)
+
+
+def _tool_call_segment(text: str) -> Segment:
+    return {
+        "type": "tool_call",
+        "title": _rollup_title(text),
+        "input": None,
+        "result": text,
+        "elided": "earlier items hidden" in text,
+        "running": _rollup_is_running(text),
+    }
+
+
+_ROLLUP_COUNT_RE = re.compile(r"(\d+)\s+(?:grep|search|file|glob|match|line|edit|read)s?\b", re.I)
+_ROLLUP_PATH_RE = re.compile(r"(\S+/\S+|[\w.-]+\.\w{1,5})")
+
+
+def _rollup_signature(text: str) -> tuple[str, object]:
+    """Classify a rollup for redraw-chain continuation.
+
+    A *redraw chain* is the SAME accumulating operation repainted (its counts only
+    grow); distinct operations — a shell command, a different file edit — must not
+    merge. Returns ``(kind, key)``:
+      shell  -> each command is its own op, never continues.
+      count  -> count-summary rollup; key = total count (monotonic across a chain).
+      single -> single-action rollup; key = its first path/filename token.
+    """
+    s = text.strip()
+    if _ROLLUP_SHELL_RE.match(s):
+        return ("shell", s)
+    counts = _ROLLUP_COUNT_RE.findall(s)
+    if counts:
+        return ("count", sum(int(c) for c in counts))
+    m = _ROLLUP_PATH_RE.search(s)
+    return ("single", m.group(1) if m else s)
+
+
+def _rollup_continues(prev: str, cur: str) -> bool:
+    """True if ``cur`` is a later redraw frame of the same operation as ``prev``."""
+    pk, pv = _rollup_signature(prev)
+    ck, cv = _rollup_signature(cur)
+    if pk == "count" and ck == "count":
+        return cv >= pv  # same accumulating group; counts only grow
+    if pk == "single" and ck == "single":
+        return pv == cv  # "Editing X" -> "Edited X" (same target)
+    return False
+
+
+def _collapse_tool_rollups(spanned: list[SpannedSegment]) -> list[SpannedSegment]:
+    """Collapse each redraw chain of tool_call rollups to its final frame.
+
+    Cursor repaints a rollup as actions accumulate, so one operation shows up as
+    several adjacent tool_call frames; keep only the last (most complete), but
+    only merge frames that continue the *same* operation (see _rollup_continues)
+    so distinct tool calls stay separate.
+    """
+    out: list[SpannedSegment] = []
+    i = 0
+    while i < len(spanned):
+        if spanned[i].segment.get("type") != "tool_call":
+            out.append(spanned[i])
+            i += 1
+            continue
+        j = i
+        while (
+            j + 1 < len(spanned)
+            and spanned[j + 1].segment.get("type") == "tool_call"
+            and _rollup_continues(spanned[j].segment["result"], spanned[j + 1].segment["result"])
+        ):
+            j += 1
+        last = spanned[j]
+        out.append(SpannedSegment(last.segment, spanned[i].start, last.end))
+        i = j + 1
+    return out
+
+
 def parse_lines(
     lines: list[str],
     system_prompt: str | None = None,
@@ -218,6 +365,8 @@ def parse_spanned(
             continue
         if is_user or normalize_prompt_match(text) in anchors:
             spanned.append(SpannedSegment({"type": "user", "text": text}, start, end))
+        elif _is_cursor_tool_rollup(text):
+            spanned.append(SpannedSegment(_tool_call_segment(text), start, end))
         else:
             spanned.append(
                 SpannedSegment(
@@ -226,7 +375,7 @@ def parse_spanned(
                     end,
                 )
             )
-    return dedupe_adjacent_spanned(spanned)
+    return _collapse_tool_rollups(dedupe_adjacent_spanned(spanned))
 
 
 def is_idle(pane_text: str) -> bool:
