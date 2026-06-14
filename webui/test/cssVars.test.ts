@@ -13,16 +13,28 @@ const theme = buildTheme(PALETTES[DEFAULT_THEME_ID], DEFAULT_THEME_ID);
 describe('themeToCssVars', () => {
   it('maps every semantic role to a kebab-cased --color-* variable', () => {
     const vars = themeToCssVars(theme);
-    // One var per role.
-    expect(Object.keys(vars)).toHaveLength(Object.keys(theme).length);
+    // One var per scalar role (array roles emit a list var + one var per entry, so the count is at
+    // least the role count).
+    expect(Object.keys(vars).length).toBeGreaterThanOrEqual(Object.keys(theme).length);
     // camelCase → kebab-case.
     expect(vars['--color-row-selected-bg']).toBe(theme.rowSelectedBg);
     expect(vars['--color-gauge-label-text']).toBe(theme.gaugeLabelText);
     expect(vars['--color-text']).toBe(theme.text);
-    // Every value is a hex string.
-    for (const value of Object.values(vars)) {
-      expect(value).toMatch(/^#[0-9a-fA-F]{6}$/);
+    // Every scalar value is a hex string; list vars are comma-joined hexes.
+    for (const [name, value] of Object.entries(vars)) {
+      if (name === '--color-lane-colors') {
+        expect(value).toMatch(/^#[0-9a-fA-F]{6}(, #[0-9a-fA-F]{6})*$/);
+      } else {
+        expect(value).toMatch(/^#[0-9a-fA-F]{6}$/);
+      }
     }
+  });
+
+  it('projects an array role into a list var plus indexed entry vars', () => {
+    const vars = themeToCssVars(theme);
+    expect(vars['--color-lane-colors-0']).toBe(theme.laneColors[0]);
+    expect(vars['--color-lane-colors']).toContain(theme.laneColors[0] as string);
+    expect(vars['--color-lane-colors']).toContain(', ');
   });
 });
 

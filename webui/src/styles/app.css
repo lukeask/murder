@@ -19,6 +19,9 @@
   flex-direction: column;
   height: 100%;
   overflow: hidden;
+  /* Never let wide content (long ANSI tmux lines, etc.) scroll the whole page sideways — wide
+   * content scrolls inside its own pane instead. */
+  overflow-x: hidden;
 }
 
 .app__header {
@@ -26,8 +29,11 @@
   align-items: center;
   justify-content: space-between;
   gap: var(--space-3);
-  height: var(--header-height);
-  padding: 0 var(--space-4);
+  /* The notch reserves space ABOVE the header bar via top safe-area padding (kept tall enough to
+   * stay tappable); left/right insets keep brand + pill clear of rounded corners. */
+  height: calc(var(--header-height) + var(--safe-top));
+  padding: var(--safe-top) calc(var(--space-4) + var(--safe-right)) 0
+    calc(var(--space-4) + var(--safe-left));
   border-bottom: 1px solid var(--color-border-blurred);
   flex-shrink: 0;
   background: var(--color-panel-selected-bg);
@@ -66,6 +72,7 @@
   flex-direction: column;
   gap: var(--space-3);
   overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
   min-height: 0;
 }
 
@@ -138,6 +145,7 @@
 
 .panel__body {
   overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
   flex: 1;
   min-height: 0;
 }
@@ -377,7 +385,7 @@
   align-items: center;
 }
 .stage__target { margin-left: var(--space-2); font-family: var(--font-mono); font-size: 11px; color: var(--color-muted); padding-right: var(--space-2); }
-.stage__body { flex: 1; min-height: 0; overflow-y: auto; padding: var(--space-3); }
+.stage__body { flex: 1; min-height: 0; overflow-y: auto; -webkit-overflow-scrolling: touch; padding: var(--space-3); }
 
 .chat__empty, .tmux__empty { padding: var(--space-4); color: var(--color-muted); font-style: italic; }
 
@@ -386,6 +394,7 @@
 .turn__speaker { font-size: 10px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--color-muted); }
 .turn__text {
   white-space: pre-wrap;
+  overflow-wrap: anywhere;
   font-family: var(--font-mono);
   font-size: 13px;
   padding: var(--space-2) var(--space-3);
@@ -468,7 +477,9 @@
 }
 .doc-viewer__kind { color: var(--color-muted); font-size: 11px; text-transform: uppercase; }
 .doc-viewer__title { font-family: var(--font-mono); color: var(--color-heading); }
-.doc-viewer__body, .ticket-detail__body { overflow-y: auto; padding: var(--space-3); min-height: 0; }
+.doc-viewer__body, .ticket-detail__body { overflow-y: auto; -webkit-overflow-scrolling: touch; padding: var(--space-3); min-height: 0; }
+/* Long words / paths in viewed docs must wrap, never push the pane wide on a phone. */
+.doc-viewer__body { overflow-wrap: anywhere; }
 .doc-viewer__body { white-space: pre-wrap; font-family: var(--font-mono); font-size: 13px; color: var(--color-text); margin: 0; }
 .ticket-detail__fm { display: grid; grid-template-columns: max-content 1fr; gap: 2px var(--space-3); margin: 0 0 var(--space-3); }
 .ticket-detail__fm dt { color: var(--color-muted); font-size: 11px; }
@@ -494,14 +505,25 @@
 .tabbar {
   display: flex;
   flex-shrink: 0;
-  height: var(--tabbar-height);
+  /* 10 tabs don't fit on a phone, so the bar scrolls horizontally with momentum and the scrollbar
+   * hidden (it stays swipeable). The home-indicator inset is added below the row so the bar's tap
+   * targets clear it; left/right insets keep the first/last tab off rounded corners. */
+  height: calc(var(--tabbar-height) + var(--safe-bottom));
+  padding-bottom: var(--safe-bottom);
+  padding-left: var(--safe-left);
+  padding-right: var(--safe-right);
   border-top: 1px solid var(--color-border-blurred);
   background: var(--color-panel-selected-bg);
   overflow-x: auto;
+  overflow-y: hidden;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none; /* Firefox */
 }
+.tabbar::-webkit-scrollbar { display: none; } /* WebKit/Blink */
 .tabbar__tab {
   flex: 1 0 auto;
-  min-width: 64px;
+  /* Each tab keeps a comfortable thumb width even when the bar overflows and scrolls. */
+  min-width: max(var(--tap-min), 64px);
   background: none;
   border: none;
   color: var(--color-muted);
@@ -509,7 +531,9 @@
   font-size: 11px;
   cursor: pointer;
   padding: var(--space-1);
+  -webkit-tap-highlight-color: transparent;
 }
+.tabbar__tab:active { background: var(--color-panel-header-bg); }
 .tabbar__tab[data-on="true"] { color: var(--color-focus); border-top: 2px solid var(--color-focus); }
 
 /* On mobile a panel/stage should fill the available column. */
@@ -518,6 +542,31 @@
 
 /* ── Responsive tweaks ─────────────────────────────────────────────────────────────────────── */
 @media (max-width: 768px) {
-  .app__header { padding: 0 var(--space-3); }
+  .app__header {
+    padding: var(--safe-top) calc(var(--space-3) + var(--safe-right)) 0
+      calc(var(--space-3) + var(--safe-left));
+  }
   .turn--user .turn__text { max-width: 90%; }
+
+  /* iOS Safari auto-zooms when a focused text field is < 16px. Bump every editable field to the
+   * mobile input size so focusing never zooms (and the layout never has to recover from it). */
+  .chat-input__field,
+  .ticket-detail__editor,
+  .ticket-detail__schedule input {
+    font-size: var(--font-input-mobile);
+  }
+
+  /* Kill the grey flash on tap for interactive chrome; a real :active state keeps taps feeling
+   * responsive. (Hover affordances stay desktop-only.) */
+  .list__row,
+  .row-action,
+  .star,
+  .seg button,
+  .stage__tabs button,
+  .theme-swatch,
+  .chat-input__send {
+    -webkit-tap-highlight-color: transparent;
+  }
+  .list__row:active { background: var(--color-panel-selected-bg); }
+  .chat-input__send:active:not(:disabled) { opacity: 0.7; }
 }

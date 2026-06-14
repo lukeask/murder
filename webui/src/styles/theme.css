@@ -70,6 +70,15 @@
 
   /* Touch targets (mobile thumb-friendly minimum) */
   --tap-min: 44px;
+
+  /* Mobile input font-size: must be >=16px so iOS Safari doesn't auto-zoom on focus. */
+  --font-input-mobile: 16px;
+
+  /* Safe-area insets (notch / home indicator). 0 fallback on browsers without env(). */
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-left: env(safe-area-inset-left, 0px);
+  --safe-right: env(safe-area-inset-right, 0px);
 }
 
 * {
@@ -77,10 +86,19 @@
 }
 
 html,
-body,
-#root {
+body {
   margin: 0;
   height: 100%;
+}
+
+/* The app shell fills the viewport. `dvh` tracks the *dynamic* viewport so the mobile browser
+ * chrome collapsing (and the on-screen keyboard) resizes the shell instead of letting it overflow
+ * under fixed UI. `vh` is the fallback line first for browsers without `dvh`. */
+#root {
+  margin: 0;
+  height: 100vh;
+  height: 100dvh;
+  overflow: hidden;
 }
 
 body {

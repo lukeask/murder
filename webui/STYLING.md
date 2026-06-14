@@ -35,6 +35,8 @@ the app's rhythm globally without touching any component:
 | `--rail-width` | desktop left/right rail column width |
 | `--header-height`, `--tabbar-height` | chrome heights |
 | `--tap-min` | minimum touch-target size (mobile thumb-friendliness) |
+| `--font-input-mobile` | text-field font-size on mobile (≥16px so iOS Safari doesn't zoom on focus) |
+| `--safe-top` / `--safe-bottom` / `--safe-left` / `--safe-right` | `env(safe-area-inset-*)` values (notch / home indicator), `0px` fallback; pad edge-anchored chrome (header, tab bar) with these |
 | `--bp-mobile` | **documentation** mirror of the mobile breakpoint |
 
 ## File organization

@@ -15,7 +15,7 @@
  */
 
 import { useAppStoreApi } from '@core/hooks/useAppStore.js';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { WsBusClient } from './bus/WsBusClient.js';
 import { useThemeCssVars } from './theme/useThemeCssVars.js';
 import { type ConnectionStatus, useConnectionStatus } from './useConnectionStatus.js';
@@ -112,6 +112,12 @@ function DesktopLayout(): React.JSX.Element {
 /** Mobile: a single panel at a time, switched by the bottom tab bar (thumb-friendly hit targets). */
 function MobileLayout(): React.JSX.Element {
   const [tab, setTab] = useState<MobileTab>('chat');
+  // The tab bar overflows (10 tabs) and scrolls; keep the selected tab in view when it changes.
+  const activeTabRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    // `scrollIntoView` is absent in jsdom (tests) and very old browsers — guard the call.
+    activeTabRef.current?.scrollIntoView?.({ inline: 'center', block: 'nearest' });
+  }, [tab]);
   return (
     <>
       <main className="app__body app__body--mobile">
@@ -121,6 +127,7 @@ function MobileLayout(): React.JSX.Element {
         {MOBILE_TABS.map((t) => (
           <button
             key={t}
+            ref={t === tab ? activeTabRef : undefined}
             type="button"
             className="tabbar__tab"
             data-on={t === tab}
