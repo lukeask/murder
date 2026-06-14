@@ -23,13 +23,13 @@ from murder.state.persistence.schema import get_db, init_db
 from murder.state.storage.filesystem import read_lock_pid
 from murder.state.storage.paths import agents_dir, db_path, lock_path
 
-# Provider env vars that count as "an LLM key is configured".
+# Provider env vars that count as "an LLM key is configured" (Groq/Cerebras first).
 _LLM_KEY_ENV_VARS = (
-    "ANTHROPIC_API_KEY",
-    "OPENROUTER_API_KEY",
-    "OPENAI_API_KEY",
     "GROQ_API_KEY",
     "CEREBRAS_API_KEY",
+    "ANTHROPIC_API_KEY",
+    "OPENAI_API_KEY",
+    "OPENROUTER_API_KEY",
 )
 
 _MIN_NODE_MAJOR = 20
@@ -154,8 +154,8 @@ def _check_api_keys() -> None:
         _ok(f"LLM API key(s) set: {', '.join(present)}")
     else:
         _warn(
-            "no LLM API key found (set ANTHROPIC_API_KEY or another provider key "
-            "before launching)"
+            "no LLM API key found (set GROQ_API_KEY, CEREBRAS_API_KEY, or another "
+            "provider key before launching)"
         )
 
 

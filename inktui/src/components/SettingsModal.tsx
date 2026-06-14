@@ -18,7 +18,7 @@
  *  4. **Harnesses** — collaborator (a radio over the 5 harnesses + a "(default)" row that clears the
  *     override) and crow (a checkbox pool over the 5 + a "reset to default" row; ≥1 must stay checked).
  *     The effective value is shown when no override is set.
- *  5. **LLM providers** — one row per provider (groq/cerebras/openrouter/local) with provenance
+ *  5. **LLM providers** — one row per provider (groq/cerebras first; openrouter/local opt-in)
  *     ("set via env" / "set here (***)" / "not set"). Enter on a row enters *text-entry* for the
  *     api_key (or local's base_url): leaving `***` keeps the stored key, `""` clears.
  *  6. **Tiers & roles** — the tiers (built-in cheap/smart + user overrides) read-only as
@@ -99,7 +99,7 @@ const ROLES: readonly string[] = ['notetaker', 'crow_handler', 'codebase_map'];
  * `BUILTIN_TIERS`; user-defined tiers of the same name override these (see `resolve_tier`). */
 const BUILTIN_TIERS: Readonly<Record<string, LlmTierWire>> = {
   cheap: { provider: 'groq', model: 'openai/gpt-oss-120b', auto_free: true },
-  smart: { provider: 'openrouter', model: 'anthropic/claude-sonnet-4-6' },
+  smart: { provider: 'cerebras', model: 'openai/gpt-oss-120b' },
 };
 
 /** The merged tier map for display: built-ins overlaid by the user's same-name tiers. Order: built-ins

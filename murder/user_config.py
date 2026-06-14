@@ -109,7 +109,7 @@ class UserNotetakerPatch(BaseModel):
     """Partial notetaker api role; fields align with `NotetakerConfig` for deep-merge."""
 
     kind: Literal["api"] | None = None
-    provider: Literal["openrouter", "anthropic", "openai", "local"] | None = None
+    provider: Literal["groq", "cerebras", "openrouter", "anthropic", "openai", "local"] | None = None
     model: str | None = None
     max_tokens: int | None = None
     max_context_tokens: int | None = None
@@ -134,7 +134,7 @@ class UserLlmTier(BaseModel):
 
     model_config = ConfigDict(extra="ignore")
 
-    provider: Literal["openrouter", "anthropic", "openai", "local", "cerebras", "groq"]
+    provider: Literal["groq", "cerebras", "openrouter", "anthropic", "openai", "local"]
     model: str
     auto_free: bool = False
 
@@ -154,6 +154,9 @@ class UserLlmConfig(BaseModel):
 
 class UserConfig(BaseModel):
     tui: TuiUserConfig = Field(default_factory=TuiUserConfig)
+    # Default root log level for the structured per-run service.log; overridable
+    # by --log-level and MURDER_LOG_LEVEL (see murder.observability.logging_setup).
+    log_level: str = "INFO"
     collaborator: UserHarnessRolePatch | None = None
     default_crow: UserHarnessRolePatch | None = None
     notetaker: UserNotetakerPatch | None = None
@@ -164,7 +167,7 @@ class UserConfig(BaseModel):
 # the same name override these (see `resolve_tier`).
 BUILTIN_TIERS: dict[str, UserLlmTier] = {
     "cheap": UserLlmTier(provider="groq", model="openai/gpt-oss-120b", auto_free=True),
-    "smart": UserLlmTier(provider="openrouter", model="anthropic/claude-sonnet-4-6"),
+    "smart": UserLlmTier(provider="cerebras", model="openai/gpt-oss-120b"),
 }
 
 

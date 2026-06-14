@@ -26,7 +26,7 @@ def _user_cfg(role: str, tier: UserLlmTier, tier_name: str = "t") -> UserConfig:
 
 
 def test_no_user_cfg_returns_original_config_object() -> None:
-    config = ApiRoleConfig(provider="openrouter", model="base-model")
+    config = ApiRoleConfig(provider="cerebras", model="base-model", auto_free=False)
     sentinel = _FakeClient()
 
     def fake_resolve(cfg: ApiRoleConfig) -> object:
@@ -46,7 +46,7 @@ def test_no_user_cfg_returns_original_config_object() -> None:
 
 
 def test_tier_applies_provider_model_auto_free(monkeypatch) -> None:
-    config = ApiRoleConfig(provider="openrouter", model="base-model")
+    config = ApiRoleConfig(provider="cerebras", model="base-model", auto_free=False)
     tier = UserLlmTier(provider="groq", model="tier-model", auto_free=True)
     user_cfg = _user_cfg("notetaker", tier)
 
@@ -72,14 +72,14 @@ def test_tier_applies_provider_model_auto_free(monkeypatch) -> None:
 
 
 def test_tier_build_failure_falls_back_to_original(monkeypatch) -> None:
-    config = ApiRoleConfig(provider="openrouter", model="base-model")
+    config = ApiRoleConfig(provider="cerebras", model="base-model", auto_free=False)
     tier = UserLlmTier(provider="groq", model="tier-model", auto_free=False)
     user_cfg = _user_cfg("crow_handler", tier)
 
     fallback_client = _FakeClient()
 
     def fake_create_client(provider: str) -> object | None:
-        # tier path uses provider "groq" -> fail; original uses "openrouter" -> ok
+        # tier path uses provider "groq" -> fail; original uses "cerebras" -> ok
         if provider == "groq":
             return None
         return fallback_client
@@ -93,7 +93,7 @@ def test_tier_build_failure_falls_back_to_original(monkeypatch) -> None:
 
 
 def test_subclass_preservation(monkeypatch) -> None:
-    config = CrowHandlerConfig(provider="openrouter", model="base-model", poll_interval_s=12.5)
+    config = CrowHandlerConfig(provider="cerebras", model="base-model", poll_interval_s=12.5, auto_free=False)
     tier = UserLlmTier(provider="anthropic", model="tier-model")
     user_cfg = _user_cfg("crow_handler", tier)
 

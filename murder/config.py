@@ -86,9 +86,9 @@ class HarnessRoleConfig(BaseModel):
 
 class ApiRoleConfig(BaseModel):
     kind: Literal["api"] = "api"
-    provider: Literal["openrouter", "anthropic", "openai", "local", "cerebras", "groq"] = "openrouter"
-    auto_free: bool = False
-    model: str
+    provider: Literal["groq", "cerebras", "openrouter", "anthropic", "openai", "local"] = "groq"
+    auto_free: bool = True
+    model: str = "openai/gpt-oss-120b"
     max_context_tokens: int = 180_000
 
 
@@ -126,13 +126,13 @@ class NotetakerConfig(ApiRoleConfig):
     """Planning-mode "notetaker": tidies the user's stream-of-consciousness
     into a clean notes doc via read/write tools.
 
-    Defaults to Cerebras/zai-glm-4.7 (reasoning model, fast on Cerebras
-    hardware). Falls back gracefully to no-LLM behavior if CEREBRAS_API_KEY
-    is unset — same degradation path as any API role with a missing key.
+    Defaults to the Groq/Cerebras auto-free pool (gpt-oss-120b). Falls back
+    gracefully to no-LLM behavior when no free provider key is set.
     """
 
-    provider: Literal["openrouter", "anthropic", "openai", "local", "cerebras", "groq"] = "cerebras"
-    model: str = "zai-glm-4.7"
+    provider: Literal["groq", "cerebras", "openrouter", "anthropic", "openai", "local"] = "groq"
+    model: str = "openai/gpt-oss-120b"
+    auto_free: bool = True
     max_tokens: int = 1500
 
 

@@ -13,8 +13,9 @@ collaborator:
 
 notetaker:
   kind: api
-  provider: cerebras
-  model: zai-glm-4.7                   # picked from Settings (ctrl+p)
+  provider: groq
+  model: openai/gpt-oss-120b
+  auto_free: true
   max_tokens: 1500
 
 planner:
@@ -27,8 +28,9 @@ planner:
 
 crow_handler:
   kind: api
-  provider: openrouter
-  model: anthropic/claude-haiku-4-5
+  provider: groq
+  model: openai/gpt-oss-120b
+  auto_free: true
   poll_interval_s: 45
   forced_summary_every_n_ticks: 7
   stuck_threshold_ticks: 3

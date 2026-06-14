@@ -38,9 +38,9 @@ class ProjectRoleModels:
     crow_handler_model: str
     collaborator_harness: HarnessKind
     notetaker_model: str
-    crow_handler_auto_free: bool = False
-    notetaker_provider: str = "cerebras"
-    notetaker_auto_free: bool = False
+    crow_handler_auto_free: bool = True
+    notetaker_provider: str = "groq"
+    notetaker_auto_free: bool = True
     planner_harness: HarnessKind = "claude_code"
 
 
@@ -114,7 +114,11 @@ class SettingsService:
                 name="settings-model-refresh",
             )
         except Exception:  # noqa: BLE001
-            LOGGER.debug("failed to schedule model refresh after settings save", exc_info=True)
+            LOGGER.warning(
+                "failed to schedule model refresh after settings save"
+                " (UI model list will be stale until next refresh)",
+                exc_info=True,
+            )
 
     async def discover_models(self, harness: HarnessKind | str) -> ModelDiscoveryResult:
         kind = harness if isinstance(harness, str) else str(harness)

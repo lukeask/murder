@@ -41,7 +41,7 @@ export type LlmEnvProviderId = 'groq' | 'cerebras' | 'openrouter';
 
 /** The tier `provider` enum (a superset of {@link LlmProviderId} — tiers may point at `anthropic` /
  * `openai` too; mirrors the Python `UserLlmTier.provider`). */
-export type LlmTierProvider = 'openrouter' | 'anthropic' | 'openai' | 'local' | 'cerebras' | 'groq';
+export type LlmTierProvider = 'groq' | 'cerebras' | 'local' | 'anthropic' | 'openai' | 'openrouter';
 
 /** One provider's stored credentials. `api_key` is masked `"***"` on `get` when a key is stored,
  * `null`/absent when unset; on `update` `"***"` means "leave unchanged" and `""` clears. `base_url`
