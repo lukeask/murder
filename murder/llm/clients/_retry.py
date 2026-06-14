@@ -37,7 +37,19 @@ def retry_after_seconds(exc: Exception) -> float | None:
     if not raw:
         return None
     try:
-        return max(0.0, float(raw.strip()))
+        seconds = max(0.0, float(raw.strip()))
     except ValueError:
         # HTTP-date form is not honored here; fall back to backoff.
+        LOGGER.debug(
+            "Retry-After header %r (status %s) is not integer-seconds; "
+            "falling back to default backoff",
+            raw,
+            exc.response.status_code,
+        )
         return None
+    LOGGER.info(
+        "honoring Retry-After=%ss for %s response (backoff sleep)",
+        seconds,
+        exc.response.status_code,
+    )
+    return seconds

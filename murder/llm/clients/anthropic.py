@@ -12,7 +12,14 @@ from typing import Any
 import httpx
 
 from murder.llm.clients._retry import is_retryable_exc, retry_after_seconds
-from murder.llm.clients.base import APIClient, CompletionResult, ToolCall, ToolSpec
+from murder.llm.clients.base import (
+    APIClient,
+    CompletionResult,
+    ToolCall,
+    ToolSpec,
+    build_request_summary,
+    record_completion,
+)
 
 ANTHROPIC_BASE = "https://api.anthropic.com/v1"
 ANTHROPIC_VERSION = "2023-06-01"
@@ -55,6 +62,14 @@ class AnthropicClient(APIClient):
         **kwargs: Any,
     ) -> CompletionResult:
         del kwargs  # accepted for wrapper-client forwarding; not used here
+        request_summary = build_request_summary(
+            model=model,
+            system=system,
+            messages=messages,
+            tools=tools,
+            max_tokens=max_tokens,
+            temperature=temperature,
+        )
         client = await self._ensure_client()
         payload: dict[str, Any] = {
             "model": model,
@@ -83,7 +98,11 @@ class AnthropicClient(APIClient):
                 resp.raise_for_status()
                 data = resp.json()
                 latency_ms = (time.monotonic() - t0) * 1000
-                return _parse_completion(data, model, latency_ms)
+                result = _parse_completion(data, model, latency_ms)
+                record_completion(
+                    request_summary=request_summary, result=result, retries=attempt
+                )
+                return result
             except (httpx.HTTPStatusError, httpx.RequestError) as e:
                 last_exc = e
                 # Terminal 4xx (400/401/413/…) will never succeed on retry.

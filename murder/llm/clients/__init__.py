@@ -1,4 +1,8 @@
-"""Native LLM clients for CrowHandler and PlanningAgent."""
+"""Native LLM clients for CrowHandler and PlanningAgent.
+
+Default inference uses Groq/Cerebras (``AutoFreeClient``). OpenRouter, Anthropic,
+and OpenAI are opt-in only — selected explicitly via config tiers or roles.
+"""
 
 import logging
 import os
@@ -22,8 +26,10 @@ LOGGER = logging.getLogger(__name__)
 def create_client(provider: str) -> APIClient | None:
     """Create the configured API client, or None when required env is absent."""
     try:
-        if provider == "openrouter":
-            return OpenRouterClient()
+        if provider == "groq":
+            return GroqClient()
+        if provider == "cerebras":
+            return CerebrasClient()
         if provider == "anthropic":
             return AnthropicClient()
         if provider == "openai":
@@ -37,10 +43,8 @@ def create_client(provider: str) -> APIClient | None:
                 base_url=base_url,
                 require_api_key=False,
             )
-        if provider == "cerebras":
-            return CerebrasClient()
-        if provider == "groq":
-            return GroqClient()
+        if provider == "openrouter":
+            return OpenRouterClient()
     except RuntimeError:
         return None
     raise ValueError(f"unknown API provider: {provider}")

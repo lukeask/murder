@@ -11,7 +11,14 @@ from typing import Any
 import httpx
 
 from murder.llm.clients._retry import is_retryable_exc, retry_after_seconds
-from murder.llm.clients.base import APIClient, CompletionResult, ToolCall, ToolSpec
+from murder.llm.clients.base import (
+    APIClient,
+    CompletionResult,
+    ToolCall,
+    ToolSpec,
+    build_request_summary,
+    record_completion,
+)
 
 LOGGER = logging.getLogger(__name__)
 MAX_ATTEMPTS = 3
@@ -41,7 +48,21 @@ class ChatCompletionsClient(APIClient):
         temperature: float = 0.0,
         **kwargs: Any,
     ) -> CompletionResult:
-        del kwargs  # accepted for wrapper-client forwarding; not used here
+        # Reasoning models (gpt-oss, qwen3, glm) split max_tokens between hidden
+        # reasoning and visible content; without an explicit effort they default to
+        # heavy reasoning and burn the whole cap, returning empty content. Forward
+        # the knob when a caller (e.g. the free-pool) supplies one. Groq/Cerebras
+        # accept reasoning_effort as a top-level field; gpt-oss takes low/medium/high
+        # (NOT none), qwen3/glm accept none. Other kwargs are ignored.
+        reasoning_effort = kwargs.get("reasoning_effort")
+        request_summary = build_request_summary(
+            model=model,
+            system=system,
+            messages=messages,
+            tools=tools,
+            max_tokens=max_tokens,
+            temperature=temperature,
+        )
         client = await self._ensure_client()
         payload: dict[str, Any] = {
             "model": model,
@@ -49,6 +70,8 @@ class ChatCompletionsClient(APIClient):
             "max_tokens": max_tokens,
             "temperature": temperature,
         }
+        if reasoning_effort is not None:
+            payload["reasoning_effort"] = reasoning_effort
         if tools:
             payload["tools"] = [
                 {
@@ -73,7 +96,11 @@ class ChatCompletionsClient(APIClient):
                 resp.raise_for_status()
                 data = resp.json()
                 latency_ms = (time.monotonic() - t0) * 1000
-                return parse_completion(data, model, latency_ms)
+                result = parse_completion(data, model, latency_ms)
+                record_completion(
+                    request_summary=request_summary, result=result, retries=attempt
+                )
+                return result
             except (httpx.HTTPStatusError, httpx.RequestError) as e:
                 last_exc = e
                 # Terminal 4xx (400/401/413/…) will never succeed on retry.
@@ -86,7 +113,9 @@ class ChatCompletionsClient(APIClient):
                     wait = backoff
                     backoff *= 2
                 else:
-                    LOGGER.warning("chat-completions rate-limited; honoring Retry-After=%.1fs", wait)
+                    LOGGER.warning(
+                        "chat-completions rate-limited; honoring Retry-After=%.1fs", wait
+                    )
                 await asyncio.sleep(wait)
         assert last_exc is not None
         raise last_exc

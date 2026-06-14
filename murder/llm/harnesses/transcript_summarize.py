@@ -19,7 +19,12 @@ Segment = Mapping[str, Any]
 
 DEFAULT_SUMMARY_MODEL = "transcript-summary"
 LOCAL_SUMMARY_MODEL = "local"
-MAX_SUMMARY_TOKENS = 120
+# 256, not 120: the old cap truncated summaries mid-sentence and — on reasoning models
+# (gpt-oss) that spend the cap on hidden reasoning — left content empty, silently
+# falling back to prior_condensed. The summarizer benchmark measured 256 as the point
+# where visible output is complete without wasting budget. The pool sets reasoning_effort
+# per model so reasoning does not eat this cap.
+MAX_SUMMARY_TOKENS = 256
 
 
 @dataclass(frozen=True)
