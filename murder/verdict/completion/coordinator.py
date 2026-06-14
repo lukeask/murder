@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Protocol
 
 from murder.bus import Bus, Entity
 from murder.bus import Role as AgentRole
+from murder.observability.advanced_log import current_advanced_log
 
 from .checks.base import CheckResult, CheckStatus, CompletionContext
 from .persistence import bump_attempts, get_attempts, reset_attempts, write_check_result
@@ -127,6 +128,13 @@ class CompletionCoordinator:
 
         if not failures:
             await self._transition_done(ticket_id)
+            current_advanced_log().record_decision(
+                payload={
+                    "source": "completion",
+                    "ticket_id": ticket_id,
+                    "result": {"completed": True, "failed_checks": []},
+                }
+            )
             return DoneHandleResult(completed=True)
 
         reprompt_msgs: list[str] = []
@@ -154,9 +162,21 @@ class CompletionCoordinator:
                 combined = "The following checks failed. Please fix them:\n\n" + "\n\n".join(reprompt_msgs)
                 await crow.send(combined)
 
+        failed_check_names = tuple(name for name, _ in failures)
+        current_advanced_log().record_decision(
+            payload={
+                "source": "completion",
+                "ticket_id": ticket_id,
+                "result": {
+                    "completed": False,
+                    "ticket_failed": ticket_failed,
+                    "failed_checks": list(failed_check_names),
+                },
+            }
+        )
         return DoneHandleResult(
             completed=False,
-            failed_checks=tuple(name for name, _ in failures),
+            failed_checks=failed_check_names,
         )
 
     async def _dispatch(

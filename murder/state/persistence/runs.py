@@ -17,5 +17,16 @@ def insert_run(conn: sqlite3.Connection, run_id: str, config_snapshot: str) -> N
     )
 
 
+def set_run_advanced_log_path(conn: sqlite3.Connection, run_id: str, path: str) -> None:
+    """Store the advanced flight-recorder DB pointer on the run row (Phase 2).
+
+    The main DB stores ONLY this pointer, never the bulky records.
+    """
+    conn.execute(
+        "UPDATE runs SET advanced_log_path = ? WHERE run_id = ?",
+        (path, run_id),
+    )
+
+
 def end_run(conn: sqlite3.Connection, run_id: str) -> None:
     conn.execute("UPDATE runs SET ended_at = ? WHERE run_id = ?", (_now(), run_id))

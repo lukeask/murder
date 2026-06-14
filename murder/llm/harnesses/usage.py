@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import re
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -12,6 +13,8 @@ from murder.llm.harnesses.models import (
     HarnessUsageWindow,
 )
 from murder.llm.harnesses.parsing import strip_ansi
+
+LOGGER = logging.getLogger(__name__)
 
 _CLAUDE_USAGE_RE = re.compile(
     r"Usage:\s*(?P<input>\d+)\s+input,\s*"
@@ -49,6 +52,7 @@ def _parse_reset_from_match(match: re.Match, now: datetime | None) -> str | None
     try:
         tz = ZoneInfo(tz_name)
     except ZoneInfoNotFoundError:
+        LOGGER.debug("unknown usage reset timezone %r; defaulting to UTC", tz_name)
         tz = ZoneInfo("UTC")
 
     base = now.astimezone(tz) if now else datetime.now(tz=tz)
@@ -70,6 +74,13 @@ def _parse_reset_from_match(match: re.Match, now: datetime | None) -> str | None
                 second=0, microsecond=0,
             ).isoformat()
         except ValueError:
+            LOGGER.debug(
+                "usage reset date out of range (mon=%r mday=%r time=%r); dropping reset_at",
+                mon_str,
+                mday_str,
+                match.group("time"),
+                exc_info=True,
+            )
             return None
 
     reset_at = base.replace(hour=parsed.hour, minute=parsed.minute, second=0, microsecond=0)
@@ -228,6 +239,13 @@ def _parse_clock_reset(raw: str, now: datetime | None) -> str | None:
                 microsecond=0,
             ).isoformat()
         except ValueError:
+            LOGGER.debug(
+                "codex/agy reset clock out of range (raw=%r day=%r mon=%r); dropping reset_at",
+                raw,
+                day,
+                mon,
+                exc_info=True,
+            )
             return None
     reset_at = base.replace(hour=hour, minute=minute, second=0, microsecond=0)
     if reset_at <= base:

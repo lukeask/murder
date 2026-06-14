@@ -34,8 +34,11 @@ Substrate invariants (Phase A):
 from __future__ import annotations
 
 import copy
+import hashlib
 from collections.abc import Iterable
 from typing import Any
+
+from murder.observability.advanced_log import current_advanced_log
 
 from murder.llm.harnesses.parsing import strip_ansi
 from murder.llm.harnesses.transcripts._shared import (
@@ -458,6 +461,19 @@ class TranscriptAccumulator:
                 choice_prompt_segment,
             )
             self._active_choice_prompt = None
+
+        # Boundary #5a: record the incremental parse for the flight recorder.
+        # Pass only the freshly-parsed segments (the per-frame delta), not the
+        # whole accumulated transcript, plus a content hash so the ChangeGate
+        # writes one row only when this frame's parse changed since the last.
+        parsed_segments = [s.segment for s in parsed]
+        dedup_basis = repr(parsed_segments)
+        current_advanced_log().record_parser(
+            session=None,
+            parsed=parsed_segments,
+            live_state=self._state,
+            dedup_hash=hashlib.sha1(dedup_basis.encode("utf-8")).hexdigest(),
+        )
 
     def to_dict(self) -> dict[str, Any]:
         segments: list[Segment] = [copy.deepcopy(s.segment) for s in self._committed]

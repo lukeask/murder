@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
 from dataclasses import dataclass
 
 from murder.bus.protocol import CommandEvent
@@ -10,6 +11,20 @@ from murder.app.service.command_dispatch import ClaimedCommand, CommandDispatche
 from murder.runtime.workers.base import Worker, WorkerCommand, WorkerCtx
 from murder.runtime.workers.process_runner import SubprocessWorkerRunner
 from murder.runtime.workers.process_targets import usage_probe_process_target
+
+LOGGER = logging.getLogger(__name__)
+
+
+async def _await_cancelled_task(task: asyncio.Task[None], *, label: str) -> None:
+    """Await a just-cancelled task, swallowing the cancellation but surfacing any
+    *other* failure that surfaced during teardown at DEBUG. CancelledError is the
+    expected outcome and is not logged."""
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+    except Exception:
+        LOGGER.debug("task %r raised during cancellation/teardown", label, exc_info=True)
 
 
 @dataclass
@@ -88,8 +103,7 @@ class Supervisor:
         state.stop_event.set()
         for task in (state.command_task, state.command_claim_task, state.heartbeat_task):
             task.cancel()
-            with contextlib.suppress(asyncio.CancelledError, Exception):
-                await task
+            await _await_cancelled_task(task, label=f"{name}:{task.get_name()}")
         if state.runner is not None:
             await state.runner.stop(state.worker.spec.shutdown_grace_s)
         elif state.run_task is not None:
@@ -97,8 +111,7 @@ class Supervisor:
                 await asyncio.wait_for(state.run_task, timeout=state.worker.spec.shutdown_grace_s)
             except asyncio.TimeoutError:
                 state.run_task.cancel()
-                with contextlib.suppress(asyncio.CancelledError, Exception):
-                    await state.run_task
+                await _await_cancelled_task(state.run_task, label=f"{name}:run")
         await state.worker.on_stop(self._ctx)
 
     async def stop_all(self) -> None:
@@ -108,8 +121,7 @@ class Supervisor:
             await self.stop_worker(name)
         if self._reaper_task is not None:
             self._reaper_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError, Exception):
-                await self._reaper_task
+            await _await_cancelled_task(self._reaper_task, label="supervisor:command-reaper")
             self._reaper_task = None
 
     async def dispatch(self, worker_name: str, command: WorkerCommand) -> bool:

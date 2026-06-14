@@ -10,6 +10,7 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, cast
 
+from murder.observability.log_context import log_context
 from murder.runtime.agents.base import Daemon, AgentRole, AgentStatus, TRANSCRIPT_SCROLLBACK_LINES
 from murder.verdict.completion import CompletionCoordinator
 from murder.config import CrowHandlerConfig
@@ -163,7 +164,8 @@ class CrowHandler(Daemon):
             await tmux.kill_session(self.session)
 
     async def send(self, msg: str) -> SimpleResult[None]:
-        return await self.harness.send_prompt(self.crow_session, msg)
+        with log_context(agent_id=self.id):
+            return await self.harness.send_prompt(self.crow_session, msg)
 
     @property
     def pending_message(self) -> str | None:
@@ -205,6 +207,10 @@ class CrowHandler(Daemon):
                 f.write(f"[{ts}] {msg}\n")
 
     async def tick(self) -> None:
+        with log_context(agent_id=self.id):
+            await self._tick()
+
+    async def _tick(self) -> None:
         from murder.runtime.terminal import tmux
 
         if self.runtime.db is None or self.runtime.bus is None or self.runtime.run_id is None:

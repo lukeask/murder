@@ -41,12 +41,38 @@ def worktrees_dir(repo_root: Path) -> Path:
     return agents_dir(repo_root) / "worktrees"
 
 
+def advlogs_dir(repo_root: Path) -> Path:
+    """Directory for the opt-in advanced flight-recorder SQLite DBs (Phase 2)."""
+    return murder_dir(repo_root) / "advlogs"
+
+
+def advanced_log_path(repo_root: Path, run_id: str, *, raw: bool, when: str | None = None) -> Path:
+    """Per-session advanced-log DB path.
+
+    ``advanced-YYYYMMDD-HHMMSS-<run_id>.db``, or the deliberately-distinct
+    ``advanced-RAW-...`` variant when ``raw`` is set so the unredacted artifact
+    is impossible to confuse for the redacted one. ``when`` (a pre-formatted
+    ``YYYYMMDD-HHMMSS`` stamp) is injectable for tests; otherwise it is computed
+    from the wall clock at call time.
+    """
+    from datetime import datetime
+
+    stamp = when or datetime.utcnow().strftime("%Y%m%d-%H%M%S")
+    marker = "RAW-" if raw else ""
+    return advlogs_dir(repo_root) / f"advanced-{marker}{stamp}-{run_id}.db"
+
+
 def run_dir(repo_root: Path, run_id: str) -> Path:
     return runs_dir(repo_root) / run_id
 
 
 def panes_dir(repo_root: Path, run_id: str) -> Path:
     return run_dir(repo_root, run_id) / "panes"
+
+
+def service_log(repo_root: Path, run_id: str) -> Path:
+    """Structured per-run NDJSON service log (the Phase 1 default-tier stream)."""
+    return run_dir(repo_root, run_id) / "service.log"
 
 
 def tickets_dir(repo_root: Path) -> Path:

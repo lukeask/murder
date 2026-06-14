@@ -22,6 +22,8 @@ from murder.bus.protocol import (
 )
 
 from murder.verdict.escalations.service import EscalationService
+from murder.observability.advanced_log import current_advanced_log
+from murder.observability.log_context import log_context
 from murder.state.persistence import commands as cmd_db
 
 if TYPE_CHECKING:
@@ -56,30 +58,55 @@ class CommandDispatcher:
         if row is None:
             return None
         row_id = str(row["id"])
-        try:
-            event = command_from_row(row)
-        except ValueError as exc:
-            # Quarantine a corrupt row (non-UUID id) so it leaves the pending
-            # set instead of wedging the claim loop. This indicates corruption
-            # or an out-of-band write, so fail loudly and move on.
-            LOGGER.error("dropping corrupt command row: %s", exc)
-            self.fail(row_id, "non-UUID command id", retryable=False)
-            return None
-        return ClaimedCommand(
-            command_id=row_id,
-            event=event,
-        )
+        with log_context(command_id=row_id):
+            try:
+                event = command_from_row(row)
+            except ValueError as exc:
+                # Quarantine a corrupt row (non-UUID id) so it leaves the pending
+                # set instead of wedging the claim loop. This indicates corruption
+                # or an out-of-band write, so fail loudly and move on.
+                LOGGER.error("dropping corrupt command row: %s", exc)
+                self.fail(row_id, "non-UUID command id", retryable=False)
+                return None
+            current_advanced_log().record_command(
+                payload={
+                    "phase": "claim",
+                    "command_id": row_id,
+                    "command": event.model_dump(mode="json"),
+                }
+            )
+            return ClaimedCommand(
+                command_id=row_id,
+                event=event,
+            )
 
     def complete(self, command_id: str, result: dict[str, Any] | None) -> None:
-        cmd_db.complete_command(self.conn, command_id=command_id, result=result)
+        with log_context(command_id=command_id):
+            current_advanced_log().record_command(
+                payload={
+                    "phase": "complete",
+                    "command_id": command_id,
+                    "result": result,
+                }
+            )
+            cmd_db.complete_command(self.conn, command_id=command_id, result=result)
 
     def fail(self, command_id: str, last_error: str, *, retryable: bool = True) -> None:
-        cmd_db.fail_command(
-            self.conn,
-            command_id=command_id,
-            last_error=last_error,
-            retryable=retryable,
-        )
+        with log_context(command_id=command_id):
+            current_advanced_log().record_command(
+                payload={
+                    "phase": "fail",
+                    "command_id": command_id,
+                    "last_error": last_error,
+                    "retryable": retryable,
+                }
+            )
+            cmd_db.fail_command(
+                self.conn,
+                command_id=command_id,
+                last_error=last_error,
+                retryable=retryable,
+            )
 
     def finish(
         self,

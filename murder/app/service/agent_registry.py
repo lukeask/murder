@@ -7,6 +7,7 @@ import contextlib
 from collections.abc import Callable
 from typing import TYPE_CHECKING
 
+from murder.observability.advanced_log import current_advanced_log
 from murder.runtime.agents.base import AgentRole
 from murder.bus import AgentStatus
 
@@ -32,6 +33,14 @@ class AgentRegistry:
                 self._crows[agent.ticket_id] = agent
             elif agent.role == AgentRole.CROW_HANDLER:
                 self._crow_handlers[agent.ticket_id] = agent
+        current_advanced_log().record_agent(
+            payload={
+                "op": "register",
+                "agent_id": agent.id,
+                "role": getattr(getattr(agent, "role", None), "value", None),
+                "ticket_id": agent.ticket_id,
+            }
+        )
         if persist is not None:
             persist(agent)
 
@@ -57,6 +66,15 @@ class AgentRegistry:
             return None
         agent.id = new_agent_id
         self._agents[new_agent_id] = agent
+        current_advanced_log().record_agent(
+            payload={
+                "op": "rename",
+                "agent_id": new_agent_id,
+                "old_agent_id": old_agent_id,
+                "role": getattr(getattr(agent, "role", None), "value", None),
+                "ticket_id": agent.ticket_id,
+            }
+        )
         if persist is not None:
             persist(agent)
         return agent
@@ -76,6 +94,14 @@ class AgentRegistry:
         agent = self._agents.pop(agent_id, None)
         if agent is None:
             return
+        current_advanced_log().record_agent(
+            payload={
+                "op": "reap",
+                "agent_id": agent_id,
+                "role": getattr(getattr(agent, "role", None), "value", None),
+                "ticket_id": agent.ticket_id,
+            }
+        )
         if agent.ticket_id is not None:
             # Only evict the index slot matching THIS agent's role; a crow and
             # its handler share a ticket_id, so reaping one half must not blow
@@ -95,6 +121,13 @@ class AgentRegistry:
             set_dead(db, agent_id, AgentStatus.DEAD.value)
 
     def clear(self) -> None:
+        current_advanced_log().record_agent(
+            payload={
+                "op": "clear",
+                "agent_id": None,
+                "count": len(self._agents),
+            }
+        )
         self._agents.clear()
         self._crows.clear()
         self._crow_handlers.clear()

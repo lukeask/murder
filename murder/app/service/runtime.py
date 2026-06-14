@@ -33,6 +33,15 @@ from murder.app.service.recovery import ReconcileReport, reconcile_agents_vs_tmu
 from murder.app.service.runtime_lifecycle import kill_project_tmux_sessions, shutdown_live_agents
 from murder.bus import Bus, EventFilter, SubscriptionHandle
 from murder.bus.protocol import Entity, StateSnapshotEvent
+from murder.observability.advanced_log import (
+    AdvancedLogBase,
+    NullAdvancedLog,
+    open_advanced_log,
+    resolve_advanced_mode,
+    set_current_advanced_log,
+)
+from murder.observability.log_context import set_run_id
+from murder.observability.logging_setup import configure_logging, resolve_log_level
 from murder.llm.harnesses.versioning import HarnessVersionRegistry
 from murder.runtime.agents.events import AgentEventSink, LoggingAgentEventSink
 from murder.runtime.terminal import tmux
@@ -45,10 +54,19 @@ from murder.state.persistence.agents import (
 from murder.state.persistence.conversation import mark_stale_conversations
 from murder.state.persistence.runs import end_run as _db_end_run
 from murder.state.persistence.runs import insert_run as _db_insert_run
+from murder.state.persistence.runs import (
+    set_run_advanced_log_path as _db_set_run_advanced_log_path,
+)
 from murder.state.persistence.schema import get_db as _db_connect
 from murder.state.persistence.schema import init_db as _db_init_schema
 from murder.state.storage.filesystem import acquire_flock, release_flock
-from murder.state.storage.paths import db_path, lock_path
+from murder.state.storage.paths import (
+    db_path,
+    lock_path,
+    logs_dir,
+    panes_dir,
+    service_log,
+)
 from murder.state.storage.run_id_allocation import allocate_run_id
 
 if TYPE_CHECKING:
@@ -96,6 +114,10 @@ class Runtime:
         self.report_sync: SimpleDocSync | None = None
         self.documents = DocumentAccess(self.repo_root)
         self.startup_reconcile_report: ReconcileReport | None = None
+        # Phase 2 flight recorder. Always present (no-op when off) so Wave 4
+        # boundaries can call ``self.advanced_log.record_*`` unconditionally.
+        self.advanced_log: AdvancedLogBase = NullAdvancedLog()
+        set_current_advanced_log(self.advanced_log)
 
     async def __aenter__(self) -> Runtime:
         await self.start()
@@ -130,8 +152,48 @@ class Runtime:
                     "startup: marked %d in_progress conversation(s) stale", stale_count
                 )
             self.run_id = allocate_run_id(self.repo_root)
+            # Pin the run id into the ambient log context and attach the per-run
+            # structured file handler now that the run dir tree exists.
+            set_run_id(self.run_id)
+            configure_logging(
+                level=resolve_log_level(),
+                log_path=service_log(self.repo_root, self.run_id),
+            )
             snap = json.dumps(self.config.model_dump(mode="json"), default=str)
             _db_insert_run(self.db, self.run_id, snap)
+            # Phase 2: open the opt-in flight recorder. No-op when the flags are
+            # off; otherwise creates a per-session DB under .murder/advlogs/,
+            # writes the session_info row (with the main-DB schema marker), and
+            # stores the pointer on the runs row.
+            mode = resolve_advanced_mode()
+            self.advanced_log = open_advanced_log(self.repo_root, self.run_id, mode)
+            set_current_advanced_log(self.advanced_log)
+            await self.advanced_log.start()
+            self.advanced_log.write_session_info(main_db=self.db)
+            if mode != "off":
+                with contextlib.suppress(Exception):
+                    _db_set_run_advanced_log_path(
+                        self.db, self.run_id, str(getattr(self.advanced_log, "_db_path", ""))
+                    )
+            # Phase 2 (Step 2.6): register REFERENCES (never contents) to the
+            # known large per-run artifacts. Stat is existence-guarded; the
+            # panes dir is referenced as a whole (per-pane logs are created
+            # lazily later). No-op when advanced logging is off.
+            for artifact in (
+                service_log(self.repo_root, self.run_id),
+                logs_dir(self.repo_root) / "supervisor.ndjson",
+                panes_dir(self.repo_root, self.run_id),
+            ):
+                size: int | None = None
+                with contextlib.suppress(OSError):
+                    if artifact.exists():
+                        size = artifact.stat().st_size
+                self.advanced_log.record_artifact_ref(
+                    path=str(artifact),
+                    size=size,
+                    sha=None,
+                    links={"run_id": self.run_id},
+                )
             self.bus = Bus(self.run_id, self.db)
             self._sync = FilesystemSyncSupervisor.attach(
                 self.repo_root,
@@ -190,6 +252,11 @@ class Runtime:
         await shutdown_live_agents(self._agents, graceful=graceful)
         with contextlib.suppress(Exception):
             await kill_project_tmux_sessions(self)
+        # Drain + close the flight recorder before the main DB closes.
+        with contextlib.suppress(Exception):
+            await self.advanced_log.stop()
+        self.advanced_log = NullAdvancedLog()
+        set_current_advanced_log(self.advanced_log)
         if self.run_id and self.db is not None:
             _db_end_run(self.db, self.run_id)
         if self.db is not None:
@@ -301,6 +368,20 @@ class Runtime:
             start_commit=getattr(agent, "start_commit", None),
             worktree_path=str(worktree_path) if worktree_path is not None else None,
             pid=None,
+        )
+        # Phase 2 flight recorder: agent mutation choke point (no-op when off).
+        self.advanced_log.record_state_mutation(
+            payload={
+                "entity": "agent",
+                "agent_id": agent.id,
+                "role": agent.role.value,
+                "ticket_id": agent.ticket_id,
+                "session": agent.session,
+                "status": agent.status.value,
+                "harness": getattr(getattr(agent, "harness", None), "kind", None),
+                "model": getattr(agent, "startup_model", None),
+                "worktree_path": str(worktree_path) if worktree_path is not None else None,
+            }
         )
         self.emit_snapshot(Entity.AGENT, agent.id)
 

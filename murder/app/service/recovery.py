@@ -10,12 +10,15 @@ and passes them in so the function is easily testable without tmux.
 
 from __future__ import annotations
 
+import logging
 import sqlite3
 from dataclasses import dataclass, field
 
 from murder.state.persistence.agents import set_agent_status as _db_set_agent_status
 from murder.bus import TicketStatus
 from murder.work.tickets import lifecycle
+
+LOGGER = logging.getLogger(__name__)
 
 
 @dataclass
@@ -123,7 +126,12 @@ def reconcile_agents_vs_tmux(
                 report.tickets_reset_to_failed.append(tid)
             except Exception:
                 # Already in a terminal state or transition not allowed — skip.
-                pass
+                LOGGER.debug(
+                    "zombie recovery: ticket %s transition to FAILED rejected"
+                    " (likely already terminal)",
+                    tid,
+                    exc_info=True,
+                )
             continue
 
         # Crow IS alive: rehydrate it on startup instead of leaving the ticket

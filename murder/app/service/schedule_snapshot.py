@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import sqlite3
 from datetime import datetime, timedelta, timezone
 
@@ -17,6 +18,8 @@ from murder.app.service.client_api import (
     UsageResetEvent,
 )
 from murder.state.persistence.usage_status import UsageStatusSnapshot
+
+LOGGER = logging.getLogger(__name__)
 
 _PERIOD_MINUTES: dict[tuple[str, str], float] = {
     ("claude_code", "current_session"): 5 * 60.0,
@@ -193,6 +196,11 @@ def _parse_ticket_updated_at(raw: object) -> datetime:
     try:
         return datetime.fromisoformat(str(raw))
     except (TypeError, ValueError):
+        LOGGER.debug(
+            "ticket updated_at not ISO-parseable (raw=%r); using utcnow fallback",
+            raw,
+            exc_info=True,
+        )
         return datetime.utcnow()
 
 
@@ -275,7 +283,14 @@ def _load_gauges(conn: sqlite3.Connection) -> list[UsageGaugeSummary]:
                         reset_at = reset_at.replace(tzinfo=timezone.utc)
                     t_until = max(0.0, (reset_at - now).total_seconds() / 60.0)
                 except (ValueError, TypeError):
-                    pass
+                    LOGGER.debug(
+                        "usage gauge reset_at not ISO-parseable for %s/%s (raw=%r);"
+                        " treating as already-reset",
+                        harness,
+                        window_key,
+                        reset_at_str,
+                        exc_info=True,
+                    )
             t_period = _PERIOD_MINUTES.get((harness, window_key), 0.0)
             gauges.append(
                 UsageGaugeSummary(

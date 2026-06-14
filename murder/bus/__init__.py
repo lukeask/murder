@@ -70,6 +70,8 @@ from murder.bus.protocol import (
     WakeMessage,
     WireMessage,
 )
+from murder.observability.advanced_log import current_advanced_log
+from murder.observability.log_context import log_context
 from murder.work.tickets.status import TicketStatus
 
 if TYPE_CHECKING:
@@ -79,6 +81,25 @@ log = logging.getLogger("murder.bus")
 
 
 Handler = Callable[[Any], Awaitable[None]]
+
+
+def _event_envelope(event: Any) -> dict[str, Any]:
+    """Serialize the FULL event envelope for the advanced flight recorder.
+
+    Unlike the Phase 1 ``events`` persist (which excludes the correlation /
+    envelope fields), the flight recorder captures the bulky, complete envelope.
+    Falls back to ``vars()`` for non-pydantic objects so capture never raises.
+    """
+    dump = getattr(event, "model_dump", None)
+    if callable(dump):
+        try:
+            return dump(mode="json")
+        except Exception:  # pragma: no cover - capture must never crash publish
+            pass
+    try:
+        return dict(vars(event))
+    except TypeError:  # pragma: no cover - no __dict__
+        return {"repr": repr(event)}
 
 
 class SubscriptionHandle:
@@ -105,6 +126,12 @@ class Bus:
         self._lock = asyncio.Lock()
 
     async def publish(self, event: Any) -> None:
+        event_id = getattr(event, "id", None)
+        with log_context(event_id=str(event_id) if event_id is not None else None):
+            current_advanced_log().record_event(payload=_event_envelope(event))
+            await self._publish(event)
+
+    async def _publish(self, event: Any) -> None:
         # Persist before fan-out so handler crashes can't lose events.
         if self._db is not None:
             from murder.state.persistence.commands import insert_command_event

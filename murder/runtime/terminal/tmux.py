@@ -12,11 +12,14 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hashlib
 import os
 import shlex
 import tempfile
 import uuid
 from pathlib import Path
+
+from murder.observability.advanced_log import current_advanced_log
 
 LARGE_PAYLOAD_BYTES = 1024
 PASTE_ENTER_DELAY_S = 0.15
@@ -102,12 +105,18 @@ async def create_session(
         if "duplicate session" in str(exc).lower():
             raise TmuxError(f"session already exists: {name}") from exc
         raise
+    current_advanced_log().record_tmux_frame(
+        session=name,
+        op="create",
+        meta={"width": width, "height": height},
+    )
 
 
 async def kill_session(name: str) -> None:
     """Kill `name`. No-op if it doesn't exist."""
     if await session_exists(name):
         await _tmux("kill-session", "-t", name)
+        current_advanced_log().record_tmux_frame(session=name, op="kill")
 
 
 async def rename_session(old_name: str, new_name: str) -> bool:
@@ -144,7 +153,13 @@ async def list_sessions(prefix: str | None = None) -> list[str]:
     if rc != 0:
         return []  # no server running → no sessions
     names = [line for line in out.splitlines() if line]
-    return [n for n in names if prefix is None or n.startswith(prefix)]
+    result = [n for n in names if prefix is None or n.startswith(prefix)]
+    current_advanced_log().record_tmux_frame(
+        session="*",
+        op="list",
+        meta={"prefix": prefix, "count": len(result)},
+    )
+    return result
 
 
 async def capture_pane(
@@ -168,9 +183,27 @@ async def capture_pane(
             _, out, _ = await _tmux(
                 "capture-pane", "-p", *extra, "-t", name, "-S", f"-{int(lines)}"
             )
+            _record_capture(name, out, lines=int(lines), escapes=escapes)
             return out
     _, out, _ = await _tmux("capture-pane", "-p", *extra, "-t", name, "-S", f"-{int(lines)}")
+    _record_capture(name, out, lines=int(lines), escapes=escapes)
     return out
+
+
+def _record_capture(name: str, out: str, *, lines: int, escapes: bool) -> None:
+    """Flight-recorder seam for a successful pane capture (boundary #2).
+
+    The sha1 of the captured text drives the writer's ChangeGate (~1/s sample +
+    identical-frame dedup). Unconditional + non-blocking by contract.
+    """
+    dedup_hash = hashlib.sha1(out.encode("utf-8", errors="replace")).hexdigest()
+    current_advanced_log().record_tmux_frame(
+        session=name,
+        op="capture",
+        frame=out,
+        meta={"lines": lines, "escapes": escapes},
+        dedup_hash=dedup_hash,
+    )
 
 
 async def send_keys(name: str, text: str, *, literal: bool = True, enter: bool = True) -> None:
@@ -183,6 +216,9 @@ async def send_keys(name: str, text: str, *, literal: bool = True, enter: bool =
     if not literal:
         # Non-literal: caller is sending key names like 'C-c' or 'Enter'.
         await _tmux("send-keys", "-t", name, text)
+        current_advanced_log().record_tmux_frame(
+            session=name, op="send", frame=text, meta={"literal": False, "enter": enter}
+        )
         return
 
     payload = text.encode("utf-8")
@@ -197,6 +233,10 @@ async def send_keys(name: str, text: str, *, literal: bool = True, enter: bool =
         if used_paste_buffer:
             await asyncio.sleep(PASTE_ENTER_DELAY_S)
         await _tmux("send-keys", "-t", name, "Enter")
+
+    current_advanced_log().record_tmux_frame(
+        session=name, op="send", frame=text, meta={"literal": True, "enter": enter}
+    )
 
 
 async def _paste_buffer_bytes(name: str, payload: bytes) -> None:

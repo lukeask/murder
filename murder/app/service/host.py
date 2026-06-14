@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hashlib
 import logging
 import os
 from collections.abc import Awaitable, Callable
@@ -22,6 +23,7 @@ from murder.bus.transport_socket import SocketBusServer, default_socket_path
 from murder.config import Config
 from murder.llm.harnesses.harnesses_doc import write_harnesses_doc
 from murder.llm.harnesses.model_cache import refresh_and_persist_harness_models
+from murder.observability.advanced_log import current_advanced_log
 from murder.runtime.orchestration.orchestrator import Orchestrator
 from murder.state.persistence.commands import get_command_status
 from murder.state.storage.paths import db_path
@@ -351,6 +353,11 @@ class ServiceHost:
                 if not isinstance(favorites, list):
                     favorites = []
             except Exception:  # noqa: BLE001
+                LOGGER.warning(
+                    "tui.load_favorites: failed to read/parse %s; returning empty list",
+                    path,
+                    exc_info=True,
+                )
                 favorites = []
             return {"ok": True, "favorites": [str(item) for item in favorites]}
 
@@ -725,7 +732,12 @@ class ServiceHost:
                     try:
                         await agent.project_once()
                     except tmux.TmuxError:
-                        pass
+                        LOGGER.debug(
+                            "projection tick: tmux error for %s (session=%s)",
+                            agent.id,
+                            getattr(agent, "session", None),
+                            exc_info=True,
+                        )
                     except Exception:
                         if agent.id not in warned_agents:
                             warned_agents.add(agent.id)
@@ -740,6 +752,23 @@ class ServiceHost:
                             )
                     else:
                         warned_agents.discard(agent.id)
+                        # Boundary #5b: record the derived projection/live-state
+                        # for the flight recorder. The dedup_hash over
+                        # (live_state, queued) lets the ChangeGate write only
+                        # when an agent's state actually changed since last tick,
+                        # so idle no-op polls are deduped, not one row each.
+                        live_state = agent._current_live_state()
+                        queued = agent.pending_message
+                        choices = ["<choice-prompt>"] if live_state == "awaiting_approval" else None
+                        current_advanced_log().record_parser(
+                            session=getattr(agent, "session", None),
+                            live_state=live_state,
+                            parsed={"agent_id": agent.id, "queued": queued},
+                            choices=choices,
+                            dedup_hash=hashlib.sha1(
+                                f"{agent.id}|{live_state}|{queued}".encode("utf-8")
+                            ).hexdigest(),
+                        )
             await asyncio.sleep(PROJECTION_INTERVAL_S)
 
     async def _run_transit_poll_loop(self) -> None:
@@ -762,13 +791,24 @@ class ServiceHost:
                     fingerprint = transit_fingerprint(self.repo_root)
                 except Exception:
                     fingerprint = last_fingerprint
-                    LOGGER.debug("transit fingerprint tick failed", exc_info=True)
+                    LOGGER.debug(
+                        "transit fingerprint tick failed for repo %s"
+                        " (keeping last fingerprint=%r)",
+                        self.repo_root,
+                        last_fingerprint,
+                        exc_info=True,
+                    )
                 if fingerprint != last_fingerprint:
                     last_fingerprint = fingerprint
                     try:
                         await runtime.publish_snapshot(Entity.TRANSIT, "*")
                     except Exception:
-                        LOGGER.debug("transit snapshot publish failed", exc_info=True)
+                        LOGGER.debug(
+                            "transit snapshot publish failed for %s (fingerprint=%r)",
+                            Entity.TRANSIT,
+                            fingerprint,
+                            exc_info=True,
+                        )
             await asyncio.sleep(TRANSIT_POLL_INTERVAL_S)
 
     async def run_until_signal(self) -> None:
@@ -815,8 +855,12 @@ class ServiceHost:
             self._service_session_name = None
 
         if self.runtime is not None:
-            with contextlib.suppress(Exception):
+            try:
                 self.runtime._external_stop.clear()
+            except Exception:  # noqa: BLE001
+                LOGGER.debug(
+                    "failed to clear runtime._external_stop during shutdown", exc_info=True
+                )
             await self.runtime.stop()
             self.runtime = None
 

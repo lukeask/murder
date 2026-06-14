@@ -50,6 +50,39 @@ from murder.app.cli._util import repo_root as _repo_root
 LOGGER = logging.getLogger(__name__)
 
 
+def apply_client_log_level(cli_value: str | None) -> None:
+    """Resolve the client log level, propagate it to the env, and configure logging.
+
+    Shared by the bare-``murder`` (TUI) path and ``murder up``. Setting
+    ``MURDER_LOG_LEVEL`` BEFORE the service subprocess is spawned makes the
+    inherited env carry the resolved level into ``serviced`` (which has no
+    ``env=`` arg on its Popen). Then configures stderr-only NDJSON logging for
+    this client process itself.
+    """
+    from murder.observability.logging_setup import configure_logging, resolve_log_level
+
+    resolved = resolve_log_level(cli_value)
+    os.environ["MURDER_LOG_LEVEL"] = resolved
+    configure_logging(level=resolved, log_path=None)
+
+
+def apply_client_advanced_logging(advanced: bool, raw: bool) -> None:
+    """Propagate the advanced flight-recorder flags to the env before spawn.
+
+    Mirrors :func:`apply_client_log_level`: the service subprocess inherits
+    ``os.environ`` (no ``env=`` on its Popen), so setting
+    ``MURDER_ADVANCED_LOGGING`` / ``MURDER_ADVANCED_LOGGING_RAW`` here carries the
+    opt-in into ``serviced``, which reads them to decide whether to open the
+    advanced-log writer. ``--advanced-logging-raw`` implies ``--advanced-logging``.
+    """
+    if raw:
+        advanced = True
+    if advanced:
+        os.environ["MURDER_ADVANCED_LOGGING"] = "1"
+    if raw:
+        os.environ["MURDER_ADVANCED_LOGGING_RAW"] = "1"
+
+
 def _open_existing_db(repo: Path):  # type: ignore[return]
     path = db_path(repo)
     if not path.exists():
@@ -158,6 +191,12 @@ def _run_async_entry(coro) -> None:  # type: ignore[no-untyped-def]
 
 
 async def _run_supervisor_only(tcp_port: int | None = None) -> None:
+    # Configure stderr logging immediately so early-startup records reach the
+    # child's stdout/stderr -> supervisor.ndjson. The per-run service.log file
+    # handler attaches later in Runtime.start once the run dir exists.
+    from murder.observability.logging_setup import configure_logging, resolve_log_level
+
+    configure_logging(level=resolve_log_level(), log_path=None)
     repo = _repo_root()
     cfg = Config.load(repo)
     host = ServiceHost(cfg, repo, socket_path=default_socket_path(repo), tcp_port=tcp_port)

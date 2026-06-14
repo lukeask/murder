@@ -30,6 +30,7 @@ from murder.verdict.policy.scheduler_policy import (
     usage_reset_detected,
 )
 from murder.runtime.workers.base import Worker, WorkerCtx, WorkerSpec
+from murder.observability.advanced_log import current_advanced_log
 
 _VALID_MODES = frozenset({"manual", "autorun_ready", "crow_magic"})
 _VALID_STEERING = frozenset({"auto", "pause", "prefer"})
@@ -552,6 +553,22 @@ class SchedulerWorker(Worker):
         kicked_ticket_id: str | None,
         emit_queue_row: bool = True,
     ) -> None:
+        # Phase 2 flight recorder (no-op when advanced logging is off). Recorded
+        # before the bus guard so the decision lands even when no bus is wired.
+        current_advanced_log().record_decision(
+            payload={
+                "source": "scheduler",
+                "harness": harness,
+                "window_key": window_key,
+                "decision": decision,
+                "usage": usage,
+                "threshold": threshold,
+                "rationale": rationale,
+                "kicked_ticket_id": kicked_ticket_id,
+                "t_until_reset": t_until_reset,
+                "t_period": t_period,
+            }
+        )
         if ctx.bus is None or ctx.run_id is None:
             return
         await ctx.bus.publish(

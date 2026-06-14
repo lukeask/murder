@@ -758,6 +758,49 @@ def _migrate_history_status(conn: sqlite3.Connection) -> None:
         )
 
 
+def _migrate_runs_advanced_log_path(conn: sqlite3.Connection) -> None:
+    """Add the nullable runs.advanced_log_path pointer (Phase 2, Step 2.9).
+
+    The main DB stores ONLY the pointer to the advanced flight-recorder DB,
+    never the bulky records themselves. Idempotent: the CREATE TABLE in
+    SCHEMA_SQL covers fresh DBs; this handles DBs created before the column.
+    """
+    existing = conn.execute(
+        "SELECT 1 FROM pragma_table_info('runs') WHERE name = 'advanced_log_path'"
+    ).fetchone()
+    if existing is None:
+        conn.execute("ALTER TABLE runs ADD COLUMN advanced_log_path TEXT")
+
+
+def current_schema_marker(conn: sqlite3.Connection) -> str:
+    """Return a defensible main-DB schema/migration version string.
+
+    There is no single integer schema version in murder.db; the closest stable
+    markers are the ``events.schema_version`` column default and the presence of
+    the additive ``runs.advanced_log_path`` pointer. The advanced log's
+    ``session_info`` row records this so a captured session can be tied back to
+    the schema that produced it. Tolerant of partial schemas (returns
+    ``"unknown"`` fields rather than raising).
+    """
+    try:
+        row = conn.execute(
+            "SELECT schema_version FROM events ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        events_ver = row["schema_version"] if row is not None else 1
+    except sqlite3.Error:
+        events_ver = "unknown"
+    try:
+        has_ptr = (
+            conn.execute(
+                "SELECT 1 FROM pragma_table_info('runs') WHERE name = 'advanced_log_path'"
+            ).fetchone()
+            is not None
+        )
+    except sqlite3.Error:
+        has_ptr = False
+    return f"events.schema_version={events_ver};runs.advanced_log_path={has_ptr}"
+
+
 def _migrate_conversation_store(conn: sqlite3.Connection) -> None:
     """Add conversations + conversation_blocks tables (Phase 1.b JSON store).
 

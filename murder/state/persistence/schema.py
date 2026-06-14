@@ -20,7 +20,8 @@ CREATE TABLE IF NOT EXISTS runs (
     run_id            TEXT PRIMARY KEY,
     started_at        TEXT NOT NULL,
     ended_at          TEXT,
-    config_snapshot   TEXT NOT NULL
+    config_snapshot   TEXT NOT NULL,
+    advanced_log_path TEXT
 );
 
 CREATE TABLE IF NOT EXISTS tickets (
@@ -494,6 +495,7 @@ def init_db(conn: sqlite3.Connection) -> None:
         _migrate_plans_single_master,
         _migrate_repair_plans_dangling_fk,
         _migrate_role_names,
+        _migrate_runs_advanced_log_path,
         _migrate_scheduler_steering,
         _migrate_ticket_archived_status,
         _migrate_ticket_draft_status,
@@ -531,6 +533,7 @@ def init_db(conn: sqlite3.Connection) -> None:
     _migrate_map_summaries(conn)
     _migrate_scheduler_steering(conn)
     _migrate_history_status(conn)
+    _migrate_runs_advanced_log_path(conn)
     ensure_notetaker_context_row(conn)
 
 
