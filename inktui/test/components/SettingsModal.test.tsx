@@ -457,8 +457,8 @@ describe('SettingsModal', () => {
     const frame = lastFrame() ?? '';
     expect(frame).toContain('cheap');
     expect(frame).toContain('smart');
-    // The smart built-in is openrouter/anthropic/claude-sonnet-4-6.
-    expect(frame).toContain('anthropic/claude-sonnet-4-6');
+    // The smart built-in is cerebras/openai/gpt-oss-120b.
+    expect(frame).toContain('openai/gpt-oss-120b');
   });
 
   it('role radio: selecting a tier commits llm.roles.<role>', async () => {
