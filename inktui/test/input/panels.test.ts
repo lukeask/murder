@@ -19,7 +19,7 @@ describe('panels mapping', () => {
     expect(panelForDigit('8')).toBe('transit');
     expect(DIGIT_TO_PANEL[8]).toBe('transit');
     const placement = PANELS.find((p) => p.id === 'transit');
-    expect(placement).toEqual({ id: 'transit', digit: 8, region: 'right' });
+    expect(placement).toEqual({ id: 'transit', digit: 8, region: 'right', label: 'tree' });
   });
 
   it('places history after tickets and transit between usage and crows in screen order', () => {

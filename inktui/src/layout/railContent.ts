@@ -110,17 +110,23 @@ const USAGE_RESERVE_WIDTH = Math.max(
  * Stage's ≥60% floor (the selector then shows fewer stations on a tight terminal). Floored at
  * {@link MIN_USAGE_WIDTH} (degenerate guard; the reserve always exceeds it).
  */
-const TRANSIT_RESERVE_WIDTH = Math.max(MIN_USAGE_WIDTH, 42);
+const TRANSIT_RESERVE_WIDTH = Math.max(MIN_USAGE_WIDTH, 50);
 
-/** Transit's natural content HEIGHT in lines (L4b — portrait): the 2 Pane borders + 2 lines per lane
- * (railway + age) + 1 blank spacer + the fixed {@link ../components/TransitPanel.tsx INFO_LINES}=4
- * info section. The lane count is read live by the hook. Pure. */
+/** Mirror of {@link ../selectors/transitSelectors.ts INFO_BODY_LINES} (the wrapped-message reserve);
+ * kept as a local constant so this height math stays a pure, hook-free function. */
+const TRANSIT_INFO_BODY_LINES = 6;
+
+/** Git Tree's natural content HEIGHT in lines (L4b — portrait): the 2 Pane borders + 1 shared ruler
+ * line + 1 line per lane (the swimlane row) + 1 blank spacer + the fixed info section (the sha line +
+ * {@link ../selectors/transitSelectors.ts INFO_BODY_LINES} wrapped message lines). The lane count is
+ * read live by the hook. Pure. */
 export function transitNaturalHeight(laneCount: number): number {
   if (laneCount <= 0) {
     return PANE_BORDER_LINES + 1; // "no branches" chrome line
   }
-  const TRANSIT_INFO_LINES = 4;
-  return PANE_BORDER_LINES + laneCount * 2 + 1 + TRANSIT_INFO_LINES;
+  const RULER_LINE = 1;
+  const INFO_LINES = 1 + TRANSIT_INFO_BODY_LINES; // sha line + wrapped message reserve
+  return PANE_BORDER_LINES + RULER_LINE + laneCount + 1 + INFO_LINES;
 }
 
 // ---------------------------------------------------------------------------
@@ -534,7 +540,7 @@ export function useRailContent(side: 'left' | 'right'): RailContent {
     naturalHeight = Math.max(naturalHeight, usageNaturalHeight(usageView.groups));
   }
   if (visible.has('transit')) {
-    naturalWidth = Math.max(naturalWidth, transitNaturalWidth(), titleRowWidth('Transit'));
+    naturalWidth = Math.max(naturalWidth, transitNaturalWidth(), titleRowWidth('Git Tree'));
     naturalHeight = Math.max(naturalHeight, transitNaturalHeight(transit.lanes.length));
   }
   // Floor a present rail's WIDTH at its smallest legible form (R7) — same reasoning as the left side;
