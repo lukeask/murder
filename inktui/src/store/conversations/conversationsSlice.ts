@@ -122,6 +122,14 @@ export interface ConversationsState {
    * with the favorites default to decide which panes the Stage tiles.
    */
   readonly paneOverrides: ReadonlyMap<string, boolean>;
+  /**
+   * Per-agent `/clear` floor (chat-input overhaul, user ask #5): the max numeric block id present
+   * when the user ran `/clear`. The render selector ({@link ../../selectors/conversationsSelectors.js
+   * selectConversationView}) hides blocks at or below this floor, so the local view clears even though
+   * the authoritative snapshot re-pulls the (durably-logged) old blocks on reconnect. Absent entry =
+   * no floor (show everything). The old chat is never lost — it lives server-side.
+   */
+  readonly clearedFloors: Readonly<Record<string, number>>;
 }
 
 /** Initial (empty) state — no transcripts, no active pane. */
@@ -130,6 +138,7 @@ export const initialConversationsState: ConversationsState = {
   meta: {},
   activePaneAgentId: null,
   paneOverrides: new Map<string, boolean>(),
+  clearedFloors: {},
 };
 
 /**

@@ -407,6 +407,7 @@ class ServiceHost:
                 "modifier": tui.modifier,
                 "key_overrides": dict(tui.key_overrides),
                 "pane_gap": tui.pane_gap,
+                "vim_mode": tui.vim_mode,
                 # --- harness overrides + effective values ---
                 "collaborator_harness": collab_override,
                 "crow_harnesses": _crow_harnesses_override(cfg),
@@ -459,8 +460,9 @@ class ServiceHost:
                 "modifier": cfg.tui.modifier,
                 "key_overrides": dict(cfg.tui.key_overrides),
                 "pane_gap": cfg.tui.pane_gap,
+                "vim_mode": cfg.tui.vim_mode,
             }
-            for key in ("theme", "modifier", "key_overrides", "pane_gap"):
+            for key in ("theme", "modifier", "key_overrides", "pane_gap", "vim_mode"):
                 if key in partial:
                     tui_merged[key] = partial[key]
             cfg.tui = TuiUserConfig.model_validate(tui_merged)

@@ -164,6 +164,8 @@ type Row =
   | { readonly kind: 'modifier'; readonly value: Modifier }
   | { readonly kind: 'theme'; readonly value: ThemeId }
   | { readonly kind: 'gap'; readonly value: number }
+  // Vim mode — a radio over on (true) / off (false).
+  | { readonly kind: 'vim'; readonly value: boolean }
   // Harnesses — collaborator radio (`value: null` = the "(default)" reset row); crow checkbox pool
   // (`value: null` = the "reset to default" row).
   | { readonly kind: 'collaborator'; readonly value: string | null }
@@ -195,6 +197,10 @@ function buildRows(llm: LlmWire): readonly Row[] {
   for (const value of GAP_OPTIONS) {
     rows.push({ kind: 'gap', value });
   }
+  // --- Vim mode ---
+  rows.push({ kind: 'header', label: 'Vim mode' });
+  rows.push({ kind: 'vim', value: true });
+  rows.push({ kind: 'vim', value: false });
   // --- Harnesses ---
   rows.push({ kind: 'header', label: 'Collaborator harness' });
   rows.push({ kind: 'collaborator', value: null }); // the "(default)" reset row
@@ -261,6 +267,8 @@ interface SettingsState {
   theme: ThemeId;
   /** The draft pane-gap (committed via `update` on selection — the layout reacts at once). */
   paneGap: number;
+  /** The draft vim-mode flag (committed via `update` on selection). */
+  vimMode: boolean;
   /** The draft per-action key overrides (`ActionId -> key char`). */
   overrides: Record<string, string>;
   /** The draft collaborator-harness override (`null` = use the effective default). */
@@ -323,6 +331,7 @@ export function settingsMode(
     readonly modifier: Modifier;
     readonly theme: ThemeId;
     readonly paneGap: number;
+    readonly vimMode?: boolean;
     readonly keyOverrides: Record<string, string>;
     readonly collaboratorHarness?: string | null;
     readonly effectiveCollaborator?: string;
@@ -344,6 +353,7 @@ export function settingsMode(
     persistedTheme: current.theme,
     theme: current.theme,
     paneGap: current.paneGap,
+    vimMode: current.vimMode ?? false,
     overrides: { ...current.keyOverrides },
     collaboratorHarness: current.collaboratorHarness ?? null,
     effectiveCollaborator: current.effectiveCollaborator ?? 'claude_code',
@@ -410,6 +420,15 @@ export function settingsMode(
   function selectGap(value: number): void {
     s.paneGap = value;
     void actions.update({ pane_gap: value });
+    s.notice = null;
+    refresh();
+  }
+
+  /** Commit the draft vim-mode flag (optimistic update). WS-E reads `settings.vimMode` to switch the
+   * chat input between plain and vim editing. */
+  function selectVim(value: boolean): void {
+    s.vimMode = value;
+    void actions.update({ vim_mode: value });
     s.notice = null;
     refresh();
   }
@@ -557,6 +576,9 @@ export function settingsMode(
         break;
       case 'gap':
         selectGap(row.value);
+        break;
+      case 'vim':
+        selectVim(row.value);
         break;
       case 'collaborator':
         selectCollaborator(row.value);
@@ -825,6 +847,8 @@ function rowKey(row: Row): string {
       return `theme:${row.value}`;
     case 'gap':
       return `gap:${row.value}`;
+    case 'vim':
+      return `vim:${row.value}`;
     case 'collaborator':
       return `collab:${row.value ?? 'default'}`;
     case 'crow':
@@ -915,6 +939,21 @@ function RowView({
         <Text color={theme.muted}>
           {'  '}
           {preview}
+        </Text>
+      </Box>
+    );
+  }
+
+  if (row.kind === 'vim') {
+    const selected = row.value === s.vimMode;
+    const mark = selected ? '(•) ' : '( ) ';
+    const color = focused ? theme.warning : theme.text;
+    return (
+      <Box flexShrink={0}>
+        <Text color={color} bold={focused}>
+          {cursor}
+          {mark}
+          {row.value ? 'on' : 'off'}
         </Text>
       </Box>
     );

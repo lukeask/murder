@@ -5,7 +5,9 @@
  */
 
 import { createBindingsStore } from './bindingsStore.js';
+import { createChatHistoryStore } from './chatHistoryStore.js';
 import { createChatInputStore } from './chatInputStore.js';
+import { createChatVimStore } from './chatVimStore.js';
 import { createFocusStore, type FocusId } from './focusStore.js';
 import { createKeymapRegistry } from './keymapRegistry.js';
 import { createModeStore } from './modeStore.js';
@@ -19,6 +21,10 @@ export interface InputStoreBundle {
   readonly keymaps: ReturnType<typeof createKeymapRegistry>;
   readonly modes: ReturnType<typeof createModeStore>;
   readonly chatInput: ReturnType<typeof createChatInputStore>;
+  /** Murder-wide sent-message history corpus (chat-input overhaul, user ask #4). */
+  readonly chatHistory: ReturnType<typeof createChatHistoryStore>;
+  /** Vim editing mode state + murder-wide yank register (chat-input overhaul, user ask #3). */
+  readonly chatVim: ReturnType<typeof createChatVimStore>;
   readonly bindings: ReturnType<typeof createBindingsStore>;
 }
 
@@ -35,8 +41,12 @@ export function createInputStores(
   const keymaps = createKeymapRegistry();
   const modes = createModeStore(focus);
   const chatInput = createChatInputStore();
+  // Murder-wide history corpus + vim state: one instance each so send-history recall and the yank
+  // register span every chat target (yank in one crow's draft, paste into another's).
+  const chatHistory = createChatHistoryStore();
+  const chatVim = createChatVimStore();
   // The bindings store starts at today's behavior (alt modifier, ctrl unavailable, no overrides); a
   // later settings phase mutates it from the settings RPC bridge.
   const bindings = createBindingsStore();
-  return { panels, focus, keymaps, modes, chatInput, bindings };
+  return { panels, focus, keymaps, modes, chatInput, chatHistory, chatVim, bindings };
 }

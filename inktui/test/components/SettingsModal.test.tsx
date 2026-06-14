@@ -211,6 +211,18 @@ describe('SettingsModal', () => {
     expect(patches).toContainEqual({ pane_gap: 1 });
   });
 
+  it('selecting the vim-mode "on" row commits update({ vim_mode: true })', async () => {
+    const { stores, patches, enter } = setup();
+    const { lastFrame, stdin } = render(<Harness stores={stores} />);
+    enter();
+    await tick();
+    // The Vim mode radio sits right after Pane gap; walk down until the focused row is "on".
+    await walkUntilFocused(stdin, lastFrame, 'on');
+    stdin.write('\r');
+    await tick();
+    expect(patches).toContainEqual({ vim_mode: true });
+  });
+
   it('ctrl/both are disabled with a notice when kitty is unsupported', async () => {
     capsStore.getState().setKittySupported(false);
     const { stores, patches, enter } = setup();

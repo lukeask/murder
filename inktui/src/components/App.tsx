@@ -57,20 +57,24 @@ import { useOrientation } from '../hooks/useOrientation.js';
 import { type TerminalEvents, useRootInput } from '../hooks/useRootInput.js';
 import { useTerminalSize } from '../hooks/useTerminalSize.js';
 import type { ActionId } from '../input/bindings.js';
+import { visualDown, visualUp } from '../input/chatBuffer.js';
 import { expandSpans, spanIds } from '../input/chatInputStore.js';
+import { reduceVimNormal } from '../input/chatVimReducer.js';
 import { readClipboardImage } from '../input/clipboardImage.js';
 import { type CommandCtx, dispatchCommand } from '../input/commandDispatch.js';
 import type { ChatInputHandler } from '../input/dispatcher.js';
-import { type FocusId, selectEffectiveFocus } from '../input/focusStore.js';
+import { CHAT_FOCUS, type FocusId, selectEffectiveFocus } from '../input/focusStore.js';
 import { selectActiveMode } from '../input/modeStore.js';
 import type { PanelId } from '../input/panels.js';
 import { deriveAgentIdentity } from '../selectors/agentIdentity.js';
 import {
   isChatPaneOpen,
+  isFreeformChoiceSelected,
   selectActiveAgentId,
   selectConversationMeta,
   selectCycledTarget,
   selectLiveChoicePrompt,
+  selectUserHistory,
 } from '../selectors/conversationsSelectors.js';
 import { submitCommand } from '../store/commandSubmit.js';
 import { createDialogActions } from '../store/dialogs/dialogActions.js';
@@ -261,12 +265,74 @@ export function choiceKeyFor(
   return null;
 }
 
+/**
+ * The chat box content width in cells, for {@link ../input/chatBuffer.js layout}/visualUp/Down. Read
+ * from the chat focusable's measured rect (`useMeasureFocus(CHAT_FOCUS)` records it in the focus
+ * store): content width = rect width − 2 (round border) − 2 (paddingX:1 both sides). Falls back to a
+ * `process.stdout.columns`-derived width (cols − 4) when the rect is unmeasured (boot, non-TTY), with
+ * an 80→76 default when even that is unknown. Always ≥1 so `layout` is well-defined.
+ */
+function chatContentWidth(focus: InputStores['focus']): number {
+  const rect = focus.getState().rects.get(CHAT_FOCUS);
+  const fromRect = rect !== undefined && rect.width > 0 ? rect.width - 4 : 0;
+  if (fromRect >= 1) {
+    return fromRect;
+  }
+  const cols = process.stdout.columns ?? 80;
+  return Math.max(1, cols - 4);
+}
+
 export function makeChatInputHandler(
   chatInput: InputStores['chatInput'],
   appStore: AppStoreApi,
   imageDraft: ImageDraftStoreApi,
   commandCtx: CommandCtx,
+  chatHistory: InputStores['chatHistory'],
+  chatVim: InputStores['chatVim'],
+  focus: InputStores['focus'],
 ): ChatInputHandler {
+  /** Record a just-sent message into the murder-wide history ring and reset history-nav. Called at
+   * every send boundary (conversations.send AND dispatchCommand text-send). */
+  const recordSend = (message: string): void => {
+    chatHistory.getState().record(message);
+    // The buffer is cleared by the send path; clearing also resets historyIndex/stashedDraft, so the
+    // next `up` starts fresh from the newest entry.
+  };
+
+  /** Apply a vim effect (from {@link ../input/chatVimReducer.js reduceVimNormal}) to the chat + vim
+   * stores. The reducer returns the pending operator to write back (it does NOT hold it), so every
+   * branch sets/clears pending explicitly. (Per the spec, `cw`/`cc` do not populate the register —
+   * the reducer's enterInsert effect carries no slice; accepted for v1.) */
+  const applyVimEffect = (effect: ReturnType<typeof reduceVimNormal>): void => {
+    const cin = chatInput.getState();
+    const vim = chatVim.getState();
+    switch (effect.kind) {
+      case 'buffer':
+        cin.setBuffer(effect.state);
+        vim.setPending(null);
+        break;
+      case 'enterInsert':
+        cin.setBuffer(effect.state);
+        vim.setSubmode('insert');
+        vim.setPending(null);
+        break;
+      case 'setRegister':
+        cin.setBuffer(effect.state);
+        vim.setRegister(effect.register);
+        vim.setPending(null);
+        break;
+      case 'paste':
+        cin.setBuffer(effect.state);
+        vim.setPending(null);
+        break;
+      case 'pending':
+        vim.setPending(effect.pending);
+        break;
+      case 'none':
+        break;
+    }
+  };
+
   return {
     handleKey(input, key): boolean {
       // Multiple-choice takeover: when the active target's transcript ends in a LIVE choice_prompt
@@ -280,6 +346,48 @@ export function makeChatInputHandler(
         if (agentId !== null) {
           const livePrompt = selectLiveChoicePrompt(state.conversations, agentId);
           if (livePrompt !== null) {
+            // Freeform "Type something." takeover: edit a LOCAL buffer (instant echo, no per-key
+            // round-trip) and flush the whole answer on Enter as ONE ordered literal send. Routing
+            // every keystroke through `agent.send_key` was slow (one tmux round-trip per char) and
+            // reordered the text under fast typing — the async sends raced. The local buffer reuses
+            // the chat field (free during the takeover); the same predicate drives the render.
+            if (isFreeformChoiceSelected(livePrompt)) {
+              if (key.return === true) {
+                // One literal send of the full answer + a newline submits CC's inline field — the
+                // exact pattern the `/` passthrough uses (atomic, ordered).
+                const buffer = chatInput.getState().text;
+                void state.actions.conversations.sendKey(agentId, `${buffer}\n`, true);
+                chatInput.getState().clear();
+                return true;
+              }
+              if (key.backspace === true || key.delete === true) {
+                chatInput.getState().backspace();
+                return true;
+              }
+              // Printable (incl. space and digits) → local echo. Checked before the nav fallback so a
+              // space lands in the buffer instead of moving the dialog cursor.
+              if (
+                input.length > 0 &&
+                key.ctrl !== true &&
+                key.meta !== true &&
+                key.escape !== true
+              ) {
+                chatInput.getState().append(input);
+                return true;
+              }
+              // Navigation / cancel leaves the field: drop the local draft and forward the key so the
+              // live pane moves the cursor / switches question tab / cancels.
+              chatInput.getState().clear();
+              const navForward = choiceKeyFor(input, key);
+              if (navForward !== null) {
+                void state.actions.conversations.sendKey(
+                  agentId,
+                  navForward.key,
+                  navForward.literal,
+                );
+              }
+              return true; // consume: stay inside the dialog rather than leaking to chat send
+            }
             const forward = choiceKeyFor(input, key);
             if (forward === null) {
               return false;
@@ -299,6 +407,12 @@ export function makeChatInputHandler(
             }
           }
         }
+      }
+      // shift+enter → insert a newline at the cursor (user ask #1). Plain Enter still sends (below).
+      // Checked before the send branch so a held Shift never submits. Consumed.
+      if (key.return === true && key.shift === true) {
+        chatInput.getState().insert('\n');
+        return true;
       }
       // Enter → send the buffer to the active agent, then clear. Always consumed (Enter is chat's).
       //
@@ -332,6 +446,9 @@ export function makeChatInputHandler(
             if (!dispatchCommand(message, agentId, commandCtx)) {
               if (agentId !== null) {
                 void appStore.getState().actions.conversations.send(agentId, message);
+                // Send boundary (user ask #4): record the sent message in the murder-wide recall ring.
+                // `clear()` below resets history-nav (historyIndex=null, stashedDraft=null).
+                recordSend(message);
               }
             }
           }
@@ -356,20 +473,95 @@ export function makeChatInputHandler(
         });
         return true;
       }
-      // Backspace/Delete → delete at the trailing edge. A trailing image span is removed whole and its
-      // id returned, so we drop its imageDraftStore entry (cancel/ignore the in-flight upload). Consumed.
-      if (key.backspace === true || key.delete === true) {
+      // VIM MODE (user ask #3): when enabled, route normal-mode keys through the reducer; insert mode
+      // behaves like the non-vim text field plus Esc→normal. Toggling vim on starts in NORMAL (the
+      // store's initial submode), so the first keystroke after enabling is a command, not text.
+      const vimOn = appStore.getState().settings.vimMode;
+      if (vimOn) {
+        const vimState = chatVim.getState();
+        if (vimState.submode === 'normal') {
+          // j/k are VISUAL up/down (the reducer is width-agnostic and returns LOGICAL motion); when no
+          // operator is pending we remap them to chatBuffer.visualUp/visualDown at the known width.
+          if (vimState.pending === null && (input === 'j' || input === 'k')) {
+            const width = chatContentWidth(focus);
+            const buf = chatInput.getState().buffer;
+            const moved = input === 'k' ? visualUp(buf, width) : visualDown(buf, width);
+            if (moved !== null) {
+              chatInput.getState().setBuffer(moved);
+            }
+            return true;
+          }
+          const effect = reduceVimNormal(
+            chatInput.getState().buffer,
+            input,
+            key,
+            vimState.pending,
+            vimState.register,
+          );
+          applyVimEffect(effect);
+          return true;
+        }
+        // submode === 'insert': Esc → normal. Everything else falls through to the shared text-entry
+        // logic below (insert/backspace/arrows behave exactly like non-vim).
+        if (key.escape === true) {
+          chatVim.getState().setSubmode('normal');
+          return true;
+        }
+      }
+
+      // --- Shared text-entry logic (non-vim, and vim INSERT mode) ---
+      const width = chatContentWidth(focus);
+      // Horizontal motion + line motion.
+      if (key.leftArrow === true) {
+        chatInput.getState().moveLeft();
+        return true;
+      }
+      if (key.rightArrow === true) {
+        chatInput.getState().moveRight();
+        return true;
+      }
+      // Up → visual-up; on the TOP visual row (visualUp null) recall older history.
+      if (key.upArrow === true) {
+        const moved = visualUp(chatInput.getState().buffer, width);
+        if (moved !== null) {
+          chatInput.getState().setBuffer(moved);
+        } else {
+          chatInput.getState().historyPrev(chatHistory.getState().entries);
+        }
+        return true;
+      }
+      // Down → visual-down; on the BOTTOM visual row (visualDown null) walk forward through history
+      // (restoring the stashed live draft at the newest end).
+      if (key.downArrow === true) {
+        const moved = visualDown(chatInput.getState().buffer, width);
+        if (moved !== null) {
+          chatInput.getState().setBuffer(moved);
+        } else {
+          chatInput.getState().historyNext(chatHistory.getState().entries);
+        }
+        return true;
+      }
+      // Backspace → delete before the cursor; Delete → delete at the cursor. A whole image span is
+      // removed at its edge and its id returned, so we drop its imageDraftStore entry. Consumed.
+      if (key.backspace === true) {
         const removedId = chatInput.getState().backspace();
         if (removedId !== null) {
           imageDraft.getState().drop(removedId);
         }
         return true;
       }
-      // A printable character (no modifier, single visible char) → append. Consumed.
+      if (key.delete === true) {
+        const removedId = chatInput.getState().deleteForward();
+        if (removedId !== null) {
+          imageDraft.getState().drop(removedId);
+        }
+        return true;
+      }
+      // A printable character (no modifier, single visible char) → insert at the cursor. Consumed.
       // Reject empty/modified input: those are control keys the chat field doesn't own (return
       // `false` so the dispatcher doesn't falsely report them handled).
       if (input.length > 0 && key.ctrl !== true && key.meta !== true && key.escape !== true) {
-        chatInput.getState().append(input);
+        chatInput.getState().insert(input);
         return true;
       }
       return false;
@@ -450,7 +642,7 @@ function Shell({
    * root input loop subscribes to it; omitted in smoke/tests (no shim → no side-channel chords). */
   readonly terminalEvents?: TerminalEvents | undefined;
 }): JSX.Element {
-  const { modes, chatInput, bindings, keymaps, focus } = useInputStores();
+  const { modes, chatInput, chatHistory, chatVim, bindings, keymaps, focus } = useInputStores();
   const appStore = useAppStoreApi();
   const bus = useBusClient();
   const loadFavorites = useAppStore((s) => s.actions.favorites.load);
@@ -544,6 +736,20 @@ function Shell({
     void loadSettings();
   }, [loadSettings]);
 
+  // Chat-input overhaul (user ask #4): seed the murder-wide send-history recall ring from the
+  // authoritative conversations snapshot, and re-seed whenever the transcripts ref-change (a fresh
+  // snapshot on reconnect, or live user blocks arriving). `seed` replaces the ring wholesale and is
+  // self-healing against the optimistic `record` the handler does at each send. Primed once at mount
+  // from the current slice, then on every transcripts change.
+  useEffect(() => {
+    chatHistory.getState().seed(selectUserHistory(appStore.getState().conversations));
+    return appStore.subscribe((state, prev) => {
+      if (state.conversations.transcripts !== prev.conversations.transcripts) {
+        chatHistory.getState().seed(selectUserHistory(state.conversations));
+      }
+    });
+  }, [appStore, chatHistory]);
+
   // Phase 3/5: the settings → store bridges. The settings slice owns the persisted preferences; the
   // input layer's bindingsStore and the global themeStore must stay bus-free (neither knows the bus
   // exists), so this one subscription mirrors the relevant fields onto them whenever they change. It
@@ -620,6 +826,7 @@ function Shell({
         modifier: settings.modifier,
         theme,
         paneGap: settings.paneGap,
+        vimMode: settings.vimMode,
         keyOverrides: settings.keyOverrides as Record<string, string>,
         collaboratorHarness: settings.collaboratorHarness,
         effectiveCollaborator: settings.effectiveCollaboratorHarness,
@@ -793,8 +1000,11 @@ function Shell({
   //  - `dismiss` is omitted for v0: the panel architecture has no uniform "dismiss" concept yet, so
   //    `:dismiss` no-ops with a toast (see commandDispatch). Wire it when one exists.
   const commandCtx: CommandCtx = {
-    sendKey: (agentId, key, literal) => {
-      void appStore.getState().actions.conversations.sendKey(agentId, key, literal);
+    sendKey: (agentId, key, literal, enter) => {
+      void appStore.getState().actions.conversations.sendKey(agentId, key, literal, enter);
+    },
+    clearTranscript: (agentId) => {
+      appStore.getState().actions.conversations.clearTranscript(agentId);
     },
     openHelp: keyHelpHandler,
     captureNote: (text) => {
@@ -827,7 +1037,15 @@ function Shell({
       murderConfirm: murderConfirmHandler,
       murderCancel: () => murderConfirmStore.getState().clear(),
       closePane: closePaneHandler,
-      chatInput: makeChatInputHandler(chatInput, appStore, imageDraft, commandCtx),
+      chatInput: makeChatInputHandler(
+        chatInput,
+        appStore,
+        imageDraft,
+        commandCtx,
+        chatHistory,
+        chatVim,
+        focus,
+      ),
     },
     terminalEvents,
   );

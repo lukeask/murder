@@ -135,6 +135,20 @@ export function translate(token: CsiKeyToken): Translation {
     return bytesOf(0x1b);
   }
 
+  // Enter (0x0d). A *modified* Enter (shift/alt/ctrl) has no legacy byte that preserves the modifier —
+  // a bare 0x0d loses it, so the legacy/printable paths below would drop it entirely (code 13 is not
+  // printable). Route it through the side channel like the ctrl+m collision, so it reaches the
+  // dispatcher as `{ return: true, <mods> }`. This is what makes **shift+enter** arrive at the chat
+  // field as `{ return:true, shift:true }` for newline insertion (chat-input overhaul, user ask #1).
+  // Plain Enter (no modifier) stays the legacy CR byte so Ink's normal return path is untouched.
+  // (ctrl+Enter resolves to `{ ctrl, return }`, the same chord as ctrl+m — the existing murder arm.)
+  if (code === 13) {
+    if (shift || alt || ctrl) {
+      return chordOf('return', { ctrl, alt, shift });
+    }
+    return bytesOf(0x0d);
+  }
+
   if (ctrl) {
     // ctrl+digit and ctrl+space have no legacy encoding → side channel.
     if ((code >= 0x30 && code <= 0x39) || code === 0x20) {

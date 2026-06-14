@@ -59,8 +59,9 @@
 
 import type { Key } from 'ink';
 import { DEFAULT_BINDINGS, type ResolvedBindings } from './bindings.js';
-import { CHAT_FOCUS, type FocusId, isStagePaneId } from './focusStore.js';
+import { CHAT_FOCUS, type FocusId } from './focusStore.js';
 import type { Direction } from './geometry.js';
+import { GLOBAL_SCOPE, inFocusScope } from './globalScope.js';
 import { matchKeymap, type PanelKeymap } from './keymap.js';
 import type { Mode } from './modeStore.js';
 import { type PanelId, panelForDigit } from './panels.js';
@@ -250,8 +251,8 @@ function dispatchGlobalChord(
   // arms with its own LOCAL cursor row (rule 1 — the global layer cannot see panel cursors; the same
   // decline-to-panel pattern as `global.spawn`'s chat-only guard).
   if (bindings.matches('global.murder', input, key)) {
-    if (focusedId === 'crows') {
-      return false;
+    if (!inFocusScope(GLOBAL_SCOPE['global.murder'], focusedId)) {
+      return false; // crows focus: fall to the panel keymap, which arms with its local cursor row
     }
     handlers.murder();
     return true;
@@ -277,7 +278,7 @@ function dispatchGlobalChord(
   // their own); a later agent must not move this onto per-pane keymaps. ctrl+q carries ctrl, which plain
   // typing never does, so checking it ahead of typing is safe.
   if (bindings.matches('global.closePane', input, key)) {
-    if (isStagePaneId(focusedId)) {
+    if (inFocusScope(GLOBAL_SCOPE['global.closePane'], focusedId)) {
       handlers.closePane();
       return true;
     }
@@ -288,7 +289,10 @@ function dispatchGlobalChord(
   // is reachable in every terminal). It claims the event ONLY when chat is NOT focused, so a literal
   // `?` typed into the chat field is never stolen (chat-focused `?` falls through to layer 2). Checked
   // before the command-modifier gate precisely because it is a plain key, not a command chord.
-  if (focusedId !== CHAT_FOCUS && bindings.matches('global.keyHelp', input, key)) {
+  if (
+    inFocusScope(GLOBAL_SCOPE['global.keyHelp'], focusedId) &&
+    bindings.matches('global.keyHelp', input, key)
+  ) {
     handlers.keyHelp();
     return true;
   }
@@ -306,7 +310,7 @@ function dispatchGlobalChord(
   // because away from chat the same `alt+h`/`alt+l` are geometric panel nav (handled just below by
   // VIM_NAV) and `alt+w` is unbound. Checked before VIM_NAV so the cycle chords win over nav while
   // typing a message.
-  if (focusedId === CHAT_FOCUS) {
+  if (inFocusScope(GLOBAL_SCOPE['global.cycleTargetPrev'], focusedId)) {
     if (bindings.matches('global.cycleTargetPrev', input, key)) {
       handlers.cycleTargetPrev();
       return true;
@@ -347,7 +351,7 @@ function dispatchGlobalChord(
     // otherwise (a list panel) decline (return false → falls through to layer 3, where panels no
     // longer bind the spawn chord, so it is unhandled). The spawn handler reads the effective focus to
     // decide whether to include the doc file in context (doc pane → yes; chat pane → no).
-    if (focusedId === CHAT_FOCUS || isStagePaneId(focusedId)) {
+    if (inFocusScope(GLOBAL_SCOPE['global.spawn'], focusedId)) {
       handlers.spawn();
       return true;
     }

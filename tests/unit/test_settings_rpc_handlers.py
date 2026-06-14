@@ -61,6 +61,7 @@ def test_settings_get_returns_defaults_when_no_config(repo_root: Path, xdg: Path
     assert s["modifier"] == "alt"
     assert s["key_overrides"] == {}
     assert s["pane_gap"] == 0
+    assert s["vim_mode"] is False
     # No user override -> None; effective comes from the live daemon config (codex).
     assert s["collaborator_harness"] is None
     assert s["crow_harnesses"] is None
@@ -107,6 +108,27 @@ def test_settings_update_persists_pane_gap(repo_root: Path, xdg: Path) -> None:
     assert reply["settings"]["pane_gap"] == 3
     again = _call(host, "settings.get", {})
     assert again["settings"]["pane_gap"] == 3
+
+
+def test_settings_update_persists_vim_mode(repo_root: Path, xdg: Path) -> None:
+    host = _host(repo_root)
+    # Default is False.
+    assert _call(host, "settings.get", {})["settings"]["vim_mode"] is False
+    # Round-trips True and persists across a fresh get + reload.
+    reply = _call(host, "settings.update", {"settings": {"vim_mode": True}})
+    assert reply["settings"]["vim_mode"] is True
+    again = _call(host, "settings.get", {})
+    assert again["settings"]["vim_mode"] is True
+    assert load_user_config().tui.vim_mode is True
+
+
+def test_settings_update_vim_mode_partial_merge(repo_root: Path, xdg: Path) -> None:
+    host = _host(repo_root)
+    # Setting vim_mode must not disturb other tui fields, and vice versa.
+    _call(host, "settings.update", {"settings": {"vim_mode": True}})
+    reply = _call(host, "settings.update", {"settings": {"pane_gap": 2}})
+    assert reply["settings"]["vim_mode"] is True
+    assert reply["settings"]["pane_gap"] == 2
 
 
 def test_settings_update_rejects_invalid_modifier(repo_root: Path, xdg: Path) -> None:

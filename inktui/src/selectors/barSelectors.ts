@@ -5,8 +5,9 @@
  * labels, the hint list) is a tested pure transform, not inline JSX logic.
  */
 
-import { chordLabel, type ResolvedBindings } from '../input/bindings.js';
+import { ACTIONS, chordLabel, type ResolvedBindings } from '../input/bindings.js';
 import { CHAT_FOCUS, type FocusId } from '../input/focusStore.js';
+import { GLOBAL_ACTION_IDS, GLOBAL_SCOPE, inFocusScope } from '../input/globalScope.js';
 import type { KeyChord, Keymap } from '../input/keymap.js';
 import { PANELS, type PanelId } from '../input/panels.js';
 
@@ -38,7 +39,7 @@ export interface TopBarLabel {
 export function selectTopBar(visible: ReadonlySet<PanelId>): readonly TopBarLabel[] {
   return PANELS.map((panel) => ({
     id: panel.id,
-    text: `${panel.id}${subscript(panel.digit)}`,
+    text: `${panel.label ?? panel.id}${subscript(panel.digit)}`,
     active: visible.has(panel.id),
   }));
 }
@@ -66,16 +67,57 @@ function modifierPrefix(bindings: ResolvedBindings): string {
     .join('/');
 }
 
-/** The always-present global hints — the chords the root dispatcher owns regardless of focus. Shown
- * first so the navigation keys are always discoverable. Built from the resolved bindings so the
- * labels track the modifier + any rebinds. */
-function globalHints(bindings: ResolvedBindings): readonly BottomBarHint[] {
+/** The navigation trio shown when a *mode* owns the bar: the chords that stay discoverable even
+ * behind a modal (panels, geometric nav, focus-chat). Kept minimal on purpose — under a non-pass-
+ * through mode the other globals are captured, so listing them would be a lying affordance. */
+function navGlobals(bindings: ResolvedBindings): readonly BottomBarHint[] {
   const prefix = modifierPrefix(bindings);
   return [
     { key: `${prefix}1–0`, description: 'panels' },
     { key: `${prefix}hjkl`, description: 'nav' },
     { key: bindings.label('global.focusChat'), description: 'chat' },
   ];
+}
+
+/**
+ * The global hints that are *usable from the current focus* — the real fix for the bar/dispatcher
+ * drift. The two synthetic groups (panel digits, vim nav) lead, then every named global whose
+ * {@link GLOBAL_SCOPE} entry is live from `focused`, in declaration order, labelled from the resolved
+ * bindings (so a rebind / modifier choice / the murder `C-m` override all track here). `global.keyHelp`
+ * is emitted separately as the right-pinned help hint, so it is skipped in the loop.
+ *
+ * Nav is itself focus-aware: away from chat all of `hjkl` move focus, but IN chat `A-h`/`A-l` are
+ * stolen by the chat-target cycle super-chords (see dispatcher.ts), so only `A-j`/`A-k` still
+ * navigate — the hint shows the truthful subset rather than claiming four working arrows.
+ */
+function globalHints(bindings: ResolvedBindings, focused: FocusId): readonly BottomBarHint[] {
+  const prefix = modifierPrefix(bindings);
+  const hints: BottomBarHint[] = [{ key: `${prefix}1–0`, description: 'panels' }];
+  hints.push(
+    focused === CHAT_FOCUS
+      ? { key: `${prefix}jk`, description: 'nav' }
+      : { key: `${prefix}hjkl`, description: 'nav' },
+  );
+  for (const id of GLOBAL_ACTION_IDS) {
+    if (id === 'global.keyHelp') {
+      continue; // rendered as the right-pinned help hint, with the chat-focus `?`-types disambiguation
+    }
+    if (!inFocusScope(GLOBAL_SCOPE[id], focused)) {
+      continue;
+    }
+    // The two chat-target cycle chords are mirror directions of one gesture; in chat focus they
+    // collapse into a single `target` hint (`A-hl`/`C-hl`, matching the nav `jk` style) to save
+    // horizontal space rather than spending two slots on `prev target` + `next target`.
+    if (id === 'global.cycleTargetNext') {
+      continue; // folded into the combined `target` hint emitted at cycleTargetPrev's position
+    }
+    if (id === 'global.cycleTargetPrev') {
+      hints.push({ key: `${prefix}hl`, description: 'target' });
+      continue;
+    }
+    hints.push({ key: bindings.label(id), description: ACTIONS[id].description });
+  }
+  return hints;
 }
 
 /** Normalize a keymap entry's chord(s) to the first chord (the list form binds equivalent chords;
@@ -115,27 +157,27 @@ export function selectBottomBar(
   bindings: ResolvedBindings,
   modeHints?: readonly BottomBarHint[],
 ): readonly BottomBarHint[] {
-  const globals = globalHints(bindings);
   if (modeHints !== undefined) {
-    // A mode owns the bar: globals (still discoverable) then the mode's own hints; no panel keys, and
-    // no help hint (a modal's keys are the only relevant ones).
-    return [...globals, ...modeHints];
+    // A mode owns the bar: the nav trio (still discoverable) then the mode's own hints; no panel keys,
+    // and no help hint (a modal's keys are the only relevant ones). The other globals are captured by
+    // a non-pass-through mode, so the bar lists only the always-discoverable navigation chords.
+    return [...navGlobals(bindings), ...modeHints];
   }
+  // The globals usable from THIS focus (the dispatcher's gate, shared via GLOBAL_SCOPE), so a live
+  // chord is always hinted and a dead one never is.
+  const globals = globalHints(bindings, focused);
   // Item 12: the keybinding-help hint, ALWAYS pinned to the far right so a new user can find it. The
   // label is derived from the resolved `global.keyHelp` binding (so a rebind tracks here too).
   //
   // While CHAT has focus, a bare `?` types into the input (the dispatcher deliberately never steals
-  // it — dispatcher.ts gates `global.keyHelp` to non-chat focus), so a plain `?  help` hint would be
-  // a lying affordance. Disambiguate by prefixing the nav-out chord: `A-hjkl ?  help` reads as
-  // "move focus off chat, then ?" — truthful, compact, and it tracks the configured modifier.
-  const helpHint: BottomBarHint = {
-    key:
-      focused === CHAT_FOCUS
-        ? `${modifierPrefix(bindings)}hjkl ${bindings.label('global.keyHelp')}`
-        : bindings.label('global.keyHelp'),
-    description: 'help',
-    align: 'right',
-  };
+  // it — dispatcher.ts gates `global.keyHelp` to non-chat focus), so a plain `?` hint would be a lying
+  // affordance. The reachable affordance from the input is the `:help` command (commandDispatch.ts),
+  // which is self-describing — so the chat-focus help hint is just `:help`, with no redundant trailing
+  // word. Away from chat the bare `?` is live, shown as `? help`.
+  const helpHint: BottomBarHint =
+    focused === CHAT_FOCUS
+      ? { key: ':help', description: '', align: 'right' }
+      : { key: bindings.label('global.keyHelp'), description: 'help', align: 'right' };
   if (focused === CHAT_FOCUS || focusedKeymap === undefined) {
     return [...globals, helpHint];
   }
