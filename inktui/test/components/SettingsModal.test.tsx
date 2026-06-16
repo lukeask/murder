@@ -338,6 +338,9 @@ describe('SettingsModal', () => {
     const { lastFrame, stdin } = render(<Harness stores={stores} />);
     stores.modes.getState().enter(settingsMode(stores.modes, actions, RICH_CURRENT));
     await tick();
+    // A "codex" harness row also exists in the Startup Rogue section (above collaborator); walk past
+    // it by first focusing the collaborator "(default)" row, then the collaborator codex row.
+    await walkUntilFocused(stdin, lastFrame, '(default)');
     await walkUntilFocused(stdin, lastFrame, 'codex');
     stdin.write('\r');
     await tick();

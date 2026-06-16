@@ -131,6 +131,72 @@ def test_settings_update_vim_mode_partial_merge(repo_root: Path, xdg: Path) -> N
     assert reply["settings"]["pane_gap"] == 2
 
 
+# --- startup rogue RPC ---
+
+
+def test_settings_get_startup_rogue_defaults_none(repo_root: Path, xdg: Path) -> None:
+    host = _host(repo_root)
+    assert _call(host, "settings.get", {})["settings"]["startup_rogue"] is None
+
+
+def test_settings_update_startup_rogue_persists_and_roundtrips(repo_root: Path, xdg: Path) -> None:
+    host = _host(repo_root)
+    reply = _call(
+        host,
+        "settings.update",
+        {"settings": {"startup_rogue": {"harness": "claude_code", "model": "opus", "effort": "medium"}}},
+    )
+    assert reply["settings"]["startup_rogue"] == {
+        "harness": "claude_code",
+        "model": "opus",
+        "effort": "medium",
+    }
+    # Persisted under tui and visible on a fresh get + reload.
+    again = _call(host, "settings.get", {})
+    assert again["settings"]["startup_rogue"]["model"] == "opus"
+    sr = load_user_config().tui.startup_rogue
+    assert sr is not None and sr.harness == "claude_code" and sr.effort == "medium"
+
+
+def test_settings_update_startup_rogue_null_clears(repo_root: Path, xdg: Path) -> None:
+    host = _host(repo_root)
+    _call(host, "settings.update", {"settings": {"startup_rogue": {"harness": "codex", "model": ""}}})
+    reply = _call(host, "settings.update", {"settings": {"startup_rogue": None}})
+    assert reply["settings"]["startup_rogue"] is None
+    assert load_user_config().tui.startup_rogue is None
+
+
+def test_settings_update_startup_rogue_empty_effort_normalizes_to_none(
+    repo_root: Path, xdg: Path
+) -> None:
+    host = _host(repo_root)
+    reply = _call(
+        host,
+        "settings.update",
+        {"settings": {"startup_rogue": {"harness": "cursor", "model": "", "effort": ""}}},
+    )
+    assert reply["settings"]["startup_rogue"] == {"harness": "cursor", "model": "", "effort": None}
+
+
+def test_settings_update_startup_rogue_survives_other_tui_updates(repo_root: Path, xdg: Path) -> None:
+    host = _host(repo_root)
+    _call(
+        host,
+        "settings.update",
+        {"settings": {"startup_rogue": {"harness": "claude_code", "model": "opus"}}},
+    )
+    # A subsequent unrelated tui update must not drop the startup rogue.
+    reply = _call(host, "settings.update", {"settings": {"pane_gap": 2}})
+    assert reply["settings"]["startup_rogue"]["model"] == "opus"
+    assert reply["settings"]["pane_gap"] == 2
+
+
+def test_settings_update_startup_rogue_rejects_invalid_harness(repo_root: Path, xdg: Path) -> None:
+    host = _host(repo_root)
+    with pytest.raises(ValueError, match="invalid startup_rogue harness"):
+        _call(host, "settings.update", {"settings": {"startup_rogue": {"harness": "bogus"}}})
+
+
 def test_settings_update_rejects_invalid_modifier(repo_root: Path, xdg: Path) -> None:
     host = _host(repo_root)
     with pytest.raises(ValidationError):  # the Literal["alt","ctrl","both"] rejects it

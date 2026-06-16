@@ -70,6 +70,15 @@ export interface LlmWire {
  * beats config.yaml). When `true` the config value is ignored — display only. */
 export type LlmEnvWire = Readonly<Record<LlmEnvProviderId, boolean>>;
 
+/** The auto-spawned-on-boot rogue ("Startup Rogue"). Mirrors the Python `StartupRogueConfig`:
+ * `model` empty = the harness adapter's default; `effort` `null` = no reasoning-effort override.
+ * The whole record is `null` on the wire when no startup rogue is configured. */
+export interface StartupRogueWire {
+  readonly harness: string;
+  readonly model: string;
+  readonly effort: string | null;
+}
+
 /** The on-the-wire settings record (snake_case, mirrors the Python `_settings_payload`). The frontend
  * binding registry is the authority on `ActionId`s, so `key_overrides` is opaque here. */
 export interface SettingsWire {
@@ -81,6 +90,8 @@ export interface SettingsWire {
   readonly pane_gap: number;
   /** Whether vim-style editing is enabled in the chat input. Mirrors `TuiUserConfig.vim_mode`. */
   readonly vim_mode: boolean;
+  /** The user's Startup Rogue (auto-spawned on boot), or `null` when none is set. */
+  readonly startup_rogue: StartupRogueWire | null;
   // --- harness overrides + daemon's live effective values ---
   /** The user's collaborator-harness override, or `null` when none is set. */
   readonly collaborator_harness: string | null;
@@ -111,6 +122,8 @@ export interface SettingsPatch {
   key_overrides?: Readonly<Record<string, string>>;
   pane_gap?: number;
   vim_mode?: boolean;
+  /** Set/replace the Startup Rogue, or `null` to clear it. */
+  startup_rogue?: StartupRogueWire | null;
   collaborator_harness?: string | null;
   crow_harnesses?: readonly string[] | null;
   llm?: LlmPatch;
@@ -165,6 +178,8 @@ function applyWire(prev: SettingsState, wire: SettingsWire | undefined): Setting
     keyOverrides: wire.key_overrides ?? prev.keyOverrides,
     paneGap: wire.pane_gap ?? prev.paneGap,
     vimMode: wire.vim_mode ?? prev.vimMode,
+    // Nullable on the wire (null = "no startup rogue") — honour `null` via key-presence, not `??`.
+    startupRogue: 'startup_rogue' in wire ? wire.startup_rogue : prev.startupRogue,
     // Harness overrides are nullable on the wire (null = "no override"), so a `??` would wrongly keep
     // the prior value when the server clears one. Honour `null` explicitly via the key-presence check.
     collaboratorHarness:
@@ -209,6 +224,7 @@ export function createSettingsActions(bus: BusClient, store: StoreApi<AppStore>)
           ...(partial.key_overrides !== undefined ? { keyOverrides: partial.key_overrides } : {}),
           ...(partial.pane_gap !== undefined ? { paneGap: partial.pane_gap } : {}),
           ...(partial.vim_mode !== undefined ? { vimMode: partial.vim_mode } : {}),
+          ...('startup_rogue' in partial ? { startupRogue: partial.startup_rogue ?? null } : {}),
           ...('collaborator_harness' in partial
             ? { collaboratorHarness: partial.collaborator_harness ?? null }
             : {}),

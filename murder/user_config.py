@@ -20,6 +20,24 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 UserHarnessKind = Literal["cursor", "claude_code", "codex", "pi", "antigravity"]
 
 
+class StartupRogueConfig(BaseModel):
+    """The auto-spawned rogue crow seeded on daemon boot — the "Startup Rogue".
+
+    When set, the service ensures exactly one ticketless rogue with this
+    harness/model/effort exists on startup, so typing `murder` lands the user in a
+    ready-to-type chat against it. ``None`` (the default) = no startup rogue.
+
+    ``model`` empty = let the harness adapter pick its own default; ``effort``
+    ``None`` = no reasoning-effort override.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    harness: UserHarnessKind = "claude_code"
+    model: str = ""
+    effort: str | None = None
+
+
 class TuiUserConfig(BaseModel):
     """User-facing TUI preferences round-tripped by the `settings.{get,update}` RPC pair.
 
@@ -43,6 +61,8 @@ class TuiUserConfig(BaseModel):
     pane_gap: int = Field(default=0, ge=0, le=4)
     # Vim-style editing in the chat input (modal normal/insert + yank/paste). Off by default.
     vim_mode: bool = False
+    # The rogue auto-spawned on daemon boot (None = none); see StartupRogueConfig.
+    startup_rogue: StartupRogueConfig | None = None
 
 
 class UserHarnessRolePatch(BaseModel):

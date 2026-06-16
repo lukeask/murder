@@ -827,6 +827,7 @@ function Shell({
         theme,
         paneGap: settings.paneGap,
         vimMode: settings.vimMode,
+        startupRogue: settings.startupRogue,
         keyOverrides: settings.keyOverrides as Record<string, string>,
         collaboratorHarness: settings.collaboratorHarness,
         effectiveCollaborator: settings.effectiveCollaboratorHarness,

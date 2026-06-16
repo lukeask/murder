@@ -37,12 +37,13 @@ import { StdinShim } from './terminal/StdinShim.js';
  * real entrypoint, so a test can import this module and drive each path without spawning a run.
  */
 
-/** Panels seeded visible on startup — the first-run default set. Two content panels with live
- * server handlers (plans, tickets) plus the right rail (usage, crows); notes and reports stay
- * opt-in via their panel toggles so a fresh service doesn't open with two empty lists. The smoke
- * build shares this constant: its FakeBusClient stubs only some slices, so smoke paints empty
- * panels for the rest — harmless for the "does it boot" gate. */
-const STARTUP_PANELS: readonly PanelId[] = ['plans', 'tickets', 'usage', 'crows'];
+/** Panels seeded visible on startup — intentionally EMPTY. A fresh `murder` opens with no rail
+ * panels at all: the only thing on screen is the chat input plus (once the daemon ensures the
+ * user's configured Startup Rogue) that rogue's empty chat-history pane in the Stage. Every rail
+ * panel (plans, tickets, usage, crows, …) is opt-in via its `ctrl/alt+<n>` toggle. This keeps the
+ * default landing focused on "type to your crow", building muscle memory for murder over claude.
+ * The smoke build shares this constant: an empty set just means it boots with no rail panels. */
+const STARTUP_PANELS: readonly PanelId[] = [];
 
 /**
  * Read the bus socket path from `MURDER_BUS_SOCKET`. The Python launcher resolves the per-project

@@ -397,6 +397,12 @@ class ServiceHost:
                 return [crow.harness]
             return None
 
+        def _startup_rogue_payload(tui: Any) -> dict[str, Any] | None:
+            sr = tui.startup_rogue
+            if sr is None:
+                return None
+            return {"harness": sr.harness, "model": sr.model, "effort": sr.effort}
+
         def _settings_payload(cfg: Any) -> dict[str, Any]:
             import os as _os
 
@@ -415,6 +421,7 @@ class ServiceHost:
                 "key_overrides": dict(tui.key_overrides),
                 "pane_gap": tui.pane_gap,
                 "vim_mode": tui.vim_mode,
+                "startup_rogue": _startup_rogue_payload(tui),
                 # --- harness overrides + effective values ---
                 "collaborator_harness": collab_override,
                 "crow_harnesses": _crow_harnesses_override(cfg),
@@ -461,6 +468,8 @@ class ServiceHost:
             # apply.
             live_apply: list[Callable[[], None]] = []
 
+            valid_harnesses = set(get_args(UserHarnessKind))
+
             # --- tui keys (re-validate the merged tui block) ---
             tui_merged: dict[str, Any] = {
                 "theme": cfg.tui.theme,
@@ -468,13 +477,36 @@ class ServiceHost:
                 "key_overrides": dict(cfg.tui.key_overrides),
                 "pane_gap": cfg.tui.pane_gap,
                 "vim_mode": cfg.tui.vim_mode,
+                "startup_rogue": (
+                    cfg.tui.startup_rogue.model_dump(mode="json")
+                    if cfg.tui.startup_rogue is not None
+                    else None
+                ),
             }
             for key in ("theme", "modifier", "key_overrides", "pane_gap", "vim_mode"):
                 if key in partial:
                     tui_merged[key] = partial[key]
+            # startup_rogue: null clears it; an object sets harness/model/effort (validated here so a
+            # bad harness is rejected before persist). The merged dict re-validates via TuiUserConfig.
+            if "startup_rogue" in partial:
+                sr_val = partial["startup_rogue"]
+                if sr_val is None:
+                    tui_merged["startup_rogue"] = None
+                elif isinstance(sr_val, dict):
+                    harness = sr_val.get("harness")
+                    if harness not in valid_harnesses:
+                        raise ValueError(f"invalid startup_rogue harness: {harness!r}")
+                    effort = sr_val.get("effort")
+                    if effort is not None and not isinstance(effort, str):
+                        raise ValueError("startup_rogue effort must be a string or null")
+                    tui_merged["startup_rogue"] = {
+                        "harness": harness,
+                        "model": str(sr_val.get("model") or ""),
+                        "effort": effort if (isinstance(effort, str) and effort.strip()) else None,
+                    }
+                else:
+                    raise ValueError("startup_rogue must be an object or null")
             cfg.tui = TuiUserConfig.model_validate(tui_merged)
-
-            valid_harnesses = set(get_args(UserHarnessKind))
 
             # --- collaborator_harness override ---
             if "collaborator_harness" in partial:
@@ -661,6 +693,9 @@ class ServiceHost:
             orchestrator=self.orchestrator,
             broker=self.broker,
         )
+        self._startup_rogue_task = asyncio.create_task(
+            self._ensure_startup_rogue_safely(), name="startup-rogue-ensure"
+        )
         self._model_discovery_task = asyncio.create_task(
             self._discover_then_write_models_doc(), name="startup-model-discovery"
         )
@@ -693,6 +728,17 @@ class ServiceHost:
                     )
         session = write_service_session(self.repo_root, self.socket_path)
         self._service_session_name = session.name
+
+    async def _ensure_startup_rogue_safely(self) -> None:
+        """Best-effort: spawn the user's configured Startup Rogue on boot.
+
+        Idempotent (the orchestrator reuses a live one); never fatal to startup —
+        a spawn failure is logged and swallowed so the daemon still comes up.
+        """
+        try:
+            await self.orchestrator.ensure_startup_rogue()
+        except Exception:
+            LOGGER.error("ensure_startup_rogue failed", exc_info=True)
 
     async def _discover_then_write_models_doc(self) -> None:
         """Discover harness models, persist to DB, then write ``HARNESSES_AND_MODELS.md``.

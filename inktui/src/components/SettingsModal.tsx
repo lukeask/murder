@@ -60,6 +60,7 @@ import type {
   LlmTierWire,
   LlmWire,
   SettingsActions,
+  StartupRogueWire,
 } from '../store/settings/settingsActions.js';
 import { capsStore, type KittySupport, useKittySupport } from '../terminal/capsStore.js';
 import { PALETTES, type ThemeId } from '../theme/palettes.js';
@@ -84,6 +85,37 @@ const GAP_OPTIONS: readonly number[] = [0, 1, 2, 3, 4];
 /** The five valid harness ids, in display order (mirrors the Python `UserHarnessKind`; the backend
  * gated out `native_coding_crow`). Used by the collaborator radio + crow checkbox pool. */
 const HARNESSES: readonly string[] = ['claude_code', 'codex', 'cursor', 'pi', 'antigravity'];
+
+/** Startup-Rogue model choices per harness (a `''` "default" lets the adapter pick its own). A static
+ * mirror of the spawn flow's per-harness model lists — kept local so the settings modal needs no live
+ * model-snapshot wiring; the daemon accepts any string, so a stale entry just spawns that model. */
+const STARTUP_ROGUE_MODELS: Readonly<Record<string, readonly string[]>> = {
+  claude_code: ['', 'opus', 'sonnet', 'haiku', 'fable'],
+  codex: ['', 'gpt-5.5', 'gpt-5.4', 'gpt-5.3-codex', 'gpt-5.2'],
+  cursor: [''],
+  pi: [''],
+  antigravity: [''],
+};
+
+/** Startup-Rogue reasoning-effort choices per harness (mirrors the spawn wizard's effort options;
+ * harnesses with no effort concept map to `[]`). */
+const STARTUP_ROGUE_EFFORTS: Readonly<Record<string, readonly string[]>> = {
+  claude_code: ['low', 'medium', 'high', 'xhigh', 'max'],
+  codex: ['low', 'medium', 'high', 'xhigh'],
+  cursor: [],
+  pi: [],
+  antigravity: [],
+};
+
+/** Pick the default effort for a harness when one is switched on (prefer `medium`, else the first
+ * option, else `null` for harnesses with no effort concept). */
+function defaultEffortFor(harness: string): string | null {
+  const efforts = STARTUP_ROGUE_EFFORTS[harness] ?? [];
+  if (efforts.length === 0) {
+    return null;
+  }
+  return efforts.includes('medium') ? 'medium' : (efforts[0] ?? null);
+}
 
 /** The four user-configurable LLM providers, in display order (mirrors `UserLlmConfig.providers`).
  * `local` is the OpenAI-compatible endpoint (no env-key flag; carries a base_url). */
@@ -166,6 +198,11 @@ type Row =
   | { readonly kind: 'gap'; readonly value: number }
   // Vim mode — a radio over on (true) / off (false).
   | { readonly kind: 'vim'; readonly value: boolean }
+  // Startup Rogue — an "off" row, a harness radio, then (when on) a model radio + effort radio.
+  | { readonly kind: 'startupRogue'; readonly field: 'off' }
+  | { readonly kind: 'startupRogue'; readonly field: 'harness'; readonly value: string }
+  | { readonly kind: 'startupRogue'; readonly field: 'model'; readonly value: string }
+  | { readonly kind: 'startupRogue'; readonly field: 'effort'; readonly value: string }
   // Harnesses — collaborator radio (`value: null` = the "(default)" reset row); crow checkbox pool
   // (`value: null` = the "reset to default" row).
   | { readonly kind: 'collaborator'; readonly value: string | null }
@@ -184,7 +221,7 @@ type Row =
 
 /** Build the flat row list (headers + selectable rows) in section order. Depends on the live `llm`
  * (the tier list + per-role tier choices are dynamic), so it is rebuilt whenever the draft changes. */
-function buildRows(llm: LlmWire): readonly Row[] {
+function buildRows(llm: LlmWire, startupRogue: StartupRogueWire | null): readonly Row[] {
   const rows: Row[] = [{ kind: 'header', label: 'Command modifier' }];
   for (const value of MODIFIERS) {
     rows.push({ kind: 'modifier', value });
@@ -201,6 +238,21 @@ function buildRows(llm: LlmWire): readonly Row[] {
   rows.push({ kind: 'header', label: 'Vim mode' });
   rows.push({ kind: 'vim', value: true });
   rows.push({ kind: 'vim', value: false });
+  // --- Startup Rogue (auto-spawned on boot) ---
+  rows.push({ kind: 'header', label: 'Startup Rogue' });
+  rows.push({ kind: 'startupRogue', field: 'off' });
+  for (const value of HARNESSES) {
+    rows.push({ kind: 'startupRogue', field: 'harness', value });
+  }
+  // Model + effort sub-rows only when a rogue is configured (they depend on the chosen harness).
+  if (startupRogue !== null) {
+    for (const value of STARTUP_ROGUE_MODELS[startupRogue.harness] ?? ['']) {
+      rows.push({ kind: 'startupRogue', field: 'model', value });
+    }
+    for (const value of STARTUP_ROGUE_EFFORTS[startupRogue.harness] ?? []) {
+      rows.push({ kind: 'startupRogue', field: 'effort', value });
+    }
+  }
   // --- Harnesses ---
   rows.push({ kind: 'header', label: 'Collaborator harness' });
   rows.push({ kind: 'collaborator', value: null }); // the "(default)" reset row
@@ -269,6 +321,8 @@ interface SettingsState {
   paneGap: number;
   /** The draft vim-mode flag (committed via `update` on selection). */
   vimMode: boolean;
+  /** The draft Startup Rogue (`null` = off). Drives the model/effort sub-rows + persisted on change. */
+  startupRogue: StartupRogueWire | null;
   /** The draft per-action key overrides (`ActionId -> key char`). */
   overrides: Record<string, string>;
   /** The draft collaborator-harness override (`null` = use the effective default). */
@@ -332,6 +386,7 @@ export function settingsMode(
     readonly theme: ThemeId;
     readonly paneGap: number;
     readonly vimMode?: boolean;
+    readonly startupRogue?: StartupRogueWire | null;
     readonly keyOverrides: Record<string, string>;
     readonly collaboratorHarness?: string | null;
     readonly effectiveCollaborator?: string;
@@ -345,7 +400,8 @@ export function settingsMode(
   const id = SETTINGS_MODE_ID;
 
   const initialLlm: LlmWire = current.llm ?? {};
-  const initialRows = buildRows(initialLlm);
+  const initialStartupRogue: StartupRogueWire | null = current.startupRogue ?? null;
+  const initialRows = buildRows(initialLlm, initialStartupRogue);
   const s: SettingsState = {
     rows: initialRows,
     cursor: firstSelectableFrom(initialRows, 0),
@@ -354,6 +410,7 @@ export function settingsMode(
     theme: current.theme,
     paneGap: current.paneGap,
     vimMode: current.vimMode ?? false,
+    startupRogue: initialStartupRogue,
     overrides: { ...current.keyOverrides },
     collaboratorHarness: current.collaboratorHarness ?? null,
     effectiveCollaborator: current.effectiveCollaborator ?? 'claude_code',
@@ -429,6 +486,61 @@ export function settingsMode(
   function selectVim(value: boolean): void {
     s.vimMode = value;
     void actions.update({ vim_mode: value });
+    s.notice = null;
+    refresh();
+  }
+
+  /** Turn the Startup Rogue off (clear it). Rebuilds rows (the model/effort sub-rows drop away). */
+  function selectStartupRogueOff(): void {
+    s.startupRogue = null;
+    rebuildRows();
+    void actions.update({ startup_rogue: null });
+    s.notice = null;
+    refresh();
+  }
+
+  /** Pick the Startup Rogue's harness (turning it on if it was off). Resets the model to the adapter
+   * default and the effort to the harness default when the harness changes; rebuilds the model/effort
+   * sub-rows for the new harness. */
+  function selectStartupRogueHarness(harness: string): void {
+    const prev = s.startupRogue;
+    const same = prev !== null && prev.harness === harness;
+    const efforts = STARTUP_ROGUE_EFFORTS[harness] ?? [];
+    const next: StartupRogueWire = {
+      harness,
+      model: same ? prev.model : '',
+      effort:
+        same && prev.effort !== null && efforts.includes(prev.effort)
+          ? prev.effort
+          : defaultEffortFor(harness),
+    };
+    s.startupRogue = next;
+    rebuildRows();
+    void actions.update({ startup_rogue: next });
+    s.notice = null;
+    refresh();
+  }
+
+  /** Pick the Startup Rogue's model (`''` = the adapter default). No row-structure change. */
+  function selectStartupRogueModel(model: string): void {
+    if (s.startupRogue === null) {
+      return;
+    }
+    const next: StartupRogueWire = { ...s.startupRogue, model };
+    s.startupRogue = next;
+    void actions.update({ startup_rogue: next });
+    s.notice = null;
+    refresh();
+  }
+
+  /** Pick the Startup Rogue's reasoning effort. No row-structure change. */
+  function selectStartupRogueEffort(effort: string): void {
+    if (s.startupRogue === null) {
+      return;
+    }
+    const next: StartupRogueWire = { ...s.startupRogue, effort };
+    s.startupRogue = next;
+    void actions.update({ startup_rogue: next });
     s.notice = null;
     refresh();
   }
@@ -513,7 +625,7 @@ export function settingsMode(
 
   /** Rebuild the live row list from the draft llm, clamping the cursor onto a still-selectable row. */
   function rebuildRows(): void {
-    s.rows = buildRows(s.llm);
+    s.rows = buildRows(s.llm, s.startupRogue);
     if (s.cursor >= s.rows.length || !isSelectable(s.rows[s.cursor] as Row)) {
       s.cursor = firstSelectableFrom(s.rows, Math.min(s.cursor, s.rows.length - 1));
     }
@@ -579,6 +691,17 @@ export function settingsMode(
         break;
       case 'vim':
         selectVim(row.value);
+        break;
+      case 'startupRogue':
+        if (row.field === 'off') {
+          selectStartupRogueOff();
+        } else if (row.field === 'harness') {
+          selectStartupRogueHarness(row.value);
+        } else if (row.field === 'model') {
+          selectStartupRogueModel(row.value);
+        } else {
+          selectStartupRogueEffort(row.value);
+        }
         break;
       case 'collaborator':
         selectCollaborator(row.value);
@@ -849,6 +972,8 @@ function rowKey(row: Row): string {
       return `gap:${row.value}`;
     case 'vim':
       return `vim:${row.value}`;
+    case 'startupRogue':
+      return `srogue:${row.field}:${row.field === 'off' ? '' : row.value}`;
     case 'collaborator':
       return `collab:${row.value ?? 'default'}`;
     case 'crow':
@@ -954,6 +1079,61 @@ function RowView({
           {cursor}
           {mark}
           {row.value ? 'on' : 'off'}
+        </Text>
+      </Box>
+    );
+  }
+
+  if (row.kind === 'startupRogue') {
+    const sr = s.startupRogue;
+    const color = focused ? theme.warning : theme.text;
+    if (row.field === 'off') {
+      const selected = sr === null;
+      return (
+        <Box flexShrink={0}>
+          <Text color={color} bold={focused}>
+            {cursor}
+            {selected ? '(•) ' : '( ) '}
+            off (no startup rogue)
+          </Text>
+        </Box>
+      );
+    }
+    if (row.field === 'harness') {
+      const selected = sr !== null && sr.harness === row.value;
+      return (
+        <Box flexShrink={0}>
+          <Text color={color} bold={focused}>
+            {cursor}
+            {selected ? '(•) ' : '( ) '}
+            {row.value}
+          </Text>
+        </Box>
+      );
+    }
+    if (row.field === 'model') {
+      const selected = sr !== null && sr.model === row.value;
+      const label = row.value === '' ? '(default model)' : row.value;
+      return (
+        <Box flexShrink={0}>
+          <Text color={color} bold={focused}>
+            {cursor}
+            {selected ? '(•) ' : '( ) '}
+            <Text color={theme.muted}>model · </Text>
+            {label}
+          </Text>
+        </Box>
+      );
+    }
+    // effort
+    const selected = sr !== null && sr.effort === row.value;
+    return (
+      <Box flexShrink={0}>
+        <Text color={color} bold={focused}>
+          {cursor}
+          {selected ? '(•) ' : '( ) '}
+          <Text color={theme.muted}>effort · </Text>
+          {row.value}
         </Text>
       </Box>
     );

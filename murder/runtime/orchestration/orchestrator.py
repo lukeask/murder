@@ -760,6 +760,42 @@ class Orchestrator:
 
     async def _retarget_plan_runtime(self, old_name: str, new_name: str) -> None:
         await self.plans._retarget_plan_runtime(old_name, new_name)
+    async def ensure_startup_rogue(self) -> str | None:
+        """Ensure the user's configured Startup Rogue exists (idempotent).
+
+        Reads the user-scope ``tui.startup_rogue`` preference and, when set,
+        spawns a single ticketless rogue under a *deterministic* agent id
+        (``<prefix>-rogue-startup``) so repeated daemon boots reuse the live one
+        rather than piling up. Returns the agent id, or ``None`` when no startup
+        rogue is configured.
+        """
+        from murder.user_config import load_user_config
+
+        sr = load_user_config().tui.startup_rogue
+        if sr is None:
+            return None
+        harness_kind = (sr.harness or "claude_code").strip()
+        agent_id = f"{_harness_prefix(harness_kind)}-rogue-startup"
+        agent = self.rt.get_agent(agent_id)
+        if agent is not None:
+            if await agent.is_live():
+                return agent_id
+            await self.rt.reap(agent_id)
+        else:
+            # Persisted in the DB by a prior daemon but absent from this process's
+            # registry (service restart): kill any orphaned tmux session so the
+            # upcoming create_session doesn't raise "already exists", then mark dead.
+            row = self.rt.db.execute(
+                "SELECT session FROM agents WHERE agent_id = ?", (agent_id,)
+            ).fetchone()
+            if row and row["session"] and await tmux.session_exists(row["session"]):
+                with contextlib.suppress(Exception):
+                    await tmux.kill_session(row["session"])
+                _db_set_agent_status(self.rt.db, agent_id, "dead")
+        return await self.spawn_rogue(
+            harness_kind, sr.model or "", sr.effort, name="startup"
+        )
+
     async def ensure_collaborator(self) -> str:
         agent_id = _db_get_active_agent_by_role(self.rt.db, "collaborator")
         if agent_id:

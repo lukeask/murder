@@ -25,7 +25,7 @@
 
 import type { StateCreator } from 'zustand';
 import type { AppStore } from '../store.js';
-import type { LlmEnvWire, LlmWire } from './settingsActions.js';
+import type { LlmEnvWire, LlmWire, StartupRogueWire } from './settingsActions.js';
 
 /** The command modifier the user has chosen. Mirrors `bindings.ts`'s `Modifier` (kept structural
  * here so the slice does not depend on the input layer — the bridge couples them). */
@@ -53,6 +53,9 @@ export interface SettingsState {
   readonly paneGap: number;
   /** Whether vim-style editing is enabled in the chat input. Mirrors the wire `vim_mode`. */
   readonly vimMode: boolean;
+  /** The Startup Rogue auto-spawned on boot, or `null` when none is configured. Mirrors the wire
+   * `startup_rogue`. */
+  readonly startupRogue: StartupRogueWire | null;
   /** The user's collaborator-harness override, or `null` when none is set (falls back to
    * `effectiveCollaboratorHarness`). Mirrors the wire `collaborator_harness`. */
   readonly collaboratorHarness: string | null;
@@ -83,6 +86,7 @@ export const initialSettingsState: SettingsState = {
   keyOverrides: {},
   paneGap: 0,
   vimMode: false,
+  startupRogue: null,
   collaboratorHarness: null,
   crowHarnesses: null,
   effectiveCollaboratorHarness: 'claude_code',
