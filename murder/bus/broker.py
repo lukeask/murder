@@ -19,7 +19,6 @@ from typing import Any, Protocol
 from uuid import UUID, uuid5
 
 from murder.bus.protocol import BUS_EVENT_ADAPTER, BusEvent, EventFilter
-from murder.observability.advanced_log import current_advanced_log
 
 # Stable namespace for deriving a deterministic CommandEvent id from an
 # events-table row when the originating commands row is gone (see
@@ -216,14 +215,6 @@ class DurableBroker:
             return result
 
         result = await asyncio.wait_for(_invoke(), timeout=timeout_s)
-        current_advanced_log().record_event(
-            payload={
-                "kind": "broker.request",
-                "target": target,
-                "body": body,
-                "result": result,
-            }
-        )
         return result
 
     def register_rpc_handler(self, target: str, handler: Any) -> None:

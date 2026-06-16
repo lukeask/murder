@@ -196,6 +196,28 @@ export interface SchedulerDecisionEvent extends BaseEvent {
   kicked_ticket_id?: string | null;
 }
 
+/** Completion coordinator verdict for a ticket (peer of {@link SchedulerDecisionEvent}). Mirrors
+ * `CompletionVerdictEvent` in `murder/bus/protocol.py`. SERVER-SIDE FORENSIC event: the client does
+ * NOT act on it directly — it reads completion via the key-only `state.snapshot` + slice refetch
+ * path. Declared here only so the discriminated union parses it. */
+export interface CompletionVerdictEvent extends BaseEvent {
+  type: 'completion.verdict';
+  completed: boolean;
+  ticket_failed: boolean;
+  failed_checks: string[];
+}
+
+/** Rich agent-registry mutation (register / rename / clear / force_stop). Mirrors
+ * `AgentLifecycleEvent` in `murder/bus/protocol.py`. SERVER-SIDE FORENSIC event: the client does NOT
+ * act on it directly — agent state arrives via the key-only `state.snapshot` path. Declared here
+ * only so the discriminated union parses it. */
+export interface AgentLifecycleEvent extends BaseEvent {
+  type: 'agent.lifecycle';
+  op: 'register' | 'rename' | 'clear' | 'force_stop';
+  details: Record<string, unknown>;
+  reason?: string | null;
+}
+
 export interface UsageResetEvent extends BaseEvent {
   type: 'usage.reset';
   harness: string;
@@ -267,6 +289,8 @@ export type BusEvent =
   | PresenceEvent
   | SchedulerModeEvent
   | SchedulerDecisionEvent
+  | CompletionVerdictEvent
+  | AgentLifecycleEvent
   | UsageResetEvent
   | ConversationBlockEvent
   | ConversationStateEvent

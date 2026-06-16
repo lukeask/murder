@@ -13,7 +13,7 @@ from typing import Any
 
 from pydantic import BaseModel
 
-from murder.observability.advanced_log import current_advanced_log
+from murder.observability.advanced_log import ApiRecord, current_advanced_log
 
 
 class ToolSpec(BaseModel):
@@ -120,10 +120,12 @@ def record_completion(
         **usage,
     }
     current_advanced_log().record_api(
-        request=request_summary,
-        response=response,
-        model=result.model,
-        status=status,
-        retries=retries,
-        usage=usage,
+        ApiRecord(
+            request=request_summary,
+            response=response,
+            model=result.model,
+            status=status,
+            retries=retries,
+            usage=usage,
+        )
     )

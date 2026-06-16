@@ -118,16 +118,18 @@ def test_configure_logging_invalid_level_falls_back(clean_root) -> None:
 
 
 def test_resolve_log_level_precedence(monkeypatch) -> None:
-    monkeypatch.setenv("MURDER_LOG_LEVEL", "WARNING")
+    # Inputs are rungs (what CLI/env/config actually carry); the resolver
+    # returns the python level. Case-insensitivity is covered separately below.
+    monkeypatch.setenv("MURDER_LOG_LEVEL", "warning")
     # CLI beats env.
-    assert resolve_log_level("DEBUG") == "DEBUG"
+    assert resolve_log_level("debug") == "DEBUG"
     # Env beats config/default when no CLI.
     assert resolve_log_level(None) == "WARNING"
 
     monkeypatch.delenv("MURDER_LOG_LEVEL", raising=False)
     # Config beats default.
     monkeypatch.setattr(
-        "murder.observability.logging_setup._config_log_level", lambda: "ERROR"
+        "murder.observability.logging_setup._config_log_level", lambda: "error"
     )
     assert resolve_log_level(None) == "ERROR"
 
@@ -186,7 +188,9 @@ def test_set_run_id_persists() -> None:
 def test_config_has_log_level_field() -> None:
     from murder.user_config import UserConfig
 
-    assert UserConfig().log_level == "INFO"
+    # Default rung on the single --log-level ladder (lower-case rung, not a
+    # python level): the recorder mode rides the same knob.
+    assert UserConfig().log_level == "info"
 
 
 def test_service_log_path() -> None:

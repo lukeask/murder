@@ -5,9 +5,8 @@ from __future__ import annotations
 import asyncio
 import contextlib
 from collections.abc import Callable
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
-from murder.observability.advanced_log import current_advanced_log
 from murder.runtime.agents.base import AgentRole
 from murder.bus import AgentStatus
 
@@ -17,6 +16,12 @@ if TYPE_CHECKING:
     from murder.runtime.agents.base import LifecycleParticipant
 
 
+# Signature of the optional lifecycle hook Runtime wires onto the registry so
+# register / rename / clear ride the one bus aspect (AgentLifecycleEvent into
+# agent_records). Keyword-only: op, agent_id, details, reason.
+LifecycleHook = Callable[..., None]
+
+
 class AgentRegistry:
     """Owns live agent instances; Runtime delegates registration and lookup."""
 
@@ -24,6 +29,14 @@ class AgentRegistry:
         self._agents: dict[str, LifecycleParticipant] = {}
         self._crows: dict[str, LifecycleParticipant] = {}
         self._crow_handlers: dict[str, LifecycleParticipant] = {}
+        # Set by Runtime.start when the flight recorder is on; the registry has
+        # no bus handle of its own, so it calls back through this (no-op when
+        # unset, e.g. in tests or below the `advanced` rung).
+        self.on_lifecycle: LifecycleHook | None = None
+
+    def _emit(self, *, op: str, agent_id: str, **details: Any) -> None:
+        if self.on_lifecycle is not None:
+            self.on_lifecycle(op=op, agent_id=agent_id, details=details)
 
     def register(self, agent: LifecycleParticipant, *, persist: Callable[[LifecycleParticipant], None] | None = None) -> None:
         """Track one agent; optional ``persist`` is ``Runtime.sync_agent``."""
@@ -33,13 +46,11 @@ class AgentRegistry:
                 self._crows[agent.ticket_id] = agent
             elif agent.role == AgentRole.CROW_HANDLER:
                 self._crow_handlers[agent.ticket_id] = agent
-        current_advanced_log().record_agent(
-            payload={
-                "op": "register",
-                "agent_id": agent.id,
-                "role": getattr(getattr(agent, "role", None), "value", None),
-                "ticket_id": agent.ticket_id,
-            }
+        self._emit(
+            op="register",
+            agent_id=agent.id,
+            role=getattr(getattr(agent, "role", None), "value", None),
+            ticket_id=agent.ticket_id,
         )
         if persist is not None:
             persist(agent)
@@ -66,14 +77,12 @@ class AgentRegistry:
             return None
         agent.id = new_agent_id
         self._agents[new_agent_id] = agent
-        current_advanced_log().record_agent(
-            payload={
-                "op": "rename",
-                "agent_id": new_agent_id,
-                "old_agent_id": old_agent_id,
-                "role": getattr(getattr(agent, "role", None), "value", None),
-                "ticket_id": agent.ticket_id,
-            }
+        self._emit(
+            op="rename",
+            agent_id=new_agent_id,
+            old_agent_id=old_agent_id,
+            role=getattr(getattr(agent, "role", None), "value", None),
+            ticket_id=agent.ticket_id,
         )
         if persist is not None:
             persist(agent)
@@ -94,14 +103,9 @@ class AgentRegistry:
         agent = self._agents.pop(agent_id, None)
         if agent is None:
             return
-        current_advanced_log().record_agent(
-            payload={
-                "op": "reap",
-                "agent_id": agent_id,
-                "role": getattr(getattr(agent, "role", None), "value", None),
-                "ticket_id": agent.ticket_id,
-            }
-        )
+        # No AgentLifecycleEvent on reap: nothing reacts to the DEAD transition
+        # and reap is already on the bus via agent.stop() → StateSnapshotEvent.
+        # Gilding it would only risk mid-teardown over-reaction (plan §2.5.A).
         if agent.ticket_id is not None:
             # Only evict the index slot matching THIS agent's role; a crow and
             # its handler share a ticket_id, so reaping one half must not blow
@@ -121,13 +125,7 @@ class AgentRegistry:
             set_dead(db, agent_id, AgentStatus.DEAD.value)
 
     def clear(self) -> None:
-        current_advanced_log().record_agent(
-            payload={
-                "op": "clear",
-                "agent_id": None,
-                "count": len(self._agents),
-            }
-        )
+        self._emit(op="clear", agent_id="", count=len(self._agents))
         self._agents.clear()
         self._crows.clear()
         self._crow_handlers.clear()

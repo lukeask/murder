@@ -32,16 +32,21 @@ from murder.app.service.filesystem_sync import FilesystemSyncSupervisor
 from murder.app.service.recovery import ReconcileReport, reconcile_agents_vs_tmux
 from murder.app.service.runtime_lifecycle import kill_project_tmux_sessions, shutdown_live_agents
 from murder.bus import Bus, EventFilter, SubscriptionHandle
-from murder.bus.protocol import Entity, StateSnapshotEvent
+from murder.bus.protocol import AgentLifecycleEvent, Entity, StateSnapshotEvent
 from murder.observability.advanced_log import (
     AdvancedLogBase,
+    ArtifactRefRecord,
     NullAdvancedLog,
+    StateMutationRecord,
     open_advanced_log,
-    resolve_advanced_mode,
     set_current_advanced_log,
 )
 from murder.observability.log_context import set_run_id
-from murder.observability.logging_setup import configure_logging, resolve_log_level
+from murder.observability.logging_setup import (
+    configure_logging,
+    resolve_log_level,
+    resolve_recorder_mode,
+)
 from murder.llm.harnesses.versioning import HarnessVersionRegistry
 from murder.runtime.agents.events import AgentEventSink, LoggingAgentEventSink
 from murder.runtime.terminal import tmux
@@ -118,6 +123,8 @@ class Runtime:
         # boundaries can call ``self.advanced_log.record_*`` unconditionally.
         self.advanced_log: AdvancedLogBase = NullAdvancedLog()
         set_current_advanced_log(self.advanced_log)
+        # The recorder's bus subscription (only when advanced logging is on).
+        self._recorder_sub: SubscriptionHandle | None = None
 
     async def __aenter__(self) -> Runtime:
         await self.start()
@@ -161,11 +168,11 @@ class Runtime:
             )
             snap = json.dumps(self.config.model_dump(mode="json"), default=str)
             _db_insert_run(self.db, self.run_id, snap)
-            # Phase 2: open the opt-in flight recorder. No-op when the flags are
-            # off; otherwise creates a per-session DB under .murder/advlogs/,
+            # Phase 2: open the opt-in flight recorder. No-op when the recorder
+            # mode is off; otherwise creates a per-session DB under .murder/advlogs/,
             # writes the session_info row (with the main-DB schema marker), and
             # stores the pointer on the runs row.
-            mode = resolve_advanced_mode()
+            mode = resolve_recorder_mode()
             self.advanced_log = open_advanced_log(self.repo_root, self.run_id, mode)
             set_current_advanced_log(self.advanced_log)
             await self.advanced_log.start()
@@ -189,12 +196,22 @@ class Runtime:
                     if artifact.exists():
                         size = artifact.stat().st_size
                 self.advanced_log.record_artifact_ref(
-                    path=str(artifact),
-                    size=size,
-                    sha=None,
-                    links={"run_id": self.run_id},
+                    ArtifactRefRecord(
+                        path=str(artifact),
+                        size=size,
+                        sha=None,
+                        links={"run_id": self.run_id},
+                    )
                 )
             self.bus = Bus(self.run_id, self.db)
+            # The flight recorder is a normal bus SUBSCRIBER (plan §2.5.A): when
+            # on, it captures EVERY event (filter=None) and routes each to its
+            # record_family table. Registered before any sync task spawns so no
+            # early event is missed. Below the `advanced` rung it does not exist
+            # — no subscription, no DB, no per-run disk cost.
+            if mode != "off":
+                self._recorder_sub = self.bus.subscribe(self._record_bus_event)
+                self._agents.on_lifecycle = self._emit_agent_lifecycle
             self._sync = FilesystemSyncSupervisor.attach(
                 self.repo_root,
                 self.db,
@@ -252,7 +269,10 @@ class Runtime:
         await shutdown_live_agents(self._agents, graceful=graceful)
         with contextlib.suppress(Exception):
             await kill_project_tmux_sessions(self)
-        # Drain + close the flight recorder before the main DB closes.
+        # Stop feeding the recorder, then drain + close it before the main DB.
+        if self._recorder_sub is not None:
+            self._recorder_sub.cancel()
+            self._recorder_sub = None
         with contextlib.suppress(Exception):
             await self.advanced_log.stop()
         self.advanced_log = NullAdvancedLog()
@@ -322,6 +342,58 @@ class Runtime:
         self._emit_tasks.add(task)
         task.add_done_callback(self._emit_tasks.discard)
 
+    async def _record_bus_event(self, event: Any) -> None:
+        """Bus-subscriber handler for the flight recorder (plan §2.5.A).
+
+        Enqueue-and-return: the writer copies the correlation ids off the ambient
+        ``log_context`` (which ``asyncio.gather`` propagated from the publisher),
+        then returns immediately. Do NOT spawn a detached task here — that would
+        run outside the publish context and sever the ids.
+        """
+        self.advanced_log.record_bus_event(event)
+
+    def _emit_agent_lifecycle(
+        self, *, op: str, agent_id: str, details: dict[str, Any] | None = None,
+        reason: str | None = None,
+    ) -> None:
+        """Schedule an ``AgentLifecycleEvent`` publish from a SYNC registry hook.
+
+        Wired onto ``AgentRegistry.on_lifecycle`` at start so register / rename /
+        clear ride the one bus aspect into ``agent_records`` (force-stop reaches
+        this directly from agent_ops). AgentLifecycleEvent is purely forensic, so
+        gate on the recorder being on: below the ``advanced`` rung there is no
+        subscriber and the registry hook is never wired, so the only path that
+        could fire here is force-stop — which must also be a no-op when off.
+        Otherwise best-effort by contract: a no-op before the bus exists and
+        DURING shutdown — ``clear`` fires from the teardown path, and the plan
+        says emit-before-teardown or treat as best-effort rather than add a
+        hot-path duplicate write to dodge the race.
+        """
+        if (
+            self._recorder_sub is None
+            or self.bus is None
+            or self.run_id is None
+            or self._shutdown.is_set()
+        ):
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        task = loop.create_task(
+            self.bus.publish(
+                AgentLifecycleEvent(
+                    run_id=self.run_id,
+                    agent_id=agent_id,
+                    op=op,  # type: ignore[arg-type]
+                    details=details or {},
+                    reason=reason,
+                )
+            )
+        )
+        self._emit_tasks.add(task)
+        task.add_done_callback(self._emit_tasks.discard)
+
     async def publish_snapshot(self, entity: Entity, key: str) -> None:
         """Emit a key-only ``state.snapshot`` from an ASYNC choke point.
 
@@ -370,18 +442,21 @@ class Runtime:
             pid=None,
         )
         # Phase 2 flight recorder: agent mutation choke point (no-op when off).
+        # This is a non-bus rich seam: the key-only StateSnapshotEvent emitted
+        # below deliberately omits these fields, so this is not a duplicate of a
+        # bus event — it captures what the snapshot does not.
         self.advanced_log.record_state_mutation(
-            payload={
-                "entity": "agent",
-                "agent_id": agent.id,
-                "role": agent.role.value,
-                "ticket_id": agent.ticket_id,
-                "session": agent.session,
-                "status": agent.status.value,
-                "harness": getattr(getattr(agent, "harness", None), "kind", None),
-                "model": getattr(agent, "startup_model", None),
-                "worktree_path": str(worktree_path) if worktree_path is not None else None,
-            }
+            StateMutationRecord(
+                entity="agent",
+                agent_id=agent.id,
+                role=agent.role.value,
+                ticket_id=agent.ticket_id,
+                session=agent.session,
+                status=agent.status.value,
+                harness=getattr(getattr(agent, "harness", None), "kind", None),
+                model=getattr(agent, "startup_model", None),
+                worktree_path=str(worktree_path) if worktree_path is not None else None,
+            )
         )
         self.emit_snapshot(Entity.AGENT, agent.id)
 

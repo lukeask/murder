@@ -38,7 +38,7 @@ import hashlib
 from collections.abc import Iterable
 from typing import Any
 
-from murder.observability.advanced_log import current_advanced_log
+from murder.observability.advanced_log import ParserRecord, current_advanced_log
 
 from murder.llm.harnesses.parsing import strip_ansi
 from murder.llm.harnesses.transcripts._shared import (
@@ -469,10 +469,12 @@ class TranscriptAccumulator:
         parsed_segments = [s.segment for s in parsed]
         dedup_basis = repr(parsed_segments)
         current_advanced_log().record_parser(
-            session=None,
-            parsed=parsed_segments,
-            live_state=self._state,
-            dedup_hash=hashlib.sha1(dedup_basis.encode("utf-8")).hexdigest(),
+            ParserRecord(
+                session=None,
+                parsed=parsed_segments,
+                live_state=self._state,
+                dedup_hash=hashlib.sha1(dedup_basis.encode("utf-8")).hexdigest(),
+            )
         )
 
     def to_dict(self) -> dict[str, Any]:

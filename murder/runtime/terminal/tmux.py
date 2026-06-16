@@ -19,7 +19,7 @@ import tempfile
 import uuid
 from pathlib import Path
 
-from murder.observability.advanced_log import current_advanced_log
+from murder.observability.advanced_log import TmuxFrameRecord, current_advanced_log
 
 LARGE_PAYLOAD_BYTES = 1024
 PASTE_ENTER_DELAY_S = 0.15
@@ -106,9 +106,9 @@ async def create_session(
             raise TmuxError(f"session already exists: {name}") from exc
         raise
     current_advanced_log().record_tmux_frame(
-        session=name,
-        op="create",
-        meta={"width": width, "height": height},
+        TmuxFrameRecord(
+            session=name, op="create", meta={"width": width, "height": height}
+        )
     )
 
 
@@ -116,7 +116,7 @@ async def kill_session(name: str) -> None:
     """Kill `name`. No-op if it doesn't exist."""
     if await session_exists(name):
         await _tmux("kill-session", "-t", name)
-        current_advanced_log().record_tmux_frame(session=name, op="kill")
+        current_advanced_log().record_tmux_frame(TmuxFrameRecord(session=name, op="kill"))
 
 
 async def rename_session(old_name: str, new_name: str) -> bool:
@@ -155,9 +155,9 @@ async def list_sessions(prefix: str | None = None) -> list[str]:
     names = [line for line in out.splitlines() if line]
     result = [n for n in names if prefix is None or n.startswith(prefix)]
     current_advanced_log().record_tmux_frame(
-        session="*",
-        op="list",
-        meta={"prefix": prefix, "count": len(result)},
+        TmuxFrameRecord(
+            session="*", op="list", meta={"prefix": prefix, "count": len(result)}
+        )
     )
     return result
 
@@ -198,11 +198,13 @@ def _record_capture(name: str, out: str, *, lines: int, escapes: bool) -> None:
     """
     dedup_hash = hashlib.sha1(out.encode("utf-8", errors="replace")).hexdigest()
     current_advanced_log().record_tmux_frame(
-        session=name,
-        op="capture",
-        frame=out,
-        meta={"lines": lines, "escapes": escapes},
-        dedup_hash=dedup_hash,
+        TmuxFrameRecord(
+            session=name,
+            op="capture",
+            frame=out,
+            meta={"lines": lines, "escapes": escapes},
+            dedup_hash=dedup_hash,
+        )
     )
 
 
@@ -217,7 +219,9 @@ async def send_keys(name: str, text: str, *, literal: bool = True, enter: bool =
         # Non-literal: caller is sending key names like 'C-c' or 'Enter'.
         await _tmux("send-keys", "-t", name, text)
         current_advanced_log().record_tmux_frame(
-            session=name, op="send", frame=text, meta={"literal": False, "enter": enter}
+            TmuxFrameRecord(
+                session=name, op="send", frame=text, meta={"literal": False, "enter": enter}
+            )
         )
         return
 
@@ -235,7 +239,9 @@ async def send_keys(name: str, text: str, *, literal: bool = True, enter: bool =
         await _tmux("send-keys", "-t", name, "Enter")
 
     current_advanced_log().record_tmux_frame(
-        session=name, op="send", frame=text, meta={"literal": True, "enter": enter}
+        TmuxFrameRecord(
+            session=name, op="send", frame=text, meta={"literal": True, "enter": enter}
+        )
     )
 
 

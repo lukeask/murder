@@ -174,9 +174,11 @@ class UserLlmConfig(BaseModel):
 
 class UserConfig(BaseModel):
     tui: TuiUserConfig = Field(default_factory=TuiUserConfig)
-    # Default root log level for the structured per-run service.log; overridable
-    # by --log-level and MURDER_LOG_LEVEL (see murder.observability.logging_setup).
-    log_level: str = "INFO"
+    # Default rung on the single --log-level ladder (error / warning / info /
+    # debug / advanced / advanced-raw); overridable by --log-level and
+    # MURDER_LOG_LEVEL. The recorder mode rides the same rung — there is no
+    # separate advanced-logging flag (see murder.observability.logging_setup).
+    log_level: str = "info"
     collaborator: UserHarnessRolePatch | None = None
     default_crow: UserHarnessRolePatch | None = None
     notetaker: UserNotetakerPatch | None = None

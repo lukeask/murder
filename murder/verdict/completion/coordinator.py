@@ -11,9 +11,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol
 
-from murder.bus import Bus, Entity
+from murder.bus import Bus, CompletionVerdictEvent, Entity
 from murder.bus import Role as AgentRole
-from murder.observability.advanced_log import current_advanced_log
 
 from .checks.base import CheckResult, CheckStatus, CompletionContext
 from .persistence import bump_attempts, get_attempts, reset_attempts, write_check_result
@@ -128,13 +127,7 @@ class CompletionCoordinator:
 
         if not failures:
             await self._transition_done(ticket_id)
-            current_advanced_log().record_decision(
-                payload={
-                    "source": "completion",
-                    "ticket_id": ticket_id,
-                    "result": {"completed": True, "failed_checks": []},
-                }
-            )
+            await self._emit_verdict(ticket_id, completed=True)
             return DoneHandleResult(completed=True)
 
         reprompt_msgs: list[str] = []
@@ -163,20 +156,43 @@ class CompletionCoordinator:
                 await crow.send(combined)
 
         failed_check_names = tuple(name for name, _ in failures)
-        current_advanced_log().record_decision(
-            payload={
-                "source": "completion",
-                "ticket_id": ticket_id,
-                "result": {
-                    "completed": False,
-                    "ticket_failed": ticket_failed,
-                    "failed_checks": list(failed_check_names),
-                },
-            }
+        await self._emit_verdict(
+            ticket_id,
+            completed=False,
+            ticket_failed=ticket_failed,
+            failed_checks=list(failed_check_names),
         )
         return DoneHandleResult(
             completed=False,
             failed_checks=failed_check_names,
+        )
+
+    async def _emit_verdict(
+        self,
+        ticket_id: str,
+        *,
+        completed: bool,
+        ticket_failed: bool = False,
+        failed_checks: list[str] | None = None,
+    ) -> None:
+        """Publish the completion verdict so forensic capture rides the bus aspect.
+
+        Replaces the old per-emitter ``record_decision()`` call: the recorder
+        subscriber routes this into ``decision_records``. Confirmed TUI consumer
+        — it reads via the key-only ``state.snapshot`` path, so keep this rich
+        event server-side. No-op before the bus / run id exist.
+        """
+        if self._rt.bus is None or self._rt.run_id is None:
+            return
+        await self._rt.bus.publish(
+            CompletionVerdictEvent(
+                run_id=self._rt.run_id,
+                agent_id="completion",
+                ticket_id=ticket_id,
+                completed=completed,
+                ticket_failed=ticket_failed,
+                failed_checks=failed_checks or [],
+            )
         )
 
     async def _dispatch(

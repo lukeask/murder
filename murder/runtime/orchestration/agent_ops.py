@@ -311,6 +311,16 @@ class AgentOps:
                 with contextlib.suppress(tmux.TmuxError):
                     await tmux.kill_session(session)
             _db_set_agent_status(db, row["agent_id"], AgentStatus.DEAD.value)
+            # Forensic gap the v1 left open: a force-stop of an agent the runtime
+            # forgot left no trace. Ride the one bus aspect into agent_records
+            # (no-op when the recorder is off / no bus).
+            emit = getattr(self.rt, "_emit_agent_lifecycle", None)
+            if emit is not None:
+                emit(
+                    op="force_stop",
+                    agent_id=row["agent_id"],
+                    details={"session": session, "requested_agent_id": agent_id},
+                )
         return {"handled": True, "agent_id": agent_id}
 
     async def rename_rogue_agent(self, agent_id: str, name: str) -> dict[str, Any]:

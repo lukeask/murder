@@ -7,8 +7,6 @@ from dataclasses import dataclass, fields
 from datetime import datetime
 from typing import Protocol, TypeAlias
 
-from murder.observability.advanced_log import current_advanced_log
-
 log = logging.getLogger(__name__)
 
 # LogRecord attributes (and our formatter's core keys) we must never shadow by
@@ -95,13 +93,13 @@ class LoggingAgentEventSink:
     async def emit(self, event: AgentEvent) -> None:
         event_type = type(event).__name__
         extra: dict[str, object] = {"event_type": event_type}
-        # Flight-recorder payload mirrors the structured event fields but keeps
-        # original field names (the recorder has no reserved-key constraint).
-        record_payload: dict[str, object] = {"event_type": event_type}
+        # The full typed payload rides the Phase 1 structured NDJSON log below
+        # (Step 1.6). These harness events carry no bulky bodies, so there is no
+        # separate Phase 2 flight-recorder capture here — that would just be the
+        # redundant per-emitter write the plan collapses (§2.5).
         for field in fields(event):
             key = field.name
             value = getattr(event, key)
-            record_payload[key] = value
             # ``session_name`` already rides in the message string; keep it
             # structured too. Remap any field whose name would collide with a
             # reserved LogRecord attribute (e.g. ``message``) before it reaches
@@ -109,8 +107,6 @@ class LoggingAgentEventSink:
             if key in _RESERVED_EXTRA_KEYS:
                 key = f"event_{key}"
             extra[key] = value
-        # Phase 2 flight recorder (no-op when advanced logging is off).
-        current_advanced_log().record_agent(payload=record_payload)
         level = _EVENT_LEVELS.get(event_type, logging.INFO)
         self._logger.log(
             level,

@@ -10,8 +10,10 @@ import pytest
 
 from murder.observability.advanced_log import (
     AdvancedLog,
+    ApiRecord,
     ChangeGate,
     NullAdvancedLog,
+    TmuxFrameRecord,
     open_advanced_log,
     redact,
 )
@@ -31,8 +33,8 @@ def test_null_writer_creates_no_file(tmp_path):
     log = open_advanced_log(repo, "run-1", "off")
     assert isinstance(log, NullAdvancedLog)
     # No-ops do nothing and never raise.
-    log.record_api(request={"a": 1}, model="m")
-    log.record_tmux_frame(session="s", op="capture", frame="x")
+    log.record_api(ApiRecord(request={"a": 1}, model="m"))
+    log.record_tmux_frame(TmuxFrameRecord(session="s", op="capture", frame="x"))
     assert not advlogs_dir(repo).exists()
 
 
@@ -100,7 +102,9 @@ def test_raw_mode_passes_secret_through(tmp_path):
     async def _run():
         log = open_advanced_log(repo, "run-raw", "raw")
         await log.start()
-        log.record_api(request={"Authorization": "Bearer sk-rawtoken12345678"}, model="m")
+        log.record_api(
+            ApiRecord(request={"Authorization": "Bearer sk-rawtoken12345678"}, model="m")
+        )
         await log.stop()
         return log._db_path
 
@@ -125,14 +129,25 @@ def test_change_gate_dedups_and_cadence():
     assert gate.should_record("k", "x", min_interval_s=1.0) is True
 
 
-def test_record_enqueues_with_correlation_ids(tmp_path):
+class _FakeBusEvent:
+    """A minimal event for record_bus_event: default family, vars()-serializable."""
+
+    record_family = "event_records"
+
+    def __init__(self) -> None:
+        self.hello = "world"
+
+
+def test_record_bus_event_enqueues_with_correlation_ids(tmp_path):
     repo = _repo(tmp_path)
 
     async def _run():
         log = open_advanced_log(repo, "run-corr", "redacted")
         await log.start()
+        # The recorder reads the ambient correlation context itself — the bus
+        # subscriber runs inside the publisher's log_context in production.
         with log_context(run_id="run-corr", agent_id="ag-1", command_id="cmd-1"):
-            log.record_event(payload={"hello": "world"})
+            log.record_bus_event(_FakeBusEvent())
         await log.stop()
         return log._db_path
 

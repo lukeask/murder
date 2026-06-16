@@ -19,7 +19,6 @@ from murder.app.cli.service_cmd import (
     _ensure_supervisor,
     _ensure_supervisor_started,
     _run_async_entry,
-    apply_client_advanced_logging,
     apply_client_log_level,
 )
 from murder.bus.transport_socket import default_socket_path
@@ -118,24 +117,17 @@ def cmd_up(
     log_level: str | None = typer.Option(
         None,
         "--log-level",
-        help="Log level: DEBUG, INFO, WARNING, ERROR (default INFO).",
+        help=(
+            "Verbosity ladder (one knob): error, warning, info (default), debug, "
+            "advanced (flight recorder, redacted), advanced-raw (unredacted)."
+        ),
         case_sensitive=False,
-    ),
-    advanced_logging: bool = typer.Option(
-        False,
-        "--advanced-logging",
-        help="Open the redacted flight-recorder DB under .murder/advlogs/.",
-    ),
-    advanced_logging_raw: bool = typer.Option(
-        False,
-        "--advanced-logging-raw",
-        help="Flight recorder with UNREDACTED bodies (implies --advanced-logging).",
     ),
 ) -> None:
     """Start the background supervisor and print whether it was already running."""
-    # Resolve + propagate to env BEFORE spawning serviced (inherited env carries it).
+    # Resolve + propagate the rung to env BEFORE spawning serviced (inherited env
+    # carries it; the recorder mode rides the same rung — no separate flag).
     apply_client_log_level(log_level)
-    apply_client_advanced_logging(advanced_logging, advanced_logging_raw)
 
     async def _up() -> None:
         repo = _repo_root()

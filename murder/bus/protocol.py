@@ -29,7 +29,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, ClassVar, Literal
 from uuid import UUID, uuid4
 
 try:
@@ -115,6 +115,18 @@ class _BaseEvent(BaseModel):
     role: Role | None = None
     ticket_id: str | None = None
 
+    # Flight-recorder routing (plan §2.5.A). The recorder is a bus SUBSCRIBER
+    # that captures each event into the table named here — events SELF-DESCRIBE
+    # their family, so there is no central match/registry to edit per new type.
+    # Default ``event_records`` means "captured into the generic bulky dump";
+    # subclasses whose forensic shape belongs in a typed family override it; a
+    # value of ``None`` opts the event out of capture entirely. A structural
+    # guard test asserts every subclass declares a value that is None or a real
+    # family, so a typo'd family fails loudly at CI instead of silently never
+    # being captured. (ClassVar → pydantic treats it as a class attr, not a
+    # field, so it is not serialized and does not touch the wire contract.)
+    record_family: ClassVar[str | None] = "event_records"
+
 
 # --- Legacy types (semantics unchanged from murder/bus.py pre-refactor) ------
 
@@ -190,6 +202,7 @@ class CommandEvent(_BaseEvent):
     """
 
     type: Literal["command"] = "command"
+    record_family: ClassVar[str] = "command_records"
     target_worker: str
     kind: str
     payload: dict[str, Any] = Field(default_factory=dict)
@@ -258,6 +271,7 @@ class SchedulerDecisionEvent(_BaseEvent):
     """Emitted on every crow_magic tick per (harness, window_key)."""
 
     type: Literal["scheduler.decision"] = "scheduler.decision"
+    record_family: ClassVar[str] = "decision_records"
     mode: str
     harness: str
     window_key: str
@@ -268,6 +282,40 @@ class SchedulerDecisionEvent(_BaseEvent):
     threshold: float
     rationale: str
     kicked_ticket_id: str | None = None
+
+
+class CompletionVerdictEvent(_BaseEvent):
+    """A completion coordinator verdict for a ticket (peer of SchedulerDecisionEvent).
+
+    Published at both verdict sites in ``verdict/completion/coordinator.py`` so
+    the forensic capture rides the one bus aspect instead of a parallel
+    ``record_decision()`` call. Confirmed TUI consumer (Luke, 2026-06-16): the
+    client reads it via the key-only ``state.snapshot`` + slice-refetch path, not
+    this rich event directly — keep the payload forensics-shaped, server-side.
+    """
+
+    type: Literal["completion.verdict"] = "completion.verdict"
+    record_family: ClassVar[str] = "decision_records"
+    completed: bool
+    ticket_failed: bool = False
+    failed_checks: list[str] = Field(default_factory=list)
+
+
+class AgentLifecycleEvent(_BaseEvent):
+    """A rich agent-registry mutation (register / rename / clear / force_stop).
+
+    Published at registry mutations — INCLUDING the ones that emitted nothing
+    before (``clear``, force-stop) — so the recorder captures them into
+    ``agent_records`` and the per-emitter ``record_agent()`` calls go away. NOT
+    emitted on ``reap``'s DEAD transition: nothing reacts to it and reap is
+    already on the bus via the ``agent.stop() → StateSnapshotEvent`` path.
+    """
+
+    type: Literal["agent.lifecycle"] = "agent.lifecycle"
+    record_family: ClassVar[str] = "agent_records"
+    op: Literal["register", "rename", "clear", "force_stop"]
+    details: dict[str, Any] = Field(default_factory=dict)
+    reason: str | None = None
 
 
 class UsageResetEvent(_BaseEvent):
@@ -347,6 +395,8 @@ BusEvent = Annotated[
     | PresenceEvent
     | SchedulerModeEvent
     | SchedulerDecisionEvent
+    | CompletionVerdictEvent
+    | AgentLifecycleEvent
     | UsageResetEvent
     | ConversationBlockEvent
     | ConversationStateEvent
@@ -581,6 +631,8 @@ __all__ = [
     "PresenceEvent",
     "SchedulerModeEvent",
     "SchedulerDecisionEvent",
+    "CompletionVerdictEvent",
+    "AgentLifecycleEvent",
     "UsageResetEvent",
     "ConversationBlockEvent",
     "ConversationStateEvent",

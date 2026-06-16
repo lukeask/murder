@@ -28,6 +28,25 @@ LOG = logging.getLogger(__name__)
 VALID_LEVELS: frozenset[str] = frozenset({"DEBUG", "INFO", "WARNING", "ERROR"})
 DEFAULT_LEVEL = "INFO"
 
+# The single verbosity ladder (plan §"The verbosity ladder — ONE knob"). This is
+# the ONLY place that knows the ladder's shape: each rung of the user-facing
+# ``--log-level`` knob maps to (python logging level, flight-recorder mode).
+# ``advanced`` / ``advanced-raw`` are the TOP of the same ladder, not a second
+# axis — there are no separate ``--advanced-logging`` flags. Nothing downstream
+# branches on the raw string; callers ask for the python level OR the recorder
+# mode via the two resolvers below.
+LADDER: dict[str, tuple[str, str]] = {
+    "error": ("ERROR", "off"),
+    "warning": ("WARNING", "off"),
+    "info": ("INFO", "off"),
+    "debug": ("DEBUG", "off"),
+    "advanced": ("DEBUG", "redacted"),
+    "advanced-raw": ("DEBUG", "raw"),
+}
+DEFAULT_RUNG = "info"
+# Accepted on the CLI / env / config; surfaced in --log-level help.
+VALID_RUNGS: tuple[str, ...] = tuple(LADDER)
+
 # Sentinel attributes tagging handlers this module installs, so repeat calls are
 # idempotent and we never collide with handlers installed elsewhere.
 _STDERR_TAG = "_murder_stderr_handler"
@@ -123,25 +142,59 @@ def configure_logging(*, level: str, log_path: Path | None) -> None:
             root.addHandler(file_handler)
 
 
-def resolve_log_level(cli_value: str | None = None) -> str:
-    """Resolve the effective log level.
+def _normalize_rung(value: str | None) -> str | None:
+    """Map a raw value to a ladder rung, or ``None`` if it isn't one.
+
+    Tolerant of case and ``advanced_raw`` / ``advanced-raw`` punctuation, and of
+    the legacy upper-case python-level spellings (``INFO`` → ``info``)."""
+    if not value:
+        return None
+    candidate = value.strip().lower().replace("_", "-")
+    return candidate if candidate in LADDER else None
+
+
+def resolve_rung(cli_value: str | None = None) -> str:
+    """Resolve the effective ``--log-level`` rung (a key of :data:`LADDER`).
 
     Precedence: ``cli_value`` > ``MURDER_LOG_LEVEL`` env > user config
-    ``log_level`` > ``INFO``. An invalid value at any tier falls back to INFO
-    rather than crashing.
+    ``log_level`` > ``info``. An unrecognised value at any tier is skipped so a
+    typo falls through to the next tier rather than crashing. This is the single
+    resolver the plan calls for; level and recorder mode are both derived here.
     """
-    if cli_value:
-        return _normalize_level(cli_value)
+    for candidate in (cli_value, os.environ.get("MURDER_LOG_LEVEL"), _config_log_level()):
+        rung = _normalize_rung(candidate)
+        if rung is not None:
+            return rung
+    return DEFAULT_RUNG
 
-    env_value = os.environ.get("MURDER_LOG_LEVEL")
-    if env_value:
-        return _normalize_level(env_value)
 
-    config_value = _config_log_level()
-    if config_value:
-        return _normalize_level(config_value)
+def level_for_rung(rung: str) -> str:
+    """Map an already-resolved rung to its python logging level.
 
-    return DEFAULT_LEVEL
+    The one place that knows :data:`LADDER`'s tuple shape, so callers that
+    already hold a rung don't index ``[0]`` themselves.
+    """
+    return LADDER[rung][0]
+
+
+def recorder_mode_for_rung(rung: str) -> str:
+    """Map an already-resolved rung to its flight-recorder mode."""
+    return LADDER[rung][1]
+
+
+def resolve_log_level(cli_value: str | None = None) -> str:
+    """Resolve the effective python logging level via the single ladder."""
+    return level_for_rung(resolve_rung(cli_value))
+
+
+def resolve_recorder_mode(cli_value: str | None = None) -> str:
+    """Resolve the flight-recorder mode (``off`` / ``redacted`` / ``raw``).
+
+    The recorder is the top of the ``--log-level`` ladder, not a second flag:
+    ``advanced`` → ``redacted``, ``advanced-raw`` → ``raw``, everything below →
+    ``off``.
+    """
+    return recorder_mode_for_rung(resolve_rung(cli_value))
 
 
 def _config_log_level() -> Optional[str]:

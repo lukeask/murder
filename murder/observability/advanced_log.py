@@ -3,24 +3,33 @@
 A separate, disposable SQLite "flight recorder" DB capturing the BULKY streams
 (full API bodies, raw tmux frames, parsed-frame snapshots, …) for local
 debugging. Fully independent of ``murder.db``: own connection, own
-``schema_version``. Opt-in via ``--advanced-logging`` / ``--advanced-logging-raw``
-(env vars ``MURDER_ADVANCED_LOGGING`` / ``MURDER_ADVANCED_LOGGING_RAW``).
+``schema_version``. Opt-in via the top rungs of the single ``--log-level`` knob
+(``advanced`` → redacted, ``advanced-raw`` → unredacted); there is NO separate
+flag and no second env var. The level resolver in
+:mod:`murder.observability.logging_setup` maps the rung to the recorder mode.
 
-Design contract (Wave 4 depends on it):
+Design contract:
 
-- :class:`AdvancedLog` exposes typed ``record_*`` methods, one per record family.
-  Each reads the four Phase 1 correlation ids from
+- :class:`AdvancedLog` exposes typed ``record_*`` methods. The non-bus seams
+  (api / tmux / parser / command / artifact / exception / state-mutation) each
+  take a frozen record dataclass defined in THIS module — the payload contract
+  lives in one place, so call sites construct a value instead of hand-building a
+  dict whose key-shape only a future reader knows. Bus-borne capture rides
+  :meth:`AdvancedLog.record_bus_event`, which routes a published event to its
+  ``record_family`` table (the bus is the single aspect; see the plan §2.5.A).
+  Each method reads the four Phase 1 correlation ids from
   :mod:`murder.observability.log_context` ITSELF, stamps ``ts`` /
   ``capture_level``, applies :func:`redact` (unless raw mode), and ENQUEUES the
   row. A background asyncio task drains the queue with ``await queue.get()`` and
   batch-inserts. Writes are append-only and NON-BLOCKING: under backpressure a
-  bounded queue drops + counts rather than stalling the runtime.
+  bounded queue drops + counts per family, and a ``gap_marker`` row is emitted so
+  the shed records are visible rather than a silent hole.
 - :class:`NullAdvancedLog` is the same interface, every method a no-op, no DB,
-  no task. When the flags are OFF this is what flows through the code paths so
-  Wave 4 call sites stay UNCONDITIONAL.
+  no task. When the recorder is OFF this is what flows through the code paths so
+  call sites stay UNCONDITIONAL.
 - :func:`current_advanced_log` returns the writer set by ``Runtime.start`` via a
-  module ContextVar, so the 7 instrumentation boundaries that have no direct
-  Runtime handle can reach it without plumbing.
+  module ContextVar, so the non-bus boundaries that have no direct Runtime handle
+  can reach it without plumbing.
 """
 
 from __future__ import annotations
@@ -28,6 +37,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import copy
+import dataclasses
 import json
 import logging
 import re
@@ -35,6 +45,7 @@ import sqlite3
 import subprocess
 import time
 from contextvars import ContextVar
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal, Optional
@@ -67,7 +78,120 @@ _FAMILY_EXTRA_COLUMNS: dict[str, tuple[str, ...]] = {
 
 
 # --------------------------------------------------------------------------- #
-# Module accessor (Wave 4 reaches the writer through this).
+# Typed records (Step 2.2) — the payload contract for the non-bus seams lives
+# here, in one module. Each ``record_*`` below takes one of these frozen values
+# instead of loose kwargs / an ad-hoc dict, so a caller cannot typo a key-shape
+# only a future reader knows. The ON-DISK json payload is unchanged: the writer
+# decides which fields land in the row (e.g. ``dedup_hash`` gates but is not
+# stored). Bus-borne events are their own typed records (pydantic) and route via
+# :meth:`AdvancedLog.record_bus_event`, so they need no dataclass here.
+# --------------------------------------------------------------------------- #
+
+
+@dataclass(frozen=True)
+class ApiRecord:
+    """LLM/API ``complete()`` boundary: request + response bodies, usage."""
+
+    request: Any = None
+    response: Any = None
+    model: str | None = None
+    status: str | None = None
+    retries: int | None = None
+    usage: Any = None
+
+
+@dataclass(frozen=True)
+class TmuxFrameRecord:
+    """A raw/sampled tmux pane frame. ``dedup_hash`` gates, it is not stored."""
+
+    session: str
+    op: str
+    frame: Any = None
+    meta: Any = None
+    dedup_hash: str | None = None
+
+
+@dataclass(frozen=True)
+class ParserRecord:
+    """A parsed-frame snapshot. ``dedup_hash`` gates, it is not stored."""
+
+    session: str | None = None
+    parsed: Any = None
+    live_state: Any = None
+    parse_error: Any = None
+    choices: Any = None
+    dedup_hash: str | None = None
+
+
+@dataclass(frozen=True)
+class CommandRecord:
+    """A command-dispatch state transition (claim / complete / fail)."""
+
+    phase: str
+    command_id: str
+    command: Any = None
+    result: Any = None
+    last_error: str | None = None
+    retryable: bool | None = None
+
+
+@dataclass(frozen=True)
+class StateMutationRecord:
+    """A persisted agent-field mutation at the sync choke point."""
+
+    entity: str
+    agent_id: str
+    role: str | None = None
+    ticket_id: str | None = None
+    session: str | None = None
+    status: str | None = None
+    harness: str | None = None
+    model: str | None = None
+    worktree_path: str | None = None
+
+
+@dataclass(frozen=True)
+class ArtifactRefRecord:
+    """A reference (never contents) to an existing large on-disk artifact."""
+
+    path: str
+    size: int | None = None
+    sha: str | None = None
+    line_range: Any = None
+    byte_range: Any = None
+    links: Any = None
+
+
+@dataclass(frozen=True)
+class ExceptionRecord:
+    """A swallowed-exception site captured with full context."""
+
+    site: str
+    exc: Any
+    payload: Any = None
+
+
+def _event_envelope(event: Any) -> dict[str, Any]:
+    """Serialize the FULL event envelope for the flight recorder.
+
+    Unlike the Phase 1 ``events`` persist (which excludes the correlation /
+    envelope fields), the recorder captures the bulky, complete envelope. Falls
+    back to ``vars()`` for non-pydantic objects so capture never raises.
+    """
+    dump = getattr(event, "model_dump", None)
+    if callable(dump):
+        try:
+            return dump(mode="json")
+        except Exception:  # pragma: no cover - capture must never crash publish
+            pass
+    try:
+        return dict(vars(event))
+    except TypeError:  # pragma: no cover - no __dict__
+        return {"repr": repr(event)}
+
+
+# --------------------------------------------------------------------------- #
+# Module accessor (the non-bus seams reach the writer through this).
 # --------------------------------------------------------------------------- #
 
 _current: ContextVar[Optional["AdvancedLogBase"]] = ContextVar(
@@ -304,38 +428,33 @@ class AdvancedLogBase:
     def write_session_info(self, *, main_db: sqlite3.Connection | None = None) -> None:
         return None
 
-    # -- record families (Wave 4 contract) -- #
-    def record_api(self, *, request=None, response=None, model=None, status=None,
-                   retries=None, usage=None) -> None:
+    # -- record families -- #
+    #
+    # The bus is the single capture aspect: :meth:`record_bus_event` routes a
+    # published event to its ``record_family`` table. The methods below are the
+    # irreducible NON-BUS seams (plan §2.5.B), each taking a typed record.
+    def record_bus_event(self, event: Any) -> None:
         return None
 
-    def record_tmux_frame(self, *, session, op, frame=None, meta=None, dedup_hash=None) -> None:
+    def record_api(self, record: ApiRecord) -> None:
         return None
 
-    def record_parser(self, *, session=None, parsed=None, live_state=None,
-                      parse_error=None, choices=None, dedup_hash=None) -> None:
+    def record_tmux_frame(self, record: TmuxFrameRecord) -> None:
         return None
 
-    def record_event(self, *, payload) -> None:
+    def record_parser(self, record: ParserRecord) -> None:
         return None
 
-    def record_command(self, *, payload) -> None:
+    def record_command(self, record: CommandRecord) -> None:
         return None
 
-    def record_decision(self, *, payload) -> None:
+    def record_state_mutation(self, record: StateMutationRecord) -> None:
         return None
 
-    def record_agent(self, *, payload) -> None:
+    def record_artifact_ref(self, record: ArtifactRefRecord) -> None:
         return None
 
-    def record_state_mutation(self, *, payload) -> None:
-        return None
-
-    def record_artifact_ref(self, *, path, size=None, sha=None, line_range=None,
-                            byte_range=None, links=None) -> None:
-        return None
-
-    def record_exception(self, *, site, exc, payload=None) -> None:
+    def record_exception(self, record: ExceptionRecord) -> None:
         return None
 
 
@@ -368,8 +487,16 @@ class AdvancedLog(AdvancedLogBase):
         self._queue: asyncio.Queue[tuple[str, tuple]] = asyncio.Queue(maxsize=_QUEUE_MAXSIZE)
         self._task: asyncio.Task[None] | None = None
         self._closed = False
-        self.dropped = 0
+        # Per-family count of records shed under backpressure since the last
+        # gap_marker row for that family. A non-zero value triggers a gap_marker
+        # on the next successful enqueue so the hole is visible, never silent.
+        self._drops: dict[str, int] = {}
         self.gate = ChangeGate()
+
+    @property
+    def dropped(self) -> int:
+        """Total records shed under backpressure across all families."""
+        return sum(self._drops.values())
 
     # -- lifecycle -- #
 
@@ -383,9 +510,15 @@ class AdvancedLog(AdvancedLogBase):
         self._closed = True
         if self._task is not None:
             # Sentinel wakes the blocked `await queue.get()` so the loop exits
-            # after draining, rather than being cancelled mid-batch.
+            # after draining. But if the queue is FULL the sentinel is shed —
+            # cancel is the guaranteed terminator. This is safe: `_write_batch`
+            # has no await, so cancellation can only fire at the `queue.get()`
+            # BETWEEN batches, never mid-write, and `_flush_remaining` below
+            # picks up anything still queued. (Without the cancel a full queue at
+            # shutdown deadlocks stop() forever.)
             with contextlib.suppress(asyncio.QueueFull):
                 self._queue.put_nowait(("__stop__", ()))
+            self._task.cancel()
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await self._task
             self._task = None
@@ -443,9 +576,7 @@ class AdvancedLog(AdvancedLogBase):
             f"INSERT INTO {family} ({', '.join(cols)}) VALUES ({placeholders})", row
         )
 
-    def _enqueue(self, family: str, payload: Any, *, extras: tuple = ()) -> None:
-        if self._closed:
-            return
+    def _build_row(self, payload: Any, extras: tuple) -> tuple:
         from murder.observability import log_context as _lc
 
         ids = tuple(_lc._VARS[name].get() for name in CONTEXT_FIELDS)
@@ -455,11 +586,39 @@ class AdvancedLog(AdvancedLogBase):
         except Exception:  # pragma: no cover
             payload_json = json.dumps({"__unserializable__": True})
         ts = datetime.now(timezone.utc).isoformat()
-        row = (ts, *ids, self.mode, *extras, payload_json)
+        return (ts, *ids, self.mode, *extras, payload_json)
+
+    def _enqueue(self, family: str, payload: Any, *, extras: tuple = ()) -> None:
+        if self._closed:
+            return
+        row = self._build_row(payload, extras)
         try:
             self._queue.put_nowait((family, row))
         except asyncio.QueueFull:
-            self.dropped += 1
+            # Shed + count rather than stall the runtime. Visibility comes from
+            # the gap_marker emitted on the next record that DOES fit.
+            self._drops[family] = self._drops.get(family, 0) + 1
+            return
+        pending = self._drops.get(family, 0)
+        if pending:
+            self._emit_gap_marker(family, pending, extras)
+
+    def _emit_gap_marker(self, family: str, dropped: int, extras: tuple) -> None:
+        """Enqueue a visible 'N records lost here' row (best-effort).
+
+        Reuses the family's own table (same column arity, blank extras) so a
+        reader sees the gap inline with the surviving rows. If the queue is still
+        full the marker is deferred — the drop count is retained until it lands.
+        """
+        marker = self._build_row(
+            {"__gap_marker__": True, "family": family, "dropped_since_last": dropped},
+            ("",) * len(_FAMILY_EXTRA_COLUMNS[family]),
+        )
+        try:
+            self._queue.put_nowait((family, marker))
+        except asyncio.QueueFull:  # pragma: no cover - still saturated; retry later
+            return
+        self._drops[family] = 0
 
     # -- session_info -- #
 
@@ -481,10 +640,7 @@ class AdvancedLog(AdvancedLogBase):
                     config_hash = hashlib.sha256(
                         str(row["config_snapshot"]).encode("utf-8")
                     ).hexdigest()
-        flags = {
-            "advanced_logging": self.mode in ("redacted", "raw"),
-            "advanced_logging_raw": self.mode == "raw",
-        }
+        flags = {"recorder_mode": self.mode}
         self._conn.execute(
             """
             INSERT INTO session_info
@@ -504,96 +660,87 @@ class AdvancedLog(AdvancedLogBase):
         )
         self._conn.commit()
 
-    # -- record families (Wave 4 contract) -- #
+    # -- bus aspect: route a published event to its family table -- #
 
-    def record_api(self, *, request=None, response=None, model=None, status=None,
-                   retries=None, usage=None) -> None:
+    def record_bus_event(self, event: Any) -> None:
+        """Capture a published bus event into the table named by its family.
+
+        The recorder is registered as a bus SUBSCRIBER (plan §2.5.A); this is
+        its handler body. The destination table is the event class's
+        ``record_family`` classvar (default ``event_records``); ``None`` opts the
+        event out of capture entirely. Runs inside the publisher's
+        ``log_context`` (``asyncio.gather`` copies it into the handler task), so
+        the correlation ids are read by :meth:`_build_row` as usual.
+        """
+        family = getattr(type(event), "record_family", "event_records")
+        if family is None:
+            return
+        self._enqueue(family, _event_envelope(event))
+
+    # -- record families: the irreducible non-bus seams (plan §2.5.B) -- #
+
+    def record_api(self, record: ApiRecord) -> None:
         payload = {
-            "request": request,
-            "response": response,
-            "model": model,
-            "status": status,
-            "retries": retries,
-            "usage": usage,
+            "request": record.request,
+            "response": record.response,
+            "model": record.model,
+            "status": record.status,
+            "retries": record.retries,
+            "usage": record.usage,
         }
-        self._enqueue("api_records", payload, extras=(model,))
+        self._enqueue("api_records", payload, extras=(record.model,))
 
-    def record_tmux_frame(self, *, session, op, frame=None, meta=None, dedup_hash=None) -> None:
-        if dedup_hash is not None and not self.gate.should_record(
-            f"tmux:{session}:{op}", dedup_hash, min_interval_s=1.0
+    def record_tmux_frame(self, record: TmuxFrameRecord) -> None:
+        if record.dedup_hash is not None and not self.gate.should_record(
+            f"tmux:{record.session}:{record.op}", record.dedup_hash, min_interval_s=1.0
         ):
             return
-        payload = {"session": session, "op": op, "frame": frame, "meta": meta}
-        self._enqueue("tmux_frames", payload, extras=(session,))
+        payload = {
+            "session": record.session,
+            "op": record.op,
+            "frame": record.frame,
+            "meta": record.meta,
+        }
+        self._enqueue("tmux_frames", payload, extras=(record.session,))
 
-    def record_parser(self, *, session=None, parsed=None, live_state=None,
-                      parse_error=None, choices=None, dedup_hash=None) -> None:
-        if dedup_hash is not None and not self.gate.should_record(
-            f"parser:{session}", dedup_hash
+    def record_parser(self, record: ParserRecord) -> None:
+        if record.dedup_hash is not None and not self.gate.should_record(
+            f"parser:{record.session}", record.dedup_hash
         ):
             return
         payload = {
-            "session": session,
-            "parsed": parsed,
-            "live_state": live_state,
-            "parse_error": parse_error,
-            "choices": choices,
+            "session": record.session,
+            "parsed": record.parsed,
+            "live_state": record.live_state,
+            "parse_error": record.parse_error,
+            "choices": record.choices,
         }
-        self._enqueue("parser_records", payload, extras=(session,))
+        self._enqueue("parser_records", payload, extras=(record.session,))
 
-    def record_event(self, *, payload) -> None:
-        self._enqueue("event_records", payload)
-
-    def record_command(self, *, payload) -> None:
+    def record_command(self, record: CommandRecord) -> None:
+        # phase / command_id are required fields, so the drop-None filter never
+        # sheds them; the other fields are optional context.
+        payload = {k: v for k, v in dataclasses.asdict(record).items() if v is not None}
         self._enqueue("command_records", payload)
 
-    def record_decision(self, *, payload) -> None:
-        self._enqueue("decision_records", payload)
+    def record_state_mutation(self, record: StateMutationRecord) -> None:
+        self._enqueue("state_mutations", dataclasses.asdict(record))
 
-    def record_agent(self, *, payload) -> None:
-        self._enqueue("agent_records", payload)
+    def record_artifact_ref(self, record: ArtifactRefRecord) -> None:
+        self._enqueue(
+            "artifact_refs", dataclasses.asdict(record), extras=(str(record.path),)
+        )
 
-    def record_state_mutation(self, *, payload) -> None:
-        self._enqueue("state_mutations", payload)
-
-    def record_artifact_ref(self, *, path, size=None, sha=None, line_range=None,
-                            byte_range=None, links=None) -> None:
-        payload = {
-            "path": path,
-            "size": size,
-            "sha": sha,
-            "line_range": line_range,
-            "byte_range": byte_range,
-            "links": links,
-        }
-        self._enqueue("artifact_refs", payload, extras=(str(path),))
-
-    def record_exception(self, *, site, exc, payload=None) -> None:
+    def record_exception(self, record: ExceptionRecord) -> None:
+        exc = record.exc
         exc_text = exc if isinstance(exc, str) else f"{type(exc).__name__}: {exc}"
-        body = {"site": site, "exc": exc_text, "payload": payload}
-        self._enqueue("exception_records", body, extras=(site,))
+        body = {"site": record.site, "exc": exc_text, "payload": record.payload}
+        self._enqueue("exception_records", body, extras=(record.site,))
 
 
 # --------------------------------------------------------------------------- #
 # Mode resolution + factory.
 # --------------------------------------------------------------------------- #
-
-
-def _env_true(name: str) -> bool:
-    return (__import__("os").environ.get(name, "") or "").strip().lower() in ("1", "true", "yes")
-
-
-def resolve_advanced_mode() -> AdvancedMode:
-    """Resolve the advanced-logging mode from env vars (raw wins, raw implies on).
-
-    ``MURDER_ADVANCED_LOGGING_RAW`` → ``"raw"``; else ``MURDER_ADVANCED_LOGGING``
-    → ``"redacted"``; else ``"off"``.
-    """
-    if _env_true("MURDER_ADVANCED_LOGGING_RAW"):
-        return "raw"
-    if _env_true("MURDER_ADVANCED_LOGGING"):
-        return "redacted"
-    return "off"
 
 
 def open_advanced_log(

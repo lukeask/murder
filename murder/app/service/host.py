@@ -23,7 +23,7 @@ from murder.bus.transport_socket import SocketBusServer, default_socket_path
 from murder.config import Config
 from murder.llm.harnesses.harnesses_doc import write_harnesses_doc
 from murder.llm.harnesses.model_cache import refresh_and_persist_harness_models
-from murder.observability.advanced_log import current_advanced_log
+from murder.observability.advanced_log import ParserRecord, current_advanced_log
 from murder.runtime.orchestration.orchestrator import Orchestrator
 from murder.state.persistence.commands import get_command_status
 from murder.state.storage.paths import db_path
@@ -807,13 +807,15 @@ class ServiceHost:
                         queued = agent.pending_message
                         choices = ["<choice-prompt>"] if live_state == "awaiting_approval" else None
                         current_advanced_log().record_parser(
-                            session=getattr(agent, "session", None),
-                            live_state=live_state,
-                            parsed={"agent_id": agent.id, "queued": queued},
-                            choices=choices,
-                            dedup_hash=hashlib.sha1(
-                                f"{agent.id}|{live_state}|{queued}".encode("utf-8")
-                            ).hexdigest(),
+                            ParserRecord(
+                                session=getattr(agent, "session", None),
+                                live_state=live_state,
+                                parsed={"agent_id": agent.id, "queued": queued},
+                                choices=choices,
+                                dedup_hash=hashlib.sha1(
+                                    f"{agent.id}|{live_state}|{queued}".encode("utf-8")
+                                ).hexdigest(),
+                            )
                         )
             await asyncio.sleep(PROJECTION_INTERVAL_S)
 

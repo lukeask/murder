@@ -47,8 +47,13 @@ def test_bus_publish_and_command_dispatch_land_rows(tmp_path):
         await log.start()
         set_current_advanced_log(log)
         try:
-            # --- Boundary #3a: Bus.publish -> event_records ---
+            # --- Boundary #3a: the recorder is a bus SUBSCRIBER ---
             bus = Bus("run-bnd")  # no db_conn: skip persist, exercise publish path
+
+            async def _recorder(event):
+                log.record_bus_event(event)
+
+            bus.subscribe(_recorder)
             await bus.publish(
                 StateSnapshotEvent(run_id="run-bnd", agent_id="", entity=Entity.AGENT, key="*")
             )
