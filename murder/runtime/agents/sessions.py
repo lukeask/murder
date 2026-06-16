@@ -28,7 +28,7 @@ class AgentSessionStatus(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class AgentScope:
-    """What an agent session is about. All fields optional — global agents (e.g. Sentinel) have no ticket/plan/worktree."""
+    """What an agent session is about. All fields optional — global agents (e.g. the collaborator) have no ticket/plan/worktree."""
 
     ticket_id: str | None = None
     plan_name: str | None = None

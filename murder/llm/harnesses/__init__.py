@@ -1,7 +1,7 @@
 """Harness adapter registry. See `.murder/harnesses_spec.md`.
 
 Adapters wrap interactive CLI harnesses (cursor, claude_code, codex, pi,
-antigravity) so the runner / CrowHandler / Sentinel can stay harness-agnostic.
+antigravity) so the runner / CrowHandler can stay harness-agnostic.
 
 `native_coding_crow` is gated out of the v0 public surface (its adapter file is
 kept for a future v2); it is intentionally absent from the registry.
