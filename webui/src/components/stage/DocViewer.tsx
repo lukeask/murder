@@ -1,12 +1,15 @@
 /**
- * DocViewer — renders the open document (plan / note / report) from the `docView` slice. The body is
- * the raw markdown fetched by `docView.open(kind, name)`; we render it in a `<pre>` (no markdown
- * parser dependency — the body is read as plaintext-with-markdown, matching the Ink DocPane which
- * also shows the raw source). Close routes through `docView.close()`.
+ * DocViewer — the open document (plan / note / report) from the `docView` slice, reskinned onto the DS
+ * plan-viewer template: an `active`, `flush` DS Panel whose title carries the kind Tag + name and whose
+ * header actions hold a close IconButton; the body scrolls the fetched markdown in a <pre> with the
+ * doc typography (defined in panels-stage.css, referencing DS tokens). Data wiring is UNCHANGED (rule 2):
+ * `docView` body/status/error + the `docView.close()` action; still rendered as plaintext-with-markdown
+ * (no markdown parser — matches the Ink DocPane raw source).
  */
 
 import { useAppStore } from '@core/hooks/useAppStore.js';
 import { shallow } from 'zustand/shallow';
+import { Panel, Tag, IconButton, Icon } from '../ds/index.js';
 
 export function DocViewer(): React.JSX.Element | null {
   const docView = useAppStore((s) => s.docView, shallow);
@@ -17,22 +20,32 @@ export function DocViewer(): React.JSX.Element | null {
   }
 
   return (
-    <div className="doc-viewer">
-      <header className="doc-viewer__head">
-        <span className="doc-viewer__title">
-          <span className="doc-viewer__kind">{docView.open.kind}</span> {docView.open.name}
-        </span>
-        <button type="button" className="row-action" onClick={() => close()}>
-          close
-        </button>
-      </header>
-      {docView.status === 'loading' ? (
-        <p className="panel__hint">Loading…</p>
-      ) : docView.status === 'error' ? (
-        <p className="panel__hint panel__hint--error">{docView.error ?? 'Failed to load.'}</p>
-      ) : (
-        <pre className="doc-viewer__body">{docView.body ?? ''}</pre>
-      )}
+    <div className="mds-doc">
+      <Panel
+        active
+        flush
+        title={
+          <span className="mds-doc__title">
+            <Tag tone="accent">{docView.open.kind}</Tag>
+            <span className="mds-doc__name">{docView.open.name}</span>
+          </span>
+        }
+        actions={
+          <IconButton label="close" size="md" onClick={() => close()}>
+            <Icon name="x" />
+          </IconButton>
+        }
+      >
+        {docView.status === 'loading' ? (
+          <p className="mds-stage__empty">Loading…</p>
+        ) : docView.status === 'error' ? (
+          <p className="mds-stage__empty">{docView.error ?? 'Failed to load.'}</p>
+        ) : (
+          <div className="mds-doc__scroll">
+            <pre className="mds-doc__body">{docView.body ?? ''}</pre>
+          </div>
+        )}
+      </Panel>
     </div>
   );
 }

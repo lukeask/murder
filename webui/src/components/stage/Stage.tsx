@@ -1,16 +1,19 @@
 /**
- * Stage — the center region. Hosts the focused agent's conversation (transcript + chat input) plus
- * the "watch the terminal" tmux frame view, and — when one is open — the doc viewer or ticket
- * detail layered on top (closing them returns to the chat, mirroring the Ink Stage's pane model).
+ * Stage — the center region. Hosts the focused agent's conversation (transcript + composer) plus the
+ * "watch the terminal" tmux frame view, and — when one is open — the doc viewer or ticket detail
+ * layered on top (closing them returns to the chat, mirroring the Ink Stage's pane model).
  *
- * The active chat agent comes from {@link selectActiveAgentId} (conversations + roster + favorites);
- * a local Chat/Terminal tab toggles the transcript vs. the live tmux frame for that agent.
+ * Reskinned onto the DS: the chat/terminal switch is a DS {@link Tabs} (underline). Data wiring is
+ * UNCHANGED (rule 2): the active chat agent comes from {@link selectActiveAgentId}; the doc/ticket
+ * overlay priority (ticket open → TicketDetail; doc open → DocViewer; else chat/terminal tabs) is
+ * preserved exactly.
  */
 
 import { selectActiveAgentId } from '@core/selectors/conversationsSelectors.js';
 import { useAppStore } from '@core/hooks/useAppStore.js';
 import { shallow } from 'zustand/shallow';
 import { useState } from 'react';
+import { Tabs } from '../ds/index.js';
 import { ChatTranscript } from './ChatTranscript.js';
 import { ChatInput } from './ChatInput.js';
 import { TmuxFrameView } from './TmuxFrameView.js';
@@ -33,39 +36,49 @@ export function Stage(): React.JSX.Element {
   // the chat/terminal for the active agent.
   if (ticketOpen) {
     return (
-      <div className="stage">
+      <div className="stage mds-stage mds-stage--overlay">
         <TicketDetail />
       </div>
     );
   }
   if (docOpen) {
     return (
-      <div className="stage">
+      <div className="stage mds-stage mds-stage--overlay">
         <DocViewer />
       </div>
     );
   }
 
+  // Terminal is unavailable until an agent is targeted; fall back to chat so the tab stays valid.
+  const effectiveTab: StageTab = agentId === null ? 'chat' : tab;
+
   return (
-    <div className="stage">
-      <div className="stage__tabs">
-        <button type="button" data-on={tab === 'chat'} onClick={() => setTab('chat')}>
-          Chat
-        </button>
-        <button
-          type="button"
-          data-on={tab === 'terminal'}
-          disabled={agentId === null}
-          onClick={() => setTab('terminal')}
-        >
-          Terminal
-        </button>
-        {agentId !== null ? <span className="stage__target">{agentId}</span> : null}
+    <div className="stage mds-stage">
+      <div className="mds-stage__tabs">
+        <Tabs
+          tabs={[
+            { id: 'chat', label: 'Chat' },
+            { id: 'terminal', label: 'Terminal' },
+          ]}
+          value={effectiveTab}
+          onChange={(id) => {
+            if (id === 'terminal' && agentId === null) {
+              return;
+            }
+            setTab(id as StageTab);
+          }}
+        />
+        {agentId !== null ? (
+          <span className="mds-stage__target">
+            <span className="star">★</span>
+            {agentId}
+          </span>
+        ) : null}
       </div>
-      <div className="stage__body">
+      <div className="mds-stage__body">
         {agentId === null ? (
-          <div className="chat__empty">Select a crow from the roster to start chatting.</div>
-        ) : tab === 'chat' ? (
+          <div className="mds-stage__empty">Select a crow from the roster to start chatting.</div>
+        ) : effectiveTab === 'chat' ? (
           <ChatTranscript agentId={agentId} />
         ) : (
           <TmuxFrameView agentId={agentId} />

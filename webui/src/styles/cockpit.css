@@ -1,0 +1,155 @@
+/*
+ * cockpit.css — the SHELL layout for the design-system reskin (Phase C1).
+ *
+ * This file owns ONLY the app frame: the NavBar/body/KeybindBar vertical stack, the desktop 3-rail
+ * grid, the rail scroll columns, the Stage cell, and the mobile header + bottom tab-bar shell. It is
+ * the cockpit analog of the old `.app`/`.rail`/`.tabbar` rules in app.css — those still exist there
+ * for not-yet-migrated chrome, but the NEW shell DOM (`.cockpit*`, `.mw-*`) is styled here.
+ *
+ * STYLING CONTRACT (unchanged): colors via `--color-*` runtime theme vars; spacing/radius/dimension
+ * via the layout tokens in theme.css / tokens.css. No hard-coded hex.
+ *
+ * Import order (main.tsx): AFTER the ds-*.css component sheets (so `.mds-*` rules are defined) and
+ * after app.css (so these shell rules win where the old `.app*` selectors would otherwise apply to
+ * the same elements — though we use new class names, the later import keeps cascade intent explicit).
+ */
+
+/* ── Cockpit frame (desktop) ───────────────────────────────────────────────────────────────── */
+.cockpit {
+  display: grid;
+  /* nav | body | keybind bar. The body row takes all remaining height; the bar sizes to content. */
+  grid-template-rows: auto 1fr auto;
+  height: 100%;
+  overflow: hidden;
+  /* Never let wide content (long ANSI tmux lines) scroll the whole page sideways. */
+  overflow-x: hidden;
+}
+
+/* The DS NavBar (`.mds-nav`) is the top row; reserve the notch safe-area above it. */
+.cockpit > .mds-nav {
+  padding-top: var(--safe-top);
+  padding-left: calc(var(--space-4) + var(--safe-left));
+  padding-right: calc(var(--space-4) + var(--safe-right));
+  flex-shrink: 0;
+}
+
+/* The connection indicator that lives in the NavBar trailing slot. */
+.cockpit__conn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  white-space: nowrap;
+}
+.cockpit__conn-label { color: var(--color-muted); }
+.cockpit__conn--connected .cockpit__conn-label { color: var(--color-success); }
+.cockpit__conn--reconnecting .cockpit__conn-label { color: var(--color-warning); }
+.cockpit__conn--error .cockpit__conn-label { color: var(--color-error); }
+
+/* ── Body: 3-rail grid ─────────────────────────────────────────────────────────────────────── */
+.cockpit__cols {
+  display: grid;
+  /* left rail | Stage (grows) | right rail. Rails are token-width but allowed to shrink. */
+  grid-template-columns:
+    minmax(280px, var(--rail-width))
+    minmax(0, 1fr)
+    minmax(280px, var(--rail-width));
+  gap: var(--space-3);
+  padding: var(--space-3);
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* Rails: independently-scrolling columns of panels. */
+.cockpit__rail {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-height: 0;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+/* In the rails a DS panel sizes to content but caps its scroll height so several fit. */
+.cockpit__rail > .mds-panel { max-height: 60vh; }
+
+/* Stage cell: the center column grows and scrolls inside its own pane. */
+.cockpit__stage {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+}
+
+/* ── Mobile shell ──────────────────────────────────────────────────────────────────────────── */
+.mw-app {
+  display: grid;
+  /* header | pane (grows) | pill tab bar. */
+  grid-template-rows: auto 1fr auto;
+  height: 100%;
+  overflow: hidden;
+  overflow-x: hidden;
+}
+
+.mw-header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  height: calc(var(--header-height) + var(--safe-top));
+  padding: var(--safe-top) calc(var(--space-3) + var(--safe-right)) 0
+    calc(var(--space-3) + var(--safe-left));
+  border-bottom: 1px solid var(--color-border-blurred);
+  background: var(--color-panel-selected-bg);
+  flex-shrink: 0;
+}
+/* Current-view label after the brand: lowercase, mono, quiet. */
+.mw-view {
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  color: var(--color-muted);
+}
+.mw-spacer { flex: 1; }
+
+.mw-main {
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  padding: var(--space-2);
+}
+/* The single mobile pane fills the column. */
+.mw-main > .mds-panel,
+.mw-main > .panel,
+.mw-main > .stage { flex: 1; min-height: 0; max-height: none; }
+
+/* Bottom pill tab bar. The DS Tabs (`variant=pill full`) sits in this padded, safe-area-aware nav. */
+.mw-tabbar {
+  flex-shrink: 0;
+  padding: var(--space-2) calc(var(--space-2) + var(--safe-right))
+    calc(var(--space-2) + var(--safe-bottom)) calc(var(--space-2) + var(--safe-left));
+  border-top: 1px solid var(--color-border-blurred);
+  background: var(--color-panel-selected-bg);
+}
+/* Stacked icon+label tabs need a touch more height to breathe; allow horizontal scroll for 10 tabs. */
+.mw-tabbar .mds-tabs--full {
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.mw-tabbar .mds-tabs--full::-webkit-scrollbar { display: none; }
+.mw-tabbar .mds-tab--stack { min-width: max(var(--tap-min), 56px); }
+
+/* ── The Fraunces masthead wordmark (brand mark only — never body copy). ───────────────────── */
+/* The NavBar/header brand text gets the accent serif display face. Scoped to the shell so the DS
+ * NavBar's default mono brand is unaffected elsewhere. This is the ONLY Fraunces usage (per brand
+ * rules: reserved for the wordmark/masthead). The `_` wink stays mono — see the wordmark span. */
+.cockpit > .mds-nav .mds-nav__brand,
+.mw-brand {
+  font: var(--type-display);
+  font-size: var(--text-xl);
+  line-height: 1;
+  color: var(--color-brand);
+  letter-spacing: -0.01em;
+}
+/* The mono `_` wink in the lockup — kept mono on purpose. */
+.cockpit-brand__wink {
+  font-family: var(--font-mono);
+  color: var(--color-muted);
+}

@@ -35,10 +35,24 @@ describe('SettingsPanel theme switch', () => {
     expect(document.documentElement.style.getPropertyValue('--color-text')).toBe(lightText);
   });
 
+  it('reflects the active scheme onto <html data-theme> so DS components switch', () => {
+    const { store } = makeStore();
+    renderWithStore(<Harness />, { store });
+
+    // Default scheme (everforest-dark) → data-theme="dark".
+    expect(document.documentElement.dataset['theme']).toBe('dark');
+
+    fireEvent.click(screen.getByText('everforest-light'));
+    expect(document.documentElement.dataset['theme']).toBe('light');
+  });
+
   it('marks the active theme swatch', () => {
     setTheme('everforest-light');
     const { store } = makeStore();
     renderWithStore(<Harness />, { store });
-    expect(screen.getByText('everforest-light').getAttribute('data-on')).toBe('true');
+    // The label text lives inside the swatch button; the inspectable active marker (`data-on`) sits
+    // on the button itself, so read it off the enclosing toggle.
+    const swatch = screen.getByText('everforest-light').closest('.theme-swatch');
+    expect(swatch?.getAttribute('data-on')).toBe('true');
   });
 });

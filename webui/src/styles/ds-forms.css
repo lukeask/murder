@@ -1,0 +1,357 @@
+/*
+ * Design-system FORMS component styles (.mds-*) — Phase B.
+ *
+ * Static translation of each forms-bundle component's injected `CSS` string (no runtime
+ * useInjected() <style> injection). Mirrors the Phase A authoring contract in ds.css: one banner
+ * section per component, all values reference DS tokens from tokens.css. NOT imported here — the
+ * integrator wires this file into the build after tokens.css / ds.css.
+ */
+
+/* ── IconButton ──────────────────────────────────────────────────────────────────────────────── */
+.mds-iconbtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--control-sm);
+  height: var(--control-sm);
+  color: var(--text-secondary);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  padding: 0;
+  transition:
+    background var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out);
+}
+.mds-iconbtn:hover {
+  background: var(--surface-hover);
+  color: var(--text-primary);
+}
+.mds-iconbtn:active {
+  background: var(--surface-active);
+}
+.mds-iconbtn:focus-visible {
+  outline: 2px solid var(--border-focus);
+  outline-offset: 2px;
+}
+.mds-iconbtn[disabled] {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.mds-iconbtn--md {
+  width: var(--control-md);
+  height: var(--control-md);
+  border-radius: var(--radius);
+}
+.mds-iconbtn--lg {
+  width: var(--touch-min);
+  height: var(--touch-min);
+  border-radius: var(--radius);
+}
+.mds-iconbtn--active {
+  color: var(--accent);
+  background: var(--surface-hover);
+}
+.mds-iconbtn--bordered {
+  border-color: var(--border-default);
+}
+
+/* ── Input ───────────────────────────────────────────────────────────────────────────────────── */
+.mds-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.mds-field__label {
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  letter-spacing: var(--tracking-wide);
+}
+.mds-input {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--surface-raised);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius);
+  padding: 0 12px;
+  height: var(--control-md);
+  min-height: var(--control-md);
+  transition:
+    border-color var(--dur-fast) var(--ease-out),
+    background var(--dur-fast) var(--ease-out);
+}
+.mds-input:focus-within {
+  border-color: var(--border-accent);
+  background: var(--surface-panel);
+}
+.mds-input--invalid {
+  border-color: var(--ef-red);
+}
+.mds-input--disabled {
+  opacity: 0.5;
+  pointer-events: none;
+}
+.mds-input__glyph {
+  display: inline-grid;
+  place-items: center;
+  color: var(--text-faint);
+  user-select: none;
+}
+.mds-input__glyph svg {
+  width: 16px;
+  height: 16px;
+  stroke-width: 1.75;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.mds-input__el {
+  flex: 1 1 auto;
+  min-width: 0;
+  background: transparent;
+  border: 0;
+  outline: 0;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: var(--text-md);
+}
+.mds-input__el::placeholder {
+  color: var(--text-faint);
+}
+.mds-input--lg {
+  height: var(--control-lg);
+}
+.mds-field__hint {
+  font-size: var(--text-xs);
+  color: var(--text-faint);
+}
+.mds-field__hint--error {
+  color: var(--text-error);
+}
+
+/* ── Select ──────────────────────────────────────────────────────────────────────────────────── */
+.mds-select {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.mds-select__label {
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  letter-spacing: var(--tracking-wide);
+}
+.mds-select__wrap {
+  position: relative;
+  display: flex;
+}
+.mds-select__el {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 100%;
+  height: var(--control-md);
+  background: var(--surface-raised);
+  color: var(--text-primary);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius);
+  font-family: var(--font-mono);
+  font-size: var(--text-md);
+  padding: 0 30px 0 12px;
+  cursor: pointer;
+  outline: 0;
+  transition: border-color var(--dur-fast) var(--ease-out);
+}
+.mds-select__el:focus-visible {
+  border-color: var(--border-accent);
+}
+.mds-select__caret {
+  position: absolute;
+  right: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: inline-grid;
+  place-items: center;
+  color: var(--text-faint);
+  pointer-events: none;
+}
+.mds-select__caret svg {
+  width: 16px;
+  height: 16px;
+  stroke-width: 1.75;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.mds-select--disabled {
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+/* ── Checkbox ────────────────────────────────────────────────────────────────────────────────── */
+.mds-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+  user-select: none;
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+}
+.mds-check__box {
+  width: 18px;
+  height: 18px;
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--surface-raised);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-xs);
+  color: var(--text-on-accent);
+  font-size: 13px;
+  line-height: 1;
+  transition:
+    background var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out);
+}
+.mds-check:hover .mds-check__box {
+  border-color: var(--accent);
+}
+.mds-check--on .mds-check__box {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.mds-check--disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.mds-check__native {
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+.mds-check__native:focus-visible + .mds-check__box {
+  outline: 2px solid var(--border-focus);
+  outline-offset: 2px;
+}
+
+/* ── Radio ───────────────────────────────────────────────────────────────────────────────────── */
+.mds-radiogroup {
+  display: flex;
+  gap: 10px;
+}
+.mds-radiogroup--col {
+  flex-direction: column;
+}
+.mds-radio {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  cursor: pointer;
+  user-select: none;
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+}
+.mds-radio__ring {
+  width: 16px;
+  height: 16px;
+  flex: none;
+  border-radius: var(--radius-pill);
+  background: var(--surface-raised);
+  border: 1px solid var(--border-strong);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: border-color var(--dur-fast) var(--ease-out);
+}
+.mds-radio:hover .mds-radio__ring {
+  border-color: var(--accent);
+}
+.mds-radio__core {
+  width: 8px;
+  height: 8px;
+  border-radius: var(--radius-pill);
+  background: var(--accent);
+  transform: scale(0);
+  transition: transform var(--dur-fast) var(--ease-out);
+}
+.mds-radio--on .mds-radio__ring {
+  border-color: var(--accent);
+}
+.mds-radio--on .mds-radio__core {
+  transform: scale(1);
+}
+.mds-radio--on {
+  color: var(--text-primary);
+}
+.mds-radio--disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.mds-radio__native {
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+.mds-radio__native:focus-visible + .mds-radio__ring {
+  outline: 2px solid var(--border-focus);
+  outline-offset: 2px;
+}
+
+/* ── Switch ──────────────────────────────────────────────────────────────────────────────────── */
+.mds-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+  user-select: none;
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+}
+.mds-switch__track {
+  position: relative;
+  width: 38px;
+  height: 22px;
+  flex: none;
+  background: var(--surface-active);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-pill);
+  transition:
+    background var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out);
+}
+.mds-switch__thumb {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  background: var(--text-secondary);
+  border-radius: var(--radius-pill);
+  transition:
+    transform var(--dur-fast) var(--ease-out),
+    background var(--dur-fast) var(--ease-out);
+}
+.mds-switch--on .mds-switch__track {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.mds-switch--on .mds-switch__thumb {
+  transform: translateX(16px);
+  background: var(--text-on-accent);
+}
+.mds-switch--disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.mds-switch__native {
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+.mds-switch__native:focus-visible + .mds-switch__track {
+  outline: 2px solid var(--border-focus);
+  outline-offset: 2px;
+}

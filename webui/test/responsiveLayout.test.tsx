@@ -55,24 +55,27 @@ afterEach(() => {
 });
 
 describe('responsive layout', () => {
-  it('renders the three-region desktop layout above the breakpoint', () => {
+  it('renders the three-region desktop cockpit above the breakpoint', () => {
     stubMatchMedia(false);
     const container = renderApp();
     expect(container.querySelector('.app')?.getAttribute('data-layout')).toBe('desktop');
-    expect(container.querySelector('.app__body--desktop')).not.toBeNull();
+    // The cockpit grid: NavBar + 3-rail body + KeybindBar. Two scrolling rails (left + right).
+    expect(container.querySelector('.cockpit')).not.toBeNull();
+    expect(container.querySelector('.cockpit__cols')).not.toBeNull();
     expect(container.querySelectorAll('.rail')).toHaveLength(2);
     // No mobile tab bar on desktop.
     expect(container.querySelector('.tabbar')).toBeNull();
   });
 
-  it('renders the single-pane + tab-bar mobile layout below the breakpoint', () => {
+  it('renders the single-pane + pill tab-bar mobile layout below the breakpoint', () => {
     stubMatchMedia(true);
     const container = renderApp();
     expect(container.querySelector('.app')?.getAttribute('data-layout')).toBe('mobile');
     expect(container.querySelector('.app__body--mobile')).not.toBeNull();
-    // No desktop rails; a tab bar instead.
+    // No desktop rails; a DS pill Tabs switcher instead (each tab a `.mds-tab` button).
     expect(container.querySelectorAll('.rail')).toHaveLength(0);
     expect(container.querySelector('.tabbar')).not.toBeNull();
-    expect(container.querySelectorAll('.tabbar__tab').length).toBeGreaterThan(1);
+    expect(container.querySelector('.mds-tabs--pill')).not.toBeNull();
+    expect(container.querySelectorAll('.mds-tab').length).toBeGreaterThan(1);
   });
 });

@@ -1,0 +1,42 @@
+/*
+ * panels.css — SHARED panel helpers for the design-system reskin + the Tickets exemplar.
+ *
+ * ── C2 CONVENTION (LOCKED) ──────────────────────────────────────────────────────────────────────
+ * This file holds ONLY (a) helpers reused across multiple reskinned panels, and (b) the Tickets
+ * exemplar's own rules (Tickets is the template, so its bespoke CSS lives here as the worked example).
+ *
+ * Each later panel-group agent (C2) appends its bespoke rules to its OWN file named
+ * `styles/panels-<group>.css` (e.g. `panels-docs.css`, `panels-roster.css`, `panels-usage.css`) —
+ * NOT to this shared file — so parallel agents never collide on a merge. The human integrator wires
+ * each new `panels-<group>.css` into `main.tsx`; C2 agents do NOT edit main.tsx.
+ *
+ * STYLING CONTRACT (unchanged): colors via `--color-*`; spacing/radius/font via the layout tokens.
+ */
+
+/* ── Shared helpers (reusable across reskinned panels) ─────────────────────────────────────────
+ * Semantic text tones for inline cells inside a ListRow meta line. These mirror the old `.tone--*`
+ * (still in app.css) but are namespaced for the reskin so a later app.css cleanup can't strand them.
+ * A reskinned panel uses these on meta-line spans that need a success/warning/error/neutral color. */
+.tone--success { color: var(--color-success); }
+.tone--warning { color: var(--color-warning); }
+.tone--error { color: var(--color-error); }
+.tone--neutral { color: var(--color-muted); }
+
+/* ── Tickets ─────────────────────────────────────────────────────────────────────────────────── */
+/* The ticket meta line: a wrapping mono row of id + timestamps + deps + schedule, sitting under the
+ * title inside the DS ListRow's meta slot. The status itself is the row's trailing Badge (no CSS). */
+.ticket-meta {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-1) var(--space-3);
+}
+.ticket-meta__id {
+  font-family: var(--font-mono);
+  color: var(--color-text-secondary, var(--color-muted));
+}
+.ticket-meta__cell {
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  color: var(--color-muted);
+}

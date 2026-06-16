@@ -26,7 +26,7 @@ describe('TmuxFrameView', () => {
     act(() => {
       bus.emit({ type: 'tmux.frame', frame: '[31mhi[0m', agent_id: 'a1' } as never);
     });
-    const pre = document.querySelector('.tmux__frame');
+    const pre = document.querySelector('.mds-tmux__frame');
     expect(pre).not.toBeNull();
     expect(pre?.innerHTML).toContain('hi');
     // ansi-to-html emits a styled span for the color code.

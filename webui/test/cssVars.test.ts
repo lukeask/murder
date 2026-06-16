@@ -5,8 +5,11 @@
 
 import { buildTheme } from '@core/theme/buildTheme.js';
 import { DEFAULT_THEME_ID, PALETTES } from '@core/theme/palettes.js';
-import { describe, expect, it } from 'vitest';
+import { setTheme } from '@core/theme/themeStore.js';
+import { renderHook, cleanup } from '@testing-library/react';
+import { afterEach, describe, expect, it } from 'vitest';
 import { applyThemeCssVars, themeToCssVars } from '../src/theme/cssVars.js';
+import { useThemeCssVars } from '../src/theme/useThemeCssVars.js';
 
 const theme = buildTheme(PALETTES[DEFAULT_THEME_ID], DEFAULT_THEME_ID);
 
@@ -45,5 +48,26 @@ describe('applyThemeCssVars', () => {
     expect(root.style.getPropertyValue('--color-text')).toBe(theme.text);
     expect(root.style.getPropertyValue('--color-focus')).toBe(theme.focus);
     expect(root.style.getPropertyValue('--color-error')).toBe(theme.error);
+  });
+});
+
+describe('useThemeCssVars data-theme pin', () => {
+  afterEach(() => {
+    cleanup();
+    setTheme('everforest-dark'); // reset the process-global scheme between cases
+  });
+
+  it('reflects the active @core scheme onto <html data-theme> (dark default, light on switch)', () => {
+    const { rerender } = renderHook(() => useThemeCssVars());
+    // Default scheme is everforest-dark → data-theme="dark".
+    expect(document.documentElement.dataset['theme']).toBe('dark');
+
+    setTheme('everforest-light');
+    rerender();
+    expect(document.documentElement.dataset['theme']).toBe('light');
+
+    setTheme('everforest-dark');
+    rerender();
+    expect(document.documentElement.dataset['theme']).toBe('dark');
   });
 });

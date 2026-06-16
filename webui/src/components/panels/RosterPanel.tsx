@@ -4,13 +4,40 @@
  * {@link selectCrowsView}; clicking a crow selects it as the active chat target (the conversations
  * slice's `setActivePaneAgentId`), and the ★ toggles its favorite (`favorites.toggle`). A
  * ticket-bound crow can be reset via `roster.resetCrow(ticketId)`.
+ *
+ * Reskinned onto the DS (C2, follows the TicketsPanel exemplar): a DS {@link Panel} wraps each
+ * type-section's {@link ListRow}s. Per row: an {@link Avatar} (name-hashed identity color) leads the
+ * title, harness · model is the mono meta line, the crow's client-side `health` becomes a
+ * {@link StatusDot} (green/yellow/red/neutral → running/pending/failed/idle, with the raw status word
+ * as its label), the favorite star is the ListRow's own `starred`/`onPinToggle`, and the reset action
+ * is a small ghost {@link IconButton}. Data wiring is byte-for-byte unchanged.
  */
 
 import { selectCrowsView } from '@core/selectors/crowsSelectors.js';
+import type { Health } from '@core/selectors/crowHealthSelectors.js';
 import { useAppStore } from '@core/hooks/useAppStore.js';
 import { shallow } from 'zustand/shallow';
-import { Panel } from '../Panel.js';
+import {
+  Panel,
+  ListRow,
+  StatusDot,
+  Avatar,
+  Tag,
+  IconButton,
+  Icon,
+  cx,
+} from '../ds/index.js';
+import type { StatusDotStatus } from '../ds/index.js';
 import { SliceHint } from '../SliceHint.js';
+
+/** Map the selector's client-side crow health onto a DS StatusDot status (rule 2: no re-derivation
+ * of meaning — this is the fixed health→dot color contract from the C2 spec). */
+const HEALTH_TO_DOT: Readonly<Record<Health, StatusDotStatus>> = {
+  green: 'running',
+  yellow: 'pending',
+  red: 'failed',
+  neutral: 'idle',
+};
 
 export function RosterPanel(): React.JSX.Element {
   const roster = useAppStore((s) => s.roster, shallow);
@@ -27,58 +54,59 @@ export function RosterPanel(): React.JSX.Element {
   const ticketIdFor = (agentId: string): string | null =>
     rosterRows.find((r) => r.agentId === agentId)?.ticketId ?? null;
 
+  const rowCount = view.sections.reduce((n, s) => n + s.rows.length, 0);
+
   return (
-    <Panel title="Crows">
+    <Panel title="Crows" count={view.isEmpty ? null : rowCount} flush>
       <SliceHint state={view} empty="No agents." />
       {view.sections.map((section) => (
-        <div key={section.group} className="roster__section">
-          <div className="roster__section-label">{section.label}</div>
-          <ul className="list">
-            {section.rows.map((row) => {
-              const ticketId = ticketIdFor(row.agentId);
-              return (
-                <li
-                  key={row.agentId}
-                  className="list__row roster__row"
-                  data-selected={row.agentId === activeAgentId ? 'true' : undefined}
-                  onClick={() => {
-                    setActivePane(row.agentId);
-                    setPaneOpen(row.agentId, true);
-                  }}
-                >
-                  <button
-                    type="button"
-                    className="star"
-                    aria-pressed={row.favorited}
-                    title={row.favorited ? 'Unstar' : 'Star'}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      void toggleFavorite(row.agentId);
-                    }}
-                  >
-                    {row.favorited ? '★' : '☆'}
-                  </button>
-                  <span className="list__primary roster__name">{row.name}</span>
-                  <span className="roster__meta">{row.harness}</span>
-                  <span className={`health health--${row.health}`} title={`health: ${row.health}`} />
-                  <span className={`badge badge--${row.status}`}>{row.status}</span>
-                  {ticketId !== null ? (
-                    <button
-                      type="button"
-                      className="row-action"
-                      title="Reset crow"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        void resetCrow(ticketId);
-                      }}
-                    >
-                      reset
-                    </button>
-                  ) : null}
-                </li>
-              );
-            })}
-          </ul>
+        <div key={section.group} className="roster-section">
+          <span className="roster-section__label">{section.label}</span>
+          {section.rows.map((row) => {
+            const ticketId = ticketIdFor(row.agentId);
+            return (
+              <ListRow
+                key={row.agentId}
+                as="button"
+                selected={row.agentId === activeAgentId}
+                starred={row.favorited}
+                onPinToggle={() => void toggleFavorite(row.agentId)}
+                onClick={() => {
+                  setActivePane(row.agentId);
+                  setPaneOpen(row.agentId, true);
+                }}
+                title={
+                  <span className={cx('roster-name')}>
+                    <Avatar size="sm" name={row.name} />
+                    {row.name}
+                  </span>
+                }
+                meta={
+                  <span className="roster-meta">
+                    <Tag>{row.harness}</Tag>
+                    <span>{row.model}</span>
+                  </span>
+                }
+                trailing={
+                  <span className="roster-trail">
+                    <StatusDot status={HEALTH_TO_DOT[row.health]} pulse label={row.status} />
+                    {ticketId !== null ? (
+                      <IconButton
+                        size="sm"
+                        label="Reset crow"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          void resetCrow(ticketId);
+                        }}
+                      >
+                        <Icon name="back" size={14} />
+                      </IconButton>
+                    ) : null}
+                  </span>
+                }
+              />
+            );
+          })}
         </div>
       ))}
     </Panel>

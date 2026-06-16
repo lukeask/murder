@@ -1,21 +1,21 @@
 /**
- * App — the web/mobile shell. Composes the full UI ported from the Ink TUI: a left rail (plans,
- * notes, reports, tickets, history), a center Stage (chat transcript + chat input + tmux terminal
- * frame, with doc/ticket overlays), and a right rail (roster/crows, usage, transit, settings).
+ * App — the web/mobile shell, rebuilt on the design-system primitives (Phase C1, "desktop cockpit").
  *
- * ## Responsive strategy (the one JS-level layout decision; the rest is CSS)
- *  - Desktop (> 768px): three regions side-by-side — `[ left rail | Stage | right rail ]` — mirroring
- *    the TUI's landscape layout. Each rail scrolls independently; the Stage grows to fill the middle.
- *  - Mobile (≤ 768px, {@link MOBILE_QUERY}): a single column showing ONE panel at a time, chosen by a
- *    thumb-friendly bottom tab bar. This is a genuinely different DOM tree (one panel, not three
- *    regions) — the only thing CSS alone can't express — so {@link useMediaQuery} governs it.
+ * ## Layout (chrome only — data flow / IA unchanged)
+ *  - Desktop (> 768px): a `.cockpit` grid of three rows — DS {@link NavBar} (Fraunces `murder` brand +
+ *    a connection indicator in the trailing slot), a 3-rail body `[ left rail | Stage | right rail ]`,
+ *    and a DS {@link KeybindBar} of display-only chord hints. Rails scroll independently; the Stage
+ *    grows. The left/center/right PANEL ASSIGNMENTS are identical to the pre-reskin shell.
+ *  - Mobile (≤ 768px, {@link MOBILE_QUERY}): a single pane switched by a bottom pill {@link Tabs} bar
+ *    (stacked icon+label), with a DS header showing the brand + the current-view label. Same 10 tabs,
+ *    same `MobilePane` switch — only the chrome changed.
  *
- * All visual styling lives in CSS (`styles/app.css`) keyed off the theme CSS vars + layout tokens;
- * this file only chooses the structural tree and wires slice refresh on (re)connect.
+ * Responsive switching stays a single JS decision ({@link useMediaQuery}); everything else is CSS in
+ * `styles/cockpit.css`. Store/bus wiring (the onConnect re-prime, every selector) is untouched.
  */
 
 import { useAppStoreApi } from '@core/hooks/useAppStore.js';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { WsBusClient } from './bus/WsBusClient.js';
 import { useThemeCssVars } from './theme/useThemeCssVars.js';
 import { type ConnectionStatus, useConnectionStatus } from './useConnectionStatus.js';
@@ -30,6 +30,7 @@ import { UsagePanel } from './components/panels/UsagePanel.js';
 import { TransitPanel } from './components/panels/TransitPanel.js';
 import { SettingsPanel } from './components/panels/SettingsPanel.js';
 import { Stage } from './components/stage/Stage.js';
+import { NavBar, KeybindBar, type KeybindHint, StatusDot, type StatusDotStatus, Tabs, type TabItem, Icon, type IconName } from './components/ds/index.js';
 
 /** The mobile tab set — one entry per top-level destination (panels + the chat Stage). */
 const MOBILE_TABS = [
@@ -45,6 +46,35 @@ const MOBILE_TABS = [
   'settings',
 ] as const;
 type MobileTab = (typeof MOBILE_TABS)[number];
+
+/** Per-tab DS line icon (stacked above the label in the pill switcher). */
+const MOBILE_TAB_ICON: Record<MobileTab, IconName> = {
+  chat: 'message-square',
+  crows: 'crosshair',
+  tickets: 'ticket',
+  plans: 'file-text',
+  notes: 'file-text',
+  reports: 'file-text',
+  history: 'git-branch',
+  usage: 'gauge',
+  transit: 'git-branch',
+  settings: 'settings',
+};
+
+/**
+ * Display-only keybind hints for the desktop bottom bar. Lowercase verb-noun per brand rules; these
+ * mirror the desktop-cockpit template and are NOT wired to live handlers in this phase.
+ */
+const KEYBIND_HINTS: readonly KeybindHint[] = [
+  { chord: 'C-1-0', desc: 'panels' },
+  { chord: 'C-jk', desc: 'nav' },
+  { chord: 'C-space', desc: 'chat' },
+  { chord: 'C-s', desc: 'spawn' },
+  { chord: 'C-p', desc: 'new plan' },
+  { chord: 'C-t', desc: 'new ticket' },
+  { chord: 'C-hl', desc: 'target' },
+  { chord: 'C-o', desc: 'settings' },
+];
 
 export function App({ bus }: { readonly bus: WsBusClient }): React.JSX.Element {
   useThemeCssVars();
@@ -74,70 +104,72 @@ export function App({ bus }: { readonly bus: WsBusClient }): React.JSX.Element {
     return off;
   }, [bus, storeApi]);
 
+  // `data-layout` is preserved (tests + any external hooks key off it). The DOM tree differs between
+  // desktop (cockpit grid) and mobile (single pane) — the one thing CSS alone can't express.
   return (
     <div className="app" data-layout={isMobile ? 'mobile' : 'desktop'}>
-      <header className="app__header">
-        <span className="app__brand">murder</span>
-        <ConnectionPill status={status} />
-      </header>
-      {isMobile ? <MobileLayout /> : <DesktopLayout />}
+      {isMobile ? <MobileLayout status={status} /> : <DesktopLayout status={status} />}
     </div>
   );
 }
 
-/** Desktop: the three-region TUI-like layout. Each rail is a scroll column of panels. */
-function DesktopLayout(): React.JSX.Element {
+/** Desktop: NavBar (brand + connection) / 3-rail body / KeybindBar. Panel assignments unchanged. */
+function DesktopLayout({ status }: { readonly status: ConnectionStatus }): React.JSX.Element {
   return (
-    <main className="app__body app__body--desktop">
-      <aside className="rail rail--left">
-        <TicketsPanel />
-        <PlansPanel />
-        <NotesPanel />
-        <ReportsPanel />
-        <HistoryPanel />
-      </aside>
-      <section className="app__stage">
-        <Stage />
-      </section>
-      <aside className="rail rail--right">
-        <RosterPanel />
-        <UsagePanel />
-        <TransitPanel />
-        <SettingsPanel />
-      </aside>
-    </main>
+    <div className="cockpit">
+      <NavBar brand="murder" trailing={<ConnectionIndicator status={status} />} />
+      <div className="cockpit__cols">
+        <aside className="rail cockpit__rail cockpit__rail--left">
+          <TicketsPanel />
+          <PlansPanel />
+          <NotesPanel />
+          <ReportsPanel />
+          <HistoryPanel />
+        </aside>
+        <section className="cockpit__stage">
+          <Stage />
+        </section>
+        <aside className="rail cockpit__rail cockpit__rail--right">
+          <RosterPanel />
+          <UsagePanel />
+          <TransitPanel />
+          <SettingsPanel />
+        </aside>
+      </div>
+      <KeybindBar hints={[...KEYBIND_HINTS]} help={null} />
+    </div>
   );
 }
 
-/** Mobile: a single panel at a time, switched by the bottom tab bar (thumb-friendly hit targets). */
-function MobileLayout(): React.JSX.Element {
+/** Mobile: DS header (brand + view label) / single pane / bottom pill tab bar. */
+function MobileLayout({ status }: { readonly status: ConnectionStatus }): React.JSX.Element {
   const [tab, setTab] = useState<MobileTab>('chat');
-  // The tab bar overflows (10 tabs) and scrolls; keep the selected tab in view when it changes.
-  const activeTabRef = useRef<HTMLButtonElement>(null);
-  useEffect(() => {
-    // `scrollIntoView` is absent in jsdom (tests) and very old browsers — guard the call.
-    activeTabRef.current?.scrollIntoView?.({ inline: 'center', block: 'nearest' });
-  }, [tab]);
+  const tabItems: TabItem[] = MOBILE_TABS.map((t) => ({
+    id: t,
+    label: t,
+    icon: <Icon name={MOBILE_TAB_ICON[t]} size={18} />,
+  }));
   return (
-    <>
-      <main className="app__body app__body--mobile">
+    <div className="mw-app">
+      <header className="mw-header">
+        <span className="mw-brand">murder</span>
+        <span className="mw-view">{tab}</span>
+        <span className="mw-spacer" />
+        <ConnectionIndicator status={status} />
+      </header>
+      <main className="app__body app__body--mobile mw-main">
         <MobilePane tab={tab} />
       </main>
-      <nav className="tabbar" aria-label="Sections">
-        {MOBILE_TABS.map((t) => (
-          <button
-            key={t}
-            ref={t === tab ? activeTabRef : undefined}
-            type="button"
-            className="tabbar__tab"
-            data-on={t === tab}
-            onClick={() => setTab(t)}
-          >
-            {t}
-          </button>
-        ))}
+      <nav className="tabbar mw-tabbar" aria-label="Sections">
+        <Tabs
+          variant="pill"
+          full
+          tabs={tabItems}
+          value={tab}
+          onChange={(id) => setTab(id as MobileTab)}
+        />
       </nav>
-    </>
+    </div>
   );
 }
 
@@ -168,18 +200,31 @@ function MobilePane({ tab }: { readonly tab: MobileTab }): React.JSX.Element {
   }
 }
 
-function ConnectionPill({ status }: { readonly status: ConnectionStatus }): React.JSX.Element {
+/**
+ * ConnectionIndicator — the reskinned connection pill: a DS {@link StatusDot} + a terse lowercase
+ * label. Drives all four {@link ConnectionStatus} states off the existing `useConnectionStatus`. The
+ * status→dot mapping reuses the DS crow-state palette (connected→done/green, connecting/reconnecting→
+ * running/pending, error→failed/red); the `pulse` breathe is only meaningful on the "running" status.
+ */
+function ConnectionIndicator({ status }: { readonly status: ConnectionStatus }): React.JSX.Element {
   const label: Record<ConnectionStatus, string> = {
     connecting: 'connecting…',
     connected: 'connected',
     reconnecting: 'reconnecting…',
-    error: 'version mismatch — restart murder',
+    error: 'version mismatch',
   };
+  const dotStatus: Record<ConnectionStatus, StatusDotStatus> = {
+    connecting: 'running',
+    connected: 'done',
+    reconnecting: 'running',
+    error: 'failed',
+  };
+  // Visual variant class for the label color (kept distinct from the dot's crow-state palette).
   const variant = status === 'connecting' ? 'reconnecting' : status;
   return (
-    <span className={`conn conn--${variant}`}>
-      <span className="conn__dot" />
-      {label[status]}
+    <span className={`conn cockpit__conn cockpit__conn--${variant}`} title={status === 'error' ? 'version mismatch — restart murder' : label[status]}>
+      <StatusDot status={dotStatus[status]} pulse />
+      <span className="cockpit__conn-label">{label[status]}</span>
     </span>
   );
 }

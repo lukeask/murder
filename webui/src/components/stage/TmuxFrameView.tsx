@@ -43,14 +43,16 @@ export function TmuxFrameView({ agentId }: { readonly agentId: string }): React.
   }, [bus, agentId]);
 
   if (frame === '') {
-    return <div className="tmux__empty">Waiting for the agent's terminal…</div>;
+    return <div className="mds-tmux__empty">Waiting for the agent's terminal…</div>;
   }
 
   return (
-    <pre
-      className="tmux__frame"
-      // ansi-to-html output is sanitized (escapeXML) and only emits <span style> + <br>.
-      dangerouslySetInnerHTML={{ __html: convert.toHtml(frame) }}
-    />
+    <div className="mds-tmux">
+      <pre
+        className="mds-tmux__frame"
+        // ansi-to-html output is sanitized (escapeXML) and only emits <span style> + <br>.
+        dangerouslySetInnerHTML={{ __html: convert.toHtml(frame) }}
+      />
+    </div>
   );
 }

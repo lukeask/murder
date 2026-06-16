@@ -7,6 +7,7 @@
 import { selectPlansView } from '@core/selectors/plansSelectors.js';
 import { useAppStore } from '@core/hooks/useAppStore.js';
 import { shallow } from 'zustand/shallow';
+import { Button } from '../ds/index.js';
 import { DocListPanel } from './DocListPanel.js';
 
 export function PlansPanel(): React.JSX.Element {
@@ -30,9 +31,10 @@ export function PlansPanel(): React.JSX.Element {
         depth: r.depth,
       }))}
       rowExtra={(row) => (
-        <button
-          type="button"
-          className="row-action"
+        <Button
+          variant="ghost"
+          size="sm"
+          className="doc-rowaction"
           title="Spawn planner"
           onClick={(e) => {
             e.stopPropagation();
@@ -40,7 +42,7 @@ export function PlansPanel(): React.JSX.Element {
           }}
         >
           plan
-        </button>
+        </Button>
       )}
     />
   );

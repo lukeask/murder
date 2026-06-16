@@ -1,0 +1,162 @@
+/* Phase B — FEEDBACK primitives. Static DS rules ported from the bundle (Toast, Tooltip).
+   Not imported here; wired in during integration. Reference DS tokens; hard-code only where the
+   bundle does. Reduced-motion safe. */
+
+/* ── Toast ─────────────────────────────────────────────────────────────────────────────────────── */
+.mds-toast {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  min-width: 240px;
+  max-width: 380px;
+  background: var(--surface-raised);
+  border: 1px solid var(--border-default);
+  border-left-width: 3px;
+  border-radius: var(--radius);
+  padding: 11px 13px;
+  box-shadow: var(--shadow);
+  font-family: var(--font-mono);
+  animation: mds-toast-in var(--dur) var(--ease-out);
+}
+.mds-toast--running,
+.mds-toast--success,
+.mds-toast--done {
+  border-left-color: var(--status-done);
+}
+.mds-toast--failed,
+.mds-toast--error {
+  border-left-color: var(--status-failed);
+}
+.mds-toast--info,
+.mds-toast--archived {
+  border-left-color: var(--status-archived);
+}
+.mds-toast--warning,
+.mds-toast--pending {
+  border-left-color: var(--status-pending);
+}
+.mds-toast--neutral {
+  border-left-color: var(--border-strong);
+}
+.mds-toast__glyph {
+  font-size: var(--text-sm);
+  line-height: 1.4;
+}
+.mds-toast--success .mds-toast__glyph,
+.mds-toast--done .mds-toast__glyph,
+.mds-toast--running .mds-toast__glyph {
+  color: var(--status-done);
+}
+.mds-toast--failed .mds-toast__glyph,
+.mds-toast--error .mds-toast__glyph {
+  color: var(--status-failed);
+}
+.mds-toast--info .mds-toast__glyph,
+.mds-toast--archived .mds-toast__glyph {
+  color: var(--status-archived);
+}
+.mds-toast--warning .mds-toast__glyph,
+.mds-toast--pending .mds-toast__glyph {
+  color: var(--status-pending);
+}
+.mds-toast__body {
+  flex: 1;
+  min-width: 0;
+}
+.mds-toast__title {
+  font-size: var(--text-sm);
+  color: var(--text-primary);
+}
+.mds-toast__desc {
+  font-size: var(--text-2xs);
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+.mds-toast__close {
+  background: transparent;
+  border: 0;
+  color: var(--text-faint);
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  padding: 2px;
+}
+.mds-toast__close:hover {
+  color: var(--text-secondary);
+}
+@keyframes mds-toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* ── Tooltip ───────────────────────────────────────────────────────────────────────────────────── */
+.mds-tip {
+  position: relative;
+  display: inline-flex;
+}
+.mds-tip__bubble {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 50%;
+  transform: translateX(-50%) translateY(3px);
+  background: var(--ef-bg-3);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  line-height: 1.3;
+  white-space: nowrap;
+  padding: 5px 8px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-strong);
+  box-shadow: var(--shadow);
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    opacity var(--dur-fast) var(--ease-out),
+    transform var(--dur-fast) var(--ease-out);
+  z-index: var(--z-overlay);
+}
+.mds-tip__bubble::after {
+  content: "";
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  border: 5px solid transparent;
+  border-top-color: var(--ef-bg-3);
+}
+.mds-tip:hover .mds-tip__bubble,
+.mds-tip:focus-within .mds-tip__bubble {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
+.mds-tip--bottom .mds-tip__bubble {
+  bottom: auto;
+  top: calc(100% + 8px);
+}
+.mds-tip--bottom .mds-tip__bubble::after {
+  top: auto;
+  bottom: 100%;
+  border-top-color: transparent;
+  border-bottom-color: var(--ef-bg-3);
+}
+
+/* ── Reduced motion ────────────────────────────────────────────────────────────────────────────── */
+@media (prefers-reduced-motion: reduce) {
+  .mds-toast {
+    animation: none;
+  }
+  .mds-tip__bubble {
+    transition: none;
+  }
+  .mds-tip:hover .mds-tip__bubble,
+  .mds-tip:focus-within .mds-tip__bubble {
+    transform: translateX(-50%);
+  }
+}

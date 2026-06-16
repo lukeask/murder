@@ -1,10 +1,13 @@
 /**
- * ChatInput — the message editor for the active chat target. Maps to the `conversations` slice:
- * the active agent comes from {@link selectActiveAgentId}; Enter sends via `conversations.send`.
+ * ChatInput — the message editor for the active chat target, reskinned onto the DS composer
+ * (crow-chat / web-cockpit): a meta row ("to ⭐ crowname" + a KeyHint) above a DS Input (size lg) with
+ * a leading attach IconButton and a trailing send IconButton that fills `--accent` when the draft is
+ * non-empty. Data wiring is UNCHANGED (rule 2): active agent from {@link selectActiveAgentId};
+ * Enter sends via `conversations.send`; the live-choice takeover forwards keys via `conversations.sendKey`.
  *
- * Live multiple-choice takeover: when the active transcript ends in an unanswered `choice_prompt`
- * ({@link selectLiveChoicePrompt} ≠ null), the input forwards keys to the agent's pane via
- * `conversations.sendKey` instead of buffering text — the same contract the Ink ChatInput uses.
+ * BOTH render paths preserved:
+ *  - live-choice-prompt path: numbered options list + key-forwarding (`onKeyDownChoice`) unchanged.
+ *  - normal text path: Enter (no shift) to send; the trailing send button mirrors that.
  * Image-paste (the Ink ctrl+v draft flow) is intentionally deferred for the web port; see report.
  */
 
@@ -15,6 +18,7 @@ import {
 import { useAppStore } from '@core/hooks/useAppStore.js';
 import { shallow } from 'zustand/shallow';
 import { useState } from 'react';
+import { Input, IconButton, KeyHint, Icon } from '../ds/index.js';
 
 export function ChatInput(): React.JSX.Element {
   const conversations = useAppStore((s) => s.conversations, shallow);
@@ -26,6 +30,7 @@ export function ChatInput(): React.JSX.Element {
 
   const agentId = selectActiveAgentId(conversations, roster, favorites);
   const livePrompt = agentId === null ? null : selectLiveChoicePrompt(conversations, agentId);
+  const canSend = agentId !== null && text.trim() !== '';
 
   const submit = (): void => {
     if (agentId === null || text.trim() === '') {
@@ -61,12 +66,23 @@ export function ChatInput(): React.JSX.Element {
     }
   };
 
+  const metaRow = (
+    <div className="mds-composer__meta">
+      <span className="mds-composer__to">
+        <span className="star">★</span>
+        <span className="mds-composer__to-name">{agentId ?? 'no crow'}</span>
+      </span>
+      <KeyHint chord="Enter" desc="send" tone="muted" />
+    </div>
+  );
+
   if (livePrompt !== null && agentId !== null) {
     return (
-      <div className="chat-input chat-input--choice">
-        <div className="chat-input__prompt">
-          <span className="chat-input__prompt-q">{livePrompt.question}</span>
-          <ol className="chat-input__options">
+      <div className="mds-composer">
+        {metaRow}
+        <div className="mds-composer__prompt">
+          <span className="mds-composer__prompt-q">{livePrompt.question}</span>
+          <ol className="mds-composer__options">
             {livePrompt.options.map((opt) => (
               <li
                 key={opt.number}
@@ -78,23 +94,29 @@ export function ChatInput(): React.JSX.Element {
             ))}
           </ol>
         </div>
-        <input
-          className="chat-input__field"
+        <Input
+          size="lg"
           placeholder="answer (keys forward to the agent)…"
           onKeyDown={onKeyDownChoice}
           autoFocus
+          leading={
+            <span className="mds-composer__attach">
+              <Icon name="paperclip" />
+            </span>
+          }
         />
       </div>
     );
   }
 
   return (
-    <div className="chat-input">
-      <input
-        className="chat-input__field"
-        placeholder={agentId === null ? 'select a crow to chat…' : `message ${agentId}…`}
+    <div className="mds-composer">
+      {metaRow}
+      <Input
+        size="lg"
         value={text}
         disabled={agentId === null}
+        placeholder={agentId === null ? 'select a crow to chat…' : `message ${agentId}…`}
         onChange={(e) => setText(e.target.value)}
         onKeyDown={(e) => {
           if (e.key === 'Enter' && !e.shiftKey) {
@@ -102,10 +124,27 @@ export function ChatInput(): React.JSX.Element {
             submit();
           }
         }}
+        leading={
+          <span className="mds-composer__attach">
+            <Icon name="paperclip" />
+          </span>
+        }
+        trailing={
+          <IconButton
+            label="send"
+            size="md"
+            disabled={!canSend}
+            onClick={submit}
+            style={
+              canSend
+                ? { background: 'var(--accent)', color: 'var(--text-on-accent)' }
+                : undefined
+            }
+          >
+            <Icon name="send" />
+          </IconButton>
+        }
       />
-      <button type="button" className="chat-input__send" disabled={agentId === null} onClick={submit}>
-        send
-      </button>
     </div>
   );
 }
