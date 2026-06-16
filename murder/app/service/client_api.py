@@ -104,8 +104,8 @@ class TicketDetailSnapshot:
     # Runtime state delivered alongside the doc (DB-only per line 165). The editor shows
     # status; schedule_at backs the free-form schedule input (line 245).
     schedule_at: str | None
-    # Legacy split sections retained for backward compatibility with existing consumers
-    # (the Textual client / older tests). Ink reads `body`; these mirror the same prose.
+    # Legacy split sections retained for wire backward compatibility. The Ink client
+    # ignores them and reads `body`; they mirror the same prose for any older consumer.
     plan_md: str
     working_notes_md: str
     as_of: datetime

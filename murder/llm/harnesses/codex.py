@@ -145,8 +145,10 @@ class CodexAdapter(HarnessAdapter):
     usage_collection_mode: ClassVar[UsageCollectionMode] = "tmux_slash"
     startup_model_selects_runtime_model: ClassVar[bool] = True
     # Codex's model picker is `/model` (singular); it opens a numbered modal
-    # list (`› 1. gpt-5.5 (current)  Frontier model …`) which the generic
-    # parser handles. The modal needs a beat to render, so capture late.
+    # list (`› 1. gpt-5.5 (current)  Frontier model …`). This adapter overrides
+    # `request_model_list` and parses the modal with `parse_numbered_model_choices`
+    # (not the base `parse_harness_model_list`). The modal needs a beat to render,
+    # so capture late.
     model_list_command: ClassVar[str | None] = "/model"
     model_list_capture_delay_s: ClassVar[float] = 3.0
     supported_efforts: ClassVar[tuple[str, ...]] = ("low", "medium", "high", "xhigh")

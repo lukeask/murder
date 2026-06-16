@@ -193,8 +193,9 @@ async def _run_supervisor_only(tcp_port: int | None = None) -> None:
         try:
             await host.run_until_signal()
         finally:
-            # A service shutdown is authoritative (`murder down`), unlike the
-            # old in-process TUI quit path. Let Runtime stop agents/tmux.
+            # A service shutdown is authoritative (`murder down`): the backend
+            # owns agent/tmux teardown, not any connected client. Let Runtime
+            # stop agents/tmux.
             with contextlib.suppress(Exception):
                 if host.runtime is not None:
                     host.runtime._external_stop.clear()

@@ -1,8 +1,9 @@
 """Long-lived async runtime + supervisor.
 
 Owns the asyncio loop, the SQLite connection, the bus, and the lifecycle
-of all agents. The TUI is one consumer in this same loop (D1: single
-process). Daemons (CrowHandler, Sentinel) are coroutines spawned and supervised
+of all agents. This backend runs headless: the Ink TUI is a separate Node
+process that connects over a Unix socket and consumes the bus from outside
+this loop. Daemons (e.g. CrowHandler) are coroutines spawned and supervised
 here; their "tmux session" is a logfile being tailed for debug
 visibility, not a real interactive session.
 

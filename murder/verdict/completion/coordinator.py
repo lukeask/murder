@@ -177,10 +177,11 @@ class CompletionCoordinator:
     ) -> None:
         """Publish the completion verdict so forensic capture rides the bus aspect.
 
-        Replaces the old per-emitter ``record_decision()`` call: the recorder
-        subscriber routes this into ``decision_records``. Confirmed TUI consumer
-        — it reads via the key-only ``state.snapshot`` path, so keep this rich
-        event server-side. No-op before the bus / run id exist.
+        The event's ``record_family = "decision_records"`` class var lets the
+        recorder subscriber route it into the ``decision_records`` store off the
+        one bus aspect. Confirmed TUI consumer — it reads via the key-only
+        ``state.snapshot`` path, so keep this rich event server-side. No-op
+        before the bus / run id exist.
         """
         if self._rt.bus is None or self._rt.run_id is None:
             return

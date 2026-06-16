@@ -1,4 +1,4 @@
-"""Completion check system — replaces ValidatorPipeline."""
+"""Completion check system: coordinator + registry over per-ticket checks."""
 
 from .coordinator import CompletionCoordinator, CoordinatorHost, DoneHandleResult
 from .registry import CheckRegistry

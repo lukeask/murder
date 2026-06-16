@@ -94,7 +94,7 @@ class SettingsService:
         """Fire-and-forget model re-discovery on the running event loop.
 
         Best-effort: if no running loop exists (e.g. called from a sync test
-        or the Textual TUI in a non-async context), the refresh is silently
+        in a non-async context), the refresh is silently
         skipped.  DB persistence is skipped here since ``SettingsService`` has
         no DB reference; the full persist path goes through
         ``reconfigure_collaborator`` (which is async and holds the DB).

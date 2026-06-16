@@ -1,1 +1,1 @@
-"""Git utilities for crow start-commit tracking."""
+"""Anti-faking enforcement: checklist verification and git-diff utilities."""

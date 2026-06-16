@@ -1,8 +1,10 @@
 """DB-backed planning notes — the "notetaker" scratchpad docs.
 
-Notes are dated markdown documents (`.murder/notes/<YYYY-MM-DD>.md`).
-Runtime maintains a DB+file mirror and records note revisions in
-`note_revisions` for safety/auditability.
+Notes are markdown documents under `.murder/notes/`. Capture notes are
+created with a provisional timestamp name (`<YYYYMMDDTHHMMSSffffffZ>.md`)
+and may later be renamed to a slug by `submit_capture`. Runtime maintains
+a DB+file mirror and records note revisions in `note_revisions` for
+safety/auditability.
 
 Also contains capture logic: durable note create first, async LLM
 metadata resolution second.
@@ -285,7 +287,11 @@ def capture_metadata_fields(blob: dict[str, Any]) -> dict[str, str]:
 
 
 def normalized_capture_fields(blob: dict[str, Any]) -> tuple[str, str, str]:
-    """Compatibility parser for older tests plus the new title field."""
+    """Parse a capture blob into ``(cleaned, short_vers, title)``.
+
+    NOTE: currently has no in-tree callers (possibly dead); retained for
+    compatibility.
+    """
     cleaned = blob.get("cleaned")
     if not isinstance(cleaned, str) or not cleaned.strip():
         raise ValueError("missing cleaned")

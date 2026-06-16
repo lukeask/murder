@@ -164,7 +164,7 @@ def get_ticket_status(conn: sqlite3.Connection, ticket_id: str) -> str | None:
 
 
 def compute_ready(conn: sqlite3.Connection) -> list[str]:
-    """Tickets whose deps are all ``done`` and that are currently ``ready``.
+    """Tickets currently ``ready`` whose every dep is ``done`` or ``archived``.
 
     A ticket with no deps qualifies trivially. Result is sorted by id so kickoff order is
     stable.
@@ -195,7 +195,11 @@ def dependents_of(conn: sqlite3.Connection, ticket_id: str) -> list[str]:
 
 
 def set_checklist(conn: sqlite3.Connection, ticket_id: str, items: list[str]) -> None:
-    """Replace a ticket's checklist. Used by Collaborator on carve."""
+    """Replace a ticket's checklist.
+
+    Note: currently has no callers (carve applies its checklist through
+    ``apply_ticket_carve_payload``); kept as a standalone checklist-replace helper.
+    """
     conn.execute("BEGIN")
     try:
         conn.execute("DELETE FROM checklist WHERE ticket_id = ?", (ticket_id,))

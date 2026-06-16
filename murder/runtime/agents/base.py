@@ -3,8 +3,10 @@
 All roles implement this interface. `CrowAgent`, `CollaboratorAgent`, and
 `PlanningAgent` own real tmux sessions (interactive harness) and subclass
 `HarnessBackedAgent`. `CrowHandler` and `PlanningHandler` are coroutine
-daemons that subclass `Daemon` directly; they own no interactive pane and
-have no transcript.
+daemons that subclass `Daemon` directly. They own no *interactive* harness
+pane and have no transcript; their tmux session is just a non-interactive
+``tail -f`` of their handler log file (so the session is attachable for
+debugging), created in start() and killed in stop().
 """
 
 from __future__ import annotations
@@ -86,7 +88,7 @@ class HarnessBackedAgent(LifecycleParticipant):
     """Lifecycle participant that owns an interactive harness pane in tmux.
 
     Provides the single server-side conversation path shared by
-    CollaboratorAgent, PlanningAgent, and CrowAgent (phase 1.c): the service
+    CollaboratorAgent, PlanningAgent, and CrowAgent: the service
     parses the harness pane here — never in the TUI — and stores blocks into
     the JSON conversation store. ``conversation_id`` is the agent ``id`` (one
     live conversation per agent).

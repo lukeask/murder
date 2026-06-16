@@ -11,7 +11,7 @@ Pipeline (one shape for all harnesses):
     segments, in pane order -> the accumulator reconciles the fresh parse against
     the committed history and freezes everything above the live window.
 
-Substrate invariants (Phase A):
+Substrate invariants:
 
   - **Monotonic coordinates.** ``_PaneScrollback.lines`` only grows; an index
     into it, once assigned, denotes the same logical scrollback line for the
@@ -237,8 +237,8 @@ def _reconcile(
     a content key (``_segment_key``) rather than pure span position: codex
     redraws a block (the plan checklist, a streaming tool) *in place* and only
     later scrolls it, so two segments legitimately occupy the same coordinates at
-    different times — position alone cannot tell them apart, content can. See the
-    Phase A report for why the goldens force this.
+    different times — position alone cannot tell them apart, content can. The codex
+    golden transcripts exercise exactly this in-place-redraw case.
     """
     if not committed:
         return [_clone(s) for s in parsed]

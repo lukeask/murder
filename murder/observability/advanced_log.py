@@ -207,7 +207,7 @@ def set_current_advanced_log(log: "AdvancedLogBase") -> None:
 def current_advanced_log() -> "AdvancedLogBase":
     """Return the active advanced log, or a shared no-op if none is set.
 
-    Wave 4 boundaries that cannot reach the Runtime call
+    Call sites that can't get the log injected call
     ``current_advanced_log().record_*(...)`` unconditionally; off-mode returns a
     :class:`NullAdvancedLog` so the call is a cheap no-op.
     """

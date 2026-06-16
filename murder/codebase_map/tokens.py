@@ -1,7 +1,8 @@
 """Canonical budget tokenizer for the codebase map.
 
 This is the *one* definition used everywhere the map does budget math, so
-the 15% (file) / 5% (agent) budgets are well-defined across providers.
+the 15% (per-file summary) / 50% (rollup) budgets are well-defined across
+providers.
 """
 
 from __future__ import annotations

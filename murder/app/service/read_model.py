@@ -61,8 +61,8 @@ RESUMABLE_HARNESS = "claude_code"
 def _keep_failed_session(session: CrowSessionSummary, *, now: datetime) -> bool:
     """Whether a failed agent should remain on the wire roster.
 
-    Mirrors the Textual roster predicate: keep failed agents whose ticket is
-    still active, or whose heartbeat is recent; drop the rest. ``now`` and the
+    Roster predicate: keep failed agents whose ticket is still active, or
+    whose heartbeat is recent; drop the rest. ``now`` and the
     session timestamps are all naive UTC (see ``datetime.utcnow``), so they are
     compared directly without tz normalisation.
     """

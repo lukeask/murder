@@ -16,7 +16,9 @@ Two storage paths live side-by-side in this module:
   A ``conversations`` row holds metadata per conversation session.
   See :func:`merge_conversation_doc`, :func:`read_conversation_blocks`, etc.
 
-Both paths are independent; 1.c will wire the JSON path into the live app.
+Both paths are independent. The JSON path is the one wired into the live app
+(see ``project_parsed_doc_with_changes`` / ``append_user_message`` callers in
+``runtime/agents/base.py`` and ``conversation_producer.py``).
 """
 
 from __future__ import annotations
@@ -93,7 +95,8 @@ def _now() -> str:
 
 # Canonical set of block kinds.  assistant segment is split by phase so each
 # kind maps unambiguously back to a segment dict stored in payload_json.
-# `notice` is reserved for 1.f (usage/error notices; no parser emits it yet).
+# `notice` carries service-originated usage/error notices written via
+# `append_notice` (not emitted by any parser; the service injects them).
 BLOCK_KINDS: tuple[str, ...] = (
     "user",
     "assistant_intermediate",
@@ -102,7 +105,7 @@ BLOCK_KINDS: tuple[str, ...] = (
     "plan_update",
     "agent_event",
     "choice_prompt",
-    "notice",                # reserved for 1.f
+    "notice",                # service-injected; see append_notice
 )
 
 

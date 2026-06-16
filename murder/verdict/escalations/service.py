@@ -1,4 +1,4 @@
-"""Semantic escalation operations (W5)."""
+"""Semantic escalation operations."""
 
 from __future__ import annotations
 

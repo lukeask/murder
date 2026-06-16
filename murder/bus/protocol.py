@@ -1,16 +1,15 @@
 """Frozen wire contract between supervisor, workers, and clients.
 
 This module is the single source of truth for the bus protocol that spans
-the worker-bus refactor. Both the TUI branch and the backend branch import
-from here. The TUI develops against a fake bus that produces messages
-matching these types; the backend builds the broker that produces them
-for real. They meet at this file.
+the worker-bus refactor. The TUI, the broker, and every client import from
+here: the TUI develops against a fake bus that produces messages matching
+these types; the broker produces them for real. They meet at this file.
 
 Amendment process
 -----------------
 - **Additive changes** (new optional fields, new BusEvent kinds, new
   closed-enum values that don't change existing meaning) MAY be made
-  inline. Coordinate the PR across both branches.
+  inline.
 - **Non-additive changes** (renaming a field, changing a discriminator
   value, narrowing a type, removing a kind) MUST bump
   ``PROTOCOL_VERSION``. Clients refuse mismatched versions on connect.
@@ -21,7 +20,7 @@ Broker implementations, transport framing read/write loops, kind handler
 bodies, asyncio glue, sqlite glue. Types and constants only. If you find
 yourself importing ``asyncio`` here, you're in the wrong file.
 
-See `.agents/bus_protocol.md` for the design rationale behind these
+See `.agents/old/bus_protocol.md` for the design rationale behind these
 shapes.
 """
 
@@ -189,7 +188,7 @@ class ErrorEvent(_BaseEvent):
     traceback: str | None = None
 
 
-# --- New types added by the worker-bus refactor -----------------------------
+# --- Types added by the worker-bus refactor ---------------------------------
 
 
 class CommandEvent(_BaseEvent):
@@ -220,8 +219,8 @@ class StateSnapshotEvent(_BaseEvent):
     """Key-only notification that an entity changed.
 
     Body lives in SQLite; every client holds a read-only DB handle and
-    refetches on receipt. See worker_bus_refactor.md §D.5 for the
-    deliberation.
+    refetches on receipt. See `.agents/old/worker_bus_refactor.md` §D.5 for
+    the deliberation.
     """
 
     type: Literal["state.snapshot"] = "state.snapshot"
@@ -428,8 +427,8 @@ class EventFilter(BaseModel):
     """Server-applied filter. Fields compose with AND; ``None`` matches any.
 
     The broker MUST apply filters before fanout. At the future tier-3 scale
-    (~45 clients in worker_bus_refactor handoff §5.2) client-side filtering
-    is O(clients × events) and untenable.
+    (~45 clients in `.agents/old/worker_bus_refactor.md` handoff §5.2)
+    client-side filtering is O(clients × events) and untenable.
     """
 
     role: Role | None = None
@@ -530,7 +529,7 @@ class WakeBody(BaseModel):
     """Per-client signal sent immediately on connect / reconnect.
 
     Distinct from PresenceEvent. PresenceEvent is broadcast and represents
-    a global debounced transition; WakeEvent is per-client and represents
+    a global debounced transition; WakeBody is per-client and represents
     "you just joined — here are the entities whose state is most likely
     stale for you." Not persisted to ``events``.
     """

@@ -1,4 +1,4 @@
-"""Schema migration functions — all ``_migrate_*`` helpers from murder/db.py."""
+"""Schema migration functions — the ``_migrate_*`` helpers that bring an existing murder.db forward to the current schema."""
 
 from __future__ import annotations
 

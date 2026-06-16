@@ -193,8 +193,10 @@ class PlanningHandler(Daemon):
 
         pane = await tmux.capture_pane(self.planner_session, lines=TRANSCRIPT_SCROLLBACK_LINES)
 
-        # Transcript projection is owned by the PlanningAgent's own loop, not
-        # here; this handler only relays crow ASKs and routes ANSWER markers.
+        # Transcript projection of the planner's pane is driven by the
+        # service-owned projection poll loop (ServiceHost._run_projection_poll_loop
+        # -> PlanningAgent.project_once), not here; this handler only relays crow
+        # ASKs and routes ANSWER markers.
 
         for ticket_id, reply in self.harness.detect_answers(pane):
             if ticket_id in self._routed:

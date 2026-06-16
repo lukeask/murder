@@ -54,7 +54,8 @@ def _root(
         case_sensitive=False,
     ),
 ) -> None:
-    """Bare entrypoint launches the TUI. Kickoff is `/murder` inside the chat pane."""
+    """Bare entrypoint launches the TUI. Start a plan with the new-plan popup
+    (`alt+p`), which creates a plan and starts its planning agent."""
     if version:
         typer.echo(f"murder {__version__}")
         raise typer.Exit(0)

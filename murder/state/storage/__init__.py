@@ -2,7 +2,7 @@
 
 Most state is in SQLite (D2); this package handles things that have to
 live as files: pane logfiles, escalation .md bodies, plan .md files,
-ticket prose .md files, lockfile, .env paths.
+ticket prose .md files, lockfile.
 """
 
 from murder.state.storage.paths import agents_dir, db_path, lock_path, runs_dir

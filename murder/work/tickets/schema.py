@@ -41,5 +41,5 @@ class Ticket(BaseModel):
     working_notes: str = ""
 
     def md_path(self, agents_root: Path) -> Path:
-        """Where this ticket's prose-only markdown lives (D9: flat)."""
+        """Where this ticket's unified markdown (frontmatter + `# Checklist` body) lives (D9: flat)."""
         return agents_root / "tickets" / f"{self.id}.md"

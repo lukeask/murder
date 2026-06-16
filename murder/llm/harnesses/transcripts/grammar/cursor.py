@@ -181,7 +181,7 @@ def _cursor_is_chrome(line: str) -> bool:
 
 
 # ---- tool-activity rollups ------------------------------------------------- #
-# Cursor has no tool-call glyphs (unlike CC's ⏺/⎿); it paints tool activity as
+# Cursor has no tool-call glyphs (unlike CC's ●/⎿); it paints tool activity as
 # rollup lines that progressively redraw as actions accumulate, e.g.
 #     Grepping, searching 1 grep, 1 search Grepped "pat" in . …      (in-progress)
 #     Grepped, searched 1 grep, 1 search Grepped "pat" in . …        (done)

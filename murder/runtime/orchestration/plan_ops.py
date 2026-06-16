@@ -293,8 +293,9 @@ class PlanOps:
         plan row + materialized markdown (and emits the plan snapshot), then —
         when an initial ``message`` is supplied — ``send_agent_message`` to the
         ``planner-{name}`` agent, which lazily spawns the planner via
-        ``ensure_planning_agent``. Mirrors the Textual ctrl+p new-plan flow
-        (scaffold + focus ``planner-{name}`` as chat target).
+        ``ensure_planning_agent``. This is the new-plan flow originally exposed
+        via the retired Textual ctrl+p binding (scaffold + focus
+        ``planner-{name}`` as chat target).
 
         ``body`` seeds the plan's markdown body (defaulting to the legacy
         ``"# Plan Name\\n"`` stub). ``auto_name`` derives the plan name from

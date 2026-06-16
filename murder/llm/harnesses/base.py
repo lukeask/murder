@@ -563,7 +563,7 @@ class HarnessAdapter(ABC):
         return bool(DONE_RE.search(strip_ui_chrome(pane_text)))
 
     async def interrupt(self, session: str) -> None:
-        """Stop an in-flight generation. Override per harness (see plan Obj 4)."""
+        """Stop an in-flight generation. Override per harness."""
         await tmux.interrupt(session)
 
     async def interrupt_generation(self, session: str) -> None:

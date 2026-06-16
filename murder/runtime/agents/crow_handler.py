@@ -151,7 +151,10 @@ class CrowHandler(Daemon):
                 await self.stop()
 
     async def stop(self, *, failed: bool = False, kill_session: bool = True) -> None:
-        del kill_session  # crow_handler has no real tmux session
+        # kill_session=False exists to preserve an *interactive harness* session
+        # for reattach; this handler's session is only a disposable `tail -f`
+        # log pane, so we always tear it down regardless of the flag.
+        del kill_session
         from murder.runtime.terminal import tmux
 
         if failed or self.status == AgentStatus.FAILED:
@@ -218,8 +221,10 @@ class CrowHandler(Daemon):
 
         pane = await tmux.capture_pane(self.crow_session, lines=TRANSCRIPT_SCROLLBACK_LINES)
 
-        # Transcript projection is owned by the CrowAgent's own loop, not here;
-        # this handler only does ticket orchestration off the captured pane.
+        # Transcript projection of the crow's pane is driven by the
+        # service-owned projection poll loop (ServiceHost._run_projection_poll_loop
+        # -> CrowAgent.project_once), not here; this handler only does ticket
+        # orchestration off the captured pane.
 
         # Fast: idle detection + queued message delivery
         was_idle = self._idle_cached

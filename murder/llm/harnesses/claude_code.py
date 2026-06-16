@@ -2,8 +2,8 @@
 
 Caveats:
 - `--dangerously-skip-permissions` refuses to run as root.
-- CC's UI has tool-box rendering and spinners; pane regexes need
-  empirical tuning during M1/M2.
+- CC's UI has tool-box rendering and spinners; pane parsing relies on
+  empirically-tuned regexes (see the claude_code transcript grammar).
 """
 
 from __future__ import annotations

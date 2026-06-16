@@ -94,7 +94,7 @@ class SchedulerWorker(Worker):
     """Automates ticket kickoff based on configured scheduler mode.
 
     Modes:
-    - manual: never kicks anything automatically (operator-driven F6 / CLI)
+    - manual: never kicks anything automatically (operator-driven via CLI)
     - autorun_ready: every tick, submits scheduler.kickoff_ready to orchestrator
       when ready tickets with clear deps exist
     - crow_magic: per-(harness, window) usage gate via usage_threshold_curve; per-harness

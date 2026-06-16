@@ -22,10 +22,12 @@ This client does that:
     explicit ``low`` effort it burns the whole cap on reasoning and returns empty
     content. qwen3/glm take ``none``; non-reasoning models omit the knob.
 
-Quality tiering comes from the benchmark: glm-4.7, qwen3-32b, gpt-oss-120b(low) and
-llama-3.3-70b are all failover-eligible (faithfulness>=4, continuation>=4);
+Quality tiering comes from the benchmark: qwen3-32b, zai-glm-4.7, gpt-oss-120b(low)
+and llama-3.3-70b are all failover-eligible (faithfulness>=4, continuation>=4);
 gpt-oss-20b is last-resort (faithful but intermittently drops continuation-critical
 state). gpt-oss-120b appears on BOTH providers because they are separate buckets.
+(Model ids in ``_DEFAULT_SPECS`` carry provider prefixes, e.g. ``qwen/qwen3-32b``,
+``openai/gpt-oss-120b``.)
 """
 
 from __future__ import annotations

@@ -76,7 +76,7 @@ def set_last_error(conn: sqlite3.Connection, ticket_id: str, error: str) -> None
 def reopen(conn: sqlite3.Connection, ticket_id: str) -> list[str]:
     """D7 reopen path: done → planned + cascade dependents back to planned.
 
-    Returns ids of dependents cascaded. Caller stops running monkeys for them.
+    Returns ids of dependents cascaded. Caller stops running crows for them.
     """
     transition(conn, ticket_id, TicketStatus.PLANNED, reason="reopened")
     cascaded: list[str] = []
