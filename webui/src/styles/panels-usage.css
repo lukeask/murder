@@ -1,0 +1,75 @@
+/* ── Usage ──────────────────────────────────────────────────────────
+   Bespoke CSS for UsagePanel (Phase C2). Faithful to the design bundle's
+   `.usage-grp` (desktop-cockpit) + `.mw-usagebar` (web kit): a per-window
+   row of period · accent meter · pct · window/reset, with a slim
+   pill-radius meter. Tokens only — no raw hex. Wired in via main.tsx. */
+
+.usage-grp + .usage-grp {
+  margin-top: var(--space-5);
+}
+
+.usage-grp__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin-bottom: var(--space-3);
+}
+
+.usage-grp__harness {
+  font: var(--type-body);
+  font-weight: var(--weight-semibold);
+  color: var(--text-primary);
+}
+
+/* The DS Select is full-width by default; keep the steering control compact. */
+.usage-grp__steering {
+  flex: 0 0 auto;
+  min-width: 92px;
+}
+
+.usage-row {
+  display: grid;
+  grid-template-columns: 30px 1fr 38px 42px;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-1) 0;
+  font: var(--type-meta);
+}
+
+.usage-row__period {
+  color: var(--text-muted);
+}
+
+.usage-row__pct {
+  text-align: right;
+  color: var(--accent);
+  font-weight: var(--weight-medium);
+}
+
+.usage-row__reset {
+  text-align: right;
+  color: var(--text-muted);
+}
+
+/* Meter: slim pill track (--surface-active / --ef-bg-4) with an accent fill;
+   high (>=80%) paints the fill in the error color. Fill width is data-driven
+   via inline style from filledCount/barWidth. */
+.usage-meter {
+  height: 8px;
+  border-radius: var(--radius-pill);
+  background: var(--surface-active);
+  overflow: hidden;
+}
+
+.usage-meter__fill {
+  display: block;
+  height: 100%;
+  border-radius: var(--radius-pill);
+  background: var(--accent);
+  transition: width var(--dur-fast) var(--ease-out);
+}
+
+.usage-meter__fill--high {
+  background: var(--text-error);
+}

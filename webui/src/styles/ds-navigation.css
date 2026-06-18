@@ -1,0 +1,145 @@
+/* ── NavBar ──────────────────────────────────────────────────────────────────────────────────── */
+.mds-nav {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  height: var(--header-h);
+  padding: 0 16px;
+  background: var(--surface-panel);
+  border-bottom: 1px solid var(--border-subtle);
+  font-family: var(--font-mono);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.mds-nav::-webkit-scrollbar {
+  display: none;
+}
+.mds-nav__brand {
+  font-size: var(--text-md);
+  font-weight: var(--weight-bold);
+  color: var(--text-brand);
+  flex: none;
+  margin-right: 6px;
+}
+.mds-nav__items {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  flex: none;
+}
+.mds-nav__item {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  padding: 4px 0;
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+  transition: color var(--dur-fast) var(--ease-out);
+}
+.mds-nav__item svg {
+  width: 16px;
+  height: 16px;
+  stroke-width: 1.75;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  flex: none;
+}
+.mds-nav__item:hover {
+  color: var(--text-secondary);
+}
+.mds-nav__item--active {
+  color: var(--text-primary);
+  font-weight: var(--weight-semibold);
+}
+.mds-nav__item--active::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -1px;
+  height: 2px;
+  background: var(--accent);
+  border-radius: 2px;
+}
+.mds-nav__spacer {
+  flex: 1;
+}
+.mds-nav__trail {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+}
+
+/* ── KeybindBar ──────────────────────────────────────────────────────────────────────────────── */
+.mds-keybar {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  flex-wrap: wrap;
+  padding: 10px 16px;
+  min-height: 40px;
+  background: var(--surface-panel);
+  border-top: 1px solid var(--border-subtle);
+  font-family: var(--font-mono);
+}
+.mds-keybar__hint {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: var(--text-xs);
+}
+.mds-keybar__chord {
+  color: var(--accent);
+  font-weight: var(--weight-semibold);
+}
+.mds-keybar__desc {
+  color: var(--text-muted);
+}
+.mds-keybar__spacer {
+  flex: 1;
+}
+.mds-keybar__help {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+  background: var(--surface-raised);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  padding: 6px 11px 6px 9px;
+  cursor: pointer;
+  transition:
+    background var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out);
+}
+.mds-keybar__help:hover {
+  background: var(--surface-hover);
+  color: var(--text-primary);
+}
+.mds-keybar__help:focus-visible {
+  outline: 2px solid var(--border-focus);
+  outline-offset: 2px;
+}
+.mds-keybar__help svg {
+  width: 16px;
+  height: 16px;
+  stroke-width: 1.75;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.mds-keybar--scroll {
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.mds-keybar--scroll::-webkit-scrollbar {
+  display: none;
+}

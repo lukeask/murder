@@ -1,0 +1,572 @@
+/*
+ * App layout + component styling.
+ *
+ * STYLING CONTRACT (see STYLING.md):
+ *  - All COLORS reference `--color-*` custom properties written at runtime from the active theme
+ *    (theme.css documents them). Never hard-code a hex here.
+ *  - All SPACING / RADIUS / FONT / DIMENSION use the layout tokens in theme.css (`--space-*`,
+ *    `--radius*`, `--font-*`, `--rail-width`, …). Change a token there to restyle globally.
+ *  - The desktop↔mobile structural switch is driven by `data-layout` on `.app` (set from
+ *    useMediaQuery); per-element responsive tweaks use the @media query at the bottom of this file.
+ *
+ * File is organised: shell → connection pill → rails/stage → Panel chrome → list rows → per-domain
+ * panel styles → Stage (chat/tmux/doc/ticket) → mobile tab bar → responsive @media.
+ */
+
+/* ── Shell ─────────────────────────────────────────────────────────────────────────────────── */
+.app {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+  /* Never let wide content (long ANSI tmux lines, etc.) scroll the whole page sideways — wide
+   * content scrolls inside its own pane instead. */
+  overflow-x: hidden;
+}
+
+.app__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  /* The notch reserves space ABOVE the header bar via top safe-area padding (kept tall enough to
+   * stay tappable); left/right insets keep brand + pill clear of rounded corners. */
+  height: calc(var(--header-height) + var(--safe-top));
+  padding: var(--safe-top) calc(var(--space-4) + var(--safe-right)) 0
+    calc(var(--space-4) + var(--safe-left));
+  border-bottom: 1px solid var(--color-border-blurred);
+  flex-shrink: 0;
+  background: var(--color-panel-selected-bg);
+}
+
+.app__brand {
+  color: var(--color-brand);
+  font-weight: 700;
+  font-size: 18px;
+  letter-spacing: 0.05em;
+}
+
+.app__body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  overflow: hidden;
+}
+
+.app__body--desktop {
+  flex-direction: row;
+  gap: var(--space-3);
+  padding: var(--space-3);
+}
+
+.app__body--mobile {
+  flex-direction: column;
+  padding: var(--space-2);
+}
+
+/* Rails: scrolling columns of panels. */
+.rail {
+  width: var(--rail-width);
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  min-height: 0;
+}
+
+.app__stage {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  min-height: 0;
+}
+
+/* ── Connection pill ───────────────────────────────────────────────────────────────────────── */
+.conn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  padding: 2px var(--space-2);
+  border-radius: 999px;
+  border: 1px solid var(--color-border-blurred);
+}
+.conn__dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--color-inactive);
+}
+.conn--connected .conn__dot { background: var(--color-success); }
+.conn--connected { color: var(--color-success); }
+.conn--reconnecting .conn__dot { background: var(--color-warning); }
+.conn--reconnecting { color: var(--color-warning); }
+.conn--error .conn__dot { background: var(--color-error); }
+.conn--error { color: var(--color-error); }
+
+/* ── Panel chrome (the Pane analog) ────────────────────────────────────────────────────────── */
+.panel {
+  display: flex;
+  flex-direction: column;
+  background: var(--color-panel-header-bg);
+  border: 1px solid var(--color-border-blurred);
+  border-radius: var(--radius);
+  overflow: hidden;
+  min-height: 0;
+}
+/* In the desktop rails a panel sizes to content but caps its scroll height so all fit. */
+.rail .panel { max-height: 60vh; }
+
+.panel[data-focused="true"] {
+  border-color: var(--color-focus);
+  box-shadow: 0 0 0 1px var(--color-focus);
+}
+
+.panel__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  background: var(--color-panel-selected-bg);
+  border-bottom: 1px solid var(--color-border-blurred);
+  flex-shrink: 0;
+}
+.panel__title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-heading);
+}
+.panel__actions { display: flex; gap: var(--space-1); }
+
+.panel__body {
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  flex: 1;
+  min-height: 0;
+}
+
+.panel__hint {
+  padding: var(--space-3);
+  color: var(--color-muted);
+  font-style: italic;
+}
+.panel__hint--error { color: var(--color-error); font-style: normal; }
+
+/* ── Generic list rows ─────────────────────────────────────────────────────────────────────── */
+.list { list-style: none; margin: 0; padding: 0; }
+
+.list__row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--color-border-blurred);
+  cursor: pointer;
+  min-height: var(--tap-min);
+}
+.list__row:nth-child(even) { background: var(--color-row-alt-bg); }
+.list__row:hover { background: var(--color-panel-selected-bg); }
+.list__row[data-selected="true"] {
+  background: var(--color-row-selected-bg);
+  box-shadow: inset 2px 0 0 var(--color-focus);
+}
+
+.list__primary {
+  font-family: var(--font-mono);
+  color: var(--color-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 1;
+  min-width: 0;
+}
+.list__secondary { color: var(--color-muted); font-size: 12px; white-space: nowrap; }
+
+/* Status badge / semantic tone */
+.badge {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  padding: 1px var(--space-1);
+  border-radius: var(--radius-sm);
+  color: var(--color-gauge-label-text);
+  background: var(--color-inactive);
+  white-space: nowrap;
+}
+.badge--running, .badge--working, .badge--live { background: var(--color-success); }
+.badge--blocked, .badge--escalating, .badge--awaiting_input, .badge--awaiting_approval { background: var(--color-warning); }
+.badge--failed, .badge--dead, .badge--error { background: var(--color-error); }
+.badge--done, .badge--idle { background: var(--color-accent); }
+
+.tone--success { color: var(--color-success); }
+.tone--warning { color: var(--color-warning); }
+.tone--error { color: var(--color-error); }
+.tone--neutral { color: var(--color-muted); }
+.tone { font-family: var(--font-mono); font-size: 12px; white-space: nowrap; }
+
+/* Star + inline row actions */
+.star {
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--color-warning);
+  font-size: 15px;
+  padding: 0 2px;
+  line-height: 1;
+}
+.star[aria-pressed="false"] { color: var(--color-inactive); }
+
+.row-action {
+  background: var(--color-panel-selected-bg);
+  border: 1px solid var(--color-border-blurred);
+  color: var(--color-text);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  padding: 2px var(--space-2);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.row-action:hover { border-color: var(--color-focus); }
+.row-action:disabled { opacity: 0.4; cursor: default; }
+
+/* Segmented toggle (history loose/all, stage tabs) */
+.seg, .stage__tabs { display: inline-flex; border: 1px solid var(--color-border-blurred); border-radius: var(--radius-sm); overflow: hidden; }
+.seg button, .stage__tabs button {
+  background: var(--color-panel-header-bg);
+  border: none;
+  color: var(--color-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  padding: 4px var(--space-2);
+  cursor: pointer;
+}
+.seg button[data-on="true"], .stage__tabs button[data-on="true"] {
+  background: var(--color-focus);
+  color: var(--color-gauge-label-text);
+}
+
+/* ── Roster / crows ────────────────────────────────────────────────────────────────────────── */
+.roster__section-label {
+  padding: var(--space-1) var(--space-3);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--color-muted);
+  background: var(--color-panel-header-bg);
+}
+.roster__name { flex: 1; }
+.roster__meta { color: var(--color-muted); font-size: 11px; font-family: var(--font-mono); }
+.health { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+.health--green { background: var(--color-success); }
+.health--yellow { background: var(--color-warning); }
+.health--red { background: var(--color-error); }
+.health--neutral { background: var(--color-inactive); }
+
+/* ── Tickets ───────────────────────────────────────────────────────────────────────────────── */
+.ticket__row { flex-direction: column; align-items: stretch; gap: var(--space-1); }
+.ticket__main { display: flex; justify-content: space-between; gap: var(--space-2); align-items: baseline; }
+.ticket__cols { display: flex; gap: var(--space-3); flex-wrap: wrap; }
+.ticket__cell { font-family: var(--font-mono); font-size: 11px; color: var(--color-muted); }
+.ticket__cell--dim { opacity: 0.7; }
+
+/* ── Docs (plans/notes/reports list rows) ──────────────────────────────────────────────────── */
+.doc__name { flex: 1; }
+.doc__meta { color: var(--color-muted); font-size: 11px; font-family: var(--font-mono); white-space: nowrap; }
+.doc__meta--dim { opacity: 0.7; }
+
+/* ── History ───────────────────────────────────────────────────────────────────────────────── */
+.history__text { flex: 1; }
+.history__target { color: var(--color-accent); font-family: var(--font-mono); font-size: 11px; }
+.history__age { color: var(--color-muted); font-size: 11px; }
+.tag {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  padding: 1px var(--space-1);
+  border-radius: var(--radius-sm);
+  background: var(--color-inactive);
+  color: var(--color-gauge-label-text);
+}
+.tag--open { background: var(--color-success); }
+.tag--stale { background: var(--color-warning); }
+.tag--dismissed { background: var(--color-inactive); }
+
+/* ── Usage gauges ──────────────────────────────────────────────────────────────────────────── */
+.usage__group { padding: var(--space-2) var(--space-3); border-bottom: 1px solid var(--color-border-blurred); }
+.usage__head { display: flex; align-items: center; justify-content: space-between; margin-bottom: var(--space-1); }
+.usage__harness { font-family: var(--font-mono); color: var(--color-heading); font-size: 12px; }
+.usage__steering {
+  background: var(--color-panel-selected-bg);
+  color: var(--color-text);
+  border: 1px solid var(--color-border-blurred);
+  border-radius: var(--radius-sm);
+  font-size: 11px;
+  padding: 1px var(--space-1);
+}
+.gauge { display: flex; align-items: center; gap: var(--space-2); margin: 2px 0; }
+.gauge__period { width: 40px; font-family: var(--font-mono); font-size: 11px; color: var(--color-muted); }
+.gauge__bar {
+  flex: 1;
+  position: relative;
+  height: 16px;
+  background: var(--color-row-alt-bg);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+.gauge__fill { height: 100%; background: var(--color-gauge-normal); }
+.gauge__fill--high { background: var(--color-gauge-high); }
+.gauge__pct {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--color-text);
+}
+.gauge__reset { width: 56px; text-align: right; font-family: var(--font-mono); font-size: 11px; color: var(--color-muted); }
+
+/* ── Transit ───────────────────────────────────────────────────────────────────────────────── */
+.transit__lane { padding: var(--space-2) var(--space-3); border-bottom: 1px solid var(--color-border-blurred); }
+.transit__branch { display: flex; align-items: center; gap: var(--space-1); margin-bottom: var(--space-1); }
+.transit__name { font-family: var(--font-mono); font-size: 12px; color: var(--color-text); }
+.transit__name--main { color: var(--color-heading); font-weight: 600; }
+.transit__home { color: var(--color-accent); }
+.transit__commits { margin-left: var(--space-2); border-left: 2px solid var(--color-border-blurred); }
+.transit__commit { display: flex; align-items: center; gap: var(--space-2); padding: 2px var(--space-2); cursor: pointer; }
+.transit__commit:hover { background: var(--color-panel-selected-bg); }
+.transit__commit[data-selected="true"] { background: var(--color-row-selected-bg); }
+.transit__node { color: var(--color-accent); margin-left: -7px; }
+.transit__sha { font-family: var(--font-mono); font-size: 11px; color: var(--color-warning); }
+.transit__subject { flex: 1; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.transit__age { font-size: 11px; color: var(--color-muted); }
+.transit__detail { padding: var(--space-3); background: var(--color-panel-selected-bg); }
+.transit__detail-head { font-family: var(--font-mono); font-size: 12px; color: var(--color-heading); }
+.transit__body { white-space: pre-wrap; font-family: var(--font-mono); font-size: 12px; color: var(--color-text); margin: var(--space-2) 0 0; }
+
+/* ── Settings ──────────────────────────────────────────────────────────────────────────────── */
+.settings { padding: var(--space-3); display: flex; flex-direction: column; gap: var(--space-4); }
+.settings__group h3 { margin: 0 0 var(--space-2); font-size: 12px; color: var(--color-heading); }
+.settings__themes { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+.theme-swatch {
+  background: var(--color-panel-selected-bg);
+  border: 1px solid var(--color-border-blurred);
+  color: var(--color-text);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.theme-swatch[data-on="true"] { border-color: var(--color-focus); color: var(--color-focus); }
+.settings__value { margin-left: var(--space-2); font-family: var(--font-mono); color: var(--color-muted); }
+
+/* ── Stage (center: chat / tmux / doc / ticket) ────────────────────────────────────────────── */
+.stage {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  background: var(--color-panel-header-bg);
+  border: 1px solid var(--color-border-blurred);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.stage__tabs {
+  flex-shrink: 0;
+  margin: var(--space-2);
+  align-self: flex-start;
+  align-items: center;
+}
+.stage__target { margin-left: var(--space-2); font-family: var(--font-mono); font-size: 11px; color: var(--color-muted); padding-right: var(--space-2); }
+.stage__body { flex: 1; min-height: 0; overflow-y: auto; -webkit-overflow-scrolling: touch; padding: var(--space-3); }
+
+.chat__empty, .tmux__empty { padding: var(--space-4); color: var(--color-muted); font-style: italic; }
+
+.chat__transcript { display: flex; flex-direction: column; gap: var(--space-3); }
+.turn { display: flex; flex-direction: column; gap: 2px; }
+.turn__speaker { font-size: 10px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--color-muted); }
+.turn__text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius);
+  background: var(--color-row-alt-bg);
+  color: var(--color-text);
+}
+.turn--user .turn__text { background: var(--color-row-selected-bg); }
+.turn--user { align-items: flex-end; }
+.turn--user .turn__text { max-width: 80%; }
+.turn--assistant .turn__text { border-left: 2px solid var(--color-heading); }
+.turn--tool .turn__text { border-left: 2px solid var(--color-accent); color: var(--color-muted); }
+.turn--plan .turn__text { border-left: 2px solid var(--color-warning); }
+.turn--agent .turn__text { font-size: 11px; color: var(--color-muted); background: none; padding: 0 var(--space-3); }
+.turn--notice .turn__text { color: var(--color-warning); }
+.turn--live .turn__text { border: 1px solid var(--color-focus); }
+
+/* tmux terminal frame */
+.tmux__frame {
+  margin: 0;
+  white-space: pre;
+  overflow: auto;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.2;
+  color: var(--color-text);
+  background: #000;
+  padding: var(--space-2);
+  border-radius: var(--radius-sm);
+}
+
+/* Chat input */
+.chat-input {
+  flex-shrink: 0;
+  display: flex;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-top: 1px solid var(--color-border-blurred);
+  background: var(--color-panel-selected-bg);
+}
+.chat-input__field {
+  flex: 1;
+  background: var(--color-panel-header-bg);
+  border: 1px solid var(--color-border-blurred);
+  border-radius: var(--radius-sm);
+  color: var(--color-text);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  padding: var(--space-2);
+  min-height: var(--tap-min);
+}
+.chat-input__field:focus { outline: none; border-color: var(--color-focus); }
+.chat-input__send {
+  background: var(--color-focus);
+  color: var(--color-gauge-label-text);
+  border: none;
+  border-radius: var(--radius-sm);
+  font-weight: 600;
+  padding: 0 var(--space-4);
+  cursor: pointer;
+  min-width: var(--tap-min);
+}
+.chat-input__send:disabled { opacity: 0.4; cursor: default; }
+.chat-input--choice { flex-direction: column; align-items: stretch; }
+.chat-input__prompt-q { font-size: 13px; color: var(--color-heading); }
+.chat-input__options { margin: var(--space-1) 0; padding-left: var(--space-4); }
+.chat-input__options li { cursor: pointer; padding: 2px 0; }
+.chat-input__options li[data-selected="true"] { color: var(--color-focus); font-weight: 600; }
+
+/* Doc viewer + ticket detail */
+.doc-viewer, .ticket-detail { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+.doc-viewer__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--color-border-blurred);
+  background: var(--color-panel-selected-bg);
+  flex-shrink: 0;
+}
+.doc-viewer__kind { color: var(--color-muted); font-size: 11px; text-transform: uppercase; }
+.doc-viewer__title { font-family: var(--font-mono); color: var(--color-heading); }
+.doc-viewer__body, .ticket-detail__body { overflow-y: auto; -webkit-overflow-scrolling: touch; padding: var(--space-3); min-height: 0; }
+/* Long words / paths in viewed docs must wrap, never push the pane wide on a phone. */
+.doc-viewer__body { overflow-wrap: anywhere; }
+.doc-viewer__body { white-space: pre-wrap; font-family: var(--font-mono); font-size: 13px; color: var(--color-text); margin: 0; }
+.ticket-detail__fm { display: grid; grid-template-columns: max-content 1fr; gap: 2px var(--space-3); margin: 0 0 var(--space-3); }
+.ticket-detail__fm dt { color: var(--color-muted); font-size: 11px; }
+.ticket-detail__fm dd { margin: 0; font-family: var(--font-mono); font-size: 12px; }
+.ticket-detail__schedule { display: flex; align-items: center; gap: var(--space-2); margin-bottom: var(--space-3); }
+.ticket-detail__schedule input { background: var(--color-panel-header-bg); border: 1px solid var(--color-border-blurred); color: var(--color-text); border-radius: var(--radius-sm); padding: var(--space-1); margin-left: var(--space-2); font-family: var(--font-mono); }
+.ticket-detail__schedule input[aria-invalid="true"] { border-color: var(--color-error); }
+.ticket-detail__editor {
+  width: 100%;
+  min-height: 240px;
+  resize: vertical;
+  background: var(--color-panel-header-bg);
+  border: 1px solid var(--color-border-blurred);
+  color: var(--color-text);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  border-radius: var(--radius-sm);
+  padding: var(--space-2);
+  margin-bottom: var(--space-2);
+}
+
+/* ── Mobile bottom tab bar ─────────────────────────────────────────────────────────────────── */
+.tabbar {
+  display: flex;
+  flex-shrink: 0;
+  /* 10 tabs don't fit on a phone, so the bar scrolls horizontally with momentum and the scrollbar
+   * hidden (it stays swipeable). The home-indicator inset is added below the row so the bar's tap
+   * targets clear it; left/right insets keep the first/last tab off rounded corners. */
+  height: calc(var(--tabbar-height) + var(--safe-bottom));
+  padding-bottom: var(--safe-bottom);
+  padding-left: var(--safe-left);
+  padding-right: var(--safe-right);
+  border-top: 1px solid var(--color-border-blurred);
+  background: var(--color-panel-selected-bg);
+  overflow-x: auto;
+  overflow-y: hidden;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none; /* Firefox */
+}
+.tabbar::-webkit-scrollbar { display: none; } /* WebKit/Blink */
+.tabbar__tab {
+  flex: 1 0 auto;
+  /* Each tab keeps a comfortable thumb width even when the bar overflows and scrolls. */
+  min-width: max(var(--tap-min), 64px);
+  background: none;
+  border: none;
+  color: var(--color-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  cursor: pointer;
+  padding: var(--space-1);
+  -webkit-tap-highlight-color: transparent;
+}
+.tabbar__tab:active { background: var(--color-panel-header-bg); }
+.tabbar__tab[data-on="true"] { color: var(--color-focus); border-top: 2px solid var(--color-focus); }
+
+/* On mobile a panel/stage should fill the available column. */
+.app__body--mobile .panel,
+.app__body--mobile .stage { flex: 1; max-height: none; }
+
+/* ── Responsive tweaks ─────────────────────────────────────────────────────────────────────── */
+@media (max-width: 768px) {
+  .app__header {
+    padding: var(--safe-top) calc(var(--space-3) + var(--safe-right)) 0
+      calc(var(--space-3) + var(--safe-left));
+  }
+  .turn--user .turn__text { max-width: 90%; }
+
+  /* iOS Safari auto-zooms when a focused text field is < 16px. Bump every editable field to the
+   * mobile input size so focusing never zooms (and the layout never has to recover from it). */
+  .chat-input__field,
+  .ticket-detail__editor,
+  .ticket-detail__schedule input {
+    font-size: var(--font-input-mobile);
+  }
+
+  /* Kill the grey flash on tap for interactive chrome; a real :active state keeps taps feeling
+   * responsive. (Hover affordances stay desktop-only.) */
+  .list__row,
+  .row-action,
+  .star,
+  .seg button,
+  .stage__tabs button,
+  .theme-swatch,
+  .chat-input__send {
+    -webkit-tap-highlight-color: transparent;
+  }
+  .list__row:active { background: var(--color-panel-selected-bg); }
+  .chat-input__send:active:not(:disabled) { opacity: 0.7; }
+}

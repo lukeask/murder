@@ -1,0 +1,30 @@
+/*
+ * panels-history.css — bespoke CSS for the reskinned HistoryPanel. C2 lane: history only.
+ * Appends to the LOCKED C2 convention (see panels.css). References DS tokens only.
+ * Wired into main.tsx by the human integrator — do NOT @import elsewhere.
+ */
+
+/* ── History ────────────────────────────────────────────────────────────────────────────────── */
+/* The history row's meta line: target crow + relative age as quiet mono metadata under the text. */
+.history-meta {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--space-2) var(--space-3);
+  flex-wrap: wrap;
+}
+.history-meta__target {
+  font-family: var(--font-mono);
+  color: var(--color-accent);
+}
+.history-meta__age {
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs, 10px);
+  color: var(--color-muted);
+}
+
+/* Trailing cluster: the status Tag + resume/dismiss ghost controls, vertically centred. */
+.history-trail {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}

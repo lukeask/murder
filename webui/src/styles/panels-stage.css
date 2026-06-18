@@ -1,0 +1,424 @@
+/* ── Stage ── */
+/*
+ * Bespoke styling for the STAGE (center column): chat transcript bubbles + composer, the doc viewer,
+ * the ticket detail editor, the tmux frame, and the chat/terminal tab switch. Everything references
+ * DS tokens; the DS primitives (Panel/Tabs/Input/IconButton/Avatar/StatusDot/Tag/KeyHint) carry their
+ * own chrome. This file styles only the stage-specific layout glue + the chat-bubble typography, and is
+ * wired in via main.tsx (do not import directly). Class prefix: `mds-stage*`.
+ */
+
+/* The stage shell — column: tab bar, scrolling body, docked composer. */
+.mds-stage {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
+  background: var(--surface-app);
+}
+
+.mds-stage__tabs {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex: none;
+  padding: var(--space-2) var(--space-3);
+  background: var(--surface-panel);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.mds-stage__tabs .mds-tabs {
+  flex: 1;
+}
+
+.mds-stage__target {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  white-space: nowrap;
+}
+
+.mds-stage__target .star {
+  color: var(--text-warning);
+}
+
+.mds-stage__body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* When a doc / ticket overlay takes over, it fills the whole stage. */
+.mds-stage--overlay {
+  padding: 0;
+}
+
+.mds-stage__empty {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-6);
+  color: var(--text-faint);
+  font-size: var(--text-xs);
+  text-align: center;
+}
+
+/* ── Chat transcript — real bubbles ── */
+.mds-thread {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--space-5) var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+/* A bubble row: avatar + column. Crow/assistant left, user right (row-reverse). */
+.mds-msg {
+  display: flex;
+  gap: var(--space-3);
+  max-width: 84%;
+  align-self: flex-start;
+}
+
+.mds-msg--user {
+  align-self: flex-end;
+  flex-direction: row-reverse;
+}
+
+.mds-msg__col {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.mds-msg__role {
+  font-size: var(--text-2xs);
+  color: var(--text-success);
+  letter-spacing: 0.04em;
+}
+
+.mds-msg--user .mds-msg__role {
+  text-align: right;
+}
+
+/* The bubble. Crow = raised surface w/ tucked bottom-left; user = accent tint w/ tucked bottom-right. */
+.mds-bubble {
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-md);
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: var(--text-sm);
+}
+
+.mds-bubble--crow {
+  background: var(--surface-raised);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-primary);
+  border-bottom-left-radius: var(--radius-xs);
+}
+
+.mds-bubble--user {
+  background: color-mix(in oklab, var(--accent) 18%, var(--surface-raised));
+  border: 1px solid color-mix(in oklab, var(--accent) 35%, transparent);
+  color: var(--text-primary);
+  border-bottom-right-radius: var(--radius-xs);
+}
+
+/* tool/plan turns: a crow bubble that keeps preformatted structure tighter + monospace dimmed. */
+.mds-bubble--struct {
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+}
+
+/* system / notice / meta turns: centered muted mono pill chips. */
+.mds-msg--meta {
+  align-self: center;
+  max-width: 100%;
+}
+
+.mds-meta-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-3);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-pill);
+  background: var(--surface-panel);
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* "working" / live state: a pulse dot + running label (no blinking caret). */
+.mds-work {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  align-self: flex-start;
+  margin-left: 42px;
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+}
+
+/* ── Composer ── */
+.mds-composer {
+  flex: none;
+  padding: var(--space-3) var(--space-4);
+  background: var(--surface-panel);
+  border-top: 1px solid var(--border-subtle);
+}
+
+.mds-composer__meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin-bottom: var(--space-2);
+}
+
+.mds-composer__to {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  min-width: 0;
+}
+
+.mds-composer__to .star {
+  color: var(--text-warning);
+}
+
+.mds-composer__to-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mds-composer__attach {
+  color: var(--text-faint);
+  display: inline-flex;
+}
+
+/* The live multiple-choice takeover: question + numbered options above the key-forwarding field. */
+.mds-composer__prompt {
+  margin-bottom: var(--space-3);
+  padding: var(--space-3);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius);
+  background: var(--surface-raised);
+}
+
+.mds-composer__prompt-q {
+  display: block;
+  color: var(--text-primary);
+  font-size: var(--text-sm);
+  margin-bottom: var(--space-2);
+}
+
+.mds-composer__options {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.mds-composer__options li {
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-xs);
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  cursor: pointer;
+}
+
+.mds-composer__options li:hover {
+  background: var(--surface-active);
+  color: var(--text-primary);
+}
+
+.mds-composer__options li[data-selected='true'] {
+  background: color-mix(in oklab, var(--accent) 18%, transparent);
+  color: var(--text-primary);
+}
+
+/* ── Doc viewer ── */
+.mds-doc {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.mds-doc .mds-panel {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.mds-doc .mds-panel__body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.mds-doc__title {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.mds-doc__name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mds-doc__scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--space-3) var(--space-6) var(--space-7);
+}
+
+/* Markdown-ish typography for the raw doc body (rendered in a <pre> as plaintext-with-markdown). */
+.mds-doc__body {
+  margin: 0;
+  max-width: 72ch;
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  line-height: 1.75;
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* ── Ticket detail ── */
+.mds-ticket {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.mds-ticket .mds-panel {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.mds-ticket .mds-panel__body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  gap: var(--space-4);
+}
+
+.mds-ticket__title {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+/* Frontmatter — clean key/value grid (no middots). */
+.mds-ticket__fm {
+  display: grid;
+  grid-template-columns: 88px 1fr;
+  gap: var(--space-2) var(--space-3);
+  margin: 0;
+  font-size: var(--text-xs);
+}
+
+.mds-ticket__fm dt {
+  color: var(--text-faint);
+}
+
+.mds-ticket__fm dd {
+  margin: 0;
+  color: var(--text-secondary);
+  word-break: break-word;
+}
+
+.mds-ticket__schedule {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--space-3);
+}
+
+.mds-ticket__schedule .mds-field {
+  flex: 1;
+}
+
+/* Body editor — mono textarea on a raised surface with a focus ring. */
+.mds-ticket__editor {
+  flex: 1;
+  min-height: 180px;
+  resize: vertical;
+  width: 100%;
+  box-sizing: border-box;
+  padding: var(--space-3);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius);
+  background: var(--surface-raised);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  line-height: 1.6;
+}
+
+.mds-ticket__editor:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
+.mds-ticket__actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+/* ── Tmux frame ── */
+.mds-tmux {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  background: var(--surface-app);
+  padding: var(--space-3);
+}
+
+.mds-tmux__frame {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: 1.4;
+  color: var(--text-primary);
+  white-space: pre;
+}
+
+.mds-tmux__empty {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-6);
+  color: var(--text-faint);
+  font-size: var(--text-xs);
+}

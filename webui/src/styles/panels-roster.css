@@ -1,0 +1,46 @@
+/*
+ * panels-roster.css — bespoke CSS for the reskinned RosterPanel (crows). C2 lane: roster only.
+ * Appends to the LOCKED C2 convention (see panels.css). References DS tokens only.
+ * Wired into main.tsx by the human integrator — do NOT @import elsewhere.
+ */
+
+/* ── Roster ─────────────────────────────────────────────────────────────────────────────────── */
+/* Type-grouped sections (collaborator / planners / rogue / ticket). Each section = a small uppercase
+ * label header followed by its DS ListRows. The label sits flush above flush list rows. */
+.roster-section + .roster-section {
+  margin-top: var(--space-2);
+}
+.roster-section__label {
+  display: block;
+  padding: var(--space-1) var(--space-3);
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs, 10px);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--color-muted);
+}
+
+/* The crow row's title slot: name-hashed Avatar leading the display name. */
+.roster-name {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+/* The crow row's meta line: harness · model as quiet mono metadata under the name. */
+.roster-meta {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs, 10px);
+  color: var(--color-muted);
+}
+
+/* Trailing cluster: the health StatusDot + the reset ghost IconButton, vertically centred. */
+.roster-trail {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}

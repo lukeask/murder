@@ -28,6 +28,7 @@ from murder.app.cli.service_cmd import (
     cmd_status,
 )
 from murder.app.cli.tui_cmd import _launch_tui, cmd_up
+from murder.app.cli.web_cmd import web_app
 
 app = typer.Typer(
     name="murder",
@@ -37,6 +38,7 @@ app = typer.Typer(
     add_completion=False,
 )
 app.add_typer(tickets_app, name="ticket")
+app.add_typer(web_app, name="web")
 
 
 @app.callback()

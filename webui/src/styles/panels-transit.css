@@ -1,0 +1,129 @@
+/* ── Transit ────────────────────────────────────────────────────────
+   Bespoke CSS for TransitPanel (Phase C2). No DS template (it's a
+   bespoke git DAG) — a clean tokenized commit list per lane, NOT an
+   ASCII railway. Each lane carries a per-branch identity color via the
+   `--lane-color` custom prop (set from the crow palette in the
+   component). Tokens only. Wired in via main.tsx. */
+
+.transit-lane + .transit-lane {
+  margin-top: var(--space-5);
+}
+
+.transit-lane__branch {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+}
+
+.transit-lane__dot {
+  width: 8px;
+  height: 8px;
+  flex: 0 0 auto;
+  border-radius: var(--radius-pill);
+  background: var(--lane-color, var(--accent));
+}
+
+.transit-lane__name {
+  font: var(--type-body);
+  font-weight: var(--weight-medium);
+  color: var(--text-secondary);
+}
+
+.transit-lane__name--main {
+  color: var(--lane-color, var(--text-primary));
+  font-weight: var(--weight-semibold);
+}
+
+.transit-lane__home {
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+}
+
+.transit-lane__commits {
+  list-style: none;
+  margin: 0;
+  /* hang commits under the lane dot, with a hairline rail in the lane color */
+  padding: 0 0 0 var(--space-2);
+  margin-left: 3px;
+  border-left: var(--border-hair) solid var(--border-subtle);
+}
+
+.transit-commit {
+  display: grid;
+  grid-template-columns: 10px auto 1fr auto;
+  align-items: baseline;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-out);
+}
+
+.transit-commit:hover {
+  background: var(--surface-hover);
+}
+
+.transit-commit[data-selected='true'] {
+  background: var(--surface-active);
+}
+
+.transit-commit__node {
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-pill);
+  background: var(--lane-color, var(--accent));
+  align-self: center;
+}
+
+.transit-commit__sha {
+  font: var(--type-mono-sm);
+  color: var(--text-muted);
+}
+
+.transit-commit__subject {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: var(--type-meta);
+  color: var(--text-primary);
+}
+
+.transit-commit__age {
+  font: var(--type-meta);
+  color: var(--text-muted);
+}
+
+/* Selected-commit detail block. */
+.transit-detail {
+  margin-top: var(--space-5);
+  padding: var(--space-4);
+  border-radius: var(--radius);
+  background: var(--surface-raised);
+  border: var(--border-hair) solid var(--border-subtle);
+}
+
+.transit-detail__head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-3);
+}
+
+.transit-detail__sha {
+  font: var(--type-mono-sm);
+  color: var(--text-muted);
+}
+
+.transit-detail__subject {
+  font: var(--type-body);
+  color: var(--text-primary);
+}
+
+.transit-detail__body {
+  margin: var(--space-3) 0 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font: var(--type-meta);
+  color: var(--text-secondary);
+}

@@ -11,6 +11,13 @@ venv/
 # Ink TUI bundle — generated into the wheel by the hatch build hook; never committed.
 murder/_inktui/
 
+# Web frontend build artifacts — generated; never committed.
+# murder/_webui/ is generated into the wheel by the hatch build hook (mirrors murder/_inktui/).
+# webui/dist is the Vite build output; webui/node_modules are installed deps.
+murder/_webui/
+webui/dist/
+webui/node_modules/
+
 # Environment
 .env
 

@@ -1,0 +1,37 @@
+/* ── Docs ── */
+/*
+ * Bespoke styling for the doc-list panels (Plans / Notes / Reports), all rendered through the
+ * shared DocListPanel → DS Panel + ListRow. Everything here references DS tokens; the layout/visual
+ * chrome of the row itself comes from the DS (`.mds-row*`). This file only styles the doc-specific
+ * meta line and the trailing per-row action, and is wired in via main.tsx (do not import directly).
+ */
+
+/* Meta line: char count then update time, terse + lowercase, spaced (NO middot). */
+.doc-meta {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--space-3);
+  text-transform: lowercase;
+}
+
+.doc-meta__cell {
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+/* The update time recedes a step further than the char count. */
+.doc-meta__cell--dim {
+  color: var(--text-faint);
+}
+
+/* Plans' "spawn planner" trailing action — keep it quiet until the row is hovered/focused. */
+.doc-rowaction {
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+
+.mds-row:hover .doc-rowaction,
+.mds-row:focus-within .doc-rowaction,
+.mds-row--selected .doc-rowaction {
+  opacity: 1;
+}

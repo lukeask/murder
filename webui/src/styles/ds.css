@@ -1,0 +1,386 @@
+/*
+ * Design-system component styles (.mds-*).
+ *
+ * AUTHORING CONTRACT (Phase A — copy this verbatim in Phase B):
+ *  - This is the ONE home for every `.mds-*` rule. Do NOT use the bundle's runtime
+ *    `useInjected()` <style> injection. Translate each bundle component's `CSS` string into static
+ *    rules here, grouped under a `/* ── ComponentName ── *\/` banner (matching app.css banner style).
+ *  - COLORS / SPACING / RADII / TYPE / MOTION all reference the DS tokens from tokens.css
+ *    (`--surface-*`, `--text-*`, `--ef-*`, `--space-*`, `--radius*`, `--control-*`, `--dur-*`, …).
+ *    Never hard-code a hex except where the bundle itself does (e.g. the `color-mix #fff` hover and
+ *    the `rgba(0,0,0,…)` chip/scrim washes — kept byte-faithful to the bundle).
+ *  - Imported from main.tsx AFTER tokens.css.
+ */
+
+/* ── Button ──────────────────────────────────────────────────────────────────────────────────── */
+.mds-btn {
+  --_bg: var(--surface-raised);
+  --_fg: var(--text-primary);
+  --_bd: var(--border-default);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  font-family: var(--font-mono);
+  font-weight: var(--weight-semibold);
+  font-size: var(--text-sm);
+  line-height: 1;
+  letter-spacing: 0;
+  background: var(--_bg);
+  color: var(--_fg);
+  border: 1px solid var(--_bd);
+  border-radius: var(--radius);
+  padding: 0 16px;
+  height: var(--control-md);
+  min-height: var(--control-md);
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+  transition:
+    background var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out),
+    transform var(--dur-instant) var(--ease-out);
+}
+.mds-btn:hover {
+  background: color-mix(in srgb, var(--_bg) 86%, #fff 14%);
+}
+.mds-btn:active {
+  transform: translateY(1px);
+}
+.mds-btn:focus-visible {
+  outline: 2px solid var(--border-focus);
+  outline-offset: 2px;
+}
+.mds-btn[disabled] {
+  opacity: 0.45;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.mds-btn--primary {
+  --_bg: var(--accent);
+  --_fg: var(--text-on-accent);
+  --_bd: transparent;
+}
+.mds-btn--primary:hover {
+  background: var(--accent-hover);
+}
+.mds-btn--primary:active {
+  background: var(--accent-press);
+}
+
+.mds-btn--brand {
+  --_bg: var(--brand);
+  --_fg: var(--text-on-accent);
+  --_bd: transparent;
+}
+.mds-btn--brand:hover {
+  background: var(--brand-hover);
+}
+.mds-btn--brand:active {
+  background: var(--brand-press);
+}
+
+.mds-btn--secondary {
+  --_bg: var(--surface-raised);
+  --_fg: var(--text-primary);
+  --_bd: var(--border-strong);
+}
+
+.mds-btn--ghost {
+  --_bg: transparent;
+  --_fg: var(--text-secondary);
+  --_bd: transparent;
+}
+.mds-btn--ghost:hover {
+  --_fg: var(--text-primary);
+  background: var(--surface-hover);
+}
+
+.mds-btn--danger {
+  --_bg: transparent;
+  --_fg: var(--text-error);
+  --_bd: var(--ef-red);
+}
+.mds-btn--danger:hover {
+  background: var(--surface-error);
+}
+
+.mds-btn--sm {
+  height: var(--control-sm);
+  min-height: var(--control-sm);
+  padding: 0 11px;
+  font-size: var(--text-xs);
+}
+.mds-btn--lg {
+  height: var(--control-lg);
+  min-height: var(--control-lg);
+  padding: 0 22px;
+  font-size: var(--text-md);
+}
+.mds-btn--block {
+  display: flex;
+  width: 100%;
+}
+
+.mds-btn__key {
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-medium);
+  padding: 2px 5px;
+  border-radius: var(--radius-xs);
+  background: rgba(0, 0, 0, 0.22);
+  color: inherit;
+  opacity: 0.8;
+}
+
+/* ── Panel ───────────────────────────────────────────────────────────────────────────────────── */
+.mds-panel {
+  display: flex;
+  flex-direction: column;
+  background: var(--surface-panel);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius);
+  overflow: hidden;
+  transition: border-color var(--dur-fast) var(--ease-out);
+}
+.mds-panel--active {
+  border: 2px solid var(--border-accent);
+}
+.mds-panel--flush > .mds-panel__body {
+  padding: 0;
+}
+.mds-panel__head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  min-height: 38px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.mds-panel--active .mds-panel__head {
+  border-bottom-color: var(--ef-bg-3);
+}
+.mds-panel__title {
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
+  color: var(--text-primary);
+  letter-spacing: 0;
+}
+.mds-panel--active .mds-panel__title {
+  color: var(--accent);
+}
+.mds-panel__count {
+  font-size: var(--text-2xs);
+  color: var(--text-muted);
+  line-height: 1;
+  background: var(--surface-active);
+  border-radius: var(--radius-pill);
+  padding: 2px 8px;
+}
+.mds-panel__spacer {
+  flex: 1;
+}
+.mds-panel__actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.mds-panel__body {
+  padding: 14px;
+}
+
+/* ── Tabs ────────────────────────────────────────────────────────────────────────────────────── */
+.mds-tabs {
+  display: inline-flex;
+  align-items: stretch;
+  gap: 2px;
+  font-family: var(--font-mono);
+}
+.mds-tabs--full {
+  display: flex;
+}
+.mds-tabs--underline {
+  border-bottom: 1px solid var(--border-subtle);
+  gap: 18px;
+}
+.mds-tab {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+  padding: 9px 14px;
+  min-height: var(--touch-min);
+  flex: 1;
+  transition:
+    color var(--dur-fast) var(--ease-out),
+    background var(--dur-fast) var(--ease-out);
+}
+.mds-tab:hover {
+  color: var(--text-secondary);
+}
+.mds-tab--active {
+  color: var(--text-primary);
+}
+
+/* pill variant */
+.mds-tabs--pill {
+  background: var(--surface-raised);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius);
+  padding: 3px;
+}
+.mds-tabs--pill .mds-tab {
+  border-radius: var(--radius-sm);
+  min-height: var(--control-md);
+  padding: 6px 14px;
+}
+.mds-tabs--pill .mds-tab--active {
+  background: var(--surface-hover);
+  color: var(--text-primary);
+}
+
+/* underline variant */
+.mds-tabs--underline .mds-tab {
+  padding: 10px 2px;
+  flex: none;
+}
+.mds-tabs--underline .mds-tab--active::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -1px;
+  height: 2px;
+  background: var(--accent);
+  border-radius: 2px;
+}
+.mds-tab__count {
+  font-size: var(--text-2xs);
+  color: var(--text-faint);
+}
+.mds-tab__icon {
+  display: inline-grid;
+  place-items: center;
+}
+.mds-tab__icon svg {
+  width: 18px;
+  height: 18px;
+  stroke-width: 1.75;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.mds-tab--stack {
+  flex-direction: column;
+  gap: 4px;
+}
+.mds-tabs--pill .mds-tab--stack {
+  min-height: 48px;
+  font-size: var(--text-2xs);
+}
+.mds-tab--active .mds-tab__icon {
+  color: var(--accent);
+}
+
+/* ── Dialog ──────────────────────────────────────────────────────────────────────────────────── */
+.mds-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-dialog);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  background: rgba(24, 29, 32, 0.62);
+  -webkit-backdrop-filter: blur(2px);
+  backdrop-filter: blur(2px);
+  animation: mds-fade var(--dur) var(--ease-out);
+}
+.mds-dialog {
+  width: 100%;
+  max-width: 440px;
+  max-height: calc(100vh - 40px);
+  display: flex;
+  flex-direction: column;
+  background: var(--surface-panel);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+  overflow: hidden;
+  animation: mds-pop var(--dur) var(--ease-out);
+}
+.mds-dialog__head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 16px 18px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.mds-dialog__title {
+  font-size: var(--text-md);
+  font-weight: var(--weight-semibold);
+  color: var(--text-primary);
+  flex: 1;
+}
+.mds-dialog__close {
+  background: transparent;
+  border: 0;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 18px;
+  line-height: 1;
+  padding: 4px;
+  border-radius: var(--radius-xs);
+}
+.mds-dialog__close:hover {
+  color: var(--text-primary);
+  background: var(--surface-hover);
+}
+.mds-dialog__body {
+  padding: 18px;
+  overflow: auto;
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+  line-height: var(--leading-normal);
+}
+.mds-dialog__foot {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 14px 18px;
+  border-top: 1px solid var(--border-subtle);
+}
+@keyframes mds-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@keyframes mds-pop {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@media (max-width: 520px) {
+  .mds-scrim {
+    align-items: flex-end;
+    padding: 0;
+  }
+  .mds-dialog {
+    max-width: none;
+    border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+  }
+}

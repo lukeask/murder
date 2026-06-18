@@ -1,0 +1,448 @@
+/* ============================================================
+   murder — Design-System token foundation (ported)
+   ------------------------------------------------------------
+   Faithful port of murder-design-system/project/tokens/*.css
+   (fonts + colors + typography + spacing + the non-conflicting
+   base bits). Imported from main.tsx AFTER theme.css and BEFORE
+   app.css, so the DS `--surface-*`/`--text-*`/`--ef-*`/`--space-*`
+   /`--type-*`/`--radius*`/`--control-*` vocabulary is present
+   app-wide WITHOUT disturbing the runtime `--color-*` injection.
+
+   This file is ADDITIVE. The existing app.css depends on the
+   `--color-*` vars (still written at runtime by useThemeCssVars)
+   and on a handful of layout tokens declared in theme.css. Where
+   DS names overlap theme.css (`--space-1..5`, `--radius`,
+   `--radius-sm`, `--font-mono`, `--font-sans`), the DS values
+   declared here OVERRIDE theme.css because tokens.css is imported
+   AFTER it — see the reconciliation note in the Phase-A report.
+
+   LIGHT/DARK: `:root` = dark (default). Light comes via BOTH
+   `@media (prefers-color-scheme: light)` and `[data-theme="light"]`
+   — the attribute wins on specificity (0,1,1) > media (0,0,1). A
+   `[data-theme="dark"]` block pins dark over an OS light pref.
+   useThemeCssVars sets `document.documentElement.dataset.theme`
+   from the active @core scheme, so DS components key off it.
+
+   Do not edit piecemeal — this mirrors the bundle. If the bundle
+   tokens change, re-port the whole file.
+   ============================================================ */
+
+/* ── Fonts (tokens/fonts.css) ─────────────────────────────────
+   JetBrains Mono = the working mono voice. Fraunces = RESERVED
+   for the `murder` wordmark / --type-display ONLY. */
+@import url("https://fonts.googleapis.com/css2?family=JetBrains+Mono:ital,wght@0,300;0,400;0,500;0,600;0,700;0,800;1,400;1,600&display=swap");
+@import url("https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,500;0,9..144,600;0,9..144,700;0,9..144,900;1,9..144,500;1,9..144,700&display=swap");
+
+/* ── Colors (tokens/colors.css) — Everforest Dark (hard) ────── */
+:root {
+  color-scheme: dark;
+
+  /* Background ramp (app backdrop -> raised surfaces) */
+  --ef-bg-dim:  #1b2024;
+  --ef-bg-0:    #21282d;
+  --ef-bg-1:    #272e33;
+  --ef-bg-2:    #2e383c;
+  --ef-bg-3:    #374145;
+  --ef-bg-4:    #414b50;
+  --ef-bg-5:    #4f5b58;
+
+  /* Tinted background washes (status surfaces) */
+  --ef-bg-red:    #4c3a3f;
+  --ef-bg-green:  #3a4a3e;
+  --ef-bg-yellow: #45443c;
+  --ef-bg-blue:   #384b55;
+  --ef-bg-aqua:   #3a4a44;
+  --ef-bg-visual: #4c3743;
+
+  /* Foreground / greys */
+  --ef-fg:     #d3c6aa;
+  --ef-grey-2: #9da9a0;
+  --ef-grey-1: #859289;
+  --ef-grey-0: #7a8478;
+
+  /* Accents (Everforest) */
+  --ef-red:    #e67e80;
+  --ef-orange: #e69875;
+  --ef-yellow: #dbbc7f;
+  --ef-green:  #a7c080;
+  --ef-aqua:   #83c092;
+  --ef-blue:   #7fbbb3;
+  --ef-purple: #d699b6;
+
+  /* Dimmed accents (fills behind text / chips) */
+  --ef-red-dim:    #543a40;
+  --ef-green-dim:  #44503b;
+  --ef-yellow-dim: #4d4a3a;
+  --ef-aqua-dim:   #3d4d44;
+  --ef-blue-dim:   #3a4f53;
+
+  /* ── Semantic aliases — consume THESE in components ─────────── */
+
+  /* Surfaces */
+  --surface-app:     var(--ef-bg-dim);
+  --surface-panel:   var(--ef-bg-0);
+  --surface-raised:  var(--ef-bg-1);
+  --surface-hover:   var(--ef-bg-2);
+  --surface-active:  var(--ef-bg-3);
+  --surface-overlay: #181d20;
+
+  /* Borders */
+  --border-subtle:  var(--ef-bg-2);
+  --border-default: var(--ef-bg-3);
+  --border-strong:  var(--ef-bg-5);
+  --border-accent:  var(--ef-green);
+  --border-focus:   var(--ef-green);
+
+  /* Text */
+  --text-primary:   var(--ef-fg);
+  --text-secondary: var(--ef-grey-2);
+  --text-muted:     var(--ef-grey-1);
+  --text-faint:     var(--ef-grey-0);
+  --text-disabled:  var(--ef-grey-0);
+  --text-on-accent: #1b2024;
+
+  /* Brand + intent text */
+  --text-brand:    var(--ef-red);
+  --text-link:     var(--ef-blue);
+  --text-success:  var(--ef-green);
+  --text-error:    var(--ef-red);
+  --text-warning:  var(--ef-yellow);
+  --text-info:     var(--ef-aqua);
+  --text-accent:   var(--ef-green);
+
+  /* Interactive fills (buttons, toggles) */
+  --accent:          var(--ef-green);
+  --accent-hover:    #b4ca91;
+  --accent-press:    #97b06f;
+  --brand:           var(--ef-red);
+  --brand-hover:     #ec9092;
+  --brand-press:     #cf6e70;
+
+  /* Status — the crow lifecycle */
+  --status-running:  var(--ef-green);
+  --status-done:     var(--ef-green);
+  --status-failed:   var(--ef-red);
+  --status-archived: var(--ef-aqua);
+  --status-pending:  var(--ef-yellow);
+  --status-idle:     var(--ef-grey-1);
+
+  /* Status surfaces (tinted chip / row backgrounds) */
+  --surface-success: var(--ef-green-dim);
+  --surface-error:   var(--ef-red-dim);
+  --surface-warning: var(--ef-yellow-dim);
+  --surface-info:    var(--ef-aqua-dim);
+
+  /* Crow / branch identity colors */
+  --crow-1: var(--ef-red);
+  --crow-2: var(--ef-orange);
+  --crow-3: var(--ef-yellow);
+  --crow-4: var(--ef-aqua);
+  --crow-5: var(--ef-blue);
+  --crow-6: var(--ef-purple);
+}
+
+/* ── Typography (tokens/typography.css) ─────────────────────── */
+:root {
+  /* Families — one mono for the whole system. */
+  --font-mono: "JetBrains Mono", ui-monospace, "SFMono-Regular",
+               "Menlo", "Consolas", monospace;
+  --font-sans: var(--font-mono); /* alias: there is no sans. stay mono. */
+
+  /* Accent display serif — RESERVED for the `murder` wordmark / --type-display only. */
+  --font-accent: "Fraunces", "Hoefler Text", "Georgia", serif;
+
+  /* Type scale (px) */
+  --text-2xs:  11px;
+  --text-xs:   12px;
+  --text-sm:   13px;   /* body default */
+  --text-md:   15px;
+  --text-lg:   18px;
+  --text-xl:   22px;
+  --text-2xl:  28px;
+  --text-3xl:  38px;
+  --text-4xl:  52px;
+
+  /* Weights */
+  --weight-light:    300;
+  --weight-regular:  400;
+  --weight-medium:   500;
+  --weight-semibold: 600;
+  --weight-bold:     700;
+
+  /* Line heights */
+  --leading-tight:   1.15;
+  --leading-snug:    1.35;
+  --leading-normal:  1.55;
+  --leading-relaxed: 1.7;
+
+  /* Letter spacing */
+  --tracking-tight:  -0.01em;
+  --tracking-normal: 0;
+  --tracking-wide:   0.04em;
+  --tracking-wider:  0.12em;
+
+  /* Semantic type roles (shorthands) */
+  --type-display:  var(--weight-bold)     var(--text-4xl)/var(--leading-tight)  var(--font-accent);
+  --type-h1:       var(--weight-semibold) var(--text-2xl)/var(--leading-tight)  var(--font-mono);
+  --type-h2:       var(--weight-semibold) var(--text-xl)/var(--leading-snug)    var(--font-mono);
+  --type-title:    var(--weight-semibold) var(--text-lg)/var(--leading-snug)    var(--font-mono);
+  --type-body:     var(--weight-regular)  var(--text-sm)/var(--leading-normal)  var(--font-mono);
+  --type-body-lg:  var(--weight-regular)  var(--text-md)/var(--leading-normal)  var(--font-mono);
+  --type-meta:     var(--weight-regular)  var(--text-xs)/var(--leading-snug)    var(--font-mono);
+  --type-mono-sm:  var(--weight-regular)  var(--text-2xs)/var(--leading-snug)   var(--font-mono);
+}
+
+/* ── Spacing, radii, borders, shadows, motion (tokens/spacing.css)
+   NOTE: `--space-1..5`, `--radius`, `--radius-sm` overlap theme.css.
+   These DS values WIN (imported after theme.css). See report. ─── */
+:root {
+  /* Spacing scale (4px base) */
+  --space-0:   0;
+  --space-1:   2px;
+  --space-2:   4px;
+  --space-3:   8px;
+  --space-4:   12px;
+  --space-5:   16px;   /* default gutter inside cards */
+  --space-6:   20px;
+  --space-7:   24px;   /* panel padding */
+  --space-8:   32px;
+  --space-9:   40px;
+  --space-10:  48px;
+  --space-12:  64px;
+  --space-16:  96px;
+
+  /* Semantic spacing */
+  --pad-inline:   var(--space-5);
+  --pad-card:     var(--space-7);
+  --pad-row:      var(--space-4);
+  --gap-tight:    var(--space-2);
+  --gap:          var(--space-4);
+  --gap-loose:    var(--space-7);
+  --gutter:       var(--space-5);
+
+  /* Touch targets (mobile-first) */
+  --touch-min:    44px;
+  --control-sm:   30px;
+  --control-md:   38px;
+  --control-lg:   46px;
+
+  /* Radii (modest — a small corner reads precise) */
+  --radius-xs:  3px;
+  --radius-sm:  5px;
+  --radius:     7px;
+  --radius-md:  9px;
+  --radius-lg:  12px;
+  --radius-pill: 999px;
+
+  /* Border widths */
+  --border-hair:  1px;
+  --border-thick: 2px;
+
+  /* Elevation */
+  --shadow-none: none;
+  --shadow-sm:   0 1px 2px rgba(0, 0, 0, 0.25);
+  --shadow:      0 4px 14px rgba(0, 0, 0, 0.35);
+  --shadow-lg:   0 12px 34px rgba(0, 0, 0, 0.45);
+  --shadow-focus: 0 0 0 2px var(--surface-app), 0 0 0 4px var(--border-focus);
+
+  /* Z-index */
+  --z-base:    0;
+  --z-sticky:  10;
+  --z-nav:     20;
+  --z-overlay: 100;
+  --z-dialog:  110;
+  --z-toast:   120;
+
+  /* Motion */
+  --ease-out:    cubic-bezier(0.22, 0.61, 0.36, 1);
+  --ease-in-out: cubic-bezier(0.45, 0, 0.4, 1);
+  --dur-instant: 80ms;
+  --dur-fast:    140ms;
+  --dur:         220ms;
+  --dur-slow:    340ms;
+
+  /* Layout */
+  --maxw-content: 720px;
+  --maxw-app:     1320px;
+  --sidebar-w:    260px;
+  --header-h:     48px;
+}
+
+/* ============================================================
+   THEME SWITCHING — Everforest Light (hard) + near-black ink
+   Only the base ramp + raw-hex semantics are re-declared; every
+   var()-based alias re-resolves for free.
+   ============================================================ */
+
+@media (prefers-color-scheme: light) {
+  :root {
+    color-scheme: light;
+
+    --ef-bg-dim:  #f2efdf;
+    --ef-bg-0:    #fffbef;
+    --ef-bg-1:    #f8f5e4;
+    --ef-bg-2:    #ece8d6;
+    --ef-bg-3:    #e0dcc6;
+    --ef-bg-4:    #cfcab0;
+    --ef-bg-5:    #bec5b2;
+
+    --ef-bg-red:    #ffe0d3;
+    --ef-bg-green:  #e9eecb;
+    --ef-bg-yellow: #fbe6c3;
+    --ef-bg-blue:   #e0ecef;
+    --ef-bg-aqua:   #dbeee0;
+    --ef-bg-visual: #f0e9c8;
+
+    --ef-fg:     #2b3339;
+    --ef-grey-2: #4a5258;
+    --ef-grey-1: #5c6a72;
+    --ef-grey-0: #8a948c;
+
+    --ef-red:    #f85552;
+    --ef-orange: #f57d26;
+    --ef-yellow: #dfa000;
+    --ef-green:  #8da101;
+    --ef-aqua:   #35a77c;
+    --ef-blue:   #3a94c5;
+    --ef-purple: #df69ba;
+
+    --ef-red-dim:    #fbe3da;
+    --ef-green-dim:  #eef0cf;
+    --ef-yellow-dim: #faedbf;
+    --ef-aqua-dim:   #dff0e3;
+    --ef-blue-dim:   #ddeaf0;
+
+    --surface-overlay: #2b3339;
+    --text-on-accent:  #fffbef;
+    --accent-hover:    #9bb000;
+    --accent-press:    #788a00;
+    --brand-hover:     #fa6764;
+    --brand-press:     #e44340;
+  }
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  --ef-bg-dim:  #1b2024;
+  --ef-bg-0:    #21282d;
+  --ef-bg-1:    #272e33;
+  --ef-bg-2:    #2e383c;
+  --ef-bg-3:    #374145;
+  --ef-bg-4:    #414b50;
+  --ef-bg-5:    #4f5b58;
+
+  --ef-bg-red:    #4c3a3f;
+  --ef-bg-green:  #3a4a3e;
+  --ef-bg-yellow: #45443c;
+  --ef-bg-blue:   #384b55;
+  --ef-bg-aqua:   #3a4a44;
+  --ef-bg-visual: #4c3743;
+
+  --ef-fg:     #d3c6aa;
+  --ef-grey-2: #9da9a0;
+  --ef-grey-1: #859289;
+  --ef-grey-0: #7a8478;
+
+  --ef-red:    #e67e80;
+  --ef-orange: #e69875;
+  --ef-yellow: #dbbc7f;
+  --ef-green:  #a7c080;
+  --ef-aqua:   #83c092;
+  --ef-blue:   #7fbbb3;
+  --ef-purple: #d699b6;
+
+  --ef-red-dim:    #543a40;
+  --ef-green-dim:  #44503b;
+  --ef-yellow-dim: #4d4a3a;
+  --ef-aqua-dim:   #3d4d44;
+  --ef-blue-dim:   #3a4f53;
+
+  --surface-overlay: #181d20;
+  --text-on-accent:  #1b2024;
+  --accent-hover:    #b4ca91;
+  --accent-press:    #97b06f;
+  --brand-hover:     #ec9092;
+  --brand-press:     #cf6e70;
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+
+  --ef-bg-dim:  #f2efdf;
+  --ef-bg-0:    #fffbef;
+  --ef-bg-1:    #f8f5e4;
+  --ef-bg-2:    #ece8d6;
+  --ef-bg-3:    #e0dcc6;
+  --ef-bg-4:    #cfcab0;
+  --ef-bg-5:    #bec5b2;
+
+  --ef-bg-red:    #ffe0d3;
+  --ef-bg-green:  #e9eecb;
+  --ef-bg-yellow: #fbe6c3;
+  --ef-bg-blue:   #e0ecef;
+  --ef-bg-aqua:   #dbeee0;
+  --ef-bg-visual: #f0e9c8;
+
+  --ef-fg:     #2b3339;
+  --ef-grey-2: #4a5258;
+  --ef-grey-1: #5c6a72;
+  --ef-grey-0: #8a948c;
+
+  --ef-red:    #f85552;
+  --ef-orange: #f57d26;
+  --ef-yellow: #dfa000;
+  --ef-green:  #8da101;
+  --ef-aqua:   #35a77c;
+  --ef-blue:   #3a94c5;
+  --ef-purple: #df69ba;
+
+  --ef-red-dim:    #fbe3da;
+  --ef-green-dim:  #eef0cf;
+  --ef-yellow-dim: #faedbf;
+  --ef-aqua-dim:   #dff0e3;
+  --ef-blue-dim:   #ddeaf0;
+
+  --surface-overlay: #2b3339;
+  --text-on-accent:  #fffbef;
+  --accent-hover:    #9bb000;
+  --accent-press:    #788a00;
+  --brand-hover:     #fa6764;
+  --brand-press:     #e44340;
+}
+
+/* ── Base reset bits (tokens/base.css, non-conflicting only) ───
+   theme.css already owns `box-sizing`, html/body margins, #root
+   sizing and the body font/background. We add ONLY the DS extras
+   that don't fight those: selection color, focus halo, themed
+   scrollbars and reduced-motion. */
+::selection {
+  background: var(--ef-bg-visual);
+  color: var(--text-primary);
+}
+
+:focus-visible {
+  outline: var(--border-thick) solid var(--border-focus);
+  outline-offset: 2px;
+  border-radius: var(--radius-xs);
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--ef-bg-4) transparent;
+}
+*::-webkit-scrollbar { width: 10px; height: 10px; }
+*::-webkit-scrollbar-thumb {
+  background: var(--ef-bg-4);
+  border-radius: var(--radius-pill);
+  border: 3px solid transparent;
+  background-clip: content-box;
+}
+*::-webkit-scrollbar-thumb:hover { background: var(--ef-bg-5); background-clip: content-box; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    transition-duration: 0.001ms !important;
+  }
+}
