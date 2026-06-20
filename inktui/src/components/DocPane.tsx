@@ -36,7 +36,16 @@
  */
 
 import { Box, type DOMElement, measureElement, Text } from 'ink';
-import { type JSX, memo, useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import {
+  type JSX,
+  memo,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import { useAppStore, useAppStoreApi } from '../hooks/useAppStore.js';
 import { type GotoIntent, useGotoLine } from '../hooks/useGotoLine.js';
 import {
@@ -45,6 +54,7 @@ import {
   useInputStores,
   useMeasureFocus,
   usePanelKeymap,
+  usePaneScrollBus,
 } from '../hooks/useInputStores.js';
 import type { FocusId, StagePaneId } from '../input/focusStore.js';
 import type { PanelKeymap } from '../input/keymap.js';
@@ -251,6 +261,22 @@ export const StageDocPane = memo(function StageDocPane({
     [maxScroll, effectiveHeight, closeAction, spawnPlanner, open, goto],
   );
   usePanelKeymap(focusId, focused ? keymap : EMPTY_KEYMAP);
+
+  // Mouse-wheel scroll (the scroll-bus subscription). `scroll` is the first visible line (0 = top),
+  // so `up` decreases it and `down` increases it — the opposite sign of the chat pane, whose offset
+  // counts from the tail. The bound is read from a ref so the subscription installs once per focus id.
+  const paneScroll = usePaneScrollBus();
+  const maxScrollRef = useRef(maxScroll);
+  maxScrollRef.current = maxScroll;
+  useEffect(
+    () =>
+      paneScroll.subscribe(focusId, (direction, amount) => {
+        setScroll((s) =>
+          direction === 'up' ? Math.max(s - amount, 0) : Math.min(s + amount, maxScrollRef.current),
+        );
+      }),
+    [paneScroll, focusId],
+  );
 
   return (
     // The right border doubles as the scroll track (the Pane's `scrollbar` prop) — no separate

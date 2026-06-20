@@ -19,7 +19,13 @@ import { describe, expect, it } from 'vitest';
 import { FakeBusClient } from '../../src/bus/FakeBusClient.js';
 import type { ConversationBlockEvent } from '../../src/bus/protocol.js';
 import { PlansPanel } from '../../src/components/PlansPanel.js';
-import { flattenTurns, formatTurnText, Stage } from '../../src/components/Stage.js';
+import {
+  ChatPane,
+  flattenTurns,
+  formatTurnText,
+  paneContentHeights,
+  Stage,
+} from '../../src/components/Stage.js';
 import { AppStoreProvider } from '../../src/hooks/useAppStore.js';
 import { InputStoresProvider } from '../../src/hooks/useInputStores.js';
 import { useRootInput } from '../../src/hooks/useRootInput.js';
@@ -149,6 +155,68 @@ async function setup(reply: CrowSnapshotReply = oneCollaborator()) {
   const inputStores = createInputStores(['plans'], 'plans');
   return { fake, store, dispose, inputStores };
 }
+
+describe('paneContentHeights', () => {
+  it('splits an even grid height evenly and subtracts the 2-row chrome', () => {
+    expect(paneContentHeights(30, 2, 0)).toEqual([13, 13]);
+  });
+
+  it('spreads the remainder onto the first rows (one extra cell)', () => {
+    expect(paneContentHeights(31, 2, 0)).toEqual([14, 13]);
+  });
+
+  it('subtracts the inter-row gaps before distributing', () => {
+    // gaps = 2 → avail = 28 → base = 14 → 14 − 2 chrome = 12 per row.
+    expect(paneContentHeights(30, 2, 2)).toEqual([12, 12]);
+  });
+
+  it('handles a single row', () => {
+    expect(paneContentHeights(10, 1, 0)).toEqual([8]);
+  });
+
+  it('returns undefined per row before the grid has measured (height 0)', () => {
+    expect(paneContentHeights(0, 2, 0)).toEqual([undefined, undefined]);
+  });
+
+  it('returns [] for no rows', () => {
+    expect(paneContentHeights(5, 0, 0)).toEqual([]);
+  });
+});
+
+describe('ChatPane — window honors the contentHeight prop', () => {
+  it('bounds the visible window to the contentHeight prop (deterministic, no self-measure)', async () => {
+    // Previously impossible to test: ink-testing-library renders sizeless, so `measureElement`
+    // returned 0 and the window was always FALLBACK_HEIGHT. Now the height is a prop, so a small
+    // contentHeight provably clamps the window regardless of the (zero) measured render size.
+    const { fake, store, inputStores, dispose } = await setup();
+    emitTurns(fake, 30); // ~59 flattened lines (a blank separator between turns) — far above 5
+    const identity = { kind: 'collaborator' as const, agentId: 'collab-1', label: 'TestCollab' };
+    const { lastFrame } = render(
+      <AppStoreProvider value={store}>
+        <InputStoresProvider value={inputStores}>
+          <RootInput />
+          <Box flexDirection="column" width={80} height={30}>
+            <ChatPane
+              identity={identity}
+              conversations={store.getState().conversations}
+              chatTarget={false}
+              footer={null}
+              contentHeight={5}
+            />
+          </Box>
+        </InputStoresProvider>
+      </AppStoreProvider>,
+    );
+    await tick();
+
+    const frame = lastFrame() ?? '';
+    // The newest content line is present (window pinned to the tail) ...
+    expect(frame).toContain('msg-29');
+    // ... and an early/oldest line is NOT — the window is bounded to ~5 lines, not FALLBACK (20).
+    expect(frame).not.toContain('msg-00');
+    dispose();
+  });
+});
 
 describe('Stage — empty-Stage first-run hint', () => {
   it('shows the spawn/star hint instead of a void when no panes and no doc are open', async () => {
@@ -331,6 +399,32 @@ describe('Stage — chat-history panes as focusable Stage panes', () => {
     const scrolled = lastFrame() ?? '';
     expect(scrolled).toContain('msg-00'); // oldest now in view
     expect(scrolled).not.toContain('msg-49'); // newest scrolled off the bottom
+    dispose();
+  });
+
+  it('scrolls via the wheel bus WITHOUT focusing the pane (the chat-input target case)', async () => {
+    const { fake, store, inputStores, dispose } = await setup();
+    emitTurns(fake, 50);
+    void store;
+    const { lastFrame } = render(<Harness store={store} inputStores={inputStores} />);
+    await tick();
+
+    // The pane is NOT focused (focus stays on the seeded 'plans' panel) — exactly the state when the
+    // user is typing in the chat input. A wheel notch routed to this pane's focus id must still scroll
+    // it, proving the bus subscription is independent of focus (unlike the j/k keymap).
+    expect(selectEffectiveFocus(inputStores.focus)).toBe('plans');
+    const initial = lastFrame() ?? '';
+    expect(initial).toContain('msg-49');
+    expect(initial).not.toContain('msg-00');
+
+    for (let i = 0; i < 120; i++) {
+      inputStores.paneScroll.emit(STAGE_PANE, 'up', 1);
+    }
+    await tick();
+
+    const scrolled = lastFrame() ?? '';
+    expect(scrolled).toContain('msg-00');
+    expect(scrolled).not.toContain('msg-49');
     dispose();
   });
 });

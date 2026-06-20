@@ -33,15 +33,22 @@ import {
 import {
   CHAT_FOCUS,
   type FocusStoreApi,
+  isStagePaneId,
   mountedStagePanesOf,
   resolveFocus,
+  type StagePaneId,
 } from '../input/focusStore.js';
 import { selectActiveMode } from '../input/modeStore.js';
 import type { PanelStoreApi } from '../input/panelStore.js';
 import type { PanelId } from '../input/panels.js';
 import { toastStore } from '../store/toast/toastStore.js';
+import type { Wheel } from '../terminal/StdinShim.js';
 import type { Chord } from '../terminal/translate.js';
 import { useInputStores } from './useInputStores.js';
+
+/** Lines a single wheel notch scrolls. 3 is the conventional terminal step (xterm's default), and
+ * brisker than the `j`/`k` single-line step so a flick of the wheel moves a meaningful chunk. */
+const WHEEL_STEP = 3;
 
 /** Handlers for the global chords owned by *later* chunks, injected so this hook stays complete now
  * without stubbing their behaviour. Both default to safe behaviour described on {@link useRootInput}. */
@@ -93,6 +100,14 @@ export interface DeferredGlobalHandlers {
    * chunks/tests are unaffected. See {@link ChatInputHandler} and the dispatcher's layer 2.
    */
   chatInput?: ChatInputHandler;
+  /**
+   * Resolve the agent whose chat-history pane the mouse wheel should scroll while the chat INPUT
+   * holds focus — i.e. the input's active send target. Returns the agentId, or `null` when there is
+   * no target. Supplied by the shell (it reads conversations/roster/favorites); the wheel only acts
+   * if that agent's pane is currently shown on the Stage (checked here against the rects map). Absent
+   * → the chat-input wheel case is a no-op.
+   */
+  chatScrollTargetAgentId?: () => string | null;
 }
 
 /**
@@ -106,6 +121,10 @@ export interface DeferredGlobalHandlers {
 export interface TerminalEvents {
   on(event: 'chord', listener: (chord: Chord) => void): unknown;
   off(event: 'chord', listener: (chord: Chord) => void): unknown;
+  /** Mouse-wheel notches lifted from SGR mouse reports (the shim emits these when mouse reporting is
+   * enabled). Routed by effective focus to the focused/targeted pane's scroll. */
+  on(event: 'wheel', listener: (wheel: Wheel) => void): unknown;
+  off(event: 'wheel', listener: (wheel: Wheel) => void): unknown;
 }
 
 /**
@@ -191,7 +210,7 @@ export function useRootInput(
   deferred: DeferredGlobalHandlers = {},
   terminalEvents?: TerminalEvents,
 ): void {
-  const { panels, focus, keymaps, modes, bindings } = useInputStores();
+  const { panels, focus, keymaps, modes, bindings, paneScroll } = useInputStores();
   // Only claim raw mode when the terminal supports it (see the raw-mode note above).
   const { isRawModeSupported } = useStdin();
 
@@ -241,7 +260,7 @@ export function useRootInput(
                 toastStore
                   .getState()
                   .push("focus a crow's chat to mirror it (C-hjkl into the Stage)", {
-                    ttlMs: 4000,
+                    ttlMs: 8000,
                   });
                 return;
               }
@@ -299,6 +318,38 @@ export function useRootInput(
     }
   };
 
+  // Mouse-wheel scroll routing. Focus-based, not pointer-based (the design the user chose): the wheel
+  // scrolls whatever pane the highlight is on. A focused Stage pane (chat history or doc) scrolls
+  // itself; with the chat INPUT focused the wheel scrolls the input's active send-target history pane
+  // IF that pane is currently shown, else it is a no-op (no off-screen scrolling). A focused panel/
+  // modal does not scroll (no Stage pane to drive). The pane applies the delta to its own local
+  // offset via the scroll bus, clamped to its own range (only the pane knows its content length).
+  const handleWheel = (wheel: Wheel): void => {
+    const focusState = focus.getState();
+    const effective = resolveFocus(
+      focusState.intendedId,
+      panels.getState().visible,
+      mountedStagePanesOf(focusState.rects),
+    );
+    let target: StagePaneId | null = null;
+    if (isStagePaneId(effective)) {
+      // A focused chat-history or doc pane scrolls itself.
+      target = effective;
+    } else if (effective === CHAT_FOCUS) {
+      // Typing in the chat input: scroll the active target's history pane, but only if it's on-screen.
+      const agentId = deferred.chatScrollTargetAgentId?.() ?? null;
+      if (agentId !== null) {
+        const candidate: StagePaneId = `stage:chat:${agentId}`;
+        if (focusState.rects.has(candidate)) {
+          target = candidate;
+        }
+      }
+    }
+    if (target !== null) {
+      paneScroll.emit(target, wheel.direction, WHEEL_STEP);
+    }
+  };
+
   useInput(
     (input, key) => {
       handleKey(input, key);
@@ -314,6 +365,8 @@ export function useRootInput(
   // time), so this is belt-and-braces, but it also keeps the effect's dependency list honest.
   const handleKeyRef = useRef(handleKey);
   handleKeyRef.current = handleKey;
+  const handleWheelRef = useRef(handleWheel);
+  handleWheelRef.current = handleWheel;
 
   // The terminal chord side-channel (Phase 2). When the kitty shim is wired and the protocol is
   // active, it emits `chord` events for command combos with no legacy byte encoding (ctrl+digit, …);
@@ -328,9 +381,14 @@ export function useRootInput(
       const { input, key } = chordToKey(chord);
       handleKeyRef.current(input, key);
     };
+    const onWheel = (wheel: Wheel): void => {
+      handleWheelRef.current(wheel);
+    };
     terminalEvents.on('chord', onChord);
+    terminalEvents.on('wheel', onWheel);
     return () => {
       terminalEvents.off('chord', onChord);
+      terminalEvents.off('wheel', onWheel);
     };
   }, [terminalEvents]);
 }

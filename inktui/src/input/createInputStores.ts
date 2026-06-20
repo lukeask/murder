@@ -13,6 +13,7 @@ import { createKeymapRegistry } from './keymapRegistry.js';
 import { createModeStore } from './modeStore.js';
 import { createPanelStore } from './panelStore.js';
 import type { PanelId } from './panels.js';
+import { createPaneScrollBus } from './paneScrollBus.js';
 
 /** The wired input stores. Matches the `InputStores` context value the React provider carries. */
 export interface InputStoreBundle {
@@ -26,6 +27,9 @@ export interface InputStoreBundle {
   /** Vim editing mode state + murder-wide yank register (chat-input overhaul, user ask #3). */
   readonly chatVim: ReturnType<typeof createChatVimStore>;
   readonly bindings: ReturnType<typeof createBindingsStore>;
+  /** Focus-id-keyed mouse-wheel scroll command channel (Stage panes subscribe; the root input loop
+   * emits to the focused/targeted pane). */
+  readonly paneScroll: ReturnType<typeof createPaneScrollBus>;
 }
 
 /** Build the bundle. `initialVisible` seeds the toggled-on panels; `initialFocus` seeds intended
@@ -48,5 +52,18 @@ export function createInputStores(
   // The bindings store starts at today's behavior (alt modifier, ctrl unavailable, no overrides); a
   // later settings phase mutates it from the settings RPC bridge.
   const bindings = createBindingsStore();
-  return { panels, focus, keymaps, modes, chatInput, chatHistory, chatVim, bindings };
+  // The wheel→scroll command channel. Stateless fan-out; one instance so every pane and the root
+  // input loop share the same bus.
+  const paneScroll = createPaneScrollBus();
+  return {
+    panels,
+    focus,
+    keymaps,
+    modes,
+    chatInput,
+    chatHistory,
+    chatVim,
+    bindings,
+    paneScroll,
+  };
 }

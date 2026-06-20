@@ -197,6 +197,22 @@ export async function setupTerminal(
   );
   const bindings = inputStores.bindings;
 
+  // SGR mouse reporting — INDEPENDENT of the kitty keyboard gate below. We enable it whenever stdout
+  // is a real TTY so the mouse wheel sends SGR reports (`CSI < 64/65 ; x ; y M`) the shim lifts into
+  // `wheel` events. Without this, kitty's alternate-scroll feature downgrades the wheel to Up/Down
+  // arrow keys (which read as chat-history navigation in the input) — the bug this fixes. Mode 1000 is
+  // button-press tracking only (no motion spam); 1006 is the SGR extended-coordinate encoding. The
+  // tradeoff: the terminal hands click-drag to us, so native text selection needs Shift+drag.
+  const MOUSE_ON = '\x1b[?1000h\x1b[?1006h';
+  const MOUSE_OFF = '\x1b[?1006l\x1b[?1000l';
+  const mouseCapable = shim.isTTY === true && process.stdout.isTTY === true;
+  let mouseEnabled = false;
+  if (mouseCapable) {
+    process.stdout.write(MOUSE_ON);
+    shim.setMouseEnabled(true);
+    mouseEnabled = true;
+  }
+
   // Detect (through the shim). A non-answering terminal resolves false on the driver's timeout.
   const supported = await detectIfTty(shim, driver);
   caps.getState().setKittySupported(supported);
@@ -220,11 +236,17 @@ export async function setupTerminal(
   apply();
   const unsubscribe = bindings.subscribe(apply);
 
-  // Best-effort pop on abnormal exit so the parent shell's input isn't left in protocol mode.
+  // Best-effort pop on abnormal exit so the parent shell's input isn't left in protocol or mouse mode
+  // (a terminal stuck in mouse reporting spews escape codes on every move/click).
   const popOnExit = (): void => {
     if (enabled) {
       driver.disable();
       enabled = false;
+    }
+    if (mouseEnabled) {
+      process.stdout.write(MOUSE_OFF);
+      shim.setMouseEnabled(false);
+      mouseEnabled = false;
     }
   };
   process.on('exit', popOnExit);

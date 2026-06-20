@@ -36,6 +36,7 @@ import type { PanelKeymap } from '../input/keymap.js';
 import type { KeymapRegistryApi, KeymapRegistryState } from '../input/keymapRegistry.js';
 import type { ModeState, ModeStoreApi } from '../input/modeStore.js';
 import type { PanelState, PanelStoreApi } from '../input/panelStore.js';
+import type { PaneScrollBus } from '../input/paneScrollBus.js';
 import { useTerminalSize } from './useTerminalSize.js';
 
 /** The input stores, carried as one context value so the provider wires them together once. */
@@ -48,6 +49,7 @@ export interface InputStores {
   readonly chatHistory: ChatHistoryStoreApi;
   readonly chatVim: ChatVimStoreApi;
   readonly bindings: BindingsStoreApi;
+  readonly paneScroll: PaneScrollBus;
 }
 
 /** `null` outside a provider so the hooks fail loudly on a wiring bug (mirrors `useAppStore`). */
@@ -153,6 +155,12 @@ export function useBindingsStore<T>(
  */
 export function useBindings(): ResolvedBindings {
   return useBindingsStore((s) => s.resolved);
+}
+
+/** The mouse-wheel scroll command channel. A Stage pane subscribes for its own focus id to receive
+ * wheel nudges; {@link useRootInput} emits to the focused/targeted pane. */
+export function usePaneScrollBus(): PaneScrollBus {
+  return useInputStores().paneScroll;
 }
 
 /**

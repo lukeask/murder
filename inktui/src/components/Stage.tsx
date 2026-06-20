@@ -50,7 +50,16 @@
  */
 
 import { Box, type DOMElement, measureElement, Text } from 'ink';
-import { type JSX, memo, useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import {
+  type JSX,
+  memo,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import { shallow } from 'zustand/shallow';
 import { useAppStore } from '../hooks/useAppStore.js';
 import { type GotoIntent, useGotoLine } from '../hooks/useGotoLine.js';
@@ -60,6 +69,7 @@ import {
   useFocusRef,
   useMeasureFocus,
   usePanelKeymap,
+  usePaneScrollBus,
 } from '../hooks/useInputStores.js';
 import { useOrientation } from '../hooks/useOrientation.js';
 import { CHAT_FOCUS, type FocusId, type StagePaneId } from '../input/focusStore.js';
@@ -117,9 +127,14 @@ function footerFor(roster: RosterState, agentId: string): string | null {
 
 /** How many turns scroll past per `j`/`k` (the window step). */
 const SCROLL_STEP = 1;
-/** Fallback turn-window size before the fill box has been measured (first paint or sizeless test
- * render). Once {@link measureElement} reports a real height that value drives the window. */
+/** Fallback turn-window size before the grid has measured its height (first paint or sizeless test
+ * render). Once the grid reports a real height the derived per-pane `contentHeight` drives the window. */
 const FALLBACK_HEIGHT = 20;
+
+/** Rows of pane chrome between a pinned row height and the inner fill-box height: the inline-title
+ * top border (1) + Ink's own bottom border on the content box (1). The footer overlay is net-0
+ * (marginTop:-1 cancels its row), so chrome is exactly 2 — see Pane.tsx / paneBorder.tsx. */
+const PANE_CHROME_ROWS = 2;
 
 // ---------------------------------------------------------------------------
 // Sub-components
@@ -191,12 +206,21 @@ export function flattenTurns(turns: readonly ChatTurn[]): readonly ChatLine[] {
  * scroll is live, and a blurred pane never claims `j`), and flips the Pane's focus color when it holds
  * the effective focus. The Pane's outer box carries the focus ref so `useMeasureFocus` registers the
  * whole bordered region's rect for directional nav (matching the panel recipe in {@link ./Pane.tsx}).
+ *
+ * The scroll-window height arrives as the deterministic `contentHeight` PROP, computed by {@link
+ * ChatGrid} from its measured grid height (see {@link paneContentHeights}). This pane used to
+ * self-measure its (parent-controlled) fill box via `measureElement` in a `useLayoutEffect` — but the
+ * pane is `React.memo`'d and the box height is set by the GRID's row sizing, not by any pane prop, so
+ * when the grid re-pinned a row the memo'd pane never re-rendered, never re-ran its measure, and the
+ * window went stale (blank lines below content, or clipped). Receiving the height as data makes the
+ * window a pure function of the layout — and unit-testable.
  */
-const ChatPane = memo(function ChatPane({
+export const ChatPane = memo(function ChatPane({
   identity,
   conversations,
   chatTarget,
   footer,
+  contentHeight,
 }: {
   readonly identity: AgentIdentity;
   readonly conversations: ConversationsState;
@@ -207,6 +231,10 @@ const ChatPane = memo(function ChatPane({
   /** The crow's `harness ◇ model` label for the bottom border, or `null` when unknown (so the
    * bottom border draws plain). Derived in the Stage from the roster row (rule 2). */
   readonly footer: string | null;
+  /** The inner fill-box height for this pane, computed deterministically by ChatGrid from the pinned
+   * row height; `undefined` only before the grid's first measure. Replaces self-measuring a
+   * parent-controlled height that went stale behind React.memo. */
+  readonly contentHeight: number | undefined;
 }): JSX.Element {
   const theme = useTheme();
   const focusId: FocusId = chatPaneFocusId(identity.agentId);
@@ -228,17 +256,10 @@ const ChatPane = memo(function ChatPane({
   // transcript can't strand the window past its end.
   const [scrollUp, setScrollUp] = useState(0);
 
-  // Measured window height — the Ledger fill-box pattern (mirrors StageDocPane). The fill box below
-  // is flexGrow so measureElement reports the room we HAVE, not the rows we drew. Fallback covers
-  // first paint and sizeless test renders.
-  const boxRef = useRef<DOMElement | null>(null);
-  const [measuredHeight, setMeasuredHeight] = useState(0);
-  useLayoutEffect(() => {
-    if (boxRef.current === null) return;
-    const { height } = measureElement(boxRef.current);
-    if (height !== measuredHeight) setMeasuredHeight(height);
-  });
-  const effectiveHeight = measuredHeight > 0 ? measuredHeight : FALLBACK_HEIGHT;
+  // Window height arrives as a deterministic prop from ChatGrid (which alone measures the grid and
+  // distributes integer row heights). Fallback covers first paint and sizeless test renders — when
+  // the grid hasn't measured yet, `contentHeight` is undefined.
+  const effectiveHeight = contentHeight ?? FALLBACK_HEIGHT;
 
   // Window by physical LINE (the unit drawn + measured), exactly as StageDocPane windows the document
   // body — NOT by whole turns. See flattenTurns for why turn-count windowing left long chats stuck.
@@ -296,6 +317,26 @@ const ChatPane = memo(function ChatPane({
   // only consults the FOCUSED id's entry anyway, so this is belt-and-suspenders for clarity.
   usePanelKeymap(focusId, focused ? keymap : EMPTY_KEYMAP);
 
+  // Mouse-wheel scroll (the scroll-bus subscription). Subscribed UNCONDITIONALLY — not gated on
+  // `focused` like the keymap — because the wheel can target this pane while the chat INPUT holds
+  // focus (scrolling the input's active-target history). `up` reveals older turns (scrollUp counts
+  // hidden lines from the tail, so it grows); `down` reveals newer. The bound is read from a ref so
+  // the subscription installs once per focus id, not on every `maxScrollUp` change.
+  const paneScroll = usePaneScrollBus();
+  const maxScrollUpRef = useRef(maxScrollUp);
+  maxScrollUpRef.current = maxScrollUp;
+  useEffect(
+    () =>
+      paneScroll.subscribe(focusId, (direction, amount) => {
+        setScrollUp((s) =>
+          direction === 'up'
+            ? Math.min(s + amount, maxScrollUpRef.current)
+            : Math.max(s - amount, 0),
+        );
+      }),
+    [paneScroll, focusId],
+  );
+
   // The visible window: the effectiveHeight newest LINES shifted up by the (clamped) scroll offset.
   // Slice arithmetic keeps the most recent lines by default (scroll 0 → pinned to the tail/newest).
   const end = lines.length - clampedScroll;
@@ -322,9 +363,9 @@ const ChatPane = memo(function ChatPane({
       // The harness ◇ model label rides the bottom border, right-aligned to mirror the top-left name.
       footerRight={footer !== null ? <Text dimColor>{footer}</Text> : undefined}
     >
-      {/* Fill box: sizes to the Pane's inner content area (flexGrow + overflow hidden), so
-          measureElement reports the room we HAVE, not the rows we drew. */}
-      <Box ref={boxRef} flexDirection="column" flexGrow={1} minHeight={0} overflow="hidden">
+      {/* Fill box: sizes to the Pane's inner content area (flexGrow + overflow hidden). Its height is
+          received as `contentHeight` (ChatGrid measures + distributes), not self-measured here. */}
+      <Box flexDirection="column" flexGrow={1} minHeight={0} overflow="hidden">
         {visibleLines.length === 0 ? (
           <Text dimColor>no history</Text>
         ) : (
@@ -346,6 +387,37 @@ type ScrollIntent = 'scrollUp' | 'scrollDown';
 /** A stable empty keymap for a blurred pane (so the `useMemo`/registration identity doesn't churn).
  * Typed to the pane's full intent union so the `focused ? keymap : EMPTY_KEYMAP` ternary is one type. */
 const EMPTY_KEYMAP: PanelKeymap<ScrollIntent | GotoIntent> = { keymap: [], onIntent() {} };
+
+/**
+ * The inner fill-box height each pane in row `i` gets, derived deterministically from the grid's
+ * measured height. Mirrors the integer row-height distribution exactly (`base`, with the first
+ * `remainder` rows getting one extra cell) then subtracts the fixed pane chrome. Returns `undefined`
+ * per row before the grid has measured (height 0) — the pane then falls back to FALLBACK_HEIGHT for
+ * the first paint. This replaces ChatPane self-measuring its (parent-controlled) box height: a memo'd
+ * pane never re-ran its measure when the grid re-pinned a row, stranding the window stale. Passing the
+ * height down as data makes the window a pure function of the layout (and unit-testable). Pure; the
+ * test seam.
+ *
+ * Uses the raw measured grid height — NOT the `staleByFooter`-zeroed value the row sizing uses — so a
+ * BottomBar line-count change doesn't collapse the pane windows. (A transiently-too-large window can
+ * never overflow the terminal: the fill box is `overflow:hidden`, so it clips in-pane; only ROW
+ * pinning needs the staleByFooter overflow guard, which is left untouched.)
+ */
+export function paneContentHeights(
+  measuredHeight: number,
+  rowCount: number,
+  paneGap: number,
+): readonly (number | undefined)[] {
+  if (rowCount <= 0) return [];
+  if (measuredHeight <= 0) return Array.from({ length: rowCount }, () => undefined);
+  const gaps = paneGap * Math.max(0, rowCount - 1);
+  const avail = Math.max(0, measuredHeight - gaps);
+  const base = Math.floor(avail / rowCount);
+  const remainder = avail - base * rowCount;
+  return Array.from({ length: rowCount }, (_, i) =>
+    Math.max(base + (i < remainder ? 1 : 0) - PANE_CHROME_ROWS, 0),
+  );
+}
 
 /**
  * The chat-history grid — one cross-axis line per `rows` entry, panes splitting each line.
@@ -421,6 +493,10 @@ function ChatGrid({
   const avail = Math.max(0, effectiveHeight - gaps);
   const base = n > 0 ? Math.floor(avail / n) : 0;
   const remainder = avail - base * n;
+  // The per-row inner fill-box height handed down to each ChatPane — derived from the RAW measured
+  // height (not the staleByFooter-zeroed `effectiveHeight`) so a BottomBar line-count change collapses
+  // only the ROW pinning, never the pane scroll windows. See paneContentHeights.
+  const contentHeights = paneContentHeights(measuredHeight, n, paneGap);
   return (
     <Box
       ref={ref}
@@ -471,6 +547,7 @@ function ChatGrid({
                   conversations={conversations}
                   chatTarget={targetAgentId === identity.agentId}
                   footer={footerFor(roster, identity.agentId)}
+                  contentHeight={contentHeights[i]}
                 />
               </Box>
             ))}
