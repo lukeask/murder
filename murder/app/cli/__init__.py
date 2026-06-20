@@ -55,7 +55,9 @@ def _root(
     ),
 ) -> None:
     """Bare entrypoint launches the TUI. Start a plan with the new-plan popup
-    (`alt+p`), which creates a plan and starts its planning agent."""
+    (the command-modifier + `p` chord — `alt+p` by default, `ctrl+p` when the
+    command modifier is configured to ctrl; see the hint bar), which creates a
+    plan and starts its planning agent."""
     if version:
         typer.echo(f"murder {__version__}")
         raise typer.Exit(0)
