@@ -110,7 +110,7 @@ export interface PaneProps {
    * bottom can be Ink's clip-robust own border). 0/undefined renders nothing extra. */
   readonly overflowBelow?: number | undefined;
   /** Scrollable panes (doc/chat) pass this to make the RIGHT border double as the scroll track: the
-   * thumb is a heavy `┃` run rolling along the `│` side (see {@link ./paneBorder.js PaneBorderRight}).
+   * thumb is a full `█` run rolling along the `│` side (see {@link ./paneBorder.js PaneBorderRight}).
    * `height` is the pane's measured inner row count (the same fill-box measurement that drives the
    * pane's window); `thumb` is {@link ./DocPane.js computeScrollThumb}'s geometry, `null` when the
    * content fits (the column then draws as a plain border). Omitted → Ink draws the right border as
@@ -188,7 +188,7 @@ export const Pane = memo(
       ) : (
         /* Scrollable pane: the right border IS the scroll track. The content box keeps left/bottom
            (its Ink bottom border ends `╰──` since borderRight is off); the hand-composed column
-           draws the `│`/`┃` track cells plus the closing `╯` corner — same net width as before. */
+           draws the `│`/`█` track cells plus the closing `╯` corner — same net width as before. */
         <Box flexDirection="row" flexGrow={1} minHeight={0} overflow="hidden">
           {content}
           <PaneBorderRight height={scrollbar.height} thumb={scrollbar.thumb} color={borderColor} />

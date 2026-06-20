@@ -234,15 +234,14 @@ export function PaneBorderBottom({
   );
 }
 
-/** The thumb glyph: a HEAVY vertical stroke, so the scroll position reads as a thicker run of the
- * border itself (vs the light `│` track) — not a separate widget glyph like the old `█` column. */
-const THUMB = '┃';
+/** The thumb glyph: a full block, so the scroll position reads clearly against the light `│` track. */
+const THUMB = '█';
 /** The track glyph — Ink's round-border side, so a thumb-less column is byte-identical to a border. */
 const TRACK = '│';
 
 /**
  * The scrollbar-as-right-border column for a scrollable {@link ./Pane.tsx Pane} — the pane's RIGHT
- * border doubles as the scroll track: the thumb is a heavy `┃` run rolling along the light `│` side,
+ * border doubles as the scroll track: the thumb is a full `█` run rolling along the light `│` side,
  * and the column's last cell is the `╯` bottom corner (the content box disables its own right border
  * via `borderRight={false}`, so its Ink bottom border ends `╰──` and this corner completes it). This
  * replaced the old separate 1-char scrollbar column inside the border (`█` over a dim track).
