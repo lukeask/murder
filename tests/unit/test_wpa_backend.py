@@ -7,6 +7,7 @@ execute under this repo's pytest config (no ``asyncio_mode = auto``).
 from __future__ import annotations
 
 import asyncio
+import re
 from pathlib import Path
 
 from murder.app.service.runtime import Runtime
@@ -240,3 +241,35 @@ def test_submit_capture_blank_title_uses_llm_path(repo_root: Path) -> None:
     # Blank title is treated as absent -> LLM titling path runs.
     assert len(seen) == 1
     assert result["short_vers"] == "summary"
+
+
+def test_submit_capture_llm_error_keeps_timestamped_note(repo_root: Path) -> None:
+    rt = _runtime(repo_root)
+    orch = Orchestrator(rt)
+
+    async def _boom(**kwargs):
+        raise RuntimeError("LLM API error")
+
+    orig = notes_mod.llm_capture_metadata
+    notes_mod.llm_capture_metadata = _boom  # type: ignore[assignment]
+    try:
+        result = asyncio.run(
+            orch.submit_notetaker_capture(
+                {"raw": "First line of capture\nsecond line"}
+            )
+        )
+        asyncio.run(_drain(rt))
+    finally:
+        notes_mod.llm_capture_metadata = orig  # type: ignore[assignment]
+
+    # Auto-naming failed but the note must still be saved under its provisional
+    # timestamp name, never lost. short_vers falls back to the first line.
+    name = result["note_name"]
+    # Provisional name is kept unchanged: either the daily note (YYYY-MM-DD)
+    # or a raw capture timestamp -- never lost to the LLM failure.
+    assert re.fullmatch(r"\d{4}-\d{2}-\d{2}|\d{8}T\d{12}Z(-\d+)?", name), name
+    assert result["short_vers"] == "First line of capture"
+    # The note file/DB row must actually exist.
+    assert notes_mod.read_note(rt.db, name).strip().startswith(
+        "First line of capture"
+    )

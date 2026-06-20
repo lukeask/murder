@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import re
 import sqlite3
 from datetime import datetime
@@ -34,6 +35,8 @@ from murder.state.storage.paths import note_md, notes_dir
 
 _SHORT_VERS_MAX_CHARS = 240
 _JSON_FENCE = re.compile(r"```(?:json)?\s*\n([\s\S]*?)```", re.IGNORECASE)
+
+LOGGER = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -452,12 +455,31 @@ async def resolve_capture_note(
             "reply": short_vers,
         }
     system = _load_prompt("notetaker")
-    meta = await llm_capture_metadata(
-        raw=body,
-        system=system,
-        client=client,
-        config=config,
-    )
+    try:
+        meta = await llm_capture_metadata(
+            raw=body,
+            system=system,
+            client=client,
+            config=config,
+        )
+    except Exception as exc:
+        # The note is already durably saved under its timestamp name; an LLM
+        # API failure must never lose it. Keep the timestamped name and a
+        # cheap first-line short_vers instead of propagating the error.
+        LOGGER.warning(
+            "notetaker auto-name failed; keeping timestamped note %s: %s",
+            note_name,
+            exc,
+        )
+        short_vers = _fallback_short_vers(body.splitlines()[0] if body else body)
+        notetaker_db.update_notes_entry_short_vers(conn, entry_id, short_vers)
+        return {
+            "entry_id": entry_id,
+            "note_name": note_name,
+            "cleaned": body,
+            "short_vers": short_vers,
+            "reply": short_vers,
+        }
     short_vers = meta["short_vers"]
     notetaker_db.update_notes_entry_short_vers(conn, entry_id, short_vers)
 
@@ -466,18 +488,31 @@ async def resolve_capture_note(
     slug = _slugify_title(title)
     if slug:
         if active_note_name_exists(conn, repo_root, slug, exclude=note_name):
-            retry = await llm_capture_metadata(
-                raw=body,
-                system=system,
-                client=client,
-                config=config,
-                avoid_titles=(title, slug),
-            )
-            retry_slug = _slugify_title(retry["one_or_two_word_title"])
-            if retry_slug:
-                short_vers = retry["short_vers"]
-                notetaker_db.update_notes_entry_short_vers(conn, entry_id, short_vers)
-                slug = retry_slug
+            try:
+                retry = await llm_capture_metadata(
+                    raw=body,
+                    system=system,
+                    client=client,
+                    config=config,
+                    avoid_titles=(title, slug),
+                )
+            except Exception as exc:
+                # Collision retry is best-effort; fall back to a numbered
+                # suffix on the original slug rather than failing the capture.
+                LOGGER.warning(
+                    "notetaker title-collision retry failed for %s: %s",
+                    note_name,
+                    exc,
+                )
+                retry = None
+            if retry is not None:
+                retry_slug = _slugify_title(retry["one_or_two_word_title"])
+                if retry_slug:
+                    short_vers = retry["short_vers"]
+                    notetaker_db.update_notes_entry_short_vers(
+                        conn, entry_id, short_vers
+                    )
+                    slug = retry_slug
         target = _collision_safe_name(conn, repo_root, slug, exclude=note_name)
         if target != note_name:
             resolved_name = rename_note(conn, repo_root, note_name, target)
