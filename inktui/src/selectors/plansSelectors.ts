@@ -36,6 +36,7 @@ import { useMemo } from 'react';
 import type { FavoritesState } from '../store/favorites/favoritesSlice.js';
 import type { PlanRow, PlansState } from '../store/plans/plansSlice.js';
 import { isInFavoriteSet } from './favoritesSelectors.js';
+import { formatCharCount, formatUpdatedAt } from './resourceMeta.js';
 
 /** Spaces a child's name is indented under its parent (spec: "name indented 4 spaces"). */
 const CHILD_INDENT = '    ';
@@ -66,43 +67,6 @@ export interface PlansView {
   readonly status: PlansState['status'];
   readonly error: string | null;
   readonly isEmpty: boolean;
-}
-
-/** Three-letter month abbreviations, indexed by 0-based month, for {@link formatUpdatedAt}. */
-const MONTHS = [
-  'Jan',
-  'Feb',
-  'Mar',
-  'Apr',
-  'May',
-  'Jun',
-  'Jul',
-  'Aug',
-  'Sep',
-  'Oct',
-  'Nov',
-  'Dec',
-] as const;
-
-/**
- * Format an ISO-8601 datetime to `Mon. dd HH:MM` (e.g. `Jun. 10 09:32`). Parsed by slicing the fixed
- * ISO layout `YYYY-MM-DDTHH:MM:SS` — no Date object, so it's timezone-stable (the stored time is shown
- * verbatim) and matches the rest of the selectors' string-slice formatting.
- */
-function formatUpdatedAt(iso: string): string {
-  const month = MONTHS[Number(iso.slice(5, 7)) - 1] ?? '???';
-  const day = iso.slice(8, 10);
-  const time = iso.slice(11, 16);
-  return `${month}. ${day} ${time}`;
-}
-
-/**
- * Format a character count as a compact, human-readable display string (e.g. `3,998 chars`). No
- * padding — the `· updated` column follows the count directly with a single separator, so a short
- * count doesn't carry a run of trailing spaces before the `·`.
- */
-function formatCharCount(n: number): string {
-  return `${n.toLocaleString()} chars`;
 }
 
 /** A parent and its (recency-ordered) children — the unit ordering operates over. */

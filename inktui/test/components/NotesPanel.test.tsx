@@ -3,8 +3,10 @@
  *
  * Modeled on {@link ./PlansPanel.test.tsx}: asserts the {@link ../../src/components/Pane.tsx Pane}
  * inline-title border (`╭─ Notes ─…`) and the {@link ../../src/components/Ledger.tsx Ledger}
- * two-line entries with the focus-gated `▌` cursor marker, plus the unchanged local cursor + j/k
- * keymap + star sort + focus wiring (rule 1).
+ * two-line entries (the shared {@link ../../src/components/ResourceRow.tsx} row), plus the unchanged
+ * local cursor + j/k keymap + star sort + focus wiring (rule 1). The cursor marker is a plain space
+ * now (ResourceRow's `CURSOR_GLYPH`), so the selection is signalled ONLY by the Ledger's full-width
+ * background — the cursor-move assertion is FORCE_COLOR-gated, exactly like the plans reference.
  *
  * Recipe summary (same as the reference, with notes-specific stubs):
  *  1. Build `FakeBusClient`, stub `state.notes_snapshot`, build the store.
@@ -28,6 +30,18 @@ import { createAppStore } from '../../src/store/store.js';
 
 const ALT_F = '\x1bf'; // star/favorite the highlighted row
 const ALT_SPACE = '\x1b '; // focus chat (was alt+f)
+
+// The cursor marker is now a plain space (ResourceRow's `CURSOR_GLYPH`), so the selected row is
+// signalled ONLY by the Ledger's full-width selection background (everforest `bg_green` truecolor
+// `48;2;60;72;65`). ink-testing-library strips ANSI unless color is forced, so the cursor-move
+// assertion runs only under FORCE_COLOR; without it it skips (matching the plans reference).
+const { FORCE_COLOR } = process.env;
+const colorOn = Boolean(FORCE_COLOR);
+const SELECTED_BG = '\x1b[48;2;60;72;65m';
+/** Frame lines carrying the full-width selection background (a 2-line entry tags both its lines). */
+function selectedLines(frame: string): string[] {
+  return frame.split('\n').filter((line) => line.includes(SELECTED_BG));
+}
 
 async function tick(): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, 20));
@@ -96,11 +110,12 @@ describe('NotesPanel', () => {
     const frame = lastFrame() ?? '';
     // Pane inline title: `╭─ Notes ─…` on the top border (not a plain border + "Notes" text line).
     expect(frame).toContain('╭─ Notes');
-    // Line 1: name. Line 2: char count and formatted date.
+    // Line 1: name. Line 2: char count and formatted date — the count is unpadded and the date is
+    // the compact `Mon. dd HH:MM` (the shared resourceMeta format that plans/notes/reports share).
     expect(frame).toContain('alpha-note');
-    expect(frame).toContain('2026-06-08 10:00');
+    expect(frame).toContain('· Jun. 08 10:00');
     expect(frame).toContain('bravo-note');
-    expect(frame).toContain('2026-06-01 08:00');
+    expect(frame).toContain('· Jun. 01 08:00');
     dispose();
   });
 
@@ -118,18 +133,20 @@ describe('NotesPanel', () => {
     unfocusedSetup.dispose();
   });
 
-  it('moves the local cursor on a declared key only when focused', async () => {
+  it.skipIf(!colorOn)('moves the local cursor on a declared key only when focused', async () => {
     const { store, inputStores, dispose } = await setup(twoNotes(), true);
     const { stdin, lastFrame } = render(<Harness store={store} inputStores={inputStores} />);
     await tick();
 
-    // Focused: 'j' fires cursorDown → cursor marker moves below alpha-note.
-    const before = lastFrame() ?? '';
-    expect(before.indexOf('▌')).toBeLessThan(before.indexOf('bravo-note'));
+    // Focused: cursor starts on alpha-note; 'j' fires cursorDown → the full-width highlight moves
+    // to bravo-note (the cursor glyph is a space now, so the selection background is the signal).
+    const before = selectedLines(lastFrame() ?? '');
+    expect(before.some((line) => line.includes('alpha-note'))).toBe(true);
     stdin.write('j');
     await tick();
-    const afterDown = lastFrame() ?? '';
-    expect(afterDown.indexOf('▌')).toBeGreaterThan(afterDown.indexOf('alpha-note'));
+    const afterDown = selectedLines(lastFrame() ?? '');
+    expect(afterDown.some((line) => line.includes('bravo-note'))).toBe(true);
+    expect(afterDown.some((line) => line.includes('alpha-note'))).toBe(false);
 
     // Unfocus: alt+space → chat; 'k' no longer routes to the panel.
     stdin.write(ALT_SPACE);

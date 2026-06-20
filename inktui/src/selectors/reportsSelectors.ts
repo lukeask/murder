@@ -11,6 +11,7 @@ import { useMemo } from 'react';
 import type { FavoritesState } from '../store/favorites/favoritesSlice.js';
 import type { ReportRow, ReportsState } from '../store/reports/reportsSlice.js';
 import { isInFavoriteSet, stableSortStarredFirst } from './favoritesSelectors.js';
+import { formatCharCount, formatUpdatedAt } from './resourceMeta.js';
 
 /**
  * One report row as the component paints it: display-ready strings for both lines of the
@@ -20,7 +21,7 @@ export interface ReportRowView {
   readonly name: string;
   /** Character count formatted for display. */
   readonly charCount: string;
-  /** `updated_at` formatted as `YYYY-MM-DD HH:MM`. */
+  /** `updated_at` formatted `Mon. dd HH:MM` (e.g. `Jun. 10 09:32`). */
   readonly updatedAt: string;
   /** Whether this report is starred (in the explicit favorite set). */
   readonly starred: boolean;
@@ -32,27 +33,6 @@ export interface ReportsView {
   readonly status: ReportsState['status'];
   readonly error: string | null;
   readonly isEmpty: boolean;
-}
-
-/** Format an ISO-8601 datetime string to `YYYY-MM-DD HH:MM`. Mirrors Python `[:16].replace("T"," ")`. */
-function formatUpdatedAt(iso: string): string {
-  return iso.slice(0, 16).replace('T', ' ');
-}
-
-/**
- * Width the formatted char-count field is right-padded to, so the trailing `· updated` column aligns
- * across rows regardless of digit count (`5,000 chars` vs `50,000 chars`). `"9,999,999 chars"` is 15
- * chars; a longer value simply isn't padded (never truncates). Alignment is formatting, so it lives
- * HERE in the selector (rule 2). Mirrors notes/plans.
- */
-const CHAR_COUNT_FIELD_WIDTH = 15;
-
-/**
- * Format a character count as a compact, human-readable display string, right-padded to a fixed width
- * so the following `·`/`updated` column lines up across rows (see {@link CHAR_COUNT_FIELD_WIDTH}).
- */
-function formatCharCount(n: number): string {
-  return `${n.toLocaleString()} chars`.padEnd(CHAR_COUNT_FIELD_WIDTH);
 }
 
 /** Project one domain row into its presentation tuple. */

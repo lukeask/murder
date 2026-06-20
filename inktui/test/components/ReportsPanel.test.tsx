@@ -19,6 +19,18 @@ import { createAppStore } from '../../src/store/store.js';
 
 const ALT_SPACE = '\x1b '; // alt+space → focus chat (was alt+f, which now stars in panels)
 
+// The cursor marker is now a plain space (ResourceRow's `CURSOR_GLYPH`), so the selected row is
+// signalled ONLY by the Ledger's full-width selection background (everforest `bg_green` truecolor
+// `48;2;60;72;65`). ink-testing-library strips ANSI unless color is forced, so the cursor-move
+// assertion runs only under FORCE_COLOR; without it it skips (matching the plans reference).
+const { FORCE_COLOR } = process.env;
+const colorOn = Boolean(FORCE_COLOR);
+const SELECTED_BG = '\x1b[48;2;60;72;65m';
+/** Frame lines carrying the full-width selection background (a 2-line entry tags both its lines). */
+function selectedLines(frame: string): string[] {
+  return frame.split('\n').filter((line) => line.includes(SELECTED_BG));
+}
+
 async function tick(): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, 20));
 }
@@ -98,10 +110,11 @@ describe('ReportsPanel', () => {
     const frame = lastFrame() ?? '';
     // Pane inline title on the top border (not a plain border + "Reports" text line).
     expect(frame).toContain('╭─ Reports');
+    // Line 2: char count and the compact `Mon. dd HH:MM` date (the shared resourceMeta format).
     expect(frame).toContain('alpha-report');
-    expect(frame).toContain('2026-06-07 12:00');
+    expect(frame).toContain('· Jun. 07 12:00');
     expect(frame).toContain('bravo-report');
-    expect(frame).toContain('2026-05-15 09:30');
+    expect(frame).toContain('· May. 15 09:30');
     dispose();
   });
 
@@ -119,18 +132,20 @@ describe('ReportsPanel', () => {
     unfocusedSetup.dispose();
   });
 
-  it('moves the local cursor on a declared key only when focused', async () => {
+  it.skipIf(!colorOn)('moves the local cursor on a declared key only when focused', async () => {
     const { store, inputStores, dispose } = await setup(twoReports(), true);
     const { stdin, lastFrame } = render(<Harness store={store} inputStores={inputStores} />);
     await tick();
 
-    // Focused: 'j' fires cursorDown → cursor moves below alpha-report.
-    const before = lastFrame() ?? '';
-    expect(before.indexOf('▌')).toBeLessThan(before.indexOf('bravo-report'));
+    // Focused: cursor starts on alpha-report; 'j' fires cursorDown → the full-width highlight moves
+    // to bravo-report (the cursor glyph is a space now, so the selection background is the signal).
+    const before = selectedLines(lastFrame() ?? '');
+    expect(before.some((line) => line.includes('alpha-report'))).toBe(true);
     stdin.write('j');
     await tick();
-    const afterDown = lastFrame() ?? '';
-    expect(afterDown.indexOf('▌')).toBeGreaterThan(afterDown.indexOf('alpha-report'));
+    const afterDown = selectedLines(lastFrame() ?? '');
+    expect(afterDown.some((line) => line.includes('bravo-report'))).toBe(true);
+    expect(afterDown.some((line) => line.includes('alpha-report'))).toBe(false);
 
     // Unfocus to chat; 'k' no longer routes to the panel.
     stdin.write(ALT_SPACE);

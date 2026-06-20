@@ -42,9 +42,9 @@ describe('selectNotesView — presentation', () => {
     expect(view.rows.map((r) => r.name)).toEqual(['a', 'c', 'b', 'd']);
   });
 
-  it('formats updatedAt as YYYY-MM-DD HH:MM (T replaced with space, 16 chars)', () => {
+  it('formats updatedAt as the compact `Mon. dd HH:MM` (shared resourceMeta formatter)', () => {
     const view = selectNotesView(state([row({ updatedAt: '2026-06-08T14:30:00.123' })]), NO_FAVS);
-    expect(view.rows[0]?.updatedAt).toBe('2026-06-08 14:30');
+    expect(view.rows[0]?.updatedAt).toBe('Jun. 08 14:30');
   });
 
   it('formats charCount with a locale-formatted number and "chars" suffix', () => {

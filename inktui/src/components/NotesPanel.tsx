@@ -6,7 +6,8 @@
  *  - Slice: `s.notes` (via `useNotesView`), plus `s.favorites` so starred sort to the top (rule 2 —
  *    the sort lives in the selector via {@link ../selectors/favoritesSelectors.js stableSortStarredFirst}).
  *  - `PANEL_ID`: `'notes'`.
- *  - Row layout: line 1 = star marker + name; line 2 = char count · updated time.
+ *  - Row layout: the shared {@link ./ResourceRow.tsx} two-line entry — line 1 = optional star + name,
+ *    line 2 = char count · updated time.
  *  - Intents: `'cursorDown' | 'cursorUp' | 'refresh' | 'star' | 'open'`.
  *    - `star` is fired by `ctrl+s` — the dispatcher routes `ctrl+s` to the focused panel's keymap
  *      (it is global-for-chat-only; see dispatcher.ts). The panel stars its OWN cursor row (rule 1 —
@@ -20,19 +21,21 @@
  * hand-rolled `<Box borderStyle>` + title `<Text>` chrome is now a {@link ./Pane.tsx Pane}
  * (inline-title border, focus color, the forwarded measure `ref`), and the hand-rolled
  * `NoteEntry`/`NotesList` map is now a {@link ./Ledger.tsx Ledger} (two-line single-column entries,
- * full-width highlight, alternating background, overflow windowing). What stayed EXACTLY the same:
+ * full-width highlight, alternating background, overflow windowing) over the shared
+ * {@link ./ResourceRow.tsx} two-line row (the doc-style entry plans/notes/reports all paint).
+ * What stayed EXACTLY the same:
  * the local `cursor` `useState`, the j/k/r/star/open keymap, the selector usage (`useNotesView`),
  * and the focus wiring (`useFocusRef`/`useEffectiveFocus`/`useMeasureFocus`).
  *
  * Two rendering rules the Pane + Ledger split imposes (copied from PlansPanel):
  *  - The Ledger owns the selection highlight (a full-width background on the cursor row), so
- *    `renderEntry` must NOT re-apply `inverse`. It uses `ctx.selected` only for the `▌` marker + the
- *    line-2 dim.
+ *    `renderEntry` must NOT re-apply `inverse`. The shared {@link ./ResourceRow.tsx} entry uses
+ *    `ctx.selected` only for the line-2 dim (and an optional cursor marker, disabled by default).
  *  - The Ledger renders nothing for an empty list, so the empty/loading/error chrome stays in the
  *    PANEL (as the Pane's children), branching to the Ledger only when there are rows.
  */
 
-import { Box, Text } from 'ink';
+import { Text } from 'ink';
 import { memo, useCallback, useMemo, useState } from 'react';
 import { shallow } from 'zustand/shallow';
 import { useAppStore } from '../hooks/useAppStore.js';
@@ -45,11 +48,12 @@ import {
 } from '../hooks/useInputStores.js';
 import type { PanelKeymap } from '../input/keymap.js';
 import type { PanelId } from '../input/panels.js';
-import { type NoteRowView, type NotesView, useNotesView } from '../selectors/notesSelectors.js';
+import { type NotesView, useNotesView } from '../selectors/notesSelectors.js';
 import { useTheme } from '../theme/themeStore.js';
 import { useDocView } from './DocPane.js';
-import { Ledger, type LedgerEntryContext } from './Ledger.js';
+import { Ledger } from './Ledger.js';
 import { Pane } from './Pane.js';
+import { renderResourceEntry, renderResourceHeader } from './ResourceRow.js';
 
 const PANEL_ID: PanelId = 'notes';
 const PANEL_TITLE = 'Notes';
@@ -59,44 +63,10 @@ const PANEL_TITLE = 'Notes';
 
 type NotesIntent = 'cursorDown' | 'cursorUp' | 'refresh' | 'star' | 'open';
 
-/**
- * Render one note row as a two-line Ledger entry. Line 1: cursor marker + star + name. Line 2: char
- * count · updated time. The Ledger paints the full-width selection background and the alternating
- * shade, so this only uses `ctx.selected` for the `▌` marker + line-2 dim — it does NOT set
- * `inverse`. Single column (`maxColumns=1`), so `ctx.columns` is unused.
- */
-function renderNoteEntry(row: NoteRowView, ctx: LedgerEntryContext): React.ReactNode {
-  const marker = ctx.selected ? '▌' : ' ';
-  // FIXED-WIDTH star gutter (bug 2): `★ ` when starred, two spaces otherwise — name column is fixed.
-  const star = row.starred ? '★ ' : '  ';
-  return (
-    // The LedgerRow wraps this in a full-width `row` Box (with the highlight/alt-bg background); a
-    // two-line entry composes its own `column` here. `flexGrow={1}` spans the background; `flexShrink={0}`
-    // so Yoga doesn't drop a line. Leading gutter is marker(1)+star(2)=3 (the cursor bar abuts the
-    // star, whose trailing space separates it from the name) so the name sits close to the left edge;
-    // line-2's 3-space indent matches it so `charCount` sits under `name`.
-    <Box flexDirection="column" flexGrow={1} flexShrink={0}>
-      <Text wrap="truncate">{`${marker}${star}${row.name}`}</Text>
-      <Text dimColor={!ctx.selected} wrap="truncate">
-        {`   ${row.charCount} · ${row.updatedAt}`}
-      </Text>
-    </Box>
-  );
-}
-
-/**
- * The Ledger column-titles key — a dim two-line block labeling the entry lines: `name` over
- * `size · updated`. The 3-space leading indent matches {@link renderNoteEntry}'s gutter
- * (marker + star) so the labels sit directly above the data columns (bug 1).
- */
-function renderNotesHeader(): React.ReactNode {
-  return (
-    <Box flexDirection="column" flexShrink={0}>
-      <Text dimColor>{'   name'}</Text>
-      <Text dimColor>{'   size · updated'}</Text>
-    </Box>
-  );
-}
+// The two-line row + header come from the shared {@link ./ResourceRow.tsx} renderer (plans/notes/
+// reports paint the identical doc-style entry — flush-left, star shown only when starred, no forced
+// cursor glyph). Notes' star-float sort lives in {@link ../selectors/notesSelectors.js} and is baked
+// into `row.starred` before the renderer sees it. `NoteRowView` is structurally a `ResourceRowFields`.
 
 /** The list body: empty/loading/error chrome (Ledger renders nothing for zero rows), else the
  * two-line entries via {@link Ledger} (in selector order, with the full-width selection highlight). */
@@ -129,8 +99,8 @@ function NotesList({
       linesPerEntry={2}
       minColumns={1}
       maxColumns={1}
-      renderEntry={renderNoteEntry}
-      header={renderNotesHeader}
+      renderEntry={renderResourceEntry}
+      header={renderResourceHeader}
       rowKey={(row) => row.name}
       onWindow={(win) => onOverflow({ above: win.start, below: view.rows.length - win.end })}
     />

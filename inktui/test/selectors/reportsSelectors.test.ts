@@ -40,9 +40,9 @@ describe('selectReportsView — presentation', () => {
     expect(view.rows.map((r) => r.name)).toEqual(['a', 'c', 'b', 'd']);
   });
 
-  it('formats updatedAt as YYYY-MM-DD HH:MM', () => {
+  it('formats updatedAt as the compact `Mon. dd HH:MM` (shared resourceMeta formatter)', () => {
     const view = selectReportsView(state([row({ updatedAt: '2026-06-08T09:15:00.000' })]), NO_FAVS);
-    expect(view.rows[0]?.updatedAt).toBe('2026-06-08 09:15');
+    expect(view.rows[0]?.updatedAt).toBe('Jun. 08 09:15');
   });
 
   it('formats charCount with "chars" suffix', () => {

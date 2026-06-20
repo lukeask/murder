@@ -8,13 +8,14 @@
  * ## Phase 3: Pane + Ledger conversion
  * Converted to the layout primitives following {@link ./PlansPanel.tsx} / {@link ./NotesPanel.tsx}.
  * The bordered chrome is now a {@link ./Pane.tsx Pane} and the two-line list is a
- * {@link ./Ledger.tsx Ledger} (single column, `linesPerEntry=2`). The cursor `useState`, keymap,
- * selector usage, and focus wiring are unchanged; only the rendering moved to the primitives.
- * `renderEntry` does NOT set `inverse` (Ledger owns the full-width highlight + alt-bg); it uses
- * `ctx.selected` only for the `▌` marker + line-2 dim.
+ * {@link ./Ledger.tsx Ledger} (single column, `linesPerEntry=2`) over the shared
+ * {@link ./ResourceRow.tsx} two-line row. The cursor `useState`, keymap, selector usage, and focus
+ * wiring are unchanged; only the rendering moved to the primitives. `renderResourceEntry` does NOT
+ * set `inverse` (Ledger owns the full-width highlight + alt-bg); it uses `ctx.selected` only for the
+ * line-2 dim (and an optional cursor marker, disabled by default).
  */
 
-import { Box, Text } from 'ink';
+import { Text } from 'ink';
 import { memo, useCallback, useMemo, useState } from 'react';
 import { shallow } from 'zustand/shallow';
 import { useAppStore } from '../hooks/useAppStore.js';
@@ -27,15 +28,12 @@ import {
 } from '../hooks/useInputStores.js';
 import type { PanelKeymap } from '../input/keymap.js';
 import type { PanelId } from '../input/panels.js';
-import {
-  type ReportRowView,
-  type ReportsView,
-  useReportsView,
-} from '../selectors/reportsSelectors.js';
+import { type ReportsView, useReportsView } from '../selectors/reportsSelectors.js';
 import { useTheme } from '../theme/themeStore.js';
 import { useDocView } from './DocPane.js';
-import { Ledger, type LedgerEntryContext } from './Ledger.js';
+import { Ledger } from './Ledger.js';
 import { Pane } from './Pane.js';
+import { renderResourceEntry, renderResourceHeader } from './ResourceRow.js';
 
 const PANEL_ID: PanelId = 'reports';
 const PANEL_TITLE = 'Reports';
@@ -45,39 +43,10 @@ const PANEL_TITLE = 'Reports';
 
 type ReportsIntent = 'cursorDown' | 'cursorUp' | 'refresh' | 'star' | 'open';
 
-/**
- * Render one report row as a two-line Ledger entry. Line 1: cursor marker + star + name. Line 2:
- * char count · updated time. Ledger owns the highlight + alt-bg, so this only uses `ctx.selected`
- * for the `▌` marker + line-2 dim (no `inverse`). Single column (`maxColumns=1`).
- */
-function renderReportEntry(row: ReportRowView, ctx: LedgerEntryContext): React.ReactNode {
-  const marker = ctx.selected ? '▌' : ' ';
-  // FIXED-WIDTH star gutter (bug 2): `★ ` when starred, two spaces otherwise — name column is fixed.
-  const star = row.starred ? '★ ' : '  ';
-  return (
-    // Leading gutter is marker(1)+star(2)=3; line-2's 3-space indent matches so `charCount` sits under `name`.
-    <Box flexDirection="column" flexGrow={1} flexShrink={0}>
-      <Text wrap="truncate">{`${marker}${star}${row.name}`}</Text>
-      <Text dimColor={!ctx.selected} wrap="truncate">
-        {`   ${row.charCount} · ${row.updatedAt}`}
-      </Text>
-    </Box>
-  );
-}
-
-/**
- * The Ledger column-titles key — a dim two-line block labeling the entry lines: `name` over
- * `size · updated`. The 3-space leading indent matches {@link renderReportEntry}'s gutter
- * (marker + star) so the labels sit directly above the data columns (bug 1).
- */
-function renderReportsHeader(): React.ReactNode {
-  return (
-    <Box flexDirection="column" flexShrink={0}>
-      <Text dimColor>{'   name'}</Text>
-      <Text dimColor>{'   size · updated'}</Text>
-    </Box>
-  );
-}
+// The two-line row + header come from the shared {@link ./ResourceRow.tsx} renderer (plans/notes/
+// reports paint the identical doc-style entry — flush-left, star shown only when starred, no forced
+// cursor glyph). Reports' star-float sort lives in {@link ../selectors/reportsSelectors.js} and is
+// baked into `row.starred` first. `ReportRowView` is structurally a `ResourceRowFields`.
 
 /** The list body: empty/loading/error chrome (Ledger renders nothing for zero rows), else the
  * two-line entries via {@link Ledger}. */
@@ -110,8 +79,8 @@ function ReportsList({
       linesPerEntry={2}
       minColumns={1}
       maxColumns={1}
-      renderEntry={renderReportEntry}
-      header={renderReportsHeader}
+      renderEntry={renderResourceEntry}
+      header={renderResourceHeader}
       rowKey={(row) => row.name}
       onWindow={(win) => onOverflow({ above: win.start, below: view.rows.length - win.end })}
     />
