@@ -61,7 +61,8 @@ import { visualDown, visualUp } from '../input/chatBuffer.js';
 import { expandSpans, spanIds } from '../input/chatInputStore.js';
 import { reduceVimNormal } from '../input/chatVimReducer.js';
 import { readClipboardImage } from '../input/clipboardImage.js';
-import { type CommandCtx, dispatchCommand } from '../input/commandDispatch.js';
+import { BUILTIN_COMMAND_NAMES, type CommandCtx, dispatchCommand } from '../input/commandDispatch.js';
+import { expandTemplates } from '../input/expandTemplates.js';
 import type { ChatInputHandler } from '../input/dispatcher.js';
 import { CHAT_FOCUS, type FocusId, selectEffectiveFocus } from '../input/focusStore.js';
 import { selectActiveMode } from '../input/modeStore.js';
@@ -434,7 +435,13 @@ export function makeChatInputHandler(
             toastStore.getState().push('image still uploading…', { ttlMs: 4000 });
             return true;
           }
-          const message = expandSpans(buffer, draftState.pathsById());
+          let message = expandSpans(buffer, draftState.pathsById());
+          // Template expansion (leading `:name args` fill / inline `:name:` macros), upstream of the
+          // prefix dispatcher so a builtin `:command` still wins and an unknown `:foo` falls through.
+          const templateRegistry = new Map<string, string>(
+            appStore.getState().templates.items.map((t) => [t.name, t.body]),
+          );
+          message = expandTemplates(message, templateRegistry, BUILTIN_COMMAND_NAMES);
           if (message.length > 0) {
             const agentId = selectActiveAgentId(
               appStore.getState().conversations,
@@ -1013,6 +1020,9 @@ function Shell({
       toastStore.getState().push('note captured', { ttlMs: 6000 });
     },
     pushToast: (text, options) => toastStore.getState().push(text, options),
+    saveTemplate: (name, body) => {
+      void appStore.getState().actions.templates.save(name, body);
+    },
   };
 
   // The single root input loop for the whole app (rule 5) — installed exactly once, here.

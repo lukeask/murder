@@ -489,4 +489,232 @@ describe('SettingsModal', () => {
     await tick();
     expect(patches).toContainEqual({ llm: { roles: { notetaker: 'smart' } } });
   });
+
+  // --- Templates section ---
+
+  /** A spy templates handle recording rename/remove calls. */
+  function fakeTemplateActions(): {
+    handle: { remove(name: string): void; rename(oldName: string, newName: string): void };
+    removed: string[];
+    renamed: Array<[string, string]>;
+  } {
+    const removed: string[] = [];
+    const renamed: Array<[string, string]> = [];
+    const handle = {
+      remove: (name: string) => removed.push(name),
+      rename: (oldName: string, newName: string) => renamed.push([oldName, newName]),
+    };
+    return { handle, removed, renamed };
+  }
+
+  function templatesCurrent(
+    items: ReadonlyArray<{ name: string; body: string }>,
+    handle?: { remove(name: string): void; rename(oldName: string, newName: string): void },
+  ): Parameters<typeof settingsMode>[2] {
+    return {
+      ...RICH_CURRENT,
+      templates: items,
+      ...(handle !== undefined ? { templateActions: handle } : {}),
+    };
+  }
+
+  it('renders a Templates header + one row per template', async () => {
+    const stores = createInputStores(['notes'], 'notes');
+    const { actions } = fakeActions();
+    const { lastFrame, stdin } = render(<Harness stores={stores} />);
+    stores.modes.getState().enter(
+      settingsMode(
+        stores.modes,
+        actions,
+        templatesCurrent([
+          { name: 'greet', body: 'hello' },
+          { name: 'bye', body: 'goodbye' },
+        ]),
+      ),
+    );
+    await tick();
+    await walkUntilFocused(stdin, lastFrame, ':greet');
+    const frame = lastFrame() ?? '';
+    expect(frame).toContain('Templates');
+    expect(frame).toContain(':greet');
+    expect(frame).toContain(':bye');
+  });
+
+  it('shows the empty-state hint when there are no templates', async () => {
+    const stores = createInputStores(['notes'], 'notes');
+    const { actions } = fakeActions();
+    const { lastFrame, stdin } = render(<Harness stores={stores} />);
+    stores.modes.getState().enter(settingsMode(stores.modes, actions, templatesCurrent([])));
+    await tick();
+    // Walk down so the Templates section (below tiers/roles) scrolls into view.
+    await walkUntilFocused(stdin, lastFrame, 'notetaker: smart');
+    for (let i = 0; i < 20; i++) {
+      stdin.write('j');
+      await tick();
+      if ((lastFrame() ?? '').includes('no templates')) {
+        break;
+      }
+    }
+    expect(lastFrame()).toContain('no templates');
+  });
+
+  it('previews the template body when the cursor lands on its row', async () => {
+    const stores = createInputStores(['notes'], 'notes');
+    const { actions } = fakeActions();
+    const { lastFrame, stdin } = render(<Harness stores={stores} />);
+    stores.modes
+      .getState()
+      .enter(
+        settingsMode(
+          stores.modes,
+          actions,
+          templatesCurrent([{ name: 'greet', body: 'hello world body' }]),
+        ),
+      );
+    await tick();
+    await walkUntilFocused(stdin, lastFrame, ':greet');
+    const frame = lastFrame() ?? '';
+    expect(frame).toContain('preview');
+    expect(frame).toContain('hello world body');
+  });
+
+  it('Enter on a template begins a rename; a clean new name calls rename()', async () => {
+    const stores = createInputStores(['notes'], 'notes');
+    const { actions } = fakeActions();
+    const { handle, renamed } = fakeTemplateActions();
+    const { lastFrame, stdin } = render(<Harness stores={stores} />);
+    stores.modes
+      .getState()
+      .enter(
+        settingsMode(stores.modes, actions, templatesCurrent([{ name: 'old', body: 'b' }], handle)),
+      );
+    await tick();
+    await walkUntilFocused(stdin, lastFrame, ':old');
+    stdin.write('\r'); // begin rename (buffer seeded with "old")
+    await tick();
+    // Clear the seeded name and type a new one.
+    stdin.write('\x15'); // meta+u clears — but use deleteAll; the keymap binds meta+u. Fall back to backspaces.
+    await tick();
+    // Robust clear: three backspaces remove "old", then type "new".
+    stdin.write('\x7f');
+    stdin.write('\x7f');
+    stdin.write('\x7f');
+    await tick();
+    stdin.write('n');
+    stdin.write('e');
+    stdin.write('w');
+    await tick();
+    stdin.write('\r'); // commit
+    await tick();
+    expect(renamed).toContainEqual(['old', 'new']);
+  });
+
+  it('rename rejects an invalid name with a notice and does not call rename()', async () => {
+    const stores = createInputStores(['notes'], 'notes');
+    const { actions } = fakeActions();
+    const { handle, renamed } = fakeTemplateActions();
+    const { lastFrame, stdin } = render(<Harness stores={stores} />);
+    stores.modes
+      .getState()
+      .enter(
+        settingsMode(stores.modes, actions, templatesCurrent([{ name: 'old', body: 'b' }], handle)),
+      );
+    await tick();
+    await walkUntilFocused(stdin, lastFrame, ':old');
+    stdin.write('\r');
+    await tick();
+    // Append "!" → "old!" is invalid (`!` not in [A-Za-z0-9_-]).
+    stdin.write('!');
+    await tick();
+    stdin.write('\r'); // commit attempt
+    await tick();
+    expect(lastFrame()).toContain('invalid');
+    expect(renamed).toHaveLength(0);
+  });
+
+  it('rename rejects a collision with an existing template name', async () => {
+    const stores = createInputStores(['notes'], 'notes');
+    const { actions } = fakeActions();
+    const { handle, renamed } = fakeTemplateActions();
+    const { lastFrame, stdin } = render(<Harness stores={stores} />);
+    stores.modes.getState().enter(
+      settingsMode(
+        stores.modes,
+        actions,
+        templatesCurrent(
+          [
+            { name: 'aaa', body: 'x' },
+            { name: 'bbb', body: 'y' },
+          ],
+          handle,
+        ),
+      ),
+    );
+    await tick();
+    await walkUntilFocused(stdin, lastFrame, ':aaa');
+    stdin.write('\r'); // rename "aaa", buffer = "aaa"
+    await tick();
+    stdin.write('\x7f');
+    stdin.write('\x7f');
+    stdin.write('\x7f');
+    await tick();
+    stdin.write('b');
+    stdin.write('b');
+    stdin.write('b'); // collides with the other template
+    await tick();
+    stdin.write('\r');
+    await tick();
+    expect(lastFrame()).toContain('already exists');
+    expect(renamed).toHaveLength(0);
+  });
+
+  it('d on a template prompts a confirm; y deletes via remove()', async () => {
+    const stores = createInputStores(['notes'], 'notes');
+    const { actions } = fakeActions();
+    const { handle, removed } = fakeTemplateActions();
+    const { lastFrame, stdin } = render(<Harness stores={stores} />);
+    stores.modes
+      .getState()
+      .enter(
+        settingsMode(
+          stores.modes,
+          actions,
+          templatesCurrent([{ name: 'gone', body: 'b' }], handle),
+        ),
+      );
+    await tick();
+    await walkUntilFocused(stdin, lastFrame, ':gone');
+    stdin.write('d'); // open the confirm
+    await tick();
+    expect(lastFrame()).toContain('(y/n)');
+    stdin.write('y'); // confirm delete
+    await tick();
+    expect(removed).toContainEqual('gone');
+  });
+
+  it('d-confirm cancels on n without deleting', async () => {
+    const stores = createInputStores(['notes'], 'notes');
+    const { actions } = fakeActions();
+    const { handle, removed } = fakeTemplateActions();
+    const { lastFrame, stdin } = render(<Harness stores={stores} />);
+    stores.modes
+      .getState()
+      .enter(
+        settingsMode(
+          stores.modes,
+          actions,
+          templatesCurrent([{ name: 'stay', body: 'b' }], handle),
+        ),
+      );
+    await tick();
+    await walkUntilFocused(stdin, lastFrame, ':stay');
+    stdin.write('d');
+    await tick();
+    expect(lastFrame()).toContain('(y/n)');
+    stdin.write('n'); // cancel
+    await tick();
+    expect(removed).toHaveLength(0);
+    // The confirm prompt is gone.
+    expect(lastFrame()).not.toContain('(y/n)');
+  });
 });

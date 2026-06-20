@@ -66,6 +66,12 @@ import {
   type FavoritesState,
   initialFavoritesState,
 } from './favorites/favoritesSlice.js';
+import { createTemplatesActions, type TemplatesActions } from './templates/templatesActions.js';
+import {
+  createTemplatesSlice,
+  type TemplatesState,
+  initialTemplatesState,
+} from './templates/templatesSlice.js';
 import { createHistoryActions, type HistoryActions } from './history/historyActions.js';
 import {
   createHistorySlice,
@@ -154,6 +160,7 @@ export interface AppActions {
   ticketDetail: TicketDetailActions;
   conversations: ConversationsActions;
   favorites: FavoritesActions;
+  templates: TemplatesActions;
   docView: DocViewActions;
   settings: SettingsActions;
 }
@@ -175,6 +182,7 @@ export interface AppStore {
   ticketDetail: TicketDetailState;
   conversations: ConversationsState;
   favorites: FavoritesState;
+  templates: TemplatesState;
   docView: DocViewState;
   settings: SettingsState;
   actions: AppActions;
@@ -219,6 +227,7 @@ export function createAppStore(bus: BusClient): {
     ...createTicketDetailSlice(...a),
     ...createConversationsSlice(...a),
     ...createFavoritesSlice(...a),
+    ...createTemplatesSlice(...a),
     ...createDocViewSlice(...a),
     ...createSettingsSlice(...a),
     // Placeholder; replaced in step 2 now that we have the handle the actions need to `setState`.
@@ -238,6 +247,7 @@ export function createAppStore(bus: BusClient): {
     ticketDetail: createTicketDetailActions(bus, store),
     conversations: createConversationsActions(bus, store),
     favorites: createFavoritesActions(bus, store),
+    templates: createTemplatesActions(bus, store),
     docView: createDocViewActions(bus, store),
     settings: createSettingsActions(bus, store),
   };
@@ -369,6 +379,7 @@ export const initialAppState: Pick<
   | 'ticketDetail'
   | 'conversations'
   | 'favorites'
+  | 'templates'
   | 'docView'
   | 'settings'
 > = {
@@ -383,6 +394,7 @@ export const initialAppState: Pick<
   ticketDetail: initialTicketDetailState,
   conversations: initialConversationsState,
   favorites: initialFavoritesState,
+  templates: initialTemplatesState,
   docView: initialDocViewState,
   settings: initialSettingsState,
 };

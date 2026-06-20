@@ -11,6 +11,7 @@ project file (see `Config.load`).
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 from typing import Any, Literal
 
@@ -246,6 +247,70 @@ def config_dir() -> Path:
 
 def config_path() -> Path:
     return config_dir() / "config.yaml"
+
+
+def templates_path() -> Path:
+    """Userspace/global text-template registry (follows the user across repos)."""
+    return config_dir() / "templates.yaml"
+
+
+_TEMPLATE_NAME_RE = re.compile(r"^[A-Za-z0-9_-]+$")
+
+
+def load_templates(path: Path | None = None) -> list[dict[str, str]]:
+    """Read the userspace templates registry.
+
+    Tolerates a missing/empty file or a missing ``templates:`` key by returning
+    an empty list. Each record is coerced to ``{"name": str, "body": str}``.
+    """
+    tpath = path or templates_path()
+    if not tpath.exists():
+        return []
+    try:
+        raw = yaml.safe_load(tpath.read_text(encoding="utf-8")) or {}
+    except Exception:  # noqa: BLE001
+        return []
+    if not isinstance(raw, dict):
+        return []
+    records = raw.get("templates")
+    if not isinstance(records, list):
+        return []
+    out: list[dict[str, str]] = []
+    for rec in records:
+        if not isinstance(rec, dict):
+            continue
+        out.append({"name": str(rec.get("name", "")), "body": str(rec.get("body", ""))})
+    return out
+
+
+def _normalize_templates(records: Any) -> list[dict[str, str]]:
+    """Validate/coerce records: drop invalid names, de-dupe (last wins), sort."""
+    by_name: dict[str, str] = {}
+    if isinstance(records, list):
+        for rec in records:
+            if not isinstance(rec, dict):
+                continue
+            name = str(rec.get("name", ""))
+            if not _TEMPLATE_NAME_RE.match(name):
+                continue
+            by_name[name] = str(rec.get("body", ""))
+    return [{"name": n, "body": by_name[n]} for n in sorted(by_name)]
+
+
+def save_templates(records: Any, path: Path | None = None) -> list[dict[str, str]]:
+    """Normalize and atomically persist the templates registry.
+
+    Returns the normalized list (canonical state) so callers can sync to it.
+    """
+    normalized = _normalize_templates(records)
+    tpath = path or templates_path()
+    tpath.parent.mkdir(parents=True, exist_ok=True)
+    payload = yaml.safe_dump({"templates": normalized}, default_flow_style=False, sort_keys=False)
+    tmp = tpath.with_suffix(".tmp")
+    tmp.write_text(payload, encoding="utf-8")
+    os.chmod(tmp, 0o600)
+    tmp.replace(tpath)
+    return normalized
 
 
 _GATED_HARNESS = "native_coding_crow"

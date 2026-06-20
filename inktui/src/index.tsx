@@ -292,6 +292,10 @@ export function primeSlices(store: ReturnType<typeof createAppStore>['store']): 
   // from the persisted truth", and without this the local star set diverges from the server after a
   // disconnected optimistic toggle (or a failed save) until a full restart.
   void store.getState().actions.favorites.load();
+  // Re-load the template registry on every (re)connect too — same persisted-truth rationale as
+  // favorites: a disconnected optimistic save/remove/rename leaves the local list ahead of the
+  // server until a reload reconciles it.
+  void store.getState().actions.templates.load();
   // Re-load settings on every (re)connect too. The slice loads once from a mount-effect
   // (App.tsx `loadSettings`), but that single `settings.get` has no retry: if it races the daemon
   // socket coming up (e.g. a fresh TUI right after `murder up`) or is lost to a disconnect, the slice
