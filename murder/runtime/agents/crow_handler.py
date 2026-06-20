@@ -6,6 +6,7 @@ import asyncio
 import contextlib
 import hashlib
 import json
+import logging
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, cast
@@ -23,6 +24,8 @@ if TYPE_CHECKING:
     from murder.llm.clients.base import APIClient
     from murder.app.service.runtime_scope import AgentLifecycleHost as Runtime
 
+
+_LOG = logging.getLogger(__name__)
 
 # A single transient tmux/SQLite tick blip should not permanently fail a
 # ticket. Only after this many *consecutive* tick failures do we go terminal.
@@ -70,7 +73,18 @@ class CrowHandler(Daemon):
         self._idle_cached = False
         self._queued_message: str | None = None
         self._on_idle_callbacks: list[asyncio.Future[None]] = []
-        self._done_pane_hash: str | None = None
+        # DONE latch: once a crow has emitted `>>> DONE` in its assistant
+        # transcript we record that fact here so completion still fires even if
+        # the marker later scrolls out of the captured pane window. The latch is
+        # set when the marker is first observed and drives a single completion
+        # run; `_completion_in_flight` blocks a re-entrant double-fire and
+        # `_resolved_pane_hash` records the pane we last evaluated so a reprompt
+        # retry only re-fires once the crow produces fresh output (idempotency —
+        # see `_maybe_complete`).
+        self._done_latched = False
+        self._completion_in_flight = False
+        self._completion_succeeded = False
+        self._resolved_pane_hash: str | None = None
         self._log_path: Path | None = None
         self._terminal_failure = False
         # Set by a tick that detects a terminal ticket; the loop honours it and
@@ -237,13 +251,20 @@ class CrowHandler(Daemon):
                 self._log(result.message or "queued message delivery failed")
         self._fire_idle_callbacks_if_idle()
 
-        # Fast: pane hash + done detection (hash-gated to fire once per done state)
+        # Fast: pane hash bookkeeping (used by stuck detection downstream).
         h = hashlib.sha256(pane.encode("utf-8", errors="replace")).hexdigest()
         self._last_pane_hash = h
 
-        if self.harness.detect_done(pane) and h != self._done_pane_hash:
-            self._done_pane_hash = h
-            await self._run_completion()
+        # Fast: DONE detection via a latch. detect_done() scans the assistant
+        # transcript projected from the captured pane; the marker can scroll out
+        # of a later capture, so once we have *ever* seen it we latch the fact
+        # and drive completion off the latch — not off the current pane window.
+        # This is intentionally NOT gated on pane-hash change or idle state: a
+        # DONE that lands on a hash-stable / idle beat must still fire.
+        if not self._done_latched and self.harness.detect_done(pane):
+            self._latch_done()
+        if self._done_latched:
+            await self._maybe_complete(h)
             return
 
         # Slow: orchestration (time-gated; asks/notes are not idempotent at 5Hz)
@@ -355,17 +376,64 @@ class CrowHandler(Daemon):
             self._last_heartbeat_emit_bucket = bucket
             await self.runtime.publish_snapshot(Entity.AGENT, self.id)
 
-    async def _run_completion(self) -> None:
+    def _latch_done(self) -> None:
+        """Record that this crow has emitted ``>>> DONE`` (once)."""
+        if self._done_latched:
+            return
+        self._done_latched = True
+        self._log(f"crow DONE marker observed for {self.ticket_id} — latched")
+        _LOG.info(
+            "crow.done.detected", extra={"agent_id": self.id, "ticket_id": self.ticket_id}
+        )
+
+    async def _maybe_complete(self, pane_hash: str) -> None:
+        """Run completion at most once per latched DONE.
+
+        Single-fire guarantee: `_completion_in_flight` is set *before* awaiting
+        the coordinator, so a re-entrant tick (the loop awaits between ticks)
+        that still sees the latch set cannot start a second `handle_done()` for
+        the same DONE. After a *non-completing* verdict (checks failed → the
+        coordinator reprompted the crow) the latch is cleared so the crow's next
+        `>>> DONE` — emitted once it has produced fresh output (a new pane hash) —
+        re-triggers checks. `_resolved_pane_hash` suppresses an immediate re-fire
+        on the identical, not-yet-changed pane.
+        """
+        if self._completion_in_flight or self._completion_succeeded:
+            return
+        if pane_hash == self._resolved_pane_hash:
+            # Same DONE we already evaluated and reprompted on; wait for the crow
+            # to produce new output before re-running checks.
+            return
+        self._completion_in_flight = True
+        try:
+            completed = await self._run_completion()
+        finally:
+            self._completion_in_flight = False
+        self._resolved_pane_hash = pane_hash
+        if completed:
+            # Terminal success: never run completion again for this crow.
+            self._completion_succeeded = True
+        else:
+            # Coordinator did not transition the ticket done (checks failed /
+            # reprompt). Re-arm so a fresh DONE after the crow's fix fires again.
+            self._done_latched = False
+
+    async def _run_completion(self) -> bool:
         from murder.verdict.completion.coordinator import DoneHandleResult
 
         self._log(f"crow done detected for {self.ticket_id} — running completion checks…")
+        _LOG.info(
+            "crow.completion.triggered",
+            extra={"agent_id": self.id, "ticket_id": self.ticket_id},
+        )
         result = await self.coordinator.handle_done(
             self.ticket_id,
             crow_session=self.crow_session,
             repo_root=self.workspace_root,
         )
         if not isinstance(result, DoneHandleResult):
-            return
+            return False
+        return result.completed
 
     def is_crow_idle(self) -> bool:
         return self._idle_cached
