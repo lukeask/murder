@@ -44,6 +44,46 @@ deps: []
     assert "model" in parsed.parse_error
 
 
+def test_parse_ticket_recovers_title_from_heading_when_frontmatterless() -> None:
+    # Bug H4: `ticket.quick_create` writes a frontmatter-less `# {title}` file.
+    # The reconcile re-parse must recover the typed title from the heading instead
+    # of falling back to `default_title` (the id), which clobbered the DB title.
+    parsed = parse_ticket(
+        "# Brand new test ticket\n\n## Plan\n\n## Working Notes\n",
+        default_title="t031",
+    )
+
+    assert parsed.parse_error is None
+    assert parsed.title == "Brand new test ticket"
+
+
+def test_parse_ticket_heading_fallback_skips_checklist_header() -> None:
+    # The structural `# Checklist` header must not be mistaken for a title; with no
+    # other heading, fall back to default_title.
+    parsed = parse_ticket(
+        "# Checklist\n[ ] do thing\n",
+        default_title="t032",
+    )
+
+    assert parsed.title == "t032"
+
+
+def test_parse_ticket_heading_fallback_not_applied_when_frontmatter_present() -> None:
+    # A frontmatter ticket missing `title:` is a reportable error, NOT a heading
+    # scrape — keep title None so the missing-field error stands.
+    parsed = parse_ticket(
+        """---
+deps: []
+---
+# Heading
+""",
+    )
+
+    assert parsed.title is None
+    assert parsed.parse_error is not None
+    assert "title" in parsed.parse_error
+
+
 def test_parse_ticket_reports_malformed_yaml_without_raising() -> None:
     parsed = parse_ticket(
         """---

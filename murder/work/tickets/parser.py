@@ -12,6 +12,7 @@ import yaml
 from murder.state.storage.filesystem import atomic_write_text
 
 _FRONTMATTER_DELIM = "---"
+_MISSING_CLOSE_ERROR = "ticket markdown is missing closing frontmatter delimiter"
 _CANONICAL_FRONTMATTER_KEYS = ("title", "deps", "harness", "model", "worktree")
 _ALIASES = {
     "dependency": "deps",
@@ -51,7 +52,16 @@ def parse_ticket(md_text: str, *, default_title: str | None = None) -> ParsedTic
         front_text, body, delimiter_error = _split_frontmatter(md_text)
         raw: dict[str, Any] = {}
         errors: list[str] = []
-        if delimiter_error is not None:
+        # The planner writes a frontmatter-less ticket `.md` by convention (see
+        # prompts/planner.md): three prose sections, no `---` block. That file
+        # MUST still ingest to a `planned` row (the carve form fills harness/
+        # model/title later). So a total *absence* of frontmatter is not an
+        # error — only a *malformed* (opened-but-unclosed / non-mapping) block
+        # is. ``_split_frontmatter`` distinguishes the two: ``has_frontmatter``
+        # is False with no delimiter_error when the file simply has no `---`.
+        has_frontmatter = front_text is not None
+        frontmatter_required = has_frontmatter or delimiter_error == _MISSING_CLOSE_ERROR
+        if delimiter_error == _MISSING_CLOSE_ERROR:
             errors.append(delimiter_error)
         elif front_text is not None:
             try:
@@ -73,18 +83,29 @@ def parse_ticket(md_text: str, *, default_title: str | None = None) -> ParsedTic
         }
 
         title = _optional_non_empty_str(known.get("title"))
+        if title is None and not frontmatter_required:
+            # Frontmatter-less tickets (planner files, `ticket.quick_create`) carry
+            # the title in the leading `# {title}` heading. Recover it so a reconcile
+            # doesn't clobber the real title with the id fallback. Only applied when
+            # no frontmatter block is present — a frontmatter ticket's title MUST come
+            # from the `title:` field (a missing one is a reportable error, not a
+            # heading scrape).
+            title = _heading_title(body)
         if title is None:
             title = _optional_non_empty_str(default_title)
-        if title is None:
+        if title is None and frontmatter_required:
             errors.append("ticket frontmatter requires a non-empty title")
 
         deps = _coerce_str_list(known.get("deps"), "deps", errors)
         harness = _optional_string_field(known.get("harness"), "harness", errors)
         model = _optional_string_field(known.get("model"), "model", errors)
         worktree = _optional_string_field(known.get("worktree"), "worktree", errors)
-        if harness is None:
+        # harness/model are only *required* when the author chose to write a
+        # frontmatter block. A frontmatter-less planner file leaves them null;
+        # they are supplied later by the carve form (apply_carve_ready).
+        if harness is None and frontmatter_required:
             errors.append("ticket frontmatter requires a non-empty harness")
-        if model is None:
+        if model is None and frontmatter_required:
             errors.append("ticket frontmatter requires a non-empty model")
 
         return ParsedTicket(
@@ -104,11 +125,13 @@ def parse_ticket(md_text: str, *, default_title: str | None = None) -> ParsedTic
 
 def _split_frontmatter(md_text: str) -> tuple[str | None, str, str | None]:
     if not md_text.startswith(f"{_FRONTMATTER_DELIM}\n"):
-        return None, md_text, "ticket markdown must start with YAML frontmatter"
+        # No frontmatter at all: valid (the planner writes such files). The
+        # caller treats this as "frontmatter-less", NOT as a parse error.
+        return None, md_text, None
     try:
         front_text, body = md_text[4:].split(f"\n{_FRONTMATTER_DELIM}", 1)
     except ValueError:
-        return None, md_text, "ticket markdown is missing closing frontmatter delimiter"
+        return None, md_text, _MISSING_CLOSE_ERROR
     if body.startswith("\n"):
         body = body[1:]
     return front_text, body, None
@@ -122,6 +145,21 @@ def _normalize_aliases(raw: dict[str, Any]) -> dict[str, Any]:
             continue
         normalized[canonical] = value
     return normalized
+
+
+def _heading_title(body: str) -> str | None:
+    """Recover a title from the leading `# {title}` heading of a frontmatter-less ticket.
+
+    Skips the `# Checklist` section header (matched by ``_CHECKLIST_HEADER_RE``),
+    which is structural, not a title. Returns the first real level-one heading's
+    text, or None if there is none.
+    """
+    for line in body.splitlines():
+        if _CHECKLIST_HEADER_RE.match(line):
+            continue
+        if _LEVEL_ONE_HEADER_RE.match(line):
+            return _optional_non_empty_str(line[1:])
+    return None
 
 
 def _optional_non_empty_str(value: object) -> str | None:

@@ -106,6 +106,11 @@ class TicketOps:
                 "ok": False,
                 "error": f"ticket id {ticket_id} already exists on disk (allocation collision)",
             }
+        # The title is carried by the `# {title}` heading (this file is
+        # frontmatter-less by convention, like a planner ticket — harness/model
+        # are filled in later by carve). `parse_ticket` recovers the title from
+        # this heading when frontmatter is absent, so TicketSync's reconcile
+        # preserves the typed title instead of falling back to the id.
         path.write_text(f"# {title}\n\n## Plan\n\n## Working Notes\n")
 
         # Insert directly into DB — bypasses the 1.5 s TicketSync poll.
