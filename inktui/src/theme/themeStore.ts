@@ -23,7 +23,7 @@
  *   2. `SettingsModal` (`../components/SettingsModal.tsx`) *previews* a browsed theme by calling
  *      {@link setTheme} directly — deliberately bypassing settings so the preview stays transient.
  *      It commits through `actions.settings.update` on Save (which flows back via caller 1) and
- *      reverts with `setTheme(persistedTheme)` on cancel.
+ *      reverts with `setTheme(persistedTheme)` on cancel or when the cursor leaves the theme rows.
  *
  * So: to *change the persisted scheme*, write through `actions.settings.update`, never `setTheme`.
  * Direct {@link setTheme} is reserved for the transient preview path above.

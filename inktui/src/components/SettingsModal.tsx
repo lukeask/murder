@@ -11,9 +11,10 @@
  *     ({@link ../terminal/capsStore.js kittySupported} === `false`). Selecting a row commits the
  *     modifier immediately (live: the dispatcher/footer/shim react at once).
  *  2. **Theme** — a select over the known {@link ../theme/palettes.js ThemeId}s. Moving the cursor
- *     onto a theme row **live-previews** it ({@link ../theme/themeStore.js setTheme} fires on cursor
- *     move, recoloring the whole UI under the modal); the preview is *committed* only on Save and is
- *     *reverted* to the persisted value on cancel/Esc — so browsing themes never persists a half-pick.
+ *     across theme rows **live-previews** them ({@link ../theme/themeStore.js setTheme} fires on
+ *     cursor move, recoloring the whole UI under the modal); the preview is *committed* only on
+ *     Enter and is *reverted* to the persisted value on cancel/Esc or when the cursor leaves the
+ *     theme section — so browsing themes never persists a half-pick or affects later navigation.
  *  3. **Pane gap** — a radio over `0`–`4` spaces of inter-pane border gap (live).
  *  4. **Harnesses** — collaborator (a radio over the 5 harnesses + a "(default)" row that clears the
  *     override) and crow (a checkbox pool over the 5 + a "reset to default" row; ≥1 must stay checked).
@@ -431,6 +432,14 @@ export function settingsMode(
     }
   }
 
+  /** Drop an uncommitted theme preview when navigation leaves the theme rows. */
+  function restoreThemePreview(): void {
+    if (s.theme !== s.persistedTheme) {
+      s.theme = s.persistedTheme;
+      setTheme(s.persistedTheme);
+    }
+  }
+
   /** Move the cursor by `delta`, skipping header/read-only rows (wrapping). */
   function moveCursor(delta: number): void {
     const len = s.rows.length;
@@ -439,13 +448,15 @@ export function settingsMode(
       idx = (idx + delta + len) % len;
       const row = s.rows[idx];
       if (row !== undefined && isSelectable(row)) {
+        const prev = s.rows[s.cursor];
         s.cursor = idx;
         // Live theme preview: landing the cursor on a theme row applies it immediately (committed on
-        // Save, reverted on cancel — see the class doc). Leaving a theme row keeps the preview until
-        // the cursor lands on a *different* theme (or the modal is dismissed).
+        // Enter, reverted on cancel or when the cursor leaves the theme section).
         if (row.kind === 'theme') {
           s.theme = row.value;
           setTheme(row.value);
+        } else if (prev?.kind === 'theme') {
+          restoreThemePreview();
         }
         s.notice = null;
         refresh();
@@ -681,7 +692,9 @@ export function settingsMode(
         break;
       case 'theme':
         // The preview already applied on cursor-move; Enter commits it to the persisted config.
+        s.theme = row.value;
         s.persistedTheme = row.value;
+        setTheme(row.value);
         void actions.update({ theme: row.value });
         s.notice = 'Theme saved';
         refresh();
@@ -864,8 +877,8 @@ const CTRL_UNSUPPORTED_NOTICE =
 
 function SettingsDialog({ state: s }: { readonly state: SettingsState }): JSX.Element {
   const theme = useTheme();
-  // Design width 64, clamped to the live terminal so a narrow screen doesn't overflow the box.
-  const width = useModalWidth(64);
+  // Design width 84, clamped to the live terminal so a narrow screen doesn't overflow the box.
+  const width = useModalWidth(84);
   const kitty = useKittySupport();
   const ctrlAvailable = kitty === true;
   const view = rowWindow(s.rows, s.cursor);
@@ -927,9 +940,9 @@ function SettingsDialog({ state: s }: { readonly state: SettingsState }): JSX.El
   );
 }
 
-/** The maximum number of section rows shown at once — a scroll-by-cursor window so the modal stays
- * usable at 80x24 once all sections are present (the row list is far taller than the screen). */
-const VISIBLE_ROWS = 16;
+/** The maximum number of section rows shown at once — a scroll-by-cursor window so the modal shows
+ * more settings at once while still avoiding an unbounded frame. */
+const VISIBLE_ROWS = 22;
 
 /** Compute the visible row window around the cursor. Returns the slice (with original indices, so
  * focus math stays correct) plus the count of rows hidden above/below (shown as "↑ N more"). */
@@ -1033,7 +1046,7 @@ function RowView({
   }
 
   if (row.kind === 'theme') {
-    const selected = row.value === s.theme;
+    const selected = row.value === s.persistedTheme;
     const mark = selected ? '(•) ' : '( ) ';
     const color = focused ? theme.warning : theme.text;
     return (

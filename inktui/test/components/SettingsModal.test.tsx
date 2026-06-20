@@ -6,8 +6,9 @@
  *  2. The settings chord (`alt+o`) opens the modal end-to-end through the dispatcher.
  *  3. Modifier radio: selecting `alt` commits via `update`; ctrl/both disabled + notice when kitty
  *     is unsupported (and the disabled rows refuse selection).
- *  4. Theme select: cursor-move live-previews (setTheme fires); Esc reverts to the persisted theme.
- *  5. Theme commit on Enter persists via `update`.
+ *  4. Theme select: cursor-move live-previews within the theme rows; leaving the section / Esc
+ *     reverts to the persisted theme.
+ *  5. Theme commit on Enter persists via `update` and remains active after leaving the section.
  *  6. Key rebind: Enter on a binding row captures the next key; a clean char commits via `update`;
  *     a reserved char (digit / ctrl-exit letter) and a collision are both rejected with a notice.
  */
@@ -243,24 +244,33 @@ describe('SettingsModal', () => {
     expect(lastFrame()).toContain('kitty keyboard protocol');
   });
 
-  it('moving the cursor onto a theme row live-previews; Esc reverts', async () => {
+  it('moving onto a theme row previews; leaving the theme section reverts', async () => {
     const { stores, enter } = setup();
-    const { stdin } = render(<Harness stores={stores} />);
+    const { lastFrame, stdin } = render(<Harness stores={stores} />);
     enter();
     await tick();
     expect(themeStore.getState().id).toBe(DEFAULT_THEME_ID);
 
-    // Navigate down to the second theme row (everforest-light). Rows: 3 modifiers + 1st theme is the
-    // default; one more `j` lands on the alternate theme → preview fires.
-    // Walk down until the theme id changes (robust to row counts).
     const other: ThemeId = 'everforest-light';
-    for (let i = 0; i < 20 && themeStore.getState().id !== other; i++) {
-      stdin.write('j');
-      await tick();
-    }
+    await walkUntilFocused(stdin, lastFrame, other);
+    expect(themeStore.getState().id).toBe(other);
+    expect((lastFrame() ?? '').split('\n').find((l) => l.includes('›'))).toContain('( )');
+
+    await walkUntilFocused(stdin, lastFrame, '0 (flush)');
+    expect(themeStore.getState().id).toBe(DEFAULT_THEME_ID);
+  });
+
+  it('Esc while previewing a theme reverts to the persisted theme', async () => {
+    const { stores, enter } = setup();
+    const { lastFrame, stdin } = render(<Harness stores={stores} />);
+    enter();
+    await tick();
+    expect(themeStore.getState().id).toBe(DEFAULT_THEME_ID);
+
+    const other: ThemeId = 'everforest-light';
+    await walkUntilFocused(stdin, lastFrame, other);
     expect(themeStore.getState().id).toBe(other);
 
-    // Esc reverts the live preview to the persisted (default) theme.
     stdin.write(ESC);
     await tick();
     expect(themeStore.getState().id).toBe(DEFAULT_THEME_ID);
@@ -268,17 +278,20 @@ describe('SettingsModal', () => {
 
   it('Enter on a theme row commits the previewed theme via update', async () => {
     const { stores, patches, enter } = setup();
-    const { stdin } = render(<Harness stores={stores} />);
+    const { lastFrame, stdin } = render(<Harness stores={stores} />);
     enter();
     await tick();
     const other: ThemeId = 'everforest-light';
-    for (let i = 0; i < 20 && themeStore.getState().id !== other; i++) {
-      stdin.write('j');
-      await tick();
-    }
+    await walkUntilFocused(stdin, lastFrame, other);
+    expect(themeStore.getState().id).toBe(other);
     stdin.write('\r');
     await tick();
     expect(patches).toContainEqual({ theme: other });
+    expect(themeStore.getState().id).toBe(other);
+    expect((lastFrame() ?? '').split('\n').find((l) => l.includes('›'))).toContain('(•)');
+
+    await walkUntilFocused(stdin, lastFrame, '0 (flush)');
+    expect(themeStore.getState().id).toBe(other);
   });
 
   it('rebinds a key: Enter captures, a clean char commits via update', async () => {
