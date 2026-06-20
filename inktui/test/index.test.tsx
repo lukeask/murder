@@ -11,7 +11,10 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { resolveSocketPath } from '../src/index.js';
+import { FakeBusClient } from '../src/bus/FakeBusClient.js';
+import { primeSlices, resolveSocketPath } from '../src/index.js';
+import type { SettingsWire } from '../src/store/settings/settingsActions.js';
+import { createAppStore } from '../src/store/store.js';
 
 describe('resolveSocketPath', () => {
   it('returns MURDER_BUS_SOCKET verbatim (no rehashing the per-project path)', () => {
@@ -25,5 +28,64 @@ describe('resolveSocketPath', () => {
 
   it('throws when MURDER_BUS_SOCKET is empty or whitespace', () => {
     expect(() => resolveSocketPath({ MURDER_BUS_SOCKET: '   ' })).toThrow(/MURDER_BUS_SOCKET/);
+  });
+});
+
+/** A canned `settings.get` reply with a non-default modifier, so a successful prime is visible as a
+ * change away from `initialSettingsState` (which uses `alt`). */
+function settingsWire(overrides: Partial<SettingsWire> = {}): SettingsWire {
+  return {
+    theme: 'everforest-dark',
+    modifier: 'ctrl',
+    key_overrides: {},
+    pane_gap: 0,
+    vim_mode: false,
+    startup_rogue: null,
+    collaborator_harness: null,
+    crow_harnesses: ['cursor', 'claude_code'],
+    effective_collaborator_harness: 'claude_code',
+    effective_crow_harnesses: ['cursor', 'claude_code'],
+    llm: {},
+    llm_env: { groq: false, cerebras: false, openrouter: false },
+    ...overrides,
+  };
+}
+
+/**
+ * Regression guard for the settings-wipe bug: `primeSlices` runs on every (re)connect, but settings
+ * was the lone persisted slice missing from it — it loaded once from a mount-effect with no retry, so
+ * a `settings.get` that raced the daemon socket after `murder up` stranded the slice at its defaults
+ * (modifier `alt`, crow-harness fallback) for the whole session even though config.yaml was intact.
+ * Priming settings here is what lets the slice self-heal on reconnect like every other slice.
+ */
+describe('primeSlices', () => {
+  it('re-fetches settings on every (re)connect (settings-wipe regression)', async () => {
+    const fake = new FakeBusClient();
+    fake.stubRpc('settings.get', { ok: true, settings: settingsWire() });
+    const { store, dispose } = createAppStore(fake);
+
+    expect(store.getState().settings.modifier).toBe('alt'); // pre-prime default
+
+    primeSlices(store);
+    await new Promise((r) => setTimeout(r, 0)); // let the fire-and-forget RPCs settle
+
+    expect(fake.rpcCalls.some((c) => c.method === 'settings.get')).toBe(true);
+    const settings = store.getState().settings;
+    expect(settings.status).toBe('ready');
+    expect(settings.modifier).toBe('ctrl'); // loaded from the reply, not stranded at the default
+    dispose();
+  });
+
+  it('also primes favorites on (re)connect (the sibling self-heal it mirrors)', async () => {
+    const fake = new FakeBusClient();
+    fake.stubRpc('settings.get', { ok: true, settings: settingsWire() });
+    fake.stubRpc('tui.load_favorites', { ok: true, favorites: [] });
+    const { store, dispose } = createAppStore(fake);
+
+    primeSlices(store);
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(fake.rpcCalls.some((c) => c.method === 'tui.load_favorites')).toBe(true);
+    dispose();
   });
 });

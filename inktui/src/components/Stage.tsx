@@ -73,12 +73,15 @@ import {
   useConversationTurns,
   useOpenChatPanes,
 } from '../selectors/conversationsSelectors.js';
+import { harnessModelFooter } from '../selectors/harnessDisplay.js';
 import type { ConversationsState } from '../store/conversations/conversationsSlice.js';
 import type { OpenDoc } from '../store/docView/docViewSlice.js';
 import type { FavoritesState } from '../store/favorites/favoritesSlice.js';
 import type { RosterState } from '../store/roster/rosterSlice.js';
 import { useTheme } from '../theme/themeStore.js';
+import { useBottomBarLines } from './BottomBar.js';
 import { computeScrollThumb, StageDocPane } from './DocPane.js';
+import { META_SEP } from './glyphs.js';
 import { Pane } from './Pane.js';
 
 /** The Stage focus id for a crow's chat pane. The single place the `stage:chat:` scheme is minted, so
@@ -99,6 +102,17 @@ function kindLabel(kind: AgentIdentity['kind']): string {
     default:
       return 'ticket';
   }
+}
+
+/** The crow's `harness ◇ model` bottom-border label, looked up from the roster by agent id. `null`
+ * when the row is gone or neither part is known — the bottom border then draws plain. Rule 2: the
+ * wording lives in {@link ../selectors/harnessDisplay.js}; this just joins it to the roster row. */
+function footerFor(roster: RosterState, agentId: string): string | null {
+  const row = roster.rows.find((r) => r.agentId === agentId);
+  if (row === undefined) {
+    return null;
+  }
+  return harnessModelFooter(row.harness, row.model, META_SEP);
 }
 
 /** How many turns scroll past per `j`/`k` (the window step). */
@@ -182,6 +196,7 @@ const ChatPane = memo(function ChatPane({
   identity,
   conversations,
   chatTarget,
+  footer,
 }: {
   readonly identity: AgentIdentity;
   readonly conversations: ConversationsState;
@@ -189,6 +204,9 @@ const ChatPane = memo(function ChatPane({
    * the effective focus, the targeted pane is highlighted too (so the user sees where a typed
    * message will land without moving focus off the input). */
   readonly chatTarget: boolean;
+  /** The crow's `harness ◇ model` label for the bottom border, or `null` when unknown (so the
+   * bottom border draws plain). Derived in the Stage from the roster row (rule 2). */
+  readonly footer: string | null;
 }): JSX.Element {
   const theme = useTheme();
   const focusId: FocusId = chatPaneFocusId(identity.agentId);
@@ -294,12 +312,15 @@ const ChatPane = memo(function ChatPane({
       focused={highlighted}
       titleExtra={
         <>
-          <Text dimColor>{`[${kindLabel(identity.kind)}]`}</Text>
+          {/* A space precedes the bracket so the title reads `name [rogue]`, not `name[rogue]`. */}
+          <Text dimColor>{` [${kindLabel(identity.kind)}]`}</Text>
           {/* Live `g<digits>` capture indicator — shows the line number as it is typed. */}
           {goto.pending !== null && <Text color={theme.warning}>{` g${goto.pending}`}</Text>}
         </>
       }
       scrollbar={{ height: effectiveHeight, thumb }}
+      // The harness ◇ model label rides the bottom border, right-aligned to mirror the top-left name.
+      footerRight={footer !== null ? <Text dimColor>{footer}</Text> : undefined}
     >
       {/* Fill box: sizes to the Pane's inner content area (flexGrow + overflow hidden), so
           measureElement reports the room we HAVE, not the rows we drew. */}
@@ -325,6 +346,140 @@ type ScrollIntent = 'scrollUp' | 'scrollDown';
 /** A stable empty keymap for a blurred pane (so the `useMemo`/registration identity doesn't churn).
  * Typed to the pane's full intent union so the `focused ? keymap : EMPTY_KEYMAP` ternary is one type. */
 const EMPTY_KEYMAP: PanelKeymap<ScrollIntent | GotoIntent> = { keymap: [], onIntent() {} };
+
+/**
+ * The chat-history grid — one cross-axis line per `rows` entry, panes splitting each line.
+ *
+ * Why this measures its own height and assigns INTEGER row heights (instead of `flexGrow` rows):
+ * a chat pane wears a bottom-border footer ({@link ./Pane.js Pane}'s `footerRight`), and that footer
+ * — like any node positioned at a pane's bottom edge — drops its text when the pane lands on a
+ * fractional (half-cell) height, which is exactly what `flexGrow` rows produce when an odd grid height
+ * splits across ≥2 rows (Ink's own border survives as border-box space, but a footer overlay's
+ * position rounds independently and clips). Measuring the grid's height once and handing each row an
+ * explicit integer height (remainder spread across the first rows) means every pane gets a whole-cell
+ * box, so the footer text is always drawn. Before the first measure (height 0) we fall back to
+ * `flexGrow` so the first paint is still sane. The container itself stays `flexGrow` (its height is
+ * parent-driven); only the ROWS are pinned — so there is no measure→resize feedback loop.
+ */
+function ChatGrid({
+  rows,
+  chatWeight,
+  paneGap,
+  conversations,
+  roster,
+  targetAgentId,
+}: {
+  readonly rows: readonly (readonly AgentIdentity[])[];
+  readonly chatWeight: number;
+  readonly paneGap: number;
+  readonly conversations: ConversationsState;
+  readonly roster: RosterState;
+  readonly targetAgentId: string | null;
+}): JSX.Element {
+  const ref = useRef<DOMElement | null>(null);
+  const [measuredHeight, setMeasuredHeight] = useState(0);
+  // ## The stale-height latch (the landscape Stage doc-overflow fix)
+  // This grid measures its own (`flexGrow`, slot-bounded) height and assigns each row a FIXED
+  // `height={rowHeight}` — but `measuredHeight` is ONE RENDER STALE. On a no-resize Body SHRINK the
+  // stale-too-large value makes the fixed rows overflow the now-shorter slot; the overflow propagates
+  // past the Body's `height={rows}` clip and the terminal scrolls the TopBar into scrollback. Because a
+  // terminal scroll is IRRECOVERABLE (Ink only erases `rows` lines, so the lost top line never
+  // repaints) it is not enough to settle to the right height EVENTUALLY — not even one frame may exceed
+  // the slot. The trigger is the BottomBar hint growing a row when a Stage doc is opened/focused (its
+  // scroll keybinds), which shrinks the Body with no resize event. Fix, in layers:
+  //  (1) When the BottomBar line count CHANGES we drop back to the pre-measure `flexGrow` row sizing
+  //      THIS SAME RENDER (the `staleByFooter` branch below sets the effective height to 0 during
+  //      render, the canonical "derive state from changed input while rendering" pattern). `flexGrow`
+  //      rows can never overflow their slot, so the shrink frame is emitted at the correct height — no
+  //      transient over-tall frame, no scroll. `seen` is reconciled in the effect, then the real
+  //      measurement resumes and the integer distribution settles.
+  //  (2) The rows are also `flexShrink={1}` (below) as belt-and-suspenders: any other stale-too-tall
+  //      total CLIPS to the slot instead of forcing it taller.
+  // (The doc region needs neither: it is pure `flexGrow` with no fixed-height child, so it shrinks
+  // cleanly — which is why only the chat grid latched.)
+  const footerLineCount = useBottomBarLines().length;
+  const [seenFooterLineCount, setSeenFooterLineCount] = useState(footerLineCount);
+  const staleByFooter = footerLineCount !== seenFooterLineCount;
+  useLayoutEffect(() => {
+    if (ref.current === null) return;
+    if (staleByFooter) {
+      setSeenFooterLineCount(footerLineCount);
+      setMeasuredHeight(0);
+      return;
+    }
+    const { height } = measureElement(ref.current);
+    if (height !== measuredHeight) setMeasuredHeight(height);
+  });
+  // The height that actually drives the row sizing: 0 (→ `flexGrow` fallback) on the render where the
+  // BottomBar count just changed, so the shrink frame can't overflow; the measured value otherwise.
+  const effectiveHeight = staleByFooter ? 0 : measuredHeight;
+  // Distribute the measured height into integer per-row heights summing to exactly the available
+  // space (so the rows neither overflow nor leave a gap): `base` each, with the first `remainder`
+  // rows getting one extra cell. The rowGaps are subtracted out first.
+  const n = rows.length;
+  const gaps = paneGap * Math.max(0, n - 1);
+  const avail = Math.max(0, effectiveHeight - gaps);
+  const base = n > 0 ? Math.floor(avail / n) : 0;
+  const remainder = avail - base * n;
+  return (
+    <Box
+      ref={ref}
+      flexGrow={chatWeight}
+      flexBasis={0}
+      minWidth={0}
+      minHeight={0}
+      overflow="hidden"
+      flexDirection="column"
+      rowGap={paneGap}
+    >
+      {rows.map((row, i) => {
+        // Pinned integer height once measured; `flexGrow` fallback before the first measure AND on the
+        // render where the BottomBar count just changed (`effectiveHeight === 0`), so a Body shrink
+        // never emits an over-tall frame (see the stale-height-latch note above).
+        const rowHeight = effectiveHeight > 0 ? base + (i < remainder ? 1 : 0) : undefined;
+        const sizing =
+          rowHeight !== undefined
+            ? { height: rowHeight, flexShrink: 1 }
+            : { flexGrow: 1, flexBasis: 0 };
+        return (
+          // Row key = its agent-id membership join. The inner panes key by stable agentId (below),
+          // so a pane that stays in the same row keeps its ChatPane scroll offset. But re-gridding
+          // that moves an agent to a different row changes that row's join-key, remounting the row
+          // and resetting the local scroll state of every pane in it — accepted for v0 (favoriting
+          // reshuffles rows rarely and a reset-to-bottom there is tolerable).
+          <Box
+            key={row.map((identity) => identity.agentId).join(',')}
+            flexDirection="row"
+            {...sizing}
+            minWidth={0}
+            minHeight={0}
+            overflow="hidden"
+            columnGap={paneGap}
+          >
+            {row.map((identity) => (
+              <Box
+                key={identity.agentId}
+                flexGrow={1}
+                flexBasis={0}
+                minWidth={0}
+                minHeight={0}
+                overflow="hidden"
+                flexDirection="column"
+              >
+                <ChatPane
+                  identity={identity}
+                  conversations={conversations}
+                  chatTarget={targetAgentId === identity.agentId}
+                  footer={footerFor(roster, identity.agentId)}
+                />
+              </Box>
+            ))}
+          </Box>
+        );
+      })}
+    </Box>
+  );
+}
 
 // ---------------------------------------------------------------------------
 // Stage
@@ -458,51 +613,14 @@ export const Stage = memo(function Stage({
           the grid: a `rowGap` between stacked grid lines, a `columnGap` between side-by-side panes in
           a line (0 = flush borders, the default). */}
       {rows.length > 0 && (
-        <Box
-          flexGrow={chatWeight}
-          flexBasis={0}
-          minWidth={0}
-          minHeight={0}
-          overflow="hidden"
-          flexDirection="column"
-          rowGap={paneGap}
-        >
-          {rows.map((row) => (
-            // Row key = its agent-id membership join. The inner panes key by stable agentId (below),
-            // so a pane that stays in the same row keeps its ChatPane scroll offset. But re-gridding
-            // that moves an agent to a different row changes that row's join-key, remounting the row
-            // and resetting the local scroll state of every pane in it — accepted for v0 (favoriting
-            // reshuffles rows rarely and a reset-to-bottom there is tolerable).
-            <Box
-              key={row.map((identity) => identity.agentId).join(',')}
-              flexDirection="row"
-              flexGrow={1}
-              flexBasis={0}
-              minWidth={0}
-              minHeight={0}
-              overflow="hidden"
-              columnGap={paneGap}
-            >
-              {row.map((identity) => (
-                <Box
-                  key={identity.agentId}
-                  flexGrow={1}
-                  flexBasis={0}
-                  minWidth={0}
-                  minHeight={0}
-                  overflow="hidden"
-                  flexDirection="column"
-                >
-                  <ChatPane
-                    identity={identity}
-                    conversations={conversations}
-                    chatTarget={target?.agentId === identity.agentId}
-                  />
-                </Box>
-              ))}
-            </Box>
-          ))}
-        </Box>
+        <ChatGrid
+          rows={rows}
+          chatWeight={chatWeight}
+          paneGap={paneGap}
+          conversations={conversations}
+          roster={roster}
+          targetAgentId={target?.agentId ?? null}
+        />
       )}
     </Box>
   );

@@ -515,25 +515,70 @@ export interface CycleTargetResult {
 }
 
 /**
- * The ordered list of chat-target identities to cycle through (item 9 super-chords): the OPEN chat
- * panes first (Stage order — {@link selectOpenChatPanes}), then the favorited crows whose panes are
- * currently CLOSED (so cycling reaches a favorite that isn't pinned to the Stage yet, opening it when
- * landed on). De-duplicated by `agentId` (a favorite that is already open appears once, in the open
- * section). Pure over roster + favorites + the pane overrides.
+ * The ordered list of chat-target identities to cycle through (item 9 super-chords): EVERY chattable
+ * crow in the roster, in spec group order (collaborator → planner → rogue → ticket). Cycling the
+ * target is a pure input-routing change — it does NOT open the crow's pane on the Stage (the user
+ * toggles a pane explicitly with the `toggleTargetPane` chord), so the cycle reaches every crow you
+ * can chat to, whether or not its chat box is pinned to the Stage. Pure over the roster alone
+ * (favorites/overrides no longer gate it — they only decide which panes are *shown*).
+ *
+ * `conversationsState` / `favorites` are kept in the signature so existing call sites are unchanged
+ * and a future ordering tweak can read them without a churny re-thread.
  */
 export function selectCycleTargets(
+  _conversationsState: ConversationsState,
+  rosterState: RosterState,
+  _favorites: FavoritesState = NO_FAVORITES,
+): readonly AgentIdentity[] {
+  const byGroup: Record<string, AgentIdentity[]> = {
+    collaborator: [],
+    planner: [],
+    rogue: [],
+    ticket: [],
+  };
+  for (const row of rosterState.rows) {
+    const identity = deriveAgentIdentity(row);
+    if (identity !== null) {
+      const groupKey = identity.kind === 'planner' ? 'planner' : identity.kind;
+      (byGroup[groupKey] ?? []).push(identity);
+    }
+  }
+  const targets: AgentIdentity[] = [];
+  for (const kind of FAVORITES_GROUP_ORDER) {
+    for (const identity of byGroup[kind] ?? []) {
+      targets.push(identity);
+    }
+  }
+  return targets;
+}
+
+/**
+ * The chat-target identities immediately before/after the current target in {@link selectCycleTargets}
+ * — what `cycleTargetPrev` (`◂`) and `cycleTargetNext` (`▸`) would land on. Used by the
+ * {@link ../components/ChatInput.js ChatInput} to advertise the adjacent crows on its bottom border
+ * so the user can see who a step in each direction reaches WITHOUT opening any pane.
+ *
+ * Both are `null` when there are fewer than two targets (nothing to cycle to). With exactly two,
+ * prev and next are the same other crow (a single step wraps either way) — both are returned so each
+ * side of the border still names it.
+ */
+export function selectAdjacentTargets(
   conversationsState: ConversationsState,
   rosterState: RosterState,
   favorites: FavoritesState = NO_FAVORITES,
-): readonly AgentIdentity[] {
-  const overrides = conversationsState.paneOverrides;
-  const open = selectOpenChatPanes(rosterState, favorites, overrides).panes;
-  const seen = new Set(open.map((p) => p.agentId));
-  // Favorited crows not already open, in the same spec group order.
-  const closedFavorites = selectFavoritesChatPanes(rosterState, favorites).panes.filter(
-    (p) => !seen.has(p.agentId),
-  );
-  return [...open, ...closedFavorites];
+): { readonly prev: AgentIdentity | null; readonly next: AgentIdentity | null } {
+  const targets = selectCycleTargets(conversationsState, rosterState, favorites);
+  if (targets.length < 2) {
+    return { prev: null, next: null };
+  }
+  const current = selectActiveAgentId(conversationsState, rosterState, favorites);
+  const idx = targets.findIndex((t) => t.agentId === current);
+  const len = targets.length;
+  // Unknown current → step from before-the-start so prev/next still name the list's ends.
+  const from = idx === -1 ? 0 : idx;
+  const prev = targets[(((from - 1) % len) + len) % len] ?? null;
+  const next = targets[(from + 1) % len] ?? null;
+  return { prev, next };
 }
 
 /**
@@ -542,8 +587,9 @@ export function selectCycleTargets(
  * the list (or there is no current target), starts from the first/last entry so the chord still has an
  * effect. Returns `null` when there is nothing to cycle to (no open panes and no favorites).
  *
- * The returned `needsOpen` flag tells the caller to open the landed-on pane (a closed favorite):
- * cycling *onto* a closed-pane target opens its pane (per item 9).
+ * The returned `needsOpen` flag reports whether the landed-on target's pane is currently closed.
+ * It is informational only: cycling NO LONGER opens the pane (the user toggles a pane explicitly via
+ * `toggleTargetPane`), so a step can target a crow whose chat box is not on the Stage.
  */
 export function selectCycledTarget(
   conversationsState: ConversationsState,

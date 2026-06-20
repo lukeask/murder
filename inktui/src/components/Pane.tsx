@@ -67,7 +67,7 @@ import { Box, type DOMElement } from 'ink';
 import { forwardRef, memo } from 'react';
 import type { Theme } from '../theme/buildTheme.js';
 import { useTheme } from '../theme/themeStore.js';
-import { PaneBorderRight, PaneBorderTop } from './paneBorder.js';
+import { PaneBorderBottom, PaneBorderRight, PaneBorderTop } from './paneBorder.js';
 
 /** Focus-driven colors for the border/corners/fill (`border`) and the title segment (`title`). */
 export interface PaneColors {
@@ -119,6 +119,15 @@ export interface PaneProps {
     readonly height: number;
     readonly thumb: { readonly size: number; readonly offset: number } | null;
   };
+  /** Optional left-anchored node on the BOTTOM border (the mirror of `title`). Opting into a footer
+   *  replaces Ink's own bottom border with a hand-composed {@link ./paneBorder.js PaneBorderBottom}
+   *  row — see that component's fractional-height note for the (opt-in) trade-off. The CALLER owns
+   *  the node's color. */
+  readonly footerLeft?: React.ReactNode;
+  /** Optional right-anchored node on the bottom border — sits the same distance from the right edge
+   *  as `title` sits from the left (e.g. a chat pane's `Claude Code ◇ Opus 4.8`). The CALLER owns its
+   *  color. Either footer prop turns the bottom border into the hand-composed footer row. */
+  readonly footerRight?: React.ReactNode;
 }
 
 /**
@@ -137,11 +146,18 @@ export const Pane = memo(
       overflowAbove,
       overflowBelow,
       scrollbar,
+      footerLeft,
+      footerRight,
     },
     ref,
   ): React.JSX.Element {
     const theme = useTheme();
     const { border: borderColor, title: titleColor } = paneColors(focused, theme);
+    // A footer (either side) trades Ink's own bottom border for the hand-composed PaneBorderBottom
+    // row — see its fractional-height note. Without one, the bottom stays Ink's clip-robust border.
+    const hasFooter =
+      (footerLeft !== undefined && footerLeft !== null && footerLeft !== false) ||
+      (footerRight !== undefined && footerRight !== null && footerRight !== false);
     /* Content box supplies the LEFT (+ RIGHT, unless the scrollbar column replaces it) sides + the
        BOTTOM border + padding + height clamp. Only the TOP is `false` (the hand-composed title row
        draws it). The bottom is Ink's OWN border (`╰──╯`), NOT a separate sibling row: a fixed-height
@@ -165,6 +181,19 @@ export const Pane = memo(
         {children}
       </Box>
     );
+    // The content region (the box, plus the scroll-track column for a scrollable pane).
+    const body =
+      scrollbar === undefined ? (
+        content
+      ) : (
+        /* Scrollable pane: the right border IS the scroll track. The content box keeps left/bottom
+           (its Ink bottom border ends `╰──` since borderRight is off); the hand-composed column
+           draws the `│`/`┃` track cells plus the closing `╯` corner — same net width as before. */
+        <Box flexDirection="row" flexGrow={1} minHeight={0} overflow="hidden">
+          {content}
+          <PaneBorderRight height={scrollbar.height} thumb={scrollbar.thumb} color={borderColor} />
+        </Box>
+      );
     return (
       <Box ref={ref} flexDirection="column" flexGrow={flexGrow} minHeight={0} overflow="hidden">
         {/* Top border line with the inline title — the shared {@link ./paneBorder.js} recipe (also
@@ -178,20 +207,17 @@ export const Pane = memo(
           overflowAbove={overflowAbove}
           overflowBelow={overflowBelow}
         />
-        {scrollbar === undefined ? (
-          content
-        ) : (
-          /* Scrollable pane: the right border IS the scroll track. The content box keeps left/bottom
-             (its Ink bottom border ends `╰──` since borderRight is off); the hand-composed column
-             draws the `│`/`┃` track cells plus the closing `╯` corner — same net width as before. */
-          <Box flexDirection="row" flexGrow={1} minHeight={0} overflow="hidden">
-            {content}
-            <PaneBorderRight
-              height={scrollbar.height}
-              thumb={scrollbar.thumb}
-              color={borderColor}
-            />
-          </Box>
+        {body}
+        {/* Opt-in footer: an OVERLAY pulled up onto Ink's own (clip-robust) bottom border, carrying
+            the left/right labels (e.g. a chat pane's `Claude Code ◇ Opus 4.8`). It adds zero height
+            (`marginTop:-1` cancels its 1 row), so the pane is exactly as tall — and as fractional-
+            height-robust — as the no-footer case. See {@link ./paneBorder.js PaneBorderBottom}. */}
+        {hasFooter && (
+          <PaneBorderBottom
+            borderColor={borderColor}
+            leftExtra={footerLeft}
+            rightExtra={footerRight}
+          />
         )}
       </Box>
     );

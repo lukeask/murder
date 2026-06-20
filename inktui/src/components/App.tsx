@@ -896,9 +896,10 @@ function Shell({
     modes.getState().enter(helpMode(modes, bindings.getState().resolved, keymaps));
   };
 
-  // Item 9 super-chords: cycle the chat target (prev/−1, next/+1). Cycle order = open chat panes
-  // (Stage order) then favorited crows whose panes are closed; landing on a closed-pane target opens
-  // it (per item 9). Reads the store imperatively at call time so it always sees current state.
+  // Item 9 super-chords: cycle the chat target (prev/−1, next/+1) through EVERY chattable crow
+  // (spec order — {@link selectCycleTargets}). Cycling is a pure input-routing change: it sets the
+  // send target but does NOT add the crow's chat box to the Stage — the user opens a pane explicitly
+  // with `toggleTargetPane` (ctrl+w). Reads the store imperatively so it always sees current state.
   const cycleTarget = (direction: 1 | -1): void => {
     const state = appStore.getState();
     const result = selectCycledTarget(
@@ -910,11 +911,7 @@ function Shell({
     if (result === null) {
       return;
     }
-    const actions = state.actions.conversations;
-    if (result.needsOpen) {
-      actions.setChatPaneOpen(result.agentId, true);
-    }
-    actions.setActivePaneAgentId(result.agentId);
+    state.actions.conversations.setActivePaneAgentId(result.agentId);
   };
 
   // Item 9 super-chord: toggle the current chat target's pane from the chat box.

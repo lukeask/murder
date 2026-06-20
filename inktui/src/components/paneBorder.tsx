@@ -158,11 +158,81 @@ export function PaneBorderTop({
   );
 }
 
-// NOTE: there is no `PaneBorderBottom` row anymore. The bottom border is drawn by Ink's OWN border on
-// the {@link ./Pane.tsx Pane}'s content box, which never clips off at fractional pane heights (a
-// hand-composed fixed-height bottom ROW did — the `[top, flexGrow, bottom]` split loses its trailing
-// cell when the pane rounds to a half-cell, e.g. two panels splitting an odd rail height). The `▾ N`
-// scroll-below count that row used to carry now rides {@link PaneBorderTop} beside the `▴ N` count.
+export interface PaneBorderBottomProps {
+  /** Border color — the spacer cells inherit it (they're blanks, so it's only meaningful if a future
+   *  glyph rides them); the left/right nodes own their own color. */
+  readonly borderColor: string;
+  /** Optional left-anchored node placed after the `╰─ ` corner (the bottom mirror of the title slot).
+   *  SHRINKABLE + clipped. The CALLER owns its color. */
+  readonly leftExtra?: React.ReactNode;
+  /** Optional right-anchored node placed before the ` ─╯` corner, so bottom-right info sits the same
+   *  distance from the right edge as the title sits from the left (the `╭─ ` / ` ─╯` 3-cell mirror).
+   *  FIXED (`flexShrink={0}`). The CALLER owns its color. */
+  readonly rightExtra?: React.ReactNode;
+}
+
+/**
+ * The inline bottom-border footer — the mirror of {@link PaneBorderTop}, used by a {@link ./Pane.tsx
+ * Pane} that opts into a footer (and by {@link ./ChatInput.tsx ChatInput}). Reads as
+ * `╰─ <left> ──…── <right> ─╯`, carrying e.g. a chat pane's `Claude Code ◇ Opus 4.8`.
+ *
+ * ## Why this is an OVERLAY, not a row (the fractional-height fix)
+ * The bottom border is NOT a separate fixed-height row appended after the content — that shape
+ * (`[top(1), content(flex), footer(1)]`) drops the footer when the pane's height rounds to a
+ * half-cell (two panes splitting an odd grid height; the documented bug that once led to this
+ * component being deleted). Instead the CALLER keeps Ink's OWN bottom border on its content box —
+ * which is border-box reserved space and so is robust at any fractional height — and this footer is
+ * pulled UP onto that border line with `marginTop={-1}`. Because the overlay's height (1) and its
+ * negative margin (−1) cancel, it contributes ZERO height: the pane is exactly as tall as it would be
+ * with no footer (the clip-robust case), so nothing ever clips. The overlay's empty cells are
+ * transparent, so Ink's `╰────╯` shows through everywhere the labels don't paint; the labels (opaque
+ * text) overwrite the dashes they sit on. The 2-cell left reserve sits over `╰─`, the 1-cell right
+ * reserve over the closing `╯` (Ink's own, or the scrollbar column's), so the corners are never
+ * clobbered.
+ */
+export function PaneBorderBottom({
+  borderColor,
+  leftExtra,
+  rightExtra,
+}: PaneBorderBottomProps): React.JSX.Element {
+  const hasLeft = leftExtra !== undefined && leftExtra !== null && leftExtra !== false;
+  const hasRight = rightExtra !== undefined && rightExtra !== null && rightExtra !== false;
+  return (
+    <Box
+      flexDirection="row"
+      flexShrink={0}
+      width="100%"
+      height={1}
+      marginTop={-1}
+      overflow="hidden"
+    >
+      {/* Transparent over Ink's `╰─` corner + dash (the mirror of the top's `╭─ `). */}
+      <Box flexShrink={0} width={2} />
+      {hasLeft && (
+        // ` <label> ` — the surrounding blanks sit over the border `─`, giving the label breathing
+        // room exactly like the title's ` ` gaps. SHRINKABLE so a wide label clips before the corners.
+        <Box flexShrink={1} minWidth={0} overflow="hidden" flexDirection="row">
+          <Text color={borderColor}> </Text>
+          {leftExtra}
+          <Text color={borderColor}> </Text>
+        </Box>
+      )}
+      {/* Transparent fill — Ink's `─` border shows through (no painted glyphs to clip/flicker). */}
+      <Box flexGrow={1} flexShrink={1} flexBasis={0} minWidth={0} overflow="hidden" />
+      {hasRight && (
+        // ` <label> ─` ending one cell before the right edge; the reserve below shows the `╯` corner,
+        // so this reads `… <label> ─╯`, mirroring the title's `╭─ ` 3-cell inset. FIXED — fill clips first.
+        <Box flexShrink={0} flexDirection="row">
+          <Text color={borderColor}> </Text>
+          {rightExtra}
+          <Text color={borderColor}> ─</Text>
+        </Box>
+      )}
+      {/* Transparent over the closing `╯` (Ink's own corner, or the scrollbar column's). */}
+      <Box flexShrink={0} width={1} />
+    </Box>
+  );
+}
 
 /** The thumb glyph: a HEAVY vertical stroke, so the scroll position reads as a thicker run of the
  * border itself (vs the light `│` track) — not a separate widget glyph like the old `█` column. */

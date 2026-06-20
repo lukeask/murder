@@ -257,7 +257,7 @@ function detectIfTty(shim: StdinShim, driver: KeyProtocolDriver): Promise<boolea
  * all six slices here closes the gap: a quiescent or freshly-started service shows populated data
  * on the very first frame.
  */
-function primeSlices(store: ReturnType<typeof createAppStore>['store']): void {
+export function primeSlices(store: ReturnType<typeof createAppStore>['store']): void {
   void store.getState().actions.roster.refresh();
   void store.getState().actions.usage.refresh();
   void store.getState().actions.plans.refresh();
@@ -270,6 +270,13 @@ function primeSlices(store: ReturnType<typeof createAppStore>['store']): void {
   // from the persisted truth", and without this the local star set diverges from the server after a
   // disconnected optimistic toggle (or a failed save) until a full restart.
   void store.getState().actions.favorites.load();
+  // Re-load settings on every (re)connect too. The slice loads once from a mount-effect
+  // (App.tsx `loadSettings`), but that single `settings.get` has no retry: if it races the daemon
+  // socket coming up (e.g. a fresh TUI right after `murder up`) or is lost to a disconnect, the slice
+  // is stranded at `initialSettingsState` defaults (modifier `alt`, crow-harness fallback) for the
+  // whole session — config.yaml stays intact, but the UI/bindings silently revert to defaults. Every
+  // other persisted slice already self-heals here; settings was the lone omission.
+  void store.getState().actions.settings.load();
 }
 
 /** Register a (re)connect listener if the client exposes `onConnect` (the live {@link UdsBusClient}
