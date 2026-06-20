@@ -94,6 +94,72 @@ describe('chatBuffer — backspace', () => {
   });
 });
 
+describe('chatBuffer — backspace over grapheme clusters (M3)', () => {
+  /** A lone surrogate is a code unit in [0xD800, 0xDFFF] with no matching pair. */
+  const hasLoneSurrogate = (s: string): boolean => {
+    for (let i = 0; i < s.length; i++) {
+      const c = s.charCodeAt(i);
+      if (c >= 0xd800 && c <= 0xdbff) {
+        const next = s.charCodeAt(i + 1);
+        if (!(next >= 0xdc00 && next <= 0xdfff)) {
+          return true;
+        }
+        i++; // valid pair — skip the low surrogate
+      } else if (c >= 0xdc00 && c <= 0xdfff) {
+        return true; // low surrogate with no preceding high surrogate
+      }
+    }
+    return false;
+  };
+
+  it('deletes a whole emoji surrogate pair in one backspace (no lone surrogate)', () => {
+    const text = 'a🐦'; // 🐦 = U+1F426, two UTF-16 code units
+    const s = buf(text, text.length);
+    const { state, removedId } = backspace(s);
+    expect(removedId).toBeNull();
+    expect(state).toEqual({ text: 'a', cursor: 1 });
+    expect(hasLoneSurrogate(state.text)).toBe(false);
+  });
+
+  it('deletes the emoji even mid-buffer, landing the cursor on a boundary', () => {
+    const text = 'a🐦b'; // cursor right after the emoji (offset 3)
+    const s = buf(text, 3);
+    const { state } = backspace(s);
+    expect(state).toEqual({ text: 'ab', cursor: 1 });
+    expect(hasLoneSurrogate(state.text)).toBe(false);
+  });
+
+  it('deletes a ZWJ emoji sequence as a single cluster', () => {
+    // 👨‍👩‍👧 = man + ZWJ + woman + ZWJ + girl (one user-perceived glyph)
+    const family = '👨‍👩‍👧';
+    const text = `x${family}`;
+    const s = buf(text, text.length);
+    const { state } = backspace(s);
+    expect(state.text).toBe('x');
+    expect(state.cursor).toBe(1);
+    expect(hasLoneSurrogate(state.text)).toBe(false);
+  });
+
+  it('deletes one BMP CJK char per backspace (中文)', () => {
+    const text = '中文'; // each is one BMP code unit
+    const s = buf(text, text.length);
+    const { state } = backspace(s);
+    expect(state).toEqual({ text: '中', cursor: 1 });
+    expect(hasLoneSurrogate(state.text)).toBe(false);
+    const { state: state2 } = backspace(state);
+    expect(state2).toEqual({ text: '', cursor: 0 });
+  });
+
+  it('deleteForward removes a whole emoji (no lone surrogate, cursor put)', () => {
+    const text = '🐦b';
+    const s = buf(text, 0);
+    const { state, removedId } = deleteForward(s);
+    expect(removedId).toBeNull();
+    expect(state).toEqual({ text: 'b', cursor: 0 });
+    expect(hasLoneSurrogate(state.text)).toBe(false);
+  });
+});
+
 describe('chatBuffer — deleteForward', () => {
   it('deletes the char at the cursor, leaving the cursor put', () => {
     expect(deleteForward(buf('abc', 1))).toEqual({

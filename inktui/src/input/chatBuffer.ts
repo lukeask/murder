@@ -138,6 +138,71 @@ export function snapCursor(text: string, offset: number): number {
 }
 
 // --------------------------------------------------------------------------------------------------
+// Grapheme-cluster boundaries (so delete operates on whole user-perceived characters)
+// --------------------------------------------------------------------------------------------------
+
+/**
+ * Lazily-built grapheme segmenter. A single instance is reused (constructing one per keystroke is
+ * wasteful). `Intl.Segmenter` is available in the Node version we ship on; on the off chance it is
+ * absent the boundary helpers fall back to surrogate-pair-aware single-code-point stepping, which
+ * still keeps astral-plane chars (emoji) intact — the original single-code-UNIT bug's worst case.
+ */
+const graphemeSegmenter: Intl.Segmenter | null =
+  typeof Intl !== 'undefined' && typeof Intl.Segmenter === 'function'
+    ? new Intl.Segmenter(undefined, { granularity: 'grapheme' })
+    : null;
+
+/**
+ * The start offset of the grapheme cluster that ENDS at `offset` — i.e. the boundary one whole
+ * user-perceived character to the LEFT of `offset` (used by Backspace). Operates over UTF-16 offsets
+ * so it stays consistent with the rest of the buffer's indexing. Never crosses below 0.
+ *
+ * Astral-plane chars (emoji) are surrogate pairs (2 code units) and ZWJ / combining / flag sequences
+ * span several code points; stepping by clusters means a single delete removes the whole thing and the
+ * cursor lands on a boundary — never leaving a lone surrogate half (the M3 bug).
+ */
+function prevGraphemeStart(text: string, offset: number): number {
+  if (offset <= 0) {
+    return 0;
+  }
+  if (graphemeSegmenter === null) {
+    // Surrogate-pair-aware fallback: if the unit before `offset` is a low surrogate whose preceding
+    // unit is a high surrogate, step back over the whole pair; else one unit.
+    const lo = text.charCodeAt(offset - 1);
+    const hi = text.charCodeAt(offset - 2);
+    const isPair = lo >= 0xdc00 && lo <= 0xdfff && hi >= 0xd800 && hi <= 0xdbff;
+    return offset - (isPair ? 2 : 1);
+  }
+  let start = 0;
+  for (const seg of graphemeSegmenter.segment(text.slice(0, offset))) {
+    start = seg.index;
+  }
+  return start;
+}
+
+/**
+ * The end offset of the grapheme cluster that STARTS at `offset` — the boundary one whole
+ * user-perceived character to the RIGHT of `offset` (used by Delete). Never exceeds `text.length`.
+ */
+function nextGraphemeEnd(text: string, offset: number): number {
+  if (offset >= text.length) {
+    return text.length;
+  }
+  if (graphemeSegmenter === null) {
+    const hi = text.charCodeAt(offset);
+    const lo = text.charCodeAt(offset + 1);
+    const isPair = hi >= 0xd800 && hi <= 0xdbff && lo >= 0xdc00 && lo <= 0xdfff;
+    return offset + (isPair ? 2 : 1);
+  }
+  // The first segment of the remainder is the cluster at `offset`; its length is its `.segment`.
+  const first = graphemeSegmenter.segment(text.slice(offset))[Symbol.iterator]().next();
+  if (first.done) {
+    return offset + 1;
+  }
+  return offset + first.value.segment.length;
+}
+
+// --------------------------------------------------------------------------------------------------
 // Edit ops
 // --------------------------------------------------------------------------------------------------
 
@@ -167,8 +232,9 @@ export function backspace(s: BufferState): { state: BufferState; removedId: stri
     const text = s.text.slice(0, span.start) + s.text.slice(span.end);
     return { state: { text, cursor: span.start }, removedId: span.id };
   }
-  const text = s.text.slice(0, s.cursor - 1) + s.text.slice(s.cursor);
-  return { state: { text, cursor: s.cursor - 1 }, removedId: null };
+  const start = prevGraphemeStart(s.text, s.cursor);
+  const text = s.text.slice(0, start) + s.text.slice(s.cursor);
+  return { state: { text, cursor: start }, removedId: null };
 }
 
 /**
@@ -186,7 +252,8 @@ export function deleteForward(s: BufferState): { state: BufferState; removedId: 
     const text = s.text.slice(0, span.start) + s.text.slice(span.end);
     return { state: { text, cursor: span.start }, removedId: span.id };
   }
-  const text = s.text.slice(0, s.cursor) + s.text.slice(s.cursor + 1);
+  const end = nextGraphemeEnd(s.text, s.cursor);
+  const text = s.text.slice(0, s.cursor) + s.text.slice(end);
   return { state: { text, cursor: s.cursor }, removedId: null };
 }
 
