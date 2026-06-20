@@ -16,6 +16,7 @@ import { Box } from 'ink';
 import { render } from 'ink-testing-library';
 import type { JSX } from 'react';
 import { describe, expect, it } from 'vitest';
+import { inkTestColorOn } from '../inkTestColorOn.js';
 import { FakeBusClient } from '../../src/bus/FakeBusClient.js';
 import type { ConversationBlockEvent } from '../../src/bus/protocol.js';
 import { PlansPanel } from '../../src/components/PlansPanel.js';
@@ -430,10 +431,9 @@ describe('Stage — chat-history panes as focusable Stage panes', () => {
 });
 
 describe('Stage — chat-target highlight', () => {
-  // ink-testing-library strips ANSI unless FORCE_COLOR is set; the highlight is purely a color/bold
-  // flip on the pane chrome, so the visual case runs only under FORCE_COLOR (the Ledger convention).
-  // biome-ignore lint/complexity/useLiteralKeys: tsc's noPropertyAccessFromIndexSignature requires bracket access on process.env.
-  const colorOn = Boolean(process.env['FORCE_COLOR']);
+  // ink-testing-library omits ANSI unless chalk level ≥ 3 (FORCE_COLOR=3); the highlight is purely a
+  // color/bold flip on the pane chrome, so the visual case runs only then (the Ledger convention).
+  const colorOn = inkTestColorOn();
 
   it.skipIf(!colorOn)(
     'highlights the chat-target pane while the chat input holds focus',

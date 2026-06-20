@@ -8,6 +8,7 @@ import { Box } from 'ink';
 import { render } from 'ink-testing-library';
 import type { JSX } from 'react';
 import { describe, expect, it } from 'vitest';
+import { inkTestColorOn } from '../inkTestColorOn.js';
 import { FakeBusClient } from '../../src/bus/FakeBusClient.js';
 import { ReportsPanel } from '../../src/components/ReportsPanel.js';
 import { AppStoreProvider } from '../../src/hooks/useAppStore.js';
@@ -23,8 +24,7 @@ const ALT_SPACE = '\x1b '; // alt+space → focus chat (was alt+f, which now sta
 // signalled ONLY by the Ledger's full-width selection background (everforest `bg_green` truecolor
 // `48;2;60;72;65`). ink-testing-library strips ANSI unless color is forced, so the cursor-move
 // assertion runs only under FORCE_COLOR; without it it skips (matching the plans reference).
-const { FORCE_COLOR } = process.env;
-const colorOn = Boolean(FORCE_COLOR);
+const colorOn = inkTestColorOn();
 const SELECTED_BG = '\x1b[48;2;60;72;65m';
 /** Frame lines carrying the full-width selection background (a 2-line entry tags both its lines). */
 function selectedLines(frame: string): string[] {

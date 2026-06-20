@@ -13,6 +13,7 @@
 import { Box, Text } from 'ink';
 import { render } from 'ink-testing-library';
 import { describe, expect, it } from 'vitest';
+import { inkTestColorOn } from '../inkTestColorOn.js';
 import { Pane, paneColors } from '../../src/components/Pane.js';
 import { theme } from '../../src/theme.js';
 
@@ -27,9 +28,8 @@ function Fixed({
   return <Box width={width}>{children}</Box>;
 }
 
-/** ink-testing-library strips ANSI unless FORCE_COLOR is set; color-gated cases run only then. */
-// biome-ignore lint/complexity/useLiteralKeys: tsc's noPropertyAccessFromIndexSignature requires bracket access on process.env.
-const colorOn = Boolean(process.env['FORCE_COLOR']);
+/** ink-testing-library omits ANSI unless chalk level >= 3 (FORCE_COLOR=3); color-gated cases run only then. */
+const colorOn = inkTestColorOn();
 
 /** Strip ANSI SGR escapes so structural (character-position) assertions hold under FORCE_COLOR too. */
 // biome-ignore lint/suspicious/noControlCharactersInRegex: matching the ESC control char is the point.

@@ -17,6 +17,7 @@ import { Box } from 'ink';
 import { render } from 'ink-testing-library';
 import type { JSX } from 'react';
 import { describe, expect, it } from 'vitest';
+import { inkTestColorOn } from '../inkTestColorOn.js';
 import { FakeBusClient } from '../../src/bus/FakeBusClient.js';
 import { PlansPanel } from '../../src/components/PlansPanel.js';
 import { AppStoreProvider } from '../../src/hooks/useAppStore.js';
@@ -35,8 +36,7 @@ const ALT_SPACE = '\x1b '; // focus chat (was alt+f)
 // forced, so — exactly like the Ledger color test — these selection assertions run only under
 // FORCE_COLOR; without it they skip (the highlight is verified by-eye, and key routing is covered by
 // the dispatcher tests). The non-visual behavior elsewhere in this file stays ANSI-independent.
-const { FORCE_COLOR } = process.env;
-const colorOn = Boolean(FORCE_COLOR);
+const colorOn = inkTestColorOn();
 const SELECTED_BG = '\x1b[48;2;60;72;65m';
 /** Frame lines carrying the full-width selection background (a 2-line entry tags both its lines). */
 function selectedLines(frame: string): string[] {

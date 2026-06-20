@@ -14,6 +14,7 @@
 import { Box, Text } from 'ink';
 import { render } from 'ink-testing-library';
 import { describe, expect, it } from 'vitest';
+import { inkTestColorOn } from '../inkTestColorOn.js';
 import {
   columnsForWidth,
   computeWindow,
@@ -353,8 +354,7 @@ describe('Ledger — full-width highlight + alternating bg (forced color)', () =
   // (full-width selection bg, alternating row bg) only appear when color support is forced; the
   // suite doesn't run with FORCE_COLOR, so the visual is verified by-eye/probe and these assertions
   // run only when color is available. The behavioral focus-gating is covered above without color.
-  const { FORCE_COLOR } = process.env;
-  const colorOn = Boolean(FORCE_COLOR);
+  const colorOn = inkTestColorOn();
   it.skipIf(!colorOn)('paints a full-width selection bg + alternating odd-row bg', () => {
     // The Ledger colors come from `theme`: selection = `rowSelectedBg` (everforest bg_green #3c4841),
     // alternating = `rowAltBg` (everforest bg1 #2e383c). At truecolor these are the SGR codes below.
