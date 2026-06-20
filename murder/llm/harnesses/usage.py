@@ -98,9 +98,8 @@ def _parse_reset_at(text: str, now: datetime | None = None) -> str | None:
     return _parse_reset_from_match(matches[-1], now)
 
 
-def _reset_after_label(label: str, text: str, now: datetime | None) -> str | None:
-    """First reset time appearing after the latest occurrence of label (scrollback-safe)."""
-    idx = text.lower().rfind(label.lower())
+def _reset_from(text: str, idx: int, now: datetime | None) -> str | None:
+    """First reset time appearing at/after idx (the resolved bar's anchor)."""
     if idx < 0:
         return None
     matches = list(_RESET_RE.finditer(text[idx:]))
@@ -109,14 +108,40 @@ def _reset_after_label(label: str, text: str, now: datetime | None) -> str | Non
     return _parse_reset_from_match(matches[0], now)
 
 
-def _first_percent_after(label: str, text: str) -> float | None:
-    # rfind: when scrollback contains old overlays, take the latest occurrence.
-    idx = text.lower().rfind(label.lower())
+def _percent_from(text: str, idx: int) -> float | None:
     if idx < 0:
         return None
-    haystack = text[idx:]
-    match = _PERCENT_RE.search(haystack)
+    match = _PERCENT_RE.search(text[idx:])
     return float(match.group("pct")) if match else None
+
+
+def _session_anchor(text: str) -> int:
+    # rfind: when scrollback contains old overlays, take the latest occurrence.
+    return text.lower().rfind("current session")
+
+
+def _week_anchor(text: str) -> int:
+    """Resolve the aggregate weekly bar, ignoring per-model "(... only)" sub-bars.
+
+    Max plans render up to three bars: session, "Current week (all models)", and
+    "Current week (Sonnet only)". Both weekly bars start with "Current week", so a
+    naive rfind lands on the Sonnet-only sub-bar. Prefer the explicit aggregate
+    label, then fall back to the latest "Current week" line that isn't model-scoped.
+    """
+    lower = text.lower()
+    idx = lower.rfind("current week (all models)")
+    if idx >= 0:
+        return idx
+    search_end = len(text)
+    while True:
+        idx = lower.rfind("current week", 0, search_end)
+        if idx < 0:
+            return -1
+        line_end = lower.find("\n", idx)
+        line = lower[idx : line_end if line_end >= 0 else len(lower)]
+        if "only)" not in line:
+            return idx
+        search_end = idx
 
 
 def parse_claude_usage_pane(
@@ -145,16 +170,18 @@ def parse_claude_usage_pane(
         totals.cache_write_tokens = int(match.group("cache_write"))
 
     windows: list[HarnessUsageWindow] = []
-    session_pct = _first_percent_after("Current session", clean)
-    session_reset = _reset_after_label("Current session", clean, now)
+    session_idx = _session_anchor(clean)
+    session_pct = _percent_from(clean, session_idx)
+    session_reset = _reset_from(clean, session_idx, now)
     if session_pct is not None or session_reset:
         windows.append(HarnessUsageWindow(
             name="current_session",
             percent_used=session_pct,
             reset_at=session_reset,
         ))
-    weekly_pct = _first_percent_after("Current week", clean)
-    weekly_reset = _reset_after_label("Current week", clean, now)
+    week_idx = _week_anchor(clean)
+    weekly_pct = _percent_from(clean, week_idx)
+    weekly_reset = _reset_from(clean, week_idx, now)
     if weekly_pct is not None or weekly_reset:
         windows.append(HarnessUsageWindow(
             name="current_week",
