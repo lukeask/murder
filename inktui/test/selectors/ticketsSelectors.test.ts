@@ -20,6 +20,7 @@ function row(overrides: Partial<TicketRow> = {}): TicketRow {
     harness: 'claude',
     model: 'anthropic/claude-opus',
     pendingDepIds: [],
+    parent: null,
     ...overrides,
   };
 }
@@ -56,9 +57,80 @@ describe('selectTicketsView — presentation (rule 2 proof)', () => {
     expect(view.rows[0]?.titleCell.length).toBeLessThanOrEqual(24);
   });
 
-  it('formats statusCell verbatim (short status)', () => {
+  it('renders statusCell as a glyph (Goal A): ● for in_progress (running)', () => {
     const view = selectTicketsView(state([row({ status: 'in_progress' })]));
-    expect(view.rows[0]?.statusCell).toBe('in_progress');
+    expect(view.rows[0]?.statusCell).toBe('●');
+    expect(view.rows[0]?.statusTone).toBe('warning');
+  });
+
+  describe('status glyph ladder (Goal A)', () => {
+    it('failed → ✗ (error)', () => {
+      const v = selectTicketsView(state([row({ status: 'failed' })]));
+      expect(v.rows[0]?.statusCell).toBe('✗');
+      expect(v.rows[0]?.statusTone).toBe('error');
+    });
+    it('done → ✓ (success)', () => {
+      const v = selectTicketsView(state([row({ status: 'done' })]));
+      expect(v.rows[0]?.statusCell).toBe('✓');
+      expect(v.rows[0]?.statusTone).toBe('success');
+    });
+    it('blocked → ⊘ with its OWN blocked tone (not error)', () => {
+      const v = selectTicketsView(state([row({ status: 'blocked' })]));
+      expect(v.rows[0]?.statusCell).toBe('⊘');
+      expect(v.rows[0]?.statusTone).toBe('blocked');
+    });
+    it('draft and planned both → ◌ (neutral)', () => {
+      const draft = selectTicketsView(state([row({ status: 'draft' })]));
+      expect(draft.rows[0]?.statusCell).toBe('◌');
+      const planned = selectTicketsView(state([row({ status: 'planned' })]));
+      expect(planned.rows[0]?.statusCell).toBe('◌');
+      expect(planned.rows[0]?.statusTone).toBe('neutral');
+    });
+    it('ready + unmet deps → ◍ waiting-on-dependency', () => {
+      const v = selectTicketsView(state([row({ status: 'ready', pendingDepIds: ['T-9'] })]));
+      expect(v.rows[0]?.statusCell).toBe('◍');
+    });
+    it('ready + future schedule_at → ◷ scheduled', () => {
+      const now = Date.parse('2026-06-01T00:00:00Z');
+      const v = selectTicketsView(
+        state([row({ status: 'ready', scheduleAt: '2026-06-02T00:00:00Z' })]),
+        now,
+      );
+      expect(v.rows[0]?.statusCell).toBe('◷');
+    });
+    it('ready + deps ok + not future-scheduled → ◕ queued', () => {
+      const now = Date.parse('2026-06-01T00:00:00Z');
+      const v = selectTicketsView(
+        state([row({ status: 'ready', scheduleAt: '2026-05-01T00:00:00Z' })]),
+        now,
+      );
+      expect(v.rows[0]?.statusCell).toBe('◕');
+    });
+    it('plain ready (no deps, no schedule) → ◕ queued (eligible)', () => {
+      const v = selectTicketsView(state([row({ status: 'ready' })]));
+      expect(v.rows[0]?.statusCell).toBe('◕');
+    });
+  });
+
+  describe('subticket tree (Goal B) — mirrors plans', () => {
+    it('renders children indented under their parent', () => {
+      const view = selectTicketsView(
+        state([
+          row({ id: 'T-child', title: 'Child', parent: 'T-parent', lastUpdateAt: '2026-06-02T00:00:00' }),
+          row({ id: 'T-parent', title: 'Parent', lastUpdateAt: '2026-06-01T00:00:00' }),
+        ]),
+      );
+      expect(view.rows.map((r) => r.id)).toEqual(['T-parent', 'T-child']);
+      expect(view.rows[0]?.depth).toBe(0);
+      expect(view.rows[0]?.titleCell).toBe('Parent');
+      expect(view.rows[1]?.depth).toBe(1);
+      expect(view.rows[1]?.titleCell).toBe('    Child'); // 4-space indent
+    });
+    it('a child naming an unknown parent is treated as top-level (never dropped)', () => {
+      const view = selectTicketsView(state([row({ id: 'T-orphan', parent: 'missing' })]));
+      expect(view.rows).toHaveLength(1);
+      expect(view.rows[0]?.depth).toBe(0);
+    });
   });
 
   it('formats lastUpdateCell as YYYY-MM-DD + label', () => {

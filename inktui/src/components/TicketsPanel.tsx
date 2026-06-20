@@ -86,6 +86,9 @@ function statusToneColor(tone: StatusTone, theme: Theme): string {
       return theme.success;
     case 'warning':
       return theme.warning;
+    case 'blocked':
+      // Distinct from `error` (a blocked ticket isn't a failed one): the secondary accent (blue).
+      return theme.accent;
     default:
       return theme.heading;
   }

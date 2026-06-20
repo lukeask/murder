@@ -35,8 +35,6 @@ import type { TicketRow, TicketsState } from '../store/tickets/ticketsSlice.js';
 const ID_WIDTH = 8;
 /** Max width of the title cell (column 1 bottom). Truncated with ellipsis. */
 const TITLE_WIDTH = 24;
-/** Max width of the status cell (column 2 top). */
-const STATUS_WIDTH = 12;
 /** Max width of the last-update cell (column 2 bottom: "YYYY-MM-DD label"). */
 const LAST_UPDATE_WIDTH = 20;
 /** Max width of the deps cell (column 3 top: joined pending ids or sentinel). */
@@ -51,6 +49,9 @@ const MODEL_WIDTH = 18;
 const PLAN_WIDTH = 16;
 /** Max width of the worktree cell (column 5 bottom). */
 const WORKTREE_WIDTH = 16;
+
+/** Spaces a child ticket's title is indented under its parent (mirrors plans' `CHILD_INDENT`). */
+const CHILD_INDENT = '    ';
 
 // === Row view types ===========================================================================
 
@@ -79,11 +80,16 @@ export interface TicketRowView {
   /** The ticket title, truncated to {@link TITLE_WIDTH}. */
   readonly titleCell: string;
   // === Column 2: status / last-update ==========================================================
-  /** Status, verbatim (already short). */
+  /**
+   * Status rendered as a single glyph (Goal A). The glyph encodes the precedence-ladder result —
+   * 6 backend statuses + 3 DERIVED states (queued / scheduled / waiting-on-dependency). Replaces the
+   * raw status string in the status cell. See {@link statusGlyphOf}.
+   */
   readonly statusCell: string;
   /**
-   * Semantic tone for the status cell, derived purely from `row.status` (rule 2 — no string-matching
-   * in the component). The component maps this to a theme color. See {@link statusToneOf}.
+   * Semantic tone for the status glyph, derived purely from the ladder result (rule 2 — no
+   * string-matching in the component). The component maps this to a theme color. See
+   * {@link statusGlyphOf}.
    */
   readonly statusTone: StatusTone;
   /** `last_update_at` + `last_update_label`, truncated to {@link LAST_UPDATE_WIDTH}. */
@@ -118,6 +124,9 @@ export interface TicketRowView {
    * (rule 2) so the component contains no index arithmetic.
    */
   readonly rowParity: 0 | 1;
+  /** Tree depth: 0 top-level, 1 child (subticket). The indent is already baked into `titleCell`;
+   * this is exposed for optional styling (mirrors `PlanRowView.depth`). */
+  readonly depth: number;
 }
 
 /** The whole tickets list, render-ready. Parallel to {@link NotesView}. */
@@ -165,48 +174,98 @@ function formatLastUpdateCell(lastUpdateAt: string, lastUpdateLabel: string): st
   return truncate(`${compact} ${lastUpdateLabel}`, LAST_UPDATE_WIDTH);
 }
 
-/** Semantic tone for a ticket status, consumed by the panel to pick a theme color. */
-export type StatusTone = 'error' | 'success' | 'warning' | 'neutral';
+/**
+ * Semantic tone for a ticket status glyph, consumed by the panel to pick a theme color (Goal A).
+ * `blocked` is its OWN tone — deliberately NOT lumped with `error` — so the panel can paint a
+ * blocked ticket distinctly from a failed one.
+ */
+export type StatusTone = 'error' | 'success' | 'warning' | 'blocked' | 'neutral';
+
+/** One glyph + its semantic tone — the result of the status precedence ladder (Goal A). */
+export interface StatusGlyph {
+  readonly glyph: string;
+  readonly tone: StatusTone;
+}
 
 /**
- * Pure mapping from a backend ticket status string to a semantic tone (rule 2 — all status
- * semantics live here, never string-matched in the component). Backend values are the
- * `TicketStatus` StrEnum: planned/ready/in_progress/blocked/done/failed/archived. We also accept a
- * few common synonyms so non-ticket callers (or future statuses) degrade gracefully.
+ * The status precedence ladder (Goal A — first match wins). 6 of these glyphs map to backend
+ * statuses; 3 are DERIVED from the row's runtime fields:
+ *
+ *   ◌ draft      ○ ready    ◕ queued     ◷ scheduled   ◍ waiting-on-dependency
+ *   ● running    ⊘ blocked  ✓ done       ✗ failed
+ *
+ * Ladder:
+ *   1. `failed`              → ✗ (error tone)
+ *   2. `done`               → ✓ (success tone)
+ *   3. `blocked`            → ⊘ (its OWN `blocked` tone, NOT error)
+ *   4. `in_progress`        → ● running (warning tone)
+ *   5. `draft` / `planned`  → ◌ (neutral; `planned` shares draft's neutral pre-actionable glyph)
+ *   6. `ready`:
+ *        a. unmet deps (`pendingDepIds` non-empty) → ◍ waiting-on-dependency
+ *        b. else `scheduleAt` is in the FUTURE     → ◷ scheduled
+ *        c. else (eligible: deps ok, not future)   → ◕ queued
+ *        d. fallback                               → ○ ready
+ *   7. `archived` (or anything unknown) → ○ ready glyph, neutral (archived renders in its own section).
+ *
+ * Pure (rule 2 — all status semantics live here, never string-matched in the component). The
+ * `now`/`scheduleAt` future check is the only time-dependent branch; callers pass `now` for
+ * determinism in tests.
  */
-export function statusToneOf(status: string): StatusTone {
-  switch (status.toLowerCase()) {
+export function statusGlyphOf(row: TicketRow, now: number = Date.now()): StatusGlyph {
+  switch (row.status.toLowerCase()) {
     case 'failed':
-    case 'error':
-    case 'blocked':
-      return 'error';
+      return { glyph: '✗', tone: 'error' };
     case 'done':
-    case 'success':
-    case 'complete':
-    case 'completed':
-      return 'success';
+      return { glyph: '✓', tone: 'success' };
+    case 'blocked':
+      return { glyph: '⊘', tone: 'blocked' };
     case 'in_progress':
-    case 'in-progress':
-    case 'running':
-    case 'active':
-    case 'ready':
-      return 'warning';
+      return { glyph: '●', tone: 'warning' };
+    case 'draft':
+    case 'planned':
+      // `planned` shares draft's neutral pre-actionable glyph (same ◌ — both are pre-actionable).
+      return { glyph: '◌', tone: 'neutral' };
+    case 'ready': {
+      if (row.pendingDepIds.length > 0) {
+        return { glyph: '◍', tone: 'neutral' }; // a: waiting-on-dependency
+      }
+      if (row.scheduleAt != null && isFuture(row.scheduleAt, now)) {
+        return { glyph: '◷', tone: 'neutral' }; // b: scheduled (future)
+      }
+      return { glyph: '◕', tone: 'neutral' }; // c: queued (eligible)
+    }
     default:
-      return 'neutral';
+      // d/7: plain ready fallback + archived/unknown — the neutral default glyph.
+      return { glyph: '○', tone: 'neutral' };
   }
 }
 
-/** Project one domain row into its display-ready presentation tuple. `index` drives `rowParity`. */
-function toTicketRowView(row: TicketRow, index: number): TicketRowView {
+/**
+ * Whether an ISO-8601 `scheduleAt` string parses to a time strictly AFTER `now`. A value that
+ * doesn't parse to a real date (e.g. a pre-formatted label) is treated as NOT future, so it falls
+ * through to the queued glyph rather than mis-claiming "scheduled".
+ */
+function isFuture(scheduleAt: string, now: number): boolean {
+  const t = Date.parse(scheduleAt);
+  return !Number.isNaN(t) && t > now;
+}
+
+/**
+ * Project one domain row into its display-ready presentation tuple. `index` drives `rowParity`,
+ * `depth` drives the subticket indent (title pre-indented here, rule 2), `now` feeds the
+ * scheduled-vs-future check in the status ladder.
+ */
+function toTicketRowView(row: TicketRow, index: number, depth: number, now: number): TicketRowView {
   const satisfied = row.pendingDepIds.length === 0;
+  const status = statusGlyphOf(row, now);
   return {
     id: row.id,
-    // col 1
+    // col 1 — title pre-indented for a subticket (mirrors plans' `toRowView`).
     idCell: truncate(row.id, ID_WIDTH),
-    titleCell: truncate(row.title, TITLE_WIDTH),
-    // col 2
-    statusCell: truncate(row.status, STATUS_WIDTH),
-    statusTone: statusToneOf(row.status),
+    titleCell: depth > 0 ? `${CHILD_INDENT}${truncate(row.title, TITLE_WIDTH)}` : truncate(row.title, TITLE_WIDTH),
+    // col 2 — status rendered as a glyph (Goal A).
+    statusCell: status.glyph,
+    statusTone: status.tone,
     lastUpdateCell: formatLastUpdateCell(row.lastUpdateAt, row.lastUpdateLabel),
     // col 3
     depsCell: formatDepsCell(row.pendingDepIds),
@@ -219,6 +278,7 @@ function toTicketRowView(row: TicketRow, index: number): TicketRowView {
     planCell: truncate('—', PLAN_WIDTH),
     worktreeCell: truncate('—', WORKTREE_WIDTH),
     rowParity: (index % 2 === 0 ? 0 : 1) as 0 | 1,
+    depth,
   };
 }
 
@@ -230,12 +290,49 @@ function byLastUpdateDescThenId(a: TicketRow, b: TicketRow): number {
 }
 
 /**
- * The pure view-model transform. Sorts a copy (never mutates the slice's readonly array) and
- * projects each row. Same input → same output, no React, no store, no bus.
+ * The pure view-model transform (Goal B — subticket tree). Mirrors `selectPlansView`'s tree build:
+ * partition rows into top-level parents and children-of-known-parents (a child whose `parent` is
+ * missing from the list is treated as top-level — never drop a row), sort within each band by
+ * `lastUpdateAt` desc, then flatten parent → its children (children rendered indented under the
+ * parent). The status glyph is computed per row at any depth. Same input → same output; no React,
+ * no store, no bus.
+ *
+ * `now` feeds the scheduled-vs-future glyph branch; it defaults to wall-clock and is injectable for
+ * deterministic tests.
  */
-export function selectTicketsView(state: TicketsState): TicketsView {
-  const sorted = [...state.rows].sort(byLastUpdateDescThenId);
-  const rows = sorted.map(toTicketRowView);
+export function selectTicketsView(state: TicketsState, now: number = Date.now()): TicketsView {
+  const all = state.rows;
+  const byId = new Map<string, TicketRow>(all.map((r) => [r.id, r]));
+
+  // 1. Partition into top-level tickets and children-of-known-parents (mirror plans step 1).
+  const childrenOf = new Map<string, TicketRow[]>();
+  const tops: TicketRow[] = [];
+  for (const r of all) {
+    if (r.parent !== null && byId.has(r.parent)) {
+      const bucket = childrenOf.get(r.parent);
+      if (bucket === undefined) {
+        childrenOf.set(r.parent, [r]);
+      } else {
+        bucket.push(r);
+      }
+    } else {
+      tops.push(r);
+    }
+  }
+
+  // 2. Order top-level tickets, then flatten each with its (ordered) children indented under it.
+  //    Children keep the same last-update-desc order as the top level.
+  tops.sort(byLastUpdateDescThenId);
+  const ordered: { row: TicketRow; depth: number }[] = [];
+  for (const parent of tops) {
+    ordered.push({ row: parent, depth: 0 });
+    const kids = (childrenOf.get(parent.id) ?? []).slice().sort(byLastUpdateDescThenId);
+    for (const kid of kids) {
+      ordered.push({ row: kid, depth: 1 });
+    }
+  }
+
+  const rows = ordered.map(({ row, depth }, index) => toTicketRowView(row, index, depth, now));
   return {
     rows,
     status: state.status,

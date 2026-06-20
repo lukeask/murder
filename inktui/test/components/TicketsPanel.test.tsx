@@ -119,7 +119,7 @@ describe('TicketsPanel', () => {
     // Row 1 content for T-1: id, title, status.
     expect(frame).toContain('T-1');
     expect(frame).toContain('Alpha ticket');
-    expect(frame).toContain('in_progress');
+    expect(frame).toContain('●'); // status glyph: in_progress → running
 
     // Row 2 content for T-1: harness+model, deps cell = 'ok' (no pending deps), no schedule.
     expect(frame).toContain('claude');
@@ -129,7 +129,7 @@ describe('TicketsPanel', () => {
     // Row 1 content for T-2: id, title, status.
     expect(frame).toContain('T-2');
     expect(frame).toContain('Bravo ticket');
-    expect(frame).toContain('ready');
+    expect(frame).toContain('◍'); // status glyph: ready + unmet deps → waiting-on-dependency
 
     // Row 2 content for T-2: deps cell shows pending ids, schedule shows 'Mon 14:00'.
     expect(frame).toContain('T-3, T-4'); // depsCell with pending dep ids
