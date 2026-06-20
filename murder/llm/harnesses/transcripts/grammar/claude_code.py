@@ -57,9 +57,12 @@ _CC_RUNNING_SUMMARY_RE = re.compile(
 # ``[A-Z][\w-]+`` match, leaking dozens of near-identical animation frames as
 # phantom assistant prose. Allow the phrase to span words, and require ≥1 leading
 # glyph (every real spinner frame has one — incl. the dim ``·`` frame) so a plain
-# assistant sentence ending in ``…`` can't be mistaken for chrome.
+# assistant sentence ending in ``…`` can't be mistaken for chrome. The gerund
+# class also allows an apostrophe: CC's whimsical word list includes elided forms
+# (``Beboppin'``, ``Jivin'``) whose ``'`` is outside ``\w`` — without it every
+# animation frame of those words leaked as a phantom assistant turn.
 _CC_SPINNER_RE = re.compile(
-    r"^\s*(?:[·*✻✶✳✽✢⠁-⣿◐◓◑◒]\s*)+[A-Z][\w-]+(?:[ \t][\w-]+)*…+\s*"
+    r"^\s*(?:[·*✻✶✳✽✢⠁-⣿◐◓◑◒]\s*)+[A-Z][\w'’-]+(?:[ \t][\w'’-]+)*…+\s*"
     r"(?:\([^)]*(?:tokens|thought|thinking|effort|↑|↓|esc to)[^)]*\))?\s*$"
 )
 _CC_SHELL_PROMPT_RE = re.compile(r"^\w+@\w[-\w.]*:[~\w/]*\s*\$\s")
@@ -82,6 +85,11 @@ _CC_RESULT_RE = re.compile(r"^\s*⎿\s?(.*)$")
 # segment, so this line must not leak into an assistant block.
 _CC_DIALOG_TAB_RE = re.compile(r"^\s*←\s+.*\s+→\s*$")
 _CC_ELIDED_RE = re.compile(r"…\s*\+\d+\s+lines")
+# A lone ``●`` with no trailing text is CC's live "responding" indicator dot, not
+# a bullet turn — ``_CC_BULLET_RE`` requires content after the glyph, so a bare
+# ``●`` matches no other rule and falls through to the bare-prose branch, leaking
+# as a phantom assistant segment containing just ``●``.
+_CC_BARE_BULLET_RE = re.compile(r"^\s*●\s*$")
 # A `❯` prompt whose body is just a slash-command echo (`/model opus`, `/clear`)
 # is CC chrome, not a user turn — the harness echoes the command into the prompt
 # box but the user never "said" it to the model. Suppress it (the old parsing.py
@@ -111,6 +119,7 @@ def _cc_result_tip(line: str) -> bool:
 _cc_is_chrome = chrome_matcher(
     *BASE_CHROME_RULES,
     regex_match_rule(_CC_SPINNER_RE),
+    regex_match_rule(_CC_BARE_BULLET_RE),
     regex_match_rule(_CC_SHELL_PROMPT_RE),
     regex_match_rule(_CC_AGENT_ROSTER_RE),
     _cc_empty_prompt,
@@ -261,8 +270,15 @@ def parse_spanned(
             and prompt.group(1).strip()
             and not _is_live_prompt(lines, i)
             and not _CC_CHOICE_OPTION_PROMPT_RE.match(line)
-            and not _SLASH_COMMAND_RE.fullmatch(prompt.group(1).strip())
         ):
+            # A `❯` prompt echoing a slash-command (`/model opus`, `/clear`) is CC
+            # chrome, not a user turn. Suppressing only the user branch is not
+            # enough: the line would fall through to the bare-prose branch below and
+            # re-emerge as a phantom assistant segment (text incl. the literal `❯`).
+            # Consume the line outright so it produces no segment at all.
+            if _SLASH_COMMAND_RE.fullmatch(prompt.group(1).strip()):
+                i += 1
+                continue
             body = [prompt.group(1)]
             i += 1
             while i < len(lines):

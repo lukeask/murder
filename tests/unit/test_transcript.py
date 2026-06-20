@@ -686,14 +686,57 @@ def test_cc_slash_command_echo_is_not_a_user_turn():
 
     slash = cc.parse_lines(["❯ /model opus", "● ok"])
     assert [s for s in slash if s["type"] == "user"] == []
+    # ...and it must not leak as an assistant turn either. Suppressing only the
+    # user branch left the line to fall through to the bare-prose branch, which
+    # re-emitted it as a phantom assistant segment carrying the literal `❯`.
+    slash_blob = json.dumps(slash, ensure_ascii=False)
+    assert "/model opus" not in slash_blob, f"slash echo leaked: {slash_blob}"
+    assert "❯" not in slash_blob, f"prompt glyph leaked: {slash_blob}"
 
     clear = cc.parse_lines(["❯ /clear", "● ok"])
     assert [s for s in clear if s["type"] == "user"] == []
+    assert "/clear" not in json.dumps(clear, ensure_ascii=False)
 
     real = cc.parse_lines(["❯ what does this function do?", "● ok"])
     real_users = [s for s in real if s["type"] == "user"]
     assert len(real_users) == 1
     assert "what does this function" in real_users[0]["text"]
+
+
+def test_cc_bare_responding_dot_is_chrome():
+    """A lone ``●`` (CC's live "responding" indicator, no trailing text) is chrome,
+    not content. ``_CC_BULLET_RE`` requires text after the glyph, so a bare ``●``
+    matched no rule and leaked through the bare-prose branch as a phantom assistant
+    segment containing just ``●``."""
+    from murder.llm.harnesses.transcripts.grammar import claude_code as cc
+
+    # The bare dot leaks two ways: as its own segment, and (when it lands between
+    # blank lines inside a block) absorbed as a phantom continuation line. Both the
+    # column-0 form and a leading-whitespace form must be dropped.
+    segs = cc.parse_lines(
+        ["❯ hi", "", "●", "", "● real answer", "  more text", "", "  ●", "", "● tail"]
+    )
+    assert "●" not in json.dumps(segs, ensure_ascii=False), f"bare dot leaked: {segs}"
+    assistant = [s for s in segs if s["type"] == "assistant"]
+    assert [a["text"] for a in assistant] == ["real answer more text", "tail"]
+
+
+def test_cc_apostrophe_gerund_spinner_is_chrome():
+    """CC's whimsical spinner words include elided gerunds (``Beboppin'``,
+    ``Jivin'``) whose apostrophe falls outside ``\\w``. The single-word gerund
+    class dropped them, so every animation frame leaked as a phantom assistant
+    turn (one per second, stacking with climbing token counts)."""
+    from murder.llm.harnesses.transcripts.grammar import claude_code as cc
+
+    frames = [
+        "✳ Beboppin'…",
+        "✳ Beboppin'… (2s · thinking with medium effort)",
+        "* Beboppin'… (3s · ↓ 76 tokens · thinking with medium effort)",
+        "· Jivin'… (17s · ↓ 902 tokens)",
+    ]
+    segs = cc.parse_lines(["❯ go", "● on it", *frames])
+    blob = json.dumps(segs, ensure_ascii=False)
+    assert "Beboppin" not in blob and "Jivin" not in blob, f"spinner leaked: {blob}"
 
 
 def test_cc_thinking_effort_spinner_is_chrome():
