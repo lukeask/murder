@@ -375,6 +375,19 @@ class ServiceHost:
             tmp.replace(path)
             return {"ok": True, "favorites": ids}
 
+        def _tui_load_templates(_body: dict[str, Any]) -> dict[str, Any]:
+            from murder.user_config import load_templates
+
+            return {"ok": True, "templates": load_templates()}
+
+        def _tui_save_templates(body: dict[str, Any]) -> dict[str, Any]:
+            from murder.user_config import save_templates
+
+            templates = body.get("templates")
+            if not isinstance(templates, list):
+                raise ValueError("tui.save_templates requires templates list")
+            return {"ok": True, "templates": save_templates(templates)}
+
         def _mask_llm(llm: Any) -> dict[str, Any]:
             # Dump the user llm block, masking every non-empty api_key as "***".
             if llm is None:
@@ -609,6 +622,8 @@ class ServiceHost:
         self.register_rpc_handler("image.upload", _image_upload)
         self.register_rpc_handler("tui.load_favorites", _tui_load_favorites)
         self.register_rpc_handler("tui.save_favorites", _tui_save_favorites)
+        self.register_rpc_handler("tui.load_templates", _tui_load_templates)
+        self.register_rpc_handler("tui.save_templates", _tui_save_templates)
         self.register_rpc_handler("settings.get", _settings_get)
         self.register_rpc_handler("settings.update", _settings_update)
         self.register_rpc_handler("worktree.list", _worktree_list)

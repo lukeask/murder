@@ -15,6 +15,7 @@ interface FakeCtx {
   captureNote: Mock;
   pushToast: Mock;
   clearTranscript: Mock;
+  saveTemplate: Mock;
   dismiss?: Mock;
 }
 
@@ -27,6 +28,7 @@ function makeCtx(withDismiss = false): FakeCtx {
     captureNote: vi.fn(),
     pushToast: vi.fn(),
     clearTranscript: vi.fn(),
+    saveTemplate: vi.fn(),
   };
   if (withDismiss) {
     base.dismiss = vi.fn();
@@ -128,14 +130,51 @@ describe('dispatchCommand — : commands', () => {
     expect(ctx.openHelp).toHaveBeenCalledOnce();
   });
 
-  it('unknown command: consumed, toast shown, nothing sent', () => {
+  it('unknown command: literal fallthrough — returns false, no toast, nothing handled', () => {
     const ctx = makeCtx();
     const handled = dispatchCommand(':unknowncmd', AGENT, ctx);
-    expect(handled).toBe(true);
-    expect(ctx.pushToast).toHaveBeenCalledWith('Unknown command: :unknowncmd', expect.anything());
+    // Locked decision: an unknown `:foo` is NOT consumed — it's ordinary text sent verbatim by the
+    // caller. No toast, no near-miss hint.
+    expect(handled).toBe(false);
+    expect(ctx.pushToast).not.toHaveBeenCalled();
     expect(ctx.sendKey).not.toHaveBeenCalled();
     expect(ctx.openHelp).not.toHaveBeenCalled();
     expect(ctx.captureNote).not.toHaveBeenCalled();
+  });
+
+  it(':save <name> <body> persists the template and toasts', () => {
+    const ctx = makeCtx();
+    const handled = dispatchCommand(':save foo some body', AGENT, ctx);
+    expect(handled).toBe(true);
+    expect(ctx.saveTemplate).toHaveBeenCalledWith('foo', 'some body');
+    expect(ctx.pushToast).toHaveBeenCalledWith('saved :foo:');
+  });
+
+  it(':save preserves internal whitespace in the body', () => {
+    const ctx = makeCtx();
+    dispatchCommand(':save foo line one  and   more', AGENT, ctx);
+    expect(ctx.saveTemplate).toHaveBeenCalledWith('foo', 'line one  and   more');
+  });
+
+  it(':save with an empty body toasts usage error and does not save', () => {
+    const ctx = makeCtx();
+    const handled = dispatchCommand(':save foo', AGENT, ctx);
+    expect(handled).toBe(true);
+    expect(ctx.saveTemplate).not.toHaveBeenCalled();
+    expect(ctx.pushToast).toHaveBeenCalledWith(
+      'usage: :save <name> <body>',
+      expect.objectContaining({ severity: 'error' }),
+    );
+  });
+
+  it(':save with an invalid name toasts usage error and does not save', () => {
+    const ctx = makeCtx();
+    dispatchCommand(':save bad!name a body', AGENT, ctx);
+    expect(ctx.saveTemplate).not.toHaveBeenCalled();
+    expect(ctx.pushToast).toHaveBeenCalledWith(
+      'usage: :save <name> <body>',
+      expect.objectContaining({ severity: 'error' }),
+    );
   });
 });
 

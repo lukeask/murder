@@ -68,8 +68,10 @@ function Harness({
     // send path runs, exactly as before).
     const commandCtx: CommandCtx = {
       sendKey: () => {},
+      clearTranscript: () => {},
       openHelp: () => {},
       captureNote: () => {},
+      saveTemplate: () => {},
       pushToast: () => 0,
     };
     useRootInput({

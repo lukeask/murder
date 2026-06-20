@@ -46,7 +46,12 @@ export interface CommandCtx {
   readonly dismiss?: () => void;
   /** Push a transient toast (unknown-command feedback, stub "coming soon" messages, passthrough hint). */
   readonly pushToast: (text: string, options?: PushOptions) => void;
+  /** Persist a `{name, body}` template (the `:save` command). Wraps `actions.templates.save`. */
+  readonly saveTemplate: (name: string, body: string) => void;
 }
+
+/** Valid template/command name — matches the backend's `^[A-Za-z0-9_-]+$`. */
+const NAME_RE = /^[A-Za-z0-9_-]+$/;
 
 /** One murder `:command` handler. Receives the argument string (everything after the command word,
  * trimmed of the single leading space) and the active agent id (may be `null` if no agent is active).
@@ -94,6 +99,21 @@ const COMMANDS: Readonly<Record<string, CommandHandler>> = {
   resume(_args, _agentId, ctx) {
     ctx.pushToast(':resume — use r in the history panel', { ttlMs: 8000 });
   },
+
+  /** `:save <name> <body>` — persist a `:name:` template. The first whitespace-delimited token is the
+   * name; the remainder (one leading space stripped, internal whitespace/newlines preserved) is the
+   * body. Invalid name or empty body → a usage toast; nothing saved. */
+  save(args, _agentId, ctx) {
+    const spaceIdx = args.indexOf(' ');
+    const name = spaceIdx === -1 ? args : args.slice(0, spaceIdx);
+    const body = spaceIdx === -1 ? '' : args.slice(spaceIdx + 1);
+    if (name === '' || !NAME_RE.test(name) || body === '') {
+      ctx.pushToast('usage: :save <name> <body>', { severity: 'error' });
+      return;
+    }
+    ctx.saveTemplate(name, body);
+    ctx.pushToast(`saved :${name}:`);
+  },
 };
 
 /**
@@ -136,8 +156,10 @@ export function dispatchCommand(text: string, agentId: string | null, ctx: Comma
     const args = spaceIdx === -1 ? '' : rest.slice(spaceIdx + 1);
     const handler = COMMANDS[name];
     if (handler === undefined) {
-      ctx.pushToast(`Unknown command: :${name}`, { ttlMs: 6000 });
-      return true; // handled (consumed): an unknown `:command` must not leak to the agent.
+      // Literal fallthrough (locked decision): an unknown `:foo` is NOT a murder command — it's sent to
+      // the agent verbatim (no toast, no near-miss hint). Templates are expanded upstream of this, so a
+      // `:foo` reaching here is neither a builtin nor a template: treat it as ordinary text.
+      return false;
     }
     handler(args, agentId, ctx);
     return true;
@@ -150,3 +172,7 @@ export function dispatchCommand(text: string, agentId: string | null, ctx: Comma
 /** The command words known to the dispatcher, for callers that want to introspect the surface (e.g.
  * the Help overlay's "Commands" section keeps its own descriptions, but this keeps the two honest). */
 export const COMMAND_NAMES: readonly string[] = Object.keys(COMMANDS);
+
+/** The builtin command names as a Set — passed to {@link expandTemplates} so a leading `:builtin`
+ * (e.g. `:help`, `:save`) is never shadowed by a same-named template. */
+export const BUILTIN_COMMAND_NAMES: ReadonlySet<string> = new Set(Object.keys(COMMANDS));
