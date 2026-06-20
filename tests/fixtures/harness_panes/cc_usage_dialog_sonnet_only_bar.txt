@@ -1,0 +1,47 @@
+# source: tools/testing/recordings/20260620-220403/frames.jsonl frame 28
+user@machine:~/Documents/code/murder $ claude
+ ▐▛███▜▌   Claude Code v2.1.185
+▝▜█████▛▘  Opus 4.8 with medium effort · Claude Max
+  ▘▘ ▝▝    ~/Documents/code/murder
+
+
+❯ /usage
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  Settings  Status   Config   Usage   Stats
+
+  Session
+
+  Total cost:            $0.0000
+  Total duration (API):  0s
+  Total duration (wall): 2s
+  Total code changes:    0 lines added, 0 lines removed
+  Usage:                 0 input, 0 output, 0 cache read, 0 cache write
+
+  Current session
+  ██████████████████████████████████████████████████ 100% used
+  Resets 6:19pm (America/New_York)
+
+  Current week (all models)
+  ████████▌                                          17% used
+  Resets Jun 27, 1:59am (America/New_York)
+
+  Current week (Sonnet only)
+  ███                                                6% used
+  Resets Jun 27, 1:59am (America/New_York)
+
+  What's contributing to your limits usage?
+  Approximate, based on local sessions on this machine — does not include other devices or claude.ai
+
+  Scanning local sessions…
+
+  Usage credits
+  Usage credits are off · /usage-credits to turn them on
+
+  Esc to cancel
+
+
+
+
+
+

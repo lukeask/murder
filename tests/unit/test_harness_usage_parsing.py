@@ -95,6 +95,23 @@ def test_claude_usage_dialog_narrow_parses_block_bar_and_reset() -> None:
     assert 3.5 * 60 < t_until_minutes < 4.0 * 60  # ~3h40m away
 
 
+def test_claude_usage_dialog_ignores_sonnet_only_weekly_bar() -> None:
+    # Max plan /usage can show three bars: session, weekly (all models), and
+    # weekly (Sonnet only). Parser must read the first two and ignore Sonnet-only.
+    pane = _load_pane_fixture("cc_usage_dialog_sonnet_only_bar.txt")
+    now = datetime(2026, 6, 20, 18, 4, tzinfo=ZoneInfo("America/New_York"))
+    status = parse_claude_usage_pane(pane, now=now)
+    assert len(status.windows) == 2
+    by_name = {w.name: w for w in status.windows}
+    assert by_name["current_session"].percent_used == 100.0
+    session_reset = datetime.fromisoformat(by_name["current_session"].reset_at)
+    assert session_reset.hour == 18 and session_reset.minute == 19  # 6:19pm
+    assert by_name["current_week"].percent_used == 17.0
+    week_reset = datetime.fromisoformat(by_name["current_week"].reset_at)
+    assert week_reset.month == 6 and week_reset.day == 27
+    assert week_reset.hour == 1 and week_reset.minute == 59
+
+
 def test_claude_usage_dialog_weekly_parses_both_windows() -> None:
     # Max plan: /usage shows both "Current session" and "Current week (all models)".
     # Reset for weekly uses "Jun 13, 2am" format (month + day + bare hour).

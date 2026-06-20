@@ -300,6 +300,18 @@ def _cc_model_effort_high(frames: list[dict[str, object]]) -> int:
     return _find_first(frames, lambda t: "● High effort" in t and "←/→ to adjust" in t)
 
 
+def _cc_usage_dialog_sonnet_only_bar(frames: list[dict[str, object]]) -> int:
+    """Claude /usage with session, weekly (all models), and Sonnet-only bars."""
+    return _find_first(
+        frames,
+        lambda t: (
+            "Current session" in t
+            and "Current week (all models)" in t
+            and "Current week (Sonnet only)" in t
+        ),
+    )
+
+
 def _cc_model_effort_max(frames: list[dict[str, object]]) -> int:
     """Model picker showing ``◈ Max effort ←/→ to adjust``."""
     return _find_first(frames, lambda t: "◈ Max effort" in t and "←/→ to adjust" in t)
@@ -479,6 +491,12 @@ EXTRACTIONS: tuple[Extraction, ...] = (
     Extraction("20260606-043837", "cursor_opus_edit_params_default.txt", _cursor_opus_edit_params_default),
     Extraction("20260606-043837", "cursor_opus_effort_low_hover.txt", _cursor_opus_effort_low_hover),
     Extraction("20260606-043837", "cursor_opus_effort_medium_selected.txt", _cursor_opus_effort_medium_selected),
+    # 2026-06-20 additions: Claude /usage with Sonnet-only weekly bar
+    Extraction(
+        "20260620-220403",
+        "cc_usage_dialog_sonnet_only_bar.txt",
+        _cc_usage_dialog_sonnet_only_bar,
+    ),
 )
 
 
