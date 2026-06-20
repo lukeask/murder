@@ -249,7 +249,10 @@ function ChoiceMenu({
             <Text
               color={isCursor ? theme.active : theme.text}
               bold={isCursor}
-              wrap={isComposeRow ? 'wrap' : 'truncate-end'}
+              // Wrap (not truncate) so a long option label/description stays fully readable within
+              // the input-box width — matching the question above. Truncating re-hid the very text
+              // the user needs to choose.
+              wrap="wrap"
             >
               {isCursor ? '❯ ' : '  '}
               {option.number}. {box}
