@@ -100,6 +100,7 @@ function toRosterRow(session: CrowSessionDto): RosterRow {
     model: session.model ?? null,
     status: session.status,
     session: session.session_name ?? null,
+    worktreePath: session.worktree_path ?? null,
     lastSeen: session.last_seen ?? null,
     openEscalations: session.open_escalations ?? 0,
     maxSeverity: session.max_severity ?? 0,

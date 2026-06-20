@@ -83,7 +83,7 @@ import {
   useConversationTurns,
   useOpenChatPanes,
 } from '../selectors/conversationsSelectors.js';
-import { harnessModelFooter } from '../selectors/harnessDisplay.js';
+import { harnessModelFooter, worktreeLabel } from '../selectors/harnessDisplay.js';
 import type { ConversationsState } from '../store/conversations/conversationsSlice.js';
 import type { OpenDoc } from '../store/docView/docViewSlice.js';
 import type { FavoritesState } from '../store/favorites/favoritesSlice.js';
@@ -114,15 +114,26 @@ function kindLabel(kind: AgentIdentity['kind']): string {
   }
 }
 
-/** The crow's `harness ◇ model` bottom-border label, looked up from the roster by agent id. `null`
- * when the row is gone or neither part is known — the bottom border then draws plain. Rule 2: the
- * wording lives in {@link ../selectors/harnessDisplay.js}; this just joins it to the roster row. */
+/** The crow's `harness ◇ model` bottom-LEFT border label, looked up from the roster by agent id.
+ * `null` when the row is gone or neither part is known — the left footer then draws plain. Rule 2:
+ * the wording lives in {@link ../selectors/harnessDisplay.js}; this just joins it to the roster row. */
 function footerFor(roster: RosterState, agentId: string): string | null {
   const row = roster.rows.find((r) => r.agentId === agentId);
   if (row === undefined) {
     return null;
   }
   return harnessModelFooter(row.harness, row.model, META_SEP);
+}
+
+/** The crow's worktree bottom-RIGHT border label (the bare `.murder/worktrees/<name>` subdir, or
+ * `main`). `null` only when the roster row is gone. Rule 2: the wording lives in
+ * {@link ../selectors/harnessDisplay.js worktreeLabel}; this just looks up the row. */
+function worktreeFor(roster: RosterState, agentId: string): string | null {
+  const row = roster.rows.find((r) => r.agentId === agentId);
+  if (row === undefined) {
+    return null;
+  }
+  return worktreeLabel(row.worktreePath ?? null);
 }
 
 /** How many turns scroll past per `j`/`k` (the window step). */
@@ -220,6 +231,7 @@ export const ChatPane = memo(function ChatPane({
   conversations,
   chatTarget,
   footer,
+  worktree,
   contentHeight,
 }: {
   readonly identity: AgentIdentity;
@@ -228,9 +240,12 @@ export const ChatPane = memo(function ChatPane({
    * the effective focus, the targeted pane is highlighted too (so the user sees where a typed
    * message will land without moving focus off the input). */
   readonly chatTarget: boolean;
-  /** The crow's `harness ◇ model` label for the bottom border, or `null` when unknown (so the
-   * bottom border draws plain). Derived in the Stage from the roster row (rule 2). */
+  /** The crow's `harness ◇ model` label for the bottom-LEFT border, or `null` when unknown (so the
+   * left footer draws plain). Derived in the Stage from the roster row (rule 2). */
   readonly footer: string | null;
+  /** The crow's worktree label for the bottom-RIGHT border (the bare `.murder/worktrees/<name>`
+   * subdir, or `main`), or `null` when the row is gone. Derived in the Stage (rule 2). */
+  readonly worktree: string | null;
   /** The inner fill-box height for this pane, computed deterministically by ChatGrid from the pinned
    * row height; `undefined` only before the grid's first measure. Replaces self-measuring a
    * parent-controlled height that went stale behind React.memo. */
@@ -360,8 +375,10 @@ export const ChatPane = memo(function ChatPane({
         </>
       }
       scrollbar={{ height: effectiveHeight, thumb }}
-      // The harness ◇ model label rides the bottom border, right-aligned to mirror the top-left name.
-      footerRight={footer !== null ? <Text dimColor>{footer}</Text> : undefined}
+      // The harness ◇ model label rides the bottom-LEFT border; the crow's worktree rides the
+      // bottom-RIGHT (mirroring the top-left name, right-aligned to the right edge).
+      footerLeft={footer !== null ? <Text dimColor>{footer}</Text> : undefined}
+      footerRight={worktree !== null ? <Text dimColor>{worktree}</Text> : undefined}
     >
       {/* Fill box: sizes to the Pane's inner content area (flexGrow + overflow hidden). Its height is
           received as `contentHeight` (ChatGrid measures + distributes), not self-measured here. */}
@@ -547,6 +564,7 @@ function ChatGrid({
                   conversations={conversations}
                   chatTarget={targetAgentId === identity.agentId}
                   footer={footerFor(roster, identity.agentId)}
+                  worktree={worktreeFor(roster, identity.agentId)}
                   contentHeight={contentHeights[i]}
                 />
               </Box>

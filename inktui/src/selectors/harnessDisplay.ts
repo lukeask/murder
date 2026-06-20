@@ -77,3 +77,23 @@ export function harnessModelFooter(
   }
   return h ?? m ?? null;
 }
+
+/** The marker that separates the repo root from a crow's worktree name in `worktree_path`
+ *  (`…/<repo>/.murder/worktrees/<name>`). The display label is just the `<name>` past it. */
+const WORKTREE_MARKER = '.murder/worktrees/';
+
+/**
+ * The chat-pane bottom-RIGHT label: the crow's worktree, shown as the bare subdir under
+ * `.murder/worktrees/` (e.g. `…/.murder/worktrees/foobar` → `foobar`). A crow with no worktree
+ * runs on the main checkout (`worktree_path` is null on the wire — see orchestrator.py), so it
+ * reads `main`; a path without the marker also falls back to `main` defensively.
+ */
+export function worktreeLabel(path: string | null): string {
+  const raw = (path ?? '').trim();
+  const idx = raw.indexOf(WORKTREE_MARKER);
+  if (idx === -1) {
+    return 'main';
+  }
+  const name = raw.slice(idx + WORKTREE_MARKER.length).replace(/\/+$/, '');
+  return name === '' ? 'main' : name;
+}

@@ -41,6 +41,13 @@ export interface RosterRow {
   readonly status: string;
   readonly session: string | null;
   /**
+   * Filesystem path of the crow's worktree, or null when it runs on the main checkout. Fed from
+   * Python `CrowSessionSummary.worktree_path`. Rendered as the bare `.murder/worktrees/<name>`
+   * subdir (or `main`) on the chat pane's bottom-right border — see `harnessDisplay.worktreeLabel`.
+   * Optional on `RosterRow` so existing test factories don't require the field.
+   */
+  readonly worktreePath?: string | null;
+  /**
    * ISO-8601 heartbeat timestamp, or null when not available. Used by `crowsSelectors.ts` to
    * compute the stuck-but-alive (YELLOW) health branch via `isStuck`. Python serialises
    * `datetime` fields as `datetime.isoformat()`, so this is always an ISO-8601 string on the wire.

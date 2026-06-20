@@ -202,6 +202,7 @@ describe('ChatPane — window honors the contentHeight prop', () => {
               conversations={store.getState().conversations}
               chatTarget={false}
               footer={null}
+              worktree={null}
               contentHeight={5}
             />
           </Box>
