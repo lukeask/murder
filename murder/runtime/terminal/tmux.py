@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import hashlib
+import logging
 import os
 import shlex
 import tempfile
@@ -20,6 +21,8 @@ import uuid
 from pathlib import Path
 
 from murder.observability.advanced_log import TmuxFrameRecord, current_advanced_log
+
+_log = logging.getLogger(__name__)
 
 LARGE_PAYLOAD_BYTES = 1024
 PASTE_ENTER_DELAY_S = 0.15
@@ -284,6 +287,17 @@ async def paste_buffer_literal(name: str, text: str) -> None:
 async def interrupt(name: str) -> None:
     """Send Ctrl-C to the session's pane without killing the session."""
     await _tmux("send-keys", "-t", name, "C-c")
+
+
+async def clear_history(name: str) -> None:
+    """Drop a session's scrollback (tmux clear-history).
+
+    Used after dismissing codex's startup update menu so the dismissed menu
+    can't be re-captured from history and re-poison idle detection.
+    """
+    rc, _out, err = await _tmux("clear-history", "-t", name, check=False)
+    if rc != 0:
+        _log.warning("tmux clear-history failed for %s (rc=%s): %s", name, rc, err.strip())
 
 
 def attach_command(name: str) -> str:

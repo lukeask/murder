@@ -54,6 +54,9 @@ CODEX_IDLE = _load("codex_idle.txt")
 CODEX_BUSY = _load("codex_busy.txt")
 CODEX_STARTUP = _load("codex_startup.txt")
 CODEX_UPDATE_MENU = _load("codex_update_menu.txt")
+CODEX_UPDATE_MENU_DISMISSED = _load("codex_update_menu_dismissed.txt")
+CODEX_UPDATE_MENU_PTR2 = _load("codex_update_menu_ptr2.txt")
+CODEX_UPDATE_MENU_PTR3 = _load("codex_update_menu_ptr3.txt")
 
 CURSOR_IDLE = _load("cursor_idle.txt")
 CURSOR_BUSY = _load("cursor_busy.txt")
@@ -261,6 +264,50 @@ class TestCodexAdapter:
 
     def test_update_menu_not_input_ready(self):
         assert self.cx.is_input_ready(CODEX_UPDATE_MENU) is False
+
+    # ── LIVE menu with the pointer below "Update now" — STILL blocking ──
+    # The menu's pointer glyph is also `›`; a live menu where the pointer sits
+    # on "› 2. Skip" / "› 3. Skip until next version" must not be misread as a
+    # dismissed menu (that would re-open the npm-install injection hazard).
+
+    def test_live_update_menu_pointer_on_skip_not_idle(self):
+        for fixture in (CODEX_UPDATE_MENU_PTR2, CODEX_UPDATE_MENU_PTR3):
+            assert self.cx.is_idle(fixture) is False
+            assert self.cx.is_input_ready(fixture) is False
+            # And it still reads ready so initialize_defaults can dismiss it.
+            assert self.cx.is_ready(fixture) is True
+
+    # ── dismissed update menu in scrollback — live prompt below means idle ──
+
+    def test_dismissed_update_menu_in_scrollback_is_idle(self):
+        # codex 0.139 leaves the dismissed menu in scrollback; the live `›`
+        # prompt below it means the menu is gone → the crow IS idle.
+        assert self.cx.is_idle(CODEX_UPDATE_MENU_DISMISSED) is True
+
+    def test_dismissed_update_menu_in_scrollback_is_input_ready(self):
+        assert self.cx.is_input_ready(CODEX_UPDATE_MENU_DISMISSED) is True
+
+    # ── content poisoning: a prompt/transcript that QUOTES the menu is NOT a menu ─
+    # `_UPDATE_MENU_RE` matches any "N. Update now ... npm install" line, including
+    # one a user composes while asking about THIS bug. Without the blocking
+    # sentinel ("Press enter to continue") that a genuine menu always renders,
+    # such quoted prose must not be misread as a live menu (which would wrongly
+    # report not-idle, re-triggering the original stuck-working symptom).
+
+    def test_prompt_quoting_update_menu_still_idle(self):
+        pane = (
+            "╭ >_ OpenAI Codex (v0.139.0) ────────────╮\n"
+            "╰────────────────────────────────────────╯\n"
+            "• user: Investigate the codex update bug. The menu showed:\n"
+            "  1. Update now (runs `npm install -g @openai/codex`)\n"
+            "  2. Skip\n"
+            "• codex: Looking into it now.\n"
+            "\n"
+            "›\n"
+            "  gpt-5.5 medium · ~/Documents/code/testingmurderharness\n"
+        )
+        assert self.cx.is_idle(pane) is True
+        assert self.cx.is_input_ready(pane) is True
 
     def test_update_menu_yields_no_model_choices(self):
         # Defense-in-depth: the model probe must never surface "npm install …" or

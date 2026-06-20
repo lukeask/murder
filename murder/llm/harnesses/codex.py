@@ -60,6 +60,16 @@ _UPDATE_MENU_RE = re.compile(
     r"^\s*[›>]?\s*\d+\.\s+Update now\b.*npm install",
     re.IGNORECASE | re.MULTILINE,
 )
+# A codex menu OPTION line ("› 1. Update now", "  2. Skip"). Its leading pointer
+# glyph collides with the idle-prompt `›`, so when checking whether a live
+# composer prompt sits below the update menu we must not count the menu's own
+# option lines as that prompt.
+_MENU_OPTION_RE = re.compile(r"^\s*[›>]?\s*\d+\.\s")
+# The codex update menu's blocking action line. A genuine live/dismissed-in-
+# scrollback menu always renders this; a prompt or transcript line that merely
+# QUOTES "N. Update now (runs npm install ...)" does not. Requiring it stops
+# arbitrary composer/transcript content from being misread as a live menu.
+_MENU_SENTINEL_RE = re.compile(r"Press enter to continue", re.IGNORECASE)
 
 _STATUS_COMMAND_POPUP_DELAY_S = 0.5
 _STATUS_FIRST_ENTER_DELAY_S = 0.8
@@ -107,6 +117,35 @@ def _tail(pane_text: str) -> str:
     while lines and not lines[-1].strip():
         lines.pop()
     return "\n".join(lines[-_TAIL_LINES:])
+
+
+def _update_menu_active(clean: str) -> bool:
+    """True when codex's blocking 'update available' menu is the live surface.
+
+    A dismissed menu lingers in tmux scrollback; the live `›` composer prompt
+    then sits BELOW it, so the menu is normally 'active' only when no idle
+    prompt follows the last menu match. Two glyph/content hazards are guarded:
+    (1) the menu's own pointer glyph is also `›` (codex renders it on the
+    selected option, e.g. "› 2. Skip"), so only a `›` line that is NOT a
+    numbered menu option counts as the live composer prompt; (2) `_UPDATE_MENU_RE`
+    matches any "N. Update now ... npm install" line, including a prompt or
+    transcript line that merely QUOTES the menu — so we additionally require the
+    menu's blocking sentinel ("Press enter to continue") at/after the match.
+    """
+    menu = list(_UPDATE_MENU_RE.finditer(clean))
+    if not menu:
+        return False
+    last_menu = menu[-1].start()
+    sentinel = _MENU_SENTINEL_RE.search(clean, last_menu)
+    if sentinel is None:
+        return False  # no blocking sentinel → quoted text, not a live menu
+    for m in _IDLE_PROMPT_RE.finditer(clean):
+        if m.start() <= last_menu:
+            continue
+        if _MENU_OPTION_RE.match(clean[m.start():m.end()]):
+            continue
+        return False  # a real live composer prompt below the menu → it's gone
+    return True
 
 
 def _model_state_matches(
@@ -194,7 +233,7 @@ class CodexAdapter(HarnessAdapter):
         # The update menu blocks startup; it must read ready so initialize_defaults
         # gets a chance to dismiss it (dismiss runs only after _wait_startup_ready).
         return bool(
-            _UPDATE_MENU_RE.search(clean)
+            _update_menu_active(clean)
             or _BANNER_RE.search(clean)
             or _IDLE_PROMPT_RE.search(tail)
         )
@@ -202,14 +241,14 @@ class CodexAdapter(HarnessAdapter):
     def is_idle(self, pane_text: str) -> bool:
         clean = strip_ansi(pane_text)
         tail = _tail(clean)
-        if _LOGIN_RE.search(tail) or _UPDATE_MENU_RE.search(clean) or self.is_busy(tail):
+        if _LOGIN_RE.search(tail) or _update_menu_active(clean) or self.is_busy(tail):
             return False
         return bool(_IDLE_PROMPT_RE.search(tail))
 
     def is_input_ready(self, pane_text: str) -> bool | None:
         clean = strip_ansi(pane_text)
         tail = _tail(clean)
-        if _LOGIN_RE.search(tail) or _UPDATE_MENU_RE.search(clean) or self.is_busy(tail):
+        if _LOGIN_RE.search(tail) or _update_menu_active(clean) or self.is_busy(tail):
             return False
         return _live_prompt_text(clean) is not None
 
@@ -231,6 +270,9 @@ class CodexAdapter(HarnessAdapter):
                 await asyncio.sleep(0.2)
                 await tmux.send_keys(session, "Enter", literal=False, enter=False)
                 await asyncio.sleep(0.2)
+                # Drop the dismissed menu from scrollback so it can't be
+                # re-captured (-S history) and re-poison idle detection.
+                await tmux.clear_history(session)
                 break
             if attempt < attempts - 1:
                 await asyncio.sleep(0.3)
