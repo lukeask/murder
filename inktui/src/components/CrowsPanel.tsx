@@ -62,7 +62,6 @@ import { HEALTH_EDGE_COLOR } from '../selectors/crowHealthSelectors.js';
 import { type CrowRowView, type CrowsView, useCrowsView } from '../selectors/crowsSelectors.js';
 import { murderConfirmStore, resetConfirmStore } from '../store/murder/murderConfirmStore.js';
 import { toastStore } from '../store/toast/toastStore.js';
-import type { Theme } from '../theme/buildTheme.js';
 import { useTheme } from '../theme/themeStore.js';
 import { Ledger, type LedgerEntryContext } from './Ledger.js';
 import { Pane } from './Pane.js';
@@ -135,7 +134,6 @@ function renderCrowRow(
   ledgerRow: CrowLedgerRow,
   ctx: LedgerEntryContext,
   expanded: boolean,
-  theme: Theme,
 ): React.ReactNode {
   if (ledgerRow.kind === 'header') {
     return (
@@ -147,16 +145,17 @@ function renderCrowRow(
     );
   }
   const { row } = ledgerRow;
-  const edgeColor = HEALTH_EDGE_COLOR[row.health];
+  // Indicator circle colour carries the health signal the old left-edge glyph used to: a red `○`
+  // means "awaiting you with an open escalation", a green `●` means "healthily working", etc.
+  const indicatorColor = HEALTH_EDGE_COLOR[row.health];
   return (
     <Box flexDirection="column" flexGrow={1} flexShrink={0}>
       <Text wrap="truncate">
-        <Text color={edgeColor}>{ctx.selected ? '▌' : '▎'}</Text>
-        {/* FIXED-WIDTH star gutter (matches Notes/Reports): `★ ` when favorited, spaces otherwise,
-            so the names stay column-aligned whether or not the row is starred. */}
-        {row.favorited ? ' ★ ' : '   '}
-        {`${row.name}  `}
-        <Text color={theme.heading}>{row.status}</Text>
+        {/* FIXED-WIDTH leading gutter: a star (or space) cell, a space, then the readiness circle,
+            a space, then the name — so names stay column-aligned whether or not the row is starred.
+            `○` = ready for user input, `●` = working / not yet ready. */}
+        {row.favorited ? '★' : ' '} <Text color={indicatorColor}>{row.working ? '●' : '○'}</Text>
+        {` ${row.name}`}
       </Text>
       {expanded ? (
         <Text dimColor={!ctx.selected} wrap="truncate">
@@ -168,15 +167,15 @@ function renderCrowRow(
 }
 
 /**
- * The Ledger column-titles key for crows — a single dim line labeling the crow row layout: a 2-col
- * leading gutter (matching the glyph + space) then `crow · status` (bug 1). The grouped section labels
- * are in-band rows; this top key explains what a crow LINE means. Rendered above the rows; it doesn't
+ * The Ledger column-titles key for crows — a single dim legend explaining the readiness circle that
+ * leads each crow line: `○` = ready for user input, `●` = working. The grouped section labels are
+ * in-band rows; this top key explains what a crow LINE means. Rendered above the rows; it doesn't
  * participate in the flat cursor mapping (headers/keys are never selectable).
  */
 function renderCrowsHeader(): React.ReactNode {
   return (
     <Box flexShrink={0}>
-      <Text dimColor>{'  crow · status'}</Text>
+      <Text dimColor>{'  ○ ready  ● working'}</Text>
     </Box>
   );
 }
@@ -216,7 +215,7 @@ function CrowsList({
       linesPerEntry={expanded ? 2 : 1}
       minColumns={1}
       maxColumns={1}
-      renderEntry={(ledgerRow, ctx) => renderCrowRow(ledgerRow, ctx, expanded, theme)}
+      renderEntry={(ledgerRow, ctx) => renderCrowRow(ledgerRow, ctx, expanded)}
       header={renderCrowsHeader}
       rowKey={(ledgerRow) =>
         ledgerRow.kind === 'header' ? `h:${ledgerRow.group}` : `c:${ledgerRow.row.agentId}`
@@ -343,7 +342,11 @@ export const CrowsPanel = memo(function CrowsPanel(): React.JSX.Element {
         // pending-check: the handler re-derives the cursor row and confirms only when it still
         // matches the armed target; otherwise the press re-arms for the new row. Registry-sourced
         // (`panel.resetCrow`) so the help overlay lists it.
-        { chord: bindings.chordsFor('panel.resetCrow'), intent: 'reset', description: 'reset crow' },
+        {
+          chord: bindings.chordsFor('panel.resetCrow'),
+          intent: 'reset',
+          description: 'reset crow',
+        },
       ],
       onIntent(intent) {
         switch (intent) {

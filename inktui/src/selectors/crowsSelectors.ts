@@ -75,6 +75,12 @@ export interface CrowRowView {
    * the starred-first sort within the group (item 9d). */
   readonly favorited: boolean;
   readonly status: string;
+  /**
+   * True when the crow is actively working (not yet ready for user input) — drives the `●` glyph;
+   * `○` otherwise (ready/awaiting the user). Only `running` reads as working; every other status
+   * (idle, escalating, blocked, done, failed, dead) is awaiting the user.
+   */
+  readonly working: boolean;
   /** Harness, or `'—'` when absent. Used in the maximized second line. */
   readonly harness: string;
   /** Model, basename-only and truncated. Used in the maximized second line. */
@@ -197,6 +203,7 @@ function toRowView(row: RosterRow, nowMs: number, favorited: boolean): CrowRowVi
     name: row.session !== null ? stripSessionPrefix(row.session) : row.agentId,
     favorited,
     status: row.status,
+    working: (row.status ?? '').toLowerCase() === 'running',
     harness: row.harness ?? '—',
     model: modelBasename(row.model),
     health: classifyCrowHealth({

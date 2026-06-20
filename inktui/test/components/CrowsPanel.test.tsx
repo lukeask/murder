@@ -158,8 +158,10 @@ describe('CrowsPanel — sections and grouping', () => {
     expect(frame).toContain('plan-alpha');
     expect(frame).toContain('rogue-one');
     expect(frame).toContain('ticket-crow');
-    // The crow-health left-edge glyph (F9 port) is painted on each row's first line.
-    expect(frame).toContain('▎');
+    // The readiness circle leads each row: `●` for working crows (collab/rogue are `running`),
+    // `○` for crows awaiting the user (planner/ticket are `idle`).
+    expect(frame).toContain('●');
+    expect(frame).toContain('○');
     dispose();
   });
 
@@ -221,16 +223,16 @@ describe('CrowsPanel — sections and grouping', () => {
 });
 
 describe('CrowsPanel — minimized / maximized', () => {
-  it('starts minimized: shows name + status but not harness · model', async () => {
+  it('starts minimized: shows name + readiness circle but not harness · model', async () => {
     const { store, inputStores, dispose } = await setup();
     const { lastFrame } = render(<Harness store={store} inputStores={inputStores} />);
     await tick();
     const frame = lastFrame() ?? '';
     // Mode label present.
     expect(frame).toContain('[min]');
-    // Name and status visible.
+    // Name and the working circle visible (collab is `running`).
     expect(frame).toContain('collab');
-    expect(frame).toContain('running');
+    expect(frame).toContain('●');
     // Second line (harness · model) should NOT appear in minimized mode.
     expect(frame).not.toContain('claude · claude-opus');
     dispose();
@@ -285,20 +287,15 @@ describe('CrowsPanel — focus highlight and keymap', () => {
     const { stdin, lastFrame } = render(<Harness store={store} inputStores={inputStores} />);
     await tick();
 
-    // The first row in the first section (collaborator) is selected — marker on collab.
-    const before = lastFrame() ?? '';
-    const markerStart = before.indexOf('▌');
-    const collabPos = before.indexOf('collab');
-    // Marker should be near the collab entry (first rendered row).
-    expect(markerStart).toBeLessThanOrEqual(collabPos + 20);
-
-    // Move down: cursor moves to next row (the planner row).
+    // The cursor starts on the first crow (collaborator). The selection highlight is a background
+    // colour the test renderer doesn't surface (FORCE_COLOR-gated), so we prove cursor position via
+    // the row that `enter` (openChat) acts on rather than a frame marker. Move down to the planner.
     stdin.write('j');
     await tick();
-    const afterDown = lastFrame() ?? '';
-    const markerAfter = afterDown.indexOf('▌');
-    // After pressing j, the marker should have moved to a later position in the frame.
-    expect(markerAfter).toBeGreaterThan(markerStart);
+    stdin.write(RETURN);
+    await tick();
+    // Enter opened+pinned the planner's pane → the cursor was on the planner row (item 5).
+    expect(store.getState().conversations.activePaneAgentId).toBe('planner-1');
 
     // Unfocus via alt+space; k should no longer affect cursor.
     stdin.write(ALT_SPACE);
@@ -333,9 +330,10 @@ describe('CrowsPanel — favorites glyph and chat-pane toggle', () => {
     const { lastFrame } = render(<Harness store={store} inputStores={inputStores} />);
     await tick();
     const frame = lastFrame() ?? '';
-    // Collaborator + rogue are favorited-by-default → starred name. Planner + ticket crow → no star.
-    expect(frame).toContain('★ collab');
-    expect(frame).toContain('★ rogue-one');
+    // Collaborator + rogue are favorited-by-default → star in the leading gutter (`★ ● name`, the
+    // circle sits between the star and the name). Planner + ticket crow → no star.
+    expect(frame).toContain('★ ● collab');
+    expect(frame).toContain('★ ● rogue-one');
     expect(frame).not.toContain('★ plan-alpha');
     expect(frame).not.toContain('★ ticket-crow');
     dispose();
@@ -359,14 +357,15 @@ describe('CrowsPanel — favorites glyph and chat-pane toggle', () => {
 
   it('arrow keys move the cursor (item 5)', async () => {
     const { store, inputStores, dispose } = await setup();
-    const { lastFrame, stdin } = render(<Harness store={store} inputStores={inputStores} />);
+    const { stdin } = render(<Harness store={store} inputStores={inputStores} />);
     await tick();
-    const markerOf = (f: string): number => f.indexOf('▌');
-    const start = markerOf(lastFrame() ?? '');
+    // Down arrow moves off the collaborator onto the planner; enter then acts on the planner row,
+    // proving the cursor moved (the highlight itself is a FORCE_COLOR-gated background, not a glyph).
     stdin.write('\x1b[B'); // down arrow
     await tick();
-    const after = markerOf(lastFrame() ?? '');
-    expect(after).toBeGreaterThan(start);
+    stdin.write(RETURN);
+    await tick();
+    expect(store.getState().conversations.activePaneAgentId).toBe('planner-1');
     dispose();
   });
 });
