@@ -763,6 +763,61 @@ def test_cc_apostrophe_gerund_spinner_is_chrome():
     assert "Beboppin" not in blob and "Jivin" not in blob, f"spinner leaked: {blob}"
 
 
+def test_cc_tip_footer_wrapped_tail_is_chrome():
+    """CC's bottom-of-pane ``⎿ Tip:`` footer (under the working spinner) soft-wraps,
+    and the live footer wraps its tail back to column 0 — so a lone ``/config`` from
+    "…enable push notifications in /config" fell into the bare-prose branch as a
+    phantom assistant turn. The Tip line plus its wrapped tail must be consumed as
+    one chrome unit, whether the tail wraps to column 0 or stays indented."""
+    from murder.llm.harnesses.transcripts.grammar import claude_code as cc
+
+    # Tail wrapped to column 0 (the live-footer rendering that triggered the bug).
+    col0 = cc.parse_lines(
+        [
+            "● I'll read that report.",
+            "",
+            "  Searching for 1 pattern, reading 1 file… (ctrl+o to expand)",
+            "  ⎿  .murder/reports/freshstartupjun20.md",
+            "",
+            "· Beboppin'… (38s · ↑ 195 tokens)",
+            "  ⎿  Tip: Get pinged on your phone when long tasks finish · enable push notifications in",
+            "/config",
+        ]
+    )
+    blob = json.dumps(col0, ensure_ascii=False)
+    assert "/config" not in blob, f"tip wrap leaked: {blob}"
+    assert [s["text"] for s in col0 if s["type"] == "assistant"] == [
+        "I'll read that report."
+    ]
+
+    # Tail directly under a bullet with an indented wrap (collector path).
+    indented = cc.parse_lines(
+        [
+            "● Done.",
+            "",
+            "· Beboppin'… (4s · ↑ 12 tokens)",
+            "  ⎿  Tip: Get pinged on your phone when long tasks finish · enable push notifications in",
+            "     /config",
+        ]
+    )
+    assert "/config" not in json.dumps(indented, ensure_ascii=False)
+    assert [s["text"] for s in indented if s["type"] == "assistant"] == ["Done."]
+
+    # Guard the red-team regression: a real ⎿ tool RESULT row that merely contains
+    # the word "Tip:" is NOT the footer — its content must survive. A tool result
+    # follows a ``● Verb(...)`` header and is gathered by _cc_collect_result via
+    # _CC_RESULT_RE, never by the Tip branch.
+    result = cc.parse_lines(
+        [
+            "● Bash(grep -rn Tip README.md)",
+            "  ⎿  README.md:5: Tip: run the linter first",
+            "     README.md:9: Tip: commit often",
+        ]
+    )
+    blob = json.dumps(result, ensure_ascii=False)
+    assert "run the linter first" in blob and "commit often" in blob
+
+
 def test_cc_thinking_effort_spinner_is_chrome():
     """Spinner status lines whose parenthetical carries only a thinking-effort
     tail (``(5s · thinking with high effort)`` — no token counts, no ``esc to``)

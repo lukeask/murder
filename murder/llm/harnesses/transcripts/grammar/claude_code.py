@@ -285,6 +285,8 @@ def parse_spanned(
                 cur = lines[i]
                 if _cc_starts_block(lines, i):
                     break
+                if _cc_result_tip(cur):
+                    break  # hand the Tip footer + its wrap to the Tip branch
                 if cur.startswith("  ") and not _cc_is_chrome(cur):
                     body.append(cur)
                     i += 1
@@ -406,6 +408,8 @@ def parse_spanned(
             body = [bullet.group(1)]
             i += 1
             while i < len(lines) and not _cc_starts_block(lines, i):
+                if _cc_result_tip(lines[i]):
+                    break  # hand the Tip footer + its wrap to the Tip branch
                 if not _cc_is_chrome(lines[i]):
                     body.append(lines[i])
                 elif not lines[i].strip():
@@ -425,6 +429,30 @@ def parse_spanned(
                 )
             continue
 
+        if _cc_result_tip(line):
+            # CC's bottom-of-pane ``Tip:`` footer. It soft-wraps, and the live
+            # footer rendered under the working spinner wraps its tail back to
+            # column 0 (e.g. a lone ``/config`` from "…enable push notifications
+            # in /config"). That column-0 tail would otherwise fall into the
+            # bare-prose branch below as a phantom assistant turn. Consume the
+            # Tip line plus its wrapped continuation as one chrome unit. Stop at
+            # the first blank line, real block start, input box / ``⎿`` row, or a
+            # *different* chrome construct — so we only ever eat the footer's own
+            # wrap, never the content that follows it.
+            i += 1
+            while i < len(lines):
+                cur = lines[i]
+                if not cur.strip():
+                    break
+                if _cc_starts_block(lines, i):
+                    break
+                if _CC_PROMPT_RE.match(cur) or _CC_RESULT_RE.match(cur):
+                    break
+                if _cc_is_chrome(cur) and not _cc_result_tip(cur):
+                    break
+                i += 1
+            continue
+
         if (
             not _cc_is_chrome(line)
             and not (_CC_PROMPT_RE.match(line) and _is_live_prompt(lines, i))
@@ -435,6 +463,8 @@ def parse_spanned(
             i += 1
             while i < len(lines) and not _cc_starts_block(lines, i):
                 cur = lines[i]
+                if _cc_result_tip(cur):
+                    break  # hand the Tip footer + its wrap to the Tip branch
                 if _CC_PROMPT_RE.match(cur) and _is_live_prompt(lines, i):
                     break
                 if _CC_CHOICE_OPTION_PROMPT_RE.match(cur):
