@@ -235,7 +235,11 @@ class Runtime:
                 note_sync=self.note_sync,
                 on_note_change=lambda name: self.emit_snapshot(Entity.NOTE, name),
             )
-            await self._sync.reconcile_all()
+            # Seeding stays on the boot path (cheap, idempotent — restores missing
+            # examples before the loops scan). The heavy markdown->DB reconcile is now
+            # carried by the spawned per-category loops below: non-blocking, single-pass,
+            # parallel — so it no longer blocks socket readiness nor runs twice at boot.
+            self._sync.seed()
             self._tasks.update(self._sync.spawn_tasks())
         except BaseException:
             with contextlib.suppress(Exception):

@@ -139,9 +139,13 @@ class FilesystemSyncSupervisor:
         self.plan_sync.parse_error_notifier = _notify
         self.ticket_sync.parse_error_notifier = _notify
 
-    async def reconcile_all(self) -> None:
+    def seed(self) -> None:
+        """Restore any missing example artifacts. Cheap + idempotent; kept on the boot path."""
         if self.repo_root is not None:
             seed_examples(self.repo_root)
+
+    async def reconcile_all(self) -> None:
+        self.seed()
         await self.plan_sync.reconcile_all()
         await self.note_sync.reconcile_all()
         await self.notetaker_context_sync.reconcile_all()
