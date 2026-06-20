@@ -56,9 +56,17 @@ export interface RealStdin {
   unref?(): unknown;
 }
 
+/** A mouse-wheel notch lifted from an SGR mouse report. `direction` is the scroll direction; the
+ * cell coordinates are dropped because scroll routing is focus-based (the focused/targeted pane), not
+ * pointer-based — they can be threaded back through here if hover routing is ever wanted. */
+export interface Wheel {
+  readonly direction: 'up' | 'down';
+}
+
 /** Events the shim emits beyond the standard stream `data`/`end`. */
 export interface StdinShimEvents {
   chord: (chord: Chord) => void;
+  wheel: (wheel: Wheel) => void;
 }
 
 /**
@@ -76,6 +84,10 @@ export class StdinShim extends Readable implements TokenSource {
    * tokens are routed to them and swallowed downstream. */
   private readonly tokenListeners = new Set<(token: CsiToken) => void>();
   private bypass = true;
+  /** When mouse reporting is enabled the parser must run even in bypass mode, so SGR mouse reports are
+   * tokenised into `wheel` events rather than forwarded as opaque bytes to Ink (which ignores them).
+   * Keystrokes are unaffected: under legacy encoding they are not CSI-u, so they stay passthrough. */
+  private mouseEnabled = false;
   private flushTimer: ReturnType<typeof setTimeout> | undefined;
 
   constructor(real: RealStdin) {
@@ -102,6 +114,13 @@ export class StdinShim extends Readable implements TokenSource {
   /** Whether the shim is currently in pure-passthrough mode. */
   isBypass(): boolean {
     return this.bypass;
+  }
+
+  /** Enable (`true`) or disable (`false`) wheel tokenisation. When enabled the parser runs even in
+   * bypass so SGR mouse reports become `wheel` events instead of opaque passthrough bytes. The caller
+   * pairs this with writing the terminal's mouse-reporting enable/disable sequences. */
+  setMouseEnabled(enabled: boolean): void {
+    this.mouseEnabled = enabled;
   }
 
   /** {@link TokenSource}. Subscribe a detection listener; returns an unsubscribe fn. While at least
@@ -151,9 +170,11 @@ export class StdinShim extends Readable implements TokenSource {
 
   private readonly onData = (chunk: Buffer | string): void => {
     const bytes = typeof chunk === 'string' ? Buffer.from(chunk, 'utf8') : chunk;
-    // Fast path: pure bypass with no detection in flight → forward verbatim, parser untouched. This
-    // is the behavior-neutral default (modifier=alt), so we never pay parser cost when not needed.
-    if (this.bypass && this.tokenListeners.size === 0) {
+    // Fast path: pure bypass with no detection in flight AND no mouse tokenisation → forward verbatim,
+    // parser untouched. This is the behavior-neutral default (modifier=alt, mouse off), so we never pay
+    // parser cost when not needed. With mouse enabled the parser runs so SGR reports become `wheel`
+    // events; keystrokes stay passthrough (they are legacy bytes, not CSI-u, under that modifier).
+    if (this.bypass && this.tokenListeners.size === 0 && !this.mouseEnabled) {
       this.forward(bytes);
       return;
     }
@@ -178,7 +199,24 @@ export class StdinShim extends Readable implements TokenSource {
         case 'key':
           this.emitKey(token);
           break;
+        case 'mouse':
+          this.emitMouse(token);
+          break;
       }
+    }
+  }
+
+  /** Lift a wheel notch out of an SGR mouse report into a `wheel` event; all other mouse reports
+   * (clicks, drags, motion) are swallowed — mouse reporting is enabled for scrolling only, and Ink
+   * has no mouse handling, so forwarding them as bytes would be noise at best. The wheel buttons are
+   * SGR codes 64 (up) / 65 (down); the +4/+8/+16 modifier and +32 motion bits are masked off so a
+   * shift/ctrl-scroll still scrolls. */
+  private emitMouse(token: Extract<CsiToken, { type: 'mouse' }>): void {
+    const base = token.button & 0xc3; // keep the button/wheel bits (0,1,6,7); drop modifier + motion
+    if (base === 64) {
+      this.emit('wheel', { direction: 'up' } satisfies Wheel);
+    } else if (base === 65) {
+      this.emit('wheel', { direction: 'down' } satisfies Wheel);
     }
   }
 

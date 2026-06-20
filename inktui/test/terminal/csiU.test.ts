@@ -168,3 +168,54 @@ describe('non-kitty escapes pass through verbatim', () => {
     expect(passthroughText(feed(p, '\x1bOP'))).toBe('\x1bOP');
   });
 });
+
+describe('SGR mouse reports', () => {
+  it('decodes a wheel-up press CSI < 64 ; x ; y M', () => {
+    const p = new CsiUParser();
+    expect(feed(p, '\x1b[<64;10;5M')).toEqual([
+      { type: 'mouse', button: 64, x: 10, y: 5, pressed: true },
+    ]);
+  });
+
+  it('decodes a wheel-down press', () => {
+    const p = new CsiUParser();
+    expect(feed(p, '\x1b[<65;1;1M')).toEqual([
+      { type: 'mouse', button: 65, x: 1, y: 1, pressed: true },
+    ]);
+  });
+
+  it('distinguishes release (final m) from press (final M)', () => {
+    const p = new CsiUParser();
+    expect(feed(p, '\x1b[<0;3;4m')).toEqual([
+      { type: 'mouse', button: 0, x: 3, y: 4, pressed: false },
+    ]);
+  });
+
+  it('carries modifier + motion bits in the raw button code', () => {
+    const p = new CsiUParser();
+    // wheel-up (64) + ctrl (16) = 80; the consumer masks the button bits out.
+    expect(feed(p, '\x1b[<80;2;2M')).toEqual([
+      { type: 'mouse', button: 80, x: 2, y: 2, pressed: true },
+    ]);
+  });
+
+  it('reassembles a mouse report split across chunks', () => {
+    const p = new CsiUParser();
+    expect(feed(p, '\x1b[<64;1')).toEqual([]);
+    expect(feed(p, '0;20M')).toEqual([{ type: 'mouse', button: 64, x: 10, y: 20, pressed: true }]);
+  });
+
+  it('forwards a malformed mouse report (too few params) verbatim', () => {
+    const p = new CsiUParser();
+    expect(passthroughText(feed(p, '\x1b[<64;5M'))).toBe('\x1b[<64;5M');
+  });
+
+  it('does not swallow text following a mouse report', () => {
+    const p = new CsiUParser();
+    const tokens = feed(p, '\x1b[<64;1;1Mhi');
+    expect(tokens).toEqual([
+      { type: 'mouse', button: 64, x: 1, y: 1, pressed: true },
+      { type: 'passthrough', bytes: bytes('hi') },
+    ]);
+  });
+});

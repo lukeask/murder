@@ -182,3 +182,64 @@ describe('TTY surface forwarding', () => {
     expect(down.text()).toBe('');
   });
 });
+
+describe('mouse wheel (mouse reporting enabled)', () => {
+  it('lifts a wheel-up SGR report into a wheel event and swallows the bytes', () => {
+    const real = new FakeStdin();
+    const shim = new StdinShim(real);
+    shim.setMouseEnabled(true);
+    const down = collectDownstream(shim);
+    const wheels: Array<'up' | 'down'> = [];
+    shim.on('wheel', (w: { direction: 'up' | 'down' }) => wheels.push(w.direction));
+
+    real.push('\x1b[<64;10;5M');
+    expect(wheels).toEqual(['up']);
+    // The mouse bytes are consumed, never forwarded to Ink.
+    expect(down.text()).toBe('');
+  });
+
+  it('emits down for button 65 and respects modifier bits', () => {
+    const real = new FakeStdin();
+    const shim = new StdinShim(real);
+    shim.setMouseEnabled(true);
+    const wheels: Array<'up' | 'down'> = [];
+    shim.on('wheel', (w: { direction: 'up' | 'down' }) => wheels.push(w.direction));
+
+    real.push('\x1b[<65;1;1M'); // wheel down
+    real.push('\x1b[<80;2;2M'); // wheel up + ctrl (64 + 16)
+    expect(wheels).toEqual(['down', 'up']);
+  });
+
+  it('ignores non-wheel mouse reports (a click emits no wheel event)', () => {
+    const real = new FakeStdin();
+    const shim = new StdinShim(real);
+    shim.setMouseEnabled(true);
+    const wheels: string[] = [];
+    shim.on('wheel', (w: { direction: string }) => wheels.push(w.direction));
+
+    real.push('\x1b[<0;5;5M'); // left-button press — not a wheel notch
+    expect(wheels).toEqual([]);
+  });
+
+  it('still forwards ordinary keystrokes verbatim while mouse is enabled', () => {
+    const real = new FakeStdin();
+    const shim = new StdinShim(real);
+    shim.setMouseEnabled(true);
+    const down = collectDownstream(shim);
+    real.push('hello');
+    expect(down.text()).toBe('hello');
+  });
+
+  it('emits no wheel event when mouse reporting is disabled (bytes pass through)', () => {
+    const real = new FakeStdin();
+    const shim = new StdinShim(real);
+    const down = collectDownstream(shim);
+    const wheels: string[] = [];
+    shim.on('wheel', (w: { direction: string }) => wheels.push(w.direction));
+
+    real.push('\x1b[<64;10;5M');
+    expect(wheels).toEqual([]);
+    // In bypass with mouse off, the fast path forwards the bytes verbatim (Ink ignores them).
+    expect(down.text()).toBe('\x1b[<64;10;5M');
+  });
+});

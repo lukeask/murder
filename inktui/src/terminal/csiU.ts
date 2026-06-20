@@ -35,6 +35,10 @@
  *    must never see it).
  *  - `CSI ? <...> c` — a DA1 device-attributes reply (final byte `c` = 0x63). Emitted as a
  *    {@link CsiDaReplyToken}; also swallowed during detection.
+ *  - `CSI < <button> ; <x> ; <y> M|m` — an SGR mouse report (the `<` private marker, final `M` press
+ *    / `m` release). Emitted as a {@link CsiMouseToken} so the shim can lift wheel notches into scroll
+ *    events; it is NOT passthrough (with mouse reporting enabled the bytes are ours to consume, not
+ *    Ink's). A malformed report falls back to passthrough rather than being swallowed.
  *
  * Anything else — including ordinary `CSI ... <final>` sequences that are not one of the above —
  * passes through as {@link PassthroughToken} bytes, byte-for-byte, so the rest of the input pipeline
@@ -50,8 +54,11 @@ export const LONE_ESC_FLUSH_MS = 50;
 const ESC = 0x1b;
 const CSI_OPEN = 0x5b; // '['
 const QUESTION = 0x3f; // '?'
+const LESS_THAN = 0x3c; // '<'  — the SGR mouse private marker (CSI < b;x;y M|m)
 const FINAL_U = 0x75; // 'u'  — kitty key / query-reply final
 const FINAL_C = 0x63; // 'c'  — DA1 reply final
+const FINAL_M_PRESS = 0x4d; // 'M' — SGR mouse press final
+const FINAL_M_RELEASE = 0x6d; // 'm' — SGR mouse release final
 
 /** A run of bytes the parser did not interpret — forwarded downstream verbatim (text, paste, mouse,
  * unrecognised escape sequences, and a timed-out lone ESC). */
@@ -81,8 +88,26 @@ export interface CsiDaReplyToken {
   readonly type: 'daReply';
 }
 
+/** A decoded SGR mouse report: `CSI < <button> ; <x> ; <y> M|m`. `button` is the raw SGR button code
+ * (low bits = button/wheel, plus the +4/+8/+16 shift/meta/ctrl and +32 motion bits — the consumer
+ * masks what it needs); `x`/`y` are 1-based cell coordinates; `pressed` is `true` for the `M` final
+ * (press / wheel notch) and `false` for `m` (release). Emitted only when the parser is in active mode
+ * (mouse reporting enabled), NOT passthrough — Ink never sees mouse bytes, the shim consumes them. */
+export interface CsiMouseToken {
+  readonly type: 'mouse';
+  readonly button: number;
+  readonly x: number;
+  readonly y: number;
+  readonly pressed: boolean;
+}
+
 /** Everything the parser can emit. */
-export type CsiToken = PassthroughToken | CsiKeyToken | CsiQueryReplyToken | CsiDaReplyToken;
+export type CsiToken =
+  | PassthroughToken
+  | CsiKeyToken
+  | CsiQueryReplyToken
+  | CsiDaReplyToken
+  | CsiMouseToken;
 
 /** Internal state-machine phases. */
 type Phase =
@@ -113,6 +138,25 @@ function parseParams(bytes: readonly number[]): { code: number; mods?: number; e
   };
 }
 
+/** Parse the params of an SGR mouse sequence (`<button> ; <x> ; <y>`) given the final byte (`M`/`m`).
+ * Returns `null` on a malformed report (wrong field count / non-numeric) so the caller can fall back
+ * to forwarding the bytes verbatim rather than swallowing a sequence it could not decode. */
+function parseMouse(bytes: readonly number[], final: number): CsiMouseToken | null {
+  const [buttonPart = '', xPart = '', yPart = '', ...rest] = String.fromCharCode(...bytes).split(
+    ';',
+  );
+  if (rest.length > 0 || buttonPart === '' || xPart === '' || yPart === '') {
+    return null;
+  }
+  const button = Number.parseInt(buttonPart, 10);
+  const x = Number.parseInt(xPart, 10);
+  const y = Number.parseInt(yPart, 10);
+  if (Number.isNaN(button) || Number.isNaN(x) || Number.isNaN(y)) {
+    return null;
+  }
+  return { type: 'mouse', button, x, y, pressed: final === FINAL_M_PRESS };
+}
+
 /**
  * The incremental parser. Hold one instance per stdin stream; call {@link feed} with each chunk and
  * {@link flushPending} when the owning shim's lone-ESC timer fires. Both return the tokens produced
@@ -126,6 +170,8 @@ export class CsiUParser {
   private seq: number[] = [];
   /** True once the CSI params start with '?', marking a query/DA reply rather than a keypress. */
   private privateMarker = false;
+  /** True once the CSI params start with '<', marking an SGR mouse report (`CSI < b;x;y M|m`). */
+  private sgrMouse = false;
   /** Pending passthrough bytes, batched so a run of plain text is one token, not one-per-byte. */
   private passthrough: number[] = [];
 
@@ -158,6 +204,9 @@ export class CsiUParser {
       this.passthrough.push(ESC, CSI_OPEN);
       if (this.privateMarker) {
         this.passthrough.push(QUESTION);
+      }
+      if (this.sgrMouse) {
+        this.passthrough.push(LESS_THAN);
       }
       this.passthrough.push(...this.seq);
       this.reset();
@@ -207,6 +256,12 @@ export class CsiUParser {
       this.privateMarker = true;
       return;
     }
+    // Leading '<' on an otherwise-empty param run → an SGR mouse report (the private marker for
+    // `CSI < b;x;y M|m`). Consumed like '?', re-synthesised by the passthrough/flush recovery paths.
+    if (byte === LESS_THAN && this.seq.length === 0 && !this.privateMarker) {
+      this.sgrMouse = true;
+      return;
+    }
     // A final byte (0x40–0x7e) terminates the CSI sequence.
     if (byte >= 0x40 && byte <= 0x7e) {
       this.emitCsi(byte, out);
@@ -218,6 +273,19 @@ export class CsiUParser {
   }
 
   private emitCsi(final: number, out: CsiToken[]): void {
+    if (this.sgrMouse) {
+      // `CSI < b;x;y M|m`. Decode to a mouse token; a malformed report (bad field count / NaN) is
+      // forwarded verbatim rather than swallowed, so the byte stream is never silently lost.
+      if (final === FINAL_M_PRESS || final === FINAL_M_RELEASE) {
+        const mouse = parseMouse(this.seq, final);
+        if (mouse !== null) {
+          out.push(mouse);
+          return;
+        }
+      }
+      this.emitPassthroughSeq(final);
+      return;
+    }
     if (this.privateMarker) {
       if (final === FINAL_U) {
         // CSI ? <flags> u — capability query reply.
@@ -250,6 +318,9 @@ export class CsiUParser {
     if (this.privateMarker) {
       this.passthrough.push(QUESTION);
     }
+    if (this.sgrMouse) {
+      this.passthrough.push(LESS_THAN);
+    }
     this.passthrough.push(...this.seq, final);
   }
 
@@ -264,5 +335,6 @@ export class CsiUParser {
     this.phase = 'ground';
     this.seq = [];
     this.privateMarker = false;
+    this.sgrMouse = false;
   }
 }
