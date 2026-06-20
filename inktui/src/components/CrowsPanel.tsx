@@ -394,7 +394,7 @@ export const CrowsPanel = memo(function CrowsPanel(): React.JSX.Element {
             // grouping-only).
             const ticketId = roster.rows.find((r) => r.agentId === agentId)?.ticketId ?? null;
             if (ticketId === null) {
-              toastStore.getState().push('no ticket to reset for this row', { ttlMs: 2000 });
+              toastStore.getState().push('no ticket to reset for this row', { ttlMs: 4000 });
               return;
             }
             const pending = resetConfirmStore.getState().pending;
@@ -405,11 +405,11 @@ export const CrowsPanel = memo(function CrowsPanel(): React.JSX.Element {
               resetConfirmStore.getState().clear();
               void resetCrow(ticketId)
                 .then(() => {
-                  toastStore.getState().push(`reset ${pending.name} → ready`, { ttlMs: 3000 });
+                  toastStore.getState().push(`reset ${pending.name} → ready`, { ttlMs: 6000 });
                 })
                 .catch((error: unknown) => {
                   const message = error instanceof Error ? error.message : String(error);
-                  toastStore.getState().push(message, { severity: 'error', ttlMs: 6000 });
+                  toastStore.getState().push(message, { severity: 'error', ttlMs: 12000 });
                 });
               return;
             }

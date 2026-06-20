@@ -244,7 +244,7 @@ export function createSettingsActions(bus: BusClient, store: StoreApi<AppStore>)
         // an inline error) — surface via the global toast, and record it on the slice `error` (the
         // "intent stands; reconnect re-loads" model the favorites pair documents).
         store.setState((state) => ({ settings: { ...state.settings, error: message } }));
-        toastStore.getState().push(message, { severity: 'error', ttlMs: 6000 });
+        toastStore.getState().push(message, { severity: 'error', ttlMs: 12000 });
       }
     },
   };

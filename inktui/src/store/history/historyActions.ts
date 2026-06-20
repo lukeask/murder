@@ -115,7 +115,7 @@ export function createHistoryActions(bus: BusClient, store: StoreApi<AppStore>):
         // The backend rejects non-resumable conversations (non-CC, no session id, already running);
         // surface the reason as an error toast rather than failing silently.
         const message = err instanceof Error ? err.message : String(err);
-        toastStore.getState().push(`resume failed: ${message}`, { severity: 'error', ttlMs: 6000 });
+        toastStore.getState().push(`resume failed: ${message}`, { severity: 'error', ttlMs: 12000 });
       }
     },
   };

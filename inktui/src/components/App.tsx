@@ -431,7 +431,7 @@ export function makeChatInputHandler(
           const stillUploading = ids.some((id) => draftState.drafts[id]?.status === 'uploading');
           if (stillUploading) {
             // Block: leave the buffer untouched and tell the user why (consumed — Enter is chat's).
-            toastStore.getState().push('image still uploading…', { ttlMs: 2000 });
+            toastStore.getState().push('image still uploading…', { ttlMs: 4000 });
             return true;
           }
           const message = expandSpans(buffer, draftState.pathsById());
@@ -847,7 +847,7 @@ function Shell({
     modes.getState().enter(
       newPlanMode(modes, actions, {
         onSubmit(planName) {
-          toastStore.getState().push(`plan "${planName}" created`, { ttlMs: 3000 });
+          toastStore.getState().push(`plan "${planName}" created`, { ttlMs: 6000 });
           void docViewActions.open('plan', planName);
         },
       }),
@@ -862,7 +862,7 @@ function Shell({
     modes.getState().enter(
       newTicketMode(modes, actions, {
         onSubmit(_ticketId, title) {
-          toastStore.getState().push(`ticket "${title}" created`, { ttlMs: 3000 });
+          toastStore.getState().push(`ticket "${title}" created`, { ttlMs: 6000 });
         },
       }),
     );
@@ -880,9 +880,9 @@ function Shell({
             ...(title !== undefined && title.trim() !== '' ? { title: title.trim() } : {}),
           }).catch((error: unknown) => {
             const message = error instanceof Error ? error.message : String(error);
-            toastStore.getState().push(message, { severity: 'error', ttlMs: 6000 });
+            toastStore.getState().push(message, { severity: 'error', ttlMs: 12000 });
           });
-          toastStore.getState().push('note captured', { ttlMs: 3000 });
+          toastStore.getState().push('note captured', { ttlMs: 6000 });
         },
         onCancel() {},
       }),
@@ -944,7 +944,7 @@ function Shell({
       ? effective.slice('stage:chat:'.length)
       : selectActiveAgentId(state.conversations, state.roster, state.favorites);
     if (agentId === null) {
-      toastStore.getState().push('no crow to murder', { ttlMs: 2000 });
+      toastStore.getState().push('no crow to murder', { ttlMs: 4000 });
       return;
     }
     const row = state.roster.rows.find((r) => r.agentId === agentId);
@@ -961,11 +961,11 @@ function Shell({
     // outcome as a toast — the roster row update arrives via the `agent` entity snapshot.
     void submitCommand(bus, 'agent.stop', { agent_id: pending.agentId })
       .then(() => {
-        toastStore.getState().push(`murdered ${pending.name}`, { ttlMs: 3000 });
+        toastStore.getState().push(`murdered ${pending.name}`, { ttlMs: 6000 });
       })
       .catch((error: unknown) => {
         const message = error instanceof Error ? error.message : String(error);
-        toastStore.getState().push(message, { severity: 'error', ttlMs: 6000 });
+        toastStore.getState().push(message, { severity: 'error', ttlMs: 12000 });
       });
   };
 
@@ -1008,9 +1008,9 @@ function Shell({
     captureNote: (text) => {
       void submitCommand(bus, 'notetaker.capture.submit', { raw: text }).catch((error: unknown) => {
         const message = error instanceof Error ? error.message : String(error);
-        toastStore.getState().push(message, { severity: 'error', ttlMs: 6000 });
+        toastStore.getState().push(message, { severity: 'error', ttlMs: 12000 });
       });
-      toastStore.getState().push('note captured', { ttlMs: 3000 });
+      toastStore.getState().push('note captured', { ttlMs: 6000 });
     },
     pushToast: (text, options) => toastStore.getState().push(text, options),
   };
@@ -1044,6 +1044,12 @@ function Shell({
         chatVim,
         focus,
       ),
+      // Mouse wheel while the chat input is focused scrolls the input's active send-target history
+      // pane (when it's shown). Same target resolution the input border + send path use.
+      chatScrollTargetAgentId: () => {
+        const state = appStore.getState();
+        return selectActiveAgentId(state.conversations, state.roster, state.favorites);
+      },
     },
     terminalEvents,
   );

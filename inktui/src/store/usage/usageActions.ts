@@ -85,7 +85,7 @@ export function createUsageActions(bus: BusClient, store: StoreApi<AppStore>): U
         // keypress-driven write — a silent failure would leave the user thinking it took effect.
         toastStore
           .getState()
-          .push(`steering failed: ${message}`, { severity: 'error', ttlMs: 6000 });
+          .push(`steering failed: ${message}`, { severity: 'error', ttlMs: 12000 });
       }
     },
   };

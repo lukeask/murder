@@ -35,8 +35,8 @@ import { createStore, type StoreApi } from 'zustand/vanilla';
  * earns colour). Textual's `warning` is unused here, so it is not modelled (keep the union honest). */
 export type ToastSeverity = 'info' | 'error';
 
-/** Default time-to-live: short and ambient (~2–3s), so a toast is a glance, not a thing to dismiss. */
-export const DEFAULT_TTL_MS = 2500;
+/** Default time-to-live: short and ambient (~5s), so a toast is a glance, not a thing to dismiss. */
+export const DEFAULT_TTL_MS = 5000;
 
 /** How many toasts the component shows at once. The store keeps all live toasts; the *view* caps the
  * visible stack (newest-on-top) so a burst doesn't fill the screen. Lives here as the shared policy. */

@@ -398,7 +398,7 @@ export function spawnWizardMode(
         // singleton, independent of this unmounted wizard's lifecycle), using the structured
         // `rpc error [code]: message` text from UdsBusClient's rejection.
         const message = error instanceof Error ? error.message : String(error);
-        toastStore.getState().push(message, { severity: 'error', ttlMs: 6000 });
+        toastStore.getState().push(message, { severity: 'error', ttlMs: 12000 });
       });
   }
 

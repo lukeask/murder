@@ -93,7 +93,7 @@ export function createFavoritesActions(
       // So the action-level rejection surfaces via the global toast. The slice `error` is still set
       // (the documented "intent stands; reconnect re-loads" model) but the toast is what the user sees.
       store.setState((state) => ({ favorites: { ...state.favorites, error: message } }));
-      toastStore.getState().push(message, { severity: 'error', ttlMs: 6000 });
+      toastStore.getState().push(message, { severity: 'error', ttlMs: 12000 });
     }
   }
 

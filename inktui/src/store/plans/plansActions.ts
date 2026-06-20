@@ -92,10 +92,10 @@ export function createPlansActions(bus: BusClient, store: StoreApi<AppStore>): P
     async spawnPlanner(name: string): Promise<void> {
       try {
         await spawn.spawnRogue(plannerSpawnParams(name));
-        toastStore.getState().push(`planner spawned for "${name}"`, { ttlMs: 3000 });
+        toastStore.getState().push(`planner spawned for "${name}"`, { ttlMs: 6000 });
       } catch (error: unknown) {
         const message = error instanceof Error ? error.message : String(error);
-        toastStore.getState().push(message, { severity: 'error', ttlMs: 6000 });
+        toastStore.getState().push(message, { severity: 'error', ttlMs: 12000 });
       }
     },
   };

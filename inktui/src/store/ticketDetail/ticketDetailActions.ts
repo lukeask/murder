@@ -310,7 +310,7 @@ export function createTicketDetailActions(
           store.setState((state) => ({
             ticketDetail: { ...state.ticketDetail, status: 'error', error: message },
           }));
-          toastStore.getState().push(message, { severity: 'error', ttlMs: 6000 });
+          toastStore.getState().push(message, { severity: 'error', ttlMs: 12000 });
           return;
         }
         store.setState((state) => ({

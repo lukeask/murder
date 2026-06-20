@@ -265,13 +265,13 @@ export function createConversationsActions(
         // command kind absent from this action, so we don't invent it.
         if (result['handled'] === false) {
           const errorText = String(result['error'] ?? 'agent did not handle message');
-          toastStore.getState().push(errorText, { severity: 'error', ttlMs: 6000 });
+          toastStore.getState().push(errorText, { severity: 'error', ttlMs: 12000 });
           return;
         }
         if (result['queued'] === true) {
-          toastStore.getState().push('message queued (crow busy)', { ttlMs: 3000 });
+          toastStore.getState().push('message queued (crow busy)', { ttlMs: 6000 });
         } else {
-          toastStore.getState().push(`→ ${agentId}`, { ttlMs: 2000 });
+          toastStore.getState().push(`→ ${agentId}`, { ttlMs: 4000 });
         }
         // Keep the pane for this agent active after sending.
         store.setState((state) => ({
@@ -283,7 +283,7 @@ export function createConversationsActions(
         // round-trip failed from the client's view — say so. (The poll loop already resumes through
         // a transient blip; reaching here means the client gave up or the command genuinely failed.)
         const message = error instanceof Error ? error.message : String(error);
-        toastStore.getState().push(`send failed: ${message}`, { severity: 'error', ttlMs: 6000 });
+        toastStore.getState().push(`send failed: ${message}`, { severity: 'error', ttlMs: 12000 });
       }
     },
 
@@ -390,10 +390,10 @@ export function createConversationsActions(
 
     async interrupt(agentId: string): Promise<void> {
       try {
-        toastStore.getState().push('interrupt → queued message will send', { ttlMs: 2500 });
+        toastStore.getState().push('interrupt → queued message will send', { ttlMs: 5000 });
         await submitCommand(bus, 'agent.interrupt', { agent_id: agentId });
       } catch (error: unknown) {
-        toastStore.getState().push('interrupt failed', { severity: 'error', ttlMs: 4000 });
+        toastStore.getState().push('interrupt failed', { severity: 'error', ttlMs: 8000 });
         void error;
       }
     },

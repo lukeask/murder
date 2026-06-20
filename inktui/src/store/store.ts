@@ -338,7 +338,7 @@ export function createAppStore(bus: BusClient): {
         return;
       }
       const errorEvent: ErrorEvent = event;
-      toastStore.getState().push(errorEvent.message, { severity: 'error', ttlMs: 6000 });
+      toastStore.getState().push(errorEvent.message, { severity: 'error', ttlMs: 12000 });
     },
     { type: 'error' },
   );

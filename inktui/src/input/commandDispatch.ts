@@ -69,7 +69,7 @@ const COMMANDS: Readonly<Record<string, CommandHandler>> = {
   note(args, _agentId, ctx) {
     const body = args.trim();
     if (body === '') {
-      ctx.pushToast('usage: :note <text>', { ttlMs: 3000 });
+      ctx.pushToast('usage: :note <text>', { ttlMs: 6000 });
       return;
     }
     ctx.captureNote(body);
@@ -78,7 +78,7 @@ const COMMANDS: Readonly<Record<string, CommandHandler>> = {
   /** `:dismiss` — close the focused panel's overlay/selection, if a dismiss target exists. */
   dismiss(_args, _agentId, ctx) {
     if (ctx.dismiss === undefined) {
-      ctx.pushToast('nothing to dismiss', { ttlMs: 2000 });
+      ctx.pushToast('nothing to dismiss', { ttlMs: 4000 });
       return;
     }
     ctx.dismiss();
@@ -87,12 +87,12 @@ const COMMANDS: Readonly<Record<string, CommandHandler>> = {
   /** `:compact` — stub. `transcript_summarize.py` is unwired (Workstream D deferred); surface a
    * discoverability toast rather than silently doing nothing. */
   compact(_args, _agentId, ctx) {
-    ctx.pushToast(':compact is not yet available', { ttlMs: 3000 });
+    ctx.pushToast(':compact is not yet available', { ttlMs: 6000 });
   },
 
   /** `:resume` — stub. The v0 surface for resuming is the history panel's `r` keybind; point there. */
   resume(_args, _agentId, ctx) {
-    ctx.pushToast(':resume — use r in the history panel', { ttlMs: 4000 });
+    ctx.pushToast(':resume — use r in the history panel', { ttlMs: 8000 });
   },
 };
 
@@ -113,7 +113,7 @@ export function dispatchCommand(text: string, agentId: string | null, ctx: Comma
   // `/` passthrough — inject the buffer verbatim (the `/` included) into the agent's harness pane.
   if (text.startsWith('/')) {
     if (agentId === null) {
-      ctx.pushToast('no active agent for passthrough', { ttlMs: 2000 });
+      ctx.pushToast('no active agent for passthrough', { ttlMs: 4000 });
       return true; // still handled: a `/`-prefixed buffer is never an ordinary send.
     }
     // User ask #5: send the text WITHOUT a trailing '\n' and WITH a real Return (enter:true). The old
@@ -124,7 +124,7 @@ export function dispatchCommand(text: string, agentId: string | null, ctx: Comma
     if (text.trim().toLowerCase() === '/clear') {
       ctx.clearTranscript(agentId);
     }
-    ctx.pushToast('[→ passthrough]', { ttlMs: 1500 });
+    ctx.pushToast('[→ passthrough]', { ttlMs: 3000 });
     return true;
   }
 
@@ -136,7 +136,7 @@ export function dispatchCommand(text: string, agentId: string | null, ctx: Comma
     const args = spaceIdx === -1 ? '' : rest.slice(spaceIdx + 1);
     const handler = COMMANDS[name];
     if (handler === undefined) {
-      ctx.pushToast(`Unknown command: :${name}`, { ttlMs: 3000 });
+      ctx.pushToast(`Unknown command: :${name}`, { ttlMs: 6000 });
       return true; // handled (consumed): an unknown `:command` must not leak to the agent.
     }
     handler(args, agentId, ctx);

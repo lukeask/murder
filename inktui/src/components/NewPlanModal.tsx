@@ -154,7 +154,7 @@ export function newPlanMode(
         s.pending = false;
         s.error = text;
         refresh();
-        toastStore.getState().push(text, { severity: 'error', ttlMs: 6000 });
+        toastStore.getState().push(text, { severity: 'error', ttlMs: 12000 });
       });
   }
 

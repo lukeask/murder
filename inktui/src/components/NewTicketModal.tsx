@@ -134,7 +134,7 @@ export function newTicketMode(
               // toastStore (a singleton, independent of this unmounted modal's lifecycle), using the
               // structured `rpc error [code]: message` text from UdsBusClient's rejection.
               const message = error instanceof Error ? error.message : String(error);
-              toastStore.getState().push(message, { severity: 'error', ttlMs: 6000 });
+              toastStore.getState().push(message, { severity: 'error', ttlMs: 12000 });
             });
           break;
         }
