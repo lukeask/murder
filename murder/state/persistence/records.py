@@ -56,6 +56,7 @@ class TicketRecord:
     checklist: tuple[ChecklistItemRecord, ...]
     last_error: str | None = None
     schedule_at: str | None = None
+    parent_id: str | None = None
     metadata_hash: str | None = None
     metadata_file_hash: str | None = None
     metadata_last_materialized_hash: str | None = None
@@ -77,6 +78,7 @@ class TicketRecord:
             "updated_at": self.updated_at,
             "last_error": self.last_error,
             "schedule_at": self.schedule_at,
+            "parent_id": self.parent_id,
             "metadata_hash": self.metadata_hash,
             "metadata_file_hash": self.metadata_file_hash,
             "metadata_last_materialized_hash": self.metadata_last_materialized_hash,
@@ -214,6 +216,18 @@ class EscalationRecord:
         return iter(self.to_dict())
 
 
+def _row_get(row: Mapping[str, Any], key: str, default: Any = None) -> Any:
+    """Read ``key`` from a sqlite3.Row or Mapping, tolerating absent columns.
+
+    sqlite3.Row raises IndexError on a missing key (it has no ``.get``), so callers
+    that build a row with a column subset stay safe for newer optional columns.
+    """
+    try:
+        return row[key]
+    except (KeyError, IndexError):
+        return default
+
+
 def ticket_record_from_row(
     row: Mapping[str, Any],
     *,
@@ -236,6 +250,7 @@ def ticket_record_from_row(
         checklist=tuple(checklist),
         last_error=row["last_error"],
         schedule_at=row["schedule_at"],
+        parent_id=_row_get(row, "parent_ticket_id"),
         metadata_hash=row["metadata_hash"],
         metadata_file_hash=row["metadata_file_hash"],
         metadata_last_materialized_hash=row["metadata_last_materialized_hash"],

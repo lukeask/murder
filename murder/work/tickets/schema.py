@@ -29,6 +29,7 @@ class Ticket(BaseModel):
     status: TicketStatus = TicketStatus.PLANNED
     deps: list[str] = Field(default_factory=list)
     skills: list[str] = Field(default_factory=list)
+    parent_id: str | None = None  # parent ticket id (subticket linkage); None = top-level
     harness: HarnessKind | None = None  # override default_crow
     model: str | None = None
     attempts: int = 0

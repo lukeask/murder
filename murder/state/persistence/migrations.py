@@ -164,6 +164,18 @@ def _migrate_ticket_worktree(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE tickets ADD COLUMN worktree TEXT")
 
 
+def _migrate_ticket_parent(conn: sqlite3.Connection) -> None:
+    """Add the parent->child ticket linkage column (subtickets)."""
+    row = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'tickets'"
+    ).fetchone()
+    if row is None:
+        return
+    cols = {row["name"] for row in conn.execute("PRAGMA table_info(tickets)").fetchall()}
+    if "parent_ticket_id" not in cols:
+        conn.execute("ALTER TABLE tickets ADD COLUMN parent_ticket_id TEXT")
+
+
 def _migrate_ticket_drop_legacy_order(conn: sqlite3.Connection) -> None:
     """Drop the legacy ticket ordering column via table recreation."""
     row = conn.execute(

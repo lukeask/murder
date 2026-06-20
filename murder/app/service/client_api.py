@@ -68,6 +68,10 @@ class TicketSummary:
     status: TicketStatus
     harness: str | None
     model: str | None
+    # Parent ticket id for subticket linkage; None for a top-level ticket.
+    # Sourced from the tickets.parent_ticket_id column (analogous to PlanSummary.parent,
+    # which derives from frontmatter — tickets store the parent as a real column).
+    parent: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -274,7 +278,11 @@ class ScheduleTicketRow:
     metadata_sync_state: str
     metadata_parse_error: str | None
     metadata_conflict_reason: str | None
+    # Dep ids that are NOT yet satisfied (status not in done/archived) — the
+    # "waiting-on-dependency" glyph signal. Empty tuple = all deps satisfied / no deps.
     pending_dep_ids: tuple[str, ...]
+    # Parent ticket id for the subtree/subticket glyph; None for a top-level ticket.
+    parent: str | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "pending_dep_ids", tuple(self.pending_dep_ids))

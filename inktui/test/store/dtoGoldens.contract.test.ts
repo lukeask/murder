@@ -165,6 +165,7 @@ describe('read-reply DTO cross-language field-shape goldens (A-D2)', () => {
     expect(rows[0]?.model).toBe('opus');
     expect(rows[0]?.pendingDepIds).toEqual(['T-100']);
     expect(rows[0]?.scheduleAt).toBeNull();
+    expect(rows[0]?.parent).toBeNull();
     dispose();
   });
 

@@ -33,6 +33,7 @@ CREATE TABLE IF NOT EXISTS tickets (
     model         TEXT,
     worktree      TEXT,
     schedule_at   TEXT,
+    parent_ticket_id TEXT,
     metadata_hash TEXT,
     metadata_file_hash TEXT,
     metadata_last_materialized_hash TEXT,
@@ -503,6 +504,7 @@ def init_db(conn: sqlite3.Connection) -> None:
         _migrate_ticket_drop_legacy_order,
         _migrate_ticket_last_error,
         _migrate_ticket_metadata_columns,
+        _migrate_ticket_parent,
         _migrate_ticket_worktree,
     )
     from murder.state.persistence.notetaker import ensure_notetaker_context_row
@@ -518,6 +520,7 @@ def init_db(conn: sqlite3.Connection) -> None:
     _migrate_ticket_draft_status(conn)
     _migrate_ticket_worktree(conn)
     _migrate_ticket_drop_legacy_order(conn)
+    _migrate_ticket_parent(conn)
     _migrate_ticket_drop_skills(conn)
     _migrate_notes_identity_status(conn)
     _migrate_completion_tables(conn)

@@ -62,7 +62,7 @@ def build_schedule_snapshot(
                       FROM ticket_deps AS d
                       JOIN tickets AS dep ON dep.id = d.depends_on_id
                      WHERE d.ticket_id = t.id
-                       AND dep.status != 'done'
+                       AND dep.status NOT IN ('done', 'archived')
                      ORDER BY dep.id
                    )
         )
@@ -73,7 +73,8 @@ def build_schedule_snapshot(
             SELECT t.id, t.title, t.status, t.updated_at, t.schedule_at,
                    t.harness, t.model, t.last_error,
                    t.metadata_sync_state, t.metadata_parse_error,
-                   t.metadata_conflict_reason, {pending_deps_subq} AS pending_dep_ids
+                   t.metadata_conflict_reason, t.parent_ticket_id,
+                   {pending_deps_subq} AS pending_dep_ids
               FROM tickets AS t
              WHERE t.status IN ('planned', 'ready', 'in_progress', 'blocked', 'failed')
              ORDER BY datetime(t.updated_at) DESC, t.id
@@ -86,7 +87,8 @@ def build_schedule_snapshot(
             SELECT t.id, t.title, t.status, t.updated_at, t.schedule_at,
                    t.harness, t.model, t.last_error,
                    t.metadata_sync_state, t.metadata_parse_error,
-                   t.metadata_conflict_reason, {pending_deps_subq} AS pending_dep_ids
+                   t.metadata_conflict_reason, t.parent_ticket_id,
+                   {pending_deps_subq} AS pending_dep_ids
               FROM tickets AS t
              WHERE t.status = 'done'
              ORDER BY datetime(t.updated_at) DESC, t.id
@@ -100,7 +102,8 @@ def build_schedule_snapshot(
             SELECT t.id, t.title, t.status, t.updated_at, t.schedule_at,
                    t.harness, t.model, t.last_error,
                    t.metadata_sync_state, t.metadata_parse_error,
-                   t.metadata_conflict_reason, {pending_deps_subq} AS pending_dep_ids
+                   t.metadata_conflict_reason, t.parent_ticket_id,
+                   {pending_deps_subq} AS pending_dep_ids
               FROM tickets AS t
              WHERE t.status = 'archived'
              ORDER BY datetime(t.updated_at) DESC, t.id
@@ -181,6 +184,7 @@ def _ticket_rows(rows: list[sqlite3.Row]) -> tuple[ScheduleTicketRow, ...]:
             if r["metadata_conflict_reason"]
             else None,
             pending_dep_ids=_split_pending_dep_ids(r["pending_dep_ids"]),
+            parent=str(r["parent_ticket_id"]) if r["parent_ticket_id"] else None,
         )
         for r in rows
     )

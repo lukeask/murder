@@ -18,7 +18,8 @@
         "metadata_conflict_reason": null,
         "pending_dep_ids": [
           "T-100"
-        ]
+        ],
+        "parent": null
       }
     ],
     "recent_done_tickets": [],

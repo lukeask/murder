@@ -54,6 +54,9 @@ export interface TicketRow {
   readonly model: string | null;
   /** Non-done dependency ticket ids. Empty = all deps satisfied. */
   readonly pendingDepIds: readonly string[];
+  /** The id of this ticket's parent ticket, or `null` for a top-level ticket. Drives the subticket
+   * tree (mirrors `PlanRow.parent`; the slice stays flat, the selector computes the tree + indent). */
+  readonly parent: string | null;
 }
 
 /**

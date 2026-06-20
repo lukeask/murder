@@ -95,6 +95,8 @@ export interface TicketDto {
   harness?: string | null;
   model?: string | null;
   pending_dep_ids: readonly string[];
+  /** The parent ticket's id (tickets.parent_ticket_id column). Absent or null for a top-level ticket. */
+  parent?: string | null;
 }
 
 /** Project one wire ticket into the slice's row. Pure: the single place the DTO→domain mapping
@@ -110,6 +112,7 @@ function toTicketRow(dto: TicketDto): TicketRow {
     harness: dto.harness ?? null,
     model: dto.model ?? null,
     pendingDepIds: dto.pending_dep_ids,
+    parent: dto.parent ?? null,
   };
 }
 

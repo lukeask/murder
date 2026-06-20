@@ -27,9 +27,9 @@ def insert_ticket(conn: sqlite3.Connection, ticket: Ticket) -> None:
     try:
         conn.execute(
             """
-            INSERT INTO tickets(id, title, status, harness, model, attempts,
-                                created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO tickets(id, title, status, harness, model, parent_ticket_id,
+                                attempts, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 ticket.id,
@@ -37,6 +37,7 @@ def insert_ticket(conn: sqlite3.Connection, ticket: Ticket) -> None:
                 ticket.status.value,
                 ticket.harness,
                 ticket.model,
+                ticket.parent_id,
                 ticket.attempts,
                 ticket.created_at.isoformat(timespec="seconds"),
                 now,
