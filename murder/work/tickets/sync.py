@@ -226,6 +226,25 @@ class TicketSync(MarkdownSyncLoop):
                 now,
             ),
         )
+        # Observability (advanced-logging flight recorder): a `ticket.md` first
+        # appearing as a `planned` row was previously invisible. Emit a
+        # structured state-mutation so carve->ingest is auditable. Zero-cost when
+        # advanced logging is off (the accessor returns a no-op writer).
+        from murder.observability.advanced_log import (
+            StateMutationRecord,
+            current_advanced_log,
+        )
+
+        current_advanced_log().record_state_mutation(
+            StateMutationRecord(
+                entity="ticket.ingested",
+                agent_id="ticket_sync",
+                ticket_id=ticket_id,
+                status=TicketStatus.PLANNED.value,
+                harness=parsed.harness,
+                model=parsed.model,
+            )
+        )
 
     def _update_ticket_from_parsed(self, ticket_id: str, parsed: ParsedTicket) -> None:
         self.db.execute(

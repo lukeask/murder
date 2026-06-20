@@ -68,6 +68,11 @@ class PlanningHandler(Daemon):
         # The pane may contain the same answer on multiple ticks; route each
         # ticket's answer once.
         self._routed: set[str] = set()
+        # A carve form persists in the pane across ticks; enqueue its
+        # apply-carve-ready command once per (ticket_id, form-hash). The hash
+        # lets a *re-carve* (edited form for the same ticket) re-enqueue, while a
+        # stable form is enqueued exactly once.
+        self._carved: set[str] = set()
         self._log_path: Path | None = None
         self._consecutive_poll_failures = 0
 
@@ -211,3 +216,66 @@ class PlanningHandler(Daemon):
                     await crow.send(reply)
             self._routed.add(ticket_id)
             del self._pending[ticket_id]
+
+        await self._scan_carve_forms(pane)
+
+    async def _scan_carve_forms(self, pane: str) -> None:
+        """Detect the planner's YAML carve forms and enqueue apply-carve-ready.
+
+        Mirrors the ANSWER-marker scan: the carve form lingers in the pane, so
+        each (ticket_id, form) is enqueued once. The orchestrator worker handler
+        is idempotent (a duplicate apply on an already-ready ticket is a no-op),
+        which backstops any hash collision or restart re-scan.
+        """
+        import hashlib
+
+        from murder.work.tickets.carve_scan import detect_carve_forms
+
+        if self.runtime.db is None or self.runtime.run_id is None:
+            return
+
+        for spec in detect_carve_forms(pane):
+            ticket_id = str(spec["id"])
+            form_hash = hashlib.sha256(repr(sorted(spec.items())).encode()).hexdigest()[:16]
+            marker = f"{ticket_id}:{form_hash}"
+            if marker in self._carved:
+                continue
+            try:
+                self._enqueue_carve_ready(ticket_id, spec, form_hash)
+            except Exception as exc:
+                LOGGER.warning(
+                    "planning_handler %s failed to enqueue carve-ready for %s: %s",
+                    self.plan_name,
+                    ticket_id,
+                    exc,
+                )
+                continue
+            self._carved.add(marker)
+
+    def _enqueue_carve_ready(self, ticket_id: str, spec: dict[str, Any], form_hash: str) -> None:
+        from uuid import uuid4
+
+        from murder.state.persistence.commands import enqueue_command
+
+        assert self.runtime.db is not None and self.runtime.run_id is not None
+        command_id = str(uuid4())
+        # Idempotency key keyed on the ticket + form content: a re-scan of the
+        # SAME form collapses (unique index drops the duplicate), while an edited
+        # carve form for the same ticket re-enqueues. The orchestrator apply is
+        # itself idempotent against an already-ready row.
+        idempotency_key = (
+            f"ticket.apply_carve_ready:{self.runtime.run_id}:{ticket_id}:{form_hash}"
+        )
+        enqueue_command(
+            self.runtime.db,
+            command_id=command_id,
+            run_id=self.runtime.run_id,
+            agent_id=self.id,
+            role=self.role.value if hasattr(self.role, "value") else str(self.role),
+            ticket_id=ticket_id,
+            target_worker="orchestrator",
+            kind="ticket.apply_carve_ready",
+            payload={"ticket_id": ticket_id, "carve": spec},
+            correlation_id=command_id,
+            idempotency_key=idempotency_key,
+        )

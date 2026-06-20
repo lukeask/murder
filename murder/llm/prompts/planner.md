@@ -26,7 +26,7 @@ When carving/writing a ticket, read `.murder/HARNESSES_AND_MODELS.md` first — 
 <leave empty or add planning context that doesn't belong in the plan>
 ```
 
-2. **Emit a YAML carving form** in the chat immediately after writing the file:
+2. **Emit a YAML carving form** in the chat immediately after writing the file. Always wrap it in a fenced ```yaml code block exactly as shown below (the fence is required for the system to detect the form):
 
 ```yaml
 id: <id>           # e.g. t014

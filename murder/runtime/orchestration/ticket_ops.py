@@ -413,7 +413,27 @@ class TicketOps:
                 }
         except carve.CarveError as exc:
             return {"ok": False, "error": str(exc)}
+        # Idempotency: a duplicate carve form (same pane scanned twice) leaves
+        # prev == READY; the row is already ready, so suppress the no-op
+        # status-change emit and report it handled.
+        if prev == TicketStatus.READY:
+            return {"handled": True, "ok": True, "ticket_id": ticket_id, "idempotent": True}
         await self._emit_ticket_status(ticket_id, prev, TicketStatus.READY.value)
+        # Observability: carve->ready was previously invisible in the flight
+        # recorder. Emit a structured marker alongside the status-change event.
+        from murder.observability.advanced_log import (
+            StateMutationRecord,
+            current_advanced_log,
+        )
+
+        current_advanced_log().record_state_mutation(
+            StateMutationRecord(
+                entity="ticket.carved",
+                agent_id="orchestrator",
+                ticket_id=ticket_id,
+                status=TicketStatus.READY.value,
+            )
+        )
         return {"handled": True, "ok": True, "ticket_id": ticket_id}
 
 

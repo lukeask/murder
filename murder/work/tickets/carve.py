@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
+from datetime import datetime
 from typing import Any
 
 from murder.state.persistence import tickets as dbmod
@@ -12,6 +13,10 @@ from murder.work.tickets.status import TicketStatus
 
 class CarveError(ValueError):
     """Invalid carving payload or ticket state."""
+
+
+def _now() -> str:
+    return datetime.utcnow().isoformat(timespec="seconds")
 
 
 def _require_str_list(spec: dict[str, Any], key: str) -> list[str]:
@@ -36,19 +41,22 @@ def apply_carve_ready_spec(
     ticket_id: str,
     spec: dict[str, Any],
 ) -> TicketStatus:
-    """Apply fields from a parsed carve dict and transition planned → ready.
+    """Apply fields from a parsed carve dict and transition the ticket → ready.
+
+    Robust to the row not yet existing: the planner emits the carve form in
+    chat, and the matching `tickets/<id>.md` ingest (which would create the
+    `planned` row) may not have landed yet. In that case this INSERTs the row
+    from the carve form, then transitions it to ``ready`` — so the carve form is
+    self-sufficient.
+
+    Idempotent: if the ticket is already ``ready`` (a duplicate carve form on a
+    later pane tick), re-applies the payload and returns ``READY`` without error.
 
     Runs in a single transaction. Emits no bus events (callers do that).
     """
     payload_id = spec.get("id")
     if payload_id != ticket_id:
         raise CarveError(f"payload id {payload_id!r} does not match target ticket {ticket_id!r}")
-
-    row = dbmod.get_ticket(conn, ticket_id)
-    if row is None:
-        raise CarveError(f"ticket not found: {ticket_id}")
-    if row["status"] != TicketStatus.PLANNED.value:
-        raise CarveError(f"ticket {ticket_id} must be planned (currently {row['status']})")
 
     title = spec.get("title")
     if not title or not str(title).strip():
@@ -68,8 +76,31 @@ def apply_carve_ready_spec(
 
     model = _normalize_model(spec)
 
+    row = dbmod.get_ticket(conn, ticket_id)
+    if row is not None and row["status"] not in (
+        TicketStatus.PLANNED.value,
+        TicketStatus.READY.value,
+    ):
+        raise CarveError(
+            f"ticket {ticket_id} must be planned or ready (currently {row['status']})"
+        )
+
     conn.execute("BEGIN")
     try:
+        if row is None:
+            # Upsert: the carve form arrived before (or without) the `.md`
+            # ingest. Seed a `planned` row so the carve payload + transition can
+            # apply, end state being a `ready` row.
+            now = _now()
+            conn.execute(
+                """
+                INSERT INTO tickets(
+                    id, title, status, harness, model, attempts, created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, 0, ?, ?)
+                """,
+                (ticket_id, title_s, TicketStatus.PLANNED.value, harness_s, model, now, now),
+            )
         dbmod.apply_ticket_carve_payload(
             conn,
             ticket_id,
@@ -80,6 +111,8 @@ def apply_carve_ready_spec(
             skills=skills,
             checklist=checklist,
         )
+        # transition() is a no-op (returns prev == to) when already ready, so a
+        # duplicate carve form is a safe re-apply with no InvalidTransition.
         prev = lifecycle.transition(conn, ticket_id, TicketStatus.READY)
         conn.execute("COMMIT")
     except BaseException:
