@@ -152,6 +152,25 @@ describe('noteCaptureMode — undo', () => {
 });
 
 describe('noteCaptureMode — submit + plain entry', () => {
+  it('Backspace deletes from the focused draft field', () => {
+    const { store, press } = setup();
+    store.getState().setDraft('abc');
+    press('', { backspace: true });
+    expect(store.getState().draftText).toBe('ab');
+    store.getState().reset();
+  });
+
+  it('Backspace deletes from the title field after Tab switches focus', () => {
+    const { store, press } = setup();
+    press('', { tab: true });
+    press('a');
+    press('b');
+    press('', { backspace: true });
+    expect(store.getState().titleText).toBe('a');
+    expect(store.getState().draftText).toBe('');
+    store.getState().reset();
+  });
+
   it('Enter on a non-empty draft submits and dismisses; empty Enter does nothing', () => {
     const { store, onSubmit, modes, press } = setup();
     // Empty draft: Enter is a no-op.

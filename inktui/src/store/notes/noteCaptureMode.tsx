@@ -35,7 +35,7 @@ import type { Key } from 'ink';
 import { Box, Text } from 'ink';
 import type { ReactNode } from 'react';
 import { useStore } from 'zustand';
-import { MultiLineText, TextInput } from '../../components/TextInput.js';
+import { deleteLastChar, MultiLineText, TextInput } from '../../components/TextInput.js';
 import type { Mode, ModeHint, ModeStoreApi } from '../../input/modeStore.js';
 import { useTheme } from '../../theme/themeStore.js';
 import type { NoteCaptureStoreApi } from './noteCaptureStore.js';
@@ -45,7 +45,7 @@ import '../../input/dispatcher.js';
 
 /** The note-capture mode's declared-chord intent union. `d`/`u`/printable are NOT here — they are
  * context-sensitive and flow through `onUncaptured` (see the module doc). */
-type NoteCaptureIntent = 'escape' | 'submit' | 'newline' | 'switchField';
+type NoteCaptureIntent = 'escape' | 'submit' | 'newline' | 'switchField' | 'backspace';
 
 /** Stable mode id so a re-enter is idempotent (the modeStore pattern). */
 export const NOTE_CAPTURE_MODE_ID = 'note-capture';
@@ -120,6 +120,7 @@ export function noteCaptureMode(
       { chord: { key: { return: true } }, intent: 'submit', description: 'save in background' },
       // Tab toggles between the draft and the title field.
       { chord: { key: { tab: true } }, intent: 'switchField', description: 'title' },
+      { chord: { key: { backspace: true } }, intent: 'backspace', description: 'delete char' },
     ],
     onIntent(intent) {
       switch (intent) {
@@ -142,6 +143,15 @@ export function noteCaptureMode(
         case 'switchField': {
           field = field === 'draft' ? 'title' : 'draft';
           refresh();
+          return;
+        }
+        case 'backspace': {
+          const state = store.getState();
+          if (field === 'title') {
+            state.setTitle(deleteLastChar(state.titleText));
+          } else {
+            state.setDraft(deleteLastChar(state.draftText));
+          }
           return;
         }
         case 'submit': {
