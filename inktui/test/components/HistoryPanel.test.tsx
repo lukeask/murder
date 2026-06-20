@@ -100,7 +100,7 @@ describe('HistoryPanel', () => {
     await tick();
     const frame = lastFrame() ?? '';
     // Pane inline title carries the loose-thread digest.
-    expect(frame).toContain('╭─ History');
+    expect(frame).toContain('┏━ History');
     expect(frame).toContain('2 loose');
     // Line 2 of each entry is the intention text.
     expect(frame).toContain('fix the empty pane case');

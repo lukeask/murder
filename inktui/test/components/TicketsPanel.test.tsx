@@ -114,7 +114,7 @@ describe('TicketsPanel', () => {
     const frame = lastFrame() ?? '';
 
     // Pane inline title on the top border (Phase 3 Pane + Ledger structure).
-    expect(frame).toContain('╭─ Tickets');
+    expect(frame).toContain('┏━ Tickets');
 
     // Row 1 content for T-1: id, title, status.
     expect(frame).toContain('T-1');

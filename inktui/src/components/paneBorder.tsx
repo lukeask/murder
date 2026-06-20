@@ -41,7 +41,13 @@
  */
 
 import { Box, Text } from 'ink';
-import { TRI_DOWN, TRI_UP } from './glyphs.js';
+import {
+  PANE_BORDER_GLYPHS,
+  type PaneBorderGlyphs,
+  SCROLL_THUMB,
+  TRI_DOWN,
+  TRI_UP,
+} from './glyphs.js';
 
 /**
  * The scroll-overflow indicator drawn on the border tail: ` ─ ▴ N ──` (top) / ` ─ ▾ N ──` (bottom).
@@ -53,18 +59,20 @@ function OverflowIndicator({
   tri,
   count,
   borderColor,
+  horizontal,
 }: {
   readonly tri: string;
   readonly count: number;
   readonly borderColor: string;
+  readonly horizontal: string;
 }): React.JSX.Element {
   return (
     <Box flexShrink={0}>
-      <Text color={borderColor}>{`─ ${tri} `}</Text>
+      <Text color={borderColor}>{`${horizontal} ${tri} `}</Text>
       <Text color={borderColor} dimColor>
         {String(count)}
       </Text>
-      <Text color={borderColor}>{' ──'}</Text>
+      <Text color={borderColor}>{` ${horizontal}${horizontal}`}</Text>
     </Box>
   );
 }
@@ -76,6 +84,8 @@ export interface PaneBorderTopProps {
   readonly borderColor: string;
   /** Title-segment color — a {@link ../theme.js theme} role (see {@link ./Pane.tsx paneColors}). */
   readonly titleColor: string;
+  /** Hand-composed border glyphs (`round` blurred / `bold` focused) — see {@link ./glyphs.js}. */
+  readonly glyphs: PaneBorderGlyphs;
   /** True → render the title bold (matches the focused emphasis the old panels used). */
   readonly bold?: boolean;
   /** Optional trailing node placed right after the title text, inside the title segment. The CALLER
@@ -104,15 +114,17 @@ export function PaneBorderTop({
   title,
   borderColor,
   titleColor,
+  glyphs = PANE_BORDER_GLYPHS.round,
   bold = false,
   titleExtra,
   overflowAbove,
   overflowBelow,
 }: PaneBorderTopProps): React.JSX.Element {
+  const { topLeftPrefix, topRight, horizontal } = glyphs;
   return (
     <Box flexDirection="row" flexShrink={0} width="100%" height={1}>
       <Box flexShrink={0}>
-        <Text color={borderColor}>{'╭─ '}</Text>
+        <Text color={borderColor}>{topLeftPrefix}</Text>
       </Box>
       {/* Title segment: SHRINKABLE + clipped so a title/suffix wider than the rail truncates rather
           than pushing the `╮` corner off the edge (L3b). The fixed corner segments above/below never
@@ -137,7 +149,7 @@ export function PaneBorderTop({
           stay `flexShrink={0}`, so `╮` always draws). The canonical grow:1/basis:0 fill idiom. */}
       <Box flexGrow={1} flexShrink={1} flexBasis={0} minWidth={0} overflow="hidden">
         <Text color={borderColor} wrap="hard">
-          {'─'.repeat(256)}
+          {horizontal.repeat(256)}
         </Text>
       </Box>
       {/* Scroll-overflow tail — fixed (never shrinks) so the counts survive a narrow rail (the title
@@ -146,13 +158,23 @@ export function PaneBorderTop({
           heights (see overflowBelow's prop doc). Absent/0 → nothing here → byte-identical to the
           pre-feature top border. */}
       {overflowAbove !== undefined && overflowAbove > 0 && (
-        <OverflowIndicator tri={TRI_UP} count={overflowAbove} borderColor={borderColor} />
+        <OverflowIndicator
+          tri={TRI_UP}
+          count={overflowAbove}
+          borderColor={borderColor}
+          horizontal={horizontal}
+        />
       )}
       {overflowBelow !== undefined && overflowBelow > 0 && (
-        <OverflowIndicator tri={TRI_DOWN} count={overflowBelow} borderColor={borderColor} />
+        <OverflowIndicator
+          tri={TRI_DOWN}
+          count={overflowBelow}
+          borderColor={borderColor}
+          horizontal={horizontal}
+        />
       )}
       <Box flexShrink={0}>
-        <Text color={borderColor}>╮</Text>
+        <Text color={borderColor}>{topRight}</Text>
       </Box>
     </Box>
   );
@@ -162,6 +184,8 @@ export interface PaneBorderBottomProps {
   /** Border color — the spacer cells inherit it (they're blanks, so it's only meaningful if a future
    *  glyph rides them); the left/right nodes own their own color. */
   readonly borderColor: string;
+  /** Hand-composed border glyphs for the footer dash segments. */
+  readonly glyphs?: PaneBorderGlyphs;
   /** Optional left-anchored node placed after the `╰─ ` corner (the bottom mirror of the title slot).
    *  SHRINKABLE + clipped. The CALLER owns its color. */
   readonly leftExtra?: React.ReactNode;
@@ -192,9 +216,11 @@ export interface PaneBorderBottomProps {
  */
 export function PaneBorderBottom({
   borderColor,
+  glyphs = PANE_BORDER_GLYPHS.round,
   leftExtra,
   rightExtra,
 }: PaneBorderBottomProps): React.JSX.Element {
+  const { horizontal } = glyphs;
   const hasLeft = leftExtra !== undefined && leftExtra !== null && leftExtra !== false;
   const hasRight = rightExtra !== undefined && rightExtra !== null && rightExtra !== false;
   return (
@@ -225,7 +251,7 @@ export function PaneBorderBottom({
         <Box flexShrink={0} flexDirection="row">
           <Text color={borderColor}> </Text>
           {rightExtra}
-          <Text color={borderColor}> ─</Text>
+          <Text color={borderColor}>{` ${horizontal}`}</Text>
         </Box>
       )}
       {/* Transparent over the closing `╯` (Ink's own corner, or the scrollbar column's). */}
@@ -234,10 +260,12 @@ export function PaneBorderBottom({
   );
 }
 
-/** The thumb glyph: a full block, so the scroll position reads clearly against the light `│` track. */
-const THUMB = '█';
-/** The track glyph — Ink's round-border side, so a thumb-less column is byte-identical to a border. */
-const TRACK = '│';
+/** The thumb glyph: a full block, so the scroll position reads clearly against the track. */
+const THUMB = SCROLL_THUMB;
+/** The track glyph — Ink's round/bold border side, so a thumb-less column matches the content box. */
+function trackGlyph(glyphs: PaneBorderGlyphs): string {
+  return glyphs.vertical;
+}
 
 /**
  * The scrollbar-as-right-border column for a scrollable {@link ./Pane.tsx Pane} — the pane's RIGHT
@@ -255,13 +283,16 @@ export function PaneBorderRight({
   height,
   thumb,
   color,
+  glyphs = PANE_BORDER_GLYPHS.round,
 }: {
   readonly height: number;
   readonly thumb: { readonly size: number; readonly offset: number } | null;
   readonly color: string;
+  readonly glyphs?: PaneBorderGlyphs;
 }): React.JSX.Element {
+  const track = trackGlyph(glyphs);
   const cells = Array.from({ length: Math.max(height, 0) }, (_, i) =>
-    thumb !== null && i >= thumb.offset && i < thumb.offset + thumb.size ? THUMB : TRACK,
+    thumb !== null && i >= thumb.offset && i < thumb.offset + thumb.size ? THUMB : track,
   );
   return (
     <Box flexDirection="column" width={1} flexShrink={0} minHeight={0} overflow="hidden">
@@ -271,7 +302,7 @@ export function PaneBorderRight({
           {glyph}
         </Text>
       ))}
-      <Text color={color}>╯</Text>
+      <Text color={color}>{glyphs.bottomRight}</Text>
     </Box>
   );
 }

@@ -13,9 +13,13 @@
 import { Box, Text } from 'ink';
 import { render } from 'ink-testing-library';
 import { describe, expect, it } from 'vitest';
-import { inkTestColorOn } from '../inkTestColorOn.js';
-import { Pane, paneColors } from '../../src/components/Pane.js';
+import { PANE_BORDER_GLYPHS, SCROLL_THUMB, TRI_DOWN, TRI_UP } from '../../src/components/glyphs.js';
+import { Pane, paneChrome, paneColors } from '../../src/components/Pane.js';
 import { theme } from '../../src/theme.js';
+import { inkTestColorOn } from '../inkTestColorOn.js';
+
+const B = PANE_BORDER_GLYPHS.bold;
+const R = PANE_BORDER_GLYPHS.round;
 
 /** Pane is width-driven by its parent; wrap in a fixed-width Box for deterministic frames. */
 function Fixed({
@@ -46,8 +50,8 @@ describe('Pane — inline title border', () => {
     );
     const lines = (lastFrame() ?? '').split('\n').map(stripAnsi);
     // First line is the top border carrying the title between the corners.
-    expect(lines[0]).toContain('╭─ Plans');
-    expect(lines[0]).toContain('╮');
+    expect(lines[0]).toContain(`${B.topLeftPrefix}Plans`);
+    expect(lines[0]).toContain(B.topRight);
     // The title is NOT a standalone row below the border (the old look). The line after the top
     // border holds the body, not a bare "Plans".
     expect(lines[1]).toContain('body');
@@ -65,9 +69,9 @@ describe('Pane — inline title border', () => {
     const frame = lastFrame() ?? '';
     expect(frame).toContain('hello');
     // Side + bottom border glyphs present.
-    expect(frame).toContain('│');
-    expect(frame).toContain('╰');
-    expect(frame).toContain('╯');
+    expect(frame).toContain(B.vertical);
+    expect(frame).toContain(B.bottomLeft);
+    expect(frame).toContain(B.bottomRight);
   });
 });
 
@@ -83,6 +87,54 @@ describe('Pane — focus color', () => {
     expect(blurred).toEqual({ border: theme.borderBlurred, title: theme.titleBlurred });
     // The two segments differ when blurred — a readable title on a recessed border.
     expect(blurred.border).not.toBe(blurred.title);
+  });
+});
+
+describe('Pane -- focus border weight', () => {
+  it('uses bold (heavy) glyphs + Ink borderStyle when focused/highlighted', () => {
+    expect(paneChrome(true, theme)).toMatchObject({
+      inkBorderStyle: 'bold',
+      glyphs: PANE_BORDER_GLYPHS.bold,
+    });
+  });
+
+  it('uses round (light) glyphs when blurred', () => {
+    expect(paneChrome(false, theme)).toMatchObject({
+      inkBorderStyle: 'round',
+      glyphs: PANE_BORDER_GLYPHS.round,
+    });
+  });
+
+  it('renders heavy top/side/bottom glyphs when focused', () => {
+    const { lastFrame } = render(
+      <Fixed>
+        <Pane title="Plans" focused>
+          <Text>body</Text>
+        </Pane>
+      </Fixed>,
+    );
+    const lines = (lastFrame() ?? '').split('\n').map(stripAnsi);
+    expect(lines[0]).toContain(`${B.topLeftPrefix}Plans`);
+    expect(lines[0]).toContain(B.topRight);
+    expect(lines[1]).toContain(B.vertical);
+    expect(lines.at(-1)).toContain(B.bottomLeft);
+    expect(lines.at(-1)).toContain(B.bottomRight);
+  });
+
+  it('renders round glyphs when blurred', () => {
+    const { lastFrame } = render(
+      <Fixed>
+        <Pane title="Plans" focused={false}>
+          <Text>body</Text>
+        </Pane>
+      </Fixed>,
+    );
+    const lines = (lastFrame() ?? '').split('\n').map(stripAnsi);
+    expect(lines[0]).toContain(`${R.topLeftPrefix}Plans`);
+    expect(lines[0]).toContain(R.topRight);
+    expect(lines[1]).toContain(R.vertical);
+    expect(lines.at(-1)).toContain(R.bottomLeft);
+    expect(lines.at(-1)).toContain(R.bottomRight);
   });
 });
 
@@ -115,12 +167,16 @@ describe('Pane — scrollbar-as-right-border', () => {
     expect(lines).toHaveLength(6);
     // The right EDGE of the content rows is the scroll track: │ █ █ │ (thumb size 2 at offset 1) —
     // there is no separate scrollbar column inside the border.
-    expect(lines.slice(1, 5).map((l) => l.at(-1))).toEqual(['│', '█', '█', '│']);
-    // The corners still close: ╮ tops the track, ╯ ends it (the content box's own right border is
-    // off, so the track column supplies the bottom-right corner).
-    expect(lines[0]?.at(-1)).toBe('╮');
-    expect(lines[5]?.at(-1)).toBe('╯');
-    expect(lines[5]).toContain('╰');
+    expect(lines.slice(1, 5).map((l) => l.at(-1))).toEqual([
+      B.vertical,
+      SCROLL_THUMB,
+      SCROLL_THUMB,
+      B.vertical,
+    ]);
+    // The corners still close: bold top-right tops the track, bold bottom-right ends it.
+    expect(lines[0]?.at(-1)).toBe(B.topRight);
+    expect(lines[5]?.at(-1)).toBe(B.bottomRight);
+    expect(lines[5]).toContain(B.bottomLeft);
   });
 
   it('a null thumb (content fits) draws a plain │ border — no █ anywhere', () => {
@@ -132,9 +188,14 @@ describe('Pane — scrollbar-as-right-border', () => {
       </Box>,
     );
     const lines = (lastFrame() ?? '').split('\n').map(stripAnsi);
-    expect(lastFrame() ?? '').not.toContain('█');
-    expect(lines.slice(1, 5).map((l) => l.at(-1))).toEqual(['│', '│', '│', '│']);
-    expect(lines[5]?.at(-1)).toBe('╯');
+    expect(lastFrame() ?? '').not.toContain(SCROLL_THUMB);
+    expect(lines.slice(1, 5).map((l) => l.at(-1))).toEqual([
+      B.vertical,
+      B.vertical,
+      B.vertical,
+      B.vertical,
+    ]);
+    expect(lines[5]?.at(-1)).toBe(B.bottomRight);
   });
 });
 
@@ -149,7 +210,7 @@ describe('Pane — scroll-overflow border indicators', () => {
     );
     const lines = (lastFrame() ?? '').split('\n');
     // Exactly one bottom-border line, and it carries both round corners.
-    const bottomLines = lines.filter((l) => l.includes('╰') && l.includes('╯'));
+    const bottomLines = lines.filter((l) => l.includes(B.bottomLeft) && l.includes(B.bottomRight));
     expect(bottomLines).toHaveLength(1);
     const bottom = bottomLines[0] ?? '';
     // Byte-identical to the old round-style bottom: corners + dashes only, no overflow glyphs.
@@ -193,10 +254,12 @@ describe('Pane — scroll-overflow border indicators', () => {
     // Both indicators ride the TOP border now (the bottom is Ink's own border, which can't carry a
     // count and — unlike a hand-composed bottom row — never clips at fractional pane heights). Order:
     // ▴ 4 (above) then ▾ 7 (below), both after the dash-fill and before the corner ╮.
-    expect(top).toMatch(/─.*▴ 4 .*▾ 7 .*╮/u);
-    // The Ink bottom border is a clean ╰…╯ with no triangle leaking onto it.
-    expect(bottom).toContain('╰');
-    expect(bottom).toContain('╯');
+    expect(top).toMatch(
+      new RegExp(`${B.horizontal}.*${TRI_UP} 4 .*${TRI_DOWN} 7 .*${B.topRight}`, 'u'),
+    );
+    // The Ink bottom border is a clean heavy bottom with no triangle leaking onto it.
+    expect(bottom).toContain(B.bottomLeft);
+    expect(bottom).toContain(B.bottomRight);
     expect(bottom).not.toContain('▾');
     expect(bottom).not.toContain('▴');
   });
@@ -213,7 +276,7 @@ describe('Pane — scroll-overflow border indicators', () => {
     // The fixed indicator never shrinks: triangle + count survive though the title truncates.
     expect(top).toContain('▴');
     expect(top).toContain('4');
-    expect(top).toContain('╮');
+    expect(top).toContain(B.topRight);
   });
 
   it.skipIf(!colorOn)('paints the count dim and the triangle in the border color', () => {

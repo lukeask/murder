@@ -109,7 +109,7 @@ describe('ReportsPanel', () => {
     await tick();
     const frame = lastFrame() ?? '';
     // Pane inline title on the top border (not a plain border + "Reports" text line).
-    expect(frame).toContain('╭─ Reports');
+    expect(frame).toContain('┏━ Reports');
     // Line 2: char count and the compact `Mon. dd HH:MM` date (the shared resourceMeta format).
     expect(frame).toContain('alpha-report');
     expect(frame).toContain('· Jun. 07 12:00');

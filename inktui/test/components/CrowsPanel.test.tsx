@@ -136,7 +136,7 @@ describe('CrowsPanel — sections and grouping', () => {
     await tick();
     const frame = lastFrame() ?? '';
     // Pane inline title on the top border (Phase 3 Pane + Ledger structure; mode label is titleExtra).
-    expect(frame).toContain('╭─ Crows');
+    expect(frame).toContain('┏━ Crows');
     // Section headers appear in spec order.
     const collabPos = frame.indexOf('Collaborator');
     const plannersPos = frame.indexOf('Planning Agents');

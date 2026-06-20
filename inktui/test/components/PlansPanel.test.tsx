@@ -104,7 +104,7 @@ describe('PlansPanel (Pane + Ledger reference)', () => {
     await tick();
     const frame = lastFrame() ?? '';
     // Pane inline title: `╭─ Plans ─…` on the top border (not a plain border + "Plans" text line).
-    expect(frame).toContain('╭─ Plans');
+    expect(frame).toContain('┏━ Plans');
     // Two-line entries: name on line 1, char count · formatted date on line 2 (selector-formatted).
     // The count is unpadded and the date is `Mon. dd HH:MM` — assert the count and the date together
     // so the `count · date` shape (single separator, no pad spaces) is covered.

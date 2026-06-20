@@ -67,12 +67,24 @@ import { Box, type DOMElement } from 'ink';
 import { forwardRef, memo } from 'react';
 import type { Theme } from '../theme/buildTheme.js';
 import { useTheme } from '../theme/themeStore.js';
+import {
+  PANE_BORDER_GLYPHS,
+  type PaneBorderGlyphs,
+  type PaneInkBorderStyle,
+  paneBorderStyle,
+} from './glyphs.js';
 import { PaneBorderBottom, PaneBorderRight, PaneBorderTop } from './paneBorder.js';
 
 /** Focus-driven colors for the border/corners/fill (`border`) and the title segment (`title`). */
 export interface PaneColors {
   readonly border: string;
   readonly title: string;
+}
+
+/** Colors + Ink border style + hand-composed border glyphs for a Pane. */
+export interface PaneChrome extends PaneColors {
+  readonly inkBorderStyle: PaneInkBorderStyle;
+  readonly glyphs: PaneBorderGlyphs;
 }
 
 /**
@@ -85,6 +97,19 @@ export function paneColors(focused: boolean, theme: Theme): PaneColors {
   return focused
     ? { border: theme.focus, title: theme.focus }
     : { border: theme.borderBlurred, title: theme.titleBlurred };
+}
+
+/**
+ * Full pane chrome for focus: accent colors plus a heavier border (`bold` / `┏━`) when highlighted,
+ * round (`╭─`) when blurred. Color-blind aid — weight changes with the same boolean as the green flip.
+ */
+export function paneChrome(focused: boolean, theme: Theme): PaneChrome {
+  const inkBorderStyle = paneBorderStyle(focused);
+  return {
+    ...paneColors(focused, theme),
+    inkBorderStyle,
+    glyphs: PANE_BORDER_GLYPHS[inkBorderStyle],
+  };
 }
 
 export interface PaneProps {
@@ -152,7 +177,12 @@ export const Pane = memo(
     ref,
   ): React.JSX.Element {
     const theme = useTheme();
-    const { border: borderColor, title: titleColor } = paneColors(focused, theme);
+    const {
+      border: borderColor,
+      title: titleColor,
+      inkBorderStyle,
+      glyphs,
+    } = paneChrome(focused, theme);
     // A footer (either side) trades Ink's own bottom border for the hand-composed PaneBorderBottom
     // row — see its fractional-height note. Without one, the bottom stays Ink's clip-robust border.
     const hasFooter =
@@ -171,7 +201,7 @@ export const Pane = memo(
         flexGrow={1}
         minHeight={0}
         overflow="hidden"
-        borderStyle="round"
+        borderStyle={inkBorderStyle}
         borderTop={false}
         borderRight={scrollbar === undefined}
         borderColor={borderColor}
@@ -191,7 +221,12 @@ export const Pane = memo(
            draws the `│`/`█` track cells plus the closing `╯` corner — same net width as before. */
         <Box flexDirection="row" flexGrow={1} minHeight={0} overflow="hidden">
           {content}
-          <PaneBorderRight height={scrollbar.height} thumb={scrollbar.thumb} color={borderColor} />
+          <PaneBorderRight
+            height={scrollbar.height}
+            thumb={scrollbar.thumb}
+            color={borderColor}
+            glyphs={glyphs}
+          />
         </Box>
       );
     return (
@@ -202,6 +237,7 @@ export const Pane = memo(
           title={title}
           borderColor={borderColor}
           titleColor={titleColor}
+          glyphs={glyphs}
           bold={focused}
           titleExtra={titleExtra}
           overflowAbove={overflowAbove}
@@ -215,6 +251,7 @@ export const Pane = memo(
         {hasFooter && (
           <PaneBorderBottom
             borderColor={borderColor}
+            glyphs={glyphs}
             leftExtra={footerLeft}
             rightExtra={footerRight}
           />

@@ -103,7 +103,7 @@ describe('UsagePanel — rendering', () => {
     await tick();
     const frame = lastFrame() ?? '';
     // Pane inline title on the top border (Phase 3 Pane + Ledger structure).
-    expect(frame).toContain('╭─ Usage');
+    expect(frame).toContain('┏━ Usage');
     // Both harnesses appear.
     expect(frame).toContain('claude');
     expect(frame).toContain('codex');

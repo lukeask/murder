@@ -72,7 +72,7 @@ import {
 } from '../selectors/conversationsSelectors.js';
 import { isFavorited } from '../selectors/favoritesSelectors.js';
 import { useTheme } from '../theme/themeStore.js';
-import { TRI_LEFT, TRI_RIGHT } from './glyphs.js';
+import { PANE_BORDER_GLYPHS, paneBorderStyle, TRI_LEFT, TRI_RIGHT } from './glyphs.js';
 import { PaneBorderBottom, PaneBorderTop } from './paneBorder.js';
 
 /** Matches one marked image span (`U+E000 <id> U+E001`) for render-time substitution. */
@@ -316,6 +316,8 @@ export const ChatInput = memo(function ChatInput(): React.JSX.Element {
   const targetLabel =
     target === null ? 'no target' : `${starred ? '★ ' : ''}${target.label}${stateSuffix}`;
   const borderColor = focused ? theme.active : theme.inactive;
+  const inkBorderStyle = paneBorderStyle(focused);
+  const borderGlyphs = PANE_BORDER_GLYPHS[inkBorderStyle];
   const queued = meta.queuedMessage;
   // The crows a step in each direction reaches (cycleTargetPrev `◂` / cycleTargetNext `▸`), shown on
   // the bottom border so the user sees who ctrl+h / ctrl+l would target — WITHOUT opening any pane.
@@ -347,9 +349,10 @@ export const ChatInput = memo(function ChatInput(): React.JSX.Element {
         title={`${TRI_RIGHT} ${targetLabel}`}
         borderColor={borderColor}
         titleColor={focused ? theme.active : theme.inactive}
+        glyphs={borderGlyphs}
         bold={focused}
       />
-      <Box borderStyle="round" borderTop={false} borderColor={borderColor} paddingX={1}>
+      <Box borderStyle={inkBorderStyle} borderTop={false} borderColor={borderColor} paddingX={1}>
         {livePrompt !== null ? (
           <ChoiceMenu prompt={livePrompt} compose={text} />
         ) : (
@@ -364,7 +367,12 @@ export const ChatInput = memo(function ChatInput(): React.JSX.Element {
       </Box>
       {/* Bottom border overlay: `╰─ ⌃h ◂ prev ──…── next ▸ ⌃l ─╯` riding Ink's own bottom border
           above (net-zero height). The prev/next labels appear only with ≥2 crows to cycle through. */}
-      <PaneBorderBottom borderColor={borderColor} leftExtra={footerLeft} rightExtra={footerRight} />
+      <PaneBorderBottom
+        borderColor={borderColor}
+        glyphs={borderGlyphs}
+        leftExtra={footerLeft}
+        rightExtra={footerRight}
+      />
     </Box>
   );
 });

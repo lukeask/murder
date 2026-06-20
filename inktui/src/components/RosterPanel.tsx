@@ -201,7 +201,7 @@ export const RosterPanel = memo(function RosterPanel(): React.JSX.Element {
     <Box
       ref={ref}
       flexDirection="column"
-      borderStyle="round"
+      borderStyle={focused ? 'bold' : 'round'}
       borderColor={focused ? theme.active : theme.inactive}
       paddingX={1}
       flexGrow={1}

@@ -109,7 +109,7 @@ describe('NotesPanel', () => {
     await tick();
     const frame = lastFrame() ?? '';
     // Pane inline title: `╭─ Notes ─…` on the top border (not a plain border + "Notes" text line).
-    expect(frame).toContain('╭─ Notes');
+    expect(frame).toContain('┏━ Notes');
     // Line 1: name. Line 2: char count and formatted date — the count is unpadded and the date is
     // the compact `Mon. dd HH:MM` (the shared resourceMeta format that plans/notes/reports share).
     expect(frame).toContain('alpha-note');
