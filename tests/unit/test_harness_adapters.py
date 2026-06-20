@@ -30,6 +30,7 @@ from murder.llm.harnesses.claude_code import ClaudeCodeAdapter
 from murder.llm.harnesses.codex import CodexAdapter
 from murder.llm.harnesses.cursor import CursorAdapter
 from murder.llm.harnesses.pi_harness import PiAdapter
+from murder.llm.harnesses.parsing import parse_numbered_model_choices
 from tests.support.simulators import PaneSimulator
 
 FIXTURES = Path(__file__).parent.parent / "fixtures" / "harness_panes"
@@ -52,6 +53,7 @@ CC_MULTITURN = _load("cc_multiturn_idle.txt")
 CODEX_IDLE = _load("codex_idle.txt")
 CODEX_BUSY = _load("codex_busy.txt")
 CODEX_STARTUP = _load("codex_startup.txt")
+CODEX_UPDATE_MENU = _load("codex_update_menu.txt")
 
 CURSOR_IDLE = _load("cursor_idle.txt")
 CURSOR_BUSY = _load("cursor_busy.txt")
@@ -245,6 +247,29 @@ class TestCodexAdapter:
     def test_login_required_pane_not_ready(self):
         pane = PaneSimulator().add("OpenAI Codex", "  login required").render()
         assert self.cx.is_ready(pane) is False
+
+    # ── update-available menu — ready (so dismiss runs) but NOT idle/input-ready ─
+
+    def test_update_menu_is_ready(self):
+        # Must read ready so startup proceeds to initialize_defaults, which
+        # dismisses the menu (dismiss only happens after _wait_startup_ready).
+        assert self.cx.is_ready(CODEX_UPDATE_MENU) is True
+
+    def test_update_menu_not_idle(self):
+        # The "› 1. Update now …" line must NOT be treated as the idle prompt.
+        assert self.cx.is_idle(CODEX_UPDATE_MENU) is False
+
+    def test_update_menu_not_input_ready(self):
+        assert self.cx.is_input_ready(CODEX_UPDATE_MENU) is False
+
+    def test_update_menu_yields_no_model_choices(self):
+        # Defense-in-depth: the model probe must never surface "npm install …" or
+        # "Update now" as a selectable model.
+        choices = parse_numbered_model_choices(CODEX_UPDATE_MENU)
+        assert choices == []
+        assert not any(
+            "npm" in c.model_id.lower() or "update" in c.model_id.lower() for c in choices
+        )
 
 
 # ─────────────────────────────────────────────────────────────────────────────

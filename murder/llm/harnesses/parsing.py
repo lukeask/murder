@@ -115,6 +115,13 @@ _MODEL_SKIP_FRAGMENTS = (
     "ctrl+",
     "%/",
     "update available",
+    "update now",
+    "npm install",
+    "skip until",
+    # codex's update-menu actions ("1. Update now …", "2. Skip", "3. Skip until …")
+    # are menu commands, never selectable models. "skip" never appears in a real
+    # model id, so dropping any "skip" row keeps the menu from yielding choices.
+    "skip",
     "new version",
     "extended keys",
 )
@@ -214,6 +221,9 @@ def parse_numbered_model_choices(pane_text: str) -> list[HarnessModelChoice]:
             continue
         index = int(match.group("index"))
         body = match.group("body")
+        lowered = raw.lower()
+        if any(fragment in lowered for fragment in _MODEL_SKIP_FRAGMENTS):
+            continue
         parsed = parse_harness_model_list(raw)
         if parsed:
             model_id, label = parsed[0]

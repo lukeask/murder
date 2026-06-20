@@ -562,6 +562,30 @@ def test_pi_no_chrome_in_segments():
 
 
 # --------------------------------------------------------------------------- #
+# Codex-specific: the "update available" menu is chrome, not a user turn.
+# --------------------------------------------------------------------------- #
+def test_codex_no_update_menu_in_segments():
+    from murder.llm.harnesses.transcripts.grammar import codex as codex_grammar
+
+    menu_lines = [
+        "  ✨ Update available! 0.139.0 -> 0.141.0",
+        "",
+        "  Release notes: https://github.com/openai/codex/releases/latest",
+        "",
+        "› 1. Update now (runs `npm install -g @openai/codex`)",
+        "  2. Skip",
+        "  3. Skip until next version",
+        "",
+        "  Press enter to continue",
+    ]
+    segments = codex_grammar.parse_lines(menu_lines)
+    assert not any(s["type"] == "user" for s in segments), segments
+    blob = json.dumps(segments, ensure_ascii=False)
+    for needle in ("Update now", "npm install", "Update available"):
+        assert needle not in blob, f"codex update menu leaked: {needle!r}"
+
+
+# --------------------------------------------------------------------------- #
 # Antigravity-specific: two user turns, one assistant, second turn interrupted.
 # --------------------------------------------------------------------------- #
 def test_antigravity_has_two_user_turns():

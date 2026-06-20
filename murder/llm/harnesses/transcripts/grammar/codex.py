@@ -42,6 +42,11 @@ _CODEX_TOOL_VERBS = (
 )
 # Codex echoes an unsent-input placeholder that must never become a user segment.
 _CODEX_PLACEHOLDER_RE = re.compile(r"^Find and fix a bug in @filename$")
+# codex 0.139's "update available" menu renders numbered options, the pointed
+# one with the SAME `›` glyph as the real input prompt. A menu option is
+# `[›|>] <digit>. <text>` — start-anchored digit+dot+space distinguishes it from
+# a real (prose) user turn, which never opens with that shape.
+_CODEX_UPDATE_MENU_OPTION_RE = re.compile(r"^\s*[›>]?\s*\d+\.\s+\S")
 
 
 # Codex chrome: shared base plus codex's status bars, box-drawing frame glyphs,
@@ -51,7 +56,13 @@ _codex_is_chrome = chrome_matcher(
     stripped_startswith_rule("gpt-", "tokens", "Tip:", "╭", "│", "╰", "■"),
     substring_rule("esc to interrupt", "background terminals running", "/ps to view"),
     stripped_substring_rule("ctrl + t to view transcript", "ctrl+t to view transcript"),
+    stripped_substring_rule("Update available!", "Press enter to continue"),
     regex_match_rule(_CODEX_PROMPT_RE),
+    # NB: deliberately NOT a chrome rule for `_CODEX_UPDATE_MENU_OPTION_RE` — that
+    # matcher also governs assistant prose body collection, and real codex
+    # assistant turns contain numbered lists ("1. foo"); suppressing them as
+    # chrome would silently drop list items. The menu's numbered options are
+    # blocked at the user-segment emission site in parse_spanned instead.
 )
 
 
@@ -179,6 +190,9 @@ def parse_spanned(
             if (
                 text
                 and not _CODEX_PLACEHOLDER_RE.match(text)
+                # An update-menu option (`› 1. Update now …`) is chrome, not a
+                # user turn; its captured text begins with `<digit>. `.
+                and not _CODEX_UPDATE_MENU_OPTION_RE.match(text)
                 and not _is_codex_live_prompt(lines, i)
             ):
                 spanned.append(

@@ -51,6 +51,15 @@ _BUSY_RE = re.compile(
     re.IGNORECASE | re.MULTILINE,
 )
 _LOGIN_RE = re.compile(r"\b(login required|not logged in|codex login)\b", re.IGNORECASE)
+# codex's blocking "update available" menu (full-screen on launch). Its default
+# option renders as "› 1. Update now (runs `npm install -g @openai/codex`)",
+# whose leading "›" otherwise collides with the idle-prompt glyph and whose
+# default selection, if Enter is pressed, upgrades the user's global codex.
+# Recognize it explicitly: the dangerous "Update now" option that runs npm.
+_UPDATE_MENU_RE = re.compile(
+    r"^\s*[›>]?\s*\d+\.\s+Update now\b.*npm install",
+    re.IGNORECASE | re.MULTILINE,
+)
 
 _STATUS_COMMAND_POPUP_DELAY_S = 0.5
 _STATUS_FIRST_ENTER_DELAY_S = 0.8
@@ -182,24 +191,50 @@ class CodexAdapter(HarnessAdapter):
         tail = _tail(clean)
         if _LOGIN_RE.search(tail):
             return False
-        return bool(_BANNER_RE.search(clean) or _IDLE_PROMPT_RE.search(tail))
+        # The update menu blocks startup; it must read ready so initialize_defaults
+        # gets a chance to dismiss it (dismiss runs only after _wait_startup_ready).
+        return bool(
+            _UPDATE_MENU_RE.search(clean)
+            or _BANNER_RE.search(clean)
+            or _IDLE_PROMPT_RE.search(tail)
+        )
 
     def is_idle(self, pane_text: str) -> bool:
         clean = strip_ansi(pane_text)
         tail = _tail(clean)
-        if _LOGIN_RE.search(tail) or self.is_busy(tail):
+        if _LOGIN_RE.search(tail) or _UPDATE_MENU_RE.search(clean) or self.is_busy(tail):
             return False
         return bool(_IDLE_PROMPT_RE.search(tail))
 
     def is_input_ready(self, pane_text: str) -> bool | None:
         clean = strip_ansi(pane_text)
         tail = _tail(clean)
-        if _LOGIN_RE.search(tail) or self.is_busy(tail):
+        if _LOGIN_RE.search(tail) or _UPDATE_MENU_RE.search(clean) or self.is_busy(tail):
             return False
         return _live_prompt_text(clean) is not None
 
     def is_busy(self, pane_text: str) -> bool:
         return bool(_BUSY_RE.search(_tail(strip_ansi(pane_text))))
+
+    async def initialize_defaults(self, session, spec):  # type: ignore[override]
+        del spec
+        # codex 0.139+ can launch into a blocking "update available" menu whose
+        # DEFAULT option ("1. Update now") runs `npm install -g @openai/codex`.
+        # The menu can paint a beat after the session first reports ready, so poll
+        # briefly. CRITICAL SAFETY: never press Enter while option 1 is highlighted;
+        # always move Down first so "2. Skip" is selected, then confirm.
+        attempts = 5
+        for attempt in range(attempts):
+            pane = strip_ansi(await tmux.capture_pane(session, lines=80))
+            if _UPDATE_MENU_RE.search(pane):
+                await tmux.send_keys(session, "Down", literal=False, enter=False)
+                await asyncio.sleep(0.2)
+                await tmux.send_keys(session, "Enter", literal=False, enter=False)
+                await asyncio.sleep(0.2)
+                break
+            if attempt < attempts - 1:
+                await asyncio.sleep(0.3)
+        return ok_result()
 
     def extract_last_message(self, pane_text: str) -> str | None:
         return extract_last_message_heuristic(pane_text)
