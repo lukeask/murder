@@ -1,6 +1,6 @@
 /**
  * Badge — small status/label chip. `tone` maps to crow states (running/done/failed/archived/pending/
- * idle) with semantic aliases (success/error/info/warning/neutral); `variant` is soft (tinted wash),
+ * idle/blocked) with semantic aliases (success/error/info/warning/neutral); `variant` is soft (tinted wash),
  * subtle (outline), or solid (filled). Ported from the DS bundle (data/Badge); follows the Panel
  * exemplar. Visuals live in ds-data.css (`.mds-badge*`).
  */
@@ -15,6 +15,7 @@ export type BadgeTone =
   | 'archived'
   | 'pending'
   | 'idle'
+  | 'blocked'
   | 'success'
   | 'error'
   | 'info'

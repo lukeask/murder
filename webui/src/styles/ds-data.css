@@ -139,6 +139,10 @@ button.mds-row__star:focus-visible {
   background: var(--surface-warning);
   color: var(--status-pending);
 }
+.mds-badge--blocked {
+  background: var(--surface-blocked);
+  color: var(--status-blocked);
+}
 .mds-badge--idle,
 .mds-badge--neutral {
   background: var(--surface-raised);
@@ -163,6 +167,9 @@ button.mds-row__star:focus-visible {
 .mds-badge--solid.mds-badge--pending,
 .mds-badge--solid.mds-badge--warning {
   background: var(--ef-yellow);
+}
+.mds-badge--solid.mds-badge--blocked {
+  background: var(--ef-blue);
 }
 
 /* ── StatusDot ─────────────────────────────────────────────────────────────────────────────────── */

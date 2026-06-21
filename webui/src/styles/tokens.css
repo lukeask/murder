@@ -124,6 +124,7 @@
   --status-failed:   var(--ef-red);
   --status-archived: var(--ef-aqua);
   --status-pending:  var(--ef-yellow);
+  --status-blocked:  var(--ef-blue);
   --status-idle:     var(--ef-grey-1);
 
   /* Status surfaces (tinted chip / row backgrounds) */
@@ -131,6 +132,7 @@
   --surface-error:   var(--ef-red-dim);
   --surface-warning: var(--ef-yellow-dim);
   --surface-info:    var(--ef-aqua-dim);
+  --surface-blocked: var(--ef-blue-dim);
 
   /* Crow / branch identity colors */
   --crow-1: var(--ef-red);

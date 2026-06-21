@@ -22,6 +22,7 @@ const row = (over: Partial<TicketRow>): TicketRow => ({
   harness: 'claude',
   model: 'opus',
   pendingDepIds: [],
+  parent: null,
   ...over,
 });
 
