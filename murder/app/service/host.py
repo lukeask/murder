@@ -39,6 +39,12 @@ LOGGER = logging.getLogger(__name__)
 # Cadence for the Transit git-graph fingerprint poll (branch HEAD movement).
 TRANSIT_POLL_INTERVAL_S = 4.0
 
+# Caps how many surviving-crow reattaches may poll harness/tmux state at once.
+# Each reattach can block on a ready-poll for up to 240s; gathering every
+# survivor unbounded recreates the boot-time file-descriptor storm the deferred
+# background design exists to avoid, so we throttle to a small handful.
+REATTACH_CONCURRENCY = 4
+
 RpcHandler = Callable[[dict[str, Any]], Awaitable[dict[str, Any]] | dict[str, Any]]
 
 
@@ -76,6 +82,7 @@ class ServiceHost:
     _projection_poll_task: asyncio.Task[None] | None = field(default=None, repr=False)
     _transit_poll_task: asyncio.Task[None] | None = field(default=None, repr=False)
     _model_discovery_task: asyncio.Task[None] | None = field(default=None, repr=False)
+    _reattach_task: asyncio.Task[None] | None = field(default=None, repr=False)
     _rpc_handlers: dict[str, RpcHandler] = field(default_factory=dict, repr=False)
     _service_session_name: str | None = field(default=None, repr=False)
 
@@ -167,6 +174,16 @@ class ServiceHost:
                 raise RuntimeError("read model unavailable")
             return self.read_model
 
+        def _threaded(fn: Any) -> Any:
+            """Offload a *synchronous*, thread-safe RPC handler to a worker
+            thread so its blocking sqlite/git/file work does not starve the
+            event loop. The broker awaits returned coroutines on the loop, so
+            ``asyncio.to_thread`` runs ``fn`` off-loop and yields the dict. Only
+            safe for handlers backed by ``ServiceReadModel`` (fresh per-call
+            sqlite connection) or pure git/file reads — never a handler that
+            touches the shared long-lived ``runtime.db`` connection."""
+            return lambda body=None: asyncio.to_thread(fn, body)
+
         def _value(value: Any) -> dict[str, Any]:
             return {"ok": True, "value": dto_to_wire(value)}
 
@@ -224,21 +241,37 @@ class ServiceHost:
         def _state_harness_models_snapshot(_body: dict[str, Any]) -> dict[str, Any]:
             return _value(_read_model().get_harness_models_snapshot())
 
-        self.register_rpc_handler("state.schedule_snapshot", _state_schedule_snapshot)
-        self.register_rpc_handler("state.crow_snapshot", _state_crow_snapshot)
-        self.register_rpc_handler("state.conversations_snapshot", _state_conversations_snapshot)
-        self.register_rpc_handler("state.plans_snapshot", _state_plans_snapshot)
-        self.register_rpc_handler("state.notes_snapshot", _state_notes_snapshot)
-        self.register_rpc_handler("state.reports_snapshot", _state_reports_snapshot)
-        self.register_rpc_handler("state.history_snapshot", _state_history_snapshot)
-        self.register_rpc_handler("state.transit_snapshot", _state_transit_snapshot)
-        self.register_rpc_handler("state.ticket_detail", _state_ticket_detail)
-        self.register_rpc_handler("state.plan_display", _state_plan_display)
-        self.register_rpc_handler("state.note_display", _state_note_display)
+        # These read-model handlers do blocking sqlite/git/file work and are
+        # offloaded to worker threads via ``_threaded`` so the bus socket can
+        # keep answering frontend reads during boot. They are thread-safe
+        # because ``ServiceReadModel`` opens a FRESH per-call sqlite connection
+        # (``get_db`` with ``check_same_thread=False``) — no shared connection
+        # is touched across threads.
+        self.register_rpc_handler(
+            "state.schedule_snapshot", _threaded(_state_schedule_snapshot)
+        )
+        self.register_rpc_handler("state.crow_snapshot", _threaded(_state_crow_snapshot))
+        self.register_rpc_handler(
+            "state.conversations_snapshot", _threaded(_state_conversations_snapshot)
+        )
+        self.register_rpc_handler("state.plans_snapshot", _threaded(_state_plans_snapshot))
+        self.register_rpc_handler("state.notes_snapshot", _threaded(_state_notes_snapshot))
+        self.register_rpc_handler(
+            "state.reports_snapshot", _threaded(_state_reports_snapshot)
+        )
+        self.register_rpc_handler(
+            "state.history_snapshot", _threaded(_state_history_snapshot)
+        )
+        self.register_rpc_handler(
+            "state.transit_snapshot", _threaded(_state_transit_snapshot)
+        )
+        self.register_rpc_handler("state.ticket_detail", _threaded(_state_ticket_detail))
+        self.register_rpc_handler("state.plan_display", _threaded(_state_plan_display))
+        self.register_rpc_handler("state.note_display", _threaded(_state_note_display))
         self.register_rpc_handler("state.report_display", _state_report_display)
         self.register_rpc_handler(
             "state.harness_models_snapshot",
-            _state_harness_models_snapshot,
+            _threaded(_state_harness_models_snapshot),
         )
 
         def _orchestrator() -> Orchestrator:
@@ -626,7 +659,8 @@ class ServiceHost:
         self.register_rpc_handler("tui.save_templates", _tui_save_templates)
         self.register_rpc_handler("settings.get", _settings_get)
         self.register_rpc_handler("settings.update", _settings_update)
-        self.register_rpc_handler("worktree.list", _worktree_list)
+        # Pure git subprocess + file reads, no shared connection — offloaded.
+        self.register_rpc_handler("worktree.list", _threaded(_worktree_list))
 
     async def start(self) -> None:
         from murder.user_config import load_user_config
@@ -678,19 +712,6 @@ class ServiceHost:
 
             self.runtime._sync.set_parse_error_notifier(_send_parse_error)
 
-        # Startup recovery: reattach handlers to crows whose tmux session
-        # survived a service restart so DONE is consumed and the ticket finishes.
-        report = getattr(self.runtime, "startup_reconcile_report", None)
-        if report and report.crows_to_reattach:
-            for tid, crow_session in report.crows_to_reattach:
-                try:
-                    await self.orchestrator.reattach_crow(tid, crow_session)
-                    LOGGER.info(
-                        "reattached crow handler for %s (session %s)", tid, crow_session
-                    )
-                except Exception:
-                    LOGGER.error("failed to reattach crow for %s", tid, exc_info=True)
-
         self.socket_server = SocketBusServer(
             self.broker,
             run_id=self.runtime.run_id,
@@ -698,6 +719,17 @@ class ServiceHost:
             tmux_frame_capture=self._capture_tmux_frame,
         )
         await self.socket_server.start()
+
+        # Startup recovery: reattach handlers to crows whose tmux session
+        # survived a service restart so DONE is consumed and the ticket
+        # finishes. Each reattach can block on a harness ready-poll (up to
+        # 240s), so this runs as a best-effort background task launched AFTER
+        # the socket is open — it must never delay boot — and the reattaches
+        # run concurrently rather than sequentially.
+        self._reattach_task = asyncio.create_task(
+            self._reattach_surviving_crows(), name="crow-reattach"
+        )
+
         if self.tcp_port is not None:
             self.tcp_bound = await self.socket_server.start_tcp_listener(port=self.tcp_port)
             LOGGER.info("TCP bus listener on %s:%d", *self.tcp_bound)
@@ -834,6 +866,42 @@ class ServiceHost:
                         )
             await asyncio.sleep(PROJECTION_INTERVAL_S)
 
+    async def _reattach_surviving_crows(self) -> None:
+        """Best-effort startup recovery, run as a background task after the
+        socket is open so it never delays boot. Reattaches handlers to crows
+        whose tmux session survived a service restart, running the reattaches
+        with bounded concurrency; each can block on a harness ready-poll (up to
+        240s), so we cap the simultaneous polls (REATTACH_CONCURRENCY) to avoid
+        an FD storm at boot, and a single failure must not kill the others or
+        crash boot."""
+        report = getattr(self.runtime, "startup_reconcile_report", None)
+        if not report or not report.crows_to_reattach:
+            return
+
+        # Throttle the ready-polls: only REATTACH_CONCURRENCY reattaches may hold
+        # harness/tmux file descriptors open at any one time.
+        sem = asyncio.Semaphore(REATTACH_CONCURRENCY)
+
+        async def _reattach_one(tid: str, crow_session: str) -> None:
+            async with sem:
+                try:
+                    await self.orchestrator.reattach_crow(tid, crow_session)
+                    LOGGER.info(
+                        "reattached crow handler for %s (session %s)", tid, crow_session
+                    )
+                except Exception:
+                    LOGGER.error("failed to reattach crow for %s", tid, exc_info=True)
+
+        try:
+            await asyncio.gather(
+                *(
+                    _reattach_one(tid, crow_session)
+                    for tid, crow_session in report.crows_to_reattach
+                )
+            )
+        except Exception:
+            LOGGER.error("crow reattach task failed", exc_info=True)
+
     async def _run_transit_poll_loop(self) -> None:
         """Service-owned ticker that republishes the Transit graph key when any
         watched branch HEAD moves. Git changes have no UI write to hang an
@@ -851,7 +919,9 @@ class ServiceHost:
             runtime = self.runtime
             if runtime is not None:
                 try:
-                    fingerprint = transit_fingerprint(self.repo_root)
+                    fingerprint = await asyncio.to_thread(
+                        transit_fingerprint, self.repo_root
+                    )
                 except Exception:
                     fingerprint = last_fingerprint
                     LOGGER.debug(
@@ -903,6 +973,12 @@ class ServiceHost:
             with contextlib.suppress(asyncio.CancelledError):
                 await self._model_discovery_task
             self._model_discovery_task = None
+
+        if self._reattach_task is not None:
+            self._reattach_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._reattach_task
+            self._reattach_task = None
 
         if self.supervisor is not None:
             await self.supervisor.stop_all()

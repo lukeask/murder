@@ -49,6 +49,33 @@ from murder.app.cli._util import repo_root as _repo_root
 
 LOGGER = logging.getLogger(__name__)
 
+# Headroom for the daemon's boot file-descriptor burst (5 harness model-probe
+# subprocesses + the startup rogue + tmux sessions + per-pane log tails +
+# bus sockets all opening at once). The stock soft limit is 1024, which a cold
+# boot can momentarily exceed -> EMFILE ("Too many open files"). Raise the soft
+# limit toward this target, clamped to the inherited hard limit.
+_FD_SOFT_LIMIT_TARGET = 4096
+
+
+def _raise_fd_soft_limit(target: int = _FD_SOFT_LIMIT_TARGET) -> None:
+    """Best-effort: raise this process's soft ``RLIMIT_NOFILE`` toward ``target``.
+
+    Fail-soft — never block daemon startup over a limit we couldn't change.
+    Clamped to the hard limit (raising the hard limit needs privileges we don't
+    assume). No-op if the soft limit already meets the target.
+    """
+    try:
+        import resource
+
+        soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+        desired = min(target, hard)
+        if soft >= desired:
+            return
+        resource.setrlimit(resource.RLIMIT_NOFILE, (desired, hard))
+        LOGGER.info("raised RLIMIT_NOFILE soft limit %d -> %d (hard %d)", soft, desired, hard)
+    except Exception:  # pragma: no cover - platform/permission edge; never fatal
+        LOGGER.debug("could not raise RLIMIT_NOFILE", exc_info=True)
+
 
 def apply_client_log_level(cli_value: str | None) -> None:
     """Resolve the client ``--log-level`` rung, propagate it, and configure logging.
@@ -205,6 +232,7 @@ def cmd_serviced(
     tcp_port: int = typer.Option(0, "--tcp-port", help="Also listen on TCP; 0 = disabled."),
 ) -> None:
     """Internal supervisor-only service entrypoint."""
+    _raise_fd_soft_limit()
     _run_async_entry(_run_supervisor_only(tcp_port=tcp_port or None))
 
 
