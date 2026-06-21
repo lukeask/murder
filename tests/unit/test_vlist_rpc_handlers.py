@@ -8,6 +8,7 @@ worktree.list (V7).
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 from pathlib import Path
@@ -37,7 +38,13 @@ def _host(repo_root: Path) -> ServiceHost:
 
 
 def _call(host: ServiceHost, method: str, body: dict) -> dict:
-    return host._rpc_handlers[method](body)  # type: ignore[return-value]
+    result = host._rpc_handlers[method](body)
+    # Some handlers are offloaded to worker threads via ``asyncio.to_thread``
+    # and so return a coroutine; the broker awaits it on the loop. Mirror that
+    # here so the test invokes the handler the same way production does.
+    if asyncio.iscoroutine(result):
+        return asyncio.run(result)
+    return result  # type: ignore[return-value]
 
 
 def test_image_upload_uses_client_minted_name(repo_root: Path) -> None:
