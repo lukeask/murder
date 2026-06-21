@@ -49,7 +49,6 @@ import { memo } from 'react';
 import { shallow } from 'zustand/shallow';
 import { useAppStore } from '../hooks/useAppStore.js';
 import {
-  useBindings,
   useChatInputStore,
   useChatVimStore,
   useEffectiveFocus,
@@ -319,17 +318,17 @@ export const ChatInput = memo(function ChatInput(): React.JSX.Element {
   const inkBorderStyle = paneBorderStyle(focused);
   const borderGlyphs = PANE_BORDER_GLYPHS[inkBorderStyle];
   const queued = meta.queuedMessage;
-  // The crows a step in each direction reaches (cycleTargetPrev `◂` / cycleTargetNext `▸`), shown on
-  // the bottom border so the user sees who ctrl+h / ctrl+l would target — WITHOUT opening any pane.
-  // The chord labels come live from the bindings table so they track the user's alt/ctrl choice.
-  const bindings = useBindings();
+  // The crows a step in each direction — shown bottom-right so the user sees who ctrl+h / ctrl+l
+  // would target WITHOUT opening any pane. No chord labels; just `◂ prev · next ▸`.
   const { prev, next } = selectAdjacentTargets(conversations, roster, favorites);
-  const prevChord = bindings.label('global.cycleTargetPrev');
-  const nextChord = bindings.label('global.cycleTargetNext');
-  const footerLeft =
-    prev !== null ? <Text dimColor>{`${prevChord} ${TRI_LEFT} ${prev.label}`}</Text> : undefined;
   const footerRight =
-    next !== null ? <Text dimColor>{`${next.label} ${TRI_RIGHT} ${nextChord}`}</Text> : undefined;
+    prev !== null || next !== null ? (
+      <Text dimColor>
+        {prev !== null ? `${TRI_LEFT} ${prev.label}` : ''}
+        {prev !== null && next !== null ? ' · ' : ''}
+        {next !== null ? `${next.label} ${TRI_RIGHT}` : ''}
+      </Text>
+    ) : undefined;
   return (
     // Inline-title border (Pane recipe): the `▸ <target>` sits on the top border line (item 2); the
     // content box below is a bare cursor-input line that grows in height as a long draft wraps —
@@ -365,12 +364,11 @@ export const ChatInput = memo(function ChatInput(): React.JSX.Element {
           />
         )}
       </Box>
-      {/* Bottom border overlay: `╰─ ⌃h ◂ prev ──…── next ▸ ⌃l ─╯` riding Ink's own bottom border
-          above (net-zero height). The prev/next labels appear only with ≥2 crows to cycle through. */}
+      {/* Bottom border overlay: `╰──…── ◂ prev · next ▸ ─╯` riding Ink's own bottom border
+          above (net-zero height). Labels appear only when ≥1 adjacent crow exists. */}
       <PaneBorderBottom
         borderColor={borderColor}
         glyphs={borderGlyphs}
-        leftExtra={footerLeft}
         rightExtra={footerRight}
       />
     </Box>
