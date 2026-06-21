@@ -2,12 +2,13 @@
 
 Poll-loop shaped EXACTLY like ``DoneSessionSweeperWorker`` (the conftest patches
 ``asyncio.sleep`` to a noop, so a sleep-loop would busy-spin — honor the
-``wait_for(stop_event.wait(), timeout=interval)`` idiom). Each tick:
-
-- read HEAD via ``head_commit``;
-- no map rows yet (``latest_map_sha`` is None) -> ``fresh_build``;
-- HEAD != ``latest_map_sha`` -> ``incremental_update`` from the last map sha;
-- else idle.
+``wait_for(stop_event.wait(), timeout=interval)`` idiom). Each tick reads HEAD
+and calls ``reconcile_map``, which diffs the working tree against the persisted
+snapshots PER FILE (by content hash) and does only the work that changed:
+(re)summarize drifted/new files, repair missing rendered nodes, prune deleted
+ones. When nothing changed it makes zero model calls; when a prior build was
+interrupted it resumes from whatever already persisted — so an unfinished map
+no longer re-burns the whole API on every launch.
 
 Client selection (locked decision #5): consult ``resolve_tier(user_cfg,
 "codebase_map")`` first; tier hit -> client from ``create_client(tier.provider)``
@@ -119,8 +120,7 @@ class CodebaseMapWorker(Worker):
         return self._summarizer
 
     async def run(self, ctx: WorkerCtx, stop_event: asyncio.Event) -> None:
-        from murder.codebase_map.build import fresh_build, incremental_update
-        from murder.codebase_map.store import latest_map_sha
+        from murder.codebase_map.build import reconcile_map
         from murder.verdict.enforcement.git_diff import head_commit
 
         while not stop_event.is_set():
@@ -138,18 +138,11 @@ class CodebaseMapWorker(Worker):
                 continue  # disabled; idle (but keep honoring stop_event)
 
             try:
+                # Per-file content-hash reconcile: cheap (zero model calls) when
+                # the map is already current, resumable when a prior build was
+                # interrupted. This is what stops a never-finishing fresh build
+                # from re-burning the API on every launch.
                 head = await head_commit(ctx.repo_root)
-                base = latest_map_sha(ctx.db)
-                if base is None:
-                    await fresh_build(ctx.repo_root, summarizer, db=ctx.db)
-                elif head != base:
-                    await incremental_update(
-                        ctx.repo_root,
-                        summarizer,
-                        db=ctx.db,
-                        base_sha=base,
-                        head_sha=head,
-                    )
-                # else: map already current at HEAD — idle.
+                await reconcile_map(ctx.repo_root, summarizer, db=ctx.db, head_sha=head)
             except Exception:
                 LOGGER.exception("codebase map regeneration failed")

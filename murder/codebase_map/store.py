@@ -138,6 +138,37 @@ def rows_for_commit(db: sqlite3.Connection, commit_sha: str) -> list[sqlite3.Row
     ).fetchall()
 
 
+def all_file_paths(db: sqlite3.Connection) -> set[str]:
+    """Every distinct ``path`` that has ever been snapshotted as a file summary.
+
+    The reconcile loop diffs this against the live working tree to find files
+    that were summarized once but have since been deleted (their rendered nodes
+    must be pruned). Roll-up rows (``kind in ('dir','root')``) are excluded.
+    """
+    rows = db.execute(
+        "SELECT DISTINCT path FROM map_summaries WHERE kind = 'file'"
+    ).fetchall()
+    return {r["path"] for r in rows}
+
+
+def prune_file_snapshots(db: sqlite3.Connection, path: str) -> None:
+    """Drop the file-summary history for ``path`` — the deletion tombstone.
+
+    When a tracked file is deleted, ``reconcile_map`` re-rolls its parent dir /
+    ROOT to drop the now-vanished child. But the path lingers in
+    ``map_summaries`` history, so ``all_file_paths`` keeps reporting it as a
+    deletion every tick and the rollups would re-fire forever. Removing the
+    ``kind='file'`` rows is the durable "this deletion has been reconciled"
+    marker: the path drops out of :func:`all_file_paths`, so the deletion is
+    processed exactly once. The live map no longer references it once the
+    rollups have been re-rolled, so dropping the history is safe.
+    """
+    db.execute(
+        "DELETE FROM map_summaries WHERE path = ? AND kind = 'file'",
+        (path,),
+    )
+
+
 __all__ = [
     "snapshot_file",
     "snapshot_rollup",
@@ -145,4 +176,6 @@ __all__ = [
     "load_latest_summary",
     "latest_map_sha",
     "rows_for_commit",
+    "all_file_paths",
+    "prune_file_snapshots",
 ]

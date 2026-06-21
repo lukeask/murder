@@ -12,7 +12,6 @@ import sqlite3
 from pathlib import Path
 
 import murder.codebase_map.build as build_mod
-import murder.codebase_map.store as store_mod
 import murder.verdict.enforcement.git_diff as git_diff_mod
 from murder.runtime.workers.base import WorkerCtx
 from murder.runtime.workers.codebase_map_worker import CodebaseMapWorker
@@ -26,25 +25,14 @@ def _ctx() -> WorkerCtx:
     return WorkerCtx(repo_root=Path("/repo"), db=sqlite3.connect(":memory:"))
 
 
-def test_fresh_build_when_no_map_rows(monkeypatch):
+def test_tick_reconciles_at_head(monkeypatch):
+    """Each tick reads HEAD and drives ``reconcile_map`` with the repo + db."""
     calls: dict[str, object] = {}
 
     async def _head(_root):
         return "HEAD_SHA"
 
-    def _latest(_db):
-        return None  # no map rows yet
-
-    async def _fresh(root, summarizer, *, db, concurrency=8):
-        calls["fresh"] = (root, summarizer, db)
-
-    async def _incr(*a, **k):  # pragma: no cover - must not be called
-        calls["incr"] = True
-
     monkeypatch.setattr(git_diff_mod, "head_commit", _head)
-    monkeypatch.setattr(store_mod, "latest_map_sha", _latest)
-    monkeypatch.setattr(build_mod, "fresh_build", _fresh)
-    monkeypatch.setattr(build_mod, "incremental_update", _incr)
 
     worker = CodebaseMapWorker(interval_s=0.001)
     worker._summarizer = _SummarizerStub()  # bypass client build
@@ -52,36 +40,31 @@ def test_fresh_build_when_no_map_rows(monkeypatch):
 
     async def _run() -> None:
         stop = asyncio.Event()
-        # Stop right after the first tick's work runs.
-        orig = _fresh
 
-        async def _fresh_then_stop(*a, **k):
-            await orig(*a, **k)
-            stop.set()
+        async def _reconcile(root, summarizer, *, db, head_sha, concurrency=8):
+            calls["reconcile"] = (root, summarizer, db, head_sha)
+            stop.set()  # stop after the first tick's work runs
 
-        monkeypatch.setattr(build_mod, "fresh_build", _fresh_then_stop)
+        monkeypatch.setattr(build_mod, "reconcile_map", _reconcile)
         await worker.run(ctx, stop)
 
     asyncio.run(_run())
-    assert "fresh" in calls
-    assert "incr" not in calls
+    root, summarizer, db, head_sha = calls["reconcile"]
+    assert root == ctx.repo_root
+    assert summarizer is worker._summarizer
+    assert db is ctx.db
+    assert head_sha == "HEAD_SHA"
 
 
-def test_incremental_when_head_differs(monkeypatch):
-    calls: dict[str, object] = {}
+def test_reconcile_error_does_not_kill_worker(monkeypatch):
+    """A failing reconcile is logged, not propagated — the worker keeps ticking
+    and still exits cleanly on stop_event."""
+    ticks = {"n": 0}
 
     async def _head(_root):
-        return "NEW_SHA"
-
-    def _latest(_db):
-        return "OLD_SHA"
-
-    async def _fresh(*a, **k):  # pragma: no cover - must not be called
-        calls["fresh"] = True
+        return "HEAD_SHA"
 
     monkeypatch.setattr(git_diff_mod, "head_commit", _head)
-    monkeypatch.setattr(store_mod, "latest_map_sha", _latest)
-    monkeypatch.setattr(build_mod, "fresh_build", _fresh)
 
     worker = CodebaseMapWorker(interval_s=0.001)
     worker._summarizer = _SummarizerStub()
@@ -90,59 +73,17 @@ def test_incremental_when_head_differs(monkeypatch):
     async def _run() -> None:
         stop = asyncio.Event()
 
-        async def _incr(root, summarizer, *, db, base_sha, head_sha, concurrency=8):
-            calls["incr"] = (base_sha, head_sha)
-            stop.set()
+        async def _reconcile(*a, **k):
+            ticks["n"] += 1
+            if ticks["n"] >= 2:
+                stop.set()
+            raise RuntimeError("boom")
 
-        monkeypatch.setattr(build_mod, "incremental_update", _incr)
+        monkeypatch.setattr(build_mod, "reconcile_map", _reconcile)
         await worker.run(ctx, stop)
 
     asyncio.run(_run())
-    assert calls["incr"] == ("OLD_SHA", "NEW_SHA")
-    assert "fresh" not in calls
-
-
-def test_idle_when_head_matches(monkeypatch):
-    calls: dict[str, object] = {}
-
-    async def _head(_root):
-        return "SAME_SHA"
-
-    def _latest(_db):
-        return "SAME_SHA"
-
-    async def _fresh(*a, **k):  # pragma: no cover
-        calls["fresh"] = True
-
-    async def _incr(*a, **k):  # pragma: no cover
-        calls["incr"] = True
-
-    monkeypatch.setattr(git_diff_mod, "head_commit", _head)
-    monkeypatch.setattr(store_mod, "latest_map_sha", _latest)
-    monkeypatch.setattr(build_mod, "fresh_build", _fresh)
-    monkeypatch.setattr(build_mod, "incremental_update", _incr)
-
-    worker = CodebaseMapWorker(interval_s=0.001)
-    worker._summarizer = _SummarizerStub()
-    ctx = _ctx()
-
-    async def _run() -> None:
-        stop = asyncio.Event()
-        seen = {"ticks": 0}
-        real_head = _head
-
-        async def _head_then_stop(root):
-            seen["ticks"] += 1
-            stop.set()  # stop after this idle tick
-            return await real_head(root)
-
-        monkeypatch.setattr(git_diff_mod, "head_commit", _head_then_stop)
-        await worker.run(ctx, stop)
-        assert seen["ticks"] == 1
-
-    asyncio.run(_run())
-    assert "fresh" not in calls
-    assert "incr" not in calls
+    assert ticks["n"] == 2  # survived the first failure, exited on the second
 
 
 def test_disabled_without_client_does_not_raise_or_spin(monkeypatch):
