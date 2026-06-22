@@ -9,7 +9,7 @@ import yaml
 from murder.work.tickets.parser import ParsedTicket
 
 _FRONTMATTER_DELIM = "---"
-_FRONTMATTER_KEYS = ("title", "deps", "harness", "model", "worktree")
+_FRONTMATTER_KEYS = ("title", "deps", "harness", "model", "worktree", "parent")
 
 
 def render_ticket_frontmatter(ticket: ParsedTicket | dict[str, Any]) -> str:
@@ -27,6 +27,7 @@ def _payload(ticket: ParsedTicket | dict[str, Any]) -> dict[str, Any]:
             "harness": ticket.harness,
             "model": ticket.model,
             "worktree": ticket.worktree,
+            "parent": ticket.parent,
         }
     else:
         values = {
@@ -35,6 +36,7 @@ def _payload(ticket: ParsedTicket | dict[str, Any]) -> dict[str, Any]:
             "harness": ticket.get("harness"),
             "model": ticket.get("model"),
             "worktree": ticket.get("worktree"),
+            "parent": ticket.get("parent"),
         }
 
     return {key: _render_value(key, values.get(key)) for key in _FRONTMATTER_KEYS}

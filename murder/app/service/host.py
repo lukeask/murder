@@ -421,6 +421,70 @@ class ServiceHost:
                 raise ValueError("tui.save_templates requires templates list")
             return {"ok": True, "templates": save_templates(templates)}
 
+        def _tui_load_workflows(_body: dict[str, Any]) -> dict[str, Any]:
+            from murder.user_config import load_workflows
+
+            return {"ok": True, "workflows": load_workflows()}
+
+        def _tui_save_workflows(body: dict[str, Any]) -> dict[str, Any]:
+            from murder.user_config import save_workflows
+
+            workflows = body.get("workflows")
+            if not isinstance(workflows, list):
+                raise ValueError("tui.save_workflows requires workflows list")
+            return {"ok": True, "workflows": save_workflows(workflows)}
+
+        async def _tui_run_workflow(body: dict[str, Any]) -> dict[str, Any]:
+            from murder.bus import Entity
+            from murder.work.workflows.launch import run_workflow_by_name
+
+            name = str(body.get("name", "")).strip()
+            if not name:
+                raise ValueError("tui.run_workflow requires name")
+            raw_args = body.get("args")
+            if raw_args is None:
+                raw_args = {}
+            if not isinstance(raw_args, dict):
+                raise ValueError("tui.run_workflow args must be an object")
+            # Placeholder substitution is string-only; coerce so a numeric/bool
+            # arg from the wire still fills a ``{key}`` token cleanly.
+            args = {str(k): str(v) for k, v in raw_args.items()}
+
+            # Single start guard covering runtime+db+orchestrator, matching the
+            # sibling handlers' message. (orchestrator and runtime are set
+            # together at startup, so a pre-start request would otherwise leak
+            # the internal "orchestrator unavailable" error instead.)
+            if self.runtime is None or self.runtime.db is None or self.orchestrator is None:
+                raise RuntimeError("service not started")
+            orchestrator = self.orchestrator
+            db = self.runtime.db
+
+            try:
+                result = run_workflow_by_name(db, self.repo_root, name, args)
+            except KeyError:
+                # Turn the lookup miss into a client-facing message (KeyError's
+                # repr would leak as a bare name); mirrors other handlers'
+                # bad-input -> ValueError contract.
+                raise ValueError(f"no saved workflow named {name!r}")
+
+            # Publish every freshly created ticket so the frontend renders the
+            # new run tree before any crow spawns.
+            for tid in result.created_ticket_ids:
+                await self.runtime.publish_snapshot(Entity.TICKET, tid)
+
+            # Kick only THIS run's stages: kickoff_ready(only=tid) spawns a stage
+            # only if it's an eligible root, so downstream/dep-gated stages and
+            # unrelated project tickets are left untouched.
+            for tid in result.stage_ticket_ids.values():
+                await orchestrator.kickoff_ready(only=tid)
+
+            return {
+                "ok": True,
+                "run_ticket_id": result.run_ticket_id,
+                "stage_ticket_ids": result.stage_ticket_ids,
+                "created_ticket_ids": result.created_ticket_ids,
+            }
+
         def _mask_llm(llm: Any) -> dict[str, Any]:
             # Dump the user llm block, masking every non-empty api_key as "***".
             if llm is None:
@@ -657,6 +721,9 @@ class ServiceHost:
         self.register_rpc_handler("tui.save_favorites", _tui_save_favorites)
         self.register_rpc_handler("tui.load_templates", _tui_load_templates)
         self.register_rpc_handler("tui.save_templates", _tui_save_templates)
+        self.register_rpc_handler("tui.load_workflows", _tui_load_workflows)
+        self.register_rpc_handler("tui.save_workflows", _tui_save_workflows)
+        self.register_rpc_handler("tui.run_workflow", _tui_run_workflow)
         self.register_rpc_handler("settings.get", _settings_get)
         self.register_rpc_handler("settings.update", _settings_update)
         # Pure git subprocess + file reads, no shared connection — offloaded.

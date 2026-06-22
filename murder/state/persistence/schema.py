@@ -445,6 +445,25 @@ CREATE TABLE IF NOT EXISTS history_status (
     status_note TEXT,
     updated_at  TEXT NOT NULL
 );
+
+-- One row per launched workflow run. The parent "run" ticket (a pure tree
+-- container, kept ``planned``) anchors the run; ON DELETE CASCADE means
+-- deleting it drops the run record too.
+--   definition_json: the WorkflowDef snapshot at launch time, so a later
+--     coordination layer interprets the run's edges even if the userspace
+--     definition is edited or deleted afterwards.
+--   stage_map_json: JSON object mapping each stage.id -> its materialized
+--     ticket id, so that layer resolves graph edges to concrete tickets.
+-- Run *state* (which stages are done/blocked) is deliberately NOT stored: it
+-- is re-derived from the stage tickets' statuses, so there is no cursor/edge
+-- column to drift out of sync.
+CREATE TABLE IF NOT EXISTS workflow_runs (
+    parent_ticket_id TEXT PRIMARY KEY REFERENCES tickets(id) ON DELETE CASCADE,
+    name             TEXT NOT NULL,
+    definition_json  TEXT NOT NULL,
+    stage_map_json   TEXT NOT NULL,
+    created_at       TEXT NOT NULL
+);
 """
 # fmt: on
 
@@ -506,6 +525,7 @@ def init_db(conn: sqlite3.Connection) -> None:
         _migrate_ticket_metadata_columns,
         _migrate_ticket_parent,
         _migrate_ticket_worktree,
+        _migrate_workflow_runs,
     )
     from murder.state.persistence.notetaker import ensure_notetaker_context_row
 
@@ -537,6 +557,7 @@ def init_db(conn: sqlite3.Connection) -> None:
     _migrate_scheduler_steering(conn)
     _migrate_history_status(conn)
     _migrate_runs_advanced_log_path(conn)
+    _migrate_workflow_runs(conn)
     ensure_notetaker_context_row(conn)
 
 

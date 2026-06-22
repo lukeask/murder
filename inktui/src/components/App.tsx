@@ -63,6 +63,7 @@ import { reduceVimNormal } from '../input/chatVimReducer.js';
 import { readClipboardImage } from '../input/clipboardImage.js';
 import { BUILTIN_COMMAND_NAMES, type CommandCtx, dispatchCommand } from '../input/commandDispatch.js';
 import { expandTemplates } from '../input/expandTemplates.js';
+import { parseWorkflowFire } from '../input/fireWorkflow.js';
 import type { ChatInputHandler } from '../input/dispatcher.js';
 import { CHAT_FOCUS, type FocusId, selectEffectiveFocus } from '../input/focusStore.js';
 import { selectActiveMode } from '../input/modeStore.js';
@@ -436,6 +437,23 @@ export function makeChatInputHandler(
             return true;
           }
           let message = expandSpans(buffer, draftState.pathsById());
+          // Workflow firing (Chunk E): a leading `:name` matching a SAVED workflow FIRES it instead of
+          // being sent/expanded as chat. Runs AFTER expandSpans but BEFORE expandTemplates so the locked
+          // precedence holds: builtin > workflow > template > literal (a builtin name returns null here
+          // and is handled later by dispatchCommand; a same-named template only expands if no fire).
+          const wfNames = new Set(appStore.getState().workflows.items.map((w) => w.name));
+          const fire = parseWorkflowFire(message, BUILTIN_COMMAND_NAMES, wfNames);
+          if (fire !== null) {
+            void appStore.getState().actions.workflows.run(fire.name, fire.args);
+            // Fired — do NOT expand/dispatch/send this buffer as chat. Leave the input in the same clean
+            // state a normal send does: drop the drafts (they're consumed) and clear the buffer (the
+            // shared tail below also clears, but firing returns early, so do it here).
+            for (const id of ids) {
+              imageDraft.getState().drop(id);
+            }
+            chatInput.getState().clear();
+            return true;
+          }
           // Template expansion (leading `:name args` fill / inline `:name:` macros), upstream of the
           // prefix dispatcher so a builtin `:command` still wins and an unknown `:foo` falls through.
           const templateRegistry = new Map<string, string>(

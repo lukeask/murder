@@ -159,3 +159,47 @@ def test_ticket_sync_recreates_deleted_markdown_for_single_ticket(repo_root: Pat
     reconcile_ticket_md(conn=conn, repo_root=repo_root, ticket_id="t001")
 
     assert ticket_md(repo_root, "t001").exists()
+
+
+def test_reconcile_ticket_md_round_trips_parent(repo_root: Path) -> None:
+    # Root-cause test: an .md carrying `parent: tNNN` must set (and on every
+    # re-reconcile preserve) the `parent_ticket_id` column, not get clobbered.
+    conn = _conn(repo_root)
+    path = ticket_md(repo_root, "t002")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        """---
+title: Child
+deps: []
+harness: codex
+model: gpt-5
+worktree:
+parent: t003
+---
+# Checklist
+[ ] do thing
+""",
+        encoding="utf-8",
+    )
+
+    reconcile_ticket_md(conn=conn, repo_root=repo_root, ticket_id="t002")
+    row = conn.execute("SELECT parent_ticket_id FROM tickets WHERE id = 't002'").fetchone()
+    assert row["parent_ticket_id"] == "t003"
+
+    # Re-reconcile (the poll path that previously clobbered linkage) keeps it.
+    reconcile_ticket_md(conn=conn, repo_root=repo_root, ticket_id="t002")
+    row = conn.execute("SELECT parent_ticket_id FROM tickets WHERE id = 't002'").fetchone()
+    assert row["parent_ticket_id"] == "t003"
+
+
+def test_render_row_emits_parent_from_db_column(repo_root: Path) -> None:
+    conn = _conn(repo_root)
+    _insert_ticket(conn, "t002", title="Child")
+    conn.execute("UPDATE tickets SET parent_ticket_id = 't003' WHERE id = 't002'")
+    tickets_dir(repo_root).mkdir(parents=True, exist_ok=True)
+
+    # Delete-then-recreate materializes the .md from the DB row.
+    reconcile_ticket_md(conn=conn, repo_root=repo_root, ticket_id="t002")
+
+    text = ticket_md(repo_root, "t002").read_text(encoding="utf-8")
+    assert "parent: t003\n" in text

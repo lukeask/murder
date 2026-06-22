@@ -784,6 +784,32 @@ def _migrate_runs_advanced_log_path(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE runs ADD COLUMN advanced_log_path TEXT")
 
 
+def _migrate_workflow_runs(conn: sqlite3.Connection) -> None:
+    """Add the workflow_runs table (launched-workflow run records).
+
+    Idempotent: the CREATE TABLE IF NOT EXISTS in SCHEMA_SQL handles fresh DBs;
+    this migration handles existing DBs created before workflows landed.
+    """
+    existing = {
+        row["name"]
+        for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table'"
+        ).fetchall()
+    }
+    if "workflow_runs" not in existing:
+        conn.executescript(
+            """
+            CREATE TABLE workflow_runs (
+                parent_ticket_id TEXT PRIMARY KEY REFERENCES tickets(id) ON DELETE CASCADE,
+                name             TEXT NOT NULL,
+                definition_json  TEXT NOT NULL,
+                stage_map_json   TEXT NOT NULL,
+                created_at       TEXT NOT NULL
+            );
+            """
+        )
+
+
 def current_schema_marker(conn: sqlite3.Connection) -> str:
     """Return a defensible main-DB schema/migration version string.
 
