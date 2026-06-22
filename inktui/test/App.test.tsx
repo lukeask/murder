@@ -12,7 +12,6 @@ import { render } from 'ink-testing-library';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { FakeBusClient } from '../src/bus/FakeBusClient.js';
 import { App, deriveSpawnContext } from '../src/components/App.js';
-import { TMUX_MODE_ID, tmuxMode } from '../src/components/TmuxMode.js';
 import { createInputStores } from '../src/input/createInputStores.js';
 import { CHAT_FOCUS, selectEffectiveFocus } from '../src/input/focusStore.js';
 import type { PanelId } from '../src/input/panels.js';
@@ -139,30 +138,9 @@ describe('App shell', () => {
     dispose();
   });
 
-  it('fullscreen tmux mode suppresses bars and panels (presentationHidesLayout)', async () => {
-    // Render with 'crows' visible so the top bar label is present before entering the mode.
-    const { lastFrame, inputStores, dispose } = setup(['crows']);
-    await tick();
-
-    // Before: the normal layout is showing — crows₀ label is present in the top bar.
-    expect(lastFrame()).toContain('crows₀');
-
-    // Enter fullscreen tmux mode via the store (same path useRootInput.ts toggleTmux takes).
-    inputStores.modes.getState().enter(tmuxMode(inputStores.modes));
-    await tick();
-
-    // After: Shell saw presentationHidesLayout → returned only <Overlay /> (the TmuxFrame surface).
-    // The top-bar chrome (crows₀) must be gone, and the waiting placeholder must be present.
-    expect(lastFrame()).not.toContain('crows₀');
-    expect(lastFrame()).toContain('waiting');
-
-    // Exit and verify the layout is restored.
-    inputStores.modes.getState().exit(TMUX_MODE_ID);
-    await tick();
-    expect(lastFrame()).toContain('crows₀');
-
-    dispose();
-  });
+  // TUIchat-5: the fullscreen tmux mode (and its `presentationHidesLayout` suppression test) was
+  // retired — tmux is now an inline per-pane view (TmuxFrameInline in Stage.tsx), never a layout
+  // takeover. Its coverage lives in Stage.test.tsx (inline frame subscription + rendering).
 });
 
 describe('deriveSpawnContext — doc file context gated by the highlighted Stage pane (stagelayout)', () => {

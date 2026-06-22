@@ -10,9 +10,10 @@
  *    where it was.
  *  - `navigate(dir)` delegates to the focus store's geometry-driven `navigate`.
  *  - `focusChat()` points focus at chat (`alt+space`).
- *  - `spawn()` / `toggleTmux()` are owned by later chunks (C13 spawn wizard, C14 tmux); they are
- *    injectable so those chunks supply real handlers, defaulting to safe no-ops (spawn defaults to
- *    focusing chat, matching the plan's "`alt+s` → highlight to text input").
+ *  - `spawn()` is owned by a later chunk (C13 spawn wizard); it is injectable so that chunk supplies
+ *    the real handler, defaulting to a safe no-op (spawn defaults to focusing chat, matching the
+ *    plan's "`alt+s` → highlight to text input"). (The old `toggleTmux()` fullscreen-tmux handler was
+ *    retired in TUIchat-5; tmux is now an inline per-pane view, see Stage.tsx.)
  *
  * Raw-mode guard: `useInput` puts stdin in raw mode, which a non-TTY stdin (a piped `npm run dev`
  * smoke run, CI, a `< /dev/null` invocation) does not support — Ink throws if asked. So the loop is
@@ -23,7 +24,6 @@
 
 import { type Key, useInput, useStdin } from 'ink';
 import { useEffect, useRef } from 'react';
-import { TMUX_MODE_ID, tmuxMode } from '../components/TmuxMode.js';
 import {
   type ChatInputHandler,
   type DispatchContext,
@@ -41,7 +41,6 @@ import {
 import { selectActiveMode } from '../input/modeStore.js';
 import type { PanelStoreApi } from '../input/panelStore.js';
 import type { PanelId } from '../input/panels.js';
-import { toastStore } from '../store/toast/toastStore.js';
 import type { Wheel } from '../terminal/StdinShim.js';
 import type { Chord } from '../terminal/translate.js';
 import { useInputStores } from './useInputStores.js';
@@ -55,8 +54,6 @@ const WHEEL_STEP = 3;
 export interface DeferredGlobalHandlers {
   /** `alt+s`. Default: focus chat (the text input that becomes the spawn wizard, C13). */
   spawn?: () => void;
-  /** `alt+y`. Default: no-op until C14 wires the tmux toggle. */
-  toggleTmux?: () => void;
   /** `alt+t` / `ctrl+t` (TUIchat-3): cycle the focused chat pane's view mode. Default: no-op until the
    * shell wires the focus→agentId resolution + `cyclePaneViewMode` action. */
   cycleChatView?: () => void;
@@ -234,42 +231,6 @@ export function useRootInput(
           focusState.focus(CHAT_FOCUS);
         },
         spawn: deferred.spawn ?? (() => focusState.focus(CHAT_FOCUS)),
-        toggleTmux:
-          deferred.toggleTmux ??
-          (() => {
-            // C14 wiring: toggle the tmux fullscreen mode. If the mode is already active, exit it
-            // (restores prior focus via C7M). If not active, enter it (saves current focus).
-            // `passThrough: true` on the mode lets alt+y fall through from layer 0 to layer 1
-            // (the global-chord layer) so this handler fires on the "exit" press too.
-            const modesState = modes.getState();
-            if (selectActiveMode(modes)?.id === TMUX_MODE_ID) {
-              modesState.exit(TMUX_MODE_ID);
-            } else {
-              // Scope the frame stream to the focused chat pane's crow: the raw view is the
-              // parsing backup for the conversation under the cursor. A non-chat focus (roster,
-              // a panel) yields no agent — the mode then streams the service's own session.
-              const effective = resolveFocus(
-                focusState.intendedId,
-                panels.getState().visible,
-                mountedStagePanesOf(focusState.rects),
-              );
-              const agentId = effective.startsWith('stage:chat:')
-                ? effective.slice('stage:chat:'.length)
-                : undefined;
-              if (agentId === undefined) {
-                // No focused chat → there's no crow session to mirror. Entering the mode here would
-                // stream the service's own (nonexistent) session and show a raw "can't find pane"
-                // error. Nudge the user to focus a chat first instead.
-                toastStore
-                  .getState()
-                  .push("focus a crow's chat to mirror it (C-hjkl into the Stage)", {
-                    ttlMs: 8000,
-                  });
-                return;
-              }
-              modesState.enter(tmuxMode(modes, agentId));
-            }
-          }),
         // TUIchat-3: cycle the focused chat pane's view mode. Default no-op until the shell wires it
         // (App supplies the focus→agentId resolution + the cyclePaneViewMode action call).
         cycleChatView: deferred.cycleChatView ?? (() => {}),

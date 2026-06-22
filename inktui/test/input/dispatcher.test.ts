@@ -26,7 +26,6 @@ interface SpyHandlers {
   readonly navigate: ReturnType<typeof vi.fn<GlobalHandlers['navigate']>>;
   readonly focusChat: ReturnType<typeof vi.fn<GlobalHandlers['focusChat']>>;
   readonly spawn: ReturnType<typeof vi.fn<GlobalHandlers['spawn']>>;
-  readonly toggleTmux: ReturnType<typeof vi.fn<GlobalHandlers['toggleTmux']>>;
   readonly cycleChatView: ReturnType<typeof vi.fn<GlobalHandlers['cycleChatView']>>;
   readonly newPlan: ReturnType<typeof vi.fn<GlobalHandlers['newPlan']>>;
   readonly newTicket: ReturnType<typeof vi.fn<GlobalHandlers['newTicket']>>;
@@ -49,7 +48,6 @@ function handlers(): SpyHandlers {
     navigate: vi.fn<GlobalHandlers['navigate']>(),
     focusChat: vi.fn<GlobalHandlers['focusChat']>(),
     spawn: vi.fn<GlobalHandlers['spawn']>(),
-    toggleTmux: vi.fn<GlobalHandlers['toggleTmux']>(),
     cycleChatView: vi.fn<GlobalHandlers['cycleChatView']>(),
     newPlan: vi.fn<GlobalHandlers['newPlan']>(),
     newTicket: vi.fn<GlobalHandlers['newTicket']>(),
@@ -211,10 +209,10 @@ describe('layer 1 — global chords', () => {
   it('alt+space focuses chat; alt+y is freed/parked (no longer a chord)', () => {
     const h = handlers();
     dispatchKey(' ', makeKey({ meta: true }), ctx('plans', h));
-    // TUIchat-3: `y` was the old tmux chord; it is now freed/parked, so alt+y fires nothing global.
+    // TUIchat-3: `y` was the old tmux chord; it is now freed/parked, so alt+y fires nothing global
+    // (and the fullscreen tmux mode it drove was retired in TUIchat-5). alt+y falls through unhandled.
     const out = dispatchKey('y', makeKey({ meta: true }), ctx('plans', h));
     expect(h.focusChat).toHaveBeenCalledOnce();
-    expect(h.toggleTmux).not.toHaveBeenCalled();
     expect(out).toEqual({ layer: 'panel', handled: false });
   });
 

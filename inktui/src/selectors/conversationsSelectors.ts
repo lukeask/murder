@@ -117,6 +117,11 @@ function formatBlock(block: ConversationBlock): ChatTurn | null {
   const blockId = block.id ?? null;
 
   switch (block.type) {
+    // TUIchat-2 selector pass-through: the parser (Phase 1) emits a FAITHFUL multi-line `text` (real
+    // newlines, verbatim code/tables, prose de-wrapped). We pass it straight to the renderer — only an
+    // outer `.trim()` (strips leading/trailing blank lines/spaces; internal newlines + alignment are
+    // untouched). NO pre-split / newline normalization here; the Stage's `classifyBlocks` does the
+    // presentation-time grouping, so the multi-line structure must reach it intact.
     case 'user': {
       const text = str(raw, 'text').trim();
       if (!text) return null;

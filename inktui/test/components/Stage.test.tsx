@@ -16,18 +16,18 @@ import { Box } from 'ink';
 import { render } from 'ink-testing-library';
 import type { JSX } from 'react';
 import { describe, expect, it } from 'vitest';
-import { inkTestColorOn } from '../inkTestColorOn.js';
 import { FakeBusClient } from '../../src/bus/FakeBusClient.js';
 import type { ConversationBlockEvent } from '../../src/bus/protocol.js';
 import { PlansPanel } from '../../src/components/PlansPanel.js';
 import {
   ChatPane,
   flattenTurns,
-  formatTurnText,
+  formatTurnLines,
   paneContentHeights,
   Stage,
 } from '../../src/components/Stage.js';
 import { AppStoreProvider } from '../../src/hooks/useAppStore.js';
+import { BusClientProvider } from '../../src/hooks/useBusClient.js';
 import { InputStoresProvider } from '../../src/hooks/useInputStores.js';
 import { useRootInput } from '../../src/hooks/useRootInput.js';
 import { createInputStores } from '../../src/input/createInputStores.js';
@@ -35,6 +35,7 @@ import { CHAT_FOCUS, selectEffectiveFocus } from '../../src/input/focusStore.js'
 import type { ChatTurn } from '../../src/selectors/conversationsSelectors.js';
 import type { CrowSnapshotReply } from '../../src/store/roster/rosterActions.js';
 import { createAppStore } from '../../src/store/store.js';
+import { inkTestColorOn } from '../inkTestColorOn.js';
 
 const ALT_L = '\x1bl'; // alt+l → directional nav right (alt-prefixed, terminal-representable)
 
@@ -109,19 +110,40 @@ function emitTurns(fake: FakeBusClient, n: number): void {
   }
 }
 
-describe('formatTurnText', () => {
-  it('prefixes the first line and indents continuations', () => {
-    const turn: ChatTurn = {
-      blockId: 'b1',
-      speaker: 'assistant',
-      text: 'first\nsecond',
-    };
-    expect(formatTurnText(turn)).toBe('· first\n  second');
+describe('formatTurnLines (TUIchat-2: block-classified physical lines, no inline ›/· prefix)', () => {
+  it('emits a multi-line prose block verbatim (faithful newlines), first line flagged firstOfTurn', () => {
+    const turn: ChatTurn = { blockId: 'b1', speaker: 'assistant', text: 'first\nsecond' };
+    expect(formatTurnLines(turn)).toEqual([
+      { speaker: 'assistant', kind: 'prose', text: 'first', firstOfTurn: true },
+      { speaker: 'assistant', kind: 'prose', text: 'second', firstOfTurn: false },
+    ]);
   });
 
-  it('uses › for user turns', () => {
+  it('drops the inline marker — a user turn is plain text in a prose block', () => {
     const turn: ChatTurn = { blockId: 'b2', speaker: 'user', text: 'hello' };
-    expect(formatTurnText(turn)).toBe('› hello');
+    expect(formatTurnLines(turn)).toEqual([
+      { speaker: 'user', kind: 'prose', text: 'hello', firstOfTurn: true },
+    ]);
+  });
+
+  it('separates blocks with exactly one blank line and labels code/list kinds', () => {
+    const turn: ChatTurn = {
+      blockId: 'b3',
+      speaker: 'assistant',
+      text: 'intro\n\n```\ncode()\n```\n\n- item',
+    };
+    expect(formatTurnLines(turn)).toEqual([
+      { speaker: 'assistant', kind: 'prose', text: 'intro', firstOfTurn: true },
+      { speaker: 'assistant', kind: 'blank', text: '', firstOfTurn: false },
+      { speaker: 'assistant', kind: 'code', text: 'code()', firstOfTurn: true },
+      { speaker: 'assistant', kind: 'blank', text: '', firstOfTurn: false },
+      { speaker: 'assistant', kind: 'list', text: '- item', firstOfTurn: true },
+    ]);
+  });
+
+  it('returns no lines for an empty turn', () => {
+    const turn: ChatTurn = { blockId: 'b4', speaker: 'assistant', text: '' };
+    expect(formatTurnLines(turn)).toEqual([]);
   });
 });
 
@@ -132,17 +154,27 @@ describe('flattenTurns', () => {
       { blockId: 'b2', speaker: 'user', text: 'question' },
     ];
     expect(flattenTurns(turns)).toEqual([
-      { speaker: 'assistant', text: '· reply' },
-      { speaker: 'user', text: '' },
-      { speaker: 'user', text: '› question' },
+      { speaker: 'assistant', kind: 'prose', text: 'reply', firstOfTurn: true },
+      { speaker: 'user', kind: 'blank', text: '', firstOfTurn: false },
+      { speaker: 'user', kind: 'prose', text: 'question', firstOfTurn: true },
     ]);
   });
 
   it('adds no separator around a single turn (no leading/trailing blank)', () => {
     const turns: ChatTurn[] = [{ blockId: 'b1', speaker: 'assistant', text: 'one\ntwo' }];
     expect(flattenTurns(turns)).toEqual([
-      { speaker: 'assistant', text: '· one' },
-      { speaker: 'assistant', text: '  two' },
+      { speaker: 'assistant', kind: 'prose', text: 'one', firstOfTurn: true },
+      { speaker: 'assistant', kind: 'prose', text: 'two', firstOfTurn: false },
+    ]);
+  });
+
+  it('skips an empty turn entirely (no stray separator)', () => {
+    const turns: ChatTurn[] = [
+      { blockId: 'b1', speaker: 'assistant', text: 'kept' },
+      { blockId: 'b2', speaker: 'user', text: '' },
+    ];
+    expect(flattenTurns(turns)).toEqual([
+      { speaker: 'assistant', kind: 'prose', text: 'kept', firstOfTurn: true },
     ]);
   });
 });
@@ -473,6 +505,76 @@ describe('Stage — chat-target highlight', () => {
     await tick();
     expect(selectEffectiveFocus(inputStores.focus)).toBe(CHAT_FOCUS);
     expect(inputStores.keymaps.getState().keymaps[STAGE_PANE]?.keymap ?? []).toEqual([]);
+    dispose();
+  });
+});
+
+/** A tmux.frame event for `collab-1` (the pane-scoped raw capture). */
+function tmuxFrame(frame: string, id: string) {
+  return {
+    type: 'tmux.frame' as const,
+    frame,
+    id,
+    ts: '2026-06-22T00:00:00Z',
+    run_id: 'run-1',
+    agent_id: 'collab-1',
+  };
+}
+
+describe('Stage — inline tmux view (TUIchat-5)', () => {
+  /** The Harness plus the BusClientProvider the inline frame needs (Stage reads the live store, so
+   * flipping the pane's view mode via the action re-renders it into / out of the tmux branch). */
+  function TmuxHarness({
+    store,
+    inputStores,
+    bus,
+  }: {
+    readonly store: ReturnType<typeof createAppStore>['store'];
+    readonly inputStores: ReturnType<typeof createInputStores>;
+    readonly bus: FakeBusClient;
+  }): JSX.Element {
+    return (
+      <BusClientProvider value={bus}>
+        <Harness store={store} inputStores={inputStores} />
+      </BusClientProvider>
+    );
+  }
+
+  it('renders the inline frame when the pane is in tmux mode and closes the stream on mode-leave', async () => {
+    const { fake, store, inputStores, dispose } = await setup();
+    const { lastFrame, rerender } = render(
+      <TmuxHarness store={store} inputStores={inputStores} bus={fake} />,
+    );
+    await tick();
+
+    // Baseline: the store itself holds some subscriptions on the shared fake bus (conversation.block,
+    // snapshots, …). We assert the DELTA from the inline frame, not an absolute count. Verbose by
+    // default → the inline frame surface is NOT mounted, so it adds nothing.
+    const baseline = fake.subscriberCount;
+
+    // Flip the pane to tmux mode → the inline frame mounts and opens exactly one pane-scoped
+    // subscription; before the first frame it shows the waiting placeholder.
+    store.getState().actions.conversations.setPaneViewMode('collab-1', 'tmux');
+    rerender(<TmuxHarness store={store} inputStores={inputStores} bus={fake} />);
+    await tick();
+    expect(fake.subscriberCount).toBe(baseline + 1);
+    expect(lastFrame() ?? '').toContain('waiting for tmux frame');
+
+    // A frame arrives → it renders inline inside the pane (no fullscreen takeover: the pane title is
+    // still present).
+    fake.emit(tmuxFrame('INLINE_TMUX_FRAME', 'ev-1'));
+    await tick();
+    const withFrame = lastFrame() ?? '';
+    expect(withFrame).toContain('INLINE_TMUX_FRAME');
+    expect(withFrame).toContain('TestCollab'); // pane chrome intact — inline, not a takeover
+
+    // Leave tmux mode (back to verbose) → the inline frame unmounts → its subscription closes. This
+    // is the "close on mode-leave, no idle streams" lifecycle (not only on pane destroy).
+    store.getState().actions.conversations.setPaneViewMode('collab-1', 'verbose');
+    rerender(<TmuxHarness store={store} inputStores={inputStores} bus={fake} />);
+    await tick();
+    expect(fake.subscriberCount).toBe(baseline);
+    expect(lastFrame() ?? '').not.toContain('INLINE_TMUX_FRAME');
     dispose();
   });
 });

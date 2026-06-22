@@ -100,10 +100,6 @@ export interface GlobalHandlers {
   focusChat(): void;
   /** `alt+s`: open the spawn wizard (only when chat is focused; wired by C13). */
   spawn(): void;
-  /** `alt+y` (legacy): toggle the tmux-vs-parsed fullscreen view. The chord that drove it (`y`) is
-   * freed/parked in TUIchat-3; the handler stays because the fullscreen TmuxMode itself is retired
-   * later (TUIchat-5), and the mode's pass-through "press again to exit" still calls it. */
-  toggleTmux(): void;
   /** `alt+t` / `ctrl+t` (`global.cycleChatView`, TUIchat-3): cycle the focused chat pane through
    * verbose → condensed → tmux. Resolves the focused pane's agentId and calls `cyclePaneViewMode`. */
   cycleChatView(): void;
