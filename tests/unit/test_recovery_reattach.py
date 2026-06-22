@@ -131,6 +131,9 @@ def test_orchestrator_reattach_binds_live_session_without_prompt(fake_tmux, tmp_
     rt.sync_agent = MagicMock()
     rt.publish_snapshot = AsyncMock()
     rt.get_crow = MagicMock(return_value=None)
+    # On a real restart the in-memory handler died, so the double-claim guard
+    # sees no live handler and the ticket is still in_progress — reattach proceeds.
+    rt.get_crow_handler = MagicMock(return_value=None)
 
     orch = Orchestrator(rt)
     # Spy on handler spawn so we don't drive the real handler coroutine.
@@ -147,6 +150,66 @@ def test_orchestrator_reattach_binds_live_session_without_prompt(fake_tmux, tmp_
     # fake tmux pane received no send_prompt. Handler was spawned with the session.
     orch.spawn_crow_handler.assert_awaited_once_with("t100", "crow-t100")
     rt.publish_snapshot.assert_awaited()
+
+
+def test_reattach_skips_when_handler_already_live(fake_tmux, tmp_path):
+    """Double-claim guard: if kickoff already spawned a live handler, reattach
+    must not bind a duplicate CrowAgent against the same pane."""
+    conn = _db()
+    _insert_ticket(conn, "t200")  # in_progress
+
+    rt = MagicMock()
+    rt.repo_root = tmp_path
+    rt.db = conn
+    rt.config = Config(
+        project=ProjectConfig(name="repo"),
+        collaborator=HarnessRoleConfig(harness="codex"),
+        default_crow=HarnessRoleConfig(harness="codex"),
+        crow_handler=CrowHandlerConfig(model="test-model"),
+    )
+    rt.register_agent = MagicMock()
+    rt.sync_agent = MagicMock()
+    rt.publish_snapshot = AsyncMock()
+    rt.get_crow = MagicMock(return_value=None)
+    rt.get_crow_handler = MagicMock(return_value=object())  # handler already live
+
+    orch = Orchestrator(rt)
+    orch.spawn_crow_handler = AsyncMock(return_value="crow_handler-t200")
+
+    asyncio.run(orch.reattach_crow("t200", "crow-t200"))
+
+    # Bailed: no duplicate agent registered, no second handler spawned.
+    assert rt.register_agent.call_count == 0
+    orch.spawn_crow_handler.assert_not_awaited()
+
+
+def test_reattach_skips_when_ticket_not_in_progress(fake_tmux, tmp_path):
+    """If kickoff moved the ticket out of in_progress (e.g. failed/done), the
+    reattach claim is stale and must bail."""
+    conn = _db()
+    _insert_ticket(conn, "t201", status="failed")
+
+    rt = MagicMock()
+    rt.repo_root = tmp_path
+    rt.db = conn
+    rt.config = Config(
+        project=ProjectConfig(name="repo"),
+        collaborator=HarnessRoleConfig(harness="codex"),
+        default_crow=HarnessRoleConfig(harness="codex"),
+        crow_handler=CrowHandlerConfig(model="test-model"),
+    )
+    rt.register_agent = MagicMock()
+    rt.publish_snapshot = AsyncMock()
+    rt.get_crow = MagicMock(return_value=None)
+    rt.get_crow_handler = MagicMock(return_value=None)
+
+    orch = Orchestrator(rt)
+    orch.spawn_crow_handler = AsyncMock(return_value="crow_handler-t201")
+
+    asyncio.run(orch.reattach_crow("t201", "crow-t201"))
+
+    assert rt.register_agent.call_count == 0
+    orch.spawn_crow_handler.assert_not_awaited()
 
 
 def test_summary_and_bool_reflect_reattach_candidates():

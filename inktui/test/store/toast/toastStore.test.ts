@@ -18,7 +18,7 @@ import {
 
 /** Build a toast datum with an explicit deadline, for the pure-filter tests. */
 function toast(id: number, expiresAt: number): Toast {
-  return { id, text: `t${id}`, severity: 'info', expiresAt };
+  return { id, text: `t${id}`, severity: 'info', expiresAt, count: 1 };
 }
 
 /** Wait `ms` real milliseconds — the store self-expires on real timers (no fake timers in this repo). */
@@ -81,6 +81,75 @@ describe('toastStore.push', () => {
     expect(store.getState().toasts).toHaveLength(1);
     await wait(60);
     expect(store.getState().toasts).toHaveLength(0);
+  });
+
+  it('a fresh toast starts at count 1', () => {
+    const store = createToastStore();
+    store.getState().push('once', { ttlMs: 10_000 });
+    expect(store.getState().toasts[0]?.count).toBe(1);
+    store.getState().clear();
+  });
+});
+
+describe('toastStore.push — dedup of a live identical toast', () => {
+  it('bumps count instead of stacking a second identical row (length stays 1)', () => {
+    const store = createToastStore();
+    store.getState().push('boom', { severity: 'error', ttlMs: 10_000 });
+    store.getState().push('boom', { severity: 'error', ttlMs: 10_000 });
+    store.getState().push('boom', { severity: 'error', ttlMs: 10_000 });
+    expect(store.getState().toasts).toHaveLength(1);
+    expect(store.getState().toasts[0]?.count).toBe(3);
+    store.getState().clear();
+  });
+
+  it('returns the SAME id for each deduped push (the existing toast, not a new one)', () => {
+    const store = createToastStore();
+    const first = store.getState().push('dup', { ttlMs: 10_000 });
+    const second = store.getState().push('dup', { ttlMs: 10_000 });
+    expect(second).toBe(first);
+    store.getState().clear();
+  });
+
+  it('refreshes (bumps) expiresAt on a dedup so the message stays alive while it keeps firing', () => {
+    const store = createToastStore();
+    store.getState().push('dup', { ttlMs: 10_000 });
+    const firstDeadline = store.getState().toasts[0]?.expiresAt ?? 0;
+    // A later identical push should push the deadline forward (>= the original).
+    store.getState().push('dup', { ttlMs: 10_000 });
+    const bumped = store.getState().toasts[0]?.expiresAt ?? 0;
+    expect(bumped).toBeGreaterThanOrEqual(firstDeadline);
+    store.getState().clear();
+  });
+
+  it('does NOT dedup across differing severity (same text, info vs error → two rows)', () => {
+    const store = createToastStore();
+    store.getState().push('clash', { severity: 'info', ttlMs: 10_000 });
+    store.getState().push('clash', { severity: 'error', ttlMs: 10_000 });
+    expect(store.getState().toasts).toHaveLength(2);
+    store.getState().clear();
+  });
+
+  it('does NOT dedup against an already-expired toast (a new live row is created)', async () => {
+    const store = createToastStore();
+    store.getState().push('stale', { ttlMs: 20 });
+    await wait(40); // the first toast is past its deadline (and its timer has dropped it)
+    store.getState().push('stale', { ttlMs: 10_000 });
+    const live = store.getState().toasts.filter((t) => Date.now() <= t.expiresAt);
+    expect(live).toHaveLength(1);
+    expect(live[0]?.count).toBe(1);
+    store.getState().clear();
+  });
+
+  it('a deduped toast does NOT expire at the OLD deadline — the bumped timer keeps it alive', async () => {
+    const store = createToastStore();
+    store.getState().push('keep', { ttlMs: 40 });
+    await wait(25); // before the first deadline
+    store.getState().push('keep', { ttlMs: 80 }); // bump the deadline well past the original
+    await wait(30); // now past the ORIGINAL 40ms deadline, before the bumped one
+    // If the stale timer hadn't been cancelled, the toast would be gone here.
+    expect(store.getState().toasts).toHaveLength(1);
+    expect(store.getState().toasts[0]?.count).toBe(2);
+    store.getState().clear();
   });
 });
 

@@ -126,6 +126,15 @@ def set_agent_status(conn: sqlite3.Connection, agent_id: str, status: str) -> No
     )
 
 
+def get_agent_status(conn: sqlite3.Connection, agent_id: str) -> str | None:
+    """Return the recorded status of an agent, or None if no row exists."""
+    row = conn.execute(
+        "SELECT status FROM agents WHERE agent_id = ?",
+        (agent_id,),
+    ).fetchone()
+    return str(row["status"]) if row is not None else None
+
+
 def rename_agent(
     conn: sqlite3.Connection,
     old_agent_id: str,

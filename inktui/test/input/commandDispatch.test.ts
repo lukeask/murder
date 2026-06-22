@@ -14,6 +14,7 @@ interface FakeCtx {
   openHelp: Mock;
   captureNote: Mock;
   pushToast: Mock;
+  clearToasts: Mock;
   clearTranscript: Mock;
   saveTemplate: Mock;
   setPaneViewMode: Mock;
@@ -28,6 +29,7 @@ function makeCtx(withDismiss = false): FakeCtx {
     openHelp: vi.fn(),
     captureNote: vi.fn(),
     pushToast: vi.fn(),
+    clearToasts: vi.fn(),
     clearTranscript: vi.fn(),
     saveTemplate: vi.fn(),
     setPaneViewMode: vi.fn(),
@@ -142,6 +144,15 @@ describe('dispatchCommand — : commands', () => {
     const handled = dispatchCommand(':dismiss', AGENT, ctx);
     expect(handled).toBe(true);
     expect(ctx.pushToast).toHaveBeenCalled();
+  });
+
+  it(':dismiss-toasts flushes the toast rack (clearToasts), distinct from :dismiss', () => {
+    const ctx = makeCtx(true);
+    const handled = dispatchCommand(':dismiss-toasts', AGENT, ctx);
+    expect(handled).toBe(true);
+    expect(ctx.clearToasts).toHaveBeenCalledOnce();
+    // It must NOT collide with the panel-dismiss target — the hyphenated word is its own command key.
+    expect(ctx.dismiss).not.toHaveBeenCalled();
   });
 
   it('is case-insensitive on the command word', () => {

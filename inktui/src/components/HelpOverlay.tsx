@@ -123,6 +123,7 @@ export function buildHelpGroups(
       { key: ':help', description: 'this overlay' },
       { key: ':note <text>', description: 'quick note' },
       { key: ':verbose / :compact / :tmux', description: 'set this pane view' },
+      { key: ':dismiss-toasts', description: 'flush the toast rack' },
       { key: ':resume', description: 'use r in history panel' },
     ],
   });

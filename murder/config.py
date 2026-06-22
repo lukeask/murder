@@ -113,6 +113,9 @@ class PlannerConfig(BaseModel):
     crow_ask_template: str = "crow_ask_to_planner.md"
     # PlanningHandler poll cadence (parallel to CrowHandlerConfig.poll_interval_s).
     poll_interval_s: float = 5.0
+    # Grace window before the handler's first pane capture, so boot pane-lag of a
+    # freshly-spawned planner never counts toward the poll-failure escalation.
+    startup_grace_s: float = 3.0
 
     @field_validator("kind", mode="before")
     @classmethod

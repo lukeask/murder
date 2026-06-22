@@ -74,6 +74,7 @@ function Harness({
       saveTemplate: () => {},
       setPaneViewMode: () => {},
       pushToast: () => 0,
+      clearToasts: () => {},
     };
     useRootInput({
       ...(spawn !== undefined ? { spawn } : {}),

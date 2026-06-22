@@ -389,7 +389,11 @@ export function createAppStore(bus: BusClient): {
         return;
       }
       const errorEvent: ErrorEvent = event;
-      toastStore.getState().push(errorEvent.message, { severity: 'error', ttlMs: 12000 });
+      // Severity gradient: a `recoverable` error is a transient boot race (planner pane-lag, crow
+      // tick-budget) — it reads as a dim `warning`, not an alarming red. Only a non-recoverable
+      // (fatal) error earns full `error` colour.
+      const severity = errorEvent.recoverable ? 'warning' : 'error';
+      toastStore.getState().push(errorEvent.message, { severity, ttlMs: 12000 });
     },
     { type: 'error' },
   );
