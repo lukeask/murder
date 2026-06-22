@@ -89,6 +89,28 @@ from murder.runtime.orchestration.agent_ids import is_rogue_agent_id  # noqa: E4
 
 
 class Orchestrator:
+    """Coordination facade for spawning/killing agents and computing readiness.
+
+    Owns COORDINATION ONLY. The heavy lifting lives in collaborators constructed
+    in ``__init__`` and reached by delegation:
+      • Concern ops — TicketOps / PlanOps / NoteOps / HistoryOps / AgentOps
+        (the ``*_ops.py`` modules): entity mutations, messaging, lifecycle.
+      • Heavy-path collaborators — HarnessConfigurator (``harness_config.py``),
+        WorktreeProvisioner (``worktree_provisioner.py``), BriefService
+        (``brief_service.py``): the worktree / brief / harness resolution that
+        used to be inlined and duplicated across the spawn methods.
+
+    Extending — DO NOT inline a new heavy path (DB mutation, worktree/brief/
+    harness resolution, multi-step lifecycle) into a spawn or coordination
+    method. That is precisely how this class grew to a 1608-line god. Instead
+    put the logic in the matching Ops/collaborator — or add a new one the same
+    way: take ``rt``, construct it in ``__init__``, delegate to it — and keep the
+    method here a thin call sequence. See ``spawn_crow``: it now reads as
+    resolve-harness → provision-worktree → build-brief → spawn, each one line.
+    Ousterhout: deep collaborators behind a coordinating facade; the facade's job
+    is sequencing, not implementation.
+    """
+
     def __init__(self, rt: OrchestratorHost) -> None:
         self.rt = rt
         self._question_listener: Any = None

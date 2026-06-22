@@ -36,6 +36,23 @@ class ServiceReadModel:
     Thin facade over per-domain builders (see ``read_models/``). Each public
     method delegates to its builder; a shared ``GenerationKeys`` provider keeps
     the invalidation generations in sync across all builders and the facade.
+
+    Responsibility: own NO SQL. This class is a delegating face; every query,
+    schema-compat guard, and DTO mapping lives in a builder.
+
+    Adding a snapshot/display — DO NOT add inline SQL here. The "one read model
+    for everything" shape is what made this a god (671 lines before it was slain
+    to a facade). Instead:
+      • Put the builder method on the matching domain class — work / runtime /
+        history / transit / harness (e.g. a new plan or ticket read goes on
+        ``WorkReadModel`` in ``read_models/work.py``). Use
+        ``self.keys.current_key(...)`` for the invalidation key and the shared
+        helpers in ``read_models/_common.py``.
+      • Add a one-line delegate here mirroring the others.
+      • A genuinely new domain → a new ``read_models/<domain>.py`` builder,
+        constructed in ``__init__`` with ``(self.db_path, self._keys)``.
+    Ousterhout: builders are deep modules (SQL + guards + mapping hidden behind a
+    ``get_X_snapshot()`` call); the facade stays a thin, uniform interface.
     """
 
     def __init__(self, db_path: Path) -> None:

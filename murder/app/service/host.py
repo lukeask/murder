@@ -47,7 +47,36 @@ RpcHandler = Callable[[dict[str, Any]], Awaitable[dict[str, Any]] | dict[str, An
 
 @dataclass
 class ServiceHost:
-    """Wires runtime, bus broker, socket server, orchestrator, and supervisor."""
+    """Wires runtime, bus broker, socket server, orchestrator, and supervisor.
+
+    Responsibility (keep it this narrow): the process COMPOSITION ROOT and
+    lifecycle owner. ``start``/``stop`` wire the collaborators and own the
+    background tasks; ``register_default_rpc_handlers`` just delegates to the
+    ``handlers/`` package. This class deliberately holds NO request logic.
+
+    Extending the RPC surface — DO NOT add a handler closure here. Inline
+    accretion is exactly what doubled this file to ~1100 lines before it was
+    slain back to a composition root. Instead:
+      • New method in an existing namespace → add it in
+        ``murder/app/service/handlers/<namespace>.py`` (e.g. a new ``state.*``
+        read goes in ``handlers/state.py``) and register it inside that
+        module's ``register(host)``.
+      • A new namespace → add ``handlers/<name>.py`` exposing ``register(host)``
+        and list it once in ``handlers/__init__.py::register_all``.
+      • Shared deps (read_model/orchestrator access, threading, DTO wrapping)
+        live in ``handlers/_common.py`` — reuse them, don't re-roll.
+    Ousterhout: each handler module is a deep module behind a one-line
+    ``register`` seam, so host.py stays shallow-but-small (pure wiring). Adding
+    logic here trades a narrow interface for a god class — don't.
+
+    # god-debt: the background loops (_run_projection_poll_loop,
+    # _run_transit_poll_loop, _reattach_surviving_crows,
+    # _ensure_startup_rogue_safely, _discover_then_write_models_doc) are still
+    # inline. Deferred follow-up (godslayer plan, Phase 1b): move them to a
+    # BackgroundLoops collaborator owned by the host. Left inline because they
+    # have no start/stop test net and are perpetual loops, so the extraction
+    # needs real-boot verification rather than a unit pass.
+    """
 
     config: Config
     repo_root: Path
