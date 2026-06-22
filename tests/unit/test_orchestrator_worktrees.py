@@ -202,7 +202,7 @@ def test_spawn_crow_defaults_to_main_checkout(repo_root: Path, monkeypatch) -> N
             return "brief"
 
     monkeypatch.setattr(
-        "murder.runtime.orchestration.orchestrator.ensure_worktree_for_branch",
+        "murder.runtime.orchestration.worktree_provisioner.ensure_worktree_for_branch",
         fake_ensure,
     )
     monkeypatch.setattr(
@@ -210,7 +210,7 @@ def test_spawn_crow_defaults_to_main_checkout(repo_root: Path, monkeypatch) -> N
         fake_spawn_agent,
     )
     monkeypatch.setattr(
-        "murder.runtime.orchestration.orchestrator.assembler_for",
+        "murder.runtime.orchestration.brief_service.assembler_for",
         lambda _ctx: _FakeAssembler(),
     )
 
@@ -260,7 +260,7 @@ def test_spawn_crow_provisions_opt_in_worktree_and_puts_it_in_agent_scope(
             return "brief"
 
     monkeypatch.setattr(
-        "murder.runtime.orchestration.orchestrator.ensure_worktree_for_branch",
+        "murder.runtime.orchestration.worktree_provisioner.ensure_worktree_for_branch",
         fake_ensure,
     )
     monkeypatch.setattr(
@@ -268,7 +268,7 @@ def test_spawn_crow_provisions_opt_in_worktree_and_puts_it_in_agent_scope(
         fake_spawn_agent,
     )
     monkeypatch.setattr(
-        "murder.runtime.orchestration.orchestrator.assembler_for",
+        "murder.runtime.orchestration.brief_service.assembler_for",
         lambda _ctx: _FakeAssembler(),
     )
 
