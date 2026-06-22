@@ -194,7 +194,7 @@ export const HistoryPanel = memo(function HistoryPanel(): React.JSX.Element {
             // `r` resumes the cursor row's CC session when resumable; on any other row it falls
             // through to a plain feed refresh (also the error-state "r to retry" affordance).
             const row = rowAtCursor();
-            if (row !== null && row.resumable) {
+            if (row?.resumable) {
               void resumeConversation(row.target);
               return;
             }
