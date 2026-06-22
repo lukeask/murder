@@ -72,6 +72,12 @@ import {
   type TemplatesState,
   initialTemplatesState,
 } from './templates/templatesSlice.js';
+import { createWorkflowsActions, type WorkflowsActions } from './workflows/workflowsActions.js';
+import {
+  createWorkflowsSlice,
+  type WorkflowsState,
+  initialWorkflowsState,
+} from './workflows/workflowsSlice.js';
 import { createHistoryActions, type HistoryActions } from './history/historyActions.js';
 import {
   createHistorySlice,
@@ -161,6 +167,7 @@ export interface AppActions {
   conversations: ConversationsActions;
   favorites: FavoritesActions;
   templates: TemplatesActions;
+  workflows: WorkflowsActions;
   docView: DocViewActions;
   settings: SettingsActions;
 }
@@ -183,6 +190,7 @@ export interface AppStore {
   conversations: ConversationsState;
   favorites: FavoritesState;
   templates: TemplatesState;
+  workflows: WorkflowsState;
   docView: DocViewState;
   settings: SettingsState;
   actions: AppActions;
@@ -228,6 +236,7 @@ export function createAppStore(bus: BusClient): {
     ...createConversationsSlice(...a),
     ...createFavoritesSlice(...a),
     ...createTemplatesSlice(...a),
+    ...createWorkflowsSlice(...a),
     ...createDocViewSlice(...a),
     ...createSettingsSlice(...a),
     // Placeholder; replaced in step 2 now that we have the handle the actions need to `setState`.
@@ -248,6 +257,7 @@ export function createAppStore(bus: BusClient): {
     conversations: createConversationsActions(bus, store),
     favorites: createFavoritesActions(bus, store),
     templates: createTemplatesActions(bus, store),
+    workflows: createWorkflowsActions(bus, store),
     docView: createDocViewActions(bus, store),
     settings: createSettingsActions(bus, store),
   };
@@ -380,6 +390,7 @@ export const initialAppState: Pick<
   | 'conversations'
   | 'favorites'
   | 'templates'
+  | 'workflows'
   | 'docView'
   | 'settings'
 > = {
@@ -395,6 +406,7 @@ export const initialAppState: Pick<
   conversations: initialConversationsState,
   favorites: initialFavoritesState,
   templates: initialTemplatesState,
+  workflows: initialWorkflowsState,
   docView: initialDocViewState,
   settings: initialSettingsState,
 };

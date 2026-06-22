@@ -313,6 +313,77 @@ def save_templates(records: Any, path: Path | None = None) -> list[dict[str, str
     return normalized
 
 
+def workflows_path() -> Path:
+    """Userspace/global workflow-definition registry (follows the user across repos)."""
+    return config_dir() / "workflows.yaml"
+
+
+def load_workflows(path: Path | None = None) -> list[dict[str, Any]]:
+    """Read the userspace workflow registry as a list of raw definition dicts.
+
+    Tolerant by design: a missing/empty file, a non-dict top level, or a missing
+    ``workflows:`` key all yield ``[]``, and non-dict entries are skipped. Records
+    are returned verbatim (no coercion) — ``save_workflows`` is the only writer and
+    already emits canonical ``WorkflowDef`` dumps, so readers can trust the shape.
+    """
+    wpath = path or workflows_path()
+    if not wpath.exists():
+        return []
+    try:
+        raw = yaml.safe_load(wpath.read_text(encoding="utf-8")) or {}
+    except Exception:  # noqa: BLE001
+        return []
+    if not isinstance(raw, dict):
+        return []
+    records = raw.get("workflows")
+    if not isinstance(records, list):
+        return []
+    return [rec for rec in records if isinstance(rec, dict)]
+
+
+def _normalize_workflows(records: Any) -> list[dict[str, Any]]:
+    """Coerce records through ``WorkflowDef``, drop invalid, de-dupe (last wins), sort.
+
+    A record is dropped if pydantic rejects its shape OR ``validate_workflow``
+    reports a graph/name problem — the registry never persists a definition that
+    can't later be materialized. Kept defs are re-serialized from the model so the
+    stored form is canonical regardless of the caller's input dict.
+    """
+    # Imported lazily to avoid a user_config -> work.workflows import cycle and to
+    # keep this module importable in contexts that never touch workflows.
+    from murder.work.workflows import WorkflowDef, validate_workflow
+
+    by_name: dict[str, dict[str, Any]] = {}
+    if isinstance(records, list):
+        for rec in records:
+            if not isinstance(rec, dict):
+                continue
+            try:
+                defn = WorkflowDef.model_validate(rec)
+            except Exception:  # noqa: BLE001
+                continue
+            if validate_workflow(defn):
+                continue
+            by_name[defn.name] = defn.model_dump(mode="json")
+    return [by_name[n] for n in sorted(by_name)]
+
+
+def save_workflows(records: Any, path: Path | None = None) -> list[dict[str, Any]]:
+    """Normalize and atomically persist the workflow registry.
+
+    Returns the normalized canonical list so callers can sync to it.
+    """
+    normalized = _normalize_workflows(records)
+    wpath = path or workflows_path()
+    wpath.parent.mkdir(parents=True, exist_ok=True)
+    payload = yaml.safe_dump({"workflows": normalized}, default_flow_style=False, sort_keys=False)
+    tmp = wpath.with_suffix(".tmp")
+    tmp.write_text(payload, encoding="utf-8")
+    os.chmod(tmp, 0o600)
+    tmp.replace(wpath)
+    return normalized
+
+
 _GATED_HARNESS = "native_coding_crow"
 
 

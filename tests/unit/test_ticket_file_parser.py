@@ -179,5 +179,80 @@ Body
         "harness: cc\n"
         "model: opus\n"
         "worktree: null\n"
+        "parent: null\n"
         "---\n"
     )
+
+
+def test_parse_ticket_reads_parent_as_scalar() -> None:
+    parsed = parse_ticket(
+        """---
+title: Child
+harness: cc
+model: opus
+parent: t003
+---
+# Body
+"""
+    )
+
+    assert parsed.parse_error is None
+    assert parsed.parent == "t003"
+    # `parent` is canonical, not an extra.
+    assert parsed.extras == {}
+
+
+def test_parse_ticket_absent_parent_is_none() -> None:
+    parsed = parse_ticket(
+        """---
+title: Top-level
+harness: cc
+model: opus
+---
+# Body
+"""
+    )
+
+    assert parsed.parse_error is None
+    assert parsed.parent is None
+
+
+def test_render_parse_round_trip_preserves_parent() -> None:
+    source = """---
+title: Child ticket
+deps: []
+harness: codex
+model: gpt-5.5
+worktree: null
+parent: t003
+---
+# Checklist
+[ ] do thing
+"""
+    first = parse_ticket(source)
+    rendered = render_ticket_frontmatter(first) + first.body
+    second = parse_ticket(rendered)
+
+    assert first.parent == "t003"
+    assert second.parent == "t003"
+    # Render is stable across a second pass (no parent drift).
+    assert render_ticket_frontmatter(second) + second.body == rendered
+
+
+def test_render_omits_parent_value_when_none() -> None:
+    parsed = parse_ticket(
+        """---
+title: Top-level
+harness: cc
+model: opus
+---
+# Body
+"""
+    )
+
+    frontmatter = render_ticket_frontmatter(parsed)
+
+    # Matches the other optional scalars: the key is present with a `null` value
+    # rather than carrying a stale id, and re-parses back to None.
+    assert "parent: null\n" in frontmatter
+    assert parse_ticket(frontmatter + parsed.body).parent is None

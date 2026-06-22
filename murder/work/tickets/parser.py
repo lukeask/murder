@@ -13,7 +13,7 @@ from murder.state.storage.filesystem import atomic_write_text
 
 _FRONTMATTER_DELIM = "---"
 _MISSING_CLOSE_ERROR = "ticket markdown is missing closing frontmatter delimiter"
-_CANONICAL_FRONTMATTER_KEYS = ("title", "deps", "harness", "model", "worktree")
+_CANONICAL_FRONTMATTER_KEYS = ("title", "deps", "harness", "model", "worktree", "parent")
 _ALIASES = {
     "dependency": "deps",
     "dependencies": "deps",
@@ -40,6 +40,7 @@ class ParsedTicket:
     harness: str | None = None
     model: str | None = None
     worktree: str | None = None
+    parent: str | None = None
     body: str = ""
     checklist: list[TicketChecklistItem] = field(default_factory=list)
     extras: dict[str, Any] = field(default_factory=dict)
@@ -100,6 +101,9 @@ def parse_ticket(md_text: str, *, default_title: str | None = None) -> ParsedTic
         harness = _optional_string_field(known.get("harness"), "harness", errors)
         model = _optional_string_field(known.get("model"), "model", errors)
         worktree = _optional_string_field(known.get("worktree"), "worktree", errors)
+        # `parent` is the parent ticket id (a single scalar like `t003`), coerced
+        # exactly like the other optional scalars; blank/absent collapses to None.
+        parent = _optional_string_field(known.get("parent"), "parent", errors)
         # harness/model are only *required* when the author chose to write a
         # frontmatter block. A frontmatter-less planner file leaves them null;
         # they are supplied later by the carve form (apply_carve_ready).
@@ -114,6 +118,7 @@ def parse_ticket(md_text: str, *, default_title: str | None = None) -> ParsedTic
             harness=harness,
             model=model,
             worktree=worktree,
+            parent=parent,
             body=body,
             checklist=_parse_checklist(body),
             extras=extras,

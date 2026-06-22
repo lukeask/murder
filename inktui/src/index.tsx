@@ -296,6 +296,10 @@ export function primeSlices(store: ReturnType<typeof createAppStore>['store']): 
   // favorites: a disconnected optimistic save/remove/rename leaves the local list ahead of the
   // server until a reload reconciles it.
   void store.getState().actions.templates.load();
+  // Re-load the workflow registry on every (re)connect too — same persisted-truth rationale as
+  // templates: a disconnected optimistic save/remove/rename leaves the local list ahead of the
+  // server until a reload reconciles it.
+  void store.getState().actions.workflows.load();
   // Re-load settings on every (re)connect too. The slice loads once from a mount-effect
   // (App.tsx `loadSettings`), but that single `settings.get` has no retry: if it races the daemon
   // socket coming up (e.g. a fresh TUI right after `murder up`) or is lost to a disconnect, the slice

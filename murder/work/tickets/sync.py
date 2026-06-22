@@ -194,6 +194,7 @@ class TicketSync(MarkdownSyncLoop):
                 "harness": row["harness"],
                 "model": row["model"],
                 "worktree": row["worktree"],
+                "parent": row["parent_ticket_id"],
             }
         )
         body_lines = ["# Checklist"]
@@ -211,9 +212,10 @@ class TicketSync(MarkdownSyncLoop):
         self.db.execute(
             """
             INSERT INTO tickets(
-                id, title, status, harness, model, worktree, attempts, created_at, updated_at
+                id, title, status, harness, model, worktree, parent_ticket_id,
+                attempts, created_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
             """,
             (
                 ticket_id,
@@ -222,6 +224,7 @@ class TicketSync(MarkdownSyncLoop):
                 parsed.harness,
                 parsed.model,
                 parsed.worktree,
+                parsed.parent,
                 now,
                 now,
             ),
@@ -247,10 +250,19 @@ class TicketSync(MarkdownSyncLoop):
         )
 
     def _update_ticket_from_parsed(self, ticket_id: str, parsed: ParsedTicket) -> None:
+        # The `.md` is authoritative for every agent-authored field: title,
+        # harness, model, worktree, and parent_ticket_id all take the parsed
+        # value unconditionally. `parent` is NOT a special case — an absent /
+        # `parent: null` field legitimately nulls the column, exactly as an
+        # absent `harness` nulls harness. Nothing writes parent_ticket_id behind
+        # the md's back: the workflow materializer renders `parent:` INTO the
+        # stage `.md` (see _write_stage_ticket) before this reconcile runs, and
+        # _render_row echoes the column back out, so the round-trip is closed.
         self.db.execute(
             """
             UPDATE tickets
-               SET title = ?, harness = ?, model = ?, worktree = ?, updated_at = ?
+               SET title = ?, harness = ?, model = ?, worktree = ?,
+                   parent_ticket_id = ?, updated_at = ?
              WHERE id = ?
             """,
             (
@@ -258,6 +270,7 @@ class TicketSync(MarkdownSyncLoop):
                 parsed.harness,
                 parsed.model,
                 parsed.worktree,
+                parsed.parent,
                 _now(),
                 ticket_id,
             ),
