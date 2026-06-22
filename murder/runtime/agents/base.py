@@ -96,10 +96,6 @@ class HarnessBackedAgent(LifecycleParticipant):
 
     harness: HarnessAdapter
     harness_session: Any  # HarnessSession — typed Any to avoid import cycle
-    # Persistent per-conversation accumulator: holds the system prompt + pane
-    # scrollback so each refresh feeds incrementally instead of re-parsing 4000
-    # lines from scratch. Reset on start_conversation().
-    _accumulator: Any = None
     # Owned transcript projection. Every harness-backed agent projects its own
     # pane into the conversation store via project_once(), driven by a single
     # service-owned ticker (ServiceHost). This is a universal per-agent concern,
@@ -121,22 +117,11 @@ class HarnessBackedAgent(LifecycleParticipant):
 
         return await tmux.session_exists(self.session)
 
-    def _ensure_accumulator(self) -> Any:
-        """Lazily build the persistent accumulator with the injected system
-        prompt (set on the harness at start, so creation is deferred)."""
-        if self._accumulator is None:
-            from murder.llm.harnesses.transcripts import TranscriptAccumulator
-
-            self._accumulator = TranscriptAccumulator(
-                self.harness.kind, system_prompt=self.harness.system_prompt
-            )
-        return self._accumulator
-
     def start_conversation(self) -> None:
         """Reset conversation state for a fresh harness session: drop the prior
-        run's transcript and the accumulator scrollback so a new session never
-        surfaces stale chat. Called from each subclass's start()."""
-        self._accumulator = None
+        run's transcript so a new session never surfaces stale chat, and build a
+        fresh producer (the single per-conversation parser). Called from each
+        subclass's start()."""
         runtime = getattr(self, "runtime", None)
         if runtime is not None and runtime.db is not None:
             from murder.state.persistence import conversation
@@ -377,59 +362,36 @@ class HarnessBackedAgent(LifecycleParticipant):
                 conversation.block_to_wire(block),
             )
 
-    async def _publish_conversation_changes(self, changes: list[Any]) -> None:
-        from murder.state.persistence import conversation
+    async def _projected_doc(self) -> dict[str, Any] | None:
+        """Run one producer-backed projection tick, then return the canonical
+        persisted conversation doc.
 
-        for change in changes:
-            await self._publish_conversation_block(
-                str(change.action),
-                conversation.block_to_wire(change.block),
-            )
-
-    async def _project_transcript(self) -> dict[str, Any] | None:
-        """Capture the pane, feed the persistent accumulator, and reconcile the
-        parsed doc into the JSON store (stripping re-derived user segments in
-        favour of ground-truth user blocks).
-
-        Returns the merged conversation doc (ground-truth users + parsed
-        non-user segments), or ``None`` if the session is gone. With no db,
-        returns the raw parsed doc without persisting.
+        On-demand refreshes share the single server-side parser/persistence path
+        with the service ticker (:meth:`project_once`) rather than re-parsing the
+        pane through a second accumulator. ``project_once`` already hash-skips an
+        unchanged pane, no-ops on a terminal/producerless agent, updates
+        ``last_state``, delivers a ready queued message, and emits the planner
+        re-sort — so the refresh inherits all of that and can never diverge from
+        the hot path. A dead pane surfaces as a swallowed ``TmuxError``, leaving
+        the last persisted doc intact. Returns ``None`` (caller renders an empty
+        doc) only when there is no db to read from.
         """
-        from murder.runtime.terminal import tmux
-        from murder.llm.harnesses.transcripts import wants_ansi
-
-        try:
-            pane = await tmux.capture_pane(
-                self.session,
-                lines=TRANSCRIPT_SCROLLBACK_LINES,
-                escapes=wants_ansi(self.harness.kind),
-            )
-        except tmux.TmuxError:
-            return None
-        acc = self._ensure_accumulator()
         runtime = getattr(self, "runtime", None)
-        if runtime is not None and runtime.db is not None:
-            from murder.state.persistence import conversation as _conv
-
-            acc.user_texts = _conv.read_user_texts(runtime.db, self.id)
-        acc.feed(pane)
-        doc = acc.to_dict()
         if runtime is None or runtime.db is None:
-            return doc
+            return None
+        from murder.runtime.terminal import tmux
+
+        with contextlib.suppress(tmux.TmuxError):
+            await self.project_once()
         from murder.state.persistence import conversation
 
-        merged, changes = conversation.project_parsed_doc_with_changes(runtime.db, self.id, doc)
-        await self._publish_conversation_changes(changes)
-        # F11 H1: same plan re-sort gate as project_once (the producer hot path), so
-        # the on-demand refresh path emits the bounded `plan` invalidation too.
-        await self._emit_plan_resort_if_planner(bool(changes))
-        return merged
+        return conversation.read_conversation_doc(runtime.db, self.id)
 
     async def refresh_transcript_doc(self) -> dict[str, Any]:
         """Project the pane and return the merged rich conversation doc
         (``{"harness","state","condensed","segments"}``) for display. Returns
-        an empty doc if the session is gone."""
-        doc = await self._project_transcript()
+        an empty doc if there is no persisted conversation yet."""
+        doc = await self._projected_doc()
         if doc is None:
             return {"harness": self.harness.kind, "state": "working",
                     "condensed": None, "segments": []}
@@ -481,12 +443,12 @@ class HarnessBackedAgent(LifecycleParticipant):
         """Compatibility projection: the effective transcript as ``(role, text)``
         turns (``role`` ∈ ``{"user","assistant"}``), derived from the merged doc.
 
-        Returns ``[]`` if the session is gone (the TUI falls back to the raw
-        pane mirror in that case).
+        Returns ``[]`` if there is no persisted conversation yet (the TUI falls
+        back to the raw pane mirror in that case).
         """
         from murder.llm.harnesses.base import _transcript_doc_to_turns
 
-        doc = await self._project_transcript()
+        doc = await self._projected_doc()
         if doc is None:
             return []
         return _transcript_doc_to_turns(doc)

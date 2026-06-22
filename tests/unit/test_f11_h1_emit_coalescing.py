@@ -21,7 +21,7 @@ The three sites and their gate:
    ``scheduler_decision_cache`` (``decision`` / ``rationale`` / ``kicked_ticket_id``)
    changes — NOT every 10s tick's continuous usage/threshold drift.
 
-3. **Conversation rebuild / plan re-sort** (``Daemon._project_transcript``): the
+3. **Conversation rebuild / plan re-sort** (``HarnessBackedAgent.project_once``): the
    content path (``conversation.block``) is already bounded by producer hash-skip;
    the only key-only candidate is the ``plan`` list re-sort, emitted ONLY for a
    ``planner-*`` agent AND ONLY when the poll produced real block changes.
@@ -285,7 +285,6 @@ class _StubAgent(HarnessBackedAgent):
         self.runtime = runtime
         self.harness = ClaudeCodeAdapter()
         self._producer = None
-        self._accumulator = None
         self._build_producer()  # real ConversationProducer + its hash-skip
 
     async def start(self, brief: str, ctx: dict) -> None: ...  # pragma: no cover

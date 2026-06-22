@@ -212,7 +212,7 @@ def test_collaborator_ground_truth_block_survives_refresh(
 ) -> None:
     """Phase 1.c server-side path: a user turn recorded authoritatively at the
     send boundary survives a subsequent pane parse (which never re-derives it),
-    and the projector reuses one persistent accumulator across refreshes.
+    and the projector reuses one persistent producer across refreshes.
     """
 
     fake_tmux.set_session_exists(True)
@@ -232,17 +232,18 @@ def test_collaborator_ground_truth_block_survives_refresh(
     # Ground truth recorded at send boundary, then the pane is parsed.
     agent.record_user_block("real question")
     turns = asyncio.run(agent.refresh_transcript())
-    # agent._accumulator is a documented seam: pins the invariant that the
-    # same accumulator object is reused across refreshes (incremental scrollback).
-    acc_first = agent._accumulator  # noqa: SLF001
+    # agent._producer is the single per-conversation parser: pin the invariant
+    # that the same producer object is reused across refreshes (incremental
+    # scrollback now lives in the producer's accumulator, not a second one).
+    producer_first = agent._producer  # noqa: SLF001
     asyncio.run(agent.refresh_transcript())
 
     assert ("user", "real question") in turns
     # The injected brief must never surface as a turn.
     assert all("fresh brief" not in body for _role, body in turns)
-    # One persistent accumulator is reused across refreshes (incremental scrollback).
-    assert acc_first is not None
-    assert agent._accumulator is acc_first  # noqa: SLF001
+    # One persistent producer is reused across refreshes (incremental scrollback).
+    assert producer_first is not None
+    assert agent._producer is producer_first  # noqa: SLF001
 
 
 def test_collaborator_start_failure_records_notice(tmp_path: Path) -> None:
