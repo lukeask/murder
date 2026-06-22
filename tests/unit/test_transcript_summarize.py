@@ -72,7 +72,12 @@ def test_build_summary_prompt_uses_segments_prior_condensed_and_state() -> None:
         "text": "The provider seam should wrap APIClient.",
         "elapsed": "1m 02s",
     }
-    assert payload["segments"][2]["title"] == "sed -n transcripts/core.py"
+    # Tool calls are reduced to a descriptor string (title + verb + status),
+    # never the raw input/result payload (TUIchat Phase 4).
+    tool_seg = payload["segments"][2]
+    assert tool_seg["type"] == "tool_call"
+    assert "input" not in tool_seg and "result" not in tool_seg
+    assert "sed -n transcripts/core.py" in tool_seg["descriptor"]
 
 
 def test_summarize_segments_uses_stubbed_provider_without_network() -> None:

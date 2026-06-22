@@ -13,6 +13,7 @@
 
 import { beforeEach, describe, expect, it } from 'vitest';
 import { FakeBusClient } from '../../src/bus/FakeBusClient.js';
+import type { SettingsWire } from '../../src/store/settings/settingsActions.js';
 import { createAppStore } from '../../src/store/store.js';
 import { selectLiveToasts, toastStore } from '../../src/store/toast/toastStore.js';
 
@@ -24,13 +25,15 @@ function errorToasts() {
 
 /** A full default settings wire record (every extended field present), so a stubbed reply mirrors the
  * real `_settings_payload`. Override fields per test via `{ ...wire(), ... }`. */
-function wire(over: Record<string, unknown> = {}) {
+function wire(over: Record<string, unknown> = {}): SettingsWire {
   return {
     theme: 'everforest-dark',
     modifier: 'alt',
     key_overrides: {},
     pane_gap: 0,
     vim_mode: false,
+    default_chat_view_mode: 'verbose',
+    startup_rogue: null,
     collaborator_harness: null,
     crow_harnesses: null,
     effective_collaborator_harness: 'claude_code',
@@ -38,7 +41,7 @@ function wire(over: Record<string, unknown> = {}) {
     llm: {},
     llm_env: { groq: false, cerebras: false, openrouter: false },
     ...over,
-  };
+  } as SettingsWire;
 }
 
 function setup() {
@@ -119,6 +122,29 @@ describe('settings actions', () => {
     const updates = fake.rpcCalls.filter((c) => c.method === 'settings.update');
     expect(updates.length).toBe(1);
     expect(updates[0]?.params).toEqual({ settings: { vim_mode: true } });
+    dispose();
+  });
+
+  it('load() fills defaultChatViewMode from the wire (TUIchat-3)', async () => {
+    const { fake, store, dispose } = setup();
+    fake.stubRpc('settings.get', {
+      ok: true,
+      settings: wire({ default_chat_view_mode: 'condensed' }),
+    });
+    await store.getState().actions.settings.load();
+    expect(store.getState().settings.defaultChatViewMode).toBe('condensed');
+    dispose();
+  });
+
+  it('update(default_chat_view_mode) overlays locally AND persists (TUIchat-3)', async () => {
+    const { fake, store, dispose } = setup();
+
+    await store.getState().actions.settings.update({ default_chat_view_mode: 'condensed' });
+
+    expect(store.getState().settings.defaultChatViewMode).toBe('condensed');
+    const updates = fake.rpcCalls.filter((c) => c.method === 'settings.update');
+    expect(updates.length).toBe(1);
+    expect(updates[0]?.params).toEqual({ settings: { default_chat_view_mode: 'condensed' } });
     dispose();
   });
 

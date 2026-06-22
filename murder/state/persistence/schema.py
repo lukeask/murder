@@ -277,7 +277,11 @@ CREATE INDEX IF NOT EXISTS idx_agent_messages_agent ON agent_messages(agent_id);
 -- live_state: the harness UI state at last parse (working/awaiting_input/awaiting_approval).
 -- queued_message: a user message accepted while the harness was busy, held for
 --   delivery at the next awaiting_input parse (cleared on delivery).
--- condensed: summary field from the transcript doc; stored for lossless round-trip.
+-- Condensed summaries no longer live here: a single column cannot hold an
+-- ordered sequence of chunk summaries nor their per-summary attribution
+-- pointers.  They live in conversation_chunk_summaries + chunk_summary_blocks
+-- (see below).  The old `condensed` column was dropped (migration
+-- _migrate_conversation_chunk_summaries).
 -- status:
 --   in_progress – conversation has an active tmux pane owned by murder.
 --   complete    – harness exited gracefully; resume id was captured; history is final.
@@ -293,7 +297,6 @@ CREATE TABLE IF NOT EXISTS conversations (
     model              TEXT,
     harness_session_id TEXT,
     live_state         TEXT,
-    condensed          TEXT,
     queued_message     TEXT,
     status             TEXT NOT NULL DEFAULT 'in_progress'
                        CHECK (status IN ('in_progress','complete','stale')),
@@ -336,6 +339,39 @@ CREATE TABLE IF NOT EXISTS conversation_blocks (
 
 CREATE INDEX IF NOT EXISTS idx_conversation_blocks_conv
     ON conversation_blocks(conversation_id, ordinal);
+
+-- Condensed-view rolling chunk summaries (TUIchat Phase 4).
+-- One row per summarized chunk of *intermediate* activity. The final reply is
+-- never summarized (rendered verbatim), so it never appears here.
+-- chunk_idx: 0-based order of the summary within the conversation.
+-- summary: the condensed line for the chunk (already empty-summary guarded —
+--   chunks that produced no usable summary are simply not written).
+CREATE TABLE IF NOT EXISTS conversation_chunk_summaries (
+    summary_id      INTEGER PRIMARY KEY AUTOINCREMENT,
+    conversation_id TEXT NOT NULL REFERENCES conversations(conversation_id)
+                    ON DELETE CASCADE,
+    chunk_idx       INTEGER NOT NULL,
+    summary         TEXT NOT NULL,
+    created_at      TEXT NOT NULL,
+    UNIQUE (conversation_id, chunk_idx)
+);
+
+CREATE INDEX IF NOT EXISTS idx_chunk_summaries_conv
+    ON conversation_chunk_summaries(conversation_id, chunk_idx);
+
+-- Attribution join: explicit pointers from a chunk summary to the N source
+-- conversation_blocks it stands in for (block_id = conversation_blocks.id).
+-- Explicit block-id pointers are the contract (NOT implicit ordinal ranges) so
+-- the view can reveal/jump back to the exact blocks a summary replaces.
+CREATE TABLE IF NOT EXISTS chunk_summary_blocks (
+    summary_id  INTEGER NOT NULL REFERENCES conversation_chunk_summaries(summary_id)
+                ON DELETE CASCADE,
+    block_id    INTEGER NOT NULL,
+    PRIMARY KEY (summary_id, block_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_chunk_summary_blocks_summary
+    ON chunk_summary_blocks(summary_id);
 
 CREATE TABLE IF NOT EXISTS harness_usage_snapshots (
     id             INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -504,6 +540,7 @@ def init_db(conn: sqlite3.Connection) -> None:
         _migrate_agents_notetaker_role,
         _migrate_agents_worktree_path,
         _migrate_completion_tables,
+        _migrate_conversation_chunk_summaries,
         _migrate_conversation_store,
         _migrate_conversation_queued_message,
         _migrate_drop_sentinel,
@@ -553,6 +590,7 @@ def init_db(conn: sqlite3.Connection) -> None:
     _migrate_drop_ticket_write_set(conn)
     _migrate_conversation_store(conn)
     _migrate_conversation_queued_message(conn)
+    _migrate_conversation_chunk_summaries(conn)
     _migrate_map_summaries(conn)
     _migrate_scheduler_steering(conn)
     _migrate_history_status(conn)

@@ -684,7 +684,7 @@ describe('boot-priming — slice refresh actions exist for all primed domains', 
           model: 'claude-sonnet-4-6',
           harness_session_id: null,
           live_state: null,
-          condensed: null,
+          chunk_summaries: [],
           status: 'in_progress',
           blocks: [
             {
@@ -727,7 +727,7 @@ describe('boot-priming — slice refresh actions exist for all primed domains', 
           model: null,
           harness_session_id: null,
           live_state: null,
-          condensed: null,
+          chunk_summaries: [],
           status: 'in_progress',
           blocks: [
             {

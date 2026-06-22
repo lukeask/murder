@@ -482,6 +482,12 @@ class TranscriptAccumulator:
         if self._state == "awaiting_input" and supports_harness(self.harness):
             grammar = get_grammar(self.harness)
             grammar.close_last_turn(segments)
+        # `condensed` is intentionally None here. Condensed-view summaries are
+        # no longer a single whole-conversation blob carried on the doc: they
+        # are rolling per-chunk summaries produced off the hot path by the
+        # SummarizationBuffer in the producer and stored in
+        # conversation_chunk_summaries (TUIchat Phase 4). The key is retained
+        # only for round-trip shape parity with read_conversation_doc.
         return {
             "harness": self.harness,
             "state": self._state,

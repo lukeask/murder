@@ -40,6 +40,7 @@ function settingsWire(overrides: Partial<SettingsWire> = {}): SettingsWire {
     key_overrides: {},
     pane_gap: 0,
     vim_mode: false,
+    default_chat_view_mode: 'verbose',
     startup_rogue: null,
     collaborator_harness: null,
     crow_harnesses: ['cursor', 'claude_code'],

@@ -228,12 +228,32 @@ export interface UsageResetEvent extends BaseEvent {
 /** Content-bearing conversation block. `action` distinguishes an immutable append from a live
  * trailing-block update. The store appends/replaces the block in the named conversation's
  * transcript slice. `block` is left opaque here — its shape is the transcript DTO, owned above the
- * transport seam. */
+ * transport seam.
+ *
+ * TUIchat-4 (Condensed view) reuses THIS event channel for a third `action`, `chunk-summarized`:
+ * the Python producer (`ConversationProducer._summarize_chunk` →
+ * `AgentBase._publish_conversation_block`) wraps every per-flush summary in a `conversation.block`
+ * event with `action: 'chunk-summarized'` — NOT a distinct top-level event `type`. For that action
+ * `block` is the chunk-summary payload `{ conversation_id, summary, block_ids }` (see
+ * {@link ConversationChunkSummaryEventBlock}), NOT a transcript-block row. The conversations slice
+ * folds it into its ephemeral `chunkSummaries` map for incremental Condensed updates between
+ * snapshots; the `state.conversations_snapshot` chunk_summaries[] remains the source of truth. */
 export interface ConversationBlockEvent extends BaseEvent {
   type: 'conversation.block';
   conversation_id: string;
-  action: 'block-appended' | 'block-updated';
+  action: 'block-appended' | 'block-updated' | 'chunk-summarized';
   block: Record<string, unknown>;
+}
+
+/** The `block` payload of a `conversation.block` event whose `action` is `'chunk-summarized'`
+ * (TUIchat-4). Snake_case to match the Python wire (`conversation_producer.py` publishes
+ * `{conversation_id, summary, block_ids}`). `summary` stands in for exactly the blocks named in
+ * `block_ids` in the Condensed view. The snapshot omits `summary_id`/`chunk_idx` here (those come
+ * with the authoritative `chunk_summaries[]` snapshot rows); the live event is an incremental hint. */
+export interface ConversationChunkSummaryEventBlock {
+  conversation_id: string;
+  summary: string;
+  block_ids: readonly number[];
 }
 
 /** Content-bearing conversation liveness push. Companion to {@link ConversationBlockEvent} on the

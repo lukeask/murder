@@ -520,7 +520,11 @@ def test_merge_conversation_doc_equal_count_flip_to_final_seals(conn):
 
 
 def test_merge_conversation_doc_updates_conversation_metadata(conn):
-    """merge_conversation_doc refreshes harness/state/condensed on the conversations row."""
+    """merge_conversation_doc refreshes harness/state on the conversations row.
+
+    Condensed summaries no longer live on this row (the column was dropped in
+    TUIchat Phase 4); a `condensed` key on the doc is ignored here.
+    """
     _make_conv(conn)
     doc = {
         "harness": "codex",
@@ -530,11 +534,13 @@ def test_merge_conversation_doc_updates_conversation_metadata(conn):
     }
     merge_conversation_doc(conn, "conv-1", doc)
     row = conn.execute(
-        "SELECT harness, live_state, condensed FROM conversations WHERE conversation_id='conv-1'"
+        "SELECT harness, live_state FROM conversations WHERE conversation_id='conv-1'"
     ).fetchone()
     assert row["harness"] == "codex"
     assert row["live_state"] == "awaiting_input"
-    assert row["condensed"] == "short summary"
+    # The condensed column no longer exists on conversations.
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(conversations)").fetchall()}
+    assert "condensed" not in cols
 
 
 def test_merge_conversation_doc_timestamps_stored(conn):

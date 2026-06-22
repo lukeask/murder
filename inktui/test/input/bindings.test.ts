@@ -98,8 +98,8 @@ describe('resolveBindings — overrides', () => {
   });
 
   it('an override expands under both too', () => {
-    const b = resolveBindings('both', true, { 'global.tmux': 'z' });
-    expect(b.chordsFor('global.tmux')).toEqual([
+    const b = resolveBindings('both', true, { 'global.cycleChatView': 'z' });
+    expect(b.chordsFor('global.cycleChatView')).toEqual([
       { input: 'z', key: { meta: true } },
       { input: 'z', key: { ctrl: true } },
     ]);

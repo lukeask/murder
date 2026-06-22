@@ -48,9 +48,8 @@ export type Modifier = 'alt' | 'ctrl' | 'both';
 export type ActionId =
   | 'global.focusChat' // alt+space — focus the chat input
   | 'global.spawn' // alt+s — open the spawn wizard (chat-focus scoped, see dispatcher)
-  | 'global.tmux' // alt+y — toggle the tmux/parsed fullscreen view
+  | 'global.cycleChatView' // alt+t / ctrl+t — cycle the focused pane's chat view (verbose→condensed→tmux)
   | 'global.newPlan' // alt+p — open the new-plan popup
-  | 'global.newTicket' // alt+t — open the new-ticket popup
   | 'global.settings' // alt+o / ctrl+o — open the settings modal
   | 'global.quickNote' // ctrl+n — open the quick-note capture (plain, not command-modified)
   | 'global.keyHelp' // ? — open the keybinding help overlay (see the ACTIONS note on reachability)
@@ -103,7 +102,7 @@ function plain(chord: KeyChord): BindingSpec {
 
 /**
  * The action table — the single source of truth for named chords. Mirrors today's behavior exactly:
- * the `key` chars are the current alt+<key> literals (alt+space, alt+s, alt+y, alt+p, alt+t, alt+f),
+ * the `key` chars are the current alt+<key> literals (alt+space, alt+s, alt+t, alt+p, alt+f),
  * plus `global.settings` (alt+o / ctrl+o default). Adding a feature is one entry here.
  */
 export const ACTIONS: Readonly<Record<ActionId, ActionDef>> = {
@@ -119,22 +118,18 @@ export const ACTIONS: Readonly<Record<ActionId, ActionDef>> = {
     description: 'spawn',
     rebindable: true,
   },
-  'global.tmux': {
-    id: 'global.tmux',
-    default: command('y'),
-    description: 'tmux',
+  // TUIchat-3: the chat-view cycle key. Took over `t` from the (now chord-less) `global.newTicket`;
+  // the old tmux chord `y` is freed/parked for a future history-pane yank.
+  'global.cycleChatView': {
+    id: 'global.cycleChatView',
+    default: command('t'),
+    description: 'view',
     rebindable: true,
   },
   'global.newPlan': {
     id: 'global.newPlan',
     default: command('p'),
     description: 'new plan',
-    rebindable: true,
-  },
-  'global.newTicket': {
-    id: 'global.newTicket',
-    default: command('t'),
-    description: 'new ticket',
     rebindable: true,
   },
   'global.settings': {

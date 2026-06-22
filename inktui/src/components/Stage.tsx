@@ -61,7 +61,9 @@ import {
   useState,
 } from 'react';
 import { shallow } from 'zustand/shallow';
+import type { TmuxFrameEvent } from '../bus/protocol.js';
 import { useAppStore } from '../hooks/useAppStore.js';
+import { useBusClient } from '../hooks/useBusClient.js';
 import { type GotoIntent, useGotoLine } from '../hooks/useGotoLine.js';
 import {
   useBindings,
@@ -84,11 +86,15 @@ import {
   useOpenChatPanes,
 } from '../selectors/conversationsSelectors.js';
 import { harnessModelFooter, worktreeLabel } from '../selectors/harnessDisplay.js';
-import type { ConversationsState } from '../store/conversations/conversationsSlice.js';
+import type {
+  ChatViewMode,
+  ConversationsState,
+} from '../store/conversations/conversationsSlice.js';
 import type { OpenDoc } from '../store/docView/docViewSlice.js';
 import type { FavoritesState } from '../store/favorites/favoritesSlice.js';
 import type { RosterState } from '../store/roster/rosterSlice.js';
 import { useTheme } from '../theme/themeStore.js';
+import { type BlockKind, classifyBlocks } from '../transcript/blocks.js';
 import { useBottomBarLines } from './BottomBar.js';
 import { computeScrollThumb, StageDocPane } from './DocPane.js';
 import { META_SEP } from './glyphs.js';
@@ -151,17 +157,44 @@ const PANE_CHROME_ROWS = 2;
 // Sub-components
 // ---------------------------------------------------------------------------
 
-/** Format one turn for display: `›`/`·` on the first line, two-space indent on continuations. */
-export function formatTurnText(turn: ChatTurn): string {
-  const marker = turn.speaker === 'user' ? '›' : '·';
-  return turn.text
-    .split('\n')
-    .map((line, i) => (i === 0 ? `${marker} ${line}` : `  ${line}`))
-    .join('\n');
+/**
+ * Format one turn's faithful multi-line text into its physical display lines, classified into
+ * {@link Block}s (TUIchat-2 readability engine). Each block's lines are emitted verbatim with ONE
+ * blank line between blocks; a leading blank inside the turn body is dropped (the inter-turn separator
+ * in {@link flattenTurns} owns the gap between turns). Pure; the legacy `›`/`·` inline marker is gone —
+ * the speaker is now a left gutter color-bar drawn at render time (see {@link ChatPane}). Exported as
+ * the test seam (returns the styled physical lines so block boundaries + rhythm are unit-testable).
+ *
+ * Vertical rhythm: blocks are separated by exactly one blank line and runs of >1 blank collapse to one
+ * (the parser joins blocks with `\n\n`, so `classifyBlocks` already splits on blanks; we re-insert a
+ * single blank between consecutive blocks rather than trusting the source's blank count).
+ */
+export function formatTurnLines(turn: ChatTurn): readonly ChatLine[] {
+  const blocks = classifyBlocks(turn.text);
+  const out: ChatLine[] = [];
+  for (const block of blocks) {
+    // Drop fully-blank/empty blocks (defensive — classifyBlocks shouldn't emit them) and skip a
+    // block that is only whitespace, so the rhythm never accumulates empty rows.
+    if (block.lines.length === 0) continue;
+    if (out.length > 0) {
+      out.push({ speaker: turn.speaker, kind: 'blank', text: '', firstOfTurn: false });
+    }
+    block.lines.forEach((text, i) => {
+      out.push({
+        speaker: turn.speaker,
+        kind: block.kind,
+        text,
+        firstOfTurn: out.length === 0 || (i === 0 && out[out.length - 1]?.kind === 'blank'),
+      });
+    });
+  }
+  // A turn whose text was empty/whitespace-only collapses to nothing here; the caller's separator
+  // logic then won't strand a lone blank.
+  return out;
 }
 
-/** The theme color for a turn's speaker (user green, assistant body text, tool warning, …). Pulled
- * out of the old `TurnLine` so a single flattened history line can be colored by its source speaker. */
+/** The theme color for a turn's speaker (user green, assistant body text, tool warning, …). The
+ * speaker color paints the left gutter bar; prose/list body text stays default, code/pre is dimmed. */
 function speakerColor(speaker: TurnSpeaker, theme: ReturnType<typeof useTheme>): string {
   switch (speaker) {
     case 'user':
@@ -179,36 +212,171 @@ function speakerColor(speaker: TurnSpeaker, theme: ReturnType<typeof useTheme>):
   }
 }
 
-/** One physical line of chat history: a single text row carrying its source speaker (for color). The
- * chat pane windows over THESE, not over whole turns — see {@link flattenTurns}. */
+/** One physical line of chat history: a single text row carrying its source speaker (for the gutter
+ * color) and its block kind (for styling — prose wraps, code/pre truncate as no-wrap islands, list
+ * keeps its bullet structure). The chat pane windows over THESE, not over whole turns — see
+ * {@link flattenTurns}. `blank` is a rhythm separator (between blocks and between turns). */
 interface ChatLine {
   readonly speaker: TurnSpeaker;
+  /** The block kind this line belongs to, or `blank` for a rhythm separator line. */
+  readonly kind: BlockKind | 'blank';
   readonly text: string;
+  /** True for the first content line of a turn (and the first line after an intra-turn blank) — the
+   * gutter draws its cap glyph here so a turn reads as one block with a single bar head. */
+  readonly firstOfTurn: boolean;
 }
 
 /**
- * Flatten ordered turns into the physical lines they render as — each turn's {@link formatTurnText}
- * output split on `\n`, every line tagged with its turn's speaker, with one BLANK separator line
- * between consecutive turns (so messages read as visually distinct blocks, not a solid run of rows).
+ * Flatten ordered turns into the physical lines they render as — each turn classified into styled
+ * blocks by {@link formatTurnLines}, with one BLANK separator line between consecutive turns (so
+ * messages read as visually distinct blocks, not a solid run of rows).
+ *
  * This is the fix for dead scrolling on long chats: the pane must window by *line* (the unit it draws
- * and the unit `measureElement` counts), exactly as {@link ./DocPane.js StageDocPane} windows the
+ * and the unit `measureElement` would count), exactly as {@link ./DocPane.js StageDocPane} windows the
  * document body. Windowing by whole turns made `maxScrollUp = turns.length − height`, which is ≤ 0
  * whenever a few long multi-line turns fill the viewport — so `k`/`j` had nothing to move and the
- * history was stuck. The separator is a real ChatLine (not render-time spacing) so the window/scroll
- * math and the scrollbar geometry count exactly what is drawn. Pure (no React); exported as the
- * test seam.
+ * history was stuck.
+ *
+ * Deterministic heights (the measure-wrap-trap mitigation): every block contributes EXACTLY
+ * `block.lines.length` physical {@link ChatLine}s here — the scroll window, the scrollbar geometry,
+ * and the visible slice all count these flat lines, never a measured height. Code/pre islands render
+ * `wrap="truncate"` so one source line is one drawn row; prose lines may soft-wrap to >1 terminal row
+ * but the window still advances one logical line per `j`/`k`, which is the existing (and tested)
+ * contract for long prose turns. So the height math is pure data, immune to the
+ * `measureElement`-lies-about-wrapped-content trap. The separator is a real ChatLine (not render-time
+ * spacing) so the window/scroll math counts exactly what is drawn. Pure (no React); the test seam.
  */
 export function flattenTurns(turns: readonly ChatTurn[]): readonly ChatLine[] {
   const lines: ChatLine[] = [];
   for (const turn of turns) {
+    const turnLines = formatTurnLines(turn);
+    if (turnLines.length === 0) continue;
     if (lines.length > 0) {
-      lines.push({ speaker: turn.speaker, text: '' });
+      lines.push({ speaker: turn.speaker, kind: 'blank', text: '', firstOfTurn: false });
     }
-    for (const text of formatTurnText(turn).split('\n')) {
-      lines.push({ speaker: turn.speaker, text });
+    for (const line of turnLines) {
+      lines.push(line);
     }
   }
   return lines;
+}
+
+/** The left gutter glyph: a solid bar at a turn's head, a lighter bar on continuation rows, so a turn
+ * reads as one block with a single bar head (the speaker-gutter replacement for the old inline
+ * `›`/`·` prefixes). A blank rhythm line draws no gutter. */
+const GUTTER_HEAD = '▌';
+const GUTTER_CONT = '▏';
+
+/**
+ * Render one physical {@link ChatLine} as a gutter + content ROW (TUIchat-2 speaker gutters + per-block
+ * styling). The row is `flexShrink={0}` so Yoga never drops it (the skipped-line bug) and each source
+ * line maps to a known number of rows for the deterministic window math:
+ *  - **gutter** — a left color-bar in the speaker's theme color (solid head on the turn's first line,
+ *    a lighter bar on continuations); `flexShrink={0}` + fixed width so it never wraps or collapses.
+ *  - **prose / list** — default body text. prose WRAPS to the pane width (the only place wrapping
+ *    happens — Ink's default `wrap`); list keeps its bullet structure (also wraps, but its leads carry
+ *    the indent). Note a wrapped prose row spans >1 terminal row; the window still advances one logical
+ *    line per `j`/`k` (the existing long-prose contract), so the height math stays pure data.
+ *  - **code / pre** — a DIM, no-wrap island (`wrap="truncate"`): internal spaces + column alignment are
+ *    preserved and a too-wide line is clipped (never re-wrapped into a zigzag). One source line is
+ *    exactly one drawn row, so the deterministic height holds and `measureElement` is never consulted.
+ *  - **blank** — a single space (a real row the rhythm/scroll math counts).
+ */
+function ChatHistoryLine({
+  line,
+  theme,
+}: {
+  readonly line: ChatLine;
+  readonly theme: ReturnType<typeof useTheme>;
+}): JSX.Element {
+  const gutterColor = speakerColor(line.speaker, theme);
+  // A no-wrap island for verbatim regions; default wrapping for prose/list (the single wrap site).
+  const verbatim = line.kind === 'code' || line.kind === 'pre';
+  const content =
+    line.kind === 'blank' ? (
+      // A real space so the blank row occupies a line (the scroll math counts it).
+      <Text> </Text>
+    ) : verbatim ? (
+      // Dim, no-wrap island. `flexShrink={0}` + truncate keeps internal spaces and clips overflow
+      // instead of re-wrapping — alignment survives end to end.
+      <Box flexShrink={0}>
+        <Text dimColor wrap="truncate">
+          {line.text === '' ? ' ' : line.text}
+        </Text>
+      </Box>
+    ) : (
+      // prose / list: default-wrapped body text in the speaker color.
+      <Text color={gutterColor}>{line.text === '' ? ' ' : line.text}</Text>
+    );
+  return (
+    <Box flexDirection="row" flexShrink={0}>
+      {/* The speaker gutter: a fixed two-cell bar (glyph + trailing space), never shrinking so the
+          content never overruns it. A blank rhythm line draws spaces (no bar) so gaps stay clean. */}
+      <Box flexShrink={0} width={2}>
+        {line.kind === 'blank' ? (
+          <Text> </Text>
+        ) : (
+          <Text color={gutterColor}>{line.firstOfTurn ? GUTTER_HEAD : GUTTER_CONT} </Text>
+        )}
+      </Box>
+      <Box flexGrow={1} minWidth={0} flexDirection="column">
+        {content}
+      </Box>
+    </Box>
+  );
+}
+
+/** Placeholder shown before the first tmux frame arrives for this crow's session. */
+const TMUX_WAITING_TEXT = '[waiting for tmux frame…]';
+
+/**
+ * The inline tmux view (TUIchat-5) — the raw `tmux.frame` capture for one crow rendered INSIDE its
+ * chat pane as the third per-pane view state, replacing the retired fullscreen modal. No fullscreen
+ * takeover: it fills the pane's inner content box only.
+ *
+ * ## Subscription lifecycle (the scaling guard)
+ * On mount it opens a bus subscription filtered to `{ type:'tmux.frame', agent_id }` and updates local
+ * `frame` state per event; the `useEffect` cleanup closes it on unmount. Because this component is
+ * mounted ONLY while the pane's view mode is `tmux` (the Stage seam renders it in that branch alone),
+ * leaving tmux mode unmounts it and fires the cleanup — so the subscription closes when the pane
+ * LEAVES tmux mode, not only when the pane is destroyed. That is the "close on mode-leave, no idle
+ * streams" requirement: N visible tmux panes ⇒ exactly N live subscriptions, dropping to N−1 the
+ * instant one cycles away. Rule-1 note: like the old `TmuxFrame`, this is the sanctioned narrow
+ * exception to "no `useBusClient` in a component" — transient streaming display data, not a domain
+ * slice (see {@link ../hooks/useBusClient.js}).
+ *
+ * ## Deterministic height (the measure-wrap-trap mitigation)
+ * The frame is an ANSI string Ink renders natively via `<Text>`. The outer box is pinned to the
+ * integer `height` the pane already computed (its `effectiveHeight`, from ChatGrid's integer row
+ * distribution — never `measureElement` on the wrapped/boxed frame), with `overflow:hidden` +
+ * `flexShrink={0}` so a too-tall frame clips in-pane instead of pushing the layout. `wrap="truncate"`
+ * keeps each frame line on its own row (no re-wrap zigzag), so the captured terminal grid lands 1:1.
+ */
+function TmuxFrameInline({
+  agentId,
+  height,
+}: {
+  readonly agentId: string;
+  readonly height: number;
+}): JSX.Element {
+  const bus = useBusClient();
+  const [frame, setFrame] = useState('');
+  useEffect(() => {
+    const unsubscribe = bus.subscribe(
+      (event) => {
+        if (event.type !== 'tmux.frame') return;
+        const tmuxEvent: TmuxFrameEvent = event;
+        setFrame(tmuxEvent.frame);
+      },
+      { type: 'tmux.frame', agent_id: agentId },
+    );
+    return unsubscribe;
+  }, [bus, agentId]);
+  return (
+    <Box flexDirection="column" flexShrink={0} height={height} overflow="hidden">
+      <Text wrap="truncate">{frame !== '' ? frame : TMUX_WAITING_TEXT}</Text>
+    </Box>
+  );
 }
 
 /**
@@ -253,7 +421,16 @@ export const ChatPane = memo(function ChatPane({
 }): JSX.Element {
   const theme = useTheme();
   const focusId: FocusId = chatPaneFocusId(identity.agentId);
-  const turns = useConversationTurns(identity.agentId, conversations);
+
+  // TUIchat-3 view-mode seam. Effective mode = per-pane override ?? the settings default.
+  // TUIchat-4: `condensed` now transforms the block stream (rolling chunk summaries replace their
+  // attributed blocks) BEFORE the Phase-2 renderer — see `selectConversationView`/`condenseBlocks`.
+  // `verbose` is unchanged; `tmux` shows the inline frame elsewhere and never reaches this turns path.
+  const defaultChatViewMode = useAppStore((s) => s.settings.defaultChatViewMode);
+  const viewMode: ChatViewMode =
+    conversations.paneViewModes[identity.agentId] ?? defaultChatViewMode;
+
+  const turns = useConversationTurns(identity.agentId, conversations, viewMode);
 
   // Focus highlight + rect registration — the same recipe as every panel (rule 5), but with the
   // Stage-pane focus id. useMeasureFocus drops the rect on unmount → focus re-homes to chat.
@@ -383,14 +560,19 @@ export const ChatPane = memo(function ChatPane({
       {/* Fill box: sizes to the Pane's inner content area (flexGrow + overflow hidden). Its height is
           received as `contentHeight` (ChatGrid measures + distributes), not self-measured here. */}
       <Box flexDirection="column" flexGrow={1} minHeight={0} overflow="hidden">
-        {visibleLines.length === 0 ? (
+        {viewMode === 'tmux' ? (
+          // TUIchat-5: the inline tmux frame, constrained to this pane's inner rect (no fullscreen
+          // takeover). Keyed by the focus id so it remounts per crow; the subscription closes when
+          // the pane leaves tmux mode (it unmounts here) — see TmuxFrameInline.
+          <TmuxFrameInline agentId={identity.agentId} height={effectiveHeight} />
+        ) : visibleLines.length === 0 ? (
+          // verbose AND condensed route through the TUIchat-2 readability renderer (below). condensed
+          // has no backend until TUIchat-4, so it renders identically to verbose for now.
           <Text dimColor>no history</Text>
         ) : (
           visibleLines.map((line, i) => (
             // biome-ignore lint/suspicious/noArrayIndexKey: history lines are position-keyed (the windowed index is the stable identity for the visible slice, mirroring StageDocPane).
-            <Text key={start + i} color={speakerColor(line.speaker, theme)}>
-              {line.text === '' ? ' ' : line.text}
-            </Text>
+            <ChatHistoryLine key={start + i} line={line} theme={theme} />
           ))
         )}
       </Box>

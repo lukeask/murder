@@ -67,6 +67,7 @@ import type {
   SettingsActions,
   StartupRogueWire,
 } from '../store/settings/settingsActions.js';
+import type { DefaultChatViewMode } from '../store/settings/settingsSlice.js';
 import type { AppStore } from '../store/store.js';
 import type { TemplateRecord } from '../store/templates/templatesSlice.js';
 import { capsStore, type KittySupport, useKittySupport } from '../terminal/capsStore.js';
@@ -208,6 +209,8 @@ type Row =
   | { readonly kind: 'gap'; readonly value: number }
   // Vim mode — a radio over on (true) / off (false).
   | { readonly kind: 'vim'; readonly value: boolean }
+  // Default chat view — a radio over verbose / condensed (tmux is cycle-only, not a default).
+  | { readonly kind: 'chatView'; readonly value: DefaultChatViewMode }
   // Startup Rogue — an "off" row, a harness radio, then (when on) a model radio + effort radio.
   | { readonly kind: 'startupRogue'; readonly field: 'off' }
   | { readonly kind: 'startupRogue'; readonly field: 'harness'; readonly value: string }
@@ -255,6 +258,10 @@ function buildRows(
   rows.push({ kind: 'header', label: 'Vim mode' });
   rows.push({ kind: 'vim', value: true });
   rows.push({ kind: 'vim', value: false });
+  // --- Default chat view (TUIchat-3) — tmux is reachable only via the per-pane cycle key. ---
+  rows.push({ kind: 'header', label: 'Default chat view' });
+  rows.push({ kind: 'chatView', value: 'verbose' });
+  rows.push({ kind: 'chatView', value: 'condensed' });
   // --- Startup Rogue (auto-spawned on boot) ---
   rows.push({ kind: 'header', label: 'Startup Rogue' });
   rows.push({ kind: 'startupRogue', field: 'off' });
@@ -350,6 +357,9 @@ interface SettingsState {
   paneGap: number;
   /** The draft vim-mode flag (committed via `update` on selection). */
   vimMode: boolean;
+  /** The draft default chat view mode (TUIchat-3; committed via `update` on selection). Only
+   * verbose/condensed are settable — tmux is reachable only via the per-pane cycle key. */
+  defaultChatViewMode: DefaultChatViewMode;
   /** The draft Startup Rogue (`null` = off). Drives the model/effort sub-rows + persisted on change. */
   startupRogue: StartupRogueWire | null;
   /** The draft per-action key overrides (`ActionId -> key char`). */
@@ -423,6 +433,7 @@ export function settingsMode(
     readonly theme: ThemeId;
     readonly paneGap: number;
     readonly vimMode?: boolean;
+    readonly defaultChatViewMode?: DefaultChatViewMode;
     readonly startupRogue?: StartupRogueWire | null;
     readonly keyOverrides: Record<string, string>;
     readonly collaboratorHarness?: string | null;
@@ -453,6 +464,7 @@ export function settingsMode(
     theme: current.theme,
     paneGap: current.paneGap,
     vimMode: current.vimMode ?? false,
+    defaultChatViewMode: current.defaultChatViewMode ?? 'verbose',
     startupRogue: initialStartupRogue,
     overrides: { ...current.keyOverrides },
     collaboratorHarness: current.collaboratorHarness ?? null,
@@ -550,6 +562,15 @@ export function settingsMode(
   function selectVim(value: boolean): void {
     s.vimMode = value;
     void actions.update({ vim_mode: value });
+    s.notice = null;
+    refresh();
+  }
+
+  /** Commit the draft default chat view mode (TUIchat-3, optimistic update). A pane with no per-pane
+   * override renders in this mode (`conversations.paneViewModes[id] ?? defaultChatViewMode`). */
+  function selectChatView(value: DefaultChatViewMode): void {
+    s.defaultChatViewMode = value;
+    void actions.update({ default_chat_view_mode: value });
     s.notice = null;
     refresh();
   }
@@ -849,6 +870,9 @@ export function settingsMode(
         break;
       case 'vim':
         selectVim(row.value);
+        break;
+      case 'chatView':
+        selectChatView(row.value);
         break;
       case 'startupRogue':
         if (row.field === 'off') {
@@ -1242,6 +1266,8 @@ function rowKey(row: Row): string {
       return `gap:${row.value}`;
     case 'vim':
       return `vim:${row.value}`;
+    case 'chatView':
+      return `chatView:${row.value}`;
     case 'startupRogue':
       return `srogue:${row.field}:${row.field === 'off' ? '' : row.value}`;
     case 'collaborator':
@@ -1353,6 +1379,21 @@ function RowView({
           {cursor}
           {mark}
           {row.value ? 'on' : 'off'}
+        </Text>
+      </Box>
+    );
+  }
+
+  if (row.kind === 'chatView') {
+    const selected = row.value === s.defaultChatViewMode;
+    const mark = selected ? '(•) ' : '( ) ';
+    const color = focused ? theme.warning : theme.text;
+    return (
+      <Box flexShrink={0}>
+        <Text color={color} bold={focused}>
+          {cursor}
+          {mark}
+          {row.value}
         </Text>
       </Box>
     );

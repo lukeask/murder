@@ -544,6 +544,7 @@ class ServiceHost:
                 "key_overrides": dict(tui.key_overrides),
                 "pane_gap": tui.pane_gap,
                 "vim_mode": tui.vim_mode,
+                "default_chat_view_mode": tui.default_chat_view_mode,
                 "startup_rogue": _startup_rogue_payload(tui),
                 # --- harness overrides + effective values ---
                 "collaborator_harness": collab_override,
@@ -600,13 +601,21 @@ class ServiceHost:
                 "key_overrides": dict(cfg.tui.key_overrides),
                 "pane_gap": cfg.tui.pane_gap,
                 "vim_mode": cfg.tui.vim_mode,
+                "default_chat_view_mode": cfg.tui.default_chat_view_mode,
                 "startup_rogue": (
                     cfg.tui.startup_rogue.model_dump(mode="json")
                     if cfg.tui.startup_rogue is not None
                     else None
                 ),
             }
-            for key in ("theme", "modifier", "key_overrides", "pane_gap", "vim_mode"):
+            for key in (
+                "theme",
+                "modifier",
+                "key_overrides",
+                "pane_gap",
+                "vim_mode",
+                "default_chat_view_mode",
+            ):
                 if key in partial:
                     tui_merged[key] = partial[key]
             # startup_rogue: null clears it; an object sets harness/model/effort (validated here so a
