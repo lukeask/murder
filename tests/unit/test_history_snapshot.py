@@ -61,6 +61,23 @@ def test_open_status_for_recent_message(db_path: Path) -> None:
     assert snap.items[0].status == "open"
     assert snap.items[0].text == "fix the empty pane case"
     assert snap.items[0].target == "collaborator"
+    assert snap.items[0].conversation_id == "collaborator"
+
+
+def test_history_item_carries_conversation_id_separate_from_target(db_path: Path) -> None:
+    conn = _conn(db_path)
+    conversation.append_user_message(
+        conn,
+        "crow-t1",
+        "resume the prior session",
+        conversation_id="conv-uuid-1",
+    )
+    conn.commit()
+    snap = ServiceReadModel(db_path).get_history_snapshot()
+    assert len(snap.items) == 1
+    assert snap.items[0].target == "crow-t1"
+    assert snap.items[0].conversation_id == "conv-uuid-1"
+    assert snap.items[0].item_id == "conv-uuid-1:0"
 
 
 def test_stale_status_for_old_message(db_path: Path) -> None:
@@ -107,8 +124,7 @@ def test_loose_thread_ordering_is_newest_first(db_path: Path) -> None:
     _add_user(conn, "collaborator", "third", received_at=_iso(t0 + timedelta(hours=2)))
     conn.commit()
     snap = ServiceReadModel(db_path).get_history_snapshot()
-    # The read model returns newest-first (the view re-orders loose-threads
-    # oldest-first client-side); assert the snapshot's wire order here.
+    # The read model returns newest-first; assert the snapshot's wire order here.
     assert [i.text for i in snap.items] == ["third", "second", "first"]
 
 

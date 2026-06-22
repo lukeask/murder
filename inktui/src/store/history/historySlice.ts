@@ -26,6 +26,8 @@ export interface HistoryRow {
   readonly itemId: string;
   readonly text: string;
   readonly target: string;
+  /** The conversation id (UUID) — the resume key, distinct from `target` (agent id). */
+  readonly conversationId: string;
   /** ISO-8601 string as the wire delivers it. The selector formats relative age. */
   readonly ts: string;
   /** Zero-LLM v0 status: `open` | `stale` | `dismissed`. */

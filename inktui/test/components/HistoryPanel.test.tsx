@@ -31,6 +31,7 @@ function twoItems(): HistorySnapshotReply {
     items: [
       {
         item_id: 'collaborator:0',
+        conversation_id: 'collaborator',
         text: 'fix the empty pane case',
         target: 'collaborator',
         ts: recentIso(),
@@ -41,6 +42,7 @@ function twoItems(): HistorySnapshotReply {
       },
       {
         item_id: 'planner-foo:0',
+        conversation_id: 'planner-foo',
         text: 'revisit worktree pruning',
         target: 'planner-foo',
         ts: recentIso(),
@@ -94,7 +96,7 @@ async function setup(reply: HistorySnapshotReply = twoItems(), focused = true) {
 }
 
 describe('HistoryPanel', () => {
-  it('renders the loose-thread digest title and two-line entries', async () => {
+  it('renders the loose-thread digest title and multi-line entries', async () => {
     const { store, inputStores, dispose } = await setup();
     const { lastFrame } = render(<Harness store={store} inputStores={inputStores} />);
     await tick();
@@ -137,7 +139,10 @@ describe('HistoryPanel', () => {
       invalidation_key: 'iv',
       items: [
         {
-          item_id: 'crow-t1:0',
+          item_id: 'conv-uuid-1:0',
+          // conversation_id (the resume key) is deliberately DIFFERENT from target (the agent id) —
+          // this guards the fix: resume must send conversation_id, not the agent_id it used to.
+          conversation_id: 'conv-uuid-1',
           text: 'resume me',
           target: 'crow-t1',
           ts: recentIso(),
@@ -156,7 +161,7 @@ describe('HistoryPanel', () => {
     const submit = fake.rpcCalls.find((c) => c.method === 'command.submit');
     expect(submit?.params).toMatchObject({
       kind: 'agent.resume_from_history',
-      payload: { conversation_id: 'crow-t1' },
+      payload: { conversation_id: 'conv-uuid-1' },
     });
     dispose();
   });
