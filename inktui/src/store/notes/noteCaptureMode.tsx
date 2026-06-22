@@ -13,20 +13,18 @@
  *
  * ## What each captured key does (the FSM table → dispatch)
  *
- *  - **`escape`** — declared chord → {@link NoteCaptureState.pressEscape}. The double-tap window lives
- *    in the store; on a `'commit'` outcome the mode dismisses (keeping the draft — see below); on
- *    `'armed'` it stays.
- *  - **`d`** — context-sensitive (NOT a static chord): the delete chord ONLY while
- *    {@link NoteCaptureState.blurTimerActive} (ESC just armed it), else an ordinary character. Rides
- *    `onUncaptured`.
- *  - **`u`** — undoes the last delete only if there is a snapshot ({@link NoteCaptureState.pressUndo}),
+ *  - **`escape`** — declared chord → {@link NoteCaptureState.pressEscape}. A `'commit'` outcome
+ *    dismisses immediately (keeping the draft — see below).
+ *  - **`d`** — ordinary character entry.
+ *  - **`u`** — undoes the last direct delete only if there is a snapshot
+ *    ({@link NoteCaptureState.pressUndo}),
  *    else an ordinary `u`. Rides `onUncaptured`.
  *  - **`return`** (Enter) — submit the draft if non-empty. Shift+Enter inserts a newline.
  *  - **any other printable char** — appended to the focused field.
  *
  * ## Draft persists across cancel/reopen (item 10)
  *
- * Dismiss on **cancel** (ESC double-tap) does NOT reset the FSM — the draft (and title) survive so a
+ * Dismiss on **cancel** (Escape) does NOT reset the FSM — the draft (and title) survive so a
  * reopen finds the in-progress capture intact. The store is reset ONLY on a **confirmed submit**, so a
  * captured note never leaks into the next one. This is the one behavior change from the FSM-only slice.
  */
@@ -43,8 +41,8 @@ import type { NoteCaptureStoreApi } from './noteCaptureStore.js';
 // Bring the dispatcher's `onUncaptured` augmentation of `Mode` into scope (declared in dispatcher.ts).
 import '../../input/dispatcher.js';
 
-/** The note-capture mode's declared-chord intent union. `d`/`u`/printable are NOT here — they are
- * context-sensitive and flow through `onUncaptured` (see the module doc). */
+/** The note-capture mode's declared-chord intent union. `u`/printable are NOT here — they flow
+ * through `onUncaptured` (see the module doc). */
 type NoteCaptureIntent = 'escape' | 'submit' | 'newline' | 'switchField' | 'backspace';
 
 /** Stable mode id so a re-enter is idempotent (the modeStore pattern). */
@@ -58,7 +56,7 @@ export interface NoteCaptureModeOptions {
   /** Run when the draft is submitted (Enter on non-empty text). The action layer does the bus call.
    * `title` is the optional user title (empty/undefined → backend auto/LLM-titles). */
   readonly onSubmit: (draft: string, title: string | undefined) => void;
-  /** Run when the capture is cancelled (the ESC double-tap commit). The draft is kept for next open. */
+  /** Run when the capture is cancelled. The draft is kept for next open. */
   readonly onCancel: () => void;
 }
 
@@ -68,7 +66,7 @@ export function noteCaptureHints(): readonly ModeHint[] {
     { key: 'enter', description: 'save' },
     { key: 'shift+enter', description: 'newline' },
     { key: 'tab', description: 'title' },
-    { key: 'esc·esc', description: 'cancel' },
+    { key: 'esc', description: 'cancel' },
   ];
 }
 
@@ -83,8 +81,8 @@ export function noteCaptureMode(
 ): Mode<NoteCaptureIntent> {
   const id = NOTE_CAPTURE_MODE_ID;
 
-  // Which field is focused — closure state (not the FSM store, whose `focus` is the blur draft→list
-  // machine). Persists with the mode frame for its lifetime; a reopen starts on the draft.
+  // Which field is focused — closure state that persists with the mode frame for its lifetime. A
+  // reopen starts on the draft.
   let field: CaptureField = 'draft';
 
   /** Re-render by poking the mode store (re-enter same id → new stack ref). */
@@ -109,11 +107,11 @@ export function noteCaptureMode(
     },
     // No passThrough: the capture modal captures everything (Textual's ModalScreen behavior).
     keymap: [
-      // ESC: every press fires here; the store decides arm-vs-commit (the double-tap FSM).
+      // ESC cancels immediately. The draft is KEPT (no reset) — item 10.
       {
         chord: { key: { escape: true } },
         intent: 'escape',
-        description: 'esc·esc close / esc d clear',
+        description: 'cancel',
       },
       // Shift+Enter inserts a newline in the draft; plain Enter submits.
       { chord: { key: { shift: true, return: true } }, intent: 'newline', description: 'newline' },
@@ -127,10 +125,8 @@ export function noteCaptureMode(
         case 'escape': {
           const outcome = store.getState().pressEscape();
           if (outcome === 'commit') {
-            // ESC double-tap → cancel-without-submit. Draft is KEPT (no reset) — item 10.
             cancel();
           }
-          // 'armed' → stay open; the blur timer is now ticking (handled inside the store).
           return;
         }
         case 'newline': {
@@ -182,11 +178,6 @@ export function noteCaptureMode(
       // Title field: plain text entry only (no ESC-chord behavior — those belong to the draft).
       if (field === 'title') {
         state.setTitle(state.titleText + input);
-        return true;
-      }
-      // `d` is the delete chord ONLY while the blur timer is live (ESC just armed it) — else literal.
-      if (input === 'd' && state.blurTimerActive) {
-        state.pressDelete();
         return true;
       }
       // `u` undoes the last delete ONLY if there is a snapshot — else it is a literal `u`.

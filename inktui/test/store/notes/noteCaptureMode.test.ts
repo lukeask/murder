@@ -2,14 +2,13 @@
  * `noteCaptureMode` dispatch tests — proves the note-capture ESC-chord FSM is expressible through the
  * **existing root dispatcher** with no new primitive (the F9 "verify before porting" verdict, now
  * demonstrated rather than asserted). Keys are synthesised and pushed through {@link dispatchKey} into
- * a real {@link createNoteCaptureStore} FSM, asserting the four transitions end-to-end:
- *  - ESC arms then (double-tap) commits → dismiss,
- *  - `d` is the delete chord ONLY while armed, an ordinary character otherwise (the gate),
+ * a real {@link createNoteCaptureStore} FSM, asserting the core transitions end-to-end:
+ *  - ESC commits → dismiss,
+ *  - `d` is an ordinary character,
  *  - `u` undoes only with a snapshot, an ordinary character otherwise,
- *  - the blur timer (driven by the store) fires the focus move under the real-timer idiom.
  *
- * The mode's keymap routes `escape`/`return` to `onIntent`; everything context-sensitive (`d`/`u`/
- * printable) goes through `onUncaptured` — exactly the C12 ticketEditor pattern. We drive the
+ * The mode's keymap routes `escape`/`return` to `onIntent`; `u`/printable entry goes through
+ * `onUncaptured` — exactly the C12 ticketEditor pattern. We drive the
  * dispatcher's layer-0 capture, so this exercises the real routing, not the store verbs directly.
  */
 
@@ -23,16 +22,10 @@ import {
   noteCaptureMode,
 } from '../../../src/store/notes/noteCaptureMode.js';
 import {
-  BLUR_DELAY_MS,
   createNoteCaptureStore,
   type NoteCaptureStoreApi,
 } from '../../../src/store/notes/noteCaptureStore.js';
 import { makeKey } from '../../input/key.js';
-
-/** Wait `ms` real milliseconds — the blur self-fires on a real timer (toastStore idiom). */
-function wait(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
 
 /** No-op global handlers — the capture mode captures everything, so these must never be hit. */
 function noopHandlers(): GlobalHandlers {
@@ -90,22 +83,11 @@ function setup(opts?: Partial<NoteCaptureModeOptions>): {
   return { store, onSubmit, onCancel, modes, press };
 }
 
-describe('noteCaptureMode — ESC double-tap → dismiss', () => {
-  it('a single ESC arms (mode stays up, no cancel)', () => {
-    const { store, onCancel, modes, press } = setup();
-    press('', { escape: true });
-    expect(store.getState().escArmedAt).not.toBeNull();
-    expect(store.getState().blurTimerActive).toBe(true);
-    expect(onCancel).not.toHaveBeenCalled();
-    expect(selectActiveMode(modes)).not.toBeNull(); // still captured
-    store.getState().reset();
-  });
-
-  it('two quick ESCs commit → onCancel + mode dismissed; draft PERSISTS (item 10)', () => {
+describe('noteCaptureMode — ESC dismiss', () => {
+  it('a single ESC commits → onCancel + mode dismissed; draft PERSISTS (item 10)', () => {
     const { store, onCancel, modes, press } = setup();
     store.getState().setDraft('half-written');
     press('', { escape: true });
-    press('', { escape: true }); // immediate second press — well inside the 0.45s window
     expect(onCancel).toHaveBeenCalledTimes(1);
     expect(selectActiveMode(modes)).toBeNull(); // mode exited
     // Cancel does NOT reset the FSM — the draft survives for the next open (item 10).
@@ -114,21 +96,11 @@ describe('noteCaptureMode — ESC double-tap → dismiss', () => {
   });
 });
 
-describe('noteCaptureMode — ESC-then-d delete chord (the gate)', () => {
-  it('d AFTER esc clears the draft (delete chord)', () => {
-    const { store, press } = setup();
-    store.getState().setDraft('capture me');
-    press('', { escape: true }); // arms → blur timer live
-    press('d');
-    expect(store.getState().draftText).toBe('');
-    expect(store.getState().undoSnapshot).toBe('capture me');
-    store.getState().reset();
-  });
-
-  it('d WITHOUT a prior esc is an ordinary character (gate closed)', () => {
+describe('noteCaptureMode — plain text entry', () => {
+  it('d is an ordinary character', () => {
     const { store, press } = setup();
     store.getState().setDraft('abc');
-    press('d'); // not armed → literal
+    press('d');
     expect(store.getState().draftText).toBe('abcd');
     expect(store.getState().undoSnapshot).toBeNull();
     store.getState().reset();
@@ -139,8 +111,7 @@ describe('noteCaptureMode — undo', () => {
   it('u after a delete restores the draft; u with nothing to undo is a literal char', () => {
     const { store, press } = setup();
     store.getState().setDraft('keep this');
-    press('', { escape: true });
-    press('d'); // delete → snapshot taken, draft cleared
+    store.getState().pressDelete(); // delete → snapshot taken, draft cleared
     press('u'); // undo → restore
     expect(store.getState().draftText).toBe('keep this');
 
@@ -191,20 +162,6 @@ describe('noteCaptureMode — submit + plain entry', () => {
     press('h');
     press('i');
     expect(store.getState().draftText).toBe('hi');
-    expect(store.getState().escArmedAt).toBeNull();
-    store.getState().reset();
-  });
-});
-
-describe('noteCaptureMode — blur timeout (store-driven)', () => {
-  it('after the idle delay the store blurs focus draft→list', async () => {
-    const { store, press } = setup();
-    store.getState().setDraft('idle');
-    press('', { escape: true });
-    expect(store.getState().focus).toBe('draft');
-    await wait(BLUR_DELAY_MS + 40);
-    expect(store.getState().focus).toBe('list');
-    expect(store.getState().blurTimerActive).toBe(false);
     store.getState().reset();
   });
 });
