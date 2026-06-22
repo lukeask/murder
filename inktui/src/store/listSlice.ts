@@ -109,6 +109,14 @@ export function createRefreshAction<
         // Localized cast: the generic key defeats `Partial<AppStore>` inference (see fn docstring).
         return { [key]: { ...current, status: 'loading' } } as unknown as Partial<AppStore>;
       });
+      // Coalesce a synchronous burst: a cold-start `state.snapshot` storm can fire `refresh()` once
+      // per ticket (~130x). Deferring the RPC behind one microtask lets the whole burst bump `seq` to
+      // its final value FIRST, so every stale token short-circuits BEFORE issuing an RPC — only the
+      // last call hits the wire (saving ~129 reply payloads serialized + parsed for nothing). The
+      // loading setState above already ran, so a burst still flashes loading; the surviving (latest)
+      // call always runs to completion below and sets the terminal state, so last-writer-wins holds.
+      await Promise.resolve();
+      if (token !== seq) return;
       try {
         const reply = await bus.rpc(method, {} as RpcMethods[Method]['params']);
         // Drop a stale reply: a newer refresh has been issued since we started.

@@ -101,6 +101,12 @@ export function createTransitActions(bus: BusClient, store: StoreApi<AppStore>):
         const current = state.transit;
         return { transit: { ...current, status: 'loading' } };
       });
+      // Coalesce a synchronous burst (mirrors listSlice.ts): defer the RPC behind one microtask so a
+      // burst of `transit` invalidations bumps `seq` to its final value first; every stale token then
+      // short-circuits BEFORE issuing the heavy ~110KB transit_snapshot RPC — only the last call hits
+      // the wire. The loading setState above already ran; the surviving call sets the terminal state.
+      await Promise.resolve();
+      if (token !== seq) return;
       try {
         const reply = await bus.rpc('state.transit_snapshot', {});
         if (token !== seq) return;

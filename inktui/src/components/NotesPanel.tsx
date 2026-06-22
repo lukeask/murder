@@ -36,7 +36,7 @@
  */
 
 import { Text } from 'ink';
-import { memo, useCallback, useMemo, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useState } from 'react';
 import { shallow } from 'zustand/shallow';
 import { useAppStore } from '../hooks/useAppStore.js';
 import {
@@ -119,6 +119,14 @@ export const NotesPanel = memo(function NotesPanel(): React.JSX.Element {
   const toggleFavorite = useAppStore((s) => s.actions.favorites.toggle);
   // enter on a note toggles the in-layout read-only doc view (rule 3: open/close via docView action).
   const toggleDoc = useDocView('note');
+
+  // Fetch on first open. The Rail only mounts a panel while visible, so this runs when the user opens
+  // Notes (ctrl+5) — the lazy fetch that replaces the (removed) eager startup prime. It moves the
+  // slice off `idle`, so the gated invalidation entry in store.ts keeps it live thereafter. The
+  // selector renders the empty/loading state until rows arrive. `refresh` is a stable store action.
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
 
   // Rule 1: cursor is local UI state.
   const [cursor, setCursor] = useState(0);

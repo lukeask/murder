@@ -274,20 +274,26 @@ function detectIfTty(shim: StdinShim, driver: KeyProtocolDriver): Promise<boolea
  * own errors into each slice's `error` field, and the subscription keeps the slices live thereafter
  * via key-only invalidation. Re-run on every (re)connect — see {@link runLive}.
  *
- * Tickets/notes/reports/conversations rely on event REPLAY for incremental updates, but on a
- * cold-start service (no events yet) those panels would be blank without an explicit pull. Priming
- * all six slices here closes the gap: a quiescent or freshly-started service shows populated data
- * on the very first frame.
+ * Only the EAGER slices are primed here — the ones whose panels (or off-panel readers) are present
+ * on startup or that drive always-on chrome: roster, usage, tickets, conversations, plus the
+ * persisted-truth registries below (favorites/templates/workflows/settings). They rely on event
+ * REPLAY for incremental updates, but on a cold-start service (no events yet) they would be blank
+ * without an explicit pull; priming closes that gap so a quiescent service paints data on frame one.
+ *
+ * The LAZY slices (plans, notes, reports, history, transit) are intentionally NOT primed: their
+ * panels are closed on startup, so each fetches its own data from a mount-effect on first open, and
+ * their invalidation entries in store.ts are gated on `status !== 'idle'` (only re-pull once opened).
  */
 export function primeSlices(store: ReturnType<typeof createAppStore>['store']): void {
   void store.getState().actions.roster.refresh();
   void store.getState().actions.usage.refresh();
-  void store.getState().actions.plans.refresh();
   void store.getState().actions.tickets.refresh();
-  void store.getState().actions.notes.refresh();
-  void store.getState().actions.reports.refresh();
-  void store.getState().actions.history.refresh();
   void store.getState().actions.conversations.refresh();
+  // plans/notes/reports/history are NOT primed here: their panels are CLOSED on startup and fetch
+  // their own data on first open (a mount-effect in each panel). Priming them eagerly was part of the
+  // cold-start RPC cost for data nobody was looking at. transit (the heaviest, ~110KB) was likewise
+  // never primed here — it self-fetches on open. See each panel's mount-effect + the gated
+  // invalidation entries in store.ts (status !== 'idle').
   // Re-load favorites on every (re)connect — the favorites docstring promises "a reconnect re-loads
   // from the persisted truth", and without this the local star set diverges from the server after a
   // disconnected optimistic toggle (or a failed save) until a full restart.

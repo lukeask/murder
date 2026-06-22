@@ -1,10 +1,22 @@
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
 from murder.state.persistence.schema import get_db, init_db
 from murder.state.storage.paths import ticket_md, tickets_dir
 from murder.work.tickets.sync import TicketSync, reconcile_ticket_md
+
+
+def _write_ticket_md(repo_root: Path, ticket_id: str, *, title: str = "A ticket") -> Path:
+    tickets_dir(repo_root).mkdir(parents=True, exist_ok=True)
+    path = ticket_md(repo_root, ticket_id)
+    path.write_text(
+        f"---\ntitle: {title}\ndeps: []\nharness: codex\nmodel: gpt-5\nworktree:\n---\n"
+        "# Checklist\n[ ] do thing\n",
+        encoding="utf-8",
+    )
+    return path
 
 
 def _conn(repo_root: Path):
@@ -203,3 +215,77 @@ def test_render_row_emits_parent_from_db_column(repo_root: Path) -> None:
 
     text = ticket_md(repo_root, "t002").read_text(encoding="utf-8")
     assert "parent: t003\n" in text
+
+
+# === warm-boot change detection (subplan 2) ================================
+
+
+def test_reconcile_all_unchanged_second_pass_emits_no_notifications(repo_root: Path) -> None:
+    conn = _conn(repo_root)
+    _write_ticket_md(repo_root, "t010")
+    _write_ticket_md(repo_root, "t011")
+    _write_ticket_md(repo_root, "t012")
+
+    notified: list[str] = []
+    sync = TicketSync(repo_root, conn, on_ticket_change=notified.append)
+
+    asyncio.run(sync.reconcile_all())
+    assert sorted(notified) == ["t010", "t011", "t012"]  # first pass syncs all
+
+    notified.clear()
+    asyncio.run(sync.reconcile_all())
+    # Byte-identical, already-synced files: second pass must skip the snapshot.
+    assert notified == []
+
+
+def test_reconcile_all_emits_only_for_edited_ticket(repo_root: Path) -> None:
+    conn = _conn(repo_root)
+    _write_ticket_md(repo_root, "t020")
+    _write_ticket_md(repo_root, "t021")
+    _write_ticket_md(repo_root, "t022")
+
+    notified: list[str] = []
+    sync = TicketSync(repo_root, conn, on_ticket_change=notified.append)
+
+    asyncio.run(sync.reconcile_all())
+    notified.clear()
+
+    # Edit exactly one ticket between passes.
+    ticket_md(repo_root, "t021").write_text(
+        "---\ntitle: Edited\ndeps: []\nharness: codex\nmodel: gpt-5\nworktree:\n---\n"
+        "# Checklist\n[x] do thing\n",
+        encoding="utf-8",
+    )
+
+    asyncio.run(sync.reconcile_all())
+    assert notified == ["t021"]
+    row = conn.execute("SELECT title FROM tickets WHERE id = 't021'").fetchone()
+    assert row["title"] == "Edited"
+
+
+# === reconcile_all end-to-end coverage ======================================
+
+
+def test_reconcile_all_reconciles_end_to_end(repo_root: Path) -> None:
+    conn = _conn(repo_root)
+    _write_ticket_md(repo_root, "t030", title="First")
+    _write_ticket_md(repo_root, "t031", title="Second")
+
+    sync = TicketSync(repo_root, conn)
+    asyncio.run(sync.reconcile_all())
+
+    rows = {
+        r["id"]: r
+        for r in conn.execute(
+            "SELECT id, title, metadata_sync_state, metadata_file_hash FROM tickets"
+        ).fetchall()
+    }
+    assert set(rows) == {"t030", "t031"}
+    assert rows["t030"]["title"] == "First"
+    assert rows["t031"]["title"] == "Second"
+    assert rows["t030"]["metadata_sync_state"] == "synced"
+    assert rows["t030"]["metadata_file_hash"] is not None
+    checklist = conn.execute(
+        "SELECT text FROM checklist WHERE ticket_id = 't030'"
+    ).fetchall()
+    assert [r["text"] for r in checklist] == ["do thing"]

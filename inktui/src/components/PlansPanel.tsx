@@ -33,7 +33,7 @@
  */
 
 import { Text } from 'ink';
-import { memo, useCallback, useMemo, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useState } from 'react';
 import { shallow } from 'zustand/shallow';
 import { useAppStore } from '../hooks/useAppStore.js';
 import {
@@ -115,6 +115,14 @@ export const PlansPanel = memo(function PlansPanel(): React.JSX.Element {
   const toggleFavorite = useAppStore((s) => s.actions.favorites.toggle);
   const spawnPlanner = useAppStore((s) => s.actions.plans.spawnPlanner);
   const toggleDoc = useDocView('plan');
+
+  // Fetch on first open. The Rail only mounts a panel while visible, so this runs when the user opens
+  // Plans (ctrl+4) — the lazy fetch that replaces the (removed) eager startup prime. It moves the
+  // slice off `idle`, so the gated invalidation entry in store.ts keeps it live thereafter. The
+  // selector renders the empty/loading state until rows arrive. `refresh` is a stable store action.
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
 
   const [cursor, setCursor] = useState(0);
   // Scroll-overflow counts fed up from the Ledger's window (via the list's onOverflow) into the Pane
