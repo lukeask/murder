@@ -421,6 +421,19 @@ class ServiceHost:
                 raise ValueError("tui.save_templates requires templates list")
             return {"ok": True, "templates": save_templates(templates)}
 
+        def _tui_load_spawn_favorites(_body: dict[str, Any]) -> dict[str, Any]:
+            from murder.user_config import load_spawn_favorites
+
+            return {"ok": True, "favorites": load_spawn_favorites()}
+
+        def _tui_save_spawn_favorites(body: dict[str, Any]) -> dict[str, Any]:
+            from murder.user_config import save_spawn_favorites
+
+            favorites = body.get("favorites")
+            if not isinstance(favorites, list):
+                raise ValueError("tui.save_spawn_favorites requires favorites list")
+            return {"ok": True, "favorites": save_spawn_favorites(favorites)}
+
         def _mask_llm(llm: Any) -> dict[str, Any]:
             # Dump the user llm block, masking every non-empty api_key as "***".
             if llm is None:
@@ -657,6 +670,8 @@ class ServiceHost:
         self.register_rpc_handler("tui.save_favorites", _tui_save_favorites)
         self.register_rpc_handler("tui.load_templates", _tui_load_templates)
         self.register_rpc_handler("tui.save_templates", _tui_save_templates)
+        self.register_rpc_handler("tui.load_spawn_favorites", _tui_load_spawn_favorites)
+        self.register_rpc_handler("tui.save_spawn_favorites", _tui_save_spawn_favorites)
         self.register_rpc_handler("settings.get", _settings_get)
         self.register_rpc_handler("settings.update", _settings_update)
         # Pure git subprocess + file reads, no shared connection — offloaded.
