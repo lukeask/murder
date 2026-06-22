@@ -6,7 +6,6 @@ import asyncio
 import contextlib
 import hashlib
 import logging
-import os
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from pathlib import Path

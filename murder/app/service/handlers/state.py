@@ -92,7 +92,7 @@ def register(host: ServiceHost) -> None:
     host.register_rpc_handler("state.ticket_detail", threaded(_state_ticket_detail))
     host.register_rpc_handler("state.plan_display", threaded(_state_plan_display))
     host.register_rpc_handler("state.note_display", threaded(_state_note_display))
-    host.register_rpc_handler("state.report_display", _state_report_display)
+    host.register_rpc_handler("state.report_display", threaded(_state_report_display))
     host.register_rpc_handler(
         "state.harness_models_snapshot",
         threaded(_state_harness_models_snapshot),
