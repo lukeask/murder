@@ -83,7 +83,8 @@ class CollaboratorAgent(HarnessBackedAgent):
         # right after ensure_collaborator() returns) waits for the pane to come
         # back to input-ready instead of landing in a busy harness, where the
         # text sits unsubmitted and never runs as a turn. This mirrors the Crow
-        # path's deliver-only-when-idle guarantee (CrowHandler.queue_message).
+        # path's deliver-only-when-idle guarantee
+        # (HarnessBackedAgent.queue_message).
         self.harness_session.require_first_send_idle_gate()
         # If the harness binary launched but then exited (e.g. an unanswered
         # interactive prompt, a crash, or a missing/broken install), the tmux
