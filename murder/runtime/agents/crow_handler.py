@@ -386,6 +386,28 @@ class CrowHandler(Daemon):
             "crow.done.detected", extra={"agent_id": self.id, "ticket_id": self.ticket_id}
         )
 
+    def _ticket_promotable_to_done(self) -> bool:
+        """True iff the ticket's current status can legitimately reach DONE.
+
+        DONE is only reachable from an in-flight state (in_progress / ready /
+        blocked / planned). A ticket already in a terminal state — done, failed,
+        archived — is not promotable, so a stale scrollback DONE on reattach must
+        not drive completion against it.
+        """
+        if self.runtime.db is None:
+            return False
+        from murder.state.persistence.tickets import get_ticket_status
+
+        status = get_ticket_status(self.runtime.db, self.ticket_id)
+        if status is None:
+            return False
+        return status in (
+            TicketStatus.IN_PROGRESS.value,
+            TicketStatus.READY.value,
+            TicketStatus.BLOCKED.value,
+            TicketStatus.PLANNED.value,
+        )
+
     async def _maybe_complete(self, pane_hash: str) -> None:
         """Run completion at most once per latched DONE.
 
@@ -403,6 +425,14 @@ class CrowHandler(Daemon):
         if pane_hash == self._resolved_pane_hash:
             # Same DONE we already evaluated and reprompted on; wait for the crow
             # to produce new output before re-running checks.
+            return
+        # Promotability guard: on reattach the latch can fire off a `>>> DONE`
+        # left in scrollback while the ticket has already moved to a terminal
+        # state (done/failed/archived) — or was never started. Running completion
+        # then would drive an invalid transition. Only proceed when the ticket is
+        # in a state from which it can legitimately reach DONE.
+        if not self._ticket_promotable_to_done():
+            self._done_latched = False
             return
         self._completion_in_flight = True
         try:
@@ -494,7 +524,10 @@ class CrowHandler(Daemon):
                     role=self.role,
                     ticket_id=self.ticket_id,
                     message=f"crow_handler tick failed: {error}",
-                    recoverable=False,
+                    # Boot pane-lag can exhaust the tick budget transiently; the
+                    # operator can re-kick the ticket, so this is recoverable, not
+                    # a hard failure. Drives the dim/amber toast, not solid red.
+                    recoverable=True,
                 )
             )
 
