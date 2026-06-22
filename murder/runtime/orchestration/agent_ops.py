@@ -287,8 +287,49 @@ class AgentOps:
             if ticket_id:
                 await self._reap_ticket_crow_agents(ticket_id)
                 return {"handled": True, "agent_id": agent_id}
+        if agent_id.startswith("planner-"):
+            # ctrl+m on a planner must also reap its planning_handler companion,
+            # else the orphaned handler polls a now-dead session and escalates
+            # ("planner missed in poll" red toasts). Reap the planner first so
+            # the handler's own planner-gone check would also self-terminate; the
+            # explicit reap here makes teardown immediate and deterministic.
+            await self.rt.reap(agent_id)
+            await self._reap_planner_handler(agent_id[len("planner-") :])
+            return {"handled": True, "agent_id": agent_id}
         await self.rt.reap(agent_id)
         return {"handled": True, "agent_id": agent_id}
+
+    async def _reap_planner_handler(self, plan_name: str) -> None:
+        """Reap the planning_handler paired with a ``planner-<plan>`` agent.
+
+        Idempotent: a missing/already-dead handler is a no-op. Mirrors the
+        crow/crow_handler companion teardown so murdering a planner leaves no
+        orphaned relay behind.
+        """
+        if not plan_name:
+            return
+        handler_id = f"planning_handler-{plan_name}"
+        if self.rt.get_agent(handler_id) is not None:
+            with contextlib.suppress(Exception):
+                await self.rt.reap(handler_id)
+            return
+        # Not in the in-memory registry (e.g. a prior service run). Tear down its
+        # log-tail session and mark it dead so the roster stops showing it.
+        db = self.rt.db
+        if db is None:
+            return
+        row = db.execute(
+            "SELECT agent_id, session FROM agents "
+            "WHERE agent_id = ? AND status NOT IN ('done', 'dead')",
+            (handler_id,),
+        ).fetchone()
+        if row is None:
+            return
+        session = row["session"]
+        if session and await tmux.session_exists(session):
+            with contextlib.suppress(tmux.TmuxError):
+                await tmux.kill_session(session)
+        _db_set_agent_status(db, handler_id, AgentStatus.DEAD.value)
 
     async def _force_stop_unregistered_agent(self, agent_id: str) -> dict[str, Any]:
         """Kill the tmux session and mark dead an agent the runtime forgot."""

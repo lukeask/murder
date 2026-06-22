@@ -113,6 +113,12 @@ class PlanningHandler(Daemon):
         self._start_loop()
 
     async def _loop(self) -> None:
+        # Startup grace: a freshly-spawned planner pane lags behind the handler;
+        # its first capture_pane can fail (or read empty) for a beat. Sleeping
+        # once before the first tick keeps that boot pane-lag from counting
+        # toward the 5-miss escalation. Mid-life misses are unaffected.
+        if self.config.startup_grace_s > 0:
+            await asyncio.sleep(self.config.startup_grace_s)
         while self.status == AgentStatus.RUNNING:
             try:
                 await self.tick()
@@ -123,10 +129,52 @@ class PlanningHandler(Daemon):
                 # the handler; relay_ask() will surface dead sessions. But a
                 # *sustained* failure run is now visible (logged every tick and
                 # escalated once on the bus) instead of silently swallowed.
+                # If the planner is *genuinely* gone (session absent + agent
+                # marked dead in the DB), self-terminate quietly instead.
+                if await self._planner_is_gone():
+                    LOGGER.info(
+                        "planning_handler %s: planner gone — stopping handler quietly",
+                        self.plan_name,
+                    )
+                    await self.stop()
+                    return
                 await self._record_poll_failure(exc)
             else:
                 self._consecutive_poll_failures = 0
             await asyncio.sleep(self.config.poll_interval_s)
+
+    async def _planner_is_gone(self) -> bool:
+        """True iff the planner is genuinely gone (no tmux session AND dead/absent in DB).
+
+        Distinguishes a real teardown (the planner was murdered — ctrl+m — or
+        died) from a transient pane-capture blip. Only when *both* signals agree
+        do we treat the planner as gone and self-terminate, so a momentary tmux
+        hiccup never tears down a live relay.
+        """
+        from murder.runtime.terminal import tmux
+
+        try:
+            if await tmux.session_exists(self.planner_session):
+                return False
+        except Exception:
+            # Can't tell — be conservative and keep relaying.
+            return False
+        # Session is absent. Confirm via the DB that the planner agent is dead or
+        # gone before quietly self-terminating.
+        db = getattr(self.runtime, "db", None)
+        if db is None:
+            return True
+        from murder.runtime.agents.base import AgentStatus as _AS
+        from murder.state.persistence.agents import get_agent_status
+
+        planner_agent_id = f"planner-{self.plan_name}"
+        try:
+            status = get_agent_status(db, planner_agent_id)
+        except Exception:
+            return True
+        if status is None:
+            return True
+        return status in (_AS.DEAD.value, _AS.DONE.value, _AS.FAILED.value)
 
     async def _record_poll_failure(self, exc: Exception) -> bool:
         """Account one poll-loop failure. Returns True iff an ErrorEvent was published."""
