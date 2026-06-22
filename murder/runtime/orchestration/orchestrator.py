@@ -7,7 +7,6 @@ import contextlib
 import logging
 import re
 import sqlite3
-from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
@@ -31,16 +30,9 @@ from murder.bus import Entity, StatusChangeEvent, TicketStatus
 from murder.llm.clients import resolve_role_client_tiered
 from murder.config import (
     Config,
-    resolve_default_crow_harness,
-    resolve_default_crow_startup_effort,
-    resolve_default_crow_startup_model,
 )
 from murder.llm.harnesses import get as get_harness
 from murder.llm.harnesses.harnesses_doc import write_harnesses_doc
-from murder.state.storage.paths import tickets_dir
-from murder.state.storage.worktrees import (
-    ensure_worktree_for_branch,
-)
 from murder.runtime.terminal import tmux
 from murder.runtime.terminal.session_names import format_session_name
 from murder.work.tickets import lifecycle
@@ -50,13 +42,14 @@ from murder.runtime.agents.runner import spawn_agent
 from murder.runtime.agents.sessions import AgentScope, AgentSpec
 from murder.llm.harnesses.models import HarnessStartSpec
 from murder.verdict.completion import CheckRegistry, CompletionCoordinator
-from murder.llm.harnesses import capabilities_for
-from murder.runtime.orchestration.brief import BriefContext, assembler_for
 from murder.runtime.orchestration.ticket_ops import TicketOps
 from murder.runtime.orchestration.history_ops import HistoryOps
 from murder.runtime.orchestration.note_ops import NoteOps
 from murder.runtime.orchestration.plan_ops import PlanOps
 from murder.runtime.orchestration.agent_ops import AgentOps
+from murder.runtime.orchestration.harness_config import HarnessConfigurator
+from murder.runtime.orchestration.worktree_provisioner import WorktreeProvisioner
+from murder.runtime.orchestration.brief_service import BriefService
 from murder.app.service.runtime_scope import OrchestratorHost
 
 from murder.verdict.escalations.service import EscalationService
@@ -95,24 +88,6 @@ def _harness_prefix(harness_kind: str) -> str:
 from murder.runtime.orchestration.agent_ids import is_rogue_agent_id  # noqa: E402, F401
 
 
-def _codex_startup_model_degraded_ok(
-    harness_kind: str,
-    startup_model: str | None,
-    harness_adapter: Any,
-    message: str,
-) -> bool:
-    if harness_kind != "codex" or startup_model is None:
-        return False
-    known_startup_models = {
-        model_id
-        for model_id, _label in getattr(harness_adapter, "available_startup_models", ())
-    }
-    if startup_model not in known_startup_models:
-        return False
-    msg = message.lower()
-    return "failed to select runtime model" in msg or "not idle in time" in msg
-
-
 class Orchestrator:
     def __init__(self, rt: OrchestratorHost) -> None:
         self.rt = rt
@@ -144,6 +119,9 @@ class Orchestrator:
             rogue_slug=_rogue_slug,
             agent_is_live=lambda agent: self._agent_is_live(agent),
         )
+        self.harness_cfg = HarnessConfigurator(rt)
+        self.worktrees = WorktreeProvisioner(rt)
+        self.briefs = BriefService(rt)
 
     def _escalations(self) -> EscalationService:
         assert self.rt.db is not None
@@ -273,39 +251,17 @@ class Orchestrator:
         row = _db_get_ticket(self.rt.db, ticket_id)
         if row is None:
             raise KeyError(ticket_id)
-        harness_kind = resolve_default_crow_harness(self.rt.config.default_crow, row)
-        startup_model = resolve_default_crow_startup_model(
-            self.rt.config.default_crow, row, harness_kind
-        )
-        startup_effort = resolve_default_crow_startup_effort(self.rt.config.default_crow, row)
-        worktree_name = row.get("worktree")
-        worktree_path: str | None = None
-        if isinstance(worktree_name, str) and worktree_name.strip():
-            worktree = await ensure_worktree_for_branch(
-                self.rt.repo_root,
-                worktree_name.strip(),
-            )
-            worktree_path = str(worktree.path)
-        additional_workspace_dirs: tuple[str, ...] = ()
-        if harness_kind == "codex" and worktree_path is not None:
-            additional_workspace_dirs = (str(tickets_dir(self.rt.repo_root).resolve()),)
-        ctx = BriefContext(
-            role=AgentRole.CROW,
-            repo_root=self.rt.repo_root,
-            caps=capabilities_for(harness_kind),
-            harness_name=harness_kind,
-            model=None,
-            ticket=dict(row),
-        )
-        brief = assembler_for(ctx).build(ctx)
+        ch = self.harness_cfg.resolve_crow(row)
+        wt = await self.worktrees.for_crow(row, ch.kind)
+        brief = self.briefs.build(role=AgentRole.CROW, harness_name=ch.kind, ticket=dict(row))
         spec = AgentSpec(
             role=AgentRole.CROW,
-            scope=AgentScope(ticket_id=ticket_id, worktree_path=worktree_path),
-            harness=harness_kind,
-            model=startup_model,
-            effort=startup_effort,
+            scope=AgentScope(ticket_id=ticket_id, worktree_path=wt.worktree_path),
+            harness=ch.kind,
+            model=ch.startup_model,
+            effort=ch.startup_effort,
             startup_prompt=brief,
-            additional_workspace_dirs=additional_workspace_dirs,
+            additional_workspace_dirs=wt.additional_workspace_dirs,
         )
         handle = await spawn_agent(spec, rt=self.rt, event_sink=self.rt.event_sink)
         return handle.session_name
@@ -322,37 +278,20 @@ class Orchestrator:
         row = _db_get_ticket(self.rt.db, ticket_id)
         if row is None:
             raise KeyError(ticket_id)
-        harness_kind = resolve_default_crow_harness(self.rt.config.default_crow, row)
-        startup_model = resolve_default_crow_startup_model(
-            self.rt.config.default_crow, row, harness_kind
-        )
-        startup_effort = resolve_default_crow_startup_effort(self.rt.config.default_crow, row)
-        harness = get_harness(
-            harness_kind,
-            startup_model=startup_model,
-            startup_effort=startup_effort,
-        )
+        ch = self.harness_cfg.resolve_crow(row)
+        harness = self.harness_cfg.adapter(ch)
 
-        repo_root = self.rt.repo_root
-        worktree_path: Path | None = None
-        worktree_name = row.get("worktree")
-        if isinstance(worktree_name, str) and worktree_name.strip():
-            worktree = await ensure_worktree_for_branch(
-                self.rt.repo_root,
-                worktree_name.strip(),
-            )
-            repo_root = worktree.path
-            worktree_path = worktree.path
+        wt = await self.worktrees.for_reattach(row)
 
         agent = CrowAgent(
             agent_id=f"crow-{ticket_id}",
             ticket_id=ticket_id,
             session=crow_session,
             harness=harness,
-            repo_root=repo_root,
-            startup_model=startup_model,
-            startup_effort=startup_effort,
-            worktree_path=worktree_path,
+            repo_root=wt.repo_root,
+            startup_model=ch.startup_model,
+            startup_effort=ch.startup_effort,
+            worktree_path=wt.worktree_path,
             runtime=self.rt,
         )
         self.rt.register_agent(agent)
@@ -368,16 +307,8 @@ class Orchestrator:
         row = _db_get_ticket(self.rt.db, ticket_id)
         if row is None:
             raise KeyError(ticket_id)
-        harness_kind = resolve_default_crow_harness(self.rt.config.default_crow, row)
-        startup_model = resolve_default_crow_startup_model(
-            self.rt.config.default_crow, row, harness_kind
-        )
-        startup_effort = resolve_default_crow_startup_effort(self.rt.config.default_crow, row)
-        harness = get_harness(
-            harness_kind,
-            startup_model=startup_model,
-            startup_effort=startup_effort,
-        )
+        ch = self.harness_cfg.resolve_crow(row)
+        harness = self.harness_cfg.adapter(ch)
         session = format_session_name(self.rt, "crow_handler", f"_{ticket_id}")
         client, crow_handler_cfg = resolve_role_client_tiered(
             self.rt.config.crow_handler, self.rt.user_cfg, "crow_handler"
@@ -459,21 +390,9 @@ class Orchestrator:
             startup_effort=startup_effort,
         )
 
-        cwd = self.rt.repo_root
-        resolved_worktree: Path | None = None
-        if isinstance(worktree_branch, str) and worktree_branch.strip():
-            ref = await ensure_worktree_for_branch(
-                self.rt.repo_root,
-                worktree_branch.strip(),
-            )
-            cwd = ref.path
-            resolved_worktree = ref.path
-        elif isinstance(worktree_path, str) and worktree_path.strip():
-            path = Path(worktree_path.strip())
-            if not path.is_absolute():
-                path = self.rt.repo_root / path
-            cwd = path
-            resolved_worktree = path
+        wt = await self.worktrees.for_rogue(worktree_branch, worktree_path)
+        cwd = wt.cwd
+        resolved_worktree = wt.resolved_worktree
 
         agent = CrowAgent(
             agent_id=agent_id,
@@ -498,7 +417,7 @@ class Orchestrator:
             start_result = await agent.harness_session.start(start_spec)
             if not start_result.ok:
                 message = start_result.message or "harness startup failed"
-                if not _codex_startup_model_degraded_ok(
+                if not self.harness_cfg.codex_startup_degraded_ok(
                     harness_kind, startup_model, harness_adapter, message
                 ):
                     raise RuntimeError(message)
@@ -669,15 +588,9 @@ class Orchestrator:
                     await self.spawn_planning_handler(plan_name, agent.session)
                 return agent_id
             cfg = self.rt.config.planner
-            ctx = BriefContext(
-                role=AgentRole.PLANNER,
-                repo_root=self.rt.repo_root,
-                caps=capabilities_for(cfg.harness),
-                harness_name=cfg.harness,
-                model=None,
-                plan_name=plan_name,
+            startup_prompt = self.briefs.build(
+                role=AgentRole.PLANNER, harness_name=cfg.harness, plan_name=plan_name
             )
-            startup_prompt = assembler_for(ctx).build(ctx)
             spec = AgentSpec(
                 role=AgentRole.PLANNER,
                 scope=AgentScope(plan_name=plan_name),
@@ -813,14 +726,7 @@ class Orchestrator:
                         await tmux.kill_session(row["session"])
                 _db_set_agent_status(self.rt.db, agent_id, "dead")
         collab_cfg = self.rt.config.collaborator
-        ctx = BriefContext(
-            role=AgentRole.COLLABORATOR,
-            repo_root=self.rt.repo_root,
-            caps=capabilities_for(collab_cfg.harness),
-            harness_name=collab_cfg.harness,
-            model=None,
-        )
-        body = assembler_for(ctx).build(ctx)
+        body = self.briefs.build(role=AgentRole.COLLABORATOR, harness_name=collab_cfg.harness)
         spec = AgentSpec(
             role=AgentRole.COLLABORATOR,
             scope=AgentScope(),
