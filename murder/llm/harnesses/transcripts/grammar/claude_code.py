@@ -201,8 +201,9 @@ def _reflow_prose(lines: list[str]) -> str:
 
 
 def _reflow_user(lines: list[str]) -> str:
-    cleaned = [_dedent_cc(line) for line in lines]
-    return " ".join(line.strip() for line in cleaned if line.strip())
+    # Delegate to the shared classifier so a user turn that carries code / tables /
+    # lists keeps its structure instead of being crushed to one line.
+    return _reflow_prose(lines)
 
 
 def _cc_collect_result(lines: list[str], i: int) -> tuple[str | None, bool, int]:

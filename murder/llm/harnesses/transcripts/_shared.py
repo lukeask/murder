@@ -62,46 +62,155 @@ def murder_owned_anchors(
     return anchors
 
 
+# Box-drawing / block glyphs whose presence in a block marks it as preformatted
+# (tables, frames, trees). Shared default; grammars may extend via box_chars.
+_DEFAULT_BOX_CHARS = frozenset("┌┐└┘├┤┬┴┼─│┃━═╋╔╗╚╝║╠╣╦╩╬▌▐█▏▕╭╮╯╰")
+
+# A bullet/numbered list item lead: "- ", "* ", "1. ", "2) ", …
+_LIST_LEAD_RE = re.compile(r"^\s*([-*]\s|\d+[.)]\s)")
+
+# A code fence: a line whose stripped form opens/closes with ``` (optionally a lang).
+_FENCE_RE = re.compile(r"^\s*```")
+
+# An internal multi-space gap: a non-space, then 2+ spaces, then content. The
+# offset where that *trailing* content resumes is the column start — aligned
+# tables share it across rows even though first-column widths (and thus gap
+# starts) vary.
+_GAP_RE = re.compile(r"\S {2,}(?=\S)")
+
+
+def _gap_offsets(line: str) -> set[int]:
+    """Column-start offsets (where content resumes after an internal 2+-space gap)."""
+    return {m.end() for m in _GAP_RE.finditer(line)}
+
+
+def _is_columnar(lines: list[str]) -> bool:
+    """Any line carries an internal 2+-space gap → intentional column alignment.
+
+    Soft-wrapped prose (post-dedent) is single-spaced, so an internal run of 2+
+    spaces is a strong table/alignment signal.  The test is deliberately
+    *line-local* and monotonic: once a block contains a gapped line it stays
+    preformatted as more lines stream in, so a block never flips prose→pre
+    mid-stream in a way that would break content-key dedup (single-line blocks
+    render identically either way, so labelling them ``pre`` is harmless)."""
+    return any(_gap_offsets(line) for line in lines)
+
+
+def _is_indented(lines: list[str]) -> bool:
+    """Every non-blank line carries a 2+-space (or tab) leading indent."""
+    body = [line for line in lines if line.strip()]
+    return bool(body) and all(line[:2] == "  " or line[:1] == "\t" for line in body)
+
+
+def _has_box(lines: list[str], box_chars: frozenset[str]) -> bool:
+    return any(any(ch in box_chars for ch in line) for line in lines)
+
+
+def classify_block(
+    lines: list[str],
+    *,
+    preserve_prefixes: tuple[str, ...] = (),
+    box_chars: frozenset[str] = _DEFAULT_BOX_CHARS,
+) -> str:
+    """Label a blank-line-separated block as prose / pre / list.
+
+    ``code`` is assigned upstream by fence detection.  A block is preserved
+    (``pre``/``list``) when it carries list/numbered leads, grammar-declared
+    preserve glyphs, box-drawing, uniform indent, or column alignment; otherwise
+    it is confident prose and safe to de-wrap.  Bias is toward *preserve*:
+    over-preserving leaves original formatting intact, the lesser evil.
+    """
+    body = [line for line in lines if line.strip()]
+    if any(_LIST_LEAD_RE.match(line) for line in body):
+        return "list"
+    if (
+        (bool(preserve_prefixes) and any(line.lstrip().startswith(preserve_prefixes) for line in body))
+        or _has_box(lines, box_chars)
+        or _is_indented(lines)
+        or _is_columnar(body)
+    ):
+        return "pre"
+    return "prose"
+
+
+def _split_blocks(
+    lines: list[str],
+    *,
+    preserve_prefixes: tuple[str, ...],
+    box_chars: frozenset[str],
+) -> list[tuple[str, list[str]]]:
+    """Split into labelled blocks: fenced code spans verbatim (inner blanks kept),
+    the remainder blank-line-separated and classified."""
+    blocks: list[tuple[str, list[str]]] = []
+    current: list[str] = []
+
+    def flush() -> None:
+        if current:
+            kind = classify_block(
+                current, preserve_prefixes=preserve_prefixes, box_chars=box_chars
+            )
+            blocks.append((kind, list(current)))
+            current.clear()
+
+    i = 0
+    n = len(lines)
+    while i < n:
+        line = lines[i]
+        if _FENCE_RE.match(line):
+            flush()
+            fence = [line]
+            i += 1
+            while i < n:
+                fence.append(lines[i])
+                if _FENCE_RE.match(lines[i]):
+                    i += 1
+                    break
+                i += 1
+            blocks.append(("code", fence))
+            continue
+        if not line.strip():
+            flush()
+            i += 1
+            continue
+        current.append(line)
+        i += 1
+    flush()
+    return blocks
+
+
 def reflow_paragraphs(
     lines: list[str],
     *,
     dedent: Callable[[str], str],
     preserve_prefixes: tuple[str, ...],
-    preserve_strip: bool,
+    preserve_strip: bool = False,
     post: Callable[[str], str] = lambda text: text,
+    box_chars: frozenset[str] = _DEFAULT_BOX_CHARS,
 ) -> str:
-    """De-wrap prose into paragraphs; preserve tables / lists / diffs verbatim."""
+    """De-wrap confident prose; preserve code / tables / lists / trees verbatim.
+
+    Emits a *faithful multi-line* string: only ``prose`` blocks collapse their
+    soft wraps (``" ".join``); ``code``/``pre``/``list`` render verbatim
+    (``"\\n".join``, internal spaces preserved) so column alignment and
+    indentation survive end to end.  Classification lives here because only the
+    parser knows the source wrap width.  ``preserve_strip`` is retained for
+    signature compatibility but no longer strips verbatim lines (the grammar's
+    ``dedent`` owns leading-indent policy).
+    """
     cleaned = [dedent(line) for line in lines]
     while cleaned and not cleaned[0].strip():
         cleaned.pop(0)
     while cleaned and not cleaned[-1].strip():
         cleaned.pop()
 
-    paragraphs: list[list[str]] = []
-    current: list[str] = []
-    for line in cleaned:
-        if not line.strip():
-            if current:
-                paragraphs.append(current)
-                current = []
-            continue
-        current.append(line)
-    if current:
-        paragraphs.append(current)
-
     rendered: list[str] = []
-    for paragraph in paragraphs:
-        preserve = any(
-            line.lstrip().startswith(preserve_prefixes) or re.match(r"^\s*\d+\.\s", line)
-            for line in paragraph
-        )
-        if preserve:
-            if preserve_strip:
-                rendered.append("\n".join(line.strip() for line in paragraph))
-            else:
-                rendered.append("\n".join(paragraph))
+    for kind, block in _split_blocks(
+        cleaned, preserve_prefixes=preserve_prefixes, box_chars=box_chars
+    ):
+        if kind == "prose":
+            rendered.append(" ".join(line.strip() for line in block))
         else:
-            rendered.append(" ".join(line.strip() for line in paragraph))
+            rendered.append("\n".join(block))
     return post("\n\n".join(rendered).strip())
 
 
