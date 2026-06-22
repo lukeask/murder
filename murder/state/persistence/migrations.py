@@ -898,3 +898,67 @@ def _migrate_conversation_store(conn: sqlite3.Connection) -> None:
                 ON conversation_blocks(conversation_id, ordinal);
             """
         )
+
+
+def _migrate_conversation_chunk_summaries(conn: sqlite3.Connection) -> None:
+    """Add the Condensed-view chunk-summary tables + drop vestigial `condensed`.
+
+    TUIchat Phase 4. The single `conversations.condensed` column cannot hold an
+    ordered sequence of chunk summaries nor their per-summary attribution
+    pointers, so condensed storage moves to two tables:
+
+    - ``conversation_chunk_summaries`` — ordered per-chunk summaries
+    - ``chunk_summary_blocks`` — explicit block-id attribution join (N rows/summary)
+
+    The old single column is now vestigial and dropped in the same migration.
+
+    Idempotent: CREATE TABLE IF NOT EXISTS in SCHEMA_SQL handles fresh DBs; this
+    handles DBs created before Phase 4 landed. The column drop is guarded on the
+    column actually existing.  This is a Condensed-only schema change — Verbose
+    keeps its no-schema-change guarantee.
+    """
+    existing = {
+        row["name"]
+        for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table'"
+        ).fetchall()
+    }
+    if "conversation_chunk_summaries" not in existing:
+        conn.executescript(
+            """
+            CREATE TABLE conversation_chunk_summaries (
+                summary_id      INTEGER PRIMARY KEY AUTOINCREMENT,
+                conversation_id TEXT NOT NULL REFERENCES conversations(conversation_id)
+                                ON DELETE CASCADE,
+                chunk_idx       INTEGER NOT NULL,
+                summary         TEXT NOT NULL,
+                created_at      TEXT NOT NULL,
+                UNIQUE (conversation_id, chunk_idx)
+            );
+            CREATE INDEX IF NOT EXISTS idx_chunk_summaries_conv
+                ON conversation_chunk_summaries(conversation_id, chunk_idx);
+            """
+        )
+    if "chunk_summary_blocks" not in existing:
+        conn.executescript(
+            """
+            CREATE TABLE chunk_summary_blocks (
+                summary_id  INTEGER NOT NULL
+                            REFERENCES conversation_chunk_summaries(summary_id)
+                            ON DELETE CASCADE,
+                block_id    INTEGER NOT NULL,
+                PRIMARY KEY (summary_id, block_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_chunk_summary_blocks_summary
+                ON chunk_summary_blocks(summary_id);
+            """
+        )
+
+    # Drop the now-vestigial single `condensed` column. ALTER TABLE DROP COLUMN
+    # is supported on SQLite >= 3.35 (2021); guarded on the column existing so
+    # this is a no-op on fresh DBs (built from the current SCHEMA_SQL without it).
+    has_condensed = conn.execute(
+        "SELECT 1 FROM pragma_table_info('conversations') WHERE name = 'condensed'"
+    ).fetchone()
+    if has_condensed is not None:
+        conn.execute("ALTER TABLE conversations DROP COLUMN condensed")

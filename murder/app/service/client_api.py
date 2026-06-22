@@ -400,6 +400,24 @@ class ConversationBlockSummary:
 
 
 @dataclass(frozen=True, slots=True)
+class ConversationChunkSummary:
+    """One Condensed-view chunk summary with its attributed source block ids.
+
+    ``block_ids`` are explicit pointers into the conversation's blocks (the
+    attribution contract) so the Condensed view can replace exactly those blocks
+    with ``summary`` and later reveal/jump back to the source.
+    """
+
+    summary_id: int
+    chunk_idx: int
+    summary: str
+    block_ids: tuple[int, ...]
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "block_ids", tuple(self.block_ids))
+
+
+@dataclass(frozen=True, slots=True)
 class ConversationSummary:
     conversation_id: str
     agent_id: str
@@ -407,13 +425,17 @@ class ConversationSummary:
     model: str | None
     harness_session_id: str | None
     live_state: str | None
-    condensed: str | None
+    # Ordered rolling chunk summaries (Condensed view). Replaces the old single
+    # `condensed` scalar — that column was dropped (TUIchat Phase 4). Empty when
+    # no chunk has been summarized yet (the view falls back to Verbose).
+    chunk_summaries: tuple[ConversationChunkSummary, ...]
     queued_message: str | None
     status: str
     blocks: tuple[ConversationBlockSummary, ...]
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "blocks", tuple(self.blocks))
+        object.__setattr__(self, "chunk_summaries", tuple(self.chunk_summaries))
 
 
 @dataclass(frozen=True, slots=True)
@@ -552,6 +574,7 @@ __all__ = [
     "CommandResult",
     "CommandStatus",
     "ConversationBlockSummary",
+    "ConversationChunkSummary",
     "ConversationSummary",
     "ConversationsSnapshot",
     "CrowSessionSummary",

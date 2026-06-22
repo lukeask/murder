@@ -6,15 +6,21 @@ without any tmux or process knowledge so it stays unit-testable in isolation.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
-from collections.abc import Awaitable, Callable
+import logging
+from collections.abc import Awaitable, Callable, Sequence
 from typing import TYPE_CHECKING, Any
 
+from murder.llm.harnesses.transcript_summarize import SummaryProvider, summarize_chunk
 from murder.llm.harnesses.transcripts import TranscriptAccumulator
+from murder.runtime.agents.summarization_buffer import PendingChunk, SummarizationBuffer
 from murder.state.persistence import conversation as conv_store
 
 if TYPE_CHECKING:
     import sqlite3
+
+_log = logging.getLogger(__name__)
 
 
 class ConversationProducer:
@@ -35,6 +41,8 @@ class ConversationProducer:
         system_prompt: str | None,
         db: sqlite3.Connection,
         publish: Callable[[str, dict[str, Any]], Awaitable[None]],
+        *,
+        summary_provider: SummaryProvider | None = None,
     ) -> None:
         self.conversation_id = conversation_id
         self._db = db
@@ -45,6 +53,15 @@ class ConversationProducer:
         # (working / awaiting_input / awaiting_approval). Read by the agent's
         # projection tick for queued-message delivery + conversation.state push.
         self.last_state: str | None = None
+        # Condensed-view rolling summarization (TUIchat Phase 4). The buffer's
+        # char-accounting is synchronous and inline; the summary call itself is
+        # dispatched off the hot path via asyncio.create_task so it never adds
+        # latency to the pane→bus projection. Disabled (no summarization) when
+        # no provider can be built — Condensed then falls back to Verbose.
+        self._summary_buffer = SummarizationBuffer()
+        self._summary_provider = summary_provider
+        self._summary_provider_resolved = summary_provider is not None
+        self._summary_tasks: set[asyncio.Task[None]] = set()
 
     async def poll(self, pane: str) -> bool:
         """Feed a new pane capture; no-op if the pane hasn't changed since last poll.
@@ -74,4 +91,95 @@ class ConversationProducer:
         )
         for change in changes:
             await self._publish(str(change.action), conv_store.block_to_wire(change.block))
+
+        # Off-hot-path condensed summarization: account sealed intermediate
+        # blocks and dispatch any ready chunk via create_task (no await here).
+        self._observe_for_summary(changes, str(self.last_state or "working"))
         return bool(changes)
+
+    def _observe_for_summary(
+        self,
+        changes: Sequence[conv_store.ConversationBlockChange],
+        state: str,
+    ) -> None:
+        """Feed *sealed* blocks into the summarization buffer; schedule flushes.
+
+        Only sealed blocks are buffered: an unsealed (still-growing) trailing
+        block is not final content yet, and buffering it would re-buffer on each
+        prefix-grown frame. The buffer ignores final/non-summarizable kinds and
+        de-dups by block id, so this is safe to call every poll.
+        """
+        for change in changes:
+            block = change.block
+            if not block.sealed or block.id is None:
+                continue
+            pending = self._summary_buffer.observe(
+                block_id=int(block.id),
+                kind=block.kind,
+                segment=dict(block.payload),
+                state=state,
+            )
+            if pending is not None:
+                self._schedule_summary(pending)
+
+    def _schedule_summary(self, chunk: PendingChunk) -> None:
+        """Dispatch one chunk summary as a fire-and-forget background task.
+
+        Runs strictly off the streaming hot path: ``poll`` returns immediately;
+        the network round-trip and DB write happen in this task. Single-threaded
+        asyncio means the synchronous DB write cannot interleave another poll's
+        write mid-transaction.
+        """
+        task = asyncio.create_task(
+            self._summarize_and_store(chunk),
+            name=f"condense-{self.conversation_id}-{chunk.block_ids[:1]}",
+        )
+        self._summary_tasks.add(task)
+        task.add_done_callback(self._summary_tasks.discard)
+
+    async def _summarize_and_store(self, chunk: PendingChunk) -> None:
+        provider = self._resolve_provider()
+        if provider is None:
+            return
+        try:
+            summary = await summarize_chunk(
+                segments=list(chunk.segments),
+                state=chunk.state,
+                provider=provider,
+            )
+        except Exception:  # noqa: BLE001 — summarization is best-effort
+            _log.warning("condense: chunk summary failed", exc_info=True)
+            return
+        # Empty-summary guard: a blank result degrades to Verbose (no write).
+        if not summary:
+            return
+        try:
+            conv_store.write_chunk_summary(
+                self._db,
+                self.conversation_id,
+                summary=summary,
+                block_ids=chunk.block_ids,
+            )
+            self._db.commit()
+        except Exception:  # noqa: BLE001
+            _log.warning("condense: chunk summary persist failed", exc_info=True)
+            return
+        await self._publish(
+            "chunk-summarized",
+            {
+                "conversation_id": self.conversation_id,
+                "summary": summary,
+                "block_ids": list(chunk.block_ids),
+            },
+        )
+
+    def _resolve_provider(self) -> SummaryProvider | None:
+        """Lazily build the default free-tier provider once (cached)."""
+        if not self._summary_provider_resolved:
+            from murder.llm.harnesses.transcript_summarize import (  # noqa: PLC0415
+                build_default_summary_provider,
+            )
+
+            self._summary_provider = build_default_summary_provider()
+            self._summary_provider_resolved = True
+        return self._summary_provider
