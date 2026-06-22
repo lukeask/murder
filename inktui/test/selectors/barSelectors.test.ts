@@ -19,10 +19,17 @@ describe('selectTopBar', () => {
       'reports₃',
       'tickets₄',
       'history₅',
-      'usage₉',
       'tree₈',
+      'usage₉',
       'crows₀',
     ]);
+  });
+
+  it('marks the first right-rail panel with a divider so the bar groups left/right rails', () => {
+    const labels = selectTopBar(new Set<PanelId>());
+    // Left-rail panels carry no divider; the first right-rail panel (tree) opens the group.
+    const divided = labels.filter((l) => l.dividerBefore).map((l) => l.id);
+    expect(divided).toEqual(['transit']);
   });
 
   it('marks only the visible panels active', () => {

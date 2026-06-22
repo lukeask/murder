@@ -57,8 +57,8 @@ export const PANELS: readonly PanelPlacement[] = [
   { id: 'reports', digit: 3, region: 'left' },
   { id: 'tickets', digit: 4, region: 'left' },
   { id: 'history', digit: 5, region: 'left' },
-  { id: 'usage', digit: 9, region: 'right' },
   { id: 'transit', digit: 8, region: 'right', label: 'tree' },
+  { id: 'usage', digit: 9, region: 'right' },
   { id: 'crows', digit: 0, region: 'right' },
 ];
 

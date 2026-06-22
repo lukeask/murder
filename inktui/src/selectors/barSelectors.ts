@@ -29,6 +29,8 @@ export interface TopBarLabel {
   readonly text: string;
   /** True when this panel is in the visible set → the bar renders it highlighted. */
   readonly active: boolean;
+  /** True on the first right-rail panel → the bar inserts a `·` separator before it. */
+  readonly dividerBefore?: boolean;
 }
 
 /**
@@ -37,11 +39,17 @@ export interface TopBarLabel {
  * so a new panel appears in the bar automatically (no second list to keep in sync).
  */
 export function selectTopBar(visible: ReadonlySet<PanelId>): readonly TopBarLabel[] {
-  return PANELS.map((panel) => ({
-    id: panel.id,
-    text: `${panel.label ?? panel.id}${subscript(panel.digit)}`,
-    active: visible.has(panel.id),
-  }));
+  let prevRegion: string | undefined;
+  return PANELS.map((panel) => {
+    const dividerBefore = prevRegion === 'left' && panel.region === 'right';
+    prevRegion = panel.region;
+    return {
+      id: panel.id,
+      text: `${panel.label ?? panel.id}${subscript(panel.digit)}`,
+      active: visible.has(panel.id),
+      ...(dividerBefore ? { dividerBefore: true } : {}),
+    };
+  });
 }
 
 /** One contextual hint: the key and what it does, drawn straight from a declared keymap entry. */
