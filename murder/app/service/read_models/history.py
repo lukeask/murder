@@ -77,6 +77,7 @@ class HistoryReadModel(ReadModelBase):
             items.append(
                 HistoryItemSummary(
                     item_id=item_id,
+                    conversation_id=str(row["conversation_id"]),
                     text=text,
                     target=str(row["agent_id"]),
                     ts=ts,

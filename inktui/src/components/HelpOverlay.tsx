@@ -122,7 +122,8 @@ export function buildHelpGroups(
       { key: '/…', description: 'passthrough to harness' },
       { key: ':help', description: 'this overlay' },
       { key: ':note <text>', description: 'quick note' },
-      { key: ':compact', description: 'coming soon' },
+      { key: ':verbose / :compact / :tmux', description: 'set this pane view' },
+      { key: ':dismiss-toasts', description: 'flush the toast rack' },
       { key: ':resume', description: 'use r in history panel' },
     ],
   });

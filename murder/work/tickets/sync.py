@@ -98,6 +98,15 @@ class TicketSync(MarkdownSyncLoop):
             return None
 
         file_hash = content_hash(raw)
+        # Warm-boot skip: byte-identical content that previously synced cleanly
+        # means the DB is already current, so re-parsing and re-emitting a
+        # snapshot is pure waste. A changed hash, a never-synced ticket, or a
+        # prior parse-error all fall through to the full reconcile below (which
+        # still emits exactly one snapshot). This is what keeps `reconcile_all`
+        # from firing 65 redundant snapshots on a warm boot.
+        stored_hash, stored_state = self._stored_sync_state(ticket_id)
+        if stored_hash is not None and stored_hash == file_hash and stored_state == "synced":
+            return None
         parsed = parse_ticket(raw, default_title=ticket_id)
         if parsed.parse_error is not None:
             if self._ticket_exists(ticket_id):
@@ -132,8 +141,10 @@ class TicketSync(MarkdownSyncLoop):
         # PRIMARY filesystem->DB ticket writer: emit one key-only ticket
         # snapshot after the reconcile commits. Placed after COMMIT so the
         # parse-error early-return and the FileNotFound->materialize path do not
-        # emit. ``reconcile_all`` loops this over every ticket at startup, which
-        # is acceptable refresh churn (no change-detection by design).
+        # emit. ``reconcile_all`` loops this over every ticket at startup, but
+        # the warm-boot skip above means only genuinely changed (or
+        # never-synced) tickets reach here, so an unchanged warm boot emits
+        # nothing instead of one snapshot per ticket.
         if self.on_ticket_change is not None:
             self.on_ticket_change(ticket_id)
         return None
@@ -206,6 +217,20 @@ class TicketSync(MarkdownSyncLoop):
     def _ticket_exists(self, ticket_id: str) -> bool:
         row = self.db.execute("SELECT 1 FROM tickets WHERE id = ?", (ticket_id,)).fetchone()
         return row is not None
+
+    def _stored_sync_state(self, ticket_id: str) -> tuple[str | None, str | None]:
+        """Return ``(metadata_file_hash, metadata_sync_state)`` for a ticket.
+
+        Both are ``None`` when the ticket row does not exist yet, which makes
+        the warm-boot skip guard fall through to the full insert path.
+        """
+        row = self.db.execute(
+            "SELECT metadata_file_hash, metadata_sync_state FROM tickets WHERE id = ?",
+            (ticket_id,),
+        ).fetchone()
+        if row is None:
+            return None, None
+        return row["metadata_file_hash"], row["metadata_sync_state"]
 
     def _insert_ticket_from_parsed(self, ticket_id: str, parsed: ParsedTicket) -> None:
         now = _now()

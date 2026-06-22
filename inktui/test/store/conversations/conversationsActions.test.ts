@@ -352,3 +352,111 @@ describe('conversationsActions — chat-pane overrides', () => {
     dispose();
   });
 });
+
+describe('conversationsActions — pane view modes (TUIchat-3)', () => {
+  it('starts with an empty paneViewModes map', () => {
+    expect(initialConversationsState.paneViewModes).toEqual({});
+  });
+
+  it('setPaneViewMode writes a per-pane mode entry', () => {
+    const { store, dispose } = setup();
+    store.getState().actions.conversations.setPaneViewMode('agent-1', 'condensed');
+    expect(store.getState().conversations.paneViewModes['agent-1']).toBe('condensed');
+    store.getState().actions.conversations.setPaneViewMode('agent-1', 'tmux');
+    expect(store.getState().conversations.paneViewModes['agent-1']).toBe('tmux');
+    dispose();
+  });
+
+  it('setPaneViewMode is per-agent (does not touch other panes)', () => {
+    const { store, dispose } = setup();
+    store.getState().actions.conversations.setPaneViewMode('a', 'tmux');
+    store.getState().actions.conversations.setPaneViewMode('b', 'condensed');
+    expect(store.getState().conversations.paneViewModes).toEqual({ a: 'tmux', b: 'condensed' });
+    dispose();
+  });
+
+  it('cyclePaneViewMode rotates verbose → condensed → tmux → verbose from the default', () => {
+    const { store, dispose } = setup();
+    // No override → effective mode is settings.defaultChatViewMode ('verbose').
+    expect(store.getState().settings.defaultChatViewMode).toBe('verbose');
+    const cycle = store.getState().actions.conversations.cyclePaneViewMode;
+    cycle('a');
+    expect(store.getState().conversations.paneViewModes['a']).toBe('condensed');
+    cycle('a');
+    expect(store.getState().conversations.paneViewModes['a']).toBe('tmux');
+    cycle('a');
+    expect(store.getState().conversations.paneViewModes['a']).toBe('verbose');
+    dispose();
+  });
+
+  it('cyclePaneViewMode seeds from the settings default when the pane has no override', () => {
+    const { store, dispose } = setup();
+    // Make the default 'condensed' — the first cycle should advance condensed → tmux.
+    store.setState((s) => ({ settings: { ...s.settings, defaultChatViewMode: 'condensed' } }));
+    store.getState().actions.conversations.cyclePaneViewMode('a');
+    expect(store.getState().conversations.paneViewModes['a']).toBe('tmux');
+    dispose();
+  });
+
+  it('ref-swaps paneViewModes on each mutation (granularity contract)', () => {
+    const { store, dispose } = setup();
+    const before = store.getState().conversations.paneViewModes;
+    store.getState().actions.conversations.setPaneViewMode('a', 'tmux');
+    expect(store.getState().conversations.paneViewModes).not.toBe(before);
+    dispose();
+  });
+});
+
+// ── chunk-summarized live event (TUIchat-4) ──────────────────────────────────────────────────────
+
+describe('conversations — chunk-summarized event folds into chunkSummaries', () => {
+  function chunkEvent(
+    agentId: string,
+    summaryText: string,
+    blockIds: number[],
+  ): ConversationBlockEvent {
+    return {
+      type: 'conversation.block',
+      id: `ev-${agentId}-chunk`,
+      ts: '2026-06-08T00:00:00Z',
+      run_id: 'run-1',
+      agent_id: agentId,
+      conversation_id: `conv-${agentId}`,
+      action: 'chunk-summarized',
+      block: { conversation_id: `conv-${agentId}`, summary: summaryText, block_ids: blockIds },
+    };
+  }
+
+  it('appends a chunk summary into chunkSummaries WITHOUT touching the transcript', () => {
+    const { store, dispose } = setup();
+    store.getState().actions.conversations.applyBlock(
+      makeBlockEvent('a', 'assistant', 'block-appended', { text: 'work' }),
+    );
+    const transcriptBefore = store.getState().conversations.transcripts['a'];
+    store.getState().actions.conversations.applyBlock(chunkEvent('a', 'summary one', [1, 2]));
+    const conv = store.getState().conversations;
+    // Transcript is untouched (chunk summary is NOT a transcript block).
+    expect(conv.transcripts['a']).toBe(transcriptBefore);
+    expect(conv.chunkSummaries['a']).toHaveLength(1);
+    expect(conv.chunkSummaries['a']?.[0]?.summary).toBe('summary one');
+    expect(conv.chunkSummaries['a']?.[0]?.blockIds).toEqual([1, 2]);
+    dispose();
+  });
+
+  it('appends successive summaries with ascending chunkIdx (flush order)', () => {
+    const { store, dispose } = setup();
+    store.getState().actions.conversations.applyBlock(chunkEvent('a', 'first', [1]));
+    store.getState().actions.conversations.applyBlock(chunkEvent('a', 'second', [2]));
+    const summaries = store.getState().conversations.chunkSummaries['a'];
+    expect(summaries?.map((s) => s.summary)).toEqual(['first', 'second']);
+    expect(summaries?.map((s) => s.chunkIdx)).toEqual([0, 1]);
+    dispose();
+  });
+
+  it('ignores an empty-summary event (Condensed → verbose, no write)', () => {
+    const { store, dispose } = setup();
+    store.getState().actions.conversations.applyBlock(chunkEvent('a', '', [1]));
+    expect(store.getState().conversations.chunkSummaries['a']).toBeUndefined();
+    dispose();
+  });
+});

@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
@@ -170,10 +171,13 @@ def upsert_conversation(
     model: str | None = None,
     harness_session_id: str | None = None,
     live_state: str | None = None,
-    condensed: str | None = None,
     status: str = "in_progress",
 ) -> None:
-    """Insert or update the metadata row for a conversation session."""
+    """Insert or update the metadata row for a conversation session.
+
+    Note: condensed summaries are no longer stored on this row — they live in
+    conversation_chunk_summaries (see ``write_chunk_summary``).
+    """
     now = _now()
     existing = conn.execute(
         "SELECT 1 FROM conversations WHERE conversation_id = ?",
@@ -184,12 +188,12 @@ def upsert_conversation(
             """
             INSERT INTO conversations
                 (conversation_id, agent_id, harness, model, harness_session_id,
-                 live_state, condensed, status, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 live_state, status, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 conversation_id, agent_id, harness, model, harness_session_id,
-                live_state, condensed, status, now, now,
+                live_state, status, now, now,
             ),
         )
     else:
@@ -200,13 +204,12 @@ def upsert_conversation(
                    model              = COALESCE(?, model),
                    harness_session_id = COALESCE(?, harness_session_id),
                    live_state         = COALESCE(?, live_state),
-                   condensed          = COALESCE(?, condensed),
                    status             = ?,
                    updated_at         = ?
              WHERE conversation_id = ?
             """,
             (
-                harness, model, harness_session_id, live_state, condensed,
+                harness, model, harness_session_id, live_state,
                 status, now, conversation_id,
             ),
         )
@@ -446,12 +449,14 @@ def read_conversation_doc(
 
     The returned dict has the shape::
 
-        {"harness": ..., "state": ..., "condensed": ..., "segments": [...]}
+        {"harness": ..., "state": ..., "condensed": None, "segments": [...]}
 
-    which matches the output of ``TranscriptAccumulator.to_dict()``.
+    which matches the output of ``TranscriptAccumulator.to_dict()``. The
+    ``condensed`` key is always ``None`` here — rolling chunk summaries live in
+    conversation_chunk_summaries, read via ``read_chunk_summaries``.
     """
     conv_row = conn.execute(
-        "SELECT harness, live_state, condensed FROM conversations"
+        "SELECT harness, live_state FROM conversations"
         " WHERE conversation_id = ?",
         (conversation_id,),
     ).fetchone()
@@ -463,9 +468,107 @@ def read_conversation_doc(
     return {
         "harness": conv_row["harness"],
         "state": conv_row["live_state"],
-        "condensed": conv_row["condensed"],
+        "condensed": None,
         "segments": segments,
     }
+
+
+# ---------------------------------------------------------------------------
+# Condensed-view chunk summaries (TUIchat Phase 4)
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class ChunkSummary:
+    """One rolling chunk summary plus the block ids it attributes to."""
+
+    summary_id: int
+    conversation_id: str
+    chunk_idx: int
+    summary: str
+    block_ids: tuple[int, ...]
+    created_at: str
+
+
+def write_chunk_summary(
+    conn: sqlite3.Connection,
+    conversation_id: str,
+    *,
+    summary: str,
+    block_ids: Sequence[int],
+    created_at: str | None = None,
+) -> int:
+    """Append one chunk summary + its attribution pointers; return summary_id.
+
+    ``chunk_idx`` is assigned as the next index for the conversation (ordered
+    append). ``block_ids`` are explicit pointers into ``conversation_blocks.id``
+    — the attribution contract (not implicit ordinal ranges). An empty/blank
+    ``summary`` is a programming error here: callers must apply the
+    empty-summary guard (degrade to Verbose) before writing.
+    """
+    text = (summary or "").strip()
+    if not text:
+        raise ValueError("refusing to persist an empty chunk summary")
+    ts = created_at or _now()
+    row = conn.execute(
+        "SELECT COALESCE(MAX(chunk_idx) + 1, 0) AS next_idx"
+        " FROM conversation_chunk_summaries WHERE conversation_id = ?",
+        (conversation_id,),
+    ).fetchone()
+    chunk_idx = int(row["next_idx"])
+    cur = conn.execute(
+        "INSERT INTO conversation_chunk_summaries"
+        " (conversation_id, chunk_idx, summary, created_at) VALUES (?, ?, ?, ?)",
+        (conversation_id, chunk_idx, text, ts),
+    )
+    summary_id = int(cur.lastrowid)
+    # De-dup + preserve order of explicit block-id pointers.
+    seen: set[int] = set()
+    for bid in block_ids:
+        if bid in seen:
+            continue
+        seen.add(bid)
+        conn.execute(
+            "INSERT OR IGNORE INTO chunk_summary_blocks (summary_id, block_id) VALUES (?, ?)",
+            (summary_id, int(bid)),
+        )
+    return summary_id
+
+
+def read_chunk_summaries(
+    conn: sqlite3.Connection,
+    conversation_id: str,
+) -> list[ChunkSummary]:
+    """Read all chunk summaries for a conversation, ordered by chunk_idx."""
+    rows = conn.execute(
+        "SELECT summary_id, chunk_idx, summary, created_at"
+        " FROM conversation_chunk_summaries"
+        " WHERE conversation_id = ? ORDER BY chunk_idx",
+        (conversation_id,),
+    ).fetchall()
+    if not rows:
+        return []
+    block_rows = conn.execute(
+        "SELECT csb.summary_id AS summary_id, csb.block_id AS block_id"
+        " FROM chunk_summary_blocks csb"
+        " JOIN conversation_chunk_summaries ccs ON ccs.summary_id = csb.summary_id"
+        " WHERE ccs.conversation_id = ?"
+        " ORDER BY csb.summary_id, csb.block_id",
+        (conversation_id,),
+    ).fetchall()
+    blocks_by_summary: dict[int, list[int]] = {}
+    for br in block_rows:
+        blocks_by_summary.setdefault(int(br["summary_id"]), []).append(int(br["block_id"]))
+    return [
+        ChunkSummary(
+            summary_id=int(r["summary_id"]),
+            conversation_id=conversation_id,
+            chunk_idx=int(r["chunk_idx"]),
+            summary=str(r["summary"]),
+            block_ids=tuple(blocks_by_summary.get(int(r["summary_id"]), ())),
+            created_at=str(r["created_at"]),
+        )
+        for r in rows
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -491,7 +594,7 @@ def merge_conversation_doc(
       update the live tail in-place (kind must be ``assistant_intermediate``).
     - If the doc has *fewer* segments, treat it as transient pane noise: ignore.
 
-    Also updates the ``conversations`` row with the latest harness/state/condensed.
+    Also updates the ``conversations`` row with the latest harness/state.
 
     Returns the effective block list after merging.
     """
@@ -505,7 +608,6 @@ def merge_conversation_doc(
         agent_id=_get_agent_id(conn, conversation_id),
         harness=doc.get("harness"),
         live_state=doc.get("state"),
-        condensed=doc.get("condensed"),
     )
 
     stored = read_conversation_blocks(conn, conversation_id)
@@ -818,7 +920,6 @@ def project_parsed_doc_with_changes(
         agent_id=agent_id,
         harness=doc.get("harness"),
         live_state=doc.get("state"),
-        condensed=doc.get("condensed"),
     )
     _blocks, changes = merge_non_user_segments_with_changes(
         conn,

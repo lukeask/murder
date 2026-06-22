@@ -31,6 +31,10 @@ import type { LlmEnvWire, LlmWire, StartupRogueWire } from './settingsActions.js
  * here so the slice does not depend on the input layer — the bridge couples them). */
 export type SettingsModifier = 'alt' | 'ctrl' | 'both';
 
+/** The settable default chat view mode (TUIchat-3). `tmux` is intentionally NOT settable as a default
+ * — it is reachable only via the per-pane cycle key. Mirrors the wire `default_chat_view_mode`. */
+export type DefaultChatViewMode = 'verbose' | 'condensed';
+
 /**
  * The settings slice state. `theme`/`modifier`/`keyOverrides` are the persisted preferences;
  * `status` makes the initial `settings.get` lifecycle explicit (so a view can tell "not loaded yet"
@@ -53,6 +57,11 @@ export interface SettingsState {
   readonly paneGap: number;
   /** Whether vim-style editing is enabled in the chat input. Mirrors the wire `vim_mode`. */
   readonly vimMode: boolean;
+  /** The default chat view mode for panes with no per-pane override (TUIchat-3). A pane's effective
+   * mode = `conversations.paneViewModes[agentId] ?? defaultChatViewMode`. Only `verbose`/`condensed`
+   * are settable here; `tmux` is reachable only via the cycle key. Mirrors the wire
+   * `default_chat_view_mode`. */
+  readonly defaultChatViewMode: DefaultChatViewMode;
   /** The Startup Rogue auto-spawned on boot, or `null` when none is configured. Mirrors the wire
    * `startup_rogue`. */
   readonly startupRogue: StartupRogueWire | null;
@@ -86,6 +95,7 @@ export const initialSettingsState: SettingsState = {
   keyOverrides: {},
   paneGap: 0,
   vimMode: false,
+  defaultChatViewMode: 'verbose',
   startupRogue: null,
   collaboratorHarness: null,
   crowHarnesses: null,

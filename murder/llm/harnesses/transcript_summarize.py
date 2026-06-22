@@ -92,7 +92,13 @@ def build_summary_prompt(
     state: str,
     prior_condensed: str | None = None,
 ) -> SummaryPrompt:
-    """Build the deterministic prompt from typed segments and transcript state."""
+    """Build the deterministic prompt from typed segments and transcript state.
+
+    Tool-call segments are reduced to a short *descriptor* (title + an
+    "edited file X"/"ran Y" verb + status) — never the full ``input``/``result``
+    payloads — so the chunk summary stays cheap and the model is never tempted to
+    quote raw command output.
+    """
 
     system = load_prompt("transcript_summary")
     payload = {
@@ -101,12 +107,47 @@ def build_summary_prompt(
         "segments": [_segment_for_prompt(segment) for segment in segments],
     }
     user = (
-        "Update the condensed transcript line from this typed transcript payload.\n"
-        "The segments are ordered oldest to newest; weight the newest final, plan_update, "
-        "and tool_call activity most heavily.\n\n"
+        "Summarize this chunk of intermediate transcript activity into one or two "
+        "plain sentences.\n"
+        "The segments are ordered oldest to newest; weight the newest plan_update and "
+        "tool_call activity most heavily. Tool calls are given as descriptors, not raw "
+        "payloads.\n\n"
         f"{json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True)}"
     )
     return SummaryPrompt(system=system, user=user)
+
+
+def tool_call_descriptor(segment: Segment) -> str:
+    """Reduce a ``tool_call`` segment to a compact human descriptor string.
+
+    Spec: title + an "edited file X"/"ran Y" verb + a status. The full
+    ``input``/``result`` payloads are intentionally dropped — only enough to
+    say *what happened*, not the payload itself. Deterministic for a given
+    segment so chunk hashing/dedup stays stable.
+    """
+
+    title = str(segment.get("title") or "").strip()
+    lowered = title.lower()
+    verb = ""
+    # Cheap intent classification from the title verb. Bias toward "ran".
+    if any(lowered.startswith(p) for p in ("edit", "write", "apply", "patch", "update file")):
+        verb = "edited"
+    elif lowered.startswith("read") or lowered.startswith("view") or lowered.startswith("cat"):
+        verb = "read"
+    elif lowered.startswith("search") or lowered.startswith("grep") or lowered.startswith("find"):
+        verb = "searched"
+    else:
+        verb = "ran"
+
+    if segment.get("running"):
+        status = "running"
+    elif segment.get("elided"):
+        status = "no result captured"
+    else:
+        status = "completed"
+
+    descriptor = f"{verb} {title}".strip() if title else verb
+    return f"{descriptor} ({status})"
 
 
 async def summarize_segments(
@@ -128,6 +169,43 @@ async def summarize_segments(
     )
     summary = await selected_provider.summarize(prompt)
     return summary or prior_condensed
+
+
+async def summarize_chunk(
+    *,
+    segments: Sequence[Segment],
+    state: str = "working",
+    provider: SummaryProvider | None = None,
+) -> str | None:
+    """Summarize one *chunk* of intermediate segments into a condensed line.
+
+    Contract for the rolling chunked summarizer:
+
+    - **Final replies are never summarized.** Any ``phase == "final"`` assistant
+      segment is dropped from the chunk before prompting (it is rendered verbatim
+      by the view). A chunk that is *only* a final reply yields ``None``.
+    - **Empty-summary guard (latent-bug fix).** A chunk has no prior summary to
+      fall back to, so an empty/blank provider response degrades to ``None``
+      (the view falls back to Verbose) rather than masquerading as a real
+      summary. This is the fix for the reasoning-model empty-output bug where an
+      empty string silently became a "successful" summary.
+    """
+
+    intermediate = [s for s in segments if not is_final_segment(s)]
+    if not intermediate:
+        return None
+
+    selected_provider = provider if provider is not None else build_default_summary_provider()
+    if selected_provider is None:
+        return None
+    prompt = build_summary_prompt(
+        segments=intermediate,
+        state=state,
+        prior_condensed=None,
+    )
+    summary = await selected_provider.summarize(prompt)
+    # Empty-summary guard: blank → None (degrade to Verbose), not a fake summary.
+    return summary.strip() if isinstance(summary, str) and summary.strip() else None
 
 
 async def summarize_transcript(
@@ -177,13 +255,22 @@ def _optional_str(value: Any) -> str | None:
     return None
 
 
+def is_final_segment(segment: Segment) -> bool:
+    """True for the verbatim final assistant reply (never summarized)."""
+    return (
+        str(segment.get("type", "")) == "assistant"
+        and str(segment.get("phase", "")) == "final"
+    )
+
+
 def _segment_for_prompt(segment: Segment) -> dict[str, Any]:
     segment_type = str(segment.get("type", ""))
     wanted: tuple[str, ...]
     if segment_type == "assistant":
         wanted = ("type", "phase", "text", "elapsed")
     elif segment_type == "tool_call":
-        wanted = ("type", "title", "input", "result", "elided", "running")
+        # Descriptor only — strip input/result payloads to a compact string.
+        return {"type": "tool_call", "descriptor": tool_call_descriptor(segment)}
     elif segment_type == "plan_update":
         wanted = ("type", "title", "items")
     elif segment_type == "agent_event":
@@ -210,7 +297,10 @@ __all__ = [
     "SummaryProvider",
     "build_default_summary_provider",
     "build_summary_prompt",
+    "is_final_segment",
+    "summarize_chunk",
     "summarize_doc",
     "summarize_segments",
     "summarize_transcript",
+    "tool_call_descriptor",
 ]

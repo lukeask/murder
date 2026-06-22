@@ -312,12 +312,14 @@ export const TransitPanel = memo(function TransitPanel({
   const focused = useEffectiveFocus() === PANEL_ID;
   useMeasureFocus(PANEL_ID, ref);
 
-  // Refresh on mount/focus, mirroring history's pull-on-mount.
+  // Fetch on first open. The Rail only mounts a panel while it is visible, so this effect runs
+  // exactly when the user opens the Git Tree (ctrl+8) — the lazy fetch that replaces the (removed)
+  // eager startup prime. It moves the slice off `idle` so the gated invalidation entry in store.ts
+  // keeps it live thereafter. `refresh` is a stable store action, so the effect runs once on mount.
+  // The body renders `loading…` until the lanes arrive.
   useEffect(() => {
-    if (focused) {
-      void refresh();
-    }
-  }, [focused, refresh]);
+    void refresh();
+  }, [refresh]);
 
   // Seed the cursor onto the first lane's HEAD once lanes are available and nothing is selected.
   useEffect(() => {
@@ -434,7 +436,12 @@ export const TransitPanel = memo(function TransitPanel({
       // `hidden`: these are mechanical sub-steps of the `g`-jump gesture (the per-lane label keys),
       // matchable but never hinted — otherwise all 36 a–z/0–9 chords flood the footer. Same treatment
       // as the go-to-line digits (keymap.ts); the live affordance is the single `jump (g)` hint.
-      charEntries.push({ chord: { input: ch }, intent: `char:${ch}`, description: '', hidden: true });
+      charEntries.push({
+        chord: { input: ch },
+        intent: `char:${ch}`,
+        description: '',
+        hidden: true,
+      });
     }
     return {
       keymap: [

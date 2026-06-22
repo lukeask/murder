@@ -163,6 +163,9 @@ describe('event-driven slice invalidation', () => {
         { name: 'child', char_count: 5, updated_at: '2026-06-02T00:00:00', parent: 'parent' },
       ],
     });
+    // Plans is a LAZY slice: its invalidation is gated on `status !== 'idle'`. Open it first (the
+    // panel's mount-effect equivalent) so the snapshot re-pulls; while idle the snapshot is suppressed.
+    await store.getState().actions.plans.refresh();
 
     fake.emit(snapshot('plan'));
     await flush();
@@ -185,6 +188,7 @@ describe('event-driven slice invalidation', () => {
           item_id: 'collaborator:0',
           text: 'fix the empty pane case',
           target: 'collaborator',
+          conversation_id: 'conv-collaborator',
           ts: '2026-06-10T00:00:00',
           status: 'open',
           harness: null,
@@ -193,6 +197,8 @@ describe('event-driven slice invalidation', () => {
         },
       ],
     });
+    // History is a LAZY slice: gated on `status !== 'idle'`. Open it first so the snapshot re-pulls.
+    await store.getState().actions.history.refresh();
 
     fake.emit(snapshot('history'));
     await flush();
@@ -204,6 +210,51 @@ describe('event-driven slice invalidation', () => {
     expect(history.rows[0]?.itemId).toBe('collaborator:0');
     expect(history.rows[0]?.text).toBe('fix the empty pane case');
     expect(history.rows[0]?.status).toBe('open');
+  });
+
+  it('does NOT fetch a LAZY slice (transit/plans/notes/reports/history) on its snapshot while idle', async () => {
+    // Startup-latency fix: the lazy panels are closed on boot, so their invalidation entry is gated on
+    // `status !== 'idle'`. A `state.snapshot` arriving before the panel is ever opened must NOT issue
+    // the (often heavy — transit is ~110KB) read RPC. The slice stays idle and no RPC is recorded.
+    const { fake, store } = setup();
+    fake.stubRpc('state.transit_snapshot', {
+      lanes: [],
+      generated_at_epoch: 0,
+      invalidation_key: 'iv',
+    });
+    fake.stubRpc('state.plans_snapshot', { invalidation_key: 'iv', plans: [] });
+
+    fake.emit(snapshot('transit'));
+    fake.emit(snapshot('plan'));
+    await flush();
+
+    expect(store.getState().transit.status).toBe('idle');
+    expect(store.getState().plans.status).toBe('idle');
+    expect(fake.rpcCalls).not.toContainEqual({ method: 'state.transit_snapshot', params: {} });
+    expect(fake.rpcCalls).not.toContainEqual({ method: 'state.plans_snapshot', params: {} });
+  });
+
+  it('a LAZY slice opened once (status off idle) then re-pulls on its snapshot', async () => {
+    // The complement of the gate: once the panel has been opened (its mount-effect ran one refresh,
+    // moving the slice off idle), subsequent snapshots DO re-pull it — it is live like any eager slice.
+    const { fake, store } = setup();
+    fake.stubRpc('state.transit_snapshot', {
+      lanes: [],
+      generated_at_epoch: 0,
+      invalidation_key: 'iv',
+    });
+
+    // Open the panel (mount-effect equivalent): one refresh moves transit off idle.
+    await store.getState().actions.transit.refresh();
+    expect(store.getState().transit.status).toBe('ready');
+    const callsAfterOpen = fake.rpcCalls.length;
+
+    fake.emit(snapshot('transit'));
+    await flush();
+
+    // The snapshot now re-pulls (one more transit_snapshot RPC than right after opening).
+    expect(fake.rpcCalls.length).toBe(callsAfterOpen + 1);
+    expect(fake.rpcCalls).toContainEqual({ method: 'state.transit_snapshot', params: {} });
   });
 
   it('re-pulls the roster on an `escalation` state.snapshot (escalation counts are JOINed in the crow snapshot)', async () => {
@@ -360,6 +411,8 @@ describe('C6 — notes slice invalidation', () => {
     fake.stubRpc('state.notes_snapshot', notesReply());
     const { store } = createAppStore(fake);
     expect(store.getState().notes.status).toBe('idle');
+    // Notes is a LAZY slice: gated on `status !== 'idle'`. Open it first so the snapshot re-pulls.
+    await store.getState().actions.notes.refresh();
 
     fake.emit(snapshot('note'));
     await flush();
@@ -376,6 +429,8 @@ describe('C6 — notes slice invalidation', () => {
     fake.stubRpc('state.notes_snapshot', notesReply());
     fake.stubRpc('state.reports_snapshot', reportsReply());
     const { store } = createAppStore(fake);
+    // Open the lazy notes slice (mount-effect equivalent) so its `note` snapshot re-pulls.
+    await store.getState().actions.notes.refresh();
     const rosterBefore = store.getState().roster;
     const reportsBefore = store.getState().reports;
 
@@ -395,6 +450,8 @@ describe('C6 — reports slice invalidation', () => {
     fake.stubRpc('state.reports_snapshot', reportsReply());
     const { store } = createAppStore(fake);
     expect(store.getState().reports.status).toBe('idle');
+    // Reports is a LAZY slice: gated on `status !== 'idle'`. Open it first so the snapshot re-pulls.
+    await store.getState().actions.reports.refresh();
 
     fake.emit(snapshot('report'));
     await flush();
@@ -411,6 +468,8 @@ describe('C6 — reports slice invalidation', () => {
     fake.stubRpc('state.notes_snapshot', notesReply());
     fake.stubRpc('state.reports_snapshot', reportsReply());
     const { store } = createAppStore(fake);
+    // Open the lazy reports slice (mount-effect equivalent) so its `report` snapshot re-pulls.
+    await store.getState().actions.reports.refresh();
     const rosterBefore = store.getState().roster;
     const notesBefore = store.getState().notes;
 
@@ -625,7 +684,7 @@ describe('boot-priming — slice refresh actions exist for all primed domains', 
           model: 'claude-sonnet-4-6',
           harness_session_id: null,
           live_state: null,
-          condensed: null,
+          chunk_summaries: [],
           status: 'in_progress',
           blocks: [
             {
@@ -668,7 +727,7 @@ describe('boot-priming — slice refresh actions exist for all primed domains', 
           model: null,
           harness_session_id: null,
           live_state: null,
-          condensed: null,
+          chunk_summaries: [],
           status: 'in_progress',
           blocks: [
             {
@@ -778,7 +837,7 @@ describe('first-run UX — backend error events surface as toasts', () => {
     toastStore.getState().clear();
   });
 
-  it('routes a bus `error` event to the toast rack with error severity', () => {
+  it('routes a NON-recoverable bus `error` event to the toast rack with error severity', () => {
     const { fake, dispose } = setup();
     fake.emit({
       type: 'error',
@@ -787,12 +846,31 @@ describe('first-run UX — backend error events surface as toasts', () => {
       run_id: 'run-1',
       agent_id: 'a-1',
       message: 'worker exploded',
-      recoverable: true,
+      recoverable: false,
     });
     const live = selectLiveToasts(toastStore.getState().toasts, Date.now());
     expect(live).toHaveLength(1);
     expect(live[0]?.text).toBe('worker exploded');
     expect(live[0]?.severity).toBe('error');
+    dispose();
+  });
+
+  it('maps a RECOVERABLE bus `error` event to a warning toast (severity gradient)', () => {
+    const { fake, dispose } = setup();
+    fake.emit({
+      type: 'error',
+      id: 'evt-err-recoverable',
+      ts: '2026-06-12T00:00:00Z',
+      run_id: 'run-1',
+      agent_id: 'a-1',
+      message: 'planner missed in poll',
+      recoverable: true,
+    });
+    const live = selectLiveToasts(toastStore.getState().toasts, Date.now());
+    expect(live).toHaveLength(1);
+    expect(live[0]?.text).toBe('planner missed in poll');
+    // recoverable → warning (dim/amber), NOT error red — transient boot noise reads differently.
+    expect(live[0]?.severity).toBe('warning');
     dispose();
   });
 

@@ -78,6 +78,43 @@ describe('createRefreshAction — shared list-slice mechanics', () => {
     expect(store.getState().roster.error).toBe('bus down');
   });
 
+  it('coalesces a synchronous burst of refresh() into exactly ONE rpc', async () => {
+    // A cold-start `state.snapshot` storm can fire refresh() once per ticket (~130x). The microtask
+    // deferral lets the whole synchronous burst bump `seq` to its final value before any RPC fires,
+    // so every stale token short-circuits BEFORE hitting the wire — only the last call issues an RPC.
+    const fake = new FakeBusClient();
+    fake.stubRpc('state.crow_snapshot', crowReply());
+    const { store } = createAppStore(fake);
+    const refresh = store.getState().actions.roster.refresh;
+
+    // Fire a synchronous burst (no awaits between calls) — the realistic invalidation-storm shape.
+    const pending = Promise.all([refresh(), refresh(), refresh(), refresh(), refresh()]);
+    await pending;
+    await flush();
+
+    expect(fake.rpcCalls).toEqual([{ method: 'state.crow_snapshot', params: {} }]);
+    // The surviving (latest) call still runs to completion — the slice is not stranded in `loading`.
+    expect(store.getState().roster.status).toBe('ready');
+    expect(store.getState().roster.rows).toHaveLength(1);
+  });
+
+  it('a stale (superseded) refresh still flashes loading before short-circuiting', async () => {
+    // The early token check is AFTER the loading setState, so a burst still shows loading — only the
+    // RPC is skipped for stale tokens. Verify the loading flag is set synchronously by the burst.
+    const fake = new FakeBusClient();
+    fake.stubRpc('state.crow_snapshot', crowReply());
+    const { store } = createAppStore(fake);
+    const refresh = store.getState().actions.roster.refresh;
+
+    const pending = Promise.all([refresh(), refresh()]);
+    // Before the microtask resolves, the slice is already loading (loading setState ran synchronously
+    // for every burst call, ahead of the deferred RPC).
+    expect(store.getState().roster.status).toBe('loading');
+    await pending;
+    await flush();
+    expect(store.getState().roster.status).toBe('ready');
+  });
+
   it('marks the slice loading before the rpc resolves', async () => {
     let resolveReply: (r: CrowSnapshotReply) => void = () => {};
     const fake = new FakeBusClient();

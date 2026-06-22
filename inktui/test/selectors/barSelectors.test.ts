@@ -125,14 +125,16 @@ describe('selectBottomBar', () => {
       'panels',
       'nav',
       'chat',
-      'tmux',
+      // TUIchat-3: the old 'tmux' (`y`) global is now the chat-view cycle ('view', on `t`); newTicket
+      // lost its global chord/scope, so 'new ticket' no longer appears.
+      'view',
       'new plan',
-      'new ticket',
       'settings',
       'note',
     ]) {
       expect(descriptions).toContain(d);
     }
+    expect(descriptions).not.toContain('new ticket');
     // …but NOT the chat-only super-chords, the chat-or-stage spawn, nor the Stage-only close-pane.
     expect(descriptions).not.toContain('prev target');
     expect(descriptions).not.toContain('spawn');

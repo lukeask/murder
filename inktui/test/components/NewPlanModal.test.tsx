@@ -35,13 +35,16 @@ async function tick(): Promise<void> {
 function RootInput({
   newPlan,
   newTicket,
+  cycleChatView,
 }: {
   readonly newPlan?: () => void;
   readonly newTicket?: () => void;
+  readonly cycleChatView?: () => void;
 }): null {
   const deferred = {
     ...(newPlan !== undefined ? { newPlan } : {}),
     ...(newTicket !== undefined ? { newTicket } : {}),
+    ...(cycleChatView !== undefined ? { cycleChatView } : {}),
   };
   useRootInput(deferred);
   return null;
@@ -52,14 +55,17 @@ function Harness({
   stores,
   newPlan,
   newTicket,
+  cycleChatView,
 }: {
   readonly stores: ReturnType<typeof createInputStores>;
   readonly newPlan?: () => void;
   readonly newTicket?: () => void;
+  readonly cycleChatView?: () => void;
 }): JSX.Element {
   const rootProps = {
     ...(newPlan !== undefined ? { newPlan } : {}),
     ...(newTicket !== undefined ? { newTicket } : {}),
+    ...(cycleChatView !== undefined ? { cycleChatView } : {}),
   };
   return (
     <InputStoresProvider value={stores}>
@@ -240,15 +246,19 @@ describe('global chords — alt+p and alt+t', () => {
     expect(newPlanFn).toHaveBeenCalledOnce();
   });
 
-  it('alt+t fires the newTicket handler', async () => {
+  it('alt+t fires cycleChatView, NOT newTicket (TUIchat-3 rebind)', async () => {
     const stores = createInputStores(['tickets'], 'tickets');
     const newTicketFn = vi.fn();
-    const { stdin } = render(<Harness stores={stores} newTicket={newTicketFn} />);
+    const cycleChatViewFn = vi.fn();
+    const { stdin } = render(
+      <Harness stores={stores} newTicket={newTicketFn} cycleChatView={cycleChatViewFn} />,
+    );
     await tick();
 
-    stdin.write('\x1bt'); // alt+t
+    stdin.write('\x1bt'); // alt+t — now the chat-view cycle, no longer new-ticket
     await tick();
-    expect(newTicketFn).toHaveBeenCalledOnce();
+    expect(cycleChatViewFn).toHaveBeenCalledOnce();
+    expect(newTicketFn).not.toHaveBeenCalled();
   });
 
   it('alt+p does NOT fire while the new-plan modal is up (exclusive capture)', async () => {

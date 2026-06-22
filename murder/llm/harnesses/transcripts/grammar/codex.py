@@ -75,12 +75,20 @@ def _codex_starts_block(lines: list[str], index: int) -> bool:
     )
 
 
+def _dedent_codex(line: str) -> str:
+    # Codex gutter-indents wrapped continuation lines by 2 spaces; strip that
+    # gutter so soft-wrapped prose classifies as prose (and de-wraps) rather than
+    # reading as a uniformly-indented preformatted block.
+    if line.startswith("  "):
+        return line[2:].rstrip()
+    return line.rstrip()
+
+
 def _reflow_codex_prose(lines: list[str]) -> str:
     return reflow_paragraphs(
         lines,
-        dedent=lambda line: line.rstrip(),
+        dedent=_dedent_codex,
         preserve_prefixes=("- ", "└", "│", "├", "┌", "┘", "✔", "□"),
-        preserve_strip=True,
         post=normalize_codex_text,
     )
 

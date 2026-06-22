@@ -286,7 +286,38 @@ class CompletionCoordinator:
         if self._rt.db is None:
             return
         status = get_ticket_status(self._rt.db, ticket_id)
-        if status == TicketStatus.READY.value:
+        if status == TicketStatus.DONE.value:
+            # Already done — completion is idempotent. A reattach that re-reads a
+            # `>>> DONE` from scrollback must not re-fire the transition (and the
+            # event/snapshot) against an already-terminal ticket.
+            return
+        # Normalize-then-complete: DONE is only reachable from IN_PROGRESS, but a
+        # reattach can observe `>>> DONE` against a ticket still in READY (or,
+        # transiently, PLANNED). Walk it up to IN_PROGRESS first rather than
+        # attempting an invalid raw READY/PLANNED → DONE jump. Terminal-but-not-
+        # done states (archived/failed) are not promotable; skip completion for
+        # them instead of raising InvalidTransition.
+        if status not in (
+            TicketStatus.READY.value,
+            TicketStatus.IN_PROGRESS.value,
+            TicketStatus.BLOCKED.value,
+            TicketStatus.PLANNED.value,
+        ):
+            LOGGER.warning(
+                "completion: ticket %s is %s — not promotable to done, skipping",
+                ticket_id,
+                status,
+            )
+            return
+        if status == TicketStatus.PLANNED.value:
+            lifecycle.transition(
+                self._rt.db,
+                ticket_id,
+                TicketStatus.READY,
+                reason="completion",
+            )
+            status = TicketStatus.READY.value
+        if status in (TicketStatus.READY.value, TicketStatus.BLOCKED.value):
             lifecycle.transition(
                 self._rt.db,
                 ticket_id,

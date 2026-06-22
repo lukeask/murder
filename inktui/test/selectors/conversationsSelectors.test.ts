@@ -11,16 +11,22 @@
 import { describe, expect, it } from 'vitest';
 import { deriveAgentIdentity } from '../../src/selectors/agentIdentity.js';
 import {
+  condenseBlocks,
   isChatPaneOpen,
   selectActiveAgentId,
   selectConversationTurns,
+  selectConversationView,
   selectAdjacentTargets,
   selectCycledTarget,
   selectCycleTargets,
   selectFavoritesChatPanes,
   selectOpenChatPanes,
 } from '../../src/selectors/conversationsSelectors.js';
-import type { ConversationBlock } from '../../src/store/conversations/conversationsSlice.js';
+import type {
+  ChunkSummary,
+  ConversationBlock,
+  ConversationsState,
+} from '../../src/store/conversations/conversationsSlice.js';
 import { initialConversationsState } from '../../src/store/conversations/conversationsSlice.js';
 import type { FavoritesState } from '../../src/store/favorites/favoritesSlice.js';
 import { initialFavoritesState } from '../../src/store/favorites/favoritesSlice.js';
@@ -436,5 +442,126 @@ describe('chat-target cycling (item 9)', () => {
     );
     expect(prev).toBeNull();
     expect(next).toBeNull();
+  });
+});
+
+// ── Condensed view (TUIchat-4): attribution-driven block replacement ────────────────────────────────
+
+function summary(
+  summaryId: number,
+  chunkIdx: number,
+  summaryText: string,
+  blockIds: number[],
+): ChunkSummary {
+  return { summaryId, chunkIdx, summary: summaryText, blockIds };
+}
+
+/** Build a ConversationsState with one agent's transcript + chunk summaries for condensed tests. */
+function condensedState(
+  agentId: string,
+  blocks: readonly ConversationBlock[],
+  summaries: readonly ChunkSummary[],
+): ConversationsState {
+  return {
+    ...initialConversationsState,
+    transcripts: { [agentId]: blocks },
+    chunkSummaries: { [agentId]: summaries },
+  };
+}
+
+describe('condenseBlocks (TUIchat-4 attribution)', () => {
+  it('replaces the run of attributed blocks with a single summary block', () => {
+    const blocks = [
+      block('assistant', { text: 'thinking step 1' }, '1'),
+      block('tool_call', { title: 'Read foo.ts' }, '2'),
+      block('assistant', { text: 'thinking step 2' }, '3'),
+    ];
+    const out = condenseBlocks(blocks, [summary(10, 0, 'Investigated foo.ts', [1, 2, 3])]);
+    expect(out).toHaveLength(1);
+    expect(out?.[0]?.type).toBe('__condensed_summary__');
+    expect(out?.[0]?.raw['text']).toBe('Investigated foo.ts');
+  });
+
+  it('attribution is by block id, not position — only listed ids are replaced', () => {
+    const blocks = [
+      block('assistant', { text: 'covered A' }, '1'),
+      block('assistant', { text: 'UNCOVERED tail' }, '2'),
+      block('assistant', { text: 'covered B' }, '3'),
+    ];
+    // Summary covers ids 1 and 3 only; id 2 is the still-buffering tail and renders as-is.
+    const out = condenseBlocks(blocks, [summary(10, 0, 'A-and-B summary', [1, 3])]);
+    // The summary anchors at the earliest covered position (id 1), then id 2 verbatim. id 3 dropped.
+    const turns = selectConversationTurns(out);
+    expect(turns.map((t) => t.text)).toEqual(['A-and-B summary', 'UNCOVERED tail']);
+  });
+
+  it('orders summaries by their attributed block positions (chunk order preserved)', () => {
+    const blocks = [
+      block('assistant', { text: 'i1' }, '1'),
+      block('assistant', { text: 'i2' }, '2'),
+      block('assistant', { text: 'i3' }, '3'),
+      block('assistant', { text: 'i4' }, '4'),
+    ];
+    const out = condenseBlocks(blocks, [
+      summary(20, 0, 'first chunk', [1, 2]),
+      summary(21, 1, 'second chunk', [3, 4]),
+    ]);
+    const turns = selectConversationTurns(out);
+    expect(turns.map((t) => t.text)).toEqual(['first chunk', 'second chunk']);
+  });
+
+  it('NEVER replaces the final reply — assistant_final is unattributed and stays verbatim', () => {
+    const blocks = [
+      block('assistant', { text: 'intermediate work' }, '1'),
+      block('assistant', { text: 'THE FINAL ANSWER' }, '2'), // never in any block_ids
+    ];
+    const out = condenseBlocks(blocks, [summary(10, 0, 'did some work', [1])]);
+    const turns = selectConversationTurns(out);
+    expect(turns.map((t) => t.text)).toEqual(['did some work', 'THE FINAL ANSWER']);
+  });
+
+  it('falls back to verbose-like (returns blocks unchanged) when there are no summaries', () => {
+    const blocks = [block('assistant', { text: 'a' }, '1'), block('assistant', { text: 'b' }, '2')];
+    expect(condenseBlocks(blocks, [])).toBe(blocks);
+    expect(condenseBlocks(blocks, undefined)).toBe(blocks);
+  });
+
+  it('keeps blocks with no matching summary id (graceful, never blank)', () => {
+    const blocks = [block('assistant', { text: 'orphan' }, '99')];
+    // Summary references ids that aren't present → nothing is replaced, content survives.
+    const out = condenseBlocks(blocks, [summary(10, 0, 'unrelated', [1, 2])]);
+    expect(selectConversationTurns(out).map((t) => t.text)).toEqual(['orphan']);
+  });
+});
+
+describe('selectConversationView view modes (TUIchat-4)', () => {
+  const blocks = [
+    block('assistant', { text: 'step one' }, '1'),
+    block('tool_call', { title: 'Edit x' }, '2'),
+    block('assistant', { text: 'FINAL' }, '3'),
+  ];
+  const summaries = [summary(10, 0, 'condensed work', [1, 2])];
+
+  it('condensed mode replaces attributed blocks with the summary', () => {
+    const state = condensedState('a-1', blocks, summaries);
+    const view = selectConversationView('a-1', state, 'condensed');
+    expect(view.turns.map((t) => t.text)).toEqual(['condensed work', 'FINAL']);
+    expect(view.hasContent).toBe(true);
+  });
+
+  it('verbose mode is byte-identical to the default (no summary applied)', () => {
+    const state = condensedState('a-1', blocks, summaries);
+    const verbose = selectConversationView('a-1', state, 'verbose');
+    const dflt = selectConversationView('a-1', state);
+    expect(verbose.turns).toEqual(dflt.turns);
+    // Verbose shows every intermediate verbatim — the summary text never appears.
+    expect(verbose.turns.map((t) => t.text)).toEqual(['step one', 'Edit x', 'FINAL']);
+  });
+
+  it('condensed with no summaries degrades to the verbose render', () => {
+    const state = condensedState('a-1', blocks, []);
+    const condensed = selectConversationView('a-1', state, 'condensed');
+    const verbose = selectConversationView('a-1', state, 'verbose');
+    expect(condensed.turns).toEqual(verbose.turns);
   });
 });

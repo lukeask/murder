@@ -57,9 +57,8 @@ export function inFocusScope(scope: FocusScope, focused: FocusId): boolean {
 export const GLOBAL_SCOPE = {
   'global.focusChat': 'always',
   'global.spawn': 'chat-or-stage',
-  'global.tmux': 'always',
+  'global.cycleChatView': 'always',
   'global.newPlan': 'always',
-  'global.newTicket': 'always',
   'global.settings': 'always',
   'global.quickNote': 'always',
   'global.keyHelp': 'not-chat',

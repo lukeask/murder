@@ -72,7 +72,9 @@ function Harness({
       openHelp: () => {},
       captureNote: () => {},
       saveTemplate: () => {},
+      setPaneViewMode: () => {},
       pushToast: () => 0,
+      clearToasts: () => {},
     };
     useRootInput({
       ...(spawn !== undefined ? { spawn } : {}),

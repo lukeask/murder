@@ -14,8 +14,10 @@ interface FakeCtx {
   openHelp: Mock;
   captureNote: Mock;
   pushToast: Mock;
+  clearToasts: Mock;
   clearTranscript: Mock;
   saveTemplate: Mock;
+  setPaneViewMode: Mock;
   dismiss?: Mock;
 }
 
@@ -27,8 +29,10 @@ function makeCtx(withDismiss = false): FakeCtx {
     openHelp: vi.fn(),
     captureNote: vi.fn(),
     pushToast: vi.fn(),
+    clearToasts: vi.fn(),
     clearTranscript: vi.fn(),
     saveTemplate: vi.fn(),
+    setPaneViewMode: vi.fn(),
   };
   if (withDismiss) {
     base.dismiss = vi.fn();
@@ -94,12 +98,30 @@ describe('dispatchCommand — : commands', () => {
     expect(ctx.pushToast).toHaveBeenCalledTimes(2);
   });
 
-  it(':compact shows the coming-soon stub toast (no send)', () => {
+  it(':compact sets the pane to condensed (TUIchat-3, no send)', () => {
     const ctx = makeCtx();
     const handled = dispatchCommand(':compact', AGENT, ctx);
     expect(handled).toBe(true);
-    expect(ctx.pushToast).toHaveBeenCalledWith(':compact is not yet available', expect.anything());
+    expect(ctx.setPaneViewMode).toHaveBeenCalledWith(AGENT, 'condensed');
     expect(ctx.sendKey).not.toHaveBeenCalled();
+  });
+
+  it(':verbose and :tmux set the pane view mode (TUIchat-3)', () => {
+    const verboseCtx = makeCtx();
+    expect(dispatchCommand(':verbose', AGENT, verboseCtx)).toBe(true);
+    expect(verboseCtx.setPaneViewMode).toHaveBeenCalledWith(AGENT, 'verbose');
+
+    const tmuxCtx = makeCtx();
+    expect(dispatchCommand(':tmux', AGENT, tmuxCtx)).toBe(true);
+    expect(tmuxCtx.setPaneViewMode).toHaveBeenCalledWith(AGENT, 'tmux');
+  });
+
+  it(':compact with no active agent toasts and sets nothing (TUIchat-3)', () => {
+    const ctx = makeCtx();
+    const handled = dispatchCommand(':compact', null, ctx);
+    expect(handled).toBe(true);
+    expect(ctx.setPaneViewMode).not.toHaveBeenCalled();
+    expect(ctx.pushToast).toHaveBeenCalled();
   });
 
   it(':resume points at the history panel r keybind', () => {
@@ -122,6 +144,15 @@ describe('dispatchCommand — : commands', () => {
     const handled = dispatchCommand(':dismiss', AGENT, ctx);
     expect(handled).toBe(true);
     expect(ctx.pushToast).toHaveBeenCalled();
+  });
+
+  it(':dismiss-toasts flushes the toast rack (clearToasts), distinct from :dismiss', () => {
+    const ctx = makeCtx(true);
+    const handled = dispatchCommand(':dismiss-toasts', AGENT, ctx);
+    expect(handled).toBe(true);
+    expect(ctx.clearToasts).toHaveBeenCalledOnce();
+    // It must NOT collide with the panel-dismiss target — the hyphenated word is its own command key.
+    expect(ctx.dismiss).not.toHaveBeenCalled();
   });
 
   it('is case-insensitive on the command word', () => {

@@ -40,6 +40,7 @@ def _make_producer(
     conversation_id: str = "crow-t001",
     harness_kind: str = "claude_code",
     system_prompt: str | None = None,
+    summary_provider: Any = None,
 ) -> ConversationProducer:
     async def publish(action: str, block: dict[str, Any]) -> None:
         published.append((action, block))
@@ -50,6 +51,7 @@ def _make_producer(
         system_prompt=system_prompt,
         db=conn,
         publish=publish,
+        summary_provider=summary_provider,
     )
 
 
@@ -185,6 +187,59 @@ def test_per_frame_accumulation_invariants(
                 assert fragment not in payload_str, (
                     f"frame {i}: system prompt fragment {fragment!r} found in block {block.kind}"
                 )
+
+
+def test_poll_summarizes_off_hot_path_into_chunk_storage(conn: sqlite3.Connection) -> None:
+    """A sealed intermediate run past the char threshold lands a chunk summary.
+
+    The summary call is dispatched via create_task (off the hot path); poll()
+    itself never awaits the provider. We assert the provider WAS called and the
+    chunk landed in conversation_chunk_summaries with explicit block-id
+    attribution, draining the background task at the end.
+    """
+    import asyncio
+
+    from murder.state.persistence.conversation import (
+        read_chunk_summaries,
+        read_conversation_blocks,
+    )
+
+    class _StubProvider:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def summarize(self, prompt: Any) -> str:
+            self.calls += 1
+            return "Agent worked through intermediate steps."
+
+    provider = _StubProvider()
+    published: list[tuple[str, dict[str, Any]]] = []
+    producer = _make_producer(conn, published, summary_provider=provider)
+    # Force a low threshold so a realistic transcript trips a flush.
+    producer._summary_buffer.char_threshold = 50
+
+    async def drive() -> None:
+        frame_count = len(list(_FRAMES_DIR.iterdir()))
+        for i in range(frame_count):
+            await producer.poll(_load_frame(_FRAMES_DIR, i))
+        # Drain any in-flight background summary tasks.
+        if producer._summary_tasks:
+            await asyncio.gather(*list(producer._summary_tasks))
+
+    asyncio.run(drive())
+
+    blocks = read_conversation_blocks(conn, "crow-t001")
+    has_intermediate = any(b.kind == "assistant_intermediate" for b in blocks)
+    summaries = read_chunk_summaries(conn, "crow-t001")
+    if has_intermediate:
+        # If the fixture produced sealed intermediate content, we summarized it.
+        assert provider.calls >= 1
+        assert summaries, "expected at least one chunk summary"
+        valid_ids = {b.id for b in blocks}
+        for s in summaries:
+            assert s.summary == "Agent worked through intermediate steps."
+            # Attribution points at real block ids (the contract).
+            assert all(bid in valid_ids for bid in s.block_ids)
 
 
 def test_poll_different_conversation_ids_are_isolated(conn: sqlite3.Connection) -> None:

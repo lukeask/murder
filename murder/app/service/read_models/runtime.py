@@ -9,6 +9,7 @@ from datetime import datetime
 
 from murder.app.service.client_api import (
     ConversationBlockSummary,
+    ConversationChunkSummary,
     ConversationsSnapshot,
     ConversationSummary,
     CrowSessionSummary,
@@ -118,7 +119,7 @@ class RuntimeReadModel(ReadModelBase):
             conv_rows = conn.execute(
                 """
                 SELECT conversation_id, agent_id, harness, model, harness_session_id,
-                       live_state, condensed, queued_message, status
+                       live_state, queued_message, status
                   FROM conversations
                  WHERE status = 'in_progress'
                  ORDER BY updated_at DESC, conversation_id
@@ -137,6 +138,45 @@ class RuntimeReadModel(ReadModelBase):
                  ORDER BY conversation_id, ordinal
                 """
             ).fetchall()
+            summary_rows = conn.execute(
+                """
+                SELECT conversation_id, summary_id, chunk_idx, summary
+                  FROM conversation_chunk_summaries
+                 WHERE conversation_id IN (
+                       SELECT conversation_id
+                         FROM conversations
+                        WHERE status = 'in_progress'
+                  )
+                 ORDER BY conversation_id, chunk_idx
+                """
+            ).fetchall()
+            summary_block_rows = conn.execute(
+                """
+                SELECT csb.summary_id AS summary_id, csb.block_id AS block_id
+                  FROM chunk_summary_blocks csb
+                  JOIN conversation_chunk_summaries ccs
+                    ON ccs.summary_id = csb.summary_id
+                 WHERE ccs.conversation_id IN (
+                       SELECT conversation_id
+                         FROM conversations
+                        WHERE status = 'in_progress'
+                  )
+                 ORDER BY csb.summary_id, csb.block_id
+                """
+            ).fetchall()
+        block_ids_by_summary: dict[int, list[int]] = defaultdict(list)
+        for row in summary_block_rows:
+            block_ids_by_summary[int(row["summary_id"])].append(int(row["block_id"]))
+        summaries_by_conversation: dict[str, list[ConversationChunkSummary]] = defaultdict(list)
+        for row in summary_rows:
+            summaries_by_conversation[str(row["conversation_id"])].append(
+                ConversationChunkSummary(
+                    summary_id=int(row["summary_id"]),
+                    chunk_idx=int(row["chunk_idx"]),
+                    summary=str(row["summary"]),
+                    block_ids=tuple(block_ids_by_summary.get(int(row["summary_id"]), ())),
+                )
+            )
         blocks_by_conversation: dict[str, list[ConversationBlockSummary]] = defaultdict(list)
         for row in block_rows:
             blocks_by_conversation[str(row["conversation_id"])].append(
@@ -158,7 +198,7 @@ class RuntimeReadModel(ReadModelBase):
                 model=_optional_str(row["model"]),
                 harness_session_id=_optional_str(row["harness_session_id"]),
                 live_state=_optional_str(row["live_state"]),
-                condensed=_optional_str(row["condensed"]),
+                chunk_summaries=tuple(summaries_by_conversation[str(row["conversation_id"])]),
                 queued_message=_optional_str(row["queued_message"]),
                 status=str(row["status"]),
                 blocks=tuple(blocks_by_conversation[str(row["conversation_id"])]),

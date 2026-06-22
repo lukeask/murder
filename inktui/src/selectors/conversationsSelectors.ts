@@ -23,6 +23,8 @@
 
 import { useMemo } from 'react';
 import type {
+  ChatViewMode,
+  ChunkSummary,
   ConversationBlock,
   ConversationMeta,
   ConversationsState,
@@ -117,12 +119,24 @@ function formatBlock(block: ConversationBlock): ChatTurn | null {
   const blockId = block.id ?? null;
 
   switch (block.type) {
+    // TUIchat-2 selector pass-through: the parser (Phase 1) emits a FAITHFUL multi-line `text` (real
+    // newlines, verbatim code/tables, prose de-wrapped). We pass it straight to the renderer — only an
+    // outer `.trim()` (strips leading/trailing blank lines/spaces; internal newlines + alignment are
+    // untouched). NO pre-split / newline normalization here; the Stage's `classifyBlocks` does the
+    // presentation-time grouping, so the multi-line structure must reach it intact.
     case 'user': {
       const text = str(raw, 'text').trim();
       if (!text) return null;
       return { speaker: 'user', text, blockId };
     }
     case 'assistant': {
+      const text = str(raw, 'text').trim();
+      if (!text) return null;
+      return { speaker: 'assistant', text, blockId };
+    }
+    case CONDENSED_SUMMARY_TYPE: {
+      // Synthetic Condensed-view block (TUIchat-4): the rolling chunk summary that stands in for a run
+      // of intermediate blocks. Rendered as assistant-speaker prose through the Phase-2 engine.
       const text = str(raw, 'text').trim();
       if (!text) return null;
       return { speaker: 'assistant', text, blockId };
@@ -218,6 +232,82 @@ function formatBlock(block: ConversationBlock): ChatTurn | null {
 }
 
 // ---------------------------------------------------------------------------
+// Condensed view (TUIchat-4): attribution-driven block replacement
+// ---------------------------------------------------------------------------
+
+/**
+ * The synthetic block `type` for a rolling chunk summary in Condensed view. `formatBlock` renders it
+ * as an `assistant`-speaker turn (the summary is condensed assistant/tool intermediate output), so it
+ * flows through the same Phase-2 renderer as real assistant prose. Distinct from any real wire type so
+ * it can never collide with a parsed segment.
+ */
+const CONDENSED_SUMMARY_TYPE = '__condensed_summary__';
+
+/**
+ * Build the Condensed-view block stream for one agent (TUIchat-4): replace each chunk summary's
+ * attributed run of blocks with a single synthetic summary block, leaving everything else as-is.
+ *
+ * Attribution semantics (TUIchatpaneupgrade Phase 4, Scope-decisions #3):
+ *  - Each `ChunkSummary.blockIds` lists the EXACT block row-ids the `summary` stands in for. We drop
+ *    every block whose id ∈ any summary's blockIds and emit the summary text in its place, anchored at
+ *    the position of the earliest covered block (so summaries land in conversation order — they are
+ *    already ordered by `chunkIdx`, and blocks are in ordinal order).
+ *  - Blocks NOT covered by any summary (the still-buffering tail of intermediates below the char
+ *    threshold) render as-is — Condensed degrades gracefully to verbose-like for them.
+ *  - The FINAL reply (`assistant_final`, surfaced here as a block the backend never attributes to a
+ *    summary) is never in any blockIds, so it always survives verbatim. This function additionally
+ *    NEVER drops a block that isn't explicitly attributed, so even a defensive mis-attribution can't
+ *    swallow the final.
+ *
+ * Pure. When `summaries` is empty (none fired yet / summarizer returned empty) it returns `blocks`
+ * UNCHANGED (same identity) — Condensed shows the intermediates as-is, never blank.
+ *
+ * Block ids are compared as STRINGS: `ConversationBlock.id` is the stringified row id, while
+ * `ChunkSummary.blockIds` are numeric; we stringify the latter to match.
+ */
+export function condenseBlocks(
+  blocks: readonly ConversationBlock[] | undefined,
+  summaries: readonly ChunkSummary[] | undefined,
+): readonly ConversationBlock[] | undefined {
+  if (!blocks || blocks.length === 0) return blocks;
+  if (!summaries || summaries.length === 0) return blocks;
+
+  // Map every covered block id → the summary that owns it (string keys to match ConversationBlock.id).
+  // A block id appearing in two summaries (shouldn't happen — attribution is a partition) resolves to
+  // the LAST writer; harmless since we anchor on first-seen position regardless.
+  const summaryByBlockId = new Map<string, ChunkSummary>();
+  for (const s of summaries) {
+    for (const id of s.blockIds) {
+      summaryByBlockId.set(String(id), s);
+    }
+  }
+  if (summaryByBlockId.size === 0) return blocks;
+
+  const out: ConversationBlock[] = [];
+  const emitted = new Set<ChunkSummary>();
+  for (const block of blocks) {
+    const id = block.id ?? null;
+    const owner = id === null ? undefined : summaryByBlockId.get(id);
+    if (owner === undefined) {
+      // Uncovered block (incl. the never-attributed assistant_final) → verbatim.
+      out.push(block);
+      continue;
+    }
+    // Covered block: emit the owning summary ONCE, at the earliest covered position, then drop the
+    // rest of that run.
+    if (!emitted.has(owner)) {
+      emitted.add(owner);
+      out.push({
+        type: CONDENSED_SUMMARY_TYPE,
+        id: `summary:${owner.summaryId}:${owner.chunkIdx}`,
+        raw: { text: owner.summary },
+      });
+    }
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------------------
 // Pure transforms
 // ---------------------------------------------------------------------------
 
@@ -264,12 +354,20 @@ export function selectConversationTurns(
 export function selectConversationView(
   agentId: string,
   state: ConversationsState,
+  viewMode: ChatViewMode = 'verbose',
 ): ConversationView {
   const floor = state.clearedFloors[agentId];
-  const blocks =
+  const floored =
     floor === undefined
       ? state.transcripts[agentId]
       : aboveFloor(state.transcripts[agentId], floor);
+  // Condensed view (TUIchat-4): replace each chunk summary's attributed run of blocks with the summary
+  // text BEFORE formatting, so the Phase-2 renderer sees a shorter synthetic stream. `assistant_final`
+  // is never attributed → always verbatim. Verbose/tmux paths leave `floored` untouched (byte-identical
+  // to before this change). `tmux` never reaches this selector (the Stage shows the live frame), but if
+  // it did it would render verbose, which is the correct fallback.
+  const blocks =
+    viewMode === 'condensed' ? condenseBlocks(floored, state.chunkSummaries[agentId]) : floored;
   const turns = selectConversationTurns(blocks);
   return { agentId, turns, hasContent: turns.length > 0 };
 }
@@ -447,10 +545,21 @@ const NO_OVERRIDES: ReadonlyMap<string, boolean> = new Map<string, boolean>();
 export function useConversationTurns(
   agentId: string,
   state: ConversationsState,
+  viewMode: ChatViewMode = 'verbose',
 ): readonly ChatTurn[] {
   const blocks = state.transcripts[agentId];
-  // biome-ignore lint/correctness/useExhaustiveDependencies: blocks is the stable ref; agentId is string primitive; both are correct deps
-  return useMemo(() => selectConversationTurns(blocks), [blocks, agentId]);
+  const summaries = state.chunkSummaries[agentId];
+  const floor = state.clearedFloors[agentId];
+  // Memoise on the inputs the view depends on: the transcript ref (changes only on this agent's
+  // applyBlock), the chunk-summaries ref (changes only on this agent's chunk-summary update), the
+  // agentId, the mode, and the /clear floor. Verbose ignores `summaries` but listing it is harmless
+  // (its ref only changes for this agent). Routes through `selectConversationView` so the condensed
+  // attribution-replacement logic lives in exactly one place.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: selectConversationView reads exactly these inputs off `state`; the listed deps are complete and minimal
+  return useMemo(
+    () => selectConversationView(agentId, state, viewMode).turns,
+    [blocks, summaries, agentId, viewMode, floor],
+  );
 }
 
 /**

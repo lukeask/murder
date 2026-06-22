@@ -300,6 +300,23 @@ class Orchestrator:
         row = _db_get_ticket(self.rt.db, ticket_id)
         if row is None:
             raise KeyError(ticket_id)
+        # Double-claim guard: reattach (recovery task) and kickoff_ready both run
+        # at boot. If kickoff has already claimed this ticket — a live crow handler
+        # is registered, or the ticket has already moved out of in_progress — a
+        # second reattach would bind a duplicate CrowAgent against the same pane.
+        # Bail idempotently; the existing handler owns DONE.
+        from murder.state.persistence.tickets import get_ticket_status as _get_ticket_status
+
+        if self.rt.get_crow_handler(ticket_id) is not None:
+            LOGGER.info(
+                "reattach_crow: handler for %s already live — skipping reattach", ticket_id
+            )
+            return
+        if _get_ticket_status(self.rt.db, ticket_id) != TicketStatus.IN_PROGRESS.value:
+            LOGGER.info(
+                "reattach_crow: ticket %s no longer in_progress — skipping reattach", ticket_id
+            )
+            return
         ch = self.harness_cfg.resolve_crow(row)
         harness = self.harness_cfg.adapter(ch)
 
@@ -625,8 +642,37 @@ class Orchestrator:
             # TODO: resumability — if a prior planner session exists with prior
             # transcript, future work will summarize via compact-style summary
             # and seed the new session. For now we always spawn fresh.
+            # Readiness gate: don't hand the handler a session that hasn't
+            # materialized yet. The handler's first capture_pane against a
+            # not-yet-live session is exactly the boot pane-lag that escalates;
+            # wait briefly for the tmux session to exist first. The handler also
+            # carries its own startup grace, so this is best-effort, not a hard
+            # barrier — we proceed after the timeout regardless.
+            await self._await_session_ready(handle.session_name)
             await self.spawn_planning_handler(plan_name, handle.session_name)
             return agent_id
+
+    async def _await_session_ready(
+        self, session_name: str, *, timeout_s: float = 5.0, interval_s: float = 0.25
+    ) -> bool:
+        """Poll until the planner's tmux session exists, or timeout. Best-effort.
+
+        Returns True if the session became live within the window. Never raises —
+        a missing session just means the handler's own startup grace absorbs the
+        remaining lag.
+        """
+        from murder.runtime.terminal import tmux
+
+        deadline = asyncio.get_running_loop().time() + max(0.0, timeout_s)
+        while True:
+            try:
+                if await tmux.session_exists(session_name):
+                    return True
+            except Exception:
+                return False
+            if asyncio.get_running_loop().time() >= deadline:
+                return False
+            await asyncio.sleep(interval_s)
 
     async def _record_user_block(self, agent_id: str, text: str) -> None:
         await self.agent_ops._record_user_block(agent_id, text)

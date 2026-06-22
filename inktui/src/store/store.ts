@@ -66,18 +66,6 @@ import {
   type FavoritesState,
   initialFavoritesState,
 } from './favorites/favoritesSlice.js';
-import { createTemplatesActions, type TemplatesActions } from './templates/templatesActions.js';
-import {
-  createTemplatesSlice,
-  type TemplatesState,
-  initialTemplatesState,
-} from './templates/templatesSlice.js';
-import { createWorkflowsActions, type WorkflowsActions } from './workflows/workflowsActions.js';
-import {
-  createWorkflowsSlice,
-  type WorkflowsState,
-  initialWorkflowsState,
-} from './workflows/workflowsSlice.js';
 import { createHistoryActions, type HistoryActions } from './history/historyActions.js';
 import {
   createHistorySlice,
@@ -120,6 +108,12 @@ import {
   initialSettingsState,
   type SettingsState,
 } from './settings/settingsSlice.js';
+import { createTemplatesActions, type TemplatesActions } from './templates/templatesActions.js';
+import {
+  createTemplatesSlice,
+  initialTemplatesState,
+  type TemplatesState,
+} from './templates/templatesSlice.js';
 import {
   createTicketDetailActions,
   type TicketDetailActions,
@@ -151,6 +145,12 @@ import {
   USAGE_INVALIDATING_ENTITY,
   type UsageState,
 } from './usage/usageSlice.js';
+import { createWorkflowsActions, type WorkflowsActions } from './workflows/workflowsActions.js';
+import {
+  createWorkflowsSlice,
+  initialWorkflowsState,
+  type WorkflowsState,
+} from './workflows/workflowsSlice.js';
 
 /** Every slice's actions, grouped by domain. Components dispatch through here; the bus is reached
  * only via these (rule 3). One key per slice — copy the `roster` line to add a domain. */
@@ -266,15 +266,46 @@ export function createAppStore(bus: BusClient): {
   // 3. Invalidation table: entity → the slice refresh it triggers. Usually one entry per slice, but
   //    a slice may be invalidated by more than one entity (the roster carries JOINed escalation
   //    counts, so both `agent` and `escalation` changes re-pull it).
+  // Lazy slices (plans/notes/reports/history/transit) back panels that are CLOSED on startup. Their
+  // invalidation refresh is GATED on the slice having been fetched at least once (`status !== 'idle'`
+  // — the fresh-store boot value is `idle`). The panel's own mount-effect fires the first fetch when
+  // it is opened, which moves the slice off `idle`; only then do subsequent `state.snapshot` events
+  // re-pull it. This keeps the cold-start `state.snapshot` storm from fetching heavy data for panels
+  // nobody opened (transit alone is ~110KB), while a panel that HAS been opened still stays live.
   const invalidations: readonly SliceInvalidation[] = [
     { entity: ROSTER_INVALIDATING_ENTITY, refresh: () => void actions.roster.refresh() },
     { entity: ROSTER_ESCALATION_INVALIDATING_ENTITY, refresh: () => void actions.roster.refresh() },
-    { entity: PLANS_INVALIDATING_ENTITY, refresh: () => void actions.plans.refresh() },
-    { entity: NOTES_INVALIDATING_ENTITY, refresh: () => void actions.notes.refresh() },
-    { entity: REPORTS_INVALIDATING_ENTITY, refresh: () => void actions.reports.refresh() },
+    {
+      entity: PLANS_INVALIDATING_ENTITY,
+      refresh: () => {
+        if (store.getState().plans.status !== 'idle') void actions.plans.refresh();
+      },
+    },
+    {
+      entity: NOTES_INVALIDATING_ENTITY,
+      refresh: () => {
+        if (store.getState().notes.status !== 'idle') void actions.notes.refresh();
+      },
+    },
+    {
+      entity: REPORTS_INVALIDATING_ENTITY,
+      refresh: () => {
+        if (store.getState().reports.status !== 'idle') void actions.reports.refresh();
+      },
+    },
     { entity: TICKETS_INVALIDATING_ENTITY, refresh: () => void actions.tickets.refresh() },
-    { entity: HISTORY_INVALIDATING_ENTITY, refresh: () => void actions.history.refresh() },
-    { entity: TRANSIT_INVALIDATING_ENTITY, refresh: () => void actions.transit.refresh() },
+    {
+      entity: HISTORY_INVALIDATING_ENTITY,
+      refresh: () => {
+        if (store.getState().history.status !== 'idle') void actions.history.refresh();
+      },
+    },
+    {
+      entity: TRANSIT_INVALIDATING_ENTITY,
+      refresh: () => {
+        if (store.getState().transit.status !== 'idle') void actions.transit.refresh();
+      },
+    },
     { entity: USAGE_INVALIDATING_ENTITY, refresh: () => void actions.usage.refresh() },
   ];
 
@@ -358,7 +389,11 @@ export function createAppStore(bus: BusClient): {
         return;
       }
       const errorEvent: ErrorEvent = event;
-      toastStore.getState().push(errorEvent.message, { severity: 'error', ttlMs: 12000 });
+      // Severity gradient: a `recoverable` error is a transient boot race (planner pane-lag, crow
+      // tick-budget) — it reads as a dim `warning`, not an alarming red. Only a non-recoverable
+      // (fatal) error earns full `error` colour.
+      const severity = errorEvent.recoverable ? 'warning' : 'error';
+      toastStore.getState().push(errorEvent.message, { severity, ttlMs: 12000 });
     },
     { type: 'error' },
   );

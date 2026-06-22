@@ -31,9 +31,11 @@
 
 import { createStore, type StoreApi } from 'zustand/vanilla';
 
-/** Toast urgency. Deliberately minimal — `info` (the silent default) and `error` (the only one that
- * earns colour). Textual's `warning` is unused here, so it is not modelled (keep the union honest). */
-export type ToastSeverity = 'info' | 'error';
+/** Toast urgency. `info` (the silent default, dim whisper), `warning` (dim/amber — a *recoverable*
+ * failure, e.g. a transient boot race), and `error` (red — a real, non-recoverable failure). The
+ * severity gradient (recoverable → warning, fatal → error) lets boot noise read differently from a
+ * genuine break. */
+export type ToastSeverity = 'info' | 'warning' | 'error';
 
 /** Default time-to-live: short and ambient (~5s), so a toast is a glance, not a thing to dismiss. */
 export const DEFAULT_TTL_MS = 5000;
@@ -50,6 +52,10 @@ export interface Toast {
   readonly severity: ToastSeverity;
   /** Absolute `Date.now()`-scale deadline; the toast is live while `now <= expiresAt`. */
   readonly expiresAt: number;
+  /** How many times this same `text`+`severity` toast has been pushed while live. Starts at 1; a
+   * duplicate push bumps this (and resets `expiresAt`) instead of stacking a second identical row, so
+   * a boot flood of the same error reads as `message (×N)` rather than a growing wall. */
+  readonly count: number;
 }
 
 /** Options for {@link ToastState.push}. Both optional: `info` severity, default TTL. */
@@ -104,10 +110,40 @@ export function createToastStore(): ToastStoreApi {
   const store = createStore<ToastState>()((set, get) => ({
     toasts: [],
     push(text, options = {}) {
-      const id = nextId++;
       const ttlMs = options.ttlMs ?? DEFAULT_TTL_MS;
       const severity = options.severity ?? 'info';
-      const toast: Toast = { id, text, severity, expiresAt: Date.now() + ttlMs };
+      const expiresAt = Date.now() + ttlMs;
+
+      // Dedup: if a *live* toast already has this exact `text`+`severity`, bump its deadline and
+      // `count` instead of stacking an identical row. This is what keeps a boot flood of the same
+      // error from growing the rack into a wall — it reads as `message (×N)` and stays one line.
+      const now = Date.now();
+      const existing = get().toasts.find(
+        (t) => t.text === text && t.severity === severity && now <= t.expiresAt,
+      );
+      if (existing !== undefined) {
+        const id = existing.id;
+        set((state) => ({
+          toasts: state.toasts.map((t) =>
+            t.id === id ? { ...t, count: t.count + 1, expiresAt } : t,
+          ),
+        }));
+        // Reschedule the expiry timer to the bumped deadline (cancel the stale one first).
+        const stale = timers.get(id);
+        if (stale !== undefined) {
+          clearTimeout(stale);
+        }
+        const bumped = setTimeout(() => {
+          timers.delete(id);
+          get().dismiss(id);
+        }, ttlMs);
+        bumped.unref?.();
+        timers.set(id, bumped);
+        return id;
+      }
+
+      const id = nextId++;
+      const toast: Toast = { id, text, severity, expiresAt, count: 1 };
       set((state) => ({ toasts: [...state.toasts, toast] }));
       const handle = setTimeout(() => {
         timers.delete(id);

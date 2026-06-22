@@ -101,6 +101,31 @@ export interface ConversationMeta {
   readonly queuedMessage: string | null;
 }
 
+/**
+ * One rolling chunk summary for an agent's Condensed view (TUIchat-4). Mirrors the Python
+ * `ConversationChunkSummary` DTO (`murder/app/service/client_api.py`); `dto_to_wire` preserves the
+ * snake_case field names, so the wire shape is `{summary_id, chunk_idx, summary, block_ids}`.
+ *
+ * Attribution contract (TUIchatpaneupgrade Phase 4, Scope-decisions #3): `summary` stands in for
+ * EXACTLY the blocks whose ids are in `blockIds` (explicit pointers into `conversation_blocks.id`,
+ * the same numeric row id `ConversationBlock.id` stringifies). The Condensed selector replaces the
+ * run of those blocks with a single synthetic summary block. Final (`assistant_final`) blocks are
+ * NEVER attributed to a summary, so they always render verbatim.
+ *
+ * `blockIds` are kept NUMERIC here (as on the wire) — the selector stringifies on comparison, since
+ * `ConversationBlock.id` is the stringified row id.
+ */
+export interface ChunkSummary {
+  /** Summary row PK (ordered by `chunkIdx`; absent on a live `chunk-summarized` event → -1). */
+  readonly summaryId: number;
+  /** Chunk ordinal (ascending = conversation order; -1 on a live event with no ordinal). */
+  readonly chunkIdx: number;
+  /** The summary text that stands in for the attributed blocks in Condensed view. */
+  readonly summary: string;
+  /** Numeric ids of the conversation blocks this summary covers (the attribution pointers). */
+  readonly blockIds: readonly number[];
+}
+
 export interface ConversationsState {
   /** Per-agent block transcript. Only agents with at least one block have an entry. */
   readonly transcripts: Readonly<Record<string, readonly ConversationBlock[]>>;
@@ -130,7 +155,27 @@ export interface ConversationsState {
    * no floor (show everything). The old chat is never lost — it lives server-side.
    */
   readonly clearedFloors: Readonly<Record<string, number>>;
+  /**
+   * Per-pane chat view mode (TUIchat-3): `verbose` (today's full render) / `condensed` (rolling
+   * chunked summaries, backend lands in TUIchat-4) / `tmux` (inline tmux frame, TUIchat-5). Ephemeral
+   * and NOT persisted (mirrors `paneOverrides`' per-`agentId` intent map). Absent entry → fall through
+   * to `settings.defaultChatViewMode`. Effective mode = `paneViewModes[agentId] ?? defaultChatViewMode`.
+   */
+  readonly paneViewModes: Readonly<Record<string, ChatViewMode>>;
+  /**
+   * Per-agent rolling chunk summaries for the Condensed view (TUIchat-4). Ordered by `chunkIdx`
+   * ascending. Ephemeral (mirrors the other snapshot-fed fields, e.g. `meta`): primed from the
+   * `state.conversations_snapshot` `chunk_summaries[]` (the source of truth) and incrementally folded
+   * from live `conversation.block` / `chunk-summarized` events so Condensed updates without waiting
+   * for a full re-snapshot. Absent/empty entry → Condensed falls back to verbose-like (intermediates
+   * render as-is — never blank). Consumed by `selectConversationView` when a pane's effective mode is
+   * `condensed`.
+   */
+  readonly chunkSummaries: Readonly<Record<string, readonly ChunkSummary[]>>;
 }
+
+/** Per-pane chat view mode (TUIchat-3). `tmux` is reachable only via the cycle, not a settable default. */
+export type ChatViewMode = 'verbose' | 'condensed' | 'tmux';
 
 /** Initial (empty) state — no transcripts, no active pane. */
 export const initialConversationsState: ConversationsState = {
@@ -139,6 +184,8 @@ export const initialConversationsState: ConversationsState = {
   activePaneAgentId: null,
   paneOverrides: new Map<string, boolean>(),
   clearedFloors: {},
+  paneViewModes: {},
+  chunkSummaries: {},
 };
 
 /**

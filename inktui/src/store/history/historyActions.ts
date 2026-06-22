@@ -44,6 +44,7 @@ export interface HistoryItemDto {
   item_id: string;
   text: string;
   target: string;
+  conversation_id: string;
   ts: string;
   status: string;
   harness: string | null;
@@ -57,6 +58,7 @@ function toHistoryRow(dto: HistoryItemDto): HistoryRow {
     itemId: dto.item_id,
     text: dto.text,
     target: dto.target,
+    conversationId: dto.conversation_id,
     ts: dto.ts,
     status: dto.status,
     harness: dto.harness,
@@ -75,8 +77,9 @@ export interface HistoryActions {
    * reconciled by the authoritative refetch the dismiss op publishes). */
   dismiss(itemId: string): Promise<void>;
   /** Resume a (CC-only) conversation as a fresh crow via the `agent.resume_from_history` command.
-   * `conversationId` is the row's `target` (the conversation/agent id). A backend rejection (non-CC,
-   * no session id, already running) surfaces as an error toast — never thrown past the action. */
+   * `conversationId` is the conversation id (UUID), distinct from the agent id / `target`. A backend
+   * rejection (non-CC, no session id, already running) surfaces as an error toast — never thrown past
+   * the action. */
   resumeConversation(conversationId: string): Promise<void>;
 }
 

@@ -62,6 +62,9 @@ class TuiUserConfig(BaseModel):
     pane_gap: int = Field(default=0, ge=0, le=4)
     # Vim-style editing in the chat input (modal normal/insert + yank/paste). Off by default.
     vim_mode: bool = False
+    # Default chat view mode for panes with no per-pane override (TUIchat-3). Only verbose/condensed
+    # are settable here; `tmux` is reachable in the TUI only via the per-pane cycle key, never a default.
+    default_chat_view_mode: Literal["verbose", "condensed"] = "verbose"
     # The rogue auto-spawned on daemon boot (None = none); see StartupRogueConfig.
     startup_rogue: StartupRogueConfig | None = None
 
