@@ -67,9 +67,10 @@ describe('createWorktreeOptionsActions.fetch', () => {
       '/repo/.murder/worktrees/detached',
       NEW_WORKTREE_KEY,
     ]);
-    expect(opts[1]?.label).toBe('feat (/repo/.murder/worktrees/feat)');
+    // Label shows the repo-relative `.murder/worktrees/…` tail; the key stays the absolute path.
+    expect(opts[1]?.label).toBe('feat (.murder/worktrees/feat)');
     // A null branch falls back to the path basename for the label (buildWorktreeOptions).
-    expect(opts[2]?.label).toBe('detached (/repo/.murder/worktrees/detached)');
+    expect(opts[2]?.label).toBe('detached (.murder/worktrees/detached)');
     expect(bus.rpcCalls).toEqual([{ method: 'worktree.list', params: {} }]);
   });
 

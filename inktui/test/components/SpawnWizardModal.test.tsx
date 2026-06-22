@@ -35,6 +35,7 @@ import { createInputStores } from '../../src/input/createInputStores.js';
 import { selectActiveMode } from '../../src/input/modeStore.js';
 import { createHarnessModelsActions } from '../../src/store/dialogs/harnessModelsActions.js';
 import { createSpawnActions } from '../../src/store/dialogs/spawnActions.js';
+import { createSpawnFavoritesActions } from '../../src/store/dialogs/spawnFavoritesActions.js';
 import { createWorktreeOptionsActions } from '../../src/store/dialogs/worktreeOptionsActions.js';
 import { createAppStore } from '../../src/store/store.js';
 import { selectLiveToasts, toastStore } from '../../src/store/toast/toastStore.js';
@@ -153,7 +154,7 @@ describe('SpawnWizardModal — dependent-field flow', () => {
     enter();
     await tick();
     expect(lastFrame()).toContain('Select harness');
-    expect(lastFrame()).toContain('› claude-code'); // default cursor at index 0
+    expect(lastFrame()).toContain('› [1] claude-code'); // default cursor at index 0
     expect(lastFrame()).toContain('codex');
     expect(lastFrame()).toContain('antigravity');
   });
@@ -163,13 +164,13 @@ describe('SpawnWizardModal — dependent-field flow', () => {
     const { lastFrame, stdin } = render(<Harness stores={stores} />);
     enter();
     await tick();
-    expect(lastFrame()).toContain('› claude-code');
+    expect(lastFrame()).toContain('› [1] claude-code');
     stdin.write('j');
     await tick();
-    expect(lastFrame()).toContain('› codex');
+    expect(lastFrame()).toContain('› [2] codex');
     stdin.write('k');
     await tick();
-    expect(lastFrame()).toContain('› claude-code');
+    expect(lastFrame()).toContain('› [1] claude-code');
   });
 
   it('full claude_code flow submits harness=claude_code + chosen model + effort', async () => {
@@ -285,7 +286,7 @@ describe('SpawnWizardModal — dependent-field flow', () => {
       stdin.write('j');
       await tick();
     }
-    expect(lastFrame()).toContain('› antigravity');
+    expect(lastFrame()).toContain('› [5] antigravity');
     stdin.write('\r'); // confirm harness → next active step is worktree (model+effort skipped)
     await tick();
     expect(lastFrame()).toContain('Select worktree');
@@ -315,7 +316,7 @@ describe('SpawnWizardModal — dependent-field flow', () => {
     await tick();
     stdin.write('j'); // cursor
     await tick();
-    expect(lastFrame()).toContain('› cursor');
+    expect(lastFrame()).toContain('› [3] cursor');
     stdin.write('\r'); // confirm harness → effort (model skipped)
     await tick();
     expect(lastFrame()).toContain('Select effort');
@@ -340,7 +341,7 @@ describe('SpawnWizardModal — dependent-field flow', () => {
     await tick();
     stdin.write('j'); // codex
     await tick();
-    expect(lastFrame()).toContain('› codex');
+    expect(lastFrame()).toContain('› [2] codex');
     stdin.write('\r'); // confirm harness → model step (codex has a static model list)
     await tick();
     expect(lastFrame()).toContain('Select model');
@@ -686,6 +687,119 @@ describe('spawn wizard — hints moved out of the modal box (item 4c)', () => {
     expect(lastFrame()).not.toContain('j/k: navigate · enter: confirm · esc: cancel');
     // The mode advertises its hints to the bottom bar instead.
     expect(selectActiveMode(stores.modes)?.hints?.map((h) => h.key)).toContain('j/k');
+  });
+});
+
+describe('SpawnWizardModal — spawn favorites (the two new behavioral contracts)', () => {
+  beforeEach(() => {
+    toastStore.getState().clear();
+  });
+
+  const ONE_FAVORITE = {
+    name: 'CodexHigh',
+    harness: 'codex',
+    model: 'gpt-5.5',
+    effort: 'high',
+  } as const;
+
+  /** Like `setup()` but wires the favorites column with `ONE_FAVORITE` loaded. */
+  function setupWithFavorite() {
+    const stores = createInputStores(['notes'], 'notes');
+    const bus = new FakeBusClient();
+    bus.stubRpc('command.submit', { ok: true, command_id: 'cmd-1' });
+    bus.stubRpc('command.status', {
+      ok: true,
+      status: 'done',
+      result_json: JSON.stringify({ handled: true, agent_id: 'rogue-001' }),
+    });
+    bus.stubRpc('tui.load_spawn_favorites', { ok: true, favorites: [ONE_FAVORITE] });
+    bus.stubRpc('tui.save_spawn_favorites', (p) => ({ ok: true, favorites: p.favorites }));
+    const actions = createSpawnActions(bus);
+    const enter = () =>
+      stores.modes.getState().enter(
+        spawnWizardMode(stores.modes, actions, {
+          spawnContext: null,
+          modelActions: createHarnessModelsActions(bus),
+          worktreeActions: createWorktreeOptionsActions(bus),
+          favoriteActions: createSpawnFavoritesActions(bus),
+        }),
+      );
+    return { stores, bus, enter };
+  }
+
+  it('selecting a favorite prefills harness/model/effort and JUMPS to the worktree step', async () => {
+    const { stores, bus, enter } = setupWithFavorite();
+    const { lastFrame, stdin } = render(<Harness stores={stores} />);
+    enter();
+    await tick(); // let load() resolve so the favorite appears in the right column
+
+    stdin.write('l'); // switch to the favorites column (cursor at index 0 = the favorite)
+    await tick();
+    stdin.write('\r'); // select the favorite
+    await tick();
+
+    // Skipped model + effort entirely — straight to worktree (the prefill contract).
+    expect(lastFrame()).toContain('Select worktree');
+    expect(lastFrame()).not.toContain('Select model');
+    expect(lastFrame()).not.toContain('Select effort');
+
+    // Drive the rest to submit and assert the prefilled values rode through.
+    stdin.write('\r'); // worktree (main)
+    await tick();
+    stdin.write('\r'); // name (blank) → submit
+    await tick();
+    await tick();
+    await tick();
+    expect(spawnSubmitPayload(bus)).toMatchObject({
+      harness: 'codex',
+      model: 'gpt-5.5',
+      effort: 'high',
+    });
+  });
+
+  it('create-favorite flow spawns AND persists the favorite under the typed name', async () => {
+    const { stores, bus, enter } = setupWithFavorite();
+    const { lastFrame, stdin } = render(<Harness stores={stores} />);
+    enter();
+    await tick();
+
+    stdin.write('l'); // favorites column; cursor at index 0 (the favorite)
+    await tick();
+    stdin.write('j'); // move to index 1 = the "create favorite" row
+    await tick();
+    expect(lastFrame()).toContain('create favorite');
+    stdin.write('\r'); // start the create-favorite flow → runs the full wizard
+    await tick();
+
+    // Full wizard: harness (claude_code default) → model → effort → worktree → name → nameFavorite.
+    stdin.write('\r'); // harness
+    await tick();
+    stdin.write('\r'); // model
+    await tick();
+    stdin.write('\r'); // effort
+    await tick();
+    stdin.write('\r'); // worktree (main)
+    await tick();
+    stdin.write('\r'); // rogue name (blank)
+    await tick();
+    expect(lastFrame()).toContain('Name this favorite config');
+    for (const ch of 'MyPreset') {
+      stdin.write(ch);
+      await tick();
+    }
+    stdin.write('\r'); // confirm favorite name → submit (spawn + save)
+    await tick();
+    await tick();
+    await tick();
+
+    // Both halves of the contract: it spawned AND it persisted the favorite.
+    expect(submitKinds(bus)).toContain('crow.spawn_rogue');
+    const saveCall = bus.rpcCalls.find((c) => c.method === 'tui.save_spawn_favorites');
+    expect(saveCall).toBeDefined();
+    const savedNames = (
+      (saveCall?.params as { favorites: { name: string }[] }).favorites
+    ).map((f) => f.name);
+    expect(savedNames).toContain('MyPreset');
   });
 });
 

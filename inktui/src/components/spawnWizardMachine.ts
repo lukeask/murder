@@ -69,7 +69,8 @@ export type WizardStep =
   | 'worktree'
   | 'branch'
   | 'name'
-  | 'context';
+  | 'context'
+  | 'nameFavorite';
 
 /** Inputs that determine which steps are active. */
 export interface StepConditions {
@@ -80,6 +81,11 @@ export interface StepConditions {
   readonly newWorktree: boolean;
   /** Whether a spawn-context doc was detected at open (shows the context step). */
   readonly hasContext: boolean;
+  /**
+   * Whether the user chose 'create favorite' on the first step — appends the favorite-naming step
+   * at the end.
+   */
+  readonly creatingFavorite: boolean;
 }
 
 /**
@@ -102,6 +108,9 @@ export function stepsFor(c: StepConditions): WizardStep[] {
   steps.push('name');
   if (c.hasContext) {
     steps.push('context');
+  }
+  if (c.creatingFavorite) {
+    steps.push('nameFavorite');
   }
   return steps;
 }

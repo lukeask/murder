@@ -384,6 +384,90 @@ def save_workflows(records: Any, path: Path | None = None) -> list[dict[str, Any
     return normalized
 
 
+def spawn_favorites_path(path: Path | None = None) -> Path:
+    """Userspace/global spawn-wizard favorite presets (follows the user across repos)."""
+    return config_dir() / "spawn_favorites.yaml"
+
+
+# Max number of spawn-favorite presets persisted; older entries past this are dropped.
+_MAX_SPAWN_FAVORITES = 10
+
+
+def load_spawn_favorites(path: Path | None = None) -> list[dict[str, str]]:
+    """Read the userspace spawn-favorites registry.
+
+    Tolerates a missing/empty/unparseable file or a missing ``favorites:`` key by
+    returning an empty list. Each record is coerced to
+    ``{"name": str, "harness": str, "model": str, "effort": str}``.
+    """
+    tpath = path or spawn_favorites_path()
+    if not tpath.exists():
+        return []
+    try:
+        raw = yaml.safe_load(tpath.read_text(encoding="utf-8")) or {}
+    except Exception:  # noqa: BLE001
+        return []
+    if not isinstance(raw, dict):
+        return []
+    records = raw.get("favorites")
+    if not isinstance(records, list):
+        return []
+    out: list[dict[str, str]] = []
+    for rec in records:
+        if not isinstance(rec, dict):
+            continue
+        out.append(
+            {
+                "name": str(rec.get("name", "")),
+                "harness": str(rec.get("harness", "")),
+                "model": str(rec.get("model", "")),
+                "effort": str(rec.get("effort", "")),
+            }
+        )
+    return out
+
+
+def _normalize_spawn_favorites(records: Any) -> list[dict[str, str]]:
+    """Validate/coerce favorites: drop blank names, preserve order, clamp to the cap.
+
+    Order is user-meaningful (unlike templates), so it is preserved; de-dupe is not
+    performed. Records are clamped to the first ``_MAX_SPAWN_FAVORITES``.
+    """
+    out: list[dict[str, str]] = []
+    if isinstance(records, list):
+        for rec in records:
+            if not isinstance(rec, dict):
+                continue
+            name = str(rec.get("name", "")).strip()
+            if not name:
+                continue
+            out.append(
+                {
+                    "name": name,
+                    "harness": str(rec.get("harness", "")),
+                    "model": str(rec.get("model", "")),
+                    "effort": str(rec.get("effort", "")),
+                }
+            )
+    return out[:_MAX_SPAWN_FAVORITES]
+
+
+def save_spawn_favorites(records: Any, path: Path | None = None) -> list[dict[str, str]]:
+    """Normalize and atomically persist the spawn-favorites registry.
+
+    Returns the normalized list (canonical state) so callers can sync to it.
+    """
+    normalized = _normalize_spawn_favorites(records)
+    tpath = path or spawn_favorites_path()
+    tpath.parent.mkdir(parents=True, exist_ok=True)
+    payload = yaml.safe_dump({"favorites": normalized}, default_flow_style=False, sort_keys=False)
+    tmp = tpath.with_suffix(".tmp")
+    tmp.write_text(payload, encoding="utf-8")
+    os.chmod(tmp, 0o600)
+    tmp.replace(tpath)
+    return normalized
+
+
 _GATED_HARNESS = "native_coding_crow"
 
 

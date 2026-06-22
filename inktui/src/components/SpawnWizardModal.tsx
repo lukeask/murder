@@ -49,10 +49,15 @@ import type { Key } from 'ink';
 import { Box, Text } from 'ink';
 import type { JSX } from 'react';
 import { useModalWidth } from '../hooks/useTerminalSize.js';
+import type { Modifier } from '../input/bindings.js';
 import type { Mode, ModeHint, ModeStoreApi } from '../input/modeStore.js';
 import type { HarnessModel, HarnessModelsActions } from '../store/dialogs/harnessModelsActions.js';
 import { modelsFor, STATIC_HARNESS_MODELS } from '../store/dialogs/harnessModelsActions.js';
 import type { SpawnActions } from '../store/dialogs/spawnActions.js';
+import type {
+  SpawnFavorite,
+  SpawnFavoritesActions,
+} from '../store/dialogs/spawnFavoritesActions.js';
 import type {
   WorktreeOption,
   WorktreeOptionsActions,
@@ -126,6 +131,28 @@ export interface SpawnWizardModeOptions {
   readonly onSubmit?: (effort: string, kickoffMessage: string | null) => void;
   /** Called when dismissed without spawning. */
   readonly onDismiss?: () => void;
+  /**
+   * The enabled harnesses for the left column. Defaults to {@link HARNESS_ORDER}. The `spawn`
+   * handler passes `settings.effectiveCrowHarnesses`.
+   */
+  readonly enabledHarnesses?: readonly string[];
+  /**
+   * The spawn-favorites persistence actions. When present, favorites load on open and
+   * create/delete/rename persist via the bus. When absent, the right column is just `create
+   * favorite` (no saved entries), and saves are no-ops.
+   */
+  readonly favoriteActions?: SpawnFavoritesActions;
+  /**
+   * Decides whether a `[0-9]` digit means the RIGHT (favorites) column (command-modified) vs the
+   * LEFT (harness) column (bare). Defaults to `(k) => k.ctrl || k.meta`. The `spawn` handler passes
+   * `bindings.resolved.isCommandModified`.
+   */
+  readonly commandModified?: (key: Key) => boolean;
+  /**
+   * The configured command modifier — used ONLY for the right-column chord LABEL prefix
+   * (`'alt'` → `A`, anything else → `C`). Defaults to `'C'`.
+   */
+  readonly commandModifier?: Modifier;
 }
 
 /** The default effort options — exported for back-compat with the old test/import surface. */
@@ -141,6 +168,10 @@ interface SpawnWizardState {
   modelMap: Record<string, readonly HarnessModel[]>;
   /** The worktree picker options (resolved on open). */
   worktreeOptions: readonly WorktreeOption[];
+  /** The enabled harnesses for the left column (seeded from opts). */
+  enabledHarnesses: readonly string[];
+  /** The saved spawn favorites (right column). Filled async on open, like models/worktrees. */
+  favorites: SpawnFavorite[];
   // Selections.
   harness: string;
   model: string;
@@ -154,6 +185,21 @@ interface SpawnWizardState {
   modelCursor: number;
   effortCursor: number;
   worktreeCursor: number;
+  // First-step two-column grid state.
+  /** Which column the harness step has focus on (left = harness, right = favorites). */
+  focusedColumn: 'harness' | 'favorites';
+  /** The cursor within the right (favorites + create-row) column. */
+  favoriteCursor: number;
+  /** True once the user chose `create favorite` — appends the `nameFavorite` step + saves on submit. */
+  creatingFavorite: boolean;
+  /** The favorite name being typed on the `nameFavorite` step. */
+  favoriteName: string;
+  /** The first-step sub-mode: normal nav, delete-confirm, or inline rename. */
+  gridMode: 'nav' | 'confirmDelete' | 'rename';
+  /** The in-progress rename value (when `gridMode === 'rename'`). */
+  renameValue: string;
+  /** The right-column chord label prefix (`'A'` for alt, else `'C'`) — display only. */
+  chordPrefix: string;
   error: string | null;
 }
 
@@ -162,16 +208,35 @@ interface SpawnWizardState {
  * the bottom bar). List steps advertise nav + confirm + cancel; text steps drop nav; the context step
  * advertises its yes/no nav (item 7). Pure over the step so it tests without the bar.
  */
-export function spawnWizardHints(step: WizardStep): readonly ModeHint[] {
+export function spawnWizardHints(
+  step: WizardStep,
+  ctx?: { favoritesFocused?: boolean },
+): readonly ModeHint[] {
   const cancel: ModeHint = { key: 'esc', description: 'cancel' };
   switch (step) {
     case 'harness':
+      return [
+        { key: 'h/l', description: 'cols' },
+        { key: 'j/k', description: 'nav' },
+        { key: '[n]', description: 'select' },
+        { key: 'enter', description: 'confirm' },
+        ...(ctx?.favoritesFocused === true
+          ? [{ key: 'd/r', description: 'del/rename' }]
+          : []),
+        cancel,
+      ];
     case 'model':
     case 'effort':
     case 'worktree':
-      return [{ key: 'j/k', description: 'nav' }, { key: 'enter', description: 'confirm' }, cancel];
+      return [
+        { key: 'j/k', description: 'nav' },
+        { key: '[n]', description: 'select' },
+        { key: 'enter', description: 'confirm' },
+        cancel,
+      ];
     case 'branch':
     case 'name':
+    case 'nameFavorite':
       return [{ key: 'enter', description: 'confirm' }, cancel];
     case 'context':
       return [
@@ -192,6 +257,7 @@ function conditions(s: SpawnWizardState, hasContext: boolean): StepConditions {
     modelMap: s.modelMap,
     newWorktree: s.worktreeKey === NEW_WORKTREE_KEY,
     hasContext,
+    creatingFavorite: s.creatingFavorite,
   };
 }
 
@@ -208,12 +274,22 @@ export function spawnWizardMode(
   const spawnContext = opts.spawnContext ?? null;
   const hasContext = spawnContext !== null;
 
-  // Mutable local state. Start on the harness step with claude_code preselected.
+  const enabledHarnesses =
+    opts.enabledHarnesses !== undefined && opts.enabledHarnesses.length > 0
+      ? opts.enabledHarnesses
+      : [...HARNESS_ORDER];
+  const commandModified = opts.commandModified ?? ((k: Key) => k.ctrl === true || k.meta === true);
+  const chordPrefix = opts.commandModifier === 'alt' ? 'A' : 'C';
+
+  // Mutable local state. Start on the harness step with the first enabled harness preselected.
+  const initialHarness = enabledHarnesses[0] ?? DEFAULT_HARNESS;
   const s: SpawnWizardState = {
     step: 'harness',
     modelMap: STATIC_HARNESS_MODELS,
     worktreeOptions: buildWorktreeOptions([]),
-    harness: DEFAULT_HARNESS,
+    enabledHarnesses,
+    favorites: [],
+    harness: initialHarness,
     model: '',
     effort: '',
     worktreeKey: null,
@@ -222,8 +298,15 @@ export function spawnWizardMode(
     contextAccepted: true,
     harnessCursor: 0,
     modelCursor: 0,
-    effortCursor: defaultEffortCursor(DEFAULT_HARNESS),
+    effortCursor: defaultEffortCursor(initialHarness),
     worktreeCursor: 0,
+    focusedColumn: 'harness',
+    favoriteCursor: 0,
+    creatingFavorite: false,
+    favoriteName: '',
+    gridMode: 'nav',
+    renameValue: '',
+    chordPrefix,
     error: null,
   };
 
@@ -254,12 +337,40 @@ export function spawnWizardMode(
       })
       .catch(() => {});
   }
+  if (opts.favoriteActions !== undefined) {
+    void opts.favoriteActions
+      .load()
+      .then((f) => {
+        s.favorites = f;
+        refresh();
+      })
+      .catch(() => {});
+  }
 
   /** The number of selectable rows on the active selection step (for cursor wrapping). */
+  /** Push an RPC-rejection toast (same shape as `doSubmit`'s catch). */
+  function toast(error: unknown): void {
+    const message = error instanceof Error ? error.message : String(error);
+    toastStore.getState().push(message, { severity: 'error', ttlMs: 12000 });
+  }
+
+  // --- Right-column (favorites) model ------------------------------------------------------------
+
+  /** The number of rows in the right column: favorites + the trailing `create favorite` row (hidden
+   * at 10 favorites). */
+  function rightRowCount(): number {
+    return s.favorites.length < 10 ? s.favorites.length + 1 : 10;
+  }
+
+  /** True when right-column index `i` is the `create favorite` row. */
+  function isCreateRow(i: number): boolean {
+    return i === s.favorites.length && s.favorites.length < 10;
+  }
+
   function currentListLength(): number {
     switch (s.step) {
       case 'harness':
-        return HARNESS_ORDER.length;
+        return s.enabledHarnesses.length;
       case 'model':
         return modelsFor(s.harness, s.modelMap).length;
       case 'effort':
@@ -316,11 +427,60 @@ export function spawnWizardMode(
   /** Recompute downstream selections when the harness changes — the dependent-field reset. Resets
    * the model selection + cursor and seeds the per-harness default effort. */
   function onHarnessChanged(): void {
-    s.harness = HARNESS_ORDER[s.harnessCursor] ?? DEFAULT_HARNESS;
+    s.harness = s.enabledHarnesses[s.harnessCursor] ?? DEFAULT_HARNESS;
     s.model = '';
     s.modelCursor = 0;
     s.effort = '';
     s.effortCursor = defaultEffortCursor(s.harness);
+  }
+
+  /** Move within the focused column on the harness step (wrapping by that column's length). */
+  function moveWithinColumn(delta: number): void {
+    if (s.focusedColumn === 'harness') {
+      const len = s.enabledHarnesses.length;
+      if (len > 0) s.harnessCursor = (s.harnessCursor + delta + len) % len;
+    } else {
+      const len = rightRowCount();
+      if (len > 0) s.favoriteCursor = (s.favoriteCursor + delta + len) % len;
+    }
+    refresh();
+  }
+
+  /** Switch the harness step's focused column, clamping the destination cursor into range. */
+  function switchColumn(target: 'harness' | 'favorites'): void {
+    if (s.focusedColumn === target) return;
+    s.focusedColumn = target;
+    if (target === 'harness') {
+      const len = s.enabledHarnesses.length;
+      if (s.harnessCursor >= len) s.harnessCursor = Math.max(0, len - 1);
+    } else {
+      const len = rightRowCount();
+      if (s.favoriteCursor >= len) s.favoriteCursor = Math.max(0, len - 1);
+    }
+    refresh();
+  }
+
+  /** Map a `'0'..'9'` digit to a right-column index (`1..9` → `0..8`, `0` → `9`). */
+  function rightDigitIndex(digit: string): number {
+    return digit === '0' ? 9 : digit.charCodeAt(0) - '1'.charCodeAt(0);
+  }
+
+  /** Act on the right-column entry at index `i`: create-row → start the create-favorite flow; a real
+   * favorite → prefill harness/model/effort and jump to the worktree step. */
+  function actOnFavoriteRow(i: number): void {
+    if (isCreateRow(i)) {
+      s.creatingFavorite = true;
+      advance();
+      return;
+    }
+    const f = s.favorites[i];
+    if (f === undefined) return;
+    s.harness = f.harness;
+    s.model = f.model;
+    s.effort = f.effort;
+    s.creatingFavorite = false;
+    s.step = 'worktree';
+    refresh();
   }
 
   /** Capture the current step's selection, then advance to the next active step (or submit). */
@@ -341,6 +501,13 @@ export function spawnWizardMode(
       case 'branch':
         if (s.branch.trim().length === 0) {
           s.error = 'Branch name is required.';
+          refresh();
+          return;
+        }
+        break;
+      case 'nameFavorite':
+        if (s.favoriteName.trim().length === 0) {
+          s.error = 'Favorite name is required.';
           refresh();
           return;
         }
@@ -380,6 +547,15 @@ export function spawnWizardMode(
     const kickoffMessage = buildKickoffMessage();
     const wt = resolveWorktreePayload(s.worktreeKey, s.branch);
     const name = s.name.trim();
+    // When creating a favorite, persist it alongside the spawn (fire-and-forget; a save rejection
+    // toasts but never blocks the spawn). Clamp to 10.
+    if (s.creatingFavorite && opts.favoriteActions !== undefined) {
+      const next = [
+        ...s.favorites,
+        { name: s.favoriteName.trim(), harness: s.harness, model, effort },
+      ].slice(0, 10);
+      void opts.favoriteActions.save(next).catch((e: unknown) => toast(e));
+    }
     void actions
       .spawnRogue({
         harness: s.harness,
@@ -409,7 +585,9 @@ export function spawnWizardMode(
     // bar (which re-reads on every mode-stack change — `refresh()` re-enters the frame) always shows
     // the CURRENT step's hints.
     get hints(): readonly ModeHint[] {
-      return spawnWizardHints(s.step);
+      return spawnWizardHints(s.step, {
+        favoritesFocused: s.step === 'harness' && s.focusedColumn === 'favorites',
+      });
     },
     // Structural keys only — printable chars (j/k/y/n + free text) ride `onUncaptured`.
     keymap: [
@@ -424,47 +602,102 @@ export function spawnWizardMode(
       { chord: { key: { escape: true } }, intent: 'dismiss', description: 'cancel' },
     ],
     onIntent(intent) {
+      // The harness step's rename sub-mode is a text field over `renameValue` — handle it BEFORE
+      // normal routing so structural keys edit/commit/cancel the rename, not the wizard.
+      if (s.step === 'harness' && s.gridMode === 'rename') {
+        switch (intent) {
+          case 'backspace':
+            s.renameValue = deleteLastChar(s.renameValue);
+            refresh();
+            return;
+          case 'deleteAll':
+            s.renameValue = '';
+            refresh();
+            return;
+          case 'confirm': {
+            const trimmed = s.renameValue.trim();
+            if (trimmed.length > 0) {
+              const cur = s.favorites[s.favoriteCursor];
+              if (cur !== undefined) {
+                s.favorites[s.favoriteCursor] = { ...cur, name: trimmed };
+                void opts.favoriteActions?.save(s.favorites).catch((e: unknown) => toast(e));
+              }
+              s.gridMode = 'nav';
+              refresh();
+            }
+            return;
+          }
+          case 'dismiss':
+            // Cancel the sub-mode only — do NOT exit the modal.
+            s.gridMode = 'nav';
+            refresh();
+            return;
+          default:
+            // Arrows etc. are inert while renaming.
+            return;
+        }
+      }
+
       const isList =
         s.step === 'harness' || s.step === 'model' || s.step === 'effort' || s.step === 'worktree';
-      const isText = s.step === 'branch' || s.step === 'name';
+      const isText =
+        s.step === 'branch' || s.step === 'name' || s.step === 'nameFavorite';
       switch (intent) {
         case 'cursorUp':
-          if (isList) moveCursor(-1);
+          if (s.step === 'harness') moveWithinColumn(-1);
+          else if (isList) moveCursor(-1);
           break;
         case 'cursorDown':
-          if (isList) moveCursor(1);
+          if (s.step === 'harness') moveWithinColumn(1);
+          else if (isList) moveCursor(1);
           break;
         case 'cursorLeft':
-          // Item 7: the context step's yes/no is a two-cell radio; ← highlights "yes".
-          if (s.step === 'context' && !s.contextAccepted) {
+          if (s.step === 'harness') {
+            switchColumn('harness');
+          } else if (s.step === 'context' && !s.contextAccepted) {
+            // Item 7: the context step's yes/no is a two-cell radio; ← highlights "yes".
             s.contextAccepted = true;
             refresh();
           }
           break;
         case 'cursorRight':
-          if (s.step === 'context' && s.contextAccepted) {
+          if (s.step === 'harness') {
+            switchColumn('favorites');
+          } else if (s.step === 'context' && s.contextAccepted) {
             s.contextAccepted = false;
             refresh();
           }
           break;
         case 'confirm':
-          advance();
+          if (s.step === 'harness' && s.focusedColumn === 'favorites') {
+            actOnFavoriteRow(s.favoriteCursor);
+          } else {
+            advance();
+          }
           break;
         case 'backspace':
           if (isText) {
             if (s.step === 'branch') s.branch = deleteLastChar(s.branch);
-            else s.name = deleteLastChar(s.name);
+            else if (s.step === 'name') s.name = deleteLastChar(s.name);
+            else s.favoriteName = deleteLastChar(s.favoriteName);
             refresh();
           }
           break;
         case 'deleteAll':
           if (isText) {
             if (s.step === 'branch') s.branch = '';
-            else s.name = '';
+            else if (s.step === 'name') s.name = '';
+            else s.favoriteName = '';
             refresh();
           }
           break;
         case 'dismiss':
+          // A non-nav grid sub-mode cancels first; only `nav` exits the modal.
+          if (s.gridMode !== 'nav') {
+            s.gridMode = 'nav';
+            refresh();
+            break;
+          }
           modes.getState().exit(id);
           opts.onDismiss?.();
           break;
@@ -475,11 +708,114 @@ export function spawnWizardMode(
     // Per-step printable router (see the class doc): list steps map j/k; text steps insert; context
     // step maps y/n. The dispatcher calls this only when the keymap produced no match.
     onUncaptured(input: string, key: Key): boolean {
-      if (input.length === 0 || key.ctrl || key.meta || key.escape || key.return) {
+      if (input.length === 0 || key.escape || key.return) {
+        return false;
+      }
+
+      // First-step grid sub-modes — handled BEFORE the digit / ctrl-meta logic so a single keypress
+      // confirms a delete, edits a rename, or cancels.
+      if (s.step === 'harness' && s.gridMode === 'confirmDelete') {
+        if (input === 'd' && !key.ctrl && !key.meta) {
+          s.favorites.splice(s.favoriteCursor, 1);
+          s.favoriteCursor = Math.max(0, Math.min(s.favoriteCursor, rightRowCount() - 1));
+          s.gridMode = 'nav';
+          void opts.favoriteActions?.save(s.favorites).catch((e: unknown) => toast(e));
+          refresh();
+          return true;
+        }
+        // Any other key cancels.
+        s.gridMode = 'nav';
+        refresh();
+        return true;
+      }
+      if (s.step === 'harness' && s.gridMode === 'rename') {
+        // Printable (non-ctrl/meta) chars extend the rename; structural keys ride onIntent.
+        if (!key.ctrl && !key.meta) {
+          s.renameValue = insertChar(s.renameValue, input);
+          refresh();
+          return true;
+        }
+        return true; // swallow ctrl/meta while renaming
+      }
+
+      // Digit select+advance — runs BEFORE the ctrl/meta bail because command-modified digits arrive
+      // with `key.ctrl`/`key.meta` set and still come through onUncaptured (no keymap match). Only the
+      // harness/model/effort/worktree list steps intercept digits; text steps must keep them.
+      if (/^[0-9]$/.test(input)) {
+        if (s.step === 'harness') {
+          const cmd = commandModified(key);
+          if (cmd) {
+            // Right column (favorites).
+            const idx = rightDigitIndex(input);
+            if (idx >= 0 && idx < rightRowCount()) {
+              actOnFavoriteRow(idx);
+            }
+          } else {
+            // Left column (harness) — '0' is NOT a left selection (only 1..9).
+            if (input !== '0') {
+              const idx = input.charCodeAt(0) - '1'.charCodeAt(0);
+              if (idx < s.enabledHarnesses.length) {
+                s.harnessCursor = idx;
+                advance();
+              }
+            }
+          }
+          return true; // digits never leak on the harness step
+        }
+        if (s.step === 'model' || s.step === 'effort' || s.step === 'worktree') {
+          // Bare digit selects + advances; a command-modified digit is a swallowed no-op here.
+          if (!commandModified(key) && input !== '0') {
+            const idx = input.charCodeAt(0) - '1'.charCodeAt(0);
+            if (idx < currentListLength()) {
+              setCursor(s.step, idx);
+              advance();
+            }
+          }
+          return true;
+        }
+        // Text/context steps: fall through (favoriteName/branch/name accept digit chars).
+      }
+
+      if (key.ctrl || key.meta) {
         return false;
       }
       switch (s.step) {
         case 'harness':
+          // Column nav (j/k within column, h/l switch columns) + d/r sub-mode triggers.
+          if (input === 'j') {
+            moveWithinColumn(1);
+            return true;
+          }
+          if (input === 'k') {
+            moveWithinColumn(-1);
+            return true;
+          }
+          if (input === 'h') {
+            switchColumn('harness');
+            return true;
+          }
+          if (input === 'l') {
+            switchColumn('favorites');
+            return true;
+          }
+          if (
+            s.focusedColumn === 'favorites' &&
+            !isCreateRow(s.favoriteCursor) &&
+            s.gridMode === 'nav'
+          ) {
+            if (input === 'd') {
+              s.gridMode = 'confirmDelete';
+              refresh();
+              return true;
+            }
+            if (input === 'r') {
+              s.gridMode = 'rename';
+              s.renameValue = s.favorites[s.favoriteCursor]?.name ?? '';
+              refresh();
+              return true;
+            }
+          }
+          return false; // other letters are not actions — swallow
         case 'model':
         case 'effort':
         case 'worktree':
@@ -501,16 +837,22 @@ export function spawnWizardMode(
           s.name = insertChar(s.name, input);
           refresh();
           return true;
+        case 'nameFavorite':
+          s.favoriteName = insertChar(s.favoriteName, input);
+          s.error = null;
+          refresh();
+          return true;
         case 'context':
-          // Item 7: y/n are immediate-submit binds; h/l move the highlight (Enter then submits it).
+          // Item 7: y/n set the choice then advance() (so a following nameFavorite step runs when
+          // creating a favorite; when not, context is last so advance() still submits).
           if (input === 'y') {
             s.contextAccepted = true;
-            doSubmit();
+            advance();
             return true;
           }
           if (input === 'n') {
             s.contextAccepted = false;
-            doSubmit();
+            advance();
             return true;
           }
           if (input === 'h') {
@@ -576,13 +918,7 @@ function SpawnWizardDialog({
         </Text>
       </Box>
 
-      {s.step === 'harness' && (
-        <SelectList
-          header="Select harness:"
-          items={HARNESS_ORDER.map((h) => h.replace(/_/g, '-'))}
-          cursor={s.harnessCursor}
-        />
-      )}
+      {s.step === 'harness' && <HarnessGrid state={s} />}
 
       {s.step === 'model' && (
         <SelectList
@@ -620,6 +956,14 @@ function SpawnWizardDialog({
         <TextStep label="Rogue name:" value={s.name} placeholder="blank = autogenerate" />
       )}
 
+      {s.step === 'nameFavorite' && (
+        <TextStep
+          label="Name this favorite config:"
+          value={s.favoriteName}
+          placeholder="e.g. OpusMed"
+        />
+      )}
+
       {s.step === 'context' && spawnContext !== null && (
         <ContextStep spawnContext={spawnContext} contextAccepted={s.contextAccepted} />
       )}
@@ -627,6 +971,119 @@ function SpawnWizardDialog({
       {s.error !== null && (
         <Box marginTop={1}>
           <Text color={theme.error}>{s.error}</Text>
+        </Box>
+      )}
+    </Box>
+  );
+}
+
+/**
+ * The first wizard step's two-column grid: enabled harnesses (left, bare-digit select) and saved
+ * favorites + a `create favorite` row (right, command-modified-digit select). The active column's
+ * cursor row is highlighted; the `confirmDelete` / `rename` sub-modes render a prompt below the grid.
+ */
+function HarnessGrid({ state: s }: { readonly state: SpawnWizardState }): JSX.Element {
+  const theme = useTheme();
+
+  const leftRows = s.enabledHarnesses.map((h) => h.replace(/_/g, '-'));
+  const rightCount =
+    s.favorites.length < 10 ? s.favorites.length + 1 : 10;
+  const rows = Math.max(leftRows.length, rightCount);
+
+  const favoriteFocused = s.focusedColumn === 'favorites';
+  const renamingName =
+    s.gridMode === 'rename' ? (s.favorites[s.favoriteCursor]?.name ?? '') : null;
+  const deletingName =
+    s.gridMode === 'confirmDelete' ? (s.favorites[s.favoriteCursor]?.name ?? '') : null;
+
+  const rightLabel = (i: number): string => {
+    const chord = `[${s.chordPrefix}-${i < 9 ? i + 1 : 0}]`;
+    const name = i < s.favorites.length ? (s.favorites[i]?.name ?? '') : 'create favorite';
+    return `${chord} ${name}`;
+  };
+
+  return (
+    <Box marginTop={1} flexDirection="column">
+      <Box flexDirection="row" columnGap={4}>
+        {/* Left column — enabled harnesses. */}
+        <Box flexDirection="column">
+          <Text>Select harness:</Text>
+          <Box marginTop={1} flexDirection="column">
+            {Array.from({ length: rows }, (_, i) => {
+              if (i >= leftRows.length) {
+                return (
+                  <Box key={`l-${i}`}>
+                    <Text> </Text>
+                  </Box>
+                );
+              }
+              const highlit = !favoriteFocused && i === s.harnessCursor;
+              const label = `[${i + 1}] ${leftRows[i] ?? ''}`;
+              return (
+                <Box key={`l-${i}`}>
+                  {highlit ? (
+                    <Text color={theme.warning} bold>
+                      {'› '}
+                      {label}
+                    </Text>
+                  ) : (
+                    <Text dimColor>
+                      {'  '}
+                      {label}
+                    </Text>
+                  )}
+                </Box>
+              );
+            })}
+          </Box>
+        </Box>
+        {/* Right column — saved favorites + a create row. */}
+        <Box flexDirection="column">
+          <Text>Select favorite:</Text>
+          <Box marginTop={1} flexDirection="column">
+            {Array.from({ length: rows }, (_, i) => {
+              if (i >= rightCount) {
+                return (
+                  <Box key={`r-${i}`}>
+                    <Text> </Text>
+                  </Box>
+                );
+              }
+              const highlit = favoriteFocused && i === s.favoriteCursor;
+              const label = rightLabel(i);
+              return (
+                <Box key={`r-${i}`}>
+                  {highlit ? (
+                    <Text color={theme.warning} bold>
+                      {'› '}
+                      {label}
+                    </Text>
+                  ) : (
+                    <Text dimColor>
+                      {'  '}
+                      {label}
+                    </Text>
+                  )}
+                </Box>
+              );
+            })}
+          </Box>
+        </Box>
+      </Box>
+
+      {deletingName !== null && (
+        <Box marginTop={1}>
+          <Text color={theme.error}>
+            Delete "{deletingName}"? press d to confirm, any other key to cancel
+          </Text>
+        </Box>
+      )}
+      {renamingName !== null && (
+        <Box marginTop={1} flexDirection="column">
+          <Text color={theme.warning}>Select favorite — rename:</Text>
+          <Box marginTop={1}>
+            <TextInput value={s.renameValue} placeholder="favorite name" focused color={theme.text} />
+          </Box>
         </Box>
       )}
     </Box>

@@ -68,6 +68,20 @@ export interface ExistingWorktree {
   readonly branch?: string;
 }
 
+/** Repo-relative segment every murder worktree lives under (`.murder/worktrees/<…>`). */
+const MURDER_WORKTREES_SEGMENT = '.murder/worktrees/';
+
+/**
+ * Pure: collapse a worktree's absolute path to its repo-relative tail for DISPLAY only — e.g.
+ * `/home/me/code/murder/.murder/worktrees/rogue/foo` → `.murder/worktrees/rogue/foo`. The full
+ * absolute path stays the option `key` (it's what threads to `worktree_path` on the wire); only the
+ * label is shortened. A path outside `.murder/worktrees/` is returned unchanged.
+ */
+export function shortenWorktreePath(path: string): string {
+  const idx = path.indexOf(MURDER_WORKTREES_SEGMENT);
+  return idx >= 0 ? path.slice(idx) : path;
+}
+
 /**
  * Pure: assemble the picker list — `[main, ...existing, +new]`. Ports `build_worktree_options`.
  * Kept pure so the worktree step is testable without a bus.
@@ -76,7 +90,7 @@ export function buildWorktreeOptions(existing: readonly ExistingWorktree[]): Wor
   const options: WorktreeOption[] = [{ key: MAIN_WORKTREE_KEY, label: 'main checkout' }];
   for (const wt of existing) {
     const name = wt.branch ?? wt.path.split('/').filter(Boolean).pop() ?? wt.path;
-    options.push({ key: wt.path, label: `${name} (${wt.path})` });
+    options.push({ key: wt.path, label: `${name} (${shortenWorktreePath(wt.path)})` });
   }
   options.push({ key: NEW_WORKTREE_KEY, label: '+ new worktree' });
   return options;
