@@ -61,6 +61,7 @@ def test_open_status_for_recent_message(db_path: Path) -> None:
     assert snap.items[0].status == "open"
     assert snap.items[0].text == "fix the empty pane case"
     assert snap.items[0].target == "collaborator"
+    assert snap.items[0].conversation_id == "collaborator"
 
 
 def test_stale_status_for_old_message(db_path: Path) -> None:

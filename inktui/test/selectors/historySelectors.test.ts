@@ -14,6 +14,7 @@ function row(overrides: Partial<HistoryRow>): HistoryRow {
     itemId: 'c:0',
     text: 'an intention',
     target: 'collaborator',
+    conversationId: 'c',
     ts: '2026-06-10T00:00:00',
     status: 'open',
     harness: null,
@@ -30,15 +31,15 @@ function state(rows: HistoryRow[]): HistoryState {
 const NOW = Date.parse('2026-06-12T00:00:00Z');
 
 describe('selectHistoryView', () => {
-  it('loose mode keeps only OPEN/STALE rows, oldest first', () => {
+  it('loose mode keeps only OPEN/STALE rows, newest first', () => {
     const s = state([
       row({ itemId: 'a', ts: '2026-06-11T00:00:00', status: 'open' }),
       row({ itemId: 'b', ts: '2026-06-09T00:00:00', status: 'stale' }),
       row({ itemId: 'c', ts: '2026-06-10T00:00:00', status: 'dismissed' }),
     ]);
     const view = selectHistoryView(s, 'loose', NOW);
-    // dismissed dropped; remaining oldest-first.
-    expect(view.rows.map((r) => r.itemId)).toEqual(['b', 'a']);
+    // dismissed dropped; remaining newest-first.
+    expect(view.rows.map((r) => r.itemId)).toEqual(['a', 'b']);
     expect(view.looseCount).toBe(2);
   });
 

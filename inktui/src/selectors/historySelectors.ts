@@ -1,12 +1,13 @@
 /**
  * History view-models — the selector (rule 2: presentation lives here, never in the store).
  *
- * The history feed has two modes (the panel's `a` toggle):
- *  - **loose** (default): the "loose threads" radar — OPEN + STALE items only, **oldest first** (the
- *    thing that fell through the cracks longest ago sits at the top). DISMISSED rows are hidden.
- *  - **all**: the full reverse-chronological firehose, newest first, including dismissed rows.
+ * The history feed has two modes (the panel's `a` toggle). Both order newest-first (by last
+ * user-message send time); the only difference is the filter:
+ *  - **loose** (default): the "loose threads" radar — OPEN + STALE items only. DISMISSED rows are
+ *    hidden.
+ *  - **all**: the full firehose, every row including dismissed.
  *
- * The wire delivers items newest-first; this selector re-orders per mode and formats each row's
+ * The wire delivers items newest-first; this selector re-sorts (defensively) and formats each row's
  * relative age + status tag. Two layers (same as the other selectors): a pure transform
  * (`selectHistoryView`) and a `useMemo` hook (`useHistoryView`).
  */
@@ -24,6 +25,8 @@ export interface HistoryRowView {
   readonly text: string;
   /** Who/what it was aimed at (agent id). */
   readonly target: string;
+  /** The conversation id used to resume — distinct from `target`. */
+  readonly conversationId: string;
   /** Relative age, e.g. `"3h"`, `"2d"`, `"just now"`. */
   readonly age: string;
   /** Short uppercase status tag: `OPEN` / `STALE` / `DISMISSED`. */
@@ -76,6 +79,7 @@ function toHistoryRowView(row: HistoryRow, now: number): HistoryRowView {
     itemId: row.itemId,
     text: row.text,
     target: row.target,
+    conversationId: row.conversationId,
     age: formatRelativeAge(row.ts, now),
     statusTag: row.status.toUpperCase(),
     status: row.status,
@@ -83,18 +87,15 @@ function toHistoryRowView(row: HistoryRow, now: number): HistoryRowView {
   };
 }
 
-/** Compare by `ts` ISO string (lexicographic == chronological). */
-function byTsAsc(a: HistoryRow, b: HistoryRow): number {
-  return a.ts.localeCompare(b.ts);
-}
+/** Compare by `ts` ISO string descending (lexicographic == chronological): newest first. */
 function byTsDesc(a: HistoryRow, b: HistoryRow): number {
   return b.ts.localeCompare(a.ts);
 }
 
 /**
- * The pure view-model transform. In `loose` mode: keep only OPEN/STALE rows, oldest first. In `all`
- * mode: every row, newest first. `now` is injected (testable; the hook passes `Date.now()`). Never
- * mutates the slice's readonly array.
+ * The pure view-model transform. Both modes order newest-first; `loose` keeps only OPEN/STALE rows,
+ * `all` keeps every row (including dismissed). `now` is injected (testable; the hook passes
+ * `Date.now()`). Never mutates the slice's readonly array.
  */
 export function selectHistoryView(
   state: HistoryState,
@@ -103,7 +104,7 @@ export function selectHistoryView(
 ): HistoryView {
   const looseCount = state.rows.filter(isLoose).length;
   const filtered = mode === 'loose' ? state.rows.filter(isLoose) : [...state.rows];
-  const ordered = filtered.sort(mode === 'loose' ? byTsAsc : byTsDesc);
+  const ordered = filtered.sort(byTsDesc);
   const rows = ordered.map((row) => toHistoryRowView(row, now));
   return {
     rows,

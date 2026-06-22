@@ -235,9 +235,12 @@ class HistoryItemSummary:
     zero-LLM v0 taxonomy (``open`` / ``stale`` / ``dismissed``). The
     resumability triple (``harness`` / ``conversation_status`` / ``resumable``)
     is carried from day one so the /resume keybind is additive on this panel.
+    ``conversation_id`` is the resume key (a conversation UUID), distinct from
+    ``target`` (the agent_id).
     """
 
     item_id: str
+    conversation_id: str
     text: str
     target: str
     ts: str

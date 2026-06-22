@@ -185,6 +185,7 @@ describe('event-driven slice invalidation', () => {
           item_id: 'collaborator:0',
           text: 'fix the empty pane case',
           target: 'collaborator',
+          conversation_id: 'conv-collaborator',
           ts: '2026-06-10T00:00:00',
           status: 'open',
           harness: null,

@@ -67,7 +67,7 @@ export function HistoryPanel(): React.JSX.Element {
                 {row.statusTag}
               </Tag>
               {row.resumable ? (
-                <Button variant="ghost" size="sm" onClick={() => void resume(row.target)}>
+                <Button variant="ghost" size="sm" onClick={() => void resume(row.conversationId)}>
                   resume
                 </Button>
               ) : null}
