@@ -6,7 +6,7 @@
  *    status (open/stale/dismissed) derived server-side.
  *  - `PANEL_ID`: `'history'`. ctrl+5 arrives free via the digit dispatcher — no new global chord.
  *  - Local state: a `cursor` (like every panel) AND a `mode` (`'loose' | 'all'`) the `a` key toggles
- *    — loose threads (OPEN+STALE, oldest first) by default, the full reverse-chron feed on toggle.
+ *    — loose threads (OPEN+STALE, newest first) by default, the full feed on toggle.
  *  - Keys: j/k or ↓/↑ cursor; `a` toggles loose↔all; `x` dismisses the row under the cursor.
  *  - Row layout: a fixed-height multi-line Ledger entry — 1 metadata line + `INTENTION_LINES`
  *    intention lines. Line 1 = age · target · STATUS tag. The intention text follows, wrapped then
