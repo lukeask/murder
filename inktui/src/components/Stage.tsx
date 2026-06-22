@@ -421,16 +421,16 @@ export const ChatPane = memo(function ChatPane({
 }): JSX.Element {
   const theme = useTheme();
   const focusId: FocusId = chatPaneFocusId(identity.agentId);
-  const turns = useConversationTurns(identity.agentId, conversations);
 
-  // TUIchat-3 view-mode seam. Effective mode = per-pane override ?? the settings default. This is a
-  // THIN routing seam by design: `verbose` and `condensed` both fall through to today's renderer
-  // (condensed's rolling-summary backend lands in TUIchat-4 — until then it is verbose), and `tmux`
-  // shows a placeholder. The full readability rewrite (TUIchat-2) and the inline tmux frame
-  // (TUIchat-5) replace these branches; keep the seam small so they slot in cleanly.
+  // TUIchat-3 view-mode seam. Effective mode = per-pane override ?? the settings default.
+  // TUIchat-4: `condensed` now transforms the block stream (rolling chunk summaries replace their
+  // attributed blocks) BEFORE the Phase-2 renderer — see `selectConversationView`/`condenseBlocks`.
+  // `verbose` is unchanged; `tmux` shows the inline frame elsewhere and never reaches this turns path.
   const defaultChatViewMode = useAppStore((s) => s.settings.defaultChatViewMode);
   const viewMode: ChatViewMode =
     conversations.paneViewModes[identity.agentId] ?? defaultChatViewMode;
+
+  const turns = useConversationTurns(identity.agentId, conversations, viewMode);
 
   // Focus highlight + rect registration — the same recipe as every panel (rule 5), but with the
   // Stage-pane focus id. useMeasureFocus drops the rect on unmount → focus re-homes to chat.

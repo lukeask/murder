@@ -35,6 +35,7 @@ import type { AppStore } from '../store.js';
 import { toastStore } from '../toast/toastStore.js';
 import {
   type ChatViewMode,
+  type ChunkSummary,
   type ConversationBlock,
   type ConversationMeta,
   parseBlock,
@@ -79,8 +80,26 @@ export interface ConversationBlockSummaryDto {
 }
 
 /**
+ * One rolling chunk summary as it arrives inside `ConversationSummary.chunk_summaries[]` (the
+ * `ConversationChunkSummary` DTO, `murder/app/service/client_api.py`). `dto_to_wire` preserves the
+ * Python snake_case field names verbatim, so the wire shape is exactly this. `block_ids` are the
+ * explicit attribution pointers into `conversation_blocks.id` (numeric); the Condensed selector
+ * replaces exactly those blocks with `summary`. Ordered by `chunk_idx` on the wire.
+ */
+export interface ConversationChunkSummaryDto {
+  summary_id: number;
+  chunk_idx: number;
+  summary: string;
+  block_ids: readonly number[];
+}
+
+/**
  * One conversation entry in the snapshot list (the `ConversationSummary` DTO,
  * `murder/app/service/client_api.py`). Only `in_progress` conversations are included.
+ *
+ * TUIchat-4: the old single `condensed: string | null` scalar was DROPPED on the backend (column
+ * removed in migration) and replaced by `chunk_summaries[]` — ordered rolling chunk summaries, each
+ * with its attributed `block_ids`. Empty when no chunk has been summarized yet (Condensed → verbose).
  */
 export interface ConversationSummaryDto {
   conversation_id: string;
@@ -89,7 +108,8 @@ export interface ConversationSummaryDto {
   model: string | null;
   harness_session_id: string | null;
   live_state: string | null;
-  condensed: string | null;
+  /** Ordered rolling chunk summaries for the Condensed view (TUIchat-4); may be empty. */
+  chunk_summaries: readonly ConversationChunkSummaryDto[];
   /** A user message accepted while the harness was busy, held for idle delivery (or null). */
   queued_message?: string | null;
   status: string;
@@ -243,6 +263,7 @@ export function createConversationsActions(
         // row unchanged — the `id`/`payload` shape is identical to the event block shape.
         const parsed: Record<string, readonly ConversationBlock[]> = {};
         const meta: Record<string, ConversationMeta> = {};
+        const chunkSummaries: Record<string, readonly ChunkSummary[]> = {};
         for (const conv of reply.conversations) {
           parsed[conv.agent_id] = conv.blocks.map((b) =>
             parseBlock(b as unknown as Record<string, unknown>),
@@ -251,6 +272,21 @@ export function createConversationsActions(
             liveState: conv.live_state ?? null,
             queuedMessage: conv.queued_message ?? null,
           };
+          // Chunk summaries (TUIchat-4) — the SOURCE OF TRUTH for the Condensed view. Defensive
+          // against an older service with no `chunk_summaries` field (treated as none → Condensed
+          // falls back to verbose-like). Normalised to numeric ids + ordered by chunk_idx so the
+          // selector can rely on order without re-sorting.
+          const rawSummaries = conv.chunk_summaries ?? [];
+          chunkSummaries[conv.agent_id] = rawSummaries
+            .map(
+              (s): ChunkSummary => ({
+                summaryId: Number(s.summary_id),
+                chunkIdx: Number(s.chunk_idx),
+                summary: String(s.summary ?? ''),
+                blockIds: (s.block_ids ?? []).map((id) => Number(id)),
+              }),
+            )
+            .sort((a, b) => a.chunkIdx - b.chunkIdx);
         }
         // REPLACE, do not union: the snapshot is authoritative for the in-progress set. A merge
         // (`{...old, ...parsed}`) would keep an agent whose conversation has since ENDED (absent
@@ -261,6 +297,10 @@ export function createConversationsActions(
             ...state.conversations,
             transcripts: parsed,
             meta,
+            // REPLACE (same authoritative-snapshot reasoning as transcripts/meta): the snapshot's
+            // chunk_summaries[] is the source of truth, so the map is rebuilt from exactly it. Live
+            // `chunk-summarized` events fold in between snapshots via `applyBlock`.
+            chunkSummaries,
           },
         }));
       } catch {
@@ -308,6 +348,42 @@ export function createConversationsActions(
 
     applyBlock(event: ConversationBlockEvent): void {
       const agentId = event.agent_id;
+
+      // TUIchat-4: the Condensed-view chunk summary reuses the `conversation.block` channel with
+      // `action: 'chunk-summarized'`; its `block` is the summary payload, NOT a transcript row, so it
+      // must never reach `parseBlock`/the transcript array. Fold it into the ephemeral chunkSummaries
+      // map as an incremental hint (the snapshot's chunk_summaries[] stays the source of truth and
+      // overwrites these on the next re-prime). `summary_id`/`chunk_idx` are absent on the live event:
+      // use -1 and append at the tail (events arrive in flush order, the contract).
+      if (event.action === 'chunk-summarized') {
+        const block = event.block;
+        const summaryText = typeof block['summary'] === 'string' ? block['summary'] : '';
+        if (!summaryText) return; // empty-summary guard mirrors the backend (Condensed → verbose)
+        const rawIds = block['block_ids'];
+        const blockIds = Array.isArray(rawIds)
+          ? rawIds.map((id) => Number(id)).filter((n) => Number.isFinite(n))
+          : [];
+        store.setState((state) => {
+          const prev = state.conversations.chunkSummaries[agentId] ?? [];
+          const next: ChunkSummary = {
+            summaryId: -1,
+            chunkIdx: prev.length,
+            summary: summaryText,
+            blockIds,
+          };
+          return {
+            conversations: {
+              ...state.conversations,
+              chunkSummaries: {
+                ...state.conversations.chunkSummaries,
+                [agentId]: [...prev, next],
+              },
+            },
+          };
+        });
+        return;
+      }
+
       const parsed = parseBlock(event.block);
 
       store.setState((state) => {
