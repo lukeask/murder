@@ -81,7 +81,7 @@ class CrowAgent(HarnessBackedAgent):
                 self.runtime.sync_agent(self)
             raise RuntimeError(paste.message or "failed to deliver startup context")
         self.status = AgentStatus.RUNNING
-        # Fresh tmux session ⇒ fresh transcript + accumulator scrollback.
+        # Fresh tmux session: fresh transcript and producer-owned parser state.
         self.start_conversation()
         if self.runtime:
             self.runtime.sync_agent(self)

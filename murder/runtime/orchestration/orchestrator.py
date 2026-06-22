@@ -336,7 +336,7 @@ class Orchestrator:
         self.rt.register_agent(agent)
         agent.status = AgentStatus.RUNNING
         self.rt.sync_agent(agent)
-        # Fresh accumulator; reattach resumes transcript projection from the
+        # Fresh producer state; reattach resumes transcript projection from the
         # current pane scrollback rather than the original startup state.
         agent.start_conversation()
         await self.rt.publish_snapshot(Entity.AGENT, agent.id)
@@ -464,7 +464,7 @@ class Orchestrator:
             agent.status = AgentStatus.RUNNING
             self.rt.sync_agent(agent)
             # Rogues bypass CrowAgent.start(), so kick off transcript projection
-            # here: a fresh session ⇒ fresh accumulator + producer loop.
+            # here: a fresh session gets fresh producer-owned parser state.
             agent.start_conversation()
             # Broadcast the freshly spawned agent so the Ink roster / Crows panel
             # picks it up immediately. Without this, rogue spawn emitted no `agent`
