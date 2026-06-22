@@ -47,6 +47,9 @@ export interface CommandCtx {
   readonly dismiss?: () => void;
   /** Push a transient toast (unknown-command feedback, stub "coming soon" messages, passthrough hint). */
   readonly pushToast: (text: string, options?: PushOptions) => void;
+  /** Flush the entire toast rack now — the `:dismiss-toasts` manual escape hatch for when a boot
+   * flood fills the bottom-right (no chord: `ctrl+m` is taken by murder). Wraps `toastStore.clear()`. */
+  readonly clearToasts: () => void;
   /** Persist a `{name, body}` template (the `:save` command). Wraps `actions.templates.save`. */
   readonly saveTemplate: (name: string, body: string) => void;
   /** Set the per-pane chat view mode for `agentId` (TUIchat-3: `:verbose`/`:compact`/`:tmux`). Wraps
@@ -91,6 +94,12 @@ const COMMANDS: Readonly<Record<string, CommandHandler>> = {
       return;
     }
     ctx.dismiss();
+  },
+
+  /** `:dismiss-toasts` — flush the whole toast rack now (no chord: `ctrl+m` is taken). The manual
+   * escape hatch for a boot flood that fills the bottom-right. */
+  'dismiss-toasts'(_args, _agentId, ctx) {
+    ctx.clearToasts();
   },
 
   /** `:compact` / `:verbose` / `:tmux` — set the focused pane's view mode (TUIchat-3). `:compact`

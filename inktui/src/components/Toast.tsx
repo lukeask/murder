@@ -45,19 +45,33 @@ import { useTheme } from '../theme/themeStore.js';
  * toast disappears within a frame of its deadline; only runs while the rack is non-empty. */
 const TICK_MS = 200;
 
-/** One toast row. `error` earns colour (`red`); `info` is a dim whisper with no colour flash. */
+/** One toast row. `error` earns full colour (`red`); `warning` is a dim amber whisper (a recoverable
+ * boot race — present but not alarming); `info` is a plain dim whisper with no colour. When the same
+ * toast was pushed more than once (deduped in the store) the row shows a `(×N)` multiplicity suffix. */
 function ToastRow({
   severity,
   text,
+  count,
 }: {
   readonly severity: ToastSeverity;
   readonly text: string;
+  readonly count: number;
 }): JSX.Element {
   const theme = useTheme();
+  const label = count > 1 ? `${text} (×${count})` : text;
   if (severity === 'error') {
-    return <Text color={theme.error}>{text}</Text>;
+    return <Text color={theme.error}>{label}</Text>;
   }
-  return <Text dimColor>{text}</Text>;
+  if (severity === 'warning') {
+    // Recoverable: dim + amber (theme.warning) so it reads as transient noise, not a real break —
+    // distinct from both info (plain dim) and error (full red).
+    return (
+      <Text color={theme.warning} dimColor>
+        {label}
+      </Text>
+    );
+  }
+  return <Text dimColor>{label}</Text>;
 }
 
 /**
@@ -89,7 +103,7 @@ export function Toast(): JSX.Element | null {
   return (
     <Box flexDirection="column" alignItems="flex-end">
       {shown.map((t) => (
-        <ToastRow key={t.id} severity={t.severity} text={t.text} />
+        <ToastRow key={t.id} severity={t.severity} text={t.text} count={t.count} />
       ))}
     </Box>
   );

@@ -837,7 +837,7 @@ describe('first-run UX — backend error events surface as toasts', () => {
     toastStore.getState().clear();
   });
 
-  it('routes a bus `error` event to the toast rack with error severity', () => {
+  it('routes a NON-recoverable bus `error` event to the toast rack with error severity', () => {
     const { fake, dispose } = setup();
     fake.emit({
       type: 'error',
@@ -846,12 +846,31 @@ describe('first-run UX — backend error events surface as toasts', () => {
       run_id: 'run-1',
       agent_id: 'a-1',
       message: 'worker exploded',
-      recoverable: true,
+      recoverable: false,
     });
     const live = selectLiveToasts(toastStore.getState().toasts, Date.now());
     expect(live).toHaveLength(1);
     expect(live[0]?.text).toBe('worker exploded');
     expect(live[0]?.severity).toBe('error');
+    dispose();
+  });
+
+  it('maps a RECOVERABLE bus `error` event to a warning toast (severity gradient)', () => {
+    const { fake, dispose } = setup();
+    fake.emit({
+      type: 'error',
+      id: 'evt-err-recoverable',
+      ts: '2026-06-12T00:00:00Z',
+      run_id: 'run-1',
+      agent_id: 'a-1',
+      message: 'planner missed in poll',
+      recoverable: true,
+    });
+    const live = selectLiveToasts(toastStore.getState().toasts, Date.now());
+    expect(live).toHaveLength(1);
+    expect(live[0]?.text).toBe('planner missed in poll');
+    // recoverable → warning (dim/amber), NOT error red — transient boot noise reads differently.
+    expect(live[0]?.severity).toBe('warning');
     dispose();
   });
 

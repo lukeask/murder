@@ -1070,6 +1070,7 @@ function Shell({
       toastStore.getState().push('note captured', { ttlMs: 6000 });
     },
     pushToast: (text, options) => toastStore.getState().push(text, options),
+    clearToasts: () => toastStore.getState().clear(),
     saveTemplate: (name, body) => {
       void appStore.getState().actions.templates.save(name, body);
     },

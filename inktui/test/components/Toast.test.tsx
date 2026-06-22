@@ -24,6 +24,10 @@ import { MAX_VISIBLE_TOASTS, toastStore } from '../../src/store/toast/toastStore
 // above) that emits this foreground SGR — the colour signal the assertions key on.
 const ERROR_SGR = '\x1b[38;2;230;126;128m';
 
+// Warning toasts paint in `theme.warning` (everforest-dark-hard yellow #dbbc7f) AND dim — recoverable
+// noise that is present but not alarming. This is its foreground SGR (distinct from error red).
+const WARNING_SGR = '\x1b[38;2;219;188;127m';
+
 /** Let Ink flush a render. */
 async function tick(): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, 20));
@@ -66,6 +70,43 @@ describe('<Toast>', () => {
     const frame = lastFrame() ?? '';
     expect(frame).toContain('agent did not handle message');
     expect(frame).toContain(ERROR_SGR); // theme.error truecolor SGR
+    unmount();
+  });
+
+  it('paints a warning toast dim AND amber (distinct from error red and info plain-dim)', async () => {
+    toastStore.getState().push('planner pane lag', { severity: 'warning', ttlMs: 10_000 });
+    const { lastFrame, unmount } = render(<Toast />);
+    await tick();
+    const frame = lastFrame() ?? '';
+    expect(frame).toContain('planner pane lag');
+    // warning is dim + amber — both the dim SGR (2) and the warning colour are present; NOT error red.
+    expect(frame).toContain('\x1b[2m');
+    expect(frame).toContain(WARNING_SGR);
+    expect(frame).not.toContain(ERROR_SGR);
+    unmount();
+  });
+
+  it('shows a (×N) multiplicity suffix when the same toast is pushed repeatedly (dedup)', async () => {
+    toastStore.getState().push('boot race', { severity: 'error', ttlMs: 10_000 });
+    toastStore.getState().push('boot race', { severity: 'error', ttlMs: 10_000 });
+    toastStore.getState().push('boot race', { severity: 'error', ttlMs: 10_000 });
+    const { lastFrame, unmount } = render(<Toast />);
+    await tick();
+    const frame = lastFrame() ?? '';
+    // One row (deduped), labelled with the multiplicity.
+    expect(frame).toContain('boot race (×3)');
+    const lines = frame.split('\n').filter((l) => l.trim().length > 0);
+    expect(lines).toHaveLength(1);
+    unmount();
+  });
+
+  it('does NOT show a count suffix for a single (count 1) toast', async () => {
+    toastStore.getState().push('solo', { ttlMs: 10_000 });
+    const { lastFrame, unmount } = render(<Toast />);
+    await tick();
+    const frame = lastFrame() ?? '';
+    expect(frame).toContain('solo');
+    expect(frame).not.toContain('×');
     unmount();
   });
 
