@@ -28,7 +28,15 @@ class WorktreeEntry:
 
 
 class WorktreeError(RuntimeError):
-    """Worktree provisioning failed."""
+    """Worktree provisioning failed.
+
+    Non-retryable: a worktree failure is a deterministic, well-defined
+    condition (branch mismatch, missing branch, dirty collision), so retrying
+    the same spawn would just fail the same way 90 seconds later. The supervisor
+    reads this attribute to short-circuit the retry/escalation loop.
+    """
+
+    retryable = False
 
 
 def safe_branch_segment(value: str) -> str:
@@ -53,25 +61,19 @@ def safe_branch_name(value: str) -> str:
     return name
 
 
-def crow_worktree_ref(repo_root: Path, ticket_id: str) -> WorktreeRef:
-    ticket_segment = safe_branch_segment(ticket_id)
-    return WorktreeRef(
-        branch=f"murder/crow/{ticket_segment}",
-        path=worktrees_dir(repo_root) / "crow" / ticket_segment,
-    )
+def worktree_ref(repo_root: Path, branch_name: str) -> WorktreeRef:
+    """Resolve the flat worktree path for ``branch_name``.
 
+    Every worktree lives directly at ``.murder/worktrees/<branch-slug>`` — no
+    per-kind subdirectory. Asking for ``x`` gets you ``.murder/worktrees/x``.
+    """
 
-def named_worktree_ref(repo_root: Path, branch_name: str, *, category: str) -> WorktreeRef:
     branch = safe_branch_name(branch_name)
     segment = safe_branch_segment(branch.replace("/", "-"))
     return WorktreeRef(
         branch=branch,
-        path=worktrees_dir(repo_root) / category / segment,
+        path=worktrees_dir(repo_root) / segment,
     )
-
-
-def rogue_worktree_ref(repo_root: Path, branch_name: str) -> WorktreeRef:
-    return named_worktree_ref(repo_root, branch_name, category="rogue")
 
 
 async def _git(repo_root: Path, *args: str) -> tuple[int, str, str]:
@@ -160,11 +162,36 @@ def list_murder_worktrees_sync(repo_root: Path) -> list[WorktreeEntry]:
     return result
 
 
+async def _branch_at_path(repo_root: Path, path: Path) -> str | None:
+    """Return the branch checked out at ``path``, or None if git doesn't know it."""
+
+    target = path.resolve()
+    for entry in await list_git_worktrees(repo_root):
+        if entry.path.resolve() == target:
+            return entry.branch
+    return None
+
+
 async def ensure_worktree(repo_root: Path, ref: WorktreeRef) -> WorktreeRef:
     """Create or reuse a git worktree at ``ref.path`` on ``ref.branch``."""
 
     if (ref.path / ".git").exists():
-        return ref
+        # Reuse only when the existing checkout is actually on the requested
+        # branch. Paths are flat (``worktrees/<slug>``), so two distinct branch
+        # names that slugify to the same segment collide here. Without this
+        # guard the first caller to win a slug would silently lend its checkout
+        # to the next, running that agent on the WRONG branch with no error.
+        existing = await _branch_at_path(repo_root, ref.path)
+        if existing == ref.branch:
+            return ref
+        raise WorktreeError(
+            f"worktree at {ref.path} is checked out on {existing or 'an unknown ref'!r}, "
+            f"not {ref.branch!r} (two branch names may slugify to the same path). "
+            f"Resolve with one of:\n"
+            f"  git worktree list\n"
+            f"  git -C {ref.path} checkout {ref.branch}\n"
+            f"  git worktree remove {ref.path}"
+        )
 
     ref.path.parent.mkdir(parents=True, exist_ok=True)
     rc, _out, err = await _git(
@@ -193,34 +220,15 @@ async def ensure_worktree(repo_root: Path, ref: WorktreeRef) -> WorktreeRef:
     raise WorktreeError(err.strip() or f"git worktree add failed for {ref.path}")
 
 
-async def ensure_crow_worktree(repo_root: Path, ticket_id: str) -> WorktreeRef:
-    """Create or reuse the git worktree for a ticket's crow.
+async def ensure_worktree_for_branch(repo_root: Path, branch_name: str) -> WorktreeRef:
+    """Create or reuse the flat worktree for ``branch_name``.
 
     The branch is rooted at the parent checkout's current HEAD on first
     creation. If the branch already exists, this attaches a worktree to that
     branch instead of creating a second branch.
     """
 
-    return await ensure_worktree(repo_root, crow_worktree_ref(repo_root, ticket_id))
-
-
-async def ensure_named_worktree(
-    repo_root: Path,
-    branch_name: str,
-    *,
-    category: str = "rogue",
-) -> WorktreeRef:
-    return await ensure_worktree(repo_root, named_worktree_ref(repo_root, branch_name, category=category))
-
-
-async def prune_crow_worktree(repo_root: Path, ticket_id: str) -> bool:
-    """Remove a ticket worktree when git says it is safe to remove.
-
-    Dirty worktrees are left in place so agent changes remain inspectable.
-    """
-
-    ref = crow_worktree_ref(repo_root, ticket_id)
-    return await prune_worktree_path(repo_root, ref.path)
+    return await ensure_worktree(repo_root, worktree_ref(repo_root, branch_name))
 
 
 async def prune_terminal_crow_worktree(
@@ -228,6 +236,12 @@ async def prune_terminal_crow_worktree(
     repo_root: Path,
     ticket_id: str,
 ) -> bool:
+    """Prune a finished crow's worktree using the path stored at spawn time.
+
+    The path is the durable source of truth (``agents.worktree_path``); if no
+    crow ever recorded one, there is nothing to prune.
+    """
+
     row = conn.execute(
         """
         SELECT worktree_path
@@ -240,7 +254,7 @@ async def prune_terminal_crow_worktree(
     ).fetchone()
     if row is not None and row["worktree_path"]:
         return await prune_worktree_path(repo_root, row["worktree_path"])
-    return await prune_crow_worktree(repo_root, ticket_id)
+    return False
 
 
 async def prune_worktree_path(repo_root: Path, worktree_path: str | Path) -> bool:
@@ -257,18 +271,14 @@ __all__ = [
     "WorktreeError",
     "WorktreeEntry",
     "WorktreeRef",
-    "crow_worktree_ref",
-    "ensure_crow_worktree",
-    "ensure_named_worktree",
     "ensure_worktree",
+    "ensure_worktree_for_branch",
     "list_git_worktrees",
     "list_git_worktrees_sync",
     "list_murder_worktrees_sync",
-    "named_worktree_ref",
-    "prune_crow_worktree",
     "prune_terminal_crow_worktree",
     "prune_worktree_path",
-    "rogue_worktree_ref",
     "safe_branch_name",
     "safe_branch_segment",
+    "worktree_ref",
 ]

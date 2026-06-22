@@ -39,7 +39,7 @@ from murder.llm.harnesses import get as get_harness
 from murder.llm.harnesses.harnesses_doc import write_harnesses_doc
 from murder.state.storage.paths import tickets_dir
 from murder.state.storage.worktrees import (
-    ensure_named_worktree,
+    ensure_worktree_for_branch,
 )
 from murder.runtime.terminal import tmux
 from murder.runtime.terminal.session_names import format_session_name
@@ -281,10 +281,9 @@ class Orchestrator:
         worktree_name = row.get("worktree")
         worktree_path: str | None = None
         if isinstance(worktree_name, str) and worktree_name.strip():
-            worktree = await ensure_named_worktree(
+            worktree = await ensure_worktree_for_branch(
                 self.rt.repo_root,
                 worktree_name.strip(),
-                category="crow",
             )
             worktree_path = str(worktree.path)
         additional_workspace_dirs: tuple[str, ...] = ()
@@ -338,10 +337,9 @@ class Orchestrator:
         worktree_path: Path | None = None
         worktree_name = row.get("worktree")
         if isinstance(worktree_name, str) and worktree_name.strip():
-            worktree = await ensure_named_worktree(
+            worktree = await ensure_worktree_for_branch(
                 self.rt.repo_root,
                 worktree_name.strip(),
-                category="crow",
             )
             repo_root = worktree.path
             worktree_path = worktree.path
@@ -464,10 +462,9 @@ class Orchestrator:
         cwd = self.rt.repo_root
         resolved_worktree: Path | None = None
         if isinstance(worktree_branch, str) and worktree_branch.strip():
-            ref = await ensure_named_worktree(
+            ref = await ensure_worktree_for_branch(
                 self.rt.repo_root,
                 worktree_branch.strip(),
-                category="rogue",
             )
             cwd = ref.path
             resolved_worktree = ref.path

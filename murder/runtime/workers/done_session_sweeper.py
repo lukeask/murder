@@ -22,7 +22,7 @@ class DoneSessionSweeperWorker(Worker):
             clear_agent_session,
             list_stale_done_crow_sessions,
         )
-        from murder.state.storage.worktrees import prune_crow_worktree, prune_worktree_path
+        from murder.state.storage.worktrees import prune_worktree_path
         from murder.runtime.terminal import tmux
 
         while not stop_event.is_set():
@@ -70,7 +70,7 @@ class DoneSessionSweeperWorker(Worker):
                         removed = (
                             await prune_worktree_path(ctx.repo_root, worktree_path)
                             if worktree_path
-                            else await prune_crow_worktree(ctx.repo_root, row["ticket_id"])
+                            else False
                         )
                         if removed:
                             LOGGER.info(

@@ -51,7 +51,7 @@ def _make_repo_with_branch(tmp_path: Path) -> tuple[Path, str, Path]:
 
     fork_point = _git_out(repo, "rev-parse", "HEAD")
 
-    wt_path = repo / ".murder" / "worktrees" / "rogue" / "feature"
+    wt_path = repo / ".murder" / "worktrees" / "feature"
     wt_path.parent.mkdir(parents=True, exist_ok=True)
     _git(repo, "worktree", "add", "-b", "feature/work", str(wt_path), "main")
     _commit(wt_path, "feature-a", body="line one\nline two")

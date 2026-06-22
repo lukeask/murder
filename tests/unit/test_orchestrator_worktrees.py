@@ -188,13 +188,7 @@ def test_spawn_crow_defaults_to_main_checkout(repo_root: Path, monkeypatch) -> N
     rt = _Runtime(repo_root=repo_root, config=config, db=conn)
     captured = {}
 
-    async def fake_ensure(
-        _repo: Path,
-        _branch_name: str,
-        *,
-        category: str = "rogue",
-    ) -> WorktreeRef:
-        del category
+    async def fake_ensure(_repo: Path, _branch_name: str) -> WorktreeRef:
         raise AssertionError("worktrees must be opt-in")
 
     async def fake_spawn_agent(spec, *, rt, event_sink):
@@ -208,7 +202,7 @@ def test_spawn_crow_defaults_to_main_checkout(repo_root: Path, monkeypatch) -> N
             return "brief"
 
     monkeypatch.setattr(
-        "murder.runtime.orchestration.orchestrator.ensure_named_worktree",
+        "murder.runtime.orchestration.orchestrator.ensure_worktree_for_branch",
         fake_ensure,
     )
     monkeypatch.setattr(
@@ -248,16 +242,11 @@ def test_spawn_crow_provisions_opt_in_worktree_and_puts_it_in_agent_scope(
         crow_handler=CrowHandlerConfig(model="test-model"),
     )
     rt = _Runtime(repo_root=repo_root, config=config, db=conn)
-    worktree = repo_root / ".murder" / "worktrees" / "crow" / "feature-c6"
+    worktree = repo_root / ".murder" / "worktrees" / "feature-c6"
     captured = {}
 
-    async def fake_ensure(
-        repo: Path,
-        branch_name: str,
-        *,
-        category: str = "rogue",
-    ) -> WorktreeRef:
-        captured["ensure"] = (repo, branch_name, category)
+    async def fake_ensure(repo: Path, branch_name: str) -> WorktreeRef:
+        captured["ensure"] = (repo, branch_name)
         return WorktreeRef(branch="feature/c6", path=worktree)
 
     async def fake_spawn_agent(spec, *, rt, event_sink):
@@ -271,7 +260,7 @@ def test_spawn_crow_provisions_opt_in_worktree_and_puts_it_in_agent_scope(
             return "brief"
 
     monkeypatch.setattr(
-        "murder.runtime.orchestration.orchestrator.ensure_named_worktree",
+        "murder.runtime.orchestration.orchestrator.ensure_worktree_for_branch",
         fake_ensure,
     )
     monkeypatch.setattr(
@@ -286,7 +275,7 @@ def test_spawn_crow_provisions_opt_in_worktree_and_puts_it_in_agent_scope(
     session = asyncio.run(Orchestrator(rt).spawn_crow("t001"))  # type: ignore[arg-type]
 
     assert session == "murder_repo_crow_t001"
-    assert captured["ensure"] == (repo_root, "feature/c6", "crow")
+    assert captured["ensure"] == (repo_root, "feature/c6")
     spec = captured["spec"]
     assert spec.role == AgentRole.CROW
     assert spec.scope.ticket_id == "t001"

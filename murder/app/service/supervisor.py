@@ -189,10 +189,15 @@ class Supervisor:
         try:
             result = await worker.on_command(command, self._ctx)
         except Exception as exc:
+            # An exception may declare itself non-retryable (e.g. WorktreeError):
+            # a deterministic failure that would fail identically on retry. Such
+            # an error overrides the command's own retry policy so we fail fast
+            # to escalation instead of burning the ~90s retry budget.
+            retryable = command.retryable and getattr(exc, "retryable", True)
             dispatcher.fail(
                 command_id=command_id,
                 last_error=str(exc),
-                retryable=command.retryable,
+                retryable=retryable,
             )
             return
         dispatcher.finish(
