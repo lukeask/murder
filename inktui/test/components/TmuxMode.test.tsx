@@ -133,7 +133,11 @@ describe('TmuxMode — alt+y fullscreen tmux mode', () => {
     expect(stores.focus.getState().intendedId).toBe('tickets'); // prior focus restored
   });
 
-  it('alt+y again exits the mode (toggle off) and closes the subscription', async () => {
+  // TUIchat-3: the `y` chord that entered/toggled the fullscreen tmux mode is freed/parked. The mode
+  // itself is NOT retired until TUIchat-5 (where it becomes an inline per-pane view), so the
+  // programmatic enter/exit + Escape tests above still pass; only the chord-entry paths are gone.
+  // Skipped (not deleted) so the coverage is easy to restore/relocate when TUIchat-5 lands.
+  it.skip('alt+y again exits the mode (toggle off) and closes the subscription', async () => {
     const { bus, stores } = setup();
     // A focused chat is required for the enter path: the mirror scopes to the focused crow's session.
     focusChatPane(stores);
@@ -154,7 +158,9 @@ describe('TmuxMode — alt+y fullscreen tmux mode', () => {
     expect(stores.focus.getState().intendedId).toBe('stage:chat:a1'); // prior focus restored
   });
 
-  it('alt+y with no focused chat toasts instead of entering the mirror', async () => {
+  // TUIchat-3: chord-entry removed (see the skip note above). The no-focus toast path is part of the
+  // default `toggleTmux` handler, now unreachable by chord; restore with TUIchat-5's inline entry.
+  it.skip('alt+y with no focused chat toasts instead of entering the mirror', async () => {
     const { bus, stores } = setup(); // focus is on the tickets panel — no chat → no crow session
     toastStore.getState().clear(); // singleton — start from a clean slate
     const { stdin } = render(<Harness stores={stores} bus={bus} />);
@@ -263,7 +269,10 @@ describe('TmuxMode — alt+y fullscreen tmux mode', () => {
 });
 
 describe('alt+y dispatch — pure unit test (no rendering)', () => {
-  it('alt+y fires toggleTmux in the global-chord layer', () => {
+  // TUIchat-3: `y` (the old tmux chord) is freed/parked. The fullscreen TmuxMode component is NOT
+  // retired here (that is TUIchat-5), but no global chord enters it anymore, so alt+y no longer fires
+  // toggleTmux — it falls through unhandled.
+  it('alt+y is freed/parked — no longer fires toggleTmux at the global layer', () => {
     let toggleCalled = false;
     const ctx = {
       focusedId: 'chat' as const,
@@ -276,6 +285,7 @@ describe('alt+y dispatch — pure unit test (no rendering)', () => {
         toggleTmux: () => {
           toggleCalled = true;
         },
+        cycleChatView: () => {},
         newPlan: () => {},
         newTicket: () => {},
         openSettings: () => {},
@@ -293,7 +303,10 @@ describe('alt+y dispatch — pure unit test (no rendering)', () => {
       activeMode: null,
     };
     const outcome = dispatchKey('y', makeKey({ meta: true }), ctx);
-    expect(outcome).toEqual({ layer: 'global', handled: true });
-    expect(toggleCalled).toBe(true);
+    // `y` is no longer a global chord — it is not handled at the global layer (it falls through; with
+    // chat focus the dispatcher reports the chat layer), and toggleTmux never fires.
+    expect(outcome.handled).toBe(false);
+    expect(outcome.layer).not.toBe('global');
+    expect(toggleCalled).toBe(false);
   });
 });

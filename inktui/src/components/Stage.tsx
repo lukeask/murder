@@ -84,7 +84,10 @@ import {
   useOpenChatPanes,
 } from '../selectors/conversationsSelectors.js';
 import { harnessModelFooter, worktreeLabel } from '../selectors/harnessDisplay.js';
-import type { ConversationsState } from '../store/conversations/conversationsSlice.js';
+import type {
+  ChatViewMode,
+  ConversationsState,
+} from '../store/conversations/conversationsSlice.js';
 import type { OpenDoc } from '../store/docView/docViewSlice.js';
 import type { FavoritesState } from '../store/favorites/favoritesSlice.js';
 import type { RosterState } from '../store/roster/rosterSlice.js';
@@ -255,6 +258,15 @@ export const ChatPane = memo(function ChatPane({
   const focusId: FocusId = chatPaneFocusId(identity.agentId);
   const turns = useConversationTurns(identity.agentId, conversations);
 
+  // TUIchat-3 view-mode seam. Effective mode = per-pane override ?? the settings default. This is a
+  // THIN routing seam by design: `verbose` and `condensed` both fall through to today's renderer
+  // (condensed's rolling-summary backend lands in TUIchat-4 — until then it is verbose), and `tmux`
+  // shows a placeholder. The full readability rewrite (TUIchat-2) and the inline tmux frame
+  // (TUIchat-5) replace these branches; keep the seam small so they slot in cleanly.
+  const defaultChatViewMode = useAppStore((s) => s.settings.defaultChatViewMode);
+  const viewMode: ChatViewMode =
+    conversations.paneViewModes[identity.agentId] ?? defaultChatViewMode;
+
   // Focus highlight + rect registration — the same recipe as every panel (rule 5), but with the
   // Stage-pane focus id. useMeasureFocus drops the rect on unmount → focus re-homes to chat.
   const ref = useFocusRef();
@@ -383,7 +395,13 @@ export const ChatPane = memo(function ChatPane({
       {/* Fill box: sizes to the Pane's inner content area (flexGrow + overflow hidden). Its height is
           received as `contentHeight` (ChatGrid measures + distributes), not self-measured here. */}
       <Box flexDirection="column" flexGrow={1} minHeight={0} overflow="hidden">
-        {visibleLines.length === 0 ? (
+        {viewMode === 'tmux' ? (
+          // TUIchat-5 seam: the inline tmux frame replaces this placeholder. Keep it a single dim line
+          // so the pane chrome (scrollbar/footer) still draws and the focus model is unaffected.
+          <Text dimColor>tmux view (inline) — coming in TUIchat-5</Text>
+        ) : visibleLines.length === 0 ? (
+          // verbose AND condensed route here for now (TUIchat-2 owns the readability rewrite; condensed
+          // has no backend until TUIchat-4, so it falls back to the verbose render).
           <Text dimColor>no history</Text>
         ) : (
           visibleLines.map((line, i) => (

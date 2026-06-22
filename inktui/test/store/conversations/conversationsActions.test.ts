@@ -352,3 +352,57 @@ describe('conversationsActions — chat-pane overrides', () => {
     dispose();
   });
 });
+
+describe('conversationsActions — pane view modes (TUIchat-3)', () => {
+  it('starts with an empty paneViewModes map', () => {
+    expect(initialConversationsState.paneViewModes).toEqual({});
+  });
+
+  it('setPaneViewMode writes a per-pane mode entry', () => {
+    const { store, dispose } = setup();
+    store.getState().actions.conversations.setPaneViewMode('agent-1', 'condensed');
+    expect(store.getState().conversations.paneViewModes['agent-1']).toBe('condensed');
+    store.getState().actions.conversations.setPaneViewMode('agent-1', 'tmux');
+    expect(store.getState().conversations.paneViewModes['agent-1']).toBe('tmux');
+    dispose();
+  });
+
+  it('setPaneViewMode is per-agent (does not touch other panes)', () => {
+    const { store, dispose } = setup();
+    store.getState().actions.conversations.setPaneViewMode('a', 'tmux');
+    store.getState().actions.conversations.setPaneViewMode('b', 'condensed');
+    expect(store.getState().conversations.paneViewModes).toEqual({ a: 'tmux', b: 'condensed' });
+    dispose();
+  });
+
+  it('cyclePaneViewMode rotates verbose → condensed → tmux → verbose from the default', () => {
+    const { store, dispose } = setup();
+    // No override → effective mode is settings.defaultChatViewMode ('verbose').
+    expect(store.getState().settings.defaultChatViewMode).toBe('verbose');
+    const cycle = store.getState().actions.conversations.cyclePaneViewMode;
+    cycle('a');
+    expect(store.getState().conversations.paneViewModes['a']).toBe('condensed');
+    cycle('a');
+    expect(store.getState().conversations.paneViewModes['a']).toBe('tmux');
+    cycle('a');
+    expect(store.getState().conversations.paneViewModes['a']).toBe('verbose');
+    dispose();
+  });
+
+  it('cyclePaneViewMode seeds from the settings default when the pane has no override', () => {
+    const { store, dispose } = setup();
+    // Make the default 'condensed' — the first cycle should advance condensed → tmux.
+    store.setState((s) => ({ settings: { ...s.settings, defaultChatViewMode: 'condensed' } }));
+    store.getState().actions.conversations.cyclePaneViewMode('a');
+    expect(store.getState().conversations.paneViewModes['a']).toBe('tmux');
+    dispose();
+  });
+
+  it('ref-swaps paneViewModes on each mutation (granularity contract)', () => {
+    const { store, dispose } = setup();
+    const before = store.getState().conversations.paneViewModes;
+    store.getState().actions.conversations.setPaneViewMode('a', 'tmux');
+    expect(store.getState().conversations.paneViewModes).not.toBe(before);
+    dispose();
+  });
+});

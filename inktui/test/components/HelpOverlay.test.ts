@@ -49,7 +49,7 @@ describe('buildHelpGroups', () => {
     expect(keys).toContain('/…');
     expect(keys).toContain(':help');
     expect(keys).toContain(':note <text>');
-    expect(keys).toContain(':compact');
+    expect(keys).toContain(':verbose / :compact / :tmux');
     expect(keys).toContain(':resume');
   });
 });

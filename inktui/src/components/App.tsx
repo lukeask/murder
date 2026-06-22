@@ -61,10 +61,14 @@ import { visualDown, visualUp } from '../input/chatBuffer.js';
 import { expandSpans, spanIds } from '../input/chatInputStore.js';
 import { reduceVimNormal } from '../input/chatVimReducer.js';
 import { readClipboardImage } from '../input/clipboardImage.js';
-import { BUILTIN_COMMAND_NAMES, type CommandCtx, dispatchCommand } from '../input/commandDispatch.js';
+import {
+  BUILTIN_COMMAND_NAMES,
+  type CommandCtx,
+  dispatchCommand,
+} from '../input/commandDispatch.js';
+import type { ChatInputHandler } from '../input/dispatcher.js';
 import { expandTemplates } from '../input/expandTemplates.js';
 import { parseWorkflowFire } from '../input/fireWorkflow.js';
-import type { ChatInputHandler } from '../input/dispatcher.js';
 import { CHAT_FOCUS, type FocusId, selectEffectiveFocus } from '../input/focusStore.js';
 import { selectActiveMode } from '../input/modeStore.js';
 import type { PanelId } from '../input/panels.js';
@@ -862,6 +866,7 @@ function Shell({
         theme,
         paneGap: settings.paneGap,
         vimMode: settings.vimMode,
+        defaultChatViewMode: settings.defaultChatViewMode,
         startupRogue: settings.startupRogue,
         keyOverrides: settings.keyOverrides as Record<string, string>,
         collaboratorHarness: settings.collaboratorHarness,
@@ -986,6 +991,23 @@ function Shell({
     const identity = row === undefined ? null : deriveAgentIdentity(row);
     murderConfirmStore.getState().arm({ agentId, name: identity?.label ?? agentId });
   };
+  // TUIchat-3: the chat-view cycle chord (alt+t / ctrl+t). Resolves the targeted crow like the murder
+  // chord — the focused `stage:chat:` pane's crow, else the active chat target — and rotates its
+  // per-pane view mode (verbose → condensed → tmux → verbose). The pane's effective mode is
+  // `conversations.paneViewModes[agentId] ?? settings.defaultChatViewMode`.
+  const cycleChatViewHandler = (): void => {
+    const state = appStore.getState();
+    const effective = selectEffectiveFocus(focus);
+    const agentId = effective.startsWith('stage:chat:')
+      ? effective.slice('stage:chat:'.length)
+      : selectActiveAgentId(state.conversations, state.roster, state.favorites);
+    if (agentId === null) {
+      toastStore.getState().push('no chat pane to cycle', { ttlMs: 4000 });
+      return;
+    }
+    state.actions.conversations.cyclePaneViewMode(agentId);
+  };
+
   const murderConfirmHandler = (): void => {
     const pending = murderConfirmStore.getState().pending;
     murderConfirmStore.getState().clear();
@@ -1051,6 +1073,9 @@ function Shell({
     saveTemplate: (name, body) => {
       void appStore.getState().actions.templates.save(name, body);
     },
+    setPaneViewMode: (agentId, mode) => {
+      appStore.getState().actions.conversations.setPaneViewMode(agentId, mode);
+    },
   };
 
   // The single root input loop for the whole app (rule 5) — installed exactly once, here.
@@ -1063,6 +1088,7 @@ function Shell({
       openSettings: openSettingsHandler,
       newPlan: newPlanHandler,
       newTicket: newTicketHandler,
+      cycleChatView: cycleChatViewHandler,
       quickNote: quickNoteHandler,
       keyHelp: keyHelpHandler,
       cycleTargetPrev: () => cycleTarget(-1),

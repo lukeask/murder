@@ -27,6 +27,7 @@ interface SpyHandlers {
   readonly focusChat: ReturnType<typeof vi.fn<GlobalHandlers['focusChat']>>;
   readonly spawn: ReturnType<typeof vi.fn<GlobalHandlers['spawn']>>;
   readonly toggleTmux: ReturnType<typeof vi.fn<GlobalHandlers['toggleTmux']>>;
+  readonly cycleChatView: ReturnType<typeof vi.fn<GlobalHandlers['cycleChatView']>>;
   readonly newPlan: ReturnType<typeof vi.fn<GlobalHandlers['newPlan']>>;
   readonly newTicket: ReturnType<typeof vi.fn<GlobalHandlers['newTicket']>>;
   readonly openSettings: ReturnType<typeof vi.fn<GlobalHandlers['openSettings']>>;
@@ -49,6 +50,7 @@ function handlers(): SpyHandlers {
     focusChat: vi.fn<GlobalHandlers['focusChat']>(),
     spawn: vi.fn<GlobalHandlers['spawn']>(),
     toggleTmux: vi.fn<GlobalHandlers['toggleTmux']>(),
+    cycleChatView: vi.fn<GlobalHandlers['cycleChatView']>(),
     newPlan: vi.fn<GlobalHandlers['newPlan']>(),
     newTicket: vi.fn<GlobalHandlers['newTicket']>(),
     openSettings: vi.fn<GlobalHandlers['openSettings']>(),
@@ -206,12 +208,14 @@ describe('layer 1 — global chords', () => {
     expect(h.navigate.mock.calls.map((c) => c[0])).toEqual(['left', 'down', 'up', 'right']);
   });
 
-  it('alt+space focuses chat, alt+y toggles tmux', () => {
+  it('alt+space focuses chat; alt+y is freed/parked (no longer a chord)', () => {
     const h = handlers();
     dispatchKey(' ', makeKey({ meta: true }), ctx('plans', h));
-    dispatchKey('y', makeKey({ meta: true }), ctx('plans', h));
+    // TUIchat-3: `y` was the old tmux chord; it is now freed/parked, so alt+y fires nothing global.
+    const out = dispatchKey('y', makeKey({ meta: true }), ctx('plans', h));
     expect(h.focusChat).toHaveBeenCalledOnce();
-    expect(h.toggleTmux).toHaveBeenCalledOnce();
+    expect(h.toggleTmux).not.toHaveBeenCalled();
+    expect(out).toEqual({ layer: 'panel', handled: false });
   });
 
   it('alt+f does NOT claim at the global layer — it falls through to the focused panel keymap', () => {
@@ -267,10 +271,11 @@ describe('layer 1 — global chords', () => {
     expect(out).toEqual({ layer: 'global', handled: true });
   });
 
-  it('alt+t fires newTicket (C12 new-ticket chord)', () => {
+  it('alt+t fires cycleChatView (TUIchat-3 — took over `t` from the now chord-less newTicket)', () => {
     const h = handlers();
     const out = dispatchKey('t', makeKey({ meta: true }), ctx('plans', h));
-    expect(h.newTicket).toHaveBeenCalledOnce();
+    expect(h.cycleChatView).toHaveBeenCalledOnce();
+    expect(h.newTicket).not.toHaveBeenCalled();
     expect(out).toEqual({ layer: 'global', handled: true });
   });
 
@@ -451,11 +456,11 @@ describe('command modifier — ctrl', () => {
     expect(out).toEqual({ layer: 'global', handled: true });
   });
 
-  it('ctrl+y toggles tmux, ctrl+space focuses chat', () => {
+  it('ctrl+t cycles the chat view, ctrl+space focuses chat (TUIchat-3)', () => {
     const h = handlers();
-    dispatchKey('y', makeKey({ ctrl: true }), ctx('plans', h, {}, null, ctrlBindings));
+    dispatchKey('t', makeKey({ ctrl: true }), ctx('plans', h, {}, null, ctrlBindings));
     dispatchKey(' ', makeKey({ ctrl: true }), ctx('plans', h, {}, null, ctrlBindings));
-    expect(h.toggleTmux).toHaveBeenCalledOnce();
+    expect(h.cycleChatView).toHaveBeenCalledOnce();
     expect(h.focusChat).toHaveBeenCalledOnce();
   });
 
@@ -524,11 +529,11 @@ describe('command modifier — both (alt still works)', () => {
     expect(h.focusPanel.mock.calls.map((c) => c[0])).toEqual(['plans', 'notes']);
   });
 
-  it('alt+y and ctrl+y both toggle tmux', () => {
+  it('alt+t and ctrl+t both cycle the chat view (TUIchat-3)', () => {
     const h = handlers();
-    dispatchKey('y', makeKey({ meta: true }), ctx('plans', h, {}, null, bothBindings));
-    dispatchKey('y', makeKey({ ctrl: true }), ctx('plans', h, {}, null, bothBindings));
-    expect(h.toggleTmux).toHaveBeenCalledTimes(2);
+    dispatchKey('t', makeKey({ meta: true }), ctx('plans', h, {}, null, bothBindings));
+    dispatchKey('t', makeKey({ ctrl: true }), ctx('plans', h, {}, null, bothBindings));
+    expect(h.cycleChatView).toHaveBeenCalledTimes(2);
   });
 });
 

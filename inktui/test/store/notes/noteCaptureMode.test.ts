@@ -35,6 +35,7 @@ function noopHandlers(): GlobalHandlers {
     focusChat: vi.fn(),
     spawn: vi.fn(),
     toggleTmux: vi.fn(),
+    cycleChatView: vi.fn(),
     newPlan: vi.fn(),
     newTicket: vi.fn(),
     openSettings: vi.fn(),

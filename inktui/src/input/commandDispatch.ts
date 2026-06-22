@@ -21,6 +21,7 @@
  * from what it already has in scope and calls this before `conversations.send`.
  */
 
+import type { ChatViewMode } from '../store/conversations/conversationsSlice.js';
 import type { PushOptions } from '../store/toast/toastStore.js';
 
 /**
@@ -48,6 +49,9 @@ export interface CommandCtx {
   readonly pushToast: (text: string, options?: PushOptions) => void;
   /** Persist a `{name, body}` template (the `:save` command). Wraps `actions.templates.save`. */
   readonly saveTemplate: (name: string, body: string) => void;
+  /** Set the per-pane chat view mode for `agentId` (TUIchat-3: `:verbose`/`:compact`/`:tmux`). Wraps
+   * `actions.conversations.setPaneViewMode`. */
+  readonly setPaneViewMode: (agentId: string, mode: ChatViewMode) => void;
 }
 
 /** Valid template/command name — matches the backend's `^[A-Za-z0-9_-]+$`. */
@@ -89,10 +93,17 @@ const COMMANDS: Readonly<Record<string, CommandHandler>> = {
     ctx.dismiss();
   },
 
-  /** `:compact` — stub. `transcript_summarize.py` is unwired (Workstream D deferred); surface a
-   * discoverability toast rather than silently doing nothing. */
-  compact(_args, _agentId, ctx) {
-    ctx.pushToast(':compact is not yet available', { ttlMs: 6000 });
+  /** `:compact` / `:verbose` / `:tmux` — set the focused pane's view mode (TUIchat-3). `:compact`
+   * selects `condensed` (its rolling-summary backend lands in TUIchat-4; until then it falls back to
+   * the verbose render). With no active agent → a toast, nothing set. */
+  compact(_args, agentId, ctx) {
+    setViewMode(agentId, 'condensed', ctx);
+  },
+  verbose(_args, agentId, ctx) {
+    setViewMode(agentId, 'verbose', ctx);
+  },
+  tmux(_args, agentId, ctx) {
+    setViewMode(agentId, 'tmux', ctx);
   },
 
   /** `:resume` — stub. The v0 surface for resuming is the history panel's `r` keybind; point there. */
@@ -115,6 +126,16 @@ const COMMANDS: Readonly<Record<string, CommandHandler>> = {
     ctx.pushToast(`saved :${name}:`);
   },
 };
+
+/** Shared body of the `:verbose`/`:compact`/`:tmux` view-mode commands. No active agent → a toast and
+ * nothing set (mirrors the other agent-less command guards). */
+function setViewMode(agentId: string | null, mode: ChatViewMode, ctx: CommandCtx): void {
+  if (agentId === null) {
+    ctx.pushToast('no chat pane to set the view on', { ttlMs: 4000 });
+    return;
+  }
+  ctx.setPaneViewMode(agentId, mode);
+}
 
 /**
  * Route the chat buffer through the prefix dispatcher.

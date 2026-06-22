@@ -130,7 +130,17 @@ export interface ConversationsState {
    * no floor (show everything). The old chat is never lost — it lives server-side.
    */
   readonly clearedFloors: Readonly<Record<string, number>>;
+  /**
+   * Per-pane chat view mode (TUIchat-3): `verbose` (today's full render) / `condensed` (rolling
+   * chunked summaries, backend lands in TUIchat-4) / `tmux` (inline tmux frame, TUIchat-5). Ephemeral
+   * and NOT persisted (mirrors `paneOverrides`' per-`agentId` intent map). Absent entry → fall through
+   * to `settings.defaultChatViewMode`. Effective mode = `paneViewModes[agentId] ?? defaultChatViewMode`.
+   */
+  readonly paneViewModes: Readonly<Record<string, ChatViewMode>>;
 }
+
+/** Per-pane chat view mode (TUIchat-3). `tmux` is reachable only via the cycle, not a settable default. */
+export type ChatViewMode = 'verbose' | 'condensed' | 'tmux';
 
 /** Initial (empty) state — no transcripts, no active pane. */
 export const initialConversationsState: ConversationsState = {
@@ -139,6 +149,7 @@ export const initialConversationsState: ConversationsState = {
   activePaneAgentId: null,
   paneOverrides: new Map<string, boolean>(),
   clearedFloors: {},
+  paneViewModes: {},
 };
 
 /**

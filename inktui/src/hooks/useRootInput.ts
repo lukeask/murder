@@ -57,6 +57,9 @@ export interface DeferredGlobalHandlers {
   spawn?: () => void;
   /** `alt+y`. Default: no-op until C14 wires the tmux toggle. */
   toggleTmux?: () => void;
+  /** `alt+t` / `ctrl+t` (TUIchat-3): cycle the focused chat pane's view mode. Default: no-op until the
+   * shell wires the focus→agentId resolution + `cyclePaneViewMode` action. */
+  cycleChatView?: () => void;
   /** `alt+p`. Default: no-op until C12 wires the new-plan dialog. */
   newPlan?: () => void;
   /** `alt+t`. Default: no-op until C12 wires the new-ticket dialog. */
@@ -267,6 +270,9 @@ export function useRootInput(
               modesState.enter(tmuxMode(modes, agentId));
             }
           }),
+        // TUIchat-3: cycle the focused chat pane's view mode. Default no-op until the shell wires it
+        // (App supplies the focus→agentId resolution + the cyclePaneViewMode action call).
+        cycleChatView: deferred.cycleChatView ?? (() => {}),
         // C12: newPlan / newTicket default to no-ops until the caller supplies real handlers.
         newPlan: deferred.newPlan ?? (() => {}),
         newTicket: deferred.newTicket ?? (() => {}),

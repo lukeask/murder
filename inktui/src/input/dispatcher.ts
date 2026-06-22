@@ -100,11 +100,17 @@ export interface GlobalHandlers {
   focusChat(): void;
   /** `alt+s`: open the spawn wizard (only when chat is focused; wired by C13). */
   spawn(): void;
-  /** `alt+y`: toggle tmux-vs-parsed view (wired by C14). */
+  /** `alt+y` (legacy): toggle the tmux-vs-parsed fullscreen view. The chord that drove it (`y`) is
+   * freed/parked in TUIchat-3; the handler stays because the fullscreen TmuxMode itself is retired
+   * later (TUIchat-5), and the mode's pass-through "press again to exit" still calls it. */
   toggleTmux(): void;
+  /** `alt+t` / `ctrl+t` (`global.cycleChatView`, TUIchat-3): cycle the focused chat pane through
+   * verbose → condensed → tmux. Resolves the focused pane's agentId and calls `cyclePaneViewMode`. */
+  cycleChatView(): void;
   /** `alt+p`: open the new-plan popup (wired by C12). */
   newPlan(): void;
-  /** `alt+t`: open the new-ticket popup (wired by C12). */
+  /** New-ticket popup. CHORD-LESS since TUIchat-3 (it lost `t` to the chat-view cycle; ticket-redo
+   * rehomes it). The handler stays wired so a future chord/command can reach it. */
   newTicket(): void;
   /** `alt+o` / `ctrl+o` (the `global.settings` action): open the settings modal (wired by Phase 5). */
   openSettings(): void;
@@ -357,18 +363,15 @@ function dispatchGlobalChord(
     }
     return false;
   }
-  if (bindings.matches('global.tmux', input, key)) {
-    handlers.toggleTmux();
+  if (bindings.matches('global.cycleChatView', input, key)) {
+    // TUIchat-3: cycle the focused chat pane's view (verbose → condensed → tmux). Took over `t` from
+    // the now chord-less newTicket; the old tmux chord `y` is freed/parked.
+    handlers.cycleChatView();
     return true;
   }
   if (bindings.matches('global.newPlan', input, key)) {
     // C12: new-plan popup.
     handlers.newPlan();
-    return true;
-  }
-  if (bindings.matches('global.newTicket', input, key)) {
-    // C12: new-ticket popup.
-    handlers.newTicket();
     return true;
   }
   if (bindings.matches('global.settings', input, key)) {

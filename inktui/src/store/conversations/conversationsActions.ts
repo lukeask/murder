@@ -33,7 +33,12 @@ import type { ConversationBlockEvent, ConversationStateEvent } from '../../bus/p
 import { submitCommand } from '../commandSubmit.js';
 import type { AppStore } from '../store.js';
 import { toastStore } from '../toast/toastStore.js';
-import { type ConversationBlock, type ConversationMeta, parseBlock } from './conversationsSlice.js';
+import {
+  type ChatViewMode,
+  type ConversationBlock,
+  type ConversationMeta,
+  parseBlock,
+} from './conversationsSlice.js';
 
 /**
  * Declares the conversations read RPC via declaration merging rather than editing the frozen C1 bus
@@ -203,6 +208,20 @@ export interface ConversationsActions {
    * the existing override); the action records the override that flips it. No bus call.
    */
   toggleChatPane(agentId: string, currentlyOpen: boolean): void;
+
+  /**
+   * Set the chat view mode for a pane (TUIchat-3). Records `paneViewModes[agentId]`, overriding the
+   * `settings.defaultChatViewMode`. Ephemeral (not persisted). Used by `:verbose`/`:compact`/`:tmux`.
+   * No bus call.
+   */
+  setPaneViewMode(agentId: string, mode: ChatViewMode): void;
+
+  /**
+   * Cycle a pane's chat view mode (TUIchat-3): verbose → condensed → tmux → verbose. Reads the pane's
+   * effective mode (`paneViewModes[agentId] ?? settings.defaultChatViewMode`) and writes the next.
+   * The `t` (alt+t / ctrl+t) chord's handler. No bus call.
+   */
+  cyclePaneViewMode(agentId: string): void;
 }
 
 export function createConversationsActions(
@@ -419,5 +438,35 @@ export function createConversationsActions(
         return { conversations: { ...state.conversations, paneOverrides: next } };
       });
     },
+
+    setPaneViewMode(agentId: string, mode: ChatViewMode): void {
+      store.setState((state) => ({
+        conversations: {
+          ...state.conversations,
+          paneViewModes: { ...state.conversations.paneViewModes, [agentId]: mode },
+        },
+      }));
+    },
+
+    cyclePaneViewMode(agentId: string): void {
+      store.setState((state) => {
+        const settings = state.settings;
+        const current = state.conversations.paneViewModes[agentId] ?? settings.defaultChatViewMode;
+        const next = CHAT_VIEW_CYCLE[current];
+        return {
+          conversations: {
+            ...state.conversations,
+            paneViewModes: { ...state.conversations.paneViewModes, [agentId]: next },
+          },
+        };
+      });
+    },
   };
 }
+
+/** Cycle order (TUIchat-3): verbose → condensed → tmux → verbose. */
+const CHAT_VIEW_CYCLE: Readonly<Record<ChatViewMode, ChatViewMode>> = {
+  verbose: 'condensed',
+  condensed: 'tmux',
+  tmux: 'verbose',
+};
