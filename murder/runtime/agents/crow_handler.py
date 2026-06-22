@@ -524,10 +524,12 @@ class CrowHandler(Daemon):
                     role=self.role,
                     ticket_id=self.ticket_id,
                     message=f"crow_handler tick failed: {error}",
-                    # Boot pane-lag can exhaust the tick budget transiently; the
-                    # operator can re-kick the ticket, so this is recoverable, not
-                    # a hard failure. Drives the dim/amber toast, not solid red.
-                    recoverable=True,
+                    # This is the *terminal* tick-budget exhaustion path — it has
+                    # already failed the ticket (fail_ticket above). It is a genuine
+                    # non-boot ticket failure, not transient boot noise, so it stays
+                    # solid red. Boot pane-lag is kept out of this path entirely by
+                    # Item 4's planner startup-grace + session-readiness gate.
+                    recoverable=False,
                 )
             )
 
