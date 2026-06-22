@@ -49,6 +49,49 @@ class TicketOutcomeService:
         await self.escalations.record_ticket_failure(ticket_id, reason)
         await self._prune_terminal_worktree(ticket_id)
 
+    async def complete_ticket(self, ticket_id: str) -> None:
+        """Normalize-then-complete: walk a ticket up to DONE, emit, prune.
+
+        DONE is only reachable from IN_PROGRESS, but a reattach can observe a
+        ``>>> DONE`` against a ticket still in READY (or, transiently, PLANNED/
+        BLOCKED). Walk it up to IN_PROGRESS first rather than attempting an
+        invalid raw READY/PLANNED -> DONE jump. An already-done ticket is a
+        no-op: completion is idempotent, so a reattach that re-reads ``>>> DONE``
+        from scrollback must not re-fire the transition (and the event/snapshot)
+        against an already-terminal ticket. Terminal-but-not-done states
+        (archived/failed) are not promotable; skip completion for them instead
+        of raising InvalidTransition.
+        """
+        status = ticket_db.get_ticket_status(self.conn, ticket_id)
+        if status == TicketStatus.DONE.value:
+            return
+        if status not in (
+            TicketStatus.READY.value,
+            TicketStatus.IN_PROGRESS.value,
+            TicketStatus.BLOCKED.value,
+            TicketStatus.PLANNED.value,
+        ):
+            LOGGER.warning(
+                "completion: ticket %s is %s — not promotable to done, skipping",
+                ticket_id,
+                status,
+            )
+            return
+        if status == TicketStatus.PLANNED.value:
+            lifecycle.transition(self.conn, ticket_id, TicketStatus.READY, reason="completion")
+            status = TicketStatus.READY.value
+        if status in (TicketStatus.READY.value, TicketStatus.BLOCKED.value):
+            lifecycle.transition(
+                self.conn, ticket_id, TicketStatus.IN_PROGRESS, reason="completion"
+            )
+        prev = lifecycle.transition(self.conn, ticket_id, TicketStatus.DONE)
+        # The ready->in_progress pre-transitions above are part of the SAME
+        # logical "done"; emit_status fires the typed StatusChangeEvent plus the
+        # key-only ticket snapshot once for the terminal transition (not per
+        # intermediate lifecycle step).
+        await self.emit_status(ticket_id, prev, TicketStatus.DONE.value)
+        await self._prune_terminal_worktree(ticket_id)
+
     async def block_ticket(self, ticket_id: str, reason: str) -> None:
         ticket_db.update_ticket_status(self.conn, ticket_id, TicketStatus.BLOCKED.value)
         if self.emit_snapshot is not None:

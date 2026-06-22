@@ -21,6 +21,9 @@ from .registry import CheckRegistry
 
 if TYPE_CHECKING:
     from murder.runtime.agents.base import Agent
+    from murder.runtime.orchestration.outcome import TicketOutcomeService
+    from murder.verdict.escalations.service import EscalationService
+    from murder.work.tickets.status import TicketStatus
 
 LOGGER = logging.getLogger(__name__)
 
@@ -278,106 +281,72 @@ class CompletionCoordinator:
         return result.message
 
     async def _transition_done(self, ticket_id: str) -> None:
-        from murder.state.persistence.tickets import get_ticket_status
-        from murder.work.tickets import lifecycle
-        from murder.work.tickets.status import TicketStatus
-        from murder.bus import StatusChangeEvent
+        """Complete the ticket via the shared terminal-transition authority.
 
+        The normalize-then-complete walk (READY/PLANNED/BLOCKED -> IN_PROGRESS ->
+        DONE), the already-done idempotency guard, and the F1 snapshot emit all
+        live in ``TicketOutcomeService.complete_ticket`` so the done path no
+        longer hand-rolls a status event the orchestrator already encapsulates.
+        """
         if self._rt.db is None:
             return
-        status = get_ticket_status(self._rt.db, ticket_id)
-        if status == TicketStatus.DONE.value:
-            # Already done — completion is idempotent. A reattach that re-reads a
-            # `>>> DONE` from scrollback must not re-fire the transition (and the
-            # event/snapshot) against an already-terminal ticket.
-            return
-        # Normalize-then-complete: DONE is only reachable from IN_PROGRESS, but a
-        # reattach can observe `>>> DONE` against a ticket still in READY (or,
-        # transiently, PLANNED). Walk it up to IN_PROGRESS first rather than
-        # attempting an invalid raw READY/PLANNED → DONE jump. Terminal-but-not-
-        # done states (archived/failed) are not promotable; skip completion for
-        # them instead of raising InvalidTransition.
-        if status not in (
-            TicketStatus.READY.value,
-            TicketStatus.IN_PROGRESS.value,
-            TicketStatus.BLOCKED.value,
-            TicketStatus.PLANNED.value,
-        ):
-            LOGGER.warning(
-                "completion: ticket %s is %s — not promotable to done, skipping",
-                ticket_id,
-                status,
-            )
-            return
-        if status == TicketStatus.PLANNED.value:
-            lifecycle.transition(
-                self._rt.db,
-                ticket_id,
-                TicketStatus.READY,
-                reason="completion",
-            )
-            status = TicketStatus.READY.value
-        if status in (TicketStatus.READY.value, TicketStatus.BLOCKED.value):
-            lifecycle.transition(
-                self._rt.db,
-                ticket_id,
-                TicketStatus.IN_PROGRESS,
-                reason="completion",
-            )
-        prev = lifecycle.transition(self._rt.db, ticket_id, TicketStatus.DONE)
-        if self._rt.bus is not None and self._rt.run_id is not None:
-            await self._rt.bus.publish(
-                StatusChangeEvent(
-                    run_id=self._rt.run_id,
-                    agent_id="coordinator",
-                    role=AgentRole.COLLABORATOR,
-                    ticket_id=ticket_id,
-                    entity="ticket",
-                    entity_id=ticket_id,
-                    from_status=prev.value if hasattr(prev, "value") else str(prev),
-                    to_status=TicketStatus.DONE.value,
-                )
-            )
-            # F1: this path bypasses orchestrator._emit_ticket_status, so emit
-            # the key-only ticket snapshot here beside the typed event. Note the
-            # ready->in_progress pre-transition above is part of the SAME logical
-            # "done", so we emit once (not per lifecycle.transition call).
-            await self._rt.publish_snapshot(Entity.TICKET, ticket_id)
-        await self._prune_terminal_worktree(ticket_id)
+        await self._outcomes().complete_ticket(ticket_id)
 
     async def _fail_ticket(self, ticket_id: str, reason: str) -> None:
-        from murder.work.tickets import lifecycle
-        from murder.work.tickets.status import TicketStatus
-        from murder.bus import StatusChangeEvent
-        from murder.state.persistence.tickets import update_ticket_status
-
+        """Fail the ticket via the shared terminal-transition authority."""
         if self._rt.db is None:
             return
+        await self._outcomes().fail_ticket(ticket_id, reason)
 
-        try:
-            prev = lifecycle.transition(self._rt.db, ticket_id, TicketStatus.FAILED)
-        except Exception:
-            update_ticket_status(self._rt.db, ticket_id, TicketStatus.FAILED.value)
-            prev = TicketStatus.IN_PROGRESS
+    async def _emit_status(
+        self, ticket_id: str, from_status: TicketStatus | str, to_status: str
+    ) -> None:
+        """Emit the typed StatusChangeEvent + key-only ticket snapshot.
 
-        lifecycle.set_last_error(self._rt.db, ticket_id, reason)
+        The coordinator's terminal transitions bypass
+        ``orchestrator._emit_ticket_status`` (different component, different
+        agent_id attribution), so this is the coordinator-flavoured equivalent:
+        ``agent_id="coordinator"`` plus the F1 snapshot beside the typed event.
+        No-op before the bus / run id exist.
+        """
+        from murder.bus import StatusChangeEvent
+        from murder.work.tickets.status import TicketStatus
 
-        if self._rt.bus is not None and self._rt.run_id is not None:
-            await self._rt.bus.publish(
-                StatusChangeEvent(
-                    run_id=self._rt.run_id,
-                    agent_id="coordinator",
-                    role=AgentRole.COLLABORATOR,
-                    ticket_id=ticket_id,
-                    entity="ticket",
-                    entity_id=ticket_id,
-                    from_status=prev.value if hasattr(prev, "value") else str(prev),
-                    to_status=TicketStatus.FAILED.value,
-                )
+        if self._rt.bus is None or self._rt.run_id is None:
+            return
+        from_s = from_status.value if isinstance(from_status, TicketStatus) else from_status
+        await self._rt.bus.publish(
+            StatusChangeEvent(
+                run_id=self._rt.run_id,
+                agent_id="coordinator",
+                role=AgentRole.COLLABORATOR,
+                ticket_id=ticket_id,
+                entity="ticket",
+                entity_id=ticket_id,
+                from_status=from_s,
+                to_status=to_status,
             )
-            await self._rt.publish_snapshot(Entity.TICKET, ticket_id)
-        await self._make_escalation_service().record_ticket_failure(ticket_id, reason)
-        await self._prune_terminal_worktree(ticket_id)
+        )
+        await self._rt.publish_snapshot(Entity.TICKET, ticket_id)
+
+    def _outcomes(self) -> TicketOutcomeService:
+        """Build the shared terminal-transition service, coordinator-flavoured.
+
+        Wires ``emit_status`` to the coordinator's own ``agent_id="coordinator"``
+        emitter and the worktree prune / escalation recording to the coordinator
+        host, so completion and failure reuse the same authority the orchestrator
+        does instead of forking it.
+        """
+        from murder.runtime.orchestration.outcome import TicketOutcomeService
+
+        assert self._rt.db is not None
+        return TicketOutcomeService(
+            conn=self._rt.db,
+            repo_root=self._rt.repo_root,
+            escalations=self._make_escalation_service(),
+            emit_status=self._emit_status,
+            emit_snapshot=lambda tid: self._rt.publish_snapshot(Entity.TICKET, tid),
+        )
 
     async def _escalate_to_user(self, ticket_id: str, reason: str) -> None:
         esc = self._make_escalation_service()
@@ -393,7 +362,7 @@ class CompletionCoordinator:
         # F1: block has no StatusChangeEvent today; emit the key-only snapshot.
         await self._rt.publish_snapshot(Entity.TICKET, ticket_id)
 
-    def _make_escalation_service(self) -> object:
+    def _make_escalation_service(self) -> EscalationService:
         from murder.verdict.escalations.service import EscalationService
 
         assert self._rt.db is not None
@@ -405,16 +374,6 @@ class CompletionCoordinator:
             agent_id="coordinator",
             role=AgentRole.COLLABORATOR,
         )
-
-    async def _prune_terminal_worktree(self, ticket_id: str) -> None:
-        if self._rt.db is None:
-            return
-        from murder.state.storage.worktrees import prune_terminal_crow_worktree
-
-        try:
-            await prune_terminal_crow_worktree(self._rt.db, self._rt.repo_root, ticket_id)
-        except Exception as exc:
-            LOGGER.debug("worktree prune skipped for %s: %s", ticket_id, exc)
 
 
 __all__ = ["CompletionCoordinator", "CoordinatorHost", "DoneHandleResult"]

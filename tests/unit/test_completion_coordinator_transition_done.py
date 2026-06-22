@@ -32,7 +32,7 @@ def _insert_ticket(conn, tid: str, status: str) -> None:
     )
 
 
-def _coordinator(conn):
+def _coordinator(conn, monkeypatch):
     rt = MagicMock()
     rt.db = conn
     rt.repo_root = Path("/tmp")
@@ -40,40 +40,42 @@ def _coordinator(conn):
     rt.run_id = None
     registry = MagicMock()
     coordinator = CompletionCoordinator(rt, registry)
-    # Avoid touching the filesystem for worktree pruning.
-    coordinator._prune_terminal_worktree = MagicMock()
-
-    async def _noop(_tid):
+    # Avoid touching the filesystem for worktree pruning. The done-path prune now
+    # lives in TicketOutcomeService (call-site import of the worktree helper), so
+    # patch the helper at its source rather than a coordinator method.
+    async def _noop_prune(*_a, **_k):
         return None
 
-    coordinator._prune_terminal_worktree = _noop
+    monkeypatch.setattr(
+        "murder.state.storage.worktrees.prune_terminal_crow_worktree", _noop_prune
+    )
     return coordinator
 
 
-def test_transition_done_from_ready_normalizes_through_in_progress():
+def test_transition_done_from_ready_normalizes_through_in_progress(monkeypatch):
     conn = _db()
     _insert_ticket(conn, "t1", TicketStatus.READY.value)
-    coord = _coordinator(conn)
+    coord = _coordinator(conn, monkeypatch)
 
     asyncio.run(coord._transition_done("t1"))
 
     assert get_ticket_status(conn, "t1") == TicketStatus.DONE.value
 
 
-def test_transition_done_from_in_progress_completes():
+def test_transition_done_from_in_progress_completes(monkeypatch):
     conn = _db()
     _insert_ticket(conn, "t2", TicketStatus.IN_PROGRESS.value)
-    coord = _coordinator(conn)
+    coord = _coordinator(conn, monkeypatch)
 
     asyncio.run(coord._transition_done("t2"))
 
     assert get_ticket_status(conn, "t2") == TicketStatus.DONE.value
 
 
-def test_transition_done_already_done_is_noop():
+def test_transition_done_already_done_is_noop(monkeypatch):
     conn = _db()
     _insert_ticket(conn, "t3", TicketStatus.DONE.value)
-    coord = _coordinator(conn)
+    coord = _coordinator(conn, monkeypatch)
 
     # Must not raise InvalidTransition and must leave the ticket done.
     asyncio.run(coord._transition_done("t3"))
@@ -81,20 +83,20 @@ def test_transition_done_already_done_is_noop():
     assert get_ticket_status(conn, "t3") == TicketStatus.DONE.value
 
 
-def test_transition_done_from_blocked_normalizes():
+def test_transition_done_from_blocked_normalizes(monkeypatch):
     conn = _db()
     _insert_ticket(conn, "t4", TicketStatus.BLOCKED.value)
-    coord = _coordinator(conn)
+    coord = _coordinator(conn, monkeypatch)
 
     asyncio.run(coord._transition_done("t4"))
 
     assert get_ticket_status(conn, "t4") == TicketStatus.DONE.value
 
 
-def test_transition_done_skips_archived_terminal_state():
+def test_transition_done_skips_archived_terminal_state(monkeypatch):
     conn = _db()
     _insert_ticket(conn, "t5", TicketStatus.ARCHIVED.value)
-    coord = _coordinator(conn)
+    coord = _coordinator(conn, monkeypatch)
 
     # Archived is not promotable to done; must not raise and must stay archived.
     asyncio.run(coord._transition_done("t5"))
@@ -102,10 +104,10 @@ def test_transition_done_skips_archived_terminal_state():
     assert get_ticket_status(conn, "t5") == TicketStatus.ARCHIVED.value
 
 
-def test_transition_done_skips_failed_terminal_state():
+def test_transition_done_skips_failed_terminal_state(monkeypatch):
     conn = _db()
     _insert_ticket(conn, "t6", TicketStatus.FAILED.value)
-    coord = _coordinator(conn)
+    coord = _coordinator(conn, monkeypatch)
 
     asyncio.run(coord._transition_done("t6"))
 
