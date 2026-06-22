@@ -81,6 +81,7 @@ import { submitCommand } from '../store/commandSubmit.js';
 import { createDialogActions } from '../store/dialogs/dialogActions.js';
 import { createHarnessModelsActions } from '../store/dialogs/harnessModelsActions.js';
 import { createSpawnActions } from '../store/dialogs/spawnActions.js';
+import { createSpawnFavoritesActions } from '../store/dialogs/spawnFavoritesActions.js';
 import { createWorktreeOptionsActions } from '../store/dialogs/worktreeOptionsActions.js';
 import { DOC_DIR } from '../store/docView/docViewSlice.js';
 import {
@@ -814,9 +815,18 @@ function Shell({
     const actions = createSpawnActions(bus, appStore);
     const modelActions = createHarnessModelsActions(bus);
     const worktreeActions = createWorktreeOptionsActions(bus);
-    modes
-      .getState()
-      .enter(spawnWizardMode(modes, actions, { spawnContext, modelActions, worktreeActions }));
+    const favoriteActions = createSpawnFavoritesActions(bus);
+    modes.getState().enter(
+      spawnWizardMode(modes, actions, {
+        spawnContext,
+        modelActions,
+        worktreeActions,
+        favoriteActions,
+        enabledHarnesses: appStore.getState().settings.effectiveCrowHarnesses,
+        commandModified: (key) => bindings.getState().resolved.isCommandModified(key),
+        commandModifier: bindings.getState().modifier,
+      }),
+    );
   };
 
   // `alt+o` / `ctrl+o` → open the settings modal. Reads the persisted slice at call time so the modal opens
