@@ -50,6 +50,7 @@ from murder.bus.protocol import (
 from murder.runtime.scheduler.worker import SchedulerWorker
 from murder.runtime.workers.base import WorkerCtx
 from murder.runtime.workers.usage_probe_worker import UsageProbeWorker
+from murder.state.persistence.runs import insert_run
 from murder.state.persistence.schema import get_db, init_db
 from murder.state.persistence.usage_status import UsageWindow
 
@@ -57,6 +58,7 @@ from murder.state.persistence.usage_status import UsageWindow
 def _ctx(repo_root: Path) -> WorkerCtx:
     conn = get_db(repo_root / ".murder" / "murder.db")
     init_db(conn)
+    insert_run(conn, "run-test", "{}")
     bus = Bus("run-test", conn)
     return WorkerCtx(repo_root=repo_root, db=conn, bus=bus, run_id="run-test")
 

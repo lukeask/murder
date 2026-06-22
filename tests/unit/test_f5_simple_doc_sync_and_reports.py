@@ -23,6 +23,7 @@ from typing import Any
 import pytest
 
 from murder.bus.protocol import Entity, StateSnapshotEvent
+from murder.state.persistence.runs import insert_run
 from murder.state.persistence.schema import init_db
 
 
@@ -35,6 +36,9 @@ def _conn() -> sqlite3.Connection:
     conn = sqlite3.connect(":memory:", isolation_level=None)
     conn.row_factory = sqlite3.Row
     init_db(conn)
+    # Events FK-reference runs(run_id); seed the run these tests publish under so
+    # event persistence succeeds (the bus is fail-closed on persistence failure).
+    insert_run(conn, "run-test", "{}")
     return conn
 
 

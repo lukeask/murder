@@ -67,10 +67,9 @@ def apply_ticket_carve_payload(
     harness: str | None,
     model: str | None,
     deps: list[str],
-    skills: list[str],
     checklist: list[str],
 ) -> None:
-    """Replace deps, skills, checklist and update ticket title/harness/model.
+    """Replace deps, checklist and update ticket title/harness/model.
 
     The delete+reinsert of deps and checklist is wrapped in a ``SAVEPOINT`` so the
     whole payload applies atomically (a mid-write FK violation or crash can't leave
@@ -94,7 +93,6 @@ def apply_ticket_carve_payload(
                 "INSERT INTO ticket_deps(ticket_id, depends_on_id) VALUES (?, ?)",
                 (ticket_id, dep),
             )
-        del skills
         conn.execute("DELETE FROM checklist WHERE ticket_id = ?", (ticket_id,))
         for ord_, text in enumerate(checklist):
             conn.execute(
@@ -135,7 +133,6 @@ def get_ticket(conn: sqlite3.Connection, ticket_id: str) -> TicketRecord | None:
     return ticket_record_from_row(
         row,
         deps=deps,
-        skills=[],
         checklist=checklist,
     )
 

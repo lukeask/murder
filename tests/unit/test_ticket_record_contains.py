@@ -35,7 +35,6 @@ def _make_ticket() -> TicketRecord:
         created_at="",
         updated_at="",
         deps=(),
-        skills=(),
         checklist=(),
     )
 

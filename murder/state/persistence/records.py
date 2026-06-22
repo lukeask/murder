@@ -52,7 +52,6 @@ class TicketRecord:
     created_at: str
     updated_at: str
     deps: tuple[str, ...]
-    skills: tuple[str, ...]
     checklist: tuple[ChecklistItemRecord, ...]
     last_error: str | None = None
     schedule_at: str | None = None
@@ -87,7 +86,6 @@ class TicketRecord:
             "metadata_parse_error": self.metadata_parse_error,
             "metadata_conflict_reason": self.metadata_conflict_reason,
             "deps": list(self.deps),
-            "skills": list(self.skills),
             "checklist": [item.to_dict() for item in self.checklist],
         }
         return base
@@ -232,7 +230,6 @@ def ticket_record_from_row(
     row: Mapping[str, Any],
     *,
     deps: list[str],
-    skills: list[str],
     checklist: list[ChecklistItemRecord],
 ) -> TicketRecord:
     return TicketRecord(
@@ -246,7 +243,6 @@ def ticket_record_from_row(
         created_at=str(row["created_at"]),
         updated_at=str(row["updated_at"]),
         deps=tuple(deps),
-        skills=tuple(skills),
         checklist=tuple(checklist),
         last_error=row["last_error"],
         schedule_at=row["schedule_at"],

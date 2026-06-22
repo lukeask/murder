@@ -195,7 +195,6 @@ def cmd_ticket_create(
         title=title,
         status=status,
         deps=list(dep or []),
-        skills=[],
         harness=harness,
         model=model,
         created_at=now,

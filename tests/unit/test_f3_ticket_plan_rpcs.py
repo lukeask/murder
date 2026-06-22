@@ -27,6 +27,7 @@ from murder.config import (
     HarnessRoleConfig,
     ProjectConfig,
 )
+from murder.state.persistence.runs import insert_run
 from murder.state.persistence.schema import get_db, init_db
 from murder.state.storage.paths import plan_md, ticket_md
 from murder.work.tickets.parser import parse_ticket
@@ -49,6 +50,7 @@ def _runtime(repo_root: Path) -> Runtime:
     rt = Runtime(_config(), repo_root)
     rt.db = conn
     rt.run_id = "run-test"
+    insert_run(conn, rt.run_id, "{}")
     rt.bus = Bus(rt.run_id, conn)
     return rt
 

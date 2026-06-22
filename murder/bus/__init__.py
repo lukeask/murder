@@ -168,16 +168,19 @@ class Bus:
                         ts=event.ts.isoformat(timespec="seconds"),
                     )
             except Exception:
-                # Durability gap: this event reaches in-process handlers below
-                # but is NOT in the events table, so it will never replay to
-                # socket subscribers (they are DB-poll only). Log loudly so the
-                # split-brain is at least visible; we still fan out so live
-                # in-process consumers aren't silently starved.
+                # Fail closed: the events table is the authoritative transport.
+                # Socket subscribers are DB-poll only, so an event that failed to
+                # persist would reach in-process handlers but NEVER replay to
+                # socket subscribers — a silent split-brain no caller can detect.
+                # The replay architecture (subscribe(since_id=...)) already treats
+                # the table as the source of truth, so an in-process handler acting
+                # on an unpersisted event is itself the corruption. Don't fan out;
+                # raise so the failure is visible and uniform across all consumers.
                 log.exception(
-                    "bus: failed to persist event %s; live fan-out only, "
-                    "will NOT replay to socket subscribers",
+                    "bus: failed to persist event %s; failing closed (no fan-out)",
                     event.type,
                 )
+                raise
 
         async with self._lock:
             handlers = list(self._subs.values())

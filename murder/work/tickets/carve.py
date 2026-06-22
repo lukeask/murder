@@ -71,7 +71,6 @@ def apply_carve_ready_spec(
     harness_s = str(harness_raw).strip()
 
     deps = _require_str_list(spec, "deps")
-    skills = _require_str_list(spec, "skills")
     checklist = _require_str_list(spec, "checklist")
 
     model = _normalize_model(spec)
@@ -108,7 +107,6 @@ def apply_carve_ready_spec(
             harness=harness_s,
             model=model,
             deps=deps,
-            skills=skills,
             checklist=checklist,
         )
         # transition() is a no-op (returns prev == to) when already ready, so a

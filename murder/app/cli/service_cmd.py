@@ -474,7 +474,6 @@ def _run_lint_checks(repo: Path, conn) -> None:  # type: ignore[no-untyped-def]
                 created_at=datetime.fromisoformat(trow["created_at"]),
                 updated_at=datetime.fromisoformat(trow["updated_at"]),
                 deps=list(trow.get("deps") or []),
-                skills=list(trow.get("skills") or []),
                 checklist=[
                     ChecklistItem(
                         id=c.get("id"),

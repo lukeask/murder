@@ -339,10 +339,6 @@ class TicketOps:
         if schedule_at is not None:
             schedule_at = str(schedule_at).strip() or None
         deps = [str(d) for d in (payload.get("deps") or [])]
-        if "skills" in payload:
-            skills = [str(s) for s in (payload.get("skills") or [])]
-        else:
-            skills = [str(s) for s in (row.get("skills") or [])]
         checklist = [str(c) for c in (payload.get("checklist") or [])]
         with self.rt.db:
             self.rt.db.execute(
@@ -356,7 +352,6 @@ class TicketOps:
                 harness=harness,
                 model=model,
                 deps=deps,
-                skills=skills,
                 checklist=checklist,
             )
         await self.rt.publish_snapshot(Entity.TICKET, ticket_id)
