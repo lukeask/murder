@@ -87,6 +87,43 @@ describe('computeBodyLayout — Stage hard floor (R3/R4)', () => {
   });
 });
 
+describe('computeBodyLayout — deferred-wrap last-column reservation (landscape, no right rail)', () => {
+  it('landscape + left rail + NO right rail reserves exactly one column off the Stage', () => {
+    // The target bug case: with no right rail the Stage would own the terminal's last column and a
+    // full-width Pane border would paint a `│` into column `cols`, triggering the deferred-wrap stripe.
+    // The engine reserves the last column → stageCells == total − leftCells − gap − 1.
+    const cols = 200;
+    const leftCells = 24;
+    const layout = computeBodyLayout(landscape(cols, rail(leftCells), ABSENT));
+    expect(layout.leftRailCells).toBe(leftCells);
+    expect(layout.rightRailCells).toBe(0);
+    expect(layout.stageCells).toBe(cols - leftCells - 1 /* one gap */ - 1 /* reserved column */);
+  });
+
+  it('landscape + right rail PRESENT reserves NO column (unchanged)', () => {
+    // With the right rail present the engine already subtracts rightCells + gap, so the Stage never
+    // owns the last column — no reservation, stageCells == total − left − right − 2 gaps.
+    const cols = 200;
+    const layout = computeBodyLayout(landscape(cols, rail(24), rail(18)));
+    expect(layout.stageCells).toBe(cols - 24 - 18 - 2 /* two gaps */);
+  });
+
+  it('portrait reserves NO column even with no right rail (stacks vertically — unchanged)', () => {
+    // Portrait stacks regions, never hitting the wide side-by-side full-width Stage path. With only a
+    // left strip present the Stage keeps the full remainder: total − leftStrip − 1 gap (no reservation).
+    const layout = computeBodyLayout(portrait(50, railH(8), ABSENT));
+    expect(layout.stageCells).toBe(50 - 8 - 1 /* one gap, no reserved column */);
+  });
+
+  it('the 1-cell reservation never breaches the Stage 60% floor on a tiny terminal', () => {
+    // At a tiny width the reservation is clamped so the guaranteed ≥60% floor still holds exactly.
+    for (let cols = 1; cols <= 60; cols++) {
+      const layout = computeBodyLayout(landscape(cols, rail(10), ABSENT));
+      expect(layout.stageCells).toBeGreaterThanOrEqual(Math.ceil(STAGE_MIN_FRACTION * cols));
+    }
+  });
+});
+
 describe('computeBodyLayout — slack: rails at natural size (R1/R2)', () => {
   it('gives each rail its natural size when the budget is roomy', () => {
     // 200 cols, floor=120, gaps=2 → railBudget=78; naturals 24+18=42 < 78 → both natural.
@@ -104,19 +141,22 @@ describe('computeBodyLayout — slack: rails at natural size (R1/R2)', () => {
     expect(layout.rightRailCells).toBe(8);
   });
 
-  it('a collapsed rail contributes nothing and no gap', () => {
-    // Only the left rail present → 1 gap. Right rail is 0 cells.
+  it('a collapsed rail contributes nothing and no gap (1 col reserved for deferred-wrap)', () => {
+    // Only the left rail present → 1 gap. Right rail is 0 cells. With NO right rail in landscape the
+    // Stage would own the terminal's last column, so the engine reserves it as dead space → Stage is
+    // 1 cell narrower (the deferred-wrap striping fix). The reserved column is unassigned to any rail.
     const layout = computeBodyLayout(landscape(120, rail(20), ABSENT));
     expect(layout.rightRailCells).toBe(0);
     expect(layout.leftRailCells).toBe(20);
-    expect(layout.stageCells).toBe(120 - 20 - 1 /* one gap */);
+    expect(layout.stageCells).toBe(120 - 20 - 1 /* one gap */ - 1 /* reserved last column */);
   });
 
-  it('both rails absent → Stage takes the whole width, no gaps', () => {
+  it('both rails absent → Stage takes the whole width minus the reserved last column', () => {
     const layout = computeBodyLayout(landscape(100, ABSENT, ABSENT));
     expect(layout.leftRailCells).toBe(0);
     expect(layout.rightRailCells).toBe(0);
-    expect(layout.stageCells).toBe(100);
+    // No right rail in landscape → 1 column reserved as dead space (deferred-wrap fix).
+    expect(layout.stageCells).toBe(100 - 1);
   });
 });
 

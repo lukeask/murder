@@ -148,6 +148,12 @@ const SCROLL_STEP = 1;
  * render). Once the grid reports a real height the derived per-pane `contentHeight` drives the window. */
 const FALLBACK_HEIGHT = 20;
 
+/** "Stick to bottom" tolerance: while `scrollUp` (lines hidden below the window's bottom) is within
+ * this many lines of the tail, the pane is considered AT the bottom — a newly-arriving message snaps
+ * it to the newest line. Above this, the user is deliberately reading back, so new lines must NOT
+ * yank the window down; their absolute position is preserved instead. */
+const NEAR_BOTTOM_THRESHOLD = 3;
+
 /** Rows of pane chrome between a pinned row height and the inner fill-box height: the inline-title
  * top border (1) + Ink's own bottom border on the content box (1). The footer overlay is net-0
  * (marginTop:-1 cancels its row), so chrome is exactly 2 — see Pane.tsx / paneBorder.tsx. */
@@ -486,6 +492,45 @@ export const ChatPane = memo(function ChatPane({
   const lines = useMemo(() => flattenTurns(turns), [turns]);
   const maxScrollUp = Math.max(lines.length - effectiveHeight, 0);
   const clampedScroll = Math.min(scrollUp, maxScrollUp);
+
+  // Stick-to-bottom on new content (BUG-10) WITHOUT yanking a reader off their place. The decision is
+  // made against the PRE-update `scrollUp` captured in a ref, so it never races the same render that
+  // grows `lines`: each render syncs the refs to the values it just used, and the effect (which runs
+  // AFTER that sync) reads the values from the PREVIOUS committed render.
+  //   • near the bottom before → snap to the tail (`setScrollUp(0)`) so the new reply is in view;
+  //   • scrolled up           → bump the offset by the number of new lines so the exact lines the user
+  //                             was reading stay stationary (the offset counts from the tail, which
+  //                             just moved down by `delta`).
+  // Negative `delta` (blocks collapse / re-summarize) doesn't snap; the render-time clamp + the
+  // resize-clamp below keep `scrollUp` within the new bounds. First mount seeds the ref to the current
+  // length so it can't snap spuriously.
+  const prevLenRef = useRef<number | null>(null);
+  // Snapshot of "was the user near the bottom?" as of the LAST render whose length had not yet grown.
+  // It is refreshed only on a non-growth render (below), so on the render that delivers new lines the
+  // effect reads the pre-growth decision — never the just-recomputed (post-growth) offset. This is how
+  // we dodge the race: the deciding value is committed strictly before the length increase.
+  const wasNearBottomRef = useRef(true);
+  if (prevLenRef.current === null || lines.length <= prevLenRef.current) {
+    wasNearBottomRef.current = clampedScroll <= NEAR_BOTTOM_THRESHOLD;
+  }
+  useEffect(() => {
+    const prevLen = prevLenRef.current;
+    prevLenRef.current = lines.length;
+    if (prevLen === null) {
+      return; // first mount: no prior length to diff against — don't snap.
+    }
+    const delta = lines.length - prevLen;
+    if (delta <= 0) {
+      // Shrink (or no growth). Just keep the offset valid against the new max; never snap.
+      setScrollUp((s) => Math.min(s, maxScrollUp));
+      return;
+    }
+    if (wasNearBottomRef.current) {
+      setScrollUp(0); // stick to the tail → the new reply scrolls into view.
+    } else {
+      setScrollUp((s) => Math.min(s + delta, maxScrollUp)); // preserve absolute position.
+    }
+  }, [lines.length, maxScrollUp]);
 
   // `g<digits>` go-to-line (the shared gesture — see useGotoLine): the 1-based history line lands at
   // the TOP of the window. `scrollUp` counts hidden lines from the tail, so line N maps to

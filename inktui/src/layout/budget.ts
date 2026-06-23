@@ -244,7 +244,21 @@ export function computeBodyLayout(input: BodyLayoutInput): BodyLayout {
   // The Stage takes everything the rails and gaps leave. ≥ stageFloor by construction (the rails
   // never collectively exceed `railBudget = total - stageFloor - gaps`), but `max` belt-and-braces
   // against any rounding so the contract "stageCells ≥ stageFloor" holds exactly.
-  const stageCells = Math.max(stageFloor, total - leftCells - rightCells - gaps);
+  const stageRaw = Math.max(stageFloor, total - leftCells - rightCells - gaps);
+
+  // Deferred-wrap guard (landscape, no right rail). When the right rail is absent the Stage owns the
+  // terminal's FINAL column, and a full-width Pane border row paints a printable `│` glyph into column
+  // `cols`. That sets the terminal's pending-wrap state, so Ink's next row advance skips a physical
+  // line — the "blank every other line" striping + eventual top-bar scroll-out documented in
+  // `.murder/reports/landscape-stage-glitch-findings.md`. Reserve the last column as DEAD SPACE: shave
+  // exactly 1 cell off the Stage so a full-width border never lands in column `cols`. The reserved
+  // column is intentional, unassigned slack — it is NOT given to any rail, and the left-rail/gap math
+  // is untouched (no double-subtract). When the right rail is PRESENT it already subtracts
+  // `rightCells + gap`, so the Stage never owns the last column; portrait stacks vertically and never
+  // hits this path — both are left unchanged. Clamp to `stageFloor` so a tiny terminal never loses the
+  // guaranteed ≥60% Stage floor to this 1-cell reservation.
+  const reserveLastColumn = landscape && !rightPresent;
+  const stageCells = reserveLastColumn ? Math.max(stageFloor, stageRaw - 1) : stageRaw;
 
   // The usage gauges size off their ACTUAL inner width (rail − Pane chrome; in portrait also the
   // side-by-side split with crows), NOT the raw rail cells — so the fluid gauge line always renders

@@ -166,11 +166,44 @@ class HarnessBackedAgent(LifecycleParticipant):
         )
         had_changes = await self._producer.poll(pane)
         await self._emit_plan_resort_if_planner(had_changes)
+        # Process-lifecycle status: reconcile agents.status (the crows-panel
+        # spinner) with the harness's working↔idle signal (BUG-13).
+        self._sync_lifecycle_status()
         # Busy-harness chat queue: deliver once the parser reports the pane is
         # input-ready, and push the (live_state, queued) pair to clients when it
         # changed (cheap no-op otherwise — the publish is change-gated).
         await self._deliver_queued_if_ready()
         await self._publish_conversation_state()
+
+    def _sync_lifecycle_status(self) -> None:
+        """Toggle ``agents.status`` RUNNING↔IDLE to match the harness signal.
+
+        The crows-panel spinner is derived from ``agents.status == 'running'``,
+        but an agent only set RUNNING on startup and DONE/FAILED on stop — there
+        was no per-turn transition, so a finished crow stayed "running" forever
+        (BUG-13). The parser's live state is the harness-agnostic working/idle
+        signal (``working`` vs ``awaiting_input``/``awaiting_approval``), so this
+        works for every harness kind.
+
+        Edge-triggered: syncs only when the target status differs from the
+        current one, so it does not spam the bus on every poll tick. Strictly a
+        RUNNING↔IDLE toggle — an agent in any other status (blocked, escalating,
+        done, failed, dead) is left untouched so a stale state read can never
+        clobber an escalation or resurrect a stopped agent.
+        """
+        runtime = getattr(self, "runtime", None)
+        if runtime is None:
+            return
+        state = self._current_live_state()
+        if state is None:
+            return
+        target = AgentStatus.RUNNING if state == "working" else AgentStatus.IDLE
+        if self.status not in (AgentStatus.RUNNING, AgentStatus.IDLE):
+            return
+        if self.status == target:
+            return
+        self.status = target
+        runtime.sync_agent(self)
 
     async def _emit_plan_resort_if_planner(self, had_changes: bool) -> None:
         """F11 H1: emit the key-only ``plan`` re-sort invalidation, gated.
