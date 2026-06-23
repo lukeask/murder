@@ -71,7 +71,6 @@ class CrowHandler(Daemon):
         self._last_pane_hash: str | None = None
         self._last_summary: str | None = None
         self._idle_cached = False
-        self._queued_message: str | None = None
         self._on_idle_callbacks: list[asyncio.Future[None]] = []
         # DONE latch: once a crow has emitted `>>> DONE` in its assistant
         # transcript we record that fact here so completion still fires even if
@@ -184,24 +183,6 @@ class CrowHandler(Daemon):
         with log_context(agent_id=self.id):
             return await self.harness.send_prompt(self.crow_session, msg)
 
-    @property
-    def pending_message(self) -> str | None:
-        return self._queued_message
-
-    async def queue_message(self, msg: str) -> dict[str, bool]:
-        """Deliver now if the crow is idle; otherwise hold until the next idle tick."""
-        if self.is_crow_idle():
-            result = await self.send(msg)
-            if not result.ok:
-                return {
-                    "queued": False,
-                    "ok": False,
-                    "error": result.message or "crow message delivery failed",
-                }
-            return {"queued": False}
-        self._queued_message = msg
-        return {"queued": True}
-
     async def interrupt_crow(self) -> None:
         await self.harness.interrupt(self.crow_session)
 
@@ -240,15 +221,11 @@ class CrowHandler(Daemon):
         # -> CrowAgent.project_once), not here; this handler only does ticket
         # orchestration off the captured pane.
 
-        # Fast: idle detection + queued message delivery
-        was_idle = self._idle_cached
+        # Fast: idle detection. Drives the slow/fast poll cadence below and the
+        # idle-callback waiters. Chat delivery to a crow is NOT handled here — it
+        # flows through the crow agent's own deliver-when-idle queue
+        # (HarnessBackedAgent.queue_message), the single crow delivery path.
         self._idle_cached = self.harness.is_idle(pane)
-        if self._idle_cached and not was_idle and self._queued_message is not None:
-            queued = self._queued_message
-            self._queued_message = None
-            result = await self.send(queued)
-            if not result.ok:
-                self._log(result.message or "queued message delivery failed")
         self._fire_idle_callbacks_if_idle()
 
         # Fast: pane hash bookkeeping (used by stuck detection downstream).
@@ -464,9 +441,6 @@ class CrowHandler(Daemon):
         if not isinstance(result, DoneHandleResult):
             return False
         return result.completed
-
-    def is_crow_idle(self) -> bool:
-        return self._idle_cached
 
     async def await_idle(self) -> None:
         if self._idle_cached:

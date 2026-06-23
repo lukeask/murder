@@ -1,0 +1,9 @@
+{
+  "harness": "cursor",
+  "state": "awaiting_input",
+  "condensed": null,
+  "segments": [
+    {"type": "user", "text": "test"},
+    {"type": "assistant", "phase": "final", "text": "I will help you fix that bug. This reply is wider than the pane, so the terminal hard-wraps the overflow onto the next physical row at column zero, where cursor does not re-inject its two-space left margin.", "elapsed": null}
+  ]
+}

@@ -62,6 +62,11 @@ class ConversationProducer:
         self._summary_provider = summary_provider
         self._summary_provider_resolved = summary_provider is not None
         self._summary_tasks: set[asyncio.Task[None]] = set()
+        # Tracks the prior poll's parsed state so we can detect the working→idle
+        # turn boundary and force-flush the summarization buffer's tail (a short
+        # turn never crosses the rolling char threshold, so without this its
+        # intermediate work would never be summarized → Condensed == Verbose).
+        self._prev_summary_state: str = "working"
 
     async def poll(self, pane: str) -> bool:
         """Feed a new pane capture; no-op if the pane hasn't changed since last poll.
@@ -121,6 +126,18 @@ class ConversationProducer:
             )
             if pending is not None:
                 self._schedule_summary(pending)
+
+        # Turn-boundary flush: when the harness goes working→idle the turn's
+        # intermediate work is complete and its final reply is being rendered
+        # verbatim. A short turn never crosses the rolling char threshold, so its
+        # buffered run would otherwise sit unflushed forever (Condensed would
+        # render identically to Verbose). Flush the tail here so every completed
+        # turn yields at least one chunk summary.
+        if self._prev_summary_state == "working" and state != "working":
+            tail = self._summary_buffer.flush_pending(state)
+            if tail is not None:
+                self._schedule_summary(tail)
+        self._prev_summary_state = state
 
     def _schedule_summary(self, chunk: PendingChunk) -> None:
         """Dispatch one chunk summary as a fire-and-forget background task.

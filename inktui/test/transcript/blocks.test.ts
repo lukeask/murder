@@ -123,6 +123,15 @@ describe('classifyBlocks — pre (preserve bias)', () => {
     expect(block?.kind).toBe('pre');
     expect(block?.lines).toEqual(['col1      col2', 'val       other']);
   });
+
+  it('labels an UNFENCED code block (flush-left def + indented body) as pre', () => {
+    // BUG-1: the def line is at column 0 and the body has no internal 2-space gap, so
+    // only the indentation STEP between them flags it as structure (not prose).
+    const text = 'def add(a, b):\n    return a + b';
+    const block = classifyBlocks(text)[0];
+    expect(block?.kind).toBe('pre');
+    expect(block?.lines).toEqual(['def add(a, b):', '    return a + b']);
+  });
 });
 
 describe('classifyBlocks — mixed turn', () => {

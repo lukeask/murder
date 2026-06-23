@@ -120,6 +120,7 @@ describe('createAppStore — boot & wiring', () => {
     expect(typeof store.getState().actions.tickets.refresh).toBe('function');
     // C9 actions.
     expect(typeof store.getState().actions.usage.refresh).toBe('function');
+    expect(typeof store.getState().actions.usage.sample).toBe('function');
     // C11 actions.
     expect(typeof store.getState().actions.plans.refresh).toBe('function');
     // History actions: refresh + dismiss.

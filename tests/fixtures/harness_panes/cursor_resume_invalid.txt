@@ -1,0 +1,30 @@
+# source: live tmux capture — agent --resume=<bogus-uuid> --yolo (interactive TUI) + --print mode confirmation
+# agent version: v2026.06.19-20-24-33-653a7fb
+# state: invalid id silently ignored; agent falls through to fresh session with no warning or error
+# scrub: user@host → user@machine ; home path → /home/user ; account email → example@website.com
+# note: --resume accepts optional chatId; both UUID and garbage-string invalid ids produce identical silent fallback
+
+# --- interactive TUI form: agent --resume=00000000-0000-0000-0000-000000000000 --yolo ---
+# (no error, no warning — fresh session starts immediately)
+
+user@machine:~/Documents/code/testingmurderharness $ agent --resume=00000000-0000-0000-0000-000000000000 --yolo
+
+
+  Cursor Agent
+  v2026.06.19-20-24-33-653a7fb
+  Use /skills to give Cursor specialized knowledge for tasks.
+
+
+ ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+  → Plan, search, build anything
+ ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+  Composer 2.5                                                                                                                                                                          Run Everything
+  ~/Documents/code/testingmurderharness
+
+# --- headless confirmation: agent --resume=00000000-0000-0000-0000-000000000000 --print --yolo "test" ---
+# (also silent fallback to fresh session; responds to prompt normally)
+I'm here and working. What would you like to test or work on?
+
+# --- headless confirmation: agent --resume=not-a-real-session --print --yolo "test" ---
+# (garbage non-UUID id: identical silent fallback; no error)
+I'm here and working. What would you like to do?

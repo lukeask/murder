@@ -1,6 +1,6 @@
 """Shared harness usage sampling via the usage-probe worker.
 
-Used by the TUI (Ctrl+R refresh), the headless service interval poll, and any
+Used by the TUI usage-panel `r` sample key, the headless service interval poll, and any
 other caller that should issue the same ``state.harness_usage.sample`` command.
 """
 

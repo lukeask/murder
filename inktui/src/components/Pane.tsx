@@ -189,7 +189,13 @@ export const Pane = memo(
       (footerLeft !== undefined && footerLeft !== null && footerLeft !== false) ||
       (footerRight !== undefined && footerRight !== null && footerRight !== false);
     /* Content box supplies the LEFT (+ RIGHT, unless the scrollbar column replaces it) sides + the
-       BOTTOM border + padding + height clamp. Only the TOP is `false` (the hand-composed title row
+       BOTTOM border + padding + height clamp. `minWidth={0}` is load-bearing in the scrollbar variant:
+       there the box sits in a flex ROW beside the `flexShrink={0}` PaneBorderRight column, so its
+       default `min-width:auto` (= its content's intrinsic min-width) would refuse to shrink on a narrow
+       tiled pane and push the 1-cell right border past the cell's right edge, where the cell's
+       `overflow:hidden` clipped it — the missing `━┓` corner on the 2nd pane of a multi-column grid.
+       `minWidth={0}` lets the content shrink so the border column always keeps its cell (same fix shape
+       as TmuxFrameInline's `minWidth={0}`). Only the TOP is `false` (the hand-composed title row
        draws it). The bottom is Ink's OWN border (`╰──╯`), NOT a separate sibling row: a fixed-height
        bottom row clips off when the pane's height rounds to a half-cell (the `[top, flexGrow, bottom]`
        split loses its trailing fixed cell at fractional heights — e.g. two panels splitting an odd
@@ -199,6 +205,7 @@ export const Pane = memo(
       <Box
         flexDirection="column"
         flexGrow={1}
+        minWidth={0}
         minHeight={0}
         overflow="hidden"
         borderStyle={inkBorderStyle}
@@ -230,7 +237,24 @@ export const Pane = memo(
         </Box>
       );
     return (
-      <Box ref={ref} flexDirection="column" flexGrow={flexGrow} minHeight={0} overflow="hidden">
+      // `minWidth={0}` on the OUTER box is load-bearing alongside the content box's own `minWidth={0}`
+      // (the BUG-7 follow-up): a Box's default `min-width:auto` is its widest child's intrinsic width,
+      // and the widest child is the FOOTER/top border row (the full `╰─ harness ◇ model ──── branch ─╯`
+      // run + its 256-char `─` fill). Without `minWidth={0}` the outer box refuses to shrink below that
+      // intrinsic width on a narrow tiled column, while the inner content box (which HAS `minWidth={0}`)
+      // shrinks — so the top border + footer resolve WIDER than the content rows and the footer's fixed
+      // `─╯` reserve lands past the content's real right edge, where the real-terminal renderer WRAPS the
+      // closing `╯` onto its own line (the off-by-one footer bug). `minWidth={0}` lets the whole Pane
+      // shrink as ONE unit so all three rows share the column width. (ink-testing-library clips instead of
+      // wrapping, so the corner must be eyeballed live — see project_inktui_measure_wrap memory.)
+      <Box
+        ref={ref}
+        flexDirection="column"
+        flexGrow={flexGrow}
+        minWidth={0}
+        minHeight={0}
+        overflow="hidden"
+      >
         {/* Top border line with the inline title — the shared {@link ./paneBorder.js} recipe (also
             used by ChatInput). Fixed segments never shrink; the `─` fill absorbs the slack + clips. */}
         <PaneBorderTop

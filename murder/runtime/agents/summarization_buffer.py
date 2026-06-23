@@ -31,6 +31,11 @@ from dataclasses import dataclass, field
 from typing import Any
 
 # Roll when adding the next block would push the running char-sum past this.
+# This governs *mid-turn* chunk granularity only: a turn whose intermediate work
+# never crosses the threshold is force-flushed at the working→idle boundary by
+# the producer (ConversationProducer._observe_for_summary), so short turns are
+# summarized regardless of this value — that completion flush is what makes
+# Condensed collapse observable even for short turns.
 DEFAULT_CHAR_THRESHOLD = 3000
 
 # Block kinds that count as summarizable *intermediate* activity. The final

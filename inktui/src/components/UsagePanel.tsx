@@ -23,7 +23,7 @@
  * countdown — the bar itself is the last thing standing.
  *
  * The panel is `React.memo`'d (rule 1), owns a local cursor over the flat gauge list, declares its
- * keymap (rule 5), and reaches the bus only through the dispatched `actions.usage.refresh` (rule 3).
+ * keymap (rule 5), and reaches the bus only through the dispatched usage actions (rule 3).
  */
 
 import { Box, Text } from 'ink';
@@ -56,6 +56,9 @@ const PANEL_TITLE = 'Usage';
 const GUTTER_WIDTH = 2;
 /** Gap between the bar and its win/reset trail (and between the key line's column labels). */
 const TRAIL_GAP = 2;
+/** Optional label column for named windows/groups, e.g. Antigravity's grouped weekly quotas. */
+const WINDOW_LABEL_WIDTH = 10;
+const WINDOW_LABEL_GAP = 1;
 /** Fixed width of the window-length column (`5h`, `30d`, left-aligned). */
 const WIN_WIDTH = 3;
 /** Fixed width of the reset-countdown column (`1h52m`, right-aligned). */
@@ -72,7 +75,14 @@ const MIN_EMBED_FILL = 3;
 /** The inner width assumed when mounted bare (e.g. a test rendering UsagePanel outside the Rail):
  * the full line at the selector's nominal bar width, so the full render is the unguarded default. */
 const DEFAULT_INNER_WIDTH =
-  GUTTER_WIDTH + USAGE_BAR_WIDTH + TRAIL_GAP + WIN_WIDTH + 1 + RESET_WIDTH;
+  GUTTER_WIDTH +
+  WINDOW_LABEL_WIDTH +
+  WINDOW_LABEL_GAP +
+  USAGE_BAR_WIDTH +
+  TRAIL_GAP +
+  WIN_WIDTH +
+  1 +
+  RESET_WIDTH;
 
 type UsageIntent = 'cursorDown' | 'cursorUp' | 'refresh' | 'cycleSteering';
 
@@ -96,6 +106,7 @@ function nextSteering(current: string): string {
  */
 interface GaugeLayout {
   readonly barWidth: number;
+  readonly showLabel: boolean;
   readonly showWin: boolean;
   readonly showReset: boolean;
 }
@@ -103,15 +114,34 @@ interface GaugeLayout {
 /** Resolve the {@link GaugeLayout} for the inner width the budget engine granted. Pure; total — the
  * bar is floored at 1 cell even at degenerate widths. */
 function gaugeLayoutFor(innerWidth: number): GaugeLayout {
+  const labelBudget = WINDOW_LABEL_WIDTH + WINDOW_LABEL_GAP;
+  const labeledFullBar =
+    innerWidth - GUTTER_WIDTH - labelBudget - TRAIL_GAP - WIN_WIDTH - 1 - RESET_WIDTH;
+  if (labeledFullBar >= MIN_GAUGE_BAR_WIDTH) {
+    return { barWidth: labeledFullBar, showLabel: true, showWin: true, showReset: true };
+  }
+  const labeledResetBar = innerWidth - GUTTER_WIDTH - labelBudget - TRAIL_GAP - RESET_WIDTH;
+  if (labeledResetBar >= MIN_GAUGE_BAR_WIDTH) {
+    return { barWidth: labeledResetBar, showLabel: true, showWin: false, showReset: true };
+  }
+  const labeledBareBar = innerWidth - GUTTER_WIDTH - labelBudget;
+  if (labeledBareBar >= MIN_GAUGE_BAR_WIDTH) {
+    return { barWidth: labeledBareBar, showLabel: true, showWin: false, showReset: false };
+  }
   const fullBar = innerWidth - GUTTER_WIDTH - TRAIL_GAP - WIN_WIDTH - 1 - RESET_WIDTH;
   if (fullBar >= MIN_GAUGE_BAR_WIDTH) {
-    return { barWidth: fullBar, showWin: true, showReset: true };
+    return { barWidth: fullBar, showLabel: false, showWin: true, showReset: true };
   }
   const resetBar = innerWidth - GUTTER_WIDTH - TRAIL_GAP - RESET_WIDTH;
   if (resetBar >= MIN_GAUGE_BAR_WIDTH) {
-    return { barWidth: resetBar, showWin: false, showReset: true };
+    return { barWidth: resetBar, showLabel: false, showWin: false, showReset: true };
   }
-  return { barWidth: Math.max(1, innerWidth - GUTTER_WIDTH), showWin: false, showReset: false };
+  return {
+    barWidth: Math.max(1, innerWidth - GUTTER_WIDTH),
+    showLabel: false,
+    showWin: false,
+    showReset: false,
+  };
 }
 
 /**
@@ -213,7 +243,15 @@ function GaugeLine({
   return (
     <Box flexShrink={0} width="100%" backgroundColor={selected ? theme.panelSelectedBg : undefined}>
       <Text wrap="truncate">
-        {marker} {renderBar(gauge, theme, layout.barWidth)}
+        {marker}{' '}
+        {layout.showLabel ? (
+          <>
+            <Text dimColor>
+              {gauge.windowLabel.slice(0, WINDOW_LABEL_WIDTH).padEnd(WINDOW_LABEL_WIDTH)}
+            </Text>{' '}
+          </>
+        ) : null}
+        {renderBar(gauge, theme, layout.barWidth)}
         {layout.showWin ? (
           <>
             {'  '}
@@ -247,6 +285,7 @@ function UsageKeyLine({ layout }: { readonly layout: GaugeLayout }): JSX.Element
     <Box flexShrink={0} width="100%">
       <Text dimColor wrap="truncate">
         {'  '}
+        {layout.showLabel ? `${'window'.padEnd(WINDOW_LABEL_WIDTH)} ` : ''}
         {'usage'.padEnd(layout.barWidth)}
         {'  '}
         {layout.showWin ? `${'win'.padEnd(WIN_WIDTH)} ` : ''}
@@ -335,7 +374,7 @@ export const UsagePanel = memo(function UsagePanel({
   const usage = useAppStore((s) => s.usage, shallow);
   const view = useUsageView(usage);
   // Rule 3: bus reached only through the dispatched actions.
-  const refresh = useAppStore((s) => s.actions.usage.refresh);
+  const sample = useAppStore((s) => s.actions.usage.sample);
   const setSteering = useAppStore((s) => s.actions.usage.setSteering);
   // The cycle chord (`s`) comes from the central registry (`panel.usageSteering`); `bindings` is a
   // stable handle, so it's a sound keymap dep.
@@ -360,7 +399,7 @@ export const UsagePanel = memo(function UsagePanel({
           intent: 'cursorUp',
           description: 'prev gauge',
         },
-        { chord: { input: 'r' }, intent: 'refresh', description: 'refresh' },
+        { chord: { input: 'r' }, intent: 'refresh', description: 'sample' },
         {
           chord: bindings.chordsFor('panel.usageSteering'),
           intent: 'cycleSteering',
@@ -376,7 +415,7 @@ export const UsagePanel = memo(function UsagePanel({
             setCursor((c) => Math.max(c - 1, 0));
             return;
           case 'refresh':
-            void refresh();
+            void sample();
             return;
           case 'cycleSteering': {
             if (gaugeCount === 0) return;
@@ -397,7 +436,7 @@ export const UsagePanel = memo(function UsagePanel({
         }
       },
     }),
-    [gaugeCount, clampedCursor, refresh, setSteering, bindings, view.groups],
+    [gaugeCount, clampedCursor, sample, setSteering, bindings, view.groups],
   );
   usePanelKeymap(PANEL_ID, keymap);
 

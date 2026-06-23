@@ -26,7 +26,7 @@ import {
   paneContentHeights,
   Stage,
 } from '../../src/components/Stage.js';
-import { AppStoreProvider } from '../../src/hooks/useAppStore.js';
+import { AppStoreProvider, useAppStore } from '../../src/hooks/useAppStore.js';
 import { BusClientProvider } from '../../src/hooks/useBusClient.js';
 import { InputStoresProvider } from '../../src/hooks/useInputStores.js';
 import { useRootInput } from '../../src/hooks/useRootInput.js';
@@ -248,6 +248,135 @@ describe('ChatPane — window honors the contentHeight prop', () => {
     expect(frame).toContain('msg-29');
     // ... and an early/oldest line is NOT — the window is bounded to ~5 lines, not FALLBACK (20).
     expect(frame).not.toContain('msg-00');
+    dispose();
+  });
+});
+
+/** Emit a SINGLE distinct user block (its own unique id so it appends, not replaces). Used to feed a
+ * new message AFTER the initial render, exercising the stick-to-bottom auto-scroll on growth. */
+function emitTurn(fake: FakeBusClient, label: string): void {
+  const event: ConversationBlockEvent = {
+    type: 'conversation.block',
+    id: `ev-${label}`,
+    ts: '2026-06-08T00:00:00Z',
+    run_id: 'run-1',
+    agent_id: 'collab-1',
+    conversation_id: 'conv-collab-1',
+    action: 'block-appended',
+    block: { type: 'user', id: `block-${label}`, text: label },
+  };
+  fake.emit(event);
+}
+
+/** A ChatPane that re-subscribes to the store's live `conversations` slice, so a post-render emit
+ * actually re-renders the pane (the bare `ChatPane` takes a frozen snapshot prop). Mirrors the Stage's
+ * own wiring closely enough to drive the auto-scroll effect under test. */
+function LiveChatPane({ contentHeight }: { readonly contentHeight: number }): JSX.Element {
+  const conversations = useAppStore((s) => s.conversations);
+  return (
+    <ChatPane
+      identity={{ kind: 'collaborator', agentId: 'collab-1', label: 'TestCollab' }}
+      conversations={conversations}
+      chatTarget={false}
+      footer={null}
+      worktree={null}
+      contentHeight={contentHeight}
+    />
+  );
+}
+
+describe('ChatPane — stick-to-bottom auto-scroll on new lines (BUG-10 + refinement)', () => {
+  it('new lines while pinned at the bottom keep the newest line visible (snaps to tail)', async () => {
+    const { fake, store, inputStores, dispose } = await setup();
+    emitTurns(fake, 20); // ~39 lines, far above the window of 5 → starts pinned to the tail
+    const { lastFrame } = render(
+      <AppStoreProvider value={store}>
+        <InputStoresProvider value={inputStores}>
+          <RootInput />
+          <Box flexDirection="column" width={80} height={20}>
+            <LiveChatPane contentHeight={5} />
+          </Box>
+        </InputStoresProvider>
+      </AppStoreProvider>,
+    );
+    await tick();
+    expect(lastFrame() ?? '').toContain('msg-19'); // pinned to tail at start
+
+    // A new reply arrives while at the bottom → it must scroll into view (BUG-10).
+    emitTurn(fake, 'fresh-reply');
+    await tick();
+    const after = lastFrame() ?? '';
+    expect(after).toContain('fresh-reply'); // the new message is visible
+    dispose();
+  });
+
+  it('new lines while scrolled UP do NOT yank the window — the read-back lines stay in view', async () => {
+    const { fake, store, inputStores, dispose } = await setup();
+    emitTurns(fake, 50); // ~99 lines
+    const { lastFrame } = render(
+      <AppStoreProvider value={store}>
+        <InputStoresProvider value={inputStores}>
+          <RootInput />
+          <Box flexDirection="column" width={80} height={20}>
+            <LiveChatPane contentHeight={5} />
+          </Box>
+        </InputStoresProvider>
+      </AppStoreProvider>,
+    );
+    await tick();
+
+    // Scroll well up via the wheel bus (no focus required) so the user is reading old content, far
+    // past the near-bottom threshold.
+    for (let i = 0; i < 40; i++) {
+      inputStores.paneScroll.emit(STAGE_PANE, 'up', 1);
+    }
+    await tick();
+    const beforeFrame = lastFrame() ?? '';
+    // Identify a content marker the user is currently reading (somewhere mid-history, NOT the tail).
+    const readingMatch = beforeFrame.match(/msg-(\d\d)/g) ?? [];
+    expect(readingMatch.length).toBeGreaterThan(0);
+    const anchor = readingMatch[0]; // an oldest visible line in the current window
+    expect(beforeFrame).not.toContain('msg-49'); // not at the tail
+
+    // A new reply arrives while scrolled up → the anchored lines must remain visible (no yank).
+    emitTurn(fake, 'intruder');
+    await tick();
+    const afterFrame = lastFrame() ?? '';
+    expect(afterFrame).toContain(anchor); // the line the user was reading is still on screen
+    expect(afterFrame).not.toContain('intruder'); // the new message did NOT pull us to the bottom
+    dispose();
+  });
+
+  it('scrolling back to the bottom re-enables sticking — a later message snaps to the tail again', async () => {
+    const { fake, store, inputStores, dispose } = await setup();
+    emitTurns(fake, 50);
+    const { lastFrame } = render(
+      <AppStoreProvider value={store}>
+        <InputStoresProvider value={inputStores}>
+          <RootInput />
+          <Box flexDirection="column" width={80} height={20}>
+            <LiveChatPane contentHeight={5} />
+          </Box>
+        </InputStoresProvider>
+      </AppStoreProvider>,
+    );
+    await tick();
+
+    // Scroll up, then all the way back down to the bottom (down past the floor → clamps at 0).
+    for (let i = 0; i < 40; i++) {
+      inputStores.paneScroll.emit(STAGE_PANE, 'up', 1);
+    }
+    await tick();
+    for (let i = 0; i < 200; i++) {
+      inputStores.paneScroll.emit(STAGE_PANE, 'down', 1);
+    }
+    await tick();
+    expect(lastFrame() ?? '').toContain('msg-49'); // back at the tail
+
+    // A new reply now snaps to the tail again (sticking re-enabled by returning to the bottom).
+    emitTurn(fake, 'snapback');
+    await tick();
+    expect(lastFrame() ?? '').toContain('snapback');
     dispose();
   });
 });
@@ -575,6 +704,36 @@ describe('Stage — inline tmux view (TUIchat-5)', () => {
     await tick();
     expect(fake.subscriberCount).toBe(baseline);
     expect(lastFrame() ?? '').not.toContain('INLINE_TMUX_FRAME');
+    dispose();
+  });
+
+  it('renders EVERY line of a multi-line frame whose first line overflows the pane width (BUG-2)', async () => {
+    // BUG-2 root cause: a single `<Text wrap="truncate">` fed the whole multi-line frame collapses to
+    // ONE row the instant its first line overflows the width (Ink truncates at the first wrap point and
+    // drops every later line) — so a real full-width capture rendered as a single clipped line and the
+    // pane looked empty/collapsed. The fix renders one row per line; this proves later lines survive
+    // even when the FIRST line is wider than the pane.
+    const { fake, store, inputStores, dispose } = await setup();
+    const { lastFrame, rerender } = render(
+      <TmuxHarness store={store} inputStores={inputStores} bus={fake} />,
+    );
+    await tick();
+    store.getState().actions.conversations.setPaneViewMode('collab-1', 'tmux');
+    rerender(<TmuxHarness store={store} inputStores={inputStores} bus={fake} />);
+    await tick();
+
+    // A 3-line frame whose FIRST line is far wider than any pane — the case that used to swallow the
+    // rest. Each line carries a unique marker so we can assert all three reach the screen.
+    const wideFirst = `${'W'.repeat(300)}_TOPLINE\nMID_LINE_TWO\nBOTTOM_LINE_THREE`;
+    fake.emit(tmuxFrame(wideFirst, 'ev-wide'));
+    await tick();
+    const withFrame = lastFrame() ?? '';
+    // The first (overflowing) line truncates but is present; the later lines are NOT dropped.
+    expect(withFrame).toContain('WWWW');
+    expect(withFrame).toContain('MID_LINE_TWO');
+    expect(withFrame).toContain('BOTTOM_LINE_THREE');
+    // Pane chrome still intact (inline, not a takeover).
+    expect(withFrame).toContain('TestCollab');
     dispose();
   });
 });

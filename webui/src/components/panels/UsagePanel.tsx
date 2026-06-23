@@ -43,7 +43,13 @@ export function UsagePanel(): React.JSX.Element {
           </div>
           {group.gauges.map((g) => (
             <div key={g.windowKey} className="usage-row">
-              <span className="usage-row__period">{g.periodLabel}</span>
+              <span
+                className="usage-row__period"
+                title={`${g.windowLabel}${g.periodLabel ? ` ${g.periodLabel}` : ''}`}
+              >
+                {g.windowLabel}
+                {g.periodLabel ? ` ${g.periodLabel}` : ''}
+              </span>
               <div className="usage-meter" role="progressbar">
                 <i
                   className={cx('usage-meter__fill', g.isHigh && 'usage-meter__fill--high')}

@@ -1,0 +1,38 @@
+# source: live tmux capture of Claude Code in-TUI /resume session picker
+# claude version: v2.1.187 (Opus 4.8 with medium effort · Claude Max)
+# capture method: launched `claude --dangerously-skip-permissions` in testingmurderharness dir,
+#   typed /resume (autocomplete confirmed), pressed Enter to open picker, then Ctrl+A for all-projects view
+# picker layout: full-screen overlay modal with top separator bar (▔), header "Resume session (N of 50)",
+#   search box (⌕ Search…), project-group labels, session entries each 2 lines:
+#   line 1: ❯ or ↓ prefix + session title (first user message / slash command)
+#   line 2: age · git-branch · size-KB · /path/to/project
+# key hints bar at bottom: Ctrl+A (toggle all repos), Ctrl+B (current branch filter),
+#   Space (preview), Ctrl+R (rename), type to search, Esc to cancel
+# scrub: /home/<username> -> /home/user; session titles are slash-command stubs, no PII found
+
+ ▐▛███▜▌   Claude Code v2.1.187
+▝▜█████▛▘  Opus 4.8 with medium effort · Claude Max
+  ▘▘ ▝▝    ~/Documents/code/testingmurderharness
+
+▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔
+   Resume session (1 of 50)
+   ╭────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+   │ ⌕ Search…                                                                                                                                                                                      │
+   ╰────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+   ❯ Investigate failing tests
+     in 0 sec. · refactor/delete-crow-handler-queue · 187.2KB · /home/user/Documents/code/murder
+
+     Set up tmuxmcp testing fixtures with PII scrubbing
+     19 seconds ago · refactor/delete-crow-handler-queue · 388.2KB · /home/user/Documents/code/murder
+
+     /model
+     8 minutes ago · refactor/delete-crow-handler-queue · 4.7KB · /home/user/Documents/code/murder
+
+     /model
+     9 minutes ago · HEAD · 4.6KB · /home/user/Documents/code/testingmurderharness
+
+   ↓ Build real-time CLI audio transcriber with ONNX
+     13 minutes ago · HEAD · 311.3KB · /home/user/Agents
+
+     Ctrl+A to only show current repo · Ctrl+B to only show current branch · Space to preview · Ctrl+R to rename · Type to search · Esc to cancel

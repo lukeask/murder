@@ -102,6 +102,31 @@ def _is_indented(lines: list[str]) -> bool:
     return bool(body) and all(line[:2] == "  " or line[:1] == "\t" for line in body)
 
 
+def _leading_width(line: str) -> int:
+    """Visual leading-whitespace width (tab counts as one indentation step)."""
+    return len(line) - len(line.lstrip())
+
+
+def _has_indent_step(lines: list[str]) -> bool:
+    """True when the block mixes indentation levels — structure, not prose.
+
+    Soft-wrapped prose is uniformly flush-left once the grammar's ``dedent`` has
+    run (every body line shares the same leading width), so *more than one*
+    distinct leading width across non-blank lines is a strong code/structure
+    signal: ``def f():`` flush-left followed by an indented body, an ``if``/``for``
+    block, a nested list of dict literals, etc.  ``_is_indented`` only fires when
+    *every* line is indented and so misses the common code shape whose opening
+    line (``def``/``class``/``for``…) sits at column 0.
+
+    Like ``_is_columnar`` this is deliberately monotonic for streaming dedup: a
+    single-line block has one width (→ prose, but a one-line block renders
+    identically either way), and once a second, differently-indented line arrives
+    the block flips to ``pre`` and stays there as it grows, preserving the prefix
+    relationship ``_is_streaming_extension`` relies on."""
+    widths = {_leading_width(line) for line in lines if line.strip()}
+    return len(widths) > 1
+
+
 def _has_box(lines: list[str], box_chars: frozenset[str]) -> bool:
     return any(any(ch in box_chars for ch in line) for line in lines)
 
@@ -127,6 +152,7 @@ def classify_block(
         (bool(preserve_prefixes) and any(line.lstrip().startswith(preserve_prefixes) for line in body))
         or _has_box(lines, box_chars)
         or _is_indented(lines)
+        or _has_indent_step(body)
         or _is_columnar(body)
     ):
         return "pre"

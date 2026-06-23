@@ -51,6 +51,12 @@ export interface UsageActions {
    */
   refresh(): Promise<void>;
   /**
+   * Ask the backend usage-probe worker to collect fresh harness snapshots, then re-pull the gauges.
+   * This is intentionally separate from `refresh()`: refresh is read-only, sample mutates the
+   * snapshot table via the worker command path.
+   */
+  sample(): Promise<void>;
+  /**
    * RT5: set a harness's scheduler steering (`'auto' | 'pause' | 'prefer'`) via the
    * `scheduler.set_steering` command on the `scheduler` worker, then refetch (belt-and-braces:
    * the backend also emits a `queue_row` invalidation). Errors route into `usage.error` like a
@@ -67,6 +73,26 @@ export function createUsageActions(bus: BusClient, store: StoreApi<AppStore>): U
   });
   return {
     refresh,
+    async sample(): Promise<void> {
+      store.setState((s) => ({ usage: { ...s.usage, status: 'loading', error: null } }));
+      try {
+        await submitCommand(
+          bus,
+          'state.harness_usage.sample',
+          { trigger: 'manual_refresh' },
+          {
+            targetWorker: 'usage-probe',
+          },
+        );
+        await refresh();
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        store.setState((s) => ({ usage: { ...s.usage, status: 'error', error: message } }));
+        toastStore
+          .getState()
+          .push(`usage sample failed: ${message}`, { severity: 'error', ttlMs: 12000 });
+      }
+    },
     async setSteering(harness: string, steering: string): Promise<void> {
       try {
         await submitCommand(

@@ -39,6 +39,24 @@ def test_classify_uniform_indent_is_pre():
     assert classify_block(["  indented one", "  indented two"]) == "pre"
 
 
+def test_classify_unfenced_code_with_flush_left_def_is_pre():
+    # The BUG-1 shape: an UNFENCED python function. The opening `def …:` line sits at
+    # column 0 (so the all-lines-indented check misses it) and the body lines have no
+    # internal 2+-space gap (so the columnar check misses it) — yet the indentation
+    # STEP between the def line and its body is a confident code signal.
+    code = ["def add(a, b):", "    return a + b"]
+    assert classify_block(code) == "pre"
+
+
+def test_classify_unfenced_block_with_indent_step_is_pre():
+    code = [
+        "for row in rows:",
+        "    cells = [str(c) for c in row]",
+        "    out.append(cells)",
+    ]
+    assert classify_block(code) == "pre"
+
+
 def test_classify_box_drawing_is_pre():
     assert classify_block(["┌────┐", "│ hi │", "└────┘"]) == "pre"
 
@@ -90,6 +108,32 @@ def test_mixed_blocks_collapse_prose_keep_table():
 def test_blocks_joined_with_blank_line():
     out = _reflow(["para one line", "", "para two line"])
     assert out == "para one line\n\npara two line"
+
+
+def test_unfenced_code_preserves_newlines_and_indent():
+    # BUG-1 regression: a flush-left `def` with an indented body must NOT collapse to
+    # one space-joined line; newlines + indentation survive verbatim.
+    code = [
+        "def format_table(headers, rows):",
+        "    widths = [len(h) for h in headers]",
+        "    return widths",
+    ]
+    out = _reflow(code)
+    assert out == "\n".join(code)
+    assert out.count("\n") == 2
+
+
+def test_growing_unfenced_code_renders_are_prefix_stable():
+    # The block flips prose -> pre once the indented body line arrives. The single-line
+    # render must remain a prefix of the multi-line render so dedup never splits it.
+    frames = [
+        ["def add(a, b):"],
+        ["def add(a, b):", "    return a + b"],
+        ["def add(a, b):", "    return a + b", "    # trailing"],
+    ]
+    rendered = [_reflow(f) for f in frames]
+    for earlier, later in zip(rendered, rendered[1:]):
+        assert later.startswith(earlier), f"{earlier!r} is not a prefix of {later!r}"
 
 
 def test_real_model_list_columns_survive():

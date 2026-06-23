@@ -159,8 +159,10 @@ class AgentOps:
             # Deliver-only-when-idle for every crow (ticketed AND rogue): the
             # agent-level queue checks the harness pane and holds the message
             # until the parser reports awaiting_input (HarnessBackedAgent.
-            # queue_message). The CrowHandler queue below remains only as the
-            # fallback when the agent handle is absent (e.g. pre-restart crow).
+            # queue_message), mirroring queued state to the DB/bus so the TUI
+            # renders it. This is the sole crow delivery path — a crow with no
+            # live agent handle is simply not addressable and falls through to
+            # the honest "no agent named" failure below.
             queue_result = await agent.queue_message(message)
             if queue_result.get("ok") is False:
                 return {
@@ -172,24 +174,6 @@ class AgentOps:
             # delivery is accepted.
             await self._record_user_block(agent_id, message)
             return {"handled": True, **queue_result}
-        if agent_id.startswith("crow-"):
-            ticket_id = agent_id[len("crow-") :]
-            if not ticket_id:
-                return {"ok": False, "error": "crow agent_id requires a ticket id"}
-            handler = self.rt.get_crow_handler(ticket_id)
-            if handler is not None:
-                queue_result = await handler.queue_message(message)
-                if queue_result.get("ok") is False:
-                    return {
-                        "ok": False,
-                        "error": str(queue_result.get("error") or "crow message delivery failed"),
-                        **queue_result,
-                    }
-                # Ground truth: record the user turn on the crow's own
-                # conversation once the handler accepts immediate or queued
-                # delivery.
-                await self._record_user_block(agent_id, message)
-                return {"handled": True, **queue_result}
         if agent is None:
             return {"ok": False, "error": f"no agent named {agent_id}"}
         send_result = await agent.send(message)

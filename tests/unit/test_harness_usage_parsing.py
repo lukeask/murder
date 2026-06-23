@@ -173,6 +173,28 @@ def test_antigravity_usage_dialog_collapses_effort_variants() -> None:
         assert t_until_minutes == 12 * 60 + 39
 
 
+def test_antigravity_usage_dialog_grouped_weekly_limits() -> None:
+    # agy 1.0.10 /usage "Models & Quota" dialog: model families are grouped,
+    # and each group has a shared weekly limit. The bracketed bar carries the
+    # precise remaining percent; the prose line is rounded.
+    pane = _load_pane_fixture("agy_usage_dialog_grouped.txt")
+    now = datetime(2026, 6, 23, 10, 0, tzinfo=ZoneInfo("America/New_York"))
+    status = parse_antigravity_usage_pane(pane, now=now)
+    assert status.harness == "antigravity"
+    assert status.source == "slash:/usage"
+    assert status.plan == "Antigravity Starter Quota"
+    assert [w.name for w in status.windows] == [
+        "Gemini Models",
+        "Claude and GPT Models",
+    ]
+    by_name = {w.name: w for w in status.windows}
+    assert by_name["Gemini Models"].percent_used == 14.39
+    reset_at = datetime.fromisoformat(by_name["Gemini Models"].reset_at)
+    assert (reset_at - now).total_seconds() / 60.0 == 157 * 60 + 26
+    assert by_name["Claude and GPT Models"].percent_used == 0.0
+    assert by_name["Claude and GPT Models"].reset_at is None
+
+
 def test_antigravity_usage_divergent_variants_keep_full_labels() -> None:
     pane = (
         "└ Model Quota\n"

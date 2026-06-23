@@ -153,6 +153,79 @@ describe('Pane — titleExtra', () => {
   });
 });
 
+describe('Pane — footer width invariant', () => {
+  // The footer (bottom-border overlay) must stay WITHIN the pane's column width: its closing `╯`
+  // corner sits on the SAME line as the rest of the footer, never wrapped to its own line, and the
+  // footer adds ZERO height (it's a `marginTop:-1` overlay on Ink's own bottom border). The off-by-one
+  // bug landed `╯` past the content's right edge, where the real terminal wraps it to a new line.
+  // (ink-testing-library clips instead of wrapping — see project_inktui_measure_wrap memory — so this
+  // guards the STRUCTURAL invariants the live fix preserves; the visual corner is eyeballed in tmux.)
+  it('adds no height: a footer pane has the same line count as the no-footer baseline', () => {
+    const baseline = render(
+      <Fixed width={32}>
+        <Pane title="Chat" focused>
+          <Text>{'a\nb\nc'}</Text>
+        </Pane>
+      </Fixed>,
+    );
+    const withFooter = render(
+      <Fixed width={32}>
+        <Pane title="Chat" focused footerLeft={<Text>Cursor</Text>} footerRight={<Text>main</Text>}>
+          <Text>{'a\nb\nc'}</Text>
+        </Pane>
+      </Fixed>,
+    );
+    const baseLines = (baseline.lastFrame() ?? '').split('\n').length;
+    expect((withFooter.lastFrame() ?? '').split('\n')).toHaveLength(baseLines);
+  });
+
+  it('keeps the closing corner on the footer line (no bare wrapped ╯ row)', () => {
+    const { lastFrame } = render(
+      <Fixed width={32}>
+        <Pane
+          title="Chat"
+          focused
+          footerLeft={<Text>Cursor ◇ composer-2.5</Text>}
+          footerRight={<Text>main</Text>}
+        >
+          <Text>body</Text>
+        </Pane>
+      </Fixed>,
+    );
+    const lines = (lastFrame() ?? '').split('\n').map(stripAnsi);
+    // The bottom-left corner identifies the footer line; its closing corner must be on THAT SAME line.
+    const footerIdx = lines.findIndex((l) => l.includes(B.bottomLeft));
+    expect(footerIdx).toBeGreaterThanOrEqual(0);
+    expect(lines[footerIdx]).toContain(B.bottomRight);
+    // No line is a lone closing corner (the wrapped-`╯` symptom).
+    expect(lines.some((l) => l.trim() === B.bottomRight)).toBe(false);
+    // The footer fits within the pane's column width (no line wider than the fixed 32-col frame).
+    for (const l of lines) expect(l.length).toBeLessThanOrEqual(32);
+  });
+
+  it('scrollbar-variant footer also keeps its corner on the footer line', () => {
+    const { lastFrame } = render(
+      <Box width={28} height={6}>
+        <Pane
+          title="Chat"
+          focused
+          scrollbar={{ height: 4, thumb: null }}
+          footerLeft={<Text>Cursor ◇ composer-2.5</Text>}
+          footerRight={<Text>main</Text>}
+        >
+          <Text>body</Text>
+        </Pane>
+      </Box>,
+    );
+    const lines = (lastFrame() ?? '').split('\n').map(stripAnsi);
+    const footerIdx = lines.findIndex((l) => l.includes(B.bottomLeft));
+    expect(footerIdx).toBeGreaterThanOrEqual(0);
+    expect(lines[footerIdx]).toContain(B.bottomRight);
+    expect(lines.some((l) => l.trim() === B.bottomRight)).toBe(false);
+    for (const l of lines) expect(l.length).toBeLessThanOrEqual(28);
+  });
+});
+
 describe('Pane — scrollbar-as-right-border', () => {
   it('draws the thumb as a full █ run ON the right border, with the corner still closing', () => {
     const { lastFrame } = render(

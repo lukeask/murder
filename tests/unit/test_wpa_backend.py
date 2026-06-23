@@ -149,9 +149,14 @@ def test_create_plan_with_body_seeds_markdown(repo_root: Path) -> None:
     assert "Seeded body content." in row["body"]
 
 
-def test_create_plan_auto_name_falls_back_to_timestamp_slug(repo_root: Path) -> None:
-    # No real LLM client is configured for the test config, so auto_name must
-    # fall back to a timestamp slug rather than raising.
+def test_create_plan_auto_name_falls_back_to_timestamp_slug(repo_root: Path, monkeypatch) -> None:
+    # With no LLM client resolvable, auto_name must fall back to a timestamp slug
+    # rather than raising. Force the no-client path so the test is deterministic
+    # regardless of whether an API key happens to be present in the environment.
+    monkeypatch.setattr(
+        "murder.runtime.orchestration.plan_ops.resolve_role_client_tiered",
+        lambda cfg, user_cfg, role: (None, cfg),
+    )
     rt = _runtime(repo_root)
     orch = Orchestrator(rt)
 

@@ -75,6 +75,25 @@ function isIndented(lines: readonly string[]): boolean {
   return body.length > 0 && body.every((line) => line.startsWith('  ') || line.startsWith('\t'));
 }
 
+/** Leading-whitespace width of a line (mirrors `_leading_width`). */
+function leadingWidth(line: string): number {
+  return line.length - line.trimStart().length;
+}
+
+/**
+ * True when the block mixes indentation levels — structure, not prose (mirrors `_has_indent_step`).
+ * Soft-wrapped prose is uniformly flush-left after the parser's dedent, so >1 distinct leading width
+ * across non-blank lines flags the common code shape whose opening line (`def`/`class`/`for`/`if`…)
+ * sits at column 0 with an indented body — which `isIndented` misses. Line-local & monotonic like
+ * `isColumnar`, so a streaming block never flips prose→pre in a dedup-desyncing way.
+ */
+function hasIndentStep(lines: readonly string[]): boolean {
+  const widths = new Set(
+    lines.filter((line) => line.trim() !== '').map((line) => leadingWidth(line)),
+  );
+  return widths.size > 1;
+}
+
 /** Any line contains a box-drawing glyph (mirrors `_has_box`). */
 function hasBox(lines: readonly string[]): boolean {
   return lines.some((line) => [...line].some((ch) => BOX_CHARS.has(ch)));
@@ -90,7 +109,7 @@ function classifyBlock(lines: readonly string[]): BlockKind {
   if (body.some((line) => LIST_LEAD_RE.test(line))) {
     return 'list';
   }
-  if (hasBox(lines) || isIndented(lines) || isColumnar(body)) {
+  if (hasBox(lines) || isIndented(lines) || hasIndentStep(body) || isColumnar(body)) {
     return 'pre';
   }
   return 'prose';

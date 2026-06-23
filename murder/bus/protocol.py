@@ -332,11 +332,22 @@ class ConversationBlockEvent(_BaseEvent):
     Additive event kind for event-sourced transcripts. ``action`` distinguishes
     immutable appends from live trailing-block updates without touching the
     closed ``Entity`` enum or key-only ``StateSnapshotEvent`` contract.
+
+    TUIchat-4 (Condensed view) reuses this channel for a third ``action``,
+    ``chunk-summarized``: an incremental hint that a rolling chunk summary was
+    persisted. For that action ``block`` carries the summary payload
+    ``{conversation_id, summary, block_ids}`` (NOT a transcript-row block); the
+    client folds it into its ephemeral chunk-summaries map between snapshots
+    (``state.conversations_snapshot`` chunk_summaries[] stays the source of
+    truth). This MUST stay in sync with the frontend ``ConversationBlockEvent``
+    action union in ``inktui/src/bus/protocol.ts`` — omitting it here makes the
+    producer's ``chunk-summarized`` publish raise a validation error, the event
+    never reaches the client, and Condensed renders identically to Verbose.
     """
 
     type: Literal["conversation.block"] = "conversation.block"
     conversation_id: str
-    action: Literal["block-appended", "block-updated"]
+    action: Literal["block-appended", "block-updated", "chunk-summarized"]
     block: dict[str, Any]
 
 

@@ -1,0 +1,12 @@
+# source: live tmux capture of `codex resume --no-alt-screen <invalid-id>` in testingmurderharness/
+# codex version: codex-cli 0.142.0
+# invocation form: codex resume [SESSION_ID] -- positional UUID or name arg
+# state: exits immediately with error (exit code 1), no picker/TUI launched
+# tested ids: well-formed UUID 00000000-0000-0000-0000-000000000000 and garbage string not-a-real-session
+# scrub note: prompt lines removed; home path -> /home/user; user@host -> user@machine
+
+ERROR: No saved session found with ID 00000000-0000-0000-0000-000000000000. Run `codex resume` without an ID to choose from existing sessions.
+EXIT_CODE:1
+
+ERROR: No saved session found with ID not-a-real-session. Run `codex resume` without an ID to choose from existing sessions.
+EXIT_CODE:1

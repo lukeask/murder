@@ -1,0 +1,51 @@
+# source: live tmux capture of Codex in-TUI /resume session picker
+# codex version: v0.142.0 (gpt-5.5 high)
+# capture method: launched `codex --no-alt-screen --sandbox workspace-write --ask-for-approval never`
+#   in testingmurderharness dir, typed /resume (autocomplete confirmed "resume a saved chat"),
+#   pressed Enter to open picker
+# picker layout: inline overlay (no-alt-screen mode) with header "Resume a previous session",
+#   search box ("Type to search"), filter/sort toggles (Filter: [Cwd] All / Sort: [Updated] Created),
+#   session entries each 1 line: age + first-user-message / slash command, selected entry marked ❯
+#   status bar: "1 / 18 · 100%"
+# key hints: enter resume, esc exit, ctrl+c exit, tab focus sort/filter, ←/→ change option,
+#   ctrl+o comfortable view, ctrl+t transcript, ctrl+e expand, ↑/↓ browse
+# note: /resume IS present in codex's slash-command menu ("resume a saved chat")
+# scrub: shell prompt user@host -> user@machine; /home/<username> -> /home/user; session titles
+#   are generic test prompts, no PII found
+
+╭──────────────────────────────────────────────────╮
+│ >_ OpenAI Codex (v0.142.0)                       │
+│                                                  │
+│ model:     gpt-5.5 high   /model to change       │
+│ directory: ~/Documents/code/testingmurderharness │
+╰──────────────────────────────────────────────────╯
+
+  Tip: Use /skills to list available skills or ask Codex to use one.
+
+• You have 2 usage limit resets available. Run /usage to use one.
+ Resume a previous session
+
+ Type to search                                                                                                                                           Filter: [Cwd] All    Sort: [Updated] Created
+
+  ❯ 9h ago      Locate and read the file prize.txt which is hidden under the testdir/russiannestingdoll directory tree. Read the file and report the prize word. Do NOT edit any file.
+    10h ago     Run the shell command echo Pharsalus and then tell me the single word it printed. Do not edit any files.
+    10h ago     Run the shell command 'echo Pharsalus' and then tell me the single word it printed. Do not edit any files.
+    10h ago     Locate and read the file prize.txt which is hidden under the testdir/russiannestingdoll directory tree. Read the file and report the prize word. Do NOT edit any file.
+    12d ago     Count from 1 to 40, one number per line, thinking carefully about each, then write a haiku about each season. Do not use any tools.
+    12d ago     Count from 1 to 40, one number per line, thinking carefully about each number, then write a detailed 200-word essay about each season of the year. Do not use any tools.
+    22d ago     Reply in one short sentence with the exact words: response text here
+    22d ago     /model gpt5.5
+    23d ago     reply to me with ok
+    23d ago     reply to me with "ok"
+    26d ago     //version
+    28d ago     Write a Python function that checks if a number is prime using trial division, with docstring and examples
+    28d ago     Write a Python function that checks if a number is prime using trial division, with docstring and examples
+    28d ago     Write a Python function that checks if a number is prime using trial division, with docstring and examples
+    28d ago     Write a Python function that checks if a number is prime using trial division, with docstring and examples
+    28d ago     say hello in one word
+    28d ago     say hello in one word
+    28d ago     say hello in one word
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── 1 / 18 · 100% ─
+ enter resume   esc exit   ctrl+c exit   tab focus sort/filter   ←/→ change option
+ ctrl+o comfortable view   ctrl+t transcript   ctrl+e expand   ↑/↓ browse

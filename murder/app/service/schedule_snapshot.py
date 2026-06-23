@@ -28,8 +28,10 @@ _PERIOD_MINUTES: dict[tuple[str, str], float] = {
     ("codex", "weekly"): 7 * 24 * 60.0,
     ("cursor", "auto_composer"): 30 * 24 * 60.0,
     ("cursor", "api"): 30 * 24 * 60.0,
+    ("antigravity", "Gemini Models"): 7 * 24 * 60.0,
+    ("antigravity", "Claude and GPT Models"): 7 * 24 * 60.0,
 }
-_PROVIDER_ORDER = ("claude_code", "codex", "cursor")
+_PROVIDER_ORDER = ("claude_code", "codex", "cursor", "antigravity")
 
 
 def build_schedule_snapshot(
@@ -230,7 +232,7 @@ def _crow_rationale(conn: sqlite3.Connection) -> str:
     if not dec_rows:
         snap_n = conn.execute("SELECT COUNT(*) AS n FROM harness_usage_snapshots").fetchone()["n"]
         if snap_n == 0:
-            return "no usage snapshots — press ctrl+r to fetch"
+            return "no usage snapshots — press r in Usage to fetch"
         return "evaluating…"
     holds = [r for r in dec_rows if not r["decision"]]
     kicks = [r for r in dec_rows if r["decision"]]

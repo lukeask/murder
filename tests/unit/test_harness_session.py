@@ -17,6 +17,7 @@ import pytest
 
 import murder.runtime.terminal.tmux as tmux_mod
 from murder.llm.harnesses.base import HarnessSession
+from murder.llm.harnesses.antigravity import AntigravityAdapter
 from murder.llm.harnesses.claude_code import ClaudeCodeAdapter
 from murder.llm.harnesses.codex import CodexAdapter
 from murder.llm.harnesses.cursor import CursorAdapter
@@ -524,6 +525,23 @@ def test_set_model_cursor_sends_slash_model_command(fake_tmux: FakeTmux):
     assert any("/model gpt-5.5" in t for t in texts)
 
 
+def test_set_model_cursor_auto_with_default_effort_succeeds(fake_tmux: FakeTmux):
+    # BUG-4 regression: slow/fast is a Composer-2.5-only control. Selecting a
+    # non-Composer cursor model ("auto") must not fail just because the spawn
+    # wizard forwarded the harness default effort ("slow") — the model exposes
+    # no speed picker, so the effort is dropped rather than treated as a
+    # verification failure.
+    # "> Auto" parses as the active/pointed model with no reportable speed
+    # (effort=None). Pre-fix, set_model rejected this because desired_speed
+    # ("slow") != state.effort (None).
+    fake_tmux.queue_pane("> Auto · Use the best model\n")
+    hs = _make_session(CursorAdapter())
+
+    result = asyncio.run(hs.set_model("auto", "slow"))
+
+    assert result.ok
+
+
 # ── status_from_pane() — pure function, no tmux I/O ─────────────────────────
 
 
@@ -726,3 +744,45 @@ def test_codex_large_prompt_all_chunks_sum_to_original(fake_tmux: FakeTmux):
     paste_calls = fake_tmux.calls_to("paste_buffer_literal")
     reassembled = "".join(chunk for (_, chunk), _ in paste_calls)
     assert reassembled == large_prompt
+
+
+# ── codex / antigravity completion-detection regressions (BUG-11 / BUG-12) ────
+#
+# Live-captured fixtures: codex 0.142.0 and antigravity 1.0.10 drifted from the
+# versions the adapters' regexes were first tuned against. Two HIGH-severity
+# render bugs resulted — codex final replies never sealed (read busy forever on
+# an idle frame) and antigravity's spinner never cleared (busy verb mismatch +
+# spinner-text leak). These pin the corrected idle/busy detection.
+
+CODEX_IDLE_AFTER_PROSE = _load("codex_idle_after_prose_narration.txt")
+AGY_BUSY_LOADING = _load("agy_busy_loading.txt")
+
+
+def test_codex_idle_completion_frame_with_running_prose_reads_idle():
+    """BUG-11: a COMPLETED codex turn sits at the `›` prompt but its assistant
+    narration opened with `• Running the requested shell command…`. The old
+    verb-list _BUSY_RE matched that prose and kept the pane "busy" forever, so
+    the final reply never sealed/delivered until the next turn. The genuine busy
+    spinner always carries "esc to interrupt"; this idle frame has none."""
+    adapter = CodexAdapter()
+    assert adapter.is_busy(CODEX_IDLE_AFTER_PROSE) is False
+    assert adapter.is_idle(CODEX_IDLE_AFTER_PROSE) is True
+
+
+def test_codex_busy_spinner_still_reads_busy():
+    """The real codex working spinner — verified across recorded busy fixtures —
+    always renders the "esc to interrupt" hint and must read busy."""
+    adapter = CodexAdapter()
+    pane = "• Working (3s • esc to interrupt)\n\n›\n  gpt-5.4-mini medium · ~/repo"
+    assert adapter.is_busy(pane) is True
+    assert adapter.is_idle(pane) is False
+
+
+def test_antigravity_loading_spinner_reads_busy():
+    """BUG-12: antigravity 1.0.10 paints "Loading..." (not 1.0.2's "Generating...")
+    while generating; the modal footer "esc to cancel" is the version-stable busy
+    marker. The pane must read busy (and not idle) so the spinner state clears
+    correctly when it later returns to "? for shortcuts"."""
+    adapter = AntigravityAdapter()
+    assert adapter.is_busy(AGY_BUSY_LOADING) is True
+    assert adapter.is_idle(AGY_BUSY_LOADING) is False

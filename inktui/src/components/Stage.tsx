@@ -148,6 +148,12 @@ const SCROLL_STEP = 1;
  * render). Once the grid reports a real height the derived per-pane `contentHeight` drives the window. */
 const FALLBACK_HEIGHT = 20;
 
+/** "Stick to bottom" tolerance: while `scrollUp` (lines hidden below the window's bottom) is within
+ * this many lines of the tail, the pane is considered AT the bottom — a newly-arriving message snaps
+ * it to the newest line. Above this, the user is deliberately reading back, so new lines must NOT
+ * yank the window down; their absolute position is preserved instead. */
+const NEAR_BOTTOM_THRESHOLD = 3;
+
 /** Rows of pane chrome between a pinned row height and the inner fill-box height: the inline-title
  * top border (1) + Ink's own bottom border on the content box (1). The footer overlay is net-0
  * (marginTop:-1 cancels its row), so chrome is exactly 2 — see Pane.tsx / paneBorder.tsx. */
@@ -345,12 +351,23 @@ const TMUX_WAITING_TEXT = '[waiting for tmux frame…]';
  * exception to "no `useBusClient` in a component" — transient streaming display data, not a domain
  * slice (see {@link ../hooks/useBusClient.js}).
  *
- * ## Deterministic height (the measure-wrap-trap mitigation)
- * The frame is an ANSI string Ink renders natively via `<Text>`. The outer box is pinned to the
- * integer `height` the pane already computed (its `effectiveHeight`, from ChatGrid's integer row
- * distribution — never `measureElement` on the wrapped/boxed frame), with `overflow:hidden` +
- * `flexShrink={0}` so a too-tall frame clips in-pane instead of pushing the layout. `wrap="truncate"`
- * keeps each frame line on its own row (no re-wrap zigzag), so the captured terminal grid lands 1:1.
+ * ## Deterministic height + one-row-per-line (the measure-wrap-trap mitigation, BUG-2 fix)
+ * The frame is a multi-line ANSI capture. It is rendered as ONE `<Text wrap="truncate">` ROW PER
+ * FRAME LINE, capped to the integer `height` the pane already computed (its `effectiveHeight`, from
+ * ChatGrid's integer row distribution — never `measureElement` on the wrapped/boxed frame). This is
+ * deliberate, not stylistic: a SINGLE `<Text wrap="truncate">` fed the whole multi-line string
+ * collapses the ENTIRE frame to one row the moment its first line overflows the pane width (Ink's
+ * `truncate` cuts at the first wrap point and drops every line after it). That made a real full-width
+ * capture render as a single clipped line — the pane looked empty/collapsed (BUG-2: the pane appeared
+ * to vanish until an Alt+w reflow re-measured it). Splitting into per-line rows makes each captured
+ * terminal line land on its own row 1:1, and the row count is pure data (`min(lines, height)`), immune
+ * to the measure-wrap trap.
+ *
+ * Layout discipline: the outer box pins the integer `height` with `overflow:hidden` + `flexShrink={0}`
+ * (a too-tall frame clips in-pane instead of pushing the layout) AND `width="100%"` + `minWidth={0}` so
+ * it fills its cell but can NEVER demand more width than the cell — without `minWidth={0}` a flex ROW
+ * item's default `min-width:auto` is its (wide) content min-size, which can starve a side-by-side
+ * sibling pane. Each line row is `flexShrink={0}` so Yoga never drops it (the skipped-line bug).
  */
 function TmuxFrameInline({
   agentId,
@@ -372,9 +389,26 @@ function TmuxFrameInline({
     );
     return unsubscribe;
   }, [bus, agentId]);
+  // One row per captured line, deterministically capped to the pane's integer height (never measured).
+  // The waiting placeholder is a single line; a real frame's lines are kept verbatim and clipped.
+  const lines = (frame !== '' ? frame : TMUX_WAITING_TEXT)
+    .split('\n')
+    .slice(0, Math.max(height, 0));
   return (
-    <Box flexDirection="column" flexShrink={0} height={height} overflow="hidden">
-      <Text wrap="truncate">{frame !== '' ? frame : TMUX_WAITING_TEXT}</Text>
+    <Box
+      flexDirection="column"
+      flexShrink={0}
+      width="100%"
+      minWidth={0}
+      height={height}
+      overflow="hidden"
+    >
+      {lines.map((text, i) => (
+        // biome-ignore lint/suspicious/noArrayIndexKey: frame lines are position-keyed (row index is the stable identity for a captured grid line, mirroring the chat-history slice).
+        <Box key={i} flexShrink={0}>
+          <Text wrap="truncate">{text === '' ? ' ' : text}</Text>
+        </Box>
+      ))}
     </Box>
   );
 }
@@ -458,6 +492,45 @@ export const ChatPane = memo(function ChatPane({
   const lines = useMemo(() => flattenTurns(turns), [turns]);
   const maxScrollUp = Math.max(lines.length - effectiveHeight, 0);
   const clampedScroll = Math.min(scrollUp, maxScrollUp);
+
+  // Stick-to-bottom on new content (BUG-10) WITHOUT yanking a reader off their place. The decision is
+  // made against the PRE-update `scrollUp` captured in a ref, so it never races the same render that
+  // grows `lines`: each render syncs the refs to the values it just used, and the effect (which runs
+  // AFTER that sync) reads the values from the PREVIOUS committed render.
+  //   • near the bottom before → snap to the tail (`setScrollUp(0)`) so the new reply is in view;
+  //   • scrolled up           → bump the offset by the number of new lines so the exact lines the user
+  //                             was reading stay stationary (the offset counts from the tail, which
+  //                             just moved down by `delta`).
+  // Negative `delta` (blocks collapse / re-summarize) doesn't snap; the render-time clamp + the
+  // resize-clamp below keep `scrollUp` within the new bounds. First mount seeds the ref to the current
+  // length so it can't snap spuriously.
+  const prevLenRef = useRef<number | null>(null);
+  // Snapshot of "was the user near the bottom?" as of the LAST render whose length had not yet grown.
+  // It is refreshed only on a non-growth render (below), so on the render that delivers new lines the
+  // effect reads the pre-growth decision — never the just-recomputed (post-growth) offset. This is how
+  // we dodge the race: the deciding value is committed strictly before the length increase.
+  const wasNearBottomRef = useRef(true);
+  if (prevLenRef.current === null || lines.length <= prevLenRef.current) {
+    wasNearBottomRef.current = clampedScroll <= NEAR_BOTTOM_THRESHOLD;
+  }
+  useEffect(() => {
+    const prevLen = prevLenRef.current;
+    prevLenRef.current = lines.length;
+    if (prevLen === null) {
+      return; // first mount: no prior length to diff against — don't snap.
+    }
+    const delta = lines.length - prevLen;
+    if (delta <= 0) {
+      // Shrink (or no growth). Just keep the offset valid against the new max; never snap.
+      setScrollUp((s) => Math.min(s, maxScrollUp));
+      return;
+    }
+    if (wasNearBottomRef.current) {
+      setScrollUp(0); // stick to the tail → the new reply scrolls into view.
+    } else {
+      setScrollUp((s) => Math.min(s + delta, maxScrollUp)); // preserve absolute position.
+    }
+  }, [lines.length, maxScrollUp]);
 
   // `g<digits>` go-to-line (the shared gesture — see useGotoLine): the 1-based history line lands at
   // the TOP of the window. `scrollUp` counts hidden lines from the tail, so line N maps to

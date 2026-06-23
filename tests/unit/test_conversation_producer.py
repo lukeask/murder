@@ -242,6 +242,151 @@ def test_poll_summarizes_off_hot_path_into_chunk_storage(conn: sqlite3.Connectio
             assert all(bid in valid_ids for bid in s.block_ids)
 
 
+def test_short_turn_flushes_chunk_on_working_to_idle_boundary(
+    conn: sqlite3.Connection,
+) -> None:
+    """A short turn below the rolling char threshold still yields a chunk summary.
+
+    Regression: the rolling buffer only flushes mid-stream when its running
+    char-sum crosses the threshold. A short turn (read a couple files, write
+    one, then reply) weighs only ~100 weighted chars and so never trips a
+    mid-turn flush. Without a turn-boundary flush its buffered intermediate run
+    sits forever and Condensed renders identically to Verbose. We assert that
+    the working→idle transition force-flushes the tail so the turn produces at
+    least one summary even with the *production* threshold left high.
+    """
+    import asyncio
+
+    from murder.state.persistence.conversation import (
+        read_chunk_summaries,
+        read_conversation_blocks,
+    )
+
+    class _StubProvider:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def summarize(self, prompt: Any) -> str:
+            self.calls += 1
+            return "Short turn summary."
+
+    provider = _StubProvider()
+    published: list[tuple[str, dict[str, Any]]] = []
+    producer = _make_producer(conn, published, summary_provider=provider)
+    # Keep the threshold high so the ONLY way a flush can happen is the
+    # turn-boundary completion flush (not the rolling mid-turn flush).
+    producer._summary_buffer.char_threshold = 100_000
+
+    async def drive() -> None:
+        frame_count = len(list(_FRAMES_DIR.iterdir()))
+        for i in range(frame_count):
+            await producer.poll(_load_frame(_FRAMES_DIR, i))
+        if producer._summary_tasks:
+            await asyncio.gather(*list(producer._summary_tasks))
+
+    asyncio.run(drive())
+
+    blocks = read_conversation_blocks(conn, "crow-t001")
+    has_intermediate = any(b.kind == "assistant_intermediate" for b in blocks)
+    summaries = read_chunk_summaries(conn, "crow-t001")
+    assert has_intermediate, "cc fixture must produce intermediate blocks for this test"
+    # The cc fixture ends working→awaiting_input, so the boundary flush fires.
+    assert provider.calls >= 1
+    assert summaries, "completion flush should produce a tail chunk summary"
+    valid_ids = {b.id for b in blocks}
+    for s in summaries:
+        assert s.summary == "Short turn summary."
+        assert all(bid in valid_ids for bid in s.block_ids)
+
+    # Regression: EVERY summarizable intermediate block (assistant prose AND tool
+    # calls) must be attributed to a summary — otherwise Condensed renders it
+    # verbatim. The seal-on-supersede transition for streaming
+    # ``assistant_intermediate`` blocks used to be invisible, so their prose was
+    # never buffered/summarized and Condensed looked identical to Verbose.
+    covered = {bid for s in summaries for bid in s.block_ids}
+    summarizable = {
+        b.id for b in blocks if b.kind in ("assistant_intermediate", "tool_call")
+    }
+    assert summarizable - covered == set(), (
+        "every intermediate (prose + tool) block must be attributed; "
+        f"uncovered={sorted(summarizable - covered)}"
+    )
+    # The verbatim final reply must NEVER be attributed to a summary.
+    finals = {b.id for b in blocks if b.kind == "assistant_final"}
+    assert finals & covered == set(), "final reply must stay verbatim (never summarized)"
+
+
+def test_chunk_summarized_publish_constructs_a_valid_bus_event(
+    conn: sqlite3.Connection,
+) -> None:
+    """The producer's ``chunk-summarized`` publish must build a valid ConversationBlockEvent.
+
+    LIVE-failure regression. Every other producer test stubs ``publish`` with a
+    plain list-append, so they never exercise the real bus-event construction.
+    In production ``publish`` is ``AgentBase._publish_conversation_block``, which
+    constructs a ``ConversationBlockEvent``. That model's ``action`` Literal
+    originally allowed only ``block-appended``/``block-updated``; the producer's
+    third action ``chunk-summarized`` raised a pydantic ValidationError, the
+    event never reached the client, and Condensed rendered identically to
+    Verbose even though the chunk summary was written to the DB. This test wires
+    ``publish`` through the SAME model so a regressing Literal fails here.
+    """
+    import asyncio
+
+    from murder.bus import ConversationBlockEvent
+
+    class _StubProvider:
+        async def summarize(self, prompt: Any) -> str:
+            return "Short turn summary."
+
+    events: list[ConversationBlockEvent] = []
+
+    async def publish_via_real_event(action: str, block: dict[str, Any]) -> None:
+        # Mirror AgentBase._publish_conversation_block: any action the producer
+        # emits must be accepted by the wire model, or the publish raises.
+        events.append(
+            ConversationBlockEvent(
+                run_id="run-t001",
+                agent_id="crow-t001",
+                role="crow",
+                ticket_id=None,
+                conversation_id="crow-t001",
+                action=action,  # type: ignore[arg-type]
+                block=block,
+            )
+        )
+
+    producer = ConversationProducer(
+        conversation_id="crow-t001",
+        harness_kind="claude_code",
+        system_prompt=None,
+        db=conn,
+        publish=publish_via_real_event,
+        summary_provider=_StubProvider(),
+    )
+    # High threshold so the only flush is the working→idle completion flush.
+    producer._summary_buffer.char_threshold = 100_000
+
+    async def drive() -> None:
+        frame_count = len(list(_FRAMES_DIR.iterdir()))
+        for i in range(frame_count):
+            await producer.poll(_load_frame(_FRAMES_DIR, i))
+        if producer._summary_tasks:
+            await asyncio.gather(*list(producer._summary_tasks))
+
+    asyncio.run(drive())
+
+    actions = {e.action for e in events}
+    assert "chunk-summarized" in actions, (
+        "producer must publish a chunk-summarized event the wire model accepts; "
+        f"saw actions={sorted(actions)}"
+    )
+    summary_events = [e for e in events if e.action == "chunk-summarized"]
+    for ev in summary_events:
+        assert ev.block.get("summary"), "chunk-summarized block must carry summary text"
+        assert "block_ids" in ev.block
+
+
 def test_poll_different_conversation_ids_are_isolated(conn: sqlite3.Connection) -> None:
     """Two producers with different conversation_ids write to separate stores."""
     published_a: list[tuple[str, dict[str, Any]]] = []

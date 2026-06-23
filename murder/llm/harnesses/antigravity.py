@@ -38,7 +38,16 @@ _BANNER_RE = re.compile(r"Antigravity CLI\s+\d", re.IGNORECASE)
 _SIGNING_IN_RE = re.compile(r"Signing in", re.IGNORECASE)
 _IDLE_FOOTER_RE = re.compile(r"\?\s*for shortcuts", re.IGNORECASE)
 _MODAL_FOOTER_RE = re.compile(r"esc to cancel", re.IGNORECASE)
-_BUSY_RE = re.compile(r"Generating\.\.\.", re.IGNORECASE)
+# The agy busy spinner's verb drifts across releases: agy 1.0.2 painted
+# "Generating...", agy 1.0.10 paints "Loading..." (other gerunds appear on tool
+# turns). Match the live spinner line — a braille spinner glyph followed by a
+# gerund + "..." — for ANY verb, so a future rename still reads busy. The braille
+# glyph anchors it to the real spinner; we deliberately do NOT key busy off the
+# modal footer "esc to cancel" alone, because the /model picker shares that exact
+# footer (it would then read busy). Verified live against agy 1.0.10 on
+# 2026-06-23 ("⡿  Loading..."). The footer-based idle check (is_idle requires
+# "? for shortcuts", absent while busy) is the complementary guard.
+_BUSY_RE = re.compile(r"[⠀-⣿]\s+\w+\.\.\.", re.UNICODE)
 _AGY_STATUS_MODEL_RE = re.compile(
     r"(?P<label>(?:Gemini|Claude|GPT|Sonnet|Opus)[^\n]{2,60}?"
     r"\((?:Low|Medium|High|Thinking)\))",

@@ -75,10 +75,15 @@ async def _run_usage_probe_process(
             try:
                 result = await worker.on_command(command, ctx)
             except Exception as exc:  # noqa: BLE001
+                # An exception may declare itself non-retryable (e.g.
+                # WorktreeError): a deterministic failure that would fail
+                # identically on retry overrides the command's retry policy so
+                # we fail fast to escalation. Mirrors supervisor._run_command.
+                retryable = command.retryable and getattr(exc, "retryable", True)
                 dispatcher.fail(
                     command_id=str(command_id),
                     last_error=str(exc),
-                    retryable=command.retryable,
+                    retryable=retryable,
                 )
                 continue
             dispatcher.finish(

@@ -227,3 +227,55 @@ def test_project_reports_changes_only_for_real_mutations(conn: sqlite3.Connectio
     assert changes2 == []
     assert [c.action for c in changes3] == ["block-updated"]
     assert changes3[0].block.payload["text"] == "working more"
+
+
+def test_superseding_a_live_intermediate_emits_its_seal_as_update(
+    conn: sqlite3.Connection,
+) -> None:
+    """Appending past a live ``assistant_intermediate`` emits a seal ``block-updated``.
+
+    Regression (Condensed-view break): a streaming intermediate assistant block is
+    written ``sealed=0`` and seals silently (an in-place UPDATE) the moment a later
+    segment supersedes it — that seal carried NO change. Downstream consumers that
+    key off ``block.sealed`` (the producer's condensed summarization buffer only
+    buffers SEALED intermediate blocks) therefore never saw the block as sealed and
+    skipped it forever, so its prose was never summarized and Condensed rendered it
+    verbatim. The reconcile must now emit a ``block-updated`` for the now-sealed
+    predecessor so the seal is observable.
+    """
+    agent = "agent-seal"
+
+    # 1) A live intermediate assistant block (stays unsealed while streaming).
+    _d1, changes1 = project_parsed_doc_with_changes(
+        conn,
+        agent,
+        _doc(_assistant("looked at the files", phase="intermediate"), state="working"),
+    )
+    assert [c.action for c in changes1] == ["block-appended"]
+    assert changes1[0].block.sealed is False
+
+    # 2) A second segment appears AFTER it → the first block must seal.
+    _d2, changes2 = project_parsed_doc_with_changes(
+        conn,
+        agent,
+        _doc(
+            _assistant("looked at the files", phase="intermediate"),
+            _assistant("done", phase="final"),
+            state="awaiting_input",
+        ),
+    )
+
+    # The now-sealed predecessor surfaces as a block-updated with sealed=True,
+    # ordered before the newly-appended final block.
+    seal_updates = [
+        c
+        for c in changes2
+        if c.action == "block-updated"
+        and c.block.kind == "assistant_intermediate"
+        and c.block.sealed is True
+    ]
+    assert len(seal_updates) == 1, [
+        (c.action, c.block.kind, c.block.sealed) for c in changes2
+    ]
+    assert seal_updates[0].block.payload["text"] == "looked at the files"
+    assert any(c.action == "block-appended" for c in changes2)

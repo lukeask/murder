@@ -1,0 +1,49 @@
+# source: live tmux capture — agy --conversation <bogus-uuid> (CLI) + /resume TUI picker with bogus-uuid search
+# agy version: 1.0.10
+# state: CLI emits warning then falls through to normal idle; /resume picker shows "No matching conversations."
+# scrub: account email → example@website.com ; user@host → user@machine ; home path → /home/user
+
+# --- CLI form: agy --conversation 00000000-0000-0000-0000-000000000000 ---
+Warning: conversation "00000000-0000-0000-0000-000000000000" not found.
+
+      ▄▀▀▄        Antigravity CLI 1.0.10
+     ▀▀▀▀▀▀       example@website.com (Antigravity Starter Quota)
+    ▀▀▀▀▀▀▀▀      Gemini 3.1 Pro (Low)
+   ▄▀▀    ▀▀▄     ~/Documents/code/testingmurderharness
+  ▄▀▀      ▀▀▄
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+>
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+? for shortcuts                                                                                                                                                                     Gemini 3.1 Pro (Low)
+
+# --- TUI /resume picker: typed "00000000-0000-0000-0000-000000000000" as search query ---
+
+      ▄▀▀▄        Antigravity CLI 1.0.10
+     ▀▀▀▀▀▀       example@website.com (Antigravity Starter Quota)
+    ▀▀▀▀▀▀▀▀      Gemini 3.1 Pro (Low)
+   ▄▀▀    ▀▀▄     ~/Documents/code/testingmurderharness
+  ▄▀▀      ▀▀▄
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+>
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+   CLI    Antigravity   (tab to cycle)
+
+  Conversations
+  Search: 000000
+  No matching conversations.
+
+Keyboard: ↑/↓ Navigate  ←/→ Page  enter Select  f2 Rename  ctrl+delete Delete  tab Switch Tab  esc Go back / Clear search
+
+esc to cancel                                                                                                                                                                       Gemini 3.1 Pro (Low)
+
+# --- TUI /resume command entry (before selecting) ---
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+> /resume
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+> /resume  Browse and resume past conversations
+
+  ↑/↓ Navigate · enter Select · tab Complete
+esc to cancel                                                                                                                                                                       Gemini 3.1 Pro (Low)
