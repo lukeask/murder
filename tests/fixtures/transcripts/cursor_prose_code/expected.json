@@ -1,0 +1,10 @@
+{
+  "harness": "cursor",
+  "state": "awaiting_input",
+  "condensed": null,
+  "segments": [
+    {"type": "user", "text": "explain in 3 sentences what a hash map is, then write a 6-line python example"},
+    {"type": "assistant", "phase": "final", "text": "A hash map is a data structure that stores key-value pairs. It uses a hash function to map keys to indices in an underlying array, giving average O(1) lookups. Collisions are handled by chaining or open addressing.", "elapsed": null},
+    {"type": "assistant", "phase": "final", "text": "scores = {\"alice\": 95, \"bob\": 87, \"carol\": 92}\nprint(scores[\"alice\"])  # lookup by key", "elapsed": null}
+  ]
+}

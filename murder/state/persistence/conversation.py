@@ -286,6 +286,35 @@ def _seal_live_block(conn: sqlite3.Connection, conversation_id: str) -> None:
     )
 
 
+def _read_block_by_id(
+    conn: sqlite3.Connection,
+    conversation_id: str,
+    block_id: int | None,
+) -> ConversationBlock | None:
+    """Read one block row by its id, scoped to a conversation. ``None`` if absent."""
+    if block_id is None:
+        return None
+    row = conn.execute(
+        """
+        SELECT id, ordinal, kind, payload_json, sealed, service_received_at
+          FROM conversation_blocks
+         WHERE conversation_id = ? AND id = ?
+        """,
+        (conversation_id, block_id),
+    ).fetchone()
+    if row is None:
+        return None
+    return ConversationBlock(
+        id=int(row["id"]),
+        conversation_id=conversation_id,
+        ordinal=int(row["ordinal"]),
+        kind=str(row["kind"]),
+        payload=json.loads(row["payload_json"]),
+        sealed=bool(row["sealed"]),
+        service_received_at=str(row["service_received_at"]),
+    )
+
+
 def _block_is_live(kind: str, seg: dict[str, Any]) -> bool:
     """Whether a freshly written block stays mutable (sealed = 0).
 
@@ -767,9 +796,28 @@ def merge_non_user_segments_with_changes(
                 )
         # Sealed blocks are immutable — leave them as-is.
 
-    for i in range(n_stored, n_parsed):
-        block = append_block(conn, conversation_id, segments[i], received_at=ts, seal_previous=True)
-        changes.append(ConversationBlockChange(action="block-appended", block=block))
+    # When new segments are about to be appended, the first append seals the
+    # current live trailing block (a streaming ``assistant_intermediate`` or an
+    # unanswered ``choice_prompt``) via a silent UPDATE inside ``append_block``.
+    # That seal transition carries no change of its own, so downstream consumers
+    # that key off ``block.sealed`` (notably the producer's condensed-view
+    # summarization buffer, which only buffers SEALED intermediate blocks) would
+    # never observe the block as sealed and would skip it forever — leaving its
+    # prose un-summarized and rendered verbatim in Condensed. Emit an explicit
+    # ``block-updated`` for the now-sealed predecessor so the seal is observable.
+    if n_parsed > n_stored:
+        live_pred = non_user[-1] if non_user and not non_user[-1].sealed else None
+        for i in range(n_stored, n_parsed):
+            block = append_block(
+                conn, conversation_id, segments[i], received_at=ts, seal_previous=True
+            )
+            if live_pred is not None and i == n_stored:
+                sealed_pred = _read_block_by_id(conn, conversation_id, live_pred.id)
+                if sealed_pred is not None and sealed_pred.sealed:
+                    changes.append(
+                        ConversationBlockChange(action="block-updated", block=sealed_pred)
+                    )
+            changes.append(ConversationBlockChange(action="block-appended", block=block))
 
     return read_conversation_blocks(conn, conversation_id), changes
 

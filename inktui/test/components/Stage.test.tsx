@@ -577,4 +577,34 @@ describe('Stage — inline tmux view (TUIchat-5)', () => {
     expect(lastFrame() ?? '').not.toContain('INLINE_TMUX_FRAME');
     dispose();
   });
+
+  it('renders EVERY line of a multi-line frame whose first line overflows the pane width (BUG-2)', async () => {
+    // BUG-2 root cause: a single `<Text wrap="truncate">` fed the whole multi-line frame collapses to
+    // ONE row the instant its first line overflows the width (Ink truncates at the first wrap point and
+    // drops every later line) — so a real full-width capture rendered as a single clipped line and the
+    // pane looked empty/collapsed. The fix renders one row per line; this proves later lines survive
+    // even when the FIRST line is wider than the pane.
+    const { fake, store, inputStores, dispose } = await setup();
+    const { lastFrame, rerender } = render(
+      <TmuxHarness store={store} inputStores={inputStores} bus={fake} />,
+    );
+    await tick();
+    store.getState().actions.conversations.setPaneViewMode('collab-1', 'tmux');
+    rerender(<TmuxHarness store={store} inputStores={inputStores} bus={fake} />);
+    await tick();
+
+    // A 3-line frame whose FIRST line is far wider than any pane — the case that used to swallow the
+    // rest. Each line carries a unique marker so we can assert all three reach the screen.
+    const wideFirst = `${'W'.repeat(300)}_TOPLINE\nMID_LINE_TWO\nBOTTOM_LINE_THREE`;
+    fake.emit(tmuxFrame(wideFirst, 'ev-wide'));
+    await tick();
+    const withFrame = lastFrame() ?? '';
+    // The first (overflowing) line truncates but is present; the later lines are NOT dropped.
+    expect(withFrame).toContain('WWWW');
+    expect(withFrame).toContain('MID_LINE_TWO');
+    expect(withFrame).toContain('BOTTOM_LINE_THREE');
+    // Pane chrome still intact (inline, not a takeover).
+    expect(withFrame).toContain('TestCollab');
+    dispose();
+  });
 });

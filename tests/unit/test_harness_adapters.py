@@ -210,10 +210,18 @@ class TestCodexAdapter:
         # is_busy detects "• Working"; is_idle() correctly returns False
         assert self.cx.is_idle(CODEX_BUSY) is False
 
-    # ── synthetic: indented "working" line IS detected ────────────────────────
+    # ── prose narration that merely STARTS with a busy verb is NOT busy ────────
+    #
+    # Earlier _BUSY_RE matched any ``^\s*[•·]? (working|running|thinking|…)`` line,
+    # which false-positived on ordinary codex assistant narration — codex routinely
+    # opens a turn with "• Running the requested shell command…" / "  working on
+    # your request…". On a COMPLETED idle frame that prose kept the pane reading
+    # busy forever, so the final reply never sealed/delivered (BUG-11). The
+    # genuine working spinner ALWAYS carries the "esc to interrupt" hint
+    # (``• Working (3s • esc to interrupt)``); prose narration never does. These
+    # pin the corrected semantics: verb-prose without the hint is idle, not busy.
 
-    def test_indented_working_triggers_busy(self):
-        # Whitespace-only prefix satisfies ``^\s*working``
+    def test_prose_working_line_without_interrupt_hint_is_not_busy(self):
         pane = (
             PaneSimulator()
             .add(
@@ -226,9 +234,10 @@ class TestCodexAdapter:
             )
             .render()
         )
-        assert self.cx.is_busy(pane) is True
+        assert self.cx.is_busy(pane) is False
 
-    def test_indented_working_pane_not_idle(self):
+    def test_prose_working_line_without_interrupt_hint_is_idle(self):
+        # No "esc to interrupt" hint + a live `›` prompt → the pane is idle.
         pane = (
             PaneSimulator()
             .add(
@@ -241,7 +250,7 @@ class TestCodexAdapter:
             )
             .render()
         )
-        assert self.cx.is_idle(pane) is False
+        assert self.cx.is_idle(pane) is True
 
     def test_login_required_pane_not_idle(self):
         pane = PaneSimulator().add("› placeholder", "  login required").render()

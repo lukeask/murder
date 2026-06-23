@@ -1,0 +1,30 @@
+# source: synthetic regression — cursor prose+code reply with startup hint and bare cwd banner
+# terminal width 100
+user@machine:~/Documents/code/testingmurderharness $ agent
+
+
+  Cursor Agent
+  v2026.06.11-abcdef0
+  Use /mcp to connect Cursor to your tools and data sources.
+  Hit shift+tab to enable Plan Mode for large or complex changes.
+
+  ~/Documents/code/testingmurderharness
+
+
+  explain in 3 sentences what a hash map is, then write a 6-line python example
+
+
+  A hash map is a data structure that stores key-value pairs. It uses a hash
+  function to map keys to indices in an underlying array, giving average O(1)
+  lookups. Collisions are handled by chaining or open addressing.
+
+  scores = {"alice": 95, "bob": 87, "carol": 92}
+  print(scores["alice"])  # lookup by key
+
+  ~/Documents/code/testingmurderharness
+
+ ────────────────────────────────────────────────
+  → Add a follow-up
+ ──────────────────────────────────────────────
+  Composer 2.5 · 3.1%                          Run Everything
+  ~/Documents/code/testingmurderharness

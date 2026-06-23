@@ -122,7 +122,11 @@ export function PaneBorderTop({
 }: PaneBorderTopProps): React.JSX.Element {
   const { topLeftPrefix, topRight, horizontal } = glyphs;
   return (
-    <Box flexDirection="row" flexShrink={0} width="100%" height={1}>
+    // No rigid `width="100%"`: the row STRETCHES to the (shrinkable, `minWidth={0}`) outer Pane box on
+    // the cross axis, so on a narrow tiled column it resolves to the SAME width as the content box below
+    // rather than pinning to a fixed 100% that the content then undercuts. `minWidth={0}` lets the
+    // fixed corner/title segments shrink-flow correctly; `overflow="hidden"` clips the `─` fill overrun.
+    <Box flexDirection="row" flexShrink={1} minWidth={0} overflow="hidden" height={1}>
       <Box flexShrink={0}>
         <Text color={borderColor}>{topLeftPrefix}</Text>
       </Box>
@@ -224,10 +228,14 @@ export function PaneBorderBottom({
   const hasLeft = leftExtra !== undefined && leftExtra !== null && leftExtra !== false;
   const hasRight = rightExtra !== undefined && rightExtra !== null && rightExtra !== false;
   return (
+    // No rigid `width="100%"`: like PaneBorderTop, the overlay STRETCHES to the shrinkable outer Pane box
+    // so it resolves to the SAME width as the content box it overlays (Ink's `╰────╯` bottom border, or
+    // the scrollbar column's `╯`). A fixed 100% would keep the `─╯` reserve at the outer width even after
+    // the content box shrank on a narrow tile, landing `╯` past the real right edge → the wrap bug.
     <Box
       flexDirection="row"
-      flexShrink={0}
-      width="100%"
+      flexShrink={1}
+      minWidth={0}
       height={1}
       marginTop={-1}
       overflow="hidden"

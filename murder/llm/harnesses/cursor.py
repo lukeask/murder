@@ -324,6 +324,13 @@ class CursorAdapter(HarnessAdapter):
     async def set_model(self, session: str, model: str, *, effort: str | None = None) -> bool:
         desired_model = _normalize_cursor_model(model)
         desired_speed = normalize_effort(effort) if effort else None
+        # slow/fast is a Composer-2.5-only control (its Tab "Edit Parameters"
+        # Fast checkbox). Every other cursor model ("auto", gpt-*, sonnet-*,
+        # opus-*, …) exposes no speed picker, so an effort defaulted/forwarded
+        # for them is unsatisfiable — drop it rather than fail the spawn trying
+        # to verify a speed the model can never report.
+        if not _is_composer_model(desired_model):
+            desired_speed = None
         current_state: HarnessModelState | None = None
         for attempt in range(_MODEL_VERIFY_ATTEMPTS):
             pane = await tmux.capture_pane(session, lines=200)

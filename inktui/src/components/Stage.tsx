@@ -345,12 +345,23 @@ const TMUX_WAITING_TEXT = '[waiting for tmux frame…]';
  * exception to "no `useBusClient` in a component" — transient streaming display data, not a domain
  * slice (see {@link ../hooks/useBusClient.js}).
  *
- * ## Deterministic height (the measure-wrap-trap mitigation)
- * The frame is an ANSI string Ink renders natively via `<Text>`. The outer box is pinned to the
- * integer `height` the pane already computed (its `effectiveHeight`, from ChatGrid's integer row
- * distribution — never `measureElement` on the wrapped/boxed frame), with `overflow:hidden` +
- * `flexShrink={0}` so a too-tall frame clips in-pane instead of pushing the layout. `wrap="truncate"`
- * keeps each frame line on its own row (no re-wrap zigzag), so the captured terminal grid lands 1:1.
+ * ## Deterministic height + one-row-per-line (the measure-wrap-trap mitigation, BUG-2 fix)
+ * The frame is a multi-line ANSI capture. It is rendered as ONE `<Text wrap="truncate">` ROW PER
+ * FRAME LINE, capped to the integer `height` the pane already computed (its `effectiveHeight`, from
+ * ChatGrid's integer row distribution — never `measureElement` on the wrapped/boxed frame). This is
+ * deliberate, not stylistic: a SINGLE `<Text wrap="truncate">` fed the whole multi-line string
+ * collapses the ENTIRE frame to one row the moment its first line overflows the pane width (Ink's
+ * `truncate` cuts at the first wrap point and drops every line after it). That made a real full-width
+ * capture render as a single clipped line — the pane looked empty/collapsed (BUG-2: the pane appeared
+ * to vanish until an Alt+w reflow re-measured it). Splitting into per-line rows makes each captured
+ * terminal line land on its own row 1:1, and the row count is pure data (`min(lines, height)`), immune
+ * to the measure-wrap trap.
+ *
+ * Layout discipline: the outer box pins the integer `height` with `overflow:hidden` + `flexShrink={0}`
+ * (a too-tall frame clips in-pane instead of pushing the layout) AND `width="100%"` + `minWidth={0}` so
+ * it fills its cell but can NEVER demand more width than the cell — without `minWidth={0}` a flex ROW
+ * item's default `min-width:auto` is its (wide) content min-size, which can starve a side-by-side
+ * sibling pane. Each line row is `flexShrink={0}` so Yoga never drops it (the skipped-line bug).
  */
 function TmuxFrameInline({
   agentId,
@@ -372,9 +383,26 @@ function TmuxFrameInline({
     );
     return unsubscribe;
   }, [bus, agentId]);
+  // One row per captured line, deterministically capped to the pane's integer height (never measured).
+  // The waiting placeholder is a single line; a real frame's lines are kept verbatim and clipped.
+  const lines = (frame !== '' ? frame : TMUX_WAITING_TEXT)
+    .split('\n')
+    .slice(0, Math.max(height, 0));
   return (
-    <Box flexDirection="column" flexShrink={0} height={height} overflow="hidden">
-      <Text wrap="truncate">{frame !== '' ? frame : TMUX_WAITING_TEXT}</Text>
+    <Box
+      flexDirection="column"
+      flexShrink={0}
+      width="100%"
+      minWidth={0}
+      height={height}
+      overflow="hidden"
+    >
+      {lines.map((text, i) => (
+        // biome-ignore lint/suspicious/noArrayIndexKey: frame lines are position-keyed (row index is the stable identity for a captured grid line, mirroring the chat-history slice).
+        <Box key={i} flexShrink={0}>
+          <Text wrap="truncate">{text === '' ? ' ' : text}</Text>
+        </Box>
+      ))}
     </Box>
   );
 }

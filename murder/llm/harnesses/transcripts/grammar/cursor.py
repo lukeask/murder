@@ -10,6 +10,7 @@ from murder.llm.harnesses.transcripts._shared import (
     dedupe_adjacent_spanned,
     murder_owned_anchors,
     normalize_prompt_match,
+    reflow_paragraphs,
     truncate_title,
 )
 from murder.llm.harnesses.transcripts.toolkit import collect_chrome_delimited_blocks
@@ -37,7 +38,25 @@ _warned_no_marks = False
 
 # ---- cursor regexes -------------------------------------------------------- #
 _CURSOR_INPUT_LINE_RE = re.compile(r"^\s*→\s*\S")
-_CURSOR_STARTUP_HINT_RE = re.compile(r"^(?:Use\s+/\S|Try\s+Composer\b)", re.IGNORECASE)
+# Cursor's startup / mode hints, painted once at boot and (for the cwd banner)
+# repeated around every turn. ``Use /…`` / ``Try Composer`` are the connect/MCP
+# hints; ``Hit shift+tab …`` / ``… enable Plan Mode …`` is the plan-mode hint that
+# leaked as a fake assistant line (round 3). Anchored to the hint's own wording so
+# real prose merely mentioning shift+tab or plan mode is never swallowed.
+_CURSOR_STARTUP_HINT_RE = re.compile(
+    r"^(?:Use\s+/\S|Try\s+Composer\b|Hit\s+shift\+tab\b|.*\benable\s+Plan\s+Mode\b)",
+    re.IGNORECASE,
+)
+# The shell line cursor is launched from, captured flush-left above the agent UI:
+#   ``user@host:~/path $ agent`` / ``user@host /path % cursor-agent`` etc. It is
+#   the ONE genuinely flush-left chrome line cursor emits (every real chat line —
+#   user, assistant, tool output — is rendered with a 2-space left margin). Match
+#   the ``user@host…<prompt-sigil> <launch-cmd>`` shape so we drop it without the
+#   old blunt "any unindented line is chrome" rule, which also swallowed any
+#   assistant prose that landed flush-left — e.g. the terminal-hard-wrapped tail
+#   of a reply too wide for the pane (cursor's margin is not reinjected on the
+#   forced wrap), making whole replies vanish in narrow panes. See _cursor_is_chrome.
+_CURSOR_SHELL_PROMPT_RE = re.compile(r"^\S+@\S+.*[$%#»]\s+\S")
 
 # The cursor *chrome* predicate and the regexes it owns live here (the grammar
 # owns them); the cursor adapter imports ``_is_cursor_chrome`` back, plus the few
@@ -58,6 +77,17 @@ _CURSOR_CWD_RE = re.compile(r"^\s*(?:~/|/|\./|\.\./).*\s+·\s+\S+\s*$")
 # kept tight to a ``~/``- or ``/``-rooted path so a user's prose starting with
 # ``·`` is never swallowed.
 _CURSOR_CWD_LEADING_DOT_RE = re.compile(r"^\s*·\s+(?:~/|/)\S")
+# Outside a git repo (or in narrower builds) cursor drops the ``· branch`` suffix
+# and paints the cwd banner as a *bare* rooted path — ``~/Documents/code/project``
+# with nothing after it. That shape carries no ``·`` separator and is indented, so
+# it slipped past both _CURSOR_CWD_RE (needs the trailing ``· branch``) and the
+# leading-dot form, leaking the banner as a fake assistant line that repeats around
+# every turn (round 3). Match a line whose *entire* stripped content is one
+# ``~/``- or ``/``-rooted path (single token, no spaces) so a one-word reply that
+# is genuinely a path is the only false-positive risk — and assistant prose about
+# a path is virtually always a longer multi-token sentence. Kept anchored to start
+# and end ($) so ``/path is wrong`` or ``~/foo and bar`` stay content.
+_CURSOR_CWD_BARE_RE = re.compile(r"^\s*(?:~/|/)[^\s·]*\s*$")
 # Status line: model label + the auto-run mode on the right. CLI ≥ 2026.06.11
 # renders the yolo mode as "Run Everything" (older builds said "Auto-run").
 _CURSOR_COMPOSER_RE = re.compile(
@@ -108,6 +138,7 @@ def _is_cursor_chrome(line: str) -> bool:
         or _CURSOR_COMPOSER_RE.match(s)
         or _CURSOR_CWD_RE.match(s)
         or _CURSOR_CWD_LEADING_DOT_RE.match(s)
+        or _CURSOR_CWD_BARE_RE.match(s)
         or _BUSY_INPUT_HINT_RE.search(s)
         or _BUSY_SPINNER_RE.match(s)
         or _CURSOR_CHROME_RE.match(s)
@@ -176,7 +207,7 @@ def _cursor_is_chrome(line: str) -> bool:
         or _CURSOR_INPUT_LINE_RE.match(line)
         or s.startswith("Tip:")
         or _CURSOR_STARTUP_HINT_RE.match(s)
-        or not line.startswith(" ")
+        or _CURSOR_SHELL_PROMPT_RE.match(s)
     )
 
 
@@ -326,6 +357,40 @@ def _collapse_tool_rollups(spanned: list[SpannedSegment]) -> list[SpannedSegment
     return out
 
 
+def _dedent_cursor(line: str) -> str:
+    """Strip cursor's uniform 2-space left margin from a content line.
+
+    Every real chat line (prose, code, tool output) is rendered with a 2-space
+    left gutter; the terminal-hard-wrapped tail of an over-wide line is the lone
+    exception (it lands flush-left, no margin to strip). Removing the shared
+    margin lets the reflow classifier see code's *intrinsic* indentation — a
+    ``def``/``for`` body that was at column 2+margin becomes column 2+, tripping
+    ``_has_indent_step`` so the block is preserved verbatim instead of de-wrapped.
+    """
+    if line.startswith("  "):
+        return line[2:].rstrip()
+    return line.rstrip()
+
+
+def _reflow_cursor(plains: list[str]) -> str:
+    """Reassemble an assistant block's lines into faithful text.
+
+    Replaces the old destructive ``" ".join`` (which crushed every multi-line
+    block — code, lists, tables — onto one line, merging python statements and
+    losing newlines, round 3 BUG). ``reflow_paragraphs`` de-wraps only confident
+    prose and renders code / indented / columnar / list blocks verbatim with their
+    newlines intact. Cursor has no native code fences in the pane (the renderer
+    strips them), so detection rests on the shared structural signals: an internal
+    2+-space gap (``print(x)  # comment``), a mixed-indent step (a function body),
+    or list leads.
+    """
+    return reflow_paragraphs(
+        plains,
+        dedent=_dedent_cursor,
+        preserve_prefixes=(),
+    )
+
+
 def parse_lines(
     lines: list[str],
     system_prompt: str | None = None,
@@ -360,7 +425,11 @@ def parse_spanned(
     for block, start, end in blocks:
         classified = [_classify(line) for line in block]
         is_user = any(is_u for is_u, _is_chrome, _plain in classified)
-        text = " ".join(plain.strip() for _is_u, _is_chrome, plain in classified if plain.strip())
+        plains = [plain for _is_u, _is_chrome, plain in classified if plain.strip()]
+        # Flat join: the classification form (rollup / anchor / user matchers all
+        # key on single-line text). The assistant *segment* text instead comes from
+        # _reflow_cursor so code/list/table newlines survive (round 3 BUG-merge).
+        text = " ".join(plain.strip() for plain in plains)
         if not text:
             continue
         if is_user or normalize_prompt_match(text) in anchors:
@@ -370,7 +439,7 @@ def parse_spanned(
         else:
             spanned.append(
                 SpannedSegment(
-                    {"type": "assistant", "phase": "intermediate", "text": text, "elapsed": None},
+                    {"type": "assistant", "phase": "intermediate", "text": _reflow_cursor(plains), "elapsed": None},
                     start,
                     end,
                 )

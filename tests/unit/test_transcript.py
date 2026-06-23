@@ -188,6 +188,89 @@ def test_cursor_leading_dot_cwd_banner_stripped_and_not_duplicated():
 _FIXTURE_USER_TEXTS_BANNER = ["test"]
 
 
+def test_cursor_flush_left_wrapped_reply_survives():
+    """Cursor renders every real chat line with a 2-space left margin, but when an
+    assistant reply is wider than the pane the terminal hard-wraps the overflow to
+    the next physical row at column zero — where cursor cannot re-inject its
+    margin. The chrome predicate used to drop *any* unindented line (``not
+    line.startswith(" ")``), so the wrapped tail was discarded and, in narrow
+    panes, whole assistant replies vanished from Verbose/Condensed even though they
+    were present in the raw ``:tmux`` view (BUG-5). Pin that the flush-left wrapped
+    tail is reassembled into the reply while the flush-left shell-prompt line
+    (``user@host:path $ agent``) is still dropped."""
+    frames = _scenario_frames("cursor_wrapped_reply")
+    raw = "\n".join(frames)
+    # The fixture genuinely contains a flush-left assistant continuation row and a
+    # flush-left shell prompt, so the test exercises the real ambiguity.
+    assert "\nterminal hard-wraps" in raw, "fixture must carry a flush-left wrapped tail"
+    assert "$ agent" in raw, "fixture must carry the flush-left shell prompt"
+
+    doc = transcripts.parse_frames("cursor", frames, user_texts=["test"])
+    assert doc == _scenario_expected("cursor_wrapped_reply")
+    assistant = [s for s in doc["segments"] if s["type"] == "assistant"]
+    assert len(assistant) == 1, "the wrapped reply must be one assistant segment, not split"
+    text = assistant[0]["text"]
+    assert "terminal hard-wraps" in text, "flush-left wrapped tail dropped from the reply"
+    assert "re-inject its two-space left margin" in text
+    blob = json.dumps(doc, ensure_ascii=False)
+    assert "$ agent" not in blob, "flush-left shell prompt leaked into a segment"
+
+
+def test_cursor_prose_code_reply_full_doc():
+    """Round-3 regression: a cursor reply with explanatory prose followed by a
+    multi-line python example, bracketed by a startup ``shift+tab`` hint and the
+    *bare* cwd banner (``~/path`` with no ``· branch`` suffix). All three round-3
+    symptoms in one fixture: (1) prose must survive, (2) code newlines preserved,
+    (3) hint + bare banner suppressed."""
+    frames = _scenario_frames("cursor_prose_code")
+    user_text = "explain in 3 sentences what a hash map is, then write a 6-line python example"
+    doc = transcripts.parse_frames("cursor", frames, user_texts=[user_text])
+    assert doc == _scenario_expected("cursor_prose_code")
+
+
+def test_cursor_prose_code_symptoms_localized():
+    """Localize each round-3 symptom for failure triage."""
+    frames = _scenario_frames("cursor_prose_code")
+    user_text = "explain in 3 sentences what a hash map is, then write a 6-line python example"
+    doc = transcripts.parse_frames("cursor", frames, user_texts=[user_text])
+    assistants = [s["text"] for s in doc["segments"] if s["type"] == "assistant"]
+    blob = json.dumps(doc, ensure_ascii=False)
+
+    # (1) prose present — the 3-sentence explanation, de-wrapped to one line.
+    prose = next((t for t in assistants if t.startswith("A hash map is")), None)
+    assert prose is not None, "assistant prose was dropped"
+    assert "\n" not in prose, "soft-wrapped prose must be de-wrapped"
+    assert "chaining or open addressing" in prose
+
+    # (2) code newlines preserved — the two statements stay on separate lines.
+    code = next((t for t in assistants if t.startswith("scores = {")), None)
+    assert code is not None, "code block was dropped"
+    assert code == 'scores = {"alice": 95, "bob": 87, "carol": 92}\nprint(scores["alice"])  # lookup by key', (
+        "code lines were merged onto one line (newlines lost)"
+    )
+
+    # (3) chrome suppressed — neither the shift+tab hint nor the bare cwd banner.
+    assert "shift+tab" not in blob, "startup plan-mode hint leaked as content"
+    assert "enable Plan Mode" not in blob
+    assert "~/Documents/code/testingmurderharness" not in blob, "bare cwd banner leaked"
+    types = [s["type"] for s in doc["segments"]]
+    assert types == ["user", "assistant", "assistant"], f"unexpected segments: {types}"
+
+
+def test_cursor_bare_cwd_banner_chrome_predicate_spares_prose():
+    """The bare-cwd-banner rule keys on a line that is *only* a rooted path token;
+    real prose mentioning a path (multi-token) must stay content."""
+    from murder.llm.harnesses.transcripts.grammar.cursor import _CURSOR_CWD_BARE_RE
+
+    assert _CURSOR_CWD_BARE_RE.match("  ~/Documents/code/testingmurderharness")
+    assert _CURSOR_CWD_BARE_RE.match("/var/log")
+    # multi-token prose about a path is NOT the banner
+    assert not _CURSOR_CWD_BARE_RE.match("  ~/foo is the wrong directory")
+    assert not _CURSOR_CWD_BARE_RE.match("  edit /etc/hosts then restart")
+    # leading-dot banner shape is handled by its own rule, not this one
+    assert not _CURSOR_CWD_BARE_RE.match("  this is a normal sentence")
+
+
 def test_cursor_slash_command_palette_stripped():
     """Cursor's ``/`` command palette renders as an overlay above the input and
     repaints as you type, so its rows leak into the scrollback *and* duplicate
@@ -617,6 +700,59 @@ def test_antigravity_no_chrome_in_segments():
     ]
     blob = json.dumps(_parse("antigravity"), ensure_ascii=False)
     for needle in agy_chrome:
+        assert needle not in blob, f"agy chrome leaked: {needle!r}"
+
+
+# --------------------------------------------------------------------------- #
+# Antigravity 1.0.10 tool-use turn (BUG-11 / BUG-12). Live capture: the harness
+# emits `● ToolName(arg)` tool calls, then a final prose reply, and while
+# generating paints `<braille>  Loading...` plus a `└ Tip:` hint. The grammar
+# must (a) surface each tool call as a discrete tool_call segment, (b) keep the
+# final reply as assistant prose, and (c) NEVER leak the spinner / tip lines into
+# a segment — a leaked spinner becomes the frozen "Working…" block that never
+# clears once it scrolls above the live window.
+# --------------------------------------------------------------------------- #
+def _agy_tool_use_lines() -> list[str]:
+    return [
+        "> Locate and read prize.txt and report the prize word",
+        "▸ Thought for 1s",
+        "  Prioritizing Tool Usage",
+        "● ListDir(/home/luke/x)",
+        "● Bash(find . -name prize.txt)",
+        "● Read(/home/luke/x/prize.txt)",
+        "  The prize file has been located at prize.txt.",
+        "  The prize word is: Pharsalus",
+        "⡿  Loading...",
+        "└ Tip: Use /fork to branch the conversation from an earlier point.",
+    ]
+
+
+def test_antigravity_tool_calls_rendered_as_segments():
+    from murder.llm.harnesses.transcripts.grammar import antigravity as ag
+
+    segs = ag.parse_lines(_agy_tool_use_lines())
+    tool_titles = [s["title"] for s in segs if s["type"] == "tool_call"]
+    assert tool_titles == [
+        "ListDir(/home/luke/x)",
+        "Bash(find . -name prize.txt)",
+        "Read(/home/luke/x/prize.txt)",
+    ]
+
+
+def test_antigravity_final_reply_preserved_and_spinner_not_leaked():
+    from murder.llm.harnesses.transcripts.grammar import antigravity as ag
+
+    segs = ag.parse_lines(_agy_tool_use_lines())
+    ag.close_last_turn(segs)
+    assistant_texts = [s["text"] for s in segs if s["type"] == "assistant"]
+    # The final reply text is captured...
+    assert any("The prize word is: Pharsalus" in t for t in assistant_texts), assistant_texts
+    # ...and the last assistant block is sealed final at idle.
+    finals = [s for s in segs if s["type"] == "assistant" and s["phase"] == "final"]
+    assert any("Pharsalus" in s["text"] for s in finals)
+    # The spinner ("Loading...") and the `└ Tip:` hint must never leak.
+    blob = json.dumps(segs, ensure_ascii=False)
+    for needle in ("Loading...", "Tip:", "⡿"):
         assert needle not in blob, f"agy chrome leaked: {needle!r}"
 
 

@@ -1,0 +1,22 @@
+# source: synthetic regression — cursor assistant reply whose hard-wrapped tail lands flush-left
+# terminal width 80
+user@machine:~/Documents/code/murder $ agent
+
+
+  Cursor Agent
+  v2026.06.04-8f81907
+  Use /mcp to connect Cursor to your tools and data sources.
+
+
+  test
+
+
+  I will help you fix that bug. This reply is wider than the pane, so the
+terminal hard-wraps the overflow onto the next physical row at column zero,
+  where cursor does not re-inject its two-space left margin.
+
+ ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+  → Add a follow-up
+ ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+  Composer 2.5 · 3.1%                                                  Run Everything
+  ~/Documents/code/murder · main

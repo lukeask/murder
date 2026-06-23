@@ -45,11 +45,19 @@ _FOOTER_RE = re.compile(
 )
 _BULLET_RE = re.compile(r"^•\s+", re.MULTILINE)
 _COMPLETION_RE = re.compile(r"^\s*─\s*Worked\s+for\s+.+?\s*─\s*$", re.MULTILINE)
-_BUSY_RE = re.compile(
-    r"^\s*(?:[•·]\s*)?(?:working|thinking|running|executing|processing|applying patch)\b"
-    r"|esc to interrupt",
-    re.IGNORECASE | re.MULTILINE,
-)
+# Codex's live working spinner always renders as a status line carrying the
+# "esc to interrupt" hint, e.g. `• Working (3s • esc to interrupt)` or
+# `• Starting MCP servers (0/2): … (0s • esc to interrupt)`. The bare verb list
+# the old regex used (`working|running|thinking|…` at the start of a `•` line)
+# ALSO matched ordinary assistant prose narration — codex routinely opens a turn
+# with `• Running the requested shell command…` / `• Processing the results…`.
+# That false positive kept `is_busy` True (and `is_idle` False) on the COMPLETED
+# idle frame, so the final reply never sealed and never delivered until the next
+# turn pushed the prose out of the tail window (BUG-11). "esc to interrupt" is
+# the unambiguous, version-stable live-spinner marker — verified live against
+# codex 0.142.0 (2026-06-23) and across the recorded busy fixtures — so require
+# it. (A genuine spinner line always carries it; assistant prose never does.)
+_BUSY_RE = re.compile(r"esc to interrupt", re.IGNORECASE)
 _LOGIN_RE = re.compile(r"\b(login required|not logged in|codex login)\b", re.IGNORECASE)
 # codex's blocking "update available" menu (full-screen on launch). Its default
 # option renders as "› 1. Update now (runs `npm install -g @openai/codex`)",

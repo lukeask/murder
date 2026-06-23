@@ -1,0 +1,34 @@
+# source: live capture codex 0.142.0 2026-06-23 — COMPLETED turn at the idle prompt.
+# The assistant narrated with a leading "• Running …" prose line, which the old
+# _BUSY_RE (verb-list) mis-read as a live spinner, keeping the pane "busy" forever
+# (BUG-11). The genuine busy spinner always carries "esc to interrupt"; this idle
+# frame does not, so is_busy must be False and is_idle True.
+╭───────────────────────────────────────────────────╮
+│ >_ OpenAI Codex (v0.142.0)                        │
+│                                                   │
+│ model:     gpt-5.4-mini medium   /model to change │
+│ directory: ~/Documents/code/testingmurderharness  │
+╰───────────────────────────────────────────────────╯
+
+• You have 2 usage limit resets available. Run /usage to use one.
+
+
+› Run the shell command 'echo Pharsalus' and then tell me the single word it
+  printed. Do not edit any files.
+
+
+• Running the requested shell command and checking the exact output.
+
+• Ran echo Pharsalus
+  └ Pharsalus
+
+────────────────────────────────────────────────────────────────────────────────
+
+• Pharsalus
+
+────────────────────────────────────────────────────────────────────────────────
+
+
+› Use /skills to list available skills
+
+  gpt-5.4-mini medium · ~/Documents/code/testingmurderharness

@@ -1,0 +1,15 @@
+# source: live capture agy 1.0.10 2026-06-23 (busy spinner reads "Loading...", not "Generating...")
+      ▄▀▀▄        Antigravity CLI 1.0.10
+     ▀▀▀▀▀▀       user@example.com (Antigravity Starter Quota)
+    ▀▀▀▀▀▀▀▀      Gemini 3.1 Pro (Low)
+   ▄▀▀    ▀▀▄     ~/Documents/code/testingmurderharness
+  ▄▀▀      ▀▀▄
+────────────────────────────────────────────────────────────
+> Write a detailed 400 word essay about the history of the Roman Republic
+  late 2nd century BC were met with violent
+⡿  Loading...
+└ Tip: Use /fork to branch the conversation from an earlier point.
+────────────────────────────────────────────────────────────────────────────────
+>
+────────────────────────────────────────────────────────────────────────────────
+esc to cancel                                               Gemini 3.1 Pro (Low)
