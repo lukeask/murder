@@ -1,0 +1,58 @@
+# source: live tmux capture of cursor/agent in-TUI /resume command invocation
+# agent version: v2026.06.19-20-24-33-653a7fb (Cursor Agent)
+# what it shows: /resume session picker — full-screen "Previous Sessions" table
+#   with columns: session name | Created | Last updated
+#   navigation hint at bottom: 1/74 • ↑/↓ to navigate • Enter to select • Backspace to delete • Esc to close
+#   first row (→) is highlighted/selected
+# scrub: hostname and home paths replaced; no email or user@host appeared in this view
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+                                                                                           Previous Sessions
+                                                                                                                                                                        Created            Last updated
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  → New Agent                                                                                                                                                    Today 07:03 PM          Today 07:03 PM
+    New Agent                                                                                                                                                    Today 07:01 PM          Today 07:03 PM
+    Hidden Prize Finder                                                                                                                                          Today 08:28 AM          Today 08:35 AM
+    Prize Word Finder                                                                                                                                            Today 07:25 AM          Today 07:44 AM
+    Hash Map Explainer                                                                                                                                           Today 07:04 AM          Today 07:04 AM
+    Hash Map Explainer                                                                                                                                       Yesterday 04:01 PM      Yesterday 04:03 PM
+    Ok Reply                                                                                                                                                 Yesterday 03:37 PM      Yesterday 03:38 PM
+    Ok Reply                                                                                                                                              Jun 13, 2026 12:50 AM   Jun 13, 2026 12:51 AM
+    Timekeeping Historian                                                                                                                                 Jun 11, 2026 06:13 PM   Jun 11, 2026 06:13 PM
+    Timekeeping Historian                                                                                                                                 Jun 11, 2026 06:08 PM   Jun 11, 2026 06:09 PM
+    Counting Poet                                                                                                                                         Jun 11, 2026 05:59 PM   Jun 11, 2026 06:00 PM
+    Counting Poet                                                                                                                                         Jun 11, 2026 05:55 PM   Jun 11, 2026 05:56 PM
+    Count Season Haiku                                                                                                                                    Jun 11, 2026 05:54 PM   Jun 11, 2026 05:54 PM
+    Counting Poet                                                                                                                                         Jun 11, 2026 05:37 PM   Jun 11, 2026 05:52 PM
+    Counting Poet                                                                                                                                         Jun 11, 2026 05:30 PM   Jun 11, 2026 05:31 PM
+    Session Haiku                                                                                                                                         Jun 11, 2026 05:25 PM   Jun 11, 2026 05:27 PM
+    Crow Agent                                                                                                                                             Jun 1, 2026 10:18 PM    Jun 1, 2026 10:18 PM
+    New Agent                                                                                                                                              Jun 1, 2026 04:30 AM    Jun 1, 2026 04:34 AM
+    New Agent                                                                                                                                              Jun 1, 2026 04:24 AM    Jun 1, 2026 04:27 AM
+    New Agent                                                                                                                                              Jun 1, 2026 04:19 AM    Jun 1, 2026 04:22 AM
+    New Agent                                                                                                                                              Jun 1, 2026 04:08 AM    Jun 1, 2026 04:12 AM
+    New Agent                                                                                                                                              Jun 1, 2026 03:02 AM    Jun 1, 2026 03:02 AM
+    New Agent                                                                                                                                              Jun 1, 2026 02:38 AM    Jun 1, 2026 02:43 AM
+    New Agent                                                                                                                                              Jun 1, 2026 02:04 AM    Jun 1, 2026 02:04 AM
+    New Agent                                                                                                                                              Jun 1, 2026 01:50 AM    Jun 1, 2026 01:53 AM
+    New Agent                                                                                                                                              Jun 1, 2026 01:38 AM    Jun 1, 2026 01:42 AM
+    New Agent                                                                                                                                              Jun 1, 2026 12:54 AM    Jun 1, 2026 12:59 AM
+    Exact Response Text                                                                                                                                    Jun 1, 2026 12:55 AM    Jun 1, 2026 12:57 AM
+    New Agent                                                                                                                                              Jun 1, 2026 12:47 AM    Jun 1, 2026 12:51 AM
+    Exact Response Text                                                                                                                                    Jun 1, 2026 12:48 AM    Jun 1, 2026 12:49 AM
+    New Agent                                                                                                                                              Jun 1, 2026 12:38 AM    Jun 1, 2026 12:43 AM
+    Response Text Here                                                                                                                                     Jun 1, 2026 12:39 AM    Jun 1, 2026 12:41 AM
+    New Agent                                                                                                                                              Jun 1, 2026 12:35 AM    Jun 1, 2026 12:36 AM
+    New Agent                                                                                                                                              Jun 1, 2026 12:32 AM    Jun 1, 2026 12:33 AM
+    New Agent                                                                                                                                              Jun 1, 2026 12:30 AM    Jun 1, 2026 12:30 AM
+    New Agent                                                                                                                                              Jun 1, 2026 12:25 AM    Jun 1, 2026 12:27 AM
+    New Agent                                                                                                                                              Jun 1, 2026 12:22 AM    Jun 1, 2026 12:23 AM
+    New Agent                                                                                                                                              Jun 1, 2026 12:10 AM    Jun 1, 2026 12:16 AM
+    New Agent                                                                                                                                              Jun 1, 2026 12:04 AM    Jun 1, 2026 12:09 AM
+    New Agent                                                                                                                                             May 31, 2026 11:54 PM    Jun 1, 2026 12:02 AM
+    New Agent                                                                                                                                             May 31, 2026 11:46 PM   May 31, 2026 11:53 PM
+    New Agent                                                                                                                                             May 31, 2026 11:42 PM   May 31, 2026 11:45 PM
+    Exact Response Text                                                                                                                                   May 31, 2026 11:43 PM   May 31, 2026 11:43 PM
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+                                                             1/74 • ↑/↓ to navigate • Enter to select • Backspace to delete • Esc to close

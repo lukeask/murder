@@ -1,0 +1,43 @@
+# source: live tmux capture of `agy` /usage (Antigravity CLI 1.0.10, 2026-06-23)
+# NEW grouped "Models & Quota" layout: header is "Models & Quota" (not "Model
+# Quota"), models are bucketed into groups (GEMINI MODELS / CLAUDE AND GPT
+# MODELS) that share a single "Weekly Limit" bracketed bar `[██░░] 85.61%` plus
+# a "NN% remaining · Refreshes in 157h 26m" / "Quota available" status line.
+# Account email scrubbed -> example@website.com.
+
+      ▄▀▀▄        Antigravity CLI 1.0.10
+     ▀▀▀▀▀▀       example@website.com (Antigravity Starter Quota)
+    ▀▀▀▀▀▀▀▀      Gemini 3.1 Pro (Low)
+   ▄▀▀    ▀▀▄     ~/Documents/code/testingmurderharness
+  ▄▀▀      ▀▀▄
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+>
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+└ Models & Quota
+
+  Account: example@website.com
+
+GEMINI MODELS
+  Models within this group: Gemini Flash, Gemini Pro
+
+  Weekly Limit
+    [███████████████████████████████████████████░░░░░░░] 85.61%
+    86% remaining · Refreshes in 157h 26m
+
+
+CLAUDE AND GPT MODELS
+  Models within this group: Claude Opus, Claude Sonnet, GPT-OSS
+
+  Weekly Limit
+    [██████████████████████████████████████████████████] 100.00%
+    Quota available
+
+
+  │Within each group, models share a weekly limit. Quota is consumed
+  │proportionally to the cost of the tokens. Thus, limits will last longer with
+  │shorter tasks or using more cost-effective models. Your weekly limit is tied
+  │directly to your individual tier.
+
+  ↑/↓ Scroll · pgup/pgdown Page · ctrl+end Bottom · ctrl+home Top · esc Close
+esc to cancel                                                                                                                                                                       Gemini 3.1 Pro (Low)

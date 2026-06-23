@@ -37,6 +37,8 @@ export const USAGE_BAR_WIDTH = 12;
  */
 export interface UsageGaugeView {
   readonly windowKey: string;
+  /** Human-readable window/group label, derived from the wire key. */
+  readonly windowLabel: string;
   /** Formatted percentage string, e.g. `'73%'` — painted INSIDE the bar by the component. */
   readonly pctLabel: string;
   /** Window-length label, e.g. `'5h'`, `'7d'`, `'30d'`. `''` when unknown. */
@@ -105,9 +107,18 @@ function formatMinutes(minutes: number): string {
   return rem === 0 ? `${h}h` : `${h}h${rem}m`;
 }
 
+function formatWindowLabel(windowKey: string): string {
+  const clean = windowKey.replace(/_/g, ' ').replace(/\s+/g, ' ').trim();
+  if (clean === '') return 'usage';
+  if (clean === 'current session') return 'session';
+  if (clean === 'current week') return 'weekly';
+  return clean;
+}
+
 function toGaugeView(row: UsageRow): UsageGaugeView {
   return {
     windowKey: row.windowKey,
+    windowLabel: formatWindowLabel(row.windowKey),
     pctLabel: `${Math.round(row.pct)}%`,
     periodLabel: formatPeriod(row.tPeriodMinutes),
     resetLabel: formatMinutes(row.tUntilResetMinutes),

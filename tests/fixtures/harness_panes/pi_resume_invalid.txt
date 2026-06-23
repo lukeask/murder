@@ -1,0 +1,47 @@
+# source: live tmux capture of pi resume with bogus session id in testingmurderharness/
+# pi version: 0.78.1
+# invocation forms tested:
+#   (A) CLI: pi --session 00000000-0000-0000-0000-000000000000 -p "hello"
+#   (B) CLI: pi --resume 00000000-0000-0000-0000-000000000000  (--resume ignores id, opens picker TUI)
+#   (C) TUI slash command: /resume, then type bogus UUID into picker search field
+# state (A): exits immediately with one-line error on stderr, exit code 1
+# state (B): --resume flag opens interactive session-picker TUI; the UUID arg is ignored
+# state (C): in-TUI /resume opens same session-picker TUI; bogus UUID typed into search yields empty result
+# scrub note: shell prompt lines (user@host:...$) removed; home path -> /home/user; email not present
+
+# --- (A) CLI: pi --session <bogus-uuid> -p "hello" ---
+# exits immediately with error, no TUI
+
+No session found matching '00000000-0000-0000-0000-000000000000'
+
+# --- (B) CLI: pi --resume <bogus-uuid>  (--resume ignores the id argument, opens picker TUI) ---
+# user types bogus UUID into the picker's search field; "Current Folder" scope shows no results
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+Resume Session (Current Folder)                                                                                                                      ◉ Current Folder | ○ All  Name: All  Sort: Threaded
+tab scope · re:<pattern> regex · "phrase" exact
+ctrl+s sort · ctrl+n named · ctrl+d delete · ctrl+p path (off)
+
+> 00000000-0000-0000-0000-000000000000
+
+  No sessions in current folder. Press Tab to view all.
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+# --- (C) in-TUI /resume slash command, bogus UUID typed into picker search ---
+# identical picker TUI; "Current Folder" scope returns no results for bogus UUID
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+Resume Session (Current Folder)                                                                                                                      ◉ Current Folder | ○ All  Name: All  Sort: Threaded
+tab scope · re:<pattern> regex · "phrase" exact
+ctrl+s sort · ctrl+n named · ctrl+d delete · ctrl+p path (off) · ctrl+r rename
+
+> 00000000-0000-0000-0000-000000000000
+
+  No sessions in current folder. Press Tab to view all.
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+~/Documents/code/testingmurderharness
+0.0%/1.0M (auto)                                                                                                                             (or) deepseek/deepseek-v4-flash • medium

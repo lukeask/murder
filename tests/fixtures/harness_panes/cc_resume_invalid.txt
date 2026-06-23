@@ -1,0 +1,21 @@
+# source: live tmux capture of `claude --dangerously-skip-permissions --resume <bogus-id>` in testingmurderharness/
+# claude version: 2.1.187 (Claude Code)
+# invocation form: claude --dangerously-skip-permissions --resume [SESSION_ID]
+# state (well-formed UUID): exits immediately with one-line error, no picker/TUI launched
+# state (non-UUID garbage string): falls into interactive session-picker TUI (does NOT error)
+# tested ids: well-formed UUID 00000000-0000-0000-0000-000000000000 and garbage string not-a-real-session
+# scrub note: shell prompt lines (user@host:...$) removed; home path -> /home/user; email not present
+
+No conversation found with session ID: 00000000-0000-0000-0000-000000000000
+
+# --- non-UUID garbage id: interactive picker is shown instead of an error ---
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  Resume session
+  ╭──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+  │ ⌕ not-a-real-session                                                                                                                                                                             │
+  ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+   No sessions match "not-a-real-session".
+
+    Type to Search · Enter to select · Esc to clear

@@ -326,16 +326,29 @@ def parse_codex_status_pane(
     )
 
 
-# Antigravity's `/usage` opens a "Model Quota" dialog (verified against agy
-# 1.0.7, fixture `agy_usage_dialog.txt`). Each model renders as three lines:
+# Antigravity's `/usage` has used two quota-dialog layouts:
+#
+# agy 1.0.7: a "Model Quota" dialog (fixture `agy_usage_dialog.txt`), where
+# each model renders as three lines:
 #   `  Claude Opus 4.6 (Thinking)`
 #   `  ███████████ ░░░ ... 20%`          <- bar tracks quota REMAINING
 #   `  20% remaining · Refreshes in 12h 39m`   (or `Quota available`)
+#
+# agy 1.0.10: a "Models & Quota" dialog (fixture
+# `agy_usage_dialog_grouped.txt`), where model families share a weekly limit:
+#   `GEMINI MODELS`
+#   `  Models within this group: Gemini Flash, Gemini Pro`
+#   `  Weekly Limit`
+#   `    [████░░░] 85.61%`
+#   `    86% remaining · Refreshes in 157h 26m`
+#
 # `percent_used` is normalized to consumed quota (100 - remaining), matching
-# the HarnessUsageWindow contract. `reset_at` is now + the "Refreshes in"
-# delta. Effort variants of the same base model with identical (percent,
-# reset) collapse into one window named by the base model so the usage panel
-# doesn't gain a row per effort level.
+# the HarnessUsageWindow contract. The bracketed bars also track remaining
+# quota; the textual remaining line is rounded, so the parser keeps the bar's
+# more precise percent when both are present. `reset_at` is now + the
+# "Refreshes in" delta. For the old layout, effort variants of the same base
+# model with identical (percent, reset) collapse into one window named by the
+# base model so the usage panel doesn't gain a row per effort level.
 _AGY_MODEL_LINE_RE = re.compile(
     r"^\s{0,8}(?P<label>[A-Za-z][\w.\- ]{1,50}\((?:Low|Medium|High|Thinking)\))\s*$",
 )
@@ -349,6 +362,8 @@ _AGY_REFRESH_RE = re.compile(
 )
 _AGY_PLAN_RE = re.compile(r"\((?P<plan>[^()\n]*Quota[^()\n]*)\)")
 _AGY_FOOTER_RE = re.compile(r"esc to cancel|↑/↓ Scroll", re.IGNORECASE)
+_AGY_GROUP_HEADER_RE = re.compile(r"^\s*(?P<label>[A-Z][A-Z /&-]+MODELS)\s*$")
+_AGY_WEEKLY_LIMIT_RE = re.compile(r"^\s*Weekly Limit\s*$", re.IGNORECASE)
 
 
 def _agy_refresh_to_reset(line: str, now: datetime | None) -> str | None:
@@ -364,6 +379,78 @@ def _agy_refresh_to_reset(line: str, now: datetime | None) -> str | None:
     return (base + delta).replace(microsecond=0).isoformat()
 
 
+def _agy_window_used(remaining: float) -> float:
+    return round(max(0.0, min(100.0, 100.0 - remaining)), 4)
+
+
+def _agy_group_label(label: str) -> str:
+    words = re.sub(r"\s+", " ", label).strip().split(" ")
+    out: list[str] = []
+    for word in words:
+        upper = word.upper()
+        if upper in {"GPT", "GPT-OSS"}:
+            out.append(upper)
+        elif upper == "AND":
+            out.append("and")
+        else:
+            out.append(word.capitalize())
+    return " ".join(out)
+
+
+def _parse_antigravity_grouped_windows(
+    lines: list[str],
+    *,
+    now: datetime | None,
+) -> list[HarnessUsageWindow]:
+    windows: list[HarnessUsageWindow] = []
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        if _AGY_FOOTER_RE.search(line):
+            break
+        group_match = _AGY_GROUP_HEADER_RE.match(line)
+        if not group_match:
+            i += 1
+            continue
+
+        label = _agy_group_label(group_match.group("label"))
+        remaining: float | None = None
+        reset_at: str | None = None
+        j = i + 1
+        while j < len(lines):
+            row = lines[j]
+            if j > i + 1 and _AGY_GROUP_HEADER_RE.match(row):
+                break
+            if _AGY_FOOTER_RE.search(row):
+                break
+            if _AGY_WEEKLY_LIMIT_RE.match(row):
+                j += 1
+                continue
+            if bar_match := _AGY_BAR_PCT_RE.search(row):
+                # The bracketed percentage is a more precise remaining value
+                # than the rounded prose line that follows.
+                if "[" in row and "]" in row:
+                    remaining = float(bar_match.group("pct"))
+            if status_match := _AGY_REMAINING_RE.search(row):
+                if remaining is None:
+                    remaining = float(status_match.group("pct"))
+                reset_at = _agy_refresh_to_reset(row, now)
+            elif _AGY_AVAILABLE_RE.search(row):
+                remaining = remaining if remaining is not None else 100.0
+            j += 1
+
+        if remaining is not None:
+            windows.append(
+                HarnessUsageWindow(
+                    name=label,
+                    percent_used=_agy_window_used(remaining),
+                    reset_at=reset_at,
+                )
+            )
+        i = max(j, i + 1)
+    return windows
+
+
 def parse_antigravity_usage_pane(
     pane_text: str,
     *,
@@ -373,10 +460,21 @@ def parse_antigravity_usage_pane(
     clean = strip_ansi(pane_text)
     plan_match = _AGY_PLAN_RE.search(clean)
 
-    # Scrollback safety: only parse below the LAST "Model Quota" dialog header.
-    anchor = clean.lower().rfind("model quota")
+    # Scrollback safety: only parse below the LAST quota dialog header.
+    lower = clean.lower()
+    anchor = max(lower.rfind("models & quota"), lower.rfind("model quota"))
     body = clean[anchor:] if anchor >= 0 else ""
     lines = body.splitlines()
+
+    grouped_windows = _parse_antigravity_grouped_windows(lines, now=now)
+    if grouped_windows:
+        return HarnessUsageStatus(
+            harness="antigravity",
+            source="slash:/usage",
+            fetched_at=fetched_at or utc_now_iso(),
+            plan=plan_match.group("plan").strip() if plan_match else None,
+            windows=grouped_windows,
+        )
 
     # raw rows: (full label, percent_used, reset_at) in display order
     raw_rows: list[tuple[str, float, str | None]] = []
@@ -403,7 +501,8 @@ def parse_antigravity_usage_pane(
             if _AGY_MODEL_LINE_RE.match(row) or _AGY_FOOTER_RE.search(row):
                 break
             if status_match := _AGY_REMAINING_RE.search(row):
-                remaining = float(status_match.group("pct"))
+                if remaining is None:
+                    remaining = float(status_match.group("pct"))
                 reset_at = _agy_refresh_to_reset(row, now)
                 consumed = j
             elif _AGY_AVAILABLE_RE.search(row):
@@ -415,8 +514,7 @@ def parse_antigravity_usage_pane(
                 consumed = j
             j += 1
         if remaining is not None:
-            used = round(max(0.0, min(100.0, 100.0 - remaining)), 4)
-            raw_rows.append((label, used, reset_at))
+            raw_rows.append((label, _agy_window_used(remaining), reset_at))
         i = max(consumed, i) + 1
 
     # Collapse effort variants: same base model AND identical (percent, reset)

@@ -259,6 +259,38 @@ describe('UsagePanel — rendering', () => {
     dispose();
   });
 
+  it('renders Antigravity grouped quota labels', async () => {
+    const { store, inputStores, dispose } = await setup({
+      invalidation_key: 'iv',
+      active_tickets: [],
+      recent_done_tickets: [],
+      archived_tickets: [],
+      usage_gauges: [
+        {
+          harness: 'antigravity',
+          window_key: 'Gemini Models',
+          pct: 14.39,
+          t_until_reset_minutes: 157 * 60 + 26,
+          t_period_minutes: 7 * 24 * 60,
+        },
+        {
+          harness: 'antigravity',
+          window_key: 'Claude and GPT Models',
+          pct: 0,
+          t_until_reset_minutes: 0,
+          t_period_minutes: 7 * 24 * 60,
+        },
+      ],
+    });
+    const { lastFrame } = render(<Harness store={store} inputStores={inputStores} />);
+    await tick();
+    const frame = lastFrame() ?? '';
+    expect(frame).toContain('antigravity');
+    expect(frame).toContain('Gemini Mod');
+    expect(frame).toContain('Claude and');
+    dispose();
+  });
+
   it('renders no steering tag for auto (the default)', async () => {
     const { store, inputStores, dispose } = await setup(); // no steering field → auto
     const { lastFrame } = render(<Harness store={store} inputStores={inputStores} />);
@@ -266,6 +298,30 @@ describe('UsagePanel — rendering', () => {
     const frame = lastFrame() ?? '';
     expect(frame).not.toContain('[paused]');
     expect(frame).not.toContain('[preferred]');
+    dispose();
+  });
+
+  it('samples fresh usage on r through the usage-probe worker', async () => {
+    const { fake, store, inputStores, dispose } = await setup();
+    fake.stubRpc('command.submit', { ok: true, command_id: 'usage-cmd-1' });
+    fake.stubRpc('command.status', {
+      ok: true,
+      status: 'done',
+      result_json: JSON.stringify({ handled: true, stored: 1, failures: 0 }),
+    });
+    const { stdin } = render(<Harness store={store} inputStores={inputStores} />);
+    await tick();
+
+    stdin.write('r');
+    await tick();
+    await tick();
+
+    const submit = fake.rpcCalls.find((c) => c.method === 'command.submit');
+    expect(submit?.params).toMatchObject({
+      target_worker: 'usage-probe',
+      kind: 'state.harness_usage.sample',
+      payload: { trigger: 'manual_refresh' },
+    });
     dispose();
   });
 

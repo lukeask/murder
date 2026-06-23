@@ -30,7 +30,7 @@
 
 .usage-row {
   display: grid;
-  grid-template-columns: 30px 1fr 38px 42px;
+  grid-template-columns: minmax(84px, 140px) 1fr 38px 42px;
   align-items: center;
   gap: var(--space-3);
   padding: var(--space-1) 0;
@@ -39,6 +39,9 @@
 
 .usage-row__period {
   color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .usage-row__pct {
