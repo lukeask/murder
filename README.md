@@ -1,6 +1,6 @@
 # murder
 
-Multi-agent AI development harness for running Claude Code, Codex, Cursor, and other coding agents side-by-side from one terminal.
+Multi-agent AI development harness for running Claude Code, Codex, Cursor, and other coding agents side-by-side from your terminal or browser.
 
 `murder` gives a project its own agent workspace, tmux sessions, ticket/plan files, and terminal UI so you can supervise multiple coding agents without juggling separate shells.
 
@@ -25,6 +25,8 @@ Early public release. The core workflow is usable, but the project is still movi
 - Provides an Ink-based terminal UI for plans, agents, tickets, history, usage, and transcripts
 - Stores project-local runtime state under `.murder/`
 - Includes optional web/mobile UI serving over a local WebSocket bridge
+- Supports automated workflows. With one command, you can have Composer 2.5 gather a context brief for Claude, and have GPT review Claude's diff.
+- Get a clean view of what your agents are doing in one centralized location 
 - Runs preflight checks with `murder doctor`
 
 ## Requirements
