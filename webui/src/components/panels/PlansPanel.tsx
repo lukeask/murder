@@ -18,7 +18,7 @@ export function PlansPanel(): React.JSX.Element {
 
   return (
     <DocListPanel
-      title="Plans"
+      title="plans"
       kind="plan"
       view={view}
       empty="No plans."

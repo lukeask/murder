@@ -3,15 +3,17 @@
  * trailing status/value. Selected = calm full-width fill + green accent rail. Ported from the DS
  * bundle (data/ListRow); follows the Panel exemplar (plain typed FC, `cx` merge, `...rest` spread).
  *
- * Polymorphic via `as` (default "div"). The star pin has 3 states: true (filled amber), false (faint
- * outline), undefined (no slot). With `onPinToggle` the slot is a nested <button> (stops row-click
- * propagation); without it, a decorative <span>.
+ * Polymorphic via `as` (default "div"). Rows with `onClick` render as a focusable `div` with
+ * `role="button"` so nested pin/trailing controls stay valid HTML (never `<button>` inside
+ * `<button>`). The star pin has 3 states: true (filled amber), false (faint outline), undefined (no
+ * slot). With `onPinToggle` the slot is a nested <button> (stops row-click propagation); without it,
+ * a decorative <span>.
  *
  * Star icon: uses the shared {@link Icon} `star` (overriding its fill for the on-state) rather than the
  * bundle's locally-inlined polygon glyph.
  */
 
-import type { ElementType, HTMLAttributes, MouseEvent, ReactNode } from 'react';
+import type { ElementType, HTMLAttributes, KeyboardEvent, MouseEvent, ReactNode } from 'react';
 import { cx } from './cx.js';
 import { Icon } from './Icon.js';
 
@@ -46,14 +48,36 @@ export function ListRow({
   children,
   ...rest
 }: ListRowProps): React.JSX.Element {
-  const Tag: ElementType = as ?? 'div';
+  const { onClick, onKeyDown, role, tabIndex, ...rowRest } = rest;
+  const interactive = onClick !== undefined;
+  // Never use a <button> root when the row itself is clickable — nested pin/trailing buttons are
+  // common and button-in-button is invalid HTML.
+  const Tag: ElementType = interactive ? 'div' : (as ?? 'div');
   const starCls = cx('mds-row__star', starred === true && 'mds-row__star--on');
   const star = (
     <Icon name="star" size={16} fill={starred === true ? 'currentColor' : 'none'} />
   );
 
+  const onRowKeyDown = (e: KeyboardEvent<HTMLElement>): void => {
+    onKeyDown?.(e);
+    if (e.defaultPrevented || !interactive || onClick === undefined) {
+      return;
+    }
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      onClick(e as unknown as MouseEvent<HTMLElement>);
+    }
+  };
+
   return (
-    <Tag className={cx('mds-row', selected && 'mds-row--selected', className)} {...rest}>
+    <Tag
+      className={cx('mds-row', selected && 'mds-row--selected', className)}
+      role={interactive ? 'button' : role}
+      tabIndex={interactive ? (tabIndex ?? 0) : tabIndex}
+      onClick={onClick}
+      onKeyDown={onRowKeyDown}
+      {...rowRest}
+    >
       {starred !== undefined ? (
         onPinToggle !== undefined ? (
           <button

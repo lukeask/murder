@@ -54,14 +54,17 @@ export function DocListPanel({
   const openName = useAppStore((s) => (s.docView.open?.kind === kind ? s.docView.open.name : null));
 
   return (
-    <Panel title={title} flush>
+    <Panel
+      title={title}
+      flush
+      data-panel-id={kind === 'plan' ? 'plans' : kind === 'note' ? 'notes' : 'reports'}
+    >
       <SliceHint state={view} empty={empty} />
       {rows.map((row) => {
         const extra = rowExtra?.(row);
         return (
           <ListRow
             key={row.id}
-            as="button"
             starred={row.starred}
             onPinToggle={() => void toggleFavorite(row.id)}
             selected={row.name.trim() === openName}

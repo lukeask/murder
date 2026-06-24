@@ -49,9 +49,6 @@ export function Stage(): React.JSX.Element {
     );
   }
 
-  // Terminal is unavailable until an agent is targeted; fall back to chat so the tab stays valid.
-  const effectiveTab: StageTab = agentId === null ? 'chat' : tab;
-
   return (
     <div className="stage mds-stage">
       <div className="mds-stage__tabs">
@@ -60,13 +57,8 @@ export function Stage(): React.JSX.Element {
             { id: 'chat', label: 'Chat' },
             { id: 'terminal', label: 'Terminal' },
           ]}
-          value={effectiveTab}
-          onChange={(id) => {
-            if (id === 'terminal' && agentId === null) {
-              return;
-            }
-            setTab(id as StageTab);
-          }}
+          value={tab}
+          onChange={(id) => setTab(id as StageTab)}
         />
         {agentId !== null ? (
           <span className="mds-stage__target">
@@ -77,8 +69,12 @@ export function Stage(): React.JSX.Element {
       </div>
       <div className="mds-stage__body">
         {agentId === null ? (
-          <div className="mds-stage__empty">Select a crow from the roster to start chatting.</div>
-        ) : effectiveTab === 'chat' ? (
+          <div className="mds-stage__empty">
+            {tab === 'terminal'
+              ? 'Select a crow from the roster to watch its terminal.'
+              : 'Select a crow from the roster to start chatting.'}
+          </div>
+        ) : tab === 'chat' ? (
           <ChatTranscript agentId={agentId} />
         ) : (
           <TmuxFrameView agentId={agentId} />

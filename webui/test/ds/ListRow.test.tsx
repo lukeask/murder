@@ -40,7 +40,18 @@ describe('ds/ListRow', () => {
     expect(slot?.className).not.toContain('mds-row__star--on');
   });
 
-  it('honors the polymorphic `as` prop', () => {
+  it('renders clickable rows as div[role=button] so nested pin buttons stay valid', () => {
+    const onRowClick = vi.fn();
+    const { container } = render(
+      <ListRow title="t" starred onPinToggle={vi.fn()} onClick={onRowClick} />,
+    );
+    const root = container.querySelector('.mds-row');
+    expect(root?.tagName).toBe('DIV');
+    expect(root?.getAttribute('role')).toBe('button');
+    expect(screen.getByRole('button', { name: 'unpin' }).tagName).toBe('BUTTON');
+  });
+
+  it('honors the polymorphic `as` prop when the row is not interactive', () => {
     const { container } = render(<ListRow as="a" title="t" />);
     const root = container.querySelector('.mds-row');
     expect(root?.tagName).toBe('A');

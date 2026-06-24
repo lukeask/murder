@@ -57,7 +57,7 @@ export function RosterPanel(): React.JSX.Element {
   const rowCount = view.sections.reduce((n, s) => n + s.rows.length, 0);
 
   return (
-    <Panel title="Crows" count={view.isEmpty ? null : rowCount} flush>
+    <Panel title="crows" count={view.isEmpty ? null : rowCount} flush data-panel-id="crows">
       <SliceHint state={view} empty="No agents." />
       {view.sections.map((section) => (
         <div key={section.group} className="roster-section">
@@ -67,7 +67,6 @@ export function RosterPanel(): React.JSX.Element {
             return (
               <ListRow
                 key={row.agentId}
-                as="button"
                 selected={row.agentId === activeAgentId}
                 starred={row.favorited}
                 onPinToggle={() => void toggleFavorite(row.agentId)}

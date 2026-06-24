@@ -41,7 +41,7 @@ describe('RosterPanel (DS reskin)', () => {
 
     // DS Panel container + title.
     expect(document.querySelector('.mds-panel')).toBeTruthy();
-    expect(screen.getByText('Crows')).toBeTruthy();
+    expect(screen.getByText('crows')).toBeTruthy();
     // Rows render as DS ListRows.
     expect(document.querySelectorAll('.mds-row').length).toBeGreaterThan(0);
     // Each crow row carries an Avatar identity tile.

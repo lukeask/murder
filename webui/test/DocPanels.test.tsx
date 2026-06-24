@@ -48,7 +48,7 @@ describe('PlansPanel (DS reskin)', () => {
     renderWithStore(<PlansPanel />, { store });
 
     expect(document.querySelector('.mds-panel')).toBeTruthy();
-    expect(screen.getByText('Plans')).toBeTruthy();
+    expect(screen.getByText('plans')).toBeTruthy();
     expect(document.querySelector('.mds-row')).toBeTruthy();
     expect(screen.getByText('v0push.md')).toBeTruthy();
     // meta cells: char count + update time.
@@ -84,7 +84,7 @@ describe('NotesPanel (DS reskin)', () => {
     seedSlice(store, 'favorites', { ids: new Set<string>(), status: 'ready', error: null });
     renderWithStore(<NotesPanel />, { store });
 
-    expect(screen.getByText('Notes')).toBeTruthy();
+    expect(screen.getByText('notes')).toBeTruthy();
     expect(document.querySelector('.mds-row')).toBeTruthy();
     expect(screen.getByText('design.md')).toBeTruthy();
     expect(screen.queryByTitle('Spawn planner')).toBeNull();
@@ -98,7 +98,7 @@ describe('ReportsPanel (DS reskin)', () => {
     seedSlice(store, 'favorites', { ids: new Set<string>(), status: 'ready', error: null });
     renderWithStore(<ReportsPanel />, { store });
 
-    expect(screen.getByText('Reports')).toBeTruthy();
+    expect(screen.getByText('reports')).toBeTruthy();
     expect(document.querySelector('.mds-row')).toBeTruthy();
     expect(screen.getByText('run-42.md')).toBeTruthy();
   });

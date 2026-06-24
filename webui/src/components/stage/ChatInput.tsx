@@ -19,6 +19,7 @@ import { useAppStore } from '@core/hooks/useAppStore.js';
 import { shallow } from 'zustand/shallow';
 import { useState } from 'react';
 import { Input, IconButton, KeyHint, Icon } from '../ds/index.js';
+import { CHAT_INPUT_ID } from '../../useDesktopKeybinds.js';
 
 export function ChatInput(): React.JSX.Element {
   const conversations = useAppStore((s) => s.conversations, shallow);
@@ -113,6 +114,7 @@ export function ChatInput(): React.JSX.Element {
     <div className="mds-composer">
       {metaRow}
       <Input
+        id={CHAT_INPUT_ID}
         size="lg"
         value={text}
         disabled={agentId === null}

@@ -15,7 +15,7 @@ export function ReportsPanel(): React.JSX.Element {
 
   return (
     <DocListPanel
-      title="Reports"
+      title="reports"
       kind="report"
       view={view}
       empty="No reports."

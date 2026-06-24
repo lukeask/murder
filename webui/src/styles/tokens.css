@@ -28,10 +28,8 @@
    ============================================================ */
 
 /* ── Fonts (tokens/fonts.css) ─────────────────────────────────
-   JetBrains Mono = the working mono voice. Fraunces = RESERVED
-   for the `murder` wordmark / --type-display ONLY. */
+   JetBrains Mono = the working mono voice and display face. */
 @import url("https://fonts.googleapis.com/css2?family=JetBrains+Mono:ital,wght@0,300;0,400;0,500;0,600;0,700;0,800;1,400;1,600&display=swap");
-@import url("https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,500;0,9..144,600;0,9..144,700;0,9..144,900;1,9..144,500;1,9..144,700&display=swap");
 
 /* ── Colors (tokens/colors.css) — Everforest Dark (hard) ────── */
 :root {
@@ -150,8 +148,7 @@
                "Menlo", "Consolas", monospace;
   --font-sans: var(--font-mono); /* alias: there is no sans. stay mono. */
 
-  /* Accent display serif — RESERVED for the `murder` wordmark / --type-display only. */
-  --font-accent: "Fraunces", "Hoefler Text", "Georgia", serif;
+  --font-accent: var(--font-mono);
 
   /* Type scale (px) */
   --text-2xs:  11px;

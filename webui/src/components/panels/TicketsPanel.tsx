@@ -34,12 +34,11 @@ export function TicketsPanel(): React.JSX.Element {
   const view = selectTicketsView(tickets);
 
   return (
-    <Panel title="tickets" count={view.isEmpty ? null : view.rows.length} flush>
+    <Panel title="tickets" count={view.isEmpty ? null : view.rows.length} flush data-panel-id="tickets">
       <SliceHint state={view} empty="No tickets." />
       {view.rows.map((row) => (
         <ListRow
           key={row.id}
-          as="button"
           selected={row.id === openId}
           onClick={() => void openDetail(row.id)}
           title={row.titleCell}

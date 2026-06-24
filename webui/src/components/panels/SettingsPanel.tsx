@@ -46,7 +46,7 @@ export function SettingsPanel(): React.JSX.Element {
   ).map((h) => ({ value: h, label: h }));
 
   return (
-    <Panel title="settings">
+    <Panel title="settings" data-panel-id="settings">
       <div className="settings">
         <section className="settings__group">
           <h3 className="settings__heading">theme</h3>

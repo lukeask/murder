@@ -70,8 +70,18 @@
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
 }
-/* In the rails a DS panel sizes to content but caps its scroll height so several fit. */
-.cockpit__rail > .mds-panel { max-height: 60vh; }
+/* Rail panels: never shrink to header-only; cap body scroll so several panels fit in the column. */
+.cockpit__rail > .mds-panel {
+  flex-shrink: 0;
+  max-height: 60vh;
+  min-height: 0;
+}
+.cockpit__rail > .mds-panel .mds-panel__body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
 
 /* Stage cell: the center column grows and scrolls inside its own pane. */
 .cockpit__stage {
@@ -119,34 +129,88 @@
 .mw-main > .mds-panel,
 .mw-main > .panel,
 .mw-main > .stage { flex: 1; min-height: 0; max-height: none; }
+.mw-main > .mds-panel {
+  display: flex;
+  flex-direction: column;
+}
+.mw-main > .mds-panel .mds-panel__body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
 
 /* Bottom pill tab bar. The DS Tabs (`variant=pill full`) sits in this padded, safe-area-aware nav. */
 .mw-tabbar {
   flex-shrink: 0;
+  position: relative;
   padding: var(--space-2) calc(var(--space-2) + var(--safe-right))
     calc(var(--space-2) + var(--safe-bottom)) calc(var(--space-2) + var(--safe-left));
   border-top: 1px solid var(--color-border-blurred);
   background: var(--color-panel-selected-bg);
 }
-/* Stacked icon+label tabs need a touch more height to breathe; allow horizontal scroll for 10 tabs. */
+/* Scroll affordance: tabs overflow horizontally; edge fades hint that more tabs are off-screen. */
+.mw-tabbar::before,
+.mw-tabbar::after {
+  content: "";
+  position: absolute;
+  top: var(--space-2);
+  bottom: calc(var(--space-2) + var(--safe-bottom));
+  width: 28px;
+  pointer-events: none;
+  z-index: 1;
+  opacity: 0;
+  transition: opacity var(--dur-fast) var(--ease-out);
+}
+.mw-tabbar--scroll-left::before,
+.mw-tabbar--scroll-right::after {
+  opacity: 1;
+}
+.mw-tabbar::before {
+  left: calc(var(--space-2) + var(--safe-left));
+  background: linear-gradient(to right, var(--color-panel-selected-bg) 35%, transparent);
+}
+.mw-tabbar::after {
+  right: calc(var(--space-2) + var(--safe-right));
+  background: linear-gradient(to left, var(--color-panel-selected-bg) 35%, transparent);
+}
+/* Stacked icon+label tabs: fixed width (not flex-grow) so 10 tabs scroll instead of squashing. */
 .mw-tabbar .mds-tabs--full {
   overflow-x: auto;
   scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+  scroll-snap-type: x proximity;
+  scroll-padding-inline: var(--space-2);
+  mask-image: linear-gradient(
+    to right,
+    transparent,
+    #000 24px,
+    #000 calc(100% - 24px),
+    transparent
+  );
 }
 .mw-tabbar .mds-tabs--full::-webkit-scrollbar { display: none; }
-.mw-tabbar .mds-tab--stack { min-width: max(var(--tap-min), 56px); }
+.mw-tabbar .mds-tabs--full .mds-tab {
+  flex: 0 0 auto;
+  scroll-snap-align: start;
+}
+.mw-tabbar .mds-tab--stack {
+  min-width: 44px;
+  padding-inline: 6px;
+}
+.mw-tabbar .mds-tab__icon svg {
+  width: 16px;
+  height: 16px;
+}
 
-/* ── The Fraunces masthead wordmark (brand mark only — never body copy). ───────────────────── */
-/* The NavBar/header brand text gets the accent serif display face. Scoped to the shell so the DS
- * NavBar's default mono brand is unaffected elsewhere. This is the ONLY Fraunces usage (per brand
- * rules: reserved for the wordmark/masthead). The `_` wink stays mono — see the wordmark span. */
+/* ── The masthead wordmark treatment. ───────────────────── */
 .cockpit > .mds-nav .mds-nav__brand,
 .mw-brand {
   font: var(--type-display);
   font-size: var(--text-xl);
   line-height: 1;
   color: var(--color-brand);
-  letter-spacing: -0.01em;
+  letter-spacing: 0;
 }
 /* The mono `_` wink in the lockup — kept mono on purpose. */
 .cockpit-brand__wink {

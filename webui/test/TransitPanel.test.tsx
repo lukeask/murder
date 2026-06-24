@@ -45,7 +45,7 @@ describe('TransitPanel (DS reskin)', () => {
 
     // DS Panel container + title.
     expect(document.querySelector('.mds-panel')).toBeTruthy();
-    expect(screen.getByText('git tree')).toBeTruthy();
+    expect(screen.getByText('transit')).toBeTruthy();
     // Lane branch + commit row.
     expect(screen.getByText('main')).toBeTruthy();
     expect(screen.getByText('aaaaaaa')).toBeTruthy();

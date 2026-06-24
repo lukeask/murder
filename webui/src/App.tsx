@@ -2,7 +2,7 @@
  * App — the web/mobile shell, rebuilt on the design-system primitives (Phase C1, "desktop cockpit").
  *
  * ## Layout (chrome only — data flow / IA unchanged)
- *  - Desktop (> 768px): a `.cockpit` grid of three rows — DS {@link NavBar} (Fraunces `murder` brand +
+ *  - Desktop (> 768px): a `.cockpit` grid of three rows — DS {@link NavBar} (`murder` brand +
  *    a connection indicator in the trailing slot), a 3-rail body `[ left rail | Stage | right rail ]`,
  *    and a DS {@link KeybindBar} of display-only chord hints. Rails scroll independently; the Stage
  *    grows. The left/center/right PANEL ASSIGNMENTS are identical to the pre-reskin shell.
@@ -15,7 +15,7 @@
  */
 
 import { useAppStoreApi } from '@core/hooks/useAppStore.js';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { WsBusClient } from './bus/WsBusClient.js';
 import { useThemeCssVars } from './theme/useThemeCssVars.js';
 import { type ConnectionStatus, useConnectionStatus } from './useConnectionStatus.js';
@@ -30,7 +30,8 @@ import { UsagePanel } from './components/panels/UsagePanel.js';
 import { TransitPanel } from './components/panels/TransitPanel.js';
 import { SettingsPanel } from './components/panels/SettingsPanel.js';
 import { Stage } from './components/stage/Stage.js';
-import { NavBar, KeybindBar, type KeybindHint, StatusDot, type StatusDotStatus, Tabs, type TabItem, Icon, type IconName } from './components/ds/index.js';
+import { NavBar, KeybindBar, type KeybindHint, StatusDot, type StatusDotStatus, Tabs, type TabItem, Icon, type IconName, cx } from './components/ds/index.js';
+import { useDesktopKeybinds } from './useDesktopKeybinds.js';
 
 /** The mobile tab set — one entry per top-level destination (panels + the chat Stage). */
 const MOBILE_TABS = [
@@ -57,21 +58,18 @@ const MOBILE_TAB_ICON: Record<MobileTab, IconName> = {
   reports: 'file-text',
   history: 'git-branch',
   usage: 'gauge',
-  transit: 'git-branch',
+  transit: 'git-commit',
   settings: 'settings',
 };
 
 /**
- * Display-only keybind hints for the desktop bottom bar. Lowercase verb-noun per brand rules; these
- * mirror the desktop-cockpit template and are NOT wired to live handlers in this phase.
+ * Keybind hints for the desktop bottom bar. Chords use `C-` as the default modifier label (the live
+ * handler reads `settings.modifier` and accepts alt/ctrl/both). Spawn / new-plan / new-ticket are
+ * omitted — those flows are not ported to the web shell yet.
  */
 const KEYBIND_HINTS: readonly KeybindHint[] = [
   { chord: 'C-1-0', desc: 'panels' },
-  { chord: 'C-jk', desc: 'nav' },
   { chord: 'C-space', desc: 'chat' },
-  { chord: 'C-s', desc: 'spawn' },
-  { chord: 'C-p', desc: 'new plan' },
-  { chord: 'C-t', desc: 'new ticket' },
   { chord: 'C-hl', desc: 'target' },
   { chord: 'C-o', desc: 'settings' },
 ];
@@ -81,6 +79,7 @@ export function App({ bus }: { readonly bus: WsBusClient }): React.JSX.Element {
   const status = useConnectionStatus(bus);
   const isMobile = useMediaQuery(MOBILE_QUERY);
   const storeApi = useAppStoreApi();
+  useDesktopKeybinds(!isMobile);
 
   // Re-prime every slice on each (re)connect. Slice invalidation is key-only, so a slice that
   // changed while disconnected stays stale until an unrelated event; priming closes that gap.
@@ -144,11 +143,45 @@ function DesktopLayout({ status }: { readonly status: ConnectionStatus }): React
 /** Mobile: DS header (brand + view label) / single pane / bottom pill tab bar. */
 function MobileLayout({ status }: { readonly status: ConnectionStatus }): React.JSX.Element {
   const [tab, setTab] = useState<MobileTab>('chat');
+  const [tabScroll, setTabScroll] = useState({ left: false, right: true });
+  const tabsRef = useRef<HTMLDivElement>(null);
   const tabItems: TabItem[] = MOBILE_TABS.map((t) => ({
     id: t,
     label: t,
     icon: <Icon name={MOBILE_TAB_ICON[t]} size={18} />,
   }));
+
+  const syncTabScroll = (): void => {
+    const el = tabsRef.current?.querySelector('.mds-tabs--full');
+    if (!(el instanceof HTMLElement)) {
+      return;
+    }
+    const max = el.scrollWidth - el.clientWidth;
+    setTabScroll({
+      left: el.scrollLeft > 4,
+      right: max > 4 && el.scrollLeft < max - 4,
+    });
+  };
+
+  useEffect(() => {
+    syncTabScroll();
+    const el = tabsRef.current?.querySelector('.mds-tabs--full');
+    if (!(el instanceof HTMLElement)) {
+      return;
+    }
+    const onScroll = (): void => syncTabScroll();
+    el.addEventListener('scroll', onScroll, { passive: true });
+    let ro: ResizeObserver | undefined;
+    if (typeof ResizeObserver !== 'undefined') {
+      ro = new ResizeObserver(onScroll);
+      ro.observe(el);
+    }
+    return () => {
+      el.removeEventListener('scroll', onScroll);
+      ro?.disconnect();
+    };
+  }, []);
+
   return (
     <div className="mw-app">
       <header className="mw-header">
@@ -160,7 +193,15 @@ function MobileLayout({ status }: { readonly status: ConnectionStatus }): React.
       <main className="app__body app__body--mobile mw-main">
         <MobilePane tab={tab} />
       </main>
-      <nav className="tabbar mw-tabbar" aria-label="Sections">
+      <nav
+        ref={tabsRef}
+        className={cx(
+          'tabbar mw-tabbar',
+          tabScroll.left && 'mw-tabbar--scroll-left',
+          tabScroll.right && 'mw-tabbar--scroll-right',
+        )}
+        aria-label="Sections"
+      >
         <Tabs
           variant="pill"
           full

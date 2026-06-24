@@ -37,7 +37,7 @@ describe('HistoryPanel (DS reskin)', () => {
 
     // DS Panel container + title.
     expect(document.querySelector('.mds-panel')).toBeTruthy();
-    expect(screen.getByText('History')).toBeTruthy();
+    expect(screen.getByText('history')).toBeTruthy();
     // The loose/all filter rides the Panel actions slot as DS Tabs.
     expect(document.querySelector('.mds-tabs')).toBeTruthy();
     // The row renders as a DS ListRow with its text + status Tag.

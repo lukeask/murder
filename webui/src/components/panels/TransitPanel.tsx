@@ -52,7 +52,7 @@ export function TransitPanel(): React.JSX.Element {
     .find((c) => c.sha === selectedSha);
 
   return (
-    <Panel title="git tree" count={view.isEmpty ? null : transit.lanes.length}>
+    <Panel title="transit" count={view.isEmpty ? null : transit.lanes.length} data-panel-id="transit">
       <SliceHint state={view} empty="No branches." />
       {transit.lanes.map((lane, laneIdx) => {
         const laneColor = `var(--crow-${(laneIdx % CROW_SLOTS) + 1})`;

@@ -27,7 +27,7 @@ export function UsagePanel(): React.JSX.Element {
   const view = selectUsageView(usage);
 
   return (
-    <Panel title="usage" count={view.isEmpty ? null : view.groups.length}>
+    <Panel title="usage" count={view.isEmpty ? null : view.groups.length} data-panel-id="usage">
       <SliceHint state={view} empty="No usage data." />
       {view.groups.map((group) => (
         <div key={group.harness} className="usage-grp">

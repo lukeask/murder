@@ -15,7 +15,7 @@ export function NotesPanel(): React.JSX.Element {
 
   return (
     <DocListPanel
-      title="Notes"
+      title="notes"
       kind="note"
       view={view}
       empty="No notes."

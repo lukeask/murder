@@ -49,7 +49,7 @@ export function HistoryPanel(): React.JSX.Element {
   );
 
   return (
-    <Panel title="History" count={view.isEmpty ? null : view.rows.length} flush actions={toggle}>
+    <Panel title="history" count={view.isEmpty ? null : view.rows.length} flush actions={toggle} data-panel-id="history">
       <SliceHint state={view} empty="No history." />
       {view.rows.map((row) => (
         <ListRow
