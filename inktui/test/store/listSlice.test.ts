@@ -20,8 +20,12 @@ function crowReply(): CrowSnapshotReply {
 }
 
 async function flush(): Promise<void> {
-  await Promise.resolve();
-  await Promise.resolve();
+  await new Promise<void>((resolve) => {
+    setTimeout(resolve, 0);
+  });
+  await new Promise<void>((resolve) => {
+    setTimeout(resolve, 0);
+  });
 }
 
 describe('createRefreshAction — shared list-slice mechanics', () => {
@@ -112,6 +116,51 @@ describe('createRefreshAction — shared list-slice mechanics', () => {
     expect(store.getState().roster.status).toBe('loading');
     await pending;
     await flush();
+    expect(store.getState().roster.status).toBe('ready');
+  });
+
+  it('coalesces refresh() calls separated by microtasks into exactly ONE rpc', async () => {
+    // A WS subscription replay delivers one `state.snapshot` per message — each on its own turn. The
+    // shared drain loop must collapse that async storm the same way it collapses a sync burst.
+    const fake = new FakeBusClient();
+    fake.stubRpc('state.crow_snapshot', crowReply());
+    const { store } = createAppStore(fake);
+    const refresh = store.getState().actions.roster.refresh;
+
+    void refresh();
+    await Promise.resolve();
+    void refresh();
+    await Promise.resolve();
+    void refresh();
+    await flush();
+
+    expect(fake.rpcCalls).toEqual([{ method: 'state.crow_snapshot', params: {} }]);
+    expect(store.getState().roster.status).toBe('ready');
+    expect(store.getState().roster.rows).toHaveLength(1);
+  });
+
+  it('does not flash loading over existing rows on background refresh', async () => {
+    const fake = new FakeBusClient();
+    fake.stubRpc('state.crow_snapshot', crowReply());
+    const { store } = createAppStore(fake);
+    await store.getState().actions.roster.refresh();
+    expect(store.getState().roster.status).toBe('ready');
+
+    let resolveReply: (r: CrowSnapshotReply) => void = () => {};
+    fake.stubRpc(
+      'state.crow_snapshot',
+      () =>
+        new Promise<CrowSnapshotReply>((resolve) => {
+          resolveReply = resolve;
+        }),
+    );
+    const pending = store.getState().actions.roster.refresh();
+    await flush();
+    expect(store.getState().roster.status).toBe('ready');
+    expect(store.getState().roster.rows).toHaveLength(1);
+
+    resolveReply(crowReply());
+    await pending;
     expect(store.getState().roster.status).toBe('ready');
   });
 

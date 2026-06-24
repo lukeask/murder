@@ -96,44 +96,69 @@ export function createRefreshAction<
   // Per-slice request token: a burst of `state.snapshot` invalidations (or a reconnect re-prime)
   // can fire `refresh()` repeatedly with no ordering guarantee on the RPCs. Without this guard an
   // OLDER reply that resolves last would overwrite a newer one's rows as `ready` (stale clobber).
-  // Each call claims the next seq; a reply only applies if it is still the latest in flight.
+  // Each call bumps `seq`; a reply only applies if it is still the latest when the RPC settles.
+  // A shared drain loop coalesces BOTH synchronous bursts AND async storms (e.g. a WS subscription
+  // replay that delivers one snapshot per message): every call bumps `seq`, but only one drain runs
+  // at a time and retries until the in-flight RPC matches the final `seq`.
   let seq = 0;
+  let drainPromise: Promise<void> | null = null;
+
+  async function drain(): Promise<void> {
+    if (drainPromise !== null) {
+      return drainPromise;
+    }
+    drainPromise = (async () => {
+      try {
+        for (;;) {
+          // Macrotask deferral: collapses sync bursts AND back-to-back WS `pub` frames that each
+          // schedule their own turn — a subscription replay storm becomes one RPC per slice.
+          await new Promise<void>((resolve) => {
+            setTimeout(resolve, 0);
+          });
+          const token = seq;
+          try {
+            const reply = await bus.rpc(method, {} as RpcMethods[Method]['params']);
+            if (token !== seq) {
+              continue;
+            }
+            const rows = project(reply);
+            const next: ListState<Row> = { rows, status: 'ready', error: null };
+            store.setState({ [key]: next } as unknown as Partial<AppStore>);
+            return;
+          } catch (error: unknown) {
+            if (token !== seq) {
+              continue;
+            }
+            const message = error instanceof Error ? error.message : String(error);
+            store.setState((state) => {
+              const current = state[key] as ListState<Row>;
+              return {
+                [key]: { ...current, status: 'error', error: message },
+              } as unknown as Partial<AppStore>;
+            });
+            return;
+          }
+        }
+      } finally {
+        drainPromise = null;
+      }
+    })();
+    return drainPromise;
+  }
+
   return {
     async refresh(): Promise<void> {
-      const token = ++seq;
-      // Mark loading by ref-swapping ONLY this slice — sibling slices keep their identity, so their
-      // `useStore(s => s.x, shallow)` subscribers do not re-render (the invalidation-granularity
-      // contract this whole store layer is built around).
+      seq++;
+      // Mark loading by ref-swapping ONLY this slice — sibling slices keep their identity. When rows
+      // already exist, keep `ready` so the UI does not flash a loading overlay over live data.
       store.setState((state) => {
         const current = state[key] as ListState<Row>;
+        const status =
+          current.status === 'idle' || current.rows.length === 0 ? 'loading' : current.status;
         // Localized cast: the generic key defeats `Partial<AppStore>` inference (see fn docstring).
-        return { [key]: { ...current, status: 'loading' } } as unknown as Partial<AppStore>;
+        return { [key]: { ...current, status } } as unknown as Partial<AppStore>;
       });
-      // Coalesce a synchronous burst: a cold-start `state.snapshot` storm can fire `refresh()` once
-      // per ticket (~130x). Deferring the RPC behind one microtask lets the whole burst bump `seq` to
-      // its final value FIRST, so every stale token short-circuits BEFORE issuing an RPC — only the
-      // last call hits the wire (saving ~129 reply payloads serialized + parsed for nothing). The
-      // loading setState above already ran, so a burst still flashes loading; the surviving (latest)
-      // call always runs to completion below and sets the terminal state, so last-writer-wins holds.
-      await Promise.resolve();
-      if (token !== seq) return;
-      try {
-        const reply = await bus.rpc(method, {} as RpcMethods[Method]['params']);
-        // Drop a stale reply: a newer refresh has been issued since we started.
-        if (token !== seq) return;
-        const rows = project(reply);
-        const next: ListState<Row> = { rows, status: 'ready', error: null };
-        store.setState({ [key]: next } as unknown as Partial<AppStore>);
-      } catch (error: unknown) {
-        if (token !== seq) return;
-        const message = error instanceof Error ? error.message : String(error);
-        store.setState((state) => {
-          const current = state[key] as ListState<Row>;
-          return {
-            [key]: { ...current, status: 'error', error: message },
-          } as unknown as Partial<AppStore>;
-        });
-      }
+      await drain();
     },
   };
 }

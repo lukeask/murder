@@ -824,10 +824,14 @@ describe('boot-priming — slice refresh actions exist for all primed domains', 
   });
 });
 
-/** Let the FakeBusClient's Promise-routed rpc settle (it resolves on a microtask). */
+/** Let coalesced refresh timers + the FakeBusClient's Promise-routed rpc settle. */
 async function flush(): Promise<void> {
-  await Promise.resolve();
-  await Promise.resolve();
+  await new Promise<void>((resolve) => {
+    setTimeout(resolve, 0);
+  });
+  await new Promise<void>((resolve) => {
+    setTimeout(resolve, 0);
+  });
 }
 
 describe('first-run UX — backend error events surface as toasts', () => {

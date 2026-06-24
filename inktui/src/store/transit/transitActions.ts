@@ -90,35 +90,57 @@ export interface TransitActions {
 }
 
 export function createTransitActions(bus: BusClient, store: StoreApi<AppStore>): TransitActions {
-  // Per-slice request token — guards against a stale reply clobbering newer lanes when a burst of
-  // `transit` invalidations (or a reconnect re-prime) overlaps two refreshes (see listSlice.ts).
+  // Per-slice request token + shared drain — mirrors listSlice.ts (async snapshot storms included).
   let seq = 0;
+  let drainPromise: Promise<void> | null = null;
+
+  async function drain(): Promise<void> {
+    if (drainPromise !== null) {
+      return drainPromise;
+    }
+    drainPromise = (async () => {
+      try {
+        for (;;) {
+          await new Promise<void>((resolve) => {
+            setTimeout(resolve, 0);
+          });
+          const token = seq;
+          try {
+            const reply = await bus.rpc('state.transit_snapshot', {});
+            if (token !== seq) {
+              continue;
+            }
+            const next: TransitState = { lanes: project(reply), status: 'ready', error: null };
+            store.setState({ transit: next });
+            return;
+          } catch (error: unknown) {
+            if (token !== seq) {
+              continue;
+            }
+            const message = error instanceof Error ? error.message : String(error);
+            store.setState((state) => ({
+              transit: { ...state.transit, status: 'error', error: message },
+            }));
+            return;
+          }
+        }
+      } finally {
+        drainPromise = null;
+      }
+    })();
+    return drainPromise;
+  }
+
   return {
     async refresh(): Promise<void> {
-      const token = ++seq;
-      // Mark loading by ref-swapping ONLY the transit slice — sibling slices keep their identity.
+      seq++;
       store.setState((state) => {
         const current = state.transit;
-        return { transit: { ...current, status: 'loading' } };
+        const status =
+          current.status === 'idle' || current.lanes.length === 0 ? 'loading' : current.status;
+        return { transit: { ...current, status } };
       });
-      // Coalesce a synchronous burst (mirrors listSlice.ts): defer the RPC behind one microtask so a
-      // burst of `transit` invalidations bumps `seq` to its final value first; every stale token then
-      // short-circuits BEFORE issuing the heavy ~110KB transit_snapshot RPC — only the last call hits
-      // the wire. The loading setState above already ran; the surviving call sets the terminal state.
-      await Promise.resolve();
-      if (token !== seq) return;
-      try {
-        const reply = await bus.rpc('state.transit_snapshot', {});
-        if (token !== seq) return;
-        const next: TransitState = { lanes: project(reply), status: 'ready', error: null };
-        store.setState({ transit: next });
-      } catch (error: unknown) {
-        if (token !== seq) return;
-        const message = error instanceof Error ? error.message : String(error);
-        store.setState((state) => ({
-          transit: { ...state.transit, status: 'error', error: message },
-        }));
-      }
+      await drain();
     },
   };
 }
