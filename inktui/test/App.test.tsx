@@ -15,6 +15,7 @@ import { App, deriveSpawnContext } from '../src/components/App.js';
 import { createInputStores } from '../src/input/createInputStores.js';
 import { CHAT_FOCUS, selectEffectiveFocus } from '../src/input/focusStore.js';
 import type { PanelId } from '../src/input/panels.js';
+import type { SettingsWire } from '../src/store/settings/settingsActions.js';
 import { createAppStore } from '../src/store/store.js';
 import { DEFAULT_THEME_ID } from '../src/theme/palettes.js';
 import { themeStore } from '../src/theme/themeStore.js';
@@ -32,6 +33,27 @@ function setup(visible: readonly PanelId[]) {
   const inputStores = createInputStores(visible);
   const tree = render(<App store={store} inputStores={inputStores} bus={fake} />);
   return { fake, store, dispose, inputStores, ...tree };
+}
+
+function settingsWire(overrides: Partial<SettingsWire> = {}): SettingsWire {
+  return {
+    theme: DEFAULT_THEME_ID,
+    modifier: 'alt',
+    key_overrides: {},
+    pane_gap: 0,
+    vim_mode: false,
+    default_chat_view_mode: 'verbose',
+    startup_rogue: null,
+    collaborator_harness: null,
+    planner_harness: null,
+    crow_harnesses: null,
+    effective_collaborator_harness: 'claude_code',
+    effective_planner_harness: 'claude_code',
+    effective_crow_harnesses: ['claude_code'],
+    llm: {},
+    llm_env: { groq: false, cerebras: false, openrouter: false },
+    ...overrides,
+  };
 }
 
 describe('App shell', () => {
@@ -303,7 +325,7 @@ describe('theme bridge (Phase 5) — settings.theme → themeStore', () => {
     // settings.get resolves with the light theme → the bridge applies it after load.
     fake.stubRpc('settings.get', {
       ok: true,
-      settings: { theme: 'everforest-light', modifier: 'alt', key_overrides: {}, pane_gap: 0 },
+      settings: settingsWire({ theme: 'everforest-light' }),
     });
     const { store, dispose } = createAppStore(fake);
     const inputStores = createInputStores([]);
@@ -319,7 +341,7 @@ describe('theme bridge (Phase 5) — settings.theme → themeStore', () => {
     fake.stubRpc('state.crow_snapshot', { invalidation_key: 'iv', sessions: [] });
     fake.stubRpc('settings.update', {
       ok: true,
-      settings: { theme: 'everforest-light', modifier: 'alt', key_overrides: {}, pane_gap: 0 },
+      settings: settingsWire({ theme: 'everforest-light' }),
     });
     const { store, dispose } = createAppStore(fake);
     const inputStores = createInputStores([]);
@@ -340,7 +362,7 @@ describe('theme bridge (Phase 5) — settings.theme → themeStore', () => {
     fake.stubRpc('state.crow_snapshot', { invalidation_key: 'iv', sessions: [] });
     fake.stubRpc('settings.get', {
       ok: true,
-      settings: { theme: 'solarized-unknown', modifier: 'alt', key_overrides: {}, pane_gap: 0 },
+      settings: settingsWire({ theme: 'solarized-unknown' }),
     });
     const { store, dispose } = createAppStore(fake);
     const inputStores = createInputStores([]);

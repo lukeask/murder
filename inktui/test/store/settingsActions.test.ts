@@ -35,8 +35,10 @@ function wire(over: Record<string, unknown> = {}): SettingsWire {
     default_chat_view_mode: 'verbose',
     startup_rogue: null,
     collaborator_harness: null,
+    planner_harness: null,
     crow_harnesses: null,
     effective_collaborator_harness: 'claude_code',
+    effective_planner_harness: 'claude_code',
     effective_crow_harnesses: ['claude_code'],
     llm: {},
     llm_env: { groq: false, cerebras: false, openrouter: false },
@@ -199,8 +201,10 @@ describe('settings actions', () => {
       ok: true,
       settings: wire({
         collaborator_harness: 'codex',
+        planner_harness: 'cursor',
         crow_harnesses: ['cursor', 'pi'],
         effective_collaborator_harness: 'codex',
+        effective_planner_harness: 'cursor',
         effective_crow_harnesses: ['cursor', 'pi'],
         llm: {
           providers: { groq: { api_key: '***', base_url: null } },
@@ -214,8 +218,10 @@ describe('settings actions', () => {
     await store.getState().actions.settings.load();
     const s = store.getState().settings;
     expect(s.collaboratorHarness).toBe('codex');
+    expect(s.plannerHarness).toBe('cursor');
     expect(s.crowHarnesses).toEqual(['cursor', 'pi']);
     expect(s.effectiveCollaboratorHarness).toBe('codex');
+    expect(s.effectivePlannerHarness).toBe('cursor');
     expect(s.effectiveCrowHarnesses).toEqual(['cursor', 'pi']);
     expect(s.llm.providers?.groq?.api_key).toBe('***');
     expect(s.llm.roles).toEqual({ notetaker: 'fast' });
@@ -238,6 +244,23 @@ describe('settings actions', () => {
     await store.getState().actions.settings.update({ collaborator_harness: 'codex' });
     await store.getState().actions.settings.update({ collaborator_harness: null });
     expect(store.getState().settings.collaboratorHarness).toBeNull();
+    dispose();
+  });
+
+  it('update(planner_harness) overlays optimistically AND persists', async () => {
+    const { fake, store, dispose } = setup();
+    await store.getState().actions.settings.update({ planner_harness: 'codex' });
+    expect(store.getState().settings.plannerHarness).toBe('codex');
+    const updates = fake.rpcCalls.filter((c) => c.method === 'settings.update');
+    expect(updates[0]?.params).toEqual({ settings: { planner_harness: 'codex' } });
+    dispose();
+  });
+
+  it('update(planner_harness: null) clears the override locally', async () => {
+    const { store, dispose } = setup();
+    await store.getState().actions.settings.update({ planner_harness: 'codex' });
+    await store.getState().actions.settings.update({ planner_harness: null });
+    expect(store.getState().settings.plannerHarness).toBeNull();
     dispose();
   });
 

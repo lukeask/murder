@@ -182,6 +182,17 @@ def test_user_config_scrubs_native_coding_crow_in_pool(
     assert cfg.default_crow.harnesses == ["cursor"]
 
 
+def test_user_config_scrubs_native_coding_crow_from_planner(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
+    p = config_path()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text("planner:\n  harness: native_coding_crow\n", encoding="utf-8")
+    cfg = load_user_config()
+    assert cfg.planner is None or cfg.planner.harness is None
+
+
 def test_config_load_raises_on_native_coding_crow_in_roles(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     (repo / ".murder").mkdir(parents=True)

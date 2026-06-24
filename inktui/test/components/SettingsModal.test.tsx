@@ -73,6 +73,8 @@ const RICH_CURRENT: Parameters<typeof settingsMode>[2] = {
   keyOverrides: {},
   collaboratorHarness: null,
   effectiveCollaborator: 'claude_code',
+  plannerHarness: null,
+  effectivePlanner: 'claude_code',
   crowHarnesses: null,
   effectiveCrow: ['claude_code'],
   llm: {},
@@ -152,8 +154,8 @@ describe('SettingsModal', () => {
     expect(frame).toContain('Theme');
     expect(frame).toContain('Pane gap');
     // The row list now scrolls by cursor (it is far taller than the screen). The later sections —
-    // Collaborator harness, LLM providers, Tiers, Role → tier, Key bindings — come into view as the
-    // cursor descends; the top sections paint on open.
+    // Planning agent harness, LLM providers, Tiers, Role → tier, Key bindings — come into view as
+    // the cursor descends; the top sections paint on open.
     expect(selectActiveMode(stores.modes)?.id).toBe(SETTINGS_MODE_ID);
 
     stdin.write(ESC);
@@ -345,36 +347,45 @@ describe('SettingsModal', () => {
 
   // --- Harnesses section ---
 
-  it('collaborator radio: selecting a harness commits collaborator_harness', async () => {
+  it('does not show the dormant collaborator harness section', async () => {
+    const stores = createInputStores(['notes'], 'notes');
+    const { actions } = fakeActions();
+    const { lastFrame, stdin } = render(<Harness stores={stores} />);
+    stores.modes.getState().enter(settingsMode(stores.modes, actions, RICH_CURRENT));
+    await tick();
+    await walkUntilFocused(stdin, lastFrame, '(default)');
+    expect(lastFrame()).toContain('Planning agent harness');
+    expect(lastFrame()).not.toContain('Collaborator harness');
+  });
+
+  it('planner radio: selecting a harness commits planner_harness', async () => {
     const stores = createInputStores(['notes'], 'notes');
     const { actions, patches } = fakeActions();
     const { lastFrame, stdin } = render(<Harness stores={stores} />);
     stores.modes.getState().enter(settingsMode(stores.modes, actions, RICH_CURRENT));
     await tick();
-    // A "codex" harness row also exists in the Startup Rogue section (above collaborator); walk past
-    // it by first focusing the collaborator "(default)" row, then the collaborator codex row.
+    // A "codex" harness row also exists in the Startup Rogue section (above planner); walk past it
+    // by first focusing the planner "(default)" row, then the planner codex row.
     await walkUntilFocused(stdin, lastFrame, '(default)');
     await walkUntilFocused(stdin, lastFrame, 'codex');
     stdin.write('\r');
     await tick();
-    expect(patches).toContainEqual({ collaborator_harness: 'codex' });
+    expect(patches).toContainEqual({ planner_harness: 'codex' });
   });
 
-  it('collaborator "(default)" row commits collaborator_harness: null', async () => {
+  it('planner "(default)" row commits planner_harness: null', async () => {
     const stores = createInputStores(['notes'], 'notes');
     const { actions, patches } = fakeActions();
     const { lastFrame, stdin } = render(<Harness stores={stores} />);
     // Start with an override set, so selecting "(default)" is an observable clear.
     stores.modes
       .getState()
-      .enter(
-        settingsMode(stores.modes, actions, { ...RICH_CURRENT, collaboratorHarness: 'codex' }),
-      );
+      .enter(settingsMode(stores.modes, actions, { ...RICH_CURRENT, plannerHarness: 'codex' }));
     await tick();
     await walkUntilFocused(stdin, lastFrame, '(default)');
     stdin.write('\r');
     await tick();
-    expect(patches).toContainEqual({ collaborator_harness: null });
+    expect(patches).toContainEqual({ planner_harness: null });
   });
 
   it('crow checkbox: toggling a harness commits the crow_harnesses list', async () => {
@@ -384,8 +395,8 @@ describe('SettingsModal', () => {
     // Effective default is [claude_code]; toggling codex on yields [claude_code, codex].
     stores.modes.getState().enter(settingsMode(stores.modes, actions, RICH_CURRENT));
     await tick();
-    // Two harnesses named "codex" exist (collaborator + crow); walk past the collaborator one by
-    // first focusing the crow reset row, then the crow codex row.
+    // Two harnesses named "codex" exist (planner + crow); walk past the planner one by first
+    // focusing the crow reset row, then the crow codex row.
     await walkUntilFocused(stdin, lastFrame, 'reset to default');
     await walkUntilFocused(stdin, lastFrame, 'codex'); // now the crow codex row
     stdin.write('\r');

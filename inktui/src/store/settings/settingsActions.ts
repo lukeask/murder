@@ -97,10 +97,14 @@ export interface SettingsWire {
   // --- harness overrides + daemon's live effective values ---
   /** The user's collaborator-harness override, or `null` when none is set. */
   readonly collaborator_harness: string | null;
+  /** The user's planning-agent harness override, or `null` when none is set. */
+  readonly planner_harness: string | null;
   /** The user's crow-harness pool override, or `null` when none is set. */
   readonly crow_harnesses: readonly string[] | null;
   /** The daemon's live merged collaborator harness (override → role default). */
   readonly effective_collaborator_harness: string;
+  /** The daemon's live merged planning-agent harness. */
+  readonly effective_planner_harness: string;
   /** The daemon's live merged crow-harness pool. */
   readonly effective_crow_harnesses: readonly string[];
   // --- llm provider/tier/role config (api keys masked) ---
@@ -117,7 +121,7 @@ export interface LlmPatch {
 }
 
 /** A partial settings patch for `update`. Any subset of the tui keys, the harness overrides
- * (`collaborator_harness: string|null`, `crow_harnesses: non-empty string[]|null`), and `llm`. */
+ * (`collaborator_harness` / `planner_harness` / `crow_harnesses`), and `llm`. */
 export interface SettingsPatch {
   theme?: string;
   modifier?: SettingsModifier;
@@ -128,6 +132,7 @@ export interface SettingsPatch {
   /** Set/replace the Startup Rogue, or `null` to clear it. */
   startup_rogue?: StartupRogueWire | null;
   collaborator_harness?: string | null;
+  planner_harness?: string | null;
   crow_harnesses?: readonly string[] | null;
   llm?: LlmPatch;
 }
@@ -188,9 +193,11 @@ function applyWire(prev: SettingsState, wire: SettingsWire | undefined): Setting
     // the prior value when the server clears one. Honour `null` explicitly via the key-presence check.
     collaboratorHarness:
       'collaborator_harness' in wire ? wire.collaborator_harness : prev.collaboratorHarness,
+    plannerHarness: 'planner_harness' in wire ? wire.planner_harness : prev.plannerHarness,
     crowHarnesses: 'crow_harnesses' in wire ? wire.crow_harnesses : prev.crowHarnesses,
     effectiveCollaboratorHarness:
       wire.effective_collaborator_harness ?? prev.effectiveCollaboratorHarness,
+    effectivePlannerHarness: wire.effective_planner_harness ?? prev.effectivePlannerHarness,
     effectiveCrowHarnesses: wire.effective_crow_harnesses ?? prev.effectiveCrowHarnesses,
     llm: wire.llm ?? prev.llm,
     llmEnv: wire.llm_env ?? prev.llmEnv,
@@ -234,6 +241,9 @@ export function createSettingsActions(bus: BusClient, store: StoreApi<AppStore>)
           ...('startup_rogue' in partial ? { startupRogue: partial.startup_rogue ?? null } : {}),
           ...('collaborator_harness' in partial
             ? { collaboratorHarness: partial.collaborator_harness ?? null }
+            : {}),
+          ...('planner_harness' in partial
+            ? { plannerHarness: partial.planner_harness ?? null }
             : {}),
           ...('crow_harnesses' in partial ? { crowHarnesses: partial.crow_harnesses ?? null } : {}),
           status: 'ready',

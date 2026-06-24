@@ -871,6 +871,8 @@ function Shell({
         keyOverrides: settings.keyOverrides as Record<string, string>,
         collaboratorHarness: settings.collaboratorHarness,
         effectiveCollaborator: settings.effectiveCollaboratorHarness,
+        plannerHarness: settings.plannerHarness,
+        effectivePlanner: settings.effectivePlannerHarness,
         crowHarnesses: settings.crowHarnesses,
         effectiveCrow: settings.effectiveCrowHarnesses,
         llm: settings.llm,

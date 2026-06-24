@@ -68,11 +68,16 @@ export interface SettingsState {
   /** The user's collaborator-harness override, or `null` when none is set (falls back to
    * `effectiveCollaboratorHarness`). Mirrors the wire `collaborator_harness`. */
   readonly collaboratorHarness: string | null;
+  /** The user's planning-agent harness override, or `null` when none is set (falls back to
+   * `effectivePlannerHarness`). Mirrors the wire `planner_harness`. */
+  readonly plannerHarness: string | null;
   /** The user's crow-harness pool override, or `null` when none is set (falls back to
    * `effectiveCrowHarnesses`). Mirrors the wire `crow_harnesses`. */
   readonly crowHarnesses: readonly string[] | null;
   /** The daemon's live merged collaborator harness (override → role default). Display fallback. */
   readonly effectiveCollaboratorHarness: string;
+  /** The daemon's live merged planning-agent harness. Display fallback. */
+  readonly effectivePlannerHarness: string;
   /** The daemon's live merged crow-harness pool. Display fallback. */
   readonly effectiveCrowHarnesses: readonly string[];
   /** The LLM provider/tier/role config (api keys masked `***`). Stored in wire shape — its nested
@@ -98,8 +103,10 @@ export const initialSettingsState: SettingsState = {
   defaultChatViewMode: 'verbose',
   startupRogue: null,
   collaboratorHarness: null,
+  plannerHarness: null,
   crowHarnesses: null,
   effectiveCollaboratorHarness: 'claude_code',
+  effectivePlannerHarness: 'claude_code',
   effectiveCrowHarnesses: ['claude_code'],
   llm: {},
   llmEnv: { groq: false, cerebras: false, openrouter: false },

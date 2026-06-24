@@ -3,7 +3,7 @@
 This is intentionally separate from project `.murder/roles.yaml`: it stores
 local UI preferences that should follow the user across repos.
 
-Optional `collaborator`, `default_crow`, and `notetaker` blocks mirror the
+Optional `collaborator`, `planner`, `default_crow`, and `notetaker` blocks mirror the
 shape of `.murder/roles.yaml` sections; they are merged globally before the
 project file (see `Config.load`).
 """
@@ -184,6 +184,7 @@ class UserConfig(BaseModel):
     # separate advanced-logging flag (see murder.observability.logging_setup).
     log_level: str = "info"
     collaborator: UserHarnessRolePatch | None = None
+    planner: UserHarnessRolePatch | None = None
     default_crow: UserHarnessRolePatch | None = None
     notetaker: UserNotetakerPatch | None = None
     llm: UserLlmConfig | None = None
@@ -479,9 +480,9 @@ def _scrub_gated_harness(raw: dict[str, Any]) -> None:
 
     User config must never brick loading: rather than raise on a stale
     ``native_coding_crow`` reference, we silently drop the offending entry from
-    the ``collaborator`` / ``default_crow`` patch blocks.
+    the ``collaborator`` / ``planner`` / ``default_crow`` patch blocks.
     """
-    for block_name in ("collaborator", "default_crow"):
+    for block_name in ("collaborator", "planner", "default_crow"):
         block = raw.get(block_name)
         if not isinstance(block, dict):
             continue

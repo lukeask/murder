@@ -16,7 +16,7 @@
  *     Enter and is *reverted* to the persisted value on cancel/Esc or when the cursor leaves the
  *     theme section — so browsing themes never persists a half-pick or affects later navigation.
  *  3. **Pane gap** — a radio over `0`–`4` spaces of inter-pane border gap (live).
- *  4. **Harnesses** — collaborator (a radio over the 5 harnesses + a "(default)" row that clears the
+ *  4. **Harnesses** — planner (a radio over the 5 harnesses + a "(default)" row that clears the
  *     override) and crow (a checkbox pool over the 5 + a "reset to default" row; ≥1 must stay checked).
  *     The effective value is shown when no override is set.
  *  5. **LLM providers** — one row per provider (groq/cerebras first; openrouter/local opt-in)
@@ -94,7 +94,7 @@ const MODIFIERS: readonly Modifier[] = ['alt', 'ctrl', 'both'];
 const GAP_OPTIONS: readonly number[] = [0, 1, 2, 3, 4];
 
 /** The five valid harness ids, in display order (mirrors the Python `UserHarnessKind`; the backend
- * gated out `native_coding_crow`). Used by the collaborator radio + crow checkbox pool. */
+ * gated out `native_coding_crow`). Used by the planner radio + crow checkbox pool. */
 const HARNESSES: readonly string[] = ['claude_code', 'codex', 'cursor', 'pi', 'antigravity'];
 
 /** Startup-Rogue model choices per harness (a `''` "default" lets the adapter pick its own). A static
@@ -216,9 +216,11 @@ type Row =
   | { readonly kind: 'startupRogue'; readonly field: 'harness'; readonly value: string }
   | { readonly kind: 'startupRogue'; readonly field: 'model'; readonly value: string }
   | { readonly kind: 'startupRogue'; readonly field: 'effort'; readonly value: string }
-  // Harnesses — collaborator radio (`value: null` = the "(default)" reset row); crow checkbox pool
-  // (`value: null` = the "reset to default" row).
+  // Harnesses — planner radio (`value: null` = the "(default)" reset row); crow checkbox pool
+  // (`value: null` = the "reset to default" row). The dormant collaborator radio stays implemented
+  // below, but its rows are commented out in buildRows while collaborator is not user-facing.
   | { readonly kind: 'collaborator'; readonly value: string | null }
+  | { readonly kind: 'planner'; readonly value: string | null }
   | { readonly kind: 'crow'; readonly value: string | null }
   // LLM providers — `field` distinguishes the api_key row from local's base_url row.
   | {
@@ -278,10 +280,17 @@ function buildRows(
     }
   }
   // --- Harnesses ---
-  rows.push({ kind: 'header', label: 'Collaborator harness' });
-  rows.push({ kind: 'collaborator', value: null }); // the "(default)" reset row
+  // Collaborator is dormant. Keep these rows commented so the setting can be restored locally when
+  // collaborator returns to the active workflow.
+  // rows.push({ kind: 'header', label: 'Collaborator harness' });
+  // rows.push({ kind: 'collaborator', value: null }); // the "(default)" reset row
+  // for (const value of HARNESSES) {
+  //   rows.push({ kind: 'collaborator', value });
+  // }
+  rows.push({ kind: 'header', label: 'Planning agent harness' });
+  rows.push({ kind: 'planner', value: null }); // the "(default)" reset row
   for (const value of HARNESSES) {
-    rows.push({ kind: 'collaborator', value });
+    rows.push({ kind: 'planner', value });
   }
   rows.push({ kind: 'header', label: 'Crow harnesses (pick ≥1)' });
   rows.push({ kind: 'crow', value: null }); // the "reset to default" row
@@ -368,6 +377,10 @@ interface SettingsState {
   collaboratorHarness: string | null;
   /** The daemon's live effective collaborator harness (display fallback when no override). */
   effectiveCollaborator: string;
+  /** The draft planning-agent harness override (`null` = use the effective default). */
+  plannerHarness: string | null;
+  /** The daemon's live effective planning-agent harness (display fallback when no override). */
+  effectivePlanner: string;
   /** The draft crow-harness pool override (`null` = use the effective default); when set, ≥1 entry. */
   crowHarnesses: readonly string[] | null;
   /** The daemon's live effective crow-harness pool (display fallback when no override). */
@@ -438,6 +451,8 @@ export function settingsMode(
     readonly keyOverrides: Record<string, string>;
     readonly collaboratorHarness?: string | null;
     readonly effectiveCollaborator?: string;
+    readonly plannerHarness?: string | null;
+    readonly effectivePlanner?: string;
     readonly crowHarnesses?: readonly string[] | null;
     readonly effectiveCrow?: readonly string[];
     readonly llm?: LlmWire;
@@ -469,6 +484,8 @@ export function settingsMode(
     overrides: { ...current.keyOverrides },
     collaboratorHarness: current.collaboratorHarness ?? null,
     effectiveCollaborator: current.effectiveCollaborator ?? 'claude_code',
+    plannerHarness: current.plannerHarness ?? null,
+    effectivePlanner: current.effectivePlanner ?? 'claude_code',
     crowHarnesses: current.crowHarnesses ?? null,
     effectiveCrow: current.effectiveCrow ?? ['claude_code'],
     llm: initialLlm,
@@ -634,6 +651,14 @@ export function settingsMode(
   function selectCollaborator(value: string | null): void {
     s.collaboratorHarness = value;
     void actions.update({ collaborator_harness: value });
+    s.notice = null;
+    refresh();
+  }
+
+  /** Commit the draft planning-agent harness. `null` clears the override. */
+  function selectPlanner(value: string | null): void {
+    s.plannerHarness = value;
+    void actions.update({ planner_harness: value });
     s.notice = null;
     refresh();
   }
@@ -887,6 +912,9 @@ export function settingsMode(
         break;
       case 'collaborator':
         selectCollaborator(row.value);
+        break;
+      case 'planner':
+        selectPlanner(row.value);
         break;
       case 'crow':
         toggleCrow(row.value);
@@ -1272,6 +1300,8 @@ function rowKey(row: Row): string {
       return `srogue:${row.field}:${row.field === 'off' ? '' : row.value}`;
     case 'collaborator':
       return `collab:${row.value ?? 'default'}`;
+    case 'planner':
+      return `planner:${row.value ?? 'default'}`;
     case 'crow':
       return `crow:${row.value ?? 'default'}`;
     case 'provider':
@@ -1463,6 +1493,24 @@ function RowView({
     const mark = selected ? '(•) ' : '( ) ';
     const color = focused ? theme.warning : theme.text;
     const label = isDefaultRow ? `(default) ${s.effectiveCollaborator}` : (row.value ?? '');
+    return (
+      <Box flexShrink={0}>
+        <Text color={color} bold={focused}>
+          {cursor}
+          {mark}
+          {label}
+        </Text>
+      </Box>
+    );
+  }
+
+  if (row.kind === 'planner') {
+    // The "(default)" row (value null) selects the no-override state; the harness rows are a radio.
+    const isDefaultRow = row.value === null;
+    const selected = isDefaultRow ? s.plannerHarness === null : s.plannerHarness === row.value;
+    const mark = selected ? '(•) ' : '( ) ';
+    const color = focused ? theme.warning : theme.text;
+    const label = isDefaultRow ? `(default) ${s.effectivePlanner}` : (row.value ?? '');
     return (
       <Box flexShrink={0}>
         <Text color={color} bold={focused}>

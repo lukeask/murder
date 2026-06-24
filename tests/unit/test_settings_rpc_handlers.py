@@ -64,8 +64,10 @@ def test_settings_get_returns_defaults_when_no_config(repo_root: Path, xdg: Path
     assert s["vim_mode"] is False
     # No user override -> None; effective comes from the live daemon config (codex).
     assert s["collaborator_harness"] is None
+    assert s["planner_harness"] is None
     assert s["crow_harnesses"] is None
     assert s["effective_collaborator_harness"] == "codex"
+    assert s["effective_planner_harness"] == "claude_code"
     assert s["effective_crow_harnesses"] == ["codex"]
     assert s["llm"] == {}
     assert set(s["llm_env"]) == {"groq", "cerebras", "openrouter"}
@@ -302,6 +304,15 @@ def test_update_collaborator_harness_sets_and_mutates_live(repo_root: Path, xdg:
     assert load_user_config().collaborator.harness == "claude_code"
 
 
+def test_update_planner_harness_sets_and_mutates_live(repo_root: Path, xdg: Path) -> None:
+    host = _host(repo_root)
+    reply = _call(host, "settings.update", {"settings": {"planner_harness": "codex"}})
+    assert reply["settings"]["planner_harness"] == "codex"
+    assert reply["settings"]["effective_planner_harness"] == "codex"
+    assert host.config.planner.harness == "codex"
+    assert load_user_config().planner.harness == "codex"
+
+
 def test_update_crow_harnesses_rejects_invalid_harness(repo_root: Path, xdg: Path) -> None:
     host = _host(repo_root)
     with pytest.raises(ValueError, match="invalid crow harness"):
@@ -318,6 +329,12 @@ def test_update_collaborator_harness_rejects_invalid(repo_root: Path, xdg: Path)
     host = _host(repo_root)
     with pytest.raises(ValueError, match="invalid collaborator harness"):
         _call(host, "settings.update", {"settings": {"collaborator_harness": "bogus"}})
+
+
+def test_update_planner_harness_rejects_invalid(repo_root: Path, xdg: Path) -> None:
+    host = _host(repo_root)
+    with pytest.raises(ValueError, match="invalid planner harness"):
+        _call(host, "settings.update", {"settings": {"planner_harness": "bogus"}})
 
 
 # --- llm block RPC ---

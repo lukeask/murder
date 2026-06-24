@@ -60,6 +60,7 @@ def register(host: ServiceHost) -> None:
         collab_override = (
             cfg.collaborator.harness if cfg.collaborator is not None else None
         )
+        planner_override = cfg.planner.harness if cfg.planner is not None else None
         live_crow = host.config.default_crow
         effective_crow = (
             list(live_crow.harnesses) if live_crow.harnesses else [live_crow.harness]
@@ -75,8 +76,10 @@ def register(host: ServiceHost) -> None:
             "startup_rogue": _startup_rogue_payload(tui),
             # --- harness overrides + effective values ---
             "collaborator_harness": collab_override,
+            "planner_harness": planner_override,
             "crow_harnesses": _crow_harnesses_override(cfg),
             "effective_collaborator_harness": host.config.collaborator.harness,
+            "effective_planner_harness": host.config.planner.harness,
             "effective_crow_harnesses": effective_crow,
             # --- llm provider/tier/role config (api keys masked) ---
             "llm": _mask_llm(cfg.llm),
@@ -183,6 +186,21 @@ def register(host: ServiceHost) -> None:
                 live_apply.append(
                     lambda v=value: setattr(host.config.collaborator, "harness", v)
                 )
+
+        # --- planner_harness override ---
+        if "planner_harness" in partial:
+            value = partial["planner_harness"]
+            if value is None:
+                if cfg.planner is not None:
+                    cfg.planner.harness = None
+            else:
+                if value not in valid_harnesses:
+                    raise ValueError(f"invalid planner harness: {value!r}")
+                patch = cfg.planner or UserHarnessRolePatch()
+                patch.harness = value
+                cfg.planner = patch
+                # Apply live so newly spawned planning agents use it without a daemon restart.
+                live_apply.append(lambda v=value: setattr(host.config.planner, "harness", v))
 
         # --- crow_harnesses override (single -> harness; multi -> harnesses; null -> clear) ---
         if "crow_harnesses" in partial:
