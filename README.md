@@ -137,4 +137,12 @@ uv run pytest
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
+See [LICENSE](LICENSE), [BRANDING.md](BRANDING.md), and
+[LICENSES/NOTICE.md](LICENSES/NOTICE.md) for the full scoped terms.
+
+- Code and project documentation: MIT
+- JetBrains Mono font files, if vendored or bundled into package artifacts:
+  OFL-1.1
+- Project name, logo, wordmark, crow artwork, and related brand assets: owned
+  by Luke Askew and not licensed under MIT; truthful, non-misleading references
+  are permitted

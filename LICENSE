@@ -1,4 +1,12 @@
-MIT License
+Project Licensing Scope
+=======================
+
+Code and Project Documentation: MIT License
+-------------------------------------------
+
+The MIT License applies to this project's source code and project
+documentation, except for the reserved brand and artwork assets identified
+below.
 
 Copyright (c) 2026 Luke Askew
 
@@ -20,6 +28,40 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
+Reserved Brand and Artwork Assets
+----------------------------------
+
+The project's source code and documentation are licensed under the MIT License.
+
+The project name murder™, the project logo, wordmark artwork, crow artwork, and
+related brand assets are owned by Luke Askew and are not licensed under the MIT
+License.
+
+This includes the following SVG artwork files under docs/assets/:
+
+- docs/assets/crescent_crow.svg
+- docs/assets/murder_3crow_logo.svg
+- docs/assets/murder_3crow_wordmark.svg
+- docs/assets/murder_wordmark_whitetext_bborder.svg
+- docs/assets/orbit_crow.svg
+- docs/assets/respirator_crow.svg
+
+You may use the murder name and related brand assets for truthful,
+non-misleading references to the project, including identification, linking,
+discussion, commentary, critique, compatibility statements, integrations, and
+statements that software was made with or supports murder.
+
+You may not use the murder name, logo, wordmark, crow artwork, or related brand
+assets in any manner likely to imply source, sponsorship, affiliation, approval,
+or endorsement by the murder project or its maintainer where none exists.
+
+See BRANDING.md for the full trademark and branding policy.
+
+Third-Party Notices
+-------------------
+
+Third-party license notices are collected under LICENSES/.
+
 ---
 
 A VOLUNTARY REQUEST (NOT PART OF THE LICENSE ABOVE)
@@ -32,4 +74,6 @@ needed to exist.
 The Long-Term Future Fund (https://funds.effectivealtruism.org/funds/far-future)
 supports such work; any contribution toward these goals is appreciated.
 
-This is a request, not a requirement.
+This is a request, not a requirement. No right granted by the MIT License above
+is conditioned on making a donation, providing support, or taking any action in
+response to this request.
