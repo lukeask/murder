@@ -9,6 +9,8 @@ from murder.llm.harnesses.usage import (
     parse_claude_usage_pane,
     parse_codex_status_pane,
 )
+from murder.llm.harnesses.claude_code import ClaudeCodeAdapter
+from murder.llm.harnesses.codex import CodexAdapter
 
 
 def _load_pane_fixture(name: str) -> str:
@@ -41,6 +43,16 @@ def test_codex_5h_limit_parses_left_as_used() -> None:
     by_name = {w.name: w for w in status.windows}
     assert by_name["5h"].percent_used == 100.0
     assert by_name["weekly"].percent_used == 57.0
+
+
+def test_codex_status_parses_session_id_for_usage_probe_resume() -> None:
+    status = parse_codex_status_pane(_codex_session_limit_pane())
+    assert status.raw["session_id"] == "019e5c91-89a0-7ca1-9b8c-b407e537f7d6"
+
+
+def test_usage_probe_invalid_resume_fixtures_are_detected() -> None:
+    assert CodexAdapter().detects_invalid_resume(_load_pane_fixture("codex_resume_invalid.txt"))
+    assert ClaudeCodeAdapter().detects_invalid_resume(_load_pane_fixture("cc_resume_invalid.txt"))
 
 
 def test_codex_reset_clock_uses_local_timezone_not_utc() -> None:

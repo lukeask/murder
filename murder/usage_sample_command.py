@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import random
 import time
 from typing import TYPE_CHECKING
 from uuid import uuid4
@@ -25,12 +26,22 @@ log = logging.getLogger(__name__)
 USAGE_PROBE_TARGET = "usage-probe"
 HARNESS_USAGE_SAMPLE_KIND = "state.harness_usage.sample"
 USAGE_SAMPLE_POLL_INTERVAL_S = 600.0
+USAGE_SAMPLE_POLL_JITTER_FRACTION = 0.20
 USAGE_SAMPLE_DEFAULT_TIMEOUT_S = 20.0
 COMMAND_POLL_S = 0.05
 
 TRIGGER_USAGE_MANUAL_REFRESH = "manual_refresh"
 TRIGGER_USAGE_MANUAL_KEY = TRIGGER_USAGE_MANUAL_REFRESH
 TRIGGER_USAGE_SERVICE_INTERVAL = "interval_10m"
+
+
+def jittered_usage_poll_interval_s(
+    *,
+    base_s: float = USAGE_SAMPLE_POLL_INTERVAL_S,
+    jitter_fraction: float = USAGE_SAMPLE_POLL_JITTER_FRACTION,
+) -> float:
+    spread = max(0.0, base_s * jitter_fraction)
+    return random.uniform(max(0.0, base_s - spread), base_s + spread)
 
 
 def harness_usage_sample_payload(*, trigger: str) -> dict[str, object]:
@@ -90,10 +101,10 @@ async def run_service_usage_poll_loop(
     db: sqlite3.Connection,
     run_id: str,
 ) -> None:
-    """Sleep ``USAGE_SAMPLE_POLL_INTERVAL_S`` between usage samples until cancelled."""
+    """Sleep a jittered interval between usage samples until cancelled."""
 
     while True:
-        await asyncio.sleep(USAGE_SAMPLE_POLL_INTERVAL_S)
+        await asyncio.sleep(jittered_usage_poll_interval_s())
         try:
             await submit_harness_usage_sample_inprocess(
                 broker,

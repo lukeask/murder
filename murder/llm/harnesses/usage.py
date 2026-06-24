@@ -212,6 +212,10 @@ _CODEX_LIMIT_RE = re.compile(
     r"(?:[^()\n]*?\((?:resets?\s+)?(?P<reset>[^)\n]+?)\))?",
     re.IGNORECASE,
 )
+_CODEX_SESSION_RE = re.compile(
+    r"\bSession:\s*(?P<session>[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\b",
+    re.IGNORECASE,
+)
 _CLOCK_RESET_RE = re.compile(
     r"\b(?P<h>\d{1,2}):(?P<m>\d{2})(?:\s*(?P<ampm>am|pm))?"
     r"(?:\s+on\s+(?:(?P<day>\d{1,2})\s+(?P<mon>[A-Za-z]{3,})|(?P<mon2>[A-Za-z]{3,})\s+(?P<day2>\d{1,2})))?",
@@ -287,6 +291,8 @@ def parse_codex_status_pane(
     now: datetime | None = None,
 ) -> HarnessUsageStatus:
     clean = strip_ansi(pane_text)
+    session_matches = list(_CODEX_SESSION_RE.finditer(clean))
+    session_id = session_matches[-1].group("session") if session_matches else None
     # Usage probe sessions keep /status scrollback; take the latest row per window.
     windows_by_name: dict[str, HarnessUsageWindow] = {}
     window_order: list[str] = []
@@ -323,6 +329,7 @@ def parse_codex_status_pane(
         source="slash:/status",
         fetched_at=fetched_at or utc_now_iso(),
         windows=windows,
+        raw={"session_id": session_id} if session_id else {},
     )
 
 

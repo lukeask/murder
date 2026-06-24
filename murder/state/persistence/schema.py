@@ -384,6 +384,12 @@ CREATE TABLE IF NOT EXISTS harness_usage_snapshots (
 CREATE INDEX IF NOT EXISTS idx_harness_usage_snapshots_harness
     ON harness_usage_snapshots(harness, fetched_at);
 
+CREATE TABLE IF NOT EXISTS harness_usage_probe_sessions (
+    harness    TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS schedule_queue (
     id                    INTEGER PRIMARY KEY AUTOINCREMENT,
     ticket_id             TEXT REFERENCES tickets(id) ON DELETE SET NULL,

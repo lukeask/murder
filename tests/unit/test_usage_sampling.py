@@ -9,6 +9,8 @@ from murder.llm.harnesses.base import HarnessAdapter
 from murder.llm.harnesses.models import HarnessStartSpec, HarnessUsageStatus, HarnessUsageWindow
 from murder.llm.harnesses.results import fail_result, ok_result
 from murder.llm.harnesses.usage_sampling import UsageSamplingContext, sample_harness_usages
+from murder.state.persistence.schema import init_db
+from murder.state.persistence.usage import get_usage_probe_session_id, set_usage_probe_session_id
 
 
 class _StubUsageAdapter(HarnessAdapter):
@@ -20,12 +22,16 @@ class _StubUsageAdapter(HarnessAdapter):
             source="slash:/status",
             fetched_at="2026-06-04T00:00:00+00:00",
             windows=[HarnessUsageWindow(name="5h", percent_used=25.0)],
+            raw={"session_id": "fresh-session-id"},
         )
     )
 
     def startup_cmd(self, cwd: Path) -> list[str]:
         del cwd
-        return ["stub-harness"]
+        cmd = ["stub-harness"]
+        if self.resume_session_id:
+            cmd += ["--resume", self.resume_session_id]
+        return cmd
 
     def is_ready(self, pane_text: str) -> bool:
         del pane_text
@@ -62,6 +68,13 @@ def _config() -> Config:
     )
 
 
+def _db() -> sqlite3.Connection:
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    init_db(conn)
+    return conn
+
+
 async def _capture_pane(session: str, *, lines: int = 120) -> str:
     del session, lines
     return "idle"
@@ -91,7 +104,8 @@ def test_sample_harness_usages_starts_fresh_session_and_cleans_up(monkeypatch, t
         lambda db, status: inserted.append(status),
     )
 
-    ctx = UsageSamplingContext(config=_config(), repo_root=tmp_path, db=sqlite3.connect(":memory:"))
+    db = _db()
+    ctx = UsageSamplingContext(config=_config(), repo_root=tmp_path, db=db)
     stored, failures = asyncio.run(sample_harness_usages(ctx))
 
     assert stored == 1
@@ -100,6 +114,39 @@ def test_sample_harness_usages_starts_fresh_session_and_cleans_up(monkeypatch, t
     assert creates[0][2] == ["stub-harness"]
     assert len(inserted) == 1
     assert kills == [creates[0][0], creates[0][0]]
+    assert get_usage_probe_session_id(db, "codex") == "fresh-session-id"
+
+
+def test_sample_harness_usages_resumes_cached_session(monkeypatch, tmp_path) -> None:
+    creates: list[tuple[str, Path, list[str]]] = []
+
+    async def _kill_session(name: str) -> None:
+        del name
+
+    async def _create_session(name: str, cwd: Path, cmd: list[str]) -> None:
+        creates.append((name, cwd, cmd))
+
+    monkeypatch.setattr("murder.llm.harnesses.usage_sampling.REGISTRY", {"codex": _StubUsageAdapter})
+    monkeypatch.setattr(
+        "murder.llm.harnesses.usage_sampling.get_harness",
+        lambda kind, startup_model=None: _StubUsageAdapter(startup_model=startup_model),
+    )
+    monkeypatch.setattr("murder.llm.harnesses.usage_sampling.tmux.kill_session", _kill_session)
+    monkeypatch.setattr("murder.llm.harnesses.usage_sampling.tmux.create_session", _create_session)
+    monkeypatch.setattr("murder.llm.harnesses.usage_sampling.tmux.capture_pane", _capture_pane)
+    monkeypatch.setattr(
+        "murder.llm.harnesses.usage_sampling.insert_harness_usage_snapshot",
+        lambda db, status: None,
+    )
+
+    db = _db()
+    set_usage_probe_session_id(db, "codex", "cached-session-id")
+    ctx = UsageSamplingContext(config=_config(), repo_root=tmp_path, db=db)
+    stored, failures = asyncio.run(sample_harness_usages(ctx))
+
+    assert stored == 1
+    assert failures == 0
+    assert creates[0][2] == ["stub-harness", "--resume", "cached-session-id"]
 
 
 def test_sample_harness_usages_cleans_up_session_on_parse_failure(monkeypatch, tmp_path) -> None:
@@ -125,10 +172,67 @@ def test_sample_harness_usages_cleans_up_session_on_parse_failure(monkeypatch, t
     monkeypatch.setattr("murder.llm.harnesses.usage_sampling.tmux.create_session", _create_session)
     monkeypatch.setattr("murder.llm.harnesses.usage_sampling.tmux.capture_pane", _capture_pane)
 
-    ctx = UsageSamplingContext(config=_config(), repo_root=tmp_path, db=sqlite3.connect(":memory:"))
+    ctx = UsageSamplingContext(config=_config(), repo_root=tmp_path, db=_db())
     stored, failures = asyncio.run(sample_harness_usages(ctx))
 
     assert stored == 0
     assert failures == 1
     assert len(creates) == 1
     assert kills == [creates[0], creates[0]]
+
+
+def test_sample_harness_usages_clears_invalid_cached_resume_and_retries(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    from murder.llm.harnesses import usage_sampling
+
+    calls: list[str | None] = []
+    inserted: list[HarnessUsageStatus] = []
+
+    class _Adapter(_StubUsageAdapter):
+        def detects_invalid_resume(self, pane_text: str) -> bool:
+            return "No saved session found" in pane_text
+
+    class _FakeSession:
+        session = "usage-session"
+        adapter = _Adapter()
+
+        async def collect_usage_status(self):
+            return _StubUsageAdapter._result
+
+    async def _start(ctx, kind, startup_model, *, resume_session_id=None):
+        del ctx, kind, startup_model
+        calls.append(resume_session_id)
+        return None if resume_session_id else _FakeSession()
+
+    async def _capture_pane_invalid(session: str, *, lines: int = 120) -> str:
+        del session, lines
+        return "ERROR: No saved session found with ID cached-session-id."
+
+    async def _kill_session(name: str) -> None:
+        del name
+
+    monkeypatch.setattr("murder.llm.harnesses.usage_sampling.REGISTRY", {"codex": _Adapter})
+    monkeypatch.setattr(
+        "murder.llm.harnesses.usage_sampling.get_harness",
+        lambda kind, startup_model=None: _Adapter(startup_model=startup_model),
+    )
+    monkeypatch.setattr(usage_sampling, "_start_tmux_slash_session", _start)
+    monkeypatch.setattr("murder.llm.harnesses.usage_sampling.tmux.capture_pane", _capture_pane_invalid)
+    monkeypatch.setattr("murder.llm.harnesses.usage_sampling.tmux.kill_session", _kill_session)
+    monkeypatch.setattr(
+        "murder.llm.harnesses.usage_sampling.insert_harness_usage_snapshot",
+        lambda db, status: inserted.append(status),
+    )
+
+    db = _db()
+    set_usage_probe_session_id(db, "codex", "cached-session-id")
+    ctx = UsageSamplingContext(config=_config(), repo_root=tmp_path, db=db)
+    stored, failures = asyncio.run(sample_harness_usages(ctx))
+
+    assert calls == ["cached-session-id", None]
+    assert stored == 1
+    assert failures == 0
+    assert len(inserted) == 1
+    assert get_usage_probe_session_id(db, "codex") == "fresh-session-id"

@@ -59,6 +59,7 @@ _COMPLETION_RE = re.compile(r"^\s*─\s*Worked\s+for\s+.+?\s*─\s*$", re.MULTIL
 # it. (A genuine spinner line always carries it; assistant prose never does.)
 _BUSY_RE = re.compile(r"esc to interrupt", re.IGNORECASE)
 _LOGIN_RE = re.compile(r"\b(login required|not logged in|codex login)\b", re.IGNORECASE)
+_INVALID_RESUME_RE = re.compile(r"No saved session found with ID", re.IGNORECASE)
 # codex's blocking "update available" menu (full-screen on launch). Its default
 # option renders as "› 1. Update now (runs `npm install -g @openai/codex`)",
 # whose leading "›" otherwise collides with the idle-prompt glyph and whose
@@ -219,18 +220,20 @@ class CodexAdapter(HarnessAdapter):
 
     def startup_cmd(self, cwd: Path) -> list[str]:
         del cwd
-        cmd = [
-            "codex",
+        base_flags = [
             "--no-alt-screen",
             "--sandbox",
             "workspace-write",
             "--ask-for-approval",
             "never",
         ]
+        cmd = ["codex", "resume", *base_flags] if self.resume_session_id else ["codex", *base_flags]
         if self.startup_model:
             cmd.extend(["--model", self.startup_model])
         for path in self.additional_workspace_dirs:
             cmd.extend(["--add-dir", str(path)])
+        if self.resume_session_id:
+            cmd.append(self.resume_session_id)
         return cmd
 
     def is_ready(self, pane_text: str) -> bool:
@@ -262,6 +265,9 @@ class CodexAdapter(HarnessAdapter):
 
     def is_busy(self, pane_text: str) -> bool:
         return bool(_BUSY_RE.search(_tail(strip_ansi(pane_text))))
+
+    def detects_invalid_resume(self, pane_text: str) -> bool:
+        return bool(_INVALID_RESUME_RE.search(strip_ansi(pane_text)))
 
     async def initialize_defaults(self, session, spec):  # type: ignore[override]
         del spec

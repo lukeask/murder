@@ -203,9 +203,16 @@ class ClaudeCodeAdapter(HarnessAdapter):
     _RESUME_RE: ClassVar[re.Pattern[str]] = re.compile(
         r"claude\s+(?:--resume|-r)\s+(\S+)", re.IGNORECASE
     )
+    _INVALID_RESUME_RE: ClassVar[re.Pattern[str]] = re.compile(
+        r"No conversation found with session ID|No sessions match",
+        re.IGNORECASE,
+    )
 
     def graceful_exit_command(self) -> str | None:
         return "/exit"
+
+    def detects_invalid_resume(self, pane_text: str) -> bool:
+        return bool(self._INVALID_RESUME_RE.search(strip_ansi(pane_text)))
 
     def extract_resume_session_id(self, pane_text: str) -> str | None:
         clean = strip_ansi(pane_text)

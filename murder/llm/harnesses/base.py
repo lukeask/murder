@@ -477,6 +477,11 @@ class HarnessAdapter(ABC):
         """Return the command to send for a graceful exit, or None if unsupported."""
         return None
 
+    def detects_invalid_resume(self, pane_text: str) -> bool:
+        """Return True when startup output shows a cached resume id is invalid."""
+        del pane_text
+        return False
+
     def extract_resume_session_id(self, pane_text: str) -> str | None:
         """Parse the harness's 'to resume this session' output and return the session id."""
         del pane_text
