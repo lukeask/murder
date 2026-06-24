@@ -45,6 +45,8 @@ import type { AppStore } from '../store.js';
 export interface ConversationBlock {
   /** Segment discriminant (`payload.type`: 'user', 'assistant', 'tool_call', 'plan_update', …). */
   readonly type: string;
+  /** Storage-row discriminant (`kind`: 'assistant_intermediate', 'assistant_final', …), when known. */
+  readonly kind?: string | null;
   /** Row id (stringified) — used by `block-updated` to replace a trailing block in place. */
   readonly id?: string | null;
   /** The segment dict (`payload`) — selectors read content fields (text/title/options/…) off it. */
@@ -63,6 +65,8 @@ export function parseBlock(raw: Record<string, unknown>): ConversationBlock {
   // biome-ignore lint/complexity/useLiteralKeys: noPropertyAccessFromIndexSignature (tsconfig strict) requires bracket notation on index-signature types; these are runtime field reads on an opaque wire record.
   const idVal = raw['id'];
   // biome-ignore lint/complexity/useLiteralKeys: same — opaque wire record requires bracket access
+  const kindVal = raw['kind'];
+  // biome-ignore lint/complexity/useLiteralKeys: same — opaque wire record requires bracket access
   const payloadVal = raw['payload'];
   const payload =
     payloadVal !== null && typeof payloadVal === 'object' && !Array.isArray(payloadVal)
@@ -75,6 +79,7 @@ export function parseBlock(raw: Record<string, unknown>): ConversationBlock {
   const id = typeof idVal === 'number' ? String(idVal) : typeof idVal === 'string' ? idVal : null;
   return {
     type: typeof typeVal === 'string' ? typeVal : 'unknown',
+    kind: typeof kindVal === 'string' ? kindVal : null,
     id,
     raw: payload,
   };

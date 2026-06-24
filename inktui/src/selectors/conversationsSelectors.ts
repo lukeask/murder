@@ -53,6 +53,8 @@ export type TurnSpeaker =
 export interface ChatTurn {
   /** Which agent/role spoke (for coloring). */
   readonly speaker: TurnSpeaker;
+  /** Optional subtype for visual treatment without changing the speaker contract. */
+  readonly tone?: 'summary';
   /** Display text (may be multiline). */
   readonly text: string;
   /** The originating block's id, if any (for keying in React lists). */
@@ -136,10 +138,11 @@ function formatBlock(block: ConversationBlock): ChatTurn | null {
     }
     case CONDENSED_SUMMARY_TYPE: {
       // Synthetic Condensed-view block (TUIchat-4): the rolling chunk summary that stands in for a run
-      // of intermediate blocks. Rendered as assistant-speaker prose through the Phase-2 engine.
+      // of intermediate blocks. Rendered as assistant-speaker prose through the Phase-2 engine, with a
+      // distinct tone so the TUI can color summaries differently from the verbatim final answer.
       const text = str(raw, 'text').trim();
       if (!text) return null;
-      return { speaker: 'assistant', text, blockId };
+      return { speaker: 'assistant', tone: 'summary', text, blockId };
     }
     case 'tool_call': {
       const title = str(raw, 'title').trim();
@@ -275,10 +278,14 @@ export function condenseBlocks(
   // Map every covered block id → the summary that owns it (string keys to match ConversationBlock.id).
   // A block id appearing in two summaries (shouldn't happen — attribution is a partition) resolves to
   // the LAST writer; harmless since we anchor on first-seen position regardless.
+  const protectedTailIds = trailingFinalAssistantRunIds(blocks);
   const summaryByBlockId = new Map<string, ChunkSummary>();
   for (const s of summaries) {
     for (const id of s.blockIds) {
-      summaryByBlockId.set(String(id), s);
+      const key = String(id);
+      if (!protectedTailIds.has(key)) {
+        summaryByBlockId.set(key, s);
+      }
     }
   }
   if (summaryByBlockId.size === 0) return blocks;
@@ -305,6 +312,52 @@ export function condenseBlocks(
     }
   }
   return out;
+}
+
+function blockKind(block: ConversationBlock): string {
+  if (typeof block.kind === 'string' && block.kind !== '') {
+    return block.kind;
+  }
+  const phase = str(block.raw, 'phase').trim();
+  if (block.type === 'assistant' && phase) {
+    return `assistant_${phase}`;
+  }
+  return block.type;
+}
+
+function isAssistantBlock(block: ConversationBlock): boolean {
+  return block.type === 'assistant' || blockKind(block).startsWith('assistant_');
+}
+
+function isFinalAssistantBlock(block: ConversationBlock): boolean {
+  return blockKind(block) === 'assistant_final';
+}
+
+/**
+ * Return ids for the trailing run of adjacent assistant blocks when that run contains final-answer
+ * content. Condensed summaries must never replace only part of that run: parsers may split one final
+ * agent message across multiple adjacent assistant rows at blank-line gaps, and the TUI's visual
+ * coalescing treats that run as one message.
+ */
+function trailingFinalAssistantRunIds(blocks: readonly ConversationBlock[]): ReadonlySet<string> {
+  const run: ConversationBlock[] = [];
+  for (let i = blocks.length - 1; i >= 0; i--) {
+    const block = blocks[i];
+    if (block === undefined || !isAssistantBlock(block)) {
+      break;
+    }
+    run.push(block);
+  }
+  if (!run.some(isFinalAssistantBlock)) {
+    return new Set<string>();
+  }
+  const ids = new Set<string>();
+  for (const block of run) {
+    if (block.id !== null && block.id !== undefined) {
+      ids.add(block.id);
+    }
+  }
+  return ids;
 }
 
 // ---------------------------------------------------------------------------

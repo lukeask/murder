@@ -168,6 +168,41 @@ describe('flattenTurns', () => {
     ]);
   });
 
+  it('coalesces consecutive assistant turns into one visual message run', () => {
+    const turns: ChatTurn[] = [
+      { blockId: 'b1', speaker: 'assistant', text: 'first paragraph' },
+      { blockId: 'b2', speaker: 'assistant', text: 'second paragraph' },
+      { blockId: 'b3', speaker: 'assistant', text: 'third\n\n- item' },
+    ];
+    expect(flattenTurns(turns)).toEqual([
+      { speaker: 'assistant', kind: 'prose', text: 'first paragraph', firstOfTurn: true },
+      { speaker: 'assistant', kind: 'blank', text: '', firstOfTurn: false },
+      { speaker: 'assistant', kind: 'prose', text: 'second paragraph', firstOfTurn: false },
+      { speaker: 'assistant', kind: 'blank', text: '', firstOfTurn: false },
+      { speaker: 'assistant', kind: 'prose', text: 'third', firstOfTurn: false },
+      { speaker: 'assistant', kind: 'blank', text: '', firstOfTurn: false },
+      { speaker: 'assistant', kind: 'list', text: '- item', firstOfTurn: false },
+    ]);
+  });
+
+  it('does not coalesce a condensed summary into the following final assistant turn', () => {
+    const turns: ChatTurn[] = [
+      { blockId: 'summary:1:0', speaker: 'assistant', tone: 'summary', text: 'condensed work' },
+      { blockId: 'b-final', speaker: 'assistant', text: 'final answer' },
+    ];
+    expect(flattenTurns(turns)).toEqual([
+      {
+        speaker: 'assistant',
+        tone: 'summary',
+        kind: 'prose',
+        text: 'condensed work',
+        firstOfTurn: true,
+      },
+      { speaker: 'assistant', kind: 'blank', text: '', firstOfTurn: false },
+      { speaker: 'assistant', kind: 'prose', text: 'final answer', firstOfTurn: true },
+    ]);
+  });
+
   it('skips an empty turn entirely (no stray separator)', () => {
     const turns: ChatTurn[] = [
       { blockId: 'b1', speaker: 'assistant', text: 'kept' },

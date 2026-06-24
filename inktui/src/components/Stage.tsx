@@ -188,6 +188,7 @@ export function formatTurnLines(turn: ChatTurn): readonly ChatLine[] {
     block.lines.forEach((text, i) => {
       out.push({
         speaker: turn.speaker,
+        ...(turn.tone === undefined ? {} : { tone: turn.tone }),
         kind: block.kind,
         text,
         firstOfTurn: out.length === 0 || (i === 0 && out[out.length - 1]?.kind === 'blank'),
@@ -218,12 +219,22 @@ function speakerColor(speaker: TurnSpeaker, theme: ReturnType<typeof useTheme>):
   }
 }
 
+/** Summary turns are still assistant-speaker content, but need a distinct visual color from the
+ * verbatim final answer shown after them in Condensed view. */
+function chatLineColor(line: ChatLine, theme: ReturnType<typeof useTheme>): string {
+  if (line.tone === 'summary') {
+    return theme.accent;
+  }
+  return speakerColor(line.speaker, theme);
+}
+
 /** One physical line of chat history: a single text row carrying its source speaker (for the gutter
  * color) and its block kind (for styling — prose wraps, code/pre truncate as no-wrap islands, list
  * keeps its bullet structure). The chat pane windows over THESE, not over whole turns — see
  * {@link flattenTurns}. `blank` is a rhythm separator (between blocks and between turns). */
 interface ChatLine {
   readonly speaker: TurnSpeaker;
+  readonly tone?: ChatTurn['tone'];
   /** The block kind this line belongs to, or `blank` for a rhythm separator line. */
   readonly kind: BlockKind | 'blank';
   readonly text: string;
@@ -235,7 +246,10 @@ interface ChatLine {
 /**
  * Flatten ordered turns into the physical lines they render as — each turn classified into styled
  * blocks by {@link formatTurnLines}, with one BLANK separator line between consecutive turns (so
- * messages read as visually distinct blocks, not a solid run of rows).
+ * messages read as visually distinct blocks, not a solid run of rows). Consecutive assistant turns
+ * are a visual exception: parsers can split one agent reply at blank-line gaps, so a run of adjacent
+ * assistant JSON blocks is painted as one visual message. The gap stays, but only the first content
+ * row in the run gets the solid head glyph; later assistant rows use continuation bars.
  *
  * This is the fix for dead scrolling on long chats: the pane must window by *line* (the unit it draws
  * and the unit `measureElement` would count), exactly as {@link ./DocPane.js StageDocPane} windows the
@@ -254,15 +268,23 @@ interface ChatLine {
  */
 export function flattenTurns(turns: readonly ChatTurn[]): readonly ChatLine[] {
   const lines: ChatLine[] = [];
+  let previousRenderedTurn: ChatTurn | null = null;
   for (const turn of turns) {
     const turnLines = formatTurnLines(turn);
     if (turnLines.length === 0) continue;
+    const continuesAssistantRun =
+      previousRenderedTurn?.speaker === 'assistant' &&
+      turn.speaker === 'assistant' &&
+      previousRenderedTurn.tone === turn.tone;
     if (lines.length > 0) {
       lines.push({ speaker: turn.speaker, kind: 'blank', text: '', firstOfTurn: false });
     }
     for (const line of turnLines) {
-      lines.push(line);
+      lines.push(
+        continuesAssistantRun && line.kind !== 'blank' ? { ...line, firstOfTurn: false } : line,
+      );
     }
+    previousRenderedTurn = turn;
   }
   return lines;
 }
@@ -295,7 +317,7 @@ function ChatHistoryLine({
   readonly line: ChatLine;
   readonly theme: ReturnType<typeof useTheme>;
 }): JSX.Element {
-  const gutterColor = speakerColor(line.speaker, theme);
+  const gutterColor = chatLineColor(line, theme);
   // A no-wrap island for verbatim regions; default wrapping for prose/list (the single wrap site).
   const verbatim = line.kind === 'code' || line.kind === 'pre';
   const content =

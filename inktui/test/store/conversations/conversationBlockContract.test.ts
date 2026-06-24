@@ -91,6 +91,7 @@ describe('conversation.block cross-language shape contract (H3)', () => {
     // The replaced block carries the grown text (proves numeric-id replace-by-id worked).
     const grown = blocks?.find((b) => b.id === '2');
     expect(grown?.raw['text']).toBe('Sure, starting — reading files');
+    expect(grown?.kind).toBe('assistant_intermediate');
     dispose();
   });
 

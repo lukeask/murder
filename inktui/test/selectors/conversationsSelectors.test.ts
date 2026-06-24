@@ -14,9 +14,9 @@ import {
   condenseBlocks,
   isChatPaneOpen,
   selectActiveAgentId,
+  selectAdjacentTargets,
   selectConversationTurns,
   selectConversationView,
-  selectAdjacentTargets,
   selectCycledTarget,
   selectCycleTargets,
   selectFavoritesChatPanes,
@@ -480,6 +480,7 @@ describe('condenseBlocks (TUIchat-4 attribution)', () => {
     expect(out).toHaveLength(1);
     expect(out?.[0]?.type).toBe('__condensed_summary__');
     expect(out?.[0]?.raw['text']).toBe('Investigated foo.ts');
+    expect(selectConversationTurns(out)[0]?.tone).toBe('summary');
   });
 
   it('attribution is by block id, not position — only listed ids are replaced', () => {
@@ -518,6 +519,28 @@ describe('condenseBlocks (TUIchat-4 attribution)', () => {
     const out = condenseBlocks(blocks, [summary(10, 0, 'did some work', [1])]);
     const turns = selectConversationTurns(out);
     expect(turns.map((t) => t.text)).toEqual(['did some work', 'THE FINAL ANSWER']);
+  });
+
+  it('preserves the entire trailing final assistant run even if a summary references part of it', () => {
+    const blocks: ConversationBlock[] = [
+      block('assistant', { text: 'intermediate work' }, '1'),
+      block('tool_call', { title: 'Edit x' }, '2'),
+      {
+        ...block('assistant', { phase: 'final', text: 'FINAL SECTION A' }, '3'),
+        kind: 'assistant_final',
+      },
+      {
+        ...block('assistant', { phase: 'final', text: 'FINAL SECTION B' }, '4'),
+        kind: 'assistant_final',
+      },
+    ];
+    const out = condenseBlocks(blocks, [summary(10, 0, 'did some work', [1, 2, 3])]);
+    const turns = selectConversationTurns(out);
+    expect(turns.map((t) => t.text)).toEqual([
+      'did some work',
+      'FINAL SECTION A',
+      'FINAL SECTION B',
+    ]);
   });
 
   it('falls back to verbose-like (returns blocks unchanged) when there are no summaries', () => {
