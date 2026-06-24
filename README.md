@@ -10,7 +10,11 @@ Multi-agent AI development harness for running Claude Code, Codex, Cursor, and o
 
 Wide terminal layout with notes, reports, active agent panes, usage, git history, and the crows roster visible at once.
 
-![murder TUI stacked layout with notes, reports, active agent pane, and chat input](docs/assets/tui-stacked-layout.png)
+<img
+  src="docs/assets/tui-stacked-layout.png"
+  alt="murder TUI stacked layout with notes, reports, active agent pane, and chat input"
+  width="450"
+/>
 
 Stacked terminal layout for narrower windows.
 
