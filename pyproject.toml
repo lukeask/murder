@@ -1,5 +1,5 @@
 [build-system]
-requires = ["hatchling>=1.18"]
+requires = ["hatchling>=1.27"]
 build-backend = "hatchling.build"
 
 [project]
@@ -8,8 +8,9 @@ version = "0.0.1"
 description = "Agentic dev harness — a murder of crows supervising a monkey."
 readme = "README.md"
 requires-python = ">=3.10"
-license = "MIT"
-authors = [{ name = "Luke Ask", email = "lukeask@gmail.com" }]
+license = "MIT AND OFL-1.1 AND LicenseRef-murder-brand-assets"
+license-files = ["LICENSE", "BRANDING.md", "LICENSES/*"]
+authors = [{ name = "Luke Askew", email = "root@askew.sh" }]
 dependencies = [
     "pydantic>=2.6,<3.0",
     "typer>=0.12,<1.0",
@@ -46,8 +47,9 @@ include = [
     "murder/resources/templates/*",
 ]
 
-# Bundles the Ink TUI into the wheel (esbuild → murder/_inktui/index.js). Picks up hatch_build.py.
+# Bundles the Ink TUI into the wheel (esbuild → murder/_inktui/index.js).
 [tool.hatch.build.hooks.custom]
+path = "tools/packaging/hatch_build.py"
 
 # The sdist must carry the bundle's *inputs* (inktui source + lockfile + stubs + the hook), because
 # `python -m build` builds the wheel from the sdist — the hook runs `npm run bundle` in `inktui/`
@@ -70,9 +72,13 @@ include = [
     "webui/package-lock.json",
     "webui/vite.config.ts",
     "webui/tsconfig.json",
-    "hatch_build.py",
+    "webui/tsconfig.app.json",
+    "tools/packaging/hatch_build.py",
     "pyproject.toml",
     "README.md",
+    "BRANDING.md",
+    "LICENSE",
+    "LICENSES/",
 ]
 exclude = [
     "inktui/node_modules/",
