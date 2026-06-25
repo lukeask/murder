@@ -142,6 +142,31 @@ def register(host: ServiceHost) -> None:
             raise ValueError("tui.save_spawn_favorites requires favorites list")
         return {"ok": True, "favorites": save_spawn_favorites(favorites)}
 
+    def _tui_load_themes(_body: dict[str, Any]) -> dict[str, Any]:
+        from murder.user_config import load_themes
+
+        return {"ok": True, "themes": load_themes()}
+
+    def _tui_save_themes(body: dict[str, Any]) -> dict[str, Any]:
+        from murder.user_config import save_themes
+
+        themes = body.get("themes")
+        if not isinstance(themes, list):
+            raise ValueError("tui.save_themes requires themes list")
+        return {"ok": True, "themes": save_themes(themes)}
+
+    def _tui_import_theme(body: dict[str, Any]) -> dict[str, Any]:
+        from murder.user_config import import_theme_from_json
+
+        json_str = body.get("json")
+        if not isinstance(json_str, str) or not json_str.strip():
+            raise ValueError("tui.import_theme requires non-empty json string")
+        theme_id = body.get("id")
+        if theme_id is not None and not isinstance(theme_id, str):
+            raise ValueError("tui.import_theme id must be a string when provided")
+        themes, new_id = import_theme_from_json(json_str, theme_id=theme_id)
+        return {"ok": True, "themes": themes, "id": new_id}
+
     host.register_rpc_handler("tui.load_favorites", _tui_load_favorites)
     host.register_rpc_handler("tui.save_favorites", _tui_save_favorites)
     host.register_rpc_handler("tui.load_templates", _tui_load_templates)
@@ -151,3 +176,6 @@ def register(host: ServiceHost) -> None:
     host.register_rpc_handler("tui.run_workflow", _tui_run_workflow)
     host.register_rpc_handler("tui.load_spawn_favorites", _tui_load_spawn_favorites)
     host.register_rpc_handler("tui.save_spawn_favorites", _tui_save_spawn_favorites)
+    host.register_rpc_handler("tui.load_themes", _tui_load_themes)
+    host.register_rpc_handler("tui.save_themes", _tui_save_themes)
+    host.register_rpc_handler("tui.import_theme", _tui_import_theme)

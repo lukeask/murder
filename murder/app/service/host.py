@@ -129,8 +129,9 @@ class ServiceHost:
         register_all(self)
 
     async def start(self) -> None:
-        from murder.user_config import load_user_config
+        from murder.user_config import ensure_user_themes, load_user_config
 
+        ensure_user_themes()
         try:
             user_cfg = load_user_config()
         except Exception:

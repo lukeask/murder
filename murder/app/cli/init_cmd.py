@@ -89,6 +89,10 @@ def _scaffold_project(repo: Path, *, force: bool = False) -> Path:
     conn = get_db(db_path(repo))
     init_db(conn)
     conn.close()
+
+    from murder.user_config import ensure_user_themes
+
+    ensure_user_themes()
     return ad
 
 
