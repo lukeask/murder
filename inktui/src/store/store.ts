@@ -114,6 +114,12 @@ import {
   initialTemplatesState,
   type TemplatesState,
 } from './templates/templatesSlice.js';
+import { createThemesActions, type ThemesActions } from './themes/themesActions.js';
+import {
+  createThemesSlice,
+  initialThemesState,
+  type ThemesState,
+} from './themes/themesSlice.js';
 import {
   createTicketDetailActions,
   type TicketDetailActions,
@@ -167,6 +173,7 @@ export interface AppActions {
   conversations: ConversationsActions;
   favorites: FavoritesActions;
   templates: TemplatesActions;
+  themes: ThemesActions;
   workflows: WorkflowsActions;
   docView: DocViewActions;
   settings: SettingsActions;
@@ -190,6 +197,7 @@ export interface AppStore {
   conversations: ConversationsState;
   favorites: FavoritesState;
   templates: TemplatesState;
+  themes: ThemesState;
   workflows: WorkflowsState;
   docView: DocViewState;
   settings: SettingsState;
@@ -236,6 +244,7 @@ export function createAppStore(bus: BusClient): {
     ...createConversationsSlice(...a),
     ...createFavoritesSlice(...a),
     ...createTemplatesSlice(...a),
+    ...createThemesSlice(...a),
     ...createWorkflowsSlice(...a),
     ...createDocViewSlice(...a),
     ...createSettingsSlice(...a),
@@ -257,6 +266,7 @@ export function createAppStore(bus: BusClient): {
     conversations: createConversationsActions(bus, store),
     favorites: createFavoritesActions(bus, store),
     templates: createTemplatesActions(bus, store),
+    themes: createThemesActions(bus, store),
     workflows: createWorkflowsActions(bus, store),
     docView: createDocViewActions(bus, store),
     settings: createSettingsActions(bus, store),
@@ -425,6 +435,7 @@ export const initialAppState: Pick<
   | 'conversations'
   | 'favorites'
   | 'templates'
+  | 'themes'
   | 'workflows'
   | 'docView'
   | 'settings'
@@ -441,6 +452,7 @@ export const initialAppState: Pick<
   conversations: initialConversationsState,
   favorites: initialFavoritesState,
   templates: initialTemplatesState,
+  themes: initialThemesState,
   workflows: initialWorkflowsState,
   docView: initialDocViewState,
   settings: initialSettingsState,

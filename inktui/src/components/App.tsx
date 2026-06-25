@@ -99,7 +99,7 @@ import { noteCaptureStore } from '../store/notes/noteCaptureStore.js';
 import type { SettingsModifier } from '../store/settings/settingsSlice.js';
 import type { AppStoreApi } from '../store/store.js';
 import { toastStore } from '../store/toast/toastStore.js';
-import { DEFAULT_THEME_ID, PALETTES, type ThemeId } from '../theme/palettes.js';
+import { DEFAULT_THEME_ID, hasTheme, type ThemeId } from '../theme/palettes.js';
 import { setTheme } from '../theme/themeStore.js';
 import { BottomBar, useBottomBarLines } from './BottomBar.js';
 import { ChatInput } from './ChatInput.js';
@@ -801,10 +801,7 @@ function Shell({
       bindingsState.setOverrides(keyOverrides as Partial<Record<ActionId, string>>);
     };
     const syncTheme = (theme: string): void => {
-      // Validate against the known palette ids; unknown → default (never an uncolored UI).
-      // Commit path: push the persisted settings.theme (source of truth) → themeStore. SettingsModal
-      // also calls setTheme directly for transient live preview — see themeStore.ts's source-of-truth note.
-      const id: ThemeId = theme in PALETTES ? (theme as ThemeId) : DEFAULT_THEME_ID;
+      const id: ThemeId = hasTheme(theme) ? theme : DEFAULT_THEME_ID;
       setTheme(id);
     };
     const current = appStore.getState().settings;
@@ -820,7 +817,10 @@ function Shell({
           state.settings.keyOverrides as Record<string, string>,
         );
       }
-      if (state.settings.theme !== prev.settings.theme) {
+      if (
+        state.settings.theme !== prev.settings.theme ||
+        state.themes.items !== prev.themes.items
+      ) {
         syncTheme(state.settings.theme);
       }
     });
@@ -858,8 +858,8 @@ function Shell({
   const openSettingsHandler = (): void => {
     const settings = appStore.getState().settings;
     const settingsActions = appStore.getState().actions.settings;
-    const theme: ThemeId =
-      settings.theme in PALETTES ? (settings.theme as ThemeId) : DEFAULT_THEME_ID;
+    const storeState = appStore.getState();
+    const theme: ThemeId = hasTheme(settings.theme) ? settings.theme : DEFAULT_THEME_ID;
     modes.getState().enter(
       settingsMode(modes, settingsActions, {
         modifier: settings.modifier,
@@ -877,6 +877,11 @@ function Shell({
         effectiveCrow: settings.effectiveCrowHarnesses,
         llm: settings.llm,
         llmEnv: settings.llmEnv,
+        themes: storeState.themes.items,
+        themeActions: {
+          importTheme: (json) => storeState.actions.themes.importTheme(json),
+          remove: (id) => storeState.actions.themes.remove(id),
+        },
       }),
     );
   };

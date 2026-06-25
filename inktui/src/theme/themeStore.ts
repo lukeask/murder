@@ -19,7 +19,7 @@
  *
  * Two sanctioned callers of {@link setTheme}:
  *   1. The Shell's settings→theme bridge (`../components/App.tsx`) commits the persisted value:
- *      when `settings.theme` changes it pushes that id here (validated against {@link PALETTES}).
+ *      when `settings.theme` changes it pushes that id here (validated against the theme registry).
  *   2. `SettingsModal` (`../components/SettingsModal.tsx`) *previews* a browsed theme by calling
  *      {@link setTheme} directly — deliberately bypassing settings so the preview stays transient.
  *      It commits through `actions.settings.update` on Save (which flows back via caller 1) and
@@ -32,7 +32,13 @@
 import { useStoreWithEqualityFn } from 'zustand/traditional';
 import { createStore, type StoreApi } from 'zustand/vanilla';
 import { buildTheme, type Theme } from './buildTheme.js';
-import { DEFAULT_THEME_ID, PALETTES, type ThemeId } from './palettes.js';
+import {
+  DEFAULT_THEME_ID,
+  getPalette,
+  getThemeMeta,
+  hasTheme,
+  type ThemeId,
+} from './palettes.js';
 
 /** The theme store's state: the selected scheme id, its built theme, and the setter. */
 export interface ThemeState {
@@ -47,13 +53,24 @@ export interface ThemeState {
 /** The handle type, re-exported so callers needn't import `zustand/vanilla`. */
 export type ThemeStoreApi = StoreApi<ThemeState>;
 
+function resolveThemePaint(id: ThemeId): { id: ThemeId; theme: Theme } {
+  const resolvedId = hasTheme(id) ? id : DEFAULT_THEME_ID;
+  const palette = getPalette(resolvedId) ?? getPalette(DEFAULT_THEME_ID);
+  if (palette === undefined) {
+    throw new Error('theme registry missing default palette');
+  }
+  const variant = getThemeMeta(resolvedId)?.variant ?? 'dark';
+  return { id: resolvedId, theme: buildTheme(palette, variant) };
+}
+
 /** Build the store seeded at `id`. Factored out for tests (a fresh, isolated store per case). */
 export function createThemeStore(id: ThemeId = DEFAULT_THEME_ID): ThemeStoreApi {
+  const initial = resolveThemePaint(id);
   return createStore<ThemeState>()((set) => ({
-    id,
-    theme: buildTheme(PALETTES[id], id),
+    id: initial.id,
+    theme: initial.theme,
     setTheme(next) {
-      set({ id: next, theme: buildTheme(PALETTES[next], next) });
+      set(resolveThemePaint(next));
     },
   }));
 }

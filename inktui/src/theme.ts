@@ -12,7 +12,7 @@
  */
 
 import { buildTheme } from './theme/buildTheme.js';
-import { PALETTES } from './theme/palettes.js';
+import { getPalette } from './theme/palettes.js';
 
 export type { Theme } from './theme/buildTheme.js';
 export { buildTheme } from './theme/buildTheme.js';
@@ -20,5 +20,9 @@ export type { Palette, ThemeId } from './theme/palettes.js';
 export { everforestDarkHard as palette } from './theme/palettes.js';
 export { getTheme, setTheme, useTheme } from './theme/themeStore.js';
 
+const _defaultPalette = getPalette('everforest-dark');
+if (_defaultPalette === undefined) {
+  throw new Error('missing default everforest-dark palette');
+}
 /** @deprecated Static everforest-dark theme. Use `useTheme()` / `getTheme()` instead. */
-export const theme = buildTheme(PALETTES['everforest-dark'], 'everforest-dark');
+export const theme = buildTheme(_defaultPalette, 'dark');

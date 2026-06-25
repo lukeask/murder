@@ -18,7 +18,7 @@ import { Text } from 'ink';
 import { render } from 'ink-testing-library';
 import type React from 'react';
 import { afterEach, describe, expect, it } from 'vitest';
-import { PALETTES } from '../../src/theme/palettes.js';
+import { getPalette } from '../../src/theme/palettes.js';
 import { setTheme, useTheme } from '../../src/theme/themeStore.js';
 
 /** Truecolor foreground SGR for a `#rrggbb` hex. */
@@ -44,12 +44,12 @@ describe('themeStore — runtime recolor', () => {
 
   it('repaints a subscribed component when the scheme changes', async () => {
     const { lastFrame } = render(<Probe />);
-    expect(lastFrame()).toContain(fgSgr(PALETTES['everforest-dark'].red));
+    expect(lastFrame()).toContain(fgSgr(getPalette('everforest-dark')!.red));
 
     setTheme('everforest-light');
     await tick();
 
-    expect(lastFrame()).toContain(fgSgr(PALETTES['everforest-light'].red));
-    expect(lastFrame()).not.toContain(fgSgr(PALETTES['everforest-dark'].red));
+    expect(lastFrame()).toContain(fgSgr(getPalette('everforest-light')!.red));
+    expect(lastFrame()).not.toContain(fgSgr(getPalette('everforest-dark')!.red));
   });
 });

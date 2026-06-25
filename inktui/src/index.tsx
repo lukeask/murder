@@ -302,6 +302,7 @@ export function primeSlices(store: ReturnType<typeof createAppStore>['store']): 
   // favorites: a disconnected optimistic save/remove/rename leaves the local list ahead of the
   // server until a reload reconciles it.
   void store.getState().actions.templates.load();
+  void store.getState().actions.themes.load();
   // Re-load the workflow registry on every (re)connect too — same persisted-truth rationale as
   // templates: a disconnected optimistic save/remove/rename leaves the local list ahead of the
   // server until a reload reconciles it.

@@ -4,21 +4,15 @@
  * A {@link Palette} is the unopinionated layer: named slots (`bg0`, `green`, `grey1`, …) holding
  * pure hex, with no notion of *where* a color is used. The semantic-role mapping lives in
  * {@link ../theme/buildTheme.ts buildTheme} — components reference only roles, never these slots,
- * so adding a scheme is "add a palette here, register it below". Every palette MUST expose the
- * same slot keys (enforced by the {@link Palette} type) so {@link buildTheme} works over any of
- * them.
+ * so adding a scheme is "register a palette + metadata". Every palette MUST expose the same slot
+ * keys (enforced by the {@link Palette} type) so {@link buildTheme} works over any of them.
  *
- * Ink accepts a named color (`"green"`) or a hex string; we always feed hex so the look is identical
- * across terminals (named colors honor the terminal's own 16-color palette, which we do NOT want).
+ * Runtime catalog is fed from `tui.load_themes` → {@link applyThemeRecords}; everforest dark/light
+ * are seeded at module load so tests and pre-connect boot always have a paintable default.
  */
 
-/**
- * Everforest Dark — hard background variant. Grouped as upstream documents it: tinted background
- * fills first (UI surfaces), then saturated foreground accents (text + status), then the greys.
- * Canonical Everforest hex; do not editorialize — add a new palette object instead.
- */
+/** Everforest Dark — hard background variant (canonical upstream hex). */
 export const everforestDarkHard = {
-  // Background surfaces (darkest → lightest), plus the tinted "visual"/status backgrounds.
   bgDim: '#1e2326',
   bg0: '#272e33',
   bg1: '#2e383c',
@@ -31,7 +25,6 @@ export const everforestDarkHard = {
   bgGreen: '#3c4841',
   bgBlue: '#384b55',
   bgYellow: '#45443c',
-  // Foreground + saturated accents.
   fg: '#d3c6aa',
   red: '#e67e80',
   orange: '#e69875',
@@ -40,22 +33,13 @@ export const everforestDarkHard = {
   aqua: '#83c092',
   blue: '#7fbbb3',
   purple: '#d699b6',
-  // Greys (dim → bright).
   grey0: '#7a8478',
   grey1: '#859289',
   grey2: '#9da9a0',
 } as const;
 
-/**
- * Everforest Light — hard background variant. Canonical upstream light-hard hex. Note the surface
- * ramp inverts (lightest = the "darkest" UI surface here): `bgDim`/`bg0` are the brightest paper
- * tones and the ramp *darkens* toward `bg5`, which keeps {@link buildTheme}'s "one step lighter"
- * intentions readable on a light background (see the per-palette role notes in buildTheme). The
- * `green`/`red`/etc. accents are the upstream light-variant values, which are darker than the dark
- * theme's so they keep contrast against the pale paper.
- */
+/** Everforest Light — hard background variant (canonical upstream light-hard hex). */
 export const everforestLightHard = {
-  // Background surfaces (lightest paper → progressively darker UI bands), plus tinted status fills.
   bgDim: '#f2efdf',
   bg0: '#fffbef',
   bg1: '#f8f5e4',
@@ -68,7 +52,6 @@ export const everforestLightHard = {
   bgGreen: '#f3f5d9',
   bgBlue: '#eaedf3',
   bgYellow: '#fbecd4',
-  // Foreground + saturated accents (light-variant: darker, for contrast on the pale paper).
   fg: '#5c6a72',
   red: '#f85552',
   orange: '#f57d26',
@@ -77,26 +60,123 @@ export const everforestLightHard = {
   aqua: '#35a77c',
   blue: '#3a94c5',
   purple: '#df69ba',
-  // Greys (light-variant; the "dim → bright" intent reads as "lighter → darker" on paper).
   grey0: '#a6b0a0',
   grey1: '#939f91',
   grey2: '#829181',
 } as const;
 
-/**
- * The shape every palette satisfies. {@link buildTheme} is generic over this, so a new scheme only
- * has to fill in the same slots. Typed off the dark palette since both share identical keys.
- */
+/** The shape every palette satisfies. Typed off the dark palette since both share identical keys. */
 export type Palette = { readonly [K in keyof typeof everforestDarkHard]: string };
 
-/** The set of selectable schemes, keyed by their stable id. */
-export const PALETTES = {
-  'everforest-dark': everforestDarkHard,
-  'everforest-light': everforestLightHard,
-} as const satisfies Record<string, Palette>;
+export type ThemeVariant = 'light' | 'dark';
+
+export interface ThemeMeta {
+  readonly name: string;
+  readonly variant: ThemeVariant;
+  readonly builtin: boolean;
+}
+
+/** One theme row from `themes.yaml` / `tui.load_themes`. */
+export interface ThemeRecord {
+  readonly id: string;
+  readonly name: string;
+  readonly variant: ThemeVariant;
+  readonly builtin: boolean;
+  readonly palette: Palette;
+}
 
 /** A scheme id usable by the settings menu / persisted config. */
-export type ThemeId = keyof typeof PALETTES;
+export type ThemeId = string;
 
-/** Default scheme when nothing is persisted. */
+/** Default scheme when nothing is persisted or the id is unknown. */
 export const DEFAULT_THEME_ID: ThemeId = 'everforest-dark';
+
+const registry = new Map<string, { readonly palette: Palette; readonly meta: ThemeMeta }>();
+
+function registerOne(id: string, palette: Palette, meta: ThemeMeta): void {
+  registry.set(id, { palette, meta });
+}
+
+registerOne('everforest-dark', everforestDarkHard, {
+  name: 'Everforest Dark',
+  variant: 'dark',
+  builtin: true,
+});
+registerOne('everforest-light', everforestLightHard, {
+  name: 'Everforest Light',
+  variant: 'light',
+  builtin: true,
+});
+
+/** Merge server-loaded theme records into the in-memory registry (server wins per id). */
+export function applyThemeRecords(records: readonly ThemeRecord[]): void {
+  for (const rec of records) {
+    registerOne(rec.id, rec.palette, {
+      name: rec.name,
+      variant: rec.variant,
+      builtin: rec.builtin,
+    });
+  }
+}
+
+/** Drop a theme id from the registry (tests only — production removes via reload). */
+export function clearThemeRegistryForTests(): void {
+  registry.clear();
+  registerOne('everforest-dark', everforestDarkHard, {
+    name: 'Everforest Dark',
+    variant: 'dark',
+    builtin: true,
+  });
+  registerOne('everforest-light', everforestLightHard, {
+    name: 'Everforest Light',
+    variant: 'light',
+    builtin: true,
+  });
+}
+
+export function getPalette(id: string): Palette | undefined {
+  return registry.get(id)?.palette;
+}
+
+export function getThemeMeta(id: string): ThemeMeta | undefined {
+  return registry.get(id)?.meta;
+}
+
+export function hasTheme(id: string): boolean {
+  return registry.has(id);
+}
+
+export function listThemeIds(): readonly ThemeId[] {
+  return [...registry.keys()].sort();
+}
+
+export function listThemeRecords(): readonly ThemeRecord[] {
+  return listThemeIds().map((id) => {
+    const entry = registry.get(id);
+    if (entry === undefined) {
+      throw new Error(`missing registry entry for ${id}`);
+    }
+    return {
+      id,
+      name: entry.meta.name,
+      variant: entry.meta.variant,
+      builtin: entry.meta.builtin,
+      palette: entry.palette,
+    };
+  });
+}
+
+/**
+ * @deprecated Prefer {@link getPalette} / {@link listThemeIds}. Kept for gradual migration.
+ * Returns only currently registered palettes (dynamic after `applyThemeRecords`).
+ */
+export function getPalettesMap(): Readonly<Record<string, Palette>> {
+  const out: Record<string, Palette> = {};
+  for (const id of listThemeIds()) {
+    const palette = getPalette(id);
+    if (palette !== undefined) {
+      out[id] = palette;
+    }
+  }
+  return out;
+}

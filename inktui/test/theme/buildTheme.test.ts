@@ -8,26 +8,33 @@
 
 import { describe, expect, it } from 'vitest';
 import { buildTheme } from '../../src/theme/buildTheme.js';
-import { PALETTES, type ThemeId } from '../../src/theme/palettes.js';
+import { getPalette, getThemeMeta, listThemeIds } from '../../src/theme/palettes.js';
 
-const ids = Object.keys(PALETTES) as ThemeId[];
+const ids = listThemeIds();
 
 describe('buildTheme — per-palette role mapping', () => {
   it.each(ids)('snapshots the semantic theme for %s', (id) => {
-    expect(buildTheme(PALETTES[id], id)).toMatchSnapshot();
+    const palette = getPalette(id);
+    const variant = getThemeMeta(id)?.variant ?? 'dark';
+    expect(palette).toBeDefined();
+    expect(buildTheme(palette!, variant)).toMatchSnapshot();
   });
 
   it('produces the same role set for every palette', () => {
-    const roleSets = ids.map((id) => Object.keys(buildTheme(PALETTES[id], id)).sort());
+    const roleSets = ids.map((id) => {
+      const palette = getPalette(id)!;
+      const variant = getThemeMeta(id)?.variant ?? 'dark';
+      return Object.keys(buildTheme(palette, variant)).sort();
+    });
     for (const roles of roleSets) {
       expect(roles).toEqual(roleSets[0]);
     }
   });
 
   it('keeps light-scheme surface bands off the near-white base slots (visible on paper)', () => {
-    const light = buildTheme(PALETTES['everforest-light'], 'everforest-light');
-    const paper = PALETTES['everforest-light'].bg0;
-    // The selection/header bands must be distinct from the brightest paper tone, or they disappear.
+    const palette = getPalette('everforest-light')!;
+    const light = buildTheme(palette, 'light');
+    const paper = palette.bg0;
     expect(light.panelHeaderBg).not.toBe(paper);
     expect(light.panelSelectedBg).not.toBe(paper);
     expect(light.rowSelectedBg).not.toBe(paper);

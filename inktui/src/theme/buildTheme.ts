@@ -13,7 +13,7 @@
  * differ per palette.
  */
 
-import type { Palette, ThemeId } from './palettes.js';
+import type { Palette, ThemeVariant } from './palettes.js';
 
 /**
  * Surface choices that must stay visible against the background. On dark schemes the tinted/low
@@ -28,8 +28,8 @@ interface SurfaceRoles {
   panelSelectedBg: string;
 }
 
-function surfaceRoles(palette: Palette, id: ThemeId): SurfaceRoles {
-  if (id === 'everforest-light') {
+function surfaceRoles(palette: Palette, variant: ThemeVariant): SurfaceRoles {
+  if (variant === 'light') {
     // On paper the tinted `bg*` fills are near-white, so selection/header bands would disappear.
     // Repoint them onto the *darker* end of the light surface ramp (and the saturated `bgGreen`
     // for the selected row) so each band reads against the pale background while staying gentle.
@@ -49,8 +49,8 @@ function surfaceRoles(palette: Palette, id: ThemeId): SurfaceRoles {
 }
 
 /** Build the semantic theme for a palette. Pure; safe to call from anywhere. */
-export function buildTheme(palette: Palette, id: ThemeId) {
-  const surfaces = surfaceRoles(palette, id);
+export function buildTheme(palette: Palette, variant: ThemeVariant) {
+  const surfaces = surfaceRoles(palette, variant);
   return {
     // ── Branding ──────────────────────────────────────────────────────────────────────────────
     /** The `murder` wordmark (top-left). The one deliberately loud accent. */
