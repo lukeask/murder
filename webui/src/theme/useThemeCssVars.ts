@@ -9,6 +9,7 @@
  */
 
 import { useTheme, useThemeId } from '@core/theme/themeStore.js';
+import { getThemeMeta } from '@core/theme/palettes.js';
 import { useEffect } from 'react';
 import { applyThemeCssVars } from './cssVars.js';
 
@@ -24,6 +25,7 @@ export function useThemeCssVars(): void {
   // (attribute beats the prefers-color-scheme media query on specificity), so the existing
   // SettingsPanel theme control switches DS components too, with zero new UI.
   useEffect(() => {
-    document.documentElement.dataset['theme'] = themeId === 'everforest-light' ? 'light' : 'dark';
+    const variant = getThemeMeta(themeId)?.variant ?? 'dark';
+    document.documentElement.dataset['theme'] = variant === 'light' ? 'light' : 'dark';
   }, [themeId]);
 }

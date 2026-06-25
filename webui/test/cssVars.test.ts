@@ -4,14 +4,14 @@
  */
 
 import { buildTheme } from '@core/theme/buildTheme.js';
-import { DEFAULT_THEME_ID, PALETTES } from '@core/theme/palettes.js';
+import { DEFAULT_THEME_ID, getPalette } from '@core/theme/palettes.js';
 import { setTheme } from '@core/theme/themeStore.js';
 import { renderHook, cleanup } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
 import { applyThemeCssVars, themeToCssVars } from '../src/theme/cssVars.js';
 import { useThemeCssVars } from '../src/theme/useThemeCssVars.js';
 
-const theme = buildTheme(PALETTES[DEFAULT_THEME_ID], DEFAULT_THEME_ID);
+const theme = buildTheme(getPalette(DEFAULT_THEME_ID)!, 'dark');
 
 describe('themeToCssVars', () => {
   it('maps every semantic role to a kebab-cased --color-* variable', () => {

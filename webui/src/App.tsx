@@ -15,6 +15,8 @@
  */
 
 import { useAppStoreApi } from '@core/hooks/useAppStore.js';
+import { DEFAULT_THEME_ID, hasTheme, type ThemeId } from '@core/theme/palettes.js';
+import { setTheme } from '@core/theme/themeStore.js';
 import { useEffect, useRef, useState } from 'react';
 import type { WsBusClient } from './bus/WsBusClient.js';
 import { useThemeCssVars } from './theme/useThemeCssVars.js';
@@ -98,10 +100,27 @@ export function App({ bus }: { readonly bus: WsBusClient }): React.JSX.Element {
       void a.usage.refresh();
       void a.conversations.refresh();
       void a.favorites.load();
+      void a.themes.load();
       void a.settings.load();
     });
     return off;
   }, [bus, storeApi]);
+
+  useEffect(() => {
+    const syncTheme = (theme: string): void => {
+      const id: ThemeId = hasTheme(theme) ? theme : DEFAULT_THEME_ID;
+      setTheme(id);
+    };
+    syncTheme(storeApi.getState().settings.theme);
+    return storeApi.subscribe((state, prev) => {
+      if (
+        state.settings.theme !== prev.settings.theme ||
+        state.themes.items !== prev.themes.items
+      ) {
+        syncTheme(state.settings.theme);
+      }
+    });
+  }, [storeApi]);
 
   // `data-layout` is preserved (tests + any external hooks key off it). The DOM tree differs between
   // desktop (cockpit grid) and mobile (single pane) — the one thing CSS alone can't express.

@@ -6,7 +6,7 @@
  */
 
 import { buildTheme } from '@core/theme/buildTheme.js';
-import { PALETTES } from '@core/theme/palettes.js';
+import { getPalette } from '@core/theme/palettes.js';
 import { setTheme } from '@core/theme/themeStore.js';
 import { fireEvent, screen, cleanup } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -21,38 +21,39 @@ function Harness(): React.JSX.Element {
 
 afterEach(() => {
   cleanup();
-  setTheme('everforest-dark'); // reset the process-global theme between tests
+  setTheme('everforest-dark');
 });
 
 describe('SettingsPanel theme switch', () => {
   it('repaints :root CSS vars when a theme is chosen', () => {
-    const { store } = makeStore();
-    renderWithStore(<Harness />, { store });
+    const { store, bus } = makeStore();
+    bus.stubRpc('tui.load_themes', { ok: true, themes: [] });
+    renderWithStore(<Harness />, { store, bus });
 
-    const lightText = buildTheme(PALETTES['everforest-light'], 'everforest-light').text;
-    fireEvent.click(screen.getByText('everforest-light'));
+    const lightPalette = getPalette('everforest-light')!;
+    const lightText = buildTheme(lightPalette, 'light').text;
+    fireEvent.click(screen.getByText('Everforest Light'));
 
     expect(document.documentElement.style.getPropertyValue('--color-text')).toBe(lightText);
   });
 
   it('reflects the active scheme onto <html data-theme> so DS components switch', () => {
-    const { store } = makeStore();
-    renderWithStore(<Harness />, { store });
+    const { store, bus } = makeStore();
+    bus.stubRpc('tui.load_themes', { ok: true, themes: [] });
+    renderWithStore(<Harness />, { store, bus });
 
-    // Default scheme (everforest-dark) → data-theme="dark".
     expect(document.documentElement.dataset['theme']).toBe('dark');
 
-    fireEvent.click(screen.getByText('everforest-light'));
+    fireEvent.click(screen.getByText('Everforest Light'));
     expect(document.documentElement.dataset['theme']).toBe('light');
   });
 
   it('marks the active theme swatch', () => {
     setTheme('everforest-light');
-    const { store } = makeStore();
-    renderWithStore(<Harness />, { store });
-    // The label text lives inside the swatch button; the inspectable active marker (`data-on`) sits
-    // on the button itself, so read it off the enclosing toggle.
-    const swatch = screen.getByText('everforest-light').closest('.theme-swatch');
+    const { store, bus } = makeStore();
+    bus.stubRpc('tui.load_themes', { ok: true, themes: [] });
+    renderWithStore(<Harness />, { store, bus });
+    const swatch = screen.getByText('Everforest Light').closest('.theme-swatch');
     expect(swatch?.getAttribute('data-on')).toBe('true');
   });
 });

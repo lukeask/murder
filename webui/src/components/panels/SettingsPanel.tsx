@@ -15,13 +15,14 @@
  */
 
 import { useAppStore } from '@core/hooks/useAppStore.js';
+import { useEffect } from 'react';
 import { shallow } from 'zustand/shallow';
-import { PALETTES } from '@core/theme/palettes.js';
+import { getPalette, getThemeMeta, listThemeIds } from '@core/theme/palettes.js';
 import type { ThemeId } from '@core/theme/palettes.js';
 import { setTheme, useThemeId } from '@core/theme/themeStore.js';
 import { Panel, Input, Select, Radio, Switch, cx } from '../ds/index.js';
 
-const THEME_IDS = Object.keys(PALETTES) as ThemeId[];
+const FALLBACK_THEME_IDS = listThemeIds();
 
 const MODIFIER_OPTIONS = [
   { value: 'alt', label: 'alt' },
@@ -31,12 +32,22 @@ const MODIFIER_OPTIONS = [
 
 export function SettingsPanel(): React.JSX.Element {
   const settings = useAppStore((s) => s.settings, shallow);
+  const themes = useAppStore((s) => s.themes.items, shallow);
   const update = useAppStore((s) => s.actions.settings.update);
+  const loadThemes = useAppStore((s) => s.actions.themes.load);
   const activeTheme = useThemeId();
 
+  useEffect(() => {
+    if (themes.length === 0) {
+      void loadThemes();
+    }
+  }, [themes.length, loadThemes]);
+
+  const themeIds = themes.length > 0 ? themes.map((t) => t.id) : [...FALLBACK_THEME_IDS];
+
   const chooseTheme = (id: ThemeId): void => {
-    setTheme(id); // instant repaint
-    void update({ theme: id }); // persist
+    setTheme(id);
+    void update({ theme: id });
   };
 
   // The collaborator-harness override falls back to the daemon's live effective value when unset.
@@ -51,8 +62,12 @@ export function SettingsPanel(): React.JSX.Element {
         <section className="settings__group">
           <h3 className="settings__heading">theme</h3>
           <div className="settings__themes">
-            {THEME_IDS.map((id) => {
-              const p = PALETTES[id];
+            {themeIds.map((id) => {
+              const p = getPalette(id);
+              const label = themes.find((t) => t.id === id)?.name ?? getThemeMeta(id)?.name ?? id;
+              if (p === undefined) {
+                return null;
+              }
               return (
                 <button
                   key={id}
@@ -68,7 +83,7 @@ export function SettingsPanel(): React.JSX.Element {
                   }
                 >
                   <span className="theme-swatch__chip" aria-hidden="true" />
-                  <span className="theme-swatch__label">{id}</span>
+                  <span className="theme-swatch__label">{label}</span>
                 </button>
               );
             })}
