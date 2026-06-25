@@ -51,18 +51,12 @@ import { shallow } from 'zustand/shallow';
 import { useStoreWithEqualityFn } from 'zustand/traditional';
 import { AppStoreContext } from '../hooks/useAppStore.js';
 import { useModalWidth } from '../hooks/useTerminalSize.js';
-import {
-  ACTION_IDS,
-  ACTIONS,
-  type ActionId,
-  type Modifier,
-  resolveBindings,
-} from '../input/bindings.js';
+import { ACTIONS, type ActionId, type Modifier, resolveBindings } from '../input/bindings.js';
 import type { Mode, ModeStoreApi } from '../input/modeStore.js';
+import { harnessLabel } from '../selectors/harnessDisplay.js';
 import type {
   LlmEnvWire,
   LlmProviderId,
-  LlmTierWire,
   LlmWire,
   SettingsActions,
   StartupRogueWire,
@@ -70,9 +64,20 @@ import type {
 import type { DefaultChatViewMode } from '../store/settings/settingsSlice.js';
 import type { AppStore } from '../store/store.js';
 import type { TemplateRecord } from '../store/templates/templatesSlice.js';
+import type { ThemeRecord } from '../store/themes/themesSlice.js';
 import { capsStore, type KittySupport, useKittySupport } from '../terminal/capsStore.js';
-import { PALETTES, type ThemeId } from '../theme/palettes.js';
+import { DEFAULT_THEME_ID, hasTheme, listThemeRecords, type ThemeId } from '../theme/palettes.js';
 import { setTheme, useTheme } from '../theme/themeStore.js';
+import {
+  buildCategoryRows,
+  categoryIndexById,
+  SETTINGS_CATEGORIES,
+} from './settings/categories.js';
+import { defaultEffortFor, STARTUP_ROGUE_EFFORTS } from './settings/items/harnesses.js';
+import { REBINDABLE, RESERVED_KEYS } from './settings/items/keybindings.js';
+import { ENV_PROVIDERS, mergedTiers, tierNames } from './settings/items/llm.js';
+import { TEMPLATE_NAME_RE } from './settings/items/templates.js';
+import type { SettingsCategoryId, SettingsRow } from './settings/types.js';
 import { deleteLastChar, insertChar, TextInput } from './TextInput.js';
 
 // Bring the dispatcher's `onUncaptured` augmentation into scope (the printable/capture router needs it).
@@ -80,116 +85,15 @@ import '../input/dispatcher.js';
 
 /** Intent union — structural-key actions only. Printable chars (j/k + the captured rebind key) ride
  * `onUncaptured`, not the keymap. */
-type SettingsIntent = 'cursorUp' | 'cursorDown' | 'confirm' | 'cancel' | 'backspace' | 'deleteAll';
-
-/** A valid template name: non-empty, `[A-Za-z0-9_-]+` (mirrors the backend's `^[A-Za-z0-9_-]+$`). */
-const TEMPLATE_NAME_RE = /^[A-Za-z0-9_-]+$/;
-
-/** The modifier choices in display order. */
-const MODIFIERS: readonly Modifier[] = ['alt', 'ctrl', 'both'];
-
-/** The pane-gap choices in display order — spaces between adjacent pane borders. `0` = flush
- * borders (the default); `1`–`4` add spacing. Mirrors the Python `TuiUserConfig.pane_gap` range
- * (`ge=0, le=4`). */
-const GAP_OPTIONS: readonly number[] = [0, 1, 2, 3, 4];
-
-/** The five valid harness ids, in display order (mirrors the Python `UserHarnessKind`; the backend
- * gated out `native_coding_crow`). Used by the planner radio + crow checkbox pool. */
-const HARNESSES: readonly string[] = ['claude_code', 'codex', 'cursor', 'pi', 'antigravity'];
-
-/** Startup-Rogue model choices per harness (a `''` "default" lets the adapter pick its own). A static
- * mirror of the spawn flow's per-harness model lists — kept local so the settings modal needs no live
- * model-snapshot wiring; the daemon accepts any string, so a stale entry just spawns that model. */
-const STARTUP_ROGUE_MODELS: Readonly<Record<string, readonly string[]>> = {
-  claude_code: ['', 'opus', 'sonnet', 'haiku', 'fable'],
-  codex: ['', 'gpt-5.5', 'gpt-5.4', 'gpt-5.3-codex', 'gpt-5.2'],
-  cursor: [''],
-  pi: [''],
-  antigravity: [''],
-};
-
-/** Startup-Rogue reasoning-effort choices per harness (mirrors the spawn wizard's effort options;
- * harnesses with no effort concept map to `[]`). */
-const STARTUP_ROGUE_EFFORTS: Readonly<Record<string, readonly string[]>> = {
-  claude_code: ['low', 'medium', 'high', 'xhigh', 'max'],
-  codex: ['low', 'medium', 'high', 'xhigh'],
-  cursor: [],
-  pi: [],
-  antigravity: [],
-};
-
-/** Pick the default effort for a harness when one is switched on (prefer `medium`, else the first
- * option, else `null` for harnesses with no effort concept). */
-function defaultEffortFor(harness: string): string | null {
-  const efforts = STARTUP_ROGUE_EFFORTS[harness] ?? [];
-  if (efforts.length === 0) {
-    return null;
-  }
-  return efforts.includes('medium') ? 'medium' : (efforts[0] ?? null);
-}
-
-/** The four user-configurable LLM providers, in display order (mirrors `UserLlmConfig.providers`).
- * `local` is the OpenAI-compatible endpoint (no env-key flag; carries a base_url). */
-const PROVIDERS: readonly LlmProviderId[] = ['groq', 'cerebras', 'openrouter', 'local'];
-
-/** The providers that carry an env-key flag (`local` has none). */
-const ENV_PROVIDERS: ReadonlySet<string> = new Set(['groq', 'cerebras', 'openrouter']);
-
-/** The known roles a tier can be bound to (mirrors the Python role keys). */
-const ROLES: readonly string[] = ['notetaker', 'crow_handler', 'codebase_map'];
-
-/** Built-in tiers, present server-side even when `llm.tiers` is empty. Mirrors the Python
- * `BUILTIN_TIERS`; user-defined tiers of the same name override these (see `resolve_tier`). */
-const BUILTIN_TIERS: Readonly<Record<string, LlmTierWire>> = {
-  cheap: { provider: 'groq', model: 'openai/gpt-oss-120b', auto_free: true },
-  smart: { provider: 'cerebras', model: 'openai/gpt-oss-120b' },
-};
-
-/** The merged tier map for display: built-ins overlaid by the user's same-name tiers. Order: built-ins
- * first (cheap, smart), then any extra user tiers in insertion order. */
-function mergedTiers(llm: LlmWire): Array<[string, LlmTierWire]> {
-  const out: Array<[string, LlmTierWire]> = [];
-  const userTiers = llm.tiers ?? {};
-  for (const name of Object.keys(BUILTIN_TIERS)) {
-    const tier = userTiers[name] ?? BUILTIN_TIERS[name];
-    if (tier !== undefined) {
-      out.push([name, tier]);
-    }
-  }
-  for (const [name, tier] of Object.entries(userTiers)) {
-    if (!(name in BUILTIN_TIERS)) {
-      out.push([name, tier]);
-    }
-  }
-  return out;
-}
-
-/** The selectable tier names (for the per-role radio) — the merged tier map's keys. */
-function tierNames(llm: LlmWire): readonly string[] {
-  return mergedTiers(llm).map(([name]) => name);
-}
-
-/** The rebindable actions, in registry order — the rows the bindings section shows. */
-const REBINDABLE: readonly ActionId[] = ACTION_IDS.filter((id) => ACTIONS[id].rebindable);
-
-/** Key chars that may NEVER be a rebind target. `c`/`d`/`z` collide with the always-literal ctrl
- * exits (ctrl+c/d/z), and digits are reserved for panel toggles (never rebindable/interceptable —
- * see the plan's risks). A captured char in this set is rejected with an inline notice. */
-const RESERVED_KEYS: ReadonlySet<string> = new Set([
-  'c',
-  'd',
-  'z',
-  '0',
-  '1',
-  '2',
-  '3',
-  '4',
-  '5',
-  '6',
-  '7',
-  '8',
-  '9',
-]);
+type SettingsIntent =
+  | 'cursorUp'
+  | 'cursorDown'
+  | 'enterPane'
+  | 'exitPane'
+  | 'confirm'
+  | 'cancel'
+  | 'backspace'
+  | 'deleteAll';
 
 /** Options for the settings mode factory. */
 export interface SettingsModeOptions {
@@ -200,144 +104,10 @@ export interface SettingsModeOptions {
 /** The stable mode id for idempotent re-enter. */
 export const SETTINGS_MODE_ID = 'settings';
 
-/** A flat row in the modal — the cursor walks these across all three sections. A `section` header row
- * is non-focusable (the cursor skips it); a `modifier`/`theme`/`binding` row is selectable. */
-type Row =
-  | { readonly kind: 'header'; readonly label: string }
-  | { readonly kind: 'modifier'; readonly value: Modifier }
-  | { readonly kind: 'theme'; readonly value: ThemeId }
-  | { readonly kind: 'gap'; readonly value: number }
-  // Vim mode — a radio over on (true) / off (false).
-  | { readonly kind: 'vim'; readonly value: boolean }
-  // Default chat view — a radio over verbose / condensed (tmux is cycle-only, not a default).
-  | { readonly kind: 'chatView'; readonly value: DefaultChatViewMode }
-  // Startup Rogue — an "off" row, a harness radio, then (when on) a model radio + effort radio.
-  | { readonly kind: 'startupRogue'; readonly field: 'off' }
-  | { readonly kind: 'startupRogue'; readonly field: 'harness'; readonly value: string }
-  | { readonly kind: 'startupRogue'; readonly field: 'model'; readonly value: string }
-  | { readonly kind: 'startupRogue'; readonly field: 'effort'; readonly value: string }
-  // Harnesses — planner radio (`value: null` = the "(default)" reset row); crow checkbox pool
-  // (`value: null` = the "reset to default" row). The dormant collaborator radio stays implemented
-  // below, but its rows are commented out in buildRows while collaborator is not user-facing.
-  | { readonly kind: 'collaborator'; readonly value: string | null }
-  | { readonly kind: 'planner'; readonly value: string | null }
-  | { readonly kind: 'crow'; readonly value: string | null }
-  // LLM providers — `field` distinguishes the api_key row from local's base_url row.
-  | {
-      readonly kind: 'provider';
-      readonly provider: LlmProviderId;
-      readonly field: 'api_key' | 'base_url';
-    }
-  // Tiers — read-only display rows (non-focusable, like a header).
-  | { readonly kind: 'tier'; readonly name: string }
-  // Roles — per-role radio over the tier names (`tier: null` is unused; the radio always has choices).
-  | { readonly kind: 'role'; readonly role: string; readonly tier: string }
-  // Templates — one selectable row per saved template (rename/delete), or a non-selectable empty hint.
-  | { readonly kind: 'template'; readonly name: string }
-  | { readonly kind: 'templateEmpty' }
-  | { readonly kind: 'binding'; readonly action: ActionId };
-
-/** Build the flat row list (headers + selectable rows) in section order. Depends on the live `llm`
- * (the tier list + per-role tier choices are dynamic), so it is rebuilt whenever the draft changes. */
-function buildRows(
-  llm: LlmWire,
-  startupRogue: StartupRogueWire | null,
-  templates: readonly TemplateRecord[],
-): readonly Row[] {
-  const rows: Row[] = [{ kind: 'header', label: 'Command modifier' }];
-  for (const value of MODIFIERS) {
-    rows.push({ kind: 'modifier', value });
-  }
-  rows.push({ kind: 'header', label: 'Theme' });
-  for (const value of Object.keys(PALETTES) as ThemeId[]) {
-    rows.push({ kind: 'theme', value });
-  }
-  rows.push({ kind: 'header', label: 'Pane gap' });
-  for (const value of GAP_OPTIONS) {
-    rows.push({ kind: 'gap', value });
-  }
-  // --- Vim mode ---
-  rows.push({ kind: 'header', label: 'Vim mode' });
-  rows.push({ kind: 'vim', value: true });
-  rows.push({ kind: 'vim', value: false });
-  // --- Default chat view (TUIchat-3) — tmux is reachable only via the per-pane cycle key. ---
-  rows.push({ kind: 'header', label: 'Default chat view' });
-  rows.push({ kind: 'chatView', value: 'verbose' });
-  rows.push({ kind: 'chatView', value: 'condensed' });
-  // --- Startup Rogue (auto-spawned on boot) ---
-  rows.push({ kind: 'header', label: 'Startup Rogue' });
-  rows.push({ kind: 'startupRogue', field: 'off' });
-  for (const value of HARNESSES) {
-    rows.push({ kind: 'startupRogue', field: 'harness', value });
-  }
-  // Model + effort sub-rows only when a rogue is configured (they depend on the chosen harness).
-  if (startupRogue !== null) {
-    for (const value of STARTUP_ROGUE_MODELS[startupRogue.harness] ?? ['']) {
-      rows.push({ kind: 'startupRogue', field: 'model', value });
-    }
-    for (const value of STARTUP_ROGUE_EFFORTS[startupRogue.harness] ?? []) {
-      rows.push({ kind: 'startupRogue', field: 'effort', value });
-    }
-  }
-  // --- Harnesses ---
-  // Collaborator is dormant. Keep these rows commented so the setting can be restored locally when
-  // collaborator returns to the active workflow.
-  // rows.push({ kind: 'header', label: 'Collaborator harness' });
-  // rows.push({ kind: 'collaborator', value: null }); // the "(default)" reset row
-  // for (const value of HARNESSES) {
-  //   rows.push({ kind: 'collaborator', value });
-  // }
-  rows.push({ kind: 'header', label: 'Planning agent harness' });
-  rows.push({ kind: 'planner', value: null }); // the "(default)" reset row
-  for (const value of HARNESSES) {
-    rows.push({ kind: 'planner', value });
-  }
-  rows.push({ kind: 'header', label: 'Crow harnesses (pick ≥1)' });
-  rows.push({ kind: 'crow', value: null }); // the "reset to default" row
-  for (const value of HARNESSES) {
-    rows.push({ kind: 'crow', value });
-  }
-  // --- LLM providers ---
-  rows.push({ kind: 'header', label: 'LLM providers' });
-  for (const provider of PROVIDERS) {
-    rows.push({ kind: 'provider', provider, field: 'api_key' });
-    if (provider === 'local') {
-      rows.push({ kind: 'provider', provider, field: 'base_url' });
-    }
-  }
-  // --- Tiers & roles ---
-  rows.push({ kind: 'header', label: 'Tiers' });
-  for (const [name] of mergedTiers(llm)) {
-    rows.push({ kind: 'tier', name });
-  }
-  rows.push({ kind: 'header', label: 'Role → tier' });
-  const choices = tierNames(llm);
-  for (const role of ROLES) {
-    for (const tier of choices) {
-      rows.push({ kind: 'role', role, tier });
-    }
-  }
-  // --- Templates (browse / preview / rename / delete; creation is the chat `:save` command) ---
-  rows.push({ kind: 'header', label: 'Templates' });
-  if (templates.length === 0) {
-    rows.push({ kind: 'templateEmpty' });
-  } else {
-    for (const t of templates) {
-      rows.push({ kind: 'template', name: t.name });
-    }
-  }
-  // --- Key bindings ---
-  rows.push({ kind: 'header', label: 'Key bindings' });
-  for (const action of REBINDABLE) {
-    rows.push({ kind: 'binding', action });
-  }
-  return rows;
-}
-
 /** Whether a row can hold the cursor (headers + read-only tier rows are skipped). A modifier row is
  * selectable even when disabled — the cursor can rest on it (to show the notice), but `confirm` is a
  * no-op there. */
-function isSelectable(row: Row): boolean {
+function isSelectable(row: SettingsRow): boolean {
   return row.kind !== 'header' && row.kind !== 'tier' && row.kind !== 'templateEmpty';
 }
 
@@ -348,12 +118,23 @@ type EditTarget =
       readonly provider: LlmProviderId;
       readonly field: 'api_key' | 'base_url';
     }
-  | { readonly kind: 'templateRename'; readonly name: string };
+  | { readonly kind: 'templateRename'; readonly name: string }
+  | { readonly kind: 'templateCreateName' }
+  | { readonly kind: 'templateCreateBody'; readonly name: string }
+  | { readonly kind: 'themeImport' };
 
 /** Mutable closure state — not React state. Mutated by `onIntent`/`onUncaptured`; `render` reads it. */
 interface SettingsState {
   /** The live row list — rebuilt whenever the draft `llm` changes (tier/role rows are dynamic). */
-  rows: readonly Row[];
+  rows: readonly SettingsRow[];
+  /** Which pane owns j/k/up/down right now. */
+  activePane: 'categories' | 'settings';
+  /** The category selected in the sidebar. */
+  categoryId: SettingsCategoryId;
+  /** The sidebar cursor index. */
+  categoryCursor: number;
+  /** One row cursor per category id, so returning to a category restores its focused setting. */
+  rowCursors: Partial<Record<SettingsCategoryId, number>>;
   /** The cursor's row index (always on a selectable row). */
   cursor: number;
   /** The draft modifier (committed via `update` on selection). */
@@ -398,18 +179,31 @@ interface SettingsState {
   /** The live saved templates (browse/preview/rename/delete source). Synced from the app store. */
   templates: readonly TemplateRecord[];
   /** The templates action handle (rename/remove). Synced from the app store. */
-  templateActions: { remove(name: string): void; rename(oldName: string, newName: string): void };
+  templateActions: {
+    remove(name: string): void;
+    rename(oldName: string, newName: string): void;
+    save(name: string, body: string): void;
+  };
   /** The template whose body is previewed under the cursor, or `null` when the cursor is elsewhere. */
   previewTemplate: TemplateRecord | null;
   /** The template name pending a delete confirm ("(y/n)"), or `null` when not confirming. */
   confirmingDelete: string | null;
+  /** The custom theme id pending delete confirm, or `null`. */
+  confirmingThemeDelete: string | null;
+  /** The live saved themes (theme picker source). Synced from the app store. */
+  themes: readonly ThemeRecord[];
+  /** Theme registry actions (import/remove). Synced from the app store. */
+  themeActions: {
+    importTheme(json: string): Promise<string>;
+    remove(id: string): Promise<void>;
+  };
   /** The transient inline notice (rejection reason / hint), or `null`. */
   notice: string | null;
 }
 
 /** Find the first selectable row index at or after `from` (wrapping). Used to seed the cursor and to
  * skip header/read-only rows during navigation. */
-function firstSelectableFrom(rows: readonly Row[], from: number): number {
+function firstSelectableFrom(rows: readonly SettingsRow[], from: number): number {
   for (let i = 0; i < rows.length; i++) {
     const idx = (from + i) % rows.length;
     const row = rows[idx];
@@ -461,6 +255,12 @@ export function settingsMode(
     readonly templateActions?: {
       remove(name: string): void;
       rename(oldName: string, newName: string): void;
+      save(name: string, body: string): void;
+    };
+    readonly themes?: readonly ThemeRecord[];
+    readonly themeActions?: {
+      importTheme(json: string): Promise<string>;
+      remove(id: string): Promise<void>;
     };
   },
   opts: SettingsModeOptions = {},
@@ -470,10 +270,22 @@ export function settingsMode(
   const initialLlm: LlmWire = current.llm ?? {};
   const initialStartupRogue: StartupRogueWire | null = current.startupRogue ?? null;
   const initialTemplates: readonly TemplateRecord[] = current.templates ?? [];
-  const initialRows = buildRows(initialLlm, initialStartupRogue, initialTemplates);
+  const initialThemes: readonly ThemeRecord[] = current.themes ?? listThemeRecords();
+  const initialCategoryId: SettingsCategoryId = 'appearance';
+  const initialRows = buildCategoryRows(initialCategoryId, {
+    llm: initialLlm,
+    startupRogue: initialStartupRogue,
+    templates: initialTemplates,
+    themes: initialThemes,
+  });
+  const initialCursor = firstSelectableFrom(initialRows, 0);
   const s: SettingsState = {
     rows: initialRows,
-    cursor: firstSelectableFrom(initialRows, 0),
+    activePane: 'categories',
+    categoryId: initialCategoryId,
+    categoryCursor: categoryIndexById(initialCategoryId),
+    rowCursors: { [initialCategoryId]: initialCursor },
+    cursor: initialCursor,
     modifier: current.modifier,
     persistedTheme: current.theme,
     theme: current.theme,
@@ -494,9 +306,17 @@ export function settingsMode(
     editValue: '',
     capturing: null,
     templates: initialTemplates,
-    templateActions: current.templateActions ?? { remove() {}, rename() {} },
+    templateActions: current.templateActions ?? { remove() {}, rename() {}, save() {} },
     previewTemplate: null,
     confirmingDelete: null,
+    confirmingThemeDelete: null,
+    themes: initialThemes,
+    themeActions: current.themeActions ?? {
+      async importTheme() {
+        return '';
+      },
+      async remove() {},
+    },
     notice: null,
   };
 
@@ -515,8 +335,77 @@ export function settingsMode(
     }
   }
 
+  function modalIsBusy(): boolean {
+    return (
+      s.capturing !== null ||
+      s.editing !== null ||
+      s.confirmingDelete !== null ||
+      s.confirmingThemeDelete !== null
+    );
+  }
+
+  function buildRowsFor(categoryId: SettingsCategoryId): readonly SettingsRow[] {
+    return buildCategoryRows(categoryId, {
+      llm: s.llm,
+      startupRogue: s.startupRogue,
+      templates: s.templates,
+      themes: s.themes,
+    });
+  }
+
+  function switchCategory(delta: number): void {
+    if (s.activePane !== 'categories' || modalIsBusy()) {
+      return;
+    }
+    const len = SETTINGS_CATEGORIES.length;
+    const nextCursor = (s.categoryCursor + delta + len) % len;
+    const category = SETTINGS_CATEGORIES[nextCursor];
+    if (category === undefined) {
+      return;
+    }
+    const prev = s.rows[s.cursor];
+    if (prev?.kind === 'theme') {
+      restoreThemePreview();
+    }
+    s.categoryCursor = nextCursor;
+    s.categoryId = category.id;
+    s.rows = buildRowsFor(category.id);
+    const savedCursor = s.rowCursors[category.id] ?? 0;
+    s.cursor = firstSelectableFrom(s.rows, Math.min(savedCursor, s.rows.length - 1));
+    s.previewTemplate = null;
+    s.notice = null;
+    refresh();
+  }
+
+  function enterSettingsPane(): void {
+    if (modalIsBusy()) {
+      return;
+    }
+    s.activePane = 'settings';
+    s.notice = null;
+    refresh();
+  }
+
+  function enterCategoryPane(): void {
+    if (modalIsBusy()) {
+      return;
+    }
+    const prev = s.rows[s.cursor];
+    if (prev?.kind === 'theme') {
+      restoreThemePreview();
+    }
+    s.activePane = 'categories';
+    s.previewTemplate = null;
+    s.notice = null;
+    refresh();
+  }
+
   /** Move the cursor by `delta`, skipping header/read-only rows (wrapping). */
   function moveCursor(delta: number): void {
+    if (s.activePane !== 'settings') {
+      switchCategory(delta);
+      return;
+    }
     const len = s.rows.length;
     let idx = s.cursor;
     for (let step = 0; step < len; step++) {
@@ -541,6 +430,7 @@ export function settingsMode(
           s.previewTemplate = null;
         }
         s.notice = null;
+        s.rowCursors = { ...s.rowCursors, [s.categoryId]: s.cursor };
         refresh();
         return;
       }
@@ -722,6 +612,18 @@ export function settingsMode(
       commitTemplateRename();
       return;
     }
+    if (s.editing.kind === 'templateCreateName') {
+      commitTemplateCreateName();
+      return;
+    }
+    if (s.editing.kind === 'templateCreateBody') {
+      commitTemplateCreateBody();
+      return;
+    }
+    if (s.editing.kind === 'themeImport') {
+      void commitThemeImport();
+      return;
+    }
     const { provider, field } = s.editing;
     const value = s.editValue;
     const nextProvider = { ...(s.llm.providers?.[provider] ?? {}), [field]: value };
@@ -745,6 +647,58 @@ export function settingsMode(
     refresh();
   }
 
+  function validateTemplateName(name: string, originalName: string | null): string | null {
+    if (name === '') {
+      return 'Template name cannot be empty';
+    }
+    if (!TEMPLATE_NAME_RE.test(name)) {
+      return `"${name}" is invalid — use letters, digits, _ or - only`;
+    }
+    if (name !== originalName && s.templates.some((t) => t.name === name)) {
+      return `A template named "${name}" already exists`;
+    }
+    return null;
+  }
+
+  function beginTemplateCreate(): void {
+    s.editing = { kind: 'templateCreateName' };
+    s.editValue = '';
+    s.previewTemplate = null;
+    s.notice = 'New template name. Enter to continue, Esc to cancel.';
+    refresh();
+  }
+
+  function commitTemplateCreateName(): void {
+    if (s.editing === null || s.editing.kind !== 'templateCreateName') {
+      return;
+    }
+    const name = s.editValue.trim();
+    const error = validateTemplateName(name, null);
+    if (error !== null) {
+      s.notice = error;
+      refresh();
+      return;
+    }
+    s.editing = { kind: 'templateCreateBody', name };
+    s.editValue = '';
+    s.notice = 'Template body. Enter to save, Esc to cancel.';
+    refresh();
+  }
+
+  function commitTemplateCreateBody(): void {
+    if (s.editing === null || s.editing.kind !== 'templateCreateBody') {
+      return;
+    }
+    const name = s.editing.name;
+    const body = s.editValue;
+    s.templateActions.save(name, body);
+    s.editing = null;
+    s.editValue = '';
+    s.notice = null;
+    rebuildRows();
+    refresh();
+  }
+
   /** Commit a template rename: validate the new name (non-empty, `[A-Za-z0-9_-]+`, no collision with a
    * different existing template), then dispatch `rename` + rebuild. On a bad name, keep editing. */
   function commitTemplateRename(): void {
@@ -753,18 +707,9 @@ export function settingsMode(
     }
     const oldName = s.editing.name;
     const newName = s.editValue.trim();
-    if (newName === '') {
-      s.notice = 'Template name cannot be empty';
-      refresh();
-      return;
-    }
-    if (!TEMPLATE_NAME_RE.test(newName)) {
-      s.notice = `"${newName}" is invalid — use letters, digits, _ or - only`;
-      refresh();
-      return;
-    }
-    if (newName !== oldName && s.templates.some((t) => t.name === newName)) {
-      s.notice = `A template named "${newName}" already exists`;
+    const error = validateTemplateName(newName, oldName);
+    if (error !== null) {
+      s.notice = error;
       refresh();
       return;
     }
@@ -786,6 +731,12 @@ export function settingsMode(
     refresh();
   }
 
+  function beginThemeDelete(id: string): void {
+    s.confirmingThemeDelete = id;
+    s.notice = `delete theme "${id}"? (y/n)`;
+    refresh();
+  }
+
   /** Apply / cancel a pending template delete. `confirmed` removes it + rebuilds; otherwise cancels. */
   function resolveTemplateDelete(confirmed: boolean): void {
     const name = s.confirmingDelete;
@@ -799,6 +750,54 @@ export function settingsMode(
     refresh();
   }
 
+  async function resolveThemeDelete(confirmed: boolean): Promise<void> {
+    const id = s.confirmingThemeDelete;
+    s.confirmingThemeDelete = null;
+    s.notice = null;
+    if (confirmed && id !== null) {
+      await s.themeActions.remove(id);
+      if (s.theme === id || s.persistedTheme === id) {
+        s.theme = DEFAULT_THEME_ID;
+        s.persistedTheme = DEFAULT_THEME_ID;
+        setTheme(DEFAULT_THEME_ID);
+        void actions.update({ theme: DEFAULT_THEME_ID });
+      }
+      rebuildRows();
+    }
+    refresh();
+  }
+
+  function beginThemeImport(): void {
+    s.editing = { kind: 'themeImport' };
+    s.editValue = '';
+    s.notice = 'Paste theme JSON. Enter to import, Esc to cancel.';
+    refresh();
+  }
+
+  async function commitThemeImport(): Promise<void> {
+    if (s.editing === null || s.editing.kind !== 'themeImport') {
+      return;
+    }
+    const json = s.editValue.trim();
+    if (json === '') {
+      s.notice = 'Theme JSON cannot be empty';
+      refresh();
+      return;
+    }
+    try {
+      const newId = await s.themeActions.importTheme(json);
+      s.editing = null;
+      s.editValue = '';
+      s.theme = newId;
+      setTheme(newId);
+      s.notice = `Imported theme "${newId}" — Enter on the row to persist selection`;
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      s.notice = message;
+    }
+    refresh();
+  }
+
   /** Sync the live templates registry + action handle from the app store into the closure state. Called
    * by the render component when the store's `templates.items` (or actions) change, so the section
    * tracks `:save`/external edits live. Rebuilds rows only when the item list actually changed. */
@@ -807,6 +806,7 @@ export function settingsMode(
     templateActions: {
       remove(name: string): void;
       rename(oldName: string, newName: string): void;
+      save(name: string, body: string): void;
     },
   ): void {
     s.templateActions = templateActions;
@@ -825,12 +825,37 @@ export function settingsMode(
     refresh();
   }
 
+  function syncThemes(
+    items: readonly ThemeRecord[],
+    themeActions: {
+      importTheme(json: string): Promise<string>;
+      remove(id: string): Promise<void>;
+    },
+  ): void {
+    s.themeActions = themeActions;
+    const changed =
+      items.length !== s.themes.length ||
+      items.some(
+        (t, i) =>
+          t.id !== s.themes[i]?.id ||
+          t.name !== s.themes[i]?.name ||
+          t.builtin !== s.themes[i]?.builtin,
+      );
+    if (!changed) {
+      return;
+    }
+    s.themes = items;
+    rebuildRows();
+    refresh();
+  }
+
   /** Rebuild the live row list from the draft llm, clamping the cursor onto a still-selectable row. */
   function rebuildRows(): void {
-    s.rows = buildRows(s.llm, s.startupRogue, s.templates);
-    if (s.cursor >= s.rows.length || !isSelectable(s.rows[s.cursor] as Row)) {
+    s.rows = buildRowsFor(s.categoryId);
+    if (s.cursor >= s.rows.length || !isSelectable(s.rows[s.cursor] as SettingsRow)) {
       s.cursor = firstSelectableFrom(s.rows, Math.min(s.cursor, s.rows.length - 1));
     }
+    s.rowCursors = { ...s.rowCursors, [s.categoryId]: s.cursor };
   }
 
   /** Begin capturing the next key for a binding row's rebind. */
@@ -873,6 +898,10 @@ export function settingsMode(
   /** Act on the focused row (Enter). Modifier → commit; theme → already previewed, just confirm Save;
    * binding → begin capture. */
   function confirm(): void {
+    if (s.activePane === 'categories') {
+      enterSettingsPane();
+      return;
+    }
     const row = s.rows[s.cursor];
     if (row === undefined) {
       return;
@@ -925,8 +954,14 @@ export function settingsMode(
       case 'role':
         selectRole(row.role, row.tier);
         break;
+      case 'templateCreate':
+        beginTemplateCreate();
+        break;
       case 'template':
         beginTemplateRename(row.name);
+        break;
+      case 'themeImport':
+        beginThemeImport();
         break;
       case 'binding':
         beginCapture(row.action);
@@ -958,6 +993,10 @@ export function settingsMode(
       resolveTemplateDelete(false);
       return;
     }
+    if (s.confirmingThemeDelete !== null) {
+      void resolveThemeDelete(false);
+      return;
+    }
     // Revert the live preview to the last persisted theme (a browsed-but-unsaved theme is discarded).
     if (s.theme !== s.persistedTheme) {
       setTheme(s.persistedTheme);
@@ -972,6 +1011,8 @@ export function settingsMode(
     keymap: [
       { chord: { key: { downArrow: true } }, intent: 'cursorDown', description: 'next' },
       { chord: { key: { upArrow: true } }, intent: 'cursorUp', description: 'prev' },
+      { chord: { key: { rightArrow: true } }, intent: 'enterPane', description: 'settings' },
+      { chord: { key: { leftArrow: true } }, intent: 'exitPane', description: 'categories' },
       { chord: { key: { return: true } }, intent: 'confirm', description: 'select' },
       { chord: { key: { escape: true } }, intent: 'cancel', description: 'close' },
       { chord: { key: { backspace: true } }, intent: 'backspace', description: 'delete char' },
@@ -981,21 +1022,27 @@ export function settingsMode(
       switch (intent) {
         case 'cursorUp':
           // Cursor moves are inert while capturing, editing, or awaiting a delete confirm.
-          if (s.capturing === null && s.editing === null && s.confirmingDelete === null) {
+          if (!modalIsBusy()) {
             moveCursor(-1);
           }
           break;
         case 'cursorDown':
-          if (s.capturing === null && s.editing === null && s.confirmingDelete === null) {
+          if (!modalIsBusy()) {
             moveCursor(1);
           }
+          break;
+        case 'enterPane':
+          enterSettingsPane();
+          break;
+        case 'exitPane':
+          enterCategoryPane();
           break;
         case 'confirm':
           // Enter commits an in-progress text edit; otherwise acts on the focused row. Inert while a
           // delete confirm is pending (it only accepts y/n via onUncaptured, or Esc to cancel).
           if (s.editing !== null) {
             commitEdit();
-          } else if (s.capturing === null && s.confirmingDelete === null) {
+          } else if (s.capturing === null && s.confirmingDelete === null && s.confirmingThemeDelete === null) {
             confirm();
           }
           break;
@@ -1051,6 +1098,17 @@ export function settingsMode(
         }
         return true;
       }
+      if (s.confirmingThemeDelete !== null) {
+        if (input.length === 0 || key.ctrl || key.meta || key.escape || key.return) {
+          return false;
+        }
+        if (input === 'y' || input === 'Y') {
+          void resolveThemeDelete(true);
+        } else if (input === 'n' || input === 'N') {
+          void resolveThemeDelete(false);
+        }
+        return true;
+      }
       // Normal mode: j/k navigate (mirrors the spawn wizard's list steps).
       if (input.length === 0 || key.ctrl || key.meta || key.escape || key.return) {
         return false;
@@ -1063,6 +1121,14 @@ export function settingsMode(
         moveCursor(-1);
         return true;
       }
+      if (input === 'l') {
+        enterSettingsPane();
+        return true;
+      }
+      if (input === 'h') {
+        enterCategoryPane();
+        return true;
+      }
       // `d` on a template row opens a delete confirm (an unobtrusive key; only acts on a template).
       if (input === 'd') {
         const row = s.rows[s.cursor];
@@ -1070,11 +1136,15 @@ export function settingsMode(
           beginTemplateDelete(row.name);
           return true;
         }
+        if (row?.kind === 'theme' && !row.builtin) {
+          beginThemeDelete(row.value);
+          return true;
+        }
         return false;
       }
       return false; // other chars are not actions here — swallow under the modal
     },
-    render: () => <SettingsDialog state={s} syncTemplates={syncTemplates} />,
+    render: () => <SettingsDialog state={s} syncTemplates={syncTemplates} syncThemes={syncThemes} />,
   };
 
   return mode;
@@ -1087,7 +1157,11 @@ export function settingsMode(
  * subscription resolves against `EMPTY_TEMPLATES`, a stable empty snapshot, and we return `null`. */
 function useLiveTemplates(): {
   items: readonly TemplateRecord[];
-  actions: { remove(name: string): void; rename(oldName: string, newName: string): void };
+  actions: {
+    remove(name: string): void;
+    rename(oldName: string, newName: string): void;
+    save(name: string, body: string): void;
+  };
 } | null {
   const store = useContext(AppStoreContext);
   const snapshot = useStoreWithEqualityFn(
@@ -1098,12 +1172,39 @@ function useLiveTemplates(): {
   return store === null ? null : snapshot;
 }
 
+function useLiveThemes(): {
+  items: readonly ThemeRecord[];
+  actions: {
+    importTheme(json: string): Promise<string>;
+    remove(id: string): Promise<void>;
+  };
+} | null {
+  const store = useContext(AppStoreContext);
+  const snapshot = useStoreWithEqualityFn(
+    store ?? EMPTY_STORE,
+    (st: AppStore) => ({ items: st.themes.items, actions: st.actions.themes }),
+    shallow,
+  );
+  return store === null ? null : snapshot;
+}
+
 /** A stable, frozen state snapshot for {@link EMPTY_STORE} — referentially constant so the selector's
  * `shallow` compare never sees a new ref (a fresh object each call would trip React's "getSnapshot
  * should be cached" infinite-loop guard). */
 const EMPTY_STORE_STATE = {
   templates: { items: [] as readonly TemplateRecord[] },
-  actions: { templates: { remove() {}, rename() {} } },
+  themes: { items: [] as readonly ThemeRecord[] },
+  actions: {
+    templates: { remove() {}, rename() {}, save() {} },
+    themes: {
+      async importTheme() {
+        return '';
+      },
+      async remove() {},
+      async load() {},
+      async save() {},
+    },
+  },
 } as unknown as AppStore;
 
 /** A stable no-op store standing in for `useStoreWithEqualityFn` when no `<AppStoreProvider>` is
@@ -1142,11 +1243,23 @@ const CTRL_UNSUPPORTED_NOTICE =
 function SettingsDialog({
   state: s,
   syncTemplates,
+  syncThemes,
 }: {
   readonly state: SettingsState;
   readonly syncTemplates: (
     items: readonly TemplateRecord[],
-    actions: { remove(name: string): void; rename(oldName: string, newName: string): void },
+    actions: {
+      remove(name: string): void;
+      rename(oldName: string, newName: string): void;
+      save(name: string, body: string): void;
+    },
+  ) => void;
+  readonly syncThemes: (
+    items: readonly ThemeRecord[],
+    actions: {
+      importTheme(json: string): Promise<string>;
+      remove(id: string): Promise<void>;
+    },
   ) => void;
 }): JSX.Element {
   const theme = useTheme();
@@ -1158,11 +1271,17 @@ function SettingsDialog({
   // The store is optional: tests that render the modal without an <AppStoreProvider> get `null` here
   // and the modal just runs off whatever `current.templates` it was opened with.
   const live = useLiveTemplates();
+  const liveThemes = useLiveThemes();
   useEffect(() => {
     if (live !== null) {
       syncTemplates(live.items, live.actions);
     }
   }, [live, syncTemplates]);
+  useEffect(() => {
+    if (liveThemes !== null) {
+      syncThemes(liveThemes.items, liveThemes.actions);
+    }
+  }, [liveThemes, syncThemes]);
   const view = rowWindow(s.rows, s.cursor);
 
   return (
@@ -1178,27 +1297,50 @@ function SettingsDialog({
         Settings
       </Text>
 
-      <Box marginTop={1} flexDirection="column">
-        {view.before > 0 && (
-          <Box flexShrink={0}>
-            <Text dimColor>{`  ↑ ${view.before} more`}</Text>
-          </Box>
-        )}
-        {view.rows.map(({ row, index }) => (
-          <RowView
-            key={rowKey(row)}
-            row={row}
-            focused={index === s.cursor}
-            state={s}
-            theme={theme}
-            ctrlAvailable={ctrlAvailable}
-          />
-        ))}
-        {view.after > 0 && (
-          <Box flexShrink={0}>
-            <Text dimColor>{`  ↓ ${view.after} more`}</Text>
-          </Box>
-        )}
+      <Box marginTop={1} flexDirection="row">
+        <Box flexDirection="column" flexShrink={0} width={18} marginRight={2}>
+          {SETTINGS_CATEGORIES.map((category, index) => {
+            const selected = category.id === s.categoryId;
+            const focused = s.activePane === 'categories' && index === s.categoryCursor;
+            const cursor = focused ? '› ' : '  ';
+            const mark = selected ? '• ' : '  ';
+            return (
+              <Box key={category.id} flexShrink={0}>
+                <Text
+                  color={focused ? theme.warning : selected ? theme.heading : theme.text}
+                  bold={focused || selected}
+                >
+                  {cursor}
+                  {mark}
+                  {category.label}
+                </Text>
+              </Box>
+            );
+          })}
+        </Box>
+
+        <Box flexDirection="column" flexGrow={1}>
+          {view.before > 0 && (
+            <Box flexShrink={0}>
+              <Text dimColor>{`  ↑ ${view.before} more`}</Text>
+            </Box>
+          )}
+          {view.rows.map(({ row, index }) => (
+            <RowView
+              key={rowKey(row)}
+              row={row}
+              focused={s.activePane === 'settings' && index === s.cursor}
+              state={s}
+              theme={theme}
+              ctrlAvailable={ctrlAvailable}
+            />
+          ))}
+          {view.after > 0 && (
+            <Box flexShrink={0}>
+              <Text dimColor>{`  ↓ ${view.after} more`}</Text>
+            </Box>
+          )}
+        </Box>
       </Box>
 
       {/* The ctrl-unsupported notice is always shown under the modifier section when ctrl can't be
@@ -1233,7 +1375,7 @@ function SettingsDialog({
       )}
 
       <Box marginTop={1} flexShrink={0}>
-        <Text dimColor>j/k: navigate · enter: select/rename · d: delete · esc: close</Text>
+        <Text dimColor>j/k: navigate · h/l: categories/settings · enter: select · esc: close</Text>
       </Box>
     </Box>
   );
@@ -1256,9 +1398,9 @@ const VISIBLE_ROWS = 22;
 /** Compute the visible row window around the cursor. Returns the slice (with original indices, so
  * focus math stays correct) plus the count of rows hidden above/below (shown as "↑ N more"). */
 function rowWindow(
-  rows: readonly Row[],
+  rows: readonly SettingsRow[],
   cursor: number,
-): { rows: Array<{ row: Row; index: number }>; before: number; after: number } {
+): { rows: Array<{ row: SettingsRow; index: number }>; before: number; after: number } {
   if (rows.length <= VISIBLE_ROWS) {
     return {
       rows: rows.map((row, index) => ({ row, index })),
@@ -1271,7 +1413,7 @@ function rowWindow(
   let start = Math.max(0, cursor - half);
   const end = Math.min(rows.length, start + VISIBLE_ROWS);
   start = Math.max(0, end - VISIBLE_ROWS);
-  const slice: Array<{ row: Row; index: number }> = [];
+  const slice: Array<{ row: SettingsRow; index: number }> = [];
   for (let i = start; i < end; i++) {
     const row = rows[i];
     if (row !== undefined) {
@@ -1282,41 +1424,8 @@ function rowWindow(
 }
 
 /** A stable React key for a row. */
-function rowKey(row: Row): string {
-  switch (row.kind) {
-    case 'header':
-      return `header:${row.label}`;
-    case 'modifier':
-      return `modifier:${row.value}`;
-    case 'theme':
-      return `theme:${row.value}`;
-    case 'gap':
-      return `gap:${row.value}`;
-    case 'vim':
-      return `vim:${row.value}`;
-    case 'chatView':
-      return `chatView:${row.value}`;
-    case 'startupRogue':
-      return `srogue:${row.field}:${row.field === 'off' ? '' : row.value}`;
-    case 'collaborator':
-      return `collab:${row.value ?? 'default'}`;
-    case 'planner':
-      return `planner:${row.value ?? 'default'}`;
-    case 'crow':
-      return `crow:${row.value ?? 'default'}`;
-    case 'provider':
-      return `provider:${row.provider}:${row.field}`;
-    case 'tier':
-      return `tier:${row.name}`;
-    case 'role':
-      return `role:${row.role}:${row.tier}`;
-    case 'template':
-      return `template:${row.name}`;
-    case 'templateEmpty':
-      return 'templateEmpty';
-    case 'binding':
-      return `binding:${row.action}`;
-  }
+function rowKey(row: SettingsRow): string {
+  return row.id;
 }
 
 /** Render one flat row by kind. */
@@ -1327,7 +1436,7 @@ function RowView({
   theme,
   ctrlAvailable,
 }: {
-  readonly row: Row;
+  readonly row: SettingsRow;
   readonly focused: boolean;
   readonly state: SettingsState;
   readonly theme: ReturnType<typeof useTheme>;
@@ -1366,13 +1475,34 @@ function RowView({
     const selected = row.value === s.persistedTheme;
     const mark = selected ? '(•) ' : '( ) ';
     const color = focused ? theme.warning : theme.text;
+    const confirming = s.confirmingThemeDelete === row.value;
+    const label = row.builtin ? row.name : `${row.name} (custom)`;
     return (
       <Box flexShrink={0}>
         <Text color={color} bold={focused}>
           {cursor}
           {mark}
-          {row.value}
+          {label}
         </Text>
+        <Text color={confirming ? theme.warning : theme.muted}>
+          {confirming ? '  delete? (y/n)' : row.builtin ? '' : '  d: delete'}
+        </Text>
+      </Box>
+    );
+  }
+
+  if (row.kind === 'themeImport') {
+    const importing = s.editing?.kind === 'themeImport';
+    const color = focused ? theme.warning : theme.text;
+    return (
+      <Box flexShrink={0}>
+        <Text color={color} bold={focused}>
+          {cursor}
+          {importing ? 'paste JSON ' : '+ Import Theme'}
+        </Text>
+        {importing ? (
+          <TextInput value={s.editValue} placeholder="(json)" focused color={theme.text} />
+        ) : null}
       </Box>
     );
   }
@@ -1446,12 +1576,13 @@ function RowView({
     }
     if (row.field === 'harness') {
       const selected = sr !== null && sr.harness === row.value;
+      const label = harnessLabel(row.value) ?? row.value;
       return (
         <Box flexShrink={0}>
           <Text color={color} bold={focused}>
             {cursor}
             {selected ? '(•) ' : '( ) '}
-            {row.value}
+            {label}
           </Text>
         </Box>
       );
@@ -1492,7 +1623,8 @@ function RowView({
       : s.collaboratorHarness === row.value;
     const mark = selected ? '(•) ' : '( ) ';
     const color = focused ? theme.warning : theme.text;
-    const label = isDefaultRow ? `(default) ${s.effectiveCollaborator}` : (row.value ?? '');
+    const effective = harnessLabel(s.effectiveCollaborator) ?? s.effectiveCollaborator;
+    const label = isDefaultRow ? `(default) ${effective}` : (harnessLabel(row.value) ?? '');
     return (
       <Box flexShrink={0}>
         <Text color={color} bold={focused}>
@@ -1510,7 +1642,8 @@ function RowView({
     const selected = isDefaultRow ? s.plannerHarness === null : s.plannerHarness === row.value;
     const mark = selected ? '(•) ' : '( ) ';
     const color = focused ? theme.warning : theme.text;
-    const label = isDefaultRow ? `(default) ${s.effectivePlanner}` : (row.value ?? '');
+    const effective = harnessLabel(s.effectivePlanner) ?? s.effectivePlanner;
+    const label = isDefaultRow ? `(default) ${effective}` : (harnessLabel(row.value) ?? '');
     return (
       <Box flexShrink={0}>
         <Text color={color} bold={focused}>
@@ -1535,19 +1668,22 @@ function RowView({
           <Text color={color} bold={focused}>
             {cursor}
             {usingDefault ? '(•) ' : '( ) '}
-            {`reset to default (${s.effectiveCrow.join(', ')})`}
+            {`reset to default (${s.effectiveCrow
+              .map((harness) => harnessLabel(harness) ?? harness)
+              .join(', ')})`}
           </Text>
         </Box>
       );
     }
     const checked = pool.includes(row.value as string);
     const mark = checked ? '[x] ' : '[ ] ';
+    const label = harnessLabel(row.value) ?? row.value;
     return (
       <Box flexShrink={0}>
         <Text color={color} bold={focused}>
           {cursor}
           {mark}
-          {row.value}
+          {label}
         </Text>
       </Box>
     );
@@ -1642,8 +1778,31 @@ function RowView({
       <Box flexShrink={0}>
         <Text color={theme.muted}>
           {'  '}
-          no templates — use :save &lt;name&gt; &lt;body&gt; in chat
+          no templates
         </Text>
+      </Box>
+    );
+  }
+
+  if (row.kind === 'templateCreate') {
+    const creatingName = s.editing?.kind === 'templateCreateName';
+    const creatingBody = s.editing?.kind === 'templateCreateBody';
+    const creatingBodyName = s.editing?.kind === 'templateCreateBody' ? s.editing.name : null;
+    const color = focused ? theme.warning : theme.text;
+    return (
+      <Box flexShrink={0}>
+        <Text color={color} bold={focused}>
+          {cursor}
+          {creatingName ? 'name ' : creatingBody ? `body :${creatingBodyName}: ` : '+ New Template'}
+        </Text>
+        {creatingName || creatingBody ? (
+          <TextInput
+            value={s.editValue}
+            placeholder={creatingName ? '(name)' : '(body)'}
+            focused
+            color={theme.text}
+          />
+        ) : null}
       </Box>
     );
   }

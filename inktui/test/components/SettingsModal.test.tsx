@@ -65,6 +65,24 @@ async function walkUntilFocused(
   throw new Error(`never focused a row matching "${marker}"`);
 }
 
+async function openCategory(
+  stdin: { write: (s: string) => void },
+  lastFrame: () => string | undefined,
+  label: string,
+): Promise<void> {
+  for (let i = 0; i < 10; i++) {
+    const focusedLine = (lastFrame() ?? '').split('\n').find((l) => l.includes('›'));
+    if (focusedLine?.includes(label)) {
+      stdin.write('l');
+      await tick();
+      return;
+    }
+    stdin.write('j');
+    await tick();
+  }
+  throw new Error(`never focused category "${label}"`);
+}
+
 /** A `current` with the extended harness + llm data populated, for the new-section tests. */
 const RICH_CURRENT: Parameters<typeof settingsMode>[2] = {
   modifier: 'alt',
@@ -150,18 +168,53 @@ describe('SettingsModal', () => {
     await tick();
     const frame = lastFrame() ?? '';
     expect(frame).toContain('Settings');
-    expect(frame).toContain('Command modifier');
+    expect(frame).toContain('Appearance');
+    expect(frame).toContain('Harnesses');
+    expect(frame).toContain('LLM');
+    expect(frame).toContain('Templates');
+    expect(frame).toContain('Keybindings');
     expect(frame).toContain('Theme');
-    expect(frame).toContain('Pane gap');
-    // The row list now scrolls by cursor (it is far taller than the screen). The later sections —
-    // Planning agent harness, LLM providers, Tiers, Role → tier, Key bindings — come into view as
-    // the cursor descends; the top sections paint on open.
+    expect(frame).toContain('Pane Gap');
     expect(selectActiveMode(stores.modes)?.id).toBe(SETTINGS_MODE_ID);
 
     stdin.write(ESC);
     await tick();
     expect(selectActiveMode(stores.modes)).toBeNull();
     expect(stores.focus.getState().intendedId).toBe('notes');
+  });
+
+  it('category cursor moves with j/k', async () => {
+    const { stores, enter } = setup();
+    const { lastFrame, stdin } = render(<Harness stores={stores} />);
+    enter();
+    await tick();
+    expect((lastFrame() ?? '').split('\n').find((l) => l.includes('›'))).toContain('Appearance');
+    stdin.write('j');
+    await tick();
+    expect((lastFrame() ?? '').split('\n').find((l) => l.includes('›'))).toContain('Harnesses');
+    stdin.write('k');
+    await tick();
+    expect((lastFrame() ?? '').split('\n').find((l) => l.includes('›'))).toContain('Appearance');
+  });
+
+  it('l/Enter enter settings rows and h returns to categories', async () => {
+    const { stores, enter } = setup();
+    const { lastFrame, stdin } = render(<Harness stores={stores} />);
+    enter();
+    await tick();
+    stdin.write('l');
+    await tick();
+    expect((lastFrame() ?? '').split('\n').find((l) => l.includes('›'))).toContain(
+      'Everforest Dark',
+    );
+    stdin.write('h');
+    await tick();
+    expect((lastFrame() ?? '').split('\n').find((l) => l.includes('›'))).toContain('Appearance');
+    stdin.write('\r');
+    await tick();
+    expect((lastFrame() ?? '').split('\n').find((l) => l.includes('›'))).toContain(
+      'Everforest Dark',
+    );
   });
 
   it('the openSettings handler opens the modal (the chord→handler→modal wiring)', async () => {
@@ -189,9 +242,10 @@ describe('SettingsModal', () => {
       paneGap: 0,
       keyOverrides: {},
     });
-    const { stdin } = render(<Harness stores={stores} />);
+    const { lastFrame, stdin } = render(<Harness stores={stores} />);
     enter();
     await tick();
+    await openCategory(stdin, lastFrame, 'Keybindings');
     // Cursor starts on the first modifier row (`alt`). Enter selects it.
     stdin.write('\r');
     await tick();
@@ -201,14 +255,12 @@ describe('SettingsModal', () => {
   it('selecting a pane-gap option commits via update', async () => {
     // Start at gap 0; navigate to the second gap row (value 1) and Enter → update({ pane_gap: 1 }).
     const { stores, patches, enter } = setup();
-    const { stdin } = render(<Harness stores={stores} />);
+    const { lastFrame, stdin } = render(<Harness stores={stores} />);
     enter();
     await tick();
-    // Selectable rows: 3 modifiers + 2 themes precede the gap section; one more `j` lands on gap row 1.
-    for (let i = 0; i < 6; i++) {
-      stdin.write('j');
-      await tick();
-    }
+    stdin.write('l');
+    await tick();
+    await walkUntilFocused(stdin, lastFrame, '1  │');
     stdin.write('\r');
     await tick();
     expect(patches).toContainEqual({ pane_gap: 1 });
@@ -219,6 +271,7 @@ describe('SettingsModal', () => {
     const { lastFrame, stdin } = render(<Harness stores={stores} />);
     enter();
     await tick();
+    await openCategory(stdin, lastFrame, 'Keybindings');
     // The Vim mode radio sits right after Pane gap; walk down until the focused row is "on".
     await walkUntilFocused(stdin, lastFrame, 'on');
     stdin.write('\r');
@@ -232,6 +285,7 @@ describe('SettingsModal', () => {
     const { lastFrame, stdin } = render(<Harness stores={stores} />);
     enter();
     await tick();
+    await openCategory(stdin, lastFrame, 'Keybindings');
     const frame = lastFrame() ?? '';
     expect(frame).toContain('kitty keyboard protocol');
     expect(frame).toContain('unavailable');
@@ -251,10 +305,12 @@ describe('SettingsModal', () => {
     const { lastFrame, stdin } = render(<Harness stores={stores} />);
     enter();
     await tick();
+    stdin.write('l');
+    await tick();
     expect(themeStore.getState().id).toBe(DEFAULT_THEME_ID);
 
     const other: ThemeId = 'everforest-light';
-    await walkUntilFocused(stdin, lastFrame, other);
+    await walkUntilFocused(stdin, lastFrame, 'Everforest Light');
     expect(themeStore.getState().id).toBe(other);
     expect((lastFrame() ?? '').split('\n').find((l) => l.includes('›'))).toContain('( )');
 
@@ -267,10 +323,12 @@ describe('SettingsModal', () => {
     const { lastFrame, stdin } = render(<Harness stores={stores} />);
     enter();
     await tick();
+    stdin.write('l');
+    await tick();
     expect(themeStore.getState().id).toBe(DEFAULT_THEME_ID);
 
     const other: ThemeId = 'everforest-light';
-    await walkUntilFocused(stdin, lastFrame, other);
+    await walkUntilFocused(stdin, lastFrame, 'Everforest Light');
     expect(themeStore.getState().id).toBe(other);
 
     stdin.write(ESC);
@@ -283,8 +341,10 @@ describe('SettingsModal', () => {
     const { lastFrame, stdin } = render(<Harness stores={stores} />);
     enter();
     await tick();
+    stdin.write('l');
+    await tick();
     const other: ThemeId = 'everforest-light';
-    await walkUntilFocused(stdin, lastFrame, other);
+    await walkUntilFocused(stdin, lastFrame, 'Everforest Light');
     expect(themeStore.getState().id).toBe(other);
     stdin.write('\r');
     await tick();
@@ -301,6 +361,7 @@ describe('SettingsModal', () => {
     const { lastFrame, stdin } = render(<Harness stores={stores} />);
     enter();
     await tick();
+    await openCategory(stdin, lastFrame, 'Keybindings');
     // Walk to the first binding row ("spawn") — bindings are the last section, after the harness /
     // LLM / tier / role sections, and the list scrolls by cursor.
     await walkToFirstBinding(stdin, lastFrame);
@@ -320,6 +381,7 @@ describe('SettingsModal', () => {
     const { lastFrame, stdin } = render(<Harness stores={stores} />);
     enter();
     await tick();
+    await openCategory(stdin, lastFrame, 'Keybindings');
     await walkToFirstBinding(stdin, lastFrame);
     stdin.write('\r'); // begin capture
     await tick();
@@ -334,6 +396,7 @@ describe('SettingsModal', () => {
     const { lastFrame, stdin } = render(<Harness stores={stores} />);
     enter();
     await tick();
+    await openCategory(stdin, lastFrame, 'Keybindings');
     await walkToFirstBinding(stdin, lastFrame);
     stdin.write('\r'); // begin capture on the FIRST binding row
     await tick();
@@ -353,8 +416,10 @@ describe('SettingsModal', () => {
     const { lastFrame, stdin } = render(<Harness stores={stores} />);
     stores.modes.getState().enter(settingsMode(stores.modes, actions, RICH_CURRENT));
     await tick();
+    await openCategory(stdin, lastFrame, 'Harnesses');
     await walkUntilFocused(stdin, lastFrame, '(default)');
-    expect(lastFrame()).toContain('Planning agent harness');
+    expect(lastFrame()).toContain('Planning Agent Harness');
+    expect(lastFrame()).toContain('Claude Code');
     expect(lastFrame()).not.toContain('Collaborator harness');
   });
 
@@ -364,10 +429,11 @@ describe('SettingsModal', () => {
     const { lastFrame, stdin } = render(<Harness stores={stores} />);
     stores.modes.getState().enter(settingsMode(stores.modes, actions, RICH_CURRENT));
     await tick();
+    await openCategory(stdin, lastFrame, 'Harnesses');
     // A "codex" harness row also exists in the Startup Rogue section (above planner); walk past it
     // by first focusing the planner "(default)" row, then the planner codex row.
     await walkUntilFocused(stdin, lastFrame, '(default)');
-    await walkUntilFocused(stdin, lastFrame, 'codex');
+    await walkUntilFocused(stdin, lastFrame, 'Codex');
     stdin.write('\r');
     await tick();
     expect(patches).toContainEqual({ planner_harness: 'codex' });
@@ -382,6 +448,7 @@ describe('SettingsModal', () => {
       .getState()
       .enter(settingsMode(stores.modes, actions, { ...RICH_CURRENT, plannerHarness: 'codex' }));
     await tick();
+    await openCategory(stdin, lastFrame, 'Harnesses');
     await walkUntilFocused(stdin, lastFrame, '(default)');
     stdin.write('\r');
     await tick();
@@ -395,10 +462,11 @@ describe('SettingsModal', () => {
     // Effective default is [claude_code]; toggling codex on yields [claude_code, codex].
     stores.modes.getState().enter(settingsMode(stores.modes, actions, RICH_CURRENT));
     await tick();
+    await openCategory(stdin, lastFrame, 'Harnesses');
     // Two harnesses named "codex" exist (planner + crow); walk past the planner one by first
     // focusing the crow reset row, then the crow codex row.
     await walkUntilFocused(stdin, lastFrame, 'reset to default');
-    await walkUntilFocused(stdin, lastFrame, 'codex'); // now the crow codex row
+    await walkUntilFocused(stdin, lastFrame, 'Codex'); // now the crow Codex row
     stdin.write('\r');
     await tick();
     expect(patches).toContainEqual({ crow_harnesses: ['claude_code', 'codex'] });
@@ -413,8 +481,9 @@ describe('SettingsModal', () => {
       .getState()
       .enter(settingsMode(stores.modes, actions, { ...RICH_CURRENT, crowHarnesses: ['codex'] }));
     await tick();
+    await openCategory(stdin, lastFrame, 'Harnesses');
     await walkUntilFocused(stdin, lastFrame, 'reset to default');
-    await walkUntilFocused(stdin, lastFrame, 'codex'); // the crow codex row (checked)
+    await walkUntilFocused(stdin, lastFrame, 'Codex'); // the crow Codex row (checked)
     stdin.write('\r');
     await tick();
     expect(lastFrame()).toContain('At least one crow harness');
@@ -430,6 +499,7 @@ describe('SettingsModal', () => {
     // groq has llm_env true → "set via env". Scroll the providers section into view first.
     stores.modes.getState().enter(settingsMode(stores.modes, actions, RICH_CURRENT));
     await tick();
+    await openCategory(stdin, lastFrame, 'LLM');
     await walkUntilFocused(stdin, lastFrame, 'groq api_key');
     expect(lastFrame()).toContain('set via env');
   });
@@ -441,6 +511,7 @@ describe('SettingsModal', () => {
     // cerebras has no env key → editable. Focus its api_key row, type a key, Enter.
     stores.modes.getState().enter(settingsMode(stores.modes, actions, RICH_CURRENT));
     await tick();
+    await openCategory(stdin, lastFrame, 'LLM');
     await walkUntilFocused(stdin, lastFrame, 'cerebras api_key');
     stdin.write('\r'); // begin edit
     await tick();
@@ -461,6 +532,7 @@ describe('SettingsModal', () => {
     const { lastFrame, stdin } = render(<Harness stores={stores} />);
     stores.modes.getState().enter(settingsMode(stores.modes, actions, RICH_CURRENT));
     await tick();
+    await openCategory(stdin, lastFrame, 'LLM');
     await walkUntilFocused(stdin, lastFrame, 'local base_url');
     stdin.write('\r');
     await tick();
@@ -479,6 +551,7 @@ describe('SettingsModal', () => {
     const { lastFrame, stdin } = render(<Harness stores={stores} />);
     stores.modes.getState().enter(settingsMode(stores.modes, actions, RICH_CURRENT));
     await tick();
+    await openCategory(stdin, lastFrame, 'LLM');
     // Scroll down toward the tiers section so the built-ins are in view.
     await walkUntilFocused(stdin, lastFrame, 'local base_url');
     const frame = lastFrame() ?? '';
@@ -494,6 +567,7 @@ describe('SettingsModal', () => {
     const { lastFrame, stdin } = render(<Harness stores={stores} />);
     stores.modes.getState().enter(settingsMode(stores.modes, actions, RICH_CURRENT));
     await tick();
+    await openCategory(stdin, lastFrame, 'LLM');
     // Role rows render as "<role>: <tier>"; focus notetaker: smart and Enter.
     await walkUntilFocused(stdin, lastFrame, 'notetaker: smart');
     stdin.write('\r');
@@ -505,22 +579,33 @@ describe('SettingsModal', () => {
 
   /** A spy templates handle recording rename/remove calls. */
   function fakeTemplateActions(): {
-    handle: { remove(name: string): void; rename(oldName: string, newName: string): void };
+    handle: {
+      remove(name: string): void;
+      rename(oldName: string, newName: string): void;
+      save(name: string, body: string): void;
+    };
     removed: string[];
     renamed: Array<[string, string]>;
+    saved: Array<[string, string]>;
   } {
     const removed: string[] = [];
     const renamed: Array<[string, string]> = [];
+    const saved: Array<[string, string]> = [];
     const handle = {
       remove: (name: string) => removed.push(name),
       rename: (oldName: string, newName: string) => renamed.push([oldName, newName]),
+      save: (name: string, body: string) => saved.push([name, body]),
     };
-    return { handle, removed, renamed };
+    return { handle, removed, renamed, saved };
   }
 
   function templatesCurrent(
     items: ReadonlyArray<{ name: string; body: string }>,
-    handle?: { remove(name: string): void; rename(oldName: string, newName: string): void },
+    handle?: {
+      remove(name: string): void;
+      rename(oldName: string, newName: string): void;
+      save(name: string, body: string): void;
+    },
   ): Parameters<typeof settingsMode>[2] {
     return {
       ...RICH_CURRENT,
@@ -544,6 +629,7 @@ describe('SettingsModal', () => {
       ),
     );
     await tick();
+    await openCategory(stdin, lastFrame, 'Templates');
     await walkUntilFocused(stdin, lastFrame, ':greet');
     const frame = lastFrame() ?? '';
     expect(frame).toContain('Templates');
@@ -557,16 +643,39 @@ describe('SettingsModal', () => {
     const { lastFrame, stdin } = render(<Harness stores={stores} />);
     stores.modes.getState().enter(settingsMode(stores.modes, actions, templatesCurrent([])));
     await tick();
-    // Walk down so the Templates section (below tiers/roles) scrolls into view.
-    await walkUntilFocused(stdin, lastFrame, 'notetaker: smart');
-    for (let i = 0; i < 20; i++) {
-      stdin.write('j');
-      await tick();
-      if ((lastFrame() ?? '').includes('no templates')) {
-        break;
-      }
-    }
+    await openCategory(stdin, lastFrame, 'Templates');
     expect(lastFrame()).toContain('no templates');
+  });
+
+  it('creates a template with inline name then body entry', async () => {
+    const stores = createInputStores(['notes'], 'notes');
+    const { actions } = fakeActions();
+    const { handle, saved } = fakeTemplateActions();
+    const { lastFrame, stdin } = render(<Harness stores={stores} />);
+    stores.modes
+      .getState()
+      .enter(settingsMode(stores.modes, actions, templatesCurrent([], handle)));
+    await tick();
+    await openCategory(stdin, lastFrame, 'Templates');
+    expect((lastFrame() ?? '').split('\n').find((l) => l.includes('›'))).toContain(
+      '+ New Template',
+    );
+    stdin.write('\r');
+    await tick();
+    stdin.write('n');
+    stdin.write('e');
+    stdin.write('w');
+    await tick();
+    stdin.write('\r');
+    await tick();
+    stdin.write('b');
+    stdin.write('o');
+    stdin.write('d');
+    stdin.write('y');
+    await tick();
+    stdin.write('\r');
+    await tick();
+    expect(saved).toContainEqual(['new', 'body']);
   });
 
   it('previews the template body when the cursor lands on its row', async () => {
@@ -582,6 +691,9 @@ describe('SettingsModal', () => {
           templatesCurrent([{ name: 'greet', body: 'hello world body' }]),
         ),
       );
+    await tick();
+    await openCategory(stdin, lastFrame, 'Templates');
+    stdin.write('j');
     await tick();
     await walkUntilFocused(stdin, lastFrame, ':greet');
     const frame = lastFrame() ?? '';
@@ -599,6 +711,9 @@ describe('SettingsModal', () => {
       .enter(
         settingsMode(stores.modes, actions, templatesCurrent([{ name: 'old', body: 'b' }], handle)),
       );
+    await tick();
+    await openCategory(stdin, lastFrame, 'Templates');
+    stdin.write('j');
     await tick();
     await walkUntilFocused(stdin, lastFrame, ':old');
     stdin.write('\r'); // begin rename (buffer seeded with "old")
@@ -631,6 +746,9 @@ describe('SettingsModal', () => {
         settingsMode(stores.modes, actions, templatesCurrent([{ name: 'old', body: 'b' }], handle)),
       );
     await tick();
+    await openCategory(stdin, lastFrame, 'Templates');
+    stdin.write('j');
+    await tick();
     await walkUntilFocused(stdin, lastFrame, ':old');
     stdin.write('\r');
     await tick();
@@ -661,6 +779,9 @@ describe('SettingsModal', () => {
         ),
       ),
     );
+    await tick();
+    await openCategory(stdin, lastFrame, 'Templates');
+    stdin.write('j');
     await tick();
     await walkUntilFocused(stdin, lastFrame, ':aaa');
     stdin.write('\r'); // rename "aaa", buffer = "aaa"
@@ -694,6 +815,9 @@ describe('SettingsModal', () => {
         ),
       );
     await tick();
+    await openCategory(stdin, lastFrame, 'Templates');
+    stdin.write('j');
+    await tick();
     await walkUntilFocused(stdin, lastFrame, ':gone');
     stdin.write('d'); // open the confirm
     await tick();
@@ -717,6 +841,9 @@ describe('SettingsModal', () => {
           templatesCurrent([{ name: 'stay', body: 'b' }], handle),
         ),
       );
+    await tick();
+    await openCategory(stdin, lastFrame, 'Templates');
+    stdin.write('j');
     await tick();
     await walkUntilFocused(stdin, lastFrame, ':stay');
     stdin.write('d');
