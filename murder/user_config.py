@@ -10,8 +10,10 @@ project file (see `Config.load`).
 
 from __future__ import annotations
 
+import json
 import os
 import re
+from importlib import resources
 from pathlib import Path
 from typing import Any, Literal
 
@@ -470,6 +472,249 @@ def save_spawn_favorites(records: Any, path: Path | None = None) -> list[dict[st
     os.chmod(tmp, 0o600)
     tmp.replace(tpath)
     return normalized
+
+
+# ── Theme registry (`themes.yaml`) ────────────────────────────────────────────
+
+_THEME_ID_RE = re.compile(r"^[A-Za-z0-9_-]+$")
+_HEX_COLOR_RE = re.compile(r"^#[0-9A-Fa-f]{6}$")
+
+# Slot keys mirrored from `inktui/src/theme/palettes.ts` — every palette must fill all of them.
+_PALETTE_SLOTS: tuple[str, ...] = (
+    "bgDim",
+    "bg0",
+    "bg1",
+    "bg2",
+    "bg3",
+    "bg4",
+    "bg5",
+    "bgVisual",
+    "bgRed",
+    "bgGreen",
+    "bgBlue",
+    "bgYellow",
+    "fg",
+    "red",
+    "orange",
+    "yellow",
+    "green",
+    "aqua",
+    "blue",
+    "purple",
+    "grey0",
+    "grey1",
+    "grey2",
+)
+
+
+def themes_path(path: Path | None = None) -> Path:
+    """Userspace/global theme registry (follows the user across repos)."""
+    return config_dir() / "themes.yaml" if path is None else path
+
+
+def load_builtin_theme_jsons() -> list[dict[str, Any]]:
+    """Read bundled palette JSON from ``murder/resources/themes/*.json``."""
+    root = resources.files("murder.resources.themes")
+    out: list[dict[str, Any]] = []
+    for entry in sorted(root.iterdir(), key=lambda p: p.name):
+        if not entry.name.endswith(".json"):
+            continue
+        try:
+            raw = json.loads(entry.read_text(encoding="utf-8"))
+        except Exception:  # noqa: BLE001
+            continue
+        if isinstance(raw, dict):
+            out.append(raw)
+    return out
+
+
+def _coerce_palette(raw: Any) -> dict[str, str] | None:
+    if not isinstance(raw, dict):
+        return None
+    palette: dict[str, str] = {}
+    for slot in _PALETTE_SLOTS:
+        value = raw.get(slot)
+        if not isinstance(value, str) or not _HEX_COLOR_RE.match(value):
+            return None
+        palette[slot] = value.lower()
+    return palette
+
+
+def format_theme_record(
+    raw: dict[str, Any],
+    *,
+    builtin: bool,
+) -> dict[str, Any] | None:
+    """Normalize a theme dict (package JSON or yaml record) into a yaml-ready record."""
+    theme_id = str(raw.get("id", "")).strip()
+    if not _THEME_ID_RE.match(theme_id):
+        return None
+    variant = str(raw.get("variant", "")).strip().lower()
+    if variant not in ("light", "dark"):
+        return None
+    palette = _coerce_palette(raw.get("palette"))
+    if palette is None:
+        return None
+    name = str(raw.get("name", "")).strip() or theme_id
+    return {
+        "id": theme_id,
+        "name": name,
+        "variant": variant,
+        "builtin": builtin,
+        "palette": palette,
+    }
+
+
+def format_theme_from_json(json_str: str, theme_id: str | None = None) -> dict[str, Any]:
+    """Validate BYO paste JSON and return a user theme record (`builtin: false`).
+
+    Accepts a full wrapper object or a bare palette dict. Raises ``ValueError`` on
+    invalid input or duplicate ids.
+    """
+    try:
+        parsed = json.loads(json_str)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"invalid JSON: {exc}") from exc
+    if not isinstance(parsed, dict):
+        raise ValueError("theme JSON must be an object")
+
+    if _coerce_palette(parsed) is not None:
+        wrapper: dict[str, Any] = {"palette": parsed, "variant": "dark"}
+        if theme_id:
+            wrapper["id"] = theme_id
+        parsed = wrapper
+
+    if theme_id and not parsed.get("id"):
+        parsed = {**parsed, "id": theme_id}
+    if not str(parsed.get("id", "")).strip():
+        import time
+
+        parsed = {**parsed, "id": f"custom-{int(time.time())}"}
+    if not str(parsed.get("variant", "")).strip():
+        parsed = {**parsed, "variant": "dark"}
+
+    record = format_theme_record(parsed, builtin=False)
+    if record is None:
+        raise ValueError("theme JSON is missing required id, variant, or palette slots")
+
+    existing_ids = {t["id"] for t in load_themes()}
+    if record["id"] in existing_ids:
+        raise ValueError(f"id {record['id']!r} already exists")
+
+    return record
+
+
+def load_themes(path: Path | None = None) -> list[dict[str, Any]]:
+    """Read the userspace theme registry.
+
+    Tolerates a missing/empty/unparseable file or a missing ``themes:`` key by
+    returning an empty list.
+    """
+    tpath = path or themes_path()
+    if not tpath.exists():
+        return []
+    try:
+        raw = yaml.safe_load(tpath.read_text(encoding="utf-8")) or {}
+    except Exception:  # noqa: BLE001
+        return []
+    if not isinstance(raw, dict):
+        return []
+    records = raw.get("themes")
+    if not isinstance(records, list):
+        return []
+    out: list[dict[str, Any]] = []
+    for rec in records:
+        if not isinstance(rec, dict):
+            continue
+        builtin = bool(rec.get("builtin", False))
+        formatted = format_theme_record(rec, builtin=builtin)
+        if formatted is not None:
+            out.append(formatted)
+    return out
+
+
+def _normalize_themes(records: Any) -> list[dict[str, Any]]:
+    """Validate/coerce theme records: drop invalid, de-dupe (last wins), preserve order.
+
+    Re-injects any bundled themes missing from the caller's list so builtins cannot
+    be deleted via ``save_themes``.
+    """
+    by_id: dict[str, dict[str, Any]] = {}
+    order: list[str] = []
+    if isinstance(records, list):
+        for rec in records:
+            if not isinstance(rec, dict):
+                continue
+            builtin = bool(rec.get("builtin", False))
+            formatted = format_theme_record(rec, builtin=builtin)
+            if formatted is None:
+                continue
+            if formatted["id"] not in by_id:
+                order.append(formatted["id"])
+            by_id[formatted["id"]] = formatted
+
+    for builtin_raw in load_builtin_theme_jsons():
+        formatted = format_theme_record(builtin_raw, builtin=True)
+        if formatted is None:
+            continue
+        if formatted["id"] not in by_id:
+            order.append(formatted["id"])
+            by_id[formatted["id"]] = formatted
+        elif by_id[formatted["id"]].get("builtin"):
+            # Keep the user's palette for an existing builtin id, but ensure the flag stays true.
+            by_id[formatted["id"]]["builtin"] = True
+
+    return [by_id[theme_id] for theme_id in order]
+
+
+def save_themes(records: Any, path: Path | None = None) -> list[dict[str, Any]]:
+    """Normalize and atomically persist the theme registry.
+
+    Returns the normalized list (canonical state) so callers can sync to it.
+    """
+    normalized = _normalize_themes(records)
+    tpath = path or themes_path()
+    tpath.parent.mkdir(parents=True, exist_ok=True)
+    payload = yaml.safe_dump({"themes": normalized}, default_flow_style=False, sort_keys=False)
+    tmp = tpath.with_suffix(".tmp")
+    tmp.write_text(payload, encoding="utf-8")
+    os.chmod(tmp, 0o600)
+    tmp.replace(tpath)
+    return normalized
+
+
+def ensure_user_themes(path: Path | None = None) -> bool:
+    """Merge any missing bundled themes into the user's ``themes.yaml``.
+
+    Returns ``True`` when the file was created or updated.
+    """
+    tpath = path or themes_path()
+    existing = load_themes(path=tpath)
+    existing_ids = {rec["id"] for rec in existing}
+    added: list[dict[str, Any]] = []
+    for builtin_raw in load_builtin_theme_jsons():
+        formatted = format_theme_record(builtin_raw, builtin=True)
+        if formatted is None:
+            continue
+        if formatted["id"] not in existing_ids:
+            added.append(formatted)
+            existing_ids.add(formatted["id"])
+    if not added:
+        return False
+    merged = existing + added
+    save_themes(merged, path=tpath)
+    return True
+
+
+def import_theme_from_json(json_str: str, theme_id: str | None = None) -> tuple[list[dict[str, Any]], str]:
+    """Append a BYO theme to ``themes.yaml`` after validation.
+
+    Returns ``(canonical_theme_list, new_theme_id)``.
+    """
+    record = format_theme_from_json(json_str, theme_id=theme_id)
+    merged = load_themes() + [record]
+    saved = save_themes(merged)
+    return saved, record["id"]
 
 
 _GATED_HARNESS = "native_coding_crow"

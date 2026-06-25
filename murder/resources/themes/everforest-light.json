@@ -1,0 +1,32 @@
+{
+  "id": "everforest-light",
+  "name": "Everforest Light",
+  "variant": "light",
+  "upstream": "sainnhe/everforest",
+  "license": "MIT",
+  "palette": {
+    "bgDim": "#f2efdf",
+    "bg0": "#fffbef",
+    "bg1": "#f8f5e4",
+    "bg2": "#f2efdf",
+    "bg3": "#edeada",
+    "bg4": "#e8e5d5",
+    "bg5": "#bec5b2",
+    "bgVisual": "#f0f2d4",
+    "bgRed": "#fbe3da",
+    "bgGreen": "#f3f5d9",
+    "bgBlue": "#eaedf3",
+    "bgYellow": "#fbecd4",
+    "fg": "#5c6a72",
+    "red": "#f85552",
+    "orange": "#f57d26",
+    "yellow": "#dfa000",
+    "green": "#8da101",
+    "aqua": "#35a77c",
+    "blue": "#3a94c5",
+    "purple": "#df69ba",
+    "grey0": "#a6b0a0",
+    "grey1": "#939f91",
+    "grey2": "#829181"
+  }
+}

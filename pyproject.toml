@@ -45,6 +45,7 @@ murder = "murder.app.cli:app"
 include = [
     "murder/llm/prompts/*.md",
     "murder/resources/templates/*",
+    "murder/resources/themes/*",
 ]
 
 # Bundles the Ink TUI into the wheel (esbuild → murder/_inktui/index.js).

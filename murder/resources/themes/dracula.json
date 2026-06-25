@@ -1,0 +1,32 @@
+{
+  "id": "dracula",
+  "name": "Dracula",
+  "variant": "dark",
+  "upstream": "dracula/dracula-theme",
+  "license": "MIT",
+  "palette": {
+    "bgDim": "#21222c",
+    "bg0": "#282a36",
+    "bg1": "#313341",
+    "bg2": "#383a4a",
+    "bg3": "#3f4153",
+    "bg4": "#45475c",
+    "bg5": "#4c4f69",
+    "bgVisual": "#3a2d4a",
+    "bgRed": "#3d2a33",
+    "bgGreen": "#2a3d33",
+    "bgBlue": "#2a3340",
+    "bgYellow": "#3d3a2a",
+    "fg": "#f8f8f2",
+    "red": "#ff5555",
+    "orange": "#ffb86c",
+    "yellow": "#f1fa8c",
+    "green": "#50fa7b",
+    "aqua": "#8be9fd",
+    "blue": "#6272a4",
+    "purple": "#bd93f9",
+    "grey0": "#6272a4",
+    "grey1": "#7a88b0",
+    "grey2": "#9399b2"
+  }
+}

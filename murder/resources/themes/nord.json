@@ -1,0 +1,32 @@
+{
+  "id": "nord",
+  "name": "Nord",
+  "variant": "dark",
+  "upstream": "nordtheme/nord",
+  "license": "MIT",
+  "palette": {
+    "bgDim": "#242933",
+    "bg0": "#2e3440",
+    "bg1": "#3b4252",
+    "bg2": "#434c5e",
+    "bg3": "#4c566a",
+    "bg4": "#5a6578",
+    "bg5": "#677285",
+    "bgVisual": "#3b3f5a",
+    "bgRed": "#4a3338",
+    "bgGreen": "#354238",
+    "bgBlue": "#2f3d4d",
+    "bgYellow": "#4a4535",
+    "fg": "#d8dee9",
+    "red": "#bf616a",
+    "orange": "#d08770",
+    "yellow": "#ebcb8b",
+    "green": "#a3be8c",
+    "aqua": "#8fbcbb",
+    "blue": "#81a1c1",
+    "purple": "#b48ead",
+    "grey0": "#4c566a",
+    "grey1": "#616e88",
+    "grey2": "#7b88a1"
+  }
+}

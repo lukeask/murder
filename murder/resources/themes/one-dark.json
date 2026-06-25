@@ -1,0 +1,32 @@
+{
+  "id": "one-dark",
+  "name": "One Dark",
+  "variant": "dark",
+  "upstream": "Binaryify/OneDark-Pro",
+  "license": "MIT",
+  "palette": {
+    "bgDim": "#21252b",
+    "bg0": "#282c34",
+    "bg1": "#2c313a",
+    "bg2": "#31353f",
+    "bg3": "#353b45",
+    "bg4": "#3a404c",
+    "bg5": "#3f4552",
+    "bgVisual": "#3a2f4a",
+    "bgRed": "#3d2a33",
+    "bgGreen": "#2a3d33",
+    "bgBlue": "#2a3340",
+    "bgYellow": "#3d3a2a",
+    "fg": "#abb2bf",
+    "red": "#e06c75",
+    "orange": "#d19a66",
+    "yellow": "#e5c07b",
+    "green": "#98c379",
+    "aqua": "#56b6c2",
+    "blue": "#61afef",
+    "purple": "#c678dd",
+    "grey0": "#5c6370",
+    "grey1": "#6b7280",
+    "grey2": "#828997"
+  }
+}

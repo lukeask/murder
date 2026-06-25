@@ -1,0 +1,32 @@
+{
+  "id": "tokyo-night",
+  "name": "Tokyo Night",
+  "variant": "dark",
+  "upstream": "enkia/tokyo-night-vscode-theme",
+  "license": "MIT",
+  "palette": {
+    "bgDim": "#16161e",
+    "bg0": "#1a1b26",
+    "bg1": "#1f2335",
+    "bg2": "#24283b",
+    "bg3": "#292e42",
+    "bg4": "#32344a",
+    "bg5": "#3b4261",
+    "bgVisual": "#2d3f76",
+    "bgRed": "#37222c",
+    "bgGreen": "#1f2d2a",
+    "bgBlue": "#1a2332",
+    "bgYellow": "#2d2a1e",
+    "fg": "#a9b1d6",
+    "red": "#f7768e",
+    "orange": "#ff9e64",
+    "yellow": "#e0af68",
+    "green": "#9ece6a",
+    "aqua": "#73daca",
+    "blue": "#7aa2f7",
+    "purple": "#bb9af7",
+    "grey0": "#565f89",
+    "grey1": "#737aa2",
+    "grey2": "#9aa5ce"
+  }
+}
