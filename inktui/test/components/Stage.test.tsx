@@ -126,18 +126,32 @@ describe('formatTurnLines (TUIchat-2: block-classified physical lines, no inline
     ]);
   });
 
-  it('separates blocks with exactly one blank line and labels code/list kinds', () => {
+  it('preserves multi-blank gaps exactly and labels code/list kinds', () => {
     const turn: ChatTurn = {
       blockId: 'b3',
       speaker: 'assistant',
-      text: 'intro\n\n```\ncode()\n```\n\n- item',
+      text: 'intro\n\n\n```\ncode()\n```\n\n- item',
     };
     expect(formatTurnLines(turn)).toEqual([
       { speaker: 'assistant', kind: 'prose', text: 'intro', firstOfTurn: true },
       { speaker: 'assistant', kind: 'blank', text: '', firstOfTurn: false },
-      { speaker: 'assistant', kind: 'code', text: 'code()', firstOfTurn: true },
       { speaker: 'assistant', kind: 'blank', text: '', firstOfTurn: false },
-      { speaker: 'assistant', kind: 'list', text: '- item', firstOfTurn: true },
+      { speaker: 'assistant', kind: 'code', text: 'code()', firstOfTurn: false },
+      { speaker: 'assistant', kind: 'blank', text: '', firstOfTurn: false },
+      { speaker: 'assistant', kind: 'list', text: '- item', firstOfTurn: false },
+    ]);
+  });
+
+  it('keeps blank lines inside fenced code as code rows', () => {
+    const turn: ChatTurn = {
+      blockId: 'b-code',
+      speaker: 'assistant',
+      text: '```\none\n\nthree\n```',
+    };
+    expect(formatTurnLines(turn)).toEqual([
+      { speaker: 'assistant', kind: 'code', text: 'one', firstOfTurn: true },
+      { speaker: 'assistant', kind: 'code', text: '', firstOfTurn: false },
+      { speaker: 'assistant', kind: 'code', text: 'three', firstOfTurn: false },
     ]);
   });
 
@@ -155,7 +169,7 @@ describe('flattenTurns', () => {
     ];
     expect(flattenTurns(turns)).toEqual([
       { speaker: 'assistant', kind: 'prose', text: 'reply', firstOfTurn: true },
-      { speaker: 'user', kind: 'blank', text: '', firstOfTurn: false },
+      { speaker: 'user', kind: 'blank', text: '', firstOfTurn: false, gutter: 'none' },
       { speaker: 'user', kind: 'prose', text: 'question', firstOfTurn: true },
     ]);
   });
@@ -185,6 +199,18 @@ describe('flattenTurns', () => {
     ]);
   });
 
+  it('coalesces consecutive user turns into one visual message run', () => {
+    const turns: ChatTurn[] = [
+      { blockId: 'b1', speaker: 'user', text: 'first user fragment' },
+      { blockId: 'b2', speaker: 'user', text: 'second user fragment' },
+    ];
+    expect(flattenTurns(turns)).toEqual([
+      { speaker: 'user', kind: 'prose', text: 'first user fragment', firstOfTurn: true },
+      { speaker: 'user', kind: 'blank', text: '', firstOfTurn: false },
+      { speaker: 'user', kind: 'prose', text: 'second user fragment', firstOfTurn: false },
+    ]);
+  });
+
   it('does not coalesce a condensed summary into the following final assistant turn', () => {
     const turns: ChatTurn[] = [
       { blockId: 'summary:1:0', speaker: 'assistant', tone: 'summary', text: 'condensed work' },
@@ -198,7 +224,7 @@ describe('flattenTurns', () => {
         text: 'condensed work',
         firstOfTurn: true,
       },
-      { speaker: 'assistant', kind: 'blank', text: '', firstOfTurn: false },
+      { speaker: 'assistant', kind: 'blank', text: '', firstOfTurn: false, gutter: 'none' },
       { speaker: 'assistant', kind: 'prose', text: 'final answer', firstOfTurn: true },
     ]);
   });
@@ -283,6 +309,54 @@ describe('ChatPane — window honors the contentHeight prop', () => {
     expect(frame).toContain('msg-29');
     // ... and an early/oldest line is NOT — the window is bounded to ~5 lines, not FALLBACK (20).
     expect(frame).not.toContain('msg-00');
+    dispose();
+  });
+
+  it('renders internal blank rows with continuation gutters', async () => {
+    const { fake, store, inputStores, dispose } = await setup();
+    const event: ConversationBlockEvent = {
+      type: 'conversation.block',
+      id: 'ev-gapped',
+      ts: '2026-06-08T00:00:00Z',
+      run_id: 'run-1',
+      agent_id: 'collab-1',
+      conversation_id: 'conv-collab-1',
+      action: 'block-appended',
+      block: { type: 'user', id: 'block-gapped', text: 'alpha\n\n\nbeta\n\n\n\ngamma' },
+    };
+    fake.emit(event);
+    const identity = { kind: 'collaborator' as const, agentId: 'collab-1', label: 'TestCollab' };
+    const { lastFrame } = render(
+      <AppStoreProvider value={store}>
+        <InputStoresProvider value={inputStores}>
+          <RootInput />
+          <Box flexDirection="column" width={80} height={30}>
+            <ChatPane
+              identity={identity}
+              conversations={store.getState().conversations}
+              chatTarget={false}
+              footer={null}
+              worktree={null}
+              contentHeight={10}
+            />
+          </Box>
+        </InputStoresProvider>
+      </AppStoreProvider>,
+    );
+    await tick();
+
+    const rows = (lastFrame() ?? '').split('\n');
+    expect(rows.some((row) => row.includes('▌ alpha'))).toBe(true);
+    expect(rows.some((row) => row.includes('▏ beta'))).toBe(true);
+    expect(rows.some((row) => row.includes('▏ gamma'))).toBe(true);
+    const blankRailRows = rows.filter(
+      (row) =>
+        /▏\s*│/.test(row) &&
+        !row.includes('alpha') &&
+        !row.includes('beta') &&
+        !row.includes('gamma'),
+    );
+    expect(blankRailRows).toHaveLength(5);
     dispose();
   });
 });

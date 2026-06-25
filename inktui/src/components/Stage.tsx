@@ -165,38 +165,74 @@ const PANE_CHROME_ROWS = 2;
 
 /**
  * Format one turn's faithful multi-line text into its physical display lines, classified into
- * {@link Block}s (TUIchat-2 readability engine). Each block's lines are emitted verbatim with ONE
- * blank line between blocks; a leading blank inside the turn body is dropped (the inter-turn separator
- * in {@link flattenTurns} owns the gap between turns). Pure; the legacy `›`/`·` inline marker is gone —
- * the speaker is now a left gutter color-bar drawn at render time (see {@link ChatPane}). Exported as
- * the test seam (returns the styled physical lines so block boundaries + rhythm are unit-testable).
- *
- * Vertical rhythm: blocks are separated by exactly one blank line and runs of >1 blank collapse to one
- * (the parser joins blocks with `\n\n`, so `classifyBlocks` already splits on blanks; we re-insert a
- * single blank between consecutive blocks rather than trusting the source's blank count).
+ * {@link Block}s (TUIchat-2 readability engine). Source blank lines inside the already-trimmed turn
+ * body are preserved exactly; fenced-code blanks remain code rows, not rhythm separators. Pure; the
+ * legacy `›`/`·` inline marker is gone — the speaker is now a left gutter color-bar drawn at render
+ * time (see {@link ChatPane}). Exported as the test seam (returns the styled physical lines so block
+ * boundaries + rhythm are unit-testable).
  */
 export function formatTurnLines(turn: ChatTurn): readonly ChatLine[] {
-  const blocks = classifyBlocks(turn.text);
   const out: ChatLine[] = [];
-  for (const block of blocks) {
-    // Drop fully-blank/empty blocks (defensive — classifyBlocks shouldn't emit them) and skip a
-    // block that is only whitespace, so the rhythm never accumulates empty rows.
-    if (block.lines.length === 0) continue;
-    if (out.length > 0) {
-      out.push({ speaker: turn.speaker, kind: 'blank', text: '', firstOfTurn: false });
-    }
-    block.lines.forEach((text, i) => {
-      out.push({
-        speaker: turn.speaker,
-        ...(turn.tone === undefined ? {} : { tone: turn.tone }),
-        kind: block.kind,
-        text,
-        firstOfTurn: out.length === 0 || (i === 0 && out[out.length - 1]?.kind === 'blank'),
-      });
-    });
+  if (turn.text.trim() === '') {
+    return out;
   }
-  // A turn whose text was empty/whitespace-only collapses to nothing here; the caller's separator
-  // logic then won't strand a lone blank.
+
+  const lines = turn.text.split('\n');
+  const first = lines.findIndex((line) => line.trim() !== '');
+  const last = lines.findLastIndex((line) => line.trim() !== '');
+  if (first < 0 || last < first) {
+    return out;
+  }
+
+  const tone = turn.tone === undefined ? {} : { tone: turn.tone };
+  let emittedContentLine = false;
+  const pushLine = (kind: BlockKind | 'blank', text: string): void => {
+    out.push({
+      speaker: turn.speaker,
+      ...tone,
+      kind,
+      text,
+      firstOfTurn: kind !== 'blank' && !emittedContentLine,
+    });
+    if (kind !== 'blank') {
+      emittedContentLine = true;
+    }
+  };
+
+  const plainRun: string[] = [];
+  const flushPlain = (): void => {
+    if (plainRun.length === 0) return;
+    for (const block of classifyBlocks(plainRun.join('\n'))) {
+      for (const text of block.lines) {
+        pushLine(block.kind, text);
+      }
+    }
+    plainRun.length = 0;
+  };
+
+  for (let i = first; i <= last; i++) {
+    const line = lines[i] ?? '';
+    if (/^\s*```/.test(line)) {
+      flushPlain();
+      i += 1;
+      while (i <= last) {
+        const inner = lines[i] ?? '';
+        if (/^\s*```/.test(inner)) {
+          break;
+        }
+        pushLine('code', inner);
+        i += 1;
+      }
+      continue;
+    }
+    if (line.trim() === '') {
+      flushPlain();
+      pushLine('blank', '');
+      continue;
+    }
+    plainRun.push(line);
+  }
+  flushPlain();
   return out;
 }
 
@@ -238,18 +274,20 @@ interface ChatLine {
   /** The block kind this line belongs to, or `blank` for a rhythm separator line. */
   readonly kind: BlockKind | 'blank';
   readonly text: string;
-  /** True for the first content line of a turn (and the first line after an intra-turn blank) — the
-   * gutter draws its cap glyph here so a turn reads as one block with a single bar head. */
+  /** True for the first content line of a visual message run — the gutter draws its cap glyph here so
+   * a message reads as one block with a single bar head. */
   readonly firstOfTurn: boolean;
+  /** Inter-message separators are real rows for scroll math, but are not part of either message rail. */
+  readonly gutter?: 'none';
 }
 
 /**
  * Flatten ordered turns into the physical lines they render as — each turn classified into styled
- * blocks by {@link formatTurnLines}, with one BLANK separator line between consecutive turns (so
- * messages read as visually distinct blocks, not a solid run of rows). Consecutive assistant turns
- * are a visual exception: parsers can split one agent reply at blank-line gaps, so a run of adjacent
- * assistant JSON blocks is painted as one visual message. The gap stays, but only the first content
- * row in the run gets the solid head glyph; later assistant rows use continuation bars.
+ * blocks by {@link formatTurnLines}, with one BLANK separator line between consecutive visual-message
+ * runs (so messages read as visually distinct blocks, not a solid run of rows). Consecutive turns from
+ * the same speaker with the same tone are a visual exception: parsers can split one message at
+ * blank-line gaps, so adjacent fragments are painted as one visual message. The gap stays, but only
+ * the first content row in the run gets the solid head glyph; later rows use continuation bars.
  *
  * This is the fix for dead scrolling on long chats: the pane must window by *line* (the unit it draws
  * and the unit `measureElement` would count), exactly as {@link ./DocPane.js StageDocPane} windows the
@@ -272,16 +310,21 @@ export function flattenTurns(turns: readonly ChatTurn[]): readonly ChatLine[] {
   for (const turn of turns) {
     const turnLines = formatTurnLines(turn);
     if (turnLines.length === 0) continue;
-    const continuesAssistantRun =
-      previousRenderedTurn?.speaker === 'assistant' &&
-      turn.speaker === 'assistant' &&
-      previousRenderedTurn.tone === turn.tone;
+    const continuesVisualRun =
+      previousRenderedTurn?.speaker === turn.speaker && previousRenderedTurn.tone === turn.tone;
     if (lines.length > 0) {
-      lines.push({ speaker: turn.speaker, kind: 'blank', text: '', firstOfTurn: false });
+      lines.push({
+        speaker: turn.speaker,
+        ...(turn.tone === undefined ? {} : { tone: turn.tone }),
+        kind: 'blank',
+        text: '',
+        firstOfTurn: false,
+        ...(continuesVisualRun ? {} : { gutter: 'none' as const }),
+      });
     }
     for (const line of turnLines) {
       lines.push(
-        continuesAssistantRun && line.kind !== 'blank' ? { ...line, firstOfTurn: false } : line,
+        continuesVisualRun && line.kind !== 'blank' ? { ...line, firstOfTurn: false } : line,
       );
     }
     previousRenderedTurn = turn;
@@ -291,7 +334,7 @@ export function flattenTurns(turns: readonly ChatTurn[]): readonly ChatLine[] {
 
 /** The left gutter glyph: a solid bar at a turn's head, a lighter bar on continuation rows, so a turn
  * reads as one block with a single bar head (the speaker-gutter replacement for the old inline
- * `›`/`·` prefixes). A blank rhythm line draws no gutter. */
+ * `›`/`·` prefixes). */
 const GUTTER_HEAD = '▌';
 const GUTTER_CONT = '▏';
 
@@ -308,7 +351,7 @@ const GUTTER_CONT = '▏';
  *  - **code / pre** — a DIM, no-wrap island (`wrap="truncate"`): internal spaces + column alignment are
  *    preserved and a too-wide line is clipped (never re-wrapped into a zigzag). One source line is
  *    exactly one drawn row, so the deterministic height holds and `measureElement` is never consulted.
- *  - **blank** — a single space (a real row the rhythm/scroll math counts).
+ *  - **blank** — a continuation gutter plus a single space (a real row the rhythm/scroll math counts).
  */
 function ChatHistoryLine({
   line,
@@ -339,9 +382,10 @@ function ChatHistoryLine({
   return (
     <Box flexDirection="row" flexShrink={0}>
       {/* The speaker gutter: a fixed two-cell bar (glyph + trailing space), never shrinking so the
-          content never overruns it. A blank rhythm line draws spaces (no bar) so gaps stay clean. */}
+          content never overruns it. Internal blank rhythm lines keep the continuation rail; only the
+          explicit inter-message separator row opts out with `gutter: none`. */}
       <Box flexShrink={0} width={2}>
-        {line.kind === 'blank' ? (
+        {line.kind === 'blank' && line.gutter === 'none' ? (
           <Text> </Text>
         ) : (
           <Text color={gutterColor}>{line.firstOfTurn ? GUTTER_HEAD : GUTTER_CONT} </Text>
