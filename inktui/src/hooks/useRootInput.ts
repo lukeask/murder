@@ -34,8 +34,7 @@ import {
   CHAT_FOCUS,
   type FocusStoreApi,
   isStagePaneId,
-  mountedStagePanesOf,
-  resolveFocus,
+  selectEffectiveFocus,
   type StagePaneId,
 } from '../input/focusStore.js';
 import { selectActiveMode } from '../input/modeStore.js';
@@ -183,11 +182,7 @@ export function togglePanelFromShortcut(
   const panelState = panels.getState();
   const focusState = focus.getState();
   const visible = panelState.visible;
-  const effectiveFocus = resolveFocus(
-    focusState.intendedId,
-    visible,
-    mountedStagePanesOf(focusState.rects),
-  );
+  const effectiveFocus = selectEffectiveFocus(focus);
 
   if (!visible.has(id)) {
     panelState.show(id);
@@ -260,14 +255,9 @@ export function useRootInput(
       };
 
       const ctx: DispatchContext = {
-        // Effective focus, so layer 2/3 route against where the highlight actually is (post re-home).
-        // Stage panes are derived from the rects map (mountedStagePanesOf) so a focused chat pane
-        // resolves to itself, not chat — otherwise layer 2 would short-circuit its keys to the input.
-        focusedId: resolveFocus(
-          focusState.intendedId,
-          panels.getState().visible,
-          mountedStagePanesOf(focusState.rects),
-        ),
+        // Effective focus, so layer 2/3 route against where the highlight actually is after graph
+        // re-home. A mounted Stage pane resolves to itself; an unmounted pane resolves to chat.
+        focusedId: selectEffectiveFocus(focus),
         panelKeymaps: keymaps.getState().keymaps,
         handlers,
         // The live resolved binding table (modifier + rebinds). Read per-event so a settings change
@@ -293,11 +283,7 @@ export function useRootInput(
   // offset via the scroll bus, clamped to its own range (only the pane knows its content length).
   const handleWheel = (wheel: Wheel): void => {
     const focusState = focus.getState();
-    const effective = resolveFocus(
-      focusState.intendedId,
-      panels.getState().visible,
-      mountedStagePanesOf(focusState.rects),
-    );
+    const effective = selectEffectiveFocus(focus);
     let target: StagePaneId | null = null;
     if (isStagePaneId(effective)) {
       // A focused chat-history or doc pane scrolls itself.

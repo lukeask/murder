@@ -45,13 +45,14 @@ import {
 } from 'react';
 import type { BusClient } from '../bus/BusClient.js';
 import { AppStoreProvider, useAppStore, useAppStoreApi } from '../hooks/useAppStore.js';
-import { useBodyLayout } from '../hooks/useBodyLayout.js';
 import { BusClientProvider, useBusClient } from '../hooks/useBusClient.js';
 import {
   type InputStores,
   InputStoresProvider,
+  useEffectiveFocus,
   useInputStores,
   useModeStore,
+  usePanelStore,
 } from '../hooks/useInputStores.js';
 import { useOrientation } from '../hooks/useOrientation.js';
 import { type TerminalEvents, useRootInput } from '../hooks/useRootInput.js';
@@ -71,7 +72,12 @@ import { expandTemplates } from '../input/expandTemplates.js';
 import { parseWorkflowFire } from '../input/fireWorkflow.js';
 import { CHAT_FOCUS, type FocusId, selectEffectiveFocus } from '../input/focusStore.js';
 import { selectActiveMode } from '../input/modeStore.js';
-import type { PanelId } from '../input/panels.js';
+import {
+  buildPaneRequests,
+  createChatIdentityMap,
+  renderPaneLayoutPlan,
+} from '../layout/paneBridge.js';
+import { computePaneLayout } from '../layout/paneLayout.js';
 import { deriveAgentIdentity } from '../selectors/agentIdentity.js';
 import {
   isChatPaneOpen,
@@ -103,36 +109,15 @@ import { DEFAULT_THEME_ID, hasTheme, type ThemeId } from '../theme/palettes.js';
 import { setTheme } from '../theme/themeStore.js';
 import { BottomBar, useBottomBarLines } from './BottomBar.js';
 import { ChatInput } from './ChatInput.js';
-import { CrowsPanel } from './CrowsPanel.js';
 import { helpMode } from './HelpOverlay.js';
-import { HistoryPanel } from './HistoryPanel.js';
 import { newPlanMode } from './NewPlanModal.js';
 import { newTicketMode } from './NewTicketModal.js';
-import { NotesPanel } from './NotesPanel.js';
 import { Overlay, presentationHidesLayout } from './Overlay.js';
-import { PlansPanel } from './PlansPanel.js';
-import { Rail } from './Rail.js';
-import { ReportsPanel } from './ReportsPanel.js';
 import { settingsMode } from './SettingsModal.js';
 import type { SpawnContext } from './SpawnWizardModal.js';
 import { spawnWizardMode } from './SpawnWizardModal.js';
-import { Stage } from './Stage.js';
-import { TicketsPanel } from './TicketsPanel.js';
 import { Toast } from './Toast.js';
 import { TopBar } from './TopBar.js';
-import { TransitPanel } from './TransitPanel.js';
-import { UsagePanel } from './UsagePanel.js';
-
-/** The left region's panels in screen order (plan: `1` plans · `2` notes · `3` reports · `4`
- * tickets). The right region (plan: `9` usage · `0` crows — usage left of crows). One ordered list
- * per region so the shell renders panels left-to-right without re-deriving order from {@link PANELS}. */
-const LEFT_PANELS: readonly PanelId[] = ['plans', 'notes', 'reports', 'tickets', 'history'];
-const RIGHT_PANELS: readonly PanelId[] = ['usage', 'transit', 'crows'];
-
-/** Pane border + padding chrome around a right-rail panel's content (mirrors USAGE_PANE_CHROME): the
- * left/right borders (2) + the default 1-cell padding each side (2) = 4. Transit's railway draws in
- * `rightRailCells − this`. */
-const TRANSIT_PANE_CHROME = 4;
 
 /**
  * The smallest terminal the shell will attempt to lay out (first-run UX: a too-small terminal gets
@@ -144,53 +129,6 @@ const TRANSIT_PANE_CHROME = 4;
  */
 export const MIN_TERMINAL_COLUMNS = 60;
 export const MIN_TERMINAL_ROWS = 16;
-
-/**
- * Render one panel by id — the single dispatch from a {@link PanelId} to its component. Every id
- * resolves to a real panel (`plans`, `notes`, `reports`, `tickets`, `usage`, `crows`); a future
- * chunk that adds a panel adds its `case` here, copying `RosterPanel`/`CrowsPanel`, and nothing else
- * in the shell changes. Defined as a function (not inline) so the swap is one localised edit.
- *
- * The `usageInnerWidth` (L4, R9) is threaded in so the {@link UsagePanel} sizes its fluid gauge line
- * to the width the right rail actually allots it — the budget engine ({@link useBodyLayout}) derives
- * the gauges' inner width and the Shell passes it here, the single place a layout signal reaches a
- * panel. No other panel needs it, so it's a plain extra argument rather than threading the whole
- * {@link BodyLayout} through.
- */
-function renderPanel(id: PanelId, usageInnerWidth: number, rightRailCells: number): JSX.Element {
-  switch (id) {
-    case 'crows':
-      // C9: CrowsPanel replaces the RosterPanel reference implementation here. The original
-      // RosterPanel remains as the copy-reference; only this `case` changes.
-      // Phase 4a: the favorited-crow chat-history panes MOVED out of here into the {@link ./Stage.js}
-      // center region (they used to stack below CrowsPanel via the retired CrowChatPanel). The crows
-      // panel `0` is now just the roster pane; the chat panes live in the Stage and are reached by
-      // hjkl directional focus, not the crows toggle.
-      return <CrowsPanel />;
-    case 'plans':
-      // C11: PlansPanel fills the last placeholder — parent-plan indentation + star + doc-view.
-      return <PlansPanel />;
-    case 'notes':
-      return <NotesPanel />;
-    case 'reports':
-      return <ReportsPanel />;
-    case 'tickets':
-      return <TicketsPanel />;
-    case 'history':
-      return <HistoryPanel />;
-    case 'transit':
-      // The railway scrolls to the inner width the right rail allots it (R9): full rail width below
-      // usage minus the Pane chrome, mirroring the usage landscape formula.
-      return <TransitPanel innerWidth={Math.max(0, rightRailCells - TRANSIT_PANE_CHROME)} />;
-    case 'usage':
-      // C9: UsagePanel fills the right-region slot. Usage sits to the LEFT of crows because
-      // RIGHT_PANELS = ['usage', 'crows'] (App.tsx line 59) — array order = left-to-right.
-      // L4: the gauge line sizes itself to the inner width the right rail allows (R9).
-      return <UsagePanel innerWidth={usageInnerWidth} />;
-    default:
-      return id satisfies never;
-  }
-}
 
 /**
  * Derive the spawn context from the app store at `ctrl+s` invocation time. Returns a
@@ -699,9 +637,8 @@ function Shell({
   //     single-line rows; `useBottomBarLines().length` is that exact N, shared with the BottomBar
   //     render so the count and the height accounting can never disagree.
   // The `useLayoutEffect` is GUARDED (writes only on a real change) so it settles in one extra render
-  // and never loops. Before the first measurement the heights are 0 → `bodyHeight` is 0 →
-  // `useBodyLayout` falls back to terminal `rows` and self-corrects (non-TTY tests report 0 and stay
-  // on the fallback). Landscape ignores this height entirely (it budgets the width axis).
+  // and never loops. Before the first measurement the heights are 0 → `bodyHeight` is 0, so the pane
+  // layout uses a conservative first-paint fallback and then self-corrects.
   const topbarRef = useRef<DOMElement | null>(null);
   const chatInputRef = useRef<DOMElement | null>(null);
   const [topbarHeight, setTopbarHeight] = useState(0);
@@ -723,28 +660,60 @@ function Shell({
   // Footer row count (computed — see above). Shared with the BottomBar render via the same hook.
   const footerLines = useBottomBarLines().length;
   // The Body's true available height = terminal rows − topbar − ChatInput − footer rows. Only
-  // meaningful once topbar + ChatInput have been measured (>0); before that it is 0 and `useBodyLayout`
-  // falls back to the terminal `rows` (self-correcting on the next layout). `max(0, …)` so a transient
-  // over-measure can never make the portrait total negative.
+  // meaningful once topbar + ChatInput have been measured (>0); before that it is 0 and the pane
+  // layout uses a conservative first-paint fallback. `max(0, …)` so a transient over-measure can
+  // never make the body total negative.
   const bodyHeight =
     topbarHeight > 0 && chatInputHeight > 0
       ? Math.max(0, rows - topbarHeight - chatInputHeight - footerLines)
       : 0;
-  // The responsive cell budget (R1–R7): explicit rail widths/heights + the Stage's ≥60% floor,
-  // computed from the live terminal size, orientation, and each rail's natural content width. One
-  // call here, threaded down to both Rails and the Stage — the single source of truth for the Body's
-  // sizing, mirroring the single `useOrientation()` read. Portrait budgets against the MEASURED Body
-  // height (L4c) so nothing overflows into the chrome; landscape is unaffected (budgets width).
-  const bodyLayout = useBodyLayout(bodyHeight, paneGap);
-  // The {@link PanelId} → component dispatch, closing over the current usage inner width (L4/R9) so
-  // the UsagePanel sizes its fluid gauge line to the width its right rail supports. Memoised on that
-  // width so a Rail (which is `memo`-free but cheap) only re-derives when it actually changes, not on
-  // every Body re-render. Passed to BOTH Rails; only the usage case reads the width.
-  const dispatchPanel = useMemo(
+  const appState = useAppStore((s) => s);
+  const visiblePanels = usePanelStore((s) => s.visible);
+  const effectiveFocus = useEffectiveFocus();
+  const activeChatTargetId = selectActiveAgentId(
+    appState.conversations,
+    appState.roster,
+    appState.favorites,
+  );
+  const paneRequests = useMemo(
+    () => buildPaneRequests({ state: appState, visiblePanels, focusedId: effectiveFocus }),
+    [appState, visiblePanels, effectiveFocus],
+  );
+  const availableBodyHeight = bodyHeight > 0 ? bodyHeight : Math.max(0, rows - footerLines - 4);
+  const paneLayoutPlan = useMemo(
     () =>
-      (id: PanelId): JSX.Element =>
-        renderPanel(id, bodyLayout.usageInnerWidth, bodyLayout.rightRailCells),
-    [bodyLayout.usageInnerWidth, bodyLayout.rightRailCells],
+      computePaneLayout({
+        terminal: { width: columns, height: rows },
+        chrome: { topBar: topbarHeight, bottomBar: footerLines, chatInput: chatInputHeight },
+        body: { width: columns, height: availableBodyHeight },
+        bodyOrigin: { x: 0, y: topbarHeight },
+        orientation,
+        gap: paneGap,
+        requests: paneRequests,
+        focusedPaneId: effectiveFocus,
+        chatTargets: {
+          currentTargetId: activeChatTargetId,
+          ephemeralTargetId: null,
+        },
+      }),
+    [
+      columns,
+      rows,
+      topbarHeight,
+      footerLines,
+      chatInputHeight,
+      availableBodyHeight,
+      orientation,
+      paneGap,
+      paneRequests,
+      effectiveFocus,
+      activeChatTargetId,
+    ],
+  );
+  const chatIdentities = useMemo(() => createChatIdentityMap(appState), [appState]);
+  const paneRenderContext = useMemo(
+    () => ({ state: appState, chatIdentities }),
+    [appState, chatIdentities],
   );
 
   // F9: the image-draft store owns the `image.upload` bus call + the FIFO upload queue (it writes a
@@ -1185,49 +1154,7 @@ function Shell({
           chrome. When no mode is up the panels (rails + Stage) fill the slot. */}
       <Box flexGrow={1} flexBasis={0} minHeight={0} overflow="hidden" flexDirection="column">
         <BodyErrorBoundary>
-          {active !== null ? (
-            <Overlay />
-          ) : (
-            // Orientation-aware panels: landscape lays the rails + Stage out in a row (side-by-side),
-            // portrait stacks them in a column.
-            <Box
-              flexDirection={orientation === 'landscape' ? 'row' : 'column'}
-              columnGap={orientation === 'landscape' ? paneGap : 0}
-              rowGap={orientation === 'portrait' ? paneGap : 0}
-              flexGrow={1}
-              flexBasis={0}
-              minHeight={0}
-              overflow="hidden"
-            >
-              <Rail
-                side="left"
-                orientation={orientation}
-                panels={LEFT_PANELS}
-                renderPanel={dispatchPanel}
-                // Explicit, budget-computed cross-axis size — only as wide as its widest ledger row (R1/R2),
-                // compressed (so trailing columns drop) when the Stage's 60% floor needs the room (R3).
-                cells={bodyLayout.leftRailCells}
-                // User-configured spacing between this rail's stacked/side-by-side panes.
-                paneGap={paneGap}
-              />
-              {/* Phase 4a: the Stage center region — tiles the favorited-crow chat-history Panes, growing to
-                fill whatever the rails leave (full width when both rails are off). It carries the budget
-                floor (R3/R4) so it can never be sized below its guaranteed ≥60% share. Phase 4b adds
-                doc-view panes to its right; the doc slice is untouched here. The Stage itself clips/grows. */}
-              <Stage minCells={bodyLayout.stageCells} axis={bodyLayout.axis} paneGap={paneGap} />
-              <Rail
-                side="right"
-                orientation={orientation}
-                panels={RIGHT_PANELS}
-                renderPanel={dispatchPanel}
-                // The right rail (usage · crows) is sized to the crow-ledger width when crows are on (R6),
-                // computed relative to the live terminal — no `"24%"` absolute anymore (R5).
-                cells={bodyLayout.rightRailCells}
-                // User-configured spacing between this rail's stacked/side-by-side panes.
-                paneGap={paneGap}
-              />
-            </Box>
-          )}
+          {active !== null ? <Overlay /> : renderPaneLayoutPlan(paneLayoutPlan, paneRenderContext)}
         </BodyErrorBoundary>
       </Box>
       <Box flexShrink={0} flexDirection="column">

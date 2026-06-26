@@ -76,6 +76,7 @@ import {
 import { useOrientation } from '../hooks/useOrientation.js';
 import { CHAT_FOCUS, type FocusId, type StagePaneId } from '../input/focusStore.js';
 import type { PanelKeymap } from '../input/keymap.js';
+import type { PanePresentation } from '../layout/paneLayout.js';
 import { computeStageLayout } from '../layout/stageTiling.js';
 import type { AgentIdentity } from '../selectors/agentIdentity.js';
 import {
@@ -501,6 +502,7 @@ export const ChatPane = memo(function ChatPane({
   footer,
   worktree,
   contentHeight,
+  presentation,
 }: {
   readonly identity: AgentIdentity;
   readonly conversations: ConversationsState;
@@ -518,6 +520,8 @@ export const ChatPane = memo(function ChatPane({
    * row height; `undefined` only before the grid's first measure. Replaces self-measuring a
    * parent-controlled height that went stale behind React.memo. */
   readonly contentHeight: number | undefined;
+  /** The explicit outer allocation for this mounted pane under the new Pane Layout Manager bridge. */
+  readonly presentation?: PanePresentation;
 }): JSX.Element {
   const theme = useTheme();
   const focusId: FocusId = chatPaneFocusId(identity.agentId);
@@ -551,7 +555,11 @@ export const ChatPane = memo(function ChatPane({
   // Window height arrives as a deterministic prop from ChatGrid (which alone measures the grid and
   // distributes integer row heights). Fallback covers first paint and sizeless test renders — when
   // the grid hasn't measured yet, `contentHeight` is undefined.
-  const effectiveHeight = contentHeight ?? FALLBACK_HEIGHT;
+  const effectiveHeight =
+    contentHeight ??
+    (presentation !== undefined
+      ? Math.max(0, presentation.height - PANE_CHROME_ROWS)
+      : FALLBACK_HEIGHT);
 
   // Window by physical LINE (the unit drawn + measured), exactly as StageDocPane windows the document
   // body — NOT by whole turns. See flattenTurns for why turn-count windowing left long chats stuck.

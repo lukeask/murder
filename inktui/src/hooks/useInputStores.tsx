@@ -7,8 +7,8 @@
  *  - {@link usePanelStore} / {@link useFocusStore} — selector hooks (referential stability per
  *    selector, like {@link useAppStore}).
  *  - {@link useEffectiveFocus} — the derived re-home invariant as a hook: returns the *effective*
- *    focus, recomputed whenever the intended focus or the visible set changes. A panel's highlight
- *    reads `useEffectiveFocus() === myId`.
+ *    focus, recomputed from intended focus and live focus geometry. A panel's highlight reads
+ *    `useEffectiveFocus() === myId`.
  *  - {@link useMeasureFocus} — registers a component's measured rect with the focus store so
  *    directional nav has geometry (the Ink `measureElement` bridge at the component layer).
  *
@@ -24,13 +24,8 @@ import type { BindingsState, BindingsStoreApi } from '../input/bindingsStore.js'
 import type { ChatHistoryState, ChatHistoryStoreApi } from '../input/chatHistoryStore.js';
 import type { ChatInputState, ChatInputStoreApi } from '../input/chatInputStore.js';
 import type { ChatVimState, ChatVimStoreApi } from '../input/chatVimStore.js';
-import {
-  type FocusId,
-  type FocusState,
-  type FocusStoreApi,
-  mountedStagePanesOf,
-  resolveFocus,
-} from '../input/focusStore.js';
+import { buildFocusGraph, resolveEffectiveFocus } from '../input/focusGraph.js';
+import { type FocusId, type FocusState, type FocusStoreApi } from '../input/focusStore.js';
 import type { Rect } from '../input/geometry.js';
 import type { PanelKeymap } from '../input/keymap.js';
 import type { KeymapRegistryApi, KeymapRegistryState } from '../input/keymapRegistry.js';
@@ -184,20 +179,13 @@ export function usePanelKeymap<Intent extends string>(
 }
 
 /**
- * The effective focus, as a hook — the re-home invariant applied reactively. Subscribes to both the
- * intended focus and the visible set; recomputes {@link resolveFocus} when either changes, so a
- * panel going hidden re-homes the highlight to chat on the very next render with no imperative call.
- * This is the hook a panel uses to know if its border is the highlighted one.
+ * The effective focus, as a hook — the re-home invariant applied reactively against the live focus
+ * graph. Mounted/painted rectangles are the candidate source; desired panel visibility is not.
  */
 export function useEffectiveFocus(): FocusId {
   const intended = useFocusStore((s) => s.intendedId);
-  const visible = usePanelStore((s) => s.visible);
-  // Phase 4a: mounted Stage panes are derived from the rects map (co-located with `intendedId` in the
-  // focus store). `measure` dedupes unchanged rects, so the map identity is stable and this memo only
-  // recomputes when a Stage pane mounts/unmounts (or any rect changes) — a re-home-correct re-render.
   const rects = useFocusStore((s) => s.rects);
-  const mountedStagePanes = mountedStagePanesOf(rects);
-  return resolveFocus(intended, visible, mountedStagePanes);
+  return resolveEffectiveFocus(intended, buildFocusGraph({ rects }));
 }
 
 /**
@@ -237,7 +225,7 @@ function measureRect(node: DOMElement): Rect {
  * score over the NEW geometry. The effect below has no dependency array, so it re-measures on every
  * render — but that only helps if the component actually re-renders on a resize. The panels are
  * `React.memo`'d with no props (`<PlansPanel/>`), and a bare resize changes none of the slices they
- * subscribe to (focus intent, visible set, their data) — so without this hook they would NOT
+ * subscribe to (focus intent, focus geometry, their data) — so without this hook they would NOT
  * re-render, the depless effect would NOT run, and the stored rect would go stale (the bug the spec
  * warns about). We subscribe to {@link useTerminalSize} HERE so a resize re-renders every focusable
  * that calls this hook → its measure effect re-runs → its rect refreshes. One subscription covers all
@@ -245,14 +233,14 @@ function measureRect(node: DOMElement): Rect {
  *
  * ## Unmount cleanup (Phase 4a — Stage panes)
  * A Stage pane ({@link ../components/Stage.js}) is a dynamic focusable: it leaves the tree when its
- * crow is un-favorited. On unmount it must drop its rect so {@link mountedStagePanesOf} stops listing
- * it and {@link resolveFocus} re-homes focus to chat (the Stage analogue of hiding a focused panel).
+ * crow is un-favorited. On unmount it must drop its rect so the next focus graph excludes it and
+ * effective focus re-homes to chat.
  * The cleanup lives in a SEPARATE unmount-only effect (deps `[id, unmeasure]`), NOT folded into the
  * depless measure effect above: that effect's cleanup runs on every render, so unmeasuring there
  * would unmeasure→remeasure each render and transiently drop the pane from the candidate set. This is
  * uniform across all focusables (panels unmount on toggle-off too; cleaning their stale rect is
- * strictly fine — `focusCandidates` already excludes a non-visible panel — and keeps the hook one
- * shape). `id` accepts any {@link FocusId}, so a Stage pane passes `stage:chat:<agentId>` unchanged.
+ * strictly fine) and keeps the hook one shape. `id` accepts any {@link FocusId}, so a Stage pane
+ * passes `stage:chat:<agentId>` unchanged.
  */
 export function useMeasureFocus(id: FocusId, ref: React.RefObject<DOMElement | null>): void {
   const measure = useFocusStore((s) => s.measure);

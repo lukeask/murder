@@ -58,6 +58,7 @@ import {
 } from '../hooks/useInputStores.js';
 import type { FocusId, StagePaneId } from '../input/focusStore.js';
 import type { PanelKeymap } from '../input/keymap.js';
+import type { PanePresentation } from '../layout/paneLayout.js';
 import { DOC_DIR, type DocKind, type OpenDoc } from '../store/docView/docViewSlice.js';
 import { useTheme } from '../theme/themeStore.js';
 import { Pane } from './Pane.js';
@@ -139,8 +140,11 @@ type DocIntent = 'close' | 'scrollDown' | 'scrollUp' | 'pageDown' | 'pageUp' | '
  */
 export const StageDocPane = memo(function StageDocPane({
   open,
+  presentation,
 }: {
   readonly open: OpenDoc;
+  /** The explicit outer allocation for this mounted document pane under the new pane layout bridge. */
+  readonly presentation?: PanePresentation;
 }): JSX.Element {
   const theme = useTheme();
   const focusId: FocusId = docPaneFocusId(open.name);
@@ -176,7 +180,12 @@ export const StageDocPane = memo(function StageDocPane({
       setMeasuredHeight(height);
     }
   });
-  const effectiveHeight = measuredHeight > 0 ? measuredHeight : FALLBACK_HEIGHT;
+  const effectiveHeight =
+    presentation !== undefined
+      ? Math.max(0, presentation.height - 2)
+      : measuredHeight > 0
+        ? measuredHeight
+        : FALLBACK_HEIGHT;
 
   const {
     start: clamped,
