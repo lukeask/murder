@@ -1,0 +1,1734 @@
+{
+  "generatedAt": "1970-01-01T00:00:00.000Z",
+  "count": 216,
+  "snapshots": [
+    {
+      "fixtureId": "pane",
+      "dataId": "basic",
+      "focused": true,
+      "width": 54,
+      "height": 14,
+      "file": "pane__basic__focused__preferred-54x14.txt"
+    },
+    {
+      "fixtureId": "pane",
+      "dataId": "basic",
+      "focused": false,
+      "width": 54,
+      "height": 14,
+      "file": "pane__basic__blurred__preferred-54x14.txt"
+    },
+    {
+      "fixtureId": "pane",
+      "dataId": "basic",
+      "focused": true,
+      "width": 30,
+      "height": 8,
+      "file": "pane__basic__focused__cramped-30x8.txt"
+    },
+    {
+      "fixtureId": "pane",
+      "dataId": "basic",
+      "focused": false,
+      "width": 30,
+      "height": 8,
+      "file": "pane__basic__blurred__cramped-30x8.txt"
+    },
+    {
+      "fixtureId": "pane",
+      "dataId": "basic",
+      "focused": true,
+      "width": 20,
+      "height": 5,
+      "file": "pane__basic__focused__minimum-20x5.txt"
+    },
+    {
+      "fixtureId": "pane",
+      "dataId": "basic",
+      "focused": false,
+      "width": 20,
+      "height": 5,
+      "file": "pane__basic__blurred__minimum-20x5.txt"
+    },
+    {
+      "fixtureId": "pane",
+      "dataId": "overflow",
+      "focused": true,
+      "width": 54,
+      "height": 14,
+      "file": "pane__overflow__focused__preferred-54x14.txt"
+    },
+    {
+      "fixtureId": "pane",
+      "dataId": "overflow",
+      "focused": false,
+      "width": 54,
+      "height": 14,
+      "file": "pane__overflow__blurred__preferred-54x14.txt"
+    },
+    {
+      "fixtureId": "pane",
+      "dataId": "overflow",
+      "focused": true,
+      "width": 30,
+      "height": 8,
+      "file": "pane__overflow__focused__cramped-30x8.txt"
+    },
+    {
+      "fixtureId": "pane",
+      "dataId": "overflow",
+      "focused": false,
+      "width": 30,
+      "height": 8,
+      "file": "pane__overflow__blurred__cramped-30x8.txt"
+    },
+    {
+      "fixtureId": "pane",
+      "dataId": "overflow",
+      "focused": true,
+      "width": 20,
+      "height": 5,
+      "file": "pane__overflow__focused__minimum-20x5.txt"
+    },
+    {
+      "fixtureId": "pane",
+      "dataId": "overflow",
+      "focused": false,
+      "width": 20,
+      "height": 5,
+      "file": "pane__overflow__blurred__minimum-20x5.txt"
+    },
+    {
+      "fixtureId": "ledger",
+      "dataId": "compact",
+      "focused": true,
+      "width": 54,
+      "height": 14,
+      "file": "ledger__compact__focused__preferred-54x14.txt"
+    },
+    {
+      "fixtureId": "ledger",
+      "dataId": "compact",
+      "focused": false,
+      "width": 54,
+      "height": 14,
+      "file": "ledger__compact__blurred__preferred-54x14.txt"
+    },
+    {
+      "fixtureId": "ledger",
+      "dataId": "compact",
+      "focused": true,
+      "width": 30,
+      "height": 8,
+      "file": "ledger__compact__focused__cramped-30x8.txt"
+    },
+    {
+      "fixtureId": "ledger",
+      "dataId": "compact",
+      "focused": false,
+      "width": 30,
+      "height": 8,
+      "file": "ledger__compact__blurred__cramped-30x8.txt"
+    },
+    {
+      "fixtureId": "ledger",
+      "dataId": "compact",
+      "focused": true,
+      "width": 20,
+      "height": 5,
+      "file": "ledger__compact__focused__minimum-20x5.txt"
+    },
+    {
+      "fixtureId": "ledger",
+      "dataId": "compact",
+      "focused": false,
+      "width": 20,
+      "height": 5,
+      "file": "ledger__compact__blurred__minimum-20x5.txt"
+    },
+    {
+      "fixtureId": "ledger",
+      "dataId": "scroll",
+      "focused": true,
+      "width": 54,
+      "height": 14,
+      "file": "ledger__scroll__focused__preferred-54x14.txt"
+    },
+    {
+      "fixtureId": "ledger",
+      "dataId": "scroll",
+      "focused": false,
+      "width": 54,
+      "height": 14,
+      "file": "ledger__scroll__blurred__preferred-54x14.txt"
+    },
+    {
+      "fixtureId": "ledger",
+      "dataId": "scroll",
+      "focused": true,
+      "width": 30,
+      "height": 8,
+      "file": "ledger__scroll__focused__cramped-30x8.txt"
+    },
+    {
+      "fixtureId": "ledger",
+      "dataId": "scroll",
+      "focused": false,
+      "width": 30,
+      "height": 8,
+      "file": "ledger__scroll__blurred__cramped-30x8.txt"
+    },
+    {
+      "fixtureId": "ledger",
+      "dataId": "scroll",
+      "focused": true,
+      "width": 20,
+      "height": 5,
+      "file": "ledger__scroll__focused__minimum-20x5.txt"
+    },
+    {
+      "fixtureId": "ledger",
+      "dataId": "scroll",
+      "focused": false,
+      "width": 20,
+      "height": 5,
+      "file": "ledger__scroll__blurred__minimum-20x5.txt"
+    },
+    {
+      "fixtureId": "plans-panel",
+      "dataId": "mixed",
+      "focused": true,
+      "width": 54,
+      "height": 14,
+      "file": "plans-panel__mixed__focused__preferred-54x14.txt"
+    },
+    {
+      "fixtureId": "plans-panel",
+      "dataId": "mixed",
+      "focused": false,
+      "width": 54,
+      "height": 14,
+      "file": "plans-panel__mixed__blurred__preferred-54x14.txt"
+    },
+    {
+      "fixtureId": "plans-panel",
+      "dataId": "mixed",
+      "focused": true,
+      "width": 30,
+      "height": 8,
+      "file": "plans-panel__mixed__focused__cramped-30x8.txt"
+    },
+    {
+      "fixtureId": "plans-panel",
+      "dataId": "mixed",
+      "focused": false,
+      "width": 30,
+      "height": 8,
+      "file": "plans-panel__mixed__blurred__cramped-30x8.txt"
+    },
+    {
+      "fixtureId": "plans-panel",
+      "dataId": "mixed",
+      "focused": true,
+      "width": 20,
+      "height": 5,
+      "file": "plans-panel__mixed__focused__minimum-20x5.txt"
+    },
+    {
+      "fixtureId": "plans-panel",
+      "dataId": "mixed",
+      "focused": false,
+      "width": 20,
+      "height": 5,
+      "file": "plans-panel__mixed__blurred__minimum-20x5.txt"
+    },
+    {
+      "fixtureId": "plans-panel",
+      "dataId": "overflow",
+      "focused": true,
+      "width": 54,
+      "height": 14,
+      "file": "plans-panel__overflow__focused__preferred-54x14.txt"
+    },
+    {
+      "fixtureId": "plans-panel",
+      "dataId": "overflow",
+      "focused": false,
+      "width": 54,
+      "height": 14,
+      "file": "plans-panel__overflow__blurred__preferred-54x14.txt"
+    },
+    {
+      "fixtureId": "plans-panel",
+      "dataId": "overflow",
+      "focused": true,
+      "width": 30,
+      "height": 8,
+      "file": "plans-panel__overflow__focused__cramped-30x8.txt"
+    },
+    {
+      "fixtureId": "plans-panel",
+      "dataId": "overflow",
+      "focused": false,
+      "width": 30,
+      "height": 8,
+      "file": "plans-panel__overflow__blurred__cramped-30x8.txt"
+    },
+    {
+      "fixtureId": "plans-panel",
+      "dataId": "overflow",
+      "focused": true,
+      "width": 20,
+      "height": 5,
+      "file": "plans-panel__overflow__focused__minimum-20x5.txt"
+    },
+    {
+      "fixtureId": "plans-panel",
+      "dataId": "overflow",
+      "focused": false,
+      "width": 20,
+      "height": 5,
+      "file": "plans-panel__overflow__blurred__minimum-20x5.txt"
+    },
+    {
+      "fixtureId": "notes-panel",
+      "dataId": "mixed",
+      "focused": true,
+      "width": 54,
+      "height": 14,
+      "file": "notes-panel__mixed__focused__preferred-54x14.txt"
+    },
+    {
+      "fixtureId": "notes-panel",
+      "dataId": "mixed",
+      "focused": false,
+      "width": 54,
+      "height": 14,
+      "file": "notes-panel__mixed__blurred__preferred-54x14.txt"
+    },
+    {
+      "fixtureId": "notes-panel",
+      "dataId": "mixed",
+      "focused": true,
+      "width": 30,
+      "height": 8,
+      "file": "notes-panel__mixed__focused__cramped-30x8.txt"
+    },
+    {
+      "fixtureId": "notes-panel",
+      "dataId": "mixed",
+      "focused": false,
+      "width": 30,
+      "height": 8,
+      "file": "notes-panel__mixed__blurred__cramped-30x8.txt"
+    },
+    {
+      "fixtureId": "notes-panel",
+      "dataId": "mixed",
+      "focused": true,
+      "width": 20,
+      "height": 5,
+      "file": "notes-panel__mixed__focused__minimum-20x5.txt"
+    },
+    {
+      "fixtureId": "notes-panel",
+      "dataId": "mixed",
+      "focused": false,
+      "width": 20,
+      "height": 5,
+      "file": "notes-panel__mixed__blurred__minimum-20x5.txt"
+    },
+    {
+      "fixtureId": "notes-panel",
+      "dataId": "empty",
+      "focused": true,
+      "width": 54,
+      "height": 14,
+      "file": "notes-panel__empty__focused__preferred-54x14.txt"
+    },
+    {
+      "fixtureId": "notes-panel",
+      "dataId": "empty",
+      "focused": false,
+      "width": 54,
+      "height": 14,
+      "file": "notes-panel__empty__blurred__preferred-54x14.txt"
+    },
+    {
+      "fixtureId": "notes-panel",
+      "dataId": "empty",
+      "focused": true,
+      "width": 30,
+      "height": 8,
+      "file": "notes-panel__empty__focused__cramped-30x8.txt"
+    },
+    {
+      "fixtureId": "notes-panel",
+      "dataId": "empty",
+      "focused": false,
+      "width": 30,
+      "height": 8,
+      "file": "notes-panel__empty__blurred__cramped-30x8.txt"
+    },
+    {
+      "fixtureId": "notes-panel",
+      "dataId": "empty",
+      "focused": true,
+      "width": 20,
+      "height": 5,
+      "file": "notes-panel__empty__focused__minimum-20x5.txt"
+    },
+    {
+      "fixtureId": "notes-panel",
+      "dataId": "empty",
+      "focused": false,
+      "width": 20,
+      "height": 5,
+      "file": "notes-panel__empty__blurred__minimum-20x5.txt"
+    },
+    {
+      "fixtureId": "reports-panel",
+      "dataId": "mixed",
+      "focused": true,
+      "width": 54,
+      "height": 14,
+      "file": "reports-panel__mixed__focused__preferred-54x14.txt"
+    },
+    {
+      "fixtureId": "reports-panel",
+      "dataId": "mixed",
+      "focused": false,
+      "width": 54,
+      "height": 14,
+      "file": "reports-panel__mixed__blurred__preferred-54x14.txt"
+    },
+    {
+      "fixtureId": "reports-panel",
+      "dataId": "mixed",
+      "focused": true,
+      "width": 30,
+      "height": 8,
+      "file": "reports-panel__mixed__focused__cramped-30x8.txt"
+    },
+    {
+      "fixtureId": "reports-panel",
+      "dataId": "mixed",
+      "focused": false,
+      "width": 30,
+      "height": 8,
+      "file": "reports-panel__mixed__blurred__cramped-30x8.txt"
+    },
+    {
+      "fixtureId": "reports-panel",
+      "dataId": "mixed",
+      "focused": true,
+      "width": 20,
+      "height": 5,
+      "file": "reports-panel__mixed__focused__minimum-20x5.txt"
+    },
+    {
+      "fixtureId": "reports-panel",
+      "dataId": "mixed",
+      "focused": false,
+      "width": 20,
+      "height": 5,
+      "file": "reports-panel__mixed__blurred__minimum-20x5.txt"
+    },
+    {
+      "fixtureId": "reports-panel",
+      "dataId": "empty",
+      "focused": true,
+      "width": 54,
+      "height": 14,
+      "file": "reports-panel__empty__focused__preferred-54x14.txt"
+    },
+    {
+      "fixtureId": "reports-panel",
+      "dataId": "empty",
+      "focused": false,
+      "width": 54,
+      "height": 14,
+      "file": "reports-panel__empty__blurred__preferred-54x14.txt"
+    },
+    {
+      "fixtureId": "reports-panel",
+      "dataId": "empty",
+      "focused": true,
+      "width": 30,
+      "height": 8,
+      "file": "reports-panel__empty__focused__cramped-30x8.txt"
+    },
+    {
+      "fixtureId": "reports-panel",
+      "dataId": "empty",
+      "focused": false,
+      "width": 30,
+      "height": 8,
+      "file": "reports-panel__empty__blurred__cramped-30x8.txt"
+    },
+    {
+      "fixtureId": "reports-panel",
+      "dataId": "empty",
+      "focused": true,
+      "width": 20,
+      "height": 5,
+      "file": "reports-panel__empty__focused__minimum-20x5.txt"
+    },
+    {
+      "fixtureId": "reports-panel",
+      "dataId": "empty",
+      "focused": false,
+      "width": 20,
+      "height": 5,
+      "file": "reports-panel__empty__blurred__minimum-20x5.txt"
+    },
+    {
+      "fixtureId": "resource-row",
+      "dataId": "mixed",
+      "focused": true,
+      "width": 54,
+      "height": 14,
+      "file": "resource-row__mixed__focused__preferred-54x14.txt"
+    },
+    {
+      "fixtureId": "resource-row",
+      "dataId": "mixed",
+      "focused": false,
+      "width": 54,
+      "height": 14,
+      "file": "resource-row__mixed__blurred__preferred-54x14.txt"
+    },
+    {
+      "fixtureId": "resource-row",
+      "dataId": "mixed",
+      "focused": true,
+      "width": 30,
+      "height": 8,
+      "file": "resource-row__mixed__focused__cramped-30x8.txt"
+    },
+    {
+      "fixtureId": "resource-row",
+      "dataId": "mixed",
+      "focused": false,
+      "width": 30,
+      "height": 8,
+      "file": "resource-row__mixed__blurred__cramped-30x8.txt"
+    },
+    {
+      "fixtureId": "resource-row",
+      "dataId": "mixed",
+      "focused": true,
+      "width": 20,
+      "height": 5,
+      "file": "resource-row__mixed__focused__minimum-20x5.txt"
+    },
+    {
+      "fixtureId": "resource-row",
+      "dataId": "mixed",
+      "focused": false,
+      "width": 20,
+      "height": 5,
+      "file": "resource-row__mixed__blurred__minimum-20x5.txt"
+    },
+    {
+      "fixtureId": "resource-row",
+      "dataId": "overflow",
+      "focused": true,
+      "width": 54,
+      "height": 14,
+      "file": "resource-row__overflow__focused__preferred-54x14.txt"
+    },
+    {
+      "fixtureId": "resource-row",
+      "dataId": "overflow",
+      "focused": false,
+      "width": 54,
+      "height": 14,
+      "file": "resource-row__overflow__blurred__preferred-54x14.txt"
+    },
+    {
+      "fixtureId": "resource-row",
+      "dataId": "overflow",
+      "focused": true,
+      "width": 30,
+      "height": 8,
+      "file": "resource-row__overflow__focused__cramped-30x8.txt"
+    },
+    {
+      "fixtureId": "resource-row",
+      "dataId": "overflow",
+      "focused": false,
+      "width": 30,
+      "height": 8,
+      "file": "resource-row__overflow__blurred__cramped-30x8.txt"
+    },
+    {
+      "fixtureId": "resource-row",
+      "dataId": "overflow",
+      "focused": true,
+      "width": 20,
+      "height": 5,
+      "file": "resource-row__overflow__focused__minimum-20x5.txt"
+    },
+    {
+      "fixtureId": "resource-row",
+      "dataId": "overflow",
+      "focused": false,
+      "width": 20,
+      "height": 5,
+      "file": "resource-row__overflow__blurred__minimum-20x5.txt"
+    },
+    {
+      "fixtureId": "tickets-panel",
+      "dataId": "mixed",
+      "focused": true,
+      "width": 54,
+      "height": 14,
+      "file": "tickets-panel__mixed__focused__preferred-54x14.txt"
+    },
+    {
+      "fixtureId": "tickets-panel",
+      "dataId": "mixed",
+      "focused": false,
+      "width": 54,
+      "height": 14,
+      "file": "tickets-panel__mixed__blurred__preferred-54x14.txt"
+    },
+    {
+      "fixtureId": "tickets-panel",
+      "dataId": "mixed",
+      "focused": true,
+      "width": 30,
+      "height": 8,
+      "file": "tickets-panel__mixed__focused__cramped-30x8.txt"
+    },
+    {
+      "fixtureId": "tickets-panel",
+      "dataId": "mixed",
+      "focused": false,
+      "width": 30,
+      "height": 8,
+      "file": "tickets-panel__mixed__blurred__cramped-30x8.txt"
+    },
+    {
+      "fixtureId": "tickets-panel",
+      "dataId": "mixed",
+      "focused": true,
+      "width": 20,
+      "height": 5,
+      "file": "tickets-panel__mixed__focused__minimum-20x5.txt"
+    },
+    {
+      "fixtureId": "tickets-panel",
+      "dataId": "mixed",
+      "focused": false,
+      "width": 20,
+      "height": 5,
+      "file": "tickets-panel__mixed__blurred__minimum-20x5.txt"
+    },
+    {
+      "fixtureId": "tickets-panel",
+      "dataId": "empty",
+      "focused": true,
+      "width": 54,
+      "height": 14,
+      "file": "tickets-panel__empty__focused__preferred-54x14.txt"
+    },
+    {
+      "fixtureId": "tickets-panel",
+      "dataId": "empty",
+      "focused": false,
+      "width": 54,
+      "height": 14,
+      "file": "tickets-panel__empty__blurred__preferred-54x14.txt"
+    },
+    {
+      "fixtureId": "tickets-panel",
+      "dataId": "empty",
+      "focused": true,
+      "width": 30,
+      "height": 8,
+      "file": "tickets-panel__empty__focused__cramped-30x8.txt"
+    },
+    {
+      "fixtureId": "tickets-panel",
+      "dataId": "empty",
+      "focused": false,
+      "width": 30,
+      "height": 8,
+      "file": "tickets-panel__empty__blurred__cramped-30x8.txt"
+    },
+    {
+      "fixtureId": "tickets-panel",
+      "dataId": "empty",
+      "focused": true,
+      "width": 20,
+      "height": 5,
+      "file": "tickets-panel__empty__focused__minimum-20x5.txt"
+    },
+    {
+      "fixtureId": "tickets-panel",
+      "dataId": "empty",
+      "focused": false,
+      "width": 20,
+      "height": 5,
+      "file": "tickets-panel__empty__blurred__minimum-20x5.txt"
+    },
+    {
+      "fixtureId": "crows-panel",
+      "dataId": "mixed",
+      "focused": true,
+      "width": 54,
+      "height": 14,
+      "file": "crows-panel__mixed__focused__preferred-54x14.txt"
+    },
+    {
+      "fixtureId": "crows-panel",
+      "dataId": "mixed",
+      "focused": false,
+      "width": 54,
+      "height": 14,
+      "file": "crows-panel__mixed__blurred__preferred-54x14.txt"
+    },
+    {
+      "fixtureId": "crows-panel",
+      "dataId": "mixed",
+      "focused": true,
+      "width": 30,
+      "height": 8,
+      "file": "crows-panel__mixed__focused__cramped-30x8.txt"
+    },
+    {
+      "fixtureId": "crows-panel",
+      "dataId": "mixed",
+      "focused": false,
+      "width": 30,
+      "height": 8,
+      "file": "crows-panel__mixed__blurred__cramped-30x8.txt"
+    },
+    {
+      "fixtureId": "crows-panel",
+      "dataId": "mixed",
+      "focused": true,
+      "width": 20,
+      "height": 5,
+      "file": "crows-panel__mixed__focused__minimum-20x5.txt"
+    },
+    {
+      "fixtureId": "crows-panel",
+      "dataId": "mixed",
+      "focused": false,
+      "width": 20,
+      "height": 5,
+      "file": "crows-panel__mixed__blurred__minimum-20x5.txt"
+    },
+    {
+      "fixtureId": "crows-panel",
+      "dataId": "loading",
+      "focused": true,
+      "width": 54,
+      "height": 14,
+      "file": "crows-panel__loading__focused__preferred-54x14.txt"
+    },
+    {
+      "fixtureId": "crows-panel",
+      "dataId": "loading",
+      "focused": false,
+      "width": 54,
+      "height": 14,
+      "file": "crows-panel__loading__blurred__preferred-54x14.txt"
+    },
+    {
+      "fixtureId": "crows-panel",
+      "dataId": "loading",
+      "focused": true,
+      "width": 30,
+      "height": 8,
+      "file": "crows-panel__loading__focused__cramped-30x8.txt"
+    },
+    {
+      "fixtureId": "crows-panel",
+      "dataId": "loading",
+      "focused": false,
+      "width": 30,
+      "height": 8,
+      "file": "crows-panel__loading__blurred__cramped-30x8.txt"
+    },
+    {
+      "fixtureId": "crows-panel",
+      "dataId": "loading",
+      "focused": true,
+      "width": 20,
+      "height": 5,
+      "file": "crows-panel__loading__focused__minimum-20x5.txt"
+    },
+    {
+      "fixtureId": "crows-panel",
+      "dataId": "loading",
+      "focused": false,
+      "width": 20,
+      "height": 5,
+      "file": "crows-panel__loading__blurred__minimum-20x5.txt"
+    },
+    {
+      "fixtureId": "roster-panel",
+      "dataId": "mixed",
+      "focused": true,
+      "width": 54,
+      "height": 14,
+      "file": "roster-panel__mixed__focused__preferred-54x14.txt"
+    },
+    {
+      "fixtureId": "roster-panel",
+      "dataId": "mixed",
+      "focused": false,
+      "width": 54,
+      "height": 14,
+      "file": "roster-panel__mixed__blurred__preferred-54x14.txt"
+    },
+    {
+      "fixtureId": "roster-panel",
+      "dataId": "mixed",
+      "focused": true,
+      "width": 30,
+      "height": 8,
+      "file": "roster-panel__mixed__focused__cramped-30x8.txt"
+    },
+    {
+      "fixtureId": "roster-panel",
+      "dataId": "mixed",
+      "focused": false,
+      "width": 30,
+      "height": 8,
+      "file": "roster-panel__mixed__blurred__cramped-30x8.txt"
+    },
+    {
+      "fixtureId": "roster-panel",
+      "dataId": "mixed",
+      "focused": true,
+      "width": 20,
+      "height": 5,
+      "file": "roster-panel__mixed__focused__minimum-20x5.txt"
+    },
+    {
+      "fixtureId": "roster-panel",
+      "dataId": "mixed",
+      "focused": false,
+      "width": 20,
+      "height": 5,
+      "file": "roster-panel__mixed__blurred__minimum-20x5.txt"
+    },
+    {
+      "fixtureId": "roster-panel",
+      "dataId": "loading",
+      "focused": true,
+      "width": 54,
+      "height": 14,
+      "file": "roster-panel__loading__focused__preferred-54x14.txt"
+    },
+    {
+      "fixtureId": "roster-panel",
+      "dataId": "loading",
+      "focused": false,
+      "width": 54,
+      "height": 14,
+      "file": "roster-panel__loading__blurred__preferred-54x14.txt"
+    },
+    {
+      "fixtureId": "roster-panel",
+      "dataId": "loading",
+      "focused": true,
+      "width": 30,
+      "height": 8,
+      "file": "roster-panel__loading__focused__cramped-30x8.txt"
+    },
+    {
+      "fixtureId": "roster-panel",
+      "dataId": "loading",
+      "focused": false,
+      "width": 30,
+      "height": 8,
+      "file": "roster-panel__loading__blurred__cramped-30x8.txt"
+    },
+    {
+      "fixtureId": "roster-panel",
+      "dataId": "loading",
+      "focused": true,
+      "width": 20,
+      "height": 5,
+      "file": "roster-panel__loading__focused__minimum-20x5.txt"
+    },
+    {
+      "fixtureId": "roster-panel",
+      "dataId": "loading",
+      "focused": false,
+      "width": 20,
+      "height": 5,
+      "file": "roster-panel__loading__blurred__minimum-20x5.txt"
+    },
+    {
+      "fixtureId": "history-panel",
+      "dataId": "mixed",
+      "focused": true,
+      "width": 54,
+      "height": 14,
+      "file": "history-panel__mixed__focused__preferred-54x14.txt"
+    },
+    {
+      "fixtureId": "history-panel",
+      "dataId": "mixed",
+      "focused": false,
+      "width": 54,
+      "height": 14,
+      "file": "history-panel__mixed__blurred__preferred-54x14.txt"
+    },
+    {
+      "fixtureId": "history-panel",
+      "dataId": "mixed",
+      "focused": true,
+      "width": 30,
+      "height": 8,
+      "file": "history-panel__mixed__focused__cramped-30x8.txt"
+    },
+    {
+      "fixtureId": "history-panel",
+      "dataId": "mixed",
+      "focused": false,
+      "width": 30,
+      "height": 8,
+      "file": "history-panel__mixed__blurred__cramped-30x8.txt"
+    },
+    {
+      "fixtureId": "history-panel",
+      "dataId": "mixed",
+      "focused": true,
+      "width": 20,
+      "height": 5,
+      "file": "history-panel__mixed__focused__minimum-20x5.txt"
+    },
+    {
+      "fixtureId": "history-panel",
+      "dataId": "mixed",
+      "focused": false,
+      "width": 20,
+      "height": 5,
+      "file": "history-panel__mixed__blurred__minimum-20x5.txt"
+    },
+    {
+      "fixtureId": "history-panel",
+      "dataId": "empty",
+      "focused": true,
+      "width": 54,
+      "height": 14,
+      "file": "history-panel__empty__focused__preferred-54x14.txt"
+    },
+    {
+      "fixtureId": "history-panel",
+      "dataId": "empty",
+      "focused": false,
+      "width": 54,
+      "height": 14,
+      "file": "history-panel__empty__blurred__preferred-54x14.txt"
+    },
+    {
+      "fixtureId": "history-panel",
+      "dataId": "empty",
+      "focused": true,
+      "width": 30,
+      "height": 8,
+      "file": "history-panel__empty__focused__cramped-30x8.txt"
+    },
+    {
+      "fixtureId": "history-panel",
+      "dataId": "empty",
+      "focused": false,
+      "width": 30,
+      "height": 8,
+      "file": "history-panel__empty__blurred__cramped-30x8.txt"
+    },
+    {
+      "fixtureId": "history-panel",
+      "dataId": "empty",
+      "focused": true,
+      "width": 20,
+      "height": 5,
+      "file": "history-panel__empty__focused__minimum-20x5.txt"
+    },
+    {
+      "fixtureId": "history-panel",
+      "dataId": "empty",
+      "focused": false,
+      "width": 20,
+      "height": 5,
+      "file": "history-panel__empty__blurred__minimum-20x5.txt"
+    },
+    {
+      "fixtureId": "usage-panel",
+      "dataId": "normal",
+      "focused": true,
+      "width": 54,
+      "height": 14,
+      "file": "usage-panel__normal__focused__preferred-54x14.txt"
+    },
+    {
+      "fixtureId": "usage-panel",
+      "dataId": "normal",
+      "focused": false,
+      "width": 54,
+      "height": 14,
+      "file": "usage-panel__normal__blurred__preferred-54x14.txt"
+    },
+    {
+      "fixtureId": "usage-panel",
+      "dataId": "normal",
+      "focused": true,
+      "width": 30,
+      "height": 8,
+      "file": "usage-panel__normal__focused__cramped-30x8.txt"
+    },
+    {
+      "fixtureId": "usage-panel",
+      "dataId": "normal",
+      "focused": false,
+      "width": 30,
+      "height": 8,
+      "file": "usage-panel__normal__blurred__cramped-30x8.txt"
+    },
+    {
+      "fixtureId": "usage-panel",
+      "dataId": "normal",
+      "focused": true,
+      "width": 20,
+      "height": 5,
+      "file": "usage-panel__normal__focused__minimum-20x5.txt"
+    },
+    {
+      "fixtureId": "usage-panel",
+      "dataId": "normal",
+      "focused": false,
+      "width": 20,
+      "height": 5,
+      "file": "usage-panel__normal__blurred__minimum-20x5.txt"
+    },
+    {
+      "fixtureId": "usage-panel",
+      "dataId": "empty",
+      "focused": true,
+      "width": 54,
+      "height": 14,
+      "file": "usage-panel__empty__focused__preferred-54x14.txt"
+    },
+    {
+      "fixtureId": "usage-panel",
+      "dataId": "empty",
+      "focused": false,
+      "width": 54,
+      "height": 14,
+      "file": "usage-panel__empty__blurred__preferred-54x14.txt"
+    },
+    {
+      "fixtureId": "usage-panel",
+      "dataId": "empty",
+      "focused": true,
+      "width": 30,
+      "height": 8,
+      "file": "usage-panel__empty__focused__cramped-30x8.txt"
+    },
+    {
+      "fixtureId": "usage-panel",
+      "dataId": "empty",
+      "focused": false,
+      "width": 30,
+      "height": 8,
+      "file": "usage-panel__empty__blurred__cramped-30x8.txt"
+    },
+    {
+      "fixtureId": "usage-panel",
+      "dataId": "empty",
+      "focused": true,
+      "width": 20,
+      "height": 5,
+      "file": "usage-panel__empty__focused__minimum-20x5.txt"
+    },
+    {
+      "fixtureId": "usage-panel",
+      "dataId": "empty",
+      "focused": false,
+      "width": 20,
+      "height": 5,
+      "file": "usage-panel__empty__blurred__minimum-20x5.txt"
+    },
+    {
+      "fixtureId": "transit-panel",
+      "dataId": "railway",
+      "focused": true,
+      "width": 54,
+      "height": 14,
+      "file": "transit-panel__railway__focused__preferred-54x14.txt"
+    },
+    {
+      "fixtureId": "transit-panel",
+      "dataId": "railway",
+      "focused": false,
+      "width": 54,
+      "height": 14,
+      "file": "transit-panel__railway__blurred__preferred-54x14.txt"
+    },
+    {
+      "fixtureId": "transit-panel",
+      "dataId": "railway",
+      "focused": true,
+      "width": 30,
+      "height": 8,
+      "file": "transit-panel__railway__focused__cramped-30x8.txt"
+    },
+    {
+      "fixtureId": "transit-panel",
+      "dataId": "railway",
+      "focused": false,
+      "width": 30,
+      "height": 8,
+      "file": "transit-panel__railway__blurred__cramped-30x8.txt"
+    },
+    {
+      "fixtureId": "transit-panel",
+      "dataId": "railway",
+      "focused": true,
+      "width": 20,
+      "height": 5,
+      "file": "transit-panel__railway__focused__minimum-20x5.txt"
+    },
+    {
+      "fixtureId": "transit-panel",
+      "dataId": "railway",
+      "focused": false,
+      "width": 20,
+      "height": 5,
+      "file": "transit-panel__railway__blurred__minimum-20x5.txt"
+    },
+    {
+      "fixtureId": "transit-panel",
+      "dataId": "pending",
+      "focused": true,
+      "width": 54,
+      "height": 14,
+      "file": "transit-panel__pending__focused__preferred-54x14.txt"
+    },
+    {
+      "fixtureId": "transit-panel",
+      "dataId": "pending",
+      "focused": false,
+      "width": 54,
+      "height": 14,
+      "file": "transit-panel__pending__blurred__preferred-54x14.txt"
+    },
+    {
+      "fixtureId": "transit-panel",
+      "dataId": "pending",
+      "focused": true,
+      "width": 30,
+      "height": 8,
+      "file": "transit-panel__pending__focused__cramped-30x8.txt"
+    },
+    {
+      "fixtureId": "transit-panel",
+      "dataId": "pending",
+      "focused": false,
+      "width": 30,
+      "height": 8,
+      "file": "transit-panel__pending__blurred__cramped-30x8.txt"
+    },
+    {
+      "fixtureId": "transit-panel",
+      "dataId": "pending",
+      "focused": true,
+      "width": 20,
+      "height": 5,
+      "file": "transit-panel__pending__focused__minimum-20x5.txt"
+    },
+    {
+      "fixtureId": "transit-panel",
+      "dataId": "pending",
+      "focused": false,
+      "width": 20,
+      "height": 5,
+      "file": "transit-panel__pending__blurred__minimum-20x5.txt"
+    },
+    {
+      "fixtureId": "doc-pane",
+      "dataId": "short",
+      "focused": true,
+      "width": 54,
+      "height": 14,
+      "file": "doc-pane__short__focused__preferred-54x14.txt"
+    },
+    {
+      "fixtureId": "doc-pane",
+      "dataId": "short",
+      "focused": false,
+      "width": 54,
+      "height": 14,
+      "file": "doc-pane__short__blurred__preferred-54x14.txt"
+    },
+    {
+      "fixtureId": "doc-pane",
+      "dataId": "short",
+      "focused": true,
+      "width": 30,
+      "height": 8,
+      "file": "doc-pane__short__focused__cramped-30x8.txt"
+    },
+    {
+      "fixtureId": "doc-pane",
+      "dataId": "short",
+      "focused": false,
+      "width": 30,
+      "height": 8,
+      "file": "doc-pane__short__blurred__cramped-30x8.txt"
+    },
+    {
+      "fixtureId": "doc-pane",
+      "dataId": "short",
+      "focused": true,
+      "width": 20,
+      "height": 5,
+      "file": "doc-pane__short__focused__minimum-20x5.txt"
+    },
+    {
+      "fixtureId": "doc-pane",
+      "dataId": "short",
+      "focused": false,
+      "width": 20,
+      "height": 5,
+      "file": "doc-pane__short__blurred__minimum-20x5.txt"
+    },
+    {
+      "fixtureId": "doc-pane",
+      "dataId": "long",
+      "focused": true,
+      "width": 54,
+      "height": 14,
+      "file": "doc-pane__long__focused__preferred-54x14.txt"
+    },
+    {
+      "fixtureId": "doc-pane",
+      "dataId": "long",
+      "focused": false,
+      "width": 54,
+      "height": 14,
+      "file": "doc-pane__long__blurred__preferred-54x14.txt"
+    },
+    {
+      "fixtureId": "doc-pane",
+      "dataId": "long",
+      "focused": true,
+      "width": 30,
+      "height": 8,
+      "file": "doc-pane__long__focused__cramped-30x8.txt"
+    },
+    {
+      "fixtureId": "doc-pane",
+      "dataId": "long",
+      "focused": false,
+      "width": 30,
+      "height": 8,
+      "file": "doc-pane__long__blurred__cramped-30x8.txt"
+    },
+    {
+      "fixtureId": "doc-pane",
+      "dataId": "long",
+      "focused": true,
+      "width": 20,
+      "height": 5,
+      "file": "doc-pane__long__focused__minimum-20x5.txt"
+    },
+    {
+      "fixtureId": "doc-pane",
+      "dataId": "long",
+      "focused": false,
+      "width": 20,
+      "height": 5,
+      "file": "doc-pane__long__blurred__minimum-20x5.txt"
+    },
+    {
+      "fixtureId": "chat-pane",
+      "dataId": "mixed",
+      "focused": true,
+      "width": 54,
+      "height": 14,
+      "file": "chat-pane__mixed__focused__preferred-54x14.txt"
+    },
+    {
+      "fixtureId": "chat-pane",
+      "dataId": "mixed",
+      "focused": false,
+      "width": 54,
+      "height": 14,
+      "file": "chat-pane__mixed__blurred__preferred-54x14.txt"
+    },
+    {
+      "fixtureId": "chat-pane",
+      "dataId": "mixed",
+      "focused": true,
+      "width": 30,
+      "height": 8,
+      "file": "chat-pane__mixed__focused__cramped-30x8.txt"
+    },
+    {
+      "fixtureId": "chat-pane",
+      "dataId": "mixed",
+      "focused": false,
+      "width": 30,
+      "height": 8,
+      "file": "chat-pane__mixed__blurred__cramped-30x8.txt"
+    },
+    {
+      "fixtureId": "chat-pane",
+      "dataId": "mixed",
+      "focused": true,
+      "width": 20,
+      "height": 5,
+      "file": "chat-pane__mixed__focused__minimum-20x5.txt"
+    },
+    {
+      "fixtureId": "chat-pane",
+      "dataId": "mixed",
+      "focused": false,
+      "width": 20,
+      "height": 5,
+      "file": "chat-pane__mixed__blurred__minimum-20x5.txt"
+    },
+    {
+      "fixtureId": "chat-pane",
+      "dataId": "long",
+      "focused": true,
+      "width": 54,
+      "height": 14,
+      "file": "chat-pane__long__focused__preferred-54x14.txt"
+    },
+    {
+      "fixtureId": "chat-pane",
+      "dataId": "long",
+      "focused": false,
+      "width": 54,
+      "height": 14,
+      "file": "chat-pane__long__blurred__preferred-54x14.txt"
+    },
+    {
+      "fixtureId": "chat-pane",
+      "dataId": "long",
+      "focused": true,
+      "width": 30,
+      "height": 8,
+      "file": "chat-pane__long__focused__cramped-30x8.txt"
+    },
+    {
+      "fixtureId": "chat-pane",
+      "dataId": "long",
+      "focused": false,
+      "width": 30,
+      "height": 8,
+      "file": "chat-pane__long__blurred__cramped-30x8.txt"
+    },
+    {
+      "fixtureId": "chat-pane",
+      "dataId": "long",
+      "focused": true,
+      "width": 20,
+      "height": 5,
+      "file": "chat-pane__long__focused__minimum-20x5.txt"
+    },
+    {
+      "fixtureId": "chat-pane",
+      "dataId": "long",
+      "focused": false,
+      "width": 20,
+      "height": 5,
+      "file": "chat-pane__long__blurred__minimum-20x5.txt"
+    },
+    {
+      "fixtureId": "chat-input",
+      "dataId": "empty",
+      "focused": true,
+      "width": 54,
+      "height": 14,
+      "file": "chat-input__empty__focused__preferred-54x14.txt"
+    },
+    {
+      "fixtureId": "chat-input",
+      "dataId": "empty",
+      "focused": false,
+      "width": 54,
+      "height": 14,
+      "file": "chat-input__empty__blurred__preferred-54x14.txt"
+    },
+    {
+      "fixtureId": "chat-input",
+      "dataId": "empty",
+      "focused": true,
+      "width": 30,
+      "height": 8,
+      "file": "chat-input__empty__focused__cramped-30x8.txt"
+    },
+    {
+      "fixtureId": "chat-input",
+      "dataId": "empty",
+      "focused": false,
+      "width": 30,
+      "height": 8,
+      "file": "chat-input__empty__blurred__cramped-30x8.txt"
+    },
+    {
+      "fixtureId": "chat-input",
+      "dataId": "empty",
+      "focused": true,
+      "width": 20,
+      "height": 5,
+      "file": "chat-input__empty__focused__minimum-20x5.txt"
+    },
+    {
+      "fixtureId": "chat-input",
+      "dataId": "empty",
+      "focused": false,
+      "width": 20,
+      "height": 5,
+      "file": "chat-input__empty__blurred__minimum-20x5.txt"
+    },
+    {
+      "fixtureId": "chat-input",
+      "dataId": "wrapped",
+      "focused": true,
+      "width": 54,
+      "height": 14,
+      "file": "chat-input__wrapped__focused__preferred-54x14.txt"
+    },
+    {
+      "fixtureId": "chat-input",
+      "dataId": "wrapped",
+      "focused": false,
+      "width": 54,
+      "height": 14,
+      "file": "chat-input__wrapped__blurred__preferred-54x14.txt"
+    },
+    {
+      "fixtureId": "chat-input",
+      "dataId": "wrapped",
+      "focused": true,
+      "width": 30,
+      "height": 8,
+      "file": "chat-input__wrapped__focused__cramped-30x8.txt"
+    },
+    {
+      "fixtureId": "chat-input",
+      "dataId": "wrapped",
+      "focused": false,
+      "width": 30,
+      "height": 8,
+      "file": "chat-input__wrapped__blurred__cramped-30x8.txt"
+    },
+    {
+      "fixtureId": "chat-input",
+      "dataId": "wrapped",
+      "focused": true,
+      "width": 20,
+      "height": 5,
+      "file": "chat-input__wrapped__focused__minimum-20x5.txt"
+    },
+    {
+      "fixtureId": "chat-input",
+      "dataId": "wrapped",
+      "focused": false,
+      "width": 20,
+      "height": 5,
+      "file": "chat-input__wrapped__blurred__minimum-20x5.txt"
+    },
+    {
+      "fixtureId": "text-input",
+      "dataId": "empty",
+      "focused": true,
+      "width": 60,
+      "height": 3,
+      "file": "text-input__empty__focused__preferred-60x3.txt"
+    },
+    {
+      "fixtureId": "text-input",
+      "dataId": "empty",
+      "focused": false,
+      "width": 60,
+      "height": 3,
+      "file": "text-input__empty__blurred__preferred-60x3.txt"
+    },
+    {
+      "fixtureId": "text-input",
+      "dataId": "empty",
+      "focused": true,
+      "width": 30,
+      "height": 3,
+      "file": "text-input__empty__focused__cramped-30x3.txt"
+    },
+    {
+      "fixtureId": "text-input",
+      "dataId": "empty",
+      "focused": false,
+      "width": 30,
+      "height": 3,
+      "file": "text-input__empty__blurred__cramped-30x3.txt"
+    },
+    {
+      "fixtureId": "text-input",
+      "dataId": "empty",
+      "focused": true,
+      "width": 20,
+      "height": 4,
+      "file": "text-input__empty__focused__minimum-20x4.txt"
+    },
+    {
+      "fixtureId": "text-input",
+      "dataId": "empty",
+      "focused": false,
+      "width": 20,
+      "height": 4,
+      "file": "text-input__empty__blurred__minimum-20x4.txt"
+    },
+    {
+      "fixtureId": "text-input",
+      "dataId": "filled",
+      "focused": true,
+      "width": 60,
+      "height": 3,
+      "file": "text-input__filled__focused__preferred-60x3.txt"
+    },
+    {
+      "fixtureId": "text-input",
+      "dataId": "filled",
+      "focused": false,
+      "width": 60,
+      "height": 3,
+      "file": "text-input__filled__blurred__preferred-60x3.txt"
+    },
+    {
+      "fixtureId": "text-input",
+      "dataId": "filled",
+      "focused": true,
+      "width": 30,
+      "height": 3,
+      "file": "text-input__filled__focused__cramped-30x3.txt"
+    },
+    {
+      "fixtureId": "text-input",
+      "dataId": "filled",
+      "focused": false,
+      "width": 30,
+      "height": 3,
+      "file": "text-input__filled__blurred__cramped-30x3.txt"
+    },
+    {
+      "fixtureId": "text-input",
+      "dataId": "filled",
+      "focused": true,
+      "width": 20,
+      "height": 4,
+      "file": "text-input__filled__focused__minimum-20x4.txt"
+    },
+    {
+      "fixtureId": "text-input",
+      "dataId": "filled",
+      "focused": false,
+      "width": 20,
+      "height": 4,
+      "file": "text-input__filled__blurred__minimum-20x4.txt"
+    },
+    {
+      "fixtureId": "pane-border",
+      "dataId": "basic",
+      "focused": true,
+      "width": 60,
+      "height": 3,
+      "file": "pane-border__basic__focused__preferred-60x3.txt"
+    },
+    {
+      "fixtureId": "pane-border",
+      "dataId": "basic",
+      "focused": false,
+      "width": 60,
+      "height": 3,
+      "file": "pane-border__basic__blurred__preferred-60x3.txt"
+    },
+    {
+      "fixtureId": "pane-border",
+      "dataId": "basic",
+      "focused": true,
+      "width": 30,
+      "height": 3,
+      "file": "pane-border__basic__focused__cramped-30x3.txt"
+    },
+    {
+      "fixtureId": "pane-border",
+      "dataId": "basic",
+      "focused": false,
+      "width": 30,
+      "height": 3,
+      "file": "pane-border__basic__blurred__cramped-30x3.txt"
+    },
+    {
+      "fixtureId": "pane-border",
+      "dataId": "basic",
+      "focused": true,
+      "width": 20,
+      "height": 4,
+      "file": "pane-border__basic__focused__minimum-20x4.txt"
+    },
+    {
+      "fixtureId": "pane-border",
+      "dataId": "basic",
+      "focused": false,
+      "width": 20,
+      "height": 4,
+      "file": "pane-border__basic__blurred__minimum-20x4.txt"
+    },
+    {
+      "fixtureId": "pane-border",
+      "dataId": "overflow",
+      "focused": true,
+      "width": 60,
+      "height": 3,
+      "file": "pane-border__overflow__focused__preferred-60x3.txt"
+    },
+    {
+      "fixtureId": "pane-border",
+      "dataId": "overflow",
+      "focused": false,
+      "width": 60,
+      "height": 3,
+      "file": "pane-border__overflow__blurred__preferred-60x3.txt"
+    },
+    {
+      "fixtureId": "pane-border",
+      "dataId": "overflow",
+      "focused": true,
+      "width": 30,
+      "height": 3,
+      "file": "pane-border__overflow__focused__cramped-30x3.txt"
+    },
+    {
+      "fixtureId": "pane-border",
+      "dataId": "overflow",
+      "focused": false,
+      "width": 30,
+      "height": 3,
+      "file": "pane-border__overflow__blurred__cramped-30x3.txt"
+    },
+    {
+      "fixtureId": "pane-border",
+      "dataId": "overflow",
+      "focused": true,
+      "width": 20,
+      "height": 4,
+      "file": "pane-border__overflow__focused__minimum-20x4.txt"
+    },
+    {
+      "fixtureId": "pane-border",
+      "dataId": "overflow",
+      "focused": false,
+      "width": 20,
+      "height": 4,
+      "file": "pane-border__overflow__blurred__minimum-20x4.txt"
+    },
+    {
+      "fixtureId": "top-bar",
+      "dataId": "normal",
+      "focused": true,
+      "width": 60,
+      "height": 3,
+      "file": "top-bar__normal__focused__preferred-60x3.txt"
+    },
+    {
+      "fixtureId": "top-bar",
+      "dataId": "normal",
+      "focused": true,
+      "width": 30,
+      "height": 3,
+      "file": "top-bar__normal__focused__cramped-30x3.txt"
+    },
+    {
+      "fixtureId": "top-bar",
+      "dataId": "normal",
+      "focused": true,
+      "width": 20,
+      "height": 4,
+      "file": "top-bar__normal__focused__minimum-20x4.txt"
+    },
+    {
+      "fixtureId": "top-bar",
+      "dataId": "narrow",
+      "focused": true,
+      "width": 60,
+      "height": 3,
+      "file": "top-bar__narrow__focused__preferred-60x3.txt"
+    },
+    {
+      "fixtureId": "top-bar",
+      "dataId": "narrow",
+      "focused": true,
+      "width": 30,
+      "height": 3,
+      "file": "top-bar__narrow__focused__cramped-30x3.txt"
+    },
+    {
+      "fixtureId": "top-bar",
+      "dataId": "narrow",
+      "focused": true,
+      "width": 20,
+      "height": 4,
+      "file": "top-bar__narrow__focused__minimum-20x4.txt"
+    },
+    {
+      "fixtureId": "bottom-bar",
+      "dataId": "normal",
+      "focused": true,
+      "width": 60,
+      "height": 3,
+      "file": "bottom-bar__normal__focused__preferred-60x3.txt"
+    },
+    {
+      "fixtureId": "bottom-bar",
+      "dataId": "normal",
+      "focused": true,
+      "width": 30,
+      "height": 3,
+      "file": "bottom-bar__normal__focused__cramped-30x3.txt"
+    },
+    {
+      "fixtureId": "bottom-bar",
+      "dataId": "normal",
+      "focused": true,
+      "width": 20,
+      "height": 4,
+      "file": "bottom-bar__normal__focused__minimum-20x4.txt"
+    },
+    {
+      "fixtureId": "bottom-bar",
+      "dataId": "narrow",
+      "focused": true,
+      "width": 60,
+      "height": 3,
+      "file": "bottom-bar__narrow__focused__preferred-60x3.txt"
+    },
+    {
+      "fixtureId": "bottom-bar",
+      "dataId": "narrow",
+      "focused": true,
+      "width": 30,
+      "height": 3,
+      "file": "bottom-bar__narrow__focused__cramped-30x3.txt"
+    },
+    {
+      "fixtureId": "bottom-bar",
+      "dataId": "narrow",
+      "focused": true,
+      "width": 20,
+      "height": 4,
+      "file": "bottom-bar__narrow__focused__minimum-20x4.txt"
+    }
+  ]
+}

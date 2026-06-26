@@ -1,0 +1,14 @@
+[2mname               status[22m                             
+  row one[38;2;131;192;146m  ok[39m                                         
+[48;2;60;72;65m▌ row two[38;2;131;192;146m  queued[39m                                     [49m
+  row three[38;2;131;192;146m  working[39m                                  
+[48;2;46;56;60m  row four[38;2;131;192;146m  waiting[39m                                   [49m
+  row five[38;2;131;192;146m  done[39m                                      
+[48;2;46;56;60m  row six[38;2;131;192;146m  archived[39m                                   [49m
+                                                      
+                                                      
+                                                      
+                                                      
+                                                      
+                                                      
+                                                      

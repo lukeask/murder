@@ -1,0 +1,14 @@
+[2mname               status[22m                             
+  alpha[38;2;131;192;146m  ready[39m                                        
+[48;2;60;72;65m▌ beta with long text[38;2;131;192;146m  running[39m                        [49m
+  gamma[38;2;131;192;146m  blocked[39m                                      
+                                                      
+                                                      
+                                                      
+                                                      
+                                                      
+                                                      
+                                                      
+                                                      
+                                                      
+                                                      

@@ -1,0 +1,8 @@
+[2mname[22m                          
+  row one                     
+[48;2;46;56;60m  row two                     [49m
+  row three                   
+[48;2;46;56;60m  row four                    [49m
+  row five                    
+[48;2;46;56;60m  row six                     [49m
+                              

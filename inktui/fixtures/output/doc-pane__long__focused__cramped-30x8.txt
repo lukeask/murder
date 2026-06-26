@@ -1,0 +1,8 @@
+[38;2;167;192;128m┏━ [1m.murder/reports/very-lon…[22m ┓[39m
+[38;2;167;192;128m┃[39m Line 4: deterministic cont…[38;2;167;192;128m┃[39m
+[38;2;167;192;128m┃[39m Line 5: deterministic cont…[38;2;167;192;128m█[39m
+[38;2;167;192;128m┃[39m Line 6: deterministic cont…[38;2;167;192;128m█[39m
+[38;2;167;192;128m┃[39m Line 7: deterministic cont…[38;2;167;192;128m█[39m
+[38;2;167;192;128m┃[39m Line 8: deterministic cont…[38;2;167;192;128m┃[39m
+[38;2;167;192;128m┃[39m Line 9: deterministic cont…[38;2;167;192;128m┃[39m
+[38;2;167;192;128m┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛[39m

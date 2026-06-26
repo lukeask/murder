@@ -1,0 +1,14 @@
+[2mname[22m                                                  
+[2msize · updated[22m                                        
+★ ★ Starred report with text that should truncate bef…
+[2m44.0k · Jun. 18 23:59[22m                                 
+[48;2;46;56;60mAutopsy of a narrow rail rendering failure            [49m
+[48;2;46;56;60m[2m9.5k · Jun. 18 12:00[22m                                  [49m
+Follow-up: footer and scrollbar checks                
+[2m3.2k · Jun. 17 16:44[22m                                  
+[48;2;46;56;60mRegression notes from fixture review                  [49m
+[48;2;46;56;60m[2m1.1k · Jun. 16 10:05[22m                                  [49m
+Archive candidate                                     
+[2m600 · Jun. 15 08:30[22m                                   
+                                                      
+                                                      

@@ -18,7 +18,9 @@
     "lint": "biome check src test",
     "lint:fix": "biome check --write src test",
     "format": "biome format --write src test",
-    "test": "vitest run"
+    "test": "vitest run",
+    "render-pane-fixture": "tsx fixtures/render-pane-fixture.ts",
+    "fixtures:render": "tsx fixtures/render-pane-fixture.ts --all"
   },
   "dependencies": {
     "ink": "^7.0.5",

@@ -1,0 +1,14 @@
+ [38;2;219;188;127mqueued · previous queued message waiting for interr…[39m 
+[38;2;122;132;120m╭─ ▶ Plan runner · working ──────────────────────────╮[39m
+[38;2;122;132;120m│[39m [38;2;211;198;170mPlease inspect the exact border-box dimensions [39m    [38;2;122;132;120m│[39m
+[38;2;122;132;120m│[39m [38;2;211;198;170mbefore optimizing the layout.[39m                      [38;2;122;132;120m│[39m
+[38;2;122;132;120m╰────────────────────────────────── [39m[2m◂ Ada · T-017 ▸[22m[38;2;122;132;120m ─╯[39m
+                                                      
+                                                      
+                                                      
+                                                      
+                                                      
+                                                      
+                                                      
+                                                      
+                                                      
