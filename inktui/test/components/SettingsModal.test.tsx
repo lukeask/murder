@@ -657,9 +657,7 @@ describe('SettingsModal', () => {
       .enter(settingsMode(stores.modes, actions, templatesCurrent([], handle)));
     await tick();
     await openCategory(stdin, lastFrame, 'Templates');
-    expect((lastFrame() ?? '').split('\n').find((l) => l.includes('›'))).toContain(
-      '+ New Template',
-    );
+    await walkUntilFocused(stdin, lastFrame, 'New Template');
     stdin.write('\r');
     await tick();
     stdin.write('n');

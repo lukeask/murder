@@ -50,7 +50,7 @@ import { useContext, useEffect } from 'react';
 import { shallow } from 'zustand/shallow';
 import { useStoreWithEqualityFn } from 'zustand/traditional';
 import { AppStoreContext } from '../hooks/useAppStore.js';
-import { useModalWidth } from '../hooks/useTerminalSize.js';
+import { useModalHeight, useModalWidth, useTerminalSize } from '../hooks/useTerminalSize.js';
 import { ACTIONS, type ActionId, type Modifier, resolveBindings } from '../input/bindings.js';
 import type { Mode, ModeStoreApi } from '../input/modeStore.js';
 import { harnessLabel } from '../selectors/harnessDisplay.js';
@@ -1265,6 +1265,8 @@ function SettingsDialog({
   const theme = useTheme();
   // Design width 84, clamped to the live terminal so a narrow screen doesn't overflow the box.
   const width = useModalWidth(84);
+  const height = useModalHeight(0.8);
+  const { rows: termRows } = useTerminalSize();
   const kitty = useKittySupport();
   const ctrlAvailable = kitty === true;
   // Live templates registry + action handle from the app store (so `:save`/external edits track here).
@@ -1282,7 +1284,7 @@ function SettingsDialog({
       syncThemes(liveThemes.items, liveThemes.actions);
     }
   }, [liveThemes, syncThemes]);
-  const view = rowWindow(s.rows, s.cursor);
+  const view = rowWindow(s.rows, s.cursor, visibleRowBudget(termRows));
 
   return (
     <Box
@@ -1292,12 +1294,21 @@ function SettingsDialog({
       paddingX={2}
       paddingY={1}
       width={width}
+      height={height}
     >
-      <Text bold color={theme.heading}>
-        Settings
-      </Text>
+      <Box flexShrink={0}>
+        <Text bold color={theme.heading}>
+          Settings
+        </Text>
+      </Box>
 
-      <Box marginTop={1} flexDirection="row">
+      <Box
+        marginTop={1}
+        flexDirection="row"
+        flexGrow={1}
+        flexBasis={0}
+        minHeight={0}
+      >
         <Box flexDirection="column" flexShrink={0} width={18} marginRight={2}>
           {SETTINGS_CATEGORIES.map((category, index) => {
             const selected = category.id === s.categoryId;
@@ -1319,7 +1330,13 @@ function SettingsDialog({
           })}
         </Box>
 
-        <Box flexDirection="column" flexGrow={1}>
+        <Box flexDirection="column" flexGrow={1} flexBasis={0} minHeight={0}>
+          {view.before === 0 &&
+            Array.from({ length: s.categoryCursor }, (_, i) => (
+              <Box key={`category-offset-${i}`} flexShrink={0}>
+                <Text>{' '}</Text>
+              </Box>
+            ))}
           {view.before > 0 && (
             <Box flexShrink={0}>
               <Text dimColor>{`  ↑ ${view.before} more`}</Text>
@@ -1329,6 +1346,7 @@ function SettingsDialog({
             <RowView
               key={rowKey(row)}
               row={row}
+              rowIndex={index}
               focused={s.activePane === 'settings' && index === s.cursor}
               state={s}
               theme={theme}
@@ -1343,39 +1361,38 @@ function SettingsDialog({
         </Box>
       </Box>
 
-      {/* The ctrl-unsupported notice is always shown under the modifier section when ctrl can't be
-          delivered, so the user understands why the ctrl/both rows are disabled. */}
-      {!ctrlAvailable && (
+      <Box flexShrink={0} flexDirection="column">
+        {!ctrlAvailable && (
+          <Box marginTop={1} flexShrink={0}>
+            <Text color={theme.muted}>{CTRL_UNSUPPORTED_NOTICE}</Text>
+          </Box>
+        )}
+
+        {s.previewTemplate !== null && (
+          <Box
+            marginTop={1}
+            flexShrink={0}
+            flexDirection="column"
+            borderStyle="round"
+            borderColor={theme.muted}
+            paddingX={1}
+          >
+            <Text color={theme.muted}>{`preview · :${s.previewTemplate.name}:`}</Text>
+            <Text color={theme.text} wrap="truncate-end">
+              {previewBody(s.previewTemplate.body)}
+            </Text>
+          </Box>
+        )}
+
+        {s.notice !== null && (
+          <Box marginTop={1} flexShrink={0}>
+            <Text color={theme.warning}>{s.notice}</Text>
+          </Box>
+        )}
+
         <Box marginTop={1} flexShrink={0}>
-          <Text color={theme.muted}>{CTRL_UNSUPPORTED_NOTICE}</Text>
+          <Text dimColor>j/k: navigate · h/l: categories/settings · enter: select · esc: close</Text>
         </Box>
-      )}
-
-      {/* Read-only preview of the template body under the cursor (truncated to a few lines). */}
-      {s.previewTemplate !== null && (
-        <Box
-          marginTop={1}
-          flexShrink={0}
-          flexDirection="column"
-          borderStyle="round"
-          borderColor={theme.muted}
-          paddingX={1}
-        >
-          <Text color={theme.muted}>{`preview · :${s.previewTemplate.name}:`}</Text>
-          <Text color={theme.text} wrap="truncate-end">
-            {previewBody(s.previewTemplate.body)}
-          </Text>
-        </Box>
-      )}
-
-      {s.notice !== null && (
-        <Box marginTop={1} flexShrink={0}>
-          <Text color={theme.warning}>{s.notice}</Text>
-        </Box>
-      )}
-
-      <Box marginTop={1} flexShrink={0}>
-        <Text dimColor>j/k: navigate · h/l: categories/settings · enter: select · esc: close</Text>
       </Box>
     </Box>
   );
@@ -1393,15 +1410,25 @@ function previewBody(body: string): string {
 
 /** The maximum number of section rows shown at once — a scroll-by-cursor window so the modal shows
  * more settings at once while still avoiding an unbounded frame. */
-const VISIBLE_ROWS = 22;
+const VISIBLE_ROWS_MAX = 22;
+
+/** Rows of modal chrome outside the scroll list (title, borders, footer hints, main margin). */
+const MODAL_CHROME_ROWS = 8;
+
+/** Fit the scroll window to the fixed ~80% modal shell so focused rows stay on-screen. */
+function visibleRowBudget(termRows: number): number {
+  const modalRows = Math.max(12, Math.floor(termRows * 0.8));
+  return Math.max(6, Math.min(VISIBLE_ROWS_MAX, modalRows - MODAL_CHROME_ROWS));
+}
 
 /** Compute the visible row window around the cursor. Returns the slice (with original indices, so
  * focus math stays correct) plus the count of rows hidden above/below (shown as "↑ N more"). */
 function rowWindow(
   rows: readonly SettingsRow[],
   cursor: number,
+  visibleRows: number,
 ): { rows: Array<{ row: SettingsRow; index: number }>; before: number; after: number } {
-  if (rows.length <= VISIBLE_ROWS) {
+  if (rows.length <= visibleRows) {
     return {
       rows: rows.map((row, index) => ({ row, index })),
       before: 0,
@@ -1409,10 +1436,10 @@ function rowWindow(
     };
   }
   // Centre the window on the cursor, clamped to the ends.
-  const half = Math.floor(VISIBLE_ROWS / 2);
+  const half = Math.floor(visibleRows / 2);
   let start = Math.max(0, cursor - half);
-  const end = Math.min(rows.length, start + VISIBLE_ROWS);
-  start = Math.max(0, end - VISIBLE_ROWS);
+  const end = Math.min(rows.length, start + visibleRows);
+  start = Math.max(0, end - visibleRows);
   const slice: Array<{ row: SettingsRow; index: number }> = [];
   for (let i = start; i < end; i++) {
     const row = rows[i];
@@ -1431,12 +1458,14 @@ function rowKey(row: SettingsRow): string {
 /** Render one flat row by kind. */
 function RowView({
   row,
+  rowIndex,
   focused,
   state: s,
   theme,
   ctrlAvailable,
 }: {
   readonly row: SettingsRow;
+  readonly rowIndex: number;
   readonly focused: boolean;
   readonly state: SettingsState;
   readonly theme: ReturnType<typeof useTheme>;
@@ -1444,7 +1473,7 @@ function RowView({
 }): JSX.Element {
   if (row.kind === 'header') {
     return (
-      <Box marginTop={1} flexShrink={0}>
+      <Box marginTop={rowIndex === 0 ? 0 : 1} flexShrink={0}>
         <Text bold color={theme.accent}>
           {row.label}
         </Text>

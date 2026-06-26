@@ -41,10 +41,21 @@ export function useTerminalSize(): TerminalSize {
   return size;
 }
 
-/** The narrowest a clamped modal may go — wide enough for a bordered box with padded content to
- * still render *something* sensible. Below this the min-terminal-size guard (App.tsx) has already
- * replaced the whole shell anyway, so the floor is belt-and-suspenders. */
-const MODAL_MIN_WIDTH = 24;
+/** The shortest a clamped modal may go — still usable for a title + a few rows. */
+const MODAL_MIN_HEIGHT = 12;
+
+/** The pure clamp behind {@link useModalHeight}. */
+export function clampModalHeight(ratio: number, rows: number): number {
+  return Math.max(MODAL_MIN_HEIGHT, Math.floor(rows * ratio));
+}
+
+/** Modal height as a fraction of the live terminal row count (~80% of the overlay body slot in
+ * practice). Row count rather than a `%` string keeps the shell stable when the overlay parent has
+ * no bounded height (ink-testing-library renders). */
+export function useModalHeight(ratio: number): number {
+  const { rows } = useTerminalSize();
+  return clampModalHeight(ratio, rows);
+}
 
 /**
  * Clamp a modal's declared width to the live terminal: `min(preferred, columns − 2)`, floored at
@@ -57,6 +68,11 @@ export function useModalWidth(preferred: number): number {
   const { columns } = useTerminalSize();
   return clampModalWidth(preferred, columns);
 }
+
+/** The narrowest a clamped modal may go — wide enough for a bordered box with padded content to
+ * still render *something* sensible. Below this the min-terminal-size guard (App.tsx) has already
+ * replaced the whole shell anyway, so the floor is belt-and-suspenders. */
+const MODAL_MIN_WIDTH = 24;
 
 /** The pure clamp behind {@link useModalWidth}. */
 export function clampModalWidth(preferred: number, columns: number): number {
