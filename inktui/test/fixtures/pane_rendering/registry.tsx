@@ -44,6 +44,18 @@ const PANE_SIZES: readonly FixtureSize[] = [
   { id: 'minimum', width: 20, height: 5 },
 ];
 
+const TICKETS_PANEL_SIZES: readonly FixtureSize[] = [
+  { id: 'preferred', width: 54, height: 14 },
+  { id: 'cramped', width: 30, height: 8 },
+  { id: 'minimum', width: 25, height: 5 },
+];
+
+const TREE_PANEL_SIZES: readonly FixtureSize[] = [
+  { id: 'preferred', width: 54, height: 14 },
+  { id: 'cramped', width: 30, height: 8 },
+  { id: 'minimum', width: 25, height: 10 },
+];
+
 const BAR_SIZES: readonly FixtureSize[] = [
   { id: 'preferred', width: 60, height: 3 },
   { id: 'cramped', width: 30, height: 3 },
@@ -275,7 +287,7 @@ function CrowsFixture({
 }): React.JSX.Element {
   const flat = flattenCrows(rows);
   return (
-    <Pane title="Crows" titleExtra={<Text dimColor> [max]</Text>} focused={focused}>
+    <Pane title="Crows" focused={focused}>
       {rows.length === 0 ? (
         <Text dimColor>loading...</Text>
       ) : (
@@ -374,7 +386,7 @@ function UsageFixture({
                 return (
                   <Text
                     key={`${group.harness}:${gauge.label}`}
-                    backgroundColor={focused && index === 0 ? theme.panelSelectedBg : undefined}
+                    {...(focused && index === 0 ? { backgroundColor: theme.panelSelectedBg } : {})}
                     wrap="truncate"
                   >
                     {focused && index === 0 ? '▌ ' : '  '}
@@ -408,24 +420,27 @@ function TransitFixture({
         <Text dimColor wrap="truncate">
           {data.ruler}
         </Text>
-        {data.lanes.map((lane) => (
-          <Text key={lane.branch} wrap="truncate">
-            <Text color={lane.selected ? getTheme().focus : lane.color}>{lane.rail}</Text>{' '}
-            <Text
-              color={lane.color}
-              bold={lane.selected}
-              backgroundColor={lane.selected ? getTheme().panelSelectedBg : undefined}
-            >
-              {`▐ ${lane.branch} ▌`}
+        {data.lanes.map((lane) => {
+          const selected = lane.selected === true;
+          return (
+            <Text key={lane.branch} wrap="truncate">
+              <Text color={selected ? getTheme().focus : lane.color}>{lane.rail}</Text>{' '}
+              <Text
+                color={lane.color}
+                bold={selected}
+                {...(selected ? { backgroundColor: getTheme().panelSelectedBg } : {})}
+              >
+                {`▐ ${lane.branch} ▌`}
+              </Text>
             </Text>
-          </Text>
-        ))}
+          );
+        })}
         <Text> </Text>
         {data.info.map((line) => (
           <Text
             key={line}
             dimColor={data.pending !== true}
-            color={data.pending ? getTheme().heading : undefined}
+            {...(data.pending ? { color: getTheme().heading } : {})}
             wrap="truncate"
           >
             {line}
@@ -716,7 +731,7 @@ export const paneFixtures: readonly PaneFixture[] = [
   {
     id: 'tickets-panel',
     description: 'Store-free TicketsPanel body wrapper with responsive multi-column rows.',
-    sizes: PANE_SIZES,
+    sizes: TICKETS_PANEL_SIZES,
     data: ticketRows,
     render: ({ data, focused, width, height }) => (
       <TicketsFixture
@@ -780,9 +795,9 @@ export const paneFixtures: readonly PaneFixture[] = [
     ),
   },
   {
-    id: 'transit-panel',
-    description: 'Store-free TransitPanel body wrapper with deterministic railway rows.',
-    sizes: PANE_SIZES,
+    id: 'tree-panel',
+    description: 'Store-free TreePanel body wrapper with deterministic railway rows.',
+    sizes: TREE_PANEL_SIZES,
     data: transitData,
     render: ({ data, focused }) => (
       <TransitFixture data={data as TransitFixtureData} focused={focused} />

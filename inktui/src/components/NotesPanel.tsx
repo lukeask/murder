@@ -52,7 +52,7 @@ import { type NotesView, useNotesView } from '../selectors/notesSelectors.js';
 import { useTheme } from '../theme/themeStore.js';
 import { useDocView } from './DocPane.js';
 import { Ledger } from './Ledger.js';
-import { Pane } from './Pane.js';
+import { Pane, paneHorizontalPaddingForWidth } from './Pane.js';
 import { renderResourceEntry, renderResourceHeader } from './ResourceRow.js';
 
 const PANEL_ID: PanelId = 'notes';
@@ -109,7 +109,11 @@ function NotesList({
 
 /** The notes panel. Reads its slice, runs the selector, owns a local cursor, declares its keymap,
  * and paints a focus-highlighted Pane of two-line Ledger entries. `React.memo`'d (rule 1). */
-export const NotesPanel = memo(function NotesPanel(): React.JSX.Element {
+export const NotesPanel = memo(function NotesPanel({
+  allocatedWidth,
+}: {
+  readonly allocatedWidth?: number;
+}): React.JSX.Element {
   // Rule 1: read exactly these slices (shallow), rule 2: selector produces the view-model.
   const notes = useAppStore((s) => s.notes, shallow);
   const favorites = useAppStore((s) => s.favorites, shallow);
@@ -222,6 +226,8 @@ export const NotesPanel = memo(function NotesPanel(): React.JSX.Element {
   const ref = useFocusRef();
   const focused = useEffectiveFocus() === PANEL_ID;
   useMeasureFocus(PANEL_ID, ref);
+  const panePadding =
+    allocatedWidth === undefined ? undefined : paneHorizontalPaddingForWidth(allocatedWidth);
 
   return (
     // The Pane owns the inline-title border + focus color + the forwarded measure `ref`. The list
@@ -230,6 +236,7 @@ export const NotesPanel = memo(function NotesPanel(): React.JSX.Element {
       ref={ref}
       title={PANEL_TITLE}
       focused={focused}
+      {...(panePadding ?? {})}
       overflowAbove={rowCount === 0 ? 0 : overflow.above}
       overflowBelow={rowCount === 0 ? 0 : overflow.below}
     >

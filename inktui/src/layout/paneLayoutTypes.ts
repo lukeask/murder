@@ -15,7 +15,7 @@ export type PaneRect = CellPoint & CellSize;
 
 export type PaneId = string;
 
-export type PaneKind = 'listPane' | 'usage' | 'transit' | 'stageChat' | 'stageDoc';
+export type PaneKind = 'listPane' | 'usage' | 'tree' | 'stageChat' | 'stageDoc';
 
 export type PaneRegion = 'leftAligned' | 'centerStage' | 'rightAligned';
 

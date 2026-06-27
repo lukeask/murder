@@ -13,9 +13,8 @@
  * Rule 2 proof: we assert section headers appear in spec order without the component
  * ever seeing `row.role` — that stays in the selector.
  *
- * Phase 3: the panel is now a {@link ../../src/components/Pane.tsx Pane} (inline-title border +
- * `[min]`/`[max]` mode label as `titleExtra`) wrapping a single {@link ../../src/components/Ledger.tsx
- * Ledger} over the FLATTENED sections+headers list (option (ii)). The cursor still counts crow rows
+ * Phase 3: the panel is now a {@link ../../src/components/Pane.tsx Pane} (inline-title border)
+ * wrapping a single {@link ../../src/components/Ledger.tsx Ledger} over the FLATTENED sections+headers list (option (ii)). The cursor still counts crow rows
  * only; the Ledger highlights via a derived flat-array index so headers are never highlighted. These
  * tests assert the same section order / names / mode toggle / cursor behaviour against that structure.
  */
@@ -135,7 +134,7 @@ describe('CrowsPanel — sections and grouping', () => {
     const { lastFrame } = render(<Harness store={store} inputStores={inputStores} />);
     await tick();
     const frame = lastFrame() ?? '';
-    // Pane inline title on the top border (Phase 3 Pane + Ledger structure; mode label is titleExtra).
+    // Pane inline title on the top border (Phase 3 Pane + Ledger structure).
     expect(frame).toContain('┏━ Crows');
     // Section headers appear in spec order.
     const collabPos = frame.indexOf('Collaborator');
@@ -228,8 +227,8 @@ describe('CrowsPanel — minimized / maximized', () => {
     const { lastFrame } = render(<Harness store={store} inputStores={inputStores} />);
     await tick();
     const frame = lastFrame() ?? '';
-    // Mode label present.
-    expect(frame).toContain('[min]');
+    expect(frame).not.toContain('[min]');
+    expect(frame).not.toContain('[max]');
     // Name and the working circle visible (collab is `running`).
     expect(frame).toContain('collab');
     expect(frame).toContain('●');
@@ -242,11 +241,10 @@ describe('CrowsPanel — minimized / maximized', () => {
     const { store, inputStores, dispose } = await setup();
     const { stdin, lastFrame } = render(<Harness store={store} inputStores={inputStores} />);
     await tick();
-    expect(lastFrame()).toContain('[min]');
+    expect(lastFrame()).not.toContain('claude · claude-opus');
 
     stdin.write('m');
     await tick();
-    expect(lastFrame()).toContain('[max]');
     // In maximized mode, the second line for the collaborator is visible.
     expect(lastFrame()).toContain('claude · claude-opus');
     dispose();
@@ -257,12 +255,12 @@ describe('CrowsPanel — minimized / maximized', () => {
     const { stdin, lastFrame } = render(<Harness store={store} inputStores={inputStores} />);
     await tick();
     const before = lastFrame() ?? '';
-    expect(before).toContain('[min]');
+    expect(before).not.toContain('claude · claude-opus');
 
     stdin.write('m');
     await tick();
     // Still minimized — key went to chat input, not the panel.
-    expect(lastFrame()).toContain('[min]');
+    expect(lastFrame()).not.toContain('claude · claude-opus');
     dispose();
   });
 });

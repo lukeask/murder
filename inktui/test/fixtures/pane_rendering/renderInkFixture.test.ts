@@ -21,7 +21,7 @@ function lineWidths(text: string): number[] {
 
 describe('pane rendering fixtures', () => {
   it('renders one fixture at the exact requested allocation', async () => {
-    process.env.FORCE_COLOR = '3';
+    process.env['FORCE_COLOR'] = '3';
     const [{ paneFixtures }, { renderInkFixture }] = await Promise.all([
       import('./registry.js'),
       import('./renderInkFixture.js'),
@@ -46,8 +46,8 @@ describe('pane rendering fixtures', () => {
   });
 
   it('prints one selected fixture through the four positional CLI args', async () => {
-    const env = { ...process.env, FORCE_COLOR: '3' };
-    delete env.NO_COLOR;
+    const env: NodeJS.ProcessEnv = { ...process.env, FORCE_COLOR: '3' };
+    delete env['NO_COLOR'];
     const { stdout } = await execFileAsync(
       'python',
       [

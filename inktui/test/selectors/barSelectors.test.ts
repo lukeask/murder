@@ -29,7 +29,7 @@ describe('selectTopBar', () => {
     const labels = selectTopBar(new Set<PanelId>());
     // Left-rail panels carry no divider; the first right-rail panel (tree) opens the group.
     const divided = labels.filter((l) => l.dividerBefore).map((l) => l.id);
-    expect(divided).toEqual(['transit']);
+    expect(divided).toEqual(['tree']);
   });
 
   it('marks only the visible panels active', () => {

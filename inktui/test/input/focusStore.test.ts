@@ -5,43 +5,63 @@
  */
 
 import { describe, expect, it } from 'vitest';
+import { buildFocusGraph, resolveEffectiveFocus } from '../../src/input/focusGraph.js';
 import type { FocusId } from '../../src/input/focusStore.js';
 import {
   CHAT_FOCUS,
   createFocusStore,
-  focusCandidates,
   isStagePaneId,
-  mountedStagePanesOf,
-  resolveFocus,
   type StagePaneId,
   selectEffectiveFocus,
 } from '../../src/input/focusStore.js';
 import type { Rect } from '../../src/input/geometry.js';
 import { createPanelStore } from '../../src/input/panelStore.js';
 
-/** No Stage panes mounted — the common case for the panel/chat invariant tests. */
-const NO_STAGE = new Set<StagePaneId>();
+const UNIT_RECT: Rect = { x: 0, y: 0, width: 1, height: 1 };
+
+function rectsFor(ids: readonly FocusId[]): ReadonlyMap<FocusId, Rect> {
+  return new Map(ids.map((id, index) => [id, { ...UNIT_RECT, x: index }]));
+}
+
+function resolveFocus(intended: FocusId, mountedIds: readonly FocusId[]): FocusId {
+  return resolveEffectiveFocus(intended, buildFocusGraph({ rects: rectsFor(mountedIds) }));
+}
+
+function mountedStagePanesOf(rects: ReadonlyMap<FocusId, Rect>): Set<StagePaneId> {
+  const panes = new Set<StagePaneId>();
+  for (const id of rects.keys()) {
+    if (isStagePaneId(id)) {
+      panes.add(id);
+    }
+  }
+  return panes;
+}
+
+function focusCandidates(rects: ReadonlyMap<FocusId, Rect>): readonly FocusId[] {
+  const graph = buildFocusGraph({ rects });
+  return [...graph.paneVertexIds.map((id) => id as FocusId), CHAT_FOCUS];
+}
 
 describe('resolveFocus (the re-home invariant, pure)', () => {
   it('keeps a visible panel focused', () => {
-    expect(resolveFocus('plans', new Set(['plans']), NO_STAGE)).toBe('plans');
+    expect(resolveFocus('plans', ['plans'])).toBe('plans');
   });
 
   it('re-homes a hidden panel to chat', () => {
-    expect(resolveFocus('plans', new Set(), NO_STAGE)).toBe(CHAT_FOCUS);
+    expect(resolveFocus('plans', [])).toBe(CHAT_FOCUS);
   });
 
   it('chat always resolves to itself', () => {
-    expect(resolveFocus(CHAT_FOCUS, new Set(), NO_STAGE)).toBe(CHAT_FOCUS);
+    expect(resolveFocus(CHAT_FOCUS, [])).toBe(CHAT_FOCUS);
   });
 
   it('keeps a mounted Stage pane focused', () => {
     const pane: StagePaneId = 'stage:chat:a1';
-    expect(resolveFocus(pane, new Set(), new Set([pane]))).toBe(pane);
+    expect(resolveFocus(pane, [pane])).toBe(pane);
   });
 
   it('re-homes an unmounted Stage pane to chat', () => {
-    expect(resolveFocus('stage:chat:a1', new Set(), NO_STAGE)).toBe(CHAT_FOCUS);
+    expect(resolveFocus('stage:chat:a1', [])).toBe(CHAT_FOCUS);
   });
 });
 
@@ -65,14 +85,20 @@ describe('isStagePaneId / mountedStagePanesOf', () => {
 });
 
 describe('focusCandidates (the derived candidate set)', () => {
-  it('is the visible panels in screen order, then stage panes, then chat', () => {
+  it('is the mounted pane vertices by geometry order, then chat', () => {
     expect(
-      focusCandidates(new Set(['tickets', 'plans']), new Set<StagePaneId>(['stage:chat:a1'])),
+      focusCandidates(
+        new Map<FocusId, Rect>([
+          ['tickets', { x: 20, y: 0, width: 1, height: 1 }],
+          ['plans', { x: 0, y: 0, width: 1, height: 1 }],
+          ['stage:chat:a1', { x: 40, y: 0, width: 1, height: 1 }],
+        ]),
+      ),
     ).toEqual(['plans', 'tickets', 'stage:chat:a1', CHAT_FOCUS]);
   });
 
   it('is just chat when nothing is visible/mounted — there is always somewhere to be', () => {
-    expect(focusCandidates(new Set(), NO_STAGE)).toEqual([CHAT_FOCUS]);
+    expect(focusCandidates(new Map())).toEqual([CHAT_FOCUS]);
   });
 });
 
@@ -86,24 +112,26 @@ describe('focusStore — effective focus & re-home', () => {
   it('focuses a visible panel', () => {
     const panels = createPanelStore(['plans']);
     const focus = createFocusStore(panels);
+    focus.getState().measure('plans', UNIT_RECT);
     focus.getState().focus('plans');
     expect(selectEffectiveFocus(focus)).toBe('plans');
   });
 
-  it('re-homes to chat when the focused panel is hidden — no imperative call', () => {
+  it('re-homes to chat when the focused panel unmounts — no imperative call', () => {
     const panels = createPanelStore(['plans']);
     const focus = createFocusStore(panels);
+    focus.getState().measure('plans', UNIT_RECT);
     focus.getState().focus('plans');
     expect(selectEffectiveFocus(focus)).toBe('plans');
 
-    // Hide the focused panel. We touch ONLY the panel store — focus is never told to re-home.
-    panels.getState().hide('plans');
+    // The pane leaves the painted candidate set. Focus is never told to re-home.
+    focus.getState().unmeasure('plans');
 
     // The invariant holds as a derived result: effective focus is chat.
     expect(selectEffectiveFocus(focus)).toBe(CHAT_FOCUS);
     // ...while the stored *intent* is untouched (re-show restores focus, proving it was derived).
     expect(focus.getState().intendedId).toBe('plans');
-    panels.getState().show('plans');
+    focus.getState().measure('plans', UNIT_RECT);
     expect(selectEffectiveFocus(focus)).toBe('plans');
   });
 
@@ -112,18 +140,21 @@ describe('focusStore — effective focus & re-home', () => {
     const focus = createFocusStore(panels);
     const oneFocused = () => {
       const eff = selectEffectiveFocus(focus);
-      const candidates = focusCandidates(panels.getState().visible, NO_STAGE);
+      const candidates = focusCandidates(focus.getState().rects);
       // The effective focus is always present in the candidate set — never dangling.
       expect(candidates).toContain(eff);
     };
     oneFocused();
     panels.getState().toggle('plans');
+    focus.getState().measure('plans', UNIT_RECT);
     focus.getState().focus('plans');
     oneFocused();
     panels.getState().toggle('crows');
+    focus.getState().measure('crows', { ...UNIT_RECT, x: 1 });
     focus.getState().focus('crows');
     oneFocused();
     panels.getState().toggle('crows'); // hide the focused one
+    focus.getState().unmeasure('crows');
     oneFocused();
   });
 });

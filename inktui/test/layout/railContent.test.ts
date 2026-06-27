@@ -169,22 +169,17 @@ describe('titleRowWidth — inline-title border row (L3b)', () => {
     expect(titleRowWidth('Plans')).toBe(10);
   });
 
-  it('includes a titleExtra suffix (the Crows `[max]` mode label)', () => {
-    // The Crows trigger: short title + a suffix that overflowed the border (`╭─ Crows [mini]`).
-    const withExtra = titleRowWidth('Crows', ' [max]');
+  it('adds titleExtra length when provided', () => {
+    const withExtra = titleRowWidth('Crows', ' [extra]');
     const without = titleRowWidth('Crows');
     expect(withExtra).toBeGreaterThan(without);
-    expect(withExtra).toBe(5 + 'Crows'.length + ' [max]'.length); // 5 + 5 + 6 = 16
+    expect(withExtra).toBe(5 + 'Crows'.length + ' [extra]'.length);
   });
 
   it('a long-title / short-content panel: the rail must be ≥ its title row (L3b)', () => {
-    // A panel whose ROW content is tiny but whose title is wide: the natural width the hook reports is
-    // max(body row, title row). Here the title row dominates, so the rail is sized to fit the title —
-    // which is the whole point of L3b (otherwise the title overflows the border).
     const tinyBodyRow = crowNaturalWidth([{ label: 'X', rows: [] }], false); // == 1 (label 'X')
-    const naturalWidth = Math.max(tinyBodyRow, titleRowWidth('Crows', ' [max]'));
-    expect(naturalWidth).toBe(titleRowWidth('Crows', ' [max]'));
-    expect(naturalWidth).toBeGreaterThanOrEqual(titleRowWidth('Crows', ' [max]'));
+    const naturalWidth = Math.max(tinyBodyRow, titleRowWidth('Crows'));
+    expect(naturalWidth).toBeGreaterThanOrEqual(titleRowWidth('Crows'));
   });
 });
 

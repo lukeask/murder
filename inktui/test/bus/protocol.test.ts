@@ -27,6 +27,8 @@ function eventKind(event: BusEvent): string {
     case 'presence':
     case 'scheduler.mode':
     case 'scheduler.decision':
+    case 'completion.verdict':
+    case 'agent.lifecycle':
     case 'usage.reset':
     case 'conversation.block':
     case 'conversation.state':

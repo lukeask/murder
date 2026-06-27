@@ -87,7 +87,16 @@ function parseArgs(argv: readonly string[]): CliArgs {
     }
   }
 
-  return { all, fixture, data, width, height, focused, outputDir, stripAnsi };
+  return {
+    all,
+    ...(fixture === undefined ? {} : { fixture }),
+    ...(data === undefined ? {} : { data }),
+    ...(width === undefined ? {} : { width }),
+    ...(height === undefined ? {} : { height }),
+    ...(focused === undefined ? {} : { focused }),
+    outputDir,
+    stripAnsi,
+  };
 }
 
 async function main(): Promise<void> {

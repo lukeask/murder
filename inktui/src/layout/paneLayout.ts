@@ -144,11 +144,15 @@ function groupRequests(
   return {
     leftAligned: requests.filter((request) => request.region === 'leftAligned').sort(byLayoutOrder),
     centerStage: requests.filter((request) => request.region === 'centerStage').sort(byLayoutOrder),
-    rightAligned: requests.filter((request) => request.region === 'rightAligned').sort(byLayoutOrder),
+    rightAligned: requests
+      .filter((request) => request.region === 'rightAligned')
+      .sort(byLayoutOrder),
   };
 }
 
-function activeRegions(groups: Readonly<Record<PaneRegion, readonly NormalizedRequest[]>>): PaneRegion[] {
+function activeRegions(
+  groups: Readonly<Record<PaneRegion, readonly NormalizedRequest[]>>,
+): PaneRegion[] {
   return REGIONS.filter((region) => groups[region].length > 0);
 }
 
@@ -202,7 +206,11 @@ function chunkRows<T>(items: readonly T[], columns: number): readonly (readonly 
   return rows;
 }
 
-function chatGridColumns(count: number, hasDoc: boolean, orientation: PaneLayoutInput['orientation']): number {
+function chatGridColumns(
+  count: number,
+  hasDoc: boolean,
+  orientation: PaneLayoutInput['orientation'],
+): number {
   if (count <= 1) {
     return 1;
   }
@@ -218,7 +226,11 @@ function chatGridColumns(count: number, hasDoc: boolean, orientation: PaneLayout
   return count <= 6 ? 2 : 3;
 }
 
-function gridMeasure(requests: readonly NormalizedRequest[], columns: number, gap: number): RegionMeasure {
+function gridMeasure(
+  requests: readonly NormalizedRequest[],
+  columns: number,
+  gap: number,
+): RegionMeasure {
   if (requests.length === 0) {
     return { min: { width: 0, height: 0 }, preferred: { width: 0, height: 0 } };
   }
@@ -284,14 +296,37 @@ function centerMeasure(
   };
 }
 
+function sidePortraitMeasure(
+  requests: readonly NormalizedRequest[],
+  availableWidth: number,
+  gap: number,
+): RegionMeasure {
+  if (requests.length === 0) {
+    return { min: { width: 0, height: 0 }, preferred: { width: 0, height: 0 } };
+  }
+
+  for (let columns = requests.length; columns >= 1; columns -= 1) {
+    const measure = gridMeasure(requests, columns, gap);
+    if (measure.min.width <= availableWidth) {
+      return measure;
+    }
+  }
+
+  return gridMeasure(requests, 1, gap);
+}
+
 function regionMeasure(
   region: PaneRegion,
   requests: readonly NormalizedRequest[],
   orientation: PaneLayoutInput['orientation'],
   gap: number,
+  crossAxisAvailable: number,
 ): RegionMeasure {
   if (region === 'centerStage') {
     return centerMeasure(requests, orientation, gap);
+  }
+  if (orientation === 'portrait') {
+    return sidePortraitMeasure(requests, crossAxisAvailable, gap);
   }
   return stackMeasure(requests, orientation === 'landscape' ? 'height' : 'width', gap);
 }
@@ -308,9 +343,7 @@ function allocateAxis(total: number, segments: readonly AxisSegment[]): AxisAllo
   }
 
   let remaining = total - minTotal;
-  const preferredNeeds = segments.map((segment) =>
-    Math.max(0, segment.preferred - segment.min),
-  );
+  const preferredNeeds = segments.map((segment) => Math.max(0, segment.preferred - segment.min));
   const preferredNeedTotal = sum(preferredNeeds);
   if (preferredNeedTotal > 0 && remaining > 0) {
     const used = Math.min(remaining, preferredNeedTotal);
@@ -339,11 +372,8 @@ function allocateAxis(total: number, segments: readonly AxisSegment[]): AxisAllo
   if (remaining > 0) {
     const fillTotal = sum(segments.map((segment) => Math.max(0, segment.fillWeight)));
     const fillSegments =
-      fillTotal > 0
-        ? segments
-        : segments.map((segment) => ({ ...segment, fillWeight: 1 }));
-    const safeFillTotal =
-      fillTotal > 0 ? fillTotal : fillSegments.length;
+      fillTotal > 0 ? segments : segments.map((segment) => ({ ...segment, fillWeight: 1 }));
+    const safeFillTotal = fillTotal > 0 ? fillTotal : fillSegments.length;
     let distributed = 0;
     for (const segment of fillSegments) {
       const weight = Math.max(0, segment.fillWeight);
@@ -426,8 +456,7 @@ function layoutStack(
   const segments = requests.map((request) => ({
     key: request.id,
     min: axis === 'height' ? request.sizing.min.height : request.sizing.min.width,
-    preferred:
-      axis === 'height' ? request.sizing.preferred.height : request.sizing.preferred.width,
+    preferred: axis === 'height' ? request.sizing.preferred.height : request.sizing.preferred.width,
     fillWeight: 1,
   }));
   const axisValues = allocateAxis(available - gapTotal, segments);
@@ -600,8 +629,12 @@ function layoutCenter(
   if (split === null) {
     return null;
   }
-  const docWidth = split['docs'] ?? 0;
-  const chatWidth = split['chats'] ?? 0;
+  const centerSplit: AxisAllocation & {
+    readonly docs?: number;
+    readonly chats?: number;
+  } = split;
+  const docWidth = centerSplit.docs ?? 0;
+  const chatWidth = centerSplit.chats ?? 0;
   const docRect = { x: rect.x, y: rect.y, width: docWidth, height: rect.height };
   const chatRect = {
     x: rect.x + docWidth + gap,
@@ -634,7 +667,17 @@ function layoutRegion(
   if (region === 'centerStage') {
     return layoutCenter(requests, rect, orientation, gap, focusedPaneId);
   }
-  return layoutStack(requests, rect, orientation === 'landscape' ? 'height' : 'width', gap, focusedPaneId);
+  if (orientation === 'portrait') {
+    const grid = layoutBestGrid(requests, rect, requests.length, gap, focusedPaneId);
+    return grid?.allocations ?? null;
+  }
+  return layoutStack(
+    requests,
+    rect,
+    orientation === 'landscape' ? 'height' : 'width',
+    gap,
+    focusedPaneId,
+  );
 }
 
 function emptyRegionPlan(region: PaneRegion): PaneRegionPlan {
@@ -679,15 +722,15 @@ function attemptLayout(
     return { ok: true, allocations: [], regions: regionPlans([]) };
   }
 
-  const measures = new Map<PaneRegion, RegionMeasure>();
-  for (const region of regions) {
-    measures.set(region, regionMeasure(region, groups[region], orientation, gap));
-  }
-
   const primaryAxis: Axis = orientation === 'landscape' ? 'width' : 'height';
   const crossAxis: Axis = primaryAxis === 'width' ? 'height' : 'width';
   const primaryTotal = bodyRect[primaryAxis] - gap * Math.max(0, regions.length - 1);
   const crossTotal = bodyRect[crossAxis];
+  const measures = new Map<PaneRegion, RegionMeasure>();
+  for (const region of regions) {
+    measures.set(region, regionMeasure(region, groups[region], orientation, gap, crossTotal));
+  }
+
   const crossFailures = regions.filter((region) => {
     const measure = measures.get(region);
     return measure === undefined || measure.min[crossAxis] > crossTotal;
@@ -767,6 +810,7 @@ function cutCandidate(
   requests: readonly NormalizedRequest[],
   failingRegions: readonly PaneRegion[],
   focusedPaneId: PaneId | undefined,
+  canLayoutWithout?: (request: NormalizedRequest) => boolean,
 ): NormalizedRequest | null {
   const regionSet = new Set(failingRegions);
   const candidates = requests.filter(
@@ -775,12 +819,40 @@ function cutCandidate(
   if (candidates.length === 0) {
     return null;
   }
-  return [...candidates].sort(
-    (a, b) =>
-      focusedPriority(b, focusedPaneId) - focusedPriority(a, focusedPaneId) ||
-      b.orderKey - a.orderKey ||
-      b.id.localeCompare(a.id),
-  )[0] ?? null;
+  const byCutOrder = (a: NormalizedRequest, b: NormalizedRequest): number =>
+    focusedPriority(b, focusedPaneId) - focusedPriority(a, focusedPaneId) ||
+    b.orderKey - a.orderKey ||
+    b.id.localeCompare(a.id);
+
+  const sorted = [...candidates].sort(byCutOrder);
+  const resolvingCandidate =
+    canLayoutWithout === undefined
+      ? undefined
+      : sorted.find((candidate) => canLayoutWithout(candidate));
+  if (resolvingCandidate !== undefined) {
+    return resolvingCandidate;
+  }
+  return sorted[0] ?? null;
+}
+
+function canAttemptLayoutWithout(
+  requests: readonly NormalizedRequest[],
+  candidate: NormalizedRequest,
+  bodyRect: PaneRect,
+  orientation: PaneLayoutInput['orientation'],
+  gap: number,
+  focusedPaneId: PaneId | undefined,
+): boolean {
+  const remaining = requests.filter((request) => request.id !== candidate.id);
+  return attemptLayout(remaining, bodyRect, orientation, gap, focusedPaneId).ok;
+}
+
+function byLayoutOrderForAllocation(a: PaneAllocation, b: PaneAllocation): number {
+  return byLayoutOrder(a.request, b.request);
+}
+
+function sortedAllocations(allocations: readonly PaneAllocation[]): PaneAllocation[] {
+  return [...allocations].sort(byLayoutOrderForAllocation);
 }
 
 function buildBodyRect(input: PaneLayoutInput): PaneRect {
@@ -788,12 +860,13 @@ function buildBodyRect(input: PaneLayoutInput): PaneRect {
   const topBar = cellCount(input.chrome.topBar);
   const bottomBar = cellCount(input.chrome.bottomBar);
   const chatInput = cellCount(input.chrome.chatInput);
-  const bodySize = input.body === undefined
-    ? {
-        width: terminal.width,
-        height: Math.max(0, terminal.height - topBar - bottomBar - chatInput),
-      }
-    : normalizeSize(input.body);
+  const bodySize =
+    input.body === undefined
+      ? {
+          width: terminal.width,
+          height: Math.max(0, terminal.height - topBar - bottomBar - chatInput),
+        }
+      : normalizeSize(input.body);
   const origin = input.bodyOrigin ?? { x: 0, y: topBar };
   return {
     x: cellCount(origin.x),
@@ -834,9 +907,7 @@ function terminalTooSmallPlan(
 }
 
 function stageGroup(allocations: readonly PaneAllocation[]): PaneLayoutPlan['stage'] {
-  const centerAllocations = allocations.filter(
-    (allocation) => allocation.region === 'centerStage',
-  );
+  const centerAllocations = allocations.filter((allocation) => allocation.region === 'centerStage');
   return {
     docs: centerAllocations.filter((allocation) => allocation.request.kind === 'stageDoc'),
     chats: centerAllocations.filter((allocation) => allocation.request.kind === 'stageChat'),
@@ -858,17 +929,9 @@ export function computePaneLayout(input: PaneLayoutInput): PaneLayoutPlan {
   }
 
   for (;;) {
-    const attempt = attemptLayout(
-      remaining,
-      bodyRect,
-      input.orientation,
-      gap,
-      input.focusedPaneId,
-    );
+    const attempt = attemptLayout(remaining, bodyRect, input.orientation, gap, input.focusedPaneId);
     if (attempt.ok) {
-      const allocations = [...attempt.allocations].sort((a, b) =>
-        byLayoutOrder(a.request, b.request),
-      );
+      const allocations = sortedAllocations(attempt.allocations);
       return {
         terminal: normalizeSize(input.terminal),
         chrome: normalizedChrome(input),
@@ -883,16 +946,27 @@ export function computePaneLayout(input: PaneLayoutInput): PaneLayoutPlan {
       };
     }
 
-    const candidate = cutCandidate(remaining, attempt.failure.regions, input.focusedPaneId);
+    const candidate = cutCandidate(
+      remaining,
+      attempt.failure.regions,
+      input.focusedPaneId,
+      (request) =>
+        canAttemptLayoutWithout(
+          remaining,
+          request,
+          bodyRect,
+          input.orientation,
+          gap,
+          input.focusedPaneId,
+        ),
+    );
     if (candidate === null) {
       for (const request of remaining.filter((request) =>
         attempt.failure.regions.includes(request.region),
       )) {
         denials.push(denial(request, attempt.failure.reason, attempt.failure.detail));
       }
-      remaining = remaining.filter(
-        (request) => !attempt.failure.regions.includes(request.region),
-      );
+      remaining = remaining.filter((request) => !attempt.failure.regions.includes(request.region));
       continue;
     }
 

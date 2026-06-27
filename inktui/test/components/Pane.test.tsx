@@ -14,7 +14,14 @@ import { Box, Text } from 'ink';
 import { render } from 'ink-testing-library';
 import { describe, expect, it } from 'vitest';
 import { PANE_BORDER_GLYPHS, SCROLL_THUMB, TRI_DOWN, TRI_UP } from '../../src/components/glyphs.js';
-import { Pane, paneChrome, paneColors } from '../../src/components/Pane.js';
+import {
+  COMPACT_PANE_PADDING_CW,
+  Pane,
+  paneChrome,
+  paneColors,
+  paneContentWidthForWidth,
+  paneHorizontalPaddingForWidth,
+} from '../../src/components/Pane.js';
 import { theme } from '../../src/theme.js';
 import { inkTestColorOn } from '../inkTestColorOn.js';
 
@@ -135,6 +142,26 @@ describe('Pane -- focus border weight', () => {
     expect(lines[1]).toContain(R.vertical);
     expect(lines.at(-1)).toContain(R.bottomLeft);
     expect(lines.at(-1)).toContain(R.bottomRight);
+  });
+});
+
+describe('Pane -- compact horizontal padding', () => {
+  it('drops both horizontal padding columns at the shared cutoff', () => {
+    const cutoffWidth = COMPACT_PANE_PADDING_CW + 4;
+    expect(paneHorizontalPaddingForWidth(cutoffWidth)).toEqual({
+      paddingLeft: 0,
+      paddingRight: 0,
+    });
+    expect(paneContentWidthForWidth(cutoffWidth)).toBe(cutoffWidth - 2);
+  });
+
+  it('keeps default horizontal padding above the shared cutoff', () => {
+    const roomyWidth = COMPACT_PANE_PADDING_CW + 5;
+    expect(paneHorizontalPaddingForWidth(roomyWidth)).toEqual({
+      paddingLeft: 1,
+      paddingRight: 1,
+    });
+    expect(paneContentWidthForWidth(roomyWidth)).toBe(roomyWidth - 4);
   });
 });
 

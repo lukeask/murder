@@ -1,5 +1,5 @@
 /**
- * TransitPanel — the git "transit map": branch lanes and their commits, over the `transit` slice
+ * TreePanel — the git commit tree: branch lanes and their commits, over the `transit` slice
  * (Phase C2 reskin onto the design system).
  *
  * The inktui {@link selectTransitView} renders an ASCII railway tuned to a fixed terminal cell
@@ -36,7 +36,7 @@ function ageLabel(tsEpochSec: number, nowMs: number): string {
 /** The crow identity palette has 6 slots; cycle lanes through them. */
 const CROW_SLOTS = 6;
 
-export function TransitPanel(): React.JSX.Element {
+export function TreePanel(): React.JSX.Element {
   const transit = useAppStore((s) => s.transit, shallow);
   const [selectedSha, setSelectedSha] = useState<string | null>(null);
   const now = Date.now();
@@ -52,7 +52,7 @@ export function TransitPanel(): React.JSX.Element {
     .find((c) => c.sha === selectedSha);
 
   return (
-    <Panel title="transit" count={view.isEmpty ? null : transit.lanes.length} data-panel-id="transit">
+    <Panel title="Git Tree" count={view.isEmpty ? null : transit.lanes.length} data-panel-id="tree">
       <SliceHint state={view} empty="No branches." />
       {transit.lanes.map((lane, laneIdx) => {
         const laneColor = `var(--crow-${(laneIdx % CROW_SLOTS) + 1})`;

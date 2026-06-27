@@ -1,6 +1,6 @@
 /**
  * panels.ts mapping tests — the digit→panel single source of truth, with the history panel on
- * ctrl+5 (left rail, after tickets in screen order) and the transit panel on ctrl+8 (right rail,
+ * ctrl+5 (left rail, after tickets in screen order) and the tree panel on ctrl+8 (right rail,
  * before usage in screen order). Reserved digits 6–7 stay unbound.
  */
 
@@ -15,21 +15,21 @@ describe('panels mapping', () => {
     expect(placement).toEqual({ id: 'history', digit: 5, region: 'left' });
   });
 
-  it('maps digit 8 to the transit panel (right rail, before usage)', () => {
-    expect(panelForDigit('8')).toBe('transit');
-    expect(DIGIT_TO_PANEL[8]).toBe('transit');
-    const placement = PANELS.find((p) => p.id === 'transit');
-    expect(placement).toEqual({ id: 'transit', digit: 8, region: 'right', label: 'tree' });
+  it('maps digit 8 to the tree panel (right rail, before usage)', () => {
+    expect(panelForDigit('8')).toBe('tree');
+    expect(DIGIT_TO_PANEL[8]).toBe('tree');
+    const placement = PANELS.find((p) => p.id === 'tree');
+    expect(placement).toEqual({ id: 'tree', digit: 8, region: 'right' });
   });
 
-  it('places history after tickets and transit before usage in screen order', () => {
+  it('places history after tickets and tree before usage in screen order', () => {
     expect(PANEL_IDS).toEqual([
       'plans',
       'notes',
       'reports',
       'tickets',
       'history',
-      'transit',
+      'tree',
       'usage',
       'crows',
     ]);

@@ -288,12 +288,14 @@ export const StageDocPane = memo(function StageDocPane({
   );
 
   return (
-    // The right border doubles as the scroll track (the Pane's `scrollbar` prop) — no separate
-    // scrollbar column, so the content keeps the default right gutter.
+    // The right border doubles as the scroll track (the Pane's `scrollbar` prop), so document text
+    // can use the full space between the side borders with no extra content padding.
     <Pane
       ref={ref}
       title={docPath(open)}
       focused={focused}
+      paddingLeft={0}
+      paddingRight={0}
       titleExtra={
         <>
           <Text dimColor>[doc]</Text>
@@ -315,7 +317,9 @@ export const StageDocPane = memo(function StageDocPane({
         ) : (
           window.map((line, index) => (
             // biome-ignore lint/suspicious/noArrayIndexKey: body lines are position-keyed (markdown can repeat; the windowed index is the stable identity for the visible slice).
-            <Text key={clamped + index}>{line === '' ? ' ' : line}</Text>
+            <Text key={clamped + index} wrap="wrap">
+              {line === '' ? ' ' : line}
+            </Text>
           ))
         )}
       </Box>

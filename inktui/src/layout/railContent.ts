@@ -18,12 +18,10 @@
  *
  * ## Title-row width (L3b)
  * A rail's natural width is the `max` of its widest BODY row AND its widest panel TITLE row — the
- * `╭─ ` + title + titleExtra + ` ╮` inline-title border line ({@link ./components/paneBorder.tsx}).
+ * `╭─ ` + title + ` ╮` inline-title border line ({@link ./components/paneBorder.tsx}).
  * Without this, a narrow panel whose title is wider than its rows would size the rail too small and
  * the title would clip (the paneBorder L3b change makes that SAFE — the `╮` always closes — but
- * sizing for the title makes the title FIT without truncation in its common states). The Crows
- * `[min]`/`[max]` suffix is CrowsPanel-LOCAL `useState` this layer can't observe, so we budget the
- * representative widest suffix ({@link CROWS_TITLE_EXTRA}) so the title fits in both modes.
+ * sizing for the title makes the title FIT without truncation in its common states).
  *
  * ## Portrait content-height (L4b)
  * For portrait the rail is a horizontal STRIP and its needed cross-axis size is HEIGHT, not width.
@@ -120,7 +118,7 @@ const TRANSIT_INFO_BODY_LINES = 6;
  * line + 1 line per lane (the swimlane row) + 1 blank spacer + the fixed info section (the sha line +
  * {@link ../selectors/transitSelectors.ts INFO_BODY_LINES} wrapped message lines). The lane count is
  * read live by the hook. Pure. */
-export function transitNaturalHeight(laneCount: number): number {
+export function treeNaturalHeight(laneCount: number): number {
   if (laneCount <= 0) {
     return PANE_BORDER_LINES + 1; // "no branches" chrome line
   }
@@ -136,19 +134,11 @@ export function transitNaturalHeight(laneCount: number): number {
 /**
  * Fixed chrome the inline-title border line adds around the title text: the leading `╭─ ` (3) plus
  * the trailing ` ╮` (1 space + the corner = 2) = 5 columns (see {@link ../components/paneBorder.tsx}).
- * The title's natural width is this plus the title + titleExtra text.
+ * The title's natural width is this plus the title text.
  */
 const TITLE_CHROME_WIDTH = '╭─ '.length + ' ╮'.length;
 
-/**
- * The Crows `titleExtra` suffix this layer budgets for. The actual `[min]`/`[max]` mode label is
- * CrowsPanel-LOCAL `useState` we can't observe, so we reserve the WIDEST it renders — `' [max]'` and
- * `' [min]'` are both 6 columns (leading space + 5) — so the title fits in BOTH modes without
- * truncation. (Over-reserving is harmless: the rail width is a `max` over rows + this title row.)
- */
-const CROWS_TITLE_EXTRA = ' [max]';
-
-/** The width of a panel's inline-title border row: `╭─ ` + title + titleExtra + ` ╮` (L3b).
+/** The width of a panel's inline-title border row: `╭─ ` + title + ` ╮` (L3b).
  * Exported so the title-overflow guard is unit-testable independently of the store-reading hook. */
 export function titleRowWidth(title: string, titleExtra = ''): number {
   return TITLE_CHROME_WIDTH + title.length + titleExtra.length;
@@ -388,11 +378,11 @@ export function crowNaturalHeight(
 /** The left region's panels in screen order (mirrors App's `LEFT_PANELS`). */
 const LEFT_PANELS: readonly PanelId[] = ['plans', 'notes', 'reports', 'tickets', 'history'];
 /** The right region's panels in screen order (mirrors App's `RIGHT_PANELS`). */
-const RIGHT_PANELS: readonly PanelId[] = ['usage', 'transit', 'crows'];
+const RIGHT_PANELS: readonly PanelId[] = ['usage', 'tree', 'crows'];
 
-/** Transit's natural rail WIDTH: its fixed reserve (the railway scrolls to fit, so it has no
+/** Tree's natural rail WIDTH: its fixed reserve (the railway scrolls to fit, so it has no
  * data-driven natural width — it desires {@link TRANSIT_RESERVE_WIDTH} and compresses below). Pure. */
-export function transitNaturalWidth(): number {
+export function treeNaturalWidth(): number {
   return TRANSIT_RESERVE_WIDTH;
 }
 
@@ -532,16 +522,16 @@ export function useRailContent(side: 'left' | 'right'): RailContent {
   let naturalHeight = 0;
   if (visible.has('crows')) {
     naturalWidth = Math.max(naturalWidth, crowNaturalWidth(crowsView.sections, true));
-    naturalWidth = Math.max(naturalWidth, titleRowWidth('Crows', CROWS_TITLE_EXTRA));
+    naturalWidth = Math.max(naturalWidth, titleRowWidth('Crows'));
     naturalHeight = Math.max(naturalHeight, crowNaturalHeight(crowsView.sections, true));
   }
   if (visible.has('usage')) {
     naturalWidth = Math.max(naturalWidth, USAGE_RESERVE_WIDTH, titleRowWidth('Usage'));
     naturalHeight = Math.max(naturalHeight, usageNaturalHeight(usageView.groups));
   }
-  if (visible.has('transit')) {
-    naturalWidth = Math.max(naturalWidth, transitNaturalWidth(), titleRowWidth('Git Tree'));
-    naturalHeight = Math.max(naturalHeight, transitNaturalHeight(transit.lanes.length));
+  if (visible.has('tree')) {
+    naturalWidth = Math.max(naturalWidth, treeNaturalWidth(), titleRowWidth('Git Tree'));
+    naturalHeight = Math.max(naturalHeight, treeNaturalHeight(transit.lanes.length));
   }
   // Floor a present rail's WIDTH at its smallest legible form (R7) — same reasoning as the left side;
   // the usage-only reserve already exceeds this, so the floor only bites the empty-crows case.

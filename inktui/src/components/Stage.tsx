@@ -266,7 +266,7 @@ function chatLineColor(line: ChatLine, theme: ReturnType<typeof useTheme>): stri
 }
 
 /** One physical line of chat history: a single text row carrying its source speaker (for the gutter
- * color) and its block kind (for styling — prose wraps, code/pre truncate as no-wrap islands, list
+ * color) and its block kind (for styling — prose/list/code/pre all line-wrap, list
  * keeps its bullet structure). The chat pane windows over THESE, not over whole turns — see
  * {@link flattenTurns}. `blank` is a rhythm separator (between blocks and between turns). */
 interface ChatLine {
@@ -298,10 +298,9 @@ interface ChatLine {
  *
  * Deterministic heights (the measure-wrap-trap mitigation): every block contributes EXACTLY
  * `block.lines.length` physical {@link ChatLine}s here — the scroll window, the scrollbar geometry,
- * and the visible slice all count these flat lines, never a measured height. Code/pre islands render
- * `wrap="truncate"` so one source line is one drawn row; prose lines may soft-wrap to >1 terminal row
- * but the window still advances one logical line per `j`/`k`, which is the existing (and tested)
- * contract for long prose turns. So the height math is pure data, immune to the
+ * and the visible slice all count these flat lines, never a measured height. Body text may soft-wrap
+ * to >1 terminal row, but the window still advances one logical line per `j`/`k`, which is the
+ * existing (and tested) contract for long prose turns. So the height math is pure data, immune to the
  * `measureElement`-lies-about-wrapped-content trap. The separator is a real ChatLine (not render-time
  * spacing) so the window/scroll math counts exactly what is drawn. Pure (no React); the test seam.
  */
@@ -342,16 +341,12 @@ const GUTTER_CONT = '▏';
 /**
  * Render one physical {@link ChatLine} as a gutter + content ROW (TUIchat-2 speaker gutters + per-block
  * styling). The row is `flexShrink={0}` so Yoga never drops it (the skipped-line bug) and each source
- * line maps to a known number of rows for the deterministic window math:
+ * line maps to a known logical row for the deterministic window math:
  *  - **gutter** — a left color-bar in the speaker's theme color (solid head on the turn's first line,
  *    a lighter bar on continuations); `flexShrink={0}` + fixed width so it never wraps or collapses.
- *  - **prose / list** — default body text. prose WRAPS to the pane width (the only place wrapping
- *    happens — Ink's default `wrap`); list keeps its bullet structure (also wraps, but its leads carry
- *    the indent). Note a wrapped prose row spans >1 terminal row; the window still advances one logical
- *    line per `j`/`k` (the existing long-prose contract), so the height math stays pure data.
- *  - **code / pre** — a DIM, no-wrap island (`wrap="truncate"`): internal spaces + column alignment are
- *    preserved and a too-wide line is clipped (never re-wrapped into a zigzag). One source line is
- *    exactly one drawn row, so the deterministic height holds and `measureElement` is never consulted.
+ *  - **body text** — prose, list, code, and pre rows all WRAP to the pane width. Note a wrapped row
+ *    spans >1 terminal row; the window still advances one logical line per `j`/`k` (the existing
+ *    long-prose contract), so the height math stays pure data.
  *  - **blank** — a continuation gutter plus a single space (a real row the rhythm/scroll math counts).
  */
 function ChatHistoryLine({
@@ -362,23 +357,22 @@ function ChatHistoryLine({
   readonly theme: ReturnType<typeof useTheme>;
 }): JSX.Element {
   const gutterColor = chatLineColor(line, theme);
-  // A no-wrap island for verbatim regions; default wrapping for prose/list (the single wrap site).
+  // Verbatim regions stay dimmed, but still wrap like the rest of the chat body.
   const verbatim = line.kind === 'code' || line.kind === 'pre';
   const content =
     line.kind === 'blank' ? (
       // A real space so the blank row occupies a line (the scroll math counts it).
       <Text> </Text>
     ) : verbatim ? (
-      // Dim, no-wrap island. `flexShrink={0}` + truncate keeps internal spaces and clips overflow
-      // instead of re-wrapping — alignment survives end to end.
-      <Box flexShrink={0}>
-        <Text dimColor wrap="truncate">
+      <Box flexGrow={1} minWidth={0} flexDirection="column">
+        <Text dimColor wrap="wrap">
           {line.text === '' ? ' ' : line.text}
         </Text>
       </Box>
     ) : (
-      // prose / list: default-wrapped body text in the speaker color.
-      <Text color={gutterColor}>{line.text === '' ? ' ' : line.text}</Text>
+      <Text color={gutterColor} wrap="wrap">
+        {line.text === '' ? ' ' : line.text}
+      </Text>
     );
   return (
     <Box flexDirection="row" flexShrink={0}>
@@ -684,12 +678,14 @@ export const ChatPane = memo(function ChatPane({
   const thumb = computeScrollThumb(lines.length, start, effectiveHeight);
 
   return (
-    // The right border doubles as the scroll track (the Pane's `scrollbar` prop) — no separate
-    // scrollbar column, so the content keeps the default right gutter.
+    // The right border doubles as the scroll track (the Pane's `scrollbar` prop), so chat history
+    // can use the full space between the side borders with no extra content padding.
     <Pane
       ref={ref}
       title={identity.label}
       focused={highlighted}
+      paddingLeft={0}
+      paddingRight={0}
       titleExtra={
         <>
           {/* A space precedes the bracket so the title reads `name [rogue]`, not `name[rogue]`. */}

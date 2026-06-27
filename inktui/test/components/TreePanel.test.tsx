@@ -1,5 +1,5 @@
 /**
- * TransitPanel test — proves the git commit-graph right-rail panel RENDERS through the real
+ * TreePanel test — proves the git commit-graph right-rail panel RENDERS through the real
  * Ink/Yoga renderer (ink-testing-library), exercises hjkl / lane-switch / g-jump navigation, and
  * guards the loading + empty states.
  *
@@ -16,7 +16,7 @@ import { render } from 'ink-testing-library';
 import type { JSX } from 'react';
 import { describe, expect, it } from 'vitest';
 import { FakeBusClient } from '../../src/bus/FakeBusClient.js';
-import { TransitPanel } from '../../src/components/TransitPanel.js';
+import { TreePanel } from '../../src/components/TreePanel.js';
 import { AppStoreProvider } from '../../src/hooks/useAppStore.js';
 import { InputStoresProvider } from '../../src/hooks/useInputStores.js';
 import { useRootInput } from '../../src/hooks/useRootInput.js';
@@ -188,7 +188,7 @@ function Harness({
       <InputStoresProvider value={inputStores}>
         <RootInput />
         <Box height={24} width={innerWidth + 4}>
-          <TransitPanel innerWidth={innerWidth} />
+          <TreePanel innerWidth={innerWidth} />
         </Box>
       </InputStoresProvider>
     </AppStoreProvider>
@@ -200,11 +200,11 @@ async function setup(reply: TransitSnapshotReply = multiLaneReply(), focused = t
   fake.stubRpc('state.transit_snapshot', reply);
   const { store, dispose } = createAppStore(fake);
   await store.getState().actions.transit.refresh();
-  const inputStores = createInputStores(['transit'], focused ? 'transit' : 'chat');
+  const inputStores = createInputStores(['tree'], focused ? 'tree' : 'chat');
   return { fake, store, dispose, inputStores };
 }
 
-describe('TransitPanel — multi-lane render', () => {
+describe('TreePanel — multi-lane render', () => {
   it('renders without throwing: Git Tree title, all lanes, stations, branch tags', async () => {
     const { store, inputStores, dispose } = await setup();
     const { lastFrame } = render(<Harness store={store} inputStores={inputStores} />);
@@ -305,7 +305,7 @@ describe('TransitPanel — multi-lane render', () => {
   });
 });
 
-describe('TransitPanel — navigation', () => {
+describe('TreePanel — navigation', () => {
   it('l/h move selection within the lane → info body updates', async () => {
     const { store, inputStores, dispose } = await setup();
     const { lastFrame, stdin } = render(<Harness store={store} inputStores={inputStores} />);
@@ -413,7 +413,7 @@ describe('TransitPanel — navigation', () => {
   });
 });
 
-describe('TransitPanel — loading / empty guards', () => {
+describe('TreePanel — loading / empty guards', () => {
   it('renders the loading state without throwing', async () => {
     const fake = new FakeBusClient();
     // Never resolve the snapshot: status stays 'loading' after refresh is invoked, so the panel must
@@ -421,7 +421,7 @@ describe('TransitPanel — loading / empty guards', () => {
     fake.stubRpc('state.transit_snapshot', () => new Promise<TransitSnapshotReply>(() => {}));
     const { store, dispose } = createAppStore(fake);
     void store.getState().actions.transit.refresh();
-    const inputStores = createInputStores(['transit'], 'transit');
+    const inputStores = createInputStores(['tree'], 'tree');
     const { lastFrame } = render(<Harness store={store} inputStores={inputStores} />);
     await tick();
     const frame = lastFrame() ?? '';

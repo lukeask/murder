@@ -1,3 +1,4 @@
+import { EventEmitter } from 'node:events';
 import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import React from 'react';
@@ -16,8 +17,8 @@ export interface FixtureSize {
   readonly height: number;
 }
 
-export interface RenderInkFixtureRequest {
-  readonly fixture: PaneFixture;
+export interface RenderInkFixtureRequest<Data = unknown> {
+  readonly fixture: PaneFixture<Data>;
   readonly dataId: PaneFixtureDataId;
   readonly width: number;
   readonly height: number;
@@ -135,13 +136,40 @@ export function normalizeSnapshotToDimensions(
   return padded.join('\n');
 }
 
-export async function renderInkFixture({
+/**
+ * ink-testing-library hardcodes a 100-column stdout, so bordered panes wider than that render their
+ * body (incl. the scrollbar track) at ~101 cols and get space-padded to the requested width — the
+ * top/bottom borders stretch but the right `│`/`┛` column floats mid-pane. Match stdout to the
+ * fixture allocation instead (same pattern as TopBar.test's wide inkRender stub).
+ */
+function createFixtureStdout(
+  width: number,
+  height: number,
+): NodeJS.WriteStream & {
+  lastFrame: () => string | undefined;
+} {
+  const stub = new EventEmitter() as NodeJS.WriteStream & { lastFrame: () => string | undefined };
+  let last: string | undefined;
+  Object.assign(stub, {
+    columns: width,
+    rows: height,
+    isTTY: false,
+    write: (frame: string) => {
+      last = frame;
+      return true;
+    },
+    lastFrame: () => last,
+  });
+  return stub;
+}
+
+export async function renderInkFixture<Data = unknown>({
   fixture,
   dataId,
   width,
   height,
   focused,
-}: RenderInkFixtureRequest): Promise<RenderedInkFixture> {
+}: RenderInkFixtureRequest<Data>): Promise<RenderedInkFixture> {
   if (width <= 0 || height <= 0) {
     throw new Error(`fixture dimensions must be positive, got ${width}x${height}`);
   }
@@ -152,16 +180,24 @@ export async function renderInkFixture({
 
   // biome-ignore lint/complexity/useLiteralKeys: noPropertyAccessFromIndexSignature requires bracket access.
   process.env['FORCE_COLOR'] = process.env['FORCE_COLOR'] ?? '3';
-  const { render } = await import('ink-testing-library');
+  const { render: inkRender } = await import('ink');
   const { Box } = await import('ink');
   const tree = React.createElement(
     Box,
     { width, height },
     fixture.render({ data, width, height, focused }),
   );
-  const instance = render(tree);
+  const stdout = createFixtureStdout(width, height);
+  const instance = inkRender(tree, {
+    stdout,
+    stderr: stdout,
+    stdin: new EventEmitter() as unknown as NodeJS.ReadStream,
+    debug: true,
+    exitOnCtrlC: false,
+    patchConsole: false,
+  });
   await new Promise((resolve) => setTimeout(resolve, 20));
-  const frame = instance.lastFrame() ?? '';
+  const frame = stdout.lastFrame() ?? '';
   instance.unmount();
   const ansi = normalizeSnapshotToDimensions(frame, width, height);
   return { fixtureId: fixture.id, dataId, width, height, focused, ansi };
@@ -179,13 +215,20 @@ export async function writeRenderedFixture({
   readonly stripAnsi?: boolean;
 }): Promise<WrittenInkFixture> {
   await mkdir(outputDir, { recursive: true });
-  const filename = fixtureSnapshotFilename({ ...rendered, sizeId });
+  const filename = fixtureSnapshotFilename({
+    ...rendered,
+    ...(sizeId === undefined ? {} : { sizeId }),
+  });
   const filePath = path.join(outputDir, filename);
   await writeFile(filePath, rendered.ansi, 'utf8');
   if (stripAnsi) {
     const plainPath = path.join(
       outputDir,
-      fixtureSnapshotFilename({ ...rendered, sizeId, suffix: '.plain.txt' }),
+      fixtureSnapshotFilename({
+        ...rendered,
+        ...(sizeId === undefined ? {} : { sizeId }),
+        suffix: '.plain.txt',
+      }),
     );
     await writeFile(plainPath, stripAnsiSgr(rendered.ansi), 'utf8');
   }
@@ -213,7 +256,12 @@ export async function renderOneRegisteredFixture({
 }: RenderOneFixtureOptions): Promise<WrittenInkFixture> {
   const fixture = fixtureById(fixtures, fixtureId);
   const rendered = await renderInkFixture({ fixture, dataId, width, height, focused });
-  return writeRenderedFixture({ rendered, outputDir, sizeId, stripAnsi });
+  return writeRenderedFixture({
+    rendered,
+    outputDir,
+    ...(sizeId === undefined ? {} : { sizeId }),
+    stripAnsi,
+  });
 }
 
 export async function renderAllRegisteredFixtures({

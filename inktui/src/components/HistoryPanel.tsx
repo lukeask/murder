@@ -40,7 +40,7 @@ import {
 } from '../selectors/historySelectors.js';
 import { useTheme } from '../theme/themeStore.js';
 import { Ledger, type LedgerEntryContext } from './Ledger.js';
-import { Pane } from './Pane.js';
+import { Pane, paneHorizontalPaddingForWidth } from './Pane.js';
 
 const PANEL_ID: PanelId = 'history';
 
@@ -161,7 +161,11 @@ function HistoryList({
 /** The history panel. Reads its slice, runs the selector, owns a local cursor + mode, declares its
  * keymap, and paints a focus-highlighted Pane of fixed-height multi-line Ledger entries.
  * `React.memo`'d. */
-export const HistoryPanel = memo(function HistoryPanel(): React.JSX.Element {
+export const HistoryPanel = memo(function HistoryPanel({
+  allocatedWidth,
+}: {
+  readonly allocatedWidth?: number;
+}): React.JSX.Element {
   const history = useAppStore((s) => s.history, shallow);
   const [mode, setMode] = useState<HistoryMode>('loose');
   const view = useHistoryView(history, mode);
@@ -262,6 +266,8 @@ export const HistoryPanel = memo(function HistoryPanel(): React.JSX.Element {
   const ref = useFocusRef();
   const focused = useEffectiveFocus() === PANEL_ID;
   useMeasureFocus(PANEL_ID, ref);
+  const panePadding =
+    allocatedWidth === undefined ? undefined : paneHorizontalPaddingForWidth(allocatedWidth);
 
   // Title carries the loose-thread digest (the real hook) + the active mode.
   const title = `History · ${view.looseCount} loose${mode === 'all' ? ' · all' : ''}`;
@@ -271,6 +277,7 @@ export const HistoryPanel = memo(function HistoryPanel(): React.JSX.Element {
       ref={ref}
       title={title}
       focused={focused}
+      {...(panePadding ?? {})}
       overflowAbove={rowCount === 0 ? 0 : overflow.above}
       overflowBelow={rowCount === 0 ? 0 : overflow.below}
     >

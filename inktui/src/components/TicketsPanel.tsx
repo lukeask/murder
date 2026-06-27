@@ -61,7 +61,7 @@ import {
 import type { Theme } from '../theme/buildTheme.js';
 import { useTheme } from '../theme/themeStore.js';
 import { Ledger, type LedgerEntryContext } from './Ledger.js';
-import { Pane } from './Pane.js';
+import { Pane, paneHorizontalPaddingForWidth } from './Pane.js';
 import { useTicketEditor } from './TicketEditorMode.js';
 
 const PANEL_ID: PanelId = 'tickets';
@@ -235,7 +235,11 @@ function TicketsList({
  * and paints a focus-highlighted Pane of 2-row ticket entries. `React.memo`'d (rule 1) so it
  * re-renders only when the tickets slice changes or focus changes.
  */
-export const TicketsPanel = memo(function TicketsPanel(): React.JSX.Element {
+export const TicketsPanel = memo(function TicketsPanel({
+  allocatedWidth,
+}: {
+  readonly allocatedWidth?: number;
+}): React.JSX.Element {
   // Rule 1: read exactly this slice (shallow), rule 2: selector produces the view-model.
   const tickets = useAppStore((s) => s.tickets, shallow);
   const view = useTicketsView(tickets);
@@ -329,12 +333,15 @@ export const TicketsPanel = memo(function TicketsPanel(): React.JSX.Element {
   const ref = useFocusRef();
   const focused = useEffectiveFocus() === PANEL_ID;
   useMeasureFocus(PANEL_ID, ref);
+  const panePadding =
+    allocatedWidth === undefined ? undefined : paneHorizontalPaddingForWidth(allocatedWidth);
 
   return (
     <Pane
       ref={ref}
       title={PANEL_TITLE}
       focused={focused}
+      {...(panePadding ?? {})}
       overflowAbove={rowCount === 0 ? 0 : overflow.above}
       overflowBelow={rowCount === 0 ? 0 : overflow.below}
     >

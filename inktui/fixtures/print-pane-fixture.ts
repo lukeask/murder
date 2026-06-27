@@ -34,7 +34,7 @@ function usage(): string {
     .map((fixture) => `  ${fixture.id}: ${Object.keys(fixture.data).join(', ')}`)
     .join('\n');
   return [
-    'usage: render-pane-fixture <pane_type> <fixture_data> <lh_allocation> <cw_allocation>',
+    'usage: print-pane-fixture <pane_type> <fixture_data> <lh_allocation> <cw_allocation>',
     '',
     'fixture_data is a registered data id for the pane type.',
     '',

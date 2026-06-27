@@ -11,7 +11,7 @@
  *
  * Screen positions (from the plan's Layout section):
  *   1 plans · 2 notes · 3 reports · 4 tickets · 5 history   → the left region
- *   8 transit · 9 usage · 0 crows                           → the right region
+ *   8 tree · 9 usage · 0 crows                              → the right region
  *   6–7 reserved — deliberately absent so an unbound digit is a no-op.
  */
 
@@ -24,7 +24,7 @@ export type PanelId =
   | 'tickets'
   | 'history'
   | 'usage'
-  | 'transit'
+  | 'tree'
   | 'crows';
 
 /** Which screen region a panel renders in. The focus geometry and the shell layout both need this;
@@ -36,14 +36,14 @@ export interface PanelPlacement {
   readonly id: PanelId;
   readonly digit: PanelDigit;
   readonly region: PanelRegion;
-  /** The user-facing label for the top bar, when it must differ from the internal {@link id} (e.g.
-   * `transit` renders as `tree`). Omitted = the id doubles as the label. */
+  /** The user-facing label for the top bar, when it must differ from the internal {@link id}.
+   * Omitted = the id doubles as the label. */
   readonly label?: string;
 }
 
 /** The digits that bind to a panel. A literal union (not `number`) so {@link DIGIT_TO_PANEL} is
  * checked total over exactly these and a stray digit can't silently map to nothing at a type
- * level. `6`–`7` are intentionally excluded (reserved); `8` binds `transit`. */
+ * level. `6`–`7` are intentionally excluded (reserved); `8` binds `tree`. */
 export type PanelDigit = 1 | 2 | 3 | 4 | 5 | 8 | 9 | 0;
 
 /**
@@ -57,7 +57,7 @@ export const PANELS: readonly PanelPlacement[] = [
   { id: 'reports', digit: 3, region: 'left' },
   { id: 'tickets', digit: 4, region: 'left' },
   { id: 'history', digit: 5, region: 'left' },
-  { id: 'transit', digit: 8, region: 'right', label: 'tree' },
+  { id: 'tree', digit: 8, region: 'right' },
   { id: 'usage', digit: 9, region: 'right' },
   { id: 'crows', digit: 0, region: 'right' },
 ];

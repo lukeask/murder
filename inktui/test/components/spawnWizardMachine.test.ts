@@ -24,6 +24,7 @@ const cond = (overrides: Partial<StepConditions> = {}): StepConditions => ({
   modelMap: STATIC_HARNESS_MODELS,
   newWorktree: false,
   hasContext: false,
+  creatingFavorite: false,
   ...overrides,
 });
 

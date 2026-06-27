@@ -5,6 +5,16 @@ import { PANE_BORDER_GLYPHS, paneBorderStyle } from '../src/components/glyphs.js
 import { Ledger, type LedgerEntryContext } from '../src/components/Ledger.js';
 import { Pane } from '../src/components/Pane.js';
 import { PaneBorderBottom, PaneBorderTop } from '../src/components/paneBorder.js';
+import { ChatPane } from '../src/components/panes/ChatPane.js';
+import { CrowsPanel } from '../src/components/panes/CrowsPanel.js';
+import { HistoryPanel } from '../src/components/panes/HistoryPanel.js';
+import { NotesPanel } from '../src/components/panes/NotesPanel.js';
+import { PlansPanel } from '../src/components/panes/PlansPanel.js';
+import { ReportsPanel } from '../src/components/panes/ReportsPanel.js';
+import { StageDocPane } from '../src/components/panes/StageDocPane.js';
+import { TicketsPanel } from '../src/components/panes/TicketsPanel.js';
+import { TreePanel } from '../src/components/panes/TreePanel.js';
+import { UsagePanel } from '../src/components/panes/UsagePanel.js';
 import {
   type ResourceRowFields,
   renderResourceEntry,
@@ -12,6 +22,7 @@ import {
 } from '../src/components/ResourceRow.js';
 import { MultiLineText, TextInput } from '../src/components/TextInput.js';
 import { getTheme } from '../src/theme/themeStore.js';
+import { crowsPanelRowsFromFixture } from './crowsPanelFixture.js';
 import {
   type BarFixtureData,
   barData,
@@ -36,12 +47,25 @@ import {
   usageGroups,
 } from './data/paneFixtureData.js';
 import type { FixtureSize } from './renderInkFixture.js';
+import { ticketFixtureToPanelRows } from './ticketsPanelFixture.js';
 import type { PaneFixture } from './types.js';
 
 const PANE_SIZES: readonly FixtureSize[] = [
   { id: 'preferred', width: 54, height: 14 },
   { id: 'cramped', width: 30, height: 8 },
   { id: 'minimum', width: 20, height: 5 },
+];
+
+const TICKETS_PANEL_SIZES: readonly FixtureSize[] = [
+  { id: 'preferred', width: 54, height: 14 },
+  { id: 'cramped', width: 30, height: 8 },
+  { id: 'minimum', width: 25, height: 5 },
+];
+
+const TREE_PANEL_SIZES: readonly FixtureSize[] = [
+  { id: 'preferred', width: 54, height: 14 },
+  { id: 'cramped', width: 30, height: 8 },
+  { id: 'minimum', width: 25, height: 10 },
 ];
 
 const BAR_SIZES: readonly FixtureSize[] = [
@@ -91,132 +115,6 @@ function SimpleLedger({
         </Box>
       )}
     />
-  );
-}
-
-function ResourcePane({
-  title,
-  rows,
-  focused,
-  width,
-  height,
-  emptyText,
-}: {
-  readonly title: string;
-  readonly rows: readonly ResourceRowFields[];
-  readonly focused: boolean;
-  readonly width: number;
-  readonly height: number;
-  readonly emptyText: string;
-}): React.JSX.Element {
-  return (
-    <Pane
-      title={title}
-      focused={focused}
-      overflowBelow={rows.length > 3 ? Math.max(1, rows.length - 2) : 0}
-    >
-      {rows.length === 0 ? (
-        <Text dimColor>{emptyText}</Text>
-      ) : (
-        <Ledger
-          rows={rows}
-          cursor={Math.min(1, rows.length - 1)}
-          focused={focused}
-          linesPerEntry={2}
-          minColumns={1}
-          maxColumns={1}
-          availableWidth={innerWidth(width)}
-          availableHeight={innerHeight(height)}
-          renderEntry={renderResourceEntry}
-          header={renderResourceHeader}
-          rowKey={(row) => row.name}
-        />
-      )}
-    </Pane>
-  );
-}
-
-function statusToneColor(tone: TicketFixtureRow['statusTone']): string {
-  const theme = getTheme();
-  switch (tone) {
-    case 'error':
-      return theme.error;
-    case 'success':
-      return theme.success;
-    case 'warning':
-      return theme.warning;
-    case 'blocked':
-      return theme.accent;
-    default:
-      return theme.heading;
-  }
-}
-
-function renderTicketEntry(row: TicketFixtureRow, ctx: LedgerEntryContext): React.ReactNode {
-  return (
-    <Box flexDirection="row" flexGrow={1} flexShrink={0}>
-      <Text>{ctx.selected ? '▌ ' : '  '}</Text>
-      <Box flexDirection="column" marginRight={2}>
-        <Text bold={ctx.selected}>{row.id}</Text>
-        <Text dimColor={!ctx.selected} wrap="truncate">
-          {row.title}
-        </Text>
-      </Box>
-      {ctx.columns >= 2 ? (
-        <Box flexDirection="column" marginRight={2}>
-          <Text color={statusToneColor(row.statusTone)}>{row.status}</Text>
-          <Text dimColor>Jun. 21</Text>
-        </Box>
-      ) : null}
-      {ctx.columns >= 3 ? (
-        <Box flexDirection="column" marginRight={2}>
-          <Text color={row.depsOk ? getTheme().success : getTheme().warning}>{row.deps}</Text>
-          <Text dimColor>queued</Text>
-        </Box>
-      ) : null}
-      {ctx.columns >= 4 ? (
-        <Box flexDirection="column">
-          <Text>{row.harness}</Text>
-          <Text dimColor>{row.model}</Text>
-        </Box>
-      ) : null}
-    </Box>
-  );
-}
-
-function TicketsFixture({
-  rows,
-  focused,
-  width,
-  height,
-}: {
-  readonly rows: readonly TicketFixtureRow[];
-  readonly focused: boolean;
-  readonly width: number;
-  readonly height: number;
-}): React.JSX.Element {
-  return (
-    <Pane title="Tickets" focused={focused} overflowBelow={rows.length > 2 ? 1 : 0}>
-      {rows.length === 0 ? (
-        <Text dimColor>no tickets</Text>
-      ) : (
-        <Ledger
-          rows={rows}
-          cursor={0}
-          focused={focused}
-          linesPerEntry={2}
-          minColumns={1}
-          maxColumns={4}
-          availableWidth={innerWidth(width)}
-          availableHeight={innerHeight(height)}
-          renderEntry={renderTicketEntry}
-          header={(columns) => (
-            <Text dimColor>{columns >= 4 ? 'id/title  status  deps  harness' : 'id/title'}</Text>
-          )}
-          rowKey={(row) => row.id}
-        />
-      )}
-    </Pane>
   );
 }
 
@@ -275,7 +173,7 @@ function CrowsFixture({
 }): React.JSX.Element {
   const flat = flattenCrows(rows);
   return (
-    <Pane title="Crows" titleExtra={<Text dimColor> [max]</Text>} focused={focused}>
+    <Pane title="Crows" focused={focused}>
       {rows.length === 0 ? (
         <Text dimColor>loading...</Text>
       ) : (
@@ -293,227 +191,6 @@ function CrowsFixture({
           rowKey={(row, index) => (row.kind === 'header' ? `h:${row.label}` : row.row.id) + index}
         />
       )}
-    </Pane>
-  );
-}
-
-function HistoryFixture({
-  rows,
-  focused,
-  width,
-  height,
-}: {
-  readonly rows: readonly HistoryFixtureRow[];
-  readonly focused: boolean;
-  readonly width: number;
-  readonly height: number;
-}): React.JSX.Element {
-  return (
-    <Pane title={`History · ${rows.length} loose`} focused={focused}>
-      {rows.length === 0 ? (
-        <Text dimColor>no loose threads</Text>
-      ) : (
-        <Ledger
-          rows={rows}
-          cursor={0}
-          focused={focused}
-          linesPerEntry={3}
-          minColumns={1}
-          maxColumns={1}
-          availableWidth={innerWidth(width)}
-          availableHeight={innerHeight(height)}
-          header={() => <Text dimColor>{'  age      target  status\n    intention'}</Text>}
-          rowKey={(row) => row.id}
-          renderEntry={(row, ctx) => (
-            <Box flexDirection="column" flexGrow={1} flexShrink={0}>
-              <Text wrap="truncate">
-                {ctx.selected ? '▌ ' : '  '}
-                {row.age.padEnd(8)} {row.target}{' '}
-                <Text color={row.status === 'stale' ? getTheme().warning : getTheme().accent}>
-                  {row.status}
-                </Text>
-              </Text>
-              <Box height={2} overflow="hidden">
-                <Text dimColor={!ctx.selected} wrap="wrap">{`    ${row.text}`}</Text>
-              </Box>
-            </Box>
-          )}
-        />
-      )}
-    </Pane>
-  );
-}
-
-function UsageFixture({
-  groups,
-  focused,
-}: {
-  readonly groups: readonly UsageFixtureGroup[];
-  readonly focused: boolean;
-}): React.JSX.Element {
-  const theme = getTheme();
-  return (
-    <Pane title="Usage" focused={focused}>
-      {groups.length === 0 ? (
-        <Text dimColor>no usage data</Text>
-      ) : (
-        <Box flexDirection="column">
-          <Text dimColor>{'  window     usage        reset'}</Text>
-          {groups.map((group) => (
-            <Box key={group.harness} flexDirection="column">
-              <Box backgroundColor={theme.panelHeaderBg}>
-                <Text bold>
-                  {` ${group.harness}`}
-                  {group.steering !== 'auto' ? (
-                    <Text color={theme.accent}>{` [${group.steering}]`}</Text>
-                  ) : null}
-                </Text>
-              </Box>
-              {group.gauges.map((gauge, index) => {
-                const fill = Math.round((gauge.pct / 100) * 10);
-                return (
-                  <Text
-                    key={`${group.harness}:${gauge.label}`}
-                    backgroundColor={focused && index === 0 ? theme.panelSelectedBg : undefined}
-                    wrap="truncate"
-                  >
-                    {focused && index === 0 ? '▌ ' : '  '}
-                    <Text dimColor>{gauge.label.padEnd(10)}</Text>
-                    <Text color={gauge.pct >= 80 ? theme.gaugeHigh : theme.gaugeNormal}>
-                      {'█'.repeat(fill)}
-                    </Text>
-                    <Text color={theme.gaugeTrack}>{'░'.repeat(10 - fill)}</Text>
-                    <Text dimColor>{` ${String(gauge.pct).padStart(3)}% ${gauge.reset}`}</Text>
-                  </Text>
-                );
-              })}
-            </Box>
-          ))}
-        </Box>
-      )}
-    </Pane>
-  );
-}
-
-function TransitFixture({
-  data,
-  focused,
-}: {
-  readonly data: TransitFixtureData;
-  readonly focused: boolean;
-}): React.JSX.Element {
-  return (
-    <Pane title="Git Tree" focused={focused}>
-      <Box flexDirection="column">
-        <Text dimColor wrap="truncate">
-          {data.ruler}
-        </Text>
-        {data.lanes.map((lane) => (
-          <Text key={lane.branch} wrap="truncate">
-            <Text color={lane.selected ? getTheme().focus : lane.color}>{lane.rail}</Text>{' '}
-            <Text
-              color={lane.color}
-              bold={lane.selected}
-              backgroundColor={lane.selected ? getTheme().panelSelectedBg : undefined}
-            >
-              {`▐ ${lane.branch} ▌`}
-            </Text>
-          </Text>
-        ))}
-        <Text> </Text>
-        {data.info.map((line) => (
-          <Text
-            key={line}
-            dimColor={data.pending !== true}
-            color={data.pending ? getTheme().heading : undefined}
-            wrap="truncate"
-          >
-            {line}
-          </Text>
-        ))}
-      </Box>
-    </Pane>
-  );
-}
-
-function DocFixture({
-  data,
-  focused,
-  height,
-}: {
-  readonly data: DocFixtureData;
-  readonly focused: boolean;
-  readonly height: number;
-}): React.JSX.Element {
-  const visibleHeight = innerHeight(height);
-  const visible = data.lines.slice(data.scroll, data.scroll + visibleHeight);
-  const thumb =
-    data.lines.length > visibleHeight
-      ? {
-          size: Math.max(1, Math.floor((visibleHeight * visibleHeight) / data.lines.length)),
-          offset: 1,
-        }
-      : null;
-  return (
-    <Pane
-      title={data.title}
-      focused={focused}
-      paddingRight={0}
-      scrollbar={{ height: visibleHeight, thumb }}
-    >
-      <Box flexDirection="column">
-        {visible.map((line, index) => (
-          // biome-ignore lint/suspicious/noArrayIndexKey: doc fixture lines are deterministic position-keyed slices.
-          <Text key={`${index}:${line}`} wrap="truncate">
-            {line.length > 0 ? line : ' '}
-          </Text>
-        ))}
-      </Box>
-    </Pane>
-  );
-}
-
-function ChatPaneFixture({
-  data,
-  focused,
-  height,
-}: {
-  readonly data: ChatFixtureData;
-  readonly focused: boolean;
-  readonly height: number;
-}): React.JSX.Element {
-  const lines = data.turns.flatMap((turn, turnIndex) => [
-    ...(turnIndex === 0 ? [] : [{ speaker: turn.speaker, line: ' ' }]),
-    ...turn.lines.map((line) => ({ speaker: turn.speaker, line })),
-  ]);
-  const theme = getTheme();
-  return (
-    <Pane
-      title={data.title}
-      focused={focused}
-      footerLeft={<Text dimColor>{data.footerLeft}</Text>}
-      footerRight={<Text dimColor>{data.footerRight}</Text>}
-      overflowBelow={lines.length > innerHeight(height) ? lines.length - innerHeight(height) : 0}
-    >
-      <Box flexDirection="column">
-        {lines.slice(0, innerHeight(height)).map((item, index) => {
-          const color =
-            item.speaker === 'user'
-              ? theme.success
-              : item.speaker === 'tool'
-                ? theme.warning
-                : theme.text;
-          return (
-            // biome-ignore lint/suspicious/noArrayIndexKey: chat fixture lines are deterministic position-keyed slices.
-            <Box key={`${index}:${item.line}`} flexDirection="row">
-              <Text color={color}>{item.line === ' ' ? '  ' : index === 0 ? '▌ ' : '▏ '}</Text>
-              <Text color={color} wrap="wrap">
-                {item.line}
-              </Text>
-            </Box>
-          );
-        })}
-      </Box>
     </Pane>
   );
 }
@@ -644,51 +321,45 @@ export const paneFixtures: readonly PaneFixture[] = [
   },
   {
     id: 'plans-panel',
-    description: 'Store-free PlansPanel body wrapper using Pane + ResourceRow + Ledger.',
+    description: 'Store-free PlansPanel with explicit width/height contract.',
     sizes: PANE_SIZES,
     data: resourceRows,
     render: ({ data, focused, width, height }) => (
-      <ResourcePane
-        title="Plans"
+      <PlansPanel
         rows={data as readonly ResourceRowFields[]}
         focused={focused}
         width={width}
         height={height}
-        emptyText="no plans"
       />
     ),
   },
   {
     id: 'notes-panel',
-    description: 'Store-free NotesPanel body wrapper using Pane + ResourceRow + Ledger.',
+    description: 'Store-free NotesPanel with explicit width/height contract.',
     sizes: PANE_SIZES,
     // biome-ignore lint/complexity/useLiteralKeys: noPropertyAccessFromIndexSignature requires bracket access.
     data: { mixed: resourceRows['mixed'] ?? [], empty: [] },
     render: ({ data, focused, width, height }) => (
-      <ResourcePane
-        title="Notes"
+      <NotesPanel
         rows={data as readonly ResourceRowFields[]}
         focused={focused}
         width={width}
         height={height}
-        emptyText="no notes"
       />
     ),
   },
   {
     id: 'reports-panel',
-    description: 'Store-free ReportsPanel body wrapper using Pane + ResourceRow + Ledger.',
+    description: 'Store-free ReportsPanel with explicit width/height contract.',
     sizes: PANE_SIZES,
     // biome-ignore lint/complexity/useLiteralKeys: noPropertyAccessFromIndexSignature requires bracket access.
     data: { mixed: resourceRows['overflow'] ?? [], empty: [] },
     render: ({ data, focused, width, height }) => (
-      <ResourcePane
-        title="Reports"
+      <ReportsPanel
         rows={data as readonly ResourceRowFields[]}
         focused={focused}
         width={width}
         height={height}
-        emptyText="no reports"
       />
     ),
   },
@@ -715,12 +386,12 @@ export const paneFixtures: readonly PaneFixture[] = [
   },
   {
     id: 'tickets-panel',
-    description: 'Store-free TicketsPanel body wrapper with responsive multi-column rows.',
-    sizes: PANE_SIZES,
+    description: 'Store-free TicketsPanel with explicit width/height contract.',
+    sizes: TICKETS_PANEL_SIZES,
     data: ticketRows,
     render: ({ data, focused, width, height }) => (
-      <TicketsFixture
-        rows={data as readonly TicketFixtureRow[]}
+      <TicketsPanel
+        rows={ticketFixtureToPanelRows(data as readonly TicketFixtureRow[])}
         focused={focused}
         width={width}
         height={height}
@@ -731,10 +402,12 @@ export const paneFixtures: readonly PaneFixture[] = [
     id: 'crows-panel',
     description: 'Store-free CrowsPanel body wrapper with grouped rows.',
     sizes: PANE_SIZES,
-    data: crowRows,
+    // biome-ignore lint/complexity/useLiteralKeys: noPropertyAccessFromIndexSignature requires bracket access.
+    data: { mixed: crowRows['mixed'] ?? [], loading: crowRows['loading'] ?? [] },
     render: ({ data, focused, width, height }) => (
-      <CrowsFixture
-        rows={data as readonly CrowFixtureRow[]}
+      <CrowsPanel
+        rows={crowsPanelRowsFromFixture(data as readonly CrowFixtureRow[])}
+        status={data === (crowRows['loading'] ?? []) ? 'loading' : 'idle'}
         focused={focused}
         width={width}
         height={height}
@@ -762,7 +435,7 @@ export const paneFixtures: readonly PaneFixture[] = [
     sizes: PANE_SIZES,
     data: historyRows,
     render: ({ data, focused, width, height }) => (
-      <HistoryFixture
+      <HistoryPanel
         rows={data as readonly HistoryFixtureRow[]}
         focused={focused}
         width={width}
@@ -775,17 +448,27 @@ export const paneFixtures: readonly PaneFixture[] = [
     description: 'Store-free UsagePanel body wrapper with colored gauges.',
     sizes: PANE_SIZES,
     data: usageGroups,
-    render: ({ data, focused }) => (
-      <UsageFixture groups={data as readonly UsageFixtureGroup[]} focused={focused} />
+    render: ({ data, focused, width, height }) => (
+      <UsagePanel
+        groups={data as readonly UsageFixtureGroup[]}
+        focused={focused}
+        width={width}
+        height={height}
+      />
     ),
   },
   {
-    id: 'transit-panel',
-    description: 'Store-free TransitPanel body wrapper with deterministic railway rows.',
-    sizes: PANE_SIZES,
+    id: 'tree-panel',
+    description: 'Store-free TreePanel body wrapper with deterministic railway rows.',
+    sizes: TREE_PANEL_SIZES,
     data: transitData,
-    render: ({ data, focused }) => (
-      <TransitFixture data={data as TransitFixtureData} focused={focused} />
+    render: ({ data, focused, width, height }) => (
+      <TreePanel
+        data={data as TransitFixtureData}
+        focused={focused}
+        width={width}
+        height={height}
+      />
     ),
   },
   {
@@ -793,18 +476,39 @@ export const paneFixtures: readonly PaneFixture[] = [
     description: 'Store-free StageDocPane wrapper with document lines and scrollbar chrome.',
     sizes: PANE_SIZES,
     data: docData,
-    render: ({ data, focused, height }) => (
-      <DocFixture data={data as DocFixtureData} focused={focused} height={height} />
-    ),
+    render: ({ data, focused, width, height }) => {
+      const doc = data as DocFixtureData;
+      return (
+        <StageDocPane
+          title={doc.title}
+          lines={doc.lines}
+          scroll={doc.scroll}
+          focused={focused}
+          width={width}
+          height={height}
+        />
+      );
+    },
   },
   {
     id: 'chat-pane',
-    description: 'Store-free Stage ChatPane wrapper with mixed chat turns.',
+    description: 'Store-free ChatPane with explicit width/height contract.',
     sizes: PANE_SIZES,
     data: chatData,
-    render: ({ data, focused, height }) => (
-      <ChatPaneFixture data={data as ChatFixtureData} focused={focused} height={height} />
-    ),
+    render: ({ data, focused, width, height }) => {
+      const chat = data as ChatFixtureData;
+      return (
+        <ChatPane
+          title={chat.title}
+          footerLeft={chat.footerLeft}
+          footerRight={chat.footerRight}
+          turns={chat.turns}
+          focused={focused}
+          width={width}
+          height={height}
+        />
+      );
+    },
   },
   {
     id: 'chat-input',

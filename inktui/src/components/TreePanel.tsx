@@ -1,5 +1,5 @@
 /**
- * TransitPanel — the "Git Tree" commit-graph right-rail panel (panel 8, ctrl+8).
+ * TreePanel — the "Git Tree" commit-graph right-rail panel (panel 8, ctrl+8).
  *
  * Custom {@link ./Pane.tsx Pane} body (like {@link ./UsagePanel.tsx}, NOT a Ledger). The selector
  * renders a SWIMLANE DAG on a shared log-time axis: a single age RULER on top, then one row per
@@ -54,9 +54,9 @@ import {
   useTransitView,
 } from '../selectors/transitSelectors.js';
 import { useTheme } from '../theme/themeStore.js';
-import { Pane } from './Pane.js';
+import { Pane, paneHorizontalPaddingForWidth } from './Pane.js';
 
-const PANEL_ID: PanelId = 'transit';
+const PANEL_ID: PanelId = 'tree';
 const PANEL_TITLE = 'Git Tree';
 
 /** The inner width assumed when mounted bare (a test rendering the panel outside the Rail). */
@@ -285,14 +285,16 @@ function nearestShaByTime(
 }
 
 /**
- * The transit panel. Reads the transit slice, runs the selector to display-ready lanes, owns the
+ * The tree panel. Reads the transit slice, runs the selector to display-ready lanes, owns the
  * cursor + the g-capture buffer, declares its keymap, and paints a focus-highlighted Pane.
  * `React.memo`'d (rule 1). The `innerWidth` (R9) is threaded from the budget engine via App's
  * `renderPanel` so the railway scrolls to the width the right rail allots it.
  */
-export const TransitPanel = memo(function TransitPanel({
+export const TreePanel = memo(function TreePanel({
+  allocatedWidth,
   innerWidth = DEFAULT_INNER_WIDTH,
 }: {
+  readonly allocatedWidth?: number;
   /** The inner width the budget engine grants the railway (R9). Defaults to a nominal width when
    * mounted bare (e.g. a test rendering the panel outside the Rail). */
   readonly innerWidth?: number;
@@ -530,9 +532,11 @@ export const TransitPanel = memo(function TransitPanel({
     };
   }, [gPending, handleGChar, moveWithinLane, switchLane, resolveG]);
   usePanelKeymap(PANEL_ID, keymap);
+  const panePadding =
+    allocatedWidth === undefined ? undefined : paneHorizontalPaddingForWidth(allocatedWidth);
 
   return (
-    <Pane ref={ref} title={PANEL_TITLE} focused={focused}>
+    <Pane ref={ref} title={PANEL_TITLE} focused={focused} {...(panePadding ?? {})}>
       <TransitBody view={view} cursor={cursor} gPending={gPending} gBuffer={gBuffer ?? ''} />
     </Pane>
   );

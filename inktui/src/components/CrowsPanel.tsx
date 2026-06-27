@@ -64,7 +64,7 @@ import { murderConfirmStore, resetConfirmStore } from '../store/murder/murderCon
 import { toastStore } from '../store/toast/toastStore.js';
 import { useTheme } from '../theme/themeStore.js';
 import { Ledger, type LedgerEntryContext } from './Ledger.js';
-import { Pane } from './Pane.js';
+import { Pane, paneHorizontalPaddingForWidth } from './Pane.js';
 
 const PANEL_ID: PanelId = 'crows';
 const PANEL_TITLE = 'Crows';
@@ -234,7 +234,11 @@ function CrowsList({
  * owns a local cursor + expanded flag, declares its keymap, and paints a focus-highlighted
  * Pane. `React.memo`'d (rule 1) so it re-renders only when its own state changes.
  */
-export const CrowsPanel = memo(function CrowsPanel(): React.JSX.Element {
+export const CrowsPanel = memo(function CrowsPanel({
+  allocatedWidth,
+}: {
+  readonly allocatedWidth?: number;
+}): React.JSX.Element {
   // Rule 1: narrow selector (shallow) — only re-renders when the roster slice ref-changes.
   // Rule 2: view comes pre-grouped from the selector; no role/ticketId logic here.
   const roster = useAppStore((s) => s.roster, shallow);
@@ -446,21 +450,21 @@ export const CrowsPanel = memo(function CrowsPanel(): React.JSX.Element {
   const ref = useFocusRef();
   const focused = useEffectiveFocus() === PANEL_ID;
   useMeasureFocus(PANEL_ID, ref);
+  const panePadding =
+    allocatedWidth === undefined ? undefined : paneHorizontalPaddingForWidth(allocatedWidth);
 
   const clampedCursor = Math.min(cursor, Math.max(rowCount - 1, 0));
   // Map the crow-only cursor to the Ledger's flat-array index (headers excluded). When there are no
   // crow rows the empty chrome renders instead, so 0 is a safe default.
   const ledgerCursor = crowToFlat[clampedCursor] ?? 0;
-  const modeLabel = expanded ? '[max]' : '[min]';
 
   return (
-    // `titleExtra` is the `[min]`/`[max]` mode label, pre-styled per Pane's contract (the caller owns
-    // its color — Pane renders it outside the green/white title segment).
+    // Scroll-overflow counts fed up from the Ledger's window (via the list's onOverflow) into the Pane
     <Pane
       ref={ref}
       title={PANEL_TITLE}
       focused={focused}
-      titleExtra={<Text dimColor>{` ${modeLabel}`}</Text>}
+      {...(panePadding ?? {})}
       overflowAbove={rowCount === 0 ? 0 : overflow.above}
       overflowBelow={rowCount === 0 ? 0 : overflow.below}
     >

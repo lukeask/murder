@@ -50,8 +50,8 @@
  *    Pane attaches `ref` to its OUTER Box so `useMeasureFocus` measures the whole bordered region
  *    (title row + content) — this keeps the directional-focus rects correct under reflow. Do NOT add
  *    a focus hook inside Pane; that would couple a presentational primitive to panel identity.
- *  - Put the list body (a `Ledger`, or any node) as `children`. The Pane provides `paddingX={1}` (the
- *    right side is the optional `paddingRight` prop, default 1) and
+ *  - Put the list body (a `Ledger`, or any node) as `children`. The Pane provides `paddingLeft={1}`
+ *    and `paddingRight={1}` by default (both configurable for edge-to-edge panes) and
  *    the height-clamping flex discipline (`minHeight={0}` + `overflow="hidden"`) so an overflowing
  *    child clips instead of growing the frame past the terminal height.
  *  - `flexGrow` lets a Rail split its height/width evenly across stacked Panes (default 1).
@@ -112,6 +112,33 @@ export function paneChrome(focused: boolean, theme: Theme): PaneChrome {
   };
 }
 
+/** Comfortable content-width cutoff at/below which panes spend no cells on horizontal padding. */
+export const COMPACT_PANE_PADDING_CW = 21;
+
+const PANE_BORDER_COLS = 2;
+const DEFAULT_PANE_HORIZONTAL_PADDING = 1;
+
+export interface PaneHorizontalPadding {
+  readonly paddingLeft: number;
+  readonly paddingRight: number;
+}
+
+/** Width-driven horizontal padding shared by pane implementations with an explicit allocation. */
+export function paneHorizontalPaddingForWidth(width: number): PaneHorizontalPadding {
+  const comfortableContentWidth = Math.max(
+    1,
+    width - PANE_BORDER_COLS - DEFAULT_PANE_HORIZONTAL_PADDING * 2,
+  );
+  const padding = comfortableContentWidth <= COMPACT_PANE_PADDING_CW ? 0 : 1;
+  return { paddingLeft: padding, paddingRight: padding };
+}
+
+/** Content columns after side borders and the width-driven horizontal padding are removed. */
+export function paneContentWidthForWidth(width: number): number {
+  const padding = paneHorizontalPaddingForWidth(width);
+  return Math.max(1, width - PANE_BORDER_COLS - padding.paddingLeft - padding.paddingRight);
+}
+
 export interface PaneProps {
   /** Display-ready title shown inline on the top border (formatting lives in the selector). */
   readonly title: string;
@@ -123,9 +150,12 @@ export interface PaneProps {
   readonly titleExtra?: React.ReactNode;
   /** Flex weight for a Rail splitting space across stacked/side-by-side Panes (default 1). */
   readonly flexGrow?: number;
-  /** Right padding inside the content box (default 1). Set to 0 to reclaim the column for a child that
-   * draws its own right gutter (e.g. {@link ./DocPane.js}'s 1-char scrollbar) — net content width is
-   * unchanged. The left padding stays `1` regardless. */
+  /** Left padding inside the content box (default 1). Set to 0 for edge-to-edge panes such as chat
+   * history and document bodies, where the first content glyph should sit immediately after the left
+   * border. */
+  readonly paddingLeft?: number;
+  /** Right padding inside the content box (default 1). Set to 0 for edge-to-edge panes. Scrollable
+   * panes use the right border itself as the scrollbar track, so this is content padding only. */
   readonly paddingRight?: number;
   /** Rows hidden ABOVE the viewport. `> 0` draws a `▴ N` indicator on the top border; 0/undefined
    * leaves the top border byte-identical to today. */
@@ -167,6 +197,7 @@ export const Pane = memo(
       children,
       titleExtra,
       flexGrow = 1,
+      paddingLeft = 1,
       paddingRight = 1,
       overflowAbove,
       overflowBelow,
@@ -188,10 +219,10 @@ export const Pane = memo(
     const hasFooter =
       (footerLeft !== undefined && footerLeft !== null && footerLeft !== false) ||
       (footerRight !== undefined && footerRight !== null && footerRight !== false);
-    /* Content box supplies the LEFT (+ RIGHT, unless the scrollbar column replaces it) sides + the
-       BOTTOM border + padding + height clamp. `minWidth={0}` is load-bearing in the scrollbar variant:
-       there the box sits in a flex ROW beside the `flexShrink={0}` PaneBorderRight column, so its
-       default `min-width:auto` (= its content's intrinsic min-width) would refuse to shrink on a narrow
+    /* Content box supplies the LEFT (+ RIGHT, unless the right border is the scrollbar track) sides +
+       the BOTTOM border + padding + height clamp. `minWidth={0}` is load-bearing in the scrollbar
+       variant: there the box sits in a flex ROW beside the `flexShrink={0}` PaneBorderRight column, so
+       its default `min-width:auto` (= its content's intrinsic min-width) would refuse to shrink on a narrow
        tiled pane and push the 1-cell right border past the cell's right edge, where the cell's
        `overflow:hidden` clipped it — the missing `━┓` corner on the 2nd pane of a multi-column grid.
        `minWidth={0}` lets the content shrink so the border column always keeps its cell (same fix shape
@@ -212,7 +243,7 @@ export const Pane = memo(
         borderTop={false}
         borderRight={scrollbar === undefined}
         borderColor={borderColor}
-        paddingLeft={1}
+        paddingLeft={paddingLeft}
         paddingRight={paddingRight}
       >
         {children}
@@ -226,7 +257,7 @@ export const Pane = memo(
         /* Scrollable pane: the right border IS the scroll track. The content box keeps left/bottom
            (its Ink bottom border ends `╰──` since borderRight is off); the hand-composed column
            draws the `│`/`█` track cells plus the closing `╯` corner — same net width as before. */
-        <Box flexDirection="row" flexGrow={1} minHeight={0} overflow="hidden">
+        <Box flexDirection="row" flexGrow={1} minWidth={0} minHeight={0} overflow="hidden">
           {content}
           <PaneBorderRight
             height={scrollbar.height}

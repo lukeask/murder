@@ -29,7 +29,7 @@ import { TicketsPanel } from './components/panels/TicketsPanel.js';
 import { HistoryPanel } from './components/panels/HistoryPanel.js';
 import { RosterPanel } from './components/panels/RosterPanel.js';
 import { UsagePanel } from './components/panels/UsagePanel.js';
-import { TransitPanel } from './components/panels/TransitPanel.js';
+import { TreePanel } from './components/panels/TreePanel.js';
 import { SettingsPanel } from './components/panels/SettingsPanel.js';
 import { Stage } from './components/stage/Stage.js';
 import { NavBar, KeybindBar, type KeybindHint, StatusDot, type StatusDotStatus, Tabs, type TabItem, Icon, type IconName, cx } from './components/ds/index.js';
@@ -45,7 +45,7 @@ const MOBILE_TABS = [
   'reports',
   'history',
   'usage',
-  'transit',
+  'tree',
   'settings',
 ] as const;
 type MobileTab = (typeof MOBILE_TABS)[number];
@@ -60,7 +60,7 @@ const MOBILE_TAB_ICON: Record<MobileTab, IconName> = {
   reports: 'file-text',
   history: 'git-branch',
   usage: 'gauge',
-  transit: 'git-commit',
+  tree: 'git-commit',
   settings: 'settings',
 };
 
@@ -150,7 +150,7 @@ function DesktopLayout({ status }: { readonly status: ConnectionStatus }): React
         <aside className="rail cockpit__rail cockpit__rail--right">
           <RosterPanel />
           <UsagePanel />
-          <TransitPanel />
+          <TreePanel />
           <SettingsPanel />
         </aside>
       </div>
@@ -251,8 +251,8 @@ function MobilePane({ tab }: { readonly tab: MobileTab }): React.JSX.Element {
       return <HistoryPanel />;
     case 'usage':
       return <UsagePanel />;
-    case 'transit':
-      return <TransitPanel />;
+    case 'tree':
+      return <TreePanel />;
     case 'settings':
       return <SettingsPanel />;
     default:

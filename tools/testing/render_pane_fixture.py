@@ -1,8 +1,8 @@
 """Print an Ink pane fixture at an explicit terminal allocation.
 
-This module is intentionally a thin Python-facing wrapper around the Ink test
-fixture renderer. Fixture data lives in the Ink testing tree; this tool gives
-Python-based swarm agents one stable four-argument function to call.
+Thin Python wrapper around ``inktui/fixtures/print-pane-fixture.ts``. The
+canonical pane fixture registry lives under ``inktui/fixtures/``; pane agents
+wire new components there as they land in ``inktui/src/components/panes/``.
 """
 
 from __future__ import annotations
@@ -15,7 +15,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 INKTUI_DIR = REPO_ROOT / "inktui"
-RENDERER = "test/fixtures/pane_rendering/render-pane-fixture.ts"
+RENDERER = "fixtures/print-pane-fixture.ts"
 
 
 def render_pane_fixture(
@@ -32,7 +32,8 @@ def render_pane_fixture(
     """
 
     env = os.environ.copy()
-    env.setdefault("FORCE_COLOR", "3")
+    env["FORCE_COLOR"] = "3"
+    env.pop("NO_COLOR", None)
     command = [
         "node",
         "--import",

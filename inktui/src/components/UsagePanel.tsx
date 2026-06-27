@@ -47,7 +47,7 @@ import {
 } from '../selectors/usageSelectors.js';
 import type { Theme } from '../theme/buildTheme.js';
 import { useTheme } from '../theme/themeStore.js';
-import { Pane } from './Pane.js';
+import { Pane, paneHorizontalPaddingForWidth } from './Pane.js';
 
 const PANEL_ID: PanelId = 'usage';
 const PANEL_TITLE = 'Usage';
@@ -363,8 +363,10 @@ function countGauges(view: UsageView): number {
  * to {@link UsageBody} — the responsive render the spec asks for.
  */
 export const UsagePanel = memo(function UsagePanel({
+  allocatedWidth,
   innerWidth = DEFAULT_INNER_WIDTH,
 }: {
+  readonly allocatedWidth?: number;
   /** The inner width the budget engine grants the gauges (R9). Defaults to the full line at the
    * nominal bar width when mounted bare (e.g. a test rendering UsagePanel outside the Rail) so the
    * full render is the unguarded default. */
@@ -444,9 +446,11 @@ export const UsagePanel = memo(function UsagePanel({
   const ref = useFocusRef();
   const focused = useEffectiveFocus() === PANEL_ID;
   useMeasureFocus(PANEL_ID, ref);
+  const panePadding =
+    allocatedWidth === undefined ? undefined : paneHorizontalPaddingForWidth(allocatedWidth);
 
   return (
-    <Pane ref={ref} title={PANEL_TITLE} focused={focused}>
+    <Pane ref={ref} title={PANEL_TITLE} focused={focused} {...(panePadding ?? {})}>
       <UsageBody
         view={view}
         cursor={clampedCursor}

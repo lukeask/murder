@@ -32,7 +32,7 @@ import { type ReportsView, useReportsView } from '../selectors/reportsSelectors.
 import { useTheme } from '../theme/themeStore.js';
 import { useDocView } from './DocPane.js';
 import { Ledger } from './Ledger.js';
-import { Pane } from './Pane.js';
+import { Pane, paneHorizontalPaddingForWidth } from './Pane.js';
 import { renderResourceEntry, renderResourceHeader } from './ResourceRow.js';
 
 const PANEL_ID: PanelId = 'reports';
@@ -89,7 +89,11 @@ function ReportsList({
 
 /** The reports panel. Reads its slice, runs the selector, owns a local cursor, declares its
  * keymap, and paints a focus-highlighted Pane of two-line Ledger entries. `React.memo`'d (rule 1). */
-export const ReportsPanel = memo(function ReportsPanel(): React.JSX.Element {
+export const ReportsPanel = memo(function ReportsPanel({
+  allocatedWidth,
+}: {
+  readonly allocatedWidth?: number;
+}): React.JSX.Element {
   const reports = useAppStore((s) => s.reports, shallow);
   const favorites = useAppStore((s) => s.favorites, shallow);
   const view = useReportsView(reports, favorites);
@@ -191,12 +195,15 @@ export const ReportsPanel = memo(function ReportsPanel(): React.JSX.Element {
   const ref = useFocusRef();
   const focused = useEffectiveFocus() === PANEL_ID;
   useMeasureFocus(PANEL_ID, ref);
+  const panePadding =
+    allocatedWidth === undefined ? undefined : paneHorizontalPaddingForWidth(allocatedWidth);
 
   return (
     <Pane
       ref={ref}
       title={PANEL_TITLE}
       focused={focused}
+      {...(panePadding ?? {})}
       overflowAbove={rowCount === 0 ? 0 : overflow.above}
       overflowBelow={rowCount === 0 ? 0 : overflow.below}
     >

@@ -80,7 +80,10 @@ export function createThemesActions(bus: BusClient, store: StoreApi<AppStore>): 
     },
 
     async importTheme(json: string, id?: string): Promise<string> {
-      const reply = await bus.rpc('tui.import_theme', { json, id });
+      const reply = await bus.rpc('tui.import_theme', {
+        json,
+        ...(id === undefined ? {} : { id }),
+      });
       const items = toItems(reply.themes);
       applyThemeRecords(items);
       store.setState({ themes: { items, status: 'ready', error: null } });

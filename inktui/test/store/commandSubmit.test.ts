@@ -88,7 +88,13 @@ describe('submitCommand', () => {
       { ok: true, status: 'done' as const, result_json: JSON.stringify({ ticket_id: 'T-7' }) },
     ];
     let poll = 0;
-    fake.stubRpc('command.status', () => statuses[Math.min(poll++, statuses.length - 1)]);
+    fake.stubRpc('command.status', () => {
+      const status = statuses[Math.min(poll++, statuses.length - 1)];
+      if (status === undefined) {
+        throw new Error('missing command status fixture');
+      }
+      return status;
+    });
 
     const pending = submitCommand(fake, 'ticket.quick_create', { title: 'hi' });
     // Two non-terminal polls each wait one POLL_INTERVAL_MS before the third (done) poll resolves.

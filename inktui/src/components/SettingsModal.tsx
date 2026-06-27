@@ -66,7 +66,7 @@ import type { AppStore } from '../store/store.js';
 import type { TemplateRecord } from '../store/templates/templatesSlice.js';
 import type { ThemeRecord } from '../store/themes/themesSlice.js';
 import { capsStore, type KittySupport, useKittySupport } from '../terminal/capsStore.js';
-import { DEFAULT_THEME_ID, hasTheme, listThemeRecords, type ThemeId } from '../theme/palettes.js';
+import { DEFAULT_THEME_ID, listThemeRecords, type ThemeId } from '../theme/palettes.js';
 import { setTheme, useTheme } from '../theme/themeStore.js';
 import {
   buildCategoryRows,
@@ -1042,7 +1042,11 @@ export function settingsMode(
           // delete confirm is pending (it only accepts y/n via onUncaptured, or Esc to cancel).
           if (s.editing !== null) {
             commitEdit();
-          } else if (s.capturing === null && s.confirmingDelete === null && s.confirmingThemeDelete === null) {
+          } else if (
+            s.capturing === null &&
+            s.confirmingDelete === null &&
+            s.confirmingThemeDelete === null
+          ) {
             confirm();
           }
           break;
@@ -1144,7 +1148,9 @@ export function settingsMode(
       }
       return false; // other chars are not actions here — swallow under the modal
     },
-    render: () => <SettingsDialog state={s} syncTemplates={syncTemplates} syncThemes={syncThemes} />,
+    render: () => (
+      <SettingsDialog state={s} syncTemplates={syncTemplates} syncThemes={syncThemes} />
+    ),
   };
 
   return mode;
