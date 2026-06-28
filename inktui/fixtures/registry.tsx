@@ -6,15 +6,15 @@ import { Ledger, type LedgerEntryContext } from '../src/components/Ledger.js';
 import { Pane } from '../src/components/Pane.js';
 import { PaneBorderBottom, PaneBorderTop } from '../src/components/paneBorder.js';
 import { ChatPane } from '../src/components/panes/ChatPane.js';
-import { CrowsPanel } from '../src/components/panes/CrowsPanel.js';
-import { HistoryPanel } from '../src/components/panes/HistoryPanel.js';
-import { NotesPanel } from '../src/components/panes/NotesPanel.js';
-import { PlansPanel } from '../src/components/panes/PlansPanel.js';
-import { ReportsPanel } from '../src/components/panes/ReportsPanel.js';
+import { CrowsSurface } from '../src/components/panes/CrowsSurface.js';
+import { HistorySurface } from '../src/components/panes/HistorySurface.js';
+import { NotesSurface } from '../src/components/panes/NotesSurface.js';
+import { PlansSurface } from '../src/components/panes/PlansSurface.js';
+import { ReportsSurface } from '../src/components/panes/ReportsSurface.js';
 import { StageDocPane } from '../src/components/panes/StageDocPane.js';
-import { TicketsPanel } from '../src/components/panes/TicketsPanel.js';
-import { TreePanel } from '../src/components/panes/TreePanel.js';
-import { UsagePanel } from '../src/components/panes/UsagePanel.js';
+import { TicketsSurface } from '../src/components/panes/TicketsSurface.js';
+import { TreeSurface } from '../src/components/panes/TreeSurface.js';
+import { UsageSurface } from '../src/components/panes/UsageSurface.js';
 import {
   type ResourceRowFields,
   renderResourceEntry,
@@ -22,7 +22,7 @@ import {
 } from '../src/components/ResourceRow.js';
 import { MultiLineText, TextInput } from '../src/components/TextInput.js';
 import { getTheme } from '../src/theme/themeStore.js';
-import { crowsPanelRowsFromFixture } from './crowsPanelFixture.js';
+import { crowsSurfaceRowsFromFixture } from './crowsPanelFixture.js';
 import {
   type BarFixtureData,
   barData,
@@ -47,7 +47,7 @@ import {
   usageGroups,
 } from './data/paneFixtureData.js';
 import type { FixtureSize } from './renderInkFixture.js';
-import { ticketFixtureToPanelRows } from './ticketsPanelFixture.js';
+import { ticketFixtureToSurfaceRows } from './ticketsPanelFixture.js';
 import type { PaneFixture } from './types.js';
 
 const PANE_SIZES: readonly FixtureSize[] = [
@@ -56,13 +56,13 @@ const PANE_SIZES: readonly FixtureSize[] = [
   { id: 'minimum', width: 20, height: 5 },
 ];
 
-const TICKETS_PANEL_SIZES: readonly FixtureSize[] = [
+const TICKETS_SURFACE_SIZES: readonly FixtureSize[] = [
   { id: 'preferred', width: 54, height: 14 },
   { id: 'cramped', width: 30, height: 8 },
   { id: 'minimum', width: 25, height: 5 },
 ];
 
-const TREE_PANEL_SIZES: readonly FixtureSize[] = [
+const TREE_SURFACE_SIZES: readonly FixtureSize[] = [
   { id: 'preferred', width: 54, height: 14 },
   { id: 'cramped', width: 30, height: 8 },
   { id: 'minimum', width: 25, height: 10 },
@@ -321,47 +321,59 @@ export const paneFixtures: readonly PaneFixture[] = [
   },
   {
     id: 'plans-panel',
-    description: 'Store-free PlansPanel with explicit width/height contract.',
+    description: 'Store-free PlansSurface with explicit width/height contract.',
     sizes: PANE_SIZES,
     data: resourceRows,
-    render: ({ data, focused, width, height }) => (
-      <PlansPanel
-        rows={data as readonly ResourceRowFields[]}
-        focused={focused}
-        width={width}
-        height={height}
-      />
-    ),
+    render: ({ data, focused, width, height }) => {
+      const theme = getTheme();
+      return (
+        <PlansSurface
+          rows={data as readonly ResourceRowFields[]}
+          focused={focused}
+          theme={theme}
+          width={width}
+          height={height}
+        />
+      );
+    },
   },
   {
     id: 'notes-panel',
-    description: 'Store-free NotesPanel with explicit width/height contract.',
+    description: 'Store-free NotesSurface with explicit width/height contract.',
     sizes: PANE_SIZES,
     // biome-ignore lint/complexity/useLiteralKeys: noPropertyAccessFromIndexSignature requires bracket access.
     data: { mixed: resourceRows['mixed'] ?? [], empty: [] },
-    render: ({ data, focused, width, height }) => (
-      <NotesPanel
-        rows={data as readonly ResourceRowFields[]}
-        focused={focused}
-        width={width}
-        height={height}
-      />
-    ),
+    render: ({ data, focused, width, height }) => {
+      const theme = getTheme();
+      return (
+        <NotesSurface
+          rows={data as readonly ResourceRowFields[]}
+          focused={focused}
+          theme={theme}
+          width={width}
+          height={height}
+        />
+      );
+    },
   },
   {
     id: 'reports-panel',
-    description: 'Store-free ReportsPanel with explicit width/height contract.',
+    description: 'Store-free ReportsSurface with explicit width/height contract.',
     sizes: PANE_SIZES,
     // biome-ignore lint/complexity/useLiteralKeys: noPropertyAccessFromIndexSignature requires bracket access.
     data: { mixed: resourceRows['overflow'] ?? [], empty: [] },
-    render: ({ data, focused, width, height }) => (
-      <ReportsPanel
-        rows={data as readonly ResourceRowFields[]}
-        focused={focused}
-        width={width}
-        height={height}
-      />
-    ),
+    render: ({ data, focused, width, height }) => {
+      const theme = getTheme();
+      return (
+        <ReportsSurface
+          rows={data as readonly ResourceRowFields[]}
+          focused={focused}
+          theme={theme}
+          width={width}
+          height={height}
+        />
+      );
+    },
   },
   {
     id: 'resource-row',
@@ -386,33 +398,41 @@ export const paneFixtures: readonly PaneFixture[] = [
   },
   {
     id: 'tickets-panel',
-    description: 'Store-free TicketsPanel with explicit width/height contract.',
-    sizes: TICKETS_PANEL_SIZES,
+    description: 'Store-free TicketsSurface with explicit width/height contract.',
+    sizes: TICKETS_SURFACE_SIZES,
     data: ticketRows,
-    render: ({ data, focused, width, height }) => (
-      <TicketsPanel
-        rows={ticketFixtureToPanelRows(data as readonly TicketFixtureRow[])}
-        focused={focused}
-        width={width}
-        height={height}
-      />
-    ),
+    render: ({ data, focused, width, height }) => {
+      const theme = getTheme();
+      return (
+        <TicketsSurface
+          rows={ticketFixtureToSurfaceRows(data as readonly TicketFixtureRow[])}
+          focused={focused}
+          theme={theme}
+          width={width}
+          height={height}
+        />
+      );
+    },
   },
   {
     id: 'crows-panel',
-    description: 'Store-free CrowsPanel body wrapper with grouped rows.',
+    description: 'Store-free CrowsSurface body wrapper with grouped rows.',
     sizes: PANE_SIZES,
     // biome-ignore lint/complexity/useLiteralKeys: noPropertyAccessFromIndexSignature requires bracket access.
     data: { mixed: crowRows['mixed'] ?? [], loading: crowRows['loading'] ?? [] },
-    render: ({ data, focused, width, height }) => (
-      <CrowsPanel
-        rows={crowsPanelRowsFromFixture(data as readonly CrowFixtureRow[])}
-        status={data === (crowRows['loading'] ?? []) ? 'loading' : 'idle'}
-        focused={focused}
-        width={width}
-        height={height}
-      />
-    ),
+    render: ({ data, focused, width, height }) => {
+      const theme = getTheme();
+      return (
+        <CrowsSurface
+          rows={crowsSurfaceRowsFromFixture(data as readonly CrowFixtureRow[])}
+          status={data === (crowRows['loading'] ?? []) ? 'loading' : 'idle'}
+          focused={focused}
+          theme={theme}
+          width={width}
+          height={height}
+        />
+      );
+    },
   },
   {
     id: 'roster-panel',
@@ -431,45 +451,57 @@ export const paneFixtures: readonly PaneFixture[] = [
   },
   {
     id: 'history-panel',
-    description: 'Store-free HistoryPanel body wrapper with fixed-height intention rows.',
+    description: 'Store-free HistorySurface body wrapper with fixed-height intention rows.',
     sizes: PANE_SIZES,
     data: historyRows,
-    render: ({ data, focused, width, height }) => (
-      <HistoryPanel
-        rows={data as readonly HistoryFixtureRow[]}
-        focused={focused}
-        width={width}
-        height={height}
-      />
-    ),
+    render: ({ data, focused, width, height }) => {
+      const theme = getTheme();
+      return (
+        <HistorySurface
+          rows={data as readonly HistoryFixtureRow[]}
+          focused={focused}
+          theme={theme}
+          width={width}
+          height={height}
+        />
+      );
+    },
   },
   {
     id: 'usage-panel',
-    description: 'Store-free UsagePanel body wrapper with colored gauges.',
+    description: 'Store-free UsageSurface body wrapper with colored gauges.',
     sizes: PANE_SIZES,
     data: usageGroups,
-    render: ({ data, focused, width, height }) => (
-      <UsagePanel
-        groups={data as readonly UsageFixtureGroup[]}
-        focused={focused}
-        width={width}
-        height={height}
-      />
-    ),
+    render: ({ data, focused, width, height }) => {
+      const theme = getTheme();
+      return (
+        <UsageSurface
+          groups={data as readonly UsageFixtureGroup[]}
+          focused={focused}
+          theme={theme}
+          width={width}
+          height={height}
+        />
+      );
+    },
   },
   {
     id: 'tree-panel',
-    description: 'Store-free TreePanel body wrapper with deterministic railway rows.',
-    sizes: TREE_PANEL_SIZES,
+    description: 'Store-free TreeSurface body wrapper with deterministic railway rows.',
+    sizes: TREE_SURFACE_SIZES,
     data: transitData,
-    render: ({ data, focused, width, height }) => (
-      <TreePanel
-        data={data as TransitFixtureData}
-        focused={focused}
-        width={width}
-        height={height}
-      />
-    ),
+    render: ({ data, focused, width, height }) => {
+      const theme = getTheme();
+      return (
+        <TreeSurface
+          data={data as TransitFixtureData}
+          focused={focused}
+          theme={theme}
+          width={width}
+          height={height}
+        />
+      );
+    },
   },
   {
     id: 'doc-pane',
@@ -502,7 +534,14 @@ export const paneFixtures: readonly PaneFixture[] = [
           title={chat.title}
           footerLeft={chat.footerLeft}
           footerRight={chat.footerRight}
-          turns={chat.turns}
+          turns={chat.turns.map((turn, index) => ({
+            speaker: turn.speaker,
+            text: turn.lines.join('\n'),
+            blockId: `fixture-${index}`,
+          }))}
+          viewMode="verbose"
+          scrollUp={0}
+          gotoLine={null}
           focused={focused}
           width={width}
           height={height}

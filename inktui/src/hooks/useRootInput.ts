@@ -34,8 +34,8 @@ import {
   CHAT_FOCUS,
   type FocusStoreApi,
   isStagePaneId,
-  selectEffectiveFocus,
   type StagePaneId,
+  selectEffectiveFocus,
 } from '../input/focusStore.js';
 import { selectActiveMode } from '../input/modeStore.js';
 import type { PanelStoreApi } from '../input/panelStore.js';
@@ -76,6 +76,8 @@ export interface DeferredGlobalHandlers {
   cycleTargetPrev?: () => void;
   /** `alt+l`/`ctrl+l` (`global.cycleTargetNext`). Default: no-op (see cycleTargetPrev). */
   cycleTargetNext?: () => void;
+  /** `ctrl+j` (`global.toggleTargetGroup`). Default: no-op until the shell wires group toggle. */
+  toggleTargetGroup?: () => void;
   /** `alt+w`/`ctrl+w` (`global.toggleTargetPane`). Default: no-op until the shell wires the pane
    * toggle. Fires only while chat is focused (item 9 super-chords). */
   toggleTargetPane?: () => void;
@@ -242,6 +244,7 @@ export function useRootInput(
         keyHelp: deferred.keyHelp ?? (() => {}),
         cycleTargetPrev: deferred.cycleTargetPrev ?? (() => {}),
         cycleTargetNext: deferred.cycleTargetNext ?? (() => {}),
+        toggleTargetGroup: deferred.toggleTargetGroup ?? (() => {}),
         toggleTargetPane: deferred.toggleTargetPane ?? (() => {}),
         // ctrl+m murder chord: arm/confirm/cancel + the pending query. Defaults keep the pending
         // check inert (`false`) so unwired chunks/tests see zero behavior change.

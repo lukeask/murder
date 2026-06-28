@@ -1,10 +1,10 @@
-import type { TicketsPanelRow } from '../src/components/panes/TicketsPanel.js';
+import type { TicketsSurfaceRow } from '../src/components/panes/TicketsSurface.js';
 import type { TicketFixtureRow } from './data/paneFixtureData.js';
 
-/** Map fixture rows to display-ready TicketsPanel rows (Phase 0 baseline). */
-export function ticketFixtureToPanelRows(
+/** Map fixture rows to display-ready TicketsSurface rows. */
+export function ticketFixtureToSurfaceRows(
   rows: readonly TicketFixtureRow[],
-): readonly TicketsPanelRow[] {
+): readonly TicketsSurfaceRow[] {
   return rows.map((row) => ({
     id: row.id,
     idCell: row.id,

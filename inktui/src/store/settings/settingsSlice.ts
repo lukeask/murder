@@ -51,9 +51,9 @@ export interface SettingsState {
   readonly modifier: SettingsModifier;
   /** Per-action key-char rebinds, opaque `ActionId -> key char`. Bridged onto the bindings store. */
   readonly keyOverrides: Readonly<Record<string, string>>;
-  /** Spaces of horizontal gap between adjacent pane borders (rail↔stage, stage panes, rail panes).
-   * `0` = flush borders (the default look); `1`–`4` add spacing. Threaded into the Body/Stage/Rail
-   * `columnGap`/`rowGap` and the budget engine's inter-region gap (see `App.tsx`/`useBodyLayout.ts`). */
+  /** Spaces of horizontal gap between adjacent pane borders (side panes and center panes).
+   * `0` = flush borders (the default look); `1`–`4` add spacing. Threaded into the shell's
+   * `columnGap`/`rowGap` and the layout manager's inter-region gap (see `App.tsx`/`paneBridge.tsx`). */
   readonly paneGap: number;
   /** Whether vim-style editing is enabled in the chat input. Mirrors the wire `vim_mode`. */
   readonly vimMode: boolean;

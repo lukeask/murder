@@ -1,7 +1,7 @@
 /**
  * useGotoLine — the vim-style `g<digits>` go-to-line gesture, shared by BOTH scrollable Stage panes
- * ({@link ../components/DocPane.js StageDocPane} and {@link ../components/Stage.js ChatPane}) so the
- * gesture is one mechanism, not two forks.
+ * ({@link ../components/panes/StageDocPane.js StageDocPane} and
+ * {@link ../components/panes/ChatPane.js ChatPane}) so the gesture is one mechanism, not two forks.
  *
  * ## The gesture
  * With a doc/chat pane focused, `g` starts a line-number capture; each digit typed extends the

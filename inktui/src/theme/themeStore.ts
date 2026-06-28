@@ -32,13 +32,7 @@
 import { useStoreWithEqualityFn } from 'zustand/traditional';
 import { createStore, type StoreApi } from 'zustand/vanilla';
 import { buildTheme, type Theme } from './buildTheme.js';
-import {
-  DEFAULT_THEME_ID,
-  getPalette,
-  getThemeMeta,
-  hasTheme,
-  type ThemeId,
-} from './palettes.js';
+import { DEFAULT_THEME_ID, getPalette, getThemeMeta, hasTheme, type ThemeId } from './palettes.js';
 
 /** The theme store's state: the selected scheme id, its built theme, and the setter. */
 export interface ThemeState {

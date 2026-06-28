@@ -53,7 +53,7 @@ export const PANE_BORDER_GLYPHS: Record<PaneInkBorderStyle, PaneBorderGlyphs> = 
 /** Full-block glyph for the scrollbar thumb on the right-border track. */
 export const SCROLL_THUMB = '\u2588';
 
-/** Focus/highlight → heavy border; blurred → round. Shared by Pane, ChatInput, RosterPanel. */
+/** Focus/highlight → heavy border; blurred → round. Shared by Pane and ChatInput. */
 export function paneBorderStyle(focused: boolean): PaneInkBorderStyle {
   return focused ? 'bold' : 'round';
 }

@@ -220,9 +220,7 @@ export function spawnWizardHints(
         { key: 'j/k', description: 'nav' },
         { key: '[n]', description: 'select' },
         { key: 'enter', description: 'confirm' },
-        ...(ctx?.favoritesFocused === true
-          ? [{ key: 'd/r', description: 'del/rename' }]
-          : []),
+        ...(ctx?.favoritesFocused === true ? [{ key: 'd/r', description: 'del/rename' }] : []),
         cancel,
       ];
     case 'model':
@@ -640,8 +638,7 @@ export function spawnWizardMode(
 
       const isList =
         s.step === 'harness' || s.step === 'model' || s.step === 'effort' || s.step === 'worktree';
-      const isText =
-        s.step === 'branch' || s.step === 'name' || s.step === 'nameFavorite';
+      const isText = s.step === 'branch' || s.step === 'name' || s.step === 'nameFavorite';
       switch (intent) {
         case 'cursorUp':
           if (s.step === 'harness') moveWithinColumn(-1);
@@ -986,13 +983,11 @@ function HarnessGrid({ state: s }: { readonly state: SpawnWizardState }): JSX.El
   const theme = useTheme();
 
   const leftRows = s.enabledHarnesses.map((h) => h.replace(/_/g, '-'));
-  const rightCount =
-    s.favorites.length < 10 ? s.favorites.length + 1 : 10;
+  const rightCount = s.favorites.length < 10 ? s.favorites.length + 1 : 10;
   const rows = Math.max(leftRows.length, rightCount);
 
   const favoriteFocused = s.focusedColumn === 'favorites';
-  const renamingName =
-    s.gridMode === 'rename' ? (s.favorites[s.favoriteCursor]?.name ?? '') : null;
+  const renamingName = s.gridMode === 'rename' ? (s.favorites[s.favoriteCursor]?.name ?? '') : null;
   const deletingName =
     s.gridMode === 'confirmDelete' ? (s.favorites[s.favoriteCursor]?.name ?? '') : null;
 
@@ -1001,6 +996,22 @@ function HarnessGrid({ state: s }: { readonly state: SpawnWizardState }): JSX.El
     const name = i < s.favorites.length ? (s.favorites[i]?.name ?? '') : 'create favorite';
     return `${chord} ${name}`;
   };
+  const leftColumnRows = Array.from({ length: rows }, (_, i) => {
+    const name = leftRows[i] ?? null;
+    return {
+      key: name === null ? `left-empty-${i}` : `left-${name}`,
+      label: name === null ? null : `[${i + 1}] ${name}`,
+      highlit: !favoriteFocused && i === s.harnessCursor,
+    };
+  });
+  const rightColumnRows = Array.from({ length: rows }, (_, i) => {
+    const label = i >= rightCount ? null : rightLabel(i);
+    return {
+      key: label === null ? `right-empty-${i}` : `right-${label}`,
+      label,
+      highlit: favoriteFocused && i === s.favoriteCursor,
+    };
+  });
 
   return (
     <Box marginTop={1} flexDirection="column">
@@ -1009,27 +1020,25 @@ function HarnessGrid({ state: s }: { readonly state: SpawnWizardState }): JSX.El
         <Box flexDirection="column">
           <Text>Select harness:</Text>
           <Box marginTop={1} flexDirection="column">
-            {Array.from({ length: rows }, (_, i) => {
-              if (i >= leftRows.length) {
+            {leftColumnRows.map((row) => {
+              if (row.label === null) {
                 return (
-                  <Box key={`l-${i}`}>
+                  <Box key={row.key}>
                     <Text> </Text>
                   </Box>
                 );
               }
-              const highlit = !favoriteFocused && i === s.harnessCursor;
-              const label = `[${i + 1}] ${leftRows[i] ?? ''}`;
               return (
-                <Box key={`l-${i}`}>
-                  {highlit ? (
+                <Box key={row.key}>
+                  {row.highlit ? (
                     <Text color={theme.warning} bold>
                       {'› '}
-                      {label}
+                      {row.label}
                     </Text>
                   ) : (
                     <Text dimColor>
                       {'  '}
-                      {label}
+                      {row.label}
                     </Text>
                   )}
                 </Box>
@@ -1041,27 +1050,25 @@ function HarnessGrid({ state: s }: { readonly state: SpawnWizardState }): JSX.El
         <Box flexDirection="column">
           <Text>Select favorite:</Text>
           <Box marginTop={1} flexDirection="column">
-            {Array.from({ length: rows }, (_, i) => {
-              if (i >= rightCount) {
+            {rightColumnRows.map((row) => {
+              if (row.label === null) {
                 return (
-                  <Box key={`r-${i}`}>
+                  <Box key={row.key}>
                     <Text> </Text>
                   </Box>
                 );
               }
-              const highlit = favoriteFocused && i === s.favoriteCursor;
-              const label = rightLabel(i);
               return (
-                <Box key={`r-${i}`}>
-                  {highlit ? (
+                <Box key={row.key}>
+                  {row.highlit ? (
                     <Text color={theme.warning} bold>
                       {'› '}
-                      {label}
+                      {row.label}
                     </Text>
                   ) : (
                     <Text dimColor>
                       {'  '}
-                      {label}
+                      {row.label}
                     </Text>
                   )}
                 </Box>
@@ -1082,7 +1089,12 @@ function HarnessGrid({ state: s }: { readonly state: SpawnWizardState }): JSX.El
         <Box marginTop={1} flexDirection="column">
           <Text color={theme.warning}>Select favorite — rename:</Text>
           <Box marginTop={1}>
-            <TextInput value={s.renameValue} placeholder="favorite name" focused color={theme.text} />
+            <TextInput
+              value={s.renameValue}
+              placeholder="favorite name"
+              focused
+              color={theme.text}
+            />
           </Box>
         </Box>
       )}

@@ -63,7 +63,7 @@ export interface DocViewActions {
    * the per-kind `state.{plan,note,report}_display` RPC, then ref-swap to `ready` with the body
    * (from the `DisplaySnapshot.markdown` field) (or `error` on rejection — never thrown past
    * the action). Calling `open` with a doc already open replaces it (re-fetches). The doc-view Stage
-   * pane ({@link ../../components/DocPane.js}) focuses itself separately; this action only loads data.
+   * pane bridge focuses it separately; this action only loads data.
    */
   open(kind: DocKind, name: string): Promise<void>;
   /**

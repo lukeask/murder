@@ -15,18 +15,17 @@
  *  - {@link toastStore} — the app-level singleton instance, what production callers import: the
  *    conversations `send` action pushes the send toast here, and a later slice's `imageDraftStore`
  *    upload action will push the image done/failed toast here (left cleanly callable — it just
- *    `import { toastStore }` and calls `push`). Mounted once by the {@link ../../components/Toast.js
- *    Toast} component at the app root.
+ *    `import { toastStore }` and calls `push`). Rendered by the bottom bar compositor.
  *
  * ## Self-expiry — pure decision + a driving timer
  *
  * The expiry *decision* is the pure {@link selectLiveToasts}(toasts, now) filter (mirroring
- * focusStore's "invariant as a pure function"): a toast is live while `now <= expiresAt`. That is
- * what the component renders and what tests assert deterministically, with no timer race. The actual
- * *removal* is driven by a per-toast `setTimeout` (matching `submitCommand`'s existing real-timer
- * usage — the codebase uses real timers + a `tick()` helper, not fake timers). Timer handles are
- * tracked so {@link ToastState.clear} can cancel them, which is what keeps the singleton from leaking
- * timers across tests (and resets it between cases).
+ * focusStore's "invariant as a pure function"): a toast is live through its visual exit grace. That
+ * is what the bottom bar renders and what tests assert deterministically, with no timer race. The
+ * actual *removal* is driven by a per-toast `setTimeout` (matching `submitCommand`'s existing
+ * real-timer usage — the codebase uses real timers + a `tick()` helper, not fake timers). Timer
+ * handles are tracked so {@link ToastState.clear} can cancel them, which is what keeps the singleton
+ * from leaking timers across tests (and resets it between cases).
  */
 
 import { createStore, type StoreApi } from 'zustand/vanilla';
@@ -40,6 +39,10 @@ export type ToastSeverity = 'info' | 'warning' | 'error';
 /** Default time-to-live: short and ambient (~5s), so a toast is a glance, not a thing to dismiss. */
 export const DEFAULT_TTL_MS = 5000;
 
+/** Renderer exit duration; the store retains expired toasts for this grace period so the bottom bar
+ * can draw their collapse instead of dropping them abruptly. */
+export const TOAST_EXIT_MS = 400;
+
 /** How many toasts the component shows at once. The store keeps all live toasts; the *view* caps the
  * visible stack (newest-on-top) so a burst doesn't fill the screen. Lives here as the shared policy. */
 export const MAX_VISIBLE_TOASTS = 3;
@@ -50,7 +53,9 @@ export interface Toast {
   readonly id: number;
   readonly text: string;
   readonly severity: ToastSeverity;
-  /** Absolute `Date.now()`-scale deadline; the toast is live while `now <= expiresAt`. */
+  /** Absolute `Date.now()`-scale creation time; renderers derive enter animation from it. */
+  readonly createdAt: number;
+  /** Absolute `Date.now()`-scale hold deadline; visual exit runs after this. */
   readonly expiresAt: number;
   /** How many times this same `text`+`severity` toast has been pushed while live. Starts at 1; a
    * duplicate push bumps this (and resets `expiresAt`) instead of stacking a second identical row, so
@@ -73,7 +78,7 @@ export interface ToastState {
   /**
    * Push a toast. `text` is the message; `severity` defaults to `'info'`, `ttlMs` to
    * {@link DEFAULT_TTL_MS}. Returns the new toast's id (handy for a caller that wants to reason about
-   * it; callers may ignore it). Schedules a self-expiry timer that drops this toast after `ttlMs`.
+   * it; callers may ignore it). Schedules removal after `ttlMs` plus visual exit grace.
    */
   push(text: string, options?: PushOptions): number;
   /** Remove a toast by id now (its timer, if pending, is cancelled). Idempotent. */
@@ -88,13 +93,12 @@ export interface ToastState {
 export type ToastStoreApi = StoreApi<ToastState>;
 
 /**
- * The live toasts at instant `now` — the expiry invariant as a pure function. A toast is live while
- * `now <= expiresAt`; expired ones are filtered out. This is what the component renders (so a toast
- * visually vanishes at its deadline even a hair before its removal timer fires) and what unit tests
- * assert against deterministically, passing an explicit `now` instead of racing real time.
+ * The renderable toasts at instant `now` — the expiry invariant as a pure function. A toast is
+ * renderable while `now <= expiresAt + TOAST_EXIT_MS`, so the bottom bar can animate its collapse.
+ * Unit tests assert this deterministically, passing an explicit `now` instead of racing real time.
  */
 export function selectLiveToasts(toasts: readonly Toast[], now: number): readonly Toast[] {
-  return toasts.filter((t) => now <= t.expiresAt);
+  return toasts.filter((t) => now <= t.expiresAt + TOAST_EXIT_MS);
 }
 
 /**
@@ -112,14 +116,14 @@ export function createToastStore(): ToastStoreApi {
     push(text, options = {}) {
       const ttlMs = options.ttlMs ?? DEFAULT_TTL_MS;
       const severity = options.severity ?? 'info';
-      const expiresAt = Date.now() + ttlMs;
+      const createdAt = Date.now();
+      const expiresAt = createdAt + ttlMs;
 
       // Dedup: if a *live* toast already has this exact `text`+`severity`, bump its deadline and
       // `count` instead of stacking an identical row. This is what keeps a boot flood of the same
       // error from growing the rack into a wall — it reads as `message (×N)` and stays one line.
-      const now = Date.now();
       const existing = get().toasts.find(
-        (t) => t.text === text && t.severity === severity && now <= t.expiresAt,
+        (t) => t.text === text && t.severity === severity && createdAt <= t.expiresAt,
       );
       if (existing !== undefined) {
         const id = existing.id;
@@ -136,19 +140,19 @@ export function createToastStore(): ToastStoreApi {
         const bumped = setTimeout(() => {
           timers.delete(id);
           get().dismiss(id);
-        }, ttlMs);
+        }, ttlMs + TOAST_EXIT_MS);
         bumped.unref?.();
         timers.set(id, bumped);
         return id;
       }
 
       const id = nextId++;
-      const toast: Toast = { id, text, severity, expiresAt, count: 1 };
+      const toast: Toast = { id, text, severity, createdAt, expiresAt, count: 1 };
       set((state) => ({ toasts: [...state.toasts, toast] }));
       const handle = setTimeout(() => {
         timers.delete(id);
         get().dismiss(id);
-      }, ttlMs);
+      }, ttlMs + TOAST_EXIT_MS);
       // Don't keep the event loop alive just for a toast timeout (Node-only; harmless if absent).
       handle.unref?.();
       timers.set(id, handle);
@@ -181,7 +185,7 @@ export function createToastStore(): ToastStoreApi {
  * The app-level singleton toast store — the instance production code imports. The conversations
  * `send` action pushes the send toast here on bus ack; the image-paste slice's `imageDraftStore`
  * will push the image done/failed toast here (it only needs `import { toastStore }` + `push`, left
- * cleanly callable). The {@link ../../components/Toast.js Toast} component subscribes to it at the
- * app root. Tests that exercise the singleton call `toastStore.getState().clear()` in `beforeEach`.
+ * cleanly callable). The bottom bar subscribes to it for composed rendering. Tests that exercise the
+ * singleton call `toastStore.getState().clear()` in `beforeEach`.
  */
 export const toastStore: ToastStoreApi = createToastStore();

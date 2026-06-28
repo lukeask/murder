@@ -14,7 +14,13 @@ export type SettingsCategoryId = 'appearance' | 'harnesses' | 'llm' | 'templates
 export type SettingsRow =
   | { readonly id: string; readonly kind: 'header'; readonly label: string }
   | { readonly id: string; readonly kind: 'modifier'; readonly value: Modifier }
-  | { readonly id: string; readonly kind: 'theme'; readonly value: ThemeId; readonly name: string; readonly builtin: boolean }
+  | {
+      readonly id: string;
+      readonly kind: 'theme';
+      readonly value: ThemeId;
+      readonly name: string;
+      readonly builtin: boolean;
+    }
   | { readonly id: string; readonly kind: 'themeImport' }
   | { readonly id: string; readonly kind: 'gap'; readonly value: number }
   | { readonly id: string; readonly kind: 'vim'; readonly value: boolean }

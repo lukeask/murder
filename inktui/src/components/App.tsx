@@ -4,15 +4,6 @@
  * installed; below it, components are pure functions of their slice (rule 1) and never touch input or
  * the bus directly.
  *
- * Layout (the plan's "Approach › Layout", always-visible chrome around two toggleable regions):
- *
- *   ┌ TopBar ──────────────────────────────┐   toggled-panel labels (plans₁ … crows₀)
- *   │ ┌ left region ┐ ┌ right region ┐      │   left  visible iff any of 1–4 are on
- *   │ │ 1 2 3 4     │ │ 9 usage · 0  │      │   right visible iff 9 or 0 are on
- *   │ └─────────────┘ └──────────────┘      │   (usage sits to the left of crows)
- *   │ ChatInput (always visible)            │   the focus home — never toggled off
- *   └ BottomBar ───────────────────────────┘   contextual hints from the focused keymap
- *
  * Wiring, top to bottom:
  *  - {@link App} takes the two store bundles as props (constructed at the entrypoint with the real
  *    `BusClient`/input stores, or by a test with fakes — rule 4: the bus is injected, never imported
@@ -20,16 +11,9 @@
  *  - {@link Shell} runs *inside* the providers (so it may read the stores) and installs the single
  *    root input loop with {@link useRootInput}. It is the only caller of that hook.
  *
- * Region/panel pattern: each region maps its panel ids to components, rendering a panel only when it
- * is in the visible set. Every panel id now resolves to a real component (C11 filled the last
- * placeholder, `plans`, with {@link PlansPanel}); the flat {@link RosterPanel} is kept aside as the
- * copyable reference implementation. A later chunk that adds a panel swaps its `renderPanel` case for
- * a real panel copied from `RosterPanel`/`CrowsPanel` — *this file changes only at that case*. That
- * is the skeleton's contract: stable composition, panels filled in independently.
- *
- * C13: `Shell` now wires the `spawn` deferred handler so `ctrl+s` opens the spawn wizard. The
- * spawn handler reads the focus + app store at invocation time to derive the spawn context
- * (focused doc → reference-by-path). See {@link deriveSpawnContext} for the C11 seam note.
+ * C13: `Shell` wires the `spawn` deferred handler so `ctrl+s` opens the spawn wizard. The handler
+ * reads the focus + app store at invocation time to derive the spawn context (focused doc →
+ * reference-by-path). See {@link deriveSpawnContext} for the C11 seam note.
  */
 
 import { Box, type DOMElement, type Key, measureElement, Text } from 'ink';
@@ -78,6 +62,7 @@ import {
   renderPaneLayoutPlan,
 } from '../layout/paneBridge.js';
 import { computePaneLayout } from '../layout/paneLayout.js';
+import type { ChatTargetState } from '../layout/paneLayoutTypes.js';
 import { deriveAgentIdentity } from '../selectors/agentIdentity.js';
 import {
   isChatPaneOpen,
@@ -85,7 +70,9 @@ import {
   selectActiveAgentId,
   selectConversationMeta,
   selectCycledTarget,
+  selectFavoritesChatPanes,
   selectLiveChoicePrompt,
+  selectOpenChatPanes,
   selectUserHistory,
 } from '../selectors/conversationsSelectors.js';
 import { submitCommand } from '../store/commandSubmit.js';
@@ -116,7 +103,6 @@ import { Overlay, presentationHidesLayout } from './Overlay.js';
 import { settingsMode } from './SettingsModal.js';
 import type { SpawnContext } from './SpawnWizardModal.js';
 import { spawnWizardMode } from './SpawnWizardModal.js';
-import { Toast } from './Toast.js';
 import { TopBar } from './TopBar.js';
 
 /**
@@ -574,22 +560,18 @@ class BodyErrorBoundary extends Component<{ readonly children: ReactNode }, { ha
  * loop, then lays out the always-visible chrome (top bar, chat input, bottom bar) around the
  * orientation-aware Body.
  *
- * ## Orientation-aware Body (Phase 2)
- * The Body is `[ Rail(left) · Stage · Rail(right) ]`, laid out along an axis chosen by the single
- * {@link useOrientation} call here (one source of truth, threaded to both Rails so they never
- * diverge mid-tree — see the hook's handoff note):
- *  - landscape → Body is a `row`: the rails sit on the left/right of a center Stage (each Rail then
- *    stacks its own panels in a column);
- *  - portrait  → Body is a `column`: the rails stack above/below the Stage (each Rail lays its own
- *    panels out in a row).
- * Each Rail collapses to nothing when it has no visible panels, so the Stage grows to fill whatever
- * the rails leave (full width when both rails are off).
+ * ## Orientation-aware pane body
+ * The Body is rendered from the layout-manager plan. {@link useOrientation} is read once here and
+ * threaded into the pane bridge so panel regions and center-stage panes share one source of truth:
+ *  - landscape → side panels flank the center-stage pane group;
+ *  - portrait  → panel regions stack above/below the center-stage pane group.
+ * Empty panel regions collapse in the layout plan, so the center pane group grows to fill the space
+ * left by visible panels.
  *
- * ## Stage slot (Phase 4a)
- * The center hosts the {@link ./Stage.js Stage}: the favorited-crow chat-history Panes, each a
- * focusable Stage pane reachable by `alt+h/j/k/l`. It grows to fill whatever the rails leave (full
- * width when both rails are off) and clips its own overflow. Phase 4b adds open-document panes to the
- * Stage's right; the `docView` slice is untouched here.
+ * ## Pane bridge
+ * The body hosts the layout-manager output from `src/layout/paneBridge.tsx`: list panels and the
+ * focusable center-stage panes for open chat history and open documents. Legacy Rail/Stage component
+ * entrypoints remain only as compatibility shims for older imports/tests.
  *
  * C13: wires the `spawn` deferred handler so `ctrl+s` opens the spawn wizard. The handler reads the
  * app store at invocation time (not during render) so it always sees current state.
@@ -618,12 +600,12 @@ function Shell({
   // Live terminal size — `rows` bounds the root box so the frame always fits one screen (see the
   // return); `columns` feeds the min-terminal-size guard below.
   const { rows, columns } = useTerminalSize();
-  // The ONE orientation read (rule: one source of truth) — threaded to both Rails and the Body axis.
+  // The ONE orientation read (rule: one source of truth) — threaded into the live pane layout.
   const orientation = useOrientation();
   // The user-configured inter-pane-border gap (settings: "Pane gap", 0–4). One read here, threaded
-  // to the budget engine (so the Stage floor accounts for it) AND down to the Body box / Stage / Rails
-  // as their `columnGap`/`rowGap` — the single source of truth for inter-pane spacing (mirrors the
-  // single orientation read). `0` = flush borders (the default).
+  // to the pane layout engine and down to the Body box as its `columnGap`/`rowGap` — the single
+  // source of truth for inter-pane spacing (mirrors the single orientation read). `0` = flush
+  // borders (the default).
   const paneGap = useAppStore((s) => s.settings.paneGap);
   // L4c-fix2: portrait budgets the rows axis, so it must know the height the Body region actually
   // occupies = `rows − topbar − ChatInput − footer`. Two of those are MEASURED and one is COMPUTED:
@@ -675,10 +657,41 @@ function Shell({
     appState.roster,
     appState.favorites,
   );
+  const chatTargetState = useMemo<ChatTargetState>(() => {
+    const lockedVisibleTargetIds = selectOpenChatPanes(
+      appState.roster,
+      appState.favorites,
+      appState.conversations.paneOverrides,
+    ).panes.map((pane) => pane.agentId);
+    const locked = new Set(lockedVisibleTargetIds);
+    const favoriteOnlyTargetIds = selectFavoritesChatPanes(appState.roster, appState.favorites)
+      .panes.map((pane) => pane.agentId)
+      .filter((agentId) => !locked.has(agentId));
+    return {
+      activeTargetId: activeChatTargetId,
+      lockedVisibleTargetIds,
+      favoriteOnlyTargetIds,
+      ephemeralTargetId:
+        activeChatTargetId !== null && !locked.has(activeChatTargetId) ? activeChatTargetId : null,
+    };
+  }, [
+    appState.roster,
+    appState.favorites,
+    appState.conversations.paneOverrides,
+    activeChatTargetId,
+  ]);
+  useEffect(() => {
+    focus.getState().setChatTargets(chatTargetState);
+  }, [focus, chatTargetState]);
   const paneRequests = useMemo(
     () => buildPaneRequests({ state: appState, visiblePanels, focusedId: effectiveFocus }),
     [appState, visiblePanels, effectiveFocus],
   );
+  useEffect(() => {
+    appStore
+      .getState()
+      .actions.conversations.activatePane(effectiveFocus === CHAT_FOCUS ? null : effectiveFocus);
+  }, [appStore, effectiveFocus]);
   const availableBodyHeight = bodyHeight > 0 ? bodyHeight : Math.max(0, rows - footerLines - 4);
   const paneLayoutPlan = useMemo(
     () =>
@@ -691,10 +704,7 @@ function Shell({
         gap: paneGap,
         requests: paneRequests,
         focusedPaneId: effectiveFocus,
-        chatTargets: {
-          currentTargetId: activeChatTargetId,
-          ephemeralTargetId: null,
-        },
+        chatTargets: chatTargetState,
       }),
     [
       columns,
@@ -707,7 +717,7 @@ function Shell({
       paneGap,
       paneRequests,
       effectiveFocus,
-      activeChatTargetId,
+      chatTargetState,
     ],
   );
   const chatIdentities = useMemo(() => createChatIdentityMap(appState), [appState]);
@@ -795,13 +805,13 @@ function Shell({
     });
   }, [appStore, bindings]);
 
-  // `ctrl+s` → open the spawn wizard (fires when chat OR a highlighted Stage pane is focused; see
+  // `ctrl+s` → open the spawn wizard (fires when chat OR a highlighted pane is focused; see
   // dispatcher.ts). Reads the store imperatively at call time (getState()) so no stale closure; stores
   // are stable references.
   const spawnHandler = (): void => {
-    // Doc-vs-chat file context is decided by the effective focus (stagelayout plan): include the doc
-    // file ONLY when the highlighted pane is the open doc; a highlighted chat pane / the chat input
-    // gets no file prompt, even if a doc is open elsewhere on the Stage.
+    // Doc-vs-chat file context is decided by the effective focus: include the doc file ONLY when
+    // the highlighted pane is the open doc; a highlighted chat pane / the chat input gets no file
+    // prompt, even if a doc is open elsewhere.
     const spawnContext = deriveSpawnContext(appStore, selectEffectiveFocus(focus));
     const actions = createSpawnActions(bus, appStore);
     const modelActions = createHarnessModelsActions(bus);
@@ -912,10 +922,10 @@ function Shell({
     modes.getState().enter(helpMode(modes, bindings.getState().resolved, keymaps));
   };
 
-  // Item 9 super-chords: cycle the chat target (prev/−1, next/+1) through EVERY chattable crow
-  // (spec order — {@link selectCycleTargets}). Cycling is a pure input-routing change: it sets the
-  // send target but does NOT add the crow's chat box to the Stage — the user opens a pane explicitly
-  // with `toggleTargetPane` (ctrl+w). Reads the store imperatively so it always sees current state.
+  // Item 9 super-chords: cycle the chat target (prev/−1, next/+1) through locked-visible targets
+  // first, then favorite-only targets. Cycling is a pure input-routing change: it sets the send
+  // target but does NOT open the crow's chat pane — the user opens a pane explicitly with
+  // `toggleTargetPane` (ctrl+w). Reads the store imperatively so it always sees current state.
   const cycleTarget = (direction: 1 | -1): void => {
     const state = appStore.getState();
     const result = selectCycledTarget(
@@ -928,6 +938,26 @@ function Shell({
       return;
     }
     state.actions.conversations.setActivePaneAgentId(result.agentId);
+  };
+
+  const toggleTargetGroupHandler = (): void => {
+    const state = appStore.getState();
+    const activeAgentId = selectActiveAgentId(state.conversations, state.roster, state.favorites);
+    const lockedVisibleTargetIds = selectOpenChatPanes(
+      state.roster,
+      state.favorites,
+      state.conversations.paneOverrides,
+    ).panes.map((pane) => pane.agentId);
+    const locked = new Set(lockedVisibleTargetIds);
+    const favoriteOnlyTargetIds = selectFavoritesChatPanes(state.roster, state.favorites)
+      .panes.map((pane) => pane.agentId)
+      .filter((agentId) => !locked.has(agentId));
+    const destination = locked.has(activeAgentId ?? '')
+      ? (favoriteOnlyTargetIds[0] ?? null)
+      : (lockedVisibleTargetIds[0] ?? null);
+    if (destination !== null) {
+      state.actions.conversations.setActivePaneAgentId(destination);
+    }
   };
 
   // Item 9 super-chord: toggle the current chat target's pane from the chat box.
@@ -1002,7 +1032,7 @@ function Shell({
       });
   };
 
-  // ctrl+q close-pane chord (stagelayout plan): close the currently-highlighted Stage pane. The
+  // ctrl+q close-pane chord: close the currently-highlighted pane. The
   // dispatcher only fires this when a Stage pane holds the effective focus, so this reads the effective
   // focus and routes by pane kind:
   //  - `stage:doc:<name>` → close the open doc via the docView action (rule 3). The pane unmounts →
@@ -1070,6 +1100,7 @@ function Shell({
       keyHelp: keyHelpHandler,
       cycleTargetPrev: () => cycleTarget(-1),
       cycleTargetNext: () => cycleTarget(1),
+      toggleTargetGroup: toggleTargetGroupHandler,
       toggleTargetPane: toggleTargetPaneHandler,
       murder: murderHandler,
       murderPending: () => murderConfirmStore.getState().pending !== null,
@@ -1102,7 +1133,7 @@ function Shell({
   // hardcoded here, so a new full-screen-like presentation is honoured without editing the shell.
   useModeStore((s) => s.stack);
   const active = selectActiveMode(modes);
-  // Min-terminal-size guard (first-run UX): below the floor the layout degenerates (rails + Stage
+  // Min-terminal-size guard (first-run UX): below the floor the layout degenerates (the pane layout
   // can't share 60-odd columns; modals clamp to ~24 wide; 16 rows barely fits chat + both bars), so
   // render a full-screen notice instead of a broken shell. Checked AFTER every hook (rules of
   // hooks) and BEFORE the fullscreen-mode return so a too-small terminal always shows the notice.
@@ -1146,12 +1177,12 @@ function Shell({
       <Box ref={topbarRef} flexShrink={0} flexDirection="column">
         <TopBar project={project} />
       </Box>
-      {/* The Body region: a fixed-height flex slot between the always-on TopBar and the bottom chrome.
-          `flexGrow={1} flexBasis={0}` takes exactly the remaining height; `overflow="hidden"` clips.
-          A `modal`/`inlayout` mode (item 4d) renders the {@link Overlay} centered INSIDE this slot —
-          so the TopBar stays pinned at the top and the BottomBar at the bottom, the modal floating in
-          the body — rather than the old float-up where the Overlay was a sibling AFTER the bottom
-          chrome. When no mode is up the panels (rails + Stage) fill the slot. */}
+      {/* The Body region: a fixed-height flex slot between the always-on TopBar and the bottom
+          chrome. `flexGrow={1} flexBasis={0}` takes exactly the remaining height; `overflow="hidden"`
+          clips. A `modal`/`inlayout` mode (item 4d) renders the {@link Overlay} centered INSIDE this
+          slot — so the TopBar stays pinned at the top and the BottomBar at the bottom, the modal
+          floating in the body — rather than the old float-up where the Overlay was a sibling AFTER
+          the bottom chrome. When no mode is up the pane layout fills the slot. */}
       <Box flexGrow={1} flexBasis={0} minHeight={0} overflow="hidden" flexDirection="column">
         <BodyErrorBoundary>
           {active !== null ? <Overlay /> : renderPaneLayoutPlan(paneLayoutPlan, paneRenderContext)}
@@ -1165,9 +1196,6 @@ function Shell({
         )}
         <BottomBar />
       </Box>
-      {/* F9: the transient toast rack — bottom-right, subtle. Last child so it rides below the bars;
-          reads the toastStore singleton (pushed by the conversations send action + the image slice). */}
-      <Toast />
     </Box>
   );
 }

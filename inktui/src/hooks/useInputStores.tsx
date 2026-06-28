@@ -25,7 +25,7 @@ import type { ChatHistoryState, ChatHistoryStoreApi } from '../input/chatHistory
 import type { ChatInputState, ChatInputStoreApi } from '../input/chatInputStore.js';
 import type { ChatVimState, ChatVimStoreApi } from '../input/chatVimStore.js';
 import { buildFocusGraph, resolveEffectiveFocus } from '../input/focusGraph.js';
-import { type FocusId, type FocusState, type FocusStoreApi } from '../input/focusStore.js';
+import type { FocusId, FocusState, FocusStoreApi } from '../input/focusStore.js';
 import type { Rect } from '../input/geometry.js';
 import type { PanelKeymap } from '../input/keymap.js';
 import type { KeymapRegistryApi, KeymapRegistryState } from '../input/keymapRegistry.js';
@@ -185,7 +185,12 @@ export function usePanelKeymap<Intent extends string>(
 export function useEffectiveFocus(): FocusId {
   const intended = useFocusStore((s) => s.intendedId);
   const rects = useFocusStore((s) => s.rects);
-  return resolveEffectiveFocus(intended, buildFocusGraph({ rects }));
+  const chatTargets = useFocusStore((s) => s.chatTargets);
+  const graphState = useFocusStore((s) => s.graphState);
+  return resolveEffectiveFocus(
+    intended,
+    buildFocusGraph({ rects, chatTargets, state: graphState }),
+  );
 }
 
 /**
@@ -224,7 +229,7 @@ function measureRect(node: DOMElement): Rect {
  * A terminal resize / orientation flip changes every focusable's Yoga rect, so `ctrl+h/j/k/l` must
  * score over the NEW geometry. The effect below has no dependency array, so it re-measures on every
  * render — but that only helps if the component actually re-renders on a resize. The panels are
- * `React.memo`'d with no props (`<PlansPanel/>`), and a bare resize changes none of the slices they
+ * `React.memo`'d with no props (`<PlansController/>`), and a bare resize changes none of the slices they
  * subscribe to (focus intent, focus geometry, their data) — so without this hook they would NOT
  * re-render, the depless effect would NOT run, and the stored rect would go stale (the bug the spec
  * warns about). We subscribe to {@link useTerminalSize} HERE so a resize re-renders every focusable
@@ -232,7 +237,7 @@ function measureRect(node: DOMElement): Rect {
  * panels + chat; the store dedupes unchanged rects, so a no-op resize causes no re-render churn.
  *
  * ## Unmount cleanup (Phase 4a — Stage panes)
- * A Stage pane ({@link ../components/Stage.js}) is a dynamic focusable: it leaves the tree when its
+ * A Stage pane rendered by the pane bridge is a dynamic focusable: it leaves the tree when its
  * crow is un-favorited. On unmount it must drop its rect so the next focus graph excludes it and
  * effective focus re-homes to chat.
  * The cleanup lives in a SEPARATE unmount-only effect (deps `[id, unmeasure]`), NOT folded into the
@@ -245,6 +250,8 @@ function measureRect(node: DOMElement): Rect {
 export function useMeasureFocus(id: FocusId, ref: React.RefObject<DOMElement | null>): void {
   const measure = useFocusStore((s) => s.measure);
   const unmeasure = useFocusStore((s) => s.unmeasure);
+  const markPaneOpened = useFocusStore((s) => s.markPaneOpened);
+  const markPaneClosed = useFocusStore((s) => s.markPaneClosed);
   // Subscribe to the live terminal size: a resize re-renders this focusable (it's otherwise a
   // no-prop memo that wouldn't re-render), which re-runs the depless measure effect → fresh rect.
   useTerminalSize();
@@ -255,7 +262,13 @@ export function useMeasureFocus(id: FocusId, ref: React.RefObject<DOMElement | n
   });
   // Unmount-only: drop this focusable's rect when it leaves the tree (Phase 4a re-home for Stage
   // panes). Deps `[id, unmeasure]` so it does NOT run on every render (see the header note).
-  useEffect(() => () => unmeasure(id), [id, unmeasure]);
+  useEffect(() => {
+    markPaneOpened(id);
+    return () => {
+      markPaneClosed(id);
+      unmeasure(id);
+    };
+  }, [id, markPaneClosed, markPaneOpened, unmeasure]);
 }
 
 /** A stable ref for a measured focusable `<Box>`. Sugar so a panel writes `const ref = useFocusRef()`

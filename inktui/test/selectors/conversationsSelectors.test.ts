@@ -370,29 +370,24 @@ describe('chat-target cycling (item 9)', () => {
   ];
   const roster = { ...initialRosterState, rows, status: 'ready' as const };
 
-  it('cycle = EVERY chattable crow in spec order, regardless of pane open/closed', () => {
-    // Cycling is pure input routing now (it no longer opens panes), so the universe is all chattable
-    // crows in spec order (collaborator → planner → rogue → ticket) — pane overrides do not gate it.
+  it('cycle = locked-visible targets first, favorite-only targets second', () => {
     const conversations = {
       ...initialConversationsState,
       paneOverrides: new Map([['p1', false]]),
     };
     const targets = selectCycleTargets(conversations, roster, favSet('p1'));
-    expect(targets.map((t) => t.agentId)).toEqual(['collab', 'p1', 'r1']);
+    expect(targets.map((t) => t.agentId)).toEqual(['collab', 'r1', 'p1']);
   });
 
-  it('reaches a non-favorited crow whose pane is closed (no favorites needed)', () => {
-    // No favorites, no overrides: the planner p1 is neither default-favorited nor pinned, yet it is
-    // still in the cycle (the user can target it without its chat box being on the Stage).
+  it('does not cycle non-favorited closed targets', () => {
     const targets = selectCycleTargets(initialConversationsState, roster, initialFavoritesState);
-    expect(targets.map((t) => t.agentId)).toEqual(['collab', 'p1', 'r1']);
+    expect(targets.map((t) => t.agentId)).toEqual(['collab', 'r1']);
   });
 
   it('next steps forward through the cycle from the current target', () => {
-    // Active = collab (first open pane). Next → p1 (planner) — its pane is closed but cycling reaches
-    // it anyway; needsOpen reports the closed state but the caller no longer opens it.
+    // Active = collab (first open pane). Next → r1 (the next locked-visible target).
     const result = selectCycledTarget(initialConversationsState, roster, initialFavoritesState, 1);
-    expect(result).toEqual({ agentId: 'p1', needsOpen: true });
+    expect(result).toEqual({ agentId: 'r1', needsOpen: false });
   });
 
   it('prev wraps around to the last entry', () => {
@@ -419,14 +414,14 @@ describe('chat-target cycling (item 9)', () => {
   });
 
   it('selectAdjacentTargets names the prev/next crows around the current target', () => {
-    // Active = collab (index 0 of [collab, p1, r1]) → prev wraps to r1, next is p1.
+    // Active = collab in [collab, r1] → both directions reach the other target.
     const { prev, next } = selectAdjacentTargets(
       initialConversationsState,
       roster,
       initialFavoritesState,
     );
     expect(prev?.agentId).toBe('r1');
-    expect(next?.agentId).toBe('p1');
+    expect(next?.agentId).toBe('r1');
   });
 
   it('selectAdjacentTargets returns null/null when fewer than two crows', () => {

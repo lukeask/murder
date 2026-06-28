@@ -123,8 +123,5 @@ export function selectHistoryView(
 export function useHistoryView(state: HistoryState, mode: HistoryMode): HistoryView {
   // Bucket `now` to the minute so the memo doesn't recompute on every render but ages still tick.
   const nowBucket = Math.floor(Date.now() / 60000);
-  return useMemo(
-    () => selectHistoryView(state, mode, nowBucket * 60000),
-    [state, mode, nowBucket],
-  );
+  return useMemo(() => selectHistoryView(state, mode, nowBucket * 60000), [state, mode, nowBucket]);
 }

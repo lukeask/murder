@@ -5,7 +5,11 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { buildFocusGraph, resolveEffectiveFocus } from '../../src/input/focusGraph.js';
+import {
+  buildFocusGraph,
+  navigateFocus,
+  resolveEffectiveFocus,
+} from '../../src/input/focusGraph.js';
 import type { FocusId } from '../../src/input/focusStore.js';
 import {
   CHAT_FOCUS,
@@ -159,6 +163,66 @@ describe('focusStore — effective focus & re-home', () => {
   });
 });
 
+describe('focusStore — open pane history', () => {
+  const plansRect: Rect = { x: 0, y: 0, width: 20, height: 4 };
+  const ticketsRect: Rect = { x: 20, y: 0, width: 20, height: 4 };
+  const stagePane: StagePaneId = 'stage:chat:a1';
+  const stageRect: Rect = { x: 40, y: 0, width: 20, height: 4 };
+
+  it('preserves first-open order across remeasure/reorder and appends reopened panes', () => {
+    const panels = createPanelStore(['plans', 'tickets']);
+    const focus = createFocusStore(panels);
+
+    focus.getState().markPaneOpened('plans');
+    focus.getState().measure('plans', plansRect);
+    focus.getState().markPaneOpened('tickets');
+    focus.getState().measure('tickets', ticketsRect);
+    focus.getState().markPaneOpened(stagePane);
+    focus.getState().measure(stagePane, stageRect);
+
+    expect(focus.getState().graphState.openPaneIdsByOpenedAt).toEqual([
+      'plans',
+      'tickets',
+      stagePane,
+    ]);
+
+    focus.getState().markPaneOpened('plans');
+    focus.getState().measure('plans', { x: 80, y: 0, width: 20, height: 4 });
+    focus.getState().measure('tickets', { x: 0, y: 0, width: 20, height: 4 });
+    focus.getState().measure(stagePane, { x: 40, y: 0, width: 20, height: 4 });
+
+    expect(focus.getState().graphState.openPaneIdsByOpenedAt).toEqual([
+      'plans',
+      'tickets',
+      stagePane,
+    ]);
+
+    focus.getState().markPaneClosed('plans');
+    focus.getState().unmeasure('plans');
+
+    expect(focus.getState().graphState.openPaneIdsByOpenedAt).toEqual(['tickets', stagePane]);
+
+    focus.getState().markPaneOpened('plans');
+    focus.getState().measure('plans', plansRect);
+
+    expect(focus.getState().graphState.openPaneIdsByOpenedAt).toEqual([
+      'tickets',
+      stagePane,
+      'plans',
+    ]);
+  });
+
+  it('does not admit chat into pane open history', () => {
+    const panels = createPanelStore();
+    const focus = createFocusStore(panels);
+
+    focus.getState().markPaneOpened(CHAT_FOCUS);
+    focus.getState().measure(CHAT_FOCUS, UNIT_RECT);
+
+    expect(focus.getState().graphState.openPaneIdsByOpenedAt).toEqual([]);
+  });
+});
+
 describe('focusStore.navigate (geometry-driven)', () => {
   // plans (left) and tickets (right) side by side, chat below — like the real layout.
   const plansRect: Rect = { x: 0, y: 0, width: 20, height: 4 };
@@ -207,6 +271,29 @@ describe('focusStore.navigate (geometry-driven)', () => {
     const before = focus.getState().rects;
     focus.getState().measure('plans', plansRect);
     expect(focus.getState().rects).toBe(before);
+  });
+});
+
+describe('focusGraph — chat target partitions', () => {
+  it('orders locked, ephemeral, and favorite-only virtual chat targets around the active target', () => {
+    const graph = buildFocusGraph({
+      rects: new Map<FocusId, Rect>([[CHAT_FOCUS, { x: 0, y: 0, width: 40, height: 3 }]]),
+      chatTargets: {
+        activeTargetId: 'agent-b',
+        lockedVisibleTargetIds: ['agent-a'],
+        ephemeralTargetId: 'agent-b',
+        favoriteOnlyTargetIds: ['agent-c'],
+      },
+    });
+
+    expect(graph.chatTargetVertexIds).toEqual([
+      'chat:target:agent-a',
+      'chat:target:agent-b',
+      'chat:target:agent-c',
+    ]);
+    expect(graph.activeChatTargetVertexId).toBe('chat:target:agent-b');
+    expect(navigateFocus(graph, CHAT_FOCUS, 'right').chatTargetId).toBe('agent-c');
+    expect(navigateFocus(graph, CHAT_FOCUS, 'left').chatTargetId).toBe('agent-a');
   });
 });
 

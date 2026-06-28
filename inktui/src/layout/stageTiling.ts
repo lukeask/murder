@@ -5,7 +5,7 @@
  * **chat histories** (right-aligned in landscape / bottom in portrait). How they split the Stage —
  * and how the chats tile among themselves — is a pure function of *how many* of each there are and the
  * terminal {@link Orientation}. Isolating that decision here (no React, no Ink) keeps the rule
- * unit-testable and keeps {@link ../components/Stage.tsx Stage} a thin renderer of the result.
+ * unit-testable and lets the pane bridge render the result without layout logic in pane components.
  *
  * ## The intuitions this encodes (landscape, one document)
  *  - **1 doc + 1 chat** — side by side, equal halves.
@@ -98,9 +98,9 @@ export interface StageLayout<T> {
 
 /**
  * Resolve the complete Stage arrangement: the region weights plus the chat panes chunked into grid
- * rows. The single entry point {@link ../components/Stage.tsx Stage} calls — it then renders the doc
- * region (when `docWeight > 0`) and one cross-axis line per `rows` entry, both with a `flexBasis: 0`
- * cell discipline so sizing is weight-driven and order-independent.
+ * rows. The pane bridge renders the doc region (when `docWeight > 0`) and one cross-axis line per
+ * `rows` entry, both with a `flexBasis: 0` cell discipline so sizing is weight-driven and
+ * order-independent.
  */
 export function computeStageLayout<T>(
   chats: readonly T[],

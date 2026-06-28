@@ -1,9 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { UsagePanel, type UsagePanelGroup } from '../../../src/components/panes/UsagePanel.js';
+import {
+  UsageSurface,
+  type UsageSurfaceGroup,
+} from '../../../src/components/panes/UsageSurface.js';
+import { getTheme } from '../../../src/theme/themeStore.js';
 import { renderInkFixture, stripAnsiSgr } from '../../fixtures/pane_rendering/renderInkFixture.js';
 import type { PaneFixture } from '../../fixtures/pane_rendering/types.js';
 
-const wideShortUsageGroups: readonly UsagePanelGroup[] = [
+const wideShortUsageGroups: readonly UsageSurfaceGroup[] = [
   {
     harness: 'claude',
     steering: 'auto',
@@ -21,7 +25,7 @@ const wideShortUsageGroups: readonly UsagePanelGroup[] = [
   },
 ];
 
-const singleWideUsageGroup: readonly UsagePanelGroup[] = [
+const singleWideUsageGroup: readonly UsageSurfaceGroup[] = [
   {
     harness: 'claude',
     steering: 'auto',
@@ -33,8 +37,8 @@ const singleWideUsageGroup: readonly UsagePanelGroup[] = [
   },
 ];
 
-const usageSpreadFixture: PaneFixture<readonly UsagePanelGroup[]> = {
-  id: 'usage-panel-spread',
+const usageSpreadFixture: PaneFixture<readonly UsageSurfaceGroup[]> = {
+  id: 'usage-surface-spread',
   description: 'Usage pane spread-layout regression fixture',
   sizes: [
     { id: 'wide-short', width: 60, height: 5 },
@@ -46,11 +50,17 @@ const usageSpreadFixture: PaneFixture<readonly UsagePanelGroup[]> = {
     single: singleWideUsageGroup,
   },
   render: ({ data, width, height, focused }) => (
-    <UsagePanel width={width} height={height} focused={focused} groups={data} />
+    <UsageSurface
+      width={width}
+      height={height}
+      focused={focused}
+      theme={getTheme()}
+      groups={data}
+    />
   ),
 };
 
-describe('UsagePanel — spread layout', () => {
+describe('UsageSurface — spread layout', () => {
   it('spreads provider groups horizontally when the pane is short and wide', async () => {
     const rendered = await renderInkFixture({
       fixture: usageSpreadFixture,

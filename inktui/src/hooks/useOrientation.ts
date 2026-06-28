@@ -1,8 +1,8 @@
 /**
  * `useOrientation` — derive a `'portrait' | 'landscape'` layout mode from the live terminal size.
  *
- * The layout shell (Phase 2) flips its Body `flexDirection` on this value: landscape lays the rails
- * and stage out in a `row` (side-by-side), portrait stacks them in a `column` (top-to-bottom). The
+ * The layout shell flips its pane regions on this value: landscape lays side panes and center panes
+ * out in a `row` (side-by-side), portrait stacks them in a `column` (top-to-bottom). The
  * decision is purely a function of the terminal's `columns`/`rows` aspect ratio — a terminal is
  * "portrait" when it is *taller than it is wide* by more than a comfortable margin.
  *
@@ -22,11 +22,10 @@
  * without a terminal (the threshold is the load-bearing decision; the hook is thin glue over
  * {@link useTerminalSize}, which already re-renders the shell on resize — rule: no formatting/bus).
  *
- * ## Phase 2/3 handoff
- *  - The Shell calls `useOrientation()` once and threads the value to `<Body>` (flexDirection) and
- *    to each `<Rail orientation paneOrientation>` so a Rail flips its Panes between stack (landscape:
- *    `column`) and side-by-side (portrait: `row`). Pass the same value down — do not call the hook
- *    per-Rail (one source of truth; avoids any divergence mid-tree).
+ * ## Shell/layout handoff
+ *  - The Shell calls `useOrientation()` once and threads the value to the layout manager so side-pane
+ *    groups and center panes share the same row-vs-column decision. Pass the same value down — do not
+ *    call the hook per pane group (one source of truth; avoids any divergence mid-tree).
  *  - A resize re-runs {@link useTerminalSize}, which re-renders, which re-evaluates this hook and
  *    re-measures every Pane (focus rects update) — so directional `ctrl+hjkl` adapts to the new
  *    orientation for free, per the spec's focus model.

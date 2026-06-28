@@ -116,7 +116,12 @@ describe('selectTicketsView — presentation (rule 2 proof)', () => {
     it('renders children indented under their parent', () => {
       const view = selectTicketsView(
         state([
-          row({ id: 'T-child', title: 'Child', parent: 'T-parent', lastUpdateAt: '2026-06-02T00:00:00' }),
+          row({
+            id: 'T-child',
+            title: 'Child',
+            parent: 'T-parent',
+            lastUpdateAt: '2026-06-02T00:00:00',
+          }),
           row({ id: 'T-parent', title: 'Parent', lastUpdateAt: '2026-06-01T00:00:00' }),
         ]),
       );

@@ -54,6 +54,7 @@ export type ActionId =
   | 'global.quickNote' // ctrl+n — open the quick-note capture (plain, not command-modified)
   | 'global.keyHelp' // ? — open the keybinding help overlay (see the ACTIONS note on reachability)
   | 'global.cycleTargetPrev' // alt+h / ctrl+h — cycle the chat target to the previous one (chat-focus only)
+  | 'global.toggleTargetGroup' // ctrl+j — toggle chat target between locked-visible and favorite-only groups
   | 'global.cycleTargetNext' // alt+l / ctrl+l — cycle the chat target to the next one (chat-focus only)
   | 'global.toggleTargetPane' // alt+w / ctrl+w — toggle the current chat target's pane (chat-focus only)
   | 'global.murder' // ctrl+m — arm the murder confirm for the targeted crow (plain, kitty side-channel)
@@ -193,6 +194,12 @@ export const ACTIONS: Readonly<Record<ActionId, ActionDef>> = {
     default: command('l'),
     description: 'next target',
     rebindable: true,
+  },
+  'global.toggleTargetGroup': {
+    id: 'global.toggleTargetGroup',
+    default: plain({ input: 'j', key: { ctrl: true } }),
+    description: 'target group',
+    rebindable: false,
   },
   'global.toggleTargetPane': {
     id: 'global.toggleTargetPane',

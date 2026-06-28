@@ -366,11 +366,7 @@ export const ChatInput = memo(function ChatInput(): React.JSX.Element {
       </Box>
       {/* Bottom border overlay: `╰──…── ◂ prev · next ▸ ─╯` riding Ink's own bottom border
           above (net-zero height). Labels appear only when ≥1 adjacent crow exists. */}
-      <PaneBorderBottom
-        borderColor={borderColor}
-        glyphs={borderGlyphs}
-        rightExtra={footerRight}
-      />
+      <PaneBorderBottom borderColor={borderColor} glyphs={borderGlyphs} rightExtra={footerRight} />
     </Box>
   );
 });

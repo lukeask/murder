@@ -262,7 +262,10 @@ function toTicketRowView(row: TicketRow, index: number, depth: number, now: numb
     id: row.id,
     // col 1 — title pre-indented for a subticket (mirrors plans' `toRowView`).
     idCell: truncate(row.id, ID_WIDTH),
-    titleCell: depth > 0 ? `${CHILD_INDENT}${truncate(row.title, TITLE_WIDTH)}` : truncate(row.title, TITLE_WIDTH),
+    titleCell:
+      depth > 0
+        ? `${CHILD_INDENT}${truncate(row.title, TITLE_WIDTH)}`
+        : truncate(row.title, TITLE_WIDTH),
     // col 2 — status rendered as a glyph (Goal A).
     statusCell: status.glyph,
     statusTone: status.tone,

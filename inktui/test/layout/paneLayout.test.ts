@@ -67,10 +67,7 @@ describe('computePaneLayout', () => {
     });
 
     expect(plan.denials).toEqual([]);
-    expect(plan.allocations.map((allocation) => allocation.request.id)).toEqual([
-      'usage',
-      'crows',
-    ]);
+    expect(plan.allocations.map((allocation) => allocation.request.id)).toEqual(['usage', 'crows']);
     expect(plan.allocations[0]?.rect.y).toBe(0);
     expect(plan.allocations[1]?.rect.y).toBe(0);
     expect(plan.allocations[0]?.rect.height).toBe(7);

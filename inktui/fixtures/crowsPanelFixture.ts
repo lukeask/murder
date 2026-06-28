@@ -1,11 +1,11 @@
-import type { CrowsPanelRow } from '../src/components/panes/CrowsPanel.js';
+import type { CrowsSurfaceRow } from '../src/components/panes/CrowsSurface.js';
 import { classifyCrowHealth } from '../src/selectors/crowHealthSelectors.js';
 import type { CrowFixtureRow } from './data/paneFixtureData.js';
 
-/** Map fixture rows into the store-free CrowsPanel row shape. */
-export function crowsPanelRowsFromFixture(
+/** Map fixture rows into the store-free CrowsSurface row shape. */
+export function crowsSurfaceRowsFromFixture(
   rows: readonly CrowFixtureRow[],
-): readonly CrowsPanelRow[] {
+): readonly CrowsSurfaceRow[] {
   return rows.map((row) => ({
     id: row.id,
     group: row.group,

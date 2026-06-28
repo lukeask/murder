@@ -44,13 +44,13 @@ const PANE_SIZES: readonly FixtureSize[] = [
   { id: 'minimum', width: 20, height: 5 },
 ];
 
-const TICKETS_PANEL_SIZES: readonly FixtureSize[] = [
+const TICKETS_SURFACE_SIZES: readonly FixtureSize[] = [
   { id: 'preferred', width: 54, height: 14 },
   { id: 'cramped', width: 30, height: 8 },
   { id: 'minimum', width: 25, height: 5 },
 ];
 
-const TREE_PANEL_SIZES: readonly FixtureSize[] = [
+const TREE_SURFACE_SIZES: readonly FixtureSize[] = [
   { id: 'preferred', width: 54, height: 14 },
   { id: 'cramped', width: 30, height: 8 },
   { id: 'minimum', width: 25, height: 10 },
@@ -659,7 +659,7 @@ export const paneFixtures: readonly PaneFixture[] = [
   },
   {
     id: 'plans-panel',
-    description: 'Store-free PlansPanel body wrapper using Pane + ResourceRow + Ledger.',
+    description: 'Store-free PlansSurface body wrapper using Pane + ResourceRow + Ledger.',
     sizes: PANE_SIZES,
     data: resourceRows,
     render: ({ data, focused, width, height }) => (
@@ -675,7 +675,7 @@ export const paneFixtures: readonly PaneFixture[] = [
   },
   {
     id: 'notes-panel',
-    description: 'Store-free NotesPanel body wrapper using Pane + ResourceRow + Ledger.',
+    description: 'Store-free NotesSurface body wrapper using Pane + ResourceRow + Ledger.',
     sizes: PANE_SIZES,
     // biome-ignore lint/complexity/useLiteralKeys: noPropertyAccessFromIndexSignature requires bracket access.
     data: { mixed: resourceRows['mixed'] ?? [], empty: [] },
@@ -692,7 +692,7 @@ export const paneFixtures: readonly PaneFixture[] = [
   },
   {
     id: 'reports-panel',
-    description: 'Store-free ReportsPanel body wrapper using Pane + ResourceRow + Ledger.',
+    description: 'Store-free ReportsSurface body wrapper using Pane + ResourceRow + Ledger.',
     sizes: PANE_SIZES,
     // biome-ignore lint/complexity/useLiteralKeys: noPropertyAccessFromIndexSignature requires bracket access.
     data: { mixed: resourceRows['overflow'] ?? [], empty: [] },
@@ -730,8 +730,8 @@ export const paneFixtures: readonly PaneFixture[] = [
   },
   {
     id: 'tickets-panel',
-    description: 'Store-free TicketsPanel body wrapper with responsive multi-column rows.',
-    sizes: TICKETS_PANEL_SIZES,
+    description: 'Store-free TicketsSurface body wrapper with responsive multi-column rows.',
+    sizes: TICKETS_SURFACE_SIZES,
     data: ticketRows,
     render: ({ data, focused, width, height }) => (
       <TicketsFixture
@@ -744,7 +744,7 @@ export const paneFixtures: readonly PaneFixture[] = [
   },
   {
     id: 'crows-panel',
-    description: 'Store-free CrowsPanel body wrapper with grouped rows.',
+    description: 'Store-free CrowsSurface body wrapper with grouped rows.',
     sizes: PANE_SIZES,
     data: crowRows,
     render: ({ data, focused, width, height }) => (
@@ -773,7 +773,7 @@ export const paneFixtures: readonly PaneFixture[] = [
   },
   {
     id: 'history-panel',
-    description: 'Store-free HistoryPanel body wrapper with fixed-height intention rows.',
+    description: 'Store-free HistorySurface body wrapper with fixed-height intention rows.',
     sizes: PANE_SIZES,
     data: historyRows,
     render: ({ data, focused, width, height }) => (
@@ -787,7 +787,7 @@ export const paneFixtures: readonly PaneFixture[] = [
   },
   {
     id: 'usage-panel',
-    description: 'Store-free UsagePanel body wrapper with colored gauges.',
+    description: 'Store-free UsageSurface body wrapper with colored gauges.',
     sizes: PANE_SIZES,
     data: usageGroups,
     render: ({ data, focused }) => (
@@ -796,8 +796,8 @@ export const paneFixtures: readonly PaneFixture[] = [
   },
   {
     id: 'tree-panel',
-    description: 'Store-free TreePanel body wrapper with deterministic railway rows.',
-    sizes: TREE_PANEL_SIZES,
+    description: 'Store-free TreeSurface body wrapper with deterministic railway rows.',
+    sizes: TREE_SURFACE_SIZES,
     data: transitData,
     render: ({ data, focused }) => (
       <TransitFixture data={data as TransitFixtureData} focused={focused} />

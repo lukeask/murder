@@ -3,10 +3,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import {
-  formatRelativeAge,
-  selectHistoryView,
-} from '../../src/selectors/historySelectors.js';
+import { formatRelativeAge, selectHistoryView } from '../../src/selectors/historySelectors.js';
 import type { HistoryRow, HistoryState } from '../../src/store/history/historySlice.js';
 
 function row(overrides: Partial<HistoryRow>): HistoryRow {

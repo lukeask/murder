@@ -202,8 +202,8 @@ function formatSecondLine(
   if (budget <= 0) {
     return indent;
   }
-  let dateLevel = layout.dateLevel;
-  let showCharCount = layout.showCharCount;
+  const dateLevel = layout.dateLevel;
+  const showCharCount = layout.showCharCount;
   let date = compressDate(row.updatedAt, dateLevel);
   let meta = fitMetadata(row.charCount, date, budget, showCharCount);
   if (meta.length > 0) {

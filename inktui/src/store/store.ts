@@ -115,11 +115,7 @@ import {
   type TemplatesState,
 } from './templates/templatesSlice.js';
 import { createThemesActions, type ThemesActions } from './themes/themesActions.js';
-import {
-  createThemesSlice,
-  initialThemesState,
-  type ThemesState,
-} from './themes/themesSlice.js';
+import { createThemesSlice, initialThemesState, type ThemesState } from './themes/themesSlice.js';
 import {
   createTicketDetailActions,
   type TicketDetailActions,

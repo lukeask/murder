@@ -285,7 +285,7 @@ function trackGlyph(glyphs: PaneBorderGlyphs): string {
  * `height` is the pane's measured inner row count (the same fill-box measurement that drives the
  * window), so the column draws `height` track cells + the corner = exactly the content box's height.
  * A `null` thumb (content fits) draws a plain `│` track — visually just the border. Pure function of
- * its props (rule 1); the thumb geometry is {@link ../components/DocPane.js computeScrollThumb}.
+ * its props (rule 1); the thumb geometry is {@link ./panes/docWindow.js computeScrollThumb}.
  */
 export function PaneBorderRight({
   height,

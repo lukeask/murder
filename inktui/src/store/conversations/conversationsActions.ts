@@ -242,6 +242,25 @@ export interface ConversationsActions {
    * The `t` (alt+t / ctrl+t) chord's handler. No bus call.
    */
   cyclePaneViewMode(agentId: string): void;
+
+  /** Mark a pane/panel as activated for layout reap aging. Priority 0 panes remain unreapable in
+   * layout; this only tracks relative age for positive-priority requests. */
+  activatePane(paneId: string | null): void;
+}
+
+function activatePaneReapAges(
+  current: ReadonlyMap<string, number>,
+  paneId: string | null,
+): ReadonlyMap<string, number> {
+  if (paneId === null) {
+    return current;
+  }
+  const next = new Map<string, number>();
+  for (const [id, age] of current) {
+    next.set(id, id === paneId ? 0 : age > 0 ? age + 1 : 1);
+  }
+  next.set(paneId, 0);
+  return next;
 }
 
 export function createConversationsActions(
@@ -334,7 +353,14 @@ export function createConversationsActions(
         }
         // Keep the pane for this agent active after sending.
         store.setState((state) => ({
-          conversations: { ...state.conversations, activePaneAgentId: agentId },
+          conversations: {
+            ...state.conversations,
+            activePaneAgentId: agentId,
+            paneReapAges: activatePaneReapAges(
+              state.conversations.paneReapAges,
+              `stage:chat:${agentId}`,
+            ),
+          },
         }));
       } catch (error: unknown) {
         // Surface, do NOT silently swallow: a dropped/timed-out send used to vanish with no signal,
@@ -495,7 +521,23 @@ export function createConversationsActions(
 
     setActivePaneAgentId(agentId: string | null): void {
       store.setState((state) => ({
-        conversations: { ...state.conversations, activePaneAgentId: agentId },
+        conversations: {
+          ...state.conversations,
+          activePaneAgentId: agentId,
+          paneReapAges: activatePaneReapAges(
+            state.conversations.paneReapAges,
+            agentId === null ? null : `stage:chat:${agentId}`,
+          ),
+        },
+      }));
+    },
+
+    activatePane(paneId: string | null): void {
+      store.setState((state) => ({
+        conversations: {
+          ...state.conversations,
+          paneReapAges: activatePaneReapAges(state.conversations.paneReapAges, paneId),
+        },
       }));
     },
 

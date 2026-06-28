@@ -1,6 +1,6 @@
 /**
  * App-shell integration test — the skeleton-level companion to the per-panel test idiom
- * ({@link ../components/RosterPanel.test.tsx}). Renders the real {@link App} against a
+ * Renders the real {@link App} against a
  * `FakeBusClient`-backed store + the C4 input stores and asserts the composition: the bars, the
  * always-visible chat input, and region visibility driven by the panel set.
  *

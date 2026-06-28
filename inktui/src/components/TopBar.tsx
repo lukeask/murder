@@ -50,13 +50,8 @@ export const TopBar = memo(function TopBar({
             // Toggled panels are bold/coloured; off panels are dim — so the bar reads view state at a
             // glance (the plan's whole point: the top bar shows what's on, not just the active view).
             <Box key={label.id} flexDirection="row" columnGap={1}>
-              {label.dividerBefore === true && (
-                <Text color={theme.muted}>·</Text>
-              )}
-              <Text
-                bold={label.active}
-                color={label.active ? theme.active : theme.inactive}
-              >
+              {label.dividerBefore === true && <Text color={theme.muted}>·</Text>}
+              <Text bold={label.active} color={label.active ? theme.active : theme.inactive}>
                 {label.text}
               </Text>
             </Box>

@@ -1,14 +1,11 @@
-import { describe, expect, it } from 'vitest';
 import { isValidElement, type ReactElement } from 'react';
-import {
-  crowsPanelRowsFromView,
-  historyPanelRowsFromView,
-  renderPaneLayoutPlan,
-  ticketsPanelRowsFromView,
-  treePanelDataFromView,
-  usagePanelGroupsFromState,
-  usagePaneSizing,
-} from '../../src/layout/paneBridge.js';
+import { describe, expect, it } from 'vitest';
+import { crowsSurfaceRowsFromView } from '../../src/components/panes/CrowsController.js';
+import { historySurfaceRowsFromView } from '../../src/components/panes/HistoryController.js';
+import { ticketsSurfaceRowsFromView } from '../../src/components/panes/TicketsController.js';
+import { treeSurfaceDataFromView } from '../../src/components/panes/TreeController.js';
+import { usageSurfaceGroupsFromState } from '../../src/components/panes/UsageController.js';
+import { renderPaneLayoutPlan, usagePaneSizing } from '../../src/layout/paneBridge.js';
 import { computePaneLayout } from '../../src/layout/paneLayout.js';
 import type { PaneRequest } from '../../src/layout/paneLayoutTypes.js';
 import type { CrowsView } from '../../src/selectors/crowsSelectors.js';
@@ -16,9 +13,9 @@ import type { HistoryRowView } from '../../src/selectors/historySelectors.js';
 import type { TicketRowView } from '../../src/selectors/ticketsSelectors.js';
 import type { TransitCursor, TransitView } from '../../src/selectors/transitSelectors.js';
 import type { AppStore } from '../../src/store/store.js';
+import type { UsageRow, UsageState } from '../../src/store/usage/usageSlice.js';
 import type { Theme } from '../../src/theme/buildTheme.js';
 import { theme } from '../../src/theme.js';
-import type { UsageRow, UsageState } from '../../src/store/usage/usageSlice.js';
 
 function row(harness: string, windowKey: string): UsageRow {
   return {
@@ -58,8 +55,13 @@ function paneRequest(overrides: Partial<PaneRequest> = {}): PaneRequest {
 }
 
 function childrenOf(element: ReactElement): readonly unknown[] {
-  const children = element.props.children as unknown;
+  const props = element.props as { readonly children?: unknown };
+  const children = props.children;
   return Array.isArray(children) ? children : [children];
+}
+
+function propsOf(element: ReactElement): Record<string, unknown> {
+  return element.props as Record<string, unknown>;
 }
 
 describe('usagePaneSizing', () => {
@@ -90,7 +92,7 @@ describe('usagePaneSizing', () => {
   });
 
   it('maps live usage state into the new explicit usage pane props', () => {
-    const groups = usagePanelGroupsFromState({
+    const groups = usageSurfaceGroupsFromState({
       rows: [
         {
           harness: 'codex',
@@ -153,21 +155,22 @@ describe('renderPaneLayoutPlan', () => {
       return;
     }
 
-    expect(left.props.flexDirection).toBe('column');
+    expect(propsOf(left)['flexDirection']).toBe('column');
     const rows = childrenOf(left);
     expect(rows).toHaveLength(3);
     for (const row of rows) {
       expect(isValidElement(row)).toBe(true);
       if (isValidElement(row)) {
-        expect(row.props.flexDirection).toBe('row');
-        expect(row.props.width).toBe(25);
-        expect(row.props.height).toBe(5);
+        const rowProps = propsOf(row);
+        expect(rowProps['flexDirection']).toBe('row');
+        expect(rowProps['width']).toBe(25);
+        expect(rowProps['height']).toBe(5);
       }
     }
   });
 });
 
-describe('crowsPanelRowsFromView', () => {
+describe('crowsSurfaceRowsFromView', () => {
   it('maps selector-owned CrowsView rows into the explicit pane contract', () => {
     const view: CrowsView = {
       status: 'ready',
@@ -209,7 +212,7 @@ describe('crowsPanelRowsFromView', () => {
       ],
     };
 
-    expect(crowsPanelRowsFromView(view)).toEqual([
+    expect(crowsSurfaceRowsFromView(view)).toEqual([
       {
         id: 'collab-1',
         group: 'Collaborator',
@@ -232,7 +235,7 @@ describe('crowsPanelRowsFromView', () => {
   });
 });
 
-describe('ticketsPanelRowsFromView', () => {
+describe('ticketsSurfaceRowsFromView', () => {
   it('drops selector-only fields while preserving explicit ticket pane cells', () => {
     const rows: TicketRowView[] = [
       {
@@ -254,7 +257,7 @@ describe('ticketsPanelRowsFromView', () => {
       },
     ];
 
-    expect(ticketsPanelRowsFromView(rows)).toEqual([
+    expect(ticketsSurfaceRowsFromView(rows)).toEqual([
       {
         id: 'T-1',
         idCell: 'T-1',
@@ -274,7 +277,7 @@ describe('ticketsPanelRowsFromView', () => {
   });
 });
 
-describe('historyPanelRowsFromView', () => {
+describe('historySurfaceRowsFromView', () => {
   it('maps history selector rows to display-only pane rows', () => {
     const rows: HistoryRowView[] = [
       {
@@ -289,7 +292,7 @@ describe('historyPanelRowsFromView', () => {
       },
     ];
 
-    expect(historyPanelRowsFromView(rows)).toEqual([
+    expect(historySurfaceRowsFromView(rows)).toEqual([
       {
         id: 'item-1',
         age: '4m',
@@ -301,7 +304,7 @@ describe('historyPanelRowsFromView', () => {
   });
 });
 
-describe('treePanelDataFromView', () => {
+describe('treeSurfaceDataFromView', () => {
   const transitView: TransitView = {
     lanes: [
       {
@@ -348,8 +351,8 @@ describe('treePanelDataFromView', () => {
 
   const cursor: TransitCursor = { laneIndex: 1, sha: 'f0' };
 
-  it('maps TransitView geometry into explicit TreePanelData', () => {
-    expect(treePanelDataFromView(transitView, cursor, false, '', theme as Theme)).toMatchObject({
+  it('maps TransitView geometry into explicit TreeSurfaceData', () => {
+    expect(treeSurfaceDataFromView(transitView, cursor, false, '', theme as Theme)).toMatchObject({
       ruler: ' 1h  2d',
       pending: false,
       status: 'ready',
@@ -363,7 +366,7 @@ describe('treePanelDataFromView', () => {
   });
 
   it('maps g-pending mode to hint overlay lines', () => {
-    expect(treePanelDataFromView(transitView, cursor, true, '20d', theme as Theme).info).toEqual([
+    expect(treeSurfaceDataFromView(transitView, cursor, true, '20d', theme as Theme).info).toEqual([
       '[m] main  [f] feature',
       'type 5d/20m +⏎  · 20d',
     ]);

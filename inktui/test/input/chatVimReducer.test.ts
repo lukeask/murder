@@ -11,8 +11,8 @@
 
 import { describe, expect, it } from 'vitest';
 import type { BufferState } from '../../src/input/chatBuffer.js';
-import { reduceVimNormal, type VimEffect } from '../../src/input/chatVimReducer.js';
 import { SPAN_CLOSE, SPAN_OPEN } from '../../src/input/chatInputStore.js';
+import { reduceVimNormal, type VimEffect } from '../../src/input/chatVimReducer.js';
 import { makeKey } from './key.js';
 
 const buf = (text: string, cursor: number): BufferState => ({ text, cursor });

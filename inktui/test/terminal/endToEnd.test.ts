@@ -85,8 +85,8 @@ describe('ctrl+1 raw bytes → shim → dispatch → focusPanel(plans)', () => {
   });
 });
 
-describe('ctrl+j raw bytes → shim → dispatch → navigate(down)', () => {
-  it('drives vim-nav down via the side-channel chord (byte 0x0a would be `enter` to Ink)', () => {
+describe('ctrl+j raw bytes → shim → dispatch → toggleTargetGroup', () => {
+  it('toggles the chat target group via the side-channel chord (byte 0x0a would be `enter` to Ink)', () => {
     // ctrl+j's legacy byte is 0x0a, which Ink's parser reports as `enter`/`return` — never
     // `{ctrl, input:'j'}` — so it must travel the side channel as a chord, exactly like ctrl+i/m/h.
     const real = new FakeStdin();
@@ -99,7 +99,8 @@ describe('ctrl+j raw bytes → shim → dispatch → navigate(down)', () => {
     real.push('\x1b[106;5u');
     expect(chords).toHaveLength(1);
 
-    // The chord carries the plain letter `j` (NOT a special-key name), so vim-nav can match it.
+    // The chord carries the plain letter `j` (NOT a special-key name), so the chat-scoped target
+    // toggle can match it.
     const chord = chords[0];
     if (chord === undefined) throw new Error('no chord');
     expect(chord.input).toBe('j');
@@ -110,6 +111,7 @@ describe('ctrl+j raw bytes → shim → dispatch → navigate(down)', () => {
     expect(key.return).toBe(false);
 
     const navigate = vi.fn<GlobalHandlers['navigate']>();
+    const toggleTargetGroup = vi.fn<NonNullable<GlobalHandlers['toggleTargetGroup']>>();
     const handlers: GlobalHandlers = {
       focusPanel: vi.fn(),
       navigate,
@@ -121,6 +123,7 @@ describe('ctrl+j raw bytes → shim → dispatch → navigate(down)', () => {
       openSettings: vi.fn(),
       keyHelp: vi.fn(),
       quickNote: vi.fn(),
+      toggleTargetGroup,
       cycleTargetPrev: vi.fn(),
       cycleTargetNext: vi.fn(),
       toggleTargetPane: vi.fn(),
@@ -140,7 +143,8 @@ describe('ctrl+j raw bytes → shim → dispatch → navigate(down)', () => {
     const outcome = dispatchKey(input, key, ctx);
 
     expect(outcome).toEqual({ layer: 'global', handled: true });
-    expect(navigate).toHaveBeenCalledWith('down');
+    expect(toggleTargetGroup).toHaveBeenCalledOnce();
+    expect(navigate).not.toHaveBeenCalled();
   });
 });
 

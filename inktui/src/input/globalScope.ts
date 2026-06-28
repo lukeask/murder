@@ -63,6 +63,7 @@ export const GLOBAL_SCOPE = {
   'global.quickNote': 'always',
   'global.keyHelp': 'not-chat',
   'global.cycleTargetPrev': 'chat',
+  'global.toggleTargetGroup': 'chat',
   'global.cycleTargetNext': 'chat',
   'global.toggleTargetPane': 'chat',
   'global.murder': 'not-crows',

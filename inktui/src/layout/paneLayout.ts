@@ -127,6 +127,52 @@ function normalizeRequest(request: PaneRequest): NormalizedRequest {
   };
 }
 
+function chatTargetOrder(input: PaneLayoutInput): ReadonlyMap<string, number> {
+  const order = new Map<string, number>();
+  const targets = input.chatTargets;
+  if (targets === undefined) {
+    return order;
+  }
+  let index = 0;
+  for (const agentId of targets.lockedVisibleTargetIds) {
+    if (!order.has(agentId)) {
+      order.set(agentId, index++);
+    }
+  }
+  for (const agentId of targets.favoriteOnlyTargetIds) {
+    if (!order.has(agentId)) {
+      order.set(agentId, index++);
+    }
+  }
+  if (targets.ephemeralTargetId !== null && !order.has(targets.ephemeralTargetId)) {
+    order.set(targets.ephemeralTargetId, index++);
+  }
+  return order;
+}
+
+function applyChatTargetOrder(
+  requests: readonly PaneRequest[],
+  order: ReadonlyMap<string, number>,
+): readonly PaneRequest[] {
+  if (order.size === 0) {
+    return requests;
+  }
+  const chatOrderKeys = requests
+    .filter((request) => request.source.type === 'stageChat')
+    .map((request) => request.orderKey);
+  const chatBaseOrder = chatOrderKeys.length === 0 ? 1000 : Math.min(...chatOrderKeys);
+  return requests.map((request) => {
+    if (request.source.type !== 'stageChat') {
+      return request;
+    }
+    const targetOrder = order.get(request.source.agentId);
+    if (targetOrder === undefined) {
+      return request;
+    }
+    return { ...request, orderKey: chatBaseOrder + targetOrder };
+  });
+}
+
 function focusedPriority(request: NormalizedRequest, focusedPaneId: PaneId | undefined): number {
   if (request.id === focusedPaneId) {
     return Math.min(request.reapPriority, 1);
@@ -921,7 +967,9 @@ function stageGroup(allocations: readonly PaneAllocation[]): PaneLayoutPlan['sta
 export function computePaneLayout(input: PaneLayoutInput): PaneLayoutPlan {
   const gap = cellCount(input.gap);
   const bodyRect = buildBodyRect(input);
-  let remaining = input.requests.map(normalizeRequest);
+  let remaining = applyChatTargetOrder(input.requests, chatTargetOrder(input)).map(
+    normalizeRequest,
+  );
   const denials: PaneDenial[] = [];
 
   if (bodyRect.width <= 0 || bodyRect.height <= 0) {

@@ -796,9 +796,9 @@ describe('SpawnWizardModal — spawn favorites (the two new behavioral contracts
     expect(submitKinds(bus)).toContain('crow.spawn_rogue');
     const saveCall = bus.rpcCalls.find((c) => c.method === 'tui.save_spawn_favorites');
     expect(saveCall).toBeDefined();
-    const savedNames = (
-      (saveCall?.params as { favorites: { name: string }[] }).favorites
-    ).map((f) => f.name);
+    const savedNames = (saveCall?.params as { favorites: { name: string }[] }).favorites.map(
+      (f) => f.name,
+    );
     expect(savedNames).toContain('MyPreset');
   });
 });

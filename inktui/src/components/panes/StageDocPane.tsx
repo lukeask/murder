@@ -9,8 +9,8 @@
 import { Box, Text } from 'ink';
 import { memo } from 'react';
 import { useTheme } from '../../theme/themeStore.js';
-import { computeDocWindow, computeScrollThumb } from '../DocPane.js';
 import { Pane } from '../Pane.js';
+import { computeDocWindow, computeScrollThumb } from './docWindow.js';
 
 /** Horizontal chrome: side borders only; the scrollbar is the right border, not content gutter. */
 const CHROME_WIDTH = 2;
@@ -147,8 +147,7 @@ export const StageDocPane = memo(function StageDocPane({
   const windowRows = windowRowCount(innerH);
   const { start, end } = computeDocWindow(lines.length, scroll, Math.max(windowRows, 1));
   const window = windowRows > 0 ? lines.slice(start, end) : [];
-  const thumb =
-    windowRows > 0 ? computeScrollThumb(lines.length, start, windowRows) : null;
+  const thumb = windowRows > 0 ? computeScrollThumb(lines.length, start, windowRows) : null;
   const basename = docBasename(title);
   const borderTitle = formatDocBorderTitle(basename, width, mode);
   const kind = docKindFromTitle(title);

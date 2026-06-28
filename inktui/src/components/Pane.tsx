@@ -167,7 +167,7 @@ export interface PaneProps {
   /** Scrollable panes (doc/chat) pass this to make the RIGHT border double as the scroll track: the
    * thumb is a full `█` run rolling along the `│` side (see {@link ./paneBorder.js PaneBorderRight}).
    * `height` is the pane's measured inner row count (the same fill-box measurement that drives the
-   * pane's window); `thumb` is {@link ./DocPane.js computeScrollThumb}'s geometry, `null` when the
+   * pane's window); `thumb` is {@link ./panes/docWindow.js computeScrollThumb}'s geometry, `null` when the
    * content fits (the column then draws as a plain border). Omitted → Ink draws the right border as
    * before (non-scrolling consumers are untouched). */
   readonly scrollbar?: {

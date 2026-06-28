@@ -14,13 +14,13 @@
 import { Box, Text } from 'ink';
 import { render } from 'ink-testing-library';
 import { describe, expect, it } from 'vitest';
-import { inkTestColorOn } from '../inkTestColorOn.js';
 import {
   columnsForWidth,
   computeWindow,
   Ledger,
   type LedgerEntryContext,
 } from '../../src/components/Ledger.js';
+import { inkTestColorOn } from '../inkTestColorOn.js';
 
 interface DemoRow {
   readonly name: string;

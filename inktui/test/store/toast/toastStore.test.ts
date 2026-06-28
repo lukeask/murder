@@ -13,12 +13,13 @@ import {
   createToastStore,
   DEFAULT_TTL_MS,
   selectLiveToasts,
+  TOAST_EXIT_MS,
   type Toast,
 } from '../../../src/store/toast/toastStore.js';
 
 /** Build a toast datum with an explicit deadline, for the pure-filter tests. */
 function toast(id: number, expiresAt: number): Toast {
-  return { id, text: `t${id}`, severity: 'info', expiresAt, count: 1 };
+  return { id, text: `t${id}`, severity: 'info', createdAt: expiresAt - 100, expiresAt, count: 1 };
 }
 
 /** Wait `ms` real milliseconds — the store self-expires on real timers (no fake timers in this repo). */
@@ -29,17 +30,17 @@ function wait(ms: number): Promise<void> {
 describe('selectLiveToasts (pure expiry filter)', () => {
   it('keeps toasts whose deadline is at or after now, drops the rest', () => {
     const toasts = [toast(1, 100), toast(2, 200), toast(3, 300)];
-    expect(selectLiveToasts(toasts, 200).map((t) => t.id)).toEqual([2, 3]);
+    expect(selectLiveToasts(toasts, 200 + TOAST_EXIT_MS + 1).map((t) => t.id)).toEqual([3]);
   });
 
   it('treats now === expiresAt as still live (inclusive deadline)', () => {
-    expect(selectLiveToasts([toast(1, 500)], 500).map((t) => t.id)).toEqual([1]);
+    expect(selectLiveToasts([toast(1, 500)], 500 + TOAST_EXIT_MS).map((t) => t.id)).toEqual([1]);
   });
 
   it('returns all when nothing has expired and none when all have', () => {
     const toasts = [toast(1, 100), toast(2, 100)];
     expect(selectLiveToasts(toasts, 50)).toHaveLength(2);
-    expect(selectLiveToasts(toasts, 101)).toHaveLength(0);
+    expect(selectLiveToasts(toasts, 101 + TOAST_EXIT_MS)).toHaveLength(0);
   });
 });
 
@@ -79,7 +80,7 @@ describe('toastStore.push', () => {
     const store = createToastStore();
     store.getState().push('blip', { ttlMs: 30 });
     expect(store.getState().toasts).toHaveLength(1);
-    await wait(60);
+    await wait(60 + TOAST_EXIT_MS);
     expect(store.getState().toasts).toHaveLength(0);
   });
 
@@ -132,7 +133,7 @@ describe('toastStore.push — dedup of a live identical toast', () => {
   it('does NOT dedup against an already-expired toast (a new live row is created)', async () => {
     const store = createToastStore();
     store.getState().push('stale', { ttlMs: 20 });
-    await wait(40); // the first toast is past its deadline (and its timer has dropped it)
+    await wait(40 + TOAST_EXIT_MS); // the first toast is past its deadline and exit grace.
     store.getState().push('stale', { ttlMs: 10_000 });
     const live = store.getState().toasts.filter((t) => Date.now() <= t.expiresAt);
     expect(live).toHaveLength(1);

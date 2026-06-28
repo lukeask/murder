@@ -429,9 +429,11 @@ describe('conversations — chunk-summarized event folds into chunkSummaries', (
 
   it('appends a chunk summary into chunkSummaries WITHOUT touching the transcript', () => {
     const { store, dispose } = setup();
-    store.getState().actions.conversations.applyBlock(
-      makeBlockEvent('a', 'assistant', 'block-appended', { text: 'work' }),
-    );
+    store
+      .getState()
+      .actions.conversations.applyBlock(
+        makeBlockEvent('a', 'assistant', 'block-appended', { text: 'work' }),
+      );
     const transcriptBefore = store.getState().conversations.transcripts['a'];
     store.getState().actions.conversations.applyBlock(chunkEvent('a', 'summary one', [1, 2]));
     const conv = store.getState().conversations;

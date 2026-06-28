@@ -89,9 +89,7 @@ export const createWorkflowsSlice: StateCreator<
  * firing code consumes. Last-wins on a duplicate name (the backend normalizes away duplicates, but a
  * pre-save optimistic list could momentarily hold one).
  */
-export function selectWorkflowsByName(
-  items: readonly WorkflowDef[],
-): Map<string, WorkflowDef> {
+export function selectWorkflowsByName(items: readonly WorkflowDef[]): Map<string, WorkflowDef> {
   const byName = new Map<string, WorkflowDef>();
   for (const item of items) {
     byName.set(item.name, item);

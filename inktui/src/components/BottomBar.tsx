@@ -6,7 +6,8 @@
  */
 
 import { Box, Text } from 'ink';
-import { memo, useMemo } from 'react';
+import { memo, useEffect, useMemo, useState } from 'react';
+import { useStore } from 'zustand';
 import {
   useBindings,
   useEffectiveFocus,
@@ -17,7 +18,25 @@ import {
 import { useTerminalSize } from '../hooks/useTerminalSize.js';
 import { CHAT_FOCUS } from '../input/focusStore.js';
 import { selectActiveMode } from '../input/modeStore.js';
+import {
+  applyOverlays,
+  type CellOverlay,
+  type CellStyle,
+  cellsFromText,
+  createSurface,
+  putText,
+  renderSurface,
+  type TextRun,
+} from '../render/cellSurface.js';
 import { type BottomBarHint, selectBottomBar } from '../selectors/barSelectors.js';
+import {
+  MAX_VISIBLE_TOASTS,
+  selectLiveToasts,
+  TOAST_EXIT_MS,
+  type Toast as ToastData,
+  type ToastSeverity,
+  toastStore,
+} from '../store/toast/toastStore.js';
 import { useTheme } from '../theme/themeStore.js';
 
 /** Horizontal gap (cells) between hints on a line — matches the rendered `columnGap`. Single cell:
@@ -26,6 +45,10 @@ import { useTheme } from '../theme/themeStore.js';
 const HINT_GAP = 1;
 /** `paddingX={1}` each side of the bar. */
 const BAR_PADDING = 2;
+const TOAST_ENTER_MS = 400;
+const TOAST_TICK_MS = 50;
+const TOAST_GAP = 1;
+const TOAST_RIGHT_PAD = 1;
 
 /** Display width of one hint: `key` + a space + `description`. An empty description (e.g. the
  * chat-focus `:help` hint, which is self-describing) drops the trailing word but keeps the chip. */
@@ -119,52 +142,181 @@ export function useBottomBarLines(): BottomBarHint[][] {
   return useMemo(() => packHints(hints, Math.max(1, columns - BAR_PADDING)), [hints, columns]);
 }
 
-/** One hint chip — `key` (accented) then its description. A self-describing hint (empty description,
- * e.g. chat-focus `:help`) renders the accented key alone, no trailing space. */
-function HintChip({ hint }: { readonly hint: BottomBarHint }): React.JSX.Element {
-  const theme = useTheme();
-  if (hint.description.length === 0) {
-    return <Text color={theme.warning}>{hint.key}</Text>;
+function clamp01(value: number): number {
+  return Math.max(0, Math.min(1, value));
+}
+
+function easeOut(value: number): number {
+  const t = clamp01(value);
+  return 1 - (1 - t) ** 3;
+}
+
+function toastLabel(toast: ToastData): string {
+  return toast.count > 1 ? `${toast.text} (x${toast.count})` : toast.text;
+}
+
+function toastSeverityStyle(
+  severity: ToastSeverity,
+  theme: ReturnType<typeof useTheme>,
+): CellStyle {
+  if (severity === 'error') {
+    return { fg: theme.error, bg: theme.panelSelectedBg, bold: true };
   }
+  if (severity === 'warning') {
+    return { fg: theme.warning, bg: theme.panelSelectedBg };
+  }
+  return { fg: theme.muted, bg: theme.panelSelectedBg };
+}
+
+function toastEffectiveWidth(toast: ToastData, fullWidth: number, now: number): number {
+  const enterDoneAt = toast.createdAt + TOAST_ENTER_MS;
+  if (now < enterDoneAt) {
+    return Math.round(fullWidth * easeOut((now - toast.createdAt) / TOAST_ENTER_MS));
+  }
+  if (now <= toast.expiresAt) {
+    return fullWidth;
+  }
+  return Math.round(fullWidth * (1 - easeOut((now - toast.expiresAt) / TOAST_EXIT_MS)));
+}
+
+function buildToastOverlays({
+  width,
+  toasts,
+  now,
+  theme,
+}: {
+  readonly width: number;
+  readonly toasts: readonly ToastData[];
+  readonly now: number;
+  readonly theme: ReturnType<typeof useTheme>;
+}): CellOverlay[] {
+  const items = toasts
+    .slice(-MAX_VISIBLE_TOASTS)
+    .map((toast) => {
+      const cells = cellsFromText(
+        ` ${toastLabel(toast)} `,
+        toastSeverityStyle(toast.severity, theme),
+      );
+      return { toast, cells, effectiveWidth: toastEffectiveWidth(toast, cells.length, now) };
+    })
+    .filter((item) => item.effectiveWidth > 0)
+    .sort((a, b) => a.toast.createdAt - b.toast.createdAt || a.toast.id - b.toast.id);
+
+  const overlays: CellOverlay[] = [];
+  let xRight = width - TOAST_RIGHT_PAD - 1;
+  for (const item of items.toReversed()) {
+    const effectiveWidth = Math.min(item.effectiveWidth, item.cells.length);
+    const x = xRight - effectiveWidth + 1;
+    overlays.push({
+      x,
+      y: 0,
+      cells: item.cells.slice(item.cells.length - effectiveWidth),
+    });
+    xRight = x - 1 - TOAST_GAP;
+  }
+  return overlays;
+}
+
+function putHint(
+  surface: ReturnType<typeof createSurface>,
+  x: number,
+  hint: BottomBarHint,
+  theme: ReturnType<typeof useTheme>,
+): number {
+  if (hint.description.length === 0) {
+    putText(surface, x, 0, hint.key, { fg: theme.warning });
+    return x + hint.key.length;
+  }
+  putText(surface, x, 0, hint.key, { fg: theme.warning, dim: true });
+  putText(surface, x + hint.key.length, 0, ` ${hint.description}`, { dim: true });
+  return x + hintWidth(hint);
+}
+
+function renderHintLine(
+  line: readonly BottomBarHint[],
+  width: number,
+  theme: ReturnType<typeof useTheme>,
+  overlays: readonly CellOverlay[],
+): TextRun[] {
+  const surface = createSurface(width, 1);
+  const left = line.filter((h) => h.align !== 'right');
+  const right = line.filter((h) => h.align === 'right');
+  let x = 0;
+  for (const hint of left) {
+    x = putHint(surface, x, hint, theme) + HINT_GAP;
+  }
+  if (right.length > 0) {
+    let rightX = Math.max(0, width - lineWidth(right));
+    for (const hint of right) {
+      rightX = putHint(surface, rightX, hint, theme) + HINT_GAP;
+    }
+  }
+  applyOverlays(surface, overlays);
+  return renderSurface(surface);
+}
+
+function SurfaceText({ runs }: { readonly runs: readonly TextRun[] }): React.JSX.Element {
+  const occurrences = new Map<string, number>();
+  const keyedRuns = runs.map((run) => {
+    const identity = JSON.stringify([
+      run.text,
+      run.style.fg,
+      run.style.bg,
+      run.style.bold,
+      run.style.dim,
+    ]);
+    const occurrence = occurrences.get(identity) ?? 0;
+    occurrences.set(identity, occurrence + 1);
+    return { key: `${identity}:${occurrence}`, run };
+  });
   return (
-    <Text dimColor>
-      <Text color={theme.warning}>{hint.key}</Text> {hint.description}
+    <Text>
+      {keyedRuns.map(({ key, run }) => {
+        const props = {
+          ...(run.style.fg !== undefined ? { color: run.style.fg } : {}),
+          ...(run.style.bg !== undefined ? { backgroundColor: run.style.bg } : {}),
+          ...(run.style.bold !== undefined ? { bold: run.style.bold } : {}),
+          ...(run.style.dim !== undefined ? { dimColor: run.style.dim } : {}),
+        };
+        return (
+          <Text key={key} {...props}>
+            {run.text}
+          </Text>
+        );
+      })}
     </Text>
   );
 }
 
 export const BottomBar = memo(function BottomBar(): React.JSX.Element {
   const lines = useBottomBarLines();
+  const { columns } = useTerminalSize();
+  const width = Math.max(1, columns - BAR_PADDING);
+  const theme = useTheme();
+  const toasts = useStore(toastStore, (s) => s.toasts);
+  const [now, setNow] = useState(() => Date.now());
+
+  useEffect(() => {
+    if (toasts.length === 0) {
+      return;
+    }
+    const handle = setInterval(() => setNow(Date.now()), TOAST_TICK_MS);
+    return () => clearInterval(handle);
+  }, [toasts.length]);
+
+  const liveToasts = selectLiveToasts(toasts, now);
   return (
     <Box flexDirection="column" width="100%" paddingX={1}>
-      {lines.map((line) => {
-        // Right-aligned hints (item 12 prep) are pinned to the far edge: split the line into its
-        // left flow and its right cluster, and let `space-between` push them apart. A line with no
-        // right hints renders as a plain left-to-right row.
-        const left = line.filter((h) => h.align !== 'right');
-        const right = line.filter((h) => h.align === 'right');
+      {lines.map((line, index) => {
         const key = line.map((h) => h.key).join('|');
-        if (right.length === 0) {
-          return (
-            <Box key={key} flexDirection="row" columnGap={HINT_GAP}>
-              {left.map((hint) => (
-                <HintChip key={`${hint.key}:${hint.description}`} hint={hint} />
-              ))}
-            </Box>
-          );
-        }
+        const overlays =
+          index === lines.length - 1
+            ? buildToastOverlays({ width, toasts: liveToasts, now, theme })
+            : [];
+        const runs = renderHintLine(line, width, theme, overlays);
         return (
-          <Box key={key} flexDirection="row" justifyContent="space-between">
-            <Box flexDirection="row" columnGap={HINT_GAP}>
-              {left.map((hint) => (
-                <HintChip key={`${hint.key}:${hint.description}`} hint={hint} />
-              ))}
-            </Box>
-            <Box flexDirection="row" columnGap={HINT_GAP}>
-              {right.map((hint) => (
-                <HintChip key={`${hint.key}:${hint.description}`} hint={hint} />
-              ))}
-            </Box>
+          <Box key={key} flexDirection="row">
+            <SurfaceText runs={runs} />
           </Box>
         );
       })}

@@ -86,7 +86,9 @@ export type PaneChromeHeights = {
 };
 
 export type ChatTargetState = {
-  readonly currentTargetId: string | null;
+  readonly activeTargetId: string | null;
+  readonly lockedVisibleTargetIds: readonly string[];
+  readonly favoriteOnlyTargetIds: readonly string[];
   readonly ephemeralTargetId: string | null;
 };
 

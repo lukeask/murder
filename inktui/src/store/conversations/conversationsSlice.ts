@@ -153,6 +153,12 @@ export interface ConversationsState {
    */
   readonly paneOverrides: ReadonlyMap<string, boolean>;
   /**
+   * Monotonic activation age for non-required stage chat panes. The active pane is reset to 0; every
+   * existing nonzero age bumps when a different pane becomes active, making older inactive histories
+   * more eligible for layout reaping without changing the central reap algorithm.
+   */
+  readonly paneReapAges: ReadonlyMap<string, number>;
+  /**
    * Per-agent `/clear` floor (chat-input overhaul, user ask #5): the max numeric block id present
    * when the user ran `/clear`. The render selector ({@link ../../selectors/conversationsSelectors.js
    * selectConversationView}) hides blocks at or below this floor, so the local view clears even though
@@ -188,6 +194,7 @@ export const initialConversationsState: ConversationsState = {
   meta: {},
   activePaneAgentId: null,
   paneOverrides: new Map<string, boolean>(),
+  paneReapAges: new Map<string, number>(),
   clearedFloors: {},
   paneViewModes: {},
   chunkSummaries: {},

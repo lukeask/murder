@@ -5,9 +5,8 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { FakeBusClient } from '../../src/bus/FakeBusClient.js';
 import { createAppStore } from '../../src/store/store.js';
-import { hasTheme, listThemeIds } from '../../src/theme/palettes.js';
-import { everforestDarkHard } from '../../src/theme/palettes.js';
 import { selectLiveToasts, toastStore } from '../../src/store/toast/toastStore.js';
+import { everforestDarkHard, hasTheme, listThemeIds } from '../../src/theme/palettes.js';
 
 function sampleThemeRecord(id: string) {
   return {
@@ -87,9 +86,11 @@ describe('themes actions', () => {
     await store.getState().actions.themes.save([custom]);
 
     expect(store.getState().themes.items).toHaveLength(1);
-    expect(selectLiveToasts(toastStore.getState().toasts, Date.now()).some((t) => t.severity === 'error')).toBe(
-      true,
-    );
+    expect(
+      selectLiveToasts(toastStore.getState().toasts, Date.now()).some(
+        (t) => t.severity === 'error',
+      ),
+    ).toBe(true);
     dispose();
   });
 });

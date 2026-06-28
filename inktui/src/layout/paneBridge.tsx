@@ -1,79 +1,42 @@
 import { Box, Text } from 'ink';
 import { type JSX, memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { shallow } from 'zustand/shallow';
-import { StageDocPane, useDocView } from '../components/DocPane.js';
+import type { TmuxFrameEvent } from '../bus/protocol.js';
 import { META_SEP } from '../components/glyphs.js';
-import { paneContentWidthForWidth } from '../components/Pane.js';
-import {
-  CrowsPanel as ContractCrowsPanel,
-  type CrowsPanelRow,
-  type CrowsPanelStatus,
-} from '../components/panes/CrowsPanel.js';
-import {
-  HistoryPanel as ContractHistoryPanel,
-  type HistoryPanelMode,
-  type HistoryPanelRow,
-  type HistoryPanelStatus,
-} from '../components/panes/HistoryPanel.js';
-import { NotesPanel as ContractNotesPanel } from '../components/panes/NotesPanel.js';
-import {
-  TreePanel as ContractTreePanel,
-  type TreePanelData,
-  type TreePanelLane,
-} from '../components/panes/TreePanel.js';
-import { PlansPanel as ContractPlansPanel } from '../components/panes/PlansPanel.js';
-import { ReportsPanel as ContractReportsPanel } from '../components/panes/ReportsPanel.js';
-import {
-  TicketsPanel as ContractTicketsPanel,
-  type TicketsPanelRow,
-} from '../components/panes/TicketsPanel.js';
-import {
-  UsagePanel as ContractUsagePanel,
-  type UsagePanelGroup,
-} from '../components/panes/UsagePanel.js';
-import { ChatPane } from '../components/Stage.js';
-import { useTicketEditor } from '../components/TicketEditorMode.js';
+import { ChatPane as ContractChatPane } from '../components/panes/ChatPane.js';
+import { CrowsController } from '../components/panes/CrowsController.js';
+import { computeDocWindow } from '../components/panes/docWindow.js';
+import { HistoryController } from '../components/panes/HistoryController.js';
+import { NotesController } from '../components/panes/NotesController.js';
+import { PlansController } from '../components/panes/PlansController.js';
+import { ReportsController } from '../components/panes/ReportsController.js';
+import { StageDocPane as ContractStageDocPane } from '../components/panes/StageDocPane.js';
+import { TicketsController } from '../components/panes/TicketsController.js';
+import { TreeController } from '../components/panes/TreeController.js';
+import { UsageController } from '../components/panes/UsageController.js';
 import { useAppStore } from '../hooks/useAppStore.js';
+import { useBusClient } from '../hooks/useBusClient.js';
+import { type GotoIntent, useGotoLine } from '../hooks/useGotoLine.js';
 import {
-  useBindings,
+  useEffectiveFocus,
   useFocusRef,
   useMeasureFocus,
   usePanelKeymap,
+  usePaneScrollBus,
 } from '../hooks/useInputStores.js';
-import type { FocusId } from '../input/focusStore.js';
-import type { KeymapEntry, PanelKeymap } from '../input/keymap.js';
+import { CHAT_FOCUS, type FocusId } from '../input/focusStore.js';
+import type { PanelKeymap } from '../input/keymap.js';
 import { PANELS, type PanelId } from '../input/panels.js';
 import type { AgentIdentity } from '../selectors/agentIdentity.js';
 import { deriveAgentIdentity } from '../selectors/agentIdentity.js';
 import {
-  isChatPaneOpen,
   selectActiveAgentId,
   selectOpenChatPanes,
+  useConversationTurns,
 } from '../selectors/conversationsSelectors.js';
-import { type CrowsView, useCrowsView } from '../selectors/crowsSelectors.js';
 import { harnessModelFooter, worktreeLabel } from '../selectors/harnessDisplay.js';
-import {
-  type HistoryMode,
-  type HistoryRowView,
-  useHistoryView,
-} from '../selectors/historySelectors.js';
-import { useNotesView } from '../selectors/notesSelectors.js';
-import {
-  parseDuration,
-  resolveDurationJump,
-  type TransitCursor,
-  type TransitView,
-  useTransitView,
-} from '../selectors/transitSelectors.js';
 import { selectUsageView } from '../selectors/usageSelectors.js';
-import { usePlansView } from '../selectors/plansSelectors.js';
-import { useReportsView } from '../selectors/reportsSelectors.js';
-import { type TicketRowView, useTicketsView } from '../selectors/ticketsSelectors.js';
-import { murderConfirmStore, resetConfirmStore } from '../store/murder/murderConfirmStore.js';
+import { DOC_DIR } from '../store/docView/docViewSlice.js';
 import type { AppStore } from '../store/store.js';
-import { toastStore } from '../store/toast/toastStore.js';
-import type { UsageState } from '../store/usage/usageSlice.js';
-import type { Theme } from '../theme/buildTheme.js';
 import { useTheme } from '../theme/themeStore.js';
 import type {
   PaneAllocation,
@@ -85,6 +48,14 @@ import type {
   PaneRequest,
   PaneSizing,
 } from './paneLayout.js';
+
+function stageChatFocusId(agentId: string): FocusId {
+  return `stage:chat:${agentId}`;
+}
+
+function stageDocFocusId(name: string): FocusId {
+  return `stage:doc:${name}`;
+}
 
 const PANEL_SIZING: Record<PanelId, PaneSizing> = {
   plans: { min: { width: 25, height: 5 }, preferred: { width: 34, height: 14 } },
@@ -108,6 +79,10 @@ const STAGE_DOC_SIZING: PaneSizing = {
 };
 
 const PANE_CHROME_HEIGHT = 2;
+const DOC_SCROLL_STEP = 1;
+const CHAT_SCROLL_STEP = 1;
+const CHAT_NEAR_BOTTOM_THRESHOLD = 3;
+const TMUX_WAITING_TEXT = '[waiting for tmux frame…]';
 
 export interface BuildPaneRequestsInput {
   readonly state: AppStore;
@@ -163,1168 +138,282 @@ function panelSizing(panelId: PanelId, state: AppStore): PaneSizing {
   return PANEL_SIZING[panelId];
 }
 
-type PanelStatus = 'ready' | 'loading' | 'error';
-
-function listPanelStatus(status: 'idle' | 'loading' | 'ready' | 'error'): PanelStatus {
-  return status === 'loading' || status === 'error' ? status : 'ready';
+function chatKindLabel(kind: AgentIdentity['kind']): string {
+  switch (kind) {
+    case 'collaborator':
+      return 'collab';
+    case 'planner':
+      return 'planner';
+    case 'rogue':
+      return 'rogue';
+    default:
+      return 'ticket';
+  }
 }
 
-function historyPanelStatus(status: 'idle' | 'loading' | 'ready' | 'error'): HistoryPanelStatus {
-  return status === 'loading' || status === 'error' ? status : 'idle';
-}
+type DocIntent = 'close' | 'scrollDown' | 'scrollUp' | 'pageDown' | 'pageUp' | 'spawnPlanner';
 
-type PlansIntent = 'cursorDown' | 'cursorUp' | 'refresh' | 'star' | 'open' | 'spawnPlanner';
+const EMPTY_DOC_KEYMAP: PanelKeymap<DocIntent | GotoIntent> = { keymap: [], onIntent() {} };
 
-const PlansPanelAdapter = memo(function PlansPanelAdapter({
+const StageDocPaneAdapter = memo(function StageDocPaneAdapter({
   presentation,
+  open,
 }: {
   readonly presentation: PanePresentation;
+  readonly open: NonNullable<AppStore['docView']['open']>;
 }): JSX.Element {
-  const plans = useAppStore((state) => state.plans, shallow);
-  const favorites = useAppStore((state) => state.favorites, shallow);
-  const refresh = useAppStore((state) => state.actions.plans.refresh);
-  const toggleFavorite = useAppStore((state) => state.actions.favorites.toggle);
+  const body = useAppStore((state) => state.docView.body);
+  const status = useAppStore((state) => state.docView.status);
+  const error = useAppStore((state) => state.docView.error);
+  const closeAction = useAppStore((state) => state.actions.docView.close);
   const spawnPlanner = useAppStore((state) => state.actions.plans.spawnPlanner);
-  const bindings = useBindings();
-  const toggleDoc = useDocView('plan');
-  const view = usePlansView(plans, favorites);
-  const [cursor, setCursor] = useState(0);
-  const rowCount = view.rows.length;
-  const clampedCursor = Math.min(cursor, Math.max(rowCount - 1, 0));
+  const ref = useFocusRef();
+  const focusId = stageDocFocusId(open.name);
+  useMeasureFocus(focusId, ref);
 
-  useEffect(() => {
-    void refresh();
-  }, [refresh]);
-
-  const rowIdAtCursor = useCallback(
-    (): string | null => view.rows[clampedCursor]?.id ?? null,
-    [clampedCursor, view.rows],
+  const [scroll, setScroll] = useState(0);
+  const lines = useMemo(() => (body === null ? [] : body.split('\n')), [body]);
+  const effectiveHeight = Math.max(1, presentation.height - PANE_CHROME_HEIGHT);
+  const { start: clampedScroll, maxScroll } = computeDocWindow(
+    lines.length,
+    scroll,
+    effectiveHeight,
   );
 
-  const keymap: PanelKeymap<PlansIntent> = useMemo(
+  const jump = useCallback((line: number) => setScroll(Math.min(line - 1, maxScroll)), [maxScroll]);
+  const goto = useGotoLine(jump);
+
+  const keymap: PanelKeymap<DocIntent | GotoIntent> = useMemo(
     () => ({
       keymap: [
-        {
-          chord: [{ input: 'j' }, { key: { downArrow: true } }],
-          intent: 'cursorDown',
-          description: 'next plan',
-        },
-        {
-          chord: [{ input: 'k' }, { key: { upArrow: true } }],
-          intent: 'cursorUp',
-          description: 'prev plan',
-        },
-        { chord: { input: 'r' }, intent: 'refresh', description: 'refresh' },
-        { chord: bindings.chordsFor('panel.star'), intent: 'star', description: 'favorite' },
-        { chord: { key: { return: true } }, intent: 'open', description: 'view doc' },
-        { chord: { input: 'p' }, intent: 'spawnPlanner', description: 'spawn planner' },
+        ...goto.entries,
+        { chord: { key: { return: true } }, intent: 'close', description: 'close' },
+        { chord: { key: { escape: true } }, intent: 'close', description: 'close' },
+        { chord: { input: 'j' }, intent: 'scrollDown', description: 'scroll down' },
+        { chord: { key: { downArrow: true } }, intent: 'scrollDown', description: 'scroll down' },
+        { chord: { input: 'k' }, intent: 'scrollUp', description: 'scroll up' },
+        { chord: { key: { upArrow: true } }, intent: 'scrollUp', description: 'scroll up' },
+        { chord: { input: ' ' }, intent: 'pageDown', description: 'page down' },
+        { chord: { key: { pageDown: true } }, intent: 'pageDown', description: 'page down' },
+        { chord: { input: 'b' }, intent: 'pageUp', description: 'page up' },
+        { chord: { key: { pageUp: true } }, intent: 'pageUp', description: 'page up' },
+        ...(open.kind === 'plan'
+          ? [
+              {
+                chord: { input: 'p' },
+                intent: 'spawnPlanner',
+                description: 'spawn planner',
+              } as const,
+            ]
+          : []),
       ],
       onIntent(intent) {
-        switch (intent) {
-          case 'cursorDown':
-            setCursor((current) => (rowCount === 0 ? 0 : Math.min(current + 1, rowCount - 1)));
-            return;
-          case 'cursorUp':
-            setCursor((current) => Math.max(current - 1, 0));
-            return;
-          case 'refresh':
-            void refresh();
-            return;
-          case 'star': {
-            const id = rowIdAtCursor();
-            if (id !== null) {
-              void toggleFavorite(id);
-            }
-            return;
-          }
-          case 'open': {
-            const id = rowIdAtCursor();
-            if (id !== null) {
-              toggleDoc(id);
-            }
-            return;
-          }
-          case 'spawnPlanner': {
-            const id = rowIdAtCursor();
-            if (id !== null) {
-              void spawnPlanner(id);
-            }
-            return;
-          }
-          default:
-            return intent satisfies never;
-        }
-      },
-    }),
-    [bindings, refresh, rowCount, rowIdAtCursor, spawnPlanner, toggleDoc, toggleFavorite],
-  );
-  usePanelKeymap('plans', keymap);
-
-  const ref = useFocusRef();
-  useMeasureFocus('plans', ref);
-
-  return (
-    <Box
-      ref={ref}
-      width={presentation.width}
-      height={presentation.height}
-      flexDirection="column"
-      overflow="hidden"
-    >
-      <ContractPlansPanel
-        width={presentation.width}
-        height={presentation.height}
-        focused={presentation.focused}
-        rows={view.rows}
-        cursor={clampedCursor}
-        status={listPanelStatus(view.status)}
-        error={view.error}
-      />
-    </Box>
-  );
-});
-
-type NotesIntent = 'cursorDown' | 'cursorUp' | 'refresh' | 'star' | 'open';
-
-const NotesPanelAdapter = memo(function NotesPanelAdapter({
-  presentation,
-}: {
-  readonly presentation: PanePresentation;
-}): JSX.Element {
-  const notes = useAppStore((state) => state.notes, shallow);
-  const favorites = useAppStore((state) => state.favorites, shallow);
-  const refresh = useAppStore((state) => state.actions.notes.refresh);
-  const toggleFavorite = useAppStore((state) => state.actions.favorites.toggle);
-  const bindings = useBindings();
-  const toggleDoc = useDocView('note');
-  const view = useNotesView(notes, favorites);
-  const [cursor, setCursor] = useState(0);
-  const rowCount = view.rows.length;
-  const clampedCursor = Math.min(cursor, Math.max(rowCount - 1, 0));
-
-  useEffect(() => {
-    void refresh();
-  }, [refresh]);
-
-  const rowNameAtCursor = useCallback(
-    (): string | null => view.rows[clampedCursor]?.name ?? null,
-    [clampedCursor, view.rows],
-  );
-
-  const keymap: PanelKeymap<NotesIntent> = useMemo(
-    () => ({
-      keymap: [
-        {
-          chord: [{ input: 'j' }, { key: { downArrow: true } }],
-          intent: 'cursorDown',
-          description: 'next note',
-        },
-        {
-          chord: [{ input: 'k' }, { key: { upArrow: true } }],
-          intent: 'cursorUp',
-          description: 'prev note',
-        },
-        { chord: { input: 'r' }, intent: 'refresh', description: 'refresh' },
-        { chord: bindings.chordsFor('panel.star'), intent: 'star', description: 'favorite' },
-        { chord: { key: { return: true } }, intent: 'open', description: 'view doc' },
-      ],
-      onIntent(intent) {
-        switch (intent) {
-          case 'cursorDown':
-            setCursor((current) => (rowCount === 0 ? 0 : Math.min(current + 1, rowCount - 1)));
-            return;
-          case 'cursorUp':
-            setCursor((current) => Math.max(current - 1, 0));
-            return;
-          case 'refresh':
-            void refresh();
-            return;
-          case 'star': {
-            const name = rowNameAtCursor();
-            if (name !== null) {
-              void toggleFavorite(name);
-            }
-            return;
-          }
-          case 'open': {
-            const name = rowNameAtCursor();
-            if (name !== null) {
-              toggleDoc(name);
-            }
-            return;
-          }
-          default:
-            return intent satisfies never;
-        }
-      },
-    }),
-    [bindings, refresh, rowCount, rowNameAtCursor, toggleDoc, toggleFavorite],
-  );
-  usePanelKeymap('notes', keymap);
-
-  const ref = useFocusRef();
-  useMeasureFocus('notes', ref);
-
-  return (
-    <Box
-      ref={ref}
-      width={presentation.width}
-      height={presentation.height}
-      flexDirection="column"
-      overflow="hidden"
-    >
-      <ContractNotesPanel
-        width={presentation.width}
-        height={presentation.height}
-        focused={presentation.focused}
-        rows={view.rows}
-        cursor={clampedCursor}
-        status={listPanelStatus(view.status)}
-        error={view.error}
-      />
-    </Box>
-  );
-});
-
-type ReportsIntent = 'cursorDown' | 'cursorUp' | 'refresh' | 'star' | 'open';
-
-const ReportsPanelAdapter = memo(function ReportsPanelAdapter({
-  presentation,
-}: {
-  readonly presentation: PanePresentation;
-}): JSX.Element {
-  const reports = useAppStore((state) => state.reports, shallow);
-  const favorites = useAppStore((state) => state.favorites, shallow);
-  const refresh = useAppStore((state) => state.actions.reports.refresh);
-  const toggleFavorite = useAppStore((state) => state.actions.favorites.toggle);
-  const bindings = useBindings();
-  const toggleDoc = useDocView('report');
-  const view = useReportsView(reports, favorites);
-  const [cursor, setCursor] = useState(0);
-  const rowCount = view.rows.length;
-  const clampedCursor = Math.min(cursor, Math.max(rowCount - 1, 0));
-
-  useEffect(() => {
-    void refresh();
-  }, [refresh]);
-
-  const rowNameAtCursor = useCallback(
-    (): string | null => view.rows[clampedCursor]?.name ?? null,
-    [clampedCursor, view.rows],
-  );
-
-  const keymap: PanelKeymap<ReportsIntent> = useMemo(
-    () => ({
-      keymap: [
-        {
-          chord: [{ input: 'j' }, { key: { downArrow: true } }],
-          intent: 'cursorDown',
-          description: 'next report',
-        },
-        {
-          chord: [{ input: 'k' }, { key: { upArrow: true } }],
-          intent: 'cursorUp',
-          description: 'prev report',
-        },
-        { chord: { input: 'r' }, intent: 'refresh', description: 'refresh' },
-        { chord: bindings.chordsFor('panel.star'), intent: 'star', description: 'favorite' },
-        { chord: { key: { return: true } }, intent: 'open', description: 'view doc' },
-      ],
-      onIntent(intent) {
-        switch (intent) {
-          case 'cursorDown':
-            setCursor((current) => (rowCount === 0 ? 0 : Math.min(current + 1, rowCount - 1)));
-            return;
-          case 'cursorUp':
-            setCursor((current) => Math.max(current - 1, 0));
-            return;
-          case 'refresh':
-            void refresh();
-            return;
-          case 'star': {
-            const name = rowNameAtCursor();
-            if (name !== null) {
-              void toggleFavorite(name);
-            }
-            return;
-          }
-          case 'open': {
-            const name = rowNameAtCursor();
-            if (name !== null) {
-              toggleDoc(name);
-            }
-            return;
-          }
-          default:
-            return intent satisfies never;
-        }
-      },
-    }),
-    [bindings, refresh, rowCount, rowNameAtCursor, toggleDoc, toggleFavorite],
-  );
-  usePanelKeymap('reports', keymap);
-
-  const ref = useFocusRef();
-  useMeasureFocus('reports', ref);
-
-  return (
-    <Box
-      ref={ref}
-      width={presentation.width}
-      height={presentation.height}
-      flexDirection="column"
-      overflow="hidden"
-    >
-      <ContractReportsPanel
-        width={presentation.width}
-        height={presentation.height}
-        focused={presentation.focused}
-        rows={view.rows}
-        cursor={clampedCursor}
-        status={listPanelStatus(view.status)}
-        error={view.error}
-      />
-    </Box>
-  );
-});
-
-type TicketsIntent = 'cursorDown' | 'cursorUp' | 'refresh' | 'open';
-
-export function ticketsPanelRowsFromView(
-  rows: readonly TicketRowView[],
-): readonly TicketsPanelRow[] {
-  return rows.map((row) => ({
-    id: row.id,
-    idCell: row.idCell,
-    titleCell: row.titleCell,
-    statusCell: row.statusCell,
-    statusTone: row.statusTone,
-    lastUpdateCell: row.lastUpdateCell,
-    depsCell: row.depsCell,
-    depsSatisfied: row.depsSatisfied,
-    scheduleCell: row.scheduleCell,
-    harnessCell: row.harnessCell,
-    modelCell: row.modelCell,
-    planCell: row.planCell,
-    worktreeCell: row.worktreeCell,
-  }));
-}
-
-const TicketsPanelAdapter = memo(function TicketsPanelAdapter({
-  presentation,
-}: {
-  readonly presentation: PanePresentation;
-}): JSX.Element {
-  const tickets = useAppStore((state) => state.tickets, shallow);
-  const refresh = useAppStore((state) => state.actions.tickets.refresh);
-  const view = useTicketsView(tickets);
-  const rows = useMemo(() => ticketsPanelRowsFromView(view.rows), [view.rows]);
-  const openEditor = useTicketEditor();
-  const [cursor, setCursor] = useState(0);
-  const rowCount = rows.length;
-  const clampedCursor = Math.min(cursor, Math.max(rowCount - 1, 0));
-  const cursorRef = useRef(clampedCursor);
-  const rowsRef = useRef(rows);
-  cursorRef.current = clampedCursor;
-  rowsRef.current = rows;
-
-  const keymap: PanelKeymap<TicketsIntent> = useMemo(
-    () => ({
-      keymap: [
-        {
-          chord: [{ input: 'j' }, { key: { downArrow: true } }],
-          intent: 'cursorDown',
-          description: 'next ticket',
-        },
-        {
-          chord: [{ input: 'k' }, { key: { upArrow: true } }],
-          intent: 'cursorUp',
-          description: 'prev ticket',
-        },
-        { chord: { input: 'r' }, intent: 'refresh', description: 'refresh' },
-        { chord: { key: { return: true } }, intent: 'open', description: 'open ticket' },
-      ],
-      onIntent(intent) {
-        switch (intent) {
-          case 'cursorDown':
-            setCursor((current) => (rowCount === 0 ? 0 : Math.min(current + 1, rowCount - 1)));
-            return;
-          case 'cursorUp':
-            setCursor((current) => Math.max(current - 1, 0));
-            return;
-          case 'refresh':
-            void refresh();
-            return;
-          case 'open': {
-            const row = rowsRef.current[cursorRef.current];
-            if (row !== undefined) {
-              openEditor(row.id);
-            }
-            return;
-          }
-          default:
-            return intent satisfies never;
-        }
-      },
-    }),
-    [openEditor, refresh, rowCount],
-  );
-  usePanelKeymap('tickets', keymap);
-
-  const ref = useFocusRef();
-  useMeasureFocus('tickets', ref);
-
-  return (
-    <Box
-      ref={ref}
-      width={presentation.width}
-      height={presentation.height}
-      flexDirection="column"
-      overflow="hidden"
-    >
-      <ContractTicketsPanel
-        width={presentation.width}
-        height={presentation.height}
-        focused={presentation.focused}
-        rows={rows}
-        cursor={clampedCursor}
-        status={listPanelStatus(view.status)}
-        error={view.error}
-      />
-    </Box>
-  );
-});
-
-type HistoryIntent = 'cursorDown' | 'cursorUp' | 'resumeOrRefresh' | 'toggleMode' | 'dismiss';
-
-export function historyPanelRowsFromView(rows: readonly HistoryRowView[]): readonly HistoryPanelRow[] {
-  return rows.map((row) => ({
-    id: row.itemId,
-    age: row.age,
-    target: row.target,
-    status: row.status,
-    text: row.text,
-  }));
-}
-
-const HistoryPanelAdapter = memo(function HistoryPanelAdapter({
-  presentation,
-}: {
-  readonly presentation: PanePresentation;
-}): JSX.Element {
-  const history = useAppStore((state) => state.history, shallow);
-  const refresh = useAppStore((state) => state.actions.history.refresh);
-  const dismiss = useAppStore((state) => state.actions.history.dismiss);
-  const resumeConversation = useAppStore((state) => state.actions.history.resumeConversation);
-  const [mode, setMode] = useState<HistoryMode>('loose');
-  const [cursor, setCursor] = useState(0);
-  const view = useHistoryView(history, mode);
-  const rows = useMemo(() => historyPanelRowsFromView(view.rows), [view.rows]);
-  const rowCount = rows.length;
-  const clampedCursor = Math.min(cursor, Math.max(rowCount - 1, 0));
-  const panelMode: HistoryPanelMode = mode;
-  const cursorRef = useRef(clampedCursor);
-  const rowsRef = useRef(view.rows);
-  cursorRef.current = clampedCursor;
-  rowsRef.current = view.rows;
-
-  useEffect(() => {
-    void refresh();
-  }, [refresh]);
-
-  const keymap: PanelKeymap<HistoryIntent> = useMemo(
-    () => ({
-      keymap: [
-        {
-          chord: [{ input: 'j' }, { key: { downArrow: true } }],
-          intent: 'cursorDown',
-          description: 'next item',
-        },
-        {
-          chord: [{ input: 'k' }, { key: { upArrow: true } }],
-          intent: 'cursorUp',
-          description: 'prev item',
-        },
-        { chord: { input: 'r' }, intent: 'resumeOrRefresh', description: 'resume / refresh' },
-        { chord: { input: 'a' }, intent: 'toggleMode', description: 'loose ↔ all' },
-        { chord: { input: 'x' }, intent: 'dismiss', description: 'dismiss' },
-      ],
-      onIntent(intent) {
-        switch (intent) {
-          case 'cursorDown':
-            setCursor((current) => (rowCount === 0 ? 0 : Math.min(current + 1, rowCount - 1)));
-            return;
-          case 'cursorUp':
-            setCursor((current) => Math.max(current - 1, 0));
-            return;
-          case 'resumeOrRefresh': {
-            const row = rowsRef.current[cursorRef.current];
-            if (row?.resumable) {
-              void resumeConversation(row.conversationId);
-              return;
-            }
-            void refresh();
-            return;
-          }
-          case 'toggleMode':
-            setMode((current) => (current === 'loose' ? 'all' : 'loose'));
-            return;
-          case 'dismiss': {
-            const row = rowsRef.current[cursorRef.current];
-            if (row !== undefined) {
-              void dismiss(row.itemId);
-            }
-            return;
-          }
-          default:
-            return intent satisfies never;
-        }
-      },
-    }),
-    [dismiss, refresh, resumeConversation, rowCount],
-  );
-  usePanelKeymap('history', keymap);
-
-  const ref = useFocusRef();
-  useMeasureFocus('history', ref);
-
-  return (
-    <Box
-      ref={ref}
-      width={presentation.width}
-      height={presentation.height}
-      flexDirection="column"
-      overflow="hidden"
-    >
-      <ContractHistoryPanel
-        width={presentation.width}
-        height={presentation.height}
-        focused={presentation.focused}
-        rows={rows}
-        mode={panelMode}
-        cursor={clampedCursor}
-        status={historyPanelStatus(view.status)}
-        error={view.error}
-      />
-    </Box>
-  );
-});
-
-type CrowsIntent =
-  | 'cursorDown'
-  | 'cursorUp'
-  | 'refresh'
-  | 'toggleExpanded'
-  | 'star'
-  | 'openChat'
-  | 'murder'
-  | 'reset';
-
-export function crowsPanelRowsFromView(view: CrowsView): readonly CrowsPanelRow[] {
-  return view.sections.flatMap((section) =>
-    section.rows.map((row) => ({
-      id: row.agentId,
-      group: section.label,
-      name: row.name,
-      meta: `${row.harness} · ${row.model}`,
-      working: row.working,
-      starred: row.favorited,
-      health: row.health,
-    })),
-  );
-}
-
-function crowsPanelStatus(status: CrowsView['status']): CrowsPanelStatus {
-  return status === 'loading' || status === 'error' ? status : 'idle';
-}
-
-const CrowsPanelAdapter = memo(function CrowsPanelAdapter({
-  presentation,
-}: {
-  readonly presentation: PanePresentation;
-}): JSX.Element {
-  const roster = useAppStore((state) => state.roster, shallow);
-  const favorites = useAppStore((state) => state.favorites, shallow);
-  const conversations = useAppStore((state) => state.conversations, shallow);
-  const refresh = useAppStore((state) => state.actions.roster.refresh);
-  const resetCrow = useAppStore((state) => state.actions.roster.resetCrow);
-  const toggleFavorite = useAppStore((state) => state.actions.favorites.toggle);
-  const setActivePane = useAppStore((state) => state.actions.conversations.setActivePaneAgentId);
-  const toggleChatPane = useAppStore((state) => state.actions.conversations.toggleChatPane);
-  const bindings = useBindings();
-  const view = useCrowsView(roster, favorites);
-  const rows = useMemo(() => crowsPanelRowsFromView(view), [view]);
-  const [cursor, setCursor] = useState(0);
-  const [expanded, setExpanded] = useState(false);
-  const clampedCursor = Math.min(cursor, Math.max(rows.length - 1, 0));
-
-  const agentIdAtCursor = useCallback((): string | null => {
-    return rows[clampedCursor]?.id ?? null;
-  }, [clampedCursor, rows]);
-
-  const nameAtCursor = useCallback(
-    (agentId: string): string => rows.find((row) => row.id === agentId)?.name ?? agentId,
-    [rows],
-  );
-
-  const openChatAtCursor = useCallback(() => {
-    const agentId = agentIdAtCursor();
-    if (agentId === null) {
-      return;
-    }
-    const rosterRow = roster.rows.find((row) => row.agentId === agentId);
-    const identity = rosterRow === undefined ? null : deriveAgentIdentity(rosterRow);
-    if (identity === null) {
-      return;
-    }
-    const currentlyOpen = isChatPaneOpen(identity, favorites, conversations.paneOverrides);
-    toggleChatPane(agentId, currentlyOpen);
-    if (!currentlyOpen) {
-      setActivePane(agentId);
-    }
-  }, [agentIdAtCursor, conversations, favorites, roster, setActivePane, toggleChatPane]);
-
-  const keymap: PanelKeymap<CrowsIntent> = useMemo(
-    () => ({
-      keymap: [
-        {
-          chord: [{ input: 'j' }, { key: { downArrow: true } }],
-          intent: 'cursorDown',
-          description: 'next crow',
-        },
-        {
-          chord: [{ input: 'k' }, { key: { upArrow: true } }],
-          intent: 'cursorUp',
-          description: 'prev crow',
-        },
-        { chord: bindings.chordsFor('global.murder'), intent: 'murder', description: 'murder' },
-        { chord: { key: { return: true } }, intent: 'openChat', description: 'toggle chat pane' },
-        { chord: { input: 'r' }, intent: 'refresh', description: 'refresh' },
-        { chord: { input: 'm' }, intent: 'toggleExpanded', description: 'toggle maximized' },
-        { chord: bindings.chordsFor('panel.star'), intent: 'star', description: 'favorite' },
-        {
-          chord: bindings.chordsFor('panel.resetCrow'),
-          intent: 'reset',
-          description: 'reset crow',
-        },
-      ],
-      onIntent(intent) {
-        switch (intent) {
-          case 'cursorDown':
-            setCursor((current) => (rows.length === 0 ? 0 : Math.min(current + 1, rows.length - 1)));
-            return;
-          case 'cursorUp':
-            setCursor((current) => Math.max(current - 1, 0));
-            return;
-          case 'refresh':
-            void refresh();
-            return;
-          case 'toggleExpanded':
-            setExpanded((current) => !current);
-            return;
-          case 'openChat':
-            openChatAtCursor();
-            return;
-          case 'star': {
-            const agentId = agentIdAtCursor();
-            if (agentId !== null) {
-              void toggleFavorite(agentId);
-              setActivePane(agentId);
-            }
-            return;
-          }
-          case 'murder': {
-            const agentId = agentIdAtCursor();
-            if (agentId !== null) {
-              murderConfirmStore.getState().arm({ agentId, name: nameAtCursor(agentId) });
-            }
-            return;
-          }
-          case 'reset': {
-            const agentId = agentIdAtCursor();
-            if (agentId === null) {
-              return;
-            }
-            const ticketId = roster.rows.find((row) => row.agentId === agentId)?.ticketId ?? null;
-            if (ticketId === null) {
-              toastStore.getState().push('no ticket to reset for this row', { ttlMs: 4000 });
-              return;
-            }
-            const name = nameAtCursor(agentId);
-            const pending = resetConfirmStore.getState().pending;
-            if (pending !== null && pending.ticketId === ticketId) {
-              resetConfirmStore.getState().clear();
-              void resetCrow(ticketId)
-                .then(() => {
-                  toastStore.getState().push(`reset ${pending.name} → ready`, { ttlMs: 6000 });
-                })
-                .catch((error: unknown) => {
-                  const message = error instanceof Error ? error.message : String(error);
-                  toastStore.getState().push(message, { severity: 'error', ttlMs: 12000 });
-                });
-              return;
-            }
-            resetConfirmStore.getState().arm({ ticketId, name });
-            return;
-          }
-          default:
-            return intent satisfies never;
-        }
-      },
-    }),
-    [
-      agentIdAtCursor,
-      bindings,
-      nameAtCursor,
-      openChatAtCursor,
-      refresh,
-      resetCrow,
-      roster,
-      rows.length,
-      setActivePane,
-      toggleFavorite,
-    ],
-  );
-  usePanelKeymap('crows', keymap);
-
-  const ref = useFocusRef();
-  useMeasureFocus('crows', ref);
-
-  return (
-    <Box
-      ref={ref}
-      width={presentation.width}
-      height={presentation.height}
-      flexDirection="column"
-      overflow="hidden"
-    >
-      <ContractCrowsPanel
-        width={presentation.width}
-        height={presentation.height}
-        focused={presentation.focused}
-        rows={rows}
-        cursor={clampedCursor}
-        expanded={expanded}
-        status={crowsPanelStatus(view.status)}
-        error={view.error}
-      />
-    </Box>
-  );
-});
-
-type TreeIntent =
-  | 'older'
-  | 'newer'
-  | 'laneDown'
-  | 'laneUp'
-  | 'startG'
-  | 'gEnter'
-  | 'gEsc'
-  | `char:${string}`;
-
-const TREE_ALPHA = 'abcdefghijklmnopqrstuvwxyz';
-const TREE_DIGITS = '0123456789';
-const TREE_UNIT_LETTERS = new Set(['m', 'h', 'd', 'w']);
-
-function treeLaneColor(index: number, mainIndex: number, theme: Theme): string {
-  if (index === mainIndex) {
-    return theme.active;
-  }
-  return theme.laneColors[index % theme.laneColors.length] ?? theme.text;
-}
-
-function transitRailText(lane: TransitView['lanes'][number]): string {
-  return lane.segments.map((segment) => segment.text).join('');
-}
-
-export function treePanelDataFromView(
-  view: TransitView,
-  cursor: TransitCursor,
-  gPending: boolean,
-  gBuffer: string,
-  theme: Theme,
-): TreePanelData {
-  const lanes: TreePanelLane[] = view.lanes.map((lane, index) => ({
-    branch: lane.branch,
-    rail: transitRailText(lane),
-    color: treeLaneColor(lane.colorIndex, view.mainIndex, theme),
-    selected: index === cursor.laneIndex,
-  }));
-  const info = gPending
-    ? [
-        view.lanes.map((lane) => `[${lane.hint}] ${lane.branch}`).join('  '),
-        `type 5d/20m +⏎  ${gBuffer.length > 0 ? `· ${gBuffer}` : ''}`,
-      ]
-    : view.selected === null
-      ? ['no commit selected']
-      : [`${view.selected.short} · ${view.selected.branch} · ${view.selected.age}`, ...view.infoLines];
-  return {
-    ruler: view.ruler,
-    lanes,
-    info,
-    pending: gPending,
-    status: view.status,
-    error: view.error,
-  };
-}
-
-function nearestShaByTime(
-  lane: { readonly commits: readonly { readonly sha: string; readonly tsEpoch: number }[] },
-  tsEpoch: number | null,
-): string | null {
-  if (lane.commits.length === 0) {
-    return null;
-  }
-  if (tsEpoch === null) {
-    return lane.commits[0]?.sha ?? null;
-  }
-  let best = lane.commits[0];
-  let bestDelta = Number.POSITIVE_INFINITY;
-  for (const commit of lane.commits) {
-    const delta = Math.abs(commit.tsEpoch - tsEpoch);
-    if (delta < bestDelta) {
-      bestDelta = delta;
-      best = commit;
-    }
-  }
-  return best?.sha ?? null;
-}
-
-const TreePanelAdapter = memo(function TreePanelAdapter({
-  presentation,
-}: {
-  readonly presentation: PanePresentation;
-}): JSX.Element {
-  const transit = useAppStore((state) => state.transit, shallow);
-  const refresh = useAppStore((state) => state.actions.transit.refresh);
-  const theme = useTheme();
-  const innerWidth = paneContentWidthForWidth(presentation.width);
-  const [cursor, setCursor] = useState<TransitCursor>({ laneIndex: 0, sha: null });
-  const [gBuffer, setGBuffer] = useState<string | null>(null);
-  const gPending = gBuffer !== null;
-  const view = useTransitView(transit, cursor, innerWidth);
-  const data = useMemo(
-    () => treePanelDataFromView(view, cursor, gPending, gBuffer ?? '', theme),
-    [cursor, gBuffer, gPending, theme, view],
-  );
-
-  useEffect(() => {
-    void refresh();
-  }, [refresh]);
-
-  useEffect(() => {
-    if (cursor.sha === null && transit.lanes.length > 0) {
-      const head = transit.lanes[0]?.headSha ?? null;
-      if (head !== null) {
-        setCursor({ laneIndex: 0, sha: head });
-      }
-    }
-  }, [cursor.sha, transit.lanes]);
-
-  const selectedLane = transit.lanes[cursor.laneIndex] ?? null;
-
-  const moveWithinLane = useCallback(
-    (delta: number) => {
-      const lane = transit.lanes[cursor.laneIndex];
-      if (lane === undefined || lane.commits.length === 0) {
-        return;
-      }
-      const index = lane.commits.findIndex((commit) => commit.sha === cursor.sha);
-      const current = index >= 0 ? index : 0;
-      const next = Math.min(Math.max(current + delta, 0), lane.commits.length - 1);
-      const sha = lane.commits[next]?.sha ?? null;
-      setCursor((currentCursor) => ({ ...currentCursor, sha }));
-    },
-    [cursor.laneIndex, cursor.sha, transit.lanes],
-  );
-
-  const switchLane = useCallback(
-    (delta: number) => {
-      if (transit.lanes.length === 0) {
-        return;
-      }
-      const nextIndex = Math.min(Math.max(cursor.laneIndex + delta, 0), transit.lanes.length - 1);
-      if (nextIndex === cursor.laneIndex) {
-        return;
-      }
-      const currentLane = transit.lanes[cursor.laneIndex];
-      const currentTs =
-        currentLane?.commits.find((commit) => commit.sha === cursor.sha)?.tsEpoch ?? null;
-      const nextLane = transit.lanes[nextIndex];
-      if (nextLane === undefined) {
-        return;
-      }
-      setCursor({ laneIndex: nextIndex, sha: nearestShaByTime(nextLane, currentTs) });
-    },
-    [cursor.laneIndex, cursor.sha, transit.lanes],
-  );
-
-  const jumpToSha = useCallback(
-    (sha: string) => {
-      const mainIndex = transit.lanes.findIndex((lane) => lane.isMain);
-      const mainLane = mainIndex >= 0 ? transit.lanes[mainIndex] : undefined;
-      if (mainLane?.commits.some((commit) => commit.sha === sha)) {
-        setCursor({ laneIndex: mainIndex, sha });
-        return;
-      }
-      setCursor((current) => ({ ...current, sha }));
-    },
-    [transit.lanes],
-  );
-
-  const handleGChar = useCallback(
-    (ch: string) => {
-      const buffer = gBuffer ?? '';
-      if (buffer.length === 0) {
-        const laneByHint = view.lanes.find((lane) => lane.hint === ch);
-        if (laneByHint !== undefined) {
-          const lane = transit.lanes.find((candidate) => candidate.branch === laneByHint.branch);
-          if (lane !== undefined) {
-            const laneIndex = transit.lanes.indexOf(lane);
-            setCursor({ laneIndex, sha: lane.headSha });
-          }
-          setGBuffer(null);
+        if (goto.handle(intent)) {
           return;
         }
-      }
-      if (ch >= '0' && ch <= '9') {
-        setGBuffer((current) => (current ?? '') + ch);
-        return;
-      }
-      if (TREE_UNIT_LETTERS.has(ch)) {
-        setGBuffer((current) => (current ?? '') + ch);
-      }
-    },
-    [gBuffer, transit.lanes, view.lanes],
+        goto.clear();
+        switch (intent as DocIntent) {
+          case 'close':
+            closeAction();
+            return;
+          case 'scrollDown':
+            setScroll((current) => Math.min(current + DOC_SCROLL_STEP, maxScroll));
+            return;
+          case 'scrollUp':
+            setScroll((current) => Math.max(current - DOC_SCROLL_STEP, 0));
+            return;
+          case 'pageDown':
+            setScroll((current) => Math.min(current + effectiveHeight, maxScroll));
+            return;
+          case 'pageUp':
+            setScroll((current) => Math.max(current - effectiveHeight, 0));
+            return;
+          case 'spawnPlanner':
+            void spawnPlanner(open.name);
+            return;
+        }
+      },
+    }),
+    [closeAction, effectiveHeight, goto, maxScroll, open.kind, open.name, spawnPlanner],
+  );
+  usePanelKeymap(focusId, presentation.focused ? keymap : EMPTY_DOC_KEYMAP);
+
+  const paneScroll = usePaneScrollBus();
+  const maxScrollRef = useRef(maxScroll);
+  maxScrollRef.current = maxScroll;
+  useEffect(
+    () =>
+      paneScroll.subscribe(focusId, (direction, amount) => {
+        setScroll((current) =>
+          direction === 'up'
+            ? Math.max(current - amount, 0)
+            : Math.min(current + amount, maxScrollRef.current),
+        );
+      }),
+    [focusId, paneScroll],
   );
 
-  const resolveG = useCallback(() => {
-    const buffer = gBuffer ?? '';
-    const ms = parseDuration(buffer);
-    if (ms !== null && selectedLane !== null) {
-      const resolved = resolveDurationJump(selectedLane, ms, Date.now());
-      if (resolved !== null) {
-        jumpToSha(resolved.sha);
-      }
-    }
-    setGBuffer(null);
-  }, [gBuffer, jumpToSha, selectedLane]);
+  return (
+    <Box
+      ref={ref}
+      width={presentation.width}
+      height={presentation.height}
+      flexDirection="column"
+      overflow="hidden"
+    >
+      <ContractStageDocPane
+        width={presentation.width}
+        height={presentation.height}
+        focused={presentation.focused}
+        title={`.murder/${DOC_DIR[open.kind]}/${open.name}.md`}
+        lines={lines}
+        scroll={clampedScroll}
+        status={status === 'idle' ? 'ready' : status}
+        error={error}
+      />
+    </Box>
+  );
+});
 
-  const keymap: PanelKeymap<TreeIntent> = useMemo(() => {
-    const charEntries: KeymapEntry<TreeIntent>[] = [];
-    for (const ch of TREE_ALPHA + TREE_DIGITS) {
-      charEntries.push({
-        chord: { input: ch },
-        intent: `char:${ch}`,
-        description: '',
-        hidden: true,
-      });
+type ChatScrollIntent = 'scrollUp' | 'scrollDown';
+
+const EMPTY_CHAT_KEYMAP: PanelKeymap<ChatScrollIntent | GotoIntent> = {
+  keymap: [],
+  onIntent() {},
+};
+
+const StageChatPaneAdapter = memo(function StageChatPaneAdapter({
+  presentation,
+  identity,
+  state,
+  chatTarget,
+}: {
+  readonly presentation: PanePresentation;
+  readonly identity: AgentIdentity;
+  readonly state: AppStore;
+  readonly chatTarget: boolean;
+}): JSX.Element {
+  const ref = useFocusRef();
+  const theme = useTheme();
+  const focusId = stageChatFocusId(identity.agentId);
+  const effectiveFocus = useEffectiveFocus();
+  const highlighted = presentation.focused || (chatTarget && effectiveFocus === CHAT_FOCUS);
+  useMeasureFocus(focusId, ref);
+
+  const defaultChatViewMode = useAppStore((current) => current.settings.defaultChatViewMode);
+  const viewMode = state.conversations.paneViewModes[identity.agentId] ?? defaultChatViewMode;
+  const turns = useConversationTurns(identity.agentId, state.conversations, viewMode);
+  const [scrollUp, setScrollUp] = useState(0);
+  const [gotoLine, setGotoLine] = useState<number | null>(null);
+  const [chatMetrics, setChatMetrics] = useState({ lineCount: 0, maxScrollUp: 0 });
+  const maxScrollUp = chatMetrics.maxScrollUp;
+
+  const prevLenRef = useRef<number | null>(null);
+  const wasNearBottomRef = useRef(true);
+  if (prevLenRef.current === null || chatMetrics.lineCount <= prevLenRef.current) {
+    wasNearBottomRef.current = scrollUp <= CHAT_NEAR_BOTTOM_THRESHOLD;
+  }
+  useEffect(() => {
+    const prevLen = prevLenRef.current;
+    prevLenRef.current = chatMetrics.lineCount;
+    if (prevLen === null) {
+      return;
     }
-    return {
+    const delta = chatMetrics.lineCount - prevLen;
+    if (delta <= 0) {
+      setScrollUp((current) => Math.min(current, maxScrollUp));
+      return;
+    }
+    if (wasNearBottomRef.current) {
+      setScrollUp(0);
+    } else {
+      setScrollUp((current) => Math.min(current + delta, maxScrollUp));
+    }
+  }, [chatMetrics.lineCount, maxScrollUp]);
+
+  const jump = useCallback((line: number) => setGotoLine(line), []);
+  const goto = useGotoLine(jump);
+  const keymap: PanelKeymap<ChatScrollIntent | GotoIntent> = useMemo(
+    () => ({
       keymap: [
+        ...goto.entries,
         {
-          chord: [{ input: 'l' }, { key: { rightArrow: true } }],
-          intent: 'newer',
-          description: 'newer',
-        },
-        {
-          chord: [{ input: 'h' }, { key: { leftArrow: true } }],
-          intent: 'older',
+          chord: [{ input: 'k' }, { key: { upArrow: true } }],
+          intent: 'scrollUp',
           description: 'older',
         },
         {
           chord: [{ input: 'j' }, { key: { downArrow: true } }],
-          intent: 'laneDown',
-          description: 'next lane',
+          intent: 'scrollDown',
+          description: 'newer',
         },
-        {
-          chord: [{ input: 'k' }, { key: { upArrow: true } }],
-          intent: 'laneUp',
-          description: 'prev lane',
-        },
-        { chord: { input: 'g' }, intent: 'startG', description: 'jump (g)' },
-        { chord: { key: { return: true } }, intent: 'gEnter', description: 'resolve' },
-        { chord: { key: { escape: true } }, intent: 'gEsc', description: 'cancel' },
-        ...charEntries,
       ],
       onIntent(intent) {
-        if (intent.startsWith('char:')) {
-          if (gPending) {
-            handleGChar(intent.slice('char:'.length));
-          }
+        if (goto.handle(intent)) {
           return;
         }
-        switch (intent) {
-          case 'older':
-            if (gPending) {
-              handleGChar('h');
-            } else {
-              moveWithinLane(1);
-            }
-            return;
-          case 'newer':
-            if (!gPending) {
-              moveWithinLane(-1);
-            }
-            return;
-          case 'laneDown':
-            if (!gPending) {
-              switchLane(1);
-            }
-            return;
-          case 'laneUp':
-            if (!gPending) {
-              switchLane(-1);
-            }
-            return;
-          case 'startG':
-            setGBuffer('');
-            return;
-          case 'gEnter':
-            if (gPending) {
-              resolveG();
-            }
-            return;
-          case 'gEsc':
-            if (gPending) {
-              setGBuffer(null);
-            }
-            return;
-          default:
-            return;
-        }
-      },
-    };
-  }, [gPending, handleGChar, moveWithinLane, resolveG, switchLane]);
-  usePanelKeymap('tree', keymap);
-
-  const ref = useFocusRef();
-  useMeasureFocus('tree', ref);
-
-  return (
-    <Box
-      ref={ref}
-      width={presentation.width}
-      height={presentation.height}
-      flexDirection="column"
-      overflow="hidden"
-    >
-      <ContractTreePanel
-        width={presentation.width}
-        height={presentation.height}
-        focused={presentation.focused}
-        data={data}
-      />
-    </Box>
-  );
-});
-
-type UsageIntent = 'cursorDown' | 'cursorUp' | 'refresh' | 'cycleSteering';
-
-const USAGE_STEERING_CYCLE: Record<string, string> = {
-  auto: 'prefer',
-  prefer: 'pause',
-  pause: 'auto',
-};
-
-function nextUsageSteering(current: string): string {
-  return USAGE_STEERING_CYCLE[current] ?? 'prefer';
-}
-
-function pctFromLabel(label: string): number {
-  const pct = Number.parseInt(label.replace(/%$/, ''), 10);
-  return Number.isFinite(pct) ? pct : 0;
-}
-
-export function usagePanelGroupsFromState(state: UsageState): readonly UsagePanelGroup[] {
-  return selectUsageView(state).groups.map((group) => ({
-    harness: group.harness,
-    steering: group.steering,
-    gauges: group.gauges.map((gauge) => ({
-      label: gauge.windowLabel,
-      pct: pctFromLabel(gauge.pctLabel),
-      reset: gauge.resetLabel,
-    })),
-  }));
-}
-
-function usageGaugeCount(groups: readonly UsagePanelGroup[]): number {
-  return groups.reduce((count, group) => count + group.gauges.length, 0);
-}
-
-function usagePanelStatus(status: UsageState['status']): 'ready' | 'loading' | 'error' {
-  return status === 'idle' ? 'ready' : status;
-}
-
-const UsagePanelAdapter = memo(function UsagePanelAdapter({
-  presentation,
-}: {
-  readonly presentation: PanePresentation;
-}): JSX.Element {
-  const usage = useAppStore((state) => state.usage, shallow);
-  const sample = useAppStore((state) => state.actions.usage.sample);
-  const setSteering = useAppStore((state) => state.actions.usage.setSteering);
-  const bindings = useBindings();
-  const groups = useMemo(() => usagePanelGroupsFromState(usage), [usage]);
-  const gaugeCount = usageGaugeCount(groups);
-  const [cursor, setCursor] = useState(0);
-  const clampedCursor = Math.min(cursor, Math.max(gaugeCount - 1, 0));
-  const keymap: PanelKeymap<UsageIntent> = useMemo(
-    () => ({
-      keymap: [
-        {
-          chord: [{ input: 'j' }, { key: { downArrow: true } }],
-          intent: 'cursorDown',
-          description: 'next gauge',
-        },
-        {
-          chord: [{ input: 'k' }, { key: { upArrow: true } }],
-          intent: 'cursorUp',
-          description: 'prev gauge',
-        },
-        { chord: { input: 'r' }, intent: 'refresh', description: 'sample' },
-        {
-          chord: bindings.chordsFor('panel.usageSteering'),
-          intent: 'cycleSteering',
-          description: 'steering',
-        },
-      ],
-      onIntent(intent) {
-        switch (intent) {
-          case 'cursorDown':
-            setCursor((current) => (gaugeCount === 0 ? 0 : Math.min(current + 1, gaugeCount - 1)));
-            return;
-          case 'cursorUp':
-            setCursor((current) => Math.max(current - 1, 0));
-            return;
-          case 'refresh':
-            void sample();
-            return;
-          case 'cycleSteering': {
-            if (gaugeCount === 0) {
-              return;
-            }
-            let index = clampedCursor;
-            for (const group of groups) {
-              if (index < group.gauges.length) {
-                void setSteering(group.harness, nextUsageSteering(group.steering));
-                return;
-              }
-              index -= group.gauges.length;
-            }
-            return;
-          }
-          default:
-            return intent satisfies never;
+        goto.clear();
+        if (intent === 'scrollUp') {
+          setScrollUp((current) => Math.min(current + CHAT_SCROLL_STEP, maxScrollUp));
+        } else {
+          setScrollUp((current) => Math.max(current - CHAT_SCROLL_STEP, 0));
         }
       },
     }),
-    [bindings, clampedCursor, gaugeCount, groups, sample, setSteering],
+    [goto, maxScrollUp],
   );
-  usePanelKeymap('usage', keymap);
+  usePanelKeymap(focusId, presentation.focused ? keymap : EMPTY_CHAT_KEYMAP);
 
-  const ref = useFocusRef();
-  useMeasureFocus('usage', ref);
+  const paneScroll = usePaneScrollBus();
+  const maxScrollUpRef = useRef(maxScrollUp);
+  maxScrollUpRef.current = maxScrollUp;
+  useEffect(
+    () =>
+      paneScroll.subscribe(focusId, (direction, amount) => {
+        setScrollUp((current) =>
+          direction === 'up'
+            ? Math.min(current + amount, maxScrollUpRef.current)
+            : Math.max(current - amount, 0),
+        );
+      }),
+    [focusId, paneScroll],
+  );
+
+  const bus = useBusClient();
+  const [tmuxFrame, setTmuxFrame] = useState('');
+  useEffect(() => {
+    if (viewMode !== 'tmux') {
+      setTmuxFrame('');
+      return;
+    }
+    const unsubscribe = bus.subscribe(
+      (event) => {
+        if (event.type !== 'tmux.frame') {
+          return;
+        }
+        const tmuxEvent: TmuxFrameEvent = event;
+        setTmuxFrame(tmuxEvent.frame);
+      },
+      { type: 'tmux.frame', agent_id: identity.agentId },
+    );
+    return unsubscribe;
+  }, [bus, identity.agentId, viewMode]);
+
+  const handleScrollUpChange = useCallback((nextScrollUp: number) => {
+    setScrollUp(nextScrollUp);
+    setGotoLine(null);
+  }, []);
+
+  const handleWindowMetricsChange = useCallback(
+    (metrics: { readonly lineCount: number; readonly maxScrollUp: number }) => {
+      setChatMetrics((current) =>
+        current.lineCount === metrics.lineCount && current.maxScrollUp === metrics.maxScrollUp
+          ? current
+          : metrics,
+      );
+    },
+    [],
+  );
 
   return (
     <Box
@@ -1334,14 +423,27 @@ const UsagePanelAdapter = memo(function UsagePanelAdapter({
       flexDirection="column"
       overflow="hidden"
     >
-      <ContractUsagePanel
+      <ContractChatPane
         width={presentation.width}
         height={presentation.height}
-        focused={presentation.focused}
-        groups={groups}
-        cursor={clampedCursor}
-        status={usagePanelStatus(usage.status)}
-        error={usage.error}
+        focused={highlighted}
+        title={identity.label}
+        titleExtra={
+          <>
+            <Text dimColor>{` [${chatKindLabel(identity.kind)}]`}</Text>
+            {goto.pending !== null && <Text color={theme.warning}>{` g${goto.pending}`}</Text>}
+          </>
+        }
+        footerLeft={footerFor(state, identity.agentId) ?? ''}
+        footerRight={worktreeFor(state, identity.agentId) ?? ''}
+        turns={turns}
+        viewMode={viewMode}
+        scrollUp={scrollUp}
+        gotoLine={gotoLine}
+        onScrollUpChange={handleScrollUpChange}
+        onWindowMetricsChange={handleWindowMetricsChange}
+        tmuxFrame={tmuxFrame}
+        tmuxWaitingText={TMUX_WAITING_TEXT}
       />
     </Box>
   );
@@ -1350,6 +452,12 @@ const UsagePanelAdapter = memo(function UsagePanelAdapter({
 export function buildPaneRequests(input: BuildPaneRequestsInput): readonly PaneRequest[] {
   const { state, visiblePanels, focusedId } = input;
   const requests: PaneRequest[] = [];
+  const agedPriority = (id: PaneId, priority: number): number => {
+    if (priority === 0) {
+      return 0;
+    }
+    return priority + (state.conversations.paneReapAges.get(id) ?? 0);
+  };
 
   for (const panel of PANELS) {
     if (!visiblePanels.has(panel.id)) {
@@ -1360,7 +468,11 @@ export function buildPaneRequests(input: BuildPaneRequestsInput): readonly PaneR
       kind: panelKind(panel.id),
       region: panelRegion(panel.id),
       sizing: panelSizing(panel.id, state),
-      reapPriority: requestPriority(panel.id, focusedId, 40 + panelOrder(panel.id)),
+      reapPriority: requestPriority(
+        panel.id,
+        focusedId,
+        agedPriority(panel.id, 40 + panelOrder(panel.id)),
+      ),
       orderKey: panelOrder(panel.id),
       source: { type: 'panel', panelId: panel.id },
     });
@@ -1392,7 +504,7 @@ export function buildPaneRequests(input: BuildPaneRequestsInput): readonly PaneR
       kind: 'stageDoc',
       region: 'centerStage',
       sizing: STAGE_DOC_SIZING,
-      reapPriority: requestPriority(id, focusedId, 12),
+      reapPriority: requestPriority(id, focusedId, agedPriority(id, 12)),
       orderKey: stageOrder++,
       source: { type: 'stageDoc', name: state.docView.open.name },
     });
@@ -1401,12 +513,13 @@ export function buildPaneRequests(input: BuildPaneRequestsInput): readonly PaneR
   for (const { identity, locked } of chatPanesByAgentId.values()) {
     const current = identity.agentId === currentAgentId;
     const id: PaneId = `stage:chat:${identity.agentId}`;
+    const chatReapPriority = current ? 1 : locked ? 24 : 10;
     requests.push({
       id,
       kind: 'stageChat',
       region: 'centerStage',
       sizing: STAGE_CHAT_SIZING,
-      reapPriority: requestPriority(id, focusedId, current ? 1 : locked ? 24 : 10),
+      reapPriority: requestPriority(id, focusedId, agedPriority(id, chatReapPriority)),
       orderKey: stageOrder++,
       source: {
         type: 'stageChat',
@@ -1424,21 +537,21 @@ export function buildPaneRequests(input: BuildPaneRequestsInput): readonly PaneR
 function renderPanel(panelId: PanelId, presentation: PanePresentation): JSX.Element {
   switch (panelId) {
     case 'crows':
-      return <CrowsPanelAdapter presentation={presentation} />;
+      return <CrowsController presentation={presentation} />;
     case 'plans':
-      return <PlansPanelAdapter presentation={presentation} />;
+      return <PlansController presentation={presentation} />;
     case 'notes':
-      return <NotesPanelAdapter presentation={presentation} />;
+      return <NotesController presentation={presentation} />;
     case 'reports':
-      return <ReportsPanelAdapter presentation={presentation} />;
+      return <ReportsController presentation={presentation} />;
     case 'tickets':
-      return <TicketsPanelAdapter presentation={presentation} />;
+      return <TicketsController presentation={presentation} />;
     case 'history':
-      return <HistoryPanelAdapter presentation={presentation} />;
+      return <HistoryController presentation={presentation} />;
     case 'tree':
-      return <TreePanelAdapter presentation={presentation} />;
+      return <TreeController presentation={presentation} />;
     case 'usage':
-      return <UsagePanelAdapter presentation={presentation} />;
+      return <UsageController presentation={presentation} />;
     default:
       return panelId satisfies never;
   }
@@ -1470,7 +583,7 @@ export function renderPaneAllocation(
       renderPanel(request.source.panelId, presentation)
     ) : request.source.type === 'stageDoc' ? (
       context.state.docView.open === null ? null : (
-        <StageDocPane open={context.state.docView.open} presentation={presentation} />
+        <StageDocPaneAdapter open={context.state.docView.open} presentation={presentation} />
       )
     ) : (
       (() => {
@@ -1479,14 +592,11 @@ export function renderPaneAllocation(
           return null;
         }
         return (
-          <ChatPane
-            identity={identity}
-            conversations={context.state.conversations}
-            chatTarget={request.source.current}
-            footer={footerFor(context.state, identity.agentId)}
-            worktree={worktreeFor(context.state, identity.agentId)}
-            contentHeight={Math.max(0, presentation.height - PANE_CHROME_HEIGHT)}
+          <StageChatPaneAdapter
             presentation={presentation}
+            identity={identity}
+            state={context.state}
+            chatTarget={request.source.current}
           />
         );
       })()

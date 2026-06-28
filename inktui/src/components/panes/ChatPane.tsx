@@ -1,18 +1,17 @@
 /**
  * ChatPane — explicit width/height pane contract for crow chat history.
  *
- * Store-free: callers pass display-ready turns and chrome props. Matches the old
- * {@link ../Stage.tsx ChatPane} gutter + scroll window at large sizes; smaller allocations
- * route through {@link layout} into deterministic display modes.
+ * Store-free: callers pass display-ready turns plus explicit chrome and dimensions. The layout
+ * router keeps the pane deterministic across the layout manager's allocated sizes.
  */
 
 import { Box, Text } from 'ink';
-import { memo, useMemo } from 'react';
+import { memo, useEffect, useMemo } from 'react';
 import type { ChatTurn, TurnSpeaker } from '../../selectors/conversationsSelectors.js';
 import { useTheme } from '../../theme/themeStore.js';
-import { computeScrollThumb } from '../DocPane.js';
 import { Pane } from '../Pane.js';
-import { flattenTurns } from '../Stage.js';
+import { type ChatLine, flattenTurns } from './chatLines.js';
+import { computeScrollThumb } from './docWindow.js';
 
 const GUTTER_HEAD = '▌';
 const GUTTER_CONT = '▏';
@@ -31,14 +30,13 @@ const MIN_FOOTER_MODEL_INNER_W = 14;
 const MIN_SCROLLBAR_INNER_H = 6;
 /** Drop the bottom-bar overlay when vertical budget cannot fit title + one content row. */
 const MIN_FOOTER_INNER_H = 4;
-/** Gutter column width when speaker rails are shown. */
-const GUTTER_COLS = 2;
 
 export type ChatDisplayMode = 'full' | 'compact' | 'minimal' | 'tiny';
 
 export interface ChatPaneTurn {
-  readonly speaker: 'user' | 'assistant' | 'tool';
+  readonly speaker: TurnSpeaker;
   readonly lines: readonly string[];
+  readonly tone?: ChatLine['tone'];
 }
 
 export interface ChatPaneProps {
@@ -49,11 +47,19 @@ export interface ChatPaneProps {
   readonly title: string;
   readonly footerLeft: string;
   readonly footerRight: string;
-  readonly turns: readonly ChatPaneTurn[];
+  readonly turns: readonly ChatTurn[];
+  readonly viewMode: 'verbose' | 'condensed' | 'tmux';
+  readonly scrollUp: number;
+  readonly gotoLine: number | null;
+  readonly onScrollUpChange?: (scrollUp: number) => void;
+  readonly onWindowMetricsChange?: (metrics: {
+    readonly lineCount: number;
+    readonly maxScrollUp: number;
+  }) => void;
+  readonly tmuxFrame?: string;
+  readonly tmuxWaitingText?: string;
   readonly titleExtra?: React.ReactNode;
 }
-
-type ChatLine = ReturnType<typeof flattenTurns>[number];
 
 function contentHeight(height: number): number {
   return Math.max(1, height - CHROME_ROWS);
@@ -80,14 +86,6 @@ export function layout(width: number, height: number): ChatDisplayMode {
     return 'compact';
   }
   return 'full';
-}
-
-function fixtureTurnsToChatTurns(turns: readonly ChatPaneTurn[]): readonly ChatTurn[] {
-  return turns.map((turn, index) => ({
-    speaker: turn.speaker,
-    text: turn.lines.join('\n'),
-    blockId: `fixture-turn-${index}`,
-  }));
 }
 
 function speakerColor(speaker: TurnSpeaker, theme: ReturnType<typeof useTheme>): string {
@@ -226,58 +224,64 @@ function footerVisible(height: number, level: FooterLevel): boolean {
   return contentHeight(height) >= MIN_FOOTER_INNER_H;
 }
 
-function bodyTextCols(innerW: number, guttersVisible: boolean): number {
-  return Math.max(1, innerW - (guttersVisible ? GUTTER_COLS : 0));
+export function computeChatWindow(
+  total: number,
+  scrollUp: number,
+  height: number,
+  gotoLine: number | null = null,
+): {
+  readonly start: number;
+  readonly end: number;
+  readonly maxScrollUp: number;
+  readonly clampedScrollUp: number;
+} {
+  const h = Math.max(height, 1);
+  const maxScrollUp = Math.max(total - h, 0);
+  const requestedScroll =
+    gotoLine === null ? scrollUp : Math.min(Math.max(maxScrollUp - (gotoLine - 1), 0), maxScrollUp);
+  const clampedScrollUp = Math.min(Math.max(requestedScroll, 0), maxScrollUp);
+  const end = total - clampedScrollUp;
+  return {
+    start: Math.max(end - h, 0),
+    end,
+    maxScrollUp,
+    clampedScrollUp,
+  };
 }
 
-/** Upper-bound terminal rows for a soft-wrapped logical line (deterministic, no measure). */
-function estimateWrapRows(text: string, cols: number): number {
-  if (text === '') {
-    return 1;
-  }
-  return Math.max(1, Math.ceil(text.length / cols));
-}
+function TmuxFrameBody({
+  frame,
+  height,
+  waitingText,
+}: {
+  readonly frame: string | undefined;
+  readonly height: number;
+  readonly waitingText: string;
+}): React.JSX.Element {
+  const lines = (frame !== undefined && frame !== '' ? frame : waitingText)
+    .split('\n')
+    .slice(0, Math.max(height, 0));
+  const keyedLines = lines.map((text, index) => ({
+    key: `tmux-${index}:${text}`,
+    text,
+  }));
 
-function lineVisualRows(line: ChatLine, cols: number): number {
-  if (line.kind === 'blank') {
-    return 1;
-  }
-  return estimateWrapRows(line.text, cols);
-}
-
-/**
- * Tail-pinned slice for the scroll window. Walks backward from the newest line,
- * accumulating estimated wrap rows until the inner-height budget is met. A single
- * long line may still clip at the bottom when it exceeds the budget — preferable
- * to pushing title chrome off-screen (long-fixture Phase 3).
- */
-function computeChatWindow(
-  lines: readonly ChatLine[],
-  innerH: number,
-  textCols: number,
-): { readonly start: number; readonly end: number } {
-  const end = lines.length;
-  if (end === 0 || innerH <= 0) {
-    return { start: 0, end: 0 };
-  }
-  let used = 0;
-  let start = end;
-  for (let i = end - 1; i >= 0; i--) {
-    const line = lines[i];
-    if (line === undefined) {
-      continue;
-    }
-    const rows = lineVisualRows(line, textCols);
-    if (used + rows > innerH && start < end) {
-      break;
-    }
-    used += rows;
-    start = i;
-    if (used >= innerH) {
-      break;
-    }
-  }
-  return { start, end };
+  return (
+    <Box
+      flexDirection="column"
+      flexShrink={0}
+      width="100%"
+      minWidth={0}
+      height={height}
+      overflow="hidden"
+    >
+      {keyedLines.map(({ key, text }) => (
+        <Box key={key} flexShrink={0}>
+          <Text wrap="truncate">{text === '' ? ' ' : text}</Text>
+        </Box>
+      ))}
+    </Box>
+  );
 }
 
 export const ChatPane = memo(function ChatPane({
@@ -288,32 +292,52 @@ export const ChatPane = memo(function ChatPane({
   footerLeft,
   footerRight,
   turns,
+  viewMode,
+  scrollUp,
+  gotoLine,
+  onScrollUpChange,
+  onWindowMetricsChange,
+  tmuxFrame,
+  tmuxWaitingText = '[waiting for tmux frame…]',
   titleExtra,
 }: ChatPaneProps): React.JSX.Element {
   const theme = useTheme();
   const displayMode = layout(width, height);
   const innerH = contentHeight(height);
-  const lines = useMemo(() => flattenTurns(fixtureTurnsToChatTurns(turns)), [turns]);
+  const lines = useMemo(() => (viewMode === 'tmux' ? [] : flattenTurns(turns)), [turns, viewMode]);
+  const window = computeChatWindow(lines.length, scrollUp, innerH, gotoLine);
+  const visibleLines = lines.slice(window.start, window.end);
+  const keyedVisibleLines = visibleLines.map((line, index) => ({
+    key: `${window.start + index}:${line.speaker}:${line.kind}:${line.text}`,
+    line,
+  }));
+
+  useEffect(() => {
+    if (gotoLine !== null && onScrollUpChange !== undefined) {
+      onScrollUpChange(window.clampedScrollUp);
+    }
+  }, [gotoLine, onScrollUpChange, window.clampedScrollUp]);
+
+  useEffect(() => {
+    onWindowMetricsChange?.({ lineCount: lines.length, maxScrollUp: window.maxScrollUp });
+  }, [lines.length, onWindowMetricsChange, window.maxScrollUp]);
 
   const guttersVisible = showGutters(displayMode);
-  const textCols = bodyTextCols(contentWidth(width), guttersVisible);
-  const { start, end } =
-    displayMode === 'tiny'
-      ? { start: 0, end: lines.length }
-      : computeChatWindow(lines, innerH, textCols);
-  const visibleLines = displayMode === 'tiny' ? lines : lines.slice(start, end);
-  const thumb = computeScrollThumb(lines.length, start, innerH);
+  const thumb = computeScrollThumb(lines.length, window.start, innerH);
   const footers = footerLevel(width);
   const footerLeftText = formatFooterLeft(footerLeft, footers);
   const showFooterChrome = footerLeftText !== null && footerVisible(height, footers);
   const scrollbarVisible = showScrollbar(displayMode, innerH, lines.length, innerH);
 
   const body = (() => {
-    if (lines.length === 0) {
+    if (viewMode === 'tmux') {
+      return <TmuxFrameBody frame={tmuxFrame} height={innerH} waitingText={tmuxWaitingText} />;
+    }
+    if (visibleLines.length === 0) {
       return <Text dimColor>no history</Text>;
     }
     if (displayMode === 'tiny') {
-      const lastContent = [...lines].reverse().find((line) => line.kind !== 'blank');
+      const lastContent = [...visibleLines].reverse().find((line) => line.kind !== 'blank');
       if (lastContent === undefined) {
         return <Text dimColor>no history</Text>;
       }
@@ -324,13 +348,8 @@ export const ChatPane = memo(function ChatPane({
         </Text>
       );
     }
-    return visibleLines.map((line) => (
-      <ChatHistoryLine
-        key={`${line.speaker}:${line.kind}:${line.text}`}
-        line={line}
-        theme={theme}
-        showGutter={guttersVisible}
-      />
+    return keyedVisibleLines.map(({ key, line }) => (
+      <ChatHistoryLine key={key} line={line} theme={theme} showGutter={guttersVisible} />
     ));
   })();
 

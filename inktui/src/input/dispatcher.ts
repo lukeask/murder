@@ -122,6 +122,9 @@ export interface GlobalHandlers {
   /** `alt+l`/`ctrl+l` (`global.cycleTargetNext`): cycle the chat target to the next one. Chat-focus
    * only (item 9 super-chords). */
   cycleTargetNext(): void;
+  /** `ctrl+j` (`global.toggleTargetGroup`): toggle the chat target between locked-visible and
+   * favorite-only groups. Chat-focus only. */
+  toggleTargetGroup?(): void;
   /** `alt+w`/`ctrl+w` (`global.toggleTargetPane`): toggle the current chat target's pane. Chat-focus
    * only (item 9 super-chords). */
   toggleTargetPane(): void;
@@ -313,6 +316,10 @@ function dispatchGlobalChord(
   // VIM_NAV) and `alt+w` is unbound. Checked before VIM_NAV so the cycle chords win over nav while
   // typing a message.
   if (inFocusScope(GLOBAL_SCOPE['global.cycleTargetPrev'], focusedId)) {
+    if (bindings.matches('global.toggleTargetGroup', input, key)) {
+      handlers.toggleTargetGroup?.();
+      return true;
+    }
     if (bindings.matches('global.cycleTargetPrev', input, key)) {
       handlers.cycleTargetPrev();
       return true;

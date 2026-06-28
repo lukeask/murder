@@ -677,39 +677,32 @@ export interface CycleTargetResult {
 }
 
 /**
- * The ordered list of chat-target identities to cycle through (item 9 super-chords): EVERY chattable
- * crow in the roster, in spec group order (collaborator → planner → rogue → ticket). Cycling the
- * target is a pure input-routing change — it does NOT open the crow's pane on the Stage (the user
- * toggles a pane explicitly with the `toggleTargetPane` chord), so the cycle reaches every crow you
- * can chat to, whether or not its chat box is pinned to the Stage. Pure over the roster alone
- * (favorites/overrides no longer gate it — they only decide which panes are *shown*).
- *
- * `conversationsState` / `favorites` are kept in the signature so existing call sites are unchanged
- * and a future ordering tweak can read them without a churny re-thread.
+ * The ordered list of chat-target identities to cycle through (item 9 super-chords): locked-visible
+ * targets first, favorite-only targets second. Agent kind no longer participates in cycling order;
+ * the visible/favorite partition already encodes the user's target groups.
  */
 export function selectCycleTargets(
-  _conversationsState: ConversationsState,
+  conversationsState: ConversationsState,
   rosterState: RosterState,
-  _favorites: FavoritesState = NO_FAVORITES,
+  favorites: FavoritesState = NO_FAVORITES,
 ): readonly AgentIdentity[] {
-  const byGroup: Record<string, AgentIdentity[]> = {
-    collaborator: [],
-    planner: [],
-    rogue: [],
-    ticket: [],
-  };
-  for (const row of rosterState.rows) {
-    const identity = deriveAgentIdentity(row);
-    if (identity !== null) {
-      const groupKey = identity.kind === 'planner' ? 'planner' : identity.kind;
-      (byGroup[groupKey] ?? []).push(identity);
-    }
-  }
+  const lockedVisible = selectOpenChatPanes(
+    rosterState,
+    favorites,
+    conversationsState.paneOverrides,
+  ).panes;
+  const lockedIds = new Set(lockedVisible.map((identity) => identity.agentId));
+  const favoriteOnly = selectFavoritesChatPanes(rosterState, favorites).panes.filter(
+    (identity) => !lockedIds.has(identity.agentId),
+  );
+  const seen = new Set<string>();
   const targets: AgentIdentity[] = [];
-  for (const kind of FAVORITES_GROUP_ORDER) {
-    for (const identity of byGroup[kind] ?? []) {
-      targets.push(identity);
+  for (const identity of [...lockedVisible, ...favoriteOnly]) {
+    if (seen.has(identity.agentId)) {
+      continue;
     }
+    seen.add(identity.agentId);
+    targets.push(identity);
   }
   return targets;
 }

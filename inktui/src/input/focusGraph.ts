@@ -1,6 +1,7 @@
+import type { ChatTargetState } from '../layout/paneLayoutTypes.js';
 import {
-  chatTargetVertexId,
   CHAT_FOCUS,
+  chatTargetVertexId,
   type FocusGraphTargetId,
   type FocusId,
   isChatTargetVertexId,
@@ -39,8 +40,13 @@ export interface FocusGraph {
 }
 
 export interface FocusGraphState {
-  readonly activeChatTargetId: string | null;
-  readonly lastTargetByDirection: Readonly<Partial<Record<Direction, FocusGraphTargetId>>>;
+  readonly activeTargetId: string | null;
+  readonly previouslyInhabitedVertexId: FocusGraphTargetId | null;
+  readonly openPaneIdsByOpenedAt: readonly FocusGraphTargetId[];
+  readonly openPaneIdsByX: readonly FocusGraphTargetId[];
+  readonly openPaneIdsByY: readonly FocusGraphTargetId[];
+  readonly previousLockedVisibleTargetIds: readonly string[];
+  readonly previousFavoriteOnlyTargetIds: readonly string[];
 }
 
 export interface FocusGraphAllocation {
@@ -62,8 +68,9 @@ export interface FocusGraphChatTarget {
 export interface BuildFocusGraphInput {
   readonly rects?: ReadonlyMap<FocusId, PaneRect>;
   readonly allocations?: readonly FocusGraphAllocation[];
-  readonly chatTargets?: readonly FocusGraphChatTarget[];
+  readonly chatTargets?: ChatTargetState | readonly FocusGraphChatTarget[];
   readonly activeChatTargetId?: string | null;
+  readonly state?: FocusGraphState;
 }
 
 export interface FocusNavigationResult {
@@ -75,6 +82,16 @@ export interface FocusNavigationResult {
 }
 
 const DEFAULT_CHAT_TARGET = '__active__';
+
+export const EMPTY_FOCUS_GRAPH_STATE: FocusGraphState = {
+  activeTargetId: null,
+  previouslyInhabitedVertexId: null,
+  openPaneIdsByOpenedAt: [],
+  openPaneIdsByX: [],
+  openPaneIdsByY: [],
+  previousLockedVisibleTargetIds: [],
+  previousFavoriteOnlyTargetIds: [],
+};
 
 function rectHasArea(rect: PaneRect): boolean {
   return rect.width > 0 && rect.height > 0;
@@ -145,6 +162,65 @@ function sortedVertexIds(
   });
 }
 
+function uniqueStrings(values: readonly (string | null | undefined)[]): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const value of values) {
+    if (value === null || value === undefined || seen.has(value)) {
+      continue;
+    }
+    seen.add(value);
+    result.push(value);
+  }
+  return result;
+}
+
+function isPartitionedChatTargetState(
+  targets: ChatTargetState | readonly FocusGraphChatTarget[] | undefined,
+): targets is ChatTargetState {
+  return (
+    targets !== undefined &&
+    !Array.isArray(targets) &&
+    'activeTargetId' in targets &&
+    'lockedVisibleTargetIds' in targets
+  );
+}
+
+function chatTargetsFromInput(input: BuildFocusGraphInput): {
+  readonly targets: readonly FocusGraphChatTarget[];
+  readonly activeTargetId: string | null | undefined;
+  readonly lockedVisibleTargetIds: readonly string[];
+  readonly favoriteOnlyTargetIds: readonly string[];
+} {
+  if (isPartitionedChatTargetState(input.chatTargets)) {
+    const state = input.chatTargets;
+    const targetIds = uniqueStrings([
+      ...state.lockedVisibleTargetIds,
+      state.ephemeralTargetId,
+      ...state.favoriteOnlyTargetIds,
+      state.activeTargetId,
+    ]);
+    const targets = targetIds.map((targetId, index) => ({
+      targetId,
+      orderKey: index,
+      active: targetId === state.activeTargetId,
+    }));
+    return {
+      targets,
+      activeTargetId: state.activeTargetId,
+      lockedVisibleTargetIds: state.lockedVisibleTargetIds,
+      favoriteOnlyTargetIds: state.favoriteOnlyTargetIds,
+    };
+  }
+  const targets = input.chatTargets ?? [];
+  return {
+    targets,
+    activeTargetId: input.activeChatTargetId,
+    lockedVisibleTargetIds: [],
+    favoriteOnlyTargetIds: [],
+  };
+}
+
 function resolveActiveChatTarget(
   chatTargets: readonly FocusGraphChatTarget[],
   explicitActive: string | null | undefined,
@@ -162,17 +238,19 @@ function buildOrdinaryEdge(
   direction: Direction,
   activeChatTargetVertexId: FocusGraphTargetId | null,
   paneVertexIds: readonly FocusGraphTargetId[],
+  state: FocusGraphState | undefined,
 ): FocusEdge | null {
   const source = vertices.get(from);
   if (source === undefined) {
     return null;
   }
+  const orderedPaneVertexIds = orderPaneCandidatesForDirection(paneVertexIds, direction, state);
   const candidateIds =
     source.kind === 'chatTarget'
-      ? [from, ...paneVertexIds]
+      ? [from, ...orderedPaneVertexIds]
       : activeChatTargetVertexId === null
-        ? paneVertexIds
-        : [...paneVertexIds, activeChatTargetVertexId];
+        ? orderedPaneVertexIds
+        : [...orderedPaneVertexIds, activeChatTargetVertexId];
   const candidates: FocusCandidate<FocusGraphTargetId>[] = [];
   for (const id of candidateIds) {
     const vertex = vertices.get(id);
@@ -184,6 +262,35 @@ function buildOrdinaryEdge(
   return target === null
     ? null
     : { from, to: target, direction, traversal: 'ordinaryPaneAdjacency' };
+}
+
+function orderPaneCandidatesForDirection(
+  paneVertexIds: readonly FocusGraphTargetId[],
+  direction: Direction,
+  state: FocusGraphState | undefined,
+): readonly FocusGraphTargetId[] {
+  if (state === undefined) {
+    return paneVertexIds;
+  }
+  const remaining = new Set(paneVertexIds);
+  const ordered: FocusGraphTargetId[] = [];
+  const pushKnown = (ids: readonly FocusGraphTargetId[]) => {
+    for (const id of ids) {
+      if (!remaining.delete(id)) {
+        continue;
+      }
+      ordered.push(id);
+    }
+  };
+  if (state.previouslyInhabitedVertexId !== null) {
+    pushKnown([state.previouslyInhabitedVertexId]);
+  }
+  pushKnown(
+    direction === 'left' || direction === 'right' ? state.openPaneIdsByY : state.openPaneIdsByX,
+  );
+  pushKnown(state.openPaneIdsByOpenedAt);
+  pushKnown(paneVertexIds);
+  return ordered;
 }
 
 export function buildFocusGraph(input: BuildFocusGraphInput): FocusGraph {
@@ -211,19 +318,26 @@ export function buildFocusGraph(input: BuildFocusGraphInput): FocusGraph {
       if (allocation.id === CHAT_FOCUS) {
         chatRect = allocation.rect;
       } else {
-        pushPaneVertex(vertices, paneVertexIds, allocation.id, allocation.rect, allocation.orderKey);
+        pushPaneVertex(
+          vertices,
+          paneVertexIds,
+          allocation.id,
+          allocation.rect,
+          allocation.orderKey,
+        );
       }
     }
   }
 
   const chatTargetVertexIds: FocusGraphTargetId[] = [];
   let activeChatTargetVertexId: FocusGraphTargetId | null = null;
+  const chatTargetInput = chatTargetsFromInput(input);
   if (chatRect !== null) {
     const sourceTargets =
-      input.chatTargets !== undefined && input.chatTargets.length > 0
-        ? input.chatTargets
+      chatTargetInput.targets.length > 0
+        ? chatTargetInput.targets
         : [{ targetId: DEFAULT_CHAT_TARGET, active: true }];
-    const activeTargetId = resolveActiveChatTarget(sourceTargets, input.activeChatTargetId);
+    const activeTargetId = resolveActiveChatTarget(sourceTargets, chatTargetInput.activeTargetId);
     sourceTargets.forEach((target, index) => {
       const id = chatTargetVertexId(target.targetId);
       const vertex: FocusVertex = {
@@ -260,6 +374,7 @@ export function buildFocusGraph(input: BuildFocusGraphInput): FocusGraph {
         direction,
         activeChatTargetVertexId,
         sortedPaneVertexIds,
+        input.state,
       );
       if (edge !== null) {
         edges.push(edge);
@@ -291,6 +406,39 @@ export function buildFocusGraph(input: BuildFocusGraphInput): FocusGraph {
   };
 }
 
+function graphTraversalState(
+  graph: FocusGraph,
+  activeTargetId: string | null,
+  previouslyInhabitedVertexId: FocusGraphTargetId | null,
+  lockedVisibleTargetIds: readonly string[],
+  favoriteOnlyTargetIds: readonly string[],
+  previousState: FocusGraphState,
+): FocusGraphState {
+  const livePaneIds = new Set(graph.paneVertexIds);
+  const byOpenedAt = previousState.openPaneIdsByOpenedAt.filter((id) => livePaneIds.has(id));
+  const byX = [...graph.paneVertexIds].sort((a, b) => {
+    const av = graph.vertices.get(a);
+    const bv = graph.vertices.get(b);
+    if (av === undefined || bv === undefined) return 0;
+    return av.rect.x - bv.rect.x || av.rect.y - bv.rect.y || av.orderKey - bv.orderKey;
+  });
+  const byY = [...graph.paneVertexIds].sort((a, b) => {
+    const av = graph.vertices.get(a);
+    const bv = graph.vertices.get(b);
+    if (av === undefined || bv === undefined) return 0;
+    return av.rect.y - bv.rect.y || av.rect.x - bv.rect.x || av.orderKey - bv.orderKey;
+  });
+  return {
+    activeTargetId,
+    previouslyInhabitedVertexId,
+    openPaneIdsByOpenedAt: byOpenedAt,
+    openPaneIdsByX: byX,
+    openPaneIdsByY: byY,
+    previousLockedVisibleTargetIds: [...lockedVisibleTargetIds],
+    previousFavoriteOnlyTargetIds: [...favoriteOnlyTargetIds],
+  };
+}
+
 export function resolveEffectiveFocus(intended: FocusId, graph: FocusGraph): FocusId {
   if (intended === CHAT_FOCUS) {
     return CHAT_FOCUS;
@@ -299,10 +447,25 @@ export function resolveEffectiveFocus(intended: FocusId, graph: FocusGraph): Foc
   return vertex?.kind === 'pane' ? intended : CHAT_FOCUS;
 }
 
-function sourceVertexIdForFocus(
-  current: FocusId,
+export function refreshFocusGraphState(
   graph: FocusGraph,
-): FocusGraphTargetId | null {
+  state: FocusGraphState = EMPTY_FOCUS_GRAPH_STATE,
+): FocusGraphState {
+  const activeTargetId =
+    graph.activeChatTargetVertexId === null
+      ? state.activeTargetId
+      : targetIdForVirtualVertex(graph.activeChatTargetVertexId);
+  return graphTraversalState(
+    graph,
+    activeTargetId,
+    state.previouslyInhabitedVertexId,
+    state.previousLockedVisibleTargetIds,
+    state.previousFavoriteOnlyTargetIds,
+    state,
+  );
+}
+
+function sourceVertexIdForFocus(current: FocusId, graph: FocusGraph): FocusGraphTargetId | null {
   if (current === CHAT_FOCUS) {
     return graph.activeChatTargetVertexId;
   }
@@ -313,6 +476,7 @@ function edgeForDirection(
   graph: FocusGraph,
   source: FocusGraphTargetId,
   direction: Direction,
+  state: FocusGraphState,
 ): FocusEdge | null {
   const sourceVertex = graph.vertices.get(source);
   const matches = graph.edges.filter(
@@ -325,34 +489,43 @@ function edgeForDirection(
       null
     );
   }
-  return matches.find((candidate) => candidate.traversal === 'ordinaryPaneAdjacency') ?? null;
+  const ordinary = matches.filter((candidate) => candidate.traversal === 'ordinaryPaneAdjacency');
+  const previous = ordinary.find((candidate) => candidate.to === state.previouslyInhabitedVertexId);
+  return previous ?? ordinary[0] ?? null;
 }
 
 export function navigateFocus(
   graph: FocusGraph,
   current: FocusId,
   direction: Direction,
-  state: FocusGraphState = { activeChatTargetId: null, lastTargetByDirection: {} },
+  state: FocusGraphState = EMPTY_FOCUS_GRAPH_STATE,
 ): FocusNavigationResult {
   const source = sourceVertexIdForFocus(current, graph);
-  const edge = source === null ? null : edgeForDirection(graph, source, direction);
+  const edge = source === null ? null : edgeForDirection(graph, source, direction, state);
   const targetVertex = edge === null ? null : (graph.vertices.get(edge.to) ?? null);
   const targetId = targetVertex?.id ?? null;
   const chatTargetId =
     targetVertex?.kind === 'chatTarget'
       ? (targetVertex.chatTargetId ?? targetIdForVirtualVertex(targetVertex.id))
       : null;
+  const activeTargetId =
+    chatTargetId ??
+    (graph.activeChatTargetVertexId === null
+      ? state.activeTargetId
+      : targetIdForVirtualVertex(graph.activeChatTargetVertexId));
+  const nextState = graphTraversalState(
+    graph,
+    activeTargetId,
+    targetId ?? source ?? state.previouslyInhabitedVertexId,
+    state.previousLockedVisibleTargetIds,
+    state.previousFavoriteOnlyTargetIds,
+    state,
+  );
   return {
     targetId,
     focusId: targetVertex === null ? null : focusIdForVertex(targetVertex),
     chatTargetId,
     edge,
-    state: {
-      activeChatTargetId: chatTargetId ?? state.activeChatTargetId,
-      lastTargetByDirection:
-        targetId === null
-          ? state.lastTargetByDirection
-          : { ...state.lastTargetByDirection, [direction]: targetId },
-    },
+    state: nextState,
   };
 }

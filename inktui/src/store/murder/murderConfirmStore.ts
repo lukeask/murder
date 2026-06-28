@@ -3,10 +3,10 @@
  *
  * ## Why a tiny store and not a mode
  *
- * The murder confirm is deliberately NOT a {@link ../../input/modeStore.js mode}: the shell renders
- * the Overlay INSTEAD of the rails + Stage while any mode is up (App.tsx's body ternary), so a mode
- * would blank the whole layout for the confirm window — the opposite of the subtle "press m again"
- * cue this wants. Instead the pending target lives here, the cue is a plain toast, and the root
+ * The murder confirm is deliberately NOT a {@link ../../input/modeStore.js mode}: modal overlays
+ * capture the shell layout while any mode is up, so a mode would obscure the normal pane context for
+ * the confirm window — the opposite of the subtle "press m again" cue this wants. Instead the
+ * pending target lives here, the cue is a plain toast, and the root
  * dispatcher consults the pending flag per-event (via injected handlers, staying pure) to claim the
  * confirming `m`/ctrl+m before the chat/panel layers see it. Any other key cancels the pending state
  * and keeps its normal meaning; an untouched pending state self-expires after {@link ARM_TTL_MS}.
@@ -121,7 +121,5 @@ export interface ResetTarget {
  * needed: the panel re-derives the cursor row on the second press and confirms only when it still
  * matches the armed ticket. The self-expiry guards the stale-arm case.
  */
-export const resetConfirmStore: StoreApi<ConfirmState<ResetTarget>> = createConfirmStore<ResetTarget>(
-  toastStore,
-  (target) => `press x again to reset ${target.name}`,
-);
+export const resetConfirmStore: StoreApi<ConfirmState<ResetTarget>> =
+  createConfirmStore<ResetTarget>(toastStore, (target) => `press x again to reset ${target.name}`);

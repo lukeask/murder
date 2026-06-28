@@ -37,7 +37,7 @@
  *
  * Modes stack: a mode opened over a mode pushes; `exit()` pops the top, `exit(id)` removes that id
  * wherever it sits. The *active* mode is the stack top — the dispatcher and overlay read only it.
- * Each stack frame records the effective focus that was live when it was pushed, so popping restores
+ * Each stack frame records the intended focus that was live when it was pushed, so popping restores
  * exactly the focus the user came from (a dialog opened from the tickets panel returns there; a
  * dialog opened over another dialog returns to that dialog's focus, then to the panel).
  *
@@ -57,7 +57,6 @@
 import type { ReactNode } from 'react';
 import { createStore, type StoreApi } from 'zustand/vanilla';
 import type { FocusId, FocusStoreApi } from './focusStore.js';
-import { selectEffectiveFocus } from './focusStore.js';
 import type { PanelKeymap } from './keymap.js';
 
 /** How the overlay presents a mode. Data, not a branch the consumer hardcodes: the three surfaces
@@ -98,7 +97,7 @@ export interface ModeHint {
   readonly description: string;
 }
 
-/** A pushed stack frame: the mode plus the effective focus that was live when it was pushed, so the
+/** A pushed stack frame: the mode plus the intended focus that was live when it was pushed, so the
  * pop restores exactly there. The saved focus is internal bookkeeping — never exposed to consumers. */
 interface ModeFrame {
   readonly mode: Mode;
@@ -111,7 +110,7 @@ export interface ModeState {
    * callers; replaced wholesale on every push/pop so a `useStore` subscriber re-renders on change. */
   readonly stack: readonly ModeFrame[];
   /**
-   * Enter a mode — push it as the new active mode and save the current effective focus so the
+   * Enter a mode — push it as the new active mode and save the current intended focus so the
    * matching {@link exit} restores it. Re-entering an id already on the stack is idempotent: it is
    * removed and re-pushed to the top (so its saved focus is *not* clobbered to its own surface — we
    * preserve the original frame's saved focus), keeping a stable single instance per id.
@@ -150,8 +149,8 @@ export function createModeStore(focus: FocusStoreApi): ModeStoreApi {
     enter(mode) {
       const existing = get().stack.find((f) => f.mode.id === mode.id);
       // Preserve the original frame's saved focus on a re-enter (don't save *our own* surface as the
-      // restore target); otherwise capture the current effective focus as this frame's restore point.
-      const savedFocus = existing?.savedFocus ?? selectEffectiveFocus(focus);
+      // restore target); otherwise capture the current intended focus as this frame's restore point.
+      const savedFocus = existing?.savedFocus ?? focus.getState().intendedId;
       // The stack stores the erased `Mode<string>` shape (the dispatcher only fires *a* string intent
       // through `onIntent`, always with an intent drawn from this same mode's keymap — so widening
       // `Intent` to `string` on store is sound, exactly as the keymap registry erases `PanelKeymap`).
