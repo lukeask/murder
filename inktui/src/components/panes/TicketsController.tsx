@@ -7,7 +7,7 @@ import type { PanePresentation } from '../../layout/paneLayoutTypes.js';
 import { type TicketRowView, useTicketsView } from '../../selectors/ticketsSelectors.js';
 import { useTheme } from '../../theme/themeStore.js';
 import { useTicketEditor } from '../TicketEditorMode.js';
-import { MeasuredPaneFrame } from './shared/MeasuredPaneFrame.js';
+import { AllocatedPaneFrame } from './shared/AllocatedPaneFrame.js';
 import { useClampedCursor } from './shared/useClampedCursor.js';
 import { TicketsSurface, type TicketsSurfaceRow } from './TicketsSurface.js';
 
@@ -109,7 +109,7 @@ export const TicketsController = memo(function TicketsController({
   usePanelKeymap('tickets', keymap);
 
   return (
-    <MeasuredPaneFrame id="tickets" presentation={presentation}>
+    <AllocatedPaneFrame id="tickets" presentation={presentation}>
       <TicketsSurface
         width={presentation.width}
         height={presentation.height}
@@ -120,6 +120,6 @@ export const TicketsController = memo(function TicketsController({
         status={surfaceStatus(view.status)}
         error={view.error}
       />
-    </MeasuredPaneFrame>
+    </AllocatedPaneFrame>
   );
 });

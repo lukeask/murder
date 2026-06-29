@@ -11,7 +11,7 @@ import {
 } from '../../selectors/historySelectors.js';
 import { useTheme } from '../../theme/themeStore.js';
 import { HistorySurface, type HistorySurfaceRow } from './HistorySurface.js';
-import { MeasuredPaneFrame } from './shared/MeasuredPaneFrame.js';
+import { AllocatedPaneFrame } from './shared/AllocatedPaneFrame.js';
 import { useClampedCursor } from './shared/useClampedCursor.js';
 
 type HistoryIntent = 'cursorDown' | 'cursorUp' | 'resumeOrRefresh' | 'toggleMode' | 'dismiss';
@@ -113,7 +113,7 @@ export const HistoryController = memo(function HistoryController({
   usePanelKeymap('history', keymap);
 
   return (
-    <MeasuredPaneFrame id="history" presentation={presentation}>
+    <AllocatedPaneFrame id="history" presentation={presentation}>
       <HistorySurface
         width={presentation.width}
         height={presentation.height}
@@ -125,6 +125,6 @@ export const HistoryController = memo(function HistoryController({
         status={surfaceStatus(view.status)}
         error={view.error}
       />
-    </MeasuredPaneFrame>
+    </AllocatedPaneFrame>
   );
 });

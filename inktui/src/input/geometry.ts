@@ -15,15 +15,9 @@
  * order as the final stable tiebreak. See {@link directionalFocusTarget} for the per-field map.
  */
 
-/** A measured rectangle in terminal cells. `x`/`y` are the top-left; `width`/`height` extend
- * right/down. Matches what Ink `measureElement` yields, reduced to the four numbers the kernel
- * needs — no widget handle leaks in, keeping the kernel pure. */
-export interface Rect {
-  readonly x: number;
-  readonly y: number;
-  readonly width: number;
-  readonly height: number;
-}
+export type { Rect } from '../terminal/geometry.js';
+
+import type { Rect } from '../terminal/geometry.js';
 
 /** A focus candidate: an opaque id plus where it is on screen. The kernel returns the winning
  * `id`; the caller (focus store) maps it back to a focus target. Generic over the id type so the

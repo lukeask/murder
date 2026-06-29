@@ -18,6 +18,7 @@ import { deriveAgentIdentity } from '../selectors/agentIdentity.js';
 import {
   selectActiveAgentId,
   selectOpenTranscriptPanes,
+  selectRecipientTargets,
 } from '../selectors/conversationsSelectors.js';
 import { selectUsageView } from '../selectors/usageSelectors.js';
 import type { AppStore } from '../store/store.js';
@@ -30,7 +31,7 @@ import type {
   PaneRegion,
   PaneRequest,
   PaneSizing,
-} from './paneLayout.js';
+} from './paneLayoutTypes.js';
 
 const PANEL_SIZING: Record<PanelId, PaneSizing> = {
   plans: { min: { width: 25, height: 5 }, preferred: { width: 34, height: 14 } },
@@ -90,6 +91,19 @@ function requestPriority(id: PaneId, focusedId: FocusId, base: number): number {
   return id === focusedId ? 1 : base;
 }
 
+function orderedTranscriptAgentIds(
+  state: AppStore,
+  currentAgentId: string | null,
+): readonly string[] {
+  const ids = selectRecipientTargets(state.conversations, state.roster, state.favorites).map(
+    (identity) => identity.agentId,
+  );
+  if (currentAgentId === null || ids.includes(currentAgentId)) {
+    return ids;
+  }
+  return [...ids, currentAgentId];
+}
+
 export function usagePaneSizing(state: Pick<AppStore, 'usage'>): PaneSizing {
   const view = selectUsageView(state.usage);
   const stackedHeight = PANE_CHROME_HEIGHT + view.groups.length + state.usage.rows.length;
@@ -139,6 +153,9 @@ export function buildPaneRequests(input: BuildPaneRequestsInput): readonly PaneR
   }
 
   const currentAgentId = selectActiveAgentId(state.conversations, state.roster, state.favorites);
+  const transcriptOrder = new Map<string, number>(
+    orderedTranscriptAgentIds(state, currentAgentId).map((agentId, index) => [agentId, index]),
+  );
   const lockedPanes = selectOpenTranscriptPanes(
     state.roster,
     state.favorites,
@@ -170,7 +187,13 @@ export function buildPaneRequests(input: BuildPaneRequestsInput): readonly PaneR
     });
   }
 
-  for (const { identity, locked } of chatPanesByAgentId.values()) {
+  const chatPanes = [...chatPanesByAgentId.values()].sort(
+    (a, b) =>
+      (transcriptOrder.get(a.identity.agentId) ?? Number.MAX_SAFE_INTEGER) -
+        (transcriptOrder.get(b.identity.agentId) ?? Number.MAX_SAFE_INTEGER) ||
+      a.identity.agentId.localeCompare(b.identity.agentId),
+  );
+  for (const { identity, locked } of chatPanes) {
     const current = identity.agentId === currentAgentId;
     const id: PaneId = stageTranscriptFocusId(identity.agentId);
     const chatReapPriority = current ? 1 : locked ? 24 : 10;

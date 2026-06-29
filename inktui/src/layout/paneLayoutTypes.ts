@@ -1,5 +1,6 @@
 import type { Orientation } from '../hooks/useOrientation.js';
 import type { PanelId } from '../input/panels.js';
+import type { Rect } from '../terminal/geometry.js';
 
 export type CellSize = {
   readonly width: number;
@@ -10,8 +11,6 @@ export type CellPoint = {
   readonly x: number;
   readonly y: number;
 };
-
-export type PaneRect = CellPoint & CellSize;
 
 export type PaneId = string;
 
@@ -24,18 +23,9 @@ export type PaneSizing = {
   readonly preferred: CellSize;
 };
 
-export type PaneDensity = 'full' | 'compact' | 'minimal';
-
-export type PanePresentationConstraints = {
-  readonly horizontallyCramped: boolean;
-  readonly verticallyCramped: boolean;
-};
-
 export type PanePresentation = {
   readonly width: number;
   readonly height: number;
-  readonly density: PaneDensity;
-  readonly constraints: PanePresentationConstraints;
   readonly focused: boolean;
 };
 
@@ -69,7 +59,7 @@ export type PaneDenialReason =
 export type PaneAllocation = {
   readonly request: PaneRequest;
   readonly region: PaneRegion;
-  readonly rect: PaneRect;
+  readonly rect: Rect;
   readonly presentation: PanePresentation;
 };
 
@@ -83,13 +73,6 @@ export type PaneChromeHeights = {
   readonly topBar: number;
   readonly bottomBar: number;
   readonly chatInput: number;
-};
-
-export type RecipientTargetState = {
-  readonly activeTargetId: string | null;
-  readonly lockedVisibleTargetIds: readonly string[];
-  readonly favoriteOnlyTargetIds: readonly string[];
-  readonly ephemeralTargetId: string | null;
 };
 
 export type PaneLayoutInput = {
@@ -108,12 +91,11 @@ export type PaneLayoutInput = {
   readonly gap: number;
   readonly requests: readonly PaneRequest[];
   readonly focusedPaneId?: PaneId;
-  readonly recipientTargets?: RecipientTargetState;
 };
 
 export type PaneRegionPlan = {
   readonly region: PaneRegion;
-  readonly rect: PaneRect | null;
+  readonly rect: Rect | null;
   readonly allocations: readonly PaneAllocation[];
 };
 
@@ -127,7 +109,7 @@ export type PaneLayoutPlan = {
   readonly terminal: CellSize;
   readonly chrome: PaneChromeHeights;
   readonly body: CellSize;
-  readonly bodyRect: PaneRect;
+  readonly bodyRect: Rect;
   readonly orientation: Orientation;
   readonly gap: number;
   readonly allocations: readonly PaneAllocation[];

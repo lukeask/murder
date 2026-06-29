@@ -15,7 +15,7 @@ import { useConversationTurns } from '../../selectors/conversationsSelectors.js'
 import { harnessModelFooter, worktreeLabel } from '../../selectors/harnessDisplay.js';
 import type { AppStore } from '../../store/store.js';
 import { useTheme } from '../../theme/themeStore.js';
-import { MeasuredPaneFrame } from './shared/MeasuredPaneFrame.js';
+import { AllocatedPaneFrame } from './shared/AllocatedPaneFrame.js';
 import { TranscriptPane } from './TranscriptPane.js';
 
 const TRANSCRIPT_SCROLL_STEP = 1;
@@ -193,7 +193,7 @@ export const TranscriptController = memo(function TranscriptController({
   );
 
   return (
-    <MeasuredPaneFrame id={focusId} presentation={presentation}>
+    <AllocatedPaneFrame id={focusId} presentation={presentation}>
       <TranscriptPane
         width={presentation.width}
         height={presentation.height}
@@ -216,6 +216,6 @@ export const TranscriptController = memo(function TranscriptController({
         tmuxFrame={tmuxFrame}
         tmuxWaitingText={TMUX_WAITING_TEXT}
       />
-    </MeasuredPaneFrame>
+    </AllocatedPaneFrame>
   );
 });

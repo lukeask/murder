@@ -9,8 +9,7 @@
  *  - {@link useEffectiveFocus} — the derived re-home invariant as a hook: returns the *effective*
  *    focus, recomputed from intended focus and live focus geometry. A panel's highlight reads
  *    `useEffectiveFocus() === myId`.
- *  - {@link useMeasureFocus} — registers a component's measured rect with the focus store so
- *    directional nav has geometry (the Ink `measureElement` bridge at the component layer).
+ *  - {@link useMeasureFocus} — registers non-layout focus geometry such as chat.
  *
  * These are the hooks C5's panels copy; nothing here calls the bus or owns input — the root input
  * loop lives in {@link useRootInput}.
@@ -26,10 +25,18 @@ import type { ChatInputState, ChatInputStoreApi } from '../input/chatInputStore.
 import type { ChatVimState, ChatVimStoreApi } from '../input/chatVimStore.js';
 import {
   buildFocusGraph,
+  focusPaneGeometriesFromRects,
+  normalizeFocusGraphRecipientTargets,
   resolveEffectiveFocus,
   resolveEffectiveFocusTarget,
 } from '../input/focusGraph.js';
-import type { FocusId, FocusState, FocusStoreApi, FocusTarget } from '../input/focusStore.js';
+import {
+  CHAT_FOCUS,
+  type FocusId,
+  type FocusState,
+  type FocusStoreApi,
+  type FocusTarget,
+} from '../input/focusStore.js';
 import type { Rect } from '../input/geometry.js';
 import type { PanelKeymap } from '../input/keymap.js';
 import type { KeymapRegistryApi, KeymapRegistryState } from '../input/keymapRegistry.js';
@@ -189,22 +196,34 @@ export function usePanelKeymap<Intent extends string>(
 export function useEffectiveFocus(): FocusId {
   const intended = useFocusStore((s) => s.intendedId);
   const rects = useFocusStore((s) => s.rects);
+  const paneGeometries = useFocusStore((s) => s.paneGeometries);
   const recipientTargets = useFocusStore((s) => s.recipientTargets);
   const graphState = useFocusStore((s) => s.graphState);
   return resolveEffectiveFocus(
     intended,
-    buildFocusGraph({ rects, recipientTargets, state: graphState }),
+    buildFocusGraph({
+      panes: paneGeometries ?? focusPaneGeometriesFromRects(rects),
+      chatRect: rects.get(CHAT_FOCUS) ?? null,
+      recipientTargets: normalizeFocusGraphRecipientTargets(recipientTargets),
+      state: graphState,
+    }),
   );
 }
 
 export function useEffectiveFocusTarget(): FocusTarget {
   const intended = useFocusStore((s) => s.intendedId);
   const rects = useFocusStore((s) => s.rects);
+  const paneGeometries = useFocusStore((s) => s.paneGeometries);
   const recipientTargets = useFocusStore((s) => s.recipientTargets);
   const graphState = useFocusStore((s) => s.graphState);
   return resolveEffectiveFocusTarget(
     intended,
-    buildFocusGraph({ rects, recipientTargets, state: graphState }),
+    buildFocusGraph({
+      panes: paneGeometries ?? focusPaneGeometriesFromRects(rects),
+      chatRect: rects.get(CHAT_FOCUS) ?? null,
+      recipientTargets: normalizeFocusGraphRecipientTargets(recipientTargets),
+      state: graphState,
+    }),
   ).target;
 }
 
@@ -238,45 +257,35 @@ function measureRect(node: DOMElement): Rect {
 /**
  * Bridge an Ink box's measured absolute rect into the focus store so directional nav can target it.
  * Pass the focusable's id and the ref you put on its `<Box>`; on every layout this measures the box
- * and records the rect (the store dedupes unchanged rects). C5's panels call this once per panel.
+ * and records the rect (the store dedupes unchanged rects). Allocated panes do not use this; their
+ * geometry comes from the layout plan.
  *
  * ## Re-measure under reflow (Phase 2)
- * A terminal resize / orientation flip changes every focusable's Yoga rect, so `ctrl+h/j/k/l` must
- * score over the NEW geometry. The effect below has no dependency array, so it re-measures on every
- * render — but that only helps if the component actually re-renders on a resize. The panels are
- * `React.memo`'d with no props (`<PlansController/>`), and a bare resize changes none of the slices they
- * subscribe to (focus intent, focus geometry, their data) — so without this hook they would NOT
- * re-render, the depless effect would NOT run, and the stored rect would go stale (the bug the spec
- * warns about). We subscribe to {@link useTerminalSize} HERE so a resize re-renders every focusable
- * that calls this hook → its measure effect re-runs → its rect refreshes. One subscription covers all
- * panels + chat; the store dedupes unchanged rects, so a no-op resize causes no re-render churn.
+ * A terminal resize / orientation flip changes chat's Yoga rect, so `ctrl+h/j/k/l` must score over
+ * the NEW geometry. We subscribe to {@link useTerminalSize} HERE so a resize re-renders any measured
+ * non-layout focusable and refreshes its rect.
  *
- * ## Unmount cleanup (Phase 4a — Stage panes)
- * A Stage pane rendered by the pane bridge is a dynamic focusable: it leaves the tree when its
- * crow is un-favorited. On unmount it must drop its rect so the next focus graph excludes it and
- * effective focus re-homes to chat.
+ * ## Unmount cleanup
+ * A measured non-layout focusable must drop its rect when it leaves the tree.
  * The cleanup lives in a SEPARATE unmount-only effect (deps `[id, unmeasure]`), NOT folded into the
  * depless measure effect above: that effect's cleanup runs on every render, so unmeasuring there
  * would unmeasure→remeasure each render and transiently drop the pane from the candidate set. This is
- * uniform across all focusables (panels unmount on toggle-off too; cleaning their stale rect is
- * strictly fine) and keeps the hook one shape. `id` accepts any {@link FocusId}, so a Stage pane
- * passes its opaque stage-pane focus id unchanged.
+ * `id` accepts any {@link FocusId} so tests can use the same hook shape for ad hoc focusables.
  */
 export function useMeasureFocus(id: FocusId, ref: React.RefObject<DOMElement | null>): void {
   const measure = useFocusStore((s) => s.measure);
   const unmeasure = useFocusStore((s) => s.unmeasure);
   const markPaneOpened = useFocusStore((s) => s.markPaneOpened);
   const markPaneClosed = useFocusStore((s) => s.markPaneClosed);
-  // Subscribe to the live terminal size: a resize re-renders this focusable (it's otherwise a
-  // no-prop memo that wouldn't re-render), which re-runs the depless measure effect → fresh rect.
+  // Subscribe to the live terminal size so resize refreshes measured non-layout focus rects.
   useTerminalSize();
   useEffect(() => {
     if (ref.current !== null) {
       measure(id, measureRect(ref.current));
     }
   });
-  // Unmount-only: drop this focusable's rect when it leaves the tree (Phase 4a re-home for Stage
-  // panes). Deps `[id, unmeasure]` so it does NOT run on every render (see the header note).
+  // Unmount-only: drop this focusable's rect when it leaves the tree. Deps `[id, unmeasure]` so it
+  // does NOT run on every render (see the header note).
   useEffect(() => {
     markPaneOpened(id);
     return () => {
@@ -286,8 +295,18 @@ export function useMeasureFocus(id: FocusId, ref: React.RefObject<DOMElement | n
   }, [id, markPaneClosed, markPaneOpened, unmeasure]);
 }
 
-/** A stable ref for a measured focusable `<Box>`. Sugar so a panel writes `const ref = useFocusRef()`
- * and spreads it, rather than importing `useRef`/`DOMElement` itself. */
+export function usePaneFocusLifecycle(id: FocusId): void {
+  const markPaneOpened = useFocusStore((s) => s.markPaneOpened);
+  const markPaneClosed = useFocusStore((s) => s.markPaneClosed);
+  useEffect(() => {
+    markPaneOpened(id);
+    return () => {
+      markPaneClosed(id);
+    };
+  }, [id, markPaneClosed, markPaneOpened]);
+}
+
+/** A stable ref for a measured non-layout focusable `<Box>`. */
 export function useFocusRef(): React.RefObject<DOMElement | null> {
   return useRef<DOMElement | null>(null);
 }

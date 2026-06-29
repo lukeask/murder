@@ -8,7 +8,7 @@ import { useReportsView } from '../../selectors/reportsSelectors.js';
 import { useTheme } from '../../theme/themeStore.js';
 import { useDocView } from './docView.js';
 import { ReportsSurface } from './ReportsSurface.js';
-import { MeasuredPaneFrame } from './shared/MeasuredPaneFrame.js';
+import { AllocatedPaneFrame } from './shared/AllocatedPaneFrame.js';
 import { useClampedCursor } from './shared/useClampedCursor.js';
 
 type ReportsIntent = 'cursorDown' | 'cursorUp' | 'refresh' | 'star' | 'open';
@@ -91,7 +91,7 @@ export const ReportsController = memo(function ReportsController({
   usePanelKeymap('reports', keymap);
 
   return (
-    <MeasuredPaneFrame id="reports" presentation={presentation}>
+    <AllocatedPaneFrame id="reports" presentation={presentation}>
       <ReportsSurface
         width={presentation.width}
         height={presentation.height}
@@ -102,6 +102,6 @@ export const ReportsController = memo(function ReportsController({
         status={view.status}
         error={view.error}
       />
-    </MeasuredPaneFrame>
+    </AllocatedPaneFrame>
   );
 });

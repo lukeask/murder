@@ -56,6 +56,7 @@ import { expandTemplates } from '../input/expandTemplates.js';
 import { parseWorkflowFire } from '../input/fireWorkflow.js';
 import {
   CHAT_FOCUS,
+  type FocusId,
   type FocusTarget,
   selectResolvedFocus,
 } from '../input/focusStore.js';
@@ -66,7 +67,6 @@ import {
   renderPaneLayoutPlan,
 } from '../layout/paneBridge.js';
 import { computePaneLayout } from '../layout/paneLayout.js';
-import type { RecipientTargetState } from '../layout/paneLayoutTypes.js';
 import { deriveAgentIdentity } from '../selectors/agentIdentity.js';
 import {
   isFreeformChoiceSelected,
@@ -77,6 +77,7 @@ import {
   selectFavoriteTranscriptPanes,
   selectLiveChoicePrompt,
   selectOpenTranscriptPanes,
+  selectRecipientTargetState,
   selectUserHistory,
 } from '../selectors/conversationsSelectors.js';
 import { submitCommand } from '../store/commandSubmit.js';
@@ -143,7 +144,10 @@ export const MIN_TERMINAL_ROWS = 16;
  * The returned `path` is `.murder/<dir>/<name>.md` (the dir from {@link DOC_DIR}). The wizard builds
  * `"Please read ${path} before starting."` — the rogue reads the file, not an inlined body.
  */
-export function deriveSpawnContext(appStore: AppStoreApi, target: FocusTarget): SpawnContext | null {
+export function deriveSpawnContext(
+  appStore: AppStoreApi,
+  target: FocusTarget,
+): SpawnContext | null {
   // The file context is included ONLY when the highlighted pane is the open doc. A transcript pane / the
   // chat input never includes the file, even when a doc is open elsewhere in the center-stage group.
   if (target.kind !== 'docPane') {
@@ -655,36 +659,10 @@ function Shell({
   const appState = useAppStore((s) => s);
   const visiblePanels = usePanelStore((s) => s.visible);
   const effectiveFocus = useEffectiveFocus();
-  const activeRecipientTargetId = selectActiveAgentId(
-    appState.conversations,
-    appState.roster,
-    appState.favorites,
+  const recipientTargetState = useMemo(
+    () => selectRecipientTargetState(appState.conversations, appState.roster, appState.favorites),
+    [appState.conversations, appState.roster, appState.favorites],
   );
-  const recipientTargetState = useMemo<RecipientTargetState>(() => {
-    const lockedVisibleTargetIds = selectOpenTranscriptPanes(
-      appState.roster,
-      appState.favorites,
-      appState.conversations.paneOverrides,
-    ).panes.map((pane) => pane.agentId);
-    const locked = new Set(lockedVisibleTargetIds);
-    const favoriteOnlyTargetIds = selectFavoriteTranscriptPanes(appState.roster, appState.favorites)
-      .panes.map((pane) => pane.agentId)
-      .filter((agentId) => !locked.has(agentId));
-    return {
-      activeTargetId: activeRecipientTargetId,
-      lockedVisibleTargetIds,
-      favoriteOnlyTargetIds,
-      ephemeralTargetId:
-        activeRecipientTargetId !== null && !locked.has(activeRecipientTargetId)
-          ? activeRecipientTargetId
-          : null,
-    };
-  }, [
-    appState.roster,
-    appState.favorites,
-    appState.conversations.paneOverrides,
-    activeRecipientTargetId,
-  ]);
   useEffect(() => {
     focus.getState().setRecipientTargets(recipientTargetState);
   }, [focus, recipientTargetState]);
@@ -709,7 +687,6 @@ function Shell({
         gap: paneGap,
         requests: paneRequests,
         focusedPaneId: effectiveFocus,
-        recipientTargets: recipientTargetState,
       }),
     [
       columns,
@@ -722,9 +699,17 @@ function Shell({
       paneGap,
       paneRequests,
       effectiveFocus,
-      recipientTargetState,
     ],
   );
+  useEffect(() => {
+    focus.getState().setPaneGeometries(
+      paneLayoutPlan.allocations.map((allocation) => ({
+        id: allocation.request.id as FocusId,
+        rect: allocation.rect,
+        orderKey: allocation.request.orderKey,
+      })),
+    );
+  }, [focus, paneLayoutPlan.allocations]);
   const chatIdentities = useMemo(() => createChatIdentityMap(appState), [appState]);
   const paneRenderContext = useMemo(
     () => ({ state: appState, chatIdentities }),

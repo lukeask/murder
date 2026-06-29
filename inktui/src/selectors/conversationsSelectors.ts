@@ -93,6 +93,13 @@ export interface OpenTranscriptPanesView {
   readonly panes: readonly AgentIdentity[];
 }
 
+export interface RecipientTargetState {
+  readonly activeTargetId: string | null;
+  readonly lockedVisibleTargetIds: readonly string[];
+  readonly favoriteOnlyTargetIds: readonly string[];
+  readonly ephemeralTargetId: string | null;
+}
+
 // ---------------------------------------------------------------------------
 // Block→turn formatting (rule 2: presentation here, not in the store)
 // ---------------------------------------------------------------------------
@@ -623,7 +630,10 @@ export function useFavoriteTranscriptPanes(
   rosterState: RosterState,
   favorites: FavoritesState = NO_FAVORITES,
 ): FavoriteTranscriptPanesView {
-  return useMemo(() => selectFavoriteTranscriptPanes(rosterState, favorites), [rosterState, favorites]);
+  return useMemo(
+    () => selectFavoriteTranscriptPanes(rosterState, favorites),
+    [rosterState, favorites],
+  );
 }
 
 /**
@@ -663,7 +673,11 @@ export function selectActiveAgentId(
   }
   // Default the target to the first OPEN pane (item 9b: open = favorites default + overrides) so the
   // chat input names a target whose pane is actually in the center-stage group.
-  const { panes } = selectOpenTranscriptPanes(rosterState, favorites, conversationsState.paneOverrides);
+  const { panes } = selectOpenTranscriptPanes(
+    rosterState,
+    favorites,
+    conversationsState.paneOverrides,
+  );
   return panes.length > 0 ? (panes[0]?.agentId ?? null) : null;
 }
 
@@ -705,6 +719,30 @@ export function selectRecipientTargets(
     targets.push(identity);
   }
   return targets;
+}
+
+export function selectRecipientTargetState(
+  conversationsState: ConversationsState,
+  rosterState: RosterState,
+  favorites: FavoritesState = NO_FAVORITES,
+): RecipientTargetState {
+  const activeTargetId = selectActiveAgentId(conversationsState, rosterState, favorites);
+  const lockedVisibleTargetIds = selectOpenTranscriptPanes(
+    rosterState,
+    favorites,
+    conversationsState.paneOverrides,
+  ).panes.map((pane) => pane.agentId);
+  const locked = new Set(lockedVisibleTargetIds);
+  const favoriteOnlyTargetIds = selectFavoriteTranscriptPanes(rosterState, favorites)
+    .panes.map((pane) => pane.agentId)
+    .filter((agentId) => !locked.has(agentId));
+  return {
+    activeTargetId,
+    lockedVisibleTargetIds,
+    favoriteOnlyTargetIds,
+    ephemeralTargetId:
+      activeTargetId !== null && !locked.has(activeTargetId) ? activeTargetId : null,
+  };
 }
 
 /**

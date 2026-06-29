@@ -8,7 +8,7 @@ import { useNotesView } from '../../selectors/notesSelectors.js';
 import { useTheme } from '../../theme/themeStore.js';
 import { useDocView } from './docView.js';
 import { NotesSurface } from './NotesSurface.js';
-import { MeasuredPaneFrame } from './shared/MeasuredPaneFrame.js';
+import { AllocatedPaneFrame } from './shared/AllocatedPaneFrame.js';
 import { useClampedCursor } from './shared/useClampedCursor.js';
 
 type NotesIntent = 'cursorDown' | 'cursorUp' | 'refresh' | 'star' | 'open';
@@ -91,7 +91,7 @@ export const NotesController = memo(function NotesController({
   usePanelKeymap('notes', keymap);
 
   return (
-    <MeasuredPaneFrame id="notes" presentation={presentation}>
+    <AllocatedPaneFrame id="notes" presentation={presentation}>
       <NotesSurface
         width={presentation.width}
         height={presentation.height}
@@ -102,6 +102,6 @@ export const NotesController = memo(function NotesController({
         status={view.status}
         error={view.error}
       />
-    </MeasuredPaneFrame>
+    </AllocatedPaneFrame>
   );
 });

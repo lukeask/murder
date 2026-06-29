@@ -8,7 +8,7 @@ import { usePlansView } from '../../selectors/plansSelectors.js';
 import { useTheme } from '../../theme/themeStore.js';
 import { useDocView } from './docView.js';
 import { PlansSurface } from './PlansSurface.js';
-import { MeasuredPaneFrame } from './shared/MeasuredPaneFrame.js';
+import { AllocatedPaneFrame } from './shared/AllocatedPaneFrame.js';
 import { useClampedCursor } from './shared/useClampedCursor.js';
 
 type PlansIntent = 'cursorDown' | 'cursorUp' | 'refresh' | 'star' | 'open' | 'spawnPlanner';
@@ -100,7 +100,7 @@ export const PlansController = memo(function PlansController({
   usePanelKeymap('plans', keymap);
 
   return (
-    <MeasuredPaneFrame id="plans" presentation={presentation}>
+    <AllocatedPaneFrame id="plans" presentation={presentation}>
       <PlansSurface
         width={presentation.width}
         height={presentation.height}
@@ -111,6 +111,6 @@ export const PlansController = memo(function PlansController({
         status={view.status}
         error={view.error}
       />
-    </MeasuredPaneFrame>
+    </AllocatedPaneFrame>
   );
 });

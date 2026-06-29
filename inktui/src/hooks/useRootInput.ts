@@ -33,10 +33,10 @@ import {
 import {
   CHAT_FOCUS,
   type FocusStoreApi,
-  selectResolvedFocus,
-  stageTranscriptFocusId,
   type StagePaneId,
   selectEffectiveFocus,
+  selectResolvedFocus,
+  stageTranscriptFocusId,
 } from '../input/focusStore.js';
 import { selectActiveMode } from '../input/modeStore.js';
 import type { PanelStoreApi } from '../input/panelStore.js';
@@ -106,8 +106,8 @@ export interface DeferredGlobalHandlers {
    * Resolve the agent whose transcript pane the mouse wheel should scroll while the chat INPUT
    * holds focus — i.e. the input's active send target. Returns the agentId, or `null` when there is
    * no target. Supplied by the shell (it reads conversations/roster/favorites); the wheel only acts
-   * if that agent's pane is currently shown in the center-stage group (checked here against the rects map). Absent
-   * → the chat-input wheel case is a no-op.
+   * if that agent's pane is currently shown in the center-stage group. Absent → the chat-input wheel
+   * case is a no-op.
    */
   chatScrollTargetAgentId?: () => string | null;
 }
@@ -122,10 +122,10 @@ export interface DeferredGlobalHandlers {
  */
 export interface TerminalEvents {
   on(event: 'chord', listener: (chord: Chord) => void): unknown;
-  off(event: 'chord', listener: (chord: Chord) => void): unknown;
   /** Mouse-wheel notches lifted from SGR mouse reports (the shim emits these when mouse reporting is
    * enabled). Routed by effective focus to the focused/targeted pane's scroll. */
   on(event: 'wheel', listener: (wheel: Wheel) => void): unknown;
+  off(event: 'chord', listener: (chord: Chord) => void): unknown;
   off(event: 'wheel', listener: (wheel: Wheel) => void): unknown;
 }
 
@@ -296,7 +296,10 @@ export function useRootInput(
       const agentId = deferred.chatScrollTargetAgentId?.() ?? null;
       if (agentId !== null) {
         const candidate: StagePaneId = stageTranscriptFocusId(agentId);
-        if (focusState.rects.has(candidate)) {
+        const paneIsAllocated =
+          focusState.paneGeometries?.some((geometry) => geometry.id === candidate) ??
+          focusState.rects.has(candidate);
+        if (paneIsAllocated) {
           target = candidate;
         }
       }

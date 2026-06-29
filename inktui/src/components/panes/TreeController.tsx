@@ -14,7 +14,7 @@ import {
 import type { Theme } from '../../theme/buildTheme.js';
 import { useTheme } from '../../theme/themeStore.js';
 import { paneContentWidthForWidth } from '../Pane.js';
-import { MeasuredPaneFrame } from './shared/MeasuredPaneFrame.js';
+import { AllocatedPaneFrame } from './shared/AllocatedPaneFrame.js';
 import { TreeSurface, type TreeSurfaceData, type TreeSurfaceLane } from './TreeSurface.js';
 
 type TreeIntent =
@@ -309,7 +309,7 @@ export const TreeController = memo(function TreeController({
   usePanelKeymap('tree', keymap);
 
   return (
-    <MeasuredPaneFrame id="tree" presentation={presentation}>
+    <AllocatedPaneFrame id="tree" presentation={presentation}>
       <TreeSurface
         width={presentation.width}
         height={presentation.height}
@@ -317,6 +317,6 @@ export const TreeController = memo(function TreeController({
         theme={theme}
         data={data}
       />
-    </MeasuredPaneFrame>
+    </AllocatedPaneFrame>
   );
 });

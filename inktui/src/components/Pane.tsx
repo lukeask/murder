@@ -44,12 +44,9 @@
  *  - Formatting stays in selectors (rule 2): `title`/`titleExtra` arrive display-ready.
  *
  * ## Phase 2/3 handoff (prop contract / seam)
- *  - The PANEL owns focus identity. It keeps `useFocusRef` / `useEffectiveFocus` / `useMeasureFocus`
- *    (panel-level — those tie a `PanelId` to a measured rect for directional nav), computes
- *    `focused = useEffectiveFocus() === PANEL_ID`, and passes `focused` + `ref` into the Pane. The
- *    Pane attaches `ref` to its OUTER Box so `useMeasureFocus` measures the whole bordered region
- *    (title row + content) — this keeps the directional-focus rects correct under reflow. Do NOT add
- *    a focus hook inside Pane; that would couple a presentational primitive to panel identity.
+ *  - The PANEL owns focus identity. It computes `focused = useEffectiveFocus() === PANEL_ID` and
+ *    passes `focused` into the Pane. Do NOT add a focus hook inside Pane; that would couple a
+ *    presentational primitive to panel identity.
  *  - Put the list body (a `Ledger`, or any node) as `children`. The Pane provides `paddingLeft={1}`
  *    and `paddingRight={1}` by default (both configurable for edge-to-edge panes) and
  *    the height-clamping flex discipline (`minHeight={0}` + `overflow="hidden"`) so an overflowing
@@ -186,8 +183,7 @@ export interface PaneProps {
 }
 
 /**
- * The bordered Pane. `ref` is forwarded to the OUTER Box for the panel's `useMeasureFocus` (see the
- * header's handoff note). `memo`'d so a Pane repaints only when its own props change (rule 1).
+ * The bordered Pane. `memo`'d so a Pane repaints only when its own props change (rule 1).
  */
 export const Pane = memo(
   forwardRef<DOMElement, PaneProps>(function Pane(

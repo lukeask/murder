@@ -27,19 +27,21 @@
  * {@link PanelId}s + chat to include {@link StagePaneId} (`stage:<...>`;
  * Phase 4b adds `stage:doc:<name>` under the same scheme — no further type change needed).
  *
- * A pane's analogue of "is this a live candidate?" is **"does it have a non-zero measured rect right
- * now?"**. A pane that painted has measured itself; a pane that unmounted called
- * {@link FocusState.unmeasure} and dropped its rect. The graph applies that rule uniformly to list
- * panels and Stage panes.
+ * A pane's analogue of "is this a live candidate?" is **"did the layout engine allocate it a
+ * non-zero rect?"**. Chat is outside pane allocation, so it remains a measured focusable.
  */
 
 import { createStore, type StoreApi } from 'zustand/vanilla';
-import type { RecipientTargetState } from '../layout/paneLayoutTypes.js';
+import type { RecipientTargetState } from '../selectors/conversationsSelectors.js';
 import {
   buildFocusGraph,
   EMPTY_FOCUS_GRAPH_STATE,
+  type FocusGraph,
   type FocusGraphState,
+  type FocusPaneGeometry,
+  focusPaneGeometriesFromRects,
   navigateFocus,
+  normalizeFocusGraphRecipientTargets,
   type ResolvedFocus,
   refreshFocusGraphState,
   resolveEffectiveFocus,
@@ -52,9 +54,9 @@ import type { PanelStoreApi } from './panelStore.js';
 export {
   CHAT_FOCUS,
   decodeStagePaneFocusId,
-  focusTargetFromFocusId,
   type FocusId,
   type FocusTarget,
+  focusTargetFromFocusId,
   isStagePaneId,
   type StagePaneId,
   stageDocFocusId,
@@ -93,6 +95,21 @@ function graphStateWithOpenHistory(
   return { ...graphState, openPaneIdsByOpenedAt };
 }
 
+function buildStoreFocusGraph(
+  rects: ReadonlyMap<FocusId, Rect>,
+  paneGeometries: readonly FocusPaneGeometry[] | null,
+  recipientTargets: RecipientTargetState,
+  state: FocusGraphState,
+): FocusGraph {
+  const chatRect = rects.get(CHAT_FOCUS) ?? null;
+  return buildFocusGraph({
+    panes: paneGeometries ?? focusPaneGeometriesFromRects(rects),
+    chatRect,
+    recipientTargets: normalizeFocusGraphRecipientTargets(recipientTargets),
+    state,
+  });
+}
+
 /** The focus store's state: the intended target plus the focus verbs. The *effective* focus is not
  * stored — read it with {@link selectEffectiveFocus} (or the React hook), which applies the
  * invariant against the live focus graph. */
@@ -103,12 +120,11 @@ export interface FocusState {
   readonly graphState: FocusGraphState;
   /** Durable pane admission order, updated from mount/unmount rather than layout order. */
   readonly openPaneIdsByOpenedAt: readonly FocusId[];
+  readonly paneGeometries: readonly FocusPaneGeometry[] | null;
   readonly recipientTargets: RecipientTargetState;
   /**
-   * The measured screen rect of each focusable, keyed by {@link FocusId}. Populated by components
-   * via {@link FocusState.measure} (Ink `measureElement` at the component layer); read only by
-   * {@link FocusState.navigate} to run the geometry kernel. Plain data — the kernel stays pure and
-   * the store stays the single home of focus state, including the geometry inputs nav needs.
+   * Measured non-layout focus rects, keyed by {@link FocusId}. In the app this is primarily chat;
+   * tests may also use it as a fallback pane geometry source before layout publishes allocations.
    */
   readonly rects: ReadonlyMap<FocusId, Rect>;
   /** Point focus at a target (`ctrl+<n>` on a panel, `ctrl+f`/`ctrl+s` to chat, a vim-nav result).
@@ -121,16 +137,17 @@ export interface FocusState {
   markPaneOpened(id: FocusId): void;
   /** Retire an unmounted pane from the durable open-history queue. Chat is ignored. */
   markPaneClosed(id: FocusId): void;
-  /** Drop a focusable's rect — a Stage pane calls this on UNMOUNT (its component left the tree). It
-   * removes the pane from the rects map, so the next graph build excludes it and effective focus
-   * re-homes to chat if needed. Idempotent for an absent id (keeps map identity → no re-render
+  /** Publish the current layout-engine pane rectangles. Null means the store falls back to measured
+   * rects for tests and non-layout harnesses; an empty array is a real "no panes allocated" state. */
+  setPaneGeometries(geometries: readonly FocusPaneGeometry[]): void;
+  /** Drop a measured non-layout rect. Idempotent for an absent id (keeps map identity → no re-render
    * churn). */
   unmeasure(id: FocusId): void;
   /** Publish the current recipient-target partition from the app state into focus graph construction. */
   setRecipientTargets(recipientTargets: RecipientTargetState): void;
-  /** `ctrl+vim`: move focus to the geometric neighbour of the *effective* focus in `direction`,
-   * over the mounted candidates' measured rects. No neighbour in that direction → focus unchanged
-   * (the layout edge). The whole nav policy is here so the dispatcher just calls `navigate(dir)`. */
+  /** `ctrl+vim`: move focus to the geometric neighbour of the *effective* focus in `direction`.
+   * No neighbour in that direction → focus unchanged (the layout edge). The whole nav policy is here
+   * so the dispatcher just calls `navigate(dir)`. */
   navigate(direction: Direction): void;
 }
 
@@ -145,6 +162,7 @@ export function createFocusStore(
     intendedId: initialIntended,
     graphState: EMPTY_FOCUS_GRAPH_STATE,
     openPaneIdsByOpenedAt: [],
+    paneGeometries: null,
     recipientTargets: EMPTY_RECIPIENT_TARGETS,
     rects: new Map<FocusId, Rect>(),
     focus(id) {
@@ -157,11 +175,12 @@ export function createFocusStore(
           return state; // unchanged — keep map identity, no re-render churn
         }
         const rects = new Map(state.rects).set(id, rect);
-        const graph = buildFocusGraph({
+        const graph = buildStoreFocusGraph(
           rects,
-          recipientTargets: state.recipientTargets,
-          state: graphStateWithOpenHistory(state.graphState, state.openPaneIdsByOpenedAt),
-        });
+          state.paneGeometries,
+          state.recipientTargets,
+          graphStateWithOpenHistory(state.graphState, state.openPaneIdsByOpenedAt),
+        );
         return {
           rects,
           graphState: refreshFocusGraphState(
@@ -178,11 +197,12 @@ export function createFocusStore(
         }
         const openPaneIdsByOpenedAt = [...state.openPaneIdsByOpenedAt, id];
         const graphState = graphStateWithOpenHistory(state.graphState, openPaneIdsByOpenedAt);
-        const graph = buildFocusGraph({
-          rects: state.rects,
-          recipientTargets: state.recipientTargets,
-          state: graphState,
-        });
+        const graph = buildStoreFocusGraph(
+          state.rects,
+          state.paneGeometries,
+          state.recipientTargets,
+          graphState,
+        );
         return {
           openPaneIdsByOpenedAt,
           graphState: refreshFocusGraphState(graph, graphState),
@@ -196,11 +216,12 @@ export function createFocusStore(
         }
         const openPaneIdsByOpenedAt = state.openPaneIdsByOpenedAt.filter((paneId) => paneId !== id);
         const graphState = graphStateWithOpenHistory(state.graphState, openPaneIdsByOpenedAt);
-        const graph = buildFocusGraph({
-          rects: state.rects,
-          recipientTargets: state.recipientTargets,
-          state: graphState,
-        });
+        const graph = buildStoreFocusGraph(
+          state.rects,
+          state.paneGeometries,
+          state.recipientTargets,
+          graphState,
+        );
         return {
           openPaneIdsByOpenedAt,
           graphState: refreshFocusGraphState(graph, graphState),
@@ -214,17 +235,33 @@ export function createFocusStore(
         }
         const next = new Map(state.rects);
         next.delete(id);
-        const graph = buildFocusGraph({
-          rects: next,
-          recipientTargets: state.recipientTargets,
-          state: graphStateWithOpenHistory(state.graphState, state.openPaneIdsByOpenedAt),
-        });
+        const graph = buildStoreFocusGraph(
+          next,
+          state.paneGeometries,
+          state.recipientTargets,
+          graphStateWithOpenHistory(state.graphState, state.openPaneIdsByOpenedAt),
+        );
         return {
           rects: next,
           graphState: refreshFocusGraphState(
             graph,
             graphStateWithOpenHistory(state.graphState, state.openPaneIdsByOpenedAt),
           ),
+        };
+      });
+    },
+    setPaneGeometries(geometries) {
+      set((state) => {
+        const graphState = graphStateWithOpenHistory(state.graphState, state.openPaneIdsByOpenedAt);
+        const graph = buildStoreFocusGraph(
+          state.rects,
+          geometries,
+          state.recipientTargets,
+          graphState,
+        );
+        return {
+          paneGeometries: geometries,
+          graphState: refreshFocusGraphState(graph, graphState),
         };
       });
     },
@@ -240,11 +277,12 @@ export function createFocusStore(
           previousLockedVisibleTargetIds: [...recipientTargets.lockedVisibleTargetIds],
           previousFavoriteOnlyTargetIds: [...recipientTargets.favoriteOnlyTargetIds],
         };
-        const graph = buildFocusGraph({
-          rects: state.rects,
+        const graph = buildStoreFocusGraph(
+          state.rects,
+          state.paneGeometries,
           recipientTargets,
-          state: graphState,
-        });
+          graphState,
+        );
         return {
           recipientTargets,
           graphState: refreshFocusGraphState(graph, graphState),
@@ -253,11 +291,12 @@ export function createFocusStore(
     },
     navigate(direction) {
       const state = get();
-      const graph = buildFocusGraph({
-        rects: state.rects,
-        recipientTargets: state.recipientTargets,
-        state: graphStateWithOpenHistory(state.graphState, state.openPaneIdsByOpenedAt),
-      });
+      const graph = buildStoreFocusGraph(
+        state.rects,
+        state.paneGeometries,
+        state.recipientTargets,
+        graphStateWithOpenHistory(state.graphState, state.openPaneIdsByOpenedAt),
+      );
       const current = resolveEffectiveFocus(state.intendedId, graph);
       const result = navigateFocus(
         graph,
@@ -290,11 +329,12 @@ export function selectEffectiveFocus(focus: FocusStoreApi): FocusId {
   const state = focus.getState();
   return resolveEffectiveFocus(
     state.intendedId,
-    buildFocusGraph({
-      rects: state.rects,
-      recipientTargets: state.recipientTargets,
-      state: graphStateWithOpenHistory(state.graphState, state.openPaneIdsByOpenedAt),
-    }),
+    buildStoreFocusGraph(
+      state.rects,
+      state.paneGeometries,
+      state.recipientTargets,
+      graphStateWithOpenHistory(state.graphState, state.openPaneIdsByOpenedAt),
+    ),
   );
 }
 
@@ -302,10 +342,11 @@ export function selectResolvedFocus(focus: FocusStoreApi): ResolvedFocus {
   const state = focus.getState();
   return resolveEffectiveFocusTarget(
     state.intendedId,
-    buildFocusGraph({
-      rects: state.rects,
-      recipientTargets: state.recipientTargets,
-      state: graphStateWithOpenHistory(state.graphState, state.openPaneIdsByOpenedAt),
-    }),
+    buildStoreFocusGraph(
+      state.rects,
+      state.paneGeometries,
+      state.recipientTargets,
+      graphStateWithOpenHistory(state.graphState, state.openPaneIdsByOpenedAt),
+    ),
   );
 }

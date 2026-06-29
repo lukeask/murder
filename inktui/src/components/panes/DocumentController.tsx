@@ -8,7 +8,7 @@ import type { PanePresentation } from '../../layout/paneLayoutTypes.js';
 import { DOC_DIR } from '../../store/docView/docViewSlice.js';
 import type { AppStore } from '../../store/store.js';
 import { DocumentSurface, documentContentInnerHeight } from './DocumentSurface.js';
-import { MeasuredPaneFrame } from './shared/MeasuredPaneFrame.js';
+import { AllocatedPaneFrame } from './shared/AllocatedPaneFrame.js';
 import { computeDocumentWindow } from './shared/scrollWindow.js';
 
 const DOC_SCROLL_STEP = 1;
@@ -119,7 +119,7 @@ export const DocumentController = memo(function DocumentController({
   );
 
   return (
-    <MeasuredPaneFrame id={focusId} presentation={presentation}>
+    <AllocatedPaneFrame id={focusId} presentation={presentation}>
       <DocumentSurface
         width={presentation.width}
         height={presentation.height}
@@ -131,6 +131,6 @@ export const DocumentController = memo(function DocumentController({
         status={status === 'idle' ? 'ready' : status}
         error={error}
       />
-    </MeasuredPaneFrame>
+    </AllocatedPaneFrame>
   );
 });

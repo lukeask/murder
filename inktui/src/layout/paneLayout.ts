@@ -1,42 +1,17 @@
+import type { Rect } from '../terminal/geometry.js';
 import type {
   CellSize,
   PaneAllocation,
   PaneDenial,
   PaneDenialReason,
-  PaneDensity,
   PaneId,
   PaneLayoutInput,
   PaneLayoutPlan,
   PanePresentation,
-  PaneRect,
   PaneRegion,
   PaneRegionPlan,
   PaneRequest,
   PaneSizing,
-} from './paneLayoutTypes.js';
-
-export type {
-  CellPoint,
-  CellSize,
-  RecipientTargetState,
-  PaneAllocation,
-  PaneChromeHeights,
-  PaneDenial,
-  PaneDenialReason,
-  PaneDensity,
-  PaneId,
-  PaneKind,
-  PaneLayoutInput,
-  PaneLayoutPlan,
-  PanePresentation,
-  PanePresentationConstraints,
-  PaneRect,
-  PaneRegion,
-  PaneRegionPlan,
-  PaneRequest,
-  PaneSizing,
-  PaneSource,
-  PaneStageGroupPlan,
 } from './paneLayoutTypes.js';
 
 const REGIONS: readonly PaneRegion[] = ['leftAligned', 'centerStage', 'rightAligned'];
@@ -125,52 +100,6 @@ function normalizeRequest(request: PaneRequest): NormalizedRequest {
     orderKey: cellCount(request.orderKey),
     sizing: normalizeSizing(request.sizing),
   };
-}
-
-function recipientTargetOrder(input: PaneLayoutInput): ReadonlyMap<string, number> {
-  const order = new Map<string, number>();
-  const targets = input.recipientTargets;
-  if (targets === undefined) {
-    return order;
-  }
-  let index = 0;
-  for (const agentId of targets.lockedVisibleTargetIds) {
-    if (!order.has(agentId)) {
-      order.set(agentId, index++);
-    }
-  }
-  for (const agentId of targets.favoriteOnlyTargetIds) {
-    if (!order.has(agentId)) {
-      order.set(agentId, index++);
-    }
-  }
-  if (targets.ephemeralTargetId !== null && !order.has(targets.ephemeralTargetId)) {
-    order.set(targets.ephemeralTargetId, index++);
-  }
-  return order;
-}
-
-function applyRecipientTargetOrder(
-  requests: readonly PaneRequest[],
-  order: ReadonlyMap<string, number>,
-): readonly PaneRequest[] {
-  if (order.size === 0) {
-    return requests;
-  }
-  const chatOrderKeys = requests
-    .filter((request) => request.source.type === 'stageTranscript')
-    .map((request) => request.orderKey);
-  const chatBaseOrder = chatOrderKeys.length === 0 ? 1000 : Math.min(...chatOrderKeys);
-  return requests.map((request) => {
-    if (request.source.type !== 'stageTranscript') {
-      return request;
-    }
-    const targetOrder = order.get(request.source.agentId);
-    if (targetOrder === undefined) {
-      return request;
-    }
-    return { ...request, orderKey: chatBaseOrder + targetOrder };
-  });
 }
 
 function focusedPriority(request: NormalizedRequest, focusedPaneId: PaneId | undefined): number {
@@ -446,41 +375,21 @@ function allocateAxis(total: number, segments: readonly AxisSegment[]): AxisAllo
   return Object.fromEntries(values.entries());
 }
 
-function densityFor(width: number, height: number, sizing: PaneSizing): PaneDensity {
-  const widthRange = Math.max(1, sizing.preferred.width - sizing.min.width);
-  const heightRange = Math.max(1, sizing.preferred.height - sizing.min.height);
-  const widthRatio = (width - sizing.min.width) / widthRange;
-  const heightRatio = (height - sizing.min.height) / heightRange;
-  const ratio = Math.min(widthRatio, heightRatio);
-  if (ratio >= 1) {
-    return 'full';
-  }
-  if (ratio >= 0.4) {
-    return 'compact';
-  }
-  return 'minimal';
-}
-
 function presentationFor(
   request: NormalizedRequest,
-  rect: PaneRect,
+  rect: Rect,
   focusedPaneId: PaneId | undefined,
 ): PanePresentation {
   return {
     width: rect.width,
     height: rect.height,
-    density: densityFor(rect.width, rect.height, request.sizing),
-    constraints: {
-      horizontallyCramped: rect.width < request.sizing.preferred.width,
-      verticallyCramped: rect.height < request.sizing.preferred.height,
-    },
     focused: request.id === focusedPaneId,
   };
 }
 
 function allocationFor(
   request: NormalizedRequest,
-  rect: PaneRect,
+  rect: Rect,
   focusedPaneId: PaneId | undefined,
 ): PaneAllocation {
   return {
@@ -493,7 +402,7 @@ function allocationFor(
 
 function layoutStack(
   requests: readonly NormalizedRequest[],
-  rect: PaneRect,
+  rect: Rect,
   axis: Axis,
   gap: number,
   focusedPaneId: PaneId | undefined,
@@ -542,7 +451,7 @@ function gridCells<T>(items: readonly T[], columns: number): readonly GridCell<T
 
 function layoutGrid(
   requests: readonly NormalizedRequest[],
-  rect: PaneRect,
+  rect: Rect,
   columns: number,
   gap: number,
   focusedPaneId: PaneId | undefined,
@@ -617,7 +526,7 @@ function layoutGrid(
 
 function layoutBestGrid(
   requests: readonly NormalizedRequest[],
-  rect: PaneRect,
+  rect: Rect,
   maxColumns: number,
   gap: number,
   focusedPaneId: PaneId | undefined,
@@ -635,7 +544,7 @@ function layoutBestGrid(
 
 function layoutCenter(
   requests: readonly NormalizedRequest[],
-  rect: PaneRect,
+  rect: Rect,
   orientation: PaneLayoutInput['orientation'],
   gap: number,
   focusedPaneId: PaneId | undefined,
@@ -713,7 +622,7 @@ function layoutCenter(
 function layoutRegion(
   region: PaneRegion,
   requests: readonly NormalizedRequest[],
-  rect: PaneRect,
+  rect: Rect,
   orientation: PaneLayoutInput['orientation'],
   gap: number,
   focusedPaneId: PaneId | undefined,
@@ -739,7 +648,7 @@ function emptyRegionPlan(region: PaneRegion): PaneRegionPlan {
 }
 
 function regionPlans(
-  entries: readonly [PaneRegion, PaneRect, readonly PaneAllocation[]][],
+  entries: readonly [PaneRegion, Rect, readonly PaneAllocation[]][],
 ): Readonly<Record<PaneRegion, PaneRegionPlan>> {
   const plans: Record<PaneRegion, PaneRegionPlan> = {
     leftAligned: emptyRegionPlan('leftAligned'),
@@ -754,7 +663,7 @@ function regionPlans(
 
 function attemptLayout(
   requests: readonly NormalizedRequest[],
-  bodyRect: PaneRect,
+  bodyRect: Rect,
   orientation: PaneLayoutInput['orientation'],
   gap: number,
   focusedPaneId: PaneId | undefined,
@@ -822,7 +731,7 @@ function attemptLayout(
   }
 
   let cursor = orientation === 'landscape' ? bodyRect.x : bodyRect.y;
-  const entries: [PaneRegion, PaneRect, readonly PaneAllocation[]][] = [];
+  const entries: [PaneRegion, Rect, readonly PaneAllocation[]][] = [];
   const allocations: PaneAllocation[] = [];
   for (const region of regions) {
     const primarySize = primarySizes[region] ?? 0;
@@ -892,7 +801,7 @@ function cutCandidate(
 function canAttemptLayoutWithout(
   requests: readonly NormalizedRequest[],
   candidate: NormalizedRequest,
-  bodyRect: PaneRect,
+  bodyRect: Rect,
   orientation: PaneLayoutInput['orientation'],
   gap: number,
   focusedPaneId: PaneId | undefined,
@@ -909,7 +818,7 @@ function sortedAllocations(allocations: readonly PaneAllocation[]): PaneAllocati
   return [...allocations].sort(byLayoutOrderForAllocation);
 }
 
-function buildBodyRect(input: PaneLayoutInput): PaneRect {
+function buildBodyRect(input: PaneLayoutInput): Rect {
   const terminal = normalizeSize(input.terminal);
   const topBar = cellCount(input.chrome.topBar);
   const bottomBar = cellCount(input.chrome.bottomBar);
@@ -940,7 +849,7 @@ function normalizedChrome(input: PaneLayoutInput): PaneLayoutPlan['chrome'] {
 
 function terminalTooSmallPlan(
   input: PaneLayoutInput,
-  bodyRect: PaneRect,
+  bodyRect: Rect,
   requests: readonly NormalizedRequest[],
 ): PaneLayoutPlan {
   const denials = requests.map((request) =>
@@ -977,9 +886,7 @@ function stageGroup(allocations: readonly PaneAllocation[]): PaneLayoutPlan['sta
 export function computePaneLayout(input: PaneLayoutInput): PaneLayoutPlan {
   const gap = cellCount(input.gap);
   const bodyRect = buildBodyRect(input);
-  let remaining = applyRecipientTargetOrder(input.requests, recipientTargetOrder(input)).map(
-    normalizeRequest,
-  );
+  let remaining = input.requests.map(normalizeRequest);
   const denials: PaneDenial[] = [];
 
   if (bodyRect.width <= 0 || bodyRect.height <= 0) {

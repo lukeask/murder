@@ -11,7 +11,7 @@ import { murderConfirmStore, resetConfirmStore } from '../../store/murder/murder
 import { toastStore } from '../../store/toast/toastStore.js';
 import { useTheme } from '../../theme/themeStore.js';
 import { CrowsSurface, type CrowsSurfaceRow, type CrowsSurfaceStatus } from './CrowsSurface.js';
-import { MeasuredPaneFrame } from './shared/MeasuredPaneFrame.js';
+import { AllocatedPaneFrame } from './shared/AllocatedPaneFrame.js';
 import { useClampedCursor } from './shared/useClampedCursor.js';
 
 type CrowsIntent =
@@ -201,7 +201,7 @@ export const CrowsController = memo(function CrowsController({
   usePanelKeymap('crows', keymap);
 
   return (
-    <MeasuredPaneFrame id="crows" presentation={presentation}>
+    <AllocatedPaneFrame id="crows" presentation={presentation}>
       <CrowsSurface
         width={presentation.width}
         height={presentation.height}
@@ -213,6 +213,6 @@ export const CrowsController = memo(function CrowsController({
         status={surfaceStatus(view.status)}
         error={view.error}
       />
-    </MeasuredPaneFrame>
+    </AllocatedPaneFrame>
   );
 });

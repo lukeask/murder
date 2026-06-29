@@ -7,7 +7,7 @@ import type { PanePresentation } from '../../layout/paneLayoutTypes.js';
 import { selectUsageView } from '../../selectors/usageSelectors.js';
 import type { UsageState } from '../../store/usage/usageSlice.js';
 import { useTheme } from '../../theme/themeStore.js';
-import { MeasuredPaneFrame } from './shared/MeasuredPaneFrame.js';
+import { AllocatedPaneFrame } from './shared/AllocatedPaneFrame.js';
 import { useClampedCursor } from './shared/useClampedCursor.js';
 import { UsageSurface, type UsageSurfaceGroup } from './UsageSurface.js';
 
@@ -119,7 +119,7 @@ export const UsageController = memo(function UsageController({
   usePanelKeymap('usage', keymap);
 
   return (
-    <MeasuredPaneFrame id="usage" presentation={presentation}>
+    <AllocatedPaneFrame id="usage" presentation={presentation}>
       <UsageSurface
         width={presentation.width}
         height={presentation.height}
@@ -130,6 +130,6 @@ export const UsageController = memo(function UsageController({
         status={usageSurfaceStatus(usage.status)}
         error={usage.error}
       />
-    </MeasuredPaneFrame>
+    </AllocatedPaneFrame>
   );
 });
