@@ -121,6 +121,25 @@ import { TopBar } from './TopBar.js';
 export const MIN_TERMINAL_COLUMNS = 60;
 export const MIN_TERMINAL_ROWS = 16;
 
+export function bodyHeightForChrome({
+  rows,
+  topbarHeight,
+  chatInputHeight,
+  footerLines,
+  chatInputHidden,
+}: {
+  readonly rows: number;
+  readonly topbarHeight: number;
+  readonly chatInputHeight: number;
+  readonly footerLines: number;
+  readonly chatInputHidden: boolean;
+}): number {
+  const effectiveChatInputHeight = chatInputHidden ? 0 : chatInputHeight;
+  return topbarHeight > 0 && (chatInputHidden || effectiveChatInputHeight > 0)
+    ? Math.max(0, rows - topbarHeight - effectiveChatInputHeight - footerLines)
+    : 0;
+}
+
 /**
  * Derive the spawn context from the app store at `ctrl+s` invocation time. Returns a
  * {@link SpawnContext} when the highlighted pane is the open document, else
@@ -614,6 +633,9 @@ function Shell({
   // source of truth for inter-pane spacing (mirrors the single orientation read). `0` = flush
   // borders (the default).
   const paneGap = useAppStore((s) => s.settings.paneGap);
+  useModeStore((s) => s.stack);
+  const active = selectActiveMode(modes);
+  const chatInputHidden = active !== null && active.passThrough !== true;
   // L4c-fix2: portrait budgets the rows axis, so it must know the height the Body region actually
   // occupies = `rows − topbar − ChatInput − footer`. Two of those are MEASURED and one is COMPUTED:
   //   • topbar + ChatInput — measured via `measureElement` on their `flexShrink={0}` boxes. They are
@@ -644,6 +666,8 @@ function Shell({
       if (height !== chatInputHeight) {
         setChatInputHeight(height);
       }
+    } else if (chatInputHidden && chatInputHeight !== 0) {
+      setChatInputHeight(0);
     }
   });
   // Footer row count (computed — see above). Shared with the BottomBar render via the same hook.
@@ -652,10 +676,14 @@ function Shell({
   // meaningful once topbar + ChatInput have been measured (>0); before that it is 0 and the pane
   // layout uses a conservative first-paint fallback. `max(0, …)` so a transient over-measure can
   // never make the body total negative.
-  const bodyHeight =
-    topbarHeight > 0 && chatInputHeight > 0
-      ? Math.max(0, rows - topbarHeight - chatInputHeight - footerLines)
-      : 0;
+  const effectiveChatInputHeight = chatInputHidden ? 0 : chatInputHeight;
+  const bodyHeight = bodyHeightForChrome({
+    rows,
+    topbarHeight,
+    chatInputHeight,
+    footerLines,
+    chatInputHidden,
+  });
   const appState = useAppStore((s) => s);
   const visiblePanels = usePanelStore((s) => s.visible);
   const effectiveFocus = useEffectiveFocus();
@@ -680,7 +708,11 @@ function Shell({
     () =>
       computePaneLayout({
         terminal: { width: columns, height: rows },
-        chrome: { topBar: topbarHeight, bottomBar: footerLines, chatInput: chatInputHeight },
+        chrome: {
+          topBar: topbarHeight,
+          bottomBar: footerLines,
+          chatInput: effectiveChatInputHeight,
+        },
         body: { width: columns, height: availableBodyHeight },
         bodyOrigin: { x: 0, y: topbarHeight },
         orientation,
@@ -693,7 +725,7 @@ function Shell({
       rows,
       topbarHeight,
       footerLines,
-      chatInputHeight,
+      effectiveChatInputHeight,
       availableBodyHeight,
       orientation,
       paneGap,
@@ -1040,7 +1072,13 @@ function Shell({
         appStore.getState().actions.docView.close();
         return;
       case 'transcriptPane':
-        appStore.getState().actions.conversations.setTranscriptPaneOpen(target.agentId, false);
+        {
+          const state = appStore.getState();
+          state.actions.conversations.setTranscriptPaneOpen(target.agentId, false);
+          if (state.conversations.activePaneAgentId === target.agentId) {
+            state.actions.conversations.setActivePaneAgentId(null);
+          }
+        }
         return;
       case 'composer':
       case 'panel':
@@ -1126,8 +1164,6 @@ function Shell({
   // panels. `modal`/`inlayout` modes keep the layout — the overlay draws over/within it. The
   // suppression predicate lives with the presentation data ({@link presentationHidesLayout}), not
   // hardcoded here, so a new full-screen-like presentation is honoured without editing the shell.
-  useModeStore((s) => s.stack);
-  const active = selectActiveMode(modes);
   // Min-terminal-size guard (first-run UX): below the floor the layout degenerates (the pane layout
   // can't share 60-odd columns; modals clamp to ~24 wide; 16 rows barely fits chat + both bars), so
   // render a full-screen notice instead of a broken shell. Checked AFTER every hook (rules of
@@ -1156,7 +1192,6 @@ function Shell({
   // Item 4a: while a capturing (non-passThrough) mode is up, the chat input can't be typed into — it
   // owns input exclusively — so hide it. Its hints (and the chat field's role) move to the bottom
   // bar (item 4b). A `passThrough` mode (e.g. an inlayout editor that still lets chat work) keeps it.
-  const chatInputHidden = active !== null && active.passThrough !== true;
   // Bound the whole app to the terminal height: a frame taller than the screen breaks Ink's in-place
   // redraw (it can only erase up to the screen height, so each re-render stacks a fresh full copy into
   // scrollback). This is the standard header/scroll/footer flex idiom:

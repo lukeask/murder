@@ -35,6 +35,9 @@ interface SpyHandlers {
   readonly keyHelp: ReturnType<typeof vi.fn<GlobalHandlers['keyHelp']>>;
   readonly cycleTargetPrev: ReturnType<typeof vi.fn<GlobalHandlers['cycleTargetPrev']>>;
   readonly cycleTargetNext: ReturnType<typeof vi.fn<GlobalHandlers['cycleTargetNext']>>;
+  readonly toggleTargetGroup: ReturnType<
+    typeof vi.fn<NonNullable<GlobalHandlers['toggleTargetGroup']>>
+  >;
   readonly toggleTargetPane: ReturnType<typeof vi.fn<GlobalHandlers['toggleTargetPane']>>;
   readonly murder: ReturnType<typeof vi.fn<GlobalHandlers['murder']>>;
   readonly murderPending: ReturnType<typeof vi.fn<GlobalHandlers['murderPending']>>;
@@ -57,6 +60,7 @@ function handlers(): SpyHandlers {
     keyHelp: vi.fn<GlobalHandlers['keyHelp']>(),
     cycleTargetPrev: vi.fn<GlobalHandlers['cycleTargetPrev']>(),
     cycleTargetNext: vi.fn<GlobalHandlers['cycleTargetNext']>(),
+    toggleTargetGroup: vi.fn<NonNullable<GlobalHandlers['toggleTargetGroup']>>(),
     toggleTargetPane: vi.fn<GlobalHandlers['toggleTargetPane']>(),
     murder: vi.fn<GlobalHandlers['murder']>(),
     murderPending: vi.fn<GlobalHandlers['murderPending']>(() => false),
@@ -369,6 +373,21 @@ describe('global.closePane — ctrl+q closes the highlighted Stage pane (stagela
 });
 
 describe('layer 1 — chat-target super-chords (item 9)', () => {
+  it('ctrl+j toggles the chat target group under the default alt modifier', () => {
+    const h = handlers();
+    const out = dispatchKey('j', makeKey({ ctrl: true }), ctx(CHAT_FOCUS, h));
+    expect(h.toggleTargetGroup).toHaveBeenCalledOnce();
+    expect(out).toEqual({ layer: 'global', handled: true });
+    expect(h.navigate).not.toHaveBeenCalled();
+  });
+
+  it('ctrl+j does not toggle the chat target group away from chat focus', () => {
+    const h = handlers();
+    const out = dispatchKey('j', makeKey({ ctrl: true }), ctx('plans', h));
+    expect(h.toggleTargetGroup).not.toHaveBeenCalled();
+    expect(out).toEqual({ layer: 'panel', handled: false });
+  });
+
   it('alt+h / alt+l cycle the chat target while chat is focused', () => {
     const h = handlers();
     const prev = dispatchKey('h', makeKey({ meta: true }), ctx(CHAT_FOCUS, h));

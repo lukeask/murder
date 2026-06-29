@@ -205,7 +205,7 @@ describe('usagePaneSizing', () => {
 });
 
 describe('buildPaneRequests', () => {
-  it('assigns transcript order keys from locked-visible, favorite-only, then ephemeral target order', () => {
+  it('does not resurrect an explicitly closed active transcript as an ephemeral pane', () => {
     const state = appState({
       roster: {
         ...initialAppState.roster,
@@ -239,8 +239,8 @@ describe('buildPaneRequests', () => {
       focusedId: CHAT_FOCUS,
     }).filter(isStageTranscriptRequest);
 
-    expect(requests.map((request) => request.source.agentId)).toEqual(['collab', 'r1', 'p1']);
-    expect(requests.map((request) => request.orderKey)).toEqual([1000, 1001, 1002]);
+    expect(requests.map((request) => request.source.agentId)).toEqual(['collab', 'r1']);
+    expect(requests.map((request) => request.orderKey)).toEqual([1000, 1001]);
   });
 
   it('keeps stage documents before transcript requests while ordering transcripts in the bridge', () => {

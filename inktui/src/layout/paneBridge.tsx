@@ -165,7 +165,11 @@ export function buildPaneRequests(input: BuildPaneRequestsInput): readonly PaneR
   for (const identity of lockedPanes) {
     chatPanesByAgentId.set(identity.agentId, { identity, locked: true });
   }
-  if (currentAgentId !== null && !chatPanesByAgentId.has(currentAgentId)) {
+  if (
+    currentAgentId !== null &&
+    state.conversations.paneOverrides.get(currentAgentId) !== false &&
+    !chatPanesByAgentId.has(currentAgentId)
+  ) {
     const row = state.roster.rows.find((candidate) => candidate.agentId === currentAgentId);
     const identity = row === undefined ? null : deriveAgentIdentity(row);
     if (identity !== null) {

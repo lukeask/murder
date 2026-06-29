@@ -8,10 +8,11 @@
  * `<App store inputStores />`, assert on the painted frame.
  */
 
+import { Text } from 'ink';
 import { render } from 'ink-testing-library';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { FakeBusClient } from '../src/bus/FakeBusClient.js';
-import { App, deriveSpawnContext } from '../src/components/App.js';
+import { App, bodyHeightForChrome, deriveSpawnContext } from '../src/components/App.js';
 import { createInputStores } from '../src/input/createInputStores.js';
 import { stageTranscriptFocusId } from '../src/input/focusIds.js';
 import { CHAT_FOCUS, selectEffectiveFocus } from '../src/input/focusStore.js';
@@ -163,6 +164,55 @@ describe('App shell', () => {
   // TUIchat-5: the fullscreen tmux mode (and its `presentationHidesLayout` suppression test) was
   // retired — tmux is now an inline per-pane view in TranscriptPane.tsx, never a layout takeover. View-mode
   // cycling is covered in conversationsActions.test.ts; inline frame rendering has no dedicated test yet.
+
+  it('hides and restores the chat input around capturing modes', async () => {
+    const { inputStores, lastFrame, dispose } = setup([]);
+    await tick();
+    expect(lastFrame() ?? '').toContain('type a message');
+
+    inputStores.modes.getState().enter({
+      id: 'test-capture',
+      presentation: 'modal',
+      keymap: [],
+      onIntent() {},
+      render: () => <Text>capture modal</Text>,
+    });
+    await tick();
+    const capturedFrame = lastFrame() ?? '';
+    expect(capturedFrame).toContain('capture modal');
+    expect(capturedFrame).not.toContain('type a message');
+
+    inputStores.modes.getState().exit('test-capture');
+    await tick();
+    expect(lastFrame() ?? '').toContain('type a message');
+    dispose();
+  });
+});
+
+describe('bodyHeightForChrome', () => {
+  it('ignores a stale chat input measurement when the input is hidden', () => {
+    expect(
+      bodyHeightForChrome({
+        rows: 24,
+        topbarHeight: 2,
+        chatInputHeight: 4,
+        footerLines: 2,
+        chatInputHidden: true,
+      }),
+    ).toBe(20);
+  });
+
+  it('subtracts the measured chat input height when the input is visible', () => {
+    expect(
+      bodyHeightForChrome({
+        rows: 24,
+        topbarHeight: 2,
+        chatInputHeight: 4,
+        footerLines: 2,
+        chatInputHidden: false,
+      }),
+    ).toBe(16);
+  });
 });
 
 describe('deriveSpawnContext — doc file context gated by the highlighted center-stage pane', () => {
@@ -272,6 +322,7 @@ describe('ctrl+q — close the highlighted center-stage pane', () => {
 
     // The pane closed: an explicit `false` paneOverride hides even the default-favorited collaborator.
     expect(store.getState().conversations.paneOverrides.get('collab-1')).toBe(false);
+    expect(store.getState().conversations.activePaneAgentId).toBeNull();
     // The pane unmounted → focus re-homes to chat (the derived invariant).
     expect(selectEffectiveFocus(inputStores.focus)).toBe(CHAT_FOCUS);
     dispose();

@@ -290,6 +290,19 @@ function dispatchGlobalChord(
     return false;
   }
 
+  // `global.toggleTargetGroup` (ctrl+j, a `plain` chord) toggles the chat recipient target between
+  // locked-visible and favorite-only groups. It is chat-scoped like the other target super-chords,
+  // but it must be matched BEFORE the command-modifier gate: with the default alt modifier, ctrl+j is
+  // not command-modified, so a gate-first order makes the binding unreachable. It carries ctrl, so it
+  // cannot steal ordinary typed `j`.
+  if (
+    inFocusScope(GLOBAL_SCOPE['global.toggleTargetGroup'], focusedId) &&
+    bindings.matches('global.toggleTargetGroup', input, key)
+  ) {
+    handlers.toggleTargetGroup?.();
+    return true;
+  }
+
   // Item 12: the keybinding help overlay (`global.keyHelp`, a *plain* `?` — no command modifier, so it
   // is reachable in every terminal). It claims the event ONLY when chat is NOT focused, so a literal
   // `?` typed into the chat field is never stolen (chat-focused `?` falls through to layer 2). Checked
@@ -316,10 +329,6 @@ function dispatchGlobalChord(
   // VIM_NAV) and `alt+w` is unbound. Checked before VIM_NAV so the cycle chords win over nav while
   // typing a message.
   if (inFocusScope(GLOBAL_SCOPE['global.cycleTargetPrev'], focusedId)) {
-    if (bindings.matches('global.toggleTargetGroup', input, key)) {
-      handlers.toggleTargetGroup?.();
-      return true;
-    }
     if (bindings.matches('global.cycleTargetPrev', input, key)) {
       handlers.cycleTargetPrev();
       return true;
