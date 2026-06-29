@@ -60,18 +60,18 @@ describe('resolveFocus (the re-home invariant, pure)', () => {
   });
 
   it('keeps a mounted Stage pane focused', () => {
-    const pane: StagePaneId = 'stage:chat:a1';
+    const pane: StagePaneId = 'stage:transcript:a1';
     expect(resolveFocus(pane, [pane])).toBe(pane);
   });
 
   it('re-homes an unmounted Stage pane to chat', () => {
-    expect(resolveFocus('stage:chat:a1', [])).toBe(CHAT_FOCUS);
+    expect(resolveFocus('stage:transcript:a1', [])).toBe(CHAT_FOCUS);
   });
 });
 
 describe('isStagePaneId / mountedStagePanesOf', () => {
   it('discriminates stage ids from panels + chat', () => {
-    expect(isStagePaneId('stage:chat:a1')).toBe(true);
+    expect(isStagePaneId('stage:transcript:a1')).toBe(true);
     expect(isStagePaneId('plans')).toBe(false);
     expect(isStagePaneId(CHAT_FOCUS)).toBe(false);
   });
@@ -80,11 +80,11 @@ describe('isStagePaneId / mountedStagePanesOf', () => {
     const r: Rect = { x: 0, y: 0, width: 1, height: 1 };
     const rects = new Map<FocusId, Rect>([
       ['plans', r],
-      ['stage:chat:a1', r],
+      ['stage:transcript:a1', r],
       [CHAT_FOCUS, r],
-      ['stage:chat:b2', r],
+      ['stage:transcript:b2', r],
     ]);
-    expect([...mountedStagePanesOf(rects)]).toEqual(['stage:chat:a1', 'stage:chat:b2']);
+    expect([...mountedStagePanesOf(rects)]).toEqual(['stage:transcript:a1', 'stage:transcript:b2']);
   });
 });
 
@@ -95,10 +95,10 @@ describe('focusCandidates (the derived candidate set)', () => {
         new Map<FocusId, Rect>([
           ['tickets', { x: 20, y: 0, width: 1, height: 1 }],
           ['plans', { x: 0, y: 0, width: 1, height: 1 }],
-          ['stage:chat:a1', { x: 40, y: 0, width: 1, height: 1 }],
+          ['stage:transcript:a1', { x: 40, y: 0, width: 1, height: 1 }],
         ]),
       ),
-    ).toEqual(['plans', 'tickets', 'stage:chat:a1', CHAT_FOCUS]);
+    ).toEqual(['plans', 'tickets', 'stage:transcript:a1', CHAT_FOCUS]);
   });
 
   it('is just chat when nothing is visible/mounted — there is always somewhere to be', () => {
@@ -166,7 +166,7 @@ describe('focusStore — effective focus & re-home', () => {
 describe('focusStore — open pane history', () => {
   const plansRect: Rect = { x: 0, y: 0, width: 20, height: 4 };
   const ticketsRect: Rect = { x: 20, y: 0, width: 20, height: 4 };
-  const stagePane: StagePaneId = 'stage:chat:a1';
+  const stagePane: StagePaneId = 'stage:transcript:a1';
   const stageRect: Rect = { x: 40, y: 0, width: 20, height: 4 };
 
   it('preserves first-open order across remeasure/reorder and appends reopened panes', () => {
@@ -274,11 +274,11 @@ describe('focusStore.navigate (geometry-driven)', () => {
   });
 });
 
-describe('focusGraph — chat target partitions', () => {
-  it('orders locked, ephemeral, and favorite-only virtual chat targets around the active target', () => {
+describe('focusGraph — recipient target partitions', () => {
+  it('orders locked, ephemeral, and favorite-only virtual recipient targets around the active target', () => {
     const graph = buildFocusGraph({
       rects: new Map<FocusId, Rect>([[CHAT_FOCUS, { x: 0, y: 0, width: 40, height: 3 }]]),
-      chatTargets: {
+      recipientTargets: {
         activeTargetId: 'agent-b',
         lockedVisibleTargetIds: ['agent-a'],
         ephemeralTargetId: 'agent-b',
@@ -286,21 +286,21 @@ describe('focusGraph — chat target partitions', () => {
       },
     });
 
-    expect(graph.chatTargetVertexIds).toEqual([
-      'chat:target:agent-a',
-      'chat:target:agent-b',
-      'chat:target:agent-c',
+    expect(graph.recipientTargetVertexIds).toEqual([
+      'recipient:target:agent-a',
+      'recipient:target:agent-b',
+      'recipient:target:agent-c',
     ]);
-    expect(graph.activeChatTargetVertexId).toBe('chat:target:agent-b');
-    expect(navigateFocus(graph, CHAT_FOCUS, 'right').chatTargetId).toBe('agent-c');
-    expect(navigateFocus(graph, CHAT_FOCUS, 'left').chatTargetId).toBe('agent-a');
+    expect(graph.activeRecipientTargetVertexId).toBe('recipient:target:agent-b');
+    expect(navigateFocus(graph, CHAT_FOCUS, 'right').recipientTargetId).toBe('agent-c');
+    expect(navigateFocus(graph, CHAT_FOCUS, 'left').recipientTargetId).toBe('agent-a');
   });
 });
 
 describe('focusStore — Stage panes (Phase 4a)', () => {
-  // A left panel and a Stage chat pane to its right, chat below — the real Stage layout shape.
+  // A left panel and a Stage transcript pane to its right, chat below — the real Stage layout shape.
   const plansRect: Rect = { x: 0, y: 0, width: 20, height: 6 };
-  const stagePane: StagePaneId = 'stage:chat:a1';
+  const stagePane: StagePaneId = 'stage:transcript:a1';
   const stageRect: Rect = { x: 20, y: 0, width: 30, height: 6 };
   const chatRect: Rect = { x: 0, y: 6, width: 50, height: 3 };
 
@@ -313,7 +313,7 @@ describe('focusStore — Stage panes (Phase 4a)', () => {
     return { panels, focus };
   }
 
-  it('hjkl reaches a mounted Stage pane: right from a left panel lands on the chat pane', () => {
+  it('hjkl reaches a mounted Stage pane: right from a left panel lands on the transcript pane', () => {
     const { focus } = setup();
     focus.getState().focus('plans');
     focus.getState().navigate('right');

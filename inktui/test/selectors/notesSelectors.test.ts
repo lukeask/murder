@@ -57,6 +57,8 @@ describe('selectNotesView — presentation', () => {
   it('carries load flags through and computes isEmpty', () => {
     expect(selectNotesView(state([]), NO_FAVS).isEmpty).toBe(true);
     expect(selectNotesView(state([row()]), NO_FAVS).isEmpty).toBe(false);
+    expect(selectNotesView(state([], { status: 'idle' }), NO_FAVS).status).toBe('ready');
+    expect(selectNotesView(state([], { status: 'loading' }), NO_FAVS).status).toBe('loading');
     const err = selectNotesView(state([], { status: 'error', error: 'oops' }), NO_FAVS);
     expect(err.status).toBe('error');
     expect(err.error).toBe('oops');

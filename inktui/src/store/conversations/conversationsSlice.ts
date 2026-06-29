@@ -90,9 +90,10 @@ export function parseBlock(raw: Record<string, unknown>): ConversationBlock {
  * (append/update semantics from `ConversationBlockEvent`). All fields readonly — ref-swapped
  * wholesale on change at the per-agent transcript level (not the whole map).
  *
- * `activePaneAgentId`: the currently visible chat pane agent. `null` = no explicit selection;
- * the panel defaults to the collaborator or first favorited crow. This is C10's seam for
- * "keep chat pane active" (the ctrl+s/starring side is C11's job — see seam note at bottom).
+ * `activePaneAgentId`: the currently visible transcript pane agent. `null` = no explicit
+ * selection; the panel defaults to the collaborator or first favorited crow. This is C10's seam
+ * for "keep transcript pane active" (the ctrl+s/starring side is C11's job — see seam note at
+ * bottom).
  */
 /**
  * Per-agent conversation liveness, fed by `ConversationStateEvent` (and primed from the
@@ -137,23 +138,23 @@ export interface ConversationsState {
   /** Per-agent liveness ({@link ConversationMeta}); absent entry = unknown (treated as nulls). */
   readonly meta: Readonly<Record<string, ConversationMeta>>;
   /**
-   * The chat pane currently pinned open by user action (`ctrl+s` "keep pane active" path).
+   * The transcript pane currently pinned open by user action (`ctrl+s` "keep pane active" path).
    * `null` = no user-pinned selection; the panel derives the displayed pane from favorites.
    * C11 is responsible for the full starring/prefs system; C10 provides this slot + the
    * "keep active on send" behavior.
    */
   readonly activePaneAgentId: string | null;
   /**
-   * Explicit open/close overrides for chat panes, layered OVER the favorites-derived default
+   * Explicit open/close overrides for transcript panes, layered OVER the favorites-derived default
    * (item 9b). A `true` opens a pane that the favorites default would close (e.g. a planner the
    * user hasn't starred); a `false` closes a pane the favorites default would open (e.g. a rogue,
    * which is default-favorited). Absent (no entry) → fall through to the favorites default. The map
-   * is the user's explicit "show this pane / hide this pane" intent; `selectOpenChatPanes` merges it
-   * with the favorites default to decide which panes the Stage tiles.
+   * is the user's explicit "show this pane / hide this pane" intent; `selectOpenTranscriptPanes`
+   * merges it with the favorites default to decide which panes the Stage tiles.
    */
   readonly paneOverrides: ReadonlyMap<string, boolean>;
   /**
-   * Monotonic activation age for non-required stage chat panes. The active pane is reset to 0; every
+   * Monotonic activation age for non-required stage transcript panes. The active pane is reset to 0; every
    * existing nonzero age bumps when a different pane becomes active, making older inactive histories
    * more eligible for layout reaping without changing the central reap algorithm.
    */

@@ -33,7 +33,7 @@ async function tick(): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, 20));
 }
 
-/** A roster with one collaborator (the default active chat target). */
+/** A roster with one collaborator (the default active recipient target). */
 const ROSTER_REPLY = {
   invalidation_key: 'iv',
   sessions: [

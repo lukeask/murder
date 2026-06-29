@@ -48,17 +48,17 @@ export type Modifier = 'alt' | 'ctrl' | 'both';
 export type ActionId =
   | 'global.focusChat' // alt+space — focus the chat input
   | 'global.spawn' // alt+s — open the spawn wizard (chat-focus scoped, see dispatcher)
-  | 'global.cycleChatView' // alt+t / ctrl+t — cycle the focused pane's chat view (verbose→condensed→tmux)
+  | 'global.cycleChatView' // alt+t / ctrl+t — cycle the focused pane's transcript view (verbose→condensed→tmux)
   | 'global.newPlan' // alt+p — open the new-plan popup
   | 'global.settings' // alt+o / ctrl+o — open the settings modal
   | 'global.quickNote' // ctrl+n — open the quick-note capture (plain, not command-modified)
   | 'global.keyHelp' // ? — open the keybinding help overlay (see the ACTIONS note on reachability)
-  | 'global.cycleTargetPrev' // alt+h / ctrl+h — cycle the chat target to the previous one (chat-focus only)
-  | 'global.toggleTargetGroup' // ctrl+j — toggle chat target between locked-visible and favorite-only groups
-  | 'global.cycleTargetNext' // alt+l / ctrl+l — cycle the chat target to the next one (chat-focus only)
-  | 'global.toggleTargetPane' // alt+w / ctrl+w — toggle the current chat target's pane (chat-focus only)
+  | 'global.cycleTargetPrev' // alt+h / ctrl+h — cycle the recipient target to the previous one (chat-focus only)
+  | 'global.toggleTargetGroup' // ctrl+j — toggle recipient target between locked-visible and favorite-only groups
+  | 'global.cycleTargetNext' // alt+l / ctrl+l — cycle the recipient target to the next one (chat-focus only)
+  | 'global.toggleTargetPane' // alt+w / ctrl+w — toggle the current recipient target's transcript pane (chat-focus only)
   | 'global.murder' // ctrl+m — arm the murder confirm for the targeted crow (plain, kitty side-channel)
-  | 'global.closePane' // ctrl+q — close the highlighted Stage pane (chat history / doc); plain chord
+  | 'global.closePane' // ctrl+q — close the highlighted Stage pane (transcript / doc); plain chord
   | 'panel.star' // alt+f — favorite/star the focused panel's cursor row
   | 'panel.resetCrow' // x — arm the two-press reset for the crows panel's cursor row
   | 'panel.usageSteering' // s — cycle the usage panel's cursor gauge steering (auto→prefer→pause)
@@ -181,7 +181,7 @@ export const ACTIONS: Readonly<Record<ActionId, ActionDef>> = {
   },
   'global.cycleTargetPrev': {
     id: 'global.cycleTargetPrev',
-    // Item 9 super-chords: alt+h / ctrl+h — cycle the chat target to the previous one. Active ONLY
+    // Item 9 super-chords: alt+h / ctrl+h — cycle the recipient target to the previous one. Active ONLY
     // while the chat input has focus (otherwise alt+h is geometric panel nav); the dispatcher gates
     // this in the chat-focus branch of the global layer, NOT as an unconditional global.
     default: command('h'),
@@ -190,7 +190,7 @@ export const ACTIONS: Readonly<Record<ActionId, ActionDef>> = {
   },
   'global.cycleTargetNext': {
     id: 'global.cycleTargetNext',
-    // alt+l / ctrl+l — cycle the chat target to the next one. Chat-focus only (see cycleTargetPrev).
+    // alt+l / ctrl+l — cycle the recipient target to the next one. Chat-focus only (see cycleTargetPrev).
     default: command('l'),
     description: 'next target',
     rebindable: true,
@@ -203,9 +203,9 @@ export const ACTIONS: Readonly<Record<ActionId, ActionDef>> = {
   },
   'global.toggleTargetPane': {
     id: 'global.toggleTargetPane',
-    // Item 9: toggle the current chat target's pane from the chat box. The plan suggested command('o')
+    // Item 9: toggle the current recipient target's transcript pane from the chat box. The plan suggested command('o')
     // but 'o' is TAKEN by `global.settings` (and the plan's proposed fix — moving settings to ',' — is
-    // itself unreachable, the alt+, problem). 'w' (mnemonic: toggle the chat *window*/pane) is
+    // itself unreachable, the alt+, problem). 'w' (mnemonic: toggle the transcript pane) is
     // unclaimed by any other action, reachable under both alt (alt+w) and ctrl (ctrl+w rides a clean
     // control byte 0x17), and is not a panel-local plain key. Chat-focus only. FLAGGED for arbitration.
     default: command('w'),
@@ -239,7 +239,7 @@ export const ACTIONS: Readonly<Record<ActionId, ActionDef>> = {
   },
   'global.closePane': {
     id: 'global.closePane',
-    // ctrl+q — close the currently-highlighted Stage pane (a chat-history pane or the open doc). A
+    // ctrl+q — close the currently-highlighted Stage pane (a transcript pane or the open doc). A
     // `plain` (NOT command-modified) chord: ctrl+q arrives as the clean legacy byte 0x11, which Ink
     // reports as `{ ctrl: true, input: 'q' }` — the same modifier-independent shape as `global.quickNote`
     // (ctrl+n). The dispatcher matches it ahead of the command-modifier gate and only claims it when a

@@ -22,7 +22,14 @@ import {
   paneContentWidthForWidth,
   paneHorizontalPaddingForWidth,
 } from '../../src/components/Pane.js';
-import { theme } from '../../src/theme.js';
+import { buildTheme } from '../../src/theme/buildTheme.js';
+import { DEFAULT_THEME_ID, getPalette, getThemeMeta } from '../../src/theme/palettes.js';
+
+const defaultPalette = getPalette(DEFAULT_THEME_ID);
+if (defaultPalette === undefined) {
+  throw new Error('missing default palette');
+}
+const theme = buildTheme(defaultPalette, getThemeMeta(DEFAULT_THEME_ID)?.variant ?? 'dark');
 import { inkTestColorOn } from '../inkTestColorOn.js';
 
 const B = PANE_BORDER_GLYPHS.bold;

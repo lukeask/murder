@@ -19,7 +19,7 @@ import type { PanelKeymap } from './keymap.js';
  * ## Phase 4a — keyed by {@link FocusId}, not {@link PanelId}
  * The dispatcher routes a matched key to `keymaps[focusedId]`, where `focusedId` is now a `FocusId`
  * (a panel, chat, or a mounted Stage pane). Keying the registry by `FocusId` lets a focusable Stage
- * pane (`stage:chat:<agentId>`) declare its own keymap (e.g. `j`/`k` to scroll its history) the same
+ * pane declare its own keymap (e.g. `j`/`k` to scroll its history) the same
  * way a panel does — `usePanelKeymap` passes any `FocusId`. Panels still pass a `PanelId` (a `FocusId`
  * subtype), so every existing caller is unchanged; chat declares nothing (it has the persistent
  * chat-input handler, not a registry entry). */

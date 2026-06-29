@@ -14,7 +14,7 @@ import {
 import type { Theme } from '../../theme/buildTheme.js';
 import { useTheme } from '../../theme/themeStore.js';
 import { paneContentWidthForWidth } from '../Pane.js';
-import { MeasuredPaneFrame } from './shared/index.js';
+import { MeasuredPaneFrame } from './shared/MeasuredPaneFrame.js';
 import { TreeSurface, type TreeSurfaceData, type TreeSurfaceLane } from './TreeSurface.js';
 
 type TreeIntent =

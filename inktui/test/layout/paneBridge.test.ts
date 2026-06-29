@@ -1,21 +1,34 @@
 import { isValidElement, type ReactElement } from 'react';
 import { describe, expect, it } from 'vitest';
 import { crowsSurfaceRowsFromView } from '../../src/components/panes/CrowsController.js';
+import { DocumentController } from '../../src/components/panes/DocumentController.js';
 import { historySurfaceRowsFromView } from '../../src/components/panes/HistoryController.js';
 import { ticketsSurfaceRowsFromView } from '../../src/components/panes/TicketsController.js';
+import { TranscriptController } from '../../src/components/panes/TranscriptController.js';
 import { treeSurfaceDataFromView } from '../../src/components/panes/TreeController.js';
 import { usageSurfaceGroupsFromState } from '../../src/components/panes/UsageController.js';
-import { renderPaneLayoutPlan, usagePaneSizing } from '../../src/layout/paneBridge.js';
+import {
+  renderPaneAllocation,
+  renderPaneLayoutPlan,
+  usagePaneSizing,
+} from '../../src/layout/paneBridge.js';
 import { computePaneLayout } from '../../src/layout/paneLayout.js';
-import type { PaneRequest } from '../../src/layout/paneLayoutTypes.js';
+import type { PaneAllocation, PaneRequest } from '../../src/layout/paneLayoutTypes.js';
+import type { AgentIdentity } from '../../src/selectors/agentIdentity.js';
 import type { CrowsView } from '../../src/selectors/crowsSelectors.js';
 import type { HistoryRowView } from '../../src/selectors/historySelectors.js';
 import type { TicketRowView } from '../../src/selectors/ticketsSelectors.js';
 import type { TransitCursor, TransitView } from '../../src/selectors/transitSelectors.js';
 import type { AppStore } from '../../src/store/store.js';
 import type { UsageRow, UsageState } from '../../src/store/usage/usageSlice.js';
-import type { Theme } from '../../src/theme/buildTheme.js';
-import { theme } from '../../src/theme.js';
+import { buildTheme } from '../../src/theme/buildTheme.js';
+import { DEFAULT_THEME_ID, getPalette, getThemeMeta } from '../../src/theme/palettes.js';
+
+const defaultPalette = getPalette(DEFAULT_THEME_ID);
+if (defaultPalette === undefined) {
+  throw new Error('missing default palette');
+}
+const theme = buildTheme(defaultPalette, getThemeMeta(DEFAULT_THEME_ID)?.variant ?? 'dark');
 
 function row(harness: string, windowKey: string): UsageRow {
   return {
@@ -54,14 +67,40 @@ function paneRequest(overrides: Partial<PaneRequest> = {}): PaneRequest {
   };
 }
 
+function paneAllocation(request: PaneRequest): PaneAllocation {
+  return {
+    request,
+    region: request.region,
+    rect: { x: 0, y: 0, width: 40, height: 8 },
+    presentation: {
+      width: 40,
+      height: 8,
+      density: 'full',
+      constraints: { horizontallyCramped: false, verticallyCramped: false },
+      focused: true,
+    },
+  };
+}
+
 function childrenOf(element: ReactElement): readonly unknown[] {
   const props = element.props as { readonly children?: unknown };
   const children = props.children;
   return Array.isArray(children) ? children : [children];
 }
 
-function propsOf(element: ReactElement): Record<string, unknown> {
-  return element.props as Record<string, unknown>;
+interface ElementProps {
+  readonly children?: unknown;
+  readonly flexDirection?: unknown;
+  readonly width?: unknown;
+  readonly height?: unknown;
+  readonly open?: unknown;
+  readonly presentation?: unknown;
+  readonly identity?: unknown;
+  readonly activeRecipientTarget?: unknown;
+}
+
+function propsOf(element: ReactElement): ElementProps {
+  return element.props as ElementProps;
 }
 
 describe('usagePaneSizing', () => {
@@ -155,18 +194,90 @@ describe('renderPaneLayoutPlan', () => {
       return;
     }
 
-    expect(propsOf(left)['flexDirection']).toBe('column');
+    expect(propsOf(left).flexDirection).toBe('column');
     const rows = childrenOf(left);
     expect(rows).toHaveLength(3);
     for (const row of rows) {
       expect(isValidElement(row)).toBe(true);
       if (isValidElement(row)) {
         const rowProps = propsOf(row);
-        expect(rowProps['flexDirection']).toBe('row');
-        expect(rowProps['width']).toBe(25);
-        expect(rowProps['height']).toBe(5);
+        expect(rowProps.flexDirection).toBe('row');
+        expect(rowProps.width).toBe(25);
+        expect(rowProps.height).toBe(5);
       }
     }
+  });
+});
+
+describe('renderPaneAllocation — stage controller routing', () => {
+  it('routes stage document allocations to DocumentController', () => {
+    const open = { kind: 'note' as const, name: 'field-notes' };
+    const allocation = paneAllocation(
+      paneRequest({
+        id: 'stage:doc:field-notes',
+        kind: 'stageDoc',
+        region: 'centerStage',
+        source: { type: 'stageDoc', name: 'field-notes' },
+      }),
+    );
+    const root = renderPaneAllocation(allocation, {
+      state: { docView: { open } } as AppStore,
+      chatIdentities: new Map(),
+    });
+
+    expect(isValidElement(root)).toBe(true);
+    if (!isValidElement(root)) {
+      return;
+    }
+    const [child] = childrenOf(root);
+    expect(isValidElement(child)).toBe(true);
+    if (!isValidElement(child)) {
+      return;
+    }
+    expect(child.type).toBe(DocumentController);
+    expect(propsOf(child).open).toEqual(open);
+    expect(propsOf(child).presentation).toBe(allocation.presentation);
+  });
+
+  it('routes stage transcript allocations to TranscriptController', () => {
+    const identity: AgentIdentity = {
+      kind: 'collaborator',
+      agentId: 'collab-1',
+      label: 'collab',
+    };
+    const root = renderPaneAllocation(
+      paneAllocation(
+        paneRequest({
+          id: 'stage:transcript:collab-1',
+          kind: 'stageTranscript',
+          region: 'centerStage',
+          source: {
+            type: 'stageTranscript',
+            agentId: 'collab-1',
+            locked: true,
+            ephemeral: false,
+            current: true,
+          },
+        }),
+      ),
+      {
+        state: {} as AppStore,
+        chatIdentities: new Map([['collab-1', identity]]),
+      },
+    );
+
+    expect(isValidElement(root)).toBe(true);
+    if (!isValidElement(root)) {
+      return;
+    }
+    const [child] = childrenOf(root);
+    expect(isValidElement(child)).toBe(true);
+    if (!isValidElement(child)) {
+      return;
+    }
+    expect(child.type).toBe(TranscriptController);
+    expect(propsOf(child).identity).toBe(identity);
+    expect(propsOf(child).activeRecipientTarget).toBe(true);
   });
 });
 
@@ -352,7 +463,7 @@ describe('treeSurfaceDataFromView', () => {
   const cursor: TransitCursor = { laneIndex: 1, sha: 'f0' };
 
   it('maps TransitView geometry into explicit TreeSurfaceData', () => {
-    expect(treeSurfaceDataFromView(transitView, cursor, false, '', theme as Theme)).toMatchObject({
+    expect(treeSurfaceDataFromView(transitView, cursor, false, '', theme)).toMatchObject({
       ruler: ' 1h  2d',
       pending: false,
       status: 'ready',
@@ -366,7 +477,7 @@ describe('treeSurfaceDataFromView', () => {
   });
 
   it('maps g-pending mode to hint overlay lines', () => {
-    expect(treeSurfaceDataFromView(transitView, cursor, true, '20d', theme as Theme).info).toEqual([
+    expect(treeSurfaceDataFromView(transitView, cursor, true, '20d', theme).info).toEqual([
       '[m] main  [f] feature',
       'type 5d/20m +⏎  · 20d',
     ]);

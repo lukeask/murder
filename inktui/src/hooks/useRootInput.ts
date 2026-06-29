@@ -13,7 +13,7 @@
  *  - `spawn()` is owned by a later chunk (C13 spawn wizard); it is injectable so that chunk supplies
  *    the real handler, defaulting to a safe no-op (spawn defaults to focusing chat, matching the
  *    plan's "`alt+s` → highlight to text input"). (The old `toggleTmux()` fullscreen-tmux handler was
- *    retired in TUIchat-5; tmux is now an inline per-pane view, see Stage.tsx.)
+ *    retired in TUIchat-5; tmux is now an inline per-pane view in the transcript pane.)
  *
  * Raw-mode guard: `useInput` puts stdin in raw mode, which a non-TTY stdin (a piped `npm run dev`
  * smoke run, CI, a `< /dev/null` invocation) does not support — Ink throws if asked. So the loop is
@@ -33,7 +33,8 @@ import {
 import {
   CHAT_FOCUS,
   type FocusStoreApi,
-  isStagePaneId,
+  selectResolvedFocus,
+  stageTranscriptFocusId,
   type StagePaneId,
   selectEffectiveFocus,
 } from '../input/focusStore.js';
@@ -53,7 +54,7 @@ const WHEEL_STEP = 3;
 export interface DeferredGlobalHandlers {
   /** `alt+s`. Default: focus chat (the text input that becomes the spawn wizard, C13). */
   spawn?: () => void;
-  /** `alt+t` / `ctrl+t` (TUIchat-3): cycle the focused chat pane's view mode. Default: no-op until the
+  /** `alt+t` / `ctrl+t` (TUIchat-3): cycle the focused transcript pane's view mode. Default: no-op until the
    * shell wires the focus→agentId resolution + `cyclePaneViewMode` action. */
   cycleChatView?: () => void;
   /** `alt+p`. Default: no-op until C12 wires the new-plan dialog. */
@@ -71,7 +72,7 @@ export interface DeferredGlobalHandlers {
   /** `?` (the `global.keyHelp` action). Default: no-op until the shell supplies the help-overlay
    * handler. The dispatcher already routes the chord (gated to non-chat focus). */
   keyHelp?: () => void;
-  /** `alt+h`/`ctrl+h` (`global.cycleTargetPrev`). Default: no-op until the shell wires chat-target
+  /** `alt+h`/`ctrl+h` (`global.cycleTargetPrev`). Default: no-op until the shell wires recipient-target
    * cycling. Fires only while chat is focused (item 9 super-chords). */
   cycleTargetPrev?: () => void;
   /** `alt+l`/`ctrl+l` (`global.cycleTargetNext`). Default: no-op (see cycleTargetPrev). */
@@ -91,9 +92,9 @@ export interface DeferredGlobalHandlers {
   murderConfirm?: () => void;
   /** Any other key while armed cancels (without consuming the event). Default: no-op. */
   murderCancel?: () => void;
-  /** `ctrl+q` (`global.closePane`): close the highlighted Stage pane. Default: no-op until the shell
+  /** `ctrl+q` (`global.closePane`): close the highlighted center-stage pane. Default: no-op until the shell
    * supplies the handler (it needs the app store's docView / conversations actions, which this hook
-   * does not hold). The dispatcher already routes the chord (gated to Stage-pane focus). */
+   * does not hold). The dispatcher already routes the chord (gated to center-stage-pane focus). */
   closePane?: () => void;
   /**
    * The persistent chat-input handler (C11, part F). Supplied by the shell (it needs both the chat
@@ -102,10 +103,10 @@ export interface DeferredGlobalHandlers {
    */
   chatInput?: ChatInputHandler;
   /**
-   * Resolve the agent whose chat-history pane the mouse wheel should scroll while the chat INPUT
+   * Resolve the agent whose transcript pane the mouse wheel should scroll while the chat INPUT
    * holds focus — i.e. the input's active send target. Returns the agentId, or `null` when there is
    * no target. Supplied by the shell (it reads conversations/roster/favorites); the wheel only acts
-   * if that agent's pane is currently shown on the Stage (checked here against the rects map). Absent
+   * if that agent's pane is currently shown in the center-stage group (checked here against the rects map). Absent
    * → the chat-input wheel case is a no-op.
    */
   chatScrollTargetAgentId?: () => string | null;
@@ -228,7 +229,7 @@ export function useRootInput(
           focusState.focus(CHAT_FOCUS);
         },
         spawn: deferred.spawn ?? (() => focusState.focus(CHAT_FOCUS)),
-        // TUIchat-3: cycle the focused chat pane's view mode. Default no-op until the shell wires it
+        // TUIchat-3: cycle the focused transcript pane's view mode. Default no-op until the shell wires it
         // (App supplies the focus→agentId resolution + the cyclePaneViewMode action call).
         cycleChatView: deferred.cycleChatView ?? (() => {}),
         // C12: newPlan / newTicket default to no-ops until the caller supplies real handlers.
@@ -253,14 +254,14 @@ export function useRootInput(
         murderConfirm: deferred.murderConfirm ?? (() => {}),
         murderCancel: deferred.murderCancel ?? (() => {}),
         // ctrl+q close-pane: default no-op until the shell wires the docView/conversations actions.
-        // The dispatcher only fires this when a Stage pane holds focus.
+        // The dispatcher only fires this when a center-stage pane holds focus.
         closePane: deferred.closePane ?? (() => {}),
       };
 
       const ctx: DispatchContext = {
         // Effective focus, so layer 2/3 route against where the highlight actually is after graph
-        // re-home. A mounted Stage pane resolves to itself; an unmounted pane resolves to chat.
-        focusedId: selectEffectiveFocus(focus),
+        // re-home. A mounted center-stage pane resolves to itself; an unmounted pane resolves to chat.
+        focusedId: selectResolvedFocus(focus).id,
         panelKeymaps: keymaps.getState().keymaps,
         handlers,
         // The live resolved binding table (modifier + rebinds). Read per-event so a settings change
@@ -279,23 +280,22 @@ export function useRootInput(
   };
 
   // Mouse-wheel scroll routing. Focus-based, not pointer-based (the design the user chose): the wheel
-  // scrolls whatever pane the highlight is on. A focused Stage pane (chat history or doc) scrolls
+  // scrolls whatever pane the highlight is on. A focused center-stage pane (transcript or doc) scrolls
   // itself; with the chat INPUT focused the wheel scrolls the input's active send-target history pane
   // IF that pane is currently shown, else it is a no-op (no off-screen scrolling). A focused panel/
-  // modal does not scroll (no Stage pane to drive). The pane applies the delta to its own local
+  // modal does not scroll (no center-stage pane to drive). The pane applies the delta to its own local
   // offset via the scroll bus, clamped to its own range (only the pane knows its content length).
   const handleWheel = (wheel: Wheel): void => {
     const focusState = focus.getState();
-    const effective = selectEffectiveFocus(focus);
+    const resolved = selectResolvedFocus(focus);
     let target: StagePaneId | null = null;
-    if (isStagePaneId(effective)) {
-      // A focused chat-history or doc pane scrolls itself.
-      target = effective;
-    } else if (effective === CHAT_FOCUS) {
-      // Typing in the chat input: scroll the active target's history pane, but only if it's on-screen.
+    if (resolved.target.kind === 'transcriptPane' || resolved.target.kind === 'docPane') {
+      target = resolved.id as StagePaneId;
+    } else if (resolved.target.kind === 'composer') {
+      // Typing in the chat input: scroll the active target's transcript pane, but only if it's on-screen.
       const agentId = deferred.chatScrollTargetAgentId?.() ?? null;
       if (agentId !== null) {
-        const candidate: StagePaneId = `stage:chat:${agentId}`;
+        const candidate: StagePaneId = stageTranscriptFocusId(agentId);
         if (focusState.rects.has(candidate)) {
           target = candidate;
         }

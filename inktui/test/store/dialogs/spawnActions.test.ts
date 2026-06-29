@@ -29,20 +29,20 @@ function spawnBus(agentId: string | undefined): FakeBusClient {
 function fakeStore(): {
   store: StoreApi<AppStore>;
   refresh: ReturnType<typeof vi.fn>;
-  setChatPaneOpen: ReturnType<typeof vi.fn>;
+  setTranscriptPaneOpen: ReturnType<typeof vi.fn>;
   setActivePaneAgentId: ReturnType<typeof vi.fn>;
 } {
   const refresh = vi.fn(() => Promise.resolve());
-  const setChatPaneOpen = vi.fn();
+  const setTranscriptPaneOpen = vi.fn();
   const setActivePaneAgentId = vi.fn();
   const state = {
     actions: {
       roster: { refresh },
-      conversations: { setChatPaneOpen, setActivePaneAgentId },
+      conversations: { setTranscriptPaneOpen, setActivePaneAgentId },
     },
   };
   const store = { getState: () => state } as unknown as StoreApi<AppStore>;
-  return { store, refresh, setChatPaneOpen, setActivePaneAgentId };
+  return { store, refresh, setTranscriptPaneOpen, setActivePaneAgentId };
 }
 
 describe('spawnActions — spawnRogue roster refresh', () => {

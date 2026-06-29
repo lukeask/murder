@@ -46,7 +46,7 @@ export function RosterPanel(): React.JSX.Element {
   const toggleFavorite = useAppStore((s) => s.actions.favorites.toggle);
   const resetCrow = useAppStore((s) => s.actions.roster.resetCrow);
   const setActivePane = useAppStore((s) => s.actions.conversations.setActivePaneAgentId);
-  const setPaneOpen = useAppStore((s) => s.actions.conversations.setChatPaneOpen);
+  const setTranscriptPaneOpen = useAppStore((s) => s.actions.conversations.setTranscriptPaneOpen);
   const activeAgentId = useAppStore((s) => s.conversations.activePaneAgentId);
 
   const view = selectCrowsView(roster, Date.now(), favorites);
@@ -72,7 +72,7 @@ export function RosterPanel(): React.JSX.Element {
                 onPinToggle={() => void toggleFavorite(row.agentId)}
                 onClick={() => {
                   setActivePane(row.agentId);
-                  setPaneOpen(row.agentId, true);
+                  setTranscriptPaneOpen(row.agentId, true);
                 }}
                 title={
                   <span className={cx('roster-name')}>

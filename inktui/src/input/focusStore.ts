@@ -21,10 +21,10 @@
  *
  * ## Phase 4a — dynamic Stage panes
  *
- * The Stage region tiles chat-history panes that are NOT
+ * The Stage region tiles committed transcript panes that are NOT
  * toggleable panels: they appear/disappear as crows are favorited, not as a `ctrl/alt+<digit>` toggle.
  * They are still focusable (hjkl must reach them), so {@link FocusId} widens beyond the six
- * {@link PanelId}s + chat to include {@link StagePaneId} (`stage:<...>`, e.g. `stage:chat:<agentId>`;
+ * {@link PanelId}s + chat to include {@link StagePaneId} (`stage:<...>`;
  * Phase 4b adds `stage:doc:<name>` under the same scheme — no further type change needed).
  *
  * A pane's analogue of "is this a live candidate?" is **"does it have a non-zero measured rect right
@@ -34,27 +34,39 @@
  */
 
 import { createStore, type StoreApi } from 'zustand/vanilla';
-import type { ChatTargetState } from '../layout/paneLayoutTypes.js';
+import type { RecipientTargetState } from '../layout/paneLayoutTypes.js';
 import {
   buildFocusGraph,
   EMPTY_FOCUS_GRAPH_STATE,
   type FocusGraphState,
   navigateFocus,
+  type ResolvedFocus,
   refreshFocusGraphState,
   resolveEffectiveFocus,
+  resolveEffectiveFocusTarget,
 } from './focusGraph.js';
 import { CHAT_FOCUS, type FocusId } from './focusIds.js';
 import type { Direction, Rect } from './geometry.js';
 import type { PanelStoreApi } from './panelStore.js';
 
-export { CHAT_FOCUS, type FocusId, isStagePaneId, type StagePaneId } from './focusIds.js';
+export {
+  CHAT_FOCUS,
+  decodeStagePaneFocusId,
+  focusTargetFromFocusId,
+  type FocusId,
+  type FocusTarget,
+  isStagePaneId,
+  type StagePaneId,
+  stageDocFocusId,
+  stageTranscriptFocusId,
+} from './focusIds.js';
 
 /** Field-wise rect equality — so a re-measure that yields the same position skips the ref-swap. */
 function rectsEqual(a: Rect, b: Rect): boolean {
   return a.x === b.x && a.y === b.y && a.width === b.width && a.height === b.height;
 }
 
-const EMPTY_CHAT_TARGETS: ChatTargetState = {
+const EMPTY_RECIPIENT_TARGETS: RecipientTargetState = {
   activeTargetId: null,
   lockedVisibleTargetIds: [],
   favoriteOnlyTargetIds: [],
@@ -65,7 +77,7 @@ function arrayEqual(a: readonly string[], b: readonly string[]): boolean {
   return a.length === b.length && a.every((value, index) => value === b[index]);
 }
 
-function chatTargetsEqual(a: ChatTargetState, b: ChatTargetState): boolean {
+function recipientTargetsEqual(a: RecipientTargetState, b: RecipientTargetState): boolean {
   return (
     a.activeTargetId === b.activeTargetId &&
     a.ephemeralTargetId === b.ephemeralTargetId &&
@@ -91,7 +103,7 @@ export interface FocusState {
   readonly graphState: FocusGraphState;
   /** Durable pane admission order, updated from mount/unmount rather than layout order. */
   readonly openPaneIdsByOpenedAt: readonly FocusId[];
-  readonly chatTargets: ChatTargetState;
+  readonly recipientTargets: RecipientTargetState;
   /**
    * The measured screen rect of each focusable, keyed by {@link FocusId}. Populated by components
    * via {@link FocusState.measure} (Ink `measureElement` at the component layer); read only by
@@ -114,8 +126,8 @@ export interface FocusState {
    * re-homes to chat if needed. Idempotent for an absent id (keeps map identity → no re-render
    * churn). */
   unmeasure(id: FocusId): void;
-  /** Publish the current chat-target partition from the app state into focus graph construction. */
-  setChatTargets(chatTargets: ChatTargetState): void;
+  /** Publish the current recipient-target partition from the app state into focus graph construction. */
+  setRecipientTargets(recipientTargets: RecipientTargetState): void;
   /** `ctrl+vim`: move focus to the geometric neighbour of the *effective* focus in `direction`,
    * over the mounted candidates' measured rects. No neighbour in that direction → focus unchanged
    * (the layout edge). The whole nav policy is here so the dispatcher just calls `navigate(dir)`. */
@@ -133,7 +145,7 @@ export function createFocusStore(
     intendedId: initialIntended,
     graphState: EMPTY_FOCUS_GRAPH_STATE,
     openPaneIdsByOpenedAt: [],
-    chatTargets: EMPTY_CHAT_TARGETS,
+    recipientTargets: EMPTY_RECIPIENT_TARGETS,
     rects: new Map<FocusId, Rect>(),
     focus(id) {
       set({ intendedId: id });
@@ -147,7 +159,7 @@ export function createFocusStore(
         const rects = new Map(state.rects).set(id, rect);
         const graph = buildFocusGraph({
           rects,
-          chatTargets: state.chatTargets,
+          recipientTargets: state.recipientTargets,
           state: graphStateWithOpenHistory(state.graphState, state.openPaneIdsByOpenedAt),
         });
         return {
@@ -168,7 +180,7 @@ export function createFocusStore(
         const graphState = graphStateWithOpenHistory(state.graphState, openPaneIdsByOpenedAt);
         const graph = buildFocusGraph({
           rects: state.rects,
-          chatTargets: state.chatTargets,
+          recipientTargets: state.recipientTargets,
           state: graphState,
         });
         return {
@@ -186,7 +198,7 @@ export function createFocusStore(
         const graphState = graphStateWithOpenHistory(state.graphState, openPaneIdsByOpenedAt);
         const graph = buildFocusGraph({
           rects: state.rects,
-          chatTargets: state.chatTargets,
+          recipientTargets: state.recipientTargets,
           state: graphState,
         });
         return {
@@ -204,7 +216,7 @@ export function createFocusStore(
         next.delete(id);
         const graph = buildFocusGraph({
           rects: next,
-          chatTargets: state.chatTargets,
+          recipientTargets: state.recipientTargets,
           state: graphStateWithOpenHistory(state.graphState, state.openPaneIdsByOpenedAt),
         });
         return {
@@ -216,25 +228,25 @@ export function createFocusStore(
         };
       });
     },
-    setChatTargets(chatTargets) {
+    setRecipientTargets(recipientTargets) {
       set((state) => {
-        if (chatTargetsEqual(state.chatTargets, chatTargets)) {
+        if (recipientTargetsEqual(state.recipientTargets, recipientTargets)) {
           return state;
         }
         const graphState = {
           ...state.graphState,
           openPaneIdsByOpenedAt: state.openPaneIdsByOpenedAt,
-          activeTargetId: chatTargets.activeTargetId,
-          previousLockedVisibleTargetIds: [...chatTargets.lockedVisibleTargetIds],
-          previousFavoriteOnlyTargetIds: [...chatTargets.favoriteOnlyTargetIds],
+          activeTargetId: recipientTargets.activeTargetId,
+          previousLockedVisibleTargetIds: [...recipientTargets.lockedVisibleTargetIds],
+          previousFavoriteOnlyTargetIds: [...recipientTargets.favoriteOnlyTargetIds],
         };
         const graph = buildFocusGraph({
           rects: state.rects,
-          chatTargets,
+          recipientTargets,
           state: graphState,
         });
         return {
-          chatTargets,
+          recipientTargets,
           graphState: refreshFocusGraphState(graph, graphState),
         };
       });
@@ -243,7 +255,7 @@ export function createFocusStore(
       const state = get();
       const graph = buildFocusGraph({
         rects: state.rects,
-        chatTargets: state.chatTargets,
+        recipientTargets: state.recipientTargets,
         state: graphStateWithOpenHistory(state.graphState, state.openPaneIdsByOpenedAt),
       });
       const current = resolveEffectiveFocus(state.intendedId, graph);
@@ -280,7 +292,19 @@ export function selectEffectiveFocus(focus: FocusStoreApi): FocusId {
     state.intendedId,
     buildFocusGraph({
       rects: state.rects,
-      chatTargets: state.chatTargets,
+      recipientTargets: state.recipientTargets,
+      state: graphStateWithOpenHistory(state.graphState, state.openPaneIdsByOpenedAt),
+    }),
+  );
+}
+
+export function selectResolvedFocus(focus: FocusStoreApi): ResolvedFocus {
+  const state = focus.getState();
+  return resolveEffectiveFocusTarget(
+    state.intendedId,
+    buildFocusGraph({
+      rects: state.rects,
+      recipientTargets: state.recipientTargets,
       state: graphStateWithOpenHistory(state.graphState, state.openPaneIdsByOpenedAt),
     }),
   );

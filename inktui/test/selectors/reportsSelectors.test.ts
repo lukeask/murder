@@ -54,6 +54,8 @@ describe('selectReportsView — presentation', () => {
   it('carries load flags through and computes isEmpty', () => {
     expect(selectReportsView(state([]), NO_FAVS).isEmpty).toBe(true);
     expect(selectReportsView(state([row()]), NO_FAVS).isEmpty).toBe(false);
+    expect(selectReportsView(state([], { status: 'idle' }), NO_FAVS).status).toBe('ready');
+    expect(selectReportsView(state([], { status: 'loading' }), NO_FAVS).status).toBe('loading');
     const err = selectReportsView(state([], { status: 'error', error: 'fail' }), NO_FAVS);
     expect(err.status).toBe('error');
     expect(err.error).toBe('fail');

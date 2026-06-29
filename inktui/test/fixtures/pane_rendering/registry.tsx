@@ -15,10 +15,8 @@ import { getTheme } from '../../../src/theme/themeStore.js';
 import {
   type BarFixtureData,
   barData,
-  type ChatFixtureData,
   type ChatInputFixtureData,
   type CrowFixtureRow,
-  chatData,
   chatInputData,
   crowRows,
   type DocFixtureData,
@@ -29,8 +27,10 @@ import {
   resourceRows,
   type SimpleLedgerRow,
   type TicketFixtureRow,
+  type TranscriptFixtureData,
   type TransitFixtureData,
   ticketRows,
+  transcriptData,
   transitData,
   type UsageFixtureGroup,
   usageGroups,
@@ -488,12 +488,12 @@ function DocFixture({
   );
 }
 
-function ChatPaneFixture({
+function TranscriptPaneFixture({
   data,
   focused,
   height,
 }: {
-  readonly data: ChatFixtureData;
+  readonly data: TranscriptFixtureData;
   readonly focused: boolean;
   readonly height: number;
 }): React.JSX.Element {
@@ -519,7 +519,7 @@ function ChatPaneFixture({
                 ? theme.warning
                 : theme.text;
           return (
-            // biome-ignore lint/suspicious/noArrayIndexKey: chat fixture lines are deterministic position-keyed slices.
+            // biome-ignore lint/suspicious/noArrayIndexKey: transcript fixture lines are deterministic position-keyed slices.
             <Box key={`${index}:${item.line}`} flexDirection="row">
               <Text color={color}>{item.line === ' ' ? '  ' : index === 0 ? '▌ ' : '▏ '}</Text>
               <Text color={color} wrap="wrap">
@@ -805,7 +805,8 @@ export const paneFixtures: readonly PaneFixture[] = [
   },
   {
     id: 'doc-pane',
-    description: 'Store-free StageDocPane wrapper with document lines and scrollbar chrome.',
+    description:
+      'Store-free DocumentSurface-style wrapper with document lines and scrollbar chrome.',
     sizes: PANE_SIZES,
     data: docData,
     render: ({ data, focused, height }) => (
@@ -813,12 +814,16 @@ export const paneFixtures: readonly PaneFixture[] = [
     ),
   },
   {
-    id: 'chat-pane',
-    description: 'Store-free Stage ChatPane wrapper with mixed chat turns.',
+    id: 'transcript-pane',
+    description: 'Store-free Stage TranscriptPane wrapper with mixed transcript turns.',
     sizes: PANE_SIZES,
-    data: chatData,
+    data: transcriptData,
     render: ({ data, focused, height }) => (
-      <ChatPaneFixture data={data as ChatFixtureData} focused={focused} height={height} />
+      <TranscriptPaneFixture
+        data={data as TranscriptFixtureData}
+        focused={focused}
+        height={height}
+      />
     ),
   },
   {

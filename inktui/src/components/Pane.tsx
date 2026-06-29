@@ -180,7 +180,7 @@ export interface PaneProps {
    *  the node's color. */
   readonly footerLeft?: React.ReactNode;
   /** Optional right-anchored node on the bottom border — sits the same distance from the right edge
-   *  as `title` sits from the left (e.g. a chat pane's `Claude Code ◇ Opus 4.8`). The CALLER owns its
+   *  as `title` sits from the left (e.g. a transcript pane's `Claude Code ◇ Opus 4.8`). The CALLER owns its
    *  color. Either footer prop turns the bottom border into the hand-composed footer row. */
   readonly footerRight?: React.ReactNode;
 }
@@ -300,7 +300,7 @@ export const Pane = memo(
         />
         {body}
         {/* Opt-in footer: an OVERLAY pulled up onto Ink's own (clip-robust) bottom border, carrying
-            the left/right labels (e.g. a chat pane's `Claude Code ◇ Opus 4.8`). It adds zero height
+            the left/right labels (e.g. a transcript pane's `Claude Code ◇ Opus 4.8`). It adds zero height
             (`marginTop:-1` cancels its 1 row), so the pane is exactly as tall — and as fractional-
             height-robust — as the no-footer case. See {@link ./paneBorder.js PaneBorderBottom}. */}
         {hasFooter && (

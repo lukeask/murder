@@ -54,7 +54,11 @@ import {
 import type { ChatInputHandler } from '../input/dispatcher.js';
 import { expandTemplates } from '../input/expandTemplates.js';
 import { parseWorkflowFire } from '../input/fireWorkflow.js';
-import { CHAT_FOCUS, type FocusId, selectEffectiveFocus } from '../input/focusStore.js';
+import {
+  CHAT_FOCUS,
+  type FocusTarget,
+  selectResolvedFocus,
+} from '../input/focusStore.js';
 import { selectActiveMode } from '../input/modeStore.js';
 import {
   buildPaneRequests,
@@ -62,17 +66,17 @@ import {
   renderPaneLayoutPlan,
 } from '../layout/paneBridge.js';
 import { computePaneLayout } from '../layout/paneLayout.js';
-import type { ChatTargetState } from '../layout/paneLayoutTypes.js';
+import type { RecipientTargetState } from '../layout/paneLayoutTypes.js';
 import { deriveAgentIdentity } from '../selectors/agentIdentity.js';
 import {
-  isChatPaneOpen,
   isFreeformChoiceSelected,
+  isTranscriptPaneOpen,
   selectActiveAgentId,
   selectConversationMeta,
-  selectCycledTarget,
-  selectFavoritesChatPanes,
+  selectCycledRecipientTarget,
+  selectFavoriteTranscriptPanes,
   selectLiveChoicePrompt,
-  selectOpenChatPanes,
+  selectOpenTranscriptPanes,
   selectUserHistory,
 } from '../selectors/conversationsSelectors.js';
 import { submitCommand } from '../store/commandSubmit.js';
@@ -107,7 +111,7 @@ import { TopBar } from './TopBar.js';
 
 /**
  * The smallest terminal the shell will attempt to lay out (first-run UX: a too-small terminal gets
- * a clear notice, not a mangled frame). 60 columns is where the rails + the Stage's ≥60% floor stop
+ * a clear notice, not a mangled frame). 60 columns is where the side panels + the center-stage group's ≥60% floor stop
  * being co-satisfiable (and the 56–64-wide modals clamp to uselessness); 16 rows is the floor for
  * the chrome (top bar + chat + bottom bar) plus a usable body. Exported for the guard's tests.
  * Deliberately BELOW the 24×80 non-TTY fallback in {@link useTerminalSize}, so piped/CI renders
@@ -118,18 +122,18 @@ export const MIN_TERMINAL_ROWS = 16;
 
 /**
  * Derive the spawn context from the app store at `ctrl+s` invocation time. Returns a
- * {@link SpawnContext} when the **highlighted pane is the open document** (`stage:doc:<name>`), else
+ * {@link SpawnContext} when the highlighted pane is the open document, else
  * `null` (no "include this file in context" step shown in the wizard).
  *
- * ## Doc-vs-chat is decided by the EFFECTIVE FOCUS (stagelayout plan)
- * `ctrl+s` now spawns from chat OR any highlighted Stage pane (a chat-history pane or the open doc).
+ * ## Doc-vs-chat is decided by the EFFECTIVE FOCUS (center-stage layout)
+ * `ctrl+s` now spawns from chat OR any highlighted center-stage pane (a transcript pane or the open doc).
  * The plan's requirement is that the doc file is included ONLY when the **document** pane is the one
- * highlighted; when a chat-history pane is highlighted there is NO file prompt, even if a doc happens
- * to be open elsewhere on the Stage. So this consults `focusedId` (the effective focus passed in by
+ * highlighted; when a transcript pane is highlighted there is NO file prompt, even if a doc happens
+ * to be open elsewhere in the center-stage group. So this consults `focusedId` (the effective focus passed in by
  * the spawn handler), not merely `docView.open`:
- *  - focus is `stage:doc:<name>` → return the open doc's reference-by-path context (the context step
+ *  - focus is the document pane → return the open doc's reference-by-path context (the context step
  *    appears).
- *  - focus is a chat pane or the chat input → return `null` (no context step), regardless of whether
+ *  - focus is a transcript pane or the chat input → return `null` (no context step), regardless of whether
  *    a doc is open.
  *
  * The open doc is already shared state with a real identity (`{ kind, name }`), so panel cursors stay
@@ -139,10 +143,10 @@ export const MIN_TERMINAL_ROWS = 16;
  * The returned `path` is `.murder/<dir>/<name>.md` (the dir from {@link DOC_DIR}). The wizard builds
  * `"Please read ${path} before starting."` — the rogue reads the file, not an inlined body.
  */
-export function deriveSpawnContext(appStore: AppStoreApi, focusedId: FocusId): SpawnContext | null {
-  // The file context is included ONLY when the highlighted pane is the open doc. A chat pane / the
-  // chat input never includes the file, even when a doc is open elsewhere on the Stage.
-  if (!focusedId.startsWith('stage:doc:')) {
+export function deriveSpawnContext(appStore: AppStoreApi, target: FocusTarget): SpawnContext | null {
+  // The file context is included ONLY when the highlighted pane is the open doc. A transcript pane / the
+  // chat input never includes the file, even when a doc is open elsewhere in the center-stage group.
+  if (target.kind !== 'docPane') {
     return null;
   }
   const open = appStore.getState().docView.open;
@@ -150,7 +154,7 @@ export function deriveSpawnContext(appStore: AppStoreApi, focusedId: FocusId): S
     return null;
   }
   const dir = DOC_DIR[open.kind];
-  return { title: open.name, path: `.murder/${dir}/${open.name}.md` };
+  return { title: target.name, path: `.murder/${dir}/${open.name}.md` };
 }
 
 /**
@@ -570,16 +574,15 @@ class BodyErrorBoundary extends Component<{ readonly children: ReactNode }, { ha
  *
  * ## Pane bridge
  * The body hosts the layout-manager output from `src/layout/paneBridge.tsx`: list panels and the
- * focusable center-stage panes for open chat history and open documents. Legacy Rail/Stage component
- * entrypoints remain only as compatibility shims for older imports/tests.
+ * focusable center-stage panes for open chat history and open documents.
  *
  * C13: wires the `spawn` deferred handler so `ctrl+s` opens the spawn wizard. The handler reads the
  * app store at invocation time (not during render) so it always sees current state.
  *
- * `ctrl+s` spawns from chat OR a highlighted Stage pane (a chat-history pane or the open doc); the
+ * `ctrl+s` spawns from chat OR a highlighted center-stage pane (a transcript pane or the open doc); the
  * dispatcher routes it (declines on a list panel, where alt+f stays the star chord). The doc file is
  * included in the spawn context ONLY when the highlighted pane is the document — see
- * {@link deriveSpawnContext}, which reads the effective focus. `ctrl+q` closes the highlighted Stage
+ * {@link deriveSpawnContext}, which reads the effective focus. `ctrl+q` closes the highlighted center-stage
  * pane (see `closePaneHandler`). C11 also loads the persisted favorites once on mount via the favorites
  * action.
  */
@@ -652,37 +655,39 @@ function Shell({
   const appState = useAppStore((s) => s);
   const visiblePanels = usePanelStore((s) => s.visible);
   const effectiveFocus = useEffectiveFocus();
-  const activeChatTargetId = selectActiveAgentId(
+  const activeRecipientTargetId = selectActiveAgentId(
     appState.conversations,
     appState.roster,
     appState.favorites,
   );
-  const chatTargetState = useMemo<ChatTargetState>(() => {
-    const lockedVisibleTargetIds = selectOpenChatPanes(
+  const recipientTargetState = useMemo<RecipientTargetState>(() => {
+    const lockedVisibleTargetIds = selectOpenTranscriptPanes(
       appState.roster,
       appState.favorites,
       appState.conversations.paneOverrides,
     ).panes.map((pane) => pane.agentId);
     const locked = new Set(lockedVisibleTargetIds);
-    const favoriteOnlyTargetIds = selectFavoritesChatPanes(appState.roster, appState.favorites)
+    const favoriteOnlyTargetIds = selectFavoriteTranscriptPanes(appState.roster, appState.favorites)
       .panes.map((pane) => pane.agentId)
       .filter((agentId) => !locked.has(agentId));
     return {
-      activeTargetId: activeChatTargetId,
+      activeTargetId: activeRecipientTargetId,
       lockedVisibleTargetIds,
       favoriteOnlyTargetIds,
       ephemeralTargetId:
-        activeChatTargetId !== null && !locked.has(activeChatTargetId) ? activeChatTargetId : null,
+        activeRecipientTargetId !== null && !locked.has(activeRecipientTargetId)
+          ? activeRecipientTargetId
+          : null,
     };
   }, [
     appState.roster,
     appState.favorites,
     appState.conversations.paneOverrides,
-    activeChatTargetId,
+    activeRecipientTargetId,
   ]);
   useEffect(() => {
-    focus.getState().setChatTargets(chatTargetState);
-  }, [focus, chatTargetState]);
+    focus.getState().setRecipientTargets(recipientTargetState);
+  }, [focus, recipientTargetState]);
   const paneRequests = useMemo(
     () => buildPaneRequests({ state: appState, visiblePanels, focusedId: effectiveFocus }),
     [appState, visiblePanels, effectiveFocus],
@@ -704,7 +709,7 @@ function Shell({
         gap: paneGap,
         requests: paneRequests,
         focusedPaneId: effectiveFocus,
-        chatTargets: chatTargetState,
+        recipientTargets: recipientTargetState,
       }),
     [
       columns,
@@ -717,7 +722,7 @@ function Shell({
       paneGap,
       paneRequests,
       effectiveFocus,
-      chatTargetState,
+      recipientTargetState,
     ],
   );
   const chatIdentities = useMemo(() => createChatIdentityMap(appState), [appState]);
@@ -810,9 +815,9 @@ function Shell({
   // are stable references.
   const spawnHandler = (): void => {
     // Doc-vs-chat file context is decided by the effective focus: include the doc file ONLY when
-    // the highlighted pane is the open doc; a highlighted chat pane / the chat input gets no file
+    // the highlighted pane is the open doc; a highlighted transcript pane / the chat input gets no file
     // prompt, even if a doc is open elsewhere.
-    const spawnContext = deriveSpawnContext(appStore, selectEffectiveFocus(focus));
+    const spawnContext = deriveSpawnContext(appStore, selectResolvedFocus(focus).target);
     const actions = createSpawnActions(bus, appStore);
     const modelActions = createHarnessModelsActions(bus);
     const worktreeActions = createWorktreeOptionsActions(bus);
@@ -922,13 +927,13 @@ function Shell({
     modes.getState().enter(helpMode(modes, bindings.getState().resolved, keymaps));
   };
 
-  // Item 9 super-chords: cycle the chat target (prev/−1, next/+1) through locked-visible targets
+  // Item 9 super-chords: cycle the recipient target (prev/−1, next/+1) through locked-visible targets
   // first, then favorite-only targets. Cycling is a pure input-routing change: it sets the send
-  // target but does NOT open the crow's chat pane — the user opens a pane explicitly with
+  // target but does NOT open the crow's transcript pane — the user opens a pane explicitly with
   // `toggleTargetPane` (ctrl+w). Reads the store imperatively so it always sees current state.
-  const cycleTarget = (direction: 1 | -1): void => {
+  const cycleRecipientTarget = (direction: 1 | -1): void => {
     const state = appStore.getState();
-    const result = selectCycledTarget(
+    const result = selectCycledRecipientTarget(
       state.conversations,
       state.roster,
       state.favorites,
@@ -943,13 +948,13 @@ function Shell({
   const toggleTargetGroupHandler = (): void => {
     const state = appStore.getState();
     const activeAgentId = selectActiveAgentId(state.conversations, state.roster, state.favorites);
-    const lockedVisibleTargetIds = selectOpenChatPanes(
+    const lockedVisibleTargetIds = selectOpenTranscriptPanes(
       state.roster,
       state.favorites,
       state.conversations.paneOverrides,
     ).panes.map((pane) => pane.agentId);
     const locked = new Set(lockedVisibleTargetIds);
-    const favoriteOnlyTargetIds = selectFavoritesChatPanes(state.roster, state.favorites)
+    const favoriteOnlyTargetIds = selectFavoriteTranscriptPanes(state.roster, state.favorites)
       .panes.map((pane) => pane.agentId)
       .filter((agentId) => !locked.has(agentId));
     const destination = locked.has(activeAgentId ?? '')
@@ -960,35 +965,36 @@ function Shell({
     }
   };
 
-  // Item 9 super-chord: toggle the current chat target's pane from the chat box.
+  // Item 9 super-chord: toggle the current recipient target's transcript pane from the chat box.
   const toggleTargetPaneHandler = (): void => {
     const state = appStore.getState();
     const agentId = selectActiveAgentId(state.conversations, state.roster, state.favorites);
     if (agentId === null) {
       return;
     }
-    // `toggleChatPane` needs the current open state (it writes the opposite override). Derive it via
+    // `toggleTranscriptPane` needs the current open state (it writes the opposite override). Derive it via
     // the agent's identity so the kind-default favorite is honoured for an un-overridden pane.
     const row = state.roster.rows.find((r) => r.agentId === agentId);
     const identity = row === undefined ? null : deriveAgentIdentity(row);
     const currentlyOpen =
       identity === null
         ? state.conversations.paneOverrides.get(agentId) === true
-        : isChatPaneOpen(identity, state.favorites, state.conversations.paneOverrides);
-    state.actions.conversations.toggleChatPane(agentId, currentlyOpen);
+        : isTranscriptPaneOpen(identity, state.favorites, state.conversations.paneOverrides);
+    state.actions.conversations.toggleTranscriptPane(agentId, currentlyOpen);
   };
 
-  // ctrl+m murder chord. ARM resolves the targeted crow from the live UI state: the focused chat
-  // pane's crow when a `stage:chat:` pane holds focus, else the active chat target (the crow the
+  // ctrl+m murder chord. ARM resolves the targeted crow from the live UI state: the focused transcript
+  // pane's crow when a transcript pane holds focus, else the active recipient target (the crow the
   // user is chatting to). The crows-panel case never reaches this handler — the dispatcher declines
   // there so the panel arms with its own local cursor row. The confirm/cancel handlers drive the
   // shared {@link murderConfirmStore}, so the panel-armed and shell-armed paths confirm identically.
   const murderHandler = (): void => {
     const state = appStore.getState();
-    const effective = selectEffectiveFocus(focus);
-    const agentId = effective.startsWith('stage:chat:')
-      ? effective.slice('stage:chat:'.length)
-      : selectActiveAgentId(state.conversations, state.roster, state.favorites);
+    const target = selectResolvedFocus(focus).target;
+    const agentId =
+      target.kind === 'transcriptPane'
+        ? target.agentId
+        : selectActiveAgentId(state.conversations, state.roster, state.favorites);
     if (agentId === null) {
       toastStore.getState().push('no crow to murder', { ttlMs: 4000 });
       return;
@@ -998,17 +1004,18 @@ function Shell({
     murderConfirmStore.getState().arm({ agentId, name: identity?.label ?? agentId });
   };
   // TUIchat-3: the chat-view cycle chord (alt+t / ctrl+t). Resolves the targeted crow like the murder
-  // chord — the focused `stage:chat:` pane's crow, else the active chat target — and rotates its
+  // chord: the focused transcript pane's crow, else the active recipient target, and rotates its
   // per-pane view mode (verbose → condensed → tmux → verbose). The pane's effective mode is
   // `conversations.paneViewModes[agentId] ?? settings.defaultChatViewMode`.
   const cycleChatViewHandler = (): void => {
     const state = appStore.getState();
-    const effective = selectEffectiveFocus(focus);
-    const agentId = effective.startsWith('stage:chat:')
-      ? effective.slice('stage:chat:'.length)
-      : selectActiveAgentId(state.conversations, state.roster, state.favorites);
+    const target = selectResolvedFocus(focus).target;
+    const agentId =
+      target.kind === 'transcriptPane'
+        ? target.agentId
+        : selectActiveAgentId(state.conversations, state.roster, state.favorites);
     if (agentId === null) {
-      toastStore.getState().push('no chat pane to cycle', { ttlMs: 4000 });
+      toastStore.getState().push('no transcript pane to cycle', { ttlMs: 4000 });
       return;
     }
     state.actions.conversations.cyclePaneViewMode(agentId);
@@ -1033,23 +1040,26 @@ function Shell({
   };
 
   // ctrl+q close-pane chord: close the currently-highlighted pane. The
-  // dispatcher only fires this when a Stage pane holds the effective focus, so this reads the effective
+  // dispatcher only fires this when a center-stage pane holds the effective focus, so this reads the effective
   // focus and routes by pane kind:
-  //  - `stage:doc:<name>` → close the open doc via the docView action (rule 3). The pane unmounts →
+  //  - document pane → close the open doc via the docView action (rule 3). The pane unmounts →
   //    focus re-homes to chat via the derived invariant (no imperative re-home).
-  //  - `stage:chat:<agentId>` → close that chat pane via `conversations.setChatPaneOpen(id, false)`.
+  //  - transcript pane → close that transcript pane via `conversations.setTranscriptPaneOpen(id, false)`.
   //    This writes an explicit `false` paneOverride that overrides the favorites default, so even a
-  //    default-favorited collaborator/rogue pane disappears (a bare `toggleChatPane` would need the
+  //    default-favorited collaborator/rogue pane disappears (a bare `toggleTranscriptPane` would need the
   //    current open state; the explicit `false` is unconditional, which is what close means).
   const closePaneHandler = (): void => {
-    const effective = selectEffectiveFocus(focus);
-    if (effective.startsWith('stage:doc:')) {
-      appStore.getState().actions.docView.close();
-      return;
-    }
-    if (effective.startsWith('stage:chat:')) {
-      const agentId = effective.slice('stage:chat:'.length);
-      appStore.getState().actions.conversations.setChatPaneOpen(agentId, false);
+    const target = selectResolvedFocus(focus).target;
+    switch (target.kind) {
+      case 'docPane':
+        appStore.getState().actions.docView.close();
+        return;
+      case 'transcriptPane':
+        appStore.getState().actions.conversations.setTranscriptPaneOpen(target.agentId, false);
+        return;
+      case 'composer':
+      case 'panel':
+        return;
     }
   };
 
@@ -1098,8 +1108,8 @@ function Shell({
       cycleChatView: cycleChatViewHandler,
       quickNote: quickNoteHandler,
       keyHelp: keyHelpHandler,
-      cycleTargetPrev: () => cycleTarget(-1),
-      cycleTargetNext: () => cycleTarget(1),
+      cycleTargetPrev: () => cycleRecipientTarget(-1),
+      cycleTargetNext: () => cycleRecipientTarget(1),
       toggleTargetGroup: toggleTargetGroupHandler,
       toggleTargetPane: toggleTargetPaneHandler,
       murder: murderHandler,

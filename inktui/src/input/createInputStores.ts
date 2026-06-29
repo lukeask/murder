@@ -46,7 +46,7 @@ export function createInputStores(
   const modes = createModeStore(focus);
   const chatInput = createChatInputStore();
   // Murder-wide history corpus + vim state: one instance each so send-history recall and the yank
-  // register span every chat target (yank in one crow's draft, paste into another's).
+  // register span every recipient target (yank in one crow's draft, paste into another's).
   const chatHistory = createChatHistoryStore();
   const chatVim = createChatVimStore();
   // The bindings store starts at today's behavior (alt modifier, ctrl unavailable, no overrides); a

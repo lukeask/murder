@@ -246,7 +246,7 @@ export function selectCrowsView(
   const sorted = [...state.rows].sort(byStatusThenId);
 
   // Whether a roster row is favorited — ORs the explicit star set with the kind-derived default
-  // (collaborator + rogue), exactly like the chat-pane decision (item 9d). Derived from the row's
+  // (collaborator + rogue), exactly like the transcript-pane decision (item 9d). Derived from the row's
   // identity so the default matches `isDefaultFavorited`; rows with no identity are never favorited.
   const isRowFavorited = (row: RosterRow): boolean => {
     const identity = deriveAgentIdentity(row);

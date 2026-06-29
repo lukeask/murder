@@ -1,11 +1,11 @@
 /**
- * harnessDisplay tests — pure label helpers for the chat-pane bottom border (rule 2). No store, no
+ * harnessDisplay tests — pure label helpers for the transcript-pane bottom border (rule 2). No store, no
  * React: feed raw ids/paths, assert the render-ready labels.
  */
 
 import { worktreeLabel } from '../../src/selectors/harnessDisplay.js';
 
-describe('worktreeLabel — chat-pane bottom-right', () => {
+describe('worktreeLabel — transcript-pane bottom-right', () => {
   it('shows the bare subdir under .murder/worktrees/', () => {
     expect(worktreeLabel('/home/luke/code/murder/.murder/worktrees/foobar')).toBe('foobar');
   });

@@ -174,6 +174,20 @@ describe('ticketDetailActions.open', () => {
     dispose();
   });
 
+  it('maps a live null detail reply to an editor error', async () => {
+    const fake = new FakeBusClient();
+    fake.stubRpc('state.ticket_detail', null);
+    fake.stubRpc('state.crow_snapshot', { invalidation_key: 'iv', sessions: [] });
+    const { store, dispose } = createAppStore(fake);
+    await store.getState().actions.ticketDetail.open('T-404');
+    const detail = store.getState().ticketDetail;
+    expect(detail.status).toBe('error');
+    expect(detail.error).toBe('ticket not found: T-404');
+    expect(detail.savedBody).toBeNull();
+    expect(detail.editedBody).toBeNull();
+    dispose();
+  });
+
   it('does not mutate sibling slices (invariant: only ticketDetail key changes)', async () => {
     const { store, dispose } = setup();
     const rosterBefore = store.getState().roster;

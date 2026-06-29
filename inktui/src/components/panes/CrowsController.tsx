@@ -5,13 +5,14 @@ import { useBindings, usePanelKeymap } from '../../hooks/useInputStores.js';
 import type { PanelKeymap } from '../../input/keymap.js';
 import type { PanePresentation } from '../../layout/paneLayoutTypes.js';
 import { deriveAgentIdentity } from '../../selectors/agentIdentity.js';
-import { isChatPaneOpen } from '../../selectors/conversationsSelectors.js';
+import { isTranscriptPaneOpen } from '../../selectors/conversationsSelectors.js';
 import { type CrowsView, useCrowsView } from '../../selectors/crowsSelectors.js';
 import { murderConfirmStore, resetConfirmStore } from '../../store/murder/murderConfirmStore.js';
 import { toastStore } from '../../store/toast/toastStore.js';
 import { useTheme } from '../../theme/themeStore.js';
 import { CrowsSurface, type CrowsSurfaceRow, type CrowsSurfaceStatus } from './CrowsSurface.js';
-import { MeasuredPaneFrame, useClampedCursor } from './shared/index.js';
+import { MeasuredPaneFrame } from './shared/MeasuredPaneFrame.js';
+import { useClampedCursor } from './shared/useClampedCursor.js';
 
 type CrowsIntent =
   | 'cursorDown'
@@ -55,7 +56,9 @@ export const CrowsController = memo(function CrowsController({
   const resetCrow = useAppStore((state) => state.actions.roster.resetCrow);
   const toggleFavorite = useAppStore((state) => state.actions.favorites.toggle);
   const setActivePane = useAppStore((state) => state.actions.conversations.setActivePaneAgentId);
-  const toggleChatPane = useAppStore((state) => state.actions.conversations.toggleChatPane);
+  const toggleTranscriptPane = useAppStore(
+    (state) => state.actions.conversations.toggleTranscriptPane,
+  );
   const bindings = useBindings();
   const view = useCrowsView(roster, favorites);
   const theme = useTheme();
@@ -82,12 +85,12 @@ export const CrowsController = memo(function CrowsController({
     if (identity === null) {
       return;
     }
-    const currentlyOpen = isChatPaneOpen(identity, favorites, conversations.paneOverrides);
-    toggleChatPane(agentId, currentlyOpen);
+    const currentlyOpen = isTranscriptPaneOpen(identity, favorites, conversations.paneOverrides);
+    toggleTranscriptPane(agentId, currentlyOpen);
     if (!currentlyOpen) {
       setActivePane(agentId);
     }
-  }, [agentIdAtCursor, conversations, favorites, roster, setActivePane, toggleChatPane]);
+  }, [agentIdAtCursor, conversations, favorites, roster, setActivePane, toggleTranscriptPane]);
 
   const keymap: PanelKeymap<CrowsIntent> = useMemo(
     () => ({
@@ -103,7 +106,11 @@ export const CrowsController = memo(function CrowsController({
           description: 'prev crow',
         },
         { chord: bindings.chordsFor('global.murder'), intent: 'murder', description: 'murder' },
-        { chord: { key: { return: true } }, intent: 'openChat', description: 'toggle chat pane' },
+        {
+          chord: { key: { return: true } },
+          intent: 'openChat',
+          description: 'toggle transcript pane',
+        },
         { chord: { input: 'r' }, intent: 'refresh', description: 'refresh' },
         { chord: { input: 'm' }, intent: 'toggleExpanded', description: 'toggle maximized' },
         { chord: bindings.chordsFor('panel.star'), intent: 'star', description: 'favorite' },

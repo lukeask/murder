@@ -7,7 +7,8 @@ import type { PanePresentation } from '../../layout/paneLayoutTypes.js';
 import { selectUsageView } from '../../selectors/usageSelectors.js';
 import type { UsageState } from '../../store/usage/usageSlice.js';
 import { useTheme } from '../../theme/themeStore.js';
-import { MeasuredPaneFrame, useClampedCursor } from './shared/index.js';
+import { MeasuredPaneFrame } from './shared/MeasuredPaneFrame.js';
+import { useClampedCursor } from './shared/useClampedCursor.js';
 import { UsageSurface, type UsageSurfaceGroup } from './UsageSurface.js';
 
 type UsageIntent = 'cursorDown' | 'cursorUp' | 'refresh' | 'cycleSteering';

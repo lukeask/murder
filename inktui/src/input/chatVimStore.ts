@@ -1,7 +1,7 @@
 /**
  * `chatVimStore` — the **vim editing mode** state for the chat input (chat-input overhaul, user ask
  * #3): the current submode (`normal`/`insert`), the pending operator for two-key commands, and the
- * **murder-wide yank register**. One store instance is shared across every chat target, which is the
+ * **murder-wide yank register**. One store instance is shared across every recipient target, which is the
  * whole point of the register: yank in one crow's draft, paste into another's.
  *
  * ## Why these three live together (and what does NOT)
@@ -21,7 +21,7 @@
  *    lets the UI show a pending indicator if it wants.
  *  - **`register`** — the **murder-wide** yank register. Yank/delete/change write it (via the reducer's
  *    `setRegister`/`buffer`-with-register effects, applied by the handler); paste (`p`/`P`) reads it.
- *    Because there is exactly one store instance for the whole app, the register naturally spans chat
+ *    Because there is exactly one store instance for the whole app, the register naturally spans recipient
  *    targets — the cross-crow yank/paste the spec asks for falls out for free.
  *
  * What is deliberately NOT here: the buffer itself (that is {@link ./chatInputStore.js}, a
@@ -49,7 +49,7 @@ export interface ChatVimState {
    * `null` when none is pending. Set/cleared by the handler from the reducer's `pending` effect.
    * Entering insert mode or completing a command clears it back to `null`. */
   readonly pending: string | null;
-  /** The murder-wide yank register — shared across all chat targets because there is one store
+  /** The murder-wide yank register — shared across all recipient targets because there is one store
    * instance. Written by yank/delete/change, read by paste. Starts `''`. */
   readonly register: string;
   /** Set the submode (`normal`↔`insert`). */

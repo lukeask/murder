@@ -15,7 +15,7 @@ export type PaneRect = CellPoint & CellSize;
 
 export type PaneId = string;
 
-export type PaneKind = 'listPane' | 'usage' | 'tree' | 'stageChat' | 'stageDoc';
+export type PaneKind = 'listPane' | 'usage' | 'tree' | 'stageTranscript' | 'stageDoc';
 
 export type PaneRegion = 'leftAligned' | 'centerStage' | 'rightAligned';
 
@@ -42,7 +42,7 @@ export type PanePresentation = {
 export type PaneSource =
   | { readonly type: 'panel'; readonly panelId: PanelId }
   | {
-      readonly type: 'stageChat';
+      readonly type: 'stageTranscript';
       readonly agentId: string;
       readonly locked: boolean;
       readonly ephemeral: boolean;
@@ -85,7 +85,7 @@ export type PaneChromeHeights = {
   readonly chatInput: number;
 };
 
-export type ChatTargetState = {
+export type RecipientTargetState = {
   readonly activeTargetId: string | null;
   readonly lockedVisibleTargetIds: readonly string[];
   readonly favoriteOnlyTargetIds: readonly string[];
@@ -108,7 +108,7 @@ export type PaneLayoutInput = {
   readonly gap: number;
   readonly requests: readonly PaneRequest[];
   readonly focusedPaneId?: PaneId;
-  readonly chatTargets?: ChatTargetState;
+  readonly recipientTargets?: RecipientTargetState;
 };
 
 export type PaneRegionPlan = {
@@ -119,7 +119,7 @@ export type PaneRegionPlan = {
 
 export type PaneStageGroupPlan = {
   readonly docs: readonly PaneAllocation[];
-  readonly chats: readonly PaneAllocation[];
+  readonly transcripts: readonly PaneAllocation[];
   readonly other: readonly PaneAllocation[];
 };
 

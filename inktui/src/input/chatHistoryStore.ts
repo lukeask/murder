@@ -2,7 +2,7 @@
  * `chatHistoryStore` — the **murder-wide ring of sent user messages** (chat-input overhaul, user ask
  * #4). It is the corpus that the chat field scrolls back through when the cursor is on the top visual
  * row and `up` is pressed: a recall of *previously-sent* messages, drawn across **all** crows, not just
- * the active chat target. Yank-in-one-chat / paste-into-another is the register's job (see
+ * the active recipient target. Yank-in-one-chat / paste-into-another is the register's job (see
  * {@link ./chatVimStore.js}); this store is the *send-history* analogue, equally murder-wide.
  *
  * ## Why this is just the corpus (and where navigation lives)

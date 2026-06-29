@@ -14,7 +14,7 @@
  *     orchestrator command kind (not a standalone RPC), so this routes through the live
  *     `command.submit` choke point ({@link ../commandSubmit.js}). Routes to the agent identified by
  *     `agentId`; the discriminated-union identity (deriving the right agentId) lives in the
- *     selectors/CrowChatPanel, NOT here (rule 2). This action receives the resolved agentId from its
+ *     selectors/transcript pane, NOT here (rule 2). This action receives the resolved agentId from its
  *     caller, never parses a conversation_id (rule 1 / anti-pattern).
  *
  *  3. `applyBlock(event)` — pure setState, no bus call. Called by the second `bus.subscribe` in
@@ -31,6 +31,7 @@ import type { StoreApi } from 'zustand';
 import type { BusClient } from '../../bus/BusClient.js';
 import type { ConversationBlockEvent, ConversationStateEvent } from '../../bus/protocol.js';
 import { submitCommand } from '../commandSubmit.js';
+import { stageTranscriptFocusId } from '../../input/focusIds.js';
 import type { AppStore } from '../store.js';
 import { toastStore } from '../toast/toastStore.js';
 import {
@@ -45,7 +46,7 @@ import {
  * Declares the conversations read RPC via declaration merging rather than editing the frozen C1 bus
  * files. `state.conversations_snapshot` is the bus-contract name (`domain.verb`, mirrors Python
  * `RuntimeClient.get_conversations_snapshot`). Called on connect to prime the transcripts map so a
- * cold-start service (no `conversation.block` events yet) paints populated chat panes immediately.
+ * cold-start service (no `conversation.block` events yet) paints populated transcript panes immediately.
  */
 declare module '../../bus/BusClient.js' {
   interface RpcMethods {
@@ -136,7 +137,7 @@ export interface ConversationsActions {
   /**
    * Boot-prime: pull all agent transcripts from `state.conversations_snapshot` and populate the
    * transcripts map. Called from `primeSlices` in `index.tsx` on every (re)connect so a cold-start
-   * service (no `conversation.block` events yet) shows populated chat panes immediately.
+   * service (no `conversation.block` events yet) shows populated transcript panes immediately.
    *
    * Errors are swallowed (fire-and-forget from the priming path; transcripts remain empty rather
    * than crashing, and live `conversation.block` events will populate them as they arrive).
@@ -145,7 +146,7 @@ export interface ConversationsActions {
 
   /**
    * Send a message to the agent identified by `agentId` via `agent.message`.
-   * The sole bus caller for chat sends — rule 3. The caller (chat pane / CrowChatPanel)
+   * The sole bus caller for chat sends — rule 3. The caller (transcript pane)
    * resolves the agentId from the discriminated-union identity BEFORE calling this action.
    * No conversation_id parsing, no string-prefix matching — ever.
    *
@@ -208,7 +209,7 @@ export interface ConversationsActions {
   interrupt(agentId: string): Promise<void>;
 
   /**
-   * Explicitly set the active chat pane. Called by the CrowChatPanel when the user navigates
+   * Explicitly set the active transcript pane. Called by the transcript pane when the user navigates
    * between panes or the "keep pane active" path fires. Does not call the bus.
    * C11 seam: this slot is here for ctrl+s "keep pane active"; the full starring/prefs system
    * (tui.save_favorites) is C11's responsibility.
@@ -216,18 +217,18 @@ export interface ConversationsActions {
   setActivePaneAgentId(agentId: string | null): void;
 
   /**
-   * Explicitly open or close a chat pane (item 9b). Writes a `paneOverrides` entry that layers over
+   * Explicitly open or close a transcript pane (item 9b). Writes a `paneOverrides` entry that layers over
    * the favorites-derived default — so `open=true` forces a non-favorited agent's pane visible, and
    * `open=false` hides a default-favorited one. No bus call. Used by `spawnRogue`'s auto-open (9e).
    */
-  setChatPaneOpen(agentId: string, open: boolean): void;
+  setTranscriptPaneOpen(agentId: string, open: boolean): void;
 
   /**
-   * Toggle a chat pane open/closed (item 9c). `currentlyOpen` is the pane's CURRENT effective open
-   * state (the caller computes it via `selectOpenChatPanes`, which merges the favorites default with
+   * Toggle a transcript pane open/closed (item 9c). `currentlyOpen` is the pane's CURRENT effective open
+   * state (the caller computes it via `selectOpenTranscriptPanes`, which merges the favorites default with
    * the existing override); the action records the override that flips it. No bus call.
    */
-  toggleChatPane(agentId: string, currentlyOpen: boolean): void;
+  toggleTranscriptPane(agentId: string, currentlyOpen: boolean): void;
 
   /**
    * Set the chat view mode for a pane (TUIchat-3). Records `paneViewModes[agentId]`, overriding the
@@ -358,7 +359,7 @@ export function createConversationsActions(
             activePaneAgentId: agentId,
             paneReapAges: activatePaneReapAges(
               state.conversations.paneReapAges,
-              `stage:chat:${agentId}`,
+              stageTranscriptFocusId(agentId),
             ),
           },
         }));
@@ -526,7 +527,7 @@ export function createConversationsActions(
           activePaneAgentId: agentId,
           paneReapAges: activatePaneReapAges(
             state.conversations.paneReapAges,
-            agentId === null ? null : `stage:chat:${agentId}`,
+            agentId === null ? null : stageTranscriptFocusId(agentId),
           ),
         },
       }));
@@ -541,15 +542,14 @@ export function createConversationsActions(
       }));
     },
 
-    setChatPaneOpen(agentId: string, open: boolean): void {
+    setTranscriptPaneOpen(agentId: string, open: boolean): void {
       store.setState((state) => {
         const next = new Map(state.conversations.paneOverrides);
         next.set(agentId, open);
         return { conversations: { ...state.conversations, paneOverrides: next } };
       });
     },
-
-    toggleChatPane(agentId: string, currentlyOpen: boolean): void {
+    toggleTranscriptPane(agentId: string, currentlyOpen: boolean): void {
       store.setState((state) => {
         const next = new Map(state.conversations.paneOverrides);
         next.set(agentId, !currentlyOpen);

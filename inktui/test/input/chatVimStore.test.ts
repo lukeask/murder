@@ -47,7 +47,7 @@ describe('chatVimStore', () => {
   });
 
   it('the register is shared across reads of the single store instance (murder-wide)', () => {
-    // Two readers of the SAME store instance model two chat targets sharing the one register.
+    // Two readers of the SAME store instance model two recipient targets sharing the one register.
     const store = createChatVimStore();
     const chatA = store; // crow A's view
     const chatB = store; // crow B's view

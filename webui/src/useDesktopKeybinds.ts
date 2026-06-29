@@ -1,13 +1,13 @@
 /**
  * Desktop keyboard shortcuts for the web cockpit — mirrors the Ink dispatcher's global chords that
- * have a sensible web analogue (focus chat, scroll a panel into view, cycle the chat target).
+ * have a sensible web analogue (focus chat, scroll a panel into view, cycle the recipient target).
  * Respects the persisted command modifier from settings (`alt` / `ctrl` / `both`).
  */
 
 import { useAppStoreApi } from '@core/hooks/useAppStore.js';
 import { panelForDigit } from '@core/input/panels.js';
 import type { PanelId } from '@core/input/panels.js';
-import { selectCycledTarget } from '@core/selectors/conversationsSelectors.js';
+import { selectCycledRecipientTarget } from '@core/selectors/conversationsSelectors.js';
 import type { SettingsModifier } from '@core/store/settings/settingsSlice.js';
 import { useEffect } from 'react';
 
@@ -88,7 +88,7 @@ export function useDesktopKeybinds(enabled: boolean): void {
       }
 
       if (e.key === 'h' || e.key === 'H') {
-        const result = selectCycledTarget(conversations, roster, favorites, -1);
+        const result = selectCycledRecipientTarget(conversations, roster, favorites, -1);
         if (result !== null) {
           e.preventDefault();
           actions.conversations.setActivePaneAgentId(result.agentId);
@@ -97,7 +97,7 @@ export function useDesktopKeybinds(enabled: boolean): void {
       }
 
       if (e.key === 'l' || e.key === 'L') {
-        const result = selectCycledTarget(conversations, roster, favorites, 1);
+        const result = selectCycledRecipientTarget(conversations, roster, favorites, 1);
         if (result !== null) {
           e.preventDefault();
           actions.conversations.setActivePaneAgentId(result.agentId);

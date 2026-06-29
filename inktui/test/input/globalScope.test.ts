@@ -18,7 +18,7 @@ describe('inFocusScope', () => {
   it('not-chat: every focus except the chat input', () => {
     expect(inFocusScope('not-chat', CHAT_FOCUS)).toBe(false);
     expect(inFocusScope('not-chat', 'plans')).toBe(true);
-    expect(inFocusScope('not-chat', 'stage:chat:a1')).toBe(true);
+    expect(inFocusScope('not-chat', 'stage:transcript:a1')).toBe(true);
   });
 
   it('chat: only the chat input', () => {
@@ -33,7 +33,7 @@ describe('inFocusScope', () => {
   });
 
   it('stage: only a Stage pane', () => {
-    expect(inFocusScope('stage', 'stage:chat:a1')).toBe(true);
+    expect(inFocusScope('stage', 'stage:transcript:a1')).toBe(true);
     expect(inFocusScope('stage', CHAT_FOCUS)).toBe(false);
     expect(inFocusScope('stage', 'plans')).toBe(false);
   });

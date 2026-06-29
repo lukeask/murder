@@ -14,6 +14,7 @@ import {
   type GlobalHandlers,
 } from '../../src/input/dispatcher.js';
 import { CHAT_FOCUS, type FocusId } from '../../src/input/focusStore.js';
+import { stageTranscriptFocusId } from '../../src/input/focusIds.js';
 import type { PanelKeymap } from '../../src/input/keymap.js';
 import type { Mode } from '../../src/input/modeStore.js';
 import { makeKey } from './key.js';
@@ -248,9 +249,9 @@ describe('layer 1 — global chords', () => {
     expect(out).toEqual({ layer: 'panel', handled: false });
   });
 
-  it('alt+s spawns when a chat-history Stage pane is highlighted (stagelayout)', () => {
+  it('alt+s spawns when a transcript-history Stage pane is highlighted (stagelayout)', () => {
     const h = handlers();
-    const out = dispatchKey('s', makeKey({ meta: true }), ctx('stage:chat:crow-1', h));
+    const out = dispatchKey('s', makeKey({ meta: true }), ctx(stageTranscriptFocusId('crow-1'), h));
     expect(h.spawn).toHaveBeenCalledOnce();
     expect(out).toEqual({ layer: 'global', handled: true });
   });
@@ -330,9 +331,9 @@ describe('global.closePane — ctrl+q closes the highlighted Stage pane (stagela
   // ctrl+q is a plain chord delivered as the clean legacy byte → `{ ctrl: true, input: 'q' }`.
   const CTRL_Q = makeKey({ ctrl: true });
 
-  it('ctrl+q closes a highlighted chat-history Stage pane (claimed at the global layer)', () => {
+  it('ctrl+q closes a highlighted transcript-history Stage pane (claimed at the global layer)', () => {
     const h = handlers();
-    const out = dispatchKey('q', CTRL_Q, ctx('stage:chat:crow-1', h));
+    const out = dispatchKey('q', CTRL_Q, ctx(stageTranscriptFocusId('crow-1'), h));
     expect(h.closePane).toHaveBeenCalledOnce();
     expect(out).toEqual({ layer: 'global', handled: true });
   });

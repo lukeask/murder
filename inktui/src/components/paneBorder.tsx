@@ -80,9 +80,9 @@ function OverflowIndicator({
 export interface PaneBorderTopProps {
   /** Display-ready title text shown inline on the border (e.g. `Plans`, or `›` for the chat input). */
   readonly title: string;
-  /** Border + corner + `─`-fill color — a {@link ../theme.js theme} role resolved by `paneColors`. */
+  /** Border + corner + `─`-fill color — a {@link ../theme/buildTheme.js Theme} role resolved by `paneColors`. */
   readonly borderColor: string;
-  /** Title-segment color — a {@link ../theme.js theme} role (see {@link ./Pane.tsx paneColors}). */
+  /** Title-segment color — a {@link ../theme/buildTheme.js Theme} role (see {@link ./Pane.tsx paneColors}). */
   readonly titleColor: string;
   /** Hand-composed border glyphs (`round` blurred / `bold` focused) — see {@link ./glyphs.js}. */
   readonly glyphs: PaneBorderGlyphs;
@@ -202,7 +202,7 @@ export interface PaneBorderBottomProps {
 /**
  * The inline bottom-border footer — the mirror of {@link PaneBorderTop}, used by a {@link ./Pane.tsx
  * Pane} that opts into a footer (and by {@link ./ChatInput.tsx ChatInput}). Reads as
- * `╰─ <left> ──…── <right> ─╯`, carrying e.g. a chat pane's `Claude Code ◇ Opus 4.8`.
+ * `╰─ <left> ──…── <right> ─╯`, carrying e.g. a transcript pane's `Claude Code ◇ Opus 4.8`.
  *
  * ## Why this is an OVERLAY, not a row (the fractional-height fix)
  * The bottom border is NOT a separate fixed-height row appended after the content — that shape

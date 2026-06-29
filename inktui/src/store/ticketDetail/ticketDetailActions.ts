@@ -1,7 +1,7 @@
 /**
  * Ticket-detail actions — the *only* code that calls the bus for ticket detail data (rule 3).
  *
- * Three modeled RPCs (NOT yet on the live bus — FakeBusClient only until service B13):
+ * Three live RPCs:
  *  1. `state.ticket_detail {ticket_id}` → body string + frontmatter for display.
  *  2. `ticket.save_body {ticket_id, body}` → `{ok}` — service syncs the markdown body to DB.
  *  3. `ticket.schedule {ticket_id, duration}` → `{ok}` — service runs `parse_duration()` and
@@ -34,26 +34,24 @@ import type { TicketDetailState, TicketFrontmatter } from './ticketDetailSlice.j
 // ── RPC declarations ────────────────────────────────────────────────────────────────────────────
 
 /**
- * Augments `RpcMethods` with the three ticket-detail RPCs. Each key is unique (never redeclares
- * an existing key). All three are modeled-not-live: confirmed against the Python service shape in
- * `murder/app/service/client_api.py` (`get_ticket_detail`, implicit save, duration scheduling);
- * confirm exact names/shapes when service B13 lands.
+ * Augments `RpcMethods` with the three live ticket-detail RPCs. Reads are registered by
+ * `murder/app/service/handlers/state.py`; writes are registered by
+ * `murder/app/service/handlers/ticket.py`.
  */
 declare module '../../bus/BusClient.js' {
   interface RpcMethods {
     /**
      * Fetch the detail for one ticket: frontmatter fields + the markdown body.
-     * NOT yet on the live bus — modeled per the bus contract `domain.verb` naming.
-     * The service's `get_ticket_detail(ticket_id)` returns `TicketDetailSnapshot`; this models
-     * the RPC surface. Body contains `# Checklist` with `[ ]`/`[x]` lines.
+     * The service's `get_ticket_detail(ticket_id)` returns `TicketDetailSnapshot | null`. Body
+     * contains `# Checklist` with `[ ]`/`[x]` lines.
      */
     'state.ticket_detail': {
       params: { ticket_id: string };
-      result: TicketDetailReply;
+      result: TicketDetailReply | null;
     };
     /**
-     * Persist the edited body back to the service. The service syncs body→DB.
-     * NOT yet on the live bus — modeled per the bus contract "body save goes through an action".
+     * Persist the edited body back to the service. The service writes the ticket markdown and
+     * reconciles it into the DB before returning.
      */
     'ticket.save_body': {
       params: { ticket_id: string; body: string };
@@ -67,11 +65,10 @@ declare module '../../bus/BusClient.js' {
     /**
      * Schedule a ticket using a free-form duration string (`1d4h3m`, `34m`).
      * The service calls `parse_duration(duration)` authoritatively.
-     * NOT yet on the live bus — modeled per the bus contract.
      */
     'ticket.schedule': {
       params: { ticket_id: string; duration: string };
-      result: { ok: boolean };
+      result: { ok?: boolean; error?: string; schedule_at?: string | null };
     };
   }
 }
@@ -236,6 +233,18 @@ export function createTicketDetailActions(
           // mirrors the docView identity check). The slice's own `ticketId` is the identity.
           if (state.ticketDetail.ticketId !== ticketId) {
             return state;
+          }
+          if (reply === null) {
+            return {
+              ticketDetail: {
+                ...state.ticketDetail,
+                frontmatter: null,
+                savedBody: null,
+                editedBody: null,
+                status: 'error',
+                error: `ticket not found: ${ticketId}`,
+              },
+            };
           }
           const next: TicketDetailState = {
             ticketId,

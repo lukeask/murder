@@ -3,7 +3,7 @@
  *
  * Covers:
  *  1. `selectConversationTurns` — block→turn formatting for each block type.
- *  2. `selectFavoritesChatPanes` — correct ordering (collaborator → rogue), correct exclusions.
+ *  2. `selectFavoriteTranscriptPanes` — correct ordering (collaborator → rogue), correct exclusions.
  *  3. `selectActiveAgentId` — activePaneAgentId priority + fallback to first favorited.
  *  4. Ref-swap stability: same blocks input → same turns array identity (memoised by useMemo).
  */
@@ -12,15 +12,15 @@ import { describe, expect, it } from 'vitest';
 import { deriveAgentIdentity } from '../../src/selectors/agentIdentity.js';
 import {
   condenseBlocks,
-  isChatPaneOpen,
+  isTranscriptPaneOpen,
   selectActiveAgentId,
-  selectAdjacentTargets,
+  selectAdjacentRecipientTargets,
   selectConversationTurns,
   selectConversationView,
-  selectCycledTarget,
-  selectCycleTargets,
-  selectFavoritesChatPanes,
-  selectOpenChatPanes,
+  selectCycledRecipientTarget,
+  selectRecipientTargets,
+  selectFavoriteTranscriptPanes,
+  selectOpenTranscriptPanes,
 } from '../../src/selectors/conversationsSelectors.js';
 import type {
   ChunkSummary,
@@ -226,11 +226,11 @@ describe('selectConversationTurns', () => {
   });
 });
 
-// ── selectFavoritesChatPanes ──────────────────────────────────────────────────────────────────────
+// ── selectFavoriteTranscriptPanes ──────────────────────────────────────────────────────────────────────
 
-describe('selectFavoritesChatPanes', () => {
+describe('selectFavoriteTranscriptPanes', () => {
   it('returns empty panes for an empty roster', () => {
-    const { panes } = selectFavoritesChatPanes(initialRosterState);
+    const { panes } = selectFavoriteTranscriptPanes(initialRosterState);
     expect(panes).toHaveLength(0);
   });
 
@@ -241,7 +241,7 @@ describe('selectFavoritesChatPanes', () => {
       rosterRow({ agentId: 'rogue-1', role: 'crow', ticketId: null }),
       rosterRow({ agentId: 'ticket-crow', role: 'crow', ticketId: 'T-1' }),
     ];
-    const { panes } = selectFavoritesChatPanes({ ...initialRosterState, rows, status: 'ready' });
+    const { panes } = selectFavoriteTranscriptPanes({ ...initialRosterState, rows, status: 'ready' });
     const agentIds = panes.map((p) => p.agentId);
     expect(agentIds).toContain('collab');
     expect(agentIds).toContain('rogue-1');
@@ -254,7 +254,7 @@ describe('selectFavoritesChatPanes', () => {
       rosterRow({ agentId: 'rogue-1', role: 'crow', ticketId: null }),
       rosterRow({ agentId: 'collab', role: 'collaborator' }),
     ];
-    const { panes } = selectFavoritesChatPanes({ ...initialRosterState, rows, status: 'ready' });
+    const { panes } = selectFavoriteTranscriptPanes({ ...initialRosterState, rows, status: 'ready' });
     expect(panes[0]?.kind).toBe('collaborator');
     expect(panes[1]?.kind).toBe('rogue');
   });
@@ -265,7 +265,7 @@ describe('selectFavoritesChatPanes', () => {
       rosterRow({ agentId: 'ch', role: 'crow_handler' }),
       rosterRow({ agentId: 'nt', role: 'notetaker' }),
     ];
-    const { panes } = selectFavoritesChatPanes({ ...initialRosterState, rows, status: 'ready' });
+    const { panes } = selectFavoriteTranscriptPanes({ ...initialRosterState, rows, status: 'ready' });
     expect(panes).toHaveLength(0);
   });
 });
@@ -295,38 +295,38 @@ describe('selectActiveAgentId', () => {
   });
 });
 
-// ── isChatPaneOpen / selectOpenChatPanes — pane open/close model (item 9b) ───────────────────────
+// ── isTranscriptPaneOpen / selectOpenTranscriptPanes — pane open/close model (item 9b) ───────────────────────
 
 function favSet(...ids: string[]): FavoritesState {
   return { ...initialFavoritesState, ids: new Set(ids), status: 'ready' };
 }
 
-describe('isChatPaneOpen — favorites default merged with overrides', () => {
+describe('isTranscriptPaneOpen — favorites default merged with overrides', () => {
   const rogue = deriveAgentIdentity(rosterRow({ role: 'crow', ticketId: null, agentId: 'r1' }))!;
   const planner = deriveAgentIdentity(rosterRow({ role: 'planner', agentId: 'p1' }))!;
 
   it('default-favorited (rogue) is open with no override', () => {
-    expect(isChatPaneOpen(rogue, initialFavoritesState, new Map())).toBe(true);
+    expect(isTranscriptPaneOpen(rogue, initialFavoritesState, new Map())).toBe(true);
   });
 
   it('non-favorited (planner) is closed with no override', () => {
-    expect(isChatPaneOpen(planner, initialFavoritesState, new Map())).toBe(false);
+    expect(isTranscriptPaneOpen(planner, initialFavoritesState, new Map())).toBe(false);
   });
 
   it('override true opens a non-favorited planner', () => {
-    expect(isChatPaneOpen(planner, initialFavoritesState, new Map([['p1', true]]))).toBe(true);
+    expect(isTranscriptPaneOpen(planner, initialFavoritesState, new Map([['p1', true]]))).toBe(true);
   });
 
   it('override false closes a default-favorited rogue', () => {
-    expect(isChatPaneOpen(rogue, initialFavoritesState, new Map([['r1', false]]))).toBe(false);
+    expect(isTranscriptPaneOpen(rogue, initialFavoritesState, new Map([['r1', false]]))).toBe(false);
   });
 
   it('explicit star (favorites set) opens a planner with no override', () => {
-    expect(isChatPaneOpen(planner, favSet('p1'), new Map())).toBe(true);
+    expect(isTranscriptPaneOpen(planner, favSet('p1'), new Map())).toBe(true);
   });
 });
 
-describe('selectOpenChatPanes — open set = favorites default + overrides', () => {
+describe('selectOpenTranscriptPanes — open set = favorites default + overrides', () => {
   const rows: RosterRow[] = [
     rosterRow({ role: 'collaborator', agentId: 'collab', session: 'collab' }),
     rosterRow({ role: 'planner', agentId: 'p1', session: 'murder_murder_planner_alpha' }),
@@ -340,22 +340,22 @@ describe('selectOpenChatPanes — open set = favorites default + overrides', () 
   const roster = { ...initialRosterState, rows, status: 'ready' as const };
 
   it('defaults: collaborator + rogue open, planner closed', () => {
-    const { panes } = selectOpenChatPanes(roster, initialFavoritesState, new Map());
+    const { panes } = selectOpenTranscriptPanes(roster, initialFavoritesState, new Map());
     expect(panes.map((p) => p.agentId)).toEqual(['collab', 'r1']);
   });
 
   it('override opens the planner, in spec order (collaborator → planner → rogue)', () => {
-    const { panes } = selectOpenChatPanes(roster, initialFavoritesState, new Map([['p1', true]]));
+    const { panes } = selectOpenTranscriptPanes(roster, initialFavoritesState, new Map([['p1', true]]));
     expect(panes.map((p) => p.agentId)).toEqual(['collab', 'p1', 'r1']);
   });
 
   it('override closes the default-favorited rogue', () => {
-    const { panes } = selectOpenChatPanes(roster, initialFavoritesState, new Map([['r1', false]]));
+    const { panes } = selectOpenTranscriptPanes(roster, initialFavoritesState, new Map([['r1', false]]));
     expect(panes.map((p) => p.agentId)).toEqual(['collab']);
   });
 });
 
-// ── selectCycleTargets / selectCycledTarget — chat-target cycling (item 9 super-chords) ───────────
+// ── selectRecipientTargets / selectCycledRecipientTarget — chat-target cycling (item 9 super-chords) ───────────
 
 describe('chat-target cycling (item 9)', () => {
   const rows: RosterRow[] = [
@@ -375,36 +375,36 @@ describe('chat-target cycling (item 9)', () => {
       ...initialConversationsState,
       paneOverrides: new Map([['p1', false]]),
     };
-    const targets = selectCycleTargets(conversations, roster, favSet('p1'));
+    const targets = selectRecipientTargets(conversations, roster, favSet('p1'));
     expect(targets.map((t) => t.agentId)).toEqual(['collab', 'r1', 'p1']);
   });
 
   it('does not cycle non-favorited closed targets', () => {
-    const targets = selectCycleTargets(initialConversationsState, roster, initialFavoritesState);
+    const targets = selectRecipientTargets(initialConversationsState, roster, initialFavoritesState);
     expect(targets.map((t) => t.agentId)).toEqual(['collab', 'r1']);
   });
 
   it('next steps forward through the cycle from the current target', () => {
     // Active = collab (first open pane). Next → r1 (the next locked-visible target).
-    const result = selectCycledTarget(initialConversationsState, roster, initialFavoritesState, 1);
+    const result = selectCycledRecipientTarget(initialConversationsState, roster, initialFavoritesState, 1);
     expect(result).toEqual({ agentId: 'r1', needsOpen: false });
   });
 
   it('prev wraps around to the last entry', () => {
     // Active = collab; prev wraps to the last cycle target (r1 — the rogue, default-favorited → open).
-    const result = selectCycledTarget(initialConversationsState, roster, initialFavoritesState, -1);
+    const result = selectCycledRecipientTarget(initialConversationsState, roster, initialFavoritesState, -1);
     expect(result).toEqual({ agentId: 'r1', needsOpen: false });
   });
 
   it('next wraps from the last entry back to the first', () => {
     // Active pinned to r1 (last in spec order) → next wraps to collab (first).
     const conversations = { ...initialConversationsState, activePaneAgentId: 'r1' };
-    const result = selectCycledTarget(conversations, roster, initialFavoritesState, 1);
+    const result = selectCycledRecipientTarget(conversations, roster, initialFavoritesState, 1);
     expect(result).toEqual({ agentId: 'collab', needsOpen: false });
   });
 
   it('returns null when there is nothing to cycle to', () => {
-    const result = selectCycledTarget(
+    const result = selectCycledRecipientTarget(
       initialConversationsState,
       initialRosterState,
       initialFavoritesState,
@@ -413,9 +413,9 @@ describe('chat-target cycling (item 9)', () => {
     expect(result).toBeNull();
   });
 
-  it('selectAdjacentTargets names the prev/next crows around the current target', () => {
+  it('selectAdjacentRecipientTargets names the prev/next crows around the current target', () => {
     // Active = collab in [collab, r1] → both directions reach the other target.
-    const { prev, next } = selectAdjacentTargets(
+    const { prev, next } = selectAdjacentRecipientTargets(
       initialConversationsState,
       roster,
       initialFavoritesState,
@@ -424,13 +424,13 @@ describe('chat-target cycling (item 9)', () => {
     expect(next?.agentId).toBe('r1');
   });
 
-  it('selectAdjacentTargets returns null/null when fewer than two crows', () => {
+  it('selectAdjacentRecipientTargets returns null/null when fewer than two crows', () => {
     const soloRoster = {
       ...initialRosterState,
       rows: [rosterRow({ role: 'collaborator', agentId: 'collab', session: 'collab' })],
       status: 'ready' as const,
     };
-    const { prev, next } = selectAdjacentTargets(
+    const { prev, next } = selectAdjacentRecipientTargets(
       initialConversationsState,
       soloRoster,
       initialFavoritesState,

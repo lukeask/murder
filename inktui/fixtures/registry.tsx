@@ -5,14 +5,14 @@ import { PANE_BORDER_GLYPHS, paneBorderStyle } from '../src/components/glyphs.js
 import { Ledger, type LedgerEntryContext } from '../src/components/Ledger.js';
 import { Pane } from '../src/components/Pane.js';
 import { PaneBorderBottom, PaneBorderTop } from '../src/components/paneBorder.js';
-import { ChatPane } from '../src/components/panes/ChatPane.js';
 import { CrowsSurface } from '../src/components/panes/CrowsSurface.js';
+import { DocumentSurface } from '../src/components/panes/DocumentSurface.js';
 import { HistorySurface } from '../src/components/panes/HistorySurface.js';
 import { NotesSurface } from '../src/components/panes/NotesSurface.js';
 import { PlansSurface } from '../src/components/panes/PlansSurface.js';
 import { ReportsSurface } from '../src/components/panes/ReportsSurface.js';
-import { StageDocPane } from '../src/components/panes/StageDocPane.js';
 import { TicketsSurface } from '../src/components/panes/TicketsSurface.js';
+import { TranscriptPane } from '../src/components/panes/TranscriptPane.js';
 import { TreeSurface } from '../src/components/panes/TreeSurface.js';
 import { UsageSurface } from '../src/components/panes/UsageSurface.js';
 import {
@@ -26,10 +26,8 @@ import { crowsSurfaceRowsFromFixture } from './crowsPanelFixture.js';
 import {
   type BarFixtureData,
   barData,
-  type ChatFixtureData,
   type ChatInputFixtureData,
   type CrowFixtureRow,
-  chatData,
   chatInputData,
   crowRows,
   type DocFixtureData,
@@ -40,8 +38,10 @@ import {
   resourceRows,
   type SimpleLedgerRow,
   type TicketFixtureRow,
+  type TranscriptFixtureData,
   type TransitFixtureData,
   ticketRows,
+  transcriptData,
   transitData,
   type UsageFixtureGroup,
   usageGroups,
@@ -425,6 +425,7 @@ export const paneFixtures: readonly PaneFixture[] = [
       return (
         <CrowsSurface
           rows={crowsSurfaceRowsFromFixture(data as readonly CrowFixtureRow[])}
+          // biome-ignore lint/complexity/useLiteralKeys: noPropertyAccessFromIndexSignature requires bracket access.
           status={data === (crowRows['loading'] ?? []) ? 'loading' : 'idle'}
           focused={focused}
           theme={theme}
@@ -505,13 +506,13 @@ export const paneFixtures: readonly PaneFixture[] = [
   },
   {
     id: 'doc-pane',
-    description: 'Store-free StageDocPane wrapper with document lines and scrollbar chrome.',
+    description: 'Store-free DocumentSurface wrapper with document lines and scrollbar chrome.',
     sizes: PANE_SIZES,
     data: docData,
     render: ({ data, focused, width, height }) => {
       const doc = data as DocFixtureData;
       return (
-        <StageDocPane
+        <DocumentSurface
           title={doc.title}
           lines={doc.lines}
           scroll={doc.scroll}
@@ -523,18 +524,18 @@ export const paneFixtures: readonly PaneFixture[] = [
     },
   },
   {
-    id: 'chat-pane',
-    description: 'Store-free ChatPane with explicit width/height contract.',
+    id: 'transcript-pane',
+    description: 'Store-free TranscriptPane with explicit width/height contract.',
     sizes: PANE_SIZES,
-    data: chatData,
+    data: transcriptData,
     render: ({ data, focused, width, height }) => {
-      const chat = data as ChatFixtureData;
+      const transcript = data as TranscriptFixtureData;
       return (
-        <ChatPane
-          title={chat.title}
-          footerLeft={chat.footerLeft}
-          footerRight={chat.footerRight}
-          turns={chat.turns.map((turn, index) => ({
+        <TranscriptPane
+          title={transcript.title}
+          footerLeft={transcript.footerLeft}
+          footerRight={transcript.footerRight}
+          turns={transcript.turns.map((turn, index) => ({
             speaker: turn.speaker,
             text: turn.lines.join('\n'),
             blockId: `fixture-${index}`,

@@ -1,5 +1,5 @@
 /**
- * ChatPane — explicit width/height pane contract for crow chat history.
+ * TranscriptPane — explicit width/height pane contract for crow chat history.
  *
  * Store-free: callers pass display-ready turns plus explicit chrome and dimensions. The layout
  * router keeps the pane deterministic across the layout manager's allocated sizes.
@@ -11,7 +11,7 @@ import type { ChatTurn, TurnSpeaker } from '../../selectors/conversationsSelecto
 import { useTheme } from '../../theme/themeStore.js';
 import { Pane } from '../Pane.js';
 import { type ChatLine, flattenTurns } from './chatLines.js';
-import { computeScrollThumb } from './docWindow.js';
+import { computeScrollThumb, computeTranscriptWindow } from './shared/scrollWindow.js';
 
 const GUTTER_HEAD = '▌';
 const GUTTER_CONT = '▏';
@@ -33,13 +33,13 @@ const MIN_FOOTER_INNER_H = 4;
 
 export type ChatDisplayMode = 'full' | 'compact' | 'minimal' | 'tiny';
 
-export interface ChatPaneTurn {
+export interface TranscriptPaneTurn {
   readonly speaker: TurnSpeaker;
   readonly lines: readonly string[];
   readonly tone?: ChatLine['tone'];
 }
 
-export interface ChatPaneProps {
+export interface TranscriptPaneProps {
   /** Full pane allocation including border, title, and footer. */
   readonly width: number;
   readonly height: number;
@@ -224,31 +224,6 @@ function footerVisible(height: number, level: FooterLevel): boolean {
   return contentHeight(height) >= MIN_FOOTER_INNER_H;
 }
 
-export function computeChatWindow(
-  total: number,
-  scrollUp: number,
-  height: number,
-  gotoLine: number | null = null,
-): {
-  readonly start: number;
-  readonly end: number;
-  readonly maxScrollUp: number;
-  readonly clampedScrollUp: number;
-} {
-  const h = Math.max(height, 1);
-  const maxScrollUp = Math.max(total - h, 0);
-  const requestedScroll =
-    gotoLine === null ? scrollUp : Math.min(Math.max(maxScrollUp - (gotoLine - 1), 0), maxScrollUp);
-  const clampedScrollUp = Math.min(Math.max(requestedScroll, 0), maxScrollUp);
-  const end = total - clampedScrollUp;
-  return {
-    start: Math.max(end - h, 0),
-    end,
-    maxScrollUp,
-    clampedScrollUp,
-  };
-}
-
 function TmuxFrameBody({
   frame,
   height,
@@ -284,7 +259,7 @@ function TmuxFrameBody({
   );
 }
 
-export const ChatPane = memo(function ChatPane({
+export const TranscriptPane = memo(function TranscriptPane({
   width,
   height,
   focused,
@@ -300,12 +275,12 @@ export const ChatPane = memo(function ChatPane({
   tmuxFrame,
   tmuxWaitingText = '[waiting for tmux frame…]',
   titleExtra,
-}: ChatPaneProps): React.JSX.Element {
+}: TranscriptPaneProps): React.JSX.Element {
   const theme = useTheme();
   const displayMode = layout(width, height);
   const innerH = contentHeight(height);
   const lines = useMemo(() => (viewMode === 'tmux' ? [] : flattenTurns(turns)), [turns, viewMode]);
-  const window = computeChatWindow(lines.length, scrollUp, innerH, gotoLine);
+  const window = computeTranscriptWindow(lines.length, scrollUp, innerH, gotoLine);
   const visibleLines = lines.slice(window.start, window.end);
   const keyedVisibleLines = visibleLines.map((line, index) => ({
     key: `${window.start + index}:${line.speaker}:${line.kind}:${line.text}`,

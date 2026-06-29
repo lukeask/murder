@@ -140,7 +140,7 @@ const COMMANDS: Readonly<Record<string, CommandHandler>> = {
  * nothing set (mirrors the other agent-less command guards). */
 function setViewMode(agentId: string | null, mode: ChatViewMode, ctx: CommandCtx): void {
   if (agentId === null) {
-    ctx.pushToast('no chat pane to set the view on', { ttlMs: 4000 });
+    ctx.pushToast('no transcript pane to set the view on', { ttlMs: 4000 });
     return;
   }
   ctx.setPaneViewMode(agentId, mode);

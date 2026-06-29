@@ -7,9 +7,9 @@ import type { PanePresentation } from '../../layout/paneLayoutTypes.js';
 import { useNotesView } from '../../selectors/notesSelectors.js';
 import { useTheme } from '../../theme/themeStore.js';
 import { useDocView } from './docView.js';
-import { listSurfaceStatus } from './listSurfaceStatus.js';
 import { NotesSurface } from './NotesSurface.js';
-import { MeasuredPaneFrame, useClampedCursor } from './shared/index.js';
+import { MeasuredPaneFrame } from './shared/MeasuredPaneFrame.js';
+import { useClampedCursor } from './shared/useClampedCursor.js';
 
 type NotesIntent = 'cursorDown' | 'cursorUp' | 'refresh' | 'star' | 'open';
 
@@ -99,7 +99,7 @@ export const NotesController = memo(function NotesController({
         theme={theme}
         rows={view.rows}
         cursor={cursor}
-        status={listSurfaceStatus(view.status)}
+        status={view.status}
         error={view.error}
       />
     </MeasuredPaneFrame>

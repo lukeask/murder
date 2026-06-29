@@ -107,9 +107,9 @@ export function plannerSpawnParams(planName: string): SpawnRogueParams {
 
 /**
  * Build the spawn actions bound to one injected {@link BusClient}, and (optionally) the app store
- * handle so a successful spawn can auto-open the rogue's chat pane (item 9e).
+ * handle so a successful spawn can auto-open the rogue's transcript pane (item 9e).
  *
- * When `store` is supplied, `spawnRogue` opens the spawned rogue's chat pane override and pins it as
+ * When `store` is supplied, `spawnRogue` opens the spawned rogue's transcript pane override and pins it as
  * the active pane the moment the spawn resolves with an `agent_id` — so the rogue's history appears
  * on the Stage with no manual step (the roster row itself arrives via a later `state.snapshot`
  * event). When `store` is omitted the spawn still works; only the auto-open side effect is skipped.
@@ -148,11 +148,11 @@ export function createSpawnActions(bus: BusClient, store?: StoreApi<AppStore>): 
         });
       }
 
-      // Auto-open the rogue's chat pane on the Stage (item 9e): force its pane override open and pin
+      // Auto-open the rogue's transcript pane on the Stage (item 9e): force its pane override open and pin
       // it active. Guarded on `store` so a store-less construction (e.g. a bare unit test) is inert.
       if (agentId !== undefined && store !== undefined) {
         const conversations = store.getState().actions.conversations;
-        conversations.setChatPaneOpen(agentId, true);
+        conversations.setTranscriptPaneOpen(agentId, true);
         conversations.setActivePaneAgentId(agentId);
 
         // Proactively re-pull the roster so the freshly spawned crow appears in the Crows panel

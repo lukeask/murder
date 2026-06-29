@@ -11,7 +11,8 @@ import {
 } from '../../selectors/historySelectors.js';
 import { useTheme } from '../../theme/themeStore.js';
 import { HistorySurface, type HistorySurfaceRow } from './HistorySurface.js';
-import { MeasuredPaneFrame, useClampedCursor } from './shared/index.js';
+import { MeasuredPaneFrame } from './shared/MeasuredPaneFrame.js';
+import { useClampedCursor } from './shared/useClampedCursor.js';
 
 type HistoryIntent = 'cursorDown' | 'cursorUp' | 'resumeOrRefresh' | 'toggleMode' | 'dismiss';
 

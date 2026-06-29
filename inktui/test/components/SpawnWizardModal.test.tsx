@@ -100,8 +100,7 @@ function setup(spawnContext: SpawnContext | null = null) {
     status: 'done',
     result_json: JSON.stringify({ handled: true, agent_id: 'rogue-001' }),
   });
-  // No state.harness_models_snapshot stub → fetch rejects → static fallback (production-realistic
-  // until Workstream A lands).
+  // No state.harness_models_snapshot stub → fetch rejects → static fallback.
   const actions = createSpawnActions(bus);
   const modelActions = createHarnessModelsActions(bus);
   const worktreeActions = createWorktreeOptionsActions(bus);
@@ -595,7 +594,7 @@ describe('H4 — spawn payload contract (real spawn action)', () => {
     });
   });
 
-  it('auto-opens the spawned rogue chat pane + pins it active when a store is supplied (item 9e)', async () => {
+  it('auto-opens the spawned rogue transcript pane + pins it active when a store is supplied (item 9e)', async () => {
     const bus = liveStubBus();
     bus.stubRpc('state.crow_snapshot', { invalidation_key: 'iv', sessions: [] });
     bus.stubRpc('state.conversations_snapshot', {

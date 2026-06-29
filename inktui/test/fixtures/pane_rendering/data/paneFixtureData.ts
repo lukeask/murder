@@ -63,7 +63,7 @@ export interface DocFixtureData {
   readonly scroll: number;
 }
 
-export interface ChatFixtureData {
+export interface TranscriptFixtureData {
   readonly title: string;
   readonly footerLeft: string;
   readonly footerRight: string;
@@ -308,7 +308,7 @@ export const docData: Record<string, DocFixtureData> = {
   },
 };
 
-export const chatData: Record<string, ChatFixtureData> = {
+export const transcriptData: Record<string, TranscriptFixtureData> = {
   mixed: {
     title: 'Ada',
     footerLeft: 'claude ◇ opus',
@@ -319,7 +319,7 @@ export const chatData: Record<string, ChatFixtureData> = {
         speaker: 'assistant',
         lines: ['Yes. Rendering with fixture data only.', '- exact width', '- exact height'],
       },
-      { speaker: 'tool', lines: ['render-pane-fixture --fixture chat-pane'] },
+      { speaker: 'tool', lines: ['render-pane-fixture --fixture transcript-pane'] },
     ],
   },
   long: {

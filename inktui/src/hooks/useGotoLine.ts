@@ -1,10 +1,10 @@
 /**
  * useGotoLine — the vim-style `g<digits>` go-to-line gesture, shared by BOTH scrollable Stage panes
- * ({@link ../components/panes/StageDocPane.js StageDocPane} and
- * {@link ../components/panes/ChatPane.js ChatPane}) so the gesture is one mechanism, not two forks.
+ * ({@link ../components/panes/DocumentController.js DocumentController} and
+ * transcript pane) so the gesture is one mechanism, not two forks.
  *
  * ## The gesture
- * With a doc/chat pane focused, `g` starts a line-number capture; each digit typed extends the
+ * With a doc/transcript pane focused, `g` starts a line-number capture; each digit typed extends the
  * number and jumps the pane's window IMMEDIATELY (`g39` = press `g`, then `3` — jump to line 3 —
  * then `9` — refine to line 39). There is no commit key: the jump is live per digit. `g`/`esc`/
  * `enter` end the capture (position keeps the last jump); any OTHER matched pane key (e.g. `j`)

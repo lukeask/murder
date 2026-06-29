@@ -18,7 +18,7 @@ import type {
 export type {
   CellPoint,
   CellSize,
-  ChatTargetState,
+  RecipientTargetState,
   PaneAllocation,
   PaneChromeHeights,
   PaneDenial,
@@ -127,9 +127,9 @@ function normalizeRequest(request: PaneRequest): NormalizedRequest {
   };
 }
 
-function chatTargetOrder(input: PaneLayoutInput): ReadonlyMap<string, number> {
+function recipientTargetOrder(input: PaneLayoutInput): ReadonlyMap<string, number> {
   const order = new Map<string, number>();
-  const targets = input.chatTargets;
+  const targets = input.recipientTargets;
   if (targets === undefined) {
     return order;
   }
@@ -150,7 +150,7 @@ function chatTargetOrder(input: PaneLayoutInput): ReadonlyMap<string, number> {
   return order;
 }
 
-function applyChatTargetOrder(
+function applyRecipientTargetOrder(
   requests: readonly PaneRequest[],
   order: ReadonlyMap<string, number>,
 ): readonly PaneRequest[] {
@@ -158,11 +158,11 @@ function applyChatTargetOrder(
     return requests;
   }
   const chatOrderKeys = requests
-    .filter((request) => request.source.type === 'stageChat')
+    .filter((request) => request.source.type === 'stageTranscript')
     .map((request) => request.orderKey);
   const chatBaseOrder = chatOrderKeys.length === 0 ? 1000 : Math.min(...chatOrderKeys);
   return requests.map((request) => {
-    if (request.source.type !== 'stageChat') {
+    if (request.source.type !== 'stageTranscript') {
       return request;
     }
     const targetOrder = order.get(request.source.agentId);
@@ -252,7 +252,7 @@ function chunkRows<T>(items: readonly T[], columns: number): readonly (readonly 
   return rows;
 }
 
-function chatGridColumns(
+function transcriptGridColumns(
   count: number,
   hasDoc: boolean,
   orientation: PaneLayoutInput['orientation'],
@@ -322,22 +322,26 @@ function centerMeasure(
   const docs = requests.filter((request) => request.kind === 'stageDoc');
   const nonDocs = requests.filter((request) => request.kind !== 'stageDoc');
   if (docs.length === 0) {
-    return gridMeasure(nonDocs, chatGridColumns(nonDocs.length, false, orientation), gap);
+    return gridMeasure(nonDocs, transcriptGridColumns(nonDocs.length, false, orientation), gap);
   }
   if (nonDocs.length === 0) {
     return stackMeasure(docs, 'height', gap);
   }
 
   const docMeasure = stackMeasure(docs, 'height', gap);
-  const chatMeasure = gridMeasure(nonDocs, chatGridColumns(nonDocs.length, true, orientation), gap);
+  const transcriptMeasure = gridMeasure(
+    nonDocs,
+    transcriptGridColumns(nonDocs.length, true, orientation),
+    gap,
+  );
   return {
     min: {
-      width: docMeasure.min.width + gap + chatMeasure.min.width,
-      height: Math.max(docMeasure.min.height, chatMeasure.min.height),
+      width: docMeasure.min.width + gap + transcriptMeasure.min.width,
+      height: Math.max(docMeasure.min.height, transcriptMeasure.min.height),
     },
     preferred: {
-      width: docMeasure.preferred.width + gap + chatMeasure.preferred.width,
-      height: Math.max(docMeasure.preferred.height, chatMeasure.preferred.height),
+      width: docMeasure.preferred.width + gap + transcriptMeasure.preferred.width,
+      height: Math.max(docMeasure.preferred.height, transcriptMeasure.preferred.height),
     },
   };
 }
@@ -646,7 +650,7 @@ function layoutCenter(
     const grid = layoutBestGrid(
       nonDocs,
       rect,
-      chatGridColumns(nonDocs.length, false, orientation),
+      transcriptGridColumns(nonDocs.length, false, orientation),
       gap,
       focusedPaneId,
     );
@@ -657,7 +661,11 @@ function layoutCenter(
   }
 
   const docMeasure = stackMeasure(docs, 'height', gap);
-  const chatMeasure = gridMeasure(nonDocs, chatGridColumns(nonDocs.length, true, orientation), gap);
+  const transcriptMeasure = gridMeasure(
+    nonDocs,
+    transcriptGridColumns(nonDocs.length, true, orientation),
+    gap,
+  );
   const split = allocateAxis(rect.width - gap, [
     {
       key: 'docs',
@@ -666,9 +674,9 @@ function layoutCenter(
       fillWeight: 1,
     },
     {
-      key: 'chats',
-      min: chatMeasure.min.width,
-      preferred: chatMeasure.preferred.width,
+      key: 'transcripts',
+      min: transcriptMeasure.min.width,
+      preferred: transcriptMeasure.preferred.width,
       fillWeight: nonDocs.length >= 4 ? 2 : 1,
     },
   ]);
@@ -677,29 +685,29 @@ function layoutCenter(
   }
   const centerSplit: AxisAllocation & {
     readonly docs?: number;
-    readonly chats?: number;
+    readonly transcripts?: number;
   } = split;
   const docWidth = centerSplit.docs ?? 0;
-  const chatWidth = centerSplit.chats ?? 0;
+  const transcriptWidth = centerSplit.transcripts ?? 0;
   const docRect = { x: rect.x, y: rect.y, width: docWidth, height: rect.height };
-  const chatRect = {
+  const transcriptRect = {
     x: rect.x + docWidth + gap,
     y: rect.y,
-    width: chatWidth,
+    width: transcriptWidth,
     height: rect.height,
   };
   const docAllocations = layoutStack(docs, docRect, 'height', gap, focusedPaneId);
-  const chatGrid = layoutBestGrid(
+  const transcriptGrid = layoutBestGrid(
     nonDocs,
-    chatRect,
-    chatGridColumns(nonDocs.length, true, orientation),
+    transcriptRect,
+    transcriptGridColumns(nonDocs.length, true, orientation),
     gap,
     focusedPaneId,
   );
-  if (docAllocations === null || chatGrid === null) {
+  if (docAllocations === null || transcriptGrid === null) {
     return null;
   }
-  return [...docAllocations, ...chatGrid.allocations];
+  return [...docAllocations, ...transcriptGrid.allocations];
 }
 
 function layoutRegion(
@@ -948,7 +956,7 @@ function terminalTooSmallPlan(
     allocations: [],
     denials,
     regions: regionPlans([]),
-    stage: { docs: [], chats: [], other: [] },
+    stage: { docs: [], transcripts: [], other: [] },
   };
 }
 
@@ -956,10 +964,12 @@ function stageGroup(allocations: readonly PaneAllocation[]): PaneLayoutPlan['sta
   const centerAllocations = allocations.filter((allocation) => allocation.region === 'centerStage');
   return {
     docs: centerAllocations.filter((allocation) => allocation.request.kind === 'stageDoc'),
-    chats: centerAllocations.filter((allocation) => allocation.request.kind === 'stageChat'),
+    transcripts: centerAllocations.filter(
+      (allocation) => allocation.request.kind === 'stageTranscript',
+    ),
     other: centerAllocations.filter(
       (allocation) =>
-        allocation.request.kind !== 'stageDoc' && allocation.request.kind !== 'stageChat',
+        allocation.request.kind !== 'stageDoc' && allocation.request.kind !== 'stageTranscript',
     ),
   };
 }
@@ -967,7 +977,7 @@ function stageGroup(allocations: readonly PaneAllocation[]): PaneLayoutPlan['sta
 export function computePaneLayout(input: PaneLayoutInput): PaneLayoutPlan {
   const gap = cellCount(input.gap);
   const bodyRect = buildBodyRect(input);
-  let remaining = applyChatTargetOrder(input.requests, chatTargetOrder(input)).map(
+  let remaining = applyRecipientTargetOrder(input.requests, recipientTargetOrder(input)).map(
     normalizeRequest,
   );
   const denials: PaneDenial[] = [];

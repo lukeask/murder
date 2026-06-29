@@ -39,7 +39,7 @@ import { StdinShim } from './terminal/StdinShim.js';
 
 /** Panels seeded visible on startup — intentionally EMPTY. A fresh `murder` opens with no rail
  * panels at all: the only thing on screen is the chat input plus (once the daemon ensures the
- * user's configured Startup Rogue) that rogue's empty chat-history pane in the Stage. Every rail
+ * user's configured Startup Rogue) that rogue's empty transcript pane in the Stage. Every rail
  * panel (plans, tickets, usage, crows, …) is opt-in via its `ctrl/alt+<n>` toggle. This keeps the
  * default landing focused on "type to your crow", building muscle memory for murder over claude.
  * The smoke build shares this constant: an empty set just means it boots with no rail panels. */

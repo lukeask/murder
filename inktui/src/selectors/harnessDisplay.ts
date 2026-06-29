@@ -1,8 +1,8 @@
 /**
  * harnessDisplay — pure display helpers that turn a roster row's raw `harness`/`model` ids into the
- * human labels worn on a chat pane's bottom border (`Claude Code ◇ Opus 4.8`).
+ * human labels worn on a transcript pane's bottom border (`Claude Code ◇ Opus 4.8`).
  *
- * Rule 2: formatting lives in a selector, not the component. The chat pane (Stage) and any future
+ * Rule 2: formatting lives in a selector, not the component. The transcript pane and any future
  * consumer call these so the harness/model wording never drifts.
  *
  * The harness map covers the five backend harness ids ({@link ../components/spawnWizardMachine.js
@@ -61,7 +61,7 @@ export function modelLabel(model: string | null): string | null {
 }
 
 /**
- * The chat-pane footer string `<harness> ◇ <model>` (the separator passed in so the glyph stays a
+ * The transcript-pane footer string `<harness> ◇ <model>` (the separator passed in so the glyph stays a
  * single source of truth in {@link ../components/glyphs.js}). Returns `null` when NEITHER part is
  * known (so the bottom border draws plain). When only one part is known, just that part is shown.
  */
@@ -83,7 +83,7 @@ export function harnessModelFooter(
 const WORKTREE_MARKER = '.murder/worktrees/';
 
 /**
- * The chat-pane bottom-RIGHT label: the crow's worktree, shown as the bare subdir under
+ * The transcript-pane bottom-RIGHT label: the crow's worktree, shown as the bare subdir under
  * `.murder/worktrees/` (e.g. `…/.murder/worktrees/foobar` → `foobar`). A crow with no worktree
  * runs on the main checkout (`worktree_path` is null on the wire — see orchestrator.py), so it
  * reads `main`; a path without the marker also falls back to `main` defensively.

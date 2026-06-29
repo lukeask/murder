@@ -3,7 +3,7 @@
  *
  * ## Why a bus and not a store
  *
- * A Stage pane (chat history, doc) owns its scroll offset as local `useState` (rule 1 — the window
+ * A Stage pane (committed transcript, doc) owns its scroll offset as local `useState` (rule 1 — the window
  * offset is panel-local, not a slice). Keyboard scroll (`j`/`k`) flows through the pane's own keymap,
  * so it never needs to reach in from outside. The mouse wheel is different: it can target a pane that
  * is NOT focused — when the chat INPUT holds focus, the wheel should scroll the input's active-target
@@ -14,8 +14,8 @@
  * So this is a command channel, not state: {@link useRootInput} resolves which pane the wheel targets
  * and {@link PaneScrollBus.emit}s a nudge at that pane's {@link FocusId}; the pane {@link
  * PaneScrollBus.subscribe}s for its own id and applies the delta to its local offset (clamped to its
- * own scroll range, which only the pane knows). Keyed by `FocusId` so both chat panes
- * (`stage:chat:<agentId>`) and doc panes (`stage:doc:<name>`) use the one mechanism. Framework-
+ * own scroll range, which only the pane knows). Keyed by `FocusId` so both transcript panes
+ * and doc panes use the one mechanism. Framework-
  * agnostic (rule 4): a plain emitter, no React, no Ink — the component layer binds it via an effect.
  */
 

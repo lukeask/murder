@@ -13,6 +13,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { FakeBusClient } from '../src/bus/FakeBusClient.js';
 import { App, deriveSpawnContext } from '../src/components/App.js';
 import { createInputStores } from '../src/input/createInputStores.js';
+import { stageTranscriptFocusId } from '../src/input/focusIds.js';
 import { CHAT_FOCUS, selectEffectiveFocus } from '../src/input/focusStore.js';
 import type { PanelId } from '../src/input/panels.js';
 import type { SettingsWire } from '../src/store/settings/settingsActions.js';
@@ -131,10 +132,9 @@ describe('App shell', () => {
     dispose();
   });
 
-  it('Phase 4a: the Stage mounts a chat pane for a favorited crow (center region, not the crows Rail)', async () => {
-    // App-path test: renders the full App (not just the component harness) and proves the favorited
-    // crow's chat-history pane is mounted in the center Stage. (Pre-4a this lived in CrowChatPanel
-    // stacked under CrowsPanel in the right Rail; 4a moved it into the always-mounted Stage.)
+  it('mounts a favorited crow transcript pane in the center-stage group (not the crows list pane)', async () => {
+    // App-path test: renders the full App and proves the favorited crow's transcript pane is
+    // mounted in the center-stage group via the pane bridge.
     const fake = new FakeBusClient();
     fake.stubRpc('state.crow_snapshot', {
       invalidation_key: 'iv',
@@ -153,19 +153,19 @@ describe('App shell', () => {
     await tick();
 
     const frame = lastFrame() ?? '';
-    // CrowsPanel header is present (confirms crows region rendered).
+    // Crows list pane header is present (confirms the crows region rendered).
     expect(frame).toContain('Crows');
-    // The Stage shows a pane titled for the collaborator (proves it was mounted under App's center).
+    // The center-stage group shows a pane titled for the collaborator.
     expect(frame).toContain('TestCollab');
     dispose();
   });
 
   // TUIchat-5: the fullscreen tmux mode (and its `presentationHidesLayout` suppression test) was
-  // retired — tmux is now an inline per-pane view (TmuxFrameInline in Stage.tsx), never a layout
-  // takeover. Its coverage lives in Stage.test.tsx (inline frame subscription + rendering).
+  // retired — tmux is now an inline per-pane view in TranscriptPane.tsx, never a layout takeover. View-mode
+  // cycling is covered in conversationsActions.test.ts; inline frame rendering has no dedicated test yet.
 });
 
-describe('deriveSpawnContext — doc file context gated by the highlighted Stage pane (stagelayout)', () => {
+describe('deriveSpawnContext — doc file context gated by the highlighted center-stage pane', () => {
   /** Build a minimal FakeBusClient-backed store. */
   function makeStore() {
     const fake = new FakeBusClient();
@@ -175,7 +175,7 @@ describe('deriveSpawnContext — doc file context gated by the highlighted Stage
 
   it('returns null when no doc is open (the closed doc-view default)', () => {
     const { store, dispose } = makeStore();
-    expect(deriveSpawnContext(store, 'stage:doc:anything')).toBeNull();
+    expect(deriveSpawnContext(store, { kind: 'docPane', name: 'anything' })).toBeNull();
     dispose();
   });
 
@@ -184,7 +184,7 @@ describe('deriveSpawnContext — doc file context gated by the highlighted Stage
     store.setState((s) => ({
       docView: { ...s.docView, open: { kind: 'note', name: 'my-note' } },
     }));
-    expect(deriveSpawnContext(store, 'stage:doc:my-note')).toEqual({
+    expect(deriveSpawnContext(store, { kind: 'docPane', name: 'my-note' })).toEqual({
       title: 'my-note',
       path: '.murder/notes/my-note.md',
     });
@@ -196,7 +196,7 @@ describe('deriveSpawnContext — doc file context gated by the highlighted Stage
     store.setState((s) => ({
       docView: { ...s.docView, open: { kind: 'report', name: 'my-report' } },
     }));
-    expect(deriveSpawnContext(store, 'stage:doc:my-report')).toEqual({
+    expect(deriveSpawnContext(store, { kind: 'docPane', name: 'my-report' })).toEqual({
       title: 'my-report',
       path: '.murder/reports/my-report.md',
     });
@@ -208,40 +208,40 @@ describe('deriveSpawnContext — doc file context gated by the highlighted Stage
     store.setState((s) => ({
       docView: { ...s.docView, open: { kind: 'plan', name: 'my-plan' } },
     }));
-    expect(deriveSpawnContext(store, 'stage:doc:my-plan')).toEqual({
+    expect(deriveSpawnContext(store, { kind: 'docPane', name: 'my-plan' })).toEqual({
       title: 'my-plan',
       path: '.murder/plans/my-plan.md',
     });
     dispose();
   });
 
-  it('returns null when a CHAT pane is highlighted, even though a doc is open elsewhere', () => {
-    // stagelayout requirement: a highlighted chat-history pane gets NO file prompt, even if a doc
-    // happens to be open on the Stage — the file context follows the highlight, not the open slice.
+  it('returns null when a transcript pane is highlighted, even though a doc is open elsewhere', () => {
+    // A highlighted transcript pane gets NO file prompt, even if a doc is open elsewhere in the
+    // center-stage group — the file context follows the highlight, not the open slice.
     const { store, dispose } = makeStore();
     store.setState((s) => ({
       docView: { ...s.docView, open: { kind: 'plan', name: 'my-plan' } },
     }));
-    expect(deriveSpawnContext(store, 'stage:chat:crow-1')).toBeNull();
+    expect(deriveSpawnContext(store, { kind: 'transcriptPane', agentId: 'crow-1' })).toBeNull();
     dispose();
   });
 
-  it('returns null when the chat input is focused (no Stage pane highlighted)', () => {
+  it('returns null when the chat input is focused (no center-stage pane highlighted)', () => {
     const { store, dispose } = makeStore();
     store.setState((s) => ({
       docView: { ...s.docView, open: { kind: 'plan', name: 'my-plan' } },
     }));
-    expect(deriveSpawnContext(store, CHAT_FOCUS)).toBeNull();
+    expect(deriveSpawnContext(store, { kind: 'composer' })).toBeNull();
     dispose();
   });
 });
 
-describe('ctrl+q — close the highlighted Stage pane (stagelayout)', () => {
+describe('ctrl+q — close the highlighted center-stage pane', () => {
   // ctrl+q rides the clean legacy byte 0x11, which Ink reports as `{ ctrl: true, input: 'q' }`.
   const CTRL_Q = '\x11';
 
-  /** A full App against fakes, with a roster carrying one default-favorited collaborator (→ one Stage
-   * chat pane) so ctrl+q has a chat pane to close. */
+  /** A full App against fakes, with a roster carrying one default-favorited collaborator (→ one center-stage
+   * transcript pane) so ctrl+q has a transcript pane to close. */
   async function setupApp() {
     const fake = new FakeBusClient();
     fake.stubRpc('state.crow_snapshot', {
@@ -258,14 +258,14 @@ describe('ctrl+q — close the highlighted Stage pane (stagelayout)', () => {
     return { fake, store, dispose, inputStores, ...tree };
   }
 
-  it('closes the highlighted chat-history pane and re-homes focus to chat', async () => {
+  it('closes the highlighted transcript pane and re-homes focus to chat', async () => {
     const { store, inputStores, stdin, dispose } = await setupApp();
     await tick();
 
-    // The default-favorited collaborator's chat pane is open + mounted; focus it.
-    inputStores.focus.getState().focus('stage:chat:collab-1');
+    // The default-favorited collaborator's transcript pane is open + mounted; focus it.
+    inputStores.focus.getState().focus(stageTranscriptFocusId('collab-1'));
     await tick();
-    expect(selectEffectiveFocus(inputStores.focus)).toBe('stage:chat:collab-1');
+    expect(selectEffectiveFocus(inputStores.focus)).toBe(stageTranscriptFocusId('collab-1'));
 
     stdin.write(CTRL_Q);
     await tick();
@@ -281,7 +281,7 @@ describe('ctrl+q — close the highlighted Stage pane (stagelayout)', () => {
     const { store, inputStores, stdin, dispose } = await setupApp();
     await tick();
 
-    // Open a doc and focus its Stage pane.
+    // Open a doc and focus its center-stage pane.
     await store.getState().actions.docView.open('plan', 'my-plan');
     inputStores.focus.getState().focus('stage:doc:my-plan');
     await tick();
@@ -296,7 +296,7 @@ describe('ctrl+q — close the highlighted Stage pane (stagelayout)', () => {
     dispose();
   });
 
-  it('does nothing when the chat input is focused (no Stage pane highlighted)', async () => {
+  it('does nothing when the chat input is focused (no center-stage pane highlighted)', async () => {
     const { store, inputStores, stdin, dispose } = await setupApp();
     await tick();
     // Focus stays on chat (the default home).

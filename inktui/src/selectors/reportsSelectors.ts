@@ -11,6 +11,7 @@ import { useMemo } from 'react';
 import type { FavoritesState } from '../store/favorites/favoritesSlice.js';
 import type { ReportRow, ReportsState } from '../store/reports/reportsSlice.js';
 import { isInFavoriteSet, stableSortStarredFirst } from './favoritesSelectors.js';
+import { type ListSurfaceStatus, toListSurfaceStatus } from './listViewModel.js';
 import { formatCharCount, formatUpdatedAt } from './resourceMeta.js';
 
 /**
@@ -30,7 +31,7 @@ export interface ReportRowView {
 /** The whole reports list, render-ready. Parallel to {@link NotesView}. */
 export interface ReportsView {
   readonly rows: readonly ReportRowView[];
-  readonly status: ReportsState['status'];
+  readonly status: ListSurfaceStatus;
   readonly error: string | null;
   readonly isEmpty: boolean;
 }
@@ -65,7 +66,7 @@ export function selectReportsView(state: ReportsState, favorites: FavoritesState
   const rows = ordered.map((row) => toReportRowView(row, isInFavoriteSet(favorites, row.name)));
   return {
     rows,
-    status: state.status,
+    status: toListSurfaceStatus(state.status),
     error: state.error,
     isEmpty: rows.length === 0,
   };

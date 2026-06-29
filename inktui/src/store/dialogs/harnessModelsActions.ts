@@ -2,27 +2,18 @@
  * Harness-models actions — the *only* code that calls the bus for the spawn wizard's per-harness
  * model list (rule 3).
  *
- * ## Pull-only RPC (Workstream A contract)
+ * ## Pull-only RPC
  *
  * The spawn wizard's model picker is driven by a **pull-only** RPC `state.harness_models_snapshot`
- * built in parallel by Workstream A. The LOCKED response shape is:
+ * registered by `murder/app/service/handlers/state.py`. The response shape is:
  *
  * ```json
  * { "models": { "<harness_kind>": [ {"id": "...", "label": "..."}, ... ] }, "as_of": "<ISO|null>" }
  * ```
  *
- * The wizard fetches the whole map ONCE on open and re-indexes per selected harness (it does NOT
- * replicate Textual's per-harness async discovery worker). When a harness key is missing/empty, the
+ * The wizard fetches the whole map once on open and re-indexes per selected harness; it does not
+ * replicate Textual's per-harness async discovery worker. When a harness key is missing/empty, the
  * caller falls back to the static last-good map ({@link STATIC_HARNESS_MODELS}).
- *
- * ## INTEGRATION SWAP POINT (Workstream A)
- *
- * `state.harness_models_snapshot` is NOT yet on the live bus — it is modeled here per the contract
- * (same idiom as the B13-modeled `state.notes_snapshot`). {@link fetchHarnessModels} calls the real
- * `bus.rpc('state.harness_models_snapshot', {})`; until Workstream A lands the handler, that call
- * rejects and we fall back to {@link STATIC_HARNESS_MODELS}. When Workstream A lands, nothing here
- * changes — the live handler simply starts answering. The static fallback then only serves as the
- * pre-resolve "last-good" snapshot.
  */
 
 import type { BusClient } from '../../bus/BusClient.js';
@@ -34,8 +25,8 @@ export interface HarnessModel {
 }
 
 /**
- * The `state.harness_models_snapshot` reply — the LOCKED Workstream A shape. `models` maps each
- * harness kind to its model list; `as_of` is the ISO timestamp of the snapshot (or `null`).
+ * The `state.harness_models_snapshot` reply. `models` maps each harness kind to its model list;
+ * `as_of` is the ISO timestamp of the snapshot (or `null`).
  */
 export interface HarnessModelsSnapshotReply {
   readonly models: Record<string, readonly HarnessModel[]>;
@@ -43,13 +34,12 @@ export interface HarnessModelsSnapshotReply {
 }
 
 /**
- * Declares the pull-only models RPC via declaration merging (rule 4 — never edit the frozen C1 bus
- * files). `state.harness_models_snapshot` is the bus-contract name; the params are empty (pull the
- * whole map). NOT yet on the live bus — confirm when Workstream A lands.
+ * Declares the live pull-only models RPC via declaration merging (rule 4 — never edit the frozen C1
+ * bus files). `state.harness_models_snapshot` pulls the whole map with empty params.
  */
 declare module '../../bus/BusClient.js' {
   interface RpcMethods {
-    /** Pull the full per-harness model map (Workstream A). Fetched once on wizard open. */
+    /** Pull the full per-harness model map. Fetched once on wizard open. */
     'state.harness_models_snapshot': {
       params: Record<string, never>;
       result: HarnessModelsSnapshotReply;
@@ -87,8 +77,8 @@ export const STATIC_HARNESS_MODELS: Record<string, readonly HarnessModel[]> = {
 export interface HarnessModelsActions {
   /**
    * Fetch the full per-harness model map. Resolves with the live snapshot's `models` map on
-   * success, or {@link STATIC_HARNESS_MODELS} on any rejection (RPC not live / transport error) —
-   * never throws past the action. The wizard re-indexes the returned map per selected harness.
+   * success, or {@link STATIC_HARNESS_MODELS} on any rejection (transport/read-model error). Never
+   * throws past the action. The wizard re-indexes the returned map per selected harness.
    */
   fetch(): Promise<Record<string, readonly HarnessModel[]>>;
 }
@@ -105,7 +95,7 @@ export function createHarnessModelsActions(bus: BusClient): HarnessModelsActions
         // Merge over the static map so a harness the snapshot omits still shows its last-good list.
         return { ...STATIC_HARNESS_MODELS, ...reply.models };
       } catch {
-        // RPC not live (Workstream A not landed) or transport error — fall back to last-good.
+        // Transport/read-model error — fall back to last-good.
         return STATIC_HARNESS_MODELS;
       }
     },

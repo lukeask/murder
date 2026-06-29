@@ -24,8 +24,12 @@ import type { BindingsState, BindingsStoreApi } from '../input/bindingsStore.js'
 import type { ChatHistoryState, ChatHistoryStoreApi } from '../input/chatHistoryStore.js';
 import type { ChatInputState, ChatInputStoreApi } from '../input/chatInputStore.js';
 import type { ChatVimState, ChatVimStoreApi } from '../input/chatVimStore.js';
-import { buildFocusGraph, resolveEffectiveFocus } from '../input/focusGraph.js';
-import type { FocusId, FocusState, FocusStoreApi } from '../input/focusStore.js';
+import {
+  buildFocusGraph,
+  resolveEffectiveFocus,
+  resolveEffectiveFocusTarget,
+} from '../input/focusGraph.js';
+import type { FocusId, FocusState, FocusStoreApi, FocusTarget } from '../input/focusStore.js';
 import type { Rect } from '../input/geometry.js';
 import type { PanelKeymap } from '../input/keymap.js';
 import type { KeymapRegistryApi, KeymapRegistryState } from '../input/keymapRegistry.js';
@@ -185,12 +189,23 @@ export function usePanelKeymap<Intent extends string>(
 export function useEffectiveFocus(): FocusId {
   const intended = useFocusStore((s) => s.intendedId);
   const rects = useFocusStore((s) => s.rects);
-  const chatTargets = useFocusStore((s) => s.chatTargets);
+  const recipientTargets = useFocusStore((s) => s.recipientTargets);
   const graphState = useFocusStore((s) => s.graphState);
   return resolveEffectiveFocus(
     intended,
-    buildFocusGraph({ rects, chatTargets, state: graphState }),
+    buildFocusGraph({ rects, recipientTargets, state: graphState }),
   );
+}
+
+export function useEffectiveFocusTarget(): FocusTarget {
+  const intended = useFocusStore((s) => s.intendedId);
+  const rects = useFocusStore((s) => s.rects);
+  const recipientTargets = useFocusStore((s) => s.recipientTargets);
+  const graphState = useFocusStore((s) => s.graphState);
+  return resolveEffectiveFocusTarget(
+    intended,
+    buildFocusGraph({ rects, recipientTargets, state: graphState }),
+  ).target;
 }
 
 /**
@@ -245,7 +260,7 @@ function measureRect(node: DOMElement): Rect {
  * would unmeasure→remeasure each render and transiently drop the pane from the candidate set. This is
  * uniform across all focusables (panels unmount on toggle-off too; cleaning their stale rect is
  * strictly fine) and keeps the hook one shape. `id` accepts any {@link FocusId}, so a Stage pane
- * passes `stage:chat:<agentId>` unchanged.
+ * passes its opaque stage-pane focus id unchanged.
  */
 export function useMeasureFocus(id: FocusId, ref: React.RefObject<DOMElement | null>): void {
   const measure = useFocusStore((s) => s.measure);

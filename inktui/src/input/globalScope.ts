@@ -22,7 +22,7 @@ import { CHAT_FOCUS, type FocusId, isStagePaneId } from './focusStore.js';
  *                      must type instead of stealing).
  *  - `chat`          — only while the chat input is focused (the item-9 chat-target super-chords;
  *                      away from chat the same `alt+h/l` are geometric nav).
- *  - `chat-or-stage` — the chat input OR a Stage pane (chat-history / open doc) — `alt+s` spawn.
+ *  - `chat-or-stage` — the chat input OR a Stage pane (transcript / open doc) — `alt+s` spawn.
  *  - `stage`         — only a Stage pane (`ctrl+q` close-pane).
  *  - `not-crows`     — any focus except the crows panel, where the chord falls to that panel's own
  *                      keymap (the `ctrl+m` murder arm).

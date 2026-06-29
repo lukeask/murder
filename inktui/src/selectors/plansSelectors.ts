@@ -36,6 +36,7 @@ import { useMemo } from 'react';
 import type { FavoritesState } from '../store/favorites/favoritesSlice.js';
 import type { PlanRow, PlansState } from '../store/plans/plansSlice.js';
 import { isInFavoriteSet } from './favoritesSelectors.js';
+import { type ListSurfaceStatus, toListSurfaceStatus } from './listViewModel.js';
 import { formatCharCount, formatUpdatedAt } from './resourceMeta.js';
 
 /** Spaces a child's name is indented under its parent (spec: "name indented 4 spaces"). */
@@ -64,7 +65,7 @@ export interface PlanRowView {
 /** The whole plans list, render-ready and in final display order. Parallel to {@link NotesView}. */
 export interface PlansView {
   readonly rows: readonly PlanRowView[];
-  readonly status: PlansState['status'];
+  readonly status: ListSurfaceStatus;
   readonly error: string | null;
   readonly isEmpty: boolean;
 }
@@ -157,7 +158,7 @@ export function selectPlansView(state: PlansState, favorites: FavoritesState): P
 
   return {
     rows,
-    status: state.status,
+    status: toListSurfaceStatus(state.status),
     error: state.error,
     isEmpty: rows.length === 0,
   };

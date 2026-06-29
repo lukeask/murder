@@ -26,7 +26,7 @@ import type { RosterRow } from '../store/roster/rosterSlice.js';
 /**
  * Strip the `murder_<repo>_<role…>_` prefix from a tmux session name so the UI shows only the
  * agent's own name. The single home for this transform — used by both {@link deriveAgentIdentity}
- * (the chat target label) and `crowsSelectors.toRowView` (the Crows-pane row name), so the two
+ * (the recipient-target label) and `crowsSelectors.toRowView` (the Crows-pane row name), so the two
  * never drift.
  *
  * The grammar comes from `murder/runtime/terminal/session_names.py` —
@@ -197,7 +197,7 @@ export function deriveAgentIdentity(row: RosterRow): AgentIdentity | null {
  *
  * C11 seam: this is the derivable "default favorites" logic. The full starring/prefs system
  * (including user-toggled favorites persisted via `tui.save_favorites`) is C11's work.
- * The `CrowChatPanel` uses this to decide which panes to show by default.
+ * The transcript pane uses this to decide which panes to show by default.
  */
 export function isDefaultFavorited(identity: AgentIdentity): boolean {
   switch (identity.kind) {

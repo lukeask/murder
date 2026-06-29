@@ -64,7 +64,7 @@ import {
   isFreeformChoiceLabel,
   isFreeformChoiceSelected,
   type LiveChoicePromptView,
-  selectAdjacentTargets,
+  selectAdjacentRecipientTargets,
   selectConversationMeta,
   selectLiveChoicePrompt,
   useActiveAgent,
@@ -320,7 +320,7 @@ export const ChatInput = memo(function ChatInput(): React.JSX.Element {
   const queued = meta.queuedMessage;
   // The crows a step in each direction — shown bottom-right so the user sees who ctrl+h / ctrl+l
   // would target WITHOUT opening any pane. No chord labels; just `◂ prev · next ▸`.
-  const { prev, next } = selectAdjacentTargets(conversations, roster, favorites);
+  const { prev, next } = selectAdjacentRecipientTargets(conversations, roster, favorites);
   const footerRight =
     prev !== null || next !== null ? (
       <Text dimColor>

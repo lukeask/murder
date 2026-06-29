@@ -29,7 +29,7 @@
  *     They are safe to check first because every one carries `meta`, which printable typing never
  *     does — so checking them ahead of the chat short-circuit cannot swallow a typed character.
  *     **`alt+s` claims when chat OR a Stage pane is focused:** it opens the spawn wizard when the
- *     effective focus is the chat input or a Stage pane (a chat-history pane / the open doc); with a
+ *     effective focus is the chat input or a Stage pane (a transcript pane / the open doc); with a
  *     *list panel* focused it declines here (returns false) and the event falls through to layer 3.
  *     Panels no longer bind `alt+s` (favorite/star is `alt+f` now), so the fall-through is simply
  *     unhandled at the panel layer. `ctrl+q` (`global.closePane`) is the symmetric "close the
@@ -100,7 +100,7 @@ export interface GlobalHandlers {
   focusChat(): void;
   /** `alt+s`: open the spawn wizard (only when chat is focused; wired by C13). */
   spawn(): void;
-  /** `alt+t` / `ctrl+t` (`global.cycleChatView`, TUIchat-3): cycle the focused chat pane through
+  /** `alt+t` / `ctrl+t` (`global.cycleChatView`, TUIchat-3): cycle the focused transcript pane through
    * verbose → condensed → tmux. Resolves the focused pane's agentId and calls `cyclePaneViewMode`. */
   cycleChatView(): void;
   /** `alt+p`: open the new-plan popup (wired by C12). */
@@ -116,20 +116,20 @@ export interface GlobalHandlers {
   /** `?` (the `global.keyHelp` action): open the keybinding help overlay (item 12). Fires only when
    * chat is NOT focused (so a literal `?` typed into the chat field is never stolen). */
   keyHelp(): void;
-  /** `alt+h`/`ctrl+h` (`global.cycleTargetPrev`): cycle the chat target to the previous one. Fires
+  /** `alt+h`/`ctrl+h` (`global.cycleTargetPrev`): cycle the recipient target to the previous one. Fires
    * ONLY while chat has focus — otherwise alt+h is geometric panel nav (item 9 super-chords). */
   cycleTargetPrev(): void;
-  /** `alt+l`/`ctrl+l` (`global.cycleTargetNext`): cycle the chat target to the next one. Chat-focus
+  /** `alt+l`/`ctrl+l` (`global.cycleTargetNext`): cycle the recipient target to the next one. Chat-focus
    * only (item 9 super-chords). */
   cycleTargetNext(): void;
-  /** `ctrl+j` (`global.toggleTargetGroup`): toggle the chat target between locked-visible and
+  /** `ctrl+j` (`global.toggleTargetGroup`): toggle the recipient target between locked-visible and
    * favorite-only groups. Chat-focus only. */
   toggleTargetGroup?(): void;
-  /** `alt+w`/`ctrl+w` (`global.toggleTargetPane`): toggle the current chat target's pane. Chat-focus
+  /** `alt+w`/`ctrl+w` (`global.toggleTargetPane`): toggle the current recipient target's transcript pane. Chat-focus
    * only (item 9 super-chords). */
   toggleTargetPane(): void;
   /** `ctrl+m` (the `global.murder` action): ARM the two-press murder confirm for the targeted crow
-   * (the crow of the focused chat pane, else the active chat target). Fires from any focus EXCEPT the
+   * (the crow of the focused transcript pane, else the active recipient target). Fires from any focus EXCEPT the
    * crows panel — there the chord falls through to the panel keymap, which arms with its own local
    * cursor row (the same decline-to-panel pattern as `global.spawn`'s chat-only guard). */
   murder(): void;
@@ -144,7 +144,7 @@ export interface GlobalHandlers {
    * while pending — the key then keeps its normal meaning in the lower layers. */
   murderCancel(): void;
   /** `ctrl+q` (the `global.closePane` action): close the currently-highlighted Stage pane — the open
-   * doc pane (`stage:doc:<name>`) or a chat-history pane (`stage:chat:<agentId>`). Fired ONLY when the
+   * doc pane or transcript pane. Fired ONLY when the
    * effective focus is a Stage pane; from chat/a panel the chord falls through (does nothing). The
    * closed pane unmounts → focus re-homes to chat via the derived invariant (no imperative re-home). */
   closePane(): void;
@@ -214,11 +214,11 @@ const VIM_NAV: Readonly<Record<string, Direction>> = {
  *
  * Every *other* global chord wins unconditionally (it carries `meta`, so it can't swallow typing).
  * `alt+s` is the documented exception: it opens the spawn wizard when the effective focus is the chat
- * input OR a Stage pane (a chat-history pane `stage:chat:<agentId>` or the open doc `stage:doc:<name>`).
+ * input OR a Stage pane (a transcript pane or the open doc).
  * When a *list panel* is focused we return `false` for `'s'`, letting it fall through to layer 3 —
  * panels no longer bind `alt+s` (favorite/star moved to `alt+f`), so it is simply unhandled there.
  * Keeping the chat-or-Stage guard means `alt+s` never fires the spawn wizard from a list panel, while
- * still letting the user spawn from a highlighted chat-history or doc pane (the stagelayout plan's
+ * still letting the user spawn from a highlighted transcript or doc pane (the stagelayout plan's
  * requirement). The doc-vs-chat file-context decision is made by the spawn handler reading the
  * effective focus (see {@link ../components/App.js}'s `deriveSpawnContext`), NOT here — the dispatcher
  * only routes the chord. A later agent must not "fix" this back to chat-only: spawning from a
@@ -274,12 +274,12 @@ function dispatchGlobalChord(
     return true;
   }
 
-  // `global.closePane` (ctrl+q, a `plain` chord) closes the currently-highlighted Stage pane (a chat-
-  // history pane or the open doc). Matched BEFORE the command-modifier gate (like quickNote — under a
+  // `global.closePane` (ctrl+q, a `plain` chord) closes the currently-highlighted Stage pane (a
+  // transcript pane or the open doc). Matched BEFORE the command-modifier gate (like quickNote — under a
   // ctrl/both modifier the gate would otherwise route ctrl+q into the digit/named-command branch and
   // swallow it). It claims the event ONLY when a Stage pane holds the effective focus; from chat or a
   // list panel it DECLINES (returns false → falls through), so ctrl+q does nothing there rather than a
-  // surprising close. There is ONE close mechanism for both pane kinds (chat panes have no close key of
+  // surprising close. There is ONE close mechanism for both pane kinds (transcript panes have no close key of
   // their own); a later agent must not move this onto per-pane keymaps. ctrl+q carries ctrl, which plain
   // typing never does, so checking it ahead of typing is safe.
   if (bindings.matches('global.closePane', input, key)) {
@@ -356,10 +356,10 @@ function dispatchGlobalChord(
     return true;
   }
   if (bindings.matches('global.spawn', input, key)) {
-    // Spawn wizard when chat OR a Stage pane (chat-history / doc) holds focus (see the fn doc);
+    // Spawn wizard when chat OR a Stage pane (transcript / doc) holds focus (see the fn doc);
     // otherwise (a list panel) decline (return false → falls through to layer 3, where panels no
     // longer bind the spawn chord, so it is unhandled). The spawn handler reads the effective focus to
-    // decide whether to include the doc file in context (doc pane → yes; chat pane → no).
+    // decide whether to include the doc file in context (doc pane → yes; transcript pane → no).
     if (inFocusScope(GLOBAL_SCOPE['global.spawn'], focusedId)) {
       handlers.spawn();
       return true;
@@ -367,7 +367,7 @@ function dispatchGlobalChord(
     return false;
   }
   if (bindings.matches('global.cycleChatView', input, key)) {
-    // TUIchat-3: cycle the focused chat pane's view (verbose → condensed → tmux). Took over `t` from
+    // TUIchat-3: cycle the focused transcript pane's view (verbose → condensed → tmux). Took over `t` from
     // the now chord-less newTicket; the old tmux chord `y` is freed/parked.
     handlers.cycleChatView();
     return true;

@@ -7,7 +7,8 @@ import type { PanePresentation } from '../../layout/paneLayoutTypes.js';
 import { type TicketRowView, useTicketsView } from '../../selectors/ticketsSelectors.js';
 import { useTheme } from '../../theme/themeStore.js';
 import { useTicketEditor } from '../TicketEditorMode.js';
-import { MeasuredPaneFrame, useClampedCursor } from './shared/index.js';
+import { MeasuredPaneFrame } from './shared/MeasuredPaneFrame.js';
+import { useClampedCursor } from './shared/useClampedCursor.js';
 import { TicketsSurface, type TicketsSurfaceRow } from './TicketsSurface.js';
 
 type TicketsIntent = 'cursorDown' | 'cursorUp' | 'refresh' | 'open';

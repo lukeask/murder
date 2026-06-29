@@ -1,10 +1,12 @@
-import type { ChatTargetState } from '../layout/paneLayoutTypes.js';
+import type { RecipientTargetState } from '../layout/paneLayoutTypes.js';
 import {
   CHAT_FOCUS,
-  chatTargetVertexId,
+  focusTargetFromFocusId,
   type FocusGraphTargetId,
   type FocusId,
-  isChatTargetVertexId,
+  type FocusTarget,
+  recipientTargetIdFromVertexId,
+  recipientTargetVertexId,
 } from './focusIds.js';
 import {
   type Direction,
@@ -18,25 +20,25 @@ export type PaneRect = Rect;
 export interface FocusVertex {
   readonly id: FocusGraphTargetId;
   readonly focusId: FocusId;
-  readonly kind: 'pane' | 'chatTarget';
+  readonly kind: 'pane' | 'recipientTarget';
   readonly rect: PaneRect;
   readonly orderKey: number;
-  readonly chatTargetId?: string | null;
+  readonly recipientTargetId?: string | null;
 }
 
 export interface FocusEdge {
   readonly from: FocusGraphTargetId;
   readonly to: FocusGraphTargetId;
   readonly direction: Direction;
-  readonly traversal: 'ordinaryPaneAdjacency' | 'syntheticChatTarget';
+  readonly traversal: 'ordinaryPaneAdjacency' | 'syntheticRecipientTarget';
 }
 
 export interface FocusGraph {
   readonly vertices: ReadonlyMap<FocusGraphTargetId, FocusVertex>;
   readonly edges: readonly FocusEdge[];
   readonly paneVertexIds: readonly FocusGraphTargetId[];
-  readonly chatTargetVertexIds: readonly FocusGraphTargetId[];
-  readonly activeChatTargetVertexId: FocusGraphTargetId | null;
+  readonly recipientTargetVertexIds: readonly FocusGraphTargetId[];
+  readonly activeRecipientTargetVertexId: FocusGraphTargetId | null;
 }
 
 export interface FocusGraphState {
@@ -59,7 +61,7 @@ export interface FocusGraphAllocation {
   readonly denied?: boolean;
 }
 
-export interface FocusGraphChatTarget {
+export interface FocusGraphRecipientTarget {
   readonly targetId: string;
   readonly orderKey?: number;
   readonly active?: boolean;
@@ -68,20 +70,25 @@ export interface FocusGraphChatTarget {
 export interface BuildFocusGraphInput {
   readonly rects?: ReadonlyMap<FocusId, PaneRect>;
   readonly allocations?: readonly FocusGraphAllocation[];
-  readonly chatTargets?: ChatTargetState | readonly FocusGraphChatTarget[];
-  readonly activeChatTargetId?: string | null;
+  readonly recipientTargets?: RecipientTargetState | readonly FocusGraphRecipientTarget[];
   readonly state?: FocusGraphState;
+}
+
+export interface ResolvedFocus {
+  readonly id: FocusId;
+  readonly target: FocusTarget;
 }
 
 export interface FocusNavigationResult {
   readonly targetId: FocusGraphTargetId | null;
   readonly focusId: FocusId | null;
-  readonly chatTargetId: string | null;
+  readonly target: FocusTarget | null;
+  readonly recipientTargetId: string | null;
   readonly edge: FocusEdge | null;
   readonly state: FocusGraphState;
 }
 
-const DEFAULT_CHAT_TARGET = '__active__';
+const DEFAULT_RECIPIENT_TARGET = '__active__';
 
 export const EMPTY_FOCUS_GRAPH_STATE: FocusGraphState = {
   activeTargetId: null,
@@ -128,15 +135,12 @@ function pushPaneVertex(
   paneVertexIds.push(id);
 }
 
-function targetIdForVirtualVertex(vertexId: FocusGraphTargetId): string | null {
-  if (!isChatTargetVertexId(vertexId)) {
-    return null;
-  }
-  return vertexId.slice('chat:target:'.length);
+function recipientTargetIdForVirtualVertex(vertexId: FocusGraphTargetId): string | null {
+  return recipientTargetIdFromVertexId(vertexId);
 }
 
 function focusIdForVertex(vertex: FocusVertex): FocusId {
-  return vertex.kind === 'chatTarget' ? CHAT_FOCUS : vertex.focusId;
+  return vertex.kind === 'recipientTarget' ? CHAT_FOCUS : vertex.focusId;
 }
 
 function sortedVertexIds(
@@ -175,9 +179,9 @@ function uniqueStrings(values: readonly (string | null | undefined)[]): string[]
   return result;
 }
 
-function isPartitionedChatTargetState(
-  targets: ChatTargetState | readonly FocusGraphChatTarget[] | undefined,
-): targets is ChatTargetState {
+function isPartitionedRecipientTargetState(
+  targets: RecipientTargetState | readonly FocusGraphRecipientTarget[] | undefined,
+): targets is RecipientTargetState {
   return (
     targets !== undefined &&
     !Array.isArray(targets) &&
@@ -186,14 +190,15 @@ function isPartitionedChatTargetState(
   );
 }
 
-function chatTargetsFromInput(input: BuildFocusGraphInput): {
-  readonly targets: readonly FocusGraphChatTarget[];
+function recipientTargetsFromInput(input: BuildFocusGraphInput): {
+  readonly targets: readonly FocusGraphRecipientTarget[];
   readonly activeTargetId: string | null | undefined;
   readonly lockedVisibleTargetIds: readonly string[];
   readonly favoriteOnlyTargetIds: readonly string[];
 } {
-  if (isPartitionedChatTargetState(input.chatTargets)) {
-    const state = input.chatTargets;
+  const rawTargets = input.recipientTargets;
+  if (isPartitionedRecipientTargetState(rawTargets)) {
+    const state = rawTargets;
     const targetIds = uniqueStrings([
       ...state.lockedVisibleTargetIds,
       state.ephemeralTargetId,
@@ -212,31 +217,31 @@ function chatTargetsFromInput(input: BuildFocusGraphInput): {
       favoriteOnlyTargetIds: state.favoriteOnlyTargetIds,
     };
   }
-  const targets = input.chatTargets ?? [];
+  const targets = (rawTargets ?? []) as readonly FocusGraphRecipientTarget[];
   return {
     targets,
-    activeTargetId: input.activeChatTargetId,
+    activeTargetId: undefined,
     lockedVisibleTargetIds: [],
     favoriteOnlyTargetIds: [],
   };
 }
 
-function resolveActiveChatTarget(
-  chatTargets: readonly FocusGraphChatTarget[],
+function resolveActiveRecipientTarget(
+  recipientTargets: readonly FocusGraphRecipientTarget[],
   explicitActive: string | null | undefined,
 ): string {
   if (explicitActive !== undefined && explicitActive !== null) {
     return explicitActive;
   }
-  const marked = chatTargets.find((target) => target.active === true);
-  return marked?.targetId ?? chatTargets[0]?.targetId ?? DEFAULT_CHAT_TARGET;
+  const marked = recipientTargets.find((target) => target.active === true);
+  return marked?.targetId ?? recipientTargets[0]?.targetId ?? DEFAULT_RECIPIENT_TARGET;
 }
 
 function buildOrdinaryEdge(
   vertices: ReadonlyMap<FocusGraphTargetId, FocusVertex>,
   from: FocusGraphTargetId,
   direction: Direction,
-  activeChatTargetVertexId: FocusGraphTargetId | null,
+  activeRecipientTargetVertexId: FocusGraphTargetId | null,
   paneVertexIds: readonly FocusGraphTargetId[],
   state: FocusGraphState | undefined,
 ): FocusEdge | null {
@@ -246,11 +251,11 @@ function buildOrdinaryEdge(
   }
   const orderedPaneVertexIds = orderPaneCandidatesForDirection(paneVertexIds, direction, state);
   const candidateIds =
-    source.kind === 'chatTarget'
+    source.kind === 'recipientTarget'
       ? [from, ...orderedPaneVertexIds]
-      : activeChatTargetVertexId === null
+      : activeRecipientTargetVertexId === null
         ? orderedPaneVertexIds
-        : [...orderedPaneVertexIds, activeChatTargetVertexId];
+        : [...orderedPaneVertexIds, activeRecipientTargetVertexId];
   const candidates: FocusCandidate<FocusGraphTargetId>[] = [];
   for (const id of candidateIds) {
     const vertex = vertices.get(id);
@@ -329,42 +334,45 @@ export function buildFocusGraph(input: BuildFocusGraphInput): FocusGraph {
     }
   }
 
-  const chatTargetVertexIds: FocusGraphTargetId[] = [];
-  let activeChatTargetVertexId: FocusGraphTargetId | null = null;
-  const chatTargetInput = chatTargetsFromInput(input);
+  const recipientTargetVertexIds: FocusGraphTargetId[] = [];
+  let activeRecipientTargetVertexId: FocusGraphTargetId | null = null;
+  const recipientTargetInput = recipientTargetsFromInput(input);
   if (chatRect !== null) {
     const sourceTargets =
-      chatTargetInput.targets.length > 0
-        ? chatTargetInput.targets
-        : [{ targetId: DEFAULT_CHAT_TARGET, active: true }];
-    const activeTargetId = resolveActiveChatTarget(sourceTargets, chatTargetInput.activeTargetId);
+      recipientTargetInput.targets.length > 0
+        ? recipientTargetInput.targets
+        : [{ targetId: DEFAULT_RECIPIENT_TARGET, active: true }];
+    const activeTargetId = resolveActiveRecipientTarget(
+      sourceTargets,
+      recipientTargetInput.activeTargetId,
+    );
     sourceTargets.forEach((target, index) => {
-      const id = chatTargetVertexId(target.targetId);
+      const id = recipientTargetVertexId(target.targetId);
       const vertex: FocusVertex = {
         id,
         focusId: CHAT_FOCUS,
-        kind: 'chatTarget',
+        kind: 'recipientTarget',
         rect: chatRect,
         orderKey: target.orderKey ?? index,
-        chatTargetId: target.targetId,
+        recipientTargetId: target.targetId,
       };
       vertices.set(id, vertex);
-      chatTargetVertexIds.push(id);
+      recipientTargetVertexIds.push(id);
       if (target.targetId === activeTargetId) {
-        activeChatTargetVertexId = id;
+        activeRecipientTargetVertexId = id;
       }
     });
-    if (activeChatTargetVertexId === null) {
-      activeChatTargetVertexId = chatTargetVertexIds[0] ?? null;
+    if (activeRecipientTargetVertexId === null) {
+      activeRecipientTargetVertexId = recipientTargetVertexIds[0] ?? null;
     }
   }
 
   const sortedPaneVertexIds = sortedVertexIds(vertices, paneVertexIds);
-  const sortedChatTargetVertexIds = sortedVertexIds(vertices, chatTargetVertexIds);
+  const sortedRecipientTargetVertexIds = sortedVertexIds(vertices, recipientTargetVertexIds);
   const edges: FocusEdge[] = [];
   const edgeSources = [...sortedPaneVertexIds];
-  if (activeChatTargetVertexId !== null) {
-    edgeSources.push(activeChatTargetVertexId);
+  if (activeRecipientTargetVertexId !== null) {
+    edgeSources.push(activeRecipientTargetVertexId);
   }
   for (const from of edgeSources) {
     for (const direction of ['left', 'right', 'up', 'down'] as const) {
@@ -372,7 +380,7 @@ export function buildFocusGraph(input: BuildFocusGraphInput): FocusGraph {
         vertices,
         from,
         direction,
-        activeChatTargetVertexId,
+        activeRecipientTargetVertexId,
         sortedPaneVertexIds,
         input.state,
       );
@@ -382,18 +390,18 @@ export function buildFocusGraph(input: BuildFocusGraphInput): FocusGraph {
     }
   }
 
-  sortedChatTargetVertexIds.forEach((from, index) => {
-    const count = sortedChatTargetVertexIds.length;
+  sortedRecipientTargetVertexIds.forEach((from, index) => {
+    const count = sortedRecipientTargetVertexIds.length;
     if (count < 2) {
       return;
     }
-    const left = sortedChatTargetVertexIds[(index - 1 + count) % count];
-    const right = sortedChatTargetVertexIds[(index + 1) % count];
+    const left = sortedRecipientTargetVertexIds[(index - 1 + count) % count];
+    const right = sortedRecipientTargetVertexIds[(index + 1) % count];
     if (left !== undefined) {
-      edges.push({ from, to: left, direction: 'left', traversal: 'syntheticChatTarget' });
+      edges.push({ from, to: left, direction: 'left', traversal: 'syntheticRecipientTarget' });
     }
     if (right !== undefined) {
-      edges.push({ from, to: right, direction: 'right', traversal: 'syntheticChatTarget' });
+      edges.push({ from, to: right, direction: 'right', traversal: 'syntheticRecipientTarget' });
     }
   });
 
@@ -401,8 +409,8 @@ export function buildFocusGraph(input: BuildFocusGraphInput): FocusGraph {
     vertices,
     edges,
     paneVertexIds: sortedPaneVertexIds,
-    chatTargetVertexIds: sortedChatTargetVertexIds,
-    activeChatTargetVertexId,
+    recipientTargetVertexIds: sortedRecipientTargetVertexIds,
+    activeRecipientTargetVertexId,
   };
 }
 
@@ -447,14 +455,23 @@ export function resolveEffectiveFocus(intended: FocusId, graph: FocusGraph): Foc
   return vertex?.kind === 'pane' ? intended : CHAT_FOCUS;
 }
 
+export function resolveEffectiveFocusTarget(
+  intended: FocusId,
+  graph: FocusGraph,
+): ResolvedFocus {
+  const id = resolveEffectiveFocus(intended, graph);
+  const target = focusTargetFromFocusId(id);
+  return { id, target: target ?? { kind: 'composer' } };
+}
+
 export function refreshFocusGraphState(
   graph: FocusGraph,
   state: FocusGraphState = EMPTY_FOCUS_GRAPH_STATE,
 ): FocusGraphState {
   const activeTargetId =
-    graph.activeChatTargetVertexId === null
+    graph.activeRecipientTargetVertexId === null
       ? state.activeTargetId
-      : targetIdForVirtualVertex(graph.activeChatTargetVertexId);
+      : recipientTargetIdForVirtualVertex(graph.activeRecipientTargetVertexId);
   return graphTraversalState(
     graph,
     activeTargetId,
@@ -467,9 +484,9 @@ export function refreshFocusGraphState(
 
 function sourceVertexIdForFocus(current: FocusId, graph: FocusGraph): FocusGraphTargetId | null {
   if (current === CHAT_FOCUS) {
-    return graph.activeChatTargetVertexId;
+    return graph.activeRecipientTargetVertexId;
   }
-  return graph.vertices.has(current) ? current : graph.activeChatTargetVertexId;
+  return graph.vertices.has(current) ? current : graph.activeRecipientTargetVertexId;
 }
 
 function edgeForDirection(
@@ -482,9 +499,9 @@ function edgeForDirection(
   const matches = graph.edges.filter(
     (candidate) => candidate.from === source && candidate.direction === direction,
   );
-  if (sourceVertex?.kind === 'chatTarget' && (direction === 'left' || direction === 'right')) {
+  if (sourceVertex?.kind === 'recipientTarget' && (direction === 'left' || direction === 'right')) {
     return (
-      matches.find((candidate) => candidate.traversal === 'syntheticChatTarget') ??
+      matches.find((candidate) => candidate.traversal === 'syntheticRecipientTarget') ??
       matches[0] ??
       null
     );
@@ -504,15 +521,16 @@ export function navigateFocus(
   const edge = source === null ? null : edgeForDirection(graph, source, direction, state);
   const targetVertex = edge === null ? null : (graph.vertices.get(edge.to) ?? null);
   const targetId = targetVertex?.id ?? null;
-  const chatTargetId =
-    targetVertex?.kind === 'chatTarget'
-      ? (targetVertex.chatTargetId ?? targetIdForVirtualVertex(targetVertex.id))
+  const recipientTargetId =
+    targetVertex?.kind === 'recipientTarget'
+      ? (targetVertex.recipientTargetId ?? recipientTargetIdForVirtualVertex(targetVertex.id))
       : null;
+  const focusId = targetVertex === null ? null : focusIdForVertex(targetVertex);
   const activeTargetId =
-    chatTargetId ??
-    (graph.activeChatTargetVertexId === null
+    recipientTargetId ??
+    (graph.activeRecipientTargetVertexId === null
       ? state.activeTargetId
-      : targetIdForVirtualVertex(graph.activeChatTargetVertexId));
+      : recipientTargetIdForVirtualVertex(graph.activeRecipientTargetVertexId));
   const nextState = graphTraversalState(
     graph,
     activeTargetId,
@@ -523,8 +541,9 @@ export function navigateFocus(
   );
   return {
     targetId,
-    focusId: targetVertex === null ? null : focusIdForVertex(targetVertex),
-    chatTargetId,
+    focusId,
+    target: focusId === null ? null : focusTargetFromFocusId(focusId),
+    recipientTargetId,
     edge,
     state: nextState,
   };

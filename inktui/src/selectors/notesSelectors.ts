@@ -18,6 +18,7 @@ import { useMemo } from 'react';
 import type { FavoritesState } from '../store/favorites/favoritesSlice.js';
 import type { NoteRow, NotesState } from '../store/notes/notesSlice.js';
 import { isInFavoriteSet, stableSortStarredFirst } from './favoritesSelectors.js';
+import { type ListSurfaceStatus, toListSurfaceStatus } from './listViewModel.js';
 import { formatCharCount, formatUpdatedAt } from './resourceMeta.js';
 
 /**
@@ -37,7 +38,7 @@ export interface NoteRowView {
 /** The whole notes list, render-ready. Parallel to {@link RosterView}. */
 export interface NotesView {
   readonly rows: readonly NoteRowView[];
-  readonly status: NotesState['status'];
+  readonly status: ListSurfaceStatus;
   readonly error: string | null;
   readonly isEmpty: boolean;
 }
@@ -74,7 +75,7 @@ export function selectNotesView(state: NotesState, favorites: FavoritesState): N
   const rows = ordered.map((row) => toNoteRowView(row, isInFavoriteSet(favorites, row.name)));
   return {
     rows,
-    status: state.status,
+    status: toListSurfaceStatus(state.status),
     error: state.error,
     isEmpty: rows.length === 0,
   };

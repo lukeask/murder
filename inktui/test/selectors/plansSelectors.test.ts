@@ -101,6 +101,8 @@ describe('selectPlansView — starring reconciliation', () => {
 describe('selectPlansView — load flags', () => {
   it('carries status/error and computes isEmpty', () => {
     expect(selectPlansView(state([]), NO_FAVS).isEmpty).toBe(true);
+    expect(selectPlansView(state([], { status: 'idle' }), NO_FAVS).status).toBe('ready');
+    expect(selectPlansView(state([], { status: 'loading' }), NO_FAVS).status).toBe('loading');
     const err = selectPlansView(state([], { status: 'error', error: 'x' }), NO_FAVS);
     expect(err.status).toBe('error');
     expect(err.error).toBe('x');

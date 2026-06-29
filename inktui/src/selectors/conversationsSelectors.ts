@@ -16,8 +16,8 @@
  *  - Pure transforms (`selectConversationTurns`) — no React, unit-testable in isolation.
  *  - `useConversationTurns` hook — component-facing, memoises on the agent's transcript identity.
  *
- * Per-agent favorited view (`selectFavoritesChatPanes`) — derives the ordered list of favorited
- * crow identities whose chat panes should be shown. Collaborator + rogue crows are default-
+ * Per-agent favorited view (`selectFavoriteTranscriptPanes`) — derives the ordered list of favorited
+ * crow identities whose transcript panes should be shown. Collaborator + rogue crows are default-
  * favorited (see `agentIdentity.isDefaultFavorited`). C11 owns the full prefs persistence.
  */
 
@@ -82,14 +82,14 @@ export interface ConversationView {
   readonly hasContent: boolean;
 }
 
-/** The ordered list of favorited crow identities whose panes should be rendered. */
-export interface FavoritesChatPanesView {
+/** The ordered list of favorited crow identities whose transcript panes should be rendered. */
+export interface FavoriteTranscriptPanesView {
   readonly panes: readonly AgentIdentity[];
 }
 
-/** The ordered list of crow identities whose chat panes are currently OPEN — the favorites default
- * merged with the explicit `paneOverrides` (item 9b). The Stage tiles exactly these. */
-export interface OpenChatPanesView {
+/** The ordered list of crow identities whose transcript panes are currently OPEN — the favorites default
+ * merged with the explicit `paneOverrides` (item 9b). The center-stage group tiles exactly these. */
+export interface OpenTranscriptPanesView {
   readonly panes: readonly AgentIdentity[];
 }
 
@@ -124,7 +124,7 @@ function formatBlock(block: ConversationBlock): ChatTurn | null {
     // TUIchat-2 selector pass-through: the parser (Phase 1) emits a FAITHFUL multi-line `text` (real
     // newlines, verbatim code/tables, prose de-wrapped). We pass it straight to the renderer — only an
     // outer `.trim()` (strips leading/trailing blank lines/spaces; internal newlines + alignment are
-    // untouched). NO pre-split / newline normalization here; the Stage's `classifyBlocks` does the
+    // untouched). NO pre-split / newline normalization here; the transcript pane renderer's `classifyBlocks` does the
     // presentation-time grouping, so the multi-line structure must reach it intact.
     case 'user': {
       const text = str(raw, 'text').trim();
@@ -417,7 +417,7 @@ export function selectConversationView(
   // Condensed view (TUIchat-4): replace each chunk summary's attributed run of blocks with the summary
   // text BEFORE formatting, so the Phase-2 renderer sees a shorter synthetic stream. `assistant_final`
   // is never attributed → always verbatim. Verbose/tmux paths leave `floored` untouched (byte-identical
-  // to before this change). `tmux` never reaches this selector (the Stage shows the live frame), but if
+  // to before this change). `tmux` never reaches this selector (the center-stage transcript pane shows the live frame), but if
   // it did it would render verbose, which is the correct fallback.
   const blocks =
     viewMode === 'condensed' ? condenseBlocks(floored, state.chunkSummaries[agentId]) : floored;
@@ -469,13 +469,13 @@ export function selectUserHistory(state: ConversationsState): readonly string[] 
 }
 
 /**
- * Derive the ordered list of favorited crow chat panes to render.
- * Ordering: collaborator → planners → rogue crows → ticket crows (spec order, same as CrowsPanel).
+ * Derive the ordered list of favorited crow transcript panes to render.
+ * Ordering: collaborator → planners → rogue crows → ticket crows (spec order, same as the crows pane).
  *
  * Filtered to: identities favorited per {@link ../selectors/favoritesSelectors.js isFavorited} —
  * which ORs the kind-derived default ({@link ./agentIdentity.js isDefaultFavorited}: collaborator +
  * rogues) with the explicit, persisted favorite set (C11). So a planner or ticket crow the user
- * stars with `ctrl+s` now gets a chat pane too, not only the default-favorited kinds.
+ * stars with `ctrl+s` now gets a transcript pane too, not only the default-favorited kinds.
  *
  * `favorites` is optional: when omitted (C10-era callers), it falls back to defaults-only — the same
  * behaviour as before C11, so nothing breaks if a caller hasn't been updated.
@@ -486,10 +486,10 @@ const FAVORITES_GROUP_ORDER = ['collaborator', 'planner', 'rogue', 'ticket'] as 
 /** An empty favorite set — the defaults-only fallback when no prefs slice is supplied. */
 const NO_FAVORITES: FavoritesState = { ids: new Set<string>(), status: 'idle', error: null };
 
-export function selectFavoritesChatPanes(
+export function selectFavoriteTranscriptPanes(
   rosterState: RosterState,
   favorites: FavoritesState = NO_FAVORITES,
-): FavoritesChatPanesView {
+): FavoriteTranscriptPanesView {
   const panes: AgentIdentity[] = [];
   // Collect by group so we maintain the spec order (collaborator → planner → rogue → ticket).
   const byGroup: Record<string, AgentIdentity[]> = {
@@ -524,13 +524,13 @@ export function selectFavoritesChatPanes(
 }
 
 /**
- * Whether one agent's chat pane is OPEN — the favorites default merged with the explicit override
+ * Whether one agent's transcript pane is OPEN — the favorites default merged with the explicit override
  * (item 9b). An explicit `paneOverrides` entry wins (the user said open/close); absent, it falls
  * through to the favorites default (`isFavorited` ORs the explicit star set with the kind-default,
  * so collaborator + rogues are open by default). The single home for the "is this pane open?"
- * question, used by `selectOpenChatPanes` and `CrowsPanel`'s toggle.
+ * question, used by `selectOpenTranscriptPanes` and the crows pane toggle.
  */
-export function isChatPaneOpen(
+export function isTranscriptPaneOpen(
   identity: AgentIdentity,
   favorites: FavoritesState,
   overrides: ReadonlyMap<string, boolean>,
@@ -543,18 +543,18 @@ export function isChatPaneOpen(
 }
 
 /**
- * Derive the ordered list of OPEN chat panes (item 9b) — the favorites default layered under the
- * explicit `paneOverrides`. Replaces {@link selectFavoritesChatPanes} at the Stage call site: an
- * agent's pane is open iff {@link isChatPaneOpen}, so a toggled-open planner appears and a
+ * Derive the ordered list of OPEN transcript panes (item 9b) — the favorites default layered under the
+ * explicit `paneOverrides`. Replaces {@link selectFavoriteTranscriptPanes} at the pane-bridge call site: an
+ * agent's pane is open iff {@link isTranscriptPaneOpen}, so a toggled-open planner appears and a
  * toggled-closed rogue disappears. Ordering is the same spec order (collaborator → planner → rogue
  * → ticket). `favorites`/`overrides` default to empty so a bare caller still renders the kind-default
  * panes.
  */
-export function selectOpenChatPanes(
+export function selectOpenTranscriptPanes(
   rosterState: RosterState,
   favorites: FavoritesState = NO_FAVORITES,
   overrides: ReadonlyMap<string, boolean> = NO_OVERRIDES,
-): OpenChatPanesView {
+): OpenTranscriptPanesView {
   const panes: AgentIdentity[] = [];
   const byGroup: Record<string, AgentIdentity[]> = {
     collaborator: [],
@@ -565,7 +565,7 @@ export function selectOpenChatPanes(
 
   for (const row of rosterState.rows) {
     const identity = deriveAgentIdentity(row);
-    if (identity !== null && isChatPaneOpen(identity, favorites, overrides)) {
+    if (identity !== null && isTranscriptPaneOpen(identity, favorites, overrides)) {
       const groupKey = identity.kind === 'planner' ? 'planner' : identity.kind;
       (byGroup[groupKey] ?? []).push(identity);
     }
@@ -616,34 +616,34 @@ export function useConversationTurns(
 }
 
 /**
- * Memoised hook for the favorited chat panes list. Re-runs when the roster OR favorites ref-changes
+ * Memoised hook for the favorited transcript panes list. Re-runs when the roster OR favorites ref-changes
  * (so starring a crow updates the pane list). `favorites` defaults to defaults-only when omitted.
  */
-export function useFavoritesChatPanes(
+export function useFavoriteTranscriptPanes(
   rosterState: RosterState,
   favorites: FavoritesState = NO_FAVORITES,
-): FavoritesChatPanesView {
-  return useMemo(() => selectFavoritesChatPanes(rosterState, favorites), [rosterState, favorites]);
+): FavoriteTranscriptPanesView {
+  return useMemo(() => selectFavoriteTranscriptPanes(rosterState, favorites), [rosterState, favorites]);
 }
 
 /**
- * Memoised hook for the OPEN chat panes (item 9b). Re-runs when the roster, favorites, OR the
- * `paneOverrides` map ref-changes (every override mutation ref-swaps the map). The Stage uses this
- * in place of {@link useFavoritesChatPanes} so toggling a pane open/closed re-tiles the center.
+ * Memoised hook for the OPEN transcript panes (item 9b). Re-runs when the roster, favorites, OR the
+ * `paneOverrides` map ref-changes (every override mutation ref-swaps the map). The pane bridge uses this
+ * in place of {@link useFavoriteTranscriptPanes} so toggling a pane open/closed re-tiles the center.
  */
-export function useOpenChatPanes(
+export function useOpenTranscriptPanes(
   rosterState: RosterState,
   favorites: FavoritesState = NO_FAVORITES,
   overrides: ReadonlyMap<string, boolean> = NO_OVERRIDES,
-): OpenChatPanesView {
+): OpenTranscriptPanesView {
   return useMemo(
-    () => selectOpenChatPanes(rosterState, favorites, overrides),
+    () => selectOpenTranscriptPanes(rosterState, favorites, overrides),
     [rosterState, favorites, overrides],
   );
 }
 
 /**
- * Derive the `agentId` for the currently active chat pane.
+ * Derive the `agentId` for the currently active transcript pane.
  * Used by the ChatInput (or a future integrated send path) to route `ctrl+enter` to the right agent.
  *
  * Resolution order:
@@ -662,37 +662,37 @@ export function selectActiveAgentId(
     return conversationsState.activePaneAgentId;
   }
   // Default the target to the first OPEN pane (item 9b: open = favorites default + overrides) so the
-  // chat input names a target whose pane is actually on the Stage.
-  const { panes } = selectOpenChatPanes(rosterState, favorites, conversationsState.paneOverrides);
+  // chat input names a target whose pane is actually in the center-stage group.
+  const { panes } = selectOpenTranscriptPanes(rosterState, favorites, conversationsState.paneOverrides);
   return panes.length > 0 ? (panes[0]?.agentId ?? null) : null;
 }
 
-/** The result of cycling the chat target (item 9 super-chords): the agent now targeted, and whether
- * its pane needs opening (it was a favorited crow whose pane is currently closed). `null` when there
- * is nothing to cycle to. */
-export interface CycleTargetResult {
+/** The result of cycling the recipient target (item 9 super-chords): the agent now targeted, and
+ * whether its pane needs opening (it was a favorited crow whose pane is currently closed).
+ * `null` when there is nothing to cycle to. */
+export interface RecipientTargetCycleResult {
   readonly agentId: string;
   /** True when the landed-on target's pane is currently closed, so the caller must open it. */
   readonly needsOpen: boolean;
 }
 
 /**
- * The ordered list of chat-target identities to cycle through (item 9 super-chords): locked-visible
- * targets first, favorite-only targets second. Agent kind no longer participates in cycling order;
- * the visible/favorite partition already encodes the user's target groups.
+ * The ordered list of recipient-target identities to cycle through (item 9 super-chords):
+ * locked-visible targets first, favorite-only targets second. Agent kind no longer participates in
+ * cycling order; the visible/favorite partition already encodes the user's target groups.
  */
-export function selectCycleTargets(
+export function selectRecipientTargets(
   conversationsState: ConversationsState,
   rosterState: RosterState,
   favorites: FavoritesState = NO_FAVORITES,
 ): readonly AgentIdentity[] {
-  const lockedVisible = selectOpenChatPanes(
+  const lockedVisible = selectOpenTranscriptPanes(
     rosterState,
     favorites,
     conversationsState.paneOverrides,
   ).panes;
   const lockedIds = new Set(lockedVisible.map((identity) => identity.agentId));
-  const favoriteOnly = selectFavoritesChatPanes(rosterState, favorites).panes.filter(
+  const favoriteOnly = selectFavoriteTranscriptPanes(rosterState, favorites).panes.filter(
     (identity) => !lockedIds.has(identity.agentId),
   );
   const seen = new Set<string>();
@@ -708,21 +708,22 @@ export function selectCycleTargets(
 }
 
 /**
- * The chat-target identities immediately before/after the current target in {@link selectCycleTargets}
- * — what `cycleTargetPrev` (`◂`) and `cycleTargetNext` (`▸`) would land on. Used by the
- * {@link ../components/ChatInput.js ChatInput} to advertise the adjacent crows on its bottom border
- * so the user can see who a step in each direction reaches WITHOUT opening any pane.
+ * The recipient-target identities immediately before/after the current target in
+ * {@link selectRecipientTargets} — what `cycleTargetPrev` (`◂`) and `cycleTargetNext` (`▸`) would
+ * land on. Used by the {@link ../components/ChatInput.js ChatInput} to advertise the adjacent crows
+ * on its bottom border so the user can see who a step in each direction reaches WITHOUT opening any
+ * pane.
  *
  * Both are `null` when there are fewer than two targets (nothing to cycle to). With exactly two,
  * prev and next are the same other crow (a single step wraps either way) — both are returned so each
  * side of the border still names it.
  */
-export function selectAdjacentTargets(
+export function selectAdjacentRecipientTargets(
   conversationsState: ConversationsState,
   rosterState: RosterState,
   favorites: FavoritesState = NO_FAVORITES,
 ): { readonly prev: AgentIdentity | null; readonly next: AgentIdentity | null } {
-  const targets = selectCycleTargets(conversationsState, rosterState, favorites);
+  const targets = selectRecipientTargets(conversationsState, rosterState, favorites);
   if (targets.length < 2) {
     return { prev: null, next: null };
   }
@@ -737,22 +738,23 @@ export function selectAdjacentTargets(
 }
 
 /**
- * Compute the chat target after stepping `direction` (+1 next, −1 prev) from the current active
- * target through {@link selectCycleTargets}. Wraps around the list. When the current target is not in
- * the list (or there is no current target), starts from the first/last entry so the chord still has an
- * effect. Returns `null` when there is nothing to cycle to (no open panes and no favorites).
+ * Compute the recipient target after stepping `direction` (+1 next, −1 prev) from the current active
+ * target through {@link selectRecipientTargets}. Wraps around the list. When the current target is
+ * not in the list (or there is no current target), starts from the first/last entry so the chord
+ * still has an effect. Returns `null` when there is nothing to cycle to (no open panes and no
+ * favorites).
  *
  * The returned `needsOpen` flag reports whether the landed-on target's pane is currently closed.
  * It is informational only: cycling NO LONGER opens the pane (the user toggles a pane explicitly via
- * `toggleTargetPane`), so a step can target a crow whose chat box is not on the Stage.
+ * `toggleTargetPane`), so a step can target a crow whose chat box is not in the center-stage group.
  */
-export function selectCycledTarget(
+export function selectCycledRecipientTarget(
   conversationsState: ConversationsState,
   rosterState: RosterState,
   favorites: FavoritesState,
   direction: 1 | -1,
-): CycleTargetResult | null {
-  const targets = selectCycleTargets(conversationsState, rosterState, favorites);
+): RecipientTargetCycleResult | null {
+  const targets = selectRecipientTargets(conversationsState, rosterState, favorites);
   if (targets.length === 0) {
     return null;
   }
@@ -767,7 +769,7 @@ export function selectCycledTarget(
   if (landed === undefined) {
     return null;
   }
-  const needsOpen = !isChatPaneOpen(landed, favorites, conversationsState.paneOverrides);
+  const needsOpen = !isTranscriptPaneOpen(landed, favorites, conversationsState.paneOverrides);
   return { agentId: landed.agentId, needsOpen };
 }
 
@@ -903,7 +905,7 @@ export function selectConversationMeta(
   return state.meta[agentId] ?? EMPTY_META;
 }
 
-/** Memoised hook for the active chat target's identity — re-runs when conversations/roster/favorites
+/** Memoised hook for the active recipient target's identity — re-runs when conversations/roster/favorites
  * ref-change. Used by the {@link ../components/ChatInput.js ChatInput} to label its target. */
 export function useActiveAgent(
   conversationsState: ConversationsState,

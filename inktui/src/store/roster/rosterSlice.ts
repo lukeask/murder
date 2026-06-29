@@ -43,7 +43,7 @@ export interface RosterRow {
   /**
    * Filesystem path of the crow's worktree, or null when it runs on the main checkout. Fed from
    * Python `CrowSessionSummary.worktree_path`. Rendered as the bare `.murder/worktrees/<name>`
-   * subdir (or `main`) on the chat pane's bottom-right border — see `harnessDisplay.worktreeLabel`.
+   * subdir (or `main`) on the transcript pane's bottom-right border — see `harnessDisplay.worktreeLabel`.
    * Optional on `RosterRow` so existing test factories don't require the field.
    */
   readonly worktreePath?: string | null;

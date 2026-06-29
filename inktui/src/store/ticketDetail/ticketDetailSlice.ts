@@ -21,7 +21,7 @@
  *
  * To use this slice: call `actions.ticketDetail.open(id)` to load; the editor mode enters itself
  * and reads the slice. `actions.ticketDetail.saveBody()` writes back; `actions.ticketDetail.schedule()`
- * sends the duration. Both are modeled-not-live (FakeBusClient only) until service B13.
+ * sends the duration.
  */
 
 import type { StateCreator } from 'zustand';

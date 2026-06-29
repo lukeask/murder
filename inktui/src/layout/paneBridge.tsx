@@ -1,43 +1,26 @@
 import { Box, Text } from 'ink';
-import { type JSX, memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { TmuxFrameEvent } from '../bus/protocol.js';
-import { META_SEP } from '../components/glyphs.js';
-import { ChatPane as ContractChatPane } from '../components/panes/ChatPane.js';
+import type { JSX } from 'react';
 import { CrowsController } from '../components/panes/CrowsController.js';
-import { computeDocWindow } from '../components/panes/docWindow.js';
+import { DocumentController } from '../components/panes/DocumentController.js';
 import { HistoryController } from '../components/panes/HistoryController.js';
 import { NotesController } from '../components/panes/NotesController.js';
 import { PlansController } from '../components/panes/PlansController.js';
 import { ReportsController } from '../components/panes/ReportsController.js';
-import { StageDocPane as ContractStageDocPane } from '../components/panes/StageDocPane.js';
 import { TicketsController } from '../components/panes/TicketsController.js';
+import { TranscriptController } from '../components/panes/TranscriptController.js';
 import { TreeController } from '../components/panes/TreeController.js';
 import { UsageController } from '../components/panes/UsageController.js';
-import { useAppStore } from '../hooks/useAppStore.js';
-import { useBusClient } from '../hooks/useBusClient.js';
-import { type GotoIntent, useGotoLine } from '../hooks/useGotoLine.js';
-import {
-  useEffectiveFocus,
-  useFocusRef,
-  useMeasureFocus,
-  usePanelKeymap,
-  usePaneScrollBus,
-} from '../hooks/useInputStores.js';
-import { CHAT_FOCUS, type FocusId } from '../input/focusStore.js';
-import type { PanelKeymap } from '../input/keymap.js';
+import { stageDocFocusId, stageTranscriptFocusId } from '../input/focusIds.js';
+import type { FocusId } from '../input/focusStore.js';
 import { PANELS, type PanelId } from '../input/panels.js';
 import type { AgentIdentity } from '../selectors/agentIdentity.js';
 import { deriveAgentIdentity } from '../selectors/agentIdentity.js';
 import {
   selectActiveAgentId,
-  selectOpenChatPanes,
-  useConversationTurns,
+  selectOpenTranscriptPanes,
 } from '../selectors/conversationsSelectors.js';
-import { harnessModelFooter, worktreeLabel } from '../selectors/harnessDisplay.js';
 import { selectUsageView } from '../selectors/usageSelectors.js';
-import { DOC_DIR } from '../store/docView/docViewSlice.js';
 import type { AppStore } from '../store/store.js';
-import { useTheme } from '../theme/themeStore.js';
 import type {
   PaneAllocation,
   PaneId,
@@ -48,14 +31,6 @@ import type {
   PaneRequest,
   PaneSizing,
 } from './paneLayout.js';
-
-function stageChatFocusId(agentId: string): FocusId {
-  return `stage:chat:${agentId}`;
-}
-
-function stageDocFocusId(name: string): FocusId {
-  return `stage:doc:${name}`;
-}
 
 const PANEL_SIZING: Record<PanelId, PaneSizing> = {
   plans: { min: { width: 25, height: 5 }, preferred: { width: 34, height: 14 } },
@@ -68,7 +43,7 @@ const PANEL_SIZING: Record<PanelId, PaneSizing> = {
   crows: { min: { width: 18, height: 7 }, preferred: { width: 34, height: 13 } },
 };
 
-const STAGE_CHAT_SIZING: PaneSizing = {
+const STAGE_TRANSCRIPT_SIZING: PaneSizing = {
   min: { width: 30, height: 5 },
   preferred: { width: 56, height: 18 },
 };
@@ -79,10 +54,6 @@ const STAGE_DOC_SIZING: PaneSizing = {
 };
 
 const PANE_CHROME_HEIGHT = 2;
-const DOC_SCROLL_STEP = 1;
-const CHAT_SCROLL_STEP = 1;
-const CHAT_NEAR_BOTTOM_THRESHOLD = 3;
-const TMUX_WAITING_TEXT = '[waiting for tmux frame…]';
 
 export interface BuildPaneRequestsInput {
   readonly state: AppStore;
@@ -138,317 +109,6 @@ function panelSizing(panelId: PanelId, state: AppStore): PaneSizing {
   return PANEL_SIZING[panelId];
 }
 
-function chatKindLabel(kind: AgentIdentity['kind']): string {
-  switch (kind) {
-    case 'collaborator':
-      return 'collab';
-    case 'planner':
-      return 'planner';
-    case 'rogue':
-      return 'rogue';
-    default:
-      return 'ticket';
-  }
-}
-
-type DocIntent = 'close' | 'scrollDown' | 'scrollUp' | 'pageDown' | 'pageUp' | 'spawnPlanner';
-
-const EMPTY_DOC_KEYMAP: PanelKeymap<DocIntent | GotoIntent> = { keymap: [], onIntent() {} };
-
-const StageDocPaneAdapter = memo(function StageDocPaneAdapter({
-  presentation,
-  open,
-}: {
-  readonly presentation: PanePresentation;
-  readonly open: NonNullable<AppStore['docView']['open']>;
-}): JSX.Element {
-  const body = useAppStore((state) => state.docView.body);
-  const status = useAppStore((state) => state.docView.status);
-  const error = useAppStore((state) => state.docView.error);
-  const closeAction = useAppStore((state) => state.actions.docView.close);
-  const spawnPlanner = useAppStore((state) => state.actions.plans.spawnPlanner);
-  const ref = useFocusRef();
-  const focusId = stageDocFocusId(open.name);
-  useMeasureFocus(focusId, ref);
-
-  const [scroll, setScroll] = useState(0);
-  const lines = useMemo(() => (body === null ? [] : body.split('\n')), [body]);
-  const effectiveHeight = Math.max(1, presentation.height - PANE_CHROME_HEIGHT);
-  const { start: clampedScroll, maxScroll } = computeDocWindow(
-    lines.length,
-    scroll,
-    effectiveHeight,
-  );
-
-  const jump = useCallback((line: number) => setScroll(Math.min(line - 1, maxScroll)), [maxScroll]);
-  const goto = useGotoLine(jump);
-
-  const keymap: PanelKeymap<DocIntent | GotoIntent> = useMemo(
-    () => ({
-      keymap: [
-        ...goto.entries,
-        { chord: { key: { return: true } }, intent: 'close', description: 'close' },
-        { chord: { key: { escape: true } }, intent: 'close', description: 'close' },
-        { chord: { input: 'j' }, intent: 'scrollDown', description: 'scroll down' },
-        { chord: { key: { downArrow: true } }, intent: 'scrollDown', description: 'scroll down' },
-        { chord: { input: 'k' }, intent: 'scrollUp', description: 'scroll up' },
-        { chord: { key: { upArrow: true } }, intent: 'scrollUp', description: 'scroll up' },
-        { chord: { input: ' ' }, intent: 'pageDown', description: 'page down' },
-        { chord: { key: { pageDown: true } }, intent: 'pageDown', description: 'page down' },
-        { chord: { input: 'b' }, intent: 'pageUp', description: 'page up' },
-        { chord: { key: { pageUp: true } }, intent: 'pageUp', description: 'page up' },
-        ...(open.kind === 'plan'
-          ? [
-              {
-                chord: { input: 'p' },
-                intent: 'spawnPlanner',
-                description: 'spawn planner',
-              } as const,
-            ]
-          : []),
-      ],
-      onIntent(intent) {
-        if (goto.handle(intent)) {
-          return;
-        }
-        goto.clear();
-        switch (intent as DocIntent) {
-          case 'close':
-            closeAction();
-            return;
-          case 'scrollDown':
-            setScroll((current) => Math.min(current + DOC_SCROLL_STEP, maxScroll));
-            return;
-          case 'scrollUp':
-            setScroll((current) => Math.max(current - DOC_SCROLL_STEP, 0));
-            return;
-          case 'pageDown':
-            setScroll((current) => Math.min(current + effectiveHeight, maxScroll));
-            return;
-          case 'pageUp':
-            setScroll((current) => Math.max(current - effectiveHeight, 0));
-            return;
-          case 'spawnPlanner':
-            void spawnPlanner(open.name);
-            return;
-        }
-      },
-    }),
-    [closeAction, effectiveHeight, goto, maxScroll, open.kind, open.name, spawnPlanner],
-  );
-  usePanelKeymap(focusId, presentation.focused ? keymap : EMPTY_DOC_KEYMAP);
-
-  const paneScroll = usePaneScrollBus();
-  const maxScrollRef = useRef(maxScroll);
-  maxScrollRef.current = maxScroll;
-  useEffect(
-    () =>
-      paneScroll.subscribe(focusId, (direction, amount) => {
-        setScroll((current) =>
-          direction === 'up'
-            ? Math.max(current - amount, 0)
-            : Math.min(current + amount, maxScrollRef.current),
-        );
-      }),
-    [focusId, paneScroll],
-  );
-
-  return (
-    <Box
-      ref={ref}
-      width={presentation.width}
-      height={presentation.height}
-      flexDirection="column"
-      overflow="hidden"
-    >
-      <ContractStageDocPane
-        width={presentation.width}
-        height={presentation.height}
-        focused={presentation.focused}
-        title={`.murder/${DOC_DIR[open.kind]}/${open.name}.md`}
-        lines={lines}
-        scroll={clampedScroll}
-        status={status === 'idle' ? 'ready' : status}
-        error={error}
-      />
-    </Box>
-  );
-});
-
-type ChatScrollIntent = 'scrollUp' | 'scrollDown';
-
-const EMPTY_CHAT_KEYMAP: PanelKeymap<ChatScrollIntent | GotoIntent> = {
-  keymap: [],
-  onIntent() {},
-};
-
-const StageChatPaneAdapter = memo(function StageChatPaneAdapter({
-  presentation,
-  identity,
-  state,
-  chatTarget,
-}: {
-  readonly presentation: PanePresentation;
-  readonly identity: AgentIdentity;
-  readonly state: AppStore;
-  readonly chatTarget: boolean;
-}): JSX.Element {
-  const ref = useFocusRef();
-  const theme = useTheme();
-  const focusId = stageChatFocusId(identity.agentId);
-  const effectiveFocus = useEffectiveFocus();
-  const highlighted = presentation.focused || (chatTarget && effectiveFocus === CHAT_FOCUS);
-  useMeasureFocus(focusId, ref);
-
-  const defaultChatViewMode = useAppStore((current) => current.settings.defaultChatViewMode);
-  const viewMode = state.conversations.paneViewModes[identity.agentId] ?? defaultChatViewMode;
-  const turns = useConversationTurns(identity.agentId, state.conversations, viewMode);
-  const [scrollUp, setScrollUp] = useState(0);
-  const [gotoLine, setGotoLine] = useState<number | null>(null);
-  const [chatMetrics, setChatMetrics] = useState({ lineCount: 0, maxScrollUp: 0 });
-  const maxScrollUp = chatMetrics.maxScrollUp;
-
-  const prevLenRef = useRef<number | null>(null);
-  const wasNearBottomRef = useRef(true);
-  if (prevLenRef.current === null || chatMetrics.lineCount <= prevLenRef.current) {
-    wasNearBottomRef.current = scrollUp <= CHAT_NEAR_BOTTOM_THRESHOLD;
-  }
-  useEffect(() => {
-    const prevLen = prevLenRef.current;
-    prevLenRef.current = chatMetrics.lineCount;
-    if (prevLen === null) {
-      return;
-    }
-    const delta = chatMetrics.lineCount - prevLen;
-    if (delta <= 0) {
-      setScrollUp((current) => Math.min(current, maxScrollUp));
-      return;
-    }
-    if (wasNearBottomRef.current) {
-      setScrollUp(0);
-    } else {
-      setScrollUp((current) => Math.min(current + delta, maxScrollUp));
-    }
-  }, [chatMetrics.lineCount, maxScrollUp]);
-
-  const jump = useCallback((line: number) => setGotoLine(line), []);
-  const goto = useGotoLine(jump);
-  const keymap: PanelKeymap<ChatScrollIntent | GotoIntent> = useMemo(
-    () => ({
-      keymap: [
-        ...goto.entries,
-        {
-          chord: [{ input: 'k' }, { key: { upArrow: true } }],
-          intent: 'scrollUp',
-          description: 'older',
-        },
-        {
-          chord: [{ input: 'j' }, { key: { downArrow: true } }],
-          intent: 'scrollDown',
-          description: 'newer',
-        },
-      ],
-      onIntent(intent) {
-        if (goto.handle(intent)) {
-          return;
-        }
-        goto.clear();
-        if (intent === 'scrollUp') {
-          setScrollUp((current) => Math.min(current + CHAT_SCROLL_STEP, maxScrollUp));
-        } else {
-          setScrollUp((current) => Math.max(current - CHAT_SCROLL_STEP, 0));
-        }
-      },
-    }),
-    [goto, maxScrollUp],
-  );
-  usePanelKeymap(focusId, presentation.focused ? keymap : EMPTY_CHAT_KEYMAP);
-
-  const paneScroll = usePaneScrollBus();
-  const maxScrollUpRef = useRef(maxScrollUp);
-  maxScrollUpRef.current = maxScrollUp;
-  useEffect(
-    () =>
-      paneScroll.subscribe(focusId, (direction, amount) => {
-        setScrollUp((current) =>
-          direction === 'up'
-            ? Math.min(current + amount, maxScrollUpRef.current)
-            : Math.max(current - amount, 0),
-        );
-      }),
-    [focusId, paneScroll],
-  );
-
-  const bus = useBusClient();
-  const [tmuxFrame, setTmuxFrame] = useState('');
-  useEffect(() => {
-    if (viewMode !== 'tmux') {
-      setTmuxFrame('');
-      return;
-    }
-    const unsubscribe = bus.subscribe(
-      (event) => {
-        if (event.type !== 'tmux.frame') {
-          return;
-        }
-        const tmuxEvent: TmuxFrameEvent = event;
-        setTmuxFrame(tmuxEvent.frame);
-      },
-      { type: 'tmux.frame', agent_id: identity.agentId },
-    );
-    return unsubscribe;
-  }, [bus, identity.agentId, viewMode]);
-
-  const handleScrollUpChange = useCallback((nextScrollUp: number) => {
-    setScrollUp(nextScrollUp);
-    setGotoLine(null);
-  }, []);
-
-  const handleWindowMetricsChange = useCallback(
-    (metrics: { readonly lineCount: number; readonly maxScrollUp: number }) => {
-      setChatMetrics((current) =>
-        current.lineCount === metrics.lineCount && current.maxScrollUp === metrics.maxScrollUp
-          ? current
-          : metrics,
-      );
-    },
-    [],
-  );
-
-  return (
-    <Box
-      ref={ref}
-      width={presentation.width}
-      height={presentation.height}
-      flexDirection="column"
-      overflow="hidden"
-    >
-      <ContractChatPane
-        width={presentation.width}
-        height={presentation.height}
-        focused={highlighted}
-        title={identity.label}
-        titleExtra={
-          <>
-            <Text dimColor>{` [${chatKindLabel(identity.kind)}]`}</Text>
-            {goto.pending !== null && <Text color={theme.warning}>{` g${goto.pending}`}</Text>}
-          </>
-        }
-        footerLeft={footerFor(state, identity.agentId) ?? ''}
-        footerRight={worktreeFor(state, identity.agentId) ?? ''}
-        turns={turns}
-        viewMode={viewMode}
-        scrollUp={scrollUp}
-        gotoLine={gotoLine}
-        onScrollUpChange={handleScrollUpChange}
-        onWindowMetricsChange={handleWindowMetricsChange}
-        tmuxFrame={tmuxFrame}
-        tmuxWaitingText={TMUX_WAITING_TEXT}
-      />
-    </Box>
-  );
-});
-
 export function buildPaneRequests(input: BuildPaneRequestsInput): readonly PaneRequest[] {
   const { state, visiblePanels, focusedId } = input;
   const requests: PaneRequest[] = [];
@@ -479,7 +139,7 @@ export function buildPaneRequests(input: BuildPaneRequestsInput): readonly PaneR
   }
 
   const currentAgentId = selectActiveAgentId(state.conversations, state.roster, state.favorites);
-  const lockedPanes = selectOpenChatPanes(
+  const lockedPanes = selectOpenTranscriptPanes(
     state.roster,
     state.favorites,
     state.conversations.paneOverrides,
@@ -498,7 +158,7 @@ export function buildPaneRequests(input: BuildPaneRequestsInput): readonly PaneR
 
   let stageOrder = 1000;
   if (state.docView.open !== null) {
-    const id: PaneId = `stage:doc:${state.docView.open.name}`;
+    const id: PaneId = stageDocFocusId(state.docView.open.name);
     requests.push({
       id,
       kind: 'stageDoc',
@@ -512,17 +172,17 @@ export function buildPaneRequests(input: BuildPaneRequestsInput): readonly PaneR
 
   for (const { identity, locked } of chatPanesByAgentId.values()) {
     const current = identity.agentId === currentAgentId;
-    const id: PaneId = `stage:chat:${identity.agentId}`;
+    const id: PaneId = stageTranscriptFocusId(identity.agentId);
     const chatReapPriority = current ? 1 : locked ? 24 : 10;
     requests.push({
       id,
-      kind: 'stageChat',
+      kind: 'stageTranscript',
       region: 'centerStage',
-      sizing: STAGE_CHAT_SIZING,
+      sizing: STAGE_TRANSCRIPT_SIZING,
       reapPriority: requestPriority(id, focusedId, agedPriority(id, chatReapPriority)),
       orderKey: stageOrder++,
       source: {
-        type: 'stageChat',
+        type: 'stageTranscript',
         agentId: identity.agentId,
         locked,
         ephemeral: !locked,
@@ -557,22 +217,6 @@ function renderPanel(panelId: PanelId, presentation: PanePresentation): JSX.Elem
   }
 }
 
-function footerFor(state: AppStore, agentId: string): string | null {
-  const row = state.roster.rows.find((candidate) => candidate.agentId === agentId);
-  if (row === undefined) {
-    return null;
-  }
-  return harnessModelFooter(row.harness, row.model, META_SEP);
-}
-
-function worktreeFor(state: AppStore, agentId: string): string | null {
-  const row = state.roster.rows.find((candidate) => candidate.agentId === agentId);
-  if (row === undefined) {
-    return null;
-  }
-  return worktreeLabel(row.worktreePath ?? null);
-}
-
 export function renderPaneAllocation(
   allocation: PaneAllocation,
   context: RenderPaneAllocationContext,
@@ -583,7 +227,7 @@ export function renderPaneAllocation(
       renderPanel(request.source.panelId, presentation)
     ) : request.source.type === 'stageDoc' ? (
       context.state.docView.open === null ? null : (
-        <StageDocPaneAdapter open={context.state.docView.open} presentation={presentation} />
+        <DocumentController open={context.state.docView.open} presentation={presentation} />
       )
     ) : (
       (() => {
@@ -592,11 +236,11 @@ export function renderPaneAllocation(
           return null;
         }
         return (
-          <StageChatPaneAdapter
+          <TranscriptController
             presentation={presentation}
             identity={identity}
             state={context.state}
-            chatTarget={request.source.current}
+            activeRecipientTarget={request.source.current}
           />
         );
       })()
@@ -750,7 +394,9 @@ export function renderPaneLayoutPlan(
     }
     const rect = regionRect(center);
     const docs = center.filter((allocation) => allocation.request.kind === 'stageDoc');
-    const chats = center.filter((allocation) => allocation.request.kind === 'stageChat');
+    const transcripts = center.filter(
+      (allocation) => allocation.request.kind === 'stageTranscript',
+    );
     const renderAllocationGrid = (
       key: string,
       allocations: readonly PaneAllocation[],
@@ -810,9 +456,9 @@ export function renderPaneLayoutPlan(
         </Box>
       );
     }
-    if (docs.length > 0 && chats.length > 0) {
+    if (docs.length > 0 && transcripts.length > 0) {
       const docRect = regionRect(docs);
-      const chatRect = regionRect(chats);
+      const transcriptRect = regionRect(transcripts);
       return (
         <Box
           key="center"
@@ -826,7 +472,12 @@ export function renderPaneLayoutPlan(
           columnGap={plan.gap}
         >
           {renderAllocationGrid('center:docs', docs, docRect.width, docRect.height)}
-          {renderAllocationGrid('center:chats', chats, chatRect.width, chatRect.height)}
+          {renderAllocationGrid(
+            'center:transcripts',
+            transcripts,
+            transcriptRect.width,
+            transcriptRect.height,
+          )}
         </Box>
       );
     }
