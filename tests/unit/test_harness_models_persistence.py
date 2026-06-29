@@ -15,7 +15,9 @@ from pathlib import Path
 
 import pytest
 
+from murder.app.service.host import ServiceHost
 from murder.app.service.read_model import ServiceReadModel
+from murder.config import Config, CrowHandlerConfig, HarnessRoleConfig, ProjectConfig
 from murder.llm.harnesses import model_cache as mc
 from murder.llm.harnesses.model_cache import (
     clear_model_cache,
@@ -142,6 +144,23 @@ def test_snapshot_shape_with_rows(repo_root, db_conn):
     assert snapshot["as_of"] == "2026-06-09T15:30:00"
     assert "claude_code" in snapshot["models"]
     assert snapshot["models"]["claude_code"] == models
+
+
+def test_host_registers_live_harness_models_snapshot_rpc(repo_root):
+    """The live bus handler must be registered, not only modeled by FakeBusClient."""
+    host = ServiceHost(
+        config=Config(
+            project=ProjectConfig(name="repo"),
+            collaborator=HarnessRoleConfig(harness="codex"),
+            default_crow=HarnessRoleConfig(harness="codex"),
+            crow_handler=CrowHandlerConfig(model="test-model"),
+        ),
+        repo_root=repo_root,
+    )
+    host.read_model = ServiceReadModel(db_path(repo_root))
+    host.register_default_rpc_handlers()
+
+    assert "state.harness_models_snapshot" in host._rpc_handlers
 
 
 def test_snapshot_as_of_is_max_fetched_at(repo_root, db_conn):
