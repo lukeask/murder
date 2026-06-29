@@ -7,7 +7,11 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildFocusGraph,
+  EMPTY_FOCUS_GRAPH_STATE,
+  type FocusGraphState,
+  focusPaneGeometriesFromRects,
   navigateFocus,
+  normalizeFocusGraphRecipientTargets,
   resolveEffectiveFocus,
 } from '../../src/input/focusGraph.js';
 import type { FocusId } from '../../src/input/focusStore.js';
@@ -28,7 +32,10 @@ function rectsFor(ids: readonly FocusId[]): ReadonlyMap<FocusId, Rect> {
 }
 
 function resolveFocus(intended: FocusId, mountedIds: readonly FocusId[]): FocusId {
-  return resolveEffectiveFocus(intended, buildFocusGraph({ rects: rectsFor(mountedIds) }));
+  return resolveEffectiveFocus(
+    intended,
+    buildFocusGraph({ panes: focusPaneGeometriesFromRects(rectsFor(mountedIds)) }),
+  );
 }
 
 function mountedStagePanesOf(rects: ReadonlyMap<FocusId, Rect>): Set<StagePaneId> {
@@ -42,7 +49,7 @@ function mountedStagePanesOf(rects: ReadonlyMap<FocusId, Rect>): Set<StagePaneId
 }
 
 function focusCandidates(rects: ReadonlyMap<FocusId, Rect>): readonly FocusId[] {
-  const graph = buildFocusGraph({ rects });
+  const graph = buildFocusGraph({ panes: focusPaneGeometriesFromRects(rects) });
   return [...graph.paneVertexIds.map((id) => id as FocusId), CHAT_FOCUS];
 }
 
@@ -137,6 +144,27 @@ describe('focusStore — effective focus & re-home', () => {
     expect(focus.getState().intendedId).toBe('plans');
     focus.getState().measure('plans', UNIT_RECT);
     expect(selectEffectiveFocus(focus)).toBe('plans');
+  });
+
+  it('uses layout pane geometry over stale measured pane rects', () => {
+    const panels = createPanelStore(['plans', 'crows']);
+    const focus = createFocusStore(panels);
+    focus.getState().measure('crows', { x: 20, y: 0, width: 10, height: 4 });
+    focus
+      .getState()
+      .setPaneGeometries([
+        { id: 'plans', rect: { x: 0, y: 0, width: 10, height: 4 }, orderKey: 0 },
+      ]);
+    focus.getState().focus('crows');
+
+    expect(selectEffectiveFocus(focus)).toBe(CHAT_FOCUS);
+
+    focus
+      .getState()
+      .setPaneGeometries([
+        { id: 'crows', rect: { x: 20, y: 0, width: 10, height: 4 }, orderKey: 1 },
+      ]);
+    expect(selectEffectiveFocus(focus)).toBe('crows');
   });
 
   it('exactly one focusable is effective at all times across a toggle sequence', () => {
@@ -274,16 +302,86 @@ describe('focusStore.navigate (geometry-driven)', () => {
   });
 });
 
+describe('focusGraph — directional tiebreaks', () => {
+  const rects = new Map<FocusId, Rect>([
+    ['crows', { x: 0, y: 0, width: 10, height: 10 }],
+    ['plans', { x: 10, y: 0, width: 10, height: 5 }],
+    ['tickets', { x: 10, y: 5, width: 10, height: 5 }],
+  ]);
+
+  it('prefers previous inhabitance, then most-recent open history, then live projection order', () => {
+    const withPrevious: FocusGraphState = {
+      ...EMPTY_FOCUS_GRAPH_STATE,
+      previouslyInhabitedVertexId: 'plans',
+      openPaneIdsByOpenedAt: ['plans', 'tickets'],
+    };
+    expect(
+      navigateFocus(
+        buildFocusGraph({
+          panes: focusPaneGeometriesFromRects(rects),
+          state: withPrevious,
+        }),
+        'crows',
+        'right',
+        withPrevious,
+      ).focusId,
+    ).toBe('plans');
+
+    const withOpenHistory: FocusGraphState = {
+      ...EMPTY_FOCUS_GRAPH_STATE,
+      openPaneIdsByOpenedAt: ['plans', 'tickets'],
+    };
+    expect(
+      navigateFocus(
+        buildFocusGraph({
+          panes: focusPaneGeometriesFromRects(rects),
+          state: withOpenHistory,
+        }),
+        'crows',
+        'right',
+        withOpenHistory,
+      ).focusId,
+    ).toBe('tickets');
+
+    expect(
+      navigateFocus(
+        buildFocusGraph({
+          panes: focusPaneGeometriesFromRects(rects),
+          state: EMPTY_FOCUS_GRAPH_STATE,
+        }),
+        'crows',
+        'right',
+        EMPTY_FOCUS_GRAPH_STATE,
+      ).focusId,
+    ).toBe('plans');
+  });
+
+  it('records the vertex focus left as previous inhabitance', () => {
+    const result = navigateFocus(
+      buildFocusGraph({
+        panes: focusPaneGeometriesFromRects(rects),
+        state: EMPTY_FOCUS_GRAPH_STATE,
+      }),
+      'crows',
+      'right',
+      EMPTY_FOCUS_GRAPH_STATE,
+    );
+
+    expect(result.state.previouslyInhabitedVertexId).toBe('crows');
+  });
+});
+
 describe('focusGraph — recipient target partitions', () => {
   it('orders locked, ephemeral, and favorite-only virtual recipient targets around the active target', () => {
     const graph = buildFocusGraph({
-      rects: new Map<FocusId, Rect>([[CHAT_FOCUS, { x: 0, y: 0, width: 40, height: 3 }]]),
-      recipientTargets: {
+      panes: [],
+      chatRect: { x: 0, y: 0, width: 40, height: 3 },
+      recipientTargets: normalizeFocusGraphRecipientTargets({
         activeTargetId: 'agent-b',
         lockedVisibleTargetIds: ['agent-a'],
         ephemeralTargetId: 'agent-b',
         favoriteOnlyTargetIds: ['agent-c'],
-      },
+      }),
     });
 
     expect(graph.recipientTargetVertexIds).toEqual([

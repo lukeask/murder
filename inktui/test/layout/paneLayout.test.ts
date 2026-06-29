@@ -33,7 +33,6 @@ describe('computePaneLayout', () => {
     expect(plan.denials).toEqual([]);
     expect(plan.allocations).toHaveLength(1);
     expect(plan.allocations[0]?.rect).toMatchObject({ width: 80, height: 5 });
-    expect(plan.allocations[0]?.presentation.constraints.verticallyCramped).toBe(true);
   });
 
   it('tiles side-region panes horizontally in portrait when width can buy back height', () => {

@@ -16,8 +16,6 @@ import { type AppStoreApi, createAppStore } from '../../../src/store/store.js';
 const presentation: PanePresentation = {
   width: 44,
   height: 8,
-  density: 'full',
-  constraints: { horizontallyCramped: false, verticallyCramped: false },
   focused: true,
 };
 

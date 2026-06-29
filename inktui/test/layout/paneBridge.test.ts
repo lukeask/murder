@@ -7,7 +7,9 @@ import { ticketsSurfaceRowsFromView } from '../../src/components/panes/TicketsCo
 import { TranscriptController } from '../../src/components/panes/TranscriptController.js';
 import { treeSurfaceDataFromView } from '../../src/components/panes/TreeController.js';
 import { usageSurfaceGroupsFromState } from '../../src/components/panes/UsageController.js';
+import { CHAT_FOCUS } from '../../src/input/focusStore.js';
 import {
+  buildPaneRequests,
   renderPaneAllocation,
   renderPaneLayoutPlan,
   usagePaneSizing,
@@ -19,7 +21,8 @@ import type { CrowsView } from '../../src/selectors/crowsSelectors.js';
 import type { HistoryRowView } from '../../src/selectors/historySelectors.js';
 import type { TicketRowView } from '../../src/selectors/ticketsSelectors.js';
 import type { TransitCursor, TransitView } from '../../src/selectors/transitSelectors.js';
-import type { AppStore } from '../../src/store/store.js';
+import type { RosterRow } from '../../src/store/roster/rosterSlice.js';
+import { type AppStore, initialAppState } from '../../src/store/store.js';
 import type { UsageRow, UsageState } from '../../src/store/usage/usageSlice.js';
 import { buildTheme } from '../../src/theme/buildTheme.js';
 import { DEFAULT_THEME_ID, getPalette, getThemeMeta } from '../../src/theme/palettes.js';
@@ -51,6 +54,42 @@ function usage(rows: readonly UsageRow[]): { readonly usage: UsageState } {
   };
 }
 
+function rosterRow(overrides: Partial<RosterRow>): RosterRow {
+  return {
+    agentId: 'a-1',
+    role: 'crow',
+    ticketId: null,
+    ticketTitle: null,
+    harness: null,
+    model: null,
+    status: 'idle',
+    session: null,
+    ...overrides,
+  };
+}
+
+function appState(overrides: Partial<AppStore> = {}): AppStore {
+  return {
+    ...initialAppState,
+    actions: {} as AppStore['actions'],
+    ...overrides,
+  };
+}
+
+function isStageTranscriptRequest(request: PaneRequest): request is PaneRequest & {
+  readonly source: { readonly type: 'stageTranscript'; readonly agentId: string };
+} {
+  return request.source.type === 'stageTranscript';
+}
+
+function isStageRequest(request: PaneRequest): request is PaneRequest & {
+  readonly source:
+    | { readonly type: 'stageDoc'; readonly name: string }
+    | { readonly type: 'stageTranscript'; readonly agentId: string };
+} {
+  return request.source.type === 'stageDoc' || request.source.type === 'stageTranscript';
+}
+
 function paneRequest(overrides: Partial<PaneRequest> = {}): PaneRequest {
   return {
     id: 'plans',
@@ -75,8 +114,6 @@ function paneAllocation(request: PaneRequest): PaneAllocation {
     presentation: {
       width: 40,
       height: 8,
-      density: 'full',
-      constraints: { horizontallyCramped: false, verticallyCramped: false },
       focused: true,
     },
   };
@@ -164,6 +201,78 @@ describe('usagePaneSizing', () => {
         ],
       },
     ]);
+  });
+});
+
+describe('buildPaneRequests', () => {
+  it('assigns transcript order keys from locked-visible, favorite-only, then ephemeral target order', () => {
+    const state = appState({
+      roster: {
+        ...initialAppState.roster,
+        status: 'ready',
+        rows: [
+          rosterRow({ role: 'collaborator', agentId: 'collab', session: 'collab' }),
+          rosterRow({ role: 'planner', agentId: 'p1', session: 'murder_murder_planner_alpha' }),
+          rosterRow({
+            role: 'crow',
+            ticketId: null,
+            agentId: 'r1',
+            session: 'murder_murder_crow_claude_rogue_tony',
+          }),
+        ],
+      },
+      favorites: {
+        ...initialAppState.favorites,
+        status: 'ready',
+        ids: new Set(['p1']),
+      },
+      conversations: {
+        ...initialAppState.conversations,
+        activePaneAgentId: 'p1',
+        paneOverrides: new Map([['p1', false]]),
+      },
+    });
+
+    const requests = buildPaneRequests({
+      state,
+      visiblePanels: new Set(),
+      focusedId: CHAT_FOCUS,
+    }).filter(isStageTranscriptRequest);
+
+    expect(requests.map((request) => request.source.agentId)).toEqual(['collab', 'r1', 'p1']);
+    expect(requests.map((request) => request.orderKey)).toEqual([1000, 1001, 1002]);
+  });
+
+  it('keeps stage documents before transcript requests while ordering transcripts in the bridge', () => {
+    const state = appState({
+      roster: {
+        ...initialAppState.roster,
+        status: 'ready',
+        rows: [
+          rosterRow({ role: 'collaborator', agentId: 'collab', session: 'collab' }),
+          rosterRow({
+            role: 'crow',
+            ticketId: null,
+            agentId: 'r1',
+            session: 'murder_murder_crow_claude_rogue_tony',
+          }),
+        ],
+      },
+      docView: { ...initialAppState.docView, open: { kind: 'note', name: 'brief' } },
+    });
+
+    const requests = buildPaneRequests({
+      state,
+      visiblePanels: new Set(),
+      focusedId: CHAT_FOCUS,
+    }).filter(isStageRequest);
+
+    expect(
+      requests.map((request) =>
+        request.source.type === 'stageTranscript' ? request.source.agentId : request.source.name,
+      ),
+    ).toEqual(['brief', 'collab', 'r1']);
+    expect(requests.map((request) => request.orderKey)).toEqual([1000, 1001, 1002]);
   });
 });
 
