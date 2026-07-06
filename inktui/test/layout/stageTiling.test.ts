@@ -1,5 +1,5 @@
 /**
- * stageTiling tests — the pure doc/transcript split + transcript-grid geometry that drives the Stage layout.
+ * stageTiling tests — legacy count-only doc/transcript split + transcript-grid geometry.
  *
  * Covers the plan's stated intuitions (landscape, one document) and the portrait stacking rule, plus
  * the transcripts-only fallback and the chunking math. No React/Ink — the geometry is a pure function.

@@ -61,6 +61,8 @@ type GridLayout = {
   readonly measure: RegionMeasure;
 };
 
+type RowPattern = readonly number[];
+
 function cellCount(value: number): number {
   if (!Number.isFinite(value)) {
     return 0;
@@ -181,24 +183,95 @@ function chunkRows<T>(items: readonly T[], columns: number): readonly (readonly 
   return rows;
 }
 
-function transcriptGridColumns(
-  count: number,
-  hasDoc: boolean,
-  orientation: PaneLayoutInput['orientation'],
-): number {
-  if (count <= 1) {
+function transcriptMaxColumns(count: number, orientation: PaneLayoutInput['orientation']): number {
+  if (count <= 1 || orientation === 'portrait') {
     return 1;
   }
-  if (orientation === 'portrait') {
-    return 1;
+  return Math.min(count, 3);
+}
+
+function rowPatternKey(pattern: RowPattern): string {
+  return pattern.join(',');
+}
+
+function balancedRowPatterns(count: number, maxColumns: number): readonly RowPattern[] {
+  if (count <= 0) {
+    return [];
   }
-  if (hasDoc) {
-    return count <= 3 ? 1 : 2;
+  const safeMaxColumns = Math.max(1, Math.min(maxColumns, count));
+  const patterns: RowPattern[] = [];
+  const seen = new Set<string>();
+  for (let rowCount = 1; rowCount <= count; rowCount += 1) {
+    const base = Math.floor(count / rowCount);
+    const remainder = count % rowCount;
+    if (base === 0 || base + (remainder > 0 ? 1 : 0) > safeMaxColumns) {
+      continue;
+    }
+    const pattern = Array.from({ length: rowCount }, (_, row) => base + (row < remainder ? 1 : 0));
+    const key = rowPatternKey(pattern);
+    if (!seen.has(key)) {
+      seen.add(key);
+      patterns.push(pattern);
+    }
   }
-  if (count <= 2) {
-    return count;
+  return patterns;
+}
+
+function rowPatternMeasure(
+  requests: readonly NormalizedRequest[],
+  pattern: RowPattern,
+  gap: number,
+): RegionMeasure {
+  let cursor = 0;
+  const rowMeasures = pattern.map((columns) => {
+    const row = requests.slice(cursor, cursor + columns);
+    cursor += columns;
+    const gapTotal = gap * Math.max(0, row.length - 1);
+    return {
+      min: {
+        width: sum(row.map((request) => request.sizing.min.width)) + gapTotal,
+        height: max(row.map((request) => request.sizing.min.height)),
+      },
+      preferred: {
+        width: sum(row.map((request) => request.sizing.preferred.width)) + gapTotal,
+        height: max(row.map((request) => request.sizing.preferred.height)),
+      },
+    };
+  });
+  const rowGapTotal = gap * Math.max(0, rowMeasures.length - 1);
+  return {
+    min: {
+      width: max(rowMeasures.map((measure) => measure.min.width)),
+      height: sum(rowMeasures.map((measure) => measure.min.height)) + rowGapTotal,
+    },
+    preferred: {
+      width: max(rowMeasures.map((measure) => measure.preferred.width)),
+      height: sum(rowMeasures.map((measure) => measure.preferred.height)) + rowGapTotal,
+    },
+  };
+}
+
+function adaptiveRowsMeasure(
+  requests: readonly NormalizedRequest[],
+  maxColumns: number,
+  gap: number,
+): RegionMeasure {
+  if (requests.length === 0) {
+    return { min: { width: 0, height: 0 }, preferred: { width: 0, height: 0 } };
   }
-  return count <= 6 ? 2 : 3;
+  const measures = balancedRowPatterns(requests.length, maxColumns).map((pattern) =>
+    rowPatternMeasure(requests, pattern, gap),
+  );
+  return {
+    min: {
+      width: Math.min(...measures.map((measure) => measure.min.width)),
+      height: Math.min(...measures.map((measure) => measure.min.height)),
+    },
+    preferred: {
+      width: Math.min(...measures.map((measure) => measure.preferred.width)),
+      height: Math.min(...measures.map((measure) => measure.preferred.height)),
+    },
+  };
 }
 
 function gridMeasure(
@@ -251,16 +324,16 @@ function centerMeasure(
   const docs = requests.filter((request) => request.kind === 'stageDoc');
   const nonDocs = requests.filter((request) => request.kind !== 'stageDoc');
   if (docs.length === 0) {
-    return gridMeasure(nonDocs, transcriptGridColumns(nonDocs.length, false, orientation), gap);
+    return adaptiveRowsMeasure(nonDocs, transcriptMaxColumns(nonDocs.length, orientation), gap);
   }
   if (nonDocs.length === 0) {
     return stackMeasure(docs, 'height', gap);
   }
 
   const docMeasure = stackMeasure(docs, 'height', gap);
-  const transcriptMeasure = gridMeasure(
+  const transcriptMeasure = adaptiveRowsMeasure(
     nonDocs,
-    transcriptGridColumns(nonDocs.length, true, orientation),
+    transcriptMaxColumns(nonDocs.length, orientation),
     gap,
   );
   return {
@@ -542,6 +615,139 @@ function layoutBestGrid(
   return best;
 }
 
+function layoutRowsPattern(
+  requests: readonly NormalizedRequest[],
+  rect: Rect,
+  pattern: RowPattern,
+  gap: number,
+  focusedPaneId: PaneId | undefined,
+): GridLayout | null {
+  if (requests.length === 0) {
+    return {
+      allocations: [],
+      measure: { min: { width: 0, height: 0 }, preferred: { width: 0, height: 0 } },
+    };
+  }
+
+  const rowSegments: AxisSegment[] = [];
+  let requestCursor = 0;
+  for (let row = 0; row < pattern.length; row += 1) {
+    const columns = pattern[row] ?? 0;
+    const rowItems = requests.slice(requestCursor, requestCursor + columns);
+    requestCursor += columns;
+    rowSegments.push({
+      key: `row:${row}`,
+      min: max(rowItems.map((request) => request.sizing.min.height)),
+      preferred: max(rowItems.map((request) => request.sizing.preferred.height)),
+      fillWeight: 1,
+    });
+  }
+
+  const rowSizes = allocateAxis(rect.height - gap * Math.max(0, pattern.length - 1), rowSegments);
+  if (rowSizes === null) {
+    return null;
+  }
+
+  const allocations: PaneAllocation[] = [];
+  let y = rect.y;
+  requestCursor = 0;
+  for (let row = 0; row < pattern.length; row += 1) {
+    const columns = pattern[row] ?? 0;
+    const rowItems = requests.slice(requestCursor, requestCursor + columns);
+    requestCursor += columns;
+    const rowHeight = rowSizes[`row:${row}`] ?? 0;
+    const columnSegments = rowItems.map((request, column) => ({
+      key: `column:${row}:${column}`,
+      min: request.sizing.min.width,
+      preferred: request.sizing.preferred.width,
+      fillWeight: 1,
+    }));
+    const columnSizes = allocateAxis(
+      rect.width - gap * Math.max(0, rowItems.length - 1),
+      columnSegments,
+    );
+    if (columnSizes === null) {
+      return null;
+    }
+
+    let x = rect.x;
+    for (let column = 0; column < rowItems.length; column += 1) {
+      const request = rowItems[column];
+      if (request === undefined) {
+        continue;
+      }
+      const width = columnSizes[`column:${row}:${column}`] ?? 0;
+      if (width < request.sizing.min.width || rowHeight < request.sizing.min.height) {
+        return null;
+      }
+      allocations.push(allocationFor(request, { x, y, width, height: rowHeight }, focusedPaneId));
+      x += width + gap;
+    }
+    y += rowHeight + gap;
+  }
+
+  return {
+    allocations,
+    measure: rowPatternMeasure(requests, pattern, gap),
+  };
+}
+
+function transcriptLayoutScore(layout: GridLayout): number {
+  if (layout.allocations.length === 0) {
+    return 0;
+  }
+
+  const fitRatios = layout.allocations.map((allocation) => {
+    const preferred = allocation.request.sizing.preferred;
+    return Math.min(
+      allocation.rect.width / preferred.width,
+      allocation.rect.height / preferred.height,
+      1,
+    );
+  });
+  const minFit = Math.min(...fitRatios);
+  const avgFit = sum(fitRatios) / fitRatios.length;
+  const areas = layout.allocations.map(
+    (allocation) => allocation.rect.width * allocation.rect.height,
+  );
+  const avgArea = sum(areas) / areas.length;
+  const areaImbalance = avgArea <= 0 ? 0 : (Math.max(...areas) - Math.min(...areas)) / avgArea;
+  const aspectPenalty =
+    sum(
+      layout.allocations.map((allocation) => {
+        const preferred = allocation.request.sizing.preferred;
+        const target = preferred.width / preferred.height;
+        const actual = allocation.rect.width / allocation.rect.height;
+        return Math.abs(Math.log(Math.max(actual, 0.01) / Math.max(target, 0.01)));
+      }),
+    ) / layout.allocations.length;
+
+  return minFit * 1000 + avgFit * 100 - areaImbalance * 20 - aspectPenalty * 8;
+}
+
+function layoutAdaptiveTranscriptRows(
+  requests: readonly NormalizedRequest[],
+  rect: Rect,
+  maxColumns: number,
+  gap: number,
+  focusedPaneId: PaneId | undefined,
+): readonly PaneAllocation[] | null {
+  let best: GridLayout | null = null;
+  let bestScore = Number.NEGATIVE_INFINITY;
+  for (const pattern of balancedRowPatterns(requests.length, maxColumns)) {
+    const attempt = layoutRowsPattern(requests, rect, pattern, gap, focusedPaneId);
+    if (attempt === null) {
+      continue;
+    }
+    const score = transcriptLayoutScore(attempt);
+    if (score > bestScore) {
+      best = attempt;
+      bestScore = score;
+    }
+  }
+  return best?.allocations ?? null;
+}
+
 function layoutCenter(
   requests: readonly NormalizedRequest[],
   rect: Rect,
@@ -556,23 +762,22 @@ function layoutCenter(
   const docs = requests.filter((request) => request.kind === 'stageDoc');
   const nonDocs = requests.filter((request) => request.kind !== 'stageDoc');
   if (docs.length === 0) {
-    const grid = layoutBestGrid(
+    return layoutAdaptiveTranscriptRows(
       nonDocs,
       rect,
-      transcriptGridColumns(nonDocs.length, false, orientation),
+      transcriptMaxColumns(nonDocs.length, orientation),
       gap,
       focusedPaneId,
     );
-    return grid?.allocations ?? null;
   }
   if (nonDocs.length === 0) {
     return layoutStack(docs, rect, 'height', gap, focusedPaneId);
   }
 
   const docMeasure = stackMeasure(docs, 'height', gap);
-  const transcriptMeasure = gridMeasure(
+  const transcriptMeasure = adaptiveRowsMeasure(
     nonDocs,
-    transcriptGridColumns(nonDocs.length, true, orientation),
+    transcriptMaxColumns(nonDocs.length, orientation),
     gap,
   );
   const split = allocateAxis(rect.width - gap, [
@@ -606,17 +811,17 @@ function layoutCenter(
     height: rect.height,
   };
   const docAllocations = layoutStack(docs, docRect, 'height', gap, focusedPaneId);
-  const transcriptGrid = layoutBestGrid(
+  const transcriptAllocations = layoutAdaptiveTranscriptRows(
     nonDocs,
     transcriptRect,
-    transcriptGridColumns(nonDocs.length, true, orientation),
+    transcriptMaxColumns(nonDocs.length, orientation),
     gap,
     focusedPaneId,
   );
-  if (docAllocations === null || transcriptGrid === null) {
+  if (docAllocations === null || transcriptAllocations === null) {
     return null;
   }
-  return [...docAllocations, ...transcriptGrid.allocations];
+  return [...docAllocations, ...transcriptAllocations];
 }
 
 function layoutRegion(

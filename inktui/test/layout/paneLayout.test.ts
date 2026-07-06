@@ -18,6 +18,27 @@ function request(overrides: Partial<PaneRequest> = {}): PaneRequest {
   };
 }
 
+function transcriptRequest(id: string, orderKey: number): PaneRequest {
+  return request({
+    id,
+    kind: 'stageTranscript',
+    region: 'centerStage',
+    sizing: {
+      min: { width: 30, height: 5 },
+      preferred: { width: 56, height: 18 },
+    },
+    reapPriority: 10,
+    orderKey,
+    source: {
+      type: 'stageTranscript',
+      agentId: id,
+      locked: true,
+      ephemeral: false,
+      current: false,
+    },
+  });
+}
+
 describe('computePaneLayout', () => {
   it('admits a high-width low-height usage pane at its compact minimum', () => {
     const plan = computePaneLayout({
@@ -149,5 +170,67 @@ describe('computePaneLayout', () => {
     expect(plan.allocations.map((allocation) => allocation.request.id)).toEqual(['usage']);
     expect(plan.denials.map((denial) => denial.request.id)).toEqual(['tree']);
     expect(plan.denials[0]?.reason).toBe('preemptedByReapPriority');
+  });
+
+  it('lays out three transcript panes in one row when the stage is wide and shallow', () => {
+    const plan = computePaneLayout({
+      terminal: { width: 170, height: 18 },
+      chrome: { topBar: 0, bottomBar: 0, chatInput: 0 },
+      body: { width: 170, height: 18 },
+      orientation: 'landscape',
+      gap: 1,
+      requests: [
+        transcriptRequest('agent-a', 0),
+        transcriptRequest('agent-b', 1),
+        transcriptRequest('agent-c', 2),
+      ],
+    });
+
+    expect(plan.denials).toEqual([]);
+    expect(plan.stage.transcripts.map((allocation) => allocation.rect.y)).toEqual([0, 0, 0]);
+    expect(plan.stage.transcripts.map((allocation) => allocation.rect.height)).toEqual([
+      18, 18, 18,
+    ]);
+  });
+
+  it('uses the full second row for the third transcript when two rows fit better', () => {
+    const plan = computePaneLayout({
+      terminal: { width: 100, height: 30 },
+      chrome: { topBar: 0, bottomBar: 0, chatInput: 0 },
+      body: { width: 100, height: 30 },
+      orientation: 'landscape',
+      gap: 1,
+      requests: [
+        transcriptRequest('agent-a', 0),
+        transcriptRequest('agent-b', 1),
+        transcriptRequest('agent-c', 2),
+      ],
+    });
+
+    expect(plan.denials).toEqual([]);
+    expect(plan.stage.transcripts.map((allocation) => allocation.rect)).toEqual([
+      { x: 0, y: 0, width: 50, height: 15 },
+      { x: 51, y: 0, width: 49, height: 15 },
+      { x: 0, y: 16, width: 100, height: 14 },
+    ]);
+  });
+
+  it('stacks three transcript panes when the stage is too narrow for two columns', () => {
+    const plan = computePaneLayout({
+      terminal: { width: 60, height: 50 },
+      chrome: { topBar: 0, bottomBar: 0, chatInput: 0 },
+      body: { width: 60, height: 50 },
+      orientation: 'landscape',
+      gap: 1,
+      requests: [
+        transcriptRequest('agent-a', 0),
+        transcriptRequest('agent-b', 1),
+        transcriptRequest('agent-c', 2),
+      ],
+    });
+
+    expect(plan.denials).toEqual([]);
+    expect(plan.stage.transcripts.map((allocation) => allocation.rect.x)).toEqual([0, 0, 0]);
+    expect(plan.stage.transcripts.map((allocation) => allocation.rect.width)).toEqual([60, 60, 60]);
   });
 });

@@ -1,11 +1,9 @@
 /**
- * `stageTiling` — the pure geometry of how the Stage arranges documents and transcript panes.
+ * `stageTiling` — count-only helpers for the original Stage transcript tiling rules.
  *
- * The Stage holds two kinds of thing: **documents** (left-aligned in landscape / top in portrait) and
- * **transcript panes** (right-aligned in landscape / bottom in portrait). How they split the Stage —
- * and how the transcripts tile among themselves — is a pure function of *how many* of each there are and the
- * terminal {@link Orientation}. Isolating that decision here (no React, no Ink) keeps the rule
- * unit-testable and lets the pane bridge render the result without layout logic in pane components.
+ * Runtime allocation now lives in `paneLayout.ts`, where transcript panes are tiled against the actual
+ * Stage rectangle. This module is kept as a small pure reference for the older count/orientation-only
+ * rules and for tests that document the original plan intuition.
  *
  * ## The intuitions this encodes (landscape, one document)
  *  - **1 doc + 1 transcript** — side by side, equal halves.
