@@ -59,12 +59,36 @@ def murder_owned_anchors(
         normalized = normalize_prompt_match(text)
         if normalized:
             anchors.add(normalized)
+            anchors.update(_anchor_suffixes_from_dirty_user_text(normalized))
     return anchors
 
 
 # Box-drawing / block glyphs whose presence in a block marks it as preformatted
 # (tables, frames, trees). Shared default; grammars may extend via box_chars.
 _DEFAULT_BOX_CHARS = frozenset("┌┐└┘├┤┬┴┼─│┃━═╋╔╗╚╝║╠╣╦╩╬▌▐█▏▕╭╮╯╰")
+_ANCHOR_SUFFIX_MIN_WORDS = 8
+_ANCHOR_SUFFIX_MIN_CHARS = 48
+
+
+def _anchor_suffixes_from_dirty_user_text(normalized: str) -> set[str]:
+    """Long suffix anchors for user turns polluted by copied TUI chrome.
+
+    The send boundary records the exact command text, but a user can paste a
+    selected bit of the murder TUI into chat. Cursor may echo only the prose tail
+    of that paste, without the copied borders/footer. When ANSI role marks are
+    missing, exact anchor matching then fails and the echoed prose tail is
+    mislabelled as assistant. Keep this fallback narrow: only box-drawing
+    polluted user turns get suffix anchors, and only substantial suffixes.
+    """
+    if not any(ch in normalized for ch in _DEFAULT_BOX_CHARS):
+        return set()
+    words = normalized.split()
+    out: set[str] = set()
+    for i in range(1, max(1, len(words) - _ANCHOR_SUFFIX_MIN_WORDS + 1)):
+        suffix = " ".join(words[i:])
+        if len(suffix) >= _ANCHOR_SUFFIX_MIN_CHARS:
+            out.add(suffix)
+    return out
 
 # A bullet/numbered list item lead: "- ", "* ", "1. ", "2) ", …
 _LIST_LEAD_RE = re.compile(r"^\s*([-*]\s|\d+[.)]\s)")

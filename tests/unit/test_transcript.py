@@ -1102,6 +1102,35 @@ def test_cursor_system_prompt_dropped_via_anchors():
     assert any(s["type"] == "user" and s["text"] == "test" for s in doc["segments"])
 
 
+def test_cursor_dirty_user_anchor_drops_clean_suffix_echo():
+    """If a sent message contains copied murder TUI chrome, Cursor can echo only
+    the clean prose suffix. In no-ANSI degraded mode that suffix must still be
+    recognised as user-authored content, not appended as assistant output."""
+    dirty_user = (
+        "╰─ Codex ◇ GPT-5.5 ───────── main ─╯"
+        "┗━ Cursor ━━━━━━━━━━━━━━━━━━━ main ━┛ "
+        "is the bottom lines of current murder TUI, note that codex has model "
+        "sohown but cursor-cli does not have the model shown. Please investigate why"
+    )
+    clean_echo = (
+        "current murder TUI, note that codex has model sohown but cursor-cli does "
+        "not have the model shown. Please investigate why"
+    )
+    frame = (
+        f"  {clean_echo}\n\n"
+        "  The footer reads the roster model, not Cursor's live status bar.\n\n"
+        "  Composer 2.5 · 7.3%                                    Auto-run\n"
+        "  ~/Documents/code/murder · main\n"
+    )
+
+    doc = transcripts.parse_frames("cursor", [frame], user_texts=[dirty_user])
+
+    assert [s["text"] for s in doc["segments"] if s["type"] == "assistant"] == [
+        "The footer reads the roster model, not Cursor's live status bar."
+    ]
+    assert any(s["type"] == "user" and s["text"] == clean_echo for s in doc["segments"])
+
+
 def test_cursor_user_blocks_classified_by_colour_marker():
     """The primary signal: Cursor colour-codes user-input blocks. With the
     background-colour escapes preserved, user turns are recognised with no
