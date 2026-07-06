@@ -610,7 +610,14 @@ class Orchestrator:
         reason = f"[crow ASK] {ask[:300]}"
         await self._escalations().escalate_to_user(reason, severity=2, ticket_id=ticket_id)
 
-    async def ensure_planning_agent(self, plan_name: str) -> str:
+    async def ensure_planning_agent(
+        self,
+        plan_name: str,
+        *,
+        harness: str | None = None,
+        model: str | None = None,
+        effort: str | None = None,
+    ) -> str:
         """Return the agent_id of a live planning agent for plan_name,
         spawning the agent + its handler if needed."""
         assert self.rt.db is not None
@@ -627,15 +634,22 @@ class Orchestrator:
                     await self.spawn_planning_handler(plan_name, agent.session)
                 return agent_id
             cfg = self.rt.config.planner
+            resolved_harness = (harness or cfg.harness).strip()
+            resolved_model = cfg.startup_model if model is None else (model.strip() or None)
+            resolved_effort = cfg.startup_effort if effort is None else (
+                effort.strip() if isinstance(effort, str) and effort.strip() else None
+            )
             startup_prompt = self.briefs.build(
-                role=AgentRole.PLANNER, harness_name=cfg.harness, plan_name=plan_name
+                role=AgentRole.PLANNER,
+                harness_name=resolved_harness,
+                plan_name=plan_name,
             )
             spec = AgentSpec(
                 role=AgentRole.PLANNER,
                 scope=AgentScope(plan_name=plan_name),
-                harness=cfg.harness,
-                model=cfg.startup_model,
-                effort=cfg.startup_effort,
+                harness=resolved_harness,
+                model=resolved_model,
+                effort=resolved_effort,
                 startup_prompt=startup_prompt,
             )
             handle = await spawn_agent(spec, rt=self.rt, event_sink=self.rt.event_sink)
@@ -650,7 +664,57 @@ class Orchestrator:
             # barrier — we proceed after the timeout regardless.
             await self._await_session_ready(handle.session_name)
             await self.spawn_planning_handler(plan_name, handle.session_name)
+            await self.rt.publish_snapshot(Entity.AGENT, agent_id)
             return agent_id
+
+    async def spawn_planner(
+        self,
+        plan_name: str,
+        harness: str,
+        model: str = "",
+        effort: str | None = None,
+    ) -> str:
+        """Start (or return) the per-plan planning agent for ``plan_name``.
+
+        ``harness`` is required at the command boundary (the UI supplies the
+        effective planner harness from settings). ``model``/``effort`` are
+        optional overrides; empty model falls through to role config / adapter
+        defaults.
+        """
+        harness_kind = harness.strip()
+        if not harness_kind:
+            raise ValueError("spawn_planner requires harness")
+        plan = plan_name.strip()
+        if not plan:
+            raise ValueError("spawn_planner requires plan_name")
+        model_override = model.strip() if isinstance(model, str) else ""
+        return await self.ensure_planning_agent(
+            plan,
+            harness=harness_kind,
+            model=model_override,
+            effort=effort,
+        )
+
+    async def spawn_planner_command(self, payload: dict[str, Any]) -> dict[str, Any]:
+        plan_name = payload.get("plan_name")
+        harness = payload.get("harness")
+        model = payload.get("model")
+        effort = payload.get("effort")
+        if not isinstance(plan_name, str) or not plan_name.strip():
+            raise ValueError("planner.spawn requires plan_name")
+        if not isinstance(harness, str) or not harness.strip():
+            raise ValueError("planner.spawn requires harness")
+        if model is not None and not isinstance(model, str):
+            raise ValueError("planner.spawn model must be a string")
+        if effort is not None and not isinstance(effort, str):
+            raise ValueError("planner.spawn effort must be a string")
+        agent_id = await self.spawn_planner(
+            plan_name.strip(),
+            harness.strip(),
+            model if isinstance(model, str) else "",
+            effort,
+        )
+        return {"handled": True, "agent_id": agent_id}
 
     async def _await_session_ready(
         self, session_name: str, *, timeout_s: float = 5.0, interval_s: float = 0.25

@@ -79,6 +79,8 @@ class OrchestratorCommands(Protocol):
 
     async def spawn_rogue_command(self, payload: dict[str, Any]) -> dict[str, Any]: ...
 
+    async def spawn_planner_command(self, payload: dict[str, Any]) -> dict[str, Any]: ...
+
     async def reconfigure_collaborator(self) -> dict[str, Any]: ...
 
 
@@ -296,6 +298,10 @@ async def _spawn_rogue(orch: OrchestratorCommands, payload: dict[str, Any]) -> d
     return await orch.spawn_rogue_command(dict(payload))
 
 
+async def _spawn_planner(orch: OrchestratorCommands, payload: dict[str, Any]) -> dict[str, Any]:
+    return await orch.spawn_planner_command(dict(payload))
+
+
 async def _reconfigure_collaborator(
     orch: OrchestratorCommands, payload: dict[str, Any]  # noqa: ARG001
 ) -> dict[str, Any]:
@@ -331,6 +337,7 @@ _HANDLERS: dict[str, Handler] = {
     "ticket.quick_kick": _quick_kick,
     "ticket.quick_create": _quick_create,
     "crow.spawn_rogue": _spawn_rogue,
+    "planner.spawn": _spawn_planner,
     "collaborator.reconfigure": _reconfigure_collaborator,
 }
 

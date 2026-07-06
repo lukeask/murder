@@ -103,6 +103,9 @@ class _StubOrchestrator:
     async def spawn_rogue_command(self, _payload: dict[str, Any]) -> dict[str, Any]:
         return {"handled": True}
 
+    async def spawn_planner_command(self, _payload: dict[str, Any]) -> dict[str, Any]:
+        return {"handled": True}
+
     async def reconfigure_collaborator(self) -> dict[str, Any]:
         return {"handled": True}
 
