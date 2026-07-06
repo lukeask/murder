@@ -530,8 +530,33 @@ class RpcArgs(BaseModel):
     timeout_s: float = 30.0
 
 
+class HydrateArgs(BaseModel):
+    topics: list[str] = Field(default_factory=lambda: ["all"])
+    cursor: int | None = None
+    timeout_s: float = 30.0
+
+
+class HydrateReplayEvent(BaseModel):
+    seq: int
+    event: BusEvent
+
+
+class HydrateReply(BaseModel):
+    snapshots: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    cursor: int
+    mode: Literal["cold", "resume", "snapshot_fallback"]
+    replay: list[HydrateReplayEvent] = Field(default_factory=list)
+
+
 class AckBody(BaseModel):
-    kind: Literal["subscribed", "replay_done", "rpc_reply", "pong", "published"]
+    kind: Literal[
+        "subscribed",
+        "replay_done",
+        "rpc_reply",
+        "hydrate_reply",
+        "pong",
+        "published",
+    ]
     watermark: int | None = None
     result: dict[str, Any] | None = None
 
@@ -572,6 +597,7 @@ class HelloMessage(_BaseMessage):
 class PubMessage(_BaseMessage):
     op: Literal["pub"] = "pub"
     event: BusEvent
+    seq: int | None = None
 
 
 class SubMessage(_BaseMessage):
@@ -582,6 +608,11 @@ class SubMessage(_BaseMessage):
 class RpcMessage(_BaseMessage):
     op: Literal["rpc"] = "rpc"
     args: RpcArgs
+
+
+class HydrateMessage(_BaseMessage):
+    op: Literal["hydrate"] = "hydrate"
+    args: HydrateArgs
 
 
 class AckMessage(_BaseMessage):
@@ -600,7 +631,14 @@ class WakeMessage(_BaseMessage):
 
 
 WireMessage = Annotated[
-    HelloMessage | PubMessage | SubMessage | RpcMessage | AckMessage | ErrMessage | WakeMessage,
+    HelloMessage
+    | PubMessage
+    | SubMessage
+    | RpcMessage
+    | HydrateMessage
+    | AckMessage
+    | ErrMessage
+    | WakeMessage,
     Field(discriminator="op"),
 ]
 
@@ -660,6 +698,9 @@ __all__ = [
     "HelloBody",
     "SubArgs",
     "RpcArgs",
+    "HydrateArgs",
+    "HydrateReplayEvent",
+    "HydrateReply",
     "AckBody",
     "ErrBody",
     "WakeBody",
@@ -667,6 +708,7 @@ __all__ = [
     "PubMessage",
     "SubMessage",
     "RpcMessage",
+    "HydrateMessage",
     "AckMessage",
     "ErrMessage",
     "WakeMessage",

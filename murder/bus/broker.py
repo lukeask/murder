@@ -14,7 +14,7 @@ import logging
 import sqlite3
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Protocol
 from uuid import UUID, uuid5
 
@@ -24,6 +24,9 @@ from murder.bus.protocol import BUS_EVENT_ADAPTER, BusEvent, EventFilter
 # events-table row when the originating commands row is gone (see
 # ``_lookup_command_id``). Fixed so replay is reproducible across processes.
 _COMMAND_ID_NAMESPACE = UUID("6f1d2c3a-0000-4000-8000-636d646e7400")
+_DEFAULT_RETENTION_MIN_EVENTS = 20_000
+_DEFAULT_RETENTION_MAX_AGE_DAYS = 7
+_DEFAULT_RETENTION_CHECK_INTERVAL = 512
 
 LOGGER = logging.getLogger(__name__)
 
@@ -162,14 +165,26 @@ class DurableBroker:
         db_conn: sqlite3.Connection,
         *,
         poll_interval_s: float = 0.05,
+        retention_min_events: int = _DEFAULT_RETENTION_MIN_EVENTS,
+        retention_max_age_days: int = _DEFAULT_RETENTION_MAX_AGE_DAYS,
+        retention_check_interval: int = _DEFAULT_RETENTION_CHECK_INTERVAL,
     ) -> None:
         self._bus = bus
         self._db = db_conn
         self._poll_interval_s = poll_interval_s
         self._rpc_handlers: dict[str, Any] = {}
+        self._retention_min_events = retention_min_events
+        self._retention_max_age = timedelta(days=retention_max_age_days)
+        self._retention_check_interval = max(1, retention_check_interval)
+        self._publishes_since_retention = 0
+        self._ensure_storage()
 
     async def publish(self, event: BusEvent) -> None:
         await self._bus.publish(event)
+        self._publishes_since_retention += 1
+        if self._publishes_since_retention >= self._retention_check_interval:
+            self._publishes_since_retention = 0
+            self.prune_retained_events()
 
     async def subscribe(
         self,
@@ -227,6 +242,66 @@ class DurableBroker:
         row = self._db.execute("SELECT COALESCE(MAX(id), 0) AS max_id FROM events").fetchone()
         return int(row["max_id"] if row is not None else 0)
 
+    def current_max_id(self) -> int:
+        """Return the current durable log position."""
+        return self.watermark()
+
+    def oldest_event_id(self) -> int | None:
+        """Return the oldest retained event id, or ``None`` when the log is empty."""
+        row = self._db.execute("SELECT MIN(id) AS min_id FROM events").fetchone()
+        if row is None or row["min_id"] is None:
+            return None
+        return int(row["min_id"])
+
+    def is_cursor_retained(self, cursor: int) -> bool:
+        """Return whether replaying from ``cursor`` can be satisfied from retention.
+
+        A cursor points at the last event the client has observed. If the log's
+        oldest retained row is ``N``, cursor ``N - 1`` is still valid because
+        replay starts at ``id > cursor``.
+        """
+        if cursor < 0:
+            return False
+        watermark = self.watermark()
+        if cursor > watermark:
+            return False
+        oldest_id = self.oldest_event_id()
+        if oldest_id is None:
+            return cursor == 0
+        return cursor >= oldest_id - 1
+
+    def prune_retained_events(self, *, now: datetime | None = None) -> int:
+        """Apply event-log retention once and return the number of deleted rows.
+
+        This produces the same retained set as repeatedly deleting the oldest
+        event while the oldest event is older than the configured age and the
+        log has more than the configured minimum count. The delete is batched
+        into one statement so publish-triggered maintenance stays cheap.
+        """
+        count_row = self._db.execute("SELECT COUNT(*) AS n_events FROM events").fetchone()
+        n_events = int(count_row["n_events"] if count_row is not None else 0)
+        overage = n_events - self._retention_min_events
+        if overage <= 0:
+            return 0
+
+        reference = now or datetime.now(timezone.utc)
+        cutoff = reference - self._retention_max_age
+        cutoff_text = cutoff.isoformat(timespec="seconds")
+        cur = self._db.execute(
+            """
+            DELETE FROM events
+             WHERE id IN (
+                SELECT id
+                  FROM events
+                 WHERE ts < ?
+                 ORDER BY id ASC
+                 LIMIT ?
+             )
+            """,
+            (cutoff_text, overage),
+        )
+        return int(cur.rowcount if cur.rowcount is not None else 0)
+
     def replay(
         self,
         filter: EventFilter | None = None,
@@ -241,6 +316,9 @@ class DurableBroker:
             "FROM events WHERE id > ?"
         )
         params: list[Any] = [since_id]
+        if filter is not None and filter.type is not None:
+            sql += " AND type = ?"
+            params.append(filter.type)
         if until_id is not None:
             sql += " AND id <= ?"
             params.append(until_id)
@@ -276,6 +354,16 @@ class DurableBroker:
                     yield row_id, event
                 continue
             await asyncio.sleep(self._poll_interval_s)
+
+    def _ensure_storage(self) -> None:
+        row = self._db.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'events'"
+        ).fetchone()
+        if row is None:
+            return
+        self._db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_events_type_id ON events(type, id)"
+        )
 
     def _event_from_row(self, row: sqlite3.Row) -> BusEvent:
         payload_raw = row["payload_json"]

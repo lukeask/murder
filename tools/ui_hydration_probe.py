@@ -2,9 +2,8 @@
 """Pretend to be a fresh TUI/WebUI client and time initial data hydration.
 
 Connects to the murder supervisor bus for a project repo (a directory containing
-``.murder``), performs the same hello handshake, subscriptions, and eager
-``primeSlices`` RPC pulls that a real Ink/Web client issues on (re)connect, and
-logs every inbound frame with monotonic timestamps until hydration finishes.
+``.murder``), performs the hello handshake and the UI ``hydrate`` operation,
+and logs every inbound frame with monotonic timestamps until hydration finishes.
 
 Usage::
 
@@ -36,41 +35,18 @@ from murder.bus.protocol import (
     AckMessage,
     ClientKind,
     ErrMessage,
-    EventFilter,
     HelloBody,
     HelloMessage,
     PubMessage,
-    RpcArgs,
-    RpcMessage,
-    SubArgs,
-    SubMessage,
     WakeMessage,
 )
 from murder.bus.transport_socket import UdsTransport
 from murder.state.storage.paths import MURDER_DIR_NAME
 from murder.state.storage.service_registry import socket_path_for_repo
 
-# Mirrors inktui `primeSlices` + store.ts subscription filters.
-SUBSCRIPTIONS: tuple[tuple[str, EventFilter], ...] = (
-    ("state.snapshot", EventFilter(type="state.snapshot")),
-    ("conversation.block", EventFilter(type="conversation.block")),
-    ("conversation.state", EventFilter(type="conversation.state")),
-    ("error", EventFilter(type="error")),
-)
-
-# Mirrors inktui `primeSlices` eager pulls. `state.schedule_snapshot` is issued
-# twice in the real client (usage + tickets slices).
-PRIME_RPCS: tuple[tuple[str, str], ...] = (
-    ("roster", "state.crow_snapshot"),
-    ("usage", "state.schedule_snapshot"),
-    ("tickets", "state.schedule_snapshot"),
-    ("conversations", "state.conversations_snapshot"),
-    ("favorites", "tui.load_favorites"),
-    ("templates", "tui.load_templates"),
-    ("workflows", "tui.load_workflows"),
-    ("themes", "tui.load_themes"),
-    ("settings", "settings.get"),
-)
+# Mirrors the hydrate contract's "all" convenience. The server owns the exact
+# snapshot assembly and tail attachment for these UI topics.
+HYDRATE_TOPICS: tuple[str, ...] = ("all",)
 
 DEFAULT_RPC_TIMEOUT_S = 30.0
 
@@ -84,41 +60,6 @@ def _resolve_repo(path: Path) -> Path:
 
 def _json_size(value: Any) -> int:
     return len(json.dumps(value, default=str))
-
-
-def _unwrap_rpc_result(target: str, result: dict[str, Any] | None) -> dict[str, Any] | None:
-    if result is None:
-        return None
-    if target.startswith("state.") and result.get("ok") is True and "value" in result:
-        value = result["value"]
-        return value if isinstance(value, dict) else {"value": value}
-    return result
-
-
-def _summarize_result(target: str, result: dict[str, Any] | None) -> dict[str, Any]:
-    payload = _unwrap_rpc_result(target, result)
-    if not payload:
-        return {"bytes": 0, "keys": []}
-    summary: dict[str, Any] = {"bytes": _json_size(payload), "keys": sorted(payload)}
-    if target == "state.crow_snapshot":
-        summary["sessions"] = len(payload.get("sessions") or [])
-    elif target == "state.schedule_snapshot":
-        summary["active_tickets"] = len(payload.get("active") or [])
-        summary["usage_gauges"] = len(payload.get("usage_gauges") or [])
-    elif target == "state.conversations_snapshot":
-        agents = payload.get("agents") or []
-        summary["agents"] = len(agents)
-        summary["transcript_blocks"] = sum(len(a.get("blocks") or []) for a in agents)
-    elif target.startswith("tui.load_"):
-        for key in ("favorites", "templates", "workflows", "themes"):
-            if key in payload:
-                items = payload[key]
-                summary[key] = len(items) if isinstance(items, list) else 1
-    elif target == "settings.get":
-        settings = payload.get("settings")
-        if isinstance(settings, dict):
-            summary["settings_keys"] = sorted(settings)
-    return summary
 
 
 def _summarize_pub(event: dict[str, Any]) -> dict[str, Any]:
@@ -145,10 +86,8 @@ class HydrationProbe:
     json_mode: bool
     t0: float = field(default_factory=time.monotonic)
     events: list[dict[str, Any]] = field(default_factory=list)
-    rpc_pending: dict[str, tuple[str, str]] = field(default_factory=dict)
-    rpc_done: set[str] = field(default_factory=set)
-    sub_pending: set[str] = field(default_factory=set)
-    sub_replay_done: set[str] = field(default_factory=set)
+    hydrate_correlation_id: str | None = None
+    hydrate_done: bool = False
     handshake_done: bool = False
     hydration_done: bool = False
     hydration_at: float | None = None
@@ -169,48 +108,54 @@ class HydrationProbe:
         payload = json.dumps(message.model_dump(mode="json"), default=str) + "\n"
         await session.transport.send(payload.encode())
 
-    async def _subscribe_all(self, session: _JsonSession) -> None:
-        for label, filt in SUBSCRIPTIONS:
-            correlation_id = f"sub-{uuid4().hex}"
-            self.sub_pending.add(correlation_id)
-            await self._send_json(
-                session,
-                SubMessage(
-                    correlation_id=correlation_id,
-                    args=SubArgs(filter=filt),
-                ),
-            )
-            self._log("sub_sent", {"label": label, "filter_type": filt.type})
+    async def _send_payload(self, session: _JsonSession, payload: dict[str, Any]) -> None:
+        await session.transport.send((json.dumps(payload, default=str) + "\n").encode())
 
-    async def _prime_all(self, session: _JsonSession) -> None:
-        for label, target in PRIME_RPCS:
-            correlation_id = f"rpc-{uuid4().hex}"
-            self.rpc_pending[correlation_id] = (label, target)
-            await self._send_json(
-                session,
-                RpcMessage(
-                    correlation_id=correlation_id,
-                    args=RpcArgs(target=target, body={}, timeout_s=self.rpc_timeout_s),
-                ),
-            )
-            self._log("rpc_sent", {"label": label, "target": target})
+    async def _hydrate(self, session: _JsonSession) -> None:
+        correlation_id = f"hydrate-{uuid4().hex}"
+        self.hydrate_correlation_id = correlation_id
+        await self._send_payload(
+            session,
+            {
+                "op": "hydrate",
+                "schema_version": PROTOCOL_VERSION,
+                "correlation_id": correlation_id,
+                "args": {
+                    "topics": list(HYDRATE_TOPICS),
+                    "timeout_s": self.rpc_timeout_s,
+                },
+            },
+        )
+        self._log("hydrate_sent", {"topics": ",".join(HYDRATE_TOPICS)})
 
     def _maybe_note_hydration_done(self) -> None:
         if self.hydration_done or not self.handshake_done:
             return
-        if self.sub_pending and not self.sub_pending.issubset(self.sub_replay_done):
-            return
-        if self.rpc_pending:
+        if not self.hydrate_done:
             return
         self.hydration_done = True
         self.hydration_at = time.monotonic()
         self._log(
             "hydration_done",
             {
-                "rpc_count": len(self.rpc_done),
+                "mode": "hydrate",
                 "pub_count": sum(1 for e in self.events if e["kind"] == "pub"),
             },
         )
+
+    def _summarize_hydrate_result(self, result: dict[str, Any] | None) -> dict[str, Any]:
+        if not result:
+            return {"bytes": 0, "keys": []}
+        snapshots = result.get("snapshots")
+        summary: dict[str, Any] = {
+            "bytes": _json_size(result),
+            "keys": sorted(result),
+            "cursor": result.get("cursor"),
+        }
+        if isinstance(snapshots, dict):
+            summary["snapshot_topics"] = sorted(snapshots)
+            summary["snapshot_bytes"] = _json_size(snapshots)
+        return summary
 
     def _handle_inbound(self, msg: object) -> None:
         if isinstance(msg, WakeMessage):
@@ -227,33 +172,17 @@ class HydrationProbe:
             return
         if isinstance(msg, AckMessage):
             body = msg.body
-            if msg.correlation_id in self.rpc_pending:
-                label, target = self.rpc_pending.pop(msg.correlation_id)
-                self.rpc_done.add(msg.correlation_id)
+            if msg.correlation_id == self.hydrate_correlation_id:
+                self.hydrate_done = True
                 self._log(
-                    "rpc_ack",
+                    "hydrate_ack",
                     {
-                        "label": label,
-                        "target": target,
-                        "summary": _summarize_result(target, body.result),
+                        "kind": body.kind,
+                        "watermark": body.watermark,
+                        "summary": self._summarize_hydrate_result(body.result),
                     },
                 )
                 self._maybe_note_hydration_done()
-                return
-            if msg.correlation_id in self.sub_pending:
-                if body.kind == "subscribed":
-                    self._log("sub_ack", {"correlation_id": msg.correlation_id, "kind": "subscribed"})
-                if body.kind == "replay_done":
-                    self.sub_replay_done.add(msg.correlation_id)
-                    self._log(
-                        "sub_ack",
-                        {
-                            "correlation_id": msg.correlation_id,
-                            "kind": "replay_done",
-                            "watermark": body.watermark,
-                        },
-                    )
-                    self._maybe_note_hydration_done()
                 return
             self._log("ack", {"correlation_id": msg.correlation_id, "kind": body.kind})
             return
@@ -319,8 +248,7 @@ class HydrationProbe:
             await self._send_json(session, hello)
             await self._wait_for_hello_ack(inbound, hello_correlation_id)
 
-            await self._subscribe_all(session)
-            await self._prime_all(session)
+            await self._hydrate(session)
 
             tail_deadline = None
             while True:
@@ -359,7 +287,6 @@ class HydrationProbe:
             None,
         )
         hello_ms = next((e["t_ms"] for e in self.events if e["kind"] == "hello_ack"), None)
-        rpc_acks = [e for e in self.events if e["kind"] == "rpc_ack"]
         pubs = [e for e in self.events if e["kind"] == "pub"]
 
         print()
@@ -371,15 +298,18 @@ class HydrationProbe:
         if hydration_ms is not None:
             print(f"hydration_done:  {hydration_ms:.1f} ms")
         else:
-            print("hydration_done:  (incomplete — missing rpc or replay_done)")
-        print(f"rpc replies:     {len(rpc_acks)}/{len(PRIME_RPCS)}")
+            print("hydration_done:  (incomplete - missing hydrate ack)")
+        hydrate_acks = [e for e in self.events if e["kind"] == "hydrate_ack"]
+        print(f"hydrate replies: {len(hydrate_acks)}/1")
         print(f"pub events:      {len(pubs)}")
-        if rpc_acks:
-            print("rpc timings:")
-            for row in rpc_acks:
+        if hydrate_acks:
+            print("hydrate timings:")
+            for row in hydrate_acks:
                 summary = row.get("summary", {})
                 size = summary.get("bytes", "?")
-                print(f"  {row['t_ms']:8.1f} ms  {row['label']:<14} {row['target']}  ({size} B)")
+                cursor = summary.get("cursor", "?")
+                topics = ",".join(summary.get("snapshot_topics", []))
+                print(f"  {row['t_ms']:8.1f} ms  cursor={cursor} topics={topics} ({size} B)")
 
 
 class _JsonSession:
@@ -439,7 +369,7 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
         type=float,
         default=DEFAULT_RPC_TIMEOUT_S,
         metavar="SECONDS",
-        help=f"per-RPC server timeout (default: {DEFAULT_RPC_TIMEOUT_S:g})",
+        help=f"hydrate server timeout (default: {DEFAULT_RPC_TIMEOUT_S:g})",
     )
     parser.add_argument(
         "--json",

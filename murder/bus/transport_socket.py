@@ -23,7 +23,11 @@ from murder.bus.protocol import (
     Entity,
     ErrBody,
     ErrMessage,
+    EventFilter,
     HelloMessage,
+    HydrateMessage,
+    HydrateReplayEvent,
+    HydrateReply,
     PresenceEvent,
     PresenceState,
     PubMessage,
@@ -33,13 +37,12 @@ from murder.bus.protocol import (
     WakeBody,
     WakeMessage,
 )
+from murder.state.storage.service_registry import socket_path_for_repo
 
 # Callable that returns the current ANSI frame for an agent's pane (or the
 # service's own session when ``agent_id`` is None). Injected into
 # SocketBusServer so tests can supply a controllable fake.
 TmuxFrameCapture = Callable[[str | None], Awaitable[str]]
-
-from murder.state.storage.service_registry import socket_path_for_repo
 
 # Default interval between frame captures (seconds).  Chosen to be responsive
 # without hammering tmux; Ink renders at terminal frame-rate so 100ms is plenty.
@@ -51,6 +54,18 @@ LOGGER = logging.getLogger(__name__)
 _ACCEPT_RESOURCE_ERRNOS = frozenset({errno.EMFILE, errno.ENFILE, errno.ENOBUFS, errno.ENOMEM})
 _ACCEPT_BACKOFF_MIN = 0.1
 _ACCEPT_BACKOFF_MAX = 30.0
+
+_HYDRATE_SNAPSHOT_TARGETS: dict[str, str] = {
+    "conversations": "state.conversations_snapshot",
+    "crow": "state.crow_snapshot",
+    "schedule": "state.schedule_snapshot",
+    "favorites": "tui.load_favorites",
+    "templates": "tui.load_templates",
+    "themes": "tui.load_themes",
+    "workflows": "tui.load_workflows",
+    "settings": "settings.get",
+}
+_HYDRATE_ALL_TOPICS = tuple(_HYDRATE_SNAPSHOT_TARGETS)
 
 
 @dataclass
@@ -247,35 +262,7 @@ class SocketBusServer:
                 if not line:
                     break
                 msg = WIRE_MESSAGE_ADAPTER.validate_json(line.decode("utf-8"))
-                if isinstance(msg, SubMessage):
-                    if session is None:
-                        continue
-                    task = asyncio.create_task(
-                        self._run_subscription(session, msg),
-                        name=f"bus-sub:{msg.correlation_id}",
-                    )
-                    session.subscriptions.add(task)
-                    task.add_done_callback(
-                        lambda t, s=session: self._on_subscription_done(s, t)
-                    )
-                    continue
-                if isinstance(msg, PubMessage):
-                    await self._broker.publish(msg.event)
-                    await self._send_ack(
-                        transport,
-                        correlation_id=msg.correlation_id,
-                        kind="published",
-                    )
-                    continue
-                if isinstance(msg, RpcMessage):
-                    await self._handle_rpc(transport, msg)
-                    continue
-                await self._send_err(
-                    transport,
-                    correlation_id=msg.correlation_id,
-                    code="unsupported_op",
-                    message=f"unsupported op {msg.op}",
-                )
+                await self._handle_client_message(session, transport, msg)
         except Exception as exc:  # noqa: BLE001
             if not self._closed:
                 with contextlib.suppress(Exception):
@@ -325,6 +312,45 @@ class SocketBusServer:
             raise RuntimeError("first message must be hello")
         return msg
 
+    async def _handle_client_message(
+        self,
+        session: _ClientSession | None,
+        transport: UdsTransport,
+        msg: Any,
+    ) -> None:
+        if isinstance(msg, SubMessage):
+            if session is None:
+                return
+            task = asyncio.create_task(
+                self._run_subscription(session, msg),
+                name=f"bus-sub:{msg.correlation_id}",
+            )
+            session.subscriptions.add(task)
+            task.add_done_callback(lambda t, s=session: self._on_subscription_done(s, t))
+            return
+        if isinstance(msg, PubMessage):
+            await self._broker.publish(msg.event)
+            await self._send_ack(
+                transport,
+                correlation_id=msg.correlation_id,
+                kind="published",
+            )
+            return
+        if isinstance(msg, RpcMessage):
+            await self._handle_rpc(transport, msg)
+            return
+        if isinstance(msg, HydrateMessage):
+            if session is None:
+                return
+            await self._handle_hydrate(session, msg)
+            return
+        await self._send_err(
+            transport,
+            correlation_id=msg.correlation_id,
+            code="unsupported_op",
+            message=f"unsupported op {msg.op}",
+        )
+
     async def _handle_rpc(self, transport: UdsTransport, msg: RpcMessage) -> None:
         try:
             result = await self._broker.request(
@@ -346,6 +372,116 @@ class SocketBusServer:
             kind="rpc_reply",
             result=result,
         )
+
+    async def _handle_hydrate(self, session: _ClientSession, msg: HydrateMessage) -> None:
+        try:
+            reply, tail_filters = await self._build_hydrate_reply(msg)
+        except Exception as exc:  # noqa: BLE001
+            await self._send_err(
+                session.transport,
+                correlation_id=msg.correlation_id,
+                code="hydrate_error",
+                message=str(exc),
+            )
+            return
+
+        await self._send_ack(
+            session.transport,
+            correlation_id=msg.correlation_id,
+            kind="hydrate_reply",
+            watermark=reply.cursor,
+            result=reply.model_dump(mode="json"),
+        )
+
+        for filt, since_id in tail_filters:
+            task = asyncio.create_task(
+                self._run_hydrate_tail(session, msg.correlation_id, filt, since_id=since_id),
+                name=f"bus-hydrate-tail:{msg.correlation_id}:{filt.type or 'all'}",
+            )
+            session.subscriptions.add(task)
+            task.add_done_callback(lambda t, s=session: self._on_subscription_done(s, t))
+
+    async def _build_hydrate_reply(
+        self,
+        msg: HydrateMessage,
+    ) -> tuple[HydrateReply, list[tuple[EventFilter, int]]]:
+        requested = _normalize_hydrate_topics(msg.args.topics)
+        watermark = self._broker.watermark()
+        cursor = msg.args.cursor
+        retained = cursor is not None and self._cursor_is_retained(cursor, watermark)
+
+        if retained and cursor is not None:
+            replay_filters = _hydrate_replay_filters(requested)
+            replay = self._hydrate_replay(cursor=cursor, until_id=watermark, filters=replay_filters)
+            reply = HydrateReply(
+                snapshots={},
+                cursor=watermark,
+                mode="resume",
+                replay=replay,
+            )
+            return reply, _hydrate_tail_filters(requested, since_id=watermark)
+
+        snapshots: dict[str, dict[str, Any]] = {}
+        for topic in requested:
+            target = _HYDRATE_SNAPSHOT_TARGETS.get(topic)
+            if target is None:
+                continue
+            snapshots[topic] = await self._broker.request(
+                target,
+                {},
+                timeout_s=msg.args.timeout_s,
+            )
+        reply = HydrateReply(
+            snapshots=snapshots,
+            cursor=watermark,
+            mode="cold" if cursor is None else "snapshot_fallback",
+        )
+        return reply, _hydrate_tail_filters(requested, since_id=watermark)
+
+    def _cursor_is_retained(self, cursor: int, watermark: int) -> bool:
+        if cursor < 0 or cursor > watermark:
+            return False
+        for name in ("is_cursor_retained", "cursor_retained"):
+            checker = getattr(self._broker, name, None)
+            if checker is not None:
+                return bool(checker(cursor))
+        # Current DurableBroker has no retention/pruning implementation, so a
+        # cursor not ahead of the watermark is replayable. When retention lands,
+        # expose one of the methods above so stale cursors degrade to snapshots.
+        return True
+
+    def _hydrate_replay(
+        self,
+        *,
+        cursor: int,
+        until_id: int,
+        filters: list[EventFilter],
+    ) -> list[HydrateReplayEvent]:
+        out: list[HydrateReplayEvent] = []
+        seen: set[int] = set()
+        for filt in filters:
+            for row_id, event in self._broker.replay(
+                filt,
+                since_id=cursor,
+                until_id=until_id,
+            ):
+                if row_id in seen:
+                    continue
+                seen.add(row_id)
+                out.append(HydrateReplayEvent(seq=row_id, event=event))
+        out.sort(key=lambda item: item.seq)
+        return out
+
+    async def _run_hydrate_tail(
+        self,
+        session: _ClientSession,
+        correlation_id: str,
+        filt: EventFilter,
+        *,
+        since_id: int,
+    ) -> None:
+        async for row_id, event in self._broker.tail(filt, since_id=since_id):
+            await self._send_pub(session.transport, correlation_id, event, seq=row_id)
 
     async def _run_subscription(self, session: _ClientSession, msg: SubMessage) -> None:
         filt = msg.args.filter
@@ -378,12 +514,12 @@ class SocketBusServer:
         replay_since = (
             watermark if msg.args.tail_only else (msg.args.since_id or 0)
         )
-        for _, event in self._broker.replay(
+        for row_id, event in self._broker.replay(
             filt,
             since_id=replay_since,
             until_id=watermark,
         ):
-            await self._send_pub(transport, msg.correlation_id, event)
+            await self._send_pub(transport, msg.correlation_id, event, seq=row_id)
         await self._send_ack(
             transport,
             correlation_id=msg.correlation_id,
@@ -401,8 +537,8 @@ class SocketBusServer:
             retained = self._presence_event()
             if filt.matches(retained):
                 await self._send_pub(transport, msg.correlation_id, retained)
-        async for _, event in self._broker.tail(filt, since_id=watermark):
-            await self._send_pub(transport, msg.correlation_id, event)
+        async for row_id, event in self._broker.tail(filt, since_id=watermark):
+            await self._send_pub(transport, msg.correlation_id, event, seq=row_id)
 
     async def _run_tmux_frame_stream(
         self,
@@ -447,10 +583,12 @@ class SocketBusServer:
         transport: UdsTransport,
         correlation_id: str,
         event: Any,
+        *,
+        seq: int | None = None,
     ) -> None:
         await self._send_message(
             transport,
-            PubMessage(correlation_id=correlation_id, event=event),
+            PubMessage(correlation_id=correlation_id, event=event, seq=seq),
         )
 
     async def _send_ack(
@@ -570,6 +708,39 @@ def _is_loopback_host(host: str) -> bool:
         # Hostnames other than 'localhost' may resolve anywhere — treat as
         # non-loopback rather than doing a DNS lookup here.
         return False
+
+
+def _normalize_hydrate_topics(topics: list[str]) -> list[str]:
+    requested = [str(topic).strip() for topic in topics if str(topic).strip()]
+    if not requested or "all" in requested:
+        return list(_HYDRATE_ALL_TOPICS)
+    out: list[str] = []
+    seen: set[str] = set()
+    valid = set(_HYDRATE_SNAPSHOT_TARGETS) | {"state", "events", "errors"}
+    for topic in requested:
+        if topic not in valid:
+            raise ValueError(f"unsupported hydrate topic {topic!r}")
+        if topic not in seen:
+            seen.add(topic)
+            out.append(topic)
+    return out
+
+
+def _hydrate_replay_filters(topics: list[str]) -> list[EventFilter]:
+    filters: list[EventFilter] = []
+    if any(topic in topics for topic in ("state", "crow", "schedule")):
+        filters.append(EventFilter(type="state.snapshot"))
+    if "conversations" in topics or "events" in topics:
+        filters.append(EventFilter(type="conversation.block"))
+        filters.append(EventFilter(type="conversation.state"))
+    return filters
+
+
+def _hydrate_tail_filters(topics: list[str], *, since_id: int) -> list[tuple[EventFilter, int]]:
+    filters = [(filt, since_id) for filt in _hydrate_replay_filters(topics)]
+    if "errors" in topics or set(topics) == set(_HYDRATE_ALL_TOPICS):
+        filters.append((EventFilter(type="error"), since_id))
+    return filters
 
 
 # ---------------------------------------------------------------------------
