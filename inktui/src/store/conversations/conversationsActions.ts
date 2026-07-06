@@ -2,13 +2,12 @@
  * Conversations actions — the only code that calls the bus for chat operations (rule 3).
  *
  * Three actions:
- *  1. `refresh()` — explicit boot-prime pull. Calls `state.conversations_snapshot` to hydrate the
- *     transcripts map on connect (cold-start, before any `conversation.block` events arrive). The
+ *  1. `refresh()` — explicit user/mount pull. Calls `state.conversations_snapshot` to hydrate the
+ *     transcripts map outside the startup hydrate path. The
  *     reply is a list of `ConversationSummary` entries (in-progress conversations); each entry's
  *     `agent_id` becomes the key and its `blocks` are parsed through `parseBlock` (same wire shape
  *     as the event block, so the seam is consistent). Errors are swallowed into the `conversations`
- *     slice (future: add an `error` field when needed). Called from `primeSlices` in `index.tsx` on
- *     every (re)connect.
+ *     slice (future: add an `error` field when needed).
  *
  *  2. `send(agentId, message)` — the sole sender of chat messages. `agent.message` is an
  *     orchestrator command kind (not a standalone RPC), so this routes through the live
@@ -30,8 +29,8 @@
 import type { StoreApi } from 'zustand';
 import type { BusClient } from '../../bus/BusClient.js';
 import type { ConversationBlockEvent, ConversationStateEvent } from '../../bus/protocol.js';
-import { submitCommand } from '../commandSubmit.js';
 import { stageTranscriptFocusId } from '../../input/focusIds.js';
+import { submitCommand } from '../commandSubmit.js';
 import type { AppStore } from '../store.js';
 import { toastStore } from '../toast/toastStore.js';
 import {
@@ -132,12 +131,62 @@ export interface ConversationsSnapshotReply {
   invalidation_key: string;
 }
 
+interface ProjectedConversationsSnapshot {
+  readonly transcripts: Record<string, readonly ConversationBlock[]>;
+  readonly meta: Record<string, ConversationMeta>;
+  readonly chunkSummaries: Record<string, readonly ChunkSummary[]>;
+}
+
+export function projectConversationsSnapshot(
+  reply: ConversationsSnapshotReply,
+): ProjectedConversationsSnapshot {
+  const transcripts: Record<string, readonly ConversationBlock[]> = {};
+  const meta: Record<string, ConversationMeta> = {};
+  const chunkSummaries: Record<string, readonly ChunkSummary[]> = {};
+  for (const conv of reply.conversations) {
+    transcripts[conv.agent_id] = conv.blocks.map((b) =>
+      parseBlock(b as unknown as Record<string, unknown>),
+    );
+    meta[conv.agent_id] = {
+      liveState: conv.live_state ?? null,
+      queuedMessage: conv.queued_message ?? null,
+    };
+    const rawSummaries = conv.chunk_summaries ?? [];
+    chunkSummaries[conv.agent_id] = rawSummaries
+      .map(
+        (s): ChunkSummary => ({
+          summaryId: Number(s.summary_id),
+          chunkIdx: Number(s.chunk_idx),
+          summary: String(s.summary ?? ''),
+          blockIds: (s.block_ids ?? []).map((id) => Number(id)),
+        }),
+      )
+      .sort((a, b) => a.chunkIdx - b.chunkIdx);
+  }
+  return { transcripts, meta, chunkSummaries };
+}
+
+export function applyConversationsSnapshot(
+  store: StoreApi<AppStore>,
+  reply: ConversationsSnapshotReply,
+): void {
+  const projected = projectConversationsSnapshot(reply);
+  store.setState((state) => ({
+    conversations: {
+      ...state.conversations,
+      transcripts: projected.transcripts,
+      meta: projected.meta,
+      chunkSummaries: projected.chunkSummaries,
+    },
+  }));
+}
+
 /** The conversations actions, bound to one `BusClient` + store handle. */
 export interface ConversationsActions {
   /**
-   * Boot-prime: pull all agent transcripts from `state.conversations_snapshot` and populate the
-   * transcripts map. Called from `primeSlices` in `index.tsx` on every (re)connect so a cold-start
-   * service (no `conversation.block` events yet) shows populated transcript panes immediately.
+   * Explicit refresh: pull all agent transcripts from `state.conversations_snapshot` and populate
+   * the transcripts map. Startup hydration applies the same snapshot shape through
+   * `applyConversationsSnapshot`; this action remains for explicit refresh/mount paths.
    *
    * Errors are swallowed (fire-and-forget from the priming path; transcripts remain empty rather
    * than crashing, and live `conversation.block` events will populate them as they arrive).
@@ -277,52 +326,11 @@ export function createConversationsActions(
       try {
         const reply = await bus.rpc('state.conversations_snapshot', {});
         if (token !== seq) return;
-        // Project each ConversationSummary into the transcripts map keyed by agent_id.
-        // CONTRACT ASSUMPTION: one active conversation per agent (same assumption the slice makes
-        // for `conversation.block` events). `parseBlock` applies to each ConversationBlockSummary
-        // row unchanged — the `id`/`payload` shape is identical to the event block shape.
-        const parsed: Record<string, readonly ConversationBlock[]> = {};
-        const meta: Record<string, ConversationMeta> = {};
-        const chunkSummaries: Record<string, readonly ChunkSummary[]> = {};
-        for (const conv of reply.conversations) {
-          parsed[conv.agent_id] = conv.blocks.map((b) =>
-            parseBlock(b as unknown as Record<string, unknown>),
-          );
-          meta[conv.agent_id] = {
-            liveState: conv.live_state ?? null,
-            queuedMessage: conv.queued_message ?? null,
-          };
-          // Chunk summaries (TUIchat-4) — the SOURCE OF TRUTH for the Condensed view. Defensive
-          // against an older service with no `chunk_summaries` field (treated as none → Condensed
-          // falls back to verbose-like). Normalised to numeric ids + ordered by chunk_idx so the
-          // selector can rely on order without re-sorting.
-          const rawSummaries = conv.chunk_summaries ?? [];
-          chunkSummaries[conv.agent_id] = rawSummaries
-            .map(
-              (s): ChunkSummary => ({
-                summaryId: Number(s.summary_id),
-                chunkIdx: Number(s.chunk_idx),
-                summary: String(s.summary ?? ''),
-                blockIds: (s.block_ids ?? []).map((id) => Number(id)),
-              }),
-            )
-            .sort((a, b) => a.chunkIdx - b.chunkIdx);
-        }
         // REPLACE, do not union: the snapshot is authoritative for the in-progress set. A merge
         // (`{...old, ...parsed}`) would keep an agent whose conversation has since ENDED (absent
         // from the snapshot) forever — accumulating ghost panes/dead transcripts across reconnects.
         // The map is rebuilt from exactly the snapshot's conversations.
-        store.setState((state) => ({
-          conversations: {
-            ...state.conversations,
-            transcripts: parsed,
-            meta,
-            // REPLACE (same authoritative-snapshot reasoning as transcripts/meta): the snapshot's
-            // chunk_summaries[] is the source of truth, so the map is rebuilt from exactly it. Live
-            // `chunk-summarized` events fold in between snapshots via `applyBlock`.
-            chunkSummaries,
-          },
-        }));
+        applyConversationsSnapshot(store, reply);
       } catch {
         // Swallow: priming is best-effort; live events will hydrate the transcripts when they arrive.
       }
@@ -392,18 +400,20 @@ export function createConversationsActions(
           : [];
         store.setState((state) => {
           const prev = state.conversations.chunkSummaries[agentId] ?? [];
+          const matchIdx = findChunkSummaryIndex(prev, blockIds);
           const next: ChunkSummary = {
             summaryId: -1,
-            chunkIdx: prev.length,
+            chunkIdx: matchIdx === -1 ? prev.length : (prev[matchIdx]?.chunkIdx ?? matchIdx),
             summary: summaryText,
             blockIds,
           };
+          const updated = matchIdx === -1 ? [...prev, next] : replaceAt(prev, matchIdx, next);
           return {
             conversations: {
               ...state.conversations,
               chunkSummaries: {
                 ...state.conversations.chunkSummaries,
-                [agentId]: [...prev, next],
+                [agentId]: updated,
               },
             },
           };
@@ -417,29 +427,9 @@ export function createConversationsActions(
         const prev = state.conversations;
         const existing: readonly (typeof parsed)[] = prev.transcripts[agentId] ?? [];
 
-        let updated: readonly (typeof parsed)[];
-        if (event.action === 'block-updated') {
-          // Replace the last block whose id matches — or push if none match.
-          const matchIdx = (() => {
-            for (let i = existing.length - 1; i >= 0; i--) {
-              const b = existing[i];
-              if (b != null && b.id === parsed.id && parsed.id !== null) {
-                return i;
-              }
-            }
-            return -1;
-          })();
-          if (matchIdx !== -1) {
-            const arr = [...existing];
-            arr[matchIdx] = parsed;
-            updated = arr;
-          } else {
-            updated = [...existing, parsed];
-          }
-        } else {
-          // block-appended: push
-          updated = [...existing, parsed];
-        }
+        const matchIdx = findBlockIndex(existing, parsed.id);
+        const updated =
+          matchIdx === -1 ? [...existing, parsed] : replaceAt(existing, matchIdx, parsed);
 
         return {
           conversations: {
@@ -588,3 +578,38 @@ const CHAT_VIEW_CYCLE: Readonly<Record<ChatViewMode, ChatViewMode>> = {
   condensed: 'tmux',
   tmux: 'verbose',
 };
+
+function findBlockIndex(blocks: readonly ConversationBlock[], id: ConversationBlock['id']): number {
+  if (id === null) {
+    return -1;
+  }
+  for (let i = blocks.length - 1; i >= 0; i--) {
+    if (blocks[i]?.id === id) {
+      return i;
+    }
+  }
+  return -1;
+}
+
+function findChunkSummaryIndex(
+  summaries: readonly ChunkSummary[],
+  blockIds: readonly number[],
+): number {
+  const key = chunkBlockIdsKey(blockIds);
+  for (let i = summaries.length - 1; i >= 0; i--) {
+    if (chunkBlockIdsKey(summaries[i]?.blockIds ?? []) === key) {
+      return i;
+    }
+  }
+  return -1;
+}
+
+function chunkBlockIdsKey(blockIds: readonly number[]): string {
+  return [...blockIds].sort((a, b) => a - b).join(',');
+}
+
+function replaceAt<T>(items: readonly T[], index: number, item: T): readonly T[] {
+  const next = [...items];
+  next[index] = item;
+  return next;
+}

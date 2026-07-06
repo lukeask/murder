@@ -306,7 +306,7 @@ describe('SpawnWizardModal — dependent-field flow', () => {
     expect(payload['model']).toBe('');
   });
 
-  it('cursor skips the model step but keeps effort (slow/fast)', async () => {
+  it('cursor shows the static model step and threads the selected model id', async () => {
     const { stores, bus, enter } = setup(null);
     const { lastFrame, stdin } = render(<Harness stores={stores} />);
     enter();
@@ -316,7 +316,11 @@ describe('SpawnWizardModal — dependent-field flow', () => {
     stdin.write('j'); // cursor
     await tick();
     expect(lastFrame()).toContain('› [3] cursor');
-    stdin.write('\r'); // confirm harness → effort (model skipped)
+    stdin.write('\r'); // confirm harness → model
+    await tick();
+    expect(lastFrame()).toContain('Select model');
+    expect(lastFrame()).toContain('Composer 2.5');
+    stdin.write('\r'); // model (Composer 2.5, the default)
     await tick();
     expect(lastFrame()).toContain('Select effort');
     expect(lastFrame()).toContain('slow');
@@ -330,7 +334,11 @@ describe('SpawnWizardModal — dependent-field flow', () => {
     await tick();
     await tick();
     await tick();
-    expect(spawnSubmitPayload(bus)).toMatchObject({ harness: 'cursor', effort: 'slow' });
+    expect(spawnSubmitPayload(bus)).toMatchObject({
+      harness: 'cursor',
+      model: 'composer-2.5',
+      effort: 'slow',
+    });
   });
 
   it('codex shows its model list and threads the selected model id', async () => {

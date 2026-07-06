@@ -40,7 +40,16 @@ describe('harnessModelsActions — modelsFor (pure)', () => {
   });
 
   it('returns [] for a missing or empty harness key', () => {
-    expect(modelsFor('cursor', STATIC_HARNESS_MODELS)).toEqual([]);
     expect(modelsFor('bogus', STATIC_HARNESS_MODELS)).toEqual([]);
+  });
+
+  it('keeps a static last-good cursor model list', () => {
+    expect(modelsFor('cursor', STATIC_HARNESS_MODELS).map((m) => m.id)).toEqual([
+      'composer-2.5',
+      'auto',
+      'gpt-5.5',
+      'gpt-5.4',
+      'claude-sonnet-4.5',
+    ]);
   });
 });

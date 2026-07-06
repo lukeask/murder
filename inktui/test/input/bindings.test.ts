@@ -164,6 +164,22 @@ describe('global.closePane — plain ctrl+q chord (stagelayout)', () => {
   });
 });
 
+describe('global.repaint — plain ctrl+r chord (manual redraw)', () => {
+  it('resolves to ctrl+r under every modifier (plain = modifier-independent) and labels C-r', () => {
+    for (const modifier of ['alt', 'ctrl', 'both'] as const) {
+      const bindings = resolveBindings(modifier, true, {});
+      expect(bindings.chordsFor('global.repaint')).toEqual([{ input: 'r', key: { ctrl: true } }]);
+      expect(bindings.matches('global.repaint', 'r', makeKey({ ctrl: true }))).toBe(true);
+      expect(bindings.matches('global.repaint', 'r', makeKey())).toBe(false);
+      expect(bindings.label('global.repaint')).toBe('C-r');
+    }
+  });
+
+  it('is not rebindable (a fixed muscle-memory chord)', () => {
+    expect(ACTIONS['global.repaint'].rebindable).toBe(false);
+  });
+});
+
 describe('global.murder — plain ctrl+m chord with a label override', () => {
   it('resolves to the ctrl+return collision chord under every modifier (plain = modifier-independent)', () => {
     for (const modifier of ['alt', 'ctrl', 'both'] as const) {

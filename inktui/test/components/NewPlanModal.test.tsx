@@ -181,7 +181,7 @@ describe('NewPlanModal — super+p new-plan wizard', () => {
     expect(selectActiveMode(stores.modes)).toBeNull();
   });
 
-  it('empty body still submits (auto) with a stock kickoff message', async () => {
+  it('empty body submits without manufacturing a stock kickoff message', async () => {
     const { stores, bus } = setup();
     stores.modes.getState().enter(newPlanMode(stores.modes, createDialogActions(bus), {}));
     bus.stubRpc('plan.create', { handled: true, ok: true, plan_name: 'x' });
@@ -196,7 +196,7 @@ describe('NewPlanModal — super+p new-plan wizard', () => {
 
     expect(bus.rpcCalls.length).toBe(1);
     const params = bus.rpcCalls[0]?.params as { message?: string };
-    expect(params.message).toBeTruthy(); // a non-empty stock kickoff
+    expect(params).not.toHaveProperty('message');
   });
 
   it('a rejected plan.create pushes an error toast and keeps the form up', async () => {

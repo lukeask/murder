@@ -104,10 +104,10 @@ describe('spawnWizardMachine — effort matrix mirrors backend adapter enums', (
 });
 
 describe('spawnWizardMachine — harness change recomputes skips', () => {
-  it('cursor: skips the model step (no models) but keeps effort', () => {
-    // cursor has [] static models and a slow/fast effort enum.
+  it('cursor: includes the static model step and keeps effort', () => {
     expect(stepsFor(cond({ harness: 'cursor' }))).toEqual([
       'harness',
+      'model',
       'effort',
       'worktree',
       'name',
@@ -122,7 +122,7 @@ describe('spawnWizardMachine — harness change recomputes skips', () => {
     expect(stepsFor(cond({ harness: 'pi' }))).toEqual(['harness', 'worktree', 'name']);
   });
 
-  it('a live snapshot adding models to cursor restores its model step', () => {
+  it('a live snapshot replacing cursor models keeps its model step', () => {
     const map = { ...STATIC_HARNESS_MODELS, cursor: [{ id: 'composer', label: 'Composer' }] };
     expect(stepsFor(cond({ harness: 'cursor', modelMap: map }))).toEqual([
       'harness',

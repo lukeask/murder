@@ -48,8 +48,7 @@ declare module '../../bus/BusClient.js' {
      * Payload (all optional individually, but one of `plan_name`/`auto_name` is required by the
      * service): `body` seeds the plan's markdown; `auto_name: true` derives the name from `body` via a
      * mini-LLM naming call (created under the FINAL name — no rename); a non-empty `message` starts the
-     * planning agent. The new-plan form always sends a message (the body or a stock kickoff) so submit =
-     * create + start planner. Returns the FINAL `plan_name` (the auto-named result, when `auto_name`).
+     * planning agent. Returns the FINAL `plan_name` (the auto-named result, when `auto_name`).
      */
     'plan.create': {
       params: {
@@ -91,8 +90,8 @@ export interface PlanCreateResult {
 
 /**
  * The new-plan submit input. The form fills `body` (the typed plan content) and either asks for an
- * auto name (`autoName: true`) or supplies a `planName`. `message` is the kickoff text sent to the
- * planning agent (the form always sends one so submit = create + start planner).
+ * auto name (`autoName: true`) or supplies a `planName`. `message`, when supplied, is sent to the
+ * planning agent after creation.
  */
 export interface CreatePlanInput {
   /** The plan's markdown body (whatever was typed in the body box). */
@@ -101,8 +100,8 @@ export interface CreatePlanInput {
   readonly autoName: boolean;
   /** The user-chosen plan name; ignored when `autoName` is set. */
   readonly planName?: string;
-  /** The kickoff message that starts the planning agent. */
-  readonly message: string;
+  /** Optional message sent to the planning agent after creation. */
+  readonly message?: string;
 }
 
 /** The actions exposed to the dialog components for writing operations. */
@@ -157,10 +156,18 @@ export function createDialogActions(bus: BusClient): DialogActions {
 
     async createPlan(input: CreatePlanInput): Promise<PlanCreateResult> {
       // Auto path: send `auto_name` + body, no plan_name (the service derives it). Custom path: send
-      // the chosen plan_name. Always send the body + a message so submit = create + start planner.
+      // the chosen plan_name. Only include message when the caller supplied one.
       const params = input.autoName
-        ? { auto_name: true, body: input.body, message: input.message }
-        : { plan_name: input.planName ?? '', body: input.body, message: input.message };
+        ? {
+            auto_name: true,
+            body: input.body,
+            ...(input.message !== undefined ? { message: input.message } : {}),
+          }
+        : {
+            plan_name: input.planName ?? '',
+            body: input.body,
+            ...(input.message !== undefined ? { message: input.message } : {}),
+          };
       return bus.rpc('plan.create', params);
     },
   };

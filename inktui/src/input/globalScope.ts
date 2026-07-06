@@ -68,6 +68,7 @@ export const GLOBAL_SCOPE = {
   'global.toggleTargetPane': 'chat',
   'global.murder': 'not-crows',
   'global.closePane': 'stage',
+  'global.repaint': 'always',
 } as const satisfies Partial<Record<ActionId, FocusScope>>;
 
 /** An action id that carries a {@link FocusScope} (i.e. a global, not a `panel.*` action). */

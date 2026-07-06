@@ -37,16 +37,25 @@
  */
 
 import { createStore, type StoreApi } from 'zustand/vanilla';
-import type { BusClient } from '../bus/BusClient.js';
+import type {
+  BusClient,
+  BusEventListener,
+  HydrateSnapshots,
+  Unsubscribe,
+} from '../bus/BusClient.js';
 import type {
   ConversationBlockEvent,
   ConversationStateEvent,
   Entity,
   ErrorEvent,
+  HydrateTopic,
   StateSnapshotEvent,
 } from '../bus/protocol.js';
+import { applyThemeRecords, type ThemeRecord } from '../theme/palettes.js';
 import {
+  applyConversationsSnapshot,
   type ConversationsActions,
+  type ConversationsSnapshotReply,
   createConversationsActions,
 } from './conversations/conversationsActions.js';
 import {
@@ -94,7 +103,9 @@ import {
   REPORTS_INVALIDATING_ENTITY,
   type ReportsState,
 } from './reports/reportsSlice.js';
+import type { CrowSessionDto, CrowSnapshotReply } from './roster/rosterActions.js';
 import { createRosterActions, type RosterActions } from './roster/rosterActions.js';
+import type { RosterRow } from './roster/rosterSlice.js';
 import {
   createRosterSlice,
   initialRosterState,
@@ -102,6 +113,7 @@ import {
   ROSTER_INVALIDATING_ENTITY,
   type RosterState,
 } from './roster/rosterSlice.js';
+import type { SettingsWire } from './settings/settingsActions.js';
 import { createSettingsActions, type SettingsActions } from './settings/settingsActions.js';
 import {
   createSettingsSlice,
@@ -112,6 +124,7 @@ import { createTemplatesActions, type TemplatesActions } from './templates/templ
 import {
   createTemplatesSlice,
   initialTemplatesState,
+  type TemplateRecord,
   type TemplatesState,
 } from './templates/templatesSlice.js';
 import { createThemesActions, type ThemesActions } from './themes/themesActions.js';
@@ -125,7 +138,13 @@ import {
   initialTicketDetailState,
   type TicketDetailState,
 } from './ticketDetail/ticketDetailSlice.js';
+import type {
+  ScheduleSnapshotReply,
+  ScheduleUsageGaugeDto,
+  TicketDto,
+} from './tickets/ticketsActions.js';
 import { createTicketsActions, type TicketsActions } from './tickets/ticketsActions.js';
+import type { TicketRow } from './tickets/ticketsSlice.js';
 import {
   createTicketsSlice,
   initialTicketsState,
@@ -141,6 +160,7 @@ import {
   type TransitState,
 } from './transit/transitSlice.js';
 import { createUsageActions, type UsageActions } from './usage/usageActions.js';
+import type { UsageRow } from './usage/usageSlice.js';
 import {
   createUsageSlice,
   initialUsageState,
@@ -151,6 +171,7 @@ import { createWorkflowsActions, type WorkflowsActions } from './workflows/workf
 import {
   createWorkflowsSlice,
   initialWorkflowsState,
+  type WorkflowDef,
   type WorkflowsState,
 } from './workflows/workflowsSlice.js';
 
@@ -175,6 +196,13 @@ export interface AppActions {
   settings: SettingsActions;
 }
 
+export interface HydrationState {
+  readonly status: 'idle' | 'loading' | 'ready' | 'error';
+  readonly cursor: number | null;
+  readonly mode: 'cold' | 'resume' | 'snapshot_fallback' | null;
+  readonly error: string | null;
+}
+
 /**
  * The combined store state: one key per domain slice, plus `actions`. This is the type every
  * selector and hook is generic over. Slices are flat top-level keys (not nested under `slices`) so a
@@ -197,6 +225,7 @@ export interface AppStore {
   workflows: WorkflowsState;
   docView: DocViewState;
   settings: SettingsState;
+  hydration: HydrationState;
   actions: AppActions;
 }
 
@@ -212,6 +241,13 @@ interface SliceInvalidation {
   readonly entity: Entity;
   readonly refresh: () => void;
 }
+
+export const initialHydrationState: HydrationState = {
+  status: 'idle',
+  cursor: null,
+  mode: null,
+  error: null,
+};
 
 /**
  * Create the app store with an injected {@link BusClient} (rule 4 — tests pass `FakeBusClient`, prod
@@ -244,6 +280,7 @@ export function createAppStore(bus: BusClient): {
     ...createWorkflowsSlice(...a),
     ...createDocViewSlice(...a),
     ...createSettingsSlice(...a),
+    hydration: initialHydrationState,
     // Placeholder; replaced in step 2 now that we have the handle the actions need to `setState`.
     actions: undefined as unknown as AppActions,
   }));
@@ -333,86 +370,259 @@ export function createAppStore(bus: BusClient): {
   } satisfies Record<Entity, Entity>;
   void _INVALIDATION_COVERAGE;
 
-  // 4. Event-driven invalidation. Subscribe filtered to `state.snapshot`; on each, re-pull exactly
-  //    the slice(s) the named entity invalidates. No poll loop, no deep-diff — the event's `entity`
-  //    is the change granularity. `void` the promise: invalidation is fire-and-forget (the action
-  //    routes its own errors into the slice's `error` field).
-  const unsubscribeSnapshot = bus.subscribe(
-    (event) => {
-      // The server filter already narrows to `state.snapshot`, but re-narrow in code so the type
-      // refines to `StateSnapshotEvent` (and a fake/test that emits unfiltered is handled correctly).
-      if (event.type !== 'state.snapshot') {
-        return;
-      }
-      const snapshot: StateSnapshotEvent = event;
-      for (const invalidation of invalidations) {
-        if (invalidation.entity === snapshot.entity) {
-          invalidation.refresh();
-        }
-      }
-    },
-    { type: 'state.snapshot' },
-  );
-
-  // 5. Conversation-block subscription. A SECOND bus.subscribe filtered to `conversation.block`
-  //    routes content-bearing events to the conversations slice. `conversation` is NOT in the Entity
-  //    union, so these events never flow through the snapshot invalidation loop above — they need
-  //    their own subscription. The action is `applyBlock` (pure setState, no bus call).
-  const unsubscribeConversations = bus.subscribe(
-    (event) => {
-      if (event.type !== 'conversation.block') {
-        return;
-      }
-      const blockEvent: ConversationBlockEvent = event;
-      actions.conversations.applyBlock(blockEvent);
-    },
-    { type: 'conversation.block' },
-  );
-
-  // 6. Conversation-state subscription. Same additive content-event seam as conversation.block:
-  //    per-agent liveness (live_state) + the queued-but-undelivered message, routed to the
-  //    conversations slice's meta map via `applyState` (pure setState, no bus call).
-  const unsubscribeConversationState = bus.subscribe(
-    (event) => {
-      if (event.type !== 'conversation.state') {
-        return;
-      }
-      const stateEvent: ConversationStateEvent = event;
-      actions.conversations.applyState(stateEvent);
-    },
-    { type: 'conversation.state' },
-  );
-
-  // 7. Backend-error subscription. The service publishes `error` events for failures that have no
-  //    owning RPC caller (worker crashes, command failures, …). Nothing else subscribes to them, so
-  //    without this they are silently dropped at the dispatch layer. Route them to the toast rack —
-  //    the ambient-feedback primitive — with error severity and a longer TTL (an error deserves more
-  //    than a 2.5s glance). The traceback is deliberately NOT shown: the message is the user-facing
-  //    truth; the service logs carry the rest.
-  const unsubscribeErrors = bus.subscribe(
-    (event) => {
-      if (event.type !== 'error') {
-        return;
-      }
-      const errorEvent: ErrorEvent = event;
-      // Severity gradient: a `recoverable` error is a transient boot race (planner pane-lag, crow
-      // tick-budget) — it reads as a dim `warning`, not an alarming red. Only a non-recoverable
-      // (fatal) error earns full `error` colour.
-      const severity = errorEvent.recoverable ? 'warning' : 'error';
-      toastStore.getState().push(errorEvent.message, { severity, ttlMs: 12000 });
-    },
-    { type: 'error' },
-    { tailOnly: true },
-  );
+  const hydration = wireHydration(bus, store, actions, invalidations);
 
   return {
     store,
     dispose: () => {
-      unsubscribeSnapshot();
-      unsubscribeConversations();
-      unsubscribeConversationState();
-      unsubscribeErrors();
+      hydration.dispose();
     },
+  };
+}
+
+const HYDRATE_TOPICS: readonly HydrateTopic[] = ['all'];
+
+function wireHydration(
+  bus: BusClient,
+  store: AppStoreApi,
+  actions: AppActions,
+  invalidations: readonly SliceInvalidation[],
+): { dispose: () => void } {
+  let disposed = false;
+  const listener: BusEventListener = (event) => {
+    if (disposed) {
+      return;
+    }
+    routeHydratedEvent(event, actions, invalidations);
+  };
+
+  store.setState({ hydration: { status: 'loading', cursor: null, mode: null, error: null } });
+  let unsubscribeHydrate: Unsubscribe | undefined;
+  void bus
+    .hydrate(HYDRATE_TOPICS, listener)
+    .then((reply) => {
+      if (disposed) {
+        reply.unsubscribe();
+        return;
+      }
+      applyHydrateSnapshots(store, reply.snapshots);
+      for (const replay of reply.replay ?? []) {
+        listener(replay.event);
+      }
+      unsubscribeHydrate = reply.unsubscribe;
+      store.setState({
+        hydration: {
+          status: 'ready',
+          cursor: reply.cursor,
+          mode: reply.mode ?? null,
+          error: null,
+        },
+      });
+    })
+    .catch((error: unknown) => {
+      if (disposed) return;
+      const message = error instanceof Error ? error.message : String(error);
+      store.setState({ hydration: { status: 'error', cursor: null, mode: null, error: message } });
+    });
+
+  return {
+    dispose: () => {
+      disposed = true;
+      unsubscribeHydrate?.();
+    },
+  };
+}
+
+function routeHydratedEvent(
+  event: Parameters<BusEventListener>[0],
+  actions: AppActions,
+  invalidations: readonly SliceInvalidation[],
+): void {
+  if (event.type === 'state.snapshot') {
+    const snapshot: StateSnapshotEvent = event;
+    for (const invalidation of invalidations) {
+      if (invalidation.entity === snapshot.entity) {
+        invalidation.refresh();
+      }
+    }
+    return;
+  }
+  if (event.type === 'conversation.block') {
+    actions.conversations.applyBlock(event as ConversationBlockEvent);
+    return;
+  }
+  if (event.type === 'conversation.state') {
+    actions.conversations.applyState(event as ConversationStateEvent);
+    return;
+  }
+  if (event.type === 'error') {
+    const errorEvent: ErrorEvent = event;
+    const severity = errorEvent.recoverable ? 'warning' : 'error';
+    toastStore.getState().push(errorEvent.message, { severity, ttlMs: 12000 });
+  }
+}
+
+function applyHydrateSnapshots(store: AppStoreApi, snapshots: HydrateSnapshots): void {
+  const crow = snapshotAs<CrowSnapshotReply>(snapshots, 'state.crow_snapshot', 'crow', 'roster');
+  if (crow !== undefined) {
+    store.setState({
+      roster: { rows: crow.sessions.map(toRosterRow), status: 'ready', error: null },
+    });
+  }
+
+  const schedule = snapshotAs<ScheduleSnapshotReply>(
+    snapshots,
+    'state.schedule_snapshot',
+    'schedule',
+  );
+  if (schedule !== undefined) {
+    store.setState({
+      tickets: { rows: projectTickets(schedule), status: 'ready', error: null },
+      usage: { rows: schedule.usage_gauges.map(toUsageRow), status: 'ready', error: null },
+    });
+  }
+
+  const conversations = snapshotAs<ConversationsSnapshotReply>(
+    snapshots,
+    'state.conversations_snapshot',
+    'conversations',
+  );
+  if (conversations !== undefined) {
+    applyConversationsSnapshot(store, conversations);
+  }
+
+  const favorites = snapshotAs<{ favorites?: readonly string[] }>(
+    snapshots,
+    'tui.load_favorites',
+    'favorites',
+  );
+  if (favorites !== undefined) {
+    store.setState({
+      favorites: { ids: new Set(favorites.favorites ?? []), status: 'ready', error: null },
+    });
+  }
+
+  const templates = snapshotAs<{ templates?: readonly TemplateRecord[] }>(
+    snapshots,
+    'tui.load_templates',
+    'templates',
+  );
+  if (templates !== undefined) {
+    store.setState({
+      templates: { items: templates.templates ?? [], status: 'ready', error: null },
+    });
+  }
+
+  const themes = snapshotAs<{ themes?: readonly ThemeRecord[] }>(
+    snapshots,
+    'tui.load_themes',
+    'themes',
+  );
+  if (themes !== undefined) {
+    const items = themes.themes ?? [];
+    applyThemeRecords(items);
+    store.setState({ themes: { items, status: 'ready', error: null } });
+  }
+
+  const workflows = snapshotAs<{ workflows?: readonly WorkflowDef[] }>(
+    snapshots,
+    'tui.load_workflows',
+    'workflows',
+  );
+  if (workflows !== undefined) {
+    store.setState({
+      workflows: { items: workflows.workflows ?? [], status: 'ready', error: null },
+    });
+  }
+
+  const settings = snapshotAs<{ settings?: SettingsWire }>(snapshots, 'settings.get', 'settings');
+  if (settings !== undefined) {
+    store.setState((state) => ({ settings: applySettingsWire(state.settings, settings.settings) }));
+  }
+}
+
+function snapshotAs<T>(snapshots: HydrateSnapshots, ...keys: readonly string[]): T | undefined {
+  for (const key of keys) {
+    if (Object.hasOwn(snapshots, key)) {
+      return snapshots[key] as unknown as T;
+    }
+  }
+  return undefined;
+}
+
+function toRosterRow(session: CrowSessionDto): RosterRow {
+  return {
+    agentId: session.agent_id,
+    role: session.role,
+    ticketId: session.ticket_id ?? null,
+    ticketTitle: session.ticket_title ?? null,
+    harness: session.harness ?? null,
+    model: session.model ?? null,
+    status: session.status,
+    session: session.session_name ?? null,
+    worktreePath: session.worktree_path ?? null,
+    lastSeen: session.last_seen ?? null,
+    openEscalations: session.open_escalations ?? 0,
+    maxSeverity: session.max_severity ?? 0,
+  };
+}
+
+function projectTickets(reply: ScheduleSnapshotReply): readonly TicketRow[] {
+  return [...reply.active_tickets, ...reply.recent_done_tickets, ...reply.archived_tickets].map(
+    toTicketRow,
+  );
+}
+
+function toTicketRow(dto: TicketDto): TicketRow {
+  return {
+    id: dto.id,
+    title: dto.title,
+    status: dto.status,
+    lastUpdateAt: dto.last_update_at,
+    lastUpdateLabel: dto.last_update_label,
+    scheduleAt: dto.schedule_at ?? null,
+    harness: dto.harness ?? null,
+    model: dto.model ?? null,
+    pendingDepIds: dto.pending_dep_ids,
+    parent: dto.parent ?? null,
+  };
+}
+
+function toUsageRow(dto: ScheduleUsageGaugeDto): UsageRow {
+  return {
+    harness: dto.harness,
+    windowKey: dto.window_key,
+    pct: dto.pct,
+    tUntilResetMinutes: dto.t_until_reset_minutes,
+    tPeriodMinutes: dto.t_period_minutes ?? 0,
+    steering: dto.steering ?? 'auto',
+  };
+}
+
+function applySettingsWire(prev: SettingsState, wire: SettingsWire | undefined): SettingsState {
+  if (wire === undefined) {
+    return { ...prev, status: 'ready', error: null };
+  }
+  return {
+    theme: wire.theme ?? prev.theme,
+    modifier: wire.modifier ?? prev.modifier,
+    keyOverrides: wire.key_overrides ?? prev.keyOverrides,
+    paneGap: wire.pane_gap ?? prev.paneGap,
+    vimMode: wire.vim_mode ?? prev.vimMode,
+    defaultChatViewMode: wire.default_chat_view_mode ?? prev.defaultChatViewMode,
+    startupRogue: 'startup_rogue' in wire ? wire.startup_rogue : prev.startupRogue,
+    collaboratorHarness:
+      'collaborator_harness' in wire ? wire.collaborator_harness : prev.collaboratorHarness,
+    plannerHarness: 'planner_harness' in wire ? wire.planner_harness : prev.plannerHarness,
+    crowHarnesses: 'crow_harnesses' in wire ? wire.crow_harnesses : prev.crowHarnesses,
+    effectiveCollaboratorHarness:
+      wire.effective_collaborator_harness ?? prev.effectiveCollaboratorHarness,
+    effectivePlannerHarness: wire.effective_planner_harness ?? prev.effectivePlannerHarness,
+    effectiveCrowHarnesses: wire.effective_crow_harnesses ?? prev.effectiveCrowHarnesses,
+    llm: wire.llm ?? prev.llm,
+    llmEnv: wire.llm_env ?? prev.llmEnv,
+    status: 'ready',
+    error: null,
   };
 }
 
@@ -436,6 +646,7 @@ export const initialAppState: Pick<
   | 'workflows'
   | 'docView'
   | 'settings'
+  | 'hydration'
 > = {
   roster: initialRosterState,
   plans: initialPlansState,
@@ -453,4 +664,5 @@ export const initialAppState: Pick<
   workflows: initialWorkflowsState,
   docView: initialDocViewState,
   settings: initialSettingsState,
+  hydration: initialHydrationState,
 };

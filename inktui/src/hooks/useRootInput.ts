@@ -96,6 +96,9 @@ export interface DeferredGlobalHandlers {
    * supplies the handler (it needs the app store's docView / conversations actions, which this hook
    * does not hold). The dispatcher already routes the chord (gated to center-stage-pane focus). */
   closePane?: () => void;
+  /** `ctrl+r` (`global.repaint`): force a full terminal redraw. Default: no-op until the shell wires
+   * {@link forceInkFullRepaint}. ctrl+l is taken by target cycling. */
+  repaint?: () => void;
   /**
    * The persistent chat-input handler (C11, part F). Supplied by the shell (it needs both the chat
    * buffer store and the send action). When absent, layer 2 declines as before — so older
@@ -269,6 +272,8 @@ export function useRootInput(
         // ctrl+q close-pane: default no-op until the shell wires the docView/conversations actions.
         // The dispatcher only fires this when a center-stage pane holds focus.
         closePane: deferred.closePane ?? (() => {}),
+        // ctrl+r redraw: default no-op until the shell wires forceInkFullRepaint.
+        repaint: deferred.repaint ?? (() => {}),
       };
 
       const ctx: DispatchContext = {

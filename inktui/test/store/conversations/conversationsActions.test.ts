@@ -146,6 +146,18 @@ describe('conversations — event-driven: ConversationBlockEvent via subscribe',
     dispose();
   });
 
+  it('block-appended with an existing block id replaces instead of duplicating', () => {
+    const { fake, store, dispose } = setup();
+
+    fake.emit(makeBlockEvent('agent-1', 'assistant', 'block-appended', { text: 'snapshot copy' }));
+    fake.emit(makeBlockEvent('agent-1', 'assistant', 'block-appended', { text: 'tail copy' }));
+
+    const blocks = store.getState().conversations.transcripts['agent-1'];
+    expect(blocks).toHaveLength(1);
+    expect(blocks?.[0]?.raw['text']).toBe('tail copy');
+    dispose();
+  });
+
   it('block-updated with no matching id falls back to push (defensive)', () => {
     const { fake, store, dispose } = setup();
 
@@ -452,6 +464,19 @@ describe('conversations — chunk-summarized event folds into chunkSummaries', (
     const summaries = store.getState().conversations.chunkSummaries['a'];
     expect(summaries?.map((s) => s.summary)).toEqual(['first', 'second']);
     expect(summaries?.map((s) => s.chunkIdx)).toEqual([0, 1]);
+    dispose();
+  });
+
+  it('dedups a repeated chunk summary by block_ids and keeps its chunkIdx stable', () => {
+    const { store, dispose } = setup();
+    store.getState().actions.conversations.applyBlock(chunkEvent('a', 'draft', [2, 1]));
+    store.getState().actions.conversations.applyBlock(chunkEvent('a', 'final', [1, 2]));
+
+    const summaries = store.getState().conversations.chunkSummaries['a'];
+    expect(summaries).toHaveLength(1);
+    expect(summaries?.[0]?.summary).toBe('final');
+    expect(summaries?.[0]?.chunkIdx).toBe(0);
+    expect(summaries?.[0]?.blockIds).toEqual([1, 2]);
     dispose();
   });
 

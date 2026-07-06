@@ -18,6 +18,9 @@
 import type {
   BusClient,
   BusEventListener,
+  HydrateReply,
+  HydrateResult,
+  HydrateTopics,
   RpcMethod,
   RpcParams,
   RpcPayload,
@@ -26,7 +29,7 @@ import type {
   Unsubscribe,
 } from './BusClient.js';
 import { matchesFilter } from './matchesFilter.js';
-import type { BusEvent, EventFilter } from './protocol.js';
+import type { BusEvent, EventFilter, HydrateTopic } from './protocol.js';
 import { unwrapReadReply } from './readEnvelope.js';
 
 // Re-exported so the bus seam exposes one `matchesFilter` symbol; tests historically import it from
@@ -50,6 +53,20 @@ interface Subscription {
   filter: EventFilter | undefined;
 }
 
+interface Hydration {
+  listener: BusEventListener | undefined;
+}
+
+export interface RecordedHydrateCall {
+  topics: readonly HydrateTopic[];
+  cursor: number | null;
+}
+
+export type HydrateHandler = (
+  topics: readonly HydrateTopic[],
+  cursor: number | null,
+) => HydrateReply | Promise<HydrateReply>;
+
 /** The internal, type-erased handler stored per method. A heterogeneous method map can't preserve
  * each key's params/result types, so the map erases to `RpcPayload -> unknown`; the *public*
  * {@link FakeBusClient.stubRpc} / {@link FakeBusClient.rpc} signatures stay fully typed, and the
@@ -58,8 +75,12 @@ type ErasedRpcHandler = (params: RpcPayload) => unknown;
 
 export class FakeBusClient implements BusClient {
   private readonly subscriptions = new Set<Subscription>();
+  private readonly hydrations = new Set<Hydration>();
   private readonly rpcHandlers = new Map<RpcMethod, ErasedRpcHandler>();
   private readonly recordedCalls: RecordedRpcCall[] = [];
+  private readonly recordedHydrateCalls: RecordedHydrateCall[] = [];
+  private hydrateHandler: HydrateHandler | undefined;
+  private cursor: number | null = null;
 
   /**
    * Register a canned reply for `method`. Pass a value for a fixed reply or a handler to compute
@@ -78,9 +99,20 @@ export class FakeBusClient implements BusClient {
     return [...this.recordedCalls];
   }
 
+  /** Every hydrate made so far, in order. The cursor is the fake's automatically tracked cursor. */
+  get hydrateCalls(): readonly RecordedHydrateCall[] {
+    return [...this.recordedHydrateCalls];
+  }
+
   /** Number of live subscriptions — lets a test assert subscribe/unsubscribe lifecycle. */
   get subscriberCount(): number {
     return this.subscriptions.size;
+  }
+
+  /** Register the fake hydrate reply. Re-stubbing replaces the prior handler. */
+  stubHydrate(reply: HydrateReply | HydrateHandler): void {
+    this.hydrateHandler =
+      typeof reply === 'function' ? (reply as HydrateHandler) : async () => reply;
   }
 
   /**
@@ -88,13 +120,17 @@ export class FakeBusClient implements BusClient {
    * subscription order. The core driver for store tests: emit a `state.snapshot` and assert the
    * slice re-pulled.
    */
-  emit(event: BusEvent): void {
+  emit(event: BusEvent, seq?: number | null): void {
+    this.observeCursor(seq);
     // Snapshot first so a listener that unsubscribes (or subscribes) during dispatch doesn't
     // perturb this fanout.
     for (const subscription of [...this.subscriptions]) {
       if (matchesFilter(event, subscription.filter)) {
         subscription.listener(event);
       }
+    }
+    for (const hydration of [...this.hydrations]) {
+      hydration.listener?.(event);
     }
   }
 
@@ -130,4 +166,39 @@ export class FakeBusClient implements BusClient {
       this.subscriptions.delete(subscription);
     };
   }
+
+  hydrate(topics: HydrateTopics, listener?: BusEventListener): Promise<HydrateResult> {
+    const normalizedTopics = normalizeHydrateTopics(topics);
+    const callCursor = this.cursor;
+    this.recordedHydrateCalls.push({ topics: normalizedTopics, cursor: callCursor });
+    const hydration: Hydration = { listener };
+    this.hydrations.add(hydration);
+
+    const reply =
+      this.hydrateHandler === undefined
+        ? Promise.resolve({ snapshots: {}, cursor: callCursor })
+        : Promise.resolve().then(() => this.hydrateHandler?.(normalizedTopics, callCursor));
+
+    return reply.then((value) => {
+      const resolved = value ?? { snapshots: {}, cursor: callCursor };
+      this.observeCursor(resolved.cursor);
+      return {
+        ...resolved,
+        unsubscribe: () => {
+          this.hydrations.delete(hydration);
+        },
+      };
+    });
+  }
+
+  private observeCursor(cursor: number | null | undefined): void {
+    if (typeof cursor !== 'number') {
+      return;
+    }
+    this.cursor = this.cursor === null ? cursor : Math.max(this.cursor, cursor);
+  }
+}
+
+function normalizeHydrateTopics(topics: HydrateTopics): readonly HydrateTopic[] {
+  return typeof topics === 'string' ? [topics] : [...topics];
 }

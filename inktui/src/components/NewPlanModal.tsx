@@ -9,7 +9,7 @@
  *  3. **Name input** — shown only when `custom` is chosen; the typed plan name. Enter submits.
  *
  * On submit it calls `actions.createPlan(...)` → `plan.create` RPC (the service derives the name when
- * `auto`, seeds the body, and starts the planning agent from the kickoff message). A brief `naming…`
+ * `auto` and seeds the body). A brief `naming…`
  * pending state covers the auto path's mini-LLM round-trip. On success the caller's `onSubmit` runs
  * (toast + open the plan's doc pane).
  *
@@ -56,10 +56,6 @@ type Naming = 'auto' | 'custom';
 
 /** Which focus group has the highlight. `body` → naming → (`name` only when custom is chosen). */
 type FocusGroup = 'body' | 'naming' | 'name';
-
-/** A stock kickoff sent to the planning agent when the body is empty, so submit always starts the
- * planner (the service spawns iff `message` is non-empty). */
-const STOCK_KICKOFF = 'Start planning. Read the plan body and propose the first steps.';
 
 /** Options passed to the mode factory. */
 export interface NewPlanModeOptions {
@@ -135,12 +131,11 @@ export function newPlanMode(
     s.pending = true;
     s.error = null;
     refresh();
-    // Always send a message so the service starts the planner: the body if present, else a stock kickoff.
     const body = s.body;
-    const message = body.trim().length > 0 ? body : STOCK_KICKOFF;
+    const message = body.trim().length > 0 ? body : undefined;
     const input: CreatePlanInput = autoName
-      ? { body, autoName: true, message }
-      : { body, autoName: false, planName, message };
+      ? { body, autoName: true, ...(message !== undefined ? { message } : {}) }
+      : { body, autoName: false, planName, ...(message !== undefined ? { message } : {}) };
     void actions
       .createPlan(input)
       .then((result) => {

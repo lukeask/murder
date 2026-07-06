@@ -72,6 +72,9 @@ import { connect as netConnect, type Socket } from 'node:net';
 import type {
   BusClient,
   BusEventListener,
+  HydrateReply,
+  HydrateResult,
+  HydrateTopics,
   RpcMethod,
   RpcParams,
   RpcResult,
@@ -85,6 +88,8 @@ import {
   DEFAULT_RPC_TIMEOUT_S,
   type EventFilter,
   type HelloMessage,
+  type HydrateMessage,
+  type HydrateTopic,
   PROTOCOL_VERSION,
   type RpcMessage,
   type SubMessage,
@@ -222,12 +227,32 @@ interface Subscription {
   correlationId: string;
 }
 
+/** A standing hydrate intent. It survives reconnect; each fresh socket gets a resume hydrate using
+ * the latest observed durable cursor. */
+interface Hydration {
+  readonly topics: readonly HydrateTopic[];
+  readonly listener: BusEventListener | undefined;
+  correlationId: string;
+  pending: Deferred<HydrateReply> | undefined;
+}
+
 /** An in-flight RPC awaiting its `ack`/`err`/timeout. Keyed by `correlation_id`. */
 interface PendingRpc {
   resolve(result: Record<string, unknown>): void;
   reject(error: Error): void;
   /** Clears the timeout timer; called on settle so a resolved RPC can't later "time out". */
   cancelTimeout(): void;
+}
+
+interface Deferred<T> {
+  promise: Promise<T>;
+  resolve(value: T): void;
+  reject(error: Error): void;
+}
+
+interface PendingHydrate {
+  readonly hydration: Hydration;
+  readonly completion: Deferred<HydrateReply>;
 }
 
 /** The lifecycle of the single connection. */
@@ -247,7 +272,10 @@ export class UdsBusClient implements BusClient {
   private lineBuffer = new LineBuffer();
 
   private readonly subscriptions = new Set<Subscription>();
+  private readonly hydrations = new Set<Hydration>();
   private readonly pendingRpcs = new Map<string, PendingRpc>();
+  private readonly pendingHydrates = new Map<string, PendingHydrate>();
+  private cursor: number | undefined;
 
   /** Listeners fired after every successful (re)handshake — the app uses this to re-prime its
    * slices on reconnect (see {@link onConnect}). */
@@ -360,15 +388,46 @@ export class UdsBusClient implements BusClient {
     };
   }
 
+  /** {@inheritDoc BusClient.hydrate} */
+  async hydrate(topics: HydrateTopics, listener?: BusEventListener): Promise<HydrateResult> {
+    const completion = createDeferred<HydrateReply>();
+    const hydration: Hydration = {
+      topics: normalizeHydrateTopics(topics),
+      listener,
+      correlationId: `hydrate-${randomUUID()}`,
+      pending: completion,
+    };
+    this.hydrations.add(hydration);
+    const unsubscribe = (): void => {
+      this.hydrations.delete(hydration);
+      const pending = this.pendingHydrates.get(hydration.correlationId);
+      if (pending !== undefined) {
+        this.pendingHydrates.delete(hydration.correlationId);
+        pending.completion.reject(new ConnectionLostError('hydrate unsubscribed'));
+      }
+      hydration.pending?.reject(new ConnectionLostError('hydrate unsubscribed'));
+      hydration.pending = undefined;
+    };
+
+    try {
+      const socket = await this.ensureConnected();
+      this.sendHydration(socket, hydration);
+      const reply = await completion.promise;
+      return { ...reply, unsubscribe };
+    } catch (error) {
+      this.hydrations.delete(hydration);
+      throw error;
+    }
+  }
+
   /**
-   * Register a listener fired after every successful (re)handshake — once per live connection. The
-   * app hooks this to **re-prime its slices on (re)connect**: subscriptions survive reconnect and
-   * slice invalidation is key-only, so a slice that changed while disconnected would otherwise stay
-   * stale until the next unrelated event; re-priming on connect closes that gap.
+   * Register a listener fired after every successful (re)handshake — once per live connection.
+   * Hydrate intents are re-sent internally on reconnect; app wiring uses this hook for connection
+   * state and other transport-visible lifecycle work.
    *
    * Fires immediately if already connected at registration time, so a listener registered after a
-   * fast first handshake still primes exactly once (no race against the initial connect, no
-   * double-fire). Returns an {@link Unsubscribe} disposer. Not on the {@link BusClient} interface —
+   * fast first handshake still observes the connection. Returns an {@link Unsubscribe} disposer.
+   * Not on the {@link BusClient} interface —
    * the app narrows for it structurally, exactly as it does for {@link close}, so the fake stays
    * untouched.
    */
@@ -461,7 +520,9 @@ export class UdsBusClient implements BusClient {
     this.state = 'closed';
     this.pendingSleep?.cancel();
     this.failAllPendingRpcs(new ConnectionLostError('client closed'));
+    this.failAllHydrations(new ConnectionLostError('client closed'));
     this.subscriptions.clear();
+    this.hydrations.clear();
     this.connectListeners.clear();
     this.disconnectListeners.clear();
     this.permanentErrorListeners.clear();
@@ -515,6 +576,7 @@ export class UdsBusClient implements BusClient {
               rejectFirst(error);
             }
             this.failAllPendingRpcs(error);
+            this.failAllHydrations(error);
             this.notifyPermanentError(error);
             return;
           }
@@ -526,6 +588,7 @@ export class UdsBusClient implements BusClient {
         // Drop with the connection lost: fail outstanding RPCs, then back off and retry. If this was
         // an established connection dropping, tell the wiring (it reads this as "reconnecting").
         this.failAllPendingRpcs(new ConnectionLostError('connection dropped'));
+        this.pendingHydrates.clear();
         if (wasEstablished) {
           this.notifyDisconnected();
         }
@@ -560,6 +623,7 @@ export class UdsBusClient implements BusClient {
         protocol_version: PROTOCOL_VERSION,
         client_kind: this.clientKind,
         client_id: this.clientId,
+        ...(this.cursor !== undefined ? { since_id: this.cursor } : {}),
       },
     };
 
@@ -573,6 +637,10 @@ export class UdsBusClient implements BusClient {
     for (const subscription of this.subscriptions) {
       subscription.correlationId = `sub-${randomUUID()}`;
       this.sendSubscription(socket, subscription);
+    }
+    for (const hydration of this.hydrations) {
+      hydration.correlationId = `hydrate-${randomUUID()}`;
+      this.sendHydration(socket, hydration);
     }
     // Dispatch any frames the server pipelined into the ack's chunk *after* subscriptions are
     // replayed, so a pipelined `pub` is fanned out exactly as a steady-state frame would be (and
@@ -697,12 +765,23 @@ export class UdsBusClient implements BusClient {
   private dispatch(message: WireMessage): void {
     switch (message.op) {
       case 'pub':
+        this.observeCursor(message.seq);
         this.fanout(message.event);
         return;
       case 'ack':
+        this.observeCursor(message.body.watermark);
+        if (this.settleHydrate(message.correlation_id, message.body.result ?? {})) {
+          return;
+        }
         this.settleRpc(message.correlation_id, (rpc) => rpc.resolve(message.body.result ?? {}));
         return;
       case 'err':
+        if (this.rejectHydrate(
+          message.correlation_id,
+          new Error(`hydrate error [${message.body.code}]: ${message.body.message}`),
+        )) {
+          return;
+        }
         this.settleRpc(message.correlation_id, (rpc) =>
           rpc.reject(new Error(`rpc error [${message.body.code}]: ${message.body.message}`)),
         );
@@ -713,6 +792,7 @@ export class UdsBusClient implements BusClient {
       case 'hello':
       case 'sub':
       case 'rpc':
+      case 'hydrate':
         return;
       default:
         assertNever(message);
@@ -732,6 +812,13 @@ export class UdsBusClient implements BusClient {
         } catch {
           // A subscriber's failure is its own concern; never let it skip sibling subscribers.
         }
+      }
+    }
+    for (const hydration of [...this.hydrations]) {
+      try {
+        hydration.listener?.(event);
+      } catch {
+        // A hydrate-tail listener's failure is its own concern; keep sibling fanout alive.
       }
     }
   }
@@ -791,6 +878,26 @@ export class UdsBusClient implements BusClient {
     this.writeMessage(socket, message);
   }
 
+  private sendHydration(socket: Socket, hydration: Hydration): void {
+    const completion = hydration.pending ?? createDeferred<HydrateReply>();
+    if (hydration.pending === undefined) {
+      // Internal reconnect/resume hydrate; no public caller is awaiting it, so consume rejection.
+      void completion.promise.catch(() => {});
+    }
+    hydration.pending = completion;
+    this.pendingHydrates.set(hydration.correlationId, { hydration, completion });
+    const message: HydrateMessage = {
+      op: 'hydrate',
+      schema_version: PROTOCOL_VERSION,
+      correlation_id: hydration.correlationId,
+      args: {
+        topics: hydration.topics,
+        ...(this.cursor !== undefined ? { cursor: this.cursor } : {}),
+      },
+    };
+    this.writeMessage(socket, message);
+  }
+
   /** Outbound JSON-lines framing: serialize the envelope and terminate with `\n` (Python's `send`). */
   private writeMessage(socket: Socket, message: WireMessage): void {
     socket.write(`${JSON.stringify(message)}\n`);
@@ -808,6 +915,52 @@ export class UdsBusClient implements BusClient {
       rpc.reject(error);
     }
     this.pendingRpcs.clear();
+  }
+
+  private settleHydrate(correlationId: string, result: Record<string, unknown>): boolean {
+    const pending = this.pendingHydrates.get(correlationId);
+    if (pending === undefined) {
+      return false;
+    }
+    this.pendingHydrates.delete(correlationId);
+    const reply = normalizeHydrateReply(result, this.cursor);
+    this.observeCursor(reply.cursor);
+    if (pending.hydration.pending === pending.completion) {
+      pending.hydration.pending = undefined;
+    }
+    pending.completion.resolve(reply);
+    return true;
+  }
+
+  private rejectHydrate(correlationId: string, error: Error): boolean {
+    const pending = this.pendingHydrates.get(correlationId);
+    if (pending === undefined) {
+      return false;
+    }
+    this.pendingHydrates.delete(correlationId);
+    if (pending.hydration.pending === pending.completion) {
+      pending.hydration.pending = undefined;
+    }
+    pending.completion.reject(error);
+    return true;
+  }
+
+  private failAllHydrations(error: Error): void {
+    for (const [, pending] of this.pendingHydrates) {
+      pending.completion.reject(error);
+    }
+    this.pendingHydrates.clear();
+    for (const hydration of this.hydrations) {
+      hydration.pending?.reject(error);
+      hydration.pending = undefined;
+    }
+  }
+
+  private observeCursor(cursor: number | null | undefined): void {
+    if (typeof cursor !== 'number') {
+      return;
+    }
+    this.cursor = this.cursor === undefined ? cursor : Math.max(this.cursor, cursor);
   }
 
   private teardownSocket(): void {
@@ -853,10 +1006,63 @@ function isWireMessage(value: unknown): value is WireMessage {
     op === 'pub' ||
     op === 'sub' ||
     op === 'rpc' ||
+    op === 'hydrate' ||
     op === 'ack' ||
     op === 'err' ||
     op === 'wake'
   );
+}
+
+function normalizeHydrateTopics(topics: HydrateTopics): readonly HydrateTopic[] {
+  return typeof topics === 'string' ? [topics] : [...topics];
+}
+
+function normalizeHydrateReply(
+  result: Record<string, unknown>,
+  fallbackCursor: number | undefined,
+): HydrateReply {
+  const snapshots =
+    typeof result['snapshots'] === 'object' && result['snapshots'] !== null
+      ? (result['snapshots'] as Record<string, unknown>)
+      : {};
+  const cursor = typeof result['cursor'] === 'number' ? result['cursor'] : (fallbackCursor ?? null);
+  const mode =
+    result['mode'] === 'cold' ||
+    result['mode'] === 'resume' ||
+    result['mode'] === 'snapshot_fallback'
+      ? result['mode']
+      : undefined;
+  const replay = Array.isArray(result['replay'])
+    ? result['replay'].filter(isHydrateReplayEvent)
+    : undefined;
+  return {
+    snapshots,
+    cursor,
+    ...(mode !== undefined ? { mode } : {}),
+    ...(replay !== undefined ? { replay } : {}),
+  };
+}
+
+function isHydrateReplayEvent(
+  value: unknown,
+): value is { readonly seq: number; readonly event: BusEvent } {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    typeof (value as { seq?: unknown }).seq === 'number' &&
+    typeof (value as { event?: unknown }).event === 'object' &&
+    (value as { event?: unknown }).event !== null
+  );
+}
+
+function createDeferred<T>(): Deferred<T> {
+  let resolveFn!: (value: T) => void;
+  let rejectFn!: (error: Error) => void;
+  const promise = new Promise<T>((resolve, reject) => {
+    resolveFn = resolve;
+    rejectFn = reject;
+  });
+  return { promise, resolve: resolveFn, reject: rejectFn };
 }
 
 function stringifyError(error: unknown): string {

@@ -7,7 +7,7 @@
  * bridge swaps transport with zero store edits. Nothing terminal- or socket-specific appears
  * here — only the protocol types from `protocol.ts`.
  *
- * Two operations, mirroring the two directions of the bus contract:
+ * Three operations, mirroring the bus contract:
  *
  *  - {@link BusClient.rpc} — view -> service request/response (the only view->bus write path,
  *    rule 3). Typed by {@link RpcMethods}: the method name selects its params and result types, so
@@ -15,9 +15,11 @@
  *  - {@link BusClient.subscribe} — service -> view server-push. Key-only events name the slice
  *    that changed; the store re-pulls that slice. Delivered to a **callback**, not an async
  *    iterator — see the rationale on the method.
+ *  - {@link BusClient.hydrate} — cold-load snapshots plus an auto-resumed live tail. The client
+ *    owns durable cursor tracking; application code never passes sequence numbers.
  */
 
-import type { BusEvent, EventFilter } from './protocol.js';
+import type { BusEvent, EventFilter, HydrateTopic } from './protocol.js';
 
 /**
  * Typed registry of RPC methods: method name -> { params, result }. Only genuine
@@ -124,6 +126,29 @@ export interface SubscribeOptions {
   readonly tailOnly?: boolean;
 }
 
+/** Client-facing hydrate topic argument. The live client normalizes a single topic to a list and
+ * supplies the durable cursor automatically. */
+export type HydrateTopics = HydrateTopic | readonly HydrateTopic[];
+
+/** State snapshot payloads returned by hydrate, keyed by server-defined topic/slice name. */
+export type HydrateSnapshots = Record<string, unknown>;
+
+export interface HydrateReply {
+  /** Snapshots needed for cold load. Empty on a cheap resume when the server only replays deltas. */
+  readonly snapshots: HydrateSnapshots;
+  /** Durable log position the snapshots/delta are consistent with. */
+  readonly cursor: number | null;
+  /** Server mode hint for loading state and diagnostics. */
+  readonly mode?: 'cold' | 'resume' | 'snapshot_fallback';
+  /** Delta events returned on a cheap resume before the live tail is attached. */
+  readonly replay?: readonly { readonly seq: number; readonly event: BusEvent }[];
+}
+
+export interface HydrateResult extends HydrateReply {
+  /** Stops delivering tail events registered by this hydrate call on the client side. */
+  readonly unsubscribe: Unsubscribe;
+}
+
 export interface BusClient {
   /**
    * Issue an RPC and resolve with its typed result. The sole view->bus write path (rule 3): the
@@ -150,4 +175,14 @@ export interface BusClient {
     filter?: EventFilter,
     options?: SubscribeOptions,
   ): Unsubscribe;
+
+  /**
+   * Hydrate current UI state and attach the server-defined live tail behind the same contract.
+   *
+   * The caller chooses topics and may provide one listener for tail events. The implementation owns
+   * durable cursor tracking: it records max `seq` from `pub` frames, sends that cursor on reconnect
+   * and hydrate resume, and resolves when the server reports hydrate completion. Application/store
+   * code should apply `snapshots`, then process tail events idempotently.
+   */
+  hydrate(topics: HydrateTopics, listener?: BusEventListener): Promise<HydrateResult>;
 }

@@ -11,7 +11,10 @@ import { connectionStore } from './store/connection/connectionStore.js';
 import { createAppStore } from './store/store.js';
 import { capsStore } from './terminal/capsStore.js';
 import { createKittyDriver, type KeyProtocolDriver } from './terminal/kittyDriver.js';
+import { forceInkFullRepaint } from './terminal/forceInkRepaint.js';
 import { StdinShim } from './terminal/StdinShim.js';
+
+export { forceInkFullRepaint } from './terminal/forceInkRepaint.js';
 
 /**
  * Process entrypoint — the **standing live runner** (F7). It constructs the injected stores and
@@ -78,29 +81,14 @@ export function resolveProject(env: NodeJS.ProcessEnv = process.env): string | u
 
 /**
  * Mount the shell against a live {@link UdsBusClient} and hold the terminal open until the user
- * exits. The store opens its bus subscriptions on construction; we additionally prime the visible
- * slices so the first paint shows live data on a quiescent service too (subscribe replay only
- * carries already-persisted events, and a fresh slice would otherwise sit empty until the next
- * server-side change — so we pull). Returns when the app exits.
- *
- * Priming runs on **every (re)connect**, not just at startup. Subscriptions survive reconnect and
- * slice invalidation is key-only, so a slice that changed while the socket was down would otherwise
- * stay stale until the next unrelated event — re-priming on connect closes that gap. We hook the
- * client's {@link UdsBusClient.onConnect} (fires once per live handshake, and immediately if already
- * connected at registration time), so first connect and every reconnect both prime exactly once.
+ * exits. The store hydrates itself through the bus hydrate contract on construction: one snapshot
+ * reply plus server-attached tails replaces the old startup prime RPCs and replay-gated
+ * subscriptions. Returns when the app exits.
  */
 export async function runLive(busFactory: () => BusClient = makeLiveBus): Promise<void> {
   const bus = busFactory();
   const { store, dispose } = createAppStore(bus);
   const inputStores = createInputStores(STARTUP_PANELS);
-
-  // Re-prime the visible slices on every (re)connect. If the client exposes `onConnect` (the live
-  // UdsBusClient does; the fake does not), hook it; otherwise prime once as a fallback so a non-
-  // hooking transport still paints live data on first connect.
-  const unhookConnect = onConnectIfSupported(bus, () => primeSlices(store));
-  if (unhookConnect === undefined) {
-    primeSlices(store);
-  }
 
   // Connection-state badge wiring (mirrors the onConnect narrowing above). The transport drives the
   // process-global connectionStore; the TopBar reads it. We set `'connecting'` explicitly before the
@@ -154,7 +142,9 @@ export async function runLive(busFactory: () => BusClient = makeLiveBus): Promis
       incrementalRendering: true,
     },
   );
-  const teardownResizeClear = installResizeClear(process.stdout, () => instance.clear());
+  const teardownResizeClear = installResizeClear(process.stdout, () =>
+    forceInkFullRepaint(process.stdout),
+  );
   // Wire the protocol lifecycle through the shim now that it is Ink's stdin: detect support, feed
   // `ctrlAvailable`, and enable the protocol only when the user's modifier wants ctrl AND it is
   // supported. Returns a teardown that pops the protocol (best-effort).
@@ -167,7 +157,6 @@ export async function runLive(busFactory: () => BusClient = makeLiveBus): Promis
     teardownResizeClear();
     teardownTerminal();
     shim.dispose();
-    unhookConnect?.();
     unhookConnectedStatus?.();
     unhookDisconnect?.();
     unhookPermanentError?.();
@@ -273,11 +262,16 @@ export async function setupTerminal(
  * Ink's built-in resize handler clears only when the width decreases. That protects the common
  * narrow-resize case, but monitor moves / font scaling can change rows or expand dimensions while
  * leaving stale cells in the alternate screen. A pane toggle fixes the symptom because it causes a
- * later full-enough repaint; clearing here makes the resize itself the repaint boundary while
+ * later full-enough repaint; repainting here makes the resize itself the repaint boundary while
  * preserving incremental rendering for normal typing.
  */
 export function installResizeClear(
-  stdout: Pick<NodeJS.WriteStream, 'columns' | 'rows' | 'on' | 'off'>,
+  stdout: {
+    columns: number;
+    rows: number;
+    on(event: 'resize', listener: () => void): unknown;
+    off(event: 'resize', listener: () => void): unknown;
+  },
   clear: () => void,
 ): () => void {
   let previousColumns = stdout.columns;
@@ -305,53 +299,6 @@ function detectIfTty(shim: StdinShim, driver: KeyProtocolDriver): Promise<boolea
     return Promise.resolve(false);
   }
   return driver.detect();
-}
-
-/**
- * Pull the visible slices so the shell paints live data. Fire-and-forget: the actions route their
- * own errors into each slice's `error` field, and the subscription keeps the slices live thereafter
- * via key-only invalidation. Re-run on every (re)connect — see {@link runLive}.
- *
- * Only the EAGER slices are primed here — the ones whose panels (or off-panel readers) are present
- * on startup or that drive always-on chrome: roster, usage, tickets, conversations, plus the
- * persisted-truth registries below (favorites/templates/workflows/settings). They rely on event
- * REPLAY for incremental updates, but on a cold-start service (no events yet) they would be blank
- * without an explicit pull; priming closes that gap so a quiescent service paints data on frame one.
- *
- * The LAZY slices (plans, notes, reports, history, transit) are intentionally NOT primed: their
- * panels are closed on startup, so each fetches its own data from a mount-effect on first open, and
- * their invalidation entries in store.ts are gated on `status !== 'idle'` (only re-pull once opened).
- */
-export function primeSlices(store: ReturnType<typeof createAppStore>['store']): void {
-  void store.getState().actions.roster.refresh();
-  void store.getState().actions.usage.refresh();
-  void store.getState().actions.tickets.refresh();
-  void store.getState().actions.conversations.refresh();
-  // plans/notes/reports/history are NOT primed here: their panels are CLOSED on startup and fetch
-  // their own data on first open (a mount-effect in each panel). Priming them eagerly was part of the
-  // cold-start RPC cost for data nobody was looking at. transit (the heaviest, ~110KB) was likewise
-  // never primed here — it self-fetches on open. See each panel's mount-effect + the gated
-  // invalidation entries in store.ts (status !== 'idle').
-  // Re-load favorites on every (re)connect — the favorites docstring promises "a reconnect re-loads
-  // from the persisted truth", and without this the local star set diverges from the server after a
-  // disconnected optimistic toggle (or a failed save) until a full restart.
-  void store.getState().actions.favorites.load();
-  // Re-load the template registry on every (re)connect too — same persisted-truth rationale as
-  // favorites: a disconnected optimistic save/remove/rename leaves the local list ahead of the
-  // server until a reload reconciles it.
-  void store.getState().actions.templates.load();
-  void store.getState().actions.themes.load();
-  // Re-load the workflow registry on every (re)connect too — same persisted-truth rationale as
-  // templates: a disconnected optimistic save/remove/rename leaves the local list ahead of the
-  // server until a reload reconciles it.
-  void store.getState().actions.workflows.load();
-  // Re-load settings on every (re)connect too. The slice loads once from a mount-effect
-  // (App.tsx `loadSettings`), but that single `settings.get` has no retry: if it races the daemon
-  // socket coming up (e.g. a fresh TUI right after `murder up`) or is lost to a disconnect, the slice
-  // is stranded at `initialSettingsState` defaults (modifier `alt`, crow-harness fallback) for the
-  // whole session — config.yaml stays intact, but the UI/bindings silently revert to defaults. Every
-  // other persisted slice already self-heals here; settings was the lone omission.
-  void store.getState().actions.settings.load();
 }
 
 /** Register a (re)connect listener if the client exposes `onConnect` (the live {@link UdsBusClient}

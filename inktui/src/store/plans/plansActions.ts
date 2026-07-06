@@ -74,9 +74,9 @@ export interface PlansActions {
   /**
    * Spawn a planning agent over the named plan — the `p` bind in the Plans panel and on a staged
    * plan doc. A plans-domain verb so components stay off the bus (rule 3); the spawn itself goes
-   * through {@link createSpawnActions} (rule 3's only spawner — pane auto-open + kickoff-by-path
-   * ride along for free) with the {@link plannerSpawnParams} defaults. Outcome lands as a toast;
-   * never throws past the action.
+   * through {@link createSpawnActions} (rule 3's only spawner — pane auto-open rides along for free)
+   * with the {@link plannerSpawnParams} defaults. Outcome lands as a toast; never throws past the
+   * action.
    */
   spawnPlanner(name: string): Promise<void>;
 }
@@ -91,7 +91,8 @@ export function createPlansActions(bus: BusClient, store: StoreApi<AppStore>): P
     }),
     async spawnPlanner(name: string): Promise<void> {
       try {
-        await spawn.spawnRogue(plannerSpawnParams(name));
+        const settings = store.getState().settings;
+        await spawn.spawnPlanner(plannerSpawnParams(name, settings));
         toastStore.getState().push(`planner spawned for "${name}"`, { ttlMs: 6000 });
       } catch (error: unknown) {
         const message = error instanceof Error ? error.message : String(error);

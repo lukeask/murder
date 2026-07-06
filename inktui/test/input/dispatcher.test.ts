@@ -44,6 +44,7 @@ interface SpyHandlers {
   readonly murderConfirm: ReturnType<typeof vi.fn<GlobalHandlers['murderConfirm']>>;
   readonly murderCancel: ReturnType<typeof vi.fn<GlobalHandlers['murderCancel']>>;
   readonly closePane: ReturnType<typeof vi.fn<GlobalHandlers['closePane']>>;
+  readonly repaint: ReturnType<typeof vi.fn<GlobalHandlers['repaint']>>;
 }
 
 function handlers(): SpyHandlers {
@@ -67,6 +68,7 @@ function handlers(): SpyHandlers {
     murderConfirm: vi.fn<GlobalHandlers['murderConfirm']>(),
     murderCancel: vi.fn<GlobalHandlers['murderCancel']>(),
     closePane: vi.fn<GlobalHandlers['closePane']>(),
+    repaint: vi.fn<GlobalHandlers['repaint']>(),
   };
 }
 
@@ -314,6 +316,20 @@ describe('layer 1 — global chords', () => {
     const h = handlers();
     const out = dispatchKey('n', makeKey({ ctrl: true }), ctx(CHAT_FOCUS, h));
     expect(h.quickNote).toHaveBeenCalledOnce();
+    expect(out).toEqual({ layer: 'global', handled: true });
+  });
+
+  it('ctrl+r fires repaint (plain chord, app-wide) under the default alt modifier', () => {
+    const h = handlers();
+    const out = dispatchKey('r', makeKey({ ctrl: true }), ctx('plans', h));
+    expect(h.repaint).toHaveBeenCalledOnce();
+    expect(out).toEqual({ layer: 'global', handled: true });
+  });
+
+  it('ctrl+r fires repaint even while chat is focused', () => {
+    const h = handlers();
+    const out = dispatchKey('r', makeKey({ ctrl: true }), ctx(CHAT_FOCUS, h));
+    expect(h.repaint).toHaveBeenCalledOnce();
     expect(out).toEqual({ layer: 'global', handled: true });
   });
   it('plain ? fires keyHelp when a panel is focused (item 12, no modifier needed)', () => {

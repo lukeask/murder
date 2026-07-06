@@ -59,6 +59,7 @@ export type ActionId =
   | 'global.toggleTargetPane' // alt+w / ctrl+w — toggle the current recipient target's transcript pane (chat-focus only)
   | 'global.murder' // ctrl+m — arm the murder confirm for the targeted crow (plain, kitty side-channel)
   | 'global.closePane' // ctrl+q — close the highlighted Stage pane (transcript / doc); plain chord
+  | 'global.repaint' // ctrl+r — force a full terminal redraw (plain; ctrl+l is cycleTargetNext)
   | 'panel.star' // alt+f — favorite/star the focused panel's cursor row
   | 'panel.resetCrow' // x — arm the two-press reset for the crows panel's cursor row
   | 'panel.usageSteering' // s — cycle the usage panel's cursor gauge steering (auto→prefer→pause)
@@ -247,6 +248,16 @@ export const ACTIONS: Readonly<Record<ActionId, ActionDef>> = {
     // muscle-memory chord, like quickNote).
     default: { kind: 'plain', chord: { input: 'q', key: { ctrl: true } } },
     description: 'close pane',
+    rebindable: false,
+  },
+  'global.repaint': {
+    id: 'global.repaint',
+    // ctrl+r — force a full terminal redraw after external screen disturbances (tmux messages,
+    // terminal-side clears) that leave Ink's incremental line cache stale. A `plain` chord matched
+    // before the command-modifier gate (like quickNote). NOT ctrl+l — that key is `global.cycleTargetNext`
+    // (chat-focus target cycling) and geometric panel nav elsewhere.
+    default: { kind: 'plain', chord: { input: 'r', key: { ctrl: true } } },
+    description: 'redraw screen',
     rebindable: false,
   },
   'panel.star': {

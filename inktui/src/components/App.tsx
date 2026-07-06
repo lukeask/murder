@@ -28,6 +28,7 @@ import {
   useState,
 } from 'react';
 import type { BusClient } from '../bus/BusClient.js';
+import { forceInkFullRepaint } from '../terminal/forceInkRepaint.js';
 import { AppStoreProvider, useAppStore, useAppStoreApi } from '../hooks/useAppStore.js';
 import { BusClientProvider, useBusClient } from '../hooks/useBusClient.js';
 import {
@@ -72,7 +73,6 @@ import {
   isFreeformChoiceSelected,
   isTranscriptPaneOpen,
   selectActiveAgentId,
-  selectConversationMeta,
   selectCycledRecipientTarget,
   selectFavoriteTranscriptPanes,
   selectLiveChoicePrompt,
@@ -353,16 +353,12 @@ export function makeChatInputHandler(
             void state.actions.conversations.sendKey(agentId, forward.key, forward.literal);
             return true;
           }
-          // Queued-message "send now": with a held message for the target, an Enter on an EMPTY
-          // buffer interrupts the agent — the service then delivers the queued message at the next
-          // input-ready parse. A non-empty buffer keeps normal send semantics (the new text appends
-          // to the queue server-side).
+          // Empty Enter is an interrupt for the active target. When a queued message is held, the
+          // service delivers it at the next input-ready parse; without one this is a plain interrupt.
+          // A non-empty buffer keeps normal send semantics.
           if (key.return === true && chatInput.getState().text.length === 0) {
-            const queued = selectConversationMeta(state.conversations, agentId).queuedMessage;
-            if (queued !== null) {
-              void state.actions.conversations.interrupt(agentId);
-              return true;
-            }
+            void state.actions.conversations.interrupt(agentId);
+            return true;
           }
         }
       }
@@ -1140,6 +1136,7 @@ function Shell({
       murderConfirm: murderConfirmHandler,
       murderCancel: () => murderConfirmStore.getState().clear(),
       closePane: closePaneHandler,
+      repaint: () => forceInkFullRepaint(process.stdout),
       chatInput: makeChatInputHandler(
         chatInput,
         appStore,

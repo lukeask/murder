@@ -163,14 +163,19 @@ describe('ChatInput — persistent chat-input send (C11)', () => {
     dispose();
   });
 
-  it('enter on an empty buffer is a no-op (no send)', async () => {
+  it('enter on an empty buffer interrupts the active agent', async () => {
     const { fake, store, inputStores, dispose } = await setup();
     const { stdin } = render(<Harness store={store} inputStores={inputStores} />);
     await tick();
 
     stdin.write(RETURN);
     await tick();
-    expect(fake.rpcCalls.filter((c) => c.method === 'command.submit').length).toBe(0);
+    const interrupts = submitsOfKind(fake, 'agent.interrupt');
+    expect(interrupts.length).toBe(1);
+    expect((interrupts[0]?.params as { payload: unknown }).payload).toMatchObject({
+      agent_id: 'collab-1',
+    });
+    expect(submitsOfKind(fake, 'agent.message').length).toBe(0);
     dispose();
   });
 

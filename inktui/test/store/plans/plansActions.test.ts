@@ -188,13 +188,13 @@ describe('plansActions — wire→selector: C11 indentation + recency ordering f
 // ── spawnPlanner — the `p` bind's plans-domain verb ───────────────────────────────────────────────
 
 describe('plansActions — spawnPlanner', () => {
-  it('spawns a planning rogue over the plan: crow.spawn_rogue with the planner defaults, then the kickoff-by-path message', async () => {
+  it('spawns a planning agent with planner.spawn and no follow-up kickoff message', async () => {
     const { fake, store, dispose } = setup({ invalidation_key: 'iv', plans: [] });
     fake.stubRpc('command.submit', { ok: true, command_id: 'cmd-1' });
     fake.stubRpc('command.status', {
       ok: true,
       status: 'done',
-      result_json: JSON.stringify({ handled: true, agent_id: 'rogue-1' }),
+      result_json: JSON.stringify({ handled: true, agent_id: 'planner-alpha' }),
     });
     toastStore.getState().clear();
 
@@ -202,30 +202,48 @@ describe('plansActions — spawnPlanner', () => {
 
     const submits = fake.rpcCalls.filter((c) => c.method === 'command.submit');
     const kinds = submits.map((c) => (c.params as { kind: string }).kind);
-    expect(kinds).toContain('crow.spawn_rogue');
-    expect(kinds).toContain('agent.message'); // the kickoff rides out-of-band after the spawn
+    expect(kinds).toContain('planner.spawn');
+    expect(kinds).not.toContain('agent.message');
 
-    const spawn = submits.find((c) => (c.params as { kind: string }).kind === 'crow.spawn_rogue');
+    const spawn = submits.find((c) => (c.params as { kind: string }).kind === 'planner.spawn');
     const payload = (spawn?.params as { payload: Record<string, unknown> }).payload;
-    // The planner defaults (plannerSpawnParams): deep-thinking tier, named after the plan.
     expect(payload).toMatchObject({
+      plan_name: 'alpha',
       harness: 'claude_code',
       model: 'opus',
       effort: 'high',
-      name: 'plan-alpha',
     });
-    expect(payload).not.toHaveProperty('worktree_branch'); // the planner edits .murder/, not the tree
-
-    const kickoff = submits.find((c) => (c.params as { kind: string }).kind === 'agent.message');
-    const kickoffPayload = (kickoff?.params as { payload: { agent_id: string; message: string } })
-      .payload;
-    expect(kickoffPayload.agent_id).toBe('rogue-1');
-    // Reference-by-path (the locked mechanism): the planner READS the plan file, never an inlined body.
-    expect(kickoffPayload.message).toContain('.murder/plans/alpha.md');
 
     const live = selectLiveToasts(toastStore.getState().toasts, Date.now());
     expect(live.map((t) => t.text)).toContain('planner spawned for "alpha"');
     toastStore.getState().clear();
+    dispose();
+  });
+
+  it('planner.spawn uses the effective harness when a plannerHarness override is set', async () => {
+    const { fake, store, dispose } = setup({ invalidation_key: 'iv', plans: [] });
+    fake.stubRpc('command.submit', { ok: true, command_id: 'cmd-1' });
+    fake.stubRpc('command.status', {
+      ok: true,
+      status: 'done',
+      result_json: JSON.stringify({ handled: true, agent_id: 'planner-beta' }),
+    });
+    store.setState((state) => ({
+      ...state,
+      settings: {
+        ...state.settings,
+        plannerHarness: 'codex',
+        effectivePlannerHarness: 'claude_code',
+      },
+    }));
+
+    await store.getState().actions.plans.spawnPlanner('beta');
+
+    const spawn = fake.rpcCalls
+      .filter((c) => c.method === 'command.submit')
+      .find((c) => (c.params as { kind: string }).kind === 'planner.spawn');
+    const payload = (spawn?.params as { payload: Record<string, unknown> }).payload;
+    expect(payload).toMatchObject({ plan_name: 'beta', harness: 'codex', effort: 'high' });
     dispose();
   });
 

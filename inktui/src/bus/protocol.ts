@@ -357,6 +357,17 @@ export interface SubArgs {
   presence_retain: boolean;
 }
 
+/** Topic names accepted by the `hydrate` wire op. `all` is the server-defined convenience topic;
+ * concrete topic strings are intentionally open so new views can hydrate narrower state without
+ * changing this transport layer. */
+export type HydrateTopic = 'all' | (string & {});
+
+/** Hydrate arguments. The client owns `cursor`: application code never passes it directly. */
+export interface HydrateArgs {
+  topics: readonly HydrateTopic[];
+  cursor?: number | null;
+}
+
 /** RPC arguments. `target` is the method name; `body` its params. Mirrors Python `RpcArgs`. */
 export interface RpcArgs {
   target: string;
@@ -365,7 +376,7 @@ export interface RpcArgs {
 }
 
 export interface AckBody {
-  kind: 'subscribed' | 'replay_done' | 'rpc_reply' | 'pong';
+  kind: 'subscribed' | 'replay_done' | 'rpc_reply' | 'hydrate_reply' | 'pong' | 'published';
   watermark?: number | null;
   result?: Record<string, unknown> | null;
 }
@@ -404,6 +415,8 @@ export interface HelloMessage extends BaseMessage {
 
 export interface PubMessage extends BaseMessage {
   op: 'pub';
+  /** Durable event-log position for this frame. Optional while older servers are in flight. */
+  seq?: number | null;
   event: BusEvent;
 }
 
@@ -415,6 +428,11 @@ export interface SubMessage extends BaseMessage {
 export interface RpcMessage extends BaseMessage {
   op: 'rpc';
   args: RpcArgs;
+}
+
+export interface HydrateMessage extends BaseMessage {
+  op: 'hydrate';
+  args: HydrateArgs;
 }
 
 export interface AckMessage extends BaseMessage {
@@ -439,6 +457,7 @@ export type WireMessage =
   | PubMessage
   | SubMessage
   | RpcMessage
+  | HydrateMessage
   | AckMessage
   | ErrMessage
   | WakeMessage;

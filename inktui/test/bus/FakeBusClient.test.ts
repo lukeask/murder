@@ -186,6 +186,50 @@ describe('FakeBusClient — rpc', () => {
   });
 });
 
+describe('FakeBusClient — hydrate', () => {
+  it('resolves a stubbed hydrate reply and records the automatic cursor', async () => {
+    const fake = new FakeBusClient();
+    fake.stubHydrate({ snapshots: { conversations: { agents: [] } }, cursor: 42 });
+
+    await expect(fake.hydrate('all')).resolves.toMatchObject({
+      snapshots: { conversations: { agents: [] } },
+      cursor: 42,
+    });
+    expect(fake.hydrateCalls).toEqual([{ topics: ['all'], cursor: null }]);
+
+    fake.stubHydrate({ snapshots: {}, cursor: 45 });
+    await fake.hydrate(['conversations', 'schedule']);
+
+    expect(fake.hydrateCalls).toEqual([
+      { topics: ['all'], cursor: null },
+      { topics: ['conversations', 'schedule'], cursor: 42 },
+    ]);
+  });
+
+  it('uses observed pub seq as the next hydrate cursor', async () => {
+    const fake = new FakeBusClient();
+    fake.emit(snapshot({ key: 'older' }), 7);
+    fake.emit(snapshot({ key: 'newer' }), 12);
+    fake.emit(snapshot({ key: 'late-low-seq' }), 9);
+
+    await fake.hydrate('all');
+
+    expect(fake.hydrateCalls).toEqual([{ topics: ['all'], cursor: 12 }]);
+  });
+
+  it('delivers hydrate tail events until the hydrate result is unsubscribed', async () => {
+    const fake = new FakeBusClient();
+    const received: BusEvent[] = [];
+
+    const hydration = await fake.hydrate('all', (event) => received.push(event));
+    fake.emit(snapshot({ key: 'T-1' }), 1);
+    hydration.unsubscribe();
+    fake.emit(snapshot({ key: 'T-2' }), 2);
+
+    expect(received.map((event) => (event as StateSnapshotEvent).key)).toEqual(['T-1']);
+  });
+});
+
 describe('matchesFilter', () => {
   const event = snapshot({ entity: 'ticket', ticket_id: 'T-1' });
 

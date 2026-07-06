@@ -50,8 +50,8 @@ declare module '../../bus/BusClient.js' {
 /**
  * Static last-good model map — the fallback shown instantly on open before (or instead of) the
  * live snapshot. Mirrors the old Textual wizard's `_HARNESS_MODELS` (spawn_wizard.py:21). Harnesses
- * with no static list (`cursor`, `pi`, `antigravity`) get `[]` → the model
- * step is skipped unless the live snapshot supplies entries.
+ * with no static list (`pi`, `antigravity`) get `[]` → the model step is
+ * skipped unless the live snapshot supplies entries.
  */
 export const STATIC_HARNESS_MODELS: Record<string, readonly HarnessModel[]> = {
   claude_code: [
@@ -66,7 +66,13 @@ export const STATIC_HARNESS_MODELS: Record<string, readonly HarnessModel[]> = {
     { id: 'gpt-5.3-codex', label: 'GPT-5.3 Codex' },
     { id: 'gpt-5.2', label: 'GPT-5.2' },
   ],
-  cursor: [],
+  cursor: [
+    { id: 'composer-2.5', label: 'Composer 2.5' },
+    { id: 'auto', label: 'Auto' },
+    { id: 'gpt-5.5', label: 'GPT-5.5' },
+    { id: 'gpt-5.4', label: 'GPT-5.4' },
+    { id: 'claude-sonnet-4.5', label: 'Claude Sonnet 4.5' },
+  ],
   pi: [],
   antigravity: [],
 };

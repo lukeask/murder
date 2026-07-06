@@ -148,6 +148,9 @@ export interface GlobalHandlers {
    * effective focus is a Stage pane; from chat/a panel the chord falls through (does nothing). The
    * closed pane unmounts → focus re-homes to chat via the derived invariant (no imperative re-home). */
   closePane(): void;
+  /** `ctrl+r` (`global.repaint`): force a full terminal redraw. Modifier-independent plain chord;
+   * ctrl+l is taken by target cycling / panel nav. */
+  repaint(): void;
 }
 
 /**
@@ -288,6 +291,13 @@ function dispatchGlobalChord(
       return true;
     }
     return false;
+  }
+
+  // `global.repaint` (ctrl+r) forces a full terminal redraw after external screen disturbances that
+  // leave Ink's incremental line cache stale. Matched before the command-modifier gate (plain chord).
+  if (bindings.matches('global.repaint', input, key)) {
+    handlers.repaint();
+    return true;
   }
 
   // `global.toggleTargetGroup` (ctrl+j, a `plain` chord) toggles the chat recipient target between

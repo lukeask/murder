@@ -7,7 +7,7 @@ export const HARNESSES: readonly string[] = ['claude_code', 'codex', 'cursor', '
 export const STARTUP_ROGUE_MODELS: Readonly<Record<string, readonly string[]>> = {
   claude_code: ['', 'opus', 'sonnet', 'haiku', 'fable'],
   codex: ['', 'gpt-5.5', 'gpt-5.4', 'gpt-5.3-codex', 'gpt-5.2'],
-  cursor: [''],
+  cursor: ['', 'composer-2.5', 'auto', 'gpt-5.5', 'gpt-5.4', 'claude-sonnet-4.5'],
   pi: [''],
   antigravity: [''],
 };

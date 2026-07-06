@@ -48,6 +48,7 @@ function wireOp(message: WireMessage): string {
     case 'pub':
     case 'sub':
     case 'rpc':
+    case 'hydrate':
     case 'ack':
     case 'err':
     case 'wake':

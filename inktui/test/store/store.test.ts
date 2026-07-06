@@ -9,6 +9,7 @@ import type { Entity, StateSnapshotEvent } from '../../src/bus/protocol.js';
 import type { NotesSnapshotReply } from '../../src/store/notes/notesActions.js';
 import type { ReportsSnapshotReply } from '../../src/store/reports/reportsActions.js';
 import type { CrowSnapshotReply } from '../../src/store/roster/rosterActions.js';
+import type { SettingsWire } from '../../src/store/settings/settingsActions.js';
 import { createAppStore } from '../../src/store/store.js';
 import type { ScheduleSnapshotReply } from '../../src/store/tickets/ticketsActions.js';
 import { selectLiveToasts, toastStore } from '../../src/store/toast/toastStore.js';
@@ -66,6 +67,29 @@ function scheduleReply(overrides: Partial<ScheduleSnapshotReply> = {}): Schedule
   };
 }
 
+/** A canned `settings.get` payload with a non-default modifier, so hydrate visibly moves the slice
+ * away from `initialSettingsState` (which uses `alt`). */
+function settingsWire(overrides: Partial<SettingsWire> = {}): SettingsWire {
+  return {
+    theme: 'everforest-dark',
+    modifier: 'ctrl',
+    key_overrides: {},
+    pane_gap: 0,
+    vim_mode: false,
+    default_chat_view_mode: 'verbose',
+    startup_rogue: null,
+    collaborator_harness: null,
+    planner_harness: null,
+    crow_harnesses: ['cursor', 'claude_code'],
+    effective_collaborator_harness: 'claude_code',
+    effective_planner_harness: 'claude_code',
+    effective_crow_harnesses: ['cursor', 'claude_code'],
+    llm: {},
+    llm_env: { groq: false, cerebras: false, openrouter: false },
+    ...overrides,
+  };
+}
+
 /**
  * Build a store wired to a FakeBusClient with the roster + schedule RPCs stubbed. Roster keys on
  * `'agent'`; usage keys on `'queue_row'` (F1 locked map) and reads `state.schedule_snapshot`'s
@@ -81,13 +105,83 @@ function setup(reply: CrowSnapshotReply = crowReply()) {
 
 describe('createAppStore — boot & wiring', () => {
   it('subscribes to the bus four times on construction (state.snapshot + conversation.block + conversation.state + error)', () => {
-    // C3 had one subscription (state.snapshot); C10 added conversation.block; the queued-message /
-    // liveness work added conversation.state; first-run UX added the backend-error → toast route.
-    // All unsubscribe on dispose (the contract: dispose tears down all wiring).
+    // Hydration replaces the four constructor subscriptions with one server-defined snapshot+tail
+    // contract. The legacy subscribe count stays zero; dispose tears down the hydrate tail.
     const { fake, dispose } = setup();
-    expect(fake.subscriberCount).toBe(4);
+    expect(fake.subscriberCount).toBe(0);
+    expect(fake.hydrateCalls).toEqual([{ topics: ['all'], cursor: null }]);
     dispose();
     expect(fake.subscriberCount).toBe(0);
+  });
+
+  it('uses bus.hydrate when available and applies startup snapshots without priming RPCs', async () => {
+    const fake = new FakeBusClient();
+    fake.stubHydrate({
+      snapshots: {
+        'state.crow_snapshot': crowReply(),
+        'state.schedule_snapshot': scheduleReply({
+          usage_gauges: [
+            { harness: 'claude', window_key: 'h1', pct: 42, t_until_reset_minutes: 8 },
+          ],
+        }),
+        'tui.load_favorites': { favorites: ['collaborator'] },
+        'settings.get': { settings: settingsWire() },
+      },
+      cursor: 123,
+      mode: 'cold',
+    });
+    const { store, dispose } = createAppStore(fake);
+
+    expect(store.getState().hydration.status).toBe('loading');
+    await flush();
+
+    expect(fake.hydrateCalls).toEqual([{ topics: ['all'], cursor: null }]);
+    expect(fake.subscriberCount).toBe(0);
+    expect(fake.rpcCalls).toEqual([]);
+    expect(store.getState().hydration).toMatchObject({
+      status: 'ready',
+      cursor: 123,
+      mode: 'cold',
+    });
+    expect(store.getState().roster.rows[0]?.agentId).toBe('a-1');
+    expect(store.getState().usage.rows[0]?.pct).toBe(42);
+    expect(store.getState().favorites.ids.has('collaborator')).toBe(true);
+    expect(store.getState().settings.modifier).toBe('ctrl');
+    dispose();
+  });
+
+  it('applies hydrate replay events through the same idempotent conversation event path', async () => {
+    const block = {
+      type: 'conversation.block',
+      id: 'ev-block',
+      ts: '2026-06-08T00:00:00Z',
+      run_id: 'run-1',
+      agent_id: 'agent-1',
+      conversation_id: 'conv-1',
+      action: 'block-appended',
+      block: { type: 'assistant', id: 'block-1', text: 'from replay' },
+    } as const;
+    const fake = new FakeBusClient();
+    fake.stubHydrate({
+      snapshots: {},
+      cursor: 124,
+      mode: 'resume',
+      replay: [
+        { seq: 123, event: block },
+        {
+          seq: 124,
+          event: { ...block, block: { type: 'assistant', id: 'block-1', text: 'final' } },
+        },
+      ],
+    });
+    const { store, dispose } = createAppStore(fake);
+
+    await flush();
+
+    const blocks = store.getState().conversations.transcripts['agent-1'];
+    expect(blocks).toHaveLength(1);
+    expect(blocks?.[0]?.raw['text']).toBe('final');
+    dispose();
   });
 
   it('starts each slice in its idle, pre-fetch state', () => {
