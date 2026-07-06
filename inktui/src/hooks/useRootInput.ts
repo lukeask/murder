@@ -171,6 +171,19 @@ export function chordToKey(chord: Chord): { input: string; key: Key } {
   }
 }
 
+function normalizeTerminalKey(input: string, key: Key): { input: string; key: Key } {
+  if (key.backspace === true) {
+    return { input, key };
+  }
+  // Raw-mode Backspace is not universal: local terminals commonly send DEL (0x7f), while SSH/tmux
+  // paths can deliver BS (0x08). If Ink surfaces either byte as input instead of key.backspace,
+  // normalize it before the dispatcher/mode keymaps see the event.
+  if (input === '\x7f' || input === '\x08') {
+    return { input: '', key: { ...key, backspace: true } };
+  }
+  return { input, key };
+}
+
 /**
  * Shared panel-shortcut behaviour. Visibility and focus meet here:
  *  - hidden panel: show it and focus it
@@ -311,7 +324,8 @@ export function useRootInput(
 
   useInput(
     (input, key) => {
-      handleKey(input, key);
+      const normalized = normalizeTerminalKey(input, key);
+      handleKey(normalized.input, normalized.key);
     },
     // `=== true` so an `undefined` (non-TTY stdin) is a hard `false`: `useInput` skips raw mode only
     // on a strict `isActive === false`, so a falsy-but-not-false value would still try to claim it.

@@ -157,6 +157,24 @@ describe('modified Enter (0x0d) → side-channel chord (chat-input overhaul)', (
   });
 });
 
+describe('Backspace CSI-u translation', () => {
+  it('plain DEL-style Backspace (127) stays usable as legacy DEL', () => {
+    expect(bytesOf(translate(key(127)))).toEqual([0x7f]);
+  });
+
+  it('plain BS-style Backspace (8) is normalized to legacy DEL', () => {
+    expect(bytesOf(translate(key(8)))).toEqual([0x7f]);
+  });
+
+  it('modified Backspace travels the side channel with modifiers intact', () => {
+    const t = translate(key(127, mods({ alt: true })));
+    expect(t).toEqual({
+      kind: 'chord',
+      chord: { input: 'backspace', ctrl: false, alt: true, shift: false },
+    });
+  });
+});
+
 describe('events', () => {
   it('drops a release event (event 3) → empty bytes', () => {
     const t = translate(key(0x73, mods({ ctrl: true }), 3));

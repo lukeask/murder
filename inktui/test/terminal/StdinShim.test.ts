@@ -80,6 +80,15 @@ describe('active mode — translation', () => {
     expect(down.text()).toBe('\x13');
   });
 
+  it('forwards a kitty Backspace key as a legacy DEL byte', () => {
+    const real = new FakeStdin();
+    const shim = new StdinShim(real);
+    shim.setBypass(false);
+    const down = collectDownstream(shim);
+    real.push('\x1b[127u'); // Backspace → DEL
+    expect(down.text()).toBe('\x7f');
+  });
+
   it('emits a chord (not bytes) for ctrl+1', () => {
     const real = new FakeStdin();
     const shim = new StdinShim(real);

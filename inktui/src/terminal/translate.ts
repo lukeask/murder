@@ -2,10 +2,10 @@
  * `translate` — turn a decoded kitty {@link CsiKeyToken} into one of two outcomes:
  *
  *  1. **Legacy bytes** the downstream consumer (Ink's own input parser) already understands, so the
- *     keypress behaves exactly as it does without the kitty protocol. Esc → `\x1b`, ctrl+c →
- *     `\x03` (literal — so Ink's `exitOnCtrlC` keeps working), a printable char → its UTF-8 bytes,
- *     alt+<key> → the legacy ESC-prefixed form (Ink reports it as `key.meta`, unchanged from today),
- *     and a ctrl+<letter> that has a clean legacy control byte → that byte.
+ *     keypress behaves exactly as it does without the kitty protocol. Esc → `\x1b`, Backspace →
+ *     `\x7f`, ctrl+c → `\x03` (literal — so Ink's `exitOnCtrlC` keeps working), a printable char →
+ *     its UTF-8 bytes, alt+<key> → the legacy ESC-prefixed form (Ink reports it as `key.meta`,
+ *     unchanged from today), and a ctrl+<letter> that has a clean legacy control byte → that byte.
  *
  *  2. **A side-channel {@link Chord}** for combos legacy encoding *cannot* represent — ctrl+digit,
  *     ctrl+i/m/h/j (collide with Tab/Enter/Backspace/Enter), ctrl+space. These never go downstream as bytes
@@ -105,6 +105,7 @@ function printableChar(code: number): string | null {
  *  - **ctrl+c** → literal `\x03`, ALWAYS, regardless of other modifiers, so Ink's ctrl-c exit path is
  *    untouched.
  *  - **Esc** (code 27, no mods) → `\x1b`.
+ *  - **Backspace** (code 127 or 8) → legacy DEL (`\x7f`) when unmodified; side-channel when modified.
  *  - **ctrl + digit / space** → side-channel chord (no legacy byte exists).
  *  - **ctrl + i/m** → side-channel chord with the collision's special-key name (the legacy byte is
  *    ambiguous with Tab/Enter, so we must not emit it as a ctrl chord).
@@ -133,6 +134,15 @@ export function translate(token: CsiKeyToken): Translation {
   // Esc.
   if (code === 27 && !ctrl && !alt) {
     return bytesOf(0x1b);
+  }
+
+  // Backspace. Terminals vary between DEL (127) and BS (8), especially over SSH/tmux. Preserve the
+  // unmodified key as the legacy DEL byte Ink already handles, and keep modified Backspace explicit.
+  if (code === 127 || code === 8) {
+    if (shift || alt || ctrl) {
+      return chordOf('backspace', { ctrl, alt, shift });
+    }
+    return bytesOf(0x7f);
   }
 
   // Enter (0x0d). A *modified* Enter (shift/alt/ctrl) has no legacy byte that preserves the modifier —

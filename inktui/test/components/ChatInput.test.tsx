@@ -28,6 +28,7 @@ import { createAppStore } from '../../src/store/store.js';
 const RETURN = '\r';
 const ALT_S = '\x1bs';
 const BACKSPACE = '\x7f';
+const CTRL_H_BACKSPACE = '\x08';
 
 async function tick(): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, 20));
@@ -181,6 +182,19 @@ describe('ChatInput — persistent chat-input send (C11)', () => {
     stdin.write('abc');
     await tick();
     stdin.write(BACKSPACE);
+    await tick();
+    expect(inputStores.chatInput.getState().text).toBe('ab');
+    dispose();
+  });
+
+  it('ctrl-h style backspace deletes from the buffer', async () => {
+    const { store, inputStores, dispose } = await setup();
+    const { stdin } = render(<Harness store={store} inputStores={inputStores} />);
+    await tick();
+
+    stdin.write('abc');
+    await tick();
+    stdin.write(CTRL_H_BACKSPACE);
     await tick();
     expect(inputStores.chatInput.getState().text).toBe('ab');
     dispose();
