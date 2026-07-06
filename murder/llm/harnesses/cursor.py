@@ -138,6 +138,14 @@ def _is_composer_model(model: str) -> bool:
     return _normalize_cursor_model(model) == "composer-2.5"
 
 
+def _cursor_picker_filter_text(model: str) -> str:
+    normalized = _normalize_cursor_model(model)
+    for model_id, label in CursorAdapter.available_startup_models:
+        if _normalize_cursor_model(model_id) == normalized:
+            return label
+    return model
+
+
 class CursorAdapter(HarnessAdapter):
     kind: ClassVar[str] = "cursor"
     usage_collection_mode: ClassVar[UsageCollectionMode] = "http"
@@ -275,6 +283,47 @@ class CursorAdapter(HarnessAdapter):
             return None
         return HarnessModelState(model=model, effort=effort)
 
+    def _parse_model_picker_rows(self, pane_text: str) -> list[tuple[str, str]]:
+        return parse_cursor_model_list(pane_text, model_id_for_label=_cursor_model_id_from_label)
+
+    async def _wait_for_picker_model(
+        self,
+        session: str,
+        desired_model: str,
+    ) -> tuple[str, str] | None:
+        for _ in range(_MODEL_VERIFY_ATTEMPTS):
+            pane = await tmux.capture_pane(session, lines=200)
+            for model_id, label in self._parse_model_picker_rows(pane):
+                if _normalize_cursor_model(model_id) == desired_model:
+                    return model_id, label
+            if self.detects_model_rejection(pane, desired_model):
+                return None
+            await asyncio.sleep(_MODEL_SETTLE_DELAY_S)
+        return None
+
+    async def _select_model_from_picker(self, session: str, model: str) -> bool:
+        desired_model = _normalize_cursor_model(model)
+        await tmux.send_keys(session, "/model", literal=True, enter=True)
+        await asyncio.sleep(_MODEL_MENU_DELAY_S)
+        await self._type_picker_filter(session, _cursor_picker_filter_text(model))
+        if await self._wait_for_picker_model(session, desired_model) is None:
+            await tmux.send_keys(session, "Escape", literal=False, enter=False)
+            await asyncio.sleep(0.15)
+            return False
+        await tmux.send_keys(session, "", literal=True, enter=True)
+        return await self._wait_for_active_model(session, desired_model)
+
+    async def _wait_for_active_model(self, session: str, desired_model: str) -> bool:
+        for _ in range(_MODEL_VERIFY_ATTEMPTS):
+            await asyncio.sleep(_MODEL_SETTLE_DELAY_S)
+            pane = await tmux.capture_pane(session, lines=200)
+            state = self.parse_active_model_state(pane)
+            if state is not None and _normalize_cursor_model(state.model or "") == desired_model:
+                return True
+            if self.detects_model_rejection(pane, desired_model):
+                return False
+        return False
+
     async def _type_picker_filter(self, session: str, text: str) -> None:
         """Type ``text`` into the `/model` picker's filter one key at a time.
 
@@ -297,7 +346,10 @@ class CursorAdapter(HarnessAdapter):
         await tmux.send_keys(session, "/model", literal=True, enter=True)
         await asyncio.sleep(_MODEL_MENU_DELAY_S)
         await self._type_picker_filter(session, "Composer 2.5")
-        await asyncio.sleep(0.25)
+        if await self._wait_for_picker_model(session, "composer-2.5") is None:
+            await tmux.send_keys(session, "Escape", literal=False, enter=False)
+            await asyncio.sleep(0.15)
+            return False
         await tmux.send_keys(session, "Tab", literal=False, enter=False)
         await asyncio.sleep(0.25)
         pane = await tmux.capture_pane(session, lines=200)
@@ -351,13 +403,12 @@ class CursorAdapter(HarnessAdapter):
         if _is_composer_model(desired_model) and desired_speed is not None:
             return await self._set_composer_speed(session, desired_speed)
 
-        await tmux.send_keys(session, f"/model {model}", literal=True, enter=True)
-        await asyncio.sleep(_MODEL_SETTLE_DELAY_S)
+        if not await self._select_model_from_picker(session, model):
+            return False
         pane = await tmux.capture_pane(session, lines=200)
         state = self.parse_active_model_state(pane)
         if state is None:
-            curated = {_normalize_cursor_model(m) for m, _ in self.available_startup_models}
-            return desired_model in curated
+            return False
         active_model = _normalize_cursor_model(state.model or "")
         if active_model != desired_model:
             return False

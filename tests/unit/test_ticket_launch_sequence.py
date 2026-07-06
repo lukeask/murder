@@ -39,6 +39,17 @@ CURSOR_IDLE = _load("cursor_idle.txt")
 # Idle pane with no parseable active-model status line, so cursor's set_model
 # verification falls back to curated membership and confirms the request.
 CURSOR_IDLE_GPT = CURSOR_IDLE.replace("Composer 2.5", "GPT-5.5")
+CURSOR_FILTERED_GPT = """
+Available models
+
+ Filter: GPT-5.5
+
+ → GPT-5.5                  272K Medium
+
+ 1-1 of 1
+
+ Type to filter • Enter to select • Tab to edit
+"""
 CODEX_IDLE = _load("codex_idle.txt")
 
 
@@ -76,6 +87,10 @@ def _send_texts(ft: FakeTmux) -> list[str]:
 
 
 def test_crow_agent_start_applies_model_before_brief(fake_tmux_launch: FakeTmux) -> None:
+    fake_tmux_launch.queue_pane(CURSOR_IDLE)
+    fake_tmux_launch.queue_pane(CURSOR_IDLE)
+    fake_tmux_launch.queue_pane(CURSOR_IDLE)
+    fake_tmux_launch.queue_pane(CURSOR_FILTERED_GPT)
     fake_tmux_launch.queue_pane(CURSOR_IDLE_GPT)
 
     agent = CrowAgent(

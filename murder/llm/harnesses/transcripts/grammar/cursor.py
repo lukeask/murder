@@ -91,7 +91,10 @@ _CURSOR_CWD_BARE_RE = re.compile(r"^\s*(?:~/|/)[^\s·]*\s*$")
 # Status line: model label + the auto-run mode on the right. CLI ≥ 2026.06.11
 # renders the yolo mode as "Run Everything" (older builds said "Auto-run").
 _CURSOR_COMPOSER_RE = re.compile(
-    r"^\s*Composer\b.*\b(?:Auto-run|Run\s+Everything)\b", re.IGNORECASE
+    r"^\s*[A-Za-z][A-Za-z0-9 .:+/_-]*?"
+    r"(?:\s+·\s+\d+(?:\.\d+)?%)?\s+"
+    r"(?:Auto-run|Run\s+Everything)\s*$",
+    re.IGNORECASE,
 )
 _CURSOR_PLACEHOLDER_RE = re.compile(
     r"^\s*→\s*(?:Add a follow-up|Plan,\s*search,\s*build anything)\b",

@@ -511,7 +511,13 @@ def test_set_model_succeeds_when_model_matches_startup(fake_tmux: FakeTmux):
     assert result.ok
 
 
-def test_set_model_cursor_sends_slash_model_command(fake_tmux: FakeTmux):
+def test_set_model_cursor_filters_picker_and_verifies_footer(fake_tmux: FakeTmux):
+    fake_tmux.queue_pane(
+        "  → Plan, search, build anything\n  Composer 2.5   Auto-run\n  ~/repo · main\n"
+    )
+    fake_tmux.queue_pane(
+        "Available models\n\n Filter: GPT-5.5\n\n → GPT-5.5                  272K Medium\n\n 1-1 of 1\n"
+    )
     fake_tmux.queue_pane(
         "  → Plan, search, build anything\n  GPT-5.5   Auto-run\n  ~/repo · main\n"
     )
@@ -522,7 +528,8 @@ def test_set_model_cursor_sends_slash_model_command(fake_tmux: FakeTmux):
     assert result.ok
     send_calls = fake_tmux.calls_to("send_keys")
     texts = [args[1] for args, _ in send_calls]
-    assert any("/model gpt-5.5" in t for t in texts)
+    assert "/model" in texts
+    assert "".join(t for t in texts if len(t) == 1) == "GPT-5.5"
 
 
 def test_set_model_cursor_auto_with_default_effort_succeeds(fake_tmux: FakeTmux):

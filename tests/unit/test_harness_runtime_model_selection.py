@@ -195,8 +195,9 @@ def test_cursor_set_composer_speed_types_picker_filter_per_key(fake_tmux: FakeTm
     # The /model picker (CLI ≥ 2026.06.11) drops bulk literal input as a paste
     # guard — the filter must be typed one key at a time, never as one string.
     idle_slow = CURSOR_IDLE_COMPOSER_FAST.replace("Fast", "Slow")
+    fake_tmux.queue_pane(CURSOR_IDLE_COMPOSER_FAST)
     fake_tmux.queue_pane(CURSOR_COMPOSER_MENU_SLOW)
-    fake_tmux.queue_pane(idle_slow)
+    fake_tmux.queue_pane(CURSOR_COMPOSER_EDIT_PARAMETERS_SLOW)
     fake_tmux.queue_pane(idle_slow)
 
     ok = asyncio.run(CursorAdapter().set_model("sess", "composer-2.5", effort="slow"))
@@ -408,6 +409,36 @@ CURSOR_IDLE_COMPOSER_NO_SPEED = """
   ~/Documents/code/murder · main
 """
 
+CURSOR_IDLE_GPT55 = """
+  → Plan, search, build anything
+  GPT-5.5                                                                         Auto-run
+  ~/Documents/code/murder · main
+"""
+
+CURSOR_MODEL_FILTERED_GPT55 = """
+Available models
+
+ Filter: GPT-5.5
+
+ → GPT-5.5                  272K Medium
+
+ 1-1 of 1
+
+Type to filter • Enter to select • Tab to edit
+"""
+
+CURSOR_MODEL_FILTERED_NO_GPT55 = """
+Available models
+
+ Filter: GPT-5.5
+
+   Composer 2.5             (Tab to modify)
+
+ 1-1 of 1
+
+ Type to filter • Enter to select • Tab to edit
+"""
+
 CURSOR_MODEL_LIST_PAGE1 = _pane("cursor_model_list.txt")
 CURSOR_MODEL_LIST_PAGE2 = """
 Available models
@@ -477,6 +508,14 @@ def test_cursor_active_model_state_parses_composer_speed() -> None:
     assert state.effort == "fast"
 
 
+def test_cursor_active_model_state_parses_non_composer_status_line() -> None:
+    state = CursorAdapter().parse_active_model_state(CURSOR_IDLE_GPT55)
+
+    assert state is not None
+    assert state.model == "gpt-5.5"
+    assert state.effort is None
+
+
 def test_cursor_set_model_accepts_current_default_composer_without_opening_picker(
     fake_tmux: FakeTmux,
 ) -> None:
@@ -504,12 +543,48 @@ def test_cursor_set_model_waits_briefly_for_default_composer_footer(
     assert "/model" not in sent
 
 
+def test_cursor_set_model_filters_picker_and_verifies_non_composer_footer(
+    fake_tmux: FakeTmux,
+) -> None:
+    fake_tmux.queue_pane(CURSOR_IDLE_COMPOSER_NO_SPEED)
+    fake_tmux.queue_pane(CURSOR_MODEL_FILTERED_GPT55)
+    fake_tmux.queue_pane(CURSOR_IDLE_GPT55)
+    fake_tmux.queue_pane(CURSOR_IDLE_GPT55)
+
+    ok = asyncio.run(CursorAdapter().set_model("sess", "gpt-5.5"))
+
+    assert ok
+    sent = [args[1] for args, _ in fake_tmux.calls_to("send_keys")]
+    assert "/model" in sent
+    assert "GPT-5.5" not in sent
+    single_chars = [s for s in sent if len(s) == 1]
+    assert "".join(single_chars) == "GPT-5.5"
+
+
+def test_cursor_set_model_does_not_commit_when_filtered_row_is_absent(
+    fake_tmux: FakeTmux,
+) -> None:
+    fake_tmux.queue_pane(CURSOR_IDLE_COMPOSER_NO_SPEED)
+    fake_tmux.queue_pane(CURSOR_MODEL_FILTERED_NO_GPT55)
+
+    ok = asyncio.run(CursorAdapter().set_model("sess", "gpt-5.5"))
+
+    assert ok is False
+    calls = fake_tmux.calls_to("send_keys")
+    texts = [args[1] for args, _ in calls]
+    assert "Escape" in texts
+    # The only Enter-submitting send should be opening `/model`; there must be
+    # no empty-string Enter commit when the requested row never appears.
+    assert "" not in texts
+
+
 def test_cursor_set_composer_speed_accepts_checkbox_ui_for_slow(
     fake_tmux: FakeTmux,
 ) -> None:
     # Edit-parameters dialog (Tab from the picker): Fast is unchecked → already
     # slow, so no Enter toggle — just Escape back and commit.
     fake_tmux.queue_pane(CURSOR_IDLE_COMPOSER_FAST)
+    fake_tmux.queue_pane(CURSOR_COMPOSER_MENU_SLOW)
     fake_tmux.queue_pane(CURSOR_COMPOSER_EDIT_PARAMETERS_SLOW)
     fake_tmux.queue_pane(CURSOR_IDLE_COMPOSER_NO_SPEED)
 
@@ -529,6 +604,7 @@ def test_cursor_set_composer_speed_toggles_checkbox_ui_for_fast(
     # Edit-parameters dialog: Fast is unchecked → toggle with Enter ("Enter to
     # select" toggles the checkbox in CLI ≥ 2026.06.11; Space does nothing).
     fake_tmux.queue_pane(CURSOR_IDLE_COMPOSER_NO_SPEED)
+    fake_tmux.queue_pane(CURSOR_COMPOSER_MENU_SLOW)
     fake_tmux.queue_pane(CURSOR_COMPOSER_EDIT_PARAMETERS_SLOW)
     fake_tmux.queue_pane(CURSOR_IDLE_COMPOSER_FAST)
 
