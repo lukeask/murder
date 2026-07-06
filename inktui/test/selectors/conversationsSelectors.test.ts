@@ -13,6 +13,7 @@ import { deriveAgentIdentity } from '../../src/selectors/agentIdentity.js';
 import {
   condenseBlocks,
   isTranscriptPaneOpen,
+  selectActiveAgent,
   selectActiveAgentId,
   selectAdjacentRecipientTargets,
   selectConversationTurns,
@@ -259,6 +260,15 @@ describe('selectFavoriteTranscriptPanes', () => {
     expect(panes[1]?.kind).toBe('rogue');
   });
 
+  it('keeps same-kind panes in stable agentId order regardless of roster row order', () => {
+    const rows: RosterRow[] = [
+      rosterRow({ agentId: 'rogue-b', role: 'crow', ticketId: null }),
+      rosterRow({ agentId: 'rogue-a', role: 'crow', ticketId: null }),
+    ];
+    const { panes } = selectFavoriteTranscriptPanes({ ...initialRosterState, rows, status: 'ready' });
+    expect(panes.map((pane) => pane.agentId)).toEqual(['rogue-a', 'rogue-b']);
+  });
+
   it('excludes infrastructure roles', () => {
     const rows: RosterRow[] = [
       rosterRow({ agentId: 'nh', role: 'planning_handler' }),
@@ -279,8 +289,16 @@ describe('selectActiveAgentId', () => {
   });
 
   it('returns activePaneAgentId when set (user-pinned takes priority)', () => {
+    const rows: RosterRow[] = [
+      rosterRow({ agentId: 'agent-pinned', role: 'crow', ticketId: null }),
+      rosterRow({ agentId: 'other', role: 'crow', ticketId: null }),
+    ];
     const conversations = { ...initialConversationsState, activePaneAgentId: 'agent-pinned' };
-    const result = selectActiveAgentId(conversations, initialRosterState);
+    const result = selectActiveAgentId(conversations, {
+      ...initialRosterState,
+      rows,
+      status: 'ready',
+    });
     expect(result).toBe('agent-pinned');
   });
 
@@ -292,6 +310,19 @@ describe('selectActiveAgentId', () => {
     const roster = { ...initialRosterState, rows, status: 'ready' as const };
     const result = selectActiveAgentId(initialConversationsState, roster);
     expect(result).toBe('collab'); // collaborator is first in spec order
+  });
+
+  it('falls through to the next live target when the pinned crow is dead', () => {
+    const rows: RosterRow[] = [
+      rosterRow({ agentId: 'dead-crow', role: 'crow', ticketId: null, status: 'dead' }),
+      rosterRow({ agentId: 'next-crow', role: 'crow', ticketId: null, status: 'idle' }),
+    ];
+    const conversations = { ...initialConversationsState, activePaneAgentId: 'dead-crow' };
+    const roster = { ...initialRosterState, rows, status: 'ready' as const };
+    expect(selectActiveAgentId(conversations, roster, initialFavoritesState)).toBe('next-crow');
+    expect(selectActiveAgent(conversations, roster, initialFavoritesState)?.agentId).toBe(
+      'next-crow',
+    );
   });
 });
 
@@ -336,6 +367,12 @@ describe('selectOpenTranscriptPanes — open set = favorites default + overrides
       agentId: 'r1',
       session: 'murder_murder_crow_claude_rogue_tony',
     }),
+    rosterRow({
+      role: 'crow',
+      ticketId: 'T-1',
+      agentId: 'ticket-1',
+      session: 'murder_murder_crow_T-1',
+    }),
   ];
   const roster = { ...initialRosterState, rows, status: 'ready' as const };
 
@@ -352,6 +389,20 @@ describe('selectOpenTranscriptPanes — open set = favorites default + overrides
   it('override closes the default-favorited rogue', () => {
     const { panes } = selectOpenTranscriptPanes(roster, initialFavoritesState, new Map([['r1', false]]));
     expect(panes.map((p) => p.agentId)).toEqual(['collab']);
+  });
+
+  it('keeps same-kind open panes in stable agentId order regardless of roster row order', () => {
+    const rows: RosterRow[] = [
+      rosterRow({ role: 'crow', ticketId: null, agentId: 'r2', session: 'rogue-2' }),
+      rosterRow({ role: 'crow', ticketId: null, agentId: 'r1', session: 'rogue-1' }),
+    ];
+    const unorderedRoster = { ...initialRosterState, rows, status: 'ready' as const };
+    const { panes } = selectOpenTranscriptPanes(
+      unorderedRoster,
+      initialFavoritesState,
+      new Map(),
+    );
+    expect(panes.map((pane) => pane.agentId)).toEqual(['r1', 'r2']);
   });
 });
 
@@ -379,9 +430,31 @@ describe('chat-target cycling (item 9)', () => {
     expect(targets.map((t) => t.agentId)).toEqual(['collab', 'r1', 'p1']);
   });
 
-  it('does not cycle non-favorited closed targets', () => {
+  it('does not cycle non-favorited closed ticket crows', () => {
     const targets = selectRecipientTargets(initialConversationsState, roster, initialFavoritesState);
-    expect(targets.map((t) => t.agentId)).toEqual(['collab', 'r1']);
+    expect(targets.map((t) => t.agentId)).toEqual(['collab', 'r1', 'p1']);
+  });
+
+  it('includes active planners even when their transcript pane is closed and unstarred', () => {
+    const plannerOnlyRoster = {
+      ...initialRosterState,
+      rows: [
+        rosterRow({
+          role: 'planner',
+          agentId: 'planner-1',
+          session: 'murder_murder_planner_alpha',
+          status: 'idle',
+        }),
+      ],
+      status: 'ready' as const,
+    };
+    const targets = selectRecipientTargets(
+      initialConversationsState,
+      plannerOnlyRoster,
+      initialFavoritesState,
+    );
+    expect(targets.map((t) => t.agentId)).toEqual(['planner-1']);
+    expect(selectActiveAgentId(initialConversationsState, plannerOnlyRoster)).toBe('planner-1');
   });
 
   it('next steps forward through the cycle from the current target', () => {
@@ -391,14 +464,14 @@ describe('chat-target cycling (item 9)', () => {
   });
 
   it('prev wraps around to the last entry', () => {
-    // Active = collab; prev wraps to the last cycle target (r1 — the rogue, default-favorited → open).
+    // Active = collab; prev wraps to the last cycle target (p1 — the closed active planner).
     const result = selectCycledRecipientTarget(initialConversationsState, roster, initialFavoritesState, -1);
-    expect(result).toEqual({ agentId: 'r1', needsOpen: false });
+    expect(result).toEqual({ agentId: 'p1', needsOpen: true });
   });
 
   it('next wraps from the last entry back to the first', () => {
-    // Active pinned to r1 (last in spec order) → next wraps to collab (first).
-    const conversations = { ...initialConversationsState, activePaneAgentId: 'r1' };
+    // Active pinned to p1 (last in target order) → next wraps to collab (first).
+    const conversations = { ...initialConversationsState, activePaneAgentId: 'p1' };
     const result = selectCycledRecipientTarget(conversations, roster, initialFavoritesState, 1);
     expect(result).toEqual({ agentId: 'collab', needsOpen: false });
   });
@@ -414,13 +487,13 @@ describe('chat-target cycling (item 9)', () => {
   });
 
   it('selectAdjacentRecipientTargets names the prev/next crows around the current target', () => {
-    // Active = collab in [collab, r1] → both directions reach the other target.
+    // Active = collab in [collab, r1, p1] → prev wraps to p1, next reaches r1.
     const { prev, next } = selectAdjacentRecipientTargets(
       initialConversationsState,
       roster,
       initialFavoritesState,
     );
-    expect(prev?.agentId).toBe('r1');
+    expect(prev?.agentId).toBe('p1');
     expect(next?.agentId).toBe('r1');
   });
 

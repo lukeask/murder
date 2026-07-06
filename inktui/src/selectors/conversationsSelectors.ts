@@ -30,7 +30,7 @@ import type {
   ConversationsState,
 } from '../store/conversations/conversationsSlice.js';
 import type { FavoritesState } from '../store/favorites/favoritesSlice.js';
-import type { RosterState } from '../store/roster/rosterSlice.js';
+import type { RosterRow, RosterState } from '../store/roster/rosterSlice.js';
 import { type AgentIdentity, deriveAgentIdentity, isDefaultFavorited } from './agentIdentity.js';
 import { isFavorited } from './favoritesSelectors.js';
 
@@ -493,6 +493,10 @@ const FAVORITES_GROUP_ORDER = ['collaborator', 'planner', 'rogue', 'ticket'] as 
 /** An empty favorite set — the defaults-only fallback when no prefs slice is supplied. */
 const NO_FAVORITES: FavoritesState = { ids: new Set<string>(), status: 'idle', error: null };
 
+function compareTranscriptPaneIdentity(a: AgentIdentity, b: AgentIdentity): number {
+  return a.agentId.localeCompare(b.agentId);
+}
+
 export function selectFavoriteTranscriptPanes(
   rosterState: RosterState,
   favorites: FavoritesState = NO_FAVORITES,
@@ -521,7 +525,7 @@ export function selectFavoriteTranscriptPanes(
   for (const kind of FAVORITES_GROUP_ORDER) {
     const group = byGroup[kind];
     if (group) {
-      for (const identity of group) {
+      for (const identity of [...group].sort(compareTranscriptPaneIdentity)) {
         panes.push(identity);
       }
     }
@@ -581,7 +585,7 @@ export function selectOpenTranscriptPanes(
   for (const kind of FAVORITES_GROUP_ORDER) {
     const group = byGroup[kind];
     if (group) {
-      for (const identity of group) {
+      for (const identity of [...group].sort(compareTranscriptPaneIdentity)) {
         panes.push(identity);
       }
     }
@@ -592,6 +596,24 @@ export function selectOpenTranscriptPanes(
 
 /** An empty pane-override map — the defaults-only fallback. */
 const NO_OVERRIDES: ReadonlyMap<string, boolean> = new Map<string, boolean>();
+
+function isTargetableRosterRow(row: RosterRow): boolean {
+  return row.status.toLowerCase() !== 'dead';
+}
+
+function selectActivePlannerTargets(rosterState: RosterState): readonly AgentIdentity[] {
+  const planners: AgentIdentity[] = [];
+  for (const row of rosterState.rows) {
+    if (row.role !== 'planner' || !isTargetableRosterRow(row)) {
+      continue;
+    }
+    const identity = deriveAgentIdentity(row);
+    if (identity !== null) {
+      planners.push(identity);
+    }
+  }
+  return planners.sort(compareTranscriptPaneIdentity);
+}
 
 // ---------------------------------------------------------------------------
 // Component-facing hooks (rule 2: memoised on slice identity)
@@ -668,17 +690,17 @@ export function selectActiveAgentId(
   rosterState: RosterState,
   favorites: FavoritesState = NO_FAVORITES,
 ): string | null {
-  if (conversationsState.activePaneAgentId !== null) {
+  const targets = selectRecipientTargets(conversationsState, rosterState, favorites);
+  if (targets.length === 0) {
+    return null;
+  }
+  if (
+    conversationsState.activePaneAgentId !== null &&
+    targets.some((target) => target.agentId === conversationsState.activePaneAgentId)
+  ) {
     return conversationsState.activePaneAgentId;
   }
-  // Default the target to the first OPEN pane (item 9b: open = favorites default + overrides) so the
-  // chat input names a target whose pane is actually in the center-stage group.
-  const { panes } = selectOpenTranscriptPanes(
-    rosterState,
-    favorites,
-    conversationsState.paneOverrides,
-  );
-  return panes.length > 0 ? (panes[0]?.agentId ?? null) : null;
+  return targets[0]?.agentId ?? null;
 }
 
 /** The result of cycling the recipient target (item 9 super-chords): the agent now targeted, and
@@ -704,14 +726,23 @@ export function selectRecipientTargets(
     rosterState,
     favorites,
     conversationsState.paneOverrides,
-  ).panes;
+  ).panes.filter((identity) =>
+    rosterState.rows.some(
+      (row) => row.agentId === identity.agentId && isTargetableRosterRow(row),
+    ),
+  );
   const lockedIds = new Set(lockedVisible.map((identity) => identity.agentId));
   const favoriteOnly = selectFavoriteTranscriptPanes(rosterState, favorites).panes.filter(
-    (identity) => !lockedIds.has(identity.agentId),
+    (identity) =>
+      !lockedIds.has(identity.agentId) &&
+      rosterState.rows.some(
+        (row) => row.agentId === identity.agentId && isTargetableRosterRow(row),
+      ),
   );
+  const activePlanners = selectActivePlannerTargets(rosterState);
   const seen = new Set<string>();
   const targets: AgentIdentity[] = [];
-  for (const identity of [...lockedVisible, ...favoriteOnly]) {
+  for (const identity of [...lockedVisible, ...favoriteOnly, ...activePlanners]) {
     if (seen.has(identity.agentId)) {
       continue;
     }
@@ -731,10 +762,17 @@ export function selectRecipientTargetState(
     rosterState,
     favorites,
     conversationsState.paneOverrides,
-  ).panes.map((pane) => pane.agentId);
+  ).panes
+    .filter((identity) =>
+      rosterState.rows.some(
+        (row) => row.agentId === identity.agentId && isTargetableRosterRow(row),
+      ),
+    )
+    .map((pane) => pane.agentId);
   const locked = new Set(lockedVisibleTargetIds);
-  const favoriteOnlyTargetIds = selectFavoriteTranscriptPanes(rosterState, favorites)
-    .panes.map((pane) => pane.agentId)
+  const targets = selectRecipientTargets(conversationsState, rosterState, favorites);
+  const favoriteOnlyTargetIds = targets
+    .map((target) => target.agentId)
     .filter((agentId) => !locked.has(agentId));
   return {
     activeTargetId,
