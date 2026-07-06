@@ -10,7 +10,7 @@ import { memo, useEffect, useMemo } from 'react';
 import type { ChatTurn, TurnSpeaker } from '../../selectors/conversationsSelectors.js';
 import { useTheme } from '../../theme/themeStore.js';
 import { Pane } from '../Pane.js';
-import { type ChatLine, flattenTurns } from './chatLines.js';
+import { type ChatLine, flattenTurns, wrapChatLines } from './chatLines.js';
 import { computeScrollThumb, computeTranscriptWindow } from './shared/scrollWindow.js';
 
 const GUTTER_HEAD = '▌';
@@ -20,6 +20,10 @@ const GUTTER_CONT = '▏';
 const CHROME_ROWS = 2;
 /** Side border columns (left + right). */
 const BORDER_COLS = 2;
+/** Gutter column pair (glyph + space). */
+const GUTTER_COLS = 2;
+/** Scrollbar track column when content overflows. */
+const SCROLLBAR_COLS = 1;
 /** Separator between harness and model in the display-ready `footerLeft` string. */
 const FOOTER_SEP = '◇';
 /** Inner width for full `harness ◇ model` + worktree on the bottom border. */
@@ -67,6 +71,21 @@ function contentHeight(height: number): number {
 
 function contentWidth(width: number): number {
   return Math.max(1, width - BORDER_COLS);
+}
+
+/** Text columns available to a chat row after pane borders, optional gutter, and scrollbar. */
+export function transcriptTextWidth(
+  paneWidth: number,
+  options: { readonly gutters: boolean; readonly scrollbar: boolean },
+): number {
+  let rowWidth = contentWidth(paneWidth);
+  if (options.scrollbar) {
+    rowWidth -= SCROLLBAR_COLS;
+  }
+  if (options.gutters) {
+    rowWidth -= GUTTER_COLS;
+  }
+  return Math.max(1, rowWidth);
 }
 
 /**
@@ -128,12 +147,12 @@ function ChatHistoryLine({
       <Text> </Text>
     ) : verbatim ? (
       <Box flexGrow={1} minWidth={0} flexDirection="column">
-        <Text dimColor wrap="wrap">
+        <Text dimColor wrap="truncate">
           {line.text === '' ? ' ' : line.text}
         </Text>
       </Box>
     ) : (
-      <Text color={gutterColor} wrap="wrap">
+      <Text color={gutterColor} wrap="truncate">
         {line.text === '' ? ' ' : line.text}
       </Text>
     );
@@ -217,6 +236,22 @@ function showScrollbar(
   return lineCount > windowRows;
 }
 
+function flattenTurnsForPane(
+  turns: readonly ChatTurn[],
+  paneWidth: number,
+  displayMode: ChatDisplayMode,
+  innerH: number,
+): readonly ChatLine[] {
+  const base = flattenTurns(turns);
+  const gutters = showGutters(displayMode);
+  const wrapAt = (scrollbar: boolean) => transcriptTextWidth(paneWidth, { gutters, scrollbar });
+  let wrapped = wrapChatLines(base, wrapAt(false));
+  if (showScrollbar(displayMode, innerH, wrapped.length, innerH)) {
+    wrapped = wrapChatLines(base, wrapAt(true));
+  }
+  return wrapped;
+}
+
 function footerVisible(height: number, level: FooterLevel): boolean {
   if (level === 'none') {
     return false;
@@ -279,7 +314,10 @@ export const TranscriptPane = memo(function TranscriptPane({
   const theme = useTheme();
   const displayMode = layout(width, height);
   const innerH = contentHeight(height);
-  const lines = useMemo(() => (viewMode === 'tmux' ? [] : flattenTurns(turns)), [turns, viewMode]);
+  const lines = useMemo(
+    () => (viewMode === 'tmux' ? [] : flattenTurnsForPane(turns, width, displayMode, innerH)),
+    [turns, viewMode, width, displayMode, innerH],
+  );
   const window = computeTranscriptWindow(lines.length, scrollUp, innerH, gotoLine);
   const visibleLines = lines.slice(window.start, window.end);
   const keyedVisibleLines = visibleLines.map((line, index) => ({

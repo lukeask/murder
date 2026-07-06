@@ -1,5 +1,6 @@
 import type { ChatTurn, TurnSpeaker } from '../../selectors/conversationsSelectors.js';
 import { type BlockKind, classifyBlocks } from '../../transcript/blocks.js';
+import { wrapTextToRows } from '../../utils/wrapText.js';
 
 export interface ChatLine {
   readonly speaker: TurnSpeaker;
@@ -72,6 +73,40 @@ export function formatTurnLines(turn: ChatTurn): readonly ChatLine[] {
     plainRun.push(line);
   }
   flushPlain();
+  return out;
+}
+
+/** Word-wrap flattened lines so each {@link ChatLine} is one terminal row. */
+export function wrapChatLines(
+  lines: readonly ChatLine[],
+  textWidth: number,
+): readonly ChatLine[] {
+  if (textWidth < 1) {
+    return lines;
+  }
+  const out: ChatLine[] = [];
+  for (const line of lines) {
+    if (line.kind === 'blank' || line.text === '') {
+      out.push(line);
+      continue;
+    }
+    const verbatim = line.kind === 'code' || line.kind === 'pre';
+    const rows = wrapTextToRows(line.text, textWidth, {
+      hard: verbatim,
+      wordWrap: !verbatim,
+    });
+    if (rows.length <= 1) {
+      out.push(line);
+      continue;
+    }
+    for (let i = 0; i < rows.length; i++) {
+      out.push({
+        ...line,
+        text: rows[i] ?? '',
+        firstOfTurn: i === 0 ? line.firstOfTurn : false,
+      });
+    }
+  }
   return out;
 }
 

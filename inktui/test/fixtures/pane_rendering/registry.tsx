@@ -11,6 +11,7 @@ import {
   renderResourceHeader,
 } from '../../../src/components/ResourceRow.js';
 import { MultiLineText, TextInput } from '../../../src/components/TextInput.js';
+import { TranscriptPane } from '../../../src/components/panes/TranscriptPane.js';
 import { getTheme } from '../../../src/theme/themeStore.js';
 import {
   type BarFixtureData,
@@ -488,51 +489,6 @@ function DocFixture({
   );
 }
 
-function TranscriptPaneFixture({
-  data,
-  focused,
-  height,
-}: {
-  readonly data: TranscriptFixtureData;
-  readonly focused: boolean;
-  readonly height: number;
-}): React.JSX.Element {
-  const lines = data.turns.flatMap((turn, turnIndex) => [
-    ...(turnIndex === 0 ? [] : [{ speaker: turn.speaker, line: ' ' }]),
-    ...turn.lines.map((line) => ({ speaker: turn.speaker, line })),
-  ]);
-  const theme = getTheme();
-  return (
-    <Pane
-      title={data.title}
-      focused={focused}
-      footerLeft={<Text dimColor>{data.footerLeft}</Text>}
-      footerRight={<Text dimColor>{data.footerRight}</Text>}
-      overflowBelow={lines.length > innerHeight(height) ? lines.length - innerHeight(height) : 0}
-    >
-      <Box flexDirection="column">
-        {lines.slice(0, innerHeight(height)).map((item, index) => {
-          const color =
-            item.speaker === 'user'
-              ? theme.success
-              : item.speaker === 'tool'
-                ? theme.warning
-                : theme.text;
-          return (
-            // biome-ignore lint/suspicious/noArrayIndexKey: transcript fixture lines are deterministic position-keyed slices.
-            <Box key={`${index}:${item.line}`} flexDirection="row">
-              <Text color={color}>{item.line === ' ' ? '  ' : index === 0 ? '▌ ' : '▏ '}</Text>
-              <Text color={color} wrap="wrap">
-                {item.line}
-              </Text>
-            </Box>
-          );
-        })}
-      </Box>
-    </Pane>
-  );
-}
-
 function ChatInputFixture({
   data,
   focused,
@@ -818,13 +774,27 @@ export const paneFixtures: readonly PaneFixture[] = [
     description: 'Store-free Stage TranscriptPane wrapper with mixed transcript turns.',
     sizes: PANE_SIZES,
     data: transcriptData,
-    render: ({ data, focused, height }) => (
-      <TranscriptPaneFixture
-        data={data as TranscriptFixtureData}
-        focused={focused}
-        height={height}
-      />
-    ),
+    render: ({ data, focused, width, height }) => {
+      const transcript = data as TranscriptFixtureData;
+      return (
+        <TranscriptPane
+          title={transcript.title}
+          footerLeft={transcript.footerLeft}
+          footerRight={transcript.footerRight}
+          turns={transcript.turns.map((turn, index) => ({
+            speaker: turn.speaker,
+            text: turn.lines.join('\n'),
+            blockId: `fixture-${index}`,
+          }))}
+          viewMode="verbose"
+          scrollUp={0}
+          gotoLine={null}
+          focused={focused}
+          width={width}
+          height={height}
+        />
+      );
+    },
   },
   {
     id: 'chat-input',
