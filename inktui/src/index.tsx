@@ -147,8 +147,14 @@ export async function runLive(busFactory: () => BusClient = makeLiveBus): Promis
       // `NodeJS.ReadStream`; we provide the consumed subset, so cast through `unknown`.
       stdin: shim as unknown as NodeJS.ReadStream,
       alternateScreen: true,
+      // The full-screen TUI repaints frequently while typing. Ink's default renderer erases the
+      // previous full frame before writing the next one; on slower SSH links that erase can become a
+      // visible blank flash. Incremental rendering rewrites only changed lines, which keeps stable
+      // panes on-screen between keystrokes and avoids the distracting flicker.
+      incrementalRendering: true,
     },
   );
+  const teardownResizeClear = installResizeClear(process.stdout, () => instance.clear());
   // Wire the protocol lifecycle through the shim now that it is Ink's stdin: detect support, feed
   // `ctrlAvailable`, and enable the protocol only when the user's modifier wants ctrl AND it is
   // supported. Returns a teardown that pops the protocol (best-effort).
@@ -158,6 +164,7 @@ export async function runLive(busFactory: () => BusClient = makeLiveBus): Promis
   try {
     await instance.waitUntilExit();
   } finally {
+    teardownResizeClear();
     teardownTerminal();
     shim.dispose();
     unhookConnect?.();
@@ -257,6 +264,37 @@ export async function setupTerminal(
     process.off('exit', popOnExit);
     process.off('SIGTERM', popOnExit);
     popOnExit();
+  };
+}
+
+/**
+ * Clear Ink's terminal surface on every real terminal-size change.
+ *
+ * Ink's built-in resize handler clears only when the width decreases. That protects the common
+ * narrow-resize case, but monitor moves / font scaling can change rows or expand dimensions while
+ * leaving stale cells in the alternate screen. A pane toggle fixes the symptom because it causes a
+ * later full-enough repaint; clearing here makes the resize itself the repaint boundary while
+ * preserving incremental rendering for normal typing.
+ */
+export function installResizeClear(
+  stdout: Pick<NodeJS.WriteStream, 'columns' | 'rows' | 'on' | 'off'>,
+  clear: () => void,
+): () => void {
+  let previousColumns = stdout.columns;
+  let previousRows = stdout.rows;
+  const onResize = (): void => {
+    const nextColumns = stdout.columns;
+    const nextRows = stdout.rows;
+    if (nextColumns === previousColumns && nextRows === previousRows) {
+      return;
+    }
+    previousColumns = nextColumns;
+    previousRows = nextRows;
+    clear();
+  };
+  stdout.on('resize', onResize);
+  return () => {
+    stdout.off('resize', onResize);
   };
 }
 

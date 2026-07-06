@@ -10,9 +10,10 @@
  *   - a missing/empty `MURDER_BUS_SOCKET` is a clear, hard failure rather than a silent bad connect.
  */
 
-import { describe, expect, it } from 'vitest';
+import { EventEmitter } from 'node:events';
+import { describe, expect, it, vi } from 'vitest';
 import { FakeBusClient } from '../src/bus/FakeBusClient.js';
-import { primeSlices, resolveSocketPath } from '../src/index.js';
+import { installResizeClear, primeSlices, resolveSocketPath } from '../src/index.js';
 import type { SettingsWire } from '../src/store/settings/settingsActions.js';
 import { createAppStore } from '../src/store/store.js';
 
@@ -28,6 +29,53 @@ describe('resolveSocketPath', () => {
 
   it('throws when MURDER_BUS_SOCKET is empty or whitespace', () => {
     expect(() => resolveSocketPath({ MURDER_BUS_SOCKET: '   ' })).toThrow(/MURDER_BUS_SOCKET/);
+  });
+});
+
+class FakeStdout extends EventEmitter {
+  columns: number | undefined;
+  rows: number | undefined;
+
+  constructor(columns: number | undefined, rows: number | undefined) {
+    super();
+    this.columns = columns;
+    this.rows = rows;
+  }
+}
+
+describe('installResizeClear', () => {
+  it('clears on column, row, or combined terminal size changes', () => {
+    const stdout = new FakeStdout(120, 40);
+    const clear = vi.fn();
+    const dispose = installResizeClear(stdout, clear);
+
+    stdout.columns = 121;
+    stdout.emit('resize');
+    stdout.rows = 41;
+    stdout.emit('resize');
+    stdout.columns = 100;
+    stdout.rows = 30;
+    stdout.emit('resize');
+
+    expect(clear).toHaveBeenCalledTimes(3);
+    dispose();
+  });
+
+  it('ignores duplicate resize events and unregisters cleanly', () => {
+    const stdout = new FakeStdout(120, 40);
+    const clear = vi.fn();
+    const dispose = installResizeClear(stdout, clear);
+
+    stdout.emit('resize');
+    expect(clear).not.toHaveBeenCalled();
+
+    stdout.columns = 80;
+    stdout.emit('resize');
+    dispose();
+    stdout.columns = 81;
+    stdout.emit('resize');
+
+    expect(clear).toHaveBeenCalledTimes(1);
   });
 });
 
