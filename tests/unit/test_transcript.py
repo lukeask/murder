@@ -1050,6 +1050,18 @@ def _cursor_paint_user_blocks(frame: str, user_texts: list[str]) -> str:
     return "\n".join(out)
 
 
+def _cursor_paint_user_blocks_black(frame: str, user_texts: list[str]) -> str:
+    """Re-create Cursor's current plain black-background user row shape."""
+    needles = {t.strip() for t in user_texts}
+    out: list[str] = []
+    for line in frame.splitlines():
+        if line.strip() in needles:
+            out.append(f"\x1b[40m{line}\x1b[49m")
+        else:
+            out.append(line)
+    return "\n".join(out)
+
+
 def test_cursor_input_box_continuation_is_chrome():
     """The live composer can hold wrapped text whose continuation lines carry no
     ``→`` marker — only the input-box background colour. Those lines must be
@@ -1066,6 +1078,24 @@ def test_cursor_input_box_continuation_is_chrome():
         f"{input_bg} → You are the user's general-purpose helper. Your role in the\x1b[49m\n"
         f"{input_bg}   system is to generally assist the user however they ask.\x1b[49m\n"
         " ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀\n"
+        "  Composer 2.5 · 7.3%                                    Auto-run\n"
+        "  ~/Documents/code/murder · fix/shutdown-flock-race\n"
+    )
+    doc = transcripts.parse_frames("cursor", [frame])
+    blob = json.dumps(doc, ensure_ascii=False)
+    assert "generally assist the user" not in blob
+    assert [s["text"] for s in doc["segments"] if s["type"] == "assistant"] == [
+        "Understood. I'm your helper."
+    ]
+
+
+def test_cursor_black_background_input_box_continuation_is_chrome():
+    """Cursor v2026.07 paints the composer with plain SGR 40m, not RGB bg."""
+    frame = (
+        "  Understood. I'm your helper.\n"
+        "\n"
+        "\x1b[40m \x1b[2m→ \x1b[0m\x1b[40mYou are the user's general-purpose helper. Your role in the\x1b[49m\n"
+        "\x1b[40m   system is to generally assist the user however they ask.\x1b[49m\n"
         "  Composer 2.5 · 7.3%                                    Auto-run\n"
         "  ~/Documents/code/murder · fix/shutdown-flock-race\n"
     )
@@ -1140,6 +1170,26 @@ def test_cursor_user_blocks_classified_by_colour_marker():
         [*_COLLAB_SYSTEM_PROMPT.split("\n\n"), "test"],
     )
     # Note: no system_prompt, no user_texts — colour alone must carry roles.
+    doc = transcripts.parse_frames("cursor", [frame])
+    kept = [s for s in doc["segments"] if s["type"] != "user"]
+    assert kept == [
+        {
+            "type": "assistant",
+            "phase": "final",
+            "text": "Here — what do you want to work on?",
+            "elapsed": None,
+        },
+    ]
+    assert any(s["type"] == "user" and s["text"] == "test" for s in doc["segments"])
+    assert "generally assist the user" not in json.dumps(kept, ensure_ascii=False)
+
+
+def test_cursor_user_blocks_classified_by_black_background_marker():
+    """Cursor v2026.07 uses SGR 40m for submitted user rows."""
+    frame = _cursor_paint_user_blocks_black(
+        _cursor_frame_with_system_prompt(),
+        [*_COLLAB_SYSTEM_PROMPT.split("\n\n"), "test"],
+    )
     doc = transcripts.parse_frames("cursor", [frame])
     kept = [s for s in doc["segments"] if s["type"] != "user"]
     assert kept == [

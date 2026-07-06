@@ -25,6 +25,7 @@ from murder.llm.harnesses.transcripts.segments import Segment, SpannedSegment
 WANTS_ANSI = True
 _USER_BG_RE = re.compile(r"\x1b\[48;2;36;36;40m")  # submitted user-input block
 _INPUT_BG_RE = re.compile(r"\x1b\[48;2;21;21;21m")  # live composer / input box
+_GENERIC_BLACK_BG_RE = re.compile(r"\x1b\[40m")
 _USER_MARK = "\x01"
 _CHROME_MARK = "\x02"
 
@@ -163,6 +164,7 @@ def preprocess_frame(frame: str) -> str:
     out: list[str] = []
     marks = 0
     has_content = False
+    in_generic_input = False
     for raw in frame.splitlines():
         plain = strip_ansi(raw)
         if plain.strip():
@@ -170,11 +172,21 @@ def preprocess_frame(frame: str) -> str:
         if _INPUT_BG_RE.search(raw):
             out.append(_CHROME_MARK + plain)
             marks += 1
+        elif _GENERIC_BLACK_BG_RE.search(raw) and (
+            _CURSOR_INPUT_LINE_RE.match(plain) or (in_generic_input and plain.strip())
+        ):
+            out.append(_CHROME_MARK + plain)
+            in_generic_input = True
+            marks += 1
         elif _USER_BG_RE.search(raw):
+            out.append(_USER_MARK + plain)
+            marks += 1
+        elif _GENERIC_BLACK_BG_RE.search(raw):
             out.append(_USER_MARK + plain)
             marks += 1
         else:
             out.append(plain)
+            in_generic_input = False
     if has_content and marks == 0 and not _warned_no_marks:
         _warned_no_marks = True
         _log.warning(
