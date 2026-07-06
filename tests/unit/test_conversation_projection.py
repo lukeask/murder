@@ -129,6 +129,31 @@ def test_project_grows_live_assistant_tail_after_user(conn: sqlite3.Connection) 
     assert sum(1 for b in blocks if not b.sealed) == 0
 
 
+def test_project_grows_sealed_assistant_final_prefix(conn: sqlite3.Connection) -> None:
+    """Cursor can briefly look idle while a final reply is still only a prefix.
+
+    The next parse at the same position must be able to replace that sealed
+    prefix with the longer same-kind final block.
+    """
+    agent = "agent-1"
+    append_user_message(conn, agent, "test")
+
+    project_parsed_doc(conn, agent, _doc(_assistant("Hear")))
+    _merged, changes = project_parsed_doc_with_changes(
+        conn,
+        agent,
+        _doc(_assistant("Hearing you loud and clear.")),
+    )
+
+    blocks = read_conversation_blocks(conn, agent)
+    assert [(b.kind, b.payload.get("text"), b.sealed) for b in blocks] == [
+        ("user", "test", True),
+        ("assistant_final", "Hearing you loud and clear.", True),
+    ]
+    assert [c.action for c in changes] == ["block-updated"]
+    assert changes[0].block.payload["text"] == "Hearing you loud and clear."
+
+
 # ---------------------------------------------------------------------------
 # Corruption regression: re-derived user segments never become turns
 # ---------------------------------------------------------------------------

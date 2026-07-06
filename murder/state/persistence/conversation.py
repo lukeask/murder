@@ -426,6 +426,63 @@ def update_live_block(
     return True
 
 
+def _sealed_block_can_grow(existing: ConversationBlock, seg: dict[str, Any]) -> bool:
+    """True when a sealed assistant final is just a shorter prefix of ``seg``."""
+    if not existing.sealed or existing.kind != "assistant_final":
+        return False
+    if segment_to_block_kind(seg) != existing.kind:
+        return False
+    old_text = existing.payload.get("text")
+    new_text = seg.get("text")
+    return (
+        isinstance(old_text, str)
+        and isinstance(new_text, str)
+        and len(new_text) > len(old_text)
+        and new_text.startswith(old_text)
+    )
+
+
+def _update_block_by_id(
+    conn: sqlite3.Connection,
+    block_id: int | None,
+    seg: dict[str, Any],
+    *,
+    received_at: str | None = None,
+) -> ConversationBlock | None:
+    if block_id is None:
+        return None
+    ts = received_at or _now()
+    kind = segment_to_block_kind(seg)
+    sealed = 0 if _block_is_live(kind, seg) else 1
+    conn.execute(
+        """
+        UPDATE conversation_blocks
+           SET kind = ?, payload_json = ?, sealed = ?, service_received_at = ?
+         WHERE id = ?
+        """,
+        (kind, json.dumps(seg), sealed, ts, block_id),
+    )
+    row = conn.execute(
+        """
+        SELECT conversation_id, ordinal, kind, payload_json, sealed, service_received_at
+          FROM conversation_blocks
+         WHERE id = ?
+        """,
+        (block_id,),
+    ).fetchone()
+    if row is None:
+        return None
+    return ConversationBlock(
+        id=block_id,
+        conversation_id=str(row["conversation_id"]),
+        ordinal=int(row["ordinal"]),
+        kind=str(row["kind"]),
+        payload=json.loads(row["payload_json"]),
+        sealed=bool(row["sealed"]),
+        service_received_at=str(row["service_received_at"]),
+    )
+
+
 def read_conversation_blocks(
     conn: sqlite3.Connection,
     conversation_id: str,
@@ -671,6 +728,8 @@ def merge_conversation_doc(
                     sealed=new_kind != "assistant_intermediate",
                     service_received_at=ts,
                 )
+        elif _sealed_block_can_grow(live, segments[-1]):
+            _update_block_by_id(conn, live.id, segments[-1], received_at=ts)
         return read_conversation_blocks(conn, conversation_id)
 
     # n_parsed > n_stored: apply the longer parse.
@@ -695,7 +754,11 @@ def merge_conversation_doc(
                         sealed=new_kind != "assistant_intermediate",
                         service_received_at=ts,
                     )
-            # Sealed blocks: immutable — leave them as-is.
+            elif _sealed_block_can_grow(existing, seg):
+                updated = _update_block_by_id(conn, existing.id, seg, received_at=ts)
+                if updated is not None:
+                    result[i] = updated
+            # Other sealed blocks are immutable — leave them as-is.
         else:
             # New segment beyond stored history: seal previous live block,
             # then append.
@@ -794,7 +857,13 @@ def merge_non_user_segments_with_changes(
                         ),
                     )
                 )
-        # Sealed blocks are immutable — leave them as-is.
+        elif _sealed_block_can_grow(existing, segments[i]):
+            updated = _update_block_by_id(conn, existing.id, segments[i], received_at=ts)
+            if updated is not None:
+                changes.append(
+                    ConversationBlockChange(action="block-updated", block=updated)
+                )
+        # Other sealed blocks are immutable — leave them as-is.
 
     # When new segments are about to be appended, the first append seals the
     # current live trailing block (a streaming ``assistant_intermediate`` or an
