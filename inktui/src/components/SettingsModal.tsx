@@ -59,6 +59,7 @@ import type {
   LlmProviderId,
   LlmWire,
   SettingsActions,
+  StartupRogueModelWire,
   StartupRogueWire,
 } from '../store/settings/settingsActions.js';
 import type { DefaultChatViewMode } from '../store/settings/settingsSlice.js';
@@ -73,7 +74,11 @@ import {
   categoryIndexById,
   SETTINGS_CATEGORIES,
 } from './settings/categories.js';
-import { defaultEffortFor, STARTUP_ROGUE_EFFORTS } from './settings/items/harnesses.js';
+import {
+  defaultEffortFor,
+  defaultModelFor,
+  startupRogueEffortsFor,
+} from './settings/items/harnesses.js';
 import { REBINDABLE, RESERVED_KEYS } from './settings/items/keybindings.js';
 import { ENV_PROVIDERS, mergedTiers, tierNames } from './settings/items/llm.js';
 import { TEMPLATE_NAME_RE } from './settings/items/templates.js';
@@ -152,6 +157,10 @@ interface SettingsState {
   defaultChatViewMode: DefaultChatViewMode;
   /** The draft Startup Rogue (`null` = off). Drives the model/effort sub-rows + persisted on change. */
   startupRogue: StartupRogueWire | null;
+  /** Startup Rogue model choices by harness. */
+  startupRogueModels: Readonly<Record<string, readonly StartupRogueModelWire[]>>;
+  /** Startup Rogue effort choices by harness. */
+  startupRogueEfforts: Readonly<Record<string, readonly string[]>>;
   /** The draft per-action key overrides (`ActionId -> key char`). */
   overrides: Record<string, string>;
   /** The draft collaborator-harness override (`null` = use the effective default). */
@@ -242,6 +251,8 @@ export function settingsMode(
     readonly vimMode?: boolean;
     readonly defaultChatViewMode?: DefaultChatViewMode;
     readonly startupRogue?: StartupRogueWire | null;
+    readonly startupRogueModels?: Readonly<Record<string, readonly StartupRogueModelWire[]>>;
+    readonly startupRogueEfforts?: Readonly<Record<string, readonly string[]>>;
     readonly keyOverrides: Record<string, string>;
     readonly collaboratorHarness?: string | null;
     readonly effectiveCollaborator?: string;
@@ -269,12 +280,16 @@ export function settingsMode(
 
   const initialLlm: LlmWire = current.llm ?? {};
   const initialStartupRogue: StartupRogueWire | null = current.startupRogue ?? null;
+  const initialStartupRogueModels = current.startupRogueModels ?? {};
+  const initialStartupRogueEfforts = current.startupRogueEfforts ?? {};
   const initialTemplates: readonly TemplateRecord[] = current.templates ?? [];
   const initialThemes: readonly ThemeRecord[] = current.themes ?? listThemeRecords();
   const initialCategoryId: SettingsCategoryId = 'appearance';
   const initialRows = buildCategoryRows(initialCategoryId, {
     llm: initialLlm,
     startupRogue: initialStartupRogue,
+    startupRogueModels: initialStartupRogueModels,
+    startupRogueEfforts: initialStartupRogueEfforts,
     templates: initialTemplates,
     themes: initialThemes,
   });
@@ -293,6 +308,8 @@ export function settingsMode(
     vimMode: current.vimMode ?? false,
     defaultChatViewMode: current.defaultChatViewMode ?? 'verbose',
     startupRogue: initialStartupRogue,
+    startupRogueModels: initialStartupRogueModels,
+    startupRogueEfforts: initialStartupRogueEfforts,
     overrides: { ...current.keyOverrides },
     collaboratorHarness: current.collaboratorHarness ?? null,
     effectiveCollaborator: current.effectiveCollaborator ?? 'claude_code',
@@ -348,6 +365,8 @@ export function settingsMode(
     return buildCategoryRows(categoryId, {
       llm: s.llm,
       startupRogue: s.startupRogue,
+      startupRogueModels: s.startupRogueModels,
+      startupRogueEfforts: s.startupRogueEfforts,
       templates: s.templates,
       themes: s.themes,
     });
@@ -497,14 +516,14 @@ export function settingsMode(
   function selectStartupRogueHarness(harness: string): void {
     const prev = s.startupRogue;
     const same = prev !== null && prev.harness === harness;
-    const efforts = STARTUP_ROGUE_EFFORTS[harness] ?? [];
+    const efforts = startupRogueEffortsFor(harness, s.startupRogueEfforts);
     const next: StartupRogueWire = {
       harness,
-      model: same ? prev.model : '',
+      model: same ? prev.model : defaultModelFor(harness, s.startupRogueModels),
       effort:
         same && prev.effort !== null && efforts.includes(prev.effort)
           ? prev.effort
-          : defaultEffortFor(harness),
+          : defaultEffortFor(harness, s.startupRogueEfforts),
     };
     s.startupRogue = next;
     rebuildRows();
@@ -1624,7 +1643,7 @@ function RowView({
     }
     if (row.field === 'model') {
       const selected = sr !== null && sr.model === row.value;
-      const label = row.value === '' ? '(default model)' : row.value;
+      const label = row.label ?? (row.value === '' ? '(default model)' : row.value);
       return (
         <Box flexShrink={0}>
           <Text color={color} bold={focused}>

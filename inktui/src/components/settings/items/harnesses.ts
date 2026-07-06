@@ -1,27 +1,47 @@
-import type { StartupRogueWire } from '../../../store/settings/settingsActions.js';
+import type {
+  StartupRogueModelWire,
+  StartupRogueWire,
+} from '../../../store/settings/settingsActions.js';
+import {
+  DEFAULT_STARTUP_ROGUE_EFFORTS,
+  DEFAULT_STARTUP_ROGUE_MODELS,
+} from '../../../store/settings/settingsSlice.js';
 import type { SettingsItem, SettingsRow } from '../types.js';
 import { headerRow } from '../types.js';
 
 export const HARNESSES: readonly string[] = ['claude_code', 'codex', 'cursor', 'pi', 'antigravity'];
 
-export const STARTUP_ROGUE_MODELS: Readonly<Record<string, readonly string[]>> = {
-  claude_code: ['', 'opus', 'sonnet', 'haiku', 'fable'],
-  codex: ['', 'gpt-5.5', 'gpt-5.4', 'gpt-5.3-codex', 'gpt-5.2'],
-  cursor: ['', 'composer-2.5', 'auto', 'gpt-5.5', 'gpt-5.4', 'claude-sonnet-4.5'],
-  pi: [''],
-  antigravity: [''],
-};
+export const STARTUP_ROGUE_MODELS = DEFAULT_STARTUP_ROGUE_MODELS;
 
-export const STARTUP_ROGUE_EFFORTS: Readonly<Record<string, readonly string[]>> = {
-  claude_code: ['low', 'medium', 'high', 'xhigh', 'max'],
-  codex: ['low', 'medium', 'high', 'xhigh'],
-  cursor: [],
-  pi: [],
-  antigravity: [],
-};
+export const STARTUP_ROGUE_EFFORTS = DEFAULT_STARTUP_ROGUE_EFFORTS;
 
-export function defaultEffortFor(harness: string): string | null {
-  const efforts = STARTUP_ROGUE_EFFORTS[harness] ?? [];
+export function startupRogueModelsFor(
+  harness: string,
+  models: Readonly<Record<string, readonly StartupRogueModelWire[]>>,
+): readonly StartupRogueModelWire[] {
+  const choices = models[harness] ?? STARTUP_ROGUE_MODELS[harness] ?? [];
+  return choices.length > 0 ? choices : [{ id: '', label: '(default model)' }];
+}
+
+export function defaultModelFor(
+  harness: string,
+  models: Readonly<Record<string, readonly StartupRogueModelWire[]>>,
+): string {
+  return startupRogueModelsFor(harness, models)[0]?.id ?? '';
+}
+
+export function startupRogueEffortsFor(
+  harness: string,
+  effortsByHarness: Readonly<Record<string, readonly string[]>>,
+): readonly string[] {
+  return effortsByHarness[harness] ?? STARTUP_ROGUE_EFFORTS[harness] ?? [];
+}
+
+export function defaultEffortFor(
+  harness: string,
+  effortsByHarness: Readonly<Record<string, readonly string[]>> = STARTUP_ROGUE_EFFORTS,
+): string | null {
+  const efforts = startupRogueEffortsFor(harness, effortsByHarness);
   if (efforts.length === 0) {
     return null;
   }
@@ -31,7 +51,7 @@ export function defaultEffortFor(harness: string): string | null {
 const startupRogueItem: SettingsItem = {
   id: 'harnesses.startupRogue',
   label: 'Startup Rogue',
-  rows: ({ startupRogue }) => {
+  rows: ({ startupRogue, startupRogueModels, startupRogueEfforts }) => {
     const rows: SettingsRow[] = [
       headerRow(startupRogueItem),
       { id: 'harnesses.startupRogue:off', kind: 'startupRogue', field: 'off' },
@@ -45,22 +65,28 @@ const startupRogueItem: SettingsItem = {
       ),
     ];
     if (startupRogue !== null) {
-      appendStartupRogueDetails(rows, startupRogue);
+      appendStartupRogueDetails(rows, startupRogue, startupRogueModels, startupRogueEfforts);
     }
     return rows;
   },
 };
 
-function appendStartupRogueDetails(rows: SettingsRow[], startupRogue: StartupRogueWire): void {
-  for (const value of STARTUP_ROGUE_MODELS[startupRogue.harness] ?? ['']) {
+function appendStartupRogueDetails(
+  rows: SettingsRow[],
+  startupRogue: StartupRogueWire,
+  modelsByHarness: Readonly<Record<string, readonly StartupRogueModelWire[]>>,
+  effortsByHarness: Readonly<Record<string, readonly string[]>>,
+): void {
+  for (const model of startupRogueModelsFor(startupRogue.harness, modelsByHarness)) {
     rows.push({
-      id: `harnesses.startupRogue:model:${value || 'default'}`,
+      id: `harnesses.startupRogue:model:${model.id || 'default'}`,
       kind: 'startupRogue',
       field: 'model',
-      value,
+      value: model.id,
+      label: model.label,
     });
   }
-  for (const value of STARTUP_ROGUE_EFFORTS[startupRogue.harness] ?? []) {
+  for (const value of startupRogueEffortsFor(startupRogue.harness, effortsByHarness)) {
     rows.push({
       id: `harnesses.startupRogue:effort:${value}`,
       kind: 'startupRogue',

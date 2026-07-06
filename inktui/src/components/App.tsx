@@ -16,7 +16,7 @@
  * reference-by-path). See {@link deriveSpawnContext} for the C11 seam note.
  */
 
-import { Box, type DOMElement, type Key, measureElement, Text } from 'ink';
+import { Box, type DOMElement, type Key, measureElement, Text, useStdout } from 'ink';
 import {
   Component,
   type JSX,
@@ -619,6 +619,7 @@ function Shell({
   const bus = useBusClient();
   const loadFavorites = useAppStore((s) => s.actions.favorites.load);
   const loadSettings = useAppStore((s) => s.actions.settings.load);
+  const { stdout } = useStdout();
   // Live terminal size — `rows` bounds the root box so the frame always fits one screen (see the
   // return); `columns` feeds the min-terminal-size guard below.
   const { rows, columns } = useTerminalSize();
@@ -650,20 +651,37 @@ function Shell({
   const chatInputRef = useRef<DOMElement | null>(null);
   const [topbarHeight, setTopbarHeight] = useState(0);
   const [chatInputHeight, setChatInputHeight] = useState(0);
+  const didMountTerminalSizeRef = useRef(false);
+  const repaintAfterChromeMeasureRef = useRef(false);
   useLayoutEffect(() => {
+    if (!didMountTerminalSizeRef.current) {
+      didMountTerminalSizeRef.current = true;
+      return;
+    }
+    repaintAfterChromeMeasureRef.current = true;
+  }, [rows, columns]);
+  useLayoutEffect(() => {
+    let chromeChanged = false;
     if (topbarRef.current !== null) {
       const { height } = measureElement(topbarRef.current);
       if (height !== topbarHeight) {
+        chromeChanged = true;
         setTopbarHeight(height);
       }
     }
     if (chatInputRef.current !== null) {
       const { height } = measureElement(chatInputRef.current);
       if (height !== chatInputHeight) {
+        chromeChanged = true;
         setChatInputHeight(height);
       }
     } else if (chatInputHidden && chatInputHeight !== 0) {
+      chromeChanged = true;
       setChatInputHeight(0);
+    }
+    if (repaintAfterChromeMeasureRef.current && !chromeChanged) {
+      repaintAfterChromeMeasureRef.current = false;
+      forceInkFullRepaint(stdout);
     }
   });
   // Footer row count (computed — see above). Shared with the BottomBar render via the same hook.
@@ -865,6 +883,8 @@ function Shell({
         vimMode: settings.vimMode,
         defaultChatViewMode: settings.defaultChatViewMode,
         startupRogue: settings.startupRogue,
+        startupRogueModels: settings.startupRogueModels,
+        startupRogueEfforts: settings.startupRogueEfforts,
         keyOverrides: settings.keyOverrides as Record<string, string>,
         collaboratorHarness: settings.collaboratorHarness,
         effectiveCollaborator: settings.effectiveCollaboratorHarness,
@@ -1136,7 +1156,7 @@ function Shell({
       murderConfirm: murderConfirmHandler,
       murderCancel: () => murderConfirmStore.getState().clear(),
       closePane: closePaneHandler,
-      repaint: () => forceInkFullRepaint(process.stdout),
+      repaint: () => forceInkFullRepaint(stdout),
       chatInput: makeChatInputHandler(
         chatInput,
         appStore,

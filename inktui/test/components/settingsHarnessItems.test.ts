@@ -4,12 +4,11 @@ import { STARTUP_ROGUE_MODELS } from '../../src/components/settings/items/harnes
 describe('settings harness items', () => {
   it('offers cursor startup rogue models without waiting for live discovery', () => {
     expect(STARTUP_ROGUE_MODELS['cursor']).toEqual([
-      '',
-      'composer-2.5',
-      'auto',
-      'gpt-5.5',
-      'gpt-5.4',
-      'claude-sonnet-4.5',
+      { id: 'composer-2.5', label: 'Composer 2.5' },
+      { id: 'auto', label: 'Auto' },
+      { id: 'gpt-5.5', label: 'GPT-5.5' },
+      { id: 'gpt-5.4', label: 'GPT-5.4' },
+      { id: 'claude-sonnet-4.5', label: 'Claude Sonnet 4.5' },
     ]);
   });
 });

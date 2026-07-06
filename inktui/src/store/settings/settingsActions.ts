@@ -79,6 +79,11 @@ export interface StartupRogueWire {
   readonly effort: string | null;
 }
 
+export interface StartupRogueModelWire {
+  readonly id: string;
+  readonly label: string;
+}
+
 /** The on-the-wire settings record (snake_case, mirrors the Python `_settings_payload`). The frontend
  * binding registry is the authority on `ActionId`s, so `key_overrides` is opaque here. */
 export interface SettingsWire {
@@ -94,6 +99,10 @@ export interface SettingsWire {
   readonly default_chat_view_mode: DefaultChatViewMode;
   /** The user's Startup Rogue (auto-spawned on boot), or `null` when none is set. */
   readonly startup_rogue: StartupRogueWire | null;
+  /** Available Startup Rogue model choices by harness. */
+  readonly startup_rogue_models?: Readonly<Record<string, readonly StartupRogueModelWire[]>>;
+  /** Available Startup Rogue effort choices by harness. */
+  readonly startup_rogue_efforts?: Readonly<Record<string, readonly string[]>>;
   // --- harness overrides + daemon's live effective values ---
   /** The user's collaborator-harness override, or `null` when none is set. */
   readonly collaborator_harness: string | null;
@@ -189,6 +198,8 @@ function applyWire(prev: SettingsState, wire: SettingsWire | undefined): Setting
     defaultChatViewMode: wire.default_chat_view_mode ?? prev.defaultChatViewMode,
     // Nullable on the wire (null = "no startup rogue") — honour `null` via key-presence, not `??`.
     startupRogue: 'startup_rogue' in wire ? wire.startup_rogue : prev.startupRogue,
+    startupRogueModels: wire.startup_rogue_models ?? prev.startupRogueModels,
+    startupRogueEfforts: wire.startup_rogue_efforts ?? prev.startupRogueEfforts,
     // Harness overrides are nullable on the wire (null = "no override"), so a `??` would wrongly keep
     // the prior value when the server clears one. Honour `null` explicitly via the key-presence check.
     collaboratorHarness:

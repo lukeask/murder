@@ -2,6 +2,7 @@ import type { ActionId, Modifier } from '../../input/bindings.js';
 import type {
   LlmProviderId,
   LlmWire,
+  StartupRogueModelWire,
   StartupRogueWire,
 } from '../../store/settings/settingsActions.js';
 import type { DefaultChatViewMode } from '../../store/settings/settingsSlice.js';
@@ -31,6 +32,7 @@ export type SettingsRow =
       readonly kind: 'startupRogue';
       readonly field: 'harness' | 'model' | 'effort';
       readonly value: string;
+      readonly label?: string;
     }
   | { readonly id: string; readonly kind: 'collaborator'; readonly value: string | null }
   | { readonly id: string; readonly kind: 'planner'; readonly value: string | null }
@@ -51,6 +53,8 @@ export type SettingsRow =
 export interface SettingsBuildContext {
   readonly llm: LlmWire;
   readonly startupRogue: StartupRogueWire | null;
+  readonly startupRogueModels: Readonly<Record<string, readonly StartupRogueModelWire[]>>;
+  readonly startupRogueEfforts: Readonly<Record<string, readonly string[]>>;
   readonly templates: readonly TemplateRecord[];
   readonly themes: readonly ThemeRecord[];
 }

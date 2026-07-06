@@ -25,7 +25,12 @@
 
 import type { StateCreator } from 'zustand';
 import type { AppStore } from '../store.js';
-import type { LlmEnvWire, LlmWire, StartupRogueWire } from './settingsActions.js';
+import type {
+  LlmEnvWire,
+  LlmWire,
+  StartupRogueModelWire,
+  StartupRogueWire,
+} from './settingsActions.js';
 
 /** The command modifier the user has chosen. Mirrors `bindings.ts`'s `Modifier` (kept structural
  * here so the slice does not depend on the input layer — the bridge couples them). */
@@ -34,6 +39,47 @@ export type SettingsModifier = 'alt' | 'ctrl' | 'both';
 /** The settable default chat view mode (TUIchat-3). `tmux` is intentionally NOT settable as a default
  * — it is reachable only via the per-pane cycle key. Mirrors the wire `default_chat_view_mode`. */
 export type DefaultChatViewMode = 'verbose' | 'condensed';
+
+export const DEFAULT_STARTUP_ROGUE_MODELS: Readonly<
+  Record<string, readonly StartupRogueModelWire[]>
+> = {
+  claude_code: [
+    { id: 'default', label: 'Default (recommended)' },
+    { id: 'sonnet[1m]', label: 'Sonnet (1M context)' },
+    { id: 'fable', label: 'Fable' },
+    { id: 'opus', label: 'Opus' },
+    { id: 'haiku', label: 'Haiku' },
+  ],
+  codex: [
+    { id: 'gpt-5.5', label: 'GPT-5.5' },
+    { id: 'gpt-5.4', label: 'GPT-5.4' },
+    { id: 'gpt-5.4-mini', label: 'GPT-5.4 Mini' },
+    { id: 'gpt-5.3-codex', label: 'GPT-5.3 Codex' },
+    { id: 'gpt-5.2', label: 'GPT-5.2' },
+  ],
+  cursor: [
+    { id: 'composer-2.5', label: 'Composer 2.5' },
+    { id: 'auto', label: 'Auto' },
+    { id: 'gpt-5.5', label: 'GPT-5.5' },
+    { id: 'gpt-5.4', label: 'GPT-5.4' },
+    { id: 'claude-sonnet-4.5', label: 'Claude Sonnet 4.5' },
+  ],
+  pi: [
+    { id: 'anthropic/claude-sonnet-4-6', label: 'Claude Sonnet 4.6' },
+    { id: 'anthropic/claude-opus-4-7', label: 'Claude Opus 4.7' },
+    { id: 'openai/gpt-5.5', label: 'GPT-5.5' },
+    { id: 'openai/gpt-5.4-mini', label: 'GPT-5.4 Mini' },
+  ],
+  antigravity: [],
+};
+
+export const DEFAULT_STARTUP_ROGUE_EFFORTS: Readonly<Record<string, readonly string[]>> = {
+  claude_code: ['low', 'medium', 'high', 'xhigh', 'max'],
+  codex: ['low', 'medium', 'high', 'xhigh'],
+  cursor: ['slow', 'fast'],
+  pi: [],
+  antigravity: ['low', 'medium', 'high'],
+};
 
 /**
  * The settings slice state. `theme`/`modifier`/`keyOverrides` are the persisted preferences;
@@ -65,6 +111,10 @@ export interface SettingsState {
   /** The Startup Rogue auto-spawned on boot, or `null` when none is configured. Mirrors the wire
    * `startup_rogue`. */
   readonly startupRogue: StartupRogueWire | null;
+  /** Available Startup Rogue model choices by harness. */
+  readonly startupRogueModels: Readonly<Record<string, readonly StartupRogueModelWire[]>>;
+  /** Available Startup Rogue effort choices by harness. */
+  readonly startupRogueEfforts: Readonly<Record<string, readonly string[]>>;
   /** The user's collaborator-harness override, or `null` when none is set (falls back to
    * `effectiveCollaboratorHarness`). Mirrors the wire `collaborator_harness`. */
   readonly collaboratorHarness: string | null;
@@ -102,6 +152,8 @@ export const initialSettingsState: SettingsState = {
   vimMode: false,
   defaultChatViewMode: 'verbose',
   startupRogue: null,
+  startupRogueModels: DEFAULT_STARTUP_ROGUE_MODELS,
+  startupRogueEfforts: DEFAULT_STARTUP_ROGUE_EFFORTS,
   collaboratorHarness: null,
   plannerHarness: null,
   crowHarnesses: null,

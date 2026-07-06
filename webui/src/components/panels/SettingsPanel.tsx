@@ -20,6 +20,13 @@ import { shallow } from 'zustand/shallow';
 import { getPalette, getThemeMeta, listThemeIds } from '@core/theme/palettes.js';
 import type { ThemeId } from '@core/theme/palettes.js';
 import { setTheme, useThemeId } from '@core/theme/themeStore.js';
+import {
+  defaultEffortFor,
+  defaultModelFor,
+  HARNESSES,
+  startupRogueEffortsFor,
+  startupRogueModelsFor,
+} from '@core/components/settings/items/harnesses.js';
 import { Panel, Input, Select, Radio, Switch, cx } from '../ds/index.js';
 
 const FALLBACK_THEME_IDS = listThemeIds();
@@ -55,6 +62,46 @@ export function SettingsPanel(): React.JSX.Element {
   const harnessOptions = Array.from(
     new Set([settings.effectiveCollaboratorHarness, ...settings.effectiveCrowHarnesses, harnessValue]),
   ).map((h) => ({ value: h, label: h }));
+  const startupRogue = settings.startupRogue;
+  const startupHarness = startupRogue?.harness ?? '';
+  const startupModelChoices =
+    startupRogue === null
+      ? []
+      : startupRogueModelsFor(startupRogue.harness, settings.startupRogueModels);
+  const startupEffortChoices =
+    startupRogue === null
+      ? []
+      : startupRogueEffortsFor(startupRogue.harness, settings.startupRogueEfforts);
+  const startupModelIds = new Set(startupModelChoices.map((m) => m.id));
+  const startupModelValue =
+    startupRogue !== null && startupModelIds.has(startupRogue.model)
+      ? startupRogue.model
+      : (startupModelChoices[0]?.id ?? '');
+  const startupEffortValue =
+    startupRogue !== null &&
+    startupRogue.effort !== null &&
+    startupEffortChoices.includes(startupRogue.effort)
+      ? startupRogue.effort
+      : (startupEffortChoices[0] ?? '');
+
+  const chooseStartupHarness = (harness: string): void => {
+    if (harness === '') {
+      void update({ startup_rogue: null });
+      return;
+    }
+    const same = startupRogue !== null && startupRogue.harness === harness;
+    const efforts = startupRogueEffortsFor(harness, settings.startupRogueEfforts);
+    void update({
+      startup_rogue: {
+        harness,
+        model: same ? startupRogue.model : defaultModelFor(harness, settings.startupRogueModels),
+        effort:
+          same && startupRogue.effort !== null && efforts.includes(startupRogue.effort)
+            ? startupRogue.effort
+            : defaultEffortFor(harness, settings.startupRogueEfforts),
+      },
+    });
+  };
 
   return (
     <Panel title="settings" data-panel-id="settings">
@@ -127,6 +174,44 @@ export function SettingsPanel(): React.JSX.Element {
             value={harnessValue}
             onChange={(e) => void update({ collaborator_harness: e.target.value })}
           />
+        </section>
+
+        <section className="settings__group">
+          <Select
+            label="startup rogue"
+            options={[
+              { value: '', label: 'off' },
+              ...HARNESSES.map((h) => ({ value: h, label: h })),
+            ]}
+            value={startupHarness}
+            onChange={(e) => chooseStartupHarness(e.target.value)}
+          />
+          {startupRogue !== null ? (
+            <div className="settings__inline">
+              <Select
+                label="startup model"
+                options={startupModelChoices.map((m) => ({ value: m.id, label: m.label }))}
+                value={startupModelValue}
+                onChange={(e) =>
+                  void update({
+                    startup_rogue: { ...startupRogue, model: e.target.value },
+                  })
+                }
+              />
+              {startupEffortChoices.length > 0 ? (
+                <Select
+                  label="startup effort"
+                  options={startupEffortChoices.map((effort) => ({ value: effort, label: effort }))}
+                  value={startupEffortValue}
+                  onChange={(e) =>
+                    void update({
+                      startup_rogue: { ...startupRogue, effort: e.target.value },
+                    })
+                  }
+                />
+              ) : null}
+            </div>
+          ) : null}
         </section>
 
         {settings.status === 'error' ? (

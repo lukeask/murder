@@ -56,6 +56,9 @@ def register(host: ServiceHost) -> None:
     def _settings_payload(cfg: Any) -> dict[str, Any]:
         import os as _os
 
+        from murder.llm.harnesses import REGISTRY
+        from murder.llm.harnesses.model_cache import get_available_models
+
         tui = cfg.tui
         collab_override = (
             cfg.collaborator.harness if cfg.collaborator is not None else None
@@ -81,6 +84,17 @@ def register(host: ServiceHost) -> None:
             "effective_collaborator_harness": host.config.collaborator.harness,
             "effective_planner_harness": host.config.planner.harness,
             "effective_crow_harnesses": effective_crow,
+            "startup_rogue_models": {
+                harness: [
+                    {"id": model_id, "label": label}
+                    for model_id, label in get_available_models(harness)
+                ]
+                for harness in REGISTRY
+            },
+            "startup_rogue_efforts": {
+                harness: list(adapter_cls.supported_efforts)
+                for harness, adapter_cls in REGISTRY.items()
+            },
             # --- llm provider/tier/role config (api keys masked) ---
             "llm": _mask_llm(cfg.llm),
             "llm_env": {

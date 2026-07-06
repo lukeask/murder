@@ -56,4 +56,43 @@ describe('SettingsPanel theme switch', () => {
     const swatch = screen.getByText('Everforest Light').closest('.theme-swatch');
     expect(swatch?.getAttribute('data-on')).toBe('true');
   });
+
+  it('persists a concrete model when startup rogue cursor is selected', () => {
+    const { store, bus } = makeStore();
+    bus.stubRpc('tui.load_themes', { ok: true, themes: [] });
+    bus.stubRpc('settings.update', (params) => ({
+      ok: true,
+      settings: {
+        theme: store.getState().settings.theme,
+        modifier: store.getState().settings.modifier,
+        key_overrides: store.getState().settings.keyOverrides,
+        pane_gap: store.getState().settings.paneGap,
+        vim_mode: store.getState().settings.vimMode,
+        default_chat_view_mode: store.getState().settings.defaultChatViewMode,
+        startup_rogue: params.settings.startup_rogue ?? null,
+        startup_rogue_models: store.getState().settings.startupRogueModels,
+        startup_rogue_efforts: store.getState().settings.startupRogueEfforts,
+        collaborator_harness: store.getState().settings.collaboratorHarness,
+        planner_harness: store.getState().settings.plannerHarness,
+        crow_harnesses: store.getState().settings.crowHarnesses,
+        effective_collaborator_harness: store.getState().settings.effectiveCollaboratorHarness,
+        effective_planner_harness: store.getState().settings.effectivePlannerHarness,
+        effective_crow_harnesses: store.getState().settings.effectiveCrowHarnesses,
+        llm: store.getState().settings.llm,
+        llm_env: store.getState().settings.llmEnv,
+      },
+    }));
+    renderWithStore(<Harness />, { store, bus });
+
+    fireEvent.change(screen.getByLabelText('startup rogue'), { target: { value: 'cursor' } });
+
+    expect(bus.rpcCalls.at(-1)).toEqual({
+      method: 'settings.update',
+      params: {
+        settings: {
+          startup_rogue: { harness: 'cursor', model: 'composer-2.5', effort: 'slow' },
+        },
+      },
+    });
+  });
 });

@@ -141,6 +141,15 @@ def test_settings_get_startup_rogue_defaults_none(repo_root: Path, xdg: Path) ->
     assert _call(host, "settings.get", {})["settings"]["startup_rogue"] is None
 
 
+def test_settings_get_startup_rogue_model_choices(repo_root: Path, xdg: Path) -> None:
+    host = _host(repo_root)
+    settings = _call(host, "settings.get", {})["settings"]
+    cursor_models = settings["startup_rogue_models"]["cursor"]
+    assert cursor_models[0] == {"id": "composer-2.5", "label": "Composer 2.5"}
+    assert {"id": "auto", "label": "Auto"} in cursor_models
+    assert settings["startup_rogue_efforts"]["cursor"] == ["slow", "fast"]
+
+
 def test_settings_update_startup_rogue_persists_and_roundtrips(repo_root: Path, xdg: Path) -> None:
     host = _host(repo_root)
     reply = _call(
