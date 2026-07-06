@@ -276,6 +276,7 @@ export function installResizeClear(
 ): () => void {
   let previousColumns = stdout.columns;
   let previousRows = stdout.rows;
+  let timeout: NodeJS.Timeout | undefined;
   const onResize = (): void => {
     const nextColumns = stdout.columns;
     const nextRows = stdout.rows;
@@ -284,10 +285,20 @@ export function installResizeClear(
     }
     previousColumns = nextColumns;
     previousRows = nextRows;
-    clear();
+    if (timeout !== undefined) {
+      clearTimeout(timeout);
+    }
+    timeout = setTimeout(() => {
+      timeout = undefined;
+      clear();
+    }, 75);
   };
   stdout.on('resize', onResize);
   return () => {
+    if (timeout !== undefined) {
+      clearTimeout(timeout);
+      timeout = undefined;
+    }
     stdout.off('resize', onResize);
   };
 }
