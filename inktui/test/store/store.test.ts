@@ -114,6 +114,106 @@ describe('createAppStore — boot & wiring', () => {
     expect(fake.subscriberCount).toBe(0);
   });
 
+  it('unwraps live state.* hydrate snapshots from { ok, value } read envelopes', async () => {
+    const fake = new FakeBusClient();
+    fake.stubHydrate({
+      snapshots: {
+        conversations: {
+          ok: true,
+          value: {
+            conversations: [
+              {
+                conversation_id: 'conv-1',
+                agent_id: 'agent-1',
+                harness: 'cursor',
+                model: 'gpt',
+                harness_session_id: null,
+                live_state: null,
+                chunk_summaries: [],
+                status: 'in_progress',
+                blocks: [
+                  {
+                    id: 1,
+                    conversation_id: 'conv-1',
+                    ordinal: 0,
+                    kind: 'assistant',
+                    payload: { type: 'assistant', text: 'from snapshot' },
+                    sealed: true,
+                    service_received_at: '2026-06-08T00:00:00Z',
+                  },
+                ],
+              },
+            ],
+            as_of: '2026-06-09T00:00:00',
+            invalidation_key: 'iv-conv',
+          },
+        },
+        crow: { ok: true, value: crowReply() },
+        schedule: { ok: true, value: scheduleReply() },
+      },
+      cursor: 50,
+      mode: 'cold',
+    });
+
+    const { store, dispose } = createAppStore(fake);
+    await flush();
+
+    expect(store.getState().hydration.status).toBe('ready');
+    expect(store.getState().roster.rows[0]?.agentId).toBe('a-1');
+    expect(store.getState().conversations.transcripts['agent-1']?.[0]?.raw['text']).toBe(
+      'from snapshot',
+    );
+    dispose();
+  });
+
+  it('preserves tail conversation.block events that arrive before hydrate snapshots apply', async () => {
+    let resolveHydrate!: (reply: {
+      snapshots: Record<string, unknown>;
+      cursor: number;
+    }) => void;
+    const hydratePending = new Promise<{
+      snapshots: Record<string, unknown>;
+      cursor: number;
+    }>((resolve) => {
+      resolveHydrate = resolve;
+    });
+    const fake = new FakeBusClient();
+    fake.stubHydrate(() => hydratePending);
+
+    const tailBlock = {
+      type: 'conversation.block' as const,
+      id: 'ev-tail',
+      ts: '2026-06-08T00:00:00Z',
+      run_id: 'run-1',
+      agent_id: 'agent-1',
+      conversation_id: 'conv-1',
+      action: 'block-appended' as const,
+      block: { type: 'assistant' as const, id: 'block-tail', text: 'from tail' },
+    };
+
+    const { store, dispose } = createAppStore(fake);
+    await flush();
+
+    fake.emit(tailBlock, 99);
+
+    resolveHydrate({
+      snapshots: {
+        'state.conversations_snapshot': {
+          conversations: [],
+          as_of: '2026-06-09T00:00:00',
+          invalidation_key: 'iv-empty',
+        },
+      },
+      cursor: 100,
+    });
+    await flush();
+
+    const blocks = store.getState().conversations.transcripts['agent-1'];
+    expect(blocks).toHaveLength(1);
+    expect(blocks?.[0]?.raw['text']).toBe('from tail');
+    dispose();
+  });
+
   it('uses bus.hydrate when available and applies startup snapshots without priming RPCs', async () => {
     const fake = new FakeBusClient();
     fake.stubHydrate({

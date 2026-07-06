@@ -234,6 +234,8 @@ interface Hydration {
   readonly listener: BusEventListener | undefined;
   correlationId: string;
   pending: Deferred<HydrateReply> | undefined;
+  /** Tail frames received while a hydrate ack is in flight — replay is delivered first on settle. */
+  tailBuffer: BusEvent[];
 }
 
 /** An in-flight RPC awaiting its `ack`/`err`/timeout. Keyed by `correlation_id`. */
@@ -396,6 +398,7 @@ export class UdsBusClient implements BusClient {
       listener,
       correlationId: `hydrate-${randomUUID()}`,
       pending: completion,
+      tailBuffer: [],
     };
     this.hydrations.add(hydration);
     const unsubscribe = (): void => {
@@ -647,7 +650,7 @@ export class UdsBusClient implements BusClient {
     // a pipelined `ack`/`err` settles its correlated RPC). Without this they would be silently
     // lost — they never reach `readUntilClosed`'s loop.
     for (const line of trailingLines) {
-      const message = parseWireMessage(line);
+      const message = this.parseWireMessage(line);
       if (message !== undefined) {
         this.dispatch(message);
       }
@@ -689,7 +692,7 @@ export class UdsBusClient implements BusClient {
           if (line === undefined) {
             continue;
           }
-          const message = parseWireMessage(line);
+          const message = this.parseWireMessage(line);
           if (message === undefined) {
             continue;
           }
@@ -738,7 +741,7 @@ export class UdsBusClient implements BusClient {
     return new Promise<void>((resolve) => {
       const onData = (chunk: Buffer): void => {
         for (const line of this.lineBuffer.push(chunk.toString('utf8'))) {
-          const message = parseWireMessage(line);
+          const message = this.parseWireMessage(line);
           if (message !== undefined) {
             this.dispatch(message);
           }
@@ -816,7 +819,18 @@ export class UdsBusClient implements BusClient {
     }
     for (const hydration of [...this.hydrations]) {
       try {
-        hydration.listener?.(event);
+        if (hydration.listener === undefined) {
+          continue;
+        }
+        if (hydration.pending !== undefined) {
+          if (event.type === 'error') {
+            hydration.listener(event);
+          } else {
+            hydration.tailBuffer.push(event);
+          }
+        } else {
+          hydration.listener(event);
+        }
       } catch {
         // A hydrate-tail listener's failure is its own concern; keep sibling fanout alive.
       }
@@ -925,11 +939,28 @@ export class UdsBusClient implements BusClient {
     this.pendingHydrates.delete(correlationId);
     const reply = normalizeHydrateReply(result, this.cursor);
     this.observeCursor(reply.cursor);
+    this.deliverHydrationCatchUp(pending.hydration, reply);
     if (pending.hydration.pending === pending.completion) {
       pending.hydration.pending = undefined;
     }
     pending.completion.resolve(reply);
     return true;
+  }
+
+  /** Replay missed events, then any tail buffered during the in-flight hydrate, before going live. */
+  private deliverHydrationCatchUp(hydration: Hydration, reply: HydrateReply): void {
+    const listener = hydration.listener;
+    if (listener === undefined) {
+      hydration.tailBuffer = [];
+      return;
+    }
+    for (const item of reply.replay ?? []) {
+      listener(item.event);
+    }
+    for (const event of hydration.tailBuffer) {
+      listener(event);
+    }
+    hydration.tailBuffer = [];
   }
 
   private rejectHydrate(correlationId: string, error: Error): boolean {
@@ -970,28 +1001,30 @@ export class UdsBusClient implements BusClient {
       this.socket = undefined;
     }
   }
+
+  /** Parse one JSON line into a {@link WireMessage}, or `undefined` if it is blank or unparseable.
+   * Unlike the Python `validate_json` (which throws on a bad frame), we drop a malformed line and
+   * keep reading — one corrupt frame must not tear down a long-lived connection. */
+  private parseWireMessage(line: string): WireMessage | undefined {
+    const trimmed = line.trim();
+    if (trimmed.length === 0) {
+      return undefined;
+    }
+    try {
+      const parsed = JSON.parse(trimmed) as unknown;
+      if (isWireMessage(parsed)) {
+        return parsed;
+      }
+      this.logger.warn(`bus: dropping non-envelope JSON line: ${trimmed.slice(0, 120)}`);
+      return undefined;
+    } catch {
+      this.logger.warn(`bus: dropping malformed JSON line: ${trimmed.slice(0, 120)}`);
+      return undefined;
+    }
+  }
 }
 
 // === Module-private helpers ===================================================
-
-/** Parse one JSON line into a {@link WireMessage}, or `undefined` if it is blank or unparseable.
- * Unlike the Python `validate_json` (which throws on a bad frame), we drop a malformed line and
- * keep reading — one corrupt frame must not tear down a long-lived connection. */
-function parseWireMessage(line: string): WireMessage | undefined {
-  const trimmed = line.trim();
-  if (trimmed.length === 0) {
-    return undefined;
-  }
-  try {
-    const parsed = JSON.parse(trimmed) as unknown;
-    if (isWireMessage(parsed)) {
-      return parsed;
-    }
-    return undefined;
-  } catch {
-    return undefined;
-  }
-}
 
 /** Narrow an unknown JSON value to a {@link WireMessage} by its `op` discriminant. The full payload
  * shape is trusted from the service (the protocol is the contract); this guards only that the frame

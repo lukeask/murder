@@ -49,6 +49,16 @@ function setup() {
   return { fake, store, dispose };
 }
 
+/** Let the FakeBusClient's hydrate settle and buffered tail events deliver. */
+async function flush(): Promise<void> {
+  await new Promise<void>((resolve) => {
+    setTimeout(resolve, 0);
+  });
+  await new Promise<void>((resolve) => {
+    setTimeout(resolve, 0);
+  });
+}
+
 /** Replay the golden through the live bus → store subscription → `applyBlock` path. */
 function replayGolden(fake: FakeBusClient): void {
   for (const ev of GOLDEN) {
@@ -78,9 +88,10 @@ describe('conversation.block cross-language shape contract (H3)', () => {
     expect((first?.['payload'] as Record<string, unknown>)['type']).toBe('user');
   });
 
-  it('replaying the golden builds a transcript that survives the live-tail block-updated merge', () => {
+  it('replaying the golden builds a transcript that survives the live-tail block-updated merge', async () => {
     const { fake, store, dispose } = setup();
     replayGolden(fake);
+    await flush();
 
     const blocks = store.getState().conversations.transcripts[AGENT_ID];
     expect(blocks).toBeDefined();
@@ -95,9 +106,10 @@ describe('conversation.block cross-language shape contract (H3)', () => {
     dispose();
   });
 
-  it('renders every block kind to the correct turn (selectors anchored to the real payload)', () => {
+  it('renders every block kind to the correct turn (selectors anchored to the real payload)', async () => {
     const { fake, store, dispose } = setup();
     replayGolden(fake);
+    await flush();
 
     const view = selectConversationView(AGENT_ID, store.getState().conversations);
     const turns = view.turns;
@@ -120,9 +132,10 @@ describe('conversation.block cross-language shape contract (H3)', () => {
     dispose();
   });
 
-  it('choice_prompt: answered renders the selection; trailing unanswered is flagged live', () => {
+  it('choice_prompt: answered renders the selection; trailing unanswered is flagged live', async () => {
     const { fake, store, dispose } = setup();
     replayGolden(fake);
+    await flush();
 
     const view = selectConversationView(AGENT_ID, store.getState().conversations);
     const prompts = view.turns.filter((t) => t.speaker === 'prompt');

@@ -32,6 +32,16 @@ function setup() {
   return { fake, store, dispose };
 }
 
+/** Let the FakeBusClient's hydrate settle and buffered tail events deliver. */
+async function flush(): Promise<void> {
+  await new Promise<void>((resolve) => {
+    setTimeout(resolve, 0);
+  });
+  await new Promise<void>((resolve) => {
+    setTimeout(resolve, 0);
+  });
+}
+
 /**
  * Build a minimal `ConversationBlockEvent` for a given agent.
  *
@@ -77,12 +87,13 @@ describe('conversations — initial state', () => {
 // ── applyBlock via bus.subscribe (the event-driven path) ─────────────────────────────────────────
 
 describe('conversations — event-driven: ConversationBlockEvent via subscribe', () => {
-  it('block-appended: pushes a block onto the agent transcript', () => {
+  it('block-appended: pushes a block onto the agent transcript', async () => {
     const { fake, store, dispose } = setup();
 
     // Emit via FakeBusClient — routes through the store's second bus.subscribe.
     const event = makeBlockEvent('agent-1', 'user', 'block-appended', { text: 'hello' });
     fake.emit(event);
+    await flush();
 
     const transcripts = store.getState().conversations.transcripts;
     const blocks = transcripts['agent-1'];
@@ -92,11 +103,12 @@ describe('conversations — event-driven: ConversationBlockEvent via subscribe',
     dispose();
   });
 
-  it('two events for the same agent push two blocks', () => {
+  it('two events for the same agent push two blocks', async () => {
     const { fake, store, dispose } = setup();
 
     fake.emit(makeBlockEvent('agent-1', 'user', 'block-appended', { text: 'msg 1' }));
     fake.emit(makeBlockEvent('agent-1', 'assistant', 'block-appended', { text: 'reply 1' }));
+    await flush();
 
     const blocks = store.getState().conversations.transcripts['agent-1'];
     expect(blocks).toHaveLength(2);
@@ -105,17 +117,19 @@ describe('conversations — event-driven: ConversationBlockEvent via subscribe',
     dispose();
   });
 
-  it('only the affected agent transcript ref-swaps (granularity contract)', () => {
+  it('only the affected agent transcript ref-swaps (granularity contract)', async () => {
     const { fake, store, dispose } = setup();
 
     // Seed agent-1 with one block.
     fake.emit(makeBlockEvent('agent-1', 'user', 'block-appended', { text: 'init' }));
+    await flush();
     const transcriptsBefore = store.getState().conversations.transcripts;
     const agent1Before = transcriptsBefore['agent-1'];
     const agent2Before = transcriptsBefore['agent-2']; // undefined — no blocks yet
 
     // Now add a block for agent-2.
     fake.emit(makeBlockEvent('agent-2', 'assistant', 'block-appended', { text: 'hi' }));
+    await flush();
     const transcriptsAfter = store.getState().conversations.transcripts;
 
     // agent-2 changed.
@@ -126,17 +140,19 @@ describe('conversations — event-driven: ConversationBlockEvent via subscribe',
     dispose();
   });
 
-  it('block-updated: replaces the last block with matching id, or pushes if no match', () => {
+  it('block-updated: replaces the last block with matching id, or pushes if no match', async () => {
     const { fake, store, dispose } = setup();
 
     const blockId = 'block-agent-1-assistant';
     // First append a block with a known id.
     fake.emit(makeBlockEvent('agent-1', 'assistant', 'block-appended', { text: 'draft' }));
+    await flush();
     const after1 = store.getState().conversations.transcripts['agent-1'];
     expect(after1).toHaveLength(1);
 
     // Now update it — same id, new content.
     fake.emit(makeBlockEvent('agent-1', 'assistant', 'block-updated', { text: 'final' }));
+    await flush();
     const after2 = store.getState().conversations.transcripts['agent-1'];
     expect(after2).toHaveLength(1); // still one block (replaced, not appended)
     // biome-ignore lint/complexity/useLiteralKeys: raw is Record<string,unknown>; noPropertyAccessFromIndexSignature requires bracket notation here in tests too
@@ -146,11 +162,12 @@ describe('conversations — event-driven: ConversationBlockEvent via subscribe',
     dispose();
   });
 
-  it('block-appended with an existing block id replaces instead of duplicating', () => {
+  it('block-appended with an existing block id replaces instead of duplicating', async () => {
     const { fake, store, dispose } = setup();
 
     fake.emit(makeBlockEvent('agent-1', 'assistant', 'block-appended', { text: 'snapshot copy' }));
     fake.emit(makeBlockEvent('agent-1', 'assistant', 'block-appended', { text: 'tail copy' }));
+    await flush();
 
     const blocks = store.getState().conversations.transcripts['agent-1'];
     expect(blocks).toHaveLength(1);
@@ -158,7 +175,7 @@ describe('conversations — event-driven: ConversationBlockEvent via subscribe',
     dispose();
   });
 
-  it('block-updated with no matching id falls back to push (defensive)', () => {
+  it('block-updated with no matching id falls back to push (defensive)', async () => {
     const { fake, store, dispose } = setup();
 
     // block-updated on an empty transcript — no match → push.
@@ -172,6 +189,7 @@ describe('conversations — event-driven: ConversationBlockEvent via subscribe',
       action: 'block-updated',
       block: { type: 'assistant', id: 'no-match', text: 'pushed anyway' },
     });
+    await flush();
 
     const blocks = store.getState().conversations.transcripts['agent-x'];
     expect(blocks).toHaveLength(1);

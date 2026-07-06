@@ -55,6 +55,8 @@ interface Subscription {
 
 interface Hydration {
   listener: BusEventListener | undefined;
+  pending: boolean;
+  tailBuffer: BusEvent[];
 }
 
 export interface RecordedHydrateCall {
@@ -130,7 +132,11 @@ export class FakeBusClient implements BusClient {
       }
     }
     for (const hydration of [...this.hydrations]) {
-      hydration.listener?.(event);
+      if (hydration.pending && event.type !== 'error') {
+        hydration.tailBuffer.push(event);
+      } else {
+        hydration.listener?.(event);
+      }
     }
   }
 
@@ -171,7 +177,7 @@ export class FakeBusClient implements BusClient {
     const normalizedTopics = normalizeHydrateTopics(topics);
     const callCursor = this.cursor;
     this.recordedHydrateCalls.push({ topics: normalizedTopics, cursor: callCursor });
-    const hydration: Hydration = { listener };
+    const hydration: Hydration = { listener, pending: true, tailBuffer: [] };
     this.hydrations.add(hydration);
 
     const reply =
@@ -180,8 +186,16 @@ export class FakeBusClient implements BusClient {
         : Promise.resolve().then(() => this.hydrateHandler?.(normalizedTopics, callCursor));
 
     return reply.then((value) => {
-      const resolved = value ?? { snapshots: {}, cursor: callCursor };
+      const resolved: HydrateReply = value ?? { snapshots: {}, cursor: callCursor };
       this.observeCursor(resolved.cursor);
+      for (const item of resolved.replay ?? []) {
+        hydration.listener?.(item.event);
+      }
+      for (const event of hydration.tailBuffer) {
+        hydration.listener?.(event);
+      }
+      hydration.tailBuffer = [];
+      hydration.pending = false;
       return {
         ...resolved,
         unsubscribe: () => {

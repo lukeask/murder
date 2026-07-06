@@ -43,6 +43,7 @@ import type {
   HydrateSnapshots,
   Unsubscribe,
 } from '../bus/BusClient.js';
+import { isReadEnvelope } from '../bus/readEnvelope.js';
 import type {
   ConversationBlockEvent,
   ConversationStateEvent,
@@ -389,8 +390,18 @@ function wireHydration(
   invalidations: readonly SliceInvalidation[],
 ): { dispose: () => void } {
   let disposed = false;
+  let hydrationLive = false;
+  const pendingTail: Parameters<BusEventListener>[0][] = [];
   const listener: BusEventListener = (event) => {
     if (disposed) {
+      return;
+    }
+    if (!hydrationLive) {
+      if (event.type === 'error') {
+        routeHydratedEvent(event, actions, invalidations);
+        return;
+      }
+      pendingTail.push(event);
       return;
     }
     routeHydratedEvent(event, actions, invalidations);
@@ -406,9 +417,11 @@ function wireHydration(
         return;
       }
       applyHydrateSnapshots(store, reply.snapshots);
-      for (const replay of reply.replay ?? []) {
-        listener(replay.event);
+      hydrationLive = true;
+      for (const event of pendingTail) {
+        routeHydratedEvent(event, actions, invalidations);
       }
+      pendingTail.length = 0;
       unsubscribeHydrate = reply.unsubscribe;
       store.setState({
         hydration: {
@@ -544,10 +557,19 @@ function applyHydrateSnapshots(store: AppStoreApi, snapshots: HydrateSnapshots):
 function snapshotAs<T>(snapshots: HydrateSnapshots, ...keys: readonly string[]): T | undefined {
   for (const key of keys) {
     if (Object.hasOwn(snapshots, key)) {
-      return snapshots[key] as unknown as T;
+      return unwrapHydrateSnapshotValue(snapshots[key]) as T;
     }
   }
   return undefined;
+}
+
+/** Live hydrate snapshots for `state.*` RPC targets arrive as `{ ok, value }` read envelopes
+ * (same as `rpc()`); unwrap before projecting into slice DTOs. */
+function unwrapHydrateSnapshotValue(value: unknown): unknown {
+  if (typeof value === 'object' && value !== null && isReadEnvelope(value as Record<string, unknown>)) {
+    return (value as { ok: true; value: unknown }).value;
+  }
+  return value;
 }
 
 function toRosterRow(session: CrowSessionDto): RosterRow {
@@ -611,6 +633,8 @@ function applySettingsWire(prev: SettingsState, wire: SettingsWire | undefined):
     vimMode: wire.vim_mode ?? prev.vimMode,
     defaultChatViewMode: wire.default_chat_view_mode ?? prev.defaultChatViewMode,
     startupRogue: 'startup_rogue' in wire ? wire.startup_rogue : prev.startupRogue,
+    startupRogueModels: wire.startup_rogue_models ?? prev.startupRogueModels,
+    startupRogueEfforts: wire.startup_rogue_efforts ?? prev.startupRogueEfforts,
     collaboratorHarness:
       'collaborator_harness' in wire ? wire.collaborator_harness : prev.collaboratorHarness,
     plannerHarness: 'planner_harness' in wire ? wire.planner_harness : prev.plannerHarness,

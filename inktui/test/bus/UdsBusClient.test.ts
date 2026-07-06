@@ -57,6 +57,14 @@ class ScriptedBusServer {
   readonly subscribeFilters: SubArgs['filter'][] = [];
   /** Every full `sub` args payload seen on the wire, in order. */
   readonly subscribeArgs: SubArgs[] = [];
+  /** Every `hydrate` correlation_id seen, in order. */
+  readonly hydrateCorrelationIds: string[] = [];
+  /** Hydrate handler: given args, returns the ack `result` body. */
+  hydrateHandler: (
+    args: { topics: readonly string[]; cursor?: number },
+    callIndex: number,
+  ) => Record<string, unknown> = () => ({ cursor: 1 });
+  private hydrateCallCount = 0;
   /** RPC handler: given (target, body), returns a reply object, or `undefined` to stay silent
    * (drives the timeout path). */
   rpcHandler: (
@@ -100,13 +108,21 @@ class ScriptedBusServer {
     this.connections.clear();
   }
 
+  /** Write raw bytes to every connected client (for framing/error-path tests). */
+  writeRaw(data: string): void {
+    for (const socket of this.connections) {
+      socket.write(data);
+    }
+  }
+
   /** Push a `pub` event frame to every connected client. */
-  emit(event: BusEvent): void {
+  emit(event: BusEvent, seq?: number): void {
     const frame: WireMessage = {
       op: 'pub',
       schema_version: PROTOCOL_VERSION,
       correlation_id: `pub-${randomUUID()}`,
       event,
+      ...(seq !== undefined ? { seq } : {}),
     };
     this.broadcast(frame);
   }
@@ -115,6 +131,8 @@ class ScriptedBusServer {
    * `socket.write()` — forcing them into one TCP segment / `data` event so the client's handshake
    * read sees them in the same chunk. This reproduces the pipelined-frame drop. */
   pipelineEventWithAck: BusEvent | undefined;
+  /** When set, emitted on the wire immediately before the next hydrate ack (tail-before-ack race). */
+  emitBeforeHydrateAck: { event: BusEvent; seq: number } | undefined;
 
   /** Send an interleaved `wake` frame to every client (the client must skip these). */
   emitWake(): void {
@@ -206,6 +224,30 @@ class ScriptedBusServer {
           schema_version: PROTOCOL_VERSION,
           correlation_id: message.correlation_id,
           body: { kind: 'subscribed' },
+        });
+        return;
+      }
+      case 'hydrate': {
+        this.hydrateCorrelationIds.push(message.correlation_id);
+        const callIndex = this.hydrateCallCount;
+        this.hydrateCallCount += 1;
+        const result = this.hydrateHandler(
+          {
+            topics: message.args.topics,
+            ...(message.args.cursor !== undefined ? { cursor: message.args.cursor } : {}),
+          },
+          callIndex,
+        );
+        if (this.emitBeforeHydrateAck !== undefined) {
+          const { event, seq } = this.emitBeforeHydrateAck;
+          this.emitBeforeHydrateAck = undefined;
+          this.emit(event, seq);
+        }
+        this.send(socket, {
+          op: 'ack',
+          schema_version: PROTOCOL_VERSION,
+          correlation_id: message.correlation_id,
+          body: { kind: 'hydrate_reply', result },
         });
         return;
       }
@@ -481,6 +523,95 @@ describe('UdsBusClient — subscriptions', () => {
     // Give the frame time to (not) arrive.
     await new Promise((resolve) => setTimeout(resolve, 30));
     expect(received).toHaveLength(0);
+  });
+});
+
+describe('UdsBusClient — hydrate', () => {
+  let server: ScriptedBusServer;
+  let client: UdsBusClient;
+
+  beforeEach(async () => {
+    server = new ScriptedBusServer();
+    await server.start();
+    client = new UdsBusClient({
+      socketPath: server.socketPath,
+      clock: instantClock(),
+      backoff: FAST_BACKOFF,
+    });
+  });
+  afterEach(async () => {
+    client.close();
+    await server.stop();
+  });
+
+  it('passes through live state.* hydrate snapshots wrapped in { ok, value } read envelopes', async () => {
+    server.hydrateHandler = () => ({
+      cursor: 9,
+      snapshots: {
+        conversations: {
+          ok: true,
+          value: { conversations: [], as_of: '2026-06-09T00:00:00', invalidation_key: 'iv' },
+        },
+        crow: { ok: true, value: { invalidation_key: 'iv', sessions: [] } },
+      },
+    });
+
+    const reply = await client.hydrate('all');
+
+    expect(reply.snapshots['conversations']).toEqual({
+      ok: true,
+      value: { conversations: [], as_of: '2026-06-09T00:00:00', invalidation_key: 'iv' },
+    });
+  });
+
+  it('delivers replay to the hydrate listener before tail buffered during the pending ack', async () => {
+    server.hydrateHandler = () => ({
+      cursor: 11,
+      replay: [{ seq: 10, event: snapshot('T-replay') }],
+    });
+    server.emitBeforeHydrateAck = { event: snapshot('T-tail'), seq: 11 };
+
+    const received: BusEvent[] = [];
+    await client.hydrate('all', (event) => received.push(event));
+
+    expect(received.map((event) => (event as { key: string }).key)).toEqual([
+      'T-replay',
+      'T-tail',
+    ]);
+  });
+
+  it('delivers resume-replay events to the standing hydrate listener on reconnect', async () => {
+    server.hydrateHandler = (_args, callIndex) =>
+      callIndex === 0
+        ? { snapshots: {}, cursor: 10 }
+        : {
+            snapshots: {},
+            cursor: 12,
+            replay: [{ seq: 11, event: snapshot('T-replay') }],
+          };
+
+    const received: BusEvent[] = [];
+    await client.hydrate('all', (event) => received.push(event));
+    expect(received).toHaveLength(0);
+
+    server.dropAllConnections();
+    await waitFor(() => server.hydrateCorrelationIds.length === 2);
+    await waitFor(() => received.length === 1);
+    expect((received[0] as { key: string }).key).toBe('T-replay');
+  });
+
+  it('logs a warning when a malformed JSON line arrives on the wire', async () => {
+    const warnings: string[] = [];
+    client = new UdsBusClient({
+      socketPath: server.socketPath,
+      clock: instantClock(),
+      backoff: FAST_BACKOFF,
+      logger: { warn: (msg) => warnings.push(msg), info: () => {} },
+    });
+    await client.connect();
+    server.writeRaw('not-json\n');
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(warnings.some((msg) => msg.includes('malformed JSON'))).toBe(true);
   });
 });
 
