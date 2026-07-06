@@ -75,6 +75,7 @@ import type {
   RpcMethod,
   RpcParams,
   RpcResult,
+  SubscribeOptions,
   Unsubscribe,
 } from './BusClient.js';
 import { matchesFilter } from './matchesFilter.js';
@@ -217,6 +218,7 @@ export class LineBuffer {
 interface Subscription {
   readonly listener: BusEventListener;
   readonly filter: EventFilter | undefined;
+  readonly tailOnly: boolean;
   correlationId: string;
 }
 
@@ -324,10 +326,15 @@ export class UdsBusClient implements BusClient {
   }
 
   /** {@inheritDoc BusClient.subscribe} */
-  subscribe(listener: BusEventListener, filter?: EventFilter): Unsubscribe {
+  subscribe(
+    listener: BusEventListener,
+    filter?: EventFilter,
+    options?: SubscribeOptions,
+  ): Unsubscribe {
     const subscription: Subscription = {
       listener,
       filter,
+      tailOnly: options?.tailOnly ?? false,
       correlationId: `sub-${randomUUID()}`,
     };
     this.subscriptions.add(subscription);
@@ -778,6 +785,7 @@ export class UdsBusClient implements BusClient {
       args: {
         filter: subscription.filter ?? {},
         presence_retain: false,
+        ...(subscription.tailOnly ? { tail_only: true } : {}),
       },
     };
     this.writeMessage(socket, message);

@@ -508,6 +508,11 @@ class SubArgs(BaseModel):
     with ``events.id > N`` before the live tail begins, terminated by
     ``AckBody(kind="replay_done", watermark=...)``.
 
+    ``tail_only=True`` skips replay entirely: the server treats the replay
+    cursor as the current watermark so only events published *after* subscribe
+    are delivered. Use for ephemeral notifications (e.g. bus ``error`` events)
+    that must not re-toast historical failures on every TUI connect.
+
     ``presence_retain=True`` makes presence sticky-retain: server emits the
     current PresenceEvent on the new subscription immediately after
     replay_done so late subscribers aren't blind to current state.
@@ -515,6 +520,7 @@ class SubArgs(BaseModel):
 
     filter: EventFilter = Field(default_factory=EventFilter)
     since_id: int | None = None
+    tail_only: bool = False
     presence_retain: bool = True
 
 

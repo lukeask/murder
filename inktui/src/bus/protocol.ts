@@ -347,11 +347,13 @@ export interface HelloBody {
 }
 
 /** Subscribe arguments. `since_id=N` replays every persisted event with id > N before the live
- * tail, terminated by an {@link AckMessage} (`kind: 'replay_done'`). `presence_retain` makes the
- * current presence sticky-retained to late subscribers. */
+ * tail, terminated by an {@link AckMessage} (`kind: 'replay_done'`). `tail_only` skips replay and
+ * delivers only events published after subscribe (the server uses the current watermark as the
+ * replay cursor). `presence_retain` makes the current presence sticky-retained to late subscribers. */
 export interface SubArgs {
   filter: EventFilter;
   since_id?: number | null;
+  tail_only?: boolean;
   presence_retain: boolean;
 }
 

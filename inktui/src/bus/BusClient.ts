@@ -118,6 +118,12 @@ export type BusEventListener = (event: BusEvent) => void;
  */
 export type Unsubscribe = () => void;
 
+/** Optional subscribe behaviour. The fake ignores these; the live client maps them to wire args. */
+export interface SubscribeOptions {
+  /** Skip historical replay — receive only events published after subscribe. */
+  readonly tailOnly?: boolean;
+}
+
 export interface BusClient {
   /**
    * Issue an RPC and resolve with its typed result. The sole view->bus write path (rule 3): the
@@ -139,5 +145,9 @@ export interface BusClient {
    * socket read loop internally and fans each frame out to the registered listeners; the async
    * iterator stays an implementation detail below this seam, never leaking into the store.
    */
-  subscribe(listener: BusEventListener, filter?: EventFilter): Unsubscribe;
+  subscribe(
+    listener: BusEventListener,
+    filter?: EventFilter,
+    options?: SubscribeOptions,
+  ): Unsubscribe;
 }

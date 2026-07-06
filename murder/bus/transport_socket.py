@@ -375,9 +375,12 @@ class SocketBusServer:
             )
             return
 
+        replay_since = (
+            watermark if msg.args.tail_only else (msg.args.since_id or 0)
+        )
         for _, event in self._broker.replay(
             filt,
-            since_id=msg.args.since_id or 0,
+            since_id=replay_since,
             until_id=watermark,
         ):
             await self._send_pub(transport, msg.correlation_id, event)

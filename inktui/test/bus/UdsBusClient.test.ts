@@ -55,6 +55,8 @@ class ScriptedBusServer {
   /** Every `sub` filter seen on the wire, in order — lets a test assert the client transmits the
    * filter it was given (the server-side filtering contract starts with the client shipping it). */
   readonly subscribeFilters: SubArgs['filter'][] = [];
+  /** Every full `sub` args payload seen on the wire, in order. */
+  readonly subscribeArgs: SubArgs[] = [];
   /** RPC handler: given (target, body), returns a reply object, or `undefined` to stay silent
    * (drives the timeout path). */
   rpcHandler: (
@@ -198,6 +200,7 @@ class ScriptedBusServer {
       case 'sub': {
         this.subscribeCorrelationIds.push(message.correlation_id);
         this.subscribeFilters.push(message.args.filter);
+        this.subscribeArgs.push(message.args);
         this.send(socket, {
           op: 'ack',
           schema_version: PROTOCOL_VERSION,
@@ -422,6 +425,19 @@ describe('UdsBusClient — subscriptions', () => {
     client.subscribe(() => {});
     await waitFor(() => server.subscribeFilters.length === 1);
     expect(server.subscribeFilters[0]).toEqual({});
+  });
+
+  it('transmits tail_only when subscribe options request tail-only delivery', async () => {
+    client.subscribe(() => {}, { type: 'error' }, { tailOnly: true });
+    await waitFor(() => server.subscribeArgs.length === 1);
+    expect(server.subscribeArgs[0]?.tail_only).toBe(true);
+    expect(server.subscribeArgs[0]?.filter).toEqual({ type: 'error' });
+  });
+
+  it('omits tail_only by default (full replay cursor)', async () => {
+    client.subscribe(() => {}, { entity: 'ticket' });
+    await waitFor(() => server.subscribeArgs.length === 1);
+    expect(server.subscribeArgs[0]?.tail_only).toBeUndefined();
   });
 
   it('skips interleaved wake frames (does not deliver them as events)', async () => {

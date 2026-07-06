@@ -402,6 +402,7 @@ export function createAppStore(bus: BusClient): {
       toastStore.getState().push(errorEvent.message, { severity, ttlMs: 12000 });
     },
     { type: 'error' },
+    { tailOnly: true },
   );
 
   return {

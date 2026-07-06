@@ -22,6 +22,7 @@ import type {
   RpcParams,
   RpcPayload,
   RpcResult,
+  SubscribeOptions,
   Unsubscribe,
 } from './BusClient.js';
 import { matchesFilter } from './matchesFilter.js';
@@ -118,7 +119,11 @@ export class FakeBusClient implements BusClient {
     });
   }
 
-  subscribe(listener: BusEventListener, filter?: EventFilter): Unsubscribe {
+  subscribe(
+    listener: BusEventListener,
+    filter?: EventFilter,
+    _options?: SubscribeOptions,
+  ): Unsubscribe {
     const subscription: Subscription = { listener, filter };
     this.subscriptions.add(subscription);
     return () => {
