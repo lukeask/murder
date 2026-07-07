@@ -114,13 +114,15 @@ Shortcuts can be changed from the in-app settings.
 
 ## Configuration
 
-Project configuration lives in `.murder/roles.yaml`. The default scaffold configures:
+Harness/model selection (which harness a role uses, harness pools, startup models/effort) is user-level: set it from the in-app settings menu, which persists to `~/.config/murder/config.yaml`.
 
-- `collaborator` and `planner` as harness-backed roles
-- `notetaker` and `crow_handler` as API-backed roles
-- `default_crow` as the harness used for new crows
+Project configuration lives in `.murder/roles.yaml` and only carries project-specific bits:
 
-Edit `.murder/roles.yaml` to choose harnesses, model names, startup prompts, and per-role behavior.
+- `project` metadata, `tui`, and `runtime` settings
+- `notetaker` and `crow_handler` API-role tuning
+- non-selection role fields such as startup prompt templates and poll intervals
+
+Selection fields in `.murder/roles.yaml` are ignored on load.
 
 ## Development
 
