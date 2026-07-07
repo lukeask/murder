@@ -275,6 +275,28 @@ def _is_cursor_tool_rollup(text: str) -> bool:
     return any(sig.search(s) for sig in _ROLLUP_SIGNALS)
 
 
+# A *running* shell rollup carries a live footer after the command — elapsed
+# timer, cwd, and the backgrounding hint, e.g.
+#     $ npm test 2>&1 | tail -15  9.5s in inktui  ctrl+b twice to send to background
+# The timer ticks every repaint, and each repaint lands on a NEW scrollback line,
+# so without normalization one command becomes a pile of near-identical frames
+# (differing only in "9.5s" vs "10.0s") that defeat both the byte-identical
+# dedupe and the redraw-chain collapse — persisting one shell call as dozens of
+# blocks. Strip the footer so every frame of one command is byte-identical.
+# Anchored to the hint text, or to a full ``<elapsed>s in <dir>`` pair, so a
+# command genuinely ending in a bare duration token ("sleep 5s") is untouched.
+_ROLLUP_SHELL_FOOTER_RE = re.compile(
+    r"\s+(?:\d+(?:\.\d+)?[ms]?s\s+)?(?:in\s+\S+\s+)?ctrl\+b\s+twice\s+to\s+send\s+to\s+background\s*$"
+    r"|\s+\d+(?:\.\d+)?[ms]?s\s+in\s+\S+\s*$",
+    re.IGNORECASE,
+)
+
+
+def _strip_shell_footer(s: str) -> str:
+    """Drop the live running-footer from a whitespace-flattened shell rollup."""
+    return _ROLLUP_SHELL_FOOTER_RE.sub("", s).rstrip()
+
+
 def _rollup_is_running(text: str) -> bool:
     """True for the in-progress (gerund) redraw frame, e.g. 'Grepping …'."""
     m = _ROLLUP_GERUND_RE.match(text.strip())
@@ -290,7 +312,7 @@ def _rollup_title(text: str) -> str:
     """
     s = " ".join(text.split())
     if _ROLLUP_SHELL_RE.match(s):
-        return truncate_title(s.lstrip("$ ").strip())
+        return truncate_title(_strip_shell_footer(s).lstrip("$ ").strip())
     if _ROLLUP_COUNT_RE.search(s):  # trim expanded detail after the count summary
         cut = re.search(r'\s(?="|[A-Za-z.]+/|…)', s)
         if cut:
@@ -299,6 +321,22 @@ def _rollup_title(text: str) -> str:
 
 
 def _tool_call_segment(text: str) -> Segment:
+    # Shell rollups: normalize the stored result to the footer-stripped command so
+    # every repaint of one running command produces an IDENTICAL segment — the
+    # ticking timer otherwise makes each frame unique, and the persistence merge
+    # (sealed blocks are immutable) then accretes one row per tick. The footer's
+    # presence is still surfaced as `running`.
+    s = " ".join(text.split())
+    if _ROLLUP_SHELL_RE.match(s):
+        stripped = _strip_shell_footer(s)
+        return {
+            "type": "tool_call",
+            "title": _rollup_title(text),
+            "input": None,
+            "result": stripped,
+            "elided": "earlier items hidden" in stripped,
+            "running": stripped != s,
+        }
     return {
         "type": "tool_call",
         "title": _rollup_title(text),
@@ -325,7 +363,10 @@ def _rollup_signature(text: str) -> tuple[str, object]:
     """
     s = text.strip()
     if _ROLLUP_SHELL_RE.match(s):
-        return ("shell", s)
+        # Key on the footer-stripped command: every repaint of one running shell
+        # command (timer ticking) is the same operation. Distinct commands still
+        # get distinct keys.
+        return ("shell", _strip_shell_footer(" ".join(s.split())))
     counts = _ROLLUP_COUNT_RE.findall(s)
     if counts:
         return ("count", sum(int(c) for c in counts))
@@ -341,6 +382,8 @@ def _rollup_continues(prev: str, cur: str) -> bool:
         return cv >= pv  # same accumulating group; counts only grow
     if pk == "single" and ck == "single":
         return pv == cv  # "Editing X" -> "Edited X" (same target)
+    if pk == "shell" and ck == "shell":
+        return pv == cv  # repaints of one running command (timer ticks)
     return False
 
 

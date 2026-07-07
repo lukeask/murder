@@ -47,6 +47,22 @@ _CODEX_PLACEHOLDER_RE = re.compile(r"^Find and fix a bug in @filename$")
 # `[›|>] <digit>. <text>` — start-anchored digit+dot+space distinguishes it from
 # a real (prose) user turn, which never opens with that shape.
 _CODEX_UPDATE_MENU_OPTION_RE = re.compile(r"^\s*[›>]?\s*\d+\.\s+\S")
+# /status modal: limit rows with bracketed bars and reset suffixes. Codex's
+# parser skips non-• lines outright, but rows can still land inside a • block
+# when projection races the overlay.
+_CODEX_LIMIT_ROW_RE = re.compile(
+    r"^\s*[│╭╰]?\s*"
+    r"(?P<label>[A-Za-z0-9][\w/.\- ]*?)\s+limits?\s*:?\s*"
+    r"(?:\[[^\]]*\]\s*)?"
+    r"\d+(?:\.\d+)?\s*%\s*(?:left|remaining|used)?"
+    r"(?:\s*\([^)]*resets?[^)]*\))?",
+    re.IGNORECASE,
+)
+_CODEX_STATUS_SESSION_RE = re.compile(
+    r"^\s*[│╭╰]?\s*Session:\s+[0-9a-f]{8}-[0-9a-f]{4}-",
+    re.IGNORECASE,
+)
+_CODEX_STATUS_SLASH_RE = re.compile(r"^\s*/status\s*$", re.IGNORECASE)
 
 
 # Codex chrome: shared base plus codex's status bars, box-drawing frame glyphs,
@@ -57,6 +73,9 @@ _codex_is_chrome = chrome_matcher(
     substring_rule("esc to interrupt", "background terminals running", "/ps to view"),
     stripped_substring_rule("ctrl + t to view transcript", "ctrl+t to view transcript"),
     stripped_substring_rule("Update available!", "Press enter to continue"),
+    regex_match_rule(_CODEX_LIMIT_ROW_RE),
+    regex_match_rule(_CODEX_STATUS_SESSION_RE),
+    regex_match_rule(_CODEX_STATUS_SLASH_RE),
     regex_match_rule(_CODEX_PROMPT_RE),
     # NB: deliberately NOT a chrome rule for `_CODEX_UPDATE_MENU_OPTION_RE` — that
     # matcher also governs assistant prose body collection, and real codex

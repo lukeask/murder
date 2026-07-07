@@ -37,6 +37,24 @@ _AGY_TIP_RE = re.compile(r"^\s*└\s+Tip:", re.IGNORECASE)
 # segments. The old adapter dropped it via a case-insensitive substring rule
 # (`transcript_drop_substrings = ('antigravity cli', ...)`); restore that here.
 _AGY_CLI_BANNER_RE = re.compile(r"antigravity cli", re.IGNORECASE)
+# /usage quota dialog: per-model rows, grouped weekly limits, and scroll hints.
+_AGY_USAGE_DIALOG_HDR_RE = re.compile(r"^└\s+Models?\s*(?:&\s*)?Quota\b", re.IGNORECASE)
+_AGY_MODEL_LINE_RE = re.compile(
+    r"^\s{0,8}[A-Za-z][\w.\- ]{1,50}\((?:Low|Medium|High|Thinking)\)\s*$",
+)
+_AGY_GROUP_HEADER_RE = re.compile(r"^\s*(?P<label>[A-Z][A-Z /&-]+MODELS)\s*$")
+_AGY_WEEKLY_LIMIT_RE = re.compile(r"^\s*Weekly Limit\s*$", re.IGNORECASE)
+_AGY_BAR_LINE_RE = re.compile(r"^\s*(?:[█░]+\s+)+\d*(?:\.\d+)?%?\s*$")
+_AGY_BRACKET_BAR_RE = re.compile(r"^\s*\[[█░]+\]\s*\d+(?:\.\d+)?%\s*$")
+_AGY_REMAINING_RE = re.compile(
+    r"\d+(?:\.\d+)?%\s*remaining\s*·\s*Refreshes in",
+    re.IGNORECASE,
+)
+_AGY_AVAILABLE_RE = re.compile(r"Quota available", re.IGNORECASE)
+_AGY_MODELS_IN_GROUP_RE = re.compile(r"^\s*Models within this group:", re.IGNORECASE)
+_AGY_GROUP_EXPLAIN_RE = re.compile(r"^\s*│Within each group", re.IGNORECASE)
+_AGY_USAGE_SCROLL_RE = re.compile(r"↑/↓ Scroll", re.IGNORECASE)
+
 _AGY_STATUS_HINTS = (
     "? for shortcuts",
     "esc to cancel",
@@ -67,6 +85,17 @@ _agy_is_chrome = chrome_matcher(
     regex_match_rule(_AGY_INTERRUPTED_RE),
     regex_match_rule(_AGY_SPINNER_RE),
     regex_match_rule(_AGY_TIP_RE),
+    regex_match_rule(_AGY_USAGE_DIALOG_HDR_RE),
+    regex_match_rule(_AGY_MODEL_LINE_RE),
+    regex_match_rule(_AGY_GROUP_HEADER_RE),
+    regex_match_rule(_AGY_WEEKLY_LIMIT_RE),
+    regex_match_rule(_AGY_BAR_LINE_RE),
+    regex_match_rule(_AGY_BRACKET_BAR_RE),
+    regex_search_rule(_AGY_REMAINING_RE),
+    regex_search_rule(_AGY_AVAILABLE_RE),
+    regex_match_rule(_AGY_MODELS_IN_GROUP_RE),
+    regex_match_rule(_AGY_GROUP_EXPLAIN_RE),
+    regex_search_rule(_AGY_USAGE_SCROLL_RE),
     _agy_status_hint,
 )
 

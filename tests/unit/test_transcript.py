@@ -27,6 +27,7 @@ import pytest
 import murder.llm.harnesses.transcripts as transcripts
 
 _FIXTURES = Path(__file__).parent.parent / "fixtures" / "transcripts"
+_HARNESS_PANES = Path(__file__).parent.parent / "fixtures" / "harness_panes"
 _HARNESSES = ["cc", "codex", "cursor", "pi", "antigravity"]
 _HARNESS_KIND = {
     "cc": "claude_code",
@@ -578,6 +579,38 @@ def test_cursor_tool_rollups_become_collapsed_tool_calls():
     assert segs[0]["text"].startswith("Searching the codebase")
 
 
+def test_cursor_running_shell_repaints_collapse_to_one_tool_call():
+    # A running shell rollup carries a live footer ("9.5s in inktui  ctrl+b twice
+    # to send to background") whose timer ticks on every repaint, and each repaint
+    # lands on a new scrollback line. The footer must be stripped so the frames
+    # dedupe to ONE tool_call instead of one block per tick.
+    from murder.llm.harnesses.transcripts.grammar.cursor import parse_lines
+
+    scrollback = [
+        " $ npm test 2>&1 | tail -15  8.5s in inktui  ctrl+b twice to send to background",
+        "",
+        " $ npm test 2>&1 | tail -15  9.0s in inktui  ctrl+b twice to send to background",
+        "",
+        " $ npm test 2>&1 | tail -15  9.5s in inktui  ctrl+b twice to send to background",
+        "",
+        " All 15 tests pass.",
+    ]
+    segs = parse_lines(scrollback)
+    assert [s["type"] for s in segs] == ["tool_call", "assistant"]
+    tool = segs[0]
+    assert tool["title"] == "npm test 2>&1 | tail -15"
+    assert tool["result"] == "$ npm test 2>&1 | tail -15"
+    assert tool["running"] is True
+    # A finished frame (no footer) still continues the same command's chain.
+    finished = parse_lines([*scrollback[:-1], " $ npm test 2>&1 | tail -15"])
+    shell = [s for s in finished if s["type"] == "tool_call"]
+    assert len(shell) == 1
+    assert shell[0]["running"] is False
+    # A command that genuinely ends in a duration token is NOT stripped.
+    sleeper = parse_lines([" $ sleep 5s"])
+    assert sleeper[0]["result"] == "$ sleep 5s"
+
+
 def test_cursor_tool_rollup_spares_narration():
     from murder.llm.harnesses.transcripts.grammar.cursor import _is_cursor_tool_rollup
 
@@ -861,6 +894,132 @@ def test_cc_slash_command_echo_is_not_a_user_turn():
     real_users = [s for s in real if s["type"] == "user"]
     assert len(real_users) == 1
     assert "what does this function" in real_users[0]["text"]
+
+
+def test_cc_usage_dialog_lines_are_chrome():
+    """``/usage`` modal rows (session/week bars, reset prose, boxed scrollback)
+    must not leak into transcript segments when projection races the overlay."""
+    from murder.llm.harnesses.transcripts.grammar import claude_code as cc
+
+    wide = _strip_frame_header(
+        (_HARNESS_PANES / "cc_usage_dialog_wide.txt").read_text(encoding="utf-8")
+    )
+    scrollback = _strip_frame_header(
+        (_HARNESS_PANES / "cc_usage_scrollback.txt").read_text(encoding="utf-8")
+    )
+    needles = (
+        "Current session",
+        "Current week",
+        "% used",
+        "Resets ",
+        "Total cost:",
+        "What's contributing to your limits usage?",
+        "Claude Code – Usage",
+        "/usage",
+        "Esc to cancel",
+    )
+    for label, dialog in (("wide", wide), ("scrollback", scrollback)):
+        mixed = ["❯ hi", "● working", *dialog.splitlines(), "● done"]
+        blob = json.dumps(cc.parse_lines(mixed), ensure_ascii=False)
+        leaked = [n for n in needles if n in blob]
+        assert not leaked, f"{label} /usage dialog leaked {leaked}: {blob}"
+
+    # Indented rows can land inside an in-flight ● block — filter those too.
+    race = [
+        "❯ hi",
+        "● working",
+        "  Current session",
+        "  ████████████████████████████████████████████       88% used",
+        "  Resets 1:40pm (America/New_York)",
+        "● done",
+    ]
+    race_blob = json.dumps(cc.parse_lines(race), ensure_ascii=False)
+    assert "Current session" not in race_blob and "88% used" not in race_blob
+    assistants = [s["text"] for s in cc.parse_lines(race) if s["type"] == "assistant"]
+    assert assistants == ["working", "done"]
+
+
+def test_cc_usage_prose_mentioning_percent_used_survives():
+    """Conservative /usage filtering must not eat assistant prose that merely
+    mentions a percentage."""
+    from murder.llm.harnesses.transcripts.grammar import claude_code as cc
+
+    segs = cc.parse_lines(
+        ["❯ q", "● The metric is 88% used already in practice — not a bar row."]
+    )
+    blob = json.dumps(segs, ensure_ascii=False)
+    assert "88% used already" in blob, f"prose wrongly dropped: {blob}"
+
+
+def test_agy_usage_dialog_lines_are_chrome():
+    """Antigravity ``/usage`` quota rows (per-model and grouped weekly limits)
+    must not leak into assistant segments when the modal races projection."""
+    from murder.llm.harnesses.transcripts.grammar import antigravity as ag
+
+    per_model = [
+        "> check usage",
+        "└ Model Quota",
+        "  Gemini 3.5 Flash (Medium)",
+        "  ███████████ ███████████ 100%",
+        "  Quota available",
+        "  Claude Sonnet 4.6 (Thinking)",
+        "  20% remaining · Refreshes in 12h 39m",
+        "> next",
+    ]
+    grouped = [
+        "> usage",
+        "└ Models & Quota",
+        "GEMINI MODELS",
+        "  Models within this group: Gemini Flash, Gemini Pro",
+        "  Weekly Limit",
+        "    [███████████████████████████████████████████░░░░░░░] 85.61%",
+        "  86% remaining · Refreshes in 157h 26m",
+        "> next",
+    ]
+    needles = (
+        "Model Quota",
+        "Models & Quota",
+        "Gemini 3.5 Flash (Medium)",
+        "Quota available",
+        "remaining · Refreshes",
+        "GEMINI MODELS",
+        "Weekly Limit",
+        "85.61%",
+    )
+    for label, lines in (("per-model", per_model), ("grouped", grouped)):
+        blob = json.dumps(ag.parse_lines(lines), ensure_ascii=False)
+        leaked = [n for n in needles if n in blob]
+        assert not leaked, f"agy {label} /usage dialog leaked {leaked}: {blob}"
+
+
+def test_codex_status_limit_lines_are_chrome():
+    """Codex ``/status`` limit rows must not leak into transcript segments."""
+    from murder.llm.harnesses.transcripts.grammar import codex as cx
+
+    # codex_usage_limit.txt is a usage-cap message, not /status rows; limit/reset
+    # shapes live in codex_status_scrollback.txt (same recording family).
+    _strip_frame_header((_HARNESS_PANES / "codex_usage_limit.txt").read_text(encoding="utf-8"))
+    status = _strip_frame_header(
+        (_HARNESS_PANES / "codex_status_scrollback.txt").read_text(encoding="utf-8")
+    )
+    limit_lines = [ln for ln in status.splitlines() if "limit:" in ln.lower()][:2]
+    needles = ("5h limit:", "Weekly limit:", "% left (resets", "/status")
+    for label, dialog_lines in (
+        ("scrollback", limit_lines),
+        (
+            "race",
+            [
+                "│  5h limit:             [░░░░░░░░░░░░░░░░░░░░] 0% left (resets 20:43)            │",
+                "  Weekly limit:         [█████████░░░░░░░░░░░] 43% left (resets 16:54 on 30 May)",
+            ],
+        ),
+    ):
+        mixed = ["› hi", "• working", *dialog_lines, "• done"]
+        blob = json.dumps(cx.parse_lines(mixed), ensure_ascii=False)
+        leaked = [n for n in needles if n in blob]
+        assert not leaked, f"codex {label} /status leaked {leaked}: {blob}"
+    assistants = [s["text"] for s in cx.parse_lines(mixed) if s["type"] == "assistant"]
+    assert assistants == ["working", "done"]
 
 
 def test_cc_bare_responding_dot_is_chrome():

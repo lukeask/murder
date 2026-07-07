@@ -95,6 +95,30 @@ _CC_BARE_BULLET_RE = re.compile(r"^\s*●\s*$")
 # box but the user never "said" it to the model. Suppress it (the old parsing.py
 # did the same via this regex). Only CC needs it today; keep it local.
 _SLASH_COMMAND_RE = re.compile(r"/[A-Za-z][\w-]*(?:\s+.*)?\Z")
+# /usage modal rows — session/week bars, reset prose, and the boxed overlay
+# scrollback that persists above a fresh modal. Indented rows are otherwise
+# absorbed into an in-flight ● assistant block when projection races the modal.
+_CC_USAGE_SESSION_HDR_RE = re.compile(r"^\s*Current session\s*$", re.IGNORECASE)
+_CC_USAGE_WEEK_HDR_RE = re.compile(r"^\s*Current week\b", re.IGNORECASE)
+# Require a bar glyph or a wide leading gap so prose like "only 5% used so far"
+# (no bar, short prefix) is never swallowed.
+_CC_USAGE_PERCENT_RE = re.compile(
+    r"^\s*(?:[█░▌\[\]=]+|\s{8,})\s*\d+(?:\.\d+)?%\s+used\s*$",
+    re.IGNORECASE,
+)
+_CC_USAGE_RESET_RE = re.compile(r"^\s*Resets?\s+", re.IGNORECASE)
+_CC_USAGE_BOX_RE = re.compile(
+    r"^[│╭╰╮╯├└┘┌┐].*(?:% used|Current session|Current week|Usage:|Claude Code|"
+    r"Resets?\s|cache read|cache write|\d+\s+input,)",
+    re.IGNORECASE,
+)
+_CC_USAGE_BOX_FRAME_RE = re.compile(r"^[╭╰╮╯├└┘┌┐][─═│\s]*[╭╰╮╯├└┘┌┐│]?\s*$")
+_CC_USAGE_BOX_PADDING_RE = re.compile(r"^\s*│[│\s]*│\s*$")
+_CC_USAGE_PLAIN_RE = re.compile(r"^\s*/usage\s*$")
+_CC_USAGE_TOKEN_ROW_RE = re.compile(
+    r"Usage:\s+\d+\s+input,\s*\d+\s+output,",
+    re.IGNORECASE,
+)
 
 
 def _is_live_prompt(lines: list[str], index: int) -> bool:
@@ -135,8 +159,35 @@ _cc_is_chrome = chrome_matcher(
     regex_search_rule(_CC_UNCACHED_NOTICE_RE),
     regex_match_rule(_CC_WAITING_AGENTS_RE),
     regex_match_rule(_CC_DIALOG_TAB_RE),
+    regex_match_rule(_CC_USAGE_SESSION_HDR_RE),
+    regex_match_rule(_CC_USAGE_WEEK_HDR_RE),
+    regex_match_rule(_CC_USAGE_PERCENT_RE),
+    regex_match_rule(_CC_USAGE_RESET_RE),
+    regex_match_rule(_CC_USAGE_BOX_RE),
+    regex_match_rule(_CC_USAGE_BOX_FRAME_RE),
+    regex_match_rule(_CC_USAGE_BOX_PADDING_RE),
+    regex_match_rule(_CC_USAGE_PLAIN_RE),
+    regex_search_rule(_CC_USAGE_TOKEN_ROW_RE),
     stripped_substring_rule("Backgrounded agent"),
     stripped_startswith_rule("Tip:", "▐", "▝", "▘", "▛", "▜"),
+    stripped_substring_rule(
+        "What's contributing to your limits usage?",
+        "Claude Code – Usage",
+        "Total cost:",
+        "Total duration (API):",
+        "Total duration (wall):",
+        "Total code changes:",
+        "Settings  Status   Config   Usage   Stats",
+        "Approximate, based on local sessions",
+        "Last 24h · these are independent",
+        "% of your usage came from subagent-heavy sessions",
+        "Subagents               % of usage",
+        "MCP servers             % of usage",
+        "d to day · w to week",
+        "Scanning local sessions",
+        "Usage credits are off",
+        "Esc to cancel",
+    ),
     _cc_result_tip,
 )
 
