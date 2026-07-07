@@ -54,7 +54,7 @@ describe('GLOBAL_SCOPE', () => {
   });
 
   it('matches the dispatcher gating that motivated the table', () => {
-    expect(GLOBAL_SCOPE['global.closePane']).toBe('stage');
+    expect(GLOBAL_SCOPE['global.toggleTargetPane']).toBe('chat-or-stage');
     expect(GLOBAL_SCOPE['global.spawn']).toBe('chat-or-stage');
     expect(GLOBAL_SCOPE['global.murder']).toBe('not-crows');
     expect(GLOBAL_SCOPE['global.keyHelp']).toBe('not-chat');

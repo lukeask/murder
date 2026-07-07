@@ -286,12 +286,12 @@ describe('deriveSpawnContext — doc file context gated by the highlighted cente
   });
 });
 
-describe('ctrl+q — close the highlighted center-stage pane', () => {
-  // ctrl+q rides the clean legacy byte 0x11, which Ink reports as `{ ctrl: true, input: 'q' }`.
-  const CTRL_Q = '\x11';
+describe('alt+w — toggle show/hide for the highlighted center-stage pane', () => {
+  // alt+w is delivered as ESC + w under the default alt modifier.
+  const ALT_W = '\x1bw';
 
   /** A full App against fakes, with a roster carrying one default-favorited collaborator (→ one center-stage
-   * transcript pane) so ctrl+q has a transcript pane to close. */
+   * transcript pane) so alt+w has a transcript pane to hide. */
   async function setupApp() {
     const fake = new FakeBusClient();
     fake.stubRpc('state.crow_snapshot', {
@@ -308,7 +308,7 @@ describe('ctrl+q — close the highlighted center-stage pane', () => {
     return { fake, store, dispose, inputStores, ...tree };
   }
 
-  it('closes the highlighted transcript pane and re-homes focus to chat', async () => {
+  it('hides the highlighted transcript pane and re-homes focus to chat', async () => {
     const { store, inputStores, stdin, dispose } = await setupApp();
     await tick();
 
@@ -317,7 +317,7 @@ describe('ctrl+q — close the highlighted center-stage pane', () => {
     await tick();
     expect(selectEffectiveFocus(inputStores.focus)).toBe(stageTranscriptFocusId('collab-1'));
 
-    stdin.write(CTRL_Q);
+    stdin.write(ALT_W);
     await tick();
 
     // The pane closed: an explicit `false` paneOverride hides even the default-favorited collaborator.
@@ -328,7 +328,7 @@ describe('ctrl+q — close the highlighted center-stage pane', () => {
     dispose();
   });
 
-  it('closes the highlighted doc pane', async () => {
+  it('hides the highlighted doc pane', async () => {
     const { store, inputStores, stdin, dispose } = await setupApp();
     await tick();
 
@@ -339,7 +339,7 @@ describe('ctrl+q — close the highlighted center-stage pane', () => {
     expect(store.getState().docView.open).not.toBeNull();
     expect(selectEffectiveFocus(inputStores.focus)).toBe('stage:doc:my-plan');
 
-    stdin.write(CTRL_Q);
+    stdin.write(ALT_W);
     await tick();
 
     expect(store.getState().docView.open).toBeNull();
@@ -347,17 +347,15 @@ describe('ctrl+q — close the highlighted center-stage pane', () => {
     dispose();
   });
 
-  it('does nothing when the chat input is focused (no center-stage pane highlighted)', async () => {
+  it('toggles the active recipient transcript pane while chat is focused', async () => {
     const { store, inputStores, stdin, dispose } = await setupApp();
     await tick();
-    // Focus stays on chat (the default home).
     expect(selectEffectiveFocus(inputStores.focus)).toBe(CHAT_FOCUS);
 
-    stdin.write(CTRL_Q);
+    stdin.write(ALT_W);
     await tick();
 
-    // No pane override written; the collaborator pane remains open.
-    expect(store.getState().conversations.paneOverrides.has('collab-1')).toBe(false);
+    expect(store.getState().conversations.paneOverrides.get('collab-1')).toBe(false);
     dispose();
   });
 });

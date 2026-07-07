@@ -32,8 +32,8 @@
  *     effective focus is the chat input or a Stage pane (a transcript pane / the open doc); with a
  *     *list panel* focused it declines here (returns false) and the event falls through to layer 3.
  *     Panels no longer bind `alt+s` (favorite/star is `alt+f` now), so the fall-through is simply
- *     unhandled at the panel layer. `ctrl+q` (`global.closePane`) is the symmetric "close the
- *     highlighted Stage pane" chord, also a plain chord scoped to Stage-pane focus. See
+ *     unhandled at the panel layer. `alt+w`/`ctrl+w` (`global.toggleTargetPane`) toggles show/hide
+ *     for the active transcript or doc pane when chat OR a Stage pane is focused. See
  *     {@link dispatchGlobalChord}'s doc.
  *     (The plan lists "chat short-circuit → global chords"; we resolve the apparent ordering by
  *     scoping the short-circuit to *non-chord* input, which is the only reading that lets `alt+<n>`
@@ -58,7 +58,7 @@
  */
 
 import type { Key } from 'ink';
-import { DEFAULT_BINDINGS, type ResolvedBindings } from './bindings.js';
+import { type ActionId, DEFAULT_BINDINGS, type ResolvedBindings } from './bindings.js';
 import { CHAT_FOCUS, type FocusId } from './focusStore.js';
 import type { Direction } from './geometry.js';
 import { GLOBAL_SCOPE, inFocusScope } from './globalScope.js';
@@ -125,8 +125,9 @@ export interface GlobalHandlers {
   /** `ctrl+j` (`global.toggleTargetGroup`): toggle the recipient target between locked-visible and
    * favorite-only groups. Chat-focus only. */
   toggleTargetGroup?(): void;
-  /** `alt+w`/`ctrl+w` (`global.toggleTargetPane`): toggle the current recipient target's transcript pane. Chat-focus
-   * only (item 9 super-chords). */
+  /** `alt+w`/`ctrl+w` (`global.toggleTargetPane`): toggle show/hide for the active transcript or doc
+   * pane. From chat: toggle the current recipient target's transcript pane. From a Stage pane: hide the
+   * focused transcript or doc pane (chat-or-stage scope). */
   toggleTargetPane(): void;
   /** `ctrl+m` (the `global.murder` action): ARM the two-press murder confirm for the targeted crow
    * (the crow of the focused transcript pane, else the active recipient target). Fires from any focus EXCEPT the
@@ -143,11 +144,6 @@ export interface GlobalHandlers {
   /** Cancel the armed murder. Fired (without consuming the event) when any non-confirm key arrives
    * while pending — the key then keeps its normal meaning in the lower layers. */
   murderCancel(): void;
-  /** `ctrl+q` (the `global.closePane` action): close the currently-highlighted Stage pane — the open
-   * doc pane or transcript pane. Fired ONLY when the
-   * effective focus is a Stage pane; from chat/a panel the chord falls through (does nothing). The
-   * closed pane unmounts → focus re-homes to chat via the derived invariant (no imperative re-home). */
-  closePane(): void;
   /** `ctrl+r` (`global.repaint`): force a full terminal redraw. Modifier-independent plain chord;
    * ctrl+l is taken by target cycling / panel nav. */
   repaint(): void;
@@ -209,8 +205,10 @@ const VIM_NAV: Readonly<Record<string, Direction>> = {
 };
 
 /**
- * Try the global-chord layer. Returns `true` if a global chord claimed the event. Only fires on
- * `meta`(alt)-modified events, so it never intercepts plain typing. Order within the layer is
+ * Try the global-chord layer. Returns the matched {@link ActionId} when a named global chord claims
+ * the event, or `null` when nothing matched (digit toggles and vim nav also return `null` but set
+ * `handledWithoutAction` — they have no registry id). Only fires on `meta`(alt)-modified events for
+ * the command-gated chords, so it never intercepts plain typing. Order within the layer is
  * deterministic: digit toggles, then vim nav, then the single-letter app chords.
  *
  * ## `alt+s` claims the event when chat OR a Stage pane is focused
@@ -237,7 +235,10 @@ function dispatchGlobalChord(
   handlers: GlobalHandlers,
   focusedId: FocusId,
   bindings: ResolvedBindings,
-): boolean {
+  /** Digit toggles and vim nav fire here but have no {@link ActionId}; the caller reads this when the
+   * return is `null` to distinguish handled-without-action from not-handled. */
+  handledWithoutAction: { current: boolean },
+): ActionId | null {
   // The murder pending check — FIRST, even ahead of the other plain chords, because while armed the
   // bare `m` is the confirm press and must not reach the chat field (typing) or a panel keymap
   // (CrowsPanel's min/max toggle). This is the one sanctioned exception to "the global layer never
@@ -248,7 +249,7 @@ function dispatchGlobalChord(
     const confirmByM = input === 'm' && key.ctrl !== true && key.meta !== true;
     if (confirmByM || bindings.matches('global.murder', input, key)) {
       handlers.murderConfirm();
-      return true;
+      return 'global.murder';
     }
     handlers.murderCancel();
   }
@@ -260,10 +261,10 @@ function dispatchGlobalChord(
   // decline-to-panel pattern as `global.spawn`'s chat-only guard).
   if (bindings.matches('global.murder', input, key)) {
     if (!inFocusScope(GLOBAL_SCOPE['global.murder'], focusedId)) {
-      return false; // crows focus: fall to the panel keymap, which arms with its local cursor row
+      return null; // crows focus: fall to the panel keymap, which arms with its local cursor row
     }
     handlers.murder();
-    return true;
+    return 'global.murder';
   }
 
   // `global.quickNote` (ctrl+n) is a `plain` chord, matched BEFORE the command-modifier gate so a
@@ -274,30 +275,14 @@ function dispatchGlobalChord(
   // never does, so checking it ahead of typing is safe (same property the rest of the layer relies on).
   if (bindings.matches('global.quickNote', input, key)) {
     handlers.quickNote();
-    return true;
-  }
-
-  // `global.closePane` (ctrl+q, a `plain` chord) closes the currently-highlighted Stage pane (a
-  // transcript pane or the open doc). Matched BEFORE the command-modifier gate (like quickNote — under a
-  // ctrl/both modifier the gate would otherwise route ctrl+q into the digit/named-command branch and
-  // swallow it). It claims the event ONLY when a Stage pane holds the effective focus; from chat or a
-  // list panel it DECLINES (returns false → falls through), so ctrl+q does nothing there rather than a
-  // surprising close. There is ONE close mechanism for both pane kinds (transcript panes have no close key of
-  // their own); a later agent must not move this onto per-pane keymaps. ctrl+q carries ctrl, which plain
-  // typing never does, so checking it ahead of typing is safe.
-  if (bindings.matches('global.closePane', input, key)) {
-    if (inFocusScope(GLOBAL_SCOPE['global.closePane'], focusedId)) {
-      handlers.closePane();
-      return true;
-    }
-    return false;
+    return 'global.quickNote';
   }
 
   // `global.repaint` (ctrl+r) forces a full terminal redraw after external screen disturbances that
   // leave Ink's incremental line cache stale. Matched before the command-modifier gate (plain chord).
   if (bindings.matches('global.repaint', input, key)) {
     handlers.repaint();
-    return true;
+    return 'global.repaint';
   }
 
   // `global.toggleTargetGroup` (ctrl+j, a `plain` chord) toggles the chat recipient target between
@@ -310,7 +295,7 @@ function dispatchGlobalChord(
     bindings.matches('global.toggleTargetGroup', input, key)
   ) {
     handlers.toggleTargetGroup?.();
-    return true;
+    return 'global.toggleTargetGroup';
   }
 
   // Item 12: the keybinding help overlay (`global.keyHelp`, a *plain* `?` — no command modifier, so it
@@ -322,7 +307,7 @@ function dispatchGlobalChord(
     bindings.matches('global.keyHelp', input, key)
   ) {
     handlers.keyHelp();
-    return true;
+    return 'global.keyHelp';
   }
 
   // The command modifier (alt by default; ctrl/both via settings) gates the whole layer. The
@@ -330,26 +315,34 @@ function dispatchGlobalChord(
   // safety property is unchanged: the command modifier is never set by plain typing, so checking
   // these first can't swallow a typed character.
   if (!bindings.isCommandModified(key)) {
-    return false;
+    return null;
   }
 
-  // Item 9 super-chords — chat-target cycling + pane toggle, active ONLY while the chat input has
+  // `global.toggleTargetPane` (command+w) toggles show/hide for the active transcript or doc pane.
+  // Chat-or-stage scope: from chat it toggles the current recipient target's transcript pane; from a
+  // Stage pane it hides the focused transcript or doc pane. Checked before the chat-only target-cycle
+  // chords so alt+w is not mistaken for geometric nav on a Stage pane.
+  if (
+    inFocusScope(GLOBAL_SCOPE['global.toggleTargetPane'], focusedId) &&
+    bindings.matches('global.toggleTargetPane', input, key)
+  ) {
+    handlers.toggleTargetPane();
+    return 'global.toggleTargetPane';
+  }
+
+  // Item 9 super-chords — chat-target cycling, active ONLY while the chat input has
   // focus. Gated here (the chat-focus branch of the global layer), NOT as unconditional globals,
   // because away from chat the same `alt+h`/`alt+l` are geometric panel nav (handled just below by
-  // VIM_NAV) and `alt+w` is unbound. Checked before VIM_NAV so the cycle chords win over nav while
+  // VIM_NAV) and `alt+w` is handled above. Checked before VIM_NAV so the cycle chords win over nav while
   // typing a message.
   if (inFocusScope(GLOBAL_SCOPE['global.cycleTargetPrev'], focusedId)) {
     if (bindings.matches('global.cycleTargetPrev', input, key)) {
       handlers.cycleTargetPrev();
-      return true;
+      return 'global.cycleTargetPrev';
     }
     if (bindings.matches('global.cycleTargetNext', input, key)) {
       handlers.cycleTargetNext();
-      return true;
-    }
-    if (bindings.matches('global.toggleTargetPane', input, key)) {
-      handlers.toggleTargetPane();
-      return true;
+      return 'global.cycleTargetNext';
     }
   }
 
@@ -357,14 +350,16 @@ function dispatchGlobalChord(
   const panel = panelForDigit(input);
   if (panel !== null) {
     handlers.focusPanel(panel);
-    return true;
+    handledWithoutAction.current = true;
+    return null;
   }
 
   // <mod>+h/j/k/l: directional nav.
   const direction = VIM_NAV[input];
   if (direction !== undefined) {
     handlers.navigate(direction);
-    return true;
+    handledWithoutAction.current = true;
+    return null;
   }
 
   // The named single-purpose app chords, matched against the resolved bindings (so a rebind or a
@@ -372,7 +367,7 @@ function dispatchGlobalChord(
   if (bindings.matches('global.focusChat', input, key)) {
     // focus the chat input (was alt+f, which now stars in panels).
     handlers.focusChat();
-    return true;
+    return 'global.focusChat';
   }
   if (bindings.matches('global.spawn', input, key)) {
     // Spawn wizard when chat OR a Stage pane (transcript / doc) holds focus (see the fn doc);
@@ -381,28 +376,28 @@ function dispatchGlobalChord(
     // decide whether to include the doc file in context (doc pane → yes; transcript pane → no).
     if (inFocusScope(GLOBAL_SCOPE['global.spawn'], focusedId)) {
       handlers.spawn();
-      return true;
+      return 'global.spawn';
     }
-    return false;
+    return null;
   }
   if (bindings.matches('global.cycleChatView', input, key)) {
     // TUIchat-3: cycle the focused transcript pane's view (verbose → condensed → tmux). Took over `t` from
     // the now chord-less newTicket; the old tmux chord `y` is freed/parked.
     handlers.cycleChatView();
-    return true;
+    return 'global.cycleChatView';
   }
   if (bindings.matches('global.newPlan', input, key)) {
     // C12: new-plan popup.
     handlers.newPlan();
-    return true;
+    return 'global.newPlan';
   }
   if (bindings.matches('global.settings', input, key)) {
     // Phase 5: the settings modal. Like the other app chords it wins app-wide (it carries the
     // command modifier, so it never swallows typing) — opens the settings modal from any focus.
     handlers.openSettings();
-    return true;
+    return 'global.settings';
   }
-  return false;
+  return null;
 }
 
 /**
@@ -412,10 +407,10 @@ function dispatchGlobalChord(
  * the return value names the outcome.
  */
 export type DispatchOutcome =
-  | { readonly layer: 'mode'; readonly handled: boolean }
-  | { readonly layer: 'global'; readonly handled: true }
-  | { readonly layer: 'chat'; readonly handled: boolean }
-  | { readonly layer: 'panel'; readonly handled: boolean };
+  | { readonly layer: 'mode'; readonly handled: boolean; readonly action?: string }
+  | { readonly layer: 'global'; readonly handled: true; readonly action?: string }
+  | { readonly layer: 'chat'; readonly handled: boolean; readonly action?: string }
+  | { readonly layer: 'panel'; readonly handled: boolean; readonly action?: string };
 
 export function dispatchKey(input: string, key: Key, ctx: DispatchContext): DispatchOutcome {
   // Default to today's alt behavior when a context omits bindings (existing call sites/tests) — the
@@ -433,7 +428,7 @@ export function dispatchKey(input: string, key: Key, ctx: DispatchContext): Disp
     const intent = matchKeymap(ctx.activeMode.keymap, input, key);
     if (intent !== null) {
       ctx.activeMode.onIntent(intent);
-      return { layer: 'mode', handled: true };
+      return { layer: 'mode', handled: true, action: `mode:${intent}` };
     }
     // onUncaptured: let the mode handle a raw key before swallowing (e.g. for text-input fields).
     if (ctx.activeMode.onUncaptured !== undefined) {
@@ -450,9 +445,22 @@ export function dispatchKey(input: string, key: Key, ctx: DispatchContext): Disp
 
   // Layer 1 — global chords (win even while chat is focused; meta-only, so typing is safe). The
   // focus-scoped exceptions are `alt+s` (spawn — claims when chat OR a Stage pane is focused, declines
-  // on a list panel so alt+f stays the panel favorite/star chord) and `ctrl+q` (`global.closePane` —
-  // claims ONLY when a Stage pane is focused). So the focus id is passed in. See dispatchGlobalChord's doc.
-  if (dispatchGlobalChord(input, key, ctx.handlers, ctx.focusedId, bindings)) {
+  // on a list panel so alt+f stays the panel favorite/star chord) and `alt+w`/`ctrl+w`
+  // (`global.toggleTargetPane` — claims when chat OR a Stage pane is focused). So the focus id is
+  // passed in. See dispatchGlobalChord's doc.
+  const handledWithoutAction = { current: false };
+  const globalAction = dispatchGlobalChord(
+    input,
+    key,
+    ctx.handlers,
+    ctx.focusedId,
+    bindings,
+    handledWithoutAction,
+  );
+  if (globalAction !== null) {
+    return { layer: 'global', handled: true, action: globalAction };
+  }
+  if (handledWithoutAction.current) {
     return { layer: 'global', handled: true };
   }
 
@@ -483,19 +491,24 @@ export function dispatchKey(input: string, key: Key, ctx: DispatchContext): Disp
   // text input is never split.
   if (input.length > 1) {
     let handledAny = false;
+    let lastIntent: string | null = null;
     for (const ch of input) {
       const charIntent = matchKeymap(panelKeymap.keymap, ch, key);
       if (charIntent !== null) {
         panelKeymap.onIntent(charIntent);
         handledAny = true;
+        lastIntent = charIntent;
       }
     }
-    return { layer: 'panel', handled: handledAny };
+    if (!handledAny) {
+      return { layer: 'panel', handled: false };
+    }
+    return { layer: 'panel', handled: true, action: `${ctx.focusedId}:${lastIntent}` };
   }
   const intent = matchKeymap(panelKeymap.keymap, input, key);
   if (intent === null) {
     return { layer: 'panel', handled: false };
   }
   panelKeymap.onIntent(intent);
-  return { layer: 'panel', handled: true };
+  return { layer: 'panel', handled: true, action: `${ctx.focusedId}:${intent}` };
 }

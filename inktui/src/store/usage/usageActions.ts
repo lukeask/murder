@@ -35,6 +35,7 @@ function toUsageRow(dto: ScheduleUsageGaugeDto): UsageRow {
     tUntilResetMinutes: dto.t_until_reset_minutes,
     tPeriodMinutes: dto.t_period_minutes ?? 0,
     steering: dto.steering ?? 'auto',
+    fetchedAt: dto.fetched_at ?? null,
   };
 }
 

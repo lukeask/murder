@@ -93,6 +93,8 @@ export interface UsageSurfaceGauge {
 export interface UsageSurfaceGroup {
   readonly harness: string;
   readonly steering: string;
+  /** Pre-formatted relative snapshot age for the harness header, e.g. `'2m ago'`. */
+  readonly fetchedAt?: string;
   readonly gauges: readonly UsageSurfaceGauge[];
 }
 
@@ -430,24 +432,60 @@ function steeringTag(steering: string): string {
   return '';
 }
 
+function headerFetchedAtBudget(
+  innerWidth: number,
+  harness: string,
+  steering: string,
+  fetchedAt: string,
+): boolean {
+  const prefix = 2;
+  const needed = prefix + harness.length + steeringTag(steering).length + 1 + fetchedAt.length;
+  return innerWidth >= needed;
+}
+
+function shouldShowFetchedAt(
+  displayMode: UsageDisplayMode,
+  innerWidth: number,
+  harness: string,
+  steering: string,
+  fetchedAt: string | undefined,
+): boolean {
+  if (fetchedAt === undefined || fetchedAt === '') {
+    return false;
+  }
+  if (displayMode !== 'full') {
+    return false;
+  }
+  return headerFetchedAtBudget(innerWidth, harness, steering, fetchedAt);
+}
+
 function HeaderLine({
   harness,
   steering,
   compact,
   theme,
+  fetchedAt,
+  showFetchedAt,
 }: {
   readonly harness: string;
   readonly steering: string;
   readonly compact: boolean;
   readonly theme: Theme;
+  readonly fetchedAt?: string;
+  readonly showFetchedAt: boolean;
 }): React.JSX.Element {
   const tag = steeringTag(steering);
+  const fetchedSuffix =
+    showFetchedAt && fetchedAt !== undefined && fetchedAt !== '' ? (
+      <Text dimColor>{`  ${fetchedAt}`}</Text>
+    ) : null;
   if (compact) {
     return (
       <Box flexShrink={0} width="100%">
         <Text dimColor wrap="truncate">
           {`· ${harness}`}
           {tag ? <Text color={theme.accent}>{tag}</Text> : null}
+          {fetchedSuffix}
         </Text>
       </Box>
     );
@@ -457,6 +495,7 @@ function HeaderLine({
       <Text bold wrap="truncate">
         {` ${harness}`}
         {tag ? <Text color={theme.accent}>{tag}</Text> : null}
+        {fetchedSuffix}
       </Text>
     </Box>
   );
@@ -691,6 +730,8 @@ function SpreadGroupColumn({
         steering={group.steering}
         compact={headerCompact}
         theme={theme}
+        fetchedAt={group.fetchedAt}
+        showFetchedAt={false}
       />
       {gauges.map((gauge) => {
         gaugeIndex += 1;
@@ -860,6 +901,14 @@ function UsageBody({
           steering={group?.steering ?? 'auto'}
           compact
           theme={theme}
+          fetchedAt={group?.fetchedAt}
+          showFetchedAt={shouldShowFetchedAt(
+            displayMode,
+            innerW,
+            group?.harness ?? '?',
+            group?.steering ?? 'auto',
+            group?.fetchedAt,
+          )}
         />
         <GaugeLine
           gauge={gauge.geometry}
@@ -905,6 +954,14 @@ function UsageBody({
             steering={group.steering}
             compact={compactHeader}
             theme={theme}
+            fetchedAt={group.fetchedAt}
+            showFetchedAt={shouldShowFetchedAt(
+              displayMode,
+              innerW,
+              group.harness,
+              group.steering,
+              group.fetchedAt,
+            )}
           />
           {group.gauges.map((gauge) => {
             gaugeIndex += 1;

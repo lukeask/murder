@@ -31,6 +31,8 @@ export interface UsageRow {
   readonly tPeriodMinutes: number;
   /** RT5 per-harness steering: 'auto' | 'pause' | 'prefer'. Wire-faithful, presentation-free. */
   readonly steering: string;
+  /** ISO-8601 UTC timestamp of the latest usage snapshot for this harness. */
+  readonly fetchedAt?: string | null;
 }
 
 /**

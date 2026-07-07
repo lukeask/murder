@@ -1,0 +1,8 @@
+╭─ Git Tree ─────────────────╮
+│ type 5d/20m +enter         │
+│ ○━━○━━▶ ▐main▌             │
+│ ╰━━◆━━▶ ▐wip/tran…▌        │
+│                            │
+│ [m] main  [w] wip/transit  │
+│ buffer · 5d                │
+╰────────────────────────────╯

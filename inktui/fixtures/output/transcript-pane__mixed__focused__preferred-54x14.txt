@@ -1,0 +1,14 @@
+┏━ Ada ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃▌ Can you isolate this pane?                        ┃
+┃                                                    ┃
+┃▌ Yes. Rendering with fixture data only.            ┃
+┃▏ - exact width                                     ┃
+┃▏ - exact height                                    ┃
+┃                                                    ┃
+┃▌ render-pane-fixture --fixture transcript-pane     ┃
+┃                                                    ┃
+┃                                                    ┃
+┃                                                    ┃
+┃                                                    ┃
+┃                                                    ┃
+┗━ claude ◇ opus ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ main ━┛

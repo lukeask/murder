@@ -43,6 +43,7 @@ import type { PanelStoreApi } from '../input/panelStore.js';
 import type { PanelId } from '../input/panels.js';
 import type { Wheel } from '../terminal/StdinShim.js';
 import type { Chord } from '../terminal/translate.js';
+import { keyUsageStore } from '../store/keyUsage/keyUsageStore.js';
 import { useInputStores } from './useInputStores.js';
 
 /** Lines a single wheel notch scrolls. 3 is the conventional terminal step (xterm's default), and
@@ -80,7 +81,7 @@ export interface DeferredGlobalHandlers {
   /** `ctrl+j` (`global.toggleTargetGroup`). Default: no-op until the shell wires group toggle. */
   toggleTargetGroup?: () => void;
   /** `alt+w`/`ctrl+w` (`global.toggleTargetPane`). Default: no-op until the shell wires the pane
-   * toggle. Fires only while chat is focused (item 9 super-chords). */
+   * toggle. Fires while chat or a Stage pane is focused. */
   toggleTargetPane?: () => void;
   /** `ctrl+m` (`global.murder`): arm the murder confirm for the targeted crow. Default: no-op until
    * the shell supplies the handler (the dispatcher already routes the chord + the pending check). */
@@ -92,10 +93,6 @@ export interface DeferredGlobalHandlers {
   murderConfirm?: () => void;
   /** Any other key while armed cancels (without consuming the event). Default: no-op. */
   murderCancel?: () => void;
-  /** `ctrl+q` (`global.closePane`): close the highlighted center-stage pane. Default: no-op until the shell
-   * supplies the handler (it needs the app store's docView / conversations actions, which this hook
-   * does not hold). The dispatcher already routes the chord (gated to center-stage-pane focus). */
-  closePane?: () => void;
   /** `ctrl+r` (`global.repaint`): force a full terminal redraw. Default: no-op until the shell wires
    * {@link forceInkFullRepaint}. ctrl+l is taken by target cycling. */
   repaint?: () => void;
@@ -269,9 +266,6 @@ export function useRootInput(
         murderPending: deferred.murderPending ?? (() => false),
         murderConfirm: deferred.murderConfirm ?? (() => {}),
         murderCancel: deferred.murderCancel ?? (() => {}),
-        // ctrl+q close-pane: default no-op until the shell wires the docView/conversations actions.
-        // The dispatcher only fires this when a center-stage pane holds focus.
-        closePane: deferred.closePane ?? (() => {}),
         // ctrl+r redraw: default no-op until the shell wires forceInkFullRepaint.
         repaint: deferred.repaint ?? (() => {}),
       };
@@ -293,7 +287,10 @@ export function useRootInput(
         ...(deferred.chatInput !== undefined ? { chatInput: deferred.chatInput } : {}),
       };
 
-      dispatchKey(input, key, ctx);
+      const outcome = dispatchKey(input, key, ctx);
+      if (outcome.action !== undefined) {
+        keyUsageStore.getState().recordUse(outcome.action);
+      }
     }
   };
 

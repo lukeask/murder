@@ -38,6 +38,7 @@ export interface HistoryFixtureRow {
 export interface UsageFixtureGroup {
   readonly harness: string;
   readonly steering: string;
+  readonly fetchedAt?: string;
   readonly gauges: readonly {
     readonly label: string;
     readonly pct: number;
@@ -249,6 +250,7 @@ export const usageGroups: Record<string, readonly UsageFixtureGroup[]> = {
     {
       harness: 'codex',
       steering: 'auto',
+      fetchedAt: '5m ago',
       gauges: [
         { label: 'session', pct: 42, reset: '1h12m' },
         { label: 'weekly', pct: 71, reset: '4d3h' },
@@ -257,6 +259,7 @@ export const usageGroups: Record<string, readonly UsageFixtureGroup[]> = {
     {
       harness: 'claude',
       steering: 'prefer',
+      fetchedAt: '2h ago',
       gauges: [{ label: '5h', pct: 86, reset: '22m' }],
     },
   ],

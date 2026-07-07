@@ -59,6 +59,8 @@ export interface UsageGroupView {
   readonly gauges: readonly UsageGaugeView[];
   /** RT5 steering for this harness ('auto' | 'pause' | 'prefer'), from the group's first row. */
   readonly steering: string;
+  /** Relative snapshot age for the harness header, e.g. `'2m ago'`. Omitted when unknown. */
+  readonly fetchedAtLabel?: string;
 }
 
 /** The whole usage view: provider groups in display order plus load-lifecycle flags. */
@@ -90,7 +92,7 @@ function formatPeriod(minutes: number): string {
 }
 
 /** At most two unit letters (m/h/d). Under 48h: `Xm` / `Xh` / `XhYm`; longer: `Xd` / `XdYh` (hours rounded up). */
-function formatMinutes(minutes: number): string {
+export function formatMinutes(minutes: number): string {
   if (minutes <= 0) return '—';
   const m = Math.ceil(minutes);
   if (m < MINUTES_PER_HOUR) return `${m}m`;
@@ -115,6 +117,34 @@ function formatWindowLabel(windowKey: string): string {
   return clean;
 }
 
+/** Format an ISO-8601 snapshot timestamp as a compact relative age, e.g. `'2m ago'`. */
+export function formatRelativeFetchedAt(
+  iso: string | null | undefined,
+  now: number,
+): string | undefined {
+  if (iso === null || iso === undefined || iso === '') {
+    return undefined;
+  }
+  const then = Date.parse(iso);
+  if (Number.isNaN(then)) {
+    return undefined;
+  }
+  const seconds = Math.max(0, Math.floor((now - then) / 1000));
+  if (seconds < 60) {
+    return 'just now';
+  }
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) {
+    return `${minutes}m ago`;
+  }
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) {
+    return `${hours}h ago`;
+  }
+  const days = Math.floor(hours / 24);
+  return `${days}d ago`;
+}
+
 function toGaugeView(row: UsageRow): UsageGaugeView {
   return {
     windowKey: row.windowKey,
@@ -137,7 +167,7 @@ function toGaugeView(row: UsageRow): UsageGaugeView {
  * global sort: grouping replaces ranking) and projects each window to a display-ready gauge. Same
  * input → same output; no React, no store, no bus.
  */
-export function selectUsageView(state: UsageState): UsageView {
+export function selectUsageView(state: UsageState, now: number = Date.now()): UsageView {
   const groups: UsageGroupView[] = [];
   const byHarness = new Map<string, UsageGaugeView[]>();
   for (const row of state.rows) {
@@ -145,8 +175,14 @@ export function selectUsageView(state: UsageState): UsageView {
     if (gauges === undefined) {
       gauges = [];
       byHarness.set(row.harness, gauges);
+      const fetchedAtLabel = formatRelativeFetchedAt(row.fetchedAt, now);
       // steering is a per-harness value duplicated across the harness's rows; take the first.
-      groups.push({ harness: row.harness, gauges, steering: row.steering });
+      groups.push({
+        harness: row.harness,
+        gauges,
+        steering: row.steering,
+        ...(fetchedAtLabel === undefined ? {} : { fetchedAtLabel }),
+      });
     }
     gauges.push(toGaugeView(row));
   }
@@ -166,5 +202,6 @@ export function selectUsageView(state: UsageState): UsageView {
  * Usage: `const view = useUsageView(useAppStore((s) => s.usage));`
  */
 export function useUsageView(state: UsageState): UsageView {
-  return useMemo(() => selectUsageView(state), [state]);
+  const nowBucket = Math.floor(Date.now() / 60000);
+  return useMemo(() => selectUsageView(state, nowBucket * 60000), [state, nowBucket]);
 }

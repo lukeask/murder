@@ -43,7 +43,6 @@ interface SpyHandlers {
   readonly murderPending: ReturnType<typeof vi.fn<GlobalHandlers['murderPending']>>;
   readonly murderConfirm: ReturnType<typeof vi.fn<GlobalHandlers['murderConfirm']>>;
   readonly murderCancel: ReturnType<typeof vi.fn<GlobalHandlers['murderCancel']>>;
-  readonly closePane: ReturnType<typeof vi.fn<GlobalHandlers['closePane']>>;
   readonly repaint: ReturnType<typeof vi.fn<GlobalHandlers['repaint']>>;
 }
 
@@ -67,7 +66,6 @@ function handlers(): SpyHandlers {
     murderPending: vi.fn<GlobalHandlers['murderPending']>(() => false),
     murderConfirm: vi.fn<GlobalHandlers['murderConfirm']>(),
     murderCancel: vi.fn<GlobalHandlers['murderCancel']>(),
-    closePane: vi.fn<GlobalHandlers['closePane']>(),
     repaint: vi.fn<GlobalHandlers['repaint']>(),
   };
 }
@@ -106,7 +104,7 @@ describe('layer 0 — active-mode capture', () => {
     const h = handlers();
     const out = dispatchKey('y', makeKey(), ctx('tickets', h, {}, captureMode()));
     expect(onModeIntent).toHaveBeenCalledWith('confirm');
-    expect(out).toEqual({ layer: 'mode', handled: true });
+    expect(out).toEqual({ layer: 'mode', handled: true, action: 'mode:confirm' });
     expect(h.focusPanel).not.toHaveBeenCalled();
   });
 
@@ -118,7 +116,7 @@ describe('layer 0 — active-mode capture', () => {
       ctx('chat', handlers(), {}, captureMode()),
     );
     expect(onModeIntent).toHaveBeenCalledWith('dismiss');
-    expect(out).toEqual({ layer: 'mode', handled: true });
+    expect(out).toEqual({ layer: 'mode', handled: true, action: 'mode:dismiss' });
   });
 
   it('SWALLOWS an unmatched key (no pass-through) — global chords suppressed under the modal', () => {
@@ -137,7 +135,7 @@ describe('layer 0 — active-mode capture', () => {
     // alt+1 unmatched by the mode, but pass-through is on → layer 1 fires.
     const out = dispatchKey('1', makeKey({ meta: true }), ctx('chat', h, {}, captureMode(true)));
     expect(h.focusPanel).toHaveBeenCalledWith('plans');
-    expect(out).toEqual({ layer: 'global', handled: true });
+    expect(out).toMatchObject({ layer: 'global', handled: true });
   });
 
   it('calls onUncaptured for unmatched keys when present — returns handled:true if consumed', () => {
@@ -182,7 +180,7 @@ describe('layer 1 — global chords', () => {
     const h = handlers();
     const out = dispatchKey('1', makeKey({ meta: true }), ctx(CHAT_FOCUS, h));
     expect(h.focusPanel).toHaveBeenCalledWith('plans');
-    expect(out).toEqual({ layer: 'global', handled: true });
+    expect(out).toMatchObject({ layer: 'global', handled: true });
   });
 
   it('alt+0 maps to crows (right region, screen-position mapping)', () => {
@@ -236,14 +234,14 @@ describe('layer 1 — global chords', () => {
     const out = dispatchKey('f', makeKey({ meta: true }), ctx('plans', h, { plans: starKeymap }));
     expect(h.focusChat).not.toHaveBeenCalled(); // global layer declined alt+f
     expect(onIntent).toHaveBeenCalledWith('star'); // layer 3 (panel keymap) handled it
-    expect(out).toEqual({ layer: 'panel', handled: true });
+    expect(out).toMatchObject({ layer: 'panel', handled: true });
   });
 
   it('alt+s spawns ONLY when chat is focused (C11 dual-purpose chord)', () => {
     const h = handlers();
     const out = dispatchKey('s', makeKey({ meta: true }), ctx(CHAT_FOCUS, h));
     expect(h.spawn).toHaveBeenCalledOnce();
-    expect(out).toEqual({ layer: 'global', handled: true });
+    expect(out).toMatchObject({ layer: 'global', handled: true });
   });
 
   it('alt+s does NOT spawn when a list panel is focused — it falls through (panels no longer use alt+s)', () => {
@@ -259,21 +257,21 @@ describe('layer 1 — global chords', () => {
     const h = handlers();
     const out = dispatchKey('s', makeKey({ meta: true }), ctx(stageTranscriptFocusId('crow-1'), h));
     expect(h.spawn).toHaveBeenCalledOnce();
-    expect(out).toEqual({ layer: 'global', handled: true });
+    expect(out).toMatchObject({ layer: 'global', handled: true });
   });
 
   it('alt+s spawns when the open doc Stage pane is highlighted (stagelayout)', () => {
     const h = handlers();
     const out = dispatchKey('s', makeKey({ meta: true }), ctx('stage:doc:my-plan', h));
     expect(h.spawn).toHaveBeenCalledOnce();
-    expect(out).toEqual({ layer: 'global', handled: true });
+    expect(out).toMatchObject({ layer: 'global', handled: true });
   });
 
   it('alt+p fires newPlan (C12 new-plan chord)', () => {
     const h = handlers();
     const out = dispatchKey('p', makeKey({ meta: true }), ctx('plans', h));
     expect(h.newPlan).toHaveBeenCalledOnce();
-    expect(out).toEqual({ layer: 'global', handled: true });
+    expect(out).toEqual({ layer: 'global', handled: true, action: 'global.newPlan' });
   });
 
   it('alt+t fires cycleChatView (TUIchat-3 — took over `t` from the now chord-less newTicket)', () => {
@@ -281,21 +279,21 @@ describe('layer 1 — global chords', () => {
     const out = dispatchKey('t', makeKey({ meta: true }), ctx('plans', h));
     expect(h.cycleChatView).toHaveBeenCalledOnce();
     expect(h.newTicket).not.toHaveBeenCalled();
-    expect(out).toEqual({ layer: 'global', handled: true });
+    expect(out).toMatchObject({ layer: 'global', handled: true });
   });
 
   it('alt+o fires openSettings (Phase 5 settings chord)', () => {
     const h = handlers();
     const out = dispatchKey('o', makeKey({ meta: true }), ctx('plans', h));
     expect(h.openSettings).toHaveBeenCalledOnce();
-    expect(out).toEqual({ layer: 'global', handled: true });
+    expect(out).toMatchObject({ layer: 'global', handled: true });
   });
 
   it('alt+o fires openSettings even while chat is focused (app-wide chord)', () => {
     const h = handlers();
     const out = dispatchKey('o', makeKey({ meta: true }), ctx(CHAT_FOCUS, h));
     expect(h.openSettings).toHaveBeenCalledOnce();
-    expect(out).toEqual({ layer: 'global', handled: true });
+    expect(out).toMatchObject({ layer: 'global', handled: true });
   });
 
   it('a plain (non-alt) char is not a global chord', () => {
@@ -309,34 +307,34 @@ describe('layer 1 — global chords', () => {
     const h = handlers();
     const out = dispatchKey('n', makeKey({ ctrl: true }), ctx('plans', h));
     expect(h.quickNote).toHaveBeenCalledOnce();
-    expect(out).toEqual({ layer: 'global', handled: true });
+    expect(out).toMatchObject({ layer: 'global', handled: true });
   });
 
   it('ctrl+n fires quickNote even while chat is focused', () => {
     const h = handlers();
     const out = dispatchKey('n', makeKey({ ctrl: true }), ctx(CHAT_FOCUS, h));
     expect(h.quickNote).toHaveBeenCalledOnce();
-    expect(out).toEqual({ layer: 'global', handled: true });
+    expect(out).toMatchObject({ layer: 'global', handled: true });
   });
 
   it('ctrl+r fires repaint (plain chord, app-wide) under the default alt modifier', () => {
     const h = handlers();
     const out = dispatchKey('r', makeKey({ ctrl: true }), ctx('plans', h));
     expect(h.repaint).toHaveBeenCalledOnce();
-    expect(out).toEqual({ layer: 'global', handled: true });
+    expect(out).toMatchObject({ layer: 'global', handled: true });
   });
 
   it('ctrl+r fires repaint even while chat is focused', () => {
     const h = handlers();
     const out = dispatchKey('r', makeKey({ ctrl: true }), ctx(CHAT_FOCUS, h));
     expect(h.repaint).toHaveBeenCalledOnce();
-    expect(out).toEqual({ layer: 'global', handled: true });
+    expect(out).toMatchObject({ layer: 'global', handled: true });
   });
   it('plain ? fires keyHelp when a panel is focused (item 12, no modifier needed)', () => {
     const h = handlers();
     const out = dispatchKey('?', makeKey(), ctx('plans', h));
     expect(h.keyHelp).toHaveBeenCalledOnce();
-    expect(out).toEqual({ layer: 'global', handled: true });
+    expect(out).toMatchObject({ layer: 'global', handled: true });
   });
 
   it('plain ? does NOT fire keyHelp while chat is focused (falls to the input as a literal)', () => {
@@ -347,44 +345,45 @@ describe('layer 1 — global chords', () => {
   });
 });
 
-describe('global.closePane — ctrl+q closes the highlighted Stage pane (stagelayout)', () => {
-  // ctrl+q is a plain chord delivered as the clean legacy byte → `{ ctrl: true, input: 'q' }`.
-  const CTRL_Q = makeKey({ ctrl: true });
-
-  it('ctrl+q closes a highlighted transcript-history Stage pane (claimed at the global layer)', () => {
+describe('global.toggleTargetPane — command+w toggles show/hide on chat or Stage focus', () => {
+  it('alt+w toggles a highlighted transcript-history Stage pane (claimed at the global layer)', () => {
     const h = handlers();
-    const out = dispatchKey('q', CTRL_Q, ctx(stageTranscriptFocusId('crow-1'), h));
-    expect(h.closePane).toHaveBeenCalledOnce();
-    expect(out).toEqual({ layer: 'global', handled: true });
+    const out = dispatchKey('w', makeKey({ meta: true }), ctx(stageTranscriptFocusId('crow-1'), h));
+    expect(h.toggleTargetPane).toHaveBeenCalledOnce();
+    expect(out).toMatchObject({ layer: 'global', handled: true });
   });
 
-  it('ctrl+q closes a highlighted doc Stage pane', () => {
+  it('alt+w toggles a highlighted doc Stage pane', () => {
     const h = handlers();
-    const out = dispatchKey('q', CTRL_Q, ctx('stage:doc:my-plan', h));
-    expect(h.closePane).toHaveBeenCalledOnce();
-    expect(out).toEqual({ layer: 'global', handled: true });
+    const out = dispatchKey('w', makeKey({ meta: true }), ctx('stage:doc:my-plan', h));
+    expect(h.toggleTargetPane).toHaveBeenCalledOnce();
+    expect(out).toMatchObject({ layer: 'global', handled: true });
   });
 
-  it('ctrl+q does NOTHING when chat is focused (falls through to the chat short-circuit)', () => {
+  it('alt+w toggles the target pane while chat is focused', () => {
     const h = handlers();
-    const out = dispatchKey('q', CTRL_Q, ctx(CHAT_FOCUS, h));
-    expect(h.closePane).not.toHaveBeenCalled();
-    expect(out.layer).toBe('chat');
+    const out = dispatchKey('w', makeKey({ meta: true }), ctx(CHAT_FOCUS, h));
+    expect(h.toggleTargetPane).toHaveBeenCalledOnce();
+    expect(out).toMatchObject({ layer: 'global', handled: true });
   });
 
-  it('ctrl+q does NOTHING when a list panel is focused (falls through to the panel keymap)', () => {
+  it('alt+w is unbound (no-op) when a list panel is focused', () => {
     const h = handlers();
-    const out = dispatchKey('q', CTRL_Q, ctx('plans', h, {}));
-    expect(h.closePane).not.toHaveBeenCalled();
+    const out = dispatchKey('w', makeKey({ meta: true }), ctx('plans', h, {}));
+    expect(h.toggleTargetPane).not.toHaveBeenCalled();
     expect(out).toEqual({ layer: 'panel', handled: false });
   });
 
-  it('ctrl+q fires close-pane under modifier=ctrl too (plain chord, not shadowed by the gate)', () => {
+  it('ctrl+w fires toggle-pane under modifier=ctrl too', () => {
     const h = handlers();
     const ctrlBindings = resolveBindings('ctrl', true, {});
-    const out = dispatchKey('q', CTRL_Q, ctx('stage:doc:my-plan', h, {}, null, ctrlBindings));
-    expect(h.closePane).toHaveBeenCalledOnce();
-    expect(out).toEqual({ layer: 'global', handled: true });
+    const out = dispatchKey(
+      'w',
+      makeKey({ ctrl: true }),
+      ctx('stage:doc:my-plan', h, {}, null, ctrlBindings),
+    );
+    expect(h.toggleTargetPane).toHaveBeenCalledOnce();
+    expect(out).toMatchObject({ layer: 'global', handled: true });
   });
 });
 
@@ -393,7 +392,7 @@ describe('layer 1 — chat-target super-chords (item 9)', () => {
     const h = handlers();
     const out = dispatchKey('j', makeKey({ ctrl: true }), ctx(CHAT_FOCUS, h));
     expect(h.toggleTargetGroup).toHaveBeenCalledOnce();
-    expect(out).toEqual({ layer: 'global', handled: true });
+    expect(out).toMatchObject({ layer: 'global', handled: true });
     expect(h.navigate).not.toHaveBeenCalled();
   });
 
@@ -410,17 +409,10 @@ describe('layer 1 — chat-target super-chords (item 9)', () => {
     const next = dispatchKey('l', makeKey({ meta: true }), ctx(CHAT_FOCUS, h));
     expect(h.cycleTargetPrev).toHaveBeenCalledOnce();
     expect(h.cycleTargetNext).toHaveBeenCalledOnce();
-    expect(prev).toEqual({ layer: 'global', handled: true });
-    expect(next).toEqual({ layer: 'global', handled: true });
+    expect(prev).toMatchObject({ layer: 'global', handled: true });
+    expect(next).toMatchObject({ layer: 'global', handled: true });
     // The geometric nav must NOT fire for h/l while chat is focused (the cycle chords preempt it).
     expect(h.navigate).not.toHaveBeenCalled();
-  });
-
-  it('alt+w toggles the target pane while chat is focused', () => {
-    const h = handlers();
-    const out = dispatchKey('w', makeKey({ meta: true }), ctx(CHAT_FOCUS, h));
-    expect(h.toggleTargetPane).toHaveBeenCalledOnce();
-    expect(out).toEqual({ layer: 'global', handled: true });
   });
 
   it('alt+h is geometric nav (NOT target cycling) when a panel is focused', () => {
@@ -428,13 +420,6 @@ describe('layer 1 — chat-target super-chords (item 9)', () => {
     dispatchKey('h', makeKey({ meta: true }), ctx('plans', h));
     expect(h.navigate).toHaveBeenCalledWith('left');
     expect(h.cycleTargetPrev).not.toHaveBeenCalled();
-  });
-
-  it('alt+w is unbound (no-op) when a panel is focused', () => {
-    const h = handlers();
-    const out = dispatchKey('w', makeKey({ meta: true }), ctx('plans', h));
-    expect(h.toggleTargetPane).not.toHaveBeenCalled();
-    expect(out).toEqual({ layer: 'panel', handled: false });
   });
 });
 
@@ -457,7 +442,7 @@ describe('layer 3 — focused panel keymap', () => {
     onIntent.mockClear();
     const out = dispatchKey('a', makeKey(), ctx('plans', handlers(), { plans: plansKeymap }));
     expect(onIntent).toHaveBeenCalledWith('act');
-    expect(out).toEqual({ layer: 'panel', handled: true });
+    expect(out).toEqual({ layer: 'panel', handled: true, action: 'plans:act' });
   });
 
   it('does NOT fire the panel intent when a different panel is focused', () => {
@@ -487,7 +472,7 @@ describe('command modifier — ctrl', () => {
       ctx(CHAT_FOCUS, h, {}, null, ctrlBindings),
     );
     expect(h.focusPanel).toHaveBeenCalledWith('plans');
-    expect(out).toEqual({ layer: 'global', handled: true });
+    expect(out).toMatchObject({ layer: 'global', handled: true });
   });
 
   it('ctrl+t cycles the chat view, ctrl+space focuses chat (TUIchat-3)', () => {
@@ -506,7 +491,7 @@ describe('command modifier — ctrl', () => {
       ctx(CHAT_FOCUS, h, {}, null, ctrlBindings),
     );
     expect(h.spawn).toHaveBeenCalledOnce();
-    expect(chatOut).toEqual({ layer: 'global', handled: true });
+    expect(chatOut).toMatchObject({ layer: 'global', handled: true });
     const panelOut = dispatchKey(
       's',
       makeKey({ ctrl: true }),
@@ -522,7 +507,7 @@ describe('command modifier — ctrl', () => {
     const h = handlers();
     const out = dispatchKey('n', makeKey({ ctrl: true }), ctx('plans', h, {}, null, ctrlBindings));
     expect(h.quickNote).toHaveBeenCalledOnce();
-    expect(out).toEqual({ layer: 'global', handled: true });
+    expect(out).toMatchObject({ layer: 'global', handled: true });
   });
 
   it('alt+<n> is NOT a command chord under ctrl-only (degraded to chat short-circuit)', () => {
@@ -549,7 +534,7 @@ describe('command modifier — ctrl', () => {
       ctx('plans', h, { plans: starKeymap }, null, ctrlBindings),
     );
     expect(onIntent).toHaveBeenCalledWith('star');
-    expect(out).toEqual({ layer: 'panel', handled: true });
+    expect(out).toMatchObject({ layer: 'panel', handled: true });
   });
 });
 
@@ -579,7 +564,7 @@ describe('global.murder — ctrl+m arm + the pending confirm check', () => {
   it('ctrl+m fires murder (arm) from chat focus', () => {
     const h = handlers();
     const out = dispatchKey('', CTRL_M, ctx(CHAT_FOCUS, h));
-    expect(out).toEqual({ layer: 'global', handled: true });
+    expect(out).toMatchObject({ layer: 'global', handled: true });
     expect(h.murder).toHaveBeenCalledTimes(1);
     expect(h.murderConfirm).not.toHaveBeenCalled();
   });
@@ -611,7 +596,7 @@ describe('global.murder — ctrl+m arm + the pending confirm check', () => {
     };
     const out = dispatchKey('', CTRL_M, ctx('crows', h, { crows: keymap }));
     expect(h.murder).not.toHaveBeenCalled();
-    expect(out).toEqual({ layer: 'panel', handled: true });
+    expect(out).toMatchObject({ layer: 'panel', handled: true });
     expect(onIntent).toHaveBeenCalledWith('murder');
   });
 
@@ -621,7 +606,7 @@ describe('global.murder — ctrl+m arm + the pending confirm check', () => {
     const handleKey = vi.fn<ChatInputHandler['handleKey']>(() => true);
     const context: DispatchContext = { ...ctx(CHAT_FOCUS, h), chatInput: { handleKey } };
     const out = dispatchKey('m', makeKey(), context);
-    expect(out).toEqual({ layer: 'global', handled: true });
+    expect(out).toMatchObject({ layer: 'global', handled: true });
     expect(h.murderConfirm).toHaveBeenCalledTimes(1);
     expect(handleKey).not.toHaveBeenCalled(); // the confirm m is never typed
   });
@@ -630,7 +615,7 @@ describe('global.murder — ctrl+m arm + the pending confirm check', () => {
     const h = handlers();
     h.murderPending.mockReturnValue(true);
     const out = dispatchKey('', CTRL_M, ctx(CHAT_FOCUS, h));
-    expect(out).toEqual({ layer: 'global', handled: true });
+    expect(out).toMatchObject({ layer: 'global', handled: true });
     expect(h.murderConfirm).toHaveBeenCalledTimes(1);
     expect(h.murder).not.toHaveBeenCalled(); // confirm, not a re-arm
   });

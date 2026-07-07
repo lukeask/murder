@@ -3,6 +3,10 @@
  * or the store). The bars are pure functions of input state — the toggled-panel set, the effective
  * focus, and the focused panel's declared keymap — so their non-trivial formatting (the subscript
  * labels, the hint list) is a tested pure transform, not inline JSX logic.
+ *
+ * Phase 3.1: bar *widgets* (1-line segments registered in {@link ./barWidgetRegistry.js}) compose
+ * into the bars via {@link selectBottomBarLineItems} and {@link layoutTopBarWidgets}; hints are the
+ * first built-in widget.
  */
 
 import { ACTIONS, chordLabel, type ResolvedBindings } from '../input/bindings.js';
@@ -10,6 +14,26 @@ import { CHAT_FOCUS, type FocusId } from '../input/focusStore.js';
 import { GLOBAL_ACTION_IDS, GLOBAL_SCOPE, inFocusScope } from '../input/globalScope.js';
 import type { KeyChord, Keymap } from '../input/keymap.js';
 import { PANELS, type PanelId } from '../input/panels.js';
+import type { TextRun } from '../render/cellSurface.js';
+import type { ConnectionStatus } from '../store/connection/connectionStore.js';
+import { decayedCount, type KeyUsageRecord } from '../store/keyUsage/keyUsageStore.js';
+import type { UsageState } from '../store/usage/usageSlice.js';
+import {
+  type BarWidgetId,
+  type BarWidgetsConfig,
+  enabledBarWidgetIds,
+  resolveBarWidgetConfig,
+} from './barWidgetRegistry.js';
+import { selectUsageBarWidget } from './selectUsageBarWidget.js';
+
+/** Horizontal gap between adjacent top-bar widget segments (cells). */
+export const TOP_BAR_WIDGET_GAP = 1;
+/** `paddingX={1}` each side of the top bar. */
+export const TOP_BAR_PADDING = 2;
+/** Gap between the left label cluster and the right-side widget/badge cluster. */
+export const TOP_BAR_RIGHT_CLUSTER_GAP = 1;
+/** Gap between hints (or segment widgets) on a bottom-bar line. */
+export const BOTTOM_BAR_ITEM_GAP = 1;
 
 /** Unicode subscript digits 0–9, indexed by the digit — for the top bar's `plans₁ … crows₀` labels
  * (the plan's "Subscript number labels: `plans_1` … `crows_0`"). A real subscript glyph, so the
@@ -57,6 +81,8 @@ export interface BottomBarHint {
   /** The printable chord char (`j`), or a special-key name (`enter`) for display. */
   readonly key: string;
   readonly description: string;
+  /** When set, ties this hint to the dispatcher's usage `action` id for adaptive ranking. */
+  readonly actionId?: string;
   /** When `'right'`, the bar pins this hint to the FAR right of the bar (item 12 prep — the help
    * hint a new user can always find). Omitted/`'left'` = normal left-to-right flow. */
   readonly align?: 'left' | 'right';
@@ -123,7 +149,7 @@ function globalHints(bindings: ResolvedBindings, focused: FocusId): readonly Bot
       hints.push({ key: `${prefix}hl`, description: 'target' });
       continue;
     }
-    hints.push({ key: bindings.label(id), description: ACTIONS[id].description });
+    hints.push({ key: bindings.label(id), description: ACTIONS[id].description, actionId: id });
   }
   return hints;
 }
@@ -159,6 +185,312 @@ function hintKey(entry: Keymap<string>[number]): string {
  * discoverable. Pure over the effective focus, that panel's keymap, and the active mode's hints,
  * all passed in by the shell.
  */
+/** Context passed into bar-widget selectors (usage rows for the usage widget, etc.). */
+export interface BarWidgetContext {
+  readonly usage: UsageState;
+  readonly keyUsage: Readonly<Record<string, KeyUsageRecord>>;
+  readonly now: number;
+}
+
+/** One packable bottom-bar item: a contextual hint chip or a widget segment (Phase 3.1). */
+export type BottomBarLineItem =
+  | { readonly kind: 'hint'; readonly hint: BottomBarHint }
+  | {
+      readonly kind: 'segment';
+      readonly widgetId: BarWidgetId;
+      readonly runs: readonly TextRun[];
+      readonly width: number;
+    };
+
+/** Display width of one bottom-bar packable item. */
+export function bottomBarItemWidth(item: BottomBarLineItem): number {
+  if (item.kind === 'hint') {
+    const hint = item.hint;
+    return hint.description.length === 0
+      ? hint.key.length
+      : hint.key.length + 1 + hint.description.length;
+  }
+  return item.width;
+}
+
+/** Rendered width of a packed line of bottom-bar items (includes inter-item gaps). */
+export function bottomBarLineWidth(line: readonly BottomBarLineItem[]): number {
+  return (
+    line.reduce((sum, item) => sum + bottomBarItemWidth(item), 0) +
+    BOTTOM_BAR_ITEM_GAP * Math.max(0, line.length - 1)
+  );
+}
+
+/**
+ * Greedily pack bottom-bar items into single-width lines (left-to-right). Right-aligned hints are
+ * pulled out and appended to the last line when they fit.
+ */
+export function packBottomBarLineItems(
+  items: readonly BottomBarLineItem[],
+  avail: number,
+): BottomBarLineItem[][] {
+  const right = items.filter((item) => item.kind === 'hint' && item.hint.align === 'right');
+  const left = items.filter((item) => !(item.kind === 'hint' && item.hint.align === 'right'));
+  const lines: BottomBarLineItem[][] = [];
+  let current: BottomBarLineItem[] = [];
+  let used = 0;
+  for (const item of left) {
+    const w = bottomBarItemWidth(item);
+    const add = current.length === 0 ? w : w + BOTTOM_BAR_ITEM_GAP;
+    if (current.length > 0 && used + add > avail) {
+      lines.push(current);
+      current = [item];
+      used = w;
+    } else {
+      current.push(item);
+      used += add;
+    }
+  }
+  if (current.length > 0) {
+    lines.push(current);
+  }
+  if (right.length > 0) {
+    const last = lines[lines.length - 1];
+    if (
+      last !== undefined &&
+      bottomBarLineWidth(last) + BOTTOM_BAR_ITEM_GAP + bottomBarLineWidth(right) <= avail
+    ) {
+      last.push(...right);
+    } else {
+      lines.push([...right]);
+    }
+  }
+  return lines;
+}
+
+/** Display width of one hint chip (same math as {@link bottomBarItemWidth} for hint items). */
+function bottomBarHintWidth(hint: BottomBarHint): number {
+  return bottomBarItemWidth({ kind: 'hint', hint });
+}
+
+/**
+ * Pick left hints that fit one line, ranking by low key-usage first so unfamiliar bindings surface
+ * while mastered ones drop off. Right-aligned hints (help) are always kept; their width is reserved
+ * first. Chosen left hints are returned in their original order, then the right-aligned hints.
+ */
+export function selectOneLineHints(
+  hints: readonly BottomBarHint[],
+  usage: Readonly<Record<string, KeyUsageRecord>>,
+  avail: number,
+  now: number,
+): BottomBarHint[] {
+  const right = hints.filter((hint) => hint.align === 'right');
+  const left = hints.filter((hint) => hint.align !== 'right');
+  const rightWidth =
+    right.length === 0
+      ? 0
+      : right.reduce((sum, hint) => sum + bottomBarHintWidth(hint), 0) +
+        BOTTOM_BAR_ITEM_GAP * Math.max(0, right.length - 1);
+  const gapToRight = left.length > 0 && right.length > 0 ? BOTTOM_BAR_ITEM_GAP : 0;
+  let remaining = avail - rightWidth - gapToRight;
+  if (remaining < 0) {
+    return [...right];
+  }
+
+  const scored = left.map((hint, index) => ({
+    hint,
+    index,
+    score: (() => {
+      if (hint.actionId === undefined) {
+        return 0;
+      }
+      const record = usage[hint.actionId];
+      return record !== undefined ? decayedCount(record, now) : 0;
+    })(),
+  }));
+  scored.sort((a, b) => a.score - b.score || a.index - b.index);
+
+  const chosenIndices = new Set<number>();
+  let used = 0;
+  for (const { hint, index } of scored) {
+    const w = bottomBarHintWidth(hint);
+    const add = chosenIndices.size === 0 ? w : w + BOTTOM_BAR_ITEM_GAP;
+    if (used + add <= remaining) {
+      chosenIndices.add(index);
+      used += add;
+    }
+  }
+
+  const selectedLeft = left.filter((_, index) => chosenIndices.has(index));
+  if (selectedLeft.length === 0 && left.length > 0) {
+    return [...right];
+  }
+  return [...selectedLeft, ...right];
+}
+
+/** A top-bar widget segment: styled runs plus its display width (for layout). */
+export interface TopBarWidgetSegment {
+  readonly widgetId: BarWidgetId;
+  readonly runs: readonly TextRun[];
+  readonly width: number;
+}
+
+/** Estimate the left cluster width: branding + project + panel labels (display cells). */
+export function estimateTopBarLeftWidth(
+  project: string | undefined,
+  labels: readonly TopBarLabel[],
+): number {
+  // `murder` + gap before labels; project adds ` · name` when present.
+  let width = 'murder'.length + 3;
+  if (project !== undefined && project.length > 0) {
+    width += ` · ${project}`.length + 3;
+  }
+  for (const label of labels) {
+    if (label.dividerBefore === true) {
+      width += 2;
+    }
+    width += label.text.length + 1;
+  }
+  return width;
+}
+
+/** Display width of the connection badge for layout (0 when silent). */
+export function connectionBadgeWidth(status: ConnectionStatus): number {
+  switch (status) {
+    case 'connecting':
+      return 'connecting…'.length;
+    case 'reconnecting':
+      return '[reconnecting]'.length;
+    case 'version-mismatch':
+      return '[version mismatch — restart murder]'.length;
+    default:
+      return 0;
+  }
+}
+
+/**
+ * Fit top-bar widget segments into `avail` cells: left-to-right, drop trailing widgets that do not
+ * fit, truncate the last visible segment with `…` when needed. Never wraps — the bar stays one line.
+ */
+export function layoutTopBarWidgets(
+  segments: readonly TopBarWidgetSegment[],
+  avail: number,
+): readonly TopBarWidgetSegment[] {
+  if (avail <= 0 || segments.length === 0) {
+    return [];
+  }
+  const out: TopBarWidgetSegment[] = [];
+  let used = 0;
+  for (const segment of segments) {
+    const gap = out.length === 0 ? 0 : TOP_BAR_WIDGET_GAP;
+    if (used + gap + segment.width <= avail) {
+      out.push(segment);
+      used += gap + segment.width;
+      continue;
+    }
+    const remaining = avail - used - gap;
+    if (remaining >= 2) {
+      out.push(truncateTopBarSegment(segment, remaining));
+    }
+    break;
+  }
+  return out;
+}
+
+function truncateTopBarSegment(
+  segment: TopBarWidgetSegment,
+  maxWidth: number,
+): TopBarWidgetSegment {
+  if (segment.width <= maxWidth) {
+    return segment;
+  }
+  const ellipsis = '…';
+  const target = Math.max(1, maxWidth - ellipsis.length);
+  let taken = 0;
+  const runs: TextRun[] = [];
+  for (const run of segment.runs) {
+    if (taken >= target) {
+      break;
+    }
+    const chars = Array.from(run.text);
+    const slice = chars.slice(0, target - taken).join('');
+    if (slice.length > 0) {
+      runs.push({ text: slice, style: run.style });
+      taken += slice.length;
+    }
+  }
+  runs.push({ text: ellipsis, style: segment.runs.at(-1)?.style ?? {} });
+  return { widgetId: segment.widgetId, runs, width: maxWidth };
+}
+
+/**
+ * Enabled bottom-bar widgets → packable line items. The hints widget expands to hint chips; future
+ * widgets contribute a single `segment` item each.
+ */
+export function selectBottomBarLineItems(
+  barWidgets: BarWidgetsConfig | undefined,
+  focused: FocusId,
+  focusedKeymap: Keymap<string> | undefined,
+  bindings: ResolvedBindings,
+  context: BarWidgetContext,
+  avail: number,
+  modeHints?: readonly BottomBarHint[],
+): readonly BottomBarLineItem[] {
+  const items: BottomBarLineItem[] = [];
+  let reservedWidth = 0;
+  for (const widgetId of enabledBarWidgetIds(barWidgets, 'bottom')) {
+    if (widgetId === 'hints') {
+      const config = resolveBarWidgetConfig('hints', barWidgets);
+      const hints = selectBottomBar(focused, focusedKeymap, bindings, modeHints);
+      const gapBefore = items.length > 0 ? BOTTOM_BAR_ITEM_GAP : 0;
+      const availForHints = avail - reservedWidth - gapBefore;
+      const selected =
+        config.adaptive !== false
+          ? selectOneLineHints(hints, context.keyUsage, availForHints, context.now)
+          : hints;
+      for (const hint of selected) {
+        items.push({ kind: 'hint', hint });
+      }
+      continue;
+    }
+    if (widgetId === 'usage') {
+      const config = resolveBarWidgetConfig('usage', barWidgets);
+      const segment = selectUsageBarWidget(context.usage.rows, config.harnesses);
+      if (segment !== null) {
+        const gap = items.length > 0 ? BOTTOM_BAR_ITEM_GAP : 0;
+        reservedWidth += gap + segment.width;
+        items.push({
+          kind: 'segment',
+          widgetId: 'usage',
+          runs: segment.runs,
+          width: segment.width,
+        });
+      }
+    }
+  }
+  return items;
+}
+
+/** Enabled top-bar widgets → segments. */
+export function selectTopBarWidgetSegments(
+  barWidgets: BarWidgetsConfig | undefined,
+  context: BarWidgetContext,
+): readonly TopBarWidgetSegment[] {
+  const segments: TopBarWidgetSegment[] = [];
+  for (const widgetId of enabledBarWidgetIds(barWidgets, 'top')) {
+    if (widgetId === 'hints') {
+      continue;
+    }
+    if (widgetId === 'usage') {
+      const config = resolveBarWidgetConfig('usage', barWidgets);
+      const segment = selectUsageBarWidget(context.usage.rows, config.harnesses);
+      if (segment !== null) {
+        segments.push({
+          widgetId: 'usage',
+          runs: segment.runs,
+          width: segment.width,
+        });
+      }
+    }
+  }
+  return segments;
+}
+
 export function selectBottomBar(
   focused: FocusId,
   focusedKeymap: Keymap<string> | undefined,
@@ -196,6 +528,7 @@ export function selectBottomBar(
     .map((entry) => ({
       key: hintKey(entry),
       description: entry.description,
+      actionId: `${focused}:${entry.intent}`,
     }));
   return [...globals, ...panelHints, helpHint];
 }

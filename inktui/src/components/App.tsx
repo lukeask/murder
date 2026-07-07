@@ -601,8 +601,8 @@ class BodyErrorBoundary extends Component<{ readonly children: ReactNode }, { ha
  * `ctrl+s` spawns from chat OR a highlighted center-stage pane (a transcript pane or the open doc); the
  * dispatcher routes it (declines on a list panel, where alt+f stays the star chord). The doc file is
  * included in the spawn context ONLY when the highlighted pane is the document — see
- * {@link deriveSpawnContext}, which reads the effective focus. `ctrl+q` closes the highlighted center-stage
- * pane (see `closePaneHandler`). C11 also loads the persisted favorites once on mount via the favorites
+ * {@link deriveSpawnContext}, which reads the effective focus. `alt+w`/`ctrl+w` toggles show/hide for
+ * the active transcript or doc pane (see `toggleTargetPaneHandler`). C11 also loads the persisted favorites once on mount via the favorites
  * action.
  */
 function Shell({
@@ -881,6 +881,7 @@ function Shell({
         theme,
         paneGap: settings.paneGap,
         vimMode: settings.vimMode,
+        barWidgets: settings.barWidgets,
         defaultChatViewMode: settings.defaultChatViewMode,
         startupRogue: settings.startupRogue,
         startupRogueModels: settings.startupRogueModels,
@@ -998,22 +999,41 @@ function Shell({
     }
   };
 
-  // Item 9 super-chord: toggle the current recipient target's transcript pane from the chat box.
+  // Item 9 super-chord: toggle show/hide for the active transcript or doc pane. From chat: toggle the
+  // current recipient target's transcript pane. From a Stage pane: hide the focused transcript or doc.
   const toggleTargetPaneHandler = (): void => {
     const state = appStore.getState();
-    const agentId = selectActiveAgentId(state.conversations, state.roster, state.favorites);
-    if (agentId === null) {
-      return;
+    const target = selectResolvedFocus(focus).target;
+    switch (target.kind) {
+      case 'docPane':
+        state.actions.docView.close();
+        return;
+      case 'transcriptPane': {
+        state.actions.conversations.setTranscriptPaneOpen(target.agentId, false);
+        if (state.conversations.activePaneAgentId === target.agentId) {
+          state.actions.conversations.setActivePaneAgentId(null);
+        }
+        return;
+      }
+      case 'composer': {
+        const agentId = selectActiveAgentId(state.conversations, state.roster, state.favorites);
+        if (agentId === null) {
+          return;
+        }
+        // `toggleTranscriptPane` needs the current open state (it writes the opposite override). Derive it via
+        // the agent's identity so the kind-default favorite is honoured for an un-overridden pane.
+        const row = state.roster.rows.find((r) => r.agentId === agentId);
+        const identity = row === undefined ? null : deriveAgentIdentity(row);
+        const currentlyOpen =
+          identity === null
+            ? state.conversations.paneOverrides.get(agentId) === true
+            : isTranscriptPaneOpen(identity, state.favorites, state.conversations.paneOverrides);
+        state.actions.conversations.toggleTranscriptPane(agentId, currentlyOpen);
+        return;
+      }
+      case 'panel':
+        return;
     }
-    // `toggleTranscriptPane` needs the current open state (it writes the opposite override). Derive it via
-    // the agent's identity so the kind-default favorite is honoured for an un-overridden pane.
-    const row = state.roster.rows.find((r) => r.agentId === agentId);
-    const identity = row === undefined ? null : deriveAgentIdentity(row);
-    const currentlyOpen =
-      identity === null
-        ? state.conversations.paneOverrides.get(agentId) === true
-        : isTranscriptPaneOpen(identity, state.favorites, state.conversations.paneOverrides);
-    state.actions.conversations.toggleTranscriptPane(agentId, currentlyOpen);
   };
 
   // ctrl+m murder chord. ARM resolves the targeted crow from the live UI state: the focused transcript
@@ -1072,36 +1092,6 @@ function Shell({
       });
   };
 
-  // ctrl+q close-pane chord: close the currently-highlighted pane. The
-  // dispatcher only fires this when a center-stage pane holds the effective focus, so this reads the effective
-  // focus and routes by pane kind:
-  //  - document pane → close the open doc via the docView action (rule 3). The pane unmounts →
-  //    focus re-homes to chat via the derived invariant (no imperative re-home).
-  //  - transcript pane → close that transcript pane via `conversations.setTranscriptPaneOpen(id, false)`.
-  //    This writes an explicit `false` paneOverride that overrides the favorites default, so even a
-  //    default-favorited collaborator/rogue pane disappears (a bare `toggleTranscriptPane` would need the
-  //    current open state; the explicit `false` is unconditional, which is what close means).
-  const closePaneHandler = (): void => {
-    const target = selectResolvedFocus(focus).target;
-    switch (target.kind) {
-      case 'docPane':
-        appStore.getState().actions.docView.close();
-        return;
-      case 'transcriptPane':
-        {
-          const state = appStore.getState();
-          state.actions.conversations.setTranscriptPaneOpen(target.agentId, false);
-          if (state.conversations.activePaneAgentId === target.agentId) {
-            state.actions.conversations.setActivePaneAgentId(null);
-          }
-        }
-        return;
-      case 'composer':
-      case 'panel':
-        return;
-    }
-  };
-
   // Workstream E: the capability bag the chat-input prefix dispatcher (`commandDispatch`) needs.
   // Built here where the bus, modes, and the help/note handlers are all in scope — the dispatcher
   // stays a pure function over these capabilities (no store handles leak into it).
@@ -1155,7 +1145,6 @@ function Shell({
       murderPending: () => murderConfirmStore.getState().pending !== null,
       murderConfirm: murderConfirmHandler,
       murderCancel: () => murderConfirmStore.getState().clear(),
-      closePane: closePaneHandler,
       repaint: () => forceInkFullRepaint(stdout),
       chatInput: makeChatInputHandler(
         chatInput,

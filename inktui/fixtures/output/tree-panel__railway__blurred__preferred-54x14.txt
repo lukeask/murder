@@ -1,0 +1,14 @@
+╭─ Git Tree ─────────────────────────────────────────╮
+│ 4d   2d   8h   2h   15m                            │
+│ ○━━┳━━○━━◆━━▶ ▐ main ▌                             │
+│    ╰━━○━━○━━▶ ▐ feature/tui-layout ▌               │
+│       ╰━━○━━▶ ▐ bugfix/footer-wrap ▌               │
+│                                                    │
+│ a1b2c3d · main · 15m                               │
+│ Refactor pane fixture tooling                      │
+│ Preserve ANSI snapshots                            │
+│                                                    │
+│                                                    │
+│                                                    │
+│                                                    │
+╰────────────────────────────────────────────────────╯

@@ -24,6 +24,7 @@
  */
 
 import type { StateCreator } from 'zustand';
+import type { BarWidgetsConfig } from '../../selectors/barWidgetRegistry.js';
 import type { AppStore } from '../store.js';
 import type {
   LlmEnvWire,
@@ -103,6 +104,8 @@ export interface SettingsState {
   readonly paneGap: number;
   /** Whether vim-style editing is enabled in the chat input. Mirrors the wire `vim_mode`. */
   readonly vimMode: boolean;
+  /** Per-widget bar configuration (enable + placement). Mirrors the wire `bar_widgets`. */
+  readonly barWidgets: BarWidgetsConfig;
   /** The default chat view mode for panes with no per-pane override (TUIchat-3). A pane's effective
    * mode = `conversations.paneViewModes[agentId] ?? defaultChatViewMode`. Only `verbose`/`condensed`
    * are settable here; `tmux` is reachable only via the cycle key. Mirrors the wire
@@ -150,6 +153,7 @@ export const initialSettingsState: SettingsState = {
   keyOverrides: {},
   paneGap: 0,
   vimMode: false,
+  barWidgets: {},
   defaultChatViewMode: 'verbose',
   startupRogue: null,
   startupRogueModels: DEFAULT_STARTUP_ROGUE_MODELS,

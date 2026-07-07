@@ -147,23 +147,6 @@ describe('ACTIONS table', () => {
   });
 });
 
-describe('global.closePane — plain ctrl+q chord (stagelayout)', () => {
-  it('resolves to ctrl+q under every modifier (plain = modifier-independent) and labels C-q', () => {
-    for (const modifier of ['alt', 'ctrl', 'both'] as const) {
-      const bindings = resolveBindings(modifier, true, {});
-      expect(bindings.chordsFor('global.closePane')).toEqual([{ input: 'q', key: { ctrl: true } }]);
-      expect(bindings.matches('global.closePane', 'q', makeKey({ ctrl: true }))).toBe(true);
-      // The bare q (typed into a doc/chat) is NOT the close chord.
-      expect(bindings.matches('global.closePane', 'q', makeKey())).toBe(false);
-      expect(bindings.label('global.closePane')).toBe('C-q');
-    }
-  });
-
-  it('is not rebindable (a fixed muscle-memory chord)', () => {
-    expect(ACTIONS['global.closePane'].rebindable).toBe(false);
-  });
-});
-
 describe('global.repaint — plain ctrl+r chord (manual redraw)', () => {
   it('resolves to ctrl+r under every modifier (plain = modifier-independent) and labels C-r', () => {
     for (const modifier of ['alt', 'ctrl', 'both'] as const) {

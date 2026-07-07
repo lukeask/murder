@@ -76,6 +76,8 @@ export interface ScheduleUsageGaugeDto {
   t_period_minutes?: number;
   /** RT5 per-harness steering: 'auto' | 'pause' | 'prefer' (defaults 'auto' if absent). */
   steering?: string;
+  /** ISO-8601 UTC timestamp of the latest usage snapshot for this harness. */
+  fetched_at?: string | null;
 }
 
 /**

@@ -191,7 +191,7 @@ describe('SettingsModal', () => {
     expect((lastFrame() ?? '').split('\n').find((l) => l.includes('›'))).toContain('Appearance');
     stdin.write('j');
     await tick();
-    expect((lastFrame() ?? '').split('\n').find((l) => l.includes('›'))).toContain('Harnesses');
+    expect((lastFrame() ?? '').split('\n').find((l) => l.includes('›'))).toContain('Bars');
     stdin.write('k');
     await tick();
     expect((lastFrame() ?? '').split('\n').find((l) => l.includes('›'))).toContain('Appearance');
@@ -552,8 +552,8 @@ describe('SettingsModal', () => {
     stores.modes.getState().enter(settingsMode(stores.modes, actions, RICH_CURRENT));
     await tick();
     await openCategory(stdin, lastFrame, 'LLM');
-    // Scroll down toward the tiers section so the built-ins are in view.
-    await walkUntilFocused(stdin, lastFrame, 'local base_url');
+    // Scroll down into the roles section so the tier built-ins above it are in view.
+    await walkUntilFocused(stdin, lastFrame, 'notetaker:');
     const frame = lastFrame() ?? '';
     expect(frame).toContain('cheap');
     expect(frame).toContain('smart');
@@ -631,6 +631,10 @@ describe('SettingsModal', () => {
     await tick();
     await openCategory(stdin, lastFrame, 'Templates');
     await walkUntilFocused(stdin, lastFrame, ':greet');
+    stdin.write('j');
+    await tick();
+    // The ':bye' row itself may sit just below the scroll window, but focusing it
+    // renders its preview, proving one row exists per template.
     const frame = lastFrame() ?? '';
     expect(frame).toContain('Templates');
     expect(frame).toContain(':greet');

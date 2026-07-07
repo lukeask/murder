@@ -4,7 +4,7 @@
  * view-model ({@link ../selectors/barSelectors.js}) read this table, so a usable chord can never be
  * missing from the bar and a dead chord can never be shown. Before this table the dispatcher inlined
  * the focus gating as scattered `if`s while the bar hard-coded a three-entry global list, and the two
- * drifted: most globals (spawn, settings, the chat super-chords, ctrl+q close-pane, …) were live but
+ * drifted: most globals (spawn, settings, the chat super-chords, toggle-pane, …) were live but
  * un-hinted. Keeping the gate as data, consumed by both, makes that drift unrepresentable.
  *
  * Panel-scoped (`panel.*`) actions are intentionally absent: those are gated by *which panel
@@ -23,7 +23,7 @@ import { CHAT_FOCUS, type FocusId, isStagePaneId } from './focusStore.js';
  *  - `chat`          — only while the chat input is focused (the item-9 chat-target super-chords;
  *                      away from chat the same `alt+h/l` are geometric nav).
  *  - `chat-or-stage` — the chat input OR a Stage pane (transcript / open doc) — `alt+s` spawn.
- *  - `stage`         — only a Stage pane (`ctrl+q` close-pane).
+ *  - `stage`         — only a Stage pane (reserved; no globals use this scope today).
  *  - `not-crows`     — any focus except the crows panel, where the chord falls to that panel's own
  *                      keymap (the `ctrl+m` murder arm).
  */
@@ -65,9 +65,8 @@ export const GLOBAL_SCOPE = {
   'global.cycleTargetPrev': 'chat',
   'global.toggleTargetGroup': 'chat',
   'global.cycleTargetNext': 'chat',
-  'global.toggleTargetPane': 'chat',
+  'global.toggleTargetPane': 'chat-or-stage',
   'global.murder': 'not-crows',
-  'global.closePane': 'stage',
   'global.repaint': 'always',
 } as const satisfies Partial<Record<ActionId, FocusScope>>;
 

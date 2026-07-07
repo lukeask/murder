@@ -1,18 +1,40 @@
-import { describe, expect, it } from 'vitest';
-import { packHints } from '../../src/components/BottomBar.js';
-import type { BottomBarHint } from '../../src/selectors/barSelectors.js';
+import { render } from 'ink-testing-library';
+import type { JSX } from 'react';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { FakeBusClient } from '../../src/bus/FakeBusClient.js';
+import { BottomBar, useBottomBarLines } from '../../src/components/BottomBar.js';
+import { AppStoreProvider } from '../../src/hooks/useAppStore.js';
+import { InputStoresProvider } from '../../src/hooks/useInputStores.js';
+import { createInputStores } from '../../src/input/createInputStores.js';
+import {
+  type BottomBarHint,
+  type BottomBarLineItem,
+  bottomBarItemWidth,
+  packBottomBarLineItems,
+} from '../../src/selectors/barSelectors.js';
+import { createAppStore } from '../../src/store/store.js';
+import { toastStore } from '../../src/store/toast/toastStore.js';
 
 /**
- * packHints is the load-bearing piece of the portrait Body-height fix (L4c-fix2): the Shell derives
- * the portrait Body height from `useBottomBarLines().length`, and the BottomBar renders that same
- * line count as explicit rows. If the packing here ever disagreed with the render, the bottom rail
- * strip would clip into / overflow the chat input. These lock the packing contract.
+ * packBottomBarLineItems is the load-bearing piece of the portrait Body-height fix (L4c-fix2): the
+ * Shell derives the portrait Body height from `useBottomBarLines().length`, and the BottomBar renders
+ * that same line count as explicit rows. If the packing here ever disagreed with the render, the
+ * bottom rail strip would clip into / overflow the chat input. These lock the packing contract.
  */
 const h = (key: string, description: string): BottomBarHint => ({ key, description });
-// width of a hint = key + ' ' + description; HINT_GAP = 1 between hints on a line.
-const w = (hint: BottomBarHint): number => hint.key.length + 1 + hint.description.length;
+const toItems = (hints: readonly BottomBarHint[]): BottomBarLineItem[] =>
+  hints.map((hint) => ({ kind: 'hint', hint }));
+const packHints = (hints: readonly BottomBarHint[], avail: number): BottomBarHint[][] =>
+  packBottomBarLineItems(toItems(hints), avail).map((line) =>
+    line.flatMap((item) => (item.kind === 'hint' ? [item.hint] : [])),
+  );
+const w = (hint: BottomBarHint): number => bottomBarItemWidth({ kind: 'hint', hint });
 
-describe('packHints', () => {
+function wait(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+describe('packBottomBarLineItems (hint packing)', () => {
   it('returns no lines for no hints', () => {
     expect(packHints([], 80)).toEqual([]);
   });
@@ -96,5 +118,76 @@ describe('packHints', () => {
         expect(used).toBeLessThanOrEqual(avail);
       }
     }
+  });
+});
+
+describe('BottomBar — toast overlays', () => {
+  beforeEach(() => {
+    toastStore.getState().clear();
+  });
+  afterEach(() => {
+    toastStore.getState().clear();
+  });
+
+  it('renders toasts on a blank host line when the hints widget is disabled (zero packed lines)', async () => {
+    const { store, dispose } = createAppStore(new FakeBusClient());
+    store.setState((state) => ({
+      settings: {
+        ...state.settings,
+        barWidgets: { hints: { enabled: false, placement: 'bottom' } },
+      },
+    }));
+    toastStore.getState().push('orphan toast', { ttlMs: 60_000 });
+    const inputStores = createInputStores([], 'chat');
+    function Harness(): JSX.Element {
+      return (
+        <AppStoreProvider value={store}>
+          <InputStoresProvider value={inputStores}>
+            <BottomBar />
+          </InputStoresProvider>
+        </AppStoreProvider>
+      );
+    }
+    const { lastFrame } = render(<Harness />);
+    await wait(450);
+    expect(lastFrame()).toContain('orphan toast');
+    dispose();
+  });
+
+  it('useBottomBarLines counts the toast host line, so the Shell footer budget matches the render', async () => {
+    const { store, dispose } = createAppStore(new FakeBusClient());
+    store.setState((state) => ({
+      settings: {
+        ...state.settings,
+        barWidgets: { hints: { enabled: false, placement: 'bottom' } },
+      },
+    }));
+    const inputStores = createInputStores([], 'chat');
+    let lineCount = -1;
+    function Probe(): null {
+      lineCount = useBottomBarLines().length;
+      return null;
+    }
+    function Harness(): JSX.Element {
+      return (
+        <AppStoreProvider value={store}>
+          <InputStoresProvider value={inputStores}>
+            <Probe />
+          </InputStoresProvider>
+        </AppStoreProvider>
+      );
+    }
+    render(<Harness />);
+    // Hints disabled, no toasts → zero footer lines.
+    expect(lineCount).toBe(0);
+    // A pushed toast raises the count to 1 (the blank host line) via the hook's own subscription.
+    const id = toastStore.getState().push('counted toast', { ttlMs: 60_000 });
+    await wait(20);
+    expect(lineCount).toBe(1);
+    // Dismissal drops it back to zero (the store self-prunes at ttl + exit in production).
+    toastStore.getState().dismiss(id);
+    await wait(20);
+    expect(lineCount).toBe(0);
+    dispose();
   });
 });

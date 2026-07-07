@@ -14,22 +14,27 @@ import { render as inkRender } from 'ink';
 import { render } from 'ink-testing-library';
 import type { JSX } from 'react';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { FakeBusClient } from '../../src/bus/FakeBusClient.js';
 import { TopBar } from '../../src/components/TopBar.js';
+import { AppStoreProvider } from '../../src/hooks/useAppStore.js';
 import { InputStoresProvider } from '../../src/hooks/useInputStores.js';
 import { createInputStores } from '../../src/input/createInputStores.js';
 import {
   type ConnectionStatus,
   connectionStore,
 } from '../../src/store/connection/connectionStore.js';
+import { createAppStore } from '../../src/store/store.js';
+
+const { store } = createAppStore(new FakeBusClient());
 
 function Harness(): JSX.Element {
-  // A minimal panel-store context so TopBar's `usePanelStore` resolves; the visible set is irrelevant
-  // to the badge assertions.
   const stores = createInputStores(['plans'], 'plans');
   return (
-    <InputStoresProvider value={stores}>
-      <TopBar project="demo" />
-    </InputStoresProvider>
+    <AppStoreProvider value={store}>
+      <InputStoresProvider value={stores}>
+        <TopBar project="demo" />
+      </InputStoresProvider>
+    </AppStoreProvider>
   );
 }
 

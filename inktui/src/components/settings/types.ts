@@ -1,5 +1,10 @@
 import type { ActionId, Modifier } from '../../input/bindings.js';
 import type {
+  BarPlacement,
+  BarWidgetId,
+  BarWidgetsConfig,
+} from '../../selectors/barWidgetRegistry.js';
+import type {
   LlmProviderId,
   LlmWire,
   StartupRogueModelWire,
@@ -10,7 +15,13 @@ import type { TemplateRecord } from '../../store/templates/templatesSlice.js';
 import type { ThemeRecord } from '../../store/themes/themesSlice.js';
 import type { ThemeId } from '../../theme/palettes.js';
 
-export type SettingsCategoryId = 'appearance' | 'harnesses' | 'llm' | 'templates' | 'keybindings';
+export type SettingsCategoryId =
+  | 'appearance'
+  | 'bars'
+  | 'harnesses'
+  | 'llm'
+  | 'templates'
+  | 'keybindings';
 
 export type SettingsRow =
   | { readonly id: string; readonly kind: 'header'; readonly label: string }
@@ -48,7 +59,27 @@ export type SettingsRow =
   | { readonly id: string; readonly kind: 'templateCreate' }
   | { readonly id: string; readonly kind: 'template'; readonly name: string }
   | { readonly id: string; readonly kind: 'templateEmpty' }
-  | { readonly id: string; readonly kind: 'binding'; readonly action: ActionId };
+  | { readonly id: string; readonly kind: 'binding'; readonly action: ActionId }
+  | {
+      readonly id: string;
+      readonly kind: 'barWidget';
+      readonly widgetId: BarWidgetId;
+      readonly field: 'enabled' | 'adaptive';
+      readonly value: boolean;
+    }
+  | {
+      readonly id: string;
+      readonly kind: 'barWidget';
+      readonly widgetId: BarWidgetId;
+      readonly field: 'placement';
+      readonly value: BarPlacement;
+    }
+  | {
+      readonly id: string;
+      readonly kind: 'barWidgetHarness';
+      readonly widgetId: BarWidgetId;
+      readonly value: string;
+    };
 
 export interface SettingsBuildContext {
   readonly llm: LlmWire;
@@ -57,6 +88,7 @@ export interface SettingsBuildContext {
   readonly startupRogueEfforts: Readonly<Record<string, readonly string[]>>;
   readonly templates: readonly TemplateRecord[];
   readonly themes: readonly ThemeRecord[];
+  readonly barWidgets: BarWidgetsConfig;
 }
 
 export interface SettingsItem {

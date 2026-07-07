@@ -8,6 +8,7 @@ import { App } from './components/App.js';
 import { createInputStores } from './input/createInputStores.js';
 import type { PanelId } from './input/panels.js';
 import { connectionStore } from './store/connection/connectionStore.js';
+import { startKeyUsagePersistence } from './store/keyUsage/keyUsagePersistence.js';
 import { createAppStore } from './store/store.js';
 import { capsStore } from './terminal/capsStore.js';
 import { createKittyDriver, type KeyProtocolDriver } from './terminal/kittyDriver.js';
@@ -86,6 +87,7 @@ export function resolveProject(env: NodeJS.ProcessEnv = process.env): string | u
  * subscriptions. Returns when the app exits.
  */
 export async function runLive(busFactory: () => BusClient = makeLiveBus): Promise<void> {
+  const teardownKeyUsage = startKeyUsagePersistence();
   const bus = busFactory();
   const { store, dispose } = createAppStore(bus);
   const inputStores = createInputStores(STARTUP_PANELS);
@@ -162,6 +164,7 @@ export async function runLive(busFactory: () => BusClient = makeLiveBus): Promis
     unhookPermanentError?.();
     dispose();
     closeIfSupported(bus);
+    teardownKeyUsage();
   }
 }
 
@@ -360,6 +363,7 @@ function makeLiveBus(): BusClient {
  * build gate calls to prove the bundle loads.
  */
 export async function runSmoke(): Promise<void> {
+  const teardownKeyUsage = startKeyUsagePersistence();
   const bus = makeSmokeBus();
   const { store, dispose } = createAppStore(bus);
   const inputStores = createInputStores(STARTUP_PANELS);
@@ -372,6 +376,7 @@ export async function runSmoke(): Promise<void> {
   });
   await instance.waitUntilExit();
   dispose();
+  teardownKeyUsage();
 }
 
 /** A {@link FakeBusClient} seeded with one crow + idle usage so the smoke frame paints both regions. */

@@ -1,3 +1,3 @@
- [2m[38;2;219;188;127malt+1-0[39m panels[22m [2m[38;2;219;188;127malt+hjkl[39m nav[22m [2m[38;2;219;188;127mj/k[39m move[22m [2m[38;2;219;188;127menter[39m open[22m            
+ alt+1-0 panels alt+hjkl nav j/k move enter open            
                                                             
                                                             

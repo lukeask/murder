@@ -1,5 +1,5 @@
-[2mname[22m                
+name                
   alpha             
-[48;2;60;72;65m▌beta with long text[49m
+▌beta with long text
   gamma             
                     

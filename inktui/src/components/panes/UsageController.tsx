@@ -32,6 +32,7 @@ export function usageSurfaceGroupsFromState(state: UsageState): readonly UsageSu
   return selectUsageView(state).groups.map((group) => ({
     harness: group.harness,
     steering: group.steering,
+    ...(group.fetchedAtLabel === undefined ? {} : { fetchedAt: group.fetchedAtLabel }),
     gauges: group.gauges.map((gauge) => ({
       label: gauge.windowLabel,
       pct: pctFromLabel(gauge.pctLabel),

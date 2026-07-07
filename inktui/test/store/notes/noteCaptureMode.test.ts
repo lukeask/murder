@@ -47,7 +47,6 @@ function noopHandlers(): GlobalHandlers {
     murderPending: vi.fn(() => false),
     murderConfirm: vi.fn(),
     murderCancel: vi.fn(),
-    closePane: vi.fn(),
   };
 }
 

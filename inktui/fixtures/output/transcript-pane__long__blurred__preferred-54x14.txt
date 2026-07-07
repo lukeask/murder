@@ -1,0 +1,14 @@
+╭─ Plan runner with long title ──────────────────────╮
+│▌ Summarize the latest fixture result.              │
+│                                                    │
+│▌ Snapshot output is ANSI text and can be inspected │
+│▏ directly in a terminal.                           │
+│▏ Long assistant prose intentionally wraps inside   │
+│▏ the pane body.                                    │
+│                                                    │
+│                                                    │
+│                                                    │
+│                                                    │
+│                                                    │
+│                                                    │
+╰─ codex ◇ gpt-5-codex ────────── TUIlayoutrefactor ─╯

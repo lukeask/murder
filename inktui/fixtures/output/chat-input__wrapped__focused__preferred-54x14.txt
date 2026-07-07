@@ -1,8 +1,8 @@
- [38;2;219;188;127mqueued · previous queued message waiting for interr…[39m 
-[38;2;167;192;128m┏━ [1m▶ Plan runner · working[22m ━━━━━━━━━━━━━━━━━━━━━━━━━━┓[39m
-[38;2;167;192;128m┃[39m [38;2;211;198;170mPlease inspect the exact border-box dimensions [39m    [38;2;167;192;128m┃[39m
-[38;2;167;192;128m┃[39m [38;2;211;198;170mbefore optimizing the layout.[1m█[39m[22m                     [38;2;167;192;128m┃[39m
-[38;2;167;192;128m┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ [39m[2m◂ Ada · T-017 ▸[22m[38;2;167;192;128m ━┛[39m
+ queued · previous queued message waiting for interr… 
+┏━ ▶ Plan runner · working ━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃ Please inspect the exact border-box dimensions     ┃
+┃ before optimizing the layout.█                     ┃
+┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ ◂ Ada · T-017 ▸ ━┛
                                                       
                                                       
                                                       

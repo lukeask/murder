@@ -6,8 +6,14 @@
  * colors from `isHigh` and the bar geometry (`filledCount` over `barWidth`).
  */
 
-import { selectUsageView, USAGE_BAR_WIDTH } from '../../src/selectors/usageSelectors.js';
+import {
+  formatRelativeFetchedAt,
+  selectUsageView,
+  USAGE_BAR_WIDTH,
+} from '../../src/selectors/usageSelectors.js';
 import type { UsageRow, UsageState } from '../../src/store/usage/usageSlice.js';
+
+const NOW = Date.parse('2026-06-09T12:00:00');
 
 function row(overrides: Partial<UsageRow> = {}): UsageRow {
   return {
@@ -27,10 +33,26 @@ function state(rows: readonly UsageRow[], overrides: Partial<UsageState> = {}): 
 
 /** First gauge of the first group — the common single-row assertion target. */
 function firstGauge(rows: readonly UsageRow[]) {
-  return selectUsageView(state(rows)).groups[0]?.gauges[0];
+  return selectUsageView(state(rows), NOW).groups[0]?.gauges[0];
+}
+
+function firstGroup(rows: readonly UsageRow[]) {
+  return selectUsageView(state(rows), NOW).groups[0];
 }
 
 describe('selectUsageView — formatting', () => {
+  it('formats fetchedAt as a relative timestamp on the harness group', () => {
+    expect(
+      firstGroup([row({ fetchedAt: '2026-06-09T11:58:00' })])?.fetchedAtLabel,
+    ).toBe('2m ago');
+    expect(
+      firstGroup([row({ fetchedAt: '2026-06-09T09:00:00' })])?.fetchedAtLabel,
+    ).toBe('3h ago');
+    expect(
+      firstGroup([row({ fetchedAt: '2026-06-07T12:00:00' })])?.fetchedAtLabel,
+    ).toBe('2d ago');
+  });
+
   it('formats pct as a rounded percentage label', () => {
     expect(firstGauge([row({ pct: 73.4 })])?.pctLabel).toBe('73%');
   });
@@ -87,6 +109,27 @@ describe('selectUsageView — formatting', () => {
   });
 });
 
+describe('formatRelativeFetchedAt — edge cases', () => {
+  it('omits the label when fetchedAt is missing or unparseable', () => {
+    expect(formatRelativeFetchedAt(undefined, NOW)).toBeUndefined();
+    expect(formatRelativeFetchedAt(null, NOW)).toBeUndefined();
+    expect(formatRelativeFetchedAt('', NOW)).toBeUndefined();
+    expect(formatRelativeFetchedAt('not-a-date', NOW)).toBeUndefined();
+    expect(firstGroup([row()])?.fetchedAtLabel).toBeUndefined();
+  });
+
+  it('formats sub-minute ages as "just now"', () => {
+    expect(formatRelativeFetchedAt('2026-06-09T11:59:30', NOW)).toBe('just now');
+    expect(firstGroup([row({ fetchedAt: '2026-06-09T11:59:30' })])?.fetchedAtLabel).toBe(
+      'just now',
+    );
+  });
+
+  it('formats multi-day ages as "Xd ago"', () => {
+    expect(formatRelativeFetchedAt('2026-06-04T12:00:00', NOW)).toBe('5d ago');
+  });
+});
+
 describe('selectUsageView — grouping', () => {
   it('groups windows under their harness in first-seen order', () => {
     const view = selectUsageView(
@@ -95,6 +138,7 @@ describe('selectUsageView — grouping', () => {
         row({ harness: 'codex', windowKey: 'weekly', pct: 70 }),
         row({ harness: 'cursor', windowKey: 'api', pct: 50 }),
       ]),
+      NOW,
     );
     expect(view.groups.map((g) => g.harness)).toEqual(['codex', 'cursor']);
     expect(view.groups[0]?.gauges.map((g) => g.windowKey)).toEqual(['5h', 'weekly']);
@@ -102,9 +146,9 @@ describe('selectUsageView — grouping', () => {
   });
 
   it('carries load flags through and computes isEmpty', () => {
-    expect(selectUsageView(state([])).isEmpty).toBe(true);
-    expect(selectUsageView(state([row()])).isEmpty).toBe(false);
-    const err = selectUsageView(state([], { status: 'error', error: 'boom' }));
+    expect(selectUsageView(state([]), NOW).isEmpty).toBe(true);
+    expect(selectUsageView(state([row()]), NOW).isEmpty).toBe(false);
+    const err = selectUsageView(state([], { status: 'error', error: 'boom' }), NOW);
     expect(err.status).toBe('error');
     expect(err.error).toBe('boom');
   });
@@ -112,7 +156,7 @@ describe('selectUsageView — grouping', () => {
   it('does not mutate the input slice', () => {
     const rows = [row({ harness: 'b', pct: 30 }), row({ harness: 'a', pct: 70 })];
     const original = [...rows];
-    selectUsageView(state(rows));
+    selectUsageView(state(rows), NOW);
     expect(rows).toEqual(original);
   });
 });

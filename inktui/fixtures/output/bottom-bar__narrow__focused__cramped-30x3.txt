@@ -1,3 +1,3 @@
- [2m[38;2;219;188;127mg[39m jump[22m [2m[38;2;219;188;127mspace[39m page[22m [2m[38;2;219;188;127mesc[39m close[22m  
- [2m[38;2;219;188;127malt+/[39m help[22m                   
+ g jump space page esc close  
+ alt+/ help                   
                               

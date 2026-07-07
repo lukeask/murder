@@ -614,17 +614,17 @@
       "fixtureId": "tickets-panel",
       "dataId": "mixed",
       "focused": true,
-      "width": 20,
+      "width": 25,
       "height": 5,
-      "file": "tickets-panel__mixed__focused__minimum-20x5.txt"
+      "file": "tickets-panel__mixed__focused__minimum-25x5.txt"
     },
     {
       "fixtureId": "tickets-panel",
       "dataId": "mixed",
       "focused": false,
-      "width": 20,
+      "width": 25,
       "height": 5,
-      "file": "tickets-panel__mixed__blurred__minimum-20x5.txt"
+      "file": "tickets-panel__mixed__blurred__minimum-25x5.txt"
     },
     {
       "fixtureId": "tickets-panel",
@@ -662,17 +662,17 @@
       "fixtureId": "tickets-panel",
       "dataId": "empty",
       "focused": true,
-      "width": 20,
+      "width": 25,
       "height": 5,
-      "file": "tickets-panel__empty__focused__minimum-20x5.txt"
+      "file": "tickets-panel__empty__focused__minimum-25x5.txt"
     },
     {
       "fixtureId": "tickets-panel",
       "dataId": "empty",
       "focused": false,
-      "width": 20,
+      "width": 25,
       "height": 5,
-      "file": "tickets-panel__empty__blurred__minimum-20x5.txt"
+      "file": "tickets-panel__empty__blurred__minimum-25x5.txt"
     },
     {
       "fixtureId": "crows-panel",
@@ -1059,100 +1059,100 @@
       "file": "usage-panel__empty__blurred__minimum-20x5.txt"
     },
     {
-      "fixtureId": "transit-panel",
+      "fixtureId": "tree-panel",
       "dataId": "railway",
       "focused": true,
       "width": 54,
       "height": 14,
-      "file": "transit-panel__railway__focused__preferred-54x14.txt"
+      "file": "tree-panel__railway__focused__preferred-54x14.txt"
     },
     {
-      "fixtureId": "transit-panel",
+      "fixtureId": "tree-panel",
       "dataId": "railway",
       "focused": false,
       "width": 54,
       "height": 14,
-      "file": "transit-panel__railway__blurred__preferred-54x14.txt"
+      "file": "tree-panel__railway__blurred__preferred-54x14.txt"
     },
     {
-      "fixtureId": "transit-panel",
+      "fixtureId": "tree-panel",
       "dataId": "railway",
       "focused": true,
       "width": 30,
       "height": 8,
-      "file": "transit-panel__railway__focused__cramped-30x8.txt"
+      "file": "tree-panel__railway__focused__cramped-30x8.txt"
     },
     {
-      "fixtureId": "transit-panel",
+      "fixtureId": "tree-panel",
       "dataId": "railway",
       "focused": false,
       "width": 30,
       "height": 8,
-      "file": "transit-panel__railway__blurred__cramped-30x8.txt"
+      "file": "tree-panel__railway__blurred__cramped-30x8.txt"
     },
     {
-      "fixtureId": "transit-panel",
+      "fixtureId": "tree-panel",
       "dataId": "railway",
       "focused": true,
-      "width": 20,
-      "height": 5,
-      "file": "transit-panel__railway__focused__minimum-20x5.txt"
+      "width": 25,
+      "height": 10,
+      "file": "tree-panel__railway__focused__minimum-25x10.txt"
     },
     {
-      "fixtureId": "transit-panel",
+      "fixtureId": "tree-panel",
       "dataId": "railway",
       "focused": false,
-      "width": 20,
-      "height": 5,
-      "file": "transit-panel__railway__blurred__minimum-20x5.txt"
+      "width": 25,
+      "height": 10,
+      "file": "tree-panel__railway__blurred__minimum-25x10.txt"
     },
     {
-      "fixtureId": "transit-panel",
+      "fixtureId": "tree-panel",
       "dataId": "pending",
       "focused": true,
       "width": 54,
       "height": 14,
-      "file": "transit-panel__pending__focused__preferred-54x14.txt"
+      "file": "tree-panel__pending__focused__preferred-54x14.txt"
     },
     {
-      "fixtureId": "transit-panel",
+      "fixtureId": "tree-panel",
       "dataId": "pending",
       "focused": false,
       "width": 54,
       "height": 14,
-      "file": "transit-panel__pending__blurred__preferred-54x14.txt"
+      "file": "tree-panel__pending__blurred__preferred-54x14.txt"
     },
     {
-      "fixtureId": "transit-panel",
+      "fixtureId": "tree-panel",
       "dataId": "pending",
       "focused": true,
       "width": 30,
       "height": 8,
-      "file": "transit-panel__pending__focused__cramped-30x8.txt"
+      "file": "tree-panel__pending__focused__cramped-30x8.txt"
     },
     {
-      "fixtureId": "transit-panel",
+      "fixtureId": "tree-panel",
       "dataId": "pending",
       "focused": false,
       "width": 30,
       "height": 8,
-      "file": "transit-panel__pending__blurred__cramped-30x8.txt"
+      "file": "tree-panel__pending__blurred__cramped-30x8.txt"
     },
     {
-      "fixtureId": "transit-panel",
+      "fixtureId": "tree-panel",
       "dataId": "pending",
       "focused": true,
-      "width": 20,
-      "height": 5,
-      "file": "transit-panel__pending__focused__minimum-20x5.txt"
+      "width": 25,
+      "height": 10,
+      "file": "tree-panel__pending__focused__minimum-25x10.txt"
     },
     {
-      "fixtureId": "transit-panel",
+      "fixtureId": "tree-panel",
       "dataId": "pending",
       "focused": false,
-      "width": 20,
-      "height": 5,
-      "file": "transit-panel__pending__blurred__minimum-20x5.txt"
+      "width": 25,
+      "height": 10,
+      "file": "tree-panel__pending__blurred__minimum-25x10.txt"
     },
     {
       "fixtureId": "doc-pane",
@@ -1251,100 +1251,100 @@
       "file": "doc-pane__long__blurred__minimum-20x5.txt"
     },
     {
-      "fixtureId": "chat-pane",
+      "fixtureId": "transcript-pane",
       "dataId": "mixed",
       "focused": true,
       "width": 54,
       "height": 14,
-      "file": "chat-pane__mixed__focused__preferred-54x14.txt"
+      "file": "transcript-pane__mixed__focused__preferred-54x14.txt"
     },
     {
-      "fixtureId": "chat-pane",
+      "fixtureId": "transcript-pane",
       "dataId": "mixed",
       "focused": false,
       "width": 54,
       "height": 14,
-      "file": "chat-pane__mixed__blurred__preferred-54x14.txt"
+      "file": "transcript-pane__mixed__blurred__preferred-54x14.txt"
     },
     {
-      "fixtureId": "chat-pane",
+      "fixtureId": "transcript-pane",
       "dataId": "mixed",
       "focused": true,
       "width": 30,
       "height": 8,
-      "file": "chat-pane__mixed__focused__cramped-30x8.txt"
+      "file": "transcript-pane__mixed__focused__cramped-30x8.txt"
     },
     {
-      "fixtureId": "chat-pane",
+      "fixtureId": "transcript-pane",
       "dataId": "mixed",
       "focused": false,
       "width": 30,
       "height": 8,
-      "file": "chat-pane__mixed__blurred__cramped-30x8.txt"
+      "file": "transcript-pane__mixed__blurred__cramped-30x8.txt"
     },
     {
-      "fixtureId": "chat-pane",
+      "fixtureId": "transcript-pane",
       "dataId": "mixed",
       "focused": true,
       "width": 20,
       "height": 5,
-      "file": "chat-pane__mixed__focused__minimum-20x5.txt"
+      "file": "transcript-pane__mixed__focused__minimum-20x5.txt"
     },
     {
-      "fixtureId": "chat-pane",
+      "fixtureId": "transcript-pane",
       "dataId": "mixed",
       "focused": false,
       "width": 20,
       "height": 5,
-      "file": "chat-pane__mixed__blurred__minimum-20x5.txt"
+      "file": "transcript-pane__mixed__blurred__minimum-20x5.txt"
     },
     {
-      "fixtureId": "chat-pane",
+      "fixtureId": "transcript-pane",
       "dataId": "long",
       "focused": true,
       "width": 54,
       "height": 14,
-      "file": "chat-pane__long__focused__preferred-54x14.txt"
+      "file": "transcript-pane__long__focused__preferred-54x14.txt"
     },
     {
-      "fixtureId": "chat-pane",
+      "fixtureId": "transcript-pane",
       "dataId": "long",
       "focused": false,
       "width": 54,
       "height": 14,
-      "file": "chat-pane__long__blurred__preferred-54x14.txt"
+      "file": "transcript-pane__long__blurred__preferred-54x14.txt"
     },
     {
-      "fixtureId": "chat-pane",
+      "fixtureId": "transcript-pane",
       "dataId": "long",
       "focused": true,
       "width": 30,
       "height": 8,
-      "file": "chat-pane__long__focused__cramped-30x8.txt"
+      "file": "transcript-pane__long__focused__cramped-30x8.txt"
     },
     {
-      "fixtureId": "chat-pane",
+      "fixtureId": "transcript-pane",
       "dataId": "long",
       "focused": false,
       "width": 30,
       "height": 8,
-      "file": "chat-pane__long__blurred__cramped-30x8.txt"
+      "file": "transcript-pane__long__blurred__cramped-30x8.txt"
     },
     {
-      "fixtureId": "chat-pane",
+      "fixtureId": "transcript-pane",
       "dataId": "long",
       "focused": true,
       "width": 20,
       "height": 5,
-      "file": "chat-pane__long__focused__minimum-20x5.txt"
+      "file": "transcript-pane__long__focused__minimum-20x5.txt"
     },
     {
-      "fixtureId": "chat-pane",
+      "fixtureId": "transcript-pane",
       "dataId": "long",
       "focused": false,
       "width": 20,
       "height": 5,
-      "file": "chat-pane__long__blurred__minimum-20x5.txt"
+      "file": "transcript-pane__long__blurred__minimum-20x5.txt"
     },
     {
       "fixtureId": "chat-input",

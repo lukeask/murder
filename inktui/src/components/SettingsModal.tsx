@@ -53,7 +53,7 @@ import { AppStoreContext } from '../hooks/useAppStore.js';
 import { useModalHeight, useModalWidth, useTerminalSize } from '../hooks/useTerminalSize.js';
 import { ACTIONS, type ActionId, type Modifier, resolveBindings } from '../input/bindings.js';
 import type { Mode, ModeStoreApi } from '../input/modeStore.js';
-import { harnessLabel } from '../selectors/harnessDisplay.js';
+import { harnessLabel, harnessShortLabel } from '../selectors/harnessDisplay.js';
 import type {
   LlmEnvWire,
   LlmProviderId,
@@ -77,6 +77,7 @@ import {
 import {
   defaultEffortFor,
   defaultModelFor,
+  HARNESSES,
   startupRogueEffortsFor,
 } from './settings/items/harnesses.js';
 import { REBINDABLE, RESERVED_KEYS } from './settings/items/keybindings.js';
@@ -84,6 +85,11 @@ import { ENV_PROVIDERS, mergedTiers, tierNames } from './settings/items/llm.js';
 import { TEMPLATE_NAME_RE } from './settings/items/templates.js';
 import type { SettingsCategoryId, SettingsRow } from './settings/types.js';
 import { deleteLastChar, insertChar, TextInput } from './TextInput.js';
+import {
+  type BarWidgetId,
+  type BarWidgetsConfig,
+  resolveBarWidgetConfig,
+} from '../selectors/barWidgetRegistry.js';
 
 // Bring the dispatcher's `onUncaptured` augmentation into scope (the printable/capture router needs it).
 import '../input/dispatcher.js';
@@ -152,6 +158,8 @@ interface SettingsState {
   paneGap: number;
   /** The draft vim-mode flag (committed via `update` on selection). */
   vimMode: boolean;
+  /** Draft bar-widget overrides (partial map; defaults resolved via the registry). */
+  barWidgets: BarWidgetsConfig;
   /** The draft default chat view mode (TUIchat-3; committed via `update` on selection). Only
    * verbose/condensed are settable — tmux is reachable only via the per-pane cycle key. */
   defaultChatViewMode: DefaultChatViewMode;
@@ -249,6 +257,7 @@ export function settingsMode(
     readonly theme: ThemeId;
     readonly paneGap: number;
     readonly vimMode?: boolean;
+    readonly barWidgets?: BarWidgetsConfig;
     readonly defaultChatViewMode?: DefaultChatViewMode;
     readonly startupRogue?: StartupRogueWire | null;
     readonly startupRogueModels?: Readonly<Record<string, readonly StartupRogueModelWire[]>>;
@@ -292,6 +301,7 @@ export function settingsMode(
     startupRogueEfforts: initialStartupRogueEfforts,
     templates: initialTemplates,
     themes: initialThemes,
+    barWidgets: current.barWidgets ?? {},
   });
   const initialCursor = firstSelectableFrom(initialRows, 0);
   const s: SettingsState = {
@@ -306,6 +316,7 @@ export function settingsMode(
     theme: current.theme,
     paneGap: current.paneGap,
     vimMode: current.vimMode ?? false,
+    barWidgets: { ...(current.barWidgets ?? {}) },
     defaultChatViewMode: current.defaultChatViewMode ?? 'verbose',
     startupRogue: initialStartupRogue,
     startupRogueModels: initialStartupRogueModels,
@@ -369,6 +380,7 @@ export function settingsMode(
       startupRogueEfforts: s.startupRogueEfforts,
       templates: s.templates,
       themes: s.themes,
+      barWidgets: s.barWidgets,
     });
   }
 
@@ -490,6 +502,43 @@ export function settingsMode(
     void actions.update({ vim_mode: value });
     s.notice = null;
     refresh();
+  }
+
+  function patchBarWidget(
+    widgetId: BarWidgetId,
+    patch: {
+      enabled?: boolean;
+      placement?: 'top' | 'bottom';
+      adaptive?: boolean;
+      harnesses?: readonly string[];
+    },
+  ): void {
+    const current = resolveBarWidgetConfig(widgetId, s.barWidgets);
+    const merged = {
+      enabled: current.enabled,
+      placement: current.placement,
+      adaptive: current.adaptive,
+      ...(current.harnesses !== undefined ? { harnesses: [...current.harnesses] } : {}),
+      ...patch,
+    };
+    s.barWidgets = { ...s.barWidgets, [widgetId]: merged };
+    void actions.update({ bar_widgets: { [widgetId]: merged } });
+    s.notice = null;
+    refresh();
+  }
+
+  function toggleUsageBarHarness(harness: string): void {
+    const config = resolveBarWidgetConfig('usage', s.barWidgets);
+    const all = [...HARNESSES];
+    const current =
+      config.harnesses === undefined || config.harnesses.length === 0 ? all : [...config.harnesses];
+    const checked = current.includes(harness);
+    const next = checked ? current.filter((h) => h !== harness) : [...current, harness];
+    const normalized =
+      next.length === 0 || next.length === all.length
+        ? []
+        : next.sort((a, b) => all.indexOf(a) - all.indexOf(b));
+    patchBarWidget('usage', { harnesses: normalized });
   }
 
   /** Commit the draft default chat view mode (TUIchat-3, optimistic update). A pane with no per-pane
@@ -943,6 +992,18 @@ export function settingsMode(
         break;
       case 'vim':
         selectVim(row.value);
+        break;
+      case 'barWidget':
+        if (row.field === 'enabled') {
+          patchBarWidget(row.widgetId, { enabled: row.value });
+        } else if (row.field === 'adaptive') {
+          patchBarWidget(row.widgetId, { adaptive: row.value });
+        } else if (row.field === 'placement') {
+          patchBarWidget(row.widgetId, { placement: row.value });
+        }
+        break;
+      case 'barWidgetHarness':
+        toggleUsageBarHarness(row.value);
         break;
       case 'chatView':
         selectChatView(row.value);
@@ -1593,6 +1654,58 @@ function RowView({
           {cursor}
           {mark}
           {row.value ? 'on' : 'off'}
+        </Text>
+      </Box>
+    );
+  }
+
+  if (row.kind === 'barWidget') {
+    const config = resolveBarWidgetConfig(row.widgetId, s.barWidgets);
+    const selected =
+      row.field === 'enabled'
+        ? row.value === config.enabled
+        : row.field === 'adaptive'
+          ? row.value === config.adaptive
+          : row.value === config.placement;
+    const mark = selected ? '(•) ' : '( ) ';
+    const color = focused ? theme.warning : theme.text;
+    const label =
+      row.field === 'enabled'
+        ? row.value
+          ? 'on'
+          : 'off'
+        : row.field === 'adaptive'
+          ? row.value
+            ? 'adaptive'
+            : 'show all'
+          : row.value === 'top'
+            ? 'top bar'
+            : 'bottom bar';
+    return (
+      <Box flexShrink={0}>
+        <Text color={color} bold={focused}>
+          {cursor}
+          {mark}
+          {label}
+        </Text>
+      </Box>
+    );
+  }
+
+  if (row.kind === 'barWidgetHarness') {
+    const config = resolveBarWidgetConfig(row.widgetId, s.barWidgets);
+    const selected = config.harnesses;
+    const checked =
+      selected === undefined || selected.length === 0 ? true : selected.includes(row.value);
+    const mark = checked ? '[x] ' : '[ ] ';
+    const color = focused ? theme.warning : theme.text;
+    const label = harnessShortLabel(row.value);
+    return (
+      <Box flexShrink={0}>
+        <Text color={color} bold={focused}>
+          {cursor}
+          {mark}
+          {label}
         </Text>
       </Box>
     );

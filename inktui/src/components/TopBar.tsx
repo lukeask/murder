@@ -5,17 +5,49 @@
  * store's visible set: it reads the set, runs the {@link selectTopBar} view-model (rule 2 — the
  * label formatting lives in the selector), and paints each label highlighted iff its panel is on.
  *
+ * Enabled top-bar widgets (Phase 3.1) render in the remaining right-side space before the connection
+ * badge; they truncate/drop rather than wrap so the bar stays exactly one line.
+ *
  * `project` is the current project/repo name, threaded from the entrypoint (the launcher hands it
  * over via `MURDER_PROJECT`; see index.tsx). When unknown (smoke/tests) only the `murder` mark shows.
  */
 
 import { Box, Text } from 'ink';
 import { memo, useMemo } from 'react';
+import { useAppStore } from '../hooks/useAppStore.js';
 import { usePanelStore } from '../hooks/useInputStores.js';
-import { selectTopBar } from '../selectors/barSelectors.js';
+import { useTerminalSize } from '../hooks/useTerminalSize.js';
+import {
+  connectionBadgeWidth,
+  estimateTopBarLeftWidth,
+  layoutTopBarWidgets,
+  selectTopBar,
+  selectTopBarWidgetSegments,
+  TOP_BAR_PADDING,
+  TOP_BAR_RIGHT_CLUSTER_GAP,
+  type TopBarWidgetSegment,
+} from '../selectors/barSelectors.js';
 import { type ConnectionStatus, useConnectionStatus } from '../store/connection/connectionStore.js';
 import type { Theme } from '../theme/buildTheme.js';
 import { useTheme } from '../theme/themeStore.js';
+import { TextRuns } from './TextRuns.js';
+
+function TopBarWidgetCluster({
+  segments,
+}: {
+  readonly segments: readonly TopBarWidgetSegment[];
+}): React.JSX.Element | null {
+  if (segments.length === 0) {
+    return null;
+  }
+  return (
+    <Box flexDirection="row" columnGap={1}>
+      {segments.map((segment) => (
+        <TextRuns key={segment.widgetId} runs={segment.runs} />
+      ))}
+    </Box>
+  );
+}
 
 export const TopBar = memo(function TopBar({
   project,
@@ -25,30 +57,37 @@ export const TopBar = memo(function TopBar({
   const theme = useTheme();
   const status = useConnectionStatus();
   const visible = usePanelStore((s) => s.visible);
-  // The selector turns the visible set into render-ready labels; memoised on the set identity (the
-  // panel store ref-swaps the set only on change, so this re-formats only on a real toggle).
+  const barWidgets = useAppStore((s) => s.settings.barWidgets);
+  const usage = useAppStore((s) => s.usage);
+  const { columns } = useTerminalSize();
   const labels = useMemo(() => selectTopBar(visible), [visible]);
+  const rawSegments = useMemo(
+    () => selectTopBarWidgetSegments(barWidgets, { usage, keyUsage: {}, now: 0 }),
+    [barWidgets, usage],
+  );
+  const widgetAvail = useMemo(() => {
+    const left = estimateTopBarLeftWidth(project, labels);
+    const badge = connectionBadgeWidth(status);
+    const clusterGap = badge > 0 || rawSegments.length > 0 ? TOP_BAR_RIGHT_CLUSTER_GAP : 0;
+    return Math.max(0, columns - TOP_BAR_PADDING - left - badge - clusterGap);
+  }, [columns, project, labels, status, rawSegments.length]);
+  const widgetSegments = useMemo(
+    () => layoutTopBarWidgets(rawSegments, widgetAvail),
+    [rawSegments, widgetAvail],
+  );
   return (
-    // `justifyContent="space-between"` pins the connection badge to the right edge while the existing
-    // branding + panel-label group stays left, so neither shifts the other (the badge is silent —
-    // and absent — for the steady `connected`/`unknown` states, see `ConnectionBadge`).
     <Box flexDirection="row" paddingX={1} justifyContent="space-between">
       <Box flexDirection="row">
-        {/* Branding: a bold `murder` mark + the dim project name, then a gap before the panel labels. */}
         <Box flexDirection="row" columnGap={1} marginRight={3}>
           <Text bold color={theme.brand}>
             murder
           </Text>
           {project !== undefined && project.length > 0 && (
-            // A middot separator keeps the coral brand and the project name from running together
-            // (`murder · testingmurderharness`), since adjacent Text nodes otherwise abut visually.
             <Text color={theme.muted}>{`· ${project}`}</Text>
           )}
         </Box>
         <Box flexDirection="row" columnGap={1}>
           {labels.map((label) => (
-            // Toggled panels are bold/coloured; off panels are dim — so the bar reads view state at a
-            // glance (the plan's whole point: the top bar shows what's on, not just the active view).
             <Box key={label.id} flexDirection="row" columnGap={1}>
               {label.dividerBefore === true && <Text color={theme.muted}>·</Text>}
               <Text bold={label.active} color={label.active ? theme.active : theme.inactive}>
@@ -58,7 +97,10 @@ export const TopBar = memo(function TopBar({
           ))}
         </Box>
       </Box>
-      <ConnectionBadge status={status} theme={theme} />
+      <Box flexDirection="row" columnGap={1}>
+        <TopBarWidgetCluster segments={widgetSegments} />
+        <ConnectionBadge status={status} theme={theme} />
+      </Box>
     </Box>
   );
 });
@@ -87,7 +129,6 @@ function ConnectionBadge({
     case 'version-mismatch':
       return <Text color={theme.error}>[version mismatch — restart murder]</Text>;
     default:
-      // 'connected' and 'unknown' show no badge.
       return null;
   }
 }

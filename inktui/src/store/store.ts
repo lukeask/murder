@@ -618,6 +618,7 @@ function toUsageRow(dto: ScheduleUsageGaugeDto): UsageRow {
     tUntilResetMinutes: dto.t_until_reset_minutes,
     tPeriodMinutes: dto.t_period_minutes ?? 0,
     steering: dto.steering ?? 'auto',
+    fetchedAt: dto.fetched_at ?? null,
   };
 }
 
@@ -631,6 +632,7 @@ function applySettingsWire(prev: SettingsState, wire: SettingsWire | undefined):
     keyOverrides: wire.key_overrides ?? prev.keyOverrides,
     paneGap: wire.pane_gap ?? prev.paneGap,
     vimMode: wire.vim_mode ?? prev.vimMode,
+    barWidgets: wire.bar_widgets ?? prev.barWidgets,
     defaultChatViewMode: wire.default_chat_view_mode ?? prev.defaultChatViewMode,
     startupRogue: 'startup_rogue' in wire ? wire.startup_rogue : prev.startupRogue,
     startupRogueModels: wire.startup_rogue_models ?? prev.startupRogueModels,

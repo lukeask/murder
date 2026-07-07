@@ -1,5 +1,5 @@
-[2mname[22m                
+name                
   row one           
-[48;2;60;72;65m▌ row two           [49m
+▌ row two           
   row three         
-[48;2;46;56;60m  row four          [49m
+  row four          

@@ -1,0 +1,8 @@
+╭─ Plan runner with long ti… ╮
+│▌ Snapshot output is ANSI   │
+│▏ text and can be inspected │
+│▏  directly in a terminal.  █
+│▏ Long assistant prose      █
+│▏ intentionally wraps       █
+│▏ inside the pane body.     █
+╰─codex   TUIlayoutrefactor ─╯

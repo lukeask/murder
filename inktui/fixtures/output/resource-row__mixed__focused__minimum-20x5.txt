@@ -1,5 +1,5 @@
-[2mname[22m                
-[2msize · updated[22m      
-[48;2;60;72;65m★ Root investigatio…[49m
-[48;2;60;72;65m12.4k · Jun. 21 09:…[49m
+name                
+size · updated      
+★ Root investigatio…
+12.4k · Jun. 21 09:…
                     

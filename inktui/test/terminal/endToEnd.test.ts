@@ -69,7 +69,6 @@ describe('ctrl+1 raw bytes → shim → dispatch → focusPanel(plans)', () => {
       murderPending: vi.fn(() => false),
       murderConfirm: vi.fn(),
       murderCancel: vi.fn(),
-      closePane: vi.fn(),
     };
     const ctx: DispatchContext = {
       focusedId: CHAT_FOCUS,
@@ -80,7 +79,7 @@ describe('ctrl+1 raw bytes → shim → dispatch → focusPanel(plans)', () => {
     };
     const outcome = dispatchKey(input, key, ctx);
 
-    expect(outcome).toEqual({ layer: 'global', handled: true });
+    expect(outcome).toMatchObject({ layer: 'global', handled: true });
     expect(focusPanel).toHaveBeenCalledWith('plans');
   });
 });
@@ -131,7 +130,6 @@ describe('ctrl+j raw bytes → shim → dispatch → toggleTargetGroup', () => {
       murderPending: vi.fn(() => false),
       murderConfirm: vi.fn(),
       murderCancel: vi.fn(),
-      closePane: vi.fn(),
     };
     const ctx: DispatchContext = {
       focusedId: CHAT_FOCUS,
@@ -142,7 +140,7 @@ describe('ctrl+j raw bytes → shim → dispatch → toggleTargetGroup', () => {
     };
     const outcome = dispatchKey(input, key, ctx);
 
-    expect(outcome).toEqual({ layer: 'global', handled: true });
+    expect(outcome).toMatchObject({ layer: 'global', handled: true });
     expect(toggleTargetGroup).toHaveBeenCalledOnce();
     expect(navigate).not.toHaveBeenCalled();
   });
@@ -193,7 +191,6 @@ describe('ctrl+h raw bytes → shim → dispatch (travel-left + cycleTargetPrev)
       murderPending: vi.fn(() => false),
       murderConfirm: vi.fn(),
       murderCancel: vi.fn(),
-      closePane: vi.fn(),
       ...over,
     };
   }
@@ -211,7 +208,7 @@ describe('ctrl+h raw bytes → shim → dispatch (travel-left + cycleTargetPrev)
     };
     const outcome = dispatchKey(input, key, ctx);
 
-    expect(outcome).toEqual({ layer: 'global', handled: true });
+    expect(outcome).toMatchObject({ layer: 'global', handled: true });
     expect(navigate).toHaveBeenCalledWith('left');
     expect(handlers.cycleTargetPrev).not.toHaveBeenCalled();
   });
@@ -229,7 +226,7 @@ describe('ctrl+h raw bytes → shim → dispatch (travel-left + cycleTargetPrev)
     };
     const outcome = dispatchKey(input, key, ctx);
 
-    expect(outcome).toEqual({ layer: 'global', handled: true });
+    expect(outcome).toMatchObject({ layer: 'global', handled: true });
     expect(cycleTargetPrev).toHaveBeenCalledTimes(1);
     expect(handlers.navigate).not.toHaveBeenCalled();
   });
@@ -279,7 +276,6 @@ describe('ctrl+m raw bytes → shim → dispatch (murder arm + pending confirm)'
       murderPending: vi.fn(() => false),
       murderConfirm: vi.fn(),
       murderCancel: vi.fn(),
-      closePane: vi.fn(),
       ...over,
     };
   }
@@ -297,7 +293,7 @@ describe('ctrl+m raw bytes → shim → dispatch (murder arm + pending confirm)'
     };
     const outcome = dispatchKey(input, key, ctx);
 
-    expect(outcome).toEqual({ layer: 'global', handled: true });
+    expect(outcome).toMatchObject({ layer: 'global', handled: true });
     expect(murder).toHaveBeenCalledTimes(1);
   });
 
@@ -317,7 +313,7 @@ describe('ctrl+m raw bytes → shim → dispatch (murder arm + pending confirm)'
     };
     const outcome = dispatchKey(input, key, ctx);
 
-    expect(outcome).toEqual({ layer: 'global', handled: true });
+    expect(outcome).toMatchObject({ layer: 'global', handled: true });
     expect(murderConfirm).toHaveBeenCalledTimes(1);
     expect(handlers.murder).not.toHaveBeenCalled();
   });

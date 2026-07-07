@@ -27,6 +27,7 @@
 
 import type { StoreApi } from 'zustand';
 import type { BusClient } from '../../bus/BusClient.js';
+import type { BarWidgetsConfig } from '../../selectors/barWidgetRegistry.js';
 import type { AppStore } from '../store.js';
 import { toastStore } from '../toast/toastStore.js';
 import type { DefaultChatViewMode, SettingsModifier, SettingsState } from './settingsSlice.js';
@@ -95,6 +96,8 @@ export interface SettingsWire {
   readonly pane_gap: number;
   /** Whether vim-style editing is enabled in the chat input. Mirrors `TuiUserConfig.vim_mode`. */
   readonly vim_mode: boolean;
+  /** Per-widget bar configuration. Mirrors `TuiUserConfig.bar_widgets`. */
+  readonly bar_widgets: BarWidgetsConfig;
   /** Default chat view mode for panes with no override. Mirrors `TuiUserConfig.default_chat_view_mode`. */
   readonly default_chat_view_mode: DefaultChatViewMode;
   /** The user's Startup Rogue (auto-spawned on boot), or `null` when none is set. */
@@ -137,6 +140,7 @@ export interface SettingsPatch {
   key_overrides?: Readonly<Record<string, string>>;
   pane_gap?: number;
   vim_mode?: boolean;
+  bar_widgets?: BarWidgetsConfig;
   default_chat_view_mode?: DefaultChatViewMode;
   /** Set/replace the Startup Rogue, or `null` to clear it. */
   startup_rogue?: StartupRogueWire | null;
@@ -195,6 +199,7 @@ function applyWire(prev: SettingsState, wire: SettingsWire | undefined): Setting
     keyOverrides: wire.key_overrides ?? prev.keyOverrides,
     paneGap: wire.pane_gap ?? prev.paneGap,
     vimMode: wire.vim_mode ?? prev.vimMode,
+    barWidgets: wire.bar_widgets ?? prev.barWidgets,
     defaultChatViewMode: wire.default_chat_view_mode ?? prev.defaultChatViewMode,
     // Nullable on the wire (null = "no startup rogue") — honour `null` via key-presence, not `??`.
     startupRogue: 'startup_rogue' in wire ? wire.startup_rogue : prev.startupRogue,
@@ -246,6 +251,7 @@ export function createSettingsActions(bus: BusClient, store: StoreApi<AppStore>)
           ...(partial.key_overrides !== undefined ? { keyOverrides: partial.key_overrides } : {}),
           ...(partial.pane_gap !== undefined ? { paneGap: partial.pane_gap } : {}),
           ...(partial.vim_mode !== undefined ? { vimMode: partial.vim_mode } : {}),
+          ...(partial.bar_widgets !== undefined ? { barWidgets: partial.bar_widgets } : {}),
           ...(partial.default_chat_view_mode !== undefined
             ? { defaultChatViewMode: partial.default_chat_view_mode }
             : {}),

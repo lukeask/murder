@@ -62,6 +62,7 @@ def test_settings_get_returns_defaults_when_no_config(repo_root: Path, xdg: Path
     assert s["key_overrides"] == {}
     assert s["pane_gap"] == 0
     assert s["vim_mode"] is False
+    assert s["bar_widgets"] == {}
     # No user override -> None; effective comes from the live daemon config (codex).
     assert s["collaborator_harness"] is None
     assert s["planner_harness"] is None
@@ -131,6 +132,141 @@ def test_settings_update_vim_mode_partial_merge(repo_root: Path, xdg: Path) -> N
     reply = _call(host, "settings.update", {"settings": {"pane_gap": 2}})
     assert reply["settings"]["vim_mode"] is True
     assert reply["settings"]["pane_gap"] == 2
+
+
+def test_settings_update_bar_widgets_persists_and_roundtrips(repo_root: Path, xdg: Path) -> None:
+    host = _host(repo_root)
+    reply = _call(
+        host,
+        "settings.update",
+        {"settings": {"bar_widgets": {"hints": {"enabled": False, "placement": "bottom"}}}},
+    )
+    assert reply["settings"]["bar_widgets"] == {
+        "hints": {"enabled": False, "placement": "bottom", "adaptive": True},
+    }
+    again = _call(host, "settings.get", {})
+    assert again["settings"]["bar_widgets"]["hints"]["enabled"] is False
+    cfg = load_user_config()
+    assert cfg.tui.bar_widgets["hints"].enabled is False
+
+
+def test_settings_update_bar_widgets_partial_merge(repo_root: Path, xdg: Path) -> None:
+    host = _host(repo_root)
+    _call(
+        host,
+        "settings.update",
+        {"settings": {"bar_widgets": {"hints": {"enabled": False, "placement": "bottom"}}}},
+    )
+    reply = _call(
+        host,
+        "settings.update",
+        {"settings": {"bar_widgets": {"hints": {"enabled": True}}}},
+    )
+    assert reply["settings"]["bar_widgets"]["hints"] == {
+        "enabled": True,
+        "placement": "bottom",
+        "adaptive": True,
+    }
+    _call(host, "settings.update", {"settings": {"pane_gap": 1}})
+    again = _call(host, "settings.get", {})
+    assert again["settings"]["bar_widgets"]["hints"]["enabled"] is True
+    assert again["settings"]["pane_gap"] == 1
+
+
+def test_settings_update_bar_widgets_adaptive_roundtrips(repo_root: Path, xdg: Path) -> None:
+    host = _host(repo_root)
+    reply = _call(
+        host,
+        "settings.update",
+        {
+            "settings": {
+                "bar_widgets": {
+                    "hints": {"enabled": True, "placement": "bottom", "adaptive": False}
+                }
+            }
+        },
+    )
+    assert reply["settings"]["bar_widgets"]["hints"] == {
+        "enabled": True,
+        "placement": "bottom",
+        "adaptive": False,
+    }
+    again = _call(host, "settings.get", {})
+    assert again["settings"]["bar_widgets"]["hints"]["adaptive"] is False
+    cfg = load_user_config()
+    assert cfg.tui.bar_widgets["hints"].adaptive is False
+
+
+def test_settings_update_usage_bar_widget_harnesses_persist_and_roundtrip(
+    repo_root: Path, xdg: Path
+) -> None:
+    host = _host(repo_root)
+    reply = _call(
+        host,
+        "settings.update",
+        {
+            "settings": {
+                "bar_widgets": {
+                    "usage": {
+                        "enabled": True,
+                        "placement": "top",
+                        "harnesses": ["codex", "claude_code"],
+                    }
+                }
+            }
+        },
+    )
+    assert reply["settings"]["bar_widgets"]["usage"] == {
+        "enabled": True,
+        "placement": "top",
+        "adaptive": True,
+        "harnesses": ["codex", "claude_code"],
+    }
+    cfg = load_user_config()
+    assert cfg.tui.bar_widgets["usage"].harnesses == ["codex", "claude_code"]
+    again = _call(host, "settings.get", {})
+    assert again["settings"]["bar_widgets"]["usage"]["harnesses"] == ["codex", "claude_code"]
+
+
+def test_settings_update_usage_bar_widget_empty_harnesses_means_all(
+    repo_root: Path, xdg: Path
+) -> None:
+    host = _host(repo_root)
+    _call(
+        host,
+        "settings.update",
+        {
+            "settings": {
+                "bar_widgets": {
+                    "usage": {"enabled": True, "placement": "top", "harnesses": ["codex"]}
+                }
+            }
+        },
+    )
+    reply = _call(
+        host,
+        "settings.update",
+        {"settings": {"bar_widgets": {"usage": {"harnesses": []}}}},
+    )
+    usage = reply["settings"]["bar_widgets"]["usage"]
+    assert "harnesses" not in usage
+    assert load_user_config().tui.bar_widgets["usage"].harnesses is None
+
+
+def test_settings_update_usage_bar_widget_rejects_invalid_harness(
+    repo_root: Path, xdg: Path
+) -> None:
+    host = _host(repo_root)
+    with pytest.raises(ValueError, match="invalid bar widget harness"):
+        _call(
+            host,
+            "settings.update",
+            {
+                "settings": {
+                    "bar_widgets": {"usage": {"harnesses": ["not_a_harness"]}}
+                }
+            },
+        )
 
 
 # --- startup rogue RPC ---

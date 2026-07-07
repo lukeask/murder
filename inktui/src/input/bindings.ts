@@ -56,9 +56,8 @@ export type ActionId =
   | 'global.cycleTargetPrev' // alt+h / ctrl+h — cycle the recipient target to the previous one (chat-focus only)
   | 'global.toggleTargetGroup' // ctrl+j — toggle recipient target between locked-visible and favorite-only groups
   | 'global.cycleTargetNext' // alt+l / ctrl+l — cycle the recipient target to the next one (chat-focus only)
-  | 'global.toggleTargetPane' // alt+w / ctrl+w — toggle the current recipient target's transcript pane (chat-focus only)
+  | 'global.toggleTargetPane' // alt+w / ctrl+w — toggle show/hide for the active transcript or doc pane (chat or stage focus)
   | 'global.murder' // ctrl+m — arm the murder confirm for the targeted crow (plain, kitty side-channel)
-  | 'global.closePane' // ctrl+q — close the highlighted Stage pane (transcript / doc); plain chord
   | 'global.repaint' // ctrl+r — force a full terminal redraw (plain; ctrl+l is cycleTargetNext)
   | 'panel.star' // alt+f — favorite/star the focused panel's cursor row
   | 'panel.resetCrow' // x — arm the two-press reset for the crows panel's cursor row
@@ -204,11 +203,10 @@ export const ACTIONS: Readonly<Record<ActionId, ActionDef>> = {
   },
   'global.toggleTargetPane': {
     id: 'global.toggleTargetPane',
-    // Item 9: toggle the current recipient target's transcript pane from the chat box. The plan suggested command('o')
-    // but 'o' is TAKEN by `global.settings` (and the plan's proposed fix — moving settings to ',' — is
-    // itself unreachable, the alt+, problem). 'w' (mnemonic: toggle the transcript pane) is
-    // unclaimed by any other action, reachable under both alt (alt+w) and ctrl (ctrl+w rides a clean
-    // control byte 0x17), and is not a panel-local plain key. Chat-focus only. FLAGGED for arbitration.
+    // Item 9: toggle show/hide for the active transcript or doc pane. From chat: toggle the current
+    // recipient target's transcript pane. From a Stage pane: hide the focused transcript or doc pane.
+    // 'w' is unclaimed by any other action, reachable under both alt (alt+w) and ctrl (ctrl+w rides a
+    // clean control byte 0x17), and is not a panel-local plain key. Chat-or-stage focus only.
     default: command('w'),
     description: 'toggle pane',
     rebindable: true,
@@ -236,18 +234,6 @@ export const ACTIONS: Readonly<Record<ActionId, ActionDef>> = {
     // re-point of this one.
     default: { kind: 'plain', chord: { key: { ctrl: true, return: true } }, label: 'C-m' },
     description: 'murder crow',
-    rebindable: false,
-  },
-  'global.closePane': {
-    id: 'global.closePane',
-    // ctrl+q — close the currently-highlighted Stage pane (a transcript pane or the open doc). A
-    // `plain` (NOT command-modified) chord: ctrl+q arrives as the clean legacy byte 0x11, which Ink
-    // reports as `{ ctrl: true, input: 'q' }` — the same modifier-independent shape as `global.quickNote`
-    // (ctrl+n). The dispatcher matches it ahead of the command-modifier gate and only claims it when a
-    // Stage pane holds focus, so it never shadows typing or a panel key. Not rebindable (a single fixed
-    // muscle-memory chord, like quickNote).
-    default: { kind: 'plain', chord: { input: 'q', key: { ctrl: true } } },
-    description: 'close pane',
     rebindable: false,
   },
   'global.repaint': {

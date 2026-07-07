@@ -1,14 +1,14 @@
-[38;2;167;192;128m┏━ [1m.murder/reports/very-long-fixture-report-name.md[22m ━┓[39m
-[38;2;167;192;128m┃[39m Line 4: deterministic content.                     [38;2;167;192;128m┃[39m
-[38;2;167;192;128m┃[39m Line 5: deterministic content.                     [38;2;167;192;128m┃[39m
-[38;2;167;192;128m┃[39m Line 6: deterministic content.                     [38;2;167;192;128m┃[39m
-[38;2;167;192;128m┃[39m Line 7: deterministic content.                     [38;2;167;192;128m┃[39m
-[38;2;167;192;128m┃[39m Line 8: deterministic content.                     [38;2;167;192;128m┃[39m
-[38;2;167;192;128m┃[39m Line 9: deterministic content.                     [38;2;167;192;128m┃[39m
-[38;2;167;192;128m┃[39m Line 10: deterministic content.                    [38;2;167;192;128m┃[39m
-[38;2;167;192;128m┃[39m                                                    [38;2;167;192;128m┃[39m
-[38;2;167;192;128m┃[39m                                                    [38;2;167;192;128m┃[39m
-[38;2;167;192;128m┃[39m                                                    [38;2;167;192;128m┃[39m
-[38;2;167;192;128m┃[39m                                                    [38;2;167;192;128m┃[39m
-[38;2;167;192;128m┃[39m                                                    [38;2;167;192;128m┃[39m
-[38;2;167;192;128m┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛[39m
+┏━ very-long-fixture-report-name ━━━━━━━━━━━━━━━━━━━━┓
+┃# Long report                                       ┃
+┃                                                    ┃
+┃The pane should show a scrollbar when there are more┃
+┃ lines than fit.                                    ┃
+┃Line 4: deterministic content.                      ┃
+┃Line 5: deterministic content.                      ┃
+┃Line 6: deterministic content.                      ┃
+┃Line 7: deterministic content.                      ┃
+┃Line 8: deterministic content.                      ┃
+┃Line 9: deterministic content.                      ┃
+┃Line 10: deterministic content.                     ┃
+┃                                                    ┃
+┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ report ━┛

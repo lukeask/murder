@@ -11,6 +11,7 @@
 import { describe, expect, it } from 'vitest';
 import { deriveAgentIdentity } from '../../src/selectors/agentIdentity.js';
 import {
+  collapseToolRuns,
   condenseBlocks,
   isTranscriptPaneOpen,
   selectActiveAgent,
@@ -82,6 +83,26 @@ describe('selectConversationTurns', () => {
     expect(turns[0]?.speaker).toBe('tool');
     expect(turns[0]?.text).toContain('Read file');
     expect(turns[0]?.text).toContain('$ foo.ts');
+  });
+
+  it('tool_call drops the title when the result already contains it (Cursor rollup shape)', () => {
+    // Cursor grammar: title = result minus the `$ ` prefix, input = null. Showing both would
+    // print the command twice.
+    const turns = selectConversationTurns([
+      block('tool_call', {
+        title: 'npm test 2>&1 | tail -15',
+        input: null,
+        result: '$ npm test 2>&1 | tail -15',
+      }),
+    ]);
+    expect(turns[0]?.text).toBe('$ npm test 2>&1 | tail -15');
+  });
+
+  it('tool_call keeps title + result when they carry different information (CC shape)', () => {
+    const turns = selectConversationTurns([
+      block('tool_call', { title: 'Bash', input: 'ls -la', result: 'total 0' }),
+    ]);
+    expect(turns[0]?.text).toBe('Bash\n$ ls -la\ntotal 0');
   });
 
   it('formats plan_update block with items', () => {
@@ -625,6 +646,59 @@ describe('condenseBlocks (TUIchat-4 attribution)', () => {
   });
 });
 
+describe('collapseToolRuns (Condensed tool activity line)', () => {
+  it('folds an adjacent run of tool calls into one counter line with the latest title', () => {
+    const blocks = [
+      block('assistant', { text: 'working' }, '1'),
+      block('tool_call', { title: 'Read foo.ts' }, '2'),
+      block('tool_call', { title: 'Grep bar' }, '3'),
+      block('tool_call', { title: 'npm test 2>&1 | tail -15' }, '4'),
+      block('assistant', { text: 'done' }, '5'),
+    ];
+    const turns = selectConversationTurns(collapseToolRuns(blocks));
+    expect(turns.map((t) => t.text)).toEqual([
+      'working',
+      '3 tool calls · npm test 2>&1 | tail -15',
+      'done',
+    ]);
+    expect(turns[1]?.speaker).toBe('tool');
+  });
+
+  it('uses the singular form for a lone tool call', () => {
+    const turns = selectConversationTurns(
+      collapseToolRuns([block('tool_call', { title: 'Read foo.ts' }, '1')]),
+    );
+    expect(turns.map((t) => t.text)).toEqual(['1 tool call · Read foo.ts']);
+  });
+
+  it('marks a still-running latest call with a trailing ellipsis', () => {
+    const turns = selectConversationTurns(
+      collapseToolRuns([
+        block('tool_call', { title: 'ls', running: false }, '1'),
+        block('tool_call', { title: 'npm test', running: true }, '2'),
+      ]),
+    );
+    expect(turns.map((t) => t.text)).toEqual(['2 tool calls · npm test …']);
+  });
+
+  it('keeps separate runs separate (assistant text between them)', () => {
+    const blocks = [
+      block('tool_call', { title: 'a' }, '1'),
+      block('assistant', { text: 'mid' }, '2'),
+      block('tool_call', { title: 'b' }, '3'),
+    ];
+    const turns = selectConversationTurns(collapseToolRuns(blocks));
+    expect(turns.map((t) => t.text)).toEqual(['1 tool call · a', 'mid', '1 tool call · b']);
+  });
+
+  it('returns the input unchanged (same identity) when there are no tool calls', () => {
+    const blocks = [block('assistant', { text: 'x' }, '1')];
+    expect(collapseToolRuns(blocks)).toBe(blocks);
+    expect(collapseToolRuns(undefined)).toBeUndefined();
+    expect(collapseToolRuns([])).toEqual([]);
+  });
+});
+
 describe('selectConversationView view modes (TUIchat-4)', () => {
   const blocks = [
     block('assistant', { text: 'step one' }, '1'),
@@ -649,10 +723,45 @@ describe('selectConversationView view modes (TUIchat-4)', () => {
     expect(verbose.turns.map((t) => t.text)).toEqual(['step one', 'Edit x', 'FINAL']);
   });
 
-  it('condensed with no summaries degrades to the verbose render', () => {
+  it('condensed with no summaries still folds tool calls into a counter line', () => {
     const state = condensedState('a-1', blocks, []);
     const condensed = selectConversationView('a-1', state, 'condensed');
-    const verbose = selectConversationView('a-1', state, 'verbose');
-    expect(condensed.turns).toEqual(verbose.turns);
+    expect(condensed.turns.map((t) => t.text)).toEqual([
+      'step one',
+      '1 tool call · Edit x',
+      'FINAL',
+    ]);
+  });
+
+  it('condensed folds the uncovered tool-call tail after the summary (repeated rollups)', () => {
+    const tail = [
+      block('assistant', { text: 'step one' }, '1'),
+      block('tool_call', { title: 'Edit x' }, '2'),
+      block('tool_call', { title: 'npm test 2>&1 | tail -15' }, '3'),
+      block('tool_call', { title: 'npm test 2>&1 | tail -15' }, '4'),
+      block('tool_call', { title: 'npm test 2>&1 | tail -15' }, '5'),
+    ];
+    const state = condensedState('a-1', tail, [summary(10, 0, 'condensed work', [1, 2])]);
+    const view = selectConversationView('a-1', state, 'condensed');
+    expect(view.turns.map((t) => t.text)).toEqual([
+      'condensed work',
+      '3 tool calls · npm test 2>&1 | tail -15',
+    ]);
+  });
+
+  it('condensed shows the final assistant message verbatim below the tool counter', () => {
+    const withFinal = [
+      block('tool_call', { title: 'Grep foo' }, '1'),
+      block('tool_call', { title: 'Read bar.ts' }, '2'),
+      block('assistant', { text: 'FINAL PART A' }, '3'),
+      block('assistant', { text: 'FINAL PART B' }, '4'),
+    ];
+    const state = condensedState('a-1', withFinal, []);
+    const view = selectConversationView('a-1', state, 'condensed');
+    expect(view.turns.map((t) => t.text)).toEqual([
+      '2 tool calls · Read bar.ts',
+      'FINAL PART A',
+      'FINAL PART B',
+    ]);
   });
 });

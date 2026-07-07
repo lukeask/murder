@@ -4,8 +4,11 @@ This is intentionally separate from project `.murder/roles.yaml`: it stores
 local UI preferences that should follow the user across repos.
 
 Optional `collaborator`, `planner`, `default_crow`, and `notetaker` blocks mirror the
-shape of `.murder/roles.yaml` sections; they are merged globally before the
-project file (see `Config.load`).
+shape of `.murder/roles.yaml` sections. Harness/model selection fields
+(`UserHarnessRolePatch`: harness, harnesses, startup_model, startup_effort,
+startup_models, startup_models_by_harness) are user-scope ONLY — project
+roles.yaml is ignored for them in `Config.load` (bundled defaults are the only
+fallback). Other fields merge bundled -> user -> project.
 """
 
 from __future__ import annotations
@@ -21,6 +24,25 @@ import yaml
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 UserHarnessKind = Literal["cursor", "claude_code", "codex", "pi", "antigravity"]
+
+
+class BarWidgetUserConfig(BaseModel):
+    """One bar widget's persisted enable/placement (Phase 3.1)."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    enabled: bool = True
+    placement: Literal["top", "bottom"] = "bottom"
+    adaptive: bool = True
+    # Usage widget only: harness ids feeding the min-timer. None/[] = all harnesses.
+    harnesses: list[UserHarnessKind] | None = Field(default=None)
+
+    @field_validator("harnesses", mode="before")
+    @classmethod
+    def _empty_harnesses_to_none(cls, v: Any) -> Any:
+        if v == []:
+            return None
+        return v
 
 
 class StartupRogueConfig(BaseModel):
@@ -69,6 +91,8 @@ class TuiUserConfig(BaseModel):
     default_chat_view_mode: Literal["verbose", "condensed"] = "verbose"
     # The rogue auto-spawned on daemon boot (None = none); see StartupRogueConfig.
     startup_rogue: StartupRogueConfig | None = None
+    # Per-widget top/bottom bar configuration (enable + placement). Omitted keys use registry defaults.
+    bar_widgets: dict[str, BarWidgetUserConfig] = Field(default_factory=dict)
 
 
 class UserHarnessRolePatch(BaseModel):

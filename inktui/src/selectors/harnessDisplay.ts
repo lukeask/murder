@@ -24,6 +24,16 @@ const HARNESS_LABELS: Readonly<Record<string, string>> = {
   antigravity: 'Antigravity',
 };
 
+/** Compact harness token for tight chrome (usage bar, etc.). */
+const HARNESS_SHORT_LABELS: Readonly<Record<string, string>> = {
+  claude_code: 'cc',
+  claude: 'cc',
+  codex: 'codex',
+  cursor: 'cursor',
+  pi: 'pi',
+  antigravity: 'ag',
+};
+
 /** Flattened model-id → label map, derived once from every harness's wizard list (so `gpt-5.5` →
  * `GPT-5.5`, `opus` → `Opus`, …). Ids are unique enough across harnesses that a flat map is fine. */
 const MODEL_LABELS: Readonly<Record<string, string>> = Object.fromEntries(
@@ -37,6 +47,15 @@ function titleCase(raw: string): string {
     .filter((w) => w.length > 0)
     .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
     .join(' ');
+}
+
+/** Short harness label for one-line widgets; falls back to the raw id. */
+export function harnessShortLabel(harness: string): string {
+  const raw = harness.trim();
+  if (raw === '') {
+    return '';
+  }
+  return HARNESS_SHORT_LABELS[raw] ?? raw;
 }
 
 /** The display label for a harness id, or `null` when there is none (so the caller can omit it). */

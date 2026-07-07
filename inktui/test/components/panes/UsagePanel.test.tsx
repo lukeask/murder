@@ -121,4 +121,28 @@ describe('UsageSurface — spread layout', () => {
     expect(lines.join('\n')).not.toContain('weekly');
     expect(lines.join('\n')).not.toContain('daily');
   });
+
+  it('shows fetchedAt on harness headers in full-width layout', async () => {
+    const groups: readonly UsageSurfaceGroup[] = [
+      {
+        harness: 'codex',
+        steering: 'auto',
+        fetchedAt: '5m ago',
+        gauges: [{ label: 'session', pct: 42, reset: '1h12m' }],
+      },
+    ];
+    const rendered = await renderInkFixture({
+      fixture: {
+        ...usageSpreadFixture,
+        data: { single: groups },
+      },
+      dataId: 'single',
+      width: 54,
+      height: 14,
+      focused: true,
+    });
+    const lines = stripAnsiSgr(rendered.ansi).split('\n');
+    expect(lines[2]).toContain('codex');
+    expect(lines[2]).toContain('5m ago');
+  });
 });

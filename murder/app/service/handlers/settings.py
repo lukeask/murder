@@ -75,6 +75,19 @@ def register(host: ServiceHost) -> None:
             "key_overrides": dict(tui.key_overrides),
             "pane_gap": tui.pane_gap,
             "vim_mode": tui.vim_mode,
+            "bar_widgets": {
+                widget_id: {
+                    "enabled": cfg.enabled,
+                    "placement": cfg.placement,
+                    "adaptive": cfg.adaptive,
+                    **(
+                        {"harnesses": list(cfg.harnesses)}
+                        if cfg.harnesses
+                        else {}
+                    ),
+                }
+                for widget_id, cfg in tui.bar_widgets.items()
+            },
             "default_chat_view_mode": tui.default_chat_view_mode,
             "startup_rogue": _startup_rogue_payload(tui),
             # --- harness overrides + effective values ---
@@ -117,6 +130,7 @@ def register(host: ServiceHost) -> None:
         from typing import get_args
 
         from murder.user_config import (
+            BarWidgetUserConfig,
             TuiUserConfig,
             UserHarnessKind,
             UserHarnessRolePatch,
@@ -151,6 +165,10 @@ def register(host: ServiceHost) -> None:
                 if cfg.tui.startup_rogue is not None
                 else None
             ),
+            "bar_widgets": {
+                widget_id: cfg.model_dump(mode="json")
+                for widget_id, cfg in cfg.tui.bar_widgets.items()
+            },
         }
         for key in (
             "theme",
@@ -162,6 +180,35 @@ def register(host: ServiceHost) -> None:
         ):
             if key in partial:
                 tui_merged[key] = partial[key]
+        if "bar_widgets" in partial:
+            incoming = partial["bar_widgets"]
+            if not isinstance(incoming, dict):
+                raise ValueError("bar_widgets must be an object")
+            merged_widgets = {
+                widget_id: cfg.model_dump(mode="json")
+                for widget_id, cfg in cfg.tui.bar_widgets.items()
+            }
+            for widget_id, patch in incoming.items():
+                if not isinstance(widget_id, str) or not isinstance(patch, dict):
+                    raise ValueError("bar_widgets entries must be {id: {enabled, placement}}")
+                base = merged_widgets.get(widget_id, BarWidgetUserConfig().model_dump(mode="json"))
+                merged_patch = {**base, **patch}
+                if "harnesses" in patch:
+                    harnesses_val = patch["harnesses"]
+                    if harnesses_val is None:
+                        merged_patch["harnesses"] = None
+                    elif isinstance(harnesses_val, list):
+                        for h in harnesses_val:
+                            if h not in valid_harnesses:
+                                raise ValueError(f"invalid bar widget harness: {h!r}")
+                        merged_patch["harnesses"] = harnesses_val or None
+                    else:
+                        raise ValueError("bar_widgets harnesses must be a list or null")
+                merged_widgets[widget_id] = merged_patch
+            tui_merged["bar_widgets"] = {
+                widget_id: BarWidgetUserConfig.model_validate(values)
+                for widget_id, values in merged_widgets.items()
+            }
         # startup_rogue: null clears it; an object sets harness/model/effort (validated here so a
         # bad harness is rejected before persist). The merged dict re-validates via TuiUserConfig.
         if "startup_rogue" in partial:

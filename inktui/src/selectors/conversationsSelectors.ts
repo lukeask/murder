@@ -154,17 +154,27 @@ function formatBlock(block: ConversationBlock): ChatTurn | null {
     case 'tool_call': {
       const title = str(raw, 'title').trim();
       if (!title) return null;
-      const parts: string[] = [title];
+      const result = field(raw, 'result');
+      const resultText = typeof result === 'string' ? result.trim() : '';
+      // Cursor rollups put the whole line in `result` with `title` a (possibly truncated) copy of
+      // it — showing both prints the same command twice. When the result subsumes the title, keep
+      // only the result (it carries the `$ ` shell marker and any extra detail).
+      const parts: string[] =
+        resultText && resultSubsumesTitle(title, resultText) ? [] : [title];
       const toolInput = field(raw, 'input');
       if (typeof toolInput === 'string' && toolInput.trim()) {
         parts.push(`$ ${toolInput.trim()}`);
       }
-      const result = field(raw, 'result');
-      if (typeof result === 'string' && result.trim()) {
-        parts.push(result.trim());
-      }
+      if (resultText) parts.push(resultText);
       if (field(raw, 'elided') === true) parts.push('[collapsed]');
       return { speaker: 'tool', text: parts.join('\n'), blockId };
+    }
+    case CONDENSED_TOOL_RUN_TYPE: {
+      // Synthetic Condensed-view block: a run of uncovered tool calls collapsed to one activity
+      // line ("N tool calls · latest title") — enough to know the agent is working, no more.
+      const text = str(raw, 'text').trim();
+      if (!text) return null;
+      return { speaker: 'tool', text, blockId };
     }
     case 'plan_update': {
       const title = str(raw, 'title').trim();
@@ -252,6 +262,73 @@ function formatBlock(block: ConversationBlock): ChatTurn | null {
  * it can never collide with a parsed segment.
  */
 const CONDENSED_SUMMARY_TYPE = '__condensed_summary__';
+
+/**
+ * The synthetic block `type` for a collapsed run of tool calls in Condensed view. Condensed panes
+ * must stay clean: instead of painting every tool rollup verbatim (the still-unattributed tail can
+ * hold dozens), we fold each adjacent run into one activity line — a counter plus the latest call's
+ * title. Distinct from any real wire type so it can never collide with a parsed segment.
+ */
+const CONDENSED_TOOL_RUN_TYPE = '__condensed_tool_run__';
+
+/**
+ * True when a tool_call's `result` already contains the information in `title`, so rendering both
+ * would print the command twice. Cursor rollups set `title` to the (possibly truncated) result line
+ * minus the `$ ` shell prefix; CC/Codex set `title` to the tool NAME with the output in `result`,
+ * which never matches. Comparison is whitespace-normalized, prefix-based to survive title
+ * truncation (`…`).
+ */
+function resultSubsumesTitle(title: string, result: string): boolean {
+  const norm = (s: string) => s.replace(/\s+/g, ' ').trim();
+  const t = norm(title).replace(/…$/, '');
+  if (!t) return false;
+  const r = norm(result).replace(/^\$\s*/, '');
+  return r.startsWith(t);
+}
+
+/**
+ * Fold each adjacent run of `tool_call` blocks into ONE synthetic activity block (Condensed view).
+ * The line is `N tool calls · <latest title>` (singular form for one) with a trailing `…` while
+ * the latest call is still running — enough to see the agent working without a wall of rollups.
+ * Non-tool blocks pass through untouched. Pure; returns the input unchanged (same identity) when
+ * there are no tool calls.
+ */
+export function collapseToolRuns(
+  blocks: readonly ConversationBlock[] | undefined,
+): readonly ConversationBlock[] | undefined {
+  if (!blocks || blocks.length === 0) return blocks;
+  if (!blocks.some((b) => b.type === 'tool_call')) return blocks;
+
+  const out: ConversationBlock[] = [];
+  let i = 0;
+  while (i < blocks.length) {
+    const block = blocks[i];
+    if (block === undefined) {
+      i++;
+      continue;
+    }
+    if (block.type !== 'tool_call') {
+      out.push(block);
+      i++;
+      continue;
+    }
+    let j = i;
+    while (j + 1 < blocks.length && blocks[j + 1]?.type === 'tool_call') j++;
+    const run = blocks.slice(i, j + 1);
+    const last = run[run.length - 1] as ConversationBlock;
+    const title = str(last.raw, 'title').trim() || 'tool call';
+    const running = field(last.raw, 'running') === true;
+    const count = run.length;
+    const label = count === 1 ? '1 tool call' : `${count} tool calls`;
+    out.push({
+      type: CONDENSED_TOOL_RUN_TYPE,
+      id: last.id ?? null,
+      raw: { text: `${label} · ${title}${running ? ' …' : ''}` },
+    });
+    i = j + 1;
+  }
+  return out;
+}
 
 /**
  * Build the Condensed-view block stream for one agent (TUIchat-4): replace each chunk summary's
@@ -426,8 +503,13 @@ export function selectConversationView(
   // is never attributed → always verbatim. Verbose/tmux paths leave `floored` untouched (byte-identical
   // to before this change). `tmux` never reaches this selector (the center-stage transcript pane shows the live frame), but if
   // it did it would render verbose, which is the correct fallback.
+  // Condensed additionally folds every surviving run of tool_call blocks (the not-yet-attributed
+  // tail, or everything when no summaries have fired) into a one-line activity counter — condensed
+  // panes show short summaries + the verbatim final, never a wall of tool rollups.
   const blocks =
-    viewMode === 'condensed' ? condenseBlocks(floored, state.chunkSummaries[agentId]) : floored;
+    viewMode === 'condensed'
+      ? collapseToolRuns(condenseBlocks(floored, state.chunkSummaries[agentId]))
+      : floored;
   const turns = selectConversationTurns(blocks);
   return { agentId, turns, hasContent: turns.length > 0 };
 }
