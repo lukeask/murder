@@ -1,5 +1,8 @@
-# Bundled defaults. Copied to .murder/roles.yaml on `murder init`.
-# Per-project overrides land in .murder/roles.yaml.
+# Bundled defaults. Copied (minus selection fields) to .murder/roles.yaml on `murder init`.
+# Harness/model selection (harness, harnesses, startup_model, startup_effort,
+# startup_models, startup_models_by_harness) is user-scope only: set it via the
+# in-app settings menu (~/.config/murder/config.yaml). The selection values in
+# this file are bundled fallback defaults; project .murder/roles.yaml ignores them.
 
 project:
   name: TODO_SET_ME           # used in tmux session names
@@ -38,16 +41,11 @@ crow_handler:
 
 default_crow:
   kind: harness
+  # Harness/model selection lives in user config (in-app settings menu /
+  # ~/.config/murder/config.yaml); harness pools and startup models there pick
+  # stably by ticket id. The values below are bundled defaults only.
   harness: cursor
-  # Optional pools (murder --config can set these): tickets without overrides pick
-  # stably by ticket id. Omit harnesses / startup_models for single-harness/model.
-  # harnesses: [cursor, codex]
   startup_model: composer       # cursor's selector; consumed by CursorAdapter
-  # startup_effort: medium       # optional; defaults to medium for CC/Codex when supported
-  # startup_models: [composer, gpt-4.1]
-  # startup_models_by_harness:
-  #   cursor: [composer]
-  #   codex: [gpt-5.5]
   startup_prompt_template: fresh_crow.md
 
 tui:

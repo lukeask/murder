@@ -1,6 +1,6 @@
 """User-scope LLM config: schema round-trip, tier resolution, env application,
 file perms, and native_coding_crow gate-out behavior (scrub on user load, raise
-on project Config.load).
+in Config.load when a merged layer still references it).
 """
 
 from __future__ import annotations
@@ -14,6 +14,7 @@ from murder.config import Config
 from murder.user_config import (
     BUILTIN_TIERS,
     UserConfig,
+    UserHarnessRolePatch,
     UserLlmConfig,
     UserLlmProviderSettings,
     UserLlmTier,
@@ -55,6 +56,96 @@ def test_stale_config_without_llm_loads(tmp_path: Path, monkeypatch: pytest.Monk
     cfg = load_user_config()
     assert cfg.llm is None
     assert cfg.tui.modifier == "ctrl"
+
+
+# --- Config.load: harness/model selection is user-scope only ---
+
+
+_PROJECT_ROLES_WITH_SELECTION = (
+    "project:\n  name: repo\n"
+    "default_crow:\n"
+    "  harness: codex\n"
+    "  harnesses:\n"
+    "    - codex\n"
+    "    - pi\n"
+    "  startup_prompt_template: custom_crow.md\n"
+    "planner:\n"
+    "  poll_interval_s: 9\n"
+)
+
+
+def _write_roles_yaml(repo: Path, body: str) -> None:
+    murder = repo / ".murder"
+    murder.mkdir(parents=True, exist_ok=True)
+    (murder / "roles.yaml").write_text(body, encoding="utf-8")
+
+
+def test_config_load_ignores_project_selection_user_config_wins(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _write_roles_yaml(repo, _PROJECT_ROLES_WITH_SELECTION)
+    save_user_config(
+        UserConfig(
+            default_crow=UserHarnessRolePatch(
+                harness="cursor",
+                harnesses=["cursor", "claude_code"],
+            )
+        )
+    )
+    loaded = Config.load(repo)
+    assert loaded.default_crow.harness == "cursor"
+    assert loaded.default_crow.harnesses == ["cursor", "claude_code"]
+
+
+def test_config_load_bundled_selection_defaults_apply_without_user_override(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _write_roles_yaml(repo, _PROJECT_ROLES_WITH_SELECTION)
+    loaded = Config.load(repo)
+    # Project pool is ignored; bundled defaults (harness: cursor, no pool) apply.
+    assert loaded.default_crow.harness == "cursor"
+    assert loaded.default_crow.harnesses is None
+
+
+def test_config_load_project_non_selection_role_fields_still_apply(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _write_roles_yaml(repo, _PROJECT_ROLES_WITH_SELECTION)
+    loaded = Config.load(repo)
+    assert loaded.default_crow.startup_prompt_template == "custom_crow.md"
+    assert loaded.planner.poll_interval_s == 9
+
+
+def test_bar_widget_usage_harnesses_round_trip(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from murder.user_config import BarWidgetUserConfig, TuiUserConfig
+
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
+    cfg = UserConfig(
+        tui=TuiUserConfig(
+            bar_widgets={
+                "usage": BarWidgetUserConfig(
+                    enabled=True,
+                    placement="top",
+                    harnesses=["codex", "claude_code"],
+                )
+            }
+        )
+    )
+    save_user_config(cfg)
+    loaded = load_user_config()
+    usage = loaded.tui.bar_widgets["usage"]
+    assert usage.enabled is True
+    assert usage.placement == "top"
+    assert usage.harnesses == ["codex", "claude_code"]
 
 
 # --- resolve_tier ---
@@ -193,11 +284,24 @@ def test_user_config_scrubs_native_coding_crow_from_planner(
     assert cfg.planner is None or cfg.planner.harness is None
 
 
-def test_config_load_raises_on_native_coding_crow_in_roles(tmp_path: Path) -> None:
+def test_config_load_raises_on_native_coding_crow_in_user_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Project roles.yaml selection fields are stripped on load; user-config file
+    # load scrubs the gated harness too — inject via load_user_config to exercise
+    # the post-merge guard on the user-config layer.
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
     repo = tmp_path / "repo"
-    (repo / ".murder").mkdir(parents=True)
-    (repo / ".murder" / "roles.yaml").write_text(
-        "default_crow:\n  harness: native_coding_crow\n", encoding="utf-8"
-    )
+    repo.mkdir()
+    import murder.user_config as user_config_mod
+
+    def _gated_user_config() -> UserConfig:
+        return UserConfig.model_construct(
+            default_crow=UserHarnessRolePatch.model_construct(
+                harness="native_coding_crow",
+            )
+        )
+
+    monkeypatch.setattr(user_config_mod, "load_user_config", _gated_user_config)
     with pytest.raises(ValueError, match="native_coding_crow is not available in v0"):
         Config.load(repo)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import shutil
 import sqlite3
 from datetime import datetime
@@ -52,6 +53,41 @@ def _append_gitignore_entries(repo: Path, entries: str) -> None:
     root_gitignore.write_text(entries.rstrip() + "\n", encoding="utf-8")
 
 
+_SELECTION_KEY_RE = re.compile(
+    r"^(\s+)(harness|harnesses|startup_model|startup_effort|startup_models|"
+    r"startup_models_by_harness):"
+)
+_SELECTION_ROLES = ("collaborator", "planner", "default_crow")
+
+
+def _strip_selection_fields_from_roles_text(text: str) -> str:
+    """Drop harness/model selection lines from the scaffolded roles.yaml.
+
+    Selection is user-scope only (settings menu / ~/.config/murder/config.yaml);
+    leaving the bundled defaults in the project file would be dead, confusing keys.
+    """
+    out: list[str] = []
+    current_block: str | None = None
+    skip_deeper_than: int | None = None
+    for line in text.splitlines():
+        stripped = line.strip()
+        if line and not line[0].isspace() and stripped.endswith(":"):
+            current_block = stripped[:-1]
+            skip_deeper_than = None
+        indent = len(line) - len(line.lstrip())
+        if skip_deeper_than is not None:
+            if stripped and indent > skip_deeper_than:
+                continue
+            skip_deeper_than = None
+        if current_block in _SELECTION_ROLES:
+            m = _SELECTION_KEY_RE.match(line)
+            if m:
+                skip_deeper_than = len(m.group(1))
+                continue
+        out.append(line)
+    return "\n".join(out) + "\n"
+
+
 def _scaffold_project(repo: Path, *, force: bool = False) -> Path:
     ad = agents_dir(repo)
     if ad.exists() and not force:
@@ -70,6 +106,7 @@ def _scaffold_project(repo: Path, *, force: bool = False) -> Path:
     quoted_project_name = project_name.replace("'", "''")
     roles_text = tpl_root.joinpath("roles.yaml").read_text(encoding="utf-8")
     roles_text = roles_text.replace("name: TODO_SET_ME", f"name: '{quoted_project_name}'", 1)
+    roles_text = _strip_selection_fields_from_roles_text(roles_text)
     env_example_text = tpl_root.joinpath("env.example").read_text(encoding="utf-8")
     gitignore_text = tpl_root.joinpath("gitignore").read_text(encoding="utf-8")
 

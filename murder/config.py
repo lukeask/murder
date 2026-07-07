@@ -181,8 +181,11 @@ class Config(BaseModel):
         project = repo_root / ".murder" / "roles.yaml"
         if project.exists():
             with project.open("r", encoding="utf-8") as f:
-                user_yaml = yaml.safe_load(f) or {}
-            merged = _deep_merge(merged, user_yaml)
+                project_yaml = yaml.safe_load(f) or {}
+            # Harness/model selection is user-scope only; project roles.yaml is
+            # ignored for those fields (bundled defaults + user config supply them).
+            project_yaml = _strip_project_role_selection_fields(project_yaml)
+            merged = _deep_merge(merged, project_yaml)
         # The native_coding_crow harness is gated out of v0; a project roles.yaml
         # that still references it must fail loudly rather than silently degrade.
         if _references_gated_harness(merged):
@@ -207,6 +210,31 @@ def project_env_path(repo_root: Path) -> Path:
 def _load_bundled_defaults() -> dict[str, Any]:
     text = resources.files("murder.resources.templates").joinpath("roles.yaml").read_text(encoding="utf-8")
     return yaml.safe_load(text) or {}
+
+
+_USER_SCOPED_SELECTION_ROLES = ("collaborator", "planner", "default_crow")
+_USER_SCOPED_ROLE_SELECTION_FIELDS = frozenset(
+    {
+        "harness",
+        "harnesses",
+        "startup_model",
+        "startup_effort",
+        "startup_models",
+        "startup_models_by_harness",
+    }
+)
+
+
+def _strip_project_role_selection_fields(project_yaml: dict[str, Any]) -> dict[str, Any]:
+    """Drop user-scope harness/model keys from project role blocks before merge."""
+    out = dict(project_yaml)
+    for role in _USER_SCOPED_SELECTION_ROLES:
+        block = out.get(role)
+        if isinstance(block, dict):
+            out[role] = {
+                k: v for k, v in block.items() if k not in _USER_SCOPED_ROLE_SELECTION_FIELDS
+            }
+    return out
 
 
 _GATED_HARNESS = "native_coding_crow"

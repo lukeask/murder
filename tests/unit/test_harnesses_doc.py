@@ -69,17 +69,21 @@ def test_render_trailing_newline_stable():
     assert not doc.endswith("\n\n")
 
 
-def _write_roles(tmp_path, harnesses):
-    murder_dir = tmp_path / ".murder"
-    murder_dir.mkdir(exist_ok=True)
-    (murder_dir / "roles.yaml").write_text(
+def _write_user_crow_pool(tmp_path, monkeypatch, harnesses):
+    # Harness selection is user-scope only: write the pool into an isolated
+    # XDG user config rather than the project roles.yaml (which ignores it).
+    xdg = tmp_path / "xdg"
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(xdg))
+    cfg_dir = xdg / "murder"
+    cfg_dir.mkdir(parents=True, exist_ok=True)
+    (cfg_dir / "config.yaml").write_text(
         yaml.safe_dump({"default_crow": {"harness": harnesses[0], "harnesses": harnesses}}),
         encoding="utf-8",
     )
 
 
-def test_write_doc_uses_cache_and_writes_file(tmp_path):
-    _write_roles(tmp_path, ["claude_code", "codex"])
+def test_write_doc_uses_cache_and_writes_file(tmp_path, monkeypatch):
+    _write_user_crow_pool(tmp_path, monkeypatch, ["claude_code", "codex"])
     set_discovered_models("claude_code", [("sonnet", "Claude Sonnet 4")])
     write_harnesses_doc(tmp_path)
     path = harnesses_and_models_md(tmp_path)
@@ -90,10 +94,10 @@ def test_write_doc_uses_cache_and_writes_file(tmp_path):
     assert "## codex" in text
 
 
-def test_write_doc_omits_disabled_harness(tmp_path):
+def test_write_doc_omits_disabled_harness(tmp_path, monkeypatch):
     # only claude_code enabled -> codex (with a non-empty classvar fallback)
     # must NOT appear, so the planner can't assign a disabled harness.
-    _write_roles(tmp_path, ["claude_code"])
+    _write_user_crow_pool(tmp_path, monkeypatch, ["claude_code"])
     write_harnesses_doc(tmp_path)
     text = harnesses_and_models_md(tmp_path).read_text(encoding="utf-8")
     assert "## claude_code" in text
