@@ -18,6 +18,9 @@ interface FakeCtx {
   clearTranscript: Mock;
   saveTemplate: Mock;
   setPaneViewMode: Mock;
+  resolveRenameTarget: Mock;
+  renameRogue: Mock;
+  renamePlan: Mock;
   dismiss?: Mock;
 }
 
@@ -33,6 +36,9 @@ function makeCtx(withDismiss = false): FakeCtx {
     clearTranscript: vi.fn(),
     saveTemplate: vi.fn(),
     setPaneViewMode: vi.fn(),
+    resolveRenameTarget: vi.fn(() => null),
+    renameRogue: vi.fn(),
+    renamePlan: vi.fn(),
   };
   if (withDismiss) {
     base.dismiss = vi.fn();
@@ -204,6 +210,47 @@ describe('dispatchCommand — : commands', () => {
     expect(ctx.saveTemplate).not.toHaveBeenCalled();
     expect(ctx.pushToast).toHaveBeenCalledWith(
       'usage: :save <name> <body>',
+      expect.objectContaining({ severity: 'error' }),
+    );
+  });
+
+  it(':rename <old> <new> renames a named plan', () => {
+    const ctx = makeCtx();
+    const handled = dispatchCommand(':rename old-plan new-plan', AGENT, ctx);
+    expect(handled).toBe(true);
+    expect(ctx.renamePlan).toHaveBeenCalledWith('old-plan', 'new-plan');
+    expect(ctx.resolveRenameTarget).not.toHaveBeenCalled();
+  });
+
+  it(':rename <new> renames the resolved rogue crow target', () => {
+    const ctx = makeCtx();
+    ctx.resolveRenameTarget.mockReturnValue({ kind: 'rogue', agentId: 'claude-rogue-tony' });
+    dispatchCommand(':rename tony2', AGENT, ctx);
+    expect(ctx.renameRogue).toHaveBeenCalledWith('claude-rogue-tony', 'tony2');
+    expect(ctx.renamePlan).not.toHaveBeenCalled();
+  });
+
+  it(':rename <new> renames the resolved plan target', () => {
+    const ctx = makeCtx();
+    ctx.resolveRenameTarget.mockReturnValue({ kind: 'plan', oldName: 'alpha' });
+    dispatchCommand(':rename beta', AGENT, ctx);
+    expect(ctx.renamePlan).toHaveBeenCalledWith('alpha', 'beta');
+    expect(ctx.renameRogue).not.toHaveBeenCalled();
+  });
+
+  it(':rename with no resolved target toasts usage context', () => {
+    const ctx = makeCtx();
+    dispatchCommand(':rename solo', AGENT, ctx);
+    expect(ctx.renameRogue).not.toHaveBeenCalled();
+    expect(ctx.renamePlan).not.toHaveBeenCalled();
+    expect(ctx.pushToast).toHaveBeenCalled();
+  });
+
+  it(':rename with empty args toasts usage error', () => {
+    const ctx = makeCtx();
+    dispatchCommand(':rename', AGENT, ctx);
+    expect(ctx.pushToast).toHaveBeenCalledWith(
+      'usage: :rename <new>  or  :rename <old> <new>',
       expect.objectContaining({ severity: 'error' }),
     );
   });

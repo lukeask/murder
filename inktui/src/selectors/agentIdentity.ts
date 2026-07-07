@@ -80,6 +80,23 @@ export function hasTicket(ticketId: string | null): ticketId is string {
   return ticketId !== null && ticketId.trim() !== '';
 }
 
+/** Mirrors `murder/runtime/orchestration/agent_ids.is_rogue_agent_id` — structural rogue id shape. */
+const ROGUE_AGENT_ID_RE = /^[a-z0-9]+-rogue-/;
+
+/** True for rogue agent ids (`<harness>-rogue-<slug>`), regardless of harness prefix. */
+export function isRogueAgentId(agentId: string): boolean {
+  return ROGUE_AGENT_ID_RE.test(agentId);
+}
+
+const PLANNER_AGENT_ID_PREFIX = 'planner-';
+
+/** The plan stem encoded in a live planner agent id (`planner-<plan>`), or null when not a planner. */
+export function planNameFromPlannerAgentId(agentId: string): string | null {
+  return agentId.startsWith(PLANNER_AGENT_ID_PREFIX)
+    ? agentId.slice(PLANNER_AGENT_ID_PREFIX.length)
+    : null;
+}
+
 // ---------------------------------------------------------------------------
 // The discriminated union
 // ---------------------------------------------------------------------------

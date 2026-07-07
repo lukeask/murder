@@ -68,7 +68,11 @@ import {
   renderPaneLayoutPlan,
 } from '../layout/paneBridge.js';
 import { computePaneLayout } from '../layout/paneLayout.js';
-import { deriveAgentIdentity } from '../selectors/agentIdentity.js';
+import {
+  deriveAgentIdentity,
+  isRogueAgentId,
+  planNameFromPlannerAgentId,
+} from '../selectors/agentIdentity.js';
 import {
   isFreeformChoiceSelected,
   isTranscriptPaneOpen,
@@ -1121,6 +1125,56 @@ function Shell({
     },
     setPaneViewMode: (agentId, mode) => {
       appStore.getState().actions.conversations.setPaneViewMode(agentId, mode);
+    },
+    resolveRenameTarget: () => {
+      const state = appStore.getState();
+      const activeAgentId = selectActiveAgentId(
+        state.conversations,
+        state.roster,
+        state.favorites,
+      );
+      if (activeAgentId !== null) {
+        if (isRogueAgentId(activeAgentId)) {
+          return { kind: 'rogue', agentId: activeAgentId };
+        }
+        const planName = planNameFromPlannerAgentId(activeAgentId);
+        if (planName !== null) {
+          return { kind: 'plan', oldName: planName };
+        }
+      }
+      const open = state.docView.open;
+      if (open?.kind === 'plan') {
+        return { kind: 'plan', oldName: open.name };
+      }
+      return null;
+    },
+    renameRogue: (agentId, name) => {
+      void submitCommand(bus, 'crow.rename_rogue', { agent_id: agentId, name })
+        .then((result) => {
+          const newId = typeof result.agent_id === 'string' ? result.agent_id : agentId;
+          toastStore.getState().push(`renamed crow → ${name}`, { ttlMs: 6000 });
+          if (newId !== agentId) {
+            appStore.getState().actions.conversations.setActivePaneAgentId(newId);
+          }
+        })
+        .catch((error: unknown) => {
+          const message = error instanceof Error ? error.message : String(error);
+          toastStore.getState().push(message, { severity: 'error', ttlMs: 12000 });
+        });
+    },
+    renamePlan: (oldName, newName) => {
+      void submitCommand(bus, 'plan.rename', { old_name: oldName, new_name: newName })
+        .then(() => {
+          toastStore.getState().push(`renamed plan "${oldName}" → "${newName}"`, { ttlMs: 6000 });
+          const open = appStore.getState().docView.open;
+          if (open?.kind === 'plan' && open.name === oldName) {
+            void appStore.getState().actions.docView.open('plan', newName);
+          }
+        })
+        .catch((error: unknown) => {
+          const message = error instanceof Error ? error.message : String(error);
+          toastStore.getState().push(message, { severity: 'error', ttlMs: 12000 });
+        });
     },
   };
 

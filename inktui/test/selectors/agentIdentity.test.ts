@@ -13,6 +13,8 @@ import {
   deriveAgentIdentity,
   hasTicket,
   isDefaultFavorited,
+  isRogueAgentId,
+  planNameFromPlannerAgentId,
   stripSessionPrefix,
 } from '../../src/selectors/agentIdentity.js';
 import type { RosterRow } from '../../src/store/roster/rosterSlice.js';
@@ -255,5 +257,28 @@ describe('deriveAgentIdentity — labels are prefix-stripped', () => {
       row({ role: 'planner', session: 'murder_murder_planner_codebase-map' }),
     );
     expect(identity?.label).toBe('codebase-map');
+  });
+});
+
+describe('isRogueAgentId', () => {
+  it('matches harness-prefixed rogue ids', () => {
+    expect(isRogueAgentId('claude-rogue-tony')).toBe(true);
+    expect(isRogueAgentId('codex-rogue-foo')).toBe(true);
+  });
+
+  it('rejects ticket crows and planners', () => {
+    expect(isRogueAgentId('crow-t001')).toBe(false);
+    expect(isRogueAgentId('planner-alpha')).toBe(false);
+  });
+});
+
+describe('planNameFromPlannerAgentId', () => {
+  it('strips the planner- prefix', () => {
+    expect(planNameFromPlannerAgentId('planner-alpha')).toBe('alpha');
+    expect(planNameFromPlannerAgentId('planner-my-plan')).toBe('my-plan');
+  });
+
+  it('returns null for non-planner ids', () => {
+    expect(planNameFromPlannerAgentId('claude-rogue-tony')).toBeNull();
   });
 });

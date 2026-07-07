@@ -55,10 +55,47 @@ export interface CommandCtx {
   /** Set the per-pane chat view mode for `agentId` (TUIchat-3: `:verbose`/`:compact`/`:tmux`). Wraps
    * `actions.conversations.setPaneViewMode`. */
   readonly setPaneViewMode: (agentId: string, mode: ChatViewMode) => void;
+  /** Resolve the rename subject for `:rename <new>` — active rogue crow, active planner plan, or the
+   * plan open in the stage doc view. `null` when nothing is renameable in context. */
+  readonly resolveRenameTarget: () => RenameTarget | null;
+  /** Rename a live rogue crow (display name → new slug/id). Wraps `crow.rename_rogue`. */
+  readonly renameRogue: (agentId: string, name: string) => void;
+  /** Rename a plan on disk + in the DB (and retarget a live planner when present). Wraps
+   * `plan.rename`. */
+  readonly renamePlan: (oldName: string, newName: string) => void;
 }
+
+/** The rename subject resolved from chat/doc context for the single-arg `:rename <new>` form. */
+export type RenameTarget =
+  | { readonly kind: 'rogue'; readonly agentId: string }
+  | { readonly kind: 'plan'; readonly oldName: string };
 
 /** Valid template/command name — matches the backend's `^[A-Za-z0-9_-]+$`. */
 const NAME_RE = /^[A-Za-z0-9_-]+$/;
+
+/** Plan filename stem guard — mirrors `plan_ops._validate_plan_filename_stem` (client-side preflight). */
+function isValidPlanStem(name: string): boolean {
+  const stem = name.trim();
+  return stem.length > 0 && !stem.includes('/') && !stem.includes('\\') && stem !== '.' && stem !== '..';
+}
+
+/** Parse `:rename` args: one token renames the resolved target; two tokens rename a named plan. */
+function parseRenameArgs(
+  args: string,
+): { mode: 'single'; newName: string } | { mode: 'dual'; oldName: string; newName: string } | null {
+  const trimmed = args.trim();
+  if (trimmed === '') {
+    return null;
+  }
+  const parts = trimmed.split(/\s+/);
+  if (parts.length === 1) {
+    return { mode: 'single', newName: parts[0]! };
+  }
+  if (parts.length === 2) {
+    return { mode: 'dual', oldName: parts[0]!, newName: parts[1]! };
+  }
+  return null;
+}
 
 /** One murder `:command` handler. Receives the argument string (everything after the command word,
  * trimmed of the single leading space) and the active agent id (may be `null` if no agent is active).
@@ -133,6 +170,41 @@ const COMMANDS: Readonly<Record<string, CommandHandler>> = {
     }
     ctx.saveTemplate(name, body);
     ctx.pushToast(`saved :${name}:`);
+  },
+
+  /** `:rename <new>` — rename the active rogue crow, active planner's plan, or the plan open in the
+   * stage doc view. `:rename <old> <new>` — rename a named plan. Restores the old Textual TUI
+   * dual semantics without reintroducing the `if/elif` router. */
+  rename(args, _agentId, ctx) {
+    const parsed = parseRenameArgs(args);
+    if (parsed === null) {
+      ctx.pushToast('usage: :rename <new>  or  :rename <old> <new>', { severity: 'error' });
+      return;
+    }
+    if (parsed.mode === 'dual') {
+      if (!isValidPlanStem(parsed.oldName) || !isValidPlanStem(parsed.newName)) {
+        ctx.pushToast('usage: :rename <old> <new>', { severity: 'error' });
+        return;
+      }
+      ctx.renamePlan(parsed.oldName, parsed.newName);
+      return;
+    }
+    if (!isValidPlanStem(parsed.newName)) {
+      ctx.pushToast('usage: :rename <new>', { severity: 'error' });
+      return;
+    }
+    const target = ctx.resolveRenameTarget();
+    if (target === null) {
+      ctx.pushToast('no rogue crow or plan to rename (select one, or use :rename <old> <new>)', {
+        ttlMs: 8000,
+      });
+      return;
+    }
+    if (target.kind === 'rogue') {
+      ctx.renameRogue(target.agentId, parsed.newName);
+      return;
+    }
+    ctx.renamePlan(target.oldName, parsed.newName);
   },
 };
 

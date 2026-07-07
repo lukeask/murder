@@ -122,6 +122,8 @@ export function buildHelpGroups(
       { key: '/…', description: 'passthrough to harness' },
       { key: ':help', description: 'this overlay' },
       { key: ':note <text>', description: 'quick note' },
+      { key: ':rename <new>', description: 'rename rogue crow or plan' },
+      { key: ':rename <old> <new>', description: 'rename a named plan' },
       { key: ':verbose / :compact / :tmux', description: 'set this pane view' },
       { key: ':dismiss-toasts', description: 'flush the toast rack' },
       { key: ':resume', description: 'use r in history panel' },
