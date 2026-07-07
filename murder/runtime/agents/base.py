@@ -15,6 +15,7 @@ import asyncio
 import contextlib
 import logging
 from abc import ABC, abstractmethod
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 # Re-export from bus to keep StrEnum definitions in one place.
@@ -111,6 +112,38 @@ class HarnessBackedAgent(LifecycleParticipant):
     # The last (live_state, queued_message) pair pushed over the bus, so the
     # projection tick only publishes on change (not 2.5Hz).
     _last_pushed_conv_state: Any = None
+    # Set by live-session usage sampling while a slash-command overlay is open;
+    # projection ticks skip pane capture until the overlay is dismissed.
+    usage_capture_in_progress: bool = False
+
+    async def _usage_sampling_context(self) -> Any | None:
+        runtime = getattr(self, "runtime", None)
+        if runtime is None:
+            return None
+        from murder.llm.harnesses.usage_sampling import UsageSamplingContext
+
+        config = getattr(runtime, "config", None)
+        repo_root = getattr(runtime, "repo_root", None) or getattr(self, "repo_root", None)
+        db = getattr(runtime, "db", None)
+        if config is None or repo_root is None:
+            return None
+        return UsageSamplingContext(config=config, repo_root=Path(repo_root), db=db)
+
+    async def _sample_live_usage_on_startup(self) -> None:
+        ctx = await self._usage_sampling_context()
+        if ctx is None:
+            return
+        from murder.llm.harnesses.usage_sampling import sample_live_session_usage
+
+        await sample_live_session_usage(self, ctx, "agent_startup")
+
+    async def _sample_live_usage_on_shutdown(self) -> None:
+        ctx = await self._usage_sampling_context()
+        if ctx is None or ctx.db is None:
+            return
+        from murder.llm.harnesses.usage_sampling import sample_live_session_usage
+
+        await sample_live_session_usage(self, ctx, "agent_shutdown")
 
     async def is_live(self) -> bool:
         from murder.runtime.terminal import tmux
@@ -155,6 +188,8 @@ class HarnessBackedAgent(LifecycleParticipant):
         hash-skip makes unchanged ticks cheap; a missing session (still starting
         or torn down) surfaces as a TmuxError, which the caller swallows."""
         if self._producer is None or self.status in TERMINAL_STATUSES:
+            return
+        if self.usage_capture_in_progress:
             return
         from murder.runtime.terminal import tmux
         from murder.llm.harnesses.transcripts import wants_ansi
@@ -445,6 +480,7 @@ class HarnessBackedAgent(LifecycleParticipant):
         runtime = getattr(self, "runtime", None)
         if runtime is None or runtime.db is None:
             return
+        await self._sample_live_usage_on_shutdown()
         session_id: str | None = None
         exit_cmd = self.harness.graceful_exit_command()
         if exit_cmd is not None:

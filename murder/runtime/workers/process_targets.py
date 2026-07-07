@@ -39,11 +39,19 @@ async def _run_usage_probe_process(
     conn = get_db(db_path(repo_root))
     sampling = UsageSamplingContext(config=cfg, repo_root=repo_root, db=conn)
 
-    async def _sample(_ctx: WorkerCtx) -> tuple[int, int]:
-        return await sample_harness_usages(sampling)
+    async def _sample(
+        _ctx: WorkerCtx,
+        *,
+        modes: set[str] | None = None,
+    ) -> tuple[int, int]:
+        return await sample_harness_usages(sampling, modes=modes)
 
-    def _kinds(_ctx: WorkerCtx) -> list[str]:
-        return harness_kinds_to_sample(sampling)
+    def _kinds(
+        _ctx: WorkerCtx,
+        *,
+        modes: set[str] | None = None,
+    ) -> list[str]:
+        return harness_kinds_to_sample(sampling, modes=modes)
 
     worker = UsageProbeWorker(sampler=_sample, kinds_provider=_kinds)
     # F1 (queue_row chunk): give the subprocess its own DB-backed bus so the

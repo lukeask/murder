@@ -69,6 +69,8 @@ class PlanningAgent(HarnessBackedAgent):
                 self.runtime.sync_agent(self)
             raise TimeoutError(start_result.message or "planner harness startup failed")
 
+        await self._sample_live_usage_on_startup()
+
         if brief:
             send_result = await self.harness_session.send_prompt(brief)
             if not send_result.ok:
@@ -98,6 +100,8 @@ class PlanningAgent(HarnessBackedAgent):
     async def stop(self, *, failed: bool = False, kill_session: bool = True) -> None:
         from murder.runtime.terminal import tmux
 
+        if kill_session and not failed:
+            await self._sample_live_usage_on_shutdown()
         if kill_session:
             with contextlib.suppress(Exception):
                 await self.harness_session.interrupt()

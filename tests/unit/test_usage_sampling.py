@@ -8,7 +8,11 @@ from murder.config import Config, CrowHandlerConfig, HarnessRoleConfig, ProjectC
 from murder.llm.harnesses.base import HarnessAdapter
 from murder.llm.harnesses.models import HarnessStartSpec, HarnessUsageStatus, HarnessUsageWindow
 from murder.llm.harnesses.results import fail_result, ok_result
-from murder.llm.harnesses.usage_sampling import UsageSamplingContext, sample_harness_usages
+from murder.llm.harnesses.usage_sampling import (
+    UsageSamplingContext,
+    harness_kinds_to_sample,
+    sample_harness_usages,
+)
 from murder.state.persistence.schema import init_db
 from murder.state.persistence.usage import get_usage_probe_session_id, set_usage_probe_session_id
 
@@ -75,9 +79,129 @@ def _db() -> sqlite3.Connection:
     return conn
 
 
+class _HttpUsageAdapter(HarnessAdapter):
+    kind = "cursor"
+    usage_collection_mode = "http"
+    _result = ok_result(
+        HarnessUsageStatus(
+            harness="cursor",
+            source="http:api",
+            fetched_at="2026-06-04T00:00:00+00:00",
+            windows=[HarnessUsageWindow(name="5h", percent_used=10.0)],
+            raw={},
+        )
+    )
+
+    def startup_cmd(self, cwd: Path) -> list[str]:
+        del cwd
+        return ["cursor-stub"]
+
+    def is_ready(self, pane_text: str) -> bool:
+        del pane_text
+        return True
+
+    def is_idle(self, pane_text: str) -> bool:
+        del pane_text
+        return True
+
+    def is_busy(self, pane_text: str) -> bool:
+        del pane_text
+        return False
+
+    async def initialize_defaults(self, session: str, spec: HarnessStartSpec):  # type: ignore[override]
+        del session, spec
+        return ok_result()
+
+    async def collect_usage_status(self, session: str):
+        del session
+        return self._result
+
+    def extract_last_message(self, pane_text: str) -> str | None:
+        del pane_text
+        return None
+
+
+def _mixed_pool_config() -> Config:
+    role = HarnessRoleConfig(harness="codex", harnesses=["codex", "cursor"])
+    return Config(
+        project=ProjectConfig(name="repo"),
+        collaborator=role,
+        default_crow=role,
+        crow_handler=CrowHandlerConfig(model="test-model"),
+    )
+
+
 async def _capture_pane(session: str, *, lines: int = 120) -> str:
     del session, lines
     return "idle"
+
+
+def test_harness_kinds_to_sample_none_includes_all_usage_kinds() -> None:
+    ctx = UsageSamplingContext(config=_mixed_pool_config(), repo_root=Path("/tmp"), db=None)
+    monkeypatch_registry = {"codex": _StubUsageAdapter, "cursor": _HttpUsageAdapter}
+    import murder.llm.harnesses.usage_sampling as usage_sampling_mod
+
+    original_registry = usage_sampling_mod.REGISTRY
+    usage_sampling_mod.REGISTRY = monkeypatch_registry  # type: ignore[assignment]
+    try:
+        kinds = harness_kinds_to_sample(ctx, modes=None)
+    finally:
+        usage_sampling_mod.REGISTRY = original_registry
+
+    assert kinds == ["codex", "cursor"]
+
+
+def test_harness_kinds_to_sample_http_filter_excludes_tmux_slash() -> None:
+    ctx = UsageSamplingContext(config=_mixed_pool_config(), repo_root=Path("/tmp"), db=None)
+    import murder.llm.harnesses.usage_sampling as usage_sampling_mod
+
+    original_registry = usage_sampling_mod.REGISTRY
+    usage_sampling_mod.REGISTRY = {"codex": _StubUsageAdapter, "cursor": _HttpUsageAdapter}  # type: ignore[assignment]
+    try:
+        kinds = harness_kinds_to_sample(ctx, modes={"http"})
+    finally:
+        usage_sampling_mod.REGISTRY = original_registry
+
+    assert kinds == ["cursor"]
+
+
+def test_sample_harness_usages_http_filter_skips_tmux_slash(monkeypatch, tmp_path) -> None:
+    creates: list[tuple[str, Path, list[str]]] = []
+    inserted: list[str] = []
+
+    async def _kill_session(name: str) -> None:
+        del name
+
+    async def _create_session(name: str, cwd: Path, cmd: list[str]) -> None:
+        creates.append((name, cwd, cmd))
+
+    monkeypatch.setattr(
+        "murder.llm.harnesses.usage_sampling.REGISTRY",
+        {"codex": _StubUsageAdapter, "cursor": _HttpUsageAdapter},
+    )
+    monkeypatch.setattr(
+        "murder.llm.harnesses.usage_sampling.get_harness",
+        lambda kind, startup_model=None: (
+            _HttpUsageAdapter(startup_model=startup_model)
+            if kind == "cursor"
+            else _StubUsageAdapter(startup_model=startup_model)
+        ),
+    )
+    monkeypatch.setattr("murder.llm.harnesses.usage_sampling.tmux.kill_session", _kill_session)
+    monkeypatch.setattr("murder.llm.harnesses.usage_sampling.tmux.create_session", _create_session)
+    monkeypatch.setattr("murder.llm.harnesses.usage_sampling.tmux.capture_pane", _capture_pane)
+    monkeypatch.setattr(
+        "murder.llm.harnesses.usage_sampling.insert_harness_usage_snapshot",
+        lambda db, status: inserted.append(status.harness),
+    )
+
+    ctx = UsageSamplingContext(config=_mixed_pool_config(), repo_root=tmp_path, db=_db())
+    stored, failures = asyncio.run(sample_harness_usages(ctx, modes={"http"}))
+
+    assert stored == 1
+    assert failures == 0
+    assert inserted == ["cursor"]
+    assert creates == []
 
 
 def test_sample_harness_usages_starts_fresh_session_and_cleans_up(monkeypatch, tmp_path) -> None:

@@ -5,10 +5,13 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import logging
 import sqlite3
 from dataclasses import asdict, dataclass, is_dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Protocol
+from typing import TYPE_CHECKING, Any, Literal, Protocol
+
+_log = logging.getLogger(__name__)
 
 from murder.runtime.terminal import tmux
 from murder.config import Config, HarnessRoleConfig, resolve_default_crow_startup_model
@@ -42,6 +45,27 @@ class _SessionNameScope(Protocol):
     def config(self) -> Config: ...
 
 
+class _LiveUsageAgent(Protocol):
+    harness: HarnessAdapter
+    harness_session: HarnessSession
+
+    @property
+    def _producer(self) -> Any: ...
+
+
+LiveSessionUsageOutcome = Literal["stored", "skipped", "noop", "failed"]
+
+
+@dataclass(frozen=True, slots=True)
+class LiveSessionUsageResult:
+    outcome: LiveSessionUsageOutcome
+    reason: str | None = None
+
+
+_LIVE_IDLE_TIMEOUT_S = 3.0
+_LIVE_DISMISS_DELAY_S = 0.15
+
+
 @dataclass(frozen=True, slots=True)
 class UsageSamplingContext:
     """Explicit deps for usage sampling (no Runtime service locator)."""
@@ -73,14 +97,24 @@ def _supports_usage(kind: str) -> bool:
     return cls is not None and cls.usage_collection_mode != "none"
 
 
-def harness_kinds_to_sample(ctx: UsageSamplingContext | _SessionNameScope) -> list[str]:
+def harness_kinds_to_sample(
+    ctx: UsageSamplingContext | _SessionNameScope,
+    *,
+    modes: set[str] | None = None,
+) -> list[str]:
     """Harness kinds to sample: crow pool plus collaborator harness when supported."""
     config = ctx.config
     kinds = harness_kinds_with_usage_collection(config.default_crow)
     collab = config.collaborator.harness
     if _supports_usage(collab) and collab not in kinds:
         kinds.append(collab)
-    return kinds
+    if modes is None:
+        return kinds
+    return [
+        kind
+        for kind in kinds
+        if (cls := REGISTRY.get(kind)) is not None and cls.usage_collection_mode in modes
+    ]
 
 
 def insert_harness_usage_snapshot(db: sqlite3.Connection, status: HarnessUsageStatus) -> None:
@@ -185,14 +219,18 @@ async def _sample_tmux_slash_once(
             await tmux.kill_session(hs.session)
 
 
-async def sample_harness_usages(ctx: UsageSamplingContext) -> tuple[int, int]:
+async def sample_harness_usages(
+    ctx: UsageSamplingContext,
+    *,
+    modes: set[str] | None = None,
+) -> tuple[int, int]:
     """Collect harness usage snapshots, using fresh probe sessions when needed."""
     db = ctx.db
     if db is None:
         return 0, 0
 
     cfg = ctx.config.default_crow
-    kinds = harness_kinds_to_sample(ctx)
+    kinds = harness_kinds_to_sample(ctx, modes=modes)
     stored = 0
     failures = 0
 
@@ -236,6 +274,86 @@ async def sample_harness_usages(ctx: UsageSamplingContext) -> tuple[int, int]:
     return stored, failures
 
 
+@contextlib.asynccontextmanager
+async def usage_capture_projection_guard(agent: _LiveUsageAgent):
+    """Suspend pane projection while a live-session usage overlay is open."""
+    setattr(agent, "usage_capture_in_progress", True)
+    try:
+        yield
+    finally:
+        setattr(agent, "usage_capture_in_progress", False)
+
+
+async def _live_session_idle(agent: _LiveUsageAgent, hs: HarnessSession) -> bool:
+    producer = getattr(agent, "_producer", None)
+    if producer is not None and producer.last_state is not None:
+        return producer.last_state == "awaiting_input"
+    idle = await hs.wait_idle(timeout_s=_LIVE_IDLE_TIMEOUT_S)
+    return idle.ok
+
+
+async def _dismiss_live_usage_overlay(hs: HarnessSession) -> None:
+    try:
+        await hs.adapter.interrupt_generation(hs.session)
+        await asyncio.sleep(_LIVE_DISMISS_DELAY_S)
+        if hs.adapter.kind == "codex":
+            await tmux.send_keys(hs.session, "Escape", literal=False, enter=False)
+            await asyncio.sleep(_LIVE_DISMISS_DELAY_S)
+    except Exception:
+        _log.debug(
+            "failed to dismiss usage overlay for harness=%s session=%s",
+            hs.adapter.kind,
+            hs.session,
+            exc_info=True,
+        )
+
+
+async def sample_live_session_usage(
+    agent: _LiveUsageAgent,
+    ctx: UsageSamplingContext,
+    trigger: str,
+) -> LiveSessionUsageResult:
+    """Capture usage from an agent's live tmux session without a probe session."""
+    try:
+        cls = REGISTRY.get(agent.harness.kind)
+        if cls is None or cls.usage_collection_mode != "tmux_slash":
+            return LiveSessionUsageResult(outcome="noop", reason="unsupported_harness")
+
+        db = ctx.db
+        if db is None:
+            return LiveSessionUsageResult(outcome="failed", reason="no_db")
+
+        hs = agent.harness_session
+        if not await _live_session_idle(agent, hs):
+            return LiveSessionUsageResult(outcome="skipped", reason="not_idle")
+
+        async with usage_capture_projection_guard(agent):
+            result = await hs.collect_usage_status()
+            await _dismiss_live_usage_overlay(hs)
+
+        if not result.ok or result.data is None:
+            _log.warning(
+                "live usage capture failed for harness=%s trigger=%s: %s",
+                agent.harness.kind,
+                trigger,
+                result.message,
+            )
+            return LiveSessionUsageResult(outcome="failed", reason=result.message)
+
+        status = result.data
+        status.raw = dict(status.raw)
+        status.raw["trigger"] = trigger
+        insert_harness_usage_snapshot(db, status)
+        return LiveSessionUsageResult(outcome="stored")
+    except Exception:
+        _log.exception(
+            "live usage capture raised for harness=%s trigger=%s",
+            getattr(getattr(agent, "harness", None), "kind", "?"),
+            trigger,
+        )
+        return LiveSessionUsageResult(outcome="failed", reason="exception")
+
+
 async def sample_harness_usages_for_config(
     rt: _RuntimeDbScope | UsageSamplingContext,
 ) -> tuple[int, int]:
@@ -246,10 +364,13 @@ async def sample_harness_usages_for_config(
 
 
 __all__ = [
+    "LiveSessionUsageResult",
     "UsageSamplingContext",
     "harness_kinds_to_sample",
     "harness_kinds_with_usage_collection",
     "insert_harness_usage_snapshot",
     "sample_harness_usages",
     "sample_harness_usages_for_config",
+    "sample_live_session_usage",
+    "usage_capture_projection_guard",
 ]

@@ -70,6 +70,8 @@ class CrowAgent(HarnessBackedAgent):
                 self.runtime.sync_agent(self)
             raise TimeoutError(start_result.message or "harness startup failed")
 
+        await self._sample_live_usage_on_startup()
+
         try:
             self.start_commit = await git_diff.head_commit(self.repo_root)
         except Exception:

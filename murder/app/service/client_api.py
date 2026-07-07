@@ -299,6 +299,8 @@ class UsageGaugeSummary:
     t_until_reset_minutes: float
     t_period_minutes: float = 0.0
     steering: str = "auto"
+    # ISO-8601 UTC timestamp of the latest harness_usage_snapshots row for this harness.
+    fetched_at: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

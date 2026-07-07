@@ -15,17 +15,30 @@ from murder.llm.harnesses.usage_sampling import (
 from murder.llm.harnesses.usage_sampling import _RuntimeDbScope
 from murder.runtime.workers.base import Worker, WorkerCommand, WorkerCtx, WorkerSpec
 
-UsageSampler = Callable[[WorkerCtx], Awaitable[tuple[int, int]]]
-KindsProvider = Callable[[WorkerCtx], list[str]]
+UsageSampler = Callable[..., Awaitable[tuple[int, int]]]
+KindsProvider = Callable[..., list[str]]
 
 
-async def _missing_sampler(ctx: WorkerCtx) -> tuple[int, int]:  # pragma: no cover
-    del ctx
+def _modes_from_payload(payload: dict[str, Any]) -> set[str] | None:
+    raw = payload.get("modes")
+    if raw is None:
+        return None
+    if isinstance(raw, (list, set, frozenset, tuple)):
+        return {str(mode) for mode in raw}
+    return None
+
+
+async def _missing_sampler(
+    ctx: WorkerCtx,
+    *,
+    modes: set[str] | None = None,
+) -> tuple[int, int]:  # pragma: no cover
+    del ctx, modes
     raise RuntimeError("UsageProbeWorker requires a sampler")
 
 
 class UsageProbeWorker(Worker):
-    COMMAND_KINDS = ("state.harness_usage.sample", "scheduler.probe_usage")
+    COMMAND_KINDS = ("state.harness_usage.sample",)
 
     def __init__(
         self,
@@ -55,11 +68,19 @@ class UsageProbeWorker(Worker):
         cfg = Config.load(ctx.repo_root)
         sampling = UsageSamplingContext(config=cfg, repo_root=ctx.repo_root, db=ctx.db)
 
-        async def _sample(_ctx: WorkerCtx) -> tuple[int, int]:
-            return await sample_harness_usages(sampling)
+        async def _sample(
+            _ctx: WorkerCtx,
+            *,
+            modes: set[str] | None = None,
+        ) -> tuple[int, int]:
+            return await sample_harness_usages(sampling, modes=modes)
 
-        def _kinds(_ctx: WorkerCtx) -> list[str]:
-            return harness_kinds_to_sample(sampling)
+        def _kinds(
+            _ctx: WorkerCtx,
+            *,
+            modes: set[str] | None = None,
+        ) -> list[str]:
+            return harness_kinds_to_sample(sampling, modes=modes)
 
         return cls(sampler=_sample, kinds_provider=_kinds)
 
@@ -74,11 +95,23 @@ class UsageProbeWorker(Worker):
     ) -> UsageProbeWorker:
         """Thin shim for call sites still holding a config/db/repo scope."""
 
-        async def _sample(_ctx: WorkerCtx) -> tuple[int, int]:
+        async def _sample(
+            _ctx: WorkerCtx,
+            *,
+            modes: set[str] | None = None,
+        ) -> tuple[int, int]:
+            del modes
             return await sampler(runtime)
 
-        def _kinds(_ctx: WorkerCtx) -> list[str]:
-            return harness_kinds_to_sample(UsageSamplingContext.from_runtime(runtime))
+        def _kinds(
+            _ctx: WorkerCtx,
+            *,
+            modes: set[str] | None = None,
+        ) -> list[str]:
+            return harness_kinds_to_sample(
+                UsageSamplingContext.from_runtime(runtime),
+                modes=modes,
+            )
 
         return cls(sampler=_sample, kinds_provider=_kinds)
 
@@ -91,8 +124,9 @@ class UsageProbeWorker(Worker):
     async def on_command(self, command: CommandEvent, ctx: WorkerCtx) -> dict[str, Any]:
         if command.kind not in self.COMMAND_KINDS:
             return {"handled": False}
-        sampled_kinds = self._kinds_provider(ctx)
-        stored, failures = await self._sampler(ctx)
+        modes = _modes_from_payload(command.payload)
+        sampled_kinds = self._kinds_provider(ctx, modes=modes)
+        stored, failures = await self._sampler(ctx, modes=modes)
         # F1 (queue_row chunk): the sampler INSERTs into `harness_usage_snapshots`,
         # the read-model state behind the usage gauges embedded in
         # `state.schedule_snapshot`. Emit one key-only `state.snapshot{queue_row}`

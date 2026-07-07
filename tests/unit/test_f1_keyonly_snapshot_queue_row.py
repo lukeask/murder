@@ -120,12 +120,17 @@ async def test_usage_probe_emits_queue_row_per_sampled_harness(repo_root: Path) 
     captured: list[object] = []
     ctx.bus.subscribe(lambda ev: _record(captured, ev))
 
-    async def _sample(_ctx: WorkerCtx) -> tuple[int, int]:
+    async def _sample(
+        _ctx: WorkerCtx,
+        *,
+        modes: set[str] | None = None,
+    ) -> tuple[int, int]:
+        del modes
         return (2, 0)  # two snapshots stored, no failures
 
     worker = UsageProbeWorker(
         sampler=_sample,
-        kinds_provider=lambda _ctx: ["codex", "claude"],
+        kinds_provider=lambda _ctx, modes=None: ["codex", "claude"],
     )
     from murder.bus.protocol import CommandEvent
 
@@ -154,12 +159,17 @@ async def test_usage_probe_does_not_emit_when_nothing_stored(repo_root: Path) ->
     captured: list[object] = []
     ctx.bus.subscribe(lambda ev: _record(captured, ev))
 
-    async def _sample(_ctx: WorkerCtx) -> tuple[int, int]:
+    async def _sample(
+        _ctx: WorkerCtx,
+        *,
+        modes: set[str] | None = None,
+    ) -> tuple[int, int]:
+        del modes
         return (0, 1)  # all sampling failed -> no snapshot row inserted
 
     worker = UsageProbeWorker(
         sampler=_sample,
-        kinds_provider=lambda _ctx: ["codex"],
+        kinds_provider=lambda _ctx, modes=None: ["codex"],
     )
     from murder.bus.protocol import CommandEvent
 

@@ -62,6 +62,9 @@ class _LiveCollaborator:
 def test_reconfigure_collaborator_restarts_when_saved_harness_changes(
     repo_root: Path, monkeypatch
 ) -> None:
+    # Isolate user config: collaborator harness now resolves from user scope /
+    # bundled defaults (claude_code), never the project roles.yaml.
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(repo_root.parent / "xdg"))
     conn = get_db(repo_root / ".murder" / "murder.db")
     init_db(conn)
     roles_path = repo_root / ".murder" / "roles.yaml"
@@ -121,6 +124,7 @@ def test_reconfigure_collaborator_restarts_when_saved_harness_changes(
 def test_reconfigure_collaborator_returns_startup_failure_error(
     repo_root: Path, monkeypatch
 ) -> None:
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(repo_root.parent / "xdg"))
     conn = get_db(repo_root / ".murder" / "murder.db")
     init_db(conn)
     roles_path = repo_root / ".murder" / "roles.yaml"

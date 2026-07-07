@@ -72,6 +72,7 @@ class CollaboratorAgent(HarnessBackedAgent):
         if not start_result.ok:
             await self._fail_startup(start_result.message or "collaborator startup failed")
             raise TimeoutError(start_result.message or "collaborator startup failed")
+        await self._sample_live_usage_on_startup()
         send_result = await self.harness_session.send_prompt(brief)
         if not send_result.ok:
             message = send_result.message or "collaborator startup prompt failed"

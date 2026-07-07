@@ -213,6 +213,7 @@ def _schedule_snapshot_dto() -> ScheduleSnapshot:
         pct=42.5,
         t_until_reset_minutes=120.0,
         t_period_minutes=300.0,
+        fetched_at="2026-06-09T11:58:00",
     )
     return ScheduleSnapshot(
         scheduler_mode="auto",

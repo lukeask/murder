@@ -362,5 +362,7 @@ def test_load_gauges_carries_steering(repo_root: Path) -> None:
     gauges = _load_gauges(conn)
     by_harness = {g.harness: g for g in gauges}
     assert by_harness["codex"].steering == "pause"
+    assert by_harness["codex"].fetched_at == "2026-06-11T00:00:00"
     # No steering row -> defaults to 'auto'.
     assert by_harness["claude"].steering == "auto"
+    assert by_harness["claude"].fetched_at == "2026-06-11T00:00:00"

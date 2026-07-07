@@ -250,7 +250,7 @@ def _crow_rationale(conn: sqlite3.Connection) -> str:
 def _load_gauges(conn: sqlite3.Connection) -> list[UsageGaugeSummary]:
     snap_rows = conn.execute(
         """
-        SELECT s.harness, s.status_json
+        SELECT s.harness, s.status_json, s.fetched_at
           FROM harness_usage_snapshots s
           JOIN (
                 SELECT harness, MAX(fetched_at) AS fetched_at
@@ -306,6 +306,7 @@ def _load_gauges(conn: sqlite3.Connection) -> list[UsageGaugeSummary]:
                     t_until_reset_minutes=t_until,
                     t_period_minutes=t_period,
                     steering=steering_map.get(harness, "auto"),
+                    fetched_at=str(snap_row["fetched_at"]),
                 )
             )
     order = {h: i for i, h in enumerate(_PROVIDER_ORDER)}

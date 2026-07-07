@@ -37,7 +37,8 @@
         "pct": 42.5,
         "t_until_reset_minutes": 120.0,
         "t_period_minutes": 300.0,
-        "steering": "auto"
+        "steering": "auto",
+        "fetched_at": "2026-06-09T11:58:00"
       }
     ],
     "calendar_harnesses": ["cc"],
