@@ -18,6 +18,7 @@ import {
   useInputStores,
   useKeymapRegistry,
   useModeStore,
+  useWorkspaceStore,
 } from '../hooks/useInputStores.js';
 import { useTerminalSize } from '../hooks/useTerminalSize.js';
 import { CHAT_FOCUS } from '../input/focusStore.js';
@@ -75,6 +76,8 @@ export function useBottomBarLines(): BottomBarLineItem[][] {
   const bindings = useBindings();
   const barWidgets = useAppStore((s) => s.settings.barWidgets);
   const usage = useAppStore((s) => s.usage);
+  const activeIndex = useWorkspaceStore((s) => s.activeIndex);
+  const count = useWorkspaceStore((s) => s.count);
   const keyUsage = useStore(keyUsageStore, (s) => s.actions);
   const { modes } = useInputStores();
   useModeStore((s) => s.stack);
@@ -89,11 +92,23 @@ export function useBottomBarLines(): BottomBarLineItem[][] {
         focused,
         focusedKeymap,
         bindings,
-        { usage, keyUsage, now },
+        { usage, keyUsage, now, activeIndex, count },
         avail,
         modeHints,
       ),
-    [barWidgets, focused, focusedKeymap, bindings, modeHints, usage, keyUsage, avail, now],
+    [
+      barWidgets,
+      focused,
+      focusedKeymap,
+      bindings,
+      modeHints,
+      usage,
+      keyUsage,
+      avail,
+      now,
+      activeIndex,
+      count,
+    ],
   );
   const hasToasts = useStore(toastStore, (s) => s.toasts.length > 0);
   return useMemo(() => {
@@ -106,7 +121,9 @@ function clamp01(value: number): number {
   return Math.max(0, Math.min(1, value));
 }
 
-function easeOut(value: number): number {
+/** Cubic ease-out over a clamped 0–1 input. Shared with the toast enter/exit widths here and the
+ * workspace slide offset ({@link ./WorkspaceSlideOverlay.js}). */
+export function easeOut(value: number): number {
   const t = clamp01(value);
   return 1 - (1 - t) ** 3;
 }

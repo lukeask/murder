@@ -69,6 +69,7 @@ describe('ctrl+1 raw bytes → shim → dispatch → focusPanel(plans)', () => {
       murderPending: vi.fn(() => false),
       murderConfirm: vi.fn(),
       murderCancel: vi.fn(),
+      repaint: vi.fn(),
     };
     const ctx: DispatchContext = {
       focusedId: CHAT_FOCUS,
@@ -130,6 +131,7 @@ describe('ctrl+j raw bytes → shim → dispatch → toggleTargetGroup', () => {
       murderPending: vi.fn(() => false),
       murderConfirm: vi.fn(),
       murderCancel: vi.fn(),
+      repaint: vi.fn(),
     };
     const ctx: DispatchContext = {
       focusedId: CHAT_FOCUS,
@@ -191,6 +193,7 @@ describe('ctrl+h raw bytes → shim → dispatch (travel-left + cycleTargetPrev)
       murderPending: vi.fn(() => false),
       murderConfirm: vi.fn(),
       murderCancel: vi.fn(),
+      repaint: vi.fn(),
       ...over,
     };
   }
@@ -229,6 +232,98 @@ describe('ctrl+h raw bytes → shim → dispatch (travel-left + cycleTargetPrev)
     expect(outcome).toMatchObject({ layer: 'global', handled: true });
     expect(cycleTargetPrev).toHaveBeenCalledTimes(1);
     expect(handlers.navigate).not.toHaveBeenCalled();
+  });
+});
+
+describe('workspace <Cmd>+Shift+<key> raw bytes → shim → dispatch (kitty keystone)', () => {
+  /** Drive raw kitty bytes for a ctrl+shift+<char> combo through the shim and lift the chord exactly
+   * as useRootInput does. `code` is the base codepoint; mods = ctrl(4) | shift(1) + 1 = 6. */
+  function liftCtrlShift(code: number): {
+    input: string;
+    key: ReturnType<typeof chordToKey>['key'];
+  } {
+    const real = new FakeStdin();
+    const shim = new StdinShim(real);
+    shim.setBypass(false);
+    const chords: Chord[] = [];
+    shim.on('chord', (c: Chord) => chords.push(c));
+
+    real.push(`\x1b[${code};6u`);
+    expect(chords).toHaveLength(1);
+    const chord = chords[0];
+    if (chord === undefined) throw new Error('no chord');
+    const { input, key } = chordToKey(chord);
+    expect(key.ctrl).toBe(true);
+    expect(key.shift).toBe(true);
+    expect(key.meta).toBe(false);
+    return { input, key };
+  }
+
+  function makeHandlers(over: Partial<GlobalHandlers> = {}): GlobalHandlers {
+    return {
+      focusPanel: vi.fn(),
+      navigate: vi.fn(),
+      focusChat: vi.fn(),
+      spawn: vi.fn(),
+      cycleChatView: vi.fn(),
+      newPlan: vi.fn(),
+      newTicket: vi.fn(),
+      openSettings: vi.fn(),
+      keyHelp: vi.fn(),
+      quickNote: vi.fn(),
+      cycleTargetPrev: vi.fn(),
+      cycleTargetNext: vi.fn(),
+      toggleTargetPane: vi.fn(),
+      murder: vi.fn(),
+      murderPending: vi.fn(() => false),
+      murderConfirm: vi.fn(),
+      murderCancel: vi.fn(),
+      repaint: vi.fn(),
+      ...over,
+    };
+  }
+
+  function ctxWith(handlers: GlobalHandlers): DispatchContext {
+    return {
+      focusedId: CHAT_FOCUS,
+      panelKeymaps: {},
+      handlers,
+      activeMode: null,
+      bindings: resolveBindings('ctrl', true, {}),
+    };
+  }
+
+  it('ctrl+shift+j fires workspaceNext (the plain-chord route preserves shift)', () => {
+    const { input, key } = liftCtrlShift(0x6a); // 'j'
+    expect(input).toBe('j');
+    const workspaceNext = vi.fn<NonNullable<GlobalHandlers['workspaceNext']>>();
+    const handlers = makeHandlers({ workspaceNext });
+    const outcome = dispatchKey(input, key, ctxWith(handlers));
+    expect(outcome).toMatchObject({ layer: 'global', handled: true, action: 'workspace.next' });
+    expect(workspaceNext).toHaveBeenCalledOnce();
+  });
+
+  it('ctrl+shift+k fires workspacePrev — REGRESSION: shift must survive the clean-byte path', () => {
+    // Before the translate fix, ctrl+shift+k collapsed to the bare control byte 0x0b (shift lost),
+    // leaving workspace.prev unreachable under the kitty/ctrl modifier. The dispatcher-only test
+    // (synthetic {ctrl,shift,input:'k'}) could not catch this — only the full byte path does.
+    const { input, key } = liftCtrlShift(0x6b); // 'k'
+    expect(input).toBe('k');
+    const workspacePrev = vi.fn<NonNullable<GlobalHandlers['workspacePrev']>>();
+    const handlers = makeHandlers({ workspacePrev });
+    const outcome = dispatchKey(input, key, ctxWith(handlers));
+    expect(outcome).toMatchObject({ layer: 'global', handled: true, action: 'workspace.prev' });
+    expect(workspacePrev).toHaveBeenCalledOnce();
+  });
+
+  it('ctrl+shift+3 fires workspaceJump(2) (digit chords ride the side channel already)', () => {
+    const { input, key } = liftCtrlShift(0x33); // '3'
+    expect(input).toBe('3');
+    const workspaceJump = vi.fn<NonNullable<GlobalHandlers['workspaceJump']>>();
+    const handlers = makeHandlers({ workspaceJump });
+    const outcome = dispatchKey(input, key, ctxWith(handlers));
+    expect(outcome).toMatchObject({ layer: 'global', handled: true, action: 'workspace.jump.3' });
+    expect(workspaceJump).toHaveBeenCalledWith(2);
   });
 });
 
@@ -276,6 +371,7 @@ describe('ctrl+m raw bytes → shim → dispatch (murder arm + pending confirm)'
       murderPending: vi.fn(() => false),
       murderConfirm: vi.fn(),
       murderCancel: vi.fn(),
+      repaint: vi.fn(),
       ...over,
     };
   }

@@ -15,7 +15,7 @@
 import { Box, Text } from 'ink';
 import { memo, useMemo } from 'react';
 import { useAppStore } from '../hooks/useAppStore.js';
-import { usePanelStore } from '../hooks/useInputStores.js';
+import { usePanelStore, useWorkspaceStore } from '../hooks/useInputStores.js';
 import { useTerminalSize } from '../hooks/useTerminalSize.js';
 import {
   connectionBadgeWidth,
@@ -57,13 +57,16 @@ export const TopBar = memo(function TopBar({
   const theme = useTheme();
   const status = useConnectionStatus();
   const visible = usePanelStore((s) => s.visible);
+  const activeIndex = useWorkspaceStore((s) => s.activeIndex);
+  const count = useWorkspaceStore((s) => s.count);
   const barWidgets = useAppStore((s) => s.settings.barWidgets);
   const usage = useAppStore((s) => s.usage);
   const { columns } = useTerminalSize();
   const labels = useMemo(() => selectTopBar(visible), [visible]);
   const rawSegments = useMemo(
-    () => selectTopBarWidgetSegments(barWidgets, { usage, keyUsage: {}, now: 0 }),
-    [barWidgets, usage],
+    () =>
+      selectTopBarWidgetSegments(barWidgets, { usage, keyUsage: {}, now: 0, activeIndex, count }),
+    [barWidgets, usage, activeIndex, count],
   );
   const widgetAvail = useMemo(() => {
     const left = estimateTopBarLeftWidth(project, labels);

@@ -60,6 +60,16 @@ describe('alt+key → legacy ESC-prefixed (Ink reports key.meta)', () => {
   it('alt+x → ESC x', () => {
     expect(bytesOf(translate(key(0x78, mods({ alt: true }))))).toEqual([0x1b, 0x78]);
   });
+
+  it('alt+shift+j → ESC J (shift carried as the shifted char, matching legacy terminals)', () => {
+    // Kitty reports the unshifted codepoint + a shift bit; the legacy ESC form can only carry
+    // shift as the uppercase char itself — the workspace `<Cmd>+Shift+J` chords depend on this.
+    expect(bytesOf(translate(key(0x6a, mods({ alt: true, shift: true }))))).toEqual([0x1b, 0x4a]);
+  });
+
+  it('alt+shift+<caseless char> passes the char unchanged', () => {
+    expect(bytesOf(translate(key(0x37, mods({ alt: true, shift: true }))))).toEqual([0x1b, 0x37]);
+  });
 });
 
 describe('ctrl+letter → clean legacy control byte', () => {
@@ -74,6 +84,37 @@ describe('ctrl+letter → clean legacy control byte', () => {
   });
   it('ctrl+S (uppercase) normalises to 0x13', () => {
     expect(bytesOf(translate(key(0x53, mods({ ctrl: true }))))).toEqual([0x13]);
+  });
+});
+
+describe('ctrl+shift+<letter> → side-channel chord (shift has no legacy byte)', () => {
+  // Workspace <Cmd>+Shift+<letter> chords under the ctrl/kitty modifier: ctrl+shift+<letter>
+  // collapses to the same control byte as ctrl+<letter>, so shift must ride the side channel or it
+  // is lost. Regression guard for workspace.prev (ctrl+shift+k) being unreachable.
+  it('ctrl+shift+k → chord { input:"k", ctrl, shift } (workspace.prev)', () => {
+    const t = translate(key(0x6b, mods({ ctrl: true, shift: true })));
+    expect(t).toEqual({
+      kind: 'chord',
+      chord: { input: 'k', ctrl: true, alt: false, shift: true },
+    });
+  });
+  it('ctrl+shift+j → chord { input:"j", ctrl, shift } (workspace.next; via the plain-chord route)', () => {
+    const t = translate(key(0x6a, mods({ ctrl: true, shift: true })));
+    expect(t).toEqual({
+      kind: 'chord',
+      chord: { input: 'j', ctrl: true, alt: false, shift: true },
+    });
+  });
+  it('kitty reports the UNSHIFTED codepoint, so the chord char is lowercase even for uppercase input', () => {
+    // A terminal that (wrongly) sent the shifted codepoint 0x4b still normalises to lowercase 'k'.
+    const t = translate(key(0x4b, mods({ ctrl: true, shift: true })));
+    expect(t).toEqual({
+      kind: 'chord',
+      chord: { input: 'k', ctrl: true, alt: false, shift: true },
+    });
+  });
+  it('bare ctrl+k (no shift) is untouched — still the clean legacy byte 0x0b', () => {
+    expect(bytesOf(translate(key(0x6b, mods({ ctrl: true }))))).toEqual([0x0b]);
   });
 });
 

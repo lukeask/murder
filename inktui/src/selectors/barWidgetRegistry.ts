@@ -8,7 +8,7 @@
  */
 
 /** Known built-in widget ids. Extend this union when registering a new widget. */
-export type BarWidgetId = 'hints' | 'usage';
+export type BarWidgetId = 'hints' | 'usage' | 'workspace';
 
 export type BarPlacement = 'top' | 'bottom';
 
@@ -51,6 +51,13 @@ export const BAR_WIDGET_DEFINITIONS: readonly BarWidgetDefinition[] = [
     id: 'usage',
     label: 'Usage reset timer',
     defaultEnabled: false,
+    defaultPlacement: 'top',
+    allowedPlacements: ['top', 'bottom'],
+  },
+  {
+    id: 'workspace',
+    label: 'Workspace indicator',
+    defaultEnabled: true,
     defaultPlacement: 'top',
     allowedPlacements: ['top', 'bottom'],
   },

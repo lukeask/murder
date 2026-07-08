@@ -41,9 +41,9 @@ import {
 import { selectActiveMode } from '../input/modeStore.js';
 import type { PanelStoreApi } from '../input/panelStore.js';
 import type { PanelId } from '../input/panels.js';
+import { keyUsageStore } from '../store/keyUsage/keyUsageStore.js';
 import type { Wheel } from '../terminal/StdinShim.js';
 import type { Chord } from '../terminal/translate.js';
-import { keyUsageStore } from '../store/keyUsage/keyUsageStore.js';
 import { useInputStores } from './useInputStores.js';
 
 /** Lines a single wheel notch scrolls. 3 is the conventional terminal step (xterm's default), and
@@ -96,6 +96,12 @@ export interface DeferredGlobalHandlers {
   /** `ctrl+r` (`global.repaint`): force a full terminal redraw. Default: no-op until the shell wires
    * {@link forceInkFullRepaint}. ctrl+l is taken by target cycling. */
   repaint?: () => void;
+  /** `<Cmd>+Shift+J` (`workspace.next`). Default: no-op until the shell wires workspace switching. */
+  workspaceNext?: () => void;
+  /** `<Cmd>+Shift+K` (`workspace.prev`). Default: no-op until the shell wires workspace switching. */
+  workspacePrev?: () => void;
+  /** `<Cmd>+Shift+<n>` (`workspace.jump.<n>`). Default: no-op until the shell wires workspace switching. */
+  workspaceJump?: (index: number) => void;
   /**
    * The persistent chat-input handler (C11, part F). Supplied by the shell (it needs both the chat
    * buffer store and the send action). When absent, layer 2 declines as before — so older
@@ -221,7 +227,7 @@ export function useRootInput(
   deferred: DeferredGlobalHandlers = {},
   terminalEvents?: TerminalEvents,
 ): void {
-  const { panels, focus, keymaps, modes, bindings, paneScroll } = useInputStores();
+  const { panels, focus, keymaps, modes, bindings, paneScroll, workspace } = useInputStores();
   // Only claim raw mode when the terminal supports it (see the raw-mode note above).
   const { isRawModeSupported } = useStdin();
 
@@ -230,6 +236,13 @@ export function useRootInput(
   // dispatch path as a native key event — there is one dispatch policy, two entry points.
   const handleKey = (input: string, key: Key): void => {
     {
+      // Workspace slide in flight: ALL input is swallowed (including further workspace keybinds) —
+      // the transition lasts < half a second and the layout being animated is not the live one, so
+      // routing a key anywhere would act on a view the user cannot see. Read per-event, like the
+      // active mode.
+      if (workspace.getState().transition !== null) {
+        return;
+      }
       const focusState = focus.getState();
       const handlers: GlobalHandlers = {
         focusPanel(id) {
@@ -268,6 +281,9 @@ export function useRootInput(
         murderCancel: deferred.murderCancel ?? (() => {}),
         // ctrl+r redraw: default no-op until the shell wires forceInkFullRepaint.
         repaint: deferred.repaint ?? (() => {}),
+        workspaceNext: deferred.workspaceNext ?? (() => {}),
+        workspacePrev: deferred.workspacePrev ?? (() => {}),
+        workspaceJump: deferred.workspaceJump ?? (() => {}),
       };
 
       const ctx: DispatchContext = {
@@ -301,6 +317,10 @@ export function useRootInput(
   // modal does not scroll (no center-stage pane to drive). The pane applies the delta to its own local
   // offset via the scroll bus, clamped to its own range (only the pane knows its content length).
   const handleWheel = (wheel: Wheel): void => {
+    // Same workspace-slide input block as handleKey: no scrolling a view that isn't on screen.
+    if (workspace.getState().transition !== null) {
+      return;
+    }
     const focusState = focus.getState();
     const resolved = selectResolvedFocus(focus);
     let target: StagePaneId | null = null;

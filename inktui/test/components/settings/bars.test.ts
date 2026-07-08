@@ -15,6 +15,15 @@ describe('bar widget registry', () => {
     });
   });
 
+  it('workspace widget defaults to enabled on the top bar', () => {
+    const def = BAR_WIDGET_DEFINITIONS.find((entry) => entry.id === 'workspace');
+    expect(def).toMatchObject({ defaultEnabled: true, defaultPlacement: 'top' });
+    expect(resolveBarWidgetConfig('workspace', undefined)).toMatchObject({
+      enabled: true,
+      placement: 'top',
+    });
+  });
+
   it('resolveBarWidgetConfig round-trips harness selection for usage', () => {
     expect(
       resolveBarWidgetConfig('usage', {

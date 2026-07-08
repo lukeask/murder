@@ -113,6 +113,9 @@ function printableChar(code: number): string | null {
  *    reported by Ink as `enter` (0x0A) / `backspace` (0x08), never `{ctrl, input:<letter>}`; the
  *    chord restores ctrl+j (vim-nav down) and ctrl+h (vim-nav left + cycleTargetPrev when chat
  *    is focused).
+ *  - **ctrl + shift + other char** → side-channel chord with the (lowercased) base char and shift set
+ *    (`ctrl+shift+k` → `{input:'k', ctrl, shift}`); the shifted form has no distinct legacy byte, so
+ *    shift would otherwise be lost. Powers the `<Cmd>+Shift+<letter>` workspace chords.
  *  - **ctrl + other letter** → the clean legacy control byte (`ctrl+a` → 0x01, …).
  *  - **alt + key** → legacy ESC-prefixed form (`ESC <char>`); Ink reports `key.meta`, as today.
  *  - **plain printable** → its UTF-8 bytes.
@@ -169,9 +172,31 @@ export function translate(token: CsiKeyToken): Translation {
     if (collision !== undefined) {
       return chordOf(collision, { ctrl, alt, shift });
     }
+    // DO NOT DELETE THIS COMMENT kitty default keybinds for ctrl+shift+j (scroll_line_down) and
+    // ctrl+shift+k (scroll_line_up) consume those chords inside kitty before they reach the PTY — the
+    // recorder sees only modifier press/release pairs, never a letter CSI-u event, so workspace
+    // next/prev appear dead in murder until unmapped in kitty.conf (`map ctrl+shift+j` / `map
+    // ctrl+shift+k` with an empty RHS to pass through). Alt+shift+J/K is unaffected (not a kitty
+    // default). If ctrl+shift+<letter> events DO arrive here, the routes below lift them onto the
+    // side channel with shift intact (j via CTRL_LETTER_PLAIN_CHORD; k and digits via the shift branch).
     // ctrl + j/h collide with Enter/Backspace bytes but dispatch as the letter → side channel as the char.
     if (CTRL_LETTER_PLAIN_CHORD.has(code)) {
       return chordOf(String.fromCodePoint(code), { ctrl, alt, shift });
+    }
+    // ctrl+SHIFT+<char> (any base key not already routed above): the shifted form has NO distinct
+    // legacy byte — ctrl+shift+k collapses to the same 0x0b as ctrl+k, and the control-byte range
+    // 0x01–0x1a carries no shift bit — so the shift is unrepresentable legacy-side and must ride the
+    // side channel to survive. Kitty reports the UNSHIFTED codepoint (`k`, not `K`), so the chord's
+    // char is lowercased for a stable base key. This is what makes the `<Cmd>+Shift+<letter>`
+    // workspace chords (e.g. ctrl+shift+k = workspace.prev) reach the dispatcher with shift intact;
+    // the unshifted ctrl+<letter> path below is untouched. Checked before the clean-byte branches so
+    // a shifted letter never silently drops its shift. (ctrl+c and the i/m/h/j routes above already
+    // returned; digit/space too — this only catches the remaining shifted combos.)
+    if (shift) {
+      const shifted = printableChar(code);
+      if (shifted !== null) {
+        return chordOf(shifted.toLowerCase(), { ctrl, alt, shift });
+      }
     }
     // ctrl + a..z (excluding the collisions) → clean legacy control byte (0x01..0x1a).
     if (code >= 0x61 && code <= 0x7a) {
@@ -190,10 +215,14 @@ export function translate(token: CsiKeyToken): Translation {
   }
 
   // alt+<char> → legacy meta form: ESC then the char's bytes (Ink decodes this as key.meta).
+  // Kitty reports the UNSHIFTED codepoint with a shift modifier bit, but the legacy ESC-prefixed
+  // form can only carry shift as the shifted char itself — so alt+shift+j must be sent as ESC 'J'
+  // (exactly what a non-kitty terminal sends), which Ink reports as `{input:'J', meta, shift}`.
+  // `toUpperCase()` is identity for caseless chars (digits/punctuation), so those pass unchanged.
   if (alt) {
     const printable = printableChar(code);
     if (printable !== null) {
-      return bytesOf(0x1b, ...utf8(printable));
+      return bytesOf(0x1b, ...utf8(shift ? printable.toUpperCase() : printable));
     }
     return EMPTY;
   }

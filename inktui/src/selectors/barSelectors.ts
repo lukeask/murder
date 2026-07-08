@@ -25,6 +25,7 @@ import {
   resolveBarWidgetConfig,
 } from './barWidgetRegistry.js';
 import { selectUsageBarWidget } from './selectUsageBarWidget.js';
+import { selectWorkspaceBarWidget } from './selectWorkspaceBarWidget.js';
 
 /** Horizontal gap between adjacent top-bar widget segments (cells). */
 export const TOP_BAR_WIDGET_GAP = 1;
@@ -190,6 +191,8 @@ export interface BarWidgetContext {
   readonly usage: UsageState;
   readonly keyUsage: Readonly<Record<string, KeyUsageRecord>>;
   readonly now: number;
+  readonly activeIndex: number;
+  readonly count: number;
 }
 
 /** One packable bottom-bar item: a contextual hint chip or a widget segment (Phase 3.1). */
@@ -287,7 +290,7 @@ export function selectOneLineHints(
       : right.reduce((sum, hint) => sum + bottomBarHintWidth(hint), 0) +
         BOTTOM_BAR_ITEM_GAP * Math.max(0, right.length - 1);
   const gapToRight = left.length > 0 && right.length > 0 ? BOTTOM_BAR_ITEM_GAP : 0;
-  let remaining = avail - rightWidth - gapToRight;
+  const remaining = avail - rightWidth - gapToRight;
   if (remaining < 0) {
     return [...right];
   }
@@ -461,6 +464,20 @@ export function selectBottomBarLineItems(
           width: segment.width,
         });
       }
+      continue;
+    }
+    if (widgetId === 'workspace') {
+      const segment = selectWorkspaceBarWidget(context.activeIndex, context.count);
+      if (segment !== null) {
+        const gap = items.length > 0 ? BOTTOM_BAR_ITEM_GAP : 0;
+        reservedWidth += gap + segment.width;
+        items.push({
+          kind: 'segment',
+          widgetId: 'workspace',
+          runs: segment.runs,
+          width: segment.width,
+        });
+      }
     }
   }
   return items;
@@ -482,6 +499,17 @@ export function selectTopBarWidgetSegments(
       if (segment !== null) {
         segments.push({
           widgetId: 'usage',
+          runs: segment.runs,
+          width: segment.width,
+        });
+      }
+      continue;
+    }
+    if (widgetId === 'workspace') {
+      const segment = selectWorkspaceBarWidget(context.activeIndex, context.count);
+      if (segment !== null) {
+        segments.push({
+          widgetId: 'workspace',
           runs: segment.runs,
           width: segment.width,
         });

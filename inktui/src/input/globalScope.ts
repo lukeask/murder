@@ -68,6 +68,17 @@ export const GLOBAL_SCOPE = {
   'global.toggleTargetPane': 'chat-or-stage',
   'global.murder': 'not-crows',
   'global.repaint': 'always',
+  'workspace.next': 'always',
+  'workspace.prev': 'always',
+  'workspace.jump.1': 'always',
+  'workspace.jump.2': 'always',
+  'workspace.jump.3': 'always',
+  'workspace.jump.4': 'always',
+  'workspace.jump.5': 'always',
+  'workspace.jump.6': 'always',
+  'workspace.jump.7': 'always',
+  'workspace.jump.8': 'always',
+  'workspace.jump.9': 'always',
 } as const satisfies Partial<Record<ActionId, FocusScope>>;
 
 /** An action id that carries a {@link FocusScope} (i.e. a global, not a `panel.*` action). */

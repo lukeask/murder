@@ -8,8 +8,9 @@ import { DEFAULT_BINDINGS, resolveBindings } from '../../src/input/bindings.js';
 import { CHAT_FOCUS } from '../../src/input/focusStore.js';
 import type { Keymap } from '../../src/input/keymap.js';
 import type { PanelId } from '../../src/input/panels.js';
-import type { UsageState } from '../../src/store/usage/usageSlice.js';
 import {
+  type BottomBarHint,
+  type BottomBarLineItem,
   bottomBarItemWidth,
   connectionBadgeWidth,
   estimateTopBarLeftWidth,
@@ -20,14 +21,13 @@ import {
   selectOneLineHints,
   selectTopBar,
   selectTopBarWidgetSegments,
-  type BottomBarHint,
-  type BottomBarLineItem,
   type TopBarWidgetSegment,
 } from '../../src/selectors/barSelectors.js';
 import { KEY_USAGE_HALF_LIFE_MS } from '../../src/store/keyUsage/keyUsageStore.js';
+import type { UsageState } from '../../src/store/usage/usageSlice.js';
 
 const EMPTY_USAGE: UsageState = { rows: [], status: 'idle', error: null };
-const BAR_CONTEXT = { usage: EMPTY_USAGE, keyUsage: {}, now: 0 };
+const BAR_CONTEXT = { usage: EMPTY_USAGE, keyUsage: {}, now: 0, activeIndex: 0, count: 1 };
 const WIDE_AVAIL = 500;
 
 describe('selectTopBar', () => {
@@ -89,18 +89,12 @@ describe('selectOneLineHints (cookbook)', () => {
   });
 
   it('always keeps the right-aligned help hint', () => {
-    const hints: BottomBarHint[] = [
-      { key: 'm', description: 'toggle maximized' },
-      help,
-    ];
+    const hints: BottomBarHint[] = [{ key: 'm', description: 'toggle maximized' }, help];
     expect(selectOneLineHints(hints, {}, 6, 0)).toEqual([help]);
   });
 
   it('with avail too small for any left hint, shows only the help hint', () => {
-    const hints: BottomBarHint[] = [
-      { key: 'm', description: 'toggle maximized' },
-      help,
-    ];
+    const hints: BottomBarHint[] = [{ key: 'm', description: 'toggle maximized' }, help];
     expect(selectOneLineHints(hints, {}, 5, 0)).toEqual([help]);
   });
 });
@@ -418,5 +412,38 @@ describe('bar widget framework', () => {
 
   it('selectTopBarWidgetSegments is empty when usage widget is disabled by default', () => {
     expect(selectTopBarWidgetSegments(undefined, BAR_CONTEXT)).toEqual([]);
+  });
+
+  it('selectTopBarWidgetSegments emits the workspace segment by default when count > 1', () => {
+    // The workspace widget is default-enabled + top, so with more than one workspace and no stored
+    // config it appears in the top bar with the one-based active-index label.
+    const segments = selectTopBarWidgetSegments(undefined, {
+      ...BAR_CONTEXT,
+      activeIndex: 1,
+      count: 3,
+    });
+    const workspace = segments.find((s) => s.widgetId === 'workspace');
+    expect(workspace).toBeDefined();
+    expect(workspace?.runs.map((run) => run.text).join('')).toBe('⟨2/3⟩');
+  });
+
+  it('the workspace widget is inert at count == 1 (emits no segment even though enabled)', () => {
+    const segments = selectTopBarWidgetSegments(undefined, { ...BAR_CONTEXT, count: 1 });
+    expect(segments.some((s) => s.widgetId === 'workspace')).toBe(false);
+  });
+
+  it('selectBottomBarLineItems carries the workspace segment when placed bottom and count > 1', () => {
+    const items = selectBottomBarLineItems(
+      { workspace: { enabled: true, placement: 'bottom' } },
+      'plans',
+      keymap,
+      DEFAULT_BINDINGS,
+      { ...BAR_CONTEXT, activeIndex: 0, count: 2 },
+      WIDE_AVAIL,
+    );
+    const workspace = items.find(
+      (item) => item.kind === 'segment' && item.widgetId === 'workspace',
+    );
+    expect(workspace).toBeDefined();
   });
 });

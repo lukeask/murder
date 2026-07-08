@@ -232,10 +232,9 @@ class ScriptedBusServer {
         const callIndex = this.hydrateCallCount;
         this.hydrateCallCount += 1;
         const result = this.hydrateHandler(
-          {
-            topics: message.args.topics,
-            ...(message.args.cursor !== undefined ? { cursor: message.args.cursor } : {}),
-          },
+          message.args.cursor === undefined || message.args.cursor === null
+            ? { topics: message.args.topics }
+            : { topics: message.args.topics, cursor: message.args.cursor },
           callIndex,
         );
         if (this.emitBeforeHydrateAck !== undefined) {

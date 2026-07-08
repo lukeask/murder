@@ -13,8 +13,8 @@ import {
   dispatchKey,
   type GlobalHandlers,
 } from '../../src/input/dispatcher.js';
-import { CHAT_FOCUS, type FocusId } from '../../src/input/focusStore.js';
 import { stageTranscriptFocusId } from '../../src/input/focusIds.js';
+import { CHAT_FOCUS, type FocusId } from '../../src/input/focusStore.js';
 import type { PanelKeymap } from '../../src/input/keymap.js';
 import type { Mode } from '../../src/input/modeStore.js';
 import { makeKey } from './key.js';
@@ -44,6 +44,9 @@ interface SpyHandlers {
   readonly murderConfirm: ReturnType<typeof vi.fn<GlobalHandlers['murderConfirm']>>;
   readonly murderCancel: ReturnType<typeof vi.fn<GlobalHandlers['murderCancel']>>;
   readonly repaint: ReturnType<typeof vi.fn<GlobalHandlers['repaint']>>;
+  readonly workspaceNext: ReturnType<typeof vi.fn<NonNullable<GlobalHandlers['workspaceNext']>>>;
+  readonly workspacePrev: ReturnType<typeof vi.fn<NonNullable<GlobalHandlers['workspacePrev']>>>;
+  readonly workspaceJump: ReturnType<typeof vi.fn<NonNullable<GlobalHandlers['workspaceJump']>>>;
 }
 
 function handlers(): SpyHandlers {
@@ -67,6 +70,9 @@ function handlers(): SpyHandlers {
     murderConfirm: vi.fn<GlobalHandlers['murderConfirm']>(),
     murderCancel: vi.fn<GlobalHandlers['murderCancel']>(),
     repaint: vi.fn<GlobalHandlers['repaint']>(),
+    workspaceNext: vi.fn<NonNullable<GlobalHandlers['workspaceNext']>>(),
+    workspacePrev: vi.fn<NonNullable<GlobalHandlers['workspacePrev']>>(),
+    workspaceJump: vi.fn<NonNullable<GlobalHandlers['workspaceJump']>>(),
   };
 }
 
@@ -401,6 +407,36 @@ describe('layer 1 — chat-target super-chords (item 9)', () => {
     const out = dispatchKey('j', makeKey({ ctrl: true }), ctx('plans', h));
     expect(h.toggleTargetGroup).not.toHaveBeenCalled();
     expect(out).toEqual({ layer: 'panel', handled: false });
+  });
+
+  it('ctrl+shift+j fires workspaceNext, NOT toggleTargetGroup (dispatch-order hazard)', () => {
+    const h = handlers();
+    const ctrlBindings = resolveBindings('ctrl', true, {});
+    const out = dispatchKey(
+      'j',
+      makeKey({ ctrl: true, shift: true }),
+      ctx(CHAT_FOCUS, h, {}, null, ctrlBindings),
+    );
+    expect(h.workspaceNext).toHaveBeenCalledOnce();
+    expect(h.toggleTargetGroup).not.toHaveBeenCalled();
+    expect(h.navigate).not.toHaveBeenCalled();
+    expect(out).toMatchObject({ layer: 'global', handled: true, action: 'workspace.next' });
+  });
+
+  it('ctrl+shift+k fires workspacePrev, NOT geometric nav', () => {
+    const h = handlers();
+    const ctrlBindings = resolveBindings('ctrl', true, {});
+    dispatchKey('k', makeKey({ ctrl: true, shift: true }), ctx('plans', h, {}, null, ctrlBindings));
+    expect(h.workspacePrev).toHaveBeenCalledOnce();
+    expect(h.navigate).not.toHaveBeenCalled();
+  });
+
+  it('ctrl+shift+3 fires workspaceJump(2), NOT panel focus', () => {
+    const h = handlers();
+    const ctrlBindings = resolveBindings('ctrl', true, {});
+    dispatchKey('3', makeKey({ ctrl: true, shift: true }), ctx('plans', h, {}, null, ctrlBindings));
+    expect(h.workspaceJump).toHaveBeenCalledWith(2);
+    expect(h.focusPanel).not.toHaveBeenCalled();
   });
 
   it('alt+h / alt+l cycle the chat target while chat is focused', () => {

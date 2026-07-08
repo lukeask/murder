@@ -28,7 +28,6 @@ import {
   useState,
 } from 'react';
 import type { BusClient } from '../bus/BusClient.js';
-import { forceInkFullRepaint } from '../terminal/forceInkRepaint.js';
 import { AppStoreProvider, useAppStore, useAppStoreApi } from '../hooks/useAppStore.js';
 import { BusClientProvider, useBusClient } from '../hooks/useBusClient.js';
 import {
@@ -38,6 +37,7 @@ import {
   useInputStores,
   useModeStore,
   usePanelStore,
+  useWorkspaceStore,
 } from '../hooks/useInputStores.js';
 import { useOrientation } from '../hooks/useOrientation.js';
 import { type TerminalEvents, useRootInput } from '../hooks/useRootInput.js';
@@ -62,6 +62,11 @@ import {
   selectResolvedFocus,
 } from '../input/focusStore.js';
 import { selectActiveMode } from '../input/modeStore.js';
+import {
+  applyWorkspaceCount,
+  switchWorkspace,
+  type WorkspaceStores,
+} from '../input/workspaceSwitch.js';
 import {
   buildPaneRequests,
   createChatIdentityMap,
@@ -101,6 +106,8 @@ import { noteCaptureStore } from '../store/notes/noteCaptureStore.js';
 import type { SettingsModifier } from '../store/settings/settingsSlice.js';
 import type { AppStoreApi } from '../store/store.js';
 import { toastStore } from '../store/toast/toastStore.js';
+import { captureCurrentFrame } from '../terminal/captureFrame.js';
+import { forceInkFullRepaint } from '../terminal/forceInkRepaint.js';
 import { DEFAULT_THEME_ID, hasTheme, type ThemeId } from '../theme/palettes.js';
 import { setTheme } from '../theme/themeStore.js';
 import { BottomBar, useBottomBarLines } from './BottomBar.js';
@@ -113,6 +120,7 @@ import { settingsMode } from './SettingsModal.js';
 import type { SpawnContext } from './SpawnWizardModal.js';
 import { spawnWizardMode } from './SpawnWizardModal.js';
 import { TopBar } from './TopBar.js';
+import { WorkspaceSlideOverlay } from './WorkspaceSlideOverlay.js';
 
 /**
  * The smallest terminal the shell will attempt to lay out (first-run UX: a too-small terminal gets
@@ -618,7 +626,18 @@ function Shell({
    * root input loop subscribes to it; omitted in smoke/tests (no shim → no side-channel chords). */
   readonly terminalEvents?: TerminalEvents | undefined;
 }): JSX.Element {
-  const { modes, chatInput, chatHistory, chatVim, bindings, keymaps, focus } = useInputStores();
+  const {
+    modes,
+    chatInput,
+    chatHistory,
+    chatVim,
+    bindings,
+    keymaps,
+    focus,
+    workspace,
+    panels,
+    paneUi,
+  } = useInputStores();
   const appStore = useAppStoreApi();
   const bus = useBusClient();
   const loadFavorites = useAppStore((s) => s.actions.favorites.load);
@@ -634,6 +653,9 @@ function Shell({
   // source of truth for inter-pane spacing (mirrors the single orientation read). `0` = flush
   // borders (the default).
   const paneGap = useAppStore((s) => s.settings.paneGap);
+  // Step 4b: while a workspace slide is animating the shell renders ONLY the slide overlay (a
+  // Body-slot takeover like a fullscreen mode — same suppression shape as presentationHidesLayout).
+  const workspaceSliding = useWorkspaceStore((s) => s.transition !== null);
   useModeStore((s) => s.stack);
   const active = selectActiveMode(modes);
   const chatInputHidden = active !== null && active.passThrough !== true;
@@ -657,6 +679,7 @@ function Shell({
   const [chatInputHeight, setChatInputHeight] = useState(0);
   const didMountTerminalSizeRef = useRef(false);
   const repaintAfterChromeMeasureRef = useRef(false);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: rows/columns intentionally retrigger chrome measurement after terminal resize.
   useLayoutEffect(() => {
     if (!didMountTerminalSizeRef.current) {
       didMountTerminalSizeRef.current = true;
@@ -823,9 +846,21 @@ function Shell({
       const id: ThemeId = hasTheme(theme) ? theme : DEFAULT_THEME_ID;
       setTheme(id);
     };
+    const workspaceStores: WorkspaceStores = {
+      workspace,
+      panels,
+      focus,
+      chatInput,
+      paneUi,
+      app: appStore,
+    };
+    const syncWorkspaceCount = (count: number): void => {
+      applyWorkspaceCount(workspaceStores, count, { repaint: () => forceInkFullRepaint(stdout) });
+    };
     const current = appStore.getState().settings;
     syncBindings(current.modifier, current.keyOverrides as Record<string, string>);
     syncTheme(current.theme);
+    syncWorkspaceCount(current.workspaceCount);
     return appStore.subscribe((state, prev) => {
       if (
         state.settings.modifier !== prev.settings.modifier ||
@@ -842,8 +877,11 @@ function Shell({
       ) {
         syncTheme(state.settings.theme);
       }
+      if (state.settings.workspaceCount !== prev.settings.workspaceCount) {
+        syncWorkspaceCount(state.settings.workspaceCount);
+      }
     });
-  }, [appStore, bindings]);
+  }, [appStore, bindings, workspace, panels, focus, chatInput, paneUi, stdout]);
 
   // `ctrl+s` → open the spawn wizard (fires when chat OR a highlighted pane is focused; see
   // dispatcher.ts). Reads the store imperatively at call time (getState()) so no stale closure; stores
@@ -884,6 +922,7 @@ function Shell({
         modifier: settings.modifier,
         theme,
         paneGap: settings.paneGap,
+        workspaceCount: settings.workspaceCount,
         vimMode: settings.vimMode,
         barWidgets: settings.barWidgets,
         defaultChatViewMode: settings.defaultChatViewMode,
@@ -1096,6 +1135,40 @@ function Shell({
       });
   };
 
+  const workspaceStores: WorkspaceStores = {
+    workspace,
+    panels,
+    focus,
+    chatInput,
+    paneUi,
+    app: appStore,
+  };
+  const workspaceRepaint = (): void => {
+    forceInkFullRepaint(stdout);
+  };
+  const workspaceSwitchOptions = {
+    repaint: workspaceRepaint,
+    // Step 4b: grab the on-screen frame at switch-away — the slide's source material AND the
+    // frame cached on the outgoing slot for a future slide back. Null (internals moved, nothing
+    // rendered) degrades to the instant switch.
+    captureFrame: () => captureCurrentFrame(stdout),
+  };
+  const workspaceNextHandler = (): void => {
+    const ws = workspace.getState();
+    const target = (ws.activeIndex + 1) % ws.count;
+    switchWorkspace(workspaceStores, target, 'next', workspaceSwitchOptions);
+  };
+  const workspacePrevHandler = (): void => {
+    const ws = workspace.getState();
+    const target = (ws.activeIndex - 1 + ws.count) % ws.count;
+    switchWorkspace(workspaceStores, target, 'prev', workspaceSwitchOptions);
+  };
+  const workspaceJumpHandler = (index: number): void => {
+    const ws = workspace.getState();
+    const direction = index > ws.activeIndex ? 'next' : 'prev';
+    switchWorkspace(workspaceStores, index, direction, workspaceSwitchOptions);
+  };
+
   // Workstream E: the capability bag the chat-input prefix dispatcher (`commandDispatch`) needs.
   // Built here where the bus, modes, and the help/note handlers are all in scope — the dispatcher
   // stays a pure function over these capabilities (no store handles leak into it).
@@ -1128,11 +1201,7 @@ function Shell({
     },
     resolveRenameTarget: () => {
       const state = appStore.getState();
-      const activeAgentId = selectActiveAgentId(
-        state.conversations,
-        state.roster,
-        state.favorites,
-      );
+      const activeAgentId = selectActiveAgentId(state.conversations, state.roster, state.favorites);
       if (activeAgentId !== null) {
         if (isRogueAgentId(activeAgentId)) {
           return { kind: 'rogue', agentId: activeAgentId };
@@ -1149,9 +1218,10 @@ function Shell({
       return null;
     },
     renameRogue: (agentId, name) => {
+      const agentIdKey = 'agent_id';
       void submitCommand(bus, 'crow.rename_rogue', { agent_id: agentId, name })
         .then((result) => {
-          const newId = typeof result.agent_id === 'string' ? result.agent_id : agentId;
+          const newId = typeof result[agentIdKey] === 'string' ? result[agentIdKey] : agentId;
           toastStore.getState().push(`renamed crow → ${name}`, { ttlMs: 6000 });
           if (newId !== agentId) {
             appStore.getState().actions.conversations.setActivePaneAgentId(newId);
@@ -1200,6 +1270,9 @@ function Shell({
       murderConfirm: murderConfirmHandler,
       murderCancel: () => murderConfirmStore.getState().clear(),
       repaint: () => forceInkFullRepaint(stdout),
+      workspaceNext: workspaceNextHandler,
+      workspacePrev: workspacePrevHandler,
+      workspaceJump: workspaceJumpHandler,
       chatInput: makeChatInputHandler(
         chatInput,
         appStore,
@@ -1245,6 +1318,12 @@ function Shell({
         >{`need ≥ ${MIN_TERMINAL_COLUMNS}×${MIN_TERMINAL_ROWS}, have ${columns}×${rows}`}</Text>
       </Box>
     );
+  }
+  // Workspace slide takeover (step 4b): the switch has already committed; this paints the two
+  // captured frames sliding until the transition clears (or a resize cancels it). Checked ahead of
+  // the fullscreen-mode return so the slide wins even if a fullscreen mode is up underneath.
+  if (workspaceSliding) {
+    return <WorkspaceSlideOverlay />;
   }
   if (active !== null && presentationHidesLayout(active.presentation)) {
     return <Overlay />;

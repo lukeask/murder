@@ -11,6 +11,7 @@ import {
   DEFAULT_BINDINGS,
   resolveBindings,
 } from '../../src/input/bindings.js';
+import { chordMatches } from '../../src/input/keymap.js';
 import { makeKey } from './key.js';
 
 describe("resolveBindings — alt (today's default)", () => {
@@ -178,5 +179,50 @@ describe('global.murder — plain ctrl+m chord with a label override', () => {
 
   it('labels as C-m (the override), not the mechanical C-return', () => {
     expect(resolveBindings('alt', false, {}).label('global.murder')).toBe('C-m');
+  });
+});
+
+describe('shift-carrying command chords (workspace prerequisite — commandChord semantics)', () => {
+  // The `workspace.*` actions carry `shift: true`; these tests pin the CHORD SHAPES a shifted
+  // command binding resolves to and the events they match, via chordMatches — the exact predicate
+  // resolveBindings uses.
+  const metaFlavor = { input: 'J', key: { meta: true, shift: true } } as const;
+  const ctrlFlavor = { input: 'j', key: { ctrl: true, shift: true } } as const;
+
+  it('meta flavor matches the legacy alt+shift+j event (ESC J → uppercase input + shift)', () => {
+    expect(chordMatches(metaFlavor, 'J', makeKey({ meta: true, shift: true }))).toBe(true);
+    // Bare alt+j (lowercase, no shift) must not match.
+    expect(chordMatches(metaFlavor, 'j', makeKey({ meta: true }))).toBe(false);
+  });
+
+  it('ctrl flavor matches the kitty side-channel event (unshifted char + shift bit)', () => {
+    expect(chordMatches(ctrlFlavor, 'j', makeKey({ ctrl: true, shift: true }))).toBe(true);
+    // Bare ctrl+j must not match the shifted chord.
+    expect(chordMatches(ctrlFlavor, 'j', makeKey({ ctrl: true }))).toBe(false);
+  });
+});
+
+describe('workspace.* — shifted command chords', () => {
+  it('workspace.next resolves to the meta/ctrl shift-carrying shapes under ctrl', () => {
+    const bindings = resolveBindings('ctrl', true, {});
+    expect(bindings.chordsFor('workspace.next')).toEqual([
+      { input: 'j', key: { ctrl: true, shift: true } },
+    ]);
+    expect(bindings.matches('workspace.next', 'j', makeKey({ ctrl: true, shift: true }))).toBe(
+      true,
+    );
+    expect(bindings.matches('workspace.next', 'j', makeKey({ ctrl: true }))).toBe(false);
+    expect(bindings.label('workspace.next')).toBe('C-J');
+  });
+
+  it('workspace.jump.5 resolves to ctrl+shift+5', () => {
+    const bindings = resolveBindings('ctrl', true, {});
+    expect(bindings.chordsFor('workspace.jump.5')).toEqual([
+      { input: '5', key: { ctrl: true, shift: true } },
+    ]);
+    expect(bindings.matches('workspace.jump.5', '5', makeKey({ ctrl: true, shift: true }))).toBe(
+      true,
+    );
+    expect(bindings.label('workspace.jump.5')).toBe('C-5');
   });
 });

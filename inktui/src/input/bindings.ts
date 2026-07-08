@@ -62,17 +62,30 @@ export type ActionId =
   | 'panel.star' // alt+f — favorite/star the focused panel's cursor row
   | 'panel.resetCrow' // x — arm the two-press reset for the crows panel's cursor row
   | 'panel.usageSteering' // s — cycle the usage panel's cursor gauge steering (auto→prefer→pause)
-  | 'panel.historyResume'; // r — resume the history panel's cursor row's CC session (when resumable)
+  | 'panel.historyResume' // r — resume the history panel's cursor row's CC session (when resumable)
+  | 'workspace.next' // <Cmd>+Shift+J — cycle to the next workspace (wrapping)
+  | 'workspace.prev' // <Cmd>+Shift+K — cycle to the previous workspace (wrapping)
+  | 'workspace.jump.1' // <Cmd>+Shift+1 — jump to workspace 1 (index 0)
+  | 'workspace.jump.2' // <Cmd>+Shift+2 — jump to workspace 2 (index 1)
+  | 'workspace.jump.3' // <Cmd>+Shift+3 — jump to workspace 3 (index 2)
+  | 'workspace.jump.4' // <Cmd>+Shift+4 — jump to workspace 4 (index 3)
+  | 'workspace.jump.5' // <Cmd>+Shift+5 — jump to workspace 5 (index 4)
+  | 'workspace.jump.6' // <Cmd>+Shift+6 — jump to workspace 6 (index 5)
+  | 'workspace.jump.7' // <Cmd>+Shift+7 — jump to workspace 7 (index 6)
+  | 'workspace.jump.8' // <Cmd>+Shift+8 — jump to workspace 8 (index 7)
+  | 'workspace.jump.9'; // <Cmd>+Shift+9 — jump to workspace 9 (index 8)
 
 /**
  * How an action's default binding is expressed:
  *  - `command` — a command-modified chord. The bare `key` char is combined with the user's chosen
  *    modifier at resolution time (alt+key / ctrl+key, or both). Rebindable to another char.
+ *    `shift: true` layers Shift on top (`<Cmd>+Shift+key`, the workspace chords); see
+ *    {@link commandChord} for how each modifier flavor carries it.
  *  - `plain` — a literal chord, unaffected by the modifier setting (e.g. a bare special key). Used
  *    for actions whose binding is intrinsically not a command chord.
  */
 export type BindingSpec =
-  | { readonly kind: 'command'; readonly key: string }
+  | { readonly kind: 'command'; readonly key: string; readonly shift?: true }
   | {
       readonly kind: 'plain';
       readonly chord: KeyChord;
@@ -285,6 +298,77 @@ export const ACTIONS: Readonly<Record<ActionId, ActionDef>> = {
     description: 'resume session',
     rebindable: false,
   },
+  'workspace.next': {
+    id: 'workspace.next',
+    // <Cmd>+Shift+J — cycle to the next workspace (wrapping). A `command` kind carrying
+    // `shift: true`: resolution expands it per modifier flavor (see commandChord) —
+    // alt → { input: 'J', meta, shift } (the legacy ESC+uppercase form, which the kitty shim's
+    // alt path now also produces), ctrl → { input: 'j', ctrl, shift } (the kitty side channel
+    // preserves the shift bit with the unshifted char).
+    default: { kind: 'command', key: 'j', shift: true },
+    description: 'next workspace',
+    rebindable: true,
+  },
+  'workspace.prev': {
+    id: 'workspace.prev',
+    default: { kind: 'command', key: 'k', shift: true },
+    description: 'prev workspace',
+    rebindable: true,
+  },
+  'workspace.jump.1': {
+    id: 'workspace.jump.1',
+    default: { kind: 'command', key: '1', shift: true },
+    description: 'workspace 1',
+    rebindable: true,
+  },
+  'workspace.jump.2': {
+    id: 'workspace.jump.2',
+    default: { kind: 'command', key: '2', shift: true },
+    description: 'workspace 2',
+    rebindable: true,
+  },
+  'workspace.jump.3': {
+    id: 'workspace.jump.3',
+    default: { kind: 'command', key: '3', shift: true },
+    description: 'workspace 3',
+    rebindable: true,
+  },
+  'workspace.jump.4': {
+    id: 'workspace.jump.4',
+    default: { kind: 'command', key: '4', shift: true },
+    description: 'workspace 4',
+    rebindable: true,
+  },
+  'workspace.jump.5': {
+    id: 'workspace.jump.5',
+    default: { kind: 'command', key: '5', shift: true },
+    description: 'workspace 5',
+    rebindable: true,
+  },
+  'workspace.jump.6': {
+    id: 'workspace.jump.6',
+    default: { kind: 'command', key: '6', shift: true },
+    description: 'workspace 6',
+    rebindable: true,
+  },
+  'workspace.jump.7': {
+    id: 'workspace.jump.7',
+    default: { kind: 'command', key: '7', shift: true },
+    description: 'workspace 7',
+    rebindable: true,
+  },
+  'workspace.jump.8': {
+    id: 'workspace.jump.8',
+    default: { kind: 'command', key: '8', shift: true },
+    description: 'workspace 8',
+    rebindable: true,
+  },
+  'workspace.jump.9': {
+    id: 'workspace.jump.9',
+    default: { kind: 'command', key: '9', shift: true },
+    description: 'workspace 9',
+    rebindable: true,
+  },
 };
 
 /** Every action id, in declaration order — for iterating the settings menu / building hint tables. */
@@ -324,9 +408,35 @@ function commandFlags(modifier: Modifier, ctrlAvailable: boolean): readonly Comm
   }
 }
 
-/** Build the chord for one command flag + key char. */
-function commandChord(flag: CommandFlag, key: string): KeyChord {
-  return { input: key, key: { [flag]: true } };
+/**
+ * Build the chord for one command flag + key char. `shift` (the `<Cmd>+Shift+key` chords) is
+ * carried DIFFERENTLY per flavor, because the two arrival paths encode it differently
+ * (verified against Ink's parse-keypress + our kitty shim):
+ *
+ *  - **meta (alt):** the only wire form is the legacy ESC-prefixed char, so Shift can only travel
+ *    as the shifted char itself — alt+shift+j arrives as ESC `J`, which Ink reports as
+ *    `{ input: 'J', meta: true, shift: true }`. The chord therefore matches the UPPERCASED input
+ *    (with `shift: true` listed for precision). The kitty shim's alt path uppercases to produce the
+ *    identical bytes (see translate.ts), so kitty and legacy terminals agree.
+ *    LIMITATION: this only works for keys with case — alt+shift+<digit> produces a layout-dependent
+ *    punctuation byte that Ink's meta parser drops entirely, so a shifted `command` DIGIT binding is
+ *    unreachable under the alt modifier (kitty/ctrl only).
+ *  - **ctrl (kitty):** the side channel preserves the shift bit alongside the unshifted char —
+ *    ctrl+shift+j arrives as `{ input: 'j', ctrl: true, shift: true }`. The chord keeps the
+ *    lowercase input and requires `shift: true`.
+ *
+ * DISPATCH-ORDER NOTE for shifted chords: `shift` is don't-care for chords that don't list it
+ * (keymap.ts's strictness covers only ctrl/meta), so e.g. ctrl+shift+j also satisfies a bare
+ * ctrl+j chord. A shifted binding's dispatcher branch must run BEFORE any unshifted binding on the
+ * same base key.
+ */
+function commandChord(flag: CommandFlag, key: string, shift = false): KeyChord {
+  if (!shift) {
+    return { input: key, key: { [flag]: true } };
+  }
+  return flag === 'meta'
+    ? { input: key.toUpperCase(), key: { meta: true, shift: true } }
+    : { input: key, key: { ctrl: true, shift: true } };
 }
 
 /** The hint-bar prefix for the alt/meta modifier. `A-` (alt) reads more plainly than the old `M-`
@@ -390,7 +500,8 @@ export function resolveBindings(
       continue;
     }
     const key = overrides[id] ?? def.default.key;
-    table[id] = flags.map((flag) => commandChord(flag, key));
+    const shift = def.default.shift === true;
+    table[id] = flags.map((flag) => commandChord(flag, key, shift));
   }
 
   // Precompute labels alongside the chord table.
@@ -402,8 +513,10 @@ export function resolveBindings(
       continue;
     }
     const key = overrides[id] ?? def.default.key;
-    // A space key reads as `space` in the label (a literal ' ' would be invisible).
-    const keyLabel = key === ' ' ? 'space' : key;
+    // A space key reads as `space` in the label (a literal ' ' would be invisible). A shifted
+    // command chord reads as its uppercase char (`A-J` = alt+shift+j) — matching what the meta
+    // flavor literally matches on.
+    const keyLabel = key === ' ' ? 'space' : def.default.shift === true ? key.toUpperCase() : key;
     labels[id] = flags.map((flag) => `${flagPrefix(flag)}${keyLabel}`).join('/');
   }
 

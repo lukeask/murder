@@ -147,6 +147,13 @@ export interface GlobalHandlers {
   /** `ctrl+r` (`global.repaint`): force a full terminal redraw. Modifier-independent plain chord;
    * ctrl+l is taken by target cycling / panel nav. */
   repaint(): void;
+  /** `<Cmd>+Shift+J` (`workspace.next`): cycle to the next workspace (wrapping). */
+  workspaceNext?(): void;
+  /** `<Cmd>+Shift+K` (`workspace.prev`): cycle to the previous workspace (wrapping). */
+  workspacePrev?(): void;
+  /** `<Cmd>+Shift+<n>` (`workspace.jump.<n>`): jump to workspace `index` (0-based). No-op when
+   * `index >= count`. */
+  workspaceJump?(index: number): void;
 }
 
 /**
@@ -283,6 +290,55 @@ function dispatchGlobalChord(
   if (bindings.matches('global.repaint', input, key)) {
     handlers.repaint();
     return 'global.repaint';
+  }
+
+  // `workspace.*` shifted command chords — BEFORE any unshifted binding on the same base key
+  // (ctrl+shift+j also satisfies bare ctrl+j for `global.toggleTargetGroup`; shift+k/j likewise
+  // preempt vim nav; shift+digits preempt panel toggles). `bindings.matches` is self-filtering to
+  // the shifted chord shapes (see commandChord).
+  if (bindings.matches('workspace.next', input, key)) {
+    handlers.workspaceNext?.();
+    return 'workspace.next';
+  }
+  if (bindings.matches('workspace.prev', input, key)) {
+    handlers.workspacePrev?.();
+    return 'workspace.prev';
+  }
+  if (bindings.matches('workspace.jump.1', input, key)) {
+    handlers.workspaceJump?.(0);
+    return 'workspace.jump.1';
+  }
+  if (bindings.matches('workspace.jump.2', input, key)) {
+    handlers.workspaceJump?.(1);
+    return 'workspace.jump.2';
+  }
+  if (bindings.matches('workspace.jump.3', input, key)) {
+    handlers.workspaceJump?.(2);
+    return 'workspace.jump.3';
+  }
+  if (bindings.matches('workspace.jump.4', input, key)) {
+    handlers.workspaceJump?.(3);
+    return 'workspace.jump.4';
+  }
+  if (bindings.matches('workspace.jump.5', input, key)) {
+    handlers.workspaceJump?.(4);
+    return 'workspace.jump.5';
+  }
+  if (bindings.matches('workspace.jump.6', input, key)) {
+    handlers.workspaceJump?.(5);
+    return 'workspace.jump.6';
+  }
+  if (bindings.matches('workspace.jump.7', input, key)) {
+    handlers.workspaceJump?.(6);
+    return 'workspace.jump.7';
+  }
+  if (bindings.matches('workspace.jump.8', input, key)) {
+    handlers.workspaceJump?.(7);
+    return 'workspace.jump.8';
+  }
+  if (bindings.matches('workspace.jump.9', input, key)) {
+    handlers.workspaceJump?.(8);
+    return 'workspace.jump.9';
   }
 
   // `global.toggleTargetGroup` (ctrl+j, a `plain` chord) toggles the chat recipient target between
