@@ -61,6 +61,7 @@ def test_settings_get_returns_defaults_when_no_config(repo_root: Path, xdg: Path
     assert s["modifier"] == "alt"
     assert s["key_overrides"] == {}
     assert s["pane_gap"] == 0
+    assert s["workspace_count"] == 1
     assert s["vim_mode"] is False
     assert s["bar_widgets"] == {}
     # No user override -> None; effective comes from the live daemon config (codex).
@@ -111,6 +112,14 @@ def test_settings_update_persists_pane_gap(repo_root: Path, xdg: Path) -> None:
     assert reply["settings"]["pane_gap"] == 3
     again = _call(host, "settings.get", {})
     assert again["settings"]["pane_gap"] == 3
+
+
+def test_settings_update_persists_workspace_count(repo_root: Path, xdg: Path) -> None:
+    host = _host(repo_root)
+    reply = _call(host, "settings.update", {"settings": {"workspace_count": 3}})
+    assert reply["settings"]["workspace_count"] == 3
+    again = _call(host, "settings.get", {})
+    assert again["settings"]["workspace_count"] == 3
 
 
 def test_settings_update_persists_vim_mode(repo_root: Path, xdg: Path) -> None:
@@ -354,6 +363,14 @@ def test_settings_update_rejects_out_of_range_pane_gap(repo_root: Path, xdg: Pat
     host = _host(repo_root)
     with pytest.raises(ValidationError):  # ge=0/le=4 rejects 5
         _call(host, "settings.update", {"settings": {"pane_gap": 5}})
+
+
+def test_settings_update_rejects_out_of_range_workspace_count(repo_root: Path, xdg: Path) -> None:
+    host = _host(repo_root)
+    with pytest.raises(ValidationError):  # ge=1/le=9 rejects 0 and 10
+        _call(host, "settings.update", {"settings": {"workspace_count": 0}})
+    with pytest.raises(ValidationError):
+        _call(host, "settings.update", {"settings": {"workspace_count": 10}})
 
 
 def test_settings_update_rejects_non_object(repo_root: Path, xdg: Path) -> None:

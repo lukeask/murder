@@ -74,6 +74,7 @@ def register(host: ServiceHost) -> None:
             "modifier": tui.modifier,
             "key_overrides": dict(tui.key_overrides),
             "pane_gap": tui.pane_gap,
+            "workspace_count": tui.workspace_count,
             "vim_mode": tui.vim_mode,
             "bar_widgets": {
                 widget_id: {
@@ -158,6 +159,7 @@ def register(host: ServiceHost) -> None:
             "modifier": cfg.tui.modifier,
             "key_overrides": dict(cfg.tui.key_overrides),
             "pane_gap": cfg.tui.pane_gap,
+            "workspace_count": cfg.tui.workspace_count,
             "vim_mode": cfg.tui.vim_mode,
             "default_chat_view_mode": cfg.tui.default_chat_view_mode,
             "startup_rogue": (
@@ -175,6 +177,7 @@ def register(host: ServiceHost) -> None:
             "modifier",
             "key_overrides",
             "pane_gap",
+            "workspace_count",
             "vim_mode",
             "default_chat_view_mode",
         ):

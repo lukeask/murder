@@ -84,6 +84,8 @@ class TuiUserConfig(BaseModel):
     # Spaces of horizontal gap between adjacent pane borders (rail<->stage, stage panes,
     # rail panes). 0 = flush borders (the default look); capped at 4 (the radio select's range).
     pane_gap: int = Field(default=0, ge=0, le=4)
+    # Number of virtual workspaces (1 = feature inert; capped at 9 for direct-jump keybindings).
+    workspace_count: int = Field(default=1, ge=1, le=9)
     # Vim-style editing in the chat input (modal normal/insert + yank/paste). Off by default.
     vim_mode: bool = False
     # Default chat view mode for panes with no per-pane override (TUIchat-3). Only verbose/condensed
