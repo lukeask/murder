@@ -31,7 +31,9 @@ function wire(over: Record<string, unknown> = {}): SettingsWire {
     modifier: 'alt',
     key_overrides: {},
     pane_gap: 0,
+    workspace_count: 1,
     vim_mode: false,
+    bar_widgets: {},
     default_chat_view_mode: 'verbose',
     startup_rogue: null,
     collaborator_harness: null,
@@ -98,6 +100,18 @@ describe('settings actions', () => {
     const updates = fake.rpcCalls.filter((c) => c.method === 'settings.update');
     expect(updates.length).toBe(1);
     expect(updates[0]?.params).toEqual({ settings: { pane_gap: 2 } });
+    dispose();
+  });
+
+  it('update(workspace_count) overlays locally AND persists via settings.update', async () => {
+    const { fake, store, dispose } = setup();
+
+    await store.getState().actions.settings.update({ workspace_count: 3 });
+
+    expect(store.getState().settings.workspaceCount).toBe(3);
+    const updates = fake.rpcCalls.filter((c) => c.method === 'settings.update');
+    expect(updates.length).toBe(1);
+    expect(updates[0]?.params).toEqual({ settings: { workspace_count: 3 } });
     dispose();
   });
 

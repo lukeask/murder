@@ -4,6 +4,7 @@ import { HARNESS_ITEMS } from './items/harnesses.js';
 import { KEYBINDING_ITEMS } from './items/keybindings.js';
 import { LLM_ITEMS } from './items/llm.js';
 import { TEMPLATE_ITEMS } from './items/templates.js';
+import { WORKSPACE_ITEMS } from './items/workspaces.js';
 import type {
   SettingsBuildContext,
   SettingsCategory,
@@ -18,6 +19,7 @@ export const SETTINGS_CATEGORIES = [
   { id: 'llm', label: 'LLM', items: LLM_ITEMS },
   { id: 'templates', label: 'Templates', items: TEMPLATE_ITEMS },
   { id: 'keybindings', label: 'Keybindings', items: KEYBINDING_ITEMS },
+  { id: 'workspaces', label: 'Workspaces', items: WORKSPACE_ITEMS },
 ] satisfies readonly [SettingsCategory, ...SettingsCategory[]];
 
 export function categoryById(id: SettingsCategoryId): SettingsCategory {

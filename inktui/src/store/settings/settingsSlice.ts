@@ -102,6 +102,8 @@ export interface SettingsState {
    * `0` = flush borders (the default look); `1`–`4` add spacing. Threaded into the shell's
    * `columnGap`/`rowGap` and the layout manager's inter-region gap (see `App.tsx`/`paneBridge.tsx`). */
   readonly paneGap: number;
+  /** Number of virtual workspaces (1 = feature inert). Mirrors the wire `workspace_count`. */
+  readonly workspaceCount: number;
   /** Whether vim-style editing is enabled in the chat input. Mirrors the wire `vim_mode`. */
   readonly vimMode: boolean;
   /** Per-widget bar configuration (enable + placement). Mirrors the wire `bar_widgets`. */
@@ -152,6 +154,7 @@ export const initialSettingsState: SettingsState = {
   modifier: 'alt',
   keyOverrides: {},
   paneGap: 0,
+  workspaceCount: 1,
   vimMode: false,
   barWidgets: {},
   defaultChatViewMode: 'verbose',

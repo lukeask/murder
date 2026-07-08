@@ -631,6 +631,7 @@ function applySettingsWire(prev: SettingsState, wire: SettingsWire | undefined):
     modifier: wire.modifier ?? prev.modifier,
     keyOverrides: wire.key_overrides ?? prev.keyOverrides,
     paneGap: wire.pane_gap ?? prev.paneGap,
+    workspaceCount: wire.workspace_count ?? prev.workspaceCount,
     vimMode: wire.vim_mode ?? prev.vimMode,
     barWidgets: wire.bar_widgets ?? prev.barWidgets,
     defaultChatViewMode: wire.default_chat_view_mode ?? prev.defaultChatViewMode,

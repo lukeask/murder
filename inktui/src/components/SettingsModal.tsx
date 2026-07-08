@@ -53,6 +53,11 @@ import { AppStoreContext } from '../hooks/useAppStore.js';
 import { useModalHeight, useModalWidth, useTerminalSize } from '../hooks/useTerminalSize.js';
 import { ACTIONS, type ActionId, type Modifier, resolveBindings } from '../input/bindings.js';
 import type { Mode, ModeStoreApi } from '../input/modeStore.js';
+import {
+  type BarWidgetId,
+  type BarWidgetsConfig,
+  resolveBarWidgetConfig,
+} from '../selectors/barWidgetRegistry.js';
 import { harnessLabel, harnessShortLabel } from '../selectors/harnessDisplay.js';
 import type {
   LlmEnvWire,
@@ -85,11 +90,6 @@ import { ENV_PROVIDERS, mergedTiers, tierNames } from './settings/items/llm.js';
 import { TEMPLATE_NAME_RE } from './settings/items/templates.js';
 import type { SettingsCategoryId, SettingsRow } from './settings/types.js';
 import { deleteLastChar, insertChar, TextInput } from './TextInput.js';
-import {
-  type BarWidgetId,
-  type BarWidgetsConfig,
-  resolveBarWidgetConfig,
-} from '../selectors/barWidgetRegistry.js';
 
 // Bring the dispatcher's `onUncaptured` augmentation into scope (the printable/capture router needs it).
 import '../input/dispatcher.js';
@@ -156,6 +156,8 @@ interface SettingsState {
   theme: ThemeId;
   /** The draft pane-gap (committed via `update` on selection — the layout reacts at once). */
   paneGap: number;
+  /** The draft workspace count (committed via `update` on selection). */
+  workspaceCount: number;
   /** The draft vim-mode flag (committed via `update` on selection). */
   vimMode: boolean;
   /** Draft bar-widget overrides (partial map; defaults resolved via the registry). */
@@ -232,14 +234,19 @@ function firstSelectableFrom(rows: readonly SettingsRow[], from: number): number
 }
 
 /** The resolved label for a binding row's current chord, honouring the draft overrides + modifier (so
- * the row reflects an in-session rebind/modifier change before it is even saved). `ctrlAvailable` is
- * irrelevant to the displayed *key char*, so it is left false here. */
+ * the row reflects an in-session rebind/modifier change before it is even saved). `ctrlAvailable`
+ * matters because `resolveBindings('ctrl', false, ...)` intentionally degrades labels to Alt. */
 function bindingLabel(
   action: ActionId,
   modifier: Modifier,
+  ctrlAvailable: boolean,
   overrides: Record<string, string>,
 ): string {
-  return resolveBindings(modifier, false, overrides as Partial<Record<ActionId, string>>).label(
+  return resolveBindings(
+    modifier,
+    ctrlAvailable,
+    overrides as Partial<Record<ActionId, string>>,
+  ).label(
     action,
   );
 }
@@ -256,6 +263,7 @@ export function settingsMode(
     readonly modifier: Modifier;
     readonly theme: ThemeId;
     readonly paneGap: number;
+    readonly workspaceCount?: number;
     readonly vimMode?: boolean;
     readonly barWidgets?: BarWidgetsConfig;
     readonly defaultChatViewMode?: DefaultChatViewMode;
@@ -315,6 +323,7 @@ export function settingsMode(
     persistedTheme: current.theme,
     theme: current.theme,
     paneGap: current.paneGap,
+    workspaceCount: current.workspaceCount ?? 1,
     vimMode: current.vimMode ?? false,
     barWidgets: { ...(current.barWidgets ?? {}) },
     defaultChatViewMode: current.defaultChatViewMode ?? 'verbose',
@@ -491,6 +500,14 @@ export function settingsMode(
   function selectGap(value: number): void {
     s.paneGap = value;
     void actions.update({ pane_gap: value });
+    s.notice = null;
+    refresh();
+  }
+
+  /** Commit the draft workspace count (optimistic update). */
+  function selectWorkspaceCount(value: number): void {
+    s.workspaceCount = value;
+    void actions.update({ workspace_count: value });
     s.notice = null;
     refresh();
   }
@@ -990,6 +1007,9 @@ export function settingsMode(
       case 'gap':
         selectGap(row.value);
         break;
+      case 'workspaceCount':
+        selectWorkspaceCount(row.value);
+        break;
       case 'vim':
         selectVim(row.value);
         break;
@@ -1388,13 +1408,7 @@ function SettingsDialog({
         </Text>
       </Box>
 
-      <Box
-        marginTop={1}
-        flexDirection="row"
-        flexGrow={1}
-        flexBasis={0}
-        minHeight={0}
-      >
+      <Box marginTop={1} flexDirection="row" flexGrow={1} flexBasis={0} minHeight={0}>
         <Box flexDirection="column" flexShrink={0} width={18} marginRight={2}>
           {SETTINGS_CATEGORIES.map((category, index) => {
             const selected = category.id === s.categoryId;
@@ -1419,8 +1433,9 @@ function SettingsDialog({
         <Box flexDirection="column" flexGrow={1} flexBasis={0} minHeight={0}>
           {view.before === 0 &&
             Array.from({ length: s.categoryCursor }, (_, i) => (
+              // biome-ignore lint/suspicious/noArrayIndexKey: these are positional spacer rows.
               <Box key={`category-offset-${i}`} flexShrink={0}>
-                <Text>{' '}</Text>
+                <Text> </Text>
               </Box>
             ))}
           {view.before > 0 && (
@@ -1477,7 +1492,9 @@ function SettingsDialog({
         )}
 
         <Box marginTop={1} flexShrink={0}>
-          <Text dimColor>j/k: navigate · h/l: categories/settings · enter: select · esc: close</Text>
+          <Text dimColor>
+            j/k: navigate · h/l: categories/settings · enter: select · esc: close
+          </Text>
         </Box>
       </Box>
     </Box>
@@ -1639,6 +1656,21 @@ function RowView({
         <Text color={theme.muted}>
           {'  '}
           {preview}
+        </Text>
+      </Box>
+    );
+  }
+
+  if (row.kind === 'workspaceCount') {
+    const selected = row.value === s.workspaceCount;
+    const mark = selected ? '(•) ' : '( ) ';
+    const color = focused ? theme.warning : theme.text;
+    return (
+      <Box flexShrink={0}>
+        <Text color={color} bold={focused}>
+          {cursor}
+          {mark}
+          {row.value}
         </Text>
       </Box>
     );
@@ -1997,7 +2029,7 @@ function RowView({
 
   // binding row
   const capturing = s.capturing === row.action;
-  const label = bindingLabel(row.action, s.modifier, s.overrides);
+  const label = bindingLabel(row.action, s.modifier, ctrlAvailable, s.overrides);
   const color = focused ? theme.warning : theme.text;
   return (
     <Box flexShrink={0}>

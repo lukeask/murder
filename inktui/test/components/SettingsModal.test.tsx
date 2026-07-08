@@ -88,6 +88,7 @@ const RICH_CURRENT: Parameters<typeof settingsMode>[2] = {
   modifier: 'alt',
   theme: DEFAULT_THEME_ID,
   paneGap: 0,
+  workspaceCount: 1,
   keyOverrides: {},
   collaboratorHarness: null,
   effectiveCollaborator: 'claude_code',
@@ -173,6 +174,7 @@ describe('SettingsModal', () => {
     expect(frame).toContain('LLM');
     expect(frame).toContain('Templates');
     expect(frame).toContain('Keybindings');
+    expect(frame).toContain('Workspaces');
     expect(frame).toContain('Theme');
     expect(frame).toContain('Pane Gap');
     expect(selectActiveMode(stores.modes)?.id).toBe(SETTINGS_MODE_ID);
@@ -252,6 +254,31 @@ describe('SettingsModal', () => {
     expect(patches).toContainEqual({ modifier: 'alt' });
   });
 
+  it('binding rows relabel immediately when the command modifier changes to ctrl', async () => {
+    const { stores, enter } = setup();
+    const { lastFrame, stdin } = render(<Harness stores={stores} />);
+    enter();
+    await tick();
+    await openCategory(stdin, lastFrame, 'Keybindings');
+
+    // Cursor starts on `alt`; select `ctrl` while the modal stays open.
+    stdin.write('j');
+    await tick();
+    stdin.write('\r');
+    await tick();
+
+    await walkToFirstBinding(stdin, lastFrame);
+    const spawnLine = (lastFrame() ?? '').split('\n').find((l) => l.includes('spawn')) ?? '';
+    expect(spawnLine).toContain('C-s');
+    expect(spawnLine).not.toContain('A-s');
+
+    await walkUntilFocused(stdin, lastFrame, 'next workspace');
+    const workspaceLine =
+      (lastFrame() ?? '').split('\n').find((l) => l.includes('next workspace')) ?? '';
+    expect(workspaceLine).toContain('C-J');
+    expect(workspaceLine).not.toContain('A-J');
+  });
+
   it('selecting a pane-gap option commits via update', async () => {
     // Start at gap 0; navigate to the second gap row (value 1) and Enter → update({ pane_gap: 1 }).
     const { stores, patches, enter } = setup();
@@ -264,6 +291,20 @@ describe('SettingsModal', () => {
     stdin.write('\r');
     await tick();
     expect(patches).toContainEqual({ pane_gap: 1 });
+  });
+
+  it('selecting a workspace-count option commits via update', async () => {
+    const { stores, patches, enter } = setup();
+    const { lastFrame, stdin } = render(<Harness stores={stores} />);
+    enter();
+    await tick();
+    await openCategory(stdin, lastFrame, 'Workspaces');
+    stdin.write('j');
+    await tick();
+    await walkUntilFocused(stdin, lastFrame, '( ) 2');
+    stdin.write('\r');
+    await tick();
+    expect(patches).toContainEqual({ workspace_count: 2 });
   });
 
   it('selecting the vim-mode "on" row commits update({ vim_mode: true })', async () => {

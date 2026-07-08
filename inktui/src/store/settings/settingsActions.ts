@@ -94,6 +94,8 @@ export interface SettingsWire {
   readonly key_overrides: Readonly<Record<string, string>>;
   /** Spaces of inter-pane-border gap (0–4). Mirrors the Python `TuiUserConfig.pane_gap`. */
   readonly pane_gap: number;
+  /** Number of virtual workspaces (1–9). Mirrors the Python `TuiUserConfig.workspace_count`. */
+  readonly workspace_count: number;
   /** Whether vim-style editing is enabled in the chat input. Mirrors `TuiUserConfig.vim_mode`. */
   readonly vim_mode: boolean;
   /** Per-widget bar configuration. Mirrors `TuiUserConfig.bar_widgets`. */
@@ -139,6 +141,7 @@ export interface SettingsPatch {
   modifier?: SettingsModifier;
   key_overrides?: Readonly<Record<string, string>>;
   pane_gap?: number;
+  workspace_count?: number;
   vim_mode?: boolean;
   bar_widgets?: BarWidgetsConfig;
   default_chat_view_mode?: DefaultChatViewMode;
@@ -198,6 +201,7 @@ function applyWire(prev: SettingsState, wire: SettingsWire | undefined): Setting
     modifier: wire.modifier ?? prev.modifier,
     keyOverrides: wire.key_overrides ?? prev.keyOverrides,
     paneGap: wire.pane_gap ?? prev.paneGap,
+    workspaceCount: wire.workspace_count ?? prev.workspaceCount,
     vimMode: wire.vim_mode ?? prev.vimMode,
     barWidgets: wire.bar_widgets ?? prev.barWidgets,
     defaultChatViewMode: wire.default_chat_view_mode ?? prev.defaultChatViewMode,
@@ -250,6 +254,9 @@ export function createSettingsActions(bus: BusClient, store: StoreApi<AppStore>)
           ...(partial.modifier !== undefined ? { modifier: partial.modifier } : {}),
           ...(partial.key_overrides !== undefined ? { keyOverrides: partial.key_overrides } : {}),
           ...(partial.pane_gap !== undefined ? { paneGap: partial.pane_gap } : {}),
+          ...(partial.workspace_count !== undefined
+            ? { workspaceCount: partial.workspace_count }
+            : {}),
           ...(partial.vim_mode !== undefined ? { vimMode: partial.vim_mode } : {}),
           ...(partial.bar_widgets !== undefined ? { barWidgets: partial.bar_widgets } : {}),
           ...(partial.default_chat_view_mode !== undefined
