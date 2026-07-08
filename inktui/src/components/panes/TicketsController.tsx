@@ -8,7 +8,7 @@ import { type TicketRowView, useTicketsView } from '../../selectors/ticketsSelec
 import { useTheme } from '../../theme/themeStore.js';
 import { useTicketEditor } from '../TicketEditorMode.js';
 import { AllocatedPaneFrame } from './shared/AllocatedPaneFrame.js';
-import { useClampedCursor } from './shared/useClampedCursor.js';
+import { usePaneUiClampedCursor } from './shared/useClampedCursor.js';
 import { TicketsSurface, type TicketsSurfaceRow } from './TicketsSurface.js';
 
 type TicketsIntent = 'cursorDown' | 'cursorUp' | 'refresh' | 'open';
@@ -52,7 +52,7 @@ export const TicketsController = memo(function TicketsController({
   const theme = useTheme();
   const rows = useMemo(() => ticketsSurfaceRowsFromView(view.rows), [view.rows]);
   const openEditor = useTicketEditor();
-  const { cursor, moveDown, moveUp } = useClampedCursor(rows.length);
+  const { cursor, moveDown, moveUp } = usePaneUiClampedCursor('tickets', rows.length);
   const cursorRef = useRef(cursor);
   const rowsRef = useRef(rows);
   cursorRef.current = cursor;

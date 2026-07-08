@@ -471,7 +471,9 @@ function HeaderLine({
   readonly steering: string;
   readonly compact: boolean;
   readonly theme: Theme;
-  readonly fetchedAt?: string;
+  // Explicit `| undefined` (not just `?`) so callers may pass a `string | undefined` group field
+  // directly under exactOptionalPropertyTypes. Pre-existing, unrelated to workspaces (step-5 fix).
+  readonly fetchedAt?: string | undefined;
   readonly showFetchedAt: boolean;
 }): React.JSX.Element {
   const tag = steeringTag(steering);

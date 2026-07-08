@@ -1,18 +1,15 @@
-import { memo, useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useEffect, useMemo, useRef } from 'react';
 import { shallow } from 'zustand/shallow';
 import { useAppStore } from '../../hooks/useAppStore.js';
 import { usePanelKeymap } from '../../hooks/useInputStores.js';
 import type { PanelKeymap } from '../../input/keymap.js';
 import type { PanePresentation } from '../../layout/paneLayoutTypes.js';
-import {
-  type HistoryMode,
-  type HistoryRowView,
-  useHistoryView,
-} from '../../selectors/historySelectors.js';
+import { type HistoryRowView, useHistoryView } from '../../selectors/historySelectors.js';
 import { useTheme } from '../../theme/themeStore.js';
 import { HistorySurface, type HistorySurfaceRow } from './HistorySurface.js';
 import { AllocatedPaneFrame } from './shared/AllocatedPaneFrame.js';
-import { useClampedCursor } from './shared/useClampedCursor.js';
+import { usePaneUiClampedCursor } from './shared/useClampedCursor.js';
+import { usePaneHistoryMode } from './shared/usePaneHistoryMode.js';
 
 type HistoryIntent = 'cursorDown' | 'cursorUp' | 'resumeOrRefresh' | 'toggleMode' | 'dismiss';
 
@@ -45,11 +42,12 @@ export const HistoryController = memo(function HistoryController({
   const refresh = useAppStore((state) => state.actions.history.refresh);
   const dismiss = useAppStore((state) => state.actions.history.dismiss);
   const resumeConversation = useAppStore((state) => state.actions.history.resumeConversation);
-  const [mode, setMode] = useState<HistoryMode>('loose');
+  const paneId = 'history';
+  const [mode, setMode] = usePaneHistoryMode(paneId);
   const view = useHistoryView(history, mode);
   const theme = useTheme();
   const rows = useMemo(() => historySurfaceRowsFromView(view.rows), [view.rows]);
-  const { cursor, moveDown, moveUp } = useClampedCursor(rows.length);
+  const { cursor, moveDown, moveUp } = usePaneUiClampedCursor(paneId, rows.length);
   const cursorRef = useRef(cursor);
   const rowsRef = useRef(view.rows);
   cursorRef.current = cursor;
@@ -108,12 +106,12 @@ export const HistoryController = memo(function HistoryController({
         }
       },
     }),
-    [dismiss, moveDown, moveUp, refresh, resumeConversation],
+    [dismiss, moveDown, moveUp, refresh, resumeConversation, setMode],
   );
-  usePanelKeymap('history', keymap);
+  usePanelKeymap(paneId, keymap);
 
   return (
-    <AllocatedPaneFrame id="history" presentation={presentation}>
+    <AllocatedPaneFrame id={paneId} presentation={presentation}>
       <HistorySurface
         width={presentation.width}
         height={presentation.height}

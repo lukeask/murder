@@ -9,7 +9,7 @@ import { useTheme } from '../../theme/themeStore.js';
 import { useDocView } from './docView.js';
 import { PlansSurface } from './PlansSurface.js';
 import { AllocatedPaneFrame } from './shared/AllocatedPaneFrame.js';
-import { useClampedCursor } from './shared/useClampedCursor.js';
+import { usePaneUiClampedCursor } from './shared/useClampedCursor.js';
 
 type PlansIntent = 'cursorDown' | 'cursorUp' | 'refresh' | 'star' | 'open' | 'spawnPlanner';
 
@@ -29,7 +29,7 @@ export const PlansController = memo(function PlansController({
   const toggleDoc = useDocView('plan');
   const view = usePlansView(plans, favorites);
   const theme = useTheme();
-  const { cursor, moveDown, moveUp } = useClampedCursor(view.rows.length);
+  const { cursor, moveDown, moveUp } = usePaneUiClampedCursor('plans', view.rows.length);
 
   useEffect(() => {
     void refresh();

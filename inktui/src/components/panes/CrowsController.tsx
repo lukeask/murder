@@ -1,4 +1,4 @@
-import { memo, useCallback, useMemo, useState } from 'react';
+import { memo, useCallback, useMemo } from 'react';
 import { shallow } from 'zustand/shallow';
 import { useAppStore } from '../../hooks/useAppStore.js';
 import { useBindings, usePanelKeymap } from '../../hooks/useInputStores.js';
@@ -12,7 +12,8 @@ import { toastStore } from '../../store/toast/toastStore.js';
 import { useTheme } from '../../theme/themeStore.js';
 import { CrowsSurface, type CrowsSurfaceRow, type CrowsSurfaceStatus } from './CrowsSurface.js';
 import { AllocatedPaneFrame } from './shared/AllocatedPaneFrame.js';
-import { useClampedCursor } from './shared/useClampedCursor.js';
+import { usePaneUiClampedCursor } from './shared/useClampedCursor.js';
+import { usePaneExpandedState } from './shared/usePaneExpandedState.js';
 
 type CrowsIntent =
   | 'cursorDown'
@@ -63,8 +64,8 @@ export const CrowsController = memo(function CrowsController({
   const view = useCrowsView(roster, favorites);
   const theme = useTheme();
   const rows = useMemo(() => crowsSurfaceRowsFromView(view), [view]);
-  const { cursor, moveDown, moveUp } = useClampedCursor(rows.length);
-  const [expanded, setExpanded] = useState(false);
+  const { cursor, moveDown, moveUp } = usePaneUiClampedCursor('crows', rows.length);
+  const [expanded, setExpanded] = usePaneExpandedState('crows');
 
   const agentIdAtCursor = useCallback((): string | null => {
     return rows[cursor]?.id ?? null;
@@ -195,6 +196,7 @@ export const CrowsController = memo(function CrowsController({
       resetCrow,
       roster,
       setActivePane,
+      setExpanded,
       toggleFavorite,
     ],
   );

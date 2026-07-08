@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useMemo, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo } from 'react';
 import { shallow } from 'zustand/shallow';
 import { useAppStore } from '../../hooks/useAppStore.js';
 import { usePanelKeymap } from '../../hooks/useInputStores.js';
@@ -15,6 +15,8 @@ import type { Theme } from '../../theme/buildTheme.js';
 import { useTheme } from '../../theme/themeStore.js';
 import { paneContentWidthForWidth } from '../Pane.js';
 import { AllocatedPaneFrame } from './shared/AllocatedPaneFrame.js';
+import { usePaneGBuffer } from './shared/usePaneGBuffer.js';
+import { usePaneTransitCursor } from './shared/usePaneTransitCursor.js';
 import { TreeSurface, type TreeSurfaceData, type TreeSurfaceLane } from './TreeSurface.js';
 
 type TreeIntent =
@@ -109,8 +111,8 @@ export const TreeController = memo(function TreeController({
   const refresh = useAppStore((state) => state.actions.transit.refresh);
   const theme = useTheme();
   const innerWidth = paneContentWidthForWidth(presentation.width);
-  const [cursor, setCursor] = useState<TransitCursor>({ laneIndex: 0, sha: null });
-  const [gBuffer, setGBuffer] = useState<string | null>(null);
+  const [cursor, setCursor] = usePaneTransitCursor('tree', transit.lanes.length);
+  const [gBuffer, setGBuffer] = usePaneGBuffer('tree');
   const gPending = gBuffer !== null;
   const view = useTransitView(transit, cursor, innerWidth);
   const data = useMemo(
@@ -129,7 +131,7 @@ export const TreeController = memo(function TreeController({
         setCursor({ laneIndex: 0, sha: head });
       }
     }
-  }, [cursor.sha, transit.lanes]);
+  }, [cursor.sha, transit.lanes, setCursor]);
 
   const selectedLane = transit.lanes[cursor.laneIndex] ?? null;
 
@@ -145,7 +147,7 @@ export const TreeController = memo(function TreeController({
       const sha = lane.commits[next]?.sha ?? null;
       setCursor((currentCursor) => ({ ...currentCursor, sha }));
     },
-    [cursor.laneIndex, cursor.sha, transit.lanes],
+    [cursor.laneIndex, cursor.sha, transit.lanes, setCursor],
   );
 
   const switchLane = useCallback(
@@ -166,7 +168,7 @@ export const TreeController = memo(function TreeController({
       }
       setCursor({ laneIndex: nextIndex, sha: nearestShaByTime(nextLane, currentTs) });
     },
-    [cursor.laneIndex, cursor.sha, transit.lanes],
+    [cursor.laneIndex, cursor.sha, transit.lanes, setCursor],
   );
 
   const jumpToSha = useCallback(
@@ -179,7 +181,7 @@ export const TreeController = memo(function TreeController({
       }
       setCursor((current) => ({ ...current, sha }));
     },
-    [transit.lanes],
+    [transit.lanes, setCursor],
   );
 
   const handleGChar = useCallback(
@@ -205,7 +207,7 @@ export const TreeController = memo(function TreeController({
         setGBuffer((current) => (current ?? '') + ch);
       }
     },
-    [gBuffer, transit.lanes, view.lanes],
+    [gBuffer, transit.lanes, view.lanes, setCursor, setGBuffer],
   );
 
   const resolveG = useCallback(() => {
@@ -218,7 +220,7 @@ export const TreeController = memo(function TreeController({
       }
     }
     setGBuffer(null);
-  }, [gBuffer, jumpToSha, selectedLane]);
+  }, [gBuffer, jumpToSha, selectedLane, setGBuffer]);
 
   const keymap: PanelKeymap<TreeIntent> = useMemo(() => {
     const charEntries: KeymapEntry<TreeIntent>[] = [];
@@ -305,7 +307,7 @@ export const TreeController = memo(function TreeController({
         }
       },
     };
-  }, [gPending, handleGChar, moveWithinLane, resolveG, switchLane]);
+  }, [gPending, handleGChar, moveWithinLane, resolveG, switchLane, setGBuffer]);
   usePanelKeymap('tree', keymap);
 
   return (

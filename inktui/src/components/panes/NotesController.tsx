@@ -9,7 +9,7 @@ import { useTheme } from '../../theme/themeStore.js';
 import { useDocView } from './docView.js';
 import { NotesSurface } from './NotesSurface.js';
 import { AllocatedPaneFrame } from './shared/AllocatedPaneFrame.js';
-import { useClampedCursor } from './shared/useClampedCursor.js';
+import { usePaneUiClampedCursor } from './shared/useClampedCursor.js';
 
 type NotesIntent = 'cursorDown' | 'cursorUp' | 'refresh' | 'star' | 'open';
 
@@ -28,7 +28,7 @@ export const NotesController = memo(function NotesController({
   const toggleDoc = useDocView('note');
   const view = useNotesView(notes, favorites);
   const theme = useTheme();
-  const { cursor, moveDown, moveUp } = useClampedCursor(view.rows.length);
+  const { cursor, moveDown, moveUp } = usePaneUiClampedCursor('notes', view.rows.length);
 
   useEffect(() => {
     void refresh();

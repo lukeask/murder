@@ -43,6 +43,8 @@ import type { KeymapRegistryApi, KeymapRegistryState } from '../input/keymapRegi
 import type { ModeState, ModeStoreApi } from '../input/modeStore.js';
 import type { PanelState, PanelStoreApi } from '../input/panelStore.js';
 import type { PaneScrollBus } from '../input/paneScrollBus.js';
+import type { PaneUiState, PaneUiStoreApi } from '../input/paneUiStore.js';
+import type { WorkspaceStoreApi, WorkspaceStoreState } from '../input/workspaceStore.js';
 import { useTerminalSize } from './useTerminalSize.js';
 
 /** The input stores, carried as one context value so the provider wires them together once. */
@@ -56,6 +58,8 @@ export interface InputStores {
   readonly chatVim: ChatVimStoreApi;
   readonly bindings: BindingsStoreApi;
   readonly paneScroll: PaneScrollBus;
+  readonly paneUi: PaneUiStoreApi;
+  readonly workspace: WorkspaceStoreApi;
 }
 
 /** `null` outside a provider so the hooks fail loudly on a wiring bug (mirrors `useAppStore`). */
@@ -167,6 +171,30 @@ export function useBindings(): ResolvedBindings {
  * wheel nudges; {@link useRootInput} emits to the focused/targeted pane. */
 export function usePaneScrollBus(): PaneScrollBus {
   return useInputStores().paneScroll;
+}
+
+/** Subscribe to a selected view of the workspace store (workspaces plan). The indicator widget
+ * selects `{ activeIndex, count }`; the dispatcher reads `getState()` directly. */
+export function useWorkspaceStore<T>(
+  selector: (state: WorkspaceStoreState) => T,
+  equality?: (a: T, b: T) => boolean,
+): T {
+  const { workspace } = useInputStores();
+  return useStoreWithEqualityFn(workspace, selector, equality);
+}
+
+/** Subscribe to a selected view of the per-pane UI-state store (scroll/cursor keyed by pane id).
+ * The common cases are the shared hooks in {@link ../components/panes/shared/useClampedCursor.js}
+ * (`usePaneUiClampedCursor`), {@link ../components/panes/shared/usePaneScrollState.js}
+ * (`usePaneScrollState`), and {@link ../components/panes/shared/usePaneExpandedState.js}
+ * (`usePaneExpandedState`); select `s.cursors[id]` / `s.scrolls[id]` / `s.expandeds[id]` for a
+ * single pane. */
+export function usePaneUiStore<T>(
+  selector: (state: PaneUiState) => T,
+  equality?: (a: T, b: T) => boolean,
+): T {
+  const { paneUi } = useInputStores();
+  return useStoreWithEqualityFn(paneUi, selector, equality);
 }
 
 /**

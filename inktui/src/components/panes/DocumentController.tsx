@@ -1,4 +1,4 @@
-import { type JSX, memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { type JSX, memo, useCallback, useEffect, useMemo, useRef } from 'react';
 import { useAppStore } from '../../hooks/useAppStore.js';
 import { type GotoIntent, useGotoLine } from '../../hooks/useGotoLine.js';
 import { usePanelKeymap, usePaneScrollBus } from '../../hooks/useInputStores.js';
@@ -10,6 +10,7 @@ import type { AppStore } from '../../store/store.js';
 import { DocumentSurface, documentContentInnerHeight } from './DocumentSurface.js';
 import { AllocatedPaneFrame } from './shared/AllocatedPaneFrame.js';
 import { computeDocumentWindow } from './shared/scrollWindow.js';
+import { usePaneScrollState } from './shared/usePaneScrollState.js';
 
 const DOC_SCROLL_STEP = 1;
 
@@ -36,7 +37,7 @@ export const DocumentController = memo(function DocumentController({
   const spawnPlanner = useAppStore((state) => state.actions.plans.spawnPlanner);
   const focusId = stageDocFocusId(open.name);
 
-  const [scroll, setScroll] = useState(0);
+  const [scroll, setScroll] = usePaneScrollState(focusId);
   const lines = useMemo(() => (body === null ? [] : body.split('\n')), [body]);
   const effectiveHeight = Math.max(1, documentContentInnerHeight(presentation.height));
   const { start: clampedScroll, maxScroll } = computeDocumentWindow(
@@ -45,7 +46,10 @@ export const DocumentController = memo(function DocumentController({
     effectiveHeight,
   );
 
-  const jump = useCallback((line: number) => setScroll(Math.min(line - 1, maxScroll)), [maxScroll]);
+  const jump = useCallback(
+    (line: number) => setScroll(Math.min(line - 1, maxScroll)),
+    [maxScroll, setScroll],
+  );
   const goto = useGotoLine(jump);
 
   const keymap: PanelKeymap<DocumentIntent | GotoIntent> = useMemo(
@@ -99,7 +103,7 @@ export const DocumentController = memo(function DocumentController({
         }
       },
     }),
-    [closeAction, effectiveHeight, goto, maxScroll, open.kind, open.name, spawnPlanner],
+    [closeAction, effectiveHeight, goto, maxScroll, open.kind, open.name, setScroll, spawnPlanner],
   );
   usePanelKeymap(focusId, presentation.focused ? keymap : EMPTY_DOCUMENT_KEYMAP);
 
@@ -115,7 +119,7 @@ export const DocumentController = memo(function DocumentController({
             : Math.min(current + amount, maxScrollRef.current),
         );
       }),
-    [focusId, paneScroll],
+    [focusId, paneScroll, setScroll],
   );
 
   return (

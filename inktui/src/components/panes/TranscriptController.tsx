@@ -16,6 +16,8 @@ import { harnessModelFooter, worktreeLabel } from '../../selectors/harnessDispla
 import type { AppStore } from '../../store/store.js';
 import { useTheme } from '../../theme/themeStore.js';
 import { AllocatedPaneFrame } from './shared/AllocatedPaneFrame.js';
+import { usePaneGotoLineState } from './shared/usePaneGotoLineState.js';
+import { usePaneScrollState } from './shared/usePaneScrollState.js';
 import { TranscriptPane } from './TranscriptPane.js';
 
 const TRANSCRIPT_SCROLL_STEP = 1;
@@ -80,8 +82,8 @@ export const TranscriptController = memo(function TranscriptController({
   const defaultChatViewMode = useAppStore((current) => current.settings.defaultChatViewMode);
   const viewMode = state.conversations.paneViewModes[identity.agentId] ?? defaultChatViewMode;
   const turns = useConversationTurns(identity.agentId, state.conversations, viewMode);
-  const [scrollUp, setScrollUp] = useState(0);
-  const [gotoLine, setGotoLine] = useState<number | null>(null);
+  const [scrollUp, setScrollUp] = usePaneScrollState(focusId);
+  const [gotoLine, setGotoLine] = usePaneGotoLineState(focusId);
   const [chatMetrics, setChatMetrics] = useState({ lineCount: 0, maxScrollUp: 0 });
   const maxScrollUp = chatMetrics.maxScrollUp;
 
@@ -106,9 +108,9 @@ export const TranscriptController = memo(function TranscriptController({
     } else {
       setScrollUp((current) => Math.min(current + delta, maxScrollUp));
     }
-  }, [chatMetrics.lineCount, maxScrollUp]);
+  }, [chatMetrics.lineCount, maxScrollUp, setScrollUp]);
 
-  const jump = useCallback((line: number) => setGotoLine(line), []);
+  const jump = useCallback((line: number) => setGotoLine(line), [setGotoLine]);
   const goto = useGotoLine(jump);
   const keymap: PanelKeymap<TranscriptScrollIntent | GotoIntent> = useMemo(
     () => ({
@@ -137,7 +139,7 @@ export const TranscriptController = memo(function TranscriptController({
         }
       },
     }),
-    [goto, maxScrollUp],
+    [goto, maxScrollUp, setScrollUp],
   );
   usePanelKeymap(focusId, presentation.focused ? keymap : EMPTY_TRANSCRIPT_KEYMAP);
 
@@ -153,7 +155,7 @@ export const TranscriptController = memo(function TranscriptController({
             : Math.max(current - amount, 0),
         );
       }),
-    [focusId, paneScroll],
+    [focusId, paneScroll, setScrollUp],
   );
 
   const bus = useBusClient();
@@ -176,10 +178,13 @@ export const TranscriptController = memo(function TranscriptController({
     return unsubscribe;
   }, [bus, identity.agentId, viewMode]);
 
-  const handleScrollUpChange = useCallback((nextScrollUp: number) => {
-    setScrollUp(nextScrollUp);
-    setGotoLine(null);
-  }, []);
+  const handleScrollUpChange = useCallback(
+    (nextScrollUp: number) => {
+      setScrollUp(nextScrollUp);
+      setGotoLine(null);
+    },
+    [setGotoLine, setScrollUp],
+  );
 
   const handleWindowMetricsChange = useCallback(
     (metrics: { readonly lineCount: number; readonly maxScrollUp: number }) => {

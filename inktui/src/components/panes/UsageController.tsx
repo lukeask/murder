@@ -8,7 +8,7 @@ import { selectUsageView } from '../../selectors/usageSelectors.js';
 import type { UsageState } from '../../store/usage/usageSlice.js';
 import { useTheme } from '../../theme/themeStore.js';
 import { AllocatedPaneFrame } from './shared/AllocatedPaneFrame.js';
-import { useClampedCursor } from './shared/useClampedCursor.js';
+import { usePaneUiClampedCursor } from './shared/useClampedCursor.js';
 import { UsageSurface, type UsageSurfaceGroup } from './UsageSurface.js';
 
 type UsageIntent = 'cursorDown' | 'cursorUp' | 'refresh' | 'cycleSteering';
@@ -63,7 +63,7 @@ export const UsageController = memo(function UsageController({
   const theme = useTheme();
   const groups = useMemo(() => usageSurfaceGroupsFromState(usage), [usage]);
   const gaugeCount = usageGaugeCount(groups);
-  const { cursor, moveDown, moveUp } = useClampedCursor(gaugeCount);
+  const { cursor, moveDown, moveUp } = usePaneUiClampedCursor('usage', gaugeCount);
 
   const keymap: PanelKeymap<UsageIntent> = useMemo(
     () => ({

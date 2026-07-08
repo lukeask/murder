@@ -14,6 +14,8 @@ import { createModeStore } from './modeStore.js';
 import { createPanelStore } from './panelStore.js';
 import type { PanelId } from './panels.js';
 import { createPaneScrollBus } from './paneScrollBus.js';
+import { createPaneUiStore } from './paneUiStore.js';
+import { createWorkspaceStore } from './workspaceStore.js';
 
 /** The wired input stores. Matches the `InputStores` context value the React provider carries. */
 export interface InputStoreBundle {
@@ -30,6 +32,11 @@ export interface InputStoreBundle {
   /** Focus-id-keyed mouse-wheel scroll command channel (Stage panes subscribe; the root input loop
    * emits to the focused/targeted pane). */
   readonly paneScroll: ReturnType<typeof createPaneScrollBus>;
+  /** Per-pane ephemeral UI state (scroll/cursor) keyed by pane id, hoisted out of controller
+   * `useState` so it survives pane remount (workspaces plan, step 1). */
+  readonly paneUi: ReturnType<typeof createPaneUiStore>;
+  /** N-virtual-workspaces slots + active index (workspaces plan, step 2a). Inert at count 1. */
+  readonly workspace: ReturnType<typeof createWorkspaceStore>;
 }
 
 /** Build the bundle. `initialVisible` seeds the toggled-on panels; `initialFocus` seeds intended
@@ -55,6 +62,12 @@ export function createInputStores(
   // The wheel→scroll command channel. Stateless fan-out; one instance so every pane and the root
   // input loop share the same bus.
   const paneScroll = createPaneScrollBus();
+  // Per-pane UI state (scroll/cursor). One instance so a pane's position is remembered across the
+  // controller unmounting/remounting (panel toggle, workspace switch).
+  const paneUi = createPaneUiStore();
+  // Workspace slots. Starts at count 1 (feature inert); the settings bridge (step 2c) pushes
+  // `workspace_count` through `applyWorkspaceCount`.
+  const workspace = createWorkspaceStore();
   return {
     panels,
     focus,
@@ -65,5 +78,7 @@ export function createInputStores(
     chatVim,
     bindings,
     paneScroll,
+    paneUi,
+    workspace,
   };
 }

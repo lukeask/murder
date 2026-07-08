@@ -9,7 +9,7 @@ import { useTheme } from '../../theme/themeStore.js';
 import { useDocView } from './docView.js';
 import { ReportsSurface } from './ReportsSurface.js';
 import { AllocatedPaneFrame } from './shared/AllocatedPaneFrame.js';
-import { useClampedCursor } from './shared/useClampedCursor.js';
+import { usePaneUiClampedCursor } from './shared/useClampedCursor.js';
 
 type ReportsIntent = 'cursorDown' | 'cursorUp' | 'refresh' | 'star' | 'open';
 
@@ -28,7 +28,7 @@ export const ReportsController = memo(function ReportsController({
   const toggleDoc = useDocView('report');
   const view = useReportsView(reports, favorites);
   const theme = useTheme();
-  const { cursor, moveDown, moveUp } = useClampedCursor(view.rows.length);
+  const { cursor, moveDown, moveUp } = usePaneUiClampedCursor('reports', view.rows.length);
 
   useEffect(() => {
     void refresh();
