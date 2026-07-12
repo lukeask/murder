@@ -56,6 +56,17 @@ export type SettingsRow =
       readonly provider: LlmProviderId;
       readonly field: 'api_key' | 'base_url';
     }
+  | { readonly id: string; readonly kind: 'llmGlobal' }
+  | {
+      readonly id: string;
+      readonly kind: 'llmProvider';
+      readonly providerId: string;
+      readonly builtin: boolean;
+    }
+  | { readonly id: string; readonly kind: 'llmAddProvider'; readonly providerType: 'openai_compatible' | 'lemonade' }
+  | { readonly id: string; readonly kind: 'llmPolicy'; readonly policyId: string; readonly builtin: boolean }
+  | { readonly id: string; readonly kind: 'llmCreatePolicy' }
+  | { readonly id: string; readonly kind: 'llmFeaturePolicy'; readonly feature: string }
   | { readonly id: string; readonly kind: 'tier'; readonly name: string }
   | { readonly id: string; readonly kind: 'role'; readonly role: string; readonly tier: string }
   | { readonly id: string; readonly kind: 'templateCreate' }

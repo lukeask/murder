@@ -48,8 +48,26 @@ export type LlmTierProvider = 'groq' | 'cerebras' | 'local' | 'anthropic' | 'ope
  * `null`/absent when unset; on `update` `"***"` means "leave unchanged" and `""` clears. `base_url`
  * is meaningful for `local` (the OpenAI-compatible endpoint). */
 export interface LlmProviderWire {
+  readonly type?: string | null;
+  readonly name?: string | null;
+  readonly enabled?: boolean;
+  readonly endpoint?: string | null;
+  readonly auth?: { readonly api_key?: string | null };
   readonly api_key?: string | null;
   readonly base_url?: string | null;
+  readonly models?: {
+    readonly source?: 'recommended' | 'discovered' | 'custom';
+    readonly include?: readonly string[];
+    readonly exclude?: readonly string[];
+    readonly overrides?: Readonly<Record<string, LlmModelOverrideWire>>;
+  };
+}
+
+export interface LlmModelOverrideWire {
+  readonly enabled?: boolean;
+  readonly locality?: 'local' | 'remote' | 'unknown';
+  readonly cost_class?: 'free' | 'paid' | 'unknown';
+  readonly tags?: readonly string[];
 }
 
 /** A named tier: a `(provider, model)` pair a role can bind to. Mirrors the Python `UserLlmTier`. */
@@ -62,9 +80,19 @@ export interface LlmTierWire {
 /** The LLM block — `{}` when nothing is set. `tiers`/`roles` are open string-keyed maps; the built-in
  * `cheap`/`smart` tiers exist server-side even when `tiers` is empty (the UI lists them regardless). */
 export interface LlmWire {
-  readonly providers?: Readonly<Partial<Record<LlmProviderId, LlmProviderWire>>>;
+  readonly disabled?: boolean;
+  readonly active_policy?: string | null;
+  readonly providers?: Readonly<Record<string, LlmProviderWire>>;
   readonly tiers?: Readonly<Record<string, LlmTierWire>>;
   readonly roles?: Readonly<Record<string, string>>;
+  readonly policies?: Readonly<Record<string, LlmPolicyWire>>;
+  readonly feature_policies?: Readonly<Record<string, string>>;
+}
+
+export interface LlmPolicyWire {
+  readonly builtin: boolean;
+  readonly name?: string | null;
+  readonly groups?: readonly { readonly selectors: readonly unknown[] }[];
 }
 
 /** Whether each env-flagged provider's api key is present in the daemon's environment (env/.env always
@@ -129,7 +157,8 @@ export interface SettingsWire {
 /** A partial LLM patch for `update` — deep-merged server-side. Sending an `api_key` of `"***"` leaves
  * it unchanged; `""` clears it. The deep-merge cannot delete keys (so omit, never null, a tier/role). */
 export interface LlmPatch {
-  readonly providers?: Partial<Record<LlmProviderId, LlmProviderWire>>;
+  readonly providers?: Record<string, LlmProviderWire>;
+  readonly feature_policies?: Record<string, string>;
   readonly tiers?: Record<string, LlmTierWire>;
   readonly roles?: Record<string, string>;
 }
@@ -170,6 +199,74 @@ declare module '../../bus/BusClient.js' {
       params: { settings: SettingsPatch };
       result: { ok: boolean; settings: SettingsWire };
     };
+    'llm.settings.set_disabled': {
+      params: { disabled: boolean };
+      result: { ok: boolean; llm: LlmWire; settings: SettingsWire };
+    };
+    'llm.provider.create': {
+      params: { provider: Record<string, unknown> };
+      result: { ok: boolean; provider_id: string; llm: LlmWire; settings: SettingsWire };
+    };
+    'llm.provider.update': {
+      params: { provider_id: string; patch: Record<string, unknown> };
+      result: { ok: boolean; llm: LlmWire; settings: SettingsWire };
+    };
+    'llm.provider.delete': {
+      params: { provider_id: string; confirm: true };
+      result: { ok: boolean; llm: LlmWire; settings: SettingsWire };
+    };
+    'llm.provider.discover_models': {
+      params: { provider_id: string };
+      result: { ok: boolean; models: readonly { id: string; label: string }[] };
+    };
+    'llm.provider.models.update': {
+      params: { provider_id: string; patch: Record<string, unknown> };
+      result: { ok: boolean; llm: LlmWire; settings: SettingsWire };
+    };
+    'llm.policy.create': {
+      params: { name: string; policy?: Record<string, unknown> };
+      result: { ok: boolean; policy_id: string; llm: LlmWire; settings: SettingsWire };
+    };
+    'llm.policy.update': {
+      params: { policy_id: string; patch: Record<string, unknown> };
+      result: { ok: boolean; llm: LlmWire; settings: SettingsWire };
+    };
+    'llm.policy.delete': {
+      params: { policy_id: string; confirm: true };
+      result: { ok: boolean; llm: LlmWire; settings: SettingsWire };
+    };
+    'llm.policy.activate': {
+      params: { policy_id: string };
+      result: { ok: boolean; llm: LlmWire; settings: SettingsWire };
+    };
+    'llm.policy.clone': {
+      params: { policy_id: string; name: string };
+      result: { ok: boolean; policy_id: string; llm: LlmWire; settings: SettingsWire };
+    };
+    'llm.feature_policy.set': {
+      params: { feature_type: string; policy_id: string | null };
+      result: { ok: boolean; llm: LlmWire; settings: SettingsWire };
+    };
+    'llm.preview_resolution': {
+      params: {
+        feature_type: string;
+        required_capabilities?: readonly string[];
+        required_execution_mode?: string | null;
+        min_context_tokens?: number | null;
+      };
+      result: {
+        ok: boolean;
+        status: string;
+        policy_id: string | null;
+        candidates: readonly {
+          provider_id: string;
+          provider_type: string;
+          model_id: string;
+          locality: string;
+          cost_class: string;
+        }[];
+      };
+    };
   }
 }
 
@@ -188,6 +285,25 @@ export interface SettingsActions {
    * `error` + a toast, no rollback).
    */
   update(partial: SettingsPatch): Promise<void>;
+  readonly llm: LlmActions;
+}
+
+/** Direct-LLM configuration operations. The service returns its masked,
+ * authoritative config after each mutation so the TUI never merges secrets. */
+export interface LlmActions {
+  setDisabled(disabled: boolean): Promise<void>;
+  createProvider(provider: Record<string, unknown>): Promise<string | null>;
+  updateProvider(providerId: string, patch: Record<string, unknown>): Promise<void>;
+  updateProviderModels(providerId: string, patch: Record<string, unknown>): Promise<void>;
+  deleteProvider(providerId: string): Promise<void>;
+  discoverModels(providerId: string): Promise<readonly { id: string; label: string }[]>;
+  createPolicy(name: string, policy?: Record<string, unknown>): Promise<string | null>;
+  updatePolicy(policyId: string, patch: Record<string, unknown>): Promise<void>;
+  deletePolicy(policyId: string): Promise<void>;
+  activatePolicy(policyId: string): Promise<void>;
+  clonePolicy(policyId: string, name: string): Promise<string | null>;
+  setFeaturePolicy(featureType: string, policyId: string | null): Promise<void>;
+  previewResolution(featureType: string): Promise<readonly { provider_id: string; model_id: string }[]>;
 }
 
 /** Project a `settings.get`/`settings.update` reply's wire record onto the slice's camelCase shape,
@@ -227,6 +343,16 @@ function applyWire(prev: SettingsState, wire: SettingsWire | undefined): Setting
 }
 
 export function createSettingsActions(bus: BusClient, store: StoreApi<AppStore>): SettingsActions {
+  const applyLlmReply = (reply: { settings: SettingsWire }): void => {
+    store.setState((state) => ({ settings: applyWire(state.settings, reply.settings) }));
+  };
+
+  const llmFailure = (error: unknown): void => {
+    const message = error instanceof Error ? error.message : String(error);
+    store.setState((state) => ({ settings: { ...state.settings, error: message } }));
+    toastStore.getState().push(message, { severity: 'error', ttlMs: 12000 });
+  };
+
   return {
     async load(): Promise<void> {
       store.setState((state) => ({ settings: { ...state.settings, status: 'loading' } }));
@@ -287,6 +413,112 @@ export function createSettingsActions(bus: BusClient, store: StoreApi<AppStore>)
         store.setState((state) => ({ settings: { ...state.settings, error: message } }));
         toastStore.getState().push(message, { severity: 'error', ttlMs: 12000 });
       }
+    },
+
+    llm: {
+      async setDisabled(disabled): Promise<void> {
+        try {
+          applyLlmReply(await bus.rpc('llm.settings.set_disabled', { disabled }));
+        } catch (error: unknown) {
+          llmFailure(error);
+        }
+      },
+      async createProvider(provider): Promise<string | null> {
+        try {
+          const reply = await bus.rpc('llm.provider.create', { provider });
+          applyLlmReply(reply);
+          return reply.provider_id;
+        } catch (error: unknown) {
+          llmFailure(error);
+          return null;
+        }
+      },
+      async updateProvider(provider_id, patch): Promise<void> {
+        try {
+          applyLlmReply(await bus.rpc('llm.provider.update', { provider_id, patch }));
+        } catch (error: unknown) {
+          llmFailure(error);
+        }
+      },
+      async updateProviderModels(provider_id, patch): Promise<void> {
+        try {
+          applyLlmReply(await bus.rpc('llm.provider.models.update', { provider_id, patch }));
+        } catch (error: unknown) {
+          llmFailure(error);
+        }
+      },
+      async deleteProvider(provider_id): Promise<void> {
+        try {
+          applyLlmReply(await bus.rpc('llm.provider.delete', { provider_id, confirm: true }));
+        } catch (error: unknown) {
+          llmFailure(error);
+        }
+      },
+      async discoverModels(provider_id): Promise<readonly { id: string; label: string }[]> {
+        try {
+          return (await bus.rpc('llm.provider.discover_models', { provider_id })).models;
+        } catch (error: unknown) {
+          llmFailure(error);
+          return [];
+        }
+      },
+      async createPolicy(name, policy): Promise<string | null> {
+        try {
+          const reply = await bus.rpc('llm.policy.create', { name, ...(policy ? { policy } : {}) });
+          applyLlmReply(reply);
+          return reply.policy_id;
+        } catch (error: unknown) {
+          llmFailure(error);
+          return null;
+        }
+      },
+      async updatePolicy(policy_id, patch): Promise<void> {
+        try {
+          applyLlmReply(await bus.rpc('llm.policy.update', { policy_id, patch }));
+        } catch (error: unknown) {
+          llmFailure(error);
+        }
+      },
+      async deletePolicy(policy_id): Promise<void> {
+        try {
+          applyLlmReply(await bus.rpc('llm.policy.delete', { policy_id, confirm: true }));
+        } catch (error: unknown) {
+          llmFailure(error);
+        }
+      },
+      async activatePolicy(policy_id): Promise<void> {
+        try {
+          applyLlmReply(await bus.rpc('llm.policy.activate', { policy_id }));
+        } catch (error: unknown) {
+          llmFailure(error);
+        }
+      },
+      async clonePolicy(policy_id, name): Promise<string | null> {
+        try {
+          const reply = await bus.rpc('llm.policy.clone', { policy_id, name });
+          applyLlmReply(reply);
+          return reply.policy_id;
+        } catch (error: unknown) {
+          llmFailure(error);
+          return null;
+        }
+      },
+      async setFeaturePolicy(feature_type, policy_id): Promise<void> {
+        try {
+          applyLlmReply(await bus.rpc('llm.feature_policy.set', { feature_type, policy_id }));
+        } catch (error: unknown) {
+          llmFailure(error);
+        }
+      },
+      async previewResolution(feature_type): Promise<readonly { provider_id: string; model_id: string }[]> {
+        try {
+          const reply = await bus.rpc('llm.preview_resolution', { feature_type });
+          return reply.candidates.map(({ provider_id, model_id }) => ({ provider_id, model_id }));
+        } catch (error: unknown) {
+          llmFailure(error);
+          return [];
+        }
+      },
     },
   };
 }

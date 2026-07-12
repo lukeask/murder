@@ -77,10 +77,7 @@ export function formatTurnLines(turn: ChatTurn): readonly ChatLine[] {
 }
 
 /** Word-wrap flattened lines so each {@link ChatLine} is one terminal row. */
-export function wrapChatLines(
-  lines: readonly ChatLine[],
-  textWidth: number,
-): readonly ChatLine[] {
+export function wrapChatLines(lines: readonly ChatLine[], textWidth: number): readonly ChatLine[] {
   if (textWidth < 1) {
     return lines;
   }
@@ -96,7 +93,7 @@ export function wrapChatLines(
       wordWrap: !verbatim,
     });
     if (rows.length <= 1) {
-      out.push(line);
+      out.push({ ...line, text: rows[0] ?? '' });
       continue;
     }
     for (let i = 0; i < rows.length; i++) {

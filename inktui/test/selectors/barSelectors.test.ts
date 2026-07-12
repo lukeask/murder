@@ -266,6 +266,23 @@ describe('selectBottomBar', () => {
     expect(onPlans).toContain('murder crow');
   });
 
+  it('shows workspace traversal as one shifted J/K hint, not per-digit jump binds', () => {
+    const ctrl = resolveBindings('ctrl', true, {});
+    const hints = selectBottomBar('plans', undefined, ctrl);
+    const descriptions = hints.map((h) => h.description);
+    expect(descriptions).toContain('workspace');
+    expect(descriptions).not.toContain('next workspace');
+    expect(descriptions).not.toContain('prev workspace');
+    expect(descriptions).not.toContain('workspace 4');
+    expect(descriptions).not.toContain('workspace 5');
+    const workspace = hints.find((h) => h.description === 'workspace');
+    expect(workspace?.key).toBe('C-S-j/k');
+
+    const alt = resolveBindings('alt', false, {});
+    const altHints = selectBottomBar('plans', undefined, alt);
+    expect(altHints.find((h) => h.description === 'workspace')?.key).toBe('A-S-j/k');
+  });
+
   it('shows only `A-jk` nav (not `A-hjkl`) in chat, where A-h/A-l cycle the target', () => {
     const nav = selectBottomBar(CHAT_FOCUS, undefined, DEFAULT_BINDINGS).find(
       (h) => h.description === 'nav',

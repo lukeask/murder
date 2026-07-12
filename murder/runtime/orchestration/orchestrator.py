@@ -27,7 +27,7 @@ from murder.runtime.agents.base import AgentRole, AgentStatus
 from murder.runtime.agents.crow_handler import CrowHandler
 from murder.runtime.agents.planning_handler import PlanningHandler
 from murder.bus import Entity, StatusChangeEvent, TicketStatus
-from murder.llm.clients import resolve_role_client_tiered
+from murder.llm.direct import resolve_direct_role_client
 from murder.config import (
     Config,
 )
@@ -349,8 +349,11 @@ class Orchestrator:
         ch = self.harness_cfg.resolve_crow(row)
         harness = self.harness_cfg.adapter(ch)
         session = format_session_name(self.rt, "crow_handler", f"_{ticket_id}")
-        client, crow_handler_cfg = resolve_role_client_tiered(
-            self.rt.config.crow_handler, self.rt.user_cfg, "crow_handler"
+        client, crow_handler_cfg = resolve_direct_role_client(
+            self.rt.config.crow_handler,
+            self.rt.user_cfg,
+            "crow_classification",
+            "crow_handler",
         )
         crow_agent = self.rt.get_crow(ticket_id)
         worktree_path = getattr(crow_agent, "worktree_path", None) if crow_agent else None

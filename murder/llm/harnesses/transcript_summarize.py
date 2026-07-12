@@ -76,6 +76,25 @@ def build_default_summary_provider(*, prefer_local: bool = False) -> SummaryProv
     callers can opt into it once local summary serving is configured.
     """
 
+    # New policy configuration is optional. Legacy installs retain the
+    # established local/auto-free path, while an explicit global disable or an
+    # explicit-but-unresolvable policy produces no direct request.
+    from murder.llm.direct import has_explicit_policy_config, resolve_policy_client
+    from murder.user_config import load_user_config
+
+    try:
+        user_cfg = load_user_config()
+    except Exception:  # pragma: no cover - config read must stay fail-soft
+        user_cfg = None
+    if user_cfg is not None and user_cfg.llm is not None:
+        if user_cfg.llm.disabled:
+            return None
+        selected = resolve_policy_client(user_cfg, "transcript_summary")
+        if selected.client is not None and selected.model_id is not None:
+            return APITranscriptSummaryProvider(selected.client, model=selected.model_id)
+        if has_explicit_policy_config(user_cfg):
+            return None
+
     if prefer_local:
         local = create_client("local")
         if local is not None:

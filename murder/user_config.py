@@ -21,9 +21,22 @@ from pathlib import Path
 from typing import Any, Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 UserHarnessKind = Literal["cursor", "claude_code", "codex", "pi", "antigravity"]
+UserLlmProviderKind = Literal[
+    "groq",
+    "cerebras",
+    "openrouter",
+    "anthropic",
+    "openai",
+    "local",
+    "lemonade",
+    "openai_compatible",
+]
+ModelSource = Literal["recommended", "discovered", "custom"]
+CandidateLocality = Literal["local", "remote", "unknown"]
+CandidateCostClass = Literal["free", "paid", "unknown"]
 
 
 class BarWidgetUserConfig(BaseModel):
@@ -167,6 +180,42 @@ class UserNotetakerPatch(BaseModel):
     max_context_tokens: int | None = None
 
 
+class UserLlmMetadata(BaseModel):
+    """Optional metadata defaults; model values override provider values."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    locality: CandidateLocality | None = None
+    cost_class: CandidateCostClass | None = None
+    tags: set[str] | None = None
+    capabilities: set[str] | None = None
+    execution_modes: set[str] | None = None
+    context_window: int | None = Field(default=None, ge=1)
+
+
+class UserLlmModelOverride(UserLlmMetadata):
+    """Per-model catalog enablement and metadata overrides."""
+
+    enabled: bool | None = None
+
+
+class UserLlmModelCatalog(BaseModel):
+    """A provider instance's source catalog plus non-destructive adjustments."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    source: ModelSource = "recommended"
+    include: list[str] = Field(default_factory=list)
+    exclude: list[str] = Field(default_factory=list)
+    overrides: dict[str, UserLlmModelOverride] = Field(default_factory=dict)
+
+
+class UserLlmProviderAuth(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    api_key: str | None = None
+
+
 class UserLlmProviderSettings(BaseModel):
     """User-scope API credentials/endpoint for one LLM provider.
 
@@ -177,8 +226,201 @@ class UserLlmProviderSettings(BaseModel):
 
     model_config = ConfigDict(extra="ignore")
 
-    api_key: str | None = None
-    base_url: str | None = None
+    # ``api_key`` and ``base_url`` are retained as compatibility accessors for
+    # the legacy provider map.  New config persists ``auth`` and ``endpoint``.
+    type: UserLlmProviderKind | None = None
+    name: str | None = None
+    enabled: bool = True
+    endpoint: str | None = None
+    auth: UserLlmProviderAuth = Field(default_factory=UserLlmProviderAuth)
+    metadata: UserLlmMetadata = Field(default_factory=UserLlmMetadata)
+    models: UserLlmModelCatalog = Field(default_factory=UserLlmModelCatalog)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _migrate_legacy_shape(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
+        data = dict(value)
+        legacy_type = data.pop("provider", None)
+        if legacy_type is not None and "type" not in data:
+            data["type"] = legacy_type
+        legacy_key = data.pop("api_key", None)
+        if legacy_key is not None:
+            auth = dict(data.get("auth") or {})
+            auth.setdefault("api_key", legacy_key)
+            data["auth"] = auth
+        legacy_endpoint = data.pop("base_url", None)
+        if legacy_endpoint is not None and "endpoint" not in data:
+            data["endpoint"] = legacy_endpoint
+        # The preliminary/legacy map ``models: {id: {enabled: ...}}`` is a
+        # custom catalog.  Convert it without discarding user choices.
+        models = data.get("models")
+        if isinstance(models, dict) and "source" not in models:
+            data["models"] = {
+                "source": "custom",
+                "include": list(models),
+                "overrides": models,
+            }
+        return data
+
+    @property
+    def api_key(self) -> str | None:
+        return self.auth.api_key
+
+    @property
+    def base_url(self) -> str | None:
+        return self.endpoint
+
+
+class UserLlmExactCandidate(BaseModel):
+    """One pinned provider-instance/model pair in a selection policy."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    provider: str
+    model: str
+
+
+class UserLlmSelectorMatch(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    locality: CandidateLocality | None = None
+    cost_class: CandidateCostClass | None = None
+    tags: set[str] = Field(default_factory=set)
+    capabilities: set[str] = Field(default_factory=set)
+
+
+class UserLlmSelector(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    match: UserLlmSelectorMatch | None = None
+    candidate: UserLlmExactCandidate | None = None
+
+
+class UserLlmPolicyGroup(BaseModel):
+    """Equal-priority selectors, rotated by the stateful policy resolver."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    selectors: list[UserLlmSelector] = Field(default_factory=list)
+
+
+class UserLlmPolicy(BaseModel):
+    """Reusable ordered model-selection policy.
+
+    Candidates in the first group are preferred.  Later groups are fallbacks;
+    the resolver rotates within each group without changing group priority.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    builtin: bool = False
+    name: str | None = None
+    groups: list[UserLlmPolicyGroup] = Field(default_factory=list)
+
+
+BUILTIN_LLM_POLICIES: dict[str, UserLlmPolicy] = {
+    "local-then-free": UserLlmPolicy(
+        builtin=True,
+        name="Local Then Free",
+        groups=[
+            UserLlmPolicyGroup(selectors=[UserLlmSelector(match=UserLlmSelectorMatch(locality="local"))]),
+            UserLlmPolicyGroup(selectors=[UserLlmSelector(match=UserLlmSelectorMatch(locality="remote", cost_class="free"))]),
+        ],
+    ),
+    "remote-free": UserLlmPolicy(
+        builtin=True,
+        name="Remote Free",
+        groups=[UserLlmPolicyGroup(selectors=[UserLlmSelector(match=UserLlmSelectorMatch(locality="remote", cost_class="free"))])],
+    ),
+    "local-only": UserLlmPolicy(
+        builtin=True,
+        name="Local Only",
+        groups=[UserLlmPolicyGroup(selectors=[UserLlmSelector(match=UserLlmSelectorMatch(locality="local"))])],
+    ),
+    # Oracle-oriented default: prefer capable remote free models, then any local.
+    # Execution mode (batch vs immediate) is intentionally not encoded here.
+    "oracle-smart": UserLlmPolicy(
+        builtin=True,
+        name="Oracle Smart",
+        groups=[
+            UserLlmPolicyGroup(
+                selectors=[
+                    UserLlmSelector(
+                        match=UserLlmSelectorMatch(
+                            locality="remote",
+                            cost_class="free",
+                            capabilities={"tools"},
+                        )
+                    )
+                ]
+            ),
+            UserLlmPolicyGroup(selectors=[UserLlmSelector(match=UserLlmSelectorMatch(locality="local"))]),
+            UserLlmPolicyGroup(
+                selectors=[UserLlmSelector(match=UserLlmSelectorMatch(locality="remote", cost_class="free"))]
+            ),
+        ],
+    ),
+}
+
+
+ExecutionMode = Literal["immediate", "batch"]
+
+
+class UserExecutionPolicy(BaseModel):
+    """How a request should be submitted and awaited (distinct from model selection)."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    builtin: bool = False
+    name: str | None = None
+    # Single-mode policies use ``mode``; preferred/fallback policies use the pair.
+    mode: ExecutionMode | None = None
+    preferred_mode: ExecutionMode | None = None
+    fallback_mode: ExecutionMode | None = None
+
+    @model_validator(mode="after")
+    def _require_mode_or_preferred(self) -> UserExecutionPolicy:
+        if self.mode is None and self.preferred_mode is None:
+            raise ValueError("execution policy requires mode or preferred_mode")
+        return self
+
+
+BUILTIN_EXECUTION_POLICIES: dict[str, UserExecutionPolicy] = {
+    "immediate": UserExecutionPolicy(builtin=True, name="Immediate", mode="immediate"),
+    "batch-preferred": UserExecutionPolicy(
+        builtin=True,
+        name="Batch Preferred",
+        preferred_mode="batch",
+        fallback_mode="immediate",
+    ),
+    "batch-only": UserExecutionPolicy(builtin=True, name="Batch Only", mode="batch"),
+}
+
+
+class UserExecutionConfig(BaseModel):
+    """Reusable execution policies, separate from model-selection policies."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    policies: dict[str, UserExecutionPolicy] = Field(default_factory=dict)
+
+    def resolved_policy(self, name: str) -> UserExecutionPolicy | None:
+        if name in BUILTIN_EXECUTION_POLICIES:
+            return BUILTIN_EXECUTION_POLICIES[name]
+        policy = self.policies.get(name)
+        return None if policy is None or policy.builtin else policy
+
+
+class UserOracleConfig(BaseModel):
+    """Oracle is a workflow feature, not a provider type (§13.1)."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    enabled: bool = True
+    model_policy: str = "oracle-smart"
+    execution_policy: str = "batch-preferred"
 
 
 class UserLlmTier(BaseModel):
@@ -192,16 +434,51 @@ class UserLlmTier(BaseModel):
 
 
 class UserLlmConfig(BaseModel):
-    """User-scope LLM config: provider credentials, named tiers, role->tier map."""
+    """User-scope direct-LLM config.
+
+    ``tiers`` and ``roles`` are the legacy role-tier interface and remain fully
+    supported.  Provider instance IDs, catalogs, and policies are additive.
+    """
 
     model_config = ConfigDict(extra="ignore")
 
-    providers: dict[
-        Literal["groq", "cerebras", "openrouter", "local"], UserLlmProviderSettings
-    ] = Field(default_factory=dict)
+    disabled: bool = False
+    # Key is an instance id.  Built-ins conventionally use their provider name
+    # (for example ``groq``); custom OpenAI-compatible endpoints use any id.
+    providers: dict[str, UserLlmProviderSettings] = Field(default_factory=dict)
+    policies: dict[str, UserLlmPolicy] = Field(default_factory=dict)
+    # Semantic direct-LLM feature/role name -> reusable policy name.
+    feature_policies: dict[str, str] = Field(default_factory=dict)
+    # Used when a feature has no explicit policy binding.
+    active_policy: str | None = "local-then-free"
     tiers: dict[str, UserLlmTier] = Field(default_factory=dict)
     # role name -> tier name
     roles: dict[str, str] = Field(default_factory=dict)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _migrate_pre_policy_schema(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
+        data = dict(value)
+        if "direct_llm_enabled" in data and "disabled" not in data:
+            data["disabled"] = not bool(data.pop("direct_llm_enabled"))
+        providers = data.get("providers")
+        if isinstance(providers, dict):
+            migrated: dict[str, Any] = {}
+            for provider_id, settings in providers.items():
+                if isinstance(settings, dict) and "type" not in settings and "provider" not in settings:
+                    settings = {**settings, "type": provider_id}
+                migrated[provider_id] = settings
+            data["providers"] = migrated
+        return data
+
+    def resolved_policy(self, name: str) -> UserLlmPolicy | None:
+        """Return an immutable built-in or a user-defined custom policy."""
+        if name in BUILTIN_LLM_POLICIES:
+            return BUILTIN_LLM_POLICIES[name]
+        policy = self.policies.get(name)
+        return None if policy is None or policy.builtin else policy
 
 
 class UserConfig(BaseModel):
@@ -216,6 +493,10 @@ class UserConfig(BaseModel):
     default_crow: UserHarnessRolePatch | None = None
     notetaker: UserNotetakerPatch | None = None
     llm: UserLlmConfig | None = None
+    # Execution policies and Oracle live beside ``llm`` so model-selection
+    # config stays free of batch/immediate encoding (§3, §13.2).
+    execution: UserExecutionConfig | None = None
+    oracle: UserOracleConfig | None = None
 
 
 # Built-in tiers, available even with no user `llm.tiers`. User-defined tiers of

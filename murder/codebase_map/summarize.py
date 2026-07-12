@@ -41,8 +41,9 @@ class FileSummary:
 class FileSummarizer:
     """Summarize a single source file to a budgeted markdown body."""
 
-    def __init__(self, client: APIClient) -> None:
+    def __init__(self, client: APIClient, *, rollup_client: APIClient | None = None) -> None:
         self.client = client
+        self.rollup_client = rollup_client or client
 
     async def summarize(self, path: str, src: str) -> FileSummary:
         symbols = extract_symbols(path, src)

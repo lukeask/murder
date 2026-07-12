@@ -8,13 +8,22 @@ import logging
 import os
 from typing import TYPE_CHECKING
 
-from murder.llm.clients.auto_free import AutoFreeClient
+from murder.config import ApiRoleConfig
 from murder.llm.clients.anthropic import AnthropicClient
+from murder.llm.clients.auto_free import AutoFreeClient
 from murder.llm.clients.base import APIClient
+from murder.llm.clients.catalog import (
+    PROVIDER_DEFINITIONS,
+    ModelPreset,
+    ProviderDefinition,
+    ProviderFieldSpec,
+    create_instance_client,
+    get_provider_definition,
+    recommended_catalogs,
+)
 from murder.llm.clients.cerebras import CerebrasClient
 from murder.llm.clients.groq import GroqClient
 from murder.llm.clients.openai_compatible import OPENAI_BASE, OpenAICompatibleClient
-from murder.config import ApiRoleConfig
 from murder.llm.clients.openrouter import OpenRouterClient
 
 if TYPE_CHECKING:
@@ -101,6 +110,13 @@ __all__ = [
     "GroqClient",
     "OpenAICompatibleClient",
     "OpenRouterClient",
+    "ModelPreset",
+    "PROVIDER_DEFINITIONS",
+    "ProviderDefinition",
+    "ProviderFieldSpec",
+    "create_instance_client",
+    "get_provider_definition",
+    "recommended_catalogs",
     "create_client",
     "resolve_role_client",
     "resolve_role_client_tiered",

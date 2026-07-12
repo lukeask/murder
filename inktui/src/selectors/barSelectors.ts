@@ -150,6 +150,19 @@ function globalHints(bindings: ResolvedBindings, focused: FocusId): readonly Bot
       hints.push({ key: `${prefix}hl`, description: 'target' });
       continue;
     }
+    // Workspace jump digits are live globals but secondary to next/prev; listing each one floods
+    // the bar (and adaptively ranks them as "unfamiliar"). The combined J/K hint is the gesture
+    // users actually traverse with.
+    if (id.startsWith('workspace.jump.')) {
+      continue;
+    }
+    if (id === 'workspace.prev') {
+      continue; // folded into the combined workspace hint at workspace.next
+    }
+    if (id === 'workspace.next') {
+      hints.push({ key: `${prefix}S-j/k`, description: 'workspace' });
+      continue;
+    }
     hints.push({ key: bindings.label(id), description: ACTIONS[id].description, actionId: id });
   }
   return hints;

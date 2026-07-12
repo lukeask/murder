@@ -39,7 +39,7 @@ async function tick(): Promise<void> {
 
 /** Walk the cursor down (j) until the first binding row ("spawn", the first rebindable action) is
  * focused. The list scrolls by cursor, so we step until that focused row is in the visible frame.
- * Robust to the section ordering above the bindings (harnesses/providers/tiers/roles). */
+ * Robust to the section ordering above the bindings. */
 async function walkToFirstBinding(
   stdin: { write: (s: string) => void },
   lastFrame: () => string | undefined,
@@ -108,6 +108,17 @@ function fakeActions(): { actions: SettingsActions; patches: SettingsPatch[] } {
     update: vi.fn(async (patch: SettingsPatch) => {
       patches.push(patch);
     }),
+    llm: {
+      setDisabled: vi.fn(async () => {}),
+      createProvider: vi.fn(async () => null),
+      updateProvider: vi.fn(async () => {}),
+      deleteProvider: vi.fn(async () => {}),
+      discoverModels: vi.fn(async () => []),
+      createPolicy: vi.fn(async () => null),
+      updatePolicy: vi.fn(async () => {}),
+      deletePolicy: vi.fn(async () => {}),
+      activatePolicy: vi.fn(async () => {}),
+    },
   };
   return { actions, patches };
 }
@@ -275,8 +286,8 @@ describe('SettingsModal', () => {
     await walkUntilFocused(stdin, lastFrame, 'next workspace');
     const workspaceLine =
       (lastFrame() ?? '').split('\n').find((l) => l.includes('next workspace')) ?? '';
-    expect(workspaceLine).toContain('C-J');
-    expect(workspaceLine).not.toContain('A-J');
+    expect(workspaceLine).toContain('C-S-j');
+    expect(workspaceLine).not.toContain('A-S-j');
   });
 
   it('selecting a pane-gap option commits via update', async () => {
@@ -305,6 +316,28 @@ describe('SettingsModal', () => {
     stdin.write('\r');
     await tick();
     expect(patches).toContainEqual({ workspace_count: 2 });
+  });
+
+  it('shows a Kitty workspace-mapping warning when ctrl users enable multi-workspace', async () => {
+    const { stores, enter } = setup({
+      modifier: 'ctrl',
+      theme: DEFAULT_THEME_ID,
+      paneGap: 0,
+      workspaceCount: 1,
+      keyOverrides: {},
+    });
+    const { lastFrame, stdin } = render(<Harness stores={stores} />);
+    enter();
+    await tick();
+    await openCategory(stdin, lastFrame, 'Workspaces');
+    stdin.write('j');
+    await tick();
+    await walkUntilFocused(stdin, lastFrame, '( ) 2');
+    stdin.write('\r');
+    await tick();
+    expect(lastFrame()).toContain('Kitty users with ctrl as the command modifier');
+    expect(lastFrame()).toContain('ctrl+shift+k no_op');
+    expect(lastFrame()).toContain('ctrl+shift+j no_op');
   });
 
   it('selecting the vim-mode "on" row commits update({ vim_mode: true })', async () => {
@@ -531,89 +564,92 @@ describe('SettingsModal', () => {
     expect(patches.find((p) => p.crow_harnesses !== undefined)).toBeUndefined();
   });
 
-  // --- LLM providers section ---
+  // --- LLM Functionality section ---
 
-  it('provider api_key: env-set provider shows "set via env"', async () => {
-    const stores = createInputStores(['notes'], 'notes');
-    const { actions } = fakeActions();
-    const { lastFrame, stdin } = render(<Harness stores={stores} />);
-    // groq has llm_env true → "set via env". Scroll the providers section into view first.
-    stores.modes.getState().enter(settingsMode(stores.modes, actions, RICH_CURRENT));
-    await tick();
-    await openCategory(stdin, lastFrame, 'LLM');
-    await walkUntilFocused(stdin, lastFrame, 'groq api_key');
-    expect(lastFrame()).toContain('set via env');
-  });
-
-  it('provider api_key: text-entry commits llm.providers.<p>.api_key', async () => {
-    const stores = createInputStores(['notes'], 'notes');
-    const { actions, patches } = fakeActions();
-    const { lastFrame, stdin } = render(<Harness stores={stores} />);
-    // cerebras has no env key → editable. Focus its api_key row, type a key, Enter.
-    stores.modes.getState().enter(settingsMode(stores.modes, actions, RICH_CURRENT));
-    await tick();
-    await openCategory(stdin, lastFrame, 'LLM');
-    await walkUntilFocused(stdin, lastFrame, 'cerebras api_key');
-    stdin.write('\r'); // begin edit
-    await tick();
-    stdin.write('k');
-    await tick();
-    stdin.write('e');
-    await tick();
-    stdin.write('y');
-    await tick();
-    stdin.write('\r'); // commit
-    await tick();
-    expect(patches).toContainEqual({ llm: { providers: { cerebras: { api_key: 'key' } } } });
-  });
-
-  it('local provider has a base_url row and commits llm.providers.local.base_url', async () => {
-    const stores = createInputStores(['notes'], 'notes');
-    const { actions, patches } = fakeActions();
-    const { lastFrame, stdin } = render(<Harness stores={stores} />);
-    stores.modes.getState().enter(settingsMode(stores.modes, actions, RICH_CURRENT));
-    await tick();
-    await openCategory(stdin, lastFrame, 'LLM');
-    await walkUntilFocused(stdin, lastFrame, 'local base_url');
-    stdin.write('\r');
-    await tick();
-    stdin.write('u');
-    await tick();
-    stdin.write('\r');
-    await tick();
-    expect(patches).toContainEqual({ llm: { providers: { local: { base_url: 'u' } } } });
-  });
-
-  // --- Tiers & roles section ---
-
-  it('tiers section lists the built-in cheap/smart tiers read-only', async () => {
+  it('shows the global control and provider rows in the LLM three-column view', async () => {
     const stores = createInputStores(['notes'], 'notes');
     const { actions } = fakeActions();
     const { lastFrame, stdin } = render(<Harness stores={stores} />);
     stores.modes.getState().enter(settingsMode(stores.modes, actions, RICH_CURRENT));
     await tick();
     await openCategory(stdin, lastFrame, 'LLM');
-    // Scroll down into the roles section so the tier built-ins above it are in view.
-    await walkUntilFocused(stdin, lastFrame, 'notetaker:');
     const frame = lastFrame() ?? '';
-    expect(frame).toContain('cheap');
-    expect(frame).toContain('smart');
-    // The smart built-in is cerebras/openai/gpt-oss-120b.
-    expect(frame).toContain('openai/gpt-oss-120b');
+    expect(frame).toContain('LLM Functionality');
+    expect(frame).toContain('Enabled');
+    expect(frame).toContain('groq');
+    expect(frame).toContain('Add Lemonade');
   });
 
-  it('role radio: selecting a tier commits llm.roles.<role>', async () => {
+  it('keeps provider and policy rows readable and navigable in the standard-width LLM modal', async () => {
     const stores = createInputStores(['notes'], 'notes');
-    const { actions, patches } = fakeActions();
+    const { actions } = fakeActions();
     const { lastFrame, stdin } = render(<Harness stores={stores} />);
     stores.modes.getState().enter(settingsMode(stores.modes, actions, RICH_CURRENT));
     await tick();
     await openCategory(stdin, lastFrame, 'LLM');
-    // Role rows render as "<role>: <tier>"; focus notetaker: smart and Enter.
-    await walkUntilFocused(stdin, lastFrame, 'notetaker: smart');
+
+    await walkUntilFocused(stdin, lastFrame, 'groq');
+    expect((lastFrame() ?? '').split('\n').find((line) => line.includes('›'))).toContain('groq');
+
+    await walkUntilFocused(stdin, lastFrame, 'local then free');
+    expect((lastFrame() ?? '').split('\n').find((line) => line.includes('›'))).toContain(
+      'local then free',
+    );
+  });
+
+  it('toggles a provider with Space and opens its editor with Enter', async () => {
+    const stores = createInputStores(['notes'], 'notes');
+    const { actions } = fakeActions();
+    const { lastFrame, stdin } = render(<Harness stores={stores} />);
+    stores.modes.getState().enter(settingsMode(stores.modes, actions, RICH_CURRENT));
+    await tick();
+    await openCategory(stdin, lastFrame, 'LLM');
+    await walkUntilFocused(stdin, lastFrame, 'groq');
+    stdin.write(' ');
+    await tick();
+    expect(actions.llm.updateProvider).toHaveBeenCalledWith('groq', { enabled: true });
     stdin.write('\r');
     await tick();
-    expect(patches).toContainEqual({ llm: { roles: { notetaker: 'smart' } } });
+    expect(lastFrame()).toContain('Provider settings');
+    expect(lastFrame()).toContain('API key');
+  });
+
+  it('opens the custom OpenAI-compatible provider form', async () => {
+    const stores = createInputStores(['notes'], 'notes');
+    const { actions } = fakeActions();
+    const { lastFrame, stdin } = render(<Harness stores={stores} />);
+    stores.modes.getState().enter(settingsMode(stores.modes, actions, RICH_CURRENT));
+    await tick();
+    await openCategory(stdin, lastFrame, 'LLM');
+    await walkUntilFocused(stdin, lastFrame, 'Add OpenAI-compatible');
+    stdin.write('\r');
+    await tick();
+    expect(lastFrame()).toContain('Add OpenAI-compatible');
+    expect(lastFrame()).toContain('Endpoint');
+    expect(lastFrame()).toContain('Models source');
+  });
+
+  it('distinguishes the active policy glyph and opens the policy creation form', async () => {
+    const stores = createInputStores(['notes'], 'notes');
+    const { actions } = fakeActions();
+    const { lastFrame, stdin } = render(<Harness stores={stores} />);
+    stores.modes.getState().enter(
+      settingsMode(stores.modes, actions, {
+        ...RICH_CURRENT,
+        llm: { active_policy: 'local-then-free' },
+      }),
+    );
+    await tick();
+    await openCategory(stdin, lastFrame, 'LLM');
+    await walkUntilFocused(stdin, lastFrame, 'local then free');
+    expect(
+      (lastFrame() ?? '').split('\n').find((line) => line.includes('local then free')),
+    ).toContain('●');
+    await walkUntilFocused(stdin, lastFrame, 'Create Policy');
+    stdin.write('\r');
+    await tick();
+    expect(lastFrame()).toContain('Create Policy');
+    expect(lastFrame()).toContain('Groups JSON');
   });
 
   // --- Templates section ---

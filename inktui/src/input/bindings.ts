@@ -513,11 +513,13 @@ export function resolveBindings(
       continue;
     }
     const key = overrides[id] ?? def.default.key;
-    // A space key reads as `space` in the label (a literal ' ' would be invisible). A shifted
-    // command chord reads as its uppercase char (`A-J` = alt+shift+j) — matching what the meta
-    // flavor literally matches on.
-    const keyLabel = key === ' ' ? 'space' : def.default.shift === true ? key.toUpperCase() : key;
-    labels[id] = flags.map((flag) => `${flagPrefix(flag)}${keyLabel}`).join('/');
+    // A space key reads as `space` in the label (a literal ' ' would be invisible). Shifted
+    // command chords (`<Cmd>+Shift+key`, the workspace binds) carry an explicit `S-` marker so
+    // `C-S-5` cannot be read as bare ctrl+5 — uppercase alone only worked for letters and lied
+    // on digits.
+    const keyLabel = key === ' ' ? 'space' : key;
+    const shiftMarker = def.default.shift === true ? 'S-' : '';
+    labels[id] = flags.map((flag) => `${flagPrefix(flag)}${shiftMarker}${keyLabel}`).join('/');
   }
 
   return {

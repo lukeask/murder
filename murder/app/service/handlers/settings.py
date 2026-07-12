@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
@@ -26,13 +27,35 @@ def _deep_merge_settings(base: dict[str, Any], over: dict[str, Any]) -> dict[str
 
 def register(host: ServiceHost) -> None:
     def _mask_llm(llm: Any) -> dict[str, Any]:
-        # Dump the user llm block, masking every non-empty api_key as "***".
+        # Dump the user llm block, masking every non-empty API key.  Keep this
+        # structural rather than tied to the legacy ``providers`` map: provider
+        # instances may carry credentials at a different nesting level.
         if llm is None:
             return {}
         data = llm.model_dump(mode="json")
+
+        def _mask(value: Any) -> None:
+            if isinstance(value, dict):
+                for key, nested in value.items():
+                    if key == "api_key" and nested:
+                        value[key] = "***"
+                    else:
+                        _mask(nested)
+            elif isinstance(value, list):
+                for nested in value:
+                    _mask(nested)
+
+        _mask(data)
+        # Preserve the legacy settings RPC projection while clients migrate to
+        # provider-instance ``auth``/``endpoint`` fields.
         for provider in (data.get("providers") or {}).values():
-            if isinstance(provider, dict) and provider.get("api_key"):
-                provider["api_key"] = "***"
+            if not isinstance(provider, dict):
+                continue
+            auth = provider.get("auth")
+            if isinstance(auth, dict) and "api_key" not in provider:
+                provider["api_key"] = auth.get("api_key")
+            if "base_url" not in provider and "endpoint" in provider:
+                provider["base_url"] = provider.get("endpoint")
         return data
 
     def _crow_harnesses_override(cfg: Any) -> list[str] | None:
@@ -56,18 +79,16 @@ def register(host: ServiceHost) -> None:
     def _settings_payload(cfg: Any) -> dict[str, Any]:
         import os as _os
 
+        from murder.llm.clients.catalog import PROVIDER_DEFINITIONS
         from murder.llm.harnesses import REGISTRY
         from murder.llm.harnesses.model_cache import get_available_models
+        from murder.user_config import BUILTIN_EXECUTION_POLICIES, UserOracleConfig
 
         tui = cfg.tui
-        collab_override = (
-            cfg.collaborator.harness if cfg.collaborator is not None else None
-        )
+        collab_override = cfg.collaborator.harness if cfg.collaborator is not None else None
         planner_override = cfg.planner.harness if cfg.planner is not None else None
         live_crow = host.config.default_crow
-        effective_crow = (
-            list(live_crow.harnesses) if live_crow.harnesses else [live_crow.harness]
-        )
+        effective_crow = list(live_crow.harnesses) if live_crow.harnesses else [live_crow.harness]
         return {
             # --- existing tui fields (unchanged) ---
             "theme": tui.theme,
@@ -81,11 +102,7 @@ def register(host: ServiceHost) -> None:
                     "enabled": cfg.enabled,
                     "placement": cfg.placement,
                     "adaptive": cfg.adaptive,
-                    **(
-                        {"harnesses": list(cfg.harnesses)}
-                        if cfg.harnesses
-                        else {}
-                    ),
+                    **({"harnesses": list(cfg.harnesses)} if cfg.harnesses else {}),
                 }
                 for widget_id, cfg in tui.bar_widgets.items()
             },
@@ -116,6 +133,53 @@ def register(host: ServiceHost) -> None:
                 "cerebras": bool(_os.environ.get("CEREBRAS_API_KEY")),
                 "openrouter": bool(_os.environ.get("OPENROUTER_API_KEY")),
             },
+            "llm_definitions": {
+                provider_type: {
+                    "label": definition.label,
+                    "default_endpoint": definition.default_endpoint,
+                    "canonical_instance": definition.canonical_instance,
+                    "multiple_instances": definition.multiple_instances,
+                    "supports_discovery": definition.supports_discovery,
+                    "execution_modes": sorted(definition.metadata.execution_modes),
+                    "fields": [
+                        {
+                            "name": field.name,
+                            "label": field.label,
+                            "kind": field.kind,
+                            "required": field.required,
+                            "secret": field.secret,
+                        }
+                        for field in definition.field_specs
+                    ],
+                    "presets": [
+                        {
+                            "id": preset.id,
+                            "label": preset.label,
+                            "execution_modes": sorted(
+                                (definition.metadata.execution_modes | preset.metadata.execution_modes)
+                                or frozenset({"immediate"})
+                            ),
+                        }
+                        for preset in definition.presets
+                    ],
+                }
+                for provider_type, definition in PROVIDER_DEFINITIONS.items()
+            },
+            # Execution policies and Oracle sit beside ``llm`` (§3 / §13).
+            "execution": (
+                cfg.execution.model_dump(mode="json")
+                if cfg.execution is not None
+                else {"policies": {}}
+            ),
+            "execution_definitions": {
+                policy_id: policy.model_dump(mode="json")
+                for policy_id, policy in BUILTIN_EXECUTION_POLICIES.items()
+            },
+            "oracle": (
+                cfg.oracle.model_dump(mode="json")
+                if cfg.oracle is not None
+                else UserOracleConfig().model_dump(mode="json")
+            ),
         }
 
     def _settings_get(_body: dict[str, Any]) -> dict[str, Any]:
@@ -123,6 +187,320 @@ def register(host: ServiceHost) -> None:
 
         cfg = load_user_config()
         return {"ok": True, "settings": _settings_payload(cfg)}
+
+    def _llm_payload(cfg: Any) -> dict[str, Any]:
+        """Return the persisted direct-LLM block with credentials redacted."""
+        return _mask_llm(cfg.llm)
+
+    def _load_llm_config() -> tuple[Any, Any]:
+        from murder.user_config import UserLlmConfig, load_user_config
+
+        cfg = load_user_config()
+        if cfg.llm is None:
+            cfg.llm = UserLlmConfig()
+        return cfg, cfg.llm
+
+    def _save_llm_config(cfg: Any) -> dict[str, Any]:
+        from murder.user_config import save_user_config
+
+        save_user_config(cfg)
+        return {"ok": True, "llm": _llm_payload(cfg), "settings": _settings_payload(cfg)}
+
+    def _provider_id(name: str, providers: dict[str, Any]) -> str:
+        base = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-") or "provider"
+        candidate = base
+        suffix = 2
+        while candidate in providers:
+            candidate = f"{base}-{suffix}"
+            suffix += 1
+        return candidate
+
+    def _restore_auth_sentinel(existing: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any]:
+        """Keep a masked API key when an editor submits it unchanged."""
+        merged = _deep_merge_settings(existing, patch)
+        auth = merged.get("auth")
+        if isinstance(auth, dict) and auth.get("api_key") == "***":
+            stored_auth = existing.get("auth")
+            auth["api_key"] = stored_auth.get("api_key") if isinstance(stored_auth, dict) else None
+        return merged
+
+    def _llm_set_disabled(body: dict[str, Any]) -> dict[str, Any]:
+        disabled = body.get("disabled")
+        if not isinstance(disabled, bool):
+            raise ValueError("llm.settings.set_disabled requires a boolean disabled value")
+        cfg, llm = _load_llm_config()
+        llm.disabled = disabled
+        return _save_llm_config(cfg)
+
+    def _llm_provider_create(body: dict[str, Any]) -> dict[str, Any]:
+        from murder.user_config import UserLlmProviderSettings
+
+        raw = body.get("provider")
+        if not isinstance(raw, dict):
+            raise ValueError("llm.provider.create requires a provider object")
+        provider_type = raw.get("type")
+        if provider_type not in {"openai_compatible", "lemonade"}:
+            raise ValueError("only OpenAI-compatible and Lemonade providers may be created")
+        name = raw.get("name")
+        if not isinstance(name, str) or not name.strip():
+            raise ValueError("provider name is required")
+        endpoint = raw.get("endpoint")
+        if not isinstance(endpoint, str) or not endpoint.strip():
+            raise ValueError("custom provider endpoint is required")
+        cfg, llm = _load_llm_config()
+        provider_id = _provider_id(name, llm.providers)
+        data = dict(raw)
+        data["name"] = name.strip()
+        data["endpoint"] = endpoint.strip()
+        data["type"] = provider_type
+        llm.providers[provider_id] = UserLlmProviderSettings.model_validate(data)
+        reply = _save_llm_config(cfg)
+        reply["provider_id"] = provider_id
+        return reply
+
+    def _llm_provider_update(body: dict[str, Any]) -> dict[str, Any]:
+        from murder.user_config import UserLlmProviderSettings
+
+        provider_id = body.get("provider_id")
+        patch = body.get("patch")
+        if not isinstance(provider_id, str) or not isinstance(patch, dict):
+            raise ValueError("llm.provider.update requires provider_id and patch objects")
+        cfg, llm = _load_llm_config()
+        existing = llm.providers.get(provider_id)
+        if existing is None:
+            if provider_id not in {"groq", "cerebras", "openrouter", "openai", "anthropic"}:
+                raise ValueError(f"unknown provider: {provider_id}")
+            existing = UserLlmProviderSettings(type=provider_id, name=provider_id.title())
+        data = _restore_auth_sentinel(existing.model_dump(mode="json"), patch)
+        if data.get("type") != existing.type:
+            raise ValueError("provider type cannot be changed")
+        llm.providers[provider_id] = UserLlmProviderSettings.model_validate(data)
+        return _save_llm_config(cfg)
+
+    def _llm_provider_delete(body: dict[str, Any]) -> dict[str, Any]:
+        provider_id = body.get("provider_id")
+        if not isinstance(provider_id, str) or body.get("confirm") is not True:
+            raise ValueError("llm.provider.delete requires provider_id and confirm=true")
+        cfg, llm = _load_llm_config()
+        provider = llm.providers.get(provider_id)
+        if provider is None:
+            raise ValueError(f"unknown provider: {provider_id}")
+        if provider.type not in {"openai_compatible", "lemonade"}:
+            raise ValueError("built-in providers cannot be deleted")
+        references = [
+            policy_id
+            for policy_id, policy in llm.policies.items()
+            if any(
+                selector.candidate is not None and selector.candidate.provider == provider_id
+                for group in policy.groups
+                for selector in group.selectors
+            )
+        ]
+        if references:
+            raise ValueError(f"provider is referenced by policies: {', '.join(references)}")
+        del llm.providers[provider_id]
+        return _save_llm_config(cfg)
+
+    def _llm_provider_models_update(body: dict[str, Any]) -> dict[str, Any]:
+        """Persist a model-catalog patch without allowing provider edits."""
+        from murder.user_config import UserLlmModelCatalog
+
+        provider_id = body.get("provider_id")
+        patch = body.get("patch")
+        if not isinstance(provider_id, str) or not isinstance(patch, dict):
+            raise ValueError("llm.provider.models.update requires provider_id and patch objects")
+        cfg, llm = _load_llm_config()
+        provider = llm.providers.get(provider_id)
+        if provider is None:
+            raise ValueError(f"unknown provider: {provider_id}")
+        data = _deep_merge_settings(provider.models.model_dump(mode="json"), patch)
+        provider.models = UserLlmModelCatalog.model_validate(data)
+        return _save_llm_config(cfg)
+
+    async def _llm_provider_discover_models(body: dict[str, Any]) -> dict[str, Any]:
+        provider_id = body.get("provider_id")
+        if not isinstance(provider_id, str):
+            raise ValueError("llm.provider.discover_models requires provider_id")
+        cfg, llm = _load_llm_config()
+        provider = llm.providers.get(provider_id)
+        if provider is None:
+            raise ValueError(f"unknown provider: {provider_id}")
+        from murder.llm.clients.catalog import get_provider_definition
+
+        definition = get_provider_definition(provider.type or provider_id)
+        discovered = await definition.discover_models(provider)
+        # Store returned IDs as catalog includes.  The resolver can therefore
+        # use the discovered set before a richer runtime cache is available.
+        provider.models.include = list(dict.fromkeys([*provider.models.include, *discovered]))
+        from murder.user_config import save_user_config
+
+        save_user_config(cfg)
+        return {
+            "ok": True,
+            "models": [{"id": model_id, "label": model_id} for model_id in discovered],
+        }
+
+    def _llm_policy_create(body: dict[str, Any]) -> dict[str, Any]:
+        from murder.user_config import UserLlmPolicy
+
+        name = body.get("name")
+        if not isinstance(name, str) or not name.strip():
+            raise ValueError("policy name is required")
+        from murder.user_config import BUILTIN_LLM_POLICIES
+
+        cfg, llm = _load_llm_config()
+        policy_id = _provider_id(
+            name, {**llm.policies, **{k: None for k in BUILTIN_LLM_POLICIES}}
+        )
+        raw = body.get("policy")
+        data = raw if isinstance(raw, dict) else {}
+        data = {**data, "builtin": False, "name": name.strip()}
+        llm.policies[policy_id] = UserLlmPolicy.model_validate(data)
+        reply = _save_llm_config(cfg)
+        reply["policy_id"] = policy_id
+        return reply
+
+    def _llm_policy_update(body: dict[str, Any]) -> dict[str, Any]:
+        from murder.user_config import UserLlmPolicy
+
+        policy_id = body.get("policy_id")
+        patch = body.get("patch")
+        if not isinstance(policy_id, str) or not isinstance(patch, dict):
+            raise ValueError("llm.policy.update requires policy_id and patch objects")
+        cfg, llm = _load_llm_config()
+        policy = llm.policies.get(policy_id)
+        if policy is None:
+            raise ValueError(
+                "built-in policies are immutable"
+                if llm.resolved_policy(policy_id)
+                else f"unknown policy: {policy_id}"
+            )
+        data = _deep_merge_settings(policy.model_dump(mode="json"), patch)
+        data["builtin"] = False
+        llm.policies[policy_id] = UserLlmPolicy.model_validate(data)
+        return _save_llm_config(cfg)
+
+    def _llm_policy_delete(body: dict[str, Any]) -> dict[str, Any]:
+        policy_id = body.get("policy_id")
+        if not isinstance(policy_id, str) or body.get("confirm") is not True:
+            raise ValueError("llm.policy.delete requires policy_id and confirm=true")
+        cfg, llm = _load_llm_config()
+        if policy_id not in llm.policies:
+            raise ValueError(
+                "built-in policies cannot be deleted"
+                if llm.resolved_policy(policy_id)
+                else f"unknown policy: {policy_id}"
+            )
+        references: list[str] = []
+        if llm.active_policy == policy_id:
+            references.append("active policy")
+        references.extend(
+            f"feature:{feature_type}"
+            for feature_type, assigned_policy in llm.feature_policies.items()
+            if assigned_policy == policy_id
+        )
+        if references:
+            raise ValueError(f"policy is referenced by: {', '.join(references)}")
+        del llm.policies[policy_id]
+        return _save_llm_config(cfg)
+
+    def _llm_policy_activate(body: dict[str, Any]) -> dict[str, Any]:
+        policy_id = body.get("policy_id")
+        if not isinstance(policy_id, str):
+            raise ValueError("llm.policy.activate requires policy_id")
+        cfg, llm = _load_llm_config()
+        if llm.resolved_policy(policy_id) is None:
+            raise ValueError(f"unknown policy: {policy_id}")
+        llm.active_policy = policy_id
+        return _save_llm_config(cfg)
+
+    def _llm_policy_clone(body: dict[str, Any]) -> dict[str, Any]:
+        from murder.user_config import BUILTIN_LLM_POLICIES, UserLlmPolicy
+
+        source_id = body.get("policy_id")
+        name = body.get("name")
+        if not isinstance(source_id, str) or not isinstance(name, str) or not name.strip():
+            raise ValueError("llm.policy.clone requires policy_id and a name")
+        cfg, llm = _load_llm_config()
+        source = llm.resolved_policy(source_id)
+        if source is None:
+            raise ValueError(f"unknown policy: {source_id}")
+        policy_id = _provider_id(
+            name,
+            {**llm.policies, **{k: None for k in BUILTIN_LLM_POLICIES}},
+        )
+        data = source.model_dump(mode="json")
+        data.update({"builtin": False, "name": name.strip()})
+        llm.policies[policy_id] = UserLlmPolicy.model_validate(data)
+        reply = _save_llm_config(cfg)
+        reply["policy_id"] = policy_id
+        return reply
+
+    def _llm_feature_policy_set(body: dict[str, Any]) -> dict[str, Any]:
+        feature_type = body.get("feature_type")
+        policy_id = body.get("policy_id")
+        if not isinstance(feature_type, str) or not feature_type.strip():
+            raise ValueError("llm.feature_policy.set requires feature_type")
+        if policy_id is not None and not isinstance(policy_id, str):
+            raise ValueError("policy_id must be a string, 'disabled', or null")
+        cfg, llm = _load_llm_config()
+        if policy_id is None:
+            llm.feature_policies.pop(feature_type, None)
+        elif policy_id != "disabled":
+            if llm.resolved_policy(policy_id) is None:
+                raise ValueError(f"unknown policy: {policy_id}")
+            llm.feature_policies[feature_type] = policy_id
+        else:
+            llm.feature_policies[feature_type] = "disabled"
+        return _save_llm_config(cfg)
+
+    def _llm_preview_resolution(body: dict[str, Any]) -> dict[str, Any]:
+        """Resolve candidates for the UI without constructing a provider client."""
+        from murder.llm.direct import preview_policy
+        from murder.llm.policy import InferenceRequirements
+
+        feature_type = body.get("feature_type")
+        if not isinstance(feature_type, str) or not feature_type.strip():
+            raise ValueError("llm.preview_resolution requires feature_type")
+        capabilities = body.get("required_capabilities", [])
+        if not isinstance(capabilities, list) or not all(
+            isinstance(item, str) for item in capabilities
+        ):
+            raise ValueError("required_capabilities must be a list of strings")
+        execution_mode = body.get("required_execution_mode")
+        if execution_mode is not None and not isinstance(execution_mode, str):
+            raise ValueError("required_execution_mode must be a string or null")
+        min_context_tokens = body.get("min_context_tokens")
+        if min_context_tokens is not None and (
+            not isinstance(min_context_tokens, int) or min_context_tokens < 1
+        ):
+            raise ValueError("min_context_tokens must be a positive integer or null")
+        cfg, _llm = _load_llm_config()
+        resolution = preview_policy(
+            cfg,
+            feature_type,
+            requirements=InferenceRequirements(
+                feature_type=feature_type,
+                required_capabilities=frozenset(capabilities),
+                required_execution_mode=execution_mode,
+                min_context_tokens=min_context_tokens,
+            )
+        )
+        return {
+            "ok": True,
+            "status": resolution.status,
+            "policy_id": resolution.policy_name,
+            "candidates": [
+                {
+                    "provider_id": candidate.provider_id,
+                    "provider_type": candidate.provider_type,
+                    "model_id": candidate.model_id,
+                    "locality": candidate.metadata.locality,
+                    "cost_class": candidate.metadata.cost_class,
+                }
+                for candidate in resolution.candidates
+            ],
+        }
 
     def _settings_update(body: dict[str, Any]) -> dict[str, Any]:
         # Partial merge: load the persisted user config, overlay only the provided keys,
@@ -247,9 +625,7 @@ def register(host: ServiceHost) -> None:
                 patch.harness = value
                 cfg.collaborator = patch
                 # Apply live so new spawns use it without a daemon restart.
-                live_apply.append(
-                    lambda v=value: setattr(host.config.collaborator, "harness", v)
-                )
+                live_apply.append(lambda v=value: setattr(host.config.collaborator, "harness", v))
 
         # --- planner_harness override ---
         if "planner_harness" in partial:
@@ -302,20 +678,64 @@ def register(host: ServiceHost) -> None:
             incoming = partial["llm"]
             if not isinstance(incoming, dict):
                 raise ValueError("llm must be an object")
-            existing = (
-                cfg.llm.model_dump(mode="json") if cfg.llm is not None else {}
-            )
+            # Translate the legacy flat credential fields before merging the
+            # typed provider-instance config.  Existing TUI clients use these
+            # names; new clients send ``auth.api_key`` and ``endpoint``.
+            incoming = _deep_merge_settings({}, incoming)
+            providers = incoming.get("providers")
+            if isinstance(providers, dict):
+                for provider in providers.values():
+                    if not isinstance(provider, dict):
+                        continue
+                    if "api_key" in provider:
+                        auth = provider.get("auth")
+                        auth = dict(auth) if isinstance(auth, dict) else {}
+                        auth["api_key"] = provider.pop("api_key")
+                        provider["auth"] = auth
+                    if "base_url" in provider:
+                        provider["endpoint"] = provider.pop("base_url")
+            existing = cfg.llm.model_dump(mode="json") if cfg.llm is not None else {}
             merged_llm = _deep_merge_settings(existing, incoming)
             # Resolve "***" sentinels: an incoming api_key of "***" means
             # "unchanged" — restore the stored value (empty string clears).
-            stored_providers = (existing.get("providers") or {})
+            stored_providers = existing.get("providers") or {}
             for name, provider in (merged_llm.get("providers") or {}).items():
                 if not isinstance(provider, dict):
                     continue
-                if provider.get("api_key") == "***":
+                auth = provider.get("auth")
+                if isinstance(auth, dict) and auth.get("api_key") == "***":
                     stored = stored_providers.get(name) or {}
-                    provider["api_key"] = stored.get("api_key")
+                    stored_auth = stored.get("auth") if isinstance(stored, dict) else None
+                    auth["api_key"] = (
+                        stored_auth.get("api_key") if isinstance(stored_auth, dict) else None
+                    )
             cfg.llm = UserLlmConfig.model_validate(merged_llm)
+
+        if "execution" in partial:
+            from murder.user_config import UserExecutionConfig
+
+            incoming = partial["execution"]
+            if not isinstance(incoming, dict):
+                raise ValueError("execution must be an object")
+            existing_exec = (
+                cfg.execution.model_dump(mode="json") if cfg.execution is not None else {}
+            )
+            cfg.execution = UserExecutionConfig.model_validate(
+                _deep_merge_settings(existing_exec, incoming)
+            )
+
+        if "oracle" in partial:
+            from murder.user_config import UserOracleConfig
+
+            incoming = partial["oracle"]
+            if not isinstance(incoming, dict):
+                raise ValueError("oracle must be an object")
+            existing_oracle = (
+                cfg.oracle.model_dump(mode="json") if cfg.oracle is not None else {}
+            )
+            cfg.oracle = UserOracleConfig.model_validate(
+                _deep_merge_settings(existing_oracle, incoming)
+            )
 
         save_user_config(cfg)
         # Persist succeeded -> now apply the live mutations so in-memory and
@@ -328,3 +748,16 @@ def register(host: ServiceHost) -> None:
 
     host.register_rpc_handler("settings.get", _settings_get)
     host.register_rpc_handler("settings.update", _settings_update)
+    host.register_rpc_handler("llm.settings.set_disabled", _llm_set_disabled)
+    host.register_rpc_handler("llm.provider.create", _llm_provider_create)
+    host.register_rpc_handler("llm.provider.update", _llm_provider_update)
+    host.register_rpc_handler("llm.provider.delete", _llm_provider_delete)
+    host.register_rpc_handler("llm.provider.models.update", _llm_provider_models_update)
+    host.register_rpc_handler("llm.provider.discover_models", _llm_provider_discover_models)
+    host.register_rpc_handler("llm.policy.create", _llm_policy_create)
+    host.register_rpc_handler("llm.policy.update", _llm_policy_update)
+    host.register_rpc_handler("llm.policy.delete", _llm_policy_delete)
+    host.register_rpc_handler("llm.policy.activate", _llm_policy_activate)
+    host.register_rpc_handler("llm.policy.clone", _llm_policy_clone)
+    host.register_rpc_handler("llm.feature_policy.set", _llm_feature_policy_set)
+    host.register_rpc_handler("llm.preview_resolution", _llm_preview_resolution)

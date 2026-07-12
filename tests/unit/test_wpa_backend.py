@@ -154,8 +154,8 @@ def test_create_plan_auto_name_falls_back_to_timestamp_slug(repo_root: Path, mon
     # rather than raising. Force the no-client path so the test is deterministic
     # regardless of whether an API key happens to be present in the environment.
     monkeypatch.setattr(
-        "murder.runtime.orchestration.plan_ops.resolve_role_client_tiered",
-        lambda cfg, user_cfg, role: (None, cfg),
+        "murder.runtime.orchestration.plan_ops.resolve_direct_role_client",
+        lambda cfg, user_cfg, feature, legacy_role: (None, cfg),
     )
     rt = _runtime(repo_root)
     orch = Orchestrator(rt)
@@ -180,8 +180,8 @@ def test_create_plan_auto_name_uses_llm_slug(repo_root: Path, monkeypatch) -> No
 
     monkeypatch.setattr(notes_mod, "llm_capture_metadata", _fake_meta)
     monkeypatch.setattr(
-        "murder.runtime.orchestration.plan_ops.resolve_role_client_tiered",
-        lambda cfg, user_cfg, role: (object(), cfg),
+        "murder.runtime.orchestration.plan_ops.resolve_direct_role_client",
+        lambda cfg, user_cfg, feature, legacy_role: (object(), cfg),
     )
 
     result = asyncio.run(

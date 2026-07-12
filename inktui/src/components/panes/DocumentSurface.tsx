@@ -3,11 +3,16 @@
  *
  * Accepts explicit allocated `width`/`height` and display-ready document data. Controllers own
  * store reads, keymaps, and input; this surface owns the visible window and Pane chrome.
+ *
+ * Body rows are always physical terminal rows: `full` / `compact` / `minimal` wrap before
+ * windowing; only `micro` truncates. Never combine logical-line windowing with `Text wrap="wrap"`.
  */
 
 import { Box, Text } from 'ink';
-import { memo } from 'react';
+import { memo, useMemo } from 'react';
 import { useTheme } from '../../theme/themeStore.js';
+import { terminalSafeText } from '../../utils/terminalSafeText.js';
+import { truncateToWidth, wrapTextToRows } from '../../utils/wrapText.js';
 import { Pane } from '../Pane.js';
 import { computeDocumentWindow, computeScrollThumb } from './shared/scrollWindow.js';
 
@@ -122,9 +127,22 @@ export function layout(width: number, height: number): DocumentDisplayMode {
   return 'full';
 }
 
-/** Full width uses soft wrap; narrow modes keep one terminal row per logical line. */
-function bodyWrapMode(mode: DocumentDisplayMode): 'wrap' | 'truncate' {
-  return mode === 'full' ? 'wrap' : 'truncate';
+/**
+ * Expand document source lines into physical terminal rows for the allocated pane size.
+ * `full` / `compact` / `minimal` wrap within the pane; only `micro` truncates to one row.
+ */
+export function documentPhysicalRows(
+  lines: readonly string[],
+  width: number,
+  height: number,
+): readonly string[] {
+  const mode = layout(width, height);
+  const columns = contentInnerWidth(width);
+  if (mode === 'micro') {
+    return lines.map((line) => truncateToWidth(line, columns));
+  }
+  // Soft-wrap on spaces when possible; hard-break long tokens (URLs) so rows stay ≤ columns.
+  return lines.flatMap((line) => wrapTextToRows(line, columns, { hard: true, wordWrap: true }));
 }
 
 function windowRowCount(innerH: number): number {
@@ -146,21 +164,32 @@ export const DocumentSurface = memo(function DocumentSurface({
   const mode = layout(width, height);
   const innerH = documentContentInnerHeight(height);
   const windowRows = windowRowCount(innerH);
-  const { start, end } = computeDocumentWindow(lines.length, scroll, Math.max(windowRows, 1));
-  const window = windowRows > 0 ? lines.slice(start, end) : [];
-  const thumb = windowRows > 0 ? computeScrollThumb(lines.length, start, windowRows) : null;
+  const physicalRows = useMemo(
+    () => documentPhysicalRows(lines, width, height),
+    [lines, width, height],
+  );
+  const { start, end } = computeDocumentWindow(
+    physicalRows.length,
+    scroll,
+    Math.max(windowRows, 1),
+  );
+  const window = windowRows > 0 ? physicalRows.slice(start, end) : [];
+  const thumb = windowRows > 0 ? computeScrollThumb(physicalRows.length, start, windowRows) : null;
   const basename = docBasename(title);
   const baseBorderTitle = formatDocBorderTitle(basename, width, mode);
   const kind = docKindFromTitle(title);
   const showScrollbar = windowRows > 0 && mode !== 'micro';
-  const wrap = bodyWrapMode(mode);
 
   const body = (() => {
     if (windowRows === 0) {
       return null;
     }
     if (status === 'error' && error !== null) {
-      return <Text color={theme.error}>{`error: ${error}`}</Text>;
+      return (
+        <Text color={theme.error} wrap="truncate">
+          {terminalSafeText(`error: ${error}`)}
+        </Text>
+      );
     }
     if (status === 'loading') {
       return <Text dimColor>loading…</Text>;
@@ -172,14 +201,18 @@ export const DocumentSurface = memo(function DocumentSurface({
       return null;
     }
     if (mode === 'micro' || mode === 'minimal') {
-      const line = window[0] ?? lines[scroll] ?? lines[0] ?? '';
-      return <Text wrap={wrap}>{line === '' ? ' ' : line}</Text>;
+      const line = window[0] ?? physicalRows[scroll] ?? physicalRows[0] ?? '';
+      return (
+        <Box width="100%" minWidth={0} overflow="hidden">
+          <Text wrap="truncate">{line === '' ? ' ' : line}</Text>
+        </Box>
+      );
     }
     return window.map((line, index) => (
       // biome-ignore lint/suspicious/noArrayIndexKey: body lines are position-keyed slices.
-      <Text key={start + index} wrap={wrap}>
-        {line === '' ? ' ' : line}
-      </Text>
+      <Box key={start + index} width="100%" minWidth={0} overflow="hidden" flexShrink={0}>
+        <Text wrap="truncate">{line === '' ? ' ' : line}</Text>
+      </Box>
     ));
   })();
 

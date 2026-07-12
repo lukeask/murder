@@ -10,7 +10,7 @@ from typing import Any
 
 from murder.app.service.runtime_scope import OrchestratorHost
 from murder.bus import Entity
-from murder.llm.clients import resolve_role_client_tiered
+from murder.llm.direct import resolve_direct_role_client
 from murder.runtime.agents.base import AgentStatus
 from murder.runtime.terminal import tmux
 from murder.runtime.terminal.session_names import format_session_name
@@ -261,8 +261,11 @@ class PlanOps:
         configured or the model returns nothing usable.
         """
         text = (body or "").strip()
-        client, notetaker_cfg = resolve_role_client_tiered(
-            self.rt.config.notetaker, self.rt.user_cfg, "notetaker"
+        client, notetaker_cfg = resolve_direct_role_client(
+            self.rt.config.notetaker,
+            self.rt.user_cfg,
+            "plan_namer",
+            "notetaker",
         )
         if client is not None and text:
             try:

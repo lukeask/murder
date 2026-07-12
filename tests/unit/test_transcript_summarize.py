@@ -13,6 +13,7 @@ from murder.llm.harnesses.transcript_summarize import (
     summarize_doc,
     summarize_transcript,
 )
+from murder.user_config import UserConfig, UserLlmConfig
 
 
 class StubSummaryProvider:
@@ -122,4 +123,15 @@ def test_default_provider_can_be_absent_without_network(monkeypatch: pytest.Monk
     monkeypatch.setenv("GROQ_API_KEY", "")
     monkeypatch.setenv("CEREBRAS_API_KEY", "")
 
+    assert build_default_summary_provider() is None
+
+
+def test_default_provider_global_disable_skips_direct_factory(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "murder.user_config.load_user_config", lambda: UserConfig(llm=UserLlmConfig(disabled=True))
+    )
+    monkeypatch.setattr(
+        "murder.llm.harnesses.transcript_summarize.AutoFreeClient.build_default",
+        classmethod(lambda cls: (_ for _ in ()).throw(AssertionError("must not build"))),
+    )
     assert build_default_summary_provider() is None

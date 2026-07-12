@@ -394,7 +394,7 @@ async def _apply_changeset(
     dir_bodies: dict[str, str] = {}
     for dir_rel in sorted(affected_dirs, key=lambda d: d.count("/"), reverse=True):
         children = await _build_children(dir_rel, dir_bodies)
-        body = await dir_summary(summarizer.client, dir_rel, children)
+        body = await dir_summary(summarizer.rollup_client, dir_rel, children)
         dir_bodies[dir_rel] = body
         render_dir_summary(map_root, dir_rel, body)
         if db is not None and head_sha is not None:
@@ -417,7 +417,7 @@ async def _apply_changeset(
         root_children = _root_children(
             by_dir=by_dir, file_bodies=root_file_bodies, dir_bodies=top_dir_bodies
         )
-        root_body = await root_summary(summarizer.client, root_children)
+        root_body = await root_summary(summarizer.rollup_client, root_children)
         render_root(map_root, root_body)
         if db is not None and head_sha is not None:
             store_mod.snapshot_rollup(

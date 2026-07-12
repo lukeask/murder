@@ -10,12 +10,10 @@ ones. When nothing changed it makes zero model calls; when a prior build was
 interrupted it resumes from whatever already persisted — so an unfinished map
 no longer re-burns the whole API on every launch.
 
-Client selection (locked decision #5): consult ``resolve_tier(user_cfg,
-"codebase_map")`` first; tier hit -> client from ``create_client(tier.provider)``
-(or ``AutoFreeClient`` when the tier is auto-free), pinned to ``tier.model``;
-otherwise / on any failure -> ``AutoFreeClient.build_default()``. If no client at
-all -> log "codebase map disabled" once and idle forever. The daemon must NEVER
-fail to start over a missing key, so the client is built lazily + fail-soft.
+Client selection is policy-first for file and roll-up summaries independently.
+Legacy tier/auto-free selection remains the fallback for configurations that do
+not yet declare a policy. If either map feature has no client, the worker idles
+without issuing partial direct-inference work.
 """
 
 from __future__ import annotations
@@ -67,18 +65,27 @@ class _ModelPinnedClient(APIClient):
         )
 
 
-def _build_client() -> APIClient | None:
-    """Build the cheap summarizer client, fail-soft. None -> map disabled."""
+def _build_client(feature: str = "codebase_file_summary") -> APIClient | None:
+    """Build one policy-selected map client, fail-soft. None -> map disabled."""
     from murder.llm.clients import create_client
     from murder.llm.clients.auto_free import AutoFreeClient
 
     # Tier consult first (locked decision #5). Fail-soft on every step.
     try:
+        from murder.llm.direct import has_explicit_policy_config, resolve_policy_client
         from murder.user_config import load_user_config, resolve_tier
 
         user_cfg = None
         with contextlib.suppress(Exception):
             user_cfg = load_user_config()
+        if user_cfg is not None and user_cfg.llm is not None:
+            if user_cfg.llm.disabled:
+                return None
+            selected = resolve_policy_client(user_cfg, feature)
+            if selected.client is not None and selected.model_id is not None:
+                return _ModelPinnedClient(selected.client, selected.model_id)
+            if has_explicit_policy_config(user_cfg):
+                return None
         tier = resolve_tier(user_cfg, "codebase_map")
         if tier is not None:
             inner = (
@@ -109,14 +116,15 @@ class CodebaseMapWorker(Worker):
             return None
         if self._summarizer is not None:
             return self._summarizer
-        client = _build_client()
-        if client is None:
+        client = _build_client("codebase_file_summary")
+        rollup_client = _build_client("codebase_rollup")
+        if client is None or rollup_client is None:
             self._disabled = True
             LOGGER.info("codebase map disabled — no cheap LLM client available")
             return None
         from murder.codebase_map.summarize import FileSummarizer
 
-        self._summarizer = FileSummarizer(client)
+        self._summarizer = FileSummarizer(client, rollup_client=rollup_client)
         return self._summarizer
 
     async def run(self, ctx: WorkerCtx, stop_event: asyncio.Event) -> None:

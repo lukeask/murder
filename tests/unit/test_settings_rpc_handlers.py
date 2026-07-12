@@ -12,6 +12,7 @@ XDG-resolved path; we point ``XDG_CONFIG_HOME`` at a tmp dir so each test is iso
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
 import pytest
@@ -73,7 +74,14 @@ def test_settings_get_returns_defaults_when_no_config(repo_root: Path, xdg: Path
     assert s["effective_crow_harnesses"] == ["codex"]
     assert s["llm"] == {}
     assert set(s["llm_env"]) == {"groq", "cerebras", "openrouter"}
-
+    assert s["execution"] == {"policies": {}}
+    assert set(s["execution_definitions"]) == {"immediate", "batch-preferred", "batch-only"}
+    assert s["oracle"] == {
+        "enabled": True,
+        "model_policy": "oracle-smart",
+        "execution_policy": "batch-preferred",
+    }
+    assert s["llm_definitions"]["groq"]["execution_modes"] == ["immediate"]
 
 def test_settings_update_persists_and_roundtrips(repo_root: Path, xdg: Path) -> None:
     host = _host(repo_root)
@@ -270,11 +278,7 @@ def test_settings_update_usage_bar_widget_rejects_invalid_harness(
         _call(
             host,
             "settings.update",
-            {
-                "settings": {
-                    "bar_widgets": {"usage": {"harnesses": ["not_a_harness"]}}
-                }
-            },
+            {"settings": {"bar_widgets": {"usage": {"harnesses": ["not_a_harness"]}}}},
         )
 
 
@@ -300,7 +304,11 @@ def test_settings_update_startup_rogue_persists_and_roundtrips(repo_root: Path, 
     reply = _call(
         host,
         "settings.update",
-        {"settings": {"startup_rogue": {"harness": "claude_code", "model": "opus", "effort": "medium"}}},
+        {
+            "settings": {
+                "startup_rogue": {"harness": "claude_code", "model": "opus", "effort": "medium"}
+            }
+        },
     )
     assert reply["settings"]["startup_rogue"] == {
         "harness": "claude_code",
@@ -316,7 +324,9 @@ def test_settings_update_startup_rogue_persists_and_roundtrips(repo_root: Path, 
 
 def test_settings_update_startup_rogue_null_clears(repo_root: Path, xdg: Path) -> None:
     host = _host(repo_root)
-    _call(host, "settings.update", {"settings": {"startup_rogue": {"harness": "codex", "model": ""}}})
+    _call(
+        host, "settings.update", {"settings": {"startup_rogue": {"harness": "codex", "model": ""}}}
+    )
     reply = _call(host, "settings.update", {"settings": {"startup_rogue": None}})
     assert reply["settings"]["startup_rogue"] is None
     assert load_user_config().tui.startup_rogue is None
@@ -334,7 +344,9 @@ def test_settings_update_startup_rogue_empty_effort_normalizes_to_none(
     assert reply["settings"]["startup_rogue"] == {"harness": "cursor", "model": "", "effort": None}
 
 
-def test_settings_update_startup_rogue_survives_other_tui_updates(repo_root: Path, xdg: Path) -> None:
+def test_settings_update_startup_rogue_survives_other_tui_updates(
+    repo_root: Path, xdg: Path
+) -> None:
     host = _host(repo_root)
     _call(
         host,
@@ -384,11 +396,7 @@ def test_stale_yaml_with_old_tui_fields_loads_clean(repo_root: Path, xdg: Path) 
     cfg_path = config_path()
     cfg_path.parent.mkdir(parents=True, exist_ok=True)
     cfg_path.write_text(
-        "tui:\n"
-        "  editor: nvim\n"
-        "  theme: gruvbox\n"
-        "collaborator:\n"
-        "  harness: codex\n",
+        "tui:\n  editor: nvim\n  theme: gruvbox\ncollaborator:\n  harness: codex\n",
         encoding="utf-8",
     )
     # Direct load: unknown tui keys (editor) are dropped; theme survives (it's still a tui field);
@@ -428,9 +436,7 @@ def test_update_crow_harnesses_single_sets_harness_and_mutates_live(
     assert reply["settings"]["effective_crow_harnesses"] == ["cursor"]
 
 
-def test_update_crow_harnesses_multi_sets_pool_and_mutates_live(
-    repo_root: Path, xdg: Path
-) -> None:
+def test_update_crow_harnesses_multi_sets_pool_and_mutates_live(repo_root: Path, xdg: Path) -> None:
     host = _host(repo_root)
     reply = _call(
         host,
@@ -532,7 +538,9 @@ def test_update_llm_persists_and_masks_api_key_on_get(repo_root: Path, xdg: Path
 
 def test_update_llm_star_sentinel_keeps_stored_key(repo_root: Path, xdg: Path) -> None:
     host = _host(repo_root)
-    _call(host, "settings.update", {"settings": {"llm": {"providers": {"groq": {"api_key": "real"}}}}})
+    _call(
+        host, "settings.update", {"settings": {"llm": {"providers": {"groq": {"api_key": "real"}}}}}
+    )
     # A subsequent update sending "***" must NOT overwrite the stored key.
     _call(
         host,
@@ -546,7 +554,9 @@ def test_update_llm_star_sentinel_keeps_stored_key(repo_root: Path, xdg: Path) -
 
 def test_update_llm_empty_string_clears_key(repo_root: Path, xdg: Path) -> None:
     host = _host(repo_root)
-    _call(host, "settings.update", {"settings": {"llm": {"providers": {"groq": {"api_key": "real"}}}}})
+    _call(
+        host, "settings.update", {"settings": {"llm": {"providers": {"groq": {"api_key": "real"}}}}}
+    )
     _call(host, "settings.update", {"settings": {"llm": {"providers": {"groq": {"api_key": ""}}}}})
     cfg = load_user_config()
     assert cfg.llm.providers["groq"].api_key == ""
@@ -561,3 +571,190 @@ def test_get_llm_env_reflects_environment(
     host = _host(repo_root)
     s = _call(host, "settings.get", {})["settings"]
     assert s["llm_env"] == {"groq": True, "cerebras": False, "openrouter": False}
+
+
+def test_llm_global_toggle_preserves_provider_configuration(repo_root: Path, xdg: Path) -> None:
+    host = _host(repo_root)
+    _call(
+        host,
+        "llm.provider.create",
+        {
+            "provider": {
+                "type": "openai_compatible",
+                "name": "Home vLLM",
+                "endpoint": "http://localhost:8000/v1",
+                "auth": {"api_key": "secret"},
+            }
+        },
+    )
+    reply = _call(host, "llm.settings.set_disabled", {"disabled": True})
+    assert reply["llm"]["disabled"] is True
+    provider = reply["llm"]["providers"]["home-vllm"]
+    assert provider["enabled"] is True
+    assert provider["auth"]["api_key"] == "***"
+    assert load_user_config().llm.providers["home-vllm"].auth.api_key == "secret"
+
+
+def test_llm_provider_crud_uses_stable_id_and_rejects_builtin_delete(
+    repo_root: Path, xdg: Path
+) -> None:
+    host = _host(repo_root)
+    created = _call(
+        host,
+        "llm.provider.create",
+        {
+            "provider": {
+                "type": "lemonade",
+                "name": "Laptop Lemonade",
+                "endpoint": "http://127.0.0.1:8000",
+            }
+        },
+    )
+    assert created["provider_id"] == "laptop-lemonade"
+    updated = _call(
+        host,
+        "llm.provider.update",
+        {"provider_id": "laptop-lemonade", "patch": {"name": "Desk Lemonade", "enabled": False}},
+    )
+    assert "laptop-lemonade" in updated["llm"]["providers"]
+    assert updated["llm"]["providers"]["laptop-lemonade"]["name"] == "Desk Lemonade"
+    _call(host, "llm.provider.delete", {"provider_id": "laptop-lemonade", "confirm": True})
+    _call(host, "settings.update", {"settings": {"llm": {"providers": {"groq": {"api_key": "x"}}}}})
+    with pytest.raises(ValueError, match="built-in providers"):
+        _call(host, "llm.provider.delete", {"provider_id": "groq", "confirm": True})
+
+
+def test_llm_policy_create_activate_and_builtin_immutability(repo_root: Path, xdg: Path) -> None:
+    host = _host(repo_root)
+    created = _call(host, "llm.policy.create", {"name": "My policy"})
+    assert created["policy_id"] == "my-policy"
+    activated = _call(host, "llm.policy.activate", {"policy_id": "my-policy"})
+    assert activated["llm"]["active_policy"] == "my-policy"
+    with pytest.raises(ValueError, match="immutable"):
+        _call(
+            host,
+            "llm.policy.update",
+            {"policy_id": "local-only", "patch": {"name": "Nope"}},
+        )
+
+
+def test_llm_discovery_uses_definition_and_caches_model_ids(
+    repo_root: Path, xdg: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    host = _host(repo_root)
+    _call(
+        host,
+        "llm.provider.create",
+        {
+            "provider": {
+                "type": "openai_compatible",
+                "name": "Home",
+                "endpoint": "http://localhost:8000/v1",
+                "models": {"source": "discovered"},
+            }
+        },
+    )
+
+    class _Definition:
+        async def discover_models(self, _provider: object) -> dict[str, object]:
+            return {"qwen": object(), "coder": object()}
+
+    monkeypatch.setattr(
+        "murder.llm.clients.catalog.get_provider_definition", lambda _type: _Definition()
+    )
+    reply = asyncio.run(host._rpc_handlers["llm.provider.discover_models"]({"provider_id": "home"}))
+    assert reply["models"] == [{"id": "qwen", "label": "qwen"}, {"id": "coder", "label": "coder"}]
+    assert load_user_config().llm.providers["home"].models.include == ["qwen", "coder"]
+
+
+def test_llm_model_catalog_patch_persists_include_exclude_and_override(
+    repo_root: Path, xdg: Path
+) -> None:
+    host = _host(repo_root)
+    _call(
+        host,
+        "settings.update",
+        {"settings": {"llm": {"providers": {"groq": {"api_key": "key"}}}}},
+    )
+    reply = _call(
+        host,
+        "llm.provider.models.update",
+        {
+            "provider_id": "groq",
+            "patch": {
+                "source": "recommended",
+                "include": ["new-model"],
+                "exclude": ["old-model"],
+                "overrides": {"new-model": {"enabled": False, "cost_class": "paid"}},
+            },
+        },
+    )
+    models = reply["llm"]["providers"]["groq"]["models"]
+    assert models["include"] == ["new-model"]
+    assert models["exclude"] == ["old-model"]
+    override = models["overrides"]["new-model"]
+    assert override["enabled"] is False
+    assert override["cost_class"] == "paid"
+
+
+def test_llm_feature_policy_clone_reference_protection_and_preview(
+    repo_root: Path, xdg: Path
+) -> None:
+    host = _host(repo_root)
+    _call(
+        host,
+        "settings.update",
+        {"settings": {"llm": {"providers": {"groq": {"api_key": "key"}}}}},
+    )
+    cloned = _call(
+        host,
+        "llm.policy.clone",
+        {"policy_id": "remote-free", "name": "My Remote Free"},
+    )
+    policy_id = cloned["policy_id"]
+    _call(host, "llm.policy.activate", {"policy_id": policy_id})
+    _call(
+        host,
+        "llm.feature_policy.set",
+        {"feature_type": "transcript_summary", "policy_id": policy_id},
+    )
+    with pytest.raises(ValueError, match="referenced"):
+        _call(host, "llm.policy.delete", {"policy_id": policy_id, "confirm": True})
+    preview = _call(host, "llm.preview_resolution", {"feature_type": "transcript_summary"})
+    assert preview["status"] == "resolved"
+    assert preview["policy_id"] == policy_id
+    assert preview["candidates"][0]["provider_id"] == "groq"
+    _call(host, "llm.feature_policy.set", {"feature_type": "transcript_summary", "policy_id": None})
+    _call(host, "llm.policy.activate", {"policy_id": "remote-free"})
+    _call(host, "llm.policy.delete", {"policy_id": policy_id, "confirm": True})
+
+
+def test_settings_update_persists_execution_and_oracle(repo_root: Path, xdg: Path) -> None:
+    host = _host(repo_root)
+    reply = _call(
+        host,
+        "settings.update",
+        {
+            "settings": {
+                "oracle": {"enabled": False, "execution_policy": "immediate"},
+                "execution": {
+                    "policies": {
+                        "custom-batch": {
+                            "name": "Custom Batch",
+                            "preferred_mode": "batch",
+                            "fallback_mode": "immediate",
+                        }
+                    }
+                },
+            }
+        },
+    )
+    assert reply["ok"] is True
+    assert reply["settings"]["oracle"]["enabled"] is False
+    assert reply["settings"]["oracle"]["execution_policy"] == "immediate"
+    assert reply["settings"]["oracle"]["model_policy"] == "oracle-smart"
+    assert "custom-batch" in reply["settings"]["execution"]["policies"]
+    cfg = load_user_config()
+    assert cfg.oracle is not None and cfg.oracle.enabled is False
+    assert cfg.execution is not None
+    assert cfg.execution.resolved_policy("custom-batch") is not None

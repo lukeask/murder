@@ -212,7 +212,7 @@ describe('workspace.* — shifted command chords', () => {
       true,
     );
     expect(bindings.matches('workspace.next', 'j', makeKey({ ctrl: true }))).toBe(false);
-    expect(bindings.label('workspace.next')).toBe('C-J');
+    expect(bindings.label('workspace.next')).toBe('C-S-j');
   });
 
   it('workspace.jump.5 resolves to ctrl+shift+5', () => {
@@ -223,6 +223,6 @@ describe('workspace.* — shifted command chords', () => {
     expect(bindings.matches('workspace.jump.5', '5', makeKey({ ctrl: true, shift: true }))).toBe(
       true,
     );
-    expect(bindings.label('workspace.jump.5')).toBe('C-5');
+    expect(bindings.label('workspace.jump.5')).toBe('C-S-5');
   });
 });

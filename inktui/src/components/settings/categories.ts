@@ -16,7 +16,7 @@ export const SETTINGS_CATEGORIES = [
   { id: 'appearance', label: 'Appearance', items: APPEARANCE_ITEMS },
   { id: 'bars', label: 'Bars', items: BAR_ITEMS },
   { id: 'harnesses', label: 'Harnesses', items: HARNESS_ITEMS },
-  { id: 'llm', label: 'LLM', items: LLM_ITEMS },
+  { id: 'llm', label: 'LLM Functionality', items: LLM_ITEMS },
   { id: 'templates', label: 'Templates', items: TEMPLATE_ITEMS },
   { id: 'keybindings', label: 'Keybindings', items: KEYBINDING_ITEMS },
   { id: 'workspaces', label: 'Workspaces', items: WORKSPACE_ITEMS },

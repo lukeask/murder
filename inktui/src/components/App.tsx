@@ -39,6 +39,7 @@ import {
   usePanelStore,
   useWorkspaceStore,
 } from '../hooks/useInputStores.js';
+import { useKittyMurderMarker } from '../hooks/useKittyMurderMarker.js';
 import { useOrientation } from '../hooks/useOrientation.js';
 import { type TerminalEvents, useRootInput } from '../hooks/useRootInput.js';
 import { useTerminalSize } from '../hooks/useTerminalSize.js';
@@ -626,6 +627,7 @@ function Shell({
    * root input loop subscribes to it; omitted in smoke/tests (no shim → no side-channel chords). */
   readonly terminalEvents?: TerminalEvents | undefined;
 }): JSX.Element {
+  useKittyMurderMarker();
   const {
     modes,
     chatInput,

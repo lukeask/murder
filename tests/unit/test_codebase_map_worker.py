@@ -15,6 +15,7 @@ import murder.codebase_map.build as build_mod
 import murder.verdict.enforcement.git_diff as git_diff_mod
 from murder.runtime.workers.base import WorkerCtx
 from murder.runtime.workers.codebase_map_worker import CodebaseMapWorker
+from murder.user_config import UserConfig, UserLlmConfig
 
 
 class _SummarizerStub:
@@ -91,7 +92,7 @@ def test_disabled_without_client_does_not_raise_or_spin(monkeypatch):
     and exits cleanly on stop_event (no busy-spin)."""
     import murder.runtime.workers.codebase_map_worker as worker_mod
 
-    monkeypatch.setattr(worker_mod, "_build_client", lambda: None)
+    monkeypatch.setattr(worker_mod, "_build_client", lambda *_args: None)
 
     called = {"head": 0}
 
@@ -139,3 +140,16 @@ def test_build_client_falls_back_to_auto_free(monkeypatch):
     monkeypatch.setattr("murder.user_config.resolve_tier", lambda cfg, role: None)
 
     assert worker_mod._build_client() is sentinel
+
+
+def test_build_client_global_disable_skips_direct_factories(monkeypatch):
+    import murder.runtime.workers.codebase_map_worker as worker_mod
+
+    monkeypatch.setattr(
+        "murder.user_config.load_user_config", lambda: UserConfig(llm=UserLlmConfig(disabled=True))
+    )
+    monkeypatch.setattr(
+        "murder.llm.clients.auto_free.AutoFreeClient.build_default",
+        classmethod(lambda cls: (_ for _ in ()).throw(AssertionError("must not build"))),
+    )
+    assert worker_mod._build_client("codebase_file_summary") is None

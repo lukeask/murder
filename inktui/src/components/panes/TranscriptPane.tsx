@@ -9,6 +9,8 @@ import { Box, Text } from 'ink';
 import { memo, useEffect, useMemo } from 'react';
 import type { ChatTurn, TurnSpeaker } from '../../selectors/conversationsSelectors.js';
 import { useTheme } from '../../theme/themeStore.js';
+import { terminalSafeText } from '../../utils/terminalSafeText.js';
+import { truncateToWidth, wrapTextToRows } from '../../utils/wrapText.js';
 import { Pane } from '../Pane.js';
 import { type ChatLine, flattenTurns, wrapChatLines } from './chatLines.js';
 import { computeScrollThumb, computeTranscriptWindow } from './shared/scrollWindow.js';
@@ -142,23 +144,10 @@ function ChatHistoryLine({
 }): React.JSX.Element {
   const gutterColor = chatLineColor(line, theme);
   const verbatim = line.kind === 'code' || line.kind === 'pre';
-  const content =
-    line.kind === 'blank' ? (
-      <Text> </Text>
-    ) : verbatim ? (
-      <Box flexGrow={1} minWidth={0} flexDirection="column">
-        <Text dimColor wrap="truncate">
-          {line.text === '' ? ' ' : line.text}
-        </Text>
-      </Box>
-    ) : (
-      <Text color={gutterColor} wrap="truncate">
-        {line.text === '' ? ' ' : line.text}
-      </Text>
-    );
+  const text = line.text === '' ? ' ' : line.text;
 
   return (
-    <Box flexDirection="row" flexShrink={0}>
+    <Box flexDirection="row" flexShrink={0} width="100%" minWidth={0}>
       {showGutter ? (
         <Box flexShrink={0} width={2}>
           {line.kind === 'blank' && line.gutter === 'none' ? (
@@ -168,8 +157,18 @@ function ChatHistoryLine({
           )}
         </Box>
       ) : null}
-      <Box flexGrow={1} minWidth={0} flexDirection="column">
-        {content}
+      <Box flexGrow={1} flexShrink={1} minWidth={0} overflow="hidden">
+        {line.kind === 'blank' ? (
+          <Text> </Text>
+        ) : verbatim ? (
+          <Text dimColor wrap="truncate">
+            {text}
+          </Text>
+        ) : (
+          <Text color={gutterColor} wrap="truncate">
+            {text}
+          </Text>
+        )}
       </Box>
     </Box>
   );
@@ -259,18 +258,27 @@ function footerVisible(height: number, level: FooterLevel): boolean {
   return contentHeight(height) >= MIN_FOOTER_INNER_H;
 }
 
+/** Normalize a tmux capture into a rectangular, control-free cell surface. */
+export function tmuxFrameRows(frame: string, columns: number, maxRows: number): readonly string[] {
+  const safe = terminalSafeText(frame);
+  const lines = safe.split('\n').slice(0, Math.max(maxRows, 0));
+  return lines.map((line) => truncateToWidth(line, columns));
+}
+
 function TmuxFrameBody({
   frame,
+  width,
   height,
   waitingText,
 }: {
   readonly frame: string | undefined;
+  readonly width: number;
   readonly height: number;
   readonly waitingText: string;
 }): React.JSX.Element {
-  const lines = (frame !== undefined && frame !== '' ? frame : waitingText)
-    .split('\n')
-    .slice(0, Math.max(height, 0));
+  const columns = contentWidth(width);
+  const source = frame !== undefined && frame !== '' ? frame : waitingText;
+  const lines = tmuxFrameRows(source, columns, height);
   const keyedLines = lines.map((text, index) => ({
     key: `tmux-${index}:${text}`,
     text,
@@ -286,7 +294,7 @@ function TmuxFrameBody({
       overflow="hidden"
     >
       {keyedLines.map(({ key, text }) => (
-        <Box key={key} flexShrink={0}>
+        <Box key={key} flexShrink={0} width="100%" minWidth={0} overflow="hidden">
           <Text wrap="truncate">{text === '' ? ' ' : text}</Text>
         </Box>
       ))}
@@ -344,7 +352,14 @@ export const TranscriptPane = memo(function TranscriptPane({
 
   const body = (() => {
     if (viewMode === 'tmux') {
-      return <TmuxFrameBody frame={tmuxFrame} height={innerH} waitingText={tmuxWaitingText} />;
+      return (
+        <TmuxFrameBody
+          frame={tmuxFrame}
+          width={width}
+          height={innerH}
+          waitingText={tmuxWaitingText}
+        />
+      );
     }
     if (visibleLines.length === 0) {
       return <Text dimColor>no history</Text>;
@@ -354,11 +369,33 @@ export const TranscriptPane = memo(function TranscriptPane({
       if (lastContent === undefined) {
         return <Text dimColor>no history</Text>;
       }
-      const wrap = innerH <= 2 ? 'truncate' : 'wrap';
+      const columns = contentWidth(width);
+      const color = chatLineColor(lastContent, theme);
+      if (innerH <= 2) {
+        return (
+          <Box width="100%" minWidth={0} overflow="hidden">
+            <Text wrap="truncate" color={color}>
+              {truncateToWidth(lastContent.text, columns)}
+            </Text>
+          </Box>
+        );
+      }
+      const rows = wrapTextToRows(lastContent.text, columns, {
+        hard: false,
+        wordWrap: true,
+        sanitize: false,
+      }).slice(0, innerH);
       return (
-        <Text wrap={wrap} color={chatLineColor(lastContent, theme)}>
-          {lastContent.text}
-        </Text>
+        <Box flexDirection="column" width="100%" minWidth={0} overflow="hidden" height={innerH}>
+          {rows.map((row, index) => (
+            // biome-ignore lint/suspicious/noArrayIndexKey: tiny preview is a capped physical slice.
+            <Box key={index} width="100%" minWidth={0} overflow="hidden" flexShrink={0}>
+              <Text wrap="truncate" color={color}>
+                {row === '' ? ' ' : row}
+              </Text>
+            </Box>
+          ))}
+        </Box>
       );
     }
     return keyedVisibleLines.map(({ key, line }) => (
@@ -379,7 +416,7 @@ export const TranscriptPane = memo(function TranscriptPane({
         footerLeft={showFooterChrome ? <Text dimColor>{footerLeftText}</Text> : undefined}
         footerRight={showFooterChrome ? <Text dimColor>{footerRight}</Text> : undefined}
       >
-        <Box flexDirection="column" flexShrink={0} height={innerH} overflow="hidden">
+        <Box flexDirection="column" flexShrink={0} height={innerH} overflow="hidden" minWidth={0}>
           {body}
         </Box>
       </Pane>

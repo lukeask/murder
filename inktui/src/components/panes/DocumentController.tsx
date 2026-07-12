@@ -7,7 +7,11 @@ import type { PanelKeymap } from '../../input/keymap.js';
 import type { PanePresentation } from '../../layout/paneLayoutTypes.js';
 import { DOC_DIR } from '../../store/docView/docViewSlice.js';
 import type { AppStore } from '../../store/store.js';
-import { DocumentSurface, documentContentInnerHeight } from './DocumentSurface.js';
+import {
+  DocumentSurface,
+  documentContentInnerHeight,
+  documentPhysicalRows,
+} from './DocumentSurface.js';
 import { AllocatedPaneFrame } from './shared/AllocatedPaneFrame.js';
 import { computeDocumentWindow } from './shared/scrollWindow.js';
 import { usePaneScrollState } from './shared/usePaneScrollState.js';
@@ -39,9 +43,13 @@ export const DocumentController = memo(function DocumentController({
 
   const [scroll, setScroll] = usePaneScrollState(focusId);
   const lines = useMemo(() => (body === null ? [] : body.split('\n')), [body]);
+  const physicalRows = useMemo(
+    () => documentPhysicalRows(lines, presentation.width, presentation.height),
+    [lines, presentation.height, presentation.width],
+  );
   const effectiveHeight = Math.max(1, documentContentInnerHeight(presentation.height));
   const { start: clampedScroll, maxScroll } = computeDocumentWindow(
-    lines.length,
+    physicalRows.length,
     scroll,
     effectiveHeight,
   );
