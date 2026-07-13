@@ -104,6 +104,37 @@ def test_poll_hash_skip_is_noop(conn: sqlite3.Connection) -> None:
     assert len(published) == after_first
 
 
+def test_document_identity_is_content_addressed_not_capture_provenance(
+    conn: sqlite3.Connection,
+) -> None:
+    """The same verified document from another capture is a true producer no-op."""
+    published: list[tuple[str, dict[str, Any]]] = []
+    producer = _make_producer(conn, published, conversation_id="agent-content-hash")
+    producer._summary_provider_resolved = True
+    doc = {
+        "harness": "claude_code",
+        "state": "awaiting_input",
+        "condensed": None,
+        "segments": [{"type": "assistant", "phase": "final", "text": "same reply"}],
+    }
+
+    import asyncio
+
+    first = asyncio.run(producer.poll_document(doc))
+    captured_at = conn.execute(
+        "SELECT captured_at FROM agent_messages WHERE agent_id = ?", ("agent-content-hash",)
+    ).fetchone()["captured_at"]
+    second = asyncio.run(producer.poll_document(dict(doc)))
+
+    assert first.changed
+    assert not second.changed
+    assert second.changes == ()
+    assert len(published) == 1
+    assert conn.execute(
+        "SELECT captured_at FROM agent_messages WHERE agent_id = ?", ("agent-content-hash",)
+    ).fetchone()["captured_at"] == captured_at
+
+
 def test_poll_growing_pane_appends(conn: sqlite3.Connection) -> None:
     """Feeding a later frame that extends the transcript appends new blocks."""
     published: list[tuple[str, dict[str, Any]]] = []

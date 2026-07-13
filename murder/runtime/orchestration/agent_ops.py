@@ -10,6 +10,7 @@ from typing import Any
 
 from murder.app.service.runtime_scope import OrchestratorHost
 from murder.bus import Entity
+from murder.llm.harness_control.runtime.manual_input import emit_manual_input
 from murder.runtime.agents.base import AgentRole, AgentStatus
 from murder.runtime.orchestration.agent_ids import is_rogue_agent_id
 from murder.runtime.terminal import tmux
@@ -38,7 +39,7 @@ def _crow_handler_companion(agent_id: str) -> str:
     to a query without a special case.
     """
     if agent_id.startswith("crow-"):
-        return f"crow_handler-{agent_id[len('crow-'):]}"
+        return f"crow_handler-{agent_id[len('crow-') :]}"
     return agent_id
 
 
@@ -119,7 +120,7 @@ class AgentOps:
         # ``merge_transcript`` rebuild that ALSO re-sorts is deferred per the
         # plan's coalescing caveat -- see commit message follow-up.)
         if agent_id.startswith("planner-"):
-            await self.rt.publish_snapshot(Entity.PLAN, agent_id[len("planner-"):])
+            await self.rt.publish_snapshot(Entity.PLAN, agent_id[len("planner-") :])
 
     async def send_agent_message(
         self,
@@ -185,7 +186,7 @@ class AgentOps:
         await self._record_user_block(agent_id, message)
         return {"handled": True, "queued": False}
 
-    async def send_agent_key(
+    async def send_agent_key(  # noqa: PLR0911 - each validation failure is an API result
         self,
         agent_id: str | None,
         key: str,
@@ -194,7 +195,13 @@ class AgentOps:
         enter: bool = False,
         log_user_input: str | None = None,
     ) -> dict[str, Any]:
-        """Send a raw tmux key (name or literal text) to an agent harness pane."""
+        """Emit explicit operator input through the verified session actuator.
+
+        This endpoint deliberately has no legacy direct-terminal fallback.  It
+        is for an operator's raw key intent, not a claim that the harness
+        accepted or interpreted that intent; the verified runtime records the
+        operation/action/effects before any physical emission.
+        """
         if agent_id is None:
             agent_id = await self._ensure_collaborator()
 
@@ -213,7 +220,34 @@ class AgentOps:
         if not isinstance(session, str) or not session:
             return {"ok": False, "error": f"agent {agent_id} has no tmux session"}
 
-        await tmux.send_keys(session, key, literal=literal, enter=enter)
+        control = getattr(agent, "verified_harness_control", None)
+        if control is None:
+            return {
+                "ok": False,
+                "error": f"agent {agent_id} has no initialized verified harness control",
+            }
+        if getattr(control, "terminal_session", None) != session:
+            return {
+                "ok": False,
+                "error": f"agent {agent_id} verified control is bound to a different tmux session",
+            }
+        try:
+            receipt = await emit_manual_input(
+                control,
+                text=key,
+                literal=literal,
+                append_enter=enter,
+            )
+        except Exception as exc:
+            LOGGER.exception("verified manual terminal input failed for %s", agent_id)
+            return {"ok": False, "error": f"manual terminal input emission failed: {exc}"}
+        if not receipt.accepted_by_terminal_transport:
+            return {
+                "ok": False,
+                "error": "terminal transport rejected manual input; harness interpretation unknown",
+                "operation_id": receipt.operation_id,
+                "action_id": receipt.action_id,
+            }
         # Ground truth: record raw-key user input authoritatively in both the
         # JSON store and the flat log (always-log-user-input is non-negotiable).
         if isinstance(log_user_input, str) and log_user_input.strip():
@@ -226,6 +260,12 @@ class AgentOps:
             "literal": literal,
             "enter": enter,
             "logged_user_input": bool(log_user_input and log_user_input.strip()),
+            "operation_id": receipt.operation_id,
+            "action_id": receipt.action_id,
+            # Explicitly bounded claim: accepted transport is not a verified
+            # semantic operation outcome.
+            "terminal_transport_accepted": True,
+            "harness_interpretation_verified": False,
         }
 
     async def refresh_agent_transcript(self, agent_id: str) -> dict[str, Any]:
@@ -409,10 +449,11 @@ class AgentOps:
             agent = self.rt.get_agent(agent_id)
             if agent is None:
                 return {"ok": False, "error": f"no agent named {agent_id}"}
-            harness_session = getattr(agent, "harness_session", None)
-            if harness_session is None:
-                return {"ok": False, "error": f"agent {agent_id} has no harness session"}
-            await harness_session.interrupt()
+            interrupt = getattr(agent, "interrupt_verified_generation", None)
+            if not callable(interrupt):
+                return {"ok": False, "error": f"agent {agent_id} has no verified harness control"}
+            if not await interrupt():
+                return {"ok": False, "error": f"agent {agent_id} interrupt was not verified"}
             return {"handled": True}
         if not agent_id.startswith("crow-"):
             return {"ok": False, "error": "interrupt is only supported for crow agents"}

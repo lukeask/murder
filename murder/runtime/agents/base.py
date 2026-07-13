@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hashlib
 import logging
 from abc import ABC, abstractmethod
 from pathlib import Path
@@ -115,6 +116,126 @@ class HarnessBackedAgent(LifecycleParticipant):
     # Set by live-session usage sampling while a slash-command overlay is open;
     # projection ticks skip pane capture until the overlay is dismissed.
     usage_capture_in_progress: bool = False
+    # The verified control runtime is initialized only after tmux startup, when
+    # it can bind one immutable observer and one serialized actuator to the
+    # real pane.  It replaces procedural prompt delivery during migration.
+    verified_harness_control: Any | None = None
+    # Exact frame+snapshot pair most recently persisted by the verified
+    # observer.  Orchestration companions consume this shared provenance; they
+    # never open a second pane-capture path.
+    latest_ingested_frame: Any | None = None
+
+    async def initialize_verified_harness_control(self) -> None:
+        runtime = getattr(self, "runtime", None)
+        if runtime is None or runtime.db is None:
+            raise RuntimeError("verified harness control requires the service persistence database")
+        from murder.llm.harness_control.runtime.session import VerifiedHarnessControlSession
+
+        options: dict[str, Any] = {}
+        if getattr(runtime, "verified_prompt_driver_policy", None) is not None:
+            options["prompt_policy"] = runtime.verified_prompt_driver_policy
+        if getattr(runtime, "verified_prompt_driver_sleep", None) is not None:
+            options["prompt_sleep"] = runtime.verified_prompt_driver_sleep
+        self.verified_harness_control = VerifiedHarnessControlSession.from_tmux(
+            harness_kind=self.harness.kind,
+            terminal_session=self.session,
+            connection=runtime.db,
+            persistence_session_id=self.id,
+            **options,
+        )
+        # A reattached pane begins with current evidence, never a resumed
+        # procedural stack.  Unfinished persisted effects are explicitly
+        # escalated by the session recovery boundary rather than replayed.
+        await self.verified_harness_control.recover_pending_operations()
+
+    async def send_verified_prompt(
+        self,
+        text: str,
+        *,
+        murder_owned: bool = False,
+    ) -> SimpleResult[None]:
+        """Submit through the persisted controller, never a legacy adapter call."""
+
+        if self.verified_harness_control is None:
+            from murder.llm.harnesses.results import fail_result
+
+            return fail_result("verified harness control has not been initialized")
+        from murder.llm.harness_control.model.actions import InputChunk, InputProvenance
+        from murder.llm.harness_control.model.operations import OperationOutcome
+        from murder.llm.harnesses.results import fail_result, ok_result
+
+        provenance = (
+            InputProvenance.MURDER_CONTEXT_BLOCK
+            if murder_owned
+            else InputProvenance.USER_PASTE_BLOCK
+        )
+        result = await self.verified_harness_control.submit_prompt(
+            (
+                InputChunk(
+                    text,
+                    provenance,
+                    f"agent:{self.id}:{hashlib.sha256(text.encode('utf-8')).hexdigest()}",
+                ),
+            )
+        )
+        if result.outcome is OperationOutcome.SUBMITTED:
+            return ok_result()
+        return fail_result(f"verified prompt submission {result.outcome.name.lower()}")
+
+    async def interrupt_verified_generation(self) -> bool:
+        """Request interruption through the controller's serialized actuator."""
+
+        if self.verified_harness_control is None:
+            return False
+        return await self.verified_harness_control.interrupt()
+
+    async def answer_verified_question(
+        self, request: Any, *, operation_id: str | None = None
+    ) -> bool:
+        """Route a recorded user/policy question decision to verified control."""
+
+        if self.verified_harness_control is None:
+            return False
+        return await self.verified_harness_control.answer_question(
+            request, operation_id=operation_id
+        )
+
+    async def answer_verified_permission(
+        self, request: Any, *, operation_id: str | None = None
+    ) -> bool:
+        """Route a recorded user/policy permission decision to verified control."""
+
+        if self.verified_harness_control is None:
+            return False
+        return await self.verified_harness_control.answer_permission(
+            request, operation_id=operation_id
+        )
+
+    async def select_verified_model(
+        self, model: str | None, effort: str | None = None
+    ) -> SimpleResult[None]:
+        """Select a runtime model through the persisted verified controller.
+
+        A launch option, a picker highlight, or a successful terminal call is
+        not treated as activation.  This entry point only succeeds after the
+        controller has observed independent active-model readback.
+        """
+
+        from murder.llm.harnesses.results import fail_result, ok_result
+
+        if model is None:
+            return ok_result()
+        if self.verified_harness_control is None:
+            return fail_result("verified harness control has not been initialized")
+        from murder.llm.harness_control.capabilities.model_selection import (
+            ModelSelectionOutcome,
+            ModelTarget,
+        )
+
+        result = await self.verified_harness_control.select_model(ModelTarget(model, effort=effort))
+        if result.outcome is ModelSelectionOutcome.ACTIVATED:
+            return ok_result()
+        return fail_result(f"verified model selection {result.outcome.name.lower()}")
 
     async def _usage_sampling_context(self) -> Any | None:
         runtime = getattr(self, "runtime", None)
@@ -156,6 +277,7 @@ class HarnessBackedAgent(LifecycleParticipant):
         fresh producer (the single per-conversation parser). Called from each
         subclass's start()."""
         runtime = getattr(self, "runtime", None)
+        self.latest_ingested_frame = None
         if runtime is not None and runtime.db is not None:
             from murder.state.persistence import conversation
 
@@ -191,16 +313,27 @@ class HarnessBackedAgent(LifecycleParticipant):
             return
         if self.usage_capture_in_progress:
             return
-        from murder.runtime.terminal import tmux
-        from murder.llm.harnesses.transcripts import wants_ansi
-
-        pane = await tmux.capture_pane(
-            self.session,
-            lines=TRANSCRIPT_SCROLLBACK_LINES,
-            escapes=wants_ansi(self.harness.kind),
+        if self.verified_harness_control is None:
+            return
+        runtime = getattr(self, "runtime", None)
+        ingested = await self.verified_harness_control.ingest_once()
+        self.latest_ingested_frame = ingested
+        decision_router = getattr(runtime, "structured_decisions", None)
+        if decision_router is not None:
+            await decision_router.observe(self, ingested.snapshot)
+        transcript = next(
+            (
+                item.payload.get("transcript")
+                for item in ingested.evidence
+                if isinstance(item.payload.get("transcript"), dict)
+            ),
+            None,
         )
-        had_changes = await self._producer.poll(pane)
-        await self._emit_plan_resort_if_planner(had_changes)
+        if transcript is None:
+            raise RuntimeError("verified harness evidence omitted its transcript document")
+        projection = await self._producer.poll_document(transcript)
+        await self._emit_plan_resort_if_planner(projection.changed)
+        await self._route_projected_orchestration_signals(projection.changes)
         # Process-lifecycle status: reconcile agents.status (the crows-panel
         # spinner) with the harness's working↔idle signal (BUG-13).
         self._sync_lifecycle_status()
@@ -209,6 +342,22 @@ class HarnessBackedAgent(LifecycleParticipant):
         # changed (cheap no-op otherwise — the publish is change-gated).
         await self._deliver_queued_if_ready()
         await self._publish_conversation_state()
+
+    async def _route_projected_orchestration_signals(self, changes: tuple[Any, ...]) -> None:
+        """Give a ticket Crow's handler the assistant blocks that just changed.
+
+        Projection is the authoritative ingress boundary for assistant text.
+        Routing these concrete block changes avoids reinterpreting an accumulated
+        pane transcript on every handler polling tick.
+        """
+        if not changes or self.role is not AgentRole.CROW or not self.ticket_id:
+            return
+        runtime = getattr(self, "runtime", None)
+        get_handler = getattr(runtime, "get_crow_handler", None)
+        handler = get_handler(self.ticket_id) if callable(get_handler) else None
+        observe = getattr(handler, "observe_conversation_changes", None)
+        if callable(observe):
+            await observe(changes)
 
     def _sync_lifecycle_status(self) -> None:
         """Toggle ``agents.status`` RUNNING↔IDLE to match the harness signal.
@@ -260,7 +409,7 @@ class HarnessBackedAgent(LifecycleParticipant):
             return
         from murder.bus.protocol import Entity
 
-        await runtime.publish_snapshot(Entity.PLAN, self.id[len("planner-"):])
+        await runtime.publish_snapshot(Entity.PLAN, self.id[len("planner-") :])
 
     @property
     def pending_message(self) -> str | None:
@@ -285,19 +434,11 @@ class HarnessBackedAgent(LifecycleParticipant):
         been parsed yet; it is unreliable on harnesses that keep their input
         box visible while working (codex), which would type into a busy pane.
         """
-        from murder.runtime.terminal import tmux
-
         idle = False
         if self._queued_message is None:
             state = self._current_live_state()
             if state is not None:
                 idle = state == "awaiting_input"
-            else:
-                try:
-                    pane = await tmux.capture_pane(self.session, lines=120)
-                except tmux.TmuxError:
-                    pane = ""
-                idle = self.harness.is_idle(pane)
         if idle:
             result = await self.send(msg)
             if result is not None and getattr(result, "ok", True) is False:
@@ -461,13 +602,15 @@ class HarnessBackedAgent(LifecycleParticipant):
         an empty doc if there is no persisted conversation yet."""
         doc = await self._projected_doc()
         if doc is None:
-            return {"harness": self.harness.kind, "state": "working",
-                    "condensed": None, "segments": []}
+            return {
+                "harness": self.harness.kind,
+                "state": "working",
+                "condensed": None,
+                "segments": [],
+            }
         return doc
 
-    async def _finalize_conversation_on_stop(
-        self, *, kill_session: bool, failed: bool
-    ) -> None:
+    async def _finalize_conversation_on_stop(self, *, kill_session: bool, failed: bool) -> None:
         """Capture harness session id and set conversation status = complete.
 
         Only runs on clean kills (kill_session=True, failed=False) — the path
@@ -481,22 +624,12 @@ class HarnessBackedAgent(LifecycleParticipant):
         if runtime is None or runtime.db is None:
             return
         await self._sample_live_usage_on_shutdown()
+        # Do not send a legacy `/exit` command here.  It was an independent
+        # terminal writer outside the actuator and only inferred success from a
+        # later pane scrape.  Resume identifiers remain harness evidence from
+        # normal observations; teardown itself is an explicit session lifecycle
+        # operation, not semantic harness input.
         session_id: str | None = None
-        exit_cmd = self.harness.graceful_exit_command()
-        if exit_cmd is not None:
-            try:
-                from murder.runtime.terminal import tmux
-
-                await tmux.send_keys(self.session, exit_cmd)
-                await asyncio.sleep(0.5)
-                pane = await tmux.capture_pane(self.session, lines=40)
-                session_id = self.harness.extract_resume_session_id(pane)
-            except Exception:
-                # Best-effort: a later /resume will report "no resumable session
-                # id"; leave a breadcrumb so the loss isn't silent.
-                LOGGER.debug(
-                    "resume session-id capture failed for %s", self.id, exc_info=True
-                )
         from murder.state.persistence import conversation
 
         if session_id is not None:

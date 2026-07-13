@@ -8,7 +8,9 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import murder.app.service.bootstrap as bootstrap_mod
-from murder.runtime.workers import CodebaseMapWorker
+from murder.llm.harnesses import usage_sampling
+from murder.runtime import workers as workers_pkg
+from murder.runtime.workers import CodebaseMapWorker, UsageProbeWorker
 
 
 class _RecordingSupervisor:
@@ -33,8 +35,6 @@ def test_codebase_map_worker_registered(monkeypatch):
     # HarnessVersionProbeWorker.from_runtime + UsageProbeWorker.from_worker_ctx
     # need real scaffolding; stub the heavyweight worker factories to plain
     # objects so the test focuses on registration order/membership.
-    from murder.runtime import workers as workers_pkg
-
     monkeypatch.setattr(
         workers_pkg.UsageProbeWorker, "from_worker_ctx", classmethod(lambda cls, ctx: object())
     )
@@ -60,3 +60,5 @@ def test_codebase_map_worker_registered(monkeypatch):
     assert len(map_workers) == 1
     # Registered last, after all pre-existing workers.
     assert isinstance(supervisor.started[-1], CodebaseMapWorker)
+    assert not hasattr(UsageProbeWorker, "from_runtime")
+    assert not hasattr(usage_sampling, "sample_harness_usages_for_config")

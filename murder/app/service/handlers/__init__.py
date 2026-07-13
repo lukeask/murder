@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING
 from murder.app.service.handlers import (
     command,
     health,
+    harness_control,
     image,
     plan,
     settings,
@@ -26,6 +27,7 @@ if TYPE_CHECKING:
 
 def register_all(host: ServiceHost) -> None:
     health.register(host)
+    harness_control.register(host)
     command.register(host)
     state.register(host)
     ticket.register(host)

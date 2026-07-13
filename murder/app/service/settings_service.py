@@ -2,13 +2,19 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from dataclasses import dataclass
 from pathlib import Path
 
 from murder.config import HarnessKind
+from murder.llm.harnesses import REGISTRY
 from murder.llm.harnesses.harnesses_doc import write_harnesses_doc
-from murder.llm.harnesses.model_discovery import discover_harness_models
+from murder.llm.harnesses.model_cache import (
+    CATALOG_ADVISORY,
+    get_available_models,
+    refresh_and_persist_harness_models,
+)
 from murder.user_config import UserConfig, save_user_config
 
 LOGGER = logging.getLogger(__name__)
@@ -29,7 +35,7 @@ class ModelDiscoveryResult:
 
 @dataclass
 class SettingsService:
-    """Owns user config writes and harness model discovery.
+    """Owns user config writes and configured harness model catalog access.
 
     Harness/model selection is user-scope only; there is no project
     ``roles.yaml`` write path.
@@ -48,18 +54,13 @@ class SettingsService:
         return SettingsApplyResult(ok=True)
 
     def _schedule_model_refresh(self) -> None:
-        """Fire-and-forget model re-discovery on the running event loop.
+        """Persist the configured model catalog on the running event loop.
 
         Best-effort: if no running loop exists (e.g. called from a sync test
-        in a non-async context), the refresh is silently
-        skipped.  DB persistence is skipped here since ``SettingsService`` has
-        no DB reference; the full persist path goes through
-        ``reconfigure_collaborator`` (which is async and holds the DB).
+        in a non-async context), the refresh is silently skipped. DB
+        persistence is skipped here since ``SettingsService`` has no DB
+        reference; the service startup and reconfiguration paths persist it.
         """
-        import asyncio
-
-        from murder.llm.harnesses.model_cache import refresh_and_persist_harness_models
-
         repo_root = self.repo_root
         try:
             loop = asyncio.get_running_loop()
@@ -72,24 +73,22 @@ class SettingsService:
             )
         except Exception:  # noqa: BLE001
             LOGGER.warning(
-                "failed to schedule model refresh after settings save"
-                " (UI model list will be stale until next refresh)",
+                "failed to schedule configured model catalog refresh after settings save",
                 exc_info=True,
             )
 
     async def discover_models(self, harness: HarnessKind | str) -> ModelDiscoveryResult:
         kind = harness if isinstance(harness, str) else str(harness)
-        result = await discover_harness_models(kind, self.repo_root)
-        if not result.ok or not result.data:
+        if kind not in REGISTRY:
             return ModelDiscoveryResult(
                 ok=False,
                 models=(),
-                message=result.message or f"{harness} model discovery failed",
+                message=f"unknown harness {kind!r}; no configured model catalog",
             )
         return ModelDiscoveryResult(
             ok=True,
-            models=tuple(result.data),
-            message=None,
+            models=tuple(get_available_models(kind)),
+            message=CATALOG_ADVISORY,
         )
 
 

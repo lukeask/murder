@@ -31,6 +31,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -38,8 +39,10 @@ import pytest
 from murder.bus import Bus
 from murder.bus.protocol import Entity, StateSnapshotEvent
 from murder.llm.harnesses.claude_code import ClaudeCodeAdapter
+from murder.llm.harness_control.runtime.session import IngestedFrame
 from murder.runtime.agents.base import AgentRole, AgentStatus, HarnessBackedAgent
 from murder.runtime.scheduler.worker import SchedulerWorker
+from murder.runtime.orchestration.verified_signals import VerifiedOrchestrationSignals
 from murder.runtime.workers.base import WorkerCtx
 from murder.state.persistence.agents import (
     HEARTBEAT_EMIT_BUCKET_S,
@@ -175,7 +178,10 @@ async def test_crow_handler_heartbeat_emit_bounded_over_window(
         "murder.runtime.agents.crow_handler.time.monotonic", lambda: clock["t"]
     )
     for _ in range(ticks):
-        await handler._orchestration_tick("just working, nothing to see\n")
+        await handler._orchestration_tick(
+            "just working, nothing to see\n",
+            VerifiedOrchestrationSignals("working", (), (), (), False, ""),
+        )
         clock["t"] += step
 
     # Ceiling: bounded to <= one emit per elapsed bucket, NOT one per tick.
@@ -286,6 +292,7 @@ class _StubAgent(HarnessBackedAgent):
         self.harness = ClaudeCodeAdapter()
         self._producer = None
         self._build_producer()  # real ConversationProducer + its hash-skip
+        self.verified_harness_control = SimpleNamespace(ingest_once=AsyncMock())
 
     async def start(self, brief: str, ctx: dict) -> None: ...  # pragma: no cover
     async def stop(self, *, failed: bool = False, kill_session: bool = True) -> None: ...  # pragma: no cover
@@ -298,6 +305,7 @@ def _planner_runtime(conn) -> tuple[object, list[tuple[Entity, str]]]:
     runtime.db = conn
     runtime.bus = MagicMock()
     runtime.bus.publish = AsyncMock()  # producer awaits conversation.block publishes
+    runtime.structured_decisions = None
     runtime.run_id = "run-test"
     calls: list[tuple[Entity, str]] = []
 
@@ -331,7 +339,11 @@ async def test_project_once_emits_plan_only_for_planner_with_changes(
 
     runtime, calls = _planner_runtime(conn)
     planner = _StubAgent("planner-alpha", runtime)
-    fake_tmux.queue_pane("assistant: hello\n")
+    planner.verified_harness_control.ingest_once.return_value = IngestedFrame(
+        frame=SimpleNamespace(raw_text="assistant: hello\n", frame_id="planner-1"),
+        snapshot=MagicMock(),
+        evidence=(SimpleNamespace(payload={"transcript": {"state": "working"}}),),
+    )
     await planner.project_once()
     assert calls == [(Entity.PLAN, "alpha")]
 
@@ -339,7 +351,11 @@ async def test_project_once_emits_plan_only_for_planner_with_changes(
     # (its content rides conversation.block; only the plans list re-sorts on planners).
     runtime2, calls2 = _planner_runtime(conn)
     crow = _StubAgent("crow_handler-t001", runtime2)
-    fake_tmux.queue_pane("assistant: hello\n")
+    crow.verified_harness_control.ingest_once.return_value = IngestedFrame(
+        frame=SimpleNamespace(raw_text="assistant: hello\n", frame_id="crow-1"),
+        snapshot=MagicMock(),
+        evidence=(SimpleNamespace(payload={"transcript": {"state": "working"}}),),
+    )
     await crow.project_once()
     assert calls2 == []
 
@@ -361,10 +377,14 @@ async def test_project_once_coalesces_plan_emit_on_hash_skip(
 
     runtime, calls = _planner_runtime(conn)
     planner = _StubAgent("planner-alpha", runtime)
+    planner.verified_harness_control.ingest_once.return_value = IngestedFrame(
+        frame=SimpleNamespace(raw_text="assistant: same pane\n", frame_id="same-frame"),
+        snapshot=MagicMock(),
+        evidence=(SimpleNamespace(payload={"transcript": {"state": "working"}}),),
+    )
 
     # 10 ticker polls of the SAME pane content -> producer hash-skips 9 of them.
     for _ in range(10):
-        fake_tmux.queue_pane("assistant: same pane\n")
         await planner.project_once()
 
     assert len(calls) == 1, f"expected hash-skip to coalesce to 1, got {len(calls)}"

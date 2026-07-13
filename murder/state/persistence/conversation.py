@@ -143,6 +143,12 @@ class ConversationBlockChange:
 
     action: str  # "block-appended" | "block-updated"
     block: ConversationBlock
+    # Projection consumers occasionally need to distinguish text growth from a
+    # state-only update (notably live assistant markers).  Keep that history on
+    # the change itself: the conversation block remains the sole identity and
+    # no second cursor/fingerprint store is required.
+    previous_payload: dict[str, Any] | None = None
+    previous_sealed: bool | None = None
 
 
 def block_to_wire(block: ConversationBlock) -> dict[str, Any]:
@@ -855,13 +861,20 @@ def merge_non_user_segments_with_changes(
                             sealed=bool(row["sealed"]),
                             service_received_at=row["service_received_at"],
                         ),
+                        previous_payload=dict(existing.payload),
+                        previous_sealed=existing.sealed,
                     )
                 )
         elif _sealed_block_can_grow(existing, segments[i]):
             updated = _update_block_by_id(conn, existing.id, segments[i], received_at=ts)
             if updated is not None:
                 changes.append(
-                    ConversationBlockChange(action="block-updated", block=updated)
+                    ConversationBlockChange(
+                        action="block-updated",
+                        block=updated,
+                        previous_payload=dict(existing.payload),
+                        previous_sealed=existing.sealed,
+                    )
                 )
         # Other sealed blocks are immutable — leave them as-is.
 
@@ -884,7 +897,12 @@ def merge_non_user_segments_with_changes(
                 sealed_pred = _read_block_by_id(conn, conversation_id, live_pred.id)
                 if sealed_pred is not None and sealed_pred.sealed:
                     changes.append(
-                        ConversationBlockChange(action="block-updated", block=sealed_pred)
+                        ConversationBlockChange(
+                            action="block-updated",
+                            block=sealed_pred,
+                            previous_payload=dict(live_pred.payload),
+                            previous_sealed=live_pred.sealed,
+                        )
                     )
             changes.append(ConversationBlockChange(action="block-appended", block=block))
 

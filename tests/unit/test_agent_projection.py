@@ -18,7 +18,6 @@ from murder.bus import ConversationBlockEvent
 from murder.llm.harnesses.claude_code import ClaudeCodeAdapter
 from murder.runtime.agents.base import AgentStatus
 from murder.runtime.agents.crow import CrowAgent
-from murder.runtime.terminal import tmux
 from murder.state.persistence.conversation import read_conversation_blocks
 from murder.state.persistence.schema import get_db, init_db
 from tests.support.fake_tmux import FakeTmux
@@ -58,10 +57,33 @@ def test_rogue_project_once_persists_assistant_reply(
     # spawn_rogue calls start_conversation() directly (it bypasses CrowAgent.start);
     # that builds the producer with no I/O and no background task.
     agent.start_conversation()
-    fake_tmux.queue_pane(_last_frame())
+    # This test owns capture/projection provenance, not the optional external
+    # summarizer. Keep its fire-and-forget task from resolving a real provider.
+    agent._producer._summary_provider_resolved = True
+    # Session recovery establishes the verified observation root.  The next
+    # frame must be captured exactly once, persisted, and handed unchanged to
+    # transcript projection.
+    pane = _last_frame()
+    fake_tmux.queue_pane("")
+    fake_tmux.queue_pane(pane)
+    asyncio.run(agent.initialize_verified_harness_control())
+    captures_before = len(fake_tmux.calls_to("capture_pane"))
 
     asyncio.run(agent.project_once())
 
+    captures = fake_tmux.calls_to("capture_pane")[captures_before:]
+    assert len(captures) == 1
+    persisted = conn.execute(
+        """
+        SELECT raw_text
+        FROM harness_control_frames
+        WHERE session_id = ?
+        ORDER BY capture_sequence DESC
+        LIMIT 1
+        """,
+        (agent.id,),
+    ).fetchone()
+    assert persisted is not None and persisted["raw_text"] == pane
     blocks = read_conversation_blocks(conn, "claude-rogue-testingpostworker")
     kinds = {b.kind for b in blocks}
     assert kinds & {"assistant_final", "assistant_intermediate"}, kinds
@@ -73,6 +95,14 @@ def test_rogue_project_once_persists_assistant_reply(
     block_events = [e for e in events if isinstance(e, ConversationBlockEvent)]
     assert block_events, events
     assert block_events[-1].conversation_id == "claude-rogue-testingpostworker"
+
+    # An unknown legacy live-state cannot open a second observation path just
+    # to decide whether a queued prompt is safe.  It waits for project_once's
+    # next persisted frame instead.
+    agent._producer.last_state = None
+    captures_before_queue = len(fake_tmux.calls_to("capture_pane"))
+    assert asyncio.run(agent.queue_message("wait for shared observation")) == {"queued": True}
+    assert len(fake_tmux.calls_to("capture_pane")) == captures_before_queue
 
 
 def test_project_once_is_noop_without_producer(fake_tmux: FakeTmux, tmp_path: Path) -> None:

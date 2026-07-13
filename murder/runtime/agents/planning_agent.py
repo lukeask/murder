@@ -69,10 +69,18 @@ class PlanningAgent(HarnessBackedAgent):
                 self.runtime.sync_agent(self)
             raise TimeoutError(start_result.message or "planner harness startup failed")
 
+        await self.initialize_verified_harness_control()
+        model_result = await self.select_verified_model(self.startup_model, self.startup_effort)
+        if not model_result.ok:
+            self.status = AgentStatus.FAILED
+            if self.runtime:
+                self.runtime.sync_agent(self)
+            raise RuntimeError(model_result.message or "verified planner model selection failed")
+
         await self._sample_live_usage_on_startup()
 
         if brief:
-            send_result = await self.harness_session.send_prompt(brief)
+            send_result = await self.send_verified_prompt(brief, murder_owned=True)
             if not send_result.ok:
                 self.status = AgentStatus.FAILED
                 if self.runtime:
@@ -104,7 +112,7 @@ class PlanningAgent(HarnessBackedAgent):
             await self._sample_live_usage_on_shutdown()
         if kill_session:
             with contextlib.suppress(Exception):
-                await self.harness_session.interrupt()
+                await self.interrupt_verified_generation()
             with contextlib.suppress(Exception):
                 await tmux.kill_session(self.session)
         if failed or self.status == AgentStatus.FAILED:
@@ -115,4 +123,4 @@ class PlanningAgent(HarnessBackedAgent):
             self.runtime.sync_agent(self)
 
     async def send(self, msg: str) -> SimpleResult[None]:
-        return await self.harness_session.send_prompt(msg)
+        return await self.send_verified_prompt(msg)

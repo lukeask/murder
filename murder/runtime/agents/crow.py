@@ -39,9 +39,7 @@ class CrowAgent(HarnessBackedAgent):
         self.harness = harness
         self.repo_root = Path(repo_root)
         self.worktree_path = Path(worktree_path) if worktree_path is not None else None
-        self.additional_workspace_dirs = tuple(
-            Path(path) for path in additional_workspace_dirs
-        )
+        self.additional_workspace_dirs = tuple(Path(path) for path in additional_workspace_dirs)
         self.startup_model = startup_model
         self.startup_effort = startup_effort
         self.runtime = runtime
@@ -70,13 +68,21 @@ class CrowAgent(HarnessBackedAgent):
                 self.runtime.sync_agent(self)
             raise TimeoutError(start_result.message or "harness startup failed")
 
+        await self.initialize_verified_harness_control()
+        model_result = await self.select_verified_model(self.startup_model, self.startup_effort)
+        if not model_result.ok:
+            self.status = AgentStatus.FAILED
+            if self.runtime:
+                self.runtime.sync_agent(self)
+            raise RuntimeError(model_result.message or "verified crow model selection failed")
+
         await self._sample_live_usage_on_startup()
 
         try:
             self.start_commit = await git_diff.head_commit(self.repo_root)
         except Exception:
             self.start_commit = None
-        paste = await self.harness_session.send_prompt(brief)
+        paste = await self.send_verified_prompt(brief, murder_owned=True)
         if not paste.ok:
             self.status = AgentStatus.FAILED
             if self.runtime:
@@ -107,7 +113,7 @@ class CrowAgent(HarnessBackedAgent):
         await self._finalize_conversation_on_stop(kill_session=kill_session, failed=failed)
         if kill_session:
             with contextlib.suppress(Exception):
-                await self.harness_session.interrupt()
+                await self.interrupt_verified_generation()
             with contextlib.suppress(Exception):
                 await tmux.kill_session(self.session)
         if failed or self.status == AgentStatus.FAILED:
@@ -118,4 +124,4 @@ class CrowAgent(HarnessBackedAgent):
             self.runtime.sync_agent(self)
 
     async def send(self, msg: str) -> SimpleResult[None]:
-        return await self.harness_session.send_prompt(msg)
+        return await self.send_verified_prompt(msg)

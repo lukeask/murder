@@ -8,8 +8,10 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import logging
 from collections.abc import Awaitable, Callable, Sequence
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from murder.llm.harnesses.transcript_summarize import SummaryProvider, summarize_chunk
@@ -21,6 +23,18 @@ if TYPE_CHECKING:
     import sqlite3
 
 _log = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True, slots=True)
+class ConversationProjectionResult:
+    """The semantic result of projecting one transcript document.
+
+    Keeping the changed blocks beside the boolean prevents consumers from
+    reconstructing meaning from a whole pane on every polling tick.
+    """
+
+    changed: bool
+    changes: tuple[conv_store.ConversationBlockChange, ...] = ()
 
 
 class ConversationProducer:
@@ -49,6 +63,7 @@ class ConversationProducer:
         self._publish = publish
         self._acc = TranscriptAccumulator(harness_kind, system_prompt=system_prompt)
         self._last_pane_hash: str | None = None
+        self._last_document_hash: str | None = None
         # The parsed harness UI state from the most recent non-skipped poll
         # (working / awaiting_input / awaiting_approval). Read by the agent's
         # projection tick for queued-message delivery + conversation.state push.
@@ -68,7 +83,7 @@ class ConversationProducer:
         # intermediate work would never be summarized → Condensed == Verbose).
         self._prev_summary_state: str = "working"
 
-    async def poll(self, pane: str) -> bool:
+    async def poll(self, pane: str) -> ConversationProjectionResult:
         """Feed a new pane capture; no-op if the pane hasn't changed since last poll.
 
         Returns ``True`` iff this poll produced real block changes (i.e. the pane
@@ -81,7 +96,7 @@ class ConversationProducer:
         """
         h = hashlib.sha256(pane.encode("utf-8", errors="replace")).hexdigest()
         if h == self._last_pane_hash:
-            return False
+            return ConversationProjectionResult(False)
         self._last_pane_hash = h
 
         # Refresh murder-owned user turns so markerless grammars can recognise
@@ -89,6 +104,22 @@ class ConversationProducer:
         self._acc.user_texts = conv_store.read_user_texts(self._db, self.conversation_id)
         self._acc.feed(pane)
         doc = self._acc.to_dict()
+        return await self.poll_document(doc)
+
+    async def poll_document(self, doc: dict[str, Any]) -> ConversationProjectionResult:
+        """Project one transcript document already retained as harness evidence.
+
+        Capture UUIDs identify evidence, not conversation semantics.  The
+        producer owns the canonical document identity so callers cannot make
+        cache/no-op behavior depend on an observation that happened to carry
+        identical content.
+        """
+
+        canonical = json.dumps(doc, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+        document_hash = hashlib.sha256(canonical.encode("utf-8", errors="replace")).hexdigest()
+        if document_hash == self._last_document_hash:
+            return ConversationProjectionResult(False)
+        self._last_document_hash = document_hash
         self.last_state = doc.get("state")
 
         _merged, changes = conv_store.project_parsed_doc_with_changes(
@@ -100,7 +131,7 @@ class ConversationProducer:
         # Off-hot-path condensed summarization: account sealed intermediate
         # blocks and dispatch any ready chunk via create_task (no await here).
         self._observe_for_summary(changes, str(self.last_state or "working"))
-        return bool(changes)
+        return ConversationProjectionResult(bool(changes), tuple(changes))
 
     def _observe_for_summary(
         self,

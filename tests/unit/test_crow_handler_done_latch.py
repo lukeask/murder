@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -21,8 +22,9 @@ from murder.config import CrowHandlerConfig
 from murder.llm.harnesses.claude_code import ClaudeCodeAdapter
 from murder.runtime.agents.crow_handler import CrowHandler
 from murder.runtime.orchestration.outcome import TicketOutcomeService
-from murder.verdict.completion.coordinator import CompletionCoordinator
 from murder.state.persistence.schema import get_db, init_db
+from murder.state.persistence.tickets import get_ticket_status
+from murder.verdict.completion.coordinator import CompletionCoordinator
 from murder.work.tickets.status import TicketStatus
 
 # A claude_code assistant turn ending in a standalone `>>> DONE` line. The
@@ -104,9 +106,17 @@ def _real_coordinator(db, tmp_path: Path) -> CompletionCoordinator:
 
 
 def _ticket_status(db) -> str | None:
-    from murder.state.persistence.tickets import get_ticket_status
-
     return get_ticket_status(db, "t001")
+
+
+def _publish_frame(handler: CrowHandler, pane: str) -> None:
+    transcript = handler.harness.parse_transcript_doc(pane)
+    handler.runtime.get_crow.return_value = SimpleNamespace(
+        latest_ingested_frame=SimpleNamespace(
+            frame=SimpleNamespace(raw_text=pane),
+            evidence=(SimpleNamespace(payload={"transcript": transcript}),),
+        )
+    )
 
 
 def test_done_in_prior_beat_still_completes_when_marker_scrolls_out(db, fake_tmux, tmp_path):
@@ -116,7 +126,7 @@ def test_done_in_prior_beat_still_completes_when_marker_scrolls_out(db, fake_tmu
     handler = _make_handler(db, tmp_path, coordinator)
 
     # Beat 1: DONE is visible → latch + complete → ticket transitions to done.
-    fake_tmux.queue_pane(PANE_WITH_DONE)
+    _publish_frame(handler, PANE_WITH_DONE)
     asyncio.run(handler.tick())
 
     assert handler._done_latched is True
@@ -125,8 +135,7 @@ def test_done_in_prior_beat_still_completes_when_marker_scrolls_out(db, fake_tmu
 
     # Beat 2: the marker has scrolled out, but completion already succeeded and
     # must NOT re-run. (Latch stays terminal; no second handle_done.)
-    fake_tmux.reset_queue()
-    fake_tmux.queue_pane(PANE_DONE_SCROLLED_OUT)
+    _publish_frame(handler, PANE_DONE_SCROLLED_OUT)
     asyncio.run(handler.tick())
     assert _ticket_status(db) == TicketStatus.DONE.value
 
@@ -140,8 +149,7 @@ def test_completion_fires_exactly_once_across_repeated_ticks(db, fake_tmux, tmp_
     handler = _make_handler(db, tmp_path, coordinator)
 
     for _ in range(4):
-        fake_tmux.reset_queue()
-        fake_tmux.queue_pane(PANE_WITH_DONE)
+        _publish_frame(handler, PANE_WITH_DONE)
         asyncio.run(handler.tick())
 
     spy.assert_awaited_once()
@@ -161,7 +169,7 @@ def test_latch_set_even_on_idle_hash_stable_beat(db, fake_tmux, tmp_path):
     # is irrelevant to the latch path; we assert the latch fires regardless).
     handler._idle_cached = True
 
-    fake_tmux.queue_pane(PANE_WITH_DONE)
+    _publish_frame(handler, PANE_WITH_DONE)
     asyncio.run(handler.tick())
 
     assert handler._done_latched is True

@@ -19,6 +19,7 @@ from murder.config import CrowHandlerConfig
 from murder.llm.harnesses.claude_code import ClaudeCodeAdapter
 from murder.runtime.agents.crow_handler import CrowHandler
 from murder.runtime.orchestration.outcome import TicketOutcomeService
+from murder.state.persistence.conversation import project_parsed_doc_with_changes
 from murder.state.persistence.schema import get_db, init_db
 from murder.state.storage.paths import ticket_md
 
@@ -92,7 +93,16 @@ def test_note_lands_in_db_and_leaves_unified_ticket_untouched(handler, db, tmp_p
     tpath = _seed_ticket(db, tmp_path)
     before = tpath.read_bytes()
 
-    asyncio.run(handler._orchestration_tick(PANE_WITH_NOTE))
+    _, changes = project_parsed_doc_with_changes(
+        db,
+        "crow-t001",
+        {
+            "harness": "claude_code",
+            "state": "awaiting_input",
+            "segments": [{"type": "assistant", "phase": "final", "text": PANE_WITH_NOTE}],
+        },
+    )
+    asyncio.run(handler.observe_conversation_changes(changes))
 
     # The note is durable in the events audit log...
     rows = db.execute(
@@ -104,3 +114,71 @@ def test_note_lands_in_db_and_leaves_unified_ticket_untouched(handler, db, tmp_p
 
     # ...and the unified ticket .md — frontmatter + checklist — is byte-for-byte intact.
     assert tpath.read_bytes() == before
+
+
+def test_projected_assistant_messages_emit_markers_once_each(handler, db, tmp_path) -> None:
+    """Stable frames replay nothing; a distinct assistant block remains distinct."""
+    _seed_ticket(db, tmp_path)
+    marker = ">>> ASK: which port should I use?\n>>> DONE"
+    first_doc = {
+        "harness": "claude_code",
+        "state": "awaiting_input",
+        "segments": [{"type": "assistant", "phase": "final", "text": marker}],
+    }
+    _, first = project_parsed_doc_with_changes(db, "crow-t001", first_doc)
+    asyncio.run(handler.observe_conversation_changes(first))
+    _, unchanged = project_parsed_doc_with_changes(db, "crow-t001", first_doc)
+    asyncio.run(handler.observe_conversation_changes(unchanged))
+
+    second_doc = {
+        **first_doc,
+        "segments": [
+            *first_doc["segments"],
+            {"type": "assistant", "phase": "final", "text": marker},
+        ],
+    }
+    _, second = project_parsed_doc_with_changes(db, "crow-t001", second_doc)
+    asyncio.run(handler.observe_conversation_changes(second))
+
+    question_count = 2
+    assert (
+        db.execute("SELECT COUNT(*) FROM events WHERE type = 'question'").fetchone()[0]
+        == question_count
+    )
+
+
+def test_growing_assistant_message_emits_each_completed_marker_once(handler, db, tmp_path) -> None:
+    _seed_ticket(db, tmp_path)
+    first_text = ">>> ASK: first question\n>>> NOTE: first note\n>>> END"
+    working_doc = {
+        "harness": "claude_code",
+        "state": "working",
+        "segments": [{"type": "assistant", "phase": "intermediate", "text": first_text}],
+    }
+    _, first = project_parsed_doc_with_changes(db, "crow-t001", working_doc)
+    asyncio.run(handler.observe_conversation_changes(first))
+    _, unchanged = project_parsed_doc_with_changes(db, "crow-t001", working_doc)
+    asyncio.run(handler.observe_conversation_changes(unchanged))
+
+    grown_text = first_text + "\n>>> ASK: second question\n>>> DONE"
+    grown_doc = {
+        **working_doc,
+        "segments": [{"type": "assistant", "phase": "intermediate", "text": grown_text}],
+    }
+    _, grown = project_parsed_doc_with_changes(db, "crow-t001", grown_doc)
+    asyncio.run(handler.observe_conversation_changes(grown))
+    sealed_doc = {
+        **grown_doc,
+        "state": "awaiting_input",
+        "segments": [{"type": "assistant", "phase": "final", "text": grown_text}],
+    }
+    _, sealed = project_parsed_doc_with_changes(db, "crow-t001", sealed_doc)
+    asyncio.run(handler.observe_conversation_changes(sealed))
+
+    question_count = 2
+    note_count = 1
+    assert (
+        db.execute("SELECT COUNT(*) FROM events WHERE type = 'question'").fetchone()[0]
+        == question_count
+    )
+    assert db.execute("SELECT COUNT(*) FROM events WHERE type = 'note'").fetchone()[0] == note_count

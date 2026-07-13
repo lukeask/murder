@@ -47,8 +47,12 @@ def handler(fake_tmux, tmp_path: Path) -> CrowHandler:
     )
 
 
-def test_interrupt_crow_sends_escape(handler, fake_tmux):
+def test_interrupt_crow_routes_through_verified_agent(handler, fake_tmux):
+    crow = MagicMock()
+    crow.interrupt_verified_generation = AsyncMock(return_value=True)
+    handler.runtime.get_crow.return_value = crow
+
     asyncio.run(handler.interrupt_crow())
-    send_calls = fake_tmux.calls_to("send_keys")
-    assert len(send_calls) == 1
-    assert send_calls[0][0] == (SESSION, "Escape")
+
+    crow.interrupt_verified_generation.assert_awaited_once_with()
+    assert fake_tmux.calls_to("send_keys") == []

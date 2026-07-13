@@ -70,7 +70,7 @@ class ServiceHost:
 
     # god-debt: the background loops (_run_projection_poll_loop,
     # _run_transit_poll_loop, _reattach_surviving_crows,
-    # _ensure_startup_rogue_safely, _discover_then_write_models_doc) are still
+    # _ensure_startup_rogue_safely, _persist_catalog_then_write_models_doc) are still
     # inline. Deferred follow-up (godslayer plan, Phase 1b): move them to a
     # BackgroundLoops collaborator owned by the host. Left inline because they
     # have no start/stop test net and are perpetual loops, so the extraction
@@ -91,7 +91,7 @@ class ServiceHost:
     _usage_poll_task: asyncio.Task[None] | None = field(default=None, repr=False)
     _projection_poll_task: asyncio.Task[None] | None = field(default=None, repr=False)
     _transit_poll_task: asyncio.Task[None] | None = field(default=None, repr=False)
-    _model_discovery_task: asyncio.Task[None] | None = field(default=None, repr=False)
+    _model_catalog_task: asyncio.Task[None] | None = field(default=None, repr=False)
     _reattach_task: asyncio.Task[None] | None = field(default=None, repr=False)
     _rpc_handlers: dict[str, RpcHandler] = field(default_factory=dict, repr=False)
     _service_session_name: str | None = field(default=None, repr=False)
@@ -173,9 +173,7 @@ class ServiceHost:
             orch = self.orchestrator
 
             async def _send_parse_error(agent_id: str, message: str) -> None:
-                await orch.send_agent_message(
-                    agent_id, message, None, spawn_if_needed=False
-                )
+                await orch.send_agent_message(agent_id, message, None, spawn_if_needed=False)
 
             self.runtime._sync.set_parse_error_notifier(_send_parse_error)
 
@@ -210,8 +208,8 @@ class ServiceHost:
         self._startup_rogue_task = asyncio.create_task(
             self._ensure_startup_rogue_safely(), name="startup-rogue-ensure"
         )
-        self._model_discovery_task = asyncio.create_task(
-            self._discover_then_write_models_doc(), name="startup-model-discovery"
+        self._model_catalog_task = asyncio.create_task(
+            self._persist_catalog_then_write_models_doc(), name="startup-model-catalog"
         )
         self._usage_poll_task = asyncio.create_task(
             run_service_usage_poll_loop(self.broker, self.runtime.db, str(self.runtime.run_id)),
@@ -254,14 +252,8 @@ class ServiceHost:
         except Exception:
             LOGGER.error("ensure_startup_rogue failed", exc_info=True)
 
-    async def _discover_then_write_models_doc(self) -> None:
-        """Discover harness models, persist to DB, then write ``HARNESSES_AND_MODELS.md``.
-
-        Chained (not two parallel tasks) so the startup doc reflects the
-        *discovered* model lists rather than racing discovery and capturing the
-        classvar fallback.  Discovery fires exactly once; results are written
-        to both the in-process cache and the SQLite DB.
-        """
+    async def _persist_catalog_then_write_models_doc(self) -> None:
+        """Persist configured model catalogs, then write the settings document."""
         db = self.runtime.db if self.runtime is not None else None
         await refresh_and_persist_harness_models(self.repo_root, db)
         write_harnesses_doc(self.repo_root)
@@ -307,9 +299,7 @@ class ServiceHost:
                                 exc_info=True,
                             )
                         else:
-                            LOGGER.debug(
-                                "projection tick failed for %s", agent.id, exc_info=True
-                            )
+                            LOGGER.debug("projection tick failed for %s", agent.id, exc_info=True)
                     else:
                         warned_agents.discard(agent.id)
                         # Boundary #5b: record the derived projection/live-state
@@ -353,9 +343,7 @@ class ServiceHost:
             async with sem:
                 try:
                     await self.orchestrator.reattach_crow(tid, crow_session)
-                    LOGGER.info(
-                        "reattached crow handler for %s (session %s)", tid, crow_session
-                    )
+                    LOGGER.info("reattached crow handler for %s (session %s)", tid, crow_session)
                 except Exception:
                     LOGGER.error("failed to reattach crow for %s", tid, exc_info=True)
 
@@ -386,14 +374,11 @@ class ServiceHost:
             runtime = self.runtime
             if runtime is not None:
                 try:
-                    fingerprint = await asyncio.to_thread(
-                        transit_fingerprint, self.repo_root
-                    )
+                    fingerprint = await asyncio.to_thread(transit_fingerprint, self.repo_root)
                 except Exception:
                     fingerprint = last_fingerprint
                     LOGGER.debug(
-                        "transit fingerprint tick failed for repo %s"
-                        " (keeping last fingerprint=%r)",
+                        "transit fingerprint tick failed for repo %s (keeping last fingerprint=%r)",
                         self.repo_root,
                         last_fingerprint,
                         exc_info=True,
@@ -435,11 +420,11 @@ class ServiceHost:
                 await self._transit_poll_task
             self._transit_poll_task = None
 
-        if self._model_discovery_task is not None:
-            self._model_discovery_task.cancel()
+        if self._model_catalog_task is not None:
+            self._model_catalog_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
-                await self._model_discovery_task
-            self._model_discovery_task = None
+                await self._model_catalog_task
+            self._model_catalog_task = None
 
         if self._reattach_task is not None:
             self._reattach_task.cancel()

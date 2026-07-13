@@ -390,6 +390,30 @@ class TmuxFrameEvent(_BaseEvent):
     frame: str
 
 
+class HarnessDecisionRequestEvent(_BaseEvent):
+    """Durable external-decision request projected from verified evidence."""
+
+    type: Literal["harness.decision.request"] = "harness.decision.request"
+    record_family: ClassVar[str] = "decision_records"
+    decision_request_id: str
+    decision_kind: Literal["question", "permission"]
+    request_identity: str
+    observation_revision: tuple[int, int, int]
+    request: dict[str, Any]
+
+
+class HarnessDecisionResponseEvent(_BaseEvent):
+    """Recorded user/policy choice, persisted before verified execution."""
+
+    type: Literal["harness.decision.response"] = "harness.decision.response"
+    record_family: ClassVar[str] = "decision_records"
+    decision_request_id: str
+    decision_kind: Literal["question", "permission"]
+    request_identity: str
+    response: dict[str, Any]
+    decided_by: str
+
+
 # --- Discriminated union of inner events ------------------------------------
 
 BusEvent = Annotated[
@@ -410,7 +434,9 @@ BusEvent = Annotated[
     | UsageResetEvent
     | ConversationBlockEvent
     | ConversationStateEvent
-    | TmuxFrameEvent,
+    | TmuxFrameEvent
+    | HarnessDecisionRequestEvent
+    | HarnessDecisionResponseEvent,
     Field(discriminator="type"),
 ]
 
@@ -691,6 +717,8 @@ __all__ = [
     "ConversationBlockEvent",
     "ConversationStateEvent",
     "TmuxFrameEvent",
+    "HarnessDecisionRequestEvent",
+    "HarnessDecisionResponseEvent",
     "BusEvent",
     "AgentEvent",
     "BUS_EVENT_ADAPTER",

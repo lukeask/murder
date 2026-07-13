@@ -176,7 +176,7 @@ def test_set_schedule_at_updates_ticket_timestamp(repo_root: Path) -> None:
     ],
     ids=["runtime_picker_failure", "idle_timeout"],
 )
-def test_codex_rogue_keeps_startup_session_on_startup_failure(
+def test_codex_rogue_reaps_session_on_startup_failure(
     repo_root: Path,
     monkeypatch: pytest.MonkeyPatch,
     error_message: str,
@@ -209,15 +209,12 @@ def test_codex_rogue_keeps_startup_session_on_startup_failure(
     )
     orch = Orchestrator(rt)
 
-    agent_id = asyncio.run(orch.spawn_rogue("codex", "gpt-5.4-mini"))
+    with pytest.raises(RuntimeError, match=error_message):
+        asyncio.run(orch.spawn_rogue("codex", "gpt-5.4-mini"))
 
-    assert agent_id in agents
-    assert reaped == []
-    agent = agents[agent_id]
-    # _first_send_idle_gate_pending is the only observable that the session is
-    # held open awaiting a manual first send rather than being torn down.
-    assert agent.harness_session._first_send_idle_gate_pending is True  # noqa: SLF001
-    rt.sync_agent.assert_called_once()
+    assert len(agents) == 1
+    assert reaped == list(agents)
+    rt.sync_agent.assert_not_called()
 
 
 def test_transition_done_heals_ready_status(repo_root: Path) -> None:

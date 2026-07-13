@@ -72,21 +72,20 @@ class CollaboratorAgent(HarnessBackedAgent):
         if not start_result.ok:
             await self._fail_startup(start_result.message or "collaborator startup failed")
             raise TimeoutError(start_result.message or "collaborator startup failed")
+        await self.initialize_verified_harness_control()
+        model_result = await self.select_verified_model(self.startup_model, self.startup_effort)
+        if not model_result.ok:
+            message = model_result.message or "verified collaborator model selection failed"
+            await self._fail_startup(message)
+            raise RuntimeError(message)
         await self._sample_live_usage_on_startup()
-        send_result = await self.harness_session.send_prompt(brief)
+        send_result = await self.send_verified_prompt(brief, murder_owned=True)
         if not send_result.ok:
             message = send_result.message or "collaborator startup prompt failed"
             await self._fail_startup(message)
             raise RuntimeError(message)
-        # The brief send returns as soon as the keystrokes are delivered — the
-        # harness is now *working on the brief*, not idle. Re-arm the first-send
-        # idle gate so the user's first real message (delivered by the worker
-        # right after ensure_collaborator() returns) waits for the pane to come
-        # back to input-ready instead of landing in a busy harness, where the
-        # text sits unsubmitted and never runs as a turn. This mirrors the Crow
-        # path's deliver-only-when-idle guarantee
-        # (HarnessBackedAgent.queue_message).
-        self.harness_session.require_first_send_idle_gate()
+        # The verified controller waits for an observed actionable composer;
+        # there is no procedural first-send gate to re-arm after the brief.
         # If the harness binary launched but then exited (e.g. an unanswered
         # interactive prompt, a crash, or a missing/broken install), the tmux
         # session is already gone — say so plainly instead of leaving the pane
@@ -128,7 +127,7 @@ class CollaboratorAgent(HarnessBackedAgent):
         await self._finalize_conversation_on_stop(kill_session=kill_session, failed=failed)
         if kill_session:
             with contextlib.suppress(Exception):
-                await self.harness_session.interrupt()
+                await self.interrupt_verified_generation()
             with contextlib.suppress(Exception):
                 await tmux.kill_session(self.session)
         self.status = AgentStatus.FAILED if failed else AgentStatus.DONE
@@ -136,4 +135,4 @@ class CollaboratorAgent(HarnessBackedAgent):
             self.runtime.sync_agent(self)
 
     async def send(self, msg: str) -> SimpleResult[None]:
-        return await self.harness_session.send_prompt(msg)
+        return await self.send_verified_prompt(msg)

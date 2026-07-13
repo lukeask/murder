@@ -50,6 +50,7 @@ from murder.observability.logging_setup import (
 )
 from murder.llm.harnesses.versioning import HarnessVersionRegistry
 from murder.runtime.agents.events import AgentEventSink, LoggingAgentEventSink
+from murder.runtime.orchestration.structured_decisions import StructuredDecisionRouter
 from murder.runtime.terminal import tmux
 from murder.state.persistence.agents import (
     set_agent_status as _db_set_agent_status,
@@ -126,6 +127,9 @@ class Runtime:
         set_current_advanced_log(self.advanced_log)
         # The recorder's bus subscription (only when advanced logging is on).
         self._recorder_sub: SubscriptionHandle | None = None
+        # Durable observation→external-decision→verified-execution router.
+        # It owns no policy and is initialized only once the persisted bus exists.
+        self.structured_decisions: Any | None = None
 
     async def __aenter__(self) -> Runtime:
         await self.start()
@@ -205,6 +209,7 @@ class Runtime:
                     )
                 )
             self.bus = Bus(self.run_id, self.db)
+            self.structured_decisions = StructuredDecisionRouter(self)
             # The flight recorder is a normal bus SUBSCRIBER (plan §2.5.A): when
             # on, it captures EVERY event (filter=None) and routes each to its
             # record_family table. Registered before any sync task spawns so no
@@ -249,6 +254,7 @@ class Runtime:
             self.bus = None
             self.run_id = None
             self._sync = None
+            self.structured_decisions = None
             if self._lock_fd is not None:
                 with contextlib.suppress(Exception):
                     release_flock(self._lock_fd)
@@ -295,6 +301,7 @@ class Runtime:
         self.report_sync = None
         self.documents = DocumentAccess(self.repo_root)
         self.bus = None
+        self.structured_decisions = None
         self.run_id = None
         if self._lock_fd is not None:
             release_flock(self._lock_fd)

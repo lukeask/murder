@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from murder.runtime.agents.base import Daemon, AgentRole, AgentStatus, TRANSCRIPT_SCROLLBACK_LINES
+from murder.runtime.agents.base import Daemon, AgentRole, AgentStatus
 from murder.config import PlannerConfig
 from murder.llm.harnesses.base import HarnessAdapter
 
@@ -35,6 +35,11 @@ class PendingAsk:
     ticket_id: str
     ask: str
     crow_session: str
+    # A ticket may be asked more than once while a planner send is in flight.
+    # This is the identity of one such registration, not a persisted ticket
+    # version.  It makes failure compensation conditional on the request that
+    # actually failed.
+    generation: int
 
 
 class PlanningHandler(Daemon):
@@ -65,6 +70,7 @@ class PlanningHandler(Daemon):
         # One in-flight ask per ticket. If the same crow re-asks while a prior
         # ask is pending, the new ask replaces the old pending entry.
         self._pending: dict[str, PendingAsk] = {}
+        self._next_pending_generation = 0
         # The pane may contain the same answer on multiple ticks; route each
         # ticket's answer once.
         self._routed: set[str] = set()
@@ -113,10 +119,8 @@ class PlanningHandler(Daemon):
         self._start_loop()
 
     async def _loop(self) -> None:
-        # Startup grace: a freshly-spawned planner pane lags behind the handler;
-        # its first capture_pane can fail (or read empty) for a beat. Sleeping
-        # once before the first tick keeps that boot pane-lag from counting
-        # toward the 5-miss escalation. Mid-life misses are unaffected.
+        # Startup grace lets the verified observer publish the planner's first
+        # persisted frame before this companion begins consuming it.
         if self.config.startup_grace_s > 0:
             await asyncio.sleep(self.config.startup_grace_s)
         while self.status == AgentStatus.RUNNING:
@@ -233,25 +237,87 @@ class PlanningHandler(Daemon):
                 f"Please wrap your reply as `>>> ANSWER[{ticket_id}]: <reply>` "
                 "so the system can extract it."
             )
-        result = await self.harness.send_prompt(self.planner_session, body)
+        get_agent = getattr(self.runtime, "get_agent", None)
+        planner = get_agent(f"planner-{self.plan_name}") if callable(get_agent) else None
+        if planner is None:
+            raise RuntimeError(f"no live planner for plan {self.plan_name}")
+        previous, was_routed, pending = self._register_pending_ask(
+            ticket_id, ask, crow_session
+        )
+        try:
+            result = await planner.send(body)
+        except Exception:
+            self._restore_pending_after_failed_delivery(
+                pending, previous, was_routed
+            )
+            raise
         if not result.ok:
+            self._restore_pending_after_failed_delivery(
+                pending, previous, was_routed
+            )
             raise RuntimeError(result.message or "planner message delivery failed")
-        self._pending[ticket_id] = PendingAsk(ticket_id, ask, crow_session)
-        # Clear any prior routed marker for this ticket so a fresh answer for
-        # the same ticket can be picked up.
+
+    def _register_pending_ask(
+        self, ticket_id: str, ask: str, crow_session: str
+    ) -> tuple[PendingAsk | None, bool, PendingAsk]:
+        """Install routing state before crossing the planner-send boundary.
+
+        The returned old entry is deliberately kept only by the caller that
+        installed the replacement.  That caller may restore it after a failed
+        delivery, but only if no later request superseded its generation.
+        """
+        self._next_pending_generation += 1
+        pending = PendingAsk(
+            ticket_id=ticket_id,
+            ask=ask,
+            crow_session=crow_session,
+            generation=self._next_pending_generation,
+        )
+        previous = self._pending.get(ticket_id)
+        was_routed = ticket_id in self._routed
+        self._pending[ticket_id] = pending
+        # A new question is entitled to a new answer for this ticket.
         self._routed.discard(ticket_id)
+        return previous, was_routed, pending
+
+    def _restore_pending_after_failed_delivery(
+        self,
+        pending: PendingAsk,
+        previous: PendingAsk | None,
+        was_routed: bool,
+    ) -> None:
+        """Undo *this* failed registration without disturbing a replacement."""
+        if self._pending.get(pending.ticket_id) != pending:
+            return
+        if previous is None:
+            del self._pending[pending.ticket_id]
+        else:
+            self._pending[pending.ticket_id] = previous
+        if was_routed:
+            self._routed.add(pending.ticket_id)
+        else:
+            self._routed.discard(pending.ticket_id)
+
+    def _complete_pending_ask(self, pending: PendingAsk) -> bool:
+        """Complete a routed ask iff it has not been superseded while awaiting."""
+        if self._pending.get(pending.ticket_id) != pending:
+            return False
+        self._routed.add(pending.ticket_id)
+        del self._pending[pending.ticket_id]
+        return True
 
     async def tick(self) -> None:
-        from murder.runtime.terminal import tmux
+        get_agent = getattr(self.runtime, "get_agent", None)
+        planner = get_agent(f"planner-{self.plan_name}") if callable(get_agent) else None
+        ingested = getattr(planner, "latest_ingested_frame", None) if planner is not None else None
+        pane = getattr(getattr(ingested, "frame", None), "raw_text", None)
+        if not isinstance(pane, str):
+            return
+        from murder.runtime.orchestration.verified_signals import VerifiedOrchestrationSignals
 
-        pane = await tmux.capture_pane(self.planner_session, lines=TRANSCRIPT_SCROLLBACK_LINES)
+        signals = VerifiedOrchestrationSignals.from_ingested(ingested)
 
-        # Transcript projection of the planner's pane is driven by the
-        # service-owned projection poll loop (ServiceHost._run_projection_poll_loop
-        # -> PlanningAgent.project_once), not here; this handler only relays crow
-        # ASKs and routes ANSWER markers.
-
-        for ticket_id, reply in self.harness.detect_answers(pane):
+        for ticket_id, reply in signals.answers:
             if ticket_id in self._routed:
                 continue
             entry = self._pending.get(ticket_id)
@@ -262,10 +328,9 @@ class PlanningHandler(Daemon):
             if crow is not None:
                 with contextlib.suppress(Exception):
                     await crow.send(reply)
-            self._routed.add(ticket_id)
-            del self._pending[ticket_id]
+            self._complete_pending_ask(entry)
 
-        await self._scan_carve_forms(pane)
+        await self._scan_carve_forms(signals.assistant_text)
 
     async def _scan_carve_forms(self, pane: str) -> None:
         """Detect the planner's YAML carve forms and enqueue apply-carve-ready.
@@ -311,9 +376,7 @@ class PlanningHandler(Daemon):
         # SAME form collapses (unique index drops the duplicate), while an edited
         # carve form for the same ticket re-enqueues. The orchestrator apply is
         # itself idempotent against an already-ready row.
-        idempotency_key = (
-            f"ticket.apply_carve_ready:{self.runtime.run_id}:{ticket_id}:{form_hash}"
-        )
+        idempotency_key = f"ticket.apply_carve_ready:{self.runtime.run_id}:{ticket_id}:{form_hash}"
         enqueue_command(
             self.runtime.db,
             command_id=command_id,

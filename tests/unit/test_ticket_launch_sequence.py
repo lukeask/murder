@@ -1,29 +1,29 @@
 """Tests for ticket and rogue crow launch sequencing invariants.
 
-COOKBOOK = canonical launch ordering: model before brief, trust before model,
-           effort defaulting, rogue-never-briefed.
-EDGE CASES = rejection detection, brief-paste failure, codex picker bypass,
-             cursor set_model rejection.
+COOKBOOK = canonical launch ordering: verified control before brief,
+           rogue-never-briefed.
+EDGE CASES = brief-paste failure and no legacy model/prompt ownership.
 """
 
 from __future__ import annotations
 
 import asyncio
+from datetime import timedelta
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 import murder.runtime.terminal.tmux as tmux_mod
-from murder.llm.harnesses.antigravity import AntigravityAdapter
+from murder.llm.harness_control.runtime.prompt_driver import PromptDriverPolicy
 from murder.llm.harnesses.base import HarnessSession
 from murder.llm.harnesses.claude_code import ClaudeCodeAdapter
-from murder.llm.harnesses.codex import CodexAdapter
 from murder.llm.harnesses.cursor import CursorAdapter
 from murder.llm.harnesses.models import HarnessStartSpec
-from murder.llm.harnesses.results import fail_result, ok_result
 from murder.runtime.agents.base import AgentStatus
 from murder.runtime.agents.crow import CrowAgent
+from murder.state.persistence.schema import get_db, init_db
 from tests.support.fake_tmux import FakeTmux
 
 _FIXTURES = Path(__file__).parent.parent / "fixtures" / "harness_panes"
@@ -36,8 +36,6 @@ def _load(name: str) -> str:
 CC_IDLE = _load("cc_idle.txt")
 CC_TRUST = _load("cc_trust_dialog.txt")
 CURSOR_IDLE = _load("cursor_idle.txt")
-# Idle pane with no parseable active-model status line, so cursor's set_model
-# verification falls back to curated membership and confirms the request.
 CURSOR_IDLE_GPT = CURSOR_IDLE.replace("Composer 2.5", "GPT-5.5")
 CURSOR_FILTERED_GPT = """
 Available models
@@ -51,6 +49,7 @@ Available models
  Type to filter • Enter to select • Tab to edit
 """
 CODEX_IDLE = _load("codex_idle.txt")
+MINIMUM_EVIDENCE_RECORDS = 3
 
 
 @pytest.fixture
@@ -79,6 +78,45 @@ def _send_texts(ft: FakeTmux) -> list[str]:
     return [args[1] for args, _ in ft.calls_to("send_keys")]
 
 
+def _verified_runtime(tmp_path: Path) -> SimpleNamespace:
+    connection = get_db(tmp_path / "state.db")
+    init_db(connection)
+
+    async def no_sleep(_: float) -> None:
+        return None
+
+    return SimpleNamespace(
+        db=connection,
+        bus=None,
+        run_id=None,
+        sync_agent=MagicMock(),
+        verified_prompt_driver_policy=PromptDriverPolicy(
+            observation_interval=timedelta(), maximum_observations=12
+        ),
+        verified_prompt_driver_sleep=no_sleep,
+    )
+
+
+def _script_verified_claude_prompt(ft: FakeTmux, text: str) -> None:
+    visible = CC_IDLE.replace('❯\xa0Try "create a util logging.py that..."', f"❯ {text}")
+    ft.queue_pane_after_effect(visible, effect="paste_buffer_literal", effect_text=text)
+    ft.queue_pane_after_effect(CC_IDLE, effect="send_keys", effect_text="Enter")
+
+
+def _script_visible_payload_without_acknowledgment(ft: FakeTmux, text: str) -> None:
+    visible = CC_IDLE.replace('❯\xa0Try "create a util logging.py that..."', f"❯ {text}")
+    ft.queue_pane_after_effect(visible, effect="paste_buffer_literal", effect_text=text)
+
+
+def _assert_verified_prompt_trace(connection, ft: FakeTmux) -> None:
+    assert connection.execute("SELECT COUNT(*) FROM harness_control_operations").fetchone()[0] == 1
+    assert (
+        connection.execute("SELECT COUNT(*) FROM harness_control_evidence").fetchone()[0]
+        >= MINIMUM_EVIDENCE_RECORDS
+    )
+    enters = [args for args, _ in ft.calls_to("send_keys") if args[1] == "Enter"]
+    assert len(enters) == 1
+
 # ============================================================
 # === COOKBOOK ===============================================
 # ============================================================
@@ -86,29 +124,29 @@ def _send_texts(ft: FakeTmux) -> list[str]:
 # ── 7.1 — ticket crow: model before brief ────────────────────────────────────
 
 
-def test_crow_agent_start_applies_model_before_brief(fake_tmux_launch: FakeTmux) -> None:
-    fake_tmux_launch.queue_pane(CURSOR_IDLE)
-    fake_tmux_launch.queue_pane(CURSOR_IDLE)
-    fake_tmux_launch.queue_pane(CURSOR_IDLE)
-    fake_tmux_launch.queue_pane(CURSOR_FILTERED_GPT)
-    fake_tmux_launch.queue_pane(CURSOR_IDLE_GPT)
+def test_crow_agent_start_submits_brief_through_verified_control(
+    fake_tmux_launch: FakeTmux, tmp_path: Path
+) -> None:
+    """Crow startup needs fresh acknowledgment, not a legacy send result."""
+
+    fake_tmux_launch.queue_pane(CC_IDLE)
+    brief = "implement the widget per ticket t001"
+    _script_verified_claude_prompt(fake_tmux_launch, brief)
+    runtime = _verified_runtime(tmp_path)
 
     agent = CrowAgent(
         agent_id="crow-t001",
         ticket_id="t001",
         session="crow-t001",
-        harness=CursorAdapter(startup_model="gpt-5.5"),
-        repo_root=Path("/tmp/test-repo"),
-        startup_model="gpt-5.5",
+        harness=ClaudeCodeAdapter(),
+        repo_root=tmp_path,
+        runtime=runtime,
     )
-    brief = "implement the widget per ticket t001"
 
     asyncio.run(agent.start(brief, {}))
 
-    texts = _send_texts(fake_tmux_launch)
-    model_idx = next(i for i, t in enumerate(texts) if t.startswith("/model"))
-    brief_idx = next(i for i, t in enumerate(texts) if brief in t)
-    assert model_idx < brief_idx
+    assert agent.status is AgentStatus.RUNNING
+    _assert_verified_prompt_trace(runtime.db, fake_tmux_launch)
     assert "create_session" in fake_tmux_launch.call_names()
 
 
@@ -127,106 +165,6 @@ def test_rogue_harness_start_never_sends_brief(fake_tmux_launch: FakeTmux) -> No
     assert not any(context_text in t for t in texts)
 
 
-# ── 7.4 — CC trust dismissed before /model ───────────────────────────────────
-
-
-def test_cc_trust_dialog_dismissed_before_model_command(fake_tmux_launch: FakeTmux) -> None:
-    fake_tmux_launch.queue_pane(CC_TRUST)
-    fake_tmux_launch.queue_pane(CC_TRUST)
-    fake_tmux_launch.queue_pane(CC_IDLE)
-
-    hs = HarnessSession(ClaudeCodeAdapter(), "cc-sess", Path("/tmp/repo"))
-
-    async def _spy_set_model(model: str, effort: str | None = None):
-        await tmux_mod.send_keys(hs.session, f"/model {model}", literal=True, enter=True)
-        return ok_result()
-
-    hs.set_model = _spy_set_model  # type: ignore[method-assign]
-
-    result = asyncio.run(
-        hs._configure_started_session(_fast_spec(startup_model="haiku"))  # noqa: SLF001
-    )
-
-    assert result.ok
-    texts = _send_texts(fake_tmux_launch)
-    assert "1" in texts
-    model_cmds = [i for i, t in enumerate(texts) if t.startswith("/model")]
-    assert model_cmds, "expected /model during configured startup"
-    assert texts.index("1") < model_cmds[0]
-
-
-# ── 7.5 — effort defaults and preservation ───────────────────────────────────
-
-
-def test_configure_session_defaults_effort_to_medium(fake_tmux_launch: FakeTmux) -> None:
-    fake_tmux_launch.queue_pane(CC_IDLE)
-    captured: dict[str, object] = {}
-
-    hs = HarnessSession(ClaudeCodeAdapter(), "claude-sess", Path("/tmp/repo"))
-
-    async def _spy_set_model(model: str, effort: str | None = None):
-        captured["effort"] = effort
-        return ok_result()
-
-    hs.set_model = _spy_set_model  # type: ignore[method-assign]
-
-    result = asyncio.run(
-        hs._configure_started_session(  # noqa: SLF001
-            _fast_spec(startup_model="gpt-5.5", startup_effort=None)
-        )
-    )
-
-    assert result.ok
-    assert captured["effort"] == "medium"
-
-
-def test_antigravity_configure_session_keeps_effort_unset_when_omitted(
-    fake_tmux_launch: FakeTmux,
-) -> None:
-    fake_tmux_launch.queue_pane(_load("agy_idle.txt"))
-    captured: dict[str, object] = {}
-
-    hs = HarnessSession(AntigravityAdapter(), "agy-sess", Path("/tmp/repo"))
-
-    async def _spy_set_model(model: str, effort: str | None = None):
-        captured["model"] = model
-        captured["effort"] = effort
-        return ok_result()
-
-    hs.set_model = _spy_set_model  # type: ignore[method-assign]
-
-    result = asyncio.run(
-        hs._configure_started_session(  # noqa: SLF001
-            _fast_spec(startup_model="gemini-3-1-pro", startup_effort=None)
-        )
-    )
-
-    assert result.ok
-    assert captured == {"model": "gemini-3-1-pro", "effort": None}
-
-
-def test_configure_session_preserves_explicit_effort(fake_tmux_launch: FakeTmux) -> None:
-    fake_tmux_launch.queue_pane(CC_IDLE)
-    captured: dict[str, object] = {}
-
-    hs = HarnessSession(ClaudeCodeAdapter(), "claude-sess", Path("/tmp/repo"))
-
-    async def _spy_set_model(model: str, effort: str | None = None):
-        captured["effort"] = effort
-        return ok_result()
-
-    hs.set_model = _spy_set_model  # type: ignore[method-assign]
-
-    result = asyncio.run(
-        hs._configure_started_session(  # noqa: SLF001
-            _fast_spec(startup_model="gpt-5.5", startup_effort="high")
-        )
-    )
-
-    assert result.ok
-    assert captured["effort"] == "high"
-
-
 # ============================================================
 # === EDGE CASES =============================================
 # ============================================================
@@ -234,117 +172,54 @@ def test_configure_session_preserves_explicit_effort(fake_tmux_launch: FakeTmux)
 # ── 7.3 — send_prompt failure after successful harness start ─────────────────
 
 
-def test_crow_agent_start_fails_when_brief_paste_fails(
-    fake_tmux_launch: FakeTmux, monkeypatch: pytest.MonkeyPatch
+def test_crow_agent_start_escalates_when_enter_lacks_fresh_acknowledgment(
+    fake_tmux_launch: FakeTmux, tmp_path: Path
 ) -> None:
+    """The startup path must not pretend that a successful Enter submitted."""
+
     fake_tmux_launch.queue_pane(CC_IDLE)
+    _script_visible_payload_without_acknowledgment(fake_tmux_launch, "ticket context")
+    runtime = _verified_runtime(tmp_path)
 
     agent = CrowAgent(
         agent_id="crow-t002",
         ticket_id="t002",
         session="crow-t002",
         harness=ClaudeCodeAdapter(),
-        repo_root=Path("/tmp/test-repo"),
+        repo_root=tmp_path,
+        runtime=runtime,
     )
-    sync = MagicMock()
-    agent.runtime = type("RT", (), {"sync_agent": sync})()
 
-    async def _fail_paste(_prompt: str):
-        return fail_result("paste boom")
-
-    monkeypatch.setattr(agent.harness_session, "send_prompt", _fail_paste)
-
-    with pytest.raises(RuntimeError, match="paste boom"):
+    with pytest.raises(RuntimeError, match="verified prompt submission escalated"):
         asyncio.run(agent.start("ticket context", {}))
 
     assert agent.status == AgentStatus.FAILED
-    sync.assert_called()
+    runtime.sync_agent.assert_called()
+    enters = [args for args, _ in fake_tmux_launch.calls_to("send_keys") if args[1] == "Enter"]
+    assert len(enters) == 1
 
 
-def test_crow_agent_send_propagates_failed_result(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_crow_agent_send_reports_verified_escalation_after_ambiguous_commit(
+    fake_tmux_launch: FakeTmux, tmp_path: Path
+) -> None:
+    """No adapter ``send_prompt`` seam remains to fake delivery success."""
+
+    fake_tmux_launch.queue_pane(CC_IDLE)
+    _script_visible_payload_without_acknowledgment(fake_tmux_launch, "hello")
+    runtime = _verified_runtime(tmp_path)
     agent = CrowAgent(
         agent_id="crow-t003",
         ticket_id="t003",
         session="crow-t003",
         harness=ClaudeCodeAdapter(),
-        repo_root=Path("/tmp/test-repo"),
+        repo_root=tmp_path,
+        runtime=runtime,
     )
-
-    async def _fail_send(_prompt: str):
-        return fail_result("delivery failed")
-
-    monkeypatch.setattr(agent.harness_session, "send_prompt", _fail_send)
+    asyncio.run(agent.initialize_verified_harness_control())
 
     result = asyncio.run(agent.send("hello"))
 
     assert not result.ok
-    assert result.message == "delivery failed"
-
-
-# ── 7.5 — codex startup model skips runtime picker ───────────────────────────
-
-
-def test_codex_startup_model_skips_runtime_picker(fake_tmux_launch: FakeTmux) -> None:
-    fake_tmux_launch.queue_pane(CODEX_IDLE)
-    hs = HarnessSession(CodexAdapter(), "codex-sess", Path("/tmp/repo"))
-
-    async def _spy_set_model(model: str, effort: str | None = None):
-        raise AssertionError(f"unexpected runtime selection for {model} {effort}")
-
-    hs.set_model = _spy_set_model  # type: ignore[method-assign]
-
-    result = asyncio.run(
-        hs._configure_started_session(  # noqa: SLF001
-            _fast_spec(startup_model="gpt-5.4-mini", startup_effort=None)
-        )
-    )
-
-    assert result.ok
-
-
-def test_codex_startup_nondefault_effort_drives_runtime_selection(
-    fake_tmux_launch: FakeTmux,
-) -> None:
-    # The launch --model flag selects the model but carries no effort, so a
-    # non-default startup effort must still run the runtime selection even
-    # though the model itself is already in place.
-    fake_tmux_launch.queue_pane(CODEX_IDLE)
-    hs = HarnessSession(CodexAdapter(), "codex-sess", Path("/tmp/repo"))
-    captured: dict[str, object] = {}
-
-    async def _spy_set_model(model: str, effort: str | None = None):
-        captured["model"] = model
-        captured["effort"] = effort
-        return ok_result()
-
-    hs.set_model = _spy_set_model  # type: ignore[method-assign]
-
-    result = asyncio.run(
-        hs._configure_started_session(  # noqa: SLF001
-            _fast_spec(startup_model="gpt-5.4-mini", startup_effort="high")
-        )
-    )
-
-    assert result.ok
-    assert captured == {"model": "gpt-5.4-mini", "effort": "high"}
-
-
-# ── 7.6 — Cursor set_model rejection detection ───────────────────────────────
-
-
-def test_cursor_set_model_returns_false_on_rejection(fake_tmux_launch: FakeTmux) -> None:
-    fake_tmux_launch.queue_pane("unknown model 'xyz' is not supported")
-
-    ok = asyncio.run(CursorAdapter().set_model("sess", "xyz"))
-
-    assert ok is False
-
-
-def test_cursor_set_model_returns_true_when_model_confirmed(fake_tmux_launch: FakeTmux) -> None:
-    # No conflicting active-model status line on the pane, so verification
-    # falls back to curated membership and confirms the requested model.
-    fake_tmux_launch.queue_pane(CURSOR_IDLE_GPT)
-
-    ok = asyncio.run(CursorAdapter().set_model("sess", "gpt-5.5"))
-
-    assert ok is True
+    assert result.message == "verified prompt submission escalated"
+    enters = [args for args, _ in fake_tmux_launch.calls_to("send_keys") if args[1] == "Enter"]
+    assert len(enters) == 1

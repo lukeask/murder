@@ -459,11 +459,15 @@ class Orchestrator:
             start_result = await agent.harness_session.start(start_spec)
             if not start_result.ok:
                 message = start_result.message or "harness startup failed"
-                if not self.harness_cfg.codex_startup_degraded_ok(
-                    harness_kind, startup_model, harness_adapter, message
-                ):
-                    raise RuntimeError(message)
-                agent.harness_session.require_first_send_idle_gate()
+                raise RuntimeError(message)
+            # Rogues bypass CrowAgent.start(), so they must bind the same
+            # verified observer/controller/actuator explicitly after tmux
+            # startup.  The old first-send gate was a procedural workaround;
+            # verified prompt delivery waits for current composer evidence.
+            await agent.initialize_verified_harness_control()
+            model_result = await agent.select_verified_model(startup_model, startup_effort)
+            if not model_result.ok:
+                raise RuntimeError(model_result.message or "verified rogue model selection failed")
             agent.status = AgentStatus.RUNNING
             self.rt.sync_agent(agent)
             # Rogues bypass CrowAgent.start(), so kick off transcript projection

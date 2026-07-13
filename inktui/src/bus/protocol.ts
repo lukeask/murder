@@ -295,6 +295,26 @@ export interface TmuxFrameEvent extends BaseEvent {
   frame: string;
 }
 
+/** A durable external-decision request projected from verified harness evidence. */
+export interface HarnessDecisionRequestEvent extends BaseEvent {
+  type: 'harness.decision.request';
+  decision_request_id: string;
+  decision_kind: 'question' | 'permission';
+  request_identity: string;
+  observation_revision: readonly [number, number, number];
+  request: Record<string, unknown>;
+}
+
+/** A recorded user/policy choice, persisted before verified execution. */
+export interface HarnessDecisionResponseEvent extends BaseEvent {
+  type: 'harness.decision.response';
+  decision_request_id: string;
+  decision_kind: 'question' | 'permission';
+  request_identity: string;
+  response: Record<string, unknown>;
+  decided_by: string;
+}
+
 /** Discriminated union of every server-pushed inner event. `type` is the discriminant. */
 export type BusEvent =
   | HeartbeatEvent
@@ -314,7 +334,9 @@ export type BusEvent =
   | UsageResetEvent
   | ConversationBlockEvent
   | ConversationStateEvent
-  | TmuxFrameEvent;
+  | TmuxFrameEvent
+  | HarnessDecisionRequestEvent
+  | HarnessDecisionResponseEvent;
 
 /** The string literal `type` discriminant of every {@link BusEvent}. */
 export type BusEventType = BusEvent['type'];

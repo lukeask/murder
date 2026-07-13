@@ -9,11 +9,13 @@ EDGE CASES = real failure modes: stale conversation cleared on restart,
 from __future__ import annotations
 
 import asyncio
+from datetime import timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 from murder.bus import ConversationBlockEvent
+from murder.llm.harness_control.runtime.prompt_driver import PromptDriverPolicy
 from murder.llm.harnesses.claude_code import ClaudeCodeAdapter
 from murder.llm.harnesses.results import fail_result
 from murder.runtime.agents.base import AgentStatus
@@ -25,26 +27,45 @@ from tests.support.fake_tmux import FakeTmux
 _FIXTURES = Path(__file__).parent.parent / "fixtures" / "harness_panes"
 CC_IDLE = (_FIXTURES / "cc_idle.txt").read_text(encoding="utf-8")
 CC_BUSY = (_FIXTURES / "cc_busy.txt").read_text(encoding="utf-8")
+PROMPT_COUNT = 2
 
 
-def test_start_rearms_idle_gate_so_first_user_send_waits_for_input(
-    fake_tmux: FakeTmux,
-    tmp_path: Path,
-) -> None:
-    """Regression: the brief send returns while the harness is still working on
-    the brief. The first real user message (delivered by the worker right after
-    ensure_collaborator() returns) must wait for the pane to come back to
-    input-ready instead of landing keystrokes in a busy harness — where the text
-    would sit unsubmitted and never run as a turn (the observed
-    collaborator-never-runs-a-turn bug). Mirrors the Crow deliver-when-idle gate.
-    """
+async def _no_sleep(_: float) -> None:
+    """Keep reconciliation traces deterministic without making them timing tests."""
 
+
+def _runtime(conn: object, *, bus: object | None = None) -> SimpleNamespace:
+    return SimpleNamespace(
+        db=conn,
+        bus=bus,
+        run_id="run-1" if bus is not None else None,
+        sync_agent=MagicMock(),
+        verified_prompt_driver_policy=PromptDriverPolicy(
+            observation_interval=timedelta(), maximum_observations=12
+        ),
+        verified_prompt_driver_sleep=_no_sleep,
+    )
+
+
+def _composer_visible(text: str) -> str:
+    return CC_IDLE.replace('❯\xa0Try "create a util logging.py that..."', f"❯ {text}")
+
+
+def _script_acknowledged_submission(fake_tmux: FakeTmux, text: str) -> None:
+    """Acknowledge only after the actuator has emitted the semantic commit."""
+
+    fake_tmux.queue_pane_after_effect(
+        _composer_visible(text), effect="paste_buffer_literal", effect_text=text
+    )
+    fake_tmux.queue_pane_after_effect(CC_IDLE, effect="send_keys", effect_text="Enter")
+
+
+def _new_agent(
+    *, fake_tmux: FakeTmux, tmp_path: Path, conn: object, bus: object | None = None
+) -> tuple[CollaboratorAgent, SimpleNamespace]:
     fake_tmux.set_session_exists(True)
-    # Boot: every poll during start() sees an idle pane.
     fake_tmux.queue_pane(CC_IDLE)
-    conn = get_db(tmp_path / "state.db")
-    init_db(conn)
-    runtime = SimpleNamespace(db=conn, bus=None, run_id=None, sync_agent=MagicMock())
+    runtime = _runtime(conn, bus=bus)
     agent = CollaboratorAgent(
         agent_id="collaborator-0",
         session="murder_test_collaborator",
@@ -52,36 +73,93 @@ def test_start_rearms_idle_gate_so_first_user_send_waits_for_input(
         repo_root=tmp_path,
         runtime=runtime,
     )
+    return agent, runtime
+
+
+def test_start_and_followup_use_verified_prompt_control(
+    fake_tmux: FakeTmux,
+    tmp_path: Path,
+) -> None:
+    """Messages use persisted verified control rather than adapter send_prompt."""
+
+    conn = get_db(tmp_path / "state.db")
+    init_db(conn)
+    agent, runtime = _new_agent(fake_tmux=fake_tmux, tmp_path=tmp_path, conn=conn)
+    _script_acknowledged_submission(fake_tmux, "fresh brief")
 
     asyncio.run(agent.start("fresh brief", {}))
 
-    # The gate must be re-armed after the brief: the next send is a *first* send
-    # again and is obligated to wait for input-ready.
-    assert agent.harness_session._first_send_idle_gate_pending is True  # noqa: SLF001
-
-    # Now the harness is busy with the brief, then returns to idle. The user send
-    # must poll the busy pane (and NOT deliver) until the idle pane appears.
-    fake_tmux.reset_queue()
-    fake_tmux.queue_pane(CC_BUSY)  # first input-ready poll: still working
-    fake_tmux.queue_pane(CC_IDLE)  # second poll: back to input-ready
-
-    send_calls_before = len(fake_tmux.calls_to("send_keys"))
+    _script_acknowledged_submission(fake_tmux, "real user question")
     result = asyncio.run(agent.send("real user question"))
 
     assert result.ok
-    # The user text was delivered exactly once, only after the gate cleared.
-    user_sends = [
-        args for args, _kw in fake_tmux.calls_to("send_keys") if args[1] == "real user question"
-    ]
-    assert len(user_sends) == 1
-    # And the gate forced at least one input-ready poll before delivery: more
-    # capture_pane calls than a gateless straight-through send would make.
-    assert len(fake_tmux.calls_to("send_keys")) == send_calls_before + 1
-    assert any(
-        name == "capture_pane" for name, *_ in fake_tmux.calls
-    ), "gate must poll the pane for input-ready before delivering"
-    # Gate is consumed by this delivery (one-shot).
-    assert agent.harness_session._first_send_idle_gate_pending is False  # noqa: SLF001
+    enters = [args for args, _kw in fake_tmux.calls_to("send_keys") if args[1] == "Enter"]
+    assert len(enters) == PROMPT_COUNT
+    assert not hasattr(agent.harness_session, "send_prompt")
+
+    # The raw terminal fact, broad parser evidence, semantic operation, and
+    # emitted action are all durable.  A tmux Enter alone is never the result.
+    assert conn.execute("SELECT COUNT(*) FROM harness_control_frames").fetchone()[0] > 0
+    assert conn.execute("SELECT COUNT(*) FROM harness_control_evidence").fetchone()[0] > 0
+    assert (
+        conn.execute(
+            "SELECT COUNT(*) FROM harness_control_operations WHERE capability = 'submit_prompt'"
+        ).fetchone()[0]
+        == PROMPT_COUNT
+    )
+    assert (
+        conn.execute(
+            "SELECT COUNT(*) FROM harness_control_actions "
+            "WHERE semantic_action_type LIKE '%CommitPromptSubmission' "
+            "AND emission_status = 'EMITTED'"
+        ).fetchone()[0]
+        == PROMPT_COUNT
+    )
+    calls = fake_tmux.calls
+    final_enter = max(
+        index
+        for index, (name, args, _kwargs) in enumerate(calls)
+        if name == "send_keys" and args[1] == "Enter"
+    )
+    assert any(name == "capture_pane" for name, _args, _kwargs in calls[final_enter + 1 :])
+    runtime.sync_agent.assert_called_with(agent)
+
+
+def test_collaborator_send_escalates_when_enter_has_no_later_acknowledgment(
+    fake_tmux: FakeTmux,
+    tmp_path: Path,
+) -> None:
+    """Commit emission remains ambiguous when only pre-Enter evidence is visible."""
+
+    conn = get_db(tmp_path / "state.db")
+    init_db(conn)
+    agent, _runtime_scope = _new_agent(
+        fake_tmux=fake_tmux, tmp_path=tmp_path, conn=conn
+    )
+    _script_acknowledged_submission(fake_tmux, "fresh brief")
+    asyncio.run(agent.start("fresh brief", {}))
+
+    # The fake updates for insertion but deliberately not for Enter.  The
+    # controller must observe, then escalate; it must not replay the unsafe
+    # commit action to make progress.
+    fake_tmux.queue_pane_after_effect(
+        _composer_visible("ambiguous question"),
+        effect="paste_buffer_literal",
+        effect_text="ambiguous question",
+    )
+    result = asyncio.run(agent.send("ambiguous question"))
+
+    assert not result.ok
+    assert "escalated" in (result.message or "")
+    enter_calls = [args for args, _ in fake_tmux.calls_to("send_keys") if args[1] == "Enter"]
+    assert len(enter_calls) == PROMPT_COUNT  # startup acknowledgment + one ambiguous commit
+    assert not hasattr(agent.harness_session, "send_prompt")
+    latest = conn.execute(
+        "SELECT status FROM harness_control_operations "
+        "WHERE capability = 'submit_prompt' ORDER BY updated_at DESC LIMIT 1"
+    ).fetchone()
+    assert latest["status"] == "ESCALATED"
+    assert conn.execute("SELECT COUNT(*) FROM harness_control_evidence").fetchone()[0] > 0
 
 
 # ============================================================
@@ -93,15 +171,13 @@ def test_collaborator_start_clears_prior_conversation(
     fake_tmux: FakeTmux,
     tmp_path: Path,
 ) -> None:
-    fake_tmux.set_session_exists(True)
-    fake_tmux.queue_pane(CC_IDLE)
     conn = get_db(tmp_path / "state.db")
     init_db(conn)
     conn.execute(
         "INSERT INTO agent_messages(agent_id, ordinal, role, body, captured_at) "
         "VALUES ('collaborator-0', 0, 'user', 'stale', '2026-06-02T00:00:00Z')"
     )
-    runtime = SimpleNamespace(db=conn, bus=None, run_id=None, sync_agent=MagicMock())
+    runtime = _runtime(conn)
     agent = CollaboratorAgent(
         agent_id="collaborator-0",
         session="murder_test_collaborator",
@@ -110,13 +186,15 @@ def test_collaborator_start_clears_prior_conversation(
         runtime=runtime,
     )
 
-    asyncio.run(agent.start("fresh brief", {}))
+    # Conversation reset is an ownership concern, not a reason to exercise a
+    # procedural prompt sender.  Prompt behavior is covered by verified traces
+    # above.
+    agent.start_conversation()
 
     rows = conn.execute(
         "SELECT body FROM agent_messages WHERE agent_id = 'collaborator-0'"
     ).fetchall()
     assert rows == []
-    runtime.sync_agent.assert_called_once_with(agent)
 
 
 def test_record_user_block_event_publishes_conversation_block(tmp_path: Path) -> None:
@@ -144,12 +222,11 @@ def test_record_user_block_event_publishes_conversation_block(tmp_path: Path) ->
     assert event.block["payload"] == {"type": "user", "text": "real question"}
 
 
-def test_stop_clean_sets_conversation_complete_and_captures_session_id(
+def test_stop_clean_sets_conversation_complete_without_legacy_exit_scrape(
     fake_tmux: FakeTmux,
     tmp_path: Path,
 ) -> None:
-    """1.g: clean stop (kill_session=True, failed=False) transitions conversation
-    to 'complete' and stores the harness resume session id."""
+    """Clean stop completes the conversation without unowned `/exit` input."""
     conn = get_db(tmp_path / "state.db")
     init_db(conn)
     runtime = SimpleNamespace(db=conn, bus=None, run_id=None, sync_agent=MagicMock())
@@ -161,10 +238,6 @@ def test_stop_clean_sets_conversation_complete_and_captures_session_id(
         runtime=runtime,
     )
     upsert_conversation(conn, conversation_id="collaborator-0", agent_id="collaborator-0")
-    fake_tmux.queue_pane(
-        "Session ended.\nTo resume this session, run:\nclaude --resume abc123-deadbeef"
-    )
-
     asyncio.run(agent.stop(failed=False, kill_session=True))
 
     row = conn.execute(
@@ -172,7 +245,8 @@ def test_stop_clean_sets_conversation_complete_and_captures_session_id(
         " WHERE conversation_id = 'collaborator-0'"
     ).fetchone()
     assert row["status"] == "complete"
-    assert row["harness_session_id"] == "abc123-deadbeef"
+    assert row["harness_session_id"] is None
+    assert not any(name == "send_keys" for name, _args, _kwargs in fake_tmux.calls)
 
 
 def test_stop_preserve_session_leaves_conversation_in_progress(
@@ -215,11 +289,9 @@ def test_collaborator_ground_truth_block_survives_refresh(
     and the projector reuses one persistent producer across refreshes.
     """
 
-    fake_tmux.set_session_exists(True)
-    fake_tmux.queue_pane(CC_IDLE)
     conn = get_db(tmp_path / "state.db")
     init_db(conn)
-    runtime = SimpleNamespace(db=conn, bus=None, run_id=None, sync_agent=MagicMock())
+    runtime = _runtime(conn)
     agent = CollaboratorAgent(
         agent_id="collaborator-0",
         session="murder_test_collaborator",
@@ -227,7 +299,8 @@ def test_collaborator_ground_truth_block_survives_refresh(
         repo_root=tmp_path,
         runtime=runtime,
     )
-    asyncio.run(agent.start("fresh brief", {}))
+    agent.start_conversation()
+    fake_tmux.queue_pane(CC_IDLE)
 
     # Ground truth recorded at send boundary, then the pane is parsed.
     agent.record_user_block("real question")

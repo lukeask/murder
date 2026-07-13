@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, cast
 
 from murder.observability.log_context import log_context
-from murder.runtime.agents.base import Daemon, AgentRole, AgentStatus, TRANSCRIPT_SCROLLBACK_LINES
+from murder.runtime.agents.base import Daemon, AgentRole, AgentStatus
 from murder.verdict.completion import CompletionCoordinator
 from murder.config import CrowHandlerConfig
 from murder.llm.harnesses.base import HarnessAdapter
@@ -58,9 +58,7 @@ class CrowHandler(Daemon):
         self.harness = harness
         self.config = config
         self.repo_root = Path(repo_root)
-        self.workspace_root = (
-            Path(workspace_root) if workspace_root is not None else self.repo_root
-        )
+        self.workspace_root = Path(workspace_root) if workspace_root is not None else self.repo_root
         self.runtime = runtime
         self.outcome = outcome
         self.coordinator = coordinator
@@ -181,10 +179,20 @@ class CrowHandler(Daemon):
 
     async def send(self, msg: str) -> SimpleResult[None]:
         with log_context(agent_id=self.id):
-            return await self.harness.send_prompt(self.crow_session, msg)
+            crow = self.runtime.get_crow(self.ticket_id)
+            if crow is None:
+                from murder.llm.harnesses.results import fail_result
+
+                return fail_result(f"no live crow for ticket {self.ticket_id}")
+            return await crow.send(msg)
 
     async def interrupt_crow(self) -> None:
-        await self.harness.interrupt(self.crow_session)
+        crow = self.runtime.get_crow(self.ticket_id)
+        if crow is None:
+            raise RuntimeError(f"no live crow for ticket {self.ticket_id}")
+        interrupted = await crow.interrupt_verified_generation()
+        if not interrupted:
+            raise RuntimeError("crow interruption was not verified")
 
     def _fire_idle_callbacks_if_idle(self) -> None:
         if not self._idle_cached:
@@ -209,23 +217,22 @@ class CrowHandler(Daemon):
             await self._tick()
 
     async def _tick(self) -> None:
-        from murder.runtime.terminal import tmux
-
         if self.runtime.db is None or self.runtime.bus is None or self.runtime.run_id is None:
             return
+        crow = self.runtime.get_crow(self.ticket_id)
+        ingested = getattr(crow, "latest_ingested_frame", None) if crow is not None else None
+        pane = getattr(getattr(ingested, "frame", None), "raw_text", None)
+        if not isinstance(pane, str):
+            return
+        from murder.runtime.orchestration.verified_signals import VerifiedOrchestrationSignals
 
-        pane = await tmux.capture_pane(self.crow_session, lines=TRANSCRIPT_SCROLLBACK_LINES)
-
-        # Transcript projection of the crow's pane is driven by the
-        # service-owned projection poll loop (ServiceHost._run_projection_poll_loop
-        # -> CrowAgent.project_once), not here; this handler only does ticket
-        # orchestration off the captured pane.
+        signals = VerifiedOrchestrationSignals.from_ingested(ingested)
 
         # Fast: idle detection. Drives the slow/fast poll cadence below and the
         # idle-callback waiters. Chat delivery to a crow is NOT handled here — it
         # flows through the crow agent's own deliver-when-idle queue
         # (HarnessBackedAgent.queue_message), the single crow delivery path.
-        self._idle_cached = self.harness.is_idle(pane)
+        self._idle_cached = signals.state in {"awaiting_input", "idle"}
         self._fire_idle_callbacks_if_idle()
 
         # Fast: pane hash bookkeeping (used by stuck detection downstream).
@@ -238,7 +245,7 @@ class CrowHandler(Daemon):
         # and drive completion off the latch — not off the current pane window.
         # This is intentionally NOT gated on pane-hash change or idle state: a
         # DONE that lands on a hash-stable / idle beat must still fire.
-        if not self._done_latched and self.harness.detect_done(pane):
+        if not self._done_latched and signals.done:
             self._latch_done()
         if self._done_latched:
             await self._maybe_complete(h)
@@ -248,12 +255,12 @@ class CrowHandler(Daemon):
         now = time.monotonic()
         if now - self._last_orchestration_t >= self.config.poll_interval_s:
             self._last_orchestration_t = now
-            await self._orchestration_tick(pane)
+            await self._orchestration_tick(pane, signals)
 
-    async def _orchestration_tick(self, pane: str) -> None:
+    async def _orchestration_tick(self, pane: str, signals) -> None:
         from murder.state.persistence.tickets import get_ticket_status, checklist_progress
         from murder.state.persistence.agents import heartbeat_agent, heartbeat_bucket
-        from murder.bus import HeartbeatEvent, NoteEvent, QuestionEvent, SummaryEvent
+        from murder.bus import HeartbeatEvent, SummaryEvent
         from murder.bus.protocol import Entity
 
         # Stop if ticket reached a terminal state via any path.
@@ -263,45 +270,12 @@ class CrowHandler(Daemon):
             self._stop_requested = True
             return
 
-        # Tail-slice for non-idempotent detectors: keep the same window as the
-        # original 40-line capture so markers scroll out between orchestration ticks.
-        tail_lines = pane.splitlines()[-self.config.context_lines:]
-        tail = "\n".join(tail_lines)
-
-        for ask in self.harness.detect_asks(tail):
-            await self.runtime.bus.publish(
-                QuestionEvent(
-                    run_id=self.runtime.run_id,
-                    agent_id=self.id,
-                    role=self.role,
-                    ticket_id=self.ticket_id,
-                    question=ask,
-                    crow_session=self.crow_session,
-                    recent_pane=tail,
-                )
-            )
-
-        # DB-owns-runtime: working notes land in the events table (audit log)
-        # via the bus, not the ticket .md. The bus persists every event before
-        # fan-out, so the note is durable without clobbering ticket frontmatter
-        # or the body checklist.
-        for note in self.harness.detect_notes(tail):
-            await self.runtime.bus.publish(
-                NoteEvent(
-                    run_id=self.runtime.run_id,
-                    agent_id=self.id,
-                    role=self.role,
-                    ticket_id=self.ticket_id,
-                    note=note,
-                )
-            )
-
         # Stuck detection: compare pane hash between consecutive orchestration ticks.
         h = hashlib.sha256(pane.encode("utf-8", errors="replace")).hexdigest()
         pane_unchanged = h == self._last_orchestration_pane_hash
         self._last_orchestration_pane_hash = h
 
-        excerpt = self.harness.extract_last_message(pane) or ""
+        excerpt = signals.assistant_text
         done_n, total = checklist_progress(self.runtime.db, self.ticket_id)
 
         if pane_unchanged and self._idle_cached:
@@ -353,15 +327,50 @@ class CrowHandler(Daemon):
             self._last_heartbeat_emit_bucket = bucket
             await self.runtime.publish_snapshot(Entity.AGENT, self.id)
 
+    async def observe_conversation_changes(self, changes) -> None:
+        """Publish ASK/NOTE markers introduced by newly projected assistant text.
+
+        Projection is the assistant-message ingress boundary.  Its block
+        changes prevent the polling loop from replaying markers that happen to
+        remain visible in later captures.
+        """
+        if self.runtime.bus is None or self.runtime.run_id is None:
+            return
+        from murder.bus import NoteEvent, QuestionEvent
+        from murder.runtime.orchestration.verified_signals import VerifiedOrchestrationSignals
+
+        for change in changes:
+            signals = VerifiedOrchestrationSignals.from_conversation_block_change(change)
+            for ask in signals.asks:
+                await self.runtime.bus.publish(
+                    QuestionEvent(
+                        run_id=self.runtime.run_id,
+                        agent_id=self.id,
+                        role=self.role,
+                        ticket_id=self.ticket_id,
+                        question=ask,
+                        crow_session=self.crow_session,
+                        recent_pane=signals.assistant_text,
+                    )
+                )
+            for note in signals.notes:
+                await self.runtime.bus.publish(
+                    NoteEvent(
+                        run_id=self.runtime.run_id,
+                        agent_id=self.id,
+                        role=self.role,
+                        ticket_id=self.ticket_id,
+                        note=note,
+                    )
+                )
+
     def _latch_done(self) -> None:
         """Record that this crow has emitted ``>>> DONE`` (once)."""
         if self._done_latched:
             return
         self._done_latched = True
         self._log(f"crow DONE marker observed for {self.ticket_id} — latched")
-        _LOG.info(
-            "crow.done.detected", extra={"agent_id": self.id, "ticket_id": self.ticket_id}
-        )
+        _LOG.info("crow.done.detected", extra={"agent_id": self.id, "ticket_id": self.ticket_id})
 
     def _ticket_promotable_to_done(self) -> bool:
         """True iff the ticket's current status can legitimately reach DONE.
