@@ -193,6 +193,27 @@ async def capture_pane(
     return out
 
 
+async def pane_dimensions(name: str) -> tuple[int, int]:
+    """Return the active pane dimensions for immutable frame provenance.
+
+    Reading dimensions is intentionally separate from input delivery: frame
+    consumers need renderer context to interpret wrapping, but this operation
+    cannot mutate the terminal or imply anything about harness state.
+    """
+
+    _, out, _ = await _tmux("display-message", "-p", "-t", name, "#{pane_width} #{pane_height}")
+    fields = out.strip().split()
+    if len(fields) != 2:
+        raise TmuxError(f"tmux returned invalid pane dimensions for {name!r}: {out!r}")
+    try:
+        width, height = (int(field) for field in fields)
+    except ValueError as exc:
+        raise TmuxError(f"tmux returned non-integer pane dimensions for {name!r}: {out!r}") from exc
+    if width <= 0 or height <= 0:
+        raise TmuxError(f"tmux returned non-positive pane dimensions for {name!r}: {out!r}")
+    return width, height
+
+
 def _record_capture(name: str, out: str, *, lines: int, escapes: bool) -> None:
     """Flight-recorder seam for a successful pane capture (boundary #2).
 

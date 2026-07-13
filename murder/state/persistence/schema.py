@@ -384,6 +384,158 @@ CREATE TABLE IF NOT EXISTS harness_usage_snapshots (
 CREATE INDEX IF NOT EXISTS idx_harness_usage_snapshots_harness
     ON harness_usage_snapshots(harness, fetched_at);
 
+-- Verified harness-control persistence.  This is deliberately separate from
+-- conversation blocks and generic events/commands: frames/evidence are the
+-- durable parser boundary, while operations/actions/effects are the durable
+-- control boundary.  Do not use conversation text as a substitute for either.
+CREATE TABLE IF NOT EXISTS harness_control_frames (
+    frame_id          TEXT PRIMARY KEY,
+    harness_id        TEXT NOT NULL,
+    session_id        TEXT,
+    captured_at       TEXT NOT NULL,
+    width             INTEGER NOT NULL CHECK (width >= 0),
+    height            INTEGER NOT NULL CHECK (height >= 0),
+    raw_text          TEXT NOT NULL,
+    ansi_preserved    INTEGER NOT NULL CHECK (ansi_preserved IN (0, 1)),
+    pane_epoch        INTEGER NOT NULL CHECK (pane_epoch >= 0),
+    capture_sequence  INTEGER NOT NULL CHECK (capture_sequence >= 0),
+    stored_at         TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_harness_control_frames_session
+    ON harness_control_frames(harness_id, session_id, pane_epoch, capture_sequence);
+
+CREATE TABLE IF NOT EXISTS harness_control_evidence (
+    evidence_id         TEXT PRIMARY KEY,
+    frame_id            TEXT NOT NULL REFERENCES harness_control_frames(frame_id)
+                        ON DELETE CASCADE,
+    harness_id          TEXT NOT NULL,
+    parser_version      TEXT NOT NULL,
+    evidence_type       TEXT NOT NULL,
+    captured_at         TEXT NOT NULL,
+    payload_json        TEXT NOT NULL,
+    source_regions_json TEXT NOT NULL,
+    diagnostics_json    TEXT NOT NULL,
+    stored_at           TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_harness_control_evidence_frame
+    ON harness_control_evidence(frame_id, evidence_type);
+CREATE INDEX IF NOT EXISTS idx_harness_control_evidence_harness
+    ON harness_control_evidence(harness_id, captured_at, evidence_type);
+
+CREATE TABLE IF NOT EXISTS harness_control_observations (
+    harness_id         TEXT NOT NULL,
+    session_id         TEXT,
+    pane_epoch         INTEGER NOT NULL CHECK (pane_epoch >= 0),
+    capture_sequence   INTEGER NOT NULL CHECK (capture_sequence >= 0),
+    semantic_sequence  INTEGER NOT NULL CHECK (semantic_sequence >= 0),
+    captured_at        TEXT NOT NULL,
+    snapshot_json      TEXT NOT NULL,
+    evidence_refs_json TEXT NOT NULL,
+    stored_at          TEXT NOT NULL,
+    PRIMARY KEY (harness_id, session_id, pane_epoch, capture_sequence, semantic_sequence)
+);
+
+CREATE INDEX IF NOT EXISTS idx_harness_control_observations_latest
+    ON harness_control_observations(harness_id, session_id, pane_epoch DESC,
+                                    capture_sequence DESC, semantic_sequence DESC);
+
+CREATE TABLE IF NOT EXISTS harness_control_semantic_events (
+    id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+    harness_id         TEXT NOT NULL,
+    session_id         TEXT,
+    pane_epoch         INTEGER NOT NULL CHECK (pane_epoch >= 0),
+    capture_sequence   INTEGER NOT NULL CHECK (capture_sequence >= 0),
+    semantic_sequence  INTEGER NOT NULL CHECK (semantic_sequence >= 0),
+    event_type         TEXT NOT NULL,
+    payload_json       TEXT NOT NULL,
+    evidence_refs_json TEXT NOT NULL,
+    diagnostics_json   TEXT NOT NULL,
+    captured_at        TEXT NOT NULL,
+    stored_at          TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_harness_control_semantic_events_harness
+    ON harness_control_semantic_events(harness_id, session_id, id);
+
+CREATE TABLE IF NOT EXISTS harness_control_operations (
+    operation_id                    TEXT PRIMARY KEY,
+    harness_id                      TEXT NOT NULL,
+    session_id                      TEXT,
+    capability                      TEXT NOT NULL,
+    status                          TEXT NOT NULL,
+    phase_type                      TEXT NOT NULL,
+    phase_payload_json              TEXT NOT NULL,
+    request_json                    TEXT NOT NULL,
+    operation_state_json            TEXT NOT NULL,
+    created_at                      TEXT NOT NULL,
+    updated_at                      TEXT NOT NULL,
+    deadline                        TEXT,
+    attempt_count                   INTEGER NOT NULL DEFAULT 0,
+    last_pane_epoch                 INTEGER,
+    last_capture_sequence           INTEGER,
+    last_semantic_sequence          INTEGER,
+    warnings_json                   TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_harness_control_operations_recovery
+    ON harness_control_operations(harness_id, session_id, status, updated_at);
+
+CREATE TABLE IF NOT EXISTS harness_control_actions (
+    action_id                       TEXT PRIMARY KEY,
+    operation_id                    TEXT NOT NULL REFERENCES harness_control_operations(operation_id)
+                                    ON DELETE CASCADE,
+    semantic_action_type            TEXT NOT NULL,
+    semantic_action_json            TEXT NOT NULL,
+    duplicate_policy                TEXT NOT NULL,
+    selected_pane_epoch             INTEGER NOT NULL,
+    selected_capture_sequence       INTEGER NOT NULL,
+    selected_semantic_sequence      INTEGER NOT NULL,
+    requested_at                    TEXT NOT NULL,
+    expectation_json                TEXT NOT NULL,
+    emitted_at                      TEXT,
+    emission_error                  TEXT,
+    emission_status                 TEXT NOT NULL CHECK (emission_status IN ('PENDING','EMITTED','FAILED'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_harness_control_actions_operation
+    ON harness_control_actions(operation_id, requested_at);
+
+CREATE TABLE IF NOT EXISTS harness_control_effects (
+    effect_id           TEXT PRIMARY KEY,
+    action_id           TEXT NOT NULL REFERENCES harness_control_actions(action_id)
+                        ON DELETE CASCADE,
+    effect_type         TEXT NOT NULL,
+    payload_json        TEXT NOT NULL,
+    ordinal             INTEGER NOT NULL,
+    emission_status     TEXT NOT NULL CHECK (emission_status IN ('PENDING','EMITTED','FAILED')),
+    emitted_at          TEXT,
+    emission_error      TEXT,
+    UNIQUE(action_id, ordinal)
+);
+
+CREATE INDEX IF NOT EXISTS idx_harness_control_effects_action
+    ON harness_control_effects(action_id, ordinal);
+
+CREATE TABLE IF NOT EXISTS harness_control_decisions (
+    id                          INTEGER PRIMARY KEY AUTOINCREMENT,
+    operation_id                TEXT NOT NULL REFERENCES harness_control_operations(operation_id)
+                                ON DELETE CASCADE,
+    pane_epoch                  INTEGER NOT NULL,
+    capture_sequence            INTEGER NOT NULL,
+    semantic_sequence           INTEGER NOT NULL,
+    phase_before                TEXT NOT NULL,
+    predicate_results_json      TEXT NOT NULL,
+    selected_decision           TEXT NOT NULL,
+    selected_action_id          TEXT,
+    reason                      TEXT NOT NULL,
+    decided_at                  TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_harness_control_decisions_operation
+    ON harness_control_decisions(operation_id, id);
+
 CREATE TABLE IF NOT EXISTS harness_usage_probe_sessions (
     harness    TEXT PRIMARY KEY,
     session_id TEXT NOT NULL,

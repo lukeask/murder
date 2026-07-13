@@ -31,7 +31,10 @@ class FakeTmux:
 
     def __init__(self) -> None:
         self._pane_queue: list[str | Exception] = []
+        self._effect_pane_transitions: list[tuple[str, str | None, str]] = []
+        self._effect_pane: str | None = None
         self.calls: list[tuple[str, tuple, dict]] = []
+        self.pane_size: tuple[int, int] = (220, 50)
         # Settable session state: tests flip `session_exists_returns` (a default
         # for unknown names) and/or seed `_sessions` to model live sessions.
         self.session_exists_returns: bool = False
@@ -47,6 +50,23 @@ class FakeTmux:
     def queue_error(self, msg: str = "session gone") -> None:
         self._pane_queue.append(self.TmuxError(msg))
 
+    def queue_pane_after_effect(
+        self, text: str, *, effect: str, effect_text: str | None = None
+    ) -> None:
+        """Advance the visible pane after one matching emitted terminal effect.
+
+        Transitions are ordered and only react to effects that pass through the
+        fake tmux API.  This lets verified-driver tests model physical emission
+        followed by a later observed acknowledgment without making the effect
+        itself a semantic success.
+        """
+        self._effect_pane_transitions.append((effect, effect_text, text))
+
+    def set_pane_dimensions(self, width: int, height: int) -> None:
+        if width <= 0 or height <= 0:
+            raise ValueError("fake pane dimensions must be positive")
+        self.pane_size = (width, height)
+
     # ── session-state helpers ─────────────────────────────────────────────────
 
     def add_session(self, name: str) -> None:
@@ -58,6 +78,8 @@ class FakeTmux:
         self.session_exists_returns = exists
 
     def _next_pane(self) -> str:
+        if self._effect_pane is not None:
+            return self._effect_pane
         if not self._pane_queue:
             return ""
         # Repeat last item when only one remains (avoids IndexError on long polls)
@@ -66,6 +88,15 @@ class FakeTmux:
             raise item
         return item
 
+    def _apply_effect_transition(self, effect: str, text: str) -> None:
+        if not self._effect_pane_transitions:
+            return
+        expected_effect, expected_text, pane = self._effect_pane_transitions[0]
+        if expected_effect != effect or (expected_text is not None and expected_text != text):
+            return
+        self._effect_pane_transitions.pop(0)
+        self._effect_pane = pane
+
     # ── fake async ops ────────────────────────────────────────────────────────
 
     async def capture_pane(
@@ -73,6 +104,10 @@ class FakeTmux:
     ) -> str:
         self.calls.append(("capture_pane", (name,), {"lines": lines, "escapes": escapes}))
         return self._next_pane()
+
+    async def pane_dimensions(self, name: str) -> tuple[int, int]:
+        self.calls.append(("pane_dimensions", (name,), {}))
+        return self.pane_size
 
     async def create_session(self, name: str, cwd: object, cmd: list[str]) -> None:
         self.calls.append(("create_session", (name, cwd, cmd), {}))
@@ -110,18 +145,23 @@ class FakeTmux:
         self, session: str, text: str, *, literal: bool = True, enter: bool = True
     ) -> None:
         self.calls.append(("send_keys", (session, text), {"literal": literal, "enter": enter}))
+        self._apply_effect_transition("send_keys", text)
 
     async def interrupt(self, session: str) -> None:
         self.calls.append(("interrupt", (session,), {}))
+        self._apply_effect_transition("interrupt", "")
 
     async def paste_buffer_literal(self, session: str, text: str) -> None:
         self.calls.append(("paste_buffer_literal", (session, text), {}))
+        self._apply_effect_transition("paste_buffer_literal", text)
 
     # ── queue / call helpers ──────────────────────────────────────────────────
 
     def reset_queue(self) -> None:
         """Discard any queued pane texts (use between test phases)."""
         self._pane_queue.clear()
+        self._effect_pane = None
+        self._effect_pane_transitions.clear()
 
     def call_names(self) -> list[str]:
         return [c[0] for c in self.calls]
@@ -136,6 +176,7 @@ class FakeTmux:
         mp.setattr(tmux_mod, "TmuxError", self.TmuxError)
         mp.setattr(tmux_mod, "LARGE_PAYLOAD_BYTES", self.LARGE_PAYLOAD_BYTES)
         mp.setattr(tmux_mod, "capture_pane", self.capture_pane)
+        mp.setattr(tmux_mod, "pane_dimensions", self.pane_dimensions)
         mp.setattr(tmux_mod, "create_session", self.create_session)
         mp.setattr(tmux_mod, "send_keys", self.send_keys)
         mp.setattr(tmux_mod, "interrupt", self.interrupt)
