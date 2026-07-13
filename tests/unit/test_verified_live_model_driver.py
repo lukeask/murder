@@ -36,6 +36,7 @@ from murder.llm.harness_control.model.operations import OperationEnvelope, Opera
 from murder.llm.harness_control.runtime.actuator import HarnessActuator
 from murder.llm.harness_control.runtime.controller import HarnessController
 from murder.llm.harness_control.runtime.model_driver import (
+    DEFAULT_MODEL_SELECTION_DEADLINE,
     ModelDriverPolicy,
     VerifiedModelSelectionDriver,
 )
@@ -227,6 +228,15 @@ def test_driver_configures_reopens_and_waits_for_delayed_active_readback() -> No
         )
 
     asyncio.run(scenario())
+
+
+def test_create_operation_defaults_to_one_minute_deadline() -> None:
+    driver, _controller, _connection, _events = _driver("initial")
+
+    operation = driver.create_operation(TARGET)
+
+    assert operation.request.deadline == DEFAULT_MODEL_SELECTION_DEADLINE
+    assert operation.envelope.deadline == NOW + DEFAULT_MODEL_SELECTION_DEADLINE
 
 
 def test_resume_after_activation_effect_uses_fresh_readback_and_never_replays() -> None:

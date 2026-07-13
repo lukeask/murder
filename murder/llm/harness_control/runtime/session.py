@@ -83,7 +83,10 @@ from murder.llm.harness_control.model.operations import (
 )
 from murder.llm.harness_control.runtime.actuator import HarnessActuator, IntentPriority
 from murder.llm.harness_control.runtime.controller import HarnessController
-from murder.llm.harness_control.runtime.model_driver import VerifiedModelSelectionDriver
+from murder.llm.harness_control.runtime.model_driver import (
+    DEFAULT_MODEL_SELECTION_DEADLINE,
+    VerifiedModelSelectionDriver,
+)
 from murder.llm.harness_control.runtime.observer import ObservationStore
 from murder.llm.harness_control.runtime.operation_arbiter import SessionOperationArbiter
 from murder.llm.harness_control.runtime.prompt_driver import (
@@ -417,7 +420,10 @@ class VerifiedHarnessControlSession:
         )
 
     async def select_model(
-        self, target: ModelTarget, *, deadline: timedelta = timedelta(minutes=3)
+        self,
+        target: ModelTarget,
+        *,
+        deadline: timedelta = DEFAULT_MODEL_SELECTION_DEADLINE,
     ) -> SelectModelResult:
         """Configure and activate a model only after independent readback."""
 

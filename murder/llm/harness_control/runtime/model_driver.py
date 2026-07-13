@@ -55,6 +55,11 @@ class ModelDriverPolicy:
 
 
 DEFAULT_MODEL_DRIVER_POLICY = ModelDriverPolicy()
+# A model picker that has not produced independently readable state within a
+# minute is treated as ambiguous.  Keep this aligned with the observation
+# budget (240 observations at 250 ms) so budget exhaustion does not preempt a
+# longer persisted operation deadline.
+DEFAULT_MODEL_SELECTION_DEADLINE = timedelta(minutes=1)
 
 
 class VerifiedModelSelectionDriver:
@@ -84,7 +89,7 @@ class VerifiedModelSelectionDriver:
         self,
         target: ModelTarget,
         *,
-        deadline: timedelta = timedelta(minutes=3),
+        deadline: timedelta = DEFAULT_MODEL_SELECTION_DEADLINE,
         operation_id: str | None = None,
     ) -> SelectModelResult:
         """Request configuration and independent active-model verification."""
@@ -99,7 +104,7 @@ class VerifiedModelSelectionDriver:
         self,
         target: ModelTarget,
         *,
-        deadline: timedelta = timedelta(minutes=3),
+        deadline: timedelta = DEFAULT_MODEL_SELECTION_DEADLINE,
         operation_id: str | None = None,
     ) -> SelectModelOperation:
         if deadline <= timedelta():
@@ -196,6 +201,7 @@ def _observation_budget_exhausted(
 
 __all__ = [
     "DEFAULT_MODEL_DRIVER_POLICY",
+    "DEFAULT_MODEL_SELECTION_DEADLINE",
     "ModelFrameObserver",
     "ModelDriverPolicy",
     "VerifiedModelSelectionDriver",
