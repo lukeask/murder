@@ -1,0 +1,8 @@
+╭──────────────────────────────────────────────────────────╮
+│ Permission required to run the deployment command        │
+│                                                          │
+│ › 1. Allow once                                          │
+│   2. Deny                                                │
+│                                                          │
+│ Press enter to confirm or esc to cancel                  │
+╰──────────────────────────────────────────────────────────╯

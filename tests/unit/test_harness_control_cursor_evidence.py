@@ -1,0 +1,231 @@
+"""Fixture-backed coverage for Cursor's verified-architecture edge adapter."""
+
+from __future__ import annotations
+
+from dataclasses import replace
+from datetime import datetime, timezone
+from pathlib import Path
+
+import pytest
+
+from murder.llm.harness_control.adapters.cursor import CursorHarnessAdapter
+from murder.llm.harness_control.model import (
+    ClearComposer,
+    DuplicatePolicy,
+    HarnessId,
+    InputChunk,
+    InputProvenance,
+    InsertPromptPayload,
+    Knowledge,
+    Observed,
+    PasteBuffer,
+    SelectModel,
+    SendLiteralKeys,
+    SendNamedKey,
+    SurfaceKind,
+    SurfaceState,
+    TerminalFrame,
+    unknown_snapshot,
+)
+
+FIXTURES = Path(__file__).parents[1] / "fixtures" / "harness_panes"
+NOW = datetime(2026, 7, 11, tzinfo=timezone.utc)
+TERMINAL_CONTEXT_PERCENT = 7.4
+HTTP_USAGE_PERCENT = 12.5
+USAGE_EVIDENCE_COUNT = 2
+PICKER_VISIBLE_CHOICES = 10
+
+
+def _frame(name: str, *, sequence: int = 1) -> TerminalFrame:
+    return TerminalFrame(
+        f"frame-{name}",
+        HarnessId("cursor"),
+        NOW,
+        220,
+        50,
+        (FIXTURES / name).read_text(),
+        name == "cursor_idle_input_filled.txt",
+        0,
+        sequence,
+    )
+
+
+def test_composer_and_attachment_evidence_is_retained_without_widening_snapshot() -> None:
+    adapter = CursorHarnessAdapter()
+    evidence = adapter.parse_evidence(_frame("cursor_idle_input_filled.txt"), ())
+    payload = evidence[0].payload
+
+    assert evidence[0].parser_version == "cursor-evidence-v3"
+    assert evidence[0].evidence_type == "cursor.frame.v3"
+    assert payload["raw_frame"]["ansi_preserved"] is True
+    assert payload["composer"]["text"].startswith("Write a detailed 2000-word history")
+    assert payload["composer"]["fingerprint"]
+    assert payload["composer"]["queued_follow_up"] is None
+    # Attachment data remains harness evidence even though it is not a shared
+    # controller field beyond ComposerState.attachments.
+    assert "attachments" in payload["composer"]
+    assert payload["composer"]["attachments"] == ()
+
+
+def test_picker_parameters_and_active_readback_are_separate_evidence() -> None:
+    adapter = CursorHarnessAdapter()
+    picker_evidence = adapter.parse_evidence(_frame("cursor_model_list_fast_active.txt"), ())
+    picker = picker_evidence[0].payload
+    hovered_params = adapter.parse_evidence(
+        _frame("cursor_opus_effort_low_hover.txt"), ()
+    )[0].payload
+    current_params = adapter.parse_evidence(
+        _frame("cursor_opus_effort_medium_selected.txt"), ()
+    )[0].payload
+    status = adapter.parse_evidence(_frame("cursor_status_fast_active.txt"), ())[0].payload
+
+    assert picker["models"]["picker"]["visible"] is True
+    assert picker["models"]["picker"]["page"] == (1, 10, 27)
+    pointed = next(
+        row
+        for row in picker["models"]["picker"]["choices"]
+        if row["model_id"] == "composer-2.5"
+    )
+    assert pointed == {
+        "model_id": "composer-2.5",
+        "label": "Composer 2.5",
+        "highlighted": True,
+        "current": None,
+        "selected": None,
+        "disabled": False,
+    }
+    picker_projection = adapter.project_observations(picker_evidence, prior=None).updates
+    configuration = picker_projection["model_configuration"].value
+    assert configuration is not None
+    assert configuration.highlighted_model_id == "composer-2.5"
+    assert configuration.selected_model_id is None
+    assert configuration.configured_model_id is None
+    # The first page cannot prove a target absent. Rows remain in durable
+    # evidence while the narrow shared availability view stays intentionally
+    # unknown so the adapter can use Cursor's character-wise filter.
+    assert configuration.available == ()
+    assert len(picker["models"]["picker"]["choices"]) == PICKER_VISIBLE_CHOICES
+    assert picker_projection["active_model"].knowledge is Knowledge.UNKNOWN
+
+    # Moving the pointer changes only the highlighted parameter.  Checkmarks,
+    # and therefore configured values, remain independent evidence.
+    assert hovered_params["models"]["parameters"]["options"]["effort"] == (
+        {"label": "low", "highlighted": True, "current": False},
+        {"label": "medium", "highlighted": False, "current": False},
+        {"label": "high", "highlighted": False, "current": True},
+        {"label": "xhigh", "highlighted": False, "current": False},
+        {"label": "max", "highlighted": False, "current": False},
+    )
+    assert current_params["models"]["parameters"]["options"]["effort"][1] == {
+        "label": "medium",
+        "highlighted": True,
+        "current": True,
+    }
+    assert dict(hovered_params["models"]["parameters"]["values"])["effort"] == "high"
+    assert dict(current_params["models"]["parameters"]["values"])["effort"] == "medium"
+    # The parameter editor carries a durable staged configuration identity and
+    # semantic option/navigation evidence; it is not mistaken for active model
+    # readback or flattened into the shared snapshot.
+    parameter_values = dict(current_params["models"]["parameters"]["values"])
+    assert parameter_values["stage"] == "effort"
+    assert parameter_values["configured_model_id"] == "opus-4-8"
+    assert parameter_values["effort_option.medium"] == "1"
+    assert parameter_values["effort_highlighted_index"] == "1"
+    assert status["models"]["active_readback"] == {
+        "model_id": "composer-2.5",
+        "display_name": "Composer 2.5",
+        "effort": "fast",
+    }
+
+
+def test_projection_prefers_http_usage_but_keeps_terminal_usage_evidence() -> None:
+    adapter = CursorHarnessAdapter(
+        http_usage={
+            "source": "cursor-api:GetCurrentPeriodUsage",
+            "plan": "pro",
+            "windows": [{"name": "api", "percent_used": 12.5, "reset_at": "2026-07-12T00:00Z"}],
+            "raw": {"api_used": 17, "provider_only": {"nested": True}},
+        }
+    )
+    evidence = adapter.parse_evidence(_frame("cursor_tool_output.txt"), ())
+    delta = adapter.project_observations(evidence, prior=None)
+
+    frame_payload = evidence[0].payload
+    usage = delta.updates["usage"]
+    assert frame_payload["terminal_usage"]["context_percent"] == TERMINAL_CONTEXT_PERCENT
+    assert evidence[1].evidence_type == "cursor.http_usage.v1"
+    assert evidence[1].payload["status"]["raw"]["provider_only"] == {"nested": True}
+    assert usage.value is not None
+    assert usage.value.windows[0].name == "api"
+    assert usage.value.windows[0].percent_used == HTTP_USAGE_PERCENT
+    assert len(usage.evidence) == USAGE_EVIDENCE_COUNT
+
+
+def test_tool_evidence_conservatively_records_obvious_file_reads_and_not_arbitrary_writes() -> None:
+    evidence = CursorHarnessAdapter().parse_evidence(_frame("cursor_tool_output.txt"), ())
+    tools = evidence[0].payload["tool_activity"]
+
+    assert tools["paths_read"] == (".gitignore",)
+    assert tools["paths_written"] == ()
+    assert tools["commands"] == ("find /home/user/Documents/code/testingmurderharness -type f",)
+    assert tools["transcript_tools"]
+
+
+def test_cursor_lowering_returns_values_for_actuator_without_terminal_side_effects() -> None:
+    adapter = CursorHarnessAdapter()
+    snapshot = unknown_snapshot(HarnessId("cursor"), captured_at=NOW)
+    clear = adapter.lower(ClearComposer("clear", "op", DuplicatePolicy.REPLAY_SAFE), snapshot)
+    prompt = adapter.lower(
+        InsertPromptPayload(
+            "insert",
+            "op",
+            DuplicatePolicy.SAFE_BEFORE_COMMIT,
+            (
+                InputChunk("typed", InputProvenance.USER_TYPED, "one"),
+                InputChunk("pasted", InputProvenance.USER_PASTE_BLOCK, "two"),
+            ),
+            "fingerprint",
+        ),
+        snapshot,
+    )
+    with pytest.raises(ValueError, match="current picker configuration evidence"):
+        adapter.lower(
+            SelectModel("model", "op", DuplicatePolicy.AMBIGUOUS_AFTER_EMISSION, "gpt-5.5"),
+            snapshot,
+        )
+
+    parameter_evidence = adapter.parse_evidence(
+        _frame("cursor_opus_effort_medium_selected.txt"), ()
+    )
+    parameter_delta = adapter.project_observations(parameter_evidence, prior=None)
+    parameter_snapshot = replace(
+        snapshot,
+        model_configuration=parameter_delta.updates["model_configuration"],
+        surface=Observed.present(
+            SurfaceState(
+                SurfaceKind.MODEL_PICKER,
+                frozenset({SurfaceKind.MODEL_PICKER}),
+                SurfaceKind.MODEL_PICKER,
+                True,
+                True,
+            ),
+            evidence=(),
+            observed_at=NOW,
+            revision=snapshot.revision,
+        ),
+    )
+    effort = adapter.lower(
+        SelectModel(
+            "effort",
+            "op",
+            DuplicatePolicy.AMBIGUOUS_AFTER_EMISSION,
+            "opus-4-8",
+            effort="medium",
+        ),
+        parameter_snapshot,
+    )
+
+    assert clear == (SendNamedKey("clear:clear", "C-u"),)
+    assert isinstance(prompt[0], SendLiteralKeys)
+    assert isinstance(prompt[1], PasteBuffer)
+    assert effort == (SendNamedKey("effort:select-effort", "Enter"),)

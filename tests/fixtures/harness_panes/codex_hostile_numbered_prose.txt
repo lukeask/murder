@@ -1,0 +1,14 @@
+╭ >_ OpenAI Codex (v0.144.0) ──────────────────────────────╮
+│ model: gpt-5.5 high                                      │
+╰─────────────────────────────────────────────────────────╯
+
+• Assistant: Here is the deployment runbook. Choose a deployment target
+  only after reviewing the release notes:
+  1. Blue: deploy to the canary environment.
+  2. Green: deploy to the primary environment.
+
+  This is documentation, not an interactive prompt. Press enter to continue
+  reading the runbook.
+
+› Write tests for @filename
+  gpt-5.5 high · ~/Documents/code/murder
