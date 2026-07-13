@@ -4,10 +4,14 @@ from __future__ import annotations
 
 import logging
 import re
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from murder.llm.harnesses.models import (
+    HarnessUsageContextWindow,
+    HarnessUsageFreshness,
+    HarnessUsageNotice,
     HarnessUsageStatus,
     HarnessUsageTotals,
     HarnessUsageWindow,
@@ -206,10 +210,10 @@ def parse_claude_usage_pane(
 # means low usage. `percent_used` is always normalized to consumed quota:
 # `left`/`remaining` is converted with 100−x; `used` passes through.
 _CODEX_LIMIT_RE = re.compile(
-    r"(?P<label>[A-Za-z0-9][\w/.\- ]*?)\s+limits?\s*:?\s*"
-    r"(?:\[[^\]]*\]\s*)?"
-    r"(?P<pct>\d+(?:\.\d+)?)\s*%\s*(?P<dir>left|remaining|used)?"
-    r"(?:[^()\n]*?\((?:resets?\s+)?(?P<reset>[^)\n]+?)\))?",
+    r"^(?P<label>[^:]{1,80}?\blimits?)\s*:\s*"
+    r"(?:\[[^\]]*\]\s*)?(?P<pct>\d+(?:\.\d+)?)\s*%"
+    r"(?:\s*(?P<dir>left|remaining|used|consumed))?"
+    r"(?P<tail>.*)$",
     re.IGNORECASE,
 )
 _CODEX_SESSION_RE = re.compile(
@@ -221,6 +225,30 @@ _CLOCK_RESET_RE = re.compile(
     r"(?:\s+on\s+(?:(?P<day>\d{1,2})\s+(?P<mon>[A-Za-z]{3,})|(?P<mon2>[A-Za-z]{3,})\s+(?P<day2>\d{1,2})))?",
     re.IGNORECASE,
 )
+_CODEX_HEADING_RE = re.compile(r"(?:>_\s*)?OpenAI\s+Codex\s*\(v[^)]*\)", re.I)
+_CODEX_FIELD_RE = re.compile(r"^(?P<label>[A-Za-z][A-Za-z ._-]{1,40}):\s*(?P<value>.+)$")
+_CODEX_CONTEXT_RE = re.compile(
+    r"^Context\s+window\s*:\s*(?P<pct>\d+(?:\.\d+)?)\s*%\s*(?P<dir>left|remaining|used|consumed)"
+    r"(?:\s*\(\s*(?P<used>\d+(?:\.\d+)?)\s*(?P<unit>[KMGT]?)\s*used\s*/\s*"
+    r"(?P<limit>\d+(?:\.\d+)?)\s*(?P<limit_unit>[KMGT]?)\s*\))?",
+    re.I,
+)
+_STALE_NOTICE_RE = re.compile(r"\blimits?\s+may\s+be\s+(?:stale|out\s+of\s+date)\b", re.I)
+_HARD_LIMIT_RE = re.compile(r"you(?:'|’)ve\s+hit\s+your\s+usage\s+limit", re.I)
+_RESET_CREDIT_RE = re.compile(
+    r"you\s+have\s+(?P<count>\d+)\s+usage\s+limit\s+resets?\s+available", re.I
+)
+
+
+@dataclass(frozen=True, slots=True)
+class CodexStatusSurface:
+    """The bounded status panel selected from a terminal capture."""
+
+    start: int
+    end: int
+    complete: bool
+    active: bool
+    lines: tuple[str, ...]
 _MONTHS = {
     m: i
     for i, m in enumerate(
@@ -236,7 +264,11 @@ def _local_clock_base(now: datetime | None) -> datetime:
         return datetime.now().astimezone()
     if now.tzinfo is None:
         return now.replace(tzinfo=datetime.now().astimezone().tzinfo)
-    return now.astimezone()
+    # ``now`` is supplied by callers/tests specifically to establish the
+    # harness-local wall clock. Converting it through the host's local zone
+    # changes the calendar clock (e.g. Eastern → Mountain) and turns a
+    # 45-minute reset into a multi-hour one. Preserve an explicit offset/zone.
+    return now
 
 
 def _parse_clock_reset(raw: str, now: datetime | None) -> str | None:
@@ -284,6 +316,72 @@ def _parse_clock_reset(raw: str, now: datetime | None) -> str | None:
     return reset_at.isoformat()
 
 
+def locate_codex_status_surface(pane_text: str) -> CodexStatusSurface | None:
+    """Locate the newest structurally valid Codex status panel.
+
+    Selection is intentionally independent of quota labels: an update may
+    remove a window, and scrollback must never lend it back from an old panel.
+    """
+    lines = strip_ansi(pane_text).splitlines()
+    last_composer = max(
+        (i for i, line in enumerate(lines) if line.lstrip().startswith("›")), default=-1
+    )
+    candidates: list[CodexStatusSurface] = []
+    for start, line in enumerate(lines):
+        if not _CODEX_HEADING_RE.search(line):
+            continue
+        next_heading = next(
+            (i for i in range(start + 1, len(lines)) if _CODEX_HEADING_RE.search(lines[i])),
+            len(lines),
+        )
+        close = next(
+            (i for i in range(start + 1, next_heading) if lines[i].lstrip().startswith(("╰", "+"))),
+            None,
+        )
+        end = (close + 1) if close is not None else next_heading
+        content = [_clean_codex_line(item) for item in lines[start + 1:end]]
+        labels = {
+            match.group("label").strip().lower()
+            for item in content
+            if (match := _CODEX_FIELD_RE.match(item)) is not None
+        }
+        if not labels.intersection({"session", "account", "collaboration mode"}):
+            continue
+        # Borderless captures are accepted only when another status heading or
+        # composer bounds them; an unbounded rendering remains incomplete.
+        complete = close is not None or end < len(lines)
+        candidates.append(
+            CodexStatusSurface(start, end, complete, start > last_composer, tuple(lines[start:end]))
+        )
+    completed = [candidate for candidate in candidates if candidate.complete]
+    return (completed or candidates or [None])[-1]
+
+
+def _clean_codex_line(line: str) -> str:
+    return line.strip().strip("│").strip()
+
+
+def _codex_key(label: str) -> str:
+    normalized = re.sub(r"\s+", " ", label).strip().lower()
+    aliases = {"5h limit": "5h", "5 hour limit": "5h", "weekly limit": "weekly"}
+    return aliases.get(normalized, re.sub(r"\s+limit$", "", normalized))
+
+
+def _codex_notices(lines: list[str]) -> list[HarnessUsageNotice]:
+    notices: list[HarnessUsageNotice] = []
+    for line in lines:
+        text = _clean_codex_line(line)
+        if _STALE_NOTICE_RE.search(text):
+            notices.append(HarnessUsageNotice("stale_limits", text))
+        elif _HARD_LIMIT_RE.search(text):
+            notices.append(HarnessUsageNotice("hard_limit", text))
+        elif match := _RESET_CREDIT_RE.search(text):
+            notices.append(
+                HarnessUsageNotice("reset_credit_available", text, int(match.group("count")))
+            )
+    return notices
+
+
 def parse_codex_status_pane(
     pane_text: str,
     *,
@@ -291,44 +389,84 @@ def parse_codex_status_pane(
     now: datetime | None = None,
 ) -> HarnessUsageStatus:
     clean = strip_ansi(pane_text)
-    session_matches = list(_CODEX_SESSION_RE.finditer(clean))
-    session_id = session_matches[-1].group("session") if session_matches else None
-    # Usage probe sessions keep /status scrollback; take the latest row per window.
-    windows_by_name: dict[str, HarnessUsageWindow] = {}
-    window_order: list[str] = []
-
-    for match in _CODEX_LIMIT_RE.finditer(clean):
-        pct = float(match.group("pct"))
-        direction = (match.group("dir") or "used").lower()
-        used = 100.0 - pct if direction in ("left", "remaining") else pct
-        used = round(max(0.0, min(100.0, used)), 4)
-        name = re.sub(r"\s+", " ", match.group("label")).strip().lower() or "usage"
-        reset_raw = match.group("reset") or ""
-        # Newer Codex builds put `(resets 21:29)` inline; older ones put a
-        # standalone `Resets 9:15am (TZ)` line — fall back to the latter.
-        reset_at = (
-            _parse_clock_reset(reset_raw, now) if reset_raw else _parse_reset_at(clean, now=now)
-        )
-        if name not in windows_by_name:
-            window_order.append(name)
-        windows_by_name[name] = HarnessUsageWindow(name=name, percent_used=used, reset_at=reset_at)
-
-    windows = [windows_by_name[name] for name in window_order]
-
-    if not windows and (match := _PERCENT_RE.search(clean)):
-        windows.append(
-            HarnessUsageWindow(
-                name="usage",
-                percent_used=float(match.group("pct")),
-                reset_at=_parse_reset_at(clean, now=now),
+    surface = locate_codex_status_surface(clean)
+    panel_lines = list(surface.lines) if surface else []
+    diagnostics: list[str] = []
+    windows: list[HarnessUsageWindow] = []
+    context: HarnessUsageContextWindow | None = None
+    session_id: str | None = None
+    for index, raw_line in enumerate(panel_lines):
+        line = _clean_codex_line(raw_line)
+        if session_match := _CODEX_SESSION_RE.search(line):
+            session_id = session_match.group("session")
+        if context_match := _CODEX_CONTEXT_RE.match(line):
+            pct = float(context_match.group("pct"))
+            direction = context_match.group("dir").lower()
+            used = pct if direction in {"used", "consumed"} else 100.0 - pct
+            context = HarnessUsageContextWindow(
+                percent_used=round(max(0.0, min(100.0, used)), 4),
+                percent_left=pct if direction in {"left", "remaining"} else 100.0 - pct,
+                used=float(context_match.group("used")) if context_match.group("used") else None,
+                limit=float(context_match.group("limit")) if context_match.group("limit") else None,
+                unit=context_match.group("unit") or context_match.group("limit_unit") or None,
             )
-        )
+            continue
+        match = _CODEX_LIMIT_RE.match(line)
+        if match is None:
+            continue
+        direction = (match.group("dir") or "").lower()
+        label = re.sub(r"\s+", " ", match.group("label")).strip()
+        if not direction:
+            diagnostics.append(f"ambiguous quota direction for {label!r}")
+            continue
+        pct = float(match.group("pct"))
+        used = pct if direction in {"used", "consumed"} else 100.0 - pct
+        reset_text = match.group("tail")
+        # A wrapped reset can only belong to the immediately preceding row.
+        if "reset" not in reset_text.lower() and index + 1 < len(panel_lines):
+            following = _clean_codex_line(panel_lines[index + 1])
+            if following.lower().startswith("resets"):
+                reset_text = following
+        reset_at = _parse_clock_reset(reset_text, now) if "reset" in reset_text.lower() else None
+        if "reset" in reset_text.lower() and reset_at is None:
+            diagnostics.append(f"invalid reset for {label!r}: {reset_text!r}")
+        key = _codex_key(label)
+        windows.append(HarnessUsageWindow(
+            # Preserve the long-standing public labels for known Codex rows;
+            # future labels remain visible instead of being collapsed away.
+            name=key if key in {"5h", "weekly"} else label,
+            key=key,
+            percent_used=round(max(0.0, min(100.0, used)), 4),
+            reset_at=reset_at,
+        ))
+
+    # Notices outside /status are meaningful only in the active view below
+    # the last composer; historical scrollback must not become current state.
+    active_lines = clean.splitlines()
+    last_composer = max(
+        (i for i, line in enumerate(active_lines) if line.lstrip().startswith("›")), default=-1
+    )
+    notices = _codex_notices(panel_lines)
+    if last_composer >= 0:
+        notices.extend(_codex_notices(active_lines[last_composer:]))
+    freshness = (
+        HarnessUsageFreshness.ADVISORY_STALE if any(n.kind == "stale_limits" for n in notices)
+        else HarnessUsageFreshness.CURRENT if surface and surface.complete
+        else HarnessUsageFreshness.UNKNOWN
+    )
 
     return HarnessUsageStatus(
         harness="codex",
         source="slash:/status",
         fetched_at=fetched_at or utc_now_iso(),
         windows=windows,
+        freshness=freshness,
+        notices=notices,
+        context_window=context,
+        diagnostics=diagnostics,
+        surface_bounds=(surface.start + 1, surface.end) if surface else None,
+        surface_complete=bool(surface and surface.complete),
+        parser_version="codex-status-v2",
         raw={"session_id": session_id} if session_id else {},
     )
 

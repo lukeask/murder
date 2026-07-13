@@ -10,38 +10,24 @@ Covers:
 from __future__ import annotations
 
 import asyncio
-import json
-from pathlib import Path
+import sqlite3
 
 import pytest
 
 from murder.app.service.host import ServiceHost
 from murder.app.service.read_model import ServiceReadModel
 from murder.config import Config, CrowHandlerConfig, HarnessRoleConfig, ProjectConfig
-from murder.llm.harnesses import model_cache as mc
-from murder.llm.harnesses.model_cache import (
-    clear_model_cache,
-    refresh_and_persist_harness_models,
-)
-from murder.llm.harnesses.results import ok_result, fail_result
+from murder.llm.harnesses.model_cache import CATALOG_ADVISORY, refresh_and_persist_harness_models
 from murder.state.persistence.harness_models import (
     get_all_harness_models,
     upsert_harness_models,
 )
-from murder.state.persistence.schema import db_path_for, get_db, init_db
+from murder.state.persistence.schema import get_db, init_db
 from murder.state.storage.paths import db_path
-
 
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
-
-
-@pytest.fixture(autouse=True)
-def _clean_model_cache():
-    clear_model_cache()
-    yield
-    clear_model_cache()
 
 
 @pytest.fixture
@@ -59,7 +45,9 @@ def db_conn(repo_root):
 
 def test_upsert_and_read_roundtrip(db_conn):
     models = [{"id": "m1", "label": "Model 1"}, {"id": "m2", "label": "Model 2"}]
-    upsert_harness_models(db_conn, harness="claude_code", models=models, fetched_at="2026-06-09T12:00:00")
+    upsert_harness_models(
+        db_conn, harness="claude_code", models=models, fetched_at="2026-06-09T12:00:00"
+    )
     db_conn.commit()
 
     rows = get_all_harness_models(db_conn)
@@ -189,8 +177,6 @@ def test_snapshot_as_of_is_max_fetched_at(repo_root, db_conn):
 def test_snapshot_missing_table_guard(repo_root):
     """get_harness_models_snapshot returns safe default on a DB without the table."""
     # Create the .murder dir but open a bare DB (no init_db → no harness_models table)
-    import sqlite3
-
     db_file = db_path(repo_root)
     db_file.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(db_file))
@@ -206,71 +192,24 @@ def test_snapshot_missing_table_guard(repo_root):
 # ---------------------------------------------------------------------------
 
 
-def test_refresh_persists_discovered_models(repo_root, db_conn, monkeypatch):
-    """Successful discovery should appear in the DB after refresh."""
-
-    async def fake_discover(kind: str, repo_root: Path, **_kw):
-        return ok_result([(f"{kind}-model", f"{kind.title()} Model")])
-
-    monkeypatch.setattr(mc, "discover_harness_models", fake_discover)
-
+def test_refresh_persists_configured_catalog(repo_root, db_conn):
+    """Configured catalog rows are persisted without a live harness probe."""
     asyncio.run(refresh_and_persist_harness_models(repo_root, db_conn))
 
     rows = get_all_harness_models(db_conn)
     harnesses_persisted = {r["harness"] for r in rows}
-    # At least one harness should have been persisted
     assert len(harnesses_persisted) > 0
     for row in rows:
-        # Success rows: no error, model list non-empty
-        assert row["discovery_error"] is None
-        assert len(row["models"]) > 0
-        assert row["models"][0]["id"].endswith("-model")
-        assert row["models"][0]["label"].endswith(" Model")
+        assert row["discovery_error"] == CATALOG_ADVISORY
+        assert isinstance(row["models"], list)
 
 
-def test_refresh_persists_failure_rows(repo_root, db_conn, monkeypatch):
-    """A failed probe should store the error in discovery_error."""
-    from murder.llm.harnesses.model_cache import enabled_harnesses
-
-    enabled = enabled_harnesses()
-    assert enabled, "need at least one enabled harness"
-
-    async def fake_discover(kind: str, repo_root: Path, **_kw):
-        return fail_result("probe failed")
-
-    monkeypatch.setattr(mc, "discover_harness_models", fake_discover)
-
-    asyncio.run(refresh_and_persist_harness_models(repo_root, db_conn))
-
-    rows = get_all_harness_models(db_conn)
-    assert len(rows) > 0
-    for row in rows:
-        assert row["discovery_error"] == "probe failed"
-
-
-def test_refresh_no_db_does_not_raise(repo_root, monkeypatch):
-    """refresh_and_persist_harness_models with db=None should not raise."""
-
-    async def fake_discover(kind: str, repo_root: Path, **_kw):
-        return ok_result([("x", "X")])
-
-    monkeypatch.setattr(mc, "discover_harness_models", fake_discover)
-
-    # Should not raise
+def test_refresh_without_db_does_not_probe_or_raise(repo_root):
     asyncio.run(refresh_and_persist_harness_models(repo_root, db=None))
-    # Cache should be populated
-    from murder.llm.harnesses.model_cache import get_available_models, enabled_harnesses
-    for kind in enabled_harnesses():
-        assert get_available_models(kind) == [("x", "X")]
 
 
-def test_refresh_and_snapshot_end_to_end(repo_root, db_conn, monkeypatch):
+def test_refresh_and_snapshot_end_to_end(repo_root, db_conn):
     """Full round-trip: refresh writes DB, snapshot reads correct shape."""
-
-    async def fake_discover(kind: str, repo_root: Path, **_kw):
-        return ok_result([(f"{kind}-id", f"{kind} Label")])
-
-    monkeypatch.setattr(mc, "discover_harness_models", fake_discover)
 
     asyncio.run(refresh_and_persist_harness_models(repo_root, db_conn))
     db_conn.commit()

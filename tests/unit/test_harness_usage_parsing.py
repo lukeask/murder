@@ -4,13 +4,14 @@ from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+from murder.llm.harnesses.claude_code import ClaudeCodeAdapter
+from murder.llm.harnesses.codex import CodexAdapter
 from murder.llm.harnesses.usage import (
+    locate_codex_status_surface,
     parse_antigravity_usage_pane,
     parse_claude_usage_pane,
     parse_codex_status_pane,
 )
-from murder.llm.harnesses.claude_code import ClaudeCodeAdapter
-from murder.llm.harnesses.codex import CodexAdapter
 
 
 def _load_pane_fixture(name: str) -> str:
@@ -92,6 +93,34 @@ def test_codex_status_uses_latest_scrollback_row_per_window() -> None:
     assert reset_at.hour == 2 and reset_at.minute == 14
     t_until_minutes = (reset_at - now).total_seconds() / 60.0
     assert 4.5 * 60 < t_until_minutes < 5.5 * 60
+
+
+def test_codex_status_is_atomic_and_does_not_restore_an_old_window() -> None:
+    old = _codex_session_limit_pane()
+    old_5h_row = next(line for line in old.splitlines(keepends=True) if "5h limit:" in line)
+    newest = old.replace(old_5h_row, "").replace("43% left", "44% left")
+    status = parse_codex_status_pane(f"{old}\n{newest}")
+    assert [(row.name, row.percent_used) for row in status.windows] == [("weekly", 56.0)]
+    assert status.surface_complete is True
+
+
+def test_codex_status_context_and_exact_stale_notice_are_typed() -> None:
+    pane = Path(
+        ".murder/codexusageexamples/goldenexamples/04_status_context_window_stale_warning_v0144.txt"
+    ).read_text()
+    status = parse_codex_status_pane(pane)
+    assert status.context_window is not None
+    assert status.context_window.used == 91.7
+    assert status.context_window.limit == 353.0
+    assert status.freshness.value == "advisory_stale"
+    assert [notice.kind for notice in status.notices] == ["stale_limits"]
+
+
+def test_codex_status_rejects_unbounded_hostile_percentages() -> None:
+    status = parse_codex_status_pane("marketing copy: 90% used, limits are great")
+    assert status.windows == []
+    assert status.freshness.value == "unknown"
+    assert locate_codex_status_surface("marketing copy: 90% used") is None
 
 
 def test_claude_usage_dialog_narrow_parses_block_bar_and_reset() -> None:

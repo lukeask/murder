@@ -43,21 +43,3 @@ class HarnessConfigurator:
             startup_model=ch.startup_model,
             startup_effort=ch.startup_effort,
         )
-
-    @staticmethod
-    def codex_startup_degraded_ok(
-        harness_kind: str,
-        startup_model: str | None,
-        harness_adapter: Any,
-        message: str,
-    ) -> bool:
-        if harness_kind != "codex" or startup_model is None:
-            return False
-        known_startup_models = {
-            model_id
-            for model_id, _label in getattr(harness_adapter, "available_startup_models", ())
-        }
-        if startup_model not in known_startup_models:
-            return False
-        msg = message.lower()
-        return "failed to select runtime model" in msg or "not idle in time" in msg

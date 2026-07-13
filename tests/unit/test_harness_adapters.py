@@ -81,6 +81,7 @@ AGY_MODEL_PICKER = _load("agy_model_picker.txt")
 # ClaudeCode adapter
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 class TestClaudeCodeAdapter:
     cc = ClaudeCodeAdapter()
 
@@ -163,6 +164,7 @@ class TestClaudeCodeAdapter:
 # Codex adapter
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 class TestCodexAdapter:
     cx = CodexAdapter()
 
@@ -188,9 +190,9 @@ class TestCodexAdapter:
         # the prompt chrome is already visible.
         assert self.cx.is_idle(CODEX_STARTUP) is False
 
-    def test_startup_cmd_passes_requested_model(self):
+    def test_startup_cmd_does_not_select_runtime_model(self):
         cmd = CodexAdapter(startup_model="gpt-5.4-mini").startup_cmd(Path("/tmp/repo"))
-        assert cmd[cmd.index("--model") + 1] == "gpt-5.4-mini"
+        assert "--model" not in cmd
 
     def test_startup_cmd_adds_extra_workspace_dirs(self):
         adapter = CodexAdapter()
@@ -260,11 +262,10 @@ class TestCodexAdapter:
         pane = PaneSimulator().add("OpenAI Codex", "  login required").render()
         assert self.cx.is_ready(pane) is False
 
-    # ── update-available menu — ready (so dismiss runs) but NOT idle/input-ready ─
+    # ── update-available menu — ready but NOT idle/input-ready ─
 
     def test_update_menu_is_ready(self):
-        # Must read ready so startup proceeds to initialize_defaults, which
-        # dismisses the menu (dismiss only happens after _wait_startup_ready).
+        # Restoration owns dismissal; the passive adapter only recognizes it.
         assert self.cx.is_ready(CODEX_UPDATE_MENU) is True
 
     def test_update_menu_not_idle(self):
@@ -283,7 +284,7 @@ class TestCodexAdapter:
         for fixture in (CODEX_UPDATE_MENU_PTR2, CODEX_UPDATE_MENU_PTR3):
             assert self.cx.is_idle(fixture) is False
             assert self.cx.is_input_ready(fixture) is False
-            # And it still reads ready so initialize_defaults can dismiss it.
+            # It still reads ready so verified restoration can handle it.
             assert self.cx.is_ready(fixture) is True
 
     # ── dismissed update menu in scrollback — live prompt below means idle ──
@@ -331,6 +332,7 @@ class TestCodexAdapter:
 # ─────────────────────────────────────────────────────────────────────────────
 # Cursor adapter
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 class TestCursorAdapter:
     cu = CursorAdapter()
@@ -434,6 +436,7 @@ class TestCursorAdapter:
 # Pi adapter
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 class TestPiAdapter:
     pi = PiAdapter()
 
@@ -503,6 +506,7 @@ class TestPiAdapter:
 # Antigravity adapter
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 class TestAntigravityAdapter:
     agy = AntigravityAdapter()
 
@@ -534,8 +538,7 @@ class TestAntigravityAdapter:
     # ── trust dialog (first-run, untrusted directory) ─────────────────────────
 
     def test_trust_dialog_is_ready(self):
-        # is_ready must include the trust dialog so initialize_defaults
-        # gets a chance to dismiss it
+        # is_ready includes the trust dialog so verified restoration can handle it.
         assert self.agy.is_ready(AGY_TRUST_DIALOG) is True
 
     def test_trust_dialog_not_idle(self):
@@ -575,14 +578,13 @@ class TestAntigravityAdapter:
         assert "--dangerously-skip-permissions" in cmd
         assert "--model" not in cmd
 
-    # NOTE: antigravity set_model now navigates the /model picker (see
-    # test_harness_runtime_model_selection.test_antigravity_set_model_navigates_picker);
-    # the old advisory string-match contract no longer applies.
+    # Runtime model selection is verified control, not a legacy adapter method.
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Shared sentinel detection (base class, adapter-agnostic)
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 class TestSentinelDetection:
     """ASK / DONE / NOTE / ANSWER marker detection uses base regexes

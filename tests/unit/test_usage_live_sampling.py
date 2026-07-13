@@ -1,13 +1,15 @@
+"""Live usage sampling delegates only to verified control capabilities."""
+
 from __future__ import annotations
 
 import asyncio
+import json
 import sqlite3
 from pathlib import Path
 
 from murder.config import Config, CrowHandlerConfig, HarnessRoleConfig, ProjectConfig
-from murder.llm.harnesses.base import HarnessAdapter, HarnessSession
-from murder.llm.harnesses.models import HarnessStartSpec, HarnessUsageStatus, HarnessUsageWindow
-from murder.llm.harnesses.results import fail_result, ok_result
+from murder.llm.harnesses.base import HarnessAdapter
+from murder.llm.harnesses.models import HarnessUsageStatus, HarnessUsageWindow
 from murder.llm.harnesses.usage_sampling import (
     LiveSessionUsageResult,
     UsageSamplingContext,
@@ -19,15 +21,6 @@ from murder.state.persistence.schema import init_db
 class _StubUsageAdapter(HarnessAdapter):
     kind = "codex"
     usage_collection_mode = "tmux_slash"
-    _result = ok_result(
-        HarnessUsageStatus(
-            harness="codex",
-            source="slash:/status",
-            fetched_at="2026-06-04T00:00:00+00:00",
-            windows=[HarnessUsageWindow(name="5h", percent_used=25.0)],
-            raw={"session_id": "live-session-id"},
-        )
-    )
 
     def startup_cmd(self, cwd: Path) -> list[str]:
         del cwd
@@ -45,14 +38,6 @@ class _StubUsageAdapter(HarnessAdapter):
         del pane_text
         return False
 
-    async def initialize_defaults(self, session: str, spec: HarnessStartSpec):  # type: ignore[override]
-        del session, spec
-        return ok_result()
-
-    async def collect_usage_status(self, session: str):
-        del session
-        return self._result
-
     def extract_last_message(self, pane_text: str) -> str | None:
         del pane_text
         return None
@@ -63,39 +48,20 @@ class _HttpOnlyAdapter(_StubUsageAdapter):
     usage_collection_mode = "http"
 
 
-class _FakeProducer:
-    def __init__(self, last_state: str | None) -> None:
-        self.last_state = last_state
+class _VerifiedUsageControl:
+    def __init__(self, status: HarnessUsageStatus | None) -> None:
+        self.status = status
+        self.triggers: list[str] = []
 
-
-class _FakeHarnessSession:
-    def __init__(self, adapter: HarnessAdapter, session: str = "crow-1") -> None:
-        self.adapter = adapter
-        self.session = session
-        self.repo_root = Path("/tmp")
-        self.collect_calls = 0
-
-    async def collect_usage_status(self):
-        self.collect_calls += 1
-        return await self.adapter.collect_usage_status(self.session)
-
-    async def wait_idle(self, timeout_s: float = 30.0):
-        del timeout_s
-        return ok_result()
+    async def collect_usage(self, *, trigger: str) -> HarnessUsageStatus | None:
+        self.triggers.append(trigger)
+        return self.status
 
 
 class _FakeAgent:
-    def __init__(
-        self,
-        *,
-        harness: HarnessAdapter,
-        harness_session: _FakeHarnessSession,
-        producer: _FakeProducer | None = None,
-    ) -> None:
+    def __init__(self, harness: HarnessAdapter, control: object | None) -> None:
         self.harness = harness
-        self.harness_session = harness_session
-        self._producer = producer
-        self.usage_capture_in_progress = False
+        self.verified_harness_control = control
 
 
 def _config() -> Config:
@@ -115,137 +81,61 @@ def _db() -> sqlite3.Connection:
     return conn
 
 
-def test_live_sample_inserts_snapshot_with_trigger(monkeypatch, tmp_path) -> None:
-    sent: list[tuple[str, str, bool, bool]] = []
-    inserted: list[HarnessUsageStatus] = []
-
-    async def _send_keys(session: str, keys: str, *, literal: bool, enter: bool) -> None:
-        sent.append((session, keys, literal, enter))
-
-    async def _interrupt_generation(self, session: str) -> None:
-        del self
-        sent.append((session, "Escape", False, False))
-
-    monkeypatch.setattr(
-        "murder.llm.harnesses.usage_sampling.tmux.send_keys",
-        _send_keys,
-    )
-    monkeypatch.setattr(
-        _StubUsageAdapter,
-        "interrupt_generation",
-        _interrupt_generation,
-    )
-    monkeypatch.setattr(
-        "murder.llm.harnesses.usage_sampling.REGISTRY",
-        {"codex": _StubUsageAdapter},
-    )
-    monkeypatch.setattr(
-        "murder.llm.harnesses.usage_sampling.insert_harness_usage_snapshot",
-        lambda db, status: inserted.append(status),
+def _status() -> HarnessUsageStatus:
+    return HarnessUsageStatus(
+        harness="codex",
+        source="slash:/status",
+        fetched_at="2026-06-04T00:00:00+00:00",
+        windows=[HarnessUsageWindow(name="5h", percent_used=25.0)],
+        raw={"session_id": "live-session-id"},
     )
 
-    adapter = _StubUsageAdapter()
-    hs = _FakeHarnessSession(adapter, session="crow-ticket-1")
-    agent = _FakeAgent(
-        harness=adapter,
-        harness_session=hs,
-        producer=_FakeProducer("awaiting_input"),
-    )
+
+def test_live_sample_persists_only_verified_usage_result(tmp_path: Path) -> None:
+    control = _VerifiedUsageControl(_status())
+    agent = _FakeAgent(_StubUsageAdapter(), control)
     db = _db()
     ctx = UsageSamplingContext(config=_config(), repo_root=tmp_path, db=db)
 
     result = asyncio.run(sample_live_session_usage(agent, ctx, "agent_startup"))
 
     assert result == LiveSessionUsageResult(outcome="stored")
-    assert hs.collect_calls == 1
-    assert len(inserted) == 1
-    assert inserted[0].raw.get("trigger") == "agent_startup"
-    assert any(keys == "Escape" for _, keys, _, _ in sent)
+    assert control.triggers == ["agent_startup"]
+    row = db.execute("SELECT status_json FROM harness_usage_snapshots").fetchone()
+    assert row is not None
+    assert json.loads(row["status_json"])["raw"]["trigger"] == "agent_startup"
 
 
-def test_live_sample_skips_when_not_idle(monkeypatch, tmp_path) -> None:
-    sent: list[tuple[str, str]] = []
-
-    async def _send_keys(session: str, keys: str, *, literal: bool, enter: bool) -> None:
-        del literal, enter
-        sent.append((session, keys))
-
-    monkeypatch.setattr(
-        "murder.llm.harnesses.usage_sampling.tmux.send_keys",
-        _send_keys,
-    )
-    monkeypatch.setattr(
-        "murder.llm.harnesses.usage_sampling.REGISTRY",
-        {"codex": _StubUsageAdapter},
-    )
-    monkeypatch.setattr(
-        "murder.llm.harnesses.usage_sampling.insert_harness_usage_snapshot",
-        lambda db, status: (_ for _ in ()).throw(AssertionError("should not insert")),
-    )
-
-    adapter = _StubUsageAdapter()
-    hs = _FakeHarnessSession(adapter)
-    agent = _FakeAgent(
-        harness=adapter,
-        harness_session=hs,
-        producer=_FakeProducer("working"),
-    )
+def test_live_sample_skips_without_a_verified_usage_capability(tmp_path: Path) -> None:
+    agent = _FakeAgent(_StubUsageAdapter(), None)
     ctx = UsageSamplingContext(config=_config(), repo_root=tmp_path, db=_db())
 
     result = asyncio.run(sample_live_session_usage(agent, ctx, "agent_shutdown"))
 
-    assert result == LiveSessionUsageResult(outcome="skipped", reason="not_idle")
-    assert hs.collect_calls == 0
-    assert sent == []
-
-
-def test_live_sample_noop_for_non_tmux_slash_harness(tmp_path) -> None:
-    adapter = _HttpOnlyAdapter()
-    hs = _FakeHarnessSession(adapter)
-    agent = _FakeAgent(
-        harness=adapter,
-        harness_session=hs,
-        producer=_FakeProducer("awaiting_input"),
+    assert result == LiveSessionUsageResult(
+        outcome="skipped", reason="verified_usage_unavailable"
     )
+
+
+def test_live_sample_noops_for_side_channel_harness(tmp_path: Path) -> None:
+    control = _VerifiedUsageControl(_status())
+    agent = _FakeAgent(_HttpOnlyAdapter(), control)
     ctx = UsageSamplingContext(config=_config(), repo_root=tmp_path, db=_db())
 
     result = asyncio.run(sample_live_session_usage(agent, ctx, "agent_startup"))
 
     assert result == LiveSessionUsageResult(outcome="noop", reason="unsupported_harness")
-    assert hs.collect_calls == 0
+    assert control.triggers == []
 
 
-def test_live_sample_parse_failure_does_not_raise(monkeypatch, tmp_path) -> None:
-    class _FailingAdapter(_StubUsageAdapter):
-        _result = fail_result("no usage")
-
-    async def _interrupt_generation(self, session: str) -> None:
-        del self, session
-
-    monkeypatch.setattr(
-        _FailingAdapter,
-        "interrupt_generation",
-        _interrupt_generation,
-    )
-    monkeypatch.setattr(
-        "murder.llm.harnesses.usage_sampling.REGISTRY",
-        {"codex": _FailingAdapter},
-    )
-    monkeypatch.setattr(
-        "murder.llm.harnesses.usage_sampling.insert_harness_usage_snapshot",
-        lambda db, status: (_ for _ in ()).throw(AssertionError("should not insert")),
-    )
-
-    adapter = _FailingAdapter()
-    hs = _FakeHarnessSession(adapter)
-    agent = _FakeAgent(
-        harness=adapter,
-        harness_session=hs,
-        producer=_FakeProducer("awaiting_input"),
-    )
+def test_live_sample_reports_failed_verified_usage_request(tmp_path: Path) -> None:
+    control = _VerifiedUsageControl(None)
+    agent = _FakeAgent(_StubUsageAdapter(), control)
     ctx = UsageSamplingContext(config=_config(), repo_root=tmp_path, db=_db())
 
     result = asyncio.run(sample_live_session_usage(agent, ctx, "agent_shutdown"))
 
-    assert result.outcome == "failed"
-    assert hs.collect_calls == 1
+    assert result == LiveSessionUsageResult(
+        outcome="failed", reason="verified_usage_unavailable"
+    )
+    assert control.triggers == ["agent_shutdown"]

@@ -7,20 +7,11 @@ doc from the live model cache.
 
 from __future__ import annotations
 
-import pytest
 import yaml
 
 from murder.llm.harnesses import REGISTRY
 from murder.llm.harnesses.harnesses_doc import render_harnesses_doc, write_harnesses_doc
-from murder.llm.harnesses.model_cache import clear_model_cache, set_discovered_models
 from murder.state.storage.paths import harnesses_and_models_md
-
-
-@pytest.fixture(autouse=True)
-def _clean_cache():
-    clear_model_cache()
-    yield
-    clear_model_cache()
 
 
 def test_render_lists_harness_names_and_models():
@@ -82,15 +73,14 @@ def _write_user_crow_pool(tmp_path, monkeypatch, harnesses):
     )
 
 
-def test_write_doc_uses_cache_and_writes_file(tmp_path, monkeypatch):
+def test_write_doc_uses_configured_catalog_and_writes_file(tmp_path, monkeypatch):
     _write_user_crow_pool(tmp_path, monkeypatch, ["claude_code", "codex"])
-    set_discovered_models("claude_code", [("sonnet", "Claude Sonnet 4")])
     write_harnesses_doc(tmp_path)
     path = harnesses_and_models_md(tmp_path)
     assert path.exists()
     text = path.read_text(encoding="utf-8")
     assert "## claude_code" in text
-    assert "Claude Sonnet 4" in text
+    assert "Sonnet" in text
     assert "## codex" in text
 
 

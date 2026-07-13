@@ -10,9 +10,7 @@ from murder.llm.harnesses.usage_sampling import (
     UsageSamplingContext,
     harness_kinds_to_sample,
     sample_harness_usages,
-    sample_harness_usages_for_config,
 )
-from murder.llm.harnesses.usage_sampling import _RuntimeDbScope
 from murder.runtime.workers.base import Worker, WorkerCommand, WorkerCtx, WorkerSpec
 
 UsageSampler = Callable[..., Awaitable[tuple[int, int]]]
@@ -81,37 +79,6 @@ class UsageProbeWorker(Worker):
             modes: set[str] | None = None,
         ) -> list[str]:
             return harness_kinds_to_sample(sampling, modes=modes)
-
-        return cls(sampler=_sample, kinds_provider=_kinds)
-
-    @classmethod
-    def from_runtime(
-        cls,
-        runtime: _RuntimeDbScope,
-        *,
-        sampler: Callable[
-            [_RuntimeDbScope], Awaitable[tuple[int, int]]
-        ] = sample_harness_usages_for_config,
-    ) -> UsageProbeWorker:
-        """Thin shim for call sites still holding a config/db/repo scope."""
-
-        async def _sample(
-            _ctx: WorkerCtx,
-            *,
-            modes: set[str] | None = None,
-        ) -> tuple[int, int]:
-            del modes
-            return await sampler(runtime)
-
-        def _kinds(
-            _ctx: WorkerCtx,
-            *,
-            modes: set[str] | None = None,
-        ) -> list[str]:
-            return harness_kinds_to_sample(
-                UsageSamplingContext.from_runtime(runtime),
-                modes=modes,
-            )
 
         return cls(sampler=_sample, kinds_provider=_kinds)
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from enum import Enum
 from pathlib import Path
 
 
@@ -45,13 +46,6 @@ class HarnessModelState:
 
 
 @dataclass(slots=True)
-class HarnessPaneState:
-    ready: bool
-    idle: bool
-    busy: bool
-
-
-@dataclass(slots=True)
 class HarnessUsageTotals:
     input_tokens: int | None = None
     output_tokens: int | None = None
@@ -62,6 +56,34 @@ class HarnessUsageTotals:
     wall_duration_s: float | None = None
     lines_added: int | None = None
     lines_removed: int | None = None
+
+
+class HarnessUsageFreshness(str, Enum):
+    """Whether a usage surface can be used for current quota decisions."""
+
+    CURRENT = "current"
+    ADVISORY_STALE = "advisory_stale"
+    UNKNOWN = "unknown"
+
+
+@dataclass(frozen=True, slots=True)
+class HarnessUsageNotice:
+    """A provider notice which is deliberately distinct from a quota row."""
+
+    kind: str
+    text: str
+    count: int | None = None
+
+
+@dataclass(slots=True)
+class HarnessUsageContextWindow:
+    """Context consumption, not a billing/rate-limit quota window."""
+
+    percent_used: float | None = None
+    percent_left: float | None = None
+    used: float | None = None
+    limit: float | None = None
+    unit: str | None = None
 
 
 @dataclass(slots=True)
@@ -79,6 +101,8 @@ class HarnessUsageWindow:
     """
 
     name: str
+    # Stable machine key; ``name`` remains the provider-facing display label.
+    key: str | None = None
     percent_used: float | None = None
     reset_at: str | None = None
     starts_at: str | None = None
@@ -97,4 +121,11 @@ class HarnessUsageStatus:
     windows: list[HarnessUsageWindow] = field(default_factory=list)
     session: HarnessUsageTotals | None = None
     messages: list[str] = field(default_factory=list)
+    freshness: HarnessUsageFreshness = HarnessUsageFreshness.CURRENT
+    notices: list[HarnessUsageNotice] = field(default_factory=list)
+    context_window: HarnessUsageContextWindow | None = None
+    diagnostics: list[str] = field(default_factory=list)
+    surface_bounds: tuple[int, int] | None = None
+    surface_complete: bool = False
+    parser_version: str | None = None
     raw: dict[str, object] = field(default_factory=dict)

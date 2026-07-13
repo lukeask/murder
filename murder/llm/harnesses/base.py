@@ -9,21 +9,15 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import ClassVar, Literal
 
-from murder.runtime.terminal import tmux
+from murder.llm.harnesses.capabilities import HarnessCapabilities
 from murder.llm.harnesses.models import (
     HarnessModelState,
-    HarnessPaneState,
     HarnessStartSpec,
-    HarnessUsageStatus,
 )
-from murder.llm.harnesses.parsing import (
-    parse_harness_model_list,
-    strip_ansi,
-    strip_ui_chrome,
-)
-from murder.llm.harnesses.capabilities import CapabilityError, HarnessCapabilities, require
-from murder.llm.harnesses.transcripts import SEGMENT_TYPES, parse_frames, supports_harness
+from murder.llm.harnesses.parsing import strip_ui_chrome
 from murder.llm.harnesses.results import SimpleResult, fail_result, ok_result
+from murder.llm.harnesses.transcripts import SEGMENT_TYPES, parse_frames, supports_harness
+from murder.runtime.terminal import tmux
 
 _log = logging.getLogger(__name__)
 
@@ -45,16 +39,6 @@ _DONE_IN_SEGMENT_RE = re.compile(r"(?:^|(?<=\s))>>>\s*DONE[ \t]*(?:\n|\Z)", re.M
 MAX_NOTE_LINES = 20
 
 UsageCollectionMode = Literal["none", "tmux_slash", "http"]
-
-_MODEL_REJECTION_WORD_RE = re.compile(
-    r"\b("
-    r"invalid|unknown|unsupported|unrecognized|unrecognised|"
-    r"unavailable|not\s+available|not\s+found|no\s+such|"
-    r"does\s+not\s+exist|failed\s+to\s+set|could\s+not\s+set"
-    r")\b",
-    re.IGNORECASE,
-)
-_MODEL_WORD_RE = re.compile(r"\bmodels?\b", re.IGNORECASE)
 
 
 def _transcript_doc_to_turns(doc: dict[str, object]) -> list[tuple[str, str]]:
@@ -87,7 +71,6 @@ class HarnessSession:
         self.adapter = adapter
         self.session = session
         self.repo_root = repo_root
-        self._first_send_idle_gate_pending = False
 
     async def start(self, spec: HarnessStartSpec | None = None) -> SimpleResult[None]:
         start_spec = spec or HarnessStartSpec(
@@ -95,12 +78,9 @@ class HarnessSession:
             startup_model=self.adapter.startup_model,
             startup_effort=self.adapter.startup_effort,
         )
-        # Adapters are strictly per-session (one HarnessAdapter instance backs
-        # one HarnessSession). start() propagates the spec's startup model/effort
-        # onto the adapter so that startup_cmd() and the "model already selected"
-        # check below read a single source of truth. Do not share an adapter
-        # across sessions — this write would otherwise leak one session's model
-        # into the next.
+        # Requested model fields remain launch metadata for higher-level
+        # verified control.  Legacy startup never turns them into a CLI flag or
+        # terminal picker workflow.
         if start_spec.startup_model is not None:
             self.adapter.startup_model = start_spec.startup_model
         if start_spec.startup_effort is not None:
@@ -121,14 +101,7 @@ class HarnessSession:
         ready = await self._wait_startup_ready(start_spec)
         if not ready.ok:
             return ready
-        configured = await self._configure_started_session(start_spec)
-        if not configured.ok:
-            return configured
-        self._first_send_idle_gate_pending = True
         return ok_result()
-
-    def require_first_send_idle_gate(self) -> None:
-        self._first_send_idle_gate_pending = True
 
     async def _wait_startup_ready(self, start_spec: HarnessStartSpec) -> SimpleResult[None]:
         attempts = max(1, int(start_spec.ready_timeout_s / start_spec.poll_interval_s))
@@ -144,190 +117,17 @@ class HarnessSession:
             return fail_result(f"Harness not ready in time: session={self.session}")
         return ok_result()
 
-    async def _configure_started_session(self, start_spec: HarnessStartSpec) -> SimpleResult[None]:
-        desired_model = start_spec.startup_model or self.adapter.startup_model
-        desired_effort = start_spec.startup_effort or self.adapter.startup_effort
-        if (
-            desired_model
-            and desired_effort is None
-            and self.adapter.supported_efforts
-            and self.adapter.assume_default_effort_when_omitted
-        ):
-            desired_effort = self.adapter.default_effort
-
-        init_result = await self.initialize_defaults(start_spec)
-        if not init_result.ok:
-            return init_result
-        idle_result = await self.wait_idle(timeout_s=15.0)
-        if not idle_result.ok:
-            return idle_result
-
-        if desired_model:
-            launched_model = start_spec.startup_model or self.adapter.startup_model
-            startup_already_selected = (
-                self.adapter.startup_model_selects_runtime_model
-                and desired_model == launched_model
-            )
-            # A startup --model flag (codex) selects the model but carries no
-            # reasoning effort, so when a *non-default* effort is wanted we still
-            # run the runtime selection even though the model is already in place.
-            # set_model() short-circuits the default-effort case, so this only
-            # drives the picker when effort genuinely needs changing.
-            needs_runtime_effort = (
-                desired_effort is not None
-                and desired_effort != self.adapter.default_effort
-            )
-            if not startup_already_selected or needs_runtime_effort:
-                model_result = await self.set_model(desired_model, desired_effort)
-                if not model_result.ok:
-                    return model_result
-                idle_result = await self.wait_idle(timeout_s=15.0)
-                if not idle_result.ok:
-                    return idle_result
-        return ok_result()
-
-    async def wait_ready(self, timeout_s: float = 240.0) -> SimpleResult[None]:
-        attempts = max(1, int(timeout_s / 0.4))
-        for _ in range(attempts):
-            try:
-                pane = await tmux.capture_pane(self.session, lines=120)
-            except tmux.TmuxError as e:
-                return fail_result(f"Session lost during ready-wait: {e}")
-            if self.adapter.is_ready(pane):
-                return ok_result()
-            await asyncio.sleep(0.4)
-        return fail_result(f"Harness not ready in time: session={self.session}")
-
-    async def wait_idle(self, timeout_s: float = 30.0) -> SimpleResult[None]:
-        attempts = max(1, int(timeout_s / 0.4))
-        for _ in range(attempts):
-            try:
-                pane = await tmux.capture_pane(self.session, lines=120)
-            except tmux.TmuxError as e:
-                return fail_result(f"Session lost during idle-wait: {e}")
-            if self.adapter.is_idle(pane):
-                return ok_result()
-            await asyncio.sleep(0.4)
-        return fail_result(f"Harness not idle in time: session={self.session}")
-
-    def _pane_is_awaiting_input(self, pane_text: str) -> bool:
-        input_ready = self.adapter.is_input_ready(pane_text)
-        if input_ready is not None:
-            return input_ready
-        if self.adapter.has_transcript_parser():
-            return self.adapter.parse_transcript_doc(pane_text).get("state") == "awaiting_input"
-        return self.adapter.is_idle(pane_text)
-
-    async def wait_input_ready(
-        self,
-        timeout_s: float = 30.0,
-        *,
-        stable_polls: int = 2,
-    ) -> SimpleResult[None]:
-        attempts = max(1, int(timeout_s / 0.4))
-        needed = max(1, stable_polls)
-        consecutive = 0
-        for _ in range(attempts):
-            try:
-                pane = await tmux.capture_pane(self.session, lines=120)
-            except tmux.TmuxError as e:
-                return fail_result(f"Session lost during input-ready-wait: {e}")
-            if self._pane_is_awaiting_input(pane):
-                consecutive += 1
-                if consecutive >= needed:
-                    return ok_result()
-            else:
-                consecutive = 0
-            await asyncio.sleep(0.4)
-        return fail_result(f"Harness not awaiting input in time: session={self.session}")
-
-    async def initialize_defaults(self, spec: HarnessStartSpec) -> SimpleResult[None]:
-        return await self.adapter.initialize_defaults(self.session, spec)
-
-    def status_from_pane(self, pane_text: str) -> HarnessPaneState:
-        return HarnessPaneState(
-            ready=self.adapter.is_ready(pane_text),
-            idle=self.adapter.is_idle(pane_text),
-            busy=self.adapter.is_busy(pane_text),
-        )
-
-    async def send_prompt(self, prompt: str) -> SimpleResult[None]:
-        if self._first_send_idle_gate_pending:
-            input_ready = await self.wait_input_ready(timeout_s=15.0)
-            if not input_ready.ok:
-                return input_ready
-        try:
-            delivered = await self.adapter.send_prompt(self.session, prompt)
-        except Exception as e:
-            return fail_result(f"Harness prompt delivery failed: {e}")
-        if not delivered.ok:
-            return delivered
-        self._first_send_idle_gate_pending = False
-        return ok_result()
-
-    async def set_model(self, model: str, effort: str | None = None) -> SimpleResult[None]:
-        # A model selected by the launch --model flag already runs at the
-        # harness's default effort, so requesting that same model with no (or
-        # the default) effort is a no-op. A non-default effort still has to be
-        # applied via the adapter's runtime picker.
-        if (
-            self.adapter.startup_model_selects_runtime_model
-            and self.adapter.startup_model == model
-            and (effort is None or effort == self.adapter.default_effort)
-        ):
-            return ok_result()
-        selected = await self.adapter.set_model(self.session, model, effort=effort)
-        if selected:
-            return ok_result()
-        effort_msg = f" with effort {effort!r}" if effort else ""
-        return fail_result(
-            f"{self.adapter.kind} failed to select runtime model {model!r}{effort_msg} "
-            f"(startup_model={self.adapter.startup_model!r}, "
-            f"startup_selects_runtime={self.adapter.startup_model_selects_runtime_model})"
-        )
-
-    async def request_usage_status(self) -> SimpleResult[None]:
-        requested = await self.adapter.request_usage_status(self.session)
-        if requested:
-            return ok_result()
-        return fail_result(f"{self.adapter.kind} does not support usage/status reporting")
-
-    async def collect_usage_status(self) -> SimpleResult[HarnessUsageStatus]:
-        return await self.adapter.collect_usage_status(self.session)
-
-    async def collect_available_models(self) -> SimpleResult[list[tuple[str, str]]]:
-        return await self.adapter.collect_available_models(self.session)
-
-    async def collect_active_model_state(self) -> SimpleResult[HarnessModelState]:
-        pane = await tmux.capture_pane(self.session, lines=200)
-        state = self.adapter.parse_active_model_state(pane)
-        if state is None or (state.model is None and state.effort is None):
-            return fail_result(f"{self.adapter.kind} active model state was not visible")
-        return ok_result(state)
-
-    async def probe_invalid_model(self, model: str) -> SimpleResult[None]:
-        return await self.adapter.probe_invalid_model(self.session, model)
-
-    async def interrupt(self) -> SimpleResult[None]:
-        await self.adapter.interrupt(self.session)
-        return ok_result()
-
-
 class HarnessAdapter(ABC):
     kind: ClassVar[str]
     crow_system_prompt: ClassVar[str]
+    # Passive configured catalog metadata.  Verified harness control owns every
+    # runtime selection effect; these values never drive tmux or startup argv.
     available_startup_models: ClassVar[list[tuple[str, str]]] = []
-    model_list_command: ClassVar[str | None] = "/models"
-    model_list_capture_delay_s: ClassVar[float] = 0.8
-    model_selection_command_template: ClassVar[str | None] = "/model {model}"
-    model_selection_capture_delay_s: ClassVar[float] = 0.8
     supported_efforts: ClassVar[tuple[str, ...]] = ()
     default_effort: ClassVar[str] = "medium"
-    assume_default_effort_when_omitted: ClassVar[bool] = True
     usage_collection_mode: ClassVar[UsageCollectionMode] = "none"
     supports_subagents: ClassVar[bool] = False
     cheapest_subagent_model: ClassVar[str | None] = None
-    startup_model_selects_runtime_model: ClassVar[bool] = False
 
     def __init__(
         self,
@@ -356,8 +156,10 @@ class HarnessAdapter(ABC):
         """Derive capability flags from adapter class vars (registry source of truth)."""
         return HarnessCapabilities(
             usage_reporting=cls.usage_collection_mode != "none",
-            model_discovery=cls.model_list_command is not None,
-            model_selection=cls.model_selection_command_template is not None,
+            # Runtime model interaction is exclusively owned by verified
+            # harness control, never by this legacy adapter facade.
+            model_discovery=False,
+            model_selection=False,
             pane_state_reading=True,
             transcript_access=supports_harness(cls.kind),
             startup_interrupt_continue=True,
@@ -386,88 +188,6 @@ class HarnessAdapter(ABC):
     def is_input_ready(self, pane_text: str) -> bool | None:
         del pane_text
         return None
-
-    async def initialize_defaults(self, session: str, spec: HarnessStartSpec) -> SimpleResult[None]:
-        del session, spec
-        return ok_result()
-
-    async def send_prompt(self, session: str, prompt: str) -> SimpleResult[None]:
-        await tmux.send_keys(session, prompt, literal=True, enter=True)
-        return ok_result()
-
-    async def set_model(self, session: str, model: str, *, effort: str | None = None) -> bool:
-        del session, model, effort
-        return False
-
-    async def request_model_selection(
-        self,
-        session: str,
-        model: str,
-        *,
-        effort: str | None = None,
-    ) -> bool:
-        del effort
-        if self.model_selection_command_template is None:
-            return False
-        await tmux.send_keys(
-            session,
-            self.model_selection_command_template.format(model=model),
-            literal=True,
-            enter=True,
-        )
-        await asyncio.sleep(self.model_selection_capture_delay_s)
-        return True
-
-    def detects_model_rejection(self, pane_text: str, model: str) -> bool:
-        clean = strip_ansi(pane_text)
-        model_at = clean.lower().find(model.lower())
-        if model_at >= 0:
-            window = clean[max(0, model_at - 240) : model_at + len(model) + 240]
-            return bool(_MODEL_REJECTION_WORD_RE.search(window))
-        tail = clean[-1200:]
-        return bool(_MODEL_REJECTION_WORD_RE.search(tail) and _MODEL_WORD_RE.search(tail))
-
-    async def probe_invalid_model(self, session: str, model: str) -> SimpleResult[None]:
-        try:
-            require(self.capabilities(), "model_selection")
-        except CapabilityError as e:
-            return fail_result(str(e))
-        requested = await self.request_model_selection(session, model)
-        if not requested:
-            return fail_result(f"{self.kind} does not support runtime model selection")
-        pane = await tmux.capture_pane(session, lines=200)
-        if self.detects_model_rejection(pane, model):
-            return ok_result()
-        return fail_result(f"{self.kind} did not reject invalid model selection for {model!r}")
-
-    async def request_usage_status(self, session: str) -> bool:
-        del session
-        return False
-
-    async def collect_usage_status(self, session: str) -> SimpleResult[HarnessUsageStatus]:
-        del session
-        try:
-            require(self.capabilities(), "usage_reporting")
-        except CapabilityError as e:
-            return fail_result(str(e))
-        return fail_result(f"{self.kind} does not support structured usage/status reporting")
-
-    async def request_model_list(self, session: str) -> bool:
-        if self.model_list_command is None:
-            return False
-        await tmux.send_keys(session, self.model_list_command, literal=True, enter=True)
-        await asyncio.sleep(self.model_list_capture_delay_s)
-        return True
-
-    async def collect_available_models(self, session: str) -> SimpleResult[list[tuple[str, str]]]:
-        requested = await self.request_model_list(session)
-        if not requested:
-            return fail_result(f"{self.kind} does not support /models discovery")
-        pane = await tmux.capture_pane(session, lines=200)
-        models = parse_harness_model_list(pane)
-        if not models:
-            return fail_result(f"{self.kind} /models did not expose any model choices")
-        return ok_result(models)
 
     def parse_active_model_state(self, pane_text: str) -> HarnessModelState | None:
         del pane_text
@@ -566,11 +286,3 @@ class HarnessAdapter(ABC):
                 for s in doc.get("segments", [])
             )
         return bool(DONE_RE.search(strip_ui_chrome(pane_text)))
-
-    async def interrupt(self, session: str) -> None:
-        """Stop an in-flight generation. Override per harness."""
-        await tmux.interrupt(session)
-
-    async def interrupt_generation(self, session: str) -> None:
-        """Send Escape — shared by interactive CLIs that document esc-to-interrupt."""
-        await tmux.send_keys(session, "Escape", literal=False, enter=False)

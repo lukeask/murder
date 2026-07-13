@@ -1,4 +1,4 @@
-"""Tests for ``parse_harness_model_list`` and adapter model selection config.
+"""Tests for passive model parsing and configured catalog metadata.
 
 ``parse_harness_model_list`` is a pure function tested here against two real
 pane fixtures extracted from recordings:
@@ -12,7 +12,7 @@ pane fixtures extracted from recordings:
 Key assertions:
   - Model IDs are extracted correctly for both harness styles
   - Chrome / UI labels (headers, tips, press-enter hints, status bars) are absent
-  - Adapter class vars (model_list_command, available_startup_models) match expectations
+  - Passive configured model catalog metadata remains available without terminal I/O
 """
 
 from __future__ import annotations
@@ -32,7 +32,6 @@ from murder.llm.harnesses.parsing import (
     parse_numbered_effort_choices,
     parse_numbered_model_choices,
 )
-from murder.llm.harnesses.pi_harness import PiAdapter
 from tests.support.simulators import PaneSimulator
 
 _FIXTURES = Path(__file__).parent.parent / "fixtures" / "harness_panes"
@@ -306,10 +305,6 @@ def test_cc_model_picker_opus_plan_distinct_from_opus():
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def test_cc_model_list_command_is_slash_model():
-    assert ClaudeCodeAdapter.model_list_command == "/model"
-
-
 def test_cc_available_startup_models_cover_full_real_set():
     ids = [m[0] for m in ClaudeCodeAdapter.available_startup_models]
     assert ids == ["default", "sonnet[1m]", "fable", "opus", "haiku"]
@@ -340,10 +335,6 @@ def test_cc_claude_model_id_rejects_unknown_and_empty():
     assert _claude_model_id("not-a-model") is None
 
 
-def test_cursor_model_list_command_is_slash_model():
-    assert CursorAdapter.model_list_command == "/model"
-
-
 def test_cursor_model_list_parses_first_page_fixture():
     pane = _pane("cursor_model_list.txt")
     assert parse_cursor_model_page(pane) == (1, 10, 27)
@@ -353,20 +344,6 @@ def test_cursor_model_list_parses_first_page_fixture():
     assert "composer-2.5" in ids
     assert "codex-5-3" in ids
     assert "sonnet-4-6" in ids
-
-
-def test_codex_model_list_command_is_slash_model():
-    assert CodexAdapter.model_list_command == "/model"
-
-
-def test_pi_model_list_command_is_slash_model():
-    assert PiAdapter.model_list_command == "/model"
-
-
-def test_antigravity_model_list_command_is_slash_model():
-    from murder.llm.harnesses.antigravity import AntigravityAdapter
-
-    assert AntigravityAdapter.model_list_command == "/model"
 
 
 def test_antigravity_picker_slugs_gemini_pro_low():
@@ -461,9 +438,8 @@ def test_cc_model_picker_effort_max_parses():
 def test_cc_fable_banner_reports_model_and_effort():
     """Fable banner ("Fable 5 with medium effort · Claude Pro") must parse.
 
-    Regression: the banner regexes only knew Opus/Sonnet/Haiku, so after
-    `/model fable` the post-switch verification in set_model() saw no model,
-    returned False, and the spawn was failed even though the switch succeeded.
+    Regression: the parser must preserve this independent active-model
+    readback so verified model selection can confirm a later picker action.
     """
     adapter = ClaudeCodeAdapter()
     result = adapter.parse_active_model_state(_pane("cc_fable_banner.txt"))

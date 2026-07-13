@@ -18,7 +18,7 @@ from murder.llm.harnesses.capabilities import CapabilityError, HarnessCapabiliti
 from murder.llm.harnesses.claude_code import ClaudeCodeAdapter
 from murder.llm.harnesses.codex import CodexAdapter
 from murder.llm.harnesses.cursor import CursorAdapter
-from murder.llm.harnesses.models import HarnessPaneState, HarnessStartSpec
+from murder.llm.harnesses.models import HarnessStartSpec
 from murder.llm.harnesses.pi_harness import PiAdapter
 from murder.llm.harnesses.results import SimpleResult
 
@@ -65,7 +65,6 @@ __all__ = [
     "CapabilityError",
     "HarnessAdapter",
     "HarnessCapabilities",
-    "HarnessPaneState",
     "HarnessSession",
     "HarnessStartSpec",
     "REGISTRY",
