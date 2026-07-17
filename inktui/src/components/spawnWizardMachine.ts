@@ -29,7 +29,7 @@ export type HarnessKind = (typeof HARNESS_ORDER)[number];
 export const DEFAULT_HARNESS: HarnessKind = 'claude_code';
 
 /**
- * Per-harness effort enums + default — a frontend constant mirroring the backend adapter enums.
+ * Effort enums + defaults mirroring the backend adapter capabilities.
  * Source of truth (read-only):
  *  - claude_code: claude_code.py:33  `_CC_EFFORT_ORDER = ("low","medium","high","xhigh","max")`
  *  - codex:       codex.py:142       `supported_efforts = ("low","medium","high","xhigh")`
@@ -49,14 +49,30 @@ const EFFORT_MATRIX: Record<HarnessKind, EffortSpec> = {
   pi: { options: [], default: '' },
 };
 
-/** Pure: the effort enum + default for a harness. Unknown harness → no effort (skip the step). */
-export function effortMatrixFor(harness: string): EffortSpec {
+/** Pure: the effort enum + default for a harness/model pair. */
+export function effortMatrixFor(harness: string, model = ''): EffortSpec {
+  if (harness === 'cursor') {
+    const modelId = model.toLowerCase();
+    if (modelId === 'auto') return { options: [], default: '' };
+    if (
+      modelId === '' ||
+      modelId === 'composer' ||
+      modelId === 'composer-2' ||
+      modelId === 'composer-2.5'
+    ) {
+      return { options: ['slow', 'fast'], default: 'slow' };
+    }
+    if (modelId === 'cursor-grok-4-5' || modelId === 'grok-4-5') {
+      return { options: ['low', 'medium', 'high'], default: 'medium' };
+    }
+    return { options: ['low', 'medium', 'high', 'xhigh'], default: 'medium' };
+  }
   return EFFORT_MATRIX[harness as HarnessKind] ?? { options: [], default: '' };
 }
 
 /** Pure: index of a harness's default effort within its options (0 when none / not found). */
-export function defaultEffortCursor(harness: string): number {
-  const spec = effortMatrixFor(harness);
+export function defaultEffortCursor(harness: string, model = ''): number {
+  const spec = effortMatrixFor(harness, model);
   const idx = spec.options.indexOf(spec.default);
   return idx >= 0 ? idx : 0;
 }
@@ -75,6 +91,7 @@ export type WizardStep =
 /** Inputs that determine which steps are active. */
 export interface StepConditions {
   readonly harness: string;
+  readonly model: string;
   /** The model map (live snapshot or static fallback) — used to decide if the model step shows. */
   readonly modelMap: Record<string, readonly HarnessModel[]>;
   /** Whether the user selected "+ new worktree" (inserts the branch step). */
@@ -98,7 +115,7 @@ export function stepsFor(c: StepConditions): WizardStep[] {
   if (modelsFor(c.harness, c.modelMap).length > 0) {
     steps.push('model');
   }
-  if (effortMatrixFor(c.harness).options.length > 0) {
+  if (effortMatrixFor(c.harness, c.model).options.length > 0) {
     steps.push('effort');
   }
   steps.push('worktree');

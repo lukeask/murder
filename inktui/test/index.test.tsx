@@ -11,7 +11,6 @@
  */
 
 import { EventEmitter } from 'node:events';
-import { createRequire } from 'node:module';
 import { PassThrough } from 'node:stream';
 import { render, Text } from 'ink';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -20,6 +19,7 @@ import { App } from '../src/components/App.js';
 import { createInputStores } from '../src/input/createInputStores.js';
 import { forceInkFullRepaint, installResizeClear, resolveSocketPath } from '../src/index.js';
 import { createAppStore } from '../src/store/store.js';
+import { inkInstances } from '../src/terminal/inkInstances.js';
 
 interface TestInkInternals {
   log?: {
@@ -37,10 +37,6 @@ interface TestInkInternals {
   calculateLayout?: () => void;
   onRender?: () => void;
 }
-
-const inkInstances = createRequire(import.meta.url)(
-  '../node_modules/ink/build/instances.js',
-).default as WeakMap<NodeJS.WriteStream, TestInkInternals>;
 
 afterEach(() => {
   vi.useRealTimers();
@@ -177,7 +173,7 @@ describe('forceInkFullRepaint', () => {
       throttledOnRender: { cancel: cancelRender },
       calculateLayout: vi.fn(),
       onRender: () => stdout.write('fresh-frame'),
-    });
+    } as TestInkInternals as never);
 
     forceInkFullRepaint(stdout);
     await vi.runAllTimersAsync();

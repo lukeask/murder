@@ -252,6 +252,7 @@ export function spawnWizardHints(
 function conditions(s: SpawnWizardState, hasContext: boolean): StepConditions {
   return {
     harness: s.harness,
+    model: s.model,
     modelMap: s.modelMap,
     newWorktree: s.worktreeKey === NEW_WORKTREE_KEY,
     hasContext,
@@ -372,7 +373,7 @@ export function spawnWizardMode(
       case 'model':
         return modelsFor(s.harness, s.modelMap).length;
       case 'effort':
-        return effortMatrixFor(s.harness).options.length;
+        return effortMatrixFor(s.harness, s.model).options.length;
       case 'worktree':
         return s.worktreeOptions.length;
       default:
@@ -489,9 +490,11 @@ export function spawnWizardMode(
         break;
       case 'model':
         s.model = modelsFor(s.harness, s.modelMap)[s.modelCursor]?.id ?? '';
+        s.effort = '';
+        s.effortCursor = defaultEffortCursor(s.harness, s.model);
         break;
       case 'effort':
-        s.effort = effortMatrixFor(s.harness).options[s.effortCursor] ?? '';
+        s.effort = effortMatrixFor(s.harness, s.model).options[s.effortCursor] ?? '';
         break;
       case 'worktree':
         s.worktreeKey = s.worktreeOptions[s.worktreeCursor]?.key ?? null;
@@ -535,7 +538,7 @@ export function spawnWizardMode(
   /** Submit: exit-then-act (restore focus first, then fire the async RPC). */
   function doSubmit(): void {
     modes.getState().exit(id);
-    const effort = effortMatrixFor(s.harness).options.length > 0 ? s.effort : '';
+    const effort = effortMatrixFor(s.harness, s.model).options.length > 0 ? s.effort : '';
     // The model is the picker selection, or `''` for harnesses that skip the model step (cursor /
     // antigravity / pi). The live handler requires a STRING but tolerates the
     // empty one (`model.strip() or None` → the adapter picks its own default), so we must NOT force
@@ -928,7 +931,7 @@ function SpawnWizardDialog({
       {s.step === 'effort' && (
         <SelectList
           header="Select effort level:"
-          items={[...effortMatrixFor(s.harness).options]}
+          items={[...effortMatrixFor(s.harness, s.model).options]}
           cursor={s.effortCursor}
         />
       )}

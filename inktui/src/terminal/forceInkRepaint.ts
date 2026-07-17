@@ -1,6 +1,4 @@
-import { createRequire } from 'node:module';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { inkInstances } from './inkInstances.js';
 
 /** The subset of Ink's internal renderer instance this repaint path drives. */
 interface InkInternals {
@@ -19,11 +17,6 @@ interface InkInternals {
   calculateLayout?: () => void;
   onRender?: () => void;
 }
-
-/** Ink keeps one renderer per stdout in an internal WeakMap (not exported from the package). */
-const inkInstances = createRequire(
-  join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'node_modules', 'ink', 'build', 'instances.js'),
-)('./instances.js').default as WeakMap<NodeJS.WriteStream, InkInternals>;
 
 /** ED2 (erase entire screen) + cursor home — a physical wipe of the alternate screen buffer. */
 const ERASE_SCREEN_AND_HOME = '\u001B[2J\u001B[H';
@@ -63,7 +56,7 @@ const END_SYNC = '\u001B[?2026l';
  */
 export function forceInkFullRepaint(stdout: NodeJS.WriteStream): void {
   try {
-    const ink = inkInstances.get(stdout);
+    const ink = inkInstances.get(stdout) as InkInternals | undefined;
     if (
       ink === undefined ||
       typeof ink.log?.reset !== 'function' ||

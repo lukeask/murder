@@ -5,32 +5,18 @@
  * size. Then the validate-or-no-op edges: no instance, missing/empty `lastOutput`, unknown size,
  * and frames that don't fit the declared geometry (the resize race).
  *
- * The tests write into the SAME private WeakMap the production code reads (the `createRequire`
- * reach into `ink/build/instances.js`), so they pin the exact fragile surface: if Ink moves it,
- * both the code and these tests go no-op/red together.
+ * The tests write into the SAME private WeakMap the production code reads
+ * (`inkInstances` → `ink/build/instances.js`), so they pin the exact fragile surface: if Ink
+ * moves it, both the code and these tests go no-op/red together.
  */
 
-import { createRequire } from 'node:module';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { captureCurrentFrame } from '../../src/terminal/captureFrame.js';
+import { inkInstances } from '../../src/terminal/inkInstances.js';
 
 interface FakeInkInternals {
   lastOutput?: string | number;
 }
-
-const inkInstances = createRequire(
-  join(
-    dirname(fileURLToPath(import.meta.url)),
-    '..',
-    '..',
-    'node_modules',
-    'ink',
-    'build',
-    'instances.js',
-  ),
-)('./instances.js').default as WeakMap<object, FakeInkInternals>;
 
 /** A stdout stand-in: only `columns`/`rows` and identity (the WeakMap key) matter to the capture. */
 function fakeStdout(columns?: number, rows?: number): NodeJS.WriteStream {
@@ -38,7 +24,7 @@ function fakeStdout(columns?: number, rows?: number): NodeJS.WriteStream {
 }
 
 function register(stdout: NodeJS.WriteStream, internals: FakeInkInternals): void {
-  inkInstances.set(stdout, internals);
+  inkInstances.set(stdout, internals as never);
 }
 
 describe('captureCurrentFrame (cookbook)', () => {

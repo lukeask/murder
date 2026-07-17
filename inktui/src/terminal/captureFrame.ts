@@ -1,8 +1,6 @@
-import { createRequire } from 'node:module';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import type { CapturedFrame } from '../input/workspaceStore.js';
 import { displayWidth } from '../render/frameText.js';
+import { inkInstances } from './inkInstances.js';
 
 /** The one Ink-internal field the capture path reads: the last frame string the renderer wrote
  * (rows joined by newlines, ANSI included). Same fragile-surface discipline as
@@ -11,20 +9,6 @@ import { displayWidth } from '../render/frameText.js';
 interface InkInternals {
   lastOutput?: string;
 }
-
-/** Ink keeps one renderer per stdout in an internal WeakMap (not exported from the package) — the
- * same `createRequire` reach-in {@link ./forceInkRepaint.js} established. */
-const inkInstances = createRequire(
-  join(
-    dirname(fileURLToPath(import.meta.url)),
-    '..',
-    '..',
-    'node_modules',
-    'ink',
-    'build',
-    'instances.js',
-  ),
-)('./instances.js').default as WeakMap<NodeJS.WriteStream, InkInternals>;
 
 /**
  * Capture the frame currently on screen as slide-animation source material (workspaces plan, step
@@ -44,7 +28,7 @@ const inkInstances = createRequire(
  */
 export function captureCurrentFrame(stdout: NodeJS.WriteStream): CapturedFrame | null {
   try {
-    const ink = inkInstances.get(stdout);
+    const ink = inkInstances.get(stdout) as InkInternals | undefined;
     if (ink === undefined || typeof ink.lastOutput !== 'string' || ink.lastOutput.length === 0) {
       return null;
     }

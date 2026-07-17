@@ -650,14 +650,15 @@ export function settingsMode(
   function selectStartupRogueHarness(harness: string): void {
     const prev = s.startupRogue;
     const same = prev !== null && prev.harness === harness;
-    const efforts = startupRogueEffortsFor(harness, s.startupRogueEfforts);
+    const model = same ? prev.model : defaultModelFor(harness, s.startupRogueModels);
+    const efforts = startupRogueEffortsFor(harness, s.startupRogueEfforts, model);
     const next: StartupRogueWire = {
       harness,
-      model: same ? prev.model : defaultModelFor(harness, s.startupRogueModels),
+      model,
       effort:
         same && prev.effort !== null && efforts.includes(prev.effort)
           ? prev.effort
-          : defaultEffortFor(harness, s.startupRogueEfforts),
+          : defaultEffortFor(harness, s.startupRogueEfforts, model),
     };
     s.startupRogue = next;
     rebuildRows();
@@ -666,13 +667,19 @@ export function settingsMode(
     refresh();
   }
 
-  /** Pick the Startup Rogue's model (`''` = the adapter default). No row-structure change. */
+  /** Pick the Startup Rogue's model (`''` = adapter default) and recompute its parameters. */
   function selectStartupRogueModel(model: string): void {
     if (s.startupRogue === null) {
       return;
     }
-    const next: StartupRogueWire = { ...s.startupRogue, model };
+    const efforts = startupRogueEffortsFor(s.startupRogue.harness, s.startupRogueEfforts, model);
+    const effort =
+      s.startupRogue.effort !== null && efforts.includes(s.startupRogue.effort)
+        ? s.startupRogue.effort
+        : defaultEffortFor(s.startupRogue.harness, s.startupRogueEfforts, model);
+    const next: StartupRogueWire = { ...s.startupRogue, model, effort };
     s.startupRogue = next;
+    rebuildRows();
     void actions.update({ startup_rogue: next });
     s.notice = null;
     refresh();

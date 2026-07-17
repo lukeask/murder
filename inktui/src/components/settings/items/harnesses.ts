@@ -6,6 +6,7 @@ import {
   DEFAULT_STARTUP_ROGUE_EFFORTS,
   DEFAULT_STARTUP_ROGUE_MODELS,
 } from '../../../store/settings/settingsSlice.js';
+import { effortMatrixFor } from '../../spawnWizardMachine.js';
 import type { SettingsItem, SettingsRow } from '../types.js';
 import { headerRow } from '../types.js';
 
@@ -33,15 +34,20 @@ export function defaultModelFor(
 export function startupRogueEffortsFor(
   harness: string,
   effortsByHarness: Readonly<Record<string, readonly string[]>>,
+  model = '',
 ): readonly string[] {
+  if (harness === 'cursor') {
+    return effortMatrixFor(harness, model).options;
+  }
   return effortsByHarness[harness] ?? STARTUP_ROGUE_EFFORTS[harness] ?? [];
 }
 
 export function defaultEffortFor(
   harness: string,
   effortsByHarness: Readonly<Record<string, readonly string[]>> = STARTUP_ROGUE_EFFORTS,
+  model = '',
 ): string | null {
-  const efforts = startupRogueEffortsFor(harness, effortsByHarness);
+  const efforts = startupRogueEffortsFor(harness, effortsByHarness, model);
   if (efforts.length === 0) {
     return null;
   }
@@ -86,7 +92,11 @@ function appendStartupRogueDetails(
       label: model.label,
     });
   }
-  for (const value of startupRogueEffortsFor(startupRogue.harness, effortsByHarness)) {
+  for (const value of startupRogueEffortsFor(
+    startupRogue.harness,
+    effortsByHarness,
+    startupRogue.model,
+  )) {
     rows.push({
       id: `harnesses.startupRogue:effort:${value}`,
       kind: 'startupRogue',

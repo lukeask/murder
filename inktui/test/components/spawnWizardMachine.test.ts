@@ -21,6 +21,7 @@ import { STATIC_HARNESS_MODELS } from '../../src/store/dialogs/harnessModelsActi
 
 const cond = (overrides: Partial<StepConditions> = {}): StepConditions => ({
   harness: DEFAULT_HARNESS,
+  model: 'sonnet',
   modelMap: STATIC_HARNESS_MODELS,
   newWorktree: false,
   hasContext: false,
@@ -82,8 +83,16 @@ describe('spawnWizardMachine — effort matrix mirrors backend adapter enums', (
     });
   });
 
-  it('cursor: slow/fast, default slow (cursor.py:60)', () => {
-    expect(effortMatrixFor('cursor')).toEqual({ options: ['slow', 'fast'], default: 'slow' });
+  it('cursor capabilities depend on the selected model', () => {
+    expect(effortMatrixFor('cursor', 'composer-2.5')).toEqual({
+      options: ['slow', 'fast'],
+      default: 'slow',
+    });
+    expect(effortMatrixFor('cursor', 'cursor-grok-4-5')).toEqual({
+      options: ['low', 'medium', 'high'],
+      default: 'medium',
+    });
+    expect(effortMatrixFor('cursor', 'auto').options).toEqual([]);
   });
 
   it('antigravity / pi have NO effort enum', () => {
@@ -98,14 +107,14 @@ describe('spawnWizardMachine — effort matrix mirrors backend adapter enums', (
   it('defaultEffortCursor points at the per-harness default option', () => {
     expect(defaultEffortCursor('claude_code')).toBe(1); // 'medium' at index 1
     expect(defaultEffortCursor('codex')).toBe(1); // 'medium' at index 1
-    expect(defaultEffortCursor('cursor')).toBe(0); // 'slow' at index 0
+    expect(defaultEffortCursor('cursor', 'cursor-grok-4-5')).toBe(1);
     expect(defaultEffortCursor('antigravity')).toBe(0); // no enum → 0
   });
 });
 
 describe('spawnWizardMachine — harness change recomputes skips', () => {
   it('cursor: includes the static model step and keeps effort', () => {
-    expect(stepsFor(cond({ harness: 'cursor' }))).toEqual([
+    expect(stepsFor(cond({ harness: 'cursor', model: 'composer-2.5' }))).toEqual([
       'harness',
       'model',
       'effort',
@@ -124,7 +133,7 @@ describe('spawnWizardMachine — harness change recomputes skips', () => {
 
   it('a live snapshot replacing cursor models keeps its model step', () => {
     const map = { ...STATIC_HARNESS_MODELS, cursor: [{ id: 'composer', label: 'Composer' }] };
-    expect(stepsFor(cond({ harness: 'cursor', modelMap: map }))).toEqual([
+    expect(stepsFor(cond({ harness: 'cursor', model: 'composer', modelMap: map }))).toEqual([
       'harness',
       'model',
       'effort',
