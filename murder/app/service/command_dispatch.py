@@ -20,11 +20,10 @@ from murder.bus.protocol import (
     CommandStatus,
     Role,
 )
-
-from murder.verdict.escalations.service import EscalationService
 from murder.observability.advanced_log import CommandRecord, current_advanced_log
 from murder.observability.log_context import log_context
 from murder.state.persistence import commands as cmd_db
+from murder.verdict.escalations.service import EscalationService
 
 if TYPE_CHECKING:
     from murder.bus.broker import Bus
@@ -87,6 +86,17 @@ class CommandDispatcher:
             )
             cmd_db.complete_command(self.conn, command_id=command_id, result=result)
 
+    def renew(self, command_id: str, *, claimed_by: str) -> bool:
+        """Keep an actively executing command from becoming re-dispatchable."""
+
+        lease_expires_at = math.ceil(time.time() + self.lease_ttl_s)
+        return cmd_db.renew_command_lease(
+            self.conn,
+            command_id=command_id,
+            claimed_by=claimed_by,
+            lease_expires_at=lease_expires_at,
+        )
+
     def fail(self, command_id: str, last_error: str, *, retryable: bool = True) -> None:
         with log_context(command_id=command_id):
             current_advanced_log().record_command(
@@ -124,11 +134,7 @@ class CommandDispatcher:
             # Domain failure: the handler ran fine and hit a normal business
             # error (e.g. "no agent named X"). Surface the handler's own error.
             error = result.get("error")
-            message = (
-                str(error)
-                if error
-                else f"command {command.kind!r} failed"
-            )
+            message = str(error) if error else f"command {command.kind!r} failed"
             self.fail(command_id, message, retryable=False)
             return
         self.complete(command_id, result)

@@ -14,8 +14,11 @@ from uuid import UUID, uuid4
 
 import pytest
 
-from murder.bus.protocol import CommandEvent
 from murder.app.service.command_dispatch import CommandDispatcher, command_from_row
+from murder.bus.protocol import CommandEvent
+from murder.state.persistence import commands as command_db
+from murder.state.persistence.runs import insert_run
+from murder.state.persistence.schema import get_db, init_db
 
 
 def _command(kind: str = "agent.stop") -> CommandEvent:
@@ -172,11 +175,41 @@ def test_claim_next_quarantines_non_uuid_row() -> None:
     original = mod.cmd_db.claim_next_command
     mod.cmd_db.claim_next_command = lambda *a, **k: _row("not-a-uuid")  # type: ignore[assignment]
     try:
-        claimed = dispatcher.claim_next(
-            target_worker="orchestrator", claimed_by="orchestrator"
-        )
+        claimed = dispatcher.claim_next(target_worker="orchestrator", claimed_by="orchestrator")
     finally:
         mod.cmd_db.claim_next_command = original  # type: ignore[assignment]
 
     assert claimed is None
     assert failures == [("non-UUID command id", False)]
+
+
+def test_renewed_live_command_is_not_reaped_or_redispatched(tmp_path, monkeypatch) -> None:
+    conn = get_db(tmp_path / "state.db")
+    init_db(conn)
+    insert_run(conn, "run", "{}")
+    command_id = str(uuid4())
+    command_db.enqueue_command(
+        conn,
+        command_id=command_id,
+        run_id="run",
+        agent_id="",
+        role=None,
+        ticket_id=None,
+        target_worker="orchestrator",
+        kind="crow.spawn_rogue",
+        payload={"harness": "cursor", "model": "cursor-grok-4-5", "effort": "medium"},
+        correlation_id="c",
+        idempotency_key="i",
+    )
+    dispatcher = CommandDispatcher(conn=conn, repo_root=tmp_path, lease_ttl_s=30)
+    monkeypatch.setattr("murder.app.service.command_dispatch.time.time", lambda: 100.0)
+    claimed = dispatcher.claim_next(target_worker="orchestrator", claimed_by="orchestrator")
+    assert claimed is not None
+
+    monkeypatch.setattr("murder.app.service.command_dispatch.time.time", lambda: 125.0)
+    assert dispatcher.renew(command_id, claimed_by="orchestrator")
+    assert dispatcher.reap_stale() == {"retried": [], "failed": []}
+    row = conn.execute(
+        "SELECT status, attempt_count FROM commands WHERE id = ?", (command_id,)
+    ).fetchone()
+    assert dict(row) == {"status": "in_flight", "attempt_count": 1}

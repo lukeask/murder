@@ -8,6 +8,10 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from murder.config import HarnessKind
+from murder.llm.harness_control.runtime.live_model_probe import (
+    LIVE_MODEL_DISCOVERY_HARNESSES,
+    probe_live_models,
+)
 from murder.llm.harnesses import REGISTRY
 from murder.llm.harnesses.harnesses_doc import write_harnesses_doc
 from murder.llm.harnesses.model_cache import (
@@ -85,6 +89,9 @@ class SettingsService:
                 models=(),
                 message=f"unknown harness {kind!r}; no configured model catalog",
             )
+        if kind in LIVE_MODEL_DISCOVERY_HARNESSES:
+            result = await probe_live_models(kind, self.repo_root)
+            return ModelDiscoveryResult(result.ok, result.models, result.message)
         return ModelDiscoveryResult(
             ok=True,
             models=tuple(get_available_models(kind)),

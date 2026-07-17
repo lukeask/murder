@@ -5,12 +5,12 @@ import contextlib
 import logging
 from dataclasses import dataclass
 
-from murder.bus.protocol import CommandEvent
-from murder.state.persistence.commands import upsert_worker_heartbeat
 from murder.app.service.command_dispatch import ClaimedCommand, CommandDispatcher
+from murder.bus.protocol import CommandEvent
 from murder.runtime.workers.base import Worker, WorkerCommand, WorkerCtx
 from murder.runtime.workers.process_runner import SubprocessWorkerRunner
 from murder.runtime.workers.process_targets import usage_probe_process_target
+from murder.state.persistence.commands import upsert_worker_heartbeat
 
 LOGGER = logging.getLogger(__name__)
 
@@ -186,6 +186,18 @@ class Supervisor:
         dispatcher = self._command_dispatcher()
         if dispatcher is None:
             return
+        # Renew immediately, then periodically while the side-effecting handler
+        # is alive. A reaper may still recover the command if this worker dies,
+        # but ordinary lease expiry can no longer start a duplicate operation.
+        dispatcher.renew(command_id, claimed_by=worker.spec.name)
+        renewal_task = asyncio.create_task(
+            self._renew_command_lease(
+                dispatcher,
+                command_id=command_id,
+                claimed_by=worker.spec.name,
+            ),
+            name=f"{worker.spec.name}:renew-command:{command_id}",
+        )
         try:
             result = await worker.on_command(command, self._ctx)
         except Exception as exc:
@@ -200,12 +212,28 @@ class Supervisor:
                 retryable=retryable,
             )
             return
+        finally:
+            renewal_task.cancel()
+            await _await_cancelled_task(renewal_task, label=renewal_task.get_name())
         dispatcher.finish(
             command_id=command_id,
             command=command,
             worker_name=worker.spec.name,
             result=result,
         )
+
+    @staticmethod
+    async def _renew_command_lease(
+        dispatcher: CommandDispatcher,
+        *,
+        command_id: str,
+        claimed_by: str,
+    ) -> None:
+        interval = max(0.05, dispatcher.lease_ttl_s / 3)
+        while True:
+            await asyncio.sleep(interval)
+            if not dispatcher.renew(command_id, claimed_by=claimed_by):
+                return
 
     async def _command_claim_loop(
         self,
