@@ -106,7 +106,7 @@ def test_codex_status_is_atomic_and_does_not_restore_an_old_window() -> None:
 
 def test_codex_status_context_and_exact_stale_notice_are_typed() -> None:
     pane = Path(
-        ".murder/codexusageexamples/goldenexamples/04_status_context_window_stale_warning_v0144.txt"
+        "tests/fixtures/harness_state/codex/status_context_window_stale_v0144.txt"
     ).read_text()
     status = parse_codex_status_pane(pane)
     assert status.context_window is not None

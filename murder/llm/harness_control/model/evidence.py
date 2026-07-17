@@ -27,6 +27,7 @@ class TerminalFrame:
     ansi_preserved: bool
     pane_epoch: int
     capture_sequence: int
+    viewport_text: str | None = None
 
     def __post_init__(self) -> None:
         if self.width < 0 or self.height < 0:

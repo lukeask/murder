@@ -19,8 +19,14 @@ def test_frame_observer_retains_ansi_and_monotonic_capture_provenance(monkeypatc
         assert escapes is True
         return "\x1b[1mcomposer\x1b[0m"
 
+    async def viewport(session: str, *, escapes: bool) -> str:
+        assert session == "harness-1"
+        assert escapes is True
+        return "\x1b[1mcomposer\x1b[0m"
+
     monkeypatch.setattr(tmux, "pane_dimensions", dimensions)
     monkeypatch.setattr(tmux, "capture_pane", capture)
+    monkeypatch.setattr(tmux, "capture_viewport", viewport)
 
     async def scenario() -> None:
         observer = TmuxFrameObserver("harness-1", "codex", pane_epoch=4)
@@ -28,6 +34,7 @@ def test_frame_observer_retains_ansi_and_monotonic_capture_provenance(monkeypatc
         second = await observer.capture_frame()
         assert (first.width, first.height, first.ansi_preserved) == (220, 50, True)
         assert first.raw_text.startswith("\x1b[")
+        assert first.viewport_text == first.raw_text
         assert (first.pane_epoch, first.capture_sequence) == (4, 1)
         assert (second.pane_epoch, second.capture_sequence) == (4, 2)
         assert first.frame_id != second.frame_id

@@ -26,6 +26,8 @@ _log = logging.getLogger(__name__)
 
 LARGE_PAYLOAD_BYTES = 1024
 PASTE_ENTER_DELAY_S = 0.15
+TMUX_TIMEOUT_RETURN_CODE = 124
+PANE_DIMENSION_FIELD_COUNT = 2
 
 
 class TmuxError(RuntimeError):
@@ -149,7 +151,7 @@ async def list_sessions(prefix: str | None = None) -> list[str]:
         check=False,
         timeout_s=2.0,
     )
-    if rc == 124:
+    if rc == TMUX_TIMEOUT_RETURN_CODE:
         # A timeout is NOT "no sessions" — returning [] here would let callers
         # wrongly conclude a murder-owned session is gone and respawn/duplicate.
         raise TmuxError("tmux list-sessions timed out")
@@ -193,6 +195,15 @@ async def capture_pane(
     return out
 
 
+async def capture_viewport(name: str, *, escapes: bool = False) -> str:
+    """Capture only the pane's current screen, excluding scrollback history."""
+
+    extra = ("-e",) if escapes else ()
+    _, out, _ = await _tmux("capture-pane", "-p", *extra, "-t", name, "-S", "0")
+    _record_capture(name, out, lines=0, escapes=escapes)
+    return out
+
+
 async def pane_dimensions(name: str) -> tuple[int, int]:
     """Return the active pane dimensions for immutable frame provenance.
 
@@ -203,7 +214,7 @@ async def pane_dimensions(name: str) -> tuple[int, int]:
 
     _, out, _ = await _tmux("display-message", "-p", "-t", name, "#{pane_width} #{pane_height}")
     fields = out.strip().split()
-    if len(fields) != 2:
+    if len(fields) != PANE_DIMENSION_FIELD_COUNT:
         raise TmuxError(f"tmux returned invalid pane dimensions for {name!r}: {out!r}")
     try:
         width, height = (int(field) for field in fields)

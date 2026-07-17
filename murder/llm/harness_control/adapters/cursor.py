@@ -18,9 +18,11 @@ from murder.llm.harness_control.model.actions import (
     FAST_HUMANIZED_TYPING,
     ClearComposer,
     CommitPromptSubmission,
+    DelayProfile,
     DismissOverlay,
     InputProvenance,
     InsertPromptPayload,
+    NavigateModelPicker,
     OpenModelPicker,
     PasteBuffer,
     RequestUsage,
@@ -81,11 +83,18 @@ _ATTACHMENT = re.compile(
 )
 _WORKSPACE = re.compile(r"^\s*(?P<path>(?:~/|/|\./)[^·\n]+?)(?:\s+·\s+(?P<branch>\S+))?\s*$")
 _RESUME_TITLE = re.compile(r"^\s*Previous Sessions\s*$", re.I | re.M)
-_PARAMETER_TITLE = re.compile(r"^\s*(?P<model>.+?)\s+[—-]\s+Edit Parameters\s*$", re.I | re.M)
+_PARAMETER_TITLE = re.compile(
+    r"^\s*(?P<model>.+?)\s+[—-]\s+Edit Parameters(?:\s+.*)?$", re.I | re.M
+)
 _CHECKED = re.compile(r"^\s*(?P<pointer>[→>])?\s*\[(?P<mark>[xX✓ ])\]\s*(?P<name>.+?)\s*$", re.M)
 _OPTION = re.compile(
     r"^\s*(?P<pointer>[→>])?\s*"
+    r"(?P<radio>[○●◯◉])?\s*"
     r"(?P<label>Low|Medium|High|Extra High|Max|\d+[KMG])\s*(?P<current>✓)?\s*$",
+    re.I | re.M,
+)
+_FAST_RADIO = re.compile(
+    r"^\s*(?P<pointer>[→>])?\s*(?P<radio>[○●◯◉])\s*Fast\s*(?P<current>✓)?\s*$",
     re.I | re.M,
 )
 _TOKEN_COUNT = re.compile(r"\b(?P<count>\d+)\s+tokens?\b", re.I)
@@ -95,6 +104,7 @@ _WRITE = re.compile(
     re.I | re.M,
 )
 _SHELL = re.compile(r"^\s*\$\s+(?P<command>.+?)(?:\s+\d+(?:\.\d+)?[ms]?s.*)?$", re.M)
+_CURSOR_FILTER_TYPING = DelayProfile(20.0, 45.0)
 
 
 def _model_id(label: str) -> str | None:
@@ -113,6 +123,28 @@ def _model_id(label: str) -> str | None:
 
 def _fingerprint(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def _model_filter_label(model_id: str) -> str:
+    """Recover Cursor's searchable display spelling from its stable slug."""
+    tokens = model_id.split("-")
+    rendered: list[str] = []
+    index = 0
+    while index < len(tokens):
+        token = tokens[index]
+        if token.isdigit() and index + 1 < len(tokens) and tokens[index + 1].isdigit():
+            rendered.append(f"{token}.{tokens[index + 1]}")
+            index += 2
+            continue
+        rendered.append("GPT" if token.casefold() == "gpt" else token.title())
+        index += 1
+    label = " ".join(rendered)
+    match rendered:
+        case ["GPT", version, *suffix]:
+            label = f"GPT-{version}"
+            if suffix:
+                label += f" {' '.join(suffix)}"
+    return label
 
 
 class CursorHarnessAdapter(HarnessObservationAdapter, HarnessActionAdapter):
@@ -351,9 +383,29 @@ class CursorHarnessAdapter(HarnessObservationAdapter, HarnessActionAdapter):
             return (SendNamedKey(f"{prefix}:escape", "Escape"),)
         if isinstance(action, SelectModel):
             return self._lower_model(action, snapshot)
-        if isinstance(action, OpenModelPicker):
-            return self._open_model_picker(action, snapshot)
+        if isinstance(action, (OpenModelPicker, NavigateModelPicker)):
+            return self._lower_model_picker_action(action, snapshot)
         raise ValueError(f"Cursor lowering does not support {type(action).__name__}")
+
+    def _lower_model_picker_action(
+        self,
+        action: OpenModelPicker | NavigateModelPicker,
+        snapshot: ObservationSnapshot,
+    ) -> Sequence[TerminalEffect]:
+        if isinstance(action, NavigateModelPicker):
+            if (
+                snapshot.surface.knowledge is not Knowledge.PRESENT
+                or snapshot.surface.value is None
+                or snapshot.surface.value.primary is not SurfaceKind.MODEL_PICKER
+            ):
+                raise ValueError("Cursor model-picker navigation requires a visible picker")
+            return (
+                SendNamedKey(
+                    f"{action.action_id}:navigate-model",
+                    "Down" if action.direction == "down" else "Up",
+                ),
+            )
+        return self._open_model_picker(action, snapshot)
 
     def _lower_model(
         self, action: SelectModel, snapshot: ObservationSnapshot
@@ -384,23 +436,36 @@ class CursorHarnessAdapter(HarnessObservationAdapter, HarnessActionAdapter):
         )
         effects: list[TerminalEffect] = []
         existing_filter = parameters.get("filter_text")
-        if isinstance(existing_filter, str) and existing_filter:
-            # Filtering is a stateful editor.  Clear only an observed existing
-            # filter; never assume a fresh picker starts empty.
-            effects.append(SendNamedKey(f"{action.action_id}:clear-filter", "C-u"))
-        # Cursor rejects bulk filter pastes.  Encode each character separately;
-        # the actuator controls serialization and actual timing.
-        effects.extend(
-            SendLiteralKeys(f"{action.action_id}:filter:{index}", character, FAST_HUMANIZED_TYPING)
-            for index, character in enumerate(filter_text)
+        filter_is_target = bool(
+            isinstance(existing_filter, str)
+            and existing_filter.casefold() == filter_text.casefold()
         )
+        if isinstance(existing_filter, str) and existing_filter and not filter_is_target:
+            # Cursor's model-filter editor does not honor the usual readline
+            # kill bindings. Its observed caret is at the end of the rendered
+            # filter, so clear exactly the observed characters with Backspace.
+            effects.extend(
+                SendNamedKey(f"{action.action_id}:clear-filter:{index}", "Backspace")
+                for index in range(len(existing_filter))
+            )
+        # Cursor drops filter characters when separate terminal effects arrive
+        # back-to-back. One literal-key effect remains character-wise at the
+        # transport boundary and supplies an actual inter-character delay.
+        if not filter_is_target:
+            effects.append(
+                SendLiteralKeys(
+                    f"{action.action_id}:filter",
+                    filter_text,
+                    _CURSOR_FILTER_TYPING,
+                )
+            )
         if action.effort is None:
             effects.append(SendNamedKey(f"{action.action_id}:select", "Enter"))
             return tuple(effects)
-        # Cursor opens an editor for parameterized models. Observe that editor
-        # before any effort/fast-mode interaction instead of chaining Tab and
-        # Enter based on stale picker assumptions.
-        effects.append(SendNamedKey(f"{action.action_id}:select-model", "Enter"))
+        # Cursor selects a row with Enter, but opens its parameter editor with
+        # Tab.  Observe that editor before any effort/fast-mode interaction
+        # instead of chaining speculative navigation after the picker action.
+        effects.append(SendNamedKey(f"{action.action_id}:edit-model", "Tab"))
         return tuple(effects)
 
     def _open_model_picker(
@@ -410,10 +475,22 @@ class CursorHarnessAdapter(HarnessObservationAdapter, HarnessActionAdapter):
             raise ValueError("Cursor model picker requires a known safe surface")
         if snapshot.surface.value.primary not in {SurfaceKind.COMPOSER, SurfaceKind.TRANSCRIPT}:
             raise ValueError("Cursor model picker will not replace an unobserved overlay")
-        return (
-            SendLiteralKeys(f"{action.action_id}:open", "/model", FAST_HUMANIZED_TYPING),
-            SendNamedKey(f"{action.action_id}:open-enter", "Enter"),
-        )
+        effects: list[TerminalEffect] = []
+        composer_text: str | None = None
+        if snapshot.composer.knowledge is Knowledge.PRESENT and snapshot.composer.value is not None:
+            composer_text = snapshot.composer.value.text
+        if composer_text is not None and composer_text.strip().startswith("/model"):
+            return (SendNamedKey(f"{action.action_id}:confirm-command", "Enter"),)
+        if composer_text:
+            effects.append(SendNamedKey(f"{action.action_id}:clear-composer", "C-u"))
+        command = "/model"
+        if action.filter_text:
+            command = f"/model {_model_filter_label(action.filter_text)}"
+        effects.append(SendLiteralKeys(f"{action.action_id}:open", command, _CURSOR_FILTER_TYPING))
+        if action.filter_text:
+            key = "Tab" if action.edit_parameters else "Enter"
+            effects.append(SendNamedKey(f"{action.action_id}:open-confirm", key))
+        return tuple(effects)
 
 
 def _raw_frame(frame: TerminalFrame) -> dict[str, object]:
@@ -503,6 +580,14 @@ def _models(clean: str) -> dict[str, object]:
     filter_match = re.search(r"^\s*Filter:\s*(?P<text>.*)$", clean, re.I | re.M)
     param_title = _PARAMETER_TITLE.search(clean)
     params, parameter_options = _parameters(clean)
+    if page is not None:
+        params.extend(
+            (
+                ("model_page_start", str(page[0])),
+                ("model_page_end", str(page[1])),
+                ("model_page_total", str(page[2])),
+            )
+        )
     active = _active_model(clean)
     return {
         "picker": {
@@ -521,7 +606,7 @@ def _models(clean: str) -> dict[str, object]:
     }
 
 
-def _parameters(
+def _parameters(  # noqa: PLR0912 -- Cursor renders several parameter row grammars
     clean: str,
 ) -> tuple[
     list[tuple[str, str | bool | None]],
@@ -538,27 +623,30 @@ def _parameters(
     for match in _CHECKED.finditer(clean):
         name = match.group("name").strip().casefold()
         if name in {"fast", "thinking"}:
-            values.append((name, match.group("mark").strip().casefold() in {"x", "✓"}))
+            parameter_name = "fast_enabled" if name == "fast" else name
+            values.append((parameter_name, match.group("mark").strip().casefold() in {"x", "✓"}))
     active_section: str | None = None
     for line in clean.splitlines():
         stripped = line.strip()
         if stripped.casefold() in {"context", "effort"}:
             active_section = stripped.casefold()
             continue
-        match = _OPTION.match(line)
-        if match and active_section:
+        option_match = _OPTION.match(line)
+        if option_match and active_section:
             label = (
-                normalize_effort(match.group("label"))
+                normalize_effort(option_match.group("label"))
                 if active_section == "effort"
-                else match.group("label")
+                else option_match.group("label")
             )
             if label is None:
                 continue
-            current = bool(match.group("current"))
+            current = bool(
+                option_match.group("current") or option_match.group("radio") in {"●", "◉"}
+            )
             options.setdefault(active_section, []).append(
                 {
                     "label": label,
-                    "highlighted": bool(match.group("pointer")),
+                    "highlighted": bool(option_match.group("pointer")),
                     "current": current,
                 }
             )
@@ -569,6 +657,9 @@ def _parameters(
             values.append((f"{section}_option.{row['label']}", str(index)))
             if row["highlighted"]:
                 values.append((f"{section}_highlighted_index", str(index)))
+    fast = _FAST_RADIO.search(clean)
+    if fast is not None:
+        values.append(("fast_enabled", fast.group("radio") in {"●", "◉"}))
     return values, {name: tuple(rows) for name, rows in options.items()}
 
 
@@ -578,15 +669,23 @@ def _active_model(clean: str) -> dict[str, str | None]:
         if match is None or "available models" in line.casefold():
             continue
         label = re.sub(r"\s+·\s+\d+(?:\.\d+)?%\s*$", "", match.group("label")).strip()
-        speed = re.search(r"\b(Slow|Fast)\b", label, re.I)
-        if speed:
-            label = re.sub(r"\b(?:Slow|Fast)\b", "", label, flags=re.I).strip()
+        speed = re.search(r"\b(Slow|Fast)\s*$", label, re.I)
+        if speed is not None:
+            label = label[: speed.start()].strip()
+        effort_match = re.search(r"\b(Extra High|Low|Medium|High|Max)\s*$", label, re.I)
+        effort = normalize_effort(effort_match.group(1)) if effort_match is not None else None
+        if effort_match is not None:
+            label = label[: effort_match.start()].strip()
+        label = re.sub(r"\s+\d+[KMG]\s*$", "", label, flags=re.I).strip()
+        label = re.sub(r"\s+\(Thinking\)\s*$", "", label, flags=re.I).strip()
         model_id = _model_id(label)
         if model_id:
+            if model_id.startswith("composer"):
+                effort = normalize_effort(speed.group(1)) if speed is not None else "slow"
             return {
                 "model_id": model_id,
                 "display_name": label,
-                "effort": normalize_effort(speed.group(1)) if speed else None,
+                "effort": effort,
             }
     return {"model_id": None, "display_name": None, "effort": None}
 
@@ -756,13 +855,9 @@ def _model_configuration(models: Mapping[str, Any], present: Any, without: Any) 
     picker, parameters = models["picker"], models["parameters"]
     if not picker["visible"] and not parameters["visible"]:
         return without(Knowledge.UNKNOWN, "no Cursor model picker or parameter editor visible")
-    page = picker["page"]
-    # A paginated list cannot establish target absence.  Preserve every row in
-    # evidence, but keep the shared availability predicate deliberately
-    # unknown unless this frame displays the whole list. A non-empty filter is
-    # itself an additional reason not to equate a visible subset with global
-    # model availability.
-    partial_page = bool(page and page[1] < page[2])
+    # Visible rows remain available to exhaustive discovery. Page metadata in
+    # ``parameters`` lets selection distinguish viewport absence from a known
+    # exhaustive absence without throwing these rows away.
     choices = tuple(
         ChoiceState(
             row["model_id"],
@@ -773,10 +868,8 @@ def _model_configuration(models: Mapping[str, Any], present: Any, without: Any) 
             disabled=row["disabled"],
         )
         for row in picker["choices"]
-    ) if not partial_page else ()
-    highlighted = next(
-        (row["model_id"] for row in picker["choices"] if row["highlighted"]), None
     )
+    highlighted = next((row["model_id"] for row in picker["choices"] if row["highlighted"]), None)
     selected = next((row["model_id"] for row in picker["choices"] if row["selected"]), None)
     parameter_values = tuple(parameters["values"])
     if picker["filter_text"] is not None:
@@ -821,21 +914,28 @@ def _lower_parameter_selection(
     action: SelectModel, parameters: Mapping[str, object]
 ) -> Sequence[TerminalEffect]:
     """Navigate a current Cursor editor by observed semantic option identity."""
-    if action.effort is None:
-        return (SendNamedKey(f"{action.action_id}:confirm-configuration", "Enter"),)
-    target = parameters.get(f"effort_option.{action.effort}")
-    highlighted = parameters.get("effort_highlighted_index")
-    if not isinstance(target, str) or not target.isdigit():
-        raise ValueError("requested Cursor effort is absent from observed parameter editor")
-    if not isinstance(highlighted, str) or not highlighted.isdigit():
-        raise ValueError("Cursor parameter editor has no observed highlighted effort")
-    offset = int(target) - int(highlighted)
-    key = "Down" if offset > 0 else "Up"
-    effects: list[TerminalEffect] = [
-        SendNamedKey(f"{action.action_id}:effort-{index}", key)
-        for index in range(abs(offset))
-    ]
-    effects.append(SendNamedKey(f"{action.action_id}:select-effort", "Enter"))
+    effects: list[TerminalEffect] = []
+    if action.effort is not None:
+        target = parameters.get(f"effort_option.{action.effort}")
+        highlighted = parameters.get("effort_highlighted_index")
+        if not isinstance(target, str) or not target.isdigit():
+            raise ValueError("requested Cursor effort is absent from observed parameter editor")
+        if not isinstance(highlighted, str) or not highlighted.isdigit():
+            raise ValueError("Cursor parameter editor has no observed highlighted effort")
+        offset = int(target) - int(highlighted)
+        key = "Down" if offset > 0 else "Up"
+        effects.extend(
+            SendNamedKey(f"{action.action_id}:effort-{index}", key) for index in range(abs(offset))
+        )
+        effects.append(SendNamedKey(f"{action.action_id}:select-effort", "Enter"))
+    if action.fast_enabled is not None:
+        current_fast = parameters.get("fast_enabled")
+        if not isinstance(current_fast, bool):
+            raise ValueError("Cursor parameter editor has no observed Fast toggle")
+        if current_fast != action.fast_enabled:
+            effects.append(SendNamedKey(f"{action.action_id}:toggle-fast", "Enter"))
+    if not effects:
+        effects.append(SendNamedKey(f"{action.action_id}:confirm-configuration", "Enter"))
     return tuple(effects)
 
 

@@ -251,6 +251,25 @@ class ModelConfigurationState:
 
 
 @dataclass(frozen=True, slots=True)
+class SessionSettingsState:
+    """Harness settings independently read back from the current live chrome."""
+
+    run_mode: str | None
+    fast_enabled: bool | None
+
+
+@dataclass(frozen=True, slots=True)
+class HarnessInfoState:
+    """Stable harness chrome suitable for API and diagnostic presentation."""
+
+    cli_version: str | None
+    directory: str | None
+    tip: str | None
+    rename_thread_tip: bool | None
+    notices: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
 class UsageWindow:
     name: str
     percent_used: float | None
@@ -319,6 +338,8 @@ class ObservationSnapshot:
     permission_request: Observed[PermissionRequestState]
     active_model: Observed[ModelState]
     model_configuration: Observed[ModelConfigurationState]
+    settings: Observed[SessionSettingsState]
+    info: Observed[HarnessInfoState]
     usage: Observed[UsageState]
     tool_activity: Observed[ToolActivityState]
     health: ObservationHealth
@@ -363,6 +384,8 @@ def unknown_snapshot(
         permission_request=unknown(),  # type: ignore[arg-type]
         active_model=unknown(),  # type: ignore[arg-type]
         model_configuration=unknown(),  # type: ignore[arg-type]
+        settings=unknown(),  # type: ignore[arg-type]
+        info=unknown(),  # type: ignore[arg-type]
         usage=unknown(),  # type: ignore[arg-type]
         tool_activity=unknown(),  # type: ignore[arg-type]
         health=ObservationHealth(parser_status="unobserved"),

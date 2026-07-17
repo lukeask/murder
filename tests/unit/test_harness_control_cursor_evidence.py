@@ -17,6 +17,7 @@ from murder.llm.harness_control.model import (
     InputProvenance,
     InsertPromptPayload,
     Knowledge,
+    NavigateModelPicker,
     Observed,
     PasteBuffer,
     SelectModel,
@@ -71,20 +72,18 @@ def test_picker_parameters_and_active_readback_are_separate_evidence() -> None:
     adapter = CursorHarnessAdapter()
     picker_evidence = adapter.parse_evidence(_frame("cursor_model_list_fast_active.txt"), ())
     picker = picker_evidence[0].payload
-    hovered_params = adapter.parse_evidence(
-        _frame("cursor_opus_effort_low_hover.txt"), ()
-    )[0].payload
-    current_params = adapter.parse_evidence(
-        _frame("cursor_opus_effort_medium_selected.txt"), ()
-    )[0].payload
+    hovered_params = adapter.parse_evidence(_frame("cursor_opus_effort_low_hover.txt"), ())[
+        0
+    ].payload
+    current_params = adapter.parse_evidence(_frame("cursor_opus_effort_medium_selected.txt"), ())[
+        0
+    ].payload
     status = adapter.parse_evidence(_frame("cursor_status_fast_active.txt"), ())[0].payload
 
     assert picker["models"]["picker"]["visible"] is True
     assert picker["models"]["picker"]["page"] == (1, 10, 27)
     pointed = next(
-        row
-        for row in picker["models"]["picker"]["choices"]
-        if row["model_id"] == "composer-2.5"
+        row for row in picker["models"]["picker"]["choices"] if row["model_id"] == "composer-2.5"
     )
     assert pointed == {
         "model_id": "composer-2.5",
@@ -100,10 +99,10 @@ def test_picker_parameters_and_active_readback_are_separate_evidence() -> None:
     assert configuration.highlighted_model_id == "composer-2.5"
     assert configuration.selected_model_id is None
     assert configuration.configured_model_id is None
-    # The first page cannot prove a target absent. Rows remain in durable
-    # evidence while the narrow shared availability view stays intentionally
-    # unknown so the adapter can use Cursor's character-wise filter.
-    assert configuration.available == ()
+    # Visible rows are projected for exhaustive discovery; pagination metadata
+    # prevents their viewport from being mistaken for the whole catalog.
+    assert len(configuration.available) == PICKER_VISIBLE_CHOICES
+    assert dict(configuration.parameters)["model_page_total"] == "27"
     assert len(picker["models"]["picker"]["choices"]) == PICKER_VISIBLE_CHOICES
     assert picker_projection["active_model"].knowledge is Knowledge.UNKNOWN
 
@@ -229,3 +228,95 @@ def test_cursor_lowering_returns_values_for_actuator_without_terminal_side_effec
     assert isinstance(prompt[0], SendLiteralKeys)
     assert isinstance(prompt[1], PasteBuffer)
     assert effort == (SendNamedKey("effort:select-effort", "Enter"),)
+
+
+def test_cursor_july_radio_parameters_and_reasoning_status_are_model_aware() -> None:
+    adapter = CursorHarnessAdapter()
+    parameter_payload = adapter.parse_evidence(
+        _frame("cursor_grok_effort_medium_selected.txt"), ()
+    )[0].payload
+    status_payload = adapter.parse_evidence(_frame("cursor_grok_status_high_fast.txt"), ())[
+        0
+    ].payload
+
+    parameters = dict(parameter_payload["models"]["parameters"]["values"])
+    assert parameters["configured_model_id"] == "cursor-grok-4-5"
+    assert parameters["effort"] == "medium"
+    assert parameters["effort_option.medium"] == "1"
+    assert parameters["fast_enabled"] is False
+    assert status_payload["models"]["active_readback"] == {
+        "model_id": "cursor-grok-4-5",
+        "display_name": "Cursor Grok 4.5",
+        "effort": "high",
+    }
+
+
+def test_cursor_composer_speed_lowers_to_independent_fast_toggle() -> None:
+    adapter = CursorHarnessAdapter()
+    snapshot = unknown_snapshot(HarnessId("cursor"), captured_at=NOW)
+    evidence = adapter.parse_evidence(_frame("cursor_composer_fast_off.txt"), ())
+    delta = adapter.project_observations(evidence, prior=None)
+    parameter_snapshot = replace(
+        snapshot,
+        model_configuration=delta.updates["model_configuration"],
+        surface=delta.updates["surface"],
+    )
+
+    effects = adapter.lower(
+        SelectModel(
+            "fast",
+            "op",
+            DuplicatePolicy.AMBIGUOUS_AFTER_EMISSION,
+            "composer-2.5",
+            fast_enabled=True,
+        ),
+        parameter_snapshot,
+    )
+
+    assert effects == (SendNamedKey("fast:toggle-fast", "Enter"),)
+
+
+def test_cursor_opens_parameter_editor_with_tab_when_effort_is_requested() -> None:
+    adapter = CursorHarnessAdapter()
+    snapshot = unknown_snapshot(HarnessId("cursor"), captured_at=NOW)
+    picker_evidence = adapter.parse_evidence(_frame("cursor_model_list_fast_active.txt"), ())
+    picker_delta = adapter.project_observations(picker_evidence, prior=None)
+    picker_snapshot = replace(
+        snapshot,
+        model_configuration=picker_delta.updates["model_configuration"],
+        surface=picker_delta.updates["surface"],
+    )
+
+    effects = adapter.lower(
+        SelectModel(
+            "edit",
+            "op",
+            DuplicatePolicy.AMBIGUOUS_AFTER_EMISSION,
+            "gpt-5.5",
+            effort="medium",
+        ),
+        picker_snapshot,
+    )
+
+    assert effects[-1] == SendNamedKey("edit:edit-model", "Tab")
+
+
+@pytest.mark.parametrize(("direction", "key"), (("down", "Down"), ("up", "Up")))
+def test_cursor_lowers_model_picker_navigation_only_from_observed_picker(
+    direction: str, key: str
+) -> None:
+    adapter = CursorHarnessAdapter()
+    snapshot = unknown_snapshot(HarnessId("cursor"), captured_at=NOW)
+    picker_evidence = adapter.parse_evidence(_frame("cursor_model_list_fast_active.txt"), ())
+    picker_delta = adapter.project_observations(picker_evidence, prior=None)
+    picker_snapshot = replace(
+        snapshot,
+        model_configuration=picker_delta.updates["model_configuration"],
+        surface=picker_delta.updates["surface"],
+    )
+    action = NavigateModelPicker("navigate", "op", DuplicatePolicy.REPLAY_SAFE, direction)
+
+    assert adapter.lower(action, picker_snapshot) == (SendNamedKey("navigate:navigate-model", key),)
+
+    with pytest.raises(ValueError, match="requires a visible picker"):
+        adapter.lower(action, snapshot)

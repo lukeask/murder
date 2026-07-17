@@ -104,6 +104,7 @@ class AnswerQuestion(SemanticAction):
     mode: QuestionAnswerMode
     selections: tuple[QuestionChoiceSelection, ...] = ()
     custom_answer: str | None = None
+    note: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -133,6 +134,42 @@ class OpenModelPicker(SemanticAction):
     model.  It is a reversible surface transition whose later frame must show
     the picker before a ``SelectModel`` action can be lowered.
     """
+
+    filter_text: str | None = None
+    edit_parameters: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class OpenResumePicker(SemanticAction):
+    """Open the harness session-resume picker from an observed safe composer."""
+
+
+@dataclass(frozen=True, slots=True)
+class ConfigureResumePicker(SemanticAction):
+    """Configure a freshly opened resume picker's search/filter/sort state."""
+
+    search_text: str
+    filter_mode: str
+    sort_mode: str
+
+
+@dataclass(frozen=True, slots=True)
+class NavigateModelPicker(SemanticAction):
+    """Move one row in a currently observed model picker without confirming."""
+
+    direction: str
+
+    def __post_init__(self) -> None:
+        if self.direction not in {"up", "down"}:
+            raise ValueError("model-picker direction must be 'up' or 'down'")
+
+
+@dataclass(frozen=True, slots=True)
+class ConfigureSessionSettings(SemanticAction):
+    """Apply requested interactive settings; later chrome must verify them."""
+
+    run_mode: str | None = None
+    fast_enabled: bool | None = None
 
 
 @dataclass(frozen=True, slots=True)

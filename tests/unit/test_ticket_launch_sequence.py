@@ -117,6 +117,7 @@ def _assert_verified_prompt_trace(connection, ft: FakeTmux) -> None:
     enters = [args for args, _ in ft.calls_to("send_keys") if args[1] == "Enter"]
     assert len(enters) == 1
 
+
 # ============================================================
 # === COOKBOOK ===============================================
 # ============================================================
@@ -163,6 +164,31 @@ def test_rogue_harness_start_never_sends_brief(fake_tmux_launch: FakeTmux) -> No
     assert result.ok
     texts = _send_texts(fake_tmux_launch)
     assert not any(context_text in t for t in texts)
+
+
+def test_cursor_grok_slow_is_rejected_before_tmux_creation(
+    fake_tmux_launch: FakeTmux,
+) -> None:
+    """Cross-layer guard: observed Grok capabilities reject Composer speed."""
+
+    hs = HarnessSession(
+        CursorAdapter(startup_model="cursor-grok-4-5", startup_effort="slow"),
+        "rogue-grok",
+        Path("/tmp/repo"),
+    )
+
+    result = asyncio.run(
+        hs.start(
+            _fast_spec(
+                startup_model="cursor-grok-4-5",
+                startup_effort="slow",
+            )
+        )
+    )
+
+    assert not result.ok
+    assert "supported efforts: low, medium, high" in (result.message or "")
+    assert "create_session" not in fake_tmux_launch.call_names()
 
 
 # ============================================================

@@ -33,6 +33,7 @@ class FakeTmux:
         self._pane_queue: list[str | Exception] = []
         self._effect_pane_transitions: list[tuple[str, str | None, str]] = []
         self._effect_pane: str | None = None
+        self._last_captured_pane = ""
         self.calls: list[tuple[str, tuple, dict]] = []
         self.pane_size: tuple[int, int] = (220, 50)
         # Settable session state: tests flip `session_exists_returns` (a default
@@ -103,7 +104,14 @@ class FakeTmux:
         self, name: str, lines: int = 200, *, perf: object | None = None, escapes: bool = False
     ) -> str:
         self.calls.append(("capture_pane", (name,), {"lines": lines, "escapes": escapes}))
-        return self._next_pane()
+        self._last_captured_pane = self._next_pane()
+        return self._last_captured_pane
+
+    async def capture_viewport(self, name: str, *, escapes: bool = False) -> str:
+        """Return the same atomic fake pane without consuming another frame."""
+
+        self.calls.append(("capture_viewport", (name,), {"escapes": escapes}))
+        return self._last_captured_pane
 
     async def pane_dimensions(self, name: str) -> tuple[int, int]:
         self.calls.append(("pane_dimensions", (name,), {}))
@@ -161,6 +169,7 @@ class FakeTmux:
         """Discard any queued pane texts (use between test phases)."""
         self._pane_queue.clear()
         self._effect_pane = None
+        self._last_captured_pane = ""
         self._effect_pane_transitions.clear()
 
     def call_names(self) -> list[str]:
@@ -176,6 +185,7 @@ class FakeTmux:
         mp.setattr(tmux_mod, "TmuxError", self.TmuxError)
         mp.setattr(tmux_mod, "LARGE_PAYLOAD_BYTES", self.LARGE_PAYLOAD_BYTES)
         mp.setattr(tmux_mod, "capture_pane", self.capture_pane)
+        mp.setattr(tmux_mod, "capture_viewport", self.capture_viewport)
         mp.setattr(tmux_mod, "pane_dimensions", self.pane_dimensions)
         mp.setattr(tmux_mod, "create_session", self.create_session)
         mp.setattr(tmux_mod, "send_keys", self.send_keys)

@@ -13,6 +13,11 @@ from dataclasses import fields, is_dataclass
 from datetime import datetime, timedelta
 from enum import Enum
 
+from murder.llm.harness_control.capabilities.model_discovery import (
+    DiscoverModelsOperation,
+    DiscoverModelsRequest,
+    ModelDiscoveryPhase,
+)
 from murder.llm.harness_control.capabilities.model_selection import (
     ModelSelectionPhase,
     ModelTarget,
@@ -38,6 +43,19 @@ from murder.llm.harness_control.capabilities.restoration import (
     RestorationPhase,
     RestoreComposerOperation,
     RestoreComposerRequest,
+)
+from murder.llm.harness_control.capabilities.resume import (
+    ConfigureResumeOperation,
+    ConfigureResumePhase,
+    OpenResumeOperation,
+    OpenResumePhase,
+    OpenResumeRequest,
+    ResumePickerTarget,
+)
+from murder.llm.harness_control.capabilities.session_settings import (
+    ConfigureSessionSettingsOperation,
+    SessionSettingsPhase,
+    SessionSettingsTarget,
 )
 from murder.llm.harness_control.capabilities.usage import UsageOperation, UsagePhase, UsageRequest
 from murder.llm.harness_control.model.actions import (
@@ -82,6 +100,14 @@ _DATACLASSES = (
     ModelTarget,
     SelectModelRequest,
     SelectModelOperation,
+    DiscoverModelsRequest,
+    DiscoverModelsOperation,
+    OpenResumeRequest,
+    OpenResumeOperation,
+    ResumePickerTarget,
+    ConfigureResumeOperation,
+    SessionSettingsTarget,
+    ConfigureSessionSettingsOperation,
     QuestionChoiceSelection,
     QuestionAnswerRequest,
     AnswerQuestionOperation,
@@ -101,6 +127,10 @@ _ENUMS = (
     SubmitPhase,
     InputProvenance,
     ModelSelectionPhase,
+    ModelDiscoveryPhase,
+    OpenResumePhase,
+    ConfigureResumePhase,
+    SessionSettingsPhase,
     QuestionAnswerMode,
     AnswerQuestionPhase,
     PermissionDecisionKind,
@@ -118,6 +148,10 @@ _TYPE_REGISTRY: dict[str, type[object]] = {
 _OPERATION_TYPES = (
     SubmitPromptOperation,
     SelectModelOperation,
+    DiscoverModelsOperation,
+    OpenResumeOperation,
+    ConfigureResumeOperation,
+    ConfigureSessionSettingsOperation,
     AnswerQuestionOperation,
     AnswerPermissionOperation,
     RestoreComposerOperation,

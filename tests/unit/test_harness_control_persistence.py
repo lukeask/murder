@@ -135,6 +135,8 @@ def _snapshot() -> ObservationSnapshot:
         permission_request=_unknown(ref=ref),
         active_model=_unknown(ref=ref),
         model_configuration=_unknown(ref=ref),
+        settings=_unknown(ref=ref),
+        info=_unknown(ref=ref),
         usage=_unknown(ref=ref),
         tool_activity=_unknown(ref=ref),
         health=ObservationHealth(parser_status="healthy"),

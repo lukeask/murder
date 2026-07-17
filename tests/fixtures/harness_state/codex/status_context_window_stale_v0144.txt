@@ -1,0 +1,45 @@
+# source: manually supplied terminal capture, 2026-07-12
+# Scrubbed: account email -> example@website.com.
+
+/status
+
+╭───────────────────────────────────────────────────────────────────────────────────────╮
+│  >_ OpenAI Codex (v0.144.1)                                                           │
+│                                                                                       │
+│ Visit https://chatgpt.com/codex/settings/usage for up-to-date                         │
+│ information on rate limits and credits                                                │
+│                                                                                       │
+│  Model:                gpt-5.6-terra (reasoning high, summaries auto)                 │
+│  Directory:            ~/Documents/code/murder/.murder/worktrees/betterharnesscontrol │
+│  Permissions:          Full Access                                                    │
+│  Agents.md:            <none>                                                         │
+│  Account:              example@website.com (Plus)                                     │
+│  Collaboration mode:   Default                                                        │
+│  Session:              019f594f-11fd-7d51-a622-979834a8b034                           │
+│                                                                                       │
+│  Context window:       77% left (91.7K used / 353K)                                   │
+│  Weekly limit:         [█████████░░░░░░░░░░░] 45% left (resets 17:19 on 19 Jul)       │
+╰───────────────────────────────────────────────────────────────────────────────────────╯
+
+/status
+
+╭───────────────────────────────────────────────────────────────────────────────────────╮
+│  >_ OpenAI Codex (v0.144.1)                                                           │
+│                                                                                       │
+│ Visit https://chatgpt.com/codex/settings/usage for up-to-date                         │
+│ information on rate limits and credits                                                │
+│                                                                                       │
+│  Model:                gpt-5.6-terra (reasoning high, summaries auto)                 │
+│  Directory:            ~/Documents/code/murder/.murder/worktrees/betterharnesscontrol │
+│  Permissions:          Full Access                                                    │
+│  Agents.md:            <none>                                                         │
+│  Account:              example@website.com (Plus)                                     │
+│  Collaboration mode:   Default                                                        │
+│  Session:              019f594f-11fd-7d51-a622-979834a8b034                           │
+│                                                                                       │
+│  Context window:       77% left (91.7K used / 353K)                                   │
+│  Weekly limit:         [█████████░░░░░░░░░░░] 44% left (resets 17:19 on 19 Jul)       │
+│  Warning:              limits may be stale - run /status again shortly.               │
+╰───────────────────────────────────────────────────────────────────────────────────────╯
+
+› Explain this codebase

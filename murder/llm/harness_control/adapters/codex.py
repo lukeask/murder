@@ -6,6 +6,7 @@ from __future__ import annotations
 import hashlib
 import re
 from collections.abc import Sequence
+from dataclasses import replace
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -16,10 +17,14 @@ from murder.llm.harness_control.model.actions import (
     AnswerQuestion,
     ClearComposer,
     CommitPromptSubmission,
+    ConfigureResumePicker,
+    ConfigureSessionSettings,
     DismissOverlay,
     InputProvenance,
     InsertPromptPayload,
+    NavigateModelPicker,
     OpenModelPicker,
+    OpenResumePicker,
     PasteBuffer,
     QuestionAnswerMode,
     RequestUsage,
@@ -28,6 +33,7 @@ from murder.llm.harness_control.model.actions import (
     SendInterrupt,
     SendLiteralKeys,
     SendNamedKey,
+    SleepEffect,
     TerminalEffect,
 )
 from murder.llm.harness_control.model.evidence import (
@@ -43,6 +49,7 @@ from murder.llm.harness_control.model.observations import (
     ComposerState,
     GenerationPhase,
     GenerationState,
+    HarnessInfoState,
     Knowledge,
     ModalKind,
     ModalState,
@@ -54,6 +61,7 @@ from murder.llm.harness_control.model.observations import (
     Observed,
     PermissionRequestState,
     QuestionState,
+    SessionSettingsState,
     SurfaceKind,
     SurfaceState,
     ToolActivityState,
@@ -81,7 +89,9 @@ _MODEL = re.compile(
     r"\bmodel:\s*(?P<model>[\w.+:/-]+)(?:\s+(?P<effort>low|medium|high|extra\s+high|xhigh))?", re.I
 )
 _FOOTER = re.compile(
-    r"^\s*(?P<model>[\w.+:/-]+)\s+(?P<effort>low|medium|high|extra\s+high|xhigh)\s+·", re.I | re.M
+    r"^\s*(?P<model>[\w.+:/-]+)\s+"
+    r"(?P<effort>low|medium|high|extra\s+high|xhigh)(?:\s+fast)?\s+·",
+    re.I | re.M,
 )
 _NOTICE = re.compile(r"^\s*[■⚠]\s*(?P<text>.+)$", re.M)
 _BACKGROUND = re.compile(r"(?P<count>\d+)\s+background terminals?\s+running", re.I)
@@ -100,6 +110,10 @@ _CODEX_MENU_CONTROLS = re.compile(
 )
 _MINIMUM_MENU_CHOICES = 2
 _STATUS_HEADING = re.compile(r">_\s*OpenAI Codex\s*\(v(?P<version>[^)]+)\)", re.I)
+_HEADER_DIRECTORY = re.compile(
+    r"^\s*[│┃║]?\s*directory:\s*(?P<directory>.*?)\s*[│┃║]?\s*$", re.M
+)
+_TIP = re.compile(r"^\s*Tip:\s*(?P<text>\S.*)$", re.I | re.M)
 _STATUS_FIELD = re.compile(
     r"^\s*(?P<label>Model|Directory|Workspace|Permissions|Agents\.md|Account|"
     r"Collaboration mode|Session)\s*:\s*(?P<value>.*?)\s*$",
@@ -107,8 +121,7 @@ _STATUS_FIELD = re.compile(
 )
 _RESUME_TITLE = "Resume a previous session"
 _RESUME_OPTIONS = re.compile(
-    r"Filter:\s*\[(?P<filter>[^]]+)]\s*(?P<filter_other>\S+)\s+"
-    r"Sort:\s*\[(?P<sort>[^]]+)]\s*(?P<sort_other>\S+)",
+    r"Filter:\s*(?P<filter>.+?)\s+Sort:\s*(?P<sort>.+?)\s*$",
     re.I,
 )
 _RESUME_SESSION = re.compile(
@@ -132,43 +145,63 @@ class CodexHarnessAdapter(HarnessObservationAdapter, HarnessActionAdapter):
     ) -> Sequence[EvidenceEnvelope]:
         del history
         clean = strip_ansi(frame.raw_text)
-        full = ScreenRegionRef("full_frame", 1, max(1, len(clean.splitlines())))
+        live = (
+            strip_ansi(frame.viewport_text)
+            if frame.viewport_text is not None
+            else _viewport(clean, frame.height)
+        )
+        history_region = ScreenRegionRef(
+            "scrollback_frame", 1, max(1, len(clean.splitlines()))
+        )
+        viewport_region = ScreenRegionRef(
+            "current_viewport", 1, max(1, len(live.splitlines()))
+        )
         diagnostics: list[str] = []
         try:
             transcript = parse_frames("codex", [frame.raw_text], pane_height=frame.height)
         except Exception as exc:  # evidence must survive a parser failure
             transcript = {"harness": "codex", "state": "unknown", "segments": []}
             diagnostics.append(f"transcript parse failed: {type(exc).__name__}: {exc}")
-        composer = _composer(clean)
-        model_picker_visible = "Select Model and Effort" in clean
-        reasoning_picker_visible = "Select Reasoning Level" in clean
+        composer = _composer(live)
+        picker_view, picker_kind = _live_model_picker(live)
+        model_picker_visible = picker_kind == "model"
+        reasoning_picker_visible = picker_kind == "effort"
         model_choices = [
             {
                 "number": row.index,
                 "model_id": row.model_id,
                 "label": row.label,
                 "current": row.current,
-                "highlighted": _codex_row_is_highlighted(clean, row.index),
+                "highlighted": _codex_row_is_highlighted(picker_view, row.index),
             }
-            for row in parse_numbered_model_choices(clean)
+            for row in parse_numbered_model_choices(picker_view)
         ] if model_picker_visible else []
         effort_choices = [
             {"number": row.index, "effort": row.effort, "label": row.label, "current": row.current}
-            for row in parse_numbered_effort_choices(clean)
+            for row in parse_numbered_effort_choices(picker_view)
         ] if reasoning_picker_visible else []
         model_readbacks = _model_readbacks(clean)
         status = parse_codex_status_pane(clean, fetched_at=frame.captured_at.isoformat())
-        status_evidence = _status_evidence(clean, status)
-        resume_surface = _resume_surface(clean)
-        update_surface = _update_surface(clean)
-        shell_error = _current_shell_error(clean)
+        status_evidence = _status_evidence(live, status)
+        resume_surface = _resume_surface(live)
+        update_surface = _update_surface(live)
+        shell_error = _current_shell_error(live)
         windows = [
             {"name": item.name, "percent_used": item.percent_used, "reset_at": item.reset_at}
             for item in status.windows
         ]
+        question, permission = _structured_surfaces(live)
+        if not question["present"] and update_surface["present"]:
+            question = _update_question_surface(update_surface)
+        elif not question["present"] and resume_surface["present"]:
+            question = _resume_question_surface(resume_surface)
         modal = (
             "model_picker"
             if model_picker_visible or reasoning_picker_visible
+            else "question"
+            if question["present"] and question.get("kind") != "resume"
+            else "permission"
+            if permission["present"]
             else "resume_picker"
             if resume_surface["present"]
             else "update"
@@ -179,7 +212,6 @@ class CodexHarnessAdapter(HarnessObservationAdapter, HarnessActionAdapter):
             if status_evidence["present"]
             else None
         )
-        question, permission = _structured_surfaces(clean)
         payload: dict[str, Any] = {
             "raw_frame": {
                 "text": frame.raw_text,
@@ -188,8 +220,10 @@ class CodexHarnessAdapter(HarnessObservationAdapter, HarnessActionAdapter):
                 "height": frame.height,
                 "pane_epoch": frame.pane_epoch,
                 "capture_sequence": frame.capture_sequence,
+                "viewport_text": frame.viewport_text,
             },
             "composer": composer,
+            "chrome": _chrome(live),
             "transcript": transcript,
             "modal": {
                 "kind": modal,
@@ -201,24 +235,26 @@ class CodexHarnessAdapter(HarnessObservationAdapter, HarnessActionAdapter):
                 "available": model_choices,
                 "effort_choices": effort_choices,
                 "configuration": _codex_model_configuration(
-                    model_choices, effort_choices, model_readbacks, clean
+                    model_choices, effort_choices, model_readbacks, picker_view
                 ),
             },
             "status": {
                 **status_evidence,
                 "usage_windows": windows,
             },
-            "notices": [match.group("text").strip() for match in _NOTICE.finditer(clean)],
+            "notices": _notices(live),
             "activity": {
-                "busy": _busy(clean),
-                "background_terminals": _background_count(clean),
+                "busy": _busy(live),
+                "background_terminals": _background_count(live),
                 "tools": _tools(transcript),
-                "mcp_startup": _mcp_startup(clean),
+                "mcp_startup": _mcp_startup(live),
             },
             # Codex structured question/approval parsing is intentionally not
             # invented from arbitrary numbered text; retain raw text for later.
             "question_surface": question,
             "permission_surface": permission,
+            "question_ack": _codex_question_ack(live, update_surface),
+            "permission_ack": _codex_permission_ack(live),
             "resume_surface": resume_surface,
             "update_surface": update_surface,
             "shell": {
@@ -235,7 +271,7 @@ class CodexHarnessAdapter(HarnessObservationAdapter, HarnessActionAdapter):
                 captured_at=frame.captured_at,
                 evidence_type="codex.frame.v4",
                 payload=payload,
-                source_regions=(full,),
+                source_regions=(history_region, viewport_region),
                 diagnostics=EvidenceDiagnostics(
                     parser_name=self.parser_version, messages=tuple(diagnostics)
                 ),
@@ -273,7 +309,41 @@ class CodexHarnessAdapter(HarnessObservationAdapter, HarnessActionAdapter):
         composer = p["composer"]
         modal = p["modal"]["kind"]
         busy = p["activity"]["busy"]
-        if modal == "resume_picker":
+        if modal == "question":
+            surface = SurfaceState(
+                SurfaceKind.QUESTION_PICKER,
+                frozenset({SurfaceKind.QUESTION_PICKER}),
+                SurfaceKind.QUESTION_PICKER,
+                True,
+                True,
+            )
+            modal_state = ModalState(
+                ModalKind.QUESTION,
+                p["question_surface"].get("prompt"),
+                _highlighted_index(p["question_surface"].get("choices", [])),
+                len(p["question_surface"].get("choices", [])),
+                True,
+                True,
+            )
+            composer_observed = unknown("question picker occludes Codex composer")
+        elif modal == "permission":
+            surface = SurfaceState(
+                SurfaceKind.PERMISSION_DIALOG,
+                frozenset({SurfaceKind.PERMISSION_DIALOG}),
+                SurfaceKind.PERMISSION_DIALOG,
+                True,
+                True,
+            )
+            modal_state = ModalState(
+                ModalKind.PERMISSION,
+                p["permission_surface"].get("title"),
+                _highlighted_index(p["permission_surface"].get("choices", [])),
+                len(p["permission_surface"].get("choices", [])),
+                True,
+                True,
+            )
+            composer_observed = unknown("permission dialog occludes Codex composer")
+        elif modal == "resume_picker":
             resume = p["resume_surface"]
             pagination = resume.get("pagination") or {}
             surface = SurfaceState(
@@ -390,7 +460,12 @@ class CodexHarnessAdapter(HarnessObservationAdapter, HarnessActionAdapter):
             else Observed.without_value(
                 Knowledge.ABSENT, evidence=(ref,), observed_at=now, revision=revision
             ),
-            "generation": obs(_generation(busy)),
+            "generation": obs(
+                _generation(
+                    busy,
+                    _payload_viewport(p),
+                )
+            ),
             "transcript_tail": obs(_tail(p["transcript"], busy)),
             "question": _question_observed(
                 p["question_surface"],
@@ -409,7 +484,72 @@ class CodexHarnessAdapter(HarnessObservationAdapter, HarnessActionAdapter):
                 or p["question_surface"]["present"],
             ),
             "tool_activity": obs(_tool_activity(p["activity"]["tools"])),
+            "settings": obs(
+                _codex_settings(_payload_viewport(p))
+            ),
         }
+        chrome = p["chrome"]
+        updates["info"] = (
+            obs(
+                HarnessInfoState(
+                    chrome["cli_version"],
+                    chrome["directory"],
+                    chrome["tip"],
+                    chrome["rename_thread_tip"],
+                    tuple(p["notices"]),
+                )
+            )
+            if any(
+                (
+                    chrome["cli_version"],
+                    chrome["directory"],
+                    chrome["tip"],
+                    p["notices"],
+                )
+            )
+            else unknown("no live Codex header chrome is visible")
+        )
+        question_ack = p["question_ack"] or _resumed_question_ack(p, prior)
+        if (
+            not p["question_surface"]["present"]
+            and question_ack
+            and prior is not None
+            and prior.question.knowledge is Knowledge.PRESENT
+            and prior.question.value is not None
+        ):
+            acknowledged_answer = next(
+                (
+                    choice.label
+                    for choice in prior.question.value.choices
+                    if choice.label.casefold() in question_ack.casefold()
+                    or question_ack.casefold() in choice.label.casefold()
+                ),
+                question_ack,
+            )
+            updates["question"] = obs(
+                replace(prior.question.value, answered_summary=(acknowledged_answer,))
+            )
+        permission_ack = p["permission_ack"] or _permission_progress_ack(p, prior)
+        if (
+            not p["permission_surface"]["present"]
+            and permission_ack
+            and prior is not None
+            and prior.permission_request.knowledge is Knowledge.PRESENT
+            and prior.permission_request.value is not None
+        ):
+            prior_permission = prior.permission_request.value
+            acknowledged = next(
+                (
+                    choice.stable_choice_id
+                    for choice in prior_permission.choices
+                    if _permission_choice_acknowledged(permission_ack, choice.label)
+                ),
+                None,
+            )
+            if acknowledged is not None:
+                updates["permission_request"] = obs(
+                    replace(prior_permission, acknowledged_response_id=acknowledged)
+                )
         readbacks = p["model"]["readbacks"]
         if readbacks:
             active = readbacks[-1]
@@ -449,18 +589,26 @@ class CodexHarnessAdapter(HarnessObservationAdapter, HarnessActionAdapter):
             UsageWindow(row["name"], row["percent_used"], _dt(row["reset_at"]), row["reset_at"])
             for row in p["status"]["usage_windows"]
         )
+        usage_limit = next(
+            (notice for notice in p["notices"] if "usage limit" in notice.casefold()), None
+        )
+        status_fields = p["status"]["fields"]
+        status_model = _present_status_value(status_fields, "model_id") or (
+            readbacks[-1]["model_id"] if readbacks else None
+        )
+        status_plan = _present_status_value(status_fields, "plan")
         updates["usage"] = (
             obs(
                 UsageState(
-                    None,
-                    None,
+                    status_model,
+                    status_plan,
                     windows,
-                    p["status"]["freshness"],
-                    SurfaceKind.STATUS_PANEL if windows else None,
-                    p["status"]["freshness_advisory"],
+                    p["status"]["freshness"] if windows else "current",
+                    SurfaceKind.STATUS_PANEL if windows else surface.primary,
+                    p["status"]["freshness_advisory"] or usage_limit,
                 )
             )
-            if windows
+            if windows or usage_limit
             else unknown("no Codex status usage visible")
         )
         events: tuple[dict[str, object], ...] = (
@@ -503,6 +651,10 @@ class CodexHarnessAdapter(HarnessObservationAdapter, HarnessActionAdapter):
                     "available_version": p["update_surface"]["available_version"],
                 },
             )
+        if _is_interrupted(_payload_viewport(p)):
+            events += ({"type": "codex.conversation_interrupted"},)
+        if usage_limit is not None:
+            events += ({"type": "codex.usage_limit", "message": usage_limit},)
         return ObservationDelta(
             updates=updates,
             evidence_refs=(ref,),
@@ -543,7 +695,26 @@ class CodexHarnessAdapter(HarnessObservationAdapter, HarnessActionAdapter):
                 SendNamedKey(f"{prefix}:command-enter", "Enter"),
                 SendNamedKey(f"{prefix}:open-status", "Enter"),
             )
-        if isinstance(action, (DismissOverlay, SendInterrupt)):
+        if isinstance(action, DismissOverlay):
+            effects: list[TerminalEffect] = [SendNamedKey(f"{prefix}:escape", "Escape")]
+            if (
+                snapshot.surface.knowledge is Knowledge.PRESENT
+                and snapshot.surface.value is not None
+                and snapshot.surface.value.primary is SurfaceKind.RESUME_PICKER
+                and snapshot.question.knowledge is Knowledge.PRESENT
+                and snapshot.question.value is not None
+                and bool(snapshot.question.value.custom_answer_text)
+            ):
+                effects.extend(
+                    (
+                        SleepEffect(
+                            f"{prefix}:await-search-clear", timedelta(milliseconds=1500)
+                        ),
+                        SendNamedKey(f"{prefix}:dismiss-after-clear", "Escape"),
+                    )
+                )
+            return tuple(effects)
+        if isinstance(action, SendInterrupt):
             return (SendNamedKey(f"{prefix}:escape", "Escape"),)
         if isinstance(action, AnswerQuestion):
             if action.mode is QuestionAnswerMode.DECLINE:
@@ -551,14 +722,119 @@ class CodexHarnessAdapter(HarnessObservationAdapter, HarnessActionAdapter):
             if action.mode is QuestionAnswerMode.MULTIPLE:
                 raise ValueError("Codex fixture corpus has no multi-select question surface")
             choice_id = action.selections[0].stable_choice_id if action.selections else None
-            return _lower_menu_answer(prefix, choice_id, action.custom_answer)
+            choices = (
+                snapshot.question.value.choices
+                if snapshot is not None
+                and snapshot.question.knowledge is Knowledge.PRESENT
+                and snapshot.question.value is not None
+                else ()
+            )
+            return _lower_menu_answer(
+                prefix, choice_id, action.custom_answer, action.note, choices
+            )
         if isinstance(action, AnswerPermission):
-            return _lower_menu_answer(prefix, action.response_id, None)
+            choices = (
+                snapshot.permission_request.value.choices
+                if snapshot is not None
+                and snapshot.permission_request.knowledge is Knowledge.PRESENT
+                and snapshot.permission_request.value is not None
+                else ()
+            )
+            return _lower_menu_answer(prefix, action.response_id, None, None, choices)
         if isinstance(action, SelectModel):
             return _lower_model_selection(action, snapshot)
         if isinstance(action, OpenModelPicker):
             return _open_model_picker(action, snapshot)
+        if isinstance(action, OpenResumePicker):
+            if (
+                snapshot.surface.knowledge is not Knowledge.PRESENT
+                or snapshot.surface.value is None
+                or snapshot.surface.value.primary is not SurfaceKind.COMPOSER
+            ):
+                raise ValueError("Codex resume picker requires a visible composer")
+            return (
+                SendLiteralKeys(f"{prefix}:open-resume", "/resume", FAST_HUMANIZED_TYPING),
+                SleepEffect(f"{prefix}:await-resume-autocomplete", timedelta(milliseconds=400)),
+                SendNamedKey(f"{prefix}:open-resume-enter", "Enter"),
+            )
+        if isinstance(action, ConfigureResumePicker):
+            question = snapshot.question
+            if (
+                snapshot.surface.knowledge is not Knowledge.PRESENT
+                or snapshot.surface.value is None
+                or snapshot.surface.value.primary is not SurfaceKind.RESUME_PICKER
+                or question.knowledge is not Knowledge.PRESENT
+                or question.value is None
+                or question.value.prompt_text != _RESUME_TITLE
+                or (question.value.custom_answer_text or "") != ""
+                or not (question.value.active_tab or "").casefold().startswith(
+                    "filter=cwd;sort=updated;"
+                )
+                or "loading=true" in (question.value.active_tab or "").casefold()
+            ):
+                raise ValueError(
+                    "Codex resume configuration requires a freshly opened default picker"
+                )
+            effects: list[TerminalEffect] = []
+            if action.filter_mode == "all":
+                effects.extend(
+                    (
+                        SendNamedKey(f"{prefix}:filter-all", "Right"),
+                        SleepEffect(f"{prefix}:filter-settle", timedelta(milliseconds=300)),
+                    )
+                )
+            if action.sort_mode == "created":
+                effects.extend(
+                    (
+                        SendNamedKey(f"{prefix}:focus-sort", "Tab"),
+                        SendNamedKey(f"{prefix}:sort-created", "Right"),
+                        SleepEffect(f"{prefix}:sort-settle", timedelta(milliseconds=300)),
+                    )
+                )
+            if action.search_text:
+                effects.extend(
+                    (
+                        SendLiteralKeys(
+                            f"{prefix}:search",
+                            action.search_text,
+                            FAST_HUMANIZED_TYPING,
+                        ),
+                        SleepEffect(f"{prefix}:search-settle", timedelta(milliseconds=500)),
+                    )
+                )
+            if not effects:
+                raise ValueError("Codex resume configuration has no change to apply")
+            return tuple(effects)
+        if isinstance(action, NavigateModelPicker):
+            if (
+                snapshot.surface.knowledge is not Knowledge.PRESENT
+                or snapshot.surface.value is None
+                or snapshot.surface.value.primary is not SurfaceKind.MODEL_PICKER
+            ):
+                raise ValueError("Codex model-picker navigation requires a visible picker")
+            return (
+                SendNamedKey(
+                    f"{prefix}:navigate-model", "Down" if action.direction == "down" else "Up"
+                ),
+            )
+        if isinstance(action, ConfigureSessionSettings):
+            return _lower_session_settings(action, snapshot)
         raise ValueError(f"Codex lowering does not support {type(action).__name__}")
+
+
+def _viewport(clean: str, height: int) -> str:
+    """Return the current terminal viewport while preserving broad raw evidence."""
+
+    lines = clean.splitlines()
+    return "\n".join(lines[-height:]) if height > 0 else clean
+
+
+def _payload_viewport(payload: dict[str, Any]) -> str:
+    raw = payload["raw_frame"]
+    viewport = raw.get("viewport_text")
+    if isinstance(viewport, str):
+        return strip_ansi(viewport)
+    return _viewport(str(raw["text"]), int(raw["height"]))
 
 
 def _composer(clean: str) -> dict[str, Any]:
@@ -576,6 +852,7 @@ def _composer(clean: str) -> dict[str, Any]:
             "visible_lines": [],
         }
     i, match = matches[-1]
+    assert match is not None
     visible_lines = [lines[i]]
     content_lines = [match.group("text")]
     for line in lines[i + 1 :]:
@@ -608,6 +885,77 @@ def _composer(clean: str) -> dict[str, Any]:
     }
 
 
+def _chrome(clean: str) -> dict[str, Any]:
+    """Retain current Codex banner chrome without mistaking it for /status."""
+
+    versions = [match.group("version").strip() for match in _STATUS_HEADING.finditer(clean)]
+    directories = [
+        match.group("directory").strip().rstrip("│┃║").strip()
+        for match in _HEADER_DIRECTORY.finditer(clean)
+    ]
+    tips = [match.group("text").strip() for match in _TIP.finditer(clean)]
+    return {
+        "cli_version": versions[0] if versions else None,
+        "directory": directories[0] if directories else None,
+        "tip": tips[-1] if tips else None,
+        "rename_thread_tip": any("/rename" in tip for tip in tips),
+    }
+
+
+def _notices(clean: str) -> list[str]:
+    """Capture wrapped Codex notices as complete messages."""
+
+    lines = clean.splitlines()
+    notices: list[str] = []
+    for index, line in enumerate(lines):
+        match = _NOTICE.match(line)
+        if match is None:
+            continue
+        parts = [match.group("text").strip()]
+        for continuation in lines[index + 1 :]:
+            stripped = continuation.strip()
+            if not stripped or _PROMPT.match(continuation) or _FOOTER.match(continuation):
+                break
+            if _NOTICE.match(continuation) or continuation.lstrip().startswith("•"):
+                break
+            parts.append(stripped)
+        notices.append(" ".join(parts))
+    return notices
+
+
+def _highlighted_index(choices: Sequence[dict[str, Any]]) -> int | None:
+    return next((index for index, choice in enumerate(choices) if choice["highlighted"]), None)
+
+
+def _live_model_picker(clean: str) -> tuple[str, str | None]:
+    """Return only the latest still-live Codex model-picker suffix.
+
+    Inline mode retains dismissed menus in scrollback.  A genuine composer
+    below the last picker title proves that historical menu is no longer the
+    active surface; numbered pointer rows do not count as composers.
+    """
+
+    anchors = [
+        (clean.rfind("Select Model and Effort"), "model"),
+        (clean.rfind("Select Reasoning Level"), "effort"),
+    ]
+    anchor, kind = max(anchors, key=lambda item: item[0])
+    if anchor < 0:
+        return "", None
+    view = clean[anchor:]
+    controls = re.search(r"Press enter to confirm or esc to go back", view, re.I)
+    if controls is not None:
+        suffix = view[controls.end() :]
+        if "model changed to" in suffix.casefold() or any(
+            _FOOTER.match(line) for line in suffix.splitlines()
+        ):
+            return "", None
+    for line in view.splitlines()[1:]:
+        if _PROMPT.match(line) and not _MENU.match(line):
+            return "", None
+    return view, kind
+
+
 def _structured_surfaces(clean: str) -> tuple[dict[str, Any], dict[str, Any]]:
     """Recognize complete, live Codex decision surfaces and fail closed.
 
@@ -620,6 +968,10 @@ def _structured_surfaces(clean: str) -> tuple[dict[str, Any], dict[str, Any]]:
     Model, reasoning, update, and resume menus are retained as their own
     evidence, not misclassified as user questions or permissions.
     """
+    if question := _live_codex_question(clean):
+        return question, {"present": False, "reason": "question surface active"}
+    if permission := _live_codex_permission(clean):
+        return {"present": False, "reason": "permission surface active"}, permission
     lines = clean.splitlines()
     candidate = _live_numbered_surface(lines)
     if candidate is None:
@@ -641,7 +993,7 @@ def _structured_surfaces(clean: str) -> tuple[dict[str, Any], dict[str, Any]]:
                 "present": True,
                 "title": title,
                 "choices": rows,
-                "selected": next((r["id"] for r in rows if r["selected"]), None),
+                "selected": next((r["id"] for r in rows if r["highlighted"]), None),
             },
         )
     if any(word in lowered for word in ("question", "choose", "select")):
@@ -659,6 +1011,274 @@ def _structured_surfaces(clean: str) -> tuple[dict[str, Any], dict[str, Any]]:
         {"present": False, "reason": "numbered menu has no question semantics"},
         {"present": False, "reason": "numbered menu has no permission semantics"},
     )
+
+
+def _wrapped_numbered_rows(lines: list[str]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for line in lines:
+        row = _numbered_row(line)
+        if row is not None:
+            rows.append(row)
+            continue
+        text = _surface_text(line)
+        if rows and text and not re.search(r"\b(?:enter|esc|option \d+/\d+)\b", text, re.I):
+            rows[-1]["label"] = f"{rows[-1]['label']} {text}".strip()
+    return rows
+
+
+def _live_codex_question(clean: str) -> dict[str, Any] | None:
+    matches = list(
+        re.finditer(r"^[ \t]*Question\s+\d+/\d+[^\n]*$", clean, re.I | re.M)
+    )
+    if not matches:
+        return None
+    view = clean[matches[-1].start() :]
+    controls = re.search(
+        r"^[^\n]*enter to submit answer[^\n]*$", view, re.I | re.M
+    )
+    if controls is None:
+        return None
+    if re.search(r"Questions?\s+\d+/\d+\s+answered", view[controls.end() :], re.I):
+        return None
+    if any(
+        _PROMPT.match(line) and not _MENU.match(line)
+        for line in view[controls.end() :].splitlines()
+    ):
+        return None
+    lines = view[: controls.start()].splitlines()
+    rows = _wrapped_numbered_rows(lines)
+    if len(rows) < _MINIMUM_MENU_CHOICES:
+        return None
+    first_row = next((index for index, line in enumerate(lines) if _numbered_row(line)), None)
+    prompt = " ".join(
+        _surface_text(line)
+        for line in lines[1 : first_row if first_row is not None else 1]
+        if _surface_text(line)
+    )
+    return {
+        "present": True,
+        "prompt": prompt or _surface_text(lines[0]),
+        "choices": rows,
+        "selection_mode": "single",
+        "custom_answer": False,
+        "visible_tabs": (
+            ("notes",)
+            if any("none of the above" in row["label"].casefold() for row in rows)
+            else ()
+        ),
+    }
+
+
+def _live_codex_permission(clean: str) -> dict[str, Any] | None:
+    matches = list(
+        re.finditer(
+            r"^\s*Would you like to (?:run the following command|make the following edits)\?\s*$",
+            clean,
+            re.I | re.M,
+        )
+    )
+    if not matches:
+        return None
+    view = clean[matches[-1].start() :]
+    controls = re.search(r"Press enter to confirm or esc to cancel", view, re.I)
+    if controls is None:
+        return None
+    resolution = view[controls.end() :].casefold()
+    if "you approved codex to" in resolution or "you canceled the request" in resolution:
+        return None
+    if any(
+        _PROMPT.match(line) and not _MENU.match(line)
+        for line in view[controls.end() :].splitlines()
+    ):
+        return None
+    rows = _wrapped_numbered_rows(view[: controls.start()].splitlines()[1:])
+    if len(rows) < _MINIMUM_MENU_CHOICES:
+        return None
+    title = _surface_text(view.splitlines()[0])
+    command = next(
+        (
+            _surface_text(line)
+            for line in view.splitlines()
+            if "touch " in line or line.lstrip().startswith(("$ ", "Command:"))
+        ),
+        None,
+    )
+    return {
+        "present": True,
+        "title": title,
+        "command": command,
+        "tool_name": "shell" if "command" in title.casefold() else "edit",
+        "choices": rows,
+        "selected": next((row["id"] for row in rows if row["highlighted"]), None),
+        "risks": ["shell"] if "command" in title.casefold() else ["write"],
+    }
+
+
+def _codex_question_ack(clean: str, update_surface: dict[str, Any]) -> str | None:
+    matches = list(
+        re.finditer(
+            r"Questions?\s+\d+/\d+\s+answered.*?answer:\s*(?P<answer>[^\n]+)",
+            clean,
+            re.I | re.S,
+        )
+    )
+    if matches:
+        match = matches[-1]
+        answer = match.group("answer").strip()
+        tail = clean[match.end() :]
+        note = re.search(r"^\s*note:\s*(?P<note>[^\n]+)", tail, re.I | re.M)
+        return f"{answer}\n{note.group('note').strip()}" if note else answer
+    tail = "\n".join(clean.splitlines()[-40:]).casefold()
+    if "conversation interrupted" in tail or "you canceled the request" in tail:
+        return "declined"
+    if update_surface.get("historical"):
+        return next(
+            (
+                row["label"]
+                for row in update_surface.get("choices", [])
+                if row["highlighted"]
+            ),
+            None,
+        )
+    return None
+
+
+def _update_question_surface(update: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "present": True,
+        "kind": "update",
+        "prompt": (
+            f"Update Codex {update['current_version']} to {update['available_version']}"
+        ),
+        "choices": [
+            {
+                "id": row["id"],
+                "label": row["label"],
+                "number": int(row["id"]),
+                "highlighted": row["highlighted"],
+                "selected": None,
+                "checked": None,
+                "disabled": row["disabled"],
+            }
+            for row in update["choices"]
+        ],
+        "selection_mode": "single",
+        "custom_answer": False,
+    }
+
+
+def _resume_question_surface(resume: dict[str, Any]) -> dict[str, Any]:
+    choices = []
+    for number, row in enumerate(resume["sessions"], start=1):
+        stable_id = hashlib.sha256(
+            f"{number}\x1f{row['age']}\x1f{row['preview']}".encode()
+        ).hexdigest()[:16]
+        choices.append(
+            {
+                "id": stable_id,
+                "label": row["preview"],
+                "number": number,
+                "highlighted": row["highlighted"],
+                "selected": None,
+                "checked": None,
+                "disabled": False,
+            }
+        )
+    filter_state = resume.get("filter") or {}
+    sort_state = resume.get("sort") or {}
+    return {
+        "present": True,
+        "kind": "resume",
+        "prompt": _RESUME_TITLE,
+        "choices": choices,
+        "selection_mode": "single",
+        "custom_answer": False,
+        "custom_answer_text": resume.get("search_text"),
+        "active_tab": (
+            f"filter={filter_state.get('selected')};sort={sort_state.get('selected')};"
+            f"loading={'true' if resume.get('loading') else 'false'}"
+        ),
+        "visible_tabs": tuple(
+            [f"filter={value}" for value in filter_state.get("available", [])]
+            + [f"sort={value}" for value in sort_state.get("available", [])]
+        ),
+    }
+
+
+def _resumed_question_ack(
+    payload: dict[str, Any], prior: ObservationSnapshot | None
+) -> str | None:
+    if (
+        prior is None
+        or prior.question.knowledge is not Knowledge.PRESENT
+        or prior.question.value is None
+        or prior.question.value.prompt_text != _RESUME_TITLE
+    ):
+        return None
+    # Closing an empty/search-filtered picker is not a resume acknowledgment.
+    # Only a visible selected row can be correlated with a resumed transcript.
+    if not prior.question.value.choices:
+        return None
+    current_tail = _tail(payload["transcript"], payload["activity"]["busy"])
+    if (
+        prior.transcript_tail.knowledge is Knowledge.PRESENT
+        and prior.transcript_tail.value is not None
+        and current_tail == prior.transcript_tail.value
+    ):
+        return None
+    segments = payload["transcript"].get("segments", [])
+    users = [
+        str(segment.get("text", "")).strip()
+        for segment in segments
+        if isinstance(segment, dict) and segment.get("type") == "user"
+    ]
+    return users[-1] if users else None
+
+
+def _codex_permission_ack(clean: str) -> str | None:
+    tail = "\n".join(clean.splitlines()[-40:]).casefold()
+    if "you approved codex to" in tail:
+        return "approved"
+    if "you canceled the request" in tail or "conversation interrupted" in tail:
+        return "denied"
+    anchors = [
+        clean.casefold().rfind("would you like to run the following command"),
+        clean.casefold().rfind("would you like to make the following edits"),
+        clean.casefold().rfind("permission required"),
+    ]
+    anchor = max(anchors)
+    if anchor >= 0:
+        suffix = clean[anchor:]
+        controls = re.search(r"press enter to confirm or esc to cancel", suffix, re.I)
+        after = suffix[controls.end() :] if controls is not None else ""
+        if re.search(r"^\s*•", after, re.M) or _BUSY.search(after):
+            return "approved"
+    return None
+
+
+def _permission_choice_acknowledged(ack: str, label: str) -> bool:
+    lowered = label.casefold()
+    if ack == "denied":
+        return any(word in lowered for word in ("deny", "reject", "no", "cancel"))
+    if ack == "approved":
+        return any(word in lowered for word in ("allow", "approve", "yes", "proceed"))
+    return ack in lowered
+
+
+def _permission_progress_ack(
+    payload: dict[str, Any], prior: ObservationSnapshot | None
+) -> str | None:
+    if (
+        prior is None
+        or prior.permission_request.knowledge is not Knowledge.PRESENT
+        or prior.permission_request.value is None
+        or payload["permission_surface"]["present"]
+    ):
+        return None
+    tools = payload["activity"]["tools"]
+    if payload["activity"]["busy"] is not None or tools:
+        return "approved"
+    return None
 
 
 def _live_numbered_surface(lines: list[str]) -> tuple[str, list[dict[str, Any]]] | None:
@@ -684,6 +1304,8 @@ def _live_numbered_surface(lines: list[str]) -> tuple[str, list[dict[str, Any]]]
         if len(rows) < _MINIMUM_MENU_CHOICES or not _has_live_menu_chrome(
             lines, title_index, end
         ):
+            continue
+        if any(_PROMPT.match(line) and not _MENU.match(line) for line in lines[end:]):
             continue
         return (_surface_text(lines[title_index]), rows)
     return None
@@ -789,10 +1411,10 @@ def _question_observed(
             surface["prompt"],
             choices,
             surface["selection_mode"],
-            None,
-            (),
+            surface.get("active_tab"),
+            tuple(surface.get("visible_tabs", ())),
             surface["custom_answer"],
-            None,
+            surface.get("custom_answer_text"),
             "Enter",
             "Escape",
             (),
@@ -834,12 +1456,12 @@ def _permission_observed(
     return Observed.present(
         PermissionRequestState(
             hashlib.sha256(surface["title"].encode()).hexdigest()[:16],
-            None,
-            None,
+            surface.get("tool_name"),
+            surface.get("command"),
             surface["title"],
             choices,
             surface["selected"],
-            frozenset(),
+            frozenset(surface.get("risks", ())),
         ),
         evidence=(ref,),
         observed_at=now,
@@ -848,16 +1470,48 @@ def _permission_observed(
 
 
 def _lower_menu_answer(
-    prefix: str, choice_id: str | None, custom_answer: str | None
+    prefix: str,
+    choice_id: str | None,
+    custom_answer: str | None,
+    note: str | None,
+    choices: tuple[ChoiceState, ...],
 ) -> Sequence[TerminalEffect]:
     if custom_answer is not None:
         return (
             SendLiteralKeys(f"{prefix}:custom", custom_answer, FAST_HUMANIZED_TYPING),
             SendNamedKey(f"{prefix}:confirm", "Enter"),
         )
-    if choice_id is None or not choice_id.isdigit():
-        raise ValueError("Codex menu lowering requires fixture-backed numeric choice identity")
-    return (SendLiteralKeys(f"{prefix}:choice", choice_id, FAST_HUMANIZED_TYPING),)
+    if choice_id is None:
+        raise ValueError("Codex menu lowering requires a stable choice identity")
+    if not choices:
+        if not choice_id.isdigit():
+            raise ValueError("Codex unobserved menu choices require numeric identity")
+        return (SendLiteralKeys(f"{prefix}:choice", choice_id, FAST_HUMANIZED_TYPING),)
+    target = next(
+        (index for index, choice in enumerate(choices) if choice.stable_choice_id == choice_id),
+        None,
+    )
+    current = next((index for index, choice in enumerate(choices) if choice.highlighted), None)
+    if target is None or current is None:
+        raise ValueError("Codex menu lowering requires a visible target and cursor")
+    key = "Down" if target > current else "Up"
+    effects: list[TerminalEffect] = []
+    for index in range(abs(target - current)):
+        effects.extend(
+            (
+                SendNamedKey(f"{prefix}:nav:{index}", key),
+                SleepEffect(f"{prefix}:nav-settle:{index}", timedelta(milliseconds=150)),
+            )
+        )
+    if note is not None:
+        effects.extend(
+            (
+                SendNamedKey(f"{prefix}:open-notes", "Tab"),
+                SendLiteralKeys(f"{prefix}:note", note, FAST_HUMANIZED_TYPING),
+            )
+        )
+    effects.append(SendNamedKey(f"{prefix}:confirm", "Enter"))
+    return tuple(effects)
 
 
 def _model_readbacks(clean: str) -> list[dict[str, str | None]]:
@@ -881,6 +1535,14 @@ def _model_readbacks(clean: str) -> list[dict[str, str | None]]:
             }
         )
     return rows
+
+
+def _codex_settings(clean: str) -> SessionSettingsState:
+    lines = strip_ansi(clean).splitlines()
+    tail = "\n".join(lines[-40:])
+    run_mode = "plan" if "Plan mode (shift+tab to cycle)" in tail else "default"
+    footer = next((line for line in reversed(lines) if _FOOTER.match(line)), "")
+    return SessionSettingsState(run_mode, bool(re.search(r"\bfast\b", footer, re.I)))
 
 
 def _codex_row_is_highlighted(clean: str, number: int | None) -> bool:
@@ -993,8 +1655,38 @@ def _open_model_picker(
         raise ValueError("Codex model picker will not replace an unobserved overlay")
     return (
         SendLiteralKeys(f"{action.action_id}:open-model", "/model", FAST_HUMANIZED_TYPING),
+        SleepEffect(f"{action.action_id}:await-autocomplete", timedelta(milliseconds=400)),
         SendNamedKey(f"{action.action_id}:open-model-enter", "Enter"),
     )
+
+
+def _lower_session_settings(
+    action: ConfigureSessionSettings, snapshot: ObservationSnapshot
+) -> Sequence[TerminalEffect]:
+    observed = snapshot.settings
+    if observed.knowledge is not Knowledge.PRESENT or observed.value is None:
+        raise ValueError("Codex settings require current live chrome readback")
+    current = observed.value
+    effects: list[TerminalEffect] = []
+    if action.run_mode is not None and action.run_mode != current.run_mode:
+        if {action.run_mode, current.run_mode} != {"default", "plan"}:
+            raise ValueError("Codex supports only default and plan run modes")
+        effects.append(SendNamedKey(f"{action.action_id}:cycle-mode", "BTab"))
+    if action.fast_enabled is not None and action.fast_enabled != current.fast_enabled:
+        effects.extend(
+            (
+                SendLiteralKeys(
+                    f"{action.action_id}:fast", "/fast", FAST_HUMANIZED_TYPING
+                ),
+                SleepEffect(
+                    f"{action.action_id}:await-fast-autocomplete", timedelta(milliseconds=400)
+                ),
+                SendNamedKey(f"{action.action_id}:toggle-fast", "Enter"),
+            )
+        )
+    if not effects:
+        raise ValueError("Codex settings action has no observable change to apply")
+    return tuple(effects)
 
 
 def _busy(clean: str) -> dict[str, Any] | None:
@@ -1008,8 +1700,10 @@ def _busy(clean: str) -> dict[str, Any] | None:
     }
 
 
-def _generation(busy: dict[str, Any] | None) -> GenerationState:
+def _generation(busy: dict[str, Any] | None, clean: str) -> GenerationState:
     if busy is None:
+        if _is_interrupted(clean):
+            return GenerationState(GenerationPhase.STOPPED, False, False, None, None, None)
         return GenerationState(GenerationPhase.IDLE, False, False, None, None, None)
     label = busy["label"].lower()
     phase = (
@@ -1022,6 +1716,24 @@ def _generation(busy: dict[str, Any] | None) -> GenerationState:
     return GenerationState(
         phase, True, True, timedelta(seconds=busy["seconds"] + busy["minutes"] * 60), None, None
     )
+
+
+def _is_interrupted(clean: str) -> bool:
+    """Recognize the latest interrupted turn without reviving stale banners."""
+
+    marker = clean.casefold().rfind("conversation interrupted")
+    if marker < 0:
+        return False
+    suffix = clean[marker:].splitlines()[1:]
+    return not any(line.lstrip().startswith("•") for line in suffix)
+
+
+def _present_status_value(fields: dict[str, Any], name: str) -> str | None:
+    field = fields.get(name)
+    if not isinstance(field, dict) or field.get("knowledge") != "present":
+        return None
+    value = field.get("value")
+    return value if isinstance(value, str) else None
 
 
 def _tail(doc: dict[str, Any], busy: dict[str, Any] | None) -> TranscriptTailState:
@@ -1170,18 +1882,13 @@ def _resume_surface(clean: str) -> dict[str, Any]:
     sort_state = None
     if options is not None and options_index is not None:
         before_filter = lines[options_index][: options.start()].strip()
-        search_text = "" if before_filter == "Type to search" else before_filter
-        filter_state = {
-            "selected": options.group("filter").strip(),
-            "available": [
-                options.group("filter").strip(),
-                options.group("filter_other").strip(),
-            ],
-        }
-        sort_state = {
-            "selected": options.group("sort").strip(),
-            "available": [options.group("sort").strip(), options.group("sort_other").strip()],
-        }
+        search_text = (
+            ""
+            if before_filter == "Type to search"
+            else re.sub(r"^Search:\s*", "", before_filter, flags=re.I)
+        )
+        filter_state = _bracketed_option_state(options.group("filter"))
+        sort_state = _bracketed_option_state(options.group("sort"))
     pagination = (
         {
             "selected_index": int(page.group("selected")),
@@ -1200,10 +1907,20 @@ def _resume_surface(clean: str) -> dict[str, Any]:
         "filter": filter_state,
         "sort": sort_state,
         "pagination": pagination,
+        "loading": any("searching" in line.casefold() for line in lines[title_index:raw_end]),
         "sessions": sessions,
         "controls": {"resume": "enter", "exit": ["esc", "ctrl+c"]},
         "raw_lines": lines[title_index:raw_end],
     }
+
+
+def _bracketed_option_state(raw: str) -> dict[str, Any] | None:
+    tokens = re.findall(r"\[([^]]+)]|(\S+)", raw.strip())
+    available = [(bracketed or plain).strip() for bracketed, plain in tokens]
+    selected = next((bracketed.strip() for bracketed, _ in tokens if bracketed), None)
+    if selected is None or not available:
+        return None
+    return {"selected": selected, "available": available}
 
 
 def _update_surface(clean: str) -> dict[str, Any]:

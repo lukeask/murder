@@ -1,23 +1,34 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+
+import pytest
 
 from murder.llm.harness_control.adapters.codex import CodexHarnessAdapter
 from murder.llm.harness_control.model.actions import (
     FAST_HUMANIZED_TYPING,
     AnswerQuestion,
     CommitPromptSubmission,
+    ConfigureResumePicker,
+    DismissOverlay,
     DuplicatePolicy,
     QuestionAnswerMode,
     QuestionChoiceSelection,
     SelectModel,
     SendLiteralKeys,
     SendNamedKey,
+    SleepEffect,
 )
 from murder.llm.harness_control.model.evidence import FrameId, HarnessId, TerminalFrame
-from murder.llm.harness_control.model.observations import Knowledge, unknown_snapshot
+from murder.llm.harness_control.model.observations import (
+    GenerationPhase,
+    Knowledge,
+    ModalKind,
+    SurfaceKind,
+    unknown_snapshot,
+)
 
 ROOT = Path(__file__).parents[2]
 
@@ -109,6 +120,10 @@ def test_codex_evidence_retains_broad_status_and_unpromoted_menu_details(  # noq
     assert resume_delta.updates["surface"].value is not None
     assert resume_delta.updates["surface"].value.primary.name == "RESUME_PICKER"
     assert resume_delta.updates["composer"].knowledge is Knowledge.UNKNOWN
+    assert resume_delta.updates["question"].knowledge is Knowledge.PRESENT
+    assert resume_delta.updates["question"].value is not None
+    assert len(resume_delta.updates["question"].value.choices) == 18  # noqa: PLR2004
+    assert resume_delta.updates["question"].value.choices[0].highlighted is True
 
     reasoning = adapter.parse_evidence(_frame("codex_reasoning_low.txt"), (resume,))[0]
     assert reasoning.payload["modal"]["model_choices"] == []
@@ -116,7 +131,7 @@ def test_codex_evidence_retains_broad_status_and_unpromoted_menu_details(  # noq
     assert reasoning.payload["model"]["configuration"]["configured_model_id"] == "gpt-5.5"
 
     for unsafe_name, expected_surface in (
-        ("codex_update_menu.txt", "UNKNOWN_OVERLAY"),
+        ("codex_update_menu.txt", "QUESTION_PICKER"),
         ("codex_resume_invalid.txt", "SHELL"),
     ):
         unsafe_frame = _frame(unsafe_name)
@@ -319,6 +334,81 @@ def test_codex_hostile_numbered_prose_remains_evidence_not_an_actionable_surface
     assert projected.updates["permission_request"].value is None
 
 
+def test_codex_live_unboxed_question_and_permission_surfaces_are_actionable() -> None:
+    adapter = CodexHarnessAdapter()
+    question_frame = replace(
+        _frame("codex_idle.txt"),
+        raw_text="""Question 1/1 (1 unanswered)
+
+Pick a color
+› 1. Red
+  2. Green
+  3. Blue
+  4. None of the above  Optionally, add details in notes (tab).
+
+option 1/4 | tab to add notes | enter to submit answer | esc to interrupt
+""",
+    )
+    question_delta = adapter.project_observations(adapter.parse_evidence(question_frame, ()), None)
+    question = question_delta.updates["question"]
+    assert question.knowledge is Knowledge.PRESENT
+    assert question.value is not None
+    assert question.value.prompt_text == "Pick a color"
+    assert tuple(choice.label for choice in question.value.choices) == (
+        "Red",
+        "Green",
+        "Blue",
+        "None of the above Optionally, add details in notes (tab).",
+    )
+    assert question.value.allow_custom_answer is False
+    assert question.value.visible_tabs == ("notes",)
+
+    base = unknown_snapshot(HarnessId("codex"), captured_at=question_frame.captured_at)
+    question_snapshot = replace(
+        base,
+        surface=question_delta.updates["surface"],  # type: ignore[arg-type]
+        question=question_delta.updates["question"],  # type: ignore[arg-type]
+    )
+    none_choice = question.value.choices[-1]
+    noted = AnswerQuestion(
+        "note-answer",
+        "question-op",
+        DuplicatePolicy.NEVER_AUTOMATICALLY_REPLAY,
+        question.value.question_id_hint,
+        QuestionAnswerMode.SINGLE,
+        (QuestionChoiceSelection(none_choice.stable_choice_id, none_choice.label),),
+        note="Purple",
+    )
+    effects = adapter.lower(noted, question_snapshot)
+    assert effects[-3:] == (
+        SendNamedKey("note-answer:open-notes", "Tab"),
+        SendLiteralKeys("note-answer:note", "Purple", FAST_HUMANIZED_TYPING),
+        SendNamedKey("note-answer:confirm", "Enter"),
+    )
+
+    permission_frame = replace(
+        question_frame,
+        raw_text="""Would you like to run the following command?
+
+Environment: local
+Reason: test denial
+› 1. Yes, proceed (y)
+  2. Yes, and don't ask again (p)
+  3. No, and tell Codex what to do differently (esc)
+
+Press enter to confirm or esc to cancel
+""",
+    )
+    permission_delta = adapter.project_observations(
+        adapter.parse_evidence(permission_frame, ()), None
+    )
+    permission = permission_delta.updates["permission_request"]
+    assert permission.knowledge is Knowledge.PRESENT
+    assert permission.value is not None
+    assert permission.value.tool_name == "shell"
+    assert permission.value.risk_attributes == frozenset({"shell"})
+
+
 def test_codex_model_picker_keeps_configuration_distinct_from_active_readback() -> None:
     adapter, frame = CodexHarnessAdapter(), _frame("codex_model_list.txt")
     delta = adapter.project_observations(
@@ -401,3 +491,400 @@ def test_codex_model_lowering_requires_each_fresh_parameter_stage() -> None:
     assert adapter.lower(action, low_snapshot) == (
         SendNamedKey("select:confirm-configuration", "Enter"),
     )
+
+
+CODEX_PANE_FIXTURES = {
+    "codex_startup.txt",
+    "codex_idle.txt",
+    "codex_idle_after_prose_narration.txt",
+    "codex_busy.txt",
+    "codex_interrupt.txt",
+    "codex_model_list.txt",
+    "codex_model_picker_gpt55.txt",
+    "codex_reasoning_low.txt",
+    "codex_reasoning_high.txt",
+    "codex_reasoning_extrahi.txt",
+    "codex_reasoning_medium.txt",
+    "codex_usage_limit.txt",
+    "codex_session_limit.txt",
+    "codex_status_scrollback.txt",
+    "codex_update_menu.txt",
+    "codex_update_menu_dismissed.txt",
+    "codex_update_menu_ptr2.txt",
+    "codex_update_menu_ptr3.txt",
+    "codex_resume_picker.txt",
+    "codex_resume_invalid.txt",
+    "codex_live_permission.txt",
+    "codex_live_question.txt",
+    "codex_hostile_numbered_prose.txt",
+}
+
+
+def _project(name: str):  # type: ignore[no-untyped-def]
+    adapter, frame = CodexHarnessAdapter(), _frame(name)
+    evidence = adapter.parse_evidence(frame, ())
+    return evidence[0], adapter.project_observations(
+        evidence, unknown_snapshot(HarnessId("codex"), captured_at=frame.captured_at)
+    )
+
+
+def test_codex_fixture_contract_inventory_is_exhaustive() -> None:
+    actual = {
+        path.name for path in (ROOT / "tests" / "fixtures" / "harness_panes").glob("codex_*.txt")
+    }
+    assert actual == CODEX_PANE_FIXTURES
+
+
+def test_codex_startup_chrome_and_mcp_phase_are_structured() -> None:
+    evidence, delta = _project("codex_startup.txt")
+
+    assert evidence.payload["chrome"] == {
+        "cli_version": "0.133.0",
+        "directory": "~/Documents/code/murder",
+        "tip": "Use /rename to rename your threads for easier thread resuming.",
+        "rename_thread_tip": True,
+    }
+    assert delta.updates["generation"].value.phase is GenerationPhase.STARTING
+    assert delta.updates["surface"].value.primary is SurfaceKind.COMPOSER
+    assert delta.updates["active_model"].value.model_id == "gpt-5.4"
+    assert delta.updates["info"].value.cli_version == "0.133.0"
+    assert delta.updates["info"].value.directory == "~/Documents/code/murder"
+    assert delta.updates["info"].value.rename_thread_tip is True
+
+
+@pytest.mark.parametrize(
+    ("fixture", "phase", "active"),
+    (
+        ("codex_idle.txt", GenerationPhase.IDLE, False),
+        ("codex_idle_after_prose_narration.txt", GenerationPhase.IDLE, False),
+        ("codex_busy.txt", GenerationPhase.THINKING, True),
+        ("codex_interrupt.txt", GenerationPhase.STOPPED, False),
+    ),
+)
+def test_codex_generation_contract(
+    fixture: str, phase: GenerationPhase, active: bool
+) -> None:
+    _, delta = _project(fixture)
+    generation = delta.updates["generation"].value
+    assert generation.phase is phase
+    assert generation.active is active
+
+
+@pytest.mark.parametrize(
+    ("fixture", "effort", "option"),
+    (
+        ("codex_reasoning_low.txt", "low", "1"),
+        ("codex_reasoning_medium.txt", "medium", "2"),
+        ("codex_reasoning_high.txt", "high", "3"),
+        ("codex_reasoning_extrahi.txt", "xhigh", "4"),
+    ),
+)
+def test_codex_reasoning_picker_contract(fixture: str, effort: str, option: str) -> None:
+    evidence, delta = _project(fixture)
+    configuration = delta.updates["model_configuration"].value
+
+    assert evidence.payload["model"]["configuration"]["stage"] == "effort"
+    assert configuration.configured_model_id == "gpt-5.5"
+    assert dict(configuration.parameters)["effort"] == effort
+    assert dict(configuration.parameters)[f"effort_option.{effort}"] == option
+    assert delta.updates["surface"].value.primary is SurfaceKind.MODEL_PICKER
+
+
+def test_codex_usage_limit_is_idle_but_observable() -> None:
+    evidence, delta = _project("codex_usage_limit.txt")
+    usage = delta.updates["usage"].value
+
+    assert delta.updates["generation"].value.phase is GenerationPhase.IDLE
+    assert usage.model == "gpt-5.4-mini"
+    assert usage.advisory_text == evidence.payload["notices"][0]
+    assert "You've hit your usage limit" in usage.advisory_text
+    assert delta.semantic_events[-1]["type"] == "codex.usage_limit"
+
+
+def test_codex_status_projects_account_plan_model_and_limits() -> None:
+    _, delta = _project("codex_session_limit.txt")
+    usage = delta.updates["usage"].value
+
+    assert usage.model == "gpt-5.4"
+    assert usage.plan == "Plus"
+    assert tuple(window.name for window in usage.windows) == ("5h", "weekly")
+
+
+@pytest.mark.parametrize(
+    ("fixture", "selected"),
+    (
+        ("codex_update_menu.txt", "1"),
+        ("codex_update_menu_ptr2.txt", "2"),
+        ("codex_update_menu_ptr3.txt", "3"),
+    ),
+)
+def test_codex_update_menu_pointer_variants_are_typed_questions(
+    fixture: str, selected: str
+) -> None:
+    evidence, delta = _project(fixture)
+    choices = evidence.payload["update_surface"]["choices"]
+
+    assert next(row["id"] for row in choices if row["highlighted"]) == selected
+    assert delta.updates["surface"].value.primary is SurfaceKind.QUESTION_PICKER
+    assert delta.updates["question"].knowledge is Knowledge.PRESENT
+    assert delta.updates["question"].value.choices[int(selected) - 1].highlighted is True
+    assert delta.updates["permission_request"].knowledge is Knowledge.ABSENT
+
+
+@pytest.mark.parametrize(
+    ("fixture", "surface", "modal"),
+    (
+        ("codex_live_question.txt", SurfaceKind.QUESTION_PICKER, ModalKind.QUESTION),
+        ("codex_live_permission.txt", SurfaceKind.PERMISSION_DIALOG, ModalKind.PERMISSION),
+    ),
+)
+def test_codex_decision_dialogs_project_their_exact_surface(
+    fixture: str, surface: SurfaceKind, modal: ModalKind
+) -> None:
+    _, delta = _project(fixture)
+
+    assert delta.updates["surface"].value.primary is surface
+    assert delta.updates["modal"].value.kind is modal
+    assert delta.updates["modal"].value.selected_index == 0
+    assert delta.updates["composer"].knowledge is Knowledge.UNKNOWN
+
+
+def test_codex_update_selection_is_acknowledged_by_dismissed_historical_menu() -> None:
+    adapter = CodexHarnessAdapter()
+    initial = unknown_snapshot(
+        HarnessId("codex"), captured_at=_frame("codex_update_menu_ptr2.txt").captured_at
+    )
+    update_frame = _frame("codex_update_menu_ptr2.txt")
+    update_delta = adapter.project_observations(
+        adapter.parse_evidence(update_frame, ()), initial
+    )
+    prior = replace(
+        initial,
+        surface=update_delta.updates["surface"],  # type: ignore[arg-type]
+        composer=update_delta.updates["composer"],  # type: ignore[arg-type]
+        modal=update_delta.updates["modal"],  # type: ignore[arg-type]
+        question=update_delta.updates["question"],  # type: ignore[arg-type]
+    )
+
+    dismissed = _frame("codex_update_menu_dismissed.txt")
+    dismissed_delta = adapter.project_observations(
+        adapter.parse_evidence(dismissed, ()), prior
+    )
+
+    answered = dismissed_delta.updates["question"]
+    assert answered.knowledge is Knowledge.PRESENT
+    assert answered.value is not None
+    assert answered.value.answered_summary == ("Skip",)
+
+
+def test_codex_approved_permission_is_correlated_with_resulting_activity() -> None:
+    adapter = CodexHarnessAdapter()
+    permission_frame = _frame("codex_live_permission.txt")
+    initial = unknown_snapshot(HarnessId("codex"), captured_at=permission_frame.captured_at)
+    permission_delta = adapter.project_observations(
+        adapter.parse_evidence(permission_frame, ()), initial
+    )
+    prior = replace(
+        initial,
+        permission_request=permission_delta.updates["permission_request"],  # type: ignore[arg-type]
+    )
+    progressed = replace(
+        permission_frame,
+        frame_id=FrameId("permission-approved"),
+        capture_sequence=2,
+        raw_text="""Would you like to run the following command?
+
+$ printf codex-approval-ok
+› 1. Yes, proceed (y)
+  2. Yes, and don't ask again (p)
+  3. No, and tell Codex what to do differently (esc)
+
+Press enter to confirm or esc to cancel
+✔ You approved codex to run printf codex-approval-ok this time
+• Ran printf codex-approval-ok
+  └ codex-approval-ok
+• Working (4s • esc to interrupt)
+""",
+    )
+    progressed_delta = adapter.project_observations(
+        adapter.parse_evidence(progressed, ()), prior
+    )
+
+    acknowledged = progressed_delta.updates["permission_request"]
+    assert acknowledged.knowledge is Knowledge.PRESENT
+    assert acknowledged.value is not None
+    assert acknowledged.value.acknowledged_response_id == "1"
+
+
+def test_codex_resume_configuration_uses_live_probed_focus_order() -> None:
+    adapter = CodexHarnessAdapter()
+    frame = _frame("codex_resume_picker.txt")
+    initial = unknown_snapshot(HarnessId("codex"), captured_at=frame.captured_at)
+    delta = adapter.project_observations(adapter.parse_evidence(frame, ()), initial)
+    snapshot = replace(
+        initial,
+        surface=delta.updates["surface"],  # type: ignore[arg-type]
+        question=delta.updates["question"],  # type: ignore[arg-type]
+    )
+    action = ConfigureResumePicker(
+        "configure",
+        "resume-op",
+        DuplicatePolicy.NEVER_AUTOMATICALLY_REPLAY,
+        "needle",
+        "all",
+        "created",
+    )
+
+    assert adapter.lower(action, snapshot) == (
+        SendNamedKey("configure:filter-all", "Right"),
+        SleepEffect("configure:filter-settle", timedelta(milliseconds=300)),
+        SendNamedKey("configure:focus-sort", "Tab"),
+        SendNamedKey("configure:sort-created", "Right"),
+        SleepEffect("configure:sort-settle", timedelta(milliseconds=300)),
+        SendLiteralKeys("configure:search", "needle", FAST_HUMANIZED_TYPING),
+        SleepEffect("configure:search-settle", timedelta(milliseconds=500)),
+    )
+
+    second = snapshot.question.value.choices[1]  # type: ignore[union-attr]
+    resume = AnswerQuestion(
+        "resume",
+        "resume-op",
+        DuplicatePolicy.NEVER_AUTOMATICALLY_REPLAY,
+        snapshot.question.value.question_id_hint,  # type: ignore[union-attr]
+        QuestionAnswerMode.SINGLE,
+        (QuestionChoiceSelection(second.stable_choice_id, second.label),),
+    )
+    assert adapter.lower(resume, snapshot) == (
+        SendNamedKey("resume:nav:0", "Down"),
+        SleepEffect("resume:nav-settle:0", timedelta(milliseconds=150)),
+        SendNamedKey("resume:confirm", "Enter"),
+    )
+
+
+def test_codex_resume_parser_reads_second_options_and_search_prefix() -> None:
+    original = _frame("codex_resume_picker.txt")
+    header = next(
+        line
+        for line in original.raw_text.splitlines()
+        if "Filter:" in line and "Sort:" in line and not line.lstrip().startswith("#")
+    )
+    changed = replace(
+        original,
+        frame_id=FrameId("resume-configured"),
+        raw_text=original.raw_text.replace(
+            header,
+            "Search: needle    Filter: Cwd [All]    Sort: Updated [Created]",
+        ),
+    )
+    evidence = CodexHarnessAdapter().parse_evidence(changed, ())[0]
+    resume = evidence.payload["resume_surface"]
+
+    assert resume["search_text"] == "needle"
+    assert resume["filter"] == {"selected": "All", "available": ["Cwd", "All"]}
+    assert resume["sort"] == {
+        "selected": "Created",
+        "available": ["Updated", "Created"],
+    }
+
+
+def test_codex_resume_is_acknowledged_by_matching_resumed_transcript() -> None:
+    adapter = CodexHarnessAdapter()
+    picker_frame = _frame("codex_resume_picker.txt")
+    initial = unknown_snapshot(HarnessId("codex"), captured_at=picker_frame.captured_at)
+    picker_delta = adapter.project_observations(
+        adapter.parse_evidence(picker_frame, ()), initial
+    )
+    prior = replace(
+        initial,
+        question=picker_delta.updates["question"],  # type: ignore[arg-type]
+    )
+    resumed_frame = _frame("codex_idle_after_prose_narration.txt")
+    resumed_delta = adapter.project_observations(
+        adapter.parse_evidence(resumed_frame, ()), prior
+    )
+
+    answered = resumed_delta.updates["question"]
+    assert answered.knowledge is Knowledge.PRESENT
+    assert answered.value is not None
+    assert answered.value.answered_summary == (
+        "Run the shell command 'echo Pharsalus' and then tell me the single word it "
+        "printed. Do not edit any files.",
+    )
+
+
+def test_codex_closed_model_picker_is_not_revived_from_scrollback() -> None:
+    original = _frame("codex_model_list.txt")
+    closed = replace(
+        original,
+        frame_id=FrameId("model-picker-closed"),
+        raw_text=(
+            original.raw_text
+            + "\n• Model changed to gpt-5.6-luna medium\n"
+            + "  gpt-5.6-luna medium · ~/Documents/code/murder\n"
+        ),
+    )
+    evidence, = CodexHarnessAdapter().parse_evidence(closed, ())
+
+    assert evidence.payload["modal"]["kind"] is None
+    assert evidence.payload["modal"]["model_choices"] == []
+    assert evidence.payload["model"]["configuration"]["picker_visible"] is False
+
+
+def test_codex_resume_dismissal_clears_search_then_closes_picker() -> None:
+    original = _frame("codex_resume_picker.txt")
+    header = next(
+        line
+        for line in original.raw_text.splitlines()
+        if "Filter:" in line and "Sort:" in line and not line.lstrip().startswith("#")
+    )
+    searched = replace(
+        original,
+        frame_id=FrameId("resume-with-search"),
+        raw_text=original.raw_text.replace(
+            header,
+            "Search: needle    Filter: Cwd [All]    Sort: Updated [Created]",
+        ),
+    )
+    adapter = CodexHarnessAdapter()
+    initial = unknown_snapshot(HarnessId("codex"), captured_at=searched.captured_at)
+    delta = adapter.project_observations(adapter.parse_evidence(searched, ()), initial)
+    snapshot = replace(
+        initial,
+        surface=delta.updates["surface"],  # type: ignore[arg-type]
+        question=delta.updates["question"],  # type: ignore[arg-type]
+    )
+    action = DismissOverlay(
+        "dismiss",
+        "restore-op",
+        DuplicatePolicy.REPLAY_SAFE_WHILE_PRECONDITION_HOLDS,
+        "RESUME_PICKER",
+    )
+
+    assert adapter.lower(action, snapshot) == (
+        SendNamedKey("dismiss:escape", "Escape"),
+        SleepEffect("dismiss:await-search-clear", timedelta(milliseconds=1500)),
+        SendNamedKey("dismiss:dismiss-after-clear", "Escape"),
+    )
+
+
+def test_codex_control_state_uses_authoritative_viewport_not_scrollback() -> None:
+    history = _frame("codex_model_list.txt").raw_text + _frame(
+        "codex_resume_picker.txt"
+    ).raw_text
+    idle = _frame("codex_idle.txt")
+    frame = replace(
+        idle,
+        frame_id=FrameId("authoritative-viewport"),
+        raw_text=history,
+        viewport_text=idle.raw_text,
+    )
+    evidence, = CodexHarnessAdapter().parse_evidence(frame, ())
+    delta = CodexHarnessAdapter().project_observations(
+        (evidence,), unknown_snapshot(HarnessId("codex"), captured_at=frame.captured_at)
+    )
+
+    assert evidence.payload["modal"]["kind"] is None
+    assert evidence.payload["resume_surface"]["present"] is False
+    assert evidence.payload["question_surface"]["present"] is False
+    assert delta.updates["surface"].value.primary is SurfaceKind.COMPOSER
+    assert delta.updates["question"].knowledge is Knowledge.ABSENT

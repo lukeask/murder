@@ -169,7 +169,8 @@ _CURSOR_MODEL_PAGE_RE = re.compile(
     re.IGNORECASE,
 )
 _CURSOR_MODEL_MENU_SKIP_RE = re.compile(
-    r"^(?:available models|filter:?\s*$|type to filter|\d+\s*-\s*\d+\s+of\s+\d+)",
+    r"^(?:available models|filter:?\s*$|type to filter|edit prompt to filter|"
+    r"\d+\s*-\s*\d+\s+of\s+\d+)",
     re.IGNORECASE,
 )
 

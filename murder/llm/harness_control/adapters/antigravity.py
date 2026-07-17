@@ -5,18 +5,22 @@ from __future__ import annotations
 import hashlib
 import re
 from collections.abc import Sequence
-from datetime import datetime
+from dataclasses import replace
+from datetime import datetime, timedelta
 from typing import Any
 
 from murder.llm.harness_control.adapters.base import HarnessActionAdapter, HarnessObservationAdapter
 from murder.llm.harness_control.model.actions import (
     FAST_HUMANIZED_TYPING,
     AnswerPermission,
+    AnswerQuestion,
     ClearComposer,
     CommitPromptSubmission,
+    ConfigureSessionSettings,
     DismissOverlay,
     InputProvenance,
     InsertPromptPayload,
+    NavigateModelPicker,
     OpenModelPicker,
     PasteBuffer,
     RequestUsage,
@@ -25,6 +29,7 @@ from murder.llm.harness_control.model.actions import (
     SendInterrupt,
     SendLiteralKeys,
     SendNamedKey,
+    SleepEffect,
     TerminalEffect,
 )
 from murder.llm.harness_control.model.evidence import (
@@ -50,6 +55,8 @@ from murder.llm.harness_control.model.observations import (
     ObservationSnapshot,
     Observed,
     PermissionRequestState,
+    QuestionState,
+    SessionSettingsState,
     SurfaceKind,
     SurfaceState,
     ToolActivityState,
@@ -72,6 +79,7 @@ _MODEL = re.compile(
 _BUSY = re.compile(r"[⠀-⣿]\s+(?P<label>\w+)\.\.\.")
 _COMPOSER_BORDER = re.compile(r"^[─━═-]{10,}\s*$")
 _COMPOSER_RULE_COUNT = 2
+_MINIMUM_DECISION_CHOICES = 2
 _ACCOUNT = re.compile(r"(?P<account>[^\s@]+@[^\s@]+)\s*(?:\((?P<plan>[^)]*)\))?")
 _WORKSPACE = re.compile(
     r"(?P<workspace>~/(?:[^\s]+)|/(?:tmp|home|Users|workspace|work|mnt)/[^\s]*)"
@@ -116,6 +124,7 @@ class AntigravityHarnessAdapter(HarnessObservationAdapter, HarnessActionAdapter)
         identity = _identity(clean)
         notices = _notices(view)
         activity = _activity(view)
+        question_surface, permission_surface = _agy_decision_surfaces(view)
         payload: dict[str, Any] = {
             "raw_frame": {
                 "text": frame.raw_text,
@@ -158,8 +167,13 @@ class AntigravityHarnessAdapter(HarnessObservationAdapter, HarnessActionAdapter)
             "context": {
                 "lines": _context_lines(view),
             },
+            "settings": _agy_settings(view),
             "activity": activity,
             "notices": notices,
+            "question_surface": question_surface,
+            "permission_surface": permission_surface,
+            "question_ack": _agy_question_ack(clean),
+            "permission_ack": _agy_permission_ack(clean),
         }
         return (
             EvidenceEnvelope(
@@ -175,7 +189,7 @@ class AntigravityHarnessAdapter(HarnessObservationAdapter, HarnessActionAdapter)
             ),
         )
 
-    def project_observations(
+    def project_observations(  # noqa: PLR0912, PLR0915 -- explicit surface projection
         self, evidence: Sequence[EvidenceEnvelope], prior: ObservationSnapshot | None
     ) -> ObservationDelta:
         e = next((x for x in reversed(evidence) if x.evidence_type == "antigravity.frame.v3"), None)
@@ -197,8 +211,48 @@ class AntigravityHarnessAdapter(HarnessObservationAdapter, HarnessActionAdapter)
             )
 
         trust, busy = p["surfaces"]["trust"], p["activity"]["busy"]
+        question_surface = p["question_surface"]
+        permission_surface = p["permission_surface"]
         safe_composer = False
-        if trust:
+        if question_surface:
+            surface = SurfaceState(
+                SurfaceKind.QUESTION_PICKER,
+                frozenset({SurfaceKind.QUESTION_PICKER}),
+                SurfaceKind.QUESTION_PICKER,
+                True,
+                True,
+            )
+            modal = ModalState(
+                ModalKind.QUESTION,
+                question_surface["prompt"],
+                _selected_index(question_surface["choices"]),
+                len(question_surface["choices"]),
+                True,
+                True,
+            )
+            permission: Observed[object] = Observed.without_value(
+                Knowledge.ABSENT, evidence=(ref,), observed_at=now, revision=rev
+            )
+            composer = unknown("question picker occludes composer")
+        elif permission_surface:
+            surface = SurfaceState(
+                SurfaceKind.PERMISSION_DIALOG,
+                frozenset({SurfaceKind.PERMISSION_DIALOG}),
+                SurfaceKind.PERMISSION_DIALOG,
+                True,
+                True,
+            )
+            modal = ModalState(
+                ModalKind.PERMISSION,
+                permission_surface["description"],
+                _selected_index(permission_surface["choices"]),
+                len(permission_surface["choices"]),
+                True,
+                True,
+            )
+            permission = present(_agy_permission_state(permission_surface))
+            composer = unknown("permission dialog occludes composer")
+        elif trust:
             surface, modal = (
                 SurfaceState(
                     SurfaceKind.TRUST_DIALOG,
@@ -224,7 +278,11 @@ class AntigravityHarnessAdapter(HarnessObservationAdapter, HarnessActionAdapter)
                     trust["prompt"],
                     tuple(
                         ChoiceState(
-                            c["id"], c["label"], selected=c["selected"], highlighted=c["selected"]
+                            c["id"],
+                            c["label"],
+                            selected=c["selected"],
+                            highlighted=c["selected"],
+                            disabled=False,
                         )
                         for c in trust["choices"]
                     ),
@@ -414,6 +472,46 @@ class AntigravityHarnessAdapter(HarnessObservationAdapter, HarnessActionAdapter)
                     "session_count": len(p["surfaces"]["resume"]["sessions"]),
                 }
             )
+        question_observed = (
+            present(_agy_question_state(question_surface))
+            if question_surface
+            else present(
+                replace(prior.question.value, answered_summary=(p["question_ack"],))
+            )
+            if p["question_ack"]
+            and prior is not None
+            and prior.question.knowledge is Knowledge.PRESENT
+            and prior.question.value is not None
+            else Observed.without_value(
+                Knowledge.ABSENT if safe_composer or permission_surface else Knowledge.UNKNOWN,
+                evidence=(ref,),
+                observed_at=now,
+                revision=rev,
+                explanation=None
+                if safe_composer or permission_surface
+                else "no safe surface establishes question absence",
+            )
+        )
+        if (
+            not permission_surface
+            and p["permission_ack"]
+            and prior is not None
+            and prior.permission_request.knowledge is Knowledge.PRESENT
+            and prior.permission_request.value is not None
+        ):
+            prior_permission = prior.permission_request.value
+            acknowledged = next(
+                (
+                    choice.stable_choice_id
+                    for choice in prior_permission.choices
+                    if p["permission_ack"] in choice.label.casefold()
+                ),
+                None,
+            )
+            if acknowledged is not None:
+                permission = present(
+                    replace(prior_permission, acknowledged_response_id=acknowledged)
+                )
         return ObservationDelta(
             {
                 "surface": present(surface),
@@ -434,19 +532,12 @@ class AntigravityHarnessAdapter(HarnessObservationAdapter, HarnessActionAdapter)
                     )
                 ),
                 "permission_request": permission,
-                "question": Observed.without_value(
-                    Knowledge.ABSENT if safe_composer else Knowledge.UNKNOWN,
-                    evidence=(ref,),
-                    observed_at=now,
-                    revision=rev,
-                    explanation=None
-                    if safe_composer
-                    else "no safe surface establishes question absence",
-                ),
+                "question": question_observed,
                 "active_model": active,
                 "model_configuration": _project_model_configuration(
                     p["models"]["configuration"], present, unknown
                 ),
+                "settings": present(SessionSettingsState(**p["settings"])),
                 "usage": present(
                     UsageState(
                         None,
@@ -476,7 +567,7 @@ class AntigravityHarnessAdapter(HarnessObservationAdapter, HarnessActionAdapter)
             semantic_events=tuple(events),
         )
 
-    def lower(  # noqa: PLR0911 - one branch per semantic action is intentional
+    def lower(  # noqa: PLR0911, PLR0912 - one branch per semantic action
         self, action: SemanticAction, snapshot: ObservationSnapshot
     ) -> Sequence[TerminalEffect]:
         if isinstance(action, InsertPromptPayload):
@@ -499,38 +590,55 @@ class AntigravityHarnessAdapter(HarnessObservationAdapter, HarnessActionAdapter)
         if isinstance(action, (DismissOverlay, SendInterrupt)):
             return (SendNamedKey(f"{action.action_id}:escape", "Escape"),)
         if isinstance(action, AnswerPermission):
-            req = (
+            request = (
                 snapshot.permission_request.value
                 if snapshot.permission_request.knowledge is Knowledge.PRESENT
                 else None
             )
-            if req is None:
+            if request is None:
                 raise ValueError("permission response requires observed dialog")
-            target = next(
-                (
-                    i
-                    for i, c in enumerate(req.choices)
-                    if c.stable_choice_id == action.response_id or c.label == action.response_label
-                ),
-                None,
+            return _agy_lower_choice(
+                action.action_id,
+                request.choices,
+                action.response_id,
+                action.response_label,
             )
-            current = next((i for i, c in enumerate(req.choices) if c.selected), 0)
-            if target is None:
-                raise ValueError("requested response is not visible")
-            key = "Down" if target > current else "Up"
-            return tuple(
-                [
-                    *(
-                        SendNamedKey(f"{action.action_id}:nav:{i}", key)
-                        for i in range(abs(target - current))
-                    ),
-                    SendNamedKey(f"{action.action_id}:confirm", "Enter"),
-                ]
+        if isinstance(action, AnswerQuestion):
+            if len(action.selections) != 1:
+                raise ValueError("Antigravity currently exposes single-select questions")
+            question = (
+                snapshot.question.value
+                if snapshot.question.knowledge is Knowledge.PRESENT
+                else None
+            )
+            if question is None:
+                raise ValueError("question response requires observed dialog")
+            selection = action.selections[0]
+            return _agy_lower_choice(
+                action.action_id,
+                question.choices,
+                selection.stable_choice_id,
+                selection.label,
             )
         if isinstance(action, SelectModel):
             return _lower_model_selection(action, snapshot)
         if isinstance(action, OpenModelPicker):
             return _open_model_picker(action, snapshot)
+        if isinstance(action, NavigateModelPicker):
+            if (
+                snapshot.surface.knowledge is not Knowledge.PRESENT
+                or snapshot.surface.value is None
+                or snapshot.surface.value.primary is not SurfaceKind.MODEL_PICKER
+            ):
+                raise ValueError("Antigravity model-picker navigation requires a visible picker")
+            return (
+                SendNamedKey(
+                    f"{action.action_id}:navigate-model",
+                    "Down" if action.direction == "down" else "Up",
+                ),
+            )
+        if isinstance(action, ConfigureSessionSettings):
+            return _lower_session_settings(action, snapshot)
         raise ValueError(f"Antigravity lowering does not support {type(action).__name__}")
 
 
@@ -552,6 +660,178 @@ def _trust(clean: str) -> dict[str, Any] | None:
         "selected": next((x["id"] for x in rows if x["selected"]), None),
         "selected_index": next((i for i, x in enumerate(rows) if x["selected"]), 0),
     }
+
+
+def _agy_menu_rows(lines: list[str]) -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    pattern = re.compile(r"^\s*(?P<pointer>>)?\s*(?P<number>\d+)\.\s+(?P<label>\S.*)$")
+    for line in lines:
+        if match := pattern.match(line):
+            rows.append(
+                {
+                    "id": match.group("number"),
+                    "number": int(match.group("number")),
+                    "label": re.sub(r"\s+", " ", match.group("label")).strip(),
+                    "highlighted": bool(match.group("pointer")),
+                }
+            )
+    return rows
+
+
+def _agy_decision_surfaces(
+    view: str,
+) -> tuple[dict[str, object] | None, dict[str, object] | None]:
+    question_matches = list(
+        re.finditer(r"^\s*Question\s+\d+/\d+:\s*(?P<prompt>.+)$", view, re.I | re.M)
+    )
+    if question_matches and re.search(
+        r"enter\s+Select", view[question_matches[-1].start() :], re.I
+    ):
+        match = question_matches[-1]
+        suffix = view[match.start() :]
+        rows = _agy_menu_rows(suffix.splitlines())
+        if len(rows) >= _MINIMUM_DECISION_CHOICES:
+            return {
+                "prompt": match.group("prompt").strip(),
+                "choices": rows,
+                "selection_mode": "single",
+                "allow_custom_answer": any(
+                    "write-in" in str(row["label"]).casefold() for row in rows
+                ),
+            }, None
+    permission_anchor = max(
+        view.rfind("Do you want to proceed?"),
+        view.rfind("Accept this file edit?"),
+        view.rfind("Allow access to this file?"),
+    )
+    if permission_anchor >= 0 and re.search(
+        r"(?:enter\s+Select|esc to cancel)", view[permission_anchor:], re.I
+    ):
+        suffix = view[permission_anchor:]
+        rows = _agy_menu_rows(suffix.splitlines())
+        if len(rows) >= _MINIMUM_DECISION_CHOICES:
+            is_edit = any(
+                marker in suffix.splitlines()[0].casefold()
+                for marker in ("file edit", "access to this file")
+            )
+            command = next(
+                (
+                    line.partition(":")[2].strip()
+                    for line in view[:permission_anchor].splitlines()
+                    if "Requesting permission for:" in line or line.strip().startswith("Write:")
+                ),
+                None,
+            )
+            return None, {
+                "description": suffix.splitlines()[0].strip(),
+                "tool_name": "edit" if is_edit else "shell",
+                "command": command,
+                "choices": rows,
+                "risks": ["write"] if is_edit else ["shell"],
+            }
+    return None, None
+
+
+def _agy_question_ack(clean: str) -> str | None:
+    matches = list(
+        re.finditer(
+            r"^\s*\?\s+(?P<prompt>[^\n]+)\n\s*>\s+(?P<answer>[^/\n][^\n]*)$",
+            clean,
+            re.M,
+        )
+    )
+    return matches[-1].group("answer").strip() if matches else None
+
+
+def _agy_permission_ack(clean: str) -> str | None:
+    tail = "\n".join(clean.splitlines()[-60:]).casefold()
+    return "no" if "user declined the tool call" in tail else None
+
+
+def _selected_index(choices: list[dict[str, object]]) -> int | None:
+    return next((index for index, choice in enumerate(choices) if choice["highlighted"]), None)
+
+
+def _agy_question_state(surface: dict[str, object]) -> QuestionState:
+    choices = surface["choices"]
+    assert isinstance(choices, list)
+    prompt = str(surface["prompt"])
+    return QuestionState(
+        hashlib.sha256(prompt.encode()).hexdigest()[:16],
+        prompt,
+        tuple(
+            ChoiceState(
+                str(row["id"]),
+                str(row["label"]),
+                number=int(row["number"]),
+                highlighted=bool(row["highlighted"]),
+                disabled=False,
+            )
+            for row in choices
+        ),
+        str(surface["selection_mode"]),
+        None,
+        (),
+        bool(surface["allow_custom_answer"]),
+        None,
+        "Enter",
+        "Escape",
+        (),
+    )
+
+
+def _agy_permission_state(surface: dict[str, object]) -> PermissionRequestState:
+    choices = surface["choices"]
+    assert isinstance(choices, list)
+    description = str(surface["description"])
+    return PermissionRequestState(
+        hashlib.sha256(description.encode()).hexdigest()[:16],
+        str(surface["tool_name"]),
+        str(surface["command"]) if surface.get("command") else None,
+        description,
+        tuple(
+            ChoiceState(
+                str(row["id"]),
+                str(row["label"]),
+                number=int(row["number"]),
+                selected=bool(row["highlighted"]),
+                highlighted=bool(row["highlighted"]),
+                disabled=False,
+            )
+            for row in choices
+        ),
+        next((str(row["id"]) for row in choices if row["highlighted"]), None),
+        frozenset(str(risk) for risk in surface["risks"]),
+    )
+
+
+def _agy_lower_choice(
+    action_id: str,
+    choices: tuple[ChoiceState, ...],
+    target_id: str | None,
+    target_label: str | None,
+) -> tuple[TerminalEffect, ...]:
+    target = next(
+        (
+            index
+            for index, choice in enumerate(choices)
+            if choice.stable_choice_id == target_id or choice.label == target_label
+        ),
+        None,
+    )
+    current = next((index for index, choice in enumerate(choices) if choice.highlighted), None)
+    if target is None or current is None:
+        raise ValueError("requested choice or current cursor is not visible")
+    key = "Down" if target > current else "Up"
+    return tuple(
+        [
+            *(
+                SendNamedKey(f"{action_id}:nav:{index}", key)
+                for index in range(abs(target - current))
+            ),
+            SendNamedKey(f"{action_id}:confirm", "Enter"),
+        ]
+    )
 
 
 def _active_view(clean: str) -> str:
@@ -585,6 +865,18 @@ def _identity(clean: str) -> dict[str, str | None]:
         "workspace": workspace,
         "active_model_label": active_label,
     }
+
+
+def _agy_settings(view: str) -> dict[str, str | bool | None]:
+    lower = view.casefold()
+    run_mode = (
+        "plan"
+        if "plan mode: research & plan only" in lower
+        else "accept-edits"
+        if "accept-edits mode: file edits auto-approved" in lower
+        else "default"
+    )
+    return {"run_mode": run_mode, "fast_enabled": None}
 
 
 def _resume(view: str) -> dict[str, object] | None:
@@ -911,7 +1203,29 @@ def _open_model_picker(
         raise ValueError("Antigravity model picker will not replace an unobserved overlay")
     return (
         SendLiteralKeys(f"{action.action_id}:open-model", "/model", FAST_HUMANIZED_TYPING),
+        SleepEffect(f"{action.action_id}:await-autocomplete", timedelta(milliseconds=400)),
         SendNamedKey(f"{action.action_id}:open-model-enter", "Enter"),
+    )
+
+
+def _lower_session_settings(
+    action: ConfigureSessionSettings, snapshot: ObservationSnapshot
+) -> Sequence[TerminalEffect]:
+    observed = snapshot.settings
+    if observed.knowledge is not Knowledge.PRESENT or observed.value is None:
+        raise ValueError("Antigravity settings require current live chrome readback")
+    current = observed.value
+    if action.fast_enabled is not None:
+        raise ValueError("Antigravity does not expose an inference fast-mode setting")
+    if action.run_mode is None or action.run_mode == current.run_mode:
+        raise ValueError("Antigravity settings action has no observable change to apply")
+    modes = ("default", "accept-edits", "plan")
+    if current.run_mode not in modes or action.run_mode not in modes:
+        raise ValueError("Antigravity run mode is unknown or unsupported")
+    steps = (modes.index(action.run_mode) - modes.index(current.run_mode)) % len(modes)
+    return tuple(
+        SendNamedKey(f"{action.action_id}:cycle-mode:{index}", "BTab")
+        for index in range(steps)
     )
 
 

@@ -121,6 +121,44 @@ def test_restore_waits_when_dismissal_has_no_fresh_observation():
     assert reconcile_restore_composer(op, s, NOW).kind.name == "OBSERVE_MORE"
 
 
+def test_restore_never_answers_a_structured_decision_by_escape() -> None:
+    snapshot = unknown_snapshot(
+        HarnessId("codex"), captured_at=NOW, revision=ObservationRevision(0, 1, 1)
+    )
+    revision = snapshot.revision
+    snapshot = replace(
+        snapshot,
+        surface=Observed.present(
+            SurfaceState(
+                SurfaceKind.PERMISSION_DIALOG,
+                frozenset({SurfaceKind.PERMISSION_DIALOG}),
+                SurfaceKind.PERMISSION_DIALOG,
+                True,
+                True,
+            ),
+            evidence=(),
+            observed_at=NOW,
+            revision=revision,
+        ),
+    )
+    operation = RestoreComposerOperation(
+        OperationEnvelope(
+            "restore",
+            "restore_composer",
+            OperationStatus.RUNNING,
+            RestorationPhase.CREATED,
+            NOW,
+            NOW,
+            NOW + timedelta(minutes=1),
+        ),
+        RestoreComposerRequest(timedelta(minutes=1)),
+    )
+
+    decision = reconcile_restore_composer(operation, snapshot, NOW)
+    assert decision.kind.name == "ESCALATE"
+    assert decision.action is None
+
+
 def test_interrupt_does_not_treat_unknown_generation_as_already_stopped():
     snapshot = unknown_snapshot(
         HarnessId("codex"), captured_at=NOW, revision=ObservationRevision(0, 1, 1)

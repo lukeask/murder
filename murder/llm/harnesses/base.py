@@ -6,6 +6,7 @@ import asyncio
 import logging
 import re
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 from pathlib import Path
 from typing import ClassVar, Literal
 
@@ -39,6 +40,20 @@ _DONE_IN_SEGMENT_RE = re.compile(r"(?:^|(?<=\s))>>>\s*DONE[ \t]*(?:\n|\Z)", re.M
 MAX_NOTE_LINES = 20
 
 UsageCollectionMode = Literal["none", "tmux_slash", "http"]
+
+
+@dataclass(frozen=True, slots=True)
+class ModelParameterCapabilities:
+    """Parameters a harness exposes for one model.
+
+    ``fast_toggle`` is deliberately separate from ``efforts``: Cursor models
+    such as Grok expose Low/Medium/High reasoning and an independent Fast row,
+    while Composer exposes only the Fast row and presents its two states as
+    the legacy slow/fast launch choice.
+    """
+
+    efforts: tuple[str, ...] = ()
+    fast_toggle: bool = False
 
 
 def _transcript_doc_to_turns(doc: dict[str, object]) -> list[tuple[str, str]]:
@@ -92,6 +107,15 @@ class HarnessSession:
             self.adapter.resume_session_id = start_spec.resume_session_id
         if start_spec.binary is not None:
             self.adapter.binary = start_spec.binary
+        try:
+            self.adapter.validate_model_parameters(
+                start_spec.startup_model,
+                start_spec.startup_effort,
+            )
+        except ValueError as exc:
+            # Validation must precede tmux creation: incompatible selections
+            # are input errors, not half-created agent sessions.
+            return fail_result(str(exc))
         await tmux.create_session(
             self.session,
             start_spec.cwd,
@@ -117,6 +141,7 @@ class HarnessSession:
             return fail_result(f"Harness not ready in time: session={self.session}")
         return ok_result()
 
+
 class HarnessAdapter(ABC):
     kind: ClassVar[str]
     crow_system_prompt: ClassVar[str]
@@ -128,6 +153,31 @@ class HarnessAdapter(ABC):
     usage_collection_mode: ClassVar[UsageCollectionMode] = "none"
     supports_subagents: ClassVar[bool] = False
     cheapest_subagent_model: ClassVar[str | None] = None
+
+    @classmethod
+    def parameter_capabilities_for_model(cls, model: str | None) -> ModelParameterCapabilities:
+        """Return parameter semantics for ``model``.
+
+        Most harnesses have one effort enum for every model. Adapters with
+        model-dependent editors override this method.
+        """
+
+        del model
+        return ModelParameterCapabilities(efforts=tuple(cls.supported_efforts))
+
+    @classmethod
+    def validate_model_parameters(cls, model: str | None, effort: str | None) -> None:
+        if effort is None:
+            return
+        normalized = effort.strip().casefold()
+        capabilities = cls.parameter_capabilities_for_model(model)
+        if normalized not in capabilities.efforts:
+            model_label = model or "the default model"
+            supported = ", ".join(capabilities.efforts) or "none"
+            raise ValueError(
+                f"{cls.kind} model {model_label!r} does not support effort {effort!r}; "
+                f"supported efforts: {supported}"
+            )
 
     def __init__(
         self,

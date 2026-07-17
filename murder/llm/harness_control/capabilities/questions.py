@@ -56,6 +56,7 @@ class QuestionAnswerRequest:
     mode: QuestionAnswerMode
     selections: tuple[QuestionChoiceSelection, ...] = ()
     custom_answer: str | None = None
+    note: str | None = None
 
     def __post_init__(self) -> None:
         if not self.question_id_hint and not self.question_fingerprint:
@@ -66,11 +67,13 @@ class QuestionAnswerRequest:
             if self.mode is QuestionAnswerMode.SINGLE and len(self.selections) != 1:
                 raise ValueError("single-select answers require exactly one choice")
         elif self.mode is QuestionAnswerMode.CUSTOM:
-            if self.selections or not (self.custom_answer or "").strip():
+            if self.selections or self.note is not None or not (self.custom_answer or "").strip():
                 raise ValueError("custom answers require non-empty custom text only")
         elif self.mode is QuestionAnswerMode.DECLINE:
-            if self.selections or self.custom_answer is not None:
+            if self.selections or self.custom_answer is not None or self.note is not None:
                 raise ValueError("decline answers cannot include choices or custom text")
+        if self.note is not None and not self.note.strip():
+            raise ValueError("question notes must be non-empty when provided")
 
 
 @dataclass(frozen=True, slots=True)
@@ -116,6 +119,14 @@ def question_matches(
             evidence=observed.evidence,
         )
     question = observed.value
+    if request.note is not None and "notes" not in question.visible_tabs:
+        return _predicate(
+            snapshot,
+            "question_answer_available",
+            TruthValue.FALSE,
+            "question does not expose a notes affordance",
+            evidence=observed.evidence,
+        )
     checks: list[bool] = []
     if request.question_id_hint:
         if question.question_id_hint is None:
@@ -259,7 +270,7 @@ def answer_is_available(  # noqa: PLR0911 -- each knowledge/choice outcome is ex
     )
 
 
-def question_answer_acknowledged(
+def question_answer_acknowledged(  # noqa: PLR0911 - explicit acknowledgment states
     op: AnswerQuestionOperation, snapshot: ObservationSnapshot
 ) -> PredicateResult:
     if (
@@ -300,9 +311,21 @@ def question_answer_acknowledged(
             evidence=observed.evidence,
         )
     summary = "\n".join(observed.value.answered_summary).casefold()
+    if op.request.mode is QuestionAnswerMode.DECLINE and any(
+        marker in summary for marker in ("declined", "canceled", "interrupted")
+    ):
+        return _predicate(
+            snapshot,
+            "question_answer_acknowledged",
+            TruthValue.TRUE,
+            "question decline is explicitly acknowledged",
+            evidence=observed.evidence,
+        )
     expected = [target.label.casefold() for target in op.request.selections]
     if op.request.custom_answer:
         expected.append(op.request.custom_answer.casefold())
+    if op.request.note:
+        expected.append(op.request.note.casefold())
     if expected and summary and all(value in summary for value in expected):
         return _predicate(
             snapshot,
@@ -331,6 +354,7 @@ def _answer_action(op: AnswerQuestionOperation) -> AnswerQuestion:
         request.mode,
         request.selections,
         request.custom_answer,
+        request.note,
     )
 
 

@@ -214,6 +214,35 @@ def test_custom_answer_requires_explicit_custom_affordance() -> None:
     assert decision.action.custom_answer == "explain why"
 
 
+def test_single_choice_note_requires_notes_affordance_and_is_preserved() -> None:
+    question = replace(_question(), selection_mode="single", visible_tabs=("notes",))
+    request = QuestionAnswerRequest(
+        "question-1",
+        question_fingerprint(question),
+        QuestionAnswerMode.SINGLE,
+        (QuestionChoiceSelection("blue", "Blue"),),
+        note="use the canary",
+    )
+    envelope = OperationEnvelope(
+        "question-op",
+        "answer_question",
+        OperationStatus.RUNNING,
+        AnswerQuestionPhase.READY_TO_ANSWER,
+        NOW,
+        NOW,
+        NOW + timedelta(minutes=1),
+    )
+    decision = reconcile_answer_question(
+        AnswerQuestionOperation(envelope, request),
+        _snapshot(question, ObservationRevision(0, 2, 2)),
+        NOW,
+    )
+
+    assert decision.kind is ControllerDecisionKind.EMIT_ACTION
+    assert isinstance(decision.action, AnswerQuestion)
+    assert decision.action.note == "use the canary"
+
+
 def test_answer_action_records_identity_and_freshness_before_emission() -> None:
     question = _question()
     snapshot = _snapshot(question, ObservationRevision(0, 2, 2))

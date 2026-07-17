@@ -111,6 +111,55 @@ def test_trust_is_permission_evidence():
     )
 
 
+def test_live_question_and_command_permission_are_projected() -> None:
+    adapter = AntigravityHarnessAdapter()
+    question_frame = replace(
+        _frame("agy_idle.txt"),
+        raw_text="""Question
+Question 1/1: Pick a color
+> 1. Red
+  2. Green
+  3. Blue
+  4. Write-in...
+↑/↓ Navigate · enter Select · esc Skip · ctrl+r Review
+esc to cancel
+""",
+    )
+    question = adapter.project_observations(
+        adapter.parse_evidence(question_frame, ()), None
+    ).updates["question"]
+    assert question.knowledge is Knowledge.PRESENT
+    assert question.value is not None
+    assert question.value.prompt_text == "Pick a color"
+    assert tuple(choice.label for choice in question.value.choices) == (
+        "Red",
+        "Green",
+        "Blue",
+        "Write-in...",
+    )
+
+    permission_frame = replace(
+        question_frame,
+        raw_text="""Command
+Requesting permission for: touch approval-shell.txt
+Do you want to proceed?
+> 1. Yes
+  2. Yes, and always allow in this conversation
+  3. Yes, and always allow (Persist to settings.json)
+  4. No
+↑/↓ Navigate · tab Amend · ctrl+g edit/expand command
+esc to cancel
+""",
+    )
+    permission = adapter.project_observations(
+        adapter.parse_evidence(permission_frame, ()), None
+    ).updates["permission_request"]
+    assert permission.knowledge is Knowledge.PRESENT
+    assert permission.value is not None
+    assert permission.value.command == "touch approval-shell.txt"
+    assert permission.value.risk_attributes == frozenset({"shell"})
+
+
 def test_model_picker_distinguishes_cursor_configuration_and_active_readback() -> None:
     adapter, frame = AntigravityHarnessAdapter(), _frame("agy_model_picker.txt")
     delta = adapter.project_observations(

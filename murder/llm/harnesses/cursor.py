@@ -29,6 +29,7 @@ from typing import ClassVar
 from murder.llm.harnesses import cursor_usage
 from murder.llm.harnesses.base import (
     HarnessAdapter,
+    ModelParameterCapabilities,
     UsageCollectionMode,
 )
 from murder.llm.harnesses.models import HarnessModelState, HarnessUsageStatus
@@ -121,7 +122,16 @@ def _cursor_model_id_from_label(label: str) -> str | None:  # noqa: PLR0911
 class CursorAdapter(HarnessAdapter):
     kind: ClassVar[str] = "cursor"
     usage_collection_mode: ClassVar[UsageCollectionMode] = "http"
-    supported_efforts: ClassVar[tuple[str, ...]] = ("slow", "fast")
+    # Union used by legacy harness-level consumers. Runtime validation and new
+    # UI code use ``parameter_capabilities_for_model`` below.
+    supported_efforts: ClassVar[tuple[str, ...]] = (
+        "slow",
+        "fast",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+    )
     default_effort: ClassVar[str] = "slow"
     available_startup_models: ClassVar[list[tuple[str, str]]] = [
         ("composer-2.5", "Composer 2.5"),
@@ -130,6 +140,25 @@ class CursorAdapter(HarnessAdapter):
         ("gpt-5.4", "GPT-5.4"),
         ("claude-sonnet-4.5", "Claude Sonnet 4.5"),
     ]
+
+    @classmethod
+    def parameter_capabilities_for_model(cls, model: str | None) -> ModelParameterCapabilities:
+        model_id = (model or "").strip().casefold()
+        if not model_id or model_id in _COMPOSER_IDS:
+            return ModelParameterCapabilities(efforts=("slow", "fast"), fast_toggle=True)
+        if model_id == "auto":
+            return ModelParameterCapabilities()
+        if model_id in {"cursor-grok-4-5", "grok-4-5"}:
+            return ModelParameterCapabilities(
+                efforts=("low", "medium", "high"),
+                fast_toggle=True,
+            )
+        # Cursor's reasoning-model editor uses this common shape; individual
+        # exceptions should be promoted above as captured panes establish them.
+        return ModelParameterCapabilities(
+            efforts=("low", "medium", "high", "xhigh"),
+            fast_toggle=True,
+        )
 
     crow_system_prompt: ClassVar[str] = (
         # Loaded from prompts/crow_cursor.md at runtime by Crow.start().

@@ -9,13 +9,16 @@ picker, parameter, and confirmation key sequence.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from enum import Enum, auto
 from uuid import uuid4
 
 from murder.llm.harness_control.model.actions import (
+    DismissOverlay,
     DuplicatePolicy,
+    NavigateModelPicker,
     OpenModelPicker,
     SelectModel,
 )
@@ -71,6 +74,7 @@ class ModelSelectionPhase(Enum):
     CREATED = auto()
     ENSURING_CONFIGURATION = auto()
     AWAITING_CONFIGURATION_PICKER = auto()
+    AWAITING_CONFIGURATION_SEARCH_STEP = auto()
     AWAITING_CONFIGURATION = auto()
     AWAITING_PARAMETER_SELECTION = auto()
     AWAITING_CONFIGURATION_CONFIRMATION = auto()
@@ -101,6 +105,10 @@ class SelectModelOperation:
     configuration_acknowledged: bool = False
     activation_picker_baseline_revision: ObservationRevision | None = None
     ambiguity_reason: str | None = None
+    configuration_search_action_ids: tuple[str, ...] = ()
+    configuration_search_baseline_revision: ObservationRevision | None = None
+    configuration_search_start_model_id: str | None = None
+    configuration_seen_model_ids: tuple[str, ...] = ()
 
 
 class ModelSelectionOutcome(Enum):
@@ -133,10 +141,20 @@ def _predicate(
 
 def _model_matches(target: ModelTarget, model: ModelState) -> bool:
     return (
-        model.model_id == target.model_id
+        _same_model_id(model.model_id, target.model_id)
         and (target.provider is None or model.provider == target.provider)
         and (target.effort is None or model.effort == target.effort)
     )
+
+
+def _same_model_id(left: str, right: str) -> bool:
+    if left == right:
+        return True
+    return _canonical_model_id(left) == _canonical_model_id(right)
+
+
+def _canonical_model_id(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "-", value.casefold()).strip("-")
 
 
 def active_model_matches(target: ModelTarget, snapshot: ObservationSnapshot) -> PredicateResult:
@@ -169,7 +187,9 @@ def model_configuration_matches(
             f"model configuration is {observed.knowledge.name.lower()}",
         )
     config: ModelConfigurationState = observed.value
-    if config.configured_model_id != target.model_id:
+    if config.configured_model_id is None or not _same_model_id(
+        config.configured_model_id, target.model_id
+    ):
         return _predicate(
             snapshot,
             "configuration_matches",
@@ -219,7 +239,10 @@ def target_is_available(target: ModelTarget, snapshot: ObservationSnapshot) -> P
             "configuration surface did not expose model choices",
         )
     for choice in choices:
-        if target.model_id in (choice.stable_choice_id, choice.label):
+        if (
+            choice.stable_choice_id is not None
+            and _same_model_id(target.model_id, choice.stable_choice_id)
+        ) or target.model_id == choice.label:
             if choice.disabled is True:
                 return _predicate(
                     snapshot,
@@ -233,6 +256,22 @@ def target_is_available(target: ModelTarget, snapshot: ObservationSnapshot) -> P
                 TruthValue.TRUE,
                 "target model is visible in the picker",
             )
+    parameters = dict(observed.value.parameters)
+    page_end = parameters.get("model_page_end")
+    page_total = parameters.get("model_page_total")
+    if (
+        isinstance(page_end, str)
+        and page_end.isdigit()
+        and isinstance(page_total, str)
+        and page_total.isdigit()
+        and int(page_end) < int(page_total)
+    ):
+        return _predicate(
+            snapshot,
+            "configuration_target_available",
+            TruthValue.UNKNOWN,
+            "target model is absent from the current paginated viewport",
+        )
     return _predicate(
         snapshot,
         "configuration_target_available",
@@ -257,7 +296,33 @@ def _configured_model_is_target(op: SelectModelOperation, snapshot: ObservationS
     return bool(
         observed.knowledge is Knowledge.PRESENT
         and observed.value is not None
-        and observed.value.configured_model_id == op.request.target.model_id
+        and observed.value.configured_model_id is not None
+        and _same_model_id(observed.value.configured_model_id, op.request.target.model_id)
+    )
+
+
+def _model_picker_is_active(snapshot: ObservationSnapshot) -> bool:
+    return bool(
+        snapshot.surface.knowledge is Knowledge.PRESENT
+        and snapshot.surface.value is not None
+        and snapshot.surface.value.primary is SurfaceKind.MODEL_PICKER
+    )
+
+
+def _safe_composer_surface(snapshot: ObservationSnapshot) -> bool:
+    return bool(
+        snapshot.surface.knowledge is Knowledge.PRESENT
+        and snapshot.surface.value is not None
+        and snapshot.surface.value.primary in {SurfaceKind.COMPOSER, SurfaceKind.TRANSCRIPT}
+    )
+
+
+def _model_slash_command_is_pending(snapshot: ObservationSnapshot) -> bool:
+    return bool(
+        snapshot.composer.knowledge is Knowledge.PRESENT
+        and snapshot.composer.value is not None
+        and snapshot.composer.value.text is not None
+        and snapshot.composer.value.text.strip().startswith("/model")
     )
 
 
@@ -278,11 +343,81 @@ def _select_action(op: SelectModelOperation) -> SelectModel:
     )
 
 
+def _activation_action(op: SelectModelOperation) -> SelectModel:
+    """Confirm a configured picker row without reopening its parameter editor."""
+    target = op.request.target
+    return SelectModel(
+        action_id=str(uuid4()),
+        operation_id=op.envelope.operation_id,
+        duplicate_policy=DuplicatePolicy.AMBIGUOUS_AFTER_EMISSION,
+        model_id=target.model_id,
+        provider=target.provider,
+    )
+
+
+def _dismiss_parameter_editor_action(op: SelectModelOperation) -> DismissOverlay:
+    return DismissOverlay(
+        action_id=str(uuid4()),
+        operation_id=op.envelope.operation_id,
+        duplicate_policy=DuplicatePolicy.REPLAY_SAFE_WHILE_PRECONDITION_HOLDS,
+        overlay_kind="model_parameters",
+    )
+
+
 def _open_picker_action(op: SelectModelOperation) -> OpenModelPicker:
     return OpenModelPicker(
         action_id=str(uuid4()),
         operation_id=op.envelope.operation_id,
         duplicate_policy=DuplicatePolicy.REPLAY_SAFE_WHILE_PRECONDITION_HOLDS,
+        filter_text=op.request.target.model_id,
+        edit_parameters=bool(op.request.target.parameters()),
+    )
+
+
+def _navigate_picker_action(op: SelectModelOperation) -> NavigateModelPicker:
+    return NavigateModelPicker(
+        action_id=str(uuid4()),
+        operation_id=op.envelope.operation_id,
+        duplicate_policy=DuplicatePolicy.REPLAY_SAFE_WHILE_PRECONDITION_HOLDS,
+        direction="down",
+    )
+
+
+def _visible_model_ids(snapshot: ObservationSnapshot) -> tuple[str, ...]:
+    observed = snapshot.model_configuration
+    if observed.knowledge is not Knowledge.PRESENT or observed.value is None:
+        return ()
+    return tuple(
+        choice.stable_choice_id
+        for choice in observed.value.available
+        if choice.stable_choice_id is not None
+    )
+
+
+def _highlighted_model_id(snapshot: ObservationSnapshot) -> str | None:
+    observed = snapshot.model_configuration
+    if observed.knowledge is not Knowledge.PRESENT or observed.value is None:
+        return None
+    highlighted = next((choice for choice in observed.value.available if choice.highlighted), None)
+    if highlighted is not None:
+        return f"{highlighted.stable_choice_id or ''}\x1f{highlighted.label}"
+    return observed.value.highlighted_model_id
+
+
+def _target_is_visibly_disabled(target: ModelTarget, snapshot: ObservationSnapshot) -> bool:
+    observed = snapshot.model_configuration
+    if observed.knowledge is not Knowledge.PRESENT or observed.value is None:
+        return False
+    return any(
+        (
+            (
+                choice.stable_choice_id is not None
+                and _same_model_id(target.model_id, choice.stable_choice_id)
+            )
+            or target.model_id == choice.label
+        )
+        and choice.disabled is True
+        for choice in observed.value.available
     )
 
 
@@ -356,6 +491,14 @@ def reconcile_model_selection(  # noqa: PLR0911, PLR0912, PLR0915 -- typed phase
     if phase is ModelSelectionPhase.ENSURING_CONFIGURATION:
         if configured.value is TruthValue.TRUE:
             if active.value is TruthValue.TRUE:
+                if _model_picker_is_active(snapshot):
+                    return ControllerDecision(
+                        ControllerDecisionKind.EMIT_ACTION,
+                        ModelSelectionPhase.AWAITING_CONFIGURATION,
+                        _select_action(op),
+                        "target is active but its open picker still requires explicit confirmation",
+                        (configured, active),
+                    )
                 return ControllerDecision(
                     ControllerDecisionKind.SUCCEED,
                     ModelSelectionPhase.SUCCEEDED,
@@ -370,20 +513,70 @@ def reconcile_model_selection(  # noqa: PLR0911, PLR0912, PLR0915 -- typed phase
                 configured,
                 active,
             )
+        parameters = _configuration_parameters(snapshot)
+        if parameters.get("stage") == "effort" and _configured_model_is_target(op, snapshot):
+            mismatched_parameters = tuple(
+                name
+                for name, expected in op.request.target.parameters()
+                if parameters.get(name) != expected
+            )
+            if mismatched_parameters:
+                return ControllerDecision(
+                    ControllerDecisionKind.EMIT_ACTION,
+                    ModelSelectionPhase.AWAITING_PARAMETER_SELECTION,
+                    _select_action(op),
+                    "direct model command opened parameters; select requested "
+                    + ", ".join(mismatched_parameters),
+                    (configured,),
+                )
+            return ControllerDecision(
+                ControllerDecisionKind.EMIT_ACTION,
+                ModelSelectionPhase.AWAITING_CONFIGURATION_CONFIRMATION,
+                _dismiss_parameter_editor_action(op),
+                "direct model command opened matching parameters; return for activation",
+                (configured,),
+            )
         availability = target_is_available(op.request.target, snapshot)
         if availability.value is TruthValue.FALSE:
+            if _target_is_visibly_disabled(op.request.target, snapshot):
+                return ControllerDecision(
+                    ControllerDecisionKind.FAIL,
+                    ModelSelectionPhase.FAILED,
+                    None,
+                    "target model is visible but disabled",
+                    (configured, availability),
+                )
+            highlighted = _highlighted_model_id(snapshot)
+            if highlighted is None:
+                return _escalate(
+                    ModelSelectionPhase.AMBIGUOUS,
+                    "target is outside the visible picker and the picker cursor is unknown",
+                    configured,
+                    availability,
+                )
+            if (
+                op.configuration_search_action_ids
+                and highlighted == op.configuration_search_start_model_id
+            ):
+                return ControllerDecision(
+                    ControllerDecisionKind.FAIL,
+                    ModelSelectionPhase.FAILED,
+                    None,
+                    "target model is unavailable after an exhaustive picker traversal",
+                    (configured, availability),
+                )
             return ControllerDecision(
-                ControllerDecisionKind.FAIL,
-                ModelSelectionPhase.FAILED,
-                None,
-                "target model is unavailable",
+                ControllerDecisionKind.EMIT_ACTION,
+                ModelSelectionPhase.AWAITING_CONFIGURATION_SEARCH_STEP,
+                _navigate_picker_action(op),
+                "target is not in the visible viewport; advance the picker and read it again",
                 (configured, availability),
             )
         if configured.value is TruthValue.UNKNOWN:
             if op.configuration_picker_action_id is not None:
-                return _escalate(
-                    ModelSelectionPhase.AMBIGUOUS,
-                    "model picker was opened without visible configuration evidence",
+                return _observe(
+                    phase,
+                    "wait through Cursor's picker-to-parameter transition",
                     configured,
                 )
             if (
@@ -430,16 +623,53 @@ def reconcile_model_selection(  # noqa: PLR0911, PLR0912, PLR0915 -- typed phase
             )
         if not _after(snapshot, op.configuration_picker_baseline_revision):
             return _observe(phase, "wait for fresh model-picker observation")
+        if active.value is TruthValue.TRUE:
+            return ControllerDecision(
+                ControllerDecisionKind.SUCCEED,
+                ModelSelectionPhase.SUCCEEDED,
+                None,
+                "targeted /model command produced matching active-model readback",
+                (active,),
+            )
         if snapshot.model_configuration.knowledge is Knowledge.PRESENT:
             return _observe(
                 ModelSelectionPhase.ENSURING_CONFIGURATION,
                 "model picker observed; assess target configuration",
                 configured,
             )
+        if _safe_composer_surface(snapshot) and _model_slash_command_is_pending(snapshot):
+            return ControllerDecision(
+                ControllerDecisionKind.EMIT_ACTION,
+                ModelSelectionPhase.AWAITING_CONFIGURATION_PICKER,
+                _open_picker_action(op),
+                "confirm Cursor's pending /model slash-command selection",
+                (configured,),
+            )
         return _escalate(
             ModelSelectionPhase.AMBIGUOUS,
             "model-picker request emitted without visible picker evidence",
             configured,
+        )
+
+    if phase is ModelSelectionPhase.AWAITING_CONFIGURATION_SEARCH_STEP:
+        if (
+            not op.configuration_search_action_ids
+            or op.configuration_search_baseline_revision is None
+        ):
+            return _escalate(
+                ModelSelectionPhase.AMBIGUOUS,
+                "model-picker traversal lacks persisted action identity or baseline revision",
+            )
+        if not _after(snapshot, op.configuration_search_baseline_revision):
+            return _observe(phase, "wait for a fresh model-picker viewport")
+        if snapshot.model_configuration.knowledge is Knowledge.PRESENT:
+            return _observe(
+                ModelSelectionPhase.ENSURING_CONFIGURATION,
+                "fresh picker viewport observed; continue target search",
+            )
+        return _escalate(
+            ModelSelectionPhase.AMBIGUOUS,
+            "model-picker traversal emitted without fresh picker evidence",
         )
 
     if phase is ModelSelectionPhase.AWAITING_CONFIGURATION:
@@ -451,6 +681,14 @@ def reconcile_model_selection(  # noqa: PLR0911, PLR0912, PLR0915 -- typed phase
             )
         if not _after(snapshot, op.configuration_baseline_revision):
             return _observe(phase, "wait for a fresh configuration observation", configured)
+        if active.value is TruthValue.TRUE:
+            return ControllerDecision(
+                ControllerDecisionKind.SUCCEED,
+                ModelSelectionPhase.SUCCEEDED,
+                None,
+                "model-row confirmation produced matching active-model readback",
+                (active,),
+            )
         parameters = _configuration_parameters(snapshot)
         if parameters.get("stage") == "effort" and _configured_model_is_target(op, snapshot):
             if (
@@ -467,8 +705,8 @@ def reconcile_model_selection(  # noqa: PLR0911, PLR0912, PLR0915 -- typed phase
             return ControllerDecision(
                 ControllerDecisionKind.EMIT_ACTION,
                 ModelSelectionPhase.AWAITING_CONFIGURATION_CONFIRMATION,
-                _select_action(op),
-                "confirm the observed model parameter configuration",
+                _dismiss_parameter_editor_action(op),
+                "leave the saved parameter editor before activating the model",
                 (configured,),
             )
         if configured.value is TruthValue.TRUE:
@@ -511,8 +749,8 @@ def reconcile_model_selection(  # noqa: PLR0911, PLR0912, PLR0915 -- typed phase
             return ControllerDecision(
                 ControllerDecisionKind.EMIT_ACTION,
                 ModelSelectionPhase.AWAITING_CONFIGURATION_CONFIRMATION,
-                _select_action(op),
-                "selected effort is visible; confirm configuration explicitly",
+                _dismiss_parameter_editor_action(op),
+                "selected effort is visible; return to the picker for activation",
             )
         return _escalate(
             ModelSelectionPhase.AMBIGUOUS,
@@ -527,6 +765,19 @@ def reconcile_model_selection(  # noqa: PLR0911, PLR0912, PLR0915 -- typed phase
             )
         if not _after(snapshot, op.confirmation_baseline_revision):
             return _observe(phase, "wait for fresh post-confirmation evidence")
+        parameters = _configuration_parameters(snapshot)
+        if (
+            parameters.get("stage") == "effort"
+            and _configured_model_is_target(op, snapshot)
+            and parameters.get("effort") == op.request.target.effort
+        ):
+            return ControllerDecision(
+                ControllerDecisionKind.EMIT_ACTION,
+                ModelSelectionPhase.AWAITING_CONFIGURATION_CONFIRMATION,
+                _dismiss_parameter_editor_action(op),
+                "saved parameter editor is still visible; dismiss it again safely",
+                (configured,),
+            )
         if active.value is TruthValue.TRUE:
             return ControllerDecision(
                 ControllerDecisionKind.SUCCEED,
@@ -534,6 +785,14 @@ def reconcile_model_selection(  # noqa: PLR0911, PLR0912, PLR0915 -- typed phase
                 None,
                 "configuration confirmation also activated the requested model",
                 (active,),
+            )
+        if _model_picker_is_active(snapshot):
+            return ControllerDecision(
+                ControllerDecisionKind.EMIT_ACTION,
+                ModelSelectionPhase.AWAITING_ACTIVE_READBACK,
+                _activation_action(op),
+                "saved parameters are visible in the picker; activate the configured row",
+                (configured, active),
             )
         if (
             snapshot.surface.knowledge is Knowledge.PRESENT
@@ -593,7 +852,7 @@ def reconcile_model_selection(  # noqa: PLR0911, PLR0912, PLR0915 -- typed phase
                 "reopen model picker before activating configured target",
                 (configured, active),
             )
-        action = _select_action(op)
+        action = _activation_action(op)
         return ControllerDecision(
             ControllerDecisionKind.EMIT_ACTION,
             ModelSelectionPhase.AWAITING_ACTIVE_READBACK,
@@ -661,7 +920,7 @@ def reconcile_model_selection(  # noqa: PLR0911, PLR0912, PLR0915 -- typed phase
     )
 
 
-def advance_model_selection(
+def advance_model_selection(  # noqa: PLR0912, PLR0915 -- typed phase persistence
     op: SelectModelOperation,
     decision: ControllerDecision,
     snapshot: ObservationSnapshot,
@@ -697,6 +956,10 @@ def advance_model_selection(
     confirmation_baseline = op.confirmation_baseline_revision
     activate_picker_baseline = op.activation_picker_baseline_revision
     ambiguity = op.ambiguity_reason
+    search_action_ids = op.configuration_search_action_ids
+    search_baseline = op.configuration_search_baseline_revision
+    search_start = op.configuration_search_start_model_id
+    seen_model_ids = op.configuration_seen_model_ids
     if decision.action is not None:
         action_history = (*action_history, decision.action.action_id)
         if phase is ModelSelectionPhase.AWAITING_CONFIGURATION:
@@ -714,6 +977,13 @@ def advance_model_selection(
         elif phase is ModelSelectionPhase.AWAITING_CONFIGURATION_PICKER:
             config_picker_action_id = decision.action.action_id
             config_picker_baseline = snapshot.revision
+        elif phase is ModelSelectionPhase.AWAITING_CONFIGURATION_SEARCH_STEP:
+            search_action_ids = (*search_action_ids, decision.action.action_id)
+            search_baseline = snapshot.revision
+            highlighted = _highlighted_model_id(snapshot)
+            if search_start is None:
+                search_start = highlighted
+            seen_model_ids = tuple(dict.fromkeys((*seen_model_ids, *_visible_model_ids(snapshot))))
         elif phase is ModelSelectionPhase.AWAITING_ACTIVATION_PICKER:
             activate_picker_action_id = decision.action.action_id
             activate_picker_baseline = snapshot.revision
@@ -749,6 +1019,10 @@ def advance_model_selection(
         ),
         activation_picker_baseline_revision=activate_picker_baseline,
         ambiguity_reason=ambiguity,
+        configuration_search_action_ids=search_action_ids,
+        configuration_search_baseline_revision=search_baseline,
+        configuration_search_start_model_id=search_start,
+        configuration_seen_model_ids=seen_model_ids,
     )
 
 

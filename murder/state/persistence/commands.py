@@ -120,6 +120,33 @@ def complete_command(
     )
 
 
+def renew_command_lease(
+    conn: sqlite3.Connection,
+    *,
+    command_id: str,
+    claimed_by: str,
+    lease_expires_at: int,
+) -> bool:
+    """Extend a live claim without changing its attempt count.
+
+    Ownership and status are part of the update predicate so a late heartbeat
+    cannot revive a command that was completed, failed, or claimed elsewhere.
+    """
+
+    cursor = conn.execute(
+        """
+        UPDATE commands
+           SET lease_expires_at = ?,
+               updated_at = ?
+         WHERE id = ?
+           AND status = 'in_flight'
+           AND claimed_by = ?
+        """,
+        (lease_expires_at, _now(), command_id, claimed_by),
+    )
+    return cursor.rowcount == 1
+
+
 def fail_command(
     conn: sqlite3.Connection,
     *,

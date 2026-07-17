@@ -44,7 +44,7 @@ class RestoreComposerOperation:
     dismissal_action_id: str | None = None
 
 
-def reconcile_restore_composer(
+def reconcile_restore_composer(  # noqa: PLR0911 - explicit surface outcomes
     op: RestoreComposerOperation, snapshot: ObservationSnapshot, now: datetime
 ) -> ControllerDecision:
     if op.envelope.deadline and now > op.envelope.deadline:
@@ -85,6 +85,13 @@ def reconcile_restore_composer(
             "observation predates overlay dismissal",
         )
     surface = snapshot.surface.value
+    if surface.primary in {SurfaceKind.PERMISSION_DIALOG, SurfaceKind.QUESTION_PICKER}:
+        return ControllerDecision(
+            ControllerDecisionKind.ESCALATE,
+            RestorationPhase.ESCALATED,
+            None,
+            "structured decisions require an explicit answer, not generic dismissal",
+        )
     if surface.primary in {SurfaceKind.COMPOSER, SurfaceKind.TRANSCRIPT}:
         return ControllerDecision(
             ControllerDecisionKind.OBSERVE_MORE,

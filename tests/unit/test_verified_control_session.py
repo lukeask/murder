@@ -267,7 +267,7 @@ def test_session_recovery_reconciles_typed_state_against_one_fresh_observation()
     asyncio.run(scenario())
 
 
-def test_restart_hydrates_semantic_and_evidence_baselines_then_recovers_without_replay(
+def test_restart_hydrates_semantic_and_evidence_baselines_then_recovers_without_replay(  # noqa: PLR0915 - end-to-end recovery trace
     monkeypatch,
 ) -> None:
     """Restart preserves knowledge/history and drives safe observation to quiescence."""
@@ -386,16 +386,23 @@ def test_restart_hydrates_semantic_and_evidence_baselines_then_recovers_without_
         connection.commit()
 
         frames = iter(("active", "stopped"))
+        latest = {"text": ""}
 
         async def dimensions(_session):
             return 120, 40
 
         async def capture(_session, *, lines, escapes):
             del lines, escapes
-            return next(frames)
+            latest["text"] = next(frames)
+            return latest["text"]
+
+        async def viewport(_session, *, escapes):
+            del escapes
+            return latest["text"]
 
         monkeypatch.setattr(tmux, "pane_dimensions", dimensions)
         monkeypatch.setattr(tmux, "capture_pane", capture)
+        monkeypatch.setattr(tmux, "capture_viewport", viewport)
 
         class Adapter:
             parser_version = "restart-test/v1"

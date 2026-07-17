@@ -30,6 +30,14 @@ from murder.llm.harness_control.capabilities.restoration import (
     RestoreComposerOperation,
     RestoreComposerRequest,
 )
+from murder.llm.harness_control.capabilities.resume import (
+    ConfigureResumeOperation,
+    ConfigureResumePhase,
+    OpenResumeOperation,
+    OpenResumePhase,
+    OpenResumeRequest,
+    ResumePickerTarget,
+)
 from murder.llm.harness_control.capabilities.usage import UsageOperation, UsagePhase, UsageRequest
 from murder.llm.harness_control.model.actions import (
     InputChunk,
@@ -108,6 +116,18 @@ def _operations() -> tuple[object, ...]:
             ),
             activation_action_id="action-1",
             activation_baseline_revision=REVISION,
+        ),
+        OpenResumeOperation(
+            _envelope("open_resume_picker", OpenResumePhase.AWAITING_PICKER),
+            OpenResumeRequest(timedelta(seconds=30)),
+            REVISION,
+            "action-1",
+        ),
+        ConfigureResumeOperation(
+            _envelope("configure_resume_picker", ConfigureResumePhase.AWAITING_READBACK),
+            ResumePickerTarget("needle", "all", "created"),
+            REVISION,
+            "action-1",
         ),
         AnswerQuestionOperation(
             _envelope("answer_question", AnswerQuestionPhase.AWAITING_ACKNOWLEDGMENT),

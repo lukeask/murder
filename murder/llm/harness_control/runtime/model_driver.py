@@ -47,7 +47,7 @@ class ModelFrameObserver(Protocol):
 @dataclass(frozen=True, slots=True)
 class ModelDriverPolicy:
     observation_interval: timedelta = timedelta(milliseconds=250)
-    maximum_observations: int = 240
+    maximum_observations: int = 480
 
     def __post_init__(self) -> None:
         if self.maximum_observations <= 0:
@@ -55,11 +55,11 @@ class ModelDriverPolicy:
 
 
 DEFAULT_MODEL_DRIVER_POLICY = ModelDriverPolicy()
-# A model picker that has not produced independently readable state within a
-# minute is treated as ambiguous.  Keep this aligned with the observation
-# budget (240 observations at 250 ms) so budget exhaustion does not preempt a
+# A model picker that has not produced independently readable state within two
+# minutes is treated as ambiguous. Keep this aligned with the observation
+# budget (480 observations at 250 ms) so budget exhaustion does not preempt a
 # longer persisted operation deadline.
-DEFAULT_MODEL_SELECTION_DEADLINE = timedelta(minutes=1)
+DEFAULT_MODEL_SELECTION_DEADLINE = timedelta(minutes=2)
 
 
 class VerifiedModelSelectionDriver:
@@ -174,11 +174,14 @@ class VerifiedModelSelectionDriver:
             OperationStatus.FAILED: ModelSelectionOutcome.FAILED,
             OperationStatus.ESCALATED: ModelSelectionOutcome.ESCALATED,
         }.get(operation.envelope.status, ModelSelectionOutcome.ESCALATED)
+        warnings = tuple(warning.message for warning in operation.envelope.warnings)
+        if operation.ambiguity_reason is not None and operation.ambiguity_reason not in warnings:
+            warnings = (*warnings, operation.ambiguity_reason)
         return SelectModelResult(
             operation.envelope.operation_id,
             outcome,
             active,
-            tuple(warning.message for warning in operation.envelope.warnings),
+            warnings,
         )
 
     def _active_model(self) -> ModelState | None:

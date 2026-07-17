@@ -43,6 +43,10 @@ class TmuxFrameObserver:
             lines=self._lines,
             escapes=self._preserve_ansi,
         )
+        viewport_text = await tmux.capture_viewport(
+            self._session,
+            escapes=self._preserve_ansi,
+        )
         self._capture_sequence += 1
         return TerminalFrame(
             frame_id=FrameId(str(uuid4())),
@@ -54,6 +58,7 @@ class TmuxFrameObserver:
             ansi_preserved=self._preserve_ansi,
             pane_epoch=self._pane_epoch,
             capture_sequence=self._capture_sequence,
+            viewport_text=viewport_text,
         )
 
 

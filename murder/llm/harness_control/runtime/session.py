@@ -25,6 +25,12 @@ from murder.llm.harness_control.adapters.claude_code import ClaudeCodeAdapter
 from murder.llm.harness_control.adapters.codex import CodexHarnessAdapter
 from murder.llm.harness_control.adapters.cursor import CursorHarnessAdapter
 from murder.llm.harness_control.adapters.pi import PiHarnessAdapter
+from murder.llm.harness_control.capabilities.model_discovery import (
+    DiscoverModelsOperation,
+    DiscoverModelsResult,
+    advance_model_discovery,
+    reconcile_model_discovery,
+)
 from murder.llm.harness_control.capabilities.model_selection import (
     ModelTarget,
     SelectModelOperation,
@@ -50,11 +56,32 @@ from murder.llm.harness_control.capabilities.restoration import (
     InterruptOperation,
     InterruptPhase,
     InterruptRequest,
+    RestorationPhase,
     RestoreComposerOperation,
+    RestoreComposerRequest,
     advance_interrupt,
     advance_restore_composer,
     reconcile_interrupt,
     reconcile_restore_composer,
+)
+from murder.llm.harness_control.capabilities.resume import (
+    ConfigureResumeOperation,
+    ConfigureResumePhase,
+    OpenResumeOperation,
+    OpenResumePhase,
+    OpenResumeRequest,
+    ResumePickerTarget,
+    advance_configure_resume,
+    advance_open_resume,
+    reconcile_configure_resume,
+    reconcile_open_resume,
+)
+from murder.llm.harness_control.capabilities.session_settings import (
+    ConfigureSessionSettingsOperation,
+    SessionSettingsPhase,
+    SessionSettingsTarget,
+    advance_session_settings,
+    reconcile_session_settings,
 )
 from murder.llm.harness_control.capabilities.submit_prompt import (
     advance_submit_prompt,
@@ -83,6 +110,7 @@ from murder.llm.harness_control.model.operations import (
 )
 from murder.llm.harness_control.runtime.actuator import HarnessActuator, IntentPriority
 from murder.llm.harness_control.runtime.controller import HarnessController
+from murder.llm.harness_control.runtime.model_discovery_driver import VerifiedModelDiscoveryDriver
 from murder.llm.harness_control.runtime.model_driver import (
     DEFAULT_MODEL_SELECTION_DEADLINE,
     VerifiedModelSelectionDriver,
@@ -161,6 +189,7 @@ class VerifiedHarnessControlSession:
         model_driver: VerifiedModelSelectionDriver,
         usage_driver: VerifiedUsageDriver,
         *,
+        model_discovery_driver: VerifiedModelDiscoveryDriver | None = None,
         harness_id: HarnessId,
         terminal_session: str,
         connection: sqlite3.Connection,
@@ -174,6 +203,9 @@ class VerifiedHarnessControlSession:
         self._prompt_driver = prompt_driver
         self._observer = observer
         self._model_driver = model_driver
+        self._model_discovery_driver = model_discovery_driver or VerifiedModelDiscoveryDriver(
+            controller, observer
+        )
         self._usage_driver = usage_driver
         self._connection = connection
         self._persistence_session_id = persistence_session_id
@@ -256,6 +288,7 @@ class VerifiedHarnessControlSession:
             observer,
             VerifiedModelSelectionDriver(controller, observer),
             VerifiedUsageDriver(controller, observer),
+            model_discovery_driver=VerifiedModelDiscoveryDriver(controller, observer),
             harness_id=harness_id,
             terminal_session=terminal_session,
             connection=connection,
@@ -437,6 +470,19 @@ class VerifiedHarnessControlSession:
             on_preempt=self._preemption_hook(operation_id),
         )
 
+    async def discover_models(
+        self, *, deadline: timedelta = timedelta(minutes=2)
+    ) -> DiscoverModelsResult:
+        """Read every interactive ``/model`` row by traversing the live picker."""
+
+        operation_id = str(uuid4())
+        return await self._operation_arbiter.run(
+            operation_id,
+            IntentPriority.MODEL_SELECTION,
+            lambda: self._model_discovery_driver.discover(deadline=deadline),
+            on_preempt=None,
+        )
+
     async def collect_usage(self, *, trigger: str) -> HarnessUsageStatus | None:
         """Collect a fresh terminal usage observation through the actuator.
 
@@ -458,6 +504,41 @@ class VerifiedHarnessControlSession:
         if result.outcome is not UsageCollectionOutcome.COLLECTED or result.usage is None:
             return None
         return _as_harness_usage_status(str(self.harness_id), result.usage)
+
+    async def configure_settings(
+        self,
+        target: SessionSettingsTarget,
+        *,
+        deadline: timedelta = timedelta(minutes=1),
+    ) -> bool:
+        """Set run/fast modes and require a fresh live-chrome readback."""
+
+        _validate_structured_decision_deadline(deadline, "session settings")
+        now = self._structured_decision_timing.clock()
+        operation = ConfigureSessionSettingsOperation(
+            OperationEnvelope(
+                str(uuid4()),
+                "configure_session_settings",
+                OperationStatus.PENDING,
+                SessionSettingsPhase.CREATED,
+                now,
+                now,
+                now + deadline,
+            ),
+            target,
+        )
+        await self.controller.persist_operation(operation)
+        return await self._operation_arbiter.run(
+            operation.envelope.operation_id,
+            IntentPriority.MODEL_SELECTION,
+            lambda: self._drive_structured(
+                operation,
+                reconcile_session_settings,
+                advance_session_settings,
+                IntentPriority.MODEL_SELECTION,
+            ),
+            on_preempt=self._preemption_hook(operation.envelope.operation_id),
+        )
 
     async def answer_question(
         self,
@@ -485,6 +566,109 @@ class VerifiedHarnessControlSession:
                 operation,
                 reconcile_answer_question,
                 advance_answer_question,
+                IntentPriority.PROMPT_SUBMISSION,
+            ),
+            on_preempt=self._preemption_hook(operation.envelope.operation_id),
+        )
+
+    async def open_resume_picker(
+        self, *, deadline: timedelta = timedelta(minutes=1)
+    ) -> bool:
+        """Open and verify the interactive saved-session picker."""
+
+        _validate_structured_decision_deadline(deadline, "resume picker")
+        now = self._structured_decision_timing.clock()
+        operation = OpenResumeOperation(
+            OperationEnvelope(
+                str(uuid4()),
+                "open_resume_picker",
+                OperationStatus.PENDING,
+                OpenResumePhase.CREATED,
+                now,
+                now,
+                now + deadline,
+            ),
+            OpenResumeRequest(deadline),
+        )
+        await self.controller.persist_operation(operation)
+        return await self._operation_arbiter.run(
+            operation.envelope.operation_id,
+            IntentPriority.PROMPT_SUBMISSION,
+            lambda: self._drive_structured(
+                operation,
+                reconcile_open_resume,
+                advance_open_resume,
+                IntentPriority.PROMPT_SUBMISSION,
+            ),
+            on_preempt=self._preemption_hook(operation.envelope.operation_id),
+        )
+
+    async def configure_resume_picker(
+        self,
+        target: ResumePickerTarget,
+        *,
+        deadline: timedelta = timedelta(minutes=1),
+    ) -> bool:
+        """Reset, reopen, configure, and verify Codex's resume picker."""
+
+        _validate_structured_decision_deadline(deadline, "resume configuration")
+        if not await self.restore_composer(deadline=deadline):
+            return False
+        if not await self.open_resume_picker(deadline=deadline):
+            return False
+        now = self._structured_decision_timing.clock()
+        operation = ConfigureResumeOperation(
+            OperationEnvelope(
+                str(uuid4()),
+                "configure_resume_picker",
+                OperationStatus.PENDING,
+                ConfigureResumePhase.CREATED,
+                now,
+                now,
+                now + deadline,
+            ),
+            target,
+        )
+        await self.controller.persist_operation(operation)
+        return await self._operation_arbiter.run(
+            operation.envelope.operation_id,
+            IntentPriority.PROMPT_SUBMISSION,
+            lambda: self._drive_structured(
+                operation,
+                reconcile_configure_resume,
+                advance_configure_resume,
+                IntentPriority.PROMPT_SUBMISSION,
+            ),
+            on_preempt=self._preemption_hook(operation.envelope.operation_id),
+        )
+
+    async def restore_composer(
+        self, *, deadline: timedelta = timedelta(seconds=20)
+    ) -> bool:
+        """Dismiss the current typed overlay and verify an actionable composer."""
+
+        _validate_structured_decision_deadline(deadline, "composer restoration")
+        now = self._structured_decision_timing.clock()
+        operation = RestoreComposerOperation(
+            OperationEnvelope(
+                str(uuid4()),
+                "restore_composer",
+                OperationStatus.PENDING,
+                RestorationPhase.CREATED,
+                now,
+                now,
+                now + deadline,
+            ),
+            RestoreComposerRequest(deadline),
+        )
+        await self.controller.persist_operation(operation)
+        return await self._operation_arbiter.run(
+            operation.envelope.operation_id,
+            IntentPriority.PROMPT_SUBMISSION,
+            lambda: self._drive_structured(
+                operation,
+                reconcile_restore_composer,
+                advance_restore_composer,
                 IntentPriority.PROMPT_SUBMISSION,
             ),
             on_preempt=self._preemption_hook(operation.envelope.operation_id),
@@ -671,10 +855,34 @@ def _recovery_contract(operation: object):
             IntentPriority.MODEL_SELECTION,
         ),
         (
+            DiscoverModelsOperation,
+            reconcile_model_discovery,
+            advance_model_discovery,
+            IntentPriority.MODEL_SELECTION,
+        ),
+        (
+            OpenResumeOperation,
+            reconcile_open_resume,
+            advance_open_resume,
+            IntentPriority.PROMPT_SUBMISSION,
+        ),
+        (
+            ConfigureResumeOperation,
+            reconcile_configure_resume,
+            advance_configure_resume,
+            IntentPriority.PROMPT_SUBMISSION,
+        ),
+        (
             AnswerQuestionOperation,
             reconcile_answer_question,
             advance_answer_question,
             IntentPriority.PROMPT_SUBMISSION,
+        ),
+        (
+            ConfigureSessionSettingsOperation,
+            reconcile_session_settings,
+            advance_session_settings,
+            IntentPriority.MODEL_SELECTION,
         ),
         (
             AnswerPermissionOperation,

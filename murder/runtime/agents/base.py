@@ -232,7 +232,17 @@ class HarnessBackedAgent(LifecycleParticipant):
             ModelTarget,
         )
 
-        result = await self.verified_harness_control.select_model(ModelTarget(model, effort=effort))
+        capabilities = self.harness.parameter_capabilities_for_model(model)
+        fast_enabled: bool | None = None
+        target_effort = effort
+        if capabilities.fast_toggle and effort in {"slow", "fast"}:
+            # Composer's advertised slow/fast choice is the state of its Fast
+            # checkbox, not an effort row in Cursor's parameter editor.
+            fast_enabled = effort == "fast"
+            target_effort = None
+        result = await self.verified_harness_control.select_model(
+            ModelTarget(model, effort=target_effort, fast_enabled=fast_enabled)
+        )
         if result.outcome is ModelSelectionOutcome.ACTIVATED:
             return ok_result()
         return fail_result(f"verified model selection {result.outcome.name.lower()}")
