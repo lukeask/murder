@@ -107,6 +107,7 @@ def register(host: ServiceHost) -> None:
                 for widget_id, cfg in tui.bar_widgets.items()
             },
             "default_chat_view_mode": tui.default_chat_view_mode,
+            "document_display_mode": tui.document_display_mode,
             "startup_rogue": _startup_rogue_payload(tui),
             # --- harness overrides + effective values ---
             "collaborator_harness": collab_override,
@@ -540,6 +541,7 @@ def register(host: ServiceHost) -> None:
             "workspace_count": cfg.tui.workspace_count,
             "vim_mode": cfg.tui.vim_mode,
             "default_chat_view_mode": cfg.tui.default_chat_view_mode,
+            "document_display_mode": cfg.tui.document_display_mode,
             "startup_rogue": (
                 cfg.tui.startup_rogue.model_dump(mode="json")
                 if cfg.tui.startup_rogue is not None
@@ -558,6 +560,7 @@ def register(host: ServiceHost) -> None:
             "workspace_count",
             "vim_mode",
             "default_chat_view_mode",
+            "document_display_mode",
         ):
             if key in partial:
                 tui_merged[key] = partial[key]

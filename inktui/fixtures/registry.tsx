@@ -6,7 +6,10 @@ import { Ledger, type LedgerEntryContext } from '../src/components/Ledger.js';
 import { Pane } from '../src/components/Pane.js';
 import { PaneBorderBottom, PaneBorderTop } from '../src/components/paneBorder.js';
 import { CrowsSurface } from '../src/components/panes/CrowsSurface.js';
-import { DocumentSurface } from '../src/components/panes/DocumentSurface.js';
+import {
+  DocumentSurface,
+  documentContentInnerWidth,
+} from '../src/components/panes/DocumentSurface.js';
 import { HistorySurface } from '../src/components/panes/HistorySurface.js';
 import { NotesSurface } from '../src/components/panes/NotesSurface.js';
 import { PlansSurface } from '../src/components/panes/PlansSurface.js';
@@ -21,6 +24,7 @@ import {
   renderResourceHeader,
 } from '../src/components/ResourceRow.js';
 import { MultiLineText, TextInput } from '../src/components/TextInput.js';
+import { layoutPlainText } from '../src/render/documentLayout.js';
 import { getTheme } from '../src/theme/themeStore.js';
 import { crowsSurfaceRowsFromFixture } from './crowsPanelFixture.js';
 import {
@@ -514,7 +518,7 @@ export const paneFixtures: readonly PaneFixture[] = [
       return (
         <DocumentSurface
           title={doc.title}
-          lines={doc.lines}
+          rows={layoutPlainText(doc.lines.join('\n'), documentContentInnerWidth(width)).rows}
           scroll={doc.scroll}
           focused={focused}
           width={width}

@@ -40,6 +40,8 @@ export type SettingsModifier = 'alt' | 'ctrl' | 'both';
 /** The settable default chat view mode (TUIchat-3). `tmux` is intentionally NOT settable as a default
  * — it is reachable only via the per-pane cycle key. Mirrors the wire `default_chat_view_mode`. */
 export type DefaultChatViewMode = 'verbose' | 'condensed';
+/** How document panes interpret their source. Never inferred from a document name or extension. */
+export type DocumentDisplayMode = 'plain' | 'markdown';
 
 export const DEFAULT_STARTUP_ROGUE_MODELS: Readonly<
   Record<string, readonly StartupRogueModelWire[]>
@@ -113,6 +115,8 @@ export interface SettingsState {
    * are settable here; `tmux` is reachable only via the cycle key. Mirrors the wire
    * `default_chat_view_mode`. */
   readonly defaultChatViewMode: DefaultChatViewMode;
+  /** Plain source or native terminal Markdown rendering. */
+  readonly documentDisplayMode: DocumentDisplayMode;
   /** The Startup Rogue auto-spawned on boot, or `null` when none is configured. Mirrors the wire
    * `startup_rogue`. */
   readonly startupRogue: StartupRogueWire | null;
@@ -158,6 +162,7 @@ export const initialSettingsState: SettingsState = {
   vimMode: false,
   barWidgets: {},
   defaultChatViewMode: 'verbose',
+  documentDisplayMode: 'plain',
   startupRogue: null,
   startupRogueModels: DEFAULT_STARTUP_ROGUE_MODELS,
   startupRogueEfforts: DEFAULT_STARTUP_ROGUE_EFFORTS,

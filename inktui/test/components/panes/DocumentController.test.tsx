@@ -86,4 +86,48 @@ describe('DocumentController', () => {
     tree.unmount();
     dispose();
   });
+
+  it('updates immediately on display-mode changes and clamps the persisted row scroll', async () => {
+    const fake = new FakeBusClient();
+    const { store, dispose } = createAppStore(fake);
+    const table = [
+      '| First heading | Second heading | Third heading | Fourth heading |',
+      '| --- | --- | --- | --- |',
+      '| alpha | beta | gamma | delta |',
+      '| one | two | three | four |',
+    ].join('\n');
+    store.setState((state) => ({
+      settings: { ...state.settings, documentDisplayMode: 'markdown' },
+      docView: {
+        open: { kind: 'plan', name: 'mode' },
+        body: table,
+        status: 'ready',
+        error: null,
+      },
+    }));
+    const focusId = stageDocFocusId('scroll');
+    const inputStores = createInputStores([], focusId);
+    const tree = render(<Harness store={store} inputStores={inputStores} />);
+    await flushReact();
+
+    inputStores.paneUi.getState().setScroll(focusId, 99);
+    await flushReact();
+    const markdownScroll = inputStores.paneUi.getState().scrolls[focusId] ?? 0;
+    expect(markdownScroll).toBeGreaterThan(0);
+    expect(tree.lastFrame() ?? '').toContain('Fourth heading:');
+
+    await act(async () => {
+      store.setState((state) => ({
+        settings: { ...state.settings, documentDisplayMode: 'plain' },
+      }));
+    });
+    await flushReact();
+
+    expect(tree.lastFrame() ?? '').toContain('|');
+    expect(tree.lastFrame() ?? '').not.toContain('Fourth heading:');
+    expect(inputStores.paneUi.getState().scrolls[focusId] ?? 0).toBeLessThan(markdownScroll);
+
+    tree.unmount();
+    dispose();
+  });
 });

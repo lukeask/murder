@@ -1,18 +1,19 @@
 /**
  * DocumentSurface — store-free read-only document pane.
  *
- * Accepts explicit allocated `width`/`height` and display-ready document data. Controllers own
- * store reads, keymaps, and input; this surface owns the visible window and Pane chrome.
+ * Accepts explicit allocated `width`/`height` and display-ready physical rows. Controllers own
+ * source parsing/layout, store reads, keymaps, and input; this surface owns the visible window and
+ * Pane chrome.
  *
- * Body rows are always physical terminal rows: `full` / `compact` / `minimal` wrap before
- * windowing; only `micro` truncates. Never combine logical-line windowing with `Text wrap="wrap"`.
+ * Every body row already occupies exactly one terminal row. Never combine logical-line windowing
+ * with `Text wrap="wrap"`.
  */
 
 import { Box, Text } from 'ink';
-import { memo, useMemo } from 'react';
+import { memo } from 'react';
+import type { StyledDocumentRow } from '../../render/documentLayout.js';
 import { useTheme } from '../../theme/themeStore.js';
 import { terminalSafeText } from '../../utils/terminalSafeText.js';
-import { truncateToWidth, wrapTextToRows } from '../../utils/wrapText.js';
 import { Pane } from '../Pane.js';
 import { computeDocumentWindow, computeScrollThumb } from './shared/scrollWindow.js';
 
@@ -24,7 +25,7 @@ const CHROME_HEIGHT = 2;
 const TITLE_CHROME_WIDTH = 5;
 export type DocKind = 'plan' | 'note' | 'report';
 
-export type DocumentDisplayMode = 'full' | 'compact' | 'minimal' | 'micro';
+export type DocumentSizeMode = 'full' | 'compact' | 'minimal' | 'micro';
 
 export interface DocumentSurfaceProps {
   /** Full pane allocation width (border box). */
@@ -33,14 +34,14 @@ export interface DocumentSurfaceProps {
   readonly height: number;
   readonly focused: boolean;
   readonly title: string;
-  readonly lines: readonly string[];
+  readonly rows: readonly StyledDocumentRow[];
   readonly scroll: number;
   readonly gotoPending?: string | null;
   readonly status?: 'ready' | 'loading' | 'error';
   readonly error?: string | null;
 }
 
-function contentInnerWidth(width: number): number {
+export function documentContentInnerWidth(width: number): number {
   return Math.max(1, width - CHROME_WIDTH);
 }
 
@@ -69,11 +70,7 @@ export function docBasename(title: string): string {
  * Pane border title for the allocated width — name rule: names <=6 chars show in full; longer names
  * keep ≥6 leading characters when truncated; at extreme narrow widths collapse to `…`.
  */
-export function formatDocBorderTitle(
-  name: string,
-  width: number,
-  mode: DocumentDisplayMode,
-): string {
+export function formatDocBorderTitle(name: string, width: number, mode: DocumentSizeMode): string {
   if (mode === 'micro') {
     const titleBudget = Math.max(0, width - TITLE_CHROME_WIDTH);
     if (titleBudget <= 1) {
@@ -111,8 +108,8 @@ export function formatDocBorderTitle(
 }
 
 /** Deterministic 2D layout router — branches on allocated size before rendering. */
-export function layout(width: number, height: number): DocumentDisplayMode {
-  const innerW = contentInnerWidth(width);
+export function layout(width: number, height: number): DocumentSizeMode {
+  const innerW = documentContentInnerWidth(width);
   const innerH = documentContentInnerHeight(height);
 
   if (innerH < 1 || innerW < 6) {
@@ -127,24 +124,6 @@ export function layout(width: number, height: number): DocumentDisplayMode {
   return 'full';
 }
 
-/**
- * Expand document source lines into physical terminal rows for the allocated pane size.
- * `full` / `compact` / `minimal` wrap within the pane; only `micro` truncates to one row.
- */
-export function documentPhysicalRows(
-  lines: readonly string[],
-  width: number,
-  height: number,
-): readonly string[] {
-  const mode = layout(width, height);
-  const columns = contentInnerWidth(width);
-  if (mode === 'micro') {
-    return lines.map((line) => truncateToWidth(line, columns));
-  }
-  // Soft-wrap on spaces when possible; hard-break long tokens (URLs) so rows stay ≤ columns.
-  return lines.flatMap((line) => wrapTextToRows(line, columns, { hard: true, wordWrap: true }));
-}
-
 function windowRowCount(innerH: number): number {
   return Math.max(0, innerH);
 }
@@ -154,7 +133,7 @@ export const DocumentSurface = memo(function DocumentSurface({
   height,
   focused,
   title,
-  lines,
+  rows,
   scroll,
   gotoPending = null,
   status = 'ready',
@@ -164,17 +143,9 @@ export const DocumentSurface = memo(function DocumentSurface({
   const mode = layout(width, height);
   const innerH = documentContentInnerHeight(height);
   const windowRows = windowRowCount(innerH);
-  const physicalRows = useMemo(
-    () => documentPhysicalRows(lines, width, height),
-    [lines, width, height],
-  );
-  const { start, end } = computeDocumentWindow(
-    physicalRows.length,
-    scroll,
-    Math.max(windowRows, 1),
-  );
-  const window = windowRows > 0 ? physicalRows.slice(start, end) : [];
-  const thumb = windowRows > 0 ? computeScrollThumb(physicalRows.length, start, windowRows) : null;
+  const { start, end } = computeDocumentWindow(rows.length, scroll, Math.max(windowRows, 1));
+  const window = windowRows > 0 ? rows.slice(start, end) : [];
+  const thumb = windowRows > 0 ? computeScrollThumb(rows.length, start, windowRows) : null;
   const basename = docBasename(title);
   const baseBorderTitle = formatDocBorderTitle(basename, width, mode);
   const kind = docKindFromTitle(title);
@@ -194,24 +165,24 @@ export const DocumentSurface = memo(function DocumentSurface({
     if (status === 'loading') {
       return <Text dimColor>loading…</Text>;
     }
-    if (status === 'ready' && lines.length === 0) {
+    if (status === 'ready' && rows.length === 0) {
       return <Text dimColor>(empty document)</Text>;
     }
     if (status !== 'ready') {
       return null;
     }
     if (mode === 'micro' || mode === 'minimal') {
-      const line = window[0] ?? physicalRows[scroll] ?? physicalRows[0] ?? '';
+      const displayRow = window[0] ?? rows[scroll] ?? rows[0];
       return (
         <Box width="100%" minWidth={0} overflow="hidden">
-          <Text wrap="truncate">{line === '' ? ' ' : line}</Text>
+          <StyledRow row={displayRow} />
         </Box>
       );
     }
-    return window.map((line, index) => (
+    return window.map((displayRow, index) => (
       // biome-ignore lint/suspicious/noArrayIndexKey: body lines are position-keyed slices.
       <Box key={start + index} width="100%" minWidth={0} overflow="hidden" flexShrink={0}>
-        <Text wrap="truncate">{line === '' ? ' ' : line}</Text>
+        <StyledRow row={displayRow} />
       </Box>
     ));
   })();
@@ -241,3 +212,34 @@ export const DocumentSurface = memo(function DocumentSurface({
     </Box>
   );
 });
+
+function StyledRow({
+  row: displayRow,
+}: {
+  readonly row: StyledDocumentRow | undefined;
+}): React.JSX.Element {
+  if (displayRow === undefined || displayRow.runs.length === 0) {
+    return <Text wrap="truncate"> </Text>;
+  }
+  return (
+    <Text wrap="truncate">
+      {displayRow.runs.map((run, index) => (
+        <Text
+          // biome-ignore lint/suspicious/noArrayIndexKey: runs are immutable positional layout data.
+          key={index}
+          {...(run.style.fg !== undefined ? { color: run.style.fg } : {})}
+          {...(run.style.bg !== undefined ? { backgroundColor: run.style.bg } : {})}
+          {...(run.style.bold !== undefined ? { bold: run.style.bold } : {})}
+          {...(run.style.dim !== undefined ? { dimColor: run.style.dim } : {})}
+          {...(run.style.italic !== undefined ? { italic: run.style.italic } : {})}
+          {...(run.style.underline !== undefined ? { underline: run.style.underline } : {})}
+          {...(run.style.strikethrough !== undefined
+            ? { strikethrough: run.style.strikethrough }
+            : {})}
+        >
+          {run.text}
+        </Text>
+      ))}
+    </Text>
+  );
+}

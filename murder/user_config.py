@@ -104,6 +104,8 @@ class TuiUserConfig(BaseModel):
     # Default chat view mode for panes with no per-pane override (TUIchat-3). Only verbose/condensed
     # are settable here; `tmux` is reachable in the TUI only via the per-pane cycle key, never a default.
     default_chat_view_mode: Literal["verbose", "condensed"] = "verbose"
+    # Document source interpretation is explicit and never inferred from its filename.
+    document_display_mode: Literal["plain", "markdown"] = "plain"
     # The rogue auto-spawned on daemon boot (None = none); see StartupRogueConfig.
     startup_rogue: StartupRogueConfig | None = None
     # Per-widget top/bottom bar configuration (enable + placement). Omitted keys use registry defaults.

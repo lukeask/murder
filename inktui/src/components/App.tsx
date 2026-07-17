@@ -928,6 +928,7 @@ function Shell({
         vimMode: settings.vimMode,
         barWidgets: settings.barWidgets,
         defaultChatViewMode: settings.defaultChatViewMode,
+        documentDisplayMode: settings.documentDisplayMode,
         startupRogue: settings.startupRogue,
         startupRogueModels: settings.startupRogueModels,
         startupRogueEfforts: settings.startupRogueEfforts,

@@ -30,7 +30,12 @@ import type { BusClient } from '../../bus/BusClient.js';
 import type { BarWidgetsConfig } from '../../selectors/barWidgetRegistry.js';
 import type { AppStore } from '../store.js';
 import { toastStore } from '../toast/toastStore.js';
-import type { DefaultChatViewMode, SettingsModifier, SettingsState } from './settingsSlice.js';
+import type {
+  DefaultChatViewMode,
+  DocumentDisplayMode,
+  SettingsModifier,
+  SettingsState,
+} from './settingsSlice.js';
 
 /** The four user-configurable LLM provider ids (mirrors the Python `UserLlmConfig.providers` keys).
  * `local` is the OpenAI-compatible local endpoint (no api-key env flag). */
@@ -130,6 +135,8 @@ export interface SettingsWire {
   readonly bar_widgets: BarWidgetsConfig;
   /** Default chat view mode for panes with no override. Mirrors `TuiUserConfig.default_chat_view_mode`. */
   readonly default_chat_view_mode: DefaultChatViewMode;
+  /** Document interpretation mode. Optional for compatibility with an older daemon snapshot. */
+  readonly document_display_mode?: DocumentDisplayMode;
   /** The user's Startup Rogue (auto-spawned on boot), or `null` when none is set. */
   readonly startup_rogue: StartupRogueWire | null;
   /** Available Startup Rogue model choices by harness. */
@@ -174,6 +181,7 @@ export interface SettingsPatch {
   vim_mode?: boolean;
   bar_widgets?: BarWidgetsConfig;
   default_chat_view_mode?: DefaultChatViewMode;
+  document_display_mode?: DocumentDisplayMode;
   /** Set/replace the Startup Rogue, or `null` to clear it. */
   startup_rogue?: StartupRogueWire | null;
   collaborator_harness?: string | null;
@@ -321,6 +329,7 @@ function applyWire(prev: SettingsState, wire: SettingsWire | undefined): Setting
     vimMode: wire.vim_mode ?? prev.vimMode,
     barWidgets: wire.bar_widgets ?? prev.barWidgets,
     defaultChatViewMode: wire.default_chat_view_mode ?? prev.defaultChatViewMode,
+    documentDisplayMode: wire.document_display_mode ?? prev.documentDisplayMode,
     // Nullable on the wire (null = "no startup rogue") — honour `null` via key-presence, not `??`.
     startupRogue: 'startup_rogue' in wire ? wire.startup_rogue : prev.startupRogue,
     startupRogueModels: wire.startup_rogue_models ?? prev.startupRogueModels,
@@ -387,6 +396,9 @@ export function createSettingsActions(bus: BusClient, store: StoreApi<AppStore>)
           ...(partial.bar_widgets !== undefined ? { barWidgets: partial.bar_widgets } : {}),
           ...(partial.default_chat_view_mode !== undefined
             ? { defaultChatViewMode: partial.default_chat_view_mode }
+            : {}),
+          ...(partial.document_display_mode !== undefined
+            ? { documentDisplayMode: partial.document_display_mode }
             : {}),
           ...('startup_rogue' in partial ? { startupRogue: partial.startup_rogue ?? null } : {}),
           ...('collaborator_harness' in partial

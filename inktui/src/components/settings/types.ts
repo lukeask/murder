@@ -10,7 +10,10 @@ import type {
   StartupRogueModelWire,
   StartupRogueWire,
 } from '../../store/settings/settingsActions.js';
-import type { DefaultChatViewMode } from '../../store/settings/settingsSlice.js';
+import type {
+  DefaultChatViewMode,
+  DocumentDisplayMode,
+} from '../../store/settings/settingsSlice.js';
 import type { TemplateRecord } from '../../store/templates/templatesSlice.js';
 import type { ThemeRecord } from '../../store/themes/themesSlice.js';
 import type { ThemeId } from '../../theme/palettes.js';
@@ -39,6 +42,7 @@ export type SettingsRow =
   | { readonly id: string; readonly kind: 'workspaceCount'; readonly value: number }
   | { readonly id: string; readonly kind: 'vim'; readonly value: boolean }
   | { readonly id: string; readonly kind: 'chatView'; readonly value: DefaultChatViewMode }
+  | { readonly id: string; readonly kind: 'documentDisplay'; readonly value: DocumentDisplayMode }
   | { readonly id: string; readonly kind: 'startupRogue'; readonly field: 'off' }
   | {
       readonly id: string;

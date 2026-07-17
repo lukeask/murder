@@ -3,6 +3,9 @@ export interface CellStyle {
   readonly bg?: string;
   readonly bold?: boolean;
   readonly dim?: boolean;
+  readonly italic?: boolean;
+  readonly underline?: boolean;
+  readonly strikethrough?: boolean;
 }
 
 export interface Cell {
@@ -33,6 +36,8 @@ const EMPTY_STYLE: CellStyle = {};
 function styleKey(style: CellStyle): string {
   return `${style.fg ?? ''}\0${style.bg ?? ''}\0${style.bold === true ? '1' : '0'}\0${
     style.dim === true ? '1' : '0'
+  }\0${style.italic === true ? '1' : '0'}\0${style.underline === true ? '1' : '0'}\0${
+    style.strikethrough === true ? '1' : '0'
   }`;
 }
 

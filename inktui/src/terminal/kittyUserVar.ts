@@ -7,7 +7,7 @@
 
 /** Emit kitty's `SetUserVar` OSC 1337 sequence. `value === null` unsets the variable. */
 export function setKittyUserVar(name: string, value: string | null): void {
-  if (!process.env.KITTY_WINDOW_ID) {
+  if (!process.env['KITTY_WINDOW_ID']) {
     return;
   }
 
@@ -25,7 +25,7 @@ let cleanupInstalled = false;
 
 /** Register process-level cleanup so `murder_tui` is unset on exit and common signals. Idempotent. */
 export function ensureKittyMurderMarkerCleanup(): void {
-  if (!process.env.KITTY_WINDOW_ID || cleanupInstalled) {
+  if (!process.env['KITTY_WINDOW_ID'] || cleanupInstalled) {
     return;
   }
   cleanupInstalled = true;

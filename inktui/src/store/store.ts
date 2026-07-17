@@ -635,6 +635,7 @@ function applySettingsWire(prev: SettingsState, wire: SettingsWire | undefined):
     vimMode: wire.vim_mode ?? prev.vimMode,
     barWidgets: wire.bar_widgets ?? prev.barWidgets,
     defaultChatViewMode: wire.default_chat_view_mode ?? prev.defaultChatViewMode,
+    documentDisplayMode: wire.document_display_mode ?? prev.documentDisplayMode,
     startupRogue: 'startup_rogue' in wire ? wire.startup_rogue : prev.startupRogue,
     startupRogueModels: wire.startup_rogue_models ?? prev.startupRogueModels,
     startupRogueEfforts: wire.startup_rogue_efforts ?? prev.startupRogueEfforts,

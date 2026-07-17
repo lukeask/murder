@@ -35,6 +35,7 @@ function wire(over: Record<string, unknown> = {}): SettingsWire {
     vim_mode: false,
     bar_widgets: {},
     default_chat_view_mode: 'verbose',
+    document_display_mode: 'plain',
     startup_rogue: null,
     collaborator_harness: null,
     planner_harness: null,
@@ -161,6 +162,22 @@ describe('settings actions', () => {
     const updates = fake.rpcCalls.filter((c) => c.method === 'settings.update');
     expect(updates.length).toBe(1);
     expect(updates[0]?.params).toEqual({ settings: { default_chat_view_mode: 'condensed' } });
+    dispose();
+  });
+
+  it('loads and optimistically persists document display mode', async () => {
+    const { fake, store, dispose } = setup();
+    fake.stubRpc('settings.get', {
+      ok: true,
+      settings: wire({ document_display_mode: 'markdown' }),
+    });
+    await store.getState().actions.settings.load();
+    expect(store.getState().settings.documentDisplayMode).toBe('markdown');
+
+    await store.getState().actions.settings.update({ document_display_mode: 'plain' });
+    expect(store.getState().settings.documentDisplayMode).toBe('plain');
+    const updates = fake.rpcCalls.filter((call) => call.method === 'settings.update');
+    expect(updates[0]?.params).toEqual({ settings: { document_display_mode: 'plain' } });
     dispose();
   });
 

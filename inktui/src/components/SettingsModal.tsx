@@ -68,7 +68,7 @@ import type {
   StartupRogueModelWire,
   StartupRogueWire,
 } from '../store/settings/settingsActions.js';
-import type { DefaultChatViewMode } from '../store/settings/settingsSlice.js';
+import type { DefaultChatViewMode, DocumentDisplayMode } from '../store/settings/settingsSlice.js';
 import type { AppStore } from '../store/store.js';
 import type { TemplateRecord } from '../store/templates/templatesSlice.js';
 import type { ThemeRecord } from '../store/themes/themesSlice.js';
@@ -202,6 +202,8 @@ interface SettingsState {
   /** The draft default chat view mode (TUIchat-3; committed via `update` on selection). Only
    * verbose/condensed are settable — tmux is reachable only via the per-pane cycle key. */
   defaultChatViewMode: DefaultChatViewMode;
+  /** Draft document source interpretation mode, committed immediately. */
+  documentDisplayMode: DocumentDisplayMode;
   /** The draft Startup Rogue (`null` = off). Drives the model/effort sub-rows + persisted on change. */
   startupRogue: StartupRogueWire | null;
   /** Startup Rogue model choices by harness. */
@@ -308,6 +310,7 @@ export function settingsMode(
     readonly vimMode?: boolean;
     readonly barWidgets?: BarWidgetsConfig;
     readonly defaultChatViewMode?: DefaultChatViewMode;
+    readonly documentDisplayMode?: DocumentDisplayMode;
     readonly startupRogue?: StartupRogueWire | null;
     readonly startupRogueModels?: Readonly<Record<string, readonly StartupRogueModelWire[]>>;
     readonly startupRogueEfforts?: Readonly<Record<string, readonly string[]>>;
@@ -370,6 +373,7 @@ export function settingsMode(
     vimMode: current.vimMode ?? false,
     barWidgets: { ...(current.barWidgets ?? {}) },
     defaultChatViewMode: current.defaultChatViewMode ?? 'verbose',
+    documentDisplayMode: current.documentDisplayMode ?? 'plain',
     startupRogue: initialStartupRogue,
     startupRogueModels: initialStartupRogueModels,
     startupRogueEfforts: initialStartupRogueEfforts,
@@ -631,6 +635,13 @@ export function settingsMode(
   function selectChatView(value: DefaultChatViewMode): void {
     s.defaultChatViewMode = value;
     void actions.update({ default_chat_view_mode: value });
+    s.notice = null;
+    refresh();
+  }
+
+  function selectDocumentDisplay(value: DocumentDisplayMode): void {
+    s.documentDisplayMode = value;
+    void actions.update({ document_display_mode: value });
     s.notice = null;
     refresh();
   }
@@ -1351,6 +1362,9 @@ export function settingsMode(
         break;
       case 'chatView':
         selectChatView(row.value);
+        break;
+      case 'documentDisplay':
+        selectDocumentDisplay(row.value);
         break;
       case 'startupRogue':
         if (row.field === 'off') {
@@ -2293,6 +2307,21 @@ function RowView({
           {cursor}
           {mark}
           {row.value}
+        </Text>
+      </Box>
+    );
+  }
+
+  if (row.kind === 'documentDisplay') {
+    const selected = row.value === s.documentDisplayMode;
+    const mark = selected ? '(•) ' : '( ) ';
+    const color = focused ? theme.warning : theme.text;
+    return (
+      <Box flexShrink={0}>
+        <Text color={color} bold={focused}>
+          {cursor}
+          {mark}
+          {row.value === 'plain' ? 'Plain text' : 'Markdown'}
         </Text>
       </Box>
     );

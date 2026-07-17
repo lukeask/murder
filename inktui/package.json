@@ -25,12 +25,17 @@
   "dependencies": {
     "ink": "^7.0.5",
     "react": "^19.2.0",
+    "remark-gfm": "^4.0.1",
+    "remark-parse": "^11.0.0",
+    "string-width": "^8.2.2",
+    "unified": "^11.0.5",
     "use-sync-external-store": "^1.6.0",
     "wrap-ansi": "^10.0.0",
     "zustand": "^5.0.14"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.4.16",
+    "@types/mdast": "^4.0.4",
     "@types/node": "^24.0.0",
     "@types/react": "^19.2.0",
     "esbuild": "^0.28.0",

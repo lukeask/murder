@@ -2,8 +2,13 @@ import { describe, expect, it } from 'vitest';
 import { SCROLL_THUMB } from '../../../src/components/glyphs.js';
 import {
   DocumentSurface,
-  documentPhysicalRows,
+  documentContentInnerWidth,
 } from '../../../src/components/panes/DocumentSurface.js';
+import {
+  documentRowText,
+  layoutDocument,
+  layoutPlainText,
+} from '../../../src/render/documentLayout.js';
 import { renderInkFixture, stripAnsiSgr } from '../../fixtures/pane_rendering/renderInkFixture.js';
 import type { PaneFixture } from '../../fixtures/pane_rendering/types.js';
 
@@ -20,7 +25,7 @@ const fixture: PaneFixture<readonly string[]> = {
       height={height}
       focused={focused}
       title=".murder/plans/scroll.md"
-      lines={data}
+      rows={layoutPlainText(data.join('\n'), documentContentInnerWidth(width)).rows}
       scroll={3}
     />
   ),
@@ -58,12 +63,12 @@ describe('DocumentSurface', () => {
           height={height}
           focused={focused}
           title=".murder/plans/wrap.md"
-          lines={data}
+          rows={layoutPlainText(data.join('\n'), documentContentInnerWidth(width)).rows}
           scroll={0}
         />
       ),
     };
-    const physical = documentPhysicalRows([longUrl, 'second'], 36, 6);
+    const physical = layoutPlainText(longUrl, documentContentInnerWidth(36)).rows;
     expect(physical.length).toBeGreaterThan(2);
 
     const rendered = await renderInkFixture({
@@ -81,14 +86,18 @@ describe('DocumentSurface', () => {
   it('wraps (does not truncate) in compact and minimal layouts', () => {
     const long = 'abcdefghijklmnopqrstuvwxyz';
     // compact: innerW < 16 → width 14 (inner 12), height enough for compact not micro
-    const compactRows = documentPhysicalRows([long], 14, 6);
+    const compactRows = layoutPlainText(long, documentContentInnerWidth(14)).rows.map(
+      documentRowText,
+    );
     expect(compactRows.length).toBeGreaterThan(1);
     expect(compactRows.every((row) => row.length <= 12)).toBe(true);
     expect(compactRows.join('')).toBe(long);
 
     // minimal: innerH < 2 → height 3; keep width above micro threshold but force wrap
     const minimalLong = 'x'.repeat(80);
-    const minimalRows = documentPhysicalRows([minimalLong], 36, 3);
+    const minimalRows = layoutPlainText(minimalLong, documentContentInnerWidth(36)).rows.map(
+      documentRowText,
+    );
     expect(minimalRows.length).toBeGreaterThan(1);
     expect(minimalRows.join('')).toBe(minimalLong);
   });
@@ -105,7 +114,7 @@ describe('DocumentSurface', () => {
           height={height}
           focused={focused}
           title=".murder/plans/ctrl.md"
-          lines={data}
+          rows={layoutPlainText(data.join('\n'), documentContentInnerWidth(width)).rows}
           scroll={0}
         />
       ),
@@ -122,5 +131,38 @@ describe('DocumentSurface', () => {
     expect(frame).toContain('leak');
     expect(frame).not.toContain('\u001B');
     expect(frame).not.toContain('\r');
+  });
+
+  it.each([
+    ['notes.txt', 'markdown', '**rendered**', 'rendered', '**rendered**'],
+    ['notes.md', 'plain', '**literal**', '**literal**', 'never-present'],
+    ['README', 'markdown', '_extensionless_', 'extensionless', '_extensionless_'],
+  ] as const)('renders %s using explicit %s mode only', async (title, displayMode, source, visible, absent) => {
+    const explicitModeFixture: PaneFixture<string> = {
+      id: `document-explicit-mode-${title}`,
+      description: 'Document display mode is independent of its title.',
+      sizes: [{ id: 'preferred', width: 36, height: 6 }],
+      data: { source },
+      render: ({ data, width, height, focused }) => (
+        <DocumentSurface
+          width={width}
+          height={height}
+          focused={focused}
+          title={title}
+          rows={layoutDocument(data, displayMode, documentContentInnerWidth(width)).rows}
+          scroll={0}
+        />
+      ),
+    };
+    const rendered = await renderInkFixture({
+      fixture: explicitModeFixture,
+      dataId: 'source',
+      width: 36,
+      height: 6,
+      focused: true,
+    });
+    const frame = stripAnsiSgr(rendered.ansi);
+    expect(frame).toContain(visible);
+    expect(frame).not.toContain(absent);
   });
 });

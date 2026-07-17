@@ -50,8 +50,27 @@ const defaultChatViewItem: SettingsItem = {
   ],
 };
 
+const documentDisplayItem: SettingsItem = {
+  id: 'appearance.documentDisplay',
+  label: 'Document Display',
+  rows: () => [
+    headerRow(documentDisplayItem),
+    {
+      id: 'appearance.documentDisplay:plain',
+      kind: 'documentDisplay',
+      value: 'plain',
+    },
+    {
+      id: 'appearance.documentDisplay:markdown',
+      kind: 'documentDisplay',
+      value: 'markdown',
+    },
+  ],
+};
+
 export const APPEARANCE_ITEMS: readonly SettingsItem[] = [
   themeItem,
   paneGapItem,
   defaultChatViewItem,
+  documentDisplayItem,
 ];

@@ -5,12 +5,18 @@ import { usePanelKeymap, usePaneScrollBus } from '../../hooks/useInputStores.js'
 import { stageDocFocusId } from '../../input/focusIds.js';
 import type { PanelKeymap } from '../../input/keymap.js';
 import type { PanePresentation } from '../../layout/paneLayoutTypes.js';
+import {
+  type DocumentStyles,
+  layoutDocument,
+  rowForSourceLine,
+} from '../../render/documentLayout.js';
 import { DOC_DIR } from '../../store/docView/docViewSlice.js';
 import type { AppStore } from '../../store/store.js';
+import { useTheme } from '../../theme/themeStore.js';
 import {
   DocumentSurface,
   documentContentInnerHeight,
-  documentPhysicalRows,
+  documentContentInnerWidth,
 } from './DocumentSurface.js';
 import { AllocatedPaneFrame } from './shared/AllocatedPaneFrame.js';
 import { computeDocumentWindow } from './shared/scrollWindow.js';
@@ -37,26 +43,48 @@ export const DocumentController = memo(function DocumentController({
   const body = useAppStore((state) => state.docView.body);
   const status = useAppStore((state) => state.docView.status);
   const error = useAppStore((state) => state.docView.error);
+  const displayMode = useAppStore((state) => state.settings.documentDisplayMode);
   const closeAction = useAppStore((state) => state.actions.docView.close);
   const spawnPlanner = useAppStore((state) => state.actions.plans.spawnPlanner);
   const focusId = stageDocFocusId(open.name);
+  const theme = useTheme();
 
   const [scroll, setScroll] = usePaneScrollState(focusId);
-  const lines = useMemo(() => (body === null ? [] : body.split('\n')), [body]);
-  const physicalRows = useMemo(
-    () => documentPhysicalRows(lines, presentation.width, presentation.height),
-    [lines, presentation.height, presentation.width],
+  const styles: DocumentStyles = useMemo(
+    () => ({
+      text: { fg: theme.text },
+      heading: { fg: theme.heading, bold: true },
+      emphasis: { italic: true },
+      strong: { bold: true },
+      delete: { strikethrough: true },
+      code: { fg: theme.warning, bg: theme.panelHeaderBg },
+      quote: { fg: theme.muted, italic: true },
+      link: { fg: theme.accent, underline: true },
+      marker: { fg: theme.accent, bold: true },
+      muted: { fg: theme.muted, dim: true },
+    }),
+    [theme],
+  );
+  const documentLayout = useMemo(
+    () =>
+      layoutDocument(
+        body ?? '',
+        displayMode,
+        documentContentInnerWidth(presentation.width),
+        styles,
+      ),
+    [body, displayMode, presentation.width, styles],
   );
   const effectiveHeight = Math.max(1, documentContentInnerHeight(presentation.height));
   const { start: clampedScroll, maxScroll } = computeDocumentWindow(
-    physicalRows.length,
+    documentLayout.rows.length,
     scroll,
     effectiveHeight,
   );
 
   const jump = useCallback(
-    (line: number) => setScroll(Math.min(line - 1, maxScroll)),
-    [maxScroll, setScroll],
+    (line: number) => setScroll(Math.min(rowForSourceLine(documentLayout, line), maxScroll)),
+    [documentLayout, maxScroll, setScroll],
   );
   const goto = useGotoLine(jump);
 
@@ -130,6 +158,14 @@ export const DocumentController = memo(function DocumentController({
     [focusId, paneScroll, setScroll],
   );
 
+  // Persisted pane scroll survives re-layout, but it must not remain beyond the new rendered tail
+  // after a resize or display-mode switch.
+  useEffect(() => {
+    if (scroll !== clampedScroll) {
+      setScroll(clampedScroll);
+    }
+  }, [clampedScroll, scroll, setScroll]);
+
   return (
     <AllocatedPaneFrame id={focusId} presentation={presentation}>
       <DocumentSurface
@@ -137,7 +173,7 @@ export const DocumentController = memo(function DocumentController({
         height={presentation.height}
         focused={presentation.focused}
         title={`.murder/${DOC_DIR[open.kind]}/${open.name}.md`}
-        lines={lines}
+        rows={documentLayout.rows}
         scroll={clampedScroll}
         gotoPending={goto.pending}
         status={status === 'idle' ? 'ready' : status}

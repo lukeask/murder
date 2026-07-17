@@ -65,6 +65,7 @@ def test_settings_get_returns_defaults_when_no_config(repo_root: Path, xdg: Path
     assert s["workspace_count"] == 1
     assert s["vim_mode"] is False
     assert s["bar_widgets"] == {}
+    assert s["document_display_mode"] == "plain"
     # No user override -> None; effective comes from the live daemon config (codex).
     assert s["collaborator_harness"] is None
     assert s["planner_harness"] is None
@@ -120,6 +121,18 @@ def test_settings_update_persists_pane_gap(repo_root: Path, xdg: Path) -> None:
     assert reply["settings"]["pane_gap"] == 3
     again = _call(host, "settings.get", {})
     assert again["settings"]["pane_gap"] == 3
+
+
+def test_settings_update_persists_document_display_mode(repo_root: Path, xdg: Path) -> None:
+    host = _host(repo_root)
+    reply = _call(host, "settings.update", {"settings": {"document_display_mode": "markdown"}})
+    assert reply["settings"]["document_display_mode"] == "markdown"
+    again = _call(host, "settings.get", {})
+    assert again["settings"]["document_display_mode"] == "markdown"
+    assert load_user_config().tui.document_display_mode == "markdown"
+
+    with pytest.raises(ValidationError):
+        _call(host, "settings.update", {"settings": {"document_display_mode": "automatic"}})
 
 
 def test_settings_update_persists_workspace_count(repo_root: Path, xdg: Path) -> None:
