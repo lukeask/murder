@@ -25,6 +25,9 @@ class InputProvenance(Enum):
     USER_TYPED = auto()
 
 
+PASTE_VERIFICATION_TAIL_LENGTH = 64
+
+
 @dataclass(frozen=True, slots=True)
 class InputChunk:
     text: str

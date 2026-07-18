@@ -7,14 +7,17 @@ the selected semantic action separately.
 
 from __future__ import annotations
 
+import re
 from dataclasses import replace
 from datetime import datetime
 from uuid import uuid4
 
 from murder.llm.harness_control.model.actions import (
+    PASTE_VERIFICATION_TAIL_LENGTH,
     ClearComposer,
     CommitPromptSubmission,
     DuplicatePolicy,
+    InputProvenance,
     InsertPromptPayload,
 )
 from murder.llm.harness_control.model.observations import (
@@ -38,6 +41,24 @@ def _predicate(
     return PredicateResult(value, name, (), snapshot.revision, reason)
 
 
+def _visual_rows_match_payload(observed: str, expected: str) -> bool:
+    """Match composer rows without inventing whether their boundaries are whitespace."""
+
+    positions = {0}
+    for index, row in enumerate(observed.splitlines()):
+        content = re.sub(r"\s+", " ", row).strip()
+        separators = ("",) if index == 0 else ("", " ")
+        positions = {
+            position + len(separator) + len(content)
+            for position in positions
+            for separator in separators
+            if expected.startswith(separator + content, position)
+        }
+        if not positions:
+            return False
+    return len(expected) in positions
+
+
 def composer_contains_payload(
     op: SubmitPromptOperation, snapshot: ObservationSnapshot
 ) -> PredicateResult:
@@ -57,11 +78,41 @@ def composer_contains_payload(
             TruthValue.UNKNOWN,
             "composer fingerprint is unavailable",
         )
+    collapsed = re.fullmatch(
+        r"\[Pasted Content (?P<count>\d+) chars\]\s*(?P<tail>.+)",
+        composer.value.normalized_text or "",
+    )
+    if (
+        collapsed is not None
+        and len(op.request.payload.chunks) == 1
+        and op.request.payload.chunks[0].provenance is not InputProvenance.USER_TYPED
+    ):
+        expected = op.request.payload.normalized_text
+        tail = collapsed.group("tail")
+        prefix_length = len(expected) - len(tail)
+        verified = (
+            len(tail) == PASTE_VERIFICATION_TAIL_LENGTH
+            and expected.endswith(tail)
+            and int(collapsed.group("count")) == prefix_length + 1
+        )
+        return _predicate(
+            snapshot,
+            "composer_contains_payload",
+            TruthValue.TRUE if verified else TruthValue.FALSE,
+            "collapsed paste count and payload-derived visible tail compared with intended payload",
+        )
+    verified = fingerprint == op.payload_fingerprint
+    composer_text = composer.value.text
+    if not verified and composer_text is not None and "\n" in composer_text:
+        verified = _visual_rows_match_payload(
+            composer_text,
+            op.request.payload.normalized_text,
+        )
     return _predicate(
         snapshot,
         "composer_contains_payload",
-        TruthValue.TRUE if fingerprint == op.payload_fingerprint else TruthValue.FALSE,
-        "composer fingerprint compared with intended payload",
+        TruthValue.TRUE if verified else TruthValue.FALSE,
+        "composer visual rows compared with intended payload",
     )
 
 

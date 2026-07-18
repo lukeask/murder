@@ -14,6 +14,10 @@ from murder.llm.harness_control.model.actions import (
     ConfigureResumePicker,
     DismissOverlay,
     DuplicatePolicy,
+    InputChunk,
+    InputProvenance,
+    InsertPromptPayload,
+    PasteBuffer,
     QuestionAnswerMode,
     QuestionChoiceSelection,
     SelectModel,
@@ -41,10 +45,92 @@ def _frame(name: str) -> TerminalFrame:
         220,
         50,
         (ROOT / "tests" / "fixtures" / "harness_panes" / name).read_text(),
-        False,
+        name.endswith(".ansi"),
         0,
         1,
     )
+
+
+def test_codex_01445_reasoning_highlight_requires_confirmation() -> None:
+    adapter = CodexHarnessAdapter()
+    frame = _frame("codex_01445_luna_reasoning_highlighted.ansi")
+    evidence = adapter.parse_evidence(frame, ())[0]
+    delta = adapter.project_observations(
+        (evidence,), unknown_snapshot(HarnessId("codex"), captured_at=frame.captured_at)
+    )
+
+    configuration = evidence.payload["model"]["configuration"]
+    assert configuration["configured_model_id"] == "gpt-5.6-luna"
+    assert dict(configuration["parameters"])["highlighted_effort"] == "medium"
+    assert "effort" not in dict(configuration["parameters"])
+    snapshot = replace(
+        unknown_snapshot(HarnessId("codex"), captured_at=frame.captured_at),
+        **delta.updates,
+    )
+    effects = adapter.lower(
+        SelectModel(
+            "select-luna-medium",
+            "model-operation",
+            DuplicatePolicy.AMBIGUOUS_AFTER_EMISSION,
+            "gpt-5.6-luna",
+            effort="medium",
+        ),
+        snapshot,
+    )
+    assert effects == (
+        SendNamedKey("select-luna-medium:confirm-configuration", "Enter"),
+    )
+
+
+def test_codex_01445_ansi_placeholder_and_collapsed_paste_are_distinct() -> None:
+    adapter = CodexHarnessAdapter()
+    placeholder_frame = _frame("codex_01445_dynamic_placeholder.ansi")
+    placeholder_frame = replace(
+        placeholder_frame,
+        raw_text=placeholder_frame.raw_text.replace(
+            "Find and fix a bug in @filename", "Review recent changes for regressions"
+        ),
+    )
+    placeholder = adapter.parse_evidence(placeholder_frame, ())[0].payload["composer"]
+    collapsed = adapter.parse_evidence(
+        _frame("codex_01445_collapsed_paste.ansi"), ()
+    )[0].payload["composer"]
+
+    assert placeholder["placeholder"] == "Review recent changes for regressions"
+    assert placeholder["text"] == ""
+    assert collapsed["placeholder"] is None
+    assert collapsed["text"] == "[Pasted Content 1244 chars]"
+
+
+def test_codex_long_paste_leaves_original_payload_tail_visible() -> None:
+    adapter = CodexHarnessAdapter()
+    text = "pasted body " * 100 + "payload-specific verification tail remains visible here."
+    action = InsertPromptPayload(
+        "insert-paste",
+        "submit-operation",
+        DuplicatePolicy.SAFE_BEFORE_COMMIT,
+        (InputChunk(text, InputProvenance.USER_PASTE_BLOCK, "chunk"),),
+        "fingerprint",
+    )
+
+    effects = adapter.lower(
+        action,
+        unknown_snapshot(HarnessId("codex"), captured_at=datetime.now(timezone.utc)),
+    )
+
+    tail = text[-64:]
+    assert effects == (
+        PasteBuffer("insert-paste:paste:0", text[:-64]),
+        SendNamedKey("insert-paste:tab:0", "Tab"),
+        SleepEffect("insert-paste:paste-settle:0", timedelta(milliseconds=150)),
+        SendLiteralKeys(
+            "insert-paste:paste-tail:0",
+            tail,
+            FAST_HUMANIZED_TYPING,
+        ),
+    )
+    assert effects[0].text + effects[-1].text == text
+    assert len(tail) == 64  # noqa: PLR2004 - verification contract
 
 
 def test_codex_evidence_retains_broad_status_and_unpromoted_menu_details(  # noqa: PLR0915
@@ -54,7 +140,7 @@ def test_codex_evidence_retains_broad_status_and_unpromoted_menu_details(  # noq
     status_frame = _frame("codex_status_scrollback.txt")
     status = adapter.parse_evidence(status_frame, (evidence,))[0]
 
-    assert evidence.parser_version == "codex-evidence-v5"
+    assert evidence.parser_version == "codex-evidence-v6"
     assert evidence.evidence_type == "codex.frame.v4"
     assert evidence.payload["raw_frame"]["text"].startswith("# source:")
     assert evidence.payload["modal"]["model_choices"]
@@ -435,6 +521,18 @@ def test_codex_model_picker_keeps_configuration_distinct_from_active_readback() 
     )
 
 
+def test_codex_01445_current_model_picker_remains_a_blocking_surface() -> None:
+    adapter = CodexHarnessAdapter()
+    evidence = adapter.parse_evidence(_frame("codex_01445_model_picker_current.txt"), ())
+    updates = adapter.project_observations(evidence, prior=None).updates
+
+    assert updates["active_model"].value is not None
+    assert updates["active_model"].value.model_id == "gpt-5.6-sol"
+    assert updates["surface"].value is not None
+    assert updates["surface"].value.primary is SurfaceKind.MODEL_PICKER
+    assert updates["surface"].value.blocks_composer_input is True
+
+
 def test_codex_model_lowering_uses_current_numeric_picker_identity() -> None:
     adapter, frame = CodexHarnessAdapter(), _frame("codex_model_list.txt")
     initial = unknown_snapshot(HarnessId("codex"), captured_at=frame.captured_at)
@@ -494,6 +592,7 @@ def test_codex_model_lowering_requires_each_fresh_parameter_stage() -> None:
 
 
 CODEX_PANE_FIXTURES = {
+    "codex_01445_model_picker_current.txt",
     "codex_startup.txt",
     "codex_idle.txt",
     "codex_idle_after_prose_narration.txt",
@@ -585,7 +684,7 @@ def test_codex_reasoning_picker_contract(fixture: str, effort: str, option: str)
 
     assert evidence.payload["model"]["configuration"]["stage"] == "effort"
     assert configuration.configured_model_id == "gpt-5.5"
-    assert dict(configuration.parameters)["effort"] == effort
+    assert dict(configuration.parameters)["highlighted_effort"] == effort
     assert dict(configuration.parameters)[f"effort_option.{effort}"] == option
     assert delta.updates["surface"].value.primary is SurfaceKind.MODEL_PICKER
 

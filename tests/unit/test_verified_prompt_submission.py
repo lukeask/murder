@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import hashlib
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
+from murder.llm.harness_control.adapters.codex import CodexHarnessAdapter
 from murder.llm.harness_control.capabilities.submit_prompt import (
     advance_submit_prompt,
     reconcile_submit_prompt,
@@ -10,6 +13,7 @@ from murder.llm.harness_control.capabilities.submit_prompt import (
 from murder.llm.harness_control.model import (
     ComposerActionability,
     ComposerState,
+    ControllerDecision,
     ControllerDecisionKind,
     HarnessId,
     InputChunk,
@@ -27,6 +31,16 @@ from murder.llm.harness_control.model import (
     TranscriptTailState,
     TurnRef,
     unknown_snapshot,
+)
+from murder.llm.harness_control.model.evidence import FrameId, TerminalFrame
+
+ROOT = Path(__file__).parents[2]
+HARD_WRAPPED_PROMPT = (
+    "review the existing tinyboard project as the final maintainer. inspect domain behavior, "
+    "json storage durability, cli error handling, packaging, documentation, and tests. run the "
+    "full suite and a realistic cli smoke test. correct any concrete bug or inconsistency you "
+    "find with small focused changes and add regression tests; otherwise leave the implementation "
+    "alone. finish with a concise account of what you verified."
 )
 
 
@@ -138,6 +152,192 @@ def test_empty_composer_uses_text_not_empty_hash_sentinel() -> None:
     )
     assert decision.kind is ControllerDecisionKind.OBSERVE_MORE
     assert decision.next_phase is SubmitPhase.INSERTING_PAYLOAD
+
+
+def test_fresh_collapsed_paste_requires_payload_derived_visible_tail() -> None:
+    text = "same-length body " * 20 + "the authentic payload has this unique visible ending"
+    tail = text[-64:]
+    prefix_count = len(text) - len(tail) + 1
+    operation = _operation(SubmitPhase.VERIFYING_PAYLOAD)
+    operation = replace(
+        operation,
+        request=replace(
+            operation.request,
+            payload=PromptPayload(
+                (
+                    InputChunk(
+                        text,
+                        InputProvenance.USER_PASTE_BLOCK,
+                        f"chunk:{operation.payload_fingerprint}",
+                    ),
+                ),
+                text,
+                operation.payload_fingerprint,
+            ),
+        ),
+        insertion_revision=ObservationRevision(0, 1, 1),
+    )
+    snapshot = replace(
+        _ready_snapshot(),
+        revision=ObservationRevision(0, 2, 2),
+    )
+
+    def with_summary(summary_tail: str):
+        summary = f"[Pasted Content {prefix_count} chars] {summary_tail}"
+        composer = replace(
+            snapshot.composer.value,
+            text=summary,
+            normalized_text=summary,
+            content_fingerprint="collapsed-summary",
+        )
+        return replace(
+            snapshot,
+            composer=Observed.present(
+                composer,
+                evidence=(),
+                observed_at=snapshot.captured_at,
+                revision=snapshot.revision,
+            ),
+        )
+
+    unrelated = reconcile_submit_prompt(
+        operation,
+        with_summary("x" * len(tail)),
+        datetime.now(timezone.utc),
+    )
+    stale = reconcile_submit_prompt(
+        operation,
+        replace(with_summary(tail), revision=operation.insertion_revision),
+        datetime.now(timezone.utc),
+    )
+    verified = reconcile_submit_prompt(
+        operation,
+        with_summary(tail),
+        datetime.now(timezone.utc),
+    )
+
+    assert unrelated.kind is ControllerDecisionKind.OBSERVE_MORE
+    assert unrelated.next_phase is SubmitPhase.VERIFYING_PAYLOAD
+    assert unrelated.action is None
+    assert stale.next_phase is SubmitPhase.VERIFYING_PAYLOAD
+    assert stale.action is None
+    assert verified.kind is ControllerDecisionKind.OBSERVE_MORE
+    assert verified.next_phase is SubmitPhase.READY_TO_COMMIT
+
+
+def test_recorded_codex_hard_wrap_verifies_the_exact_intended_payload() -> None:
+    recorded_frame = (
+        ROOT
+        / "tests"
+        / "fixtures"
+        / "harness_panes"
+        / "codex_01445_hard_wrapped_paste_tail.ansi"
+    ).read_text() + "\n"
+    assert hashlib.sha256(recorded_frame.encode()).hexdigest() == (
+        "720a6931fc8f14cfc923b7429b3a5bc8eed04a7f43acc17535ad4c5a6e66d75d"
+    )
+    frame = TerminalFrame(
+        FrameId("819a0b4b-2b81-4e5b-9863-9263330d36f6"),
+        HarnessId("codex"),
+        datetime(2026, 7, 18, 7, 2, tzinfo=timezone.utc),
+        220,
+        50,
+        recorded_frame,
+        True,
+        0,
+        45,
+    )
+    adapter = CodexHarnessAdapter()
+    evidence = adapter.parse_evidence(frame, ())
+    prior = unknown_snapshot(
+        HarnessId("codex"),
+        captured_at=frame.captured_at,
+        revision=ObservationRevision(0, 38, 4),
+    )
+    updates = adapter.project_observations(evidence, prior).updates
+    snapshot = replace(
+        prior,
+        revision=updates["composer"].revision,
+        **updates,
+    )  # type: ignore[arg-type]
+    fingerprint = hashlib.sha256(HARD_WRAPPED_PROMPT.encode()).hexdigest()
+    operation = _operation(SubmitPhase.VERIFYING_PAYLOAD)
+    operation = replace(
+        operation,
+        request=replace(
+            operation.request,
+            payload=PromptPayload(
+                (
+                    InputChunk(
+                        HARD_WRAPPED_PROMPT,
+                        InputProvenance.USER_PASTE_BLOCK,
+                        f"chunk:{fingerprint}",
+                    ),
+                ),
+                HARD_WRAPPED_PROMPT,
+                fingerprint,
+            ),
+        ),
+        payload_fingerprint=fingerprint,
+        insertion_revision=prior.revision,
+    )
+
+    assert snapshot.composer.value is not None
+    assert snapshot.composer.value.text is not None
+    assert snapshot.composer.value.normalized_text is not None
+    assert "implement\nation" in snapshot.composer.value.text
+    assert "implement ation" in snapshot.composer.value.normalized_text
+
+    decision = reconcile_submit_prompt(operation, snapshot, frame.captured_at)
+
+    assert decision.kind is ControllerDecisionKind.OBSERVE_MORE
+    assert decision.next_phase is SubmitPhase.READY_TO_COMMIT
+    assert decision.predicates[1].value.name == "TRUE"
+
+
+def test_visual_row_matching_preserves_real_whitespace_and_rejects_near_matches() -> None:
+    snapshot = replace(_ready_snapshot(), revision=ObservationRevision(0, 2, 2))
+
+    def decision_for(expected: str) -> ControllerDecision:
+        fingerprint = hashlib.sha256(expected.encode()).hexdigest()
+        composer = replace(
+            snapshot.composer.value,
+            text="implement\nation",
+            normalized_text="implement ation",
+            content_fingerprint=hashlib.sha256(b"implement ation").hexdigest(),
+        )
+        observed = replace(
+            snapshot,
+            composer=Observed.present(
+                composer,
+                evidence=(),
+                observed_at=snapshot.captured_at,
+                revision=snapshot.revision,
+            ),
+        )
+        operation = _operation(SubmitPhase.VERIFYING_PAYLOAD)
+        operation = replace(
+            operation,
+            request=replace(
+                operation.request,
+                payload=PromptPayload(
+                    (InputChunk(expected, InputProvenance.USER_TYPED, "chunk"),),
+                    expected,
+                    fingerprint,
+                ),
+            ),
+            payload_fingerprint=fingerprint,
+            insertion_revision=ObservationRevision(0, 1, 1),
+        )
+        return reconcile_submit_prompt(operation, observed, datetime.now(timezone.utc))
+
+    real_space = decision_for("implement ation")
+    hard_wrap = decision_for("implementation")
+    adversarial = decision_for("implement station")
+
+    assert real_space.next_phase is SubmitPhase.READY_TO_COMMIT
+    assert hard_wrap.next_phase is SubmitPhase.READY_TO_COMMIT
+    assert adversarial.next_phase is SubmitPhase.VERIFYING_PAYLOAD
 
 
 def test_completion_waits_for_a_completed_assistant_turn_after_submission_acknowledgment() -> None:

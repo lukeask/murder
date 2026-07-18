@@ -7,6 +7,7 @@ instead of an alternate-screen buffer.
 
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 from typing import ClassVar
@@ -25,6 +26,7 @@ from murder.llm.harnesses.parsing import (
 _TAIL_LINES = 30
 
 _BANNER_RE = re.compile(r"OpenAI Codex", re.IGNORECASE)
+_MODEL_LOADING_RE = re.compile(r"\bmodel:\s*loading\b", re.IGNORECASE)
 # The Codex input box renders as a "› …" line; the placeholder text after it
 # rotates ("Explain this codebase", "Find and fix a bug in @filename", …), so
 # match any "› " line (busy state is screened separately, before this check).
@@ -50,6 +52,9 @@ _COMPLETION_RE = re.compile(r"^\s*─\s*Worked\s+for\s+.+?\s*─\s*$", re.MULTIL
 # it. (A genuine spinner line always carries it; assistant prose never does.)
 _BUSY_RE = re.compile(r"esc to interrupt", re.IGNORECASE)
 _LOGIN_RE = re.compile(r"\b(login required|not logged in|codex login)\b", re.IGNORECASE)
+_TRUST_PROMPT_RE = re.compile(
+    r"Do you trust the contents of this directory\?", re.IGNORECASE
+)
 _INVALID_RESUME_RE = re.compile(r"No saved session found with ID", re.IGNORECASE)
 # codex's blocking "update available" menu (full-screen on launch). Its default
 # option renders as "› 1. Update now (runs `npm install -g @openai/codex`)",
@@ -77,6 +82,13 @@ def _tail(pane_text: str) -> str:
     while lines and not lines[-1].strip():
         lines.pop()
     return "\n".join(lines[-_TAIL_LINES:])
+
+
+def _model_is_loading(pane_text: str) -> bool:
+    """Check the newest banner readback, ignoring older inline scrollback."""
+
+    start = pane_text.casefold().rfind("model:")
+    return start >= 0 and _MODEL_LOADING_RE.search(pane_text, start) is not None
 
 
 def _update_menu_active(clean: str) -> bool:
@@ -143,9 +155,10 @@ class CodexAdapter(HarnessAdapter):
     ]
 
     def startup_cmd(self, cwd: Path) -> list[str]:
-        del cwd
         base_flags = [
             "--no-alt-screen",
+            "--config",
+            f"projects.{json.dumps(str(cwd))}.trust_level=\"untrusted\"",
             "--sandbox",
             "workspace-write",
             "--ask-for-approval",
@@ -161,7 +174,11 @@ class CodexAdapter(HarnessAdapter):
     def is_ready(self, pane_text: str) -> bool:
         clean = strip_ansi(pane_text)
         tail = _tail(clean)
-        if _LOGIN_RE.search(tail):
+        if _LOGIN_RE.search(tail) or _TRUST_PROMPT_RE.search(tail):
+            return False
+        # Codex paints the banner and composer before its model is bound.
+        # Input sent during this short window is silently discarded.
+        if _model_is_loading(clean):
             return False
         # A startup update menu is a blocking surface.  Verified restoration
         # owns any dismissal; this passive adapter only recognizes it.
@@ -172,14 +189,24 @@ class CodexAdapter(HarnessAdapter):
     def is_idle(self, pane_text: str) -> bool:
         clean = strip_ansi(pane_text)
         tail = _tail(clean)
-        if _LOGIN_RE.search(tail) or _update_menu_active(clean) or self.is_busy(tail):
+        if (
+            _LOGIN_RE.search(tail)
+            or _TRUST_PROMPT_RE.search(tail)
+            or _update_menu_active(clean)
+            or self.is_busy(tail)
+        ):
             return False
         return bool(_IDLE_PROMPT_RE.search(tail))
 
     def is_input_ready(self, pane_text: str) -> bool | None:
         clean = strip_ansi(pane_text)
         tail = _tail(clean)
-        if _LOGIN_RE.search(tail) or _update_menu_active(clean) or self.is_busy(tail):
+        if (
+            _LOGIN_RE.search(tail)
+            or _TRUST_PROMPT_RE.search(tail)
+            or _update_menu_active(clean)
+            or self.is_busy(tail)
+        ):
             return False
         return _live_prompt_text(clean) is not None
 

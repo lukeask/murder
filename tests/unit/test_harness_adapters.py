@@ -185,6 +185,14 @@ class TestCodexAdapter:
         # Banner "OpenAI Codex" present immediately
         assert self.cx.is_ready(CODEX_STARTUP) is True
 
+    def test_startup_pane_is_not_ready_while_model_is_loading(self):
+        loading = CODEX_IDLE.replace("model:     gpt-5", "model:     loading")
+        assert self.cx.is_ready(loading) is False
+
+    def test_old_loading_banner_does_not_hide_new_ready_banner(self):
+        loading = CODEX_IDLE.replace("model:     gpt-5", "model:     loading")
+        assert self.cx.is_ready(f"{loading}\n{CODEX_IDLE}") is True
+
     def test_startup_pane_not_idle_while_mcp_servers_start(self):
         # "esc to interrupt" means Codex is still doing startup work even though
         # the prompt chrome is already visible.
@@ -193,6 +201,29 @@ class TestCodexAdapter:
     def test_startup_cmd_does_not_select_runtime_model(self):
         cmd = CodexAdapter(startup_model="gpt-5.4-mini").startup_cmd(Path("/tmp/repo"))
         assert "--model" not in cmd
+
+    def test_startup_cmd_suppresses_trust_prompt_without_trusting_project(self):
+        cmd = CodexAdapter().startup_cmd(Path('/tmp/repo "quoted"'))
+
+        assert cmd[cmd.index("--config") + 1] == (
+            'projects."/tmp/repo \\"quoted\\"".trust_level="untrusted"'
+        )
+
+    def test_fresh_directory_trust_prompt_is_not_ready_or_idle(self):
+        pane = (
+            PaneSimulator()
+            .add(
+                "You are in /tmp/new-repo",
+                "Do you trust the contents of this directory? Working with untrusted",
+                "contents comes with higher risk of prompt injection.",
+                "› 1. Yes, continue",
+                "  2. No, quit",
+            )
+            .render()
+        )
+
+        assert self.cx.is_ready(pane) is False
+        assert self.cx.is_idle(pane) is False
 
     def test_startup_cmd_adds_extra_workspace_dirs(self):
         adapter = CodexAdapter()

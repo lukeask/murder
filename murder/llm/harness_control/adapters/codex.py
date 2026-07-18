@@ -13,6 +13,7 @@ from typing import Any
 from murder.llm.harness_control.adapters.base import HarnessActionAdapter, HarnessObservationAdapter
 from murder.llm.harness_control.model.actions import (
     FAST_HUMANIZED_TYPING,
+    PASTE_VERIFICATION_TAIL_LENGTH,
     AnswerPermission,
     AnswerQuestion,
     ClearComposer,
@@ -135,21 +136,24 @@ _UPDATE_TITLE = re.compile(
     r"Update available!\s*(?P<current>[\w.-]+)\s*->\s*(?P<available>[\w.-]+)", re.I
 )
 _INVALID_RESUME = re.compile(r"(?:ERROR:\s*)?No saved session found|EXIT_CODE:\s*[1-9]", re.I)
+_SGR_DIM = 2
+_SGR_NORMAL_INTENSITY = 22
 
 
 class CodexHarnessAdapter(HarnessObservationAdapter, HarnessActionAdapter):
-    parser_version = "codex-evidence-v5"
+    parser_version = "codex-evidence-v6"
 
     def parse_evidence(
         self, frame: TerminalFrame, history: Sequence[EvidenceEnvelope]
     ) -> Sequence[EvidenceEnvelope]:
         del history
         clean = strip_ansi(frame.raw_text)
-        live = (
-            strip_ansi(frame.viewport_text)
+        live_ansi = (
+            frame.viewport_text
             if frame.viewport_text is not None
-            else _viewport(clean, frame.height)
+            else _viewport(frame.raw_text, frame.height)
         )
+        live = strip_ansi(live_ansi)
         history_region = ScreenRegionRef(
             "scrollback_frame", 1, max(1, len(clean.splitlines()))
         )
@@ -162,7 +166,7 @@ class CodexHarnessAdapter(HarnessObservationAdapter, HarnessActionAdapter):
         except Exception as exc:  # evidence must survive a parser failure
             transcript = {"harness": "codex", "state": "unknown", "segments": []}
             diagnostics.append(f"transcript parse failed: {type(exc).__name__}: {exc}")
-        composer = _composer(live)
+        composer = _composer(live, live_ansi)
         picker_view, picker_kind = _live_model_picker(live)
         model_picker_visible = picker_kind == "model"
         reasoning_picker_visible = picker_kind == "effort"
@@ -667,20 +671,35 @@ class CodexHarnessAdapter(HarnessObservationAdapter, HarnessActionAdapter):
     ) -> Sequence[TerminalEffect]:
         prefix = action.action_id
         if isinstance(action, InsertPromptPayload):
-            effects: list[TerminalEffect] = []
+            insertion_effects: list[TerminalEffect] = []
             for index, chunk in enumerate(action.chunks):
                 if chunk.provenance is InputProvenance.USER_TYPED:
-                    effects.append(
+                    insertion_effects.append(
                         SendLiteralKeys(f"{prefix}:type:{index}", chunk.text, FAST_HUMANIZED_TYPING)
                     )
                 else:
-                    effects.extend(
+                    pasted, visible_tail = _verifiable_paste_parts(chunk.text)
+                    insertion_effects.extend(
                         (
-                            PasteBuffer(f"{prefix}:paste:{index}", chunk.text),
+                            PasteBuffer(f"{prefix}:paste:{index}", pasted),
                             SendNamedKey(f"{prefix}:tab:{index}", "Tab"),
                         )
                     )
-            return tuple(effects)
+                    if visible_tail:
+                        insertion_effects.extend(
+                            (
+                                SleepEffect(
+                                    f"{prefix}:paste-settle:{index}",
+                                    timedelta(milliseconds=150),
+                                ),
+                                SendLiteralKeys(
+                                    f"{prefix}:paste-tail:{index}",
+                                    visible_tail,
+                                    FAST_HUMANIZED_TYPING,
+                                ),
+                            )
+                        )
+            return tuple(insertion_effects)
         if isinstance(action, ClearComposer):
             return (SendNamedKey(f"{prefix}:clear", "C-u"),)
         if isinstance(action, CommitPromptSubmission):
@@ -837,7 +856,7 @@ def _payload_viewport(payload: dict[str, Any]) -> str:
     return _viewport(str(raw["text"]), int(raw["height"]))
 
 
-def _composer(clean: str) -> dict[str, Any]:
+def _composer(clean: str, ansi: str | None = None) -> dict[str, Any]:
     lines = clean.splitlines()
     matches = [(i, _PROMPT.match(line)) for i, line in enumerate(lines)]
     matches = [(i, m) for i, m in matches if m and not _MENU.match(lines[i])]
@@ -867,11 +886,11 @@ def _composer(clean: str) -> dict[str, Any]:
         visible_lines.append(line)
         content_lines.append(stripped)
     text = "\n".join(content_lines)
-    placeholder = (
-        text
-        if text.lower().startswith(("find and fix", "explain this codebase", "use /skills"))
-        else None
-    )
+    placeholder = text if _prompt_content_is_dim(ansi) else None
+    if placeholder is None and text.lower().startswith(
+        ("find and fix", "explain this codebase", "use /skills")
+    ):
+        placeholder = text
     value = "" if placeholder else text
     normalized = re.sub(r"\s+", " ", value).strip()
     return {
@@ -883,6 +902,43 @@ def _composer(clean: str) -> dict[str, Any]:
         "placeholder": placeholder,
         "visible_lines": visible_lines,
     }
+
+
+def _prompt_content_is_dim(ansi: str | None) -> bool:
+    """Codex renders its changing empty-composer suggestion with SGR dim."""
+
+    if not ansi:
+        return False
+    for line in reversed(ansi.splitlines()):
+        clean = strip_ansi(line)
+        if not _PROMPT.match(clean) or _MENU.match(clean):
+            continue
+        suffix = line[line.find("›") + 1 :]
+        dim = False
+        for token in re.split(r"(\x1b\[[0-9;]*m)", suffix):
+            if token.startswith("\x1b["):
+                codes = {int(code or 0) for code in token[2:-1].split(";")}
+                if 0 in codes or _SGR_NORMAL_INTENSITY in codes:
+                    dim = False
+                if _SGR_DIM in codes:
+                    dim = True
+            elif token.strip():
+                return dim
+        return False
+    return False
+
+
+def _verifiable_paste_parts(text: str) -> tuple[str, str]:
+    """Keep a payload-derived tail visible beside Codex's collapsed paste."""
+
+    tail = text[-PASTE_VERIFICATION_TAIL_LENGTH:]
+    if (
+        len(text) <= len(tail)
+        or any(character in tail for character in "\r\n\t")
+        or re.search(r"\s{2,}", tail)
+    ):
+        return text, ""
+    return text[: -len(tail)], tail
 
 
 def _chrome(clean: str) -> dict[str, Any]:
@@ -1587,7 +1643,7 @@ def _codex_model_configuration(
         )
         parameters = [("stage", "effort")]
         if highlighted_effort is not None:
-            parameters.append(("effort", highlighted_effort))
+            parameters.append(("highlighted_effort", highlighted_effort))
         parameters.extend(
             (f"effort_option.{row['effort']}", str(row["number"]))
             for row in effort_choices
@@ -1621,7 +1677,7 @@ def _lower_model_selection(
         raise ValueError("Codex model selection will not reopen an unobserved picker")
     parameters = dict(config.value.parameters)
     if parameters.get("stage") == "effort":
-        if action.effort is None or parameters.get("effort") == action.effort:
+        if action.effort is None or parameters.get("highlighted_effort") == action.effort:
             return (SendNamedKey(f"{action.action_id}:confirm-configuration", "Enter"),)
         option = parameters.get(f"effort_option.{action.effort}")
         if not isinstance(option, str):
