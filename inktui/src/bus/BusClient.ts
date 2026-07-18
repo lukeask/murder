@@ -16,6 +16,7 @@ import type {
   TerminalFrameMessage,
 } from '../generated/applicationProtocol.js';
 import type { BusEvent } from './protocol.js';
+import './sessionWriterMethods.js';
 
 export type ApplicationPayload = Record<string, unknown>;
 
@@ -57,6 +58,14 @@ export type CommandResult<M extends CommandMethod> = CommandMethods[M] extends {
  * established DTO union while backend feature contracts are introduced incrementally.
  */
 export type BusEventListener = (event: BusEvent) => void;
+export interface ProjectionInvalidation {
+  readonly type: 'projection.invalidate';
+  readonly projection: ProjectionTopic;
+  readonly subject_key: string;
+  readonly generation: number;
+  readonly source_fact_id: string | null;
+}
+export type ProjectionInvalidationListener = (invalidation: ProjectionInvalidation) => void;
 export type Unsubscribe = () => void;
 
 export type ProjectionTopics = ProjectionTopic | readonly ProjectionTopic[];
@@ -86,8 +95,17 @@ export interface BusClient {
   /**
    * Subscribe to projection snapshots plus their resumable invalidation tail. The transport owns
    * the cursor and reattaches on reconnect; callers apply snapshots, then compatibility events.
+   *
+   * @param since - Resume cursor for the projection subscription. `null` forces a cold subscribe
+   *   (omit cursor). When omitted, transports that have completed `server.hello` default to
+   *   {@link ServerHello.projection_cursor}.
    */
-  hydrate(topics: ProjectionTopics, listener?: BusEventListener): Promise<HydrateResult>;
+  hydrate(
+    topics: ProjectionTopics,
+    listener?: BusEventListener,
+    invalidationListener?: ProjectionInvalidationListener,
+    since?: number | null,
+  ): Promise<HydrateResult>;
 
   /**
    * Attach the replace-frame terminal stream for `sessionId`. The synchronous disposer removes the

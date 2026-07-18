@@ -27,9 +27,11 @@ from murder.app.protocol.common import (
     ErrorCode as ApplicationErrorCode,
 )
 from murder.app.protocol.subscriptions import (
+    FactSubscription,
     NotificationChannel,
     NotificationSubscription,
     ProjectionSubscription,
+    ProjectionTopic,
     SubscriptionSnapshot,
 )
 from murder.app.protocol.terminal import TerminalFrame, TerminalTarget
@@ -64,7 +66,7 @@ from murder.app.protocol.wire import (
     SubscribeMessage as ApplicationSubscribeMessage,
 )
 from murder.app.service.gateway import ApplicationGateway
-from murder.bus.broker import DurableBroker
+from murder.bus.broker import DurableBroker, ReplayGapError
 from murder.bus.protocol import (
     PRESENCE_DISCONNECT_DEBOUNCE_S,
     PRESENCE_USER_KINDS,
@@ -117,6 +119,7 @@ _ANSI_ESCAPE_RE = re.compile(r"\x1b(?:\[[0-?]*[ -/]*[@-~]|[@-_])")
 
 
 LOGGER = logging.getLogger(__name__)
+_MAX_PROJECTION_REPLAY_ITEMS = 1000
 
 _ACCEPT_RESOURCE_ERRNOS = frozenset({errno.EMFILE, errno.ENFILE, errno.ENOBUFS, errno.ENOMEM})
 _ACCEPT_BACKOFF_MIN = 0.1
@@ -164,6 +167,7 @@ class SocketBusServer:
         disconnect_debounce_s: float = PRESENCE_DISCONNECT_DEBOUNCE_S,
         tmux_frame_capture: TmuxFrameCapture | None = None,
         tmux_frame_interval_s: float = TMUX_FRAME_INTERVAL_S,
+        retention_interval_s: float = 60.0,
     ) -> None:
         self._broker = broker
         self._run_id = run_id
@@ -171,6 +175,7 @@ class SocketBusServer:
         self._disconnect_debounce_s = disconnect_debounce_s
         self._tmux_frame_capture = tmux_frame_capture
         self._tmux_frame_interval_s = tmux_frame_interval_s
+        self._retention_interval_s = retention_interval_s
         # Terminal ordering belongs to the target, not a connection or stream
         # id. Counters survive detach/reattach and are seeded by reconnecting
         # clients so a restarted service can continue above their last frame.
@@ -185,6 +190,7 @@ class SocketBusServer:
         self._presence_state = PresenceState.HEADLESS
         self._presence_version = 0
         self._presence_task: asyncio.Task[None] | None = None
+        self._retention_task: asyncio.Task[None] | None = None
         self._kind_counts: dict[ClientKind, int] = {}
         self._closed = False
         self._accept_backoff_delay: float = 0.0
@@ -207,6 +213,27 @@ class SocketBusServer:
             path=str(self._socket_path),
         )
         self._install_accept_backoff_handler()
+        if hasattr(self._broker, "prune_projection_inputs"):
+            self._retention_task = asyncio.create_task(
+                self._retention_loop(),
+                name="retained-history-maintenance",
+            )
+
+    async def _retention_loop(self) -> None:
+        while True:
+            try:
+                self._broker.prune_projection_inputs()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                LOGGER.exception("projection-input retention failed; retrying")
+            try:
+                self._broker.prune_retained_facts()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                LOGGER.exception("retained-fact retention failed; retrying")
+            await asyncio.sleep(self._retention_interval_s)
 
     async def start_tcp_listener(self, host: str = "127.0.0.1", port: int = 0) -> tuple[str, int]:
         """Start an additional TCP listener; returns (bound_host, bound_port).
@@ -236,6 +263,11 @@ class SocketBusServer:
 
     async def stop(self) -> None:
         self._closed = True
+        if self._retention_task is not None:
+            self._retention_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._retention_task
+            self._retention_task = None
         if self._accept_backoff_task is not None:
             self._accept_backoff_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
@@ -386,7 +418,11 @@ class SocketBusServer:
             if session.application:
                 await self._send_message(
                     transport,
-                    ApplicationServerHello(server_id=self._run_id),
+                    ApplicationServerHello(
+                        server_id=self._run_id,
+                        fact_cursor=self._broker.fact_watermark(),
+                        projection_cursor=self._broker.projection_watermark(),
+                    ),
                 )
             else:
                 assert legacy_hello is not None
@@ -460,15 +496,6 @@ class SocketBusServer:
         )
         asyncio.get_running_loop().create_task(session.transport.close())
 
-    async def _read_hello(self, reader: asyncio.StreamReader) -> HelloMessage:
-        raw = await reader.readline()
-        if not raw:
-            raise RuntimeError("client disconnected before hello")
-        msg = WIRE_MESSAGE_ADAPTER.validate_json(raw.decode("utf-8"))
-        if not isinstance(msg, HelloMessage):
-            raise RuntimeError("first message must be hello")
-        return msg
-
     async def _handle_client_message(
         self,
         session: _ClientSession | None,
@@ -518,6 +545,7 @@ class SocketBusServer:
                 result = await self._application_gateway.request(
                     msg.request,
                     timeout_s=msg.timeout_s,
+                    authenticated_client_id=session.client_id,
                 )
             except Exception as exc:  # noqa: BLE001
                 await self._send_application_error(
@@ -659,6 +687,9 @@ class SocketBusServer:
         if isinstance(spec, NotificationSubscription):
             await self._run_application_notification_subscription(session, msg)
             return
+        if isinstance(spec, FactSubscription):
+            await self._run_application_fact_subscription(session, msg)
+            return
         await self._send_application_error(
             session.transport,
             code=ApplicationErrorCode.UNSUPPORTED_SUBSCRIPTION,
@@ -673,6 +704,41 @@ class SocketBusServer:
     ) -> None:
         spec = msg.subscription
         assert isinstance(spec, ProjectionSubscription)
+        if not spec.topics:
+            await self._send_application_error(
+                session.transport,
+                code=ApplicationErrorCode.INVALID_MESSAGE,
+                message="projection subscriptions require at least one topic",
+                subscription_id=msg.subscription_id,
+            )
+            return
+        feature_topics = {
+            ProjectionTopic.SCHEDULE,
+            ProjectionTopic.WORKFLOW_RUNS,
+            ProjectionTopic.ACTIVITIES,
+            ProjectionTopic.APPROVALS,
+            ProjectionTopic.PERMISSIONS,
+            ProjectionTopic.SESSIONS,
+        }
+        selected = set(spec.topics)
+        modern = selected & feature_topics
+        if modern:
+            if modern != selected:
+                await self._send_application_error(
+                    session.transport,
+                    code=ApplicationErrorCode.UNSUPPORTED_SUBSCRIPTION,
+                    message=(
+                        "feature-owned and compatibility projections use different "
+                        "cursor domains; subscribe to them separately"
+                    ),
+                    subscription_id=msg.subscription_id,
+                )
+                return
+            await self._run_application_feature_projection_subscription(session, msg)
+            return
+
+        # Compatibility projections retain their existing event-table cursor
+        # until their owning features migrate to retained projection inputs.
         topics = [_legacy_hydrate_topic(topic.value) for topic in spec.topics]
         hydrate = HydrateMessage(
             correlation_id=msg.subscription_id,
@@ -715,6 +781,138 @@ class SocketBusServer:
             ]
         )
 
+    async def _run_application_feature_projection_subscription(
+        self,
+        session: _ClientSession,
+        msg: ApplicationSubscribeMessage,
+    ) -> None:
+        spec = msg.subscription
+        assert isinstance(spec, ProjectionSubscription)
+        projections = frozenset(topic.value for topic in spec.topics)
+        watermark = self._broker.projection_watermark()
+
+        if spec.cursor is None:
+            mode: Literal["cold", "resume", "snapshot_fallback"] = "cold"
+            snapshots = {
+                projection: self._broker.projection_snapshot(projection)
+                for projection in sorted(projections)
+            }
+            replay = ()
+        elif self._broker.is_projection_cursor_retained(spec.cursor):
+            mode = "resume"
+            snapshots = {}
+            replay = self._broker.replay_projection_inputs(
+                since_sequence=spec.cursor,
+                until_sequence=watermark,
+                projections=projections,
+                limit=_MAX_PROJECTION_REPLAY_ITEMS + 1,
+            )
+            if len(replay) > _MAX_PROJECTION_REPLAY_ITEMS:
+                mode = "snapshot_fallback"
+                snapshots = {
+                    projection: self._broker.projection_snapshot(projection)
+                    for projection in sorted(projections)
+                }
+                replay = ()
+        else:
+            # A retained-input gap is recoverable because each projection has
+            # an authoritative feature-owned snapshot loader.
+            mode = "snapshot_fallback"
+            snapshots = {
+                projection: self._broker.projection_snapshot(projection)
+                for projection in sorted(projections)
+            }
+            replay = ()
+
+        await self._send_message(
+            session.transport,
+            SubscriptionReadyMessage(
+                subscription_id=msg.subscription_id,
+                snapshot=SubscriptionSnapshot(
+                    snapshots=snapshots,
+                    cursor=watermark,
+                    mode=mode,
+                    replay=[
+                        {
+                            "cursor": item.sequence,
+                            "payload": {
+                                "type": "projection.invalidate",
+                                "projection": item.projection,
+                                "subject_key": item.subject_key,
+                                "generation": item.generation,
+                                "source_fact_id": (
+                                    str(item.source_fact_id)
+                                    if item.source_fact_id is not None
+                                    else None
+                                ),
+                            },
+                        }
+                        for item in replay
+                    ],
+                ),
+            ),
+        )
+        cursor = watermark
+        while True:
+            try:
+                async for item in self._broker.tail_projection_inputs(
+                    since_sequence=cursor,
+                    projections=projections,
+                ):
+                    cursor = item.sequence
+                    await self._send_message(
+                        session.transport,
+                        SubscriptionEventMessage(
+                            subscription_id=msg.subscription_id,
+                            cursor=item.sequence,
+                            payload={
+                                "type": "projection.invalidate",
+                                "projection": item.projection,
+                                "subject_key": item.subject_key,
+                                "generation": item.generation,
+                                "source_fact_id": (
+                                    str(item.source_fact_id)
+                                    if item.source_fact_id is not None
+                                    else None
+                                ),
+                            },
+                        ),
+                    )
+            except ReplayGapError:
+                cursor = self._broker.projection_watermark()
+                await self._send_message(
+                    session.transport,
+                    SubscriptionReadyMessage(
+                        subscription_id=msg.subscription_id,
+                        snapshot=SubscriptionSnapshot(
+                            snapshots={
+                                projection: self._broker.projection_snapshot(projection)
+                                for projection in sorted(projections)
+                            },
+                            cursor=cursor,
+                            mode="snapshot_fallback",
+                        ),
+                    ),
+                )
+                # Existing long-lived clients apply only the initial ready
+                # snapshot. A wildcard invalidation makes tail-gap recovery
+                # observable and prompts each feature store to refetch.
+                for projection in sorted(projections):
+                    await self._send_message(
+                        session.transport,
+                        SubscriptionEventMessage(
+                            subscription_id=msg.subscription_id,
+                            cursor=cursor,
+                            payload={
+                                "type": "projection.invalidate",
+                                "projection": projection,
+                                "subject_key": "*",
+                                "generation": cursor,
+                                "source_fact_id": None,
+                            },
+                        ),
+                    )
+
     async def _run_application_notification_subscription(
         self,
         session: _ClientSession,
@@ -722,6 +920,14 @@ class SocketBusServer:
     ) -> None:
         spec = msg.subscription
         assert isinstance(spec, NotificationSubscription)
+        if not spec.channels:
+            await self._send_application_error(
+                session.transport,
+                code=ApplicationErrorCode.INVALID_MESSAGE,
+                message="notification subscriptions require at least one channel",
+                subscription_id=msg.subscription_id,
+            )
+            return
         watermark = self._broker.watermark()
         since_id = spec.cursor if spec.cursor is not None else watermark
         filters: list[EventFilter] = []
@@ -750,6 +956,87 @@ class SocketBusServer:
                 for filt in filters
             ]
         )
+
+    async def _run_application_fact_subscription(
+        self,
+        session: _ClientSession,
+        msg: ApplicationSubscribeMessage,
+    ) -> None:
+        """Replay/tail only the feature-owned immutable fact log.
+
+        The generalized ``events`` compatibility table is intentionally not a
+        fallback for this public capability.
+        """
+
+        spec = msg.subscription
+        assert isinstance(spec, FactSubscription)
+        watermark = self._broker.fact_watermark()
+        since_sequence = spec.cursor if spec.cursor is not None else watermark
+        if spec.cursor is not None and not self._broker.is_fact_cursor_retained(
+            since_sequence
+        ):
+            await self._send_application_error(
+                session.transport,
+                code=ApplicationErrorCode.INVALID_MESSAGE,
+                message="fact cursor is outside retained fact history",
+                subscription_id=msg.subscription_id,
+            )
+            return
+        kinds = frozenset(spec.fact_kinds)
+        replay = self._broker.replay_facts(
+            since_sequence=since_sequence,
+            until_sequence=watermark,
+            kinds=kinds,
+        )
+        await self._send_message(
+            session.transport,
+            SubscriptionReadyMessage(
+                subscription_id=msg.subscription_id,
+                snapshot=SubscriptionSnapshot(
+                    cursor=watermark,
+                    mode="resume" if spec.cursor is not None else "cold",
+                    replay=[
+                        {
+                            "cursor": fact.sequence,
+                            "payload": fact.model_dump(mode="json"),
+                        }
+                        for fact in replay
+                    ],
+                ),
+            ),
+        )
+        cursor = watermark
+        while True:
+            try:
+                async for fact in self._broker.tail_facts(
+                    since_sequence=cursor,
+                    kinds=kinds,
+                ):
+                    cursor = fact.sequence
+                    await self._send_message(
+                        session.transport,
+                        SubscriptionEventMessage(
+                            subscription_id=msg.subscription_id,
+                            cursor=fact.sequence,
+                            payload=fact.model_dump(mode="json"),
+                        ),
+                    )
+            except ReplayGapError:
+                # Retention pruned past our tail cursor. Facts have no
+                # authoritative snapshot loader, so skip the gap: re-anchor at
+                # the current watermark and tell the client via a fresh ready
+                # message in snapshot_fallback mode.
+                cursor = self._broker.fact_watermark()
+                await self._send_message(
+                    session.transport,
+                    SubscriptionReadyMessage(
+                        subscription_id=msg.subscription_id,
+                        snapshot=SubscriptionSnapshot(
+                            cursor=cursor,
+                            mode="snapshot_fallback",
+                        ),
+                    ),
+                )
 
     async def _run_application_tail(
         self,

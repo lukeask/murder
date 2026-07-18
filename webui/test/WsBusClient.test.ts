@@ -85,6 +85,8 @@ function completeHandshake(socket: MockWebSocket): void {
     commands: ['settings.update'],
     subscriptions: ['projections', 'notifications'],
     terminal_streams: true,
+    fact_cursor: 0,
+    projection_cursor: 0,
   });
 }
 
@@ -107,6 +109,8 @@ describe('WsBusClient application handshake', () => {
     const connected = bus.connect();
     completeHandshake(sockets[0]!);
     await expect(connected).resolves.toBeUndefined();
+    expect(bus.getFactCursor()).toBe(0);
+    expect(bus.getProjectionCursor()).toBe(0);
     bus.close();
 
     const mismatch = makeClient();
@@ -118,6 +122,26 @@ describe('WsBusClient application handshake', () => {
     });
     await expect(failed).rejects.toThrow(/upgrade required/);
     mismatch.bus.close();
+  });
+
+  it('stores ServerHello fact_cursor and projection_cursor watermarks', async () => {
+    const { bus, sockets } = makeClient();
+    sockets[0]?.open();
+    sockets[0]?.receive({
+      op: 'server.hello',
+      protocol_version: APPLICATION_PROTOCOL_VERSION,
+      server_id: 'service-test',
+      queries: ['settings.get'],
+      commands: ['settings.update'],
+      subscriptions: ['projections', 'notifications'],
+      terminal_streams: true,
+      fact_cursor: 9,
+      projection_cursor: 4,
+    });
+    await flush();
+    expect(bus.getFactCursor()).toBe(9);
+    expect(bus.getProjectionCursor()).toBe(4);
+    bus.close();
   });
 });
 
@@ -169,18 +193,24 @@ describe('WsBusClient resumable streams', () => {
     await bus.connect();
 
     const seen: unknown[] = [];
-    const hydration = bus.hydrate('roster', (event) => seen.push(event));
+    const hydration = bus.hydrate('roster', (event) => seen.push(event), undefined, null);
     await flush();
     const projection = sockets[0]!.sentMessage(1);
     const notifications = sockets[0]!.sentMessage(2);
     expect(projection).toMatchObject({
       op: 'subscribe',
-      subscription: { kind: 'projections', topics: ['roster'], cursor: null },
+      subscription: { kind: 'projections', topics: ['roster'] },
     });
+    expect(
+      (projection as { subscription?: { cursor?: unknown } }).subscription?.cursor,
+    ).toBeUndefined();
     expect(notifications).toMatchObject({
       op: 'subscribe',
-      subscription: { kind: 'notifications', channels: ['errors'], cursor: null },
+      subscription: { kind: 'notifications', channels: ['errors'] },
     });
+    expect(
+      (notifications as { subscription?: { cursor?: unknown } }).subscription?.cursor,
+    ).toBeUndefined();
     if (projection.op !== 'subscribe' || notifications.op !== 'subscribe') {
       throw new Error('expected subscriptions');
     }
@@ -389,6 +419,66 @@ describe('WsBusClient resumable streams', () => {
     );
     ready.unsubscribe();
     detach();
+    bus.close();
+  });
+
+  it('keeps terminal registration after a non-fatal stream error and reattaches on reconnect', async () => {
+    const immediateClock: Clock = {
+      sleep: () => ({ promise: Promise.resolve(), cancel: () => {} }),
+      random: () => 0,
+    };
+    const { bus, sockets } = makeClient(immediateClock);
+    completeHandshake(sockets[0]!);
+    await bus.connect();
+    bus.attachTerminal('agent-a', () => {});
+    const attach = sockets[0]!.sentMessage(1);
+    if (attach.op !== 'terminal.attach') throw new Error('expected terminal attach');
+
+    sockets[0]!.receive({
+      op: 'error',
+      stream_id: attach.stream_id,
+      error: { code: 'invalid_message', message: 'transient stream glitch', details: {} },
+    });
+
+    sockets[0]!.close();
+    await flush();
+    await flush();
+    completeHandshake(sockets[1]!);
+    await flush();
+
+    expect(sockets[1]!.sentMessage(1)).toMatchObject({
+      op: 'terminal.attach',
+      stream_id: attach.stream_id,
+      target: { legacy_agent_id: 'agent-a' },
+    });
+    bus.close();
+  });
+
+  it('drops terminal registration on stream_failed so reconnect does not reattach', async () => {
+    const immediateClock: Clock = {
+      sleep: () => ({ promise: Promise.resolve(), cancel: () => {} }),
+      random: () => 0,
+    };
+    const { bus, sockets } = makeClient(immediateClock);
+    completeHandshake(sockets[0]!);
+    await bus.connect();
+    bus.attachTerminal('agent-a', () => {});
+    const attach = sockets[0]!.sentMessage(1);
+    if (attach.op !== 'terminal.attach') throw new Error('expected terminal attach');
+
+    sockets[0]!.receive({
+      op: 'error',
+      stream_id: attach.stream_id,
+      error: { code: 'stream_failed', message: 'capture unavailable', details: {} },
+    });
+
+    sockets[0]!.close();
+    await flush();
+    await flush();
+    completeHandshake(sockets[1]!);
+    await flush();
+
+    expect(sockets[1]!.sent.slice(1)).toEqual([]);
     bus.close();
   });
 });

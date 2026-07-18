@@ -7,19 +7,11 @@ mapping to transitional internals.
 
 from __future__ import annotations
 
-from enum import Enum
 from typing import Literal
 
 from pydantic import Field
 
-from murder.app.protocol.common import ApplicationModel
-
-
-class StrEnum(str, Enum):
-    """Python-3.10-compatible string enum."""
-
-    def __str__(self) -> str:
-        return str.__str__(self)
+from murder.app.protocol.common import ApplicationModel, StrEnum
 
 
 class QueryName(StrEnum):
@@ -47,6 +39,10 @@ class QueryName(StrEnum):
     TEMPLATES_GET = "templates.get"
     THEMES_GET = "themes.get"
     WORKFLOWS_GET = "workflows.get"
+    APPROVALS_LIST = "approvals.list"
+    APPROVALS_GET = "approvals.get"
+    PERMISSIONS_LIST = "permissions.list"
+    SESSION_WRITER_GET = "session.writer.get"
 
 
 class CommandName(StrEnum):
@@ -77,6 +73,11 @@ class CommandName(StrEnum):
     THEME_IMPORT = "theme.import"
     WORKFLOWS_SET = "workflows.set"
     WORKFLOW_START = "workflow.start"
+    TRIGGER_FIRE = "trigger.fire"
+    APPROVAL_DECIDE = "approval.decide"
+    SESSION_WRITER_ACQUIRE = "session.writer.acquire"
+    SESSION_WRITER_RENEW = "session.writer.renew"
+    SESSION_WRITER_RELEASE = "session.writer.release"
 
 
 class OrchestrationAction(StrEnum):

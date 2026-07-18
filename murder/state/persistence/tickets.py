@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING
+from uuid import UUID, uuid5
 
+from murder.facts.contracts import ProjectionInputDraft
+from murder.facts.log import append_projection_input
 from murder.state.persistence.records import (
     ChecklistItemRecord,
     TicketRecord,
@@ -16,9 +19,45 @@ from murder.work.workflows.service import notify_ticket_status
 if TYPE_CHECKING:
     from murder.work.tickets.schema import Ticket
 
+# Stable namespace for schedule projection input ids (ticket status invalidations).
+_SCHEDULE_PROJECTION_NAMESPACE = UUID("a8c3e1f0-5b2d-4e9a-9c1f-7d6e4b3a2f10")
+
 
 def _now() -> str:
     return datetime.utcnow().isoformat(timespec="seconds")
+
+
+def _append_schedule_projection_input(
+    conn: sqlite3.Connection,
+    *,
+    ticket_id: str,
+    operation: str,
+) -> None:
+    """Append a key-only schedule invalidation without inventing a retained fact."""
+
+    row = conn.execute(
+        """
+        SELECT COALESCE(MAX(generation), -1) + 1 AS next_gen
+          FROM projection_inputs
+         WHERE projection = 'schedule' AND subject_key = ?
+        """,
+        (ticket_id,),
+    ).fetchone()
+    generation = int(row["next_gen"])
+    timestamp = datetime.now(timezone.utc)
+    append_projection_input(
+        conn,
+        ProjectionInputDraft(
+            input_id=uuid5(
+                _SCHEDULE_PROJECTION_NAMESPACE,
+                f"{ticket_id}:{generation}:{operation}",
+            ),
+            projection="schedule",
+            subject_key=ticket_id,
+            generation=generation,
+        ),
+        created_at=timestamp,
+    )
 
 
 def insert_ticket(conn: sqlite3.Connection, ticket: Ticket) -> None:
@@ -163,6 +202,11 @@ def update_ticket_status(conn: sqlite3.Connection, ticket_id: str, new_status: s
         # of workflow truth. Their terminal outcomes become addressed signals that
         # advance the authoritative persisted state machine in this same transaction.
         notify_ticket_status(conn, ticket_id=ticket_id, status=new_status)
+        # Feature-owned schedule projection invalidation (dual-write with bus
+        # StateSnapshotEvent emits that still happen at higher layers).
+        _append_schedule_projection_input(
+            conn, ticket_id=ticket_id, operation=f"status:{new_status}"
+        )
     except BaseException:
         if owns_transaction:
             conn.rollback()

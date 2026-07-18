@@ -1,9 +1,4 @@
-/**
- * Browser transport for Murder's public application protocol.
- *
- * The WebSocket bridge is deliberately framing-only: this client owns hello/version negotiation,
- * request correlation, resumable projection subscriptions, and independent terminal streams.
- */
+/** Browser WebSocket transport for the generated application protocol. */
 
 import type {
   BusClient,
@@ -12,6 +7,8 @@ import type {
   CommandParams,
   CommandResult,
   HydrateResult,
+  ProjectionInvalidation,
+  ProjectionInvalidationListener,
   ProjectionTopics,
   QueryMethod,
   QueryParams,
@@ -126,6 +123,13 @@ export class ProtocolVersionMismatchError extends Error {
   }
 }
 
+export class RpcTimeoutError extends Error {
+  constructor(name: string, timeoutS: number) {
+    super(`request '${name}' timed out after ${timeoutS}s`);
+    this.name = 'RpcTimeoutError';
+  }
+}
+
 export class ConnectionLostError extends Error {
   constructor(message = 'application WebSocket connection lost') {
     super(message);
@@ -144,6 +148,7 @@ interface ProjectionRegistration {
   readonly notificationId: string;
   readonly topics: readonly ProjectionTopic[];
   readonly listener: BusEventListener | undefined;
+  readonly invalidationListener: ProjectionInvalidationListener | undefined;
   cursor: number | null;
   notificationCursor: number | null;
   initialSettled: boolean;
@@ -196,6 +201,11 @@ export class WsBusClient implements BusClient {
   private readonly disconnectListeners = new Set<() => void>();
   private readonly permanentErrorListeners = new Set<(error: Error) => void>();
 
+  /** Last `server.hello.fact_cursor` watermark; `undefined` until the first hello. */
+  private factCursor: number | undefined;
+  /** Last `server.hello.projection_cursor` watermark; `undefined` until the first hello. */
+  private projectionCursor: number | undefined;
+
   constructor(options: WsBusClientOptions = {}) {
     this.url = options.url ?? defaultBusUrl();
     this.clientId = options.clientId ?? stableClientId();
@@ -218,6 +228,16 @@ export class WsBusClient implements BusClient {
     return new Promise<void>((resolve, reject) => {
       this.connectWaiters.add({ resolve, reject });
     });
+  }
+
+  /** Fact-log watermark from the most recent `server.hello`, or `undefined` pre-handshake. */
+  getFactCursor(): number | undefined {
+    return this.factCursor;
+  }
+
+  /** Projection-input watermark from the most recent `server.hello`, or `undefined` pre-handshake. */
+  getProjectionCursor(): number | undefined {
+    return this.projectionCursor;
   }
 
   close(): void {
@@ -266,6 +286,8 @@ export class WsBusClient implements BusClient {
   hydrate(
     topics: ProjectionTopics,
     listener?: BusEventListener,
+    invalidationListener?: ProjectionInvalidationListener,
+    since?: number | null,
   ): Promise<HydrateResult> {
     const normalized = normalizeProjectionTopics(
       typeof topics === 'string' ? [topics] : [...topics],
@@ -278,12 +300,14 @@ export class WsBusClient implements BusClient {
       resolveInitial = resolve;
       rejectInitial = reject;
     });
+    const initialCursor = resolveInitialProjectionCursor(since, this.projectionCursor);
     this.projections.set(id, {
       id,
       notificationId,
       topics: normalized,
       listener,
-      cursor: null,
+      invalidationListener,
+      cursor: initialCursor ?? null,
       notificationCursor: null,
       initialSettled: false,
       ready: false,
@@ -328,7 +352,7 @@ export class WsBusClient implements BusClient {
     };
   }
 
-  detachTerminal(streamId: string): void {
+  private detachTerminal(streamId: string): void {
     if (!this.terminals.delete(streamId)) return;
     if (this.state === 'connected' && this.socket !== undefined) {
       this.write(this.socket, { op: 'terminal.detach', stream_id: streamId });
@@ -366,8 +390,8 @@ export class WsBusClient implements BusClient {
     return new Promise<Record<string, unknown>>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pendingRequests.delete(requestId);
-        reject(new Error(`${kind} '${name}' timed out after ${timeoutS}s`));
-      }, timeoutS * 1000);
+        reject(new RpcTimeoutError(name, timeoutS));
+      }, (timeoutS + 1) * 1000);
       this.pendingRequests.set(requestId, {
         resolve,
         reject,
@@ -479,6 +503,10 @@ export class WsBusClient implements BusClient {
                 ),
               );
             } else {
+              this.factCursor =
+                typeof message.fact_cursor === 'number' ? message.fact_cursor : 0;
+              this.projectionCursor =
+                typeof message.projection_cursor === 'number' ? message.projection_cursor : 0;
               settled = true;
               this.abortHandshake = undefined;
               resolve();
@@ -573,7 +601,9 @@ export class WsBusClient implements BusClient {
     const replayItems: Array<{ seq: number; event: BusEvent }> = [];
     for (const item of snapshot.replay) {
       projection.cursor = Math.max(projection.cursor, item.cursor);
-      if (isBusEvent(item.payload)) {
+      if (isProjectionInvalidation(item.payload)) {
+        this.notifyProjectionInvalidation(projection, item.payload);
+      } else if (!hasProjectionInvalidationType(item.payload) && isBusEvent(item.payload)) {
         replayItems.push({ seq: item.cursor, event: item.payload });
         this.notifyProjection(projection, item.payload);
       }
@@ -622,7 +652,15 @@ export class WsBusClient implements BusClient {
         projection.cursor = Math.max(projection.cursor ?? 0, cursor);
       }
     }
-    this.notifyProjection(projection, payload);
+    if (notification) {
+      this.notifyProjection(projection, payload);
+      return;
+    }
+    if (isProjectionInvalidation(payload)) {
+      this.notifyProjectionInvalidation(projection, payload);
+    } else if (!hasProjectionInvalidationType(payload) && isBusEvent(payload)) {
+      this.notifyProjection(projection, payload);
+    }
   }
 
   private notifyProjection(
@@ -634,6 +672,17 @@ export class WsBusClient implements BusClient {
       projection.listener?.(payload);
     } catch {
       // Subscriber failures are isolated from transport dispatch.
+    }
+  }
+
+  private notifyProjectionInvalidation(
+    projection: ProjectionRegistration,
+    invalidation: ProjectionInvalidation,
+  ): void {
+    try {
+      projection.invalidationListener?.(invalidation);
+    } catch {
+      // A projection consumer owns its own error state.
     }
   }
 
@@ -668,7 +717,13 @@ export class WsBusClient implements BusClient {
       }
     }
     if (message.stream_id !== null && message.stream_id !== undefined) {
-      this.terminals.delete(message.stream_id);
+      // Keep attach intent across transient stream errors (UDS behavior) so reconnect
+      // reattaches. Only `stream_failed` means the registration should be abandoned.
+      if (message.error.code === 'stream_failed') {
+        this.terminals.delete(message.stream_id);
+      } else {
+        this.logger.warn(error.message);
+      }
     }
   }
 
@@ -703,23 +758,37 @@ export class WsBusClient implements BusClient {
     if (projection === undefined) return;
     projection.ready = false;
     projection.tailBuffer = [];
+    const projectionSubscription: {
+      kind: 'projections';
+      topics: readonly ProjectionTopic[];
+      cursor?: number;
+    } = {
+      kind: 'projections',
+      topics: projection.topics,
+    };
+    if (projection.cursor !== null) {
+      projectionSubscription.cursor = projection.cursor;
+    }
     this.write(socket, {
       op: 'subscribe',
       subscription_id: projection.id,
-      subscription: {
-        kind: 'projections',
-        topics: projection.topics,
-        cursor: projection.cursor,
-      },
+      subscription: projectionSubscription,
     });
+    const notificationSubscription: {
+      kind: 'notifications';
+      channels: readonly ['errors'];
+      cursor?: number;
+    } = {
+      kind: 'notifications',
+      channels: ['errors'],
+    };
+    if (projection.notificationCursor !== null) {
+      notificationSubscription.cursor = projection.notificationCursor;
+    }
     this.write(socket, {
       op: 'subscribe',
       subscription_id: projection.notificationId,
-      subscription: {
-        kind: 'notifications',
-        channels: ['errors'],
-        cursor: projection.notificationCursor,
-      },
+      subscription: notificationSubscription,
     });
   }
 
@@ -752,8 +821,6 @@ export class WsBusClient implements BusClient {
       this.requestTerminalResync(terminal, 'unsupported_mode');
       return;
     }
-    // Full snapshots recover a skipped sequence caused by terminal queue
-    // coalescing, so the newest replacement can be rendered immediately.
     terminal.lastSequence = frame.sequence;
     terminal.resyncPending = false;
     this.notifyTerminal(terminal, frame);
@@ -839,6 +906,57 @@ export class WsBusClient implements BusClient {
 
 const WS_OPEN = 1;
 
+const PROJECTION_TOPICS: ReadonlySet<string> = new Set([
+  'conversations',
+  'roster',
+  'schedule',
+  'favorites',
+  'templates',
+  'themes',
+  'workflows',
+  'workflow_runs',
+  'activities',
+  'settings',
+  'approvals',
+  'permissions',
+  'sessions',
+]);
+
+function resolveInitialProjectionCursor(
+  since: number | null | undefined,
+  helloProjectionCursor: number | undefined,
+): number | undefined {
+  if (since === null) return undefined;
+  if (typeof since === 'number') return since;
+  return helloProjectionCursor;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function isProjectionInvalidation(value: unknown): value is ProjectionInvalidation {
+  if (!isRecord(value)) return false;
+  const { type, projection, subject_key, generation, source_fact_id } = value;
+  return (
+    type === 'projection.invalidate' &&
+    typeof projection === 'string' &&
+    PROJECTION_TOPICS.has(projection) &&
+    typeof subject_key === 'string' &&
+    subject_key.length > 0 &&
+    typeof generation === 'number' &&
+    Number.isSafeInteger(generation) &&
+    generation >= 0 &&
+    (source_fact_id === null ||
+      (typeof source_fact_id === 'string' && UUID_RE.test(source_fact_id)))
+  );
+}
+
+function hasProjectionInvalidationType(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  return value['type'] === 'projection.invalidate';
+}
+
 function parseServerMessage(data: unknown): ServerMessage | undefined {
   if (typeof data !== 'string' || data.trim() === '') return undefined;
   try {
@@ -884,7 +1002,12 @@ const ALL_PROJECTION_TOPICS: readonly ProjectionTopic[] = [
   'templates',
   'themes',
   'workflows',
+  'workflow_runs',
+  'activities',
   'settings',
+  'approvals',
+  'permissions',
+  'sessions',
 ];
 
 /** Transitional aliases are normalized at the client boundary and never sent on the public wire. */

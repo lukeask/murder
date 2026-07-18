@@ -16,6 +16,8 @@ from uuid import UUID
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, JsonValue
 
+from murder.permissions.contracts import GrantScope, PermissionPrincipal
+
 
 class WorkflowContract(BaseModel):
     """Immutable boundary and persistence contract."""
@@ -277,6 +279,9 @@ class ExecutionRequirements(WorkflowContract):
     require_structured_protocol: bool = False
     require_terminal: bool = False
     reusable_session: bool = True
+    session_strategy: Literal[
+        "new", "reuse_if_compatible", "require_existing"
+    ] | None = None
     worktree: str | None = None
     max_parallelism_group: str | None = None
     policy_profile: str | None = None
@@ -303,18 +308,23 @@ ActivityPayload = Annotated[
 
 
 class ActivityRequestDraft(WorkflowContract):
+    activity_id: UUID
     payload: ActivityPayload
     idempotency_key: str = Field(min_length=1)
     priority: int = 0
     retry_policy: str = "default"
+    max_attempts: int = Field(default=3, ge=1)
 
 
 class ApprovalRequestDraft(WorkflowContract):
+    approval_id: UUID
     operation_digest: str = Field(min_length=1)
     summary: str
     details: dict[str, JsonValue] = Field(default_factory=dict)
     required_reviewers: tuple[Literal["human", "llm"], ...]
     policy: Literal["any", "all", "human_required"]
+    requested_by: PermissionPrincipal
+    grant_scope: GrantScope
 
 
 class WorkflowTransitionPlan(WorkflowContract):

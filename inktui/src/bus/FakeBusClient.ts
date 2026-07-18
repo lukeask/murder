@@ -9,6 +9,8 @@ import type {
   CommandResult,
   HydrateReply,
   HydrateResult,
+  ProjectionInvalidation,
+  ProjectionInvalidationListener,
   ProjectionTopics,
   QueryMethod,
   QueryParams,
@@ -24,8 +26,10 @@ type ErasedHandler = (params: unknown) => unknown;
 
 interface Hydration {
   readonly listener: BusEventListener | undefined;
+  readonly invalidationListener: ProjectionInvalidationListener | undefined;
   pending: boolean;
   tailBuffer: BusEvent[];
+  invalidationTail: ProjectionInvalidation[];
 }
 
 interface TerminalAttachment {
@@ -74,6 +78,8 @@ export class FakeBusClient implements BusClient {
   private readonly terminals = new Set<TerminalAttachment>();
   private hydrateHandler: HydrateHandler | undefined;
   private cursor: number | null = null;
+  private factCursor: number | undefined;
+  private projectionCursor: number | undefined;
 
   stubQuery<M extends QueryMethod>(name: M, reply: QueryResult<M> | QueryHandler<M>): void {
     const handler: QueryHandler<M> =
@@ -90,6 +96,20 @@ export class FakeBusClient implements BusClient {
   stubHydrate(reply: HydrateReply | HydrateHandler): void {
     this.hydrateHandler =
       typeof reply === 'function' ? (reply as HydrateHandler) : async () => reply;
+  }
+
+  /** Seed hello-style watermarks for tests that assert default-`since` behavior. */
+  setHelloCursors(factCursor: number, projectionCursor: number): void {
+    this.factCursor = factCursor;
+    this.projectionCursor = projectionCursor;
+  }
+
+  getFactCursor(): number | undefined {
+    return this.factCursor;
+  }
+
+  getProjectionCursor(): number | undefined {
+    return this.projectionCursor;
   }
 
   get queryCalls(): readonly RecordedQueryCall[] {
@@ -136,33 +156,54 @@ export class FakeBusClient implements BusClient {
     return Promise.resolve().then(() => handler(params) as CommandResult<M>);
   }
 
-  hydrate(topics: ProjectionTopics, listener?: BusEventListener): Promise<HydrateResult> {
+  hydrate(
+    topics: ProjectionTopics,
+    listener?: BusEventListener,
+    invalidationListener?: ProjectionInvalidationListener,
+    since?: number | null,
+  ): Promise<HydrateResult> {
     const normalized = normalizeProjectionTopics(topics);
-    const callCursor = this.cursor;
+    const callCursor = resolveFakeHydrateCursor(since, this.projectionCursor, this.cursor);
     this.recordedHydrates.push({ topics: normalized, cursor: callCursor });
-    const hydration: Hydration = { listener, pending: true, tailBuffer: [] };
+    const hydration: Hydration = {
+      listener,
+      invalidationListener,
+      pending: true,
+      tailBuffer: [],
+      invalidationTail: [],
+    };
     this.hydrations.add(hydration);
     const reply =
       this.hydrateHandler === undefined
         ? Promise.resolve<HydrateReply>({ snapshots: {}, cursor: callCursor })
         : Promise.resolve().then(() => this.hydrateHandler?.(normalized, callCursor));
-    return reply.then((value) => {
-      const resolved = value ?? { snapshots: {}, cursor: callCursor };
-      this.observeCursor(resolved.cursor);
-      for (const item of resolved.replay ?? []) {
-        this.observeCursor(item.seq);
-        hydration.listener?.(item.event);
-      }
-      for (const event of hydration.tailBuffer) {
-        hydration.listener?.(event);
-      }
-      hydration.tailBuffer = [];
-      hydration.pending = false;
-      return {
-        ...resolved,
-        unsubscribe: () => this.hydrations.delete(hydration),
-      };
-    });
+    return reply.then(
+      (value) => {
+        const resolved = value ?? { snapshots: {}, cursor: callCursor };
+        this.observeCursor(resolved.cursor);
+        for (const item of resolved.replay ?? []) {
+          this.observeCursor(item.seq);
+          hydration.listener?.(item.event);
+        }
+        for (const event of hydration.tailBuffer) {
+          hydration.listener?.(event);
+        }
+        for (const invalidation of hydration.invalidationTail) {
+          hydration.invalidationListener?.(invalidation);
+        }
+        hydration.tailBuffer = [];
+        hydration.invalidationTail = [];
+        hydration.pending = false;
+        return {
+          ...resolved,
+          unsubscribe: () => this.hydrations.delete(hydration),
+        };
+      },
+      (error: unknown) => {
+        this.hydrations.delete(hydration);
+        throw error;
+      },
+    );
   }
 
   attachTerminal(sessionId: string | null, listener: TerminalFrameListener): Unsubscribe {
@@ -180,6 +221,18 @@ export class FakeBusClient implements BusClient {
         hydration.tailBuffer.push(event);
       } else {
         hydration.listener?.(event);
+      }
+    }
+  }
+
+  /** Emit a modern `projection.invalidate` to standing hydration listeners. */
+  emitInvalidation(invalidation: ProjectionInvalidation, cursor?: number | null): void {
+    this.observeCursor(cursor);
+    for (const hydration of [...this.hydrations]) {
+      if (hydration.pending) {
+        hydration.invalidationTail.push(invalidation);
+      } else {
+        hydration.invalidationListener?.(invalidation);
       }
     }
   }
@@ -215,4 +268,15 @@ export class FakeBusClient implements BusClient {
 
 function normalizeProjectionTopics(topics: ProjectionTopics): readonly ProjectionTopic[] {
   return typeof topics === 'string' ? [topics] : [...topics];
+}
+
+function resolveFakeHydrateCursor(
+  since: number | null | undefined,
+  helloProjectionCursor: number | undefined,
+  observedCursor: number | null,
+): number | null {
+  if (since === null) return null;
+  if (typeof since === 'number') return since;
+  if (helloProjectionCursor !== undefined) return helloProjectionCursor;
+  return observedCursor;
 }

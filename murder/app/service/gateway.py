@@ -44,6 +44,10 @@ QUERY_TARGETS: Mapping[QueryName, str] = {
     QueryName.TEMPLATES_GET: "tui.load_templates",
     QueryName.THEMES_GET: "tui.load_themes",
     QueryName.WORKFLOWS_GET: "tui.load_workflows",
+    QueryName.APPROVALS_LIST: "approvals.list",
+    QueryName.APPROVALS_GET: "approvals.get",
+    QueryName.PERMISSIONS_LIST: "permissions.list",
+    QueryName.SESSION_WRITER_GET: "session.writer.get",
 }
 
 COMMAND_TARGETS: Mapping[CommandName, str] = {
@@ -73,7 +77,22 @@ COMMAND_TARGETS: Mapping[CommandName, str] = {
     CommandName.THEME_IMPORT: "tui.import_theme",
     CommandName.WORKFLOWS_SET: "tui.save_workflows",
     CommandName.WORKFLOW_START: "tui.run_workflow",
+    CommandName.TRIGGER_FIRE: "trigger.fire",
+    CommandName.APPROVAL_DECIDE: "approval.decide",
+    CommandName.SESSION_WRITER_ACQUIRE: "session.writer.acquire",
+    CommandName.SESSION_WRITER_RENEW: "session.writer.renew",
+    CommandName.SESSION_WRITER_RELEASE: "session.writer.release",
 }
+
+_SESSION_WRITER_COMMANDS = frozenset(
+    {
+        CommandName.SESSION_WRITER_ACQUIRE,
+        CommandName.SESSION_WRITER_RENEW,
+        CommandName.SESSION_WRITER_RELEASE,
+    }
+)
+
+_TRUSTED_LOCAL_HOLDER = {"kind": "service", "id": "trusted-local"}
 
 
 class ApplicationGateway:
@@ -87,6 +106,7 @@ class ApplicationGateway:
         request: QueryRequest | CommandRequest,
         *,
         timeout_s: float,
+        authenticated_client_id: str | None = None,
     ) -> dict[str, Any]:
         params = dict(request.params)
         if isinstance(request, QueryRequest):
@@ -96,6 +116,21 @@ class ApplicationGateway:
             params = self._orchestration_command(params)
         else:
             target = COMMAND_TARGETS[request.name]
+            if request.name is CommandName.APPROVAL_DECIDE:
+                if authenticated_client_id is None:
+                    raise ValueError("approval.decide requires an authenticated client")
+                params["reviewer"] = {
+                    "kind": "client",
+                    "id": authenticated_client_id,
+                }
+            elif request.name in _SESSION_WRITER_COMMANDS:
+                if authenticated_client_id is not None:
+                    params["holder"] = {
+                        "kind": "client",
+                        "id": authenticated_client_id,
+                    }
+                else:
+                    params["holder"] = dict(_TRUSTED_LOCAL_HOLDER)
         result = await self._broker.request(target, params, timeout_s=timeout_s)
         return cast(dict[str, Any], result)
 

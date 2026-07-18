@@ -6,6 +6,7 @@ import asyncio
 import re
 import sqlite3
 import subprocess
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -172,7 +173,12 @@ async def _branch_at_path(repo_root: Path, path: Path) -> str | None:
     return None
 
 
-async def ensure_worktree(repo_root: Path, ref: WorktreeRef) -> WorktreeRef:
+async def ensure_worktree(
+    repo_root: Path,
+    ref: WorktreeRef,
+    *,
+    permission_connection: sqlite3.Connection | None = None,
+) -> WorktreeRef:
     """Create or reuse a git worktree at ``ref.path`` on ``ref.branch``."""
 
     if (ref.path / ".git").exists():
@@ -194,33 +200,89 @@ async def ensure_worktree(repo_root: Path, ref: WorktreeRef) -> WorktreeRef:
         )
 
     ref.path.parent.mkdir(parents=True, exist_ok=True)
-    rc, _out, err = await _git(
-        repo_root,
-        "worktree",
-        "add",
-        "-b",
-        ref.branch,
-        str(ref.path),
-        "HEAD",
-    )
-    if rc == 0:
-        return ref
 
-    if "already exists" in err or "a branch named" in err:
-        rc, _out, err = await _git(
+    async def add_new_branch() -> tuple[int, str, str]:
+        return await _git(
+            repo_root,
+            "worktree",
+            "add",
+            "-b",
+            ref.branch,
+            str(ref.path),
+            "HEAD",
+        )
+
+    async def add_existing_branch() -> tuple[int, str, str]:
+        return await _git(
             repo_root,
             "worktree",
             "add",
             str(ref.path),
             ref.branch,
         )
+
+    if permission_connection is None:
+        rc, _out, err = await add_new_branch()
         if rc == 0:
             return ref
+        if "already exists" in err or "a branch named" in err:
+            rc, _out, err = await add_existing_branch()
+            if rc == 0:
+                return ref
+        raise WorktreeError(err.strip() or f"git worktree add failed for {ref.path}")
 
+    from uuid import NAMESPACE_URL, uuid4, uuid5  # noqa: PLC0415
+
+    from murder.permissions import (  # noqa: PLC0415
+        GitOperation,
+        LocalServicePermissionPolicy,
+        PermissionPrincipal,
+        PermissionService,
+        PermissionStore,
+        SideEffectEnforcer,
+    )
+
+    try:
+        relative_path = ref.path.resolve().relative_to(repo_root.resolve()).as_posix()
+    except ValueError as exc:
+        raise WorktreeError("worktree path must be inside the repository") from exc
+    service = PermissionService(
+        store=PermissionStore(permission_connection),
+        policy=LocalServicePermissionPolicy(),
+    )
+    enforcer = SideEffectEnforcer(service)
+    principal = PermissionPrincipal(kind="service", id="worktree-provisioner")
+    repository_id = uuid5(NAMESPACE_URL, f"murder:repository:{repo_root.resolve()}")
+
+    async def run_add(
+        effect: Callable[[], Awaitable[tuple[int, str, str]]],
+    ) -> tuple[int, str, str]:
+        operation = GitOperation(
+            operation_id=uuid4(),
+            principal=principal,
+            repository_id=repository_id,
+            action="worktree_add",
+            arguments=(relative_path, ref.branch),
+            worktree_path=relative_path,
+        )
+        return await enforcer.execute(operation, effect)
+
+    rc, _out, err = await run_add(add_new_branch)
+    if rc == 0:
+        return ref
+    if "already exists" in err or "a branch named" in err:
+        rc, _out, err = await run_add(add_existing_branch)
+        if rc == 0:
+            return ref
     raise WorktreeError(err.strip() or f"git worktree add failed for {ref.path}")
 
 
-async def ensure_worktree_for_branch(repo_root: Path, branch_name: str) -> WorktreeRef:
+async def ensure_worktree_for_branch(
+    repo_root: Path,
+    branch_name: str,
+    *,
+    permission_connection: sqlite3.Connection | None = None,
+) -> WorktreeRef:
     """Create or reuse the flat worktree for ``branch_name``.
 
     The branch is rooted at the parent checkout's current HEAD on first
@@ -228,7 +290,11 @@ async def ensure_worktree_for_branch(repo_root: Path, branch_name: str) -> Workt
     branch instead of creating a second branch.
     """
 
-    return await ensure_worktree(repo_root, worktree_ref(repo_root, branch_name))
+    return await ensure_worktree(
+        repo_root,
+        worktree_ref(repo_root, branch_name),
+        permission_connection=permission_connection,
+    )
 
 
 async def prune_terminal_crow_worktree(
@@ -253,17 +319,57 @@ async def prune_terminal_crow_worktree(
         (ticket_id,),
     ).fetchone()
     if row is not None and row["worktree_path"]:
-        return await prune_worktree_path(repo_root, row["worktree_path"])
+        return await prune_worktree_path(
+            repo_root,
+            row["worktree_path"],
+            permission_connection=conn,
+        )
     return False
 
 
-async def prune_worktree_path(repo_root: Path, worktree_path: str | Path) -> bool:
+async def prune_worktree_path(
+    repo_root: Path,
+    worktree_path: str | Path,
+    *,
+    permission_connection: sqlite3.Connection,
+) -> bool:
     path = Path(worktree_path)
     if not path.is_absolute():
         path = repo_root / path
     if not path.exists():
         return False
-    rc, _out, _err = await _git(repo_root, "worktree", "remove", str(path))
+    from uuid import NAMESPACE_URL, uuid4, uuid5  # noqa: PLC0415
+
+    from murder.permissions import (  # noqa: PLC0415
+        GitOperation,
+        LocalServicePermissionPolicy,
+        PermissionPrincipal,
+        PermissionService,
+        PermissionStore,
+        SideEffectEnforcer,
+    )
+
+    try:
+        relative_path = path.resolve().relative_to(repo_root.resolve()).as_posix()
+    except ValueError as exc:
+        raise WorktreeError("worktree removal target must be inside the repository") from exc
+    operation = GitOperation(
+        operation_id=uuid4(),
+        principal=PermissionPrincipal(kind="service", id="worktree-pruner"),
+        repository_id=uuid5(NAMESPACE_URL, f"murder:repository:{repo_root.resolve()}"),
+        action="worktree_remove",
+        arguments=(relative_path,),
+        worktree_path=relative_path,
+    )
+    service = PermissionService(
+        store=PermissionStore(permission_connection),
+        policy=LocalServicePermissionPolicy(),
+    )
+
+    async def remove() -> tuple[int, str, str]:
+        return await _git(repo_root, "worktree", "remove", str(path))
+
+    rc, _out, _err = await SideEffectEnforcer(service).execute(operation, remove)
     return rc == 0
 
 

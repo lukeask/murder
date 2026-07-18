@@ -7,6 +7,10 @@ import sqlite3
 from collections.abc import Awaitable, Callable
 from uuid import UUID
 
+from murder.permissions.persistence import PermissionStore
+from murder.permissions.policy import LocalServicePermissionPolicy
+from murder.permissions.service import PermissionService
+from murder.permissions.session import SessionPermissionAuthorizer
 from murder.runtime.sessions.backend import SessionBackend
 from murder.runtime.sessions.contracts import HarnessSessionRecord
 from murder.runtime.sessions.controller import (
@@ -22,6 +26,10 @@ BackendFactory = Callable[
 ControllerFactory = Callable[[HarnessSessionRecord, SessionBackend], SessionController]
 
 
+class SessionBackendRequiredError(RuntimeError):
+    pass
+
+
 class SessionControllerRegistry:
     """The service-level owner of controller identity and restart recovery."""
 
@@ -34,12 +42,15 @@ class SessionControllerRegistry:
     ) -> None:
         self._store = store
         self._backend_factory = backend_factory
+        # Default denies until an explicit authorizer is supplied. Production
+        # uses ``registry_for_connection`` (SessionPermissionAuthorizer);
+        # tests that need the old bypass must opt into
+        # ``trusted_local_controller_factory``.
         self._controller_factory = controller_factory or (
             lambda record, backend: SessionController(
                 record=record,
                 store=self._store,
                 backend=backend,
-                authorizer=trusted_local_session_authorizer,
             )
         )
         self._controllers: dict[UUID, SessionController] = {}
@@ -71,7 +82,9 @@ class SessionControllerRegistry:
                 selected_backend = backend
                 if selected_backend is None:
                     if self._backend_factory is None:
-                        raise RuntimeError("session controller requires a backend")
+                        raise SessionBackendRequiredError(
+                            "session controller requires a backend"
+                        )
                     backend_or_awaitable = self._backend_factory(record)
                     if isinstance(backend_or_awaitable, Awaitable):
                         selected_backend = await backend_or_awaitable
@@ -134,9 +147,34 @@ def registry_for_connection(connection: sqlite3.Connection) -> SessionController
     if current is not None and current[0] is connection:
         return current[1]
     store = SessionStore(connection)
+    permission_service = PermissionService(
+        store=PermissionStore(connection),
+        policy=LocalServicePermissionPolicy(),
+    )
+    permission_authorizer = SessionPermissionAuthorizer(permission_service)
+
+    def controller_factory(
+        record: HarnessSessionRecord,
+        backend: SessionBackend,
+    ) -> SessionController:
+        return SessionController(
+            record=record,
+            store=store,
+            backend=backend,
+            authorizer=permission_authorizer,
+            takeover_authorizer=lambda request, holder, current_lease, proof: (
+                permission_authorizer.authorize_takeover(
+                    request,
+                    holder=holder,
+                    current_lease=current_lease,
+                    authorization=proof,
+                )
+            ),
+        )
+
     registry = SessionControllerRegistry(
         store=store,
-        controller_factory=SessionControllerRegistry.trusted_local_controller_factory(store),
+        controller_factory=controller_factory,
     )
     _CONNECTION_REGISTRIES[key] = (connection, registry)
     return registry

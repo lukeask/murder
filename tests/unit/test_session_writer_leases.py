@@ -75,6 +75,21 @@ def lease_store() -> tuple[SessionStore, Clock, UUID]:
     return store, clock, session_id
 
 
+def test_schema_setup_and_session_facts_preserve_owner_transaction() -> None:
+    connection = sqlite3.connect(":memory:", isolation_level=None)
+    ensure_session_schema(connection)
+    session_id = uuid4()
+
+    connection.execute("BEGIN IMMEDIATE")
+    ensure_session_schema(connection)
+    SessionStore(connection).save_session(record(session_id))
+    connection.rollback()
+
+    assert connection.execute("SELECT COUNT(*) FROM harness_sessions").fetchone()[0] == 0
+    assert connection.execute("SELECT COUNT(*) FROM retained_facts").fetchone()[0] == 0
+    assert connection.execute("SELECT COUNT(*) FROM projection_inputs").fetchone()[0] == 0
+
+
 def test_acquire_renew_release_and_fence_validation(
     lease_store: tuple[SessionStore, Clock, UUID],
 ) -> None:

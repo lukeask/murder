@@ -14,7 +14,11 @@ from uuid import UUID
 
 from murder.app.service.bootstrap import start_supervisor_workers
 from murder.app.service.read_model import ServiceReadModel
-from murder.app.service.runtime import Runtime
+from murder.app.service.runtime import (
+    ActivityDispatcherFactory,
+    Runtime,
+    TriggerDispatcherFactory,
+)
 from murder.app.service.supervisor import Supervisor
 from murder.bus.broker import DurableBroker
 from murder.bus.transport_socket import (
@@ -86,6 +90,8 @@ class ServiceHost:
     repo_root: Path
     socket_path: Path = field(default_factory=default_socket_path)
     tcp_port: int | None = None
+    activity_dispatcher_factory: ActivityDispatcherFactory | None = None
+    trigger_dispatcher_factory: TriggerDispatcherFactory | None = None
     runtime: Runtime | None = None
     read_model: ServiceReadModel | None = None
     broker: DurableBroker | None = None
@@ -160,7 +166,13 @@ class ServiceHost:
         register_all(self)
 
     async def start(self) -> None:
-        from murder.user_config import ensure_user_themes, load_user_config
+        from murder.runtime.activity_dispatcher import (  # noqa: PLC0415
+            build_default_activity_dispatcher,
+        )
+        from murder.runtime.trigger_dispatcher import (  # noqa: PLC0415
+            build_default_trigger_dispatcher,
+        )
+        from murder.user_config import ensure_user_themes, load_user_config  # noqa: PLC0415
 
         ensure_user_themes()
         try:
@@ -176,7 +188,23 @@ class ServiceHost:
         # before re-raising, so a half-started daemon never leaves the lock
         # held or tmux sessions orphaned.
         try:
-            self.runtime = Runtime(self.config, self.repo_root, user_cfg=user_cfg)
+            self.runtime = Runtime(
+                self.config,
+                self.repo_root,
+                user_cfg=user_cfg,
+                activity_dispatcher_factory=(
+                    self.activity_dispatcher_factory or build_default_activity_dispatcher
+                ),
+                trigger_dispatcher_factory=(
+                    self.trigger_dispatcher_factory
+                    or (
+                        lambda connection: build_default_trigger_dispatcher(
+                            connection,
+                            repo_root=self.repo_root,
+                        )
+                    )
+                ),
+            )
             await self.runtime.start()
             if self.runtime.db is None or self.runtime.bus is None or self.runtime.run_id is None:
                 raise RuntimeError("runtime failed to initialize db/bus/run_id")

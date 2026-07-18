@@ -114,6 +114,12 @@ def test_websocket_speaks_service_application_protocol(tmp_path: Path) -> None:
         def watermark(self) -> int:
             return 0
 
+        def fact_watermark(self) -> int:
+            return 0
+
+        def projection_watermark(self) -> int:
+            return 0
+
         def replay(self, *_args: object, **_kwargs: object) -> list:
             return []
 

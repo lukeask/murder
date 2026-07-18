@@ -10,6 +10,13 @@ filter, and cannot publish internal events. Projection subscriptions own
 durable cursors; terminal streams have independent identities and monotonic
 replace-frame sequences.
 
+The `facts` subscription is the sole retained-outcome surface. It replays only
+feature-owned immutable fact envelopes from `retained_facts`; it never exposes
+the generalized compatibility `events` table. Projection-input cursors are
+written transactionally with their source facts, while workflow signals,
+terminal bytes, session commands, and immediate queries/decisions remain in
+their owning non-fact paths.
+
 Run `python tools/generate_application_protocol.py` after changing a Pydantic
 contract. CI verifies that
 `inktui/src/generated/applicationProtocol.ts` matches the Python schema.

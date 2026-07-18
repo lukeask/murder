@@ -1,12 +1,20 @@
 from __future__ import annotations
 
+import hashlib
 import sqlite3
 from datetime import datetime, timedelta, timezone
-from uuid import UUID, uuid4
+from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 
 import pytest
 from pydantic import ValidationError
 
+from murder.facts.log import get_fact, replay_facts, replay_projection_inputs
+from murder.permissions import (
+    ApprovalChoice,
+    GrantScope,
+    PermissionPrincipal,
+)
+from murder.state.persistence.approvals import resolve_approval_request
 from murder.state.persistence.schema import init_db
 from murder.state.persistence.workflow_runs import (
     SignalDeduplicationConflictError,
@@ -24,6 +32,7 @@ from murder.work.workflows.definition import StageDef, WorkflowDef
 from murder.work.workflows.runtime import (
     ActivityFinishedSignal,
     ActivityWait,
+    ApprovalRequestDraft,
     ApprovalResolvedSignal,
     ApprovalWait,
     Correlation,
@@ -320,7 +329,34 @@ def test_apply_plan_atomically_consumes_replaces_and_increments_revision() -> No
     outbox = conn.execute(
         "SELECT kind, workflow_revision FROM workflow_transition_outbox"
     ).fetchall()
-    assert [(row["kind"], row["workflow_revision"]) for row in outbox] == [("fact", 1)]
+    assert outbox == []
+    facts = conn.execute("SELECT fact_id, kind FROM retained_facts ORDER BY sequence").fetchall()
+    assert [row["kind"] for row in facts] == [
+        "workflow.started",
+        "workflow.transition.applied",
+        "workflow.progressed",
+    ]
+    fact_row = next(row for row in facts if row["kind"] == "workflow.progressed")
+    fact = get_fact(conn, UUID(str(fact_row["fact_id"])))
+    assert fact is not None
+    assert fact.kind == "workflow.progressed"
+    assert fact.aggregate is not None
+    assert fact.aggregate.kind == "workflow"
+    assert fact.aggregate.id == run.workflow_id
+    assert fact.aggregate.revision == 1
+    assert fact.actor.kind == "user"
+    assert fact.actor.id == "luke"
+    assert fact.correlation.correlation_id == run.correlation.correlation_id
+    assert fact.payload == {"stage": "one"}
+    projection_inputs = replay_projection_inputs(conn, projection="workflow_runs")
+    _started_input, transition_input = projection_inputs
+    transition_fact = get_fact(conn, transition_input.source_fact_id)
+    assert transition_fact is not None
+    assert transition_fact.kind == "workflow.transition.applied"
+    assert (
+        transition_input.subject_key,
+        transition_input.generation,
+    ) == (str(run.workflow_id), 1)
 
 
 def test_stale_revision_does_not_consume_signal_or_replace_waits() -> None:
@@ -349,6 +385,313 @@ def test_stale_revision_does_not_consume_signal_or_replace_waits() -> None:
     assert require_workflow_run(conn, run.workflow_id).revision == 0
     assert get_workflow_signal(conn, signal.signal_id).consumed_at is None  # type: ignore[union-attr]
     assert [record.spec for record in list_workflow_waits(conn, run.workflow_id)] == [original_wait]
+
+
+def test_approval_creation_resolution_grant_signal_and_fact_are_atomic() -> None:
+    conn = _conn()
+    run = _run(status=WorkflowStatus.RUNNING)
+    create_workflow_run(conn, run)
+    approval_id = uuid4()
+    digest = hashlib.sha256(b"exact proposed operation").hexdigest()
+    draft = ApprovalRequestDraft(
+        approval_id=approval_id,
+        operation_digest=digest,
+        summary="destructive operation",
+        required_reviewers=("human",),
+        policy="human_required",
+        requested_by=PermissionPrincipal(kind="workflow", id=str(run.workflow_id)),
+        grant_scope=GrantScope(
+            workflow_ids=(run.workflow_id,),
+            operation_types=("git.mutate",),
+            max_uses=1,
+            expires_at=NOW + timedelta(minutes=10),
+        ),
+    )
+    apply_transition_plan(
+        conn,
+        workflow_id=run.workflow_id,
+        plan=WorkflowTransitionPlan(
+            state=StateReplacement(
+                expected_revision=0,
+                status=WorkflowStatus.WAITING,
+                state=_state(),
+            ),
+            replace_waits=(ApprovalWait(approval_id=approval_id),),
+            approvals=(draft,),
+        ),
+        applied_at=NOW,
+    )
+    row = conn.execute(
+        "SELECT payload_json FROM permission_approval_requests WHERE approval_id = ?",
+        (str(approval_id),),
+    ).fetchone()
+    assert row is not None
+
+    with pytest.raises(ValueError, match="digest"):
+        resolve_approval_request(
+            conn,
+            workflow_id=run.workflow_id,
+            approval_id=approval_id,
+            expected_workflow_revision=1,
+            expected_operation_digest="0" * 64,
+            reviewer=PermissionPrincipal(kind="reviewer", id="human"),
+            choice=ApprovalChoice.APPROVE,
+            rationale="looks safe",
+            decided_at=NOW + timedelta(seconds=1),
+        )
+    assert conn.execute(
+        "SELECT COUNT(*) FROM permission_approval_evidence"
+    ).fetchone()[0] == 0
+    assert len(replay_facts(conn, kind="permission.approval.requested")) == 1
+    assert len(replay_projection_inputs(conn, projection="approvals")) == 1
+
+    with pytest.raises(ValueError, match="cannot review"):
+        resolve_approval_request(
+            conn,
+            workflow_id=run.workflow_id,
+            approval_id=approval_id,
+            expected_workflow_revision=1,
+            expected_operation_digest=digest,
+            reviewer=PermissionPrincipal(kind="service", id="scheduler"),
+            choice=ApprovalChoice.APPROVE,
+            rationale="self-approved",
+            decided_at=NOW + timedelta(seconds=1),
+        )
+    assert conn.execute(
+        "SELECT COUNT(*) FROM permission_approval_evidence"
+    ).fetchone()[0] == 0
+
+    conn.execute(
+        """
+        UPDATE workflow_runs SET status = 'cancelled', revision = 2
+        WHERE workflow_id = ?
+        """,
+        (str(run.workflow_id),),
+    )
+    with pytest.raises(ValueError, match="current workflow revision"):
+        resolve_approval_request(
+            conn,
+            workflow_id=run.workflow_id,
+            approval_id=approval_id,
+            expected_workflow_revision=1,
+            expected_operation_digest=digest,
+            reviewer=PermissionPrincipal(kind="reviewer", id="human"),
+            choice=ApprovalChoice.APPROVE,
+            rationale="too late",
+            decided_at=NOW + timedelta(seconds=1),
+        )
+    assert conn.execute(
+        "SELECT COUNT(*) FROM permission_authorization_grants"
+    ).fetchone()[0] == 0
+    conn.execute(
+        """
+        UPDATE workflow_runs SET status = 'waiting', revision = 1
+        WHERE workflow_id = ?
+        """,
+        (str(run.workflow_id),),
+    )
+
+    conn.execute(
+        """
+        CREATE TRIGGER reject_permission_grant_fact
+        BEFORE INSERT ON retained_facts
+        WHEN NEW.kind = 'permission.grant.issued'
+        BEGIN
+            SELECT RAISE(ABORT, 'reject grant fact');
+        END
+        """
+    )
+    with pytest.raises(sqlite3.IntegrityError, match="reject grant fact"):
+        resolve_approval_request(
+            conn,
+            workflow_id=run.workflow_id,
+            approval_id=approval_id,
+            expected_workflow_revision=1,
+            expected_operation_digest=digest,
+            reviewer=PermissionPrincipal(kind="reviewer", id="human"),
+            choice=ApprovalChoice.APPROVE,
+            rationale="must roll back",
+            decided_at=NOW + timedelta(seconds=1),
+        )
+    assert conn.execute(
+        "SELECT COUNT(*) FROM permission_approval_evidence"
+    ).fetchone()[0] == 0
+    assert conn.execute(
+        "SELECT COUNT(*) FROM permission_authorization_grants"
+    ).fetchone()[0] == 0
+    persisted_request = conn.execute(
+        """
+        SELECT status FROM permission_approval_requests
+        WHERE approval_id = ?
+        """,
+        (str(approval_id),),
+    ).fetchone()
+    assert persisted_request["status"] == "pending"
+    conn.execute("DROP TRIGGER reject_permission_grant_fact")
+
+    decision, grant, authorization = resolve_approval_request(
+        conn,
+        workflow_id=run.workflow_id,
+        approval_id=approval_id,
+        expected_workflow_revision=1,
+        expected_operation_digest=digest,
+        reviewer=PermissionPrincipal(kind="reviewer", id="human"),
+        choice=ApprovalChoice.APPROVE,
+        rationale="looks safe",
+        decided_at=NOW + timedelta(seconds=2),
+    )
+    assert grant is not None
+    assert grant.operation_digest == digest
+    assert authorization is not None
+    assert authorization.operation_digest == digest
+    assert authorization.grant_id == grant.grant_id
+    assert authorization.operation_id == approval_id
+    signals = list_workflow_signals(conn, run.workflow_id)
+    assert any(
+        isinstance(item.payload, ApprovalResolvedSignal)
+        and item.payload.approval_id == approval_id
+        and item.payload.decision_id == decision.decision_id
+        for item in signals
+    )
+    wait = next(
+        item for item in list_workflow_waits(conn, run.workflow_id)
+        if isinstance(item.spec, ApprovalWait)
+    )
+    assert wait.satisfied_at is not None
+    facts = replay_facts(conn, kind="permission.approval.resolved")
+    assert len(facts) == 1
+    assert facts[0].payload["operation_digest"] == digest
+    approval_inputs = replay_projection_inputs(conn, projection="approvals")
+    assert [item.source_fact_id for item in approval_inputs] == [
+        uuid5(NAMESPACE_URL, f"murder:approval-requested:{approval_id}"),
+        uuid5(
+            NAMESPACE_URL,
+            f"murder:approval-resolved:{approval_id}:{decision.decision_id}",
+        ),
+    ]
+
+
+def test_approval_deny_and_partial_resolution_yield_no_authorization() -> None:
+    conn = _conn()
+    run = _run(status=WorkflowStatus.RUNNING)
+    create_workflow_run(conn, run)
+    deny_id = uuid4()
+    partial_id = uuid4()
+    digest = hashlib.sha256(b"workflow approval without proposed operation").hexdigest()
+    deny_draft = ApprovalRequestDraft(
+        approval_id=deny_id,
+        operation_digest=digest,
+        summary="deny me",
+        required_reviewers=("human",),
+        policy="human_required",
+        requested_by=PermissionPrincipal(kind="workflow", id=str(run.workflow_id)),
+        grant_scope=GrantScope(
+            workflow_ids=(run.workflow_id,),
+            operation_types=("git.mutate",),
+            max_uses=1,
+            expires_at=NOW + timedelta(minutes=10),
+        ),
+    )
+    partial_draft = ApprovalRequestDraft(
+        approval_id=partial_id,
+        operation_digest=digest,
+        summary="need both reviewers",
+        required_reviewers=("human", "llm"),
+        policy="all",
+        requested_by=PermissionPrincipal(kind="workflow", id=str(run.workflow_id)),
+        grant_scope=GrantScope(
+            workflow_ids=(run.workflow_id,),
+            operation_types=("git.mutate",),
+            max_uses=1,
+            expires_at=NOW + timedelta(minutes=10),
+        ),
+    )
+    apply_transition_plan(
+        conn,
+        workflow_id=run.workflow_id,
+        plan=WorkflowTransitionPlan(
+            state=StateReplacement(
+                expected_revision=0,
+                status=WorkflowStatus.WAITING,
+                state=_state(),
+            ),
+            replace_waits=(
+                ApprovalWait(approval_id=deny_id),
+                ApprovalWait(approval_id=partial_id),
+            ),
+            approvals=(deny_draft, partial_draft),
+        ),
+        applied_at=NOW,
+    )
+
+    _decision, grant, authorization = resolve_approval_request(
+        conn,
+        workflow_id=run.workflow_id,
+        approval_id=deny_id,
+        expected_workflow_revision=1,
+        expected_operation_digest=digest,
+        reviewer=PermissionPrincipal(kind="reviewer", id="human"),
+        choice=ApprovalChoice.DENY,
+        rationale="not safe",
+        decided_at=NOW + timedelta(seconds=1),
+    )
+    assert grant is None
+    assert authorization is None
+
+    _decision, grant, authorization = resolve_approval_request(
+        conn,
+        workflow_id=run.workflow_id,
+        approval_id=partial_id,
+        expected_workflow_revision=1,
+        expected_operation_digest=digest,
+        reviewer=PermissionPrincipal(kind="reviewer", id="human"),
+        choice=ApprovalChoice.APPROVE,
+        rationale="human half",
+        decided_at=NOW + timedelta(seconds=2),
+    )
+    assert grant is None
+    assert authorization is None
+    assert (
+        conn.execute(
+            "SELECT status FROM permission_approval_requests WHERE approval_id = ?",
+            (str(partial_id),),
+        ).fetchone()["status"]
+        == "pending"
+    )
+
+
+def test_factless_transition_still_invalidates_workflow_projection_transactionally() -> None:
+    conn = _conn()
+    run = _run()
+    create_workflow_run(
+        conn,
+        run,
+        waits=(ExternalSignalWait(signal_name="wake"),),
+    )
+    apply_transition_plan(
+        conn,
+        workflow_id=run.workflow_id,
+        plan=WorkflowTransitionPlan(
+            state=StateReplacement(
+                expected_revision=0,
+                status=WorkflowStatus.WAITING,
+                state=_state(StageStatus.RUNNING),
+            ),
+            replace_waits=(ExternalSignalWait(signal_name="next"),),
+        ),
+        applied_at=NOW,
+    )
+
+    facts = conn.execute("SELECT kind FROM retained_facts ORDER BY sequence").fetchall()
+    assert [row["kind"] for row in facts] == [
+        "workflow.started",
+        "workflow.transition.applied",
+    ]
+    inputs = replay_projection_inputs(conn, projection="workflow_runs")
+    assert [(item.subject_key, item.generation) for item in inputs] == [
+        (str(run.workflow_id), 0),
+        (str(run.workflow_id), 1),
+    ]
 
 
 def test_apply_plan_rolls_back_every_write_when_wait_replacement_fails() -> None:

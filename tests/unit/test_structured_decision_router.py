@@ -5,6 +5,7 @@ from dataclasses import replace
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
+from uuid import UUID
 
 import pytest
 
@@ -21,6 +22,7 @@ from murder.llm.harness_control.model import (
     QuestionState,
     unknown_snapshot,
 )
+from murder.permissions import PermissionPrincipal, PermissionStore
 from murder.runtime.orchestration.structured_decisions import StructuredDecisionRouter
 from murder.state.persistence.schema import get_db, init_db
 
@@ -270,3 +272,91 @@ async def test_structured_decisions_are_durable_identity_bound_and_terminal_free
         "SELECT count(*) FROM events WHERE type = 'harness.decision.response'"
     ).fetchone()[0]
     assert response_count == len(snapshots) + 1
+
+
+@pytest.mark.asyncio
+async def test_permission_observe_and_respond_bridge_permission_service(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Observed dialogs create approval records; answers issue authorization proofs."""
+
+    monkeypatch.setattr(
+        "murder.runtime.terminal.tmux.send_keys",
+        AsyncMock(side_effect=AssertionError("the decision router emitted terminal input")),
+    )
+    db = get_db(tmp_path / "murder.db")
+    init_db(db)
+    db.execute(
+        "INSERT INTO runs(run_id, started_at, config_snapshot) VALUES (?, ?, ?)",
+        ("run-perm", "2026-07-12T00:00:00+00:00", "{}"),
+    )
+    bus = Bus("run-perm", db)
+    now = datetime(2026, 7, 12, tzinfo=timezone.utc)
+    revision = ObservationRevision(1, 1, 1)
+    base = unknown_snapshot(HarnessId("codex"), captured_at=now, revision=revision)
+    permission = PermissionRequestState(
+        "p-bridge",
+        "shell",
+        "pytest -q",
+        "Run tests",
+        (
+            ChoiceState("allow_once", "Allow once", disabled=False, highlighted=True),
+            ChoiceState("deny", "Deny", disabled=False),
+        ),
+        "allow_once",
+        frozenset({"shell"}),
+    )
+    snapshot = replace(
+        base,
+        permission_request=Observed.present(
+            permission, evidence=(), observed_at=now, revision=revision
+        ),
+    )
+    agent = SimpleNamespace(
+        id="bridge-agent",
+        latest_ingested_frame=SimpleNamespace(snapshot=snapshot),
+        answer_verified_question=AsyncMock(return_value=True),
+        answer_verified_permission=AsyncMock(return_value=True),
+    )
+    runtime = SimpleNamespace(
+        db=db,
+        bus=bus,
+        run_id="run-perm",
+        get_agent=lambda agent_id: agent if agent_id == agent.id else None,
+    )
+    router = StructuredDecisionRouter(runtime)
+    await router.observe(agent, snapshot)
+
+    request = json.loads(
+        db.execute(
+            "SELECT payload_json FROM events WHERE type = 'harness.decision.request'"
+        ).fetchone()["payload_json"]
+    )
+    assert request["decision_kind"] == "permission"
+    pending = PermissionStore(db).get_pending_approval_for_operation(
+        UUID(request["decision_request_id"])
+    )
+    assert pending is not None
+    assert pending[1].status == "pending"
+    assert pending[1].requested_by == PermissionPrincipal(kind="llm", id=agent.id)
+
+    accepted = await router.respond(
+        {
+            "agent_id": agent.id,
+            "decision_kind": "permission",
+            "decision_request_id": request["decision_request_id"],
+            "request_identity": permission_fingerprint(permission),
+            "response": {
+                "kind": "allow_once",
+                "id": "allow_once",
+                "label": "Allow once",
+            },
+            "decided_by": "human-reviewer",
+        }
+    )
+    assert accepted == {"ok": True}
+    agent.answer_verified_permission.assert_awaited_once()
+    store = PermissionStore(db)
+    assert store.get_pending_approval_for_operation(UUID(request["decision_request_id"])) is None
+    assert store.count("permission_authorization_grants") == 1
+    assert store.count("permission_approval_evidence") == 1

@@ -4,10 +4,12 @@ The wire contract (event types, envelope, constants) lives in
 ``murder.bus.protocol`` — see that module for the frozen schema both
 branches build against during the worker-bus refactor.
 
-This module keeps the in-process ``Bus`` broker used by the current
-single-process runtime. The broker persists every event to the SQLite
-``events`` table before fanning out, so handler crashes never lose
-events. Existing call sites continue to import legacy names
+This module keeps the in-process ``Bus`` compatibility broker used by the
+current single-process runtime. The broker persists every internal bus message
+to the SQLite ``events`` table before fanning out, so handler crashes never
+lose compatibility traffic. This is not the retained fact log; only
+``murder.facts`` may append public immutable facts. Existing call sites
+continue to import legacy names
 (``Role``, ``TicketStatus``, ``HeartbeatEvent``, …) from
 ``murder.bus``; they're re-exported here.
 """

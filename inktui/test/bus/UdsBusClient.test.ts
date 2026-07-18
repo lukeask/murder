@@ -3,6 +3,7 @@ import { rm } from 'node:fs/promises';
 import { createServer, type Server, type Socket } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import type { ProjectionInvalidation } from '../../src/bus/BusClient.js';
 import type { BusEvent } from '../../src/bus/protocol.js';
 import {
   type BackoffConfig,
@@ -25,6 +26,10 @@ class ScriptedApplicationServer {
   readonly messages: ClientMessage[] = [];
   handshakeCount = 0;
   rejectVersion = false;
+  /** When set, projection `subscribe` gets this error instead of `subscription.ready`. */
+  subscriptionError:
+    | { code: 'unsupported_subscription' | 'stream_failed' | 'invalid_message'; message: string }
+    | undefined;
   requestHandler: (
     message: Extract<ClientMessage, { op: 'request' }>,
   ) => Record<string, unknown> | undefined = () => ({});
@@ -34,6 +39,8 @@ class ScriptedApplicationServer {
     mode: 'cold',
     replay: [],
   };
+  factCursor = 0;
+  projectionCursor = 0;
 
   private server: Server | undefined;
   private readonly sockets = new Set<Socket>();
@@ -69,7 +76,7 @@ class ScriptedApplicationServer {
     for (const socket of this.sockets) socket.write(data);
   }
 
-  emitProjection(payload: BusEvent, cursor = 2): void {
+  emitProjection(payload: BusEvent | Record<string, unknown>, cursor = 2): void {
     const subscription = this.latestSubscription('projections');
     if (subscription === undefined) throw new Error('no projection subscription');
     this.broadcast({
@@ -206,6 +213,8 @@ class ScriptedApplicationServer {
           commands: ['plan.create'],
           subscriptions: ['projections', 'notifications'],
           terminal_streams: true,
+          fact_cursor: this.factCursor,
+          projection_cursor: this.projectionCursor,
         });
         return;
       case 'request': {
@@ -216,6 +225,21 @@ class ScriptedApplicationServer {
         return;
       }
       case 'subscribe':
+        if (
+          this.subscriptionError !== undefined &&
+          message.subscription.kind === 'projections'
+        ) {
+          this.send(socket, {
+            op: 'error',
+            subscription_id: message.subscription_id,
+            error: {
+              code: this.subscriptionError.code,
+              message: this.subscriptionError.message,
+              details: {},
+            },
+          });
+          return;
+        }
         this.send(socket, {
           op: 'subscription.ready',
           subscription_id: message.subscription_id,
@@ -276,6 +300,21 @@ function snapshot(key: string): BusEvent {
   };
 }
 
+function projectionInvalidation(
+  projection: ProjectionInvalidation['projection'],
+  subjectKey: string,
+  generation: number,
+  sourceFactId: string | null = '11111111-1111-4111-8111-111111111111',
+): ProjectionInvalidation & Record<string, unknown> {
+  return {
+    type: 'projection.invalidate',
+    projection,
+    subject_key: subjectKey,
+    generation,
+    source_fact_id: sourceFactId,
+  };
+}
+
 function errorEvent(message: string): BusEvent {
   return {
     type: 'error',
@@ -323,6 +362,54 @@ describe('UdsBusClient — generated application handshake', () => {
       client: { client_id: 'tui-test', kind: 'tui' },
     });
     expect(server.handshakeCount).toBe(1);
+    expect(client.getFactCursor()).toBe(0);
+    expect(client.getProjectionCursor()).toBe(0);
+  });
+
+  it('stores ServerHello fact_cursor and projection_cursor watermarks', async () => {
+    server.factCursor = 11;
+    server.projectionCursor = 7;
+    client = new UdsBusClient({
+      socketPath: server.socketPath,
+      clock: instantClock(),
+    });
+    await client.connect();
+
+    expect(client.getFactCursor()).toBe(11);
+    expect(client.getProjectionCursor()).toBe(7);
+  });
+
+  it('defaults projection subscribe since to ServerHello.projection_cursor when omitted', async () => {
+    server.projectionCursor = 42;
+    client = new UdsBusClient({
+      socketPath: server.socketPath,
+      clock: instantClock(),
+      backoff: FAST_BACKOFF,
+    });
+    await client.connect();
+    await client.hydrate('approvals');
+
+    expect(server.latestSubscription('projections')?.subscription).toMatchObject({
+      kind: 'projections',
+      topics: ['approvals'],
+      cursor: 42,
+    });
+  });
+
+  it('forces a cold projection subscribe when since is null', async () => {
+    server.projectionCursor = 42;
+    client = new UdsBusClient({
+      socketPath: server.socketPath,
+      clock: instantClock(),
+      backoff: FAST_BACKOFF,
+    });
+    await client.connect();
+    await client.hydrate('approvals', undefined, undefined, null);
+
+    expect(server.latestSubscription('projections')?.subscription).toEqual({
+      kind: 'projections',
+      topics: ['approvals'],
+    });
   });
 
   it('treats a version_mismatch error as permanent', async () => {
@@ -425,7 +512,7 @@ describe('UdsBusClient — generated subscriptions', () => {
       replay: [],
     };
 
-    const hydration = await client.hydrate(['roster', 'schedule']);
+    const hydration = await client.hydrate(['roster', 'favorites']);
     expect(hydration).toMatchObject({
       snapshots: { roster: { invalidation_key: 'iv', sessions: [] } },
       cursor: 9,
@@ -433,7 +520,7 @@ describe('UdsBusClient — generated subscriptions', () => {
     });
     expect(server.latestSubscription('projections')?.subscription).toEqual({
       kind: 'projections',
-      topics: ['roster', 'schedule'],
+      topics: ['roster', 'favorites'],
     });
     expect(server.latestSubscription('notifications')?.subscription).toEqual({
       kind: 'notifications',
@@ -461,6 +548,72 @@ describe('UdsBusClient — generated subscriptions', () => {
     expect(received.map((event) => (event as { key: string }).key)).toEqual(['T-replay', 'T-tail']);
   });
 
+  it('delivers typed modern projection invalidations from replay and the live tail', async () => {
+    const replayInvalidation = projectionInvalidation('approvals', 'approval-replay', 3, null);
+    const liveInvalidation = projectionInvalidation('approvals', 'approval-live', 4, null);
+    server.snapshot = {
+      snapshots: {},
+      cursor: 20,
+      mode: 'resume',
+      replay: [{ cursor: 19, payload: replayInvalidation }],
+    };
+    const legacyEvents: BusEvent[] = [];
+    const invalidations: ProjectionInvalidation[] = [];
+
+    await client.hydrate(
+      'approvals',
+      (event) => legacyEvents.push(event),
+      (invalidation) => invalidations.push(invalidation),
+    );
+    server.emitProjection(liveInvalidation, 21);
+    await waitFor(() => invalidations.length === 2);
+
+    expect(invalidations).toEqual([replayInvalidation, liveInvalidation]);
+    expect(legacyEvents).toEqual([]);
+  });
+
+  it('delivers nullable-provenance wildcard invalidations for tail-gap recovery', async () => {
+    const invalidations: ProjectionInvalidation[] = [];
+    await client.hydrate('permissions', undefined, (invalidation) =>
+      invalidations.push(invalidation),
+    );
+    const wildcard = projectionInvalidation('permissions', '*', 42, null);
+
+    server.emitProjection(wildcard, 42);
+    await waitFor(() => invalidations.length === 1);
+
+    expect(invalidations).toEqual([wildcard]);
+  });
+
+  it('ignores malformed projection invalidations safely while retaining their cursor', async () => {
+    const invalidations: ProjectionInvalidation[] = [];
+    await client.hydrate('approvals', undefined, (invalidation) =>
+      invalidations.push(invalidation),
+    );
+    server.emitProjection(
+      {
+        type: 'projection.invalidate',
+        projection: 'approvals',
+        subject_key: 'approval-bad',
+        generation: -1,
+        source_fact_id: 'not-a-uuid',
+      },
+      22,
+    );
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(invalidations).toEqual([]);
+
+    server.dropAllConnections();
+    await waitFor(() => server.handshakeCount === 2);
+    await waitFor(
+      () =>
+        server.messages.filter(
+          (message) => message.op === 'subscribe' && message.subscription.kind === 'projections',
+        ).length === 2,
+    );
+    expect(server.latestSubscription('projections')?.subscription).toMatchObject({ cursor: 22 });
+  });
+
   it('delivers compatibility notification events through the standing hydration listener', async () => {
     const received: BusEvent[] = [];
     await client.hydrate('roster', (event) => received.push(event));
@@ -485,6 +638,25 @@ describe('UdsBusClient — generated subscriptions', () => {
       )
       .map((message) => message.subscription_id);
     expect(ids).toEqual([projectionId, notificationId]);
+  });
+
+  it('removes failed initial hydrations so reconnect does not resubscribe them', async () => {
+    server.subscriptionError = {
+      code: 'unsupported_subscription',
+      message: 'projections unavailable',
+    };
+    await expect(client.hydrate('roster')).rejects.toThrow(/projections unavailable/);
+
+    server.subscriptionError = undefined;
+    server.dropAllConnections();
+    await waitFor(() => server.handshakeCount === 2);
+
+    const secondHelloIndex = server.messages.findLastIndex((message) => message.op === 'client.hello');
+    expect(secondHelloIndex).toBeGreaterThan(0);
+    const postReconnectSubscribes = server.messages
+      .slice(secondHelloIndex + 1)
+      .filter((message) => message.op === 'subscribe');
+    expect(postReconnectSubscribes).toEqual([]);
   });
 
   it('re-sends subscribe with the last cursor after reconnect', async () => {

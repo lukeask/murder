@@ -13,10 +13,23 @@ import sqlite3
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from datetime import datetime, timezone
-from uuid import UUID, uuid4
+from uuid import UUID, uuid4, uuid5
 
-from pydantic import TypeAdapter
+from pydantic import JsonValue, TypeAdapter
 
+from murder.facts.contracts import (
+    AggregateRef as FactAggregateRef,
+)
+from murder.facts.contracts import (
+    FactActor,
+    FactCorrelation,
+    ProjectionInputDraft,
+    RetainedFactDraft,
+    WorkflowStartedPayload,
+    WorkflowStateMigratedPayload,
+    WorkflowTransitionAppliedPayload,
+)
+from murder.facts.log import append_fact
 from murder.work.workflows.runtime import (
     ActivityFinishedSignal,
     ActivityWait,
@@ -42,6 +55,7 @@ from murder.work.workflows.runtime import (
 
 _WAIT_ADAPTER: TypeAdapter[WaitSpec] = TypeAdapter(WaitSpec)
 _SIGNAL_ADAPTER: TypeAdapter[WorkflowSignalPayload] = TypeAdapter(WorkflowSignalPayload)
+_WORKFLOW_FACT_NAMESPACE = UUID("6a3761aa-a34f-5d83-8ac4-1d4d59290c4f")
 
 
 class WorkflowPersistenceError(RuntimeError):
@@ -129,6 +143,25 @@ def create_workflow_run(
             workflow_id=run.workflow_id,
             waits=waits,
             created_at=run.created_at,
+        )
+        started_payload = WorkflowStartedPayload(
+            workflow_id=run.workflow_id,
+            definition_name=run.definition_name,
+            definition_version=run.definition_version,
+            status=run.status.value,
+        )
+        _append_workflow_fact(
+            conn,
+            workflow=run,
+            revision=run.revision,
+            fact_id=uuid5(
+                _WORKFLOW_FACT_NAMESPACE,
+                f"{run.workflow_id}:{run.revision}:started",
+            ),
+            kind=started_payload.type,
+            payload=started_payload.model_dump(mode="json"),
+            occurred_at=run.created_at,
+            invalidate=True,
         )
 
 
@@ -349,7 +382,7 @@ def apply_transition_plan(  # noqa: PLR0912 - closed transactional invariants
     new_revision = plan.state.expected_revision + 1
     with _transaction(conn, "apply_workflow_transition", immediate=True):
         row = conn.execute(
-            "SELECT revision, status, state_json FROM workflow_runs WHERE workflow_id = ?",
+            "SELECT * FROM workflow_runs WHERE workflow_id = ?",
             (str(workflow_id),),
         ).fetchone()
         if row is None:
@@ -452,9 +485,45 @@ def apply_transition_plan(  # noqa: PLR0912 - closed transactional invariants
             waits=plan.replace_waits,
             created_at=timestamp,
         )
+        if plan.activities:
+            from murder.state.persistence.activities import (  # noqa: PLC0415
+                insert_activity_requests,
+            )
+
+            insert_activity_requests(
+                conn,
+                workflow_id=workflow_id,
+                workflow_revision=new_revision,
+                drafts=plan.activities,
+                created_at=timestamp,
+            )
+        _validate_activity_wait_references(
+            conn,
+            workflow_id=workflow_id,
+            waits=plan.replace_waits,
+        )
+        if plan.approvals:
+            from murder.state.persistence.approvals import (  # noqa: PLC0415
+                insert_approval_requests,
+            )
+
+            insert_approval_requests(
+                conn,
+                workflow_id=workflow_id,
+                workflow_revision=new_revision,
+                drafts=plan.approvals,
+                created_at=timestamp,
+            )
         _append_transition_outbox(
             conn,
             workflow_id=workflow_id,
+            revision=new_revision,
+            plan=plan,
+            created_at=timestamp,
+        )
+        _append_transition_facts(
+            conn,
+            workflow=_run_record(row),
             revision=new_revision,
             plan=plan,
             created_at=timestamp,
@@ -534,6 +603,28 @@ def apply_workflow_state_migration(
                 _datetime_text(timestamp),
             ),
         )
+        migrated_payload = WorkflowStateMigratedPayload(
+            workflow_id=workflow_id,
+            migration_name=migration_name,
+            from_schema_name=current.state.schema_name,
+            from_schema_version=current.state.schema_version,
+            to_schema_name=target_state.schema_name,
+            to_schema_version=target_state.schema_version,
+            revision=to_revision,
+        )
+        _append_workflow_fact(
+            conn,
+            workflow=current,
+            revision=to_revision,
+            fact_id=uuid5(
+                _WORKFLOW_FACT_NAMESPACE,
+                f"{workflow_id}:{to_revision}:state-migrated",
+            ),
+            kind=migrated_payload.type,
+            payload=migrated_payload.model_dump(mode="json"),
+            occurred_at=timestamp,
+            invalidate=True,
+        )
     return WorkflowStateMigrationRecord(
         migration_id=migration_id,
         workflow_id=workflow_id,
@@ -571,11 +662,10 @@ def _append_transition_outbox(
     plan: WorkflowTransitionPlan,
     created_at: datetime,
 ) -> None:
-    batches: tuple[tuple[str, Sequence[WorkflowContract]], ...] = (
-        ("activity", plan.activities),
-        ("approval", plan.approvals),
-        ("fact", plan.facts),
-    )
+    # Feature tables are now authoritative for activities and approvals, while
+    # facts append directly to the retained fact log. Keep the compatibility
+    # table readable, but create no second dispatch surface.
+    batches: tuple[tuple[str, Sequence[WorkflowContract]], ...] = ()
     for kind, drafts in batches:
         for ordinal, draft in enumerate(drafts):
             conn.execute(
@@ -595,6 +685,116 @@ def _append_transition_outbox(
                     _datetime_text(created_at),
                 ),
             )
+
+
+def _append_transition_facts(
+    conn: sqlite3.Connection,
+    *,
+    workflow: WorkflowRunRecord,
+    revision: int,
+    plan: WorkflowTransitionPlan,
+    created_at: datetime,
+) -> None:
+    """Append workflow facts with run provenance inside the state transaction."""
+
+    workflow_aggregate = FactAggregateRef(
+        kind="workflow",
+        id=workflow.workflow_id,
+        revision=revision,
+    )
+    transition_payload = WorkflowTransitionAppliedPayload(
+        workflow_id=workflow.workflow_id,
+        from_status=workflow.status.value,
+        to_status=plan.state.status.value,
+        revision=revision,
+    )
+    _append_workflow_fact(
+        conn,
+        workflow=workflow,
+        revision=revision,
+        fact_id=uuid5(
+            _WORKFLOW_FACT_NAMESPACE,
+            f"{workflow.workflow_id}:{revision}:transition",
+        ),
+        kind=transition_payload.type,
+        payload=transition_payload.model_dump(mode="json"),
+        occurred_at=created_at,
+        invalidate=True,
+    )
+
+    for ordinal, draft in enumerate(plan.facts):
+        aggregate = (
+            FactAggregateRef(
+                kind=draft.aggregate.kind,
+                id=draft.aggregate.id,
+                revision=draft.aggregate.revision,
+            )
+            if draft.aggregate is not None
+            else workflow_aggregate
+        )
+        _append_workflow_fact(
+            conn,
+            workflow=workflow,
+            revision=revision,
+            fact_id=uuid5(
+                _WORKFLOW_FACT_NAMESPACE,
+                f"{workflow.workflow_id}:{revision}:{ordinal}",
+            ),
+            kind=draft.kind,
+            payload=draft.payload,
+            occurred_at=created_at,
+            aggregate=aggregate,
+        )
+
+
+def _append_workflow_fact(
+    conn: sqlite3.Connection,
+    *,
+    workflow: WorkflowRunRecord,
+    revision: int,
+    fact_id: UUID,
+    kind: str,
+    payload: dict[str, JsonValue],
+    occurred_at: datetime,
+    aggregate: FactAggregateRef | None = None,
+    invalidate: bool = False,
+) -> None:
+    append_fact(
+        conn,
+        RetainedFactDraft(
+            fact_id=fact_id,
+            kind=kind,
+            occurred_at=occurred_at,
+            aggregate=aggregate
+            or FactAggregateRef(
+                kind="workflow",
+                id=workflow.workflow_id,
+                revision=revision,
+            ),
+            actor=FactActor(
+                kind=workflow.started_by.kind.value,
+                id=workflow.started_by.id,
+            ),
+            correlation=FactCorrelation(
+                correlation_id=workflow.correlation.correlation_id,
+                causation_id=workflow.correlation.causation_id,
+                trace_id=workflow.correlation.trace_id,
+            ),
+            payload=payload,
+        ),
+        projection_inputs=(
+            (
+                ProjectionInputDraft(
+                    projection="workflow_runs",
+                    subject_key=str(workflow.workflow_id),
+                    generation=revision,
+                ),
+            )
+            if invalidate
+            else ()
+        ),
+        recorded_at=occurred_at,
+    )
 
 
 def _insert_waits(
@@ -619,6 +819,29 @@ def _insert_waits(
                 _json(_WAIT_ADAPTER.dump_python(spec, mode="json")),
             ),
         )
+
+
+def _validate_activity_wait_references(
+    conn: sqlite3.Connection,
+    *,
+    workflow_id: UUID,
+    waits: Sequence[WaitSpec],
+) -> None:
+    referenced: set[UUID] = set()
+    for wait in waits:
+        if isinstance(wait, ActivityWait):
+            referenced.add(wait.activity_id)
+        elif isinstance(wait, JoinWait):
+            referenced.update(wait.activity_ids)
+    for activity_id in referenced:
+        row = conn.execute(
+            "SELECT workflow_id FROM activities WHERE activity_id = ?",
+            (str(activity_id),),
+        ).fetchone()
+        if row is None or str(row["workflow_id"]) != str(workflow_id):
+            raise ValueError(
+                f"activity wait references unknown activity {activity_id} for this workflow"
+            )
 
 
 def _signal_satisfies_wait(  # noqa: PLR0911 - one return per closed wait variant

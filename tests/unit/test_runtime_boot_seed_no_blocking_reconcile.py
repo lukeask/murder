@@ -32,6 +32,7 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 from murder.app.service.filesystem_sync import FilesystemSyncSupervisor
+from murder.app.service.recovery import ReconcileReport
 from murder.app.service.runtime import Runtime
 from murder.config import (
     Config,
@@ -39,6 +40,8 @@ from murder.config import (
     HarnessRoleConfig,
     ProjectConfig,
 )
+
+EXPECTED_DISPATCH_TICKS = 2
 
 
 def _config() -> Config:
@@ -127,6 +130,70 @@ def test_runtime_start_seeds_and_spawns_without_blocking_reconcile(
     # Boot path is precisely: seed THEN spawn_tasks (seed restores examples
     # before the loops scan).
     assert boot_calls == ["seed", "spawn_tasks"]
+
+
+def test_activity_dispatcher_starts_after_reconcile_and_is_cancelled_on_stop(
+    fake_tmux, repo_root: Path, monkeypatch
+) -> None:
+    order: list[str] = []
+    spy = _SpySupervisor()
+    entered_second_tick = asyncio.Event()
+
+    def _fake_attach(*_args, **_kwargs) -> _SpySupervisor:
+        return spy
+
+    def _reconcile(*_args, **_kwargs) -> ReconcileReport:
+        order.append("reconcile")
+        return ReconcileReport()
+
+    class _Dispatcher:
+        calls = 0
+
+        async def tick(self) -> None:
+            self.calls += 1
+            order.append(f"tick:{self.calls}")
+            assert "reconcile" in order
+            if self.calls == 1:
+                raise RuntimeError("transient")
+            entered_second_tick.set()
+            await asyncio.Event().wait()
+
+    dispatcher = _Dispatcher()
+    rt = Runtime(
+        _config(),
+        repo_root,
+        activity_dispatcher_factory=lambda _db: _make_dispatcher(),
+    )
+
+    def _make_dispatcher() -> _Dispatcher:
+        order.append("factory")
+        assert rt.startup_reconcile_report is not None
+        assert rt.run_id is not None
+        assert rt.bus is not None
+        assert rt._sync is spy
+        return dispatcher
+
+    monkeypatch.setattr(
+        "murder.app.service.runtime.FilesystemSyncSupervisor.attach",
+        _fake_attach,
+    )
+    monkeypatch.setattr(
+        "murder.app.service.runtime.reconcile_agents_vs_tmux",
+        _reconcile,
+    )
+
+    async def _drive() -> asyncio.Task[None]:
+        await rt.start()
+        task = rt._tasks["phase4-activities"]
+        await asyncio.wait_for(entered_second_tick.wait(), timeout=1)
+        await rt.stop()
+        return task
+
+    task = asyncio.run(_drive())
+
+    assert order[:2] == ["reconcile", "factory"]
+    assert dispatcher.calls == EXPECTED_DISPATCH_TICKS
+    assert task.cancelled()
 
 
 def test_supervisor_seed_is_idempotent_and_calls_seed_examples(

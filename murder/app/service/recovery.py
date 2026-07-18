@@ -14,14 +14,21 @@ import logging
 import sqlite3
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from uuid import UUID
+from uuid import UUID, uuid5
 
 from murder.bus import TicketStatus
+from murder.runtime.sessions.contracts import (
+    Correlation,
+    PrincipalKind,
+    PrincipalRef,
+    SessionStatus,
+)
 from murder.runtime.sessions.persistence import SessionStore
 from murder.state.persistence.agents import set_agent_status as _db_set_agent_status
 from murder.work.tickets import lifecycle
 
 LOGGER = logging.getLogger(__name__)
+_RECOVERY_FACT_NAMESPACE = UUID("9b584cc6-113e-4cba-b845-e4df8498248d")
 
 
 @dataclass
@@ -197,20 +204,27 @@ def _reconcile_persisted_harness_sessions(
         if str(row["transport_ref"]) in live_sessions:
             continue
         session_id = UUID(str(row["session_id"]))
-        updated = conn.execute(
-            """
-            UPDATE harness_sessions
-            SET status = 'lost', revision = revision + 1,
-                last_observed_at = ?, stopped_at = ?
-            WHERE session_id = ? AND revision = ?
-            """,
-            (now.isoformat(), now.isoformat(), str(session_id), int(row["revision"])),
-        )
-        if updated.rowcount != 1:
+        persisted = store.get_session(session_id)
+        if persisted is None or persisted.revision != int(row["revision"]):
             continue
-        store.revoke_session_writer_leases(
-            session_id,
+        lost = persisted.model_copy(
+            update={
+                "status": SessionStatus.LOST,
+                "revision": persisted.revision + 1,
+                "last_observed_at": now,
+                "stopped_at": now,
+            }
+        )
+        store.save_terminal_session(
+            lost,
+            expected_revision=persisted.revision,
             reason="tmux resource missing during startup reconciliation",
-            at=now,
+            actor=PrincipalRef(kind=PrincipalKind.SERVICE, id="startup-recovery"),
+            correlation=Correlation(
+                correlation_id=uuid5(
+                    _RECOVERY_FACT_NAMESPACE,
+                    f"{session_id}:{persisted.revision}:lost",
+                )
+            ),
         )
         report.harness_sessions_marked_lost.append(str(session_id))

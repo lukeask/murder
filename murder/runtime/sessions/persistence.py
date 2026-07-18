@@ -13,10 +13,25 @@ from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from typing import Any, cast
-from uuid import UUID, uuid4
+from uuid import UUID, uuid4, uuid5
 
+from murder.facts.contracts import (
+    AggregateRef,
+    FactActor,
+    FactCorrelation,
+    ProjectionInputDraft,
+    RetainedFactDraft,
+    SessionLifecyclePayload,
+    WriterLeaseAcquiredPayload,
+    WriterLeaseReleasedPayload,
+    WriterLeaseRenewedPayload,
+    WriterLeaseRevokedPayload,
+    WriterLeaseTakeoverPayload,
+)
+from murder.facts.log import append_fact, ensure_fact_schema
 from murder.runtime.sessions.contracts import (
     AcquireWriterLease,
+    Correlation,
     HarnessSessionRecord,
     LeaseResource,
     PrincipalKind,
@@ -32,6 +47,8 @@ from murder.runtime.sessions.contracts import (
     WriterLeaseReply,
     WriterMode,
 )
+
+_SESSION_FACT_NAMESPACE = UUID("91fb3af9-2940-58b9-ae42-249ee8af5c59")
 
 SESSION_SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS harness_sessions (
@@ -104,7 +121,9 @@ CREATE INDEX IF NOT EXISTS idx_writer_lease_audit_session
 def ensure_session_schema(connection: sqlite3.Connection) -> None:
     """Create the feature-owned tables idempotently."""
 
-    connection.executescript(SESSION_SCHEMA_SQL)
+    ensure_fact_schema(connection)
+    for statement in _schema_statements(SESSION_SCHEMA_SQL):
+        connection.execute(statement)
 
 
 class SessionPersistenceError(RuntimeError):
@@ -144,10 +163,12 @@ class SessionStore:
         record: HarnessSessionRecord,
         *,
         expected_revision: int | None = None,
+        actor: PrincipalRef | None = None,
+        correlation: Correlation | None = None,
     ) -> None:
         with self._atomic():
             existing = self._connection.execute(
-                "SELECT revision FROM harness_sessions WHERE session_id = ?",
+                "SELECT revision, status FROM harness_sessions WHERE session_id = ?",
                 (str(record.session_id),),
             ).fetchone()
             if expected_revision is not None:
@@ -191,6 +212,19 @@ class SessionStore:
                 """,
                 (str(record.session_id),),
             )
+            previous_status = None if existing is None else SessionStatus(str(existing[1]))
+            if record.status in {
+                SessionStatus.READY,
+                SessionStatus.STOPPED,
+                SessionStatus.FAILED,
+                SessionStatus.LOST,
+            } and previous_status != record.status:
+                self._append_session_lifecycle_fact(
+                    record,
+                    previous_status=previous_status,
+                    actor=actor,
+                    correlation=correlation,
+                )
 
     def get_session(self, session_id: UUID) -> HarnessSessionRecord | None:
         row = self._connection.execute(
@@ -215,6 +249,19 @@ class SessionStore:
                    last_observed_at, stopped_at
             FROM harness_sessions
             WHERE status NOT IN ('stopped', 'failed', 'lost')
+            ORDER BY started_at, session_id
+            """
+        ).fetchall()
+        return tuple(_session_from_row(row) for row in rows)
+
+    def list_sessions(self) -> tuple[HarnessSessionRecord, ...]:
+        rows = self._connection.execute(
+            """
+            SELECT session_id, agent_id, repository_id, harness, model, effort,
+                   transport, transport_ref, status, revision, capabilities_json,
+                   owning_workflow_id, owning_activity_id, started_at,
+                   last_observed_at, stopped_at
+            FROM harness_sessions
             ORDER BY started_at, session_id
             """
         ).fetchall()
@@ -296,6 +343,45 @@ class SessionStore:
             self._insert_lease(lease)
             if current is not None:
                 previous = _lease_from_row(current)
+                takeover_reason = (
+                    revocation_reason
+                    or f"force takeover by {holder.kind.value}:{holder.id}"
+                )
+                self._append_writer_fact(
+                    fact_id=uuid5(
+                        _SESSION_FACT_NAMESPACE,
+                        f"{request.meta.request_id}:revoke:{previous.lease_id}",
+                    ),
+                    payload=WriterLeaseRevokedPayload(
+                        session_id=request.session_id,
+                        lease_id=previous.lease_id,
+                        mode=previous.mode.value,
+                        fence=previous.fence,
+                        reason=takeover_reason,
+                    ),
+                    holder=holder,
+                    correlation=request.meta.correlation,
+                    occurred_at=now,
+                )
+                self._append_writer_fact(
+                    fact_id=uuid5(
+                        _SESSION_FACT_NAMESPACE,
+                        f"{request.meta.request_id}:takeover:{lease.lease_id}",
+                    ),
+                    payload=WriterLeaseTakeoverPayload(
+                        session_id=request.session_id,
+                        previous_lease_id=previous.lease_id,
+                        previous_fence=previous.fence,
+                        lease_id=lease.lease_id,
+                        mode=lease.mode.value,
+                        fence=lease.fence,
+                        reason=takeover_reason,
+                        expires_at=lease.expires_at,
+                    ),
+                    holder=holder,
+                    correlation=request.meta.correlation,
+                    occurred_at=now,
+                )
                 self._connection.execute(
                     """
                     INSERT INTO writer_lease_audit_facts (
@@ -314,15 +400,29 @@ class SessionStore:
                                 "new_fence": lease.fence,
                                 "holder_kind": holder.kind.value,
                                 "holder_id": holder.id,
-                                "revocation_reason": (
-                                    revocation_reason
-                                    or f"force takeover by {holder.kind.value}:{holder.id}"
-                                ),
+                                "revocation_reason": takeover_reason,
                             },
                             sort_keys=True,
                             separators=(",", ":"),
                         ),
                     ),
+                )
+            else:
+                self._append_writer_fact(
+                    fact_id=uuid5(
+                        _SESSION_FACT_NAMESPACE,
+                        f"{request.meta.request_id}:acquire:{lease.lease_id}",
+                    ),
+                    payload=WriterLeaseAcquiredPayload(
+                        session_id=request.session_id,
+                        lease_id=lease.lease_id,
+                        mode=lease.mode.value,
+                        fence=lease.fence,
+                        expires_at=lease.expires_at,
+                    ),
+                    holder=holder,
+                    correlation=request.meta.correlation,
+                    occurred_at=now,
                 )
             return WriterLeaseGranted(request_id=request.meta.request_id, lease=lease)
 
@@ -371,6 +471,22 @@ class SessionStore:
                     str(renewed.lease_id),
                 ),
             )
+            self._append_writer_fact(
+                fact_id=uuid5(
+                    _SESSION_FACT_NAMESPACE,
+                    f"{request.meta.request_id}:renew:{renewed.lease_id}",
+                ),
+                payload=WriterLeaseRenewedPayload(
+                    session_id=renewed.resource.session_id,
+                    lease_id=renewed.lease_id,
+                    mode=renewed.mode.value,
+                    fence=renewed.fence,
+                    expires_at=renewed.expires_at,
+                ),
+                holder=holder,
+                correlation=request.meta.correlation,
+                occurred_at=now,
+            )
             return WriterLeaseGranted(request_id=request.meta.request_id, lease=renewed)
 
     def release_writer_lease(
@@ -412,6 +528,22 @@ class SessionStore:
                 (_dump_time(now), reason, str(request.lease_id), request.fence),
             )
             released = lease.model_copy(update={"revoked_at": now, "revocation_reason": reason})
+            self._append_writer_fact(
+                fact_id=uuid5(
+                    _SESSION_FACT_NAMESPACE,
+                    f"{request.meta.request_id}:release:{released.lease_id}",
+                ),
+                payload=WriterLeaseReleasedPayload(
+                    session_id=released.resource.session_id,
+                    lease_id=released.lease_id,
+                    mode=released.mode.value,
+                    fence=released.fence,
+                    reason=reason,
+                ),
+                holder=holder,
+                correlation=request.meta.correlation,
+                occurred_at=now,
+            )
             return WriterLeaseGranted(request_id=request.meta.request_id, lease=released)
 
     def active_writer_lease(
@@ -423,18 +555,33 @@ class SessionStore:
         row = self._active_lease_row(session_id, _aware(at or self._clock()))
         return None if row is None else _lease_from_row(row)
 
+    def writer_fence(self, session_id: UUID) -> int:
+        self._require_session(session_id)
+        row = self._connection.execute(
+            "SELECT last_fence FROM session_writer_fences WHERE session_id = ?",
+            (str(session_id),),
+        ).fetchone()
+        return 0 if row is None else int(row[0])
+
     def revoke_session_writer_leases(
         self,
         session_id: UUID,
         *,
         reason: str,
         at: datetime | None = None,
+        actor: PrincipalRef | None = None,
+        correlation: Correlation | None = None,
     ) -> int:
         """Fence off every outstanding writer when a session stops or is lost."""
 
         now = _aware(at or self._clock())
         with self._atomic():
             self._require_session(session_id)
+            rows = self._connection.execute(
+                _LEASE_SELECT
+                + " WHERE session_id = ? AND revoked_at IS NULL",
+                (str(session_id),),
+            ).fetchall()
             cursor = self._connection.execute(
                 """
                 UPDATE writer_leases
@@ -443,7 +590,68 @@ class SessionStore:
                 """,
                 (_dump_time(now), reason, str(session_id)),
             )
+            fact_actor = actor or PrincipalRef(
+                kind=PrincipalKind.SERVICE,
+                id="session-controller",
+            )
+            fact_correlation = correlation or Correlation(
+                correlation_id=uuid5(
+                    _SESSION_FACT_NAMESPACE,
+                    f"{session_id}:bulk-revoke:{_dump_time(now)}:{reason}",
+                )
+            )
+            for row in rows:
+                lease = _lease_from_row(row)
+                self._append_writer_fact(
+                    fact_id=uuid5(
+                        _SESSION_FACT_NAMESPACE,
+                        f"{fact_correlation.correlation_id}:revoke:{lease.lease_id}",
+                    ),
+                    payload=WriterLeaseRevokedPayload(
+                        session_id=session_id,
+                        lease_id=lease.lease_id,
+                        mode=lease.mode.value,
+                        fence=lease.fence,
+                        reason=reason,
+                    ),
+                    holder=fact_actor,
+                    correlation=fact_correlation,
+                    occurred_at=now,
+                )
             return cursor.rowcount
+
+    def save_terminal_session(
+        self,
+        record: HarnessSessionRecord,
+        *,
+        expected_revision: int,
+        reason: str,
+        actor: PrincipalRef,
+        correlation: Correlation,
+    ) -> int:
+        """Atomically persist a terminal lifecycle outcome and fence writers."""
+
+        if record.status not in {
+            SessionStatus.STOPPED,
+            SessionStatus.FAILED,
+            SessionStatus.LOST,
+        }:
+            raise ValueError("save_terminal_session requires a terminal status")
+        with self._atomic():
+            revoked = self.revoke_session_writer_leases(
+                record.session_id,
+                reason=reason,
+                at=record.stopped_at or record.last_observed_at,
+                actor=actor,
+                correlation=correlation,
+            )
+            self.save_session(
+                record,
+                expected_revision=expected_revision,
+                actor=actor,
+                correlation=correlation,
+            )
+            return revoked
 
     def validate_writer_lease(
         self,
@@ -482,6 +690,109 @@ class SessionStore:
         if fence_row is None or int(fence_row[0]) != fence:
             raise StaleWriterLeaseError("writer lease fence has been superseded")
         return lease
+
+    def _append_writer_fact(
+        self,
+        *,
+        fact_id: UUID,
+        payload: (
+            WriterLeaseAcquiredPayload
+            | WriterLeaseRenewedPayload
+            | WriterLeaseReleasedPayload
+            | WriterLeaseRevokedPayload
+            | WriterLeaseTakeoverPayload
+        ),
+        holder: PrincipalRef,
+        correlation: Correlation,
+        occurred_at: datetime,
+    ) -> None:
+        append_fact(
+            self._connection,
+            RetainedFactDraft(
+                fact_id=fact_id,
+                kind=payload.type,
+                occurred_at=occurred_at,
+                aggregate=AggregateRef(
+                    kind="session",
+                    id=payload.session_id,
+                    revision=payload.fence,
+                ),
+                actor=FactActor(kind=holder.kind.value, id=holder.id),
+                correlation=FactCorrelation(
+                    correlation_id=correlation.correlation_id,
+                    causation_id=correlation.causation_id,
+                    trace_id=correlation.trace_id,
+                ),
+                payload=payload.model_dump(mode="json"),
+            ),
+            projection_inputs=(
+                ProjectionInputDraft(
+                    projection="sessions",
+                    subject_key=str(payload.session_id),
+                    generation=payload.fence,
+                ),
+            ),
+            recorded_at=occurred_at,
+        )
+
+    def _append_session_lifecycle_fact(
+        self,
+        record: HarnessSessionRecord,
+        *,
+        previous_status: SessionStatus | None,
+        actor: PrincipalRef | None,
+        correlation: Correlation | None,
+    ) -> None:
+        fact_actor = actor or PrincipalRef(
+            kind=PrincipalKind.SERVICE,
+            id="session-store",
+        )
+        fact_correlation = correlation or Correlation(
+            correlation_id=uuid5(
+                _SESSION_FACT_NAMESPACE,
+                f"{record.session_id}:{record.revision}:{record.status.value}",
+            )
+        )
+        payload = SessionLifecyclePayload(
+            type=f"session.{record.status.value}",
+            session_id=record.session_id,
+            from_status=previous_status.value if previous_status is not None else None,
+            to_status=record.status.value,
+            revision=record.revision,
+            harness=record.harness,
+            transport=record.transport.value,
+        )
+        append_fact(
+            self._connection,
+            RetainedFactDraft(
+                fact_id=uuid5(
+                    _SESSION_FACT_NAMESPACE,
+                    f"{record.session_id}:{record.revision}:{payload.type}",
+                ),
+                kind=payload.type,
+                occurred_at=record.last_observed_at or record.started_at,
+                aggregate=AggregateRef(
+                    kind="session",
+                    id=record.session_id,
+                    revision=record.revision,
+                ),
+                actor=FactActor(kind=fact_actor.kind.value, id=fact_actor.id),
+                correlation=FactCorrelation(
+                    correlation_id=fact_correlation.correlation_id,
+                    causation_id=fact_correlation.causation_id,
+                    trace_id=fact_correlation.trace_id,
+                ),
+                payload=payload.model_dump(mode="json"),
+            ),
+            projection_inputs=(
+                ProjectionInputDraft(
+                    projection="sessions",
+                    subject_key=str(record.session_id),
+                    generation=record.revision,
+                ),
+            ),
+            recorded_at=record.last_observed_at or record.started_at,
+        )
 
     def _require_session(self, session_id: UUID) -> None:
         if (
@@ -631,6 +942,19 @@ def _aware(value: datetime) -> datetime:
 
 def _dump_time(value: datetime) -> str:
     return _aware(value).isoformat()
+
+
+def _schema_statements(script: str) -> Iterator[str]:
+    buffer = ""
+    for line in script.splitlines(keepends=True):
+        buffer += line
+        if sqlite3.complete_statement(buffer):
+            statement = buffer.strip()
+            if statement:
+                yield statement
+            buffer = ""
+    if buffer.strip():
+        raise ValueError("incomplete session schema SQL")
 
 
 def _load_time(value: str) -> datetime:

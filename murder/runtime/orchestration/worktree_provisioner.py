@@ -44,6 +44,7 @@ class WorktreeProvisioner:
             worktree = await ensure_worktree_for_branch(
                 self.rt.repo_root,
                 worktree_name.strip(),
+                permission_connection=self.rt.db,
             )
             worktree_path = str(worktree.path)
         additional_workspace_dirs: tuple[str, ...] = ()
@@ -59,6 +60,7 @@ class WorktreeProvisioner:
             worktree = await ensure_worktree_for_branch(
                 self.rt.repo_root,
                 worktree_name.strip(),
+                permission_connection=self.rt.db,
             )
             repo_root = worktree.path
             worktree_path = worktree.path
@@ -75,6 +77,7 @@ class WorktreeProvisioner:
             ref = await ensure_worktree_for_branch(
                 self.rt.repo_root,
                 worktree_branch.strip(),
+                permission_connection=self.rt.db,
             )
             cwd = ref.path
             resolved_worktree = ref.path

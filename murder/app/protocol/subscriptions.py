@@ -2,19 +2,11 @@
 
 from __future__ import annotations
 
-from enum import Enum
 from typing import Annotated, Literal
 
 from pydantic import Field
 
-from murder.app.protocol.common import ApplicationModel
-
-
-class StrEnum(str, Enum):
-    """Python-3.10-compatible string enum."""
-
-    def __str__(self) -> str:
-        return str.__str__(self)
+from murder.app.protocol.common import ApplicationModel, StrEnum
 
 
 class ProjectionTopic(StrEnum):
@@ -25,7 +17,12 @@ class ProjectionTopic(StrEnum):
     TEMPLATES = "templates"
     THEMES = "themes"
     WORKFLOWS = "workflows"
+    WORKFLOW_RUNS = "workflow_runs"
+    ACTIVITIES = "activities"
     SETTINGS = "settings"
+    APPROVALS = "approvals"
+    PERMISSIONS = "permissions"
+    SESSIONS = "sessions"
 
 
 class NotificationChannel(StrEnum):
@@ -45,8 +42,18 @@ class NotificationSubscription(ApplicationModel):
     cursor: int | None = Field(default=None, ge=0)
 
 
+class FactSubscription(ApplicationModel):
+    """Retained immutable facts, never rows from the compatibility event bus."""
+
+    kind: Literal["facts"] = "facts"
+    fact_kinds: list[Annotated[str, Field(min_length=1, max_length=200)]] = Field(
+        default_factory=list
+    )
+    cursor: int | None = Field(default=None, ge=0)
+
+
 SubscriptionSpec = Annotated[
-    ProjectionSubscription | NotificationSubscription,
+    ProjectionSubscription | NotificationSubscription | FactSubscription,
     Field(discriminator="kind"),
 ]
 

@@ -362,6 +362,117 @@ def _migrate_events_schema_version(conn: sqlite3.Connection) -> None:
     conn.execute("ALTER TABLE events ADD COLUMN schema_version INTEGER NOT NULL DEFAULT 1")
 
 
+def _migrate_fact_log(conn: sqlite3.Connection) -> None:
+    """Add the immutable retained-fact and projection-input boundary.
+
+    This deliberately does not backfill the generalized ``events`` table:
+    legacy bus rows mix commands, notifications, decisions, and compatibility
+    traffic, so promoting them would invent fact semantics after the event.
+    """
+
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS retained_facts (
+            sequence            INTEGER PRIMARY KEY AUTOINCREMENT,
+            fact_id             TEXT NOT NULL UNIQUE,
+            kind                TEXT NOT NULL,
+            schema_version      INTEGER NOT NULL CHECK (schema_version >= 1),
+            occurred_at         TEXT NOT NULL,
+            recorded_at         TEXT NOT NULL,
+            aggregate_kind      TEXT,
+            aggregate_id        TEXT,
+            aggregate_revision  INTEGER
+                                CHECK (
+                                    aggregate_revision IS NULL
+                                    OR aggregate_revision >= 0
+                                ),
+            actor_kind          TEXT NOT NULL,
+            actor_id            TEXT NOT NULL,
+            correlation_id      TEXT NOT NULL,
+            causation_id        TEXT,
+            trace_id            TEXT,
+            payload_json        TEXT NOT NULL,
+            CHECK ((aggregate_kind IS NULL) = (aggregate_id IS NULL))
+        );
+        CREATE INDEX IF NOT EXISTS idx_retained_facts_kind_sequence
+            ON retained_facts(kind, sequence);
+        CREATE INDEX IF NOT EXISTS idx_retained_facts_aggregate_sequence
+            ON retained_facts(aggregate_kind, aggregate_id, sequence);
+        CREATE TRIGGER IF NOT EXISTS retained_facts_no_update
+        BEFORE UPDATE ON retained_facts
+        BEGIN
+            SELECT RAISE(ABORT, 'retained facts are immutable');
+        END;
+        """
+    )
+
+    projection_columns = {
+        str(row["name"])
+        for row in conn.execute("PRAGMA table_info(projection_inputs)").fetchall()
+    }
+    if projection_columns and "input_id" not in projection_columns:
+        _executescript_fk_off(
+            conn,
+            """
+            DROP TRIGGER IF EXISTS projection_inputs_no_update;
+            DROP INDEX IF EXISTS idx_projection_inputs_projection_sequence;
+            ALTER TABLE projection_inputs RENAME TO projection_inputs_legacy;
+            CREATE TABLE projection_inputs (
+                sequence        INTEGER PRIMARY KEY AUTOINCREMENT,
+                input_id        TEXT NOT NULL UNIQUE,
+                source_fact_id  TEXT
+                                REFERENCES retained_facts(fact_id) ON DELETE RESTRICT,
+                projection      TEXT NOT NULL,
+                subject_key     TEXT NOT NULL,
+                generation      INTEGER NOT NULL CHECK (generation >= 0),
+                created_at      TEXT NOT NULL,
+                UNIQUE (source_fact_id, projection, subject_key, generation)
+            );
+            INSERT INTO projection_inputs(
+                sequence, input_id, source_fact_id, projection,
+                subject_key, generation, created_at
+            )
+            SELECT sequence, lower(hex(randomblob(16))),
+                   CASE
+                       WHEN source_fact_id IS NOT NULL
+                            AND EXISTS (
+                                SELECT 1 FROM retained_facts
+                                 WHERE fact_id = projection_inputs_legacy.source_fact_id
+                            )
+                       THEN source_fact_id
+                       ELSE NULL
+                   END,
+                   projection, subject_key, generation, created_at
+              FROM projection_inputs_legacy;
+            DROP TABLE projection_inputs_legacy;
+            """,
+            legacy_alter_table=True,
+        )
+
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS projection_inputs (
+            sequence        INTEGER PRIMARY KEY AUTOINCREMENT,
+            input_id        TEXT NOT NULL UNIQUE,
+            source_fact_id  TEXT
+                            REFERENCES retained_facts(fact_id) ON DELETE RESTRICT,
+            projection      TEXT NOT NULL,
+            subject_key     TEXT NOT NULL,
+            generation      INTEGER NOT NULL CHECK (generation >= 0),
+            created_at      TEXT NOT NULL,
+            UNIQUE (source_fact_id, projection, subject_key, generation)
+        );
+        CREATE INDEX IF NOT EXISTS idx_projection_inputs_projection_sequence
+            ON projection_inputs(projection, sequence);
+        CREATE TRIGGER IF NOT EXISTS projection_inputs_no_update
+        BEFORE UPDATE ON projection_inputs
+        BEGIN
+            SELECT RAISE(ABORT, 'projection inputs are immutable');
+        END;
+        """
+    )
+
+
 def _migrate_agents_worktree_path(conn: sqlite3.Connection) -> None:
     """Track the execution worktree used by an agent session."""
     cols = {row["name"] for row in conn.execute("PRAGMA table_info(agents)").fetchall()}

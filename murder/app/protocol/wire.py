@@ -21,11 +21,11 @@ from murder.app.protocol.terminal import (
     TerminalTarget,
 )
 
-SubscriptionKind = Literal["projections", "notifications"]
+SubscriptionKind = Literal["projections", "notifications", "facts"]
 
 
 def _subscription_kinds() -> list[SubscriptionKind]:
-    return ["projections", "notifications"]
+    return ["projections", "notifications", "facts"]
 
 
 class ClientHello(ApplicationModel):
@@ -42,6 +42,8 @@ class ServerHello(ApplicationModel):
     commands: list[CommandName] = Field(default_factory=lambda: list(CommandName))
     subscriptions: list[SubscriptionKind] = Field(default_factory=_subscription_kinds)
     terminal_streams: bool = True
+    fact_cursor: int = Field(default=0, ge=0)
+    projection_cursor: int = Field(default=0, ge=0)
 
 
 class RequestMessage(ApplicationModel):

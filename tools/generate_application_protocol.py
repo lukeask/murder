@@ -68,8 +68,10 @@ export interface ServerHello {{
   readonly server_id: string;
   readonly queries: readonly QueryName[];
   readonly commands: readonly CommandName[];
-  readonly subscriptions: readonly ('projections' | 'notifications')[];
+  readonly subscriptions: readonly ('projections' | 'notifications' | 'facts')[];
   readonly terminal_streams: boolean;
+  readonly fact_cursor: number;
+  readonly projection_cursor: number;
 }}
 
 export type ApplicationRequest =
@@ -99,6 +101,11 @@ export type SubscriptionSpec =
   | {{
       readonly kind: 'notifications';
       readonly channels: readonly NotificationChannel[];
+      readonly cursor?: number | null;
+    }}
+  | {{
+      readonly kind: 'facts';
+      readonly fact_kinds: readonly string[];
       readonly cursor?: number | null;
     }};
 

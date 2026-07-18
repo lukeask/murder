@@ -29,6 +29,8 @@ import type {
   CommandResult,
   HydrateReply,
   HydrateResult,
+  ProjectionInvalidation,
+  ProjectionInvalidationListener,
   ProjectionTopics,
   QueryMethod,
   QueryParams,
@@ -84,7 +86,7 @@ export interface UdsBusClientOptions {
   socketPath: string;
   clientKind?: ClientKind;
   clientId?: string;
-  /** Retained option spelling for callers; it is now the application request timeout. */
+  /** Retained option spelling for callers; application request timeout in seconds. */
   rpcTimeoutS?: number;
   backoff?: BackoffConfig;
   clock?: Clock;
@@ -144,6 +146,7 @@ interface Deferred<T> {
 interface ProjectionHydration {
   readonly topics: readonly ProjectionTopic[];
   readonly listener: BusEventListener | undefined;
+  readonly invalidationListener: ProjectionInvalidationListener | undefined;
   readonly subscriptionId: string;
   readonly notificationId: string;
   readonly initial: Deferred<HydrateReply>;
@@ -162,8 +165,7 @@ interface TerminalAttachment {
   resyncPending: boolean;
 }
 
-const UUID_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 type ConnectionState = 'idle' | 'connecting' | 'connected' | 'closed';
 
@@ -179,12 +181,18 @@ export class UdsBusClient implements BusClient {
   private state: ConnectionState = 'idle';
   private socket: Socket | undefined;
   private lineBuffer = new LineBuffer();
-  private handshakeReady: Promise<void> | undefined;
+  private loop: Promise<void> | undefined;
   private pendingSleep: { cancel(): void } | undefined;
+  private factCursor: number | undefined;
+  private projectionCursor: number | undefined;
   private readonly pendingRequests = new Map<string, PendingRequest>();
   private readonly hydrations = new Map<string, ProjectionHydration>();
   private readonly notificationHydrations = new Map<string, ProjectionHydration>();
   private readonly terminals = new Map<string, TerminalAttachment>();
+  private readonly connectWaiters = new Set<{
+    resolve: () => void;
+    reject: (error: Error) => void;
+  }>();
   private readonly connectListeners = new Set<() => void>();
   private readonly disconnectListeners = new Set<() => void>();
   private readonly permanentErrorListeners = new Set<(error: Error) => void>();
@@ -200,11 +208,28 @@ export class UdsBusClient implements BusClient {
   }
 
   connect(): Promise<void> {
+    if (this.state === 'connected') {
+      return Promise.resolve();
+    }
     if (this.state === 'closed') {
       return Promise.reject(new ConnectionLostError('client is closed'));
     }
-    this.handshakeReady ??= this.runConnectLoop();
-    return this.handshakeReady;
+    if (this.loop === undefined) {
+      this.loop = this.runConnectLoop().finally(() => {
+        this.loop = undefined;
+      });
+    }
+    return new Promise<void>((resolve, reject) => {
+      this.connectWaiters.add({ resolve, reject });
+    });
+  }
+
+  getFactCursor(): number | undefined {
+    return this.factCursor;
+  }
+
+  getProjectionCursor(): number | undefined {
+    return this.projectionCursor;
   }
 
   async query<M extends QueryMethod>(name: M, params: QueryParams<M>): Promise<QueryResult<M>> {
@@ -220,16 +245,22 @@ export class UdsBusClient implements BusClient {
     return result as CommandResult<M>;
   }
 
-  async hydrate(topics: ProjectionTopics, listener?: BusEventListener): Promise<HydrateResult> {
+  async hydrate(
+    topics: ProjectionTopics,
+    listener?: BusEventListener,
+    invalidationListener?: ProjectionInvalidationListener,
+    since?: number | null,
+  ): Promise<HydrateResult> {
     const hydration: ProjectionHydration = {
       topics: normalizeProjectionTopics(topics),
       listener,
+      invalidationListener,
       subscriptionId: `projection-${randomUUID()}`,
       notificationId: `notifications-${randomUUID()}`,
       initial: createDeferred<HydrateReply>(),
       initialSettled: false,
       ready: false,
-      projectionCursor: undefined,
+      projectionCursor: resolveInitialProjectionCursor(since, this.projectionCursor),
       notificationCursor: undefined,
       tailBuffer: [],
     };
@@ -240,6 +271,7 @@ export class UdsBusClient implements BusClient {
       if (this.state === 'connected' && this.socket !== undefined) {
         this.sendHydration(this.socket, hydration);
       } else {
+        // Handshake resend (like WS resendStreams) covers registrations already in the map.
         await this.ensureConnected();
       }
       const reply = await hydration.initial.promise;
@@ -306,10 +338,12 @@ export class UdsBusClient implements BusClient {
     }
     this.state = 'closed';
     this.pendingSleep?.cancel();
-    this.failPendingRequests(new ConnectionLostError('client closed'));
+    const error = new ConnectionLostError('client closed');
+    this.failPendingRequests(error);
+    this.rejectConnectWaiters(error);
     for (const hydration of this.hydrations.values()) {
       if (!hydration.initialSettled) {
-        hydration.initial.reject(new ConnectionLostError('client closed'));
+        hydration.initial.reject(error);
       }
     }
     this.hydrations.clear();
@@ -392,63 +426,78 @@ export class UdsBusClient implements BusClient {
 
   private async runConnectLoop(): Promise<void> {
     let attempt = 0;
-    let firstSettled = false;
-    let resolveFirst!: () => void;
-    let rejectFirst!: (error: Error) => void;
-    const firstHandshake = new Promise<void>((resolve, reject) => {
-      resolveFirst = resolve;
-      rejectFirst = reject;
-    });
-
-    const loop = async (): Promise<void> => {
-      while (!this.isClosed()) {
-        let established = false;
-        try {
-          await this.openAndHandshake();
-          attempt = 0;
-          established = true;
-          if (!firstSettled) {
-            firstSettled = true;
-            resolveFirst();
-          }
-          await this.readUntilClosed();
-        } catch (error) {
-          if (error instanceof ProtocolVersionMismatchError) {
-            this.state = 'closed';
-            if (!firstSettled) {
-              firstSettled = true;
-              rejectFirst(error);
-            }
-            this.failPendingRequests(error);
-            this.notify(this.permanentErrorListeners, error);
-            return;
-          }
-          this.logger.warn(`application connection error: ${stringifyError(error)}`);
+    while (!this.isClosed()) {
+      let established = false;
+      try {
+        const trailing = await this.openAndHandshake();
+        attempt = 0;
+        established = true;
+        this.state = 'connected';
+        const socket = this.socket;
+        if (socket === undefined) {
+          throw new ConnectionLostError('no socket after handshake');
         }
+        this.resolveConnectWaiters();
+        for (const hydration of this.hydrations.values()) {
+          this.sendHydration(socket, hydration);
+        }
+        for (const attachment of this.terminals.values()) {
+          this.sendTerminalAttach(socket, attachment);
+        }
+        for (const line of trailing) {
+          const message = this.parseServerMessage(line);
+          if (message !== undefined) {
+            this.dispatch(message);
+          }
+        }
+        this.notify(this.connectListeners, undefined);
+        await this.readUntilClosed();
         if (this.isClosed()) {
-          break;
+          return;
         }
+        this.state = 'connecting';
+        this.teardownSocket();
         this.failPendingRequests(new ConnectionLostError('connection dropped'));
         for (const hydration of this.hydrations.values()) {
           hydration.ready = false;
           hydration.tailBuffer = [];
         }
+        this.notify(this.disconnectListeners, undefined);
+      } catch (error) {
+        this.teardownSocket();
+        if (error instanceof ProtocolVersionMismatchError) {
+          this.state = 'closed';
+          this.failPendingRequests(error);
+          this.rejectConnectWaiters(error);
+          this.notify(this.permanentErrorListeners, error);
+          return;
+        }
+        this.state = 'connecting';
+        this.logger.warn(`application connection error: ${stringifyError(error)}`);
         if (established) {
+          this.failPendingRequests(new ConnectionLostError('connection dropped'));
+          for (const hydration of this.hydrations.values()) {
+            hydration.ready = false;
+            hydration.tailBuffer = [];
+          }
           this.notify(this.disconnectListeners, undefined);
         }
-        const delay = this.nextBackoffMs(attempt++);
-        const sleeper = this.clock.sleep(delay);
-        this.pendingSleep = sleeper;
-        await sleeper.promise;
-        this.pendingSleep = undefined;
       }
-    };
-    void loop();
-    return firstHandshake;
+
+      if (this.isClosed()) {
+        return;
+      }
+      const delay = this.nextBackoffMs(attempt++);
+      const sleeper = this.clock.sleep(delay);
+      this.pendingSleep = sleeper;
+      await sleeper.promise;
+      this.pendingSleep = undefined;
+    }
   }
 
-  private async openAndHandshake(): Promise<void> {
+  private async openAndHandshake(): Promise<string[]> {
     this.state = 'connecting';
+    this.teardownSocket();
     this.lineBuffer = new LineBuffer();
     const socket = await this.openSocket();
     this.socket = socket;
@@ -457,21 +506,7 @@ export class UdsBusClient implements BusClient {
       protocol_version: APPLICATION_PROTOCOL_VERSION,
       client: { client_id: this.clientId, kind: this.clientKind },
     };
-    const trailing = await this.handshakeExchange(socket, hello);
-    this.state = 'connected';
-    for (const hydration of this.hydrations.values()) {
-      this.sendHydration(socket, hydration);
-    }
-    for (const attachment of this.terminals.values()) {
-      this.sendTerminalAttach(socket, attachment);
-    }
-    for (const line of trailing) {
-      const message = this.parseServerMessage(line);
-      if (message !== undefined) {
-        this.dispatch(message);
-      }
-    }
-    this.notify(this.connectListeners, undefined);
+    return this.handshakeExchange(socket, hello);
   }
 
   private handshakeExchange(socket: Socket, hello: ClientHello): Promise<string[]> {
@@ -501,6 +536,10 @@ export class UdsBusClient implements BusClient {
                 ),
               );
             } else {
+              this.factCursor =
+                typeof message.fact_cursor === 'number' ? message.fact_cursor : 0;
+              this.projectionCursor =
+                typeof message.projection_cursor === 'number' ? message.projection_cursor : 0;
               settle(() => resolve(lines.slice(index + 1)));
             }
             return;
@@ -640,7 +679,9 @@ export class UdsBusClient implements BusClient {
     const replay: Array<{ seq: number; event: Parameters<BusEventListener>[0] }> = [];
     for (const item of snapshot.replay) {
       hydration.projectionCursor = advanceCursor(hydration.projectionCursor, item.cursor);
-      if (isBusEvent(item.payload)) {
+      if (isProjectionInvalidation(item.payload)) {
+        this.callProjectionInvalidationListener(hydration.invalidationListener, item.payload);
+      } else if (!hasProjectionInvalidationType(item.payload) && isBusEvent(item.payload)) {
         replay.push({ seq: item.cursor, event: item.payload });
         this.callBusListener(hydration.listener, item.payload);
       }
@@ -673,7 +714,9 @@ export class UdsBusClient implements BusClient {
       return;
     }
     hydration.projectionCursor = advanceCursor(hydration.projectionCursor, cursor);
-    if (isBusEvent(payload)) {
+    if (isProjectionInvalidation(payload)) {
+      this.callProjectionInvalidationListener(hydration.invalidationListener, payload);
+    } else if (!hasProjectionInvalidationType(payload) && isBusEvent(payload)) {
       this.callBusListener(hydration.listener, payload);
     }
   }
@@ -704,6 +747,8 @@ export class UdsBusClient implements BusClient {
       if (hydration !== undefined && !hydration.initialSettled) {
         hydration.initialSettled = true;
         hydration.initial.reject(error);
+        this.hydrations.delete(hydration.subscriptionId);
+        this.notificationHydrations.delete(hydration.notificationId);
       }
       return;
     }
@@ -760,8 +805,7 @@ export class UdsBusClient implements BusClient {
       this.requestTerminalResync(attachment, 'unsupported_mode');
       return;
     }
-    // A reset frame is authoritative, so a jump caused by latest-frame-wins
-    // queue coalescing is recovered by this frame itself.
+    // A reset frame recovers sequence jumps from latest-frame-wins coalescing.
     attachment.lastSequence = frame.sequence;
     attachment.resyncPending = false;
     this.callTerminalListener(attachment, frame);
@@ -812,6 +856,20 @@ export class UdsBusClient implements BusClient {
     settle(request);
   }
 
+  private resolveConnectWaiters(): void {
+    for (const waiter of this.connectWaiters) {
+      waiter.resolve();
+    }
+    this.connectWaiters.clear();
+  }
+
+  private rejectConnectWaiters(error: Error): void {
+    for (const waiter of this.connectWaiters) {
+      waiter.reject(error);
+    }
+    this.connectWaiters.clear();
+  }
+
   private failPendingRequests(error: Error): void {
     for (const request of this.pendingRequests.values()) {
       request.cancelTimeout();
@@ -829,6 +887,18 @@ export class UdsBusClient implements BusClient {
       listener(event);
     } catch {
       // A store listener owns its own error state.
+    }
+  }
+
+  private callProjectionInvalidationListener(
+    listener: ProjectionInvalidationListener | undefined,
+    invalidation: ProjectionInvalidation,
+  ): void {
+    if (listener === undefined) return;
+    try {
+      listener(invalidation);
+    } catch {
+      // A projection consumer owns its own error state.
     }
   }
 
@@ -908,7 +978,43 @@ export class UdsBusClient implements BusClient {
 }
 
 function normalizeProjectionTopics(topics: ProjectionTopics): readonly ProjectionTopic[] {
-  return typeof topics === 'string' ? [topics] : [...topics];
+  const list: readonly string[] = typeof topics === 'string' ? [topics] : [...topics];
+  if (list.length === 0 || list.includes('all')) return ALL_PROJECTION_TOPICS;
+  const aliases: Readonly<Record<string, readonly ProjectionTopic[]>> = {
+    crow: ['roster'],
+    crows: ['roster'],
+    tickets: ['schedule'],
+    prefs: ['favorites', 'templates', 'themes', 'workflows', 'settings'],
+    preferences: ['favorites', 'templates', 'themes', 'workflows', 'settings'],
+  };
+  const valid = new Set<string>(ALL_PROJECTION_TOPICS);
+  const out = new Set<ProjectionTopic>();
+  for (const topic of list) {
+    const mapped = aliases[topic];
+    if (mapped !== undefined) {
+      for (const value of mapped) out.add(value);
+    } else if (valid.has(topic)) {
+      out.add(topic as ProjectionTopic);
+    } else {
+      throw new Error(`unsupported projection topic '${topic}'`);
+    }
+  }
+  return [...out];
+}
+
+/**
+ * Resolve the initial projection subscribe cursor.
+ * - `null` → cold (omit cursor)
+ * - number → explicit since
+ * - omitted → default to the ServerHello projection watermark when known
+ */
+function resolveInitialProjectionCursor(
+  since: number | null | undefined,
+  helloProjectionCursor: number | undefined,
+): number | undefined {
+  if (since === null) return undefined;
+  if (typeof since === 'number') return since;
+  return helloProjectionCursor;
 }
 
 function createDeferred<T>(): Deferred<T> {
@@ -923,6 +1029,47 @@ function createDeferred<T>(): Deferred<T> {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+const ALL_PROJECTION_TOPICS: readonly ProjectionTopic[] = [
+  'conversations',
+  'roster',
+  'schedule',
+  'favorites',
+  'templates',
+  'themes',
+  'workflows',
+  'workflow_runs',
+  'activities',
+  'settings',
+  'approvals',
+  'permissions',
+  'sessions',
+];
+
+const PROJECTION_TOPICS: ReadonlySet<string> = new Set(ALL_PROJECTION_TOPICS);
+
+function isProjectionInvalidation(value: unknown): value is ProjectionInvalidation {
+  if (!isRecord(value)) return false;
+  const { type, projection, subject_key, generation, source_fact_id } = value;
+  return (
+    type === 'projection.invalidate' &&
+    typeof projection === 'string' &&
+    PROJECTION_TOPICS.has(projection) &&
+    typeof subject_key === 'string' &&
+    subject_key.length > 0 &&
+    typeof generation === 'number' &&
+    Number.isSafeInteger(generation) &&
+    generation >= 0 &&
+    (source_fact_id === null ||
+      (typeof source_fact_id === 'string' && UUID_RE.test(source_fact_id)))
+  );
+}
+
+function hasProjectionInvalidationType(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  const { type } = value;
+  return type === 'projection.invalidate';
 }
 
 function advanceCursor(

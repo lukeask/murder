@@ -17,11 +17,12 @@
  *    stay framework-agnostic (rule 4). The React binding lives in `src/hooks/`.
  *
  * Event-driven invalidation (the data-flow contract):
- *   on construction the store subscribes to the bus, filtered to `state.snapshot` events. Each event
- *   is key-only — it names the {@link Entity} that changed. The store maps that entity to the slice
- *   whose `*_INVALIDATING_ENTITY` matches and calls that slice's refresh action, which re-pulls and
- *   ref-swaps only itself. An unrelated entity matches no slice → no re-pull. This is the whole
- *   perf story: the wire carries change granularity; the store never polls and never deep-diffs.
+ *   on construction the store opens two projection hydrations — compatibility topics still
+ *   deliver `state.snapshot` / conversation events, while feature-owned topics deliver
+ *   `projection.invalidate` messages. Each path names what changed; the store maps that to the
+ *   slice whose refresh action re-pulls and ref-swaps only itself. Unrelated keys match no slice
+ *   → no re-pull. Dual path is intentional during migration: schedule invalidate and ticket-entity
+ *   snapshots may both refresh tickets/usage until compatibility snapshots are retired.
  *
  * To add slice X: first write its three thin-shell files (`xSlice.ts`/`xActions.ts` +
  * `xSelectors.ts`) over the shared `./listSlice.ts` factory — copy the roster files and supply
@@ -41,6 +42,8 @@ import type {
   BusClient,
   BusEventListener,
   HydrateSnapshots,
+  ProjectionInvalidation,
+  ProjectionInvalidationListener,
   Unsubscribe,
 } from '../bus/BusClient.js';
 import type {
@@ -381,15 +384,28 @@ export function createAppStore(bus: BusClient): {
   };
 }
 
-const HYDRATE_TOPICS: readonly ProjectionTopic[] = [
+/** Compatibility topics still served from the event-table hydrate path (state.snapshot, etc.). */
+const COMPAT_HYDRATE_TOPICS: readonly ProjectionTopic[] = [
   'conversations',
   'roster',
-  'schedule',
   'favorites',
   'templates',
   'themes',
   'workflows',
   'settings',
+];
+
+/**
+ * Feature-owned projections with broker snapshots + projection.invalidate. Subscribed separately
+ * from compatibility topics (distinct cursor domains on the wire).
+ */
+const FEATURE_HYDRATE_TOPICS: readonly ProjectionTopic[] = [
+  'schedule',
+  'approvals',
+  'permissions',
+  'sessions',
+  'workflow_runs',
+  'activities',
 ];
 
 function wireHydration(
@@ -401,6 +417,7 @@ function wireHydration(
   let disposed = false;
   let hydrationLive = false;
   const pendingTail: Parameters<BusEventListener>[0][] = [];
+  const pendingInvalidations: ProjectionInvalidation[] = [];
   const listener: BusEventListener = (event) => {
     if (disposed) {
       return;
@@ -415,33 +432,69 @@ function wireHydration(
     }
     routeHydratedEvent(event, actions, invalidations);
   };
+  const invalidationListener: ProjectionInvalidationListener = (invalidation) => {
+    if (disposed) {
+      return;
+    }
+    if (!hydrationLive) {
+      pendingInvalidations.push(invalidation);
+      return;
+    }
+    routeProjectionInvalidation(invalidation, actions);
+  };
 
   store.setState({ hydration: { status: 'loading', cursor: null, mode: null, error: null } });
-  let unsubscribeHydrate: Unsubscribe | undefined;
-  void bus
-    .hydrate(HYDRATE_TOPICS, listener)
+  const unsubscribers: Unsubscribe[] = [];
+  const recordUnsubscribe = (unsubscribe: Unsubscribe): void => {
+    if (disposed) {
+      unsubscribe();
+      return;
+    }
+    unsubscribers.push(unsubscribe);
+  };
+  // Force cold on boot (`since: null`) so the first ready delivers authoritative snapshots.
+  // Hello projection_cursor is used as the default since only when callers omit `since` after
+  // handshake (resume-from-watermark). Compatibility and feature topics must stay split.
+  const compatHydrate = bus
+    .hydrate(COMPAT_HYDRATE_TOPICS, listener, undefined, null)
     .then((reply) => {
+      recordUnsubscribe(reply.unsubscribe);
+      return reply;
+    });
+  const featureHydrate = bus
+    .hydrate(FEATURE_HYDRATE_TOPICS, undefined, invalidationListener, null)
+    .then((reply) => {
+      recordUnsubscribe(reply.unsubscribe);
+      return reply;
+    });
+  void Promise.all([compatHydrate, featureHydrate])
+    .then(([compatReply, featureReply]) => {
       if (disposed) {
-        reply.unsubscribe();
         return;
       }
-      applyHydrateSnapshots(store, reply.snapshots);
+      applyHydrateSnapshots(store, { ...compatReply.snapshots, ...featureReply.snapshots });
       hydrationLive = true;
       for (const event of pendingTail) {
         routeHydratedEvent(event, actions, invalidations);
       }
       pendingTail.length = 0;
-      unsubscribeHydrate = reply.unsubscribe;
+      for (const invalidation of pendingInvalidations) {
+        routeProjectionInvalidation(invalidation, actions);
+      }
+      pendingInvalidations.length = 0;
       store.setState({
         hydration: {
           status: 'ready',
-          cursor: reply.cursor,
-          mode: reply.mode ?? null,
+          cursor: featureReply.cursor ?? compatReply.cursor,
+          mode: featureReply.mode ?? compatReply.mode ?? null,
           error: null,
         },
       });
     })
     .catch((error: unknown) => {
+      for (const unsubscribe of unsubscribers.splice(0)) {
+        unsubscribe();
+      }
       if (disposed) return;
       const message = error instanceof Error ? error.message : String(error);
       store.setState({ hydration: { status: 'error', cursor: null, mode: null, error: message } });
@@ -450,9 +503,35 @@ function wireHydration(
   return {
     dispose: () => {
       disposed = true;
-      unsubscribeHydrate?.();
+      for (const unsubscribe of unsubscribers.splice(0)) {
+        unsubscribe();
+      }
     },
   };
+}
+
+function routeProjectionInvalidation(
+  invalidation: ProjectionInvalidation,
+  actions: AppActions,
+): void {
+  switch (invalidation.projection) {
+    case 'schedule':
+      // Prefer invalidate-driven refetch for the feature-owned schedule projection; the legacy
+      // ticket/queue_row state.snapshot path remains wired as a dual-write fallback.
+      void actions.tickets.refresh();
+      void actions.usage.refresh();
+      return;
+    case 'approvals':
+    case 'permissions':
+    case 'sessions':
+    case 'workflow_runs':
+    case 'activities':
+      // No store slices yet — subscription is live so future slices can attach without a protocol
+      // change. Queries exist for approvals/permissions but are unused until UI needs them.
+      return;
+    default:
+      return;
+  }
 }
 
 function routeHydratedEvent(

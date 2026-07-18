@@ -11,9 +11,11 @@ from datetime import datetime, timezone
 from typing import Generic, Literal, Protocol, TypeVar, cast
 from uuid import UUID
 
+from murder.permissions.contracts import AuthorizationProof
 from murder.runtime.sessions.backend import SessionBackend
 from murder.runtime.sessions.contracts import (
     AcquireWriterLease,
+    Correlation,
     HarnessSessionRecord,
     InterruptSession,
     PrincipalKind,
@@ -26,6 +28,7 @@ from murder.runtime.sessions.contracts import (
     SessionCommandReceipt,
     SessionStatus,
     TerminateSession,
+    WriterLease,
     WriterLeaseReply,
     WriterMode,
     WriteTerminalInput,
@@ -63,7 +66,7 @@ class SessionCommandAuthorizer(Protocol):
         command: SessionCommand,
         record: HarnessSessionRecord,
         principal: PrincipalRef,
-        authorization: object | None,
+        authorization: AuthorizationProof | None,
     ) -> bool: ...
 
 
@@ -71,7 +74,7 @@ async def _deny_authorized_command(
     command: SessionCommand,
     record: HarnessSessionRecord,
     principal: PrincipalRef,
-    authorization: object | None,
+    authorization: AuthorizationProof | None,
 ) -> bool:
     del command, record, principal, authorization
     return False
@@ -81,7 +84,7 @@ async def trusted_local_session_authorizer(
     command: SessionCommand,
     record: HarnessSessionRecord,
     principal: PrincipalRef,
-    authorization: object | None,
+    authorization: AuthorizationProof | None,
 ) -> bool:
     """Explicit policy for the trusted in-process service boundary.
 
@@ -117,7 +120,7 @@ class _MailboxItem(Generic[ResultT]):
     command: SessionCommand
     principal: PrincipalRef
     expected_revision: int | None
-    authorization: object | None
+    authorization: AuthorizationProof | None
     result: asyncio.Future[ResultT]
 
 
@@ -144,6 +147,7 @@ class _LeaseMailboxItem:
     request: AcquireWriterLease | RenewWriterLease | ReleaseWriterLease
     holder: PrincipalRef
     force_authorized: bool
+    authorization: AuthorizationProof | None
     reason: str | None
     result: asyncio.Future[WriterLeaseReply]
 
@@ -168,12 +172,23 @@ class SessionController:
         store: SessionStore,
         backend: SessionBackend,
         authorizer: SessionCommandAuthorizer = _deny_authorized_command,
+        takeover_authorizer: Callable[
+            [
+                AcquireWriterLease,
+                PrincipalRef,
+                WriterLease,
+                AuthorizationProof | None,
+            ],
+            bool,
+        ]
+        | None = None,
         cooperative_input_policy: CooperativeInputPolicy = _deny_cooperative_input,
     ) -> None:
         self._session_id = record.session_id
         self._store = store
         self._backend = backend
         self._authorizer = authorizer
+        self._takeover_authorizer = takeover_authorizer
         self._cooperative_input_policy = cooperative_input_policy
         self._mailbox: asyncio.Queue[
             _MailboxItem[SessionCommandReceipt]
@@ -216,7 +231,7 @@ class SessionController:
         *,
         principal: PrincipalRef,
         expected_revision: int | None = None,
-        authorization: object | None = None,
+        authorization: AuthorizationProof | None = None,
     ) -> SessionCommandReceipt:
         """Enqueue a discriminated command; callers can never invoke backend I/O."""
 
@@ -272,6 +287,7 @@ class SessionController:
         holder: PrincipalRef,
         force_authorized: bool = False,
         revocation_reason: str | None = None,
+        authorization: AuthorizationProof | None = None,
     ) -> WriterLeaseReply:
         if request.session_id != self._session_id:
             raise ValueError("writer lease request targets another session")
@@ -281,6 +297,7 @@ class SessionController:
             holder=holder,
             force_authorized=force_authorized,
             reason=revocation_reason,
+            authorization=authorization,
         )
 
     async def renew_writer_lease(
@@ -330,13 +347,22 @@ class SessionController:
         holder: PrincipalRef,
         force_authorized: bool = False,
         reason: str | None = None,
+        authorization: AuthorizationProof | None = None,
     ) -> WriterLeaseReply:
         if self._closed:
             raise SessionControllerClosedError("session controller is closed")
         self._ensure_worker()
         future: asyncio.Future[WriterLeaseReply] = asyncio.get_running_loop().create_future()
         await self._mailbox.put(
-            _LeaseMailboxItem(operation, request, holder, force_authorized, reason, future)
+            _LeaseMailboxItem(
+                operation,
+                request,
+                holder,
+                force_authorized,
+                authorization,
+                reason,
+                future,
+            )
         )
         return await future
 
@@ -429,6 +455,11 @@ class SessionController:
             )
         self._validate_status(record)
         self._validate_capability(record, item.command)
+        await self._validate_writer(record, item.command, item.principal)
+        # Proof validation is deliberately the final guard before backend I/O.
+        # Capability, revision, status, and lease checks above contribute the
+        # exact current effect context; no await occurs after authorization and
+        # before dispatch.
         if not await self._authorizer(
             item.command,
             record,
@@ -436,10 +467,13 @@ class SessionController:
             item.authorization,
         ):
             raise SessionAuthorizationError("session command was not authorized")
-        await self._validate_writer(record, item.command, item.principal)
 
         if isinstance(item.command, TerminateSession):
-            return await self._execute_termination(item.command, record)
+            return await self._execute_termination(
+                item.command,
+                record,
+                item.principal,
+            )
 
         await self._dispatch(item.command)
         completed_at = datetime.now(timezone.utc)
@@ -462,7 +496,9 @@ class SessionController:
         self,
         command: TerminateSession,
         record: HarnessSessionRecord,
+        principal: PrincipalRef,
     ) -> SessionCommandReceipt:
+        correlation = Correlation(correlation_id=command.operation_id)
         stopping_at = datetime.now(timezone.utc)
         stopping = record.model_copy(
             update={
@@ -484,12 +520,13 @@ class SessionController:
                     "stopped_at": failed_at,
                 }
             )
-            self._store.revoke_session_writer_leases(
-                record.session_id,
+            self._store.save_terminal_session(
+                failed,
+                expected_revision=stopping.revision,
                 reason=command.reason or "session termination failed",
-                at=failed_at,
+                actor=principal,
+                correlation=correlation,
             )
-            self._store.save_session(failed, expected_revision=stopping.revision)
             raise
         completed_at = datetime.now(timezone.utc)
         stopped = stopping.model_copy(
@@ -500,12 +537,13 @@ class SessionController:
                 "stopped_at": completed_at,
             }
         )
-        self._store.revoke_session_writer_leases(
-            record.session_id,
+        self._store.save_terminal_session(
+            stopped,
+            expected_revision=stopping.revision,
             reason=command.reason or "session terminated",
-            at=completed_at,
+            actor=principal,
+            correlation=correlation,
         )
-        self._store.save_session(stopped, expected_revision=stopping.revision)
         return SessionCommandReceipt(
             operation_id=command.operation_id,
             session_id=record.session_id,
@@ -516,10 +554,23 @@ class SessionController:
     def _execute_lease(self, item: _LeaseMailboxItem) -> WriterLeaseReply:
         if item.operation == "acquire":
             assert isinstance(item.request, AcquireWriterLease)
+            force_authorized = item.force_authorized
+            current_lease = self._store.active_writer_lease(item.request.session_id)
+            if (
+                item.request.force
+                and current_lease is not None
+                and self._takeover_authorizer is not None
+            ):
+                force_authorized = self._takeover_authorizer(
+                    item.request,
+                    item.holder,
+                    current_lease,
+                    item.authorization,
+                )
             return self._store.acquire_writer_lease(
                 item.request,
                 holder=item.holder,
-                force_authorized=item.force_authorized,
+                force_authorized=force_authorized,
                 revocation_reason=item.reason,
             )
         if item.operation == "renew":

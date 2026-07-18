@@ -68,7 +68,11 @@ class DoneSessionSweeperWorker(Worker):
                     try:
                         worktree_path = row.get("worktree_path")
                         removed = (
-                            await prune_worktree_path(ctx.repo_root, worktree_path)
+                            await prune_worktree_path(
+                                ctx.repo_root,
+                                worktree_path,
+                                permission_connection=ctx.db,
+                            )
                             if worktree_path
                             else False
                         )

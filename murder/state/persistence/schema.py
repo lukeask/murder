@@ -9,6 +9,7 @@ import sqlite3
 from datetime import datetime
 from pathlib import Path
 
+from murder.permissions.persistence import ensure_permission_schema
 from murder.runtime.sessions.persistence import ensure_session_schema
 
 from murder.state.storage.paths import MURDER_DIR_NAME
@@ -101,6 +102,61 @@ CREATE TABLE IF NOT EXISTS events (
 CREATE INDEX IF NOT EXISTS idx_events_run    ON events(run_id);
 CREATE INDEX IF NOT EXISTS idx_events_ticket ON events(ticket_id);
 CREATE INDEX IF NOT EXISTS idx_events_type   ON events(type);
+
+-- Feature-owned retained fact log.  Unlike the legacy generalized events
+-- table, rows here are immutable outcomes only: commands, addressed workflow
+-- signals, terminal bytes, queries, and immediate decisions never enter this
+-- table.  ``projection_inputs`` is the cursor-addressable transactional
+-- invalidation boundary; it contains references, never authoritative state.
+CREATE TABLE IF NOT EXISTS retained_facts (
+    sequence            INTEGER PRIMARY KEY AUTOINCREMENT,
+    fact_id             TEXT NOT NULL UNIQUE,
+    kind                TEXT NOT NULL,
+    schema_version      INTEGER NOT NULL CHECK (schema_version >= 1),
+    occurred_at         TEXT NOT NULL,
+    recorded_at         TEXT NOT NULL,
+    aggregate_kind      TEXT,
+    aggregate_id        TEXT,
+    aggregate_revision  INTEGER CHECK (aggregate_revision IS NULL OR aggregate_revision >= 0),
+    actor_kind          TEXT NOT NULL,
+    actor_id            TEXT NOT NULL,
+    correlation_id      TEXT NOT NULL,
+    causation_id        TEXT,
+    trace_id            TEXT,
+    payload_json        TEXT NOT NULL,
+    CHECK ((aggregate_kind IS NULL) = (aggregate_id IS NULL))
+);
+
+CREATE INDEX IF NOT EXISTS idx_retained_facts_kind_sequence
+    ON retained_facts(kind, sequence);
+CREATE INDEX IF NOT EXISTS idx_retained_facts_aggregate_sequence
+    ON retained_facts(aggregate_kind, aggregate_id, sequence);
+
+CREATE TRIGGER IF NOT EXISTS retained_facts_no_update
+BEFORE UPDATE ON retained_facts
+BEGIN
+    SELECT RAISE(ABORT, 'retained facts are immutable');
+END;
+
+CREATE TABLE IF NOT EXISTS projection_inputs (
+    sequence        INTEGER PRIMARY KEY AUTOINCREMENT,
+    input_id        TEXT NOT NULL UNIQUE,
+    source_fact_id  TEXT REFERENCES retained_facts(fact_id) ON DELETE RESTRICT,
+    projection      TEXT NOT NULL,
+    subject_key     TEXT NOT NULL,
+    generation      INTEGER NOT NULL CHECK (generation >= 0),
+    created_at      TEXT NOT NULL,
+    UNIQUE (source_fact_id, projection, subject_key, generation)
+);
+
+CREATE INDEX IF NOT EXISTS idx_projection_inputs_projection_sequence
+    ON projection_inputs(projection, sequence);
+
+CREATE TRIGGER IF NOT EXISTS projection_inputs_no_update
+BEFORE UPDATE ON projection_inputs
+BEGIN
+    SELECT RAISE(ABORT, 'projection inputs are immutable');
+END;
 
 CREATE TABLE IF NOT EXISTS commands (
     id               TEXT PRIMARY KEY,
@@ -713,6 +769,93 @@ CREATE TABLE IF NOT EXISTS workflow_waits (
 CREATE INDEX IF NOT EXISTS idx_workflow_waits_current
     ON workflow_waits(workflow_id, satisfied_at, created_at);
 
+CREATE TABLE IF NOT EXISTS activities (
+    activity_id       TEXT PRIMARY KEY,
+    workflow_id       TEXT NOT NULL REFERENCES workflow_runs(workflow_id) ON DELETE CASCADE,
+    workflow_revision INTEGER NOT NULL CHECK (workflow_revision >= 1),
+    ordinal           INTEGER NOT NULL CHECK (ordinal >= 0),
+    revision          INTEGER NOT NULL DEFAULT 0 CHECK (revision >= 0),
+    status            TEXT NOT NULL CHECK (status IN
+                      ('pending','routing','waiting_admission','claimed','running',
+                       'succeeded','failed','cancelled')),
+    payload_json      TEXT NOT NULL,
+    requirements_json TEXT NOT NULL,
+    idempotency_key   TEXT NOT NULL UNIQUE,
+    priority          INTEGER NOT NULL,
+    retry_policy      TEXT NOT NULL,
+    max_attempts      INTEGER NOT NULL CHECK (max_attempts >= 1),
+    route_json        TEXT,
+    route_id          TEXT,
+    session_id        TEXT,
+    attempts          INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+    claim_owner       TEXT,
+    claim_fence       INTEGER NOT NULL DEFAULT 0 CHECK (claim_fence >= 0),
+    claim_expires_at  TEXT,
+    created_at        TEXT NOT NULL,
+    updated_at        TEXT NOT NULL,
+    UNIQUE (workflow_id, workflow_revision, ordinal)
+);
+CREATE INDEX IF NOT EXISTS idx_activities_queue
+    ON activities(status, priority DESC, created_at);
+
+CREATE TABLE IF NOT EXISTS activity_reservations (
+    reservation_id        TEXT PRIMARY KEY,
+    activity_id           TEXT NOT NULL UNIQUE REFERENCES activities(activity_id) ON DELETE CASCADE,
+    reservation_keys_json TEXT NOT NULL,
+    admitted_at           TEXT NOT NULL,
+    expires_at             TEXT NOT NULL,
+    released_at           TEXT
+);
+
+CREATE TABLE IF NOT EXISTS activity_reservation_locks (
+    resource_key TEXT PRIMARY KEY,
+    activity_id  TEXT NOT NULL REFERENCES activities(activity_id) ON DELETE CASCADE,
+    expires_at   TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS activity_results (
+    result_id     TEXT PRIMARY KEY,
+    activity_id   TEXT NOT NULL REFERENCES activities(activity_id) ON DELETE CASCADE,
+    attempt       INTEGER NOT NULL CHECK (attempt >= 0),
+    outcome_json  TEXT NOT NULL,
+    completed_at  TEXT NOT NULL,
+    UNIQUE (activity_id, attempt)
+);
+
+CREATE TABLE IF NOT EXISTS workflow_triggers (
+    trigger_id    TEXT PRIMARY KEY,
+    name          TEXT NOT NULL,
+    version       INTEGER NOT NULL CHECK (version >= 1),
+    dedup_window_seconds INTEGER NOT NULL CHECK (dedup_window_seconds >= 0),
+    spec_json     TEXT NOT NULL,
+    target_json   TEXT NOT NULL,
+    enabled       INTEGER NOT NULL CHECK (enabled IN (0, 1)),
+    created_at    TEXT NOT NULL,
+    last_fired_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS trigger_firings (
+    firing_id      TEXT PRIMARY KEY,
+    trigger_id     TEXT NOT NULL REFERENCES workflow_triggers(trigger_id) ON DELETE CASCADE,
+    occurrence_key TEXT NOT NULL,
+    fired_at       TEXT NOT NULL,
+    workflow_id    TEXT NOT NULL REFERENCES workflow_runs(workflow_id) ON DELETE CASCADE,
+    UNIQUE (trigger_id, occurrence_key)
+);
+
+CREATE TABLE IF NOT EXISTS trigger_cursors (
+    trigger_id TEXT PRIMARY KEY REFERENCES workflow_triggers(trigger_id) ON DELETE CASCADE,
+    cursor     TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS trigger_manual_pending (
+    trigger_id     TEXT NOT NULL REFERENCES workflow_triggers(trigger_id) ON DELETE CASCADE,
+    occurrence_key TEXT NOT NULL,
+    enqueued_at    TEXT NOT NULL,
+    PRIMARY KEY (trigger_id, occurrence_key)
+);
+
 -- Side-effect requests and public facts returned by pure decisions are staged
 -- transactionally.  Phase 4 consumers claim the typed payloads from here.
 CREATE TABLE IF NOT EXISTS workflow_transition_outbox (
@@ -771,6 +914,7 @@ def init_db(conn: sqlite3.Connection) -> None:
         _migrate_drop_sentinel,
         _migrate_drop_ticket_write_set,
         _migrate_events_schema_version,
+        _migrate_fact_log,
         _migrate_history_status,
         _migrate_map_summaries,
         _migrate_notes_identity_status,
@@ -797,6 +941,7 @@ def init_db(conn: sqlite3.Connection) -> None:
     _migrate_workflow_runs(conn)
     conn.executescript(SCHEMA_SQL)
     _migrate_events_schema_version(conn)
+    _migrate_fact_log(conn)
     _migrate_ticket_metadata_columns(conn)
     _migrate_ticket_last_error(conn)
     _migrate_agents_failed_status(conn)
@@ -829,6 +974,9 @@ def init_db(conn: sqlite3.Connection) -> None:
     # rules cannot drift from a second schema copy. This idempotent call is the
     # central fresh-database and existing-database registration point.
     ensure_session_schema(conn)
+    # Permission/approval tables are feature-owned; register them on every
+    # init so fresh and upgraded databases share the same authoritative DDL.
+    ensure_permission_schema(conn)
     ensure_notetaker_context_row(conn)
 
 

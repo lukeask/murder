@@ -56,6 +56,10 @@ from murder.runtime.sessions.registry import (
     registry_for_connection,
 )
 from murder.runtime.terminal import tmux
+from murder.state.persistence.activities import (
+    reap_expired_claims,
+    reap_expired_reservations,
+)
 from murder.state.persistence.agents import (
     set_agent_status as _db_set_agent_status,
 )
@@ -83,7 +87,9 @@ from murder.work.workflows.service import WorkflowRuntime
 
 if TYPE_CHECKING:
     from murder.config import Config
+    from murder.runtime.activity_dispatcher import ActivityDispatcher
     from murder.runtime.agents.base import LifecycleParticipant
+    from murder.runtime.trigger_dispatcher import TriggerDispatcher
     from murder.user_config import UserConfig
     from murder.work.notes.sync import NoteSync, NotetakerContextSync
     from murder.work.plans.sync import PlanSync
@@ -91,19 +97,38 @@ if TYPE_CHECKING:
     from murder.work.tickets.sync import TicketSync
 
 Handler = Callable[[Any], Awaitable[None]]
+ActivityDispatcherFactory = Callable[[sqlite3.Connection], "ActivityDispatcher"]
+TriggerDispatcherFactory = Callable[[sqlite3.Connection], "TriggerDispatcher"]
+
+# Dual-write legacy bus entities onto application projection topics.
+# schedule is owned by tickets persistence; plans/notes/reports/history/transit
+# have no ProjectionTopic subscription path.
+_ENTITY_PROJECTION_TOPICS: dict[Entity, str] = {
+    Entity.AGENT: "roster",
+}
 
 
 class Runtime:
     """Async context manager owning the murder process lifecycle."""
 
     def __init__(
-        self, config: Config, repo_root: Path, user_cfg: UserConfig | None = None
+        self,
+        config: Config,
+        repo_root: Path,
+        user_cfg: UserConfig | None = None,
+        *,
+        activity_dispatcher_factory: ActivityDispatcherFactory | None = None,
+        trigger_dispatcher_factory: TriggerDispatcherFactory | None = None,
     ) -> None:
         self.config = config
         self.repo_root = repo_root
         self.user_cfg = user_cfg
         self.db: sqlite3.Connection | None = None
         self.session_controllers: Any | None = None
+        self._activity_dispatcher_factory = activity_dispatcher_factory
+        self._trigger_dispatcher_factory = trigger_dispatcher_factory
+        self.activity_dispatcher: ActivityDispatcher | None = None
+        self.trigger_dispatcher: TriggerDispatcher | None = None
         self.bus: Bus | None = None
         self.run_id: str | None = None
         self._agents = AgentRegistry()
@@ -144,7 +169,36 @@ class Runtime:
     async def __aexit__(self, exc_type, exc, tb) -> None:  # type: ignore[no-untyped-def]
         await self.stop()
 
-    async def start(self) -> None:  # noqa: PLR0915 - service bootstrap
+    async def _run_tick_loop(
+        self,
+        name: str,
+        tick: Callable[[], Awaitable[Any]],
+    ) -> None:
+        while not self._shutdown.is_set():
+            try:
+                await tick()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logging.getLogger(__name__).exception(
+                    "%s dispatcher tick failed; retrying", name
+                )
+            await asyncio.sleep(1)
+
+    async def _phase4_activity_loop(self) -> None:
+        assert self.activity_dispatcher is not None
+        await self._run_tick_loop("activity", self.activity_dispatcher.tick)
+
+    async def _phase4_trigger_loop(self) -> None:
+        assert self.trigger_dispatcher is not None
+
+        async def tick() -> None:
+            assert self.trigger_dispatcher is not None
+            self.trigger_dispatcher.tick()
+
+        await self._run_tick_loop("trigger", tick)
+
+    async def start(self) -> None:  # noqa: PLR0912, PLR0915 - service bootstrap
         self._shutdown.clear()
         self._external_stop.clear()
         self._lock_fd = acquire_flock(lock_path(self.repo_root))
@@ -254,7 +308,28 @@ class Runtime:
             # parallel — so it no longer blocks socket readiness nor runs twice at boot.
             self._sync.seed()
             self._tasks.update(self._sync.spawn_tasks())
+            # External work is the final subsystem enabled at boot. Session/tmux
+            # reconciliation and all Runtime core state must exist before either
+            # dispatcher may recover leases or execute an activity.
+            reap_expired_claims(self.db)
+            reap_expired_reservations(self.db)
+            if self._activity_dispatcher_factory is not None:
+                self.activity_dispatcher = self._activity_dispatcher_factory(self.db)
+                self._tasks["phase4-activities"] = asyncio.create_task(
+                    self._phase4_activity_loop()
+                )
+            if self._trigger_dispatcher_factory is not None:
+                self.trigger_dispatcher = self._trigger_dispatcher_factory(self.db)
+                self._tasks["phase4-triggers"] = asyncio.create_task(
+                    self._phase4_trigger_loop()
+                )
         except BaseException:
+            for task in self._tasks.values():
+                task.cancel()
+            if self._tasks:
+                with contextlib.suppress(asyncio.CancelledError, Exception):
+                    await asyncio.gather(*self._tasks.values(), return_exceptions=True)
+            self._tasks.clear()
             if self.db is not None:
                 with contextlib.suppress(Exception):
                     await close_registry_for_connection(self.db)
@@ -350,6 +425,7 @@ class Runtime:
         No-ops before the bus exists or outside a running loop (e.g. tests
         calling the sync method without a loop) so persistence never fails.
         """
+        self._append_compatibility_projection_input(entity, key)
         if self.bus is None or self.run_id is None:
             return
         try:
@@ -368,6 +444,47 @@ class Runtime:
         )
         self._emit_tasks.add(task)
         task.add_done_callback(self._emit_tasks.discard)
+
+    def _append_compatibility_projection_input(self, entity: Entity, key: str) -> None:
+        """Dual-write for compatibility domains still funneling through emit_snapshot."""
+        if self.db is None:
+            return
+        projection = _ENTITY_PROJECTION_TOPICS.get(entity)
+        if projection is None:
+            return
+        from uuid import NAMESPACE_URL, uuid5  # noqa: PLC0415
+
+        from murder.facts.contracts import ProjectionInputDraft  # noqa: PLC0415
+        from murder.facts.log import append_projection_input  # noqa: PLC0415
+
+        try:
+            row = self.db.execute(
+                """
+                SELECT COALESCE(MAX(generation), -1) + 1 AS next_gen
+                  FROM projection_inputs
+                 WHERE projection = ? AND subject_key = ?
+                """,
+                (projection, key),
+            ).fetchone()
+            generation = int(row[0] if not hasattr(row, "keys") else row["next_gen"])
+            append_projection_input(
+                self.db,
+                ProjectionInputDraft(
+                    input_id=uuid5(
+                        NAMESPACE_URL,
+                        f"compat-projection:{projection}:{key}:{generation}",
+                    ),
+                    projection=projection,
+                    subject_key=key,
+                    generation=generation,
+                ),
+            )
+        except Exception:
+            logging.getLogger(__name__).exception(
+                "failed to append compatibility projection input for %s/%s",
+                projection,
+                key,
+            )
 
     async def _record_bus_event(self, event: Any) -> None:
         """Bus-subscriber handler for the flight recorder (plan §2.5.A).
@@ -433,6 +550,7 @@ class Runtime:
 
         No-ops before the bus / run id exist so handlers never fail on it.
         """
+        self._append_compatibility_projection_input(entity, key)
         if self.bus is None or self.run_id is None:
             return
         await self.bus.publish(

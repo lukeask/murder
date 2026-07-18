@@ -1,7 +1,7 @@
 /**
  * Store-core tests — the invalidation-granularity proof and the reference test idiom every future
- * slice copies. Driven entirely by {@link FakeBusClient}: emit a `state.snapshot`, assert the named
- * slice (and only it) re-pulled and ref-swapped.
+ * slice copies. Driven entirely by {@link FakeBusClient}: emit a `state.snapshot` or
+ * `projection.invalidate`, assert the named slice (and only it) re-pulled and ref-swapped.
  */
 
 import { FakeBusClient } from '../../src/bus/FakeBusClient.js';
@@ -106,22 +106,32 @@ function setup(reply: CrowSnapshotReply = crowReply()) {
 }
 
 describe('createAppStore — boot & wiring', () => {
-  it('opens one generated projection hydration on construction', async () => {
-    // One hydration owns the projection and notification subscriptions and their compatibility
-    // event tail. Dispose tears down the standing hydration.
+  it('opens compatibility and feature projection hydrations on construction', async () => {
+    // Feature-owned topics use a separate cursor domain from compatibility hydrate topics, so the
+    // store opens two standing hydrations. Dispose tears both down.
     const { fake, dispose } = setup();
-    expect(fake.subscriberCount).toBe(1);
+    expect(fake.subscriberCount).toBe(2);
     expect(fake.hydrateCalls).toEqual([
       {
         topics: [
           'conversations',
           'roster',
-          'schedule',
           'favorites',
           'templates',
           'themes',
           'workflows',
           'settings',
+        ],
+        cursor: null,
+      },
+      {
+        topics: [
+          'schedule',
+          'approvals',
+          'permissions',
+          'sessions',
+          'workflow_runs',
+          'activities',
         ],
         cursor: null,
       },
@@ -254,7 +264,6 @@ describe('createAppStore — boot & wiring', () => {
         topics: [
           'conversations',
           'roster',
-          'schedule',
           'favorites',
           'templates',
           'themes',
@@ -263,8 +272,19 @@ describe('createAppStore — boot & wiring', () => {
         ],
         cursor: null,
       },
+      {
+        topics: [
+          'schedule',
+          'approvals',
+          'permissions',
+          'sessions',
+          'workflow_runs',
+          'activities',
+        ],
+        cursor: null,
+      },
     ]);
-    expect(fake.subscriberCount).toBe(1);
+    expect(fake.subscriberCount).toBe(2);
     expect(fake.queryCalls).toEqual([]);
     expect(store.getState().hydration).toMatchObject({
       status: 'ready',
@@ -276,6 +296,54 @@ describe('createAppStore — boot & wiring', () => {
     expect(store.getState().favorites.ids.has('collaborator')).toBe(true);
     expect(store.getState().settings.modifier).toBe('ctrl');
     dispose();
+  });
+
+  it('unsubscribes a settled hydrate when the other hydrate rejects', async () => {
+    const fake = new FakeBusClient();
+    fake.stubHydrate((topics) => {
+      if (topics.includes('schedule')) {
+        return Promise.reject(new Error('feature hydrate failed'));
+      }
+      return {
+        snapshots: { roster: crowReply() },
+        cursor: 10,
+        mode: 'cold',
+      };
+    });
+    const { store, dispose } = createAppStore(fake);
+    await flush();
+
+    expect(store.getState().hydration.status).toBe('error');
+    expect(store.getState().hydration.error).toBe('feature hydrate failed');
+    expect(fake.subscriberCount).toBe(0);
+    dispose();
+  });
+
+  it('dispose unsubscribes hydrates that settled mid-flight', async () => {
+    let resolveCompat!: (reply: {
+      snapshots: Record<string, unknown>;
+      cursor: number;
+      mode: 'cold';
+    }) => void;
+    const fake = new FakeBusClient();
+    fake.stubHydrate((topics) => {
+      if (topics.includes('conversations')) {
+        return new Promise((resolve) => {
+          resolveCompat = resolve;
+        });
+      }
+      return new Promise(() => {});
+    });
+    const { dispose } = createAppStore(fake);
+    await flush();
+    expect(fake.subscriberCount).toBe(2);
+
+    resolveCompat({ snapshots: {}, cursor: 1, mode: 'cold' });
+    await flush();
+    expect(fake.subscriberCount).toBe(2);
+
+    dispose();
+    expect(fake.subscriberCount).toBe(1);
   });
 
   it('applies hydrate replay events through the same idempotent conversation event path', async () => {
@@ -745,6 +813,44 @@ describe('C7 — tickets slice invalidation', () => {
     expect(store.getState().tickets.status).toBe('ready');
     expect(store.getState().tickets.rows).toHaveLength(1);
     expect(store.getState().tickets.rows[0]?.id).toBe('T-1');
+  });
+
+  it('re-pulls tickets and usage on a schedule projection.invalidate', async () => {
+    const fake = new FakeBusClient();
+    fake.stubQuery('roster.get', crowReply());
+    fake.stubQuery(
+      'schedule.get',
+      ticketsReply({
+        usage_gauges: [
+          {
+            harness: 'claude',
+            window_key: '5h',
+            pct: 17,
+            t_until_reset_minutes: 30,
+            t_period_minutes: 300,
+            steering: 'auto',
+            fetched_at: null,
+          },
+        ],
+      }),
+    );
+    const { store } = createAppStore(fake);
+    await flush();
+
+    fake.emitInvalidation({
+      type: 'projection.invalidate',
+      projection: 'schedule',
+      subject_key: 'T-1',
+      generation: 2,
+      source_fact_id: null,
+    });
+    await flush();
+
+    expect(fake.queryCalls).toContainEqual({ name: 'schedule.get', params: {} });
+    expect(store.getState().tickets.status).toBe('ready');
+    expect(store.getState().tickets.rows[0]?.id).toBe('T-1');
+    expect(store.getState().usage.status).toBe('ready');
+    expect(store.getState().usage.rows[0]?.pct).toBe(17);
   });
 
   it('flattens active + recent_done + archived into one row list', async () => {

@@ -4,13 +4,19 @@ This module owns no policy and emits no terminal effects.  It publishes the
 semantic request visible in a persisted observation, validates a later
 user/policy response against the still-current identity, records that response,
 and delegates execution to the verified capability on the owning agent.
+
+Permission observations are also bridged into ``murder.permissions`` so policy
+decisions and approval records exist alongside the bus events that drive client
+UX. Harness adapters do not execute tools; proofs issued here are for
+Murder-owned enforcement boundaries.
 """
 
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any, Literal, Protocol
-from uuid import NAMESPACE_URL, uuid5
+from uuid import NAMESPACE_URL, UUID, uuid5
 
 from murder.bus import HarnessDecisionRequestEvent, HarnessDecisionResponseEvent
 from murder.llm.harness_control.capabilities.permissions import (
@@ -28,6 +34,19 @@ from murder.llm.harness_control.model.actions import (
     QuestionChoiceSelection,
 )
 from murder.llm.harness_control.model.observations import Knowledge, ObservationSnapshot
+from murder.permissions import (
+    ApprovalChoice,
+    ApprovalRequiredError,
+    LocalServicePermissionPolicy,
+    PermissionDeniedError,
+    PermissionPrincipal,
+    PermissionService,
+    PermissionStore,
+    request_harness_permission,
+)
+from murder.permissions.contracts import PROPOSED_OPERATION_ADAPTER
+
+_LOG = logging.getLogger(__name__)
 
 
 class StructuredDecisionHost(Protocol):
@@ -39,6 +58,14 @@ class StructuredDecisionHost(Protocol):
 
 
 DecisionKind = Literal["question", "permission"]
+
+_ALLOW_KINDS = frozenset(
+    {
+        PermissionDecisionKind.ALLOW_ONCE,
+        PermissionDecisionKind.ALLOW_FOR_SESSION,
+        PermissionDecisionKind.HARNESS_SPECIFIC,
+    }
+)
 
 
 def _choice_payload(choice: Any) -> dict[str, object]:
@@ -63,6 +90,18 @@ class StructuredDecisionRouter:
         self._host = host
         self._visible: dict[tuple[str, DecisionKind], str] = {}
         self._cleared: set[tuple[str, DecisionKind]] = set()
+        self._permission_service: PermissionService | None = None
+
+    def _permissions(self) -> PermissionService | None:
+        db = self._host.db
+        if db is None:
+            return None
+        if self._permission_service is None:
+            self._permission_service = PermissionService(
+                store=PermissionStore(db),
+                policy=LocalServicePermissionPolicy(),
+            )
+        return self._permission_service
 
     async def observe(self, agent: Any, snapshot: ObservationSnapshot) -> None:
         """Publish each currently visible normalized request exactly once."""
@@ -145,6 +184,8 @@ class StructuredDecisionRouter:
             request_id = str(
                 uuid5(NAMESPACE_URL, f"{agent.id}:{kind}:{identity}:{occurrence}")
             )
+            if kind == "permission":
+                self._bridge_permission_request(agent, request, request_id=request_id)
             await self._host.bus.publish(
                 HarnessDecisionRequestEvent(
                     run_id=self._host.run_id,
@@ -162,6 +203,80 @@ class StructuredDecisionRouter:
                     request=request,
                 )
             )
+
+    def _bridge_permission_request(
+        self,
+        agent: Any,
+        request: dict[str, object],
+        *,
+        request_id: str,
+    ) -> None:
+        """Persist a permissions-subsystem decision for the observed dialog."""
+
+        service = self._permissions()
+        if service is None:
+            return
+        try:
+            request_harness_permission(
+                service,
+                request,
+                principal=PermissionPrincipal(kind="llm", id=str(agent.id)),
+                operation_id=UUID(request_id),
+            )
+        except ApprovalRequiredError:
+            # Expected for llm/client/user tool invokes under local policy.
+            return
+        except PermissionDeniedError as exc:
+            _LOG.info(
+                "harness permission denied by policy agent_id=%s request_id=%s reason=%s",
+                agent.id,
+                request_id,
+                exc,
+            )
+
+    def _bridge_permission_response(
+        self,
+        *,
+        request_id: str,
+        persisted_request: dict[str, Any],
+        semantic_request: PermissionAnswerRequest,
+        decided_by: str,
+    ) -> None:
+        """Resolve a pending permissions approval when the harness answer lands."""
+
+        service = self._permissions()
+        if service is None:
+            return
+        pending = PermissionStore(self._host.db).get_pending_approval_for_operation(
+            UUID(request_id)
+        )
+        if pending is None:
+            return
+        decision, approval = pending
+        payload_operation = approval.payload.get("operation")
+        if not isinstance(payload_operation, dict):
+            return
+        operation = PROPOSED_OPERATION_ADAPTER.validate_python(payload_operation)
+        choice = (
+            ApprovalChoice.APPROVE
+            if semantic_request.response.kind in _ALLOW_KINDS
+            else ApprovalChoice.DENY
+        )
+        try:
+            service.decide_approval(
+                operation,
+                decision=decision,
+                request=approval,
+                reviewer=PermissionPrincipal(kind="user", id=decided_by),
+                choice=choice,
+                rationale=(
+                    f"harness decision {semantic_request.response.kind.name.lower()} "
+                    f"for {persisted_request.get('tool_name') or 'tool'}"
+                ),
+            )
+        except PermissionDeniedError:
+            # Deny records evidence then raises; that is the intended outcome.
+            return
 
     async def respond(self, body: dict[str, Any]) -> dict[str, object]:  # noqa: PLR0911
         """Record and execute an exact response, rejecting stale decisions."""
@@ -198,6 +313,14 @@ class StructuredDecisionRouter:
         semantic_request = self._decode_response(kind, identity, persisted["request"], response)
         if semantic_request is None:
             return {"ok": False, "error": "invalid_semantic_response"}
+        if kind == "permission":
+            assert isinstance(semantic_request, PermissionAnswerRequest)
+            self._bridge_permission_response(
+                request_id=request_id,
+                persisted_request=persisted["request"],
+                semantic_request=semantic_request,
+                decided_by=decided_by,
+            )
         await self._host.bus.publish(
             HarnessDecisionResponseEvent(
                 run_id=self._host.run_id,
