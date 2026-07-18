@@ -543,6 +543,13 @@ describe('UdsBusClient — hydrate', () => {
     await server.stop();
   });
 
+  it('sends one cold hydrate before later attach RPCs', async () => {
+    await client.hydrate('all');
+    await client.rpc('test.echo', {});
+
+    expect(server.hydrateCorrelationIds).toHaveLength(1);
+  });
+
   it('passes through live state.* hydrate snapshots wrapped in { ok, value } read envelopes', async () => {
     server.hydrateHandler = () => ({
       cursor: 9,

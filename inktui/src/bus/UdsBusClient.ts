@@ -413,8 +413,14 @@ export class UdsBusClient implements BusClient {
     };
 
     try {
-      const socket = await this.ensureConnected();
-      this.sendHydration(socket, hydration);
+      if (this.state === 'connected' && this.socket !== undefined) {
+        this.sendHydration(this.socket, hydration);
+      } else {
+        // The handshake replays every registered hydration intent. Waiting for
+        // it is enough; sending again here would run the full cold hydrate
+        // twice and queue first-attach RPCs behind the duplicate.
+        await this.ensureConnected();
+      }
       const reply = await completion.promise;
       return { ...reply, unsubscribe };
     } catch (error) {
