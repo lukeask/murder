@@ -42,7 +42,10 @@ from murder.llm.harness_control.model.operations import (
     ReconciliationResult,
 )
 from murder.llm.harness_control.runtime.recovery import reconstruct_persisted_operation
-from murder.llm.harness_control.runtime.session import VerifiedHarnessControlSession
+from murder.llm.harness_control.runtime.session import (
+    PARSER_HISTORY_FRAME_LIMIT,
+    VerifiedHarnessControlSession,
+)
 from murder.llm.harness_control.runtime.usage_driver import (
     UsageCollectionOutcome,
     UsageCollectionResult,
@@ -62,6 +65,83 @@ from murder.state.persistence.schema import init_db
 
 NOW = datetime(2026, 7, 12, tzinfo=timezone.utc)
 HYDRATED_CAPTURE_SEQUENCE = 11
+
+
+def test_verified_attach_hydrates_only_bounded_recent_parser_history() -> None:
+    connection = sqlite3.connect(":memory:")
+    connection.row_factory = sqlite3.Row
+    init_db(connection)
+    total_frames = PARSER_HISTORY_FRAME_LIMIT + 6
+    for index in range(total_frames):
+        frame = TerminalFrame(
+            f"frame-{index}",
+            "codex",
+            NOW,
+            120,
+            40,
+            f"frame {index}",
+            False,
+            1,
+            index + 1,
+        )
+        evidence = EvidenceEnvelope(
+            f"evidence-{index}",
+            frame.frame_id,
+            frame.harness_id,
+            "bounded-history-test/v1",
+            NOW,
+            "bounded.history",
+            {"index": index},
+            (),
+            EvidenceDiagnostics("bounded-history-test"),
+        )
+        persist_frame(connection, frame, session_id="long-lived-agent")
+        persist_evidence(connection, evidence)
+
+    class Adapter:
+        parser_version = "bounded-history-test/v1"
+
+        def __init__(self) -> None:
+            self.history_ids: tuple[str, ...] = ()
+
+        def parse_evidence(self, _frame, history):
+            self.history_ids = tuple(str(item.evidence_id) for item in history)
+            return ()
+
+        def project_observations(self, _evidence, _prior):
+            return ObservationDelta({})
+
+        def lower(self, _action, _snapshot):
+            return ()
+
+    adapter = Adapter()
+    session = VerifiedHarnessControlSession.from_tmux(
+        harness_kind="codex",
+        terminal_session="codex-pane",
+        connection=connection,
+        persistence_session_id="long-lived-agent",
+        observation_adapter=adapter,
+        action_adapter=adapter,
+    )
+    asyncio.run(
+        session.controller.ingest_frame(
+            TerminalFrame(
+                "fresh-frame",
+                "codex",
+                NOW,
+                120,
+                40,
+                "fresh",
+                False,
+                1,
+                total_frames + 1,
+            )
+        )
+    )
+
+    assert len(adapter.history_ids) == PARSER_HISTORY_FRAME_LIMIT
+    assert adapter.history_ids[0] == "evidence-6"
+    assert adapter.history_ids[-1] == f"evidence-{total_frames - 1}"
 
 
 def test_verified_control_session_composes_each_supported_harness_without_legacy_sender() -> None:

@@ -584,17 +584,38 @@ def latest_observation_snapshot(
 
 
 def list_session_evidence(
-    conn: sqlite3.Connection, *, harness_id: str, session_id: str | None = None
+    conn: sqlite3.Connection,
+    *,
+    harness_id: str,
+    session_id: str | None = None,
+    frame_limit: int,
 ) -> tuple[EvidenceEnvelope, ...]:
-    """Load retained parser history for one pane session in capture order."""
-    session_clause = "frame.session_id IS NULL" if session_id is None else "frame.session_id = ?"
-    params: tuple[str, ...] = (harness_id,) if session_id is None else (harness_id, session_id)
+    """Load a bounded recent parser context for one pane session.
+
+    Raw frames and evidence remain durably retained for audit/reprocessing; an
+    attach only needs enough recent context to parse the next frame.  Selecting
+    recent frames first keeps both the query and deserialization independent of
+    the session's total history.
+    """
+    if frame_limit < 1:
+        raise ValueError("frame_limit must be positive")
+    session_clause = "session_id IS NULL" if session_id is None else "session_id = ?"
+    params: tuple[str | int, ...] = (
+        (harness_id, frame_limit)
+        if session_id is None
+        else (harness_id, session_id, frame_limit)
+    )
     rows = conn.execute(
         f"""
         SELECT evidence.*
-          FROM harness_control_evidence AS evidence
-          JOIN harness_control_frames AS frame ON frame.frame_id = evidence.frame_id
-         WHERE evidence.harness_id = ? AND {session_clause}
+          FROM (
+                SELECT frame_id, pane_epoch, capture_sequence
+                 FROM harness_control_frames
+                 WHERE harness_id = ? AND {session_clause}
+                 ORDER BY pane_epoch DESC, capture_sequence DESC
+                 LIMIT ?
+               ) AS frame
+          JOIN harness_control_evidence AS evidence ON evidence.frame_id = frame.frame_id
          ORDER BY frame.pane_epoch, frame.capture_sequence, evidence.evidence_id
         """,
         params,

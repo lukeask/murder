@@ -147,6 +147,8 @@ from murder.state.persistence.harness_control import (
     list_session_evidence,
 )
 
+PARSER_HISTORY_FRAME_LIMIT = 64
+
 
 @dataclass(frozen=True, slots=True)
 class IngestedFrame:
@@ -256,6 +258,7 @@ class VerifiedHarnessControlSession:
             connection,
             harness_id=str(harness_id),
             session_id=persistence_session_id,
+            frame_limit=PARSER_HISTORY_FRAME_LIMIT,
         )
         effective_pane_epoch = pane_epoch
         initial_capture_sequence = 0
