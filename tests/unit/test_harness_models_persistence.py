@@ -17,6 +17,10 @@ import pytest
 from murder.app.service.host import ServiceHost
 from murder.app.service.read_model import ServiceReadModel
 from murder.config import Config, CrowHandlerConfig, HarnessRoleConfig, ProjectConfig
+from murder.llm.harness_control.runtime.live_model_probe import (
+    LIVE_MODEL_DISCOVERY_HARNESSES,
+    LiveModelProbeResult,
+)
 from murder.llm.harnesses.model_cache import CATALOG_ADVISORY, refresh_and_persist_harness_models
 from murder.state.persistence.harness_models import (
     get_all_harness_models,
@@ -36,6 +40,15 @@ def db_conn(repo_root):
     init_db(conn)
     yield conn
     conn.close()
+
+
+@pytest.fixture(autouse=True)
+def _failed_live_probes(monkeypatch):
+    async def probe(kind, _root, *, timeout_s):
+        del timeout_s
+        return LiveModelProbeResult(False, (), f"{kind} unavailable")
+
+    monkeypatch.setattr("murder.llm.harnesses.model_cache.probe_live_models", probe)
 
 
 # ---------------------------------------------------------------------------
@@ -192,19 +205,22 @@ def test_snapshot_missing_table_guard(repo_root):
 # ---------------------------------------------------------------------------
 
 
-def test_refresh_persists_configured_catalog(repo_root, db_conn):
-    """Configured catalog rows are persisted without a live harness probe."""
+def test_refresh_persists_configured_fallbacks(repo_root, db_conn):
+    """Configured rows remain available when live harness probes fail."""
     asyncio.run(refresh_and_persist_harness_models(repo_root, db_conn))
 
     rows = get_all_harness_models(db_conn)
     harnesses_persisted = {r["harness"] for r in rows}
     assert len(harnesses_persisted) > 0
     for row in rows:
-        assert row["discovery_error"] == CATALOG_ADVISORY
+        if row["harness"] in LIVE_MODEL_DISCOVERY_HARNESSES:
+            assert row["discovery_error"] == f"{row['harness']} unavailable"
+        else:
+            assert row["discovery_error"] == CATALOG_ADVISORY
         assert isinstance(row["models"], list)
 
 
-def test_refresh_without_db_does_not_probe_or_raise(repo_root):
+def test_refresh_without_db_still_refreshes_cache_without_raise(repo_root):
     asyncio.run(refresh_and_persist_harness_models(repo_root, db=None))
 
 
