@@ -72,12 +72,12 @@ function expectEnvelope(env: ReadEnvelope<unknown>): void {
 function setup() {
   const fake = new FakeBusClient();
   // Stub the bare DTO (golden `value`); the fake adds the {ok, value} envelope for `state.*`.
-  fake.stubRpc('state.crow_snapshot', crow.value);
-  fake.stubRpc('state.plans_snapshot', plans.value);
-  fake.stubRpc('state.notes_snapshot', notes.value);
-  fake.stubRpc('state.reports_snapshot', reports.value);
-  fake.stubRpc('state.schedule_snapshot', schedule.value);
-  fake.stubRpc('state.ticket_detail', ticketDetail.value);
+  fake.stubQuery('roster.get', crow.value);
+  fake.stubQuery('plans.list', plans.value);
+  fake.stubQuery('notes.list', notes.value);
+  fake.stubQuery('reports.list', reports.value);
+  fake.stubQuery('schedule.get', schedule.value);
+  fake.stubQuery('ticket.get', ticketDetail.value);
   const { store, dispose } = createAppStore(fake);
   return { fake, store, dispose };
 }

@@ -1,5 +1,5 @@
 /**
- * harnessModelsActions tests — the pull-only `state.harness_models_snapshot` RPC + static fallback.
+ * harnessModelsActions tests — the pull-only `harness_models.list` RPC + static fallback.
  */
 
 import { describe, expect, it } from 'vitest';
@@ -13,7 +13,7 @@ import {
 describe('harnessModelsActions — fetch', () => {
   it('returns the live snapshot models (merged over the static map)', async () => {
     const bus = new FakeBusClient();
-    bus.stubRpc('state.harness_models_snapshot', {
+    bus.stubQuery('harness_models.list', {
       models: { claude_code: [{ id: 'opus', label: 'Opus 5' }] },
       as_of: '2026-06-09T00:00:00Z',
     });

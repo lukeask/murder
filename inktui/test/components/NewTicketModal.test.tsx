@@ -53,11 +53,11 @@ function setup() {
   const stores = createInputStores(['tickets'], 'tickets');
   const bus = new FakeBusClient();
 
-  // F2: `ticket.quick_create` is an orchestrator command kind routed through `command.submit` +
-  // `command.status` (not a standalone RPC). Status returns `'done'` on the first poll with the
-  // worker reply JSON-encoded in `result_json` (matching the live `command.status` shape).
-  bus.stubRpc('command.submit', { ok: true, command_id: 'cmd-1' });
-  bus.stubRpc('command.status', {
+  // F2: `ticket.quick_create` is an orchestrator command kind routed through `orchestration.execute` +
+  // `command.get` (not a standalone RPC). Status returns `'done'` on the first poll with the
+  // worker reply JSON-encoded in `result_json` (matching the live `command.get` shape).
+  bus.stubCommand('orchestration.execute', { ok: true, command_id: 'cmd-1' });
+  bus.stubQuery('command.get', {
     ok: true,
     status: 'done',
     result_json: JSON.stringify({ handled: true, ticket_id: 't-001', title: 'my ticket' }),
@@ -157,7 +157,7 @@ describe('NewTicketModal — alt+t new-ticket dialog', () => {
     await tick();
     await tick();
     // The submit carries the `ticket.quick_create` command kind + the title payload.
-    const submitCall = bus.rpcCalls.find((c) => c.method === 'command.submit');
+    const submitCall = bus.commandCalls.find((c) => c.name === 'orchestration.execute');
     expect(submitCall?.params).toMatchObject({
       kind: 'ticket.quick_create',
       payload: { title: 'fix bug' },
@@ -183,10 +183,10 @@ describe('NewTicketModal — alt+t new-ticket dialog', () => {
   it('a rejected ticket create pushes an error toast with the rejection message', async () => {
     const stores = createInputStores(['tickets'], 'tickets');
     const bus = new FakeBusClient();
-    // `ticket.quick_create` routes through `command.submit`; reject at the submit choke point so
+    // `ticket.quick_create` routes through `orchestration.execute`; reject at the submit choke point so
     // `quickCreateTicket` rejects. Exit-then-act: the modal is gone before this lands; the toast
     // must still fire on the global singleton with the structured UdsBusClient text.
-    bus.stubRpc('command.submit', () => {
+    bus.stubCommand('orchestration.execute', () => {
       throw new Error('rpc error [internal]: ticket create failed');
     });
     stores.modes.getState().enter(newTicketMode(stores.modes, createDialogActions(bus), {}));
@@ -217,7 +217,7 @@ describe('NewTicketModal — alt+t new-ticket dialog', () => {
     await tick();
     expect(lastFrame()).toContain('Ticket title is required');
     expect(selectActiveMode(stores.modes)?.id).toBe(NEW_TICKET_MODE_ID); // still up
-    expect(bus.rpcCalls.length).toBe(0);
+    expect(bus.commandCalls.length).toBe(0);
     // Field validation stays INLINE (modal open) — it must NOT also fire an error toast.
     expect(errorToasts()).toHaveLength(0);
   });

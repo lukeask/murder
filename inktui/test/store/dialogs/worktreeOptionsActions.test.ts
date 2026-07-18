@@ -50,9 +50,9 @@ describe('resolveWorktreePayload — wire fields', () => {
 });
 
 describe('createWorktreeOptionsActions.fetch', () => {
-  it('pulls worktree.list, drops main, splices the rest between main + new', async () => {
+  it('pulls worktrees.list, drops main, splices the rest between main + new', async () => {
     const bus = new FakeBusClient();
-    bus.stubRpc('worktree.list', {
+    bus.stubQuery('worktrees.list', {
       ok: true,
       entries: [
         { path: '/repo', branch: 'main', is_main: true },
@@ -71,7 +71,7 @@ describe('createWorktreeOptionsActions.fetch', () => {
     expect(opts[1]?.label).toBe('feat (.murder/worktrees/feat)');
     // A null branch falls back to the path basename for the label (buildWorktreeOptions).
     expect(opts[2]?.label).toBe('detached (.murder/worktrees/detached)');
-    expect(bus.rpcCalls).toEqual([{ method: 'worktree.list', params: {} }]);
+    expect(bus.queryCalls).toEqual([{ name: 'worktrees.list', params: {} }]);
   });
 
   it('falls back to [main, +new] when the RPC rejects', async () => {

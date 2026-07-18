@@ -1,6 +1,6 @@
 /**
- * TmuxFrameView — the "watch the agent's terminal" view. Subscribes to the bus's `tmux.frame`
- * stream (scoped to `agent_id`) and renders each raw ANSI snapshot.
+ * TmuxFrameView — the "watch the agent's terminal" view. Attaches to the independent terminal
+ * stream for the selected session and renders each raw ANSI replacement frame.
  *
  * ## ANSI rendering choice
  * tmux frames are full-screen SNAPSHOT strings from `tmux capture-pane -e` (not an incremental PTY
@@ -29,16 +29,10 @@ export function TmuxFrameView({ agentId }: { readonly agentId: string }): React.
 
   useEffect(() => {
     setFrame('');
-    const off = bus.subscribe(
-      (event) => {
-        if (event.type !== 'tmux.frame') {
-          return;
-        }
-        // The protocol's TmuxFrameEvent carries the full snapshot in `frame`.
-        setFrame((event as { frame: string }).frame);
-      },
-      { type: 'tmux.frame', agent_id: agentId },
-    );
+    const off = bus.attachTerminal(agentId, (terminalFrame) => {
+      // The current tmux stream mode is full-frame replacement, never incremental terminal bytes.
+      setFrame(terminalFrame.frame);
+    });
     return off;
   }, [bus, agentId]);
 

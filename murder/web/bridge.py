@@ -1,16 +1,16 @@
-"""aiohttp server: static SPA serving + a ``/bus`` WebSocket relay to the unix bus.
+"""aiohttp server: static SPA serving + an ``/api/ws`` application WebSocket relay.
 
 The relay is a dumb 1:1 byte pump (the WS BRIDGE CONTRACT):
 
-* ``GET /bus`` upgrades to a WebSocket; for each accepted WS connection we open
-  ONE fresh connection to the murder unix socket.
+* ``GET /api/ws`` upgrades to a WebSocket; for each accepted WS connection we
+  open ONE fresh connection to the Murder service's application socket.
 * WS text inbound  → write ``text + "\n"`` to the unix socket.
 * unix socket bytes → buffer, split on ``\n``; each COMPLETE line (newline
   stripped) is sent as ONE WS text message. Partial lines buffer across reads.
 * If either side closes/errors we close the other and clean up.
 
-No protocol interpretation happens here. PROTOCOL_VERSION handshakes, RPC,
-subscriptions, presence, etc. all live in the browser.
+No protocol interpretation happens here. Application-protocol hello, requests,
+subscriptions, and terminal streams all live at the two endpoints.
 
 ``aiohttp`` is an OPTIONAL dependency (``pip install 'murder[web]'``). It is
 imported lazily so the rest of the CLI works without it.
@@ -143,18 +143,20 @@ async def relay(
     try:
         reader, writer = await asyncio.open_unix_connection(str(socket_path))
     except (FileNotFoundError, ConnectionError, OSError) as exc:
-        LOGGER.warning("web bridge: cannot reach bus socket %s: %s", socket_path, exc)
+        LOGGER.warning(
+            "web bridge: cannot reach service application socket %s: %s",
+            socket_path,
+            exc,
+        )
         if not ws.closed:
-            await ws.close(code=1011, message=b"bus unreachable")
+            await ws.close(code=1011, message=b"service unreachable")
         return
 
     s2w = asyncio.create_task(_pump_socket_to_ws(reader, ws), name="web-bridge-s2w")
     w2s = asyncio.create_task(_pump_ws_to_socket(ws, writer), name="web-bridge-w2s")
     try:
         # The first task to finish (either side closed/errored) ends the relay.
-        _done, pending = await asyncio.wait(
-            {s2w, w2s}, return_when=asyncio.FIRST_COMPLETED
-        )
+        _done, pending = await asyncio.wait({s2w, w2s}, return_when=asyncio.FIRST_COMPLETED)
         for task in pending:
             task.cancel()
         for task in pending:
@@ -182,7 +184,7 @@ async def relay(
 # ---------------------------------------------------------------------------
 
 
-def _make_bus_handler(socket_path: Path):  # type: ignore[no-untyped-def]
+def _make_application_handler(socket_path: Path):  # type: ignore[no-untyped-def]
     aioweb = _require_aiohttp()
 
     async def _bus(request: aioweb.Request) -> aioweb.WebSocketResponse:
@@ -212,7 +214,7 @@ def _make_health_handler(socket_path: Path):  # type: ignore[no-untyped-def]
             del reader
         except Exception:  # noqa: BLE001
             reachable = False
-        return aioweb.json_response({"ok": True, "bus_reachable": reachable})
+        return aioweb.json_response({"ok": True, "service_reachable": reachable})
 
     return _health
 
@@ -240,11 +242,11 @@ def _make_static_handler(assets_dir: Path):  # type: ignore[no-untyped-def]
 
 
 def create_app(socket_path: Path, assets_dir: Path) -> aioweb.Application:
-    """Build the aiohttp application: ``/bus`` WS relay, ``/api/health``, and
+    """Build the aiohttp application: ``/api/ws`` relay, ``/api/health``, and
     static SPA serving for everything else."""
     aioweb = _require_aiohttp()
     app = aioweb.Application()
-    app.router.add_get("/bus", _make_bus_handler(socket_path))
+    app.router.add_get("/api/ws", _make_application_handler(socket_path))
     app.router.add_get("/api/health", _make_health_handler(socket_path))
     app.router.add_get("/{path:.*}", _make_static_handler(assets_dir))
     return app
@@ -267,7 +269,12 @@ async def run_server(
     await runner.setup()
     site = aioweb.TCPSite(runner, host, port)
     await site.start()
-    LOGGER.info("murder web bridge serving on http://%s:%d (bus=%s)", host, port, socket_path)
+    LOGGER.info(
+        "murder web bridge serving on http://%s:%d (application_socket=%s)",
+        host,
+        port,
+        socket_path,
+    )
     try:
         # Sleep forever; the worker installs a SIGTERM handler that cancels us.
         await asyncio.Event().wait()

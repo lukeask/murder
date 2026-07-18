@@ -41,10 +41,10 @@ import './styles/panels-stage.css';
 const bus = new WsBusClient({ logger: console });
 const { store } = createAppStore(bus);
 
-// Kick the connection. RPC/subscribe also lazily connect, but starting here means the header shows
+// Kick the connection. Requests/streams also lazily connect, but starting here means the header shows
 // "connecting…" immediately and the store's bus subscriptions are live before first paint.
 void bus.connect().catch((error: unknown) => {
-  // A permanent (protocol-version-mismatch) rejection is surfaced via onPermanentError → the
+  // A permanent application-version mismatch is surfaced via onPermanentError → the
   // header's "version mismatch" state; nothing else to do here but avoid an unhandled rejection.
   console.warn('initial bus connect failed:', error);
 });

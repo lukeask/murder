@@ -34,20 +34,22 @@ import type { WorkflowDef } from './workflowsSlice.js';
  * verb returning the materialized ticket ids.
  */
 declare module '../../bus/BusClient.js' {
-  interface RpcMethods {
+  interface QueryMethods {
     /** Load the persisted workflow registry. Empty params; reply carries the saved workflows. */
-    'tui.load_workflows': {
+    'workflows.get': {
       params: Record<string, never>;
       result: { ok: boolean; workflows: readonly WorkflowDef[] };
     };
+  }
+  interface CommandMethods {
     /** Persist the registry. Echoes back the NORMALIZED list. */
-    'tui.save_workflows': {
+    'workflows.set': {
       params: { workflows: readonly WorkflowDef[] };
       result: { ok: boolean; workflows: readonly WorkflowDef[] };
     };
     /** Fire a saved workflow by name: materialize its ticket tree + spawn crows. `args` are the
      * stage-instruction substitutions (v0: a single `{input}` key — see fireWorkflow.ts). */
-    'tui.run_workflow': {
+    'workflow.start': {
       params: { name: string; args: Record<string, string> };
       result: {
         ok: boolean;
@@ -105,7 +107,7 @@ export function createWorkflowsActions(
       workflows: { ...state.workflows, items: next, status: 'ready', error: null },
     }));
     try {
-      const reply = await bus.rpc('tui.save_workflows', { workflows: next });
+      const reply = await bus.command('workflows.set', { workflows: next });
       store.setState({
         workflows: { items: toItems(reply.workflows), status: 'ready', error: null },
       });
@@ -123,7 +125,7 @@ export function createWorkflowsActions(
     async load(): Promise<void> {
       store.setState((state) => ({ workflows: { ...state.workflows, status: 'loading' } }));
       try {
-        const reply = await bus.rpc('tui.load_workflows', {});
+        const reply = await bus.query('workflows.get', {});
         store.setState({
           workflows: { items: toItems(reply.workflows), status: 'ready', error: null },
         });
@@ -160,7 +162,7 @@ export function createWorkflowsActions(
 
     async run(name: string, args: Record<string, string>): Promise<void> {
       try {
-        const reply = await bus.rpc('tui.run_workflow', { name, args });
+        const reply = await bus.command('workflow.start', { name, args });
         // Fire confirmation: the run ticket is the root of the materialized tree; the tickets/crows
         // themselves arrive via the snapshot stream (this action does not poll them).
         toastStore.getState().push(`fired :${name}: → ${reply.run_ticket_id}`);

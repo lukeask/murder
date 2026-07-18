@@ -2,11 +2,12 @@
 
 `murder web up` daemonizes a long-lived aiohttp server (mirroring how `murder up`
 daemonizes the supervisor) that serves the compiled React frontend as static
-files and exposes a ``/bus`` WebSocket that relays 1:1 to the murder unix bus.
+files and exposes an ``/api/ws`` WebSocket that relays the service-owned
+application protocol to the Murder service socket.
 `murder web down` SIGTERMs it. ``serve`` is the hidden worker the daemon execs.
 
 The supervisor is ensured up first (reusing service_cmd helpers), since the
-bridge is useless without the bus socket it relays to.
+bridge is useless without the service application socket it relays to.
 """
 
 from __future__ import annotations
@@ -86,9 +87,7 @@ def resolve_host(*, localhost: bool, lan: bool, tailnet: bool) -> tuple[str, str
                 "could not determine a Tailscale IPv4 (is tailscale installed and up? "
                 "try `tailscale ip -4`)."
             )
-        hint = (
-            "tip: `tailscale serve` can reverse-proxy this port for HTTPS on your tailnet."
-        )
+        hint = "tip: `tailscale serve` can reverse-proxy this port for HTTPS on your tailnet."
         return ip, hint
     if lan:
         return "0.0.0.0", None
@@ -155,9 +154,7 @@ def cmd_web_up(
         True, "--localhost/--no-localhost", help="Bind 127.0.0.1 (default)."
     ),
     lan: bool = typer.Option(False, "--lan", help="Bind 0.0.0.0 (reachable on your LAN)."),
-    tailnet: bool = typer.Option(
-        False, "--tailnet", help="Bind this machine's Tailscale IPv4."
-    ),
+    tailnet: bool = typer.Option(False, "--tailnet", help="Bind this machine's Tailscale IPv4."),
     foreground: bool = typer.Option(
         False, "--foreground", "-f", help="Run in the foreground (don't daemonize)."
     ),

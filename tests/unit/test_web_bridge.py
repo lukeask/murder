@@ -11,7 +11,6 @@ import typer
 from murder.app.cli import web_cmd
 from murder.web import bridge
 
-
 # ---------------------------------------------------------------------------
 # Relay framing: real loopback unix socket + aiohttp test WS endpoint
 # ---------------------------------------------------------------------------
@@ -28,14 +27,14 @@ def test_relay_frames_lines_and_appends_newline(tmp_path: Path) -> None:
     received_from_ws: list[bytes] = []
 
     async def _scenario() -> None:
-        # Fake unix bus: when the bridge connects, dribble framed JSON in pieces,
+        # Fake service socket: when the bridge connects, dribble framed JSON in pieces,
         # then record whatever the bridge writes back.
         async def _handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
             # Two complete lines arriving in one chunk, plus a split line.
             writer.write(b'{"a":1}\n{"b":2}\n{"c":')
             await writer.drain()
             await asyncio.sleep(0.02)
-            writer.write(b'3}\n')  # completes the third line
+            writer.write(b"3}\n")  # completes the third line
             await writer.drain()
             # Read one line the WS sent inbound.
             line = await reader.readline()
@@ -46,12 +45,12 @@ def test_relay_frames_lines_and_appends_newline(tmp_path: Path) -> None:
         server = await asyncio.start_unix_server(_handle, path=str(socket_path))
 
         app = aioweb.Application()
-        app.router.add_get("/bus", bridge._make_bus_handler(socket_path))
+        app.router.add_get("/api/ws", bridge._make_application_handler(socket_path))
         test_server = TestServer(app)
         client = TestClient(test_server)
         await client.start_server()
         try:
-            ws = await client.ws_connect("/bus")
+            ws = await client.ws_connect("/api/ws")
             # Send one message WS->socket; bridge must append "\n".
             await ws.send_str('{"hello":"world"}')
 
@@ -82,15 +81,90 @@ def test_relay_closes_ws_when_bus_unreachable(tmp_path: Path) -> None:
 
     async def _scenario() -> None:
         app = aioweb.Application()
-        app.router.add_get("/bus", bridge._make_bus_handler(socket_path))
+        app.router.add_get("/api/ws", bridge._make_application_handler(socket_path))
         client = TestClient(TestServer(app))
         await client.start_server()
         try:
-            ws = await client.ws_connect("/bus")
+            ws = await client.ws_connect("/api/ws")
             msg = await asyncio.wait_for(ws.receive(), timeout=2.0)
             assert msg.type.name in ("CLOSE", "CLOSED", "CLOSING")
         finally:
             await client.close()
+
+    asyncio.run(_scenario())
+
+
+def test_websocket_speaks_service_application_protocol(tmp_path: Path) -> None:
+    """The framing edge reaches the service gateway, never a browser-owned RPC mapper."""
+    from aiohttp import web as aioweb
+    from aiohttp.test_utils import TestClient, TestServer
+
+    from murder.bus.transport_socket import SocketBusServer
+
+    class _Broker:
+        def __init__(self) -> None:
+            self.published: list[object] = []
+
+        async def request(self, target: str, body: dict, *, timeout_s: float) -> dict:
+            return {"target": target, "body": body, "timeout_s": timeout_s}
+
+        async def publish(self, event: object) -> None:
+            self.published.append(event)
+
+        def watermark(self) -> int:
+            return 0
+
+        def replay(self, *_args: object, **_kwargs: object) -> list:
+            return []
+
+        async def tail(self, *_args: object, **_kwargs: object):  # type: ignore[no-untyped-def]
+            while True:
+                await asyncio.sleep(3600)
+            yield
+
+    socket_path = tmp_path / "service.sock"
+
+    async def _scenario() -> None:
+        service = SocketBusServer(
+            _Broker(),  # type: ignore[arg-type]
+            run_id="run-web-test",
+            socket_path=socket_path,
+        )
+        try:
+            await service.start()
+        except PermissionError:
+            pytest.skip("sandbox forbids Unix-domain socket creation")
+        app = aioweb.Application()
+        app.router.add_get("/api/ws", bridge._make_application_handler(socket_path))
+        client = TestClient(TestServer(app))
+        await client.start_server()
+        try:
+            ws = await client.ws_connect("/api/ws")
+            await ws.send_json(
+                {
+                    "op": "client.hello",
+                    "protocol_version": 1,
+                    "client": {"client_id": "web-test", "kind": "web"},
+                }
+            )
+            hello = await ws.receive_json(timeout=2)
+            assert hello["op"] == "server.hello"
+            await ws.send_json(
+                {
+                    "op": "request",
+                    "request_id": "health-1",
+                    "request": {"kind": "query", "name": "health.get", "params": {}},
+                    "timeout_s": 2,
+                }
+            )
+            reply = await ws.receive_json(timeout=2)
+            assert reply["op"] == "reply"
+            assert reply["request_id"] == "health-1"
+            assert reply["result"]["target"] == "health.ping"
+            await ws.close()
+        finally:
+            await client.close()
+            await service.stop()
 
     asyncio.run(_scenario())
 
@@ -149,9 +223,7 @@ def test_tailscale_ipv4_picks_first_100(monkeypatch: pytest.MonkeyPatch) -> None
 # ---------------------------------------------------------------------------
 
 
-def test_resolve_assets_dir_packaged_wins(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_resolve_assets_dir_packaged_wins(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """When the packaged bundle exists it takes precedence over the source build."""
     packaged = tmp_path / "_webui"
     packaged.mkdir()
@@ -166,21 +238,15 @@ def test_resolve_assets_dir_source_fallback(
 ) -> None:
     # Point the packaged lookup at a guaranteed-nonexistent dir so this branch
     # is exercised deterministically regardless of any local _webui artifact.
-    monkeypatch.setattr(
-        bridge, "_packaged_assets_dir", lambda: tmp_path / "no_packaged"
-    )
+    monkeypatch.setattr(bridge, "_packaged_assets_dir", lambda: tmp_path / "no_packaged")
     repo = tmp_path / "repo"
     (repo / "webui" / "dist").mkdir(parents=True)
     (repo / "webui" / "dist" / "index.html").write_text("<html></html>")
     assert bridge.resolve_assets_dir(repo) == repo / "webui" / "dist"
 
 
-def test_resolve_assets_dir_missing_raises(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr(
-        bridge, "_packaged_assets_dir", lambda: tmp_path / "no_packaged"
-    )
+def test_resolve_assets_dir_missing_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(bridge, "_packaged_assets_dir", lambda: tmp_path / "no_packaged")
     with pytest.raises(FileNotFoundError):
         bridge.resolve_assets_dir(tmp_path / "nope")
 
@@ -233,7 +299,7 @@ def test_health_endpoint(tmp_path: Path) -> None:
             assert r.status == 200
             body = await r.json()
             assert body["ok"] is True
-            assert body["bus_reachable"] is False
+            assert body["service_reachable"] is False
         finally:
             await client.close()
 

@@ -17,6 +17,7 @@ const row = (over: Partial<HistoryRow>): HistoryRow => ({
   itemId: 'h1',
   text: 'plan the orchestrator split',
   target: 'collab',
+  conversationId: 'conversation-h1',
   ts: '2026-06-15T01:00:00Z',
   status: 'open',
   harness: 'claude',

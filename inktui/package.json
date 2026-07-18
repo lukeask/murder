@@ -20,7 +20,9 @@
     "format": "biome format --write src test",
     "test": "vitest run",
     "render-pane-fixture": "tsx fixtures/render-pane-fixture.ts",
-    "fixtures:render": "tsx fixtures/render-pane-fixture.ts --all"
+    "fixtures:render": "tsx fixtures/render-pane-fixture.ts --all",
+    "contracts:generate": "cd .. && python tools/generate_application_protocol.py",
+    "contracts:check": "cd .. && python tools/generate_application_protocol.py --check"
   },
   "dependencies": {
     "ink": "^7.0.5",

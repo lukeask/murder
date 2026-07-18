@@ -16,8 +16,8 @@ import type { AppStore } from '../../../src/store/store.js';
 /** A bus that accepts a `crow.spawn_rogue` command and returns `agentId` from its terminal status. */
 function spawnBus(agentId: string | undefined): FakeBusClient {
   const bus = new FakeBusClient();
-  bus.stubRpc('command.submit', { ok: true, command_id: 'cmd-1' });
-  bus.stubRpc('command.status', {
+  bus.stubCommand('orchestration.execute', { ok: true, command_id: 'cmd-1' });
+  bus.stubQuery('command.get', {
     ok: true,
     status: 'done',
     result_json: JSON.stringify(agentId !== undefined ? { handled: true, agent_id: agentId } : {}),

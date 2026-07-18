@@ -27,7 +27,7 @@ afterEach(() => {
 describe('SettingsPanel theme switch', () => {
   it('repaints :root CSS vars when a theme is chosen', () => {
     const { store, bus } = makeStore();
-    bus.stubRpc('tui.load_themes', { ok: true, themes: [] });
+    bus.stubQuery('themes.get', { ok: true, themes: [] });
     renderWithStore(<Harness />, { store, bus });
 
     const lightPalette = getPalette('everforest-light')!;
@@ -39,7 +39,7 @@ describe('SettingsPanel theme switch', () => {
 
   it('reflects the active scheme onto <html data-theme> so DS components switch', () => {
     const { store, bus } = makeStore();
-    bus.stubRpc('tui.load_themes', { ok: true, themes: [] });
+    bus.stubQuery('themes.get', { ok: true, themes: [] });
     renderWithStore(<Harness />, { store, bus });
 
     expect(document.documentElement.dataset['theme']).toBe('dark');
@@ -51,7 +51,7 @@ describe('SettingsPanel theme switch', () => {
   it('marks the active theme swatch', () => {
     setTheme('everforest-light');
     const { store, bus } = makeStore();
-    bus.stubRpc('tui.load_themes', { ok: true, themes: [] });
+    bus.stubQuery('themes.get', { ok: true, themes: [] });
     renderWithStore(<Harness />, { store, bus });
     const swatch = screen.getByText('Everforest Light').closest('.theme-swatch');
     expect(swatch?.getAttribute('data-on')).toBe('true');
@@ -59,8 +59,8 @@ describe('SettingsPanel theme switch', () => {
 
   it('persists a concrete model when startup rogue cursor is selected', () => {
     const { store, bus } = makeStore();
-    bus.stubRpc('tui.load_themes', { ok: true, themes: [] });
-    bus.stubRpc('settings.update', (params) => ({
+    bus.stubQuery('themes.get', { ok: true, themes: [] });
+    bus.stubCommand('settings.update', (params) => ({
       ok: true,
       settings: {
         theme: store.getState().settings.theme,
@@ -69,6 +69,8 @@ describe('SettingsPanel theme switch', () => {
         pane_gap: store.getState().settings.paneGap,
         vim_mode: store.getState().settings.vimMode,
         default_chat_view_mode: store.getState().settings.defaultChatViewMode,
+        workspace_count: store.getState().settings.workspaceCount,
+        bar_widgets: store.getState().settings.barWidgets,
         startup_rogue: params.settings.startup_rogue ?? null,
         startup_rogue_models: store.getState().settings.startupRogueModels,
         startup_rogue_efforts: store.getState().settings.startupRogueEfforts,
@@ -86,8 +88,8 @@ describe('SettingsPanel theme switch', () => {
 
     fireEvent.change(screen.getByLabelText('startup rogue'), { target: { value: 'cursor' } });
 
-    expect(bus.rpcCalls.at(-1)).toEqual({
-      method: 'settings.update',
+    expect(bus.commandCalls.at(-1)).toEqual({
+      name: 'settings.update',
       params: {
         settings: {
           startup_rogue: { harness: 'cursor', model: 'composer-2.5', effort: 'slow' },

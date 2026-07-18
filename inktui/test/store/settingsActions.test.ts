@@ -53,12 +53,12 @@ function setup() {
   const fake = new FakeBusClient();
   // Default stubs so an unrelated load/update resolves; tests override as needed. `settings.update`
   // echoes the patch onto the default record, mirroring the server's "reply = full merged payload".
-  fake.stubRpc('settings.get', { ok: true, settings: wire() });
-  fake.stubRpc('settings.update', (params) => {
+  fake.stubQuery('settings.get', { ok: true, settings: wire() });
+  fake.stubCommand('settings.update', (params) => {
     const partial = (params.settings ?? {}) as Record<string, unknown>;
     return { ok: true, settings: wire(partial) };
   });
-  fake.stubRpc('state.crow_snapshot', { invalidation_key: 'iv', sessions: [] });
+  fake.stubQuery('roster.get', { invalidation_key: 'iv', sessions: [] });
   const { store, dispose } = createAppStore(fake);
   return { fake, store, dispose };
 }
@@ -70,7 +70,7 @@ describe('settings actions', () => {
 
   it('load() fires settings.get and fills the slice (key_overrides → keyOverrides)', async () => {
     const { fake, store, dispose } = setup();
-    fake.stubRpc('settings.get', {
+    fake.stubQuery('settings.get', {
       ok: true,
       settings: wire({
         theme: 'everforest-light',
@@ -82,7 +82,7 @@ describe('settings actions', () => {
 
     await store.getState().actions.settings.load();
 
-    expect(fake.rpcCalls.some((c) => c.method === 'settings.get')).toBe(true);
+    expect(fake.queryCalls.some((c) => c.name === 'settings.get')).toBe(true);
     const s = store.getState().settings;
     expect(s.status).toBe('ready');
     expect(s.theme).toBe('everforest-light');
@@ -98,7 +98,7 @@ describe('settings actions', () => {
     await store.getState().actions.settings.update({ pane_gap: 2 });
 
     expect(store.getState().settings.paneGap).toBe(2);
-    const updates = fake.rpcCalls.filter((c) => c.method === 'settings.update');
+    const updates = fake.commandCalls.filter((c) => c.name === 'settings.update');
     expect(updates.length).toBe(1);
     expect(updates[0]?.params).toEqual({ settings: { pane_gap: 2 } });
     dispose();
@@ -110,7 +110,7 @@ describe('settings actions', () => {
     await store.getState().actions.settings.update({ workspace_count: 3 });
 
     expect(store.getState().settings.workspaceCount).toBe(3);
-    const updates = fake.rpcCalls.filter((c) => c.method === 'settings.update');
+    const updates = fake.commandCalls.filter((c) => c.name === 'settings.update');
     expect(updates.length).toBe(1);
     expect(updates[0]?.params).toEqual({ settings: { workspace_count: 3 } });
     dispose();
@@ -124,7 +124,7 @@ describe('settings actions', () => {
 
   it('load() fills vimMode from the wire (vim_mode → vimMode)', async () => {
     const { fake, store, dispose } = setup();
-    fake.stubRpc('settings.get', { ok: true, settings: wire({ vim_mode: true }) });
+    fake.stubQuery('settings.get', { ok: true, settings: wire({ vim_mode: true }) });
     await store.getState().actions.settings.load();
     expect(store.getState().settings.vimMode).toBe(true);
     dispose();
@@ -136,7 +136,7 @@ describe('settings actions', () => {
     await store.getState().actions.settings.update({ vim_mode: true });
 
     expect(store.getState().settings.vimMode).toBe(true);
-    const updates = fake.rpcCalls.filter((c) => c.method === 'settings.update');
+    const updates = fake.commandCalls.filter((c) => c.name === 'settings.update');
     expect(updates.length).toBe(1);
     expect(updates[0]?.params).toEqual({ settings: { vim_mode: true } });
     dispose();
@@ -144,7 +144,7 @@ describe('settings actions', () => {
 
   it('load() fills defaultChatViewMode from the wire (TUIchat-3)', async () => {
     const { fake, store, dispose } = setup();
-    fake.stubRpc('settings.get', {
+    fake.stubQuery('settings.get', {
       ok: true,
       settings: wire({ default_chat_view_mode: 'condensed' }),
     });
@@ -159,7 +159,7 @@ describe('settings actions', () => {
     await store.getState().actions.settings.update({ default_chat_view_mode: 'condensed' });
 
     expect(store.getState().settings.defaultChatViewMode).toBe('condensed');
-    const updates = fake.rpcCalls.filter((c) => c.method === 'settings.update');
+    const updates = fake.commandCalls.filter((c) => c.name === 'settings.update');
     expect(updates.length).toBe(1);
     expect(updates[0]?.params).toEqual({ settings: { default_chat_view_mode: 'condensed' } });
     dispose();
@@ -167,7 +167,7 @@ describe('settings actions', () => {
 
   it('loads and optimistically persists document display mode', async () => {
     const { fake, store, dispose } = setup();
-    fake.stubRpc('settings.get', {
+    fake.stubQuery('settings.get', {
       ok: true,
       settings: wire({ document_display_mode: 'markdown' }),
     });
@@ -176,7 +176,7 @@ describe('settings actions', () => {
 
     await store.getState().actions.settings.update({ document_display_mode: 'plain' });
     expect(store.getState().settings.documentDisplayMode).toBe('plain');
-    const updates = fake.rpcCalls.filter((call) => call.method === 'settings.update');
+    const updates = fake.commandCalls.filter((call) => call.name === 'settings.update');
     expect(updates[0]?.params).toEqual({ settings: { document_display_mode: 'plain' } });
     dispose();
   });
@@ -189,7 +189,7 @@ describe('settings actions', () => {
     // Optimistic local overlay.
     expect(store.getState().settings.modifier).toBe('ctrl');
     // Persisted with the same partial.
-    const updates = fake.rpcCalls.filter((c) => c.method === 'settings.update');
+    const updates = fake.commandCalls.filter((c) => c.name === 'settings.update');
     expect(updates.length).toBe(1);
     expect(updates[0]?.params).toEqual({ settings: { modifier: 'ctrl' } });
     dispose();
@@ -204,7 +204,7 @@ describe('settings actions', () => {
 
   it('a save rejection sets error, keeps the optimistic local change, AND surfaces a toast', async () => {
     const { fake, store, dispose } = setup();
-    fake.stubRpc('settings.update', () => {
+    fake.stubCommand('settings.update', () => {
       throw new Error('rpc error [internal]: bus down');
     });
 
@@ -228,7 +228,7 @@ describe('settings actions', () => {
 
   it('load() fills the extended harness + llm fields (snake_case → camelCase)', async () => {
     const { fake, store, dispose } = setup();
-    fake.stubRpc('settings.get', {
+    fake.stubQuery('settings.get', {
       ok: true,
       settings: wire({
         collaborator_harness: 'codex',
@@ -254,7 +254,7 @@ describe('settings actions', () => {
     expect(s.effectiveCollaboratorHarness).toBe('codex');
     expect(s.effectivePlannerHarness).toBe('cursor');
     expect(s.effectiveCrowHarnesses).toEqual(['cursor', 'pi']);
-    expect(s.llm.providers?.groq?.api_key).toBe('***');
+    expect(s.llm.providers?.['groq']?.api_key).toBe('***');
     expect(s.llm.roles).toEqual({ notetaker: 'fast' });
     expect(s.llmEnv.groq).toBe(true);
     dispose();
@@ -264,7 +264,7 @@ describe('settings actions', () => {
     const { fake, store, dispose } = setup();
     await store.getState().actions.settings.update({ collaborator_harness: 'codex' });
     expect(store.getState().settings.collaboratorHarness).toBe('codex');
-    const updates = fake.rpcCalls.filter((c) => c.method === 'settings.update');
+    const updates = fake.commandCalls.filter((c) => c.name === 'settings.update');
     expect(updates[0]?.params).toEqual({ settings: { collaborator_harness: 'codex' } });
     dispose();
   });
@@ -282,7 +282,7 @@ describe('settings actions', () => {
     const { fake, store, dispose } = setup();
     await store.getState().actions.settings.update({ planner_harness: 'codex' });
     expect(store.getState().settings.plannerHarness).toBe('codex');
-    const updates = fake.rpcCalls.filter((c) => c.method === 'settings.update');
+    const updates = fake.commandCalls.filter((c) => c.name === 'settings.update');
     expect(updates[0]?.params).toEqual({ settings: { planner_harness: 'codex' } });
     dispose();
   });
@@ -299,7 +299,7 @@ describe('settings actions', () => {
     const { fake, store, dispose } = setup();
     await store.getState().actions.settings.update({ crow_harnesses: ['cursor', 'pi'] });
     expect(store.getState().settings.crowHarnesses).toEqual(['cursor', 'pi']);
-    const updates = fake.rpcCalls.filter((c) => c.method === 'settings.update');
+    const updates = fake.commandCalls.filter((c) => c.name === 'settings.update');
     expect(updates[0]?.params).toEqual({ settings: { crow_harnesses: ['cursor', 'pi'] } });
     dispose();
   });
@@ -308,7 +308,7 @@ describe('settings actions', () => {
     const { fake, store, dispose } = setup();
     // The echo stub reflects the patch back as the merged llm payload.
     await store.getState().actions.settings.update({ llm: { roles: { notetaker: 'smart' } } });
-    const updates = fake.rpcCalls.filter((c) => c.method === 'settings.update');
+    const updates = fake.commandCalls.filter((c) => c.name === 'settings.update');
     expect(updates[0]?.params).toEqual({ settings: { llm: { roles: { notetaker: 'smart' } } } });
     expect(store.getState().settings.llm.roles).toEqual({ notetaker: 'smart' });
     dispose();
@@ -316,7 +316,7 @@ describe('settings actions', () => {
 
   it('a load rejection sets status=error and leaves settings at defaults', async () => {
     const { fake, store, dispose } = setup();
-    fake.stubRpc('settings.get', () => {
+    fake.stubQuery('settings.get', () => {
       throw new Error('no settings');
     });
 

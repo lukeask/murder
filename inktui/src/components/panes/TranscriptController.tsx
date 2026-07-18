@@ -1,6 +1,5 @@
 import { Text } from 'ink';
 import { type JSX, memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { TmuxFrameEvent } from '../../bus/protocol.js';
 import { META_SEP } from '../../components/glyphs.js';
 import { useAppStore } from '../../hooks/useAppStore.js';
 import { useBusClient } from '../../hooks/useBusClient.js';
@@ -165,16 +164,9 @@ export const TranscriptController = memo(function TranscriptController({
       setTmuxFrame('');
       return;
     }
-    const unsubscribe = bus.subscribe(
-      (event) => {
-        if (event.type !== 'tmux.frame') {
-          return;
-        }
-        const tmuxEvent: TmuxFrameEvent = event;
-        setTmuxFrame(tmuxEvent.frame);
-      },
-      { type: 'tmux.frame', agent_id: identity.agentId },
-    );
+    const unsubscribe = bus.attachTerminal(identity.agentId, (terminalFrame) => {
+      setTmuxFrame(terminalFrame.frame);
+    });
     return unsubscribe;
   }, [bus, identity.agentId, viewMode]);
 

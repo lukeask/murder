@@ -44,7 +44,7 @@ const AGENT_ID = 'crow-7';
 
 function setup() {
   const fake = new FakeBusClient();
-  fake.stubRpc('state.crow_snapshot', { invalidation_key: 'iv', sessions: [] });
+  fake.stubQuery('roster.get', { invalidation_key: 'iv', sessions: [] });
   const { store, dispose } = createAppStore(fake);
   return { fake, store, dispose };
 }

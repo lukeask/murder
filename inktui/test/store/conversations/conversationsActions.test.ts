@@ -24,10 +24,10 @@ import { toastStore } from '../../../src/store/toast/toastStore.js';
 function setup() {
   const fake = new FakeBusClient();
   // Stub sibling RPCs so the store doesn't reject.
-  fake.stubRpc('state.crow_snapshot', { invalidation_key: 'iv', sessions: [] });
-  // F2: `agent.message` is an orchestrator command kind routed through command.submit + status.
-  fake.stubRpc('command.submit', { ok: true, command_id: 'cmd-1' });
-  fake.stubRpc('command.status', { ok: true, status: 'done', result_json: '{}' });
+  fake.stubQuery('roster.get', { invalidation_key: 'iv', sessions: [] });
+  // F2: `agent.message` is an orchestrator command kind routed through orchestration.execute + status.
+  fake.stubCommand('orchestration.execute', { ok: true, command_id: 'cmd-1' });
+  fake.stubQuery('command.get', { ok: true, status: 'done', result_json: '{}' });
   const { store, dispose } = createAppStore(fake);
   return { fake, store, dispose };
 }
@@ -225,8 +225,8 @@ describe('conversationsActions.send', () => {
 
     await store.getState().actions.conversations.send('agent-42', 'test message');
 
-    // The message rides the `command.submit` choke point as the `agent.message` command kind.
-    const submit = fake.rpcCalls.find((c) => c.method === 'command.submit');
+    // The message rides the `orchestration.execute` choke point as the `agent.message` command kind.
+    const submit = fake.commandCalls.find((c) => c.name === 'orchestration.execute');
     expect(submit?.params).toMatchObject({
       kind: 'agent.message',
       payload: { agent_id: 'agent-42', message: 'test message' },
@@ -245,9 +245,9 @@ describe('conversationsActions.send', () => {
 
   it('swallows bus errors (fire-and-forget from UI perspective)', async () => {
     const fake = new FakeBusClient();
-    // Leave `command.submit` unstubbed — FakeBusClient rejects unknown methods, so the underlying
-    // agent.message command rejects; `send` must swallow it. state.crow_snapshot lets store init pass.
-    fake.stubRpc('state.crow_snapshot', { invalidation_key: 'iv', sessions: [] });
+    // Leave `orchestration.execute` unstubbed — FakeBusClient rejects unknown methods, so the underlying
+    // agent.message command rejects; `send` must swallow it. roster.get lets store init pass.
+    fake.stubQuery('roster.get', { invalidation_key: 'iv', sessions: [] });
     const { store, dispose } = createAppStore(fake);
 
     // Should not throw — send swallows the rejection.
@@ -259,13 +259,14 @@ describe('conversationsActions.send', () => {
 
   it('is the SOLE caller for chat — exactly one agent.message command is submitted', async () => {
     // This test proves the rule-3 invariant: only conversationsActions.send sends chat. We verify
-    // by checking exactly one `agent.message`-kind command.submit appears after a send.
+    // by checking exactly one `agent.message`-kind orchestration.execute appears after a send.
     const { fake, store, dispose } = setup();
 
     await store.getState().actions.conversations.send('agent-1', 'msg');
-    const agentMessageCalls = fake.rpcCalls.filter(
+    const agentMessageCalls = fake.commandCalls.filter(
       (c) =>
-        c.method === 'command.submit' && (c.params as { kind: string }).kind === 'agent.message',
+        c.name === 'orchestration.execute' &&
+        (c.params as { kind: string }).kind === 'agent.message',
     );
     expect(agentMessageCalls).toHaveLength(1);
     dispose();
@@ -279,9 +280,9 @@ describe('conversationsActions.send — toast on bus ack (F9)', () => {
    * send action sees the branch under test (success / queued / handled-false). */
   function setupWithResult(resultJson: string) {
     const fake = new FakeBusClient();
-    fake.stubRpc('state.crow_snapshot', { invalidation_key: 'iv', sessions: [] });
-    fake.stubRpc('command.submit', { ok: true, command_id: 'cmd-1' });
-    fake.stubRpc('command.status', { ok: true, status: 'done', result_json: resultJson });
+    fake.stubQuery('roster.get', { invalidation_key: 'iv', sessions: [] });
+    fake.stubCommand('orchestration.execute', { ok: true, command_id: 'cmd-1' });
+    fake.stubQuery('command.get', { ok: true, status: 'done', result_json: resultJson });
     const { store, dispose } = createAppStore(fake);
     return { store, dispose };
   }

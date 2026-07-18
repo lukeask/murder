@@ -22,8 +22,8 @@ const zustandDir = fileURLToPath(new URL('./node_modules/zustand', import.meta.u
 const useSyncDir = fileURLToPath(new URL('./node_modules/use-sync-external-store', import.meta.url));
 
 // Dev-time bus bridge target. `murder web up -f` runs the WS<->unix-socket relay on this port; the
-// dev server proxies `/bus` to it so `npm run dev` talks to a locally-running supervisor. In a
-// production build the bridge serves `webui/dist` itself, so `/bus` is same-origin and no proxy is
+// dev server proxies `/api/ws` to it so `npm run dev` talks to a locally-running supervisor. In a
+// production build the bridge serves `webui/dist` itself, so `/api/ws` is same-origin and no proxy is
 // needed. Override the port with VITE_BUS_PROXY_PORT if your bridge binds elsewhere.
 const busProxyPort = process.env['VITE_BUS_PROXY_PORT'] ?? '8473';
 
@@ -56,7 +56,7 @@ export default defineConfig({
       allow: ['..'],
     },
     proxy: {
-      '/bus': {
+      '/api/ws': {
         target: `ws://localhost:${busProxyPort}`,
         ws: true,
         changeOrigin: true,

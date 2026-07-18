@@ -1,18 +1,18 @@
-"""Frozen wire contract between supervisor, workers, and clients.
+"""Transitional internal bus contract.
 
-This module is the single source of truth for the bus protocol that spans
-the worker-bus refactor. The TUI, the broker, and every client import from
-here: the TUI develops against a fake bus that produces messages matching
-these types; the broker produces them for real. They meet at this file.
+Interactive clients use the service-owned contracts in
+``murder.app.protocol``.  This module remains the internal compatibility
+surface for workers, durable facts, and old CLI tooling while those
+implementations migrate behind feature boundaries.  Do not add new public
+client capabilities here.
 
 Amendment process
 -----------------
 - **Additive changes** (new optional fields, new BusEvent kinds, new
   closed-enum values that don't change existing meaning) MAY be made
   inline.
-- **Non-additive changes** (renaming a field, changing a discriminator
-  value, narrowing a type, removing a kind) MUST bump
-  ``PROTOCOL_VERSION``. Clients refuse mismatched versions on connect.
+- **Non-additive changes** to the internal compatibility socket MUST bump
+  ``PROTOCOL_VERSION``.
 
 Out of scope
 ------------

@@ -27,7 +27,7 @@
  */
 
 import type { StateCreator, StoreApi } from 'zustand';
-import type { BusClient, RpcMethods } from '../bus/BusClient.js';
+import type { BusClient, QueryMethod, QueryParams, QueryResult } from '../bus/BusClient.js';
 import type { AppStore } from './store.js';
 
 /**
@@ -81,7 +81,7 @@ export function createListSlice<Key extends keyof AppStore & string, Row>(
  */
 export function createRefreshAction<
   Key extends keyof AppStore & string,
-  Method extends keyof RpcMethods,
+  Method extends QueryMethod,
   Row,
 >(
   bus: BusClient,
@@ -89,7 +89,7 @@ export function createRefreshAction<
   config: {
     readonly key: Key;
     readonly method: Method;
-    readonly project: (reply: RpcMethods[Method]['result']) => readonly Row[];
+    readonly project: (reply: QueryResult<Method>) => readonly Row[];
   },
 ): { refresh(): Promise<void> } {
   const { key, method, project } = config;
@@ -117,7 +117,10 @@ export function createRefreshAction<
           });
           const token = seq;
           try {
-            const reply = await bus.rpc(method, {} as RpcMethods[Method]['params']);
+            const reply = (await bus.query(
+              method,
+              {} as QueryParams<Method>,
+            )) as QueryResult<Method>;
             if (token !== seq) {
               continue;
             }

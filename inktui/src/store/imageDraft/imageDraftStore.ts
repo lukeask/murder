@@ -41,6 +41,15 @@ import { createStore, type StoreApi } from 'zustand/vanilla';
 import type { BusClient } from '../../bus/BusClient.js';
 import { type ToastStoreApi, toastStore } from '../toast/toastStore.js';
 
+declare module '../../bus/BusClient.js' {
+  interface CommandMethods {
+    'image.upload': {
+      params: { name: string; ext: string; bytes: string };
+      result: { ok: boolean; path?: string; error?: string };
+    };
+  }
+}
+
 /** The lifecycle of one pasted image. `uploading` → `done` (path filled) | `failed`. */
 export type ImageDraftStatus = 'uploading' | 'done' | 'failed';
 
@@ -141,7 +150,7 @@ export function createImageDraftStore(
     async function uploadOne(draft: ImageDraftInternal): Promise<void> {
       const bytesB64 = draft.bytesB64;
       try {
-        const reply = await bus.rpc('image.upload', {
+        const reply = await bus.command('image.upload', {
           name: draft.stem,
           ext: draft.ext,
           bytes: bytesB64,

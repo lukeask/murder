@@ -25,9 +25,9 @@ import type { PlanRow } from './plansSlice.js';
  * `state.plans_snapshot` is the bus-contract name (`domain.verb`), registered in `host.py` and live.
  */
 declare module '../../bus/BusClient.js' {
-  interface RpcMethods {
+  interface QueryMethods {
     /** Fetch the full plans list (with parent/updated_at/char_count). Re-pulled on each `plan`-entity snapshot. */
-    'state.plans_snapshot': { params: Record<string, never>; result: PlansSnapshotReply };
+    'plans.list': { params: Record<string, never>; result: PlansSnapshotReply };
   }
 }
 
@@ -86,7 +86,7 @@ export function createPlansActions(bus: BusClient, store: StoreApi<AppStore>): P
   return {
     ...createRefreshAction(bus, store, {
       key: 'plans',
-      method: 'state.plans_snapshot',
+      method: 'plans.list',
       project: (reply) => reply.plans.map(toPlanRow),
     }),
     async spawnPlanner(name: string): Promise<void> {

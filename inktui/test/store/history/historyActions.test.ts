@@ -14,8 +14,8 @@ function flush(): Promise<void> {
 
 function setup() {
   const fake = new FakeBusClient();
-  fake.stubRpc('state.crow_snapshot', { invalidation_key: 'iv', sessions: [] });
-  fake.stubRpc('state.schedule_snapshot', {
+  fake.stubQuery('roster.get', { invalidation_key: 'iv', sessions: [] });
+  fake.stubQuery('schedule.get', {
     invalidation_key: 'iv',
     active_tickets: [],
     recent_done_tickets: [],
@@ -29,7 +29,7 @@ function setup() {
 describe('history actions', () => {
   it('refresh projects the wire snapshot into rows', async () => {
     const { fake, store } = setup();
-    fake.stubRpc('state.history_snapshot', {
+    fake.stubQuery('history.list', {
       invalidation_key: 'iv-h',
       items: [
         {
@@ -67,7 +67,7 @@ describe('history actions', () => {
 
   it('dismiss optimistically marks the row then submits history.dismiss', async () => {
     const { fake, store } = setup();
-    fake.stubRpc('state.history_snapshot', {
+    fake.stubQuery('history.list', {
       invalidation_key: 'iv-h',
       items: [
         {
@@ -83,8 +83,8 @@ describe('history actions', () => {
         },
       ],
     });
-    fake.stubRpc('command.submit', { ok: true, command_id: 'cmd-1' });
-    fake.stubRpc('command.status', {
+    fake.stubCommand('orchestration.execute', { ok: true, command_id: 'cmd-1' });
+    fake.stubQuery('command.get', {
       ok: true,
       status: 'done',
       result_json: JSON.stringify({ item_id: 'collaborator:0', status: 'dismissed' }),
@@ -99,7 +99,7 @@ describe('history actions', () => {
     // The row is optimistically marked dismissed.
     expect(store.getState().history.rows[0]?.status).toBe('dismissed');
     // And the orchestrator command was submitted with the item id.
-    const submit = fake.rpcCalls.find((c) => c.method === 'command.submit');
+    const submit = fake.commandCalls.find((c) => c.name === 'orchestration.execute');
     expect(submit?.params).toMatchObject({
       kind: 'history.dismiss',
       payload: { item_id: 'collaborator:0' },
@@ -108,8 +108,8 @@ describe('history actions', () => {
 
   it('resumeConversation submits agent.resume_from_history with the conversation id', async () => {
     const { fake, store } = setup();
-    fake.stubRpc('command.submit', { ok: true, command_id: 'cmd-r' });
-    fake.stubRpc('command.status', {
+    fake.stubCommand('orchestration.execute', { ok: true, command_id: 'cmd-r' });
+    fake.stubQuery('command.get', {
       ok: true,
       status: 'done',
       result_json: JSON.stringify({ handled: true, agent_id: 'crow-rogue-resumed' }),
@@ -117,7 +117,7 @@ describe('history actions', () => {
 
     await store.getState().actions.history.resumeConversation('crow-t1');
 
-    const submit = fake.rpcCalls.find((c) => c.method === 'command.submit');
+    const submit = fake.commandCalls.find((c) => c.name === 'orchestration.execute');
     expect(submit?.params).toMatchObject({
       kind: 'agent.resume_from_history',
       payload: { conversation_id: 'crow-t1' },
@@ -126,8 +126,8 @@ describe('history actions', () => {
 
   it('resumeConversation swallows backend rejection (does not throw)', async () => {
     const { fake, store } = setup();
-    fake.stubRpc('command.submit', { ok: true, command_id: 'cmd-r' });
-    fake.stubRpc('command.status', {
+    fake.stubCommand('orchestration.execute', { ok: true, command_id: 'cmd-r' });
+    fake.stubQuery('command.get', {
       ok: true,
       status: 'failed',
       last_error: 'resume is only supported for Claude Code sessions',

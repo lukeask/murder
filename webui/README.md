@@ -12,7 +12,7 @@ live roster + live tickets). The full UI port is a later wave.
 
 ```sh
 npm install          # from webui/
-npm run dev          # Vite dev server; proxies /bus → ws://localhost:8473 (a running bridge)
+npm run dev          # Vite dev server; proxies /api/ws → ws://localhost:8473
 npm run build        # tsc --noEmit + vite build → webui/dist (index.html + hashed assets)
 npm run preview      # serve the production build locally
 npm run test         # vitest (WsBusClient + cssVars)
@@ -21,7 +21,7 @@ npm run typecheck    # tsc --noEmit across webui + the aliased @core tree
 
 `npm run dev` expects the bus bridge running locally: `murder web up -f` on **port 8473** (the dev
 proxy target — override with `VITE_BUS_PROXY_PORT`). `npm run build` emits **`webui/dist`**, which
-the Python bridge ships as `murder/_webui/` and serves; in that served context `/bus` is
+the Python bridge ships as `murder/_webui/` and serves; in that served context `/api/ws` is
 same-origin so no proxy is involved.
 
 ## Reuse strategy — the `@core` alias
@@ -33,18 +33,15 @@ imports the portable core straight off the inktui tree — there is no copy, no 
 | --- | --- |
 | `@core/store/store` (`createAppStore`) + every slice | zustand-vanilla only; no ink, no node |
 | `@core/hooks/useAppStore` (provider + hook) | react + `zustand/traditional` only |
-| `@core/bus/protocol`, `@core/bus/BusClient` | types + constants only |
-| `@core/bus/matchesFilter`, `@core/bus/readEnvelope` | pure helpers |
+| `@core/generated/applicationProtocol`, `@core/bus/BusClient` | generated public wire + client seam |
 | `@core/selectors/*` | pure derived/formatting |
 | `@core/theme/buildTheme`, `@core/theme/palettes`, `@core/theme/themeStore` | pure + zustand |
 
 **Reimplemented in `webui/src` (the non-portable parts):**
 
-- `src/bus/WsBusClient.ts` — the `BusClient` over a browser `WebSocket`. The UDS client
-  (`@core/bus/UdsBusClient`) depends on `node:net`/`node:crypto` and JSON-lines byte framing, none
-  of which exist in the browser, so it is reimplemented (not aliased). It speaks the **identical
-  protocol** (`@core/bus/protocol`) and mirrors the UDS client's handshake, RPC correlation,
-  subscription replay, reconnect/backoff and status hooks — only the framing differs (see below).
+- `src/bus/WsBusClient.ts` — the `BusClient` over a browser `WebSocket`. It consumes the generated
+  application protocol and owns request correlation, projection/notification cursors, independent
+  terminal attachments, reconnect/backoff, and status hooks.
 - `src/theme/cssVars.ts` + `src/theme/useThemeCssVars.ts` — project the semantic `Theme` onto CSS
   custom properties (the Ink UI paints `<Text color=…>`; the web UI paints via CSS vars).
 - `src/App.tsx`, `src/main.tsx` — DOM renderer + entrypoint (mirror of inktui's `index.tsx`).
@@ -66,19 +63,19 @@ specifiers resolve back onto the `.ts` sources.
 
 The Python bridge is a **dumb 1:1 relay**; the browser implements the full protocol.
 
-- **Endpoint:** `GET /bus` on the serving origin. Default URL:
-  `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/bus`. Override via the
-  `url` option (dev uses the Vite proxy, so same-origin `/bus` still works).
+- **Endpoint:** `GET /api/ws` on the serving origin. Default URL:
+  `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/api/ws`. Override via the
+  `url` option (dev uses the Vite proxy, so same-origin `/api/ws` still works).
 - **Outbound:** each protocol envelope is **one WS text frame**, `JSON.stringify(envelope)` with
   **no trailing newline** — the bridge appends the `\n` when writing to the unix socket.
 - **Inbound:** each WS text frame is **exactly one complete JSON envelope**; `JSON.parse` directly.
   No line buffering on the browser side (WebSocket is message-framed, unlike the raw socket).
 
-Everything else mirrors `UdsBusClient`: Hello-first handshake (`client_kind: 'web'`,
-`PROTOCOL_VERSION = 5`, a stable `client_id` persisted in `localStorage`), `correlation_id` RPC
-pairing with a `timeout_s + 1` deadline, a subscription registry replayed after every reconnect,
-exponential backoff with full jitter, and the `onConnect`/`onDisconnect`/`onPermanentError` status
-hooks the header reads.
+The first frame is `client.hello` with `APPLICATION_PROTOCOL_VERSION` and a stable `client_id`
+persisted in `localStorage`. Queries and commands use correlated `request`/`reply` messages;
+projection and error-notification subscriptions keep independent cursors across reconnects; terminal
+output uses `terminal.attach`/`terminal.frame`/`terminal.detach`. Reconnect uses capped exponential
+backoff with full jitter, while a version mismatch is permanent.
 
 ## Styling — CSS custom properties only
 

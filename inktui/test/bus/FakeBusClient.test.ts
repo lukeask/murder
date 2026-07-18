@@ -1,5 +1,10 @@
 import type { BusEventListener } from '../../src/bus/BusClient.js';
-import { FakeBusClient, matchesFilter, type RecordedRpcCall } from '../../src/bus/FakeBusClient.js';
+import {
+  FakeBusClient,
+  type RecordedCommandCall,
+  type RecordedQueryCall,
+} from '../../src/bus/FakeBusClient.js';
+import { isBusEvent } from '../../src/bus/matchesFilter.js';
 import type { BusEvent, StateSnapshotEvent } from '../../src/bus/protocol.js';
 
 // The test idiom every store/selector chunk copies: construct a FakeBusClient, script its events
@@ -20,11 +25,11 @@ function snapshot(overrides: Partial<StateSnapshotEvent> = {}): StateSnapshotEve
   };
 }
 
-describe('FakeBusClient — events', () => {
-  it('delivers an emitted event to a subscriber synchronously', () => {
+describe('FakeBusClient — projection events', () => {
+  it('delivers an emitted event to a hydrated listener synchronously', async () => {
     const fake = new FakeBusClient();
     const received: BusEvent[] = [];
-    fake.subscribe((event) => received.push(event));
+    await fake.hydrate('roster', (event) => received.push(event));
 
     const event = snapshot();
     fake.emit(event);
@@ -32,12 +37,12 @@ describe('FakeBusClient — events', () => {
     expect(received).toEqual([event]);
   });
 
-  it('fans an event out to every live subscriber', () => {
+  it('fans an event out to every live hydration', async () => {
     const fake = new FakeBusClient();
     const a: BusEvent[] = [];
     const b: BusEvent[] = [];
-    fake.subscribe((event) => a.push(event));
-    fake.subscribe((event) => b.push(event));
+    await fake.hydrate('roster', (event) => a.push(event));
+    await fake.hydrate('schedule', (event) => b.push(event));
 
     fake.emit(snapshot());
 
@@ -45,38 +50,39 @@ describe('FakeBusClient — events', () => {
     expect(b).toHaveLength(1);
   });
 
-  it('stops delivering after unsubscribe (subscription lifecycle)', () => {
+  it('stops delivering after unsubscribe (subscription lifecycle)', async () => {
     const fake = new FakeBusClient();
     const received: BusEvent[] = [];
-    const unsubscribe = fake.subscribe((event) => received.push(event));
+    const hydration = await fake.hydrate('roster', (event) => received.push(event));
 
     fake.emit(snapshot({ key: 'T-1' }));
     expect(fake.subscriberCount).toBe(1);
 
-    unsubscribe();
+    hydration.unsubscribe();
     expect(fake.subscriberCount).toBe(0);
 
     fake.emit(snapshot({ key: 'T-2' }));
     expect(received).toHaveLength(1);
   });
 
-  it('unsubscribe is idempotent', () => {
+  it('unsubscribe is idempotent', async () => {
     const fake = new FakeBusClient();
-    const unsubscribe = fake.subscribe(() => {});
-    unsubscribe();
-    expect(() => unsubscribe()).not.toThrow();
+    const hydration = await fake.hydrate('roster', () => {});
+    hydration.unsubscribe();
+    expect(() => hydration.unsubscribe()).not.toThrow();
     expect(fake.subscriberCount).toBe(0);
   });
 
-  it('a listener that unsubscribes mid-dispatch does not perturb the current fanout', () => {
+  it('a listener that unsubscribes mid-dispatch does not perturb the current fanout', async () => {
     const fake = new FakeBusClient();
     const order: string[] = [];
     let unsubscribeSecond: () => void = () => {};
-    fake.subscribe(() => {
+    await fake.hydrate('roster', () => {
       order.push('first');
       unsubscribeSecond();
     });
-    unsubscribeSecond = fake.subscribe(() => order.push('second'));
+    const second = await fake.hydrate('schedule', () => order.push('second'));
+    unsubscribeSecond = second.unsubscribe;
 
     fake.emit(snapshot());
 
@@ -88,101 +94,96 @@ describe('FakeBusClient — events', () => {
     fake.emit(snapshot());
     expect(order).toEqual(['first']);
   });
-
-  // Note: the fake filters locally via the shared `matchesFilter` predicate — the same one
-  // UdsBusClient re-applies client-side. This is NOT the server-side filter; it only pins the
-  // shared predicate. The real wire filter is asserted in UdsBusClient.test.ts.
-  it('applies the shared matchesFilter predicate to delivered events', () => {
-    const fake = new FakeBusClient();
-    const tickets: BusEvent[] = [];
-    fake.subscribe((event) => tickets.push(event), { entity: 'ticket' });
-
-    fake.emit(snapshot({ entity: 'ticket', key: 'T-1' }));
-    fake.emit(snapshot({ entity: 'plan', key: 'P-9' }));
-
-    expect(tickets).toHaveLength(1);
-    expect((tickets[0] as StateSnapshotEvent).entity).toBe('ticket');
-  });
 });
 
-describe('FakeBusClient — rpc', () => {
-  it('resolves with a canned fixed reply', async () => {
+describe('FakeBusClient — generated capabilities', () => {
+  it('resolves a canned query reply', async () => {
     const fake = new FakeBusClient();
-    fake.stubRpc('test.echo', { delivered: true });
+    fake.stubQuery('roster.get', { invalidation_key: 'iv', sessions: [] });
 
-    const result = await fake.rpc('test.echo', { agent_id: 'a1', message: 'hi' });
+    const result = await fake.query('roster.get', {});
 
-    expect(result).toEqual({ delivered: true });
+    expect(result).toEqual({ invalidation_key: 'iv', sessions: [] });
   });
 
-  it('resolves with a reply computed from the params', async () => {
+  it('resolves a command reply computed from the params', async () => {
     const fake = new FakeBusClient();
-    fake.stubRpc('test.echo', (params) => ({ kicked: params['ticket_id'] }));
+    fake.stubCommand('plan.create', (params) => ({
+      handled: true,
+      ok: true,
+      plan_name: params.message ?? '',
+    }));
 
-    const result = await fake.rpc('test.echo', { ticket_id: 'T-42' });
+    const result = await fake.command('plan.create', {
+      message: 'planned',
+      body: '',
+      auto_name: true,
+    });
 
-    expect(result).toEqual({ kicked: 'T-42' });
+    expect(result).toMatchObject({ plan_name: 'planned' });
   });
 
-  it('records every rpc call in order for assertions', async () => {
+  it('records query and command calls in separate ordered logs', async () => {
     const fake = new FakeBusClient();
-    fake.stubRpc('test.echo', {});
-    fake.stubRpc('test.echo', {});
+    fake.stubQuery('roster.get', { invalidation_key: 'iv', sessions: [] });
+    fake.stubCommand('orchestration.execute', { ok: true, command_id: 'cmd-1' });
 
-    await fake.rpc('test.echo', { agent_id: 'a1', message: 'one' });
-    await fake.rpc('test.echo', { ticket_id: 'T-1' });
+    await fake.query('roster.get', {});
+    await fake.command('orchestration.execute', {
+      kind: 'agent.message',
+      payload: { agent_id: 'a1', message: 'one' },
+    });
 
-    const expected: RecordedRpcCall[] = [
-      { method: 'test.echo', params: { agent_id: 'a1', message: 'one' } },
-      { method: 'test.echo', params: { ticket_id: 'T-1' } },
+    const queries: RecordedQueryCall[] = [{ name: 'roster.get', params: {} }];
+    const commands: RecordedCommandCall[] = [
+      {
+        name: 'orchestration.execute',
+        params: { kind: 'agent.message', payload: { agent_id: 'a1', message: 'one' } },
+      },
     ];
-    expect(fake.rpcCalls).toEqual(expected);
+    expect(fake.queryCalls).toEqual(queries);
+    expect(fake.commandCalls).toEqual(commands);
   });
 
-  it('rpcCalls returns a copy that cannot mutate the internal log', async () => {
+  it('call getters return copies that cannot mutate the internal logs', async () => {
     const fake = new FakeBusClient();
-    fake.stubRpc('test.echo', {});
-    await fake.rpc('test.echo', { agent_id: 'a1', message: 'one' });
+    fake.stubQuery('roster.get', { invalidation_key: 'iv', sessions: [] });
+    await fake.query('roster.get', {});
 
-    const calls = fake.rpcCalls as RecordedRpcCall[];
+    const calls = fake.queryCalls as RecordedQueryCall[];
     calls.pop();
 
-    expect(fake.rpcCalls).toHaveLength(1);
+    expect(fake.queryCalls).toHaveLength(1);
   });
 
-  it('rejects when no stub is registered for the method', async () => {
+  it('rejects when no query stub is registered for the capability', async () => {
     const fake = new FakeBusClient();
-    await expect(fake.rpc('test.echo', { agent_id: 'a1', message: 'hi' })).rejects.toThrow(
-      "no rpc stub for method 'test.echo'",
-    );
+    await expect(fake.query('roster.get', {})).rejects.toThrow("no query stub for 'roster.get'");
   });
 
   it('surfaces a synchronous throw in a handler as a rejection (error path)', async () => {
     const fake = new FakeBusClient();
-    fake.stubRpc('test.echo', () => {
+    fake.stubQuery('roster.get', () => {
       throw new Error('service unavailable');
     });
-    await expect(fake.rpc('test.echo', { agent_id: 'a1', message: 'hi' })).rejects.toThrow(
-      'service unavailable',
-    );
+    await expect(fake.query('roster.get', {})).rejects.toThrow('service unavailable');
   });
 
-  it('re-stubbing a method replaces the prior stub', async () => {
+  it('re-stubbing a capability replaces the prior stub', async () => {
     const fake = new FakeBusClient();
-    fake.stubRpc('test.echo', { v: 1 });
-    fake.stubRpc('test.echo', { v: 2 });
+    fake.stubQuery('roster.get', { invalidation_key: 'one', sessions: [] });
+    fake.stubQuery('roster.get', { invalidation_key: 'two', sessions: [] });
 
-    await expect(fake.rpc('test.echo', { agent_id: 'a1', message: 'hi' })).resolves.toEqual({
-      v: 2,
+    await expect(fake.query('roster.get', {})).resolves.toEqual({
+      invalidation_key: 'two',
+      sessions: [],
     });
   });
 
-  it('still records a call even when the method is unstubbed', async () => {
+  it('still records a query call when the capability is unstubbed', async () => {
     const fake = new FakeBusClient();
-    await fake.rpc('test.echo', { agent_id: 'a1', message: 'hi' }).catch(() => {});
-    expect(fake.rpcCalls).toEqual([
-      { method: 'test.echo', params: { agent_id: 'a1', message: 'hi' } },
-    ]);
+    await fake.query('roster.get', {}).catch(() => {});
+    expect(fake.queryCalls).toEqual([{ name: 'roster.get', params: {} }]);
   });
 });
 
@@ -191,17 +192,17 @@ describe('FakeBusClient — hydrate', () => {
     const fake = new FakeBusClient();
     fake.stubHydrate({ snapshots: { conversations: { agents: [] } }, cursor: 42 });
 
-    await expect(fake.hydrate('all')).resolves.toMatchObject({
+    await expect(fake.hydrate('conversations')).resolves.toMatchObject({
       snapshots: { conversations: { agents: [] } },
       cursor: 42,
     });
-    expect(fake.hydrateCalls).toEqual([{ topics: ['all'], cursor: null }]);
+    expect(fake.hydrateCalls).toEqual([{ topics: ['conversations'], cursor: null }]);
 
     fake.stubHydrate({ snapshots: {}, cursor: 45 });
     await fake.hydrate(['conversations', 'schedule']);
 
     expect(fake.hydrateCalls).toEqual([
-      { topics: ['all'], cursor: null },
+      { topics: ['conversations'], cursor: null },
       { topics: ['conversations', 'schedule'], cursor: 42 },
     ]);
   });
@@ -212,16 +213,16 @@ describe('FakeBusClient — hydrate', () => {
     fake.emit(snapshot({ key: 'newer' }), 12);
     fake.emit(snapshot({ key: 'late-low-seq' }), 9);
 
-    await fake.hydrate('all');
+    await fake.hydrate('roster');
 
-    expect(fake.hydrateCalls).toEqual([{ topics: ['all'], cursor: 12 }]);
+    expect(fake.hydrateCalls).toEqual([{ topics: ['roster'], cursor: 12 }]);
   });
 
   it('delivers hydrate tail events until the hydrate result is unsubscribed', async () => {
     const fake = new FakeBusClient();
     const received: BusEvent[] = [];
 
-    const hydration = await fake.hydrate('all', (event) => received.push(event));
+    const hydration = await fake.hydrate('roster', (event) => received.push(event));
     fake.emit(snapshot({ key: 'T-1' }), 1);
     hydration.unsubscribe();
     fake.emit(snapshot({ key: 'T-2' }), 2);
@@ -230,29 +231,11 @@ describe('FakeBusClient — hydrate', () => {
   });
 });
 
-describe('matchesFilter', () => {
-  const event = snapshot({ entity: 'ticket', ticket_id: 'T-1' });
-
-  it('matches when the filter is absent', () => {
-    expect(matchesFilter(event, undefined)).toBe(true);
-  });
-
-  it('matches when every present field equals the event field', () => {
-    expect(matchesFilter(event, { type: 'state.snapshot', entity: 'ticket' })).toBe(true);
-  });
-
-  it('rejects when a present field differs', () => {
-    expect(matchesFilter(event, { entity: 'plan' })).toBe(false);
-  });
-
-  it('rejects when filtering on a field the event kind lacks', () => {
-    // `role` is absent on this snapshot, so a role filter cannot match.
-    expect(matchesFilter(event, { role: 'crow' })).toBe(false);
-  });
-
-  it('composes fields with AND', () => {
-    expect(matchesFilter(event, { entity: 'ticket', ticket_id: 'T-2' })).toBe(false);
-    expect(matchesFilter(event, { entity: 'ticket', ticket_id: 'T-1' })).toBe(true);
+describe('isBusEvent', () => {
+  it('accepts compatibility event payloads and rejects opaque application payloads', () => {
+    expect(isBusEvent(snapshot())).toBe(true);
+    expect(isBusEvent({ cursor: 1 })).toBe(false);
+    expect(isBusEvent(null)).toBe(false);
   });
 });
 
@@ -261,8 +244,7 @@ describe('FakeBusClient — interface conformance', () => {
     const fake = new FakeBusClient();
     // The store injects a BusClient; this is the assignment that wiring performs.
     const listener: BusEventListener = () => {};
-    const unsubscribe = fake.subscribe(listener);
-    expect(typeof unsubscribe).toBe('function');
-    unsubscribe();
+    const hydration = fake.hydrate('roster', listener);
+    expect(hydration).toBeInstanceOf(Promise);
   });
 });

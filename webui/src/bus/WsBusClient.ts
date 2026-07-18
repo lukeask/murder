@@ -1,112 +1,77 @@
 /**
- * The browser {@link BusClient}: a single persistent WebSocket to the `/bus` bridge, speaking the
- * identical JSON-RPC protocol the {@link UdsBusClient} speaks over a Unix socket.
+ * Browser transport for Murder's public application protocol.
  *
- * This is the web counterpart of `@core/bus/UdsBusClient`. The Python bridge is a DUMB 1:1 relay:
- * it forwards each WS text frame to the unix socket (appending the `\n` the JSON-lines framing
- * wants) and forwards each unix-socket line back as one WS text frame. So the FULL protocol —
- * handshake, RPC correlation, subscription replay, reconnect/backoff — lives here, exactly as in
- * the UDS client. The store ({@link createAppStore}) is injected this client and never knows the
- * transport changed (the BusClient seam, README rule 4).
- *
- * ## Framing (the bridge contract)
- *
- * The browser side needs NO {@link LineBuffer}: WebSocket is message-framed, so each inbound text
- * frame is exactly one complete JSON envelope (`JSON.parse` directly) and each outbound envelope is
- * one `JSON.stringify(envelope)` text frame with NO trailing newline — the bridge adds the `\n`
- * when it writes to the unix socket. (Contrast the UDS client, which reassembles a `\n`-delimited
- * byte stream.) Otherwise this mirrors UdsBusClient frame-for-frame.
- *
- * ## Connection model — single multiplexed connection
- *
- * Same as UdsBusClient: one handshake (Hello/Ack), every RPC and every subscription rides the one
- * connection, RPCs paired to replies by `correlation_id`, inbound `pub` frames fanned out to the
- * listeners whose filter matches.
- *
- * ## Reconnect / backoff
- *
- * Exponential backoff with full jitter, capped (base 250ms, cap 10s). The attempt counter resets
- * after a successful handshake. A {@link ProtocolVersionMismatchError} is permanent — not retried.
- * {@link WsBusClient.close} stops reconnection for good.
- *
- * ## Error policy
- *
- * Identical to UdsBusClient: RPC rejects on timeout / `err` envelope / connection drop with the
- * call outstanding; subscriptions survive reconnect (re-sent after each handshake); the only fatal
- * non-retried condition is a protocol-version mismatch. The same connection-state hooks
- * ({@link onConnect}/{@link onDisconnect}/{@link onPermanentError}) are exposed off the interface.
+ * The WebSocket bridge is deliberately framing-only: this client owns hello/version negotiation,
+ * request correlation, resumable projection subscriptions, and independent terminal streams.
  */
 
 import type {
   BusClient,
   BusEventListener,
-  RpcMethod,
-  RpcParams,
-  RpcResult,
+  CommandMethod,
+  CommandParams,
+  CommandResult,
+  HydrateResult,
+  ProjectionTopics,
+  QueryMethod,
+  QueryParams,
+  QueryResult,
+  TerminalFrameListener,
   Unsubscribe,
 } from '@core/bus/BusClient.js';
-import { matchesFilter } from '@core/bus/matchesFilter.js';
 import {
-  type BusEvent,
-  type ClientKind,
-  DEFAULT_RPC_TIMEOUT_S,
-  type EventFilter,
-  type HelloMessage,
-  PROTOCOL_VERSION,
-  type RpcMessage,
-  type SubMessage,
-  type WireMessage,
-} from '@core/bus/protocol.js';
+  APPLICATION_PROTOCOL_VERSION,
+  type ClientMessage,
+  type CommandName,
+  type ErrorMessage,
+  type ProjectionTopic,
+  type QueryName,
+  type ServerMessage,
+  type SubscriptionSnapshot,
+} from '@core/generated/applicationProtocol.js';
+import type { BusEvent } from '@core/bus/protocol.js';
+import { isBusEvent } from '@core/bus/matchesFilter.js';
 import { unwrapReadReply } from '@core/bus/readEnvelope.js';
 
-/** Minimal injected logger (mirrors UdsBusClient's `BusLogger`). `console` satisfies it. */
 export interface BusLogger {
   warn(message: string, ...args: unknown[]): void;
   info(message: string, ...args: unknown[]): void;
 }
 
-const SILENT_LOGGER: BusLogger = {
-  warn: () => {},
-  info: () => {},
-};
+const SILENT_LOGGER: BusLogger = { warn: () => {}, info: () => {} };
 
-/** Reconnect backoff parameters. Exponential with full jitter, capped. */
 export interface BackoffConfig {
   baseMs: number;
   capMs: number;
 }
 
 const DEFAULT_BACKOFF: BackoffConfig = { baseMs: 250, capMs: 10_000 };
+const DEFAULT_REQUEST_TIMEOUT_S = 30;
 
-/** Injected timing seam so tests drive reconnect deterministically. Defaults to real timers. */
 export interface Clock {
   sleep(ms: number): { promise: Promise<void>; cancel: () => void };
   random(): number;
 }
 
 const REAL_CLOCK: Clock = {
-  sleep(ms: number) {
+  sleep(ms) {
     let timer: ReturnType<typeof setTimeout> | undefined;
-    let resolveFn: (() => void) | undefined;
+    let resolveSleep: (() => void) | undefined;
     const promise = new Promise<void>((resolve) => {
-      resolveFn = resolve;
+      resolveSleep = resolve;
       timer = setTimeout(resolve, ms);
     });
     return {
       promise,
       cancel: () => {
-        if (timer !== undefined) {
-          clearTimeout(timer);
-        }
-        resolveFn?.();
+        if (timer !== undefined) clearTimeout(timer);
+        resolveSleep?.();
       },
     };
   },
   random: Math.random,
 };
 
-/** The browser `WebSocket` surface this client needs — narrowed so a test can inject a mock. The
- * real `WebSocket` constructor satisfies it. */
 export interface WebSocketLike {
   readonly readyState: number;
   send(data: string): void;
@@ -117,65 +82,41 @@ export interface WebSocketLike {
   onmessage: ((ev: { data: unknown }) => void) | null;
 }
 
-/** Factory for a {@link WebSocketLike}, injected so tests pass a mock. Defaults to the global
- * `WebSocket`. The one place the transport is constructed. */
 export type WebSocketFactory = (url: string) => WebSocketLike;
 
 const REAL_WEBSOCKET_FACTORY: WebSocketFactory = (url) =>
   new WebSocket(url) as unknown as WebSocketLike;
 
-/** The default `/bus` URL on the current origin (`ws://` or `wss://` to match `http(s)`). */
 export function defaultBusUrl(): string {
-  if (typeof location === 'undefined') {
-    return 'ws://localhost/bus';
-  }
+  if (typeof location === 'undefined') return 'ws://localhost/api/ws';
   const scheme = location.protocol === 'https:' ? 'wss' : 'ws';
-  return `${scheme}://${location.host}/bus`;
+  return `${scheme}://${location.host}/api/ws`;
 }
 
 const CLIENT_ID_STORAGE_KEY = 'murder.web.client_id';
 
-/** A stable client id persisted in localStorage so the supervisor can resume RPC/presence state
- * across reloads (mirrors UdsBusClient's stable `clientId`). Falls back to an in-memory id when
- * storage is unavailable (private mode / SSR). */
-function loadOrCreateClientId(clientKind: ClientKind): string {
-  const fresh = `${clientKind}-${cryptoRandomUUID()}`;
+function stableClientId(): string {
   try {
-    const existing = localStorage.getItem(CLIENT_ID_STORAGE_KEY);
-    if (existing !== null && existing.length > 0) {
-      return existing;
-    }
-    localStorage.setItem(CLIENT_ID_STORAGE_KEY, fresh);
-    return fresh;
+    const stored = localStorage.getItem(CLIENT_ID_STORAGE_KEY);
+    if (stored !== null && stored !== '') return stored;
+    const created = `web-${randomId()}`;
+    localStorage.setItem(CLIENT_ID_STORAGE_KEY, created);
+    return created;
   } catch {
-    return fresh;
+    return `web-${randomId()}`;
   }
-}
-
-/** `crypto.randomUUID` with a non-crypto fallback for ancient/insecure contexts. */
-function cryptoRandomUUID(): string {
-  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
-    return crypto.randomUUID();
-  }
-  return `${Date.now().toString(16)}-${Math.random().toString(16).slice(2)}`;
 }
 
 export interface WsBusClientOptions {
-  /** WebSocket URL for the bridge. Defaults to same-origin `/bus` ({@link defaultBusUrl}). */
   url?: string;
-  /** Identifies this client to the supervisor; defaults to `'web'`. */
-  clientKind?: ClientKind;
-  /** Stable across reconnects/reloads; defaults to a localStorage-persisted `${clientKind}-${uuid}`. */
   clientId?: string;
-  rpcTimeoutS?: number;
+  requestTimeoutS?: number;
+  logger?: BusLogger;
   backoff?: BackoffConfig;
   clock?: Clock;
-  logger?: BusLogger;
-  /** Injected for tests; defaults to the global `WebSocket`. */
   webSocketFactory?: WebSocketFactory;
 }
 
-/** Raised when the server's protocol version disagrees with ours. Permanent — not retried. */
 export class ProtocolVersionMismatchError extends Error {
   constructor(message: string) {
     super(message);
@@ -183,515 +124,704 @@ export class ProtocolVersionMismatchError extends Error {
   }
 }
 
-/** Raised when an RPC outlives its deadline. */
-export class RpcTimeoutError extends Error {
-  constructor(method: string, timeoutS: number) {
-    super(`rpc '${method}' timed out after ${timeoutS}s`);
-    this.name = 'RpcTimeoutError';
-  }
-}
-
-/** Raised when the connection drops with an RPC outstanding, or before the handshake completes. */
 export class ConnectionLostError extends Error {
-  constructor(message: string) {
+  constructor(message = 'application WebSocket connection lost') {
     super(message);
     this.name = 'ConnectionLostError';
   }
 }
 
-interface Subscription {
-  readonly listener: BusEventListener;
-  readonly filter: EventFilter | undefined;
-  correlationId: string;
+interface PendingRequest {
+  readonly resolve: (result: Record<string, unknown>) => void;
+  readonly reject: (error: Error) => void;
+  readonly cancelTimeout: () => void;
 }
 
-interface PendingRpc {
-  resolve(result: Record<string, unknown>): void;
-  reject(error: Error): void;
-  cancelTimeout(): void;
+interface ProjectionRegistration {
+  readonly id: string;
+  readonly notificationId: string;
+  readonly topics: readonly ProjectionTopic[];
+  readonly listener: BusEventListener | undefined;
+  cursor: number | null;
+  notificationCursor: number | null;
+  initialSettled: boolean;
+  ready: boolean;
+  tailBuffer: Array<{ cursor: number | null; payload: Record<string, unknown> }>;
+  readonly resolveInitial: (result: HydrateResult) => void;
+  readonly rejectInitial: (error: Error) => void;
 }
 
-type ConnectionState = 'idle' | 'connecting' | 'connected' | 'closed';
+interface TerminalRegistration {
+  readonly id: string;
+  readonly sessionId: string | null;
+  readonly listener: TerminalFrameListener;
+}
+
+type ConnectionState = 'idle' | 'connecting' | 'connected' | 'closed' | 'permanent-error';
 
 export class WsBusClient implements BusClient {
   private readonly url: string;
-  private readonly clientKind: ClientKind;
   private readonly clientId: string;
-  private readonly rpcTimeoutS: number;
+  private readonly requestTimeoutS: number;
+  private readonly logger: BusLogger;
   private readonly backoff: BackoffConfig;
   private readonly clock: Clock;
-  private readonly logger: BusLogger;
   private readonly makeSocket: WebSocketFactory;
 
   private state: ConnectionState = 'idle';
   private socket: WebSocketLike | undefined;
+  private loop: Promise<void> | undefined;
+  private abortHandshake: ((error: Error) => void) | undefined;
+  private socketClosed: Promise<void> | undefined;
+  private resolveSocketClosed: (() => void) | undefined;
+  private cancelledSleep: (() => void) | undefined;
+  private permanentError: Error | undefined;
 
-  private readonly subscriptions = new Set<Subscription>();
-  private readonly pendingRpcs = new Map<string, PendingRpc>();
+  private readonly pendingRequests = new Map<string, PendingRequest>();
+  private readonly projections = new Map<string, ProjectionRegistration>();
+  private readonly terminals = new Map<string, TerminalRegistration>();
+  private readonly connectWaiters = new Set<{
+    resolve: () => void;
+    reject: (error: Error) => void;
+  }>();
 
   private readonly connectListeners = new Set<() => void>();
   private readonly disconnectListeners = new Set<() => void>();
   private readonly permanentErrorListeners = new Set<(error: Error) => void>();
 
-  private pendingSleep: { cancel: () => void } | undefined;
-  private handshakeReady: Promise<void> | undefined;
-
   constructor(options: WsBusClientOptions = {}) {
     this.url = options.url ?? defaultBusUrl();
-    this.clientKind = options.clientKind ?? 'web';
-    this.clientId = options.clientId ?? loadOrCreateClientId(this.clientKind);
-    this.rpcTimeoutS = options.rpcTimeoutS ?? DEFAULT_RPC_TIMEOUT_S;
+    this.clientId = options.clientId ?? stableClientId();
+    this.requestTimeoutS = options.requestTimeoutS ?? DEFAULT_REQUEST_TIMEOUT_S;
+    this.logger = options.logger ?? SILENT_LOGGER;
     this.backoff = options.backoff ?? DEFAULT_BACKOFF;
     this.clock = options.clock ?? REAL_CLOCK;
-    this.logger = options.logger ?? SILENT_LOGGER;
     this.makeSocket = options.webSocketFactory ?? REAL_WEBSOCKET_FACTORY;
   }
 
-  /** {@inheritDoc UdsBusClient.connect} */
   connect(): Promise<void> {
-    if (this.state === 'closed') {
-      return Promise.reject(new ConnectionLostError('client is closed'));
-    }
-    this.handshakeReady ??= this.runConnectLoop();
-    return this.handshakeReady;
-  }
-
-  /** {@inheritDoc BusClient.rpc} */
-  async rpc<M extends RpcMethod>(method: M, params: RpcParams<M>): Promise<RpcResult<M>> {
-    const socket = await this.ensureConnected();
-    const correlationId = `rpc-${cryptoRandomUUID()}`;
-    const timeoutS = this.rpcTimeoutS;
-    const recvTimeoutMs = (timeoutS + 1.0) * 1000;
-
-    const result = await new Promise<Record<string, unknown>>((resolve, reject) => {
-      const timer = setTimeout(() => {
-        this.pendingRpcs.delete(correlationId);
-        reject(new RpcTimeoutError(method, timeoutS));
-      }, recvTimeoutMs);
-      this.pendingRpcs.set(correlationId, {
-        resolve,
-        reject,
-        cancelTimeout: () => clearTimeout(timer),
+    if (this.state === 'connected') return Promise.resolve();
+    if (this.state === 'closed') return Promise.reject(new ConnectionLostError('client is closed'));
+    if (this.permanentError !== undefined) return Promise.reject(this.permanentError);
+    if (this.loop === undefined) {
+      this.loop = this.runConnectionLoop().finally(() => {
+        this.loop = undefined;
       });
-      const message: RpcMessage = {
-        op: 'rpc',
-        schema_version: PROTOCOL_VERSION,
-        correlation_id: correlationId,
-        args: { target: method, body: params, timeout_s: timeoutS },
-      };
-      this.writeMessage(socket, message);
+    }
+    return new Promise<void>((resolve, reject) => {
+      this.connectWaiters.add({ resolve, reject });
     });
-    return unwrapReadReply(method, result) as RpcResult<M>;
   }
 
-  /** {@inheritDoc BusClient.subscribe} */
-  subscribe(listener: BusEventListener, filter?: EventFilter): Unsubscribe {
-    const subscription: Subscription = {
+  close(): void {
+    if (this.state === 'closed') return;
+    this.state = 'closed';
+    this.cancelledSleep?.();
+    this.cancelledSleep = undefined;
+    const error = new ConnectionLostError('client is closed');
+    this.abortHandshake?.(error);
+    this.abortHandshake = undefined;
+    this.resolveSocketClosed?.();
+    this.resolveSocketClosed = undefined;
+    this.teardownSocket();
+    this.failAllRequests(error);
+    this.rejectConnectWaiters(error);
+    for (const projection of this.projections.values()) {
+      if (!projection.initialSettled) projection.rejectInitial(error);
+    }
+    this.projections.clear();
+    this.terminals.clear();
+  }
+
+  async query<M extends QueryMethod>(
+    name: M,
+    params: QueryParams<M>,
+  ): Promise<QueryResult<M>> {
+    const result = await this.request(
+      'query',
+      name,
+      params as Record<string, unknown>,
+    );
+    return unwrapReadReply(name, result) as QueryResult<M>;
+  }
+
+  async command<M extends CommandMethod>(
+    name: M,
+    params: CommandParams<M>,
+  ): Promise<CommandResult<M>> {
+    return (await this.request(
+      'command',
+      name,
+      params as Record<string, unknown>,
+    )) as CommandResult<M>;
+  }
+
+  hydrate(
+    topics: ProjectionTopics,
+    listener?: BusEventListener,
+  ): Promise<HydrateResult> {
+    const normalized = normalizeProjectionTopics(
+      typeof topics === 'string' ? [topics] : [...topics],
+    );
+    const id = `projection-${randomId()}`;
+    const notificationId = `notification-${randomId()}`;
+    let resolveInitial!: (result: HydrateResult) => void;
+    let rejectInitial!: (error: Error) => void;
+    const result = new Promise<HydrateResult>((resolve, reject) => {
+      resolveInitial = resolve;
+      rejectInitial = reject;
+    });
+    this.projections.set(id, {
+      id,
+      notificationId,
+      topics: normalized,
       listener,
-      filter,
-      correlationId: `sub-${cryptoRandomUUID()}`,
-    };
-    this.subscriptions.add(subscription);
+      cursor: null,
+      notificationCursor: null,
+      initialSettled: false,
+      ready: false,
+      tailBuffer: [],
+      resolveInitial,
+      rejectInitial,
+    });
     if (this.state === 'connected' && this.socket !== undefined) {
-      this.sendSubscription(this.socket, subscription);
+      this.sendProjection(this.socket, this.projections.get(id));
+    } else {
+      void this.connect().catch((error: unknown) => {
+        const current = this.projections.get(id);
+        if (current !== undefined && !current.initialSettled) {
+          current.rejectInitial(asError(error));
+          this.projections.delete(id);
+        }
+      });
+    }
+    return result;
+  }
+
+  attachTerminal(sessionId: string | null, listener: TerminalFrameListener): Unsubscribe {
+    const id = `terminal-${randomId()}`;
+    const registration: TerminalRegistration = { id, sessionId, listener };
+    this.terminals.set(id, registration);
+    if (this.state === 'connected' && this.socket !== undefined) {
+      this.sendTerminalAttach(this.socket, registration);
     } else {
       void this.connect().catch(() => {});
     }
+    let active = true;
     return () => {
-      this.subscriptions.delete(subscription);
-      // LOCAL-only unsubscribe — the wire protocol has no `unsub` op (see UdsBusClient.subscribe).
+      if (!active) return;
+      active = false;
+      this.detachTerminal(id);
     };
+  }
+
+  detachTerminal(streamId: string): void {
+    if (!this.terminals.delete(streamId)) return;
+    if (this.state === 'connected' && this.socket !== undefined) {
+      this.write(this.socket, { op: 'terminal.detach', stream_id: streamId });
+    }
   }
 
   onConnect(listener: () => void): Unsubscribe {
     this.connectListeners.add(listener);
-    if (this.state === 'connected') {
-      listener();
-    }
-    return () => {
-      this.connectListeners.delete(listener);
-    };
+    if (this.state === 'connected') queueMicrotask(listener);
+    return () => this.connectListeners.delete(listener);
   }
 
   onDisconnect(listener: () => void): Unsubscribe {
     this.disconnectListeners.add(listener);
-    return () => {
-      this.disconnectListeners.delete(listener);
-    };
+    return () => this.disconnectListeners.delete(listener);
   }
 
   onPermanentError(listener: (error: Error) => void): Unsubscribe {
     this.permanentErrorListeners.add(listener);
-    return () => {
-      this.permanentErrorListeners.delete(listener);
-    };
-  }
-
-  private notifyConnected(): void {
-    for (const listener of [...this.connectListeners]) {
-      try {
-        listener();
-      } catch {
-        // a connect listener's failure is its own concern.
-      }
+    if (this.permanentError !== undefined) {
+      const error = this.permanentError;
+      queueMicrotask(() => listener(error));
     }
+    return () => this.permanentErrorListeners.delete(listener);
   }
 
-  private notifyDisconnected(): void {
-    for (const listener of [...this.disconnectListeners]) {
-      try {
-        listener();
-      } catch {
-        // a disconnect listener's failure is its own concern.
-      }
-    }
-  }
-
-  private notifyPermanentError(error: Error): void {
-    for (const listener of [...this.permanentErrorListeners]) {
-      try {
-        listener(error);
-      } catch {
-        // a permanent-error listener's failure is its own concern.
-      }
-    }
-  }
-
-  /** Stop reconnection, reject every outstanding RPC, and close the socket. Idempotent. */
-  close(): void {
-    if (this.state === 'closed') {
-      return;
-    }
-    this.state = 'closed';
-    this.pendingSleep?.cancel();
-    this.failAllPendingRpcs(new ConnectionLostError('client closed'));
-    this.subscriptions.clear();
-    this.connectListeners.clear();
-    this.disconnectListeners.clear();
-    this.permanentErrorListeners.clear();
-    this.teardownSocket();
-  }
-
-  private isClosed(): boolean {
-    return this.state === 'closed';
-  }
-
-  // === Connection loop ========================================================
-
-  private async runConnectLoop(): Promise<void> {
-    let attempt = 0;
-    let firstHandshakeSettled = false;
-    let resolveFirst!: () => void;
-    let rejectFirst!: (error: Error) => void;
-    const firstHandshake = new Promise<void>((resolve, reject) => {
-      resolveFirst = resolve;
-      rejectFirst = reject;
-    });
-
-    const loop = async (): Promise<void> => {
-      while (!this.isClosed()) {
-        let wasEstablished = false;
-        try {
-          await this.openAndHandshake();
-          attempt = 0;
-          if (!firstHandshakeSettled) {
-            firstHandshakeSettled = true;
-            resolveFirst();
-          }
-          wasEstablished = true;
-          await this.readUntilClosed();
-        } catch (error) {
-          if (error instanceof ProtocolVersionMismatchError) {
-            this.state = 'closed';
-            if (!firstHandshakeSettled) {
-              firstHandshakeSettled = true;
-              rejectFirst(error);
-            }
-            this.failAllPendingRpcs(error);
-            this.notifyPermanentError(error);
-            return;
-          }
-          this.logger.warn(`bus connection error: ${stringifyError(error)}`);
-        }
-        if (this.isClosed()) {
-          break;
-        }
-        this.failAllPendingRpcs(new ConnectionLostError('connection dropped'));
-        if (wasEstablished) {
-          this.notifyDisconnected();
-        }
-        const delay = this.nextBackoffMs(attempt);
-        attempt += 1;
-        this.logger.info(`bus reconnecting in ${Math.round(delay)}ms (attempt ${attempt})`);
-        const sleeper = this.clock.sleep(delay);
-        this.pendingSleep = sleeper;
-        await sleeper.promise;
-        this.pendingSleep = undefined;
-      }
-    };
-
-    void loop();
-    return firstHandshake;
-  }
-
-  /** Open the WS, send Hello, await the matching Ack (skipping wake frames), then mark connected
-   * and replay every standing subscription onto the fresh connection. Inbound frames during the
-   * handshake are dispatched through the same `onmessage` handler installed by {@link attachSocket},
-   * so a `pub` that arrives right after the ack is fanned out normally (no separate buffer to drain
-   * — WebSocket is already message-framed). */
-  private openAndHandshake(): Promise<void> {
-    this.state = 'connecting';
-    const socket = this.makeSocket(this.url);
-    this.socket = socket;
-
-    const correlationId = `hello-${cryptoRandomUUID()}`;
-    const hello: HelloMessage = {
-      op: 'hello',
-      schema_version: PROTOCOL_VERSION,
-      correlation_id: correlationId,
-      body: {
-        protocol_version: PROTOCOL_VERSION,
-        client_kind: this.clientKind,
-        client_id: this.clientId,
-      },
-    };
-
-    return new Promise<void>((resolve, reject) => {
-      let handshakeDone = false;
-
-      const finishHandshake = (): void => {
-        handshakeDone = true;
-        this.state = 'connected';
-        for (const subscription of this.subscriptions) {
-          subscription.correlationId = `sub-${cryptoRandomUUID()}`;
-          this.sendSubscription(socket, subscription);
-        }
-        this.notifyConnected();
-        resolve();
-      };
-
-      socket.onopen = (): void => {
-        this.writeMessage(socket, hello);
-      };
-      // For an injected mock that is already "open" at construction, also send immediately.
-      if (socket.readyState === WS_OPEN) {
-        this.writeMessage(socket, hello);
-      }
-
-      socket.onmessage = (ev): void => {
-        const message = parseWireMessage(ev.data);
-        if (message === undefined) {
-          return;
-        }
-        if (!handshakeDone) {
-          if (message.op === 'wake') {
-            return; // skip interleaved wake frames
-          }
-          if (message.op === 'err') {
-            reject(
-              message.body.code === 'protocol_version_mismatch'
-                ? new ProtocolVersionMismatchError(message.body.message)
-                : new ConnectionLostError(`handshake rejected: ${message.body.message}`),
-            );
-            return;
-          }
-          if (message.op === 'ack' && message.correlation_id === correlationId) {
-            finishHandshake();
-            return;
-          }
-          // Any other frame before the ack: ignore and keep waiting (mirrors UdsBusClient).
-          return;
-        }
-        // Steady state: route the frame.
-        this.dispatch(message);
-      };
-
-      socket.onerror = (): void => {
-        if (!handshakeDone) {
-          reject(new ConnectionLostError('handshake failed: socket error'));
-        }
-        // Post-handshake errors are followed by `onclose`, which drives the reconnect decision.
-      };
-
-      socket.onclose = (): void => {
-        if (!handshakeDone) {
-          reject(new ConnectionLostError('connection closed during handshake'));
-          return;
-        }
-        // Established connection dropped: resolve the read loop so the connect loop reconnects.
-        this.resolveRead?.();
-      };
+  private async request(
+    kind: 'query' | 'command',
+    name: QueryName | CommandName,
+    params: Record<string, unknown>,
+  ): Promise<Record<string, unknown>> {
+    const socket = await this.ensureConnected();
+    const requestId = `request-${randomId()}`;
+    const timeoutS = this.requestTimeoutS;
+    return new Promise<Record<string, unknown>>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.pendingRequests.delete(requestId);
+        reject(new Error(`${kind} '${name}' timed out after ${timeoutS}s`));
+      }, timeoutS * 1000);
+      this.pendingRequests.set(requestId, {
+        resolve,
+        reject,
+        cancelTimeout: () => clearTimeout(timer),
+      });
+      this.write(socket, {
+        op: 'request',
+        request_id: requestId,
+        request: { kind, name, params } as
+          | { kind: 'query'; name: QueryName; params: Record<string, unknown> }
+          | { kind: 'command'; name: CommandName; params: Record<string, unknown> },
+        timeout_s: timeoutS,
+      });
     });
   }
-
-  /** Resolver for the steady-state read loop's "socket closed" promise. */
-  private resolveRead: (() => void) | undefined;
-
-  /** Resolve only when the (already-attached) socket closes, so the connect loop can decide whether
-   * to reconnect. The `onmessage`/`onclose` handlers were installed in {@link openAndHandshake} and
-   * stay attached; this just waits for the close signal that handler relays via {@link resolveRead}. */
-  private readUntilClosed(): Promise<void> {
-    if (this.socket === undefined) {
-      return Promise.reject(new ConnectionLostError('no socket to read'));
-    }
-    return new Promise<void>((resolve) => {
-      this.resolveRead = () => {
-        this.resolveRead = undefined;
-        resolve();
-      };
-    });
-  }
-
-  /** Route one steady-state inbound frame (mirrors UdsBusClient.dispatch). */
-  private dispatch(message: WireMessage): void {
-    switch (message.op) {
-      case 'pub':
-        this.fanout(message.event);
-        return;
-      case 'ack':
-        this.settleRpc(message.correlation_id, (rpc) => rpc.resolve(message.body.result ?? {}));
-        return;
-      case 'err':
-        this.settleRpc(message.correlation_id, (rpc) =>
-          rpc.reject(new Error(`rpc error [${message.body.code}]: ${message.body.message}`)),
-        );
-        return;
-      case 'wake':
-      case 'hello':
-      case 'sub':
-      case 'rpc':
-        return;
-      default:
-        assertNever(message);
-    }
-  }
-
-  private fanout(event: BusEvent): void {
-    for (const subscription of [...this.subscriptions]) {
-      if (matchesFilter(event, subscription.filter)) {
-        try {
-          subscription.listener(event);
-        } catch {
-          // a subscriber's failure is its own concern; never skip siblings.
-        }
-      }
-    }
-  }
-
-  private settleRpc(correlationId: string, settle: (rpc: PendingRpc) => void): void {
-    const rpc = this.pendingRpcs.get(correlationId);
-    if (rpc === undefined) {
-      return;
-    }
-    this.pendingRpcs.delete(correlationId);
-    rpc.cancelTimeout();
-    settle(rpc);
-  }
-
-  // === Low-level helpers ======================================================
 
   private async ensureConnected(): Promise<WebSocketLike> {
-    if (this.state === 'closed') {
-      throw new ConnectionLostError('client is closed');
-    }
     await this.connect();
     if (this.state !== 'connected' || this.socket === undefined) {
-      throw new ConnectionLostError('connection not established');
+      throw new ConnectionLostError();
     }
     return this.socket;
   }
 
-  private sendSubscription(socket: WebSocketLike, subscription: Subscription): void {
-    const message: SubMessage = {
-      op: 'sub',
-      schema_version: PROTOCOL_VERSION,
-      correlation_id: subscription.correlationId,
-      args: {
-        filter: subscription.filter ?? {},
-        presence_retain: false,
-      },
-    };
-    this.writeMessage(socket, message);
+  private async runConnectionLoop(): Promise<void> {
+    let attempt = 0;
+    while (this.state !== 'closed' && this.state !== 'permanent-error') {
+      try {
+        await this.openAndHandshake();
+        attempt = 0;
+        this.state = 'connected';
+        this.resolveConnectWaiters();
+        this.resendStreams();
+        for (const listener of [...this.connectListeners]) listener();
+        await this.waitForClose();
+        if ((this.state as ConnectionState) === 'closed') return;
+        this.state = 'connecting';
+        this.failAllRequests(new ConnectionLostError());
+        for (const listener of [...this.disconnectListeners]) listener();
+      } catch (error: unknown) {
+        const normalized = asError(error);
+        this.teardownSocket();
+        if (normalized instanceof ProtocolVersionMismatchError) {
+          this.state = 'permanent-error';
+          this.permanentError = normalized;
+          this.failAllRequests(normalized);
+          this.rejectConnectWaiters(normalized);
+          for (const projection of this.projections.values()) {
+            if (!projection.initialSettled) projection.rejectInitial(normalized);
+          }
+          for (const listener of [...this.permanentErrorListeners]) listener(normalized);
+          return;
+        }
+        this.state = 'connecting';
+        this.logger.warn('application WebSocket connection failed; retrying', normalized);
+      } finally {
+        this.teardownSocket();
+      }
+
+      if (
+        (this.state as ConnectionState) === 'closed' ||
+        (this.state as ConnectionState) === 'permanent-error'
+      ) {
+        return;
+      }
+      const sleep = this.clock.sleep(this.nextBackoffMs(attempt++));
+      this.cancelledSleep = sleep.cancel;
+      await sleep.promise;
+      this.cancelledSleep = undefined;
+    }
   }
 
-  /** Outbound framing: one envelope per WS text frame, NO trailing newline (the bridge appends the
-   * `\n` when writing to the unix socket). */
-  private writeMessage(socket: WebSocketLike, message: WireMessage): void {
+  private openAndHandshake(): Promise<void> {
+    this.state = 'connecting';
+    const socket = this.makeSocket(this.url);
+    this.socket = socket;
+    this.socketClosed = new Promise<void>((resolve) => {
+      this.resolveSocketClosed = resolve;
+    });
+    let settled = false;
+    return new Promise<void>((resolve, reject) => {
+      const fail = (error: Error): void => {
+        if (settled) return;
+        settled = true;
+        this.abortHandshake = undefined;
+        reject(error);
+      };
+      this.abortHandshake = fail;
+      const sendHello = (): void => {
+        this.write(socket, {
+          op: 'client.hello',
+          protocol_version: APPLICATION_PROTOCOL_VERSION,
+          client: { client_id: this.clientId, kind: 'web' },
+        });
+      };
+      socket.onopen = sendHello;
+      if (socket.readyState === WS_OPEN) sendHello();
+      socket.onmessage = (event): void => {
+        const message = parseServerMessage(event.data);
+        if (message === undefined) return;
+        if (!settled) {
+          if (message.op === 'error') {
+            fail(this.errorFromMessage(message));
+          } else if (message.op === 'server.hello') {
+            if (message.protocol_version !== APPLICATION_PROTOCOL_VERSION) {
+              fail(
+                new ProtocolVersionMismatchError(
+                  `server protocol ${message.protocol_version}; client protocol ${APPLICATION_PROTOCOL_VERSION}`,
+                ),
+              );
+            } else {
+              settled = true;
+              this.abortHandshake = undefined;
+              resolve();
+            }
+          }
+          return;
+        }
+        this.dispatch(message);
+      };
+      socket.onerror = (): void => fail(new ConnectionLostError('handshake failed'));
+      socket.onclose = (): void => {
+        if (!settled) {
+          fail(new ConnectionLostError('connection closed during handshake'));
+        }
+        this.resolveSocketClosed?.();
+        this.resolveSocketClosed = undefined;
+      };
+    });
+  }
+
+  private waitForClose(): Promise<void> {
+    return this.socketClosed ?? Promise.resolve();
+  }
+
+  private dispatch(message: ServerMessage): void {
+    switch (message.op) {
+      case 'reply':
+        this.settleRequest(message.request_id, (pending) => pending.resolve(message.result));
+        return;
+      case 'subscription.ready':
+        this.acceptProjectionReady(message.subscription_id, message.snapshot);
+        return;
+      case 'subscription.event':
+        this.acceptProjectionEvent(message.subscription_id, message.cursor, message.payload);
+        return;
+      case 'terminal.frame': {
+        const stream = this.terminals.get(message.stream_id);
+        if (stream !== undefined) {
+          try {
+            stream.listener(message.frame);
+          } catch {
+            // A terminal renderer cannot disrupt sibling streams or transport dispatch.
+          }
+        }
+        return;
+      }
+      case 'error':
+        this.acceptError(message);
+        return;
+      case 'server.hello':
+      case 'terminal.attached':
+        return;
+    }
+  }
+
+  private acceptProjectionReady(id: string, snapshot: SubscriptionSnapshot): void {
+    const projection = this.findProjection(id);
+    if (projection === undefined) return;
+    if (id === projection.notificationId) {
+      projection.notificationCursor = Math.max(
+        projection.notificationCursor ?? 0,
+        snapshot.cursor,
+      );
+      for (const replay of snapshot.replay) {
+        projection.notificationCursor = Math.max(
+          projection.notificationCursor,
+          replay.cursor,
+        );
+        this.notifyProjection(projection, replay.payload);
+      }
+      return;
+    }
+    projection.cursor = Math.max(projection.cursor ?? 0, snapshot.cursor);
+    const replayItems: Array<{ seq: number; event: BusEvent }> = [];
+    for (const item of snapshot.replay) {
+      projection.cursor = Math.max(projection.cursor, item.cursor);
+      if (isBusEvent(item.payload)) {
+        replayItems.push({ seq: item.cursor, event: item.payload });
+        this.notifyProjection(projection, item.payload);
+      }
+    }
+    projection.ready = true;
+    for (const buffered of projection.tailBuffer) {
+      this.deliverProjectionPayload(projection, buffered.cursor, buffered.payload);
+    }
+    projection.tailBuffer = [];
+    if (!projection.initialSettled) {
+      projection.initialSettled = true;
+      projection.resolveInitial({
+        snapshots: snapshot.snapshots,
+        cursor: snapshot.cursor,
+        mode: snapshot.mode,
+        replay: replayItems,
+        unsubscribe: this.projectionDisposer(id),
+      });
+    }
+  }
+
+  private acceptProjectionEvent(
+    id: string,
+    cursor: number | null | undefined,
+    payload: Record<string, unknown>,
+  ): void {
+    const projection = this.findProjection(id);
+    if (projection === undefined) return;
+    if (id !== projection.notificationId && !projection.ready) {
+      projection.tailBuffer.push({ cursor: cursor ?? null, payload });
+      return;
+    }
+    this.deliverProjectionPayload(projection, cursor, payload, id === projection.notificationId);
+  }
+
+  private deliverProjectionPayload(
+    projection: ProjectionRegistration,
+    cursor: number | null | undefined,
+    payload: Record<string, unknown>,
+    notification = false,
+  ): void {
+    if (cursor !== null && cursor !== undefined) {
+      if (notification) {
+        projection.notificationCursor = Math.max(projection.notificationCursor ?? 0, cursor);
+      } else {
+        projection.cursor = Math.max(projection.cursor ?? 0, cursor);
+      }
+    }
+    this.notifyProjection(projection, payload);
+  }
+
+  private notifyProjection(
+    projection: ProjectionRegistration,
+    payload: Record<string, unknown>,
+  ): void {
+    if (!isBusEvent(payload)) return;
+    try {
+      projection.listener?.(payload);
+    } catch {
+      // Subscriber failures are isolated from transport dispatch.
+    }
+  }
+
+  private projectionDisposer(id: string): Unsubscribe {
+    let active = true;
+    return () => {
+      if (!active) return;
+      active = false;
+      const projection = this.projections.get(id);
+      if (projection === undefined) return;
+      this.projections.delete(id);
+      if (this.state === 'connected' && this.socket !== undefined) {
+        this.write(this.socket, { op: 'unsubscribe', subscription_id: id });
+        this.write(this.socket, {
+          op: 'unsubscribe',
+          subscription_id: projection.notificationId,
+        });
+      }
+    };
+  }
+
+  private acceptError(message: ErrorMessage): void {
+    const error = this.errorFromMessage(message);
+    if (message.request_id !== null && message.request_id !== undefined) {
+      this.settleRequest(message.request_id, (pending) => pending.reject(error));
+    }
+    if (message.subscription_id !== null && message.subscription_id !== undefined) {
+      const projection = this.findProjection(message.subscription_id);
+      if (projection !== undefined && !projection.initialSettled) {
+        projection.rejectInitial(error);
+        this.projections.delete(projection.id);
+      }
+    }
+    if (message.stream_id !== null && message.stream_id !== undefined) {
+      this.terminals.delete(message.stream_id);
+    }
+  }
+
+  private errorFromMessage(message: ErrorMessage): Error {
+    if (message.error.code === 'version_mismatch') {
+      return new ProtocolVersionMismatchError(message.error.message);
+    }
+    return new Error(
+      `application error [${message.error.code}]: ${message.error.message}`,
+    );
+  }
+
+  private settleRequest(id: string, settle: (pending: PendingRequest) => void): void {
+    const pending = this.pendingRequests.get(id);
+    if (pending === undefined) return;
+    this.pendingRequests.delete(id);
+    pending.cancelTimeout();
+    settle(pending);
+  }
+
+  private resendStreams(): void {
+    const socket = this.socket;
+    if (socket === undefined) return;
+    for (const projection of this.projections.values()) this.sendProjection(socket, projection);
+    for (const terminal of this.terminals.values()) this.sendTerminalAttach(socket, terminal);
+  }
+
+  private sendProjection(
+    socket: WebSocketLike,
+    projection: ProjectionRegistration | undefined,
+  ): void {
+    if (projection === undefined) return;
+    projection.ready = false;
+    projection.tailBuffer = [];
+    this.write(socket, {
+      op: 'subscribe',
+      subscription_id: projection.id,
+      subscription: {
+        kind: 'projections',
+        topics: projection.topics,
+        cursor: projection.cursor,
+      },
+    });
+    this.write(socket, {
+      op: 'subscribe',
+      subscription_id: projection.notificationId,
+      subscription: {
+        kind: 'notifications',
+        channels: ['errors'],
+        cursor: projection.notificationCursor,
+      },
+    });
+  }
+
+  private findProjection(subscriptionId: string): ProjectionRegistration | undefined {
+    const direct = this.projections.get(subscriptionId);
+    if (direct !== undefined) return direct;
+    for (const projection of this.projections.values()) {
+      if (projection.notificationId === subscriptionId) return projection;
+    }
+    return undefined;
+  }
+
+  private sendTerminalAttach(socket: WebSocketLike, terminal: TerminalRegistration): void {
+    this.write(socket, {
+      op: 'terminal.attach',
+      stream_id: terminal.id,
+      target: { session_id: terminal.sessionId },
+    });
+  }
+
+  private write(socket: WebSocketLike, message: ClientMessage): void {
     socket.send(JSON.stringify(message));
   }
 
   private nextBackoffMs(attempt: number): number {
-    const exponential = Math.min(this.backoff.capMs, this.backoff.baseMs * 2 ** attempt);
-    return this.clock.random() * exponential;
+    const maximum = Math.min(this.backoff.capMs, this.backoff.baseMs * 2 ** attempt);
+    return this.clock.random() * maximum;
   }
 
-  private failAllPendingRpcs(error: Error): void {
-    for (const [, rpc] of this.pendingRpcs) {
-      rpc.cancelTimeout();
-      rpc.reject(error);
+  private resolveConnectWaiters(): void {
+    for (const waiter of this.connectWaiters) waiter.resolve();
+    this.connectWaiters.clear();
+  }
+
+  private rejectConnectWaiters(error: Error): void {
+    for (const waiter of this.connectWaiters) waiter.reject(error);
+    this.connectWaiters.clear();
+  }
+
+  private failAllRequests(error: Error): void {
+    for (const pending of this.pendingRequests.values()) {
+      pending.cancelTimeout();
+      pending.reject(error);
     }
-    this.pendingRpcs.clear();
+    this.pendingRequests.clear();
   }
 
   private teardownSocket(): void {
-    if (this.socket !== undefined) {
-      this.socket.onopen = null;
-      this.socket.onclose = null;
-      this.socket.onerror = null;
-      this.socket.onmessage = null;
-      try {
-        this.socket.close();
-      } catch {
-        // closing an already-dead socket is a no-op we don't care about.
-      }
-      this.socket = undefined;
+    const socket = this.socket;
+    if (socket === undefined) return;
+    socket.onopen = null;
+    socket.onclose = null;
+    socket.onerror = null;
+    socket.onmessage = null;
+    try {
+      socket.close();
+    } catch {
+      // Closing an already-dead browser socket is harmless.
     }
+    this.socket = undefined;
   }
 }
 
-// === Module-private helpers ===================================================
-
-/** `WebSocket.OPEN` numeric constant (1), inlined so the module needs no DOM-global reference at
- * import time (jsdom / tests). */
 const WS_OPEN = 1;
 
-/** Parse one WS text frame (already one complete envelope) into a {@link WireMessage}, or
- * `undefined` if it is blank/unparseable/not an envelope. A corrupt frame is dropped, not fatal —
- * mirrors UdsBusClient's tolerant parse. */
-function parseWireMessage(data: unknown): WireMessage | undefined {
-  if (typeof data !== 'string') {
-    return undefined;
-  }
-  const trimmed = data.trim();
-  if (trimmed.length === 0) {
-    return undefined;
-  }
+function parseServerMessage(data: unknown): ServerMessage | undefined {
+  if (typeof data !== 'string' || data.trim() === '') return undefined;
   try {
-    const parsed = JSON.parse(trimmed) as unknown;
-    return isWireMessage(parsed) ? parsed : undefined;
+    const parsed = JSON.parse(data) as { op?: unknown };
+    return isServerOp(parsed.op) ? (parsed as ServerMessage) : undefined;
   } catch {
     return undefined;
   }
 }
 
-function isWireMessage(value: unknown): value is WireMessage {
-  if (typeof value !== 'object' || value === null) {
-    return false;
-  }
-  const op = (value as { op?: unknown }).op;
+function isServerOp(op: unknown): boolean {
   return (
-    op === 'hello' ||
-    op === 'pub' ||
-    op === 'sub' ||
-    op === 'rpc' ||
-    op === 'ack' ||
-    op === 'err' ||
-    op === 'wake'
+    op === 'server.hello' ||
+    op === 'reply' ||
+    op === 'subscription.ready' ||
+    op === 'subscription.event' ||
+    op === 'terminal.attached' ||
+    op === 'terminal.frame' ||
+    op === 'error'
   );
 }
 
-function stringifyError(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+function randomId(): string {
+  try {
+    return globalThis.crypto.randomUUID();
+  } catch {
+    return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+  }
 }
 
-function assertNever(_value: never): void {}
+function asError(error: unknown): Error {
+  return error instanceof Error ? error : new Error(String(error));
+}
+
+const ALL_PROJECTION_TOPICS: readonly ProjectionTopic[] = [
+  'conversations',
+  'roster',
+  'schedule',
+  'favorites',
+  'templates',
+  'themes',
+  'workflows',
+  'settings',
+];
+
+/** Transitional aliases are normalized at the client boundary and never sent on the public wire. */
+function normalizeProjectionTopics(topics: readonly string[]): readonly ProjectionTopic[] {
+  if (topics.length === 0 || topics.includes('all')) return ALL_PROJECTION_TOPICS;
+  const aliases: Readonly<Record<string, readonly ProjectionTopic[]>> = {
+    crow: ['roster'],
+    crows: ['roster'],
+    tickets: ['schedule'],
+    prefs: ['favorites', 'templates', 'themes', 'workflows', 'settings'],
+    preferences: ['favorites', 'templates', 'themes', 'workflows', 'settings'],
+  };
+  const valid = new Set<string>(ALL_PROJECTION_TOPICS);
+  const out = new Set<ProjectionTopic>();
+  for (const topic of topics) {
+    const mapped = aliases[topic];
+    if (mapped !== undefined) {
+      for (const value of mapped) out.add(value);
+    } else if (valid.has(topic)) {
+      out.add(topic as ProjectionTopic);
+    } else {
+      throw new Error(`unsupported projection topic '${topic}'`);
+    }
+  }
+  return [...out];
+}
+
+export type { ProjectionTopic };

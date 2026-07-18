@@ -25,7 +25,7 @@ async function flush(): Promise<void> {
 describe('imageDraftStore.paste', () => {
   it('mints a stem synchronously and records the draft as uploading before any await', () => {
     const bus = new FakeBusClient();
-    bus.stubRpc('image.upload', { ok: true, path: '/p.png' });
+    bus.stubCommand('image.upload', { ok: true, path: '/p.png' });
     const store = createImageDraftStore(bus, createToastStore());
 
     const id = store.getState().paste(Buffer.from('x'), 'png');
@@ -39,7 +39,7 @@ describe('imageDraftStore.paste', () => {
 
   it('passes the minted stem as `name` to image.upload and fills the path on done', async () => {
     const bus = new FakeBusClient();
-    bus.stubRpc('image.upload', (params) => ({ ok: true, path: `/img/${params.name}.png` }));
+    bus.stubCommand('image.upload', (params) => ({ ok: true, path: `/img/${params.name}.png` }));
     const toasts = createToastStore();
     const store = createImageDraftStore(bus, toasts);
 
@@ -49,9 +49,9 @@ describe('imageDraftStore.paste', () => {
     const draft = store.getState().drafts[id];
     expect(draft?.status).toBe('done');
     expect(draft?.path).toBe(`/img/${id}.png`);
-    expect(bus.rpcCalls[0]?.params).toMatchObject({ name: id, ext: 'png' });
+    expect(bus.commandCalls[0]?.params).toMatchObject({ name: id, ext: 'png' });
     // base64 of "abc"
-    expect((bus.rpcCalls[0]?.params as { bytes: string }).bytes).toBe(
+    expect((bus.commandCalls[0]?.params as { bytes: string }).bytes).toBe(
       Buffer.from('abc').toString('base64'),
     );
     expect(toasts.getState().toasts.some((t) => t.severity === 'info')).toBe(true);
@@ -59,7 +59,7 @@ describe('imageDraftStore.paste', () => {
 
   it('flips to failed and pushes an error toast when the server returns !ok', async () => {
     const bus = new FakeBusClient();
-    bus.stubRpc('image.upload', { ok: false, error: 'disk full' });
+    bus.stubCommand('image.upload', { ok: false, error: 'disk full' });
     const toasts = createToastStore();
     const store = createImageDraftStore(bus, toasts);
 
@@ -72,7 +72,7 @@ describe('imageDraftStore.paste', () => {
 
   it('flips to failed and pushes an error toast when the RPC rejects', async () => {
     const bus = new FakeBusClient();
-    bus.stubRpc('image.upload', () => {
+    bus.stubCommand('image.upload', () => {
       throw new Error('socket closed');
     });
     const toasts = createToastStore();
@@ -91,7 +91,7 @@ describe('imageDraftStore.paste', () => {
     let maxConcurrent = 0;
     const order: string[] = [];
     // A handler that resolves on the next microtask, recording concurrency + order.
-    bus.stubRpc('image.upload', async (params) => {
+    bus.stubCommand('image.upload', async (params) => {
       inFlight += 1;
       maxConcurrent = Math.max(maxConcurrent, inFlight);
       await Promise.resolve();
@@ -117,7 +117,7 @@ describe('imageDraftStore.paste', () => {
 
   it('drops a draft mid-flight: discards the upload result and suppresses its toast', async () => {
     const bus = new FakeBusClient();
-    bus.stubRpc('image.upload', async (params) => {
+    bus.stubCommand('image.upload', async (params) => {
       await Promise.resolve();
       return { ok: true, path: `/p/${params.name}` };
     });
@@ -139,13 +139,13 @@ describe('imageDraftStore.paste', () => {
   it('pathsById returns only done drafts (uploading/failed excluded)', async () => {
     const bus = new FakeBusClient();
     // First paste succeeds; re-stub so the second fails — exercises both branches into pathsById.
-    bus.stubRpc('image.upload', (params) => ({ ok: true, path: `/p/${params.name}` }));
+    bus.stubCommand('image.upload', (params) => ({ ok: true, path: `/p/${params.name}` }));
     const store = createImageDraftStore(bus, createToastStore());
     const okId = store.getState().paste(Buffer.from('y'), 'png');
     for (let i = 0; i < 5; i++) {
       await flush();
     }
-    bus.stubRpc('image.upload', { ok: false, error: 'no' });
+    bus.stubCommand('image.upload', { ok: false, error: 'no' });
     const badId = store.getState().paste(Buffer.from('z'), 'png');
     for (let i = 0; i < 5; i++) {
       await flush();

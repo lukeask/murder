@@ -43,15 +43,15 @@ import type {
   HydrateSnapshots,
   Unsubscribe,
 } from '../bus/BusClient.js';
-import { isReadEnvelope } from '../bus/readEnvelope.js';
 import type {
   ConversationBlockEvent,
   ConversationStateEvent,
   Entity,
   ErrorEvent,
-  HydrateTopic,
   StateSnapshotEvent,
 } from '../bus/protocol.js';
+import { isReadEnvelope } from '../bus/readEnvelope.js';
+import type { ProjectionTopic } from '../generated/applicationProtocol.js';
 import { applyThemeRecords, type ThemeRecord } from '../theme/palettes.js';
 import {
   applyConversationsSnapshot,
@@ -381,7 +381,16 @@ export function createAppStore(bus: BusClient): {
   };
 }
 
-const HYDRATE_TOPICS: readonly HydrateTopic[] = ['all'];
+const HYDRATE_TOPICS: readonly ProjectionTopic[] = [
+  'conversations',
+  'roster',
+  'schedule',
+  'favorites',
+  'templates',
+  'themes',
+  'workflows',
+  'settings',
+];
 
 function wireHydration(
   bus: BusClient,
@@ -476,18 +485,14 @@ function routeHydratedEvent(
 }
 
 function applyHydrateSnapshots(store: AppStoreApi, snapshots: HydrateSnapshots): void {
-  const crow = snapshotAs<CrowSnapshotReply>(snapshots, 'state.crow_snapshot', 'crow', 'roster');
+  const crow = snapshotAs<CrowSnapshotReply>(snapshots, 'roster');
   if (crow !== undefined) {
     store.setState({
       roster: { rows: crow.sessions.map(toRosterRow), status: 'ready', error: null },
     });
   }
 
-  const schedule = snapshotAs<ScheduleSnapshotReply>(
-    snapshots,
-    'state.schedule_snapshot',
-    'schedule',
-  );
+  const schedule = snapshotAs<ScheduleSnapshotReply>(snapshots, 'schedule');
   if (schedule !== undefined) {
     store.setState({
       tickets: { rows: projectTickets(schedule), status: 'ready', error: null },
@@ -495,66 +500,49 @@ function applyHydrateSnapshots(store: AppStoreApi, snapshots: HydrateSnapshots):
     });
   }
 
-  const conversations = snapshotAs<ConversationsSnapshotReply>(
-    snapshots,
-    'state.conversations_snapshot',
-    'conversations',
-  );
+  const conversations = snapshotAs<ConversationsSnapshotReply>(snapshots, 'conversations');
   if (conversations !== undefined) {
     applyConversationsSnapshot(store, conversations);
   }
 
-  const favorites = snapshotAs<{ favorites?: readonly string[] }>(
-    snapshots,
-    'tui.load_favorites',
-    'favorites',
-  );
+  const favorites = snapshotAs<{ favorites?: readonly string[] }>(snapshots, 'favorites');
   if (favorites !== undefined) {
     store.setState({
       favorites: { ids: new Set(favorites.favorites ?? []), status: 'ready', error: null },
     });
   }
 
-  const templates = snapshotAs<{ templates?: readonly TemplateRecord[] }>(
-    snapshots,
-    'tui.load_templates',
-    'templates',
-  );
+  const templates = snapshotAs<{ templates?: readonly TemplateRecord[] }>(snapshots, 'templates');
   if (templates !== undefined) {
     store.setState({
       templates: { items: templates.templates ?? [], status: 'ready', error: null },
     });
   }
 
-  const themes = snapshotAs<{ themes?: readonly ThemeRecord[] }>(
-    snapshots,
-    'tui.load_themes',
-    'themes',
-  );
+  const themes = snapshotAs<{ themes?: readonly ThemeRecord[] }>(snapshots, 'themes');
   if (themes !== undefined) {
     const items = themes.themes ?? [];
     applyThemeRecords(items);
     store.setState({ themes: { items, status: 'ready', error: null } });
   }
 
-  const workflows = snapshotAs<{ workflows?: readonly WorkflowDef[] }>(
-    snapshots,
-    'tui.load_workflows',
-    'workflows',
-  );
+  const workflows = snapshotAs<{ workflows?: readonly WorkflowDef[] }>(snapshots, 'workflows');
   if (workflows !== undefined) {
     store.setState({
       workflows: { items: workflows.workflows ?? [], status: 'ready', error: null },
     });
   }
 
-  const settings = snapshotAs<{ settings?: SettingsWire }>(snapshots, 'settings.get', 'settings');
+  const settings = snapshotAs<{ settings?: SettingsWire }>(snapshots, 'settings');
   if (settings !== undefined) {
     store.setState((state) => ({ settings: applySettingsWire(state.settings, settings.settings) }));
   }
 }
 
-function snapshotAs<T>(snapshots: HydrateSnapshots, ...keys: readonly string[]): T | undefined {
+function snapshotAs<T>(
+  snapshots: HydrateSnapshots,
+  ...keys: readonly (keyof HydrateSnapshots)[]
+): T | undefined {
   for (const key of keys) {
     if (Object.hasOwn(snapshots, key)) {
       return unwrapHydrateSnapshotValue(snapshots[key]) as T;
@@ -566,7 +554,11 @@ function snapshotAs<T>(snapshots: HydrateSnapshots, ...keys: readonly string[]):
 /** Live hydrate snapshots for `state.*` RPC targets arrive as `{ ok, value }` read envelopes
  * (same as `rpc()`); unwrap before projecting into slice DTOs. */
 function unwrapHydrateSnapshotValue(value: unknown): unknown {
-  if (typeof value === 'object' && value !== null && isReadEnvelope(value as Record<string, unknown>)) {
+  if (
+    typeof value === 'object' &&
+    value !== null &&
+    isReadEnvelope(value as Record<string, unknown>)
+  ) {
     return (value as { ok: true; value: unknown }).value;
   }
   return value;

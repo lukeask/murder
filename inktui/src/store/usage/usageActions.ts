@@ -69,7 +69,7 @@ export interface UsageActions {
 export function createUsageActions(bus: BusClient, store: StoreApi<AppStore>): UsageActions {
   const { refresh } = createRefreshAction(bus, store, {
     key: 'usage',
-    method: 'state.schedule_snapshot',
+    method: 'schedule.get',
     project: (reply) => reply.usage_gauges.map(toUsageRow),
   });
   return {
@@ -77,14 +77,7 @@ export function createUsageActions(bus: BusClient, store: StoreApi<AppStore>): U
     async sample(): Promise<void> {
       store.setState((s) => ({ usage: { ...s.usage, status: 'loading', error: null } }));
       try {
-        await submitCommand(
-          bus,
-          'state.harness_usage.sample',
-          { trigger: 'manual_refresh' },
-          {
-            targetWorker: 'usage-probe',
-          },
-        );
+        await submitCommand(bus, 'state.harness_usage.sample', { trigger: 'manual_refresh' });
         await refresh();
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
@@ -96,14 +89,7 @@ export function createUsageActions(bus: BusClient, store: StoreApi<AppStore>): U
     },
     async setSteering(harness: string, steering: string): Promise<void> {
       try {
-        await submitCommand(
-          bus,
-          'scheduler.set_steering',
-          { harness, steering },
-          {
-            targetWorker: 'scheduler',
-          },
-        );
+        await submitCommand(bus, 'scheduler.set_steering', { harness, steering });
         await refresh();
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);

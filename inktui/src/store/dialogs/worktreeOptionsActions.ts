@@ -12,9 +12,10 @@
  * `worktree_path` (use an existing worktree) XOR `worktree_branch` (create a new named worktree).
  * The wizard threads exactly those snake_case keys into the `crow.spawn_rogue` payload.
  *
- * ## Wire RPC (`worktree.list`)
+ * ## Application query (`worktrees.list`)
  *
- * The backend exposes `worktree.list` (host.py) → `list_murder_worktrees_sync`, returning every
+ * The gateway adapts `worktrees.list` to `worktree.list` (host.py) → `list_murder_worktrees_sync`,
+ * returning every
  * `.murder/worktrees/*` entry plus the main checkout as `{ ok, entries: [{ path, branch, is_main }] }`.
  * {@link createWorktreeOptionsActions} calls it, drops the main entry (the picker always synthesizes
  * a `main checkout` head), and splices the rest between main and "+ new" via {@link buildWorktreeOptions}.
@@ -25,20 +26,17 @@
 import type { BusClient } from '../../bus/BusClient.js';
 
 /**
- * The `worktree.list` read RPC and its reply shape, declared here via TypeScript declaration merging
- * rather than by editing `src/bus/BusClient.ts` (frozen at C1/C2) — the same pattern as
- * {@link ../roster/rosterActions.js}. The registry was designed to be extended a line per method as
- * the service exposes it; declaring it from the consuming slice keeps the bus seam byte-identical
- * while giving `bus.rpc('worktree.list', {})` full type safety.
+ * The `worktrees.list` query reply shape, declared here via TypeScript declaration merging.
+ * The query name comes from the generated application protocol; the feature owns its result shape.
  */
 declare module '../../bus/BusClient.js' {
-  interface RpcMethods {
+  interface QueryMethods {
     /** Enumerate the repo's worktrees (main + `.murder/worktrees/*`). */
-    'worktree.list': { params: Record<string, never>; result: WorktreeListReply };
+    'worktrees.list': { params: Record<string, never>; result: WorktreeListReply };
   }
 }
 
-/** The `worktree.list` reply, mirroring the service handler (host.py `_worktree_list`). */
+/** The `worktrees.list` reply, mirroring the service handler (host.py `_worktree_list`). */
 export interface WorktreeListReply {
   readonly ok: boolean;
   readonly entries: readonly WorktreeEntryDto[];
@@ -135,7 +133,7 @@ export function createWorktreeOptionsActions(bus: BusClient): WorktreeOptionsAct
   return {
     async fetch(): Promise<readonly WorktreeOption[]> {
       try {
-        const reply = await bus.rpc('worktree.list', {});
+        const reply = await bus.query('worktrees.list', {});
         const existing: ExistingWorktree[] = reply.entries
           .filter((entry) => !entry.is_main)
           .map((entry) => ({

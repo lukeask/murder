@@ -2,11 +2,11 @@
  * Workflows actions tests — the workflow-registry RPC pipeline (rule 3: actions are the only bus path).
  *
  * Drives the workflows slice through a `FakeBusClient`:
- *  - `load()` fires `tui.load_workflows` and fills the slice from the reply.
- *  - `save(defn)` upserts locally (optimistic) AND fires `tui.save_workflows`, then SYNCS the slice to
+ *  - `load()` fires `workflows.get` and fills the slice from the reply.
+ *  - `save(defn)` upserts locally (optimistic) AND fires `workflows.set`, then SYNCS the slice to
  *     the server's normalized echo.
  *  - `remove(name)` / `rename(old, new)` mutate locally + persist.
- *  - `run(name, args)` fires `tui.run_workflow` with `{name, args}` and toasts the run ticket on success.
+ *  - `run(name, args)` fires `workflow.start` with `{name, args}` and toasts the run ticket on success.
  *  - a run failure / save rejection lands in a toast (run is fire-and-forget; save keeps the optimistic
  *     local list without rollback).
  */
@@ -54,15 +54,15 @@ function setup() {
   const fake = new FakeBusClient();
   // Default stubs so an unrelated load/save/run resolves; tests override as needed. The save stub
   // echoes back the submitted workflows (the backend normalizes; tests that care override this).
-  fake.stubRpc('tui.load_workflows', { ok: true, workflows: [] });
-  fake.stubRpc('tui.save_workflows', (params) => ({ ok: true, workflows: params.workflows }));
-  fake.stubRpc('tui.run_workflow', {
+  fake.stubQuery('workflows.get', { ok: true, workflows: [] });
+  fake.stubCommand('workflows.set', (params) => ({ ok: true, workflows: params.workflows }));
+  fake.stubCommand('workflow.start', {
     ok: true,
     run_ticket_id: 'T-run',
     stage_ticket_ids: {},
     created_ticket_ids: [],
   });
-  fake.stubRpc('state.crow_snapshot', { invalidation_key: 'iv', sessions: [] });
+  fake.stubQuery('roster.get', { invalidation_key: 'iv', sessions: [] });
   const { store, dispose } = createAppStore(fake);
   return { fake, store, dispose };
 }
@@ -73,13 +73,13 @@ describe('workflows actions', () => {
     toastStore.getState().clear();
   });
 
-  it('load() fires tui.load_workflows and fills the registry', async () => {
+  it('load() fires workflows.get and fills the registry', async () => {
     const { fake, store, dispose } = setup();
-    fake.stubRpc('tui.load_workflows', { ok: true, workflows: [wf('alpha'), wf('beta')] });
+    fake.stubQuery('workflows.get', { ok: true, workflows: [wf('alpha'), wf('beta')] });
 
     await store.getState().actions.workflows.load();
 
-    expect(fake.rpcCalls.some((c) => c.method === 'tui.load_workflows')).toBe(true);
+    expect(fake.queryCalls.some((c) => c.name === 'workflows.get')).toBe(true);
     const { workflows } = store.getState();
     expect(workflows.status).toBe('ready');
     expect(workflows.items.map((w) => w.name)).toEqual(['alpha', 'beta']);
@@ -90,7 +90,7 @@ describe('workflows actions', () => {
     const { fake, store, dispose } = setup();
     // Server normalizes: sort by name. The save stub returns a sorted list to prove the slice syncs
     // to the RETURNED list, not the optimistic one.
-    fake.stubRpc('tui.save_workflows', (params) => ({
+    fake.stubCommand('workflows.set', (params) => ({
       ok: true,
       workflows: [...params.workflows].sort((a, b) => a.name.localeCompare(b.name)),
     }));
@@ -98,7 +98,7 @@ describe('workflows actions', () => {
     await store.getState().actions.workflows.save(wf('zed'));
     await store.getState().actions.workflows.save(wf('alpha'));
 
-    const saveCalls = fake.rpcCalls.filter((c) => c.method === 'tui.save_workflows');
+    const saveCalls = fake.commandCalls.filter((c) => c.name === 'workflows.set');
     expect(saveCalls.length).toBe(2);
     // Slice reflects the normalized (sorted) echo, not insertion order.
     expect(store.getState().workflows.items.map((w) => w.name)).toEqual(['alpha', 'zed']);
@@ -121,7 +121,7 @@ describe('workflows actions', () => {
     await store.getState().actions.workflows.remove('a');
 
     expect(store.getState().workflows.items.map((w) => w.name)).toEqual(['b']);
-    const lastSave = fake.rpcCalls.filter((c) => c.method === 'tui.save_workflows').at(-1);
+    const lastSave = fake.commandCalls.filter((c) => c.name === 'workflows.set').at(-1);
     expect(lastSave?.params).toEqual({ workflows: [wf('b')] });
     dispose();
   });
@@ -139,16 +139,16 @@ describe('workflows actions', () => {
   it('rename() is a no-op (no RPC) when the old name is absent', async () => {
     const { fake, store, dispose } = setup();
     await store.getState().actions.workflows.rename('missing', 'whatever');
-    expect(fake.rpcCalls.filter((c) => c.method === 'tui.save_workflows').length).toBe(0);
+    expect(fake.commandCalls.filter((c) => c.name === 'workflows.set').length).toBe(0);
     dispose();
   });
 
-  it('run() fires tui.run_workflow with {name, args} and toasts the run ticket on success', async () => {
+  it('run() fires workflow.start with {name, args} and toasts the run ticket on success', async () => {
     const { fake, store, dispose } = setup();
 
     await store.getState().actions.workflows.run('wf', { input: 'do stuff' });
 
-    const runCall = fake.rpcCalls.find((c) => c.method === 'tui.run_workflow');
+    const runCall = fake.commandCalls.find((c) => c.name === 'workflow.start');
     expect(runCall?.params).toEqual({ name: 'wf', args: { input: 'do stuff' } });
     const toasts = liveToasts();
     expect(toasts).toHaveLength(1);
@@ -159,7 +159,7 @@ describe('workflows actions', () => {
 
   it('run() failure surfaces the error via a toast', async () => {
     const { fake, store, dispose } = setup();
-    fake.stubRpc('tui.run_workflow', () => {
+    fake.stubCommand('workflow.start', () => {
       throw new Error('rpc error [internal]: no such workflow');
     });
 
@@ -173,7 +173,7 @@ describe('workflows actions', () => {
 
   it('a save rejection sets error, keeps the optimistic list, AND surfaces a toast', async () => {
     const { fake, store, dispose } = setup();
-    fake.stubRpc('tui.save_workflows', () => {
+    fake.stubCommand('workflows.set', () => {
       throw new Error('rpc error [internal]: bus down');
     });
 
@@ -190,7 +190,7 @@ describe('workflows actions', () => {
 
   it('a load rejection sets status=error and leaves the registry empty', async () => {
     const { fake, store, dispose } = setup();
-    fake.stubRpc('tui.load_workflows', () => {
+    fake.stubQuery('workflows.get', () => {
       throw new Error('no workflows');
     });
 

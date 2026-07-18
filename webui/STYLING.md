@@ -71,7 +71,7 @@ the app's rhythm globally without touching any component:
 
 ## The tmux terminal view
 
-`TmuxFrameView` renders raw ANSI snapshots from the bus's `tmux.frame` stream via the lightweight
+`TmuxFrameView` renders raw ANSI snapshots from the application protocol's terminal stream via the lightweight
 `ansi-to-html` converter into a `<pre class="tmux__frame">` (styled with the mono font on a black
 ground). We chose `ansi-to-html` over `xterm.js` because the frames are full-screen *snapshot*
 strings (`tmux capture-pane -e`), not an incremental PTY byte stream — xterm wants a live stream and

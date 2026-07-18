@@ -16,8 +16,8 @@ import { render, Text } from 'ink';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { FakeBusClient } from '../src/bus/FakeBusClient.js';
 import { App } from '../src/components/App.js';
-import { createInputStores } from '../src/input/createInputStores.js';
 import { forceInkFullRepaint, installResizeClear, resolveSocketPath } from '../src/index.js';
+import { createInputStores } from '../src/input/createInputStores.js';
 import { createAppStore } from '../src/store/store.js';
 import { inkInstances } from '../src/terminal/inkInstances.js';
 
@@ -43,17 +43,28 @@ afterEach(() => {
 });
 
 describe('resolveSocketPath', () => {
-  it('returns MURDER_BUS_SOCKET verbatim (no rehashing the per-project path)', () => {
+  it('prefers MURDER_SERVICE_SOCKET', () => {
+    expect(
+      resolveSocketPath({
+        MURDER_SERVICE_SOCKET: '/tmp/service.sock',
+        MURDER_BUS_SOCKET: '/tmp/legacy.sock',
+      }),
+    ).toBe('/tmp/service.sock');
+  });
+
+  it('uses MURDER_BUS_SOCKET as a legacy fallback', () => {
     const path = '/run/user/1000/murder/repo-abc123def456/bus.sock';
     expect(resolveSocketPath({ MURDER_BUS_SOCKET: path })).toBe(path);
   });
 
   it('throws a clear error naming the env var when it is unset', () => {
-    expect(() => resolveSocketPath({})).toThrow(/MURDER_BUS_SOCKET is not set/);
+    expect(() => resolveSocketPath({})).toThrow(/MURDER_SERVICE_SOCKET is not set/);
   });
 
-  it('throws when MURDER_BUS_SOCKET is empty or whitespace', () => {
-    expect(() => resolveSocketPath({ MURDER_BUS_SOCKET: '   ' })).toThrow(/MURDER_BUS_SOCKET/);
+  it('throws when both socket env vars are empty or whitespace', () => {
+    expect(() =>
+      resolveSocketPath({ MURDER_SERVICE_SOCKET: ' ', MURDER_BUS_SOCKET: '   ' }),
+    ).toThrow(/MURDER_SERVICE_SOCKET/);
   });
 });
 
@@ -202,7 +213,7 @@ describe('forceInkFullRepaint', () => {
     }) as typeof stdout.write;
 
     const fake = new FakeBusClient();
-    fake.stubRpc('state.crow_snapshot', { invalidation_key: 'iv', sessions: [] });
+    fake.stubQuery('roster.get', { invalidation_key: 'iv', sessions: [] });
     const { store, dispose } = createAppStore(fake);
     const inputStores = createInputStores([]);
     const { unmount } = render(<App store={store} inputStores={inputStores} bus={fake} />, {
@@ -219,7 +230,7 @@ describe('forceInkFullRepaint', () => {
     stdout.emit('resize');
     await new Promise((resolve) => setTimeout(resolve, 20));
 
-    expect(written.match(/\u001B\[2J/g)?.length ?? 0).toBe(1);
+    expect(written.split('\u001B[2J').length - 1).toBe(1);
 
     unmount();
     dispose();

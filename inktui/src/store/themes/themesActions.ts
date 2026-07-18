@@ -14,16 +14,18 @@ import type { AppStore } from '../store.js';
 import { toastStore } from '../toast/toastStore.js';
 
 declare module '../../bus/BusClient.js' {
-  interface RpcMethods {
-    'tui.load_themes': {
+  interface QueryMethods {
+    'themes.get': {
       params: Record<string, never>;
       result: { ok: boolean; themes: readonly ThemeRecord[] };
     };
-    'tui.save_themes': {
+  }
+  interface CommandMethods {
+    'themes.set': {
       params: { themes: readonly ThemeRecord[] };
       result: { ok: boolean; themes: readonly ThemeRecord[] };
     };
-    'tui.import_theme': {
+    'theme.import': {
       params: { json: string; id?: string };
       result: { ok: boolean; themes: readonly ThemeRecord[]; id: string };
     };
@@ -48,7 +50,7 @@ export function createThemesActions(bus: BusClient, store: StoreApi<AppStore>): 
       themes: { ...state.themes, items: next, status: 'ready', error: null },
     }));
     try {
-      const reply = await bus.rpc('tui.save_themes', { themes: next });
+      const reply = await bus.command('themes.set', { themes: next });
       const saved = toItems(reply.themes);
       applyThemeRecords(saved);
       store.setState({ themes: { items: saved, status: 'ready', error: null } });
@@ -63,7 +65,7 @@ export function createThemesActions(bus: BusClient, store: StoreApi<AppStore>): 
     async load(): Promise<void> {
       store.setState((state) => ({ themes: { ...state.themes, status: 'loading' } }));
       try {
-        const reply = await bus.rpc('tui.load_themes', {});
+        const reply = await bus.query('themes.get', {});
         const items = toItems(reply.themes);
         applyThemeRecords(items);
         store.setState({ themes: { items, status: 'ready', error: null } });
@@ -80,7 +82,7 @@ export function createThemesActions(bus: BusClient, store: StoreApi<AppStore>): 
     },
 
     async importTheme(json: string, id?: string): Promise<string> {
-      const reply = await bus.rpc('tui.import_theme', {
+      const reply = await bus.command('theme.import', {
         json,
         ...(id === undefined ? {} : { id }),
       });

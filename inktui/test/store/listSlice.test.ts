@@ -31,7 +31,7 @@ async function flush(): Promise<void> {
 describe('createRefreshAction — shared list-slice mechanics', () => {
   it('projects the reply into rows and flips the slice to ready', async () => {
     const fake = new FakeBusClient();
-    fake.stubRpc('state.crow_snapshot', crowReply());
+    fake.stubQuery('roster.get', crowReply());
     const { store } = createAppStore(fake);
 
     await store.getState().actions.roster.refresh();
@@ -44,17 +44,17 @@ describe('createRefreshAction — shared list-slice mechanics', () => {
 
   it('issues exactly one rpc for the slice it is bound to', async () => {
     const fake = new FakeBusClient();
-    fake.stubRpc('state.crow_snapshot', crowReply());
+    fake.stubQuery('roster.get', crowReply());
     const { store } = createAppStore(fake);
 
     await store.getState().actions.roster.refresh();
 
-    expect(fake.rpcCalls).toEqual([{ method: 'state.crow_snapshot', params: {} }]);
+    expect(fake.queryCalls).toEqual([{ name: 'roster.get', params: {} }]);
   });
 
   it('ref-swaps ONLY its own slice key — siblings keep identity', async () => {
     const fake = new FakeBusClient();
-    fake.stubRpc('state.crow_snapshot', crowReply());
+    fake.stubQuery('roster.get', crowReply());
     const { store } = createAppStore(fake);
     const notesBefore = store.getState().notes;
     const reportsBefore = store.getState().reports;
@@ -71,7 +71,7 @@ describe('createRefreshAction — shared list-slice mechanics', () => {
 
   it('routes a rejected rpc into the slice error field, never thrown past the action', async () => {
     const fake = new FakeBusClient();
-    fake.stubRpc('state.crow_snapshot', () => {
+    fake.stubQuery('roster.get', () => {
       throw new Error('bus down');
     });
     const { store } = createAppStore(fake);
@@ -87,7 +87,7 @@ describe('createRefreshAction — shared list-slice mechanics', () => {
     // deferral lets the whole synchronous burst bump `seq` to its final value before any RPC fires,
     // so every stale token short-circuits BEFORE hitting the wire — only the last call issues an RPC.
     const fake = new FakeBusClient();
-    fake.stubRpc('state.crow_snapshot', crowReply());
+    fake.stubQuery('roster.get', crowReply());
     const { store } = createAppStore(fake);
     const refresh = store.getState().actions.roster.refresh;
 
@@ -96,7 +96,7 @@ describe('createRefreshAction — shared list-slice mechanics', () => {
     await pending;
     await flush();
 
-    expect(fake.rpcCalls).toEqual([{ method: 'state.crow_snapshot', params: {} }]);
+    expect(fake.queryCalls).toEqual([{ name: 'roster.get', params: {} }]);
     // The surviving (latest) call still runs to completion — the slice is not stranded in `loading`.
     expect(store.getState().roster.status).toBe('ready');
     expect(store.getState().roster.rows).toHaveLength(1);
@@ -106,7 +106,7 @@ describe('createRefreshAction — shared list-slice mechanics', () => {
     // The early token check is AFTER the loading setState, so a burst still shows loading — only the
     // RPC is skipped for stale tokens. Verify the loading flag is set synchronously by the burst.
     const fake = new FakeBusClient();
-    fake.stubRpc('state.crow_snapshot', crowReply());
+    fake.stubQuery('roster.get', crowReply());
     const { store } = createAppStore(fake);
     const refresh = store.getState().actions.roster.refresh;
 
@@ -123,7 +123,7 @@ describe('createRefreshAction — shared list-slice mechanics', () => {
     // A WS subscription replay delivers one `state.snapshot` per message — each on its own turn. The
     // shared drain loop must collapse that async storm the same way it collapses a sync burst.
     const fake = new FakeBusClient();
-    fake.stubRpc('state.crow_snapshot', crowReply());
+    fake.stubQuery('roster.get', crowReply());
     const { store } = createAppStore(fake);
     const refresh = store.getState().actions.roster.refresh;
 
@@ -134,21 +134,21 @@ describe('createRefreshAction — shared list-slice mechanics', () => {
     void refresh();
     await flush();
 
-    expect(fake.rpcCalls).toEqual([{ method: 'state.crow_snapshot', params: {} }]);
+    expect(fake.queryCalls).toEqual([{ name: 'roster.get', params: {} }]);
     expect(store.getState().roster.status).toBe('ready');
     expect(store.getState().roster.rows).toHaveLength(1);
   });
 
   it('does not flash loading over existing rows on background refresh', async () => {
     const fake = new FakeBusClient();
-    fake.stubRpc('state.crow_snapshot', crowReply());
+    fake.stubQuery('roster.get', crowReply());
     const { store } = createAppStore(fake);
     await store.getState().actions.roster.refresh();
     expect(store.getState().roster.status).toBe('ready');
 
     let resolveReply: (r: CrowSnapshotReply) => void = () => {};
-    fake.stubRpc(
-      'state.crow_snapshot',
+    fake.stubQuery(
+      'roster.get',
       () =>
         new Promise<CrowSnapshotReply>((resolve) => {
           resolveReply = resolve;
@@ -167,8 +167,8 @@ describe('createRefreshAction — shared list-slice mechanics', () => {
   it('marks the slice loading before the rpc resolves', async () => {
     let resolveReply: (r: CrowSnapshotReply) => void = () => {};
     const fake = new FakeBusClient();
-    fake.stubRpc(
-      'state.crow_snapshot',
+    fake.stubQuery(
+      'roster.get',
       () =>
         new Promise<CrowSnapshotReply>((resolve) => {
           resolveReply = resolve;

@@ -24,7 +24,7 @@ import { submitCommand } from '../commandSubmit.js';
  * `ticket.next_id`, `ticket.exists`, and `plan.create` are all LIVE on the bus.
  */
 declare module '../../bus/BusClient.js' {
-  interface RpcMethods {
+  interface QueryMethods {
     /**
      * Fetch the next free ticket id (the id the service would assign to a new ticket).
      * LIVE — registered in `murder/app/service/host.py`.
@@ -41,6 +41,8 @@ declare module '../../bus/BusClient.js' {
       params: { handle: string };
       result: ExistsResult;
     };
+  }
+  interface CommandMethods {
     /**
      * Create a new plan and start its planning agent. LIVE — registered in
      * `murder/app/service/host.py` (`_plan_create` → `Orchestrator.create_plan`).
@@ -147,11 +149,11 @@ export function createDialogActions(bus: BusClient): DialogActions {
     },
 
     async fetchNextTicketId(): Promise<NextIdResult> {
-      return bus.rpc('ticket.next_id', {});
+      return bus.query('ticket.next_id', {});
     },
 
     async ticketExists(handle: string): Promise<ExistsResult> {
-      return bus.rpc('ticket.exists', { handle });
+      return bus.query('ticket.exists', { handle });
     },
 
     async createPlan(input: CreatePlanInput): Promise<PlanCreateResult> {
@@ -168,7 +170,7 @@ export function createDialogActions(bus: BusClient): DialogActions {
             body: input.body,
             ...(input.message !== undefined ? { message: input.message } : {}),
           };
-      return bus.rpc('plan.create', params);
+      return bus.command('plan.create', params);
     },
   };
 }

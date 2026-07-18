@@ -1,8 +1,8 @@
 """TUI launch and service-start commands.
 
-The TUI is the Ink (Node) frontend (F8). `murder` brings the daemon up, resolves the bus socket,
-then spawns the Node Ink process pointed at that socket via `MURDER_BUS_SOCKET`. The Node side never
-re-derives the per-project socket path — it connects to exactly the absolute path it is handed
+The TUI is the Ink (Node) frontend (F8). `murder` brings the daemon up, resolves the service socket,
+then spawns the Node Ink process pointed at that socket via `MURDER_SERVICE_SOCKET`. The Node side
+never re-derives the per-project socket path — it connects to exactly the absolute path it is handed
 (Open decision #2). The legacy in-process Textual `MurderApp` has been retired (F10).
 """
 
@@ -15,6 +15,8 @@ from pathlib import Path
 
 import typer
 
+from murder.app.cli._util import node_major_version as _node_major_version
+from murder.app.cli._util import repo_root as _repo_root
 from murder.app.cli.service_cmd import (
     _ensure_supervisor,
     _ensure_supervisor_started,
@@ -22,8 +24,6 @@ from murder.app.cli.service_cmd import (
     apply_client_log_level,
 )
 from murder.bus.transport_socket import default_socket_path
-from murder.app.cli._util import node_major_version as _node_major_version
-from murder.app.cli._util import repo_root as _repo_root
 
 # Node runtime floor (current LTS). Ink 5 needs >=18; 20 is the future-proof floor we ship against.
 MIN_NODE_MAJOR = 20
@@ -86,16 +86,19 @@ def _resolve_ink_entrypoint(repo: Path) -> tuple[list[str], Path | None]:
 
 
 def _spawn_ink(argv: list[str], cwd: Path | None, socket_path: Path, project: str) -> int:
-    """Spawn the resolved Ink runner against the bus socket, inheriting the tty, and wait.
+    """Spawn the resolved Ink runner against the service socket, inheriting the tty, and wait.
 
     The child owns the terminal (inherited stdio) and shares our process group, so ctrl+c reaches
     it directly. We do **not** tear the daemon down on exit — the service is authoritative and keeps
     running, matching the prior in-process launch. Returns the child's exit code.
 
     `project` is the repo directory name, passed via `MURDER_PROJECT` purely for the top-bar
-    branding (`murder · <project>`) — the TUI's own cwd is unreliable (in dev it runs from `inktui/`).
+    branding (`murder · <project>`) — the TUI's own cwd is unreliable
+    (in dev it runs from `inktui/`).
     """
     env = dict(os.environ)
+    env["MURDER_SERVICE_SOCKET"] = str(socket_path)
+    # Compatibility for older bundled clients during a rolling package upgrade.
     env["MURDER_BUS_SOCKET"] = str(socket_path)
     env["MURDER_PROJECT"] = project
     proc = subprocess.run(argv, cwd=str(cwd) if cwd is not None else None, env=env, check=False)

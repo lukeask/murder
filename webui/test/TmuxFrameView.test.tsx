@@ -1,5 +1,5 @@
 /**
- * TmuxFrameView: subscribes to the bus's `tmux.frame` stream and renders the ANSI snapshot as HTML.
+ * TmuxFrameView: attaches to a terminal stream and renders replacement ANSI frames as HTML.
  * We emit a frame with an SGR color code through the FakeBusClient and assert the converter produced
  * colored markup (a <span style> with a color) and that the empty state shows before any frame.
  */
@@ -19,12 +19,12 @@ describe('TmuxFrameView', () => {
     expect(screen.getByText(/Waiting for the agent/)).toBeTruthy();
   });
 
-  it('renders an ANSI frame as colored HTML on a tmux.frame event', () => {
+  it('renders an ANSI terminal replacement frame as colored HTML', () => {
     const bus = new FakeBusClient();
     renderWithStore(<TmuxFrameView agentId="a1" />, { bus });
     // Red foreground "hi" then reset.
     act(() => {
-      bus.emit({ type: 'tmux.frame', frame: '[31mhi[0m', agent_id: 'a1' } as never);
+      bus.emitTerminal('a1', '[31mhi[0m');
     });
     const pre = document.querySelector('.mds-tmux__frame');
     expect(pre).not.toBeNull();
@@ -37,9 +37,9 @@ describe('TmuxFrameView', () => {
     const bus = new FakeBusClient();
     renderWithStore(<TmuxFrameView agentId="a1" />, { bus });
     act(() => {
-      bus.emit({ type: 'tmux.frame', frame: 'other', agent_id: 'b2' } as never);
+      bus.emitTerminal('b2', 'other');
     });
-    // Still waiting — the subscription filter scoped to a1 didn't match b2.
+    // Still waiting — the terminal attachment is scoped to a1.
     expect(screen.getByText(/Waiting for the agent/)).toBeTruthy();
   });
 });

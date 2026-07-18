@@ -3,13 +3,7 @@ import { rm } from 'node:fs/promises';
 import { createServer, type Server, type Socket } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { RpcMethod } from '../../src/bus/BusClient.js';
-import {
-  type BusEvent,
-  PROTOCOL_VERSION,
-  type SubArgs,
-  type WireMessage,
-} from '../../src/bus/protocol.js';
+import type { BusEvent } from '../../src/bus/protocol.js';
 import {
   type BackoffConfig,
   type Clock,
@@ -19,62 +13,30 @@ import {
   RpcTimeoutError,
   UdsBusClient,
 } from '../../src/bus/UdsBusClient.js';
+import {
+  APPLICATION_PROTOCOL_VERSION,
+  type ClientMessage,
+  type ServerMessage,
+  type SubscribeMessage,
+} from '../../src/generated/applicationProtocol.js';
 
-// Test-only RPC method for exercising the generic rpc() plumbing (round-trip, envelope unwrap,
-// timeout, connection-drop) with an arbitrary method name. Real orchestrator command kinds
-// (`ticket.quick_kick`, `agent.message`, …) are deliberately NOT in `RpcMethods` — they route via
-// `command.submit` — so these transport tests use this throwaway method instead. Declared once here;
-// `tsconfig.test.json` compiles all test files together, so it's visible program-wide (incl.
-// FakeBusClient.test.ts).
-declare module '../../src/bus/BusClient.js' {
-  interface RpcMethods {
-    'test.echo': { params: Record<string, unknown>; result: Record<string, unknown> };
-  }
-}
-
-// The C2 test idiom: stand up a real in-process Unix-socket server (`net.createServer`) on a temp
-// path that speaks the handshake + a scripted reply/event, point a UdsBusClient at it, and assert
-// on the observable behavior. No live murder service is needed — the server here *is* the contract.
-
-/**
- * A scriptable in-process bus server. It performs the real Hello/Ack handshake (so the client's
- * framing/correlation must be correct) and exposes hooks for tests to drive RPCs, events, version
- * mismatch, and connection drops.
- */
-class ScriptedBusServer {
-  readonly socketPath: string;
-  private server: Server | undefined;
-  private connections = new Set<Socket>();
-
-  /** Set to refuse the next handshake with a version mismatch. */
-  rejectVersion = false;
-  /** Number of handshakes completed — lets a test assert a reconnect re-handshaked. */
+class ScriptedApplicationServer {
+  readonly socketPath = join(tmpdir(), `inktui-application-${randomUUID()}.sock`);
+  readonly messages: ClientMessage[] = [];
   handshakeCount = 0;
-  /** Every `sub` correlation_id seen, in order — lets a test assert re-subscription on reconnect. */
-  readonly subscribeCorrelationIds: string[] = [];
-  /** Every `sub` filter seen on the wire, in order — lets a test assert the client transmits the
-   * filter it was given (the server-side filtering contract starts with the client shipping it). */
-  readonly subscribeFilters: SubArgs['filter'][] = [];
-  /** Every full `sub` args payload seen on the wire, in order. */
-  readonly subscribeArgs: SubArgs[] = [];
-  /** Every `hydrate` correlation_id seen, in order. */
-  readonly hydrateCorrelationIds: string[] = [];
-  /** Hydrate handler: given args, returns the ack `result` body. */
-  hydrateHandler: (
-    args: { topics: readonly string[]; cursor?: number },
-    callIndex: number,
-  ) => Record<string, unknown> = () => ({ cursor: 1 });
-  private hydrateCallCount = 0;
-  /** RPC handler: given (target, body), returns a reply object, or `undefined` to stay silent
-   * (drives the timeout path). */
-  rpcHandler: (
-    target: string,
-    body: Record<string, unknown>,
+  rejectVersion = false;
+  requestHandler: (
+    message: Extract<ClientMessage, { op: 'request' }>,
   ) => Record<string, unknown> | undefined = () => ({});
+  snapshot: Extract<ServerMessage, { op: 'subscription.ready' }>['snapshot'] = {
+    snapshots: {},
+    cursor: 1,
+    mode: 'cold',
+    replay: [],
+  };
 
-  constructor() {
-    this.socketPath = join(tmpdir(), `inktui-bus-${randomUUID()}.sock`);
-  }
+  private server: Server | undefined;
+  private readonly sockets = new Set<Socket>();
 
   async start(): Promise<void> {
     await rm(this.socketPath, { force: true });
@@ -89,10 +51,8 @@ class ScriptedBusServer {
   }
 
   async stop(): Promise<void> {
-    for (const socket of this.connections) {
-      socket.destroy();
-    }
-    this.connections.clear();
+    for (const socket of this.sockets) socket.destroy();
+    this.sockets.clear();
     if (this.server !== undefined) {
       await new Promise<void>((resolve) => this.server?.close(() => resolve()));
       this.server = undefined;
@@ -100,181 +60,149 @@ class ScriptedBusServer {
     await rm(this.socketPath, { force: true });
   }
 
-  /** Forcibly drop every live client connection (simulates a service restart / socket loss). */
   dropAllConnections(): void {
-    for (const socket of this.connections) {
-      socket.destroy();
-    }
-    this.connections.clear();
+    for (const socket of this.sockets) socket.destroy();
+    this.sockets.clear();
   }
 
-  /** Write raw bytes to every connected client (for framing/error-path tests). */
   writeRaw(data: string): void {
-    for (const socket of this.connections) {
-      socket.write(data);
-    }
+    for (const socket of this.sockets) socket.write(data);
   }
 
-  /** Push a `pub` event frame to every connected client. */
-  emit(event: BusEvent, seq?: number): void {
-    const frame: WireMessage = {
-      op: 'pub',
-      schema_version: PROTOCOL_VERSION,
-      correlation_id: `pub-${randomUUID()}`,
-      event,
-      ...(seq !== undefined ? { seq } : {}),
-    };
-    this.broadcast(frame);
+  emitProjection(payload: BusEvent, cursor = 2): void {
+    const subscription = this.latestSubscription('projections');
+    if (subscription === undefined) throw new Error('no projection subscription');
+    this.broadcast({
+      op: 'subscription.event',
+      subscription_id: subscription.subscription_id,
+      cursor,
+      payload: payload as unknown as Record<string, unknown>,
+    });
   }
 
-  /** When set, the next handshake writes the Ack and a pipelined `pub` event in a *single*
-   * `socket.write()` — forcing them into one TCP segment / `data` event so the client's handshake
-   * read sees them in the same chunk. This reproduces the pipelined-frame drop. */
-  pipelineEventWithAck: BusEvent | undefined;
-  /** When set, emitted on the wire immediately before the next hydrate ack (tail-before-ack race). */
-  emitBeforeHydrateAck: { event: BusEvent; seq: number } | undefined;
-
-  /** Send an interleaved `wake` frame to every client (the client must skip these). */
-  emitWake(): void {
-    const frame: WireMessage = {
-      op: 'wake',
-      schema_version: PROTOCOL_VERSION,
-      correlation_id: '',
-      body: { client_id: 'test', reason: 'connect', fresh_state_hints: [] },
-    };
-    this.broadcast(frame);
+  emitNotification(payload: BusEvent, cursor = 2): void {
+    const subscription = this.latestSubscription('notifications');
+    if (subscription === undefined) throw new Error('no notification subscription');
+    this.broadcast({
+      op: 'subscription.event',
+      subscription_id: subscription.subscription_id,
+      cursor,
+      payload: payload as unknown as Record<string, unknown>,
+    });
   }
 
-  private broadcast(frame: WireMessage): void {
-    const line = `${JSON.stringify(frame)}\n`;
-    for (const socket of this.connections) {
-      socket.write(line);
-    }
+  emitTerminal(frame = 'screen', sequence = 1): void {
+    const attach = [...this.messages]
+      .reverse()
+      .find(
+        (message): message is Extract<ClientMessage, { op: 'terminal.attach' }> =>
+          message.op === 'terminal.attach',
+      );
+    if (attach === undefined) throw new Error('no terminal attachment');
+    this.broadcast({
+      op: 'terminal.frame',
+      stream_id: attach.stream_id,
+      frame: {
+        mode: 'replace',
+        sequence,
+        session_id: attach.target.session_id ?? 'supervisor',
+        frame,
+      },
+    });
+  }
+
+  latestSubscription(kind: 'projections' | 'notifications'): SubscribeMessage | undefined {
+    return [...this.messages]
+      .reverse()
+      .find(
+        (message): message is SubscribeMessage =>
+          message.op === 'subscribe' && message.subscription.kind === kind,
+      );
   }
 
   private handleConnection(socket: Socket): void {
-    this.connections.add(socket);
-    const buffer = new LineBuffer();
+    this.sockets.add(socket);
+    const lines = new LineBuffer();
     socket.on('data', (chunk: Buffer) => {
-      for (const line of buffer.push(chunk.toString('utf8'))) {
-        this.handleLine(socket, line);
+      for (const line of lines.push(chunk.toString('utf8'))) {
+        this.handleMessage(socket, JSON.parse(line) as ClientMessage);
       }
     });
-    socket.on('close', () => this.connections.delete(socket));
-    socket.on('error', () => this.connections.delete(socket));
+    socket.on('close', () => this.sockets.delete(socket));
+    socket.on('error', () => this.sockets.delete(socket));
   }
 
-  private handleLine(socket: Socket, line: string): void {
-    const message = JSON.parse(line) as WireMessage;
+  private handleMessage(socket: Socket, message: ClientMessage): void {
+    this.messages.push(message);
     switch (message.op) {
-      case 'hello': {
+      case 'client.hello':
         if (this.rejectVersion) {
           this.send(socket, {
-            op: 'err',
-            schema_version: PROTOCOL_VERSION,
-            correlation_id: message.correlation_id,
-            body: {
-              code: 'protocol_version_mismatch',
-              message: `server=${PROTOCOL_VERSION} client=${message.body.protocol_version}`,
+            op: 'error',
+            error: {
+              code: 'version_mismatch',
+              message: 'application protocol mismatch',
               details: {},
             },
           });
           return;
         }
         this.handshakeCount += 1;
-        if (this.pipelineEventWithAck !== undefined) {
-          // Pipeline path: write the Ack *and* a subsequent `pub` frame in ONE write() so they
-          // share a single chunk on the client. The trailing event must not be dropped.
-          const ackLine = `${JSON.stringify({
-            op: 'ack',
-            schema_version: PROTOCOL_VERSION,
-            correlation_id: message.correlation_id,
-            body: { kind: 'subscribed' },
-          })}\n`;
-          const pubLine = `${JSON.stringify({
-            op: 'pub',
-            schema_version: PROTOCOL_VERSION,
-            correlation_id: `pub-${randomUUID()}`,
-            event: this.pipelineEventWithAck,
-          })}\n`;
-          socket.write(ackLine + pubLine);
-          return;
+        this.send(socket, {
+          op: 'server.hello',
+          protocol_version: APPLICATION_PROTOCOL_VERSION,
+          server_id: 'test-server',
+          queries: ['roster.get', 'ticket.get'],
+          commands: ['plan.create'],
+          subscriptions: ['projections', 'notifications'],
+          terminal_streams: true,
+        });
+        return;
+      case 'request': {
+        const result = this.requestHandler(message);
+        if (result !== undefined) {
+          this.send(socket, { op: 'reply', request_id: message.request_id, result });
         }
-        // Reply Ack, then an interleaved wake the client must already tolerate post-handshake.
-        this.send(socket, {
-          op: 'ack',
-          schema_version: PROTOCOL_VERSION,
-          correlation_id: message.correlation_id,
-          body: { kind: 'subscribed' },
-        });
-        this.send(socket, {
-          op: 'wake',
-          schema_version: PROTOCOL_VERSION,
-          correlation_id: '',
-          body: { client_id: message.body.client_id, reason: 'connect', fresh_state_hints: [] },
-        });
         return;
       }
-      case 'sub': {
-        this.subscribeCorrelationIds.push(message.correlation_id);
-        this.subscribeFilters.push(message.args.filter);
-        this.subscribeArgs.push(message.args);
+      case 'subscribe':
         this.send(socket, {
-          op: 'ack',
-          schema_version: PROTOCOL_VERSION,
-          correlation_id: message.correlation_id,
-          body: { kind: 'subscribed' },
+          op: 'subscription.ready',
+          subscription_id: message.subscription_id,
+          snapshot:
+            message.subscription.kind === 'projections'
+              ? this.snapshot
+              : { snapshots: {}, cursor: this.snapshot.cursor, mode: 'cold', replay: [] },
         });
         return;
-      }
-      case 'hydrate': {
-        this.hydrateCorrelationIds.push(message.correlation_id);
-        const callIndex = this.hydrateCallCount;
-        this.hydrateCallCount += 1;
-        const result = this.hydrateHandler(
-          message.args.cursor === undefined || message.args.cursor === null
-            ? { topics: message.args.topics }
-            : { topics: message.args.topics, cursor: message.args.cursor },
-          callIndex,
-        );
-        if (this.emitBeforeHydrateAck !== undefined) {
-          const { event, seq } = this.emitBeforeHydrateAck;
-          this.emitBeforeHydrateAck = undefined;
-          this.emit(event, seq);
-        }
+      case 'terminal.attach':
         this.send(socket, {
-          op: 'ack',
-          schema_version: PROTOCOL_VERSION,
-          correlation_id: message.correlation_id,
-          body: { kind: 'hydrate_reply', result },
+          op: 'terminal.attached',
+          stream_id: message.stream_id,
+          mode: 'replace',
         });
         return;
-      }
-      case 'rpc': {
-        const reply = this.rpcHandler(message.args.target, message.args.body);
-        if (reply === undefined) {
-          return; // stay silent → drives the client timeout path
-        }
-        this.send(socket, {
-          op: 'ack',
-          schema_version: PROTOCOL_VERSION,
-          correlation_id: message.correlation_id,
-          body: { kind: 'rpc_reply', result: reply },
-        });
+      case 'unsubscribe':
+      case 'terminal.detach':
         return;
-      }
       default:
-        return;
+        assertNever(message);
     }
   }
 
-  private send(socket: Socket, message: WireMessage): void {
+  private send(socket: Socket, message: ServerMessage): void {
     socket.write(`${JSON.stringify(message)}\n`);
+  }
+
+  private broadcast(message: ServerMessage): void {
+    for (const socket of this.sockets) this.send(socket, message);
   }
 }
 
-/** A controllable clock so reconnect backoff is deterministic and instant in tests. `sleep`
- * resolves on the next microtask; `random` is fixed so jitter is predictable. */
+function assertNever(value: never): never {
+  throw new Error(`unexpected client message: ${JSON.stringify(value)}`);
+}
+
 function instantClock(random = 0): Clock {
   return {
     sleep: () => ({ promise: Promise.resolve(), cancel: () => {} }),
@@ -297,24 +225,32 @@ function snapshot(key: string): BusEvent {
   };
 }
 
-/** Poll until `predicate` holds or the deadline elapses — for asserting on async server state
- * (handshake counts, sub re-establishment) without arbitrary sleeps. */
+function errorEvent(message: string): BusEvent {
+  return {
+    type: 'error',
+    id: `err-${message}`,
+    ts: '2026-06-08T00:00:00Z',
+    run_id: 'run-1',
+    agent_id: '',
+    message,
+    recoverable: true,
+  };
+}
+
 async function waitFor(predicate: () => boolean, timeoutMs = 2000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (!predicate()) {
-    if (Date.now() > deadline) {
-      throw new Error('waitFor: condition not met before timeout');
-    }
+    if (Date.now() > deadline) throw new Error('waitFor: condition not met before timeout');
     await new Promise((resolve) => setTimeout(resolve, 5));
   }
 }
 
-describe('UdsBusClient — handshake', () => {
-  let server: ScriptedBusServer;
+describe('UdsBusClient — generated application handshake', () => {
+  let server: ScriptedApplicationServer;
   let client: UdsBusClient | undefined;
 
   beforeEach(async () => {
-    server = new ScriptedBusServer();
+    server = new ScriptedApplicationServer();
     await server.start();
   });
   afterEach(async () => {
@@ -322,37 +258,40 @@ describe('UdsBusClient — handshake', () => {
     await server.stop();
   });
 
-  it('completes the Hello/Ack handshake against a real socket', async () => {
-    client = new UdsBusClient({ socketPath: server.socketPath, clock: instantClock() });
-    await expect(client.connect()).resolves.toBeUndefined();
+  it('sends client.hello and accepts server.hello', async () => {
+    client = new UdsBusClient({
+      socketPath: server.socketPath,
+      clientId: 'tui-test',
+      clock: instantClock(),
+    });
+    await client.connect();
+
+    expect(server.messages[0]).toEqual({
+      op: 'client.hello',
+      protocol_version: APPLICATION_PROTOCOL_VERSION,
+      client: { client_id: 'tui-test', kind: 'tui' },
+    });
     expect(server.handshakeCount).toBe(1);
   });
 
-  it('refuses the connection on a protocol-version mismatch (not retried)', async () => {
-    server.rejectVersion = true;
-    client = new UdsBusClient({ socketPath: server.socketPath, clock: instantClock() });
-    await expect(client.connect()).rejects.toBeInstanceOf(ProtocolVersionMismatchError);
-    // Permanent: it must not have retried into a second handshake attempt.
-    expect(server.handshakeCount).toBe(0);
-  });
-
-  it('fires onPermanentError on a first-handshake version mismatch', async () => {
+  it('treats a version_mismatch error as permanent', async () => {
     server.rejectVersion = true;
     client = new UdsBusClient({ socketPath: server.socketPath, clock: instantClock() });
     const errors: Error[] = [];
     client.onPermanentError((error) => errors.push(error));
+
     await expect(client.connect()).rejects.toBeInstanceOf(ProtocolVersionMismatchError);
     await waitFor(() => errors.length === 1);
-    expect(errors[0]).toBeInstanceOf(ProtocolVersionMismatchError);
+    expect(server.messages.filter((message) => message.op === 'client.hello')).toHaveLength(1);
   });
 });
 
-describe('UdsBusClient — rpc', () => {
-  let server: ScriptedBusServer;
+describe('UdsBusClient — generated request/reply', () => {
+  let server: ScriptedApplicationServer;
   let client: UdsBusClient;
 
   beforeEach(async () => {
-    server = new ScriptedBusServer();
+    server = new ScriptedApplicationServer();
     await server.start();
     client = new UdsBusClient({ socketPath: server.socketPath, clock: instantClock() });
   });
@@ -361,74 +300,60 @@ describe('UdsBusClient — rpc', () => {
     await server.stop();
   });
 
-  it('round-trips an rpc paired by correlation_id', async () => {
-    server.rpcHandler = (target, body) => ({ echoed: target, ...body });
-    const result = await client.rpc('test.echo', { ticket_id: 'T-42' });
-    expect(result).toEqual({ echoed: 'test.echo', ticket_id: 'T-42' });
+  it('sends a generated query request and unwraps its read envelope', async () => {
+    server.requestHandler = (message) => ({
+      ok: true,
+      value: { invalidation_key: 'iv', sessions: [], echoed: message.request.name },
+    });
+
+    const result = await client.query('roster.get', {});
+    expect(result).toMatchObject({ invalidation_key: 'iv', echoed: 'roster.get' });
+    expect(server.messages).toContainEqual(
+      expect.objectContaining({
+        op: 'request',
+        request: { kind: 'query', name: 'roster.get', params: {} },
+      }),
+    );
   });
 
-  it('unwraps the read-RPC `{ ok, value }` envelope for `state.*` methods', async () => {
-    // The service wraps read-handler DTOs as `{ ok: true, value: <dto> }` (`_value()` in host.py);
-    // the store reads read replies top-level, so the client unwraps `.value` for `state.*` methods.
-    server.rpcHandler = () => ({ ok: true, value: { sessions: ['c1', 'c2'] } });
-    // `state.*` read methods are augmented onto RpcMethods in the store slices; cast here so this
-    // transport-level test stays independent of the store layer.
-    const result = await client.rpc('state.crow_snapshot' as RpcMethod, {} as never);
-    expect(result).toEqual({ sessions: ['c1', 'c2'] });
+  it('sends a generated command request without unwrapping the result', async () => {
+    server.requestHandler = () => ({ handled: true, ok: true, plan_name: 'phase-1' });
+
+    const result = await client.command('plan.create', {
+      plan_name: 'phase-1',
+      body: '# Phase 1',
+    });
+    expect(result).toMatchObject({ handled: true, plan_name: 'phase-1' });
+    expect(server.messages).toContainEqual(
+      expect.objectContaining({
+        op: 'request',
+        request: {
+          kind: 'command',
+          name: 'plan.create',
+          params: { plan_name: 'phase-1', body: '# Phase 1' },
+        },
+      }),
+    );
   });
 
-  it('preserves a `value: null` read envelope as `null` (not-found signal)', async () => {
-    // `_state_ticket_detail` returns `_value(None)` → `{ ok: true, value: null }` for a missing
-    // ticket; the store keys not-found on that `null`, so the unwrap must NOT coerce it to `{}`.
-    server.rpcHandler = () => ({ ok: true, value: null });
-    const result = await client.rpc('state.ticket_detail' as RpcMethod, {} as never);
-    expect(result).toBeNull();
-  });
-
-  it('leaves a write/command reply (no `value` key) untouched', async () => {
-    // Writes return `{ ok, ...fields }` top-level and must NOT be unwrapped.
-    server.rpcHandler = () => ({ ok: true, ticket_id: 'T-9' });
-    const result = await client.rpc('test.echo', { ticket_id: 'T-9' });
-    expect(result).toEqual({ ok: true, ticket_id: 'T-9' });
-  });
-
-  it('rejects an rpc that the server never answers (timeout)', async () => {
-    // Inject a tiny RPC timeout (rule 4) so the deadline path is exercised in real time, no fake
-    // timers. The server stays silent, so the only way the promise settles is the timeout.
+  it('times out a request the server never replies to', async () => {
+    server.requestHandler = () => undefined;
     const timeoutClient = new UdsBusClient({
       socketPath: server.socketPath,
       clock: instantClock(),
-      rpcTimeoutS: 0.01,
+      rpcTimeoutS: -0.99,
     });
-    server.rpcHandler = () => undefined;
-    await expect(
-      timeoutClient.rpc('test.echo', { agent_id: 'a1', message: 'hi' }),
-    ).rejects.toBeInstanceOf(RpcTimeoutError);
+    await expect(timeoutClient.query('roster.get', {})).rejects.toBeInstanceOf(RpcTimeoutError);
     timeoutClient.close();
   });
 });
 
-describe('UdsBusClient — framing', () => {
-  it('reassembles a wire message split across two socket reads (partial frame)', () => {
-    // LineBuffer is the inbound framing unit; assert it directly for the partial-frame case.
-    const buffer = new LineBuffer();
-    expect(buffer.push('{"op":"a')).toEqual([]);
-    expect(buffer.push('ck"}\n{"op":')).toEqual(['{"op":"ack"}']);
-    expect(buffer.push('"err"}\n')).toEqual(['{"op":"err"}']);
-  });
-
-  it('splits multiple messages arriving in one chunk', () => {
-    const buffer = new LineBuffer();
-    expect(buffer.push('{"a":1}\n{"b":2}\n{"c":3}\n')).toEqual(['{"a":1}', '{"b":2}', '{"c":3}']);
-  });
-});
-
-describe('UdsBusClient — subscriptions', () => {
-  let server: ScriptedBusServer;
+describe('UdsBusClient — generated subscriptions', () => {
+  let server: ScriptedApplicationServer;
   let client: UdsBusClient;
 
   beforeEach(async () => {
-    server = new ScriptedBusServer();
+    server = new ScriptedApplicationServer();
     await server.start();
     client = new UdsBusClient({
       socketPath: server.socketPath,
@@ -441,373 +366,159 @@ describe('UdsBusClient — subscriptions', () => {
     await server.stop();
   });
 
-  it('delivers pushed events to a subscriber', async () => {
-    const received: BusEvent[] = [];
-    client.subscribe((event) => received.push(event));
-    await waitFor(() => server.subscribeCorrelationIds.length === 1);
-
-    server.emit(snapshot('T-1'));
-    await waitFor(() => received.length === 1);
-
-    expect((received[0] as { key: string }).key).toBe('T-1');
-  });
-
-  it('transmits the subscription filter on the wire (server-side filtering contract)', async () => {
-    // The server applies the filter before fanout, but only if the client actually ships it. Pin
-    // that the non-empty filter the caller passed reaches the server's `sub` args verbatim — without
-    // this, the client could send `filter: {}` (or drop the field) and every other sub test would
-    // still pass because the scripted server broadcasts to everyone regardless.
-    client.subscribe(() => {}, { entity: 'ticket', agent_id: 'a1' });
-    await waitFor(() => server.subscribeFilters.length === 1);
-    expect(server.subscribeFilters[0]).toEqual({ entity: 'ticket', agent_id: 'a1' });
-  });
-
-  it('defaults to an empty filter when none is given', async () => {
-    client.subscribe(() => {});
-    await waitFor(() => server.subscribeFilters.length === 1);
-    expect(server.subscribeFilters[0]).toEqual({});
-  });
-
-  it('transmits tail_only when subscribe options request tail-only delivery', async () => {
-    client.subscribe(() => {}, { type: 'error' }, { tailOnly: true });
-    await waitFor(() => server.subscribeArgs.length === 1);
-    expect(server.subscribeArgs[0]?.tail_only).toBe(true);
-    expect(server.subscribeArgs[0]?.filter).toEqual({ type: 'error' });
-  });
-
-  it('omits tail_only by default (full replay cursor)', async () => {
-    client.subscribe(() => {}, { entity: 'ticket' });
-    await waitFor(() => server.subscribeArgs.length === 1);
-    expect(server.subscribeArgs[0]?.tail_only).toBeUndefined();
-  });
-
-  it('skips interleaved wake frames (does not deliver them as events)', async () => {
-    const received: BusEvent[] = [];
-    client.subscribe((event) => received.push(event));
-    await waitFor(() => server.subscribeCorrelationIds.length === 1);
-
-    server.emitWake();
-    server.emit(snapshot('T-1'));
-    await waitFor(() => received.length === 1);
-
-    // Only the snapshot, never the wake.
-    expect(received).toHaveLength(1);
-    expect((received[0] as { type: string }).type).toBe('state.snapshot');
-  });
-
-  it('delivers a pub frame pipelined into the handshake-ack chunk (no drop)', async () => {
-    // Regression: the server writes the Hello-ack AND a pub event in a SINGLE write(), so they
-    // land in one chunk during the client's handshake read. The handshake must complete AND the
-    // pipelined event must reach the subscriber (it must not be dropped with the handshake buffer).
-    server.pipelineEventWithAck = snapshot('T-pipelined');
-    const received: BusEvent[] = [];
-    // Subscribe before connecting (as the other sub tests do) so the listener exists when the
-    // pipelined frame is dispatched right after the handshake.
-    client.subscribe((event) => received.push(event));
-
-    await client.connect();
-    expect(server.handshakeCount).toBe(1);
-
-    await waitFor(() => received.length === 1);
-    expect((received[0] as { key: string }).key).toBe('T-pipelined');
-  });
-
-  it('stops delivering after unsubscribe', async () => {
-    const received: BusEvent[] = [];
-    const unsubscribe = client.subscribe((event) => received.push(event));
-    await waitFor(() => server.subscribeCorrelationIds.length === 1);
-
-    unsubscribe();
-    server.emit(snapshot('T-1'));
-    // Give the frame time to (not) arrive.
-    await new Promise((resolve) => setTimeout(resolve, 30));
-    expect(received).toHaveLength(0);
-  });
-});
-
-describe('UdsBusClient — hydrate', () => {
-  let server: ScriptedBusServer;
-  let client: UdsBusClient;
-
-  beforeEach(async () => {
-    server = new ScriptedBusServer();
-    await server.start();
-    client = new UdsBusClient({
-      socketPath: server.socketPath,
-      clock: instantClock(),
-      backoff: FAST_BACKOFF,
-    });
-  });
-  afterEach(async () => {
-    client.close();
-    await server.stop();
-  });
-
-  it('sends one cold hydrate before later attach RPCs', async () => {
-    await client.hydrate('all');
-    await client.rpc('test.echo', {});
-
-    expect(server.hydrateCorrelationIds).toHaveLength(1);
-  });
-
-  it('passes through live state.* hydrate snapshots wrapped in { ok, value } read envelopes', async () => {
-    server.hydrateHandler = () => ({
+  it('hydrates from subscription.ready and sends projection + notification subscriptions', async () => {
+    server.snapshot = {
+      snapshots: { roster: { invalidation_key: 'iv', sessions: [] } },
       cursor: 9,
-      snapshots: {
-        conversations: {
-          ok: true,
-          value: { conversations: [], as_of: '2026-06-09T00:00:00', invalidation_key: 'iv' },
-        },
-        crow: { ok: true, value: { invalidation_key: 'iv', sessions: [] } },
-      },
+      mode: 'cold',
+      replay: [],
+    };
+
+    const hydration = await client.hydrate(['roster', 'schedule']);
+    expect(hydration).toMatchObject({
+      snapshots: { roster: { invalidation_key: 'iv', sessions: [] } },
+      cursor: 9,
+      mode: 'cold',
     });
-
-    const reply = await client.hydrate('all');
-
-    expect(reply.snapshots['conversations']).toEqual({
-      ok: true,
-      value: { conversations: [], as_of: '2026-06-09T00:00:00', invalidation_key: 'iv' },
+    expect(server.latestSubscription('projections')?.subscription).toEqual({
+      kind: 'projections',
+      topics: ['roster', 'schedule'],
+    });
+    expect(server.latestSubscription('notifications')?.subscription).toEqual({
+      kind: 'notifications',
+      channels: ['errors'],
     });
   });
 
-  it('delivers replay to the hydrate listener before tail buffered during the pending ack', async () => {
-    server.hydrateHandler = () => ({
-      cursor: 11,
-      replay: [{ seq: 10, event: snapshot('T-replay') }],
-    });
-    server.emitBeforeHydrateAck = { event: snapshot('T-tail'), seq: 11 };
-
+  it('preserves compatibility DTO events in subscription replay and tail delivery', async () => {
+    server.snapshot = {
+      snapshots: {},
+      cursor: 10,
+      mode: 'resume',
+      replay: [
+        {
+          cursor: 9,
+          payload: snapshot('T-replay') as unknown as Record<string, unknown>,
+        },
+      ],
+    };
     const received: BusEvent[] = [];
-    await client.hydrate('all', (event) => received.push(event));
+    await client.hydrate('schedule', (event) => received.push(event));
+    server.emitProjection(snapshot('T-tail'), 11);
+    await waitFor(() => received.length === 2);
 
-    expect(received.map((event) => (event as { key: string }).key)).toEqual([
-      'T-replay',
-      'T-tail',
+    expect(received.map((event) => (event as { key: string }).key)).toEqual(['T-replay', 'T-tail']);
+  });
+
+  it('delivers compatibility notification events through the standing hydration listener', async () => {
+    const received: BusEvent[] = [];
+    await client.hydrate('roster', (event) => received.push(event));
+    server.emitNotification(errorEvent('service warning'));
+    await waitFor(() => received.length === 1);
+    expect(received[0]).toMatchObject({ type: 'error', message: 'service warning' });
+  });
+
+  it('sends unsubscribe for both generated subscriptions', async () => {
+    const hydration = await client.hydrate('roster');
+    const projectionId = server.latestSubscription('projections')?.subscription_id;
+    const notificationId = server.latestSubscription('notifications')?.subscription_id;
+    hydration.unsubscribe();
+    await waitFor(
+      () => server.messages.filter((message) => message.op === 'unsubscribe').length === 2,
+    );
+
+    const ids = server.messages
+      .filter(
+        (message): message is Extract<ClientMessage, { op: 'unsubscribe' }> =>
+          message.op === 'unsubscribe',
+      )
+      .map((message) => message.subscription_id);
+    expect(ids).toEqual([projectionId, notificationId]);
+  });
+
+  it('re-sends subscribe with the last cursor after reconnect', async () => {
+    await client.hydrate('roster');
+    server.emitProjection(snapshot('T-2'), 12);
+    server.dropAllConnections();
+    await waitFor(() => server.handshakeCount === 2);
+    await waitFor(
+      () =>
+        server.messages.filter(
+          (message) => message.op === 'subscribe' && message.subscription.kind === 'projections',
+        ).length === 2,
+    );
+
+    expect(server.latestSubscription('projections')?.subscription).toMatchObject({ cursor: 12 });
+  });
+});
+
+describe('UdsBusClient — generated terminal stream', () => {
+  it('sends terminal.attach/detach and delivers terminal.frame', async () => {
+    const server = new ScriptedApplicationServer();
+    await server.start();
+    const client = new UdsBusClient({ socketPath: server.socketPath, clock: instantClock() });
+    const frames: string[] = [];
+
+    const detach = client.attachTerminal('agent-1', (frame) => frames.push(frame.frame));
+    await waitFor(() => server.messages.some((message) => message.op === 'terminal.attach'));
+    expect(server.messages.find((message) => message.op === 'terminal.attach')).toMatchObject({
+      op: 'terminal.attach',
+      target: { session_id: 'agent-1' },
+    });
+
+    server.emitTerminal('terminal contents');
+    await waitFor(() => frames.length === 1);
+    expect(frames).toEqual(['terminal contents']);
+
+    detach();
+    await waitFor(() => server.messages.some((message) => message.op === 'terminal.detach'));
+    client.close();
+    await server.stop();
+  });
+});
+
+describe('UdsBusClient — framing and lifecycle', () => {
+  it('reassembles partial JSON-lines and splits multiple frames', () => {
+    const buffer = new LineBuffer();
+    expect(buffer.push('{"op":"server.')).toEqual([]);
+    expect(buffer.push('hello"}\n{"op":"reply"}\n')).toEqual([
+      '{"op":"server.hello"}',
+      '{"op":"reply"}',
     ]);
   });
 
-  it('delivers resume-replay events to the standing hydrate listener on reconnect', async () => {
-    server.hydrateHandler = (_args, callIndex) =>
-      callIndex === 0
-        ? { snapshots: {}, cursor: 10 }
-        : {
-            snapshots: {},
-            cursor: 12,
-            replay: [{ seq: 11, event: snapshot('T-replay') }],
-          };
-
-    const received: BusEvent[] = [];
-    await client.hydrate('all', (event) => received.push(event));
-    expect(received).toHaveLength(0);
-
-    server.dropAllConnections();
-    await waitFor(() => server.hydrateCorrelationIds.length === 2);
-    await waitFor(() => received.length === 1);
-    expect((received[0] as { key: string }).key).toBe('T-replay');
-  });
-
-  it('logs a warning when a malformed JSON line arrives on the wire', async () => {
+  it('logs malformed JSON and rejects outstanding requests when the connection drops', async () => {
+    const server = new ScriptedApplicationServer();
+    await server.start();
+    server.requestHandler = () => undefined;
     const warnings: string[] = [];
-    client = new UdsBusClient({
-      socketPath: server.socketPath,
-      clock: instantClock(),
-      backoff: FAST_BACKOFF,
-      logger: { warn: (msg) => warnings.push(msg), info: () => {} },
-    });
-    await client.connect();
-    server.writeRaw('not-json\n');
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    expect(warnings.some((msg) => msg.includes('malformed JSON'))).toBe(true);
-  });
-});
-
-describe('UdsBusClient — reconnect', () => {
-  let server: ScriptedBusServer;
-  let client: UdsBusClient;
-
-  beforeEach(async () => {
-    server = new ScriptedBusServer();
-    await server.start();
-    client = new UdsBusClient({
-      socketPath: server.socketPath,
-      clock: instantClock(),
-      backoff: FAST_BACKOFF,
-    });
-  });
-  afterEach(async () => {
-    client.close();
-    await server.stop();
-  });
-
-  it('reconnects and re-handshakes after a dropped connection', async () => {
-    await client.connect();
-    expect(server.handshakeCount).toBe(1);
-
-    server.dropAllConnections();
-    await waitFor(() => server.handshakeCount === 2);
-    expect(server.handshakeCount).toBe(2);
-  });
-
-  it('re-establishes the subscription on reconnect (store never re-subscribes)', async () => {
-    const received: BusEvent[] = [];
-    client.subscribe((event) => received.push(event));
-    await waitFor(() => server.subscribeCorrelationIds.length === 1);
-    const firstCorrelation = server.subscribeCorrelationIds[0];
-
-    server.dropAllConnections();
-    // After reconnect the client re-sends the sub frame with a fresh correlation id.
-    await waitFor(() => server.subscribeCorrelationIds.length === 2);
-    expect(server.subscribeCorrelationIds[1]).not.toBe(firstCorrelation);
-
-    // And events on the new connection are delivered to the original listener.
-    server.emit(snapshot('T-after-reconnect'));
-    await waitFor(() => received.length === 1);
-    expect((received[0] as { key: string }).key).toBe('T-after-reconnect');
-  });
-
-  it('fires onConnect on first connect and again on every reconnect (re-prime hook)', async () => {
-    let connects = 0;
-    client.onConnect(() => {
-      connects += 1;
-    });
-    await client.connect();
-    await waitFor(() => connects === 1);
-    expect(connects).toBe(1);
-
-    server.dropAllConnections();
-    await waitFor(() => connects === 2);
-    expect(connects).toBe(2);
-  });
-
-  it('fires onConnect immediately when registered after the handshake (no first-connect race)', async () => {
-    await client.connect();
-    let connects = 0;
-    client.onConnect(() => {
-      connects += 1;
-    });
-    expect(connects).toBe(1);
-  });
-
-  it('stops firing onConnect after its disposer runs', async () => {
-    let connects = 0;
-    const unhook = client.onConnect(() => {
-      connects += 1;
-    });
-    await client.connect();
-    await waitFor(() => connects === 1);
-
-    unhook();
-    server.dropAllConnections();
-    await waitFor(() => server.handshakeCount === 2);
-    expect(connects).toBe(1);
-  });
-
-  it('fires onDisconnect once when an established connection drops', async () => {
-    let disconnects = 0;
-    client.onDisconnect(() => {
-      disconnects += 1;
-    });
-    await client.connect();
-    expect(disconnects).toBe(0); // not fired on connect, only on drop
-
-    server.dropAllConnections();
-    // After the drop the loop re-handshakes; the disconnect fires exactly once for that drop.
-    await waitFor(() => server.handshakeCount === 2);
-    expect(disconnects).toBe(1);
-  });
-
-  it('stops firing onDisconnect after its disposer runs', async () => {
-    let disconnects = 0;
-    const unhook = client.onDisconnect(() => {
-      disconnects += 1;
-    });
-    await client.connect();
-    unhook();
-
-    server.dropAllConnections();
-    await waitFor(() => server.handshakeCount === 2);
-    expect(disconnects).toBe(0);
-  });
-
-  it('fires onPermanentError on a version mismatch during reconnect (previously-silent path)', async () => {
-    const errors: Error[] = [];
-    client.onPermanentError((error) => errors.push(error));
-    await client.connect();
-    expect(server.handshakeCount).toBe(1);
-
-    // The service now disagrees on version, then the connection drops. The reconnect handshake is
-    // refused; this used to set state='closed' and return silently — now it surfaces.
-    server.rejectVersion = true;
-    server.dropAllConnections();
-    await waitFor(() => errors.length === 1);
-    expect(errors[0]).toBeInstanceOf(ProtocolVersionMismatchError);
-    // It gave up permanently — no further handshake attempts.
-    expect(server.handshakeCount).toBe(1);
-  });
-
-  it('stops firing onPermanentError after its disposer runs', async () => {
-    const errors: Error[] = [];
-    const unhook = client.onPermanentError((error) => errors.push(error));
-    await client.connect();
-    unhook();
-
-    server.rejectVersion = true;
-    server.dropAllConnections();
-    // Give the refused reconnect time to settle; the disposed listener must not fire.
-    await new Promise((resolve) => setTimeout(resolve, 30));
-    expect(errors).toHaveLength(0);
-  });
-
-  it('rejects an outstanding rpc when the connection drops', async () => {
-    await client.connect();
-    server.rpcHandler = () => undefined; // never answers
-    const pending = client.rpc('test.echo', { agent_id: 'a1', message: 'hi' });
-    // Attach the rejection assertion before dropping so the rejection is observed.
-    const assertion = expect(pending).rejects.toBeInstanceOf(ConnectionLostError);
-    await waitFor(() => server.handshakeCount === 1);
-    server.dropAllConnections();
-    await assertion;
-  });
-});
-
-describe('UdsBusClient — close', () => {
-  it('stops reconnection and rejects rpc after close', async () => {
-    const server = new ScriptedBusServer();
-    await server.start();
-    const client = new UdsBusClient({ socketPath: server.socketPath, clock: instantClock() });
-    await client.connect();
-    client.close();
-
-    await expect(client.rpc('test.echo', { agent_id: 'a1', message: 'hi' })).rejects.toBeInstanceOf(
-      ConnectionLostError,
-    );
-    await server.stop();
-  });
-
-  it('clears disconnect/permanent-error listeners on close (they never fire afterward)', async () => {
-    const server = new ScriptedBusServer();
-    await server.start();
     const client = new UdsBusClient({
       socketPath: server.socketPath,
       clock: instantClock(),
       backoff: FAST_BACKOFF,
-    });
-    let disconnects = 0;
-    let errors = 0;
-    client.onDisconnect(() => {
-      disconnects += 1;
-    });
-    client.onPermanentError(() => {
-      errors += 1;
+      logger: { warn: (message) => warnings.push(message), info: () => {} },
     });
     await client.connect();
-    client.close();
+    server.writeRaw('not-json\n');
+    await waitFor(() => warnings.some((message) => message.includes('invalid application JSON')));
 
-    // After close the loop is stopped; dropping the (already-gone) connection must not fire anything.
+    const pending = client.query('roster.get', {});
+    const rejected = expect(pending).rejects.toBeInstanceOf(ConnectionLostError);
+    await waitFor(() => server.messages.some((message) => message.op === 'request'));
     server.dropAllConnections();
-    await new Promise((resolve) => setTimeout(resolve, 30));
-    expect(disconnects).toBe(0);
-    expect(errors).toBe(0);
+    await rejected;
+
+    client.close();
+    await server.stop();
+  });
+
+  it('rejects generated requests after close', async () => {
+    const server = new ScriptedApplicationServer();
+    await server.start();
+    const client = new UdsBusClient({ socketPath: server.socketPath, clock: instantClock() });
+    await client.connect();
+    client.close();
+    await expect(client.query('roster.get', {})).rejects.toBeInstanceOf(ConnectionLostError);
     await server.stop();
   });
 });

@@ -47,22 +47,24 @@ async function tick(): Promise<void> {
 }
 
 function submitKinds(bus: FakeBusClient): string[] {
-  return bus.rpcCalls
-    .filter((c) => c.method === 'command.submit')
+  return bus.commandCalls
+    .filter((c) => c.name === 'orchestration.execute')
     .map((c) => String((c.params as { kind: string }).kind));
 }
 
 function spawnSubmitPayload(bus: FakeBusClient): Record<string, unknown> {
-  const call = bus.rpcCalls.find(
+  const call = bus.commandCalls.find(
     (c) =>
-      c.method === 'command.submit' && (c.params as { kind: string }).kind === 'crow.spawn_rogue',
+      c.name === 'orchestration.execute' &&
+      (c.params as { kind: string }).kind === 'crow.spawn_rogue',
   );
   return (call?.params as { payload: Record<string, unknown> }).payload;
 }
 
 function kickoffSubmitPayload(bus: FakeBusClient): Record<string, unknown> | undefined {
-  const call = bus.rpcCalls.find(
-    (c) => c.method === 'command.submit' && (c.params as { kind: string }).kind === 'agent.message',
+  const call = bus.commandCalls.find(
+    (c) =>
+      c.name === 'orchestration.execute' && (c.params as { kind: string }).kind === 'agent.message',
   );
   return call ? (call.params as { payload: Record<string, unknown> }).payload : undefined;
 }
@@ -94,13 +96,13 @@ function Harness({
 function setup(spawnContext: SpawnContext | null = null) {
   const stores = createInputStores(['notes'], 'notes');
   const bus = new FakeBusClient();
-  bus.stubRpc('command.submit', { ok: true, command_id: 'cmd-1' });
-  bus.stubRpc('command.status', {
+  bus.stubCommand('orchestration.execute', { ok: true, command_id: 'cmd-1' });
+  bus.stubQuery('command.get', {
     ok: true,
     status: 'done',
     result_json: JSON.stringify({ handled: true, agent_id: 'rogue-001' }),
   });
-  // No state.harness_models_snapshot stub → fetch rejects → static fallback.
+  // No harness_models.list stub → fetch rejects → static fallback.
   const actions = createSpawnActions(bus);
   const modelActions = createHarnessModelsActions(bus);
   const worktreeActions = createWorktreeOptionsActions(bus);
@@ -236,12 +238,12 @@ describe('SpawnWizardModal — dependent-field flow', () => {
   });
 
   it('a rejected spawn pushes an error toast with the rejection message', async () => {
-    // `crow.spawn_rogue` routes through `command.submit`; reject at the submit choke point so
+    // `crow.spawn_rogue` routes through `orchestration.execute`; reject at the submit choke point so
     // `spawnRogue` rejects. Exit-then-act: the wizard is gone before this lands; the toast must
     // still fire on the global singleton with the structured UdsBusClient text.
     const stores = createInputStores(['notes'], 'notes');
     const bus = new FakeBusClient();
-    bus.stubRpc('command.submit', () => {
+    bus.stubCommand('orchestration.execute', () => {
       throw new Error('rpc error [internal]: spawn failed');
     });
     stores.modes.getState().enter(
@@ -565,8 +567,8 @@ describe('H4 — spawn payload contract (real spawn action)', () => {
 
   function liveStubBus(): FakeBusClient {
     const bus = new FakeBusClient();
-    bus.stubRpc('command.submit', { ok: true, command_id: 'cmd-1' });
-    bus.stubRpc('command.status', {
+    bus.stubCommand('orchestration.execute', { ok: true, command_id: 'cmd-1' });
+    bus.stubQuery('command.get', {
       ok: true,
       status: 'done',
       result_json: JSON.stringify({ handled: true, agent_id: 'rogue-001' }),
@@ -604,8 +606,8 @@ describe('H4 — spawn payload contract (real spawn action)', () => {
 
   it('auto-opens the spawned rogue transcript pane + pins it active when a store is supplied (item 9e)', async () => {
     const bus = liveStubBus();
-    bus.stubRpc('state.crow_snapshot', { invalidation_key: 'iv', sessions: [] });
-    bus.stubRpc('state.conversations_snapshot', {
+    bus.stubQuery('roster.get', { invalidation_key: 'iv', sessions: [] });
+    bus.stubQuery('conversations.get', {
       conversations: [],
       as_of: '',
       invalidation_key: 'iv',
@@ -713,14 +715,14 @@ describe('SpawnWizardModal — spawn favorites (the two new behavioral contracts
   function setupWithFavorite() {
     const stores = createInputStores(['notes'], 'notes');
     const bus = new FakeBusClient();
-    bus.stubRpc('command.submit', { ok: true, command_id: 'cmd-1' });
-    bus.stubRpc('command.status', {
+    bus.stubCommand('orchestration.execute', { ok: true, command_id: 'cmd-1' });
+    bus.stubQuery('command.get', {
       ok: true,
       status: 'done',
       result_json: JSON.stringify({ handled: true, agent_id: 'rogue-001' }),
     });
-    bus.stubRpc('tui.load_spawn_favorites', { ok: true, favorites: [ONE_FAVORITE] });
-    bus.stubRpc('tui.save_spawn_favorites', (p) => ({ ok: true, favorites: p.favorites }));
+    bus.stubQuery('spawn_favorites.get', { ok: true, favorites: [ONE_FAVORITE] });
+    bus.stubCommand('spawn_favorites.set', (p) => ({ ok: true, favorites: p.favorites }));
     const actions = createSpawnActions(bus);
     const enter = () =>
       stores.modes.getState().enter(
@@ -859,7 +861,7 @@ describe('SpawnWizardModal — spawn favorites (the two new behavioral contracts
 
     // Both halves of the contract: it spawned AND it persisted the favorite.
     expect(submitKinds(bus)).toContain('crow.spawn_rogue');
-    const saveCall = bus.rpcCalls.find((c) => c.method === 'tui.save_spawn_favorites');
+    const saveCall = bus.commandCalls.find((c) => c.name === 'spawn_favorites.set');
     expect(saveCall).toBeDefined();
     const savedNames = (saveCall?.params as { favorites: { name: string }[] }).favorites.map(
       (f) => f.name,
@@ -883,7 +885,7 @@ describe('alt+s dispatcher test', () => {
     const stores = createInputStores(['notes'], 'notes');
     const spawnFn = vi.fn();
     const bus = new FakeBusClient();
-    bus.stubRpc('command.submit', { ok: true, command_id: 'cmd-1' });
+    bus.stubCommand('orchestration.execute', { ok: true, command_id: 'cmd-1' });
     const actions = createSpawnActions(bus);
     stores.modes.getState().enter(spawnWizardMode(stores.modes, actions, { spawnContext: null }));
     const { stdin } = render(<Harness stores={stores} spawn={spawnFn} />);

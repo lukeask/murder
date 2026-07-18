@@ -20,9 +20,9 @@ import type { TransitCommit, TransitLane, TransitState } from './transitSlice.js
  * `ServiceReadModel.get_transit_snapshot`, registered in `host.py`).
  */
 declare module '../../bus/BusClient.js' {
-  interface RpcMethods {
+  interface QueryMethods {
     /** Fetch the full commit-graph. Re-pulled on each `transit`-entity `state.snapshot`. */
-    'state.transit_snapshot': { params: Record<string, never>; result: TransitSnapshotReply };
+    'transit.get': { params: Record<string, never>; result: TransitSnapshotReply };
   }
 }
 
@@ -106,7 +106,7 @@ export function createTransitActions(bus: BusClient, store: StoreApi<AppStore>):
           });
           const token = seq;
           try {
-            const reply = await bus.rpc('state.transit_snapshot', {});
+            const reply = await bus.query('transit.get', {});
             if (token !== seq) {
               continue;
             }

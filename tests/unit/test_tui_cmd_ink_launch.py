@@ -139,6 +139,7 @@ def test_spawn_sets_bus_socket_env(monkeypatch):
 
     assert rc == 0
     assert captured["argv"] == ["node", "/x/index.js"]
+    assert captured["env"]["MURDER_SERVICE_SOCKET"] == str(socket_path)
     assert captured["env"]["MURDER_BUS_SOCKET"] == str(socket_path)
     # The repo name rides along via MURDER_PROJECT for the top-bar branding.
     assert captured["env"]["MURDER_PROJECT"] == "murder"

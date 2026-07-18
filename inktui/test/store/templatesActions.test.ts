@@ -3,8 +3,8 @@
  * path).
  *
  * Drives the templates slice through a `FakeBusClient`:
- *  - `load()` fires `tui.load_templates` and fills the slice from the reply.
- *  - `save(name, body)` upserts locally (optimistic) AND fires `tui.save_templates`, then SYNCS the
+ *  - `load()` fires `templates.get` and fills the slice from the reply.
+ *  - `save(name, body)` upserts locally (optimistic) AND fires `templates.set`, then SYNCS the
  *     slice to the server's normalized echo.
  *  - `remove(name)` / `rename(old, new)` mutate locally + persist.
  *  - a save rejection lands in `error` + toast without rolling back the optimistic local list.
@@ -27,9 +27,9 @@ function setup() {
   const fake = new FakeBusClient();
   // Default stubs so an unrelated load/save resolves; tests override as needed. The save stub
   // echoes back the submitted templates (the backend normalizes; tests that care override this).
-  fake.stubRpc('tui.load_templates', { ok: true, templates: [] });
-  fake.stubRpc('tui.save_templates', (params) => ({ ok: true, templates: params.templates }));
-  fake.stubRpc('state.crow_snapshot', { invalidation_key: 'iv', sessions: [] });
+  fake.stubQuery('templates.get', { ok: true, templates: [] });
+  fake.stubCommand('templates.set', (params) => ({ ok: true, templates: params.templates }));
+  fake.stubQuery('roster.get', { invalidation_key: 'iv', sessions: [] });
   const { store, dispose } = createAppStore(fake);
   return { fake, store, dispose };
 }
@@ -40,9 +40,9 @@ describe('templates actions', () => {
     toastStore.getState().clear();
   });
 
-  it('load() fires tui.load_templates and fills the registry', async () => {
+  it('load() fires templates.get and fills the registry', async () => {
     const { fake, store, dispose } = setup();
-    fake.stubRpc('tui.load_templates', {
+    fake.stubQuery('templates.get', {
       ok: true,
       templates: [
         { name: 'greet', body: 'hello' },
@@ -52,7 +52,7 @@ describe('templates actions', () => {
 
     await store.getState().actions.templates.load();
 
-    expect(fake.rpcCalls.some((c) => c.method === 'tui.load_templates')).toBe(true);
+    expect(fake.queryCalls.some((c) => c.name === 'templates.get')).toBe(true);
     const { templates } = store.getState();
     expect(templates.status).toBe('ready');
     expect(templates.items).toEqual([
@@ -66,7 +66,7 @@ describe('templates actions', () => {
     const { fake, store, dispose } = setup();
     // Server normalizes: sort by name. The save stub returns a sorted list to prove the slice syncs
     // to the RETURNED list, not the optimistic one.
-    fake.stubRpc('tui.save_templates', (params) => ({
+    fake.stubCommand('templates.set', (params) => ({
       ok: true,
       templates: [...params.templates].sort((a, b) => a.name.localeCompare(b.name)),
     }));
@@ -74,7 +74,7 @@ describe('templates actions', () => {
     await store.getState().actions.templates.save('zed', 'Z');
     await store.getState().actions.templates.save('alpha', 'A');
 
-    const saveCalls = fake.rpcCalls.filter((c) => c.method === 'tui.save_templates');
+    const saveCalls = fake.commandCalls.filter((c) => c.name === 'templates.set');
     expect(saveCalls.length).toBe(2);
     // Slice reflects the normalized (sorted) echo, not insertion order.
     expect(store.getState().templates.items).toEqual([
@@ -100,7 +100,7 @@ describe('templates actions', () => {
     await store.getState().actions.templates.remove('a');
 
     expect(store.getState().templates.items).toEqual([{ name: 'b', body: '2' }]);
-    const lastSave = fake.rpcCalls.filter((c) => c.method === 'tui.save_templates').at(-1);
+    const lastSave = fake.commandCalls.filter((c) => c.name === 'templates.set').at(-1);
     expect(lastSave?.params).toEqual({ templates: [{ name: 'b', body: '2' }] });
     dispose();
   });
@@ -118,13 +118,13 @@ describe('templates actions', () => {
   it('rename() is a no-op (no RPC) when the old name is absent', async () => {
     const { fake, store, dispose } = setup();
     await store.getState().actions.templates.rename('missing', 'whatever');
-    expect(fake.rpcCalls.filter((c) => c.method === 'tui.save_templates').length).toBe(0);
+    expect(fake.commandCalls.filter((c) => c.name === 'templates.set').length).toBe(0);
     dispose();
   });
 
   it('a save rejection sets error, keeps the optimistic list, AND surfaces a toast', async () => {
     const { fake, store, dispose } = setup();
-    fake.stubRpc('tui.save_templates', () => {
+    fake.stubCommand('templates.set', () => {
       throw new Error('rpc error [internal]: bus down');
     });
 
@@ -148,7 +148,7 @@ describe('templates actions', () => {
 
   it('a load rejection sets status=error and leaves the registry empty', async () => {
     const { fake, store, dispose } = setup();
-    fake.stubRpc('tui.load_templates', () => {
+    fake.stubQuery('templates.get', () => {
       throw new Error('no templates');
     });
 

@@ -11,8 +11,8 @@ import { connectionStore } from './store/connection/connectionStore.js';
 import { startKeyUsagePersistence } from './store/keyUsage/keyUsagePersistence.js';
 import { createAppStore } from './store/store.js';
 import { capsStore } from './terminal/capsStore.js';
-import { createKittyDriver, type KeyProtocolDriver } from './terminal/kittyDriver.js';
 import { forceInkFullRepaint } from './terminal/forceInkRepaint.js';
+import { createKittyDriver, type KeyProtocolDriver } from './terminal/kittyDriver.js';
 import { StdinShim } from './terminal/StdinShim.js';
 
 export { forceInkFullRepaint } from './terminal/forceInkRepaint.js';
@@ -24,8 +24,8 @@ export { forceInkFullRepaint } from './terminal/forceInkRepaint.js';
  *
  * ## Two modes
  *
- *  - **Live (default, `node dist/index.js`).** Wires a {@link UdsBusClient} onto the bus socket given
- *    by `MURDER_BUS_SOCKET` (Open decision #2 — the Python launcher resolves the per-project socket
+ *  - **Live (default, `node dist/index.js`).** Wires a {@link UdsBusClient} onto the service socket
+ *    given by `MURDER_SERVICE_SOCKET` (the Python launcher resolves the per-project socket
  *    path and hands it over via the env var; the TS side NEVER reimplements that hash, it only
  *    connects to the path it is given). The app stays mounted: Ink keeps the process alive on stdin
  *    raw mode, slice-invalidation events from the service repaint the panels live, and the run ends
@@ -50,17 +50,18 @@ export { forceInkFullRepaint } from './terminal/forceInkRepaint.js';
 const STARTUP_PANELS: readonly PanelId[] = [];
 
 /**
- * Read the bus socket path from `MURDER_BUS_SOCKET`. The Python launcher resolves the per-project
+ * Read the service socket path from `MURDER_SERVICE_SOCKET`. The Python launcher resolves the per-project
  * absolute path (Open decision #2) and passes it here; this side does not derive or rehash it. A
  * missing/empty var is a hard, clear failure — without it there is no service to connect to.
  */
 export function resolveSocketPath(env: NodeJS.ProcessEnv = process.env): string {
-  const socketPath = env['MURDER_BUS_SOCKET'];
+  // MURDER_BUS_SOCKET remains a one-release launcher compatibility fallback.
+  const socketPath = env['MURDER_SERVICE_SOCKET'] ?? env['MURDER_BUS_SOCKET'];
   if (socketPath === undefined || socketPath.trim().length === 0) {
     throw new Error(
-      'MURDER_BUS_SOCKET is not set. The murder launcher must pass the absolute bus socket path ' +
+      'MURDER_SERVICE_SOCKET is not set. The murder launcher must pass the absolute service socket path ' +
         'via this env var (the Ink runner does not derive the per-project socket path itself). ' +
-        'Run the TUI via `murder`, or set MURDER_BUS_SOCKET to the bus socket path.',
+        'Run the TUI via `murder`, or set MURDER_SERVICE_SOCKET to the service socket path.',
     );
   }
   return socketPath;
@@ -382,7 +383,7 @@ export async function runSmoke(): Promise<void> {
 /** A {@link FakeBusClient} seeded with one crow + idle usage so the smoke frame paints both regions. */
 function makeSmokeBus(): FakeBusClient {
   const fake = new FakeBusClient();
-  fake.stubRpc('state.crow_snapshot', {
+  fake.stubQuery('roster.get', {
     invalidation_key: 'smoke',
     sessions: [
       {
@@ -395,7 +396,7 @@ function makeSmokeBus(): FakeBusClient {
       },
     ],
   });
-  fake.stubRpc('state.schedule_snapshot', {
+  fake.stubQuery('schedule.get', {
     invalidation_key: 'smoke',
     active_tickets: [],
     recent_done_tickets: [],

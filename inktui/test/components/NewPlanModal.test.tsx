@@ -81,7 +81,12 @@ function setup() {
   const bus = new FakeBusClient();
   const actions = createDialogActions(bus);
 
-  bus.stubRpc('plan.create', { handled: true, ok: true, plan_name: 'auto-named', agent_id: 'a-1' });
+  bus.stubCommand('plan.create', {
+    handled: true,
+    ok: true,
+    plan_name: 'auto-named',
+    agent_id: 'a-1',
+  });
 
   const enter = (onSubmit?: (name: string) => void) =>
     stores.modes
@@ -129,7 +134,7 @@ describe('NewPlanModal — super+p new-plan wizard', () => {
     stores.modes
       .getState()
       .enter(newPlanMode(stores.modes, createDialogActions(bus), { onSubmit }));
-    bus.stubRpc('plan.create', { handled: true, ok: true, plan_name: 'auto-named' });
+    bus.stubCommand('plan.create', { handled: true, ok: true, plan_name: 'auto-named' });
     const { stdin } = render(<Harness stores={stores} />);
     await tick();
 
@@ -141,9 +146,9 @@ describe('NewPlanModal — super+p new-plan wizard', () => {
     await tick();
     await tick();
 
-    expect(bus.rpcCalls.length).toBe(1);
-    expect(bus.rpcCalls[0]).toMatchObject({
-      method: 'plan.create',
+    expect(bus.commandCalls.length).toBe(1);
+    expect(bus.commandCalls[0]).toMatchObject({
+      name: 'plan.create',
       params: { auto_name: true, body: 'plan body text', message: 'plan body text' },
     });
     expect(selectActiveMode(stores.modes)).toBeNull();
@@ -153,7 +158,7 @@ describe('NewPlanModal — super+p new-plan wizard', () => {
   it('custom path: choosing "name it myself" reveals a name field; submit sends plan_name', async () => {
     const { stores, bus } = setup();
     stores.modes.getState().enter(newPlanMode(stores.modes, createDialogActions(bus), {}));
-    bus.stubRpc('plan.create', { handled: true, ok: true, plan_name: 'my-plan' });
+    bus.stubCommand('plan.create', { handled: true, ok: true, plan_name: 'my-plan' });
     const { lastFrame, stdin } = render(<Harness stores={stores} />);
     await tick();
 
@@ -173,9 +178,9 @@ describe('NewPlanModal — super+p new-plan wizard', () => {
     await tick();
     await tick();
 
-    expect(bus.rpcCalls.length).toBe(1);
-    expect(bus.rpcCalls[0]).toMatchObject({
-      method: 'plan.create',
+    expect(bus.commandCalls.length).toBe(1);
+    expect(bus.commandCalls[0]).toMatchObject({
+      name: 'plan.create',
       params: { plan_name: 'my-plan', body: 'body', message: 'body' },
     });
     expect(selectActiveMode(stores.modes)).toBeNull();
@@ -184,7 +189,7 @@ describe('NewPlanModal — super+p new-plan wizard', () => {
   it('empty body submits without manufacturing a stock kickoff message', async () => {
     const { stores, bus } = setup();
     stores.modes.getState().enter(newPlanMode(stores.modes, createDialogActions(bus), {}));
-    bus.stubRpc('plan.create', { handled: true, ok: true, plan_name: 'x' });
+    bus.stubCommand('plan.create', { handled: true, ok: true, plan_name: 'x' });
     const { stdin } = render(<Harness stores={stores} />);
     await tick();
 
@@ -194,15 +199,15 @@ describe('NewPlanModal — super+p new-plan wizard', () => {
     await tick();
     await tick();
 
-    expect(bus.rpcCalls.length).toBe(1);
-    const params = bus.rpcCalls[0]?.params as { message?: string };
+    expect(bus.commandCalls.length).toBe(1);
+    const params = bus.commandCalls[0]?.params as { message?: string };
     expect(params).not.toHaveProperty('message');
   });
 
   it('a rejected plan.create pushes an error toast and keeps the form up', async () => {
     const { stores } = setup();
     const bus = new FakeBusClient();
-    bus.stubRpc('plan.create', () => {
+    bus.stubCommand('plan.create', () => {
       throw new Error('rpc error [internal]: plan create failed');
     });
     stores.modes.getState().enter(newPlanMode(stores.modes, createDialogActions(bus), {}));

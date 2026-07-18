@@ -34,7 +34,7 @@ import type { TicketRow } from './ticketsSlice.js';
  * server name (registered in `murder/app/service/host.py`; mirrors Python `get_schedule_snapshot()`).
  */
 declare module '../../bus/BusClient.js' {
-  interface RpcMethods {
+  interface QueryMethods {
     /**
      * Fetch the full schedule snapshot (live name `state.schedule_snapshot`). Re-pulled on each
      * `ticket`-entity `state.snapshot`. The reply is the live `ScheduleSnapshot` DTO and bundles
@@ -44,7 +44,7 @@ declare module '../../bus/BusClient.js' {
      * {@link ScheduleSnapshotReply} without re-declaring the key (a second augmentation with a
      * different `result` would be a TS 2717 collision).
      */
-    'state.schedule_snapshot': { params: Record<string, never>; result: ScheduleSnapshotReply };
+    'schedule.get': { params: Record<string, never>; result: ScheduleSnapshotReply };
   }
 }
 
@@ -150,7 +150,7 @@ export interface TicketsActions {
 export function createTicketsActions(bus: BusClient, store: StoreApi<AppStore>): TicketsActions {
   return createRefreshAction(bus, store, {
     key: 'tickets',
-    method: 'state.schedule_snapshot',
+    method: 'schedule.get',
     project: projectTickets,
   });
 }

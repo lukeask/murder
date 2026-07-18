@@ -37,14 +37,16 @@ import { toastStore } from '../toast/toastStore.js';
  * pair: a flat starred-id list, round-tripped in both directions.
  */
 declare module '../../bus/BusClient.js' {
-  interface RpcMethods {
+  interface QueryMethods {
     /** Load the persisted favorite-id list. Empty params; reply carries the saved ids. */
-    'tui.load_favorites': {
+    'favorites.get': {
       params: Record<string, never>;
       result: { ok: boolean; favorites: readonly string[] };
     };
+  }
+  interface CommandMethods {
     /** Persist the favorite-id list. Echoes back the saved ids on success. */
-    'tui.save_favorites': {
+    'favorites.set': {
       params: { favorites: readonly string[] };
       result: { ok: boolean; favorites: readonly string[] };
     };
@@ -85,7 +87,7 @@ export function createFavoritesActions(
   /** Persist the given id set via `tui.save_favorites`. Shared by `toggle`/`setStarred`. */
   async function persist(ids: ReadonlySet<string>): Promise<void> {
     try {
-      await bus.rpc('tui.save_favorites', { favorites: [...ids] });
+      await bus.command('favorites.set', { favorites: [...ids] });
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : String(error);
       // `persist` is an optimistic fire-and-forget write (the star already toggled locally; there is
@@ -108,7 +110,7 @@ export function createFavoritesActions(
     async load(): Promise<void> {
       store.setState((state) => ({ favorites: { ...state.favorites, status: 'loading' } }));
       try {
-        const reply = await bus.rpc('tui.load_favorites', {});
+        const reply = await bus.query('favorites.get', {});
         store.setState({
           favorites: { ids: toIdSet(reply.favorites), status: 'ready', error: null },
         });

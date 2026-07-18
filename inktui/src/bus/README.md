@@ -1,22 +1,20 @@
 # src/bus
 
-The transport seam. `BusClient` interface, `FakeBusClient` test double, the real
-`UdsBusClient` (Unix-socket JSON-RPC, C2), and the wire `protocol.ts`. This is the **only** layer
-that knows about sockets/JSON-RPC. Injected into the store; nothing above this layer imports it
-directly. (Rule 4.)
+The Ink TUI's transport seam for Murder's service-owned application protocol.
 
-- `protocol.ts` — types + constants only (no sockets/Ink), ported 1:1 from
-  `murder/bus/protocol.py`. Discriminated unions: `WireMessage` (by `op`), `BusEvent` (by
-  `type`). `PROTOCOL_VERSION` is kept in lockstep with the Python source.
-- `BusClient.ts` — the injected interface: typed `rpc(method, params)` (via the `RpcMethods`
-  registry) + `subscribe(listener, filter?)` returning an `Unsubscribe`. Events are delivered to a
-  **callback** (the Zustand/`useSyncExternalStore` observer shape), not an async iterator.
-- `FakeBusClient.ts` — in-memory double: `emit(event)` pushes to matching subscribers
-  synchronously; `stubRpc(method, reply|handler)` cans replies; `rpcCalls` / `subscriberCount`
-  expose state for assertions. The double the whole store layer is tested against.
-- `UdsBusClient.ts` — the real client (C2). A **single persistent** Unix-socket connection,
-  multiplexed: JSON-lines framing (`LineBuffer` reassembles partial reads), Hello/Ack handshake
-  with `PROTOCOL_VERSION` refusal, exponential-backoff-with-full-jitter reconnect, and one stated
-  error policy (RPC rejects on timeout/err/drop; subscriptions auto-re-establish on reconnect so
-  the store never re-subscribes). All deps (`socketPath`, `clock`, `backoff`, `logger`) are
-  injected (rule 4). Read the module docstring for the framing/connection/error policy in full.
+- `BusClient.ts` exposes only product-level `query(name, params)`,
+  `command(name, params)`, projection `hydrate(topics, listener)`, and independent
+  `attachTerminal(sessionId, listener)` operations. Feature action modules declaration-merge their
+  DTOs into `QueryMethods` and `CommandMethods`; names are constrained by the generated contract.
+- `UdsBusClient.ts` carries generated application messages over one persistent JSON-lines Unix
+  socket. It performs `client.hello` / `server.hello`, correlates requests, resumes projection and
+  error-notification subscriptions by cursor, and reattaches terminal streams after reconnect.
+  Hydration and terminal disposers send real `unsubscribe` and `terminal.detach` messages.
+- `FakeBusClient.ts` mirrors the same seam with `stubQuery`, `stubCommand`, projection emission, and
+  terminal-frame emission for tests.
+- `../generated/applicationProtocol.ts` is generated from the backend Pydantic application
+  contracts. Client code supplies those public query/command names directly; mapping to transitional
+  internal handlers exists only in the backend gateway.
+- `protocol.ts` remains temporarily as compatibility DTO types for projection payloads. It is not
+  the public wire protocol and its legacy `rpc`, `sub`, `hydrate`, or `tmux.frame` envelopes are
+  never sent by these clients.

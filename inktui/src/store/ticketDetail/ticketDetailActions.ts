@@ -39,16 +39,18 @@ import type { TicketDetailState, TicketFrontmatter } from './ticketDetailSlice.j
  * `murder/app/service/handlers/ticket.py`.
  */
 declare module '../../bus/BusClient.js' {
-  interface RpcMethods {
+  interface QueryMethods {
     /**
      * Fetch the detail for one ticket: frontmatter fields + the markdown body.
      * The service's `get_ticket_detail(ticket_id)` returns `TicketDetailSnapshot | null`. Body
      * contains `# Checklist` with `[ ]`/`[x]` lines.
      */
-    'state.ticket_detail': {
+    'ticket.get': {
       params: { ticket_id: string };
       result: TicketDetailReply | null;
     };
+  }
+  interface CommandMethods {
     /**
      * Persist the edited body back to the service. The service writes the ticket markdown and
      * reconciles it into the DB before returning.
@@ -225,7 +227,7 @@ export function createTicketDetailActions(
         },
       }));
       try {
-        const reply = await bus.rpc('state.ticket_detail', { ticket_id: ticketId });
+        const reply = await bus.query('ticket.get', { ticket_id: ticketId });
         store.setState((state) => {
           // Stale-reply guard: a slow `open(A)` must NOT overwrite the slice once the user has
           // opened/closed to a different ticket. Open A (slow) → escape + open B (fast); B resolves,
@@ -308,7 +310,10 @@ export function createTicketDetailActions(
       }
       store.setState((state) => ({ ticketDetail: { ...state.ticketDetail, status: 'saving' } }));
       try {
-        const reply = await bus.rpc('ticket.save_body', { ticket_id: ticketId, body: editedBody });
+        const reply = await bus.command('ticket.save_body', {
+          ticket_id: ticketId,
+          body: editedBody,
+        });
         // SOFT-FAIL guard: the service can resolve (not reject) with `{ok:false, error}` (e.g.
         // ticket not found). Without this check that reply takes the success branch → the user
         // thinks the body saved when it did not (silent data loss). Route it to the SAME error
@@ -344,7 +349,10 @@ export function createTicketDetailActions(
         return;
       }
       try {
-        await bus.rpc('ticket.schedule', { ticket_id: ticketId, duration: scheduleInput.trim() });
+        await bus.command('ticket.schedule', {
+          ticket_id: ticketId,
+          duration: scheduleInput.trim(),
+        });
         store.setState((state) => ({
           ticketDetail: {
             ...state.ticketDetail,

@@ -106,10 +106,10 @@ function Harness({
 
 async function setup() {
   const fake = new FakeBusClient();
-  fake.stubRpc('state.crow_snapshot', ROSTER_REPLY);
-  // F2: chat sends route through command.submit (agent.message command kind), not a direct RPC.
-  fake.stubRpc('command.submit', { ok: true, command_id: 'cmd-1' });
-  fake.stubRpc('command.status', { ok: true, status: 'done', result_json: '{}' });
+  fake.stubQuery('roster.get', ROSTER_REPLY);
+  // F2: chat sends route through orchestration.execute (agent.message command kind), not a direct RPC.
+  fake.stubCommand('orchestration.execute', { ok: true, command_id: 'cmd-1' });
+  fake.stubQuery('command.get', { ok: true, status: 'done', result_json: '{}' });
   const { store, dispose } = createAppStore(fake);
   await store.getState().actions.roster.refresh();
   // Chat is the focus home — no visible panels, focus 'chat'.
@@ -152,9 +152,10 @@ describe('ChatInput — persistent chat-input send (C11)', () => {
     stdin.write(RETURN);
     await tick();
 
-    const sendCalls = fake.rpcCalls.filter(
+    const sendCalls = fake.commandCalls.filter(
       (c) =>
-        c.method === 'command.submit' && (c.params as { kind: string }).kind === 'agent.message',
+        c.name === 'orchestration.execute' &&
+        (c.params as { kind: string }).kind === 'agent.message',
     );
     expect(sendCalls.length).toBe(1);
     expect(sendCalls[0]?.params).toMatchObject({
@@ -317,8 +318,8 @@ function seedQueued(store: ReturnType<typeof createAppStore>['store'], message: 
 }
 
 function submitsOfKind(fake: FakeBusClient, kind: string) {
-  return fake.rpcCalls.filter(
-    (c) => c.method === 'command.submit' && (c.params as { kind: string }).kind === kind,
+  return fake.commandCalls.filter(
+    (c) => c.name === 'orchestration.execute' && (c.params as { kind: string }).kind === kind,
   );
 }
 

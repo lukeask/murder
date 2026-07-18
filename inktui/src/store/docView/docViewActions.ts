@@ -26,14 +26,14 @@ import type { DocKind } from './docViewSlice.js';
  * C1/C2 bus files. All three are LIVE on the bus (registered in `murder/app/service/host.py`).
  */
 declare module '../../bus/BusClient.js' {
-  interface RpcMethods {
+  interface QueryMethods {
     /** Fetch a plan's display snapshot by name. The service reads the file; the view never touches
      * disk (pure RPC consumer). */
-    'state.plan_display': { params: { name: string }; result: DisplaySnapshot };
+    'plan.get': { params: { name: string }; result: DisplaySnapshot };
     /** Fetch a note's display snapshot by name. */
-    'state.note_display': { params: { name: string }; result: DisplaySnapshot };
+    'note.get': { params: { name: string }; result: DisplaySnapshot };
     /** Fetch a report's display snapshot by name. */
-    'state.report_display': { params: { name: string }; result: DisplaySnapshot };
+    'report.get': { params: { name: string }; result: DisplaySnapshot };
   }
 }
 
@@ -51,10 +51,10 @@ export interface DisplaySnapshot {
 
 /** Map a {@link DocKind} to its live per-kind display RPC method name. */
 const DISPLAY_METHOD = {
-  plan: 'state.plan_display',
-  note: 'state.note_display',
-  report: 'state.report_display',
-} as const satisfies Record<DocKind, keyof import('../../bus/BusClient.js').RpcMethods>;
+  plan: 'plan.get',
+  note: 'note.get',
+  report: 'report.get',
+} as const satisfies Record<DocKind, keyof import('../../bus/BusClient.js').QueryMethods>;
 
 /** The doc-view actions, bound to one {@link BusClient} + store handle. */
 export interface DocViewActions {
@@ -80,7 +80,7 @@ export function createDocViewActions(bus: BusClient, store: StoreApi<AppStore>):
         docView: { open: { kind, name }, body: null, status: 'loading', error: null },
       });
       try {
-        const reply = await bus.rpc(DISPLAY_METHOD[kind], { name });
+        const reply = await bus.query(DISPLAY_METHOD[kind], { name });
         store.setState((state) => {
           // Guard against a stale reply: only apply if this doc is still the open one.
           const cur = state.docView.open;

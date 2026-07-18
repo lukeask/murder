@@ -2,7 +2,7 @@
   "name": "webui",
   "version": "0.0.0",
   "private": true,
-  "description": "Web/mobile React frontend for the murder TUI. Ports the framework-agnostic inktui core (store/selectors/theme/protocol) and talks to the service over a WebSocket bridge to the Unix-socket bus.",
+  "description": "Web/mobile React frontend for the murder TUI. Ports the framework-agnostic inktui core and talks to the service through its WebSocket application protocol.",
   "type": "module",
   "engines": {
     "node": ">=20.18.0"

@@ -30,7 +30,7 @@ async function tick(): Promise<void> {
 /** Build the shell against fakes with a given visible-panel set. */
 function setup(visible: readonly PanelId[]) {
   const fake = new FakeBusClient();
-  fake.stubRpc('state.crow_snapshot', { invalidation_key: 'iv', sessions: [] });
+  fake.stubQuery('roster.get', { invalidation_key: 'iv', sessions: [] });
   const { store, dispose } = createAppStore(fake);
   const inputStores = createInputStores(visible);
   const tree = render(<App store={store} inputStores={inputStores} bus={fake} />);
@@ -139,15 +139,15 @@ describe('App shell', () => {
     // App-path test: renders the full App and proves the favorited crow's transcript pane is
     // mounted in the center-stage group via the pane bridge.
     const fake = new FakeBusClient();
-    fake.stubRpc('state.crow_snapshot', {
+    fake.stubQuery('roster.get', {
       invalidation_key: 'iv',
       sessions: [
         { agent_id: 'collab-1', role: 'collaborator', status: 'idle', session_name: 'TestCollab' },
       ],
     });
-    // F2: chat sends route through command.submit (agent.message command kind), not a direct RPC.
-    fake.stubRpc('command.submit', { ok: true, command_id: 'cmd-1' });
-    fake.stubRpc('command.status', { ok: true, status: 'done', result_json: '{}' });
+    // F2: chat sends route through orchestration.execute (agent.message command kind), not a direct RPC.
+    fake.stubCommand('orchestration.execute', { ok: true, command_id: 'cmd-1' });
+    fake.stubQuery('command.get', { ok: true, status: 'done', result_json: '{}' });
     const { store, dispose } = createAppStore(fake);
     await store.getState().actions.roster.refresh();
 
@@ -221,7 +221,7 @@ describe('deriveSpawnContext — doc file context gated by the highlighted cente
   /** Build a minimal FakeBusClient-backed store. */
   function makeStore() {
     const fake = new FakeBusClient();
-    fake.stubRpc('state.crow_snapshot', { invalidation_key: 'iv', sessions: [] });
+    fake.stubQuery('roster.get', { invalidation_key: 'iv', sessions: [] });
     return createAppStore(fake);
   }
 
@@ -296,13 +296,13 @@ describe('alt+w — toggle show/hide for the highlighted center-stage pane', () 
    * transcript pane) so alt+w has a transcript pane to hide. */
   async function setupApp() {
     const fake = new FakeBusClient();
-    fake.stubRpc('state.crow_snapshot', {
+    fake.stubQuery('roster.get', {
       invalidation_key: 'iv',
       sessions: [
         { agent_id: 'collab-1', role: 'collaborator', status: 'idle', session_name: 'TestCollab' },
       ],
     });
-    fake.stubRpc('state.plan_display', { name: 'my-plan', markdown: 'doc body line' });
+    fake.stubQuery('plan.get', { name: 'my-plan', markdown: 'doc body line' });
     const { store, dispose } = createAppStore(fake);
     await store.getState().actions.roster.refresh();
     const inputStores = createInputStores([]);
@@ -372,9 +372,9 @@ describe('theme bridge (Phase 5) — settings.theme → themeStore', () => {
 
   it('loads the persisted theme into the global themeStore on mount', async () => {
     const fake = new FakeBusClient();
-    fake.stubRpc('state.crow_snapshot', { invalidation_key: 'iv', sessions: [] });
+    fake.stubQuery('roster.get', { invalidation_key: 'iv', sessions: [] });
     // settings.get resolves with the light theme → the bridge applies it after load.
-    fake.stubRpc('settings.get', {
+    fake.stubQuery('settings.get', {
       ok: true,
       settings: settingsWire({ theme: 'everforest-light' }),
     });
@@ -389,8 +389,8 @@ describe('theme bridge (Phase 5) — settings.theme → themeStore', () => {
 
   it('reacts to a live settings.theme change (the optimistic update path)', async () => {
     const fake = new FakeBusClient();
-    fake.stubRpc('state.crow_snapshot', { invalidation_key: 'iv', sessions: [] });
-    fake.stubRpc('settings.update', {
+    fake.stubQuery('roster.get', { invalidation_key: 'iv', sessions: [] });
+    fake.stubCommand('settings.update', {
       ok: true,
       settings: settingsWire({ theme: 'everforest-light' }),
     });
@@ -410,8 +410,8 @@ describe('theme bridge (Phase 5) — settings.theme → themeStore', () => {
 
   it('falls back to the default theme for an unknown persisted id', async () => {
     const fake = new FakeBusClient();
-    fake.stubRpc('state.crow_snapshot', { invalidation_key: 'iv', sessions: [] });
-    fake.stubRpc('settings.get', {
+    fake.stubQuery('roster.get', { invalidation_key: 'iv', sessions: [] });
+    fake.stubQuery('settings.get', {
       ok: true,
       settings: settingsWire({ theme: 'solarized-unknown' }),
     });

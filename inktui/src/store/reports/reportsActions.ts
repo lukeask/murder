@@ -24,9 +24,9 @@ import type { ReportRow } from './reportsSlice.js';
  * `host.py`, per the contract's "view → service = RPC methods" rule.
  */
 declare module '../../bus/BusClient.js' {
-  interface RpcMethods {
+  interface QueryMethods {
     /** Fetch the full reports list. Re-pulled on each `report`-entity `state.snapshot`. */
-    'state.reports_snapshot': { params: Record<string, never>; result: ReportsSnapshotReply };
+    'reports.list': { params: Record<string, never>; result: ReportsSnapshotReply };
   }
 }
 
@@ -70,7 +70,7 @@ export interface ReportsActions {
 export function createReportsActions(bus: BusClient, store: StoreApi<AppStore>): ReportsActions {
   return createRefreshAction(bus, store, {
     key: 'reports',
-    method: 'state.reports_snapshot',
+    method: 'reports.list',
     project: (reply) => reply.reports.map(toReportRow),
   });
 }

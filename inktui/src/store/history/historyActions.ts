@@ -27,9 +27,9 @@ import type { HistoryRow, HistoryState } from './historySlice.js';
  * `ServiceReadModel.get_history_snapshot`, registered in `host.py`).
  */
 declare module '../../bus/BusClient.js' {
-  interface RpcMethods {
+  interface QueryMethods {
     /** Fetch the full history feed. Re-pulled on each `history`-entity `state.snapshot`. */
-    'state.history_snapshot': { params: Record<string, never>; result: HistorySnapshotReply };
+    'history.list': { params: Record<string, never>; result: HistorySnapshotReply };
   }
 }
 
@@ -86,7 +86,7 @@ export interface HistoryActions {
 export function createHistoryActions(bus: BusClient, store: StoreApi<AppStore>): HistoryActions {
   const { refresh } = createRefreshAction(bus, store, {
     key: 'history',
-    method: 'state.history_snapshot',
+    method: 'history.list',
     project: (reply) => reply.items.map(toHistoryRow),
   });
 

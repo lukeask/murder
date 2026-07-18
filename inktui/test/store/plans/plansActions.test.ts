@@ -14,7 +14,7 @@
  *   it to `_parse_datetime(...) or as_of` so it is never null in practice.
  *
  * Two complementary test groups:
- *  1. Wire→row mapping: stub `state.plans_snapshot` with snake_case DTO fields, run refresh(),
+ *  1. Wire→row mapping: stub `plans.list` with snake_case DTO fields, run refresh(),
  *     assert the slice rows carry the mapped camelCase values.
  *  2. Wire→selector: same stub fed through event invalidation, assert selectPlansView produces
  *     correct indentation (4 spaces) and recency order (child bubbles parent).
@@ -34,8 +34,8 @@ import { selectLiveToasts, toastStore } from '../../../src/store/toast/toastStor
 function setup(plansReply: PlansSnapshotReply) {
   const fake = new FakeBusClient();
   // crow_snapshot required for store boot
-  fake.stubRpc('state.crow_snapshot', { invalidation_key: 'iv', sessions: [] });
-  fake.stubRpc('state.plans_snapshot', plansReply);
+  fake.stubQuery('roster.get', { invalidation_key: 'iv', sessions: [] });
+  fake.stubQuery('plans.list', plansReply);
   const { store, dispose } = createAppStore(fake);
   return { fake, store, dispose };
 }
@@ -190,8 +190,8 @@ describe('plansActions — wire→selector: C11 indentation + recency ordering f
 describe('plansActions — spawnPlanner', () => {
   it('spawns a planning agent with planner.spawn and no follow-up kickoff message', async () => {
     const { fake, store, dispose } = setup({ invalidation_key: 'iv', plans: [] });
-    fake.stubRpc('command.submit', { ok: true, command_id: 'cmd-1' });
-    fake.stubRpc('command.status', {
+    fake.stubCommand('orchestration.execute', { ok: true, command_id: 'cmd-1' });
+    fake.stubQuery('command.get', {
       ok: true,
       status: 'done',
       result_json: JSON.stringify({ handled: true, agent_id: 'planner-alpha' }),
@@ -200,7 +200,7 @@ describe('plansActions — spawnPlanner', () => {
 
     await store.getState().actions.plans.spawnPlanner('alpha');
 
-    const submits = fake.rpcCalls.filter((c) => c.method === 'command.submit');
+    const submits = fake.commandCalls.filter((c) => c.name === 'orchestration.execute');
     const kinds = submits.map((c) => (c.params as { kind: string }).kind);
     expect(kinds).toContain('planner.spawn');
     expect(kinds).not.toContain('agent.message');
@@ -222,8 +222,8 @@ describe('plansActions — spawnPlanner', () => {
 
   it('planner.spawn uses the effective harness when a plannerHarness override is set', async () => {
     const { fake, store, dispose } = setup({ invalidation_key: 'iv', plans: [] });
-    fake.stubRpc('command.submit', { ok: true, command_id: 'cmd-1' });
-    fake.stubRpc('command.status', {
+    fake.stubCommand('orchestration.execute', { ok: true, command_id: 'cmd-1' });
+    fake.stubQuery('command.get', {
       ok: true,
       status: 'done',
       result_json: JSON.stringify({ handled: true, agent_id: 'planner-beta' }),
@@ -239,8 +239,8 @@ describe('plansActions — spawnPlanner', () => {
 
     await store.getState().actions.plans.spawnPlanner('beta');
 
-    const spawn = fake.rpcCalls
-      .filter((c) => c.method === 'command.submit')
+    const spawn = fake.commandCalls
+      .filter((c) => c.name === 'orchestration.execute')
       .find((c) => (c.params as { kind: string }).kind === 'planner.spawn');
     const payload = (spawn?.params as { payload: Record<string, unknown> }).payload;
     expect(payload).toMatchObject({ plan_name: 'beta', harness: 'codex', effort: 'high' });
@@ -249,8 +249,8 @@ describe('plansActions — spawnPlanner', () => {
 
   it('routes a spawn failure into an error toast (never throws past the action)', async () => {
     const { fake, store, dispose } = setup({ invalidation_key: 'iv', plans: [] });
-    fake.stubRpc('command.submit', { ok: true, command_id: 'cmd-1' });
-    fake.stubRpc('command.status', { ok: true, status: 'failed', last_error: 'no capacity' });
+    fake.stubCommand('orchestration.execute', { ok: true, command_id: 'cmd-1' });
+    fake.stubQuery('command.get', { ok: true, status: 'failed', last_error: 'no capacity' });
     toastStore.getState().clear();
 
     await store.getState().actions.plans.spawnPlanner('alpha'); // resolves — no throw

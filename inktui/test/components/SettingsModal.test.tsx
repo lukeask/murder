@@ -112,12 +112,16 @@ function fakeActions(): { actions: SettingsActions; patches: SettingsPatch[] } {
       setDisabled: vi.fn(async () => {}),
       createProvider: vi.fn(async () => null),
       updateProvider: vi.fn(async () => {}),
+      updateProviderModels: vi.fn(async () => {}),
       deleteProvider: vi.fn(async () => {}),
       discoverModels: vi.fn(async () => []),
       createPolicy: vi.fn(async () => null),
       updatePolicy: vi.fn(async () => {}),
       deletePolicy: vi.fn(async () => {}),
       activatePolicy: vi.fn(async () => {}),
+      clonePolicy: vi.fn(async () => null),
+      setFeaturePolicy: vi.fn(async () => {}),
+      previewResolution: vi.fn(async () => []),
     },
   };
   return { actions, patches };

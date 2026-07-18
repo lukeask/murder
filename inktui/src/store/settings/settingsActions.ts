@@ -196,12 +196,14 @@ export interface SettingsPatch {
  * Shapes mirror the Python `settings.{get,update}` handlers in `murder/app/service/host.py`.
  */
 declare module '../../bus/BusClient.js' {
-  interface RpcMethods {
+  interface QueryMethods {
     /** Load the persisted TUI preferences. Empty params; reply carries the full settings record. */
     'settings.get': {
       params: Record<string, never>;
       result: { ok: boolean; settings: SettingsWire };
     };
+  }
+  interface CommandMethods {
     /** Persist a partial preferences patch; reply echoes the full merged record. */
     'settings.update': {
       params: { settings: SettingsPatch };
@@ -311,7 +313,9 @@ export interface LlmActions {
   activatePolicy(policyId: string): Promise<void>;
   clonePolicy(policyId: string, name: string): Promise<string | null>;
   setFeaturePolicy(featureType: string, policyId: string | null): Promise<void>;
-  previewResolution(featureType: string): Promise<readonly { provider_id: string; model_id: string }[]>;
+  previewResolution(
+    featureType: string,
+  ): Promise<readonly { provider_id: string; model_id: string }[]>;
 }
 
 /** Project a `settings.get`/`settings.update` reply's wire record onto the slice's camelCase shape,
@@ -366,7 +370,7 @@ export function createSettingsActions(bus: BusClient, store: StoreApi<AppStore>)
     async load(): Promise<void> {
       store.setState((state) => ({ settings: { ...state.settings, status: 'loading' } }));
       try {
-        const reply = await bus.rpc('settings.get', {});
+        const reply = await bus.query('settings.get', {});
         store.setState((state) => ({ settings: applyWire(state.settings, reply.settings) }));
       } catch (error: unknown) {
         const message = error instanceof Error ? error.message : String(error);
@@ -413,7 +417,7 @@ export function createSettingsActions(bus: BusClient, store: StoreApi<AppStore>)
         },
       }));
       try {
-        const reply = await bus.rpc('settings.update', { settings: partial });
+        const reply = await bus.command('settings.update', { settings: partial });
         // Apply the full merged reply — refreshes llm (masked keys), the `effective_*` harness values,
         // and reconciles any server-side normalisation of the optimistic overlay.
         store.setState((state) => ({ settings: applyWire(state.settings, reply.settings) }));
@@ -430,14 +434,14 @@ export function createSettingsActions(bus: BusClient, store: StoreApi<AppStore>)
     llm: {
       async setDisabled(disabled): Promise<void> {
         try {
-          applyLlmReply(await bus.rpc('llm.settings.set_disabled', { disabled }));
+          applyLlmReply(await bus.command('llm.settings.set_disabled', { disabled }));
         } catch (error: unknown) {
           llmFailure(error);
         }
       },
       async createProvider(provider): Promise<string | null> {
         try {
-          const reply = await bus.rpc('llm.provider.create', { provider });
+          const reply = await bus.command('llm.provider.create', { provider });
           applyLlmReply(reply);
           return reply.provider_id;
         } catch (error: unknown) {
@@ -447,28 +451,28 @@ export function createSettingsActions(bus: BusClient, store: StoreApi<AppStore>)
       },
       async updateProvider(provider_id, patch): Promise<void> {
         try {
-          applyLlmReply(await bus.rpc('llm.provider.update', { provider_id, patch }));
+          applyLlmReply(await bus.command('llm.provider.update', { provider_id, patch }));
         } catch (error: unknown) {
           llmFailure(error);
         }
       },
       async updateProviderModels(provider_id, patch): Promise<void> {
         try {
-          applyLlmReply(await bus.rpc('llm.provider.models.update', { provider_id, patch }));
+          applyLlmReply(await bus.command('llm.provider.models.update', { provider_id, patch }));
         } catch (error: unknown) {
           llmFailure(error);
         }
       },
       async deleteProvider(provider_id): Promise<void> {
         try {
-          applyLlmReply(await bus.rpc('llm.provider.delete', { provider_id, confirm: true }));
+          applyLlmReply(await bus.command('llm.provider.delete', { provider_id, confirm: true }));
         } catch (error: unknown) {
           llmFailure(error);
         }
       },
       async discoverModels(provider_id): Promise<readonly { id: string; label: string }[]> {
         try {
-          return (await bus.rpc('llm.provider.discover_models', { provider_id })).models;
+          return (await bus.command('llm.provider.discover_models', { provider_id })).models;
         } catch (error: unknown) {
           llmFailure(error);
           return [];
@@ -476,7 +480,10 @@ export function createSettingsActions(bus: BusClient, store: StoreApi<AppStore>)
       },
       async createPolicy(name, policy): Promise<string | null> {
         try {
-          const reply = await bus.rpc('llm.policy.create', { name, ...(policy ? { policy } : {}) });
+          const reply = await bus.command('llm.policy.create', {
+            name,
+            ...(policy ? { policy } : {}),
+          });
           applyLlmReply(reply);
           return reply.policy_id;
         } catch (error: unknown) {
@@ -486,28 +493,28 @@ export function createSettingsActions(bus: BusClient, store: StoreApi<AppStore>)
       },
       async updatePolicy(policy_id, patch): Promise<void> {
         try {
-          applyLlmReply(await bus.rpc('llm.policy.update', { policy_id, patch }));
+          applyLlmReply(await bus.command('llm.policy.update', { policy_id, patch }));
         } catch (error: unknown) {
           llmFailure(error);
         }
       },
       async deletePolicy(policy_id): Promise<void> {
         try {
-          applyLlmReply(await bus.rpc('llm.policy.delete', { policy_id, confirm: true }));
+          applyLlmReply(await bus.command('llm.policy.delete', { policy_id, confirm: true }));
         } catch (error: unknown) {
           llmFailure(error);
         }
       },
       async activatePolicy(policy_id): Promise<void> {
         try {
-          applyLlmReply(await bus.rpc('llm.policy.activate', { policy_id }));
+          applyLlmReply(await bus.command('llm.policy.activate', { policy_id }));
         } catch (error: unknown) {
           llmFailure(error);
         }
       },
       async clonePolicy(policy_id, name): Promise<string | null> {
         try {
-          const reply = await bus.rpc('llm.policy.clone', { policy_id, name });
+          const reply = await bus.command('llm.policy.clone', { policy_id, name });
           applyLlmReply(reply);
           return reply.policy_id;
         } catch (error: unknown) {
@@ -517,14 +524,16 @@ export function createSettingsActions(bus: BusClient, store: StoreApi<AppStore>)
       },
       async setFeaturePolicy(feature_type, policy_id): Promise<void> {
         try {
-          applyLlmReply(await bus.rpc('llm.feature_policy.set', { feature_type, policy_id }));
+          applyLlmReply(await bus.command('llm.feature_policy.set', { feature_type, policy_id }));
         } catch (error: unknown) {
           llmFailure(error);
         }
       },
-      async previewResolution(feature_type): Promise<readonly { provider_id: string; model_id: string }[]> {
+      async previewResolution(
+        feature_type,
+      ): Promise<readonly { provider_id: string; model_id: string }[]> {
         try {
-          const reply = await bus.rpc('llm.preview_resolution', { feature_type });
+          const reply = await bus.command('llm.preview_resolution', { feature_type });
           return reply.candidates.map(({ provider_id, model_id }) => ({ provider_id, model_id }));
         } catch (error: unknown) {
           llmFailure(error);

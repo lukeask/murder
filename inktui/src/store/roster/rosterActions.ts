@@ -2,21 +2,20 @@
  * Roster actions — the *only* code that calls the bus for crow data (rule 3).
  *
  * An action is a closure over the injected {@link BusClient} and the store's `set`. It issues one
- * RPC, projects the wire DTO into the slice's presentation-free {@link RosterRow}s, and ref-swaps
+ * query, projects the wire DTO into the slice's presentation-free {@link RosterRow}s, and ref-swaps
  * *only* the `roster` slice. Components and selectors never reach the bus — they dispatch these
  * actions (exposed off the store handle) or read the slice. This file is the seam a future
  * web/phone client reuses unchanged: no Ink, no terminal, no socket — just `BusClient` + the store.
  *
  * The loading→ready/error lifecycle + ref-swap-only-this-key mechanics now come from the shared
  * {@link createRefreshAction} factory in `../listSlice.js` — this file supplies only the three
- * per-domain pieces: the RPC method (+ its reply type, declared below), and the DTO→rows
+ * per-domain pieces: the query name (+ its reply type, declared below), and the DTO→rows
  * `project` fn. That projection is the divergence injection point; the generic never special-cases
  * a domain.
  *
- * Copy this file to add slice X: swap the RPC method + its reply shape (the `declare module` block),
+ * Copy this file to add slice X: swap the query name + its reply shape (the `declare module` block),
  * swap the projection, and pass X's slice key + method + project to `createRefreshAction`. The
- * augmentation block is how a read RPC not yet on the shared {@link RpcMethods} registry is declared
- * without editing the frozen C1 bus files — see its comment.
+ * augmentation block is how a feature declares its typed result for a generated query name.
  */
 
 import type { StoreApi } from 'zustand';
@@ -27,24 +26,20 @@ import type { AppStore } from '../store.js';
 import type { RosterRow } from './rosterSlice.js';
 
 /**
- * The crow-roster read RPC and its reply shape, declared here via TypeScript declaration merging
- * rather than by editing `src/bus/BusClient.ts` (frozen at C1/C2). The registry was designed to be
- * extended "a line per method as the service exposes it"; doing it from the consuming slice keeps
- * the bus seam byte-identical while still giving `bus.rpc('state.crow_snapshot', …)` full type safety.
+ * The crow-roster query and its reply shape, declared here via TypeScript declaration merging.
+ * The query name comes from the generated application protocol; the feature owns its result shape.
  *
- * `state.crow_snapshot` is LIVE — registered in `host.py`, backed by the Python
- * `RuntimeClient.get_crow_snapshot()`, per the Bus contract's "view → service = RPC methods" rule
- * (namespaced `domain.verb`, like `ticket.quick_kick`).
+ * `roster.get` is adapted by the application gateway to the internal roster snapshot handler.
  */
 declare module '../../bus/BusClient.js' {
-  interface RpcMethods {
+  interface QueryMethods {
     /** Fetch the full crow roster. Re-pulled on each `agent`-entity `state.snapshot`. */
-    'state.crow_snapshot': { params: Record<string, never>; result: CrowSnapshotReply };
+    'roster.get': { params: Record<string, never>; result: CrowSnapshotReply };
   }
 }
 
 /**
- * The `state.crow_snapshot` reply, mirroring the service's `CrowSnapshot` DTO (`murder/app/service/
+ * The `roster.get` reply, mirroring the service's `CrowSnapshot` DTO (`murder/app/service/
  * client_api.py`). Only the fields the roster projects are typed; the wire may carry more. Optional
  * fields are `?: T | null` to match the Python `T | None` columns exactly.
  */
@@ -136,7 +131,7 @@ export function createRosterActions(bus: BusClient, store: StoreApi<AppStore>): 
   return {
     ...createRefreshAction(bus, store, {
       key: 'roster',
-      method: 'state.crow_snapshot',
+      method: 'roster.get',
       project: (reply) => reply.sessions.map(toRosterRow),
     }),
     async resetCrow(ticketId: string): Promise<void> {

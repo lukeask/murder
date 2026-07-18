@@ -32,7 +32,7 @@ function snapshot(
   };
 }
 
-/** A canned `state.crow_snapshot` reply with one session. */
+/** A canned `roster.get` reply with one session. */
 function crowReply(overrides: Partial<CrowSnapshotReply> = {}): CrowSnapshotReply {
   return {
     invalidation_key: 'iv-1',
@@ -53,7 +53,7 @@ function crowReply(overrides: Partial<CrowSnapshotReply> = {}): CrowSnapshotRepl
 }
 
 /**
- * A canned `state.schedule_snapshot` reply (empty buckets + empty gauges). F2: usage is embedded in
+ * A canned `schedule.get` reply (empty buckets + empty gauges). F2: usage is embedded in
  * the schedule snapshot (`usage_gauges`); both the tickets and usage slices read this reply.
  */
 function scheduleReply(overrides: Partial<ScheduleSnapshotReply> = {}): ScheduleSnapshotReply {
@@ -94,24 +94,39 @@ function settingsWire(overrides: Partial<SettingsWire> = {}): SettingsWire {
 
 /**
  * Build a store wired to a FakeBusClient with the roster + schedule RPCs stubbed. Roster keys on
- * `'agent'`; usage keys on `'queue_row'` (F1 locked map) and reads `state.schedule_snapshot`'s
- * `usage_gauges`. Tests that assert on `rpcCalls` must filter by method or use `toContainEqual`.
+ * `'agent'`; usage keys on `'queue_row'` (F1 locked map) and reads `schedule.get`'s
+ * `usage_gauges`. Tests that assert on `queryCalls or commandCalls` must filter by method or use `toContainEqual`.
  */
 function setup(reply: CrowSnapshotReply = crowReply()) {
   const fake = new FakeBusClient();
-  fake.stubRpc('state.crow_snapshot', reply);
-  fake.stubRpc('state.schedule_snapshot', scheduleReply());
+  fake.stubQuery('roster.get', reply);
+  fake.stubQuery('schedule.get', scheduleReply());
   const { store, dispose } = createAppStore(fake);
   return { fake, store, dispose };
 }
 
 describe('createAppStore — boot & wiring', () => {
-  it('subscribes to the bus four times on construction (state.snapshot + conversation.block + conversation.state + error)', () => {
-    // Hydration replaces the four constructor subscriptions with one server-defined snapshot+tail
-    // contract. The legacy subscribe count stays zero; dispose tears down the hydrate tail.
+  it('opens one generated projection hydration on construction', async () => {
+    // One hydration owns the projection and notification subscriptions and their compatibility
+    // event tail. Dispose tears down the standing hydration.
     const { fake, dispose } = setup();
-    expect(fake.subscriberCount).toBe(0);
-    expect(fake.hydrateCalls).toEqual([{ topics: ['all'], cursor: null }]);
+    expect(fake.subscriberCount).toBe(1);
+    expect(fake.hydrateCalls).toEqual([
+      {
+        topics: [
+          'conversations',
+          'roster',
+          'schedule',
+          'favorites',
+          'templates',
+          'themes',
+          'workflows',
+          'settings',
+        ],
+        cursor: null,
+      },
+    ]);
+    await flush();
     dispose();
     expect(fake.subscriberCount).toBe(0);
   });
@@ -150,7 +165,7 @@ describe('createAppStore — boot & wiring', () => {
             invalidation_key: 'iv-conv',
           },
         },
-        crow: { ok: true, value: crowReply() },
+        roster: { ok: true, value: crowReply() },
         schedule: { ok: true, value: scheduleReply() },
       },
       cursor: 50,
@@ -169,10 +184,7 @@ describe('createAppStore — boot & wiring', () => {
   });
 
   it('preserves tail conversation.block events that arrive before hydrate snapshots apply', async () => {
-    let resolveHydrate!: (reply: {
-      snapshots: Record<string, unknown>;
-      cursor: number;
-    }) => void;
+    let resolveHydrate!: (reply: { snapshots: Record<string, unknown>; cursor: number }) => void;
     const hydratePending = new Promise<{
       snapshots: Record<string, unknown>;
       cursor: number;
@@ -200,7 +212,7 @@ describe('createAppStore — boot & wiring', () => {
 
     resolveHydrate({
       snapshots: {
-        'state.conversations_snapshot': {
+        conversations: {
           conversations: [],
           as_of: '2026-06-09T00:00:00',
           invalidation_key: 'iv-empty',
@@ -220,14 +232,14 @@ describe('createAppStore — boot & wiring', () => {
     const fake = new FakeBusClient();
     fake.stubHydrate({
       snapshots: {
-        'state.crow_snapshot': crowReply(),
-        'state.schedule_snapshot': scheduleReply({
+        roster: crowReply(),
+        schedule: scheduleReply({
           usage_gauges: [
             { harness: 'claude', window_key: 'h1', pct: 42, t_until_reset_minutes: 8 },
           ],
         }),
-        'tui.load_favorites': { favorites: ['collaborator'] },
-        'settings.get': { settings: settingsWire() },
+        favorites: { favorites: ['collaborator'] },
+        settings: { settings: settingsWire() },
       },
       cursor: 123,
       mode: 'cold',
@@ -237,9 +249,23 @@ describe('createAppStore — boot & wiring', () => {
     expect(store.getState().hydration.status).toBe('loading');
     await flush();
 
-    expect(fake.hydrateCalls).toEqual([{ topics: ['all'], cursor: null }]);
-    expect(fake.subscriberCount).toBe(0);
-    expect(fake.rpcCalls).toEqual([]);
+    expect(fake.hydrateCalls).toEqual([
+      {
+        topics: [
+          'conversations',
+          'roster',
+          'schedule',
+          'favorites',
+          'templates',
+          'themes',
+          'workflows',
+          'settings',
+        ],
+        cursor: null,
+      },
+    ]);
+    expect(fake.subscriberCount).toBe(1);
+    expect(fake.queryCalls).toEqual([]);
     expect(store.getState().hydration).toMatchObject({
       status: 'ready',
       cursor: 123,
@@ -345,7 +371,7 @@ describe('event-driven slice invalidation', () => {
     await flush();
 
     // Roster keys on 'agent' (usage keys on 'queue_row' — F1 map — so it does NOT fire here).
-    expect(fake.rpcCalls).toContainEqual({ method: 'state.crow_snapshot', params: {} });
+    expect(fake.queryCalls).toContainEqual({ name: 'roster.get', params: {} });
     expect(store.getState().roster.status).toBe('ready');
     expect(store.getState().roster.rows).toHaveLength(1);
     expect(store.getState().roster.rows[0]?.agentId).toBe('a-1');
@@ -353,7 +379,7 @@ describe('event-driven slice invalidation', () => {
 
   it('re-pulls the plans slice on a `plan` state.snapshot and projects the parent field (C11)', async () => {
     const { fake, store } = setup();
-    fake.stubRpc('state.plans_snapshot', {
+    fake.stubQuery('plans.list', {
       invalidation_key: 'iv-p',
       plans: [
         { name: 'parent', char_count: 10, updated_at: '2026-06-01T00:00:00' },
@@ -367,7 +393,7 @@ describe('event-driven slice invalidation', () => {
     fake.emit(snapshot('plan'));
     await flush();
 
-    expect(fake.rpcCalls).toContainEqual({ method: 'state.plans_snapshot', params: {} });
+    expect(fake.queryCalls).toContainEqual({ name: 'plans.list', params: {} });
     const plans = store.getState().plans;
     expect(plans.status).toBe('ready');
     expect(plans.rows).toHaveLength(2);
@@ -378,7 +404,7 @@ describe('event-driven slice invalidation', () => {
 
   it('re-pulls the history slice on a `history` state.snapshot and projects rows', async () => {
     const { fake, store } = setup();
-    fake.stubRpc('state.history_snapshot', {
+    fake.stubQuery('history.list', {
       invalidation_key: 'iv-h',
       items: [
         {
@@ -400,7 +426,7 @@ describe('event-driven slice invalidation', () => {
     fake.emit(snapshot('history'));
     await flush();
 
-    expect(fake.rpcCalls).toContainEqual({ method: 'state.history_snapshot', params: {} });
+    expect(fake.queryCalls).toContainEqual({ name: 'history.list', params: {} });
     const history = store.getState().history;
     expect(history.status).toBe('ready');
     expect(history.rows).toHaveLength(1);
@@ -414,12 +440,12 @@ describe('event-driven slice invalidation', () => {
     // `status !== 'idle'`. A `state.snapshot` arriving before the panel is ever opened must NOT issue
     // the (often heavy — transit is ~110KB) read RPC. The slice stays idle and no RPC is recorded.
     const { fake, store } = setup();
-    fake.stubRpc('state.transit_snapshot', {
+    fake.stubQuery('transit.get', {
       lanes: [],
       generated_at_epoch: 0,
       invalidation_key: 'iv',
     });
-    fake.stubRpc('state.plans_snapshot', { invalidation_key: 'iv', plans: [] });
+    fake.stubQuery('plans.list', { invalidation_key: 'iv', plans: [] });
 
     fake.emit(snapshot('transit'));
     fake.emit(snapshot('plan'));
@@ -427,15 +453,15 @@ describe('event-driven slice invalidation', () => {
 
     expect(store.getState().transit.status).toBe('idle');
     expect(store.getState().plans.status).toBe('idle');
-    expect(fake.rpcCalls).not.toContainEqual({ method: 'state.transit_snapshot', params: {} });
-    expect(fake.rpcCalls).not.toContainEqual({ method: 'state.plans_snapshot', params: {} });
+    expect(fake.queryCalls).not.toContainEqual({ name: 'transit.get', params: {} });
+    expect(fake.queryCalls).not.toContainEqual({ name: 'plans.list', params: {} });
   });
 
   it('a LAZY slice opened once (status off idle) then re-pulls on its snapshot', async () => {
     // The complement of the gate: once the panel has been opened (its mount-effect ran one refresh,
     // moving the slice off idle), subsequent snapshots DO re-pull it — it is live like any eager slice.
     const { fake, store } = setup();
-    fake.stubRpc('state.transit_snapshot', {
+    fake.stubQuery('transit.get', {
       lanes: [],
       generated_at_epoch: 0,
       invalidation_key: 'iv',
@@ -444,14 +470,14 @@ describe('event-driven slice invalidation', () => {
     // Open the panel (mount-effect equivalent): one refresh moves transit off idle.
     await store.getState().actions.transit.refresh();
     expect(store.getState().transit.status).toBe('ready');
-    const callsAfterOpen = fake.rpcCalls.length;
+    const callsAfterOpen = fake.queryCalls.length;
 
     fake.emit(snapshot('transit'));
     await flush();
 
     // The snapshot now re-pulls (one more transit_snapshot RPC than right after opening).
-    expect(fake.rpcCalls.length).toBe(callsAfterOpen + 1);
-    expect(fake.rpcCalls).toContainEqual({ method: 'state.transit_snapshot', params: {} });
+    expect(fake.queryCalls.length).toBe(callsAfterOpen + 1);
+    expect(fake.queryCalls).toContainEqual({ name: 'transit.get', params: {} });
   });
 
   it('re-pulls the roster on an `escalation` state.snapshot (escalation counts are JOINed in the crow snapshot)', async () => {
@@ -464,7 +490,7 @@ describe('event-driven slice invalidation', () => {
     fake.emit(snapshot('escalation'));
     await flush();
 
-    expect(fake.rpcCalls).toContainEqual({ method: 'state.crow_snapshot', params: {} });
+    expect(fake.queryCalls).toContainEqual({ name: 'roster.get', params: {} });
     expect(store.getState().roster.status).toBe('ready');
     // Ref-swapped — escalation subscribers re-render off the same path as `agent` changes.
     expect(store.getState().roster).not.toBe(rosterBefore);
@@ -483,7 +509,7 @@ describe('event-driven slice invalidation', () => {
 
     // No roster rpc was issued (notes/reports/tickets rpc calls may appear for their slices but
     // the *roster* slice must be untouched).
-    const rosterCalls = fake.rpcCalls.filter((c) => c.method === 'state.crow_snapshot');
+    const rosterCalls = fake.queryCalls.filter((c) => c.name === 'roster.get');
     expect(rosterCalls).toEqual([]);
     // The roster slice object identity is unchanged — no ref-swap, no re-render of roster subscribers.
     expect(store.getState().roster).toBe(rosterBefore);
@@ -501,7 +527,7 @@ describe('event-driven slice invalidation', () => {
       since_change_s: 1,
     });
     await flush();
-    expect(fake.rpcCalls).toEqual([]);
+    expect(fake.queryCalls).toEqual([]);
   });
 
   it('survives a malformed state.snapshot (missing/null entity) without crashing or pulling', async () => {
@@ -527,7 +553,7 @@ describe('event-driven slice invalidation', () => {
     }).not.toThrow();
     await flush();
 
-    expect(fake.rpcCalls).toEqual([]);
+    expect(fake.queryCalls).toEqual([]);
     expect(store.getState().roster).toBe(rosterBefore);
   });
 
@@ -549,7 +575,7 @@ describe('event-driven slice invalidation', () => {
 describe('actions are the only bus caller (rule 3)', () => {
   it('routes a rejected rpc into the slice error field, never thrown past the action', async () => {
     const fake = new FakeBusClient();
-    fake.stubRpc('state.crow_snapshot', () => {
+    fake.stubQuery('roster.get', () => {
       throw new Error('bus down');
     });
     const { store } = createAppStore(fake);
@@ -564,8 +590,8 @@ describe('actions are the only bus caller (rule 3)', () => {
   it('marks the slice loading before the rpc resolves', async () => {
     let resolveReply: (r: CrowSnapshotReply) => void = () => {};
     const fake = new FakeBusClient();
-    fake.stubRpc(
-      'state.crow_snapshot',
+    fake.stubQuery(
+      'roster.get',
       () =>
         new Promise<CrowSnapshotReply>((resolve) => {
           resolveReply = resolve;
@@ -604,8 +630,8 @@ function reportsReply(overrides: Partial<ReportsSnapshotReply> = {}): ReportsSna
 describe('C6 — notes slice invalidation', () => {
   it('re-pulls notes on a note-entity state.snapshot', async () => {
     const fake = new FakeBusClient();
-    fake.stubRpc('state.crow_snapshot', crowReply());
-    fake.stubRpc('state.notes_snapshot', notesReply());
+    fake.stubQuery('roster.get', crowReply());
+    fake.stubQuery('notes.list', notesReply());
     const { store } = createAppStore(fake);
     expect(store.getState().notes.status).toBe('idle');
     // Notes is a LAZY slice: gated on `status !== 'idle'`. Open it first so the snapshot re-pulls.
@@ -614,7 +640,7 @@ describe('C6 — notes slice invalidation', () => {
     fake.emit(snapshot('note'));
     await flush();
 
-    expect(fake.rpcCalls).toContainEqual({ method: 'state.notes_snapshot', params: {} });
+    expect(fake.queryCalls).toContainEqual({ name: 'notes.list', params: {} });
     expect(store.getState().notes.status).toBe('ready');
     expect(store.getState().notes.rows).toHaveLength(1);
     expect(store.getState().notes.rows[0]?.name).toBe('my-note');
@@ -622,9 +648,9 @@ describe('C6 — notes slice invalidation', () => {
 
   it('ref-swaps ONLY notes on a note event — roster and reports keep identity', async () => {
     const fake = new FakeBusClient();
-    fake.stubRpc('state.crow_snapshot', crowReply());
-    fake.stubRpc('state.notes_snapshot', notesReply());
-    fake.stubRpc('state.reports_snapshot', reportsReply());
+    fake.stubQuery('roster.get', crowReply());
+    fake.stubQuery('notes.list', notesReply());
+    fake.stubQuery('reports.list', reportsReply());
     const { store } = createAppStore(fake);
     // Open the lazy notes slice (mount-effect equivalent) so its `note` snapshot re-pulls.
     await store.getState().actions.notes.refresh();
@@ -643,8 +669,8 @@ describe('C6 — notes slice invalidation', () => {
 describe('C6 — reports slice invalidation', () => {
   it('re-pulls reports on a report-entity state.snapshot', async () => {
     const fake = new FakeBusClient();
-    fake.stubRpc('state.crow_snapshot', crowReply());
-    fake.stubRpc('state.reports_snapshot', reportsReply());
+    fake.stubQuery('roster.get', crowReply());
+    fake.stubQuery('reports.list', reportsReply());
     const { store } = createAppStore(fake);
     expect(store.getState().reports.status).toBe('idle');
     // Reports is a LAZY slice: gated on `status !== 'idle'`. Open it first so the snapshot re-pulls.
@@ -653,7 +679,7 @@ describe('C6 — reports slice invalidation', () => {
     fake.emit(snapshot('report'));
     await flush();
 
-    expect(fake.rpcCalls).toContainEqual({ method: 'state.reports_snapshot', params: {} });
+    expect(fake.queryCalls).toContainEqual({ name: 'reports.list', params: {} });
     expect(store.getState().reports.status).toBe('ready');
     expect(store.getState().reports.rows).toHaveLength(1);
     expect(store.getState().reports.rows[0]?.name).toBe('my-report');
@@ -661,9 +687,9 @@ describe('C6 — reports slice invalidation', () => {
 
   it('ref-swaps ONLY reports on a report event — roster and notes keep identity', async () => {
     const fake = new FakeBusClient();
-    fake.stubRpc('state.crow_snapshot', crowReply());
-    fake.stubRpc('state.notes_snapshot', notesReply());
-    fake.stubRpc('state.reports_snapshot', reportsReply());
+    fake.stubQuery('roster.get', crowReply());
+    fake.stubQuery('notes.list', notesReply());
+    fake.stubQuery('reports.list', reportsReply());
     const { store } = createAppStore(fake);
     // Open the lazy reports slice (mount-effect equivalent) so its `report` snapshot re-pulls.
     await store.getState().actions.reports.refresh();
@@ -707,15 +733,15 @@ function ticketsReply(overrides: Partial<ScheduleSnapshotReply> = {}): ScheduleS
 describe('C7 — tickets slice invalidation', () => {
   it('re-pulls tickets on a ticket-entity state.snapshot', async () => {
     const fake = new FakeBusClient();
-    fake.stubRpc('state.crow_snapshot', crowReply());
-    fake.stubRpc('state.schedule_snapshot', ticketsReply());
+    fake.stubQuery('roster.get', crowReply());
+    fake.stubQuery('schedule.get', ticketsReply());
     const { store } = createAppStore(fake);
     expect(store.getState().tickets.status).toBe('idle');
 
     fake.emit(snapshot('ticket'));
     await flush();
 
-    expect(fake.rpcCalls).toContainEqual({ method: 'state.schedule_snapshot', params: {} });
+    expect(fake.queryCalls).toContainEqual({ name: 'schedule.get', params: {} });
     expect(store.getState().tickets.status).toBe('ready');
     expect(store.getState().tickets.rows).toHaveLength(1);
     expect(store.getState().tickets.rows[0]?.id).toBe('T-1');
@@ -723,9 +749,9 @@ describe('C7 — tickets slice invalidation', () => {
 
   it('flattens active + recent_done + archived into one row list', async () => {
     const fake = new FakeBusClient();
-    fake.stubRpc('state.crow_snapshot', crowReply());
-    fake.stubRpc(
-      'state.schedule_snapshot',
+    fake.stubQuery('roster.get', crowReply());
+    fake.stubQuery(
+      'schedule.get',
       ticketsReply({
         active_tickets: [
           {
@@ -772,10 +798,10 @@ describe('C7 — tickets slice invalidation', () => {
 
   it('ref-swaps ONLY tickets on a ticket event — roster, notes, reports keep identity', async () => {
     const fake = new FakeBusClient();
-    fake.stubRpc('state.crow_snapshot', crowReply());
-    fake.stubRpc('state.notes_snapshot', notesReply());
-    fake.stubRpc('state.reports_snapshot', reportsReply());
-    fake.stubRpc('state.schedule_snapshot', ticketsReply());
+    fake.stubQuery('roster.get', crowReply());
+    fake.stubQuery('notes.list', notesReply());
+    fake.stubQuery('reports.list', reportsReply());
+    fake.stubQuery('schedule.get', ticketsReply());
     const { store } = createAppStore(fake);
     const rosterBefore = store.getState().roster;
     const notesBefore = store.getState().notes;
@@ -795,11 +821,11 @@ describe('C7 — tickets slice invalidation', () => {
 
 describe('C9 — usage slice invalidation', () => {
   it('re-pulls usage on a queue_row-entity state.snapshot (F1 locked map: queue_row → usage)', async () => {
-    // F2: usage reads `state.schedule_snapshot`'s `usage_gauges` (no separate usage RPC).
+    // F2: usage reads `schedule.get`'s `usage_gauges` (no separate usage RPC).
     const fake = new FakeBusClient();
-    fake.stubRpc('state.crow_snapshot', crowReply());
-    fake.stubRpc(
-      'state.schedule_snapshot',
+    fake.stubQuery('roster.get', crowReply());
+    fake.stubQuery(
+      'schedule.get',
       scheduleReply({
         usage_gauges: [{ harness: 'claude', window_key: 'h1', pct: 50, t_until_reset_minutes: 10 }],
       }),
@@ -810,7 +836,7 @@ describe('C9 — usage slice invalidation', () => {
     fake.emit(snapshot('queue_row'));
     await flush();
 
-    expect(fake.rpcCalls).toContainEqual({ method: 'state.schedule_snapshot', params: {} });
+    expect(fake.queryCalls).toContainEqual({ name: 'schedule.get', params: {} });
     expect(store.getState().usage.status).toBe('ready');
     expect(store.getState().usage.rows).toHaveLength(1);
     expect(store.getState().usage.rows[0]?.harness).toBe('claude');
@@ -818,10 +844,10 @@ describe('C9 — usage slice invalidation', () => {
 
   it('does NOT re-pull usage on an agent event (usage keys on queue_row, not agent)', async () => {
     const fake = new FakeBusClient();
-    fake.stubRpc('state.crow_snapshot', crowReply());
-    fake.stubRpc('state.notes_snapshot', notesReply());
-    fake.stubRpc('state.reports_snapshot', reportsReply());
-    fake.stubRpc('state.schedule_snapshot', ticketsReply());
+    fake.stubQuery('roster.get', crowReply());
+    fake.stubQuery('notes.list', notesReply());
+    fake.stubQuery('reports.list', reportsReply());
+    fake.stubQuery('schedule.get', ticketsReply());
     const { store } = createAppStore(fake);
     const notesBefore = store.getState().notes;
     const reportsBefore = store.getState().reports;
@@ -832,20 +858,20 @@ describe('C9 — usage slice invalidation', () => {
     await flush();
 
     // notes, reports, tickets, usage are not keyed on 'agent' — they keep identity. (usage +
-    // tickets share `state.schedule_snapshot` but both key off non-agent entities.)
+    // tickets share `schedule.get` but both key off non-agent entities.)
     expect(store.getState().notes).toBe(notesBefore);
     expect(store.getState().reports).toBe(reportsBefore);
     expect(store.getState().tickets).toBe(ticketsBefore);
     expect(store.getState().usage).toBe(usageBefore);
-    expect(fake.rpcCalls).not.toContainEqual({ method: 'state.schedule_snapshot', params: {} });
+    expect(fake.queryCalls).not.toContainEqual({ name: 'schedule.get', params: {} });
     // Only roster ref-swaps on an agent event.
     expect(store.getState().roster.status).toBe('ready');
   });
 
   it('routes a rejected usage rpc into usage.error, never thrown past the action', async () => {
     const fake = new FakeBusClient();
-    fake.stubRpc('state.crow_snapshot', crowReply());
-    fake.stubRpc('state.schedule_snapshot', () => {
+    fake.stubQuery('roster.get', crowReply());
+    fake.stubQuery('schedule.get', () => {
       throw new Error('usage down');
     });
     const { store } = createAppStore(fake);
@@ -866,13 +892,13 @@ describe('boot-priming — slice refresh actions exist for all primed domains', 
     expect(typeof store.getState().actions.conversations.refresh).toBe('function');
   });
 
-  it('conversations.refresh calls state.conversations_snapshot and hydrates transcripts', async () => {
+  it('conversations.refresh calls conversations.get and hydrates transcripts', async () => {
     const fake = new FakeBusClient();
-    fake.stubRpc('state.crow_snapshot', crowReply());
-    fake.stubRpc('state.schedule_snapshot', scheduleReply());
+    fake.stubQuery('roster.get', crowReply());
+    fake.stubQuery('schedule.get', scheduleReply());
     // Wire shape: ConversationsSnapshot.conversations is a list of ConversationSummary entries.
     // Each entry has agent_id + blocks (ConversationBlockSummary rows — id numeric, payload nested).
-    fake.stubRpc('state.conversations_snapshot', {
+    fake.stubQuery('conversations.get', {
       conversations: [
         {
           conversation_id: 'conv-1',
@@ -904,7 +930,7 @@ describe('boot-priming — slice refresh actions exist for all primed domains', 
 
     await store.getState().actions.conversations.refresh();
 
-    expect(fake.rpcCalls).toContainEqual({ method: 'state.conversations_snapshot', params: {} });
+    expect(fake.queryCalls).toContainEqual({ name: 'conversations.get', params: {} });
     const transcripts = store.getState().conversations.transcripts;
     expect(Object.keys(transcripts)).toContain('collaborator');
     expect(transcripts['collaborator']).toHaveLength(1);
@@ -913,9 +939,9 @@ describe('boot-priming — slice refresh actions exist for all primed domains', 
 
   it('conversations.refresh merges into existing transcripts (does not wipe agent-pane state)', async () => {
     const fake = new FakeBusClient();
-    fake.stubRpc('state.crow_snapshot', crowReply());
-    fake.stubRpc('state.schedule_snapshot', scheduleReply());
-    fake.stubRpc('state.conversations_snapshot', {
+    fake.stubQuery('roster.get', crowReply());
+    fake.stubQuery('schedule.get', scheduleReply());
+    fake.stubQuery('conversations.get', {
       conversations: [
         {
           conversation_id: 'conv-2',
@@ -953,10 +979,10 @@ describe('boot-priming — slice refresh actions exist for all primed domains', 
 
   it('conversations.refresh swallows RPC errors — transcripts stay empty, no throw', async () => {
     const fake = new FakeBusClient();
-    fake.stubRpc('state.crow_snapshot', crowReply());
-    fake.stubRpc('state.schedule_snapshot', scheduleReply());
-    // Handler throws — models a service that does not yet expose state.conversations_snapshot.
-    fake.stubRpc('state.conversations_snapshot', () => {
+    fake.stubQuery('roster.get', crowReply());
+    fake.stubQuery('schedule.get', scheduleReply());
+    // Handler throws — models a service that does not yet expose conversations.get.
+    fake.stubQuery('conversations.get', () => {
       throw new Error('snapshot service down');
     });
     const { store } = createAppStore(fake);
@@ -975,46 +1001,46 @@ describe('boot-priming — slice refresh actions exist for all primed domains', 
     expect(typeof store.getState().actions.reports.refresh).toBe('function');
   });
 
-  it('calling tickets.refresh primes the tickets slice from state.schedule_snapshot', async () => {
+  it('calling tickets.refresh primes the tickets slice from schedule.get', async () => {
     const fake = new FakeBusClient();
-    fake.stubRpc('state.crow_snapshot', crowReply());
-    fake.stubRpc('state.schedule_snapshot', ticketsReply());
+    fake.stubQuery('roster.get', crowReply());
+    fake.stubQuery('schedule.get', ticketsReply());
     const { store } = createAppStore(fake);
     expect(store.getState().tickets.status).toBe('idle');
 
     await store.getState().actions.tickets.refresh();
 
-    expect(fake.rpcCalls).toContainEqual({ method: 'state.schedule_snapshot', params: {} });
+    expect(fake.queryCalls).toContainEqual({ name: 'schedule.get', params: {} });
     expect(store.getState().tickets.status).toBe('ready');
     expect(store.getState().tickets.rows).toHaveLength(1);
   });
 
-  it('calling notes.refresh primes the notes slice from state.notes_snapshot', async () => {
+  it('calling notes.refresh primes the notes slice from notes.list', async () => {
     const fake = new FakeBusClient();
-    fake.stubRpc('state.crow_snapshot', crowReply());
-    fake.stubRpc('state.schedule_snapshot', scheduleReply());
-    fake.stubRpc('state.notes_snapshot', notesReply());
+    fake.stubQuery('roster.get', crowReply());
+    fake.stubQuery('schedule.get', scheduleReply());
+    fake.stubQuery('notes.list', notesReply());
     const { store } = createAppStore(fake);
     expect(store.getState().notes.status).toBe('idle');
 
     await store.getState().actions.notes.refresh();
 
-    expect(fake.rpcCalls).toContainEqual({ method: 'state.notes_snapshot', params: {} });
+    expect(fake.queryCalls).toContainEqual({ name: 'notes.list', params: {} });
     expect(store.getState().notes.status).toBe('ready');
     expect(store.getState().notes.rows).toHaveLength(1);
   });
 
-  it('calling reports.refresh primes the reports slice from state.reports_snapshot', async () => {
+  it('calling reports.refresh primes the reports slice from reports.list', async () => {
     const fake = new FakeBusClient();
-    fake.stubRpc('state.crow_snapshot', crowReply());
-    fake.stubRpc('state.schedule_snapshot', scheduleReply());
-    fake.stubRpc('state.reports_snapshot', reportsReply());
+    fake.stubQuery('roster.get', crowReply());
+    fake.stubQuery('schedule.get', scheduleReply());
+    fake.stubQuery('reports.list', reportsReply());
     const { store } = createAppStore(fake);
     expect(store.getState().reports.status).toBe('idle');
 
     await store.getState().actions.reports.refresh();
 
-    expect(fake.rpcCalls).toContainEqual({ method: 'state.reports_snapshot', params: {} });
+    expect(fake.queryCalls).toContainEqual({ name: 'reports.list', params: {} });
     expect(store.getState().reports.status).toBe('ready');
     expect(store.getState().reports.rows).toHaveLength(1);
   });

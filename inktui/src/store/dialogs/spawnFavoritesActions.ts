@@ -43,14 +43,16 @@ export interface SpawnFavorite {
  * save reply echoes the persisted list back.
  */
 declare module '../../bus/BusClient.js' {
-  interface RpcMethods {
+  interface QueryMethods {
     /** Load the persisted spawn-favorites list. Empty params; reply carries the saved favorites. */
-    'tui.load_spawn_favorites': {
+    'spawn_favorites.get': {
       params: Record<string, never>;
       result: { ok: boolean; favorites: readonly SpawnFavorite[] };
     };
+  }
+  interface CommandMethods {
     /** Persist the spawn-favorites list. Echoes back the saved favorites on success. */
-    'tui.save_spawn_favorites': {
+    'spawn_favorites.set': {
       params: { favorites: readonly SpawnFavorite[] };
       result: { ok: boolean; favorites: readonly SpawnFavorite[] };
     };
@@ -80,7 +82,7 @@ export function createSpawnFavoritesActions(bus: BusClient): SpawnFavoritesActio
   return {
     async load(): Promise<SpawnFavorite[]> {
       try {
-        const reply = await bus.rpc('tui.load_spawn_favorites', {});
+        const reply = await bus.query('spawn_favorites.get', {});
         // Coerce the readonly wire list to a mutable array for the caller.
         return [...reply.favorites];
       } catch {
@@ -91,7 +93,7 @@ export function createSpawnFavoritesActions(bus: BusClient): SpawnFavoritesActio
 
     async save(favorites: readonly SpawnFavorite[]): Promise<SpawnFavorite[]> {
       // Let a rejection propagate — the wizard catches it to toast (intentional vs `load`).
-      const reply = await bus.rpc('tui.save_spawn_favorites', { favorites });
+      const reply = await bus.command('spawn_favorites.set', { favorites });
       return [...reply.favorites];
     },
   };

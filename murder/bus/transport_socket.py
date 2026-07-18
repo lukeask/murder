@@ -6,11 +6,59 @@ import errno
 import ipaddress
 import json
 import logging
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Coroutine
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
+from murder.app.protocol.common import (
+    APPLICATION_PROTOCOL_VERSION,
+)
+from murder.app.protocol.common import (
+    ClientKind as ApplicationClientKind,
+)
+from murder.app.protocol.common import (
+    ErrorBody as ApplicationErrorBody,
+)
+from murder.app.protocol.common import (
+    ErrorCode as ApplicationErrorCode,
+)
+from murder.app.protocol.subscriptions import (
+    NotificationChannel,
+    NotificationSubscription,
+    ProjectionSubscription,
+    SubscriptionSnapshot,
+)
+from murder.app.protocol.terminal import TerminalFrame
+from murder.app.protocol.wire import (
+    APPLICATION_WIRE_ADAPTER,
+    SubscriptionEventMessage,
+    SubscriptionReadyMessage,
+    TerminalAttachedMessage,
+    TerminalAttachMessage,
+    TerminalDetachMessage,
+    TerminalFrameMessage,
+    UnsubscribeMessage,
+)
+from murder.app.protocol.wire import (
+    ClientHello as ApplicationClientHello,
+)
+from murder.app.protocol.wire import (
+    ErrorMessage as ApplicationErrorMessage,
+)
+from murder.app.protocol.wire import (
+    ReplyMessage as ApplicationReplyMessage,
+)
+from murder.app.protocol.wire import (
+    RequestMessage as ApplicationRequestMessage,
+)
+from murder.app.protocol.wire import (
+    ServerHello as ApplicationServerHello,
+)
+from murder.app.protocol.wire import (
+    SubscribeMessage as ApplicationSubscribeMessage,
+)
+from murder.app.service.gateway import ApplicationGateway
 from murder.bus.broker import DurableBroker
 from murder.bus.protocol import (
     PRESENCE_DISCONNECT_DEBOUNCE_S,
@@ -74,6 +122,8 @@ class _ClientSession:
     kind: ClientKind
     transport: UdsTransport
     subscriptions: set[asyncio.Task[None]] = field(default_factory=set)
+    application_tasks: dict[str, asyncio.Task[None]] = field(default_factory=dict)
+    application: bool = False
 
 
 class SocketBusServer:
@@ -105,6 +155,7 @@ class SocketBusServer:
         self._accept_backoff_task: asyncio.Task[None] | None = None
         self._prior_exception_handler: Any = None
         self._installed_exception_handler = False
+        self._application_gateway = ApplicationGateway(broker)
 
     @property
     def socket_path(self) -> Path:
@@ -167,6 +218,8 @@ class SocketBusServer:
         for session in list(self._clients.values()):
             for task in list(session.subscriptions):
                 task.cancel()
+            for task in list(session.application_tasks.values()):
+                task.cancel()
             await session.transport.close()
         self._clients.clear()
         if self._tcp_server is not None:
@@ -225,7 +278,7 @@ class SocketBusServer:
             srv.resume_serving()
         LOGGER.info("socket accept resumed after %.1fs backoff", delay)
 
-    async def _handle_client(
+    async def _handle_client(  # noqa: PLR0912,PLR0915
         self,
         reader: asyncio.StreamReader,
         writer: asyncio.StreamWriter,
@@ -234,47 +287,115 @@ class SocketBusServer:
         transport = attach_stream_transport(reader, writer)
         session_key = id(transport)
         session: _ClientSession | None = None
+        legacy_hello: HelloMessage | None = None
         try:
-            hello = await self._read_hello(reader)
-            if hello.body.protocol_version != PROTOCOL_VERSION:
-                await self._send_err(
-                    transport,
-                    correlation_id=hello.correlation_id,
-                    code="protocol_version_mismatch",
-                    message=(f"server={PROTOCOL_VERSION} client={hello.body.protocol_version}"),
+            raw_hello = await reader.readline()
+            if not raw_hello:
+                raise RuntimeError("client disconnected before hello")
+            raw_object = json.loads(raw_hello)
+            is_application = raw_object.get("op") == "client.hello"
+            if is_application:
+                app_hello = APPLICATION_WIRE_ADAPTER.validate_python(raw_object)
+                if not isinstance(app_hello, ApplicationClientHello):
+                    raise RuntimeError("first application message must be client.hello")
+                if app_hello.protocol_version != APPLICATION_PROTOCOL_VERSION:
+                    await self._send_application_error(
+                        transport,
+                        code=ApplicationErrorCode.VERSION_MISMATCH,
+                        message=(
+                            f"server={APPLICATION_PROTOCOL_VERSION} "
+                            f"client={app_hello.protocol_version}"
+                        ),
+                    )
+                    await transport.flush()
+                    return
+                kind = _application_client_kind(app_hello.client.kind)
+                session = _ClientSession(
+                    client_id=app_hello.client.client_id,
+                    kind=kind,
+                    transport=transport,
+                    application=True,
                 )
-                return
-            session = _ClientSession(
-                client_id=hello.body.client_id,
-                kind=hello.body.client_kind,
-                transport=transport,
-            )
+            else:
+                legacy_message = WIRE_MESSAGE_ADAPTER.validate_python(raw_object)
+                if not isinstance(legacy_message, HelloMessage):
+                    raise RuntimeError("first message must be hello")
+                legacy_hello = legacy_message
+                if legacy_hello.body.protocol_version != PROTOCOL_VERSION:
+                    await self._send_err(
+                        transport,
+                        correlation_id=legacy_hello.correlation_id,
+                        code="protocol_version_mismatch",
+                        message=(
+                            f"server={PROTOCOL_VERSION} client={legacy_hello.body.protocol_version}"
+                        ),
+                    )
+                    await transport.flush()
+                    return
+                if legacy_hello.body.client_kind in (ClientKind.TUI, ClientKind.WEB):
+                    await self._send_err(
+                        transport,
+                        correlation_id=legacy_hello.correlation_id,
+                        code="application_protocol_required",
+                        message=("interactive clients must use the service application protocol"),
+                    )
+                    await transport.flush()
+                    return
+                session = _ClientSession(
+                    client_id=legacy_hello.body.client_id,
+                    kind=legacy_hello.body.client_kind,
+                    transport=transport,
+                )
             self._clients[session_key] = session
-            await self._send_ack(
-                transport,
-                correlation_id=hello.correlation_id,
-                kind="subscribed",
-            )
-            await self._send_wake(transport, hello.body.client_id)
-            await self._on_connect(hello.body.client_kind)
+            if session.application:
+                await self._send_message(
+                    transport,
+                    ApplicationServerHello(server_id=self._run_id),
+                )
+            else:
+                assert legacy_hello is not None
+                await self._send_ack(
+                    transport,
+                    correlation_id=legacy_hello.correlation_id,
+                    kind="subscribed",
+                )
+                await self._send_wake(transport, legacy_hello.body.client_id)
+            await self._on_connect(session.kind)
             while not reader.at_eof():
                 line = await reader.readline()
                 if not line:
                     break
-                msg = WIRE_MESSAGE_ADAPTER.validate_json(line.decode("utf-8"))
-                await self._handle_client_message(session, transport, msg)
+                if session.application:
+                    application_message = APPLICATION_WIRE_ADAPTER.validate_json(
+                        line.decode("utf-8")
+                    )
+                    await self._handle_application_message(session, application_message)
+                else:
+                    bus_message = WIRE_MESSAGE_ADAPTER.validate_json(line.decode("utf-8"))
+                    await self._handle_client_message(session, transport, bus_message)
         except Exception as exc:  # noqa: BLE001
             if not self._closed:
+                LOGGER.warning("client connection failed: %s", exc, exc_info=True)
                 with contextlib.suppress(Exception):
-                    await self._send_err(
-                        transport,
-                        correlation_id="",
-                        code="server_error",
-                        message=str(exc),
-                    )
+                    if session is not None and session.application:
+                        await self._send_application_error(
+                            transport,
+                            code=ApplicationErrorCode.INVALID_MESSAGE,
+                            message=str(exc),
+                        )
+                    else:
+                        await self._send_err(
+                            transport,
+                            correlation_id="",
+                            code="server_error",
+                            message=str(exc),
+                        )
+                    await transport.flush()
         finally:
             if session is not None:
                 for task in list(session.subscriptions):
+                    task.cancel()
+                for task in list(session.application_tasks.values()):
                     task.cancel()
                 self._clients.pop(session_key, None)
                 await self._on_disconnect(session.kind)
@@ -350,6 +471,291 @@ class SocketBusServer:
             code="unsupported_op",
             message=f"unsupported op {msg.op}",
         )
+
+    async def _handle_application_message(
+        self,
+        session: _ClientSession,
+        msg: Any,
+    ) -> None:
+        if isinstance(msg, ApplicationRequestMessage):
+            try:
+                result = await self._application_gateway.request(
+                    msg.request,
+                    timeout_s=msg.timeout_s,
+                )
+            except Exception as exc:  # noqa: BLE001
+                await self._send_application_error(
+                    session.transport,
+                    code=ApplicationErrorCode.REQUEST_FAILED,
+                    message=str(exc),
+                    request_id=msg.request_id,
+                )
+                return
+            await self._send_message(
+                session.transport,
+                ApplicationReplyMessage(request_id=msg.request_id, result=result),
+            )
+            return
+
+        if isinstance(msg, ApplicationSubscribeMessage):
+            await self._replace_application_task(
+                session,
+                msg.subscription_id,
+                self._run_application_subscription(session, msg),
+                error_target="subscription",
+            )
+            return
+
+        if isinstance(msg, UnsubscribeMessage):
+            await self._cancel_application_task(session, msg.subscription_id)
+            return
+
+        if isinstance(msg, TerminalAttachMessage):
+            await self._replace_application_task(
+                session,
+                msg.stream_id,
+                self._run_application_terminal_stream(session, msg),
+                error_target="stream",
+            )
+            return
+
+        if isinstance(msg, TerminalDetachMessage):
+            await self._cancel_application_task(session, msg.stream_id)
+            return
+
+        await self._send_application_error(
+            session.transport,
+            code=ApplicationErrorCode.INVALID_MESSAGE,
+            message=f"client cannot send {msg.op}",
+        )
+
+    async def _replace_application_task(
+        self,
+        session: _ClientSession,
+        task_id: str,
+        awaitable: Coroutine[Any, Any, None],
+        *,
+        error_target: Literal["subscription", "stream"],
+    ) -> None:
+        await self._cancel_application_task(session, task_id)
+        task = asyncio.create_task(awaitable, name=f"app-stream:{task_id}")
+        session.application_tasks[task_id] = task
+
+        def _done(done: asyncio.Task[None]) -> None:
+            if session.application_tasks.get(task_id) is done:
+                session.application_tasks.pop(task_id, None)
+            if done.cancelled():
+                return
+            exc = done.exception()
+            if exc is not None and not isinstance(exc, TransportClosedError):
+                LOGGER.warning("application stream %s failed", task_id, exc_info=exc)
+                asyncio.get_running_loop().create_task(
+                    self._fail_application_task(
+                        session,
+                        str(exc),
+                        subscription_id=task_id if error_target == "subscription" else None,
+                        stream_id=task_id if error_target == "stream" else None,
+                    )
+                )
+
+        task.add_done_callback(_done)
+
+    async def _fail_application_task(
+        self,
+        session: _ClientSession,
+        message: str,
+        *,
+        subscription_id: str | None,
+        stream_id: str | None,
+    ) -> None:
+        with contextlib.suppress(Exception):
+            await self._send_application_error(
+                session.transport,
+                code=ApplicationErrorCode.STREAM_FAILED,
+                message=message,
+                subscription_id=subscription_id,
+                stream_id=stream_id,
+            )
+        await session.transport.close()
+
+    async def _cancel_application_task(
+        self,
+        session: _ClientSession,
+        task_id: str,
+    ) -> None:
+        task = session.application_tasks.pop(task_id, None)
+        if task is None:
+            return
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+
+    async def _run_application_subscription(
+        self,
+        session: _ClientSession,
+        msg: ApplicationSubscribeMessage,
+    ) -> None:
+        spec = msg.subscription
+        if isinstance(spec, ProjectionSubscription):
+            await self._run_application_projection_subscription(session, msg)
+            return
+        if isinstance(spec, NotificationSubscription):
+            await self._run_application_notification_subscription(session, msg)
+            return
+        await self._send_application_error(
+            session.transport,
+            code=ApplicationErrorCode.UNSUPPORTED_SUBSCRIPTION,
+            message=f"unsupported subscription {spec.kind}",
+            subscription_id=msg.subscription_id,
+        )
+
+    async def _run_application_projection_subscription(
+        self,
+        session: _ClientSession,
+        msg: ApplicationSubscribeMessage,
+    ) -> None:
+        spec = msg.subscription
+        assert isinstance(spec, ProjectionSubscription)
+        topics = [_legacy_hydrate_topic(topic.value) for topic in spec.topics]
+        hydrate = HydrateMessage(
+            correlation_id=msg.subscription_id,
+            args={
+                "topics": topics,
+                "cursor": spec.cursor,
+            },
+        )
+        reply, tail_filters = await self._build_hydrate_reply(hydrate)
+        snapshots = {
+            _application_projection_topic(key): value for key, value in reply.snapshots.items()
+        }
+        await self._send_message(
+            session.transport,
+            SubscriptionReadyMessage(
+                subscription_id=msg.subscription_id,
+                snapshot=SubscriptionSnapshot(
+                    snapshots=snapshots,
+                    cursor=reply.cursor,
+                    mode=reply.mode,
+                    replay=[
+                        {
+                            "cursor": item.seq,
+                            "payload": item.event.model_dump(mode="json"),
+                        }
+                        for item in reply.replay
+                    ],
+                ),
+            ),
+        )
+        await asyncio.gather(
+            *[
+                self._run_application_tail(
+                    session.transport,
+                    msg.subscription_id,
+                    filt,
+                    since_id=since_id,
+                )
+                for filt, since_id in tail_filters
+            ]
+        )
+
+    async def _run_application_notification_subscription(
+        self,
+        session: _ClientSession,
+        msg: ApplicationSubscribeMessage,
+    ) -> None:
+        spec = msg.subscription
+        assert isinstance(spec, NotificationSubscription)
+        watermark = self._broker.watermark()
+        since_id = spec.cursor if spec.cursor is not None else watermark
+        filters: list[EventFilter] = []
+        if NotificationChannel.ERRORS in spec.channels:
+            filters.append(EventFilter(type="error"))
+        if NotificationChannel.PRESENCE in spec.channels:
+            filters.append(EventFilter(type="presence"))
+        await self._send_message(
+            session.transport,
+            SubscriptionReadyMessage(
+                subscription_id=msg.subscription_id,
+                snapshot=SubscriptionSnapshot(
+                    cursor=watermark,
+                    mode="resume" if spec.cursor is not None else "cold",
+                ),
+            ),
+        )
+        await asyncio.gather(
+            *[
+                self._run_application_tail(
+                    session.transport,
+                    msg.subscription_id,
+                    filt,
+                    since_id=since_id,
+                )
+                for filt in filters
+            ]
+        )
+
+    async def _run_application_tail(
+        self,
+        transport: UdsTransport,
+        subscription_id: str,
+        filt: EventFilter,
+        *,
+        since_id: int,
+    ) -> None:
+        async for row_id, event in self._broker.tail(filt, since_id=since_id):
+            await self._send_message(
+                transport,
+                SubscriptionEventMessage(
+                    subscription_id=subscription_id,
+                    cursor=row_id,
+                    payload=event.model_dump(mode="json"),
+                ),
+            )
+
+    async def _run_application_terminal_stream(
+        self,
+        session: _ClientSession,
+        msg: TerminalAttachMessage,
+    ) -> None:
+        await self._send_message(
+            session.transport,
+            TerminalAttachedMessage(stream_id=msg.stream_id),
+        )
+        capture = self._tmux_frame_capture
+        if capture is None:
+            await self._send_application_error(
+                session.transport,
+                code=ApplicationErrorCode.STREAM_FAILED,
+                message="terminal capture is unavailable",
+                stream_id=msg.stream_id,
+            )
+            return
+        sequence = 0
+        session_id = msg.target.session_id or "supervisor"
+        while True:
+            try:
+                frame_text = await capture(msg.target.session_id)
+            except Exception as exc:  # noqa: BLE001
+                await self._send_application_error(
+                    session.transport,
+                    code=ApplicationErrorCode.STREAM_FAILED,
+                    message=str(exc),
+                    stream_id=msg.stream_id,
+                )
+                return
+            sequence += 1
+            await self._send_message(
+                session.transport,
+                TerminalFrameMessage(
+                    stream_id=msg.stream_id,
+                    frame=TerminalFrame(
+                        sequence=sequence,
+                        session_id=session_id,
+                        frame=frame_text,
+                    ),
+                ),
+            )
+            await asyncio.sleep(self._tmux_frame_interval_s)
 
     async def _handle_rpc(self, transport: UdsTransport, msg: RpcMessage) -> None:
         try:
@@ -506,14 +912,10 @@ class SocketBusServer:
                 kind="replay_done",
                 watermark=watermark,
             )
-            await self._run_tmux_frame_stream(
-                transport, msg.correlation_id, agent_id=filt.agent_id
-            )
+            await self._run_tmux_frame_stream(transport, msg.correlation_id, agent_id=filt.agent_id)
             return
 
-        replay_since = (
-            watermark if msg.args.tail_only else (msg.args.since_id or 0)
-        )
+        replay_since = watermark if msg.args.tail_only else (msg.args.since_id or 0)
         for row_id, event in self._broker.replay(
             filt,
             since_id=replay_since,
@@ -624,6 +1026,26 @@ class SocketBusServer:
             ),
         )
 
+    async def _send_application_error(
+        self,
+        transport: UdsTransport,
+        *,
+        code: ApplicationErrorCode,
+        message: str,
+        request_id: str | None = None,
+        subscription_id: str | None = None,
+        stream_id: str | None = None,
+    ) -> None:
+        await self._send_message(
+            transport,
+            ApplicationErrorMessage(
+                request_id=request_id,
+                subscription_id=subscription_id,
+                stream_id=stream_id,
+                error=ApplicationErrorBody(code=code, message=message),
+            ),
+        )
+
     async def _send_wake(self, transport: UdsTransport, client_id: str) -> None:
         hints = [
             Entity.TICKET,
@@ -708,6 +1130,22 @@ def _is_loopback_host(host: str) -> bool:
         # Hostnames other than 'localhost' may resolve anywhere — treat as
         # non-loopback rather than doing a DNS lookup here.
         return False
+
+
+def _application_client_kind(kind: ApplicationClientKind) -> ClientKind:
+    if kind is ApplicationClientKind.TUI:
+        return ClientKind.TUI
+    if kind is ApplicationClientKind.WEB:
+        return ClientKind.WEB
+    return ClientKind.CLI_EPHEMERAL
+
+
+def _legacy_hydrate_topic(topic: str) -> str:
+    return "crow" if topic == "roster" else topic
+
+
+def _application_projection_topic(topic: str) -> str:
+    return "roster" if topic == "crow" else topic
 
 
 def _normalize_hydrate_topics(topics: list[str]) -> list[str]:
@@ -833,9 +1271,7 @@ class UdsTransport(Transport):
         self._reader = reader
         self._writer = writer
         self._connected = True
-        self._drain_task = asyncio.create_task(
-            self._drain_loop(), name="uds-transport-drain"
-        )
+        self._drain_task = asyncio.create_task(self._drain_loop(), name="uds-transport-drain")
 
     async def _drain_loop(self) -> None:
         """Single writer coroutine — serialises all outbound writes."""
@@ -846,6 +1282,9 @@ class UdsTransport(Transport):
                 item = await self._write_queue.get()
                 if item is _SENTINEL:
                     break
+                if isinstance(item, asyncio.Event):
+                    item.set()
+                    continue
                 assert isinstance(item, bytes)
                 try:
                     writer.write(item)
@@ -876,6 +1315,15 @@ class UdsTransport(Transport):
         if not self._connected:
             raise TransportClosedError("transport is not connected")
         await self._write_queue.put(data)
+
+    async def flush(self) -> None:
+        """Wait until every message queued before this call has been written."""
+
+        if not self._connected:
+            return
+        marker = asyncio.Event()
+        await self._write_queue.put(marker)
+        await asyncio.wait_for(marker.wait(), timeout=self.rpc_timeout)
 
     async def recv(self) -> bytes:
         """Read the next chunk from the remote end.

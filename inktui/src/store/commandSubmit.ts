@@ -10,17 +10,38 @@
  * `kind` + `payload` and receives the parsed terminal result.
  *
  * Protocol (mirrors the live handler):
- *  1. `command.submit { target_worker, kind, payload }` → `{ command_id }`.
- *  2. Poll `command.status { command_id }` until `status` is `'done'` (resolve with the parsed
+ *  1. `orchestration.execute { kind, payload }` → `{ command_id }`.
+ *  2. Poll `command.get { command_id }` until `status` is `'done'` (resolve with the parsed
  *     `result_json`) or `'failed'` (reject with `last_error`).
  *
- * All current callers target `target_worker: 'orchestrator'`.
+ * The application gateway owns the internal orchestrator worker address.
  */
 
-import type { BusClient, RpcPayload } from '../bus/BusClient.js';
+import type { ApplicationPayload, BusClient } from '../bus/BusClient.js';
+import type { OrchestrationAction } from '../generated/applicationProtocol.js';
 
-/** Default worker for orchestrator command kinds. */
-export const ORCHESTRATOR_WORKER = 'orchestrator';
+interface CommandStatusResult {
+  readonly ok: boolean;
+  readonly status?: string;
+  readonly result_json?: string | null;
+  readonly last_error?: string | null;
+  readonly command_id?: string;
+}
+
+declare module '../bus/BusClient.js' {
+  interface QueryMethods {
+    'command.get': {
+      params: { command_id: string };
+      result: CommandStatusResult;
+    };
+  }
+  interface CommandMethods {
+    'orchestration.execute': {
+      params: { kind: OrchestrationAction; payload: ApplicationPayload };
+      result: { ok: boolean; command_id: string };
+    };
+  }
+}
 
 /**
  * Poll interval (ms) between `command.status` checks. The poll exists because the live bus exposes
@@ -71,15 +92,10 @@ function isClientClosed(error: unknown): boolean {
  */
 export async function submitCommand(
   bus: BusClient,
-  kind: string,
-  payload: RpcPayload,
-  options: { targetWorker?: string } = {},
-): Promise<RpcPayload> {
-  const submitted = await bus.rpc('command.submit', {
-    target_worker: options.targetWorker ?? ORCHESTRATOR_WORKER,
-    kind,
-    payload,
-  });
+  kind: OrchestrationAction,
+  payload: ApplicationPayload,
+): Promise<ApplicationPayload> {
+  const submitted = await bus.command('orchestration.execute', { kind, payload });
   const commandId = submitted.command_id;
   if (!commandId) {
     throw new Error(`${kind}: command.submit returned no command_id`);
@@ -87,9 +103,9 @@ export async function submitCommand(
 
   let retries = 0;
   for (let i = 0; i < MAX_POLLS; i++) {
-    let status: import('../bus/BusClient.js').CommandStatusResult;
+    let status: CommandStatusResult;
     try {
-      status = await bus.rpc('command.status', { command_id: commandId });
+      status = await bus.query('command.get', { command_id: commandId });
     } catch (error: unknown) {
       // Resume-by-command_id: a mid-command socket drop rejects this poll, but the command keeps
       // running server-side and the UdsBusClient auto-reconnects. Re-poll the SAME `command_id`
@@ -104,7 +120,7 @@ export async function submitCommand(
     retries = 0; // a successful poll clears the transient-failure budget.
     if (status.status === 'done') {
       const raw = status.result_json;
-      return raw != null && raw !== '' ? (JSON.parse(raw) as RpcPayload) : {};
+      return raw != null && raw !== '' ? (JSON.parse(raw) as ApplicationPayload) : {};
     }
     if (status.status === 'failed') {
       throw new Error(status.last_error ?? `${kind} failed`);

@@ -1,14 +1,11 @@
 /**
- * Frozen wire contract between the murder service and its clients.
+ * Transitional event/DTO compatibility types for store projections.
  *
- * This is the TypeScript port of `murder/bus/protocol.py` — the single source of truth for the
- * JSON-RPC-over-Unix-socket bus. The service *implements* this surface; the Ink store *consumes*
- * it. The two halves build against this file alone, so they can evolve in parallel without
- * reading each other's internals.
+ * The public application wire is generated at `../generated/applicationProtocol.ts`.
+ * This older port remains only because projection payloads still reuse established
+ * `BusEvent` DTOs while the backend implementation sits behind the application gateway.
  *
- * Faithfulness over invention: every shape, discriminator, and constant here mirrors the Python
- * source. When the Python contract changes, change this file in lockstep. `PROTOCOL_VERSION` MUST
- * equal the Python `PROTOCOL_VERSION`; the client refuses a mismatched server on connect (C2).
+ * No transport may send the legacy message envelopes declared at the bottom of this file.
  *
  * Out of scope (rule 4): no sockets, no Ink, no framing loops, no transport. Types and constants
  * only — the same boundary the Python module draws ("if you find yourself importing asyncio here,

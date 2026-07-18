@@ -12,11 +12,11 @@ import { createAppStore } from '../../src/store/store.js';
 
 function setup() {
   const fake = new FakeBusClient();
-  fake.stubRpc('state.crow_snapshot', { invalidation_key: 'iv', sessions: [] });
+  fake.stubQuery('roster.get', { invalidation_key: 'iv', sessions: [] });
   // F2: doc bodies come from per-kind display RPCs returning a DisplaySnapshot ({ name, markdown }).
-  fake.stubRpc('state.plan_display', { name: 'p', markdown: '# Title\nbody' });
-  fake.stubRpc('state.note_display', { name: 'my-note', markdown: '# Title\nbody' });
-  fake.stubRpc('state.report_display', { name: 'r', markdown: '# Title\nbody' });
+  fake.stubQuery('plan.get', { name: 'p', markdown: '# Title\nbody' });
+  fake.stubQuery('note.get', { name: 'my-note', markdown: '# Title\nbody' });
+  fake.stubQuery('report.get', { name: 'r', markdown: '# Title\nbody' });
   const { store, dispose } = createAppStore(fake);
   return { fake, store, dispose };
 }
@@ -26,7 +26,7 @@ describe('docView actions', () => {
     const { fake, store, dispose } = setup();
     await store.getState().actions.docView.open('note', 'my-note');
 
-    const getCalls = fake.rpcCalls.filter((c) => c.method === 'state.note_display');
+    const getCalls = fake.queryCalls.filter((c) => c.name === 'note.get');
     expect(getCalls.length).toBe(1);
     expect(getCalls[0]?.params).toEqual({ name: 'my-note' });
 
@@ -50,7 +50,7 @@ describe('docView actions', () => {
 
   it('a fetch rejection sets status=error', async () => {
     const { fake, store, dispose } = setup();
-    fake.stubRpc('state.report_display', () => {
+    fake.stubQuery('report.get', () => {
       throw new Error('not found');
     });
     await store.getState().actions.docView.open('report', 'r');

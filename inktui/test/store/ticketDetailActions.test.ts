@@ -47,21 +47,21 @@ const DETAIL_REPLY: TicketDetailReply = {
   ],
 };
 
-/** Filter rpcCalls by method name. */
+/** Filter queryCalls or commandCalls by method name. */
 function callsFor(
   fake: FakeBusClient,
   method: string,
-): ReadonlyArray<{ method: string; params: unknown }> {
-  return fake.rpcCalls.filter((c) => c.method === method);
+): ReadonlyArray<{ name: string; params: unknown }> {
+  return [...fake.queryCalls, ...fake.commandCalls].filter((c) => c.name === method);
 }
 
 function setup(detailReply: TicketDetailReply = DETAIL_REPLY) {
   const fake = new FakeBusClient();
-  fake.stubRpc('state.ticket_detail', detailReply);
-  fake.stubRpc('ticket.save_body', { ok: true });
-  fake.stubRpc('ticket.schedule', { ok: true });
+  fake.stubQuery('ticket.get', detailReply);
+  fake.stubCommand('ticket.save_body', { ok: true });
+  fake.stubCommand('ticket.schedule', { ok: true });
   // Stub sibling RPCs so the store doesn't reject on side-effects.
-  fake.stubRpc('state.crow_snapshot', { invalidation_key: 'iv', sessions: [] });
+  fake.stubQuery('roster.get', { invalidation_key: 'iv', sessions: [] });
   const { store, dispose } = createAppStore(fake);
   return { fake, store, dispose };
 }
@@ -102,7 +102,7 @@ describe('ticketDetailActions.open', () => {
     dispose();
   });
 
-  it('consumes the new wire fields: status, schedule_at, and array deps from state.ticket_detail', async () => {
+  it('consumes the new wire fields: status, schedule_at, and array deps from ticket.get', async () => {
     // Field-by-field with the Python TicketDetailSnapshot wire shape: status (TicketStatus value),
     // deps (string[]), schedule_at (ISO string | null). These now ride in the detail snapshot and
     // surface as display-only header context (frontmatter).
@@ -141,10 +141,10 @@ describe('ticketDetailActions.open', () => {
     dispose();
   });
 
-  it('calls state.ticket_detail exactly once with the ticket_id', async () => {
+  it('calls ticket.get exactly once with the ticket_id', async () => {
     const { fake, store, dispose } = setup();
     await store.getState().actions.ticketDetail.open('T-1');
-    const calls = callsFor(fake, 'state.ticket_detail');
+    const calls = callsFor(fake, 'ticket.get');
     expect(calls).toHaveLength(1);
     expect(calls[0]?.params).toEqual({ ticket_id: 'T-1' });
     dispose();
@@ -162,10 +162,10 @@ describe('ticketDetailActions.open', () => {
 
   it('sets status error on rejection', async () => {
     const fake = new FakeBusClient();
-    fake.stubRpc('state.ticket_detail', () => {
+    fake.stubQuery('ticket.get', () => {
       throw new Error('not found');
     });
-    fake.stubRpc('state.crow_snapshot', { invalidation_key: 'iv', sessions: [] });
+    fake.stubQuery('roster.get', { invalidation_key: 'iv', sessions: [] });
     const { store, dispose } = createAppStore(fake);
     await store.getState().actions.ticketDetail.open('T-99');
     const detail = store.getState().ticketDetail;
@@ -176,8 +176,8 @@ describe('ticketDetailActions.open', () => {
 
   it('maps a live null detail reply to an editor error', async () => {
     const fake = new FakeBusClient();
-    fake.stubRpc('state.ticket_detail', null);
-    fake.stubRpc('state.crow_snapshot', { invalidation_key: 'iv', sessions: [] });
+    fake.stubQuery('ticket.get', null);
+    fake.stubQuery('roster.get', { invalidation_key: 'iv', sessions: [] });
     const { store, dispose } = createAppStore(fake);
     await store.getState().actions.ticketDetail.open('T-404');
     const detail = store.getState().ticketDetail;
@@ -282,11 +282,11 @@ describe('ticketDetailActions.saveBody', () => {
 
   it('sets status error on save failure', async () => {
     const fake = new FakeBusClient();
-    fake.stubRpc('state.ticket_detail', DETAIL_REPLY);
-    fake.stubRpc('ticket.save_body', () => {
+    fake.stubQuery('ticket.get', DETAIL_REPLY);
+    fake.stubCommand('ticket.save_body', () => {
       throw new Error('write failed');
     });
-    fake.stubRpc('state.crow_snapshot', { invalidation_key: 'iv', sessions: [] });
+    fake.stubQuery('roster.get', { invalidation_key: 'iv', sessions: [] });
     const { store, dispose } = createAppStore(fake);
     await store.getState().actions.ticketDetail.open('T-1');
     await store.getState().actions.ticketDetail.saveBody();
@@ -300,9 +300,9 @@ describe('ticketDetailActions.saveBody', () => {
     // found (orchestrator.py save_ticket_body). Without the ok===false guard this would take the
     // success branch → savedBody updated, status 'ready' → silent data loss. Prove it now errors.
     const fake = new FakeBusClient();
-    fake.stubRpc('state.ticket_detail', DETAIL_REPLY);
-    fake.stubRpc('ticket.save_body', { ok: false, error: 'ticket not found: T-1' });
-    fake.stubRpc('state.crow_snapshot', { invalidation_key: 'iv', sessions: [] });
+    fake.stubQuery('ticket.get', DETAIL_REPLY);
+    fake.stubCommand('ticket.save_body', { ok: false, error: 'ticket not found: T-1' });
+    fake.stubQuery('roster.get', { invalidation_key: 'iv', sessions: [] });
     const { store, dispose } = createAppStore(fake);
     await store.getState().actions.ticketDetail.open('T-1');
     store.getState().actions.ticketDetail.setEditedBody('## Updated body');

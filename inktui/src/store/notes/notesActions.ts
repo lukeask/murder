@@ -26,9 +26,9 @@ import type { NoteRow } from './notesSlice.js';
  * per the contract's "view → service = RPC methods" rule.
  */
 declare module '../../bus/BusClient.js' {
-  interface RpcMethods {
+  interface QueryMethods {
     /** Fetch the full notes list. Re-pulled on each `note`-entity `state.snapshot`. */
-    'state.notes_snapshot': { params: Record<string, never>; result: NotesSnapshotReply };
+    'notes.list': { params: Record<string, never>; result: NotesSnapshotReply };
   }
 }
 
@@ -75,7 +75,7 @@ export interface NotesActions {
 export function createNotesActions(bus: BusClient, store: StoreApi<AppStore>): NotesActions {
   return createRefreshAction(bus, store, {
     key: 'notes',
-    method: 'state.notes_snapshot',
+    method: 'notes.list',
     project: (reply) => reply.notes.map(toNoteRow),
   });
 }

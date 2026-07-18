@@ -32,14 +32,16 @@ import type { TemplateRecord } from './templatesSlice.js';
  * save reply carrying the backend-normalized list.
  */
 declare module '../../bus/BusClient.js' {
-  interface RpcMethods {
+  interface QueryMethods {
     /** Load the persisted template registry. Empty params; reply carries the saved templates. */
-    'tui.load_templates': {
+    'templates.get': {
       params: Record<string, never>;
       result: { ok: boolean; templates: readonly TemplateRecord[] };
     };
+  }
+  interface CommandMethods {
     /** Persist the registry. Echoes back the NORMALIZED (validated/de-duped/sorted) list. */
-    'tui.save_templates': {
+    'templates.set': {
       params: { templates: readonly TemplateRecord[] };
       result: { ok: boolean; templates: readonly TemplateRecord[] };
     };
@@ -86,7 +88,7 @@ export function createTemplatesActions(
       templates: { ...state.templates, items: next, status: 'ready', error: null },
     }));
     try {
-      const reply = await bus.rpc('tui.save_templates', { templates: next });
+      const reply = await bus.command('templates.set', { templates: next });
       store.setState({
         templates: { items: toItems(reply.templates), status: 'ready', error: null },
       });
@@ -104,7 +106,7 @@ export function createTemplatesActions(
     async load(): Promise<void> {
       store.setState((state) => ({ templates: { ...state.templates, status: 'loading' } }));
       try {
-        const reply = await bus.rpc('tui.load_templates', {});
+        const reply = await bus.query('templates.get', {});
         store.setState({
           templates: { items: toItems(reply.templates), status: 'ready', error: null },
         });

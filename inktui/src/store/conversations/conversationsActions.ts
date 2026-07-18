@@ -48,7 +48,7 @@ import {
  * cold-start service (no `conversation.block` events yet) paints populated transcript panes immediately.
  */
 declare module '../../bus/BusClient.js' {
-  interface RpcMethods {
+  interface QueryMethods {
     /**
      * Fetch all in-progress agent conversations as a snapshot. Re-pulled on connect (boot-prime);
      * individual block updates arrive via `conversation.block` events thereafter. The reply is a
@@ -56,7 +56,7 @@ declare module '../../bus/BusClient.js' {
      * agent_id and the full block history (same `ConversationBlockSummary` wire shape as the event
      * block, so `parseBlock` applies unchanged).
      */
-    'state.conversations_snapshot': {
+    'conversations.get': {
       params: Record<string, never>;
       result: ConversationsSnapshotReply;
     };
@@ -324,7 +324,7 @@ export function createConversationsActions(
     async refresh(): Promise<void> {
       const token = ++seq;
       try {
-        const reply = await bus.rpc('state.conversations_snapshot', {});
+        const reply = await bus.query('conversations.get', {});
         if (token !== seq) return;
         // REPLACE, do not union: the snapshot is authoritative for the in-progress set. A merge
         // (`{...old, ...parsed}`) would keep an agent whose conversation has since ENDED (absent

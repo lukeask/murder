@@ -20,9 +20,9 @@ function sampleThemeRecord(id: string) {
 
 function setup() {
   const fake = new FakeBusClient();
-  fake.stubRpc('tui.load_themes', { ok: true, themes: [] });
-  fake.stubRpc('tui.save_themes', (params) => ({ ok: true, themes: params.themes }));
-  fake.stubRpc('state.crow_snapshot', { invalidation_key: 'iv', sessions: [] });
+  fake.stubQuery('themes.get', { ok: true, themes: [] });
+  fake.stubCommand('themes.set', (params) => ({ ok: true, themes: params.themes }));
+  fake.stubQuery('roster.get', { invalidation_key: 'iv', sessions: [] });
   const { store, dispose } = createAppStore(fake);
   return { fake, store, dispose };
 }
@@ -32,9 +32,9 @@ describe('themes actions', () => {
     toastStore.getState().clear();
   });
 
-  it('load() registers palettes from tui.load_themes', async () => {
+  it('load() registers palettes from themes.get', async () => {
     const { fake, store, dispose } = setup();
-    fake.stubRpc('tui.load_themes', {
+    fake.stubQuery('themes.get', {
       ok: true,
       themes: [sampleThemeRecord('tokyo-night')],
     });
@@ -46,10 +46,10 @@ describe('themes actions', () => {
     dispose();
   });
 
-  it('importTheme() appends via tui.import_theme and registers the new id', async () => {
+  it('importTheme() appends via theme.import and registers the new id', async () => {
     const { fake, store, dispose } = setup();
     const custom = sampleThemeRecord('my-theme');
-    fake.stubRpc('tui.import_theme', () => ({
+    fake.stubCommand('theme.import', () => ({
       ok: true,
       id: custom.id,
       themes: [custom],
@@ -65,13 +65,13 @@ describe('themes actions', () => {
   it('remove() drops a custom theme and persists the reduced list', async () => {
     const { fake, store, dispose } = setup();
     const custom = sampleThemeRecord('drop-me');
-    fake.stubRpc('tui.load_themes', { ok: true, themes: [custom] });
+    fake.stubQuery('themes.get', { ok: true, themes: [custom] });
     await store.getState().actions.themes.load();
 
     await store.getState().actions.themes.remove('drop-me');
 
     expect(store.getState().themes.items.some((t) => t.id === 'drop-me')).toBe(false);
-    expect(fake.rpcCalls.some((c) => c.method === 'tui.save_themes')).toBe(true);
+    expect(fake.commandCalls.some((c) => c.name === 'themes.set')).toBe(true);
     dispose();
   });
 
@@ -79,7 +79,7 @@ describe('themes actions', () => {
     const { fake, store, dispose } = setup();
     const custom = sampleThemeRecord('optimistic');
     store.setState({ themes: { items: [custom], status: 'ready', error: null } });
-    fake.stubRpc('tui.save_themes', () => {
+    fake.stubCommand('themes.set', () => {
       throw new Error('disk full');
     });
 

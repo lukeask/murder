@@ -38,9 +38,9 @@ export interface HarnessModelsSnapshotReply {
  * bus files). `state.harness_models_snapshot` pulls the whole map with empty params.
  */
 declare module '../../bus/BusClient.js' {
-  interface RpcMethods {
+  interface QueryMethods {
     /** Pull the full per-harness model map. Fetched once on wizard open. */
-    'state.harness_models_snapshot': {
+    'harness_models.list': {
       params: Record<string, never>;
       result: HarnessModelsSnapshotReply;
     };
@@ -97,7 +97,7 @@ export function createHarnessModelsActions(bus: BusClient): HarnessModelsActions
   return {
     async fetch(): Promise<Record<string, readonly HarnessModel[]>> {
       try {
-        const reply = await bus.rpc('state.harness_models_snapshot', {});
+        const reply = await bus.query('harness_models.list', {});
         // Merge over the static map so a harness the snapshot omits still shows its last-good list.
         return { ...STATIC_HARNESS_MODELS, ...reply.models };
       } catch {
