@@ -23,6 +23,8 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+import pytest
+
 from murder.codebase_map.build import reconcile_map
 from murder.codebase_map.store import load_latest_summary
 from murder.codebase_map.summarize import FileSummarizer
@@ -150,6 +152,44 @@ def test_resumes_only_missing_files_after_interruption():
         # The untouched files are NOT re-summarized.
         assert "pkg/a.py" not in client.file_paths
         assert "top.py" not in client.file_paths
+
+
+def test_failed_batch_settles_before_reconcile_returns():
+    """A failed file must not leave siblings running into the next worker tick."""
+    with tempfile.TemporaryDirectory() as d:
+        root = Path(d)
+        _init_repo(root)
+        db = _db()
+
+        class FailingClient(RecordingStubClient):
+            def __init__(self) -> None:
+                super().__init__()
+                self.blocked = asyncio.Event()
+                self.release = asyncio.Event()
+
+            async def complete(self, **kwargs) -> CompletionResult:
+                system = kwargs.get("system") or ""
+                if "File path: pkg/a.py" in system:
+                    raise RuntimeError("provider failed")
+                if "File path: pkg/b.py" in system:
+                    self.blocked.set()
+                    await self.release.wait()
+                return await super().complete(**kwargs)
+
+        client = FailingClient()
+
+        async def drive() -> None:
+            task = asyncio.create_task(
+                reconcile_map(root, FileSummarizer(client), db=db, concurrency=2)
+            )
+            await client.blocked.wait()
+            await asyncio.sleep(0)
+            assert not task.done()
+            client.release.set()
+            with pytest.raises(RuntimeError, match="provider failed"):
+                await task
+
+        asyncio.run(drive())
 
 
 def test_missing_render_is_repaired_without_a_model_call():

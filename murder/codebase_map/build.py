@@ -304,7 +304,12 @@ async def _apply_changeset(
         sem = asyncio.Semaphore(concurrency)
         await _do_one(present[0], sem)
         if len(present) > 1:
-            await asyncio.gather(*(_do_one(p, sem) for p in present[1:]))
+            results = await asyncio.gather(
+                *(_do_one(p, sem) for p in present[1:]), return_exceptions=True
+            )
+            for result in results:
+                if isinstance(result, BaseException):
+                    raise result
 
     # Re-render files whose body is current in the DB but whose <file>.md went
     # missing on disk (no model call — pure repair from the canonical record).
