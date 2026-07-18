@@ -1,0 +1,16 @@
+  Cursor Agent
+  v2026.07.09-a3815c0
+  Tip: Try Cursor Grok 4.5 via /model, frontier intelligence at a fraction of the cost.
+
+
+
+
+ → /model Composer 2.5
+
+
+ Composer 2.5 — Edit Parameters                                                                  Max mode: OFF
+
+
+  → ◯ Fast
+
+ ↑/↓ to navigate • Enter to select • Esc to go back

@@ -1,0 +1,28 @@
+  Cursor Agent
+  v2026.07.09-a3815c0
+  Tip: Use /skills to give Cursor specialized knowledge for tasks.
+
+
+
+
+  → Plan, search, build anything
+
+
+ Available models                                                                        Max mode: OFF
+
+ Filter:
+
+    Auto
+    Cursor Grok 4.5          Medium
+ →  Composer 2.5             (Tab to modify)
+    Opus 4.8                 300K Low
+    GPT-5.6 Sol              272K Medium
+    GPT-5.5                  272K Medium
+    Fable 5                  300K Low
+    Sonnet 5                 300K High
+    GPT-5.6 Terra            272K Medium
+    Sonnet 4.6               200K Medium
+
+ 1-10 of 32
+
+ Type to filter • Enter to select • Tab to edit

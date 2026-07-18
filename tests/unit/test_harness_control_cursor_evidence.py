@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -11,6 +12,7 @@ import pytest
 from murder.llm.harness_control.adapters.cursor import CursorHarnessAdapter
 from murder.llm.harness_control.model import (
     ClearComposer,
+    DismissOverlay,
     DuplicatePolicy,
     HarnessId,
     InputChunk,
@@ -35,6 +37,17 @@ TERMINAL_CONTEXT_PERCENT = 7.4
 HTTP_USAGE_PERCENT = 12.5
 USAGE_EVIDENCE_COUNT = 2
 PICKER_VISIBLE_CHOICES = 10
+SHORT_PROMPT = (
+    "Write a detailed 2000-word history of timekeeping devices, century by century, thinking "
+    "step by step. Do not use any tools."
+)
+WRAPPED_PROMPT = (
+    "Build a small dependency-free Python project named tinyboard in this checkout. It should "
+    "be a CLI task board storing tasks in JSON, with add, list, complete, and remove commands. "
+    "Keep domain logic separate from argparse, use atomic file replacement, include useful "
+    "validation and deterministic output, add pytest tests, a pyproject.toml, and a concise "
+    "README. Implement it fully, run the tests, and keep the design simple."
+)
 
 
 def _frame(name: str, *, sequence: int = 1) -> TerminalFrame:
@@ -51,6 +64,38 @@ def _frame(name: str, *, sequence: int = 1) -> TerminalFrame:
     )
 
 
+def _text_frame(text: str) -> TerminalFrame:
+    return TerminalFrame(
+        "frame-inline",
+        HarnessId("cursor"),
+        NOW,
+        120,
+        30,
+        text,
+        False,
+        0,
+        1,
+    )
+
+
+def test_completed_prose_about_running_workers_does_not_block_composer() -> None:
+    adapter = CursorHarnessAdapter()
+    frame = _text_frame(
+        "Created the model refresh for running workers.\n\n"
+        " → Add a follow-up\n\n"
+        " Composer 2.5 · 14.2%                         Run Everything\n"
+        " ~/Documents/code/murder · main\n"
+    )
+
+    evidence = adapter.parse_evidence(frame, ())
+    snapshot = adapter.project_observations(evidence, prior=None).updates
+
+    assert snapshot["generation"].value is not None
+    assert snapshot["generation"].value.active is False
+    assert snapshot["composer"].value is not None
+    assert snapshot["composer"].value.accepts_submission is True
+
+
 def test_composer_and_attachment_evidence_is_retained_without_widening_snapshot() -> None:
     adapter = CursorHarnessAdapter()
     evidence = adapter.parse_evidence(_frame("cursor_idle_input_filled.txt"), ())
@@ -59,13 +104,38 @@ def test_composer_and_attachment_evidence_is_retained_without_widening_snapshot(
     assert evidence[0].parser_version == "cursor-evidence-v3"
     assert evidence[0].evidence_type == "cursor.frame.v3"
     assert payload["raw_frame"]["ansi_preserved"] is True
-    assert payload["composer"]["text"].startswith("Write a detailed 2000-word history")
-    assert payload["composer"]["fingerprint"]
+    assert payload["composer"]["text"] == SHORT_PROMPT
+    assert payload["composer"]["fingerprint"] == hashlib.sha256(SHORT_PROMPT.encode()).hexdigest()
     assert payload["composer"]["queued_follow_up"] is None
     # Attachment data remains harness evidence even though it is not a shared
     # controller field beyond ComposerState.attachments.
     assert "attachments" in payload["composer"]
     assert payload["composer"]["attachments"] == ()
+
+
+def test_cursor_july_wrapped_composer_retains_exact_payload_identity() -> None:
+    payload = CursorHarnessAdapter().parse_evidence(
+        _frame("cursor_july_wrapped_composer.txt"), ()
+    )[0].payload["composer"]
+
+    assert payload["text"] == WRAPPED_PROMPT
+    assert payload["normalized_text"] == WRAPPED_PROMPT
+    assert payload["fingerprint"] == hashlib.sha256(WRAPPED_PROMPT.encode()).hexdigest()
+
+
+def test_cursor_composer_does_not_infer_missing_wrapped_rows() -> None:
+    frame = _frame("cursor_july_wrapped_composer.txt")
+    first_row_only = frame.raw_text.replace(
+        "   argparse, use atomic file replacement, include useful validation and deterministic "
+        "output, add pytest tests, a pyproject.toml, and a concise README. Implement it fully, "
+        "run the tests, and keep the design simple.",
+        "",
+    )
+    payload = CursorHarnessAdapter().parse_evidence(
+        replace(frame, raw_text=first_row_only), ()
+    )[0].payload["composer"]
+
+    assert payload["fingerprint"] != hashlib.sha256(WRAPPED_PROMPT.encode()).hexdigest()
 
 
 def test_picker_parameters_and_active_readback_are_separate_evidence() -> None:
@@ -299,6 +369,60 @@ def test_cursor_opens_parameter_editor_with_tab_when_effort_is_requested() -> No
     )
 
     assert effects[-1] == SendNamedKey("edit:edit-model", "Tab")
+
+
+def test_cursor_july_composer_row_and_parameter_frames_lower_distinct_actions() -> None:
+    adapter = CursorHarnessAdapter()
+    snapshot = unknown_snapshot(HarnessId("cursor"), captured_at=NOW)
+
+    row_delta = adapter.project_observations(
+        adapter.parse_evidence(_frame("cursor_july_composer_row.txt"), ()),
+        prior=None,
+    )
+    row_snapshot = replace(
+        snapshot,
+        model_configuration=row_delta.updates["model_configuration"],
+        surface=row_delta.updates["surface"],
+    )
+    activation = adapter.lower(
+        SelectModel(
+            "activate",
+            "op",
+            DuplicatePolicy.AMBIGUOUS_AFTER_EMISSION,
+            "composer-2.5",
+        ),
+        row_snapshot,
+    )
+
+    parameter_delta = adapter.project_observations(
+        adapter.parse_evidence(_frame("cursor_july_composer_parameters.txt"), ()),
+        prior=None,
+    )
+    parameters = parameter_delta.updates["model_configuration"].value
+    assert parameters is not None
+    assert dict(parameters.parameters) == {
+        "stage": "effort",
+        "configured_model_id": "composer-2.5",
+        "fast_enabled": False,
+    }
+    parameter_snapshot = replace(
+        snapshot,
+        model_configuration=parameter_delta.updates["model_configuration"],
+        surface=parameter_delta.updates["surface"],
+    )
+    dismissal = adapter.lower(
+        DismissOverlay(
+            "dismiss",
+            "op",
+            DuplicatePolicy.REPLAY_SAFE_WHILE_PRECONDITION_HOLDS,
+            "model_picker",
+        ),
+        parameter_snapshot,
+    )
+
+    assert activation[-1] == SendNamedKey("activate:select", "Enter")
+    assert all(not isinstance(effect, SendNamedKey) or effect.key != "Tab" for effect in activation)
+    assert dismissal == (SendNamedKey("dismiss:escape", "Escape"),)
 
 
 @pytest.mark.parametrize(("direction", "key"), (("down", "Down"), ("up", "Up")))

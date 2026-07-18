@@ -99,6 +99,8 @@ def _operation(
     confirmation_action_id: str | None = None,
     parameter_baseline: ObservationRevision | None = None,
     confirmation_baseline: ObservationRevision | None = None,
+    restoration_action_id: str | None = None,
+    restoration_baseline: ObservationRevision | None = None,
     deadline: datetime | None = None,
 ) -> SelectModelOperation:
     return SelectModelOperation(
@@ -120,6 +122,8 @@ def _operation(
         activation_baseline_revision=activation_baseline,
         parameter_baseline_revision=parameter_baseline,
         confirmation_baseline_revision=confirmation_baseline,
+        restoration_action_id=restoration_action_id,
+        restoration_baseline_revision=restoration_baseline,
     )
 
 
@@ -264,6 +268,74 @@ def test_configure_then_reopen_picker_then_verify_active_readback() -> None:
     assert reopen.next_phase is ModelSelectionPhase.REOPENING_PICKER
 
 
+def test_luna_medium_highlight_is_confirmed_before_live_readback_succeeds() -> None:
+    target = ModelTarget("gpt-5.6-luna", provider="openai", effort="medium")
+    highlighted = _snapshot(
+        6,
+        active=ModelState("gpt-5.6-sol", "medium", "gpt-5.6-sol", "openai"),
+        configuration=ModelConfigurationState(
+            (),
+            None,
+            "gpt-5.6-luna",
+            "gpt-5.6-luna",
+            True,
+            (
+                ("stage", "effort"),
+                ("highlighted_effort", "medium"),
+                ("effort_option.medium", "2"),
+            ),
+        ),
+    )
+    operation = replace(
+        _operation(
+            ModelSelectionPhase.AWAITING_CONFIGURATION,
+            configuration_action_id="select-luna",
+            configuration_baseline=_revision(5),
+        ),
+        request=SelectModelRequest(target, timedelta(minutes=3)),
+    )
+
+    confirm = reconcile_model_selection(operation, highlighted, NOW)
+
+    assert confirm.kind is ControllerDecisionKind.EMIT_ACTION
+    assert confirm.next_phase is ModelSelectionPhase.AWAITING_PARAMETER_SELECTION
+    assert isinstance(confirm.action, SelectModel)
+    assert confirm.action.effort == "medium"
+
+    active = replace(
+        _snapshot(
+            7,
+            active=ModelState("gpt-5.6-luna", "medium", "gpt-5.6-luna", "openai"),
+        ),
+        surface=_observed(
+            SurfaceState(
+                SurfaceKind.COMPOSER,
+                frozenset({SurfaceKind.COMPOSER, SurfaceKind.TRANSCRIPT}),
+                SurfaceKind.COMPOSER,
+                False,
+                False,
+            ),
+            _revision(7),
+        ),
+    )
+    confirmed = reconcile_model_selection(
+        replace(
+            operation,
+            envelope=replace(
+                operation.envelope,
+                phase=ModelSelectionPhase.AWAITING_PARAMETER_SELECTION,
+            ),
+            parameter_action_id="confirm-medium",
+            parameter_baseline_revision=_revision(6),
+        ),
+        active,
+        NOW,
+    )
+
+    assert confirmed.kind is ControllerDecisionKind.SUCCEED
+    assert confirmed.next_phase is ModelSelectionPhase.SUCCEEDED
+
+
 def test_saved_parameters_return_to_picker_then_activate_without_reopening_editor() -> None:
     revision = _revision(2)
     snapshot = _snapshot(
@@ -299,6 +371,251 @@ def test_saved_parameters_return_to_picker_then_activate_without_reopening_edito
     assert decision.next_phase is ModelSelectionPhase.AWAITING_ACTIVE_READBACK
     assert isinstance(decision.action, SelectModel)
     assert decision.action.effort is None
+
+
+def test_parameter_selection_can_converge_directly_from_active_readback() -> None:
+    snapshot = _snapshot(
+        2,
+        active=ModelState("gpt-5.5", "high", "GPT-5.5", "openai"),
+    )
+
+    decision = reconcile_model_selection(
+        _operation(
+            ModelSelectionPhase.AWAITING_PARAMETER_SELECTION,
+            parameter_action_id="effort-action",
+            parameter_baseline=_revision(1),
+        ),
+        snapshot,
+        NOW,
+    )
+
+    assert decision.kind is ControllerDecisionKind.SUCCEED
+    assert decision.next_phase is ModelSelectionPhase.SUCCEEDED
+
+
+def test_parameter_selection_restores_composer_before_succeeding() -> None:
+    revision = _revision(2)
+    snapshot = _snapshot(
+        2,
+        active=ModelState("gpt-5.5", "high", "GPT-5.5", "openai"),
+        configuration=ModelConfigurationState(
+            (),
+            None,
+            "gpt-5.5",
+            "gpt-5.5",
+            True,
+            (("stage", "effort"), ("effort", "high")),
+        ),
+    )
+    snapshot = replace(
+        snapshot,
+        surface=_observed(
+            SurfaceState(
+                SurfaceKind.MODEL_PICKER,
+                frozenset({SurfaceKind.MODEL_PICKER}),
+                SurfaceKind.MODEL_PICKER,
+                True,
+                True,
+            ),
+            revision,
+        ),
+    )
+
+    close_effort = reconcile_model_selection(
+        _operation(
+            ModelSelectionPhase.AWAITING_PARAMETER_SELECTION,
+            parameter_action_id="effort-action",
+            parameter_baseline=_revision(1),
+        ),
+        snapshot,
+        NOW,
+    )
+    assert close_effort.kind is ControllerDecisionKind.EMIT_ACTION
+    assert close_effort.next_phase is ModelSelectionPhase.RESTORING_COMPOSER
+    assert isinstance(close_effort.action, DismissOverlay)
+
+    model_picker = replace(
+        snapshot,
+        revision=_revision(3),
+        model_configuration=_observed(_configuration(model_id="gpt-5.5"), _revision(3)),
+    )
+    close_model = reconcile_model_selection(
+        _operation(
+            ModelSelectionPhase.RESTORING_COMPOSER,
+            restoration_action_id="close-effort",
+            restoration_baseline=_revision(2),
+        ),
+        model_picker,
+        NOW,
+    )
+    assert close_model.kind is ControllerDecisionKind.EMIT_ACTION
+    assert close_model.next_phase is ModelSelectionPhase.RESTORING_COMPOSER
+    assert isinstance(close_model.action, DismissOverlay)
+
+
+def test_activation_reopens_cursor_parameters_then_restores_composer_without_replay() -> None:
+    revision = _revision(3)
+    parameter_editor = _snapshot(
+        3,
+        configuration=ModelConfigurationState(
+            (),
+            None,
+            "gpt-5.5",
+            "gpt-5.5",
+            True,
+            (("stage", "effort"), ("effort", "high"), ("fast_enabled", True)),
+        ),
+    )
+    parameter_editor = replace(
+        parameter_editor,
+        surface=_observed(
+            SurfaceState(
+                SurfaceKind.MODEL_PICKER,
+                frozenset({SurfaceKind.MODEL_PICKER}),
+                SurfaceKind.MODEL_PICKER,
+                True,
+                True,
+            ),
+            revision,
+        ),
+    )
+
+    decision = reconcile_model_selection(
+        _operation(
+            ModelSelectionPhase.AWAITING_ACTIVE_READBACK,
+            activation_action_id="activate-row",
+            activation_baseline=_revision(2),
+        ),
+        parameter_editor,
+        NOW,
+    )
+
+    assert decision.kind is ControllerDecisionKind.EMIT_ACTION
+    assert decision.next_phase is ModelSelectionPhase.RESTORING_COMPOSER
+    assert isinstance(decision.action, DismissOverlay)
+
+
+def test_activation_picker_reopens_without_editing_parameters() -> None:
+    revision = _revision(2)
+    composer = replace(
+        _snapshot(2, active=ModelState("other-model", "medium", "Other", "openai")),
+        surface=_observed(
+            SurfaceState(
+                SurfaceKind.COMPOSER,
+                frozenset({SurfaceKind.COMPOSER, SurfaceKind.TRANSCRIPT}),
+                SurfaceKind.COMPOSER,
+                False,
+                False,
+            ),
+            revision,
+        ),
+    )
+    operation = replace(
+        _operation(ModelSelectionPhase.REOPENING_PICKER),
+        configuration_acknowledged=True,
+    )
+
+    decision = reconcile_model_selection(operation, composer, NOW)
+
+    assert decision.kind is ControllerDecisionKind.EMIT_ACTION
+    assert decision.next_phase is ModelSelectionPhase.AWAITING_ACTIVATION_PICKER
+    assert isinstance(decision.action, OpenModelPicker)
+    assert decision.action.edit_parameters is False
+
+
+def test_activation_picker_command_can_converge_directly() -> None:
+    revision = _revision(3)
+    composer = replace(
+        _snapshot(
+            3,
+            active=ModelState("gpt-5.5", "high", "GPT-5.5", "openai"),
+        ),
+        surface=_observed(
+            SurfaceState(
+                SurfaceKind.COMPOSER,
+                frozenset({SurfaceKind.COMPOSER, SurfaceKind.TRANSCRIPT}),
+                SurfaceKind.COMPOSER,
+                False,
+                False,
+            ),
+            revision,
+        ),
+    )
+    operation = replace(
+        _operation(ModelSelectionPhase.AWAITING_ACTIVATION_PICKER),
+        activation_picker_action_id="open-activation-picker",
+        activation_picker_baseline_revision=_revision(2),
+    )
+
+    decision = reconcile_model_selection(operation, composer, NOW)
+
+    assert decision.kind is ControllerDecisionKind.SUCCEED
+    assert decision.next_phase is ModelSelectionPhase.SUCCEEDED
+
+
+def test_codex_success_restores_open_picker_before_completing() -> None:
+    picker_revision = _revision(3)
+    picker = _snapshot(
+        3,
+        active=ModelState("gpt-5.5", "high", "GPT-5.5", "openai"),
+        configuration=_configuration(model_id="gpt-5.5"),
+    )
+    picker = replace(
+        picker,
+        surface=_observed(
+            SurfaceState(
+                SurfaceKind.MODEL_PICKER,
+                frozenset({SurfaceKind.MODEL_PICKER}),
+                SurfaceKind.MODEL_PICKER,
+                True,
+                True,
+            ),
+            picker_revision,
+        ),
+    )
+
+    restore = reconcile_model_selection(
+        _operation(
+            ModelSelectionPhase.AWAITING_ACTIVE_READBACK,
+            activation_action_id="activate-row",
+            activation_baseline=_revision(2),
+        ),
+        picker,
+        NOW,
+    )
+    assert restore.kind is ControllerDecisionKind.EMIT_ACTION
+    assert restore.next_phase is ModelSelectionPhase.RESTORING_COMPOSER
+    assert isinstance(restore.action, DismissOverlay)
+
+    composer_revision = _revision(4)
+    composer = replace(
+        _snapshot(
+            4,
+            active=ModelState("gpt-5.5", "high", "GPT-5.5", "openai"),
+        ),
+        surface=_observed(
+            SurfaceState(
+                SurfaceKind.COMPOSER,
+                frozenset({SurfaceKind.COMPOSER, SurfaceKind.TRANSCRIPT}),
+                SurfaceKind.COMPOSER,
+                False,
+                False,
+            ),
+            composer_revision,
+        ),
+    )
+    complete = reconcile_model_selection(
+        _operation(
+            ModelSelectionPhase.RESTORING_COMPOSER,
+            restoration_action_id="dismiss-picker",
+            restoration_baseline=picker_revision,
+        ),
+        composer,
+        NOW,
+    )
+
+    assert complete.kind is ControllerDecisionKind.SUCCEED
+    assert complete.next_phase is ModelSelectionPhase.SUCCEEDED
 
 
 def test_unobserved_picker_requires_a_distinct_safe_open_action_before_selection() -> None:
@@ -388,9 +705,22 @@ def test_cursor_pending_model_slash_command_is_confirmed_before_escalation() -> 
 
 
 def test_targeted_model_command_can_converge_directly_from_fresh_active_readback() -> None:
-    snapshot = _snapshot(
-        2,
-        active=ModelState("gpt-5-5", "high", "GPT-5.5", "openai"),
+    revision = _revision(2)
+    snapshot = replace(
+        _snapshot(
+            2,
+            active=ModelState("gpt-5-5", "high", "GPT-5.5", "openai"),
+        ),
+        surface=_observed(
+            SurfaceState(
+                SurfaceKind.COMPOSER,
+                frozenset({SurfaceKind.COMPOSER, SurfaceKind.TRANSCRIPT}),
+                SurfaceKind.COMPOSER,
+                False,
+                False,
+            ),
+            revision,
+        ),
     )
     operation = replace(
         _operation(ModelSelectionPhase.AWAITING_CONFIGURATION_PICKER),
@@ -402,6 +732,37 @@ def test_targeted_model_command_can_converge_directly_from_fresh_active_readback
 
     assert decision.kind is ControllerDecisionKind.SUCCEED
     assert decision.next_phase is ModelSelectionPhase.SUCCEEDED
+
+
+def test_targeted_model_command_cannot_succeed_behind_open_picker() -> None:
+    revision = _revision(2)
+    snapshot = replace(
+        _snapshot(
+            2,
+            active=ModelState("gpt-5.5", "high", "GPT-5.5", "openai"),
+            configuration=_configuration(model_id="gpt-5.5"),
+        ),
+        surface=_observed(
+            SurfaceState(
+                SurfaceKind.MODEL_PICKER,
+                frozenset({SurfaceKind.MODEL_PICKER}),
+                SurfaceKind.MODEL_PICKER,
+                True,
+                True,
+            ),
+            revision,
+        ),
+    )
+    operation = replace(
+        _operation(ModelSelectionPhase.AWAITING_CONFIGURATION_PICKER),
+        configuration_picker_action_id="targeted-model-command",
+        configuration_picker_baseline_revision=_revision(1),
+    )
+
+    decision = reconcile_model_selection(operation, snapshot, NOW)
+
+    assert decision.kind is ControllerDecisionKind.OBSERVE_MORE
+    assert decision.next_phase is ModelSelectionPhase.ENSURING_CONFIGURATION
 
 
 def test_configured_or_selected_picker_row_never_proves_activation() -> None:
@@ -444,8 +805,8 @@ def test_matching_active_readback_does_not_leave_open_picker_blocking_input() ->
     )
 
     assert decision.kind is ControllerDecisionKind.EMIT_ACTION
-    assert decision.next_phase is ModelSelectionPhase.AWAITING_CONFIGURATION
-    assert isinstance(decision.action, SelectModel)
+    assert decision.next_phase is ModelSelectionPhase.RESTORING_COMPOSER
+    assert isinstance(decision.action, DismissOverlay)
 
 
 def test_fresh_negative_active_readback_escalates_without_replaying_confirmation() -> None:

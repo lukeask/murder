@@ -81,6 +81,7 @@ class ModelSelectionPhase(Enum):
     REOPENING_PICKER = auto()
     AWAITING_ACTIVATION_PICKER = auto()
     AWAITING_ACTIVE_READBACK = auto()
+    RESTORING_COMPOSER = auto()
     AMBIGUOUS = auto()
     SUCCEEDED = auto()
     FAILED = auto()
@@ -104,6 +105,8 @@ class SelectModelOperation:
     confirmation_baseline_revision: ObservationRevision | None = None
     configuration_acknowledged: bool = False
     activation_picker_baseline_revision: ObservationRevision | None = None
+    restoration_action_id: str | None = None
+    restoration_baseline_revision: ObservationRevision | None = None
     ambiguity_reason: str | None = None
     configuration_search_action_ids: tuple[str, ...] = ()
     configuration_search_baseline_revision: ObservationRevision | None = None
@@ -355,22 +358,26 @@ def _activation_action(op: SelectModelOperation) -> SelectModel:
     )
 
 
-def _dismiss_parameter_editor_action(op: SelectModelOperation) -> DismissOverlay:
+def _dismiss_model_overlay_action(op: SelectModelOperation) -> DismissOverlay:
     return DismissOverlay(
         action_id=str(uuid4()),
         operation_id=op.envelope.operation_id,
         duplicate_policy=DuplicatePolicy.REPLAY_SAFE_WHILE_PRECONDITION_HOLDS,
-        overlay_kind="model_parameters",
+        overlay_kind="model_picker",
     )
 
 
-def _open_picker_action(op: SelectModelOperation) -> OpenModelPicker:
+def _open_picker_action(
+    op: SelectModelOperation, *, edit_parameters: bool | None = None
+) -> OpenModelPicker:
     return OpenModelPicker(
         action_id=str(uuid4()),
         operation_id=op.envelope.operation_id,
         duplicate_policy=DuplicatePolicy.REPLAY_SAFE_WHILE_PRECONDITION_HOLDS,
         filter_text=op.request.target.model_id,
-        edit_parameters=bool(op.request.target.parameters()),
+        edit_parameters=(
+            bool(op.request.target.parameters()) if edit_parameters is None else edit_parameters
+        ),
     )
 
 
@@ -461,6 +468,7 @@ def reconcile_model_selection(  # noqa: PLR0911, PLR0912, PLR0915 -- typed phase
             ModelSelectionPhase.AWAITING_PARAMETER_SELECTION,
             ModelSelectionPhase.AWAITING_CONFIGURATION_CONFIRMATION,
             ModelSelectionPhase.AWAITING_ACTIVE_READBACK,
+            ModelSelectionPhase.RESTORING_COMPOSER,
             ModelSelectionPhase.AMBIGUOUS,
         }:
             return _escalate(
@@ -494,9 +502,9 @@ def reconcile_model_selection(  # noqa: PLR0911, PLR0912, PLR0915 -- typed phase
                 if _model_picker_is_active(snapshot):
                     return ControllerDecision(
                         ControllerDecisionKind.EMIT_ACTION,
-                        ModelSelectionPhase.AWAITING_CONFIGURATION,
-                        _select_action(op),
-                        "target is active but its open picker still requires explicit confirmation",
+                        ModelSelectionPhase.RESTORING_COMPOSER,
+                        _dismiss_model_overlay_action(op),
+                        "target is active; restore the composer before succeeding",
                         (configured, active),
                     )
                 return ControllerDecision(
@@ -532,7 +540,7 @@ def reconcile_model_selection(  # noqa: PLR0911, PLR0912, PLR0915 -- typed phase
             return ControllerDecision(
                 ControllerDecisionKind.EMIT_ACTION,
                 ModelSelectionPhase.AWAITING_CONFIGURATION_CONFIRMATION,
-                _dismiss_parameter_editor_action(op),
+                _dismiss_model_overlay_action(op),
                 "direct model command opened matching parameters; return for activation",
                 (configured,),
             )
@@ -623,14 +631,6 @@ def reconcile_model_selection(  # noqa: PLR0911, PLR0912, PLR0915 -- typed phase
             )
         if not _after(snapshot, op.configuration_picker_baseline_revision):
             return _observe(phase, "wait for fresh model-picker observation")
-        if active.value is TruthValue.TRUE:
-            return ControllerDecision(
-                ControllerDecisionKind.SUCCEED,
-                ModelSelectionPhase.SUCCEEDED,
-                None,
-                "targeted /model command produced matching active-model readback",
-                (active,),
-            )
         if snapshot.model_configuration.knowledge is Knowledge.PRESENT:
             return _observe(
                 ModelSelectionPhase.ENSURING_CONFIGURATION,
@@ -644,6 +644,14 @@ def reconcile_model_selection(  # noqa: PLR0911, PLR0912, PLR0915 -- typed phase
                 _open_picker_action(op),
                 "confirm Cursor's pending /model slash-command selection",
                 (configured,),
+            )
+        if active.value is TruthValue.TRUE and _safe_composer_surface(snapshot):
+            return ControllerDecision(
+                ControllerDecisionKind.SUCCEED,
+                ModelSelectionPhase.SUCCEEDED,
+                None,
+                "targeted /model command produced matching active-model readback",
+                (active,),
             )
         return _escalate(
             ModelSelectionPhase.AMBIGUOUS,
@@ -705,19 +713,11 @@ def reconcile_model_selection(  # noqa: PLR0911, PLR0912, PLR0915 -- typed phase
             return ControllerDecision(
                 ControllerDecisionKind.EMIT_ACTION,
                 ModelSelectionPhase.AWAITING_CONFIGURATION_CONFIRMATION,
-                _dismiss_parameter_editor_action(op),
+                _dismiss_model_overlay_action(op),
                 "leave the saved parameter editor before activating the model",
                 (configured,),
             )
         if configured.value is TruthValue.TRUE:
-            if active.value is TruthValue.TRUE:
-                return ControllerDecision(
-                    ControllerDecisionKind.SUCCEED,
-                    ModelSelectionPhase.SUCCEEDED,
-                    None,
-                    "configuration action converged and active readback matches",
-                    (configured, active),
-                )
             return _observe(
                 ModelSelectionPhase.REOPENING_PICKER,
                 "configuration converged; active model still needs separate selection",
@@ -740,6 +740,22 @@ def reconcile_model_selection(  # noqa: PLR0911, PLR0912, PLR0915 -- typed phase
             )
         if not _after(snapshot, op.parameter_baseline_revision):
             return _observe(phase, "wait for fresh parameter-selection evidence")
+        if active.value is TruthValue.TRUE:
+            if _model_picker_is_active(snapshot):
+                return ControllerDecision(
+                    ControllerDecisionKind.EMIT_ACTION,
+                    ModelSelectionPhase.RESTORING_COMPOSER,
+                    _dismiss_model_overlay_action(op),
+                    "parameter selection activated the target; restore the composer",
+                    (active,),
+                )
+            return ControllerDecision(
+                ControllerDecisionKind.SUCCEED,
+                ModelSelectionPhase.SUCCEEDED,
+                None,
+                "parameter selection produced matching active-model readback",
+                (active,),
+            )
         parameters = _configuration_parameters(snapshot)
         if (
             parameters.get("stage") == "effort"
@@ -749,7 +765,7 @@ def reconcile_model_selection(  # noqa: PLR0911, PLR0912, PLR0915 -- typed phase
             return ControllerDecision(
                 ControllerDecisionKind.EMIT_ACTION,
                 ModelSelectionPhase.AWAITING_CONFIGURATION_CONFIRMATION,
-                _dismiss_parameter_editor_action(op),
+                _dismiss_model_overlay_action(op),
                 "selected effort is visible; return to the picker for activation",
             )
         return _escalate(
@@ -774,11 +790,19 @@ def reconcile_model_selection(  # noqa: PLR0911, PLR0912, PLR0915 -- typed phase
             return ControllerDecision(
                 ControllerDecisionKind.EMIT_ACTION,
                 ModelSelectionPhase.AWAITING_CONFIGURATION_CONFIRMATION,
-                _dismiss_parameter_editor_action(op),
+                _dismiss_model_overlay_action(op),
                 "saved parameter editor is still visible; dismiss it again safely",
                 (configured,),
             )
         if active.value is TruthValue.TRUE:
+            if _model_picker_is_active(snapshot):
+                return ControllerDecision(
+                    ControllerDecisionKind.EMIT_ACTION,
+                    ModelSelectionPhase.RESTORING_COMPOSER,
+                    _dismiss_model_overlay_action(op),
+                    "target is active but the model picker still blocks the composer",
+                    (active,),
+                )
             return ControllerDecision(
                 ControllerDecisionKind.SUCCEED,
                 ModelSelectionPhase.SUCCEEDED,
@@ -848,7 +872,7 @@ def reconcile_model_selection(  # noqa: PLR0911, PLR0912, PLR0915 -- typed phase
             return ControllerDecision(
                 ControllerDecisionKind.EMIT_ACTION,
                 ModelSelectionPhase.AWAITING_ACTIVATION_PICKER,
-                _open_picker_action(op),
+                _open_picker_action(op, edit_parameters=False),
                 "reopen model picker before activating configured target",
                 (configured, active),
             )
@@ -869,6 +893,23 @@ def reconcile_model_selection(  # noqa: PLR0911, PLR0912, PLR0915 -- typed phase
             )
         if not _after(snapshot, op.activation_picker_baseline_revision):
             return _observe(phase, "wait for fresh reopened model-picker observation")
+        if active.value is TruthValue.TRUE:
+            if _model_picker_is_active(snapshot):
+                return ControllerDecision(
+                    ControllerDecisionKind.EMIT_ACTION,
+                    ModelSelectionPhase.RESTORING_COMPOSER,
+                    _dismiss_model_overlay_action(op),
+                    "activation picker selected the target; restore the composer",
+                    (active,),
+                )
+            if _safe_composer_surface(snapshot):
+                return ControllerDecision(
+                    ControllerDecisionKind.SUCCEED,
+                    ModelSelectionPhase.SUCCEEDED,
+                    None,
+                    "activation picker produced matching active-model readback",
+                    (active,),
+                )
         if snapshot.model_configuration.knowledge is Knowledge.PRESENT:
             return _observe(
                 ModelSelectionPhase.REOPENING_PICKER,
@@ -891,6 +932,14 @@ def reconcile_model_selection(  # noqa: PLR0911, PLR0912, PLR0915 -- typed phase
             )
         if not _after(snapshot, op.activation_baseline_revision):
             return _observe(phase, "wait for fresh post-selection active-model readback", active)
+        if _model_picker_is_active(snapshot):
+            return ControllerDecision(
+                ControllerDecisionKind.EMIT_ACTION,
+                ModelSelectionPhase.RESTORING_COMPOSER,
+                _dismiss_model_overlay_action(op),
+                "selection left a model overlay open; restore the composer before readback",
+                (active,),
+            )
         if active.value is TruthValue.TRUE:
             return ControllerDecision(
                 ControllerDecisionKind.SUCCEED,
@@ -906,6 +955,40 @@ def reconcile_model_selection(  # noqa: PLR0911, PLR0912, PLR0915 -- typed phase
                 active,
             )
         return _observe(phase, "await active-model readback", active)
+
+    if phase is ModelSelectionPhase.RESTORING_COMPOSER:
+        if op.restoration_action_id is None or op.restoration_baseline_revision is None:
+            return _escalate(
+                ModelSelectionPhase.AMBIGUOUS,
+                "composer-restoration phase lacks persisted action identity or baseline revision",
+            )
+        if not _after(snapshot, op.restoration_baseline_revision):
+            return _observe(phase, "wait for fresh post-dismissal evidence", active)
+        if _model_picker_is_active(snapshot):
+            return ControllerDecision(
+                ControllerDecisionKind.EMIT_ACTION,
+                phase,
+                _dismiss_model_overlay_action(op),
+                "another model overlay remains; continue restoring the composer",
+                (active,),
+            )
+        if not _safe_composer_surface(snapshot):
+            return _observe(phase, "wait for a known composer surface after dismissal", active)
+        if active.value is TruthValue.TRUE:
+            return ControllerDecision(
+                ControllerDecisionKind.SUCCEED,
+                ModelSelectionPhase.SUCCEEDED,
+                None,
+                "composer restored with matching active-model readback",
+                (active,),
+            )
+        if active.value is TruthValue.FALSE:
+            return _escalate(
+                ModelSelectionPhase.AMBIGUOUS,
+                "composer restored with contradictory active-model readback",
+                active,
+            )
+        return _observe(phase, "composer restored; await active-model readback", active)
 
     if phase is ModelSelectionPhase.AMBIGUOUS:
         return _escalate(
@@ -955,6 +1038,8 @@ def advance_model_selection(  # noqa: PLR0912, PLR0915 -- typed phase persistenc
     parameter_baseline = op.parameter_baseline_revision
     confirmation_baseline = op.confirmation_baseline_revision
     activate_picker_baseline = op.activation_picker_baseline_revision
+    restoration_action_id = op.restoration_action_id
+    restoration_baseline = op.restoration_baseline_revision
     ambiguity = op.ambiguity_reason
     search_action_ids = op.configuration_search_action_ids
     search_baseline = op.configuration_search_baseline_revision
@@ -987,6 +1072,9 @@ def advance_model_selection(  # noqa: PLR0912, PLR0915 -- typed phase persistenc
         elif phase is ModelSelectionPhase.AWAITING_ACTIVATION_PICKER:
             activate_picker_action_id = decision.action.action_id
             activate_picker_baseline = snapshot.revision
+        elif phase is ModelSelectionPhase.RESTORING_COMPOSER:
+            restoration_action_id = decision.action.action_id
+            restoration_baseline = snapshot.revision
     if decision.kind is ControllerDecisionKind.ESCALATE:
         ambiguity = decision.reason
     return replace(
@@ -1018,6 +1106,8 @@ def advance_model_selection(  # noqa: PLR0912, PLR0915 -- typed phase persistenc
             )
         ),
         activation_picker_baseline_revision=activate_picker_baseline,
+        restoration_action_id=restoration_action_id,
+        restoration_baseline_revision=restoration_baseline,
         ambiguity_reason=ambiguity,
         configuration_search_action_ids=search_action_ids,
         configuration_search_baseline_revision=search_baseline,

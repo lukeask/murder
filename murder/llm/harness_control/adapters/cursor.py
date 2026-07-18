@@ -74,7 +74,11 @@ from murder.llm.harnesses.parsing import (
 from murder.llm.harnesses.transcripts import parse_frames
 
 _INPUT = re.compile(r"^\s*→\s*(?P<text>.*?)(?:\s+ctrl\+c to stop)?\s*$", re.I)
-_BUSY = re.compile(r"(?:\bComposing\b|\bRunning\b|ctrl\+c to stop)", re.I)
+_COMPOSER_ROW = re.compile(r"^\s*\x1b\[(?:40|48;2;\d+;\d+;\d+)m")
+_BUSY = re.compile(
+    r"(?:^[ \t]*[⠀-⣿]+\s+(?:Composing|Running)\b|ctrl\+c to stop)",
+    re.I | re.M,
+)
 _STATUS = re.compile(r"^\s*(?P<label>.+?)\s+(?:Auto-run|Run\s+Everything)\s*$", re.I)
 _MODEL_PAGE = re.compile(r"^\s*(?P<start>\d+)-(?P<end>\d+)\s+of\s+(?P<total>\d+)", re.I)
 _ATTACHMENT = re.compile(
@@ -172,7 +176,7 @@ class CursorHarnessAdapter(HarnessObservationAdapter, HarnessActionAdapter):
             diagnostics.append(f"transcript parse failed: {type(exc).__name__}: {exc}")
         payload = {
             "raw_frame": _raw_frame(frame),
-            "composer": _composer(clean),
+            "composer": _composer(frame.raw_text, clean),
             "models": _models(clean),
             "workspace": _workspace(clean),
             "context": _context_evidence(clean),
@@ -504,7 +508,7 @@ def _raw_frame(frame: TerminalFrame) -> dict[str, object]:
     }
 
 
-def _composer(clean: str) -> dict[str, object]:
+def _composer(raw_frame: str, clean: str) -> dict[str, object]:
     if (
         "available models" in clean.casefold()
         or _PARAMETER_TITLE.search(clean)
@@ -536,8 +540,17 @@ def _composer(clean: str) -> dict[str, object]:
             "queued_follow_up": None,
             "attachments": attachments,
         }
-    _index, match = found[-1]
-    raw = match.group("text").strip()
+    index, match = found[-1]
+    rows = [match.group("text").strip()]
+    raw_lines = raw_frame.splitlines()
+    for line in raw_lines[index + 1 :]:
+        if not _COMPOSER_ROW.match(line):
+            break
+        rendered = strip_ansi(line).strip()
+        if not rendered:
+            break
+        rows.append(rendered)
+    raw = " ".join(rows)
     raw = re.sub(r"\s+ctrl\+c to stop\s*$", "", raw, flags=re.I).rstrip()
     placeholder = raw.casefold() in {"add a follow-up", "plan, search, build anything"}
     text = "" if placeholder else raw
@@ -577,7 +590,7 @@ def _models(clean: str) -> dict[str, object]:
         for model_id, label in rows
     ]
     page = parse_cursor_model_page(clean)
-    filter_match = re.search(r"^\s*Filter:\s*(?P<text>.*)$", clean, re.I | re.M)
+    filter_match = re.search(r"^[ \t]*Filter:[ \t]*(?P<text>.*)$", clean, re.I | re.M)
     param_title = _PARAMETER_TITLE.search(clean)
     params, parameter_options = _parameters(clean)
     if page is not None:

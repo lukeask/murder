@@ -1,0 +1,15 @@
+
+
+  Cursor Agent
+  [2mv2026.07.16-899851b[0m[39m[49m
+  [2mTip: Use /skills to give Cursor specialized knowledge for tasks.[0m[39m[49m
+
+
+
+ [40m                                                                                                                                                                                                                          [49m
+ [40m → Build a small dependency-free Python project named tinyboard in this checkout. It should be a CLI task board storing tasks in JSON, with add, list, complete, and remove commands. Keep domain logic separate from     [49m
+ [40m   argparse, use atomic file replacement, include useful validation and deterministic output, add pytest tests, a pyproject.toml, and a concise README. Implement it fully, run the tests, and keep the design simple.[7m [0m[39m[40m   [49m
+ [40m                                                                                                                                                                                                                          [49m
+
+  [2mComposer 2.5[0m[39m[49m                                                                                                                                                                                              [35mRun Everything[39m
+  [2m~/Agents/codextestsmurder · main[0m[39m[49m
