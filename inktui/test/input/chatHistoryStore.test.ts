@@ -50,11 +50,27 @@ describe('chatHistoryStore', () => {
     expect(store.getState().entries).toEqual(['a', 'b', 'a']);
   });
 
-  it('seed replaces the whole ring wholesale', () => {
+  it('seed preserves a locally attempted send that is absent from the transcript', () => {
     const store = createChatHistoryStore();
     store.getState().record('stale');
     store.getState().seed(['x', 'y', 'z']);
-    expect(store.getState().entries).toEqual(['x', 'y', 'z']);
+    expect(store.getState().entries).toEqual(['x', 'y', 'z', 'stale']);
+  });
+
+  it('seed removes the optimistic tail once the transcript acknowledges it', () => {
+    const store = createChatHistoryStore();
+    store.getState().seed(['old']);
+    store.getState().record('sent');
+    store.getState().seed(['old', 'sent']);
+    expect(store.getState().entries).toEqual(['old', 'sent']);
+  });
+
+  it('an older identical transcript entry does not acknowledge a new failed attempt', () => {
+    const store = createChatHistoryStore();
+    store.getState().seed(['repeat', 'other']);
+    store.getState().record('repeat');
+    store.getState().seed(['repeat', 'other']);
+    expect(store.getState().entries).toEqual(['repeat', 'other', 'repeat']);
   });
 
   it('seed copies the caller array — later mutation does not alias state', () => {

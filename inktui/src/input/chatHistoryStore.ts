@@ -12,20 +12,21 @@
  * live draft: pressing up at the top row must *stash* the in-progress buffer, load an entry, and later
  * *restore* the draft when you walk back down past the newest entry. That coupling belongs with the
  * buffer it mutates. This store holds only the immutable-ish **entries** plus the two verbs that grow
- * it ({@link ChatHistoryState.record} at the send boundary) or reseed it wholesale
- * ({@link ChatHistoryState.seed} from a fresh conversations snapshot). The navigation reads `entries`
- * as a read-only array and indexes into it.
+ * it ({@link ChatHistoryState.record} at the send boundary) or reconcile it
+ * ({@link ChatHistoryState.seed} from a fresh conversations snapshot). Locally attempted sends
+ * remain in the ring until an authoritative snapshot contains them, so a failed delivery is still
+ * recoverable with Up. The navigation reads `entries` as a read-only array and indexes into it.
  *
  * ## Seeding vs recording — two write paths, one corpus
  *
  * The transcript feed (`state.conversations_snapshot`) is authoritative and re-pulled on every
  * (re)connect, so on boot/refresh the app collects every `type==='user'` `raw.text` across all
  * transcripts, sorts oldest→newest by numeric block id (the `selectUserHistory` selector, owned by
- * WS-E), and calls {@link ChatHistoryState.seed} to replace the whole ring. Between snapshots, each
- * successful send calls {@link ChatHistoryState.record} to append the just-sent message immediately
+ * WS-E), and calls {@link ChatHistoryState.seed} to reconcile the ring. Between snapshots, each
+ * send attempt calls {@link ChatHistoryState.record} to append the message immediately
  * (so the user can recall what they typed a moment ago without waiting for the round-trip). A reseed
  * may then re-derive the same entry from the snapshot — the dedupe rule (no consecutive duplicates)
- * keeps that from doubling, and seed replaces wholesale so it self-heals regardless.
+ * keeps that from doubling.
  *
  * Framework-agnostic vanilla Zustand (rule 4): no React, no Ink — the exact idiom as
  * {@link ./chatInputStore.js}/{@link ./focusStore.js}.
@@ -50,10 +51,9 @@ export interface ChatHistoryState {
    */
   record(text: string): void;
   /**
-   * Replace the **whole** ring — the snapshot reseed path. The caller (WS-E's `selectUserHistory`)
-   * passes the entries already sorted oldest→newest; this verb stores them verbatim. Wholesale
-   * replacement (not a merge) is what makes a reseed self-healing: whatever {@link record} appended
-   * optimistically between snapshots is reconciled to exactly what the authoritative snapshot says.
+   * Reconcile the ring with an authoritative snapshot. Entries already present
+   * in the snapshot acknowledge local attempts; unacknowledged attempts remain
+   * at the end so failed sends stay recallable.
    */
   seed(entries: readonly string[]): void;
 }
@@ -64,6 +64,9 @@ export type ChatHistoryStoreApi = StoreApi<ChatHistoryState>;
 /** Create the murder-wide sent-message history store. Starts empty; seeded from the first snapshot and
  * grown per send. */
 export function createChatHistoryStore(): ChatHistoryStoreApi {
+  // Attempts not yet acknowledged by an authoritative transcript snapshot.
+  let localAttempts: string[] = [];
+  let authoritativeEntries: string[] = [];
   return createStore<ChatHistoryState>()((set, get) => ({
     entries: [],
     record(text) {
@@ -76,11 +79,39 @@ export function createChatHistoryStore(): ChatHistoryStoreApi {
       if (entries[entries.length - 1] === text) {
         return;
       }
+      localAttempts.push(text);
       set({ entries: [...entries, text] });
     },
     seed(entries) {
-      // Wholesale replace — copy so a later mutation of the caller's array cannot alias our state.
-      set({ entries: [...entries] });
+      // Matching transcript entries acknowledge optimistic attempts. Preserve
+      // the remainder so failed/timed-out sends stay recoverable with Up.
+      const authoritative = [...entries];
+      const occurrenceCounts = (values: readonly string[]): Map<string, number> => {
+        const counts = new Map<string, number>();
+        for (const value of values) counts.set(value, (counts.get(value) ?? 0) + 1);
+        return counts;
+      };
+      const previousCounts = occurrenceCounts(authoritativeEntries);
+      const currentCounts = occurrenceCounts(authoritative);
+      const acknowledgements = new Map<string, number>();
+      for (const [text, count] of currentCounts) {
+        const added = count - (previousCounts.get(text) ?? 0);
+        if (added > 0) acknowledgements.set(text, added);
+      }
+      localAttempts = localAttempts.filter((attempt) => {
+        const remaining = acknowledgements.get(attempt) ?? 0;
+        if (remaining === 0) return true;
+        acknowledgements.set(attempt, remaining - 1);
+        return false;
+      });
+      authoritativeEntries = authoritative;
+      const merged = [...authoritative];
+      for (const attempt of localAttempts) {
+        if (merged[merged.length - 1] !== attempt) {
+          merged.push(attempt);
+        }
+      }
+      set({ entries: merged });
     },
   }));
 }
