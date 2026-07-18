@@ -172,6 +172,8 @@ interface SpawnWizardState {
   enabledHarnesses: readonly string[];
   /** The saved spawn favorites (right column). Filled async on open, like models/worktrees. */
   favorites: SpawnFavorite[];
+  /** Prevent the initial empty array from masquerading as an authoritative empty saved list. */
+  favoritesStatus: 'loading' | 'ready';
   // Selections.
   harness: string;
   model: string;
@@ -288,6 +290,7 @@ export function spawnWizardMode(
     worktreeOptions: buildWorktreeOptions([]),
     enabledHarnesses,
     favorites: [],
+    favoritesStatus: opts.favoriteActions === undefined ? 'ready' : 'loading',
     harness: initialHarness,
     model: '',
     effort: '',
@@ -310,9 +313,11 @@ export function spawnWizardMode(
   };
 
   function refresh(): void {
-    const current = modes.getState().stack.find((f) => f.mode.id === id);
+    // Async loads belong to this exact wizard instance. An older, dismissed
+    // instance must not re-enter a newer wizard that happens to share its id.
+    const current = modes.getState().stack.find((f) => f.mode === mode);
     if (current !== undefined) {
-      modes.getState().enter(current.mode);
+      modes.getState().enter(mode);
     }
   }
 
@@ -341,9 +346,13 @@ export function spawnWizardMode(
       .load()
       .then((f) => {
         s.favorites = f;
+        s.favoritesStatus = 'ready';
         refresh();
       })
-      .catch(() => {});
+      .catch(() => {
+        s.favoritesStatus = 'ready';
+        refresh();
+      });
   }
 
   /** The number of selectable rows on the active selection step (for cursor wrapping). */
@@ -358,6 +367,7 @@ export function spawnWizardMode(
   /** The number of rows in the right column: favorites + the trailing `create favorite` row (hidden
    * at 10 favorites). */
   function rightRowCount(): number {
+    if (s.favoritesStatus === 'loading') return 0;
     return s.favorites.length < 10 ? s.favorites.length + 1 : 10;
   }
 
@@ -986,7 +996,8 @@ function HarnessGrid({ state: s }: { readonly state: SpawnWizardState }): JSX.El
   const theme = useTheme();
 
   const leftRows = s.enabledHarnesses.map((h) => h.replace(/_/g, '-'));
-  const rightCount = s.favorites.length < 10 ? s.favorites.length + 1 : 10;
+  const rightCount =
+    s.favoritesStatus === 'loading' ? 1 : s.favorites.length < 10 ? s.favorites.length + 1 : 10;
   const rows = Math.max(leftRows.length, rightCount);
 
   const favoriteFocused = s.focusedColumn === 'favorites';
@@ -995,6 +1006,7 @@ function HarnessGrid({ state: s }: { readonly state: SpawnWizardState }): JSX.El
     s.gridMode === 'confirmDelete' ? (s.favorites[s.favoriteCursor]?.name ?? '') : null;
 
   const rightLabel = (i: number): string => {
+    if (s.favoritesStatus === 'loading') return 'loading favorites…';
     const chord = `[${s.chordPrefix}-${i < 9 ? i + 1 : 0}]`;
     const name = i < s.favorites.length ? (s.favorites[i]?.name ?? '') : 'create favorite';
     return `${chord} ${name}`;
@@ -1012,7 +1024,7 @@ function HarnessGrid({ state: s }: { readonly state: SpawnWizardState }): JSX.El
     return {
       key: label === null ? `right-empty-${i}` : `right-${label}`,
       label,
-      highlit: favoriteFocused && i === s.favoriteCursor,
+      highlit: s.favoritesStatus === 'ready' && favoriteFocused && i === s.favoriteCursor,
     };
   });
 

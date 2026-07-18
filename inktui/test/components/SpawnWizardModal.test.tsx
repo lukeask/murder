@@ -734,6 +734,64 @@ describe('SpawnWizardModal — spawn favorites (the two new behavioral contracts
     return { stores, bus, enter };
   }
 
+  it('does not present create-favorite as the only row while persisted favorites load', async () => {
+    const { stores, bus } = setupWithFavorite();
+    let resolveFavorites: ((favorites: (typeof ONE_FAVORITE)[]) => void) | undefined;
+    const favoriteActions = {
+      load: () =>
+        new Promise<(typeof ONE_FAVORITE)[]>((resolve) => {
+          resolveFavorites = resolve;
+        }),
+      save: async (favorites: readonly (typeof ONE_FAVORITE)[]) => [...favorites],
+    };
+    const { lastFrame } = render(<Harness stores={stores} />);
+
+    stores.modes
+      .getState()
+      .enter(spawnWizardMode(stores.modes, createSpawnActions(bus), { favoriteActions }));
+    await tick();
+
+    expect(lastFrame()).toContain('loading favorites…');
+    expect(lastFrame()).not.toContain('create favorite');
+
+    resolveFavorites?.([ONE_FAVORITE]);
+    await tick();
+
+    expect(lastFrame()).toContain('CodexHigh');
+    expect(lastFrame()).toContain('create favorite');
+  });
+
+  it('ignores a dismissed wizard load that finishes after a new wizard opens', async () => {
+    const { stores, bus } = setupWithFavorite();
+    let resolveOld: ((favorites: (typeof ONE_FAVORITE)[]) => void) | undefined;
+    const oldFavoriteActions = {
+      load: () =>
+        new Promise<(typeof ONE_FAVORITE)[]>((resolve) => {
+          resolveOld = resolve;
+        }),
+      save: async (favorites: readonly (typeof ONE_FAVORITE)[]) => [...favorites],
+    };
+    const oldMode = spawnWizardMode(stores.modes, createSpawnActions(bus), {
+      favoriteActions: oldFavoriteActions,
+    });
+    stores.modes.getState().enter(oldMode);
+    stores.modes.getState().exit(oldMode.id);
+
+    const newMode = spawnWizardMode(stores.modes, createSpawnActions(bus));
+    stores.modes.getState().enter(newMode);
+    let modeUpdates = 0;
+    const unsubscribe = stores.modes.subscribe(() => {
+      modeUpdates += 1;
+    });
+
+    resolveOld?.([ONE_FAVORITE]);
+    await tick();
+
+    unsubscribe();
+    expect(modeUpdates).toBe(0);
+    expect(selectActiveMode(stores.modes)).toBe(newMode);
+  });
+
   it('selecting a favorite prefills harness/model/effort and JUMPS to the worktree step', async () => {
     const { stores, bus, enter } = setupWithFavorite();
     const { lastFrame, stdin } = render(<Harness stores={stores} />);
