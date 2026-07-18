@@ -24,7 +24,7 @@ from murder.state.persistence.schema import get_db, init_db
 from murder.state.persistence.tickets import get_ticket
 from murder.work.plans.sync import PlanSync, content_hash
 from murder.app.service.host import ServiceHost
-from murder.state.storage.filesystem import read_lock_pid
+from murder.state.storage.filesystem import lock_is_held, read_lock_pid
 from murder.state.storage.paths import (
     agents_dir,
     db_path,
@@ -142,44 +142,74 @@ async def _supervisor_is_live(repo: Path, socket_path: Path) -> bool:
     )
 
 
+def _live_lock_owner_pid(repo: Path) -> int | None:
+    """Return the live pid recorded by the repo lock, if any.
+
+    A live lock owner whose socket is not answering may still be in startup (or
+    briefly have a busy event loop).  It is not safe to treat that state as
+    permission to launch a second supervisor: the duplicate will lose the
+    flock race and exit with code 1, obscuring the healthy process that won.
+    """
+    pid = read_lock_pid(lock_path(repo))
+    return pid if pid is not None and _pid_is_alive(pid) and lock_is_held(lock_path(repo)) else None
+
+
 def _spawn_service_process(repo: Path) -> subprocess.Popen[bytes]:
     log_root = logs_dir(repo) / datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
     log_root.mkdir(parents=True, exist_ok=True)
-    log_file = open(log_root / "supervisor.ndjson", "ab", buffering=0)
-    return subprocess.Popen(
-        [sys.executable, "-m", "murder", "serviced"],
-        cwd=str(repo),
-        stdin=subprocess.DEVNULL,
-        stdout=log_file,
-        stderr=subprocess.STDOUT,
-        start_new_session=True,
-        close_fds=True,
-    )
+    with open(log_root / "supervisor.ndjson", "ab", buffering=0) as log_file:
+        return subprocess.Popen(
+            [sys.executable, "-m", "murder", "serviced"],
+            cwd=str(repo),
+            stdin=subprocess.DEVNULL,
+            stdout=log_file,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+            close_fds=True,
+        )
+
+
+async def _ensure_supervisor_impl(repo: Path, socket_path: Path) -> bool:
+    """Ensure a responsive supervisor, returning whether this call started it."""
+    if await _supervisor_is_live(repo, socket_path):
+        return False
+
+    proc: subprocess.Popen[bytes] | None = None
+    delays = (0.25, 0.5, 1.0, 1.0, 1.0, 1.0)
+    for delay in delays:
+        # The repo lock is acquired before the socket opens.  Respect its live
+        # owner during that readiness gap instead of spawning a doomed
+        # duplicate.  If an owner dies while we wait, the next iteration takes
+        # over startup.
+        if proc is None and _live_lock_owner_pid(repo) is None:
+            proc = _spawn_service_process(repo)
+
+        await asyncio.sleep(delay)
+        if await _supervisor_is_live(repo, socket_path):
+            return proc is not None and read_lock_pid(lock_path(repo)) == proc.pid
+
+        # Fail fast if the child already died (e.g. crashed on import) instead
+        # of polling the full window for a process that's gone.  A code-1 child
+        # can also mean a concurrent launcher won the flock race; in that case
+        # follow the winner rather than surfacing the loser's exit status.
+        if proc is not None:
+            rc = proc.poll()
+            if rc is not None:
+                owner_pid = _live_lock_owner_pid(repo)
+                if owner_pid is not None and owner_pid != proc.pid:
+                    proc = None
+                    continue
+                raise RuntimeError(f"supervisor process exited during startup (code {rc})")
+    raise RuntimeError("supervisor did not become ready within 5s")
 
 
 async def _ensure_supervisor(repo: Path, socket_path: Path) -> None:
-    if await _supervisor_is_live(repo, socket_path):
-        return
-    proc = _spawn_service_process(repo)
-    delays = (0.25, 0.5, 1.0, 1.0, 1.0, 1.0)
-    for delay in delays:
-        await asyncio.sleep(delay)
-        if await _supervisor_is_live(repo, socket_path):
-            return
-        # Fail fast if the child already died (e.g. crashed on import) instead
-        # of polling the full window for a process that's gone.
-        rc = proc.poll()
-        if rc is not None:
-            raise RuntimeError(f"supervisor process exited during startup (code {rc})")
-    raise RuntimeError("supervisor did not become ready within 5s")
+    await _ensure_supervisor_impl(repo, socket_path)
 
 
 async def _ensure_supervisor_started(repo: Path, socket_path: Path) -> bool:
     """Return True when this call started the supervisor, False if it was already live."""
-    if await _supervisor_is_live(repo, socket_path):
-        return False
-    await _ensure_supervisor(repo, socket_path)
-    return True
+    return await _ensure_supervisor_impl(repo, socket_path)
 
 
 def _friendly_lock_message(repo: Path) -> str:

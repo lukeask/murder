@@ -184,6 +184,8 @@ class ServiceHost:
             tmux_frame_capture=self._capture_tmux_frame,
         )
         await self.socket_server.start()
+        session = write_service_session(self.repo_root, self.socket_path)
+        self._service_session_name = session.name
 
         # Startup recovery: reattach handlers to crows whose tmux session
         # survived a service restart so DONE is consumed and the ticket
@@ -238,9 +240,6 @@ class ServiceHost:
                             recoverable=False,
                         )
                     )
-        session = write_service_session(self.repo_root, self.socket_path)
-        self._service_session_name = session.name
-
     async def _ensure_startup_rogue_safely(self) -> None:
         """Best-effort: spawn the user's configured Startup Rogue on boot.
 

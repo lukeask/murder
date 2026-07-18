@@ -108,3 +108,29 @@ def read_lock_pid(path: Path) -> int | None:
             return int(f.read().strip())
     except (FileNotFoundError, ValueError):
         return None
+
+
+def lock_is_held(path: Path) -> bool:
+    """Return whether another process currently holds ``path``'s flock.
+
+    The pid text in a stale lockfile is not authoritative because that pid can
+    later be reused by an unrelated process.  Probing the kernel-owned flock
+    distinguishes that case without modifying or replacing the lockfile.
+    """
+    try:
+        fd = os.open(str(path), os.O_RDONLY)
+    except FileNotFoundError:
+        return False
+    try:
+        try:
+            # A shared non-blocking probe succeeds unless the daemon holds its
+            # exclusive lock, and works with this read-only descriptor.
+            fcntl.flock(fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
+        except OSError as exc:
+            if exc.errno in (errno.EACCES, errno.EAGAIN):
+                return True
+            raise
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        return False
+    finally:
+        os.close(fd)
