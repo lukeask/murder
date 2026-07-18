@@ -37,6 +37,10 @@ class InkTuiBundleHook(BuildHookInterface):
         # and any other target, so we don't shell out to npm needlessly.
         if self.target_name != "wheel":
             return
+        # Editable/dev installs resolve front-ends from the source checkout at runtime
+        # (inktui/src via tsx; webui/dist via bridge fallback) — no npm build here.
+        if version == "editable":
+            return
 
         repo_root = Path(self.root)
         force_include = build_data.setdefault("force_include", {})
