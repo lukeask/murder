@@ -6,16 +6,16 @@ from types import SimpleNamespace
 
 import pytest
 
+from murder.app.service.agent_registry import AgentRegistry
 from murder.runtime.agents.base import AgentRole, AgentStatus
 from murder.runtime.orchestration.orchestrator import Orchestrator
 from murder.state.persistence import plans as plan_db
 from murder.state.persistence.agents import upsert_agent
 from murder.state.persistence.schema import get_db, init_db
+from murder.state.storage.paths import db_path, deprecated_plans_dir, plan_md
 from murder.work.plans.parser import parse, render, write
 from murder.work.plans.schema import Plan, PlanStatus
 from murder.work.plans.sync import PlanSync, content_hash
-from murder.app.service.agent_registry import AgentRegistry
-from murder.state.storage.paths import db_path, deprecated_plans_dir, plan_md
 
 
 def _connect(repo_root):
@@ -155,7 +155,6 @@ def test_plan_sync_deprecate_marks_superseded_and_hides_from_active_list(repo_ro
 
 def test_retarget_plan_runtime_rekeys_live_planner_and_handler(
     repo_root,
-    monkeypatch,
 ) -> None:
     conn = _connect(repo_root)
     registry = AgentRegistry()
@@ -208,37 +207,22 @@ def test_retarget_plan_runtime_rekeys_live_planner_and_handler(
         "VALUES ('planner-old', 0, 'user', 'hello', '2026-01-01T00:00:00')"
     )
 
-    calls: list[tuple[str, str]] = []
-
-    async def fake_rename_session(old: str, new: str) -> bool:
-        calls.append((old, new))
-        return True
-
-    monkeypatch.setattr(
-        "murder.runtime.orchestration.orchestrator.tmux.rename_session",
-        fake_rename_session,
-    )
-
     asyncio.run(Orchestrator(rt)._retarget_plan_runtime("old", "new"))
 
     assert registry.get_agent("planner-old") is None
     assert registry.get_agent("planner-new") is planner
     assert planner.id == "planner-new"
     assert planner.plan_name == "new"
-    assert planner.session == "murder_demo_planner_new"
-    assert planner.harness_session.session == "murder_demo_planner_new"
+    assert planner.session == "murder_demo_planner_old"
+    assert planner.harness_session.session == "murder_demo_planner_old"
     assert registry.get_agent("planning_handler-new") is handler
     assert handler.id == "planning_handler-new"
     assert handler.plan_name == "new"
-    assert handler.planner_session == "murder_demo_planner_new"
-    assert calls == [
-        ("murder_demo_planner_old", "murder_demo_planner_new"),
-        ("murder_demo_planning_handler_old", "murder_demo_planning_handler_new"),
-    ]
+    assert handler.planner_session == "murder_demo_planner_old"
     rows = conn.execute("SELECT agent_id, session FROM agents ORDER BY agent_id").fetchall()
     assert [(r["agent_id"], r["session"]) for r in rows] == [
-        ("planner-new", "murder_demo_planner_new"),
-        ("planning_handler-new", "murder_demo_planning_handler_new"),
+        ("planner-new", "murder_demo_planner_old"),
+        ("planning_handler-new", "murder_demo_planning_handler_old"),
     ]
     msg_row = conn.execute("SELECT agent_id FROM agent_messages").fetchone()
     assert msg_row["agent_id"] == "planner-new"

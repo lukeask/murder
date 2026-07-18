@@ -8,12 +8,28 @@ the ticket must stay in_progress, and the stale handler row must be cleaned up.
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
+from uuid import uuid4
 
 from murder.app.service.recovery import ReconcileReport, reconcile_agents_vs_tmux
 from murder.config import Config, CrowHandlerConfig, HarnessRoleConfig, ProjectConfig
 from murder.runtime.orchestration.orchestrator import Orchestrator
+from murder.runtime.sessions.contracts import (
+    AcquireWriterLease,
+    Correlation,
+    HarnessSessionRecord,
+    PrincipalKind,
+    PrincipalRef,
+    RequestMeta,
+    SessionCapabilities,
+    SessionStatus,
+    SessionTransport,
+    WriterLeaseGranted,
+    WriterMode,
+)
+from murder.runtime.sessions.persistence import SessionStore
 from murder.state.persistence.schema import get_db, init_db
 
 
@@ -112,6 +128,47 @@ def test_stale_handler_already_terminal_is_idempotent():
 
     assert ("t004", "crow-t004") in report.crows_to_reattach
     assert report.agents_marked_dead.count("crow_handler-t004") == 0
+
+
+def test_missing_tmux_controller_session_is_lost_and_writer_revoked():
+    conn = _db()
+    store = SessionStore(conn)
+    session_id = uuid4()
+    store.save_session(
+        HarnessSessionRecord(
+            session_id=session_id,
+            repository_id=uuid4(),
+            harness="codex",
+            transport=SessionTransport.TMUX,
+            transport_ref="missing-pane",
+            status=SessionStatus.READY,
+            revision=4,
+            capabilities=SessionCapabilities(raw_terminal=True),
+            started_at=datetime(2026, 7, 18, tzinfo=timezone.utc),
+        )
+    )
+    principal = PrincipalRef(kind=PrincipalKind.CLIENT, id="web")
+    granted = store.acquire_writer_lease(
+        AcquireWriterLease(
+            meta=RequestMeta(
+                request_id=uuid4(),
+                correlation=Correlation(correlation_id=uuid4()),
+            ),
+            session_id=session_id,
+            mode=WriterMode.RAW_TERMINAL,
+        ),
+        holder=principal,
+    )
+    assert isinstance(granted, WriterLeaseGranted)
+
+    report = reconcile_agents_vs_tmux(conn, live_sessions=set())
+
+    recovered = store.get_session(session_id)
+    assert recovered is not None
+    assert recovered.status is SessionStatus.LOST
+    assert recovered.revision == 5
+    assert store.active_writer_lease(session_id) is None
+    assert report.harness_sessions_marked_lost == [str(session_id)]
 
 
 def test_orchestrator_reattach_binds_live_session_without_prompt(fake_tmux, tmp_path):

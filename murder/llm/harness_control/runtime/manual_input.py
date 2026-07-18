@@ -9,6 +9,7 @@ implied harness-level success condition and is never replayed.
 
 from __future__ import annotations
 
+import base64
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from enum import Enum, auto
@@ -16,7 +17,9 @@ from uuid import uuid4
 
 from murder.llm.harness_control.model.actions import (
     DuplicatePolicy,
+    EffectEmission,
     EmissionBatchResult,
+    EmissionStatus,
     SendLiteralKeys,
     SendNamedKey,
     TerminalEffect,
@@ -31,7 +34,23 @@ from murder.llm.harness_control.model.operations import (
     OperationStatus,
 )
 from murder.llm.harness_control.runtime.actuator import IntentPriority
-from murder.llm.harness_control.runtime.session import VerifiedHarnessControlSession
+from murder.llm.harness_control.runtime.session import (
+    SessionControllerBinding,
+    VerifiedHarnessControlSession,
+)
+from murder.runtime.sessions.contracts import (
+    AcquireWriterLease,
+    Correlation,
+    PrincipalKind,
+    PrincipalRef,
+    ReleaseWriterLease,
+    RequestMeta,
+    WriterLeaseDenied,
+    WriterLeaseGranted,
+    WriterMode,
+    WriteTerminalInput,
+)
+from murder.runtime.sessions.persistence import SessionStore, WriterLeaseRequiredError
 
 
 class ManualInputPhase(Enum):
@@ -92,6 +111,9 @@ async def emit_manual_input(
     literal: bool,
     append_enter: bool,
     source: str = "agent_ops.send_agent_key",
+    _bypass_controller: bool = False,
+    _operation_id: str | None = None,
+    _action_id: str | None = None,
 ) -> ManualInputReceipt:
     """Durably select and serialize one human-authorized terminal input.
 
@@ -105,10 +127,20 @@ async def emit_manual_input(
     if not text:
         raise ValueError("manual terminal input must not be empty")
 
+    binding = control.session_controller_binding
+    if binding is not None and not _bypass_controller:
+        return await _emit_bound_manual_input(
+            binding,
+            text=text,
+            literal=literal,
+            append_enter=append_enter,
+            source=source,
+        )
+
     controller = control.controller
     now = datetime.now(timezone.utc)
-    operation_id = str(uuid4())
-    action_id = str(uuid4())
+    operation_id = _operation_id or str(uuid4())
+    action_id = _action_id or str(uuid4())
     request = ManualInputRequest(text, literal, append_enter, source)
     operation = ManualInputOperation(
         OperationEnvelope(
@@ -179,11 +211,145 @@ async def emit_manual_input(
     return ManualInputReceipt(operation_id, action_id, emission)
 
 
+async def emit_fenced_manual_input(
+    control: VerifiedHarnessControlSession,
+    *,
+    text: str,
+    literal: bool,
+    append_enter: bool,
+    principal_id: str,
+) -> ManualInputReceipt:
+    """Acquire a short human-client lease for one serialized manual write."""
+
+    controller = await control.ensure_session_controller()
+    store = control.session_store
+    if not isinstance(store, SessionStore):
+        raise RuntimeError("verified control has no session writer-lease store")
+    principal = PrincipalRef(kind=PrincipalKind.CLIENT, id=principal_id)
+    request_id = uuid4()
+    granted = await controller.acquire_writer_lease(
+        AcquireWriterLease(
+            meta=RequestMeta(
+                request_id=request_id,
+                correlation=Correlation(correlation_id=request_id),
+            ),
+            session_id=controller.session_id,
+            mode=WriterMode.RAW_TERMINAL,
+        ),
+        holder=principal,
+    )
+    if isinstance(granted, WriterLeaseDenied):
+        raise WriterLeaseRequiredError(granted.reason)
+    assert isinstance(granted, WriterLeaseGranted)
+    control.bind_session_controller(controller, lease=granted.lease)
+    binding = control.session_controller_binding
+    assert binding is not None
+    try:
+        return await emit_manual_input(
+            control,
+            text=text,
+            literal=literal,
+            append_enter=append_enter,
+        )
+    finally:
+        control.unbind_session_controller(binding)
+        release_id = uuid4()
+        await controller.release_writer_lease(
+            ReleaseWriterLease(
+                meta=RequestMeta(
+                    request_id=release_id,
+                    correlation=Correlation(correlation_id=release_id),
+                ),
+                lease_id=granted.lease.lease_id,
+                fence=granted.lease.fence,
+            ),
+            holder=principal,
+        )
+
+
+async def _emit_bound_manual_input(
+    binding: SessionControllerBinding,
+    *,
+    text: str,
+    literal: bool,
+    append_enter: bool,
+    source: str,
+) -> ManualInputReceipt:
+    """Translate the compatibility facade into one fenced mailbox command."""
+
+    operation_uuid = uuid4()
+    operation_id = str(operation_uuid)
+    action_id = str(uuid4())
+    data = _manual_input_bytes(text, literal=literal)
+    if append_enter:
+        data += b"\r"
+    command = WriteTerminalInput(
+        operation_id=operation_uuid,
+        lease_id=binding.lease_id,
+        fence=binding.fence,
+        encoding="base64",
+        data=base64.b64encode(data).decode("ascii"),
+    )
+    binding.control.stage_controller_manual_input(
+        operation_uuid,
+        text=text,
+        literal=literal,
+        append_enter=append_enter,
+        source=source,
+        action_id=action_id,
+    )
+    try:
+        await binding.controller.execute(command, principal=binding.principal)
+    except BaseException:
+        binding.control.pop_controller_manual_input(operation_uuid)
+        raise
+    # Preserve the transitional receipt shape. Its claim remains only that the
+    # physical transport accepted the bytes; the controller receipt is not a
+    # harness-level acknowledgement.
+    effect_id = str(uuid4())
+    emission = EmissionBatchResult(
+        operation_id=operation_id,
+        results=(EffectEmission(effect_id, EmissionStatus.EMITTED),),
+    )
+    return ManualInputReceipt(operation_id, action_id, emission)
+
+
+_NAMED_KEY_BYTES = {
+    "Enter": b"\r",
+    "Escape": b"\x1b",
+    "Tab": b"\t",
+    "BSpace": b"\x7f",
+    "Space": b" ",
+    "Up": b"\x1b[A",
+    "Down": b"\x1b[B",
+    "Right": b"\x1b[C",
+    "Left": b"\x1b[D",
+    "Home": b"\x1b[H",
+    "End": b"\x1b[F",
+    "PageUp": b"\x1b[5~",
+    "PageDown": b"\x1b[6~",
+}
+
+
+def _manual_input_bytes(text: str, *, literal: bool) -> bytes:
+    if literal:
+        return text.encode("utf-8")
+    named = _NAMED_KEY_BYTES.get(text)
+    if named is not None:
+        return named
+    if len(text) == len("C-x") and text.startswith("C-"):
+        character = text[2].upper()
+        if "@" <= character <= "_":
+            return bytes((ord(character) - ord("@"),))
+    raise ValueError(f"named terminal key {text!r} has no raw-byte encoding")
+
+
 __all__ = [
     "ManualInputOperation",
     "ManualInputPhase",
     "ManualInputReceipt",
     "ManualInputRequest",
     "emit_manual_input",
+    "emit_fenced_manual_input",
     "lower_manual_input",
 ]

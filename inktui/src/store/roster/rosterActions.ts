@@ -69,6 +69,8 @@ export interface CrowSessionDto {
   model?: string | null;
   status: string;
   session_name?: string | null;
+  /** Durable HarnessSessionRecord UUID; absent for transitional legacy agents. */
+  session_id?: string | null;
   /** ISO-8601 string from Python datetime.isoformat(), or null. Used for stuck-heartbeat detection. */
   last_seen?: string | null;
   /** ISO-8601 string from Python datetime.isoformat(), or null. */
@@ -95,6 +97,7 @@ function toRosterRow(session: CrowSessionDto): RosterRow {
     model: session.model ?? null,
     status: session.status,
     session: session.session_name ?? null,
+    ...(session.session_id == null ? {} : { sessionId: session.session_id }),
     worktreePath: session.worktree_path ?? null,
     lastSeen: session.last_seen ?? null,
     openEscalations: session.open_escalations ?? 0,

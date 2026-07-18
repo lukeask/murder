@@ -31,7 +31,11 @@ export function TmuxFrameView({ agentId }: { readonly agentId: string }): React.
     setFrame('');
     const off = bus.attachTerminal(agentId, (terminalFrame) => {
       // The current tmux stream mode is full-frame replacement, never incremental terminal bytes.
-      setFrame(terminalFrame.frame);
+      setFrame((current) =>
+        terminalFrame.type === 'terminal.frame' && terminalFrame.reset
+          ? terminalFrame.data
+          : `${current}${terminalFrame.data}`,
+      );
     });
     return off;
   }, [bus, agentId]);

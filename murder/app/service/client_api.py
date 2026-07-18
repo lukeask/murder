@@ -136,6 +136,9 @@ class CrowSessionSummary:
     model: str | None = None
     open_escalations: int = 0
     max_severity: int = 0
+    # Canonical durable HarnessSessionRecord identity. ``session_name`` remains
+    # the transitional display/legacy tmux reference.
+    session_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

@@ -12,22 +12,31 @@ from murder.app.service.runtime_scope import OrchestratorHost
 from murder.bus import Entity
 from murder.llm.direct import resolve_direct_role_client
 from murder.runtime.agents.base import AgentStatus
-from murder.runtime.terminal import tmux
 from murder.runtime.terminal.session_names import format_session_name
 from murder.state.persistence.agents import (
     rename_agent as _db_rename_agent,
+)
+from murder.state.persistence.agents import (
     set_agent_status as _db_set_agent_status,
 )
 from murder.state.persistence.plans import (
     get_plan_row as _db_get_plan_row,
+)
+from murder.state.persistence.plans import (
     live_plan_name_exists as _db_live_plan_name_exists,
+)
+from murder.state.persistence.plans import (
     rename_plan as _db_rename_plan,
+)
+from murder.state.persistence.plans import (
     upsert_plan as _db_upsert_plan,
 )
 from murder.state.storage.paths import plan_md
 from murder.work import notes as notes_mod
 from murder.work.plans.parser import (
     render as _render_plan_markdown,
+)
+from murder.work.plans.parser import (
     write as _write_plan_markdown,
 )
 from murder.work.plans.schema import Plan, PlanStatus
@@ -185,22 +194,10 @@ class PlanOps:
         }
 
     async def _preflight_plan_runtime_rename(self, old_name: str, new_name: str) -> None:
-        planner = self.rt.get_agent(f"planner-{old_name}")
-        if planner is not None:
-            old_session = format_session_name(self.rt, "planner", f"_{old_name}")
-            new_session = format_session_name(self.rt, "planner", f"_{new_name}")
-            if await tmux.session_exists(old_session) and await tmux.session_exists(
-                new_session
-            ):
-                raise tmux.TmuxError(f"session already exists: {new_session}")
-        handler = self.rt.get_agent(f"planning_handler-{old_name}")
-        if handler is not None:
-            old_session = format_session_name(self.rt, "planning_handler", f"_{old_name}")
-            new_session = format_session_name(self.rt, "planning_handler", f"_{new_name}")
-            if await tmux.session_exists(old_session) and await tmux.session_exists(
-                new_session
-            ):
-                raise tmux.TmuxError(f"session already exists: {new_session}")
+        # Live transport references are durable session identity, not display
+        # labels. A plan rename rekeys agents and persisted plan ownership while
+        # deliberately retaining any existing tmux names.
+        del old_name, new_name
 
     async def _retarget_plan_runtime(self, old_name: str, new_name: str) -> None:
         assert self.rt.db is not None
@@ -211,42 +208,38 @@ class PlanOps:
         old_planner_id = f"planner-{old_name}"
         new_planner_id = f"planner-{new_name}"
         old_planner_session = format_session_name(self.rt, "planner", f"_{old_name}")
-        new_planner_session = format_session_name(self.rt, "planner", f"_{new_name}")
         planner = self.rt.rename_agent(old_planner_id, new_planner_id)
-        await tmux.rename_session(old_planner_session, new_planner_session)
         if planner is not None:
-            planner.session = new_planner_session
+            planner.session = old_planner_session
             if hasattr(planner, "plan_name"):
                 planner.plan_name = new_name
             harness_session = getattr(planner, "harness_session", None)
             if harness_session is not None:
-                harness_session.session = new_planner_session
+                harness_session.session = old_planner_session
 
         old_handler_id = f"planning_handler-{old_name}"
         new_handler_id = f"planning_handler-{new_name}"
         old_handler_session = format_session_name(self.rt, "planning_handler", f"_{old_name}")
-        new_handler_session = format_session_name(self.rt, "planning_handler", f"_{new_name}")
         handler = self.rt.rename_agent(old_handler_id, new_handler_id)
-        await tmux.rename_session(old_handler_session, new_handler_session)
         if handler is not None:
-            handler.session = new_handler_session
+            handler.session = old_handler_session
             if hasattr(handler, "plan_name"):
                 handler.plan_name = new_name
             if hasattr(handler, "planner_session"):
-                handler.planner_session = new_planner_session
+                handler.planner_session = old_planner_session
 
         with self.rt.db:
             _db_rename_agent(
                 self.rt.db,
                 old_planner_id,
                 new_planner_id,
-                session=new_planner_session,
+                session=old_planner_session,
             )
             _db_rename_agent(
                 self.rt.db,
                 old_handler_id,
                 new_handler_id,
-                session=new_handler_session,
+                session=old_handler_session,
             )
             if planner is not None:
                 self.rt.sync_agent(planner)

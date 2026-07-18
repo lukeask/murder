@@ -14,7 +14,12 @@ import sqlite3
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from uuid import uuid4
+from typing import TYPE_CHECKING
+from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
+
+if TYPE_CHECKING:
+    from murder.runtime.sessions.contracts import PrincipalRef, SessionStatus, WriterLease
+    from murder.runtime.sessions.controller import SessionController
 
 from murder.llm.harness_control.adapters.antigravity import AntigravityHarnessAdapter
 from murder.llm.harness_control.adapters.base import (
@@ -96,6 +101,10 @@ from murder.llm.harness_control.capabilities.usage import (
 from murder.llm.harness_control.model.actions import InputChunk
 from murder.llm.harness_control.model.evidence import EvidenceEnvelope, HarnessId, TerminalFrame
 from murder.llm.harness_control.model.observations import (
+    ComposerActionability,
+    GenerationPhase,
+    Knowledge,
+    ModalKind,
     ObservationSnapshot,
     UsageState,
     unknown_snapshot,
@@ -150,6 +159,45 @@ from murder.state.persistence.harness_control import (
 PARSER_HISTORY_FRAME_LIMIT = 64
 
 
+def _session_status_from_observation(
+    snapshot: ObservationSnapshot,
+) -> SessionStatus:
+    """Project verified parser state into the persisted live-session lifecycle."""
+
+    from murder.runtime.sessions.contracts import SessionStatus  # noqa: PLC0415
+
+    if (
+        snapshot.modal.knowledge is Knowledge.PRESENT
+        and snapshot.modal.value is not None
+        and snapshot.modal.value.kind in {ModalKind.PERMISSION, ModalKind.QUESTION}
+    ):
+        return SessionStatus.AWAITING_APPROVAL
+    if (
+        snapshot.generation.knowledge is Knowledge.PRESENT
+        and snapshot.generation.value is not None
+        and (
+            snapshot.generation.value.active is True
+            or snapshot.generation.value.phase
+            in {
+                GenerationPhase.STARTING,
+                GenerationPhase.THINKING,
+                GenerationPhase.RUNNING_TOOL,
+                GenerationPhase.STREAMING,
+                GenerationPhase.COMPACTING,
+                GenerationPhase.INTERRUPTING,
+            }
+        )
+    ):
+        return SessionStatus.WORKING
+    if (
+        snapshot.composer.knowledge is Knowledge.PRESENT
+        and snapshot.composer.value is not None
+        and snapshot.composer.value.actionability is ComposerActionability.ACTIONABLE
+    ):
+        return SessionStatus.AWAITING_INPUT
+    return SessionStatus.READY
+
+
 @dataclass(frozen=True, slots=True)
 class IngestedFrame:
     """One immutable capture after durable evidence projection."""
@@ -178,6 +226,17 @@ class StructuredDecisionTimingPolicy:
 
 
 DEFAULT_STRUCTURED_DECISION_TIMING_POLICY = StructuredDecisionTimingPolicy()
+
+
+@dataclass(frozen=True, slots=True)
+class SessionControllerBinding:
+    """Explicit raw-writer context used by the transitional manual-input API."""
+
+    controller: SessionController
+    control: VerifiedHarnessControlSession
+    principal: PrincipalRef
+    lease_id: UUID
+    fence: int
 
 
 class VerifiedHarnessControlSession:
@@ -213,8 +272,186 @@ class VerifiedHarnessControlSession:
         self._persistence_session_id = persistence_session_id
         self._operation_arbiter = operation_arbiter or SessionOperationArbiter()
         self._structured_decision_timing = structured_decision_timing
+        self._session_controller_binding: SessionControllerBinding | None = None
+        self._session_controller: SessionController | None = None
+        self._session_controller_registry: object | None = None
+        self._session_store: object | None = None
+        self._controller_manual_inputs: dict[UUID, tuple[str, bool, bool, str, str]] = {}
         self.harness_id = harness_id
         self.terminal_session = terminal_session
+
+    @property
+    def session_controller_binding(self) -> SessionControllerBinding | None:
+        """Return the controller path that manual input must use, when migrated."""
+
+        return self._session_controller_binding
+
+    @property
+    def session_controller(self) -> SessionController | None:
+        return self._session_controller
+
+    @property
+    def session_store(self) -> object | None:
+        return self._session_store
+
+    async def ensure_session_controller(
+        self,
+        *,
+        repository_key: str | None = None,
+        agent_key: str | None = None,
+        registry: object | None = None,
+        recover: bool = False,
+    ) -> SessionController:
+        """Install the Phase 2 controller once for this verified live session."""
+
+        if self._session_controller is not None and not self._session_controller.closed:
+            return self._session_controller
+        from murder.runtime.sessions.backend import (  # noqa: PLC0415
+            VerifiedHarnessSessionBackend,
+        )
+        from murder.runtime.sessions.capabilities import (  # noqa: PLC0415
+            verified_tmux_capabilities,
+        )
+        from murder.runtime.sessions.contracts import (  # noqa: PLC0415
+            HarnessSessionRecord,
+            SessionStatus,
+            SessionTransport,
+        )
+        from murder.runtime.sessions.persistence import (  # noqa: PLC0415
+            SessionStore,
+            ensure_session_schema,
+        )
+        from murder.runtime.sessions.registry import (  # noqa: PLC0415
+            SessionControllerRegistry,
+            registry_for_connection,
+        )
+
+        ensure_session_schema(self._connection)
+        repository_identity = repository_key or _database_identity(self._connection)
+        durable_agent_key = agent_key or self._persistence_session_id or self.terminal_session
+        session_id = uuid5(
+            NAMESPACE_URL,
+            f"murder:harness-session:{repository_identity}:{durable_agent_key}",
+        )
+        store = SessionStore(self._connection)
+        record = store.get_session(session_id)
+        if record is None:
+            record = HarnessSessionRecord(
+                session_id=session_id,
+                agent_id=uuid5(NAMESPACE_URL, f"murder:agent:{durable_agent_key}"),
+                repository_id=uuid5(
+                    NAMESPACE_URL,
+                    f"murder:repository:{repository_identity}",
+                ),
+                harness=str(self.harness_id),
+                transport=SessionTransport.TMUX,
+                transport_ref=self.terminal_session,
+                status=SessionStatus.READY,
+                revision=0,
+                capabilities=verified_tmux_capabilities(str(self.harness_id)),
+                started_at=datetime.now(timezone.utc),
+            )
+            store.save_session(record)
+        elif record.status in {
+            SessionStatus.STOPPING,
+            SessionStatus.STOPPED,
+            SessionStatus.FAILED,
+            SessionStatus.LOST,
+        }:
+            resumed = record.model_copy(
+                update={
+                    "transport_ref": self.terminal_session,
+                    "status": SessionStatus.READY,
+                    "revision": record.revision + 1,
+                    "stopped_at": None,
+                }
+            )
+            store.save_session(resumed, expected_revision=record.revision)
+            record = resumed
+        selected_registry = (
+            registry
+            if isinstance(registry, SessionControllerRegistry)
+            else registry_for_connection(self._connection)
+        )
+        controller = await selected_registry.get_or_create(
+            record,
+            backend=VerifiedHarnessSessionBackend(self),
+            recover=recover,
+        )
+        self._session_store = store
+        self._session_controller_registry = selected_registry
+        self._session_controller = controller
+        return controller
+
+    async def remove_session_controller(self) -> None:
+        """Release this session from its service registry after termination."""
+
+        from murder.runtime.sessions.registry import SessionControllerRegistry  # noqa: PLC0415
+
+        controller = self._session_controller
+        registry = self._session_controller_registry
+        self._session_controller = None
+        self._session_controller_registry = None
+        if isinstance(registry, SessionControllerRegistry) and controller is not None:
+            await registry.remove(controller.session_id)
+        elif controller is not None:
+            await controller.close()
+
+    def bind_session_controller(
+        self,
+        controller: SessionController,
+        *,
+        lease: WriterLease,
+    ) -> None:
+        """Fence the legacy manual-input facade behind a SessionController.
+
+        The verified semantic methods remain source-compatible during the
+        migration. Once this binding is installed, raw/manual writes cannot
+        reach its actuator or tmux directly.
+        """
+
+        if controller.session_id != lease.resource.session_id:
+            raise ValueError("session controller and writer lease refer to different sessions")
+        self._session_controller_binding = SessionControllerBinding(
+            controller=controller,
+            control=self,
+            principal=lease.holder,
+            lease_id=lease.lease_id,
+            fence=lease.fence,
+        )
+
+    def unbind_session_controller(self, binding: SessionControllerBinding) -> None:
+        """Remove only the matching per-call raw-writer binding."""
+
+        if self._session_controller_binding is binding:
+            self._session_controller_binding = None
+
+    def stage_controller_manual_input(
+        self,
+        operation_id: UUID,
+        *,
+        text: str,
+        literal: bool,
+        append_enter: bool,
+        source: str,
+        action_id: str,
+    ) -> None:
+        if not hasattr(self, "_controller_manual_inputs"):
+            self._controller_manual_inputs = {}
+        self._controller_manual_inputs[operation_id] = (
+            text,
+            literal,
+            append_enter,
+            source,
+            action_id,
+        )
+
+    def pop_controller_manual_input(
+        self, operation_id: UUID
+    ) -> tuple[str, bool, bool, str, str] | None:
+        if not hasattr(self, "_controller_manual_inputs"):
+            return None
+        return self._controller_manual_inputs.pop(operation_id, None)
 
     @classmethod
     def from_tmux(
@@ -322,7 +559,7 @@ class VerifiedHarnessControlSession:
             on_preempt=self._preemption_hook(operation_id),
         )
 
-    async def observe_once(self):
+    async def observe_once(self) -> ObservationSnapshot:
         """Persist one raw frame, broad evidence, and projected observation."""
 
         return (await self.ingest_once()).snapshot
@@ -336,6 +573,12 @@ class VerifiedHarnessControlSession:
         if bundle is None:
             raise RuntimeError("verified controller accepted no frame during ingestion")
         accepted_frame, snapshot, evidence = bundle
+        session_controller = self._session_controller
+        if session_controller is not None and not session_controller.closed:
+            await session_controller.observe(
+                _session_status_from_observation(snapshot),
+                observed_at=snapshot.captured_at,
+            )
         return IngestedFrame(accepted_frame, snapshot, evidence)
 
     async def recover_pending_operations(self) -> tuple[str, ...]:
@@ -1024,6 +1267,13 @@ def _as_harness_usage_status(harness: str, usage: UsageState) -> HarnessUsageSta
 
 def _fetched_at() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _database_identity(connection: sqlite3.Connection) -> str:
+    row = connection.execute("PRAGMA database_list").fetchone()
+    if row is None or not row[2]:
+        return f"memory:{id(connection)}"
+    return str(row[2])
 
 
 def _int_or_none(value: object) -> int | None:

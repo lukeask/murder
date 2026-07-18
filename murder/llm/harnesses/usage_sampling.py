@@ -5,9 +5,10 @@ from __future__ import annotations
 import json
 import logging
 import sqlite3
+from collections.abc import Awaitable, Callable
 from dataclasses import asdict, dataclass, is_dataclass
 from pathlib import Path
-from typing import Literal, Protocol
+from typing import Literal, Protocol, cast
 
 from murder.config import Config, HarnessRoleConfig
 from murder.llm.harnesses import REGISTRY
@@ -30,6 +31,21 @@ class _VerifiedUsageCapability(Protocol):
     """The semantic usage entry point exposed by verified control sessions."""
 
     async def collect_usage(self, *, trigger: str) -> HarnessUsageStatus | None: ...
+
+
+def _live_usage_collector(
+    agent: _LiveUsageAgent,
+) -> Callable[..., Awaitable[HarnessUsageStatus | None]] | None:
+    collector = getattr(agent, "collect_verified_usage", None)
+    if callable(collector):
+        return cast(Callable[..., Awaitable[HarnessUsageStatus | None]], collector)
+    control = getattr(agent, "verified_harness_control", None)
+    fallback = getattr(control, "collect_usage", None)
+    return (
+        cast(Callable[..., Awaitable[HarnessUsageStatus | None]], fallback)
+        if callable(fallback)
+        else None
+    )
 
 
 LiveSessionUsageOutcome = Literal["stored", "skipped", "noop", "failed"]
@@ -168,8 +184,7 @@ async def sample_live_session_usage(
         if db is None:
             return LiveSessionUsageResult(outcome="failed", reason="no_db")
 
-        control = getattr(agent, "verified_harness_control", None)
-        collect_usage = getattr(control, "collect_usage", None)
+        collect_usage = _live_usage_collector(agent)
         if not callable(collect_usage):
             return LiveSessionUsageResult(outcome="skipped", reason="verified_usage_unavailable")
 

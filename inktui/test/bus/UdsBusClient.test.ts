@@ -103,10 +103,60 @@ class ScriptedApplicationServer {
       op: 'terminal.frame',
       stream_id: attach.stream_id,
       frame: {
-        mode: 'replace',
+        type: 'terminal.frame',
+        subscription_id: attach.stream_id,
         sequence,
         session_id: attach.target.session_id ?? 'supervisor',
-        frame,
+        captured_at: '2026-07-18T00:00:00Z',
+        columns: 80,
+        rows: 24,
+        encoding: 'utf-8',
+        data: frame,
+        reset: true,
+      },
+    });
+  }
+
+  emitTerminalChunk(data: string, sequence: number): void {
+    const attach = [...this.messages]
+      .reverse()
+      .find(
+        (message): message is Extract<ClientMessage, { op: 'terminal.attach' }> =>
+          message.op === 'terminal.attach',
+      );
+    if (attach === undefined) throw new Error('no terminal attachment');
+    this.broadcast({
+      op: 'terminal.chunk',
+      stream_id: attach.stream_id,
+      chunk: {
+        type: 'terminal.chunk',
+        subscription_id: attach.stream_id,
+        session_id: attach.target.session_id ?? 'supervisor',
+        sequence,
+        encoding: 'utf-8',
+        data,
+      },
+    });
+  }
+
+  emitTerminalGap(expectedSequence: number, nextSequence: number): void {
+    const attach = [...this.messages]
+      .reverse()
+      .find(
+        (message): message is Extract<ClientMessage, { op: 'terminal.attach' }> =>
+          message.op === 'terminal.attach',
+      );
+    if (attach === undefined) throw new Error('no terminal attachment');
+    this.broadcast({
+      op: 'terminal.gap',
+      stream_id: attach.stream_id,
+      gap: {
+        type: 'terminal.gap',
+        subscription_id: attach.stream_id,
+        session_id: attach.target.session_id ?? 'supervisor',
+        expected_sequence: expectedSequence,
+        next_sequence: nextSequence,
+        snapshot_required: true,
       },
     });
   }
@@ -184,6 +234,7 @@ class ScriptedApplicationServer {
         return;
       case 'unsubscribe':
       case 'terminal.detach':
+      case 'terminal.resync':
         return;
       default:
         assertNever(message);
@@ -459,11 +510,12 @@ describe('UdsBusClient — generated terminal stream', () => {
     const client = new UdsBusClient({ socketPath: server.socketPath, clock: instantClock() });
     const frames: string[] = [];
 
-    const detach = client.attachTerminal('agent-1', (frame) => frames.push(frame.frame));
+    const detach = client.attachTerminal('agent-1', (frame) => frames.push(frame.data));
     await waitFor(() => server.messages.some((message) => message.op === 'terminal.attach'));
     expect(server.messages.find((message) => message.op === 'terminal.attach')).toMatchObject({
       op: 'terminal.attach',
-      target: { session_id: 'agent-1' },
+      target: { legacy_agent_id: 'agent-1' },
+      after_sequence: 0,
     });
 
     server.emitTerminal('terminal contents');
@@ -472,6 +524,58 @@ describe('UdsBusClient — generated terminal stream', () => {
 
     detach();
     await waitFor(() => server.messages.some((message) => message.op === 'terminal.detach'));
+    client.close();
+    await server.stop();
+  });
+
+  it('attaches a durable session UUID without treating it as an agent id', async () => {
+    const server = new ScriptedApplicationServer();
+    await server.start();
+    const client = new UdsBusClient({ socketPath: server.socketPath, clock: instantClock() });
+    const sessionId = '0198b156-2dd3-70a9-bc79-fca001dc8801';
+
+    const detach = client.attachTerminal(sessionId, () => {});
+    await waitFor(() => server.messages.some((message) => message.op === 'terminal.attach'));
+    expect(server.messages.find((message) => message.op === 'terminal.attach')).toMatchObject({
+      target: { session_id: sessionId },
+    });
+
+    detach();
+    client.close();
+    await server.stop();
+  });
+
+  it('requests a full resync for an incremental gap and resumes attachment sequence', async () => {
+    const server = new ScriptedApplicationServer();
+    await server.start();
+    const client = new UdsBusClient({ socketPath: server.socketPath, clock: instantClock() });
+    const updates: string[] = [];
+
+    client.attachTerminal('agent-1', (update) => updates.push(update.data));
+    await waitFor(() => server.messages.some((message) => message.op === 'terminal.attach'));
+    server.emitTerminal('snapshot', 7);
+    await waitFor(() => updates.length === 1);
+
+    server.emitTerminalChunk('missed predecessor', 9);
+    await waitFor(() => server.messages.some((message) => message.op === 'terminal.resync'));
+    expect(server.messages.find((message) => message.op === 'terminal.resync')).toMatchObject({
+      op: 'terminal.resync',
+      after_sequence: 7,
+      reason: 'gap',
+    });
+    expect(updates).toEqual(['snapshot']);
+
+    server.dropAllConnections();
+    await waitFor(() => server.handshakeCount === 2);
+    await waitFor(
+      () => server.messages.filter((message) => message.op === 'terminal.attach').length === 2,
+    );
+    const attachments = server.messages.filter(
+      (message): message is Extract<ClientMessage, { op: 'terminal.attach' }> =>
+        message.op === 'terminal.attach',
+    );
+    expect(attachments.at(-1)?.after_sequence).toBe(7);
+
     client.close();
     await server.stop();
   });

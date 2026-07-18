@@ -45,6 +45,15 @@ class RuntimeReadModel(ReadModelBase):
             rows = conn.execute(
                 """
                 SELECT a.agent_id, a.role, a.ticket_id, a.status, a.session,
+                       (
+                         SELECT hs.session_id
+                           FROM harness_sessions hs
+                          WHERE hs.transport = 'tmux'
+                            AND hs.transport_ref = a.session
+                            AND hs.status NOT IN ('stopped','failed','lost')
+                          ORDER BY hs.started_at DESC, hs.session_id DESC
+                          LIMIT 1
+                       ) AS persistent_session_id,
                        COALESCE(a.harness, t.harness) AS harness,
                        COALESCE(a.model, t.model) AS model,
                        a.worktree_path,
@@ -100,6 +109,7 @@ class RuntimeReadModel(ReadModelBase):
                 model=_optional_str(row["model"]),
                 open_escalations=open_by_ticket.get(str(row["ticket_id"] or ""), (0, 0))[0],
                 max_severity=open_by_ticket.get(str(row["ticket_id"] or ""), (0, 0))[1],
+                session_id=_optional_str(row["persistent_session_id"]),
             )
             for row in rows
         )

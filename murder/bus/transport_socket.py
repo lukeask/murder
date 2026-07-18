@@ -6,8 +6,11 @@ import errno
 import ipaddress
 import json
 import logging
+import re
+from collections import OrderedDict
 from collections.abc import Awaitable, Callable, Coroutine
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal
 
@@ -29,7 +32,7 @@ from murder.app.protocol.subscriptions import (
     ProjectionSubscription,
     SubscriptionSnapshot,
 )
-from murder.app.protocol.terminal import TerminalFrame
+from murder.app.protocol.terminal import TerminalFrame, TerminalTarget
 from murder.app.protocol.wire import (
     APPLICATION_WIRE_ADAPTER,
     SubscriptionEventMessage,
@@ -38,6 +41,8 @@ from murder.app.protocol.wire import (
     TerminalAttachMessage,
     TerminalDetachMessage,
     TerminalFrameMessage,
+    TerminalResyncedMessage,
+    TerminalResyncMessage,
     UnsubscribeMessage,
 )
 from murder.app.protocol.wire import (
@@ -87,14 +92,28 @@ from murder.bus.protocol import (
 )
 from murder.state.storage.service_registry import socket_path_for_repo
 
-# Callable that returns the current ANSI frame for an agent's pane (or the
-# service's own session when ``agent_id`` is None). Injected into
-# SocketBusServer so tests can supply a controllable fake.
-TmuxFrameCapture = Callable[[str | None], Awaitable[str]]
+
+@dataclass(frozen=True, slots=True)
+class CapturedTerminalFrame:
+    """One adapter capture paired with the pane geometry that produced it."""
+
+    data: str
+    columns: int
+    rows: int
+
+
+# The argument is a persisted session UUID string, an explicit legacy agent id,
+# or None for the supervisor compatibility target.  Production returns exact
+# tmux geometry; a string return remains accepted for lightweight test doubles.
+TmuxFrameCapture = Callable[
+    [str | None],
+    Awaitable[CapturedTerminalFrame | str],
+]
 
 # Default interval between frame captures (seconds).  Chosen to be responsive
 # without hammering tmux; Ink renders at terminal frame-rate so 100ms is plenty.
 TMUX_FRAME_INTERVAL_S = 0.1
+_ANSI_ESCAPE_RE = re.compile(r"\x1b(?:\[[0-?]*[ -/]*[@-~]|[@-_])")
 
 
 LOGGER = logging.getLogger(__name__)
@@ -116,6 +135,14 @@ _HYDRATE_SNAPSHOT_TARGETS: dict[str, str] = {
 _HYDRATE_ALL_TOPICS = tuple(_HYDRATE_SNAPSHOT_TARGETS)
 
 
+def _terminal_frame_geometry(frame: str) -> tuple[int, int]:
+    """Return a conservative rendered geometry for a captured tmux snapshot."""
+
+    lines = frame.splitlines() or [""]
+    visible = [_ANSI_ESCAPE_RE.sub("", line) for line in lines]
+    return max(1, *(len(line) for line in visible)), max(1, len(lines))
+
+
 @dataclass
 class _ClientSession:
     client_id: str
@@ -123,6 +150,7 @@ class _ClientSession:
     transport: UdsTransport
     subscriptions: set[asyncio.Task[None]] = field(default_factory=set)
     application_tasks: dict[str, asyncio.Task[None]] = field(default_factory=dict)
+    application_terminals: dict[str, TerminalTarget] = field(default_factory=dict)
     application: bool = False
 
 
@@ -143,6 +171,14 @@ class SocketBusServer:
         self._disconnect_debounce_s = disconnect_debounce_s
         self._tmux_frame_capture = tmux_frame_capture
         self._tmux_frame_interval_s = tmux_frame_interval_s
+        # Terminal ordering belongs to the target, not a connection or stream
+        # id. Counters survive detach/reattach and are seeded by reconnecting
+        # clients so a restarted service can continue above their last frame.
+        self._terminal_sequences: dict[tuple[str, str | None], int] = {}
+        self._terminal_capture_locks: dict[
+            tuple[str, str | None],
+            asyncio.Lock,
+        ] = {}
         self._server: asyncio.AbstractServer | None = None
         self._tcp_server: asyncio.AbstractServer | None = None
         self._clients: dict[int, _ClientSession] = {}
@@ -472,7 +508,7 @@ class SocketBusServer:
             message=f"unsupported op {msg.op}",
         )
 
-    async def _handle_application_message(
+    async def _handle_application_message(  # noqa: PLR0911
         self,
         session: _ClientSession,
         msg: Any,
@@ -511,6 +547,8 @@ class SocketBusServer:
             return
 
         if isinstance(msg, TerminalAttachMessage):
+            await self._cancel_application_task(session, msg.stream_id)
+            session.application_terminals[msg.stream_id] = msg.target
             await self._replace_application_task(
                 session,
                 msg.stream_id,
@@ -520,7 +558,26 @@ class SocketBusServer:
             return
 
         if isinstance(msg, TerminalDetachMessage):
+            session.application_terminals.pop(msg.stream_id, None)
             await self._cancel_application_task(session, msg.stream_id)
+            return
+
+        if isinstance(msg, TerminalResyncMessage):
+            target = session.application_terminals.get(msg.stream_id)
+            if target is None:
+                await self._send_application_error(
+                    session.transport,
+                    code=ApplicationErrorCode.STREAM_FAILED,
+                    message="terminal stream is not attached",
+                    stream_id=msg.stream_id,
+                )
+                return
+            await self._send_terminal_resync(
+                session,
+                stream_id=msg.stream_id,
+                target=target,
+                after_sequence=msg.after_sequence,
+            )
             return
 
         await self._send_application_error(
@@ -730,11 +787,14 @@ class SocketBusServer:
                 stream_id=msg.stream_id,
             )
             return
-        sequence = 0
-        session_id = msg.target.session_id or "supervisor"
+        after_sequence = msg.after_sequence
         while True:
             try:
-                frame_text = await capture(msg.target.session_id)
+                frame = await self._capture_terminal_replacement(
+                    msg.target,
+                    after_sequence=after_sequence,
+                    subscription_id=msg.stream_id,
+                )
             except Exception as exc:  # noqa: BLE001
                 await self._send_application_error(
                     session.transport,
@@ -743,19 +803,92 @@ class SocketBusServer:
                     stream_id=msg.stream_id,
                 )
                 return
-            sequence += 1
-            await self._send_message(
+            after_sequence = frame.sequence
+            await self._send_terminal_message(
                 session.transport,
                 TerminalFrameMessage(
                     stream_id=msg.stream_id,
-                    frame=TerminalFrame(
-                        sequence=sequence,
-                        session_id=session_id,
-                        frame=frame_text,
-                    ),
+                    frame=frame,
                 ),
+                stream_id=msg.stream_id,
             )
             await asyncio.sleep(self._tmux_frame_interval_s)
+
+    async def _send_terminal_resync(
+        self,
+        session: _ClientSession,
+        *,
+        stream_id: str,
+        target: TerminalTarget,
+        after_sequence: int,
+    ) -> None:
+        try:
+            frame = await self._capture_terminal_replacement(
+                target,
+                after_sequence=after_sequence,
+                subscription_id=stream_id,
+            )
+        except Exception as exc:  # noqa: BLE001
+            await self._send_application_error(
+                session.transport,
+                code=ApplicationErrorCode.STREAM_FAILED,
+                message=str(exc),
+                stream_id=stream_id,
+            )
+            return
+        await self._send_terminal_message(
+            session.transport,
+            TerminalResyncedMessage(stream_id=stream_id, frame=frame),
+            stream_id=stream_id,
+        )
+
+    async def _capture_terminal_replacement(
+        self,
+        target: TerminalTarget,
+        *,
+        after_sequence: int,
+        subscription_id: str | None = None,
+    ) -> TerminalFrame:
+        capture = self._tmux_frame_capture
+        if capture is None:
+            raise RuntimeError("terminal capture is unavailable")
+        target_ref = (
+            str(target.session_id) if target.session_id is not None else target.legacy_agent_id
+        )
+        key = (
+            (
+                "session",
+                str(target.session_id),
+            )
+            if target.session_id is not None
+            else ("legacy", target.legacy_agent_id)
+        )
+        lock = self._terminal_capture_locks.setdefault(key, asyncio.Lock())
+        async with lock:
+            current = max(self._terminal_sequences.get(key, 0), after_sequence)
+            captured = await capture(target_ref)
+            sequence = current + 1
+            self._terminal_sequences[key] = sequence
+            if isinstance(captured, CapturedTerminalFrame):
+                frame_text = captured.data
+                columns = captured.columns
+                rows = captured.rows
+            else:
+                # Compatibility for injected capture callbacks that predate
+                # geometry provenance. Production never takes this branch.
+                frame_text = captured
+                columns, rows = _terminal_frame_geometry(frame_text)
+            return TerminalFrame(
+                subscription_id=subscription_id or "",
+                sequence=sequence,
+                session_id=target.session_id,
+                legacy_agent_id=target.legacy_agent_id,
+                captured_at=datetime.now(timezone.utc),
+                columns=columns,
+                rows=rows,
+                data=frame_text,
+                reset=True,
+            )
 
     async def _handle_rpc(self, transport: UdsTransport, msg: RpcMessage) -> None:
         try:
@@ -965,7 +1098,10 @@ class SocketBusServer:
             return
         while True:
             try:
-                frame_text = await capture(agent_id)
+                captured = await capture(agent_id)
+                frame_text = (
+                    captured.data if isinstance(captured, CapturedTerminalFrame) else captured
+                )
             except Exception as exc:
                 # tmux not running, session gone, etc. Surface the failure as
                 # the frame itself: the raw view is the parsing *backup*, so an
@@ -977,7 +1113,13 @@ class SocketBusServer:
                 agent_id=agent_id or "supervisor",
                 frame=frame_text,
             )
-            await self._send_pub(transport, correlation_id, event)
+            # Legacy subscribers retain their envelope during the migration,
+            # but terminal bytes never enter the lossless control queue.
+            await self._send_terminal_message(
+                transport,
+                PubMessage(correlation_id=correlation_id, event=event),
+                stream_id=f"legacy-tmux:{correlation_id}",
+            )
             await asyncio.sleep(self._tmux_frame_interval_s)
 
     async def _send_pub(
@@ -1066,6 +1208,25 @@ class SocketBusServer:
     async def _send_message(self, transport: UdsTransport, message: Any) -> None:
         wire = message.model_dump(mode="json")
         await transport.send((json.dumps(wire, default=str) + "\n").encode("utf-8"))
+
+    async def _send_terminal_message(
+        self,
+        transport: UdsTransport,
+        message: Any,
+        *,
+        stream_id: str,
+    ) -> None:
+        """Queue terminal traffic independently with latest-frame-wins semantics."""
+
+        wire = message.model_dump(mode="json")
+        payload = (json.dumps(wire, default=str) + "\n").encode("utf-8")
+        send_terminal = getattr(transport, "send_terminal", None)
+        if send_terminal is None:
+            # Lightweight test doubles and transitional transports still expose
+            # only the base Transport interface.
+            await transport.send(payload)
+            return
+        await send_terminal(payload, stream_id=stream_id)
 
     async def _on_connect(self, kind: ClientKind) -> None:
         self._kind_counts[kind] = self._kind_counts.get(kind, 0) + 1
@@ -1191,17 +1352,22 @@ from murder.bus.transport import Transport  # noqa: E402,I001
 _SENTINEL = object()  # signals the writer drain loop to stop
 
 
+@dataclass(frozen=True)
+class _TerminalWrite:
+    payload: bytes
+    overflow_gap: bytes | None = None
+    is_gap: bool = False
+
+
 class UdsTransport(Transport):
     """Async client-side Unix-domain-socket transport.
 
     Design choices
     --------------
-    * **Single-writer queue** — all outbound bytes (subscription pushes,
-      RPC replies, acks) go through a single ``asyncio.Queue``.  A
-      dedicated ``_drain_loop`` task is the sole coroutine that calls
-      ``writer.write`` / ``writer.drain``.  This prevents interleaving
-      when multiple coroutines write concurrently on the same
-      ``StreamWriter``.
+    * **Independent logical queues** — control traffic uses a bounded,
+      lossless queue while terminal frames use a separate bounded,
+      latest-frame-wins map.  A dedicated ``_drain_loop`` remains the sole
+      coroutine that writes and always checks control traffic first.
 
     * **Two distinct timeouts**:
       - ``rpc_timeout`` — applied to short request/response exchanges
@@ -1210,16 +1376,19 @@ class UdsTransport(Transport):
         streams.  If no data arrives for this long the connection is
         closed.  Default 300 s.
 
-    * **Backpressure** — the queue has a bounded capacity
+    * **Control backpressure** — the control queue has a bounded capacity
       (``_WRITE_QUEUE_MAX``).  ``send()`` blocks while the queue is full,
       throttling bursty producers (e.g. a subscription replaying thousands
       of broker events without yielding) to socket drain speed.  It never
       raises on a full queue: the previous fail-fast behaviour silently
       killed server-side subscription tasks on every large replay, leaving
-      clients connected but receiving nothing.
+      clients connected but receiving nothing. Terminal producers never
+      block control traffic: ``send_terminal`` replaces a pending frame for
+      the same stream and drops the oldest stream when its own bound is hit.
     """
 
     _WRITE_QUEUE_MAX = 256
+    _TERMINAL_QUEUE_MAX = 32
 
     def __init__(
         self,
@@ -1235,6 +1404,9 @@ class UdsTransport(Transport):
         self._write_queue: asyncio.Queue[bytes | object] = asyncio.Queue(
             maxsize=self._WRITE_QUEUE_MAX
         )
+        self._terminal_frames: OrderedDict[str, _TerminalWrite] = OrderedDict()
+        self._terminal_ready = asyncio.Event()
+        self._terminal_frames_dropped = 0
         self._drain_task: asyncio.Task[None] | None = None
         self._connected = False
 
@@ -1274,12 +1446,12 @@ class UdsTransport(Transport):
         self._drain_task = asyncio.create_task(self._drain_loop(), name="uds-transport-drain")
 
     async def _drain_loop(self) -> None:
-        """Single writer coroutine — serialises all outbound writes."""
+        """Single writer coroutine with strict control-queue preference."""
         assert self._writer is not None
         writer = self._writer
         try:
             while True:
-                item = await self._write_queue.get()
+                item = await self._next_write()
                 if item is _SENTINEL:
                     break
                 if isinstance(item, asyncio.Event):
@@ -1294,6 +1466,40 @@ class UdsTransport(Transport):
                     raise
         finally:
             self._connected = False
+
+    async def _next_write(self) -> bytes | object:
+        """Select control first, then the latest pending terminal frames."""
+
+        while True:
+            try:
+                return self._write_queue.get_nowait()
+            except asyncio.QueueEmpty:
+                pass
+
+            if self._terminal_frames:
+                _stream_id, terminal = self._terminal_frames.popitem(last=False)
+                if not self._terminal_frames:
+                    self._terminal_ready.clear()
+                return terminal.payload
+
+            control_wait = asyncio.create_task(self._write_queue.get())
+            terminal_wait = asyncio.create_task(self._terminal_ready.wait())
+            try:
+                done, _pending = await asyncio.wait(
+                    {control_wait, terminal_wait},
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                if control_wait in done:
+                    return control_wait.result()
+            finally:
+                for task in (control_wait, terminal_wait):
+                    if not task.done():
+                        task.cancel()
+                await asyncio.gather(
+                    control_wait,
+                    terminal_wait,
+                    return_exceptions=True,
+                )
 
     # ------------------------------------------------------------------
     # Transport ABC
@@ -1315,6 +1521,59 @@ class UdsTransport(Transport):
         if not self._connected:
             raise TransportClosedError("transport is not connected")
         await self._write_queue.put(data)
+
+    async def send_terminal(
+        self,
+        data: bytes,
+        *,
+        stream_id: str,
+        overflow_gap: bytes | None = None,
+    ) -> None:
+        """Enqueue a terminal frame without consuming control-queue capacity.
+
+        At most one unsent update is retained per stream, so a fast tmux
+        capture loop cannot build stale history. When more distinct streams
+        than the terminal bound are pending, the oldest pending stream is
+        evicted; its next full replacement frame recovers the client.
+
+        Full frames omit ``overflow_gap`` and latest wins. A future
+        incremental producer must supply its serialized ``terminal.gap``;
+        coalescing then retains that gap instead of an unsafe later chunk.
+        """
+
+        if not self._connected:
+            raise TransportClosedError("transport is not connected")
+        incoming = _TerminalWrite(data, overflow_gap=overflow_gap)
+        existing = self._terminal_frames.get(stream_id)
+        if existing is not None:
+            self._terminal_frames_dropped += 1
+            if overflow_gap is None:
+                # An authoritative full frame recovers any pending gap/chunk.
+                self._terminal_frames[stream_id] = incoming
+            elif existing.is_gap:
+                # Do not let later chunks overwrite the required recovery.
+                pass
+            else:
+                gap = existing.overflow_gap or overflow_gap
+                self._terminal_frames[stream_id] = _TerminalWrite(gap, is_gap=True)
+            self._terminal_frames.move_to_end(stream_id)
+        elif len(self._terminal_frames) >= self._TERMINAL_QUEUE_MAX:
+            self._terminal_frames_dropped += 1
+            oldest_id, oldest = next(iter(self._terminal_frames.items()))
+            if oldest.is_gap:
+                pass
+            elif oldest.overflow_gap is not None:
+                self._terminal_frames[oldest_id] = _TerminalWrite(
+                    oldest.overflow_gap,
+                    is_gap=True,
+                )
+                self._terminal_frames.move_to_end(oldest_id)
+            else:
+                self._terminal_frames.popitem(last=False)
+                self._terminal_frames[stream_id] = incoming
+        else:
+            self._terminal_frames[stream_id] = incoming
+        self._terminal_ready.set()
 
     async def flush(self) -> None:
         """Wait until every message queued before this call has been written."""
@@ -1365,6 +1624,8 @@ class UdsTransport(Transport):
                 self._write_queue.get_nowait()
             except asyncio.QueueEmpty:
                 break
+        self._terminal_frames.clear()
+        self._terminal_ready.clear()
         if self._writer is not None:
             self._writer.close()
             with contextlib.suppress(Exception):

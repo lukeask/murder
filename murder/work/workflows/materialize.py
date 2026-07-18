@@ -19,10 +19,12 @@ from __future__ import annotations
 import re
 import sqlite3
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
+from typing import cast
+from uuid import UUID, uuid4
 
-from murder.state.persistence.workflow_runs import insert_workflow_run
+from murder.state.persistence.workflow_runs import create_workflow_run
 from murder.state.storage.filesystem import atomic_write_text
 from murder.state.storage.paths import ticket_md, tickets_dir
 from murder.work.tickets import parser
@@ -31,6 +33,22 @@ from murder.work.tickets.render import render_ticket_frontmatter
 from murder.work.tickets.status import TicketStatus
 from murder.work.tickets.sync import reconcile_ticket_md
 from murder.work.workflows.definition import StageDef, WorkflowDef, validate_workflow
+from murder.work.workflows.runtime import (
+    Correlation,
+    ExternalSignalWait,
+    PrincipalKind,
+    PrincipalRef,
+    StageRunState,
+    StageStatus,
+    StaticDagWorkflowStateV1,
+    WorkflowRunRecord,
+    WorkflowStatus,
+    versioned_state,
+)
+
+# Keep the patch point used by older tests/extensions while changing the
+# function's payload from ticket-derived columns to an authoritative record.
+insert_workflow_run = create_workflow_run
 
 _TNUM_RE = re.compile(r"^t(\d+)$")
 # Named ``{placeholder}`` tokens; unknown keys are left verbatim so an
@@ -40,6 +58,7 @@ _PLACEHOLDER_RE = re.compile(r"\{([A-Za-z0-9_-]+)\}")
 
 @dataclass(frozen=True)
 class MaterializeResult:
+    workflow_id: UUID
     run_ticket_id: str
     stage_ticket_ids: dict[str, str]  # stage.id -> ticket id
     created_ticket_ids: list[str]  # parent + all stages, in creation order
@@ -63,6 +82,7 @@ def materialize_workflow(
         raise ValueError("invalid workflow: " + "; ".join(errors))
 
     created_at = now or _now()
+    workflow_now = _workflow_time(created_at)
     repo_root = Path(repo_root)
     tickets_dir(repo_root).mkdir(parents=True, exist_ok=True)
 
@@ -74,8 +94,7 @@ def materialize_workflow(
     ids = _allocate_ids(conn, repo_root, count=1 + len(ordered_stages))
     run_ticket_id = ids[0]
     stage_ticket_ids: dict[str, str] = {
-        stage.id: ticket_id
-        for stage, ticket_id in zip(ordered_stages, ids[1:], strict=True)
+        stage.id: ticket_id for stage, ticket_id in zip(ordered_stages, ids[1:], strict=True)
     }
 
     created: list[str] = []
@@ -110,22 +129,59 @@ def materialize_workflow(
                 args=args,
             )
             reconcile_ticket_md(conn=conn, repo_root=repo_root, ticket_id=ticket_id)
-            transition(conn, ticket_id, TicketStatus.READY)
+            transition(conn, ticket_id, cast(TicketStatus, TicketStatus.READY))
             created.append(ticket_id)
 
+        workflow_id = uuid4()
+        initial_state = StaticDagWorkflowStateV1(
+            inputs=dict(args or {}),
+            stages=tuple(
+                StageRunState(
+                    stage_id=stage.id,
+                    status=(StageStatus.READY if not stage.depends_on else StageStatus.BLOCKED),
+                )
+                for stage in defn.stages
+            ),
+        )
+        initial_waits = tuple(
+            ExternalSignalWait(
+                signal_name="ticket.finished",
+                correlation_key=stage_ticket_ids[stage.id],
+            )
+            for stage in defn.stages
+        )
         insert_workflow_run(
             conn,
-            parent_ticket_id=run_ticket_id,
-            name=defn.name,
-            definition_json=defn.model_dump_json(),
-            stage_map=stage_ticket_ids,
-            created_at=created_at,
+            WorkflowRunRecord(
+                workflow_id=workflow_id,
+                definition_name=defn.name,
+                definition_version=defn.definition_version,
+                status=WorkflowStatus.WAITING,
+                revision=0,
+                state=versioned_state(
+                    initial_state,
+                    schema_name="static_dag",
+                    schema_version=1,
+                ),
+                created_at=workflow_now,
+                updated_at=workflow_now,
+                started_by=PrincipalRef(
+                    kind=PrincipalKind.SERVICE,
+                    id="ticket-dag-launcher",
+                ),
+                correlation=Correlation(correlation_id=uuid4()),
+                parent_ticket_id=run_ticket_id,
+                definition_snapshot=defn.model_dump(mode="json"),
+                stage_map=stage_ticket_ids,
+            ),
+            waits=initial_waits,
         )
     except Exception:
         _cleanup_partial(conn, repo_root, created)
         raise
 
     return MaterializeResult(
+        workflow_id=workflow_id,
         run_ticket_id=run_ticket_id,
         stage_ticket_ids=stage_ticket_ids,
         created_ticket_ids=created,
@@ -136,9 +192,7 @@ def _fill(text: str, args: dict[str, str] | None) -> str:
     """Substitute ``{key}`` tokens from *args*; leave unknown tokens verbatim."""
     if not args:
         return text
-    return _PLACEHOLDER_RE.sub(
-        lambda m: args.get(m.group(1), m.group(0)), text
-    )
+    return _PLACEHOLDER_RE.sub(lambda m: args.get(m.group(1), m.group(0)), text)
 
 
 def _topo_sorted(defn: WorkflowDef) -> list[StageDef]:
@@ -167,9 +221,7 @@ def _topo_sorted(defn: WorkflowDef) -> list[StageDef]:
     return out
 
 
-def _cleanup_partial(
-    conn: sqlite3.Connection, repo_root: Path, created: list[str]
-) -> None:
+def _cleanup_partial(conn: sqlite3.Connection, repo_root: Path, created: list[str]) -> None:
     """Best-effort teardown of a half-built workflow tree.
 
     Each ticket was committed in its own transaction by ``reconcile_ticket_md``,
@@ -196,9 +248,7 @@ def _cleanup_partial(
             pass
 
 
-def _allocate_ids(
-    conn: sqlite3.Connection, repo_root: Path, *, count: int
-) -> list[str]:
+def _allocate_ids(conn: sqlite3.Connection, repo_root: Path, *, count: int) -> list[str]:
     """Allocate *count* sequential ``t<NNN>`` ids from one DB + filesystem scan.
 
     Mirrors ``TicketOps.next_ticket_id`` but hands out a contiguous block in a
@@ -284,4 +334,11 @@ def _atomic_ticket_write(repo_root: Path, ticket_id: str, text: str) -> None:
 
 
 def _now() -> str:
-    return datetime.utcnow().isoformat(timespec="seconds")
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def _workflow_time(value: str) -> datetime:
+    parsed = datetime.fromisoformat(value)
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)

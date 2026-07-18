@@ -117,6 +117,10 @@ class _RecordingTransport:
     async def send(self, data: bytes) -> None:
         self.sent.append(data)
 
+    async def send_terminal(self, data: bytes, *, stream_id: str) -> None:
+        del stream_id
+        self.sent.append(data)
+
     async def close(self) -> None:
         self._connected = False
 
@@ -520,17 +524,23 @@ async def test_service_host_wires_tmux_frame_capture_into_socket_server(
         "ServiceHost must expose _capture_tmux_frame as a callable"
     )
 
-    # Patch tmux.capture_pane so we can call the supplier without a real session.
+    # Patch viewport plus pane geometry so we can call the supplier without a
+    # real tmux session.
     fake_frame = "\x1b[32mprod-frame\x1b[0m"
-    with patch(
-        "murder.runtime.terminal.tmux.capture_pane",
-        new=AsyncMock(return_value=fake_frame),
+    with (
+        patch(
+            "murder.runtime.terminal.tmux.capture_viewport",
+            new=AsyncMock(return_value=fake_frame),
+        ),
+        patch(
+            "murder.runtime.terminal.tmux.pane_dimensions",
+            new=AsyncMock(return_value=(132, 43)),
+        ),
     ):
         result = await host._capture_tmux_frame()
 
-    assert result == fake_frame, (
-        f"_capture_tmux_frame must return the ANSI frame from tmux.capture_pane; got {result!r}"
-    )
+    assert result.data == fake_frame
+    assert (result.columns, result.rows) == (132, 43)
 
     # Verify the supplier is wired into SocketBusServer (server has non-None capture).
     # We build a SocketBusServer the same way host.start() does (minus the real runtime).
@@ -572,9 +582,15 @@ async def test_service_host_wires_tmux_frame_capture_into_socket_server(
         transport=transport,  # type: ignore[arg-type]
     )
 
-    with patch(
-        "murder.runtime.terminal.tmux.capture_pane",
-        new=AsyncMock(return_value=fake_frame),
+    with (
+        patch(
+            "murder.runtime.terminal.tmux.capture_viewport",
+            new=AsyncMock(return_value=fake_frame),
+        ),
+        patch(
+            "murder.runtime.terminal.tmux.pane_dimensions",
+            new=AsyncMock(return_value=(132, 43)),
+        ),
     ):
         task = asyncio.create_task(server._run_subscription(session, sub_msg))
         for _ in range(5):

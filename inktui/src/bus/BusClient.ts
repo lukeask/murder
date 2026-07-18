@@ -11,6 +11,8 @@ import type {
   CommandName,
   ProjectionTopic,
   QueryName,
+  TerminalChunk,
+  TerminalFrame as TerminalFrameContract,
   TerminalFrameMessage,
 } from '../generated/applicationProtocol.js';
 import type { BusEvent } from './protocol.js';
@@ -73,7 +75,8 @@ export interface HydrateResult extends HydrateReply {
 }
 
 export type TerminalFrame = TerminalFrameMessage['frame'];
-export type TerminalFrameListener = (frame: TerminalFrame) => void;
+export type TerminalUpdate = TerminalFrameContract | TerminalChunk;
+export type TerminalFrameListener = (update: TerminalUpdate) => void;
 
 export interface BusClient {
   query<M extends QueryMethod>(name: M, params: QueryParams<M>): Promise<QueryResult<M>>;

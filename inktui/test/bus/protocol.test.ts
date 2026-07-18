@@ -56,6 +56,7 @@ function clientOp(message: ClientMessage): string {
     case 'unsubscribe':
     case 'terminal.attach':
     case 'terminal.detach':
+    case 'terminal.resync':
       return message.op;
     default: {
       const unreachable: never = message;
@@ -73,6 +74,9 @@ function serverOp(message: ServerMessage): string {
     case 'subscription.event':
     case 'terminal.attached':
     case 'terminal.frame':
+    case 'terminal.chunk':
+    case 'terminal.gap':
+    case 'terminal.resynced':
     case 'error':
       return message.op;
     default: {

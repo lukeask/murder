@@ -11,6 +11,7 @@ from murder.state.persistence.records import (
     TicketRecord,
     ticket_record_from_row,
 )
+from murder.work.workflows.service import notify_ticket_status
 
 if TYPE_CHECKING:
     from murder.work.tickets.schema import Ticket
@@ -150,10 +151,25 @@ def list_tickets_by_status(conn: sqlite3.Connection, status: str) -> list[Ticket
 
 
 def update_ticket_status(conn: sqlite3.Connection, ticket_id: str, new_status: str) -> None:
-    conn.execute(
-        "UPDATE tickets SET status = ?, updated_at = ? WHERE id = ?",
-        (new_status, _now(), ticket_id),
-    )
+    owns_transaction = conn.isolation_level is None and not conn.in_transaction
+    if owns_transaction:
+        conn.execute("BEGIN IMMEDIATE")
+    try:
+        conn.execute(
+            "UPDATE tickets SET status = ?, updated_at = ? WHERE id = ?",
+            (new_status, _now(), ticket_id),
+        )
+        # Static ticket DAGs are a compatibility definition type, not the source
+        # of workflow truth. Their terminal outcomes become addressed signals that
+        # advance the authoritative persisted state machine in this same transaction.
+        notify_ticket_status(conn, ticket_id=ticket_id, status=new_status)
+    except BaseException:
+        if owns_transaction:
+            conn.rollback()
+        raise
+    else:
+        if owns_transaction:
+            conn.commit()
 
 
 def get_ticket_status(conn: sqlite3.Connection, ticket_id: str) -> str | None:

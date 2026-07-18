@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -16,6 +17,7 @@ from murder.app.protocol.requests import (
     QueryName,
     QueryRequest,
 )
+from murder.app.protocol.terminal import TerminalChunk, TerminalFrame, TerminalStreamGap
 from murder.app.protocol.wire import (
     APPLICATION_WIRE_ADAPTER,
     ClientHello,
@@ -26,6 +28,8 @@ from murder.app.protocol.wire import (
     TerminalAttachMessage,
     TerminalDetachMessage,
     TerminalFrameMessage,
+    TerminalResyncedMessage,
+    TerminalResyncMessage,
 )
 from murder.app.service.gateway import (
     COMMAND_TARGETS,
@@ -36,6 +40,39 @@ from murder.bus.protocol import ClientKind
 from murder.bus.transport_socket import SocketBusServer, _ClientSession
 
 ORCHESTRATION_TIMEOUT_S = 3.0
+
+
+def test_terminal_contracts_distinguish_snapshot_increment_and_gap() -> None:
+    frame = TerminalFrame(
+        subscription_id="term-1",
+        session_id=None,
+        legacy_agent_id="crow-1",
+        sequence=3,
+        captured_at=datetime.now(timezone.utc),
+        columns=80,
+        rows=24,
+        data="full",
+    )
+    chunk = TerminalChunk(
+        subscription_id="term-1",
+        session_id=None,
+        legacy_agent_id="crow-1",
+        sequence=4,
+        data="increment",
+    )
+    gap = TerminalStreamGap(
+        subscription_id="term-1",
+        session_id=None,
+        legacy_agent_id="crow-1",
+        expected_sequence=5,
+        next_sequence=7,
+    )
+
+    assert frame.type == "terminal.frame"
+    assert frame.reset is True
+    assert chunk.type == "terminal.chunk"
+    assert gap.type == "terminal.gap"
+    assert gap.snapshot_required is True
 
 
 class _Broker:
@@ -248,7 +285,10 @@ async def test_terminal_stream_is_independent_and_detaches() -> None:
     )
     await server._handle_application_message(
         session,
-        TerminalAttachMessage(stream_id="term-1", target={"session_id": "crow-1"}),
+        TerminalAttachMessage(
+            stream_id="term-1",
+            target={"legacy_agent_id": "crow-1"},
+        ),
     )
     for _ in range(5):
         await asyncio.sleep(0)
@@ -269,5 +309,81 @@ async def test_terminal_stream_is_independent_and_detaches() -> None:
     frames = [item for item in messages if isinstance(item, TerminalFrameMessage)]
     assert frames
     assert [item.frame.sequence for item in frames] == list(range(1, len(frames) + 1))
-    assert all(item.frame.mode == "replace" for item in frames)
+    assert all(item.frame.reset for item in frames)
+    assert all(item.frame.type == "terminal.frame" for item in frames)
+    assert all(item.frame.subscription_id == "term-1" for item in frames)
     assert broker.requests == []
+
+
+@pytest.mark.asyncio
+async def test_terminal_sequence_survives_detach_and_client_resume_cursor() -> None:
+    resumed_after = 41
+    captures = 0
+
+    async def capture(session_id: str | None) -> str:
+        nonlocal captures
+        captures += 1
+        return f"{session_id}:{captures}"
+
+    server = SocketBusServer(
+        _Broker(),  # type: ignore[arg-type]
+        run_id="run-1",
+        tmux_frame_capture=capture,
+        tmux_frame_interval_s=60,
+    )
+    transport = _RecordingTransport()
+    session = _ClientSession(
+        client_id="tui-1",
+        kind=ClientKind.TUI,
+        transport=transport,  # type: ignore[arg-type]
+        application=True,
+    )
+
+    await server._handle_application_message(
+        session,
+        TerminalAttachMessage(
+            stream_id="first",
+            target={"legacy_agent_id": "crow-1"},
+            after_sequence=resumed_after,
+        ),
+    )
+    await asyncio.sleep(0)
+    await server._handle_application_message(
+        session,
+        TerminalDetachMessage(stream_id="first"),
+    )
+    await server._handle_application_message(
+        session,
+        TerminalAttachMessage(
+            stream_id="second",
+            target={"legacy_agent_id": "crow-1"},
+            after_sequence=resumed_after + 1,
+        ),
+    )
+    await asyncio.sleep(0)
+    await server._handle_application_message(
+        session,
+        TerminalResyncMessage(
+            stream_id="second",
+            after_sequence=resumed_after + 1,
+            reason="gap",
+        ),
+    )
+    await server._handle_application_message(
+        session,
+        TerminalDetachMessage(stream_id="second"),
+    )
+
+    messages = [
+        APPLICATION_WIRE_ADAPTER.validate_json(line)
+        for chunk in transport.sent
+        for line in chunk.splitlines()
+    ]
+    frames = [item.frame for item in messages if isinstance(item, TerminalFrameMessage)]
+    resyncs = [item.frame for item in messages if isinstance(item, TerminalResyncedMessage)]
+    assert frames[0].sequence == resumed_after + 1
+    assert frames[-1].sequence == resumed_after + 2
+    assert resyncs[-1].sequence == resumed_after + 3
+    assert frames[-1].subscription_id == "second"
+    assert resyncs[-1].subscription_id == "second"
+    assert all(frame.reset for frame in [*frames, *resyncs])

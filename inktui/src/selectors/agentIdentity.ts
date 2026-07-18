@@ -148,7 +148,15 @@ export interface TicketIdentity {
  *
  * Route `agent.message` using `identity.agentId` — always available, never a lookup.
  */
-export type AgentIdentity = CollaboratorIdentity | PlannerIdentity | RogueIdentity | TicketIdentity;
+export type AgentIdentity = (
+  | CollaboratorIdentity
+  | PlannerIdentity
+  | RogueIdentity
+  | TicketIdentity
+) & {
+  /** Canonical durable session UUID when the agent has entered the new registry. */
+  readonly sessionId?: string;
+};
 
 // ---------------------------------------------------------------------------
 // Derivation (rule 2: lives here, not in components)
@@ -169,12 +177,14 @@ export function deriveAgentIdentity(row: RosterRow): AgentIdentity | null {
   // The session name carries the `murder_<repo>_<role…>_` prefix; the label shows only the agent's
   // own name (item 11). One shared helper so this matches the Crows-pane row name exactly.
   const sessionLabel = row.session !== null ? stripSessionPrefix(row.session) : row.agentId;
+  const persistedSession = row.sessionId == null ? {} : { sessionId: row.sessionId };
   switch (row.role) {
     case 'collaborator':
       return {
         kind: 'collaborator',
         agentId: row.agentId,
         label: sessionLabel,
+        ...persistedSession,
       };
     case 'planner':
       return {
@@ -182,6 +192,7 @@ export function deriveAgentIdentity(row: RosterRow): AgentIdentity | null {
         agentId: row.agentId,
         label: sessionLabel,
         plan: sessionLabel,
+        ...persistedSession,
       };
     case 'crow':
       if (!hasTicket(row.ticketId)) {
@@ -190,6 +201,7 @@ export function deriveAgentIdentity(row: RosterRow): AgentIdentity | null {
           agentId: row.agentId,
           label: sessionLabel,
           id: row.agentId,
+          ...persistedSession,
         };
       }
       return {
@@ -197,6 +209,7 @@ export function deriveAgentIdentity(row: RosterRow): AgentIdentity | null {
         agentId: row.agentId,
         label: row.ticketTitle ?? row.ticketId,
         id: row.ticketId,
+        ...persistedSession,
       };
     default:
       // 'planning_handler' | 'crow_handler' | 'notetaker' | any unknown → exclude.

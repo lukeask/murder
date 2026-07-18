@@ -34,6 +34,7 @@ from murder.app.service.recovery import ReconcileReport, reconcile_agents_vs_tmu
 from murder.app.service.runtime_lifecycle import kill_project_tmux_sessions, shutdown_live_agents
 from murder.bus import Bus, EventFilter, SubscriptionHandle
 from murder.bus.protocol import AgentLifecycleEvent, Entity, StateSnapshotEvent
+from murder.llm.harnesses.versioning import HarnessVersionRegistry
 from murder.observability.advanced_log import (
     AdvancedLogBase,
     ArtifactRefRecord,
@@ -48,9 +49,12 @@ from murder.observability.logging_setup import (
     resolve_log_level,
     resolve_recorder_mode,
 )
-from murder.llm.harnesses.versioning import HarnessVersionRegistry
 from murder.runtime.agents.events import AgentEventSink, LoggingAgentEventSink
 from murder.runtime.orchestration.structured_decisions import StructuredDecisionRouter
+from murder.runtime.sessions.registry import (
+    close_registry_for_connection,
+    registry_for_connection,
+)
 from murder.runtime.terminal import tmux
 from murder.state.persistence.agents import (
     set_agent_status as _db_set_agent_status,
@@ -75,6 +79,7 @@ from murder.state.storage.paths import (
     service_log,
 )
 from murder.state.storage.run_id_allocation import allocate_run_id
+from murder.work.workflows.service import WorkflowRuntime
 
 if TYPE_CHECKING:
     from murder.config import Config
@@ -92,12 +97,13 @@ class Runtime:
     """Async context manager owning the murder process lifecycle."""
 
     def __init__(
-        self, config: Config, repo_root: Path, user_cfg: "UserConfig | None" = None
+        self, config: Config, repo_root: Path, user_cfg: UserConfig | None = None
     ) -> None:
         self.config = config
         self.repo_root = repo_root
         self.user_cfg = user_cfg
         self.db: sqlite3.Connection | None = None
+        self.session_controllers: Any | None = None
         self.bus: Bus | None = None
         self.run_id: str | None = None
         self._agents = AgentRegistry()
@@ -138,7 +144,7 @@ class Runtime:
     async def __aexit__(self, exc_type, exc, tb) -> None:  # type: ignore[no-untyped-def]
         await self.stop()
 
-    async def start(self) -> None:
+    async def start(self) -> None:  # noqa: PLR0915 - service bootstrap
         self._shutdown.clear()
         self._external_stop.clear()
         self._lock_fd = acquire_flock(lock_path(self.repo_root))
@@ -150,6 +156,8 @@ class Runtime:
         try:
             self.db = _db_connect(db_path(self.repo_root))
             _db_init_schema(self.db)
+            self.session_controllers = registry_for_connection(self.db)
+            WorkflowRuntime(self.db).recover_pending_signals()
             live_sessions = set(await tmux.list_sessions())
             report = reconcile_agents_vs_tmux(self.db, live_sessions)
             self.startup_reconcile_report = report
@@ -247,10 +255,14 @@ class Runtime:
             self._sync.seed()
             self._tasks.update(self._sync.spawn_tasks())
         except BaseException:
+            if self.db is not None:
+                with contextlib.suppress(Exception):
+                    await close_registry_for_connection(self.db)
             with contextlib.suppress(Exception):
                 if self.db is not None:
                     self.db.close()
             self.db = None
+            self.session_controllers = None
             self.bus = None
             self.run_id = None
             self._sync = None
@@ -291,6 +303,9 @@ class Runtime:
         if self.run_id and self.db is not None:
             _db_end_run(self.db, self.run_id)
         if self.db is not None:
+            with contextlib.suppress(Exception):
+                await close_registry_for_connection(self.db)
+            self.session_controllers = None
             self.db.close()
             self.db = None
         self._sync = None

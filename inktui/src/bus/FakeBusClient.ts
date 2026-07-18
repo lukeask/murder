@@ -188,10 +188,16 @@ export class FakeBusClient implements BusClient {
     const value: TerminalFrame =
       typeof frame === 'string'
         ? {
-            mode: 'replace',
+            type: 'terminal.frame',
+            subscription_id: 'fake-terminal',
             sequence,
             session_id: sessionId ?? 'supervisor',
-            frame,
+            captured_at: new Date().toISOString(),
+            columns: Math.max(1, frame.length),
+            rows: Math.max(1, frame.split('\n').length),
+            encoding: 'utf-8',
+            data: frame,
+            reset: true,
           }
         : frame;
     for (const attachment of [...this.terminals]) {

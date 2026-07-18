@@ -16,7 +16,8 @@
         "worktree_path": "/wt/t-101",
         "model": "opus",
         "open_escalations": 2,
-        "max_severity": 3
+        "max_severity": 3,
+        "session_id": "0198b156-2dd3-70a9-bc79-fca001dc8801"
       },
       {
         "agent_id": "planner-1",
@@ -32,7 +33,8 @@
         "worktree_path": null,
         "model": null,
         "open_escalations": 0,
-        "max_severity": 0
+        "max_severity": 0,
+        "session_id": null
       }
     ],
     "as_of": "2026-06-09T00:00:00",

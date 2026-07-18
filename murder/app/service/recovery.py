@@ -13,9 +13,12 @@ from __future__ import annotations
 import logging
 import sqlite3
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from uuid import UUID
 
-from murder.state.persistence.agents import set_agent_status as _db_set_agent_status
 from murder.bus import TicketStatus
+from murder.runtime.sessions.persistence import SessionStore
+from murder.state.persistence.agents import set_agent_status as _db_set_agent_status
 from murder.work.tickets import lifecycle
 
 LOGGER = logging.getLogger(__name__)
@@ -26,6 +29,7 @@ class ReconcileReport:
     agents_marked_dead: list[str] = field(default_factory=list)
     tickets_reset_to_failed: list[str] = field(default_factory=list)
     sessions_to_kill: list[str] = field(default_factory=list)
+    harness_sessions_marked_lost: list[str] = field(default_factory=list)
     # in_progress tickets whose crow session is still alive after a restart:
     # (ticket_id, crow_session). The caller rehydrates an in-memory CrowAgent +
     # fresh handler so DONE is consumed and the ticket can finish.
@@ -36,6 +40,7 @@ class ReconcileReport:
             self.agents_marked_dead
             or self.tickets_reset_to_failed
             or self.sessions_to_kill
+            or self.harness_sessions_marked_lost
             or self.crows_to_reattach
         )
 
@@ -47,6 +52,11 @@ class ReconcileReport:
             parts.append(f"tickets → failed: {', '.join(self.tickets_reset_to_failed)}")
         if self.sessions_to_kill:
             parts.append(f"sessions to kill: {', '.join(self.sessions_to_kill)}")
+        if self.harness_sessions_marked_lost:
+            parts.append(
+                "harness sessions lost: "
+                + ", ".join(self.harness_sessions_marked_lost)
+            )
         if self.crows_to_reattach:
             parts.append(
                 "crows to reattach: "
@@ -99,6 +109,8 @@ def reconcile_agents_vs_tmux(
         if session not in live_sessions:
             _db_set_agent_status(conn, row["agent_id"], "dead")
             report.agents_marked_dead.append(row["agent_id"])
+
+    _reconcile_persisted_harness_sessions(conn, live_sessions, report)
 
     # Recover in_progress tickets whose crow agent is no longer live.
     in_progress = conn.execute("SELECT id FROM tickets WHERE status = 'in_progress'").fetchall()
@@ -157,3 +169,48 @@ def reconcile_agents_vs_tmux(
                 report.sessions_to_kill.append(handler_row["session"])
 
     return report
+
+
+def _reconcile_persisted_harness_sessions(
+    conn: sqlite3.Connection,
+    live_sessions: set[str],
+    report: ReconcileReport,
+) -> None:
+    """Mark vanished tmux controller resources LOST and revoke their writers."""
+
+    exists = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'harness_sessions'"
+    ).fetchone()
+    if exists is None:
+        return
+    rows = conn.execute(
+        """
+        SELECT session_id, transport_ref, revision
+        FROM harness_sessions
+        WHERE transport = 'tmux'
+          AND status NOT IN ('stopped', 'failed', 'lost')
+        """
+    ).fetchall()
+    now = datetime.now(timezone.utc)
+    store = SessionStore(conn)
+    for row in rows:
+        if str(row["transport_ref"]) in live_sessions:
+            continue
+        session_id = UUID(str(row["session_id"]))
+        updated = conn.execute(
+            """
+            UPDATE harness_sessions
+            SET status = 'lost', revision = revision + 1,
+                last_observed_at = ?, stopped_at = ?
+            WHERE session_id = ? AND revision = ?
+            """,
+            (now.isoformat(), now.isoformat(), str(session_id), int(row["revision"])),
+        )
+        if updated.rowcount != 1:
+            continue
+        store.revoke_session_writer_leases(
+            session_id,
+            reason="tmux resource missing during startup reconciliation",
+            at=now,
+        )
+        report.harness_sessions_marked_lost.append(str(session_id))

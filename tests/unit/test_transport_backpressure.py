@@ -89,9 +89,52 @@ async def test_close_releases_senders_blocked_on_full_queue(tmp_path: Path) -> N
     # The blocked send must now resolve: either its put completed into the
     # drained queue, or the next send raised TransportClosedError. Either way
     # the task must finish promptly rather than hang forever.
-    with pytest.raises(Exception):
+    with pytest.raises(Exception):  # noqa: B017 - either close path is acceptable here
         await asyncio.wait_for(flood, timeout=2.0)
 
     block_server.set()
     server.close()
     await server.wait_closed()
+
+
+@pytest.mark.asyncio
+async def test_terminal_queue_is_independent_and_latest_frame_wins() -> None:
+    expected_drops = 2
+    transport = UdsTransport()
+    transport._connected = True
+
+    await transport.send_terminal(b"old-a", stream_id="a")
+    await transport.send_terminal(b"new-a", stream_id="a")
+    await transport.send_terminal(b"only-b", stream_id="b")
+    await transport.send(b"control")
+
+    # Control is selected before terminal traffic even though it arrived last.
+    assert await transport._next_write() == b"control"
+    assert await transport._next_write() == b"new-a"
+    assert await transport._next_write() == b"only-b"
+    assert transport._terminal_frames_dropped == 1
+
+    for index in range(transport._TERMINAL_QUEUE_MAX + 1):
+        await transport.send_terminal(b"frame", stream_id=f"stream-{index}")
+    assert len(transport._terminal_frames) == transport._TERMINAL_QUEUE_MAX
+    assert "stream-0" not in transport._terminal_frames
+    assert transport._terminal_frames_dropped == expected_drops
+
+
+@pytest.mark.asyncio
+async def test_incremental_terminal_overflow_emits_gap_instead_of_later_chunk() -> None:
+    transport = UdsTransport()
+    transport._connected = True
+
+    await transport.send_terminal(
+        b"chunk-4",
+        stream_id="incremental",
+        overflow_gap=b"gap-expected-4-next-5",
+    )
+    await transport.send_terminal(
+        b"chunk-5",
+        stream_id="incremental",
+        overflow_gap=b"gap-expected-4-next-6",
+    )
+
+    assert await transport._next_write() == b"gap-expected-4-next-5"

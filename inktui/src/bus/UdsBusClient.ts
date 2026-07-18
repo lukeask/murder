@@ -16,7 +16,9 @@ import {
   type ServerMessage,
   type SubscribeMessage,
   type TerminalAttachMessage,
+  type TerminalChunk,
   type TerminalDetachMessage,
+  type TerminalFrame,
   type UnsubscribeMessage,
 } from '../generated/applicationProtocol.js';
 import type {
@@ -156,7 +158,12 @@ interface TerminalAttachment {
   readonly sessionId: string | null;
   readonly listener: TerminalFrameListener;
   readonly streamId: string;
+  lastSequence: number;
+  resyncPending: boolean;
 }
+
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 type ConnectionState = 'idle' | 'connecting' | 'connected' | 'closed';
 
@@ -249,6 +256,8 @@ export class UdsBusClient implements BusClient {
       sessionId,
       listener,
       streamId: `terminal-${randomUUID()}`,
+      lastSequence: 0,
+      resyncPending: false,
     };
     this.terminals.set(attachment.streamId, attachment);
     if (this.state === 'connected' && this.socket !== undefined) {
@@ -584,11 +593,29 @@ export class UdsBusClient implements BusClient {
       case 'terminal.frame': {
         const attachment = this.terminals.get(message.stream_id);
         if (attachment !== undefined) {
-          try {
-            attachment.listener(message.frame);
-          } catch {
-            // One presentation listener must not tear down the socket read loop.
-          }
+          this.acceptTerminalFrame(attachment, message.frame);
+        }
+        return;
+      }
+      case 'terminal.chunk': {
+        const attachment = this.terminals.get(message.stream_id);
+        if (attachment !== undefined) {
+          this.acceptTerminalChunk(attachment, message.chunk);
+        }
+        return;
+      }
+      case 'terminal.gap': {
+        const attachment = this.terminals.get(message.stream_id);
+        if (attachment !== undefined) {
+          this.requestTerminalResync(attachment, 'gap');
+        }
+        return;
+      }
+      case 'terminal.resynced': {
+        const attachment = this.terminals.get(message.stream_id);
+        if (attachment !== undefined) {
+          attachment.resyncPending = false;
+          this.acceptTerminalFrame(attachment, message.frame);
         }
         return;
       }
@@ -716,9 +743,65 @@ export class UdsBusClient implements BusClient {
     const message: TerminalAttachMessage = {
       op: 'terminal.attach',
       stream_id: attachment.streamId,
-      target: { session_id: attachment.sessionId },
+      target:
+        attachment.sessionId === null
+          ? { session_id: null }
+          : UUID_RE.test(attachment.sessionId)
+            ? { session_id: attachment.sessionId }
+            : { legacy_agent_id: attachment.sessionId },
+      after_sequence: attachment.lastSequence,
     };
     this.writeMessage(socket, message);
+  }
+
+  private acceptTerminalFrame(attachment: TerminalAttachment, frame: TerminalFrame): void {
+    if (frame.sequence <= attachment.lastSequence) return;
+    if (!frame.reset) {
+      this.requestTerminalResync(attachment, 'unsupported_mode');
+      return;
+    }
+    // A reset frame is authoritative, so a jump caused by latest-frame-wins
+    // queue coalescing is recovered by this frame itself.
+    attachment.lastSequence = frame.sequence;
+    attachment.resyncPending = false;
+    this.callTerminalListener(attachment, frame);
+  }
+
+  private acceptTerminalChunk(attachment: TerminalAttachment, chunk: TerminalChunk): void {
+    const expected = attachment.lastSequence + 1;
+    if (attachment.lastSequence === 0 || chunk.sequence !== expected) {
+      this.requestTerminalResync(attachment, 'gap');
+      return;
+    }
+    attachment.lastSequence = chunk.sequence;
+    this.callTerminalListener(attachment, chunk);
+  }
+
+  private requestTerminalResync(
+    attachment: TerminalAttachment,
+    reason: 'gap' | 'unsupported_mode',
+  ): void {
+    if (attachment.resyncPending) return;
+    const socket = this.socket;
+    if (this.state !== 'connected' || socket === undefined) return;
+    attachment.resyncPending = true;
+    this.writeMessage(socket, {
+      op: 'terminal.resync',
+      stream_id: attachment.streamId,
+      after_sequence: attachment.lastSequence,
+      reason,
+    });
+  }
+
+  private callTerminalListener(
+    attachment: TerminalAttachment,
+    update: TerminalFrame | TerminalChunk,
+  ): void {
+    try {
+      attachment.listener(update);
+    } catch {
+      // One presentation listener must not tear down the socket read loop.
+    }
   }
 
   private settleRequest(id: string, settle: (request: PendingRequest) => void): void {

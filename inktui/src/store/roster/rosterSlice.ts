@@ -40,6 +40,8 @@ export interface RosterRow {
   readonly model: string | null;
   readonly status: string;
   readonly session: string | null;
+  /** Durable HarnessSessionRecord UUID used for exact terminal attachment. */
+  readonly sessionId?: string | null;
   /**
    * Filesystem path of the crow's worktree, or null when it runs on the main checkout. Fed from
    * Python `CrowSessionSummary.worktree_path`. Rendered as the bare `.murder/worktrees/<name>`

@@ -13,11 +13,11 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import hashlib
 import logging
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
+from uuid import uuid4
 
 # Re-export from bus to keep StrEnum definitions in one place.
 from murder.bus import AgentStatus
@@ -143,10 +143,16 @@ class HarnessBackedAgent(LifecycleParticipant):
             persistence_session_id=self.id,
             **options,
         )
+        repository_root = getattr(runtime, "repo_root", getattr(self, "repo_root", None))
+        await self.verified_harness_control.ensure_session_controller(
+            repository_key=str(repository_root) if repository_root is not None else None,
+            agent_key=self.id,
+            registry=getattr(runtime, "session_controllers", None),
+            recover=True,
+        )
         # A reattached pane begins with current evidence, never a resumed
         # procedural stack.  Unfinished persisted effects are explicitly
         # escalated by the session recovery boundary rather than replayed.
-        await self.verified_harness_control.recover_pending_operations()
 
     async def send_verified_prompt(
         self,
@@ -160,34 +166,52 @@ class HarnessBackedAgent(LifecycleParticipant):
             from murder.llm.harnesses.results import fail_result
 
             return fail_result("verified harness control has not been initialized")
-        from murder.llm.harness_control.model.actions import InputChunk, InputProvenance
-        from murder.llm.harness_control.model.operations import OperationOutcome
         from murder.llm.harnesses.results import fail_result, ok_result
+        from murder.runtime.sessions.contracts import (
+            PrincipalKind,
+            PrincipalRef,
+            SendStructuredMessage,
+        )
 
-        provenance = (
-            InputProvenance.MURDER_CONTEXT_BLOCK
-            if murder_owned
-            else InputProvenance.USER_PASTE_BLOCK
-        )
-        result = await self.verified_harness_control.submit_prompt(
-            (
-                InputChunk(
-                    text,
-                    provenance,
-                    f"agent:{self.id}:{hashlib.sha256(text.encode('utf-8')).hexdigest()}",
-                ),
+        del murder_owned
+        controller = await self.verified_harness_control.ensure_session_controller()
+        try:
+            await controller.execute(
+                SendStructuredMessage(operation_id=uuid4(), text=text),
+                principal=PrincipalRef(kind=PrincipalKind.SERVICE, id=f"agent:{self.id}"),
             )
-        )
-        if result.outcome is OperationOutcome.SUBMITTED:
+        except Exception as exc:
+            outcome = getattr(exc, "outcome", None)
+            outcome_name = getattr(outcome, "name", None)
+            if isinstance(outcome_name, str):
+                return fail_result(
+                    f"verified prompt submission {outcome_name.lower()}"
+                )
+            return fail_result(f"verified prompt submission failed: {exc}")
+        else:
             return ok_result()
-        return fail_result(f"verified prompt submission {result.outcome.name.lower()}")
 
     async def interrupt_verified_generation(self) -> bool:
         """Request interruption through the controller's serialized actuator."""
 
         if self.verified_harness_control is None:
             return False
-        return await self.verified_harness_control.interrupt()
+        from murder.runtime.sessions.contracts import (
+            InterruptSession,
+            PrincipalKind,
+            PrincipalRef,
+        )
+
+        controller = await self.verified_harness_control.ensure_session_controller()
+        try:
+            await controller.execute(
+                InterruptSession(operation_id=uuid4()),
+                principal=PrincipalRef(kind=PrincipalKind.SERVICE, id=f"agent:{self.id}"),
+            )
+        except Exception:
+            LOGGER.exception("verified session interruption failed for %s", self.id)
+            return False
+        return True
 
     async def answer_verified_question(
         self, request: Any, *, operation_id: str | None = None
@@ -196,8 +220,14 @@ class HarnessBackedAgent(LifecycleParticipant):
 
         if self.verified_harness_control is None:
             return False
-        return await self.verified_harness_control.answer_question(
-            request, operation_id=operation_id
+        return cast(
+            bool,
+            await self._run_verified_session_mutation(
+                lambda: self.verified_harness_control.answer_question(
+                    request, operation_id=operation_id
+                ),
+                required_capability="structured_approvals",
+            ),
         )
 
     async def answer_verified_permission(
@@ -207,8 +237,14 @@ class HarnessBackedAgent(LifecycleParticipant):
 
         if self.verified_harness_control is None:
             return False
-        return await self.verified_harness_control.answer_permission(
-            request, operation_id=operation_id
+        return cast(
+            bool,
+            await self._run_verified_session_mutation(
+                lambda: self.verified_harness_control.answer_permission(
+                    request, operation_id=operation_id
+                ),
+                required_capability="structured_approvals",
+            ),
         )
 
     async def select_verified_model(
@@ -240,12 +276,72 @@ class HarnessBackedAgent(LifecycleParticipant):
             # checkbox, not an effort row in Cursor's parameter editor.
             fast_enabled = effort == "fast"
             target_effort = None
-        result = await self.verified_harness_control.select_model(
-            ModelTarget(model, effort=target_effort, fast_enabled=fast_enabled)
+        result = await self._run_verified_session_mutation(
+            lambda: self.verified_harness_control.select_model(
+                ModelTarget(model, effort=target_effort, fast_enabled=fast_enabled)
+            ),
+            required_capability="model_switching",
         )
         if result.outcome is ModelSelectionOutcome.ACTIVATED:
             return ok_result()
         return fail_result(f"verified model selection {result.outcome.name.lower()}")
+
+    async def collect_verified_usage(self, *, trigger: str) -> Any | None:
+        """Collect live usage inside the same serialized session mailbox."""
+
+        if self.verified_harness_control is None:
+            return None
+        return await self._run_verified_session_mutation(
+            lambda: self.verified_harness_control.collect_usage(trigger=trigger),
+            required_capability="structured_messages",
+        )
+
+    async def _run_verified_session_mutation(
+        self,
+        effect: Any,
+        *,
+        required_capability: Any,
+    ) -> Any:
+        """Bridge pre-existing typed reducers into the Phase 2 mailbox."""
+
+        if self.verified_harness_control is None:
+            raise RuntimeError("verified harness control has not been initialized")
+        from murder.runtime.sessions.contracts import PrincipalKind, PrincipalRef
+
+        controller = await self.verified_harness_control.ensure_session_controller()
+        return await controller.run_internal(
+            uuid4(),
+            effect,
+            principal=PrincipalRef(kind=PrincipalKind.SERVICE, id=f"agent:{self.id}"),
+            required_capability=required_capability,
+        )
+
+    async def terminate_verified_session(self, *, force: bool = False) -> bool:
+        """Terminate the live pane through its serialized controller."""
+
+        if self.verified_harness_control is None:
+            return False
+        from murder.runtime.sessions.contracts import (
+            PrincipalKind,
+            PrincipalRef,
+            TerminateSession,
+        )
+
+        controller = await self.verified_harness_control.ensure_session_controller()
+        try:
+            await controller.execute(
+                TerminateSession(
+                    operation_id=uuid4(),
+                    force=force,
+                    reason="agent lifecycle stop",
+                ),
+                principal=PrincipalRef(kind=PrincipalKind.SERVICE, id=f"agent:{self.id}"),
+            )
+        except Exception:
+            LOGGER.exception("verified session termination failed for %s", self.id)
+            return False
+        await self.verified_harness_control.remove_session_controller()
+        return True
 
     async def _usage_sampling_context(self) -> Any | None:
         runtime = getattr(self, "runtime", None)

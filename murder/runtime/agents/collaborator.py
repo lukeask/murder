@@ -128,8 +128,14 @@ class CollaboratorAgent(HarnessBackedAgent):
         if kill_session:
             with contextlib.suppress(Exception):
                 await self.interrupt_verified_generation()
-            with contextlib.suppress(Exception):
-                await tmux.kill_session(self.session)
+            terminated = await self.terminate_verified_session(force=failed)
+            control = self.verified_harness_control
+            if not terminated and (
+                control is None or control.session_controller is None
+            ):
+                # Startup failures may occur before a controller exists.
+                with contextlib.suppress(Exception):
+                    await tmux.kill_session(self.session)
         self.status = AgentStatus.FAILED if failed else AgentStatus.DONE
         if self.runtime:
             self.runtime.sync_agent(self)

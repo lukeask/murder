@@ -139,12 +139,23 @@ export interface SubscriptionEventMessage {{
 export interface TerminalAttachMessage {{
   readonly op: 'terminal.attach';
   readonly stream_id: string;
-  readonly target: {{ readonly session_id?: string | null }};
+  readonly target: {{
+    readonly session_id?: string | null;
+    readonly legacy_agent_id?: string | null;
+  }};
+  readonly after_sequence: number;
 }}
 
 export interface TerminalDetachMessage {{
   readonly op: 'terminal.detach';
   readonly stream_id: string;
+}}
+
+export interface TerminalResyncMessage {{
+  readonly op: 'terminal.resync';
+  readonly stream_id: string;
+  readonly after_sequence: number;
+  readonly reason: 'gap' | 'unsupported_mode';
 }}
 
 export interface TerminalAttachedMessage {{
@@ -153,15 +164,62 @@ export interface TerminalAttachedMessage {{
   readonly mode: 'replace';
 }}
 
+export interface TerminalFrame {{
+  readonly type: 'terminal.frame';
+  readonly subscription_id: string;
+  readonly session_id?: string | null;
+  readonly legacy_agent_id?: string | null;
+  readonly sequence: number;
+  readonly captured_at: string;
+  readonly columns: number;
+  readonly rows: number;
+  readonly encoding: 'utf-8';
+  readonly data: string;
+  readonly reset: boolean;
+}}
+
+export interface TerminalChunk {{
+  readonly type: 'terminal.chunk';
+  readonly subscription_id: string;
+  readonly session_id?: string | null;
+  readonly legacy_agent_id?: string | null;
+  readonly sequence: number;
+  readonly encoding: 'utf-8';
+  readonly data: string;
+}}
+
+export interface TerminalStreamGap {{
+  readonly type: 'terminal.gap';
+  readonly subscription_id: string;
+  readonly session_id?: string | null;
+  readonly legacy_agent_id?: string | null;
+  readonly expected_sequence: number;
+  readonly next_sequence: number;
+  readonly snapshot_required: boolean;
+}}
+
 export interface TerminalFrameMessage {{
   readonly op: 'terminal.frame';
   readonly stream_id: string;
-  readonly frame: {{
-    readonly mode: 'replace';
-    readonly sequence: number;
-    readonly session_id: string;
-    readonly frame: string;
-  }};
+  readonly frame: TerminalFrame;
+}}
+
+export interface TerminalChunkMessage {{
+  readonly op: 'terminal.chunk';
+  readonly stream_id: string;
+  readonly chunk: TerminalChunk;
+}}
+
+export interface TerminalStreamGapMessage {{
+  readonly op: 'terminal.gap';
+  readonly stream_id: string;
+  readonly gap: TerminalStreamGap;
+}}
+
+export interface TerminalResyncedMessage {{
+  readonly op: 'terminal.resynced';
+  readonly stream_id: string;
+  readonly frame: TerminalFrame;
 }}
 
 export interface ErrorMessage {{
@@ -182,7 +240,8 @@ export type ClientMessage =
   | SubscribeMessage
   | UnsubscribeMessage
   | TerminalAttachMessage
-  | TerminalDetachMessage;
+  | TerminalDetachMessage
+  | TerminalResyncMessage;
 
 export type ServerMessage =
   | ServerHello
@@ -191,6 +250,9 @@ export type ServerMessage =
   | SubscriptionEventMessage
   | TerminalAttachedMessage
   | TerminalFrameMessage
+  | TerminalChunkMessage
+  | TerminalStreamGapMessage
+  | TerminalResyncedMessage
   | ErrorMessage;
 """
 

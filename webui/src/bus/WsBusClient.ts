@@ -28,6 +28,8 @@ import {
   type QueryName,
   type ServerMessage,
   type SubscriptionSnapshot,
+  type TerminalChunk,
+  type TerminalFrame,
 } from '@core/generated/applicationProtocol.js';
 import type { BusEvent } from '@core/bus/protocol.js';
 import { isBusEvent } from '@core/bus/matchesFilter.js';
@@ -155,7 +157,12 @@ interface TerminalRegistration {
   readonly id: string;
   readonly sessionId: string | null;
   readonly listener: TerminalFrameListener;
+  lastSequence: number;
+  resyncPending: boolean;
 }
+
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 type ConnectionState = 'idle' | 'connecting' | 'connected' | 'closed' | 'permanent-error';
 
@@ -300,7 +307,13 @@ export class WsBusClient implements BusClient {
 
   attachTerminal(sessionId: string | null, listener: TerminalFrameListener): Unsubscribe {
     const id = `terminal-${randomId()}`;
-    const registration: TerminalRegistration = { id, sessionId, listener };
+    const registration: TerminalRegistration = {
+      id,
+      sessionId,
+      listener,
+      lastSequence: 0,
+      resyncPending: false,
+    };
     this.terminals.set(id, registration);
     if (this.state === 'connected' && this.socket !== undefined) {
       this.sendTerminalAttach(this.socket, registration);
@@ -504,11 +517,29 @@ export class WsBusClient implements BusClient {
       case 'terminal.frame': {
         const stream = this.terminals.get(message.stream_id);
         if (stream !== undefined) {
-          try {
-            stream.listener(message.frame);
-          } catch {
-            // A terminal renderer cannot disrupt sibling streams or transport dispatch.
-          }
+          this.acceptTerminalFrame(stream, message.frame);
+        }
+        return;
+      }
+      case 'terminal.chunk': {
+        const stream = this.terminals.get(message.stream_id);
+        if (stream !== undefined) {
+          this.acceptTerminalChunk(stream, message.chunk);
+        }
+        return;
+      }
+      case 'terminal.gap': {
+        const stream = this.terminals.get(message.stream_id);
+        if (stream !== undefined) {
+          this.requestTerminalResync(stream, 'gap');
+        }
+        return;
+      }
+      case 'terminal.resynced': {
+        const stream = this.terminals.get(message.stream_id);
+        if (stream !== undefined) {
+          stream.resyncPending = false;
+          this.acceptTerminalFrame(stream, message.frame);
         }
         return;
       }
@@ -705,8 +736,62 @@ export class WsBusClient implements BusClient {
     this.write(socket, {
       op: 'terminal.attach',
       stream_id: terminal.id,
-      target: { session_id: terminal.sessionId },
+      target:
+        terminal.sessionId === null
+          ? { session_id: null }
+          : UUID_RE.test(terminal.sessionId)
+            ? { session_id: terminal.sessionId }
+            : { legacy_agent_id: terminal.sessionId },
+      after_sequence: terminal.lastSequence,
     });
+  }
+
+  private acceptTerminalFrame(terminal: TerminalRegistration, frame: TerminalFrame): void {
+    if (frame.sequence <= terminal.lastSequence) return;
+    if (!frame.reset) {
+      this.requestTerminalResync(terminal, 'unsupported_mode');
+      return;
+    }
+    // Full snapshots recover a skipped sequence caused by terminal queue
+    // coalescing, so the newest replacement can be rendered immediately.
+    terminal.lastSequence = frame.sequence;
+    terminal.resyncPending = false;
+    this.notifyTerminal(terminal, frame);
+  }
+
+  private acceptTerminalChunk(terminal: TerminalRegistration, chunk: TerminalChunk): void {
+    const expected = terminal.lastSequence + 1;
+    if (terminal.lastSequence === 0 || chunk.sequence !== expected) {
+      this.requestTerminalResync(terminal, 'gap');
+      return;
+    }
+    terminal.lastSequence = chunk.sequence;
+    this.notifyTerminal(terminal, chunk);
+  }
+
+  private requestTerminalResync(
+    terminal: TerminalRegistration,
+    reason: 'gap' | 'unsupported_mode',
+  ): void {
+    if (terminal.resyncPending || this.state !== 'connected' || this.socket === undefined) return;
+    terminal.resyncPending = true;
+    this.write(this.socket, {
+      op: 'terminal.resync',
+      stream_id: terminal.id,
+      after_sequence: terminal.lastSequence,
+      reason,
+    });
+  }
+
+  private notifyTerminal(
+    terminal: TerminalRegistration,
+    update: TerminalFrame | TerminalChunk,
+  ): void {
+    try {
+      terminal.listener(update);
+    } catch {
+      // A terminal renderer cannot disrupt sibling streams or transport dispatch.
+    }
   }
 
   private write(socket: WebSocketLike, message: ClientMessage): void {
@@ -772,6 +857,9 @@ function isServerOp(op: unknown): boolean {
     op === 'subscription.event' ||
     op === 'terminal.attached' ||
     op === 'terminal.frame' ||
+    op === 'terminal.chunk' ||
+    op === 'terminal.gap' ||
+    op === 'terminal.resynced' ||
     op === 'error'
   );
 }

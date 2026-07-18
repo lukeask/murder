@@ -223,21 +223,28 @@ describe('WsBusClient resumable streams', () => {
     completeHandshake(sockets[0]!);
     await bus.connect();
     const frames: string[] = [];
-    const detach = bus.attachTerminal('agent-a', (frame) => frames.push(frame.frame));
+    const detach = bus.attachTerminal('agent-a', (frame) => frames.push(frame.data));
     const attach = sockets[0]!.sentMessage(1);
     expect(attach).toMatchObject({
       op: 'terminal.attach',
-      target: { session_id: 'agent-a' },
+      target: { legacy_agent_id: 'agent-a' },
+      after_sequence: 0,
     });
     if (attach.op !== 'terminal.attach') throw new Error('expected terminal attach');
     sockets[0]!.receive({
       op: 'terminal.frame',
       stream_id: attach.stream_id,
       frame: {
-        mode: 'replace',
+        type: 'terminal.frame',
+        subscription_id: attach.stream_id,
         sequence: 1,
         session_id: 'agent-a',
-        frame: 'hello',
+        captured_at: '2026-07-18T00:00:00Z',
+        columns: 80,
+        rows: 24,
+        encoding: 'utf-8',
+        data: 'hello',
+        reset: true,
       },
     });
     expect(frames).toEqual(['hello']);
@@ -245,6 +252,83 @@ describe('WsBusClient resumable streams', () => {
     expect(sockets[0]!.sentMessage(2)).toEqual({
       op: 'terminal.detach',
       stream_id: attach.stream_id,
+    });
+    bus.close();
+  });
+
+  it('uses the canonical session_id field for durable UUID attachment', async () => {
+    const { bus, sockets } = makeClient();
+    completeHandshake(sockets[0]!);
+    await bus.connect();
+    const sessionId = '0198b156-2dd3-70a9-bc79-fca001dc8801';
+
+    const detach = bus.attachTerminal(sessionId, () => {});
+    expect(sockets[0]!.sentMessage(1)).toMatchObject({
+      op: 'terminal.attach',
+      target: { session_id: sessionId },
+    });
+    detach();
+    bus.close();
+  });
+
+  it('detects incremental gaps, requests resync, and resumes from the last snapshot', async () => {
+    const immediateClock: Clock = {
+      sleep: () => ({ promise: Promise.resolve(), cancel: () => {} }),
+      random: () => 0,
+    };
+    const { bus, sockets } = makeClient(immediateClock);
+    completeHandshake(sockets[0]!);
+    await bus.connect();
+    const updates: string[] = [];
+    bus.attachTerminal('agent-a', (update) => updates.push(update.data));
+    const attach = sockets[0]!.sentMessage(1);
+    if (attach.op !== 'terminal.attach') throw new Error('expected terminal attach');
+
+    sockets[0]!.receive({
+      op: 'terminal.frame',
+      stream_id: attach.stream_id,
+      frame: {
+        type: 'terminal.frame',
+        subscription_id: attach.stream_id,
+        sequence: 7,
+        session_id: 'agent-a',
+        captured_at: '2026-07-18T00:00:00Z',
+        columns: 80,
+        rows: 24,
+        encoding: 'utf-8',
+        data: 'snapshot',
+        reset: true,
+      },
+    });
+    sockets[0]!.receive({
+      op: 'terminal.chunk',
+      stream_id: attach.stream_id,
+      chunk: {
+        type: 'terminal.chunk',
+        subscription_id: attach.stream_id,
+        sequence: 9,
+        session_id: 'agent-a',
+        encoding: 'utf-8',
+        data: 'unsafe',
+      },
+    });
+    expect(updates).toEqual(['snapshot']);
+    expect(sockets[0]!.sentMessage(2)).toEqual({
+      op: 'terminal.resync',
+      stream_id: attach.stream_id,
+      after_sequence: 7,
+      reason: 'gap',
+    });
+
+    sockets[0]!.close();
+    await flush();
+    await flush();
+    completeHandshake(sockets[1]!);
+    await flush();
+    expect(sockets[1]!.sentMessage(1)).toMatchObject({
+      op: 'terminal.attach',
+      stream_id: attach.stream_id,
+      after_sequence: 7,
     });
     bus.close();
   });
@@ -299,7 +383,7 @@ describe('WsBusClient resumable streams', () => {
         }),
         expect.objectContaining({
           op: 'terminal.attach',
-          target: { session_id: 'agent-a' },
+          target: { legacy_agent_id: 'agent-a' },
         }),
       ]),
     );

@@ -10,11 +10,10 @@ from typing import Any
 
 from murder.app.service.runtime_scope import OrchestratorHost
 from murder.bus import Entity
-from murder.llm.harness_control.runtime.manual_input import emit_manual_input
+from murder.llm.harness_control.runtime.manual_input import emit_fenced_manual_input
 from murder.runtime.agents.base import AgentRole, AgentStatus
 from murder.runtime.orchestration.agent_ids import is_rogue_agent_id
 from murder.runtime.terminal import tmux
-from murder.runtime.terminal.session_names import format_session_name
 from murder.state.persistence.agents import (
     rename_agent as _db_rename_agent,
 )
@@ -232,11 +231,12 @@ class AgentOps:
                 "error": f"agent {agent_id} verified control is bound to a different tmux session",
             }
         try:
-            receipt = await emit_manual_input(
+            receipt = await emit_fenced_manual_input(
                 control,
                 text=key,
                 literal=literal,
                 append_enter=enter,
+                principal_id=f"agent-ops:{agent_id}",
             )
         except Exception as exc:
             LOGGER.exception("verified manual terminal input failed for %s", agent_id)
@@ -406,15 +406,6 @@ class AgentOps:
         if self.rt.get_agent(new_agent_id) is not None:
             return {"ok": False, "error": f"agent already exists: {new_agent_id}"}
 
-        old_session = getattr(agent, "session", None)
-        new_session = format_session_name(self.rt, "crow", f"_{prefix}_rogue_{slug}")
-        if (
-            isinstance(old_session, str)
-            and old_session != new_session
-            and await tmux.session_exists(new_session)
-        ):
-            return {"ok": False, "error": f"session already exists: {new_session}"}
-
         renamed = self.rt.rename_agent(
             agent_id,
             new_agent_id,
@@ -422,13 +413,10 @@ class AgentOps:
         )
         if renamed is None:
             return {"ok": False, "error": f"failed to rename {agent_id}"}
-        if isinstance(old_session, str) and old_session != new_session:
-            if await tmux.session_exists(old_session):
-                await tmux.rename_session(old_session, new_session)
-            renamed.session = new_session
-            harness_session = getattr(renamed, "harness_session", None)
-            if harness_session is not None:
-                harness_session.session = new_session
+        # The durable session and its transport reference keep their identity
+        # across a display/agent rename. Renaming the live tmux resource here
+        # would be a sixth, un-fenced controller mutation and would also break
+        # clients attached by persisted session UUID.
         if self.rt.db is not None:
             with self.rt.db:
                 _db_rename_agent(

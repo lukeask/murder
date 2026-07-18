@@ -124,6 +124,14 @@ async def kill_session(name: str) -> None:
         current_advanced_log().record_tmux_frame(TmuxFrameRecord(session=name, op="kill"))
 
 
+async def resize_session(name: str, *, columns: int, rows: int) -> None:
+    """Resize a detached session through the controller-owned mutation path."""
+
+    if columns < 1 or rows < 1:
+        raise ValueError("terminal dimensions must be positive")
+    await _tmux("resize-window", "-t", name, "-x", str(columns), "-y", str(rows))
+
+
 async def rename_session(old_name: str, new_name: str) -> bool:
     """Rename a tmux session if it exists; return whether a rename happened."""
     if old_name == new_name:

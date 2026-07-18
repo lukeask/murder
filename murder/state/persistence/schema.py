@@ -9,6 +9,8 @@ import sqlite3
 from datetime import datetime
 from pathlib import Path
 
+from murder.runtime.sessions.persistence import ensure_session_schema
+
 from murder.state.storage.paths import MURDER_DIR_NAME
 
 # fmt: off
@@ -640,23 +642,88 @@ CREATE TABLE IF NOT EXISTS history_status (
     updated_at  TEXT NOT NULL
 );
 
--- One row per launched workflow run. The parent "run" ticket (a pure tree
--- container, kept ``planned``) anchors the run; ON DELETE CASCADE means
--- deleting it drops the run record too.
---   definition_json: the WorkflowDef snapshot at launch time, so a later
---     coordination layer interprets the run's edges even if the userspace
---     definition is edited or deleted afterwards.
---   stage_map_json: JSON object mapping each stage.id -> its materialized
---     ticket id, so that layer resolves graph edges to concrete tickets.
--- Run *state* (which stages are done/blocked) is deliberately NOT stored: it
--- is re-derived from the stage tickets' statuses, so there is no cursor/edge
--- column to drift out of sync.
+-- Authoritative current workflow state.  parent_ticket_id, definition_json,
+-- and stage_map_json retain the static ticket-DAG definition type as a
+-- compatibility view; ticket statuses are not workflow run truth.
 CREATE TABLE IF NOT EXISTS workflow_runs (
-    parent_ticket_id TEXT PRIMARY KEY REFERENCES tickets(id) ON DELETE CASCADE,
-    name             TEXT NOT NULL,
-    definition_json  TEXT NOT NULL,
-    stage_map_json   TEXT NOT NULL,
-    created_at       TEXT NOT NULL
+    workflow_id       TEXT PRIMARY KEY,
+    definition_name   TEXT NOT NULL,
+    definition_version INTEGER NOT NULL CHECK (definition_version >= 1),
+    status            TEXT NOT NULL CHECK (status IN
+                      ('running','waiting','completed','failed','cancelled','paused')),
+    revision          INTEGER NOT NULL CHECK (revision >= 0),
+    state_json        TEXT NOT NULL,
+    created_at        TEXT NOT NULL,
+    updated_at        TEXT NOT NULL,
+    started_by_json   TEXT NOT NULL,
+    correlation_json  TEXT NOT NULL,
+    terminal_reason   TEXT,
+    parent_ticket_id  TEXT UNIQUE REFERENCES tickets(id) ON DELETE SET NULL,
+    definition_json   TEXT,
+    stage_map_json    TEXT NOT NULL DEFAULT '{}'
+);
+
+CREATE INDEX IF NOT EXISTS idx_workflow_runs_status
+    ON workflow_runs(status, updated_at);
+
+CREATE TABLE IF NOT EXISTS workflow_state_migrations (
+    migration_id        TEXT PRIMARY KEY,
+    workflow_id         TEXT NOT NULL REFERENCES workflow_runs(workflow_id) ON DELETE CASCADE,
+    migration_name      TEXT NOT NULL,
+    from_schema_name    TEXT NOT NULL,
+    from_schema_version INTEGER NOT NULL CHECK (from_schema_version >= 1),
+    to_schema_name      TEXT NOT NULL,
+    to_schema_version   INTEGER NOT NULL CHECK (to_schema_version >= 1),
+    from_revision       INTEGER NOT NULL CHECK (from_revision >= 0),
+    to_revision         INTEGER NOT NULL CHECK (to_revision >= 1),
+    migrated_at         TEXT NOT NULL,
+    UNIQUE (workflow_id, to_revision)
+);
+
+-- Addressed durable workflow inbox.  At-least-once producers converge on the
+-- per-workflow deduplication key; consumption records the accepting revision.
+CREATE TABLE IF NOT EXISTS workflow_signals (
+    signal_id           TEXT PRIMARY KEY,
+    workflow_id         TEXT NOT NULL REFERENCES workflow_runs(workflow_id) ON DELETE CASCADE,
+    deduplication_key   TEXT NOT NULL,
+    created_at          TEXT NOT NULL,
+    payload_json        TEXT NOT NULL,
+    consumed_at         TEXT,
+    consumed_at_revision INTEGER,
+    UNIQUE (workflow_id, deduplication_key),
+    CHECK ((consumed_at IS NULL) = (consumed_at_revision IS NULL)),
+    CHECK (consumed_at_revision IS NULL OR consumed_at_revision >= 1)
+);
+
+CREATE INDEX IF NOT EXISTS idx_workflow_signals_pending
+    ON workflow_signals(workflow_id, consumed_at, created_at);
+
+-- Explicit current wait set.  Satisfaction is recorded when an addressed
+-- signal arrives and the complete set is replaced by transition application.
+CREATE TABLE IF NOT EXISTS workflow_waits (
+    wait_id                 TEXT PRIMARY KEY,
+    workflow_id             TEXT NOT NULL REFERENCES workflow_runs(workflow_id) ON DELETE CASCADE,
+    created_at              TEXT NOT NULL,
+    spec_json               TEXT NOT NULL,
+    satisfied_at            TEXT,
+    satisfied_by_signal_id  TEXT REFERENCES workflow_signals(signal_id) ON DELETE SET NULL,
+    CHECK ((satisfied_at IS NULL) = (satisfied_by_signal_id IS NULL))
+);
+
+CREATE INDEX IF NOT EXISTS idx_workflow_waits_current
+    ON workflow_waits(workflow_id, satisfied_at, created_at);
+
+-- Side-effect requests and public facts returned by pure decisions are staged
+-- transactionally.  Phase 4 consumers claim the typed payloads from here.
+CREATE TABLE IF NOT EXISTS workflow_transition_outbox (
+    outbox_id          TEXT PRIMARY KEY,
+    workflow_id        TEXT NOT NULL REFERENCES workflow_runs(workflow_id) ON DELETE CASCADE,
+    workflow_revision  INTEGER NOT NULL CHECK (workflow_revision >= 1),
+    kind               TEXT NOT NULL CHECK (kind IN ('activity','approval','fact')),
+    ordinal            INTEGER NOT NULL CHECK (ordinal >= 0),
+    payload_json       TEXT NOT NULL,
+    created_at         TEXT NOT NULL,
+    UNIQUE (workflow_id, workflow_revision, kind, ordinal)
 );
 """
 # fmt: on
@@ -724,6 +791,10 @@ def init_db(conn: sqlite3.Connection) -> None:
     )
     from murder.state.persistence.notetaker import ensure_notetaker_context_row
 
+    # workflow_runs used to have a ticket id primary key and none of the
+    # authoritative state columns.  Upgrade it before SCHEMA_SQL attempts to
+    # create indexes and child tables that reference the new shape.
+    _migrate_workflow_runs(conn)
     conn.executescript(SCHEMA_SQL)
     _migrate_events_schema_version(conn)
     _migrate_ticket_metadata_columns(conn)
@@ -754,6 +825,10 @@ def init_db(conn: sqlite3.Connection) -> None:
     _migrate_history_status(conn)
     _migrate_runs_advanced_log_path(conn)
     _migrate_workflow_runs(conn)
+    # The session/controller feature owns this DDL beside its DAO so fencing
+    # rules cannot drift from a second schema copy. This idempotent call is the
+    # central fresh-database and existing-database registration point.
+    ensure_session_schema(conn)
     ensure_notetaker_context_row(conn)
 
 

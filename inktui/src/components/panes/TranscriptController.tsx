@@ -164,11 +164,15 @@ export const TranscriptController = memo(function TranscriptController({
       setTmuxFrame('');
       return;
     }
-    const unsubscribe = bus.attachTerminal(identity.agentId, (terminalFrame) => {
-      setTmuxFrame(terminalFrame.frame);
+    const unsubscribe = bus.attachTerminal(identity.sessionId ?? identity.agentId, (terminalFrame) => {
+      setTmuxFrame((current) =>
+        terminalFrame.type === 'terminal.frame' && terminalFrame.reset
+          ? terminalFrame.data
+          : `${current}${terminalFrame.data}`,
+      );
     });
     return unsubscribe;
-  }, [bus, identity.agentId, viewMode]);
+  }, [bus, identity.agentId, identity.sessionId, viewMode]);
 
   const handleScrollUpChange = useCallback(
     (nextScrollUp: number) => {

@@ -48,6 +48,9 @@ class WorkflowDef(BaseModel):
     """A reusable pipeline of stages, keyed by ``name``."""
 
     name: str  # firing key; ^[A-Za-z0-9_-]+$
+    # Definition versions are compatibility boundaries for already-running
+    # persisted state machines; changing semantics requires a new version.
+    definition_version: int = Field(default=1, ge=1)
     description: str = ""
     # Reserved for generative ticket expansion; only "static" is honored today.
     mode: Literal["static", "generative"] = "static"

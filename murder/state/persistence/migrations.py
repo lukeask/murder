@@ -1,10 +1,11 @@
-"""Schema migration functions — the ``_migrate_*`` helpers that bring an existing murder.db forward to the current schema."""
+"""Schema migrations that bring an existing ``murder.db`` forward."""
 
 from __future__ import annotations
 
+import json
 import sqlite3
-from datetime import datetime
-from uuid import uuid4
+from datetime import datetime, timezone
+from uuid import UUID, uuid4, uuid5
 
 
 def _now() -> str:
@@ -460,9 +461,7 @@ def _migrate_completion_tables(conn: sqlite3.Connection) -> None:
     """Add check_results and completion_attempts tables for the completion coordinator."""
     existing = {
         row["name"]
-        for row in conn.execute(
-            "SELECT name FROM sqlite_master WHERE type = 'table'"
-        ).fetchall()
+        for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'").fetchall()
     }
     if "check_results" not in existing:
         conn.execute(
@@ -697,9 +696,7 @@ def _migrate_map_summaries(conn: sqlite3.Connection) -> None:
     """
     existing = {
         row["name"]
-        for row in conn.execute(
-            "SELECT name FROM sqlite_master WHERE type = 'table'"
-        ).fetchall()
+        for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'").fetchall()
     }
     if "map_summaries" not in existing:
         conn.executescript(
@@ -729,9 +726,7 @@ def _migrate_scheduler_steering(conn: sqlite3.Connection) -> None:
     """
     existing = {
         row["name"]
-        for row in conn.execute(
-            "SELECT name FROM sqlite_master WHERE type = 'table'"
-        ).fetchall()
+        for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'").fetchall()
     }
     if "scheduler_steering" not in existing:
         conn.executescript(
@@ -753,9 +748,7 @@ def _migrate_history_status(conn: sqlite3.Connection) -> None:
     """
     existing = {
         row["name"]
-        for row in conn.execute(
-            "SELECT name FROM sqlite_master WHERE type = 'table'"
-        ).fetchall()
+        for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'").fetchall()
     }
     if "history_status" not in existing:
         conn.executescript(
@@ -785,29 +778,289 @@ def _migrate_runs_advanced_log_path(conn: sqlite3.Connection) -> None:
 
 
 def _migrate_workflow_runs(conn: sqlite3.Connection) -> None:
-    """Add the workflow_runs table (launched-workflow run records).
+    """Forward/backfill the legacy ticket-derived workflow table.
 
-    Idempotent: the CREATE TABLE IF NOT EXISTS in SCHEMA_SQL handles fresh DBs;
-    this migration handles existing DBs created before workflows landed.
+    Legacy rows receive deterministic UUID identities so rerunning a partially
+    deployed migration converges.  Ticket statuses are consulted exactly once
+    to seed a current state document; after migration they are a materialized
+    compatibility view and never authoritative workflow state.
     """
-    existing = {
-        row["name"]
-        for row in conn.execute(
-            "SELECT name FROM sqlite_master WHERE type = 'table'"
-        ).fetchall()
+
+    table = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'workflow_runs'"
+    ).fetchone()
+    if table is None:
+        _create_workflow_runtime_tables(conn)
+        return
+
+    columns = {
+        str(row["name"]) for row in conn.execute("PRAGMA table_info(workflow_runs)").fetchall()
     }
-    if "workflow_runs" not in existing:
-        conn.executescript(
-            """
-            CREATE TABLE workflow_runs (
-                parent_ticket_id TEXT PRIMARY KEY REFERENCES tickets(id) ON DELETE CASCADE,
-                name             TEXT NOT NULL,
-                definition_json  TEXT NOT NULL,
-                stage_map_json   TEXT NOT NULL,
-                created_at       TEXT NOT NULL
-            );
-            """
-        )
+    if "workflow_id" in columns:
+        _create_workflow_runtime_tables(conn)
+        return
+
+    legacy_rows = conn.execute(
+        """
+        SELECT parent_ticket_id, name, definition_json, stage_map_json, created_at
+        FROM workflow_runs
+        ORDER BY parent_ticket_id
+        """
+    ).fetchall()
+
+    conn.execute("PRAGMA foreign_keys = OFF")
+    try:
+        conn.execute("BEGIN")
+        conn.execute("ALTER TABLE workflow_runs RENAME TO workflow_runs_legacy_v1")
+        _create_workflow_runtime_tables(conn)
+        for row in legacy_rows:
+            parent_ticket_id = str(row["parent_ticket_id"])
+            workflow_id = uuid5(_WORKFLOW_MIGRATION_NAMESPACE, parent_ticket_id)
+            definition = _json_object(row["definition_json"])
+            stage_map = {
+                str(key): str(value) for key, value in _json_object(row["stage_map_json"]).items()
+            }
+            stages: list[dict[str, object]] = [
+                {
+                    "stage_id": stage_id,
+                    "status": _legacy_stage_status(conn, ticket_id),
+                    "activity_id": None,
+                    "session_id": None,
+                    "attempts": _legacy_ticket_attempts(conn, ticket_id),
+                    "result_ref": None,
+                    "error": _legacy_ticket_error(conn, ticket_id),
+                }
+                for stage_id, ticket_id in stage_map.items()
+            ]
+            run_status, terminal_reason = _legacy_run_status(stages)
+            created_at = _aware_timestamp(str(row["created_at"]))
+            definition_version = definition.get("definition_version", 1)
+            if not isinstance(definition_version, int) or definition_version < 1:
+                definition_version = 1
+            state = {
+                "schema_name": "static_dag",
+                "schema_version": 1,
+                "value": {
+                    "inputs": {},
+                    "stages": stages,
+                    "output": None,
+                },
+            }
+            started_by = {"kind": "service", "id": "workflow-migration"}
+            correlation = {
+                "correlation_id": str(
+                    uuid5(_WORKFLOW_MIGRATION_NAMESPACE, f"correlation:{parent_ticket_id}")
+                ),
+                "causation_id": None,
+                "trace_id": None,
+            }
+            conn.execute(
+                """
+                INSERT INTO workflow_runs(
+                    workflow_id, definition_name, definition_version, status,
+                    revision, state_json, created_at, updated_at, started_by_json,
+                    correlation_json, terminal_reason, parent_ticket_id,
+                    definition_json, stage_map_json
+                ) VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    str(workflow_id),
+                    str(row["name"]),
+                    definition_version,
+                    run_status,
+                    json.dumps(state, sort_keys=True, separators=(",", ":")),
+                    created_at,
+                    created_at,
+                    json.dumps(started_by, sort_keys=True, separators=(",", ":")),
+                    json.dumps(correlation, sort_keys=True, separators=(",", ":")),
+                    terminal_reason,
+                    parent_ticket_id,
+                    str(row["definition_json"]),
+                    json.dumps(stage_map, sort_keys=True, separators=(",", ":")),
+                ),
+            )
+            if run_status == "waiting":
+                for stage_id, ticket_id in stage_map.items():
+                    stage = next(item for item in stages if item["stage_id"] == stage_id)
+                    if stage["status"] in {"succeeded", "failed", "cancelled"}:
+                        continue
+                    wait_id = uuid5(
+                        _WORKFLOW_MIGRATION_NAMESPACE,
+                        f"wait:{parent_ticket_id}:{stage_id}",
+                    )
+                    spec = {
+                        "type": "external_signal",
+                        "signal_name": "ticket.finished",
+                        "correlation_key": ticket_id,
+                    }
+                    conn.execute(
+                        """
+                        INSERT INTO workflow_waits(
+                            wait_id, workflow_id, created_at, spec_json,
+                            satisfied_at, satisfied_by_signal_id
+                        ) VALUES (?, ?, ?, ?, NULL, NULL)
+                        """,
+                        (
+                            str(wait_id),
+                            str(workflow_id),
+                            created_at,
+                            json.dumps(spec, sort_keys=True, separators=(",", ":")),
+                        ),
+                    )
+        conn.execute("DROP TABLE workflow_runs_legacy_v1")
+        conn.commit()
+    except BaseException:
+        conn.rollback()
+        raise
+    finally:
+        conn.execute("PRAGMA foreign_keys = ON")
+
+
+_WORKFLOW_MIGRATION_NAMESPACE = UUID("14d74d42-b45a-5abc-a6d3-129f19127868")
+
+
+def _create_workflow_runtime_tables(conn: sqlite3.Connection) -> None:
+    ddl = """
+        CREATE TABLE IF NOT EXISTS workflow_runs (
+            workflow_id       TEXT PRIMARY KEY,
+            definition_name   TEXT NOT NULL,
+            definition_version INTEGER NOT NULL CHECK (definition_version >= 1),
+            status            TEXT NOT NULL CHECK (status IN
+                              ('running','waiting','completed','failed','cancelled','paused')),
+            revision          INTEGER NOT NULL CHECK (revision >= 0),
+            state_json        TEXT NOT NULL,
+            created_at        TEXT NOT NULL,
+            updated_at        TEXT NOT NULL,
+            started_by_json   TEXT NOT NULL,
+            correlation_json  TEXT NOT NULL,
+            terminal_reason   TEXT,
+            parent_ticket_id  TEXT UNIQUE REFERENCES tickets(id) ON DELETE SET NULL,
+            definition_json   TEXT,
+            stage_map_json    TEXT NOT NULL DEFAULT '{}'
+        );
+        CREATE INDEX IF NOT EXISTS idx_workflow_runs_status
+            ON workflow_runs(status, updated_at);
+        CREATE TABLE IF NOT EXISTS workflow_state_migrations (
+            migration_id        TEXT PRIMARY KEY,
+            workflow_id         TEXT NOT NULL
+                                REFERENCES workflow_runs(workflow_id) ON DELETE CASCADE,
+            migration_name      TEXT NOT NULL,
+            from_schema_name    TEXT NOT NULL,
+            from_schema_version INTEGER NOT NULL CHECK (from_schema_version >= 1),
+            to_schema_name      TEXT NOT NULL,
+            to_schema_version   INTEGER NOT NULL CHECK (to_schema_version >= 1),
+            from_revision       INTEGER NOT NULL CHECK (from_revision >= 0),
+            to_revision         INTEGER NOT NULL CHECK (to_revision >= 1),
+            migrated_at         TEXT NOT NULL,
+            UNIQUE (workflow_id, to_revision)
+        );
+        CREATE TABLE IF NOT EXISTS workflow_signals (
+            signal_id           TEXT PRIMARY KEY,
+            workflow_id         TEXT NOT NULL
+                                REFERENCES workflow_runs(workflow_id) ON DELETE CASCADE,
+            deduplication_key   TEXT NOT NULL,
+            created_at          TEXT NOT NULL,
+            payload_json        TEXT NOT NULL,
+            consumed_at         TEXT,
+            consumed_at_revision INTEGER,
+            UNIQUE (workflow_id, deduplication_key),
+            CHECK ((consumed_at IS NULL) = (consumed_at_revision IS NULL)),
+            CHECK (consumed_at_revision IS NULL OR consumed_at_revision >= 1)
+        );
+        CREATE INDEX IF NOT EXISTS idx_workflow_signals_pending
+            ON workflow_signals(workflow_id, consumed_at, created_at);
+        CREATE TABLE IF NOT EXISTS workflow_waits (
+            wait_id                 TEXT PRIMARY KEY,
+            workflow_id             TEXT NOT NULL
+                                    REFERENCES workflow_runs(workflow_id) ON DELETE CASCADE,
+            created_at              TEXT NOT NULL,
+            spec_json               TEXT NOT NULL,
+            satisfied_at            TEXT,
+            satisfied_by_signal_id  TEXT
+                                    REFERENCES workflow_signals(signal_id) ON DELETE SET NULL,
+            CHECK ((satisfied_at IS NULL) = (satisfied_by_signal_id IS NULL))
+        );
+        CREATE INDEX IF NOT EXISTS idx_workflow_waits_current
+            ON workflow_waits(workflow_id, satisfied_at, created_at);
+        CREATE TABLE IF NOT EXISTS workflow_transition_outbox (
+            outbox_id          TEXT PRIMARY KEY,
+            workflow_id        TEXT NOT NULL
+                               REFERENCES workflow_runs(workflow_id) ON DELETE CASCADE,
+            workflow_revision  INTEGER NOT NULL CHECK (workflow_revision >= 1),
+            kind               TEXT NOT NULL
+                               CHECK (kind IN ('activity','approval','fact')),
+            ordinal            INTEGER NOT NULL CHECK (ordinal >= 0),
+            payload_json       TEXT NOT NULL,
+            created_at         TEXT NOT NULL,
+            UNIQUE (workflow_id, workflow_revision, kind, ordinal)
+        );
+        """
+    # sqlite3.executescript() implicitly commits an open transaction.  Execute
+    # these simple DDL statements individually so the legacy table rebuild and
+    # its backfill remain one rollback-safe transaction.
+    for statement in ddl.split(";"):
+        if statement.strip():
+            conn.execute(statement)
+
+
+def _json_object(value: object) -> dict[str, object]:
+    try:
+        parsed = json.loads(str(value))
+    except (TypeError, ValueError):
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _legacy_ticket_row(conn: sqlite3.Connection, ticket_id: str) -> sqlite3.Row | None:
+    row = conn.execute(
+        "SELECT status, attempts, last_error FROM tickets WHERE id = ?",
+        (ticket_id,),
+    ).fetchone()
+    return row if isinstance(row, sqlite3.Row) else None
+
+
+def _legacy_stage_status(conn: sqlite3.Connection, ticket_id: str) -> str:
+    row = _legacy_ticket_row(conn, ticket_id)
+    if row is None:
+        return "blocked"
+    return {
+        "done": "succeeded",
+        "archived": "succeeded",
+        "failed": "failed",
+        "in_progress": "running",
+        "ready": "ready",
+        "blocked": "blocked",
+        "planned": "blocked",
+        "draft": "blocked",
+    }.get(str(row["status"]), "blocked")
+
+
+def _legacy_ticket_attempts(conn: sqlite3.Connection, ticket_id: str) -> int:
+    row = _legacy_ticket_row(conn, ticket_id)
+    return max(0, int(row["attempts"])) if row is not None else 0
+
+
+def _legacy_ticket_error(conn: sqlite3.Connection, ticket_id: str) -> str | None:
+    row = _legacy_ticket_row(conn, ticket_id)
+    if row is None or row["last_error"] is None:
+        return None
+    return str(row["last_error"])
+
+
+def _legacy_run_status(stages: list[dict[str, object]]) -> tuple[str, str | None]:
+    statuses = {str(stage["status"]) for stage in stages}
+    if stages and statuses <= {"succeeded"}:
+        return "completed", None
+    if "failed" in statuses:
+        return "failed", "backfilled from a failed materialized ticket"
+    return "waiting", None
+
+
+def _aware_timestamp(value: str) -> str:
+    parsed = datetime.fromisoformat(value)
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc).isoformat(timespec="microseconds")
 
 
 def current_schema_marker(conn: sqlite3.Connection) -> str:
@@ -821,9 +1074,7 @@ def current_schema_marker(conn: sqlite3.Connection) -> str:
     ``"unknown"`` fields rather than raising).
     """
     try:
-        row = conn.execute(
-            "SELECT schema_version FROM events ORDER BY id DESC LIMIT 1"
-        ).fetchone()
+        row = conn.execute("SELECT schema_version FROM events ORDER BY id DESC LIMIT 1").fetchone()
         events_ver = row["schema_version"] if row is not None else 1
     except sqlite3.Error:
         events_ver = "unknown"
@@ -847,9 +1098,7 @@ def _migrate_conversation_store(conn: sqlite3.Connection) -> None:
     """
     existing = {
         row["name"]
-        for row in conn.execute(
-            "SELECT name FROM sqlite_master WHERE type = 'table'"
-        ).fetchall()
+        for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'").fetchall()
     }
     if "conversations" not in existing:
         conn.executescript(
@@ -919,9 +1168,7 @@ def _migrate_conversation_chunk_summaries(conn: sqlite3.Connection) -> None:
     """
     existing = {
         row["name"]
-        for row in conn.execute(
-            "SELECT name FROM sqlite_master WHERE type = 'table'"
-        ).fetchall()
+        for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'").fetchall()
     }
     if "conversation_chunk_summaries" not in existing:
         conn.executescript(

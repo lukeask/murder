@@ -10,13 +10,18 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+from uuid import UUID
 
 from murder.app.service.bootstrap import start_supervisor_workers
 from murder.app.service.read_model import ServiceReadModel
 from murder.app.service.runtime import Runtime
 from murder.app.service.supervisor import Supervisor
 from murder.bus.broker import DurableBroker
-from murder.bus.transport_socket import SocketBusServer, default_socket_path
+from murder.bus.transport_socket import (
+    CapturedTerminalFrame,
+    SocketBusServer,
+    default_socket_path,
+)
 from murder.config import Config
 from murder.llm.harnesses.harnesses_doc import write_harnesses_doc
 from murder.llm.harnesses.model_cache import refresh_and_persist_harness_models
@@ -96,28 +101,54 @@ class ServiceHost:
     _rpc_handlers: dict[str, RpcHandler] = field(default_factory=dict, repr=False)
     _service_session_name: str | None = field(default=None, repr=False)
 
-    async def _capture_tmux_frame(self, agent_id: str | None = None) -> str:
-        """Return the current ANSI frame for *agent_id*'s tmux session.
+    async def _capture_tmux_frame(
+        self,
+        target_id: str | None = None,
+    ) -> CapturedTerminalFrame:
+        """Capture a persisted session UUID, or an explicit legacy agent.
 
-        Called by the ``tmux.frame`` stream on every capture tick. The raw
-        view exists as the backup when transcript parsing breaks, so it must
-        show the pane of the crow the user is looking at — each agent runs in
-        its own tmux session, found via the registry. Without an agent (or for
-        an unknown id) fall back to the deterministic project session name,
-        which works as soon as the host is constructed.
+        UUID attachment resolves through ``harness_sessions.transport_ref``;
+        the durable session identity is never treated as a tmux name. Existing
+        agent-id callers remain a deliberate compatibility branch until every
+        live legacy agent is registered. ``None`` selects the supervisor pane.
         """
         from murder.runtime.terminal import tmux
 
         session = project_session_name(self.repo_root)
-        if agent_id is not None:
+        if target_id is not None:
             if self.runtime is None:
                 raise RuntimeError("service not started")
-            agent = self.runtime.agents.get_agent(agent_id)
-            agent_session = getattr(agent, "session", None)
-            if agent_session is None:
-                raise ValueError(f"no live agent session for {agent_id!r}")
-            session = agent_session
-        return await tmux.capture_pane(session, escapes=True)
+            try:
+                persisted_id = UUID(target_id)
+            except ValueError:
+                agent = self.runtime.agents.get_agent(target_id)
+                agent_session = getattr(agent, "session", None)
+                if agent_session is None:
+                    raise ValueError(
+                        f"no live agent session for {target_id!r}"
+                    ) from None
+                session = str(agent_session)
+            else:
+                if self.runtime.db is None:
+                    raise RuntimeError("service database is unavailable")
+                row = self.runtime.db.execute(
+                    """
+                    SELECT transport, transport_ref
+                    FROM harness_sessions
+                    WHERE session_id = ?
+                    """,
+                    (str(persisted_id),),
+                ).fetchone()
+                if row is None:
+                    raise ValueError(f"persisted session {persisted_id} does not exist")
+                if str(row["transport"]) != "tmux":
+                    raise ValueError(
+                        f"session {persisted_id} does not expose a tmux terminal"
+                    )
+                session = str(row["transport_ref"])
+        frame = await tmux.capture_viewport(session, escapes=True)
+        columns, rows = await tmux.pane_dimensions(session)
+        return CapturedTerminalFrame(data=frame, columns=columns, rows=rows)
 
     def register_rpc_handler(self, method: str, handler: RpcHandler) -> None:
         self._rpc_handlers[method] = handler

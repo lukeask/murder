@@ -129,6 +129,7 @@ def _crow_snapshot_dto() -> CrowSnapshot:
                 model="opus",
                 open_escalations=2,
                 max_severity=3,
+                session_id="0198b156-2dd3-70a9-bc79-fca001dc8801",
             ),
             # A second row exercising the nullable columns as None (default fields too).
             CrowSessionSummary(

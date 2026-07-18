@@ -14,7 +14,12 @@ from murder.app.protocol.common import (
 )
 from murder.app.protocol.requests import CommandName, CommandRequest, QueryName, QueryRequest
 from murder.app.protocol.subscriptions import SubscriptionSnapshot, SubscriptionSpec
-from murder.app.protocol.terminal import TerminalFrame, TerminalTarget
+from murder.app.protocol.terminal import (
+    TerminalChunk,
+    TerminalFrame,
+    TerminalStreamGap,
+    TerminalTarget,
+)
 
 SubscriptionKind = Literal["projections", "notifications"]
 
@@ -80,11 +85,19 @@ class TerminalAttachMessage(ApplicationModel):
     op: Literal["terminal.attach"] = "terminal.attach"
     stream_id: str
     target: TerminalTarget
+    after_sequence: int = Field(default=0, ge=0)
 
 
 class TerminalDetachMessage(ApplicationModel):
     op: Literal["terminal.detach"] = "terminal.detach"
     stream_id: str
+
+
+class TerminalResyncMessage(ApplicationModel):
+    op: Literal["terminal.resync"] = "terminal.resync"
+    stream_id: str
+    after_sequence: int = Field(ge=0)
+    reason: Literal["gap", "unsupported_mode"]
 
 
 class TerminalAttachedMessage(ApplicationModel):
@@ -95,6 +108,26 @@ class TerminalAttachedMessage(ApplicationModel):
 
 class TerminalFrameMessage(ApplicationModel):
     op: Literal["terminal.frame"] = "terminal.frame"
+    stream_id: str
+    frame: TerminalFrame
+
+
+class TerminalChunkMessage(ApplicationModel):
+    op: Literal["terminal.chunk"] = "terminal.chunk"
+    stream_id: str
+    chunk: TerminalChunk
+
+
+class TerminalStreamGapMessage(ApplicationModel):
+    op: Literal["terminal.gap"] = "terminal.gap"
+    stream_id: str
+    gap: TerminalStreamGap
+
+
+class TerminalResyncedMessage(ApplicationModel):
+    """Recovery acknowledgement carrying an authoritative full replacement."""
+
+    op: Literal["terminal.resynced"] = "terminal.resynced"
     stream_id: str
     frame: TerminalFrame
 
@@ -118,8 +151,12 @@ ApplicationWireMessage = Annotated[
     | SubscriptionEventMessage
     | TerminalAttachMessage
     | TerminalDetachMessage
+    | TerminalResyncMessage
     | TerminalAttachedMessage
     | TerminalFrameMessage
+    | TerminalChunkMessage
+    | TerminalStreamGapMessage
+    | TerminalResyncedMessage
     | ErrorMessage,
     Field(discriminator="op"),
 ]
@@ -140,7 +177,11 @@ __all__ = [
     "SubscriptionReadyMessage",
     "TerminalAttachMessage",
     "TerminalAttachedMessage",
+    "TerminalChunkMessage",
     "TerminalDetachMessage",
     "TerminalFrameMessage",
+    "TerminalResyncMessage",
+    "TerminalResyncedMessage",
+    "TerminalStreamGapMessage",
     "UnsubscribeMessage",
 ]

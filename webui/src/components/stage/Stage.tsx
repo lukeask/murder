@@ -31,6 +31,10 @@ export function Stage(): React.JSX.Element {
   const [tab, setTab] = useState<StageTab>('chat');
 
   const agentId = selectActiveAgentId(conversations, roster, favorites);
+  const terminalSessionId =
+    agentId === null
+      ? null
+      : (roster.rows.find((row) => row.agentId === agentId)?.sessionId ?? agentId);
 
   // A doc / ticket takes over the Stage when open (an explicit overlay the user closes); otherwise
   // the chat/terminal for the active agent.
@@ -77,7 +81,7 @@ export function Stage(): React.JSX.Element {
         ) : tab === 'chat' ? (
           <ChatTranscript agentId={agentId} />
         ) : (
-          <TmuxFrameView agentId={agentId} />
+          <TmuxFrameView agentId={terminalSessionId ?? agentId} />
         )}
       </div>
       <ChatInput />
